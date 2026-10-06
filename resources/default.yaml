@@ -1,0 +1,20 @@
+# Installed default configuration. No external rule providers or subscriptions.
+proxies: []
+proxy-groups:
+  - name: 默认策略
+    type: select
+    proxies:
+      - DIRECT
+      - REJECT
+rules:
+  - MATCH,DIRECT
+dns:
+  enable: true
+  enhanced-mode: fake-ip
+  nameserver:
+    - https://dns.alidns.com/dns-query
+    - https://cloudflare-dns.com/dns-query
+profile:
+  store-selected: true
+  store-fake-ip: true
+geo-auto-update: false

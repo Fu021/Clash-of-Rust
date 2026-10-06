@@ -1,0 +1,6 @@
+{
+  "controller_port": 9090,
+  "mixed_port": 7897,
+  "dark": true,
+  "delay_interval_minutes": 5
+}

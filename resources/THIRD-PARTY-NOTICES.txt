@@ -1,0 +1,14 @@
+Clash of Rust includes the following third-party software and data:
+
+mihomo (MetaCubeX): https://github.com/MetaCubeX/mihomo
+Version: v1.19.32. Distributed under GPL-3.0.
+The complete GPLv3 license text is installed as LICENSE.
+Corresponding source: https://github.com/MetaCubeX/mihomo/tree/v1.19.32
+
+GeoIP.dat, GeoSite.dat, Country.mmdb, ASN.mmdb:
+https://github.com/MetaCubeX/meta-rules-dat
+The exact sources and SHA256 checksums are installed as geodata.json.
+See upstream project and data providers for database source and licensing.
+
+Rust library dependency versions are recorded in Cargo.lock in the source tree.
+Clash of Rust application source and installer scripts use GPL-3.0-only.

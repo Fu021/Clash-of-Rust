@@ -1,0 +1,25 @@
+/target/
+/bin/
+/bundle/
+/dist/
+/tools/
+
+# Temporary downloads and local diagnostics
+*.partial
+*.tmp
+*.log
+
+# Editor and operating system files
+/.idea/
+/.vscode/
+*.swp
+*.swo
+*~
+.DS_Store
+Thumbs.db
+Desktop.ini
+
+# Local environment and credentials
+.env
+.env.*
+!.env.example

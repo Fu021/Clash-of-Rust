@@ -1,0 +1,27 @@
+param([string]$Proxy = '', [switch]$SkipPrepare)
+$ErrorActionPreference = 'Stop'
+$taskRoot = [IO.Path]::GetFullPath((Join-Path $PSScriptRoot '..'))
+if (-not $SkipPrepare) { & (Join-Path $PSScriptRoot 'prepare-resources.ps1') -Proxy $Proxy }
+$compiler = Join-Path $taskRoot 'tools\nsis\nsis-3.13\makensis.exe'
+if (-not (Test-Path -LiteralPath $compiler)) {
+    $archive = Join-Path $taskRoot 'tools\nsis-3.13.zip'
+    New-Item -ItemType Directory -Path (Join-Path $taskRoot 'tools') -Force | Out-Null
+    $downloadArgs = @('--fail','--location','--retry','2','--connect-timeout','15','--max-time','120','--output',$archive)
+    if ($Proxy) { $downloadArgs += @('--proxy',$Proxy) }
+    $downloadArgs += 'https://downloads.sourceforge.net/project/nsis/NSIS%203/3.13/nsis-3.13.zip'
+    & curl.exe @downloadArgs
+    if ($LASTEXITCODE -ne 0) { throw 'Portable NSIS download failed' }
+    Expand-Archive -LiteralPath $archive -DestinationPath (Join-Path $taskRoot 'tools\nsis') -Force
+}
+Push-Location $taskRoot
+try {
+    & cargo build --release --locked
+    if ($LASTEXITCODE -ne 0) { throw 'Release build failed' }
+    Copy-Item -LiteralPath (Join-Path $taskRoot 'target\release\clash-of-rust.exe') -Destination (Join-Path $taskRoot 'bundle\clash-of-rust.exe') -Force
+    New-Item -ItemType Directory -Path (Join-Path $taskRoot 'dist') -Force | Out-Null
+    & $compiler /V2 /INPUTCHARSET UTF8 "/DPAYLOAD=$taskRoot\bundle" "/DOUTPUT=$taskRoot\dist\Clash-of-Rust-0.3.16-windows-x64-setup.exe" (Join-Path $taskRoot 'installer\clash-of-rust.nsi')
+    if ($LASTEXITCODE -ne 0) { throw 'Installer compilation failed' }
+    $setup = Join-Path $taskRoot 'dist\Clash-of-Rust-0.3.16-windows-x64-setup.exe'
+    (Get-FileHash -LiteralPath $setup -Algorithm SHA256).Hash.ToLowerInvariant() | Set-Content -Encoding ASCII -LiteralPath "$setup.sha256"
+    Write-Output "Installer ready: $setup"
+} finally { Pop-Location }

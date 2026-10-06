@@ -1,0 +1,4 @@
+# Keep Windows packages self-contained: no separately installed MSVC runtime.
+# Other platform targets retain their normal toolchain configuration.
+[target.x86_64-pc-windows-msvc]
+rustflags = ["-C", "target-feature=+crt-static"]

@@ -1,0 +1,17 @@
+# Local demonstration profile. No subscription or paid proxy is required.
+# All traffic is direct; this is intended for API and lifecycle testing.
+proxies: []
+proxy-groups:
+  - name: Example
+    type: select
+    proxies:
+      - DIRECT
+      - REJECT
+rules:
+  - DOMAIN-SUFFIX,example.com,Example
+  - MATCH,DIRECT
+dns:
+  enable: true
+  enhanced-mode: fake-ip
+  nameserver:
+    - https://dns.alidns.com/dns-query
