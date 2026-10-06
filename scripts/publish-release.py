@@ -118,7 +118,7 @@ def main():
     payload = {
         "tag_name": args.tag, "target_commitish": commit,
         "name": f"Clash of Rust {args.tag.removeprefix('v')}",
-        "body": notes, "prerelease": False, "draft": True, "make_latest": "true",
+        "body": notes, "prerelease": False, "draft": True, "make_latest": "false",
     }
     release = request(base + "/releases" + (f"/{release['id']}" if release else ""),
                       "PATCH" if release else "POST", payload)
