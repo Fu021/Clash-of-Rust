@@ -15,24 +15,47 @@
 
 ## 如何使用
 
-**推荐：使用安装包。** 在本仓库的 GitHub Releases 页面下载已编译、打包好的安装程序，运行安装程序即可。
+### 1. 使用安装包（推荐）
 
-**自行编译并打包（Windows x64）：** 先安装 Rust 的 MSVC 工具链，以及 Visual Studio Build Tools 中的“使用 C++ 的桌面开发”组件。下载仓库源码并解压，或克隆仓库后，在项目根目录打开 **PowerShell**，依次执行：
+在 [GitHub Releases](https://github.com/Fu021/Clash-of-Rust/releases) 页面选择版本，下载 `Clash-of-Rust-版本号-windows-x64-setup.exe`，运行并按照提示完成安装。
 
-# 检查 Rust 工具链
+安装包已包含 mihomo 内核、Geo 数据和默认配置，无需自行编译或另行下载这些资源。
+
+### 2. 自行编译并打包（Windows x64）
+
+先安装 Rust，以及 Visual Studio Build Tools 中的“使用 C++ 的桌面开发”组件（包含 MSVC 和 Windows SDK）。下载仓库源码并解压，或克隆仓库后，在**项目根目录打开 PowerShell**，依次执行以下命令。
+
+**检查 Rust 工具链**
+
+```powershell
 rustup default stable-x86_64-pc-windows-msvc
 rustc --version
 cargo --version
+```
 
-# 编译并打包：自动准备内核、Geo 数据和 NSIS
+**编译并生成安装包**
+
+首次打包会自动准备 mihomo 内核、Geo 数据和 NSIS，需要联网。
+
+```powershell
 powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\build-installer.ps1
+```
 
-# 查看生成的安装包
+**查看生成的安装包**
+
+```powershell
 Get-ChildItem .\dist\*-setup.exe
+```
+
+生成的安装包位于项目根目录下的 `dist` 文件夹，可直接运行安装。
+
+**再次编译（跳过资源准备）**
 
 内核和 Geo 数据已准备好后，再次编译打包可跳过资源下载：
 
+```powershell
 powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\build-installer.ps1 -SkipPrepare
+```
 
 ## License
 
