@@ -60,6 +60,10 @@ pub fn open_directory(path: &Path) -> Result<()> {
     Command::new("xdg-open").arg(path).spawn()?;
     Ok(())
 }
+pub fn open_url(url: &str) -> Result<()> {
+    Command::new("xdg-open").arg(url).spawn()?;
+    Ok(())
+}
 
 pub fn description() -> &'static str {
     "Linux GNOME 系统代理（gsettings）；KDE 尚待实现"

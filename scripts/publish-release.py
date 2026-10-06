@@ -109,8 +109,6 @@ def main():
     if not args.tag or not args.notes or not args.asset:
         raise RuntimeError("Provide --tag, --notes and --asset before publishing")
     notes = args.notes.read_text(encoding="utf-8")
-    if "开发预览版" not in notes:
-        raise RuntimeError("Release notes must disclose development preview status")
     files = [(path, path.read_bytes()) for path in args.asset]
     commit = subprocess.check_output(["git", "rev-parse", "HEAD"], cwd=root, text=True).strip()
     releases = request(base + "/releases?per_page=100")
@@ -119,8 +117,8 @@ def main():
         raise RuntimeError("Release is already published; refusing to replace it")
     payload = {
         "tag_name": args.tag, "target_commitish": commit,
-        "name": f"Clash of Rust {args.tag.removeprefix('v')} — 开发预览版",
-        "body": notes, "prerelease": True, "draft": True, "make_latest": "false",
+        "name": f"Clash of Rust {args.tag.removeprefix('v')}",
+        "body": notes, "prerelease": False, "draft": True, "make_latest": "true",
     }
     release = request(base + "/releases" + (f"/{release['id']}" if release else ""),
                       "PATCH" if release else "POST", payload)
@@ -136,7 +134,7 @@ def main():
             raise RuntimeError("Uploaded asset verification failed: " + path.name)
         print("Verified asset:", path.name)
     published = request(base + f"/releases/{release['id']}", "PATCH",
-                        {"draft": False, "prerelease": True, "make_latest": "false"})
+                        {"draft": False, "prerelease": False, "make_latest": "true"})
     print("Published:", published["html_url"])
 
 

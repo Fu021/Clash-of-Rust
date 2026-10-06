@@ -1,6 +1,12 @@
-param([string]$Proxy = '', [switch]$SkipPrepare)
+param([string]$Proxy = '', [switch]$SkipPrepare, [string]$Version = '')
 $ErrorActionPreference = 'Stop'
 $taskRoot = [IO.Path]::GetFullPath((Join-Path $PSScriptRoot '..'))
+$taskManifest = Get-Content -LiteralPath (Join-Path $taskRoot 'Cargo.toml') -Raw -Encoding UTF8
+$taskPackageVersion = [regex]::Match($taskManifest, '(?m)^version\s*=\s*"([0-9]+\.[0-9]+\.[0-9]+)"').Groups[1].Value
+$taskAppVersion = if ($Version) { $Version } else { $taskPackageVersion }
+if ($taskAppVersion -notmatch '^[0-9]+\.[0-9]+\.[0-9]+$' -or @($taskAppVersion.Split('.') | Where-Object { [long]$_ -gt 65535 }).Count) {
+    throw 'Version must contain three numeric components between 0 and 65535'
+}
 if (-not $SkipPrepare) { & (Join-Path $PSScriptRoot 'prepare-resources.ps1') -Proxy $Proxy }
 foreach ($taskResource in @('default.yaml', 'settings-defaults.json', 'THIRD-PARTY-NOTICES.txt')) {
     Copy-Item -LiteralPath (Join-Path $taskRoot "resources\$taskResource") -Destination (Join-Path $taskRoot 'bundle\resources') -Force
@@ -27,14 +33,26 @@ if (-not (Test-Path -LiteralPath $compiler)) {
     Expand-Archive -LiteralPath $archive -DestinationPath (Join-Path $taskRoot 'tools\nsis') -Force
 }
 Push-Location $taskRoot
+$taskPreviousVersion = [Environment]::GetEnvironmentVariable('CLASH_OF_RUST_BUILD_VERSION', 'Process')
 try {
+    $env:CLASH_OF_RUST_BUILD_VERSION = $taskAppVersion
     & cargo build --release --locked
     if ($LASTEXITCODE -ne 0) { throw 'Release build failed' }
+    $taskBinary = Join-Path $taskRoot 'target\release\clash-of-rust.exe'
+    if ([Diagnostics.FileVersionInfo]::GetVersionInfo($taskBinary).FileVersion -ne $taskAppVersion) {
+        throw 'Application version does not match the requested installer version'
+    }
     Copy-Item -LiteralPath (Join-Path $taskRoot 'target\release\clash-of-rust.exe') -Destination (Join-Path $taskRoot 'bundle\clash-of-rust.exe') -Force
     New-Item -ItemType Directory -Path (Join-Path $taskRoot 'dist') -Force | Out-Null
-    & $compiler /V2 /INPUTCHARSET UTF8 "/DPAYLOAD=$taskRoot\bundle" "/DOUTPUT=$taskRoot\dist\Clash-of-Rust-0.4.1-windows-x64-setup.exe" (Join-Path $taskRoot 'installer\clash-of-rust.nsi')
+    & $compiler /V2 /INPUTCHARSET UTF8 "/DAPP_VERSION=$taskAppVersion" "/DPAYLOAD=$taskRoot\bundle" "/DOUTPUT=$taskRoot\dist\Clash-of-Rust-$taskAppVersion-windows-x64-setup.exe" (Join-Path $taskRoot 'installer\clash-of-rust.nsi')
     if ($LASTEXITCODE -ne 0) { throw 'Installer compilation failed' }
-    $setup = Join-Path $taskRoot 'dist\Clash-of-Rust-0.4.1-windows-x64-setup.exe'
+    $setup = Join-Path $taskRoot "dist\Clash-of-Rust-$taskAppVersion-windows-x64-setup.exe"
+    if ([Diagnostics.FileVersionInfo]::GetVersionInfo($setup).FileVersion -ne $taskAppVersion) {
+        throw 'Installer version does not match the requested version'
+    }
     (Get-FileHash -LiteralPath $setup -Algorithm SHA256).Hash.ToLowerInvariant() | Set-Content -Encoding ASCII -LiteralPath "$setup.sha256"
     Write-Output "Installer ready: $setup"
-} finally { Pop-Location }
+} finally {
+    [Environment]::SetEnvironmentVariable('CLASH_OF_RUST_BUILD_VERSION', $taskPreviousVersion, 'Process')
+    Pop-Location
+}

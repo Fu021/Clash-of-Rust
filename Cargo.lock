@@ -453,7 +453,7 @@ dependencies = [
 
 [[package]]
 name = "clash-of-rust"
-version = "0.4.1"
+version = "0.4.2"
 dependencies = [
  "anyhow",
  "chrono",
@@ -464,6 +464,7 @@ dependencies = [
  "iced_graphics",
  "libc",
  "reqwest",
+ "semver",
  "serde",
  "serde_json",
  "serde_yaml",

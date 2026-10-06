@@ -1,5 +1,8 @@
 $ErrorActionPreference = 'Stop'
 $taskRoot = [IO.Path]::GetFullPath((Join-Path $PSScriptRoot '..'))
+$taskBundleExe = Join-Path $taskRoot 'bundle\clash-of-rust.exe'
+$taskAppVersion = [Diagnostics.FileVersionInfo]::GetVersionInfo($taskBundleExe).FileVersion
+if ($taskAppVersion -notmatch '^[0-9]+\.[0-9]+\.[0-9]+$') { throw 'Bundle application version is invalid' }
 $compiler = Join-Path $taskRoot 'tools\nsis\nsis-3.13\makensis.exe'
 $taskTestRoot = Join-Path $taskRoot ('dist\installer-test-' + [Guid]::NewGuid().ToString('N'))
 $taskInstall = Join-Path $taskTestRoot 'installed'
@@ -9,7 +12,7 @@ $testKey = 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Uninstall\ClashOfRus
 $legacyKey = 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Uninstall\ClashOfRustLegacySmokeTest'
 if (Test-Path -LiteralPath $legacyKey) { throw 'Existing legacy smoke-test entry; refusing to overwrite it' }
 if (Test-Path -LiteralPath $testKey) { throw 'An existing installer smoke-test entry is present; refusing to overwrite it' }
-& $compiler /V2 /INPUTCHARSET UTF8 /DINSTALLER_TESTING "/DPAYLOAD=$taskRoot\bundle" "/DOUTPUT=$taskSetup" (Join-Path $taskRoot 'installer\clash-of-rust.nsi')
+& $compiler /V2 /INPUTCHARSET UTF8 /DINSTALLER_TESTING "/DAPP_VERSION=$taskAppVersion" "/DPAYLOAD=$taskRoot\bundle" "/DOUTPUT=$taskSetup" (Join-Path $taskRoot 'installer\clash-of-rust.nsi')
 if ($LASTEXITCODE -ne 0) { throw 'Smoke-test installer compilation failed' }
 # Check the running-application guard before creating an installation. Once an
 # installation exists, silent reinstall refusal correctly takes precedence.
@@ -20,6 +23,9 @@ try {
 } finally { $taskRunningMutex.Dispose() }
 $first = Start-Process -FilePath $taskSetup -ArgumentList '/S',"/D=$taskInstall" -WindowStyle Hidden -Wait -PassThru
 if ($first.ExitCode -ne 0) { throw "Fresh installation failed: $($first.ExitCode)" }
+if ((Get-ItemProperty -LiteralPath $testKey).DisplayVersion -ne $taskAppVersion) { throw 'Installed version registration is incorrect' }
+if ([Diagnostics.FileVersionInfo]::GetVersionInfo((Join-Path $taskInstall 'clash-of-rust.exe')).FileVersion -ne $taskAppVersion) { throw 'Installed application version is incorrect' }
+if ((Get-FileHash -LiteralPath (Join-Path $taskInstall 'clash-of-rust.exe') -Algorithm SHA256).Hash -ne (Get-FileHash -LiteralPath $taskBundleExe -Algorithm SHA256).Hash) { throw 'Installed application differs from the bundle' }
 foreach ($name in @('GeoIP.dat','GeoSite.dat','Country.mmdb','ASN.mmdb','mihomo.exe','default.yaml','settings-defaults.json','geodata.json')) {
     if (-not (Test-Path -LiteralPath (Join-Path $taskInstall "resources\$name"))) { throw "Installed asset missing: $name" }
 }

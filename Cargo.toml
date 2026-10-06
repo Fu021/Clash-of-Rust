@@ -1,6 +1,6 @@
 [package]
 name = "clash-of-rust"
-version = "0.4.1"
+version = "0.4.2"
 edition = "2024"
 description = "A native Rust desktop client for mihomo"
 license = "GPL-3.0-only"
@@ -17,6 +17,7 @@ reqwest = { version = "0.12", default-features = false, features = ["json", "rus
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 serde_yaml = "0.9"
+semver = "1"
 tokio = { version = "1", features = ["rt-multi-thread", "process", "time", "sync", "net", "io-util", "macros"] }
 tempfile = "3"
 uuid = { version = "1", features = ["v4", "serde"] }

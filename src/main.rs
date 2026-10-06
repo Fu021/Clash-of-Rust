@@ -6,7 +6,7 @@ mod typography;
 use clash_of_rust::{
     config::{Profile, Settings, Store},
     engine::{Engine, ProxyMode, Scope, Snapshot},
-    flags, icons, ip_check, platform, probe, tray,
+    flags, icons, ip_check, platform, probe, tray, update,
 };
 use futures_util::{
     SinkExt,
@@ -278,6 +278,10 @@ enum Message {
     Elevated(Result<(), String>),
     Action(Action),
     Finished(Box<Reply>),
+    CheckUpdate,
+    UpdateChecked(Result<Option<update::Available>, String>),
+    OpenRelease,
+    ReleaseOpened(Result<(), String>),
     Tick,
     ToggleGroup(String),
     GroupPage(String, bool),
@@ -350,6 +354,7 @@ struct App {
     dns_host: String,
     test_results: Vec<String>,
     geo_status: String,
+    updates: update::State,
 }
 
 async fn execute(engine: Arc<Mutex<Engine>>, action: Action, scope: Scope) -> Reply {
@@ -574,10 +579,17 @@ impl App {
             test_url: "https://www.gstatic.com/generate_204".into(),
             dns_host: "github.com".into(),
             test_results: vec![],
+            updates: update::State::default(),
+        };
+        let update_task = if app.engine.is_none() {
+            app.check_update()
+        } else {
+            Task::none()
         };
         let task = Task::batch([
             app.dispatch(Action::Start),
             iced::window::latest().map(Message::ReadWindowSize),
+            update_task,
         ]);
         (app, task)
     }
@@ -627,6 +639,7 @@ impl App {
         };
         Subscription::batch([
             polling,
+            iced::time::every(update::CHECK_INTERVAL).map(|_| Message::CheckUpdate),
             if self.settings.delay_interval_minutes == 0 {
                 Subscription::none()
             } else {
@@ -638,6 +651,21 @@ impl App {
             tray_events,
             iced::window::events().map(Message::Window),
         ])
+    }
+
+    fn check_update(&mut self) -> Task<Message> {
+        if self.exiting || !self.updates.begin() {
+            return Task::none();
+        }
+        let proxy_port = self.snapshot.running.then_some(self.settings.mixed_port);
+        Task::perform(
+            async move {
+                update::check(proxy_port)
+                    .await
+                    .map_err(|error| error.to_string())
+            },
+            Message::UpdateChecked,
+        )
     }
 
     fn dispatch(&mut self, action: Action) -> Task<Message> {
@@ -682,6 +710,29 @@ impl App {
 
     fn update(&mut self, message: Message) -> Task<Message> {
         match message {
+            Message::CheckUpdate => return self.check_update(),
+            Message::UpdateChecked(result) => self.updates.finish(result),
+            Message::OpenRelease => {
+                let url = self.updates.available.as_ref().map_or_else(
+                    || update::RELEASES_URL.to_owned(),
+                    |update| update.url.clone(),
+                );
+                return Task::perform(
+                    async move {
+                        match tokio::task::spawn_blocking(move || platform::open_url(&url)).await {
+                            Ok(result) => result.map_err(|error| error.to_string()),
+                            Err(error) => Err(error.to_string()),
+                        }
+                    },
+                    Message::ReleaseOpened,
+                );
+            }
+            Message::ReleaseOpened(result) => {
+                if let Err(error) = result {
+                    self.notice = format!("无法打开 Release 页面：{error}");
+                    self.error = true;
+                }
+            }
             Message::Navigate(page) => {
                 self.page = page;
                 self.query.clear();
@@ -1080,13 +1131,21 @@ impl App {
                     }
                     _ => {}
                 }
-                if let Some(action) = self.queued_actions.pop_front() {
-                    return self.dispatch(action);
-                }
-                if self.pending_refresh {
+                // Start checking after core startup, so its mixed-port proxy is ready.
+                let update_task = if !self.updates.started {
+                    self.check_update()
+                } else {
+                    Task::none()
+                };
+                let next_task = if let Some(action) = self.queued_actions.pop_front() {
+                    self.dispatch(action)
+                } else if self.pending_refresh {
                     self.pending_refresh = false;
-                    return self.dispatch(Action::Refresh);
-                }
+                    self.dispatch(Action::Refresh)
+                } else {
+                    Task::none()
+                };
+                return Task::batch([update_task, next_task]);
             }
             Message::Probe(exit_ip) => {
                 if self.probing {
@@ -1297,7 +1356,7 @@ impl App {
             );
         }
         nav = nav.push(Space::new().height(Length::Fill)).push(
-            self.label(env!("CARGO_PKG_VERSION"))
+            self.label(clash_of_rust::VERSION)
                 .size(self.scaled(10))
                 .color(self.foreground()),
         );
@@ -1361,9 +1420,30 @@ impl App {
             Page::Websites => self.websites(),
             Page::Settings => self.settings_view(),
         };
+        let mut body = column![header, notice].spacing(8);
+        if let Some(update) = &self.updates.available {
+            body = body.push(
+                container(
+                    aligned_row![
+                        self.label(format!("发现新版本 {}", update.version))
+                            .color(ACCENT),
+                        Space::new().width(Length::Fill),
+                        button(self.label("查看 Release"))
+                            .style(rounded_primary)
+                            .padding([4, 10])
+                            .on_press(Message::OpenRelease)
+                    ]
+                    .spacing(8),
+                )
+                .padding(8)
+                .width(Length::Fill)
+                .style(panel),
+            );
+        }
+        let body = body.push(content);
         aligned_row![
             sidebar,
-            container(column![header, notice, content].spacing(8))
+            container(body)
                 .padding(8)
                 .width(Length::Fill)
                 .height(Length::Fill)
@@ -2206,6 +2286,33 @@ impl App {
     }
 
     fn settings_view(&self) -> Element<'_, Message> {
+        let updates = column![
+            self.label(format!("客户端更新 · 当前版本 {}", clash_of_rust::VERSION)),
+            self.label("启动时及每 6 小时自动检查 GitHub Release")
+                .size(self.scaled(11)),
+            self.label(if self.updates.checking {
+                "正在检查更新…"
+            } else if self.updates.status.is_empty() {
+                "等待首次检查"
+            } else {
+                &self.updates.status
+            })
+            .size(self.scaled(11)),
+            aligned_row![
+                button(self.label("检查更新"))
+                    .style(rounded_primary)
+                    .padding([4, 10])
+                    .on_press_maybe(
+                        (!self.updates.checking && !self.exiting).then_some(Message::CheckUpdate)
+                    ),
+                button(self.label("查看 Release"))
+                    .style(rounded_secondary)
+                    .padding([4, 10])
+                    .on_press(Message::OpenRelease)
+            ]
+            .spacing(8)
+        ]
+        .spacing(12);
         let mut ports = column![
             self.label("端口").size(self.scaled(12)),
             aligned_row![
@@ -2297,6 +2404,10 @@ impl App {
         .spacing(12);
         scrollable(
             column![
+                container(updates)
+                    .padding(10)
+                    .width(Length::Fill)
+                    .style(panel),
                 container(ports)
                     .padding(10)
                     .width(Length::Fill)

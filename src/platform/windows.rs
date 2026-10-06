@@ -96,6 +96,23 @@ pub fn open_directory(path: &Path) -> Result<()> {
     Ok(())
 }
 
+pub fn open_url(url: &str) -> Result<()> {
+    let result = unsafe {
+        ShellExecuteW(
+            std::ptr::null_mut(),
+            wide("open").as_ptr(),
+            wide(url).as_ptr(),
+            std::ptr::null(),
+            std::ptr::null(),
+            1,
+        )
+    };
+    if result <= 32 {
+        bail!("启动默认浏览器失败（系统错误 {result}）");
+    }
+    Ok(())
+}
+
 type Handle = *mut std::ffi::c_void;
 static EXIT_EVENT: std::sync::atomic::AtomicPtr<std::ffi::c_void> =
     std::sync::atomic::AtomicPtr::new(std::ptr::null_mut());

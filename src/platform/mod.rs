@@ -115,6 +115,13 @@ pub fn set_autostart(enabled: bool) -> Result<()> {
 pub fn open_directory(path: &Path) -> Result<()> {
     native::open_directory(path)
 }
+pub fn open_url(url: &str) -> Result<()> {
+    let parsed = reqwest::Url::parse(url)?;
+    if parsed.scheme() != "https" || parsed.host_str().is_none() || url.contains('\0') {
+        bail!("网页地址无效");
+    }
+    native::open_url(url)
+}
 pub fn configured_proxy(scheme: &str) -> Result<Option<String>> {
     native::configured_proxy(scheme)
 }

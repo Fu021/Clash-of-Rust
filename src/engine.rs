@@ -487,7 +487,7 @@ impl Engine {
             let mut builder = reqwest::Client::builder()
                 .no_proxy()
                 .timeout(Duration::from_secs(30))
-                .user_agent(concat!("clash-of-rust/", env!("CARGO_PKG_VERSION")));
+                .user_agent(format!("clash-of-rust/{}", crate::VERSION));
             if via_proxy {
                 let tun_enabled = if self.running() {
                     let config: Value = self.api.get("configs").await?;
