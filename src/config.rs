@@ -16,6 +16,8 @@ pub struct Settings {
     pub dark: bool,
     pub delay_interval_minutes: u32,
     pub active_profile: Option<String>,
+    pub run_mode: String,
+    pub proxy_mode: crate::engine::ProxyMode,
 }
 
 impl Default for Settings {
@@ -36,12 +38,17 @@ impl Default for Settings {
             dark: defaults.dark,
             delay_interval_minutes: 5,
             active_profile: None,
+            run_mode: "rule".into(),
+            proxy_mode: crate::engine::ProxyMode::Off,
         }
     }
 }
 
 impl Settings {
     pub fn validate(&self) -> Result<()> {
+        if !matches!(self.run_mode.as_str(), "rule" | "global" | "direct") {
+            bail!("运行模式无效");
+        }
         if self.delay_interval_minutes > 1440 {
             bail!("定时测速间隔应为 0–1440 分钟，0 表示关闭");
         }
@@ -211,7 +218,7 @@ pub fn runtime_config(raw: &str, settings: &Settings) -> Result<String> {
     map.insert(Value::from("secret"), Value::from(settings.secret.clone()));
     map.insert(Value::from("allow-lan"), Value::from(false));
     map.insert(Value::from("bind-address"), Value::from("127.0.0.1"));
-    map.insert(Value::from("mode"), Value::from("rule"));
+    map.insert(Value::from("mode"), Value::from(settings.run_mode.clone()));
     map.insert(Value::from("log-level"), Value::from("info"));
     // Geo downloads are explicitly managed by the application. Even the core's
     // missing-file fallback must not attempt Internet downloads during startup.
@@ -239,6 +246,48 @@ pub fn runtime_config(raw: &str, settings: &Settings) -> Result<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn legacy_settings_default_to_rule_and_proxy_off() {
+        let settings: Settings = serde_json::from_str(
+            r#"{"controller_port":9090,"mixed_port":7897,"secret":"test","dark":true}"#,
+        )
+        .unwrap();
+        settings.validate().unwrap();
+        assert_eq!(settings.run_mode, "rule");
+        assert_eq!(settings.proxy_mode, crate::engine::ProxyMode::Off);
+    }
+
+    #[test]
+    fn saved_modes_survive_reload_and_control_startup_config() {
+        use crate::engine::ProxyMode;
+        let tmp = tempfile::tempdir().unwrap();
+        let store = Store::at(tmp.path().to_owned()).unwrap();
+        for run_mode in ["rule", "global", "direct"] {
+            for proxy_mode in [ProxyMode::Off, ProxyMode::System, ProxyMode::Tun] {
+                let settings = Settings {
+                    run_mode: run_mode.into(),
+                    proxy_mode,
+                    ..Settings::default()
+                };
+                store.save_settings(&settings).unwrap();
+                let loaded = store.load_settings().unwrap();
+                assert_eq!(loaded.run_mode, run_mode);
+                assert_eq!(loaded.proxy_mode, proxy_mode);
+                let config: Value =
+                    serde_yaml::from_str(&runtime_config("proxies: []", &loaded).unwrap()).unwrap();
+                assert_eq!(config["mode"].as_str(), Some(run_mode));
+                // TUN is only restored after startup health checks and permission handling.
+                assert_eq!(config["tun"]["enable"].as_bool(), Some(false));
+            }
+        }
+        let invalid = Settings {
+            run_mode: "invalid".into(),
+            ..Settings::default()
+        };
+        assert!(store.save_settings(&invalid).is_err());
+        assert_eq!(store.load_settings().unwrap().run_mode, "direct");
+    }
+
     #[test]
     fn subscription_cannot_expose_controller_or_enable_tun() {
         let raw = "proxies: []\nexternal-controller: 0.0.0.0:9090\nexternal-ui: ui\nlisteners: [{name: evil}]\nallow-lan: true\ntun: {enable: true}\n";

@@ -25,10 +25,9 @@ fn proxy_address(server: &str, scheme: &str) -> Option<String> {
             .collect();
         if let Some(address) = fields.get(scheme).or_else(|| fields.get("http")) {
             (*address).to_owned()
-        } else if let Some(address) = fields.get("socks") {
-            format!("socks5h://{address}")
         } else {
-            return None;
+            let address = fields.get("socks")?;
+            format!("socks5h://{address}")
         }
     } else {
         server.trim().to_owned()
@@ -270,7 +269,12 @@ pub fn is_elevated() -> bool {
 }
 pub fn elevate(path: &Path) -> Result<()> {
     let executable = wide(&std::env::current_exe()?.to_string_lossy());
-    let parameters = wide(&format!("--elevated-tun \"{}\"", path.display()));
+    let background = std::env::args_os().any(|arg| arg == "--background");
+    let parameters = wide(&format!(
+        "--elevated-tun \"{}\"{}",
+        path.display(),
+        if background { " --background" } else { "" }
+    ));
     let result = unsafe {
         ShellExecuteW(
             std::ptr::null_mut(),
@@ -278,7 +282,7 @@ pub fn elevate(path: &Path) -> Result<()> {
             executable.as_ptr(),
             parameters.as_ptr(),
             std::ptr::null(),
-            1,
+            if background { 0 } else { 1 },
         )
     };
     if result <= 32 {

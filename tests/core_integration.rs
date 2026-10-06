@@ -15,6 +15,44 @@ fn free_port() -> u16 {
 }
 
 #[tokio::test]
+#[ignore = "Requires bundled resources; verifies remembered modes without OS proxy changes"]
+async fn remembered_modes_survive_core_and_client_restart() {
+    use clash_of_rust::engine::ProxyMode;
+    let resources = std::env::var_os("MIHOMO_TEST_RESOURCES")
+        .map(std::path::PathBuf::from)
+        .unwrap_or_else(|| std::path::PathBuf::from("bundle/resources"));
+    let tmp = tempfile::tempdir().unwrap();
+    let store = Store::at(tmp.path().to_owned()).unwrap();
+    let mut mixed = free_port();
+    let controller = free_port();
+    while mixed == controller {
+        mixed = free_port();
+    }
+    store
+        .save_settings(&Settings {
+            controller_port: controller,
+            mixed_port: mixed,
+            ..Settings::default()
+        })
+        .unwrap();
+    {
+        let mut engine = Engine::with_resources(store.clone(), resources.clone()).unwrap();
+        engine.start().await.unwrap();
+        engine.select_mode("global").await.unwrap();
+        engine.select_proxy_mode(ProxyMode::Off).await.unwrap();
+        assert!(engine.select_mode("invalid").await.is_err());
+        engine.stop().await.unwrap();
+    }
+    assert_eq!(store.load_settings().unwrap().run_mode, "global");
+    assert_eq!(store.load_settings().unwrap().proxy_mode, ProxyMode::Off);
+    let mut engine = Engine::with_resources(store, resources).unwrap();
+    engine.start().await.unwrap();
+    assert!(!engine.restore_proxy_mode().await.unwrap());
+    assert_eq!(engine.poll(Scope::Home).await.unwrap().mode, "global");
+    engine.stop().await.unwrap();
+}
+
+#[tokio::test]
 #[ignore = "Requires bundled resources; starts a real core on dynamic loopback ports"]
 async fn real_core_lifecycle_and_configuration() {
     let resources = std::env::var_os("MIHOMO_TEST_RESOURCES")

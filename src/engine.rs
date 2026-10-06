@@ -600,6 +600,7 @@ impl Engine {
                 }
             };
         }
+        self.remember_modes(&state.requested.mode, ProxyMode::Tun)?;
         Ok(())
     }
 
@@ -695,6 +696,39 @@ impl Engine {
         self.geo_manifest = manifest;
         append(&self.logs, "[客户端] 全部 Geo 数据更新完成并通过校验");
         Ok(())
+    }
+
+    // Only explicit selections persist preferences. Cleanup and temporary restarts
+    // use the lower-level mode/proxy_mode operations without clearing them.
+    fn remember_modes(&mut self, run_mode: &str, proxy_mode: ProxyMode) -> Result<()> {
+        let settings = Settings {
+            run_mode: run_mode.into(),
+            proxy_mode,
+            ..self.settings.clone()
+        };
+        self.store.save_settings(&settings)?;
+        self.settings = settings;
+        Ok(())
+    }
+
+    pub async fn select_mode(&mut self, mode: &str) -> Result<()> {
+        self.mode(mode).await?;
+        self.remember_modes(mode, self.settings.proxy_mode)
+    }
+
+    pub async fn select_proxy_mode(&mut self, mode: ProxyMode) -> Result<()> {
+        self.proxy_mode(mode).await?;
+        self.remember_modes(&self.settings.run_mode.clone(), mode)
+    }
+
+    /// Returns true when a successful UAC launch requires the GUI to exit.
+    pub async fn restore_proxy_mode(&mut self) -> Result<bool> {
+        if self.settings.proxy_mode == ProxyMode::Tun && !platform::is_elevated() {
+            self.prepare_elevation().await?;
+            return Ok(true);
+        }
+        self.proxy_mode(self.settings.proxy_mode).await?;
+        Ok(false)
     }
 
     pub async fn mode(&self, mode: &str) -> Result<()> {

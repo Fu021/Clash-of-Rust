@@ -19,9 +19,9 @@ try {
     if ($LASTEXITCODE -ne 0) { throw 'Release build failed' }
     Copy-Item -LiteralPath (Join-Path $taskRoot 'target\release\clash-of-rust.exe') -Destination (Join-Path $taskRoot 'bundle\clash-of-rust.exe') -Force
     New-Item -ItemType Directory -Path (Join-Path $taskRoot 'dist') -Force | Out-Null
-    & $compiler /V2 /INPUTCHARSET UTF8 "/DPAYLOAD=$taskRoot\bundle" "/DOUTPUT=$taskRoot\dist\Clash-of-Rust-0.3.16-windows-x64-setup.exe" (Join-Path $taskRoot 'installer\clash-of-rust.nsi')
+    & $compiler /V2 /INPUTCHARSET UTF8 "/DPAYLOAD=$taskRoot\bundle" "/DOUTPUT=$taskRoot\dist\Clash-of-Rust-0.4.0-windows-x64-setup.exe" (Join-Path $taskRoot 'installer\clash-of-rust.nsi')
     if ($LASTEXITCODE -ne 0) { throw 'Installer compilation failed' }
-    $setup = Join-Path $taskRoot 'dist\Clash-of-Rust-0.3.16-windows-x64-setup.exe'
+    $setup = Join-Path $taskRoot 'dist\Clash-of-Rust-0.4.0-windows-x64-setup.exe'
     (Get-FileHash -LiteralPath $setup -Algorithm SHA256).Hash.ToLowerInvariant() | Set-Content -Encoding ASCII -LiteralPath "$setup.sha256"
     Write-Output "Installer ready: $setup"
 } finally { Pop-Location }

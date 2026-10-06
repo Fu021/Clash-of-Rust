@@ -7,7 +7,7 @@ Unicode true
 !endif
 
 !ifndef APP_VERSION
-  !define APP_VERSION "0.3.16"
+  !define APP_VERSION "0.4.0"
 !endif
 !ifndef PAYLOAD
   !define PAYLOAD "..\bundle"
@@ -41,7 +41,7 @@ SetCompressor /SOLID lzma
 SetCompressorDictSize 32
 ShowInstDetails show
 ShowUninstDetails show
-VIProductVersion "0.3.16.0"
+VIProductVersion "0.4.0.0"
 VIAddVersionKey /LANG=2052 "ProductName" "Clash of Rust"
 VIAddVersionKey /LANG=2052 "FileDescription" "Clash of Rust Windows 安装程序"
 VIAddVersionKey /LANG=2052 "FileVersion" "${APP_VERSION}"

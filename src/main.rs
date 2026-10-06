@@ -227,6 +227,7 @@ struct Reply {
     running: bool,
     geo_status: String,
     autostart: bool,
+    exit_after_start: bool,
 }
 
 #[derive(Debug, Clone)]
@@ -318,13 +319,16 @@ struct App {
 
 async fn execute(engine: Arc<Mutex<Engine>>, action: Action, scope: Scope) -> Reply {
     let mut engine = engine.lock().await;
+    let mut exit_after_start = false;
     let result: anyhow::Result<String> = async {
         match action {
             Action::Refresh => Ok(String::new()),
             Action::Start => {
-                engine.start().await?;
                 if let Some(path) = elevation_path().filter(|path| path.exists()) {
                     engine.finish_elevation(&path).await?;
+                } else {
+                    engine.start().await?;
+                    exit_after_start = engine.restore_proxy_mode().await?;
                 }
                 Ok("内核已启动".into())
             }
@@ -392,11 +396,11 @@ async fn execute(engine: Arc<Mutex<Engine>>, action: Action, scope: Scope) -> Re
                 Ok("订阅已更新".into())
             }
             Action::Mode(mode) => {
-                engine.mode(&mode).await?;
+                engine.select_mode(&mode).await?;
                 Ok("运行模式已切换".into())
             }
             Action::ProxyMode(mode) => {
-                engine.proxy_mode(mode).await?;
+                engine.select_proxy_mode(mode).await?;
                 Ok(match mode {
                     ProxyMode::System => "系统代理已开启",
                     ProxyMode::Tun => "TUN 模式已开启",
@@ -450,6 +454,7 @@ async fn execute(engine: Arc<Mutex<Engine>>, action: Action, scope: Scope) -> Re
         running: engine.running(),
         geo_status: engine.geo_manifest.version.clone(),
         autostart: platform::autostart_enabled().unwrap_or(false),
+        exit_after_start,
     }
 }
 
@@ -944,6 +949,9 @@ impl App {
                 let reply = *reply;
                 self.busy = false;
                 self.working = false;
+                if reply.exit_after_start {
+                    return self.exit();
+                }
                 self.autostart = reply.autostart;
                 self.settings = reply.settings;
                 self.profiles = reply.profiles;
