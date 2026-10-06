@@ -1,0 +1,1100 @@
+[
+  {
+    "id": "exit-ip",
+    "name": "出口 IP",
+    "group": "IP信息",
+    "url": "https://www.cloudflare.com/cdn-cgi/trace"
+  },
+  {
+    "id": "MediaUnlockTest_ChatGPT",
+    "name": "ChatGPT",
+    "group": "AI",
+    "url": "https://chatgpt.com"
+  },
+  {
+    "id": "AIUnlockTest_Claude",
+    "name": "Claude",
+    "group": "AI",
+    "url": "https://claude.ai"
+  },
+  {
+    "id": "AIUnlockTest_Gemini_location",
+    "name": "Gemini",
+    "group": "AI",
+    "url": "https://gemini.google.com"
+  },
+  {
+    "id": "AIUnlockTest_Copilot",
+    "name": "Microsoft Copilot",
+    "group": "AI",
+    "url": "https://copilot.microsoft.com/"
+  },
+  {
+    "id": "MediaUnlockTest_Sora",
+    "name": "Sora",
+    "group": "AI",
+    "url": "https://sora.com"
+  },
+  {
+    "id": "MediaUnlockTest_PrimeVideo_Region",
+    "name": "Amazon Prime Video",
+    "group": "全球",
+    "url": "https://www.primevideo.com"
+  },
+  {
+    "id": "MediaUnlockTest_BilibiliAnimeNew",
+    "name": "Bilibili Anime",
+    "group": "全球",
+    "url": "https://api.bilibili.com/x/web-interface/zone"
+  },
+  {
+    "id": "MediaUnlockTest_Dazn",
+    "name": "Dazn",
+    "group": "全球",
+    "url": "https://startup.core.indazn.com/misl/v5/Startup"
+  },
+  {
+    "id": "MediaUnlockTest_DisneyPlus",
+    "name": "Disney+",
+    "group": "全球",
+    "url": "https://disney.api.edge.bamgrid.com/devices"
+  },
+  {
+    "id": "github",
+    "name": "GitHub",
+    "group": "全球",
+    "url": "https://github.com"
+  },
+  {
+    "id": "MediaUnlockTest_Google",
+    "name": "Google Location",
+    "group": "全球",
+    "url": "https://bard.google.com/_/BardChatUi/data/batchexecute"
+  },
+  {
+    "id": "MediaUnlockTest_HotStar",
+    "name": "HotStar",
+    "group": "全球",
+    "url": "https://api.hotstar.com/o/v1/page/1557?offset=0&size=20&tao=0&tas=20"
+  },
+  {
+    "id": "MediaUnlockTest_Instagram.Music",
+    "name": "Instagram Licensed Music",
+    "group": "全球",
+    "url": "https://www.instagram.com/graphql/query"
+  },
+  {
+    "id": "MediaUnlockTest_iQYI_Region",
+    "name": "iQyi Oversea",
+    "group": "全球",
+    "url": "https://www.iq.com/"
+  },
+  {
+    "id": "MediaUnlockTest_Netflix",
+    "name": "Netflix",
+    "group": "全球",
+    "url": "https://www.netflix.com/title/70143836"
+  },
+  {
+    "id": "MediaUnlockTest_NetflixCDN",
+    "name": "Netflix Preferred CDN",
+    "group": "全球",
+    "url": "https://api.fast.com/netflix/speedtest/v2?https=true&urlCount=1"
+  },
+  {
+    "id": "MediaUnlockTest_Spotify",
+    "name": "Spotify Region",
+    "group": "全球",
+    "url": "https://www.spotify.com/tw/signup"
+  },
+  {
+    "id": "GameTest_Steam",
+    "name": "Steam Currency",
+    "group": "全球",
+    "url": "https://store.steampowered.com/app/761830"
+  },
+  {
+    "id": "MediaUnlockTest_Tiktok",
+    "name": "Tiktok",
+    "group": "全球",
+    "url": "https://www.tiktok.com/"
+  },
+  {
+    "id": "MediaUnlockTest_TVBAnywhere",
+    "name": "TVBAnywhere+",
+    "group": "全球",
+    "url": "https://uapisfm.tvbanywhere.com.sg/geoip/check/platform/android"
+  },
+  {
+    "id": "MediaUnlockTest_Viu.com",
+    "name": "Viu.com",
+    "group": "全球",
+    "url": "https://www.viu.com/"
+  },
+  {
+    "id": "MediaUnlockTest_Wikipedia_Editable",
+    "name": "Wikipedia Editability",
+    "group": "全球",
+    "url": "https://en.wikipedia.org/w/index.php?title=Wikipedia%3AWikiProject_on_open_proxies&action=edit"
+  },
+  {
+    "id": "MediaUnlockTest_YouTube_Premium",
+    "name": "YouTube Premium",
+    "group": "全球",
+    "url": "https://www.youtube.com/premium"
+  },
+  {
+    "id": "MediaUnlockTest_YouTube_CDN",
+    "name": "YouTube Region",
+    "group": "全球",
+    "url": "https://redirector.googlevideo.com/report_mapping?di=no"
+  },
+  {
+    "id": "MediaUnlockTest_4GTV",
+    "name": "4GTV.TV",
+    "group": "台湾",
+    "url": "https://api2.4gtv.tv//Vod/GetVodUrl3"
+  },
+  {
+    "id": "MediaUnlockTest_BahamutAnime",
+    "name": "Bahamut Anime",
+    "group": "台湾",
+    "url": "https://ani.gamer.com.tw/ajax/getdeviceid.php"
+  },
+  {
+    "id": "MediaUnlockTest_BilibiliTW",
+    "name": "Bilibili Taiwan Only",
+    "group": "台湾",
+    "url": "https://api.bilibili.com/pgc/player/web/playurl"
+  },
+  {
+    "id": "MediaUnlockTest_Catchplay",
+    "name": "CatchPlay+",
+    "group": "台湾",
+    "url": "https://sunapi.catchplay.com/geo"
+  },
+  {
+    "id": "MediaUnlockTest_FridayVideo",
+    "name": "Friday Video",
+    "group": "台湾",
+    "url": "https://video.friday.tw/api2/streaming/get?streamingId=122581&streamingType=2&contentType=4&contentId=1&clientId="
+  },
+  {
+    "id": "MediaUnlockTest_HamiVideo",
+    "name": "Hami Video",
+    "group": "台湾",
+    "url": "https://hamivideo.hinet.net/api/play.do?id=OTT_VOD_0000249064&freeProduct=1"
+  },
+  {
+    "id": "MediaUnlockTest_HBOGO_ASIA",
+    "name": "HBO GO Asia",
+    "group": "台湾",
+    "url": "https://api2.hbogoasia.com/v1/geog?lang=undefined&version=0&bundleId=www.hbogoasia.com"
+  },
+  {
+    "id": "MediaUnlockTest_HBOMax",
+    "name": "HBO Max",
+    "group": "台湾",
+    "url": "https://default.any-any.prd.api.hbomax.com/token?realm=bolt&deviceId=afbb5daa-c327-461d-9460-d8e4b3ee4a1f"
+  },
+  {
+    "id": "MediaUnlockTest_KKTV",
+    "name": "KKTV",
+    "group": "台湾",
+    "url": "https://api.kktv.me/v3/ipcheck"
+  },
+  {
+    "id": "MediaUnlockTest_LineTV.TW",
+    "name": "LineTV.TW",
+    "group": "台湾",
+    "url": "https://www.linetv.tw/api/part/11829/eps/1/part?chocomemberId=&appId=062097f1b1f34e11e7f82aag22000aee"
+  },
+  {
+    "id": "MediaUnlockTest_LiTV",
+    "name": "LiTV",
+    "group": "台湾",
+    "url": "https://www.litv.tv/api/get-urls-no-auth"
+  },
+  {
+    "id": "MediaUnlockTest_MyVideo",
+    "name": "MyVideo",
+    "group": "台湾",
+    "url": "https://www.myvideo.net.tw/login.do"
+  },
+  {
+    "id": "MediaUnlockTest_ofiii",
+    "name": "ofiii",
+    "group": "台湾",
+    "url": "https://cdi.ofiii.com/ofiii_cdi/video/urls?device_type=pc&device_id=450b705c-7a08-49e9-9297-10ec0c8624b0&media_type=comic&asset_id=vod68157-020015M001&project_num=OFWEB00&puid=7a9c18b9-eecc-499b-afd2-e905bf04f5a4"
+  },
+  {
+    "id": "MediaUnlockTest_BilibiliHKMCTW",
+    "name": "BiliBili Hongkong/Macau/Taiwan",
+    "group": "香港",
+    "url": "https://api.bilibili.com/pgc/player/web/playurl"
+  },
+  {
+    "id": "MediaUnlockTest_HoyTV",
+    "name": "HOY TV",
+    "group": "香港",
+    "url": "https://hoytv-live-stream.hoy.tv/ch78/index-fhd.m3u8"
+  },
+  {
+    "id": "MediaUnlockTest_MyTVSuper",
+    "name": "MyTVSuper",
+    "group": "香港",
+    "url": "https://www.mytvsuper.com/api/auth/getSession/self/"
+  },
+  {
+    "id": "MediaUnlockTest_NBATV",
+    "name": "NBA TV",
+    "group": "香港",
+    "url": "https://www.nba.com/watch/"
+  },
+  {
+    "id": "MediaUnlockTest_NowE",
+    "name": "Now E",
+    "group": "香港",
+    "url": "https://webtvapi.nowe.com/16/1/getVodURL"
+  },
+  {
+    "id": "MediaUnlockTest_ViuTV",
+    "name": "Viu.TV",
+    "group": "香港",
+    "url": "https://api.viu.now.com/p8/3/getLiveURL"
+  },
+  {
+    "id": "MediaUnlockTest_AbemaTV_IPTest",
+    "name": "Abema.TV",
+    "group": "日本",
+    "url": "https://api.abema.io/v1/ip/check?device=android"
+  },
+  {
+    "id": "MediaUnlockTest_AnimeFesta",
+    "name": "AnimeFesta",
+    "group": "日本",
+    "url": "https://api-animefesta.iowl.jp/v1/titles/1"
+  },
+  {
+    "id": "MediaUnlockTest_DAnimeStore",
+    "name": "D Anime Store",
+    "group": "日本",
+    "url": "https://animestore.docomo.ne.jp/animestore/reg_pc"
+  },
+  {
+    "id": "MediaUnlockTest_DMMTV",
+    "name": "DMM TV",
+    "group": "日本",
+    "url": "https://api.beacon.dmm.com/v1/streaming/start"
+  },
+  {
+    "id": "MediaUnlockTest_EroGameSpace",
+    "name": "EroGameSpace",
+    "group": "日本",
+    "url": "https://erogamescape.org"
+  },
+  {
+    "id": "MediaUnlockTest_FOD",
+    "name": "FOD(Fuji TV)",
+    "group": "日本",
+    "url": "https://geocontrol1.stream.ne.jp/fod-geo/check.xml?time=1624504256"
+  },
+  {
+    "id": "MediaUnlockTest_HuluJP",
+    "name": "Hulu Japan",
+    "group": "日本",
+    "url": "https://id.hulu.jp"
+  },
+  {
+    "id": "MediaUnlockTest_J:COM_ON_DEMAND",
+    "name": "J",
+    "group": "日本",
+    "url": "https://id.zaq.ne.jp"
+  },
+  {
+    "id": "MediaUnlockTest_Kancolle",
+    "name": "Kancolle Japan",
+    "group": "日本",
+    "url": "http://w00g.kancolle-server.com/kcscontents/news/"
+  },
+  {
+    "id": "MediaUnlockTest_DAM",
+    "name": "Karaoke@DAM",
+    "group": "日本",
+    "url": "http://cds1.clubdam.com/vhls-cds1/site/xbox/sample_1.mp4.m3u8"
+  },
+  {
+    "id": "MediaUnlockTest_KonosubaFD",
+    "name": "Konosuba Fantastic Days",
+    "group": "日本",
+    "url": "https://api.konosubafd.jp/api/masterlist"
+  },
+  {
+    "id": "MediaUnlockTest_Lemino",
+    "name": "Lemino",
+    "group": "日本",
+    "url": "https://if.lemino.docomo.ne.jp/v1/user/delivery/watch/ready"
+  },
+  {
+    "id": "MediaUnlockTest_MGStage",
+    "name": "MGStage",
+    "group": "日本",
+    "url": "https://www.mgstage.com/"
+  },
+  {
+    "id": "MediaUnlockTest_mora",
+    "name": "Mora",
+    "group": "日本",
+    "url": "https://mora.jp/buy?returnUrl=https%3A%2F%2Fmora.jp%2Fpackage%2F43000087%2FTFDS01006B00Z%2F%3Ffmid%3DTOPRNKS%26trackMaterialNo%3D31168909&fromMoraUx=false&deleteMaterial="
+  },
+  {
+    "id": "MediaUnlockTest_music.jp",
+    "name": "music.jp",
+    "group": "日本",
+    "url": "https://overseaauth.music-book.jp/globalIpcheck.js"
+  },
+  {
+    "id": "MediaUnlockTest_NHKPlus",
+    "name": "NHK+",
+    "group": "日本",
+    "url": "https://location-plus.nhk.jp/geoip/area.json"
+  },
+  {
+    "id": "MediaUnlockTest_Niconico",
+    "name": "Niconico",
+    "group": "日本",
+    "url": "https://www.nicovideo.jp/watch/so23017073"
+  },
+  {
+    "id": "MediaUnlockTest_Paravi",
+    "name": "Paravi",
+    "group": "日本",
+    "url": "https://api.paravi.jp/api/v1/playback/auth"
+  },
+  {
+    "id": "MediaUnlockTest_UMAJP",
+    "name": "Pretty Derby Japan",
+    "group": "日本",
+    "url": "https://api-umamusume.cygames.jp/"
+  },
+  {
+    "id": "MediaUnlockTest_PCRJP",
+    "name": "Princess Connect Re",
+    "group": "日本",
+    "url": "https://api-priconne-redive.cygames.jp/"
+  },
+  {
+    "id": "MediaUnlockTest_ProjectSekai",
+    "name": "Project Sekai",
+    "group": "日本",
+    "url": "https://game-version.sekai.colorfulpalette.org/1.8.1/3ed70b6a-8352-4532-b819-108837926ff5"
+  },
+  {
+    "id": "MediaUnlockTest_Radiko",
+    "name": "Radiko",
+    "group": "日本",
+    "url": "https://radiko.jp/area?_=1625406539531"
+  },
+  {
+    "id": "MediaUnlockTest_RakutenMagazine",
+    "name": "Rakuten MAGAZINE",
+    "group": "日本",
+    "url": "https://data-cloudauthoring.magazine.rakuten.co.jp/rem_repository/////////.key"
+  },
+  {
+    "id": "MediaUnlockTest_RakutenTVJP",
+    "name": "Rakuten TV JP",
+    "group": "日本",
+    "url": "https://api.tv.rakuten.co.jp/content/playinfo.json?content_id=1&device_id=1"
+  },
+  {
+    "id": "MediaUnlockTest_Telasa",
+    "name": "Telasa",
+    "group": "日本",
+    "url": "https://api-videopass-anon.kddi-video.com/v1/playback/system_status"
+  },
+  {
+    "id": "MediaUnlockTest_TVer",
+    "name": "TVer",
+    "group": "日本",
+    "url": "https://playback.api.streaks.jp/v1/projects/tver-simul-ntv/medias/ref:simul-ntv"
+  },
+  {
+    "id": "MediaUnlockTest_unext",
+    "name": "U-NEXT",
+    "group": "日本",
+    "url": "https://cc.unext.jp/?zxuid=1b64984ecc23&zxemp=29854391&operationName=cosmo_getPlaylistUrl&variables=%7B%22code%22%3A%22ED00440417%22%2C%22playMode%22%3A%22caption%22%2C%22bitrateLow%22%3A192%2C%22bitrateHigh%22%3Anull%2C%22validationOnly%22%3Afalse%7D&extensions=%7B%22persistedQuery%22%3A%7B%22version%22%3A1%2C%22sha256Hash%22%3A%22a2309e22a6819ff747cf9a389dd78db35fa3c386fac1d53461061ba20fa44e34%22%7D%7D"
+  },
+  {
+    "id": "MediaUnlockTest_VideoMarket",
+    "name": "VideoMarket",
+    "group": "日本",
+    "url": "https://www.videomarket.jp/player/17588S/A17588S001999H01"
+  },
+  {
+    "id": "MediaUnlockTest_wowow",
+    "name": "WOWOW",
+    "group": "日本",
+    "url": "https://mapi.wowow.co.jp/api/v1/playback/auth"
+  },
+  {
+    "id": "MediaUnlockTest_AETV",
+    "name": "A&E TV",
+    "group": "北美",
+    "url": "https://ccpa-service.sp-prod.net/ccpa/consent/10265/display-dns"
+  },
+  {
+    "id": "MediaUnlockTest_AcornTV",
+    "name": "Acorn TV",
+    "group": "北美",
+    "url": "https://acorn.tv/"
+  },
+  {
+    "id": "MediaUnlockTest_BritBox",
+    "name": "BritBox",
+    "group": "北美",
+    "url": "https://www.britbox.com/"
+  },
+  {
+    "id": "MediaUnlockTest_CBCGem",
+    "name": "CBC Gem",
+    "group": "北美",
+    "url": "https://www.cbc.ca/g/stats/js/cbc-stats-top.js"
+  },
+  {
+    "id": "MediaUnlockTest_Crackle",
+    "name": "Crackle",
+    "group": "北美",
+    "url": "https://prod-api.crackle.com/appconfig"
+  },
+  {
+    "id": "MediaUnlockTest_Crave",
+    "name": "Crave",
+    "group": "北美",
+    "url": "https://capi.9c9media.com/destinations/crave_atexace/platforms/desktop/playback/contents/2189628/contentPackages/4178863/manifest.pmpd"
+  },
+  {
+    "id": "MediaUnlockTest_Crunchyroll",
+    "name": "Crunchyroll",
+    "group": "北美",
+    "url": "https://c.evidon.com/geo/country.js"
+  },
+  {
+    "id": "MediaUnlockTest_CWTV",
+    "name": "CW TV",
+    "group": "北美",
+    "url": "https://www.cwtv.com/"
+  },
+  {
+    "id": "MediaUnlockTest_ATTNOW",
+    "name": "Directv Stream",
+    "group": "北美",
+    "url": "https://www.atttvnow.com/"
+  },
+  {
+    "id": "MediaUnlockTest_DiscoveryPlus",
+    "name": "Discovery+",
+    "group": "北美",
+    "url": "https://us1-prod-direct.discoveryplus.com/token?deviceId=d1a4a5d25212400d1e6985984604d740&realm=go&shortlived=true"
+  },
+  {
+    "id": "MediaUnlockTest_encoreTVB",
+    "name": "encoreTVB",
+    "group": "北美",
+    "url": "https://www.encoretvb.com"
+  },
+  {
+    "id": "MediaUnlockTest_EPIX",
+    "name": "Epix",
+    "group": "北美",
+    "url": "https://api.epix.com/v2/sessions"
+  },
+  {
+    "id": "MediaUnlockTest_ESPNPlus",
+    "name": "ESPN+",
+    "group": "北美",
+    "url": "https://espn.api.edge.bamgrid.com/token"
+  },
+  {
+    "id": "MediaUnlockTest_Fox",
+    "name": "FOX",
+    "group": "北美",
+    "url": "https://x-live-fox-stgec.uplynk.com/ausw/slices/8d1/d8e6eec26bf544f084bad49a7fa2eac5/8d1de292bcc943a6b886d029e6c0dc87/G00000000.ts?pbs=c61e60ee63ce43359679fb9f65d21564&cloud=aws&si=0"
+  },
+  {
+    "id": "MediaUnlockTest_FuboTV",
+    "name": "Fubo TV",
+    "group": "北美",
+    "url": "https://api.fubo.tv/appconfig/v1/homepage"
+  },
+  {
+    "id": "MediaUnlockTest_FXNOW",
+    "name": "FXNOW",
+    "group": "北美",
+    "url": "https://fxnow.fxnetworks.com/"
+  },
+  {
+    "id": "MediaUnlockTest_HuluUS",
+    "name": "Hulu",
+    "group": "北美",
+    "url": "https://auth.hulu.com/v4/web/password/authenticate"
+  },
+  {
+    "id": "MediaUnlockTest_KBSAmerican",
+    "name": "KBS American",
+    "group": "北美",
+    "url": "https://vod.kbs.co.kr/index.html?source=episode&sname=vod&stype=vod&program_code=T2022-0690&program_id=PS-2022164275-01-000&broadcast_complete_yn=N&local_station_code=00&section_code=03"
+  },
+  {
+    "id": "MediaUnlockTest_KOCOWA",
+    "name": "KOCOWA",
+    "group": "北美",
+    "url": "https://www.kocowa.com/"
+  },
+  {
+    "id": "MediaUnlockTest_MathsSpot",
+    "name": "Maths Spot",
+    "group": "北美",
+    "url": "https://netv2.now.gg/v3/playtoken"
+  },
+  {
+    "id": "MediaUnlockTest_NBCTV",
+    "name": "NBC TV",
+    "group": "北美",
+    "url": "https://www.nbc.com/"
+  },
+  {
+    "id": "MediaUnlockTest_NFLPlus",
+    "name": "NFL+",
+    "group": "北美",
+    "url": "https://www.nfl.com/plus/"
+  },
+  {
+    "id": "MediaUnlockTest_ParamountPlus",
+    "name": "Paramount+",
+    "group": "北美",
+    "url": "https://www.paramountplus.com/"
+  },
+  {
+    "id": "MediaUnlockTest_PeacockTV",
+    "name": "Peacock TV",
+    "group": "北美",
+    "url": "https://www.peacocktv.com/"
+  },
+  {
+    "id": "MediaUnlockTest_Philo",
+    "name": "Philo",
+    "group": "北美",
+    "url": "https://content-us-east-2-fastly-b.www.philo.com/geo"
+  },
+  {
+    "id": "MediaUnlockTest_PlutoTV",
+    "name": "Pluto TV",
+    "group": "北美",
+    "url": "https://pluto.tv/"
+  },
+  {
+    "id": "MediaUnlockTest_Popcornflix",
+    "name": "Popcornflix",
+    "group": "北美",
+    "url": "https://popcornflix-prod.cloud.seachange.com/cms/popcornflix/clientconfiguration/versions/2"
+  },
+  {
+    "id": "MediaUnlockTest_SlingTV",
+    "name": "Rakuten TV JP",
+    "group": "北美",
+    "url": "https://p-geo.movetv.com/geo"
+  },
+  {
+    "id": "MediaUnlockTest_SHOWTIME",
+    "name": "SHOWTIME",
+    "group": "北美",
+    "url": "https://www.showtime.com/"
+  },
+  {
+    "id": "MediaUnlockTest_Shudder",
+    "name": "Shudder",
+    "group": "北美",
+    "url": "https://www.shudder.com/"
+  },
+  {
+    "id": "MediaUnlockTest_Starz",
+    "name": "Starz",
+    "group": "北美",
+    "url": "https://www.starz.com/sapi/header/v1/starz/us/09b397fc9eb64d5080687fc8a218775b"
+  },
+  {
+    "id": "MediaUnlockTest_TLCGO",
+    "name": "TLC GO",
+    "group": "北美",
+    "url": "https://geolocation.onetrust.com/cookieconsentpub/v1/geo/location/dnsfeed"
+  },
+  {
+    "id": "MediaUnlockTest_TubiTV",
+    "name": "Tubi TV",
+    "group": "北美",
+    "url": "https://tubitv.com"
+  },
+  {
+    "id": "MediaUnlockTest_DirecTVGO",
+    "name": "DirecTV Go",
+    "group": "南美",
+    "url": "https://www.directvgo.com/registrarse"
+  },
+  {
+    "id": "MediaUnlockTest_Amediateka",
+    "name": "Amediateka",
+    "group": "欧洲",
+    "url": "https://www.amediateka.ru/"
+  },
+  {
+    "id": "MediaUnlockTest_BBCiPLAYER",
+    "name": "BBC iPLAYER",
+    "group": "欧洲",
+    "url": "https://open.live.bbc.co.uk/mediaselector/6/select/version/2.0/mediaset/pc/vpid/bbc_one_london/format/json/jsfunc/JS_callbacks0"
+  },
+  {
+    "id": "MediaUnlockTest_CanalPlus",
+    "name": "Canal+",
+    "group": "欧洲",
+    "url": "https://boutique-tunnel.canalplus.com/"
+  },
+  {
+    "id": "MediaUnlockTest_Channel4",
+    "name": "Channel 4",
+    "group": "欧洲",
+    "url": "https://www.channel4.com/simulcast/channels/C4"
+  },
+  {
+    "id": "MediaUnlockTest_Channel5",
+    "name": "Channel 5",
+    "group": "欧洲",
+    "url": "https://cassie.channel5.com/api/v2/live_media/my5desktopng/C5.json"
+  },
+  {
+    "id": "MediaUnlockTest_DiscoveryPlusUK",
+    "name": "Discovery+ UK",
+    "group": "欧洲",
+    "url": "https://disco-api.discoveryplus.co.uk/token?realm=questuk&deviceId=61ee588b07c4df08c02861ecc1366a592c4ad02d08e8228ecfee67501d98bf47&shortlived=true"
+  },
+  {
+    "id": "MediaUnlockTest_Eurosport",
+    "name": "Eurosports Region",
+    "group": "欧洲",
+    "url": "https://www.eurosport.com/"
+  },
+  {
+    "id": "MediaUnlockTest_FranceTV",
+    "name": "France.tv",
+    "group": "欧洲",
+    "url": "https://geo-info.ftven.fr/ws/edgescape.json"
+  },
+  {
+    "id": "MediaUnlockTest_HBO_Nordic",
+    "name": "HBO Nordic",
+    "group": "欧洲",
+    "url": "https://api-discovery.hbo.eu/v1/discover/hbo?language=null&product=hbon"
+  },
+  {
+    "id": "MediaUnlockTest_HBO_Spain",
+    "name": "HBO Spain",
+    "group": "欧洲",
+    "url": "https://api-discovery.hbo.eu/v1/discover/hbo?language=null&product=hboe"
+  },
+  {
+    "id": "MediaUnlockTest_ITVHUB",
+    "name": "ITV Hub",
+    "group": "欧洲",
+    "url": "https://simulcast.itv.com/playlist/itvonline/ITV"
+  },
+  {
+    "id": "MediaUnlockTest_Joyn",
+    "name": "Joyn",
+    "group": "欧洲",
+    "url": "https://auth.joyn.de/auth/anonymous"
+  },
+  {
+    "id": "MediaUnlockTest_MegogoTV",
+    "name": "Megogo TV",
+    "group": "欧洲",
+    "url": "https://ctx.playfamily.ru/screenapi/v4/preparepurchase/web/1?elementId=0b974dc3-d4c5-4291-9df5-81a8132f67c5&elementAlias=51459024&elementType=GAME&withUpgradeSubscriptionReturnAmount=true&forceSvod=true&includeProductsForUpsale=false&sid=mDRnXOffdh_l2sBCyUIlbA"
+  },
+  {
+    "id": "MediaUnlockTest_Molotov",
+    "name": "Molotov",
+    "group": "欧洲",
+    "url": "https://fapi.molotov.tv/v1/open-europe/is-france"
+  },
+  {
+    "id": "MediaUnlockTest_MoviStarPlus",
+    "name": "Movistar+",
+    "group": "欧洲",
+    "url": "https://contratar.movistarplus.es/"
+  },
+  {
+    "id": "MediaUnlockTest_NLZIET",
+    "name": "NLZIET",
+    "group": "欧洲",
+    "url": "https://api.nlziet.nl/v7/stream/handshake/Widevine/Dash/VOD/rzIL9rb-TkSn-ek_wBmvaw?playerName=BitmovinWeb"
+  },
+  {
+    "id": "MediaUnlockTest_NPO_Start_Plus",
+    "name": "NPO Start Plus",
+    "group": "欧洲",
+    "url": "https://npo.nl/start/api/domain/player-token?productId=BV_101410466"
+  },
+  {
+    "id": "MediaUnlockTest_RaiPlay",
+    "name": "Rai Play",
+    "group": "欧洲",
+    "url": "https://mediapolisvod.rai.it/relinker/relinkerServlet.htm?cont=VxXwi7UcqjApssSlashbjsAghviAeeqqEEqualeeqqEEqual&output=64"
+  },
+  {
+    "id": "MediaUnlockTest_RakutenTV",
+    "name": "Rakuten TV",
+    "group": "欧洲",
+    "url": "https://rakuten.tv"
+  },
+  {
+    "id": "MediaUnlockTest_Salto",
+    "name": "Salto",
+    "group": "欧洲",
+    "url": "https://geo.salto.fr/v1/geoInfo/"
+  },
+  {
+    "id": "MediaUnlockTest_SetantaSports",
+    "name": "Setanta Sports",
+    "group": "欧洲",
+    "url": "https://dce-frontoffice.imggaming.com/api/v2/consent-prompt"
+  },
+  {
+    "id": "MediaUnlockTest_Sky_CH",
+    "name": "SKY CH",
+    "group": "欧洲",
+    "url": "https://sky.ch/"
+  },
+  {
+    "id": "MediaUnlockTest_SKY_DE",
+    "name": "Sky DE",
+    "group": "欧洲",
+    "url": "https://edge.api.brightcove.com/playback/v1/accounts/1050888051001/videos/6247131490001"
+  },
+  {
+    "id": "MediaUnlockTest_SkyGo",
+    "name": "Sky Go",
+    "group": "欧洲",
+    "url": "https://skyid.sky.com/authorise/skygo?response_type=token&client_id=sky&appearance=compact&redirect_uri=skygo%3A%2F%2Fauth"
+  },
+  {
+    "id": "MediaUnlockTest_SkyShowTime",
+    "name": "SkyShowTime",
+    "group": "欧洲",
+    "url": "https://www.skyshowtime.com/"
+  },
+  {
+    "id": "MediaUnlockTest_Viaplay",
+    "name": "Viaplay",
+    "group": "欧洲",
+    "url": "https://viaplay.pl/package?recommended=viaplay"
+  },
+  {
+    "id": "MediaUnlockTest_videoland",
+    "name": "videoland",
+    "group": "欧洲",
+    "url": "https://api.videoland.com/subscribe/videoland-account/graphql"
+  },
+  {
+    "id": "MediaUnlockTest_ZDF",
+    "name": "ZDF",
+    "group": "欧洲",
+    "url": "https://ssl.zdf.de/geo/de/geo.txt/"
+  },
+  {
+    "id": "MediaUnlockTest_7plus",
+    "name": "7plus",
+    "group": "大洋洲",
+    "url": "https://7plus-sevennetwork.akamaized.net/media/v1/dash/live/cenc/5303576322001/68dca38b-85d7-4dae-b1c5-c88acc58d51c/f4ea4711-514e-4cad-824f-e0c87db0a614/225ec0a0-ef18-4b7c-8fd6-8dcdd16cf03a/1x/segment0.m4f"
+  },
+  {
+    "id": "MediaUnlockTest_ABCiView",
+    "name": "ABC iView",
+    "group": "大洋洲",
+    "url": "https://api.iview.abc.net.au/v2/show/abc-kids-live-stream/video/LS1604H001S00?embed=highlightVideo%2CselectedSeries"
+  },
+  {
+    "id": "MediaUnlockTest_Binge",
+    "name": "Binge",
+    "group": "大洋洲",
+    "url": "https://auth.streamotion.com.au"
+  },
+  {
+    "id": "MediaUnlockTest_Channel10",
+    "name": "Channel 10",
+    "group": "大洋洲",
+    "url": "https://e410fasadvz.global.ssl.fastly.net/geo"
+  },
+  {
+    "id": "MediaUnlockTest_Channel9",
+    "name": "Channel 9",
+    "group": "大洋洲",
+    "url": "https://login.nine.com.au"
+  },
+  {
+    "id": "MediaUnlockTest_Docplay",
+    "name": "Docplay",
+    "group": "大洋洲",
+    "url": "https://www.docplay.com/subscribe"
+  },
+  {
+    "id": "MediaUnlockTest_KayoSports",
+    "name": "Kayo Sports",
+    "group": "大洋洲",
+    "url": "https://auth.streamotion.com.au"
+  },
+  {
+    "id": "MediaUnlockTest_MaoriTV",
+    "name": "Maori TV",
+    "group": "大洋洲",
+    "url": "https://edge.api.brightcove.com/playback/v1/accounts/1614493167001/videos/6275380737001"
+  },
+  {
+    "id": "MediaUnlockTest_NeonTV",
+    "name": "Neon TV",
+    "group": "大洋洲",
+    "url": "https://api.neontv.co.nz/api/client/gql"
+  },
+  {
+    "id": "MediaUnlockTest_OptusSports",
+    "name": "Optus Sports",
+    "group": "大洋洲",
+    "url": "https://sport.optus.com.au/api/userauth/validate/web/username/restriction.check@gmail.com"
+  },
+  {
+    "id": "MediaUnlockTest_SBSonDemand",
+    "name": "SBS on Demand",
+    "group": "大洋洲",
+    "url": "https://www.sbs.com.au/api/v3/network?context=odwebsite"
+  },
+  {
+    "id": "MediaUnlockTest_SkyGONZ",
+    "name": "SkyGo NZ",
+    "group": "大洋洲",
+    "url": "https://linear-s.stream.skyone.co.nz/sky-sport-1.mpd"
+  },
+  {
+    "id": "MediaUnlockTest_Stan",
+    "name": "Stan",
+    "group": "大洋洲",
+    "url": "https://api.stan.com.au/login/v1/sessions/web/account"
+  },
+  {
+    "id": "MediaUnlockTest_ThreeNow",
+    "name": "ThreeNow",
+    "group": "大洋洲",
+    "url": "https://bravo-livestream.fullscreen.nz/index.m3u8"
+  },
+  {
+    "id": "MediaUnlockTest_Afreeca",
+    "name": "Afreeca TV",
+    "group": "韩国",
+    "url": "https://vod.afreecatv.com/player/97464151"
+  },
+  {
+    "id": "MediaUnlockTest_CoupangPlay",
+    "name": "Coupang Play",
+    "group": "韩国",
+    "url": "https://www.coupangplay.com/"
+  },
+  {
+    "id": "MediaUnlockTest_KBSDomestic",
+    "name": "KBS Domestic",
+    "group": "韩国",
+    "url": "https://vod.kbs.co.kr/index.html?source=episode&sname=vod&stype=vod&program_code=T2022-0690&program_id=PS-2022164275-01-000&broadcast_complete_yn=N&local_station_code=00&section_code=03"
+  },
+  {
+    "id": "MediaUnlockTest_NaverTV",
+    "name": "Naver TV",
+    "group": "韩国",
+    "url": "https://apis.naver.com/"
+  },
+  {
+    "id": "MediaUnlockTest_PandaTV",
+    "name": "PandaTV",
+    "group": "韩国",
+    "url": "https://api.pandalive.co.kr/v1/live/play"
+  },
+  {
+    "id": "MediaUnlockTest_SpotvNow",
+    "name": "SPOTV NOW",
+    "group": "韩国",
+    "url": "https://edge.api.brightcove.com/playback/v1/accounts/5764318566001/videos/6349973203112"
+  },
+  {
+    "id": "MediaUnlockTest_Tving",
+    "name": "Tving",
+    "group": "韩国",
+    "url": "https://api.tving.com/v2a/media/stream/info?mediaCode=RV60891248"
+  },
+  {
+    "id": "MediaUnlockTest_Wavve",
+    "name": "Wavve",
+    "group": "韩国",
+    "url": "https://apis.wavve.com/fz/streaming?device=pc&partner=pooq&credential=none&service=wavve&pooqzone=none&region=kor&drm=pr&targetage=all&contentid=MV_C3001_C300000012559&contenttype=movie&hdr=sdr&videocodec=avc&audiocodec=ac3&issurround=n&format=normal&withinsubtitle=n&action=dash&protocol=dash&quality=auto&deviceModelId=Windows+10&guid=1a8e9c88-6a3b-11ed-8584-eed06ef80652&lastplayid=none&isabr=y&ishevc=n"
+  },
+  {
+    "id": "MediaUnlockTest_AISPlay",
+    "name": "AIS Play",
+    "group": "东南亚",
+    "url": "https://49-231-37-237-rewriter.ais-vidnt.com/ais/play/origin/VOD/playlist/ais-yMzNH1-bGUxc/index.m3u8"
+  },
+  {
+    "id": "MediaUnlockTest_beIN_Sports",
+    "name": "beIN Sports",
+    "group": "东南亚",
+    "url": "https://d6m3sfa7e58z5.cloudfront.net/out/v1/3b0660e05eed4d769521eb0275aab3ab/index.mpd"
+  },
+  {
+    "id": "MediaUnlockTest_ClipTV",
+    "name": "Clip TV",
+    "group": "东南亚",
+    "url": "https://cliptv.vn/the-forgiven-2022,lvDoN0JrP/Jx52YAKL2v"
+  },
+  {
+    "id": "MediaUnlockTest_GalaxyPlay",
+    "name": "Galaxy Play",
+    "group": "东南亚",
+    "url": "https://api.glxplay.io/account/device/new"
+  },
+  {
+    "id": "MediaUnlockTest_JioCinema",
+    "name": "Jio Cinema",
+    "group": "东南亚",
+    "url": "https://content-jiovoot.voot.com/psapi/"
+  },
+  {
+    "id": "MediaUnlockTest_KPlus",
+    "name": "K+",
+    "group": "东南亚",
+    "url": "https://tvapi-sgn.solocoo.tv/v1/provision"
+  },
+  {
+    "id": "MediaUnlockTest_meWATCH",
+    "name": "meWATCH",
+    "group": "东南亚",
+    "url": "https://cdn.mewatch.sg/api/items/362414/videos?delivery=stream%2Cprogressive&ff=idp%2Cldp%2Crpt%2Ccd&lang=en&resolution=External&segments=all"
+  },
+  {
+    "id": "MediaUnlockTest_MXPlayer",
+    "name": "MXPlayer",
+    "group": "东南亚",
+    "url": "https://www.mxplayer.in/"
+  },
+  {
+    "id": "MediaUnlockTest_MYTV",
+    "name": "MYTV",
+    "group": "东南亚",
+    "url": "https://webapi.mytv.vn/api/v1/movie/138546/play"
+  },
+  {
+    "id": "MediaUnlockTest_SonyLiv",
+    "name": "SonyLiv",
+    "group": "东南亚",
+    "url": "https://www.sonyliv.com/signin"
+  },
+  {
+    "id": "MediaUnlockTest_Sooka",
+    "name": "Sooka",
+    "group": "东南亚",
+    "url": "https://app-expmanager-proxy.sooka.my/prod/api/v1/enveu_prod/screen?screenId=0"
+  },
+  {
+    "id": "MediaUnlockTest_StarhubTVPlus",
+    "name": "Starhub TV+",
+    "group": "东南亚",
+    "url": "https://ucdn.starhubgo.com/bpk-tv/HubSensasiHD/output/manifest.mpd"
+  },
+  {
+    "id": "MediaUnlockTest_TataPlay",
+    "name": "Tata Play",
+    "group": "东南亚",
+    "url": "https://watch.tataplay.com/"
+  },
+  {
+    "id": "MediaUnlockTest_TrueID",
+    "name": "TrueID",
+    "group": "东南亚",
+    "url": "https://movie.trueid.net/apis/auth/checkedplay"
+  },
+  {
+    "id": "MediaUnlockTest_TV360",
+    "name": "TV360",
+    "group": "东南亚",
+    "url": "https://tv360.vn/public/v1/composite/get-link?sq=CJSkRii71PAn41F9A2OlJSTxkOTDBl8uip04KFxqJc6iAmCPOt52q12a9hpwORZGjayWYrJSGjwYdG7Jy2NqPA%3D%3D&secured=true"
+  },
+  {
+    "id": "MediaUnlockTest_Vidio",
+    "name": "Vidio",
+    "group": "东南亚",
+    "url": "https://geo-id-media-001-vidio-com.akamaized.net/2x2.png"
+  },
+  {
+    "id": "MediaUnlockTest_VTVcab",
+    "name": "VTVcab",
+    "group": "东南亚",
+    "url": "https://www.vtvcab.vn/"
+  },
+  {
+    "id": "MediaUnlockTest_Zee5",
+    "name": "Zee5",
+    "group": "东南亚",
+    "url": "https://www.zee5.com/"
+  },
+  {
+    "id": "MediaUnlockTest_DStv",
+    "name": "DStv",
+    "group": "非洲",
+    "url": "https://now.dstv.com/"
+  },
+  {
+    "id": "MediaUnlockTest_BeinConnect",
+    "name": "Bein Sports Connect",
+    "group": "体育",
+    "url": "https://proxies.bein-mena-production.eu-west-2.tuc.red/proxy/availableOffers"
+  },
+  {
+    "id": "MediaUnlockTest_EurosportRO",
+    "name": "Eurosport RO",
+    "group": "体育",
+    "url": "https://eu3-prod-direct.eurosport.ro/playback/v2/videoPlaybackInfo/sourceSystemId/eurosport-vid1560178"
+  },
+  {
+    "id": "MediaUnlockTest_MolaTV",
+    "name": "Mola TV",
+    "group": "体育",
+    "url": "https://mola.tv/api/v2/videos/geoguard/check/vd30491025"
+  },
+  {
+    "id": "MediaUnlockTest_CineMax",
+    "name": "CineMax Go",
+    "group": "其他",
+    "url": "https://play.maxgo.com/"
+  },
+  {
+    "id": "MediaUnlockTest_DMM",
+    "name": "DMM",
+    "group": "其他",
+    "url": "https://www.dmm.com/"
+  },
+  {
+    "id": "MediaUnlockTest_HBONow",
+    "name": "HBO Now",
+    "group": "其他",
+    "url": "https://play.hbonow.com/"
+  },
+  {
+    "id": "MediaUnlockTest_HBO_Portugal",
+    "name": "HBO Portugal",
+    "group": "其他",
+    "url": "https://api.ugw.hbogo.eu/v3.0/GeoCheck/json/PRT"
+  }
+]

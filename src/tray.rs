@@ -1,6 +1,6 @@
 //! Native tray lives on its own event thread; only commands cross into the GUI.
 use std::sync::{OnceLock, mpsc};
-use tokio::sync::{Mutex, mpsc as async_channel};
+use tokio::sync::{Mutex, mpsc as async_channel, watch};
 use tray_icon::{
     Icon, MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent,
     menu::{CheckMenuItem, Menu, MenuEvent, MenuItem, Submenu},
@@ -25,10 +25,11 @@ pub async fn next() -> Option<Command> {
 
 pub struct Guard {
     shutdown: Option<Box<dyn FnOnce() + Send>>,
-    updates: mpsc::Sender<State>,
+    updates: watch::Sender<State>,
     thread_id: u32,
 }
 
+#[derive(Clone, Default, PartialEq, Eq)]
 struct State {
     mode: String,
     system_proxy: bool,
@@ -54,12 +55,33 @@ fn update_icon(icon: &tray_icon::TrayIcon, kind: &mut crate::icons::Kind, state:
 
 impl Guard {
     pub fn update(&self, snapshot: &crate::engine::Snapshot) {
-        let _ = self.updates.send(State {
+        self.publish(snapshot, false);
+    }
+
+    /// Native check items toggle before their command is delivered. Reapply
+    /// confirmed state even when clicking an already-selected mode.
+    pub fn refresh(&self, snapshot: &crate::engine::Snapshot) {
+        self.publish(snapshot, true);
+    }
+
+    fn publish(&self, snapshot: &crate::engine::Snapshot, force: bool) {
+        let state = State {
             mode: snapshot.mode.clone(),
             system_proxy: snapshot.system_proxy,
             tun: snapshot.tun,
             running: snapshot.running,
+        };
+        let changed = self.updates.send_if_modified(|current| {
+            if !force && *current == state {
+                false
+            } else {
+                *current = state;
+                true
+            }
         });
+        if !changed {
+            return;
+        }
         #[cfg(windows)]
         unsafe {
             windows_sys::Win32::UI::WindowsAndMessaging::PostThreadMessageW(
@@ -106,7 +128,8 @@ pub fn start() -> anyhow::Result<Guard> {
     let (sender, receiver) = async_channel::unbounded_channel();
     let (ready_tx, ready_rx) = mpsc::sync_channel(1);
     let (stop_tx, stop_rx) = mpsc::channel::<()>();
-    let (update_tx, update_rx) = mpsc::channel::<State>();
+    // Only the newest state matters; a stalled tray must not accumulate polls.
+    let (update_tx, mut update_rx) = watch::channel(State::default());
     std::thread::spawn(move || {
         #[cfg(windows)]
         let thread_id = unsafe {
@@ -199,7 +222,8 @@ pub fn start() -> anyhow::Result<Guard> {
                     use windows_sys::Win32::UI::WindowsAndMessaging::*;
                     let mut message = std::mem::zeroed();
                     while GetMessageW(&mut message, std::ptr::null_mut(), 0, 0) > 0 {
-                        while let Ok(state) = update_rx.try_recv() {
+                        if update_rx.has_changed().unwrap_or(false) {
+                            let state = update_rx.borrow_and_update().clone();
                             update_icon(&icon, &mut icon_kind, &state);
                             checks.update(state);
                         }
@@ -212,14 +236,16 @@ pub fn start() -> anyhow::Result<Guard> {
                     if stop_rx.try_recv().is_ok() {
                         break;
                     }
-                    match update_rx.recv_timeout(std::time::Duration::from_millis(100)) {
-                        Ok(state) => {
+                    match update_rx.has_changed() {
+                        Ok(true) => {
+                            let state = update_rx.borrow_and_update().clone();
                             update_icon(&icon, &mut icon_kind, &state);
                             checks.update(state);
                         }
-                        Err(mpsc::RecvTimeoutError::Timeout) => {}
-                        Err(mpsc::RecvTimeoutError::Disconnected) => break,
+                        Ok(false) => {}
+                        Err(_) => break,
                     }
+                    std::thread::sleep(std::time::Duration::from_millis(100));
                 }
                 drop(icon);
             }

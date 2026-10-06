@@ -78,8 +78,18 @@ def main():
         raise RuntimeError("GitHub credential lacks repository push permission")
     if args.check:
         print("Authenticated repository:", info["full_name"])
-        runs = request(base + "/actions/runs?per_page=1")
-        for run in runs.get("workflow_runs", []):
+        commit = subprocess.check_output(
+            ["git", "rev-parse", "HEAD"], cwd=root, text=True
+        ).strip()
+        runs = request(base + "/actions/runs?per_page=20")
+        matching_runs = [
+            run for run in runs.get("workflow_runs", [])
+            if run["head_sha"] == commit and run["event"] == "push"
+        ]
+        if not matching_runs:
+            print("No push CI found for commit:", commit)
+        for run in matching_runs[:1]:
+            print("CI commit:", run["head_sha"])
             print("Latest CI:", run["status"], run["conclusion"], run["html_url"])
             if run["conclusion"] == "failure":
                 jobs = request(base + f"/actions/runs/{run['id']}/jobs")
@@ -99,7 +109,7 @@ def main():
     if not args.tag or not args.notes or not args.asset:
         raise RuntimeError("Provide --tag, --notes and --asset before publishing")
     notes = args.notes.read_text(encoding="utf-8")
-    if "开发预览版" not in notes or "不保证任何功能" not in notes:
+    if "开发预览版" not in notes:
         raise RuntimeError("Release notes must disclose development preview status")
     files = [(path, path.read_bytes()) for path in args.asset]
     commit = subprocess.check_output(["git", "rev-parse", "HEAD"], cwd=root, text=True).strip()

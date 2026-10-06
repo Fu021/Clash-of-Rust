@@ -11,17 +11,19 @@ if (Test-Path -LiteralPath $legacyKey) { throw 'Existing legacy smoke-test entry
 if (Test-Path -LiteralPath $testKey) { throw 'An existing installer smoke-test entry is present; refusing to overwrite it' }
 & $compiler /V2 /INPUTCHARSET UTF8 /DINSTALLER_TESTING "/DPAYLOAD=$taskRoot\bundle" "/DOUTPUT=$taskSetup" (Join-Path $taskRoot 'installer\clash-of-rust.nsi')
 if ($LASTEXITCODE -ne 0) { throw 'Smoke-test installer compilation failed' }
+# Check the running-application guard before creating an installation. Once an
+# installation exists, silent reinstall refusal correctly takes precedence.
+$taskRunningMutex=[System.Threading.Mutex]::new($false, 'Local\ClashOfRust.InstallerSmoke')
+try {
+    $running = Start-Process -FilePath $taskSetup -ArgumentList '/S',"/D=$taskInstall" -WindowStyle Hidden -Wait -PassThru
+    if ($running.ExitCode -ne 3) { throw 'Installer did not reject a running application' }
+} finally { $taskRunningMutex.Dispose() }
 $first = Start-Process -FilePath $taskSetup -ArgumentList '/S',"/D=$taskInstall" -WindowStyle Hidden -Wait -PassThru
 if ($first.ExitCode -ne 0) { throw "Fresh installation failed: $($first.ExitCode)" }
 foreach ($name in @('GeoIP.dat','GeoSite.dat','Country.mmdb','ASN.mmdb','mihomo.exe','default.yaml','settings-defaults.json','geodata.json')) {
     if (-not (Test-Path -LiteralPath (Join-Path $taskInstall "resources\$name"))) { throw "Installed asset missing: $name" }
 }
 if (-not (Test-Path -LiteralPath (Join-Path $taskInstall 'clash-of-rust.exe'))) { throw 'Application executable missing' }
-$taskRunningMutex=[System.Threading.Mutex]::new($false, 'Local\ClashOfRust.InstallerSmoke')
-try {
-    $running = Start-Process -FilePath $taskSetup -ArgumentList '/S',"/D=$taskInstall" -WindowStyle Hidden -Wait -PassThru
-    if ($running.ExitCode -ne 3) { throw 'Installer did not reject a running application' }
-} finally { $taskRunningMutex.Dispose() }
 $second = Start-Process -FilePath $taskSetup -ArgumentList '/S',"/D=$taskInstall" -WindowStyle Hidden -Wait -PassThru
 if ($second.ExitCode -ne 2) { throw "Existing-install detection failed: expected 2, got $($second.ExitCode)" }
 Set-Content -LiteralPath (Join-Path $taskInstall 'user-file.txt') -Value 'Must survive uninstall'

@@ -3,7 +3,95 @@ use anyhow::{Context, Result, bail};
 use reqwest::{Client, Method, Url};
 use serde::{Deserialize, Serialize, de::DeserializeOwned};
 use serde_json::{Value, json};
-use std::{collections::BTreeMap, time::Duration};
+use std::{collections::BTreeMap, io::Read, time::Duration};
+
+const JSON_LIMIT: usize = 32 * 1024 * 1024;
+
+// Backpressure bounds queued response chunks. Dropping the request closes the
+// sender, so a cancelled request also wakes the blocking JSON parser.
+struct JsonReader {
+    receiver: tokio::sync::mpsc::Receiver<std::io::Result<Vec<u8>>>,
+    chunk: std::io::Cursor<Vec<u8>>,
+}
+
+impl Read for JsonReader {
+    fn read(&mut self, output: &mut [u8]) -> std::io::Result<usize> {
+        if output.is_empty() {
+            return Ok(0);
+        }
+        loop {
+            let count = self.chunk.read(output)?;
+            if count > 0 {
+                return Ok(count);
+            }
+            match self.receiver.blocking_recv() {
+                Some(chunk) => self.chunk = std::io::Cursor::new(chunk?),
+                None => return Ok(0),
+            }
+        }
+    }
+}
+
+async fn decode_json<T: DeserializeOwned + Send + 'static>(
+    mut response: reqwest::Response,
+) -> Result<T> {
+    if response
+        .content_length()
+        .is_some_and(|size| size > JSON_LIMIT as u64)
+    {
+        bail!("mihomo API 响应超过 32 MiB 限制");
+    }
+    let (sender, receiver) = tokio::sync::mpsc::channel(2);
+    let parser = tokio::task::spawn_blocking(move || {
+        serde_json::from_reader(std::io::BufReader::with_capacity(
+            64 * 1024,
+            JsonReader {
+                receiver,
+                chunk: std::io::Cursor::new(Vec::new()),
+            },
+        ))
+    });
+    let mut size = 0;
+    'response: loop {
+        match response.chunk().await {
+            Ok(Some(chunk)) => {
+                size += chunk.len();
+                if size > JSON_LIMIT {
+                    let _ = sender
+                        .send(Err(std::io::Error::other("API 响应超过 32 MiB 限制")))
+                        .await;
+                    break;
+                }
+                for bytes in chunk.chunks(16 * 1024) {
+                    if sender.send(Ok(bytes.to_vec())).await.is_err() {
+                        break 'response;
+                    }
+                }
+            }
+            Ok(None) => break,
+            Err(error) => {
+                let _ = sender.send(Err(std::io::Error::other(error))).await;
+                break;
+            }
+        }
+    }
+    drop(sender);
+    Ok(parser.await??)
+}
+
+#[derive(Default, Deserialize)]
+pub(crate) struct ConfigStatus {
+    #[serde(default)]
+    pub mode: String,
+    #[serde(default)]
+    pub tun: TunStatus,
+}
+
+#[derive(Default, Deserialize)]
+pub(crate) struct TunStatus {
+    #[serde(default)]
+    pub enable: bool,
+}
 
 // Go serializes nil slices as null, rather than []. Both are valid API responses.
 fn null_default<'de, D, T>(deserializer: D) -> std::result::Result<T, D::Error>
@@ -97,6 +185,42 @@ pub struct Connections {
     pub connections: Vec<Connection>,
 }
 
+/// Home needs counts and traffic totals, without allocating each connection's metadata.
+#[derive(Debug, Default, Deserialize)]
+pub(crate) struct ConnectionStats {
+    #[serde(rename = "uploadTotal", default)]
+    pub upload_total: u64,
+    #[serde(rename = "downloadTotal", default)]
+    pub download_total: u64,
+    #[serde(
+        rename = "connections",
+        default,
+        deserialize_with = "count_connections"
+    )]
+    pub count: usize,
+}
+
+fn count_connections<'de, D: serde::Deserializer<'de>>(deserializer: D) -> Result<usize, D::Error> {
+    struct Counter;
+    impl<'de> serde::de::Visitor<'de> for Counter {
+        type Value = usize;
+        fn expecting(&self, formatter: &mut std::fmt::Formatter) -> std::fmt::Result {
+            formatter.write_str("a connection array or null")
+        }
+        fn visit_unit<E: serde::de::Error>(self) -> Result<usize, E> {
+            Ok(0)
+        }
+        fn visit_seq<A: serde::de::SeqAccess<'de>>(self, mut seq: A) -> Result<usize, A::Error> {
+            let mut count = 0;
+            while seq.next_element::<serde::de::IgnoredAny>()?.is_some() {
+                count += 1;
+            }
+            Ok(count)
+        }
+    }
+    deserializer.deserialize_any(Counter)
+}
+
 impl Api {
     pub fn new(settings: &Settings) -> Result<Self> {
         Ok(Self {
@@ -128,13 +252,13 @@ impl Api {
         }
         Ok(response)
     }
-    pub async fn get<T: DeserializeOwned>(&self, path: &str) -> Result<T> {
+    pub async fn get<T: DeserializeOwned + Send + 'static>(&self, path: &str) -> Result<T> {
         let response = self
             .request(Method::GET, self.url(&[path])?)
             .send()
             .await
             .context("无法连接 mihomo 控制接口")?;
-        Ok(Self::checked(response).await?.json().await?)
+        decode_json(Self::checked(response).await?).await
     }
     pub async fn patch(&self, body: Value) -> Result<()> {
         Self::checked(
@@ -147,11 +271,15 @@ impl Api {
         Ok(())
     }
     pub async fn reload(&self, payload: &str) -> Result<()> {
+        #[derive(Serialize)]
+        struct Payload<'a> {
+            payload: &'a str,
+        }
         let mut url = self.url(&["configs"])?;
         url.query_pairs_mut().append_pair("force", "true");
         Self::checked(
             self.request(Method::PUT, url)
-                .json(&json!({"payload": payload}))
+                .json(&Payload { payload })
                 .send()
                 .await?,
         )
@@ -179,14 +307,14 @@ impl Api {
 
     pub async fn delay_group(&self, group: &str) -> Result<BTreeMap<String, u32>> {
         use futures_util::{StreamExt, stream};
-        let proxies: Proxies = self.get("proxies").await?;
+        let mut proxies: Proxies = self.get("proxies").await?;
         let members = proxies
             .proxies
-            .get(group)
+            .remove(group)
             .filter(|p| !p.all.is_empty())
             .ok_or_else(|| anyhow::anyhow!("策略组不存在或没有节点"))?
-            .all
-            .clone();
+            .all;
+        drop(proxies);
         // Individual delay requests preserve pinned automatic-group selections.
         Ok(stream::iter(members.into_iter().map(|name| async move {
             let delay = self.delay(&name).await.unwrap_or(0);
@@ -215,6 +343,7 @@ impl Api {
             })
             .cloned()
             .collect();
+        drop(proxies);
         Ok(stream::iter(names.into_iter().map(|name| async move {
             let delay = self.delay(&name).await.unwrap_or(0);
             (name, delay)
@@ -246,6 +375,127 @@ impl Api {
 #[cfg(test)]
 mod tests {
     use super::*;
+    async fn mock_response(wire: Vec<u8>) -> (reqwest::Response, tokio::task::JoinHandle<()>) {
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap();
+        let server = tokio::spawn(async move {
+            let (mut socket, _) = listener.accept().await.unwrap();
+            let mut request = [0; 4096];
+            assert!(socket.read(&mut request).await.unwrap() > 0);
+            // Deliberately split UTF-8 and JSON tokens across HTTP body chunks.
+            for chunk in wire.chunks(113) {
+                if socket.write_all(chunk).await.is_err() {
+                    break;
+                }
+            }
+        });
+        let response = Client::builder()
+            .no_proxy()
+            .build()
+            .unwrap()
+            .get(format!("http://{address}/"))
+            .send()
+            .await
+            .unwrap();
+        (response, server)
+    }
+
+    #[tokio::test]
+    async fn streamed_json_accepts_large_payloads_and_rejects_truncation() {
+        let json = format!(
+            r#"{{"rules":[{}]}}"#,
+            vec![r#"{"type":"域名","payload":"example.com","proxy":"DIRECT"}"#; 5000].join(",")
+        );
+        let wire = format!(
+            "HTTP/1.1 200 OK\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{json}",
+            json.len()
+        )
+        .into_bytes();
+        let (response, server) = mock_response(wire).await;
+        let rules: Rules = decode_json(response).await.unwrap();
+        assert_eq!(rules.rules.len(), 5000);
+        assert_eq!(rules.rules[4999].kind, "域名");
+        server.await.unwrap();
+        for body in [r#"{"rules":["#, r#"{"rules":[]} trailing"#] {
+            let wire = format!("HTTP/1.1 200 OK\r\nConnection: close\r\n\r\n{body}").into_bytes();
+            let (response, server) = mock_response(wire).await;
+            assert!(decode_json::<Rules>(response).await.is_err());
+            server.await.unwrap();
+        }
+    }
+
+    #[tokio::test]
+    async fn streamed_json_enforces_limits_with_and_without_content_length() {
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+        let wire = format!(
+            "HTTP/1.1 200 OK\r\nContent-Length: {}\r\n\r\n",
+            JSON_LIMIT + 1
+        )
+        .into_bytes();
+        let (response, server) = mock_response(wire).await;
+        assert!(
+            decode_json::<Value>(response)
+                .await
+                .unwrap_err()
+                .to_string()
+                .contains("32 MiB")
+        );
+        server.await.unwrap();
+
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap();
+        let server = tokio::spawn(async move {
+            let (mut socket, _) = listener.accept().await.unwrap();
+            assert!(socket.read(&mut [0; 4096]).await.unwrap() > 0);
+            socket
+                .write_all(b"HTTP/1.1 200 OK\r\nConnection: close\r\n\r\n{\"ignored\":\"")
+                .await
+                .unwrap();
+            for _ in 0..=JSON_LIMIT / 16384 {
+                if socket.write_all(&[b'x'; 16384]).await.is_err() {
+                    break;
+                }
+            }
+        });
+        let response = Client::builder()
+            .no_proxy()
+            .build()
+            .unwrap()
+            .get(format!("http://{address}/"))
+            .send()
+            .await
+            .unwrap();
+        assert!(
+            decode_json::<ConnectionStats>(response)
+                .await
+                .unwrap_err()
+                .to_string()
+                .contains("32 MiB")
+        );
+        server.await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn closing_sender_wakes_a_waiting_json_reader() {
+        let (sender, receiver) = tokio::sync::mpsc::channel(2);
+        let parser = tokio::task::spawn_blocking(move || {
+            let mut reader = JsonReader {
+                receiver,
+                chunk: std::io::Cursor::new(Vec::new()),
+            };
+            reader.read(&mut [0; 1]).unwrap()
+        });
+        drop(sender);
+        assert_eq!(
+            tokio::time::timeout(Duration::from_secs(2), parser)
+                .await
+                .unwrap()
+                .unwrap(),
+            0
+        );
+    }
+
     #[tokio::test]
     async fn group_delay_tests_every_member_and_keeps_failures() {
         use tokio::io::{AsyncReadExt, AsyncWriteExt};
@@ -302,6 +552,22 @@ mod tests {
                 .unwrap();
         assert!(proxy.history.is_empty());
         assert!(proxy.all.is_empty());
+    }
+    #[test]
+    fn home_stats_count_connections_without_metadata() {
+        let stats: ConnectionStats = serde_json::from_str(
+            r#"{"uploadTotal":42,"downloadTotal":73,"connections":[{"metadata":{"host":"a.example"},"chains":["node"]},{"metadata":{"host":"b.example"}}]}"#,
+        ).unwrap();
+        assert_eq!(
+            (stats.count, stats.upload_total, stats.download_total),
+            (2, 42, 73)
+        );
+        for json in [r#"{"connections":null}"#, r#"{"connections":[]}"#, "{}"] {
+            assert_eq!(
+                serde_json::from_str::<ConnectionStats>(json).unwrap().count,
+                0
+            );
+        }
     }
 
     #[tokio::test]

@@ -1,15 +1,15 @@
-//! A single font family for Latin text, with an explicit YaHei font fallback
+//! Segoe UI for Latin text, with an embedded Source Han Sans fallback
 //! for CJK runs. This also covers mixed-language editable text fields.
 use cosmic_text::{Attrs, Buffer, Fallback, Family, Metrics, PlatformFallback, Shaping};
 use iced::Font;
-use std::sync::OnceLock;
+use std::sync::{Arc, OnceLock};
 use unicode_script::Script;
 
 pub const ENGLISH_FONT: Font = Font {
     family: iced::font::Family::Name(if cfg!(windows) {
-        "Times New Roman"
+        "Segoe UI"
     } else {
-        "Liberation Serif"
+        "Noto Sans"
     }),
     ..Font::DEFAULT
 };
@@ -21,9 +21,9 @@ pub fn brand_size() -> f32 {
         let mut system = iced_graphics::text::font_system().write().unwrap();
         let raw = system.raw();
         let family = if cfg!(windows) {
-            "Times New Roman"
+            "Segoe UI"
         } else {
-            "Liberation Serif"
+            "Noto Sans"
         };
         let mut buffer = Buffer::new(raw, Metrics::new(20.0, 24.0));
         buffer.set_text(
@@ -50,11 +50,11 @@ struct ChineseFallback;
 impl Fallback for ChineseFallback {
     fn common_fallback(&self) -> &[&'static str] {
         &[
-            "Times New Roman",
-            "Microsoft YaHei",
-            "Microsoft YaHei UI",
+            "Segoe UI",
+            "Source Han Sans CN",
+            "Source Han Sans SC",
             "Noto Sans CJK SC",
-            "Liberation Serif",
+            "Noto Sans",
             "Segoe UI Emoji",
             "Segoe UI Symbol",
         ]
@@ -67,8 +67,8 @@ impl Fallback for ChineseFallback {
     fn script_fallback(&self, script: Script, locale: &str) -> &[&'static str] {
         if script == Script::Han {
             &[
-                "Microsoft YaHei",
-                "Microsoft YaHei UI",
+                "Source Han Sans CN",
+                "Source Han Sans SC",
                 "Noto Sans CJK SC",
                 "WenQuanYi Micro Hei",
                 "PingFang SC",
@@ -83,6 +83,14 @@ pub fn initialize() {
     let mut system = iced_graphics::text::font_system()
         .write()
         .expect("font system lock must be available during startup");
+    // Keep a reference to the executable's embedded bytes rather than copying
+    // the complete CJK font into another heap allocation.
+    system
+        .raw()
+        .db_mut()
+        .load_font_source(cosmic_text::fontdb::Source::Binary(Arc::new(
+            include_bytes!("../resources/fonts/SourceHanSansCN-Regular.otf").as_slice(),
+        )));
     let database = system.raw().db_mut().clone();
     *system.raw() = cosmic_text::FontSystem::new_with_locale_and_db_and_fallback(
         "zh-CN".into(),

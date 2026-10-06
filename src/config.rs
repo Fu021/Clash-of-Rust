@@ -179,15 +179,15 @@ pub fn parse_profile(raw: &str) -> Result<Mapping> {
         bail!("配置超过 10 MiB 限制");
     }
     let value: Value = serde_yaml::from_str(raw).context("YAML 配置格式错误")?;
-    let map = value
-        .as_mapping()
-        .context("订阅必须是 mihomo YAML 配置，而非节点链接或 Base64 文本")?;
+    let Value::Mapping(map) = value else {
+        bail!("订阅必须是 mihomo YAML 配置，而非节点链接或 Base64 文本");
+    };
     if !map.contains_key(Value::from("proxies"))
         && !map.contains_key(Value::from("proxy-providers"))
     {
         bail!("配置中没有 proxies 或 proxy-providers");
     }
-    Ok(map.clone())
+    Ok(map)
 }
 
 pub fn runtime_config(raw: &str, settings: &Settings) -> Result<String> {
@@ -224,11 +224,10 @@ pub fn runtime_config(raw: &str, settings: &Settings) -> Result<String> {
     // missing-file fallback must not attempt Internet downloads during startup.
     map.insert(Value::from("geo-auto-update"), Value::from(false));
     map.insert(Value::from("geox-url"), serde_yaml::from_str("geoip: http://127.0.0.1:1/offline\ngeosite: http://127.0.0.1:1/offline\nmmdb: http://127.0.0.1:1/offline\nasn: http://127.0.0.1:1/offline\n")?);
-    let mut tun = map
-        .get(Value::from("tun"))
-        .and_then(Value::as_mapping)
-        .cloned()
-        .unwrap_or_default();
+    let mut tun = match map.remove(Value::from("tun")) {
+        Some(Value::Mapping(tun)) => tun,
+        _ => Mapping::new(),
+    };
     tun.insert(Value::from("enable"), Value::from(false));
     tun.entry(Value::from("stack"))
         .or_insert(Value::from("mixed"));

@@ -1,5 +1,6 @@
 * text=auto
 *.rs text eol=lf
+*.sh text eol=lf
 *.toml text eol=lf
 *.lock text eol=lf
 *.yml text eol=lf
@@ -11,3 +12,6 @@
 *.png binary
 *.ico binary
 *.rgba binary
+*.otf binary
+vendor/region-restriction-check/cookies text eol=lf
+vendor/region-restriction-check/IATACode.txt text eol=lf

@@ -11,4 +11,31 @@ The exact sources and SHA256 checksums are installed as geodata.json.
 See upstream project and data providers for database source and licensing.
 
 Rust library dependency versions are recorded in Cargo.lock in the source tree.
+Source Han Sans CN Regular (Adobe), embedded Chinese UI font:
+https://github.com/adobe-fonts/source-han-sans
+Distributed under SIL Open Font License 1.1.
+The complete font license is installed as resources/SourceHanSans-LICENSE.txt.
+Segoe UI is provided by Windows and is not redistributed by this application.
 Clash of Rust application source and installer scripts use GPL-3.0-only.
+
+RegionRestrictionCheck platform detector (upstream contributors):
+https://github.com/1-stream/RegionRestrictionCheck
+Revision: ef841d0a2910a44a6ca565e3a03de0f2282d83b3.
+The adapted script and its data retain AGPL-3.0-only, not GPL-only.
+License, unmodified upstream source and modification notes are installed in resources/ip-check.
+Corresponding combined source: https://github.com/Fu021/Clash-of-Rust
+Use the source revision matching the application release. GPLv3/AGPLv3 section 13 applies to the combination.
+
+IP detector runtime: selected Git for Windows Bash, MSYS2, GNU tools,
+curl/OpenSSL libraries, and jq 1.8.1 (MIT and bundled dependency licenses).
+Their original licenses, package versions, file checksums and corresponding
+source locations are installed in resources/ip-check/runtime.
+These separate tools retain their original licenses; they are not relicensed as GPL-only.
+
+Offline country flags: Twemoji v14.0.2, Copyright Twitter, Inc and other contributors.
+https://github.com/twitter/twemoji/tree/v14.0.2/assets/72x72
+Artwork licensed under CC-BY-4.0; PNG pixels converted to RGBA without artwork changes.
+The complete license is installed as resources/Twemoji-LICENSE.txt.
+English territory names: Unicode CLDR 46.0.0, Unicode License v3.
+https://github.com/unicode-org/cldr-json/tree/46.0.0
+The complete license is installed as resources/Unicode-LICENSE.txt.

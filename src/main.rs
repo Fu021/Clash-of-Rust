@@ -6,9 +6,12 @@ mod typography;
 use clash_of_rust::{
     config::{Profile, Settings, Store},
     engine::{Engine, ProxyMode, Scope, Snapshot},
-    icons, platform, probe, tray,
+    flags, icons, ip_check, platform, probe, tray,
 };
-use futures_util::SinkExt;
+use futures_util::{
+    SinkExt,
+    future::{AbortHandle, Abortable},
+};
 use iced::{
     Color, Element, Length, Subscription, Task, Theme,
     widget::{Space, button, column, container, image, scrollable, text, text_input},
@@ -30,6 +33,17 @@ macro_rules! aligned_row {
 }
 
 fn main() -> iced::Result {
+    let task_args: Vec<String> = std::env::args().collect();
+    if task_args
+        .get(1)
+        .is_some_and(|arg| arg == "--ip-check-resolve")
+    {
+        std::process::exit(if ip_check::resolve_host(&task_args[2..]).is_ok() {
+            0
+        } else {
+            1
+        });
+    }
     #[cfg(windows)]
     if let Some(path) = std::env::args_os()
         .skip_while(|arg| arg != "--shutdown")
@@ -135,14 +149,26 @@ fn startup_store() -> anyhow::Result<Store> {
 
 const ACCENT: Color = Color::from_rgb(0.35, 0.77, 0.70);
 const PAGE_SIZE: usize = 60;
-const SITES: [(&str, &str); 6] = [
-    ("ChatGPT", "https://chatgpt.com"),
-    ("Gemini", "https://gemini.google.com"),
-    ("Claude", "https://claude.ai"),
-    ("GitHub", "https://github.com"),
-    ("YouTube", "https://www.youtube.com"),
-    ("Netflix", "https://www.netflix.com"),
-];
+
+fn last_page_offset(total: usize) -> usize {
+    total.saturating_sub(1) / PAGE_SIZE * PAGE_SIZE
+}
+
+// Most host names and rules are ASCII; avoid allocating lowercase copies for
+// every entry on every redraw. Unicode names still use Unicode case conversion.
+fn contains_query(value: &str, lower_query: &str) -> bool {
+    if lower_query.is_empty() {
+        return true;
+    }
+    if value.is_ascii() && lower_query.is_ascii() {
+        value
+            .as_bytes()
+            .windows(lower_query.len())
+            .any(|part| part.eq_ignore_ascii_case(lower_query.as_bytes()))
+    } else {
+        value.to_lowercase().contains(lower_query)
+    }
+}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum Page {
@@ -178,7 +204,7 @@ impl Page {
             Self::Rules => "规则",
             Self::Logs => "日志",
             Self::Tests => "网络诊断",
-            Self::Websites => "网站连通性",
+            Self::Websites => "IP检测",
             Self::Settings => "设置",
         }
     }
@@ -221,7 +247,7 @@ enum Action {
 struct Reply {
     scope: Scope,
     settings: Settings,
-    profiles: Vec<Profile>,
+    profiles: Option<Vec<Profile>>,
     snapshot: Option<Snapshot>,
     notice: Result<String, String>,
     running: bool,
@@ -234,6 +260,7 @@ struct Reply {
 enum Message {
     Navigate(Page),
     Query(String),
+    ListPage(usize),
     ProfileName(String),
     ProfileSource(String),
     ControllerPort(String),
@@ -255,16 +282,21 @@ enum Message {
     ToggleGroup(String),
     GroupPage(String, bool),
     GroupDelay(String),
-    GroupDelayDone(String, Result<BTreeMap<String, u32>, String>),
+    GroupDelayDone(
+        Option<String>,
+        String,
+        Result<BTreeMap<String, u32>, String>,
+    ),
     Tray(tray::Command),
     ShowWindow(Option<iced::window::Id>),
     SiteAll,
+    SiteCancel,
     IntervalInput(String),
     SaveInterval,
     PeriodicDelay,
     PeriodicDone(Option<String>, Result<BTreeMap<String, u32>, String>),
     SiteProbe(String),
-    SiteDone(String, Result<probe::SiteResult, String>),
+    SiteDone(u64, String, Result<ip_check::CheckResult, String>),
     Probe(bool),
     ProbeDone(Result<probe::ProbeResult, String>),
     Dns,
@@ -295,12 +327,15 @@ struct App {
     site_queue: VecDeque<String>,
     interval_input: String,
     periodic_testing: bool,
-    site_results: Vec<(String, Result<probe::SiteResult, String>)>,
+    site_results: Vec<(String, Result<ip_check::CheckResult, String>)>,
+    site_generation: u64,
+    site_aborters: BTreeMap<String, AbortHandle>,
     site_busy: BTreeSet<String>,
     exiting: bool,
     notice: String,
     error: bool,
     query: String,
+    list_offset: usize,
     profile_name: String,
     profile_source: String,
     controller_port: String,
@@ -318,6 +353,7 @@ struct App {
 }
 
 async fn execute(engine: Arc<Mutex<Engine>>, action: Action, scope: Scope) -> Reply {
+    let include_profiles = !matches!(action, Action::Refresh);
     let mut engine = engine.lock().await;
     let mut exit_after_start = false;
     let result: anyhow::Result<String> = async {
@@ -448,7 +484,7 @@ async fn execute(engine: Arc<Mutex<Engine>>, action: Action, scope: Scope) -> Re
     Reply {
         scope,
         settings: engine.settings.clone(),
-        profiles: engine.profiles.clone(),
+        profiles: include_profiles.then(|| engine.profiles.clone()),
         snapshot,
         notice,
         running: engine.running(),
@@ -527,9 +563,12 @@ impl App {
             tray,
             site_queue: VecDeque::new(),
             site_results: vec![],
+            site_generation: 0,
+            site_aborters: BTreeMap::new(),
             site_busy: BTreeSet::new(),
             exiting: false,
             query: String::new(),
+            list_offset: 0,
             profile_name: String::new(),
             profile_source: String::new(),
             test_url: "https://www.gstatic.com/generate_204".into(),
@@ -622,6 +661,18 @@ impl App {
         let Some(engine) = self.engine.clone() else {
             return Task::none();
         };
+        if matches!(
+            action,
+            Action::Start
+                | Action::Save(_)
+                | Action::Activate(_)
+                | Action::Mode(_)
+                | Action::ProxyMode(_)
+                | Action::Select(_, _)
+        ) {
+            self.cancel_site_checks();
+            self.site_results.clear();
+        }
         self.busy = true;
         self.working = !matches!(action, Action::Refresh);
         Task::perform(execute(engine, action, scope), |reply| {
@@ -634,12 +685,16 @@ impl App {
             Message::Navigate(page) => {
                 self.page = page;
                 self.query.clear();
+                self.list_offset = 0;
+                self.snapshot.retain_scope(page.scope());
                 return self.dispatch(Action::Refresh);
             }
             Message::Query(value) => {
                 self.query = value;
                 self.group_offsets.clear();
+                self.list_offset = 0;
             }
+            Message::ListPage(offset) => self.list_offset = offset,
             Message::ProfileName(value) => self.profile_name = value,
             Message::ProfileSource(value) => self.profile_source = value,
             Message::ControllerPort(value) => self.controller_port = value,
@@ -768,16 +823,20 @@ impl App {
                 }
                 let engine = self.engine.clone().unwrap();
                 let label = group.clone();
+                let profile = self.settings.active_profile.clone();
                 return Task::perform(
                     async move {
                         let api = engine.lock().await.api.clone();
                         api.delay_group(&group).await.map_err(|e| e.to_string())
                     },
-                    move |result| Message::GroupDelayDone(label.clone(), result),
+                    move |result| Message::GroupDelayDone(profile.clone(), label.clone(), result),
                 );
             }
-            Message::GroupDelayDone(group, result) => {
+            Message::GroupDelayDone(profile, group, result) => {
                 self.testing_groups.remove(&group);
+                if profile != self.settings.active_profile {
+                    return Task::none();
+                }
                 match result {
                     Ok(delays) => {
                         let good = delays.values().filter(|d| **d > 0).count();
@@ -842,7 +901,7 @@ impl App {
                 self.periodic_testing = false;
                 if profile == self.settings.active_profile {
                     if let Ok(delays) = result {
-                        self.node_delays.extend(delays);
+                        self.node_delays = delays;
                     }
                     if self.page == Page::Proxies {
                         return self.dispatch(Action::Refresh);
@@ -853,8 +912,16 @@ impl App {
                 if !self.snapshot.running || !self.site_busy.is_empty() {
                     return Task::none();
                 }
-                self.site_queue = SITES.iter().map(|(_, url)| (*url).to_owned()).collect();
+                self.site_results.clear();
+                self.site_generation = self.site_generation.wrapping_add(1);
+                self.site_queue = ip_check::services()
+                    .iter()
+                    .map(|item| item.id.clone())
+                    .collect();
                 return self.start_site_queue();
+            }
+            Message::SiteCancel => {
+                self.cancel_site_checks();
             }
             Message::SiteProbe(url) => {
                 if !self.snapshot.running
@@ -864,31 +931,34 @@ impl App {
                     return Task::none();
                 }
                 let port = self.settings.mixed_port;
-                let engine = self.engine.clone().unwrap();
                 let label = url.clone();
+                let generation = self.site_generation;
+                let (handle, registration) = AbortHandle::new_pair();
+                self.site_aborters.insert(url.clone(), handle);
                 return Task::perform(
                     async move {
-                        let api = engine.lock().await.api.clone();
-                        probe::site(url, port, &api)
+                        Abortable::new(ip_check::check(&url, port), registration)
                             .await
-                            .map_err(|e| e.to_string())
+                            .map_err(|_| "检测已取消".into())
+                            .and_then(|result| result.map_err(|e| e.to_string()))
                     },
-                    move |result| Message::SiteDone(label.clone(), result),
+                    move |result| Message::SiteDone(generation, label.clone(), result),
                 );
             }
-            Message::SiteDone(url, result) => {
-                self.site_busy.remove(&url);
-                self.site_results.retain(|(target, _)| target != &url);
-                if self.site_results.len() >= 20 {
-                    let _ = self.site_results.remove(0);
+            Message::SiteDone(generation, url, result) => {
+                if generation != self.site_generation {
+                    return Task::none();
                 }
+                self.site_busy.remove(&url);
+                self.site_aborters.remove(&url);
+                self.site_results.retain(|(target, _)| target != &url);
                 self.site_results.push((url, result));
                 return self.start_site_queue();
             }
             Message::Tray(command) => {
                 // Native check items toggle on click; keep marks tied to confirmed core state.
                 if let Some(tray) = &self.tray {
-                    tray.update(&self.snapshot);
+                    tray.refresh(&self.snapshot);
                 }
                 match command {
                     tray::Command::Show => return iced::window::latest().map(Message::ShowWindow),
@@ -954,22 +1024,47 @@ impl App {
                 }
                 self.autostart = reply.autostart;
                 self.settings = reply.settings;
-                self.profiles = reply.profiles;
+                if let Some(profiles) = reply.profiles {
+                    self.profiles = profiles;
+                }
                 self.geo_status = reply.geo_status;
                 self.snapshot.running = reply.running;
                 if let Some(mut snapshot) = reply.snapshot {
-                    // Preserve data from other pages; only the active page is fetched.
-                    if snapshot.running && reply.scope != Scope::Proxies {
-                        snapshot.proxies = self.snapshot.proxies.clone();
+                    if reply.scope == Scope::Proxies && snapshot.running {
+                        let proxies = &snapshot.proxies.proxies;
+                        self.expanded.retain(|name| proxies.contains_key(name));
+                        self.group_offsets
+                            .retain(|name, _| proxies.contains_key(name));
+                        self.node_delays
+                            .retain(|name, _| proxies.contains_key(name));
                     }
-                    if snapshot.running && reply.scope != Scope::Rules {
-                        snapshot.rules = self.snapshot.rules.clone();
+                    // Rules are static between explicit refreshes. Keep only the
+                    // current page's data, including when an older poll finishes.
+                    if snapshot.running
+                        && self.visible
+                        && self.page == Page::Proxies
+                        && reply.scope != Scope::Proxies
+                    {
+                        snapshot.proxies = std::mem::take(&mut self.snapshot.proxies);
+                    }
+                    if snapshot.running
+                        && self.visible
+                        && self.page == Page::Rules
+                        && reply.scope != Scope::Rules
+                    {
+                        snapshot.rules = std::mem::take(&mut self.snapshot.rules);
                     }
                     if snapshot.running && !matches!(reply.scope, Scope::Home | Scope::Connections)
                     {
-                        snapshot.connections = self.snapshot.connections.clone();
+                        snapshot.connections = std::mem::take(&mut self.snapshot.connections);
+                        snapshot.connection_count = self.snapshot.connection_count;
                     }
                     self.snapshot = snapshot;
+                    self.snapshot.retain_scope(if self.visible {
+                        self.page.scope()
+                    } else {
+                        Scope::Other
+                    });
                 }
                 if let Some(tray) = &self.tray {
                     tray.update(&self.snapshot);
@@ -1055,6 +1150,7 @@ impl App {
             Message::Window((id, iced::window::Event::CloseRequested)) => {
                 if self.tray.is_some() {
                     self.visible = false;
+                    self.snapshot.retain_scope(Scope::Other);
                     let stop_stream = self.dispatch_scope(Action::Refresh, Scope::Other);
                     return Task::batch([
                         iced::window::set_mode(id, iced::window::Mode::Hidden),
@@ -1080,6 +1176,7 @@ impl App {
         if self.exiting {
             return Task::none();
         }
+        self.cancel_site_checks();
         if let Some(engine) = self.engine.clone() {
             self.exiting = true;
             Task::perform(
@@ -1102,6 +1199,15 @@ impl App {
             }
         }
         Task::batch(tasks)
+    }
+
+    fn cancel_site_checks(&mut self) {
+        self.site_generation = self.site_generation.wrapping_add(1);
+        self.site_queue.clear();
+        for (_, handle) in std::mem::take(&mut self.site_aborters) {
+            handle.abort();
+        }
+        self.site_busy.clear();
     }
 
     fn set_window_size(&mut self, size: iced::Size) {
@@ -1191,7 +1297,7 @@ impl App {
             );
         }
         nav = nav.push(Space::new().height(Length::Fill)).push(
-            self.label(concat!(env!("CARGO_PKG_VERSION"), " · 开发预览"))
+            self.label(env!("CARGO_PKG_VERSION"))
                 .size(self.scaled(10))
                 .color(self.foreground()),
         );
@@ -1303,7 +1409,7 @@ impl App {
             ),
             self.card(
                 "活跃连接",
-                self.snapshot.connections.connections.len().to_string(),
+                self.snapshot.connection_count.to_string(),
                 "当前连接"
             )
         ]
@@ -1429,13 +1535,13 @@ impl App {
             if proxy.all.is_empty() {
                 continue;
             }
-            let group_match = group.to_lowercase().contains(&query);
-            let nodes: Vec<_> = proxy
+            let group_match = contains_query(group, &query);
+            let nodes = proxy
                 .all
                 .iter()
-                .filter(|node| group_match || node.to_lowercase().contains(&query))
-                .collect();
-            if nodes.is_empty() {
+                .filter(|node| group_match || contains_query(node, &query));
+            let total = nodes.clone().count();
+            if total == 0 {
                 continue;
             }
             let expanded = self.expanded.contains(group) || !query.is_empty();
@@ -1492,9 +1598,8 @@ impl App {
                     .get(group)
                     .copied()
                     .unwrap_or(0)
-                    .min(nodes.len().saturating_sub(1) / PAGE_SIZE * PAGE_SIZE);
-                let total = nodes.len();
-                for node in nodes.into_iter().skip(offset).take(PAGE_SIZE) {
+                    .min(last_page_offset(total));
+                for node in nodes.skip(offset).take(PAGE_SIZE) {
                     let detail = self.snapshot.proxies.proxies.get(node);
                     let delay_value = self
                         .node_delays
@@ -1601,104 +1706,141 @@ impl App {
     }
 
     fn websites(&self) -> Element<'_, Message> {
-        let mut grid = column![].spacing(10);
-        for chunk in SITES.chunks(3) {
-            let mut tiles = aligned_row![].spacing(10);
-            for &(name, url) in chunk {
-                let busy = self.site_busy.contains(url);
-                let result = self
-                    .site_results
-                    .iter()
-                    .find(|(target, _)| target == url)
-                    .map(|(_, result)| result);
-                let (delay, country, state, color) = match result {
-                    Some(Ok(result)) => (
-                        format!("{} ms", result.millis),
-                        result.country.clone(),
-                        format!(
-                            "HTTP {}{}",
-                            result.status,
-                            if result.status == 403 {
-                                " · 访问受限"
-                            } else if result.status == 429 {
-                                " · 限流"
-                            } else {
-                                ""
-                            }
-                        ),
-                        latency_color(u32::try_from(result.millis).unwrap_or(u32::MAX)),
-                    ),
-                    Some(Err(_)) => (
-                        "超时或失败".into(),
-                        "未获取".into(),
-                        "连接失败".into(),
-                        latency_color(0),
-                    ),
-                    None => (
-                        "未测试".into(),
-                        "未获取".into(),
-                        "".into(),
-                        self.foreground(),
-                    ),
-                };
-                tiles = tiles.push(
-                    container(
-                        column![
-                            aligned_row![
-                                self.label(name).size(self.scaled(14)).color(ACCENT),
-                                Space::new().width(Length::Fill),
-                                button(
-                                    self.label(if busy { "测试中" } else { "测试" })
-                                        .size(self.scaled(10))
-                                )
-                                .padding([4, 8])
-                                .style(rounded_text)
-                                .on_press_maybe(
-                                    (self.snapshot.running && !busy && self.site_busy.len() < 3)
-                                        .then(|| Message::SiteProbe(url.into()))
-                                )
-                            ]
-                            .spacing(4),
-                            self.label(if busy {
-                                "正在测试…".to_owned()
-                            } else {
-                                delay
-                            })
-                            .size(self.scaled(12))
-                            .color(color),
-                            self.label(if country == "网站未提供地区" {
-                                country.clone()
-                            } else {
-                                format!("网站识别地区：{country}")
-                            })
-                            .size(self.scaled(10)),
-                            self.label(state).size(self.scaled(10)),
-                        ]
-                        .spacing(8),
-                    )
-                    .padding(10)
-                    .width(Length::Fill)
-                    .height(144)
-                    .style(panel),
-                );
+        let query = self.query.to_lowercase();
+        let services = ip_check::services();
+        let mut list = column![].spacing(4);
+        let mut visible = 0;
+        for (index, service) in services.iter().enumerate() {
+            let result = self
+                .site_results
+                .iter()
+                .find(|(id, _)| id == &service.id)
+                .map(|(_, result)| result);
+            let busy = self.site_busy.contains(&service.id);
+            let queued = self.site_queue.contains(&service.id);
+            let (summary, country, delay, color) = match result {
+                Some(Ok(result)) => (
+                    result.summary.clone(),
+                    result.country.clone(),
+                    format!("{} ms", result.millis),
+                    match result.state {
+                        ip_check::State::Confirmed => ACCENT,
+                        ip_check::State::Reachable => ACCENT,
+                        ip_check::State::Restricted => latency_color(0),
+                        ip_check::State::Unknown => latency_color(500),
+                    },
+                ),
+                Some(Err(_)) => (
+                    "超时或失败".into(),
+                    "未获取".into(),
+                    "—".into(),
+                    latency_color(0),
+                ),
+                None => ("未检测".into(), "—".into(), "—".into(), self.foreground()),
+            };
+            if !format!("{} {} {} {}", service.name, service.group, summary, country)
+                .to_lowercase()
+                .contains(&query)
+            {
+                continue;
             }
-            grid = grid.push(tiles);
+            visible += 1;
+            let state = if busy {
+                "检测中…".to_owned()
+            } else if queued {
+                "等待检测".to_owned()
+            } else {
+                summary
+            };
+            let (country_text, flag) = flags::label(&country);
+            let mut country_row = aligned_row![].spacing(4);
+            if let Some(flag) = flag {
+                country_row = country_row.push(image(flag).width(20).height(20));
+            }
+            country_row =
+                country_row.push(self.label(country_text.to_owned()).size(self.scaled(10)));
+            let entry = column![
+                aligned_row![
+                    self.label(format!("{:03}", index + 1))
+                        .size(self.scaled(10))
+                        .width(34),
+                    self.label(&service.name)
+                        .size(self.scaled(11))
+                        .width(Length::FillPortion(3)),
+                    self.label(&service.group).size(self.scaled(10)).width(60),
+                    self.label(state)
+                        .size(self.scaled(10))
+                        .color(if busy || queued {
+                            self.foreground()
+                        } else {
+                            color
+                        })
+                        .width(Length::FillPortion(3)),
+                    country_row.width(Length::FillPortion(2)),
+                    self.label(delay)
+                        .size(self.scaled(10))
+                        .color(match result {
+                            Some(Ok(result)) if !busy && !queued =>
+                                latency_color(result.millis.min(u128::from(u32::MAX)) as u32),
+                            Some(Err(_)) if !busy && !queued => latency_color(0),
+                            _ => self.foreground(),
+                        })
+                        .width(70)
+                ]
+                .spacing(6)
+            ]
+            .spacing(6);
+            list = list.push(container(entry).padding(8).style(panel));
+        }
+        if visible == 0 {
+            list = list.push(self.label("没有匹配的检测项目。"));
         }
         column![
             aligned_row![
-                self.label("常用网站"),
-                Space::new().width(Length::Fill),
-                button(self.label("一键测试"))
+                self.search("搜索平台、地区或检测结果"),
+                self.label(format!(
+                    "已完成 {} / {}",
+                    self.site_results.len(),
+                    services.len()
+                ))
+                .size(self.scaled(10)),
+                button(self.label("一键检测"))
+                    .padding([5, 10])
                     .style(rounded_primary)
-                    .padding([5, 12])
                     .on_press_maybe(
-                        (self.snapshot.running && self.site_busy.is_empty())
-                            .then_some(Message::SiteAll)
+                        (self.snapshot.running
+                            && self.site_busy.is_empty()
+                            && self.site_queue.is_empty())
+                        .then_some(Message::SiteAll)
+                    ),
+                button(self.label("取消"))
+                    .padding([5, 10])
+                    .style(rounded_secondary)
+                    .on_press_maybe(
+                        (!self.site_busy.is_empty() || !self.site_queue.is_empty())
+                            .then_some(Message::SiteCancel)
                     )
-            ],
-            scrollable(grid).height(Length::Fill)
+            ]
+            .spacing(8),
+            aligned_row![
+                self.label("序号").size(self.scaled(10)).width(34),
+                self.label("平台 / IP")
+                    .size(self.scaled(10))
+                    .width(Length::FillPortion(3)),
+                self.label("分类").size(self.scaled(10)).width(60),
+                self.label("检测结果")
+                    .size(self.scaled(10))
+                    .width(Length::FillPortion(3)),
+                self.label("识别地区")
+                    .size(self.scaled(10))
+                    .width(Length::FillPortion(2)),
+                self.label("延迟").size(self.scaled(10)).width(70)
+            ]
+            .spacing(6)
+            .padding([0, 8]),
+            scrollable(list).height(Length::Fill)
         ]
-        .spacing(10)
+        .spacing(8)
         .into()
     }
 
@@ -1814,26 +1956,24 @@ impl App {
 
     fn connections(&self) -> Element<'_, Message> {
         let query = self.query.to_lowercase();
-        let entries: Vec<_> = self
-            .snapshot
-            .connections
-            .connections
-            .iter()
-            .filter(|c| {
-                format!(
-                    "{} {} {} {} {}",
-                    c.metadata.host,
-                    c.metadata.destination_ip,
-                    c.metadata.process,
-                    c.rule,
-                    c.chains.join(" ")
-                )
-                .to_lowercase()
-                .contains(&query)
-            })
-            .collect();
+        let entries = self.snapshot.connections.connections.iter().filter(|c| {
+            query.is_empty()
+                || query.split_whitespace().all(|word| {
+                    [
+                        &c.metadata.host,
+                        &c.metadata.destination_ip,
+                        &c.metadata.process,
+                        &c.rule,
+                    ]
+                    .into_iter()
+                    .chain(c.chains.iter())
+                    .any(|field| contains_query(field, word))
+                })
+        });
+        let total = entries.clone().count();
+        let offset = self.list_offset.min(last_page_offset(total));
         let mut list = column![].spacing(6);
-        for connection in entries.iter() {
+        for connection in entries.skip(offset).take(PAGE_SIZE) {
             let m = &connection.metadata;
             let host = if m.host.is_empty() {
                 &m.destination_ip
@@ -1881,12 +2021,13 @@ impl App {
                 .style(panel),
             );
         }
-        if entries.is_empty() {
+        if total == 0 {
             list = list.push(self.label("当前没有匹配的连接。").color(self.foreground()));
         }
         column![
             self.search("搜索域名、IP、进程或规则"),
-            scrollable(list).height(Length::Fill)
+            scrollable(list).height(Length::Fill),
+            self.list_pager(total, offset)
         ]
         .spacing(8)
         .into()
@@ -1894,20 +2035,24 @@ impl App {
 
     fn rules(&self) -> Element<'_, Message> {
         let query = self.query.to_lowercase();
-        let entries: Vec<_> = self
+        let entries = self
             .snapshot
             .rules
             .rules
             .iter()
             .enumerate()
             .filter(|(_, r)| {
-                format!("{} {} {}", r.kind, r.payload, r.proxy)
-                    .to_lowercase()
-                    .contains(&query)
-            })
-            .collect();
+                query.is_empty()
+                    || query.split_whitespace().all(|word| {
+                        [&r.kind, &r.payload, &r.proxy]
+                            .into_iter()
+                            .any(|field| contains_query(field, word))
+                    })
+            });
+        let total = entries.clone().count();
+        let offset = self.list_offset.min(last_page_offset(total));
         let mut list = column![].spacing(4);
-        for (index, rule) in entries.iter() {
+        for (index, rule) in entries.skip(offset).take(PAGE_SIZE) {
             list = list.push(
                 container(
                     aligned_row![
@@ -1933,9 +2078,32 @@ impl App {
         column![
             self.search("搜索规则类型、内容或策略"),
             scrollable(list).height(Length::Fill),
-            self.label("规则按显示顺序匹配。当前版本通过订阅 YAML 管理规则。")
-                .size(self.scaled(10))
-                .color(self.foreground())
+            self.list_pager(total, offset)
+        ]
+        .spacing(8)
+        .into()
+    }
+
+    fn list_pager(&self, total: usize, offset: usize) -> Element<'_, Message> {
+        aligned_row![
+            self.label(if total == 0 {
+                "0 条".into()
+            } else {
+                format!(
+                    "{} 条 · {}–{}",
+                    total,
+                    offset + 1,
+                    (offset + PAGE_SIZE).min(total)
+                )
+            })
+            .size(self.scaled(10)),
+            Space::new().width(Length::Fill),
+            button(self.label("上一页")).on_press_maybe(
+                (offset > 0).then_some(Message::ListPage(offset.saturating_sub(PAGE_SIZE)))
+            ),
+            button(self.label("下一页")).on_press_maybe(
+                (offset + PAGE_SIZE < total).then_some(Message::ListPage(offset + PAGE_SIZE))
+            )
         ]
         .spacing(8)
         .into()
@@ -1949,11 +2117,11 @@ impl App {
             .logs
             .iter()
             .rev()
-            .filter(|l| l.to_lowercase().contains(&query))
+            .filter(|l| contains_query(l, &query))
             .take(150)
         {
             list = list.push(
-                container(self.label(line).size(self.scaled(10)))
+                container(self.label(line.as_ref()).size(self.scaled(10)))
                     .padding(6)
                     .width(Length::Fill)
                     .style(panel),
@@ -2260,4 +2428,37 @@ fn sidebar_panel(theme: &Theme) -> container::Style {
         bottom_left: 0.0,
     };
     style
+}
+
+#[cfg(test)]
+mod memory_tests {
+    use super::*;
+
+    #[test]
+    fn pagination_bounds_rows_without_losing_the_last_page() {
+        for (total, expected) in [
+            (0, 0),
+            (1, 0),
+            (60, 0),
+            (61, 60),
+            (120, 60),
+            (100_000, 99_960),
+        ] {
+            let offset = last_page_offset(total);
+            assert_eq!(offset, expected);
+            assert!((0..total).skip(offset).take(PAGE_SIZE).count() <= PAGE_SIZE);
+            if total > 0 {
+                assert!(offset < total);
+            }
+        }
+    }
+
+    #[test]
+    fn searching_supports_ascii_unicode_and_empty_queries() {
+        assert!(contains_query("EXAMPLE.COM", "example"));
+        assert!(contains_query("香港节点", "香港"));
+        assert!(contains_query("École", "école"));
+        assert!(contains_query("", ""));
+        assert!(!contains_query("short", "much longer"));
+    }
 }

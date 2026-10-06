@@ -7,7 +7,7 @@ Unicode true
 !endif
 
 !ifndef APP_VERSION
-  !define APP_VERSION "0.4.0"
+  !define APP_VERSION "0.4.1"
 !endif
 !ifndef PAYLOAD
   !define PAYLOAD "..\bundle"
@@ -41,7 +41,7 @@ SetCompressor /SOLID lzma
 SetCompressorDictSize 32
 ShowInstDetails show
 ShowUninstDetails show
-VIProductVersion "0.4.0.0"
+VIProductVersion "0.4.1.0"
 VIAddVersionKey /LANG=2052 "ProductName" "Clash of Rust"
 VIAddVersionKey /LANG=2052 "FileDescription" "Clash of Rust Windows 安装程序"
 VIAddVersionKey /LANG=2052 "FileVersion" "${APP_VERSION}"
@@ -213,6 +213,11 @@ Section "Clash of Rust" MainSection
   File "${PAYLOAD}\resources\default.yaml"
   File "${PAYLOAD}\resources\settings-defaults.json"
   File "${PAYLOAD}\resources\THIRD-PARTY-NOTICES.txt"
+  File /oname=SourceHanSans-LICENSE.txt "${__FILEDIR__}\..\resources\fonts\LICENSE.txt"
+  File /oname=Twemoji-LICENSE.txt "${__FILEDIR__}\..\resources\flags\LICENSE-Twemoji.txt"
+  File /oname=Unicode-LICENSE.txt "${__FILEDIR__}\..\resources\flags\LICENSE-Unicode.txt"
+  SetOutPath "$INSTDIR\resources\ip-check"
+  File /r "${PAYLOAD}\resources\ip-check\*"
   SetOutPath "$INSTDIR"
   WriteUninstaller "$INSTDIR\uninstall.exe"
   !ifndef INSTALLER_TESTING
@@ -274,6 +279,10 @@ Section "Uninstall"
   Delete "$INSTDIR\resources\default.yaml"
   Delete "$INSTDIR\resources\settings-defaults.json"
   Delete "$INSTDIR\resources\THIRD-PARTY-NOTICES.txt"
+  Delete "$INSTDIR\resources\SourceHanSans-LICENSE.txt"
+  Delete "$INSTDIR\resources\Twemoji-LICENSE.txt"
+  Delete "$INSTDIR\resources\Unicode-LICENSE.txt"
+  RMDir /r "$INSTDIR\resources\ip-check"
   Delete "$INSTDIR\resources\clash-of-rust-*.ico"
   RMDir "$INSTDIR\resources"
   Delete "$INSTDIR\LICENSE"
