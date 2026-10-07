@@ -45,19 +45,6 @@ fn main() -> iced::Result {
         });
     }
     #[cfg(windows)]
-    if let Some(path) = std::env::args_os()
-        .skip_while(|arg| arg != "--shutdown")
-        .nth(1)
-    {
-        std::process::exit(
-            if platform::shutdown_existing(std::path::Path::new(&path)).is_ok() {
-                0
-            } else {
-                1
-            },
-        );
-    }
-    #[cfg(windows)]
     let elevated_handoff = elevation_path().is_some();
     #[cfg(windows)]
     let _installation_guard = {
@@ -2288,8 +2275,6 @@ impl App {
     fn settings_view(&self) -> Element<'_, Message> {
         let updates = column![
             self.label(format!("客户端更新 · 当前版本 {}", clash_of_rust::VERSION)),
-            self.label("启动时及每 6 小时自动检查 GitHub Release")
-                .size(self.scaled(11)),
             self.label(if self.updates.checking {
                 "正在检查更新…"
             } else if self.updates.status.is_empty() {

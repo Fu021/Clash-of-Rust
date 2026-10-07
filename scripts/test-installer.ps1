@@ -33,6 +33,38 @@ if (-not (Test-Path -LiteralPath (Join-Path $taskInstall 'clash-of-rust.exe'))) 
 $second = Start-Process -FilePath $taskSetup -ArgumentList '/S',"/D=$taskInstall" -WindowStyle Hidden -Wait -PassThru
 if ($second.ExitCode -ne 2) { throw "Existing-install detection failed: expected 2, got $($second.ExitCode)" }
 Set-Content -LiteralPath (Join-Path $taskInstall 'user-file.txt') -Value 'Must survive uninstall'
+# Without a cooperative exit endpoint, keep the existing installation intact.
+$taskRunningMutex = [System.Threading.Mutex]::new($false, 'Local\ClashOfRust.InstallerSmoke')
+try {
+    $taskRefused = Start-Process -FilePath $taskSetup -ArgumentList '/S','/TESTREINSTALL',"/D=$taskInstall" -WindowStyle Hidden -Wait -PassThru
+    if ($taskRefused.ExitCode -ne 5) { throw 'Reinstall did not refuse an unavailable exit endpoint' }
+    if (-not (Test-Path -LiteralPath (Join-Path $taskInstall 'clash-of-rust.exe'))) { throw 'Failed shutdown removed the existing application' }
+} finally { $taskRunningMutex.Dispose() }
+# Simulate a client that receives the exit event and releases its instance marker.
+$taskRunningMutex = [System.Threading.Mutex]::new($false, 'Local\ClashOfRust.InstallerSmoke')
+$taskExitEvent = [System.Threading.EventWaitHandle]::new($false, [System.Threading.EventResetMode]::AutoReset, 'Local\ClashOfRust.InstallerSmoke.Exit')
+try {
+    $taskCooperative = Start-Process -FilePath $taskSetup -ArgumentList '/S','/TESTREINSTALL',"/D=$taskInstall" -WindowStyle Hidden -PassThru
+    if (-not $taskExitEvent.WaitOne(10000)) { throw 'Installer did not request cooperative exit' }
+    $taskRunningMutex.Dispose()
+    $taskRunningMutex = $null
+    if (-not $taskCooperative.WaitForExit(30000) -or $taskCooperative.ExitCode -ne 0) { throw "Reinstall after cooperative exit failed: $($taskCooperative.ExitCode)" }
+} finally {
+    if ($taskRunningMutex) { $taskRunningMutex.Dispose() }
+    $taskExitEvent.Dispose()
+}
+# An unresponsive client must time out before uninstalling any existing files.
+$taskRunningMutex = [System.Threading.Mutex]::new($false, 'Local\ClashOfRust.InstallerSmoke')
+$taskExitEvent = [System.Threading.EventWaitHandle]::new($false, [System.Threading.EventResetMode]::AutoReset, 'Local\ClashOfRust.InstallerSmoke.Exit')
+try {
+    $taskTimeout = Start-Process -FilePath $taskSetup -ArgumentList '/S','/TESTREINSTALL',"/D=$taskInstall" -WindowStyle Hidden -PassThru
+    if (-not $taskExitEvent.WaitOne(10000)) { throw 'Timeout fixture received no exit request' }
+    if (-not $taskTimeout.WaitForExit(25000) -or $taskTimeout.ExitCode -ne 5) { throw 'Installer did not stop after shutdown timeout' }
+    if (-not (Test-Path -LiteralPath (Join-Path $taskInstall 'clash-of-rust.exe'))) { throw 'Timed-out shutdown removed the existing application' }
+} finally {
+    $taskRunningMutex.Dispose()
+    $taskExitEvent.Dispose()
+}
 $reinstall = Start-Process -FilePath $taskSetup -ArgumentList '/S','/TESTREINSTALL',"/D=$taskInstall" -WindowStyle Hidden -Wait -PassThru
 if ($reinstall.ExitCode -ne 0) { throw "Confirmed uninstall/reinstall failed: $($reinstall.ExitCode)" }
 if (-not (Test-Path -LiteralPath (Join-Path $taskInstall 'clash-of-rust.exe'))) { throw 'Reinstallation did not restore the application' }
@@ -58,5 +90,5 @@ if (-not (Test-Path -LiteralPath (Join-Path $legacyInstall 'user-file.txt'))) { 
 if (-not (Test-Path -LiteralPath (Join-Path $taskInstall 'clash-of-rust.exe'))) { throw 'Migration did not install into the new directory' }
 $removed = Start-Process -FilePath $uninstall -ArgumentList '/S',"_?=$taskInstall" -WindowStyle Hidden -Wait -PassThru
 if ($removed.ExitCode -ne 0 -or (Test-Path -LiteralPath $testKey)) { throw 'Migrated installation cleanup failed' }
-Write-Output 'PASS: fresh installation, offline resources, duplicate refusal, confirmed reinstall, legacy directory migration, uninstallation, preservation of unrelated user files.'
+Write-Output 'PASS: fresh installation, offline resources, duplicate refusal, cooperative exit, shutdown refusal and timeout, confirmed reinstall, legacy migration, uninstallation, preservation of unrelated user files.'
 Write-Output "Test artifacts: $taskTestRoot"

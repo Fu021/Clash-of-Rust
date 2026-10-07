@@ -162,11 +162,6 @@ pub fn show_requested() -> bool {
     false
 }
 
-#[cfg(windows)]
-pub fn shutdown_existing(path: &Path) -> Result<()> {
-    windows::shutdown_existing(path)
-}
-
 pub fn enable(journal_path: &Path, port: u16) -> Result<()> {
     if port == 0 {
         bail!("代理端口无效");

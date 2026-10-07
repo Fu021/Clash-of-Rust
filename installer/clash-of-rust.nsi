@@ -7,7 +7,7 @@ Unicode true
 !endif
 
 !ifndef APP_VERSION
-  !define APP_VERSION "0.4.2"
+  !define APP_VERSION "0.4.3"
 !endif
 !ifndef PAYLOAD
   !define PAYLOAD "..\bundle"
@@ -19,10 +19,12 @@ Unicode true
   !define PRODUCT_KEY "Software\Microsoft\Windows\CurrentVersion\Uninstall\ClashOfRustInstallerSmokeTest"
   !define LEGACY_KEY "Software\Microsoft\Windows\CurrentVersion\Uninstall\ClashOfRustLegacySmokeTest"
   !define APP_MUTEX "Local\ClashOfRust.InstallerSmoke"
+  !define APP_EXIT_EVENT "Local\ClashOfRust.InstallerSmoke.Exit"
 !else
   !define PRODUCT_KEY "Software\Microsoft\Windows\CurrentVersion\Uninstall\ClashOfRust"
   !define LEGACY_KEY "${PRODUCT_KEY}"
   !define APP_MUTEX "Local\ClashOfRust.Desktop"
+  !define APP_EXIT_EVENT "Local\ClashOfRust.Exit"
 !endif
 
 !ifdef INSTALLER_TESTING
@@ -142,22 +144,48 @@ Function .onInit
 FunctionEnd
 
 Function ShutdownExisting
-  ${If} $ExistingDir != ""
-      !ifndef INSTALLER_TESTING
-        InitPluginsDir
-        SetOutPath "$PLUGINSDIR"
-        File /oname=clash-shutdown.exe "${PAYLOAD}\clash-of-rust.exe"
-        ClearErrors
-        ExecWait '"$PLUGINSDIR\clash-shutdown.exe" --shutdown "$ExistingDir\clash-of-rust.exe"' $ResultCode
-        IfErrors shutdown_failed
-        ${If} $ResultCode != 0
-          Goto shutdown_failed
-        ${EndIf}
-      !endif
+  ${If} $ExistingDir == ""
+    Return
   ${EndIf}
-  Return
+  ; Request normal exit. The GUI restores its proxy and stops its own core.
+  ; Never extract/run a second GUI executable or force-kill other processes.
+  System::Call 'kernel32::OpenMutexW(i 0x100000, i 0, w "${APP_MUTEX}") p.r0 ?e'
+  Pop $1
+  ${If} $0 == 0
+    ${If} $1 == 2
+      Return
+    ${EndIf}
+    Goto shutdown_failed
+  ${EndIf}
+  System::Call 'kernel32::CloseHandle(p r0)'
+  System::Call 'kernel32::OpenEventW(i 2, i 0, w "${APP_EXIT_EVENT}") p.r0'
+  ${If} $0 == 0
+    Goto shutdown_failed
+  ${EndIf}
+  System::Call 'kernel32::SetEvent(p r0) i.r1'
+  System::Call 'kernel32::CloseHandle(p r0)'
+  ${If} $1 == 0
+    Goto shutdown_failed
+  ${EndIf}
+  StrCpy $2 0
+  shutdown_wait:
+    System::Call 'kernel32::OpenMutexW(i 0x100000, i 0, w "${APP_MUTEX}") p.r0 ?e'
+    Pop $1
+    ${If} $0 == 0
+      ${If} $1 == 2
+        Return
+      ${EndIf}
+      Goto shutdown_failed
+    ${EndIf}
+    System::Call 'kernel32::CloseHandle(p r0)'
+    Sleep 250
+    IntOp $2 $2 + 1
+    IntCmp $2 60 shutdown_failed shutdown_wait shutdown_failed
   shutdown_failed:
-    MessageBox MB_OK|MB_ICONSTOP "当前程序自动关闭失败，未开始卸载或安装。"
+    IfSilent shutdown_silent shutdown_prompt
+    shutdown_prompt:
+      MessageBox MB_OK|MB_ICONSTOP "现有客户端未能正常退出。请先从托盘退出程序，再重新运行安装包。未开始卸载或安装。"
+    shutdown_silent:
     SetErrorLevel 5
     Abort
 FunctionEnd
