@@ -1,7 +1,5 @@
-# IP 检测平台索引
+# 原生 IP 与平台检测
 
-平台名称及公开检测地址参考 [RegionRestrictionCheck](https://github.com/1-stream/RegionRestrictionCheck)，整理日期：2026-10-06。索引包含 181 个平台检测条目，另增加出口 IP 与 GitHub 项目。
+`services.json` 为 183 项检测目录：出口 IP、GitHub 由 `src/ip_check.rs` 实现；其余 181 项由 `src/region_check/generated.rs` 中的原生 Rust 函数实现。
 
-平台检测已接入随安装包携带的 AGPL-3.0 上游适配脚本。固定版本、修改说明及授权见 [vendor/region-restriction-check/SOURCE.md](../../vendor/region-restriction-check/SOURCE.md)。Rust 界面与桥接部分保持 GPL-3.0-only。
-
-181 个平台条目使用上游各自的请求、鉴权及解锁判断。出口 IP、GitHub 仍使用 Rust 检测。结果包含可用、受限、仅网页、仅自制内容等状态；地区来自原检测结果，不根据用户本地 IP 猜测。平台接口变化仍可能导致失败，检测不能保证账号登录或实际播放成功。
+运行时不需要 Python、Git、Bash、curl 或 jq。Python 工具仅用于开发、资源维护与打包。上游来源及许可证见 `vendor/region-restriction-check/SOURCE.md`。

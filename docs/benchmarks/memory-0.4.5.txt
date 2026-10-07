@@ -1,0 +1,6 @@
+workload=rules mode=streamed rows=50000 payload_mib=3.33 baseline_heap_mib=3.42 peak_extra_heap_mib=6.98 retained_extra_heap_mib=6.11 elapsed_ms=14.0
+workload=connections mode=streamed rows=50000 payload_mib=12.00 baseline_heap_mib=12.08 peak_extra_heap_mib=24.20 retained_extra_heap_mib=23.30 elapsed_ms=53.2
+workload=rules mode=streamed rows=50000 payload_mib=3.33 baseline_heap_mib=3.42 peak_extra_heap_mib=7.00 retained_extra_heap_mib=6.11 elapsed_ms=13.4
+workload=connections mode=streamed rows=50000 payload_mib=12.00 baseline_heap_mib=12.08 peak_extra_heap_mib=24.20 retained_extra_heap_mib=23.30 elapsed_ms=51.0
+workload=rules mode=streamed rows=50000 payload_mib=3.33 baseline_heap_mib=3.42 peak_extra_heap_mib=6.98 retained_extra_heap_mib=6.11 elapsed_ms=15.9
+workload=connections mode=streamed rows=50000 payload_mib=12.00 baseline_heap_mib=12.08 peak_extra_heap_mib=24.20 retained_extra_heap_mib=23.30 elapsed_ms=52.0

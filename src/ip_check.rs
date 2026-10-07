@@ -1,4 +1,4 @@
-//! IP/HTTP checks plus a bridge to the bundled AGPL platform detector.
+//! Native IP/HTTP checks and upstream-derived platform decisions.
 use crate::probe::{country_name, trace_country, validate_url};
 use anyhow::{Context, Result, bail};
 use reqwest::{Client, Url};
@@ -155,30 +155,6 @@ pub(crate) fn decorate_country(name: String) -> String {
         .filter_map(|letter| char::from_u32(0x1f1e6 + u32::from(letter - b'A')))
         .collect();
     format!("{flag} {name}")
-}
-
-/// Small headless helper for upstream getent calls, available on Windows and Linux.
-pub fn resolve_host(args: &[String]) -> Result<()> {
-    use std::net::ToSocketAddrs;
-    let [family, host] = args else {
-        bail!("无效的解析参数");
-    };
-    anyhow::ensure!(
-        matches!(family.as_str(), "ahostsv4" | "ahostsv6"),
-        "无效的地址类型"
-    );
-    anyhow::ensure!(
-        matches!(host.as_str(), "www.netflix.com" | "api.bilibili.com"),
-        "检测域名不在允许列表"
-    );
-    let mut seen = std::collections::BTreeSet::new();
-    for address in (host.as_str(), 0).to_socket_addrs()? {
-        let ip = address.ip();
-        if ip.is_ipv4() == (family == "ahostsv4") && seen.insert(ip) {
-            println!("{ip} STREAM {host}");
-        }
-    }
-    Ok(())
 }
 
 fn classify(service: &Service, status: u16, final_url: &Url, text: &str) -> CheckResult {

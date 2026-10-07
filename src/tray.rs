@@ -125,6 +125,8 @@ impl Drop for Guard {
 }
 
 pub fn start() -> anyhow::Result<Guard> {
+    #[cfg(target_os = "linux")]
+    crate::platform::ensure_tray_available()?;
     let (sender, receiver) = async_channel::unbounded_channel();
     let (ready_tx, ready_rx) = mpsc::sync_channel(1);
     let (stop_tx, stop_rx) = mpsc::channel::<()>();

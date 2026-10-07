@@ -1,0 +1,6 @@
+Scan starting...
+Scan finished.
+Scanning D:\Clash-of-Rust\dist\Clash-of-Rust-0.4.5-windows-x64-setup.exe found no threats.
+Scan starting...
+Scan finished.
+Scanning D:\Clash-of-Rust\target\release\clash-of-rust.exe found no threats.

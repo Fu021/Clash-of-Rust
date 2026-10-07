@@ -1,5 +1,5 @@
-//! Compare peak live Rust heap for the old buffered HTTP path and Api::get.
-//! Run each mode in a fresh process; this does not measure GUI/core working set.
+//! Measure live Rust heap while Api::get parses synthetic HTTP responses.
+//! Run each workload in a fresh process; this does not measure GUI/core memory.
 use clash_of_rust::{
     api::{Api, Connections, Rules},
     config::Settings,
@@ -97,11 +97,14 @@ async fn measure<T: serde::de::DeserializeOwned + Send + Count + 'static>(
     };
     let elapsed = started.elapsed();
     let peak = PEAK.load(Ordering::Relaxed).saturating_sub(baseline);
+    let retained = LIVE.load(Ordering::Relaxed).saturating_sub(baseline);
     assert_eq!(result.count(), expected);
     println!(
-        "workload={path} mode={mode} rows={expected} payload_mib={:.2} peak_extra_heap_mib={:.2} elapsed_ms={:.1}",
+        "workload={path} mode={mode} rows={expected} payload_mib={:.2} baseline_heap_mib={:.2} peak_extra_heap_mib={:.2} retained_extra_heap_mib={:.2} elapsed_ms={:.1}",
         payload_size as f64 / 1048576.0,
+        baseline as f64 / 1048576.0,
         peak as f64 / 1048576.0,
+        retained as f64 / 1048576.0,
         elapsed.as_secs_f64() * 1000.0
     );
     Ok(())

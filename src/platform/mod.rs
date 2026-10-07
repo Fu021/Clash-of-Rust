@@ -18,6 +18,12 @@ struct Journal {
 }
 
 #[cfg(target_os = "linux")]
+mod desktop;
+#[cfg(target_os = "linux")]
+mod gio;
+#[cfg(target_os = "linux")]
+mod kde;
+#[cfg(target_os = "linux")]
 mod linux;
 #[cfg(windows)]
 mod windows;
@@ -45,6 +51,21 @@ mod native {
 
 pub fn description() -> &'static str {
     native::description()
+}
+
+/// Configure Linux GUI integration before any other initialization.
+///
+/// # Safety
+/// Must be called before the process starts threads or libraries that read
+/// environment variables concurrently.
+#[cfg(target_os = "linux")]
+pub unsafe fn initialize_desktop() {
+    unsafe { desktop::initialize() }
+}
+
+#[cfg(target_os = "linux")]
+pub fn ensure_tray_available() -> Result<()> {
+    gio::ensure_tray_available()
 }
 
 /// A session-wide marker prevents duplicate GUI instances and coordinates shutdown.
@@ -129,9 +150,13 @@ pub fn configured_proxy(scheme: &str) -> Result<Option<String>> {
 pub fn is_elevated() -> bool {
     windows::is_elevated()
 }
-#[cfg(not(windows))]
+#[cfg(target_os = "linux")]
 pub fn is_elevated() -> bool {
-    true
+    unsafe { libc::geteuid() == 0 }
+}
+#[cfg(not(any(windows, target_os = "linux")))]
+pub fn is_elevated() -> bool {
+    false
 }
 #[cfg(windows)]
 pub fn elevate(path: &Path) -> Result<()> {

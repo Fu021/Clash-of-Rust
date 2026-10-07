@@ -7,7 +7,7 @@ Unicode true
 !endif
 
 !ifndef APP_VERSION
-  !define APP_VERSION "0.4.3"
+  !define APP_VERSION "0.4.5"
 !endif
 !ifndef PAYLOAD
   !define PAYLOAD "..\bundle"
@@ -246,7 +246,8 @@ Section "Clash of Rust" MainSection
   File /oname=Twemoji-LICENSE.txt "${__FILEDIR__}\..\resources\flags\LICENSE-Twemoji.txt"
   File /oname=Unicode-LICENSE.txt "${__FILEDIR__}\..\resources\flags\LICENSE-Unicode.txt"
   SetOutPath "$INSTDIR\resources\ip-check"
-  File /r "${PAYLOAD}\resources\ip-check\*"
+  File "${PAYLOAD}\resources\ip-check\LICENSE"
+  File "${PAYLOAD}\resources\ip-check\SOURCE.md"
   SetOutPath "$INSTDIR"
   WriteUninstaller "$INSTDIR\uninstall.exe"
   !ifndef INSTALLER_TESTING

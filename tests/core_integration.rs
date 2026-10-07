@@ -6,6 +6,26 @@ use clash_of_rust::{
 };
 use serde_json::Value;
 
+fn test_resources() -> std::path::PathBuf {
+    std::env::var_os("MIHOMO_TEST_RESOURCES")
+        .map(std::path::PathBuf::from)
+        .unwrap_or_else(|| {
+            let directory = if cfg!(windows) {
+                "bundle/resources".to_owned()
+            } else {
+                format!(
+                    "bundle/linux-{}/resources",
+                    if cfg!(target_arch = "aarch64") {
+                        "arm64"
+                    } else {
+                        "x64"
+                    }
+                )
+            };
+            std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join(directory)
+        })
+}
+
 fn free_port() -> u16 {
     std::net::TcpListener::bind("127.0.0.1:0")
         .unwrap()
@@ -18,9 +38,7 @@ fn free_port() -> u16 {
 #[ignore = "Requires bundled resources; verifies remembered modes without OS proxy changes"]
 async fn remembered_modes_survive_core_and_client_restart() {
     use clash_of_rust::engine::ProxyMode;
-    let resources = std::env::var_os("MIHOMO_TEST_RESOURCES")
-        .map(std::path::PathBuf::from)
-        .unwrap_or_else(|| std::path::PathBuf::from("bundle/resources"));
+    let resources = test_resources();
     let tmp = tempfile::tempdir().unwrap();
     let store = Store::at(tmp.path().to_owned()).unwrap();
     let mut mixed = free_port();
@@ -55,11 +73,7 @@ async fn remembered_modes_survive_core_and_client_restart() {
 #[tokio::test]
 #[ignore = "Requires bundled resources; starts a real core on dynamic loopback ports"]
 async fn real_core_lifecycle_and_configuration() {
-    let resources = std::env::var_os("MIHOMO_TEST_RESOURCES")
-        .map(std::path::PathBuf::from)
-        .unwrap_or_else(|| {
-            std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("bundle/resources")
-        });
+    let resources = test_resources();
     let tmp = tempfile::tempdir().unwrap();
     let store = Store::at(tmp.path().to_owned()).unwrap();
     let port = free_port();
@@ -203,7 +217,7 @@ async fn real_core_lifecycle_and_configuration() {
 #[tokio::test]
 #[ignore = "Requires bundled resources; verifies active subscription deletion without OS proxy changes"]
 async fn delete_active_profile_keeps_core_running() {
-    let resources = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("bundle/resources");
+    let resources = test_resources();
     let tmp = tempfile::tempdir().unwrap();
     let store = Store::at(tmp.path().join("data")).unwrap();
     let mut settings = Settings {
@@ -258,11 +272,7 @@ fn data_directory_is_exclusive() {
 async fn bundled_geo_rules_start_without_downloads() {
     let tmp = tempfile::tempdir().unwrap();
     let store = Store::at(tmp.path().to_owned()).unwrap();
-    let resources = std::env::var_os("MIHOMO_TEST_RESOURCES")
-        .map(std::path::PathBuf::from)
-        .unwrap_or_else(|| {
-            std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("bundle/resources")
-        });
+    let resources = test_resources();
     let mut settings = Settings {
         controller_port: free_port(),
         mixed_port: free_port(),
@@ -304,11 +314,7 @@ async fn bundled_geo_rules_start_without_downloads() {
 #[ignore = "Requires bundled resources; exercises Geo replacement with active MMDB mappings"]
 async fn geo_update_restarts_core_and_restores_selection() {
     let tmp = tempfile::tempdir().unwrap();
-    let resources = std::env::var_os("MIHOMO_TEST_RESOURCES")
-        .map(std::path::PathBuf::from)
-        .unwrap_or_else(|| {
-            std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("bundle/resources")
-        });
+    let resources = test_resources();
     let store = Store::at(tmp.path().join("data")).unwrap();
     let mut settings = Settings {
         controller_port: free_port(),

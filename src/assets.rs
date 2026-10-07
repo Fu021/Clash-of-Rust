@@ -38,7 +38,18 @@ pub fn discover() -> Result<PathBuf> {
     }
     #[cfg(debug_assertions)]
     {
-        let development = Path::new(env!("CARGO_MANIFEST_DIR")).join("bundle/resources");
+        let development = Path::new(env!("CARGO_MANIFEST_DIR")).join(if cfg!(windows) {
+            "bundle/resources".to_owned()
+        } else {
+            format!(
+                "bundle/linux-{}/resources",
+                if cfg!(target_arch = "aarch64") {
+                    "arm64"
+                } else {
+                    "x64"
+                }
+            )
+        });
         if development.is_dir() {
             return Ok(development);
         }

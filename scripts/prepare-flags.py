@@ -1,5 +1,6 @@
 """Prepare pinned Twemoji flags and CLDR English territory names (development only)."""
 import concurrent.futures
+import argparse
 import io
 import json
 import re
@@ -10,8 +11,11 @@ from PIL import Image
 root = Path(__file__).resolve().parent.parent
 dest = root / "resources/flags"
 dest.mkdir(parents=True, exist_ok=True)
-opener = urllib.request.build_opener(urllib.request.ProxyHandler({
-    "http": "http://127.0.0.1:7897", "https": "http://127.0.0.1:7897"}))
+parser = argparse.ArgumentParser(description=__doc__)
+parser.add_argument("--proxy", default="")
+options = parser.parse_args()
+opener = urllib.request.build_opener(urllib.request.ProxyHandler(
+    {"http": options.proxy, "https": options.proxy} if options.proxy else {}))
 
 def fetch(url):
     return opener.open(url, timeout=30).read()

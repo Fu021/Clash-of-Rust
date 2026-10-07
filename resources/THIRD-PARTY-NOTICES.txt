@@ -21,16 +21,17 @@ Clash of Rust application source and installer scripts use GPL-3.0-only.
 RegionRestrictionCheck platform detector (upstream contributors):
 https://github.com/1-stream/RegionRestrictionCheck
 Revision: ef841d0a2910a44a6ca565e3a03de0f2282d83b3.
-The adapted script and its data retain AGPL-3.0-only, not GPL-only.
-License, unmodified upstream source and modification notes are installed in resources/ip-check.
+The upstream source, adapted reference and derived Rust decisions retain AGPL-3.0-only.
+License and source/modification notes are installed in resources/ip-check.
+Unmodified upstream source and the derived Rust source are in the corresponding repository revision.
 Corresponding combined source: https://github.com/Fu021/Clash-of-Rust
 Use the source revision matching the application release. GPLv3/AGPLv3 section 13 applies to the combination.
 
-IP detector runtime: selected Git for Windows Bash, MSYS2, GNU tools,
-curl/OpenSSL libraries, and jq 1.8.1 (MIT and bundled dependency licenses).
-Their original licenses, package versions, file checksums and corresponding
-source locations are installed in resources/ip-check/runtime.
-These separate tools retain their original licenses; they are not relicensed as GPL-only.
+Native platform checks use upstream-derived RegionRestrictionCheck decisions
+compiled to Rust (AGPL-3.0-only). No Bash/MSYS, curl, GNU command-line tools,
+jq or OpenSSL runtime is bundled for these checks. Request/parse/cancellation
+code is in src/region_check; Rust crate versions and licenses are in Cargo.lock
+and their corresponding upstream sources.
 
 Offline country flags: Twemoji v14.0.2, Copyright Twitter, Inc and other contributors.
 https://github.com/twitter/twemoji/tree/v14.0.2/assets/72x72

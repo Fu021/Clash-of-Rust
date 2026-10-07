@@ -1,6 +1,8 @@
 use super::*;
-use std::process::Command;
 pub fn configured_proxy(scheme: &str) -> Result<Option<String>> {
+    if super::kde::active() {
+        return super::kde::configured_proxy(scheme);
+    }
     let state = read()?;
     if !matches!(state.get("org.gnome.system.proxy|mode"), Some(Some(ProxyValue::Text(mode))) if mode.trim_matches('\'') == "manual")
     {
@@ -57,27 +59,14 @@ pub fn set_autostart(enabled: bool) -> Result<()> {
     Ok(())
 }
 pub fn open_directory(path: &Path) -> Result<()> {
-    Command::new("xdg-open").arg(path).spawn()?;
-    Ok(())
+    super::gio::open_directory(path)
 }
 pub fn open_url(url: &str) -> Result<()> {
-    Command::new("xdg-open").arg(url).spawn()?;
-    Ok(())
+    super::gio::open_uri(url)
 }
 
 pub fn description() -> &'static str {
-    "Linux GNOME 系统代理（gsettings）；KDE 尚待实现"
-}
-
-fn command(args: &[&str]) -> Result<String> {
-    let output = Command::new("gsettings")
-        .args(args)
-        .output()
-        .context("需要 GNOME gsettings 和有效桌面会话")?;
-    if !output.status.success() {
-        bail!("gsettings 操作失败，请检查 GNOME 桌面会话和代理设置权限");
-    }
-    Ok(String::from_utf8(output.stdout)?.trim().to_owned())
+    "Linux GNOME / KDE 原生系统代理"
 }
 
 fn keys() -> [&'static str; 7] {
@@ -93,21 +82,29 @@ fn keys() -> [&'static str; 7] {
 }
 
 pub fn read() -> Result<ProxyState> {
+    if super::kde::active() {
+        return super::kde::read();
+    }
     let mut state = ProxyState::new();
     for entry in keys() {
         let (schema, key) = entry.split_once('|').unwrap();
-        if command(&["writable", schema, key])? != "true" {
+        if super::gio::setting(&["writable", schema, key])? != "true" {
             bail!("GNOME 系统代理设置不可写");
         }
         state.insert(
             entry.into(),
-            Some(ProxyValue::Text(command(&["get", schema, key])?)),
+            Some(ProxyValue::Text(super::gio::setting(&[
+                "get", schema, key,
+            ])?)),
         );
     }
     Ok(state)
 }
 
 pub fn desired(port: u16) -> ProxyState {
+    if super::kde::active() {
+        return super::kde::desired(port);
+    }
     let values = [
         "'manual'".into(),
         "'127.0.0.1'".into(),
@@ -125,6 +122,9 @@ pub fn desired(port: u16) -> ProxyState {
 }
 
 pub fn write(state: &ProxyState) -> Result<()> {
+    if state.keys().any(|k| k.starts_with("kde|")) {
+        return super::kde::write(state);
+    }
     // Apply the mode last, after host/port are configured.
     for (entry, value) in state
         .iter()
@@ -135,7 +135,8 @@ pub fn write(state: &ProxyState) -> Result<()> {
         let Some(ProxyValue::Text(value)) = value else {
             bail!("无效 GNOME 代理值");
         };
-        command(&["set", schema, key, value])?;
+        super::gio::setting(&["set", schema, key, value])?;
     }
+    super::gio::sync();
     Ok(())
 }

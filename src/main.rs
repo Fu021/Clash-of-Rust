@@ -33,16 +33,10 @@ macro_rules! aligned_row {
 }
 
 fn main() -> iced::Result {
-    let task_args: Vec<String> = std::env::args().collect();
-    if task_args
-        .get(1)
-        .is_some_and(|arg| arg == "--ip-check-resolve")
-    {
-        std::process::exit(if ip_check::resolve_host(&task_args[2..]).is_ok() {
-            0
-        } else {
-            1
-        });
+    #[cfg(target_os = "linux")]
+    // This is the first initialization, before threads or GUI/DBus libraries.
+    unsafe {
+        platform::initialize_desktop();
     }
     #[cfg(windows)]
     let elevated_handoff = elevation_path().is_some();
@@ -546,7 +540,7 @@ impl App {
             pending_refresh: false,
             queued_actions: VecDeque::new(),
             probing: false,
-            visible: !background_start(),
+            visible: !background_start() || tray.is_none(),
             hidden_ticks: 0,
             expanded: BTreeSet::new(),
             group_offsets: BTreeMap::new(),
@@ -576,6 +570,14 @@ impl App {
         let task = Task::batch([
             app.dispatch(Action::Start),
             iced::window::latest().map(Message::ReadWindowSize),
+            if background_start() && app.tray.is_none() {
+                iced::window::latest().then(|id| match id {
+                    Some(id) => iced::window::set_mode(id, iced::window::Mode::Windowed),
+                    None => Task::none(),
+                })
+            } else {
+                Task::none()
+            },
             update_task,
         ]);
         (app, task)
