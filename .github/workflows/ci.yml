@@ -36,7 +36,7 @@ jobs:
       run:
         shell: python
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
       - uses: dtolnay/rust-toolchain@stable
         with:
           toolchain: stable-${{ matrix.target }}
@@ -85,6 +85,13 @@ jobs:
         run: |
           import subprocess, sys
           subprocess.run([sys.executable, 'scripts/test-installer.py'], check=True)
+      - name: Windows Defender installer scan
+        if: runner.os == 'Windows'
+        run: |
+          import subprocess, sys, glob
+          installers = glob.glob('dist/*-setup.exe')
+          assert len(installers) == 1, 'Expected exactly one Windows installer to scan'
+          subprocess.run([sys.executable, 'scripts/scan-defender.py', '--update-signatures', *installers], check=True)
       - name: Debian package tests
         if: runner.os == 'Linux'
         run: |
@@ -98,7 +105,7 @@ jobs:
           for artifact in glob.glob('dist/*.deb'):
               subprocess.run(['sudo', 'apt-get', 'install', '-y', './' + artifact], check=True)
               subprocess.run(['dbus-run-session', '--', 'xvfb-run', '-a', sys.executable, 'scripts/test-linux-gui.py', '--executable', '/usr/bin/clash-of-rust'], check=True)
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v6
         with:
           name: package-${{ matrix.system }}-${{ matrix.arch }}
           if-no-files-found: error

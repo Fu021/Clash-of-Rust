@@ -342,9 +342,17 @@ impl Engine {
                 }
                 bail!("内核启动后退出：{status}，请查看日志");
             }
-            if let Ok(Ok(version)) =
-                tokio::time::timeout(Duration::from_millis(400), self.healthy()).await
-            {
+            // mihomo starts its controller before applying rules and listeners.
+            // A responsive /version alone does not mean the profile is ready.
+            let ready = async {
+                let version = self.healthy().await?;
+                let config: Value = self.api.get("configs").await?;
+                if config["mixed-port"].as_u64() != Some(u64::from(self.settings.mixed_port)) {
+                    bail!("内核代理端口仍在初始化");
+                }
+                Ok::<_, anyhow::Error>(version)
+            };
+            if let Ok(Ok(version)) = tokio::time::timeout(Duration::from_millis(400), ready).await {
                 self.version = version;
                 append(&self.logs, "[客户端] mihomo 已启动，控制接口可用");
                 return Ok(());
