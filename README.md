@@ -47,8 +47,10 @@ Linux 首次开启 TUN 时请求管理员授权，仅为已安装的 mihomo 内�
 | GUI RSS | 30.97 MiB | 30.98 MiB |
 | mihomo RSS | 42.57 MiB | 42.59 MiB |
 | **RSS 合计** | **73.55 MiB** | **73.56 MiB** |
-| **PSS 合计（共享页按比例计）** | **55.75 MiB** | **55.76 MiB** |
+| **PSS 合计（实际物理内存占用的推荐参考）** | **55.75 MiB** | **55.76 MiB** |
 | USS 合计（私有驻留页） | 45.33 MiB | 45.35 MiB |
+
+RSS 是进程当前驻留的物理内存，多个进程相加会重复计算共享页；PSS 将共享页按使用进程数分摊，推荐用于参考 GUI 与内核的合计物理内存占用；USS 仅统计进程独占的驻留页，不含共享页。
 
 原始结果：[终端输出](docs/benchmarks/memory-app-0.4.11-ubuntu24.04.txt)、[逐次进程数据](docs/benchmarks/memory-app-0.4.11-ubuntu24.04.jsonl)。
 
