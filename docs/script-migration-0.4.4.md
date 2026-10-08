@@ -5,7 +5,7 @@
 | 原有依赖或问题 | 0.4.4 实现 | 主要文件 |
 | --- | --- | --- |
 | PowerShell 准备内核及 Geo 资源 | Python 标准库下载、官方 SHA256 校验、失败保留旧文件，按 Windows/Linux 与 x64/arm64 分目录 | `scripts/prepare-resources.py`、`scripts/build_support.py` |
-| PowerShell 编译和 NSIS 打包 | Python 调用 Cargo、验证版本和资源，使用新的文件清单暂存目录；Windows 输出 EXE 安装程序，Linux 输出 Debian 包，无 Shell 启动器或维护脚本 | `scripts/build-installer.py`、`scripts/build_deb.py` |
+| PowerShell 编译和 NSIS 打包 | Python 调用 Cargo、验证版本和资源，使用新的文件清单暂存目录；Windows 输出 EXE 安装程序，Linux 输出 Debian 包，无 Shell 启动器或维护脚本 | `scripts/build-installer.py`（Windows EXE 与 Linux DEB 共用入口） |
 | PowerShell 安装器冒烟测试 | Python 直接调用 Win32 和注册表 API，在独立测试目录和同步对象中验证安装生命周期 | `scripts/test-installer.py` |
 | 181 个平台检测调用 Bash、curl、jq、GNU 工具和 OpenSSL | 固定上游请求与判断迁移为原生 Rust 函数，使用 reqwest、serde_json、正则及 HMAC-SHA1 | `src/region_check.rs`、`src/region_check/generated.rs` |
 | 检测工具链依赖本机 Git for Windows，安装包携带 MSYS 的 EXE/DLL | 删除工具链提取和运行脚本适配工具；安装资源仅携带 AGPL 许可证与来源说明 | 删除 `prepare-ip-check.py`、`adapt-region-check.py`；修改安装器文件清单 |

@@ -93,6 +93,8 @@ python scripts/test-build-tools.py
 
 CI 在 Windows 和 Ubuntu 22.04 的 x64、ARM64 环境分别检查、测试和打包，并在 `ubuntu-latest` x64 上验证 Ubuntu 22.04 构建的安装包的 GUI 图标标识与真实 TUN 行为。Windows 额外复用现有托盘、图标资源和更新助手检查；完整 GUI 与真实 TUN 自动测试目前覆盖 Linux。内存基准在本机运行。正式发布等待对应提交的全部 CI 检查通过，使用该次 Actions 产物作为 Release 附件。
 
+发布入口：GitHub **Actions → Publish Release → Run workflow**，选择 `main`。`ci_run_id` 可填写对应 CI 的运行编号，留空则匹配当前提交；勾选 `check_only` 仅校验。版本号和 Release 文案从通过测试的提交读取，四个平台安装包及 SHA256 文件全部核验后发布，已有正式版本不会被覆盖。本地也可执行 `python scripts/publish-release.py --run-id 编号 --check` 检查同一批产物。
+
 ## License
 
 Rust 界面及原创通用代码采用 **GPL-3.0-only**，见 [LICENSE](LICENSE)。IP 检测复用的 RegionRestrictionCheck 源码及派生逻辑保留 **AGPL-3.0-only**，见 [授权及修改说明](vendor/region-restriction-check/SOURCE.md)；组合发行遵守 GPLv3/AGPLv3 第 13 条，包括适用时向远程网络用户提供完整对应源码。
