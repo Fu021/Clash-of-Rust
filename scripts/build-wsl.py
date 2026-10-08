@@ -13,13 +13,13 @@ import shutil
 import subprocess
 import sys
 
-from build_support import ROOT, sha256
+from build_support import ROOT, sha256, validate_version
 
 SOURCE_DIRECTORIES = ('src','scripts','resources','installer','vendor','examples','tests','docs','.github')
 SOURCE_FILES = ('Cargo.toml','Cargo.lock','build.rs','LICENSE','README.md','.gitattributes','.gitignore')
 
 
-def native_build(source, workspace, cargo_bin, cargo_home, proxy):
+def native_build(source, workspace, cargo_bin, cargo_home, proxy, version=None):
     source, workspace = source.resolve(), workspace.resolve()
     if workspace == source or workspace.is_relative_to(source) or str(workspace).startswith('/mnt/'):
         raise ValueError('WSL build workspace must be separate and on the native Linux filesystem')
@@ -78,12 +78,14 @@ def native_build(source, workspace, cargo_bin, cargo_home, proxy):
     if cache_directory and str(Path(cache_directory).resolve()).startswith('/mnt/'):
         raise ValueError('CARGO_HOME must also be on the native Linux filesystem')
     options = ['--skip-prepare'] if ready else []
+    if version:
+        options += ['--version',validate_version(version)]
     if proxy:
         options += ['--proxy',proxy]
     print('Native WSL source and Cargo target:',workspace,flush=True)
     subprocess.run([sys.executable,workspace/'scripts/build-installer.py',*options],cwd=workspace,env=environment,check=True)
     deb_arch = 'arm64' if arch == 'arm64' else 'amd64'
-    version = json.loads(subprocess.check_output(['cargo','metadata','--no-deps','--format-version','1','--offline'],cwd=workspace,env=environment))['packages'][0]['version']
+    version = version or json.loads(subprocess.check_output(['cargo','metadata','--no-deps','--format-version','1','--offline'],cwd=workspace,env=environment))['packages'][0]['version']
     artifact = workspace/f'dist/Clash-of-Rust-{version}-linux-{deb_arch}.deb'
     assert artifact.with_name(artifact.name+'.sha256').read_text().strip() == sha256(artifact)
     (source/'dist').mkdir(exist_ok=True)
@@ -100,13 +102,14 @@ def main():
     parser.add_argument('--cargo-bin',help='Optional native Linux directory containing Cargo')
     parser.add_argument('--cargo-home',help='Optional native Linux Cargo cache directory')
     parser.add_argument('--proxy',default='',help='Resource download proxy reachable from Linux')
+    parser.add_argument('--version',help='Optional package/application version override for update testing')
     parser.add_argument('--native-build',action='store_true',help=argparse.SUPPRESS)
     parser.add_argument('--source',type=Path,help=argparse.SUPPRESS)
     args = parser.parse_args()
     if args.native_build:
         if not sys.platform.startswith('linux') or args.source is None:
             raise ValueError('Internal mirror operation requires Linux and a source directory')
-        native_build(args.source,Path(args.workspace),args.cargo_bin,args.cargo_home,args.proxy)
+        native_build(args.source,Path(args.workspace),args.cargo_bin,args.cargo_home,args.proxy,args.version)
         return
     if os.name != 'nt':
         raise ValueError('Use build-installer.py directly on native Linux')
@@ -122,6 +125,8 @@ def main():
         command += ['--cargo-home',args.cargo_home]
     if args.proxy:
         command += ['--proxy',args.proxy]
+    if args.version:
+        command += ['--version',validate_version(args.version)]
     subprocess.run(command,check=True)
 
 

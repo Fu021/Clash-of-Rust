@@ -1,7 +1,9 @@
 """Isolated Windows installer smoke tests using Win32/registry APIs directly."""
 import ctypes
+import argparse
 from ctypes import wintypes
 import os
+from pathlib import Path
 import subprocess
 import uuid
 import winreg
@@ -67,6 +69,9 @@ def expect(executable,args,code,timeout=60):
 
 
 def main():
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument('--old-executable',type=Path,help='Optional real lower-version GUI executable for an upgrade fixture')
+    args = parser.parse_args()
     if os.name != 'nt':
         raise RuntimeError('Installer smoke tests require Windows')
     if key_exists(TEST_KEY) or key_exists(LEGACY_KEY):
@@ -84,6 +89,8 @@ def main():
         run([compiler,'/V2','/INPUTCHARSET','UTF8','/DINSTALLER_TESTING',f'/DAPP_VERSION={version}',f'/DPAYLOAD={stage}',f'/DOUTPUT={setup}',ROOT/'installer/clash-of-rust.nsi'])
         normal = ['/S',f'/D={installed}']
         reinstall = ['/S','/TESTREINSTALL',f'/D={installed}']
+        update = ['/S','/UPDATE',f'/D={installed}']
+        expect(setup,update,2)
         with Handle('mutex',MUTEX):
             expect(setup,normal,3)
         expect(setup,normal,0)
@@ -98,6 +105,29 @@ def main():
         expect(setup,normal,2)
         user_file = installed/'user-file.txt'
         user_file.write_text('Must survive uninstall',encoding='utf-8')
+        with Handle('mutex',MUTEX) as mutex, Handle('event',EVENT) as event:
+            with start(setup,update) as process:
+                event.wait()
+                mutex.close()
+                assert process.wait(timeout=30) == 0
+        assert user_file.is_file() and registry_value(TEST_KEY,'DisplayVersion') == version
+        assert sha256(installed/'clash-of-rust.exe') == sha256(binary)
+        assert not (installed/'clash-of-rust.update-backup.exe').exists()
+        with Handle('mutex',MUTEX), Handle('event',EVENT) as event:
+            with start(setup,update) as process:
+                event.wait()
+                assert process.wait(timeout=25) == 5
+        assert (installed/'clash-of-rust.exe').is_file() and user_file.is_file()
+        # Force a payload write failure after the running app has been backed up.
+        license_file = installed/'LICENSE'
+        saved_license = installed/'user-license-backup.txt'
+        license_file.rename(saved_license)
+        license_file.mkdir()
+        expect(setup,update,6)
+        assert sha256(installed/'clash-of-rust.exe') == sha256(binary), 'Failed update did not restore original executable'
+        assert not (installed/'clash-of-rust.update-backup.exe').exists()
+        license_file.rmdir()
+        saved_license.rename(license_file)
         with Handle('mutex',MUTEX):
             expect(setup,reinstall,5)
             assert (installed/'clash-of-rust.exe').is_file()
@@ -127,7 +157,28 @@ def main():
         assert legacy_user.is_file() and (installed/'clash-of-rust.exe').is_file()
         expect(uninstaller,['/S',f'_?={installed}'],0)
         assert not key_exists(TEST_KEY)
-    print('PASS: fresh install, native-only payload, duplicate refusal, cooperative exit, refusal and timeout, reinstall, legacy migration, uninstall, unrelated user file preservation')
+        if args.old_executable:
+            old_binary = args.old_executable.resolve(strict=True)
+            old_version = file_version(old_binary)
+            old_setup = root/'old-version-setup.exe'
+            shutil.copy2(old_binary,stage/binary.name)
+            run([compiler,'/V2','/INPUTCHARSET','UTF8','/DINSTALLER_TESTING',f'/DAPP_VERSION={old_version}',f'/DPAYLOAD={stage}',f'/DOUTPUT={old_setup}',ROOT/'installer/clash-of-rust.nsi'])
+            expect(old_setup,normal,0)
+            assert registry_value(TEST_KEY,'DisplayVersion') == old_version
+            assert file_version(installed/'clash-of-rust.exe') == old_version
+            with Handle('mutex',MUTEX) as mutex, Handle('event',EVENT) as event:
+                with start(setup,update) as process:
+                    event.wait()
+                    mutex.close()
+                    assert process.wait(timeout=30) == 0
+            assert file_version(installed/'clash-of-rust.exe') == version
+            assert registry_value(TEST_KEY,'DisplayVersion') == version
+            assert sha256(installed/'clash-of-rust.exe') == sha256(binary)
+            assert user_file.is_file()
+            expect(uninstaller,['/S',f'_?={installed}'],0)
+            assert not key_exists(TEST_KEY)
+            print(f'PASS: native automatic upgrade {old_version} -> {version}')
+    print('PASS: fresh install, native-only payload, duplicate refusal, automatic update, cooperative exit, refusal and timeout, reinstall, legacy migration, uninstall, unrelated user file preservation')
     print('Test artifacts:',root)
 
 

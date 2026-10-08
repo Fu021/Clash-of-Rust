@@ -1,6 +1,6 @@
 [package]
 name = "clash-of-rust"
-version = "0.4.5"
+version = "0.4.6"
 edition = "2024"
 description = "A native Rust desktop client for mihomo"
 license = "GPL-3.0-only"
@@ -18,7 +18,7 @@ serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 serde_yaml = "0.9"
 semver = "1"
-tokio = { version = "1", features = ["rt-multi-thread", "process", "time", "sync", "net", "io-util", "macros"] }
+tokio = { version = "1", features = ["rt-multi-thread", "process", "time", "sync", "net", "io-util", "fs", "macros"] }
 tempfile = "3"
 uuid = { version = "1", features = ["v4", "serde"] }
 futures-util = "0.3"
@@ -31,7 +31,7 @@ tray-icon = { version = "0.26", default-features = false, features = ["ksni"] }
 
 [target.'cfg(windows)'.dependencies]
 winreg = "0.55"
-windows-sys = { version = "0.61", features = ["Win32_UI_WindowsAndMessaging", "Win32_System_Threading", "Win32_Security_Authorization", "Win32_System_Memory"] }
+windows-sys = { version = "0.61", features = ["Win32_UI_WindowsAndMessaging", "Win32_UI_Shell", "Win32_System_Com", "Win32_System_Registry", "Win32_System_Threading", "Win32_Security_Authorization", "Win32_System_Memory"] }
 
 [target.'cfg(unix)'.dependencies]
 libc = "0.2"

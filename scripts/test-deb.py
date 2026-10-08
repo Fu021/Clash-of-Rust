@@ -18,6 +18,7 @@ def command(args, **kwargs):
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('artifact',type=Path)
+    parser.add_argument('--upgrade-to',type=Path,help='Optional package to install over the initial isolated version')
     args = parser.parse_args()
     artifact = args.artifact.resolve()
     if os.name == 'nt' or os.geteuid() != 0:
@@ -47,6 +48,15 @@ def main():
         command(['md5sum','--check',root/'var/lib/dpkg/info/clash-of-rust.md5sums'],cwd=root)
         unrelated = app/'user-file.txt'
         unrelated.write_text('Keep unrelated user files')
+        if args.upgrade_to:
+            upgrade = args.upgrade_to.resolve(strict=True)
+            assert upgrade.with_name(upgrade.name+'.sha256').read_text().strip() == sha256(upgrade)
+            expected = subprocess.check_output(['dpkg-deb','--field',str(upgrade),'Version'],text=True).strip()
+            command(['dpkg',f'--root={root}','--unpack',upgrade])
+            actual = subprocess.check_output(['dpkg-query',f'--admindir={root / "var/lib/dpkg"}','--show','--showformat=${Version}','clash-of-rust'],text=True)
+            assert actual == expected and unrelated.read_text() == 'Keep unrelated user files'
+            command(['md5sum','--check',root/'var/lib/dpkg/info/clash-of-rust.md5sums'],cwd=root)
+            print('PASS: isolated Debian upgrade to',expected)
         command(['dpkg',f'--root={root}','--purge','clash-of-rust'])
         assert not (app/'clash-of-rust').exists()
         assert not (root/'usr/bin/clash-of-rust').is_symlink()

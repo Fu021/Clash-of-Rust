@@ -162,6 +162,8 @@ pub fn is_elevated() -> bool {
 pub fn elevate(path: &Path) -> Result<()> {
     windows::elevate(path)
 }
+#[cfg(windows)]
+pub use windows::{installed_executable, launch_update_installer};
 #[cfg(not(windows))]
 pub fn elevate(_: &Path) -> Result<()> {
     bail!("当前平台不支持 Windows UAC 提权")

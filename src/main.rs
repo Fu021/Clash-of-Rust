@@ -14,7 +14,7 @@ use futures_util::{
 };
 use iced::{
     Color, Element, Length, Subscription, Task, Theme,
-    widget::{Space, button, column, container, image, scrollable, text, text_input},
+    widget::{Space, button, column, container, image, progress_bar, scrollable, text, text_input},
 };
 use std::{
     collections::{BTreeMap, BTreeSet, VecDeque},
@@ -33,13 +33,16 @@ macro_rules! aligned_row {
 }
 
 fn main() -> iced::Result {
+    if update::helper_main() {
+        return Ok(());
+    }
     #[cfg(target_os = "linux")]
     // This is the first initialization, before threads or GUI/DBus libraries.
     unsafe {
         platform::initialize_desktop();
     }
     #[cfg(windows)]
-    let elevated_handoff = elevation_path().is_some();
+    let elevated_handoff = elevation_path().is_some() || update_restart();
     #[cfg(windows)]
     let _installation_guard = {
         let deadline = std::time::Instant::now() + Duration::from_secs(30);
@@ -78,8 +81,12 @@ fn main() -> iced::Result {
         else {
             return Ok(());
         };
-        if file.try_lock().is_err() {
-            return Ok(());
+        let deadline = std::time::Instant::now() + Duration::from_secs(30);
+        while file.try_lock().is_err() {
+            if !update_restart() || std::time::Instant::now() >= deadline {
+                return Ok(());
+            }
+            std::thread::sleep(Duration::from_millis(100));
         }
         file
     };
@@ -102,6 +109,10 @@ fn main() -> iced::Result {
             ..Default::default()
         })
         .run()
+}
+
+fn update_restart() -> bool {
+    std::env::args_os().any(|arg| arg == "--update-result")
 }
 
 fn elevation_path() -> Option<std::path::PathBuf> {
@@ -261,6 +272,10 @@ enum Message {
     Finished(Box<Reply>),
     CheckUpdate,
     UpdateChecked(Result<Option<update::Available>, String>),
+    InstallUpdate(bool),
+    UpdateProgress(update::Progress),
+    UpdateInstalling,
+    UpdateHandoff(Result<update::InstallSession, String>),
     OpenRelease,
     ReleaseOpened(Result<(), String>),
     Tick,
@@ -562,6 +577,14 @@ impl App {
             test_results: vec![],
             updates: update::State::default(),
         };
+        if let Some((message, error)) = update::startup_outcome() {
+            if error {
+                app.updates.failure = Some(message);
+            } else {
+                app.updates.outcome = Some(message);
+            }
+            app.error = error;
+        }
         let update_task = if app.engine.is_none() {
             app.check_update()
         } else {
@@ -667,6 +690,11 @@ impl App {
     }
 
     fn dispatch_scope(&mut self, action: Action, scope: Scope) -> Task<Message> {
+        if (self.updates.install_pending || self.updates.installing.is_some())
+            && !matches!(action, Action::Refresh)
+        {
+            return Task::none();
+        }
         if self.busy || self.exiting {
             if matches!(action, Action::Refresh) {
                 self.pending_refresh = true;
@@ -701,6 +729,81 @@ impl App {
         match message {
             Message::CheckUpdate => return self.check_update(),
             Message::UpdateChecked(result) => self.updates.finish(result),
+            Message::InstallUpdate(proxied) => {
+                if self.exiting || self.updates.busy() {
+                    return Task::none();
+                }
+                let Some(available) = self.updates.available.clone() else {
+                    return Task::none();
+                };
+                if let Err(error) = update::ensure_installable() {
+                    self.updates.fail(error.to_string());
+                    return Task::none();
+                }
+                if proxied && !self.snapshot.running {
+                    self.updates.fail("请先启动内核，再使用代理更新".into());
+                    return Task::none();
+                }
+                self.updates.failure = None;
+                self.updates.outcome = None;
+                self.updates.progress = Some(update::Progress {
+                    received: 0,
+                    total: available
+                        .package
+                        .as_ref()
+                        .map_or(1, |package| package.asset.size),
+                });
+                let port = proxied.then_some(self.settings.mixed_port);
+                return Task::run(
+                    iced::stream::channel(8, async move |mut output| {
+                        let (sender, mut progress) = tokio::sync::mpsc::channel(4);
+                        let download = update::download(available, port, move |value| {
+                            let _ = sender.try_send(value);
+                        });
+                        tokio::pin!(download);
+                        let downloaded = loop {
+                            tokio::select! {
+                                result = &mut download => break result,
+                                Some(value) = progress.recv() => { let _ = output.send(Message::UpdateProgress(value)).await; }
+                            }
+                        };
+                        let result = match downloaded {
+                            Ok(downloaded) => {
+                                let _ = output.send(Message::UpdateInstalling).await;
+                                match tokio::task::spawn_blocking(move || {
+                                    update::handoff(downloaded)
+                                })
+                                .await
+                                {
+                                    Ok(result) => result.map_err(|error| error.to_string()),
+                                    Err(_) => Err("安装助手无法启动，请重试".into()),
+                                }
+                            }
+                            Err(error) => Err(error.to_string()),
+                        };
+                        let _ = output.send(Message::UpdateHandoff(result)).await;
+                    }),
+                    |message| message,
+                );
+            }
+            Message::UpdateProgress(progress) => {
+                if self.updates.progress.is_some() {
+                    self.updates.progress = Some(progress);
+                }
+            }
+            Message::UpdateInstalling => {
+                self.updates.progress = None;
+                self.updates.install_pending = true;
+            }
+            Message::UpdateHandoff(result) => {
+                self.updates.install_pending = false;
+                match result {
+                    Ok(directory) => {
+                        self.updates.installing = Some(directory);
+                    }
+                    Err(reason) => self.updates.fail(reason),
+                }
+            }
             Message::OpenRelease => {
                 let url = self.updates.available.as_ref().map_or_else(
                     || update::RELEASES_URL.to_owned(),
@@ -1031,6 +1134,22 @@ impl App {
             }
             Message::ShowWindow(None) => {}
             Message::Tick => {
+                if let Some(session) = self.updates.installing.clone()
+                    && let Some((message, error)) = session.outcome()
+                {
+                    self.updates.installing = None;
+                    self.updates.progress = None;
+                    if error {
+                        self.updates.failure = Some(message);
+                    } else {
+                        self.updates.outcome = Some(message);
+                    }
+                    self.error = error;
+                    if !error {
+                        return self.exit();
+                    }
+                    update::cleanup(&session.directory);
+                }
                 if platform::exit_requested() {
                     return self.exit();
                 }
@@ -1213,6 +1332,11 @@ impl App {
                     self.exiting = false;
                     self.error = true;
                     self.notice = format!("退出失败：{error}");
+                    if self.updates.busy() {
+                        self.updates.progress = None;
+                        self.updates.failure =
+                            Some("更新失败：客户端无法正常退出，请检查代理恢复或内核状态".into());
+                    }
                 }
             },
             Message::Window(_) => {}
@@ -1388,13 +1512,24 @@ impl App {
             .width(170)
             .align_x(iced::alignment::Horizontal::Right)
         ];
-        let notice = container(self.label(&self.notice).size(self.scaled(11)).color(
-            if self.error && !self.dark {
-                Color::from_rgb(0.95, 0.47, 0.48)
-            } else {
-                self.foreground()
-            },
-        ))
+        let update_status = if self.updates.failure.is_some() {
+            self.updates.failure.as_deref()
+        } else if self.updates.install_pending || self.updates.installing.is_some() {
+            Some("正在安装更新，请完成系统授权…")
+        } else {
+            self.updates.outcome.as_deref()
+        };
+        let notice = container(
+            self.label(update_status.unwrap_or(&self.notice))
+                .size(self.scaled(11))
+                .color(
+                    if (self.error || self.updates.failure.is_some()) && !self.dark {
+                        Color::from_rgb(0.95, 0.47, 0.48)
+                    } else {
+                        self.foreground()
+                    },
+                ),
+        )
         .padding(8)
         .width(Length::Fill)
         .style(panel);
@@ -1417,16 +1552,42 @@ impl App {
                         self.label(format!("发现新版本 {}", update.version))
                             .color(ACCENT),
                         Space::new().width(Length::Fill),
-                        button(self.label("查看 Release"))
+                        button(self.label("更新"))
                             .style(rounded_primary)
                             .padding([4, 10])
-                            .on_press(Message::OpenRelease)
+                            .on_press_maybe(
+                                (!self.updates.busy() && !self.exiting)
+                                    .then_some(Message::InstallUpdate(false))
+                            ),
+                        button(self.label("更新（代理）"))
+                            .style(rounded_secondary)
+                            .padding([4, 10])
+                            .on_press_maybe(
+                                (!self.updates.busy() && !self.exiting)
+                                    .then_some(Message::InstallUpdate(true))
+                            )
                     ]
                     .spacing(8),
                 )
                 .padding(8)
                 .width(Length::Fill)
                 .style(panel),
+            );
+        }
+        if let Some(progress) = self.updates.progress {
+            let total = progress.total.max(1);
+            let percent = (progress.received as f64 / total as f64 * 100.0).min(100.0);
+            body = body.push(
+                column![
+                    self.label(format!(
+                        "正在下载更新 · {percent:.0}%（{:.1} / {:.1} MiB）",
+                        progress.received as f64 / 1048576.0,
+                        progress.total as f64 / 1048576.0
+                    ))
+                    .size(self.scaled(11)),
+                    progress_bar(0.0..=100.0, percent as f32)
+                ]
+                .spacing(4),
             );
         }
         let body = body.push(content);
@@ -2290,7 +2451,8 @@ impl App {
                     .style(rounded_primary)
                     .padding([4, 10])
                     .on_press_maybe(
-                        (!self.updates.checking && !self.exiting).then_some(Message::CheckUpdate)
+                        (!self.updates.checking && !self.updates.busy() && !self.exiting)
+                            .then_some(Message::CheckUpdate)
                     ),
                 button(self.label("查看 Release"))
                     .style(rounded_secondary)

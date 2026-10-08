@@ -7,6 +7,85 @@ use winreg::{
 const KEY: &str = "Software\\Microsoft\\Windows\\CurrentVersion\\Internet Settings";
 
 const RUN_KEY: &str = "Software\\Microsoft\\Windows\\CurrentVersion\\Run";
+
+pub fn installed_executable(executable: &Path) -> Result<bool> {
+    use winreg::enums::{HKEY_LOCAL_MACHINE, KEY_WOW64_64KEY};
+    let key = match RegKey::predef(HKEY_LOCAL_MACHINE).open_subkey_with_flags(
+        "Software\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\ClashOfRust",
+        KEY_READ | KEY_WOW64_64KEY,
+    ) {
+        Ok(key) => key,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(false),
+        Err(error) => return Err(error.into()),
+    };
+    let directory: String = key.get_value("InstallLocation")?;
+    Ok(
+        std::fs::canonicalize(Path::new(&directory).join("clash-of-rust.exe"))?
+            == std::fs::canonicalize(executable)?,
+    )
+}
+
+pub struct UpdateInstaller(windows_sys::Win32::Foundation::HANDLE);
+impl UpdateInstaller {
+    pub fn wait(&mut self) -> Result<u32> {
+        use windows_sys::Win32::System::Threading::{GetExitCodeProcess, WaitForSingleObject};
+        if unsafe { WaitForSingleObject(self.0, u32::MAX) } != 0 {
+            bail!("无法读取安装进度");
+        }
+        let mut code = 0;
+        if unsafe { GetExitCodeProcess(self.0, &mut code) } == 0 {
+            bail!("无法读取安装结果");
+        }
+        Ok(code)
+    }
+}
+impl Drop for UpdateInstaller {
+    fn drop(&mut self) {
+        unsafe {
+            windows_sys::Win32::Foundation::CloseHandle(self.0);
+        }
+    }
+}
+
+pub fn launch_update_installer(package: &Path) -> Result<UpdateInstaller> {
+    use std::os::windows::ffi::OsStrExt;
+    use windows_sys::Win32::{
+        System::Com::{COINIT_APARTMENTTHREADED, CoInitializeEx, CoUninitialize},
+        UI::Shell::{
+            SEE_MASK_FLAG_NO_UI, SEE_MASK_NOASYNC, SEE_MASK_NOCLOSEPROCESS, SHELLEXECUTEINFOW,
+            ShellExecuteExW,
+        },
+    };
+    let file: Vec<u16> = package.as_os_str().encode_wide().chain([0]).collect();
+    let verb: Vec<u16> = "runas".encode_utf16().chain([0]).collect();
+    let parameters: Vec<u16> = "/S /UPDATE".encode_utf16().chain([0]).collect();
+    let initialized =
+        unsafe { CoInitializeEx(std::ptr::null(), COINIT_APARTMENTTHREADED as u32) } >= 0;
+    let mut info: SHELLEXECUTEINFOW = unsafe { std::mem::zeroed() };
+    info.cbSize = std::mem::size_of::<SHELLEXECUTEINFOW>() as u32;
+    info.fMask = SEE_MASK_NOCLOSEPROCESS | SEE_MASK_NOASYNC | SEE_MASK_FLAG_NO_UI;
+    info.lpVerb = verb.as_ptr();
+    info.lpFile = file.as_ptr();
+    info.lpParameters = parameters.as_ptr();
+    info.nShow = 1;
+    let success = unsafe { ShellExecuteExW(&mut info) };
+    let error = std::io::Error::last_os_error();
+    if initialized {
+        unsafe {
+            CoUninitialize();
+        }
+    }
+    if success == 0 {
+        if error.raw_os_error() == Some(1223) {
+            bail!("安装授权已取消");
+        }
+        bail!("无法启动安装程序，请检查权限或安全软件");
+    }
+    if info.hProcess.is_null() {
+        bail!("无法跟踪安装程序");
+    }
+    Ok(UpdateInstaller(info.hProcess))
+}
 pub fn configured_proxy(scheme: &str) -> Result<Option<String>> {
     let state = read()?;
     if state.get("ProxyEnable") != Some(&Some(ProxyValue::Number(1))) {

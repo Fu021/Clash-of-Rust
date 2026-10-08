@@ -1,0 +1,32 @@
+[
+  {
+    "background": false,
+    "mapped_window": [
+      "Clash of Rust · 原生代理客户端",
+      950,
+      700
+    ],
+    "core_version": {
+      "meta": true,
+      "version": "v1.19.32"
+    },
+    "close_exits": true,
+    "returncode": 0,
+    "stderr": ""
+  },
+  {
+    "background": true,
+    "mapped_window": [
+      "Clash of Rust · 原生代理客户端",
+      950,
+      700
+    ],
+    "core_version": {
+      "meta": true,
+      "version": "v1.19.32"
+    },
+    "close_exits": true,
+    "returncode": 0,
+    "stderr": ""
+  }
+]

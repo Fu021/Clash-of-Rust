@@ -2,12 +2,10 @@ Unicode true
 !include "MUI2.nsh"
 !include "LogicLib.nsh"
 !include "x64.nsh"
-!ifdef INSTALLER_TESTING
-  !include "FileFunc.nsh"
-!endif
+!include "FileFunc.nsh"
 
 !ifndef APP_VERSION
-  !define APP_VERSION "0.4.5"
+  !define APP_VERSION "0.4.6"
 !endif
 !ifndef PAYLOAD
   !define PAYLOAD "..\bundle"
@@ -74,6 +72,8 @@ Var ExistingDir
 Var ResultCode
 Var LegacyInstall
 Var KeepAutostart
+Var UpdateMode
+Var UpdateBackup
 
 !macro CheckRunning PREFIX
   System::Call 'kernel32::OpenMutexW(i 0x100000, i 0, w "${APP_MUTEX}") p.r0'
@@ -102,6 +102,14 @@ Function .onInit
   !endif
   StrCpy $LegacyInstall 0
   StrCpy $KeepAutostart 0
+  StrCpy $UpdateMode 0
+  StrCpy $UpdateBackup 0
+  ${GetParameters} $0
+  ClearErrors
+  ${GetOptions} $0 "/UPDATE" $1
+  ${IfNot} ${Errors}
+    StrCpy $UpdateMode 1
+  ${EndIf}
   ReadRegStr $ExistingDir ${PRODUCT_HIVE} "${PRODUCT_KEY}" "InstallLocation"
     ${If} $ExistingDir == ""
       ReadRegStr $ExistingDir HKCU "${LEGACY_KEY}" "InstallLocation"
@@ -117,6 +125,10 @@ Function .onInit
     ${If} $0 == '"$ExistingDir\clash-of-rust.exe" --background'
       StrCpy $KeepAutostart 1
     ${EndIf}
+    ; Clicking Update in the client authorizes this specific upgrade.
+    ${If} $UpdateMode == 1
+      Goto uninstall_existing
+    ${EndIf}
     !ifdef INSTALLER_TESTING
       ; Only test builds can simulate accepting the reinstall question silently.
       ${GetParameters} $0
@@ -125,7 +137,7 @@ Function .onInit
       IfErrors test_no_confirmation uninstall_existing
       test_no_confirmation:
     !endif
-    ; Silent reinstallation must never bypass the user's uninstall confirmation.
+    ; Ordinary silent reinstallation still requires explicit confirmation.
     IfSilent reinstall_silent reinstall_prompt
     reinstall_silent:
       SetErrorLevel 2
@@ -138,6 +150,11 @@ Function .onInit
       Call ShutdownExisting
       ; Defer file removal until the user clicks Install in the wizard.
       Goto init_done
+  ${EndIf}
+  ${If} $UpdateMode == 1
+    ; Never let an update silently turn into a new unrelated installation.
+    SetErrorLevel 2
+    Abort
   ${EndIf}
   !insertmacro CheckRunning init_
   init_done:
@@ -219,14 +236,28 @@ Function RemoveExisting
 FunctionEnd
 
 Section "Clash of Rust" MainSection
-  Call RemoveExisting
+  ${If} $UpdateMode == 0
+    Call RemoveExisting
+  ${EndIf}
   !insertmacro CheckRunning install_
+  ${If} $UpdateMode == 1
+    ClearErrors
+    Rename "$INSTDIR\clash-of-rust.exe" "$INSTDIR\clash-of-rust.update-backup.exe"
+    ${If} ${Errors}
+      SetErrorLevel 6
+      Abort
+    ${EndIf}
+    StrCpy $UpdateBackup 1
+  ${EndIf}
+  ; Extraction failures must not look like a successful update to the helper.
+  SetErrorLevel 6
   SetRegView 64
   !ifdef INSTALLER_TESTING
     SetShellVarContext current
   !else
     SetShellVarContext all
   !endif
+  ClearErrors
   SetOutPath "$INSTDIR"
   File "${PAYLOAD}\clash-of-rust.exe"
   File "${PAYLOAD}\LICENSE"
@@ -250,6 +281,11 @@ Section "Clash of Rust" MainSection
   File "${PAYLOAD}\resources\ip-check\SOURCE.md"
   SetOutPath "$INSTDIR"
   WriteUninstaller "$INSTDIR\uninstall.exe"
+  ${If} ${Errors}
+    Call RestoreUpdate
+    SetErrorLevel 6
+    Abort
+  ${EndIf}
   !ifndef INSTALLER_TESTING
     ${If} $KeepAutostart == 1
       WriteRegStr HKCU "Software\Microsoft\Windows\CurrentVersion\Run" "ClashOfRust" '"$INSTDIR\clash-of-rust.exe" --background'
@@ -264,7 +300,35 @@ Section "Clash of Rust" MainSection
   WriteRegStr ${PRODUCT_HIVE} "${PRODUCT_KEY}" "QuietUninstallString" '$\"$INSTDIR\uninstall.exe$\" /S'
   WriteRegDWORD ${PRODUCT_HIVE} "${PRODUCT_KEY}" "NoModify" 1
   WriteRegDWORD ${PRODUCT_HIVE} "${PRODUCT_KEY}" "NoRepair" 1
+  ${If} ${Errors}
+    Call RestoreUpdate
+    SetErrorLevel 6
+    Abort
+  ${EndIf}
+  !ifndef INSTALLER_TESTING
+    ${If} $UpdateMode == 1
+      ; Refresh existing links to use the new version's icon.
+      Call CreateShortcuts
+    ${EndIf}
+  !endif
+  ${If} $UpdateBackup == 1
+    Delete "$INSTDIR\clash-of-rust.update-backup.exe"
+    StrCpy $UpdateBackup 0
+  ${EndIf}
+  SetErrorLevel 0
 SectionEnd
+
+Function RestoreUpdate
+  ${If} $UpdateBackup == 1
+    Delete "$INSTDIR\clash-of-rust.exe"
+    Rename "$INSTDIR\clash-of-rust.update-backup.exe" "$INSTDIR\clash-of-rust.exe"
+    StrCpy $UpdateBackup 0
+  ${EndIf}
+FunctionEnd
+
+Function .onInstFailed
+  Call RestoreUpdate
+FunctionEnd
 
 Function un.onInit
   SetRegView 64

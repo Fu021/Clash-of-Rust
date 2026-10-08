@@ -3,7 +3,7 @@
 </p>
 <h1 align="center">Clash of Rust</h1>
 
-基于 **mihomo、Rust 和 Iced** 的原生代理客户端。当前版本 **0.4.5**，提供 **Windows x64** 的 `.exe` 安装程序和 **Linux amd64** 的 `.deb` 安装程序。安装包内置内核与 Geo 数据；应用运行无需 Python、PowerShell、Bash 或 WebView。
+基于 **mihomo、Rust 和 Iced** 的原生代理客户端。当前版本 **0.4.6**，提供 **Windows x64** 的 `.exe` 安装程序和 **Linux amd64** 的 `.deb` 安装程序。安装包内置内核与 Geo 数据；应用运行无需 Python、PowerShell、Bash 或 WebView。
 
 ## Features
 
@@ -14,7 +14,7 @@
 - **离线就绪**：安装包内置 mihomo 内核和 Geo 数据，启动无需额外下载，支持一键更新 Geo 数据。
 - **IP 检测**：183 个检测项全部由 Rust 直接请求和解析，其中 181 项采用 RegionRestrictionCheck 的检测逻辑；支持出口 IP、GitHub 连通性、AI 服务与流媒体平台地区访问检测，提供一键检测、取消及结果搜索。
 - **便捷使用**：提供托盘、后台开机自启、单实例运行、连接与日志查看、网络诊断和主题切换。
-- **更新检测**：启动时及每 6 小时检查 GitHub Release，发现新版本时提示；支持手动检查和打开 Release 页面下载更新。
+- **客户端更新**：发现新版本后可选择“更新”直连下载或“更新（代理）”通过当前内核下载；显示下载进度，校验完成后自动安装并重启。更新失败时，上方状态栏简要说明原因并撤掉进度条，可再次尝试；支持手动检查及查看 Release。
 
 ## 内存与运行效率
 
@@ -45,12 +45,16 @@ cargo run --release --locked --example memory_benchmark -- connections streamed 
 
 在 [GitHub Releases](https://github.com/Fu021/Clash-of-Rust/releases) 页面选择已发布版本。各安装包同时提供 `.sha256` 校验文件；发行附件仅提供 Windows EXE、Linux DEB 及其校验文件。
 
-| 平台 | 0.4.5 安装包 | 安装方式 |
+| 平台 | 0.4.6 安装包 | 安装方式 |
 | --- | --- | --- |
-| Windows x64 | `Clash-of-Rust-0.4.5-windows-x64-setup.exe` | 运行安装程序，按提示安装 |
-| Debian/Ubuntu amd64 | `Clash-of-Rust-0.4.5-linux-amd64.deb` | `sudo apt install ./Clash-of-Rust-0.4.5-linux-amd64.deb` |
+| Windows x64 | `Clash-of-Rust-0.4.6-windows-x64-setup.exe` | 运行安装程序，按提示安装 |
+| Debian/Ubuntu amd64 | `Clash-of-Rust-0.4.6-linux-amd64.deb` | `sudo apt install ./Clash-of-Rust-0.4.6-linux-amd64.deb` |
 
 升级时保留订阅和个人设置。Windows Defender 可能误判查杀，需自行规避。Linux amd64 包在 Ubuntu 24.04 构建，其他 Debian 系发行版需要满足 DEB 声明的依赖；GNOME/KDE 桌面集成及 Linux TUN 仍需在对应环境验证。
+
+自动更新适用于通过 EXE/DEB 安装的客户端。Windows 安装时需完成 UAC 授权；Linux 普通用户需要 `pkexec` 和可用的桌面授权服务。代理下载前需启动内核。安装包缺失、网络中断、校验失败或授权取消时会显示原因；旧版本升级至 0.4.6 仍需先手动安装，之后可使用客户端内更新。
+
+维护者可用 [低版本升级测试说明](docs/testing/automatic-update.md) 验证自动更新流程。
 
 WSL2 需要 WSLg 图形支持，应用自动使用 X11/XWayland。没有托盘宿主时，关闭窗口会退出，`--background` 启动也会显示窗口。
 
