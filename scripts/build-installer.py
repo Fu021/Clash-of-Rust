@@ -1,12 +1,11 @@
-"""Build a Windows x64 installer or a native Debian Linux package."""
+"""Build native Windows EXE or Debian DEB packages for x64 and ARM64."""
 import argparse
 import os
-import platform
 import shutil
 import sys
 import json
 import subprocess
-from build_support import ROOT, copy_static, file_version, nsis, package_version, run, sha256, stage_resources, staging_directory, validate_version
+from build_support import ROOT, bundle_directory, copy_static, file_version, host_arch, nsis, package_version, run, sha256, stage_resources, staging_directory, validate_binary_arch, validate_version
 import importlib.util
 
 _spec = importlib.util.spec_from_file_location('prepare_resources', ROOT/'scripts/prepare-resources.py')
@@ -21,19 +20,16 @@ def main():
     parser.add_argument('--skip-prepare', action='store_true')
     parser.add_argument('--version', default=package_version())
     parser.add_argument('--system', choices=('windows','linux'), default='windows' if os.name == 'nt' else 'linux')
-    parser.add_argument('--arch', choices=('x64','arm64'), default='arm64' if platform.machine().lower() in ('aarch64','arm64') else 'x64')
+    parser.add_argument('--arch', choices=('x64','arm64'), default=host_arch())
     args = parser.parse_args()
     version = validate_version(args.version)
     host = 'windows' if os.name == 'nt' else 'linux' if sys.platform.startswith('linux') else 'unsupported'
-    host_arch = 'arm64' if platform.machine().lower() in ('aarch64','arm64') else 'x64'
-    if (args.system,args.arch) != (host,host_arch):
+    if (args.system,args.arch) != (host,host_arch()):
         raise ValueError('Packaging requires a native build on the selected system/architecture')
-    if args.system == 'windows' and args.arch != 'x64':
-        raise ValueError('The NSIS installer currently supports Windows x64 only')
     if args.system == 'linux':
         from build_deb import require_tools
         require_tools()
-    resources = ROOT/'bundle/resources' if args.system == 'windows' else ROOT/f'bundle/{args.system}-{args.arch}/resources'
+    resources = bundle_directory(args.system,args.arch)/'resources'
     if not args.skip_prepare:
         resources = prepare(args.system,args.arch,args.proxy)
     copy_static(resources.parent)
@@ -46,6 +42,8 @@ def main():
     metadata = json.loads(subprocess.check_output(['cargo','metadata','--format-version','1','--no-deps','--offline'],cwd=ROOT))
     from pathlib import Path
     binary = Path(metadata['target_directory'])/'release'/('clash-of-rust.exe' if args.system == 'windows' else 'clash-of-rust')
+    validate_binary_arch(binary,args.system,args.arch)
+    validate_binary_arch(resources/('mihomo.exe' if args.system == 'windows' else 'mihomo'),args.system,args.arch)
     if args.system == 'windows' and file_version(binary) != version:
         raise ValueError('Application PE version differs from package version')
     # Maintain the developer bundle for installer tests; installer inputs always
@@ -57,8 +55,8 @@ def main():
         stage_resources(resources,stage,args.system)
         shutil.copy2(binary,stage/binary.name)
         if args.system == 'windows':
-            artifact = ROOT/f'dist/Clash-of-Rust-{version}-windows-x64-setup.exe'
-            run([nsis(args.proxy),'/V2','/INPUTCHARSET','UTF8',f'/DAPP_VERSION={version}',f'/DPAYLOAD={stage}',f'/DOUTPUT={artifact}',ROOT/'installer/clash-of-rust.nsi'])
+            artifact = ROOT/f'dist/Clash-of-Rust-{version}-windows-{args.arch}-setup.exe'
+            run([nsis(args.proxy),'/V2','/INPUTCHARSET','UTF8',f'/DAPP_VERSION={version}',f'/DAPP_ARCH={args.arch}',f'/DPAYLOAD={stage}',f'/DOUTPUT={artifact}',ROOT/'installer/clash-of-rust.nsi'])
             if file_version(artifact) != version:
                 raise ValueError('Installer PE version differs from package version')
             artifacts.append(artifact)

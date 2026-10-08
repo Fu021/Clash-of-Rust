@@ -11,7 +11,11 @@ fn test_resources() -> std::path::PathBuf {
         .map(std::path::PathBuf::from)
         .unwrap_or_else(|| {
             let directory = if cfg!(windows) {
-                "bundle/resources".to_owned()
+                if cfg!(target_arch = "aarch64") {
+                    "bundle/windows-arm64/resources".to_owned()
+                } else {
+                    "bundle/resources".to_owned()
+                }
             } else {
                 format!(
                     "bundle/linux-{}/resources",

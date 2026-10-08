@@ -2,17 +2,16 @@
 import argparse
 import gzip
 import os
-import platform
 import shutil
 import time
 import zipfile
-from build_support import ROOT, copy_static, download_asset, read_json, sha256, write_json
+from build_support import ROOT, bundle_directory, copy_static, download_asset, host_arch, read_json, sha256, write_json
 
 
 def prepare(system, arch, proxy='', core_version='v1.19.32'):
     if system not in ('windows', 'linux') or arch not in ('x64', 'arm64'):
         raise ValueError('Supported targets: windows/linux, x64/arm64')
-    bundle = ROOT/'bundle' if (system, arch) == ('windows', 'x64') else ROOT/f'bundle/{system}-{arch}'
+    bundle = bundle_directory(system, arch)
     resources = bundle/'resources'
     resources.mkdir(parents=True, exist_ok=True)
     architecture = 'amd64' if arch == 'x64' else 'arm64'
@@ -62,7 +61,7 @@ def prepare(system, arch, proxy='', core_version='v1.19.32'):
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--system', choices=('windows','linux'), default='windows' if os.name == 'nt' else 'linux')
-    parser.add_argument('--arch', choices=('x64','arm64'), default='arm64' if platform.machine().lower() in ('aarch64','arm64') else 'x64')
+    parser.add_argument('--arch', choices=('x64','arm64'), default=host_arch())
     parser.add_argument('--proxy', default='')
     parser.add_argument('--core-version', default='v1.19.32')
     args = parser.parse_args()

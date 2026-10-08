@@ -39,7 +39,11 @@ pub fn discover() -> Result<PathBuf> {
     #[cfg(debug_assertions)]
     {
         let development = Path::new(env!("CARGO_MANIFEST_DIR")).join(if cfg!(windows) {
-            "bundle/resources".to_owned()
+            if cfg!(target_arch = "aarch64") {
+                "bundle/windows-arm64/resources".to_owned()
+            } else {
+                "bundle/resources".to_owned()
+            }
         } else {
             format!(
                 "bundle/linux-{}/resources",

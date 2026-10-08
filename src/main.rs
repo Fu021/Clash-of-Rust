@@ -248,6 +248,9 @@ struct Reply {
     exit_after_start: bool,
 }
 
+// The message can be cloned; only one receiver may consume the owned installer.
+type DownloadResult = Arc<std::sync::Mutex<Option<Result<update::Downloaded, String>>>>;
+
 #[derive(Debug, Clone)]
 enum Message {
     Navigate(Page),
@@ -273,8 +276,9 @@ enum Message {
     CheckUpdate,
     UpdateChecked(Result<Option<update::Available>, String>),
     InstallUpdate,
-    UpdateProgress(update::Progress),
-    UpdateInstalling,
+    CancelUpdateDownload,
+    UpdateProgress(u64, update::Progress),
+    UpdateDownloaded(u64, DownloadResult),
     UpdateHandoff(Result<update::InstallSession, String>),
     OpenRelease,
     ReleaseOpened(Result<(), String>),
@@ -724,7 +728,7 @@ impl App {
             Message::CheckUpdate => return self.check_update(),
             Message::UpdateChecked(result) => self.updates.finish(result),
             Message::InstallUpdate => {
-                if self.exiting || self.updates.busy() {
+                if self.exiting || self.updates.busy() || self.updates.checking {
                     return Task::none();
                 }
                 let Some(available) = self.updates.available.clone() else {
@@ -734,32 +738,59 @@ impl App {
                     self.updates.fail(error.to_string());
                     return Task::none();
                 }
-                self.updates.failure = None;
-                self.updates.outcome = None;
-                self.updates.progress = Some(update::Progress {
-                    received: 0,
-                    total: available
+                let (id, registration) = self.updates.begin_download(
+                    available
                         .package
                         .as_ref()
                         .map_or(1, |package| package.asset.size),
-                });
+                );
                 let port = self.snapshot.running.then_some(self.settings.mixed_port);
                 return Task::run(
                     iced::stream::channel(8, async move |mut output| {
                         let (sender, mut progress) = tokio::sync::mpsc::channel(4);
-                        let download = update::download(available, port, move |value| {
-                            let _ = sender.try_send(value);
-                        });
+                        let download = futures_util::future::Abortable::new(
+                            update::download(available, port, move |value| {
+                                let _ = sender.try_send(value);
+                            }),
+                            registration,
+                        );
                         tokio::pin!(download);
                         let downloaded = loop {
                             tokio::select! {
                                 result = &mut download => break result,
-                                Some(value) = progress.recv() => { let _ = output.send(Message::UpdateProgress(value)).await; }
+                                Some(value) = progress.recv() => { let _ = output.send(Message::UpdateProgress(id, value)).await; }
                             }
                         };
-                        let result = match downloaded {
-                            Ok(downloaded) => {
-                                let _ = output.send(Message::UpdateInstalling).await;
+                        if let Ok(result) = downloaded {
+                            let result = Arc::new(std::sync::Mutex::new(Some(
+                                result.map_err(|error| error.to_string()),
+                            )));
+                            let _ = output.send(Message::UpdateDownloaded(id, result)).await;
+                        }
+                    }),
+                    |message| message,
+                );
+            }
+            Message::CancelUpdateDownload => {
+                self.updates.cancel_download();
+            }
+            Message::UpdateProgress(id, progress) => {
+                if self.updates.accepts_download(id) {
+                    self.updates.progress = Some(progress);
+                }
+            }
+            Message::UpdateDownloaded(id, result) => {
+                let result = result.lock().expect("download result lock").take();
+                // A canceled or superseded result is dropped here, including its
+                // temporary directory. Installation starts only after this check.
+                if !self.updates.finish_download(id) {
+                    return Task::none();
+                }
+                match result {
+                    Some(Ok(downloaded)) => {
+                        self.updates.install_pending = true;
+                        return Task::perform(
+                            async move {
                                 match tokio::task::spawn_blocking(move || {
                                     update::handoff(downloaded)
                                 })
@@ -768,22 +799,13 @@ impl App {
                                     Ok(result) => result.map_err(|error| error.to_string()),
                                     Err(_) => Err("安装助手无法启动，请重试".into()),
                                 }
-                            }
-                            Err(error) => Err(error.to_string()),
-                        };
-                        let _ = output.send(Message::UpdateHandoff(result)).await;
-                    }),
-                    |message| message,
-                );
-            }
-            Message::UpdateProgress(progress) => {
-                if self.updates.progress.is_some() {
-                    self.updates.progress = Some(progress);
+                            },
+                            Message::UpdateHandoff,
+                        );
+                    }
+                    Some(Err(reason)) => self.updates.fail(reason),
+                    None => return Task::none(),
                 }
-            }
-            Message::UpdateInstalling => {
-                self.updates.progress = None;
-                self.updates.install_pending = true;
             }
             Message::UpdateHandoff(result) => {
                 self.updates.install_pending = false;
@@ -1546,9 +1568,18 @@ impl App {
                             .style(rounded_primary)
                             .padding([4, 10])
                             .on_press_maybe(
-                                (!self.updates.busy() && !self.exiting)
+                                (!self.updates.busy() && !self.updates.checking && !self.exiting)
                                     .then_some(Message::InstallUpdate)
-                            )
+                            ),
+                        if self.updates.progress.is_some() {
+                            button(self.label("取消下载"))
+                                .style(rounded_secondary)
+                                .padding([4, 10])
+                                .on_press(Message::CancelUpdateDownload)
+                                .into()
+                        } else {
+                            Element::from(Space::new().width(0))
+                        }
                     ]
                     .spacing(8),
                 )

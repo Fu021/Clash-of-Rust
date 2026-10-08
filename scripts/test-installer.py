@@ -7,7 +7,7 @@ from pathlib import Path
 import subprocess
 import uuid
 import winreg
-from build_support import ROOT, file_version, nsis, run, sha256, stage_resources, staging_directory, validate_resources
+from build_support import ROOT, bundle_directory, file_version, host_arch, nsis, run, sha256, stage_resources, staging_directory, validate_resources
 
 TEST_KEY = r'Software\Microsoft\Windows\CurrentVersion\Uninstall\ClashOfRustInstallerSmokeTest'
 LEGACY_KEY = r'Software\Microsoft\Windows\CurrentVersion\Uninstall\ClashOfRustLegacySmokeTest'
@@ -76,17 +76,19 @@ def main():
         raise RuntimeError('Installer smoke tests require Windows')
     if key_exists(TEST_KEY) or key_exists(LEGACY_KEY):
         raise RuntimeError('Existing smoke-test registration; refusing to overwrite it')
-    binary = ROOT/'bundle/clash-of-rust.exe'
+    arch = host_arch()
+    bundle = bundle_directory('windows',arch)
+    binary = bundle/'clash-of-rust.exe'
     version = file_version(binary)
     root = ROOT/'dist'/('installer-test-'+uuid.uuid4().hex)
     root.mkdir(parents=True)
     installed, setup = root/'installed', root/'smoke-setup.exe'
     compiler = nsis()
     with staging_directory('installer-test') as stage:
-        stage_resources(ROOT/'bundle/resources',stage,'windows')
+        stage_resources(bundle/'resources',stage,'windows')
         import shutil
         shutil.copy2(binary,stage/binary.name)
-        run([compiler,'/V2','/INPUTCHARSET','UTF8','/DINSTALLER_TESTING',f'/DAPP_VERSION={version}',f'/DPAYLOAD={stage}',f'/DOUTPUT={setup}',ROOT/'installer/clash-of-rust.nsi'])
+        run([compiler,'/V2','/INPUTCHARSET','UTF8','/DINSTALLER_TESTING',f'/DAPP_VERSION={version}',f'/DAPP_ARCH={arch}',f'/DPAYLOAD={stage}',f'/DOUTPUT={setup}',ROOT/'installer/clash-of-rust.nsi'])
         normal = ['/S',f'/D={installed}']
         reinstall = ['/S','/TESTREINSTALL',f'/D={installed}']
         update = ['/S','/UPDATE',f'/D={installed}']
@@ -162,7 +164,7 @@ def main():
             old_version = file_version(old_binary)
             old_setup = root/'old-version-setup.exe'
             shutil.copy2(old_binary,stage/binary.name)
-            run([compiler,'/V2','/INPUTCHARSET','UTF8','/DINSTALLER_TESTING',f'/DAPP_VERSION={old_version}',f'/DPAYLOAD={stage}',f'/DOUTPUT={old_setup}',ROOT/'installer/clash-of-rust.nsi'])
+            run([compiler,'/V2','/INPUTCHARSET','UTF8','/DINSTALLER_TESTING',f'/DAPP_VERSION={old_version}',f'/DAPP_ARCH={arch}',f'/DPAYLOAD={stage}',f'/DOUTPUT={old_setup}',ROOT/'installer/clash-of-rust.nsi'])
             expect(old_setup,normal,0)
             assert registry_value(TEST_KEY,'DisplayVersion') == old_version
             assert file_version(installed/'clash-of-rust.exe') == old_version

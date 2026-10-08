@@ -96,9 +96,37 @@ fn find_rc() -> PathBuf {
     let mut versions: Vec<_> = fs::read_dir(sdk.join("bin"))
         .expect("Windows SDK is required")
         .filter_map(Result::ok)
-        .map(|entry| entry.path().join("x64/rc.exe"))
+        .flat_map(|entry| {
+            let host = if cfg!(target_arch = "aarch64") {
+                "arm64"
+            } else {
+                "x64"
+            };
+            let directory = entry.path();
+            [
+                directory.join("x64/rc.exe"),
+                directory.join(host).join("rc.exe"),
+            ]
+        })
         .filter(|path| path.is_file())
         .collect();
-    versions.sort();
+    versions.sort_by_key(|path| {
+        let native = path
+            .parent()
+            .and_then(|parent| parent.file_name())
+            .is_some_and(|name| {
+                name == if cfg!(target_arch = "aarch64") {
+                    "arm64"
+                } else {
+                    "x64"
+                }
+            });
+        (
+            path.parent()
+                .and_then(|parent| parent.parent())
+                .map(PathBuf::from),
+            native,
+        )
+    });
     versions.pop().expect("Windows SDK rc.exe is required")
 }

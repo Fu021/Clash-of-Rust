@@ -5,13 +5,16 @@ Unicode true
 !include "FileFunc.nsh"
 
 !ifndef APP_VERSION
-!define APP_VERSION "0.4.8"
+!define APP_VERSION "0.4.9"
+!endif
+!ifndef APP_ARCH
+!define APP_ARCH "x64"
 !endif
 !ifndef PAYLOAD
   !define PAYLOAD "..\bundle"
 !endif
 !ifndef OUTPUT
-  !define OUTPUT "..\dist\Clash-of-Rust-${APP_VERSION}-windows-x64-setup.exe"
+  !define OUTPUT "..\dist\Clash-of-Rust-${APP_VERSION}-windows-${APP_ARCH}-setup.exe"
 !endif
 !ifdef INSTALLER_TESTING
   !define PRODUCT_KEY "Software\Microsoft\Windows\CurrentVersion\Uninstall\ClashOfRustInstallerSmokeTest"
@@ -89,11 +92,21 @@ Var UpdateBackup
 !macroend
 
 Function .onInit
+!if "${APP_ARCH}" == "arm64"
+  ${IfNot} ${IsNativeARM64}
+    MessageBox MB_OK|MB_ICONSTOP "此安装包需要 ARM64 Windows。"
+    SetErrorLevel 4
+    Abort
+  ${EndIf}
+!else if "${APP_ARCH}" == "x64"
   ${IfNot} ${RunningX64}
     MessageBox MB_OK|MB_ICONSTOP "此安装包需要 64 位 Windows。"
     SetErrorLevel 4
     Abort
   ${EndIf}
+!else
+  !error "APP_ARCH must be x64 or arm64"
+!endif
   SetRegView 64
   !ifdef INSTALLER_TESTING
     SetShellVarContext current

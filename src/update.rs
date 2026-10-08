@@ -2,6 +2,7 @@
 mod discovery;
 mod install;
 use anyhow::{Context, Result, bail};
+use futures_util::future::{AbortHandle, AbortRegistration};
 pub use install::{
     InstallSession, cleanup, ensure_installable, handoff, helper_main, startup_outcome,
 };
@@ -66,6 +67,8 @@ pub struct State {
     pub install_pending: bool,
     pub failure: Option<String>,
     pub outcome: Option<String>,
+    download_id: u64,
+    download_abort: Option<AbortHandle>,
 }
 
 impl State {
@@ -83,7 +86,47 @@ impl State {
         self.progress.is_some() || self.installing.is_some() || self.install_pending
     }
 
+    pub fn begin_download(&mut self, total: u64) -> (u64, AbortRegistration) {
+        if let Some(handle) = self.download_abort.take() {
+            handle.abort();
+        }
+        self.download_id = self.download_id.wrapping_add(1);
+        let (handle, registration) = AbortHandle::new_pair();
+        self.download_abort = Some(handle);
+        self.progress = Some(Progress { received: 0, total });
+        self.failure = None;
+        self.outcome = None;
+        (self.download_id, registration)
+    }
+
+    pub fn accepts_download(&self, id: u64) -> bool {
+        self.download_id == id && self.download_abort.is_some()
+    }
+
+    pub fn finish_download(&mut self, id: u64) -> bool {
+        if !self.accepts_download(id) {
+            return false;
+        }
+        self.download_abort = None;
+        self.progress = None;
+        true
+    }
+
+    pub fn cancel_download(&mut self) -> bool {
+        let Some(handle) = self.download_abort.take() else {
+            return false;
+        };
+        handle.abort();
+        self.progress = None;
+        self.failure = None;
+        self.outcome = Some("已取消更新下载".into());
+        true
+    }
+
     pub fn fail(&mut self, reason: String) {
+        if let Some(handle) = self.download_abort.take() {
+            handle.abort();
+        }
         self.progress = None;
         self.installing = None;
         self.install_pending = false;
@@ -122,6 +165,8 @@ struct Release {
 fn package_name(version: &str) -> Option<String> {
     let suffix = if cfg!(all(windows, target_arch = "x86_64")) {
         "windows-x64-setup.exe"
+    } else if cfg!(all(windows, target_arch = "aarch64")) {
+        "windows-arm64-setup.exe"
     } else if cfg!(all(target_os = "linux", target_arch = "x86_64")) {
         "linux-amd64.deb"
     } else if cfg!(all(target_os = "linux", target_arch = "aarch64")) {
@@ -541,6 +586,110 @@ mod tests {
             assert_eq!(state.available, available);
             assert!(state.failure.unwrap().contains(reason));
         }
+    }
+
+    #[tokio::test]
+    async fn cancellation_discards_late_results_and_allows_a_fresh_download() {
+        use futures_util::future::Abortable;
+        let available = newest(vec![release("v0.4.9", false)], "0.4.8").unwrap();
+        let mut state = State {
+            available: available.clone(),
+            ..State::default()
+        };
+        let (old, registration) = state.begin_download(4096);
+        assert!(state.accepts_download(old));
+        assert!(state.cancel_download());
+        assert!(
+            Abortable::new(std::future::pending::<()>(), registration)
+                .await
+                .is_err()
+        );
+        assert!(!state.busy());
+        assert!(!state.finish_download(old));
+        assert!(state.failure.is_none());
+        assert_eq!(state.available, available);
+        let (new, _) = state.begin_download(4096);
+        assert!(!state.accepts_download(old));
+        assert!(state.accepts_download(new));
+        assert!(state.outcome.is_none());
+        assert!(state.finish_download(new));
+        state.install_pending = true;
+        assert!(!state.cancel_download());
+        assert!(state.busy());
+    }
+
+    #[tokio::test]
+    async fn canceling_a_partial_download_closes_the_connection_and_removes_its_files() {
+        use futures_util::future::Abortable;
+        let body = vec![42; 256 * 1024];
+        let expected = format!("{:x}", Sha256::digest(&body));
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let url = format!("http://{}/package", listener.local_addr().unwrap());
+        let server = tokio::spawn(async move {
+            let (mut socket, _) = listener.accept().await.unwrap();
+            let mut request = [0; 4096];
+            let mut count = 0;
+            while !request[..count].ends_with(b"\r\n\r\n") {
+                let received = socket.read(&mut request[count..]).await.unwrap();
+                assert!(received > 0);
+                count += received;
+                assert!(count < request.len());
+            }
+            socket
+                .write_all(
+                    format!("HTTP/1.1 200 OK\r\nContent-Length: {}\r\n\r\n", body.len()).as_bytes(),
+                )
+                .await
+                .unwrap();
+            socket.write_all(&body[..body.len() / 2]).await.unwrap();
+            // Do not send the second half; cancellation must close the socket.
+            assert_eq!(
+                tokio::time::timeout(Duration::from_secs(3), socket.read(&mut request))
+                    .await
+                    .unwrap()
+                    .unwrap(),
+                0
+            );
+        });
+        let directory = tempfile::tempdir().unwrap();
+        let root = directory.path().to_owned();
+        let path = root.join("package");
+        let partial = path.clone();
+        let mut state = State::default();
+        let (_, registration) = state.begin_download(256 * 1024);
+        let task = tokio::spawn(Abortable::new(
+            async move {
+                let _directory = directory;
+                transfer(
+                    &client(Duration::from_secs(10)),
+                    &url,
+                    256 * 1024,
+                    &expected,
+                    &path,
+                    |_| {},
+                )
+                .await
+            },
+            registration,
+        ));
+        tokio::time::timeout(Duration::from_secs(3), async {
+            while !std::fs::metadata(&partial).is_ok_and(|metadata| metadata.len() > 0) {
+                tokio::time::sleep(Duration::from_millis(5)).await;
+            }
+        })
+        .await
+        .unwrap();
+        assert!(state.cancel_download());
+        assert!(
+            tokio::time::timeout(Duration::from_secs(3), task)
+                .await
+                .unwrap()
+                .unwrap()
+                .is_err()
+        );
+        assert!(!root.exists());
+        assert!(state.progress.is_none());
+        server.await.unwrap();
     }
 
     #[test]

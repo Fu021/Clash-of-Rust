@@ -3,12 +3,44 @@ import hashlib
 import json
 from pathlib import Path
 import tempfile
+import struct
 import unittest
 from unittest.mock import patch
 import build_support as build
 
 
 class BuildTests(unittest.TestCase):
+    def test_arm64_bundles_are_separate_and_native_architecture_is_detected(self):
+        self.assertEqual(build.bundle_directory('windows','x64'),build.ROOT/'bundle')
+        self.assertEqual(build.bundle_directory('windows','arm64'),build.ROOT/'bundle/windows-arm64')
+        self.assertEqual(build.bundle_directory('linux','arm64'),build.ROOT/'bundle/linux-arm64')
+        for machine, expected in [('AMD64','x64'),('x86_64','x64'),('ARM64','arm64'),('aarch64','arm64')]:
+            with patch.object(build.platform,'machine',return_value=machine):
+                self.assertEqual(build.host_arch(),expected)
+        with patch.object(build.platform,'machine',return_value='armv7l'):
+            with self.assertRaises(ValueError):
+                build.host_arch()
+
+    def test_package_rejects_wrong_binary_architecture(self):
+        with tempfile.TemporaryDirectory() as folder:
+            path = Path(folder)/'binary'
+            for system, arch, machine in [('windows','x64',0x8664),('windows','arm64',0xaa64),('linux','x64',62),('linux','arm64',183)]:
+                header = bytearray(64)
+                if system == 'windows':
+                    header[:2] = b'MZ'
+                    struct.pack_into('<I',header,0x3c,64)
+                    header.extend(b'PE\0\0'+struct.pack('<H',machine))
+                else:
+                    header[:6] = b'\x7fELF\x02\x01'
+                    struct.pack_into('<H',header,18,machine)
+                path.write_bytes(header)
+                build.validate_binary_arch(path,system,arch)
+                with self.assertRaises(ValueError):
+                    build.validate_binary_arch(path,system,'arm64' if arch == 'x64' else 'x64')
+            path.write_bytes(b'not an executable')
+            with self.assertRaises(ValueError):
+                build.validate_binary_arch(path,'windows','arm64')
+
     def test_wsl_mirror_refuses_source_and_unowned_directory(self):
         import importlib.util
         spec = importlib.util.spec_from_file_location('build_wsl',build.ROOT/'scripts/build-wsl.py')

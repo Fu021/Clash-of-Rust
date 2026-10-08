@@ -4,10 +4,34 @@ on:
   pull_request:
 jobs:
   check:
+    name: ${{ matrix.system }}-${{ matrix.arch }}
     strategy:
+      fail-fast: false
       matrix:
-        os: [windows-latest, ubuntu-latest]
+        include:
+          - os: windows-latest
+            system: windows
+            arch: x64
+            target: x86_64-pc-windows-msvc
+            python: '3.11'
+          - os: windows-11-arm
+            system: windows
+            arch: arm64
+            target: aarch64-pc-windows-msvc
+            python: '3.13'
+          - os: ubuntu-24.04
+            system: linux
+            arch: x64
+            target: x86_64-unknown-linux-gnu
+            python: '3.11'
+          - os: ubuntu-24.04-arm
+            system: linux
+            arch: arm64
+            target: aarch64-unknown-linux-gnu
+            python: '3.11'
     runs-on: ${{ matrix.os }}
+    env:
+      PYTHONDONTWRITEBYTECODE: '1'
     defaults:
       run:
         shell: python
@@ -15,17 +39,27 @@ jobs:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
         with:
+          toolchain: stable-${{ matrix.target }}
           components: rustfmt, clippy
       - uses: Swatinem/rust-cache@v2
-      - uses: actions/setup-python@v5
+      - uses: actions/setup-python@v6
         with:
-          python-version: '3.11'
+          python-version: ${{ matrix.python }}
+          architecture: ${{ matrix.arch }}
+      - name: Verify native architecture
+        run: |
+          import subprocess, sys
+          sys.path.insert(0, 'scripts')
+          from build_support import host_arch
+          assert host_arch() == '${{ matrix.arch }}', 'Python host architecture mismatch'
+          assert 'host: ${{ matrix.target }}' in subprocess.check_output(['rustc', '-vV'], text=True), 'Rust host architecture mismatch'
       - if: runner.os == 'Linux'
         run: |
           import subprocess
           subprocess.run(['sudo', 'apt-get', 'update'], check=True)
           subprocess.run(['sudo', 'apt-get', 'install', '-y', 'libglib2.0-dev', 'libxkbcommon-dev', 'libwayland-dev', 'libx11-dev', 'libx11-xcb-dev', 'fonts-noto-cjk', 'gsettings-desktop-schemas', 'dbus', 'dpkg-dev'], check=True)
-      - run: |
+      - name: Rust checks and tests
+        run: |
           import subprocess
           subprocess.run(['cargo', 'fmt', '--all', '--', '--check'], check=True)
           subprocess.run(['cargo', 'clippy', '--all-targets', '--locked', '--', '-D', 'warnings'], check=True)
@@ -36,24 +70,28 @@ jobs:
           subprocess.run(['cargo', 'test', '--locked', '--lib', 'native_gsettings', '--', '--ignored'], check=True, env=dict(os.environ, GSETTINGS_BACKEND='memory'))
           subprocess.run(['dbus-run-session', '--', 'cargo', 'test', '--locked', '--lib', 'native_kde_signal', '--', '--ignored'], check=True)
           subprocess.run(['dbus-run-session', '--', 'cargo', 'test', '--locked', '--lib', 'no_tray_host', '--', '--ignored'], check=True)
-      - run: |
+      - name: Build package and test core
+        run: |
           import subprocess, sys
           subprocess.run([sys.executable, 'scripts/native-detector-codegen.py', '--check'], check=True)
           subprocess.run([sys.executable, 'scripts/test-build-tools.py'], check=True)
-          subprocess.run([sys.executable, 'scripts/build-installer.py'], check=True)
+          subprocess.run([sys.executable, 'scripts/build-installer.py', '--system', '${{ matrix.system }}', '--arch', '${{ matrix.arch }}'], check=True)
           subprocess.run(['cargo', 'test', '--locked', '--test', 'core_integration', '--', '--ignored', '--test-threads=1'], check=True)
-      - if: runner.os == 'Windows'
+      - name: Windows installer tests
+        if: runner.os == 'Windows'
         run: |
           import subprocess, sys
           subprocess.run([sys.executable, 'scripts/test-installer.py'], check=True)
-      - if: runner.os == 'Linux'
+      - name: Debian package tests
+        if: runner.os == 'Linux'
         run: |
           import subprocess, sys, glob
           for artifact in glob.glob('dist/*.deb'):
               subprocess.run(['sudo', sys.executable, 'scripts/test-deb.py', artifact], check=True)
       - uses: actions/upload-artifact@v4
         with:
-          name: package-${{ matrix.os }}
+          name: package-${{ matrix.system }}-${{ matrix.arch }}
+          if-no-files-found: error
           path: |
             dist/*-setup.exe
             dist/*.deb

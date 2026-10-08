@@ -4,10 +4,12 @@ import ctypes
 import hashlib
 import json
 import os
+import platform
 from pathlib import Path
 import re
 import shutil
 import subprocess
+import struct
 import time
 import urllib.request
 import zipfile
@@ -29,6 +31,40 @@ def sha256(path):
 def package_version():
     text = (ROOT/'Cargo.toml').read_text(encoding='utf-8')
     return re.search(r'^version\s*=\s*"([^\"]+)"', text, re.M)[1]
+
+
+def host_arch():
+    machine = platform.machine().lower()
+    if machine in ('aarch64', 'arm64'):
+        return 'arm64'
+    if machine in ('amd64', 'x86_64', 'x64'):
+        return 'x64'
+    raise ValueError('Unsupported host architecture: '+machine)
+
+
+def bundle_directory(system, arch):
+    if system not in ('windows', 'linux') or arch not in ('x64', 'arm64'):
+        raise ValueError('Supported targets: windows/linux, x64/arm64')
+    return ROOT/'bundle' if (system, arch) == ('windows', 'x64') else ROOT/f'bundle/{system}-{arch}'
+
+
+def validate_binary_arch(path, system, arch):
+    with Path(path).open('rb') as stream:
+        header = stream.read(64)
+        if system == 'windows' and header[:2] == b'MZ' and len(header) == 64:
+            stream.seek(struct.unpack_from('<I', header, 0x3c)[0])
+            pe = stream.read(6)
+            if len(pe) != 6 or pe[:4] != b'PE\0\0':
+                raise ValueError('Invalid PE header')
+            machine = struct.unpack_from('<H', pe, 4)[0]
+            expected = {'x64': 0x8664, 'arm64': 0xaa64}[arch]
+        elif system == 'linux' and header[:6] == b'\x7fELF\x02\x01' and len(header) == 64:
+            machine = struct.unpack_from('<H', header, 18)[0]
+            expected = {'x64': 62, 'arm64': 183}[arch]
+        else:
+            raise ValueError('Expected a native 64-bit '+system+' binary')
+        if machine != expected:
+            raise ValueError(f'Binary architecture does not match {system}/{arch}: {Path(path).name}')
 
 
 def validate_version(version):
