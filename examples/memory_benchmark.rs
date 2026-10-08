@@ -1,5 +1,8 @@
 //! Measure live Rust heap while Api::get parses synthetic HTTP responses.
-//! Run each workload in a fresh process; this does not measure GUI/core memory.
+//! `app <GUI_PID>` samples the real desktop process tree, including mihomo.
+//! Run each synthetic parsing workload in a fresh process.
+#[path = "memory_benchmark/process_memory.rs"]
+mod process_memory;
 use clash_of_rust::{
     api::{Api, Connections, Rules},
     config::Settings,
@@ -113,6 +116,22 @@ async fn measure<T: serde::de::DeserializeOwned + Send + Count + 'static>(
 #[tokio::main(worker_threads = 2)]
 async fn main() -> anyhow::Result<()> {
     let arguments: Vec<_> = std::env::args().collect();
+    if arguments.get(1).is_some_and(|arg| arg == "app") {
+        return process_memory::run(&arguments[2..]);
+    }
+    if arguments
+        .get(1)
+        .is_some_and(|arg| matches!(arg.as_str(), "--help" | "-h"))
+    {
+        println!(
+            "解析堆内存: memory_benchmark <rules|connections> [streamed|buffered] [rows=50000]"
+        );
+        println!(
+            "GUI + 内核: memory_benchmark app <GUI_PID> [seconds=30] [interval_ms=250] [output.jsonl]"
+        );
+        println!("先正常打开客户端，再传入 GUI 的进程号；采样期间可以切换页面或操作客户端。");
+        return Ok(());
+    }
     let workload = arguments.get(1).map(String::as_str).unwrap_or("rules");
     let mode = arguments.get(2).map(String::as_str).unwrap_or("streamed");
     let count: usize = arguments

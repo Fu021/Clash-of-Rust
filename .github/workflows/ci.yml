@@ -85,6 +85,16 @@ jobs:
         run: |
           import subprocess, sys
           subprocess.run([sys.executable, 'scripts/test-installer.py'], check=True)
+      - name: Windows native tray, icons and update helper checks
+        if: runner.os == 'Windows'
+        run: |
+          import subprocess, sys
+          sys.path.insert(0, 'scripts')
+          from build_support import bundle_directory
+          executable = bundle_directory('windows', '${{ matrix.arch }}') / 'clash-of-rust.exe'
+          subprocess.run(['cargo', 'test', '--locked', '--test', 'tray_integration', '--', '--ignored'], check=True)
+          subprocess.run([sys.executable, 'scripts/verify-icon-resources.py', str(executable)], check=True)
+          subprocess.run([sys.executable, 'scripts/test-update-helper.py', str(executable)], check=True)
       - name: Windows Defender installer scan
         if: runner.os == 'Windows'
         run: |
@@ -115,7 +125,7 @@ jobs:
           subprocess.run(['sudo', sys.executable, 'scripts/test-linux-tun.py', '--test-binary', binaries[0], '--uid', str(os.getuid())], check=True)
           shutil.copyfile(binaries[0], 'target/linux-tun-test')
       - uses: actions/upload-artifact@v6
-        if: runner.os == 'Linux'
+        if: runner.os == 'Linux' && matrix.arch == 'x64'
         with:
           name: linux-tun-test-${{ matrix.arch }}
           if-no-files-found: error
@@ -128,29 +138,21 @@ jobs:
             dist/*-setup.exe
             dist/*.deb
             dist/*.sha256
-  ubuntu24:
-    name: Ubuntu 24.04-${{ matrix.arch }} TUN and GUI
+  ubuntu_latest:
+    name: Ubuntu latest-x64 TUN and GUI
     needs: check
-    strategy:
-      fail-fast: false
-      matrix:
-        include:
-          - os: ubuntu-24.04
-            arch: x64
-          - os: ubuntu-24.04-arm
-            arch: arm64
-    runs-on: ${{ matrix.os }}
+    runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v6
       - uses: actions/download-artifact@v7
         with:
-          name: package-linux-${{ matrix.arch }}
+          name: package-linux-x64
           path: dist
       - uses: actions/download-artifact@v7
         with:
-          name: linux-tun-test-${{ matrix.arch }}
+          name: linux-tun-test-x64
           path: target
-      - name: Verify Ubuntu 22.04 packages on Ubuntu 24.04
+      - name: Verify Ubuntu 22.04 package on Ubuntu latest
         shell: python
         run: |
           import subprocess, sys, os, glob

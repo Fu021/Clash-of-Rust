@@ -38,6 +38,18 @@ Linux 首次开启 TUN 时请求管理员授权，仅为已安装的 mihomo 内�
 
 ## 内存占用
 
+**整个客户端（GUI + mihomo）实测**：2026-10-08，在 Ubuntu 24.04.5 LTS x86_64 上运行 0.4.11 Release GUI 与 mihomo v1.19.32。使用全新隔离配置、默认直连订阅、首页空闲、代理关闭；窗口显示后预热 3 秒，再采样 10 秒，每 250 毫秒一次，共 40 次有效采样、一次独立运行。
+
+| 测量范围 | 平均值 | 观测峰值 |
+| --- | ---: | ---: |
+| GUI RSS | 30.97 MiB | 30.98 MiB |
+| mihomo 内核 RSS | 42.57 MiB | 42.59 MiB |
+| **整程序 RSS 合计** | **73.55 MiB** | **73.56 MiB** |
+| **整程序 PSS 合计** | **55.75 MiB** | **55.76 MiB** |
+| 整程序 USS 合计 | 45.33 MiB | 45.35 MiB |
+
+RSS 合计包含共享页重复计算，PSS 按共享比例分摊，更适合参考实际物理内存占用；合计峰值来自同一轮采样。这是上述空闲场景的观测值，订阅规模、连接数、页面操作和运行时间都会影响实际占用。[测试场景与终端原始输出](docs/benchmarks/memory-app-0.4.11-ubuntu24.04.txt)、[逐次进程明细（JSONL）](docs/benchmarks/memory-app-0.4.11-ubuntu24.04.jsonl)。
+
 使用 [内存基准程序](examples/memory_benchmark.rs)，于 2026-10-08 在 **Ubuntu 24.04.5 LTS x86_64、0.4.11 Release 构建**下，以实际 API 解析 50,000 条数据。每项独立进程运行 3 次，表中为实测范围；工具链为 Rust 1.99.0。[原始结果](docs/benchmarks/memory-0.4.11-ubuntu24.04.txt)。
 
 | 数据 | 响应 JSON | 解析新增堆内存峰值 | 解析完成后新增堆内存 |
@@ -46,6 +58,16 @@ Linux 首次开启 TUN 时请求管理员授权，仅为已安装的 mihomo 内�
 | 50,000 条连接 | 12.00 MiB | 23.65–23.79 MiB | 23.30 MiB |
 
 统计扣除了测量前基线（规则 3.41 MiB、连接 12.07 MiB，含本地服务数据与运行时），解析完成时保留结果对象。这是 Rust 堆分配量，不包含 GUI、字体、渲染缓存、系统分配器额外开销或 mihomo 内存，不能代表客户端总内存占用。历史 Windows 测量保留在 [0.4.5 原始记录](docs/benchmarks/memory-0.4.5.txt)，不同平台结果不直接用于比较版本性能。
+
+测量 **整个客户端（GUI + mihomo 内核）** 时，先正常打开客户端，再使用同一工具的 `app` 模式。Ubuntu 可通过 `pgrep -x clash-of-rust` 查看 GUI 进程号；Windows 可在任务管理器的“详细信息”中查看。下面的 `12345` 替换为实际 GUI PID：
+
+```sh
+cargo run --release --locked --example memory_benchmark -- app 12345 30 250 memory-app.jsonl
+```
+
+该命令观察 30 秒，每 250 毫秒采样一次，显示 GUI、mihomo 和其他子进程的 RSS，以及整棵进程树的平均值、观测峰值和最后值；内核重启后自动跟踪新的子进程。基准工具自身不计入。可在采样期间切换页面、加载订阅或进行代理流量测试；记录测试场景、客户端版本、内核版本和构建类型，分别比较空闲与实际使用状态。可选的最后一个参数保存每次采样的进程明细与字节数为 JSONL，已有文件不会覆盖。
+
+Ubuntu 还提供 PSS（共享内存按比例分摊）和 USS（私有驻留页）。RSS 合计可能重复计算共享页面，评估实际物理内存占用优先参考 PSS。授权 TUN 的内核可能因进程保护无法读取 PSS/USS；此时显示 `N/A`，不会把缺失数据算成零，也不会给出不完整的合计。Windows 显示工作集 RSS，PSS/USS 为 `N/A`。这些数据包括进程内的 GUI、字体、渲染缓存、分配器和内核驻留内存，不含独立显存、驱动内存或进程外的系统缓存；采样峰值可能错过两次采样之间的短暂峰值。
 
 ## 编译与打包
 
@@ -75,7 +97,7 @@ cargo test --locked
 python scripts/test-build-tools.py
 ```
 
-CI 在 Windows 和 Ubuntu 22.04 的 x64、ARM64 环境分别检查、测试和打包，并在 Ubuntu 24.04 的两种架构验证同一批 Linux 安装包的 GUI 图标标识与真实 TUN 行为。正式发布等待对应提交的全部 CI 检查通过，使用该次 Actions 产物作为 Release 附件。
+CI 在 Windows 和 Ubuntu 22.04 的 x64、ARM64 环境分别检查、测试和打包，并在 `ubuntu-latest` x64 上验证 Ubuntu 22.04 构建的安装包的 GUI 图标标识与真实 TUN 行为。Windows 额外复用现有托盘、图标资源和更新助手检查；完整 GUI 与真实 TUN 自动测试目前覆盖 Linux。内存基准在本机运行。正式发布等待对应提交的全部 CI 检查通过，使用该次 Actions 产物作为 Release 附件。
 
 ## License
 
