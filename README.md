@@ -3,7 +3,7 @@
 </p>
 <h1 align="center">Clash of Rust</h1>
 
-基于 **mihomo、Rust 和 Iced** 的原生代理客户端。当前版本 **0.4.6**，提供 **Windows x64** 的 `.exe` 安装程序和 **Linux amd64** 的 `.deb` 安装程序。安装包内置内核与 Geo 数据；应用运行无需 Python、PowerShell、Bash 或 WebView。
+基于 **mihomo、Rust 和 Iced** 的原生代理客户端。当前版本 **0.4.7**，提供 **Windows x64** 的 `.exe` 安装程序和 **Linux amd64** 的 `.deb` 安装程序。安装包内置内核与 Geo 数据；应用运行无需 Python、PowerShell、Bash 或 WebView。
 
 ## Features
 
@@ -45,14 +45,16 @@ cargo run --release --locked --example memory_benchmark -- connections streamed 
 
 在 [GitHub Releases](https://github.com/Fu021/Clash-of-Rust/releases) 页面选择已发布版本。各安装包同时提供 `.sha256` 校验文件；发行附件仅提供 Windows EXE、Linux DEB 及其校验文件。
 
-| 平台 | 0.4.6 安装包 | 安装方式 |
+| 平台 | 0.4.7 安装包 | 安装方式 |
 | --- | --- | --- |
-| Windows x64 | `Clash-of-Rust-0.4.6-windows-x64-setup.exe` | 运行安装程序，按提示安装 |
-| Debian/Ubuntu amd64 | `Clash-of-Rust-0.4.6-linux-amd64.deb` | `sudo apt install ./Clash-of-Rust-0.4.6-linux-amd64.deb` |
+| Windows x64 | `Clash-of-Rust-0.4.7-windows-x64-setup.exe` | 运行安装程序，按提示安装 |
+| Debian/Ubuntu amd64 | `Clash-of-Rust-0.4.7-linux-amd64.deb` | `sudo apt install ./Clash-of-Rust-0.4.7-linux-amd64.deb` |
 
 升级时保留订阅和个人设置。Windows Defender 可能误判查杀，需自行规避。Linux amd64 包在 Ubuntu 24.04 构建，其他 Debian 系发行版需要满足 DEB 声明的依赖；GNOME/KDE 桌面集成及 Linux TUN 仍需在对应环境验证。
 
 自动更新适用于通过 EXE/DEB 安装的客户端。Windows 安装时需完成 UAC 授权；Linux 普通用户需要 `pkexec` 和可用的桌面授权服务。代理下载前需启动内核。安装包缺失、网络中断、校验失败或授权取消时会显示原因；旧版本升级至 0.4.6 仍需先手动安装，之后可使用客户端内更新。
+
+版本检查依次尝试当前内核代理、系统代理和直连。GitHub API 不可用时改用官方 Release 订阅源；检查失败会区分超时、解析、代理连接和证书等原因。
 
 维护者可用 [低版本升级测试说明](docs/testing/automatic-update.md) 验证自动更新流程。
 
@@ -87,6 +89,8 @@ python scripts/build-wsl.py --distro Ubuntu-24.04
 
 脚本自动同步到 WSL 的 Linux 文件系统编译，并将 DEB 与校验文件复制回 Windows 的 `dist/`。
 
+默认 Release 保留 `opt-level = 3`，使用 16 个代码生成单元、增量编译和局部 LTO，适合重复打包；开发构建保留基本调试信息。切换配置后的首次构建会重建依赖缓存。[Cargo 构建配置说明](https://doc.rust-lang.org/cargo/reference/profiles.html)。
+
 ### 开发校验
 
 ```text
@@ -97,7 +101,7 @@ python scripts/test-build-tools.py
 python scripts/test-installer.py
 ```
 
-最后一项仅适用于 Windows。Linux 包检查使用 `sudo python3 scripts/test-deb.py dist/Clash-of-Rust-0.4.5-linux-amd64.deb`；WSLg/X11 图形测试使用 `dbus-run-session -- python3 scripts/test-linux-gui.py --deb dist/Clash-of-Rust-0.4.5-linux-amd64.deb`。CI 在 Windows/Linux 分别执行构建、测试和打包。
+最后一项仅适用于 Windows。Linux 包检查使用 `sudo python3 scripts/test-deb.py dist/Clash-of-Rust-0.4.7-linux-amd64.deb`；WSLg/X11 图形测试使用 `dbus-run-session -- python3 scripts/test-linux-gui.py --deb dist/Clash-of-Rust-0.4.7-linux-amd64.deb`。CI 在 Windows/Linux 分别执行构建、测试和打包。
 
 ## 项目目录
 
@@ -114,7 +118,7 @@ python scripts/test-installer.py
 | `target/`、`tools/`、`bin/` | Cargo 缓存、NSIS 工具和资源下载缓存，Git 忽略 |
 | `dist/` | 当前安装包与校验文件，Git 忽略 |
 
-历史改造明细见 [脚本依赖改造记录](docs/script-migration-0.4.4.md)，本次目录整理见 [0.4.5 整理记录](docs/project-cleanup-0.4.5.md)，本版 Release 文案见 [0.4.5](docs/releases/0.4.5.md)。
+历史改造明细见 [脚本依赖改造记录](docs/script-migration-0.4.4.md)，本次目录整理见 [0.4.5 整理记录](docs/project-cleanup-0.4.5.md)，本版 Release 文案见 [0.4.7](docs/releases/0.4.7.md)。
 
 ## License
 

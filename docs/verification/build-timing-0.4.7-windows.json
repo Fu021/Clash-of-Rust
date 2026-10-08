@@ -1,0 +1,6 @@
+﻿{
+    "first_profile_rebuild_seconds":  157,
+    "method":  "Release rebuild after touching main.rs, unchanged source content and existing dependency/incremental cache",
+    "seconds":  7.656,
+    "controlled_comparison":  false
+}

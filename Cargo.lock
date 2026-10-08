@@ -462,7 +462,7 @@ dependencies = [
 
 [[package]]
 name = "clash-of-rust"
-version = "0.4.6"
+version = "0.4.7"
 dependencies = [
  "anyhow",
  "base64 0.22.1",
@@ -476,6 +476,7 @@ dependencies = [
  "libc",
  "regex",
  "reqwest",
+ "roxmltree",
  "semver",
  "serde",
  "serde_json",

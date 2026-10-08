@@ -1,6 +1,6 @@
 [package]
 name = "clash-of-rust"
-version = "0.4.6"
+version = "0.4.7"
 edition = "2024"
 description = "A native Rust desktop client for mihomo"
 license = "GPL-3.0-only"
@@ -24,6 +24,7 @@ uuid = { version = "1", features = ["v4", "serde"] }
 futures-util = "0.3"
 sha2 = "0.10"
 regex = "1"
+roxmltree = "0.20"
 hmac = "0.12"
 sha1 = "0.10"
 base64 = "0.22"
@@ -36,7 +37,14 @@ windows-sys = { version = "0.61", features = ["Win32_UI_WindowsAndMessaging", "W
 [target.'cfg(unix)'.dependencies]
 libc = "0.2"
 
+[profile.dev]
+# Keep line/function information while reducing development link/debug overhead.
+debug = 1
+
 [profile.release]
-lto = "thin"
-codegen-units = 1
+# Favor repeatable desktop builds over expensive cross-crate LTO.
+opt-level = 3
+lto = false
+codegen-units = 16
+incremental = true
 strip = true

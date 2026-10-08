@@ -1,4 +1,5 @@
 //! Bounded Release discovery and streaming, checksum-verified installer downloads.
+mod discovery;
 mod install;
 use anyhow::{Context, Result, bail};
 pub use install::{
@@ -204,12 +205,17 @@ fn newest(releases: Vec<Release>, current: &str) -> Result<Option<Available>> {
 }
 
 fn download_client(proxy_port: Option<u16>) -> Result<Client> {
+    let proxy = proxy_port.map(|port| format!("http://127.0.0.1:{port}"));
+    download_client_via(proxy.as_deref(), Duration::from_secs(30 * 60))
+}
+
+fn download_client_via(proxy: Option<&str>, timeout: Duration) -> Result<Client> {
     let mut builder = Client::builder()
         .no_proxy()
         .user_agent(format!("Clash-of-Rust/{}", crate::VERSION))
         .connect_timeout(Duration::from_secs(10))
         .read_timeout(Duration::from_secs(30))
-        .timeout(Duration::from_secs(30 * 60))
+        .timeout(timeout)
         .redirect(reqwest::redirect::Policy::custom(|attempt| {
             let url = attempt.url();
             let trusted = matches!(
@@ -231,8 +237,8 @@ fn download_client(proxy_port: Option<u16>) -> Result<Client> {
                 attempt.follow()
             }
         }));
-    if let Some(port) = proxy_port {
-        builder = builder.proxy(reqwest::Proxy::all(format!("http://127.0.0.1:{port}"))?);
+    if let Some(proxy) = proxy {
+        builder = builder.proxy(reqwest::Proxy::all(proxy)?);
     }
     builder.build().context("无法创建下载连接")
 }
@@ -375,17 +381,7 @@ async fn transfer(
 }
 
 pub async fn check(proxy_port: Option<u16>) -> Result<Option<Available>> {
-    let mut builder = Client::builder()
-        .no_proxy()
-        .user_agent(format!("Clash-of-Rust/{}", crate::VERSION))
-        .connect_timeout(Duration::from_secs(5))
-        .timeout(Duration::from_secs(15))
-        .redirect(reqwest::redirect::Policy::none());
-    if let Some(port) = proxy_port {
-        builder = builder.proxy(reqwest::Proxy::all(format!("http://127.0.0.1:{port}"))?);
-    }
-    // Include the project's earlier releases, even those GitHub omits from /latest.
-    fetch(&builder.build()?, API_URL, crate::VERSION).await
+    discovery::check(proxy_port).await
 }
 
 async fn fetch(client: &Client, endpoint: &str, current: &str) -> Result<Option<Available>> {
@@ -394,11 +390,17 @@ async fn fetch(client: &Client, endpoint: &str, current: &str) -> Result<Option<
         .header("Accept", "application/vnd.github+json")
         .send()
         .await
-        .context("无法连接 GitHub，请检查网络或代理")?;
+        .map_err(|error| discovery::request_error(error, "GitHub API"))?;
     decode(response, current).await
 }
 
-async fn decode(mut response: reqwest::Response, current: &str) -> Result<Option<Available>> {
+async fn decode(response: reqwest::Response, current: &str) -> Result<Option<Available>> {
+    let bytes = release_bytes(response).await?;
+    let releases = serde_json::from_slice(&bytes).context("Release 信息格式无效")?;
+    newest(releases, current)
+}
+
+async fn release_bytes(mut response: reqwest::Response) -> Result<Vec<u8>> {
     let status = response.status();
     if status == StatusCode::TOO_MANY_REQUESTS
         || (status == StatusCode::FORBIDDEN
@@ -419,14 +421,17 @@ async fn decode(mut response: reqwest::Response, current: &str) -> Result<Option
         bail!("Release 响应超过 2 MiB 限制");
     }
     let mut bytes = Vec::new();
-    while let Some(chunk) = response.chunk().await.context("读取 Release 信息失败")? {
+    while let Some(chunk) = response
+        .chunk()
+        .await
+        .map_err(|error| discovery::request_error(error, "Release 信息"))?
+    {
         if chunk.len() > RESPONSE_LIMIT.saturating_sub(bytes.len()) {
             bail!("Release 响应超过 2 MiB 限制");
         }
         bytes.extend_from_slice(&chunk);
     }
-    let releases = serde_json::from_slice(&bytes).context("Release 信息格式无效")?;
-    newest(releases, current)
+    Ok(bytes)
 }
 
 #[cfg(test)]
@@ -779,11 +784,10 @@ mod tests {
             server.await.unwrap();
         }
         let (url, server) = mock(Vec::new(), Duration::from_secs(2)).await;
-        assert!(
-            fetch(&client(Duration::from_millis(50)), &url, "0.4.1")
-                .await
-                .is_err()
-        );
+        let error = fetch(&client(Duration::from_millis(50)), &url, "0.4.1")
+            .await
+            .unwrap_err();
+        assert!(error.to_string().contains("GitHub API连接超时"));
         server.abort();
     }
 

@@ -1560,7 +1560,7 @@ impl App {
                                     .then_some(Message::InstallUpdate(false))
                             ),
                         button(self.label("更新（代理）"))
-                            .style(rounded_secondary)
+                            .style(rounded_primary)
                             .padding([4, 10])
                             .on_press_maybe(
                                 (!self.updates.busy() && !self.exiting)
