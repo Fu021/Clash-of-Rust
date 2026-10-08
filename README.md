@@ -3,7 +3,7 @@
 </p>
 <h1 align="center">Clash of Rust</h1>
 
-基于 mihomo 的原生 Rust 代理客户端。支持 **Windows（x64 / ARM64）** 和 **Debian/Ubuntu（amd64 / ARM64）**。当前版本 **0.4.9**。
+基于 mihomo 的原生 Rust 代理客户端。支持 **Windows（x64 / ARM64）** 和 **Debian/Ubuntu（amd64 / ARM64）**。当前版本 **0.4.10**。
 
 ## Features
 
@@ -21,16 +21,16 @@
 
 | 平台 | 安装包 |
 | --- | --- |
-| Windows x64 | `Clash-of-Rust-0.4.9-windows-x64-setup.exe` |
-| Windows ARM64 | `Clash-of-Rust-0.4.9-windows-arm64-setup.exe` |
-| Debian/Ubuntu amd64 | `Clash-of-Rust-0.4.9-linux-amd64.deb` |
-| Debian/Ubuntu ARM64 | `Clash-of-Rust-0.4.9-linux-arm64.deb` |
+| Windows x64 | `Clash-of-Rust-0.4.10-windows-x64-setup.exe` |
+| Windows ARM64 | `Clash-of-Rust-0.4.10-windows-arm64-setup.exe` |
+| Debian/Ubuntu amd64 | `Clash-of-Rust-0.4.10-linux-amd64.deb` |
+| Debian/Ubuntu ARM64 | `Clash-of-Rust-0.4.10-linux-arm64.deb` |
 
 Windows 运行安装程序；Debian/Ubuntu 使用 `sudo apt install ./安装包文件名.deb`。升级保留订阅和个人设置。
 
 客户端更新与订阅更新依次尝试当前内核代理、系统代理和直连。下载期间可点击“取消下载”，之后可重新更新；进入安装阶段后不能通过该按钮取消。Windows 自动安装需要 UAC 授权，Linux 需要 `pkexec` 与桌面授权服务。
 
-Linux 安装包在 Ubuntu 24.04 构建，需要满足 DEB 声明的依赖。WSL2 需要 WSLg；没有托盘宿主时，关闭窗口会退出。
+Linux 安装包在 Ubuntu 22.04 构建，需要满足 DEB 声明的依赖。WSL2 需要 WSLg；没有托盘宿主时，关闭窗口会退出。
 
 可能造成 Windows Defender 误判查杀，需自行规避。
 
@@ -62,7 +62,7 @@ sudo apt install build-essential pkg-config dpkg-dev libglib2.0-dev libxkbcommon
 python3 scripts/build-installer.py
 ```
 
-资源已准备好可加 `--skip-prepare`；下载需要代理时可加 `--proxy http://127.0.0.1:7897`。Windows 使用 WSL 构建 Linux 包可执行 `python scripts/build-wsl.py --distro Ubuntu-24.04`，项目会同步到 Linux 文件系统编译。
+资源已准备好可加 `--skip-prepare`；下载需要代理时可加 `--proxy http://127.0.0.1:7897`。Windows 使用 WSL 构建 Linux 包可执行 `python scripts/build-wsl.py --distro Ubuntu-22.04`，项目会同步到 Linux 文件系统编译。
 
 ## 开发与发布
 

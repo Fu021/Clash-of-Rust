@@ -19,12 +19,12 @@ jobs:
             arch: arm64
             target: aarch64-pc-windows-msvc
             python: '3.13'
-          - os: ubuntu-24.04
+          - os: ubuntu-22.04
             system: linux
             arch: x64
             target: x86_64-unknown-linux-gnu
             python: '3.11'
-          - os: ubuntu-24.04-arm
+          - os: ubuntu-22.04-arm
             system: linux
             arch: arm64
             target: aarch64-unknown-linux-gnu
@@ -42,6 +42,9 @@ jobs:
           toolchain: stable-${{ matrix.target }}
           components: rustfmt, clippy
       - uses: Swatinem/rust-cache@v2
+        with:
+          # Never restore objects built against a different distribution's ABI.
+          prefix-key: ${{ runner.os == 'Linux' && format('v0-rust-{0}', matrix.os) || 'v0-rust' }}
       - uses: actions/setup-python@v6
         with:
           python-version: ${{ matrix.python }}
@@ -57,7 +60,7 @@ jobs:
         run: |
           import subprocess
           subprocess.run(['sudo', 'apt-get', 'update'], check=True)
-          subprocess.run(['sudo', 'apt-get', 'install', '-y', 'libglib2.0-dev', 'libxkbcommon-dev', 'libwayland-dev', 'libx11-dev', 'libx11-xcb-dev', 'fonts-noto-cjk', 'gsettings-desktop-schemas', 'dbus', 'dpkg-dev'], check=True)
+          subprocess.run(['sudo', 'apt-get', 'install', '-y', 'libglib2.0-dev', 'libxkbcommon-dev', 'libwayland-dev', 'libx11-dev', 'libx11-xcb-dev', 'fonts-noto-cjk', 'gsettings-desktop-schemas', 'dbus', 'dpkg-dev', 'xvfb', 'xauth'], check=True)
       - name: Rust checks and tests
         run: |
           import subprocess
@@ -88,6 +91,13 @@ jobs:
           import subprocess, sys, glob
           for artifact in glob.glob('dist/*.deb'):
               subprocess.run(['sudo', sys.executable, 'scripts/test-deb.py', artifact], check=True)
+      - name: Linux package GUI smoke tests
+        if: runner.os == 'Linux'
+        run: |
+          import subprocess, sys, glob
+          for artifact in glob.glob('dist/*.deb'):
+              subprocess.run(['sudo', 'apt-get', 'install', '-y', './' + artifact], check=True)
+              subprocess.run(['dbus-run-session', '--', 'xvfb-run', '-a', sys.executable, 'scripts/test-linux-gui.py', '--executable', '/usr/bin/clash-of-rust'], check=True)
       - uses: actions/upload-artifact@v4
         with:
           name: package-${{ matrix.system }}-${{ matrix.arch }}
