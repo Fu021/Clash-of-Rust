@@ -33,6 +33,10 @@ macro_rules! aligned_row {
 }
 
 fn main() -> iced::Result {
+    #[cfg(target_os = "linux")]
+    if platform::tun_helper_main() {
+        return Ok(());
+    }
     if update::helper_main() {
         return Ok(());
     }
@@ -106,6 +110,11 @@ fn main() -> iced::Result {
             icon: Some(icons::window()),
             exit_on_close_request: false,
             visible: !background_start(),
+            #[cfg(target_os = "linux")]
+            platform_specific: iced::window::settings::PlatformSpecific {
+                application_id: "clash-of-rust".into(),
+                ..Default::default()
+            },
             ..Default::default()
         })
         .run()
@@ -902,7 +911,9 @@ impl App {
                 self.dark = value;
                 return self.dispatch(Action::Theme(value));
             }
-            Message::Action(Action::ProxyMode(ProxyMode::Tun)) if !platform::is_elevated() => {
+            Message::Action(Action::ProxyMode(ProxyMode::Tun))
+                if cfg!(windows) && !platform::is_elevated() =>
+            {
                 if self.working || self.elevating || self.exiting {
                     return Task::none();
                 }

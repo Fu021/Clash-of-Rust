@@ -44,7 +44,10 @@ def _build_deb(payload, version, arch, work):
     (binary_directory/'clash-of-rust').symlink_to('/opt/clash-of-rust/clash-of-rust')
     menu = root/'usr/share/applications/clash-of-rust.desktop'
     menu.parent.mkdir(parents=True)
-    menu.write_text('[Desktop Entry]\nType=Application\nName=Clash of Rust\nComment=Native desktop client for mihomo\nExec=/usr/bin/clash-of-rust\nIcon=clash-of-rust\nTerminal=false\nCategories=Network;\n', encoding='utf-8')
+    menu.write_text('[Desktop Entry]\nType=Application\nName=Clash of Rust\nComment=Native desktop client for mihomo\nExec=/usr/bin/clash-of-rust\nIcon=clash-of-rust\nStartupWMClass=clash-of-rust\nTerminal=false\nCategories=Network;\n', encoding='utf-8')
+    policy = root/'usr/share/polkit-1/actions/org.clashofrust.tun.policy'
+    policy.parent.mkdir(parents=True)
+    shutil.copyfile(ROOT/'resources/linux/org.clashofrust.tun.policy', policy)
     icon = root/'usr/share/icons/hicolor/128x128/apps/clash-of-rust.png'
     icon.parent.mkdir(parents=True)
     shutil.copyfile(ROOT/'resources/icons/app.png', icon)

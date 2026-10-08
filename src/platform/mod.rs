@@ -25,6 +25,12 @@ mod gio;
 mod kde;
 #[cfg(target_os = "linux")]
 mod linux;
+#[cfg(target_os = "linux")]
+mod linux_tun;
+#[cfg(target_os = "linux")]
+pub use linux_tun::{
+    authorize_tun, check_tun_environment, core_has_tun_permissions, tun_helper_main,
+};
 #[cfg(windows)]
 mod windows;
 #[cfg(target_os = "linux")]

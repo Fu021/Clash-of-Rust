@@ -3,7 +3,7 @@
 </p>
 <h1 align="center">Clash of Rust</h1>
 
-基于 mihomo 的原生 Rust 代理客户端。支持 **Windows（x64 / ARM64）** 和 **Debian/Ubuntu（amd64 / ARM64）**。当前版本 **0.4.10**。
+基于 mihomo 的原生 Rust 代理客户端。支持 **Windows（x64 / ARM64）** 和 **Debian/Ubuntu（amd64 / ARM64）**。当前版本 **0.4.11**。
 
 ## Features
 
@@ -21,10 +21,10 @@
 
 | 平台 | 安装包 |
 | --- | --- |
-| Windows x64 | `Clash-of-Rust-0.4.10-windows-x64-setup.exe` |
-| Windows ARM64 | `Clash-of-Rust-0.4.10-windows-arm64-setup.exe` |
-| Debian/Ubuntu amd64 | `Clash-of-Rust-0.4.10-linux-amd64.deb` |
-| Debian/Ubuntu ARM64 | `Clash-of-Rust-0.4.10-linux-arm64.deb` |
+| Windows x64 | [Clash-of-Rust-0.4.11-windows-x64-setup.exe](https://github.com/Fu021/Clash-of-Rust/releases/download/v0.4.11/Clash-of-Rust-0.4.11-windows-x64-setup.exe) |
+| Windows ARM64 | [Clash-of-Rust-0.4.11-windows-arm64-setup.exe](https://github.com/Fu021/Clash-of-Rust/releases/download/v0.4.11/Clash-of-Rust-0.4.11-windows-arm64-setup.exe) |
+| Debian/Ubuntu amd64 | [Clash-of-Rust-0.4.11-linux-amd64.deb](https://github.com/Fu021/Clash-of-Rust/releases/download/v0.4.11/Clash-of-Rust-0.4.11-linux-amd64.deb) |
+| Debian/Ubuntu ARM64 | [Clash-of-Rust-0.4.11-linux-arm64.deb](https://github.com/Fu021/Clash-of-Rust/releases/download/v0.4.11/Clash-of-Rust-0.4.11-linux-arm64.deb) |
 
 Windows 运行安装程序；Debian/Ubuntu 使用 `sudo apt install ./安装包文件名.deb`。升级保留订阅和个人设置。
 
@@ -32,18 +32,20 @@ Windows 运行安装程序；Debian/Ubuntu 使用 `sudo apt install ./安装包�
 
 Linux 安装包在 Ubuntu 22.04 构建，需要满足 DEB 声明的依赖。WSL2 需要 WSLg；没有托盘宿主时，关闭窗口会退出。
 
+Linux 首次开启 TUN 时请求管理员授权，仅为已安装的 mihomo 内核配置网络权限，随后自动重启内核并恢复节点选择。界面继续以普通用户运行；取消授权会保留原代理模式。需要 `/dev/net/tun`、`pkexec` 和可用的桌面授权服务。升级替换内核后可能需要重新授权；后台自启缺少权限时，打开客户端点击 TUN 完成授权。
+
 可能造成 Windows Defender 误判查杀，需自行规避。
 
 ## 内存占用
 
-使用 [内存基准程序](examples/memory_benchmark.rs)，在 Windows x64、0.4.5 Release 构建下，以实际 API 解析 50,000 条数据。每项独立进程运行 3 次，[原始结果](docs/benchmarks/memory-0.4.5.txt)。
+使用 [内存基准程序](examples/memory_benchmark.rs)，于 2026-10-08 在 **Ubuntu 24.04.5 LTS x86_64、0.4.11 Release 构建**下，以实际 API 解析 50,000 条数据。每项独立进程运行 3 次，表中为实测范围；工具链为 Rust 1.99.0。[原始结果](docs/benchmarks/memory-0.4.11-ubuntu24.04.txt)。
 
 | 数据 | 响应 JSON | 解析新增堆内存峰值 | 解析完成后新增堆内存 |
 | --- | ---: | ---: | ---: |
-| 50,000 条规则 | 3.33 MiB | 6.98–7.00 MiB | 6.11 MiB |
-| 50,000 条连接 | 12.00 MiB | 24.20 MiB | 23.30 MiB |
+| 50,000 条规则 | 3.33 MiB | 6.44–6.67 MiB | 6.11 MiB |
+| 50,000 条连接 | 12.00 MiB | 23.65–23.79 MiB | 23.30 MiB |
 
-统计扣除了测量前基线（规则 3.42 MiB、连接 12.08 MiB，含本地服务数据与运行时），解析完成时保留结果对象。这是 Rust 堆分配量，不包含 GUI、字体、渲染缓存、系统分配器额外开销或 mihomo 内存，不能代表客户端总内存占用。
+统计扣除了测量前基线（规则 3.41 MiB、连接 12.07 MiB，含本地服务数据与运行时），解析完成时保留结果对象。这是 Rust 堆分配量，不包含 GUI、字体、渲染缓存、系统分配器额外开销或 mihomo 内存，不能代表客户端总内存占用。历史 Windows 测量保留在 [0.4.5 原始记录](docs/benchmarks/memory-0.4.5.txt)，不同平台结果不直接用于比较版本性能。
 
 ## 编译与打包
 
@@ -73,7 +75,7 @@ cargo test --locked
 python scripts/test-build-tools.py
 ```
 
-CI 在 Windows、Ubuntu 的 x64 和 ARM64 环境分别检查、测试和打包。正式发布等待对应提交的四项 CI 全部通过，使用该次 Actions 产物作为 Release 附件。
+CI 在 Windows 和 Ubuntu 22.04 的 x64、ARM64 环境分别检查、测试和打包，并在 Ubuntu 24.04 的两种架构验证同一批 Linux 安装包的 GUI 图标标识与真实 TUN 行为。正式发布等待对应提交的全部 CI 检查通过，使用该次 Actions 产物作为 Release 附件。
 
 ## License
 

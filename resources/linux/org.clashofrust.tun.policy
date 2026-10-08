@@ -1,0 +1,19 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE policyconfig PUBLIC "-//freedesktop//DTD PolicyKit Policy Configuration 1.0//EN" "http://www.freedesktop.org/standards/PolicyKit/1/policyconfig.dtd">
+<policyconfig>
+  <vendor>Clash of Rust</vendor>
+  <action id="org.clashofrust.tun.authorize">
+    <description>Authorize the installed mihomo core for TUN networking</description>
+    <description xml:lang="zh_CN">为已安装的 mihomo 内核授予 TUN 网络权限</description>
+    <message>Authentication is required to enable TUN networking in Clash of Rust</message>
+    <message xml:lang="zh_CN">开启 Clash of Rust 的 TUN 网络模式需要管理员授权</message>
+    <icon_name>clash-of-rust</icon_name>
+    <defaults>
+      <allow_any>no</allow_any>
+      <allow_inactive>no</allow_inactive>
+      <allow_active>auth_admin</allow_active>
+    </defaults>
+    <annotate key="org.freedesktop.policykit.exec.path">/opt/clash-of-rust/clash-of-rust</annotate>
+    <annotate key="org.freedesktop.policykit.exec.argv1">--authorize-tun</annotate>
+  </action>
+</policyconfig>

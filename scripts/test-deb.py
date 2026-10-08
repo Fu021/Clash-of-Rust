@@ -7,6 +7,7 @@ from pathlib import Path
 import subprocess
 import tarfile
 import tempfile
+import xml.etree.ElementTree as ET
 
 from build_support import sha256, validate_resources
 
@@ -38,6 +39,14 @@ def main():
         assert (app/'clash-of-rust').stat().st_mode & 0o111
         assert (root/'usr/bin/clash-of-rust').readlink() == Path('/opt/clash-of-rust/clash-of-rust')
         assert (root/'usr/share/applications/clash-of-rust.desktop').is_file()
+        desktop = (root/'usr/share/applications/clash-of-rust.desktop').read_text()
+        assert 'Icon=clash-of-rust\n' in desktop and 'StartupWMClass=clash-of-rust\n' in desktop
+        policy = ET.parse(root/'usr/share/polkit-1/actions/org.clashofrust.tun.policy').getroot()
+        action = policy.find('action')
+        assert action.attrib['id'] == 'org.clashofrust.tun.authorize'
+        annotations = {entry.attrib['key']: entry.text for entry in action.findall('annotate')}
+        assert annotations == {'org.freedesktop.policykit.exec.path': '/opt/clash-of-rust/clash-of-rust', 'org.freedesktop.policykit.exec.argv1': '--authorize-tun'}
+        assert action.find('defaults/allow_active').text == 'auth_admin'
         assert (root/'usr/share/icons/hicolor/128x128/apps/clash-of-rust.png').is_file()
         assert {p.name for p in (app/'resources/ip-check').iterdir()} == {'LICENSE','SOURCE.md'}
         assert not any(p.suffix in {'.sh','.ps1','.py','.dll','.exe'} for p in app.rglob('*') if p.is_file())
@@ -61,6 +70,7 @@ def main():
         assert not (app/'clash-of-rust').exists()
         assert not (root/'usr/bin/clash-of-rust').is_symlink()
         assert not (root/'usr/share/applications/clash-of-rust.desktop').exists()
+        assert not (root/'usr/share/polkit-1/actions/org.clashofrust.tun.policy').exists()
         assert unrelated.read_text() == 'Keep unrelated user files'
     print('PASS: Debian metadata, no maintainer scripts, isolated unpack/purge, native command link, menu/icon, core/Geo hashes, package checksums and unrelated file preservation')
     print(fields.strip())

@@ -52,7 +52,7 @@ pub fn set_autostart(enabled: bool) -> Result<()> {
             .replace('`', "\\`")
             .replace('$', "\\$")
             .replace('%', "%%");
-        atomic_write(&path, format!("[Desktop Entry]\nType=Application\nName=Clash of Rust\nExec=\"{executable}\" --background\nTerminal=false\n").as_bytes())?;
+        atomic_write(&path, format!("[Desktop Entry]\nType=Application\nName=Clash of Rust\nExec=\"{executable}\" --background\nIcon=clash-of-rust\nStartupWMClass=clash-of-rust\nTerminal=false\n").as_bytes())?;
     } else if path.exists() {
         std::fs::remove_file(path)?;
     }

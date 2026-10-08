@@ -1,0 +1,15 @@
+Clash of Rust 0.4.11; Ubuntu 24.04; native x86_64 release build
+Date: 2026-10-08 (Asia/Shanghai)
+OS: Ubuntu 24.04.5 LTS
+Architecture: x86_64
+rustc 1.99.0 (b940084d7 2026-09-28)
+Each workload runs in a fresh process, three repetitions, 50,000 rows.
+Command: target/release/examples/memory_benchmark <rules|connections> streamed 50000
+Scope: Rust heap allocations during Api::get; excludes GUI/core memory and RSS.
+
+workload=rules mode=streamed rows=50000 payload_mib=3.33 baseline_heap_mib=3.41 peak_extra_heap_mib=6.67 retained_extra_heap_mib=6.11 elapsed_ms=19.7
+workload=connections mode=streamed rows=50000 payload_mib=12.00 baseline_heap_mib=12.07 peak_extra_heap_mib=23.65 retained_extra_heap_mib=23.30 elapsed_ms=63.3
+workload=rules mode=streamed rows=50000 payload_mib=3.33 baseline_heap_mib=3.41 peak_extra_heap_mib=6.67 retained_extra_heap_mib=6.11 elapsed_ms=18.3
+workload=connections mode=streamed rows=50000 payload_mib=12.00 baseline_heap_mib=12.07 peak_extra_heap_mib=23.78 retained_extra_heap_mib=23.30 elapsed_ms=64.2
+workload=rules mode=streamed rows=50000 payload_mib=3.33 baseline_heap_mib=3.41 peak_extra_heap_mib=6.44 retained_extra_heap_mib=6.11 elapsed_ms=16.8
+workload=connections mode=streamed rows=50000 payload_mib=12.00 baseline_heap_mib=12.07 peak_extra_heap_mib=23.79 retained_extra_heap_mib=23.30 elapsed_ms=66.7

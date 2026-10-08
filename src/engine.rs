@@ -765,18 +765,80 @@ impl Engine {
     }
 
     pub async fn select_proxy_mode(&mut self, mode: ProxyMode) -> Result<()> {
+        #[cfg(target_os = "linux")]
+        if mode == ProxyMode::Tun {
+            self.prepare_linux_tun(true).await?;
+        }
         self.proxy_mode(mode).await?;
         self.remember_modes(&self.settings.run_mode.clone(), mode)
     }
 
     /// Returns true when a successful UAC launch requires the GUI to exit.
     pub async fn restore_proxy_mode(&mut self) -> Result<bool> {
-        if self.settings.proxy_mode == ProxyMode::Tun && !platform::is_elevated() {
+        if cfg!(windows) && self.settings.proxy_mode == ProxyMode::Tun && !platform::is_elevated() {
             self.prepare_elevation().await?;
             return Ok(true);
         }
+        #[cfg(target_os = "linux")]
+        if self.settings.proxy_mode == ProxyMode::Tun {
+            // Background startup must not repeatedly request administrator access.
+            let interactive = !std::env::args_os().any(|arg| arg == "--background");
+            self.prepare_linux_tun(interactive).await?;
+        }
         self.proxy_mode(self.settings.proxy_mode).await?;
         Ok(false)
+    }
+
+    #[cfg(target_os = "linux")]
+    async fn prepare_linux_tun(&mut self, interactive: bool) -> Result<()> {
+        platform::check_tun_environment()?;
+        let pid = self
+            .child
+            .as_ref()
+            .and_then(Child::id)
+            .context("请先启动内核")?;
+        if platform::core_has_tun_permissions(pid)? {
+            return Ok(());
+        }
+        if !interactive {
+            bail!("TUN 需要网络权限，请打开客户端并点击 TUN 模式完成授权");
+        }
+        let previous = self.restart_state().await?.context("请先启动内核")?;
+        // Authorize before interrupting the old core. Cancellation leaves routing intact.
+        let core = self.core()?;
+        tokio::task::spawn_blocking(move || platform::authorize_tun(&core)).await??;
+        let result = async {
+            self.stop().await?;
+            self.resume(&previous).await?;
+            let pid = self
+                .child
+                .as_ref()
+                .and_then(Child::id)
+                .context("内核重启失败")?;
+            if !platform::core_has_tun_permissions(pid)? {
+                bail!("内核没有获得 TUN 网络权限，请检查文件系统挂载选项与启动环境");
+            }
+            Ok::<_, anyhow::Error>(())
+        }
+        .await;
+        if let Err(error) = result {
+            let rollback = async {
+                self.stop().await?;
+                self.resume(&previous).await
+            }
+            .await;
+            return match rollback {
+                Ok(()) => Err(error.context("TUN 授权后重启失败，已恢复原代理模式")),
+                Err(rollback) => {
+                    Err(error.context(format!("TUN 重启失败，恢复原模式也失败：{rollback:#}")))
+                }
+            };
+        }
+        append(
+            &self.logs,
+            "[客户端] 已授权并重启 mihomo，桌面界面保持普通用户运行",
+        );
+        Ok(())
     }
 
     pub async fn mode(&self, mode: &str) -> Result<()> {
@@ -814,6 +876,18 @@ impl Engine {
     }
 
     async fn set_tun_state(&self, enabled: bool) -> Result<()> {
+        #[cfg(target_os = "linux")]
+        if enabled {
+            platform::check_tun_environment()?;
+            let pid = self
+                .child
+                .as_ref()
+                .and_then(Child::id)
+                .context("请先启动内核")?;
+            if !platform::core_has_tun_permissions(pid)? {
+                bail!("mihomo 缺少 TUN 网络权限，请点击 TUN 模式完成授权");
+            }
+        }
         self.api
             .patch(json!({"tun":{"enable":enabled}}))
             .await

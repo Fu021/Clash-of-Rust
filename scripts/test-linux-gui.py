@@ -55,6 +55,19 @@ X.XFlush.argtypes = [c.c_void_p]
 X.XSendEvent.argtypes = [c.c_void_p, c.c_ulong, c.c_int, c.c_long, c.c_void_p]
 X.XGetWindowProperty.argtypes = [c.c_void_p, c.c_ulong, c.c_ulong, c.c_long, c.c_long, c.c_int, c.c_ulong, c.POINTER(c.c_ulong), c.POINTER(c.c_int), c.POINTER(c.c_ulong), c.POINTER(c.c_ulong), c.POINTER(c.c_void_p)]
 
+class ClassHint(c.Structure):
+    _fields_ = [('res_name', c.c_void_p), ('res_class', c.c_void_p)]
+X.XGetClassHint.argtypes = [c.c_void_p, c.c_ulong, c.POINTER(ClassHint)]
+
+def window_class(window):
+    hint = ClassHint()
+    assert X.XGetClassHint(display, window, c.byref(hint)), 'Window has no WM_CLASS'
+    try:
+        return tuple(c.string_at(value).decode() for value in (hint.res_name, hint.res_class))
+    finally:
+        if hint.res_name: X.XFree(hint.res_name)
+        if hint.res_class: X.XFree(hint.res_class)
+
 def window_pid(window):
     kind, format_, count, remaining, data = c.c_ulong(), c.c_int(), c.c_ulong(), c.c_ulong(), c.c_void_p()
     status = X.XGetWindowProperty(display, window, X.XInternAtom(display, b'_NET_WM_PID', 0), 0, 1, 0, 6, c.byref(kind), c.byref(format_), c.byref(count), c.byref(remaining), c.byref(data))
@@ -118,6 +131,8 @@ for background in (False, True):
                     break
                 time.sleep(0.1)
             assert window, 'No mapped window (background=%s)' % background
+            app_class = window_class(window[0])
+            assert app_class == ('clash-of-rust', 'clash-of-rust'), app_class
             time.sleep(3)
             assert proc.poll() is None, 'App exited before close'
             opener = urllib.request.build_opener(urllib.request.ProxyHandler({}))
@@ -133,7 +148,7 @@ for background in (False, True):
             out, err = proc.communicate(timeout=15)
             assert proc.returncode == 0, (proc.returncode, err)
             assert not err, err.decode(errors='replace')
-            results.append({'background': background, 'mapped_window': window[1:], 'core_version': core_version, 'close_exits': True, 'returncode': proc.returncode, 'stderr': err.decode()})
+            results.append({'background': background, 'mapped_window': window[1:], 'wm_class': app_class, 'core_version': core_version, 'close_exits': True, 'returncode': proc.returncode, 'stderr': err.decode()})
         finally:
             if proc.poll() is None:
                 os.killpg(proc.pid, signal.SIGTERM)
