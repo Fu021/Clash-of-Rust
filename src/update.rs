@@ -204,6 +204,7 @@ fn newest(releases: Vec<Release>, current: &str) -> Result<Option<Available>> {
     }))
 }
 
+#[cfg(test)]
 fn download_client(proxy_port: Option<u16>) -> Result<Client> {
     let proxy = proxy_port.map(|port| format!("http://127.0.0.1:{port}"));
     download_client_via(proxy.as_deref(), Duration::from_secs(30 * 60))
@@ -267,23 +268,50 @@ pub async fn download(
     {
         bail!("该版本不支持自动安装，请从 Release 手动升级");
     }
-    download_package(available, proxy_port, report).await
+    let routes = crate::network::available_routes(proxy_port, "https");
+    download_routes(available, &routes, report).await
+}
+
+async fn download_routes(
+    available: Available,
+    routes: &[crate::network::Route],
+    mut report: impl FnMut(Progress),
+) -> Result<Downloaded> {
+    let size = available
+        .package
+        .as_ref()
+        .context("该版本缺少本平台安装包或校验文件")?
+        .asset
+        .size;
+    let mut errors = Vec::new();
+    for route in routes {
+        // Each attempt owns a fresh temporary directory and starts at zero.
+        report(Progress {
+            received: 0,
+            total: size,
+        });
+        match download_package(available.clone(), route.proxy.as_deref(), &mut report).await {
+            Ok(downloaded) => return Ok(downloaded),
+            Err(error) => errors.push(format!("{}：{error}", route.label)),
+        }
+    }
+    bail!("{}（已尝试可用代理和直连）", errors.join("；"));
 }
 
 async fn download_package(
     available: Available,
-    proxy_port: Option<u16>,
+    proxy: Option<&str>,
     report: impl FnMut(Progress),
 ) -> Result<Downloaded> {
     let package = available
         .package
         .context("该版本缺少本平台安装包或校验文件")?;
-    let client = download_client(proxy_port)?;
+    let client = download_client_via(proxy, Duration::from_secs(30 * 60))?;
     let mut response = client
         .get(&package.checksum_url)
         .send()
         .await
-        .context("无法下载校验文件，请检查网络或代理")?;
+        .map_err(|error| crate::network::request_error(error, "校验文件下载"))?;
     if response.status() != StatusCode::OK {
         bail!("校验文件下载失败（HTTP {}）", response.status().as_u16());
     }
@@ -334,7 +362,7 @@ async fn transfer(
         .get(url)
         .send()
         .await
-        .context("无法连接下载地址，请检查网络或代理")?;
+        .map_err(|error| crate::network::request_error(error, "安装包下载"))?;
     if response.status() != StatusCode::OK {
         bail!("安装包下载失败（HTTP {}）", response.status().as_u16());
     }
@@ -390,7 +418,7 @@ async fn fetch(client: &Client, endpoint: &str, current: &str) -> Result<Option<
         .header("Accept", "application/vnd.github+json")
         .send()
         .await
-        .map_err(|error| discovery::request_error(error, "GitHub API"))?;
+        .map_err(|error| crate::network::request_error(error, "GitHub API"))?;
     decode(response, current).await
 }
 
@@ -424,7 +452,7 @@ async fn release_bytes(mut response: reqwest::Response) -> Result<Vec<u8>> {
     while let Some(chunk) = response
         .chunk()
         .await
-        .map_err(|error| discovery::request_error(error, "Release 信息"))?
+        .map_err(|error| crate::network::request_error(error, "Release 信息"))?
     {
         if chunk.len() > RESPONSE_LIMIT.saturating_sub(bytes.len()) {
             bail!("Release 响应超过 2 MiB 限制");
@@ -661,7 +689,7 @@ mod tests {
             .await
             .unwrap()
             .unwrap();
-        let downloaded = download_package(available, proxy, |_| {}).await.unwrap();
+        let downloaded = download(available, proxy, |_| {}).await.unwrap();
         assert!(downloaded.package.is_file());
         eprintln!(
             "Verified {}: {} bytes, SHA256 {} (not installed)",
@@ -669,6 +697,89 @@ mod tests {
             std::fs::metadata(&downloaded.package).unwrap().len(),
             downloaded.sha256
         );
+    }
+
+    async fn package_proxy(
+        body: Vec<u8>,
+        expected: String,
+    ) -> (String, tokio::task::JoinHandle<()>) {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let proxy = format!("http://{}", listener.local_addr().unwrap());
+        let task = tokio::spawn(async move {
+            for (suffix, bytes) in [(".sha256", expected.into_bytes()), ("", body)] {
+                let (mut socket, _) = listener.accept().await.unwrap();
+                let mut request = [0; 4096];
+                let count = socket.read(&mut request).await.unwrap();
+                assert!(
+                    String::from_utf8_lossy(&request[..count]).starts_with(&format!(
+                        "GET http://download.invalid/package{suffix} HTTP/1.1"
+                    ))
+                );
+                socket
+                    .write_all(
+                        format!(
+                            "HTTP/1.1 200 OK\r\nConnection: close\r\nContent-Length: {}\r\n\r\n",
+                            bytes.len()
+                        )
+                        .as_bytes(),
+                    )
+                    .await
+                    .unwrap();
+                socket.write_all(&bytes).await.unwrap();
+            }
+        });
+        (proxy, task)
+    }
+
+    #[tokio::test]
+    async fn corrupt_proxy_download_restarts_and_verifies_using_the_next_route() {
+        use crate::network::Route;
+        let body = b"valid installer bytes";
+        let expected = format!("{:x}", Sha256::digest(body));
+        let (bad_proxy, bad_task) = package_proxy(vec![0; body.len()], expected.clone()).await;
+        let (good_proxy, good_task) = package_proxy(body.to_vec(), expected.clone()).await;
+        let available = Available {
+            version: "0.4.8".into(),
+            url: format!("{RELEASES_URL}/tag/v0.4.8"),
+            preview: false,
+            package: Some(Package {
+                asset: Asset {
+                    name: package_name("0.4.8").unwrap(),
+                    size: body.len() as u64,
+                    digest: Some(format!("sha256:{expected}")),
+                },
+                url: "http://download.invalid/package".into(),
+                checksum_url: "http://download.invalid/package.sha256".into(),
+            }),
+        };
+        let routes = [
+            Route {
+                label: "内核代理",
+                proxy: Some(bad_proxy),
+            },
+            Route {
+                label: "系统代理",
+                proxy: Some(good_proxy),
+            },
+        ];
+        let mut progress = Vec::new();
+        let downloaded = download_routes(available, &routes, |value| progress.push(value))
+            .await
+            .unwrap();
+        assert_eq!(std::fs::read(&downloaded.package).unwrap(), body);
+        assert_eq!(downloaded.sha256, expected);
+        assert_eq!(
+            progress
+                .iter()
+                .map(|value| value.received)
+                .collect::<Vec<_>>(),
+            [0, body.len() as u64, 0, body.len() as u64]
+        );
+        let directory = downloaded.directory.path().to_owned();
+        drop(downloaded);
+        assert!(!directory.exists());
+        bad_task.await.unwrap();
+        good_task.await.unwrap();
     }
 
     #[test]

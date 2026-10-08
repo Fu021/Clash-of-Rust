@@ -460,78 +460,13 @@ impl Engine {
         source: String,
         existing: Option<String>,
     ) -> Result<()> {
-        self.import_with_route(name, source, existing, false).await
-    }
-
-    pub async fn import_via_proxy(
-        &mut self,
-        name: String,
-        source: String,
-        existing: Option<String>,
-    ) -> Result<()> {
-        self.import_with_route(name, source, existing, true).await
-    }
-
-    async fn import_with_route(
-        &mut self,
-        name: String,
-        source: String,
-        existing: Option<String>,
-        via_proxy: bool,
-    ) -> Result<()> {
         if source.trim().is_empty() {
             bail!("请输入订阅 URL 或本地 YAML 路径");
         }
         let (raw, usage) = if source.starts_with("https://") || source.starts_with("http://") {
             let url = reqwest::Url::parse(&source).context("订阅 URL 无效")?;
-            let mut builder = reqwest::Client::builder()
-                .no_proxy()
-                .timeout(Duration::from_secs(30))
-                .user_agent(format!("clash-of-rust/{}", crate::VERSION));
-            if via_proxy {
-                let tun_enabled = if self.running() {
-                    let config: Value = self.api.get("configs").await?;
-                    config["tun"]["enable"].as_bool() == Some(true)
-                } else {
-                    false
-                };
-                if tun_enabled {
-                    // Ordinary sockets follow the active TUN routes.
-                } else if let Some(proxy) = platform::configured_proxy(url.scheme())? {
-                    builder = builder.proxy(reqwest::Proxy::all(proxy)?);
-                } else if self.running() {
-                    builder = builder.proxy(reqwest::Proxy::all(format!(
-                        "http://127.0.0.1:{}",
-                        self.settings.mixed_port
-                    ))?);
-                } else {
-                    bail!("请先启动内核或启用系统代理");
-                }
-            }
-            let client = builder.build()?;
-            let mut response = client
-                .get(url)
-                .send()
-                .await
-                .context("订阅下载失败")?
-                .error_for_status()
-                .context("订阅服务器返回错误状态")?;
-            let usage = response
-                .headers()
-                .get("subscription-userinfo")
-                .and_then(|v| v.to_str().ok())
-                .map(str::to_owned);
-            let mut bytes = Vec::new();
-            while let Some(chunk) = response.chunk().await? {
-                if bytes.len() + chunk.len() > 10 * 1024 * 1024 {
-                    bail!("订阅超过 10 MiB 限制");
-                }
-                bytes.extend_from_slice(&chunk);
-            }
-            (
-                String::from_utf8(bytes).context("订阅不是 UTF-8 YAML 文本")?,
-                usage,
-            )
+            crate::subscription::download(&url, self.running().then_some(self.settings.mixed_port))
+                .await?
         } else {
             let file = File::open(&source).context("本地配置文件无法读取")?;
             if file.metadata()?.len() > 10 * 1024 * 1024 {

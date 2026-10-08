@@ -1,84 +1,30 @@
 //! Release discovery tolerates unavailable API domains and stale proxy routes.
 use super::*;
+#[cfg(test)]
+use crate::network::routes;
+use crate::network::{Route, available_routes, request_error};
 
 const FEED_URL: &str = "https://github.com/Fu021/Clash-of-Rust/releases.atom";
 const ATOM: &str = "http://www.w3.org/2005/Atom";
 const REQUEST_TIMEOUT: Duration = Duration::from_secs(12);
 
-#[derive(Clone)]
-struct Route {
-    label: &'static str,
-    proxy: Option<String>,
-}
-
-fn routes(port: Option<u16>, system: Option<String>) -> Vec<Route> {
-    let mut routes = Vec::new();
-    for (label, proxy) in [
-        (
-            "内核代理",
-            port.map(|port| format!("http://127.0.0.1:{port}")),
-        ),
-        ("系统代理", system),
-    ] {
-        if let Some(proxy) = proxy
-            && !routes
-                .iter()
-                .any(|route: &Route| route.proxy.as_ref() == Some(&proxy))
-        {
-            routes.push(Route {
-                label,
-                proxy: Some(proxy),
-            });
-        }
-    }
-    routes.push(Route {
-        label: "直连",
-        proxy: None,
-    });
-    routes
-}
-
 fn client(route: &Route) -> Result<Client> {
-    let mut builder = Client::builder()
+    let builder = Client::builder()
         .no_proxy()
         .user_agent(format!("Clash-of-Rust/{}", crate::VERSION))
         .connect_timeout(Duration::from_secs(5))
         .timeout(REQUEST_TIMEOUT)
         .redirect(reqwest::redirect::Policy::none());
-    if let Some(proxy) = &route.proxy {
-        builder = builder.proxy(reqwest::Proxy::all(proxy)?);
-    }
-    builder.build().context("无法创建更新检查连接")
-}
-
-pub(super) fn request_error(error: reqwest::Error, target: &str) -> anyhow::Error {
-    use std::error::Error;
-    let mut detail = error.to_string();
-    let mut source = error.source();
-    while let Some(error) = source {
-        detail.push_str(&error.to_string());
-        source = error.source();
-    }
-    let detail = detail.to_ascii_lowercase();
-    let reason = if error.is_timeout() {
-        "连接超时"
-    } else if detail.contains("certificate") || detail.contains("cert verify") {
-        "证书校验失败，请检查系统时间或代理证书"
-    } else if detail.contains("dns") || detail.contains("lookup address") {
-        "域名解析失败"
-    } else if detail.contains("tunnel") || detail.contains("proxy") {
-        "代理连接失败"
-    } else {
-        "网络连接失败"
-    };
-    anyhow::Error::new(error).context(format!("{target}{reason}"))
+    route
+        .apply(builder)?
+        .build()
+        .context("无法创建更新检查连接")
 }
 
 pub(super) async fn check(port: Option<u16>) -> Result<Option<Available>> {
     // Reading settings does not change the desktop proxy, and an unavailable
     // desktop settings service must not prevent the other routes from working.
-    let system = crate::platform::configured_proxy("https").ok().flatten();
-    let routes = routes(port, system);
+    let routes = available_routes(port, "https");
     let (mut available, feed_route) = tokio::time::timeout(
         Duration::from_secs(60),
         discover(&routes, API_URL, FEED_URL, crate::VERSION),

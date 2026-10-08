@@ -5,7 +5,7 @@ Unicode true
 !include "FileFunc.nsh"
 
 !ifndef APP_VERSION
-  !define APP_VERSION "0.4.7"
+!define APP_VERSION "0.4.8"
 !endif
 !ifndef PAYLOAD
   !define PAYLOAD "..\bundle"

@@ -222,7 +222,7 @@ enum Action {
     DelayInterval(u32),
     Import(String, String),
     Activate(String),
-    UpdateProfile(String, bool),
+    UpdateProfile(String),
     DeleteProfile(String),
     OpenProfiles,
     Mode(String),
@@ -272,7 +272,7 @@ enum Message {
     Finished(Box<Reply>),
     CheckUpdate,
     UpdateChecked(Result<Option<update::Available>, String>),
-    InstallUpdate(bool),
+    InstallUpdate,
     UpdateProgress(update::Progress),
     UpdateInstalling,
     UpdateHandoff(Result<update::InstallSession, String>),
@@ -414,22 +414,16 @@ async fn execute(engine: Arc<Mutex<Engine>>, action: Action, scope: Scope) -> Re
                 engine.activate(id).await?;
                 Ok("当前配置已切换".into())
             }
-            Action::UpdateProfile(id, via_proxy) => {
+            Action::UpdateProfile(id) => {
                 let profile = engine
                     .profiles
                     .iter()
                     .find(|p| p.id == id)
                     .cloned()
                     .ok_or_else(|| anyhow::anyhow!("配置不存在"))?;
-                if via_proxy {
-                    engine
-                        .import_via_proxy(profile.name, profile.source, Some(profile.id))
-                        .await?;
-                } else {
-                    engine
-                        .import(profile.name, profile.source, Some(profile.id))
-                        .await?;
-                }
+                engine
+                    .import(profile.name, profile.source, Some(profile.id))
+                    .await?;
                 Ok("订阅已更新".into())
             }
             Action::Mode(mode) => {
@@ -729,7 +723,7 @@ impl App {
         match message {
             Message::CheckUpdate => return self.check_update(),
             Message::UpdateChecked(result) => self.updates.finish(result),
-            Message::InstallUpdate(proxied) => {
+            Message::InstallUpdate => {
                 if self.exiting || self.updates.busy() {
                     return Task::none();
                 }
@@ -738,10 +732,6 @@ impl App {
                 };
                 if let Err(error) = update::ensure_installable() {
                     self.updates.fail(error.to_string());
-                    return Task::none();
-                }
-                if proxied && !self.snapshot.running {
-                    self.updates.fail("请先启动内核，再使用代理更新".into());
                     return Task::none();
                 }
                 self.updates.failure = None;
@@ -753,7 +743,7 @@ impl App {
                         .as_ref()
                         .map_or(1, |package| package.asset.size),
                 });
-                let port = proxied.then_some(self.settings.mixed_port);
+                let port = self.snapshot.running.then_some(self.settings.mixed_port);
                 return Task::run(
                     iced::stream::channel(8, async move |mut output| {
                         let (sender, mut progress) = tokio::sync::mpsc::channel(4);
@@ -945,7 +935,7 @@ impl App {
                 if let Action::Delay(node) = &action {
                     self.node_delays.remove(node);
                 }
-                if matches!(action, Action::Activate(_) | Action::UpdateProfile(_, _)) {
+                if matches!(action, Action::Activate(_) | Action::UpdateProfile(_)) {
                     self.node_delays.clear();
                 }
                 return self.dispatch(action);
@@ -1557,14 +1547,7 @@ impl App {
                             .padding([4, 10])
                             .on_press_maybe(
                                 (!self.updates.busy() && !self.exiting)
-                                    .then_some(Message::InstallUpdate(false))
-                            ),
-                        button(self.label("更新（代理）"))
-                            .style(rounded_primary)
-                            .padding([4, 10])
-                            .on_press_maybe(
-                                (!self.updates.busy() && !self.exiting)
-                                    .then_some(Message::InstallUpdate(true))
+                                    .then_some(Message::InstallUpdate)
                             )
                     ]
                     .spacing(8),
@@ -2113,21 +2096,8 @@ impl App {
             let active = self.settings.active_profile.as_ref() == Some(&profile.id);
             let remote =
                 profile.source.starts_with("http://") || profile.source.starts_with("https://");
-            let update_buttons: Element<'_, Message> = if remote {
-                aligned_row![
-                    self.action(
-                        "更新",
-                        Action::UpdateProfile(profile.id.clone(), false),
-                        true
-                    ),
-                    self.action(
-                        "更新（代理）",
-                        Action::UpdateProfile(profile.id.clone(), true),
-                        true
-                    )
-                ]
-                .spacing(7)
-                .into()
+            let update_button: Element<'_, Message> = if remote {
+                self.action("更新", Action::UpdateProfile(profile.id.clone()), true)
             } else {
                 Space::new().width(0).into()
             };
@@ -2150,7 +2120,7 @@ impl App {
                             ))
                             .size(self.scaled(12)),
                             Space::new().width(Length::Fill),
-                            update_buttons,
+                            update_button,
                             if profile.is_default() {
                                 Space::new().width(0).into()
                             } else {

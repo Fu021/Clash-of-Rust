@@ -5,10 +5,12 @@ pub mod engine;
 pub mod flags;
 pub mod icons;
 pub mod ip_check;
+mod network;
 pub mod platform;
 pub mod probe;
 mod proxy;
 mod region_check;
+mod subscription;
 pub mod tray;
 pub mod update;
 
