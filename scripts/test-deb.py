@@ -35,6 +35,9 @@ def main():
         # No host packages or desktop settings are changed by this dpkg root.
         command(['dpkg',f'--root={root}','--unpack',artifact])
         app = root/'opt/clash-of-rust'
+        for path in (root/'opt', app, app/'resources', app/'clash-of-rust', app/'resources/mihomo', app/'resources/core.json'):
+            metadata = path.stat()
+            assert metadata.st_uid == 0 and metadata.st_mode & 0o022 == 0, f'Untrusted package permissions: {path}'
         assert (app/'clash-of-rust').read_bytes()[:4] == b'\x7fELF'
         assert (app/'clash-of-rust').stat().st_mode & 0o111
         assert (root/'usr/bin/clash-of-rust').readlink() == Path('/opt/clash-of-rust/clash-of-rust')

@@ -66,6 +66,26 @@ class BuildTests(unittest.TestCase):
             with self.assertRaises(ValueError):
                 build.validate_version(invalid)
 
+    def test_build_token_is_sent_only_to_secure_github_api_and_removed_on_redirect(self):
+        import io
+        class Response(io.BytesIO):
+            def __enter__(self): return self
+            def __exit__(self,*_): self.close()
+        class Opener:
+            def open(self,request,**kwargs):
+                self.request = request
+                return Response(b'{"ok":true}')
+        mocked = Opener()
+        with patch.dict(build.os.environ, {'GH_TOKEN':'test-only-token'}), patch.object(build,'opener',return_value=mocked):
+            for url, expected in [('https://api.github.com/repos/example/repo', 'Bearer test-only-token'),
+                                  ('https://example.test/data', None), ('http://api.github.com/data', None)]:
+                self.assertEqual(build.read_json(url), {'ok':True})
+                self.assertEqual(mocked.request.get_header('Authorization'), expected)
+        source = build.urllib.request.Request('https://api.github.com/data', headers={'Authorization':'Bearer test-only-token'})
+        for destination in ('https://example.test/data', 'http://api.github.com/data'):
+            redirected = build.SafeRedirect().redirect_request(source,None,302,'Found',{},destination)
+            self.assertIsNone(redirected.get_header('Authorization'))
+
     def resources(self,source):
         source.mkdir()
         (source/'mihomo.exe').write_bytes(b'core')

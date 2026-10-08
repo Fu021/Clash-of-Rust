@@ -11,6 +11,7 @@ import shutil
 import subprocess
 import struct
 import time
+import urllib.parse
 import urllib.request
 import zipfile
 
@@ -96,12 +97,28 @@ def file_version(path):
     return f'{words[2] >> 16}.{words[2] & 65535}.{words[3] >> 16}'
 
 
+class SafeRedirect(urllib.request.HTTPRedirectHandler):
+    def redirect_request(self, req, fp, code, msg, headers, newurl):
+        redirected = super().redirect_request(req, fp, code, msg, headers, newurl)
+        if redirected:
+            origin = urllib.parse.urlparse(req.full_url)
+            target = urllib.parse.urlparse(newurl)
+            if (origin.scheme, origin.netloc) != (target.scheme, target.netloc):
+                redirected.remove_header('Authorization')
+        return redirected
+
+
 def opener(proxy=''):
-    return urllib.request.build_opener(urllib.request.ProxyHandler({'http': proxy, 'https': proxy} if proxy else {}))
+    return urllib.request.build_opener(urllib.request.ProxyHandler({'http': proxy, 'https': proxy} if proxy else {}), SafeRedirect())
 
 
 def read_json(url, proxy=''):
-    request = urllib.request.Request(url, headers={'User-Agent': 'Clash-of-Rust-build', 'Accept': 'application/vnd.github+json'})
+    headers = {'User-Agent': 'Clash-of-Rust-build', 'Accept': 'application/vnd.github+json'}
+    target = urllib.parse.urlparse(url)
+    token = os.environ.get('GH_TOKEN') or os.environ.get('GITHUB_TOKEN')
+    if token and target.scheme == 'https' and target.netloc == 'api.github.com':
+        headers['Authorization'] = 'Bearer ' + token
+    request = urllib.request.Request(url, headers=headers)
     with opener(proxy).open(request, timeout=30) as response:
         return json.load(response)
 

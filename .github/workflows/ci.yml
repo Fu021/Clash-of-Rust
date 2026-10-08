@@ -74,6 +74,8 @@ jobs:
           subprocess.run(['dbus-run-session', '--', 'cargo', 'test', '--locked', '--lib', 'native_kde_signal', '--', '--ignored'], check=True)
           subprocess.run(['dbus-run-session', '--', 'cargo', 'test', '--locked', '--lib', 'no_tray_host', '--', '--ignored'], check=True)
       - name: Build package and test core
+        env:
+          GH_TOKEN: ${{ github.token }}
         run: |
           import subprocess, sys
           subprocess.run([sys.executable, 'scripts/native-detector-codegen.py', '--check'], check=True)
@@ -122,6 +124,11 @@ jobs:
           output = subprocess.check_output(['cargo', 'test', '--locked', '--test', 'linux_tun', '--no-run', '--message-format=json'], text=True)
           binaries = [entry['executable'] for line in output.splitlines() if (entry := json.loads(line)).get('reason') == 'compiler-artifact' and entry.get('executable') and entry['target']['name'] == 'linux_tun']
           assert len(binaries) == 1
+          # Hosted runners make /opt writable; use normal system-directory
+          # ownership so the fixed-target authorization helper can trust it.
+          subprocess.run(['sudo', 'chown', 'root:root', '/opt'], check=True)
+          subprocess.run(['sudo', 'chmod', '0755', '/opt'], check=True)
+          subprocess.run(['stat', '-c', '%U %G %a %n', '/opt', '/opt/clash-of-rust', '/opt/clash-of-rust/resources', '/opt/clash-of-rust/clash-of-rust', '/opt/clash-of-rust/resources/mihomo', '/opt/clash-of-rust/resources/core.json'], check=True)
           subprocess.run(['sudo', sys.executable, 'scripts/test-linux-tun.py', '--test-binary', binaries[0], '--uid', str(os.getuid())], check=True)
           shutil.copyfile(binaries[0], 'target/linux-tun-test')
       - uses: actions/upload-artifact@v6
@@ -162,6 +169,8 @@ jobs:
           packages = glob.glob('dist/*.deb')
           assert len(packages) == 1
           subprocess.run(['sudo', 'apt-get', 'install', '-y', './' + packages[0]], check=True)
+          subprocess.run(['sudo', 'chown', 'root:root', '/opt'], check=True)
+          subprocess.run(['sudo', 'chmod', '0755', '/opt'], check=True)
           binary = Path('target/linux-tun-test').resolve()
           binary.chmod(0o755)
           subprocess.run(['dbus-run-session', '--', 'xvfb-run', '-a', sys.executable, 'scripts/test-linux-gui.py', '--executable', '/usr/bin/clash-of-rust'], check=True)
