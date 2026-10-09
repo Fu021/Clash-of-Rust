@@ -462,7 +462,7 @@ dependencies = [
 
 [[package]]
 name = "clash-of-rust"
-version = "0.4.12-dev.1"
+version = "0.4.12-dev.2"
 dependencies = [
  "anyhow",
  "base64 0.22.1",

@@ -278,6 +278,10 @@ impl Backend {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use windows::Win32::{
+        Foundation::VARIANT_BOOL,
+        System::TaskScheduler::{TASK_RUNLEVEL_HIGHEST, TASK_RUNLEVEL_LUA},
+    };
 
     struct Cleanup(Backend);
     impl Drop for Cleanup {
@@ -308,6 +312,40 @@ mod tests {
         assert!(!backend.legacy_enabled().unwrap());
         with_folder(|folder| {
             let task = backend.owned_task(folder)?.unwrap();
+            // Task Scheduler omits default-valued fields from its exported XML.
+            // Check the effective registered settings through COM instead.
+            let definition = unsafe { task.Definition()? };
+            let principal = unsafe { definition.Principal()? };
+            let settings = unsafe { definition.Settings()? };
+            let mut user_id = BSTR::new();
+            let mut logon_type = TASK_LOGON_INTERACTIVE_TOKEN;
+            let mut run_level = TASK_RUNLEVEL_HIGHEST;
+            let mut disallow_battery = VARIANT_BOOL(-1);
+            let mut stop_on_battery = VARIANT_BOOL(-1);
+            let mut network_required = VARIANT_BOOL(-1);
+            let mut start_when_available = VARIANT_BOOL(0);
+            let mut time_limit = BSTR::new();
+            let mut priority = 0;
+            unsafe {
+                principal.UserId(&mut user_id)?;
+                principal.LogonType(&mut logon_type)?;
+                principal.RunLevel(&mut run_level)?;
+                settings.DisallowStartIfOnBatteries(&mut disallow_battery)?;
+                settings.StopIfGoingOnBatteries(&mut stop_on_battery)?;
+                settings.RunOnlyIfNetworkAvailable(&mut network_required)?;
+                settings.StartWhenAvailable(&mut start_when_available)?;
+                settings.ExecutionTimeLimit(&mut time_limit)?;
+                settings.Priority(&mut priority)?;
+            }
+            assert_eq!(user_id.to_string(), backend.sid);
+            assert_eq!(logon_type, TASK_LOGON_INTERACTIVE_TOKEN);
+            assert_eq!(run_level, TASK_RUNLEVEL_LUA);
+            assert_eq!(disallow_battery.0, 0);
+            assert_eq!(stop_on_battery.0, 0);
+            assert_eq!(network_required.0, 0);
+            assert_ne!(start_when_available.0, 0);
+            assert_eq!(time_limit.to_string(), "PT0S");
+            assert_eq!(priority, 5);
             let xml = unsafe { task.Xml()? }.to_string();
             let document = roxmltree::Document::parse(&xml)?;
             let value = |name| {
@@ -316,15 +354,9 @@ mod tests {
                     .find(|node| node.has_tag_name(name))
                     .and_then(|node| node.text())
             };
-            assert_eq!(value("UserId"), Some(backend.sid.as_str()));
-            assert_eq!(value("LogonType"), Some("InteractiveToken"));
-            assert_eq!(value("RunLevel"), Some("LeastPrivilege"));
-            assert_eq!(value("DisallowStartIfOnBatteries"), Some("false"));
-            assert_eq!(value("ExecutionTimeLimit"), Some("PT0S"));
-            assert_eq!(value("Priority"), Some("5"));
             assert!(value("Delay").is_none_or(|delay| delay == "PT0S"));
             assert_eq!(value("Arguments"), Some("--background"));
-            unsafe { task.SetEnabled(windows::Win32::Foundation::VARIANT_BOOL(0))? };
+            unsafe { task.SetEnabled(VARIANT_BOOL(0))? };
             Ok(())
         })
         .unwrap();
