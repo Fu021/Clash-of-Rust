@@ -123,6 +123,8 @@ jobs:
         if: runner.os == 'Linux'
         run: |
           import subprocess, sys, json, os, shutil
+          if not os.path.isfile('/usr/lib/systemd/systemd-resolved') or not shutil.which('resolvectl'):
+              subprocess.run(['sudo', 'apt-get', 'install', '-y', 'systemd-resolved'], check=True)
           output = subprocess.check_output(['cargo', 'test', '--locked', '--test', 'linux_tun', '--no-run', '--message-format=json'], text=True)
           binaries = [entry['executable'] for line in output.splitlines() if (entry := json.loads(line)).get('reason') == 'compiler-artifact' and entry.get('executable') and entry['target']['name'] == 'linux_tun']
           assert len(binaries) == 1
@@ -173,6 +175,8 @@ jobs:
           subprocess.run(['sudo', 'apt-get', 'install', '-y', './' + packages[0]], check=True)
           subprocess.run(['sudo', 'chown', 'root:root', '/opt'], check=True)
           subprocess.run(['sudo', 'chmod', '0755', '/opt'], check=True)
+          if not Path('/usr/lib/systemd/systemd-resolved').is_file():
+              subprocess.run(['sudo', 'apt-get', 'install', '-y', 'systemd-resolved'], check=True)
           binary = Path('target/linux-tun-test').resolve()
           binary.chmod(0o755)
           subprocess.run(['dbus-run-session', '--', 'xvfb-run', '-a', sys.executable, 'scripts/test-linux-gui.py', '--executable', '/usr/bin/clash-of-rust'], check=True)

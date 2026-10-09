@@ -246,7 +246,12 @@ impl Engine {
         assets::core_path(&self.resources)
     }
     fn command(&self) -> Result<Command> {
-        let mut command = Command::new(self.core()?);
+        let core = self.core()?;
+        #[cfg(target_os = "linux")]
+        let executable = platform::core_launcher(&core);
+        #[cfg(not(target_os = "linux"))]
+        let executable = &core;
+        let mut command = Command::new(executable);
         command.kill_on_drop(true);
         #[cfg(windows)]
         command.creation_flags(0x08000000);

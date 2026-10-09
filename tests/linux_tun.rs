@@ -31,6 +31,29 @@ fn adapter_exists() -> bool {
     devices[0]["linkinfo"]["info_kind"] == "tun"
 }
 
+async fn assert_dns_configured() {
+    // This bus has a real systemd-resolved and no PolicyKit service or agent.
+    // All three asynchronous core DNS calls must work without a password.
+    for _ in 0..50 {
+        let values: Vec<_> = ["dns", "domain", "default-route"]
+            .into_iter()
+            .map(|command| {
+                let output = std::process::Command::new("/usr/bin/resolvectl")
+                    .args([command, "ClashRustTest"])
+                    .output()
+                    .unwrap();
+                String::from_utf8_lossy(&output.stdout).into_owned()
+            })
+            .collect();
+        if values[0].contains("198.18.0.2") && values[1].contains("~.") && values[2].contains("yes")
+        {
+            return;
+        }
+        tokio::time::sleep(Duration::from_millis(100)).await;
+    }
+    panic!("TUN DNS setup did not succeed without PolicyKit authentication");
+}
+
 #[tokio::test]
 #[ignore = "Requires installed/authorized core and an isolated network namespace"]
 async fn ordinary_user_tun_switch_restart_and_cleanup() {
@@ -71,6 +94,7 @@ async fn ordinary_user_tun_switch_restart_and_cleanup() {
     engine.select_proxy_mode(ProxyMode::System).await.unwrap();
     engine.select_proxy_mode(ProxyMode::Tun).await.unwrap();
     assert!(adapter_exists());
+    assert_dns_configured().await;
     let state = engine.poll(Scope::Home).await.unwrap();
     assert!(state.tun && !state.system_proxy);
     let routes = std::process::Command::new("ip")
@@ -121,6 +145,7 @@ async fn ordinary_user_tun_switch_restart_and_cleanup() {
     }
     engine.save_settings(changed).await.unwrap();
     assert!(engine.poll(Scope::Home).await.unwrap().tun && adapter_exists());
+    assert_dns_configured().await;
     let staged = tmp.path().join("staged");
     std::fs::create_dir(&staged).unwrap();
     for name in assets::GEO_FILES.into_iter().chain([assets::MANIFEST]) {
@@ -128,6 +153,7 @@ async fn ordinary_user_tun_switch_restart_and_cleanup() {
     }
     engine.install_geo(&staged).await.unwrap();
     assert!(engine.poll(Scope::Home).await.unwrap().tun && adapter_exists());
+    assert_dns_configured().await;
     let proxies: Proxies = engine.api.get("proxies").await.unwrap();
     assert_eq!(proxies.proxies["Example"].now, "REJECT");
     engine.stop().await.unwrap();
@@ -141,9 +167,17 @@ async fn ordinary_user_tun_switch_restart_and_cleanup() {
         "Linux must keep the GUI running"
     );
     assert!(engine.poll(Scope::Home).await.unwrap().tun && adapter_exists());
+    assert_dns_configured().await;
     engine.select_proxy_mode(ProxyMode::System).await.unwrap();
     let state = engine.poll(Scope::Home).await.unwrap();
     assert!(!state.tun && state.system_proxy && !adapter_exists());
+    for _ in 0..3 {
+        engine.select_proxy_mode(ProxyMode::Tun).await.unwrap();
+        assert!(adapter_exists());
+        assert_dns_configured().await;
+        engine.select_proxy_mode(ProxyMode::System).await.unwrap();
+        assert!(!adapter_exists());
+    }
     engine.select_proxy_mode(ProxyMode::Off).await.unwrap();
     engine.stop().await.unwrap();
     assert!(!adapter_exists());

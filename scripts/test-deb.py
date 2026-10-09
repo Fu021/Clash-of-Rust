@@ -35,11 +35,13 @@ def main():
         # No host packages or desktop settings are changed by this dpkg root.
         command(['dpkg',f'--root={root}','--unpack',artifact])
         app = root/'opt/clash-of-rust'
-        for path in (root/'opt', app, app/'resources', app/'clash-of-rust', app/'resources/mihomo', app/'resources/core.json'):
+        for path in (root/'opt', app, app/'resources', app/'clash-of-rust', app/'clash-tun-launcher', app/'resources/mihomo', app/'resources/core.json'):
             metadata = path.stat()
             assert metadata.st_uid == 0 and metadata.st_mode & 0o022 == 0, f'Untrusted package permissions: {path}'
         assert (app/'clash-of-rust').read_bytes()[:4] == b'\x7fELF'
         assert (app/'clash-of-rust').stat().st_mode & 0o111
+        assert (app/'clash-tun-launcher').read_bytes()[:4] == b'\x7fELF'
+        assert (app/'clash-tun-launcher').stat().st_mode & 0o111
         assert (root/'usr/bin/clash-of-rust').readlink() == Path('/opt/clash-of-rust/clash-of-rust')
         assert (root/'usr/share/applications/clash-of-rust.desktop').is_file()
         desktop = (root/'usr/share/applications/clash-of-rust.desktop').read_text()
@@ -71,6 +73,7 @@ def main():
             print('PASS: isolated Debian upgrade to',expected)
         command(['dpkg',f'--root={root}','--purge','clash-of-rust'])
         assert not (app/'clash-of-rust').exists()
+        assert not (app/'clash-tun-launcher').exists()
         assert not (root/'usr/bin/clash-of-rust').is_symlink()
         assert not (root/'usr/share/applications/clash-of-rust.desktop').exists()
         assert not (root/'usr/share/polkit-1/actions/org.clashofrust.tun.policy').exists()

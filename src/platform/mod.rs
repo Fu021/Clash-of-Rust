@@ -31,7 +31,7 @@ mod linux_tun;
 mod windows_autostart;
 #[cfg(target_os = "linux")]
 pub use linux_tun::{
-    authorize_tun, check_tun_environment, core_has_tun_permissions, tun_helper_main,
+    authorize_tun, check_tun_environment, core_has_tun_permissions, core_launcher, tun_helper_main,
 };
 #[cfg(windows)]
 mod windows;

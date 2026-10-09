@@ -1,24 +1,19 @@
-//! A headless, fixed-target polkit helper grants network capabilities to mihomo.
+//! A fixed-target polkit helper grants persistent network capabilities to the launcher.
 //! It never reads user configuration or starts a privileged desktop process.
 use anyhow::{Context, Result, bail, ensure};
 use sha2::{Digest, Sha256};
 use std::{
-    ffi::CStr,
     fs::File,
     io::Read,
-    os::unix::{
-        fs::MetadataExt,
-        io::{AsRawFd, FromRawFd},
-    },
+    os::unix::{fs::OpenOptionsExt, io::AsRawFd},
     path::Path,
     process::Command,
 };
 
+mod trusted;
+use trusted::{CORE, LAUNCHER, NETWORK_CAPABILITIES, installed_resources, open_at};
 const EXECUTABLE: &str = "/opt/clash-of-rust/clash-of-rust";
-const CORE: &str = "/opt/clash-of-rust/resources/mihomo";
 const HELPER_ARGUMENT: &str = "--authorize-tun";
-// CAP_NET_ADMIN (12) creates the interface/routes; CAP_NET_RAW (13) handles raw traffic.
-const NETWORK_CAPABILITIES: u64 = (1 << 12) | (1 << 13);
 
 fn status_number(status: &str, key: &str, radix: u32) -> Result<u64> {
     let value = status
@@ -31,7 +26,19 @@ fn status_number(status: &str, key: &str, radix: u32) -> Result<u64> {
 pub fn core_has_tun_permissions(pid: u32) -> Result<bool> {
     let status = std::fs::read_to_string(format!("/proc/{pid}/status"))
         .context("无法读取 mihomo 进程权限")?;
-    Ok(status_number(&status, "CapEff:", 16)? & NETWORK_CAPABILITIES == NETWORK_CAPABILITIES)
+    status_has_tun_permissions(&status)
+}
+
+fn status_has_tun_permissions(status: &str) -> Result<bool> {
+    ["CapEff:", "CapAmb:"]
+        .into_iter()
+        .try_fold(true, |ready, key| {
+            Ok::<_, anyhow::Error>(
+                ready
+                    && status_number(status, key, 16)? & NETWORK_CAPABILITIES
+                        == NETWORK_CAPABILITIES,
+            )
+        })
 }
 
 pub fn check_tun_environment() -> Result<()> {
@@ -57,46 +64,6 @@ pub fn check_tun_environment() -> Result<()> {
         "启动环境限制了 TUN 网络权限，请检查容器或沙箱设置"
     );
     Ok(())
-}
-
-fn trusted_metadata(metadata: &std::fs::Metadata, directory: bool) -> Result<()> {
-    ensure!(
-        metadata.uid() == 0 && metadata.mode() & 0o022 == 0,
-        "安装文件必须由 root 所有，且其他用户不可写，请重新安装 DEB"
-    );
-    ensure!(
-        if directory {
-            metadata.is_dir()
-        } else {
-            metadata.is_file() && metadata.nlink() == 1
-        },
-        "安装文件类型或硬链接数量无效，请重新安装 DEB"
-    );
-    Ok(())
-}
-
-fn open_at(parent: &File, name: &CStr, directory: bool) -> Result<File> {
-    let flags = libc::O_RDONLY
-        | libc::O_NOFOLLOW
-        | libc::O_CLOEXEC
-        | if directory { libc::O_DIRECTORY } else { 0 };
-    let fd = unsafe { libc::openat(parent.as_raw_fd(), name.as_ptr(), flags) };
-    if fd < 0 {
-        return Err(std::io::Error::last_os_error()).context("无法安全打开安装文件");
-    }
-    let file = unsafe { File::from_raw_fd(fd) };
-    trusted_metadata(&file.metadata()?, directory)?;
-    Ok(file)
-}
-
-fn installed_resources() -> Result<File> {
-    let root = File::open("/")?;
-    trusted_metadata(&root.metadata()?, true)?;
-    let opt = open_at(&root, c"opt", true)?;
-    let app = open_at(&opt, c"clash-of-rust", true)?;
-    // Validate the fixed executable as well as the target, without following links.
-    let _executable = open_at(&app, c"clash-of-rust", false)?;
-    open_at(&app, c"resources", true)
 }
 
 fn capability_attribute() -> [u8; 20] {
@@ -137,10 +104,23 @@ fn grant_installed_core() -> Result<()> {
         format!("{:x}", hash.finalize()) == expected,
         "内核文件校验失败，请重新安装"
     );
+    let launcher = File::options()
+        .read(true)
+        .custom_flags(libc::O_NOFOLLOW)
+        .open(LAUNCHER)?;
+    trusted::trusted_metadata(&launcher.metadata()?, false)?;
+    // File capabilities on mihomo would clear ambient capabilities at exec.
+    // Migrate the old grant to the fixed launcher before starting a new core.
+    if unsafe { libc::fremovexattr(core.as_raw_fd(), c"security.capability".as_ptr()) } != 0 {
+        let error = std::io::Error::last_os_error();
+        if error.raw_os_error() != Some(libc::ENODATA) {
+            return Err(error).context("无法迁移旧内核网络权限");
+        }
+    }
     let attribute = capability_attribute();
     let result = unsafe {
         libc::fsetxattr(
-            core.as_raw_fd(),
+            launcher.as_raw_fd(),
             c"security.capability".as_ptr(),
             attribute.as_ptr().cast(),
             attribute.len(),
@@ -149,9 +129,17 @@ fn grant_installed_core() -> Result<()> {
     };
     if result != 0 {
         return Err(std::io::Error::last_os_error())
-            .context("无法设置内核网络权限，请检查文件系统是否支持 capabilities");
+            .context("无法设置内核启动器网络权限，请检查文件系统是否支持 capabilities");
     }
     Ok(())
+}
+
+pub fn core_launcher(core: &Path) -> &Path {
+    if core == Path::new(CORE) {
+        Path::new(LAUNCHER)
+    } else {
+        core
+    }
 }
 
 pub fn authorize_tun(core: &Path) -> Result<()> {
@@ -236,6 +224,21 @@ mod tests {
             capability_attribute(),
             [1, 0, 0, 2, 0, 48, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0]
         );
+    }
+
+    #[test]
+    fn tun_requires_effective_and_inherited_dns_permissions() {
+        for (effective, ambient, ready) in [
+            (0, 0, false),
+            (0x3000, 0, false), // Previous file-only grant loses DNS permissions.
+            (0, 0x3000, false),
+            (0x3000, 0x1000, false),
+            (0x3000, 0x3000, true),
+        ] {
+            let status = format!("CapEff:\t{effective:x}\nCapAmb:\t{ambient:x}\n");
+            assert_eq!(status_has_tun_permissions(&status).unwrap(), ready);
+        }
+        assert!(status_has_tun_permissions("CapEff: 3000\n").is_err());
     }
 
     #[test]
