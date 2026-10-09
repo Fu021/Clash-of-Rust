@@ -30,7 +30,7 @@
 2. 四个平台并行获取、校验并打包已有程序。
 3. Windows 测试最终安装包的安装、同版本更新、卸载及用户文件保留；继续执行隔离的失败恢复、退出、重装和旧版迁移测试；扫描 Defender。
 4. Linux 验证 DEB 内容、安装、GUI、后台启动、TUN 授权、DNS、路由与清理。
-5. 在最新版 Ubuntu 安装同一份 Ubuntu 22.04 构建的 DEB，再验证 GUI 和 TUN；不重复编译或打包。
+5. 最新版 Ubuntu 使用官方 HTTPS APT 镜像和有界下载等待，避免 Azure 镜像挂起；安装同一份 Ubuntu 22.04 构建的 DEB，再验证 GUI 和 TUN；不重复编译或打包。
 6. 最终步骤核对所有测试 job、安装包校验值、测试成功记录与来源 CI；八个附件上传并核对后才公开 Release。开发版本标记为 prerelease，不覆盖稳定版 latest。
 
 只有最终发布 job 有 `contents: write`；前面的编译和打包测试使用读取权限。
