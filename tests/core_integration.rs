@@ -404,14 +404,13 @@ async fn subscription_metadata_failures_leave_runtime_and_preferences_unchanged(
     assert!(engine.activate(id.clone()).await.is_err());
     assert_eq!(engine.settings.active_profile, original);
     assert!(
-        engine
+        !engine
             .api
             .get::<Proxies>("proxies")
             .await
             .unwrap()
             .proxies
-            .get("commit-test")
-            .is_none()
+            .contains_key("commit-test")
     );
     assert!(engine.select_mode("direct").await.is_err());
     assert_eq!(engine.poll(Scope::Home).await.unwrap().mode, "global");
