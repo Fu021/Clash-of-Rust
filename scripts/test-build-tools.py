@@ -233,13 +233,13 @@ class ReleaseTests(unittest.TestCase):
             release.GitHub('example/project','test-only-token')('https://example.test/upload','POST',b'installer')
 
     def test_release_check_mode_never_calls_publisher(self):
-        with patch.object(release.sys,'argv',['publish-release.py','--check','--run-id','77']), \
+        with patch.object(release.sys,'argv',['publish-release.py','--check','--run-id','77','--package-run-id','88']), \
              patch.object(release,'repository',return_value='example/project'), \
              patch.object(release,'credential',return_value='test-only-token'), \
              patch.object(release,'GitHub'), patch.object(release,'git',return_value=self.commit), \
              patch.object(release,'verified_run',return_value={'id':77,'html_url':'https://example.test/ci'}), \
              patch.object(release,'release_metadata',return_value=(self.version,self.tag,self.notes)), \
-             patch.object(release,'download_ci_files',return_value={}), patch.object(release,'publish') as publishing:
+             patch.object(release,'verified_package_run'), patch.object(release,'download_package_files',return_value={}), patch.object(release,'publish') as publishing:
             release.main()
             publishing.assert_not_called()
 
@@ -275,31 +275,82 @@ class ReleaseTests(unittest.TestCase):
             checksum.write_text('0'*64+'\n')
             with self.assertRaises(ValueError):release.validate_files(list(files.values()),self.version)
 
-    def artifact_client(self, bad_name=False, expired=False, bad_digest=False, duplicate=False):
-        artifacts=[];archives={}
+    def artifact_client(self, bad_name=False, expired=False, bad_digest=False, duplicate=False, bad_receipt=False, bad_build=False):
+        artifacts=[];archives={};builds=[]
         for number,(package,suffix) in enumerate(release.PACKAGES.items()):
             name=f'Clash-of-Rust-{self.version}-{suffix}'
             data=('installer '+suffix).encode();stream=io.BytesIO()
+            system,arch=package.removeprefix('package-').split('-')
+            source={'id':100+number,'name':f'build-{system}-{arch}','digest':'sha256:'+hashlib.sha256(('build '+suffix).encode()).hexdigest(),'expired':False}
+            builds.append(source)
+            receipt={'schema':1,'commit':self.commit,'version':self.version,'ci_run_id':77,
+                     'system':system,'arch':arch,'package':name,'tests_passed':True,
+                     'sha256':hashlib.sha256(data).hexdigest(),
+                     'build_artifact':{key:source[key] for key in ('id','name','digest')}}
+            if bad_receipt:receipt['commit']='b'*40
+            if bad_build:receipt['build_artifact']['id']=999
             with zipfile.ZipFile(stream,'w') as zipped:
                 zipped.writestr('../outside' if bad_name and number==0 else name,data)
                 zipped.writestr(name+'.sha256',hashlib.sha256(data).hexdigest()+'\n')
+                zipped.writestr('package-receipt.json',json.dumps(receipt))
             blob=stream.getvalue();archives[number]=blob
             artifacts.append({'id':number,'name':package,'expired':expired,
                               'digest':'sha256:'+('0'*64 if bad_digest else hashlib.sha256(blob).hexdigest())})
         if duplicate:artifacts.append(artifacts[0])
         def request(path, raw=False):
-            if path.startswith('/actions/runs/77/artifacts?'):return {'artifacts':artifacts}
+            if path.startswith('/actions/runs/77/artifacts?'):return {'artifacts':builds}
+            if path.startswith('/actions/runs/88/artifacts?'):return {'artifacts':artifacts}
             return archives[int(path.split('/')[3])]
         return request
 
     def test_release_artifact_download_enforces_archive_hash_and_safe_complete_contents(self):
         with tempfile.TemporaryDirectory() as folder:
             directory=Path(folder)
-            self.assertEqual(len(release.download_ci_files(self.artifact_client(),77,self.version,directory/'good')),8)
-            for key in ('bad_name','expired','bad_digest','duplicate'):
+            self.assertEqual(len(release.download_package_files(self.artifact_client(),88,77,self.commit,self.version,directory/'good')),8)
+            for key in ('bad_name','expired','bad_digest','duplicate','bad_receipt','bad_build'):
                 with self.subTest(key=key), self.assertRaises(ValueError):
-                    release.download_ci_files(self.artifact_client(**{key:True}),77,self.version,directory/key)
+                    release.download_package_files(self.artifact_client(**{key:True}),88,77,self.commit,self.version,directory/key)
             self.assertFalse((directory/'outside').exists())
+
+    def test_release_requires_every_package_and_compatibility_job(self):
+        def client(changes=None,jobs=None):
+            run={'id':88,'path':'.github/workflows/release.yml@main','event':'workflow_dispatch',
+                 'head_branch':'main','head_sha':self.commit,'head_repository':{'full_name':'example/project'},
+                 'status':'completed','conclusion':'success'}
+            run.update(changes or {})
+            records=jobs if jobs is not None else [{'name':name,'status':'completed','conclusion':'success'} for name in release.PACKAGE_JOBS]
+            def request(path):
+                return {'jobs':records} if '/jobs?' in path else run
+            request.repo='example/project'
+            return request
+        with patch.dict(build.os.environ,{},clear=True):
+            self.assertEqual(release.verified_package_run(client(),88,self.commit)['id'],88)
+            for change in ({'event':'push'},{'head_sha':'b'*40},{'path':'.github/workflows/ci.yml'},
+                           {'status':'in_progress'},{'conclusion':'failure'}):
+                with self.subTest(change=change),self.assertRaises(ValueError):
+                    release.verified_package_run(client(change),88,self.commit)
+            jobs=[{'name':name,'status':'completed','conclusion':'success'} for name in release.PACKAGE_JOBS]
+            with self.assertRaises(ValueError):release.verified_package_run(client(jobs=jobs[:-1]),88,self.commit)
+            jobs[0]['conclusion']='skipped'
+            with self.assertRaises(ValueError):release.verified_package_run(client(jobs=jobs),88,self.commit)
+        with patch.dict(build.os.environ,{'GITHUB_RUN_ID':'88'},clear=True):
+            release.verified_package_run(client({'status':'in_progress','conclusion':None}),88,self.commit)
+
+    def test_resolve_emits_ci_identity_without_downloading_packages(self):
+        with tempfile.TemporaryDirectory() as directory:
+            output=Path(directory)/'outputs'
+            with patch.object(release.sys,'argv',['publish-release.py','--resolve','--run-id','77']), \
+                 patch.object(release,'repository',return_value='example/project'), \
+                 patch.object(release,'credential',return_value='test-only-token'), \
+                 patch.object(release,'GitHub'),patch.object(release,'git',return_value=self.commit), \
+                 patch.object(release,'verified_run',return_value={'id':77}), \
+                 patch.object(release,'release_metadata',return_value=(self.version,self.tag,self.notes)), \
+                 patch.object(release,'build_artifacts'),patch.object(release,'download_package_files') as download, \
+                 patch.object(release,'publish') as publishing,patch.dict(build.os.environ,{'GITHUB_OUTPUT':str(output)}):
+                release.main()
+                download.assert_not_called();publishing.assert_not_called()
+            self.assertIn('commit='+self.commit,output.read_text())
+            self.assertIn('ci_run_id=77',output.read_text())
 
     class PublisherClient:
         def __init__(self, owner, published=False, bad_upload=False, main_changed=False, wrong_tag=False, starter=False):
@@ -348,6 +399,14 @@ class ReleaseTests(unittest.TestCase):
                 self.assertFalse(client.release['draft'])
                 self.assertEqual(len(client.release['assets']),8)
                 if starter:self.assertTrue(any(method=='DELETE' for _,method,_ in client.writes))
+
+    def test_development_version_is_published_as_a_preview(self):
+        self.version='0.4.13-dev.1';self.tag='v'+self.version
+        with tempfile.TemporaryDirectory() as folder:
+            files=self.files(Path(folder));client=self.PublisherClient(self)
+            release.publish(client,self.commit,self.tag,self.notes,files)
+            self.assertTrue(client.release['prerelease'])
+            self.assertEqual(client.release['make_latest'],'false')
 
     def test_release_refuses_existing_public_release_or_wrong_tag_without_writes(self):
         with tempfile.TemporaryDirectory() as folder:

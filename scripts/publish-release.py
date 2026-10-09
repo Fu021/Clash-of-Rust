@@ -1,4 +1,4 @@
-"""Publish verified CI installers using an Actions token or local Git credentials.
+"""Publish packages tested by the manual release workflow using verified CI binaries.
 
 The workflow and local CLI share the same CI, checksum and release checks.
 Credentials stay in memory; Python 3.11+ and the standard library only.
@@ -22,7 +22,6 @@ from build_support import ROOT, opener, sha256, validate_version
 
 CI_JOBS = {
     'windows-x64', 'windows-arm64', 'linux-x64', 'linux-arm64',
-    'Ubuntu latest-x64 TUN and GUI',
 }
 PACKAGES = {
     'package-windows-x64': 'windows-x64-setup.exe',
@@ -30,6 +29,7 @@ PACKAGES = {
     'package-linux-x64': 'linux-amd64.deb',
     'package-linux-arm64': 'linux-arm64.deb',
 }
+PACKAGE_JOBS = set(PACKAGES) | {'Ubuntu latest-x64 TUN and GUI'}
 
 
 def git(*args):
@@ -111,7 +111,7 @@ def verified_run(client, commit, run_id=None):
     require(client('/branches/main')['commit']['sha'] == commit, 'Main has changed; select its current successful CI')
     jobs = client(f'/actions/runs/{run_id}/jobs?filter=latest&per_page=100')['jobs']
     require(len(jobs) == len(CI_JOBS) and {j['name'] for j in jobs} == CI_JOBS,
-            'CI does not cover all four platforms and Ubuntu latest')
+            'CI does not cover all four native platforms')
     require(all(j['status'] == 'completed' and j['conclusion'] == 'success' for j in jobs), 'A required CI job did not pass')
     return run
 
@@ -147,26 +147,70 @@ def validate_files(paths, version):
     return files
 
 
-def download_ci_files(client, run_id, version, directory):
+def build_artifacts(client, run_id):
+    from workflow_artifacts import BUILD_NAMES
+    artifacts = client(f'/actions/runs/{run_id}/artifacts?per_page=100')['artifacts']
+    builds = [a for a in artifacts if a['name'].startswith('build-')]
+    require(len(builds) == len(BUILD_NAMES) and {a['name'] for a in builds} == BUILD_NAMES,
+            'CI native build artifacts are incomplete or duplicated')
+    require(all(not a['expired'] for a in builds), 'CI native build artifact expired')
+    return {a['name']: {key: a[key] for key in ('id', 'name', 'digest')} for a in builds}
+
+
+def verified_package_run(client, run_id, commit):
+    run = client(f'/actions/runs/{run_id}')
+    require(run['path'].split('@', 1)[0] == '.github/workflows/release.yml'
+            and run['event'] == 'workflow_dispatch' and run['head_branch'] == 'main',
+            'Packages must come from the manual main-branch release workflow')
+    require(run['head_sha'] == commit and run['head_repository']['full_name'].lower() == client.repo.lower(),
+            'Package workflow source differs from the selected CI')
+    jobs = client(f'/actions/runs/{run_id}/jobs?filter=latest&per_page=100')['jobs']
+    required = [job for job in jobs if job['name'] in PACKAGE_JOBS]
+    require(len(required) == len(PACKAGE_JOBS) and {j['name'] for j in required} == PACKAGE_JOBS,
+            'Release workflow does not cover every package and Ubuntu compatibility test')
+    require(all(j['status'] == 'completed' and j['conclusion'] == 'success' for j in required),
+            'A package or installed-program test did not pass')
+    # When called by the final job this workflow is still in progress. Outside
+    # that job only a completely successful package workflow is accepted.
+    active = os.environ.get('GITHUB_RUN_ID') == str(run_id)
+    require(active or (run['status'] == 'completed' and run['conclusion'] == 'success'),
+            'Package workflow has not completed successfully')
+    return run
+
+
+def download_package_files(client, run_id, ci_run_id, commit, version, directory):
+    builds = build_artifacts(client, ci_run_id)
     artifacts = client(f'/actions/runs/{run_id}/artifacts?per_page=100')['artifacts']
     packages = [a for a in artifacts if a['name'].startswith('package-')]
-    require(len(packages) == len(PACKAGES) and {a['name'] for a in packages} == set(PACKAGES), 'CI package artifacts are incomplete or duplicated')
+    require(len(packages) == len(PACKAGES) and {a['name'] for a in packages} == set(PACKAGES),
+            'Release package artifacts are incomplete or duplicated')
     directory.mkdir(parents=True, exist_ok=True)
     require({p.name for p in directory.iterdir()} <= filenames(version), 'Output directory contains unexpected files')
     for artifact in packages:
-        require(not artifact['expired'], 'CI artifact expired: ' + artifact['name'])
+        require(not artifact['expired'], 'Release artifact expired: ' + artifact['name'])
         archive = client(f"/actions/artifacts/{artifact['id']}/zip", raw=True)
-        require(artifact.get('digest') == 'sha256:' + hashlib.sha256(archive).hexdigest(), 'CI archive checksum mismatch')
+        require(artifact.get('digest') == 'sha256:' + hashlib.sha256(archive).hexdigest(), 'Package archive checksum mismatch')
         name = f"Clash-of-Rust-{version}-{PACKAGES[artifact['name']]}"
         with zipfile.ZipFile(io.BytesIO(archive)) as zipped:
             entries = zipped.infolist()
-            require(len(entries) == 2 and {e.filename for e in entries} == {name, name + '.sha256'}, 'Unexpected files inside CI artifact')
-            for entry in entries:
-                destination = directory / entry.filename
+            require(len(entries) == 3 and {e.filename for e in entries} == {name, name + '.sha256', 'package-receipt.json'},
+                    'Unexpected files inside package artifact')
+            receipt = json.loads(zipped.read('package-receipt.json'))
+            system, arch = artifact['name'].removeprefix('package-').split('-')
+            require((receipt.get('schema'), receipt.get('commit'), receipt.get('version'),
+                     receipt.get('ci_run_id'), receipt.get('system'), receipt.get('arch'),
+                     receipt.get('package'), receipt.get('tests_passed')) ==
+                    (1, commit, version, ci_run_id, system, arch, name, True), 'Package receipt mismatch')
+            require(receipt.get('build_artifact') == builds[f'build-{system}-{arch}'],
+                    'Package was not produced from the selected CI build artifact')
+            require(receipt.get('sha256') == hashlib.sha256(zipped.read(name)).hexdigest(),
+                    'Package differs from the tested package receipt')
+            for filename in (name, name + '.sha256'):
+                destination = directory / filename
                 require(not destination.is_symlink(), 'Output path is a symbolic link')
-                data = zipped.read(entry)
+                data = zipped.read(filename)
                 if destination.exists():
-                    require(destination.is_file() and destination.read_bytes() == data, 'Existing output differs from CI: ' + entry.filename)
+                    require(destination.is_file() and destination.read_bytes() == data, 'Existing output differs from release tests: ' + filename)
                 else:
                     destination.write_bytes(data)
     return validate_files(list(directory.iterdir()), version)
@@ -196,9 +240,10 @@ def verify_tag(client, tag, commit, allow_missing=False):
 
 
 def verify_release(release, tag, notes, files):
-    require(release['tag_name'] == tag and release['body'] == notes and not release['prerelease'], 'Release metadata mismatch')
+    preview = '-' in tag.removeprefix('v')
+    require(release['tag_name'] == tag and release['body'] == notes and release['prerelease'] == preview, 'Release metadata mismatch')
     assets = release['assets']
-    require(len(assets) == len(files) and {a['name'] for a in assets} == set(files), 'Release attachment list differs from CI')
+    require(len(assets) == len(files) and {a['name'] for a in assets} == set(files), 'Release attachment list differs from tested packages')
     for asset in assets:
         path = files[asset['name']]
         require(asset['state'] == 'uploaded' and asset['size'] == path.stat().st_size
@@ -206,6 +251,7 @@ def verify_release(release, tag, notes, files):
 
 
 def publish(client, commit, tag, notes, files):
+    preview = '-' in tag.removeprefix('v')
     release = find_release(client, tag)
     require(release is None or release['draft'], 'Release is already published; refusing to replace it')
     verify_tag(client, tag, commit, allow_missing=True)
@@ -213,7 +259,7 @@ def publish(client, commit, tag, notes, files):
         require(release['target_commitish'] == commit, 'Existing draft targets a different commit')
         require({a['name'] for a in release['assets']} <= set(files), 'Draft contains unexpected attachments')
     payload = {'tag_name': tag, 'target_commitish': commit, 'name': 'Clash of Rust ' + tag.removeprefix('v'),
-               'body': notes, 'draft': True, 'prerelease': False, 'make_latest': 'false'}
+               'body': notes, 'draft': True, 'prerelease': preview, 'make_latest': 'false'}
     # GitHub enforces contents:write here for both personal and Actions tokens.
     # Installation tokens need not expose the personal-token permissions.push field.
     release = client('/releases' + (f"/{release['id']}" if release else ''), 'PATCH' if release else 'POST', payload)
@@ -234,7 +280,7 @@ def publish(client, commit, tag, notes, files):
     verify_release(draft, tag, notes, files)
     require(client('/branches/main')['commit']['sha'] == commit, 'Main changed while uploading; leaving draft unpublished')
     verify_tag(client, tag, commit, allow_missing=True)
-    client(f"/releases/{release['id']}", 'PATCH', {'draft': False, 'prerelease': False, 'make_latest': 'true'})
+    client(f"/releases/{release['id']}", 'PATCH', {'draft': False, 'prerelease': preview, 'make_latest': 'false' if preview else 'true'})
     published = client('/releases/tags/' + tag)
     require(not published['draft'], 'Release is still a draft')
     verify_release(published, tag, notes, files)
@@ -246,7 +292,9 @@ def publish(client, commit, tag, notes, files):
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--run-id', type=int, help='Successful main CI run; omitted selects current commit CI')
-    parser.add_argument('--check', action='store_true', help='Verify CI and all installers without changing a release')
+    parser.add_argument('--check', action='store_true', help='Verify the complete packaging/tests run without publishing')
+    parser.add_argument('--resolve', action='store_true', help='Verify CI and emit immutable source/run metadata for packaging')
+    parser.add_argument('--package-run-id', type=int, help='Successful packaging run; defaults to the current Actions run')
     parser.add_argument('--proxy', default='')
     parser.add_argument('--tag', help='Optional confirmation of the tested Cargo version tag')
     parser.add_argument('--notes', type=Path, help='Optional local copy; must match committed release notes')
@@ -258,8 +306,18 @@ def main():
     commit = git('rev-parse', 'HEAD')
     run = verified_run(client, commit, args.run_id)
     version, tag, notes = release_metadata(commit, args.tag, args.notes)
-    directory = args.output_dir or ROOT / f"dist/release-{version}-ci-{run['id']}"
-    files = download_ci_files(client, run['id'], version, directory)
+    if args.resolve:
+        build_artifacts(client, run['id'])
+        if os.environ.get('GITHUB_OUTPUT'):
+            with Path(os.environ['GITHUB_OUTPUT']).open('a', encoding='utf-8') as output:
+                output.write(f"commit={commit}\nci_run_id={run['id']}\nversion={version}\n")
+        print('Verified CI source:', commit, 'run:', run['id'], 'version:', version)
+        return
+    package_run_id = args.package_run_id or int(os.environ.get('GITHUB_RUN_ID', '0'))
+    require(package_run_id > 0, 'Specify --package-run-id for the verified package workflow')
+    verified_package_run(client, package_run_id, commit)
+    directory = args.output_dir or ROOT / f"dist/release-{version}-run-{package_run_id}"
+    files = download_package_files(client, package_run_id, run['id'], commit, version, directory)
     if args.asset:
         local = validate_files(args.asset, version)
         require(all(sha256(local[name]) == sha256(path) for name, path in files.items()), 'Local assets differ from selected CI')

@@ -1,0 +1,76 @@
+name: Memory Benchmark
+on:
+  workflow_dispatch:
+    inputs:
+      ref:
+        description: '需要测量的分支、标签或提交 SHA；留空测当前所选分支'
+        required: false
+        type: string
+      profile:
+        description: '构建模式；比较不同结果时保持一致'
+        type: choice
+        options: [release, dev]
+        default: release
+      rows:
+        description: '每项 API 测试的数据量'
+        type: string
+        default: '50000'
+      repetitions:
+        description: '每项 API 测试的独立进程重复次数'
+        type: string
+        default: '3'
+      sample_seconds:
+        description: '每个 GUI 场景的采样秒数'
+        type: string
+        default: '10'
+permissions:
+  contents: read
+jobs:
+  benchmark:
+    name: Linux x64 memory benchmark
+    runs-on: ubuntu-22.04
+    timeout-minutes: 60
+    env:
+      PYTHONDONTWRITEBYTECODE: '1'
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+      - uses: actions/checkout@v6
+        with:
+          ref: ${{ inputs.ref || github.ref }}
+          path: source
+          persist-credentials: false
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: source -> target
+          prefix-key: memory-ubuntu22-${{ inputs.profile }}
+          cache-on-failure: true
+      - uses: actions/setup-python@v6
+        with:
+          python-version: '3.11'
+      - name: Install benchmark dependencies
+        shell: python
+        run: |
+          import subprocess
+          subprocess.run(['sudo', 'apt-get', 'update'], check=True)
+          subprocess.run(['sudo', 'apt-get', 'install', '-y', 'libglib2.0-dev', 'libxkbcommon-dev', 'libwayland-dev', 'libx11-dev', 'libx11-xcb-dev', 'libxkbcommon-x11-0', 'libxcursor1', 'libxrandr2', 'libxi6', 'libxinerama1', 'libegl1', 'gsettings-desktop-schemas', 'dbus', 'xvfb', 'xauth', 'xdotool'], check=True)
+      - name: Benchmark the selected source
+        shell: python
+        env:
+          GH_TOKEN: ${{ github.token }}
+          BUILD_PROFILE: ${{ inputs.profile }}
+          BENCH_ROWS: ${{ inputs.rows }}
+          BENCH_REPETITIONS: ${{ inputs.repetitions }}
+          SAMPLE_SECONDS: ${{ inputs.sample_seconds }}
+        run: |
+          import os, subprocess, sys
+          subprocess.run(['dbus-run-session', '--', 'xvfb-run', '-a', '--server-args=-screen 0 1280x900x24', sys.executable, 'scripts/run-memory-benchmark.py', '--source', 'source', '--profile', os.environ['BUILD_PROFILE'], '--rows', os.environ['BENCH_ROWS'], '--repetitions', os.environ['BENCH_REPETITIONS'], '--seconds', os.environ['SAMPLE_SECONDS'], '--output', 'dist/memory'], check=True)
+      - uses: actions/upload-artifact@v6
+        if: always()
+        with:
+          name: memory-results-${{ github.run_id }}
+          path: dist/memory
+          if-no-files-found: warn
+          retention-days: 30

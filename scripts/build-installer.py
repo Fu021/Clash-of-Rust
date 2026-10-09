@@ -123,6 +123,7 @@ def main():
     parser.add_argument('--version', default=package_version())
     parser.add_argument('--system', choices=('windows','linux'), default='windows' if os.name == 'nt' else 'linux')
     parser.add_argument('--arch', choices=('x64','arm64'), default=host_arch())
+    parser.add_argument('--prebuilt', type=Path, help='Verified CI build directory; package without Cargo or downloads')
     args = parser.parse_args()
     version = validate_version(args.version)
     host = 'windows' if os.name == 'nt' else 'linux' if sys.platform.startswith('linux') else 'unsupported'
@@ -130,25 +131,15 @@ def main():
         raise ValueError('Packaging requires a native build on the selected system/architecture')
     if args.system == 'linux':
         require_deb_tools()
-    resources = bundle_directory(args.system,args.arch)/'resources'
-    if not args.skip_prepare:
-        resources = prepare(args.system,args.arch,args.proxy)
-    copy_static(resources.parent)
-    env = dict(os.environ)
-    if version == package_version():
-        env.pop('CLASH_OF_RUST_BUILD_VERSION',None)
-    else:
-        env['CLASH_OF_RUST_BUILD_VERSION'] = version
-    run(['cargo','build','--release','--locked'],env=env)
-    metadata = json.loads(subprocess.check_output(['cargo','metadata','--format-version','1','--no-deps','--offline'],cwd=ROOT))
-    binary = Path(metadata['target_directory'])/'release'/('clash-of-rust.exe' if args.system == 'windows' else 'clash-of-rust')
+    resources, binary = build_inputs(args, version)
     validate_binary_arch(binary,args.system,args.arch)
     validate_binary_arch(resources/('mihomo.exe' if args.system == 'windows' else 'mihomo'),args.system,args.arch)
     if args.system == 'windows' and file_version(binary) != version:
         raise ValueError('Application PE version differs from package version')
     # Maintain the developer bundle for installer tests; installer inputs always
     # come from a fresh whitelist stage, so old MSYS/Bash files cannot leak in.
-    shutil.copy2(binary, resources.parent/binary.name)
+    if binary.resolve() != (resources.parent/binary.name).resolve():
+        shutil.copy2(binary, resources.parent/binary.name)
     (ROOT/'dist').mkdir(exist_ok=True)
     artifacts = []
     with staging_directory('release') as stage:
@@ -169,6 +160,29 @@ def main():
         print('Package ready:',artifact)
     if args.system == 'windows':
         run([sys.executable, ROOT/'scripts/verify-icon-resources.py',binary,artifact])
+
+
+def build_inputs(args, version):
+    if args.prebuilt:
+        from workflow_artifacts import commit, verify_build
+        verify_build(args.prebuilt, args.system, args.arch, commit())
+        if version != package_version():
+            raise ValueError('Prebuilt application version cannot be overridden')
+        payload = args.prebuilt/'payload'
+        return payload/'resources', payload/('clash-of-rust.exe' if args.system == 'windows' else 'clash-of-rust')
+    resources = bundle_directory(args.system,args.arch)/'resources'
+    if not args.skip_prepare:
+        resources = prepare(args.system,args.arch,args.proxy)
+    copy_static(resources.parent)
+    env = dict(os.environ)
+    if version == package_version():
+        env.pop('CLASH_OF_RUST_BUILD_VERSION',None)
+    else:
+        env['CLASH_OF_RUST_BUILD_VERSION'] = version
+    run(['cargo','build','--release','--locked'],env=env)
+    metadata = json.loads(subprocess.check_output(['cargo','metadata','--format-version','1','--no-deps','--offline'],cwd=ROOT))
+    binary = Path(metadata['target_directory'])/'release'/('clash-of-rust.exe' if args.system == 'windows' else 'clash-of-rust')
+    return resources, binary
 
 
 if __name__ == '__main__':

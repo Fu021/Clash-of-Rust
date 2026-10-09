@@ -55,7 +55,7 @@ RSS 是进程当前驻留的物理内存，多个进程相加会重复计算共�
 | 50,000 条规则 | 3.33 MiB | 6.44–6.67 MiB | 6.11 MiB |
 | 50,000 条连接 | 12.00 MiB | 23.65–23.79 MiB | 23.30 MiB |
 
-[测试程序](examples/memory_benchmark.rs)（[进程采样实现](examples/memory_benchmark/process_memory.rs)）、[解析基准原始结果](docs/benchmarks/memory-0.4.11-ubuntu24.04.txt)。
+[统一测试程序](examples/memory_benchmark.rs)（API 解析、连续刷新与 GUI/内核进程采样）、[解析基准原始结果](docs/benchmarks/memory-0.4.11-ubuntu24.04.txt)。
 
 ## 编译与打包
 
@@ -85,7 +85,7 @@ cargo test --locked
 python scripts/test-build-tools.py
 ```
 
-正式发布需等待对应提交的 CI 全部通过，再通过 GitHub **Actions → Publish Release → Run workflow** 发布 Release。
+CI 只编译、测试并保存原生程序；手动 Publish Release 复用这些程序完成打包和安装测试后发布，支持只测试不发布。手动 Memory Benchmark 可测指定提交的内存。操作与产物说明见 [工作流文档](docs/development/workflows.md)。
 
 ## License
 

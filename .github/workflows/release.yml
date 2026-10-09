@@ -3,25 +3,30 @@ on:
   workflow_dispatch:
     inputs:
       ci_run_id:
-        description: 'CI 运行编号；留空则使用当前 main 提交的 CI'
+        description: '成功的 main CI 运行编号；留空使用当前提交的 CI'
         required: false
         type: string
       check_only:
-        description: '只校验 CI 和安装包，不发布'
+        description: '完成打包和全部安装测试，但不发布 Release'
         required: false
         default: false
         type: boolean
 permissions:
   actions: read
-  contents: write
+  contents: read
 concurrency:
   group: publish-release
   cancel-in-progress: false
 jobs:
-  publish:
+  resolve:
+    name: Resolve verified CI
     if: github.ref == 'refs/heads/main'
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    timeout-minutes: 10
+    outputs:
+      commit: ${{ steps.source.outputs.commit }}
+      ci_run_id: ${{ steps.source.outputs.ci_run_id }}
+      version: ${{ steps.source.outputs.version }}
     steps:
       - uses: actions/checkout@v6
         with:
@@ -30,18 +35,146 @@ jobs:
       - uses: actions/setup-python@v6
         with:
           python-version: '3.11'
-      - name: Verify CI installers and publish
+      - name: Verify CI and freeze source
+        id: source
         shell: python
         env:
           GH_TOKEN: ${{ github.token }}
           CI_RUN_ID: ${{ inputs.ci_run_id }}
+          PYTHONDONTWRITEBYTECODE: '1'
+        run: |
+          import os, subprocess, sys
+          command = [sys.executable, 'scripts/publish-release.py', '--resolve']
+          if os.environ.get('CI_RUN_ID'):
+              command += ['--run-id', str(int(os.environ['CI_RUN_ID']))]
+          subprocess.run(command, check=True)
+  package:
+    name: package-${{ matrix.system }}-${{ matrix.arch }}
+    needs: resolve
+    timeout-minutes: 45
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: windows-latest
+            system: windows
+            arch: x64
+            python: '3.11'
+          - os: windows-11-arm
+            system: windows
+            arch: arm64
+            python: '3.13'
+          - os: ubuntu-22.04
+            system: linux
+            arch: x64
+            python: '3.11'
+          - os: ubuntu-22.04-arm
+            system: linux
+            arch: arm64
+            python: '3.11'
+    runs-on: ${{ matrix.os }}
+    env:
+      PYTHONDONTWRITEBYTECODE: '1'
+    defaults:
+      run:
+        shell: python
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          ref: ${{ needs.resolve.outputs.commit }}
+          persist-credentials: false
+      - uses: actions/setup-python@v6
+        with:
+          python-version: ${{ matrix.python }}
+          architecture: ${{ matrix.arch }}
+      - name: Install Linux packaging/test dependencies
+        if: runner.os == 'Linux'
+        run: |
+          import subprocess
+          subprocess.run(['sudo', 'apt-get', 'update'], check=True)
+          subprocess.run(['sudo', 'apt-get', 'install', '-y', 'dpkg-dev', 'dbus', 'xvfb', 'xauth', 'iproute2', 'util-linux'], check=True)
+      - name: Fetch verified native build
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          import subprocess, sys
+          subprocess.run([sys.executable, 'scripts/workflow_artifacts.py', 'fetch', '--system', '${{ matrix.system }}', '--arch', '${{ matrix.arch }}', '--run-id', '${{ needs.resolve.outputs.ci_run_id }}', '--output', 'ci-build'], check=True)
+      - name: Package and test installed programs
+        run: |
+          import subprocess, sys
+          subprocess.run([sys.executable, 'scripts/test-release-package.py', '--system', '${{ matrix.system }}', '--arch', '${{ matrix.arch }}', '--build', 'ci-build', '--ci-run-id', '${{ needs.resolve.outputs.ci_run_id }}'], check=True)
+      - uses: actions/upload-artifact@v6
+        if: runner.os == 'Linux' && matrix.arch == 'x64'
+        with:
+          name: linux-tun-test-x64
+          path: dist/linux-tun-test
+          if-no-files-found: error
+          retention-days: 14
+      - uses: actions/upload-artifact@v6
+        with:
+          name: package-${{ matrix.system }}-${{ matrix.arch }}
+          path: |
+            dist/*-setup.exe
+            dist/*.deb
+            dist/*.sha256
+            dist/package-receipt.json
+          if-no-files-found: error
+          retention-days: 14
+  ubuntu_latest:
+    name: Ubuntu latest-x64 TUN and GUI
+    needs: [resolve, package]
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          ref: ${{ needs.resolve.outputs.commit }}
+          persist-credentials: false
+      - uses: actions/download-artifact@v7
+        with:
+          name: package-linux-x64
+          path: dist
+      - uses: actions/download-artifact@v7
+        with:
+          name: linux-tun-test-x64
+          path: target
+      - name: Verify Ubuntu 22.04 package on Ubuntu latest
+        shell: python
+        env:
+          PYTHONDONTWRITEBYTECODE: '1'
+        run: |
+          import subprocess, sys, os
+          from pathlib import Path
+          sys.path.insert(0, 'scripts')
+          from test_release_compat import run_compatibility
+          run_compatibility()
+  publish:
+    name: Publish verified release
+    needs: [resolve, package, ubuntu_latest]
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    permissions:
+      actions: read
+      contents: write
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          ref: ${{ needs.resolve.outputs.commit }}
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: actions/setup-python@v6
+        with:
+          python-version: '3.11'
+      - name: Verify packages and publish or finish test-only run
+        shell: python
+        env:
+          GH_TOKEN: ${{ github.token }}
+          CI_RUN_ID: ${{ needs.resolve.outputs.ci_run_id }}
           CHECK_ONLY: ${{ inputs.check_only }}
           PYTHONDONTWRITEBYTECODE: '1'
         run: |
           import os, subprocess, sys
-          command = [sys.executable, 'scripts/publish-release.py']
-          if os.environ.get('CI_RUN_ID'):
-              command += ['--run-id', str(int(os.environ['CI_RUN_ID']))]
-          if os.environ.get('CHECK_ONLY') == 'true':
+          command = [sys.executable, 'scripts/publish-release.py', '--run-id', os.environ['CI_RUN_ID'], '--package-run-id', os.environ['GITHUB_RUN_ID']]
+          if os.environ['CHECK_ONLY'] == 'true':
               command.append('--check')
           subprocess.run(command, check=True)

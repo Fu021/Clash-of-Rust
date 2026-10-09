@@ -68,9 +68,49 @@ def expect(executable,args,code,timeout=60):
         raise RuntimeError(f'{executable.name}: expected exit {code}, got {actual}')
 
 
+def production_package(package, binary, root):
+    # Production registration/shortcuts belong only on a disposable hosted VM;
+    # the detailed failure fixtures below retain their isolated registration.
+    if os.environ.get('GITHUB_ACTIONS') != 'true':
+        raise RuntimeError('Production package tests require a disposable Actions runner')
+    key = r'Software\Microsoft\Windows\CurrentVersion\Uninstall\ClashOfRust'
+    for hive in (winreg.HKEY_LOCAL_MACHINE, winreg.HKEY_CURRENT_USER):
+        try:
+            with winreg.OpenKey(hive, key, 0, winreg.KEY_READ | winreg.KEY_WOW64_64KEY):
+                raise RuntimeError('Existing production installation; refusing to replace it')
+        except FileNotFoundError:
+            pass
+    installed = root/'production-installed'
+    expect(package, ['/S', f'/D={installed}'], 0)
+    try:
+        with winreg.OpenKey(winreg.HKEY_LOCAL_MACHINE, key, 0, winreg.KEY_READ | winreg.KEY_WOW64_64KEY) as registration:
+            assert winreg.QueryValueEx(registration, 'DisplayVersion')[0] == file_version(binary)
+        assert sha256(installed/'clash-of-rust.exe') == sha256(binary)
+        validate_resources(installed/'resources', 'windows')
+        user_file = installed/'unrelated-user-file.txt'
+        user_file.write_text('Preserve this unrelated file', encoding='utf-8')
+        expect(package, ['/S', f'/D={installed}'], 2)
+        expect(package, ['/S', '/UPDATE', f'/D={installed}'], 0)
+        assert sha256(installed/'clash-of-rust.exe') == sha256(binary)
+        assert user_file.is_file()
+    finally:
+        uninstaller = installed/'uninstall.exe'
+        if uninstaller.is_file():
+            expect(uninstaller, ['/S', f'_?={installed}'], 0)
+    assert not (installed/'clash-of-rust.exe').exists()
+    assert user_file.is_file()
+    try:
+        with winreg.OpenKey(winreg.HKEY_LOCAL_MACHINE, key, 0, winreg.KEY_READ | winreg.KEY_WOW64_64KEY):
+            raise AssertionError('Production registration survived uninstall')
+    except FileNotFoundError:
+        pass
+    print('PASS: final production package installation, update and uninstall')
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--old-executable',type=Path,help='Optional real lower-version GUI executable for an upgrade fixture')
+    parser.add_argument('--package', type=Path, help='Test the final production installer on a disposable Actions VM')
     args = parser.parse_args()
     if os.name != 'nt':
         raise RuntimeError('Installer smoke tests require Windows')
@@ -82,6 +122,8 @@ def main():
     version = file_version(binary)
     root = ROOT/'dist'/('installer-test-'+uuid.uuid4().hex)
     root.mkdir(parents=True)
+    if args.package:
+        production_package(args.package.resolve(strict=True), binary, root)
     installed, setup = root/'installed', root/'smoke-setup.exe'
     compiler = nsis()
     with staging_directory('installer-test') as stage:
