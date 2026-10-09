@@ -11,6 +11,7 @@ use std::{
 
 pub(crate) const CORE: &str = "/opt/clash-of-rust/resources/mihomo";
 pub(crate) const LAUNCHER: &str = "/opt/clash-of-rust/clash-tun-launcher";
+pub(crate) const DNS_HELPER: &str = "/opt/clash-of-rust/libexec/resolvectl";
 pub(crate) const NETWORK_CAPABILITIES: u64 = (1 << 12) | (1 << 13);
 
 pub(crate) fn trusted_metadata(metadata: &std::fs::Metadata, directory: bool) -> Result<()> {
@@ -43,7 +44,7 @@ pub(crate) fn open_at(parent: &File, name: &CStr, directory: bool) -> Result<Fil
     Ok(file)
 }
 
-pub(crate) fn installed_resources() -> Result<File> {
+fn installed_app() -> Result<File> {
     let root = File::open("/")?;
     trusted_metadata(&root.metadata()?, true)?;
     let opt = open_at(&root, c"opt", true)?;
@@ -51,5 +52,23 @@ pub(crate) fn installed_resources() -> Result<File> {
     // Validate the fixed executable as well as the target, without following links.
     let _executable = open_at(&app, c"clash-of-rust", false)?;
     let _launcher = open_at(&app, c"clash-tun-launcher", false)?;
+    Ok(app)
+}
+
+pub(crate) fn installed_dns_helper() -> Result<File> {
+    let app = installed_app()?;
+    let helpers = open_at(&app, c"libexec", true)?;
+    let name = std::ffi::CString::new(
+        std::path::Path::new(DNS_HELPER)
+            .file_name()
+            .unwrap()
+            .as_encoded_bytes(),
+    )?;
+    open_at(&helpers, &name, false)
+}
+
+pub(crate) fn installed_resources() -> Result<File> {
+    let app = installed_app()?;
+    let _dns = installed_dns_helper()?;
     open_at(&app, c"resources", true)
 }

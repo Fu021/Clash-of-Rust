@@ -36,7 +36,7 @@ def isolated_resolved():
     with tempfile.TemporaryDirectory(prefix='clash-tun-dns-test-') as folder:
         config = Path(folder)/'dbus.conf'
         # No service activation and no PolicyKit authority or authentication
-        # agent: DNS writes can succeed only via inherited CAP_NET_ADMIN.
+        # agent: DNS writes must use the authorized native DNS bridge.
         config.write_text('<busconfig><type>system</type>'
                           '<listen>unix:path=/run/dbus/system_bus_socket</listen>'
                           '<policy context="default"><allow user="*"/><allow own="*"/>'
@@ -119,6 +119,7 @@ def main():
     executable = '/opt/clash-of-rust/clash-of-rust'
     core = '/opt/clash-of-rust/resources/mihomo'
     launcher = '/opt/clash-of-rust/clash-tun-launcher'
+    dns_helper = '/opt/clash-of-rust/libexec/resolvectl'
     def attribute(path):
         try:
             return os.getxattr(path, 'security.capability')
@@ -127,6 +128,7 @@ def main():
                 raise
             return None
     original = {path: attribute(path) for path in (core, launcher)}
+    original_dns_mode = os.stat(dns_helper).st_mode & 0o7777
     try:
         invalid = subprocess.run([executable, '--authorize-tun', 'unexpected'], capture_output=True)
         assert invalid.returncode == 1 and '不接受其他参数' in invalid.stderr.decode()
@@ -140,12 +142,20 @@ def main():
         assert attribute(core) is None
         assert attribute(launcher) == expected
         assert attribute(executable) is None, 'The GUI must never receive network capabilities'
+        assert os.stat(dns_helper).st_mode & 0o7777 == 0o4755
+        # Enabling the bridge never grants arbitrary processes DNS authority.
+        for arguments in (['dns', 'uplink', '198.18.0.2'], ['flush-caches', 'uplink'],
+                          ['dns', '--help', '198.18.0.2']):
+            denied = subprocess.run([dns_helper, *arguments], capture_output=True,
+                                    preexec_fn=ordinary_user)
+            assert denied.returncode == 1, (arguments, denied.stderr)
         run(['unshare', '--net', '--mount', sys.executable, Path(__file__).resolve(),
              '--inside-namespace', '--test-binary', binary, '--uid', args.uid], timeout=200)
         print(json.dumps({'native_authorization': True, 'ordinary_user': args.uid,
                           'tun_switch_restart_cleanup': True, 'network_namespace': True,
                           'resolved_without_polkit': True, 'legacy_grant_migration': True}))
     finally:
+        os.chmod(dns_helper, original_dns_mode)
         for path, value in original.items():
             if value is None:
                 if attribute(path) is not None:

@@ -22,6 +22,27 @@ _spec.loader.exec_module(release)
 
 
 class BuildTests(unittest.TestCase):
+    def test_linux_helpers_are_distinct_inactive_native_copies(self):
+        spec = importlib.util.spec_from_file_location('build_installer',build.ROOT/'scripts/build-installer.py')
+        installer = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(installer)
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            source = root/'clash-tun-launcher'
+            header = bytearray(64)
+            header[:6] = b'\x7fELF\x02\x01'
+            struct.pack_into('<H',header,18,62)
+            source.write_bytes(header)
+            stage = root/'stage'
+            stage.mkdir()
+            installer.stage_linux_helpers(root/'clash-of-rust',stage,'x64')
+            for path in (stage/'clash-tun-launcher',stage/'libexec/resolvectl'):
+                self.assertEqual(path.read_bytes(),source.read_bytes())
+                self.assertFalse(path.samefile(source))
+                if __import__('os').name != 'nt':
+                    self.assertEqual(path.stat().st_mode & 0o7777,0o755)
+            self.assertFalse((stage/'clash-tun-launcher').samefile(stage/'libexec/resolvectl'))
+
     def test_arm64_bundles_are_separate_and_native_architecture_is_detected(self):
         self.assertEqual(build.bundle_directory('windows','x64'),build.ROOT/'bundle')
         self.assertEqual(build.bundle_directory('windows','arm64'),build.ROOT/'bundle/windows-arm64')

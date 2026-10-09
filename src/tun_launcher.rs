@@ -1,7 +1,11 @@
-//! Linux-only, fixed-target launcher. It never becomes root or runs the GUI.
+//! Linux TUN launcher and fixed-operation DNS bridge. The GUI stays unprivileged.
 #[cfg(target_os = "linux")]
 #[path = "platform/linux_tun/trusted.rs"]
 mod trusted;
+
+#[cfg(target_os = "linux")]
+#[path = "platform/linux_tun/dns.rs"]
+mod dns;
 
 #[cfg(target_os = "linux")]
 fn launch() -> anyhow::Result<()> {
@@ -91,8 +95,7 @@ fn launch() -> anyhow::Result<()> {
                 )
             } != 0
             {
-                return Err(std::io::Error::last_os_error())
-                    .context("无法继承 TUN 与 DNS 网络权限");
+                return Err(std::io::Error::last_os_error()).context("无法继承 TUN 网络权限");
             }
         }
     }
@@ -101,14 +104,24 @@ fn launch() -> anyhow::Result<()> {
     let error = Command::new(CORE)
         .args(std::env::args_os().skip(1))
         .env_clear()
-        .env("PATH", "/usr/sbin:/usr/bin:/sbin:/bin")
+        .env(
+            "PATH",
+            "/opt/clash-of-rust/libexec:/usr/sbin:/usr/bin:/sbin:/bin",
+        )
         .exec();
     Err(error).context("无法启动已安装的 mihomo 内核")
 }
 
 #[cfg(target_os = "linux")]
 fn main() {
-    if let Err(error) = launch() {
+    let result = if std::env::current_exe().ok().as_deref()
+        == Some(std::path::Path::new(trusted::DNS_HELPER))
+    {
+        dns::run()
+    } else {
+        launch()
+    };
+    if let Err(error) = result {
         eprintln!("{error:#}");
         std::process::exit(1);
     }

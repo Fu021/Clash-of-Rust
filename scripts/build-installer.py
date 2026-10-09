@@ -23,13 +23,25 @@ GUI_DEPENDENCIES = (
     'libxkbcommon0', 'libxkbcommon-x11-0', 'libx11-6', 'libx11-xcb1',
     'libxcb1', 'libxcb-render0', 'libxcb-shm0', 'libxrandr2', 'libxi6',
     'libxcursor1', 'libxinerama1', 'libwayland-client0', 'libwayland-cursor0',
-    'libfontconfig1', 'libfreetype6', 'gsettings-desktop-schemas',
+    'libfontconfig1', 'libfreetype6', 'gsettings-desktop-schemas', 'iproute2',
 )
 
 
 def require_deb_tools():
     if os.name == 'nt' or any(shutil.which(tool) is None for tool in ('dpkg-deb', 'dpkg-shlibdeps')):
         raise RuntimeError('Debian packaging requires native Linux and dpkg-dev')
+
+
+def stage_linux_helpers(binary, stage, arch):
+    launcher = binary.with_name('clash-tun-launcher')
+    validate_binary_arch(launcher,'linux',arch)
+    helpers = stage/'libexec'
+    helpers.mkdir()
+    # Reuse the native binary, selected by its fixed installed path. Copy only
+    # bytes and activate neither capabilities nor setuid during packaging.
+    for destination in (stage/launcher.name, helpers/'resolvectl'):
+        shutil.copyfile(launcher,destination)
+        destination.chmod(0o755)
 
 
 def build_deb(payload, version, arch):
@@ -47,7 +59,7 @@ def _build_deb(payload, version, arch, work):
     shutil.copytree(payload, application)
     # Normalize permissions even when source files reside on a Windows mount.
     for path in root.rglob('*'):
-        path.chmod(0o755 if path.is_dir() or path in (application/'clash-of-rust', application/'clash-tun-launcher', application/'resources/mihomo') else 0o644)
+        path.chmod(0o755 if path.is_dir() or path in (application/'clash-of-rust', application/'clash-tun-launcher', application/'libexec/resolvectl', application/'resources/mihomo') else 0o644)
     binary_directory = root/'usr/bin'
     binary_directory.mkdir(parents=True)
     (binary_directory/'clash-of-rust').symlink_to('/opt/clash-of-rust/clash-of-rust')
@@ -143,9 +155,7 @@ def main():
         stage_resources(resources,stage,args.system)
         shutil.copy2(binary,stage/binary.name)
         if args.system == 'linux':
-            launcher = binary.with_name('clash-tun-launcher')
-            validate_binary_arch(launcher,args.system,args.arch)
-            shutil.copy2(launcher,stage/launcher.name)
+            stage_linux_helpers(binary,stage,args.arch)
         if args.system == 'windows':
             artifact = ROOT/f'dist/Clash-of-Rust-{version}-windows-{args.arch}-setup.exe'
             run([nsis(args.proxy),'/V2','/INPUTCHARSET','UTF8',f'/DAPP_VERSION={version}',f'/DAPP_NUMERIC_VERSION={numeric_version(version)}',f'/DAPP_ARCH={args.arch}',f'/DPAYLOAD={stage}',f'/DOUTPUT={artifact}',ROOT/'installer/clash-of-rust.nsi'])

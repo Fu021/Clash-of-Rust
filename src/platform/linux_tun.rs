@@ -11,6 +11,7 @@ use std::{
 };
 
 mod trusted;
+use std::os::unix::fs::MetadataExt;
 use trusted::{CORE, LAUNCHER, NETWORK_CAPABILITIES, installed_resources, open_at};
 const EXECUTABLE: &str = "/opt/clash-of-rust/clash-of-rust";
 const HELPER_ARGUMENT: &str = "--authorize-tun";
@@ -26,7 +27,8 @@ fn status_number(status: &str, key: &str, radix: u32) -> Result<u64> {
 pub fn core_has_tun_permissions(pid: u32) -> Result<bool> {
     let status = std::fs::read_to_string(format!("/proc/{pid}/status"))
         .context("无法读取 mihomo 进程权限")?;
-    status_has_tun_permissions(&status)
+    Ok(status_has_tun_permissions(&status)?
+        && trusted::installed_dns_helper()?.metadata()?.mode() & 0o7777 == 0o4755)
 }
 
 fn status_has_tun_permissions(status: &str) -> Result<bool> {
@@ -130,6 +132,12 @@ fn grant_installed_core() -> Result<()> {
     if result != 0 {
         return Err(std::io::Error::last_os_error())
             .context("无法设置内核启动器网络权限，请检查文件系统是否支持 capabilities");
+    }
+    // Classic D-Bus does not authenticate an ordinary user's capabilities.
+    // Enable the fixed-operation DNS helper in the same one-time grant.
+    let dns = trusted::installed_dns_helper()?;
+    if unsafe { libc::fchmod(dns.as_raw_fd(), 0o4755) } != 0 {
+        return Err(std::io::Error::last_os_error()).context("无法启用专用 TUN DNS 助手");
     }
     Ok(())
 }
