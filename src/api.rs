@@ -109,80 +109,313 @@ pub struct Api {
     secret: String,
 }
 
+// The pool belongs to one deserialized document, never to the process lifetime.
+// Reader-backed serde can borrow its scratch string here, avoiding temporary
+// allocations when a name/type already exists in this snapshot.
+thread_local! {
+    static TEXT_POOL: std::cell::RefCell<Option<std::collections::HashSet<std::sync::Arc<str>>>> = const { std::cell::RefCell::new(None) };
+}
+struct TextScope(Option<std::collections::HashSet<std::sync::Arc<str>>>);
+impl TextScope {
+    fn new() -> Self {
+        Self(TEXT_POOL.with(|pool| pool.replace(Some(Default::default()))))
+    }
+}
+impl Drop for TextScope {
+    fn drop(&mut self) {
+        TEXT_POOL.with(|pool| {
+            pool.replace(self.0.take());
+        });
+    }
+}
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub struct Text(std::sync::Arc<str>);
+impl Text {
+    pub fn as_str(&self) -> &str {
+        &self.0
+    }
+}
+impl From<&str> for Text {
+    fn from(value: &str) -> Self {
+        TEXT_POOL.with(|pool| {
+            let mut pool = pool.borrow_mut();
+            if let Some(pool) = pool.as_mut() {
+                if let Some(found) = pool.get(value) {
+                    return Self(found.clone());
+                }
+                let text: std::sync::Arc<str> = value.into();
+                pool.insert(text.clone());
+                Self(text)
+            } else {
+                Self(value.into())
+            }
+        })
+    }
+}
+impl From<String> for Text {
+    fn from(value: String) -> Self {
+        Self::from(value.as_str())
+    }
+}
+impl Default for Text {
+    fn default() -> Self {
+        Self::from("")
+    }
+}
+impl std::ops::Deref for Text {
+    type Target = str;
+    fn deref(&self) -> &str {
+        self.as_str()
+    }
+}
+impl AsRef<str> for Text {
+    fn as_ref(&self) -> &str {
+        self.as_str()
+    }
+}
+impl std::borrow::Borrow<str> for Text {
+    fn borrow(&self) -> &str {
+        self.as_str()
+    }
+}
+impl std::fmt::Display for Text {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        self.as_str().fmt(f)
+    }
+}
+impl PartialEq<&str> for Text {
+    fn eq(&self, other: &&str) -> bool {
+        self.as_str() == *other
+    }
+}
+impl Serialize for Text {
+    fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        serializer.serialize_str(self)
+    }
+}
+impl<'de> Deserialize<'de> for Text {
+    fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        struct Visitor;
+        impl serde::de::Visitor<'_> for Visitor {
+            type Value = Text;
+            fn expecting(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+                f.write_str("a string")
+            }
+            fn visit_str<E: serde::de::Error>(self, text: &str) -> Result<Text, E> {
+                Ok(Text::from(text))
+            }
+            fn visit_string<E: serde::de::Error>(self, text: String) -> Result<Text, E> {
+                Ok(Text::from(text))
+            }
+        }
+        deserializer.deserialize_str(Visitor)
+    }
+}
+fn compact_vec<'de, D, T>(deserializer: D) -> Result<Vec<T>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+    T: Deserialize<'de>,
+{
+    let mut values = null_default::<D, Vec<T>>(deserializer)?;
+    values.shrink_to_fit();
+    Ok(values)
+}
+fn last_delay<'de, D: serde::Deserializer<'de>>(deserializer: D) -> Result<Option<u32>, D::Error> {
+    struct Visitor;
+    impl<'de> serde::de::Visitor<'de> for Visitor {
+        type Value = Option<u32>;
+        fn expecting(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+            f.write_str("a delay array or null")
+        }
+        fn visit_unit<E: serde::de::Error>(self) -> Result<Self::Value, E> {
+            Ok(None)
+        }
+        fn visit_seq<A: serde::de::SeqAccess<'de>>(
+            self,
+            mut seq: A,
+        ) -> Result<Self::Value, A::Error> {
+            let mut last = None;
+            while let Some(delay) = seq.next_element::<Delay>()? {
+                last = Some(delay.delay);
+            }
+            Ok(last)
+        }
+    }
+    deserializer.deserialize_any(Visitor)
+}
+fn serialize_delay<S: serde::Serializer>(
+    delay: &Option<u32>,
+    serializer: S,
+) -> Result<S::Ok, S::Error> {
+    use serde::ser::SerializeSeq;
+    let mut seq = serializer.serialize_seq(Some(usize::from(delay.is_some())))?;
+    if let Some(delay) = delay {
+        seq.serialize_element(&Delay { delay: *delay })?;
+    }
+    seq.end()
+}
 #[derive(Debug, Clone, Default, Deserialize, Serialize)]
 pub struct Proxy {
-    #[serde(default)]
-    pub name: String,
     #[serde(rename = "type", default)]
-    pub kind: String,
+    pub kind: Text,
     #[serde(default)]
-    pub now: String,
-    #[serde(default, deserialize_with = "null_default")]
-    pub all: Vec<String>,
-    #[serde(default, deserialize_with = "null_default")]
-    pub history: Vec<Delay>,
+    pub now: Text,
+    #[serde(default, deserialize_with = "compact_vec")]
+    pub all: Vec<Text>,
+    #[serde(
+        rename = "history",
+        default,
+        deserialize_with = "last_delay",
+        serialize_with = "serialize_delay"
+    )]
+    pub delay: Option<u32>,
 }
 #[derive(Debug, Clone, Default, Deserialize, Serialize)]
 pub struct Delay {
     #[serde(default)]
     pub delay: u32,
 }
-#[derive(Debug, Clone, Default, Deserialize)]
+#[derive(Debug, Clone, Default)]
 pub struct Proxies {
-    #[serde(default, deserialize_with = "null_default")]
-    pub proxies: BTreeMap<String, Proxy>,
+    pub proxies: BTreeMap<Text, Proxy>,
+}
+impl<'de> Deserialize<'de> for Proxies {
+    fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        let _scope = TextScope::new();
+        #[derive(Deserialize)]
+        struct Document {
+            #[serde(default, deserialize_with = "null_default")]
+            proxies: BTreeMap<Text, Proxy>,
+        }
+        Ok(Self {
+            proxies: Document::deserialize(deserializer)?.proxies,
+        })
+    }
 }
 #[derive(Debug, Clone, Default, Deserialize)]
 pub struct Rule {
     #[serde(rename = "type", default)]
-    pub kind: String,
+    pub kind: Text,
     #[serde(default)]
-    pub payload: String,
+    pub payload: Box<str>,
     #[serde(default)]
-    pub proxy: String,
+    pub proxy: Text,
 }
-#[derive(Debug, Clone, Default, Deserialize)]
+#[derive(Debug, Clone, Default)]
 pub struct Rules {
-    #[serde(default, deserialize_with = "null_default")]
     pub rules: Vec<Rule>,
+}
+impl<'de> Deserialize<'de> for Rules {
+    fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        let _scope = TextScope::new();
+        #[derive(Deserialize)]
+        struct Document {
+            #[serde(default, deserialize_with = "compact_vec")]
+            rules: Vec<Rule>,
+        }
+        Ok(Self {
+            rules: Document::deserialize(deserializer)?.rules,
+        })
+    }
+}
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Network {
+    Tcp,
+    Udp,
+    Other(Box<str>),
+}
+impl Default for Network {
+    fn default() -> Self {
+        Self::Other(Box::default())
+    }
+}
+impl Network {
+    pub fn as_str(&self) -> &str {
+        match self {
+            Self::Tcp => "tcp",
+            Self::Udp => "udp",
+            Self::Other(value) => value,
+        }
+    }
+}
+impl std::fmt::Display for Network {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        self.as_str().fmt(f)
+    }
+}
+impl<'de> Deserialize<'de> for Network {
+    fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        struct Visitor;
+        impl serde::de::Visitor<'_> for Visitor {
+            type Value = Network;
+            fn expecting(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+                f.write_str("a network name")
+            }
+            fn visit_str<E: serde::de::Error>(self, value: &str) -> Result<Network, E> {
+                Ok(match value {
+                    "tcp" => Network::Tcp,
+                    "udp" => Network::Udp,
+                    _ => Network::Other(value.into()),
+                })
+            }
+        }
+        deserializer.deserialize_str(Visitor)
+    }
 }
 #[derive(Debug, Clone, Default, Deserialize)]
 pub struct Metadata {
     #[serde(default)]
-    pub host: String,
+    pub host: Box<str>,
     #[serde(rename = "destinationIP", default)]
-    pub destination_ip: String,
+    pub destination_ip: Box<str>,
     #[serde(rename = "destinationPort", default)]
-    pub destination_port: String,
+    pub destination_port: Text,
     #[serde(default)]
-    pub network: String,
+    pub network: Network,
     #[serde(default)]
-    pub process: String,
+    pub process: Text,
 }
 #[derive(Debug, Clone, Default, Deserialize)]
 pub struct Connection {
-    pub id: String,
+    pub id: Box<str>,
     #[serde(default)]
     pub metadata: Metadata,
     #[serde(default)]
     pub upload: u64,
     #[serde(default)]
     pub download: u64,
-    #[serde(default, deserialize_with = "null_default")]
-    pub chains: Vec<String>,
+    #[serde(default, deserialize_with = "compact_vec")]
+    pub chains: Vec<Text>,
     #[serde(default)]
-    pub rule: String,
+    pub rule: Text,
     #[serde(default)]
-    pub start: String,
+    pub start: Box<str>,
 }
-#[derive(Debug, Clone, Default, Deserialize)]
+#[derive(Debug, Clone, Default)]
 pub struct Connections {
-    #[serde(rename = "uploadTotal", default)]
     pub upload_total: u64,
-    #[serde(rename = "downloadTotal", default)]
     pub download_total: u64,
-    #[serde(default, deserialize_with = "null_default")]
     pub connections: Vec<Connection>,
+}
+impl<'de> Deserialize<'de> for Connections {
+    fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        let _scope = TextScope::new();
+        #[derive(Deserialize)]
+        struct Document {
+            #[serde(rename = "uploadTotal", default)]
+            upload_total: u64,
+            #[serde(rename = "downloadTotal", default)]
+            download_total: u64,
+            #[serde(default, deserialize_with = "compact_vec")]
+            connections: Vec<Connection>,
+        }
+        let value = Document::deserialize(deserializer)?;
+        Ok(Self {
+            upload_total: value.upload_total,
+            download_total: value.download_total,
+            connections: value.connections,
+        })
+    }
 }
 
 /// Home needs counts and traffic totals, without allocating each connection's metadata.
@@ -318,7 +551,7 @@ impl Api {
         // Individual delay requests preserve pinned automatic-group selections.
         Ok(stream::iter(members.into_iter().map(|name| async move {
             let delay = self.delay(&name).await.unwrap_or(0);
-            (name, delay)
+            (name.to_string(), delay)
         }))
         .buffer_unordered(6)
         .collect()
@@ -333,7 +566,7 @@ impl Api {
             .values()
             .flat_map(|proxy| proxy.all.iter())
             .filter(|name| {
-                proxies.proxies.get(*name).is_some_and(|proxy| {
+                proxies.proxies.get(name.as_str()).is_some_and(|proxy| {
                     proxy.all.is_empty()
                         && !matches!(
                             proxy.kind.as_str(),
@@ -346,7 +579,7 @@ impl Api {
         drop(proxies);
         Ok(stream::iter(names.into_iter().map(|name| async move {
             let delay = self.delay(&name).await.unwrap_or(0);
-            (name, delay)
+            (name.to_string(), delay)
         }))
         .buffer_unordered(6)
         .collect()
@@ -375,6 +608,30 @@ impl Api {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn snapshots_share_repeated_text_and_release_the_intern_pool() {
+        let connections: Connections = serde_json::from_str(r#"{"connections":[{"id":"1","metadata":{"network":"tcp","process":"browser"},"chains":["Auto","node"],"rule":"Domain"},{"id":"2","metadata":{"network":"udp","process":"browser"},"chains":["Auto","node"],"rule":"Domain"}]}"#).unwrap();
+        let [a, b] = connections.connections.as_slice() else {
+            panic!("missing connections")
+        };
+        assert!(std::sync::Arc::ptr_eq(
+            &a.metadata.process.0,
+            &b.metadata.process.0
+        ));
+        assert!(std::sync::Arc::ptr_eq(&a.chains[0].0, &b.chains[0].0));
+        assert_eq!(a.metadata.network, Network::Tcp);
+        assert_eq!(b.metadata.network, Network::Udp);
+        assert!(TEXT_POOL.with(|pool| pool.borrow().is_none()));
+        assert!(serde_json::from_str::<Connections>(r#"{"connections":[{"id":123}]}"#).is_err());
+        assert!(TEXT_POOL.with(|pool| pool.borrow().is_none()));
+        let proxies: Proxies = serde_json::from_str(r#"{"proxies":{"node":{"name":"ignored","type":"HTTP","history":[{"delay":42},{"delay":0}]},"group":{"type":"Selector","now":"node","all":["node"]}}}"#).unwrap();
+        let key = proxies.proxies.get_key_value("node").unwrap().0;
+        let group = &proxies.proxies["group"];
+        assert!(std::sync::Arc::ptr_eq(&key.0, &group.all[0].0));
+        assert!(std::sync::Arc::ptr_eq(&key.0, &group.now.0));
+        assert_eq!(proxies.proxies["node"].delay, Some(0));
+    }
+
     async fn mock_response(wire: Vec<u8>) -> (reqwest::Response, tokio::task::JoinHandle<()>) {
         use tokio::io::{AsyncReadExt, AsyncWriteExt};
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
@@ -550,7 +807,7 @@ mod tests {
         let proxy: Proxy =
             serde_json::from_str(r#"{"name":"DIRECT","type":"Direct","history":null,"all":null}"#)
                 .unwrap();
-        assert!(proxy.history.is_empty());
+        assert_eq!(proxy.delay, None);
         assert!(proxy.all.is_empty());
     }
     #[test]

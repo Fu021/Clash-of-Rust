@@ -41,7 +41,7 @@
 
 在 Actions 中选择 **Memory Benchmark → Run workflow**：
 
-- `ref`：需要测量的远程分支、标签或提交 SHA；留空测所选工作流分支。
+- `ref`：需要测量的远程分支、标签或提交 SHA（支持短 SHA）；留空测所选工作流分支。
 - `profile`：`release` 或 `dev`，默认 release。
 - `rows`：每项 API 测试的条数，范围 1–50,000，默认 50,000。
 - `repetitions`：每项 API 测试的独立进程次数，范围 1–10，默认 3。

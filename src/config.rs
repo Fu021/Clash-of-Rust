@@ -174,8 +174,33 @@ pub fn atomic_write(path: &Path, bytes: &[u8]) -> Result<()> {
     Ok(())
 }
 
+pub const PROFILE_LIMIT: usize = 10 * 1024 * 1024;
+
+/// Bounds allocation even if a file grows after its metadata was checked.
+pub fn read_profile(path: &Path) -> Result<String> {
+    read_config_text(path, PROFILE_LIMIT)
+}
+
+pub(crate) fn read_runtime_config(path: &Path) -> Result<String> {
+    read_config_text(path, 64 * 1024 * 1024)
+}
+
+fn read_config_text(path: &Path, limit: usize) -> Result<String> {
+    use std::io::Read;
+    let file = std::fs::File::open(path).context("配置文件无法读取")?;
+    if file.metadata()?.len() > limit as u64 {
+        bail!("配置超过 {} MiB 限制", limit / 1024 / 1024);
+    }
+    let mut raw = String::new();
+    file.take(limit as u64 + 1).read_to_string(&mut raw)?;
+    if raw.len() > limit {
+        bail!("配置超过 {} MiB 限制", limit / 1024 / 1024);
+    }
+    Ok(raw)
+}
+
 pub fn parse_profile(raw: &str) -> Result<Mapping> {
-    if raw.len() > 10 * 1024 * 1024 {
+    if raw.len() > PROFILE_LIMIT {
         bail!("配置超过 10 MiB 限制");
     }
     let value: Value = serde_yaml::from_str(raw).context("YAML 配置格式错误")?;
@@ -325,5 +350,25 @@ mod tests {
         store.save_settings(&settings).unwrap();
         assert!(!store.load_settings().unwrap().dark);
         assert!(store.profile_path("../../settings").is_err());
+    }
+}
+
+#[cfg(test)]
+mod bounded_profile_tests {
+    use super::*;
+    #[test]
+    fn profile_reader_accepts_boundary_and_rejects_oversized_files_before_reading() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("profile.yaml");
+        std::fs::write(&path, vec![b'a'; PROFILE_LIMIT]).unwrap();
+        assert_eq!(read_profile(&path).unwrap().len(), PROFILE_LIMIT);
+        let file = std::fs::OpenOptions::new().write(true).open(&path).unwrap();
+        file.set_len(1024 * 1024 * 1024).unwrap();
+        assert!(
+            read_profile(&path)
+                .unwrap_err()
+                .to_string()
+                .contains("10 MiB")
+        );
     }
 }

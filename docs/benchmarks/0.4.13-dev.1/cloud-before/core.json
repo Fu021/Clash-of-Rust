@@ -1,0 +1,8 @@
+{
+  "version": "v1.19.32",
+  "system": "linux",
+  "arch": "x64",
+  "source": "https://github.com/MetaCubeX/mihomo/releases/download/v1.19.32/mihomo-linux-amd64-compatible-v1.19.32.gz",
+  "archive_sha256": "ba3ce607747a07f948fc35780e108a4a7c7f552a38b9bd4d115f313ebcb89c20",
+  "exe_sha256": "7a0d59da2e678d56c899a3db996a2ad8963286c4f3634b0451435db248f13fa1"
+}
