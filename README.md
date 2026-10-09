@@ -3,7 +3,7 @@
 </p>
 <h1 align="center">Clash of Rust</h1>
 
-基于 mihomo 的原生 Rust 代理客户端。支持 **Windows（x64 / ARM64）** 和 **Debian/Ubuntu（amd64 / ARM64）**。当前版本 **0.4.11**。
+基于 mihomo 的原生 Rust 代理客户端。支持 **Windows（x64 / ARM64）** 和 **Debian/Ubuntu（amd64 / ARM64）**。当前版本 **0.4.12**。
 
 ## Features
 
@@ -21,18 +21,12 @@
 
 | 平台 | 安装包 |
 | --- | --- |
-| Windows x64 | [Clash-of-Rust-0.4.11-windows-x64-setup.exe](https://github.com/Fu021/Clash-of-Rust/releases/download/v0.4.11/Clash-of-Rust-0.4.11-windows-x64-setup.exe) |
-| Windows ARM64 | [Clash-of-Rust-0.4.11-windows-arm64-setup.exe](https://github.com/Fu021/Clash-of-Rust/releases/download/v0.4.11/Clash-of-Rust-0.4.11-windows-arm64-setup.exe) |
-| Debian/Ubuntu amd64 | [Clash-of-Rust-0.4.11-linux-amd64.deb](https://github.com/Fu021/Clash-of-Rust/releases/download/v0.4.11/Clash-of-Rust-0.4.11-linux-amd64.deb) |
-| Debian/Ubuntu ARM64 | [Clash-of-Rust-0.4.11-linux-arm64.deb](https://github.com/Fu021/Clash-of-Rust/releases/download/v0.4.11/Clash-of-Rust-0.4.11-linux-arm64.deb) |
+| Windows x64 | [Clash-of-Rust-0.4.12-windows-x64-setup.exe](https://github.com/Fu021/Clash-of-Rust/releases/download/v0.4.12/Clash-of-Rust-0.4.12-windows-x64-setup.exe) |
+| Windows ARM64 | [Clash-of-Rust-0.4.12-windows-arm64-setup.exe](https://github.com/Fu021/Clash-of-Rust/releases/download/v0.4.12/Clash-of-Rust-0.4.12-windows-arm64-setup.exe) |
+| Debian/Ubuntu amd64 | [Clash-of-Rust-0.4.12-linux-amd64.deb](https://github.com/Fu021/Clash-of-Rust/releases/download/v0.4.12/Clash-of-Rust-0.4.12-linux-amd64.deb) |
+| Debian/Ubuntu ARM64 | [Clash-of-Rust-0.4.12-linux-arm64.deb](https://github.com/Fu021/Clash-of-Rust/releases/download/v0.4.12/Clash-of-Rust-0.4.12-linux-arm64.deb) |
 
 Windows 运行安装程序；Debian/Ubuntu 使用 `sudo apt install ./安装包文件名.deb`。升级保留订阅和个人设置。
-
-客户端更新与订阅更新依次尝试当前内核代理、系统代理和直连。下载期间可点击“取消下载”，之后可重新更新；进入安装阶段后不能通过该按钮取消。Windows 自动安装需要 UAC 授权，Linux 需要 `pkexec` 与桌面授权服务。
-
-Linux 安装包在 Ubuntu 22.04 构建，需要满足 DEB 声明的依赖。WSL2 需要 WSLg；没有托盘宿主时，关闭窗口会退出。
-
-Linux 首次开启 TUN 时请求管理员授权，仅为已安装的 mihomo 内核配置网络权限，随后自动重启内核并恢复节点选择。界面继续以普通用户运行；取消授权会保留原代理模式。需要 `/dev/net/tun`、`pkexec` 和可用的桌面授权服务。升级替换内核后可能需要重新授权；后台自启缺少权限时，打开客户端点击 TUN 完成授权。
 
 可能造成 Windows Defender 误判查杀，需自行规避。
 
@@ -91,9 +85,7 @@ cargo test --locked
 python scripts/test-build-tools.py
 ```
 
-CI 在 Windows 和 Ubuntu 22.04 的 x64、ARM64 环境分别检查、测试和打包，并在 `ubuntu-latest` x64 上验证 Ubuntu 22.04 构建的安装包的 GUI 图标标识与真实 TUN 行为。Windows 额外复用现有托盘、图标资源和更新助手检查；完整 GUI 与真实 TUN 自动测试目前覆盖 Linux。内存基准在本机运行。正式发布等待对应提交的全部 CI 检查通过，使用该次 Actions 产物作为 Release 附件。
-
-发布入口：GitHub **Actions → Publish Release → Run workflow**，选择 `main`。`ci_run_id` 可填写对应 CI 的运行编号，留空则匹配当前提交；勾选 `check_only` 仅校验。版本号和 Release 文案从通过测试的提交读取，四个平台安装包及 SHA256 文件全部核验后发布，已有正式版本不会被覆盖。本地也可执行 `python scripts/publish-release.py --run-id 编号 --check` 检查同一批产物。
+正式发布需等待对应提交的 CI 全部通过，再通过 GitHub **Actions → Publish Release → Run workflow** 发布 Release。
 
 ## License
 
