@@ -73,8 +73,8 @@ def main():
         summary['api'].append({'workload': key[0], 'mode': key[1], 'refreshes': key[2], **values})
         p, r, t = (values[field] for field in ('peak_extra_heap_bytes', 'retained_extra_heap_bytes', 'elapsed_ms'))
         lines.append(f'| {key[0]} | {key[1]} | {key[2]} | {mib(p[0])} | {mib(p[1])} | {mib(r[0])} | {mib(r[1])} | {reduction(*r)} | {t[0]:.1f}/{t[1]:.1f} |')
-    lines += ['', '## GUI 与内核进程', '',
-              '固定输入为 2,000 节点、40 个组各包含全部节点、20,000 条规则。关闭系统代理和定时测速，无业务流量。每场景采样 10 秒，间隔 250 ms；以下为观测峰值 MiB。搜索 `node-` 匹配所有节点，截图随原始结果保存。', '',
+    lines += ['', '文本共享增加哈希查找成本，耗时结果见上表；不同云端运行器的调度也会影响耗时。进程表同时保留没有改善的场景，不能将大快照和搜索场景的收益推广到首页。', '', '## GUI 与内核进程', '',
+              f"固定输入为 2,000 节点、40 个组各包含全部节点、20,000 条规则。关闭系统代理和定时测速，无业务流量。每场景采样 {before['gui_sample_seconds']} 秒，间隔 {before['interval_ms']} ms；以下为观测峰值 MiB。搜索 `node-` 匹配所有节点，截图随原始结果保存。", '',
               '| 场景 | GUI RSS 前 | GUI RSS 后 | GUI RSS 降低 | 内核 RSS 前 | 内核 RSS 后 | 合计 PSS 前 | 合计 PSS 后 |',
               '| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: |']
     for scene in ('home', 'proxies-collapsed', 'proxies-search', 'home-after-proxies'):
@@ -94,7 +94,7 @@ def main():
               '| 搜索同时创建大量组和节点 widget | 每页四组、每组六十节点的全局上限 |',
               '| 平台检测常量及响应临时分配 | 静态借用、UTF-8 缓冲复用、借用 JSON 字段、字符切片迭代、丢弃正文不缓存 |',
               '| 每个检测重复创建两套客户端 | 并发复用，Cookie 独立，TLS 1.3 按需，弱缓存释放 |', '',
-              '## 原始记录与复现', '',
+              '## 原始记录与复现', '', '[验证记录及平台范围](VALIDATION.md)。', '',
               '云端原始数据见 [cloud-before](cloud-before/README.md) 与 [cloud-after](cloud-after/README.md)。本目录 `before-*` 保留实施修复前取得的本地基线，未参与本报告的云端数值对照。', '',
               '统一基准为 `examples/memory_benchmark.rs`；手动 Memory Benchmark 工作流各运行一次即可取得相同格式。生成此报告：', '',
               '```bash', 'python3 docs/benchmarks/0.4.13-dev.1/compare.py docs/benchmarks/0.4.13-dev.1/cloud-before docs/benchmarks/0.4.13-dev.1/cloud-after --report /tmp/memory-comparison.md', '```', '']
