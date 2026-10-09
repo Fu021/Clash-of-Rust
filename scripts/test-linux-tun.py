@@ -26,7 +26,9 @@ def isolated_resolved():
     # or daemons from the host namespace are used or changed.
     run(['mount', '--make-rprivate', '/'])
     run(['mount', '-t', 'tmpfs', '-o', 'mode=0755', 'tmpfs', '/run'])
-    for directory in ('/run/dbus', '/run/systemd/resolve', '/run/systemd/netif'):
+    # resolved creates its own runtime directory with systemd-resolve ownership
+    # before dropping root. A precreated root-owned directory makes it exit.
+    for directory in ('/run/dbus', '/run/systemd/netif/links'):
         Path(directory).mkdir(parents=True, exist_ok=True)
     daemon = next((p for p in (Path('/usr/lib/systemd/systemd-resolved'),
                               Path('/lib/systemd/systemd-resolved')) if p.is_file()), None)
@@ -41,6 +43,13 @@ def isolated_resolved():
                           '<allow send_destination="*"/><allow receive_sender="*"/></policy>'
                           '</busconfig>')
         with contextlib.ExitStack() as stack:
+            log = stack.enter_context((Path(folder)/'daemons.log').open('w+'))
+            def print_log():
+                log.flush()
+                log.seek(0)
+                print(log.read())
+            # Dump diagnostics even if a daemon exits before reaching yield.
+            stack.callback(print_log)
             processes = []
             def terminate():
                 for process in reversed(processes):
@@ -52,7 +61,6 @@ def isolated_resolved():
                         process.kill()
                         process.wait()
             stack.callback(terminate)
-            log = stack.enter_context((Path(folder)/'daemons.log').open('w+'))
             processes.append(subprocess.Popen(['dbus-daemon', '--nofork', '--config-file='+str(config)],
                                               stdout=log, stderr=log))
             for _ in range(100):
@@ -76,12 +84,7 @@ def isolated_resolved():
             denied = subprocess.run(['busctl', '--system', '--timeout=1', 'status',
                                      'org.freedesktop.PolicyKit1'], capture_output=True)
             assert denied.returncode != 0, 'A PolicyKit authority must not be available'
-            try:
-                yield
-            finally:
-                log.flush()
-                log.seek(0)
-                print(log.read())
+            yield
 
 
 def main():

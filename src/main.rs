@@ -519,8 +519,14 @@ async fn execute(engine: Arc<Mutex<Engine>>, action: Action, scope: Scope) -> Re
 }
 
 impl App {
-    fn new(mut tray_startup: Option<tray::Startup>) -> (Self, Task<Message>) {
-        let created = startup_store().and_then(Engine::new);
+    fn new(tray_startup: Option<tray::Startup>) -> (Self, Task<Message>) {
+        Self::with_engine(startup_store().and_then(Engine::new), tray_startup)
+    }
+
+    fn with_engine(
+        created: anyhow::Result<Engine>,
+        mut tray_startup: Option<tray::Startup>,
+    ) -> (Self, Task<Message>) {
         let (engine, settings, profiles, geo_status, notice, error) = match created {
             Ok(engine) => {
                 let settings = engine.settings.clone();
@@ -915,19 +921,37 @@ impl App {
                 if revision == self.size_revision {
                     self.size_pending = false;
                     self.set_window_size(size);
-                    return iced::window::resize(id, size);
+                    // Refresh native limits with the current display scale.
+                    // Startup DPI detection can otherwise leave stale X11 hints.
+                    return iced::window::set_min_size(id, Some(MIN_WINDOW_SIZE))
+                        .chain(iced::window::resize(id, size));
                 }
             }
-            Message::ResizeWindow(_, _, None) => self.size_pending = false,
+            Message::ResizeWindow(revision, _, None) => {
+                if revision == self.size_revision {
+                    self.size_pending = false;
+                }
+            }
             Message::ReadWindowSize(Some(id)) => {
                 return iced::window::size(id).map(Message::WindowSize);
             }
             Message::ReadWindowSize(None) => {}
             Message::WindowSize(size) => self.set_window_size(size),
-            Message::Window((_, iced::window::Event::Resized(size))) => {
-                self.size_pending = false;
-                self.size_revision = self.size_revision.wrapping_add(1);
+            Message::Window((id, iced::window::Event::Opened { .. })) => {
+                return iced::window::set_min_size(id, Some(MIN_WINDOW_SIZE))
+                    .chain(iced::window::resize(id, DEFAULT_WINDOW_SIZE));
+            }
+            Message::Window((id, iced::window::Event::Rescaled(_))) => {
+                return iced::window::set_min_size(id, Some(MIN_WINDOW_SIZE))
+                    .chain(iced::window::size(id).map(Message::WindowSize));
+            }
+            Message::Window((id, iced::window::Event::Resized(size))) => {
+                // A resize event can belong to an older native request. It must
+                // not cancel a newer input edit or Restore Default command.
                 self.set_window_size(size);
+                // X11 can update WM_NORMAL_HINTS again while delivering the
+                // final resize after a DPI change. Apply limits after that event.
+                return iced::window::set_min_size(id, Some(MIN_WINDOW_SIZE));
             }
             Message::TestUrl(value) => self.test_url = value,
             Message::DnsHost(value) => self.dns_host = value,
@@ -1458,7 +1482,12 @@ impl App {
     }
 
     fn set_window_size(&mut self, size: iced::Size) {
-        if !self.size_pending {
+        if !self.size_pending
+            && size.width.is_finite()
+            && size.height.is_finite()
+            && size.width > 0.0
+            && size.height > 0.0
+        {
             self.window_width = format!("{:.0}", size.width);
             self.window_height = format!("{:.0}", size.height);
         }
@@ -2752,6 +2781,76 @@ fn sidebar_panel(theme: &Theme) -> container::Style {
         bottom_left: 0.0,
     };
     style
+}
+
+#[cfg(test)]
+mod window_tests {
+    use super::*;
+
+    fn app() -> App {
+        // Exercise real message handling without loading a store, starting the
+        // core, or executing asynchronous update/network tasks.
+        App::with_engine(Err(anyhow::anyhow!("geometry test")), None).0
+    }
+
+    #[test]
+    fn old_native_resize_does_not_cancel_restore_default() {
+        let mut app = app();
+        let id = iced::window::Id::unique();
+        let _ = app.update(Message::ResetWindowSize);
+        let revision = app.size_revision;
+        let _ = app.update(Message::Window((
+            id,
+            iced::window::Event::Resized(iced::Size::new(1200.0, 700.0)),
+        )));
+        assert_eq!(app.size_revision, revision);
+        assert!(app.size_pending);
+        assert_eq!(app.window_width, "950");
+        let _ = app.update(Message::ResizeWindow(
+            revision,
+            DEFAULT_WINDOW_SIZE,
+            Some(id),
+        ));
+        assert!(!app.size_pending);
+        assert_eq!(
+            (app.window_width.as_str(), app.window_height.as_str()),
+            ("950", "700")
+        );
+    }
+
+    #[test]
+    fn obsolete_async_resize_cannot_overwrite_newer_input() {
+        let mut app = app();
+        let id = iced::window::Id::unique();
+        let _ = app.update(Message::WindowWidth("1400".into()));
+        let obsolete = app.size_revision;
+        let _ = app.update(Message::ResetWindowSize);
+        for window in [None, Some(id)] {
+            let _ = app.update(Message::ResizeWindow(
+                obsolete,
+                iced::Size::new(1400.0, 700.0),
+                window,
+            ));
+            assert!(app.size_pending);
+            assert_eq!(app.window_width, "950");
+        }
+    }
+
+    #[test]
+    fn invalid_native_sizes_do_not_replace_window_inputs() {
+        let mut app = app();
+        for size in [
+            iced::Size::ZERO,
+            iced::Size::new(f32::NAN, 700.0),
+            iced::Size::new(950.0, f32::INFINITY),
+        ] {
+            let _ = app.update(Message::WindowSize(size));
+            assert_eq!(
+                (app.window_width.as_str(), app.window_height.as_str()),
+                ("950", "700")
+            );
+        }
+    }
 }
 
 #[cfg(test)]

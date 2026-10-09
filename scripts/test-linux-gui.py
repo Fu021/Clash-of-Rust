@@ -21,7 +21,10 @@ inputs = parser.add_mutually_exclusive_group()
 inputs.add_argument('--executable', type=Path)
 inputs.add_argument('--deb', type=Path, help='Unpack and test without installing')
 parser.add_argument('--output', type=Path)
+parser.add_argument('--scales', type=float, nargs='+', default=[1.0],
+                    help='X11 scale factors to test; fractional values require a display with DPI support')
 args = parser.parse_args()
+assert args.scales and all(0 < scale <= 4 for scale in args.scales), 'Invalid scale factors'
 assert os.environ.get('DISPLAY'), 'A graphical X11 DISPLAY is required'
 assert os.environ.get('DBUS_SESSION_BUS_ADDRESS'), 'Run under dbus-run-session'
 if args.deb:
@@ -80,6 +83,16 @@ def window_pid(window):
 class Attributes(c.Structure):
     _fields_ = [(k, c.c_int) for k in ('x', 'y', 'width', 'height', 'border_width', 'depth')] + [('visual', c.c_void_p), ('root', c.c_ulong)] + [(k, c.c_int) for k in ('kind', 'bit_gravity', 'win_gravity', 'backing_store')] + [('backing_planes', c.c_ulong), ('backing_pixel', c.c_ulong), ('save_under', c.c_int), ('colormap', c.c_ulong), ('map_installed', c.c_int), ('map_state', c.c_int), ('all_event_masks', c.c_long), ('your_event_mask', c.c_long), ('do_not_propagate_mask', c.c_long), ('override_redirect', c.c_int), ('screen', c.c_void_p)]
 X.XGetWindowAttributes.argtypes = [c.c_void_p, c.c_ulong, c.POINTER(Attributes)]
+class Aspect(c.Structure):
+    _fields_ = [('x', c.c_int), ('y', c.c_int)]
+class SizeHints(c.Structure):
+    _fields_ = [('flags', c.c_long)] + [(k, c.c_int) for k in (
+        'x', 'y', 'width', 'height', 'min_width', 'min_height',
+        'max_width', 'max_height', 'width_inc', 'height_inc')]
+    _fields_ += [('min_aspect', Aspect), ('max_aspect', Aspect)]
+    _fields_ += [(k, c.c_int) for k in ('base_width', 'base_height', 'win_gravity')]
+X.XGetWMNormalHints.argtypes = [c.c_void_p, c.c_ulong, c.POINTER(SizeHints), c.POINTER(c.c_long)]
+X.XResizeWindow.argtypes = [c.c_void_p, c.c_ulong, c.c_uint, c.c_uint]
 class ClientMessage(c.Structure):
     _fields_ = [('kind', c.c_int), ('serial', c.c_ulong), ('send_event', c.c_int), ('display', c.c_void_p), ('window', c.c_ulong), ('message_type', c.c_ulong), ('format', c.c_int), ('data', c.c_long * 5)]
 class Event(c.Union):
@@ -112,15 +125,41 @@ def app_window(pid):
                     return win, title, attrs.width, attrs.height
     return None
 
+def check_window_size(pid, window, scale):
+    hints, supplied = SizeHints(), c.c_long()
+    assert X.XGetWMNormalHints(display, window, c.byref(hints), c.byref(supplied))
+    minimum = (round(800 * scale), round(450 * scale))
+    assert hints.flags & (1 << 4), 'Native minimum size is missing'
+    assert (hints.min_width, hints.min_height) == minimum, (
+        scale, (hints.min_width, hints.min_height), minimum, app_window(pid))
+    # Physical widths must convert back to 800/950 logical pixels at either
+    # scale. In particular, a stale 1200-pixel minimum must not block 950 at 1x.
+    current = app_window(pid)
+    widths = []
+    for logical_width in (1100, 800, 950):
+        requested = round(logical_width * scale)
+        X.XResizeWindow(display, window, requested, current[3])
+        X.XFlush(display)
+        for _ in range(100):
+            current = app_window(pid)
+            if current and current[2] == requested:
+                break
+            time.sleep(0.05)
+        assert current and current[2] == requested, (scale, requested, current)
+        widths.append(current[2])
+    return {'scale': scale, 'native_minimum': minimum, 'resized_widths': widths}
+
+
 results = []
-for background in (False, True):
+for scale, background in ((scale, background) for scale in args.scales for background in (False, True)):
     with tempfile.TemporaryDirectory(prefix='clash-wsl-gui-test-') as tmp:
         with socket.socket() as mixed, socket.socket() as controller:
             mixed.bind(('127.0.0.1', 0))
             controller.bind(('127.0.0.1', 0))
             mixed_port, controller_port = mixed.getsockname()[1], controller.getsockname()[1]
         Path(tmp, 'settings.json').write_text(json.dumps({'mixed_port': mixed_port, 'controller_port': controller_port, 'proxy_mode': 'off', 'secret': 'diagnostic-only'}))
-        env = dict(os.environ, CLASH_OF_RUST_DATA_DIR=tmp, GSETTINGS_BACKEND='memory')
+        env = dict(os.environ, CLASH_OF_RUST_DATA_DIR=tmp, GSETTINGS_BACKEND='memory',
+                   WINIT_X11_SCALE_FACTOR=str(scale))
         command = [str(executable)] + (['--background'] if background else [])
         proc = subprocess.Popen(command, env=env, stdout=subprocess.PIPE, stderr=subprocess.PIPE, start_new_session=True)
         try:
@@ -135,6 +174,7 @@ for background in (False, True):
             assert app_class == ('clash-of-rust', 'clash-of-rust'), app_class
             time.sleep(3)
             assert proc.poll() is None, 'App exited before close'
+            geometry = check_window_size(proc.pid, window[0], scale)
             opener = urllib.request.build_opener(urllib.request.ProxyHandler({}))
             # The engine may persist its effective settings during startup.
             settings = json.loads(Path(tmp, 'settings.json').read_text())
@@ -156,7 +196,7 @@ for background in (False, True):
             out, err = proc.communicate(timeout=15)
             assert proc.returncode == 0, (proc.returncode, err)
             assert not err, err.decode(errors='replace')
-            results.append({'background': background, 'mapped_window': window[1:], 'wm_class': app_class, 'core_version': core_version, 'close_exits': True, 'pending_tray_close_requires_confirmation': background, 'returncode': proc.returncode, 'stderr': err.decode()})
+            results.append({'background': background, 'geometry': geometry, 'mapped_window': window[1:], 'wm_class': app_class, 'core_version': core_version, 'close_exits': True, 'pending_tray_close_requires_confirmation': background, 'returncode': proc.returncode, 'stderr': err.decode()})
         finally:
             if proc.poll() is None:
                 os.killpg(proc.pid, signal.SIGTERM)
