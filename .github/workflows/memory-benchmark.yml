@@ -35,10 +35,27 @@ jobs:
     steps:
       - uses: actions/checkout@v6
         with:
+          fetch-depth: 0
           persist-credentials: false
+      - name: Resolve selected revision
+        id: source
+        shell: python
+        env:
+          SOURCE_REF: ${{ inputs.ref || github.ref }}
+        run: |
+          import os, subprocess
+          wanted = os.environ['SOURCE_REF']
+          for revision in (wanted, 'refs/remotes/origin/' + wanted):
+              result = subprocess.run(['git', 'rev-parse', '--verify', '--end-of-options', revision + '^{commit}'], capture_output=True, text=True)
+              if result.returncode == 0:
+                  with open(os.environ['GITHUB_OUTPUT'], 'a') as output:
+                      output.write('commit=' + result.stdout.strip() + '\n')
+                  break
+          else:
+              raise ValueError('Selected branch, tag or commit was not found in this repository')
       - uses: actions/checkout@v6
         with:
-          ref: ${{ inputs.ref || github.ref }}
+          ref: ${{ steps.source.outputs.commit }}
           path: source
           persist-credentials: false
       - uses: dtolnay/rust-toolchain@stable
