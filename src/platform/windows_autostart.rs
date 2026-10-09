@@ -283,6 +283,65 @@ mod tests {
         System::TaskScheduler::{TASK_RUNLEVEL_HIGHEST, TASK_RUNLEVEL_LUA},
     };
 
+    fn account_sid(account: &str) -> Result<String> {
+        use windows_sys::Win32::{
+            Foundation::{ERROR_INSUFFICIENT_BUFFER, LocalFree},
+            Security::{Authorization::ConvertSidToStringSidW, LookupAccountNameW, SidTypeUser},
+        };
+        // Task Scheduler can return either a SID or a resolved account name.
+        if account.starts_with("S-1-") {
+            return Ok(account.into());
+        }
+        let account: Vec<u16> = account.encode_utf16().chain(Some(0)).collect();
+        let mut sid_length = 0;
+        let mut domain_length = 0;
+        let mut kind = SidTypeUser;
+        unsafe {
+            LookupAccountNameW(
+                std::ptr::null(),
+                account.as_ptr(),
+                std::ptr::null_mut(),
+                &mut sid_length,
+                std::ptr::null_mut(),
+                &mut domain_length,
+                &mut kind,
+            );
+        }
+        let error = std::io::Error::last_os_error();
+        if error.raw_os_error() != Some(ERROR_INSUFFICIENT_BUFFER as i32) {
+            return Err(error.into());
+        }
+        let mut sid = vec![0usize; (sid_length as usize).div_ceil(std::mem::size_of::<usize>())];
+        let mut domain = vec![0u16; domain_length as usize];
+        if unsafe {
+            LookupAccountNameW(
+                std::ptr::null(),
+                account.as_ptr(),
+                sid.as_mut_ptr().cast(),
+                &mut sid_length,
+                domain.as_mut_ptr(),
+                &mut domain_length,
+                &mut kind,
+            )
+        } == 0
+        {
+            return Err(std::io::Error::last_os_error().into());
+        }
+        let mut text = std::ptr::null_mut();
+        if unsafe { ConvertSidToStringSidW(sid.as_ptr().cast_mut().cast(), &mut text) } == 0 {
+            return Err(std::io::Error::last_os_error().into());
+        }
+        let mut length = 0;
+        unsafe {
+            while *text.add(length) != 0 {
+                length += 1;
+            }
+            let result = String::from_utf16(std::slice::from_raw_parts(text, length));
+            LocalFree(text.cast());
+            Ok(result?)
+        }
+    }
+
     struct Cleanup(Backend);
     impl Drop for Cleanup {
         fn drop(&mut self) {
@@ -337,7 +396,7 @@ mod tests {
                 settings.ExecutionTimeLimit(&mut time_limit)?;
                 settings.Priority(&mut priority)?;
             }
-            assert_eq!(user_id.to_string(), backend.sid);
+            assert_eq!(account_sid(&user_id.to_string())?, backend.sid);
             assert_eq!(logon_type, TASK_LOGON_INTERACTIVE_TOKEN);
             assert_eq!(run_level, TASK_RUNLEVEL_LUA);
             assert_eq!(disallow_battery.0, 0);
