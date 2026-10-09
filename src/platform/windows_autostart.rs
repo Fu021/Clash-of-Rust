@@ -219,7 +219,7 @@ impl Backend {
  <RegistrationInfo><Description>Clash of Rust user logon startup</Description></RegistrationInfo>
  <Triggers><LogonTrigger><Enabled>true</Enabled><UserId>{sid}</UserId></LogonTrigger></Triggers>
  <Principals><Principal id="User"><UserId>{sid}</UserId><LogonType>InteractiveToken</LogonType><RunLevel>LeastPrivilege</RunLevel></Principal></Principals>
- <Settings><MultipleInstancesPolicy>IgnoreNew</MultipleInstancesPolicy><DisallowStartIfOnBatteries>false</DisallowStartIfOnBatteries><StopIfGoingOnBatteries>false</StopIfGoingOnBatteries><StartWhenAvailable>true</StartWhenAvailable><RunOnlyIfNetworkAvailable>false</RunOnlyIfNetworkAvailable><Enabled>true</Enabled><ExecutionTimeLimit>PT0S</ExecutionTimeLimit></Settings>
+ <Settings><MultipleInstancesPolicy>IgnoreNew</MultipleInstancesPolicy><DisallowStartIfOnBatteries>false</DisallowStartIfOnBatteries><StopIfGoingOnBatteries>false</StopIfGoingOnBatteries><StartWhenAvailable>true</StartWhenAvailable><RunOnlyIfNetworkAvailable>false</RunOnlyIfNetworkAvailable><Enabled>true</Enabled><ExecutionTimeLimit>PT0S</ExecutionTimeLimit><Priority>5</Priority></Settings>
  <Actions Context="User"><Exec><Command>{executable}</Command><Arguments>--background</Arguments><WorkingDirectory>{directory}</WorkingDirectory></Exec></Actions>
 </Task>"#
         )
@@ -321,6 +321,7 @@ mod tests {
             assert_eq!(value("RunLevel"), Some("LeastPrivilege"));
             assert_eq!(value("DisallowStartIfOnBatteries"), Some("false"));
             assert_eq!(value("ExecutionTimeLimit"), Some("PT0S"));
+            assert_eq!(value("Priority"), Some("5"));
             assert!(value("Delay").is_none_or(|delay| delay == "PT0S"));
             assert_eq!(value("Arguments"), Some("--background"));
             unsafe { task.SetEnabled(windows::Win32::Foundation::VARIANT_BOOL(0))? };
