@@ -9,7 +9,7 @@ import shutil
 import sys
 import json
 import subprocess
-from build_support import ROOT, bundle_directory, copy_static, file_version, host_arch, nsis, package_version, run, sha256, stage_resources, staging_directory, validate_binary_arch, validate_version
+from build_support import ROOT, bundle_directory, copy_static, deb_version, file_version, host_arch, nsis, numeric_version, package_version, run, sha256, stage_resources, staging_directory, validate_binary_arch, validate_version
 import importlib.util
 
 _spec = importlib.util.spec_from_file_location('prepare_resources', ROOT/'scripts/prepare-resources.py')
@@ -80,7 +80,7 @@ def _build_deb(payload, version, arch, work):
     control.chmod(0o755)
     installed_size = sum(p.stat().st_size for p in root.rglob('*') if p.is_file() and not p.is_symlink())
     (control/'control').write_text(
-        f'Package: clash-of-rust\nVersion: {version}\nArchitecture: {deb_arch}\n'
+        f'Package: clash-of-rust\nVersion: {deb_version(version)}\nArchitecture: {deb_arch}\n'
         'Section: net\nPriority: optional\nMaintainer: F021 <flmqs@outlook.com>\n'
         f'Installed-Size: {(installed_size+1023)//1024}\nDepends: {dependencies}\n'
         'Recommends: pkexec\n'
@@ -144,7 +144,7 @@ def main():
         shutil.copy2(binary,stage/binary.name)
         if args.system == 'windows':
             artifact = ROOT/f'dist/Clash-of-Rust-{version}-windows-{args.arch}-setup.exe'
-            run([nsis(args.proxy),'/V2','/INPUTCHARSET','UTF8',f'/DAPP_VERSION={version}',f'/DAPP_ARCH={args.arch}',f'/DPAYLOAD={stage}',f'/DOUTPUT={artifact}',ROOT/'installer/clash-of-rust.nsi'])
+            run([nsis(args.proxy),'/V2','/INPUTCHARSET','UTF8',f'/DAPP_VERSION={version}',f'/DAPP_NUMERIC_VERSION={numeric_version(version)}',f'/DAPP_ARCH={args.arch}',f'/DPAYLOAD={stage}',f'/DOUTPUT={artifact}',ROOT/'installer/clash-of-rust.nsi'])
             if file_version(artifact) != version:
                 raise ValueError('Installer PE version differs from package version')
             artifacts.append(artifact)

@@ -4,6 +4,8 @@ import json
 from pathlib import Path
 import tempfile
 import struct
+import shutil
+import subprocess
 import unittest
 from unittest.mock import patch
 import build_support as build
@@ -72,9 +74,18 @@ class BuildTests(unittest.TestCase):
 
     def test_version_validation(self):
         self.assertEqual(build.validate_version('0.4.4'),'0.4.4')
-        for invalid in ('1.2','1.2.3.4','1.2.x','1.2.65536','../0.4.4'):
+        for invalid in ('1.2','1.2.3.4','1.2.x','1.2.65536','../0.4.4','01.2.3','0.4.12-dev.01','0.4.12-','0.4.12-dev/1'):
             with self.assertRaises(ValueError):
                 build.validate_version(invalid)
+
+    def test_prerelease_installer_versions_preserve_semver_and_upgrade_order(self):
+        self.assertEqual(build.validate_version('0.4.12-dev.1'),'0.4.12-dev.1')
+        self.assertEqual(build.numeric_version('0.4.12-dev.1'),'0.4.12.0')
+        self.assertEqual(build.deb_version('0.4.12-dev.1'),'0.4.12~dev.1')
+        self.assertEqual(build.deb_version('0.4.12'),'0.4.12')
+        if shutil.which('dpkg'):
+            subprocess.run(['dpkg','--compare-versions',build.deb_version('0.4.12-dev.1'),'lt','0.4.12'],check=True)
+            subprocess.run(['dpkg','--compare-versions',build.deb_version('0.4.12-dev.1'),'gt','0.4.11'],check=True)
 
     def test_build_token_is_sent_only_to_secure_github_api_and_removed_on_redirect(self):
         import io
@@ -155,7 +166,8 @@ class BuildTests(unittest.TestCase):
         binary = build.ROOT/'target/release/clash-of-rust.exe'
         if not binary.is_file():
             self.skipTest('Application binary not prepared')
-        self.assertRegex(build.file_version(binary),r'^\d+\.\d+\.\d+$')
+        version = build.file_version(binary)
+        self.assertEqual(build.validate_version(version),version)
 
 
 class ReleaseTests(unittest.TestCase):

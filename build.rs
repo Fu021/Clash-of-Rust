@@ -6,17 +6,12 @@ fn main() {
     println!("cargo:rerun-if-env-changed=CLASH_OF_RUST_BUILD_VERSION");
     let version = env::var("CLASH_OF_RUST_BUILD_VERSION")
         .unwrap_or_else(|_| env::var("CARGO_PKG_VERSION").unwrap());
-    let parts: Vec<u16> = version
-        .split('.')
-        .map(|part| {
-            part.parse()
-                .expect("Build version must have three numeric components")
-        })
-        .collect();
-    assert_eq!(
-        parts.len(),
-        3,
-        "Build version must have three numeric components"
+    let parsed = semver::Version::parse(&version).expect("Build version must be valid SemVer");
+    assert!(
+        [parsed.major, parsed.minor, parsed.patch]
+            .into_iter()
+            .all(|part| part <= u16::MAX.into()),
+        "Windows version components must fit in 16 bits"
     );
     println!("cargo:rustc-env=CLASH_OF_RUST_APP_VERSION={version}");
     if env::var("CARGO_CFG_TARGET_OS").as_deref() != Ok("windows") {
@@ -24,7 +19,7 @@ fn main() {
     }
     let root = PathBuf::from(env::var_os("CARGO_MANIFEST_DIR").unwrap());
     let out = PathBuf::from(env::var_os("OUT_DIR").unwrap());
-    let numeric = format!("{},0", version.replace('.', ","));
+    let numeric = format!("{},{},{},0", parsed.major, parsed.minor, parsed.patch);
     let icon = root
         .join("resources/icons/app.ico")
         .display()

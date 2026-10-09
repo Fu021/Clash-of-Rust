@@ -27,6 +27,8 @@ mod kde;
 mod linux;
 #[cfg(target_os = "linux")]
 mod linux_tun;
+#[cfg(windows)]
+mod windows_autostart;
 #[cfg(target_os = "linux")]
 pub use linux_tun::{
     authorize_tun, check_tun_environment, core_has_tun_permissions, tun_helper_main,
@@ -72,6 +74,10 @@ pub unsafe fn initialize_desktop() {
 #[cfg(target_os = "linux")]
 pub fn ensure_tray_available() -> Result<()> {
     gio::ensure_tray_available()
+}
+#[cfg(windows)]
+pub fn ensure_tray_available() -> Result<()> {
+    windows::ensure_tray_available()
 }
 
 /// A session-wide marker prevents duplicate GUI instances and coordinates shutdown.
@@ -168,6 +174,8 @@ pub fn is_elevated() -> bool {
 pub fn elevate(path: &Path) -> Result<()> {
     windows::elevate(path)
 }
+#[cfg(windows)]
+pub use windows::{autostart_helper_main, migrate_autostart};
 #[cfg(windows)]
 pub use windows::{installed_executable, launch_update_installer};
 #[cfg(not(windows))]

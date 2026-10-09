@@ -5,7 +5,10 @@ Unicode true
 !include "FileFunc.nsh"
 
 !ifndef APP_VERSION
-!define APP_VERSION "0.4.10"
+!define APP_VERSION "0.4.12-dev.1"
+!endif
+!ifndef APP_NUMERIC_VERSION
+!define APP_NUMERIC_VERSION "0.4.12.0"
 !endif
 !ifndef APP_ARCH
 !define APP_ARCH "x64"
@@ -44,7 +47,7 @@ SetCompressor /SOLID lzma
 SetCompressorDictSize 32
 ShowInstDetails show
 ShowUninstDetails show
-VIProductVersion "${APP_VERSION}.0"
+VIProductVersion "${APP_NUMERIC_VERSION}"
 VIAddVersionKey /LANG=2052 "ProductName" "Clash of Rust"
 VIAddVersionKey /LANG=2052 "FileDescription" "Clash of Rust Windows 安装程序"
 VIAddVersionKey /LANG=2052 "FileVersion" "${APP_VERSION}"
@@ -137,6 +140,14 @@ Function .onInit
     ReadRegStr $0 HKCU "Software\Microsoft\Windows\CurrentVersion\Run" "ClashOfRust"
     ${If} $0 == '"$ExistingDir\clash-of-rust.exe" --background'
       StrCpy $KeepAutostart 1
+    ${EndIf}
+    ReadRegStr $0 HKCU "Software\ClashOfRust\Autostart" "Executable"
+    ${If} $0 == "$ExistingDir\clash-of-rust.exe"
+      ; Query the task so an intentionally disabled task stays disabled.
+      ExecWait '"$ExistingDir\clash-of-rust.exe" --autostart-status' $0
+      ${If} $0 == 0
+        StrCpy $KeepAutostart 1
+      ${EndIf}
     ${EndIf}
     ; Clicking Update in the client authorizes this specific upgrade.
     ${If} $UpdateMode == 1
@@ -301,7 +312,9 @@ Section "Clash of Rust" MainSection
   ${EndIf}
   !ifndef INSTALLER_TESTING
     ${If} $KeepAutostart == 1
-      WriteRegStr HKCU "Software\Microsoft\Windows\CurrentVersion\Run" "ClashOfRust" '"$INSTDIR\clash-of-rust.exe" --background'
+      ; Native helper registers a least-privilege user logon task. It preserves
+      ; a Run fallback if scheduling is disabled or unavailable.
+      ExecWait '"$INSTDIR\clash-of-rust.exe" --autostart-enable' $0
     ${EndIf}
   !endif
   WriteRegStr ${PRODUCT_HIVE} "${PRODUCT_KEY}" "DisplayName" "Clash of Rust"
@@ -372,6 +385,17 @@ Section "Uninstall"
     SetShellVarContext all
   !endif
   ; Delete only files owned by this package. User configuration is elsewhere.
+  !ifndef INSTALLER_TESTING
+    ReadRegStr $0 HKCU "Software\ClashOfRust\Autostart" "Executable"
+    ${If} $0 == "$INSTDIR\clash-of-rust.exe"
+      ExecWait '"$INSTDIR\clash-of-rust.exe" --autostart-remove' $0
+      ${If} $0 != 0
+        MessageBox MB_OK|MB_ICONSTOP "无法清理登录启动任务，请检查任务计划程序服务后重试卸载。"
+        SetErrorLevel 6
+        Abort
+      ${EndIf}
+    ${EndIf}
+  !endif
   ClearErrors
   Delete "$INSTDIR\clash-of-rust.exe"
   IfErrors uninstall_locked

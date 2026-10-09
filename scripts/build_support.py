@@ -69,9 +69,23 @@ def validate_binary_arch(path, system, arch):
 
 
 def validate_version(version):
-    if not re.fullmatch(r'\d+\.\d+\.\d+', version) or any(int(p) > 65535 for p in version.split('.')):
-        raise ValueError('Version must have three numeric components between 0 and 65535')
+    number = r'(?:0|[1-9][0-9]*)'
+    if not re.fullmatch(rf'{number}\.{number}\.{number}(?:-[0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*)?', version):
+        raise ValueError('Version must be SemVer with an optional prerelease suffix')
+    base, separator, prerelease = version.partition('-')
+    if any(int(p) > 65535 for p in base.split('.')) or (separator and any(
+            p.isdigit() and len(p) > 1 and p.startswith('0') for p in prerelease.split('.'))):
+        raise ValueError('Version components must fit in 16 bits and use no leading zeroes')
     return version
+
+
+def numeric_version(version):
+    return validate_version(version).partition('-')[0]+'.0'
+
+
+def deb_version(version):
+    # Debian must consider a development build older than its final release.
+    return validate_version(version).replace('-', '~', 1)
 
 
 def file_version(path):
@@ -91,6 +105,13 @@ def file_version(path):
     if not library.GetFileVersionInfoW(str(path), 0, size, data):
         raise ctypes.WinError(ctypes.get_last_error())
     pointer, length = ctypes.c_void_p(), wintypes.UINT()
+    if library.VerQueryValueW(data, r'\VarFileInfo\Translation', ctypes.byref(pointer), ctypes.byref(length)):
+        translations = ctypes.cast(pointer, ctypes.POINTER(wintypes.WORD))
+        pairs = [(translations[i], translations[i+1]) for i in range(0, length.value // 2, 2)]
+        for language, codepage in pairs:
+            field = f'\\StringFileInfo\\{language:04x}{codepage:04x}\\FileVersion'
+            if library.VerQueryValueW(data, field, ctypes.byref(pointer), ctypes.byref(length)):
+                return validate_version(ctypes.wstring_at(pointer, length.value).rstrip('\0'))
     if not library.VerQueryValueW(data, '\\', ctypes.byref(pointer), ctypes.byref(length)):
         raise ctypes.WinError(ctypes.get_last_error())
     words = ctypes.cast(pointer, ctypes.POINTER(wintypes.DWORD))

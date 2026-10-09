@@ -33,6 +33,10 @@ macro_rules! aligned_row {
 }
 
 fn main() -> iced::Result {
+    #[cfg(windows)]
+    if platform::autostart_helper_main() {
+        return Ok(());
+    }
     #[cfg(target_os = "linux")]
     if platform::tun_helper_main() {
         return Ok(());
@@ -94,30 +98,40 @@ fn main() -> iced::Result {
         }
         file
     };
+    // Publish the native icon before cold font loading and Geo integrity checks.
+    let tray_startup = std::sync::Mutex::new(Some(tray::Startup::new(Duration::from_secs(
+        if background_start() { 120 } else { 5 },
+    ))));
+    #[cfg(windows)]
+    std::thread::spawn(platform::migrate_autostart);
     typography::initialize();
-    iced::application(App::new, App::update, App::view)
-        .title("Clash of Rust · 原生代理客户端")
-        .theme(App::theme)
-        .subscription(App::subscription)
-        .settings(iced::Settings {
-            default_text_size: iced::Pixels(16.2),
+    iced::application(
+        move || App::new(tray_startup.lock().unwrap().take()),
+        App::update,
+        App::view,
+    )
+    .title("Clash of Rust · 原生代理客户端")
+    .theme(App::theme)
+    .subscription(App::subscription)
+    .settings(iced::Settings {
+        default_text_size: iced::Pixels(16.2),
+        ..Default::default()
+    })
+    .default_font(typography::ENGLISH_FONT)
+    .window(iced::window::Settings {
+        size: DEFAULT_WINDOW_SIZE,
+        min_size: Some(MIN_WINDOW_SIZE),
+        icon: Some(icons::window()),
+        exit_on_close_request: false,
+        visible: !background_start(),
+        #[cfg(target_os = "linux")]
+        platform_specific: iced::window::settings::PlatformSpecific {
+            application_id: "clash-of-rust".into(),
             ..Default::default()
-        })
-        .default_font(typography::ENGLISH_FONT)
-        .window(iced::window::Settings {
-            size: DEFAULT_WINDOW_SIZE,
-            min_size: Some(MIN_WINDOW_SIZE),
-            icon: Some(icons::window()),
-            exit_on_close_request: false,
-            visible: !background_start(),
-            #[cfg(target_os = "linux")]
-            platform_specific: iced::window::settings::PlatformSpecific {
-                application_id: "clash-of-rust".into(),
-                ..Default::default()
-            },
-            ..Default::default()
-        })
-        .run()
+        },
+        ..Default::default()
+    })
+    .run()
 }
 
 fn update_restart() -> bool {
@@ -337,6 +351,8 @@ struct App {
     testing_groups: BTreeSet<String>,
     node_delays: BTreeMap<String, u32>,
     tray: Option<tray::Guard>,
+    tray_startup: Option<tray::Startup>,
+    tray_close_requested: bool,
     site_queue: VecDeque<String>,
     interval_input: String,
     periodic_testing: bool,
@@ -503,7 +519,7 @@ async fn execute(engine: Arc<Mutex<Engine>>, action: Action, scope: Scope) -> Re
 }
 
 impl App {
-    fn new() -> (Self, Task<Message>) {
+    fn new(mut tray_startup: Option<tray::Startup>) -> (Self, Task<Message>) {
         let created = startup_store().and_then(Engine::new);
         let (engine, settings, profiles, geo_status, notice, error) = match created {
             Ok(engine) => {
@@ -528,14 +544,20 @@ impl App {
                 true,
             ),
         };
-        let tray_result = tray::start();
-        let (tray, notice, error) = match tray_result {
-            Ok(tray) => (Some(tray), notice, error),
-            Err(e) => (
-                None,
-                format!("{notice} 托盘不可用：{e}；关闭窗口将退出。"),
-                true,
-            ),
+        let (tray, notice, error) = match tray_startup.as_ref().and_then(tray::Startup::poll) {
+            Some(Ok(tray)) => {
+                tray_startup = None;
+                (Some(tray), notice, error)
+            }
+            Some(Err(e)) => {
+                tray_startup = None;
+                (
+                    None,
+                    format!("{notice} 托盘不可用：{e}；关闭窗口将退出。"),
+                    true,
+                )
+            }
+            None => (None, notice, error),
         };
         let mut app = Self {
             controller_port: settings.controller_port.to_string(),
@@ -562,13 +584,15 @@ impl App {
             pending_refresh: false,
             queued_actions: VecDeque::new(),
             probing: false,
-            visible: !background_start() || tray.is_none(),
+            visible: !background_start() || (tray.is_none() && tray_startup.is_none()),
             hidden_ticks: 0,
             expanded: BTreeSet::new(),
             group_offsets: BTreeMap::new(),
             testing_groups: BTreeSet::new(),
             node_delays: BTreeMap::new(),
             tray,
+            tray_startup,
+            tray_close_requested: false,
             site_queue: VecDeque::new(),
             site_results: vec![],
             site_generation: 0,
@@ -600,7 +624,7 @@ impl App {
         let task = Task::batch([
             app.dispatch(Action::Start),
             iced::window::latest().map(Message::ReadWindowSize),
-            if background_start() && app.tray.is_none() {
+            if background_start() && app.visible {
                 iced::window::latest().then(|id| match id {
                     Some(id) => iced::window::set_mode(id, iced::window::Mode::Windowed),
                     None => Task::none(),
@@ -1157,6 +1181,28 @@ impl App {
             }
             Message::ShowWindow(None) => {}
             Message::Tick => {
+                if let Some(startup) = &self.tray_startup {
+                    if let Some(result) = startup.poll() {
+                        self.tray_startup = None;
+                        match result {
+                            Ok(tray) => {
+                                tray.update(&self.snapshot);
+                                self.tray = Some(tray);
+                                self.tray_close_requested = false;
+                            }
+                            Err(error) => {
+                                self.error = true;
+                                self.notice = format!("托盘不可用：{error}；关闭窗口将退出。");
+                                if !self.visible {
+                                    return iced::window::latest().map(Message::ShowWindow);
+                                }
+                            }
+                        }
+                    } else if !self.visible && startup.elapsed() >= Duration::from_secs(3) {
+                        // Keep an app with no usable tray accessible while retrying.
+                        return iced::window::latest().map(Message::ShowWindow);
+                    }
+                }
                 if let Some(session) = self.updates.installing.clone()
                     && let Some((message, error)) = session.outcome()
                 {
@@ -1347,6 +1393,11 @@ impl App {
                         stop_stream,
                     ]);
                 }
+                if background_start() && self.tray_startup.is_some() && !self.tray_close_requested {
+                    self.tray_close_requested = true;
+                    self.notice = "桌面托盘正在初始化，请稍候；再次关闭窗口可退出程序。".into();
+                    return Task::none();
+                }
                 return self.exit();
             }
             Message::ExitFinished(result) => match result {
@@ -1372,6 +1423,7 @@ impl App {
             return Task::none();
         }
         self.cancel_site_checks();
+        self.tray_startup = None;
         if let Some(engine) = self.engine.clone() {
             self.exiting = true;
             Task::perform(

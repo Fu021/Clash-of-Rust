@@ -145,10 +145,18 @@ for background in (False, True):
             event.client = ClientMessage(33, 0, 1, display, window[0], X.XInternAtom(display, b'WM_PROTOCOLS', 0), 32, (c.c_long * 5)(X.XInternAtom(display, b'WM_DELETE_WINDOW', 0), 0, 0, 0, 0))
             assert X.XSendEvent(display, window[0], 0, 0, c.byref(event))
             X.XFlush(display)
+            if background:
+                # Login startup keeps retrying instead of silently disappearing
+                # when the tray host has not appeared. A second close confirms exit.
+                time.sleep(1)
+                assert proc.poll() is None, 'Background app exited while awaiting the tray host'
+                assert app_window(proc.pid), 'No tray host: the fallback window must stay accessible'
+                assert X.XSendEvent(display, window[0], 0, 0, c.byref(event))
+                X.XFlush(display)
             out, err = proc.communicate(timeout=15)
             assert proc.returncode == 0, (proc.returncode, err)
             assert not err, err.decode(errors='replace')
-            results.append({'background': background, 'mapped_window': window[1:], 'wm_class': app_class, 'core_version': core_version, 'close_exits': True, 'returncode': proc.returncode, 'stderr': err.decode()})
+            results.append({'background': background, 'mapped_window': window[1:], 'wm_class': app_class, 'core_version': core_version, 'close_exits': True, 'pending_tray_close_requires_confirmation': background, 'returncode': proc.returncode, 'stderr': err.decode()})
         finally:
             if proc.poll() is None:
                 os.killpg(proc.pid, signal.SIGTERM)

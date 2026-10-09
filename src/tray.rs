@@ -1,5 +1,8 @@
 //! Native tray lives on its own event thread; only commands cross into the GUI.
-use std::sync::{OnceLock, mpsc};
+use std::{
+    sync::{OnceLock, mpsc},
+    time::{Duration, Instant},
+};
 use tokio::sync::{Mutex, mpsc as async_channel, watch};
 use tray_icon::{
     Icon, MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent,
@@ -17,10 +20,82 @@ pub enum Command {
     ProxyOff,
     Exit,
 }
-static EVENTS: OnceLock<Mutex<async_channel::UnboundedReceiver<Command>>> = OnceLock::new();
+struct Events {
+    sender: async_channel::UnboundedSender<Command>,
+    receiver: Mutex<async_channel::UnboundedReceiver<Command>>,
+    commands: std::sync::Mutex<Vec<(tray_icon::menu::MenuId, Command)>>,
+}
+static EVENTS: OnceLock<Events> = OnceLock::new();
 
 pub async fn next() -> Option<Command> {
-    EVENTS.get()?.lock().await.recv().await
+    EVENTS.get()?.receiver.lock().await.recv().await
+}
+
+/// Starts before fonts and Geo data are loaded. A login session may not have
+/// its StatusNotifier host yet; retry without blocking the GUI thread.
+pub struct Startup {
+    ready: mpsc::Receiver<Result<Guard, String>>,
+    cancel: mpsc::Sender<()>,
+    started: Instant,
+}
+
+impl Startup {
+    pub fn new(timeout: Duration) -> Self {
+        let (ready_tx, ready) = mpsc::channel();
+        let (cancel, cancelled) = mpsc::channel();
+        let started = Instant::now();
+        std::thread::spawn(move || {
+            let deadline = started + timeout;
+            loop {
+                if !matches!(cancelled.try_recv(), Err(mpsc::TryRecvError::Empty)) {
+                    return;
+                }
+                match start() {
+                    Ok(guard) => {
+                        // A dropped receiver also drops the guard and native icon.
+                        let _ = ready_tx.send(Ok(guard));
+                        return;
+                    }
+                    Err(error) => {
+                        let remaining = deadline.saturating_duration_since(Instant::now());
+                        if remaining.is_zero() {
+                            let _ = ready_tx.send(Err(error.to_string()));
+                            return;
+                        }
+                        if !matches!(
+                            cancelled.recv_timeout(remaining.min(Duration::from_millis(250))),
+                            Err(mpsc::RecvTimeoutError::Timeout)
+                        ) {
+                            return;
+                        }
+                    }
+                }
+            }
+        });
+        Self {
+            ready,
+            cancel,
+            started,
+        }
+    }
+
+    pub fn poll(&self) -> Option<Result<Guard, String>> {
+        match self.ready.try_recv() {
+            Ok(result) => Some(result),
+            Err(mpsc::TryRecvError::Empty) => None,
+            Err(mpsc::TryRecvError::Disconnected) => Some(Err("托盘初始化线程已结束".into())),
+        }
+    }
+
+    pub fn elapsed(&self) -> Duration {
+        self.started.elapsed()
+    }
+}
+
+impl Drop for Startup {
+    fn drop(&mut self) {
+        let _ = self.cancel.send(());
+    }
 }
 
 pub struct Guard {
@@ -125,9 +200,42 @@ impl Drop for Guard {
 }
 
 pub fn start() -> anyhow::Result<Guard> {
-    #[cfg(target_os = "linux")]
+    #[cfg(any(windows, target_os = "linux"))]
     crate::platform::ensure_tray_available()?;
-    let (sender, receiver) = async_channel::unbounded_channel();
+    let events = EVENTS.get_or_init(|| {
+        let (sender, receiver) = async_channel::unbounded_channel();
+        // Native handlers can only be set once. Keep the current menu IDs
+        // separately so a retried creation never retains a failed menu.
+        MenuEvent::set_event_handler(Some(|event: MenuEvent| {
+            if let Some(events) = EVENTS.get()
+                && let Ok(commands) = events.commands.lock()
+                && let Some((_, command)) = commands.iter().find(|(id, _)| *id == event.id)
+            {
+                let _ = events.sender.send(command.clone());
+            }
+        }));
+        TrayIconEvent::set_event_handler(Some(|event| {
+            if matches!(
+                event,
+                TrayIconEvent::Click {
+                    button: MouseButton::Left,
+                    button_state: MouseButtonState::Up,
+                    ..
+                } | TrayIconEvent::DoubleClick {
+                    button: MouseButton::Left,
+                    ..
+                }
+            ) && let Some(events) = EVENTS.get()
+            {
+                let _ = events.sender.send(Command::Show);
+            }
+        }));
+        Events {
+            sender,
+            receiver: Mutex::new(receiver),
+            commands: std::sync::Mutex::new(Vec::new()),
+        }
+    });
     let (ready_tx, ready_rx) = mpsc::sync_channel(1);
     let (stop_tx, stop_rx) = mpsc::channel::<()>();
     // Only the newest state matters; a stalled tray must not accumulate polls.
@@ -183,42 +291,26 @@ pub fn start() -> anyhow::Result<Guard> {
                 tun,
                 off,
             };
-            let menu_sender = sender.clone();
-            MenuEvent::set_event_handler(Some(move |event: MenuEvent| {
-                if let Some((_, command)) = commands.iter().find(|(id, _)| *id == event.id) {
-                    let _ = menu_sender.send(command.clone());
-                }
-            }));
-            TrayIconEvent::set_event_handler(Some(move |event| {
-                if matches!(
-                    event,
-                    TrayIconEvent::Click {
-                        button: MouseButton::Left,
-                        button_state: MouseButtonState::Up,
-                        ..
-                    } | TrayIconEvent::DoubleClick {
-                        button: MouseButton::Left,
-                        ..
-                    }
-                ) {
-                    let _ = sender.send(Command::Show);
-                }
-            }));
             let icon = TrayIconBuilder::new()
+                .with_title("Clash of Rust")
                 .with_tooltip("Clash of Rust")
                 .with_icon(tray_icon(crate::icons::Kind::App))
                 .with_menu(Box::new(menu))
                 .with_menu_on_left_click(false)
                 .build()?;
+            *events.commands.lock().unwrap() = commands;
             Ok((icon, checks))
         })();
         match created {
             Ok((icon, checks)) => {
                 let mut icon_kind = crate::icons::Kind::App;
                 #[cfg(windows)]
-                let _ = ready_tx.send(Ok(thread_id));
+                let ready = ready_tx.send(Ok(thread_id));
                 #[cfg(not(windows))]
-                let _ = ready_tx.send(Ok(0u32));
+                let ready = ready_tx.send(Ok(0u32));
+                if ready.is_err() {
+                    return;
+                }
                 #[cfg(windows)]
                 unsafe {
                     use windows_sys::Win32::UI::WindowsAndMessaging::*;
@@ -258,10 +350,9 @@ pub fn start() -> anyhow::Result<Guard> {
         drop(stop_rx);
     });
     let id = ready_rx
-        .recv()
+        .recv_timeout(Duration::from_secs(5))
         .map_err(|e| anyhow::anyhow!(e))?
         .map_err(|e| anyhow::anyhow!(e))?;
-    let _ = EVENTS.set(Mutex::new(receiver));
     Ok(Guard {
         updates: update_tx,
         thread_id: id,

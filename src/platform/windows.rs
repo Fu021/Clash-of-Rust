@@ -6,8 +6,6 @@ use winreg::{
 
 const KEY: &str = "Software\\Microsoft\\Windows\\CurrentVersion\\Internet Settings";
 
-const RUN_KEY: &str = "Software\\Microsoft\\Windows\\CurrentVersion\\Run";
-
 pub fn installed_executable(executable: &Path) -> Result<bool> {
     use winreg::enums::{HKEY_LOCAL_MACHINE, KEY_WOW64_64KEY};
     let key = match RegKey::predef(HKEY_LOCAL_MACHINE).open_subkey_with_flags(
@@ -140,33 +138,56 @@ mod subscription_proxy_tests {
         assert!(proxy_address("", "https").is_none());
     }
 }
-fn startup_command() -> Result<String> {
-    Ok(format!(
-        "\"{}\" --background",
-        std::env::current_exe()?.display()
-    ))
-}
 pub fn autostart_enabled() -> Result<bool> {
-    let key = match RegKey::predef(HKEY_CURRENT_USER).open_subkey(RUN_KEY) {
-        Ok(key) => key,
-        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(false),
-        Err(e) => return Err(e.into()),
-    };
-    Ok(key.get_value::<String, _>("ClashOfRust").ok().as_deref()
-        == Some(startup_command()?.as_str()))
+    super::windows_autostart::Backend::current()?.enabled()
 }
-pub fn set_autostart(enabled: bool) -> Result<()> {
-    let (key, _) = RegKey::predef(HKEY_CURRENT_USER).create_subkey(RUN_KEY)?;
-    if enabled {
-        key.set_value("ClashOfRust", &startup_command()?)?;
-    } else {
-        match key.delete_value("ClashOfRust") {
-            Ok(()) => {}
-            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
-            Err(e) => return Err(e.into()),
-        }
+pub fn ensure_tray_available() -> Result<()> {
+    let host = unsafe {
+        windows_sys::Win32::UI::WindowsAndMessaging::FindWindowW(
+            wide("Shell_TrayWnd").as_ptr(),
+            std::ptr::null(),
+        )
+    };
+    if host.is_null() {
+        bail!("桌面托盘服务尚未就绪或当前系统没有托盘");
     }
     Ok(())
+}
+pub fn set_autostart(enabled: bool) -> Result<()> {
+    super::windows_autostart::Backend::current()?.set(enabled)
+}
+
+pub fn migrate_autostart() {
+    if let Ok(backend) = super::windows_autostart::Backend::current()
+        && backend.legacy_enabled().unwrap_or(false)
+    {
+        // Keep the old Run value if scheduling is unavailable or denied.
+        let _ = backend.set(true);
+    }
+}
+
+pub fn autostart_helper_main() -> bool {
+    if std::env::args_os().any(|arg| arg == "--autostart-status") {
+        match autostart_enabled() {
+            Ok(enabled) => std::process::exit(i32::from(!enabled)),
+            Err(error) => {
+                eprintln!("{error:#}");
+                std::process::exit(2);
+            }
+        }
+    }
+    let enabled = if std::env::args_os().any(|arg| arg == "--autostart-enable") {
+        true
+    } else if std::env::args_os().any(|arg| arg == "--autostart-remove") {
+        false
+    } else {
+        return false;
+    };
+    if let Err(error) = set_autostart(enabled) {
+        eprintln!("{error:#}");
+        std::process::exit(1);
+    }
+    true
 }
 pub fn open_directory(path: &Path) -> Result<()> {
     std::process::Command::new("explorer.exe")
