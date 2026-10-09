@@ -116,6 +116,10 @@ jobs:
         if: runner.os == 'Linux'
         run: |
           import subprocess, sys, glob
+          # The installed core launcher checks the full trusted path even when
+          # TUN is off. Hosted runners expose a writable /opt by default.
+          subprocess.run(['sudo', 'chown', 'root:root', '/opt'], check=True)
+          subprocess.run(['sudo', 'chmod', '0755', '/opt'], check=True)
           for artifact in glob.glob('dist/*.deb'):
               subprocess.run(['sudo', 'apt-get', 'install', '-y', './' + artifact], check=True)
               subprocess.run(['dbus-run-session', '--', 'xvfb-run', '-a', sys.executable, 'scripts/test-linux-gui.py', '--executable', '/usr/bin/clash-of-rust'], check=True)
@@ -128,10 +132,6 @@ jobs:
           output = subprocess.check_output(['cargo', 'test', '--locked', '--test', 'linux_tun', '--no-run', '--message-format=json'], text=True)
           binaries = [entry['executable'] for line in output.splitlines() if (entry := json.loads(line)).get('reason') == 'compiler-artifact' and entry.get('executable') and entry['target']['name'] == 'linux_tun']
           assert len(binaries) == 1
-          # Hosted runners make /opt writable; use normal system-directory
-          # ownership so the fixed-target authorization helper can trust it.
-          subprocess.run(['sudo', 'chown', 'root:root', '/opt'], check=True)
-          subprocess.run(['sudo', 'chmod', '0755', '/opt'], check=True)
           subprocess.run(['stat', '-c', '%U %G %a %n', '/opt', '/opt/clash-of-rust', '/opt/clash-of-rust/resources', '/opt/clash-of-rust/clash-of-rust', '/opt/clash-of-rust/resources/mihomo', '/opt/clash-of-rust/resources/core.json'], check=True)
           subprocess.run(['sudo', sys.executable, 'scripts/test-linux-tun.py', '--test-binary', binaries[0], '--uid', str(os.getuid())], check=True)
           shutil.copyfile(binaries[0], 'target/linux-tun-test')
