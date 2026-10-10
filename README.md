@@ -3,7 +3,7 @@
 </p>
 <h1 align="center">Clash of Rust</h1>
 
-基于 mihomo 的原生 Rust 代理客户端。支持 **Windows（x64 / ARM64）** 和 **Debian/Ubuntu（amd64 / ARM64）**。版本 **0.5.1**，修复 Windows 开机自启权限与错误提示，改善配置保存及恢复；更新内容见 [发布说明](docs/releases/0.5.1.md)。
+基于 mihomo 的原生 Rust 代理客户端。支持 **Windows（x64 / ARM64）** 和 **Debian/Ubuntu（amd64 / ARM64）**。版本 **0.5.1**，更新内容见 [发布说明](docs/releases/0.5.1.md)。
 
 ## Features
 
@@ -33,7 +33,7 @@ Windows 运行安装程序；Debian/Ubuntu 使用 `sudo apt install ./安装包�
 
 ## 内存占用
 
-参考实测版本 **0.5.0**（0.5.1 未重新测量）；Ubuntu 22.04 x64、Release 构建，附加规则关闭，固定输入为 2,000 节点、40 组和 20,000 条规则：
+参考实测版本 **0.5.0**；Ubuntu 22.04 x64、Release 构建，附加规则关闭，固定输入为 2,000 节点、40 组和 20,000 条规则：
 
 | 场景 | GUI RSS | GUI 与内核合计 PSS |
 | --- | ---: | ---: |
