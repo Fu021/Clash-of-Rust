@@ -1,6 +1,6 @@
 //! Disk-backed subscription commits. An interrupted commit is rolled back before
 //! settings/profiles are loaded on the next launch.
-use crate::config::atomic_write;
+use crate::config::{atomic_write, persist_file};
 use anyhow::{Context, Result, ensure};
 use serde::{Deserialize, Serialize};
 use std::{
@@ -49,11 +49,8 @@ fn copy_atomic(source: &Path, target: &Path) -> Result<()> {
     let mut temporary = tempfile::NamedTempFile::new_in(parent)?;
     std::io::copy(&mut fs::File::open(source)?, &mut temporary)?;
     temporary.as_file().sync_all()?;
-    temporary
-        .persist(target)
-        .map_err(|e| e.error)
-        .context("提交配置文件失败")?;
-    Ok(())
+    persist_file(temporary, target)
+        .with_context(|| format!("提交配置文件失败：{}", target.display()))
 }
 impl Transaction {
     pub(crate) fn new(root: &Path) -> Result<Self> {

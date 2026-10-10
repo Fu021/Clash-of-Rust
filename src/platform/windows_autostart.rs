@@ -203,6 +203,38 @@ impl Backend {
         Ok(())
     }
 
+    fn register_fallback(&self, scheduler_error: anyhow::Error) -> Result<()> {
+        // An ownership conflict or a failed registry write is not a scheduler
+        // outage. Do not create a duplicate entry for an existing marked task.
+        if scheduler_error
+            .downcast_ref::<windows::core::Error>()
+            .is_none()
+            || self.marked()
+        {
+            return Err(scheduler_error).context("无法修改开机启动登录任务");
+        }
+        let root = RegKey::predef(HKEY_CURRENT_USER);
+        let (key, _) = root
+            .create_subkey_with_flags(RUN_KEY, winreg::enums::KEY_SET_VALUE)
+            .context("无法创建普通开机启动项")?;
+        key.set_value(&self.run_name, &self.command())
+            .context("无法保存普通开机启动项")?;
+        // The user explicitly enabled startup; undo a Task Manager disable bit
+        // for this entry, without touching any other startup item.
+        if let Ok(key) = root.open_subkey_with_flags(APPROVED_KEY, winreg::enums::KEY_SET_VALUE) {
+            match key.delete_value(&self.run_name) {
+                Ok(()) => {}
+                Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+                Err(error) => return Err(error).context("无法启用普通开机启动项"),
+            }
+        }
+        if !self.legacy_enabled()? {
+            bail!("普通开机启动项仍被系统禁用");
+        }
+        // Successful fallback is a successful enable operation.
+        Ok(())
+    }
+
     fn xml(&self) -> String {
         let sid = xml_escape(&self.sid);
         let executable = xml_escape(&self.executable.to_string_lossy());
@@ -243,15 +275,20 @@ impl Backend {
             // Refuse to overwrite a task pointing at someone else's installation.
             self.owned_task(folder)?;
             let empty = VARIANT::default();
+            let user = VARIANT::from(BSTR::from(self.sid.as_str()));
+            let security = VARIANT::from(BSTR::from(format!(
+                "D:P(A;;GA;;;SY)(A;;GA;;;BA)(A;;GA;;;{})",
+                self.sid
+            )));
             unsafe {
                 folder.RegisterTask(
                     &BSTR::from(self.task_name.as_str()),
                     &BSTR::from(self.xml()),
                     TASK_CREATE_OR_UPDATE.0,
-                    &empty,
+                    &user,
                     &empty,
                     TASK_LOGON_INTERACTIVE_TOKEN,
-                    &empty,
+                    &security,
                 )?;
             }
             let recorded = root
@@ -266,10 +303,7 @@ impl Backend {
             Ok(())
         });
         if let Err(error) = registered {
-            root.create_subkey(RUN_KEY)?
-                .0
-                .set_value(&self.run_name, &self.command())?;
-            return Err(error).context("登录任务创建失败，已保留普通开机启动项");
+            return self.register_fallback(error);
         }
         self.remove_legacy()
     }
@@ -350,6 +384,36 @@ mod tests {
     }
 
     #[test]
+    fn scheduler_access_denied_falls_back_to_working_user_startup() {
+        let mut backend = Backend::current().unwrap();
+        let name = format!("ClashOfRust.CI.{}", uuid::Uuid::new_v4());
+        backend.task_name = name.clone();
+        backend.run_name = name.clone();
+        backend.marker_key = format!("Software\\ClashOfRust\\Tests\\{name}");
+        let cleanup = Cleanup(backend);
+        let backend = &cleanup.0;
+        let root = RegKey::predef(HKEY_CURRENT_USER);
+        root.create_subkey(APPROVED_KEY)
+            .unwrap()
+            .0
+            .set_raw_value(
+                &backend.run_name,
+                &winreg::RegValue {
+                    vtype: winreg::enums::REG_BINARY,
+                    bytes: vec![3, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0],
+                },
+            )
+            .unwrap();
+        let denied =
+            windows::core::Error::from_hresult(windows::core::HRESULT(0x80070005u32 as i32));
+        backend.register_fallback(denied.into()).unwrap();
+        assert!(backend.enabled().unwrap());
+        backend.set(false).unwrap();
+        assert!(!backend.enabled().unwrap());
+        assert!(!backend.marked());
+    }
+
+    #[test]
     #[ignore = "requires the native Windows Task Scheduler; creates only a unique test task"]
     fn native_autostart_migrates_and_cleans_up_a_user_logon_task() {
         let mut backend = Backend::current().unwrap();
@@ -371,6 +435,11 @@ mod tests {
         assert!(!backend.legacy_enabled().unwrap());
         with_folder(|folder| {
             let task = backend.owned_task(folder)?.unwrap();
+            let security = unsafe { task.GetSecurityDescriptor(4)? }.to_string();
+            assert!(
+                security.contains(&backend.sid),
+                "the user must retain task access after elevated registration"
+            );
             // Task Scheduler omits default-valued fields from its exported XML.
             // Check the effective registered settings through COM instead.
             let definition = unsafe { task.Definition()? };
@@ -436,8 +505,8 @@ mod tests {
             "a foreign task must not be overwritten"
         );
         assert!(
-            other.0.legacy_enabled().unwrap(),
-            "failed registration must keep a Run fallback"
+            !other.0.legacy_enabled().unwrap(),
+            "an ownership conflict must not create a duplicate Run entry"
         );
         other.0.set(false).unwrap();
         drop(other);

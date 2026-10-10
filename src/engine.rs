@@ -277,7 +277,8 @@ impl Engine {
             .arg(&candidate)
             .stdout(std::process::Stdio::piped())
             .stderr(std::process::Stdio::piped())
-            .spawn()?;
+            .spawn()
+            .with_context(|| format!("无法启动内核校验程序：{}", self.resources.display()))?;
         let stdout = child.stdout.take().context("无法读取校验输出")?;
         let stderr = child.stderr.take().context("无法读取校验错误输出")?;
         let (status, stdout, stderr) = tokio::time::timeout(Duration::from_secs(30), async {
@@ -309,7 +310,7 @@ impl Engine {
         }
         for port in [self.settings.controller_port, self.settings.mixed_port] {
             let _listener = std::net::TcpListener::bind(("127.0.0.1", port))
-                .with_context(|| format!("端口 {port} 已被占用"))?;
+                .with_context(|| format!("无法绑定端口 {port}，请检查占用或系统端口限制"))?;
         }
         let id = self
             .settings
@@ -331,7 +332,8 @@ impl Engine {
             .arg(path)
             .stdout(std::process::Stdio::piped())
             .stderr(std::process::Stdio::piped())
-            .spawn()?;
+            .spawn()
+            .with_context(|| format!("无法启动内核程序：{}", self.resources.display()))?;
         if let Some(stdout) = child.stdout.take() {
             let logs = self.logs.clone();
             self.readers
@@ -1135,6 +1137,15 @@ impl Engine {
         if let Ok(mut logs) = self.logs.lock() {
             logs.clear();
         }
+    }
+    pub fn record_failure(&self, error: &str) {
+        append(
+            &self.logs,
+            format!(
+                "[客户端] 操作失败：{}",
+                error.replace(&self.settings.secret, "[密钥]")
+            ),
+        );
     }
     pub fn export_logs(&self) -> Result<PathBuf> {
         let path = self.store.root.join("logs-export.txt");

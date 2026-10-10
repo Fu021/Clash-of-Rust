@@ -299,6 +299,7 @@ enum Action {
 #[derive(Debug, Clone)]
 struct Reply {
     scope: Scope,
+    start_requested: bool,
     settings: Settings,
     profiles: Option<Vec<Profile>>,
     snapshot: Option<Snapshot>,
@@ -442,6 +443,7 @@ struct App {
 }
 
 async fn execute(engine: Arc<Mutex<Engine>>, action: Action, scope: Scope) -> Reply {
+    let start_requested = matches!(action, Action::Start);
     let include_profiles = !matches!(action, Action::Refresh);
     let mut engine = engine.lock().await;
     let mut exit_after_start = false;
@@ -566,18 +568,22 @@ async fn execute(engine: Arc<Mutex<Engine>>, action: Action, scope: Scope) -> Re
         }
     }
     .await;
-    let mut notice = result.map_err(|e| e.to_string());
+    let mut notice = result.map_err(|e| format!("{e:#}"));
     let snapshot = match engine.poll(scope).await {
         Ok(snapshot) => Some(snapshot),
         Err(e) => {
             if notice.as_ref().is_ok_and(|s| s.is_empty()) {
-                notice = Err(e.to_string());
+                notice = Err(format!("{e:#}"));
             }
             None
         }
     };
+    if let Err(error) = &notice {
+        engine.record_failure(error);
+    }
     Reply {
         scope,
+        start_requested,
         settings: engine.settings.clone(),
         profiles: include_profiles.then(|| engine.profiles.clone()),
         snapshot,
@@ -1605,10 +1611,15 @@ impl App {
                 }
                 if reply.running {
                     self.core_failure = None;
-                } else if let Err(error) = &reply.notice {
-                    self.core_failure = Some(error.clone());
-                } else if self.snapshot.running {
-                    self.core_failure = Some("内核已退出，请查看日志或重试启动。".into());
+                } else if reply.start_requested || self.snapshot.running {
+                    self.core_failure = Some(
+                        reply
+                            .notice
+                            .as_ref()
+                            .err()
+                            .cloned()
+                            .unwrap_or_else(|| "内核已退出，请查看日志或重试启动。".into()),
+                    );
                 }
                 self.snapshot.running = reply.running;
                 if let Some(mut snapshot) = reply.snapshot {
@@ -2061,7 +2072,7 @@ impl App {
             None
         };
         if let Some(notice) = update_status.or_else(|| {
-            (self.notice_visible && (self.snapshot.running || self.core_failure.is_none()))
+            (self.notice_visible && self.core_failure.as_deref() != Some(self.notice.as_str()))
                 .then_some(self.notice.as_str())
         }) {
             let failed = self.error || self.updates.failure.is_some();
@@ -3907,6 +3918,7 @@ mod async_state_tests {
         app.exiting = false;
         let _ = app.update(Message::Finished(Box::new(Reply {
             scope: Scope::Home,
+            start_requested: true,
             settings: app.settings.clone(),
             profiles: None,
             snapshot: Some(Snapshot {
@@ -3922,6 +3934,42 @@ mod async_state_tests {
         assert!(app.core_failure.is_none());
         let _ = app.update(Message::RestartCore);
         assert!(!app.busy && app.queued_actions.is_empty());
+    }
+    #[test]
+    fn settings_errors_preserve_the_original_core_failure() {
+        let mut app = app();
+        app.core_failure = Some("内核程序被系统阻止".into());
+        let _ = app.update(Message::Finished(Box::new(Reply {
+            scope: Scope::Other,
+            start_requested: false,
+            settings: app.settings.clone(),
+            profiles: None,
+            snapshot: None,
+            notice: Err("无法修改开机启动登录任务：拒绝访问 (0x80070005)".into()),
+            running: false,
+            geo_status: String::new(),
+            autostart: false,
+            exit_after_start: false,
+        })));
+        assert_eq!(app.core_failure.as_deref(), Some("内核程序被系统阻止"));
+        assert!(app.notice.contains("开机启动"));
+        assert!(app.error && app.notice_visible);
+        let _ = app.update(Message::Finished(Box::new(Reply {
+            scope: Scope::Home,
+            start_requested: true,
+            settings: app.settings.clone(),
+            profiles: None,
+            snapshot: None,
+            notice: Err("无法启动内核程序：拒绝访问".into()),
+            running: false,
+            geo_status: String::new(),
+            autostart: false,
+            exit_after_start: false,
+        })));
+        assert_eq!(
+            app.core_failure.as_deref(),
+            Some("无法启动内核程序：拒绝访问")
+        );
     }
     #[test]
     fn late_group_result_cannot_remove_new_work_or_restore_old_delays() {
