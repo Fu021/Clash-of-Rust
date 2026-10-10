@@ -39,6 +39,39 @@ fn free_port() -> u16 {
 }
 
 #[tokio::test]
+#[ignore = "Requires bundled resources; retries after a real port conflict"]
+async fn failed_start_can_retry_after_port_is_released() {
+    let resources = test_resources();
+    let tmp = tempfile::tempdir().unwrap();
+    let store = Store::at(tmp.path().to_owned()).unwrap();
+    let occupied = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+    let mixed_port = occupied.local_addr().unwrap().port();
+    let mut controller_port = free_port();
+    while controller_port == mixed_port {
+        controller_port = free_port();
+    }
+    store
+        .save_settings(&Settings {
+            controller_port,
+            mixed_port,
+            ..Settings::default()
+        })
+        .unwrap();
+    let mut engine = Engine::with_resources(store, resources).unwrap();
+    let failure = engine.start().await.unwrap_err();
+    assert!(failure.to_string().contains(&mixed_port.to_string()));
+    assert!(!engine.running());
+    drop(occupied);
+    engine.start().await.unwrap();
+    assert!(!engine.restore_proxy_mode().await.unwrap());
+    let snapshot = engine.poll(Scope::Home).await.unwrap();
+    assert!(snapshot.running);
+    assert!(!snapshot.version.is_empty());
+    engine.stop().await.unwrap();
+    assert!(!engine.running());
+}
+
+#[tokio::test]
 #[ignore = "Requires bundled resources; verifies remembered modes without OS proxy changes"]
 async fn remembered_modes_survive_core_and_client_restart() {
     use clash_of_rust::engine::ProxyMode;

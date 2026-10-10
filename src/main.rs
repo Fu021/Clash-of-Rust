@@ -7,6 +7,8 @@ mod typography;
 #[cfg(feature = "ui-preview")]
 #[path = "ui_preview.rs"]
 pub(crate) mod ui_preview;
+#[path = "ui_style.rs"]
+mod ui_style;
 
 use clash_of_rust::{
     config::{Profile, Settings, Store},
@@ -127,7 +129,7 @@ fn main() -> iced::Result {
     .theme(App::theme)
     .subscription(App::subscription)
     .settings(iced::Settings {
-        default_text_size: iced::Pixels(16.2),
+        default_text_size: iced::Pixels(15.0),
         ..Default::default()
     })
     .default_font(typography::ENGLISH_FONT)
@@ -175,7 +177,6 @@ fn startup_store() -> anyhow::Result<Store> {
     }
 }
 
-const ACCENT: Color = Color::from_rgb(0.35, 0.77, 0.70);
 const PAGE_SIZE: usize = 60;
 const GROUP_PAGE_SIZE: usize = 4;
 
@@ -247,6 +248,27 @@ impl Page {
             _ => Scope::Other,
         }
     }
+    fn description(self) -> &'static str {
+        match self {
+            Self::Home => "运行状态与流量概览",
+            Self::Proxies => "决策组与节点选择",
+            Self::Profiles => "导入、更新与切换配置",
+            Self::Connections => "查看当前连接与流量去向",
+            Self::Rules => "当前配置的匹配顺序与转发策略",
+            Self::Logs => "内核与客户端的运行记录",
+            Self::Tests => "网站响应、出口信息与 DNS 检查",
+            Self::Websites => "当前出口与平台检测结果",
+            Self::Settings => "客户端、网络与外观设置",
+        }
+    }
+}
+
+#[derive(Clone)]
+struct CoreHandle(Arc<Mutex<Engine>>);
+impl std::fmt::Debug for CoreHandle {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("CoreHandle")
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -291,6 +313,9 @@ type DownloadResult = Arc<std::sync::Mutex<Option<Result<update::Downloaded, Str
 
 #[derive(Debug, Clone)]
 enum Message {
+    RestartCore,
+    CoreReady(Result<CoreHandle, String>),
+    DismissNotice,
     Navigate(Page),
     Query(String),
     NodeSort(NodeSort),
@@ -392,6 +417,8 @@ struct App {
     exiting: bool,
     notice: String,
     error: bool,
+    core_failure: Option<String>,
+    notice_visible: bool,
     query: String,
     list_offset: usize,
     profile_name: String,
@@ -602,6 +629,7 @@ impl App {
             }
             None => (None, notice, error),
         };
+        let core_failure = engine.is_none().then(|| notice.clone());
         let mut app = Self {
             node_sort: settings.node_sort,
             controller_port: settings.controller_port.to_string(),
@@ -620,6 +648,8 @@ impl App {
             geo_status,
             notice,
             error,
+            core_failure,
+            notice_visible: error,
             page: Page::Home,
             snapshot: Snapshot::default(),
             busy: false,
@@ -691,14 +721,44 @@ impl App {
     }
 
     fn scaled(&self, size: u16) -> f32 {
-        size as f32 * 1.35
+        if size <= 10 { 13.0 } else { size as f32 * 1.25 }
     }
 
     fn label<'a>(&self, value: impl text::IntoFragment<'a>) -> iced::widget::Text<'a> {
         text(value)
             .font(typography::ENGLISH_FONT)
             .size(self.scaled(12))
-            .color(self.foreground())
+    }
+
+    fn accent(&self) -> Color {
+        ui_style::tone(&self.theme(), ui_style::Tone::Accent)
+    }
+    fn secondary(&self) -> Color {
+        ui_style::secondary(&self.theme())
+    }
+    fn latency_color(&self, delay: u32) -> Color {
+        ui_style::tone(
+            &self.theme(),
+            match delay {
+                1..=299 => ui_style::Tone::Success,
+                300..=999 => ui_style::Tone::Warning,
+                _ => ui_style::Tone::Danger,
+            },
+        )
+    }
+    fn caption<'a>(&self, value: impl text::IntoFragment<'a>) -> iced::widget::Text<'a> {
+        self.label(value).size(13).color(self.secondary())
+    }
+    fn title<'a>(&self, value: impl text::IntoFragment<'a>) -> iced::widget::Text<'a> {
+        self.label(value).size(17)
+    }
+    fn ready_to_retry(&self) -> bool {
+        !self.snapshot.running
+            && !self.busy
+            && !self.working
+            && !self.elevating
+            && !self.exiting
+            && !self.updates.busy()
     }
 
     fn selection<'a, T: Clone + PartialEq + std::fmt::Display + 'a>(
@@ -708,12 +768,15 @@ impl App {
         on_select: impl Fn(T) -> Message + 'a,
         width: u32,
     ) -> Element<'a, Message> {
-        let caption = self.label(selected.to_string()).size(self.scaled(10));
+        let caption = self
+            .label(selected.to_string())
+            .size(13)
+            .wrapping(text::Wrapping::None);
         let field = pick_list(options, Some(selected), on_select)
             .font(typography::ENGLISH_FONT)
             .text_shaping(text::Shaping::Advanced)
             .text_size(self.scaled(10))
-            .padding(5)
+            .padding([8, 9])
             .width(width)
             .style(selection_field);
         // tiny-skia's cached text damage bounds ignore vertical alignment.
@@ -725,12 +788,13 @@ impl App {
             container(caption)
                 .width(Length::Fill)
                 .height(Length::Fill)
+                .clip(true)
                 .align_y(iced::alignment::Vertical::Center)
                 .padding(iced::Padding {
-                    top: 5.0,
-                    bottom: 5.0,
-                    left: 5.0,
-                    right: 5.0 + self.scaled(10),
+                    top: 8.0,
+                    bottom: 8.0,
+                    left: 9.0,
+                    right: 9.0 + self.scaled(10),
                 })
         ]
         .width(width)
@@ -738,19 +802,11 @@ impl App {
     }
 
     fn foreground(&self) -> Color {
-        if self.dark {
-            Color::WHITE
-        } else {
-            self.theme().palette().text
-        }
+        self.theme().palette().text
     }
 
     fn theme(&self) -> Theme {
-        if self.dark {
-            Theme::TokyoNight
-        } else {
-            Theme::Light
-        }
+        ui_style::theme(self.dark)
     }
 
     fn subscription(&self) -> Subscription<Message> {
@@ -854,6 +910,62 @@ impl App {
 
     fn update(&mut self, message: Message) -> Task<Message> {
         match message {
+            Message::DismissNotice => {
+                self.notice_visible = false;
+                self.updates.failure = None;
+            }
+            Message::RestartCore => {
+                if !self.ready_to_retry() {
+                    return Task::none();
+                }
+                self.notice_visible = false;
+                if self.engine.is_some() {
+                    return self.dispatch(Action::Start);
+                }
+                self.busy = true;
+                self.working = true;
+                return Task::perform(
+                    async {
+                        tokio::task::spawn_blocking(|| startup_store().and_then(Engine::new))
+                            .await
+                            .map_err(|error| format!("初始化任务失败：{error}"))?
+                            .map(|engine| CoreHandle(Arc::new(Mutex::new(engine))))
+                            .map_err(|error| format!("初始化失败：{error:#}"))
+                    },
+                    Message::CoreReady,
+                );
+            }
+            Message::CoreReady(result) => {
+                self.busy = false;
+                self.working = false;
+                if self.exiting {
+                    return Task::none();
+                }
+                match result {
+                    Ok(handle) => {
+                        let engine = handle.0;
+                        // Initialization completed outside the GUI thread. A newly
+                        // initialized engine has no running process yet.
+                        if let Ok(engine) = engine.try_lock() {
+                            self.settings = engine.settings.clone();
+                            self.profiles = engine.profiles.clone();
+                            self.geo_status = engine.geo_manifest.version.clone();
+                            self.controller_port = self.settings.controller_port.to_string();
+                            self.mixed_port = self.settings.mixed_port.to_string();
+                            self.interval_input = self.settings.delay_interval_minutes.to_string();
+                            self.node_sort = self.settings.node_sort;
+                        }
+                        self.engine = Some(engine);
+                        return self.dispatch(Action::Start);
+                    }
+                    Err(error) => {
+                        self.core_failure = Some(error.clone());
+                        self.notice = error;
+                        self.error = true;
+                        self.notice_visible = true;
+                    }
+                }
+            }
             Message::CheckUpdate => return self.check_update(),
             Message::UpdateChecked(result) => self.updates.finish(result),
             Message::InstallUpdate => {
@@ -964,6 +1076,7 @@ impl App {
                 if let Err(error) = result {
                     self.notice = format!("无法打开 Release 页面：{error}");
                     self.error = true;
+                    self.notice_visible = true;
                 }
             }
             Message::Navigate(page) => {
@@ -1123,6 +1236,7 @@ impl App {
                     Ok(()) => return self.exit(),
                     Err(error) => {
                         self.error = true;
+                        self.notice_visible = true;
                         self.notice = error;
                     }
                 }
@@ -1139,6 +1253,7 @@ impl App {
                     }
                     Err(_) => {
                         self.error = true;
+                        self.notice_visible = true;
                         self.notice = "端口必须为 1–65535 的整数".into();
                     }
                 }
@@ -1210,6 +1325,7 @@ impl App {
                     Err(error) => {
                         self.notice = format!("{group} 测速失败：{error}");
                         self.error = true;
+                        self.notice_visible = true;
                     }
                 }
                 return self.dispatch(Action::Refresh);
@@ -1230,6 +1346,7 @@ impl App {
                 }
                 _ => {
                     self.error = true;
+                    self.notice_visible = true;
                     self.notice = "请输入 0–1440 分钟，0 表示关闭定时测速".into();
                 }
             },
@@ -1392,6 +1509,7 @@ impl App {
                             }
                             Err(error) => {
                                 self.error = true;
+                                self.notice_visible = true;
                                 self.notice = format!("托盘不可用：{error}；关闭窗口将退出。");
                                 if !self.visible {
                                     return iced::window::latest().map(Message::ShowWindow);
@@ -1464,6 +1582,13 @@ impl App {
                     self.group_offsets.clear();
                     self.cancel_site_checks();
                 }
+                if reply.running {
+                    self.core_failure = None;
+                } else if let Err(error) = &reply.notice {
+                    self.core_failure = Some(error.clone());
+                } else if self.snapshot.running {
+                    self.core_failure = Some("内核已退出，请查看日志或重试启动。".into());
+                }
                 self.snapshot.running = reply.running;
                 if let Some(mut snapshot) = reply.snapshot {
                     if reply.scope == Scope::Proxies && snapshot.running {
@@ -1511,10 +1636,13 @@ impl App {
                     Ok(notice) if !notice.is_empty() => {
                         self.notice = notice;
                         self.error = false;
+                        self.notice_visible = true;
                     }
                     Err(error) => {
                         self.notice = error;
                         self.error = true;
+                        self.notice_visible = true;
+                        self.notice_visible = true;
                     }
                     _ => {}
                 }
@@ -1540,6 +1668,7 @@ impl App {
                 }
                 if !self.snapshot.running {
                     self.error = true;
+                    self.notice_visible = true;
                     self.notice = "请先启动内核".into();
                     return Task::none();
                 }
@@ -1615,6 +1744,7 @@ impl App {
                 Err(error) => {
                     self.exiting = false;
                     self.error = true;
+                    self.notice_visible = true;
                     self.notice = format!("退出失败：{error}");
                     if self.updates.busy() {
                         self.updates.progress = None;
@@ -1727,9 +1857,19 @@ impl App {
     }
 
     fn action<'a>(&self, label: &'a str, action: Action, enabled: bool) -> Element<'a, Message> {
+        let style = if matches!(action, Action::DeleteProfile(_) | Action::Close(_)) {
+            ui_style::danger_button
+        } else if matches!(
+            action,
+            Action::Import(..) | Action::SavePorts(..) | Action::Activate(_)
+        ) {
+            rounded_primary
+        } else {
+            rounded_secondary
+        };
         button(self.label(label).size(self.scaled(12)))
-            .padding([4, 10])
-            .style(rounded_primary)
+            .padding([7, 12])
+            .style(style)
             .on_press_maybe(
                 (enabled
                     && !self.working
@@ -1748,94 +1888,225 @@ impl App {
                 image(icons::sidebar()).width(24).height(24),
                 self.label("Clash of Rust")
                     .size(typography::brand_size())
-                    .shaping(text::Shaping::Advanced)
                     .wrapping(text::Wrapping::None)
                     .width(Length::Fill)
-                    .color(ACCENT)
             ]
-            .spacing(6)
-            .width(Length::Fill),
-            Space::new().height(8)
+            .spacing(6),
+            Space::new().height(if compact { 6 } else { 18 })
         ]
-        .spacing(if compact { 6 } else { 10 });
-        for page in Page::ALL {
+        .spacing(if compact { 2 } else { 5 });
+        for (index, page) in Page::ALL.into_iter().enumerate() {
             nav = nav.push(
-                button(self.label(page.name()).size(self.scaled(12)))
-                    .width(Length::Fill)
-                    .padding([4, 10])
-                    .style(if self.page == page {
-                        rounded_primary
-                    } else {
-                        rounded_text
-                    })
-                    .on_press(Message::Navigate(page)),
+                button(
+                    aligned_row![
+                        container(Space::new().width(3).height(20)).style(move |theme: &Theme| {
+                            container::Style {
+                                background: (self.page == page)
+                                    .then(|| ui_style::tone(theme, ui_style::Tone::Accent).into()),
+                                ..Default::default()
+                            }
+                        }),
+                        image(ui_style::nav_icon(index, self.dark))
+                            .width(18)
+                            .height(18),
+                        self.label(page.name()).size(15)
+                    ]
+                    .spacing(9),
+                )
+                .width(Length::Fill)
+                .padding([if compact { 6 } else { 9 }, 5])
+                .style(if self.page == page {
+                    ui_style::selected_button
+                } else {
+                    rounded_text
+                })
+                .on_press(Message::Navigate(page)),
             );
         }
-        nav = nav.push(Space::new().height(Length::Fill)).push(
-            self.label(clash_of_rust::VERSION)
-                .size(self.scaled(10))
-                .color(self.foreground()),
-        );
+        nav = nav
+            .push(Space::new().height(Length::Fill))
+            .push(self.caption(clash_of_rust::VERSION));
         let sidebar = container(nav)
-            .width(164)
+            .width(168)
             .height(Length::Fill)
-            .padding(10)
+            .padding(12)
             .style(sidebar_panel);
         let status = if self.exiting {
-            "正在恢复代理并退出…"
+            "正在退出…"
         } else if self.working || self.elevating {
             "正在处理…"
         } else if self.snapshot.running {
-            "内核运行中"
+            "● 内核运行中"
         } else {
-            "内核未启动"
+            "● 内核未启动"
+        };
+        let tone = if self.working || self.elevating {
+            ui_style::Tone::Warning
+        } else if self.snapshot.running {
+            ui_style::Tone::Success
+        } else {
+            ui_style::Tone::Danger
         };
         let active = self
             .profiles
             .iter()
             .find(|p| Some(&p.id) == self.settings.active_profile.as_ref())
             .map(|p| p.name.as_str())
-            .unwrap_or("未选择配置");
+            .unwrap_or("选择配置");
         let header = aligned_row![
-            self.label(self.page.name()).size(self.scaled(18)),
+            column![
+                self.label(self.page.name()).size(24),
+                self.caption(self.page.description())
+            ]
+            .spacing(3),
             Space::new().width(Length::Fill),
             column![
-                self.label(status)
-                    .size(self.scaled(12))
-                    .color(if self.snapshot.running {
-                        ACCENT
-                    } else {
-                        self.foreground()
-                    }),
-                self.label(active)
-                    .size(self.scaled(10))
-                    .color(self.foreground())
+                container(self.label(status).size(13))
+                    .padding([5, 9])
+                    .style(move |theme: &Theme| ui_style::badge(theme, tone)),
+                button(self.caption(active))
+                    .padding([3, 8])
+                    .style(rounded_text)
+                    .on_press(Message::Navigate(Page::Profiles))
             ]
-            .spacing(4)
-            .width(170)
+            .spacing(3)
             .align_x(iced::alignment::Horizontal::Right)
-        ];
+        ]
+        .spacing(8);
+        let mut body = column![header].spacing(if compact { 8 } else { 12 });
+        if !self.snapshot.running {
+            let starting = self.working || self.elevating;
+            let reason = if starting {
+                "正在初始化配置并启动内核，请稍候…"
+            } else {
+                self.core_failure
+                    .as_deref()
+                    .unwrap_or("内核尚未运行，可以重试启动或查看日志。")
+            };
+            body = body.push(
+                container(
+                    aligned_row![
+                        column![
+                            self.title(if starting {
+                                "内核正在启动"
+                            } else {
+                                "内核启动失败或已退出"
+                            }),
+                            self.label(reason).size(13)
+                        ]
+                        .spacing(4)
+                        .width(Length::Fill),
+                        button(self.label(if starting {
+                            "启动中…"
+                        } else {
+                            "重启内核"
+                        }))
+                        .padding([8, 12])
+                        .style(rounded_primary)
+                        .on_press_maybe(self.ready_to_retry().then_some(Message::RestartCore)),
+                        button(self.label("查看日志"))
+                            .padding([8, 10])
+                            .style(rounded_secondary)
+                            .on_press(Message::Navigate(Page::Logs))
+                    ]
+                    .spacing(10),
+                )
+                .padding(if compact { 10 } else { 14 })
+                .width(Length::Fill)
+                .style(move |theme: &Theme| {
+                    ui_style::badge(
+                        theme,
+                        if starting {
+                            ui_style::Tone::Warning
+                        } else {
+                            ui_style::Tone::Danger
+                        },
+                    )
+                }),
+            );
+        }
         let update_status = if self.updates.failure.is_some() {
             self.updates.failure.as_deref()
         } else if self.updates.install_pending || self.updates.installing.is_some() {
             Some("正在安装更新，请完成系统授权…")
         } else {
-            self.updates.outcome.as_deref()
+            None
         };
-        let notice = container(
-            self.label(update_status.unwrap_or(&self.notice))
-                .size(self.scaled(11))
-                .color(
-                    if (self.error || self.updates.failure.is_some()) && !self.dark {
-                        Color::from_rgb(0.95, 0.47, 0.48)
-                    } else {
-                        self.foreground()
-                    },
-                ),
-        )
-        .padding(8)
-        .width(Length::Fill)
-        .style(panel);
+        if let Some(notice) = update_status.or_else(|| {
+            (self.notice_visible && (self.snapshot.running || self.core_failure.is_none()))
+                .then_some(self.notice.as_str())
+        }) {
+            let failed = self.error || self.updates.failure.is_some();
+            body = body.push(
+                container(
+                    aligned_row![
+                        self.label(notice).size(13).width(Length::Fill),
+                        button(self.label("关闭").size(13))
+                            .style(rounded_text)
+                            .on_press(Message::DismissNotice)
+                    ]
+                    .spacing(8),
+                )
+                .padding(9)
+                .width(Length::Fill)
+                .style(move |theme: &Theme| {
+                    ui_style::badge(
+                        theme,
+                        if failed {
+                            ui_style::Tone::Danger
+                        } else {
+                            ui_style::Tone::Muted
+                        },
+                    )
+                }),
+            );
+        }
+        if let Some(update) = &self.updates.available {
+            body = body.push(
+                container(
+                    aligned_row![
+                        self.label(format!("发现新版本 {}", update.version))
+                            .color(self.accent()),
+                        Space::new().width(Length::Fill),
+                        button(self.label("更新"))
+                            .style(rounded_primary)
+                            .padding([8, 12])
+                            .on_press_maybe(
+                                (!self.updates.busy() && !self.updates.checking && !self.exiting)
+                                    .then_some(Message::InstallUpdate)
+                            ),
+                        if self.updates.progress.is_some() {
+                            button(self.label("取消下载"))
+                                .style(rounded_secondary)
+                                .padding([8, 12])
+                                .on_press(Message::CancelUpdateDownload)
+                                .into()
+                        } else {
+                            Element::from(Space::new().width(0))
+                        }
+                    ]
+                    .spacing(8),
+                )
+                .padding(12)
+                .width(Length::Fill)
+                .style(panel),
+            );
+        }
+        if let Some(progress) = self.updates.progress {
+            let percent =
+                (progress.received as f64 / progress.total.max(1) as f64 * 100.0).min(100.0);
+            body = body.push(
+                column![
+                    self.caption(format!(
+                        "正在下载更新 · {percent:.0}%（{:.1} / {:.1} MiB）",
+                        progress.received as f64 / 1048576.0,
+                        progress.total as f64 / 1048576.0
+                    )),
+                    progress_bar(0.0..=100.0, percent as f32)
+                ]
+                .spacing(4),
+            );
+        }
         let content = match self.page {
             Page::Home => self.home(),
             Page::Proxies => self.proxies(),
@@ -1847,59 +2118,10 @@ impl App {
             Page::Websites => self.websites(),
             Page::Settings => self.settings_view(),
         };
-        let mut body = column![header, notice].spacing(8);
-        if let Some(update) = &self.updates.available {
-            body = body.push(
-                container(
-                    aligned_row![
-                        self.label(format!("发现新版本 {}", update.version))
-                            .color(ACCENT),
-                        Space::new().width(Length::Fill),
-                        button(self.label("更新"))
-                            .style(rounded_primary)
-                            .padding([4, 10])
-                            .on_press_maybe(
-                                (!self.updates.busy() && !self.updates.checking && !self.exiting)
-                                    .then_some(Message::InstallUpdate)
-                            ),
-                        if self.updates.progress.is_some() {
-                            button(self.label("取消下载"))
-                                .style(rounded_secondary)
-                                .padding([4, 10])
-                                .on_press(Message::CancelUpdateDownload)
-                                .into()
-                        } else {
-                            Element::from(Space::new().width(0))
-                        }
-                    ]
-                    .spacing(8),
-                )
-                .padding(8)
-                .width(Length::Fill)
-                .style(panel),
-            );
-        }
-        if let Some(progress) = self.updates.progress {
-            let total = progress.total.max(1);
-            let percent = (progress.received as f64 / total as f64 * 100.0).min(100.0);
-            body = body.push(
-                column![
-                    self.label(format!(
-                        "正在下载更新 · {percent:.0}%（{:.1} / {:.1} MiB）",
-                        progress.received as f64 / 1048576.0,
-                        progress.total as f64 / 1048576.0
-                    ))
-                    .size(self.scaled(11)),
-                    progress_bar(0.0..=100.0, percent as f32)
-                ]
-                .spacing(4),
-            );
-        }
-        let body = body.push(content);
         aligned_row![
             sidebar,
-            container(body)
-                .padding(8)
+            container(body.push(content))
+                .padding(if compact { 10 } else { 16 })
                 .width(Length::Fill)
                 .height(Length::Fill)
         ]
@@ -1913,18 +2135,18 @@ impl App {
                 aligned_row![
                     self.label(title)
                         .size(self.scaled(11))
-                        .color(self.foreground()),
+                        .color(self.secondary()),
                     Space::new().width(Length::Fill),
                     self.label(detail)
                         .size(self.scaled(10))
-                        .color(self.foreground())
+                        .color(self.secondary())
                 ]
                 .spacing(4),
-                self.label(value).size(self.scaled(24)).color(ACCENT),
+                self.label(value).size(self.scaled(24)).color(self.accent()),
             ]
-            .spacing(3),
+            .spacing(10),
         )
-        .padding(8)
+        .padding(16)
         .width(Length::Fill)
         .style(panel)
         .into()
@@ -1953,11 +2175,11 @@ impl App {
             self.label("运行模式").size(self.scaled(12)),
             Space::new().width(Length::Fill)
         ]
-        .spacing(8);
+        .spacing(12);
         for (name, mode) in [("规则", "rule"), ("全局", "global"), ("直连", "direct")] {
             modes = modes.push(
                 button(self.label(name).size(self.scaled(12)))
-                    .padding([4, 10])
+                    .padding([8, 14])
                     .style(if self.snapshot.mode == mode {
                         rounded_primary
                     } else {
@@ -1980,7 +2202,7 @@ impl App {
         } else {
             ProxyMode::Off
         };
-        let mut options = aligned_row![].spacing(8);
+        let mut options = aligned_row![].spacing(12);
         for (label, mode) in [
             ("系统代理", ProxyMode::System),
             ("TUN模式", ProxyMode::Tun),
@@ -1988,7 +2210,7 @@ impl App {
         ] {
             options = options.push(
                 button(self.label(label).size(self.scaled(12)))
-                    .padding([5, 10])
+                    .padding([8, 14])
                     .style(if proxy_mode == mode {
                         rounded_primary
                     } else {
@@ -2035,21 +2257,25 @@ impl App {
                 }
             ))
             .size(self.scaled(11))
-            .color(self.foreground())
+            .color(self.secondary())
         ]
         .spacing(10);
-        column![
-            stats,
-            container(modes).padding(8).width(Length::Fill).style(panel),
-            container(ingress)
-                .padding(8)
-                .width(Length::Fill)
-                .style(panel),
-            totals,
-            Space::new().height(Length::Fill),
-            footer
-        ]
-        .spacing(8)
+        scrollable(
+            column![
+                stats,
+                container(modes)
+                    .padding(16)
+                    .width(Length::Fill)
+                    .style(panel),
+                container(ingress)
+                    .padding(16)
+                    .width(Length::Fill)
+                    .style(panel),
+                totals,
+                footer
+            ]
+            .spacing(12),
+        )
         .height(Length::Fill)
         .into()
     }
@@ -2153,63 +2379,20 @@ impl App {
                     .copied()
                     .unwrap_or(0)
                     .min(last_page_offset(total));
-                for &index in indices.iter().skip(offset).take(PAGE_SIZE) {
-                    let node = &proxy.all[index];
-                    let detail = self.snapshot.proxies.proxies.get(node.as_str());
-                    let delay_value = self.node_delay(node);
-                    let delay = delay_value
-                        .map(|delay| {
-                            if delay == 0 {
-                                "超时".into()
-                            } else {
-                                format!("{delay} ms")
-                            }
-                        })
-                        .unwrap_or_else(|| "未测速".into());
-                    let selected = proxy.now == *node;
-                    let kind = detail.map(|p| p.kind.as_str()).unwrap_or("节点");
-                    contents =
-                        contents.push(
-                            container(
-                                aligned_row![
-                                    column![
-                                        self.label(format!(
-                                            "{}{}",
-                                            if selected { "● " } else { "○ " },
-                                            node
-                                        ))
-                                        .size(self.scaled(12))
-                                        .color(if selected { ACCENT } else { self.foreground() }),
-                                        aligned_row![
-                                            self.label(kind).size(self.scaled(10)),
-                                            self.label(delay).size(self.scaled(10)).color(
-                                                delay_value
-                                                    .map(latency_color)
-                                                    .unwrap_or(self.foreground())
-                                            )
-                                        ]
-                                        .spacing(6)
-                                    ]
-                                    .spacing(4),
-                                    Space::new().width(Length::Fill),
-                                    self.action(
-                                        "测速",
-                                        Action::Delay(node.to_string()),
-                                        self.snapshot.running
-                                    ),
-                                    self.action(
-                                        if selected { "已选择" } else { "选择" },
-                                        Action::Select(group.to_string(), node.to_string()),
-                                        self.snapshot.running
-                                            && proxy.kind == "Selector"
-                                            && !selected
-                                    )
-                                ]
-                                .spacing(7),
-                            )
-                            .padding([7, 20])
-                            .width(Length::Fill),
-                        );
+                let end = (offset + PAGE_SIZE).min(total);
+                for pair in indices[offset..end].chunks(2) {
+                    let mut row = aligned_row![].spacing(10);
+                    for &index in pair {
+                        row = row.push(self.node_card(
+                            group.as_str(),
+                            proxy,
+                            proxy.all[index].as_str(),
+                        ));
+                    }
+                    if pair.len() == 1 {
+                        row = row.push(Space::new().width(Length::FillPortion(1)));
+                    }
+                    contents = contents.push(row);
                 }
                 if total > PAGE_SIZE {
                     contents = contents.push(
@@ -2258,6 +2441,85 @@ impl App {
             self.pager(group_total, group_offset, GROUP_PAGE_SIZE)
         ]
         .spacing(8)
+        .into()
+    }
+
+    fn node_card<'a>(
+        &'a self,
+        group: &'a str,
+        proxy: &'a clash_of_rust::api::Proxy,
+        node: &'a str,
+    ) -> Element<'a, Message> {
+        let detail = self.snapshot.proxies.proxies.get(node);
+        let delay = self.node_delay(node);
+        let selected = proxy.now.as_str() == node;
+        let selectable = self.snapshot.running
+            && !self.working
+            && !self.elevating
+            && !self.exiting
+            && proxy.kind == "Selector"
+            && !selected;
+        let label = delay
+            .map(|delay| {
+                if delay == 0 {
+                    "超时".into()
+                } else {
+                    format!("{delay} ms")
+                }
+            })
+            .unwrap_or_else(|| "未测速".into());
+        container(
+            column![
+                button(
+                    column![
+                        aligned_row![
+                            self.label(node).size(15).width(Length::Fill),
+                            self.label(label).size(13).color(
+                                delay
+                                    .map(|d| self.latency_color(d))
+                                    .unwrap_or(self.secondary())
+                            )
+                        ]
+                        .spacing(6),
+                        aligned_row![
+                            self.caption(detail.map(|p| p.kind.as_str()).unwrap_or("节点")),
+                            Space::new().width(Length::Fill),
+                            self.label(if selected {
+                                "✓ 已选"
+                            } else {
+                                "选择节点"
+                            })
+                            .size(13)
+                            .color(if selected {
+                                self.accent()
+                            } else {
+                                self.secondary()
+                            })
+                        ]
+                        .spacing(6)
+                    ]
+                    .spacing(5)
+                )
+                .padding(4)
+                .width(Length::Fill)
+                .style(rounded_text)
+                .on_press_maybe(
+                    selectable.then(|| Message::Action(Action::Select(group.into(), node.into())))
+                ),
+                aligned_row![
+                    Space::new().width(Length::Fill),
+                    self.action("测速", Action::Delay(node.into()), self.snapshot.running)
+                ]
+            ]
+            .spacing(3),
+        )
+        .padding(8)
+        .width(Length::FillPortion(1))
+        .style(if selected {
+            ui_style::selected_panel
+        } else {
+            panel
+        })
         .into()
     }
 
@@ -2316,10 +2578,10 @@ impl App {
 
     fn site_status_color(&self, status: Status) -> Color {
         match status {
-            Status::Available | Status::Identified => ACCENT,
-            Status::Restricted | Status::Failed => latency_color(0),
-            Status::Partial | Status::Reachable | Status::Unknown => latency_color(500),
-            Status::Untested => self.foreground(),
+            Status::Available | Status::Identified => self.latency_color(1),
+            Status::Restricted | Status::Failed => self.latency_color(0),
+            Status::Partial | Status::Reachable | Status::Unknown => self.latency_color(500),
+            Status::Untested => self.secondary(),
         }
     }
 
@@ -2327,79 +2589,96 @@ impl App {
         let completed = report.totals.completed();
         let compact = self.window_height.parse::<u16>().unwrap_or(700) < 560;
         let show_categories = !compact || self.site_report_categories;
-        let mut status_row = aligned_row![].spacing(5);
+        let mut statuses = aligned_row![].spacing(6);
         for status in Status::ALL {
             let count = report.totals.count(status);
             if count == 0 {
                 continue;
             }
-            status_row = status_row.push(
-                button(
-                    self.label(format!("{status} {count}"))
-                        .size(self.scaled(10))
-                        .color(self.site_status_color(status)),
-                )
-                .padding([4, 7])
-                .style(rounded_secondary)
-                .on_press(Message::SiteSummaryFilter(
-                    CategoryFilter::All,
-                    StatusFilter::Status(status),
-                )),
+            let ink = self.site_status_color(status);
+            statuses = statuses.push(
+                button(self.label(format!("{status} {count}")).size(13).color(ink))
+                    .padding([5, 8])
+                    .style(if self.site_status == StatusFilter::Status(status) {
+                        ui_style::selected_button
+                    } else {
+                        rounded_secondary
+                    })
+                    .on_press(Message::SiteSummaryFilter(
+                        CategoryFilter::All,
+                        StatusFilter::Status(status),
+                    )),
             );
         }
-        let mut categories = column![].spacing(5);
-        for pair in report.categories.chunks(2).filter(|_| show_categories) {
-            let mut row = aligned_row![].spacing(8);
-            for category in pair {
-                let mut states = aligned_row![].spacing(4);
-                for status in Status::ALL {
-                    let count = category.counts.count(status);
-                    if count == 0 {
-                        continue;
-                    }
-                    states = states.push(
-                        button(
-                            self.label(format!("{status} {count}"))
-                                .size(self.scaled(9))
-                                .color(self.site_status_color(status)),
-                        )
-                        .padding([2, 4])
-                        .style(rounded_text)
-                        .on_press(Message::SiteSummaryFilter(
-                            CategoryFilter::Group(category.name),
-                            StatusFilter::Status(status),
-                        )),
-                    );
-                }
-                row = row.push(
-                    container(
-                        column![
+        let mut categories = column![].spacing(8);
+        if show_categories {
+            for pair in report.categories.chunks(2) {
+                let mut row = iced::widget::row![].spacing(8);
+                for category in pair {
+                    let mut states = aligned_row![].spacing(3);
+                    for status in Status::ALL {
+                        let count = category.counts.count(status);
+                        if count == 0 {
+                            continue;
+                        }
+                        states = states.push(
                             button(
-                                self.label(format!(
-                                    "{} · {}/{}",
-                                    category.name,
-                                    category.counts.non_red(),
-                                    category.counts.total()
-                                ))
-                                .size(self.scaled(11))
+                                self.label(format!("{status} {count}"))
+                                    .size(13)
+                                    .color(self.site_status_color(status)),
                             )
-                            .padding([2, 4])
+                            .padding([3, 4])
                             .style(rounded_text)
                             .on_press(Message::SiteSummaryFilter(
                                 CategoryFilter::Group(category.name),
-                                StatusFilter::All
+                                StatusFilter::Status(status),
                             )),
-                            states.wrap()
-                        ]
-                        .spacing(2),
-                    )
-                    .width(Length::FillPortion(1)),
-                );
+                        );
+                    }
+                    let selected = self.site_category == CategoryFilter::Group(category.name);
+                    row = row.push(
+                        container(
+                            column![
+                                button(
+                                    aligned_row![
+                                        self.label(category.name).size(15),
+                                        Space::new().width(Length::Fill),
+                                        self.label(format!(
+                                            "{}/{}",
+                                            category.counts.non_red(),
+                                            category.counts.total()
+                                        ))
+                                        .size(14)
+                                    ]
+                                    .spacing(6)
+                                )
+                                .width(Length::Fill)
+                                .padding(4)
+                                .style(rounded_text)
+                                .on_press(
+                                    Message::SiteSummaryFilter(
+                                        CategoryFilter::Group(category.name),
+                                        StatusFilter::All
+                                    )
+                                ),
+                                states.wrap()
+                            ]
+                            .spacing(3),
+                        )
+                        .padding(6)
+                        .width(Length::FillPortion(1))
+                        .style(if selected {
+                            ui_style::selected_panel
+                        } else {
+                            panel
+                        }),
+                    );
+                }
+                if pair.len() == 1 {
+                    row = row.push(Space::new().width(Length::FillPortion(1)));
+                }
+                categories = categories.push(row);
             }
-            if pair.len() == 1 {
-                row = row.push(Space::new().width(Length::FillPortion(1)));
-            }
-            categories = categories.push(row);
         }
         let toggle: Element<'_, Message> = if compact {
             button(
@@ -2408,10 +2687,10 @@ impl App {
                 } else {
                     "分类总结"
                 })
-                .size(self.scaled(10)),
+                .size(13),
             )
-            .padding([3, 5])
-            .style(rounded_text)
+            .padding([4, 6])
+            .style(rounded_secondary)
             .on_press(Message::SiteReportCategories)
             .into()
         } else {
@@ -2419,48 +2698,34 @@ impl App {
         };
         let mut body = column![
             aligned_row![
-                self.label(if completed == report.totals.total() {
-                    "检测总结报告"
+                self.title(if completed == report.totals.total() {
+                    "检测总结"
                 } else {
-                    "检测总结报告 · 部分完成"
-                })
-                .size(self.scaled(13))
-                .color(ACCENT),
+                    "检测总结 · 部分完成"
+                }),
                 Space::new().width(Length::Fill),
-                self.label(if compact {
-                    format!("{completed} / {}", report.totals.total())
-                } else {
-                    format!(
-                        "完成 {completed} / {} · 点击数量筛选下方结果",
-                        report.totals.total()
-                    )
-                })
-                .size(self.scaled(10)),
+                self.caption(format!("完成 {completed} / {}", report.totals.total())),
                 toggle
             ]
-            .spacing(5),
-            status_row.wrap()
+            .spacing(8),
+            statuses.wrap()
         ]
-        .spacing(6);
+        .spacing(8);
         if !compact {
             let exit = self.site_result(0).and_then(|result| result.as_ref().ok());
-            body = body.push(
-                self.label(format!(
-                    "出口 IP：{} · 出口地区：{} · 各平台识别到 {} 个地区",
-                    exit.map_or("未获取", |result| result.summary.as_str()),
-                    exit.map_or("未获取", |result| flags::country_text(&result.country)),
-                    region_count
-                ))
-                .size(self.scaled(10)),
-            );
+            body = body.push(self.caption(format!(
+                "出口 IP：{} · {} · 识别到 {region_count} 个地区",
+                exit.map_or("未获取", |r| r.summary.as_str()),
+                exit.map_or("未获取", |r| flags::country_text(&r.country))
+            )));
         }
         if show_categories {
-            body = body.push(scrollable(categories).height(if compact { 70 } else { 120 }));
+            body = body.push(scrollable(categories).height(if compact { 65 } else { 100 }));
         }
         container(body)
-            .padding(9)
-            .style(panel)
+            .padding(if compact { 10 } else { 12 })
             .width(Length::Fill)
+            .style(panel)
             .into()
     }
 
@@ -2490,7 +2755,7 @@ impl App {
                     format!("{} ms", result.millis),
                     result_color,
                 ),
-                Some(Err(_)) => ("超时或失败", "未获取", "—".into(), latency_color(0)),
+                Some(Err(_)) => ("超时或失败", "未获取", "—".into(), self.latency_color(0)),
                 None => ("未检测", "—", "—".into(), self.foreground()),
             };
             let state = if busy {
@@ -2528,8 +2793,8 @@ impl App {
                         .size(self.scaled(10))
                         .color(match result {
                             Some(Ok(result)) if !busy && !queued =>
-                                latency_color(result.millis.min(u128::from(u32::MAX)) as u32),
-                            Some(Err(_)) if !busy && !queued => latency_color(0),
+                                self.latency_color(result.millis.min(u128::from(u32::MAX)) as u32),
+                            Some(Err(_)) if !busy && !queued => self.latency_color(0),
                             _ => self.foreground(),
                         })
                         .width(70),
@@ -2625,7 +2890,8 @@ impl App {
                 self.label(format!("匹配 {visible} 项"))
                     .size(self.scaled(10))
             ]
-            .spacing(6),
+            .spacing(6)
+            .wrap(),
         );
         page.push(
             aligned_row![
@@ -2654,23 +2920,22 @@ impl App {
     fn profiles_view(&self) -> Element<'_, Message> {
         let form = container(
             column![
-                self.label("添加配置").size(self.scaled(12)),
-                text_input("订阅名称", &self.profile_name)
+                self.title("导入订阅"),
+                self.caption("配置名称"),
+                text_input("例如：我的订阅", &self.profile_name)
                     .style(rounded_input)
-                    .size(self.scaled(12))
+                    .size(15)
                     .on_input(Message::ProfileName)
-                    .padding(8),
-                text_input(
-                    "https://订阅地址 或 本地 YAML 文件完整路径",
-                    &self.profile_source
-                )
-                .style(rounded_input)
-                .size(self.scaled(12))
-                .on_input(Message::ProfileSource)
-                .padding(8),
+                    .padding(9),
+                self.caption("订阅链接或本地 YAML 路径"),
+                text_input("https://订阅地址 或 本地文件完整路径", &self.profile_source)
+                    .style(rounded_input)
+                    .size(15)
+                    .on_input(Message::ProfileSource)
+                    .padding(9),
                 aligned_row![
                     self.action(
-                        "导入配置",
+                        "导入",
                         Action::Import(
                             self.profile_name.clone(),
                             self.profile_source.trim().into()
@@ -2679,72 +2944,87 @@ impl App {
                     ),
                     self.action("打开配置目录", Action::OpenProfiles, true)
                 ]
-                .spacing(8)
+                .spacing(10)
             ]
             .spacing(8),
         )
-        .padding(14)
+        .padding(16)
+        .width(Length::Fill)
         .style(panel);
-        let mut list = column![].spacing(8);
+        let mut list = column![].spacing(10);
         for profile in &self.profiles {
             let active = self.settings.active_profile.as_ref() == Some(&profile.id);
             let remote =
                 profile.source.starts_with("http://") || profile.source.starts_with("https://");
-            let update_button: Element<'_, Message> = if remote {
+            let update: Element<'_, Message> = if remote {
                 self.action("更新", Action::UpdateProfile(profile.id.clone()), true)
             } else {
                 Space::new().width(0).into()
             };
-            let source = if profile.source.starts_with("http") {
+            // Show the host, not subscription credentials or private URL tokens.
+            let source = if remote {
                 reqwest::Url::parse(&profile.source)
                     .ok()
-                    .and_then(|u| u.host_str().map(str::to_owned))
+                    .and_then(|url| url.host_str().map(str::to_owned))
                     .unwrap_or_else(|| "远程订阅".into())
             } else {
-                "本地文件".into()
+                "本地配置".into()
             };
             list = list.push(
                 container(
                     column![
                         aligned_row![
-                            self.label(format!(
-                                "{}{}",
-                                if active { "● " } else { "" },
-                                profile.name
-                            ))
-                            .size(self.scaled(12)),
-                            Space::new().width(Length::Fill),
-                            update_button,
+                            self.title(&profile.name).width(Length::Fill),
+                            if active {
+                                container(self.label("● 使用中").size(13))
+                                    .padding([4, 8])
+                                    .style(|theme: &Theme| {
+                                        ui_style::badge(theme, ui_style::Tone::Success)
+                                    })
+                                    .into()
+                            } else {
+                                Element::from(Space::new().width(0))
+                            },
+                            self.action(
+                                if active { "已启用" } else { "启用" },
+                                Action::Activate(profile.id.clone()),
+                                !active
+                            ),
+                            update,
                             if profile.is_default() {
                                 Space::new().width(0).into()
                             } else {
                                 self.action("删除", Action::DeleteProfile(profile.id.clone()), true)
-                            },
-                            self.action(
-                                if active { "使用中" } else { "使用" },
-                                Action::Activate(profile.id.clone()),
-                                !active
-                            )
+                            }
                         ]
-                        .spacing(7),
-                        self.label(format!(
-                            "{source} · 更新于 {}",
+                        .spacing(8),
+                        self.caption(format!(
+                            "来源：{source} · 更新于 {}",
                             presentation::timestamp(profile.updated)
                         ))
-                        .size(self.scaled(10))
-                        .color(self.foreground()),
+                        .wrapping(text::Wrapping::WordOrGlyph),
                         self.label(presentation::subscription_usage(profile.usage.as_deref()))
-                            .size(self.scaled(10))
-                            .color(self.foreground())
+                            .size(14)
                     ]
-                    .spacing(7),
+                    .spacing(10),
                 )
-                .padding(13)
-                .style(panel),
+                .padding(16)
+                .width(Length::Fill)
+                .style(if active {
+                    ui_style::selected_panel
+                } else {
+                    panel
+                }),
             );
         }
-        column![form, scrollable(list).height(Length::Fill)]
-            .spacing(14)
+        if self.profiles.is_empty() {
+            list = list.push(self.empty_state(
+                "还没有订阅配置",
+                "导入订阅链接或本地 YAML 文件后，即可启用配置。",
+            ));
+        }
+        scrollable(column![form, self.title("当前订阅与配置"), list].spacing(14))
+            .height(Length::Fill)
             .into()
     }
 
@@ -2766,8 +3046,8 @@ impl App {
         });
         let total = entries.clone().count();
         let offset = self.list_offset.min(last_page_offset(total));
-        let mut list = column![].spacing(6);
-        for connection in entries.skip(offset).take(PAGE_SIZE) {
+        let mut list = column![].spacing(0);
+        for (index, connection) in entries.skip(offset).take(PAGE_SIZE).enumerate() {
             let m = &connection.metadata;
             let host = if m.host.is_empty() {
                 &m.destination_ip
@@ -2778,52 +3058,82 @@ impl App {
                 container(
                     aligned_row![
                         column![
-                            self.label(format!("{}:{} · {}", host, m.destination_port, m.network))
-                                .size(self.scaled(12)),
-                            self.label(format!(
-                                "{} · {} → {}",
+                            self.label(format!("{}:{}", host, m.destination_port))
+                                .size(14)
+                                .wrapping(text::Wrapping::WordOrGlyph),
+                            self.caption(format!(
+                                "{} · {}",
+                                m.network,
                                 if m.process.is_empty() {
                                     "未知进程"
                                 } else {
                                     &m.process
-                                },
-                                connection.rule,
-                                connection.chains.join(" → ")
+                                }
                             ))
-                            .size(self.scaled(10))
-                            .color(self.foreground()),
-                            self.label(format!(
-                                "↑ {}   ↓ {}   · {}",
-                                bytes(connection.upload),
-                                bytes(connection.download),
-                                presentation::date_text(&connection.start)
-                            ))
-                            .size(self.scaled(10))
-                            .color(self.foreground())
                         ]
-                        .spacing(4),
-                        Space::new().width(Length::Fill),
+                        .spacing(4)
+                        .width(Length::FillPortion(2)),
+                        column![
+                            self.label(connection.rule.as_str()).size(14),
+                            self.caption(connection.chains.join(" → "))
+                                .wrapping(text::Wrapping::WordOrGlyph)
+                        ]
+                        .spacing(4)
+                        .width(Length::FillPortion(2)),
+                        column![
+                            self.label(format!("↑ {}", bytes(connection.upload)))
+                                .size(13),
+                            self.label(format!("↓ {}", bytes(connection.download)))
+                                .size(13)
+                        ]
+                        .spacing(4)
+                        .width(104),
+                        self.caption(presentation::date_text(&connection.start))
+                            .width(94),
                         self.action(
                             "关闭",
                             Action::Close(connection.id.to_string()),
                             self.snapshot.running
                         )
                     ]
-                    .spacing(6),
+                    .spacing(10),
                 )
                 .padding(10)
-                .style(panel),
+                .width(Length::Fill)
+                .style(move |theme: &Theme| ui_style::table_row(theme, index % 2 == 1)),
             );
         }
         if total == 0 {
-            list = list.push(self.label("当前没有匹配的连接。").color(self.foreground()));
+            list = list
+                .push(self.empty_state("没有匹配的连接", "尝试更改搜索条件，或等待新的网络请求。"));
         }
         column![
-            self.search("搜索域名、IP、进程或规则"),
-            scrollable(list).height(Length::Fill),
+            aligned_row![
+                self.search("搜索域名、IP、进程或规则"),
+                self.caption(format!("匹配 {total} 条"))
+            ]
+            .spacing(10),
+            self.table_header(
+                aligned_row![
+                    self.label("目标 / 进程")
+                        .size(13)
+                        .width(Length::FillPortion(2)),
+                    self.label("规则 / 代理链")
+                        .size(13)
+                        .width(Length::FillPortion(2)),
+                    self.label("上传 / 下载").size(13).width(104),
+                    self.label("开始时间").size(13).width(94),
+                    self.label("操作").size(13).width(54)
+                ]
+                .spacing(10)
+                .into()
+            ),
+            container(scrollable(list).height(Length::Fill))
+                .width(Length::Fill)
+                .style(panel),
             self.list_pager(total, offset)
         ]
-        .spacing(8)
+        .spacing(10)
         .into()
     }
 
@@ -2845,39 +3155,73 @@ impl App {
             });
         let total = entries.clone().count();
         let offset = self.list_offset.min(last_page_offset(total));
-        let mut list = column![].spacing(4);
-        for (index, rule) in entries.skip(offset).take(PAGE_SIZE) {
+        let mut list = column![].spacing(0);
+        for (row, (index, rule)) in entries.skip(offset).take(PAGE_SIZE).enumerate() {
             list = list.push(
                 container(
                     aligned_row![
-                        self.label(format!("{:04}", index + 1))
-                            .size(self.scaled(10))
-                            .color(self.foreground())
-                            .width(50),
-                        self.label(rule.kind.as_str())
-                            .size(self.scaled(11))
-                            .width(150),
+                        self.caption(format!("{:04}", index + 1)).width(44),
+                        self.label(rule.kind.as_str()).size(13).width(145),
                         self.label(rule.payload.as_ref())
-                            .size(self.scaled(11))
+                            .size(14)
+                            .wrapping(text::Wrapping::WordOrGlyph)
                             .width(Length::Fill),
                         self.label(rule.proxy.as_str())
-                            .size(self.scaled(11))
-                            .color(ACCENT)
-                            .width(160)
+                            .size(14)
+                            .color(self.accent())
+                            .width(120)
                     ]
-                    .spacing(8),
+                    .spacing(10),
                 )
-                .padding(8)
-                .style(panel),
+                .padding([12, 10])
+                .width(Length::Fill)
+                .style(move |theme: &Theme| ui_style::table_row(theme, row % 2 == 1)),
             );
         }
+        if total == 0 {
+            list = list.push(self.empty_state(
+                "没有匹配的规则",
+                "尝试更改搜索条件，或在内核启动后加载当前配置。",
+            ));
+        }
         column![
-            self.search("搜索规则类型、内容或策略"),
-            scrollable(list).height(Length::Fill),
+            aligned_row![
+                self.search("搜索规则类型、内容或策略"),
+                self.caption(format!("匹配 {total} 条"))
+            ]
+            .spacing(10),
+            self.table_header(
+                aligned_row![
+                    self.label("序号").size(13).width(44),
+                    self.label("类型").size(13).width(145),
+                    self.label("规则内容").size(13).width(Length::Fill),
+                    self.label("策略").size(13).width(120)
+                ]
+                .spacing(10)
+                .into()
+            ),
+            container(scrollable(list).height(Length::Fill))
+                .width(Length::Fill)
+                .style(panel),
             self.list_pager(total, offset)
         ]
-        .spacing(8)
+        .spacing(10)
         .into()
+    }
+
+    fn table_header<'a>(&self, content: Element<'a, Message>) -> Element<'a, Message> {
+        container(content)
+            .padding(10)
+            .width(Length::Fill)
+            .style(|theme: &Theme| ui_style::table_row(theme, true))
+            .into()
+    }
+    fn empty_state<'a>(&self, title: &'a str, detail: &'a str) -> Element<'a, Message> {
+        container(column![self.title(title), self.caption(detail)].spacing(8))
+            .padding(24)
+            .width(Length::Fill)
+            .style(panel)
+            .into()
     }
 
     fn list_pager(&self, total: usize, offset: usize) -> Element<'_, Message> {
@@ -2898,12 +3242,18 @@ impl App {
             })
             .size(self.scaled(10)),
             Space::new().width(Length::Fill),
-            button(self.label("上一页")).on_press_maybe(
-                (offset > 0).then_some(Message::ListPage(offset.saturating_sub(page_size)))
-            ),
-            button(self.label("下一页")).on_press_maybe(
-                (offset + page_size < total).then_some(Message::ListPage(offset + page_size))
-            )
+            button(self.label("上一页"))
+                .padding([8, 12])
+                .style(rounded_secondary)
+                .on_press_maybe(
+                    (offset > 0).then_some(Message::ListPage(offset.saturating_sub(page_size)))
+                ),
+            button(self.label("下一页"))
+                .padding([8, 12])
+                .style(rounded_secondary)
+                .on_press_maybe(
+                    (offset + page_size < total).then_some(Message::ListPage(offset + page_size))
+                )
         ]
         .spacing(8)
         .into()
@@ -2911,21 +3261,49 @@ impl App {
 
     fn logs(&self) -> Element<'_, Message> {
         let query = self.query.to_lowercase();
-        let mut list = column![].spacing(4);
-        for line in self
+        let mut list = column![].spacing(0);
+        let mut visible = 0;
+        for (index, line) in self
             .snapshot
             .logs
             .iter()
             .rev()
-            .filter(|l| contains_query(l, &query))
+            .filter(|line| contains_query(line, &query))
             .take(150)
+            .enumerate()
         {
+            visible += 1;
+            let (level, tone) = if contains_query(line, "error") || line.contains("失败") {
+                ("ERROR", ui_style::Tone::Danger)
+            } else if contains_query(line, "warn") {
+                ("WARN", ui_style::Tone::Warning)
+            } else {
+                ("INFO", ui_style::Tone::Success)
+            };
             list = list.push(
-                container(self.label(line.as_ref()).size(self.scaled(10)))
-                    .padding(6)
-                    .width(Length::Fill)
-                    .style(panel),
+                container(
+                    aligned_row![
+                        container(self.label(level).size(12))
+                            .padding([4, 6])
+                            .width(68)
+                            .style(move |theme: &Theme| ui_style::badge(theme, tone)),
+                        self.label(line.as_ref())
+                            .size(13)
+                            .wrapping(text::Wrapping::WordOrGlyph)
+                            .width(Length::Fill)
+                    ]
+                    .spacing(10),
+                )
+                .padding(10)
+                .width(Length::Fill)
+                .style(move |theme: &Theme| ui_style::table_row(theme, index % 2 == 1)),
             );
+        }
+        if visible == 0 {
+            list = list.push(self.empty_state(
+                "暂无匹配的日志",
+                "新记录会显示在上方，可以搜索错误或导出完整记录。",
+            ));
         }
         column![
             aligned_row![
@@ -2933,70 +3311,114 @@ impl App {
                 self.action("清空", Action::ClearLogs, true),
                 self.action("导出", Action::ExportLogs, true)
             ]
-            .spacing(7),
-            scrollable(list).height(Length::Fill)
+            .spacing(10),
+            self.caption("最新记录在上方 · 最多保留 500 条，显示最近匹配的 150 条"),
+            self.table_header(
+                aligned_row![
+                    self.label("级别").size(13).width(68),
+                    self.label("日志内容").size(13)
+                ]
+                .spacing(10)
+                .into()
+            ),
+            container(scrollable(list).height(Length::Fill))
+                .width(Length::Fill)
+                .style(panel)
         ]
-        .spacing(8)
+        .spacing(10)
         .into()
     }
 
     fn tests(&self) -> Element<'_, Message> {
-        let available = !self.probing && self.snapshot.running;
+        let available = !self.probing && self.snapshot.running && !self.working && !self.exiting;
         let network = container(
             column![
-                self.label("网站与出口 IP").size(self.scaled(12)),
+                self.title("网站与出口 IP"),
+                self.caption("测试地址"),
                 text_input("https://example.com", &self.test_url)
                     .style(rounded_input)
-                    .size(self.scaled(12))
+                    .size(15)
                     .on_input(Message::TestUrl)
-                    .padding(8),
+                    .padding(9),
                 aligned_row![
                     button(self.label("测试网站响应"))
-                        .padding(7)
+                        .style(rounded_primary)
+                        .padding([8, 12])
                         .on_press_maybe(available.then_some(Message::Probe(false))),
                     button(self.label("查询出口 IP"))
-                        .padding(7)
+                        .style(rounded_secondary)
+                        .padding([8, 12])
                         .on_press_maybe(available.then_some(Message::Probe(true)))
                 ]
-                .spacing(8)
+                .spacing(10)
             ]
             .spacing(10),
         )
-        .padding(14)
+        .padding(16)
+        .width(Length::Fill)
         .style(panel);
         let dns = container(
             column![
-                self.label("系统 DNS 查询").size(self.scaled(12)),
+                self.title("系统 DNS 查询"),
+                self.caption("域名"),
                 aligned_row![
                     text_input("github.com", &self.dns_host)
                         .style(rounded_input)
-                        .size(self.scaled(12))
+                        .size(15)
                         .on_input(Message::DnsHost)
-                        .padding(8),
+                        .padding(9),
                     button(self.label("解析域名"))
-                        .padding(8)
-                        .on_press_maybe((!self.probing).then_some(Message::Dns))
+                        .style(rounded_primary)
+                        .padding([8, 12])
+                        .on_press_maybe((!self.probing && !self.exiting).then_some(Message::Dns))
                 ]
-                .spacing(7)
+                .spacing(10)
             ]
-            .spacing(8),
+            .spacing(10),
         )
-        .padding(14)
+        .padding(16)
+        .width(Length::Fill)
         .style(panel);
-        let mut results = column![
-            self.label(if self.probing {
-                "正在测试…"
-            } else {
-                "测试记录"
-            })
-            .size(self.scaled(12))
-        ]
-        .spacing(8);
+        let mut results = column![self.title(if self.probing {
+            "正在测试…"
+        } else {
+            "测试记录"
+        })]
+        .spacing(10);
         for result in self.test_results.iter().rev() {
-            results = results.push(self.label(result).size(self.scaled(11)));
+            let failed = result.starts_with("测试失败：") || result.starts_with("DNS 查询失败：");
+            results = results.push(
+                container(
+                    aligned_row![
+                        container(self.label(if failed { "失败" } else { "完成" }).size(13))
+                            .padding([4, 8])
+                            .style(move |theme: &Theme| ui_style::badge(
+                                theme,
+                                if failed {
+                                    ui_style::Tone::Danger
+                                } else {
+                                    ui_style::Tone::Success
+                                }
+                            )),
+                        self.label(result)
+                            .size(14)
+                            .wrapping(text::Wrapping::WordOrGlyph)
+                            .width(Length::Fill)
+                    ]
+                    .spacing(10),
+                )
+                .padding(12)
+                .width(Length::Fill)
+                .style(panel),
+            );
         }
-        column![network, dns, scrollable(results).height(Length::Fill)]
-            .spacing(14)
+        if self.test_results.is_empty() {
+            results = results.push(self.caption(
+                "执行测试后，结果会显示在这里；网站和出口查询使用当前代理，DNS 使用系统解析。",
+            ));
+        }
+        scrollable(column![network, dns, results].spacing(14))
+            .height(Length::Fill)
             .into()
     }
 
@@ -3019,21 +3441,21 @@ impl App {
             aligned_row![
                 button(self.label("检查更新"))
                     .style(rounded_primary)
-                    .padding([4, 10])
+                    .padding([8, 12])
                     .on_press_maybe(
                         (!self.updates.checking && !self.updates.busy() && !self.exiting)
                             .then_some(Message::CheckUpdate)
                     ),
                 button(self.label("查看 Release"))
                     .style(rounded_secondary)
-                    .padding([4, 10])
+                    .padding([8, 12])
                     .on_press(Message::OpenRelease)
             ]
-            .spacing(8)
+            .spacing(12)
         ]
         .spacing(12);
         let mut ports = column![
-            self.label("端口").size(self.scaled(12)),
+            self.title("网络端口"),
             aligned_row![
                 column![
                     self.label("控制接口")
@@ -3069,7 +3491,7 @@ impl App {
             ));
         }
         let appearance = column![
-            self.label("外观").size(self.scaled(12)),
+            self.title("外观"),
             aligned_row![
                 button(self.label("深色").size(self.scaled(12)))
                     .padding([7, 16])
@@ -3088,7 +3510,7 @@ impl App {
                     })
                     .on_press(Message::Dark(false))
             ]
-            .spacing(8),
+            .spacing(12),
             aligned_row![
                 self.label("窗口大小"),
                 text_input("宽", &self.window_width)
@@ -3110,11 +3532,11 @@ impl App {
                     .style(rounded_secondary)
                     .on_press(Message::ResetWindowSize)
             ]
-            .spacing(8),
+            .spacing(12),
         ]
         .spacing(12);
         let geo = column![
-            self.label("Geo 数据").size(self.scaled(12)),
+            self.title("Geo 数据"),
             self.label(presentation::geo_version(&self.geo_status))
                 .size(self.scaled(11))
                 .color(self.foreground()),
@@ -3124,20 +3546,21 @@ impl App {
         scrollable(
             column![
                 container(updates)
-                    .padding(10)
+                    .padding(16)
                     .width(Length::Fill)
                     .style(panel),
                 container(ports)
-                    .padding(10)
+                    .padding(16)
                     .width(Length::Fill)
                     .style(panel),
                 container(appearance)
-                    .padding(10)
+                    .padding(16)
                     .width(Length::Fill)
                     .style(panel),
                 container(
                     aligned_row![
-                        self.label("开机自启（后台静默启动）"),
+                        column![self.title("启动"), self.caption("开机自启 · 后台静默启动")]
+                            .spacing(6),
                         Space::new().width(Length::Fill),
                         self.action(
                             if self.autostart { "关闭" } else { "开启" },
@@ -3145,14 +3568,14 @@ impl App {
                             true
                         )
                     ]
-                    .spacing(8)
+                    .spacing(12)
                 )
-                .padding(10)
+                .padding(16)
                 .width(Length::Fill)
                 .style(panel),
                 container(
                     column![
-                        self.label("定时测速"),
+                        self.title("定时测速"),
                         aligned_row![
                             text_input("间隔（分钟）", &self.interval_input)
                                 .style(rounded_input)
@@ -3163,7 +3586,7 @@ impl App {
                             self.label("分钟 · 0 表示关闭"),
                             button(self.label("保存间隔"))
                                 .style(rounded_primary)
-                                .padding([4, 10])
+                                .padding([8, 12])
                                 .on_press_maybe(
                                     (self.interval_input.trim().parse::<u32>().ok()
                                         != Some(self.settings.delay_interval_minutes)
@@ -3171,17 +3594,17 @@ impl App {
                                         .then_some(Message::SaveInterval)
                                 )
                         ]
-                        .spacing(8)
+                        .spacing(12)
                         .align_y(iced::alignment::Vertical::Center),
                     ]
-                    .spacing(8)
+                    .spacing(12)
                 )
-                .padding(10)
+                .padding(16)
                 .width(Length::Fill)
                 .style(panel),
-                container(geo).padding(10).width(Length::Fill).style(panel)
+                container(geo).padding(16).width(Length::Fill).style(panel)
             ]
-            .spacing(8),
+            .spacing(12),
         )
         .height(Length::Fill)
         .into()
@@ -3200,72 +3623,36 @@ fn bytes(value: u64) -> String {
     }
 }
 
-fn latency_color(delay: u32) -> Color {
-    match delay {
-        1..=299 => ACCENT,
-        300..=999 => Color::from_rgb(0.93, 0.73, 0.25),
-        _ => Color::from_rgb(0.96, 0.34, 0.36),
-    }
-}
-
 fn panel(theme: &Theme) -> container::Style {
-    let mut style = container::rounded_box(theme);
-    style.border.radius = 16.0.into();
-    style
+    ui_style::panel(theme)
 }
-
 fn selection_field(theme: &Theme, status: pick_list::Status) -> pick_list::Style {
     let mut style = pick_list::default(theme, status);
-    // Only hide the field caption; the menu and dropdown handle stay native.
     style.text_color = Color::TRANSPARENT;
     style.placeholder_color = Color::TRANSPARENT;
+    style.background = ui_style::surface(theme).into();
+    style.border = iced::Border {
+        color: iced::color!(0x64748B),
+        width: 1.0,
+        radius: 6.0.into(),
+    };
+    style.handle_color = ui_style::secondary(theme);
     style
 }
-
 fn rounded_primary(theme: &Theme, status: button::Status) -> button::Style {
-    let mut style = button::primary(theme, status);
-    style.border.radius = 12.0.into();
-    if matches!(theme, Theme::TokyoNight) {
-        style.text_color = Color::WHITE;
-    }
-    style
+    ui_style::primary(theme, status)
 }
 fn rounded_secondary(theme: &Theme, status: button::Status) -> button::Style {
-    let mut style = button::secondary(theme, status);
-    style.border.radius = 12.0.into();
-    if matches!(theme, Theme::TokyoNight) {
-        style.text_color = Color::WHITE;
-    }
-    style
+    ui_style::secondary_button(theme, status)
 }
 fn rounded_text(theme: &Theme, status: button::Status) -> button::Style {
-    let mut style = button::text(theme, status);
-    style.border.radius = 12.0.into();
-    if matches!(theme, Theme::TokyoNight) {
-        style.text_color = Color::WHITE;
-    }
-    style
+    ui_style::text_button(theme, status)
 }
 fn rounded_input(theme: &Theme, status: text_input::Status) -> text_input::Style {
-    let mut style = text_input::default(theme, status);
-    style.border.radius = 10.0.into();
-    if matches!(theme, Theme::TokyoNight) {
-        style.value = Color::WHITE;
-        style.placeholder = Color::from_rgb(0.56, 0.59, 0.64);
-        style.icon = Color::WHITE;
-    }
-    style
+    ui_style::input(theme, status)
 }
-
 fn sidebar_panel(theme: &Theme) -> container::Style {
-    let mut style = panel(theme);
-    style.border.radius = iced::border::Radius {
-        top_left: 0.0,
-        top_right: 16.0,
-        bottom_right: 16.0,
-        bottom_left: 0.0,
-    };
-    style
+    ui_style::sidebar(theme)
 }
 
 #[cfg(test)]
@@ -3407,6 +3794,46 @@ mod async_state_tests {
     use super::*;
     fn app() -> App {
         App::with_engine(Err(anyhow::anyhow!("state test")), None).0
+    }
+    #[test]
+    fn retry_after_initialization_failure_is_available_and_not_queued_twice() {
+        let mut app = app();
+        assert!(app.ready_to_retry());
+        assert!(app.core_failure.is_some());
+        let _ = app.update(Message::RestartCore);
+        assert!(app.busy && app.working);
+        let _ = app.update(Message::RestartCore);
+        assert!(app.queued_actions.is_empty());
+        let _ = app.update(Message::CoreReady(Err("权限不足".into())));
+        assert!(app.ready_to_retry());
+        assert_eq!(app.core_failure.as_deref(), Some("权限不足"));
+        let _ = app.update(Message::Navigate(Page::Settings));
+        assert_eq!(app.core_failure.as_deref(), Some("权限不足"));
+    }
+    #[test]
+    fn running_or_exiting_core_cannot_be_retried_and_success_clears_failure() {
+        let mut app = app();
+        app.exiting = true;
+        let _ = app.update(Message::RestartCore);
+        assert!(!app.busy);
+        app.exiting = false;
+        let _ = app.update(Message::Finished(Box::new(Reply {
+            scope: Scope::Home,
+            settings: app.settings.clone(),
+            profiles: None,
+            snapshot: Some(Snapshot {
+                running: true,
+                ..Snapshot::default()
+            }),
+            notice: Ok("内核已启动".into()),
+            running: true,
+            geo_status: String::new(),
+            autostart: false,
+            exit_after_start: false,
+        })));
+        assert!(app.core_failure.is_none());
+        let _ = app.update(Message::RestartCore);
+        assert!(!app.busy && app.queued_actions.is_empty());
     }
     #[test]
     fn late_group_result_cannot_remove_new_work_or_restore_old_delays() {
