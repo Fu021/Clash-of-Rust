@@ -76,6 +76,48 @@ def screenshot(window, output, env):
         x.XCloseDisplay(display)
 
 
+def search_center(window, output, env):
+    """Locate the real search field after notices have changed its position."""
+    path = output/'search-focus.png'
+    screenshot(window, path, env)
+    png = path.read_bytes()
+    offset, compressed, dimensions = 8, bytearray(), None
+    while offset < len(png):
+        length = struct.unpack_from('>I', png, offset)[0]
+        kind = png[offset+4:offset+8]
+        data = png[offset+8:offset+8+length]
+        if kind == b'IHDR':
+            width, height, depth, color, _, _, interlaced = struct.unpack('>IIBBBBB', data)
+            if (depth, color, interlaced) != (8, 2, 0):
+                raise ValueError('Expected an RGB screenshot')
+            dimensions = width, height
+        elif kind == b'IDAT':
+            compressed.extend(data)
+        offset += length+12
+    if dimensions is None:
+        raise ValueError('Screenshot dimensions missing')
+    width, height = dimensions
+    raw, stride = zlib.decompress(compressed), width*3+1
+    if any(raw[y*stride] != 0 for y in range(height)):
+        raise ValueError('Expected unfiltered screenshot rows')
+    runs, start = [], None
+    # At the default 950 px window, only the search input has this border
+    # on the content's left edge. Card/notice borders use other colors.
+    for y in range(70, min(height-60, 250)):
+        pixel = raw[y*stride+1+184*3:y*stride+1+185*3]
+        border = all(abs(a-b) <= 3 for a, b in zip(pixel, (100, 116, 139)))
+        if border:
+            if start is None:
+                start = y
+        elif start is not None:
+            if y-start >= 15:
+                runs.append((start, y))
+            start = None
+    if len(runs) != 1 or width != 950:
+        raise RuntimeError('Cannot locate the search field: '+str(runs))
+    return 380, sum(runs[0])//2
+
+
 def gui_scenes(executable, benchmark, output, seconds, modern_layout=False):
     env = dict(os.environ, GSETTINGS_BACKEND='memory', WINIT_UNIX_BACKEND='x11', WINIT_X11_SCALE_FACTOR='1')
     env.pop('WAYLAND_DISPLAY', None)
@@ -134,11 +176,7 @@ def gui_scenes(executable, benchmark, output, seconds, modern_layout=False):
             click(70, 126 if modern_layout else 108)
             measure('proxies-collapsed')
             if modern_layout:
-                # Native focus traversal reaches the page's only text input,
-                # independently of notices above it.
-                subprocess.run(['xdotool', 'windowfocus', '--sync', window, 'key', '--clearmodifiers', 'Tab'],
-                               env=env, check=True)
-                time.sleep(0.3)
+                click(*search_center(window, output, env))
             else:
                 click(380, 120)
             subprocess.run(['xdotool', 'windowfocus', '--sync', window], env=env, check=True)
@@ -220,7 +258,7 @@ def main():
                 'started_at': datetime.datetime.now(datetime.timezone.utc).isoformat(),
                 'instrumentation': 'The workflow benchmark example replaces only the example in the selected checkout; application sources are unchanged.'}
     modern_layout = (source/'src/ui_style.rs').is_file()
-    metadata['gui_navigation'] = 'current sidebar coordinates and native Tab focus' if modern_layout else 'legacy window coordinates'
+    metadata['gui_navigation'] = 'current sidebar coordinates and detected search field' if modern_layout else 'legacy window coordinates'
     write_json(output/'metadata.json', metadata)
     (output/'gui-fixture.yaml').write_text(fixture(), encoding='utf-8')
     command = ['cargo', 'build', '--locked', '--bins', '--example', 'memory_benchmark']
