@@ -235,7 +235,6 @@ fn update(app: &mut App, message: Message) -> Task<Message> {
     }
     match message {
         Message::Query(_)
-        | Message::FocusSearch
         | Message::NodeSort(_)
         | Message::ToggleGroup(_)
         | Message::GroupPage(..)

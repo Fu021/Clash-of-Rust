@@ -76,7 +76,7 @@ def screenshot(window, output, env):
         x.XCloseDisplay(display)
 
 
-def gui_scenes(executable, benchmark, output, seconds, native_navigation=False):
+def gui_scenes(executable, benchmark, output, seconds, modern_layout=False):
     env = dict(os.environ, GSETTINGS_BACKEND='memory', WINIT_UNIX_BACKEND='x11', WINIT_X11_SCALE_FACTOR='1')
     env.pop('WAYLAND_DISPLAY', None)
     with tempfile.TemporaryDirectory(prefix='memory-gui-') as directory, (output/'gui.log').open('x') as log:
@@ -131,24 +131,20 @@ def gui_scenes(executable, benchmark, output, seconds, native_navigation=False):
                     subprocess.run([str(benchmark), 'app', str(app.pid), str(seconds), '250',
                                     str(output/(name+'.jsonl'))], stdout=text, check=True, env=env)
             measure('home')
-            if native_navigation:
-                subprocess.run(['xdotool', 'windowfocus', '--sync', window, 'key', '--clearmodifiers', 'ctrl+2'],
-                               env=env, check=True)
-            else:
-                click(70, 108)
+            click(70, 126 if modern_layout else 108)
             measure('proxies-collapsed')
-            if native_navigation:
-                subprocess.run(['xdotool', 'key', '--clearmodifiers', 'ctrl+f'], env=env, check=True)
+            if modern_layout:
+                # Native focus traversal reaches the page's only text input,
+                # independently of notices above it.
+                subprocess.run(['xdotool', 'windowfocus', '--sync', window, 'key', '--clearmodifiers', 'Tab'],
+                               env=env, check=True)
                 time.sleep(0.3)
             else:
                 click(380, 120)
             subprocess.run(['xdotool', 'windowfocus', '--sync', window], env=env, check=True)
             subprocess.run(['xdotool', 'type', '--delay', '100', '--clearmodifiers', 'node-'], env=env, check=True)
             measure('proxies-search')
-            if native_navigation:
-                subprocess.run(['xdotool', 'key', '--clearmodifiers', 'ctrl+1'], env=env, check=True)
-            else:
-                click(70, 70)
+            click(70, 83 if modern_layout else 70)
             measure('home-after-proxies')
         finally:
             # All tests use proxy off. Stop this owned process group, including
@@ -223,8 +219,8 @@ def main():
                 'rustc': subprocess.check_output(['rustc', '-Vv'], text=True).strip(),
                 'started_at': datetime.datetime.now(datetime.timezone.utc).isoformat(),
                 'instrumentation': 'The workflow benchmark example replaces only the example in the selected checkout; application sources are unchanged.'}
-    native_navigation = 'Message::FocusSearch' in (source/'src/main.rs').read_text(encoding='utf-8')
-    metadata['gui_navigation'] = 'native keyboard shortcuts' if native_navigation else 'legacy window coordinates'
+    modern_layout = (source/'src/ui_style.rs').is_file()
+    metadata['gui_navigation'] = 'current sidebar coordinates and native Tab focus' if modern_layout else 'legacy window coordinates'
     write_json(output/'metadata.json', metadata)
     (output/'gui-fixture.yaml').write_text(fixture(), encoding='utf-8')
     command = ['cargo', 'build', '--locked', '--bins', '--example', 'memory_benchmark']
@@ -246,7 +242,7 @@ def main():
     with (output/'api.txt').open('x') as text:
         subprocess.run([str(benchmark), 'suite', str(args.rows), str(args.repetitions), str(output/'api.jsonl')],
                        cwd=source, stdout=text, check=True)
-    gui_scenes(bundle/'clash-of-rust', benchmark, output, args.seconds, native_navigation)
+    gui_scenes(bundle/'clash-of-rust', benchmark, output, args.seconds, modern_layout)
     summarize(output, metadata)
 
 
