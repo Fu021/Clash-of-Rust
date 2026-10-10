@@ -10,8 +10,7 @@ use std::{
 pub const SUBSCRIPTION_RULES: [&str; 5] = [
     "GEOSITE,category-ads-all,REJECT",
     "GEOSITE,private,DIRECT",
-    // LAN uses the core's built-in private-address matcher in both MMDB and DAT modes.
-    "GEOIP,LAN,DIRECT,no-resolve",
+    "GEOIP,Private,DIRECT,no-resolve",
     "GEOSITE,CN,DIRECT",
     "GEOIP,CN,DIRECT,no-resolve",
 ];
@@ -297,25 +296,14 @@ fn apply_rules(map: &mut Mapping, overrides: &RuleOverrides) -> Result<()> {
         _ => bail!("订阅 rules 必须是规则列表"),
     };
     let same_rule = |a: &str, b: &str| {
-        let geoip = b
-            .split(',')
-            .next()
-            .is_some_and(|kind| kind.trim().eq_ignore_ascii_case("GEOIP"));
         let mut a = a.split(',').map(str::trim);
         let mut b = b.split(',').map(str::trim);
-        let mut index = 0;
         loop {
             match (a.next(), b.next()) {
                 (None, None) => break true,
                 (Some(a), Some(b)) if a.eq_ignore_ascii_case(b) => {}
-                (Some(a), Some(b))
-                    if geoip
-                        && index == 1
-                        && a.eq_ignore_ascii_case("Private")
-                        && b.eq_ignore_ascii_case("LAN") => {}
                 _ => break false,
             }
-            index += 1;
         }
     };
     let mut rules = Vec::with_capacity(previous.len() + SUBSCRIPTION_RULES.len());
@@ -349,6 +337,8 @@ mod tests {
         assert_eq!(settings.run_mode, "rule");
         assert_eq!(settings.proxy_mode, crate::engine::ProxyMode::Off);
         assert_eq!(settings.rule_overrides, RuleOverrides::default());
+        assert_eq!(Settings::default().rule_overrides.enabled, [false; 5]);
+        assert_eq!(settings.rule_overrides.enabled, [false; 5]);
     }
 
     #[test]
@@ -385,11 +375,7 @@ mod tests {
 
     #[test]
     fn subscription_rules_already_present_are_unchanged_by_toggles() {
-        for (index, rule) in SUBSCRIPTION_RULES
-            .iter()
-            .enumerate()
-            .chain(std::iter::once((2, &"GEOIP,Private,DIRECT,no-resolve")))
-        {
+        for (index, rule) in SUBSCRIPTION_RULES.iter().enumerate() {
             let existing = rule.to_ascii_lowercase().replace(',', " , ");
             let raw = format!(
                 "proxies: []\nrules:\n  - DOMAIN,example.test,DIRECT\n  - {existing}\n  - MATCH,DIRECT\n"
@@ -415,6 +401,20 @@ mod tests {
         let config: Value =
             serde_yaml::from_str(&runtime_config(&raw, &settings).unwrap()).unwrap();
         assert_eq!(config["rules"], original["rules"]);
+        // LAN has a different address range and must not suppress Private.
+        let raw = "proxies: []\nrules: [\"GEOIP,LAN,DIRECT,no-resolve\", \"MATCH,DIRECT\"]";
+        let mut settings = Settings::default();
+        settings.rule_overrides.enabled[2] = true;
+        let config: Value = serde_yaml::from_str(&runtime_config(raw, &settings).unwrap()).unwrap();
+        assert_eq!(
+            config["rules"][0].as_str(),
+            Some("GEOIP,Private,DIRECT,no-resolve")
+        );
+        assert_eq!(
+            config["rules"][1].as_str(),
+            Some("GEOIP,LAN,DIRECT,no-resolve")
+        );
+        assert_eq!(config["rules"].as_sequence().unwrap().len(), 3);
     }
 
     #[test]

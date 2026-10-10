@@ -139,7 +139,7 @@ fn fixture(scene: &str) -> App {
         app.page = Page::Settings;
         app.geo_status = "2026-10-10".into();
         app.updates.status = "已是最新版本".into();
-        if scene == "settings-rules" {
+        if scene == "settings-rules-enabled" {
             app.rule_draft.enabled = [true; 5];
         }
     } else {

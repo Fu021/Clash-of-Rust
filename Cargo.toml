@@ -1,6 +1,6 @@
 [package]
 name = "clash-of-rust"
-version = "0.4.14-dev.1"
+version = "0.5.0"
 edition = "2024"
 default-run = "clash-of-rust"
 description = "A native Rust desktop client for mihomo"

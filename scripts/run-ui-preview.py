@@ -114,7 +114,8 @@ def main():
              'diagnostics', 'ip-summary', 'settings', 'home-failure', 'home-retrying']
     scenes = list(dict.fromkeys([scene+suffix for scene in pages for suffix in ('', '-light')] + scenes))
     scenes += [scene+'-compact'+suffix for scene in pages for suffix in ('', '-light')]
-    scenes += ['settings-rules'+suffix for suffix in ('', '-light', '-compact', '-compact-light')]
+    scenes += [scene+suffix for scene in ('settings-rules', 'settings-rules-enabled')
+               for suffix in ('', '-light', '-compact', '-compact-light')]
     for scene in scenes:
         env = dict(os.environ, CLASH_UI_PREVIEW_SCENE=scene, WINIT_UNIX_BACKEND='x11',
                    WINIT_X11_SCALE_FACTOR='1', GSETTINGS_BACKEND='memory')

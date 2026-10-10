@@ -3472,14 +3472,13 @@ impl App {
     fn settings_view(&self) -> Element<'_, Message> {
         let mut rules = column![
             self.title("订阅附加规则"),
-            self.caption("仅补充订阅缺少的规则；勾选后保存，更新后保留，取消勾选恢复原规则。"),
-            self.caption("补充的规则优先匹配，订阅原规则和兜底保持原样；仅在规则模式下生效。"),
+            self.caption("仅补充订阅缺少的规则，补充的规则优先匹配。"),
         ]
         .spacing(10);
         let labels = [
             "拦截广告",
             "本地域名直连",
-            "私有 IP 直连（Private 兼容）",
+            "私有 IP 直连",
             "国内域名直连",
             "国内 IP 直连",
         ];

@@ -83,7 +83,7 @@ async fn subscription_rule_overrides_survive_updates_and_restore_original_rules(
     );
     assert_eq!(
         config["rules"][2].as_str(),
-        Some("GEOIP,LAN,DIRECT,no-resolve")
+        Some("GEOIP,Private,DIRECT,no-resolve")
     );
     assert_eq!(
         config["rules"]
