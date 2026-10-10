@@ -216,12 +216,12 @@ def summarize(output, metadata):
                     raise ValueError('Benchmark repetition count is incomplete')
                 peak, retained = (statistics.median(row[key] for row in samples)/1048576 for key in ('peak_extra_heap_bytes', 'retained_extra_heap_bytes'))
                 lines.append(f'| {workload} | {mode} | {refresh} | {peak:.2f} | {retained:.2f} |')
-    lines += ['', 'GUI subscription: 2,000 nodes, 40 groups × 2,000 members, 20,000 rules. Proxy off; scheduled delay checks off; no business traffic. Xvfb/X11; snapshots show the scene used.', '',
-              '| Scene | GUI RSS peak MiB | Core RSS peak MiB | Total PSS peak MiB |', '| --- | ---: | ---: | ---: |']
+    lines += ['', 'GUI subscription: 2,000 nodes, 40 groups × 2,000 members, 20,000 rules. Proxy off; scheduled delay checks off; no business traffic. Xvfb/X11; snapshots show the scene used.']
     scenes = ['home', 'proxies-collapsed', 'proxies-search', 'home-after-proxies']
     if metadata.get('additional_gui_rules'):
-        lines += ['', 'rules-* scenes enable all five subscription overrides with the subscription fallback unchanged in a fresh client/core process.', '']
+        lines += ['', 'rules-* scenes enable all five subscription overrides with the subscription fallback unchanged in a fresh client/core process.']
         scenes += ['rules-'+scene for scene in scenes.copy()]
+    lines += ['', '| Scene | GUI RSS peak MiB | Core RSS peak MiB | Total PSS peak MiB |', '| --- | ---: | ---: | ---: |']
     for scene in scenes:
         rows = [json.loads(line) for line in (output/(scene+'.jsonl')).read_text().splitlines()]
         samples = [row for row in rows if 'elapsed_ms' in row]
