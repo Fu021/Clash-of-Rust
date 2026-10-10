@@ -81,7 +81,8 @@ fn main() -> iced::Result {
                     }
                     return Ok(());
                 }
-                Err(_) => {
+                Err(error) => {
+                    eprintln!("桌面初始化失败：{error:#}");
                     if !elevated_handoff && !background_start() {
                         platform::show_existing();
                     }

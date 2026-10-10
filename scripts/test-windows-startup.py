@@ -316,28 +316,14 @@ def main():
             # Use a real local Users account, rather than a filtered service
             # token that Windows may reject before application initialization.
             for arguments in (['config::tests::', '--test-threads=1'],
-                              ['profile_transaction::tests::', '--test-threads=1']):
+                              ['profile_transaction::tests::', '--test-threads=1'],
+                              ['platform::windows::show_event_tests::', '--test-threads=1']):
                 process = api.launch(test_binary, limited, dict(os.environ), arguments)
                 try:
                     api.wait(process, 60)
                 finally:
                     api.cleanup(process)
                 print('PASS: ordinary user ' + arguments[0], flush=True)
-            # The same early CLI handler is used by the UAC repair assistant.
-            # A new ordinary account must enable/disable startup successfully,
-            # and an assistant running as a different account must refuse it.
-            for arguments, expected in ((['--autostart-enable'], 0),
-                                        (['--autostart-status'], 0),
-                                        (['--autostart-remove'], 0),
-                                        (['--autostart-status'], 1),
-                                        (['--autostart-remove', '--autostart-user', sid], 3)):
-                process = api.launch(executable, None if expected == 3 else limited,
-                                     dict(os.environ), arguments)
-                try:
-                    api.wait(process, 30, expected)
-                finally:
-                    api.cleanup(process)
-            print('PASS: ordinary user startup toggle and repair-account validation', flush=True)
             fresh = root/'ordinary first run'
             fresh.mkdir()
             check_startup(api, executable, limited, fresh)
@@ -371,12 +357,36 @@ def main():
             migrated.mkdir()
             check_startup(api, executable, None, migrated)
             check_startup(api, executable, limited, migrated)
+            # The same early CLI handler is used by the UAC repair assistant.
+            # A new ordinary account must enable/disable startup successfully,
+            # and an assistant running as a different account must refuse it.
+            for arguments, expected in ((['--autostart-enable'], 0),
+                                        (['--autostart-status'], 0),
+                                        (['--autostart-remove'], 0),
+                                        (['--autostart-status'], 1),
+                                        (['--autostart-remove', '--autostart-user', sid], 3)):
+                process = api.launch(executable, None if expected == 3 else limited,
+                                     dict(os.environ), arguments)
+                try:
+                    api.wait(process, 30, expected)
+                finally:
+                    api.cleanup(process)
+            print('PASS: ordinary user startup toggle and repair-account validation', flush=True)
     finally:
         try:
             api.close_test_desktop()
         finally:
             if limited:
                 api.kernel.CloseHandle(limited)
+            # Registering a logon task can start the real background GUI as
+            # these logon sessions are created. Clean up only this test user's
+            # application process tree, before deleting the temporary account.
+            if api.username:
+                import subprocess
+                subprocess.run(['taskkill', '/F', '/FI',
+                                'USERNAME eq ' + os.environ['COMPUTERNAME'] + '\\' + api.username,
+                                '/IM', 'clash-of-rust.exe', '/T'],
+                               stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
             api.delete_test_user()
     print('PASS: Windows startup checks use a verified ordinary local Users account', flush=True)
 

@@ -356,6 +356,7 @@ fn create_show_event(name: &str) -> Result<Handle> {
             Authorization::ConvertStringSecurityDescriptorToSecurityDescriptorW,
             SECURITY_ATTRIBUTES,
         },
+        System::Threading::CreateEventExW,
     };
     // A normal shortcut must be able to wake an elevated TUN instance. This
     // session-local event only reveals the window; the exit event stays private.
@@ -378,12 +379,9 @@ fn create_show_event(name: &str) -> Result<Handle> {
         bInheritHandle: 0,
     };
     let handle = unsafe {
-        CreateEventW(
-            (&mut attributes as *mut SECURITY_ATTRIBUTES).cast(),
-            0,
-            0,
-            wide(name).as_ptr(),
-        )
+        // Interactive users are granted signal/wait rights by the DACL above.
+        // Request those rights rather than CreateEventW's EVENT_ALL_ACCESS.
+        CreateEventExW(&mut attributes, wide(name).as_ptr(), 0, 0x100002)
     };
     let error = std::io::Error::last_os_error();
     unsafe {
@@ -451,6 +449,10 @@ mod show_event_tests {
         }
         let name = format!("Local\\ClashOfRust.Show.Test.{}", uuid::Uuid::new_v4());
         let owner = create_show_event(&name).unwrap();
+        // Opening an existing event must also work for an ordinary user,
+        // whose advertised DACL rights do not include EVENT_ALL_ACCESS.
+        let reopened = create_show_event(&name).unwrap();
+        unsafe { CloseHandle(reopened) };
         let child = std::process::Command::new(std::env::current_exe().unwrap())
             .args([
                 "--exact",
