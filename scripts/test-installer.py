@@ -5,6 +5,7 @@ from ctypes import wintypes
 import os
 from pathlib import Path
 import subprocess
+import time
 import uuid
 import winreg
 from build_support import ROOT, bundle_directory, file_version, numeric_version, host_arch, nsis, run, sha256, stage_resources, staging_directory, validate_resources
@@ -66,6 +67,84 @@ def expect(executable,args,code,timeout=60):
         actual = process.wait(timeout=timeout)
     if actual != code:
         raise RuntimeError(f'{executable.name}: expected exit {code}, got {actual}')
+
+
+def interactive_uninstall(executable, installed, delete_data):
+    """Click the real wizard; verify the destructive checkbox starts unchecked."""
+    user = ctypes.WinDLL('user32', use_last_error=True)
+    callback_type = ctypes.WINFUNCTYPE(wintypes.BOOL, wintypes.HWND, wintypes.LPARAM)
+    signatures = [
+        ('EnumWindows', [callback_type, wintypes.LPARAM], wintypes.BOOL),
+        ('EnumChildWindows', [wintypes.HWND, callback_type, wintypes.LPARAM], wintypes.BOOL),
+        ('GetWindowThreadProcessId', [wintypes.HWND, ctypes.POINTER(wintypes.DWORD)], wintypes.DWORD),
+        ('GetWindowTextW', [wintypes.HWND, wintypes.LPWSTR, ctypes.c_int], ctypes.c_int),
+        ('GetDlgItem', [wintypes.HWND, ctypes.c_int], wintypes.HWND),
+        ('IsWindowEnabled', [wintypes.HWND], wintypes.BOOL),
+        ('SendMessageTimeoutW', [wintypes.HWND, wintypes.UINT, wintypes.WPARAM,
+                                 wintypes.LPARAM, wintypes.UINT, wintypes.UINT,
+                                 ctypes.POINTER(ctypes.c_size_t)], wintypes.LPARAM),
+    ]
+    for name, arguments, result in signatures:
+        function = getattr(user, name)
+        function.argtypes, function.restype = arguments, result
+
+    def enumerate_windows(parent=None):
+        handles = []
+        callback = callback_type(lambda handle, _: handles.append(handle) or True)
+        if parent is None:
+            user.EnumWindows(callback, 0)
+        else:
+            user.EnumChildWindows(parent, callback, 0)
+        return handles
+
+    def text(handle):
+        buffer = ctypes.create_unicode_buffer(1024)
+        user.GetWindowTextW(handle, buffer, len(buffer))
+        return buffer.value
+
+    def message(handle, code):
+        result = ctypes.c_size_t()
+        if not user.SendMessageTimeoutW(handle, code, 0, 0, 2, 5000, ctypes.byref(result)):
+            raise RuntimeError('Uninstall wizard did not respond to a UI action')
+        return result.value
+
+    with start(executable, [f'_?={installed}']) as process:
+        def wait_for(condition):
+            deadline = time.monotonic() + 30
+            while time.monotonic() < deadline:
+                value = condition()
+                if value:
+                    return value
+                if process.poll() is not None:
+                    raise RuntimeError(f'Uninstall wizard exited early: {process.returncode}')
+                time.sleep(0.1)
+            raise RuntimeError('Timed out waiting for the uninstall wizard')
+
+        def find_checkbox():
+            for window in enumerate_windows():
+                pid = wintypes.DWORD()
+                user.GetWindowThreadProcessId(window, ctypes.byref(pid))
+                if pid.value == process.pid:
+                    for control in enumerate_windows(window):
+                        if text(control) == '删除所有配置和数据（默认不选）':
+                            return window, control
+
+        try:
+            window, checkbox = wait_for(find_checkbox)
+            assert message(checkbox, 0xF0) == 0, 'Delete-data checkbox must default to unchecked'
+            if delete_data:
+                message(checkbox, 0xF5)
+            assert message(checkbox, 0xF0) == int(delete_data)
+            message(user.GetDlgItem(window, 1), 0xF5)  # Next: leave the data options page.
+            wait_for(lambda: not find_checkbox() and user.IsWindowEnabled(user.GetDlgItem(window, 1)))
+            message(user.GetDlgItem(window, 1), 0xF5)  # Confirm uninstall.
+            wait_for(lambda: not key_exists(TEST_KEY) and user.IsWindowEnabled(user.GetDlgItem(window, 1)))
+            message(user.GetDlgItem(window, 1), 0xF5)  # Finish.
+            assert process.wait(timeout=30) == 0
+        finally:
+            if process.poll() is None:
+                process.kill()
+                process.wait(timeout=10)
 
 
 def production_package(package, binary, root):
@@ -149,6 +228,12 @@ def main():
         expect(setup,normal,2)
         user_file = installed/'user-file.txt'
         user_file.write_text('Must survive uninstall',encoding='utf-8')
+        user_data = installed/'test-user-data'
+        data_files = [user_data/'data/settings.json', user_data/'data/profiles/test.yaml',
+                      user_data/'data/runtime/cache.db', user_data/'cache/download.tmp']
+        for path in data_files:
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_text('User configuration and data', encoding='utf-8')
         with Handle('mutex',MUTEX) as mutex, Handle('event',EVENT) as event:
             with start(setup,update) as process:
                 event.wait()
@@ -187,10 +272,21 @@ def main():
                 assert (installed/'clash-of-rust.exe').is_file()
         expect(setup,reinstall,0)
         assert user_file.is_file()
+        assert all(path.is_file() for path in data_files), 'Reinstallation deleted application data'
         uninstaller = installed/'uninstall.exe'
         expect(uninstaller,['/S',f'_?={installed}'],0)
         assert not (installed/'clash-of-rust.exe').exists() and not key_exists(TEST_KEY)
         assert user_file.is_file()
+        assert all(path.is_file() for path in data_files), 'Silent uninstall deleted application data'
+        expect(setup,normal,0)
+        interactive_uninstall(uninstaller, installed, delete_data=False)
+        assert all(path.is_file() for path in data_files), 'Default wizard choice deleted application data'
+        assert user_file.is_file()
+        expect(setup,normal,0)
+        interactive_uninstall(uninstaller, installed, delete_data=True)
+        assert not user_data.exists(), 'Explicit opt-in did not remove all configuration and data'
+        assert user_file.is_file(), 'Unrelated files must survive even when data deletion is selected'
+        print('PASS: unchecked uninstall checkbox, silent/default data preservation, explicit data removal')
         legacy_setup, legacy_install = root/'legacy-setup.exe', root/'old-user-install'
         run([compiler,'/V2','/INPUTCHARSET','UTF8',f'/DPAYLOAD={stage}',f'/DOUTPUT={legacy_setup}',ROOT/'installer/legacy-test.nsi'])
         expect(legacy_setup,['/S',f'/D={legacy_install}'],0)
