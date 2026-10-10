@@ -68,6 +68,12 @@ fn fixture(scene: &str) -> App {
         app.snapshot.connection_count = 5;
         app.snapshot.connections.upload_total = 4 * 1024 * 1024;
         app.snapshot.connections.download_total = 120 * 1024 * 1024;
+        if scene == "home-downloading" {
+            app.updates.progress = Some(update::Progress {
+                received: 25 * 1024 * 1024,
+                total: 100 * 1024 * 1024,
+            });
+        }
         if scene == "home-failure" || scene == "home-retrying" {
             app.snapshot = Snapshot::default();
             app.core_failure = Some("混合端口 7897 被占用，请调整端口后重试。".into());

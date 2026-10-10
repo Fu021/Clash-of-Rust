@@ -154,7 +154,7 @@ def main():
               'ip-ai', 'ip-restricted', 'ip-details', 'ip-partial', 'ip-compact', 'ip-summary-light',
               'ip-empty', 'ip-running', 'ip-category-partial']
     pages = ['ip-ai', 'ip-running', 'ip-empty', 'home', 'proxies-ascending', 'profiles', 'connections', 'rules', 'logs',
-             'diagnostics', 'ip-summary', 'settings', 'home-failure', 'home-retrying']
+             'diagnostics', 'ip-summary', 'settings', 'home-failure', 'home-retrying', 'home-downloading']
     scenes = list(dict.fromkeys([scene+suffix for scene in pages for suffix in ('', '-light')] + scenes))
     scenes += [scene+'-compact'+suffix for scene in pages for suffix in ('', '-light')]
     scenes += [scene+suffix for scene in ('settings-rules', 'settings-rules-enabled')

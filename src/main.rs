@@ -2080,7 +2080,7 @@ impl App {
                             } else {
                                 "内核启动失败或已退出"
                             }),
-                            scrollable(
+                            page_scroll(
                                 self.label(reason)
                                     .size(13)
                                     .wrapping(text::Wrapping::WordOrGlyph)
@@ -2200,7 +2200,7 @@ impl App {
                         progress.received as f64 / 1048576.0,
                         progress.total as f64 / 1048576.0
                     )),
-                    progress_bar(0.0..=100.0, percent as f32)
+                    progress_bar(0.0..=100.0, percent as f32).girth(5)
                 ]
                 .spacing(4),
             );
@@ -2358,7 +2358,7 @@ impl App {
             .color(self.secondary())
         ]
         .spacing(10);
-        scrollable(
+        page_scroll(
             column![
                 stats,
                 container(modes)
@@ -2536,7 +2536,7 @@ impl App {
                 self.selection(NodeSort::ALL, self.node_sort, Message::NodeSort, 185)
             ]
             .spacing(8),
-            scrollable(list).height(Length::Fill),
+            page_scroll(list).height(Length::Fill),
             self.pager(group_total, group_offset, GROUP_PAGE_SIZE)
         ]
         .spacing(8)
@@ -2918,7 +2918,7 @@ impl App {
         ]
         .spacing(12)
         .width(Length::Fill);
-        scrollable(body).spacing(8).height(Length::Fill).into()
+        page_scroll(body).height(Length::Fill).into()
     }
 
     fn websites(&self) -> Element<'_, Message> {
@@ -3152,7 +3152,7 @@ impl App {
             .spacing(6)
             .padding([0, 8]),
         )
-        .push(scrollable(list).spacing(8).height(Length::Fill))
+        .push(page_scroll(list).height(Length::Fill))
         .push(footer)
         .into()
     }
@@ -3263,7 +3263,7 @@ impl App {
                 "导入订阅链接或本地 YAML 文件后，即可启用配置。",
             ));
         }
-        scrollable(column![form, self.title("当前订阅与配置"), list].spacing(14))
+        page_scroll(column![form, self.title("当前订阅与配置"), list].spacing(14))
             .height(Length::Fill)
             .into()
     }
@@ -3368,7 +3368,7 @@ impl App {
                 .spacing(10)
                 .into()
             ),
-            container(scrollable(list).height(Length::Fill))
+            container(page_scroll(list).height(Length::Fill))
                 .width(Length::Fill)
                 .style(panel),
             self.list_pager(total, offset)
@@ -3440,7 +3440,7 @@ impl App {
                 .spacing(10)
                 .into()
             ),
-            container(scrollable(list).height(Length::Fill))
+            container(page_scroll(list).height(Length::Fill))
                 .width(Length::Fill)
                 .style(panel),
             self.list_pager(total, offset)
@@ -3561,7 +3561,7 @@ impl App {
                 .spacing(10)
                 .into()
             ),
-            container(scrollable(list).height(Length::Fill))
+            container(page_scroll(list).height(Length::Fill))
                 .width(Length::Fill)
                 .style(panel)
         ]
@@ -3657,7 +3657,7 @@ impl App {
                 "执行测试后，结果会显示在这里；网站和出口查询使用当前代理，DNS 使用系统解析。",
             ));
         }
-        scrollable(column![network, dns, results].spacing(14))
+        page_scroll(column![network, dns, results].spacing(14))
             .height(Length::Fill)
             .into()
     }
@@ -3825,7 +3825,7 @@ impl App {
             self.action("更新所有 Geo 数据", Action::UpdateGeo, true)
         ]
         .spacing(12);
-        scrollable(
+        page_scroll(
             column![
                 container(updates)
                     .padding(16)
@@ -3907,6 +3907,13 @@ fn bytes(value: u64) -> String {
     } else {
         format!("{:.2} GiB", value as f64 / (1024.0 * 1024.0 * 1024.0))
     }
+}
+
+fn page_scroll<'a>(
+    content: impl Into<Element<'a, Message>>,
+) -> iced::widget::Scrollable<'a, Message> {
+    // Embed the scrollbar beside the content instead of covering its right edge.
+    scrollable(content).spacing(8)
 }
 
 fn panel(theme: &Theme) -> container::Style {
