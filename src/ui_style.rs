@@ -19,7 +19,7 @@ pub fn theme(dark: bool) -> Theme {
     THEMES.get_or_init(|| {
         [false, true].map(|dark| {
             Theme::custom(
-                if dark { "Clash Dark" } else { "Clash Light" }.into(),
+                if dark { "Clash Dark" } else { "Clash Light" },
                 iced::theme::Palette {
                     background: if dark {
                         color!(0x111827)

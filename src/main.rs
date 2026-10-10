@@ -1642,7 +1642,6 @@ impl App {
                         self.notice = error;
                         self.error = true;
                         self.notice_visible = true;
-                        self.notice_visible = true;
                     }
                     _ => {}
                 }
@@ -1992,7 +1991,12 @@ impl App {
                             } else {
                                 "内核启动失败或已退出"
                             }),
-                            self.label(reason).size(13)
+                            scrollable(
+                                self.label(reason)
+                                    .size(13)
+                                    .wrapping(text::Wrapping::WordOrGlyph)
+                            )
+                            .height(36)
                         ]
                         .spacing(4)
                         .width(Length::Fill),
