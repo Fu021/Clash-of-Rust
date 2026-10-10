@@ -4,8 +4,7 @@ use super::*;
 use crate::network::routes;
 use crate::network::{Route, available_routes, request_error};
 
-const FEED_URL: &str = "https://github.com/Fu021/Clash-of-Rust/releases.atom";
-const ATOM: &str = "http://www.w3.org/2005/Atom";
+const LATEST_URL: &str = "https://github.com/Fu021/Clash-of-Rust/releases/latest";
 const REQUEST_TIMEOUT: Duration = Duration::from_secs(12);
 
 fn client(route: &Route) -> Result<Client> {
@@ -25,20 +24,21 @@ pub(super) async fn check(port: Option<u16>) -> Result<Option<Available>> {
     // Reading settings does not change the desktop proxy, and an unavailable
     // desktop settings service must not prevent the other routes from working.
     let routes = available_routes(port, "https");
-    let (mut available, feed_route) = tokio::time::timeout(
+    let (mut available, latest_route) = tokio::time::timeout(
         Duration::from_secs(60),
-        discover(&routes, API_URL, FEED_URL, crate::VERSION),
+        discover(&routes, API_URL, LATEST_URL, crate::VERSION),
     )
     .await
     .context("更新检查超时，请检查代理或稍后重试")??;
-    if let (Some(available), Some(route)) = (&mut available, feed_route) {
+    if let (Some(available), Some(route)) = (&mut available, latest_route) {
         // Asset discovery has its own deadline: a detected release must remain
         // visible even if its assets are absent or temporarily unreachable.
-        available.package = tokio::time::timeout(REQUEST_TIMEOUT, feed_package(available, &route))
-            .await
-            .ok()
-            .and_then(Result::ok)
-            .flatten();
+        available.package =
+            tokio::time::timeout(REQUEST_TIMEOUT, latest_package(available, &route))
+                .await
+                .ok()
+                .and_then(Result::ok)
+                .flatten();
     }
     Ok(available)
 }
@@ -46,7 +46,7 @@ pub(super) async fn check(port: Option<u16>) -> Result<Option<Available>> {
 async fn discover(
     routes: &[Route],
     api: &str,
-    feed: &str,
+    latest: &str,
     current: &str,
 ) -> Result<(Option<Available>, Option<Route>)> {
     let mut api_error = None;
@@ -64,22 +64,22 @@ async fn discover(
             }
         }
     }
-    let mut feed_error = None;
+    let mut latest_error = None;
     for route in routes {
         let result = async {
             let response = client(route)?
-                .get(feed)
+                .get(latest)
                 .send()
                 .await
                 .map_err(|error| request_error(error, "Release 订阅"))?;
-            feed_release(&release_bytes(response).await?, current)
+            latest_response(response, current).await
         }
         .await;
         match result {
             Ok(available) => return Ok((available, Some(route.clone()))),
             Err(error) => {
-                if feed_error.is_none() {
-                    feed_error = Some(error.to_string());
+                if latest_error.is_none() {
+                    latest_error = Some(error.to_string());
                 }
             }
         }
@@ -87,46 +87,49 @@ async fn discover(
     bail!(
         "{}；{}（已尝试可用代理和直连）",
         api_error.unwrap_or_default(),
-        feed_error.unwrap_or_default()
+        latest_error.unwrap_or_default()
     );
 }
 
-fn feed_release(bytes: &[u8], current: &str) -> Result<Option<Available>> {
-    let text = std::str::from_utf8(bytes).context("Release 订阅格式无效")?;
-    let document = roxmltree::Document::parse_with_options(
-        text,
-        roxmltree::ParsingOptions {
-            allow_dtd: false,
-            nodes_limit: 20_000,
-        },
-    )
-    .context("Release 订阅格式无效")?;
-    if !document.root_element().has_tag_name((ATOM, "feed")) {
+// GitHub's /releases/latest excludes drafts and prereleases. Atom entries do
+// not expose the prerelease flag, so they cannot safely select stable updates.
+async fn latest_response(response: reqwest::Response, current: &str) -> Result<Option<Available>> {
+    if !response.status().is_redirection() {
+        release_bytes(response).await?;
         bail!("Release 订阅格式无效");
     }
-    let prefix = format!("{RELEASES_URL}/tag/");
-    let releases = document
-        .root_element()
-        .children()
-        .filter(|node| node.has_tag_name((ATOM, "entry")))
-        .filter_map(|entry| {
-            let link = entry.children().find(|node| {
-                node.has_tag_name((ATOM, "link")) && node.attribute("rel") == Some("alternate")
-            })?;
-            let tag = link.attribute("href")?.strip_prefix(&prefix)?;
-            let version = Version::parse(tag.strip_prefix('v').unwrap_or(tag)).ok()?;
-            Some(Release {
-                tag_name: tag.to_owned(),
-                draft: false,
-                prerelease: !version.pre.is_empty(),
-                assets: Vec::new(),
-            })
-        })
-        .collect();
-    newest(releases, current)
+    let location = response
+        .headers()
+        .get(reqwest::header::LOCATION)
+        .and_then(|value| value.to_str().ok())
+        .context("Release 订阅格式无效")?;
+    latest_release(location, current)
 }
 
-async fn feed_package(available: &Available, route: &Route) -> Result<Option<Package>> {
+fn latest_release(location: &str, current: &str) -> Result<Option<Available>> {
+    let base = Url::parse(RELEASES_URL).expect("constant release URL");
+    let url = base.join(location).context("Release 订阅格式无效")?;
+    // With no stable release, GitHub can redirect back to the release list.
+    if url.as_str() == RELEASES_URL {
+        return Ok(None);
+    }
+    let prefix = format!("{RELEASES_URL}/tag/");
+    let tag = url
+        .as_str()
+        .strip_prefix(&prefix)
+        .context("Release 订阅格式无效")?;
+    newest(
+        vec![Release {
+            tag_name: tag.to_owned(),
+            draft: false,
+            prerelease: false,
+            assets: Vec::new(),
+        }],
+        current,
+    )
+}
+
+async fn latest_package(available: &Available, route: &Route) -> Result<Option<Package>> {
     let Some(name) = package_name(&available.version) else {
         return Ok(None);
     };
@@ -207,27 +210,29 @@ mod tests {
         (address, task)
     }
 
-    fn feed(link: &str) -> String {
-        format!(
-            r#"<feed xmlns="{ATOM}"><entry><link rel="alternate" href="{link}"/></entry></feed>"#
-        )
-    }
-
     #[test]
-    fn feed_uses_only_this_repositories_semantic_release_tags() {
-        let mut xml = feed(&format!("{RELEASES_URL}/tag/v0.4.10-beta.1"));
-        xml = xml.replace("</feed>", &format!(r#"<entry><link rel="alternate" href="{RELEASES_URL}/tag/v0.4.9"/></entry><entry><link rel="alternate" href="https://evil.invalid/releases/tag/v99.0.0"/></entry></feed>"#));
-        let available = feed_release(xml.as_bytes(), "0.4.7").unwrap().unwrap();
-        assert_eq!(available.version, "0.4.10-beta.1");
-        assert!(available.preview);
-        assert!(available.package.is_none());
-        assert!(feed_release(xml.as_bytes(), "0.4.10").unwrap().is_none());
-        for xml in [
-            "<html>challenge</html>",
-            "<feed/>",
-            "<!DOCTYPE feed [<!ENTITY a 'unsafe'>]><feed xmlns='http://www.w3.org/2005/Atom'>&a;</feed>",
+    fn latest_accepts_only_our_stable_release_tag_redirects() {
+        for location in [
+            format!("{RELEASES_URL}/tag/v0.4.9"),
+            "/Fu021/Clash-of-Rust/releases/tag/v0.4.9".into(),
         ] {
-            assert!(feed_release(xml.as_bytes(), "0.4.7").is_err());
+            let available = latest_release(&location, "0.4.7").unwrap().unwrap();
+            assert_eq!(available.version, "0.4.9");
+            assert!(!available.preview);
+            assert!(available.package.is_none());
+            assert!(latest_release(&location, "0.4.10").unwrap().is_none());
+        }
+        assert!(latest_release(RELEASES_URL, "0.4.7").unwrap().is_none());
+        assert!(
+            latest_release(&format!("{RELEASES_URL}/tag/v0.5.0-beta.1"), "0.4.7")
+                .unwrap()
+                .is_none()
+        );
+        for location in [
+            "https://evil.invalid/releases/tag/v99.0.0",
+            "https://github.com/other/project/releases/tag/v99.0.0",
+        ] {
+            assert!(latest_release(location, "0.4.7").is_err());
         }
     }
 
@@ -239,7 +244,7 @@ mod tests {
         let body = br#"[{"tag_name":"v0.4.8","draft":false,"prerelease":false}]"#;
         let (proxy, task) = server("200 OK", body, "").await;
         let route_list = routes(Some(closed_port), Some(proxy));
-        let (available, feed_route) = discover(
+        let (available, latest_route) = discover(
             &route_list,
             "http://api.invalid/releases",
             "http://feed.invalid/",
@@ -248,7 +253,7 @@ mod tests {
         .await
         .unwrap();
         assert_eq!(available.unwrap().version, "0.4.8");
-        assert!(feed_route.is_none());
+        assert!(latest_route.is_none());
         assert!(
             task.await
                 .unwrap()
@@ -257,14 +262,14 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn blocked_api_uses_release_feed_and_reports_both_errors_if_unavailable() {
+    async fn blocked_api_uses_stable_redirect_and_reports_both_errors_if_unavailable() {
         let route_list = routes(None, None);
         let (api, api_task) = server("403 Forbidden", b"", "").await;
-        let body = feed(&format!("{RELEASES_URL}/tag/v0.4.8"));
-        let (feed, feed_task) = server("200 OK", body.as_bytes(), "").await;
-        let (available, feed_route) = discover(&route_list, &api, &feed, "0.4.7").await.unwrap();
+        let redirect = format!("Location: {RELEASES_URL}/tag/v0.4.8\r\n");
+        let (feed, feed_task) = server("302 Found", b"", &redirect).await;
+        let (available, latest_route) = discover(&route_list, &api, &feed, "0.4.7").await.unwrap();
         assert_eq!(available.unwrap().version, "0.4.8");
-        assert!(feed_route.unwrap().proxy.is_none());
+        assert!(latest_route.unwrap().proxy.is_none());
         api_task.await.unwrap();
         feed_task.await.unwrap();
 
@@ -278,6 +283,43 @@ mod tests {
         assert!(error.contains("限制请求") && error.contains("502"));
         api_task.await.unwrap();
         feed_task.await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn fallback_never_accepts_a_preview_redirect_or_unverified_page() {
+        for (status, body, headers, expected_none) in [
+            (
+                "302 Found",
+                b"".as_slice(),
+                format!("Location: {RELEASES_URL}/tag/v0.6.0-dev.1\r\n"),
+                true,
+            ),
+            ("302 Found", b"".as_slice(), String::new(), false),
+            (
+                "200 OK",
+                b"<html>Pre-release</html>".as_slice(),
+                String::new(),
+                false,
+            ),
+        ] {
+            let (url, server) = server(status, body, &headers).await;
+            let response = client(&Route {
+                label: "直连",
+                proxy: None,
+            })
+            .unwrap()
+            .get(url)
+            .send()
+            .await
+            .unwrap();
+            let result = latest_response(response, "0.5.1").await;
+            if expected_none {
+                assert!(result.unwrap().is_none());
+            } else {
+                assert!(result.is_err());
+            }
+            server.await.unwrap();
+        }
     }
 
     #[tokio::test]
@@ -337,24 +379,28 @@ mod tests {
     }
 
     #[tokio::test]
-    #[ignore = "checks official GitHub feed and asset headers without installing"]
-    async fn official_feed_detects_version_and_installer_without_api() {
+    #[ignore = "checks official GitHub stable redirect and asset headers without installing"]
+    async fn official_latest_detects_stable_version_and_installer_without_api() {
         let route = Route {
             label: "系统代理",
             proxy: crate::platform::configured_proxy("https").unwrap(),
         };
-        let response = client(&route).unwrap().get(FEED_URL).send().await.unwrap();
-        let available = feed_release(&release_bytes(response).await.unwrap(), "0.0.0")
+        let response = client(&route)
             .unwrap()
+            .get(LATEST_URL)
+            .send()
+            .await
             .unwrap();
-        let package = feed_package(&available, &route).await.unwrap().unwrap();
+        let available = latest_response(response, "0.0.0").await.unwrap().unwrap();
+        assert!(!available.preview);
+        let package = latest_package(&available, &route).await.unwrap().unwrap();
         assert!(package.asset.size > 0 && package.asset.size <= PACKAGE_LIMIT);
         assert_eq!(
             package.asset.name,
             package_name(&available.version).unwrap()
         );
         eprintln!(
-            "Feed-only discovery: {} ({} bytes)",
+            "Stable-only discovery: {} ({} bytes)",
             available.version, package.asset.size
         );
     }

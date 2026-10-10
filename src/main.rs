@@ -9,6 +9,8 @@ mod typography;
 pub(crate) mod ui_preview;
 #[path = "ui_style.rs"]
 mod ui_style;
+#[path = "window_state.rs"]
+mod window_state;
 
 use clash_of_rust::{
     config::{Profile, RuleOverrides, SUBSCRIPTION_RULES, Settings, Store},
@@ -121,8 +123,12 @@ fn main() -> iced::Result {
     #[cfg(windows)]
     std::thread::spawn(platform::migrate_autostart);
     typography::initialize();
+    let window_state = startup_store()
+        .map(|store| window_state::State::load(&store))
+        .unwrap_or_default();
+    let initial_window_size = window_state.size();
     iced::application(
-        move || App::new(tray_startup.lock().unwrap().take()),
+        move || App::new(tray_startup.lock().unwrap().take(), window_state.clone()),
         App::update,
         App::view,
     )
@@ -135,7 +141,7 @@ fn main() -> iced::Result {
     })
     .default_font(typography::ENGLISH_FONT)
     .window(iced::window::Settings {
-        size: DEFAULT_WINDOW_SIZE,
+        size: initial_window_size,
         min_size: Some(MIN_WINDOW_SIZE),
         icon: Some(icons::window()),
         exit_on_close_request: false,
@@ -343,6 +349,9 @@ enum Message {
     ResizeWindow(u64, iced::Size, Option<iced::window::Id>),
     ReadWindowSize(Option<iced::window::Id>),
     WindowSize(iced::Size),
+    CaptureWindowState(u64, iced::window::Id),
+    WindowStateCaptured(u64, iced::Size, bool, Option<bool>),
+    WindowStateSaved(Result<(), String>),
     TestUrl(String),
     DnsHost(String),
     Dark(bool),
@@ -378,6 +387,7 @@ enum Message {
     Dns,
     DnsDone(Result<Vec<String>, String>),
     Window((iced::window::Id, iced::window::Event)),
+    ExitWindowState(Option<(iced::Size, bool, Option<bool>)>),
     ExitFinished(Result<(), String>),
 }
 
@@ -436,6 +446,9 @@ struct App {
     window_height: String,
     size_revision: u64,
     size_pending: bool,
+    window_state: window_state::State,
+    window_state_revision: u64,
+    window_state_debounce: Option<iced::task::Handle>,
     dark: bool,
     autostart: bool,
     test_url: String,
@@ -599,8 +612,15 @@ async fn execute(engine: Arc<Mutex<Engine>>, action: Action, scope: Scope) -> Re
 }
 
 impl App {
-    fn new(tray_startup: Option<tray::Startup>) -> (Self, Task<Message>) {
-        Self::with_engine(startup_store().and_then(Engine::new), tray_startup)
+    fn new(
+        tray_startup: Option<tray::Startup>,
+        window_state: window_state::State,
+    ) -> (Self, Task<Message>) {
+        let (mut app, task) =
+            Self::with_engine(startup_store().and_then(Engine::new), tray_startup);
+        app.set_window_size(window_state.size());
+        app.window_state = window_state;
+        (app, task)
     }
 
     fn with_engine(
@@ -657,6 +677,9 @@ impl App {
             window_height: format!("{:.0}", DEFAULT_WINDOW_SIZE.height),
             size_revision: 0,
             size_pending: false,
+            window_state: window_state::State::default(),
+            window_state_revision: 0,
+            window_state_debounce: None,
             dark: settings.dark,
             autostart: platform::autostart_enabled().unwrap_or(false),
             engine,
@@ -1209,6 +1232,7 @@ impl App {
                     // Refresh native limits with the current display scale.
                     // Startup DPI detection can otherwise leave stale X11 hints.
                     return iced::window::set_min_size(id, Some(MIN_WINDOW_SIZE))
+                        .chain(iced::window::maximize(id, false))
                         .chain(iced::window::resize(id, size));
                 }
             }
@@ -1222,9 +1246,37 @@ impl App {
             }
             Message::ReadWindowSize(None) => {}
             Message::WindowSize(size) => self.set_window_size(size),
+            Message::CaptureWindowState(revision, id) => {
+                if revision == self.window_state_revision && !self.exiting {
+                    self.window_state_debounce = None;
+                    return read_window_state(id).map(move |(size, maximized, minimized)| {
+                        Message::WindowStateCaptured(revision, size, maximized, minimized)
+                    });
+                }
+            }
+            Message::WindowStateCaptured(revision, size, maximized, minimized) => {
+                if revision == self.window_state_revision
+                    && !self.size_pending
+                    && !self.exiting
+                    && self.window_state.capture(size, maximized, minimized)
+                {
+                    let state = self.window_state.clone();
+                    return Task::perform(
+                        async move { state.save().await.map_err(|error| format!("{error:#}")) },
+                        Message::WindowStateSaved,
+                    );
+                }
+            }
+            Message::WindowStateSaved(result) => {
+                if let Err(error) = result {
+                    self.notice = format!("无法保存窗口尺寸：{error}");
+                    self.error = true;
+                    self.notice_visible = true;
+                }
+            }
             Message::Window((id, iced::window::Event::Opened { .. })) => {
                 return iced::window::set_min_size(id, Some(MIN_WINDOW_SIZE))
-                    .chain(iced::window::resize(id, DEFAULT_WINDOW_SIZE));
+                    .chain(iced::window::resize(id, self.window_state.size()));
             }
             Message::Window((id, iced::window::Event::Rescaled(_))) => {
                 return iced::window::set_min_size(id, Some(MIN_WINDOW_SIZE))
@@ -1236,7 +1288,10 @@ impl App {
                 self.set_window_size(size);
                 // X11 can update WM_NORMAL_HINTS again while delivering the
                 // final resize after a DPI change. Apply limits after that event.
-                return iced::window::set_min_size(id, Some(MIN_WINDOW_SIZE));
+                return Task::batch([
+                    iced::window::set_min_size(id, Some(MIN_WINDOW_SIZE)),
+                    self.schedule_window_state(id),
+                ]);
             }
             Message::TestUrl(value) => self.test_url = value,
             Message::DnsHost(value) => self.dns_host = value,
@@ -1809,6 +1864,26 @@ impl App {
                 }
                 return self.exit();
             }
+            Message::ExitWindowState(captured) => {
+                if let Some((size, maximized, minimized)) = captured {
+                    self.window_state.capture(size, maximized, minimized);
+                }
+                let state = self.window_state.clone();
+                let engine = self.engine.clone();
+                return Task::perform(
+                    async move {
+                        if let Err(error) = state.save().await {
+                            eprintln!("无法保存窗口尺寸：{error:#}");
+                        }
+                        if let Some(engine) = engine {
+                            engine.lock().await.stop().await.map_err(|e| e.to_string())
+                        } else {
+                            Ok(())
+                        }
+                    },
+                    Message::ExitFinished,
+                );
+            }
             Message::ExitFinished(result) => match result {
                 Ok(()) => return iced::exit(),
                 Err(error) => {
@@ -1835,15 +1910,14 @@ impl App {
         self.cancel_delay_checks();
         self.cancel_site_checks();
         self.tray_startup = None;
-        if let Some(engine) = self.engine.clone() {
-            self.exiting = true;
-            Task::perform(
-                async move { engine.lock().await.stop().await.map_err(|e| e.to_string()) },
-                Message::ExitFinished,
-            )
-        } else {
-            iced::exit()
+        self.exiting = true;
+        if let Some(handle) = self.window_state_debounce.take() {
+            handle.abort();
         }
+        iced::window::latest().then(|id| match id {
+            Some(id) => read_window_state(id).map(|state| Message::ExitWindowState(Some(state))),
+            None => Task::done(Message::ExitWindowState(None)),
+        })
     }
 
     fn start_site_queue(&mut self) -> Task<Message> {
@@ -1890,6 +1964,24 @@ impl App {
             self.window_width = format!("{:.0}", size.width);
             self.window_height = format!("{:.0}", size.height);
         }
+    }
+
+    fn schedule_window_state(&mut self, id: iced::window::Id) -> Task<Message> {
+        self.window_state_revision = self.window_state_revision.wrapping_add(1);
+        if let Some(handle) = self.window_state_debounce.take() {
+            handle.abort();
+        }
+        if self.exiting {
+            return Task::none();
+        }
+        let revision = self.window_state_revision;
+        let (task, handle) = Task::perform(
+            async { tokio::time::sleep(Duration::from_millis(350)).await },
+            move |_| Message::CaptureWindowState(revision, id),
+        )
+        .abortable();
+        self.window_state_debounce = Some(handle);
+        task
     }
 
     fn schedule_window_size(&mut self) -> Task<Message> {
@@ -3909,6 +4001,14 @@ fn bytes(value: u64) -> String {
     }
 }
 
+fn read_window_state(id: iced::window::Id) -> Task<(iced::Size, bool, Option<bool>)> {
+    iced::window::is_maximized(id).then(move |maximized| {
+        iced::window::is_minimized(id).then(move |minimized| {
+            iced::window::size(id).map(move |size| (size, maximized, minimized))
+        })
+    })
+}
+
 fn page_scroll<'a>(
     content: impl Into<Element<'a, Message>>,
 ) -> iced::widget::Scrollable<'a, Message> {
@@ -4015,6 +4115,46 @@ mod window_tests {
                 ("950", "700")
             );
         }
+    }
+
+    #[test]
+    fn stale_or_maximized_geometry_cannot_replace_last_normal_dimensions() {
+        let mut app = app();
+        let normal = iced::Size::new(900.0, 500.0);
+        let _ = app.update(Message::WindowStateCaptured(0, normal, false, Some(false)));
+        assert_eq!(app.window_state.size(), normal);
+        let _ = app.schedule_window_state(iced::window::Id::unique());
+        let current = app.window_state_revision;
+        let large = iced::Size::new(1920.0, 1080.0);
+        let _ = app.update(Message::WindowStateCaptured(0, large, false, Some(false)));
+        let _ = app.update(Message::WindowStateCaptured(
+            current,
+            large,
+            true,
+            Some(false),
+        ));
+        let _ = app.update(Message::WindowStateCaptured(
+            current,
+            normal,
+            false,
+            Some(true),
+        ));
+        assert_eq!(app.window_state.size(), normal);
+        assert_eq!(app.window_state_revision, current);
+    }
+
+    #[test]
+    fn geometry_capture_during_pending_size_edit_keeps_last_normal_dimensions() {
+        let mut app = app();
+        let _ = app.update(Message::WindowWidth("1400".into()));
+        let _ = app.update(Message::WindowStateCaptured(
+            0,
+            iced::Size::new(1200.0, 700.0),
+            false,
+            Some(false),
+        ));
+        assert!(app.size_pending);
+        assert_eq!(app.window_state.size(), DEFAULT_WINDOW_SIZE);
     }
 }
 
