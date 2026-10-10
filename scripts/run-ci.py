@@ -53,6 +53,8 @@ def main():
         run([tests['library'], 'native_autostart', '--ignored'])
         run([sys.executable, ROOT/'scripts/verify-icon-resources.py', bundle/'clash-of-rust.exe'])
         run([sys.executable, ROOT/'scripts/test-update-helper.py', bundle/'clash-of-rust.exe'])
+        run([sys.executable, ROOT/'scripts/test-windows-startup.py', bundle/'clash-of-rust.exe',
+             '--test-binary', tests['library']])
         run([sys.executable, ROOT/'scripts/test-build-tools.py',
              'BuildTests.test_windows_pe_version_is_read_without_executing_binary'])
     write_json(ROOT/'target/ci-tests.json', tests)
