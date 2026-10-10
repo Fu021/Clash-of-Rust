@@ -337,12 +337,13 @@ pub fn initialize_events() -> Result<()> {
         (&SHOW_EVENT, "Local\\ClashOfRust.Show"),
     ] {
         let handle = if name.ends_with(".Show") {
-            create_show_event(name)?
+            create_show_event(name).with_context(|| format!("创建唤醒事件 {name} 失败"))?
         } else {
             unsafe { CreateEventW(std::ptr::null_mut(), 0, 0, wide(name).as_ptr()) }
         };
         if handle.is_null() {
-            return Err(std::io::Error::last_os_error().into());
+            return Err(std::io::Error::last_os_error())
+                .with_context(|| format!("创建桌面控制事件 {name} 失败"));
         }
         target.store(handle, std::sync::atomic::Ordering::Release);
     }

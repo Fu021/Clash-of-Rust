@@ -334,10 +334,12 @@ def main():
             # token that Windows may reject before application initialization.
             for arguments in (['config::tests::', '--test-threads=1'],
                               ['profile_transaction::tests::', '--test-threads=1'],
-                              ['platform::windows::show_event_tests::', '--test-threads=1']):
+                              ['platform::windows::show_event_tests::', '--test-threads=1'],
+                              ['platform::application_guard_tests::', '--test-threads=1']):
                 process = api.launch(test_binary, limited, dict(os.environ), arguments)
                 try:
                     api.wait(process, 60)
+                    print(api.output(process), flush=True)
                 finally:
                     api.cleanup(process)
                 print('PASS: ordinary user ' + arguments[0], flush=True)

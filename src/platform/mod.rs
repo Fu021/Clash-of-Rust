@@ -114,7 +114,7 @@ pub fn application_guard() -> Result<Option<ApplicationGuard>> {
                 return Ok(None);
             }
         }
-        return Err(std::io::Error::last_os_error().into());
+        return Err(std::io::Error::last_os_error()).context("创建桌面单实例锁失败");
     }
     if unsafe { GetLastError() } == 183 {
         unsafe {
@@ -123,7 +123,7 @@ pub fn application_guard() -> Result<Option<ApplicationGuard>> {
         return Ok(None);
     }
     let guard = ApplicationGuard(handle);
-    windows::initialize_events()?;
+    windows::initialize_events().context("初始化桌面控制事件失败")?;
     Ok(Some(guard))
 }
 #[cfg(windows)]
@@ -138,6 +138,20 @@ impl Drop for ApplicationGuard {
 }
 #[cfg(not(windows))]
 pub fn application_guard() {}
+
+#[cfg(all(test, windows))]
+mod application_guard_tests {
+    use super::*;
+
+    #[test]
+    fn ordinary_user_can_initialize_desktop_control() {
+        let guard = application_guard()
+            .unwrap_or_else(|error| panic!("{error:#}"))
+            .expect("test desktop must not have an existing GUI");
+        assert!(application_guard().unwrap().is_none());
+        drop(guard);
+    }
+}
 
 pub fn autostart_enabled() -> Result<bool> {
     native::autostart_enabled()
