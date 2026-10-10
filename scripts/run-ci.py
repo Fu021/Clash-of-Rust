@@ -41,22 +41,16 @@ def main():
     for name in ('clash-of-rust', 'clash-tun-launcher'):
         shutil.copy2(ROOT/'target/release'/(name+extension), bundle/(name+extension))
     # Invoke already-built test programs directly instead of repeating Cargo.
-    run([tests['core_integration'], '--ignored', '--test-threads=1'])
     if args.system == 'linux':
+        run([tests['core_integration'], '--ignored', '--test-threads=1'])
         run([tests['library'], 'native_gsettings', '--ignored'],
             env=dict(os.environ, GSETTINGS_BACKEND='memory'))
         for name in ('native_kde_signal', 'no_tray_host'):
             run(['dbus-run-session', '--', tests['library'], name, '--ignored'])
         run(['dbus-run-session', '--', tests['tray_integration'], 'login_tray', '--ignored'])
     else:
-        run([tests['tray_integration'], '--ignored'])
-        run([tests['library'], 'native_autostart', '--ignored'])
-        run([sys.executable, ROOT/'scripts/verify-icon-resources.py', bundle/'clash-of-rust.exe'])
-        run([sys.executable, ROOT/'scripts/test-update-helper.py', bundle/'clash-of-rust.exe'])
-        run([sys.executable, ROOT/'scripts/test-windows-startup.py', bundle/'clash-of-rust.exe',
-             '--test-binary', tests['library']])
-        run([sys.executable, ROOT/'scripts/test-build-tools.py',
-             'BuildTests.test_windows_pe_version_is_read_without_executing_binary'])
+        from windows_ci import windows_tests
+        windows_tests(tests, bundle)
     write_json(ROOT/'target/ci-tests.json', tests)
     export_build(args.system, args.arch, tests, ROOT/'dist/build')
 

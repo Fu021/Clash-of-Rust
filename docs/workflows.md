@@ -17,6 +17,8 @@
 - main 推送和 PR 更新触发 CI，避免同一 feature 分支的 push 与 PR 同时执行两套矩阵；分支开发通过 PR 验证。同分支的过时 CI 会取消。资源按平台与日期缓存，使用前仍校验官方哈希；应用和资源打包时使用白名单。
 - CI 不生成安装包。编译产物使用 tar 保存执行权限，附带提交 SHA、版本、平台、Cargo.lock 校验值、工具链和逐文件校验清单。
 
+Windows 的逐项覆盖、权限环境和发布包测试范围见 [Windows CI 测试清单](windows-ci-checklist.md)。原生测试按 8 组记录耗时与结果，失败时仍保留 `windows-ci-report-{arch}` 产物。
+
 ## Publish Release
 
 在 Actions 中选择 **Publish Release → Run workflow**：

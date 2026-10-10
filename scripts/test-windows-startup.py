@@ -172,7 +172,11 @@ class Windows:
         user, updated = c.c_void_p(), c.c_void_p()
         try:
             checked(self.security.ConvertStringSidToSidW(sid, c.byref(user)))
-            entry = ExplicitAccess(7, 1, 0, Trustee(None, 0, 0, 1, user.value))
+            # Win32 named-object initialization also needs to create namespace
+            # subdirectories. Query/traverse/create-object (0x7) alone lets
+            # NtOpenDirectoryObject succeed but CreateEventW fails with error 5.
+            directory_rights = 0x1 | 0x2 | 0x4 | 0x8
+            entry = ExplicitAccess(directory_rights, 1, 0, Trustee(None, 0, 0, 1, user.value))
             status = self.security.SetEntriesInAclW(1, c.byref(entry), dacl, c.byref(updated))
             if status:
                 raise c.WinError(status)
@@ -367,6 +371,18 @@ class Windows:
 
 
 def check_startup(api, executable, token, directory, background=False):
+    if not (directory/'settings.json').exists():
+        # CI and local proxies may already occupy the application's defaults.
+        # Use two distinct OS-selected ports while retaining all other defaults.
+        import socket
+        import uuid
+        with socket.socket() as controller, socket.socket() as mixed:
+            controller.bind(('127.0.0.1', 0))
+            mixed.bind(('127.0.0.1', 0))
+            settings = {'controller_port': controller.getsockname()[1],
+                        'mixed_port': mixed.getsockname()[1],
+                        'secret': str(uuid.uuid4()), 'proxy_mode': 'off'}
+        (directory/'settings.json').write_text(json.dumps(settings), encoding='utf-8')
     environment = dict(os.environ, CLASH_OF_RUST_DATA_DIR=str(directory))
     process = api.launch(executable, token, environment, ['--background'] if background else [])
     opener = urllib.request.build_opener(urllib.request.ProxyHandler({}))
@@ -383,13 +399,15 @@ def check_startup(api, executable, token, directory, background=False):
                                                  headers={'Authorization': 'Bearer ' + settings['secret']})
                 with opener.open(request, timeout=1) as response:
                     config = json.load(response)
-                if config.get('mixed-port') == settings['mixed_port']:
+                if (config.get('mixed-port') == settings['mixed_port']
+                        and settings.get('active_profile')):
                     break
             except (OSError, ValueError, KeyError) as error:
                 failure = str(error)
             time.sleep(0.2)
         else:
-            raise AssertionError(f'GUI/core startup failed in {directory}: {failure}')
+            raise AssertionError(f'GUI/core startup failed in {directory}: {failure}\n' +
+                                 api.output(process))
         for name in ('settings.json', 'profiles.json', 'runtime/config.yaml', 'runtime/candidate.yaml'):
             assert (directory/name).is_file(), f'Startup failed to save {name}'
         profiles = json.loads((directory/'profiles.json').read_text(encoding='utf-8'))
