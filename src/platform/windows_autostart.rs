@@ -45,7 +45,7 @@ fn with_folder<T>(operation: impl FnOnce(&ITaskFolder) -> Result<T>) -> Result<T
     operation(&folder)
 }
 
-fn user_sid() -> Result<String> {
+pub(super) fn user_sid() -> Result<String> {
     use windows_sys::Win32::{
         Foundation::{CloseHandle, HANDLE, LocalFree},
         Security::{
@@ -98,6 +98,17 @@ fn user_sid() -> Result<String> {
         LocalFree(text.cast());
         Ok(result?)
     }
+}
+
+pub(super) fn access_denied(error: &anyhow::Error) -> bool {
+    error.chain().any(|cause| {
+        cause
+            .downcast_ref::<windows::core::Error>()
+            .is_some_and(|error| error.code().0 as u32 == 0x80070005)
+            || cause
+                .downcast_ref::<std::io::Error>()
+                .is_some_and(|error| error.raw_os_error() == Some(5))
+    })
 }
 
 fn xml_escape(text: &str) -> String {
@@ -203,6 +214,38 @@ impl Backend {
         Ok(())
     }
 
+    fn register_fallback(&self, scheduler_error: anyhow::Error) -> Result<()> {
+        // An ownership conflict or a failed registry write is not a scheduler
+        // outage. Do not create a duplicate entry for an existing marked task.
+        if scheduler_error
+            .downcast_ref::<windows::core::Error>()
+            .is_none()
+            || self.marked()
+        {
+            return Err(scheduler_error).context("无法修改开机启动登录任务");
+        }
+        let root = RegKey::predef(HKEY_CURRENT_USER);
+        let (key, _) = root
+            .create_subkey_with_flags(RUN_KEY, winreg::enums::KEY_SET_VALUE)
+            .context("无法创建普通开机启动项")?;
+        key.set_value(&self.run_name, &self.command())
+            .context("无法保存普通开机启动项")?;
+        // The user explicitly enabled startup; undo a Task Manager disable bit
+        // for this entry, without touching any other startup item.
+        if let Ok(key) = root.open_subkey_with_flags(APPROVED_KEY, winreg::enums::KEY_SET_VALUE) {
+            match key.delete_value(&self.run_name) {
+                Ok(()) => {}
+                Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+                Err(error) => return Err(error).context("无法启用普通开机启动项"),
+            }
+        }
+        if !self.legacy_enabled()? {
+            bail!("普通开机启动项仍被系统禁用");
+        }
+        // Successful fallback is a successful enable operation.
+        Ok(())
+    }
+
     fn xml(&self) -> String {
         let sid = xml_escape(&self.sid);
         let executable = xml_escape(&self.executable.to_string_lossy());
@@ -225,6 +268,24 @@ impl Backend {
         )
     }
 
+    fn task_security(&self) -> BSTR {
+        BSTR::from(format!("D:P(A;;GA;;;SY)(A;;GA;;;BA)(A;;GA;;;{})", self.sid))
+    }
+
+    /// Upgrade an existing task's permissions without changing its enabled
+    /// state, command, principal or trigger. Only an owned task can be repaired.
+    pub fn repair_permissions(&self) -> Result<()> {
+        if !self.marked() {
+            return Ok(());
+        }
+        with_folder(|folder| {
+            if let Some(task) = self.owned_task(folder)? {
+                unsafe { task.SetSecurityDescriptor(&self.task_security(), 0)? };
+            }
+            Ok(())
+        })
+    }
+
     pub fn set(&self, enabled: bool) -> Result<()> {
         let root = RegKey::predef(HKEY_CURRENT_USER);
         if !enabled {
@@ -243,15 +304,17 @@ impl Backend {
             // Refuse to overwrite a task pointing at someone else's installation.
             self.owned_task(folder)?;
             let empty = VARIANT::default();
+            let user = VARIANT::from(BSTR::from(self.sid.as_str()));
+            let security = VARIANT::from(self.task_security());
             unsafe {
                 folder.RegisterTask(
                     &BSTR::from(self.task_name.as_str()),
                     &BSTR::from(self.xml()),
                     TASK_CREATE_OR_UPDATE.0,
-                    &empty,
+                    &user,
                     &empty,
                     TASK_LOGON_INTERACTIVE_TOKEN,
-                    &empty,
+                    &security,
                 )?;
             }
             let recorded = root
@@ -266,10 +329,7 @@ impl Backend {
             Ok(())
         });
         if let Err(error) = registered {
-            root.create_subkey(RUN_KEY)?
-                .0
-                .set_value(&self.run_name, &self.command())?;
-            return Err(error).context("登录任务创建失败，已保留普通开机启动项");
+            return self.register_fallback(error);
         }
         self.remove_legacy()
     }
@@ -282,6 +342,65 @@ mod tests {
         Foundation::VARIANT_BOOL,
         System::TaskScheduler::{TASK_RUNLEVEL_HIGHEST, TASK_RUNLEVEL_LUA},
     };
+
+    fn grants_current_user_access(task: &IRegisteredTask, sid: &str) -> bool {
+        use windows_sys::Win32::{
+            Foundation::LocalFree,
+            Security::{
+                ACCESS_ALLOWED_ACE,
+                Authorization::{
+                    ConvertStringSecurityDescriptorToSecurityDescriptorW, ConvertStringSidToSidW,
+                },
+                EqualSid, GetAce, GetSecurityDescriptorDacl,
+            },
+        };
+        struct Allocation(*mut std::ffi::c_void);
+        impl Drop for Allocation {
+            fn drop(&mut self) {
+                unsafe {
+                    LocalFree(self.0);
+                }
+            }
+        }
+        let security = unsafe { task.GetSecurityDescriptor(4).unwrap() }.to_string();
+        let security: Vec<u16> = security.encode_utf16().chain(Some(0)).collect();
+        let sid: Vec<u16> = sid.encode_utf16().chain(Some(0)).collect();
+        let mut descriptor = Allocation(std::ptr::null_mut());
+        let mut user = Allocation(std::ptr::null_mut());
+        let mut present = 0;
+        let mut defaulted = 0;
+        let mut acl = std::ptr::null_mut();
+        unsafe {
+            assert_ne!(
+                ConvertStringSecurityDescriptorToSecurityDescriptorW(
+                    security.as_ptr(),
+                    1,
+                    &mut descriptor.0,
+                    std::ptr::null_mut()
+                ),
+                0
+            );
+            assert_ne!(ConvertStringSidToSidW(sid.as_ptr(), &mut user.0), 0);
+            assert_ne!(
+                GetSecurityDescriptorDacl(descriptor.0, &mut present, &mut acl, &mut defaulted),
+                0
+            );
+            assert_ne!(present, 0);
+            assert!(!acl.is_null());
+            for index in 0..(*acl).AceCount {
+                let mut ace = std::ptr::null_mut();
+                assert_ne!(GetAce(acl, u32::from(index), &mut ace), 0);
+                let ace = &*ace.cast::<ACCESS_ALLOWED_ACE>();
+                if ace.Header.AceType == 0
+                    && EqualSid((&ace.SidStart as *const u32).cast_mut().cast(), user.0) != 0
+                    && (ace.Mask & 0x10000000 != 0 || ace.Mask & 0x1f01ff == 0x1f01ff)
+                {
+                    return true;
+                }
+            }
+        }
+        false
+    }
 
     fn account_sid(account: &str) -> Result<String> {
         use windows_sys::Win32::{
@@ -350,6 +469,67 @@ mod tests {
     }
 
     #[test]
+    fn scheduler_access_denied_falls_back_to_working_user_startup() {
+        let mut backend = Backend::current().unwrap();
+        let name = format!("ClashOfRust.CI.{}", uuid::Uuid::new_v4());
+        backend.task_name = name.clone();
+        backend.run_name = name.clone();
+        backend.marker_key = format!("Software\\ClashOfRust\\Tests\\{name}");
+        let cleanup = Cleanup(backend);
+        let backend = &cleanup.0;
+        let root = RegKey::predef(HKEY_CURRENT_USER);
+        root.create_subkey(APPROVED_KEY)
+            .unwrap()
+            .0
+            .set_raw_value(
+                &backend.run_name,
+                &winreg::RegValue {
+                    vtype: winreg::enums::REG_BINARY,
+                    bytes: vec![3, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0],
+                },
+            )
+            .unwrap();
+        let denied =
+            windows::core::Error::from_hresult(windows::core::HRESULT(0x80070005u32 as i32));
+        backend.register_fallback(denied.into()).unwrap();
+        assert!(backend.enabled().unwrap());
+        backend.set(false).unwrap();
+        assert!(!backend.enabled().unwrap());
+        assert!(!backend.marked());
+    }
+
+    #[test]
+    #[ignore = "requires native Task Scheduler; run in an ordinary interactive Windows session"]
+    fn native_ordinary_user_can_manage_a_new_logon_task() {
+        assert!(!super::super::windows::is_elevated());
+        let mut backend = Backend::current().unwrap();
+        let name = format!("ClashOfRust.CI.{}", uuid::Uuid::new_v4());
+        backend.task_name = name.clone();
+        backend.run_name = name.clone();
+        backend.marker_key = format!("Software\\ClashOfRust\\Tests\\{name}");
+        let cleanup = Cleanup(backend);
+        let backend = &cleanup.0;
+        backend.set(true).unwrap();
+        assert!(
+            backend.marked(),
+            "test must exercise the scheduler, not Run fallback"
+        );
+        assert!(backend.enabled().unwrap());
+        with_folder(|folder| {
+            let task = backend.owned_task(folder)?.unwrap();
+            assert!(grants_current_user_access(&task, &backend.sid));
+            unsafe { task.SetEnabled(VARIANT_BOOL(0))? };
+            Ok(())
+        })
+        .unwrap();
+        assert!(!backend.enabled().unwrap());
+        backend.set(true).unwrap();
+        assert!(backend.enabled().unwrap());
+        backend.set(false).unwrap();
+        assert!(!backend.enabled().unwrap());
+    }
+
+    #[test]
     #[ignore = "requires the native Windows Task Scheduler; creates only a unique test task"]
     fn native_autostart_migrates_and_cleans_up_a_user_logon_task() {
         let mut backend = Backend::current().unwrap();
@@ -371,6 +551,10 @@ mod tests {
         assert!(!backend.legacy_enabled().unwrap());
         with_folder(|folder| {
             let task = backend.owned_task(folder)?.unwrap();
+            assert!(
+                grants_current_user_access(&task, &backend.sid),
+                "the user must retain task access after elevated registration"
+            );
             // Task Scheduler omits default-valued fields from its exported XML.
             // Check the effective registered settings through COM instead.
             let definition = unsafe { task.Definition()? };
@@ -420,6 +604,31 @@ mod tests {
         })
         .unwrap();
         assert!(!backend.enabled().unwrap());
+        // Simulate an older task whose DACL only lets the user's ordinary token
+        // read it. Repair it as admin without accidentally re-enabling it.
+        with_folder(|folder| {
+            let task = backend.owned_task(folder)?.unwrap();
+            let legacy = BSTR::from(format!(
+                "D:P(A;;GA;;;SY)(A;;GA;;;BA)(A;;GRGX;;;{})",
+                backend.sid
+            ));
+            // Preserve the deliberately restricted fixture: otherwise Task
+            // Scheduler may automatically add an allow ACE for the principal.
+            unsafe { task.SetSecurityDescriptor(&legacy, 0x10)? };
+            assert!(!grants_current_user_access(&task, &backend.sid));
+            Ok(())
+        })
+        .unwrap();
+        backend.repair_permissions().unwrap();
+        assert!(!backend.enabled().unwrap());
+        with_folder(|folder| {
+            assert!(grants_current_user_access(
+                &backend.owned_task(folder)?.unwrap(),
+                &backend.sid
+            ));
+            Ok(())
+        })
+        .unwrap();
         backend.set(true).unwrap();
         assert!(backend.enabled().unwrap());
         let other = Cleanup(Backend {
@@ -436,8 +645,8 @@ mod tests {
             "a foreign task must not be overwritten"
         );
         assert!(
-            other.0.legacy_enabled().unwrap(),
-            "failed registration must keep a Run fallback"
+            !other.0.legacy_enabled().unwrap(),
+            "an ownership conflict must not create a duplicate Run entry"
         );
         other.0.set(false).unwrap();
         drop(other);

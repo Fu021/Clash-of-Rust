@@ -119,8 +119,11 @@ impl Store {
         Self::at(root)
     }
     pub fn at(root: PathBuf) -> Result<Self> {
-        std::fs::create_dir_all(root.join("profiles"))?;
-        std::fs::create_dir_all(root.join("runtime"))?;
+        for name in ["profiles", "runtime"] {
+            let directory = root.join(name);
+            std::fs::create_dir_all(&directory)
+                .with_context(|| format!("无法创建数据目录：{}", directory.display()))?;
+        }
         Ok(Self { root })
     }
     pub fn load_settings(&self) -> Result<Settings> {
@@ -176,20 +179,58 @@ impl Store {
 
 pub fn atomic_write(path: &Path, bytes: &[u8]) -> Result<()> {
     let parent = path.parent().context("无效文件路径")?;
-    std::fs::create_dir_all(parent)?;
-    let mut file = tempfile::NamedTempFile::new_in(parent)?;
+    std::fs::create_dir_all(parent)
+        .with_context(|| format!("无法创建文件目录：{}", parent.display()))?;
+    let mut file = tempfile::NamedTempFile::new_in(parent)
+        .with_context(|| format!("无法创建保存临时文件：{}", path.display()))?;
     #[cfg(unix)]
     {
         use std::os::unix::fs::PermissionsExt;
         file.as_file()
             .set_permissions(std::fs::Permissions::from_mode(0o600))?;
     }
-    file.write_all(bytes)?;
-    file.as_file().sync_all()?;
-    file.persist(path)
-        .map_err(|e| e.error)
-        .context("保存文件失败")?;
-    Ok(())
+    file.write_all(bytes)
+        .with_context(|| format!("写入文件失败：{}", path.display()))?;
+    file.as_file()
+        .sync_all()
+        .with_context(|| format!("同步文件失败：{}", path.display()))?;
+    persist_file(file, path)
+}
+
+/// Keep atomic replacement and the original file on failure. Windows scanners
+/// and readers can briefly deny rename/delete access to the destination.
+pub(crate) fn persist_file(file: tempfile::NamedTempFile, path: &Path) -> Result<()> {
+    // Close our writer before rename, retaining ownership of the temporary path.
+    let mut temporary = Some(file.into_temp_path());
+    retry_file_operation(|| match temporary.take().unwrap().persist(path) {
+        Ok(()) => Ok(()),
+        Err(error) => {
+            temporary = Some(error.path);
+            Err(error.error)
+        }
+    })
+    .with_context(|| format!("保存文件失败：{}", path.display()))
+}
+
+/// Transaction recovery must tolerate the same short-lived Windows locks as
+/// atomic replacement. Never delete the original file as a rename workaround.
+pub(crate) fn remove_file(path: &Path) -> std::io::Result<()> {
+    retry_file_operation(|| std::fs::remove_file(path))
+}
+
+fn retry_file_operation<T>(
+    mut operation: impl FnMut() -> std::io::Result<T>,
+) -> std::io::Result<T> {
+    #[cfg(windows)]
+    for attempt in 0..8 {
+        match operation() {
+            Err(error) if matches!(error.raw_os_error(), Some(5 | 32 | 33)) => {
+                std::thread::sleep(std::time::Duration::from_millis(25 * (attempt + 1)));
+            }
+            result => return result,
+        }
+    }
+    operation()
 }
 
 pub const PROFILE_LIMIT: usize = 10 * 1024 * 1024;
@@ -205,7 +246,8 @@ pub(crate) fn read_runtime_config(path: &Path) -> Result<String> {
 
 fn read_config_text(path: &Path, limit: usize) -> Result<String> {
     use std::io::Read;
-    let file = std::fs::File::open(path).context("配置文件无法读取")?;
+    let file = std::fs::File::open(path)
+        .with_context(|| format!("配置文件无法读取：{}", path.display()))?;
     if file.metadata()?.len() > limit as u64 {
         bail!("配置超过 {} MiB 限制", limit / 1024 / 1024);
     }
@@ -327,6 +369,54 @@ fn apply_rules(map: &mut Mapping, overrides: &RuleOverrides) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[cfg(windows)]
+    #[test]
+    fn atomic_save_recovers_from_a_temporary_windows_file_lock() {
+        use std::os::windows::fs::OpenOptionsExt;
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("settings.json");
+        atomic_write(&path, b"old settings").unwrap();
+        // Readers that omit FILE_SHARE_DELETE prevent atomic replacement.
+        let reader = std::fs::OpenOptions::new()
+            .read(true)
+            .share_mode(3)
+            .open(&path)
+            .unwrap();
+        let destination = path.clone();
+        let (sender, receiver) = std::sync::mpsc::channel();
+        let writer = std::thread::spawn(move || {
+            sender.send(()).unwrap();
+            atomic_write(&destination, b"new settings")
+        });
+        receiver.recv().unwrap();
+        std::thread::sleep(std::time::Duration::from_millis(150));
+        assert_eq!(std::fs::read(&path).unwrap(), b"old settings");
+        drop(reader);
+        writer.join().unwrap().unwrap();
+        assert_eq!(std::fs::read(&path).unwrap(), b"new settings");
+        assert_eq!(std::fs::read_dir(directory.path()).unwrap().count(), 1);
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn failed_atomic_save_keeps_the_original_and_identifies_the_file() {
+        use std::os::windows::fs::OpenOptionsExt;
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("settings.json");
+        atomic_write(&path, b"original").unwrap();
+        let reader = std::fs::OpenOptions::new()
+            .read(true)
+            .share_mode(3)
+            .open(&path)
+            .unwrap();
+        let error = atomic_write(&path, b"replacement").unwrap_err();
+        assert!(format!("{error:#}").contains("settings.json"));
+        assert!(error.downcast_ref::<std::io::Error>().is_some());
+        assert_eq!(std::fs::read(&path).unwrap(), b"original");
+        drop(reader);
+        assert_eq!(std::fs::read_dir(directory.path()).unwrap().count(), 1);
+    }
+
     #[test]
     fn legacy_settings_default_to_rule_and_proxy_off() {
         let settings: Settings = serde_json::from_str(

@@ -39,6 +39,7 @@ jobs:
     runs-on: ${{ matrix.os }}
     env:
       PYTHONDONTWRITEBYTECODE: '1'
+      PYTHONUTF8: '1'
     defaults:
       run:
         shell: python
@@ -88,6 +89,14 @@ jobs:
         run: |
           import subprocess, sys
           subprocess.run([sys.executable, 'scripts/run-ci.py', '--system', '${{ matrix.system }}', '--arch', '${{ matrix.arch }}'], check=True)
+      - name: Preserve Windows regression results
+        uses: actions/upload-artifact@v6
+        if: always() && runner.os == 'Windows'
+        with:
+          name: windows-ci-report-${{ matrix.arch }}
+          path: target/windows-ci-report.json
+          if-no-files-found: warn
+          retention-days: 14
       - uses: actions/upload-artifact@v6
         with:
           name: build-${{ matrix.system }}-${{ matrix.arch }}

@@ -3,7 +3,7 @@
 </p>
 <h1 align="center">Clash of Rust</h1>
 
-基于 mihomo 的原生 Rust 代理客户端。支持 **Windows（x64 / ARM64）** 和 **Debian/Ubuntu（amd64 / ARM64）**。版本 **0.5.0**，更新内容见 [发布说明](docs/releases/0.5.0.md)。
+基于 mihomo 的原生 Rust 代理客户端。支持 **Windows（x64 / ARM64）** 和 **Debian/Ubuntu（amd64 / ARM64）**。版本 **0.5.1**，更新内容见 [发布说明](docs/releases/0.5.1.md)。
 
 ## Features
 
@@ -22,10 +22,10 @@
 
 | 平台 | 安装包 |
 | --- | --- |
-| Windows x64 | [Clash-of-Rust-0.5.0-windows-x64-setup.exe](https://github.com/Fu021/Clash-of-Rust/releases/download/v0.5.0/Clash-of-Rust-0.5.0-windows-x64-setup.exe) |
-| Windows ARM64 | [Clash-of-Rust-0.5.0-windows-arm64-setup.exe](https://github.com/Fu021/Clash-of-Rust/releases/download/v0.5.0/Clash-of-Rust-0.5.0-windows-arm64-setup.exe) |
-| Debian/Ubuntu amd64 | [Clash-of-Rust-0.5.0-linux-amd64.deb](https://github.com/Fu021/Clash-of-Rust/releases/download/v0.5.0/Clash-of-Rust-0.5.0-linux-amd64.deb) |
-| Debian/Ubuntu ARM64 | [Clash-of-Rust-0.5.0-linux-arm64.deb](https://github.com/Fu021/Clash-of-Rust/releases/download/v0.5.0/Clash-of-Rust-0.5.0-linux-arm64.deb) |
+| Windows x64 | [Clash-of-Rust-0.5.1-windows-x64-setup.exe](https://github.com/Fu021/Clash-of-Rust/releases/download/v0.5.1/Clash-of-Rust-0.5.1-windows-x64-setup.exe) |
+| Windows ARM64 | [Clash-of-Rust-0.5.1-windows-arm64-setup.exe](https://github.com/Fu021/Clash-of-Rust/releases/download/v0.5.1/Clash-of-Rust-0.5.1-windows-arm64-setup.exe) |
+| Debian/Ubuntu amd64 | [Clash-of-Rust-0.5.1-linux-amd64.deb](https://github.com/Fu021/Clash-of-Rust/releases/download/v0.5.1/Clash-of-Rust-0.5.1-linux-amd64.deb) |
+| Debian/Ubuntu ARM64 | [Clash-of-Rust-0.5.1-linux-arm64.deb](https://github.com/Fu021/Clash-of-Rust/releases/download/v0.5.1/Clash-of-Rust-0.5.1-linux-arm64.deb) |
 
 Windows 运行安装程序；Debian/Ubuntu 使用 `sudo apt install ./安装包文件名.deb`。升级保留订阅和个人设置。
 
@@ -33,7 +33,7 @@ Windows 运行安装程序；Debian/Ubuntu 使用 `sudo apt install ./安装包�
 
 ## 内存占用
 
-实验版本 **0.5.0**；Ubuntu 22.04 x64、Release 构建，附加规则关闭，固定输入为 2,000 节点、40 组和 20,000 条规则：
+参考实测版本 **0.5.0**；Ubuntu 22.04 x64、Release 构建，附加规则关闭，固定输入为 2,000 节点、40 组和 20,000 条规则：
 
 | 场景 | GUI RSS | GUI 与内核合计 PSS |
 | --- | ---: | ---: |
@@ -41,7 +41,7 @@ Windows 运行安装程序；Debian/Ubuntu 使用 `sudo apt install ./安装包�
 | 代理组折叠 | 50.39 MiB | 137.44 MiB |
 | 节点搜索 | 55.15 MiB | 142.38 MiB |
 
-五项附加规则全开时，首页 GUI RSS 为 48.77 MiB，合计 PSS 为 125.94 MiB。以上为本版本观测峰值，实际占用随配置和使用情况变化；RSS 含共享页，PSS 按比例分摊共享页。[测试记录](https://github.com/Fu021/Clash-of-Rust/actions/runs/38034324607)。
+五项附加规则全开时，首页 GUI RSS 为 48.77 MiB，合计 PSS 为 125.94 MiB。以上为该次测试的观测峰值，实际占用随配置和使用情况变化；RSS 含共享页，PSS 按比例分摊共享页。[测试记录](https://github.com/Fu021/Clash-of-Rust/actions/runs/38034324607)。
 
 ## 编译与打包
 

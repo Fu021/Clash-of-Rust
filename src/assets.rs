@@ -1,5 +1,5 @@
 //! Offline resources and transactional Geo updates, shared by Windows and Linux.
-use crate::config::atomic_write;
+use crate::config::{atomic_write, persist_file};
 use anyhow::{Context, Result, bail};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
@@ -124,8 +124,7 @@ pub fn atomic_copy(source: &Path, destination: &Path) -> Result<()> {
     }
     std::io::copy(&mut File::open(source)?, &mut file)?;
     file.as_file().sync_all()?;
-    file.persist(destination).map_err(|e| e.error)?;
-    Ok(())
+    persist_file(file, destination)
 }
 
 pub fn seed(resources: &Path, runtime: &Path) -> Result<GeoManifest> {
