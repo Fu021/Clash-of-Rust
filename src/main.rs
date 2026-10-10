@@ -24,7 +24,7 @@ use futures_util::{
 use iced::{
     Color, Element, Length, Subscription, Task, Theme,
     widget::{
-        Space, button, column, container, image, pick_list, progress_bar, scrollable, text,
+        Space, button, column, container, image, pick_list, progress_bar, scrollable, stack, text,
         text_input,
     },
 };
@@ -699,6 +699,42 @@ impl App {
             .font(typography::ENGLISH_FONT)
             .size(self.scaled(12))
             .color(self.foreground())
+    }
+
+    fn selection<'a, T: Clone + PartialEq + std::fmt::Display + 'a>(
+        &self,
+        options: impl std::borrow::Borrow<[T]> + 'a,
+        selected: T,
+        on_select: impl Fn(T) -> Message + 'a,
+        width: u16,
+    ) -> Element<'a, Message> {
+        let caption = self.label(selected.to_string()).size(self.scaled(10));
+        let field = pick_list(options, Some(selected), on_select)
+            .font(typography::ENGLISH_FONT)
+            .text_shaping(text::Shaping::Advanced)
+            .text_size(self.scaled(10))
+            .padding(5)
+            .width(width)
+            .style(selection_field);
+        // tiny-skia's cached text damage bounds ignore vertical alignment.
+        // A normal Text paragraph tracks the actual caption bounds, so changing
+        // selection clears the complete old caption without repainting the window.
+        // The native pick list still owns pointer/keyboard input and its menu.
+        stack![
+            field,
+            container(caption)
+                .width(Length::Fill)
+                .height(Length::Fill)
+                .align_y(iced::alignment::Vertical::Center)
+                .padding(iced::Padding {
+                    top: 5.0,
+                    bottom: 5.0,
+                    left: 5.0,
+                    right: 5.0 + self.scaled(10),
+                })
+        ]
+        .width(width)
+        .into()
     }
 
     fn foreground(&self) -> Color {
@@ -2215,10 +2251,7 @@ impl App {
         column![
             aligned_row![
                 self.search("搜索策略组或节点 · 搜索时自动展开"),
-                pick_list(NodeSort::ALL, Some(self.node_sort), Message::NodeSort)
-                    .text_size(self.scaled(11))
-                    .padding(7)
-                    .width(185)
+                self.selection(NodeSort::ALL, self.node_sort, Message::NodeSort, 185)
             ]
             .spacing(8),
             scrollable(list).height(Length::Fill),
@@ -2345,7 +2378,7 @@ impl App {
                                 self.label(format!(
                                     "{} · {}/{}",
                                     category.name,
-                                    category.counts.completed(),
+                                    category.counts.non_red(),
                                     category.counts.total()
                                 ))
                                 .size(self.scaled(11))
@@ -2423,13 +2456,6 @@ impl App {
         }
         if show_categories {
             body = body.push(scrollable(categories).height(if compact { 70 } else { 120 }));
-        }
-        if !compact {
-            body = body.push(
-                self.label("信息识别与平台可用分别统计；分类是服务归属，识别地区是本次结果。")
-                    .size(self.scaled(9))
-                    .color(self.foreground()),
-            );
         }
         container(body)
             .padding(9)
@@ -2588,18 +2614,9 @@ impl App {
             .collect();
         page = page.push(
             aligned_row![
-                pick_list(categories, Some(self.site_category), Message::SiteCategory)
-                    .text_size(self.scaled(10))
-                    .padding(5)
-                    .width(110),
-                pick_list(statuses, Some(self.site_status), Message::SiteStatus)
-                    .text_size(self.scaled(10))
-                    .padding(5)
-                    .width(150),
-                pick_list(regions, Some(self.site_region), Message::SiteRegion)
-                    .text_size(self.scaled(10))
-                    .padding(5)
-                    .width(150),
+                self.selection(categories, self.site_category, Message::SiteCategory, 110),
+                self.selection(statuses, self.site_status, Message::SiteStatus, 150),
+                self.selection(regions, self.site_region, Message::SiteRegion, 150),
                 button(self.label("清除筛选").size(self.scaled(10)))
                     .padding([5, 8])
                     .style(rounded_secondary)
@@ -3194,6 +3211,14 @@ fn latency_color(delay: u32) -> Color {
 fn panel(theme: &Theme) -> container::Style {
     let mut style = container::rounded_box(theme);
     style.border.radius = 16.0.into();
+    style
+}
+
+fn selection_field(theme: &Theme, status: pick_list::Status) -> pick_list::Style {
+    let mut style = pick_list::default(theme, status);
+    // Only hide the field caption; the menu and dropdown handle stay native.
+    style.text_color = Color::TRANSPARENT;
+    style.placeholder_color = Color::TRANSPARENT;
     style
 }
 

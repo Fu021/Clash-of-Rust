@@ -143,6 +143,12 @@ fn fixture(scene: &str) -> App {
 }
 
 fn update(app: &mut App, message: Message) -> Task<Message> {
+    if matches!(
+        message,
+        Message::SiteSummaryFilter(..) | Message::SiteResetFilters | Message::NodeSort(_)
+    ) {
+        eprintln!("preview interaction: {message:?}");
+    }
     match message {
         Message::Query(_)
         | Message::NodeSort(_)
@@ -178,7 +184,7 @@ pub(crate) fn run() -> iced::Result {
         update,
         App::view,
     )
-    .title("Clash of Rust · dev.2 preview")
+    .title("Clash of Rust · UI preview")
     .theme(App::theme)
     .default_font(typography::ENGLISH_FONT)
     .settings(iced::Settings {

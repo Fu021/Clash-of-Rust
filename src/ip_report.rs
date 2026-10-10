@@ -132,6 +132,15 @@ impl Counts {
     pub fn completed(&self) -> usize {
         self.total() - self.count(Status::Untested)
     }
+
+    /// Green and yellow outcomes; this is not a count of confirmed unlocks.
+    pub fn non_red(&self) -> usize {
+        self.count(Status::Available)
+            + self.count(Status::Partial)
+            + self.count(Status::Reachable)
+            + self.count(Status::Identified)
+            + self.count(Status::Unknown)
+    }
 }
 
 pub struct Category {
@@ -230,5 +239,34 @@ mod tests {
             ip_check::services().len()
         );
         assert_eq!(report.totals.completed(), 0);
+        assert_eq!(report.totals.non_red(), 0);
+    }
+
+    #[test]
+    fn category_numerator_includes_green_and_yellow_but_excludes_red_and_pending() {
+        let mut results: Vec<ResultSlot> = std::iter::repeat_with(|| None)
+            .take(ip_check::services().len())
+            .collect();
+        for (index, state) in [
+            State::Confirmed,
+            State::Reachable,
+            State::Identified,
+            State::Restricted,
+            State::Unknown,
+        ]
+        .into_iter()
+        .enumerate()
+        {
+            results[index + 1] = result(state);
+        }
+        let report = Report::from_results(&results);
+        let ai = report.categories.iter().find(|c| c.name == "AI").unwrap();
+        assert_eq!(ai.counts.non_red(), 4);
+        assert_eq!(ai.counts.total(), 5);
+        assert_eq!(ai.counts.completed(), 5);
+        let counts = Counts([1; 8]);
+        assert_eq!(counts.non_red(), 5);
+        assert_eq!(counts.completed(), 7);
+        assert_eq!(counts.total(), 8);
     }
 }
