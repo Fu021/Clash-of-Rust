@@ -706,7 +706,7 @@ impl App {
         options: impl std::borrow::Borrow<[T]> + 'a,
         selected: T,
         on_select: impl Fn(T) -> Message + 'a,
-        width: u16,
+        width: u32,
     ) -> Element<'a, Message> {
         let caption = self.label(selected.to_string()).size(self.scaled(10));
         let field = pick_list(options, Some(selected), on_select)
