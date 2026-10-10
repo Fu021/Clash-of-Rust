@@ -317,6 +317,65 @@ mod tests {
         System::TaskScheduler::{TASK_RUNLEVEL_HIGHEST, TASK_RUNLEVEL_LUA},
     };
 
+    fn grants_current_user_access(task: &IRegisteredTask, sid: &str) -> bool {
+        use windows_sys::Win32::{
+            Foundation::LocalFree,
+            Security::{
+                ACCESS_ALLOWED_ACE,
+                Authorization::{
+                    ConvertStringSecurityDescriptorToSecurityDescriptorW, ConvertStringSidToSidW,
+                },
+                EqualSid, GetAce, GetSecurityDescriptorDacl,
+            },
+        };
+        struct Allocation(*mut std::ffi::c_void);
+        impl Drop for Allocation {
+            fn drop(&mut self) {
+                unsafe {
+                    LocalFree(self.0);
+                }
+            }
+        }
+        let security = unsafe { task.GetSecurityDescriptor(4).unwrap() }.to_string();
+        let security: Vec<u16> = security.encode_utf16().chain(Some(0)).collect();
+        let sid: Vec<u16> = sid.encode_utf16().chain(Some(0)).collect();
+        let mut descriptor = Allocation(std::ptr::null_mut());
+        let mut user = Allocation(std::ptr::null_mut());
+        let mut present = 0;
+        let mut defaulted = 0;
+        let mut acl = std::ptr::null_mut();
+        unsafe {
+            assert_ne!(
+                ConvertStringSecurityDescriptorToSecurityDescriptorW(
+                    security.as_ptr(),
+                    1,
+                    &mut descriptor.0,
+                    std::ptr::null_mut()
+                ),
+                0
+            );
+            assert_ne!(ConvertStringSidToSidW(sid.as_ptr(), &mut user.0), 0);
+            assert_ne!(
+                GetSecurityDescriptorDacl(descriptor.0, &mut present, &mut acl, &mut defaulted),
+                0
+            );
+            assert_ne!(present, 0);
+            assert!(!acl.is_null());
+            for index in 0..(*acl).AceCount {
+                let mut ace = std::ptr::null_mut();
+                assert_ne!(GetAce(acl, u32::from(index), &mut ace), 0);
+                let ace = &*ace.cast::<ACCESS_ALLOWED_ACE>();
+                if ace.Header.AceType == 0
+                    && EqualSid((&ace.SidStart as *const u32).cast_mut().cast(), user.0) != 0
+                    && (ace.Mask & 0x10000000 != 0 || ace.Mask & 0x1f01ff == 0x1f01ff)
+                {
+                    return true;
+                }
+            }
+        }
+        false
+    }
+
     fn account_sid(account: &str) -> Result<String> {
         use windows_sys::Win32::{
             Foundation::{ERROR_INSUFFICIENT_BUFFER, LocalFree},
@@ -435,9 +494,8 @@ mod tests {
         assert!(!backend.legacy_enabled().unwrap());
         with_folder(|folder| {
             let task = backend.owned_task(folder)?.unwrap();
-            let security = unsafe { task.GetSecurityDescriptor(4)? }.to_string();
             assert!(
-                security.contains(&backend.sid),
+                grants_current_user_access(&task, &backend.sid),
                 "the user must retain task access after elevated registration"
             );
             // Task Scheduler omits default-valued fields from its exported XML.
