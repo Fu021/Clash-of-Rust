@@ -118,10 +118,10 @@ def search_center(window, output, env):
     return 380, sum(runs[0])//2
 
 
-def gui_scenes(executable, benchmark, output, seconds, modern_layout=False):
+def gui_scenes(executable, benchmark, output, seconds, modern_layout=False, rule_overrides=None, prefix=''):
     env = dict(os.environ, GSETTINGS_BACKEND='memory', WINIT_UNIX_BACKEND='x11', WINIT_X11_SCALE_FACTOR='1')
     env.pop('WAYLAND_DISPLAY', None)
-    with tempfile.TemporaryDirectory(prefix='memory-gui-') as directory, (output/'gui.log').open('x') as log:
+    with tempfile.TemporaryDirectory(prefix='memory-gui-') as directory, (output/(prefix+'gui.log')).open('x') as log:
         data = Path(directory)
         (data/'profiles').mkdir()
         profile_id = str(uuid.uuid4())
@@ -129,9 +129,12 @@ def gui_scenes(executable, benchmark, output, seconds, modern_layout=False):
             controller.bind(('127.0.0.1', 0))
             mixed.bind(('127.0.0.1', 0))
             controller_port, mixed_port = controller.getsockname()[1], mixed.getsockname()[1]
-        write_json(data/'settings.json', {'controller_port': controller_port, 'mixed_port': mixed_port,
+        benchmark_settings = {'controller_port': controller_port, 'mixed_port': mixed_port,
                    'secret': 'memory-benchmark', 'dark': True, 'delay_interval_minutes': 0,
-                   'active_profile': profile_id, 'run_mode': 'rule', 'proxy_mode': 'off'})
+                   'active_profile': profile_id, 'run_mode': 'rule', 'proxy_mode': 'off'}
+        if rule_overrides is not None:
+            benchmark_settings['rule_overrides'] = rule_overrides
+        write_json(data/'settings.json', benchmark_settings)
         (data/'profiles'/f'{profile_id}.yaml').write_text(fixture(), encoding='utf-8')
         write_json(data/'profiles.json', [{'id': profile_id, 'name': 'Memory workload', 'updated': 0,
                    'source': str(data/'profiles'/f'{profile_id}.yaml')}])
@@ -167,6 +170,7 @@ def gui_scenes(executable, benchmark, output, seconds, modern_layout=False):
                 subprocess.run(['xdotool', 'mousemove', '--window', window, str(x), str(y), 'click', '1'],
                                env=env, check=True)
             def measure(name):
+                name = prefix+name
                 time.sleep(3)
                 screenshot(window, output/(name+'.png'), env)
                 with (output/(name+'.txt')).open('x') as text:
@@ -214,7 +218,11 @@ def summarize(output, metadata):
                 lines.append(f'| {workload} | {mode} | {refresh} | {peak:.2f} | {retained:.2f} |')
     lines += ['', 'GUI subscription: 2,000 nodes, 40 groups × 2,000 members, 20,000 rules. Proxy off; scheduled delay checks off; no business traffic. Xvfb/X11; snapshots show the scene used.', '',
               '| Scene | GUI RSS peak MiB | Core RSS peak MiB | Total PSS peak MiB |', '| --- | ---: | ---: | ---: |']
-    for scene in ('home', 'proxies-collapsed', 'proxies-search', 'home-after-proxies'):
+    scenes = ['home', 'proxies-collapsed', 'proxies-search', 'home-after-proxies']
+    if metadata.get('additional_gui_rules'):
+        lines += ['', 'rules-* scenes enable all six subscription overrides with fallback group-0 in a fresh client/core process.', '']
+        scenes += ['rules-'+scene for scene in scenes.copy()]
+    for scene in scenes:
         rows = [json.loads(line) for line in (output/(scene+'.jsonl')).read_text().splitlines()]
         samples = [row for row in rows if 'elapsed_ms' in row]
         values = []
@@ -281,6 +289,12 @@ def main():
         subprocess.run([str(benchmark), 'suite', str(args.rows), str(args.repetitions), str(output/'api.jsonl')],
                        cwd=source, stdout=text, check=True)
     gui_scenes(bundle/'clash-of-rust', benchmark, output, args.seconds, modern_layout)
+    if 'pub rule_overrides:' in (source/'src/config.rs').read_text(encoding='utf-8'):
+        overrides = {'enabled': [True]*6, 'proxy': 'group-0'}
+        gui_scenes(bundle/'clash-of-rust', benchmark, output, args.seconds, modern_layout,
+                   rule_overrides=overrides, prefix='rules-')
+        metadata['additional_gui_rules'] = overrides
+        write_json(output/'metadata.json', metadata)
     summarize(output, metadata)
 
 

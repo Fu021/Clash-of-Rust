@@ -2,8 +2,8 @@ use crate::{
     api::{Api, ConfigStatus, ConnectionStats, Connections, Proxies, Rules},
     assets::{self, GeoManifest},
     config::{
-        Profile, Settings, Store, atomic_write, parse_profile, read_profile, read_runtime_config,
-        runtime_config,
+        Profile, RuleOverrides, Settings, Store, atomic_write, parse_profile, read_profile,
+        read_runtime_config, runtime_config,
     },
     platform,
 };
@@ -317,7 +317,7 @@ impl Engine {
             .as_ref()
             .context("请先导入并选择一个订阅配置")?;
         let raw = read_profile(&self.store.profile_path(id)?)?;
-        let payload = runtime_config(&raw, &self.settings)?;
+        let payload = self.profile_payload(&raw, &self.settings, id)?;
         drop(raw);
         self.validate(&payload).await?;
         let path = self.store.runtime().join("config.yaml");
@@ -409,6 +409,47 @@ impl Engine {
         .await
     }
 
+    fn profile_payload(&self, raw: &str, settings: &Settings, id: &str) -> Result<String> {
+        if self
+            .profiles
+            .iter()
+            .any(|profile| profile.id == id && profile.is_default())
+        {
+            return runtime_config(
+                raw,
+                &Settings {
+                    rule_overrides: RuleOverrides::default(),
+                    ..settings.clone()
+                },
+            );
+        }
+        runtime_config(raw, settings)
+    }
+
+    pub async fn save_rule_overrides(&mut self, rule_overrides: RuleOverrides) -> Result<()> {
+        let settings = Settings {
+            rule_overrides,
+            ..self.settings.clone()
+        };
+        settings.validate()?;
+        let id = settings
+            .active_profile
+            .as_deref()
+            .context("请先选择订阅配置")?;
+        let raw = read_profile(&self.store.profile_path(id)?)?;
+        let payload = self.profile_payload(&raw, &settings, id)?;
+        drop(raw);
+        let mut transaction = crate::profile_transaction::Transaction::new(&self.store.root)?;
+        transaction.stage(
+            &self.store.root.join("settings.json"),
+            &serde_json::to_vec_pretty(&settings)?,
+        )?;
+        self.commit_profile(transaction, &payload, true).await?;
+        self.settings = settings;
+        append(&self.logs, "[客户端] 订阅附加规则已保存并应用");
+        Ok(())
+    }
+
     pub async fn save_settings(&mut self, settings: Settings) -> Result<()> {
         settings.validate()?;
         if settings.controller_port == self.settings.controller_port
@@ -498,7 +539,7 @@ impl Engine {
         };
         let id = existing.unwrap_or_else(|| uuid::Uuid::new_v4().to_string());
         let path = self.store.profile_path(&id)?;
-        let payload = runtime_config(&raw, &self.settings)?;
+        let payload = self.profile_payload(&raw, &self.settings, &id)?;
         let active = self.settings.active_profile.as_ref() == Some(&id);
         let profile = Profile {
             id: id.clone(),
@@ -606,7 +647,7 @@ impl Engine {
             bail!("配置不存在");
         }
         let raw = read_profile(&self.store.profile_path(&id)?)?;
-        let payload = runtime_config(&raw, &self.settings)?;
+        let payload = self.profile_payload(&raw, &self.settings, &id)?;
         let settings = Settings {
             active_profile: Some(id),
             ..self.settings.clone()
@@ -750,7 +791,7 @@ impl Engine {
                 .context("默认配置缺失")?;
             let raw = read_profile(&self.store.profile_path(&default.id)?)?;
             settings.active_profile = Some(default.id.clone());
-            Some(runtime_config(&raw, &settings)?)
+            Some(self.profile_payload(&raw, &settings, &default.id)?)
         } else {
             None
         };
@@ -783,12 +824,16 @@ impl Engine {
     pub async fn install_geo(&mut self, staged: &std::path::Path) -> Result<()> {
         let runtime = self.store.runtime();
         let manifest = assets::verify_geo(staged)?;
+        let geo_settings = Settings {
+            rule_overrides: RuleOverrides::default(),
+            ..self.settings.clone()
+        };
         // Ask the actual core to read DAT, MMDB and ASN data before replacing anything.
         for mode in [true, false] {
             let raw = format!(
                 "proxies: []\ngeodata-mode: {mode}\nrules:\n  - GEOSITE,cn,DIRECT\n  - GEOIP,CN,DIRECT\n  - IP-ASN,13335,DIRECT\n  - MATCH,DIRECT\n"
             );
-            let payload = runtime_config(&raw, &self.settings)?;
+            let payload = runtime_config(&raw, &geo_settings)?;
             self.validate_in(&payload, staged).await?;
         }
         let state = if self.running() {

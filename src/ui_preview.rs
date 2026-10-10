@@ -135,10 +135,13 @@ fn fixture(scene: &str) -> App {
             "系统 DNS · github.com → 140.82.112.4".into(),
             "测试失败：连接超时，请检查当前节点或重试。".into(),
         ];
-    } else if scene == "settings" {
+    } else if scene.starts_with("settings") {
         app.page = Page::Settings;
         app.geo_status = "2026-10-10".into();
         app.updates.status = "已是最新版本".into();
+        if scene == "settings-rules" {
+            app.rule_draft.enabled = [true; 6];
+        }
     } else {
         app.page = Page::Websites;
         for (index, service) in ip_check::services().iter().enumerate() {
@@ -235,6 +238,8 @@ fn update(app: &mut App, message: Message) -> Task<Message> {
     }
     match message {
         Message::Query(_)
+        | Message::RuleToggle(..)
+        | Message::RuleProxy(_)
         | Message::NodeSort(_)
         | Message::ToggleGroup(_)
         | Message::GroupPage(..)
