@@ -12,6 +12,11 @@ from pathlib import Path
 import tempfile
 import time
 import urllib.request
+import sys
+
+# Hosted Windows stdout may use cp1252 even when the app emits UTF-8.
+sys.stdout.reconfigure(encoding='utf-8', errors='backslashreplace')
+sys.stderr.reconfigure(encoding='utf-8', errors='backslashreplace')
 
 
 class SidAndAttributes(c.Structure):
@@ -43,6 +48,26 @@ class UserInfo(c.Structure):
                 ('flags', w.DWORD), ('script', w.LPWSTR)]
 
 
+class UnicodeString(c.Structure):
+    _fields_ = [('length', w.USHORT), ('maximum', w.USHORT), ('buffer', w.LPWSTR)]
+
+
+class ObjectAttributes(c.Structure):
+    _fields_ = [('length', w.ULONG), ('root', w.HANDLE),
+                ('name', c.POINTER(UnicodeString)), ('attributes', w.ULONG),
+                ('descriptor', c.c_void_p), ('quality', c.c_void_p)]
+
+
+class Trustee(c.Structure):
+    _fields_ = [('multiple', c.c_void_p), ('operation', c.c_int),
+                ('form', c.c_int), ('kind', c.c_int), ('name', c.c_void_p)]
+
+
+class ExplicitAccess(c.Structure):
+    _fields_ = [('permissions', w.DWORD), ('mode', c.c_int),
+                ('inheritance', w.DWORD), ('trustee', Trustee)]
+
+
 def checked(result):
     if not result:
         raise c.WinError(c.get_last_error())
@@ -56,11 +81,16 @@ class Windows:
         self.shell = c.WinDLL('shell32', use_last_error=True)
         self.user = c.WinDLL('user32', use_last_error=True)
         self.network = c.WinDLL('netapi32', use_last_error=True)
+        self.nt = c.WinDLL('ntdll')
         self.station = self.desktop_handle = None
         self.desktop_name = None
         self.username = self.password = self.user_temp = None
+        self.namespace = self.namespace_descriptor = self.namespace_dacl = None
         signatures = [
             (self.kernel, 'GetCurrentProcess', [], w.HANDLE),
+            (self.kernel, 'GetCurrentProcessId', [], w.DWORD),
+            (self.kernel, 'ProcessIdToSessionId', [w.DWORD, c.POINTER(w.DWORD)], w.BOOL),
+            (self.kernel, 'CreateEventW', [c.c_void_p, w.BOOL, w.BOOL, w.LPCWSTR], w.HANDLE),
             (self.kernel, 'CloseHandle', [w.HANDLE], w.BOOL),
             (self.kernel, 'LocalFree', [c.c_void_p], c.c_void_p),
             (self.kernel, 'WaitForSingleObject', [w.HANDLE, w.DWORD], w.DWORD),
@@ -93,6 +123,16 @@ class Windows:
             (self.shell, 'IsUserAnAdmin', [], w.BOOL),
             (self.security, 'ConvertStringSecurityDescriptorToSecurityDescriptorW',
              [w.LPCWSTR, w.DWORD, c.POINTER(c.c_void_p), c.c_void_p], w.BOOL),
+            (self.security, 'GetSecurityInfo',
+             [w.HANDLE, c.c_int, w.DWORD, c.c_void_p, c.c_void_p,
+              c.POINTER(c.c_void_p), c.c_void_p, c.POINTER(c.c_void_p)], w.DWORD),
+            (self.security, 'SetSecurityInfo',
+             [w.HANDLE, c.c_int, w.DWORD, c.c_void_p, c.c_void_p, c.c_void_p, c.c_void_p], w.DWORD),
+            (self.security, 'SetEntriesInAclW',
+             [w.ULONG, c.POINTER(ExplicitAccess), c.c_void_p, c.POINTER(c.c_void_p)], w.DWORD),
+            (self.nt, 'NtOpenDirectoryObject',
+             [c.POINTER(w.HANDLE), w.DWORD, c.POINTER(ObjectAttributes)], c.c_long),
+            (self.nt, 'RtlNtStatusToDosError', [c.c_long], w.DWORD),
             (self.user, 'GetProcessWindowStation', [], w.HANDLE),
             (self.user, 'SetProcessWindowStation', [w.HANDLE], w.BOOL),
             (self.user, 'CreateWindowStationW',
@@ -106,6 +146,56 @@ class Windows:
         for library, name, args, result in signatures:
             function = getattr(library, name)
             function.argtypes, function.restype = args, result
+
+    def allow_test_namespace(self, sid):
+        # A run-as account shares the runner's session, rather than owning a
+        # normal interactive session. Permit only this temporary SID to create
+        # named objects there, then restore the original DACL during cleanup.
+        session = w.DWORD()
+        checked(self.kernel.ProcessIdToSessionId(self.kernel.GetCurrentProcessId(), c.byref(session)))
+        path = (f'\\Sessions\\{session.value}\\BaseNamedObjects'
+                if session.value else '\\BaseNamedObjects')
+        buffer = c.create_unicode_buffer(path)
+        name = UnicodeString(len(path) * 2, c.sizeof(buffer), c.cast(buffer, w.LPWSTR))
+        attributes = ObjectAttributes(c.sizeof(ObjectAttributes), None, c.pointer(name), 0x40, None, None)
+        handle = w.HANDLE()
+        status = self.nt.NtOpenDirectoryObject(c.byref(handle), 0x60001, c.byref(attributes))
+        if status < 0:
+            raise c.WinError(self.nt.RtlNtStatusToDosError(status))
+        self.namespace = handle
+        descriptor, dacl = c.c_void_p(), c.c_void_p()
+        status = self.security.GetSecurityInfo(handle, 6, 4, None, None,
+                                               c.byref(dacl), None, c.byref(descriptor))
+        if status:
+            raise c.WinError(status)
+        self.namespace_descriptor, self.namespace_dacl = descriptor, dacl
+        user, updated = c.c_void_p(), c.c_void_p()
+        try:
+            checked(self.security.ConvertStringSidToSidW(sid, c.byref(user)))
+            entry = ExplicitAccess(7, 1, 0, Trustee(None, 0, 0, 1, user.value))
+            status = self.security.SetEntriesInAclW(1, c.byref(entry), dacl, c.byref(updated))
+            if status:
+                raise c.WinError(status)
+            status = self.security.SetSecurityInfo(handle, 6, 4, None, None, updated, None)
+            if status:
+                raise c.WinError(status)
+        finally:
+            for allocation in (user, updated):
+                if allocation:
+                    self.kernel.LocalFree(allocation)
+
+    def restore_test_namespace(self):
+        if self.namespace:
+            try:
+                if self.namespace_descriptor:
+                    status = self.security.SetSecurityInfo(
+                        self.namespace, 6, 4, None, None, self.namespace_dacl, None)
+                    if status:
+                        raise c.WinError(status)
+            finally:
+                if self.namespace_descriptor:
+                    self.kernel.LocalFree(self.namespace_descriptor)
+                self.kernel.CloseHandle(self.namespace)
 
     def create_test_desktop(self, sid):
         descriptor = c.c_void_p()
@@ -205,11 +295,14 @@ class Windows:
         # this avoids inheriting runner-service pipe handles across accounts.
         import uuid
         output = Path(self.user_temp)/('process-' + uuid.uuid4().hex + '.log')
+        batch = output.with_suffix('.cmd')
+        # Batch execution waits for GUI programs and preserves their exit code.
+        # START through /C previously reported success for a failed Rust test.
+        batch.write_text('@echo off\nchcp 65001 >nul\n' + subprocess.list2cmdline([str(executable), *arguments]) +
+                         ' > "' + str(output) + '" 2>&1\nexit /b %errorlevel%\n', encoding='utf-8')
         shell = Path(os.environ['SystemRoot'])/'System32/cmd.exe'
         command = c.create_unicode_buffer(
-            '"' + str(shell) + '" /D /S /C "start "" /B /WAIT ' +
-            subprocess.list2cmdline([str(executable), *arguments]) +
-            ' > "' + str(output) + '" 2>&1"')
+            '"' + str(shell) + '" /D /S /C ""' + str(batch) + '""')
         env = c.create_unicode_buffer('\0'.join(f'{k}={v}' for k, v in sorted(environment.items())) + '\0\0')
         startup, process = StartupInfo(), ProcessInfo()
         startup.cb = c.sizeof(startup)
@@ -309,6 +402,51 @@ def check_startup(api, executable, token, directory, background=False):
         api.cleanup(process)
 
 
+def check_launcher(api, token, sid):
+    script = Path(__file__).resolve()
+    for arguments, expected in (([str(script), '--probe', sid], 0),
+                                ([str(script), '--probe-exit', '37'], 37)):
+        process = api.launch(Path(sys.executable), token, dict(os.environ), arguments)
+        try:
+            api.wait(process, 30, expected)
+            print(api.output(process), flush=True)
+        finally:
+            api.cleanup(process)
+    print('PASS: non-admin token, session namespace and child failure propagation', flush=True)
+
+
+def probe(sid):
+    import uuid
+    api = Windows()
+    assert not api.shell.IsUserAnAdmin(), 'Child must really have ordinary permissions'
+    length = w.DWORD()
+    token = w.HANDLE()
+    checked(api.security.OpenProcessToken(api.kernel.GetCurrentProcess(), 8, c.byref(token)))
+    try:
+        api.security.GetTokenInformation(token, 25, None, 0, c.byref(length))
+        buffer = c.create_string_buffer(length.value)
+        checked(api.security.GetTokenInformation(token, 25, buffer, length, c.byref(length)))
+        integrity = c.cast(SidAndAttributes.from_buffer(buffer).sid, c.POINTER(c.c_ubyte))
+        level = c.cast(c.addressof(integrity.contents) + 8 + 4 * (integrity[1] - 1),
+                       c.POINTER(w.DWORD)).contents.value
+        assert level == 8192, f'Expected medium-integrity token, got {level}'
+    finally:
+        api.kernel.CloseHandle(token)
+    descriptor = c.c_void_p()
+    checked(api.security.ConvertStringSecurityDescriptorToSecurityDescriptorW(
+        f'D:P(A;;GA;;;SY)(A;;GA;;;BA)(A;;GA;;;{sid})S:(ML;;NW;;;ME)',
+        1, c.byref(descriptor), None))
+    try:
+        attributes = SecurityAttributes(c.sizeof(SecurityAttributes), descriptor.value, False)
+        for security in (None, c.byref(attributes)):
+            event = checked(api.kernel.CreateEventW(
+                security, False, False, 'Local\\ClashOfRust.CI.Probe.' + uuid.uuid4().hex))
+            api.kernel.CloseHandle(event)
+    finally:
+        api.kernel.LocalFree(descriptor)
+    print('PASS: genuine ordinary medium-integrity process creates local named events')
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('executable', type=Path)
@@ -323,6 +461,7 @@ def main():
     try:
         limited, sid = api.ordinary_user()
         api.create_test_desktop(sid)
+        api.allow_test_namespace(sid)
         api.grant(executable.parent, sid, '(OI)(CI)RX')
         api.grant(test_binary.parent, sid, 'RX')
         api.grant(test_binary, sid, 'RX')
@@ -330,6 +469,7 @@ def main():
             root = Path(work)
             api.grant(root, sid, '(OI)(CI)M')
             api.user_temp = str(root)
+            check_launcher(api, limited, sid)
             # Use a real local Users account, rather than a filtered service
             # token that Windows may reject before application initialization.
             for arguments in (['config::tests::', '--test-threads=1'],
@@ -395,6 +535,7 @@ def main():
         try:
             api.close_test_desktop()
         finally:
+            api.restore_test_namespace()
             if limited:
                 api.kernel.CloseHandle(limited)
             # Registering a logon task can start the real background GUI as
@@ -411,4 +552,9 @@ def main():
 
 
 if __name__ == '__main__':
-    main()
+    if sys.argv[1:2] == ['--probe']:
+        probe(sys.argv[2])
+    elif sys.argv[1:2] == ['--probe-exit']:
+        sys.exit(int(sys.argv[2]))
+    else:
+        main()
