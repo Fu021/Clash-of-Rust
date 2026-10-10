@@ -457,12 +457,11 @@ async fn execute(engine: Arc<Mutex<Engine>>, action: Action, scope: Scope) -> Re
                 Ok("定时测速间隔已保存".into())
             }
             Action::NodeSort(node_sort) => {
-                engine
-                    .save_settings(Settings {
-                        node_sort,
-                        ..engine.settings.clone()
-                    })
-                    .await?;
+                let settings = Settings {
+                    node_sort,
+                    ..engine.settings.clone()
+                };
+                engine.save_settings(settings).await?;
                 Ok("节点排序已保存".into())
             }
             Action::DeleteProfile(id) => {
