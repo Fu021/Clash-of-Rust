@@ -67,3 +67,5 @@ query / traverse / create-object（0x7），遗漏 create-subdirectory（0x8）�
 本地 x64 原生 8 组全部通过，报告见 `target/windows-ci-report.json`。
 既有 127 项 Rust 测试及 Release GUI 测试此前通过。本地没有 ARM64 硬件，
 两架构最终状态以本次提交的 Actions 为准。
+
+最终远程验证：修复提交 `638a8e0` 的 [CI 38052491612](https://github.com/Fu021/Clash-of-Rust/actions/runs/38052491612) 中，Windows x64 / ARM64 与 Linux x64 / ARM64 全部通过。

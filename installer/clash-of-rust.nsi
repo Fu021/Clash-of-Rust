@@ -5,10 +5,10 @@ Unicode true
 !include "FileFunc.nsh"
 
 !ifndef APP_VERSION
-!define APP_VERSION "0.4.12"
+!define APP_VERSION "0.5.1"
 !endif
 !ifndef APP_NUMERIC_VERSION
-!define APP_NUMERIC_VERSION "0.4.12.0"
+!define APP_NUMERIC_VERSION "0.5.1.0"
 !endif
 !ifndef APP_ARCH
 !define APP_ARCH "x64"
