@@ -1,7 +1,10 @@
 use crate::{
     api::{Api, ConfigStatus, ConnectionStats, Connections, Proxies, Rules},
     assets::{self, GeoManifest},
-    config::{Profile, Settings, Store, atomic_write, parse_profile, runtime_config},
+    config::{
+        Profile, Settings, Store, atomic_write, parse_profile, read_profile, read_runtime_config,
+        runtime_config,
+    },
     platform,
 };
 use anyhow::{Context, Result, bail};
@@ -192,6 +195,7 @@ impl Engine {
 
     pub fn with_resources(store: Store, resources: PathBuf) -> Result<Self> {
         let instance = store.instance_lock()?;
+        crate::profile_transaction::recover(&store.root)?;
         let geo_manifest = assets::seed(&resources, &store.runtime())?;
         let logs = Arc::new(Mutex::new(VecDeque::new()));
         match platform::restore(&store.root.join("system-proxy.json")) {
@@ -202,7 +206,7 @@ impl Engine {
         let mut settings = store.load_settings()?;
         let mut profiles = store.profiles()?;
         if profiles.is_empty() {
-            let raw = std::fs::read_to_string(resources.join("default.yaml"))
+            let raw = read_profile(&resources.join("default.yaml"))
                 .context("默认配置缺失，请重新安装")?;
             parse_profile(&raw)?;
             let id = uuid::Uuid::new_v4().to_string();
@@ -312,7 +316,7 @@ impl Engine {
             .active_profile
             .as_ref()
             .context("请先导入并选择一个订阅配置")?;
-        let raw = std::fs::read_to_string(self.store.profile_path(id)?)?;
+        let raw = read_profile(&self.store.profile_path(id)?)?;
         let payload = runtime_config(&raw, &self.settings)?;
         drop(raw);
         self.validate(&payload).await?;
@@ -396,6 +400,15 @@ impl Engine {
         Ok(())
     }
 
+    pub async fn save_ports(&mut self, controller_port: u16, mixed_port: u16) -> Result<()> {
+        self.save_settings(Settings {
+            controller_port,
+            mixed_port,
+            ..self.settings.clone()
+        })
+        .await
+    }
+
     pub async fn save_settings(&mut self, settings: Settings) -> Result<()> {
         settings.validate()?;
         if settings.controller_port == self.settings.controller_port
@@ -462,7 +475,7 @@ impl Engine {
                 .proxies
                 .into_iter()
                 .filter(|(_, p)| p.kind == "Selector" && !p.now.is_empty())
-                .map(|(name, p)| (name, p.now))
+                .map(|(name, p)| (name.to_string(), p.now.to_string()))
                 .collect(),
         }))
     }
@@ -481,24 +494,12 @@ impl Engine {
             crate::subscription::download(&url, self.running().then_some(self.settings.mixed_port))
                 .await?
         } else {
-            let file = File::open(&source).context("本地配置文件无法读取")?;
-            if file.metadata()?.len() > 10 * 1024 * 1024 {
-                bail!("配置超过 10 MiB 限制");
-            }
-            let mut raw = String::new();
-            use std::io::Read;
-            file.take(10 * 1024 * 1024 + 1).read_to_string(&mut raw)?;
-            (raw, None)
+            (read_profile(std::path::Path::new(&source))?, None)
         };
         let id = existing.unwrap_or_else(|| uuid::Uuid::new_v4().to_string());
         let path = self.store.profile_path(&id)?;
         let payload = runtime_config(&raw, &self.settings)?;
-        self.validate(&payload).await?;
         let active = self.settings.active_profile.as_ref() == Some(&id);
-        if active && self.running() {
-            self.apply_payload(&payload).await?;
-        }
-        atomic_write(&path, raw.as_bytes())?;
         let profile = Profile {
             id: id.clone(),
             name: if name.trim().is_empty() {
@@ -516,50 +517,86 @@ impl Engine {
         } else {
             profiles.push(profile);
         }
-        self.store.save_profiles(&profiles)?;
-        self.profiles = profiles;
-        if self.settings.active_profile.is_none() {
-            self.settings.active_profile = Some(id);
-            self.store.save_settings(&self.settings)?;
+        let mut settings = self.settings.clone();
+        if settings.active_profile.is_none() {
+            settings.active_profile = Some(id);
         }
+        let mut transaction = crate::profile_transaction::Transaction::new(&self.store.root)?;
+        transaction.stage(&path, raw.as_bytes())?;
+        transaction.stage(
+            &self.store.root.join("profiles.json"),
+            &serde_json::to_vec_pretty(&profiles)?,
+        )?;
+        transaction.stage(
+            &self.store.root.join("settings.json"),
+            &serde_json::to_vec_pretty(&settings)?,
+        )?;
+        drop(raw);
+        self.commit_profile(transaction, &payload, active).await?;
+        self.profiles = profiles;
+        self.settings = settings;
         append(&self.logs, "[客户端] 配置已导入/更新");
         Ok(())
     }
 
-    async fn apply_payload(&self, payload: &str) -> Result<()> {
-        self.validate(payload).await?;
-        let path = self.store.runtime().join("config.yaml");
-        let old = std::fs::read_to_string(&path)?;
-        let current: Value = self.api.get("configs").await?;
-        // Reload must preserve the user's current routing and TUN state.
-        let mode = json!(current["mode"].as_str().unwrap_or("rule"));
-        let tun = json!(current["tun"]["enable"].as_bool().unwrap_or(false));
-        let previous = {
-            let mut value: Value = serde_yaml::from_str(&old)?;
-            value["mode"] = mode.clone();
-            value["tun"]["enable"] = tun.clone();
-            serde_yaml::to_string(&value)?
+    async fn commit_profile(
+        &self,
+        mut transaction: crate::profile_transaction::Transaction,
+        payload: &str,
+        active: bool,
+    ) -> Result<()> {
+        let running = active && self.running();
+        let (previous, next) = if running {
+            let path = self.store.runtime().join("config.yaml");
+            let current: ConfigStatus = self.api.get("configs").await?;
+            let preserved = |raw: &str| -> Result<String> {
+                let mut value: serde_yaml::Value = serde_yaml::from_str(raw)?;
+                value["mode"] = serde_yaml::Value::from(current.mode.clone());
+                value["tun"]["enable"] = serde_yaml::Value::from(current.tun.enable);
+                Ok(serde_yaml::to_string(&value)?)
+            };
+            let previous = preserved(&read_runtime_config(&path)?)?;
+            let next = preserved(payload)?;
+            self.validate(&next).await?;
+            transaction.stage(&path, next.as_bytes())?;
+            (Some(previous), Some(next))
+        } else {
+            self.validate(payload).await?;
+            (None, None)
         };
-        drop(old);
-        let next = {
-            let mut value: Value = serde_yaml::from_str(payload)?;
-            value["mode"] = mode;
-            value["tun"]["enable"] = tun;
-            serde_yaml::to_string(&value)?
-        };
-        let result = async {
-            self.api.reload(&next).await?;
-            self.healthy().await?;
-            atomic_write(&path, next.as_bytes())?;
+        transaction.prepare()?;
+        let changed = async {
+            if let Some(next) = &next {
+                self.api.reload(next).await?;
+                self.healthy().await?;
+            }
+            transaction.commit()?;
             Ok::<_, anyhow::Error>(())
         }
         .await;
-        if let Err(error) = result {
-            let rollback = self.api.reload(&previous).await;
-            if let Err(rollback) = rollback {
-                bail!("配置应用失败：{error}；回退也失败：{rollback}");
+        if let Err(error) = changed {
+            // Always attempt both recoveries, even if the controller is unreachable.
+            let runtime = if let Some(previous) = previous {
+                async {
+                    self.api.reload(&previous).await?;
+                    self.healthy().await?;
+                    Ok::<_, anyhow::Error>(())
+                }
+                .await
+            } else {
+                Ok(())
+            };
+            let disk = transaction.rollback();
+            match (runtime, disk) {
+                (Ok(()), Ok(())) => {
+                    return Err(error.context("配置提交失败，已恢复旧配置与订阅信息"));
+                }
+                (runtime, disk) => bail!(
+                    "配置提交失败：{error}；运行配置恢复：{}；文件恢复：{}",
+                    runtime.err().map_or("成功".into(), |e| e.to_string()),
+                    disk.err().map_or("成功".into(), |e| e.to_string())
+                ),
             }
-            return Err(error.context("配置应用失败，已恢复上一份运行配置"));
         }
         Ok(())
     }
@@ -568,13 +605,19 @@ impl Engine {
         if !self.profiles.iter().any(|p| p.id == id) {
             bail!("配置不存在");
         }
-        let raw = std::fs::read_to_string(self.store.profile_path(&id)?)?;
+        let raw = read_profile(&self.store.profile_path(&id)?)?;
         let payload = runtime_config(&raw, &self.settings)?;
-        if self.running() {
-            self.apply_payload(&payload).await?;
-        }
-        self.settings.active_profile = Some(id);
-        self.store.save_settings(&self.settings)?;
+        let settings = Settings {
+            active_profile: Some(id),
+            ..self.settings.clone()
+        };
+        let mut transaction = crate::profile_transaction::Transaction::new(&self.store.root)?;
+        transaction.stage(
+            &self.store.root.join("settings.json"),
+            &serde_json::to_vec_pretty(&settings)?,
+        )?;
+        self.commit_profile(transaction, &payload, true).await?;
+        self.settings = settings;
         Ok(())
     }
 
@@ -633,7 +676,27 @@ impl Engine {
     pub async fn finish_elevation(&mut self, path: &std::path::Path) -> Result<()> {
         let state: ElevationState = serde_json::from_slice(&std::fs::read(path)?)?;
         std::fs::remove_file(path)?;
-        if let Err(error) = self.resume(&state.requested).await {
+        let settings = Settings {
+            run_mode: state.requested.mode.clone(),
+            proxy_mode: ProxyMode::Tun,
+            ..self.settings.clone()
+        };
+        let mut transaction = match self.stage_mode_settings(&settings) {
+            Ok(transaction) => transaction,
+            Err(error) => {
+                self.resume(&state.previous)
+                    .await
+                    .context("无法保存提权模式，恢复原运行状态失败")?;
+                return Err(error.context("无法保存提权模式，已恢复原运行状态"));
+            }
+        };
+        let changed = async {
+            self.resume(&state.requested).await?;
+            transaction.commit()?;
+            Ok::<_, anyhow::Error>(())
+        }
+        .await;
+        if let Err(error) = changed {
             let restored = if self.running() {
                 let mode = if state.previous.tun {
                     ProxyMode::Tun
@@ -646,14 +709,19 @@ impl Engine {
             } else {
                 self.resume(&state.previous).await
             };
-            return match restored {
-                Ok(()) => Err(error.context("TUN 提权后切换失败，已恢复原代理模式")),
-                Err(rollback) => {
-                    Err(error.context(format!("TUN 切换失败，恢复原模式也失败：{rollback:#}")))
+            let disk = transaction.rollback();
+            return match (restored, disk) {
+                (Ok(()), Ok(())) => {
+                    Err(error.context("TUN 提权后切换失败，已恢复原代理模式与设置"))
                 }
+                (runtime, disk) => Err(error.context(format!(
+                    "TUN 切换失败；运行状态恢复：{}；文件恢复：{}",
+                    runtime.err().map_or("成功".into(), |e| e.to_string()),
+                    disk.err().map_or("成功".into(), |e| e.to_string())
+                ))),
             };
         }
-        self.remember_modes(&state.requested.mode, ProxyMode::Tun)?;
+        self.settings = settings;
         Ok(())
     }
 
@@ -666,28 +734,49 @@ impl Engine {
         if profile.is_default() {
             bail!("默认直连配置不能删除");
         }
-        if self.settings.active_profile.as_deref() == Some(id) {
-            let default = self
-                .profiles
-                .iter()
-                .find(|p| p.is_default())
-                .context("默认配置缺失")?
-                .id
-                .clone();
-            self.activate(default).await?;
-        }
+        let active = self.settings.active_profile.as_deref() == Some(id);
         let profiles: Vec<_> = self
             .profiles
             .iter()
             .filter(|p| p.id != id)
             .cloned()
             .collect();
-        self.store.save_profiles(&profiles)?;
-        self.profiles = profiles;
-        let path = self.store.profile_path(id)?;
-        if path.exists() {
-            std::fs::remove_file(path)?;
+        let mut settings = self.settings.clone();
+        let payload = if active {
+            let default = self
+                .profiles
+                .iter()
+                .find(|p| p.is_default())
+                .context("默认配置缺失")?;
+            let raw = read_profile(&self.store.profile_path(&default.id)?)?;
+            settings.active_profile = Some(default.id.clone());
+            Some(runtime_config(&raw, &settings)?)
+        } else {
+            None
+        };
+        let mut transaction = crate::profile_transaction::Transaction::new(&self.store.root)?;
+        transaction.stage_remove(&self.store.profile_path(id)?)?;
+        transaction.stage(
+            &self.store.root.join("profiles.json"),
+            &serde_json::to_vec_pretty(&profiles)?,
+        )?;
+        if let Some(payload) = payload {
+            transaction.stage(
+                &self.store.root.join("settings.json"),
+                &serde_json::to_vec_pretty(&settings)?,
+            )?;
+            self.commit_profile(transaction, &payload, true).await?;
+        } else {
+            transaction.prepare()?;
+            if let Err(error) = transaction.commit() {
+                transaction
+                    .rollback()
+                    .context("订阅删除失败，恢复旧文件失败")?;
+                return Err(error.context("订阅删除失败，已恢复旧文件"));
+            }
         }
+        self.settings = settings;
+        self.profiles = profiles;
         Ok(())
     }
 
@@ -713,7 +802,7 @@ impl Engine {
                     .proxies
                     .into_iter()
                     .filter(|(_, p)| p.kind == "Selector" && !p.now.is_empty())
-                    .map(|(name, p)| (name, p.now))
+                    .map(|(name, p)| (name.to_string(), p.now.to_string()))
                     .collect(),
             })
         } else {
@@ -753,20 +842,44 @@ impl Engine {
 
     // Only explicit selections persist preferences. Cleanup and temporary restarts
     // use the lower-level mode/proxy_mode operations without clearing them.
-    fn remember_modes(&mut self, run_mode: &str, proxy_mode: ProxyMode) -> Result<()> {
-        let settings = Settings {
-            run_mode: run_mode.into(),
-            proxy_mode,
-            ..self.settings.clone()
-        };
-        self.store.save_settings(&settings)?;
-        self.settings = settings;
-        Ok(())
+    fn stage_mode_settings(
+        &self,
+        settings: &Settings,
+    ) -> Result<crate::profile_transaction::Transaction> {
+        settings.validate()?;
+        let mut transaction = crate::profile_transaction::Transaction::new(&self.store.root)?;
+        transaction.stage(
+            &self.store.root.join("settings.json"),
+            &serde_json::to_vec_pretty(settings)?,
+        )?;
+        transaction.prepare()?;
+        Ok(transaction)
     }
 
     pub async fn select_mode(&mut self, mode: &str) -> Result<()> {
-        self.mode(mode).await?;
-        self.remember_modes(mode, self.settings.proxy_mode)
+        let current: ConfigStatus = self.api.get("configs").await?;
+        let settings = Settings {
+            run_mode: mode.into(),
+            ..self.settings.clone()
+        };
+        let mut transaction = self.stage_mode_settings(&settings)?;
+        let result = async {
+            self.mode(mode).await?;
+            transaction.commit()?;
+            Ok::<_, anyhow::Error>(())
+        }
+        .await;
+        if let Err(error) = result {
+            let runtime = self.mode(&current.mode).await;
+            let disk = transaction.rollback();
+            return Err(error.context(format!(
+                "运行模式保存失败；运行状态恢复：{}；文件恢复：{}",
+                runtime.err().map_or("成功".into(), |e| e.to_string()),
+                disk.err().map_or("成功".into(), |e| e.to_string())
+            )));
+        }
+        self.settings = settings;
+        Ok(())
     }
 
     pub async fn select_proxy_mode(&mut self, mode: ProxyMode) -> Result<()> {
@@ -774,8 +887,29 @@ impl Engine {
         if mode == ProxyMode::Tun {
             self.prepare_linux_tun(true).await?;
         }
-        self.proxy_mode(mode).await?;
-        self.remember_modes(&self.settings.run_mode.clone(), mode)
+        let previous = crate::proxy::current(self).await?;
+        let settings = Settings {
+            proxy_mode: mode,
+            ..self.settings.clone()
+        };
+        let mut transaction = self.stage_mode_settings(&settings)?;
+        let result = async {
+            self.proxy_mode(mode).await?;
+            transaction.commit()?;
+            Ok::<_, anyhow::Error>(())
+        }
+        .await;
+        if let Err(error) = result {
+            let runtime = self.proxy_mode(previous).await;
+            let disk = transaction.rollback();
+            return Err(error.context(format!(
+                "代理模式保存失败；运行状态恢复：{}；文件恢复：{}",
+                runtime.err().map_or("成功".into(), |e| e.to_string()),
+                disk.err().map_or("成功".into(), |e| e.to_string())
+            )));
+        }
+        self.settings = settings;
+        Ok(())
     }
 
     /// Returns true when a successful UAC launch requires the GUI to exit.

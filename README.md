@@ -3,7 +3,7 @@
 </p>
 <h1 align="center">Clash of Rust</h1>
 
-基于 mihomo 的原生 Rust 代理客户端。支持 **Windows（x64 / ARM64）** 和 **Debian/Ubuntu（amd64 / ARM64）**。当前版本 **0.4.12**。
+基于 mihomo 的原生 Rust 代理客户端。支持 **Windows（x64 / ARM64）** 和 **Debian/Ubuntu（amd64 / ARM64）**。当前开发版本 **0.4.13-dev.1**，稳定版下载为 **0.4.12**。
 
 ## Features
 
@@ -56,6 +56,20 @@ RSS 是进程当前驻留的物理内存，多个进程相加会重复计算共�
 | 50,000 条连接 | 12.00 MiB | 23.65–23.79 MiB | 23.30 MiB |
 
 [统一测试程序](examples/memory_benchmark.rs)（API 解析、连续刷新与 GUI/内核进程采样）、[解析基准原始结果](docs/benchmarks/memory-0.4.11-ubuntu24.04.txt)。
+
+当前开发版的前后对照见 [0.4.13-dev.1 内存报告](docs/benchmarks/0.4.13-dev.1/README.md)。下面的统一基准既支持独立进程解析和连续刷新，也支持实际 GUI/内核采样：
+
+```bash
+cargo build --release --locked --example memory_benchmark -j 1
+# 全部解析测试完成后，再采样已经打开的 GUI/内核
+./target/release/examples/memory_benchmark all GUI_PID results
+# 规则、连接、代理；流式/缓冲解析；单次/连续刷新；每项三次独立进程
+./target/release/examples/memory_benchmark suite 50000 3 results.jsonl
+# 正常打开客户端后传入 GUI PID，采样期间可切换页面、更新订阅或批量检测
+./target/release/examples/memory_benchmark app GUI_PID 30 250 app-results.jsonl
+```
+
+输出文件使用独占创建，避免覆盖以前的结果。API 堆测量与进程 RSS/PSS/USS 属于不同口径；对比时应使用相同构建模式、输入和场景。
 
 ## 编译与打包
 

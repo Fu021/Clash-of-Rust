@@ -32,14 +32,18 @@ async fn apply(backend: &impl Backend, mode: ProxyMode) -> Result<()> {
     Ok(())
 }
 
-pub(crate) async fn select(backend: &impl Backend, mode: ProxyMode) -> Result<()> {
-    let previous = if backend.tun_enabled().await? {
+pub(crate) async fn current(backend: &impl Backend) -> Result<ProxyMode> {
+    Ok(if backend.tun_enabled().await? {
         ProxyMode::Tun
     } else if backend.system_enabled()? {
         ProxyMode::System
     } else {
         ProxyMode::Off
-    };
+    })
+}
+
+pub(crate) async fn select(backend: &impl Backend, mode: ProxyMode) -> Result<()> {
+    let previous = current(backend).await?;
     if let Err(error) = apply(backend, mode).await {
         return match apply(backend, previous).await {
             Ok(()) => Err(error.context("代理模式切换失败，已恢复原模式")),

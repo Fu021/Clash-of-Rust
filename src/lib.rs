@@ -8,6 +8,7 @@ pub mod ip_check;
 mod network;
 pub mod platform;
 pub mod probe;
+mod profile_transaction;
 mod proxy;
 mod region_check;
 mod subscription;

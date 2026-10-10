@@ -53,8 +53,7 @@ pub async fn check(service: &Service, port: u16) -> Result<CheckResult> {
 }
 
 struct Context {
-    client: Client,
-    tls13_client: Client,
+    clients: std::sync::Arc<Clients>,
     first_response_ms: Option<u128>,
     failed: bool,
     challenged: bool,
@@ -104,32 +103,87 @@ impl Request {
     }
 }
 
+struct Clients {
+    normal: Client,
+    tls13: std::sync::Mutex<Option<Client>>,
+    port: u16,
+}
+impl Clients {
+    fn build(port: u16, tls13: bool) -> Result<Client> {
+        let mut builder = Client::builder()
+            .no_proxy()
+            .proxy(reqwest::Proxy::all(format!("http://127.0.0.1:{port}"))?)
+            .redirect(reqwest::redirect::Policy::none())
+            .connect_timeout(Duration::from_secs(5))
+            .timeout(Duration::from_secs(12))
+            .pool_max_idle_per_host(1)
+            .pool_idle_timeout(Duration::from_secs(15));
+        if tls13 {
+            builder = builder.min_tls_version(reqwest::tls::Version::TLS_1_3);
+        }
+        Ok(builder.build()?)
+    }
+    fn shared(port: u16) -> Result<std::sync::Arc<Self>> {
+        type Cache = std::sync::Mutex<Vec<(u16, std::sync::Weak<Clients>)>>;
+        static CACHE: Cache = std::sync::Mutex::new(Vec::new());
+        let mut cache = CACHE
+            .lock()
+            .map_err(|_| anyhow::anyhow!("检测客户端缓存不可用"))?;
+        cache.retain(|(_, clients)| clients.strong_count() > 0);
+        if let Some(clients) = cache.iter().find_map(|(cached_port, clients)| {
+            (*cached_port == port).then(|| clients.upgrade()).flatten()
+        }) {
+            return Ok(clients);
+        }
+        let clients = std::sync::Arc::new(Self {
+            normal: Self::build(port, false)?,
+            tls13: std::sync::Mutex::new(None),
+            port,
+        });
+        if cache.len() == 8 {
+            cache.remove(0);
+        }
+        cache.push((port, std::sync::Arc::downgrade(&clients)));
+        Ok(clients)
+    }
+    fn client(&self, tls13: bool) -> Result<Client> {
+        if !tls13 {
+            return Ok(self.normal.clone());
+        }
+        let mut client = self
+            .tls13
+            .lock()
+            .map_err(|_| anyhow::anyhow!("检测客户端缓存不可用"))?;
+        if client.is_none() {
+            *client = Some(Self::build(self.port, true)?);
+        }
+        Ok(client.as_ref().unwrap().clone())
+    }
+}
+
 impl Context {
     fn new(port: u16) -> Result<Self> {
         ensure!(port != 0, "代理端口无效");
-        let build = |tls13| -> Result<Client> {
-            let mut builder = Client::builder()
-                .no_proxy()
-                .proxy(reqwest::Proxy::all(format!("http://127.0.0.1:{port}"))?)
-                .redirect(reqwest::redirect::Policy::none())
-                .connect_timeout(Duration::from_secs(5))
-                .timeout(Duration::from_secs(12));
-            if tls13 {
-                builder = builder.min_tls_version(reqwest::tls::Version::TLS_1_3);
-            }
-            Ok(builder.build()?)
-        };
         Ok(Self {
-            client: build(false)?,
-            tls13_client: build(true)?,
+            clients: Clients::shared(port)?,
             first_response_ms: None,
             failed: false,
             challenged: false,
             denied: false,
+            // Cookies stay private to this detector, independently of shared transports.
             cookies: Jar::default(),
             #[cfg(test)]
             test_origin: None,
         })
+    }
+
+    #[cfg(test)]
+    fn set_test_client(&mut self, client: Client) {
+        self.clients = std::sync::Arc::new(Clients {
+            normal: client.clone(),
+            tls13: std::sync::Mutex::new(Some(client)),
+            port: self.clients.port,
+        });
     }
 
     async fn request(&mut self, request: Request) -> Result<String> {
@@ -164,7 +218,7 @@ impl Context {
         ensure!(url.host_str().is_some(), "检测地址缺少主机");
         let original_origin = url.origin();
         let mut method = Method::from_bytes(request.method.as_bytes())?;
-        let mut body = request.body.clone();
+        let mut body = request.body.as_deref();
         let mut header_text = String::new();
         for _ in 0..=10 {
             let started = Instant::now();
@@ -180,11 +234,7 @@ impl Context {
             );
             #[cfg(not(test))]
             let transport_url = url.clone();
-            let client = if request.tls13 {
-                &self.tls13_client
-            } else {
-                &self.client
-            };
+            let client = self.clients.client(request.tls13)?;
             let mut builder = client.request(method.clone(), transport_url);
             for [name, value] in &request.headers {
                 // Empty HTTP headers in the upstream are intentionally omitted.
@@ -214,7 +264,7 @@ impl Context {
                 {
                     builder = builder.header("content-type", "application/x-www-form-urlencoded");
                 }
-                builder = builder.body(data.clone());
+                builder = builder.body((*data).to_owned());
             }
             let mut response = builder.send().await?;
             self.first_response_ms
@@ -231,18 +281,22 @@ impl Context {
                 .get("location")
                 .and_then(|h| h.to_str().ok())
                 .map(str::to_owned);
-            header_text.push_str(&format!(
-                "HTTP/1.1 {} {}\r\n",
-                status.as_u16(),
-                status.canonical_reason().unwrap_or("")
-            ));
-            for (key, value) in response.headers() {
-                if let Ok(value) = value.to_str() {
-                    header_text.push_str(&format!("{}: {value}\r\n", key.as_str()));
+            if request.headers_only || request.include_headers {
+                use std::fmt::Write as _;
+                write!(
+                    header_text,
+                    "HTTP/1.1 {} {}\r\n",
+                    status.as_u16(),
+                    status.canonical_reason().unwrap_or("")
+                )?;
+                for (key, value) in response.headers() {
+                    if let Ok(value) = value.to_str() {
+                        write!(header_text, "{}: {value}\r\n", key.as_str())?;
+                    }
                 }
+                header_text.push_str("\r\n");
+                ensure!(header_text.len() <= 65536, "检测响应头超过限制");
             }
-            header_text.push_str("\r\n");
-            ensure!(header_text.len() <= 65536, "检测响应头超过限制");
             if request.cookie_store || request.cookie_load {
                 self.cookies
                     .set_cookies(&mut response.headers().get_all("set-cookie").iter(), &url);
@@ -271,21 +325,25 @@ impl Context {
                 bail!("HTTP 请求失败");
             }
             let mut bytes = Vec::new();
+            let mut received = 0usize;
             if !request.headers_only {
                 while let Some(chunk) = response.chunk().await? {
                     ensure!(
-                        bytes.len() + chunk.len() <= 2 * 1024 * 1024,
+                        chunk.len() <= (2 * 1024 * 1024usize).saturating_sub(received),
                         "检测响应超过 2 MiB"
                     );
-                    bytes.extend_from_slice(&chunk);
+                    received += chunk.len();
+                    if !request.discard_body {
+                        bytes.extend_from_slice(&chunk);
+                    }
                 }
             }
             let mut text = if request.headers_only {
-                header_text.clone()
+                std::mem::take(&mut header_text)
             } else if request.discard_body {
                 String::new()
             } else {
-                String::from_utf8_lossy(&bytes).into_owned()
+                decode_body(bytes)
             };
             if request.include_headers && !request.headers_only {
                 text = header_text + &text;
@@ -325,23 +383,52 @@ impl Context {
     }
 }
 
-struct Variables(HashMap<String, String>);
+fn decode_body(bytes: Vec<u8>) -> String {
+    String::from_utf8(bytes)
+        .unwrap_or_else(|error| String::from_utf8_lossy(error.as_bytes()).into_owned())
+}
+
+struct Variables(HashMap<&'static str, std::borrow::Cow<'static, str>>);
 impl Variables {
     fn new() -> Self {
+        use std::borrow::Cow::Borrowed;
         Self(HashMap::from([
-            ("1".into(), "4".into()), ("?".into(), "0".into()),
-            ("UA_Browser".into(), "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/112.0.0.0 Safari/537.36 Edg/112.0.1722.64".into()),
-            ("UA_Dalvik".into(), "Dalvik/2.1.0 (Linux; U; Android 9; ALP-AL00 Build/HUAWEIALP-AL00)".into()),
-            ("UA_SecCHUA".into(), "\"Chromium\";v=\"112\", \"Microsoft Edge\";v=\"112\"".into()),
-            ("Media_Cookie".into(), include_str!("../vendor/region-restriction-check/cookies").into()),
-            ("IATACode".into(), include_str!("../vendor/region-restriction-check/IATACode.txt").into()),
+            ("1", Borrowed("4")),
+            ("?", Borrowed("0")),
+            (
+                "UA_Browser",
+                Borrowed(
+                    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/112.0.0.0 Safari/537.36 Edg/112.0.1722.64",
+                ),
+            ),
+            (
+                "UA_Dalvik",
+                Borrowed("Dalvik/2.1.0 (Linux; U; Android 9; ALP-AL00 Build/HUAWEIALP-AL00)"),
+            ),
+            (
+                "UA_SecCHUA",
+                Borrowed("\"Chromium\";v=\"112\", \"Microsoft Edge\";v=\"112\""),
+            ),
+            (
+                "Media_Cookie",
+                Borrowed(include_str!("../vendor/region-restriction-check/cookies")),
+            ),
+            (
+                "IATACode",
+                Borrowed(include_str!(
+                    "../vendor/region-restriction-check/IATACode.txt"
+                )),
+            ),
         ]))
     }
     fn get(&self, key: &str) -> String {
-        self.0.get(key).cloned().unwrap_or_default()
+        self.0
+            .get(key)
+            .map(|value| value.clone().into_owned())
+            .unwrap_or_default()
     }
-    fn set(&mut self, key: &str, value: String) {
-        self.0.insert(key.into(), value);
+    fn set(&mut self, key: &'static str, value: String) {
+        self.0.insert(key, std::borrow::Cow::Owned(value));
     }
 }
 
@@ -393,16 +480,28 @@ fn decode_escapes(text: &str) -> String {
 }
 
 fn slice_text(text: &str, start: i64, length: Option<i64>) -> String {
-    let chars: Vec<char> = text.chars().collect();
-    let n = chars.len() as i64;
-    let start = if start < 0 { n + start } else { start }.clamp(0, n);
+    let n = text.chars().count() as i64;
+    let start = if start < 0 {
+        n.saturating_add(start)
+    } else {
+        start
+    }
+    .clamp(0, n);
     let end = match length {
         None => n,
-        Some(len) if len < 0 => n + len,
-        Some(len) => start + len,
+        Some(len) if len < 0 => n.saturating_add(len),
+        Some(len) => start.saturating_add(len),
     }
     .clamp(start, n);
-    chars[start as usize..end as usize].iter().collect()
+    let byte_start = text
+        .char_indices()
+        .nth(start as usize)
+        .map_or(text.len(), |(i, _)| i);
+    let byte_end = text
+        .char_indices()
+        .nth(end as usize)
+        .map_or(text.len(), |(i, _)| i);
+    text[byte_start..byte_end].to_owned()
 }
 
 fn matches_pattern(text: &str, pattern: &str) -> bool {
@@ -433,8 +532,9 @@ fn trim_prefix_pattern(text: &str, pattern: &str) -> String {
 fn json_field(text: &str, path: &str) -> Result<String> {
     // jq accepts whitespace-delimited JSON values. Google's batchexecute replies
     // include an anti-XSSI line; its selected JSON line is parsed independently.
-    let mut value: serde_json::Value =
+    let root: serde_json::Value =
         serde_json::from_str(text.trim()).context("检测响应不是有效 JSON")?;
+    let mut value = &root;
     if path != "." {
         let segments = path
             .trim_start_matches('.')
@@ -446,11 +546,10 @@ fn json_field(text: &str, path: &str) -> Result<String> {
             } else {
                 value.get(key)
             }
-            .cloned()
-            .unwrap_or(serde_json::Value::Null);
+            .unwrap_or(&serde_json::Value::Null);
         }
     }
-    Ok(serde_json::to_string_pretty(&value)?)
+    Ok(serde_json::to_string_pretty(value)?)
 }
 
 fn basic_regex(pattern: &str) -> String {
@@ -761,6 +860,55 @@ mod tests {
     use super::*;
     use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
+    #[test]
+    fn static_detector_data_is_borrowed_and_valid_utf8_reuses_the_body() {
+        let mut values = Variables::new();
+        assert!(matches!(
+            values.0["Media_Cookie"],
+            std::borrow::Cow::Borrowed(_)
+        ));
+        assert!(matches!(
+            values.0["IATACode"],
+            std::borrow::Cow::Borrowed(_)
+        ));
+        values.set("region", "US".into());
+        assert_eq!(values.get("region"), "US");
+        let bytes = "response 内容".as_bytes().to_vec();
+        let pointer = bytes.as_ptr();
+        let text = decode_body(bytes);
+        assert_eq!(text.as_ptr(), pointer);
+        assert_eq!(text, "response 内容");
+        assert_eq!(decode_body(vec![b'a', 0xff]), "a�");
+    }
+    #[test]
+    fn shared_transports_are_lazy_and_do_not_keep_completed_detectors_alive() {
+        let a = Context::new(10001).unwrap();
+        let b = Context::new(10001).unwrap();
+        assert!(std::sync::Arc::ptr_eq(&a.clients, &b.clients));
+        assert!(a.clients.tls13.lock().unwrap().is_none());
+        let weak = std::sync::Arc::downgrade(&a.clients);
+        drop(a);
+        drop(b);
+        assert!(weak.upgrade().is_none());
+    }
+    #[tokio::test]
+    async fn discarded_bodies_still_enforce_the_response_limit() {
+        let (mut ctx, server) = mock(&"x".repeat(2 * 1024 * 1024 + 1), "").await;
+        let mut request = Request::get("https://example.test/");
+        request.discard_body = true;
+        assert!(
+            ctx.perform(&request)
+                .await
+                .unwrap_err()
+                .to_string()
+                .contains("2 MiB")
+        );
+        server.abort();
+        let (mut ctx, server) = mock("discard this", "").await;
+        assert_eq!(ctx.perform(&request).await.unwrap(), "");
+        server.abort();
+    }
+
     async fn mock(body: &str, extra_headers: &str) -> (Context, tokio::task::JoinHandle<()>) {
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
         let address = listener.local_addr().unwrap();
@@ -793,12 +941,13 @@ mod tests {
             }
         });
         let mut ctx = Context::new(1).unwrap();
-        ctx.client = Client::builder()
-            .no_proxy()
-            .redirect(reqwest::redirect::Policy::none())
-            .build()
-            .unwrap();
-        ctx.tls13_client = ctx.client.clone();
+        ctx.set_test_client(
+            Client::builder()
+                .no_proxy()
+                .redirect(reqwest::redirect::Policy::none())
+                .build()
+                .unwrap(),
+        );
         ctx.test_origin = Some(Url::parse(&format!("http://{address}")).unwrap());
         (ctx, task)
     }
@@ -933,11 +1082,13 @@ mod tests {
             }
         });
         let mut ctx = Context::new(1).unwrap();
-        ctx.client = Client::builder()
-            .no_proxy()
-            .redirect(reqwest::redirect::Policy::none())
-            .build()
-            .unwrap();
+        ctx.set_test_client(
+            Client::builder()
+                .no_proxy()
+                .redirect(reqwest::redirect::Policy::none())
+                .build()
+                .unwrap(),
+        );
         ctx.test_origin = Some(origin);
         let mut request = Request::get("https://example.test/start");
         request.method = "POST".into();
@@ -990,11 +1141,13 @@ mod tests {
             }
         });
         let mut ctx = Context::new(1).unwrap();
-        ctx.client = Client::builder()
-            .no_proxy()
-            .redirect(reqwest::redirect::Policy::none())
-            .build()
-            .unwrap();
+        ctx.set_test_client(
+            Client::builder()
+                .no_proxy()
+                .redirect(reqwest::redirect::Policy::none())
+                .build()
+                .unwrap(),
+        );
         ctx.test_origin = Some(origin);
         let output = generated::execute("MediaUnlockTest_BahamutAnime", &mut ctx)
             .await
@@ -1043,7 +1196,7 @@ mod tests {
     async fn cancellation_drops_native_http_without_descendant_processes() {
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
         let mut ctx = Context::new(1).unwrap();
-        ctx.client = Client::builder().no_proxy().build().unwrap();
+        ctx.set_test_client(Client::builder().no_proxy().build().unwrap());
         let address = listener.local_addr().unwrap();
         let request = Request::get(&format!("http://{address}/hang"));
         let pending = tokio::spawn(async move { ctx.request(request).await });

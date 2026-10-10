@@ -171,7 +171,7 @@ async fn real_core_lifecycle_and_configuration() {
         .unwrap();
     let snapshot = engine.poll(Scope::Rules).await.unwrap();
     assert_eq!(snapshot.mode, "global");
-    assert_eq!(snapshot.rules.rules[0].payload, "example.org");
+    assert_eq!(snapshot.rules.rules[0].payload.as_ref(), "example.org");
     assert_eq!(engine.profiles.len(), 2);
     engine.api.select("Example", "REJECT").await.unwrap();
     let occupied = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
@@ -370,4 +370,123 @@ async fn geo_update_restarts_core_and_restores_selection() {
             .version,
         "test-update"
     );
+}
+
+#[tokio::test]
+#[ignore = "Requires bundled resources; verifies disk failure cannot switch the running subscription"]
+async fn subscription_metadata_failures_leave_runtime_and_preferences_unchanged() {
+    let tmp = tempfile::tempdir().unwrap();
+    let store = Store::at(tmp.path().join("data")).unwrap();
+    let mut settings = Settings {
+        controller_port: free_port(),
+        mixed_port: free_port(),
+        ..Settings::default()
+    };
+    while settings.controller_port == settings.mixed_port {
+        settings.mixed_port = free_port();
+    }
+    store.save_settings(&settings).unwrap();
+    let mut engine = Engine::with_resources(store.clone(), test_resources()).unwrap();
+    let original = engine.settings.active_profile.clone();
+    let source = tmp.path().join("source.yaml");
+    std::fs::write(&source,"proxies:\n  - {name: commit-test, type: http, server: 127.0.0.1, port: 1}\nrules:\n  - MATCH,DIRECT\n").unwrap();
+    engine
+        .import("Commit test".into(), source.display().to_string(), None)
+        .await
+        .unwrap();
+    let id = engine.profiles.last().unwrap().id.clone();
+    engine.start().await.unwrap();
+    engine.select_mode("global").await.unwrap();
+    let settings_path = store.root.join("settings.json");
+    let settings_backup = store.root.join("settings.saved");
+    std::fs::rename(&settings_path, &settings_backup).unwrap();
+    std::fs::create_dir(&settings_path).unwrap();
+    assert!(engine.activate(id.clone()).await.is_err());
+    assert_eq!(engine.settings.active_profile, original);
+    assert!(
+        !engine
+            .api
+            .get::<Proxies>("proxies")
+            .await
+            .unwrap()
+            .proxies
+            .contains_key("commit-test")
+    );
+    assert!(engine.select_mode("direct").await.is_err());
+    assert_eq!(engine.poll(Scope::Home).await.unwrap().mode, "global");
+    // A fresh elevated GUI must restore the former core if preferences cannot
+    // be staged, before it attempts to enable TUN.
+    engine.stop().await.unwrap();
+    let elevation = store.root.join("elevation-test.json");
+    std::fs::write(
+        &elevation,
+        serde_json::to_vec(&serde_json::json!({
+            "requested": {"mode":"global", "tun":true, "system_proxy":false, "selectors":[]},
+            "previous": {"mode":"global", "tun":false, "system_proxy":false, "selectors":[]}
+        }))
+        .unwrap(),
+    )
+    .unwrap();
+    assert!(engine.finish_elevation(&elevation).await.is_err());
+    let restored = engine.poll(Scope::Home).await.unwrap();
+    assert!(restored.running);
+    assert_eq!(restored.mode, "global");
+    assert!(!restored.tun);
+    std::fs::remove_dir(&settings_path).unwrap();
+    std::fs::rename(&settings_backup, &settings_path).unwrap();
+    engine.activate(id.clone()).await.unwrap();
+    let previous = std::fs::read(store.profile_path(&id).unwrap()).unwrap();
+    std::fs::write(&source,"proxies:\n  - {name: changed-test, type: http, server: 127.0.0.1, port: 1}\nrules:\n  - MATCH,DIRECT\n").unwrap();
+    let profiles_path = store.root.join("profiles.json");
+    let backup = store.root.join("profiles.saved");
+    std::fs::rename(&profiles_path, &backup).unwrap();
+    std::fs::create_dir(&profiles_path).unwrap();
+    assert!(
+        engine
+            .import(
+                "Commit test".into(),
+                source.display().to_string(),
+                Some(id.clone())
+            )
+            .await
+            .is_err()
+    );
+    assert_eq!(
+        std::fs::read(store.profile_path(&id).unwrap()).unwrap(),
+        previous
+    );
+    assert!(engine.delete_profile(&id).await.is_err());
+    assert_eq!(engine.settings.active_profile.as_ref(), Some(&id));
+    assert_eq!(
+        std::fs::read(store.profile_path(&id).unwrap()).unwrap(),
+        previous
+    );
+    let proxies: Proxies = engine.api.get("proxies").await.unwrap();
+    assert!(proxies.proxies.contains_key("commit-test"));
+    assert!(!proxies.proxies.contains_key("changed-test"));
+    std::fs::remove_dir(&profiles_path).unwrap();
+    std::fs::rename(&backup, &profiles_path).unwrap();
+    // Port changes merge the latest preferences rather than a queued old snapshot.
+    engine
+        .save_settings(Settings {
+            delay_interval_minutes: 10,
+            ..engine.settings.clone()
+        })
+        .await
+        .unwrap();
+    let mut controller = free_port();
+    let mut mixed = free_port();
+    while [engine.settings.controller_port, engine.settings.mixed_port].contains(&controller) {
+        controller = free_port();
+    }
+    while mixed == controller
+        || [engine.settings.controller_port, engine.settings.mixed_port].contains(&mixed)
+    {
+        mixed = free_port();
+    }
+    engine.save_ports(controller, mixed).await.unwrap();
+    assert_eq!(engine.settings.delay_interval_minutes, 10);
+    assert_eq!(engine.settings.run_mode, "global");
+    assert_eq!(engine.settings.active_profile.as_ref(), Some(&id));
+    engine.stop().await.unwrap();
 }

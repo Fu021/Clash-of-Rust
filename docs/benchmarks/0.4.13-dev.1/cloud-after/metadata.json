@@ -1,0 +1,55 @@
+{
+  "source_commit": "a17796b165f5d78454308d8acc2ea4ba410c2647",
+  "benchmark_commit": "a17796b165f5d78454308d8acc2ea4ba410c2647",
+  "version": "0.4.13-dev.1",
+  "profile": "dev",
+  "rows": 50000,
+  "repetitions": 3,
+  "gui_sample_seconds": 10,
+  "interval_ms": 250,
+  "os": "Linux-6.8.0-1064-azure-x86_64-with-glibc2.35",
+  "cpu_count": 4,
+  "rustc": "rustc 1.99.0 (b940084d7 2026-09-28)\nbinary: rustc\ncommit-hash: b940084d7eb6a299eb4bfeb8e34901bc051e7ac4\ncommit-date: 2026-09-28\nhost: x86_64-unknown-linux-gnu\nrelease: 1.99.0\nLLVM version: 23.1.1",
+  "started_at": "2026-10-09T18:23:39.474292+00:00",
+  "instrumentation": "The workflow benchmark example replaces only the example in the selected checkout; application sources are unchanged.",
+  "resources": {
+    "core.json": {
+      "version": "v1.19.32",
+      "system": "linux",
+      "arch": "x64",
+      "source": "https://github.com/MetaCubeX/mihomo/releases/download/v1.19.32/mihomo-linux-amd64-compatible-v1.19.32.gz",
+      "archive_sha256": "ba3ce607747a07f948fc35780e108a4a7c7f552a38b9bd4d115f313ebcb89c20",
+      "exe_sha256": "7a0d59da2e678d56c899a3db996a2ad8963286c4f3634b0451435db248f13fa1"
+    },
+    "geodata.json": {
+      "version": "latest | 2026-10-09T02:23:34Z",
+      "updated": 1791570241,
+      "files": [
+        {
+          "name": "GeoIP.dat",
+          "source": "https://github.com/MetaCubeX/meta-rules-dat/releases/download/latest/geoip.dat",
+          "sha256": "116cc0f03d48991962f7f9cdbbcf53d45d89777f9c3cd1a663210853e5df6093",
+          "size": 16583067
+        },
+        {
+          "name": "GeoSite.dat",
+          "source": "https://github.com/MetaCubeX/meta-rules-dat/releases/download/latest/geosite.dat",
+          "sha256": "7a17130f9fdd19cd0df73b1adacf7d7900f42cf76750507f538f066c37da4a93",
+          "size": 4254514
+        },
+        {
+          "name": "Country.mmdb",
+          "source": "https://github.com/MetaCubeX/meta-rules-dat/releases/download/latest/country.mmdb",
+          "sha256": "ad2a3b90848bccd2065545e295de53b324931f710e0077a1a0fae2b89fddc5e5",
+          "size": 7646119
+        },
+        {
+          "name": "ASN.mmdb",
+          "source": "https://github.com/MetaCubeX/meta-rules-dat/releases/download/latest/GeoLite2-ASN.mmdb",
+          "sha256": "d82d2f39ea82a175a3d63484c8b4723040d134ba1edf4b27d6819c2f96c14a9b",
+          "size": 8969559
+        }
+      ]
+    }
+  }
+}

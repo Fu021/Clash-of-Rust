@@ -164,6 +164,7 @@ fn startup_store() -> anyhow::Result<Store> {
 
 const ACCENT: Color = Color::from_rgb(0.35, 0.77, 0.70);
 const PAGE_SIZE: usize = 60;
+const GROUP_PAGE_SIZE: usize = 4;
 
 fn last_page_offset(total: usize) -> usize {
     total.saturating_sub(1) / PAGE_SIZE * PAGE_SIZE
@@ -239,7 +240,7 @@ impl Page {
 enum Action {
     Refresh,
     Start,
-    Save(Settings),
+    SavePorts(u16, u16),
     Theme(bool),
     Autostart(bool),
     DelayInterval(u32),
@@ -309,11 +310,7 @@ enum Message {
     ToggleGroup(String),
     GroupPage(String, bool),
     GroupDelay(String),
-    GroupDelayDone(
-        Option<String>,
-        String,
-        Result<BTreeMap<String, u32>, String>,
-    ),
+    GroupDelayDone(u64, String, Result<BTreeMap<String, u32>, String>),
     Tray(tray::Command),
     ShowWindow(Option<iced::window::Id>),
     SiteAll,
@@ -321,7 +318,7 @@ enum Message {
     IntervalInput(String),
     SaveInterval,
     PeriodicDelay,
-    PeriodicDone(Option<String>, Result<BTreeMap<String, u32>, String>),
+    PeriodicDone(u64, Result<BTreeMap<String, u32>, String>),
     SiteProbe(String),
     SiteDone(u64, String, Result<ip_check::CheckResult, String>),
     Probe(bool),
@@ -350,6 +347,9 @@ struct App {
     group_offsets: BTreeMap<String, usize>,
     testing_groups: BTreeSet<String>,
     node_delays: BTreeMap<String, u32>,
+    delay_generation: u64,
+    delay_aborters: BTreeMap<String, AbortHandle>,
+    periodic_aborter: Option<AbortHandle>,
     tray: Option<tray::Guard>,
     tray_startup: Option<tray::Startup>,
     tray_close_requested: bool,
@@ -398,8 +398,8 @@ async fn execute(engine: Arc<Mutex<Engine>>, action: Action, scope: Scope) -> Re
                 }
                 Ok("内核已启动".into())
             }
-            Action::Save(settings) => {
-                engine.save_settings(settings).await?;
+            Action::SavePorts(controller, mixed) => {
+                engine.save_ports(controller, mixed).await?;
                 Ok("端口已保存，运行中的内核已自动重启".into())
             }
             Action::Theme(dark) => {
@@ -596,6 +596,9 @@ impl App {
             group_offsets: BTreeMap::new(),
             testing_groups: BTreeSet::new(),
             node_delays: BTreeMap::new(),
+            delay_generation: 0,
+            delay_aborters: BTreeMap::new(),
+            periodic_aborter: None,
             tray,
             tray_startup,
             tray_close_requested: false,
@@ -746,12 +749,17 @@ impl App {
         if matches!(
             action,
             Action::Start
-                | Action::Save(_)
+                | Action::SavePorts(..)
                 | Action::Activate(_)
+                | Action::UpdateProfile(_)
+                | Action::DeleteProfile(_)
+                | Action::UpdateGeo
                 | Action::Mode(_)
                 | Action::ProxyMode(_)
                 | Action::Select(_, _)
         ) {
+            self.cancel_delay_checks();
+            self.node_delays.clear();
             self.cancel_site_checks();
             self.site_results.clear();
         }
@@ -990,7 +998,7 @@ impl App {
                     }
                 }
             }
-            Message::Action(Action::Save(_)) => {
+            Message::Action(Action::SavePorts(..)) => {
                 let ports = self.controller_port.parse::<u16>().and_then(|controller| {
                     self.mixed_port
                         .parse::<u16>()
@@ -998,13 +1006,7 @@ impl App {
                 });
                 match ports {
                     Ok((controller_port, mixed_port)) => {
-                        let settings = Settings {
-                            controller_port,
-                            mixed_port,
-                            dark: self.dark,
-                            ..self.settings.clone()
-                        };
-                        return self.dispatch(Action::Save(settings));
+                        return self.dispatch(Action::SavePorts(controller_port, mixed_port));
                     }
                     Err(_) => {
                         self.error = true;
@@ -1030,6 +1032,7 @@ impl App {
                 if !self.snapshot.running
                     || self.working
                     || self.elevating
+                    || self.periodic_testing
                     || self.testing_groups.len() >= 2
                     || !self.testing_groups.insert(group.clone())
                 {
@@ -1037,20 +1040,32 @@ impl App {
                 }
                 let engine = self.engine.clone().unwrap();
                 let label = group.clone();
-                let profile = self.settings.active_profile.clone();
+                let generation = self.delay_generation;
+                let (handle, registration) = AbortHandle::new_pair();
+                self.delay_aborters.insert(group.clone(), handle);
                 return Task::perform(
                     async move {
-                        let api = engine.lock().await.api.clone();
-                        api.delay_group(&group).await.map_err(|e| e.to_string())
+                        Abortable::new(
+                            async move {
+                                let api = engine.lock().await.api.clone();
+                                api.delay_group(&group).await.map_err(|e| e.to_string())
+                            },
+                            registration,
+                        )
+                        .await
+                        .map_err(|_| "测速已取消".into())
+                        .and_then(|result| result)
                     },
-                    move |result| Message::GroupDelayDone(profile.clone(), label.clone(), result),
+                    move |result| Message::GroupDelayDone(generation, label.clone(), result),
                 );
             }
-            Message::GroupDelayDone(profile, group, result) => {
-                self.testing_groups.remove(&group);
-                if profile != self.settings.active_profile {
+            Message::GroupDelayDone(generation, group, result) => {
+                if generation != self.delay_generation
+                    || self.delay_aborters.remove(&group).is_none()
+                {
                     return Task::none();
                 }
+                self.testing_groups.remove(&group);
                 match result {
                     Ok(delays) => {
                         let good = delays.values().filter(|d| **d > 0).count();
@@ -1068,6 +1083,7 @@ impl App {
                 }
                 return self.dispatch(Action::Refresh);
             }
+
             Message::GroupPage(group, next) => {
                 let offset = self.group_offsets.entry(group).or_default();
                 *offset = if next {
@@ -1100,30 +1116,47 @@ impl App {
                     return Task::none();
                 };
                 self.periodic_testing = true;
-                let profile = self.settings.active_profile.clone();
+                let generation = self.delay_generation;
+                let (handle, registration) = AbortHandle::new_pair();
+                self.periodic_aborter = Some(handle);
                 return Task::perform(
                     async move {
-                        let api = engine.lock().await.api.clone();
-                        api.delay_all_nodes()
-                            .await
-                            .map_err(|error| error.to_string())
+                        Abortable::new(
+                            async move {
+                                let api = engine.lock().await.api.clone();
+                                api.delay_all_nodes()
+                                    .await
+                                    .map_err(|error| error.to_string())
+                            },
+                            registration,
+                        )
+                        .await
+                        .map_err(|_| "测速已取消".into())
+                        .and_then(|result| result)
                     },
-                    move |result| Message::PeriodicDone(profile.clone(), result),
+                    move |result| Message::PeriodicDone(generation, result),
                 );
             }
-            Message::PeriodicDone(profile, result) => {
+            Message::PeriodicDone(generation, result) => {
+                if generation != self.delay_generation || self.periodic_aborter.take().is_none() {
+                    return Task::none();
+                }
                 self.periodic_testing = false;
-                if profile == self.settings.active_profile {
-                    if let Ok(delays) = result {
-                        self.node_delays = delays;
-                    }
-                    if self.page == Page::Proxies {
-                        return self.dispatch(Action::Refresh);
-                    }
+                if let Ok(delays) = result {
+                    self.node_delays = delays;
+                }
+                if self.page == Page::Proxies {
+                    return self.dispatch(Action::Refresh);
                 }
             }
+
             Message::SiteAll => {
-                if !self.snapshot.running || !self.site_busy.is_empty() {
+                if !self.snapshot.running
+                    || self.working
+                    || self.elevating
+                    || self.exiting
+                    || !self.site_busy.is_empty()
+                {
                     return Task::none();
                 }
                 self.site_results.clear();
@@ -1139,6 +1172,9 @@ impl App {
             }
             Message::SiteProbe(url) => {
                 if !self.snapshot.running
+                    || self.working
+                    || self.elevating
+                    || self.exiting
                     || self.site_busy.len() >= 3
                     || !self.site_busy.insert(url.clone())
                 {
@@ -1280,15 +1316,23 @@ impl App {
                     self.profiles = profiles;
                 }
                 self.geo_status = reply.geo_status;
+                if self.snapshot.running && !reply.running {
+                    self.cancel_delay_checks();
+                    self.node_delays.clear();
+                    self.expanded.clear();
+                    self.group_offsets.clear();
+                    self.cancel_site_checks();
+                }
                 self.snapshot.running = reply.running;
                 if let Some(mut snapshot) = reply.snapshot {
                     if reply.scope == Scope::Proxies && snapshot.running {
                         let proxies = &snapshot.proxies.proxies;
-                        self.expanded.retain(|name| proxies.contains_key(name));
+                        self.expanded
+                            .retain(|name| proxies.contains_key(name.as_str()));
                         self.group_offsets
-                            .retain(|name, _| proxies.contains_key(name));
+                            .retain(|name, _| proxies.contains_key(name.as_str()));
                         self.node_delays
-                            .retain(|name, _| proxies.contains_key(name));
+                            .retain(|name, _| proxies.contains_key(name.as_str()));
                     }
                     // Rules are static between explicit refreshes. Keep only the
                     // current page's data, including when an older poll finishes.
@@ -1446,6 +1490,7 @@ impl App {
         if self.exiting {
             return Task::none();
         }
+        self.cancel_delay_checks();
         self.cancel_site_checks();
         self.tray_startup = None;
         if let Some(engine) = self.engine.clone() {
@@ -1470,6 +1515,18 @@ impl App {
             }
         }
         Task::batch(tasks)
+    }
+
+    fn cancel_delay_checks(&mut self) {
+        self.delay_generation = self.delay_generation.wrapping_add(1);
+        for (_, handle) in std::mem::take(&mut self.delay_aborters) {
+            handle.abort();
+        }
+        if let Some(handle) = self.periodic_aborter.take() {
+            handle.abort();
+        }
+        self.testing_groups.clear();
+        self.periodic_testing = false;
     }
 
     fn cancel_site_checks(&mut self) {
@@ -1867,20 +1924,28 @@ impl App {
     fn proxies(&self) -> Element<'_, Message> {
         let query = self.query.to_lowercase();
         let mut list = column![].spacing(8);
-        for (group, proxy) in &self.snapshot.proxies.proxies {
-            if proxy.all.is_empty() {
-                continue;
-            }
+        let groups = self
+            .snapshot
+            .proxies
+            .proxies
+            .iter()
+            .filter(|(group, proxy)| {
+                !proxy.all.is_empty()
+                    && (contains_query(group, &query)
+                        || proxy.all.iter().any(|node| contains_query(node, &query)))
+            });
+        let group_total = groups.clone().count();
+        let group_offset = self
+            .list_offset
+            .min(group_total.saturating_sub(1) / GROUP_PAGE_SIZE * GROUP_PAGE_SIZE);
+        for (group, proxy) in groups.skip(group_offset).take(GROUP_PAGE_SIZE) {
             let group_match = contains_query(group, &query);
             let nodes = proxy
                 .all
                 .iter()
                 .filter(|node| group_match || contains_query(node, &query));
             let total = nodes.clone().count();
-            if total == 0 {
-                continue;
-            }
-            let expanded = self.expanded.contains(group) || !query.is_empty();
+            let expanded = self.expanded.contains(group.as_str()) || !query.is_empty();
             let mut contents = column![
                 aligned_row![
                     button(
@@ -1888,7 +1953,7 @@ impl App {
                             self.label(if expanded { "▼" } else { "▶" })
                                 .size(self.scaled(12)),
                             column![
-                                self.label(group).size(self.scaled(12)),
+                                self.label(group.as_str()).size(self.scaled(12)),
                                 self.label(format!(
                                     "{} · 当前：{} · {} 个节点",
                                     proxy.kind,
@@ -1905,9 +1970,9 @@ impl App {
                     .padding(10)
                     .width(Length::Fill)
                     .style(rounded_text)
-                    .on_press(Message::ToggleGroup(group.clone())),
+                    .on_press(Message::ToggleGroup(group.to_string())),
                     button(
-                        self.label(if self.testing_groups.contains(group) {
+                        self.label(if self.testing_groups.contains(group.as_str()) {
                             "测速中…"
                         } else {
                             "全部测速"
@@ -1920,8 +1985,8 @@ impl App {
                         (self.snapshot.running
                             && !self.working
                             && self.testing_groups.len() < 2
-                            && !self.testing_groups.contains(group))
-                        .then(|| Message::GroupDelay(group.clone()))
+                            && !self.testing_groups.contains(group.as_str()))
+                        .then(|| Message::GroupDelay(group.to_string()))
                     )
                 ]
                 .spacing(8)
@@ -1931,17 +1996,17 @@ impl App {
             if expanded {
                 let offset = self
                     .group_offsets
-                    .get(group)
+                    .get(group.as_str())
                     .copied()
                     .unwrap_or(0)
                     .min(last_page_offset(total));
                 for node in nodes.skip(offset).take(PAGE_SIZE) {
-                    let detail = self.snapshot.proxies.proxies.get(node);
+                    let detail = self.snapshot.proxies.proxies.get(node.as_str());
                     let delay_value = self
                         .node_delays
-                        .get(node)
+                        .get(node.as_str())
                         .copied()
-                        .or_else(|| detail.and_then(|p| p.history.last()).map(|d| d.delay));
+                        .or_else(|| detail.and_then(|p| p.delay));
                     let delay = delay_value
                         .map(|delay| {
                             if delay == 0 {
@@ -1979,12 +2044,12 @@ impl App {
                                     Space::new().width(Length::Fill),
                                     self.action(
                                         "测速",
-                                        Action::Delay(node.clone()),
+                                        Action::Delay(node.to_string()),
                                         self.snapshot.running
                                     ),
                                     self.action(
                                         if selected { "已选择" } else { "选择" },
-                                        Action::Select(group.clone(), node.clone()),
+                                        Action::Select(group.to_string(), node.to_string()),
                                         self.snapshot.running
                                             && proxy.kind == "Selector"
                                             && !selected
@@ -2009,11 +2074,11 @@ impl App {
                             .color(self.foreground()),
                             Space::new().width(Length::Fill),
                             button(self.label("上一页")).on_press_maybe(
-                                (offset > 0).then(|| Message::GroupPage(group.clone(), false))
+                                (offset > 0).then(|| Message::GroupPage(group.to_string(), false))
                             ),
                             button(self.label("下一页")).on_press_maybe(
                                 (offset + PAGE_SIZE < total)
-                                    .then(|| Message::GroupPage(group.clone(), true))
+                                    .then(|| Message::GroupPage(group.to_string(), true))
                             )
                         ]
                         .spacing(7),
@@ -2035,7 +2100,8 @@ impl App {
         }
         column![
             self.search("搜索策略组或节点 · 搜索时自动展开"),
-            scrollable(list).height(Length::Fill)
+            scrollable(list).height(Length::Fill),
+            self.pager(group_total, group_offset, GROUP_PAGE_SIZE)
         ]
         .spacing(8)
         .into()
@@ -2283,13 +2349,13 @@ impl App {
             query.is_empty()
                 || query.split_whitespace().all(|word| {
                     [
-                        &c.metadata.host,
-                        &c.metadata.destination_ip,
-                        &c.metadata.process,
-                        &c.rule,
+                        c.metadata.host.as_ref(),
+                        c.metadata.destination_ip.as_ref(),
+                        c.metadata.process.as_str(),
+                        c.rule.as_str(),
                     ]
                     .into_iter()
-                    .chain(c.chains.iter())
+                    .chain(c.chains.iter().map(|name| name.as_str()))
                     .any(|field| contains_query(field, word))
                 })
         });
@@ -2334,7 +2400,7 @@ impl App {
                         Space::new().width(Length::Fill),
                         self.action(
                             "关闭",
-                            Action::Close(connection.id.clone()),
+                            Action::Close(connection.id.to_string()),
                             self.snapshot.running
                         )
                     ]
@@ -2367,7 +2433,7 @@ impl App {
             .filter(|(_, r)| {
                 query.is_empty()
                     || query.split_whitespace().all(|word| {
-                        [&r.kind, &r.payload, &r.proxy]
+                        [r.kind.as_str(), r.payload.as_ref(), r.proxy.as_str()]
                             .into_iter()
                             .any(|field| contains_query(field, word))
                     })
@@ -2383,11 +2449,13 @@ impl App {
                             .size(self.scaled(10))
                             .color(self.foreground())
                             .width(50),
-                        self.label(&rule.kind).size(self.scaled(11)).width(150),
-                        self.label(&rule.payload)
+                        self.label(rule.kind.as_str())
+                            .size(self.scaled(11))
+                            .width(150),
+                        self.label(rule.payload.as_ref())
                             .size(self.scaled(11))
                             .width(Length::Fill),
-                        self.label(&rule.proxy)
+                        self.label(rule.proxy.as_str())
                             .size(self.scaled(11))
                             .color(ACCENT)
                             .width(160)
@@ -2408,6 +2476,10 @@ impl App {
     }
 
     fn list_pager(&self, total: usize, offset: usize) -> Element<'_, Message> {
+        self.pager(total, offset, PAGE_SIZE)
+    }
+
+    fn pager(&self, total: usize, offset: usize, page_size: usize) -> Element<'_, Message> {
         aligned_row![
             self.label(if total == 0 {
                 "0 条".into()
@@ -2416,16 +2488,16 @@ impl App {
                     "{} 条 · {}–{}",
                     total,
                     offset + 1,
-                    (offset + PAGE_SIZE).min(total)
+                    (offset + page_size).min(total)
                 )
             })
             .size(self.scaled(10)),
             Space::new().width(Length::Fill),
             button(self.label("上一页")).on_press_maybe(
-                (offset > 0).then_some(Message::ListPage(offset.saturating_sub(PAGE_SIZE)))
+                (offset > 0).then_some(Message::ListPage(offset.saturating_sub(page_size)))
             ),
             button(self.label("下一页")).on_press_maybe(
-                (offset + PAGE_SIZE < total).then_some(Message::ListPage(offset + PAGE_SIZE))
+                (offset + page_size < total).then_some(Message::ListPage(offset + page_size))
             )
         ]
         .spacing(8)
@@ -2587,7 +2659,7 @@ impl App {
         if self.ports_dirty() {
             ports = ports.push(self.action(
                 "保存设置并重启内核",
-                Action::Save(self.settings.clone()),
+                Action::SavePorts(0, 0),
                 self.testing_groups.is_empty(),
             ));
         }
@@ -2858,6 +2930,37 @@ mod memory_tests {
     use super::*;
 
     #[test]
+    fn proxy_widget_count_is_bounded_across_many_expanded_groups() {
+        fn nodes(groups: usize) -> usize {
+            let mut app = App::with_engine(Err(anyhow::anyhow!("view test")), None).0;
+            let mut proxies = serde_json::Map::new();
+            let names: Vec<_> = (0..100).map(|i| format!("node-{i}")).collect();
+            for name in &names {
+                proxies.insert(name.clone(), serde_json::json!({"type":"HTTP"}));
+            }
+            for group in 0..groups {
+                proxies.insert(
+                    format!("group-{group}"),
+                    serde_json::json!({"type":"Selector","now":"node-0","all":names}),
+                );
+            }
+            app.snapshot.proxies =
+                serde_json::from_value(serde_json::json!({"proxies":proxies})).unwrap();
+            app.query = "node-".into();
+            let element = app.proxies();
+            let children = element.as_widget().children();
+            let mut pending: Vec<_> = children.iter().collect();
+            let mut count = 0;
+            while let Some(tree) = pending.pop() {
+                count += 1;
+                pending.extend(tree.children.iter());
+            }
+            count
+        }
+        assert_eq!(nodes(5), nodes(500));
+    }
+
+    #[test]
     fn pagination_bounds_rows_without_losing_the_last_page() {
         for (total, expected) in [
             (0, 0),
@@ -2883,5 +2986,77 @@ mod memory_tests {
         assert!(contains_query("École", "école"));
         assert!(contains_query("", ""));
         assert!(!contains_query("short", "much longer"));
+    }
+}
+
+#[cfg(test)]
+mod async_state_tests {
+    use super::*;
+    fn app() -> App {
+        App::with_engine(Err(anyhow::anyhow!("state test")), None).0
+    }
+    #[test]
+    fn late_group_result_cannot_remove_new_work_or_restore_old_delays() {
+        let mut app = app();
+        let (old, _) = AbortHandle::new_pair();
+        let old_watch = old.clone();
+        app.delay_aborters.insert("group".into(), old);
+        let obsolete = app.delay_generation;
+        app.cancel_delay_checks();
+        assert!(old_watch.is_aborted());
+        let (new, _) = AbortHandle::new_pair();
+        app.delay_aborters.insert("group".into(), new);
+        app.testing_groups.insert("group".into());
+        let _ = app.update(Message::GroupDelayDone(
+            obsolete,
+            "group".into(),
+            Ok(BTreeMap::from([("node".into(), 999)])),
+        ));
+        assert!(app.testing_groups.contains("group"));
+        assert!(app.node_delays.is_empty());
+        let _ = app.update(Message::GroupDelayDone(
+            app.delay_generation,
+            "group".into(),
+            Ok(BTreeMap::from([("node".into(), 42)])),
+        ));
+        assert!(app.testing_groups.is_empty());
+        assert_eq!(app.node_delays["node"], 42);
+    }
+    #[test]
+    fn late_periodic_result_cannot_replace_current_run() {
+        let mut app = app();
+        let obsolete = app.delay_generation;
+        app.cancel_delay_checks();
+        let (handle, _) = AbortHandle::new_pair();
+        app.periodic_aborter = Some(handle);
+        app.periodic_testing = true;
+        let _ = app.update(Message::PeriodicDone(
+            obsolete,
+            Ok(BTreeMap::from([("node".into(), 999)])),
+        ));
+        assert!(app.periodic_testing);
+        assert!(app.node_delays.is_empty());
+        let _ = app.update(Message::PeriodicDone(
+            app.delay_generation,
+            Ok(BTreeMap::from([("node".into(), 42)])),
+        ));
+        assert!(!app.periodic_testing);
+        assert_eq!(app.node_delays["node"], 42);
+    }
+    #[test]
+    fn queued_port_save_contains_only_ports() {
+        let mut app = app();
+        app.busy = true;
+        app.controller_port = "9999".into();
+        app.mixed_port = "8888".into();
+        let _ = app.update(Message::Action(Action::SavePorts(0, 0)));
+        app.settings.run_mode = "global".into();
+        app.settings.delay_interval_minutes = 10;
+        assert!(matches!(
+            app.queued_actions.pop_front(),
+            Some(Action::SavePorts(9999, 8888))
+        ));
+        assert_eq!(app.settings.run_mode, "global");
+        assert_eq!(app.settings.delay_interval_minutes, 10);
     }
 }

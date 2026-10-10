@@ -68,7 +68,7 @@ jobs:
           assert 'host: ${{ matrix.target }}' in subprocess.check_output(['rustc', '-vV'], text=True)
           with open(os.environ['GITHUB_OUTPUT'], 'a') as output:
               output.write('day=' + datetime.datetime.now(datetime.timezone.utc).strftime('%Y-%m-%d') + '\n')
-      - uses: actions/cache@v4
+      - uses: actions/cache@v5
         with:
           path: |
             bin
