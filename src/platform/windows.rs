@@ -373,7 +373,7 @@ fn create_show_event(name: &str) -> Result<Handle> {
     {
         return Err(std::io::Error::last_os_error().into());
     }
-    let mut attributes = SECURITY_ATTRIBUTES {
+    let attributes = SECURITY_ATTRIBUTES {
         nLength: std::mem::size_of::<SECURITY_ATTRIBUTES>() as u32,
         lpSecurityDescriptor: descriptor,
         bInheritHandle: 0,
@@ -381,7 +381,7 @@ fn create_show_event(name: &str) -> Result<Handle> {
     let handle = unsafe {
         // Interactive users are granted signal/wait rights by the DACL above.
         // Request those rights rather than CreateEventW's EVENT_ALL_ACCESS.
-        CreateEventExW(&mut attributes, wide(name).as_ptr(), 0, 0x100002)
+        CreateEventExW(&attributes, wide(name).as_ptr(), 0, 0x100002)
     };
     let error = std::io::Error::last_os_error();
     unsafe {
