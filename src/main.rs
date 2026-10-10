@@ -316,6 +316,7 @@ enum Message {
     RestartCore,
     CoreReady(Result<CoreHandle, String>),
     DismissNotice,
+    FocusSearch,
     Navigate(Page),
     Query(String),
     NodeSort(NodeSort),
@@ -827,6 +828,21 @@ impl App {
         };
         Subscription::batch([
             polling,
+            iced::keyboard::on_key_press(|key, modifiers| {
+                if modifiers.control() {
+                    if let iced::keyboard::Key::Character(value) = key {
+                        if value.eq_ignore_ascii_case("f") {
+                            return Some(Message::FocusSearch);
+                        }
+                        if let Ok(index) = value.parse::<usize>() {
+                            if (1..=Page::ALL.len()).contains(&index) {
+                                return Some(Message::Navigate(Page::ALL[index - 1]));
+                            }
+                        }
+                    }
+                }
+                None
+            }),
             iced::time::every(update::CHECK_INTERVAL).map(|_| Message::CheckUpdate),
             if self.settings.delay_interval_minutes == 0 {
                 Subscription::none()
@@ -910,6 +926,7 @@ impl App {
 
     fn update(&mut self, message: Message) -> Task<Message> {
         match message {
+            Message::FocusSearch => return iced::widget::operation::focus("page-search"),
             Message::DismissNotice => {
                 self.notice_visible = false;
                 self.updates.failure = None;
@@ -2286,6 +2303,7 @@ impl App {
 
     fn search(&self, placeholder: &'static str) -> Element<'_, Message> {
         text_input(placeholder, &self.query)
+            .id("page-search")
             .style(rounded_input)
             .size(self.scaled(12))
             .on_input(Message::Query)
