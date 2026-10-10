@@ -16,31 +16,10 @@ pub const SUBSCRIPTION_RULES: [&str; 5] = [
     "GEOIP,CN,DIRECT,no-resolve",
 ];
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct RuleOverrides {
-    pub enabled: [bool; 6],
-    pub proxy: String,
-}
-
-impl Default for RuleOverrides {
-    fn default() -> Self {
-        Self {
-            enabled: [false; 6],
-            proxy: "Proxy".into(),
-        }
-    }
-}
-
-impl RuleOverrides {
-    fn validate(&self) -> Result<()> {
-        if self.enabled[5]
-            && (self.proxy.trim().is_empty() || self.proxy.contains([',', '\r', '\n']))
-        {
-            bail!("兜底代理名称不能为空，也不能包含逗号或换行");
-        }
-        Ok(())
-    }
+    pub enabled: [bool; 5],
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -86,7 +65,6 @@ impl Default for Settings {
 
 impl Settings {
     pub fn validate(&self) -> Result<()> {
-        self.rule_overrides.validate()?;
         if !matches!(self.run_mode.as_str(), "rule" | "global" | "direct") {
             bail!("运行模式无效");
         }
@@ -313,21 +291,6 @@ fn apply_rules(map: &mut Mapping, overrides: &RuleOverrides) -> Result<()> {
     if !overrides.enabled.iter().any(|enabled| *enabled) {
         return Ok(());
     }
-    let proxy = overrides.proxy.trim();
-    if overrides.enabled[5] {
-        let named_target = ["proxy-groups", "proxies"].into_iter().any(|key| {
-            map.get(Value::from(key))
-                .and_then(Value::as_sequence)
-                .is_some_and(|entries| {
-                    entries
-                        .iter()
-                        .any(|entry| entry["name"].as_str() == Some(proxy))
-                })
-        });
-        if !named_target && !matches!(proxy, "DIRECT" | "REJECT" | "REJECT-DROP") {
-            bail!("订阅中不存在代理组或节点“{proxy}”，请填写该订阅实际的代理组名称");
-        }
-    }
     let previous = match map.remove(Value::from("rules")) {
         None | Some(Value::Null) => Vec::new(),
         Some(Value::Sequence(rules)) => rules,
@@ -344,7 +307,7 @@ fn apply_rules(map: &mut Mapping, overrides: &RuleOverrides) -> Result<()> {
             }
         }
     };
-    let mut rules = Vec::with_capacity(previous.len() + 6);
+    let mut rules = Vec::with_capacity(previous.len() + SUBSCRIPTION_RULES.len());
     for (index, rule) in SUBSCRIPTION_RULES.iter().enumerate() {
         if overrides.enabled[index] {
             rules.push(Value::from(*rule));
@@ -352,14 +315,6 @@ fn apply_rules(map: &mut Mapping, overrides: &RuleOverrides) -> Result<()> {
     }
     for rule in previous {
         let line = rule.as_str().context("订阅规则必须是字符串")?;
-        if overrides.enabled[5]
-            && line
-                .split(',')
-                .next()
-                .is_some_and(|kind| kind.trim().eq_ignore_ascii_case("MATCH"))
-        {
-            continue;
-        }
         if SUBSCRIPTION_RULES
             .iter()
             .enumerate()
@@ -368,9 +323,6 @@ fn apply_rules(map: &mut Mapping, overrides: &RuleOverrides) -> Result<()> {
             continue;
         }
         rules.push(rule);
-    }
-    if overrides.enabled[5] {
-        rules.push(Value::from(format!("MATCH,{proxy}")));
     }
     map.insert(Value::from("rules"), Value::Sequence(rules));
     Ok(())
@@ -392,20 +344,17 @@ mod tests {
     }
 
     #[test]
-    fn additional_rules_have_priority_and_a_single_final_fallback() {
+    fn additional_rules_have_priority_without_changing_subscription_fallbacks() {
         let raw = "proxies: []\nproxy-groups: [{name: Proxy, type: select, proxies: [DIRECT]}]\nrules:\n  - MATCH,DIRECT\n  - GEOSITE,cn,DIRECT\n  - DOMAIN,example.test,DIRECT\n  - MATCH,Proxy\n";
         let settings = Settings {
-            rule_overrides: RuleOverrides {
-                enabled: [true; 6],
-                proxy: " Proxy ".into(),
-            },
+            rule_overrides: RuleOverrides { enabled: [true; 5] },
             ..Settings::default()
         };
         let config: Value = serde_yaml::from_str(&runtime_config(raw, &settings).unwrap()).unwrap();
         let rules = config["rules"].as_sequence().unwrap();
         let expected: Vec<_> = SUBSCRIPTION_RULES
             .into_iter()
-            .chain(["DOMAIN,example.test,DIRECT", "MATCH,Proxy"])
+            .chain(["MATCH,DIRECT", "DOMAIN,example.test,DIRECT", "MATCH,Proxy"])
             .map(Value::from)
             .collect();
         assert_eq!(*rules, expected);
@@ -421,7 +370,7 @@ mod tests {
     }
 
     #[test]
-    fn individual_rules_preserve_existing_fallback_and_reject_missing_targets() {
+    fn individual_rules_preserve_existing_fallback_and_reject_invalid_rule_lists() {
         let raw = "proxies: []\nrules:\n  - DOMAIN,example.test,DIRECT\n  - MATCH,DIRECT\n";
         for (index, rule) in SUBSCRIPTION_RULES.iter().enumerate() {
             let mut settings = Settings::default();
@@ -431,21 +380,15 @@ mod tests {
             assert_eq!(value["rules"][0].as_str(), Some(*rule));
             assert_eq!(value["rules"][2].as_str(), Some("MATCH,DIRECT"));
         }
-        let mut settings = Settings::default();
-        settings.rule_overrides.enabled[5] = true;
-        assert!(
-            runtime_config(raw, &settings)
-                .unwrap_err()
-                .to_string()
-                .contains("Proxy")
-        );
-        for invalid in ["", "Proxy,REJECT", "Proxy\n"] {
-            settings.rule_overrides.proxy = invalid.into();
-            assert!(runtime_config(raw, &settings).is_err());
-        }
-        settings.rule_overrides.proxy = "DIRECT".into();
-        assert!(runtime_config(raw, &settings).is_ok());
+        let settings = Settings {
+            rule_overrides: RuleOverrides { enabled: [true; 5] },
+            ..Settings::default()
+        };
         assert!(runtime_config("proxies: []\nrules: invalid", &settings).is_err());
+        assert!(runtime_config("proxies: []\nrules: [123]", &settings).is_err());
+        let empty: Value =
+            serde_yaml::from_str(&runtime_config("proxies: []", &settings).unwrap()).unwrap();
+        assert_eq!(empty["rules"].as_sequence().unwrap().len(), 5);
     }
 
     #[test]

@@ -220,7 +220,7 @@ def summarize(output, metadata):
               '| Scene | GUI RSS peak MiB | Core RSS peak MiB | Total PSS peak MiB |', '| --- | ---: | ---: | ---: |']
     scenes = ['home', 'proxies-collapsed', 'proxies-search', 'home-after-proxies']
     if metadata.get('additional_gui_rules'):
-        lines += ['', 'rules-* scenes enable all six subscription overrides with fallback group-0 in a fresh client/core process.', '']
+        lines += ['', 'rules-* scenes enable all five subscription overrides with the subscription fallback unchanged in a fresh client/core process.', '']
         scenes += ['rules-'+scene for scene in scenes.copy()]
     for scene in scenes:
         rows = [json.loads(line) for line in (output/(scene+'.jsonl')).read_text().splitlines()]
@@ -290,7 +290,7 @@ def main():
                        cwd=source, stdout=text, check=True)
     gui_scenes(bundle/'clash-of-rust', benchmark, output, args.seconds, modern_layout)
     if 'pub rule_overrides:' in (source/'src/config.rs').read_text(encoding='utf-8'):
-        overrides = {'enabled': [True]*6, 'proxy': 'group-0'}
+        overrides = {'enabled': [True]*5}
         gui_scenes(bundle/'clash-of-rust', benchmark, output, args.seconds, modern_layout,
                    rule_overrides=overrides, prefix='rules-')
         metadata['additional_gui_rules'] = overrides

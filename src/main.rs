@@ -333,7 +333,6 @@ enum Message {
     ControllerPort(String),
     MixedPort(String),
     RuleToggle(usize, bool),
-    RuleProxy(String),
     WindowWidth(String),
     WindowHeight(String),
     ResetWindowSize,
@@ -1160,11 +1159,6 @@ impl App {
                     && let Some(rule) = self.rule_draft.enabled.get_mut(index)
                 {
                     *rule = enabled;
-                }
-            }
-            Message::RuleProxy(value) => {
-                if !self.working && !self.exiting {
-                    self.rule_draft.proxy = value;
                 }
             }
             Message::WindowWidth(value) => {
@@ -3479,7 +3473,7 @@ impl App {
         let mut rules = column![
             self.title("订阅附加规则"),
             self.caption("勾选后保存，对订阅生效；更新订阅后保留，取消勾选恢复原规则。"),
-            self.caption("直连与广告规则优先匹配；兜底规则放在最后。仅在规则模式下生效。"),
+            self.caption("附加规则优先匹配，保留订阅原有兜底规则；仅在规则模式下生效。"),
         ]
         .spacing(10);
         let labels = [
@@ -3488,16 +3482,11 @@ impl App {
             "私有 IP 直连（Private 兼容）",
             "国内域名直连",
             "国内 IP 直连",
-            "替换兜底规则",
         ];
-        for pair in [0, 1, 2, 3, 4, 5].chunks(2) {
+        for pair in [0, 1, 2, 3, 4].chunks(2) {
             let mut row = aligned_row![].spacing(16);
             for &index in pair {
-                let rule = if index < 5 {
-                    SUBSCRIPTION_RULES[index].to_owned()
-                } else {
-                    format!("MATCH,{}", self.rule_draft.proxy.trim())
-                };
+                let rule = SUBSCRIPTION_RULES[index];
                 row = row.push(
                     column![
                         checkbox(self.rule_draft.enabled[index])
@@ -3514,22 +3503,16 @@ impl App {
                     .width(Length::Fill),
                 );
             }
+            if pair.len() == 1 {
+                row = row.push(Space::new().width(Length::Fill));
+            }
             rules = rules.push(row);
         }
-        rules = rules
-            .push(self.caption("兜底代理：填写订阅中实际存在的代理组或节点名"))
-            .push(
-                text_input("Proxy", &self.rule_draft.proxy)
-                    .size(15)
-                    .padding(9)
-                    .style(rounded_input)
-                    .on_input_maybe((!self.working && !self.exiting).then_some(Message::RuleProxy)),
-            )
-            .push(self.action(
-                "保存并应用规则",
-                Action::RuleOverrides(self.rule_draft.clone()),
-                self.rule_draft != self.settings.rule_overrides,
-            ));
+        rules = rules.push(self.action(
+            "保存并应用规则",
+            Action::RuleOverrides(self.rule_draft.clone()),
+            self.rule_draft != self.settings.rule_overrides,
+        ));
         let updates = column![
             self.label(format!("客户端更新 · 当前版本 {}", clash_of_rust::VERSION)),
             self.label(if self.updates.checking {

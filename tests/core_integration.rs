@@ -58,11 +58,8 @@ async fn subscription_rule_overrides_survive_updates_and_restore_original_rules(
         .unwrap();
     let mut engine = Engine::with_resources(store.clone(), test_resources()).unwrap();
     engine.start().await.unwrap();
-    let overrides = RuleOverrides {
-        enabled: [true; 6],
-        proxy: "Proxy".into(),
-    };
-    // The built-in direct profile remains usable even with a custom fallback enabled.
+    let overrides = RuleOverrides { enabled: [true; 5] };
+    // The built-in direct profile remains usable with subscription overrides enabled.
     engine.save_rule_overrides(overrides.clone()).await.unwrap();
     let source = tmp.path().join("subscription.yaml");
     let raw = "proxies: []\nproxy-groups: [{name: Proxy, type: select, proxies: [DIRECT, REJECT]}]\nrules:\n  - DOMAIN,example.test,DIRECT\n  - MATCH,DIRECT\n";
@@ -95,7 +92,7 @@ async fn subscription_rule_overrides_survive_updates_and_restore_original_rules(
             .last()
             .unwrap()
             .as_str(),
-        Some("MATCH,Proxy")
+        Some("MATCH,DIRECT")
     );
     assert_eq!(
         std::fs::read_to_string(store.profile_path(&id).unwrap()).unwrap(),
@@ -119,11 +116,15 @@ async fn subscription_rule_overrides_survive_updates_and_restore_original_rules(
     );
     assert_eq!(config["rules"].as_sequence().unwrap().len(), 7);
     let previous = std::fs::read_to_string(&path).unwrap();
-    let invalid = RuleOverrides {
-        proxy: "Missing".into(),
-        ..overrides.clone()
-    };
-    assert!(engine.save_rule_overrides(invalid).await.is_err());
+    let profile_path = store.profile_path(&id).unwrap();
+    std::fs::write(&profile_path, "proxies: []\nrules: invalid").unwrap();
+    assert!(
+        engine
+            .save_rule_overrides(RuleOverrides::default())
+            .await
+            .is_err()
+    );
+    std::fs::write(&profile_path, &updated).unwrap();
     assert_eq!(engine.settings.rule_overrides, overrides);
     assert_eq!(store.load_settings().unwrap().rule_overrides, overrides);
     assert_eq!(std::fs::read_to_string(&path).unwrap(), previous);

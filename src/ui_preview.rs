@@ -140,7 +140,7 @@ fn fixture(scene: &str) -> App {
         app.geo_status = "2026-10-10".into();
         app.updates.status = "已是最新版本".into();
         if scene == "settings-rules" {
-            app.rule_draft.enabled = [true; 6];
+            app.rule_draft.enabled = [true; 5];
         }
     } else {
         app.page = Page::Websites;
@@ -239,7 +239,6 @@ fn update(app: &mut App, message: Message) -> Task<Message> {
     match message {
         Message::Query(_)
         | Message::RuleToggle(..)
-        | Message::RuleProxy(_)
         | Message::NodeSort(_)
         | Message::ToggleGroup(_)
         | Message::GroupPage(..)
