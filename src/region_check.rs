@@ -27,18 +27,27 @@ pub async fn check(service: &Service, port: u16) -> Result<CheckResult> {
     let text = generated::execute(&service.id, &mut ctx).await?;
     let mut result = output::parse_output(&text);
     result.millis = ctx.first_response_ms.unwrap_or(0);
+    if service.information_only()
+        && matches!(
+            result.state,
+            State::Confirmed | State::Partial | State::Reachable
+        )
+    {
+        result.state = State::Identified;
+        result.summary = "已获取地区或网络信息".into();
+    }
     if ctx.challenged {
         result.state = State::Unknown;
         result.summary = "验证拦截，未确认".into();
         result
             .detail
             .push_str("；响应包含浏览器验证，不能据此判断地区限制");
-    } else if ctx.failed
-        || result.millis == 0
-        || (service.id == "AIUnlockTest_Claude" && ctx.denied)
-    {
-        result.state = State::Unknown;
+    } else if ctx.failed || result.millis == 0 {
+        result.state = State::Failed;
         result.summary = "请求失败，未确认".into();
+    } else if service.id == "AIUnlockTest_Claude" && ctx.denied {
+        result.state = State::Unknown;
+        result.summary = "请求被拒绝，未确认".into();
     } else if result.state == State::Restricted
         && result.summary == "不可用或受限"
         && matches!(

@@ -1,10 +1,20 @@
 [package]
 name = "clash-of-rust"
-version = "0.4.13-dev.1"
+version = "0.4.13"
 edition = "2024"
 default-run = "clash-of-rust"
 description = "A native Rust desktop client for mihomo"
 license = "GPL-3.0-only"
+
+[features]
+# Screenshot harness only; never enabled for distributed application builds.
+ui-preview = []
+
+[[test]]
+name = "ui_preview"
+path = "tests/ui_preview.rs"
+harness = false
+required-features = ["ui-preview"]
 
 [[bin]]
 name = "clash-tun-launcher"

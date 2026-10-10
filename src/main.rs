@@ -1,12 +1,21 @@
 #![cfg_attr(all(windows, not(debug_assertions)), windows_subsystem = "windows")]
 
+#[path = "presentation.rs"]
 mod presentation;
+#[path = "typography.rs"]
 mod typography;
+#[cfg(feature = "ui-preview")]
+#[path = "ui_preview.rs"]
+pub(crate) mod ui_preview;
 
 use clash_of_rust::{
     config::{Profile, Settings, Store},
     engine::{Engine, ProxyMode, Scope, Snapshot},
-    flags, icons, ip_check, platform, probe, tray, update,
+    flags, icons, ip_check,
+    ip_report::{self, CategoryFilter, RegionFilter, ResultSlot, Status, StatusFilter},
+    platform, probe,
+    proxy_order::{self, NodeSort},
+    tray, update,
 };
 use futures_util::{
     SinkExt,
@@ -14,9 +23,13 @@ use futures_util::{
 };
 use iced::{
     Color, Element, Length, Subscription, Task, Theme,
-    widget::{Space, button, column, container, image, progress_bar, scrollable, text, text_input},
+    widget::{
+        Space, button, column, container, image, pick_list, progress_bar, scrollable, text,
+        text_input,
+    },
 };
 use std::{
+    cell::RefCell,
     collections::{BTreeMap, BTreeSet, VecDeque},
     sync::Arc,
     time::Duration,
@@ -244,6 +257,7 @@ enum Action {
     Theme(bool),
     Autostart(bool),
     DelayInterval(u32),
+    NodeSort(NodeSort),
     Import(String, String),
     Activate(String),
     UpdateProfile(String),
@@ -279,6 +293,14 @@ type DownloadResult = Arc<std::sync::Mutex<Option<Result<update::Downloaded, Str
 enum Message {
     Navigate(Page),
     Query(String),
+    NodeSort(NodeSort),
+    SiteCategory(CategoryFilter),
+    SiteStatus(StatusFilter),
+    SiteRegion(RegionFilter),
+    SiteDetail(usize),
+    SiteSummaryFilter(CategoryFilter, StatusFilter),
+    SiteResetFilters,
+    SiteReportCategories,
     ListPage(usize),
     ProfileName(String),
     ProfileSource(String),
@@ -347,6 +369,8 @@ struct App {
     group_offsets: BTreeMap<String, usize>,
     testing_groups: BTreeSet<String>,
     node_delays: BTreeMap<String, u32>,
+    node_sort: NodeSort,
+    proxy_order: RefCell<BTreeMap<clash_of_rust::api::Text, Vec<usize>>>,
     delay_generation: u64,
     delay_aborters: BTreeMap<String, AbortHandle>,
     periodic_aborter: Option<AbortHandle>,
@@ -356,7 +380,12 @@ struct App {
     site_queue: VecDeque<String>,
     interval_input: String,
     periodic_testing: bool,
-    site_results: Vec<(String, Result<ip_check::CheckResult, String>)>,
+    site_results: Vec<ResultSlot>,
+    site_category: CategoryFilter,
+    site_status: StatusFilter,
+    site_region: RegionFilter,
+    site_detail: Option<usize>,
+    site_report_categories: bool,
     site_generation: u64,
     site_aborters: BTreeMap<String, AbortHandle>,
     site_busy: BTreeSet<String>,
@@ -426,6 +455,14 @@ async fn execute(engine: Arc<Mutex<Engine>>, action: Action, scope: Scope) -> Re
                 };
                 engine.save_settings(settings).await?;
                 Ok("定时测速间隔已保存".into())
+            }
+            Action::NodeSort(node_sort) => {
+                let settings = Settings {
+                    node_sort,
+                    ..engine.settings.clone()
+                };
+                engine.save_settings(settings).await?;
+                Ok("节点排序已保存".into())
             }
             Action::DeleteProfile(id) => {
                 engine.delete_profile(&id).await?;
@@ -566,6 +603,7 @@ impl App {
             None => (None, notice, error),
         };
         let mut app = Self {
+            node_sort: settings.node_sort,
             controller_port: settings.controller_port.to_string(),
             interval_input: settings.delay_interval_minutes.to_string(),
             periodic_testing: false,
@@ -596,6 +634,7 @@ impl App {
             group_offsets: BTreeMap::new(),
             testing_groups: BTreeSet::new(),
             node_delays: BTreeMap::new(),
+            proxy_order: RefCell::new(BTreeMap::new()),
             delay_generation: 0,
             delay_aborters: BTreeMap::new(),
             periodic_aborter: None,
@@ -604,6 +643,11 @@ impl App {
             tray_close_requested: false,
             site_queue: VecDeque::new(),
             site_results: vec![],
+            site_category: CategoryFilter::All,
+            site_status: StatusFilter::All,
+            site_region: RegionFilter::All,
+            site_detail: None,
+            site_report_categories: false,
             site_generation: 0,
             site_aborters: BTreeMap::new(),
             site_busy: BTreeSet::new(),
@@ -760,8 +804,10 @@ impl App {
         ) {
             self.cancel_delay_checks();
             self.node_delays.clear();
+            self.proxy_order.get_mut().clear();
             self.cancel_site_checks();
             self.site_results.clear();
+            self.reset_site_filters();
         }
         self.busy = true;
         self.working = !matches!(action, Action::Refresh);
@@ -889,12 +935,59 @@ impl App {
                 self.query.clear();
                 self.list_offset = 0;
                 self.snapshot.retain_scope(page.scope());
+                self.proxy_order.get_mut().clear();
+                self.site_detail = None;
                 return self.dispatch(Action::Refresh);
             }
             Message::Query(value) => {
                 self.query = value;
                 self.group_offsets.clear();
                 self.list_offset = 0;
+                self.proxy_order.get_mut().clear();
+                self.site_detail = None;
+            }
+            Message::NodeSort(mode) => {
+                self.node_sort = mode;
+                self.group_offsets.clear();
+                self.proxy_order.get_mut().clear();
+                return self.dispatch(Action::NodeSort(mode));
+            }
+            Message::SiteCategory(category) => {
+                self.site_category = category;
+                self.list_offset = 0;
+                self.site_detail = None;
+            }
+            Message::SiteStatus(status) => {
+                self.site_status = status;
+                self.list_offset = 0;
+                self.site_detail = None;
+            }
+            Message::SiteRegion(region) => {
+                self.site_region = region;
+                self.list_offset = 0;
+                self.site_detail = None;
+            }
+            Message::SiteSummaryFilter(category, status) => {
+                self.reset_site_filters();
+                self.list_offset = 0;
+                self.query.clear();
+                self.site_category = category;
+                self.site_status = status;
+            }
+            Message::SiteResetFilters => {
+                self.reset_site_filters();
+                self.list_offset = 0;
+                self.query.clear();
+            }
+            Message::SiteDetail(index) => {
+                self.site_detail = if self.site_detail == Some(index) {
+                    None
+                } else {
+                    Some(index)
+                };
+            }
+            Message::SiteReportCategories => {
+                self.site_report_categories = !self.site_report_categories;
             }
             Message::ListPage(offset) => self.list_offset = offset,
             Message::ProfileName(value) => self.profile_name = value,
@@ -1015,6 +1108,7 @@ impl App {
                 }
             }
             Message::Action(action) => {
+                self.proxy_order.get_mut().clear();
                 if let Action::Delay(node) = &action {
                     self.node_delays.remove(node);
                 }
@@ -1075,6 +1169,7 @@ impl App {
                         );
                         self.error = false;
                         self.node_delays.extend(delays);
+                        self.proxy_order.get_mut().clear();
                     }
                     Err(error) => {
                         self.notice = format!("{group} 测速失败：{error}");
@@ -1144,6 +1239,7 @@ impl App {
                 self.periodic_testing = false;
                 if let Ok(delays) = result {
                     self.node_delays = delays;
+                    self.proxy_order.get_mut().clear();
                 }
                 if self.page == Page::Proxies {
                     return self.dispatch(Action::Refresh);
@@ -1160,6 +1256,8 @@ impl App {
                     return Task::none();
                 }
                 self.site_results.clear();
+                self.reset_site_filters();
+                self.list_offset = 0;
                 self.site_generation = self.site_generation.wrapping_add(1);
                 self.site_queue = ip_check::services()
                     .iter()
@@ -1201,8 +1299,14 @@ impl App {
                 }
                 self.site_busy.remove(&url);
                 self.site_aborters.remove(&url);
-                self.site_results.retain(|(target, _)| target != &url);
-                self.site_results.push((url, result));
+                if let Some(index) = ip_check::services()
+                    .iter()
+                    .position(|service| service.id == url)
+                {
+                    self.site_results
+                        .resize_with(ip_check::services().len(), || None);
+                    self.site_results[index] = Some(result);
+                }
                 return self.start_site_queue();
             }
             Message::Tray(command) => {
@@ -1319,6 +1423,7 @@ impl App {
                 if self.snapshot.running && !reply.running {
                     self.cancel_delay_checks();
                     self.node_delays.clear();
+                    self.proxy_order.get_mut().clear();
                     self.expanded.clear();
                     self.group_offsets.clear();
                     self.cancel_site_checks();
@@ -1326,6 +1431,7 @@ impl App {
                 self.snapshot.running = reply.running;
                 if let Some(mut snapshot) = reply.snapshot {
                     if reply.scope == Scope::Proxies && snapshot.running {
+                        self.proxy_order.get_mut().clear();
                         let proxies = &snapshot.proxies.proxies;
                         self.expanded
                             .retain(|name| proxies.contains_key(name.as_str()));
@@ -1938,13 +2044,15 @@ impl App {
         let group_offset = self
             .list_offset
             .min(group_total.saturating_sub(1) / GROUP_PAGE_SIZE * GROUP_PAGE_SIZE);
-        for (group, proxy) in groups.skip(group_offset).take(GROUP_PAGE_SIZE) {
+        let visible_groups: Vec<_> = groups.skip(group_offset).take(GROUP_PAGE_SIZE).collect();
+        let mut orders = self.proxy_order.borrow_mut();
+        orders.retain(|name, _| {
+            visible_groups.iter().any(|(group, _)| {
+                *group == name && (self.expanded.contains(name.as_str()) || !query.is_empty())
+            })
+        });
+        for (group, proxy) in visible_groups {
             let group_match = contains_query(group, &query);
-            let nodes = proxy
-                .all
-                .iter()
-                .filter(|node| group_match || contains_query(node, &query));
-            let total = nodes.clone().count();
             let expanded = self.expanded.contains(group.as_str()) || !query.is_empty();
             let mut contents = column![
                 aligned_row![
@@ -1994,19 +2102,25 @@ impl App {
             ]
             .spacing(4);
             if expanded {
+                let indices = orders.entry(group.clone()).or_insert_with(|| {
+                    proxy_order::sorted_indices(
+                        &proxy.all,
+                        self.node_sort,
+                        |node| self.node_delay(node),
+                        |node| group_match || contains_query(node, &query),
+                    )
+                });
+                let total = indices.len();
                 let offset = self
                     .group_offsets
                     .get(group.as_str())
                     .copied()
                     .unwrap_or(0)
                     .min(last_page_offset(total));
-                for node in nodes.skip(offset).take(PAGE_SIZE) {
+                for &index in indices.iter().skip(offset).take(PAGE_SIZE) {
+                    let node = &proxy.all[index];
                     let detail = self.snapshot.proxies.proxies.get(node.as_str());
-                    let delay_value = self
-                        .node_delays
-                        .get(node.as_str())
-                        .copied()
-                        .or_else(|| detail.and_then(|p| p.delay));
+                    let delay_value = self.node_delay(node);
                     let delay = delay_value
                         .map(|delay| {
                             if delay == 0 {
@@ -2099,7 +2213,14 @@ impl App {
             );
         }
         column![
-            self.search("搜索策略组或节点 · 搜索时自动展开"),
+            aligned_row![
+                self.search("搜索策略组或节点 · 搜索时自动展开"),
+                pick_list(NodeSort::ALL, Some(self.node_sort), Message::NodeSort)
+                    .text_size(self.scaled(11))
+                    .padding(7)
+                    .width(185)
+            ]
+            .spacing(8),
             scrollable(list).height(Length::Fill),
             self.pager(group_total, group_offset, GROUP_PAGE_SIZE)
         ]
@@ -2107,61 +2228,259 @@ impl App {
         .into()
     }
 
+    fn node_delay(&self, name: &str) -> Option<u32> {
+        self.node_delays.get(name).copied().or_else(|| {
+            self.snapshot
+                .proxies
+                .proxies
+                .get(name)
+                .and_then(|proxy| proxy.delay)
+        })
+    }
+
+    fn reset_site_filters(&mut self) {
+        self.site_category = CategoryFilter::All;
+        self.site_status = StatusFilter::All;
+        self.site_region = RegionFilter::All;
+        self.site_detail = None;
+    }
+
+    fn site_result(&self, index: usize) -> Option<&Result<ip_check::CheckResult, String>> {
+        self.site_results.get(index).and_then(Option::as_ref)
+    }
+
+    fn site_matches(&self, index: usize, query: &str) -> bool {
+        let service = &ip_check::services()[index];
+        let result = self.site_result(index);
+        if let CategoryFilter::Group(group) = self.site_category
+            && service.group != group
+        {
+            return false;
+        }
+        if let StatusFilter::Status(status) = self.site_status
+            && Status::of(result) != status
+        {
+            return false;
+        }
+        match self.site_region {
+            RegionFilter::All => {}
+            RegionFilter::Unidentified if ip_report::region(result).is_some() => return false,
+            RegionFilter::Country(code) if ip_report::region(result) != Some(code) => return false,
+            _ => {}
+        }
+        contains_query(&service.name, query)
+            || contains_query(&service.group, query)
+            || match result {
+                Some(Ok(result)) => {
+                    contains_query(&result.summary, query) || contains_query(&result.country, query)
+                }
+                Some(Err(error)) => {
+                    contains_query("超时或失败", query) || contains_query(error, query)
+                }
+                None => contains_query("未检测 等待检测 检测中", query),
+            }
+    }
+
+    fn site_status_color(&self, status: Status) -> Color {
+        match status {
+            Status::Available | Status::Identified => ACCENT,
+            Status::Restricted | Status::Failed => latency_color(0),
+            Status::Partial | Status::Reachable | Status::Unknown => latency_color(500),
+            Status::Untested => self.foreground(),
+        }
+    }
+
+    fn site_report(&self, report: &ip_report::Report, region_count: usize) -> Element<'_, Message> {
+        let completed = report.totals.completed();
+        let compact = self.window_height.parse::<u16>().unwrap_or(700) < 560;
+        let show_categories = !compact || self.site_report_categories;
+        let mut status_row = aligned_row![].spacing(5);
+        for status in Status::ALL {
+            let count = report.totals.count(status);
+            if count == 0 {
+                continue;
+            }
+            status_row = status_row.push(
+                button(
+                    self.label(format!("{status} {count}"))
+                        .size(self.scaled(10))
+                        .color(self.site_status_color(status)),
+                )
+                .padding([4, 7])
+                .style(rounded_secondary)
+                .on_press(Message::SiteSummaryFilter(
+                    CategoryFilter::All,
+                    StatusFilter::Status(status),
+                )),
+            );
+        }
+        let mut categories = column![].spacing(5);
+        for pair in report.categories.chunks(2).filter(|_| show_categories) {
+            let mut row = aligned_row![].spacing(8);
+            for category in pair {
+                let mut states = aligned_row![].spacing(4);
+                for status in Status::ALL {
+                    let count = category.counts.count(status);
+                    if count == 0 {
+                        continue;
+                    }
+                    states = states.push(
+                        button(
+                            self.label(format!("{status} {count}"))
+                                .size(self.scaled(9))
+                                .color(self.site_status_color(status)),
+                        )
+                        .padding([2, 4])
+                        .style(rounded_text)
+                        .on_press(Message::SiteSummaryFilter(
+                            CategoryFilter::Group(category.name),
+                            StatusFilter::Status(status),
+                        )),
+                    );
+                }
+                row = row.push(
+                    container(
+                        column![
+                            button(
+                                self.label(format!(
+                                    "{} · {}/{}",
+                                    category.name,
+                                    category.counts.completed(),
+                                    category.counts.total()
+                                ))
+                                .size(self.scaled(11))
+                            )
+                            .padding([2, 4])
+                            .style(rounded_text)
+                            .on_press(Message::SiteSummaryFilter(
+                                CategoryFilter::Group(category.name),
+                                StatusFilter::All
+                            )),
+                            states.wrap()
+                        ]
+                        .spacing(2),
+                    )
+                    .width(Length::FillPortion(1)),
+                );
+            }
+            if pair.len() == 1 {
+                row = row.push(Space::new().width(Length::FillPortion(1)));
+            }
+            categories = categories.push(row);
+        }
+        let toggle: Element<'_, Message> = if compact {
+            button(
+                self.label(if show_categories {
+                    "收起分类"
+                } else {
+                    "分类总结"
+                })
+                .size(self.scaled(10)),
+            )
+            .padding([3, 5])
+            .style(rounded_text)
+            .on_press(Message::SiteReportCategories)
+            .into()
+        } else {
+            Space::new().width(0).into()
+        };
+        let mut body = column![
+            aligned_row![
+                self.label(if completed == report.totals.total() {
+                    "检测总结报告"
+                } else {
+                    "检测总结报告 · 部分完成"
+                })
+                .size(self.scaled(13))
+                .color(ACCENT),
+                Space::new().width(Length::Fill),
+                self.label(if compact {
+                    format!("{completed} / {}", report.totals.total())
+                } else {
+                    format!(
+                        "完成 {completed} / {} · 点击数量筛选下方结果",
+                        report.totals.total()
+                    )
+                })
+                .size(self.scaled(10)),
+                toggle
+            ]
+            .spacing(5),
+            status_row.wrap()
+        ]
+        .spacing(6);
+        if !compact {
+            let exit = self.site_result(0).and_then(|result| result.as_ref().ok());
+            body = body.push(
+                self.label(format!(
+                    "出口 IP：{} · 出口地区：{} · 各平台识别到 {} 个地区",
+                    exit.map_or("未获取", |result| result.summary.as_str()),
+                    exit.map_or("未获取", |result| flags::country_text(&result.country)),
+                    region_count
+                ))
+                .size(self.scaled(10)),
+            );
+        }
+        if show_categories {
+            body = body.push(scrollable(categories).height(if compact { 70 } else { 120 }));
+        }
+        if !compact {
+            body = body.push(
+                self.label("信息识别与平台可用分别统计；分类是服务归属，识别地区是本次结果。")
+                    .size(self.scaled(9))
+                    .color(self.foreground()),
+            );
+        }
+        container(body)
+            .padding(9)
+            .style(panel)
+            .width(Length::Fill)
+            .into()
+    }
+
     fn websites(&self) -> Element<'_, Message> {
         let query = self.query.to_lowercase();
         let services = ip_check::services();
+        let report = ip_report::Report::from_results(&self.site_results);
+        let codes: BTreeSet<_> = self
+            .site_results
+            .iter()
+            .filter_map(|result| ip_report::region(result.as_ref()))
+            .collect();
+        let matching = (0..services.len()).filter(|&index| self.site_matches(index, &query));
+        let visible = matching.clone().count();
+        let offset = self.list_offset.min(last_page_offset(visible));
         let mut list = column![].spacing(4);
-        let mut visible = 0;
-        for (index, service) in services.iter().enumerate() {
-            let result = self
-                .site_results
-                .iter()
-                .find(|(id, _)| id == &service.id)
-                .map(|(_, result)| result);
+        for index in matching.skip(offset).take(PAGE_SIZE) {
+            let service = &services[index];
+            let result = self.site_result(index);
             let busy = self.site_busy.contains(&service.id);
             let queued = self.site_queue.contains(&service.id);
+            let result_color = self.site_status_color(Status::of(result));
             let (summary, country, delay, color) = match result {
                 Some(Ok(result)) => (
-                    result.summary.clone(),
-                    result.country.clone(),
+                    result.summary.as_str(),
+                    result.country.as_str(),
                     format!("{} ms", result.millis),
-                    match result.state {
-                        ip_check::State::Confirmed => ACCENT,
-                        ip_check::State::Reachable => ACCENT,
-                        ip_check::State::Restricted => latency_color(0),
-                        ip_check::State::Unknown => latency_color(500),
-                    },
+                    result_color,
                 ),
-                Some(Err(_)) => (
-                    "超时或失败".into(),
-                    "未获取".into(),
-                    "—".into(),
-                    latency_color(0),
-                ),
-                None => ("未检测".into(), "—".into(), "—".into(), self.foreground()),
+                Some(Err(_)) => ("超时或失败", "未获取", "—".into(), latency_color(0)),
+                None => ("未检测", "—", "—".into(), self.foreground()),
             };
-            if !format!("{} {} {} {}", service.name, service.group, summary, country)
-                .to_lowercase()
-                .contains(&query)
-            {
-                continue;
-            }
-            visible += 1;
             let state = if busy {
-                "检测中…".to_owned()
+                "检测中…"
             } else if queued {
-                "等待检测".to_owned()
+                "等待检测"
             } else {
                 summary
             };
-            let (country_text, flag) = flags::label(&country);
+            let (country_text, flag) = flags::label(country);
             let mut country_row = aligned_row![].spacing(4);
             if let Some(flag) = flag {
                 country_row = country_row.push(image(flag).width(20).height(20));
             }
-            country_row =
-                country_row.push(self.label(country_text.to_owned()).size(self.scaled(10)));
-            let entry = column![
+            country_row = country_row.push(self.label(country_text).size(self.scaled(10)));
+            let mut entry = column![
                 aligned_row![
                     self.label(format!("{:03}", index + 1))
                         .size(self.scaled(10))
@@ -2187,22 +2506,44 @@ impl App {
                             Some(Err(_)) if !busy && !queued => latency_color(0),
                             _ => self.foreground(),
                         })
-                        .width(70)
+                        .width(70),
+                    button(
+                        self.label(if self.site_detail == Some(index) {
+                            "收起"
+                        } else {
+                            "详情"
+                        })
+                        .size(self.scaled(10))
+                    )
+                    .padding([3, 5])
+                    .style(rounded_text)
+                    .on_press_maybe(result.is_some().then_some(Message::SiteDetail(index)))
                 ]
                 .spacing(6)
             ]
             .spacing(6);
+            if self.site_detail == Some(index) {
+                let detail = match result {
+                    Some(Ok(result)) => Some(result.detail.as_str()),
+                    Some(Err(error)) => Some(error.as_str()),
+                    None => None,
+                };
+                if let Some(detail) = detail {
+                    entry =
+                        entry.push(self.label(detail).size(self.scaled(10)).width(Length::Fill));
+                }
+            }
             list = list.push(container(entry).padding(8).style(panel));
         }
         if visible == 0 {
             list = list.push(self.label("没有匹配的检测项目。"));
         }
-        column![
+        let mut page = column![
             aligned_row![
                 self.search("搜索平台、地区或检测结果"),
                 self.label(format!(
                     "已完成 {} / {}",
-                    self.site_results.len(),
+                    report.totals.completed(),
                     services.len()
                 ))
                 .size(self.scaled(10)),
@@ -2223,7 +2564,53 @@ impl App {
                             .then_some(Message::SiteCancel)
                     )
             ]
-            .spacing(8),
+            .spacing(8)
+        ]
+        .spacing(8);
+        if report.totals.completed() > 0 && self.site_busy.is_empty() && self.site_queue.is_empty()
+        {
+            page = page.push(self.site_report(&report, codes.len()));
+        }
+        let categories: Vec<_> = std::iter::once(CategoryFilter::All)
+            .chain(
+                report
+                    .categories
+                    .iter()
+                    .map(|category| CategoryFilter::Group(category.name)),
+            )
+            .collect();
+        let statuses: Vec<_> = std::iter::once(StatusFilter::All)
+            .chain(Status::ALL.into_iter().map(StatusFilter::Status))
+            .collect();
+        let regions: Vec<_> = [RegionFilter::All, RegionFilter::Unidentified]
+            .into_iter()
+            .chain(codes.into_iter().map(RegionFilter::Country))
+            .collect();
+        page = page.push(
+            aligned_row![
+                pick_list(categories, Some(self.site_category), Message::SiteCategory)
+                    .text_size(self.scaled(10))
+                    .padding(5)
+                    .width(110),
+                pick_list(statuses, Some(self.site_status), Message::SiteStatus)
+                    .text_size(self.scaled(10))
+                    .padding(5)
+                    .width(150),
+                pick_list(regions, Some(self.site_region), Message::SiteRegion)
+                    .text_size(self.scaled(10))
+                    .padding(5)
+                    .width(150),
+                button(self.label("清除筛选").size(self.scaled(10)))
+                    .padding([5, 8])
+                    .style(rounded_secondary)
+                    .on_press(Message::SiteResetFilters),
+                Space::new().width(Length::Fill),
+                self.label(format!("匹配 {visible} 项"))
+                    .size(self.scaled(10))
+            ]
+            .spacing(6),
+        );
+        page.push(
             aligned_row![
                 self.label("序号").size(self.scaled(10)).width(34),
                 self.label("平台 / IP")
@@ -2236,13 +2623,14 @@ impl App {
                 self.label("识别地区")
                     .size(self.scaled(10))
                     .width(Length::FillPortion(2)),
-                self.label("延迟").size(self.scaled(10)).width(70)
+                self.label("延迟").size(self.scaled(10)).width(70),
+                Space::new().width(43)
             ]
             .spacing(6)
             .padding([0, 8]),
-            scrollable(list).height(Length::Fill)
-        ]
-        .spacing(8)
+        )
+        .push(scrollable(list).height(Length::Fill))
+        .push(self.pager(visible, offset, PAGE_SIZE))
         .into()
     }
 
@@ -3058,5 +3446,133 @@ mod async_state_tests {
         ));
         assert_eq!(app.settings.run_mode, "global");
         assert_eq!(app.settings.delay_interval_minutes, 10);
+    }
+}
+
+#[cfg(test)]
+mod dev2_tests {
+    use super::*;
+
+    fn app() -> App {
+        App::with_engine(Err(anyhow::anyhow!("isolated dev.2 test")), None).0
+    }
+
+    fn result(state: ip_check::State, country: &str) -> Result<ip_check::CheckResult, String> {
+        Ok(ip_check::CheckResult {
+            state,
+            summary: "可用".into(),
+            country: country.into(),
+            millis: 20,
+            detail: "test evidence".into(),
+        })
+    }
+
+    #[test]
+    fn catalog_slots_replace_results_and_ignore_cancelled_generations() {
+        let mut app = app();
+        let id = ip_check::services()[1].id.clone();
+        let old = app.site_generation;
+        app.cancel_site_checks();
+        let _ = app.update(Message::SiteDone(
+            old,
+            id.clone(),
+            result(ip_check::State::Confirmed, "日本"),
+        ));
+        assert!(app.site_results.is_empty());
+        let _ = app.update(Message::SiteDone(
+            app.site_generation,
+            id.clone(),
+            result(ip_check::State::Confirmed, "日本"),
+        ));
+        let _ = app.update(Message::SiteDone(
+            app.site_generation,
+            id,
+            result(ip_check::State::Partial, "日本"),
+        ));
+        let report = ip_report::Report::from_results(&app.site_results);
+        assert_eq!(report.totals.completed(), 1);
+        assert_eq!(report.totals.count(Status::Available), 0);
+        assert_eq!(report.totals.count(Status::Partial), 1);
+    }
+
+    #[test]
+    fn combined_filters_use_actual_region_and_summary_click_resets_other_filters() {
+        let mut app = app();
+        app.site_results.resize_with(183, || None);
+        app.site_results[1] = Some(result(ip_check::State::Confirmed, "🇯🇵 日本"));
+        app.site_results[2] = Some(result(ip_check::State::Restricted, "美国"));
+        app.site_category = CategoryFilter::Group("AI");
+        app.site_status = StatusFilter::Status(Status::Available);
+        app.site_region = RegionFilter::Country("JP");
+        assert!(app.site_matches(1, "chatgpt"));
+        assert!(!app.site_matches(2, ""));
+        assert!(!app.site_matches(1, "claude"));
+        app.query = "old search".into();
+        app.list_offset = 120;
+        app.site_detail = Some(1);
+        let _ = app.update(Message::SiteSummaryFilter(
+            CategoryFilter::Group("AI"),
+            StatusFilter::Status(Status::Restricted),
+        ));
+        assert!(app.query.is_empty());
+        assert_eq!(app.site_region, RegionFilter::All);
+        assert_eq!(app.list_offset, 0);
+        assert_eq!(app.site_detail, None);
+        assert!(app.site_matches(2, ""));
+        assert_eq!(
+            ip_report::Report::from_results(&app.site_results)
+                .totals
+                .completed(),
+            2
+        );
+    }
+
+    #[test]
+    fn ordering_cache_is_bounded_reused_and_released_when_leaving_proxy_page() {
+        let mut app = app();
+        let names: Vec<_> = (0..125).rev().map(|i| format!("node{i}")).collect();
+        let mut proxies = serde_json::Map::new();
+        for group in 0..12 {
+            proxies.insert(
+                format!("group-{group}"),
+                serde_json::json!({"type":"Selector", "all":names}),
+            );
+        }
+        app.snapshot.proxies =
+            serde_json::from_value(serde_json::json!({"proxies":proxies})).unwrap();
+        app.query = "node".into();
+        drop(app.proxies());
+        assert_eq!(app.proxy_order.borrow().len(), GROUP_PAGE_SIZE);
+        let old_pointer = app.proxy_order.borrow().values().next().unwrap().as_ptr();
+        drop(app.proxies());
+        assert_eq!(
+            app.proxy_order.borrow().values().next().unwrap().as_ptr(),
+            old_pointer
+        );
+        app.group_offsets.insert("group-0".into(), 60);
+        let _ = app.update(Message::NodeSort(NodeSort::Name));
+        assert!(app.group_offsets.is_empty());
+        assert!(app.proxy_order.borrow().is_empty());
+        drop(app.proxies());
+        assert_eq!(app.proxy_order.borrow().len(), GROUP_PAGE_SIZE);
+        let _ = app.update(Message::Navigate(Page::Home));
+        assert!(app.proxy_order.borrow().is_empty());
+    }
+
+    #[test]
+    fn old_settings_receive_default_sort_and_new_preferences_round_trip() {
+        let mut json = serde_json::to_value(Settings::default()).unwrap();
+        json.as_object_mut().unwrap().remove("node_sort");
+        let settings: Settings = serde_json::from_value(json).unwrap();
+        assert_eq!(settings.node_sort, NodeSort::LatencyAscending);
+        for mode in NodeSort::ALL {
+            let settings = Settings {
+                node_sort: mode,
+                ..Settings::default()
+            };
+            let decoded: Settings =
+                serde_json::from_slice(&serde_json::to_vec(&settings).unwrap()).unwrap();
+            assert_eq!(decoded.node_sort, mode);
+        }
     }
 }

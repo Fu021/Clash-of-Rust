@@ -26,6 +26,17 @@ pub(crate) fn country_code(name: &str) -> Option<&'static str> {
     })
 }
 
+pub fn country_text(country: &str) -> &str {
+    let mut chars = country.chars();
+    if let (Some(first), Some(second)) = (chars.next(), chars.next())
+        && (0x1f1e6..=0x1f1ff).contains(&u32::from(first))
+        && (0x1f1e6..=0x1f1ff).contains(&u32::from(second))
+    {
+        return country[first.len_utf8() + second.len_utf8()..].trim_start();
+    }
+    country
+}
+
 pub fn label(country: &str) -> (&str, Option<Handle>) {
     let mut chars = country.char_indices();
     let Some((_, first)) = chars.next() else {
@@ -43,7 +54,7 @@ pub fn label(country: &str) -> (&str, Option<Handle>) {
         .into_iter()
         .filter_map(|ch| char::from_u32(u32::from(ch) - 0x1f1e6 + u32::from(b'A')))
         .collect();
-    let text = country[first.len_utf8() + second.len_utf8()..].trim_start();
+    let text = country_text(country);
     if matches!(code.as_str(), "HK" | "MO" | "TW") {
         return (text, None);
     }

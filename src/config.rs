@@ -18,6 +18,7 @@ pub struct Settings {
     pub active_profile: Option<String>,
     pub run_mode: String,
     pub proxy_mode: crate::engine::ProxyMode,
+    pub node_sort: crate::proxy_order::NodeSort,
 }
 
 impl Default for Settings {
@@ -40,6 +41,7 @@ impl Default for Settings {
             active_profile: None,
             run_mode: "rule".into(),
             proxy_mode: crate::engine::ProxyMode::Off,
+            node_sort: crate::proxy_order::NodeSort::default(),
         }
     }
 }
