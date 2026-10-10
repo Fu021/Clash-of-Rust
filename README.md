@@ -3,7 +3,7 @@
 </p>
 <h1 align="center">Clash of Rust</h1>
 
-基于 mihomo 的原生 Rust 代理客户端。支持 **Windows（x64 / ARM64）** 和 **Debian/Ubuntu（amd64 / ARM64）**。版本 **0.5.0（待发布）**，更新内容见 [发布说明](docs/releases/0.5.0.md)。
+基于 mihomo 的原生 Rust 代理客户端。支持 **Windows（x64 / ARM64）** 和 **Debian/Ubuntu（amd64 / ARM64）**。版本 **0.5.0**，更新内容见 [发布说明](docs/releases/0.5.0.md)。
 
 ## Features
 
@@ -18,14 +18,14 @@
 
 ## 安装与使用
 
-从 [GitHub Releases](https://github.com/Fu021/Clash-of-Rust/releases) 下载对应系统和架构的安装包，附带 `.sha256` 校验文件。0.5.0 正式包尚未发布，下方链接为当前已发布的 0.4.13。
+从 [GitHub Releases](https://github.com/Fu021/Clash-of-Rust/releases) 下载对应系统和架构的安装包，附带 `.sha256` 校验文件。
 
 | 平台 | 安装包 |
 | --- | --- |
-| Windows x64 | [Clash-of-Rust-0.4.13-windows-x64-setup.exe](https://github.com/Fu021/Clash-of-Rust/releases/download/v0.4.13/Clash-of-Rust-0.4.13-windows-x64-setup.exe) |
-| Windows ARM64 | [Clash-of-Rust-0.4.13-windows-arm64-setup.exe](https://github.com/Fu021/Clash-of-Rust/releases/download/v0.4.13/Clash-of-Rust-0.4.13-windows-arm64-setup.exe) |
-| Debian/Ubuntu amd64 | [Clash-of-Rust-0.4.13-linux-amd64.deb](https://github.com/Fu021/Clash-of-Rust/releases/download/v0.4.13/Clash-of-Rust-0.4.13-linux-amd64.deb) |
-| Debian/Ubuntu ARM64 | [Clash-of-Rust-0.4.13-linux-arm64.deb](https://github.com/Fu021/Clash-of-Rust/releases/download/v0.4.13/Clash-of-Rust-0.4.13-linux-arm64.deb) |
+| Windows x64 | [Clash-of-Rust-0.5.0-windows-x64-setup.exe](https://github.com/Fu021/Clash-of-Rust/releases/download/v0.5.0/Clash-of-Rust-0.5.0-windows-x64-setup.exe) |
+| Windows ARM64 | [Clash-of-Rust-0.5.0-windows-arm64-setup.exe](https://github.com/Fu021/Clash-of-Rust/releases/download/v0.5.0/Clash-of-Rust-0.5.0-windows-arm64-setup.exe) |
+| Debian/Ubuntu amd64 | [Clash-of-Rust-0.5.0-linux-amd64.deb](https://github.com/Fu021/Clash-of-Rust/releases/download/v0.5.0/Clash-of-Rust-0.5.0-linux-amd64.deb) |
+| Debian/Ubuntu ARM64 | [Clash-of-Rust-0.5.0-linux-arm64.deb](https://github.com/Fu021/Clash-of-Rust/releases/download/v0.5.0/Clash-of-Rust-0.5.0-linux-arm64.deb) |
 
 Windows 运行安装程序；Debian/Ubuntu 使用 `sudo apt install ./安装包文件名.deb`。升级保留订阅和个人设置。
 
@@ -33,7 +33,7 @@ Windows 运行安装程序；Debian/Ubuntu 使用 `sudo apt install ./安装包�
 
 ## 内存占用
 
-Ubuntu 22.04 x64、Release 构建，附加规则关闭，固定输入为 2,000 节点、40 组和 20,000 条规则：
+实验版本 **0.5.0**；Ubuntu 22.04 x64、Release 构建，附加规则关闭，固定输入为 2,000 节点、40 组和 20,000 条规则：
 
 | 场景 | GUI RSS | GUI 与内核合计 PSS |
 | --- | ---: | ---: |
