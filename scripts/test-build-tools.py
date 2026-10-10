@@ -212,7 +212,7 @@ class ReleaseTests(unittest.TestCase):
             if path.startswith('/actions/workflows/ci.yml/runs?'):return {'workflow_runs':[run]}
             if path == '/actions/runs/77':return run
             if path.startswith('/actions/runs/77/jobs?'):return {'jobs':jobs}
-            if path == '/branches/main':return {'commit':{'sha':main or self.commit}}
+            if path.startswith('/branches/'):return {'commit':{'sha':main or self.commit}}
             self.fail('Unexpected CI request: '+path)
         request.repo = 'example/project'
         return request
@@ -256,6 +256,20 @@ class ReleaseTests(unittest.TestCase):
         with self.assertRaises(ValueError):release.verified_run(self.client(jobs=jobs),self.commit,77)
         with self.assertRaises(ValueError):release.verified_run(self.client(main='b'*40),self.commit,77)
 
+    def test_preview_packaging_accepts_current_same_repository_pr_ci_only_in_check_mode(self):
+        changes = {'event':'pull_request', 'head_branch':'codex/dev-0.5.2'}
+        with self.assertRaises(ValueError):
+            release.verified_run(self.client(changes),self.commit,77)
+        self.assertEqual(release.verified_run(self.client(changes),self.commit,77,check_only=True)['id'],77)
+        for invalid in ({'head_repository':{'full_name':'fork/project'}}, {'head_sha':'b'*40},
+                        {'status':'in_progress'}, {'conclusion':'failure'}, {'event':'workflow_dispatch'}):
+            with self.subTest(invalid=invalid), self.assertRaises(ValueError):
+                release.verified_run(self.client(changes | invalid),self.commit,77,check_only=True)
+        with self.assertRaises(ValueError):
+            release.verified_run(self.client(changes, main='b'*40),self.commit,77,check_only=True)
+        with self.assertRaises(ValueError):
+            release.verified_run(self.client(changes,jobs=[]),self.commit,77,check_only=True)
+
     def test_release_version_and_notes_are_read_from_tested_commit(self):
         with patch.object(release,'git',return_value='[package]\nversion="0.4.11"'), patch.object(release.subprocess,'check_output',return_value=self.notes):
             self.assertEqual(release.release_metadata(self.commit),(self.version,self.tag,self.notes))
@@ -263,6 +277,18 @@ class ReleaseTests(unittest.TestCase):
             with tempfile.TemporaryDirectory() as folder:
                 path=Path(folder)/'notes.md';path.write_text('Uncommitted notes')
                 with self.assertRaises(ValueError):release.release_metadata(self.commit,notes_path=path)
+
+    def test_preview_packaging_requires_no_release_notes_and_still_checks_version(self):
+        with patch.object(release,'git',return_value='[package]\nversion="0.5.2-dev.1"'), \
+             patch.object(release.subprocess,'check_output') as notes:
+            self.assertEqual(release.release_metadata(self.commit,check_only=True),
+                             ('0.5.2-dev.1','v0.5.2-dev.1',''))
+            notes.assert_not_called()
+            with self.assertRaises(ValueError):
+                release.release_metadata(self.commit,'v0.5.1',check_only=True)
+        with patch.object(release,'git',return_value='[package]\nversion="invalid"'):
+            with self.assertRaises(ValueError):
+                release.release_metadata(self.commit,check_only=True)
 
     def test_release_rejects_missing_assets_and_bad_or_misnamed_checksums(self):
         with tempfile.TemporaryDirectory() as folder:
@@ -326,13 +352,18 @@ class ReleaseTests(unittest.TestCase):
         with patch.dict(build.os.environ,{},clear=True):
             self.assertEqual(release.verified_package_run(client(),88,self.commit)['id'],88)
             for change in ({'event':'push'},{'head_sha':'b'*40},{'path':'.github/workflows/ci.yml'},
-                           {'status':'in_progress'},{'conclusion':'failure'}):
+                           {'status':'in_progress'},{'conclusion':'failure'},{'head_branch':'codex/dev-0.5.2'}):
                 with self.subTest(change=change),self.assertRaises(ValueError):
                     release.verified_package_run(client(change),88,self.commit)
             jobs=[{'name':name,'status':'completed','conclusion':'success'} for name in release.PACKAGE_JOBS]
             with self.assertRaises(ValueError):release.verified_package_run(client(jobs=jobs[:-1]),88,self.commit)
             jobs[0]['conclusion']='skipped'
             with self.assertRaises(ValueError):release.verified_package_run(client(jobs=jobs),88,self.commit)
+            self.assertEqual(release.verified_package_run(client({'head_branch':'codex/dev-0.5.2'}),
+                                                         88,self.commit,check_only=True)['id'],88)
+            with self.assertRaises(ValueError):
+                release.verified_package_run(client({'head_branch':'codex/dev-0.5.2'},jobs=jobs),
+                                             88,self.commit,check_only=True)
         with patch.dict(build.os.environ,{'GITHUB_RUN_ID':'88'},clear=True):
             release.verified_package_run(client({'status':'in_progress','conclusion':None}),88,self.commit)
 
