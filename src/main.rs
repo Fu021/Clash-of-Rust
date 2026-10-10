@@ -2918,7 +2918,7 @@ impl App {
         ]
         .spacing(12)
         .width(Length::Fill);
-        scrollable(body).height(Length::Fill).into()
+        scrollable(body).spacing(8).height(Length::Fill).into()
     }
 
     fn websites(&self) -> Element<'_, Message> {
@@ -3152,7 +3152,7 @@ impl App {
             .spacing(6)
             .padding([0, 8]),
         )
-        .push(scrollable(list).height(Length::Fill))
+        .push(scrollable(list).spacing(8).height(Length::Fill))
         .push(footer)
         .into()
     }

@@ -50,7 +50,8 @@ def selection_regression(window, scene, output, env, runner):
         raise RuntimeError('Expected default-width report for interaction regression')
     border = (203, 213, 225) if light else (71, 85, 105)
     def ink_at(x, y, color):
-        return all(abs(a-b) <= 3 for a, b in zip(rows[y][x*3:x*3+3], color))
+        # Fractional card positions blend a 1 px border with its background.
+        return all(abs(a-b) <= 6 for a, b in zip(rows[y][x*3:x*3+3], color))
     # Category cards have three long, equally sized top borders; locate them
     # below the exit panel instead of hard-coding text-dependent report heights.
     cards = None
