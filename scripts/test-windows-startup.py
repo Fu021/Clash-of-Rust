@@ -72,6 +72,9 @@ class Windows:
             (self.security, 'CreateProcessAsUserW',
              [w.HANDLE, w.LPCWSTR, w.LPWSTR, c.c_void_p, c.c_void_p, w.BOOL,
               w.DWORD, c.c_void_p, w.LPCWSTR, c.POINTER(StartupInfo), c.POINTER(ProcessInfo)], w.BOOL),
+            (self.security, 'CreateProcessWithTokenW',
+             [w.HANDLE, w.DWORD, w.LPCWSTR, w.LPWSTR, w.DWORD, c.c_void_p,
+              w.LPCWSTR, c.POINTER(StartupInfo), c.POINTER(ProcessInfo)], w.BOOL),
             (self.shell, 'IsUserAnAdmin', [], w.BOOL),
             (self.security, 'ConvertStringSecurityDescriptorToSecurityDescriptorW',
              [w.LPCWSTR, w.DWORD, c.POINTER(c.c_void_p), c.c_void_p], w.BOOL),
@@ -129,7 +132,7 @@ class Windows:
             checked(self.security.OpenProcessToken(self.kernel.GetCurrentProcess(), 0x8B, c.byref(original)))
             checked(self.security.ConvertStringSidToSidW('S-1-5-32-544', c.byref(admin_sid)))
             disabled = SidAndAttributes(admin_sid.value, 0)
-            checked(self.security.CreateRestrictedToken(original, 5, 1, c.byref(disabled),
+            checked(self.security.CreateRestrictedToken(original, 1, 1, c.byref(disabled),
                                                        0, None, 0, None, c.byref(limited)))
             checked(self.security.ConvertStringSidToSidW('S-1-16-8192', c.byref(medium_sid)))
             label = SidAndAttributes(medium_sid.value, 0x20)
@@ -163,9 +166,16 @@ class Windows:
                 checked(self.security.OpenProcessToken(self.kernel.GetCurrentProcess(), 0x8B,
                                                        c.byref(original)))
                 token = original
-            checked(self.security.CreateProcessAsUserW(token, str(executable), command,
-                                                      None, None, False, 0x08000400, env,
-                                                      str(executable.parent), c.byref(startup), c.byref(process)))
+                checked(self.security.CreateProcessAsUserW(token, str(executable), command,
+                                                          None, None, False, 0x08000400, env,
+                                                          str(executable.parent), c.byref(startup), c.byref(process)))
+            else:
+                # Secondary Logon initializes the user's profile and process
+                # environment; creating a filtered service token directly can
+                # fail in DLL initialization before the application runs.
+                checked(self.security.CreateProcessWithTokenW(token, 1, str(executable), command,
+                                                             0x08000400, env, str(executable.parent),
+                                                             c.byref(startup), c.byref(process)))
         finally:
             if original:
                 self.kernel.CloseHandle(original)
@@ -247,18 +257,44 @@ def main():
         api.create_test_desktop()
         # These tests now run with real ordinary permissions, not just the
         # elevated runner token that masked the original startup failures.
-        process = api.launch(test_binary, limited, dict(os.environ),
-                             ['config::tests::', '--test-threads=1'])
-        try:
-            api.wait(process, 60)
-        finally:
-            api.cleanup(process)
+        for arguments in (['config::tests::', '--test-threads=1'],
+                          ['profile_transaction::tests::', '--test-threads=1']):
+            process = api.launch(test_binary, limited, dict(os.environ), arguments)
+            try:
+                api.wait(process, 60)
+            finally:
+                api.cleanup(process)
         with tempfile.TemporaryDirectory(prefix='clash startup 中文 ') as work:
             root = Path(work)
             fresh = root/'ordinary first run'
             fresh.mkdir()
             check_startup(api, executable, limited, fresh)
             check_startup(api, executable, limited, fresh, background=True)
+            # Simulate a 0.4.12 data directory: new preferences must default
+            # correctly without requiring users to discard their settings.
+            old_settings = json.loads((fresh/'settings.json').read_text(encoding='utf-8'))
+            for name in ('node_sort', 'rule_overrides'):
+                old_settings.pop(name, None)
+            (fresh/'settings.json').write_text(json.dumps(old_settings), encoding='utf-8')
+            check_startup(api, executable, limited, fresh)
+            # 0.4.13 first added the disk-backed transaction recovery path.
+            # Leave a durable journal and a partially written live settings
+            # file; the next ordinary startup must roll it back before loading.
+            import uuid
+            transaction = fresh/('.profile-transaction-' + uuid.uuid4().hex)
+            transaction.mkdir()
+            original_settings = (fresh/'settings.json').read_bytes()
+            (transaction/'0.old').write_bytes(original_settings)
+            (fresh/'settings.json').write_text('{partial settings', encoding='utf-8')
+            (fresh/'profile-transaction.json').write_text(json.dumps({
+                'directory': transaction.name,
+                'entries': [{'target': 'settings.json', 'existed': True, 'remove': False}],
+            }), encoding='utf-8')
+            check_startup(api, executable, limited, fresh)
+            assert (fresh/'settings.json').read_bytes() == original_settings
+            assert not transaction.exists() and not (fresh/'profile-transaction.json').exists()
+            print('PASS: 0.4.12 settings and 0.4.13 interrupted transactions recover under ordinary permissions',
+                  flush=True)
             migrated = root/'elevated then ordinary'
             migrated.mkdir()
             check_startup(api, executable, None, migrated)
