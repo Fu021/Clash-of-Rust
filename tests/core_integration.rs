@@ -39,6 +39,183 @@ fn free_port() -> u16 {
 }
 
 #[tokio::test]
+#[ignore = "Requires bundled resources; verifies rule override reload, update and rollback"]
+async fn subscription_rule_overrides_survive_updates_and_restore_original_rules() {
+    use clash_of_rust::config::RuleOverrides;
+    let tmp = tempfile::tempdir().unwrap();
+    let store = Store::at(tmp.path().join("data")).unwrap();
+    let controller_port = free_port();
+    let mut mixed_port = free_port();
+    while mixed_port == controller_port {
+        mixed_port = free_port();
+    }
+    store
+        .save_settings(&Settings {
+            controller_port,
+            mixed_port,
+            ..Settings::default()
+        })
+        .unwrap();
+    let mut engine = Engine::with_resources(store.clone(), test_resources()).unwrap();
+    engine.start().await.unwrap();
+    let overrides = RuleOverrides { enabled: [true; 5] };
+    // The built-in direct profile remains usable with subscription overrides enabled.
+    engine.save_rule_overrides(overrides.clone()).await.unwrap();
+    let source = tmp.path().join("subscription.yaml");
+    let raw = "proxies: []\nproxy-groups: [{name: Proxy, type: select, proxies: [DIRECT, REJECT]}]\nrules:\n  - DOMAIN,example.test,DIRECT\n  - MATCH,DIRECT\n";
+    std::fs::write(&source, raw).unwrap();
+    engine
+        .import(
+            "test subscription".into(),
+            source.display().to_string(),
+            None,
+        )
+        .await
+        .unwrap();
+    let id = engine.profiles.last().unwrap().id.clone();
+    engine.activate(id.clone()).await.unwrap();
+    let path = store.runtime().join("config.yaml");
+    let config: serde_yaml::Value =
+        serde_yaml::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
+    assert_eq!(
+        config["rules"][0].as_str(),
+        Some("GEOSITE,category-ads-all,REJECT")
+    );
+    assert_eq!(
+        config["rules"][2].as_str(),
+        Some("GEOIP,Private,DIRECT,no-resolve")
+    );
+    assert_eq!(
+        config["rules"]
+            .as_sequence()
+            .unwrap()
+            .last()
+            .unwrap()
+            .as_str(),
+        Some("MATCH,DIRECT")
+    );
+    assert_eq!(
+        std::fs::read_to_string(store.profile_path(&id).unwrap()).unwrap(),
+        raw
+    );
+    let updated = raw.replace("example.test", "updated.test");
+    std::fs::write(&source, &updated).unwrap();
+    engine
+        .import(
+            "test subscription".into(),
+            source.display().to_string(),
+            Some(id.clone()),
+        )
+        .await
+        .unwrap();
+    let config: serde_yaml::Value =
+        serde_yaml::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
+    assert_eq!(
+        config["rules"][5].as_str(),
+        Some("DOMAIN,updated.test,DIRECT")
+    );
+    assert_eq!(config["rules"].as_sequence().unwrap().len(), 7);
+    let previous = std::fs::read_to_string(&path).unwrap();
+    let profile_path = store.profile_path(&id).unwrap();
+    std::fs::write(&profile_path, "proxies: []\nrules: invalid").unwrap();
+    assert!(
+        engine
+            .save_rule_overrides(RuleOverrides::default())
+            .await
+            .is_err()
+    );
+    std::fs::write(&profile_path, &updated).unwrap();
+    assert_eq!(engine.settings.rule_overrides, overrides);
+    assert_eq!(store.load_settings().unwrap().rule_overrides, overrides);
+    assert_eq!(std::fs::read_to_string(&path).unwrap(), previous);
+    engine
+        .save_rule_overrides(RuleOverrides::default())
+        .await
+        .unwrap();
+    let config: serde_yaml::Value =
+        serde_yaml::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
+    assert_eq!(config["rules"].as_sequence().unwrap().len(), 2);
+    assert_eq!(config["rules"][1].as_str(), Some("MATCH,DIRECT"));
+    assert_eq!(
+        std::fs::read_to_string(store.profile_path(&id).unwrap()).unwrap(),
+        updated
+    );
+    // An upstream update may add these rules itself. Toggling the overrides
+    // must then preserve their original contents and order in the live core.
+    let existing = format!(
+        "proxies: []\nrules:\n  - DOMAIN,updated.test,DIRECT\n  - {}\n  - MATCH,DIRECT\n",
+        clash_of_rust::config::SUBSCRIPTION_RULES.join("\n  - ")
+    );
+    std::fs::write(&source, &existing).unwrap();
+    engine
+        .import(
+            "test subscription".into(),
+            source.display().to_string(),
+            Some(id.clone()),
+        )
+        .await
+        .unwrap();
+    let original: serde_yaml::Value = serde_yaml::from_str(&existing).unwrap();
+    for enabled in [true, false] {
+        engine
+            .save_rule_overrides(RuleOverrides {
+                enabled: [enabled; 5],
+            })
+            .await
+            .unwrap();
+        let config: serde_yaml::Value =
+            serde_yaml::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
+        assert_eq!(config["rules"], original["rules"]);
+        assert_eq!(std::fs::read_to_string(&profile_path).unwrap(), existing);
+    }
+    engine.stop().await.unwrap();
+    engine.save_rule_overrides(overrides.clone()).await.unwrap();
+    engine.start().await.unwrap();
+    assert_eq!(store.load_settings().unwrap().rule_overrides, overrides);
+    engine.delete_profile(&id).await.unwrap();
+    let config: serde_yaml::Value =
+        serde_yaml::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
+    assert_eq!(
+        config["rules"].as_sequence().unwrap(),
+        &[serde_yaml::Value::from("MATCH,DIRECT")]
+    );
+    engine.stop().await.unwrap();
+}
+
+#[tokio::test]
+#[ignore = "Requires bundled resources; retries after a real port conflict"]
+async fn failed_start_can_retry_after_port_is_released() {
+    let resources = test_resources();
+    let tmp = tempfile::tempdir().unwrap();
+    let store = Store::at(tmp.path().to_owned()).unwrap();
+    let occupied = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+    let mixed_port = occupied.local_addr().unwrap().port();
+    let mut controller_port = free_port();
+    while controller_port == mixed_port {
+        controller_port = free_port();
+    }
+    store
+        .save_settings(&Settings {
+            controller_port,
+            mixed_port,
+            ..Settings::default()
+        })
+        .unwrap();
+    let mut engine = Engine::with_resources(store, resources).unwrap();
+    let failure = engine.start().await.unwrap_err();
+    assert!(failure.to_string().contains(&mixed_port.to_string()));
+    assert!(!engine.running());
+    drop(occupied);
+    engine.start().await.unwrap();
+    assert!(!engine.restore_proxy_mode().await.unwrap());
+    let snapshot = engine.poll(Scope::Home).await.unwrap();
+    assert!(snapshot.running);
+    assert!(!snapshot.version.is_empty());
+    engine.stop().await.unwrap();
+    assert!(!engine.running());
+}
+
+#[tokio::test]
 #[ignore = "Requires bundled resources; verifies remembered modes without OS proxy changes"]
 async fn remembered_modes_survive_core_and_client_restart() {
     use clash_of_rust::engine::ProxyMode;

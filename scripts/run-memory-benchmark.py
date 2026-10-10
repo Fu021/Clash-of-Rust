@@ -76,10 +76,52 @@ def screenshot(window, output, env):
         x.XCloseDisplay(display)
 
 
-def gui_scenes(executable, benchmark, output, seconds):
+def search_center(window, output, env):
+    """Locate the real search field after notices have changed its position."""
+    path = output/'search-focus.png'
+    screenshot(window, path, env)
+    png = path.read_bytes()
+    offset, compressed, dimensions = 8, bytearray(), None
+    while offset < len(png):
+        length = struct.unpack_from('>I', png, offset)[0]
+        kind = png[offset+4:offset+8]
+        data = png[offset+8:offset+8+length]
+        if kind == b'IHDR':
+            width, height, depth, color, _, _, interlaced = struct.unpack('>IIBBBBB', data)
+            if (depth, color, interlaced) != (8, 2, 0):
+                raise ValueError('Expected an RGB screenshot')
+            dimensions = width, height
+        elif kind == b'IDAT':
+            compressed.extend(data)
+        offset += length+12
+    if dimensions is None:
+        raise ValueError('Screenshot dimensions missing')
+    width, height = dimensions
+    raw, stride = zlib.decompress(compressed), width*3+1
+    if any(raw[y*stride] != 0 for y in range(height)):
+        raise ValueError('Expected unfiltered screenshot rows')
+    runs, start = [], None
+    # At the default 950 px window, only the search input has this border
+    # on the content's left edge. Card/notice borders use other colors.
+    for y in range(70, min(height-60, 250)):
+        pixel = raw[y*stride+1+184*3:y*stride+1+185*3]
+        border = all(abs(a-b) <= 3 for a, b in zip(pixel, (100, 116, 139)))
+        if border:
+            if start is None:
+                start = y
+        elif start is not None:
+            if y-start >= 15:
+                runs.append((start, y))
+            start = None
+    if len(runs) != 1 or width != 950:
+        raise RuntimeError('Cannot locate the search field: '+str(runs))
+    return 380, sum(runs[0])//2
+
+
+def gui_scenes(executable, benchmark, output, seconds, modern_layout=False, rule_overrides=None, prefix=''):
     env = dict(os.environ, GSETTINGS_BACKEND='memory', WINIT_UNIX_BACKEND='x11', WINIT_X11_SCALE_FACTOR='1')
     env.pop('WAYLAND_DISPLAY', None)
-    with tempfile.TemporaryDirectory(prefix='memory-gui-') as directory, (output/'gui.log').open('x') as log:
+    with tempfile.TemporaryDirectory(prefix='memory-gui-') as directory, (output/(prefix+'gui.log')).open('x') as log:
         data = Path(directory)
         (data/'profiles').mkdir()
         profile_id = str(uuid.uuid4())
@@ -87,9 +129,12 @@ def gui_scenes(executable, benchmark, output, seconds):
             controller.bind(('127.0.0.1', 0))
             mixed.bind(('127.0.0.1', 0))
             controller_port, mixed_port = controller.getsockname()[1], mixed.getsockname()[1]
-        write_json(data/'settings.json', {'controller_port': controller_port, 'mixed_port': mixed_port,
+        benchmark_settings = {'controller_port': controller_port, 'mixed_port': mixed_port,
                    'secret': 'memory-benchmark', 'dark': True, 'delay_interval_minutes': 0,
-                   'active_profile': profile_id, 'run_mode': 'rule', 'proxy_mode': 'off'})
+                   'active_profile': profile_id, 'run_mode': 'rule', 'proxy_mode': 'off'}
+        if rule_overrides is not None:
+            benchmark_settings['rule_overrides'] = rule_overrides
+        write_json(data/'settings.json', benchmark_settings)
         (data/'profiles'/f'{profile_id}.yaml').write_text(fixture(), encoding='utf-8')
         write_json(data/'profiles.json', [{'id': profile_id, 'name': 'Memory workload', 'updated': 0,
                    'source': str(data/'profiles'/f'{profile_id}.yaml')}])
@@ -125,19 +170,23 @@ def gui_scenes(executable, benchmark, output, seconds):
                 subprocess.run(['xdotool', 'mousemove', '--window', window, str(x), str(y), 'click', '1'],
                                env=env, check=True)
             def measure(name):
+                name = prefix+name
                 time.sleep(3)
                 screenshot(window, output/(name+'.png'), env)
                 with (output/(name+'.txt')).open('x') as text:
                     subprocess.run([str(benchmark), 'app', str(app.pid), str(seconds), '250',
                                     str(output/(name+'.jsonl'))], stdout=text, check=True, env=env)
             measure('home')
-            click(70, 108)
+            click(70, 126 if modern_layout else 108)
             measure('proxies-collapsed')
-            click(380, 120)
+            if modern_layout:
+                click(*search_center(window, output, env))
+            else:
+                click(380, 120)
             subprocess.run(['xdotool', 'windowfocus', '--sync', window], env=env, check=True)
             subprocess.run(['xdotool', 'type', '--delay', '100', '--clearmodifiers', 'node-'], env=env, check=True)
             measure('proxies-search')
-            click(70, 70)
+            click(70, 83 if modern_layout else 70)
             measure('home-after-proxies')
         finally:
             # All tests use proxy off. Stop this owned process group, including
@@ -167,9 +216,13 @@ def summarize(output, metadata):
                     raise ValueError('Benchmark repetition count is incomplete')
                 peak, retained = (statistics.median(row[key] for row in samples)/1048576 for key in ('peak_extra_heap_bytes', 'retained_extra_heap_bytes'))
                 lines.append(f'| {workload} | {mode} | {refresh} | {peak:.2f} | {retained:.2f} |')
-    lines += ['', 'GUI subscription: 2,000 nodes, 40 groups × 2,000 members, 20,000 rules. Proxy off; scheduled delay checks off; no business traffic. Xvfb/X11; snapshots show the scene used.', '',
-              '| Scene | GUI RSS peak MiB | Core RSS peak MiB | Total PSS peak MiB |', '| --- | ---: | ---: | ---: |']
-    for scene in ('home', 'proxies-collapsed', 'proxies-search', 'home-after-proxies'):
+    lines += ['', 'GUI subscription: 2,000 nodes, 40 groups × 2,000 members, 20,000 rules. Proxy off; scheduled delay checks off; no business traffic. Xvfb/X11; snapshots show the scene used.']
+    scenes = ['home', 'proxies-collapsed', 'proxies-search', 'home-after-proxies']
+    if metadata.get('additional_gui_rules'):
+        lines += ['', 'rules-* scenes enable all five subscription overrides with the subscription fallback unchanged in a fresh client/core process.']
+        scenes += ['rules-'+scene for scene in scenes.copy()]
+    lines += ['', '| Scene | GUI RSS peak MiB | Core RSS peak MiB | Total PSS peak MiB |', '| --- | ---: | ---: | ---: |']
+    for scene in scenes:
         rows = [json.loads(line) for line in (output/(scene+'.jsonl')).read_text().splitlines()]
         samples = [row for row in rows if 'elapsed_ms' in row]
         values = []
@@ -212,6 +265,8 @@ def main():
                 'rustc': subprocess.check_output(['rustc', '-Vv'], text=True).strip(),
                 'started_at': datetime.datetime.now(datetime.timezone.utc).isoformat(),
                 'instrumentation': 'The workflow benchmark example replaces only the example in the selected checkout; application sources are unchanged.'}
+    modern_layout = (source/'src/ui_style.rs').is_file()
+    metadata['gui_navigation'] = 'current sidebar coordinates and detected search field' if modern_layout else 'legacy window coordinates'
     write_json(output/'metadata.json', metadata)
     (output/'gui-fixture.yaml').write_text(fixture(), encoding='utf-8')
     command = ['cargo', 'build', '--locked', '--bins', '--example', 'memory_benchmark']
@@ -233,7 +288,13 @@ def main():
     with (output/'api.txt').open('x') as text:
         subprocess.run([str(benchmark), 'suite', str(args.rows), str(args.repetitions), str(output/'api.jsonl')],
                        cwd=source, stdout=text, check=True)
-    gui_scenes(bundle/'clash-of-rust', benchmark, output, args.seconds)
+    gui_scenes(bundle/'clash-of-rust', benchmark, output, args.seconds, modern_layout)
+    if 'pub rule_overrides:' in (source/'src/config.rs').read_text(encoding='utf-8'):
+        overrides = {'enabled': [True]*5}
+        gui_scenes(bundle/'clash-of-rust', benchmark, output, args.seconds, modern_layout,
+                   rule_overrides=overrides, prefix='rules-')
+        metadata['additional_gui_rules'] = overrides
+        write_json(output/'metadata.json', metadata)
     summarize(output, metadata)
 
 

@@ -7,6 +7,20 @@ use std::{
     path::{Path, PathBuf},
 };
 
+pub const SUBSCRIPTION_RULES: [&str; 5] = [
+    "GEOSITE,category-ads-all,REJECT",
+    "GEOSITE,private,DIRECT",
+    "GEOIP,Private,DIRECT,no-resolve",
+    "GEOSITE,CN,DIRECT",
+    "GEOIP,CN,DIRECT,no-resolve",
+];
+
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct RuleOverrides {
+    pub enabled: [bool; 5],
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(default)]
 pub struct Settings {
@@ -19,6 +33,7 @@ pub struct Settings {
     pub run_mode: String,
     pub proxy_mode: crate::engine::ProxyMode,
     pub node_sort: crate::proxy_order::NodeSort,
+    pub rule_overrides: RuleOverrides,
 }
 
 impl Default for Settings {
@@ -42,6 +57,7 @@ impl Default for Settings {
             run_mode: "rule".into(),
             proxy_mode: crate::engine::ProxyMode::Off,
             node_sort: crate::proxy_order::NodeSort::default(),
+            rule_overrides: RuleOverrides::default(),
         }
     }
 }
@@ -220,6 +236,7 @@ pub fn parse_profile(raw: &str) -> Result<Mapping> {
 pub fn runtime_config(raw: &str, settings: &Settings) -> Result<String> {
     settings.validate()?;
     let mut map = parse_profile(raw)?;
+    apply_rules(&mut map, &settings.rule_overrides)?;
     // The application owns all ingress and controller settings. A subscription cannot
     // expose the API, load a dashboard, or silently enable TUN.
     for key in [
@@ -269,6 +286,44 @@ pub fn runtime_config(raw: &str, settings: &Settings) -> Result<String> {
     Ok(serde_yaml::to_string(&map)?)
 }
 
+fn apply_rules(map: &mut Mapping, overrides: &RuleOverrides) -> Result<()> {
+    if !overrides.enabled.iter().any(|enabled| *enabled) {
+        return Ok(());
+    }
+    let previous = match map.remove(Value::from("rules")) {
+        None | Some(Value::Null) => Vec::new(),
+        Some(Value::Sequence(rules)) => rules,
+        _ => bail!("订阅 rules 必须是规则列表"),
+    };
+    let same_rule = |a: &str, b: &str| {
+        let mut a = a.split(',').map(str::trim);
+        let mut b = b.split(',').map(str::trim);
+        loop {
+            match (a.next(), b.next()) {
+                (None, None) => break true,
+                (Some(a), Some(b)) if a.eq_ignore_ascii_case(b) => {}
+                _ => break false,
+            }
+        }
+    };
+    let mut rules = Vec::with_capacity(previous.len() + SUBSCRIPTION_RULES.len());
+    for (index, rule) in SUBSCRIPTION_RULES.iter().enumerate() {
+        if overrides.enabled[index]
+            && !previous
+                .iter()
+                .any(|value| value.as_str().is_some_and(|line| same_rule(line, rule)))
+        {
+            rules.push(Value::from(*rule));
+        }
+    }
+    for rule in previous {
+        rule.as_str().context("订阅规则必须是字符串")?;
+        rules.push(rule);
+    }
+    map.insert(Value::from("rules"), Value::Sequence(rules));
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -281,6 +336,107 @@ mod tests {
         settings.validate().unwrap();
         assert_eq!(settings.run_mode, "rule");
         assert_eq!(settings.proxy_mode, crate::engine::ProxyMode::Off);
+        assert_eq!(settings.rule_overrides, RuleOverrides::default());
+        assert_eq!(Settings::default().rule_overrides.enabled, [false; 5]);
+        assert_eq!(settings.rule_overrides.enabled, [false; 5]);
+    }
+
+    #[test]
+    fn additional_rules_have_priority_without_changing_subscription_fallbacks() {
+        let raw = "proxies: []\nproxy-groups: [{name: Proxy, type: select, proxies: [DIRECT]}]\nrules:\n  - MATCH,DIRECT\n  - GEOSITE,cn,DIRECT\n  - DOMAIN,example.test,DIRECT\n  - MATCH,Proxy\n";
+        let settings = Settings {
+            rule_overrides: RuleOverrides { enabled: [true; 5] },
+            ..Settings::default()
+        };
+        let config: Value = serde_yaml::from_str(&runtime_config(raw, &settings).unwrap()).unwrap();
+        let rules = config["rules"].as_sequence().unwrap();
+        let expected: Vec<_> = SUBSCRIPTION_RULES
+            .into_iter()
+            .filter(|rule| *rule != "GEOSITE,CN,DIRECT")
+            .chain([
+                "MATCH,DIRECT",
+                "GEOSITE,cn,DIRECT",
+                "DOMAIN,example.test,DIRECT",
+                "MATCH,Proxy",
+            ])
+            .map(Value::from)
+            .collect();
+        assert_eq!(*rules, expected);
+        let again = runtime_config(&serde_yaml::to_string(&config).unwrap(), &settings).unwrap();
+        assert_eq!(
+            serde_yaml::from_str::<Value>(&again).unwrap()["rules"],
+            config["rules"]
+        );
+        let original: Value = serde_yaml::from_str(raw).unwrap();
+        let disabled: Value =
+            serde_yaml::from_str(&runtime_config(raw, &Settings::default()).unwrap()).unwrap();
+        assert_eq!(disabled["rules"], original["rules"]);
+    }
+
+    #[test]
+    fn subscription_rules_already_present_are_unchanged_by_toggles() {
+        for (index, rule) in SUBSCRIPTION_RULES.iter().enumerate() {
+            let existing = rule.to_ascii_lowercase().replace(',', " , ");
+            let raw = format!(
+                "proxies: []\nrules:\n  - DOMAIN,example.test,DIRECT\n  - {existing}\n  - MATCH,DIRECT\n"
+            );
+            let original: Value = serde_yaml::from_str(&raw).unwrap();
+            for enabled in [true, false] {
+                let mut settings = Settings::default();
+                settings.rule_overrides.enabled[index] = enabled;
+                let config: Value =
+                    serde_yaml::from_str(&runtime_config(&raw, &settings).unwrap()).unwrap();
+                assert_eq!(config["rules"], original["rules"]);
+            }
+        }
+        let raw = format!(
+            "proxies: []\nrules:\n  - {}\n  - MATCH,DIRECT\n",
+            SUBSCRIPTION_RULES.join("\n  - ")
+        );
+        let original: Value = serde_yaml::from_str(&raw).unwrap();
+        let settings = Settings {
+            rule_overrides: RuleOverrides { enabled: [true; 5] },
+            ..Settings::default()
+        };
+        let config: Value =
+            serde_yaml::from_str(&runtime_config(&raw, &settings).unwrap()).unwrap();
+        assert_eq!(config["rules"], original["rules"]);
+        // LAN has a different address range and must not suppress Private.
+        let raw = "proxies: []\nrules: [\"GEOIP,LAN,DIRECT,no-resolve\", \"MATCH,DIRECT\"]";
+        let mut settings = Settings::default();
+        settings.rule_overrides.enabled[2] = true;
+        let config: Value = serde_yaml::from_str(&runtime_config(raw, &settings).unwrap()).unwrap();
+        assert_eq!(
+            config["rules"][0].as_str(),
+            Some("GEOIP,Private,DIRECT,no-resolve")
+        );
+        assert_eq!(
+            config["rules"][1].as_str(),
+            Some("GEOIP,LAN,DIRECT,no-resolve")
+        );
+        assert_eq!(config["rules"].as_sequence().unwrap().len(), 3);
+    }
+
+    #[test]
+    fn individual_rules_preserve_existing_fallback_and_reject_invalid_rule_lists() {
+        let raw = "proxies: []\nrules:\n  - DOMAIN,example.test,DIRECT\n  - MATCH,DIRECT\n";
+        for (index, rule) in SUBSCRIPTION_RULES.iter().enumerate() {
+            let mut settings = Settings::default();
+            settings.rule_overrides.enabled[index] = true;
+            let value: Value =
+                serde_yaml::from_str(&runtime_config(raw, &settings).unwrap()).unwrap();
+            assert_eq!(value["rules"][0].as_str(), Some(*rule));
+            assert_eq!(value["rules"][2].as_str(), Some("MATCH,DIRECT"));
+        }
+        let settings = Settings {
+            rule_overrides: RuleOverrides { enabled: [true; 5] },
+            ..Settings::default()
+        };
+        assert!(runtime_config("proxies: []\nrules: invalid", &settings).is_err());
+        assert!(runtime_config("proxies: []\nrules: [123]", &settings).is_err());
+        let empty: Value =
+            serde_yaml::from_str(&runtime_config("proxies: []", &settings).unwrap()).unwrap();
+        assert_eq!(empty["rules"].as_sequence().unwrap().len(), 5);
     }
 
     #[test]

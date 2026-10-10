@@ -5,8 +5,84 @@ import json
 import os
 from pathlib import Path
 import signal
+import struct
 import subprocess
 import time
+import zlib
+
+
+def pixels(path):
+    """Read our screenshot writer's RGB PNGs without a new image dependency."""
+    data = path.read_bytes()
+    if data[:8] != b'\x89PNG\r\n\x1a\n':
+        raise ValueError('Expected a screenshot PNG')
+    offset, compressed = 8, bytearray()
+    while offset < len(data):
+        length = struct.unpack('>I', data[offset:offset+4])[0]
+        kind, chunk = data[offset+4:offset+8], data[offset+8:offset+8+length]
+        if kind == b'IHDR':
+            width, height, depth, color, _, _, interlace = struct.unpack('>IIBBBBB', chunk)
+            if (depth, color, interlace) != (8, 2, 0):
+                raise ValueError('Expected the screenshot writer RGB format')
+        elif kind == b'IDAT':
+            compressed.extend(chunk)
+        offset += length+12
+    raw, stride = zlib.decompress(compressed), width*3+1
+    if len(raw) != stride*height or any(raw[y*stride] for y in range(height)):
+        raise ValueError('Expected unfiltered screenshot rows')
+    return width, height, [raw[y*stride+1:(y+1)*stride] for y in range(height)]
+
+
+def selection_regression(window, scene, output, env, runner):
+    """Compare a real click redraw with a full redraw at the same window size."""
+    def click(x, y):
+        subprocess.run(['xdotool', 'mousemove', '--window', window, str(x), str(y),
+                        'click', '1', 'mousemove', '--window', window, '10', '10'],
+                       env=env, check=True)
+        time.sleep(0.5)
+    light = scene.endswith('light')
+    width, height, rows = pixels(output/(scene+'.png'))
+    # Locate the native selector borders rather than depending on the height
+    # of the report, which changes with wrapping and font metrics.
+    def border_at(x, y):
+        return all(abs(a-b) <= 3 for a, b in zip(rows[y][x*3:x*3+3], (100, 116, 139)))
+    runs, start = [], None
+    for y in range(180, min(height-60, 600)):
+        if border_at(184, y) and border_at(293, y):
+            if start is None:
+                start = y
+        elif start is not None:
+            if y-start >= 12:
+                runs.append((start, y))
+            start = None
+    if len(runs) != 1 or width != 950:
+        raise RuntimeError('Could not locate the selector interiors: '+str(runs))
+    top, bottom = runs[0]
+    center = (top+bottom)//2
+    for name, x, y, expected in [
+        ('ip-filter-click', 225, center-90, 'SiteSummaryFilter(Group("IP信息"), Status(Identified))'),
+        ('ip-filter-category', 600, center-117, 'SiteSummaryFilter(Group("AI"), All)'),
+        ('ip-filter-status', 607, center-90, 'SiteSummaryFilter(Group("AI"), Status(Available))'),
+        ('ip-filter-reset', 650, center, 'SiteResetFilters'),
+    ]:
+        click(x, y)
+        if expected not in (output/(scene+'.log')).read_text():
+            raise RuntimeError('Expected real UI interaction: '+expected)
+        stem = name+('-light' if light else '')
+        partial, full = output/(stem+'.png'), output/(stem+'-full.png')
+        runner.screenshot(window, partial, env)
+        subprocess.run(['xdotool', 'windowsize', window, '970', '720'], env=env, check=True)
+        time.sleep(0.3)
+        subprocess.run(['xdotool', 'windowsize', window, '950', '700'], env=env, check=True)
+        time.sleep(0.5)
+        runner.screenshot(window, full, env)
+        a, b = pixels(partial), pixels(full)
+        # Compare the captions and their surrounding interior. tiny-skia can
+        # accumulate antialiasing differences on the bottom border after a
+        # resize; that border is outside the text area under regression.
+        if a[:2] != b[:2] or any(a[2][y][188*3:602*3] != b[2][y][188*3:602*3]
+                                  for y in range(top+2, bottom-2)):
+            raise RuntimeError('Selection redraw differs from full repaint: '+stem)
 
 
 def main():
@@ -34,6 +110,12 @@ def main():
     spec.loader.exec_module(runner)
     scenes = ['proxies-ascending', 'proxies-descending', 'proxies-name', 'ip-summary',
               'ip-ai', 'ip-restricted', 'ip-details', 'ip-partial', 'ip-compact', 'ip-summary-light']
+    pages = ['home', 'proxies-ascending', 'profiles', 'connections', 'rules', 'logs',
+             'diagnostics', 'ip-summary', 'settings', 'home-failure', 'home-retrying']
+    scenes = list(dict.fromkeys([scene+suffix for scene in pages for suffix in ('', '-light')] + scenes))
+    scenes += [scene+'-compact'+suffix for scene in pages for suffix in ('', '-light')]
+    scenes += [scene+suffix for scene in ('settings-rules', 'settings-rules-enabled')
+               for suffix in ('', '-light', '-compact', '-compact-light')]
     for scene in scenes:
         env = dict(os.environ, CLASH_UI_PREVIEW_SCENE=scene, WINIT_UNIX_BACKEND='x11',
                    WINIT_X11_SCALE_FACTOR='1', GSETTINGS_BACKEND='memory')
@@ -54,7 +136,16 @@ def main():
                 else:
                     raise RuntimeError('Preview window did not appear')
                 time.sleep(2)
+                if scene.startswith('settings-rules'):
+                    subprocess.run(['xdotool', 'mousemove', '--window', window, '600', '300',
+                                    'click', '--repeat', '2',
+                                    '--delay', '100', '5'], env=env, check=True)
+                    time.sleep(0.3)
+                subprocess.run(['xdotool', 'mousemove', '--window', window, '10', '10'],
+                               env=env, check=True)
                 runner.screenshot(window, output/(scene+'.png'), env)
+                if scene in ('ip-summary', 'ip-summary-light'):
+                    selection_regression(window, scene, output, env, runner)
             finally:
                 if process.poll() is None:
                     os.killpg(process.pid, signal.SIGTERM)
