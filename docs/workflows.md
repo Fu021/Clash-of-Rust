@@ -5,7 +5,6 @@
 | Rust / CI | main push、PR | 四平台编译、静态检查、代码与原生接口测试 | `build-{system}-{arch}`，保留 14 天 |
 | Publish Release | 手动 | 复用成功 CI 的程序，打包、安装后测试、发布 | 四个安装包及 SHA256；测试产物保留 14 天 |
 | Memory Benchmark | 手动 | 测量一个远程分支、标签或提交的内存 | 原始 JSONL、报告、截图、构建日志；保留 30 天 |
-| Windows version regression investigation | 手动 | 使用正式安装包对照 0.4.12、0.4.13、0.5.0 的普通权限启动和升级 | 逐场景退出码及调查报告；保留 7 天 |
 
 四个平台为 Windows x64 / ARM64、Linux x64 / ARM64。Ubuntu 最新版兼容验证在发布工作流中执行。
 
