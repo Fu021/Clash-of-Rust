@@ -1,6 +1,6 @@
 //! Disk-backed subscription commits. An interrupted commit is rolled back before
 //! settings/profiles are loaded on the next launch.
-use crate::config::{atomic_write, persist_file};
+use crate::config::{atomic_write, persist_file, remove_file};
 use anyhow::{Context, Result, ensure};
 use serde::{Deserialize, Serialize};
 use std::{
@@ -163,17 +163,19 @@ impl Transaction {
         self.finish()
     }
     fn finish(&mut self) -> Result<()> {
-        fs::remove_file(self.root.join(JOURNAL)).context("无法完成配置事务，保留恢复记录")?;
+        let journal = self.root.join(JOURNAL);
+        remove_file(&journal)
+            .with_context(|| format!("无法完成配置事务，保留恢复记录：{}", journal.display()))?;
         self.prepared = false;
         let _ = fs::remove_dir_all(&self.directory);
         Ok(())
     }
 }
 fn remove_if_present(path: &Path) -> Result<()> {
-    match fs::remove_file(path) {
+    match remove_file(path) {
         Ok(()) => Ok(()),
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(()),
-        Err(error) => Err(error.into()),
+        Err(error) => Err(error).with_context(|| format!("无法删除配置文件：{}", path.display())),
     }
 }
 fn restore(root: &Path, directory: &Path, journal: &Journal) -> Result<()> {
@@ -201,7 +203,9 @@ pub(crate) fn recover(root: &Path) -> Result<bool> {
     let file = match fs::File::open(&path) {
         Ok(file) => file,
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(false),
-        Err(error) => return Err(error.into()),
+        Err(error) => {
+            return Err(error).with_context(|| format!("无法读取配置恢复记录：{}", path.display()));
+        }
     };
     let mut bytes = Vec::new();
     file.take(64 * 1024 + 1).read_to_end(&mut bytes)?;
@@ -219,13 +223,78 @@ pub(crate) fn recover(root: &Path) -> Result<bool> {
     );
     let directory = root.join(&journal.directory);
     restore(root, &directory, &journal).context("恢复上次中断的订阅提交失败")?;
-    fs::remove_file(path)?;
+    remove_file(&path).with_context(|| format!("无法删除配置恢复记录：{}", path.display()))?;
     let _ = fs::remove_dir_all(directory);
     Ok(true)
 }
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[cfg(windows)]
+    #[test]
+    fn startup_recovery_waits_for_a_temporary_journal_lock() {
+        use std::os::windows::fs::OpenOptionsExt;
+        let tmp = tempfile::tempdir().unwrap();
+        let root = tmp.path();
+        let target = root.join("settings.json");
+        fs::write(&target, b"old settings").unwrap();
+        let mut transaction = Transaction::new(root).unwrap();
+        transaction.stage(&target, b"new settings").unwrap();
+        transaction.prepare().unwrap();
+        fs::write(&target, b"partial settings").unwrap();
+        drop(transaction);
+        let journal = root.join(JOURNAL);
+        let reader = fs::OpenOptions::new()
+            .read(true)
+            .share_mode(3) // FILE_SHARE_READ | FILE_SHARE_WRITE, no delete sharing.
+            .open(&journal)
+            .unwrap();
+        // The direct deletion used in 0.4.13 fails here. The recovery path
+        // below must succeed once the reader releases its Windows handle.
+        assert!(matches!(
+            fs::remove_file(&journal).unwrap_err().raw_os_error(),
+            Some(5 | 32 | 33)
+        ));
+        let release = std::thread::spawn(move || {
+            std::thread::sleep(std::time::Duration::from_millis(150));
+            drop(reader);
+        });
+        let result = recover(root);
+        release.join().unwrap();
+        assert!(result.unwrap());
+        assert_eq!(fs::read(&target).unwrap(), b"old settings");
+        assert!(!journal.exists());
+        assert_eq!(fs::read_dir(root).unwrap().count(), 1);
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn locked_journal_keeps_recovery_material_until_the_next_startup() {
+        use std::os::windows::fs::OpenOptionsExt;
+        let tmp = tempfile::tempdir().unwrap();
+        let root = tmp.path();
+        let target = root.join("settings.json");
+        fs::write(&target, b"old settings").unwrap();
+        let mut transaction = Transaction::new(root).unwrap();
+        transaction.stage(&target, b"new settings").unwrap();
+        transaction.prepare().unwrap();
+        let journal = root.join(JOURNAL);
+        let reader = fs::OpenOptions::new()
+            .read(true)
+            .share_mode(3)
+            .open(&journal)
+            .unwrap();
+        let error = transaction.commit().unwrap_err();
+        assert!(format!("{error:#}").contains("profile-transaction.json"));
+        assert!(journal.exists());
+        assert!(transaction.directory.join("0.old").is_file());
+        assert_eq!(fs::read(&target).unwrap(), b"new settings");
+        drop(reader);
+        drop(transaction);
+        assert!(recover(root).unwrap());
+        assert_eq!(fs::read(&target).unwrap(), b"old settings");
+        assert!(!journal.exists());
+    }
     #[test]
     fn deleted_profile_is_restored_after_an_interrupted_commit() {
         let tmp = tempfile::tempdir().unwrap();

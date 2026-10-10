@@ -154,13 +154,92 @@ pub fn ensure_tray_available() -> Result<()> {
     Ok(())
 }
 pub fn set_autostart(enabled: bool) -> Result<()> {
-    super::windows_autostart::Backend::current()?.set(enabled)
+    let backend = super::windows_autostart::Backend::current()?;
+    match backend.set(enabled) {
+        Err(error) if !is_elevated() && super::windows_autostart::access_denied(&error) => {
+            repair_autostart(enabled).context("修复旧开机启动任务失败")?;
+            if backend.enabled()? != enabled {
+                bail!("开机启动设置未生效，请重试");
+            }
+            Ok(())
+        }
+        result => result,
+    }
+}
+
+fn repair_autostart(enabled: bool) -> Result<()> {
+    use std::os::windows::ffi::OsStrExt;
+    use windows_sys::Win32::{
+        Foundation::CloseHandle,
+        System::{
+            Com::{COINIT_APARTMENTTHREADED, CoInitializeEx, CoUninitialize},
+            Threading::{GetExitCodeProcess, WaitForSingleObject},
+        },
+        UI::Shell::{
+            SEE_MASK_FLAG_NO_UI, SEE_MASK_NOASYNC, SEE_MASK_NOCLOSEPROCESS, SHELLEXECUTEINFOW,
+            ShellExecuteExW,
+        },
+    };
+    let executable = std::env::current_exe()?;
+    let file: Vec<u16> = executable.as_os_str().encode_wide().chain([0]).collect();
+    let verb: Vec<u16> = "runas".encode_utf16().chain([0]).collect();
+    let sid = super::windows_autostart::user_sid()?;
+    let parameters: Vec<u16> = format!(
+        "{} --autostart-user {sid}",
+        if enabled {
+            "--autostart-enable"
+        } else {
+            "--autostart-remove"
+        }
+    )
+    .encode_utf16()
+    .chain([0])
+    .collect();
+    let initialized =
+        unsafe { CoInitializeEx(std::ptr::null(), COINIT_APARTMENTTHREADED as u32) } >= 0;
+    let mut info: SHELLEXECUTEINFOW = unsafe { std::mem::zeroed() };
+    info.cbSize = std::mem::size_of::<SHELLEXECUTEINFOW>() as u32;
+    info.fMask = SEE_MASK_NOCLOSEPROCESS | SEE_MASK_NOASYNC | SEE_MASK_FLAG_NO_UI;
+    info.lpVerb = verb.as_ptr();
+    info.lpFile = file.as_ptr();
+    info.lpParameters = parameters.as_ptr();
+    let launched = unsafe { ShellExecuteExW(&mut info) };
+    let error = std::io::Error::last_os_error();
+    if initialized {
+        unsafe { CoUninitialize() };
+    }
+    if launched == 0 {
+        if error.raw_os_error() == Some(1223) {
+            bail!("开机启动修复授权已取消");
+        }
+        return Err(error).context("无法启动开机启动修复助手");
+    }
+    if info.hProcess.is_null() {
+        bail!("无法跟踪开机启动修复助手");
+    }
+    let wait = unsafe { WaitForSingleObject(info.hProcess, 300_000) };
+    let mut code = 0;
+    let read = unsafe { GetExitCodeProcess(info.hProcess, &mut code) };
+    unsafe { CloseHandle(info.hProcess) };
+    if wait != 0 {
+        bail!("开机启动修复助手未完成，请稍后重试");
+    }
+    if read == 0 || code != 0 {
+        bail!("无法修复开机启动任务，请使用当前 Windows 账号完成管理员授权");
+    }
+    Ok(())
 }
 
 pub fn migrate_autostart() {
-    if let Ok(backend) = super::windows_autostart::Backend::current()
-        && backend.legacy_enabled().unwrap_or(false)
-    {
+    let Ok(backend) = super::windows_autostart::Backend::current() else {
+        return;
+    };
+    if is_elevated() {
+        // A previous version may have created an admin-only task. Restore the
+        // user's access when an elevated TUN instance is already authorized.
+        let _ = backend.repair_permissions();
+    }
+    if backend.legacy_enabled().unwrap_or(false) {
         // Keep the old Run value if scheduling is unavailable or denied.
         let _ = backend.set(true);
     }
@@ -183,6 +262,18 @@ pub fn autostart_helper_main() -> bool {
     } else {
         return false;
     };
+    let mut arguments = std::env::args_os();
+    while let Some(argument) = arguments.next() {
+        if argument == "--autostart-user" {
+            let expected = arguments.next();
+            let actual = super::windows_autostart::user_sid();
+            if !matches!((expected, actual), (Some(expected), Ok(actual)) if expected == actual.as_str())
+            {
+                eprintln!("开机启动修复必须使用当前 Windows 账号授权");
+                std::process::exit(3);
+            }
+        }
+    }
     if let Err(error) = set_autostart(enabled) {
         eprintln!("{error:#}");
         std::process::exit(1);

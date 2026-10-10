@@ -476,7 +476,7 @@ async fn execute(engine: Arc<Mutex<Engine>>, action: Action, scope: Scope) -> Re
                 Ok("外观已自动保存".into())
             }
             Action::Autostart(enabled) => {
-                platform::set_autostart(enabled)?;
+                tokio::task::spawn_blocking(move || platform::set_autostart(enabled)).await??;
                 Ok(if enabled {
                     "已开启开机自启，将在后台启动"
                 } else {

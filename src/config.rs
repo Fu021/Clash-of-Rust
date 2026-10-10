@@ -201,27 +201,36 @@ pub fn atomic_write(path: &Path, bytes: &[u8]) -> Result<()> {
 /// and readers can briefly deny rename/delete access to the destination.
 pub(crate) fn persist_file(file: tempfile::NamedTempFile, path: &Path) -> Result<()> {
     // Close our writer before rename, retaining ownership of the temporary path.
-    let temporary = file.into_temp_path();
-    #[cfg(windows)]
-    let mut temporary = temporary;
+    let mut temporary = Some(file.into_temp_path());
+    retry_file_operation(|| match temporary.take().unwrap().persist(path) {
+        Ok(()) => Ok(()),
+        Err(error) => {
+            temporary = Some(error.path);
+            Err(error.error)
+        }
+    })
+    .with_context(|| format!("保存文件失败：{}", path.display()))
+}
+
+/// Transaction recovery must tolerate the same short-lived Windows locks as
+/// atomic replacement. Never delete the original file as a rename workaround.
+pub(crate) fn remove_file(path: &Path) -> std::io::Result<()> {
+    retry_file_operation(|| std::fs::remove_file(path))
+}
+
+fn retry_file_operation<T>(
+    mut operation: impl FnMut() -> std::io::Result<T>,
+) -> std::io::Result<T> {
     #[cfg(windows)]
     for attempt in 0..8 {
-        match temporary.persist(path) {
-            Ok(()) => return Ok(()),
-            Err(error) => {
-                if !matches!(error.error.raw_os_error(), Some(5 | 32 | 33)) {
-                    return Err(error.error)
-                        .with_context(|| format!("保存文件失败：{}", path.display()));
-                }
-                temporary = error.path;
+        match operation() {
+            Err(error) if matches!(error.raw_os_error(), Some(5 | 32 | 33)) => {
                 std::thread::sleep(std::time::Duration::from_millis(25 * (attempt + 1)));
             }
+            result => return result,
         }
     }
-    temporary
-        .persist(path)
-        .map_err(|error| error.error)
-        .with_context(|| format!("保存文件失败：{}", path.display()))
+    operation()
 }
 
 pub const PROFILE_LIMIT: usize = 10 * 1024 * 1024;
@@ -237,7 +246,8 @@ pub(crate) fn read_runtime_config(path: &Path) -> Result<String> {
 
 fn read_config_text(path: &Path, limit: usize) -> Result<String> {
     use std::io::Read;
-    let file = std::fs::File::open(path).context("配置文件无法读取")?;
+    let file = std::fs::File::open(path)
+        .with_context(|| format!("配置文件无法读取：{}", path.display()))?;
     if file.metadata()?.len() > limit as u64 {
         bail!("配置超过 {} MiB 限制", limit / 1024 / 1024);
     }

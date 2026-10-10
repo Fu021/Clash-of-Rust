@@ -45,7 +45,7 @@ fn with_folder<T>(operation: impl FnOnce(&ITaskFolder) -> Result<T>) -> Result<T
     operation(&folder)
 }
 
-fn user_sid() -> Result<String> {
+pub(super) fn user_sid() -> Result<String> {
     use windows_sys::Win32::{
         Foundation::{CloseHandle, HANDLE, LocalFree},
         Security::{
@@ -98,6 +98,17 @@ fn user_sid() -> Result<String> {
         LocalFree(text.cast());
         Ok(result?)
     }
+}
+
+pub(super) fn access_denied(error: &anyhow::Error) -> bool {
+    error.chain().any(|cause| {
+        cause
+            .downcast_ref::<windows::core::Error>()
+            .is_some_and(|error| error.code().0 as u32 == 0x80070005)
+            || cause
+                .downcast_ref::<std::io::Error>()
+                .is_some_and(|error| error.raw_os_error() == Some(5))
+    })
 }
 
 fn xml_escape(text: &str) -> String {
@@ -257,6 +268,24 @@ impl Backend {
         )
     }
 
+    fn task_security(&self) -> BSTR {
+        BSTR::from(format!("D:P(A;;GA;;;SY)(A;;GA;;;BA)(A;;GA;;;{})", self.sid))
+    }
+
+    /// Upgrade an existing task's permissions without changing its enabled
+    /// state, command, principal or trigger. Only an owned task can be repaired.
+    pub fn repair_permissions(&self) -> Result<()> {
+        if !self.marked() {
+            return Ok(());
+        }
+        with_folder(|folder| {
+            if let Some(task) = self.owned_task(folder)? {
+                unsafe { task.SetSecurityDescriptor(&self.task_security(), 0)? };
+            }
+            Ok(())
+        })
+    }
+
     pub fn set(&self, enabled: bool) -> Result<()> {
         let root = RegKey::predef(HKEY_CURRENT_USER);
         if !enabled {
@@ -276,10 +305,7 @@ impl Backend {
             self.owned_task(folder)?;
             let empty = VARIANT::default();
             let user = VARIANT::from(BSTR::from(self.sid.as_str()));
-            let security = VARIANT::from(BSTR::from(format!(
-                "D:P(A;;GA;;;SY)(A;;GA;;;BA)(A;;GA;;;{})",
-                self.sid
-            )));
+            let security = VARIANT::from(self.task_security());
             unsafe {
                 folder.RegisterTask(
                     &BSTR::from(self.task_name.as_str()),
@@ -547,6 +573,29 @@ mod tests {
         })
         .unwrap();
         assert!(!backend.enabled().unwrap());
+        // Simulate an older task whose DACL only lets the user's ordinary token
+        // read it. Repair it as admin without accidentally re-enabling it.
+        with_folder(|folder| {
+            let task = backend.owned_task(folder)?.unwrap();
+            let legacy = BSTR::from(format!(
+                "D:P(A;;GA;;;SY)(A;;GA;;;BA)(A;;GRGX;;;{})",
+                backend.sid
+            ));
+            unsafe { task.SetSecurityDescriptor(&legacy, 0)? };
+            assert!(!grants_current_user_access(&task, &backend.sid));
+            Ok(())
+        })
+        .unwrap();
+        backend.repair_permissions().unwrap();
+        assert!(!backend.enabled().unwrap());
+        with_folder(|folder| {
+            assert!(grants_current_user_access(
+                &backend.owned_task(folder)?.unwrap(),
+                &backend.sid
+            ));
+            Ok(())
+        })
+        .unwrap();
         backend.set(true).unwrap();
         assert!(backend.enabled().unwrap());
         let other = Cleanup(Backend {

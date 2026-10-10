@@ -1,7 +1,7 @@
-"""Run the real Windows GUI with a medium-integrity, non-admin token.
+"""Run the real Windows GUI as a temporary, ordinary local user in CI.
 
-Uses an isolated data directory and no system proxy/TUN. No local accounts or
-passwords are created; the restricted token retains the runner user's SID.
+Uses isolated directories and no system proxy/TUN. The test account is deleted
+in finally; its random password never enters a command line or test output.
 """
 import argparse
 import ctypes as c
@@ -37,6 +37,12 @@ class SecurityAttributes(c.Structure):
     _fields_ = [('length', w.DWORD), ('descriptor', c.c_void_p), ('inherit', w.BOOL)]
 
 
+class UserInfo(c.Structure):
+    _fields_ = [('name', w.LPWSTR), ('password', w.LPWSTR), ('password_age', w.DWORD),
+                ('privilege', w.DWORD), ('home', w.LPWSTR), ('comment', w.LPWSTR),
+                ('flags', w.DWORD), ('script', w.LPWSTR)]
+
+
 def checked(result):
     if not result:
         raise c.WinError(c.get_last_error())
@@ -49,8 +55,10 @@ class Windows:
         self.security = c.WinDLL('advapi32', use_last_error=True)
         self.shell = c.WinDLL('shell32', use_last_error=True)
         self.user = c.WinDLL('user32', use_last_error=True)
+        self.network = c.WinDLL('netapi32', use_last_error=True)
         self.station = self.desktop_handle = None
         self.desktop_name = None
+        self.username = self.password = self.user_temp = None
         signatures = [
             (self.kernel, 'GetCurrentProcess', [], w.HANDLE),
             (self.kernel, 'CloseHandle', [w.HANDLE], w.BOOL),
@@ -62,19 +70,26 @@ class Windows:
             (self.kernel, 'SetEvent', [w.HANDLE], w.BOOL),
             (self.security, 'OpenProcessToken', [w.HANDLE, w.DWORD, c.POINTER(w.HANDLE)], w.BOOL),
             (self.security, 'ConvertStringSidToSidW', [w.LPCWSTR, c.POINTER(c.c_void_p)], w.BOOL),
-            (self.security, 'GetLengthSid', [c.c_void_p], w.DWORD),
-            (self.security, 'CreateRestrictedToken',
-             [w.HANDLE, w.DWORD, w.DWORD, c.POINTER(SidAndAttributes),
-              w.DWORD, c.c_void_p, w.DWORD, c.c_void_p, c.POINTER(w.HANDLE)], w.BOOL),
-            (self.security, 'SetTokenInformation', [w.HANDLE, c.c_int, c.c_void_p, w.DWORD], w.BOOL),
+            (self.security, 'ConvertSidToStringSidW', [c.c_void_p, c.POINTER(w.LPWSTR)], w.BOOL),
+            (self.security, 'GetTokenInformation',
+             [w.HANDLE, c.c_int, c.c_void_p, w.DWORD, c.POINTER(w.DWORD)], w.BOOL),
+            (self.security, 'LogonUserW',
+             [w.LPCWSTR, w.LPCWSTR, w.LPCWSTR, w.DWORD, w.DWORD, c.POINTER(w.HANDLE)], w.BOOL),
+            (self.security, 'LookupAccountSidW',
+             [w.LPCWSTR, c.c_void_p, w.LPWSTR, c.POINTER(w.DWORD),
+              w.LPWSTR, c.POINTER(w.DWORD), c.POINTER(w.DWORD)], w.BOOL),
             (self.security, 'ImpersonateLoggedOnUser', [w.HANDLE], w.BOOL),
             (self.security, 'RevertToSelf', [], w.BOOL),
             (self.security, 'CreateProcessAsUserW',
              [w.HANDLE, w.LPCWSTR, w.LPWSTR, c.c_void_p, c.c_void_p, w.BOOL,
               w.DWORD, c.c_void_p, w.LPCWSTR, c.POINTER(StartupInfo), c.POINTER(ProcessInfo)], w.BOOL),
-            (self.security, 'CreateProcessWithTokenW',
-             [w.HANDLE, w.DWORD, w.LPCWSTR, w.LPWSTR, w.DWORD, c.c_void_p,
+            (self.security, 'CreateProcessWithLogonW',
+             [w.LPCWSTR, w.LPCWSTR, w.LPCWSTR, w.DWORD, w.LPCWSTR, w.LPWSTR, w.DWORD, c.c_void_p,
               w.LPCWSTR, c.POINTER(StartupInfo), c.POINTER(ProcessInfo)], w.BOOL),
+            (self.network, 'NetUserAdd', [w.LPCWSTR, w.DWORD, c.c_void_p, c.POINTER(w.DWORD)], w.DWORD),
+            (self.network, 'NetUserDel', [w.LPCWSTR, w.LPCWSTR], w.DWORD),
+            (self.network, 'NetLocalGroupAddMembers',
+             [w.LPCWSTR, w.LPCWSTR, w.DWORD, c.c_void_p, w.DWORD], w.DWORD),
             (self.shell, 'IsUserAnAdmin', [], w.BOOL),
             (self.security, 'ConvertStringSecurityDescriptorToSecurityDescriptorW',
              [w.LPCWSTR, w.DWORD, c.POINTER(c.c_void_p), c.c_void_p], w.BOOL),
@@ -92,15 +107,10 @@ class Windows:
             function = getattr(library, name)
             function.argtypes, function.restype = args, result
 
-    def create_test_desktop(self):
-        import csv
-        import subprocess
-        sid = next(csv.reader(subprocess.check_output(
-            ['whoami', '/user', '/fo', 'csv', '/nh'], text=True).splitlines()))[1]
+    def create_test_desktop(self, sid):
         descriptor = c.c_void_p()
-        # The hosted runner's service desktop may grant only Administrators
-        # access. Give the test user's SID its own medium-integrity desktop;
-        # keep the existing runner desktop and its permissions unchanged.
+        # Give the ordinary user an isolated medium-integrity desktop, while
+        # keeping the existing runner desktop and its permissions unchanged.
         sddl = f'D:P(A;;GA;;;SY)(A;;GA;;;BA)(A;;GA;;;{sid})S:(ML;;NW;;;ME)'
         checked(self.security.ConvertStringSecurityDescriptorToSecurityDescriptorW(
             sddl, 1, c.byref(descriptor), None))
@@ -125,36 +135,72 @@ class Windows:
         if self.station:
             checked(self.user.CloseWindowStation(self.station))
 
-    def limited_token(self):
-        original, limited = w.HANDLE(), w.HANDLE()
-        admin_sid, medium_sid = c.c_void_p(), c.c_void_p()
+    def ordinary_user(self):
+        import secrets
+        name = 'ClashCI' + secrets.token_hex(5)
+        password = 'Aa1!' + secrets.token_urlsafe(24)
+        user = UserInfo(name, password, 0, 1, None, 'Temporary Clash startup CI user', 0x201, None)
+        parameter = w.DWORD()
+        status = self.network.NetUserAdd(None, 1, c.byref(user), c.byref(parameter))
+        if status:
+            raise c.WinError(status)
+        self.username, self.password = name, password
+        users_sid = c.c_void_p()
+        token = w.HANDLE()
         try:
-            checked(self.security.OpenProcessToken(self.kernel.GetCurrentProcess(), 0x8B, c.byref(original)))
-            checked(self.security.ConvertStringSidToSidW('S-1-5-32-544', c.byref(admin_sid)))
-            disabled = SidAndAttributes(admin_sid.value, 0)
-            checked(self.security.CreateRestrictedToken(original, 1, 1, c.byref(disabled),
-                                                       0, None, 0, None, c.byref(limited)))
-            checked(self.security.ConvertStringSidToSidW('S-1-16-8192', c.byref(medium_sid)))
-            label = SidAndAttributes(medium_sid.value, 0x20)
-            checked(self.security.SetTokenInformation(limited, 25, c.byref(label),
-                                                     c.sizeof(label) + self.security.GetLengthSid(medium_sid)))
-            checked(self.security.ImpersonateLoggedOnUser(limited))
+            # Resolve the built-in Users group by SID, also on localized hosts.
+            checked(self.security.ConvertStringSidToSidW('S-1-5-32-545', c.byref(users_sid)))
+            group, domain = c.create_unicode_buffer(256), c.create_unicode_buffer(256)
+            group_length, domain_length, kind = w.DWORD(256), w.DWORD(256), w.DWORD()
+            checked(self.security.LookupAccountSidW(None, users_sid, group, c.byref(group_length),
+                                                   domain, c.byref(domain_length), c.byref(kind)))
+            member = w.LPWSTR(name)
+            status = self.network.NetLocalGroupAddMembers(None, group.value, 3, c.byref(member), 1)
+            if status not in (0, 1378):  # already a member is also fine
+                raise c.WinError(status)
+            checked(self.security.LogonUserW(name, '.', password, 2, 0, c.byref(token)))
+            checked(self.security.ImpersonateLoggedOnUser(token))
             try:
                 assert not self.shell.IsUserAnAdmin(), 'Startup test must really use non-admin permissions'
             finally:
                 checked(self.security.RevertToSelf())
-            token, limited = limited, w.HANDLE()
-            return token
+            length = w.DWORD()
+            self.security.GetTokenInformation(token, 1, None, 0, c.byref(length))
+            buffer = c.create_string_buffer(length.value)
+            checked(self.security.GetTokenInformation(token, 1, buffer, length, c.byref(length)))
+            sid = SidAndAttributes.from_buffer(buffer).sid
+            string = w.LPWSTR()
+            checked(self.security.ConvertSidToStringSidW(sid, c.byref(string)))
+            try:
+                return token, string.value
+            finally:
+                self.kernel.LocalFree(c.cast(string, c.c_void_p))
+        except BaseException:
+            if token:
+                self.kernel.CloseHandle(token)
+            raise
         finally:
-            for sid in (admin_sid, medium_sid):
-                if sid:
-                    self.kernel.LocalFree(sid)
-            for token in (original, limited):
-                if token:
-                    self.kernel.CloseHandle(token)
+            if users_sid:
+                self.kernel.LocalFree(users_sid)
+
+    def delete_test_user(self):
+        if self.username:
+            status = self.network.NetUserDel(None, self.username)
+            if status:
+                raise c.WinError(status)
+
+    def grant(self, path, sid, rights):
+        import subprocess
+        subprocess.run(['icacls', str(path), '/grant', f'*{sid}:{rights}'],
+                       check=True, stdout=subprocess.DEVNULL)
 
     def launch(self, executable, token, environment, arguments=()):
         import subprocess
+        if token is not None:
+            profile = str(Path(os.environ['SystemDrive'] + '\\Users')/self.username)
+            environment = dict(environment, TEMP=self.user_temp, TMP=self.user_temp,
+                               USERPROFILE=profile, LOCALAPPDATA=profile+'\\AppData\\Local',
+                               APPDATA=profile+'\\AppData\\Roaming', USERNAME=self.username)
         command = c.create_unicode_buffer(subprocess.list2cmdline([str(executable), *arguments]))
         env = c.create_unicode_buffer('\0'.join(f'{k}={v}' for k, v in sorted(environment.items())) + '\0\0')
         startup, process = StartupInfo(), ProcessInfo()
@@ -170,11 +216,9 @@ class Windows:
                                                           None, None, False, 0x08000400, env,
                                                           str(executable.parent), c.byref(startup), c.byref(process)))
             else:
-                # Secondary Logon initializes the user's profile and process
-                # environment; creating a filtered service token directly can
-                # fail in DLL initialization before the application runs.
-                checked(self.security.CreateProcessWithTokenW(token, 1, str(executable), command,
-                                                             0x08000400, env, str(executable.parent),
+                checked(self.security.CreateProcessWithLogonW(self.username, '.', self.password, 1,
+                                                             str(executable), command, 0x08000400,
+                                                             env, str(executable.parent),
                                                              c.byref(startup), c.byref(process)))
         finally:
             if original:
@@ -182,16 +226,22 @@ class Windows:
         self.kernel.CloseHandle(process.thread)
         return process
 
-    def wait(self, process, seconds):
+    def wait(self, process, seconds, expected=0):
         result = self.kernel.WaitForSingleObject(process.process, seconds * 1000)
         if result != 0:
             raise TimeoutError(f'Process {process.pid} did not finish: wait={result}')
         code = w.DWORD()
         checked(self.kernel.GetExitCodeProcess(process.process, c.byref(code)))
-        assert code.value == 0, f'Process {process.pid} failed: 0x{code.value:08x}'
+        assert code.value == expected, f'Process {process.pid} failed: 0x{code.value:08x}, expected={expected}'
 
-    def stop(self, process):
-        event = self.kernel.OpenEventW(2, False, 'Local\\ClashOfRust.Exit')
+    def stop(self, process, token):
+        if token is not None:
+            checked(self.security.ImpersonateLoggedOnUser(token))
+        try:
+            event = self.kernel.OpenEventW(2, False, 'Local\\ClashOfRust.Exit')
+        finally:
+            if token is not None:
+                checked(self.security.RevertToSelf())
         if event:
             try:
                 checked(self.kernel.SetEvent(event))
@@ -235,7 +285,7 @@ def check_startup(api, executable, token, directory, background=False):
         profiles = json.loads((directory/'profiles.json').read_text(encoding='utf-8'))
         assert profiles and settings['active_profile'], 'First-run default profile was not saved'
         assert not config.get('tun', {}).get('enable', False), 'Startup test must not enable TUN'
-        api.stop(process)
+        api.stop(process, token)
         print('PASS: real GUI, default profile, offline Geo, configuration saves and core startup;',
               'background=' + str(background), flush=True)
     finally:
@@ -252,20 +302,42 @@ def main():
     test_binary = args.test_binary.resolve(strict=True)
     api = Windows()
     assert api.shell.IsUserAnAdmin(), 'Expected an elevated CI runner so both contexts can be tested'
-    limited = api.limited_token()
+    limited = w.HANDLE()
     try:
-        api.create_test_desktop()
-        # These tests now run with real ordinary permissions, not just the
-        # elevated runner token that masked the original startup failures.
-        for arguments in (['config::tests::', '--test-threads=1'],
-                          ['profile_transaction::tests::', '--test-threads=1']):
-            process = api.launch(test_binary, limited, dict(os.environ), arguments)
-            try:
-                api.wait(process, 60)
-            finally:
-                api.cleanup(process)
+        limited, sid = api.ordinary_user()
+        api.create_test_desktop(sid)
+        api.grant(executable.parent, sid, '(OI)(CI)RX')
+        api.grant(test_binary.parent, sid, 'RX')
+        api.grant(test_binary, sid, 'RX')
         with tempfile.TemporaryDirectory(prefix='clash startup 中文 ') as work:
             root = Path(work)
+            api.grant(root, sid, '(OI)(CI)M')
+            api.user_temp = str(root)
+            # Use a real local Users account, rather than a filtered service
+            # token that Windows may reject before application initialization.
+            for arguments in (['config::tests::', '--test-threads=1'],
+                              ['profile_transaction::tests::', '--test-threads=1']):
+                process = api.launch(test_binary, limited, dict(os.environ), arguments)
+                try:
+                    api.wait(process, 60)
+                finally:
+                    api.cleanup(process)
+                print('PASS: ordinary user ' + arguments[0], flush=True)
+            # The same early CLI handler is used by the UAC repair assistant.
+            # A new ordinary account must enable/disable startup successfully,
+            # and an assistant running as a different account must refuse it.
+            for arguments, expected in ((['--autostart-enable'], 0),
+                                        (['--autostart-status'], 0),
+                                        (['--autostart-remove'], 0),
+                                        (['--autostart-status'], 1),
+                                        (['--autostart-remove', '--autostart-user', sid], 3)):
+                process = api.launch(executable, None if expected == 3 else limited,
+                                     dict(os.environ), arguments)
+                try:
+                    api.wait(process, 30, expected)
+                finally:
+                    api.cleanup(process)
+            print('PASS: ordinary user startup toggle and repair-account validation', flush=True)
             fresh = root/'ordinary first run'
             fresh.mkdir()
             check_startup(api, executable, limited, fresh)
@@ -300,9 +372,13 @@ def main():
             check_startup(api, executable, None, migrated)
             check_startup(api, executable, limited, migrated)
     finally:
-        api.close_test_desktop()
-        api.kernel.CloseHandle(limited)
-    print('PASS: Windows startup checks use a verified non-admin medium-integrity token', flush=True)
+        try:
+            api.close_test_desktop()
+        finally:
+            if limited:
+                api.kernel.CloseHandle(limited)
+            api.delete_test_user()
+    print('PASS: Windows startup checks use a verified ordinary local Users account', flush=True)
 
 
 if __name__ == '__main__':
