@@ -137,7 +137,7 @@ def main():
                 time.sleep(2)
                 if scene.startswith('settings-rules'):
                     subprocess.run(['xdotool', 'mousemove', '--window', window, '600', '300',
-                                    'click', '--repeat', '3' if 'compact' not in scene else '5',
+                                    'click', '--repeat', '2',
                                     '--delay', '100', '5'], env=env, check=True)
                     time.sleep(0.3)
                 subprocess.run(['xdotool', 'mousemove', '--window', window, '10', '10'],

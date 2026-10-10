@@ -3472,9 +3472,8 @@ impl App {
     fn settings_view(&self) -> Element<'_, Message> {
         let mut rules = column![
             self.title("订阅附加规则"),
-            self.caption("勾选后保存，对订阅生效；更新订阅后保留，取消勾选恢复原规则。"),
-            self.caption("附加规则优先匹配，保留订阅原有兜底规则；仅在规则模式下生效。"),
-            self.caption("订阅已有同样规则时保持原样，开关只补充缺少的规则。"),
+            self.caption("仅补充订阅缺少的规则；勾选后保存，更新后保留，取消勾选恢复原规则。"),
+            self.caption("补充的规则优先匹配，订阅原规则和兜底保持原样；仅在规则模式下生效。"),
         ]
         .spacing(10);
         let labels = [
