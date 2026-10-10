@@ -581,7 +581,9 @@ mod tests {
                 "D:P(A;;GA;;;SY)(A;;GA;;;BA)(A;;GRGX;;;{})",
                 backend.sid
             ));
-            unsafe { task.SetSecurityDescriptor(&legacy, 0)? };
+            // Preserve the deliberately restricted fixture: otherwise Task
+            // Scheduler may automatically add an allow ACE for the principal.
+            unsafe { task.SetSecurityDescriptor(&legacy, 0x10)? };
             assert!(!grants_current_user_access(&task, &backend.sid));
             Ok(())
         })
