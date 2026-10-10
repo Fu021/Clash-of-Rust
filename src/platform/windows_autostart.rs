@@ -499,6 +499,37 @@ mod tests {
     }
 
     #[test]
+    #[ignore = "requires native Task Scheduler; run in an ordinary interactive Windows session"]
+    fn native_ordinary_user_can_manage_a_new_logon_task() {
+        assert!(!super::super::windows::is_elevated());
+        let mut backend = Backend::current().unwrap();
+        let name = format!("ClashOfRust.CI.{}", uuid::Uuid::new_v4());
+        backend.task_name = name.clone();
+        backend.run_name = name.clone();
+        backend.marker_key = format!("Software\\ClashOfRust\\Tests\\{name}");
+        let cleanup = Cleanup(backend);
+        let backend = &cleanup.0;
+        backend.set(true).unwrap();
+        assert!(
+            backend.marked(),
+            "test must exercise the scheduler, not Run fallback"
+        );
+        assert!(backend.enabled().unwrap());
+        with_folder(|folder| {
+            let task = backend.owned_task(folder)?.unwrap();
+            assert!(grants_current_user_access(&task, &backend.sid));
+            unsafe { task.SetEnabled(VARIANT_BOOL(0))? };
+            Ok(())
+        })
+        .unwrap();
+        assert!(!backend.enabled().unwrap());
+        backend.set(true).unwrap();
+        assert!(backend.enabled().unwrap());
+        backend.set(false).unwrap();
+        assert!(!backend.enabled().unwrap());
+    }
+
+    #[test]
     #[ignore = "requires the native Windows Task Scheduler; creates only a unique test task"]
     fn native_autostart_migrates_and_cleans_up_a_user_logon_task() {
         let mut backend = Backend::current().unwrap();

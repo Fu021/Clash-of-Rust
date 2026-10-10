@@ -3,6 +3,7 @@
 /bundle/
 /dist/
 /tools/
+/.local-tools/
 
 # Temporary downloads and local diagnostics
 *.partial

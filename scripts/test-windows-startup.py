@@ -475,7 +475,9 @@ def main():
             for arguments in (['config::tests::', '--test-threads=1'],
                               ['profile_transaction::tests::', '--test-threads=1'],
                               ['platform::windows::show_event_tests::', '--test-threads=1'],
-                              ['platform::application_guard_tests::', '--test-threads=1']):
+                              ['platform::application_guard_tests::', '--test-threads=1'],
+                              ['native_ordinary_user_can_manage_a_new_logon_task',
+                               '--ignored', '--test-threads=1']):
                 process = api.launch(test_binary, limited, dict(os.environ), arguments)
                 try:
                     api.wait(process, 60)
