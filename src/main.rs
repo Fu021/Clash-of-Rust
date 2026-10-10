@@ -2290,7 +2290,7 @@ impl App {
         }
     }
 
-    fn site_report(&self, report: &ip_report::Report) -> Element<'_, Message> {
+    fn site_report(&self, report: &ip_report::Report, region_count: usize) -> Element<'_, Message> {
         let completed = report.totals.completed();
         let compact = self.window_height.parse::<u16>().unwrap_or(700) < 560;
         let show_categories = !compact || self.site_report_categories;
@@ -2409,8 +2409,20 @@ impl App {
             status_row.wrap()
         ]
         .spacing(6);
+        if !compact {
+            let exit = self.site_result(0).and_then(|result| result.as_ref().ok());
+            body = body.push(
+                self.label(format!(
+                    "出口 IP：{} · 出口地区：{} · 各平台识别到 {} 个地区",
+                    exit.map_or("未获取", |result| result.summary.as_str()),
+                    exit.map_or("未获取", |result| flags::country_text(&result.country)),
+                    region_count
+                ))
+                .size(self.scaled(10)),
+            );
+        }
         if show_categories {
-            body = body.push(scrollable(categories).height(if compact { 70 } else { 140 }));
+            body = body.push(scrollable(categories).height(if compact { 70 } else { 120 }));
         }
         if !compact {
             body = body.push(
@@ -2430,6 +2442,11 @@ impl App {
         let query = self.query.to_lowercase();
         let services = ip_check::services();
         let report = ip_report::Report::from_results(&self.site_results);
+        let codes: BTreeSet<_> = self
+            .site_results
+            .iter()
+            .filter_map(|result| ip_report::region(result.as_ref()))
+            .collect();
         let matching = (0..services.len()).filter(|&index| self.site_matches(index, &query));
         let visible = matching.clone().count();
         let offset = self.list_offset.min(last_page_offset(visible));
@@ -2552,7 +2569,7 @@ impl App {
         .spacing(8);
         if report.totals.completed() > 0 && self.site_busy.is_empty() && self.site_queue.is_empty()
         {
-            page = page.push(self.site_report(&report));
+            page = page.push(self.site_report(&report, codes.len()));
         }
         let categories: Vec<_> = std::iter::once(CategoryFilter::All)
             .chain(
@@ -2564,11 +2581,6 @@ impl App {
             .collect();
         let statuses: Vec<_> = std::iter::once(StatusFilter::All)
             .chain(Status::ALL.into_iter().map(StatusFilter::Status))
-            .collect();
-        let codes: BTreeSet<_> = self
-            .site_results
-            .iter()
-            .filter_map(|result| ip_report::region(result.as_ref()))
             .collect();
         let regions: Vec<_> = [RegionFilter::All, RegionFilter::Unidentified]
             .into_iter()

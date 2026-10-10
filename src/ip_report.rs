@@ -148,7 +148,7 @@ impl Report {
     pub fn from_results(results: &[ResultSlot]) -> Self {
         let mut report = Self {
             totals: Counts::default(),
-            categories: Vec::with_capacity(14),
+            categories: Vec::with_capacity(15),
         };
         for (index, service) in ip_check::services().iter().enumerate() {
             let status = Status::of(results.get(index).and_then(Option::as_ref));
@@ -205,7 +205,7 @@ mod tests {
         assert_eq!(report.totals.count(Status::Available), 1);
         assert_eq!(report.totals.count(Status::Identified), 1);
         assert_eq!(report.totals.count(Status::Untested), 176);
-        assert_eq!(report.categories.len(), 14);
+        assert_eq!(report.categories.len(), 15);
         let ai = report.categories.iter().find(|c| c.name == "AI").unwrap();
         assert_eq!(ai.counts.total(), 5);
         assert_eq!(ai.counts.completed(), 5);
