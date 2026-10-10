@@ -2811,7 +2811,7 @@ impl App {
         let progress = container(
             column![
                 actions,
-                progress_bar(0.0..=total as f32, completed as f32).height(5),
+                progress_bar(0.0..=total as f32, completed as f32).girth(5),
             ]
             .spacing(10),
         )
