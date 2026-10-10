@@ -126,7 +126,7 @@ def interactive_uninstall(executable, installed, delete_data):
                 user.GetWindowThreadProcessId(window, ctypes.byref(pid))
                 if pid.value == process.pid:
                     for control in enumerate_windows(window):
-                        if text(control) == '删除所有配置和数据（默认不选）':
+                        if text(control) == '删除所有配置和数据':
                             return window, control
 
         try:

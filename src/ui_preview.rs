@@ -144,6 +144,7 @@ fn fixture(scene: &str) -> App {
         }
     } else {
         app.page = Page::Websites;
+        app.site_has_run = true;
         for (index, service) in ip_check::services().iter().enumerate() {
             let mut state = if index == 0 {
                 ip_check::State::Identified
@@ -212,15 +213,39 @@ fn fixture(scene: &str) -> App {
             app.site_results.push(Some(result));
         }
         match scene {
-            "ip-ai" => app.site_category = CategoryFilter::Group("AI"),
-            "ip-restricted" => app.site_status = StatusFilter::Status(Status::Restricted),
+            "ip-ai" => {
+                app.site_category = CategoryFilter::Group("AI");
+                app.site_show_results = true;
+            }
+            "ip-restricted" => {
+                app.site_status = StatusFilter::Status(Status::Restricted);
+                app.site_show_results = true;
+            }
             "ip-details" => {
                 app.site_category = CategoryFilter::Group("AI");
                 app.site_detail = Some(5);
+                app.site_show_results = true;
             }
-            "ip-partial" => {
+            "ip-empty" => {
+                app.site_results.clear();
+                app.site_has_run = false;
+            }
+            "ip-running" | "ip-partial" | "ip-category-partial" => {
                 for result in app.site_results.iter_mut().skip(42) {
                     *result = None;
+                }
+                if scene != "ip-partial" {
+                    app.site_busy.insert(ip_check::services()[42].id.clone());
+                    app.site_queue.extend(
+                        ip_check::services()
+                            .iter()
+                            .skip(43)
+                            .map(|service| service.id.clone()),
+                    );
+                }
+                if scene == "ip-category-partial" {
+                    app.site_category = CategoryFilter::Group("日本");
+                    app.site_show_results = true;
                 }
             }
             _ => {}
@@ -232,7 +257,11 @@ fn fixture(scene: &str) -> App {
 fn update(app: &mut App, message: Message) -> Task<Message> {
     if matches!(
         message,
-        Message::SiteSummaryFilter(..) | Message::SiteResetFilters | Message::NodeSort(_)
+        Message::SiteSummaryFilter(..)
+            | Message::SiteResetFilters
+            | Message::SiteReport
+            | Message::SiteDetail(_)
+            | Message::NodeSort(_)
     ) {
         eprintln!("preview interaction: {message:?}");
     }
@@ -249,7 +278,7 @@ fn update(app: &mut App, message: Message) -> Task<Message> {
         | Message::SiteDetail(_)
         | Message::SiteSummaryFilter(..)
         | Message::SiteResetFilters
-        | Message::SiteReportCategories => app.update(message),
+        | Message::SiteReport => app.update(message),
         _ => Task::none(),
     }
 }

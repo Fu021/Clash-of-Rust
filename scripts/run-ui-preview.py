@@ -34,41 +34,76 @@ def pixels(path):
 
 
 def selection_regression(window, scene, output, env, runner):
-    """Compare a real click redraw with a full redraw at the same window size."""
-    def click(x, y):
+    """Click report -> AI details -> status/reset -> report, checking real redraws."""
+    def click(x, y, expected):
         subprocess.run(['xdotool', 'mousemove', '--window', window, str(x), str(y),
                         'click', '1', 'mousemove', '--window', window, '10', '10'],
                        env=env, check=True)
         time.sleep(0.5)
+        log = (output/(scene+'.log')).read_text()
+        if expected not in log:
+            raise RuntimeError('Expected real UI interaction: '+expected)
+
     light = scene.endswith('light')
     width, height, rows = pixels(output/(scene+'.png'))
-    # Locate the native selector borders rather than depending on the height
-    # of the report, which changes with wrapping and font metrics.
-    def border_at(x, y):
-        return all(abs(a-b) <= 3 for a, b in zip(rows[y][x*3:x*3+3], (100, 116, 139)))
+    if width != 950:
+        raise RuntimeError('Expected default-width report for interaction regression')
+    border = (203, 213, 225) if light else (71, 85, 105)
+    def ink_at(x, y, color):
+        return all(abs(a-b) <= 3 for a, b in zip(rows[y][x*3:x*3+3], color))
+    # Category cards have three long, equally sized top borders; locate them
+    # below the exit panel instead of hard-coding text-dependent report heights.
+    cards = None
+    for y in range(200, height-100):
+        runs, start = [], None
+        for x in range(184, width-16):
+            if ink_at(x, y, border):
+                if start is None:
+                    start = x
+            elif start is not None:
+                if 180 <= x-start <= 260:
+                    runs.append((start, x))
+                start = None
+        if len(runs) == 3:
+            cards = runs
+            card_top = y
+            break
+    if cards is None:
+        raise RuntimeError('Could not locate the three category cards')
+    click((cards[1][0]+cards[1][1])//2, card_top+40,
+          'SiteSummaryFilter(Group("AI"), All)')
+    runner.screenshot(window, output/('ip-open-category'+('-light' if light else '')+'.png'), env)
+    _, _, rows = pixels(output/('ip-open-category'+('-light' if light else '')+'.png'))
+    # The first detail selector is 150 px wide; its two vertical borders
+    # distinguish it from the full-width search input above it.
     runs, start = [], None
-    for y in range(180, min(height-60, 600)):
-        if border_at(184, y) and border_at(293, y):
+    for y in range(120, min(height-60, 600)):
+        if ink_at(184, y, (100, 116, 139)) and ink_at(333, y, (100, 116, 139)):
             if start is None:
                 start = y
         elif start is not None:
             if y-start >= 12:
                 runs.append((start, y))
             start = None
-    if len(runs) != 1 or width != 950:
-        raise RuntimeError('Could not locate the selector interiors: '+str(runs))
+    if len(runs) != 1:
+        raise RuntimeError('Could not locate detail selectors: '+str(runs))
     top, bottom = runs[0]
     center = (top+bottom)//2
-    for name, x, y, expected in [
-        ('ip-filter-click', 225, center-90, 'SiteSummaryFilter(Group("IP信息"), Status(Identified))'),
-        ('ip-filter-category', 600, center-117, 'SiteSummaryFilter(Group("AI"), All)'),
-        ('ip-filter-status', 607, center-90, 'SiteSummaryFilter(Group("AI"), Status(Available))'),
-        ('ip-filter-reset', 650, center, 'SiteResetFilters'),
-    ]:
-        click(x, y)
-        if expected not in (output/(scene+'.log')).read_text():
-            raise RuntimeError('Expected real UI interaction: '+expected)
-        stem = name+('-light' if light else '')
+    # Locate the first status button inside the category summary card.
+    status_run, start = None, None
+    for y in range(130, top-35):
+        if ink_at(196, y, border):
+            if start is None:
+                start = y
+        elif start is not None:
+            if y-start >= 12:
+                status_run = (start, y)
+                break
+            start = None
+    if status_run is None:
+        raise RuntimeError('Could not locate category status button')
+
+    def verify_redraw(stem):
         partial, full = output/(stem+'.png'), output/(stem+'-full.png')
         runner.screenshot(window, partial, env)
         subprocess.run(['xdotool', 'windowsize', window, '970', '720'], env=env, check=True)
@@ -77,12 +112,16 @@ def selection_regression(window, scene, output, env, runner):
         time.sleep(0.5)
         runner.screenshot(window, full, env)
         a, b = pixels(partial), pixels(full)
-        # Compare the captions and their surrounding interior. tiny-skia can
-        # accumulate antialiasing differences on the bottom border after a
-        # resize; that border is outside the text area under regression.
-        if a[:2] != b[:2] or any(a[2][y][188*3:602*3] != b[2][y][188*3:602*3]
+        if a[:2] != b[:2] or any(a[2][y][188*3:490*3] != b[2][y][188*3:490*3]
                                   for y in range(top+2, bottom-2)):
             raise RuntimeError('Selection redraw differs from full repaint: '+stem)
+
+    click(220, sum(status_run)//2, 'SiteSummaryFilter(Group("AI"), Status(Available))')
+    verify_redraw('ip-filter-status'+('-light' if light else ''))
+    click(525, center, 'SiteResetFilters')
+    verify_redraw('ip-filter-reset'+('-light' if light else ''))
+    click(220, 96, 'SiteReport')
+    runner.screenshot(window, output/('ip-return-report'+('-light' if light else '')+'.png'), env)
 
 
 def main():
@@ -109,8 +148,9 @@ def main():
     runner = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(runner)
     scenes = ['proxies-ascending', 'proxies-descending', 'proxies-name', 'ip-summary',
-              'ip-ai', 'ip-restricted', 'ip-details', 'ip-partial', 'ip-compact', 'ip-summary-light']
-    pages = ['home', 'proxies-ascending', 'profiles', 'connections', 'rules', 'logs',
+              'ip-ai', 'ip-restricted', 'ip-details', 'ip-partial', 'ip-compact', 'ip-summary-light',
+              'ip-empty', 'ip-running', 'ip-category-partial']
+    pages = ['ip-ai', 'ip-running', 'ip-empty', 'home', 'proxies-ascending', 'profiles', 'connections', 'rules', 'logs',
              'diagnostics', 'ip-summary', 'settings', 'home-failure', 'home-retrying']
     scenes = list(dict.fromkeys([scene+suffix for scene in pages for suffix in ('', '-light')] + scenes))
     scenes += [scene+'-compact'+suffix for scene in pages for suffix in ('', '-light')]

@@ -390,19 +390,17 @@ Function un.DataOptions
   ${If} $DataOptionsDialog == error
     Abort
   ${EndIf}
-  ${NSD_CreateLabel} 0 0 100% 24u "默认保留订阅、个人设置、缓存和内核运行数据，方便以后重新安装。"
-  Pop $0
-  ${NSD_CreateCheckbox} 0 36u 100% 14u "删除所有配置和数据（默认不选）"
+  ${NSD_CreateCheckbox} 0 12u 100% 14u "删除所有配置和数据"
   Pop $DeleteDataCheckbox
   ${NSD_SetState} $DeleteDataCheckbox $DeleteUserData
-  ${NSD_CreateLabel} 0 60u 100% 24u "勾选后会删除以下目录中的全部内容，此操作无法撤销："
+  ${NSD_CreateLabel} 0 40u 100% 14u "勾选后会删除以下目录："
   Pop $0
   ${If} $UserDataDir == ""
     EnableWindow $DeleteDataCheckbox 0
-    ${NSD_CreateLabel} 0 88u 100% 24u "无法确定当前用户的数据目录，将保留配置和数据。"
+    ${NSD_CreateLabel} 0 62u 100% 24u "无法确定数据目录，将保留配置和数据。"
     Pop $0
   ${Else}
-    ${NSD_CreateLabel} 0 88u 100% 24u "$UserDataDir"
+    ${NSD_CreateLabel} 0 62u 100% 24u "$UserDataDir"
     Pop $0
   ${EndIf}
   nsDialogs::Show

@@ -328,7 +328,8 @@ enum Message {
     SiteDetail(usize),
     SiteSummaryFilter(CategoryFilter, StatusFilter),
     SiteResetFilters,
-    SiteReportCategories,
+    SiteReport,
+    SiteRetest,
     ListPage(usize),
     ProfileName(String),
     ProfileSource(String),
@@ -415,7 +416,8 @@ struct App {
     site_status: StatusFilter,
     site_region: RegionFilter,
     site_detail: Option<usize>,
-    site_report_categories: bool,
+    site_show_results: bool,
+    site_has_run: bool,
     site_generation: u64,
     site_aborters: BTreeMap<String, AbortHandle>,
     site_busy: BTreeSet<String>,
@@ -692,7 +694,8 @@ impl App {
             site_status: StatusFilter::All,
             site_region: RegionFilter::All,
             site_detail: None,
-            site_report_categories: false,
+            site_show_results: false,
+            site_has_run: false,
             site_generation: 0,
             site_aborters: BTreeMap::new(),
             site_busy: BTreeSet::new(),
@@ -1120,6 +1123,7 @@ impl App {
             }
             Message::SiteCategory(category) => {
                 self.site_category = category;
+                self.site_show_results = true;
                 self.list_offset = 0;
                 self.site_detail = None;
             }
@@ -1139,9 +1143,12 @@ impl App {
                 self.query.clear();
                 self.site_category = category;
                 self.site_status = status;
+                self.site_show_results = true;
             }
             Message::SiteResetFilters => {
+                let category = self.site_category;
                 self.reset_site_filters();
+                self.site_category = category;
                 self.list_offset = 0;
                 self.query.clear();
             }
@@ -1152,8 +1159,11 @@ impl App {
                     Some(index)
                 };
             }
-            Message::SiteReportCategories => {
-                self.site_report_categories = !self.site_report_categories;
+            Message::SiteReport => {
+                self.reset_site_filters();
+                self.query.clear();
+                self.list_offset = 0;
+                self.site_show_results = false;
             }
             Message::ListPage(offset) => self.list_offset = offset,
             Message::ProfileName(value) => self.profile_name = value,
@@ -1425,21 +1435,49 @@ impl App {
             }
 
             Message::SiteAll => {
-                if !self.snapshot.running
-                    || self.working
-                    || self.elevating
-                    || self.exiting
-                    || !self.site_busy.is_empty()
-                {
+                if !self.can_check_sites() {
                     return Task::none();
                 }
                 self.site_results.clear();
                 self.reset_site_filters();
+                self.query.clear();
+                self.site_show_results = false;
+                self.site_has_run = true;
                 self.list_offset = 0;
                 self.site_generation = self.site_generation.wrapping_add(1);
                 self.site_queue = ip_check::services()
                     .iter()
                     .map(|item| item.id.clone())
+                    .collect();
+                return self.start_site_queue();
+            }
+            Message::SiteRetest => {
+                if !self.can_check_sites() {
+                    return Task::none();
+                }
+                if self.site_category == CategoryFilter::All {
+                    return self.update(Message::SiteAll);
+                }
+                let CategoryFilter::Group(group) = self.site_category else {
+                    unreachable!();
+                };
+                self.reset_site_filters();
+                self.site_category = CategoryFilter::Group(group);
+                self.query.clear();
+                self.site_results
+                    .resize_with(ip_check::services().len(), || None);
+                self.site_generation = self.site_generation.wrapping_add(1);
+                self.site_has_run = true;
+                self.site_detail = None;
+                self.list_offset = 0;
+                self.site_queue = ip_check::services()
+                    .iter()
+                    .enumerate()
+                    .filter(|(_, service)| service.group == group)
+                    .map(|(index, service)| {
+                        self.site_results[index] = None;
+                        service.id.clone()
+                    })
                     .collect();
                 return self.start_site_queue();
             }
@@ -1988,10 +2026,25 @@ impl App {
             .find(|p| Some(&p.id) == self.settings.active_profile.as_ref())
             .map(|p| p.name.as_str())
             .unwrap_or("选择配置");
+        let (page_title, page_description) = if self.page == Page::Websites {
+            if self.site_show_results {
+                (
+                    match self.site_category {
+                        CategoryFilter::All => "全部检测结果".into(),
+                        CategoryFilter::Group(group) => format!("{group} · 分类详情"),
+                    },
+                    "平台结果与检测依据",
+                )
+            } else {
+                ("IP检测".into(), "检测报告")
+            }
+        } else {
+            (self.page.name().into(), self.page.description())
+        };
         let header = aligned_row![
             column![
-                self.label(self.page.name()).size(24),
-                self.caption(self.page.description())
+                self.label(page_title).size(24),
+                self.caption(page_description)
             ]
             .spacing(3),
             Space::new().width(Length::Fill),
@@ -2635,148 +2688,237 @@ impl App {
         }
     }
 
-    fn site_report(&self, report: &ip_report::Report, region_count: usize) -> Element<'_, Message> {
-        let completed = report.totals.completed();
-        let compact = self.window_height.parse::<u16>().unwrap_or(700) < 560;
-        let show_categories = !compact || self.site_report_categories;
+    fn sites_running(&self) -> bool {
+        !self.site_busy.is_empty() || !self.site_queue.is_empty()
+    }
+
+    fn can_check_sites(&self) -> bool {
+        self.snapshot.running
+            && !self.working
+            && !self.elevating
+            && !self.exiting
+            && !self.sites_running()
+    }
+
+    fn site_status_buttons(
+        &self,
+        counts: &ip_report::Counts,
+        category: CategoryFilter,
+    ) -> Element<'_, Message> {
         let mut statuses = aligned_row![].spacing(6);
         for status in Status::ALL {
-            let count = report.totals.count(status);
+            let count = counts.count(status);
+            if count == 0 {
+                continue;
+            }
+            statuses = statuses.push(
+                button(
+                    self.label(format!("{status} {count}"))
+                        .size(13)
+                        .color(self.site_status_color(status)),
+                )
+                .padding([5, 8])
+                .style(
+                    if self.site_show_results && self.site_status == StatusFilter::Status(status) {
+                        ui_style::selected_button
+                    } else {
+                        rounded_secondary
+                    },
+                )
+                .on_press(Message::SiteSummaryFilter(
+                    category,
+                    StatusFilter::Status(status),
+                )),
+            );
+        }
+        statuses.wrap().into()
+    }
+
+    fn site_breakdown_bar(&self, counts: &ip_report::Counts) -> Element<'_, Message> {
+        let groups = [
+            (
+                counts.count(Status::Available) + counts.count(Status::Identified),
+                Status::Available,
+            ),
+            (
+                counts.count(Status::Partial)
+                    + counts.count(Status::Reachable)
+                    + counts.count(Status::Unknown),
+                Status::Partial,
+            ),
+            (
+                counts.count(Status::Restricted) + counts.count(Status::Failed),
+                Status::Restricted,
+            ),
+            (counts.count(Status::Untested), Status::Untested),
+        ];
+        let mut bar = iced::widget::row![].width(Length::Fill).height(4);
+        for (count, status) in groups {
             if count == 0 {
                 continue;
             }
             let ink = self.site_status_color(status);
-            statuses = statuses.push(
-                button(self.label(format!("{status} {count}")).size(13).color(ink))
-                    .padding([5, 8])
-                    .style(if self.site_status == StatusFilter::Status(status) {
-                        ui_style::selected_button
-                    } else {
-                        rounded_secondary
-                    })
-                    .on_press(Message::SiteSummaryFilter(
-                        CategoryFilter::All,
-                        StatusFilter::Status(status),
-                    )),
+            bar = bar.push(
+                container(Space::new())
+                    .width(Length::FillPortion(count as u16))
+                    .height(4)
+                    .style(move |_| container::Style {
+                        background: Some(ink.into()),
+                        ..Default::default()
+                    }),
             );
         }
-        let mut categories = column![].spacing(8);
-        if show_categories {
-            for pair in report.categories.chunks(2) {
-                let mut row = iced::widget::row![].spacing(8);
-                for category in pair {
-                    let mut states = aligned_row![].spacing(3);
-                    for status in Status::ALL {
-                        let count = category.counts.count(status);
-                        if count == 0 {
-                            continue;
-                        }
-                        states = states.push(
-                            button(
-                                self.label(format!("{status} {count}"))
-                                    .size(13)
-                                    .color(self.site_status_color(status)),
-                            )
-                            .padding([3, 4])
-                            .style(rounded_text)
-                            .on_press(Message::SiteSummaryFilter(
-                                CategoryFilter::Group(category.name),
-                                StatusFilter::Status(status),
-                            )),
-                        );
-                    }
-                    let selected = self.site_category == CategoryFilter::Group(category.name);
-                    row = row.push(
-                        container(
-                            column![
-                                button(
-                                    aligned_row![
-                                        self.label(category.name).size(15),
-                                        Space::new().width(Length::Fill),
-                                        self.label(format!(
-                                            "{}/{}",
-                                            category.counts.non_red(),
-                                            category.counts.total()
-                                        ))
-                                        .size(14)
-                                    ]
-                                    .spacing(6)
-                                )
-                                .width(Length::Fill)
-                                .padding(4)
-                                .style(rounded_text)
-                                .on_press(
-                                    Message::SiteSummaryFilter(
-                                        CategoryFilter::Group(category.name),
-                                        StatusFilter::All
-                                    )
-                                ),
-                                states.wrap()
-                            ]
-                            .spacing(3),
-                        )
-                        .padding(6)
-                        .width(Length::FillPortion(1))
-                        .style(if selected {
-                            ui_style::selected_panel
-                        } else {
-                            panel
-                        }),
-                    );
-                }
-                if pair.len() == 1 {
-                    row = row.push(Space::new().width(Length::FillPortion(1)));
-                }
-                categories = categories.push(row);
-            }
-        }
-        let toggle: Element<'_, Message> = if compact {
-            button(
-                self.label(if show_categories {
-                    "收起分类"
-                } else {
-                    "分类总结"
-                })
-                .size(13),
-            )
-            .padding([4, 6])
-            .style(rounded_secondary)
-            .on_press(Message::SiteReportCategories)
-            .into()
+        bar.into()
+    }
+
+    fn site_report(&self, report: &ip_report::Report, region_count: usize) -> Element<'_, Message> {
+        let completed = report.totals.completed();
+        let total = report.totals.total();
+        let running = self.sites_running();
+        let progress_label = if running {
+            "检测中"
+        } else if completed == total {
+            "检测完成"
+        } else if completed > 0 {
+            "部分完成"
+        } else if self.site_has_run {
+            "检测已停止"
         } else {
-            Space::new().width(0).into()
+            "尚未检测"
         };
-        let mut body = column![
-            aligned_row![
-                self.title(if completed == report.totals.total() {
-                    "检测总结"
-                } else {
-                    "检测总结 · 部分完成"
-                }),
-                Space::new().width(Length::Fill),
-                self.caption(format!("完成 {completed} / {}", report.totals.total())),
-                toggle
-            ]
-            .spacing(8),
-            statuses.wrap()
+        let mut actions = aligned_row![
+            self.title(progress_label),
+            Space::new().width(Length::Fill),
+            self.caption(format!("{completed} / {total}")),
+            button(self.label(if self.site_has_run {
+                "重新检测"
+            } else {
+                "一键检测"
+            }))
+            .padding([7, 12])
+            .style(rounded_primary)
+            .on_press_maybe(self.can_check_sites().then_some(Message::SiteAll)),
         ]
         .spacing(8);
-        if !compact {
-            let exit = self.site_result(0).and_then(|result| result.as_ref().ok());
-            body = body.push(self.caption(format!(
-                "出口 IP：{} · {} · 识别到 {region_count} 个地区",
-                exit.map_or("未获取", |r| r.summary.as_str()),
-                exit.map_or("未获取", |r| flags::country_text(&r.country))
-            )));
+        if running {
+            actions = actions.push(
+                button(self.label("取消检测"))
+                    .padding([7, 12])
+                    .style(rounded_secondary)
+                    .on_press(Message::SiteCancel),
+            );
         }
-        if show_categories {
-            body = body.push(scrollable(categories).height(if compact { 65 } else { 100 }));
+        let progress = container(
+            column![
+                actions,
+                progress_bar(0.0..=total as f32, completed as f32).height(5),
+            ]
+            .spacing(10),
+        )
+        .padding(12)
+        .width(Length::Fill)
+        .style(panel);
+        let exit = self.site_result(0).and_then(|result| result.as_ref().ok());
+        let exit_info = container(
+            column![
+                aligned_row![
+                    self.title("出口 IP"),
+                    Space::new().width(Length::Fill),
+                    self.caption(format!("识别到 {region_count} 个地区"))
+                ]
+                .spacing(8),
+                self.label(format!(
+                    "{} · {}",
+                    exit.map_or("未获取", |r| r.summary.as_str()),
+                    exit.map_or("未获取", |r| flags::country_text(&r.country))
+                )),
+                self.site_status_buttons(&report.totals, CategoryFilter::All),
+            ]
+            .spacing(8),
+        )
+        .padding(12)
+        .width(Length::Fill)
+        .style(panel);
+        let columns = if self.window_width.parse::<u16>().unwrap_or(950) >= 900 {
+            3
+        } else {
+            2
+        };
+        let mut categories = column![].spacing(8);
+        for chunk in report.categories.chunks(columns) {
+            let mut cards = iced::widget::row![].spacing(8);
+            for category in chunk {
+                let mut states = aligned_row![].spacing(6);
+                for status in Status::ALL {
+                    let count = category.counts.count(status);
+                    if count == 0 {
+                        continue;
+                    }
+                    let short = match status {
+                        Status::Available => "可用",
+                        Status::Partial => "部分可用",
+                        Status::Reachable => "网页可达",
+                        Status::Identified => "信息识别",
+                        Status::Restricted => "受限",
+                        Status::Unknown => "未确认",
+                        Status::Failed => "失败",
+                        Status::Untested => "未检测",
+                    };
+                    states = states.push(
+                        self.label(format!("{short} {count}"))
+                            .size(13)
+                            .color(self.site_status_color(status)),
+                    );
+                }
+                cards = cards.push(
+                    button(
+                        column![
+                            aligned_row![
+                                self.label(category.name),
+                                Space::new().width(Length::Fill),
+                                self.label(format!(
+                                    "{}/{}",
+                                    category.counts.non_red(),
+                                    category.counts.total()
+                                )),
+                                self.caption("›")
+                            ]
+                            .spacing(6),
+                            container(states.wrap()).height(Length::Fill),
+                            self.site_breakdown_bar(&category.counts),
+                        ]
+                        .spacing(8),
+                    )
+                    .padding(12)
+                    .height(150)
+                    .width(Length::FillPortion(1))
+                    .style(rounded_secondary)
+                    .on_press(Message::SiteSummaryFilter(
+                        CategoryFilter::Group(category.name),
+                        StatusFilter::All,
+                    )),
+                );
+            }
+            for _ in chunk.len()..columns {
+                cards = cards.push(Space::new().width(Length::FillPortion(1)));
+            }
+            categories = categories.push(cards);
         }
-        container(body)
-            .padding(if compact { 10 } else { 12 })
-            .width(Length::Fill)
-            .style(panel)
-            .into()
+        let body = column![
+            progress,
+            exit_info,
+            aligned_row![
+                self.title("分类报告"),
+                Space::new().width(Length::Fill),
+                self.caption("单击分类查看详情")
+            ]
+            .spacing(8),
+            categories,
+            self.caption("分类计数包含绿色和黄色结果。"),
+        ]
+        .spacing(12)
+        .width(Length::Fill);
+        scrollable(body).height(Length::Fill).into()
     }
 
     fn websites(&self) -> Element<'_, Message> {
@@ -2786,8 +2928,18 @@ impl App {
         let codes: BTreeSet<_> = self
             .site_results
             .iter()
-            .filter_map(|result| ip_report::region(result.as_ref()))
+            .enumerate()
+            .filter(|(index, _)| match self.site_category {
+                CategoryFilter::All => true,
+                CategoryFilter::Group(group) => services
+                    .get(*index)
+                    .is_some_and(|service| service.group == group),
+            })
+            .filter_map(|(_, result)| ip_report::region(result.as_ref()))
             .collect();
+        if !self.site_show_results {
+            return self.site_report(&report, codes.len());
+        }
         let matching = (0..services.len()).filter(|&index| self.site_matches(index, &query));
         let visible = matching.clone().count();
         let offset = self.list_offset.min(last_page_offset(visible));
@@ -2823,13 +2975,9 @@ impl App {
             country_row = country_row.push(self.label(country_text).size(self.scaled(10)));
             let mut entry = column![
                 aligned_row![
-                    self.label(format!("{:03}", index + 1))
-                        .size(self.scaled(10))
-                        .width(34),
                     self.label(&service.name)
                         .size(self.scaled(11))
                         .width(Length::FillPortion(3)),
-                    self.label(&service.group).size(self.scaled(10)).width(60),
                     self.label(state)
                         .size(self.scaled(10))
                         .color(if busy || queued {
@@ -2884,47 +3032,64 @@ impl App {
         if visible == 0 {
             list = list.push(self.label("没有匹配的检测项目。"));
         }
-        let mut page = column![
-            aligned_row![
-                self.search("搜索平台、地区或检测结果"),
-                self.label(format!(
-                    "已完成 {} / {}",
-                    report.totals.completed(),
-                    services.len()
-                ))
-                .size(self.scaled(10)),
-                button(self.label("一键检测"))
-                    .padding([5, 10])
-                    .style(rounded_primary)
-                    .on_press_maybe(
-                        (self.snapshot.running
-                            && self.site_busy.is_empty()
-                            && self.site_queue.is_empty())
-                        .then_some(Message::SiteAll)
-                    ),
-                button(self.label("取消"))
-                    .padding([5, 10])
-                    .style(rounded_secondary)
-                    .on_press_maybe(
-                        (!self.site_busy.is_empty() || !self.site_queue.is_empty())
-                            .then_some(Message::SiteCancel)
-                    )
-            ]
-            .spacing(8)
+        let counts = match self.site_category {
+            CategoryFilter::All => &report.totals,
+            CategoryFilter::Group(group) => report
+                .categories
+                .iter()
+                .find(|category| category.name == group)
+                .map_or(&report.totals, |category| &category.counts),
+        };
+        let mut actions = aligned_row![
+            button(self.label("‹ 返回报告"))
+                .padding([5, 8])
+                .style(rounded_text)
+                .on_press(Message::SiteReport),
+            Space::new().width(Length::Fill),
+            button(self.label(if self.site_category == CategoryFilter::All {
+                "重新检测"
+            } else {
+                "重新检测此分类"
+            }))
+            .padding([7, 12])
+            .style(rounded_secondary)
+            .on_press_maybe(self.can_check_sites().then_some(Message::SiteRetest)),
         ]
         .spacing(8);
-        if report.totals.completed() > 0 && self.site_busy.is_empty() && self.site_queue.is_empty()
-        {
-            page = page.push(self.site_report(&report, codes.len()));
+        if self.sites_running() {
+            actions = actions.push(
+                button(self.label("取消检测"))
+                    .padding([7, 12])
+                    .style(rounded_secondary)
+                    .on_press(Message::SiteCancel),
+            );
         }
-        let categories: Vec<_> = std::iter::once(CategoryFilter::All)
-            .chain(
-                report
-                    .categories
-                    .iter()
-                    .map(|category| CategoryFilter::Group(category.name)),
-            )
-            .collect();
+        let summary = container(
+            column![
+                aligned_row![
+                    self.title(format!(
+                        "{}   {} / {}",
+                        self.site_category,
+                        counts.non_red(),
+                        counts.total()
+                    )),
+                    Space::new().width(Length::Fill),
+                    self.caption(format!(
+                        "{} / {} 项已完成",
+                        counts.completed(),
+                        counts.total()
+                    ))
+                ]
+                .spacing(8),
+                self.site_status_buttons(counts, self.site_category),
+            ]
+            .spacing(8),
+        )
+        .padding(12)
+        .width(Length::Fill)
+        .style(panel);
+        let mut page =
+            column![actions, summary, self.search("搜索平台、地区或检测结果"),].spacing(8);
         let statuses: Vec<_> = std::iter::once(StatusFilter::All)
             .chain(Status::ALL.into_iter().map(StatusFilter::Status))
             .collect();
@@ -2932,28 +3097,49 @@ impl App {
             .into_iter()
             .chain(codes.into_iter().map(RegionFilter::Country))
             .collect();
+        let mut filters = aligned_row![].spacing(6);
+        if self.site_category == CategoryFilter::All {
+            let categories: Vec<_> = std::iter::once(CategoryFilter::All)
+                .chain(
+                    report
+                        .categories
+                        .iter()
+                        .map(|category| CategoryFilter::Group(category.name)),
+                )
+                .collect();
+            filters = filters.push(self.selection(
+                categories,
+                self.site_category,
+                Message::SiteCategory,
+                110,
+            ));
+        }
         page = page.push(
-            aligned_row![
-                self.selection(categories, self.site_category, Message::SiteCategory, 110),
-                self.selection(statuses, self.site_status, Message::SiteStatus, 150),
-                self.selection(regions, self.site_region, Message::SiteRegion, 150),
-                button(self.label("清除筛选").size(self.scaled(10)))
-                    .padding([5, 8])
-                    .style(rounded_secondary)
-                    .on_press(Message::SiteResetFilters),
-                self.label(format!("匹配 {visible} 项"))
-                    .size(self.scaled(10))
-            ]
-            .spacing(6)
-            .wrap(),
+            filters
+                .push(self.selection(statuses, self.site_status, Message::SiteStatus, 150))
+                .push(self.selection(regions, self.site_region, Message::SiteRegion, 150))
+                .push(
+                    button(self.label("清除筛选").size(self.scaled(10)))
+                        .padding([5, 8])
+                        .style(rounded_secondary)
+                        .on_press(Message::SiteResetFilters),
+                )
+                .push(
+                    self.label(format!("匹配 {visible} 项"))
+                        .size(self.scaled(10)),
+                )
+                .wrap(),
         );
+        let footer: Element<'_, Message> = if visible > PAGE_SIZE {
+            self.pager(visible, offset, PAGE_SIZE)
+        } else {
+            self.caption(format!("共 {visible} 项")).into()
+        };
         page.push(
             aligned_row![
-                self.label("序号").size(self.scaled(10)).width(34),
                 self.label("平台 / IP")
                     .size(self.scaled(10))
                     .width(Length::FillPortion(3)),
-                self.label("分类").size(self.scaled(10)).width(60),
                 self.label("检测结果")
                     .size(self.scaled(10))
                     .width(Length::FillPortion(3)),
@@ -2967,7 +3153,7 @@ impl App {
             .padding([0, 8]),
         )
         .push(scrollable(list).height(Length::Fill))
-        .push(self.pager(visible, offset, PAGE_SIZE))
+        .push(footer)
         .into()
     }
 
@@ -4107,6 +4293,7 @@ mod dev2_tests {
         assert_eq!(app.site_region, RegionFilter::All);
         assert_eq!(app.list_offset, 0);
         assert_eq!(app.site_detail, None);
+        assert!(app.site_show_results);
         assert!(app.site_matches(2, ""));
         assert_eq!(
             ip_report::Report::from_results(&app.site_results)
@@ -4114,6 +4301,115 @@ mod dev2_tests {
                 .completed(),
             2
         );
+    }
+
+    #[test]
+    fn report_navigation_and_filter_reset_keep_results_and_category_context() {
+        let mut app = app();
+        app.site_results
+            .resize_with(ip_check::services().len(), || None);
+        app.site_results[1] = Some(result(ip_check::State::Confirmed, "美国"));
+        let _ = app.update(Message::SiteSummaryFilter(
+            CategoryFilter::Group("AI"),
+            StatusFilter::All,
+        ));
+        let _ = app.update(Message::Query("chatgpt".into()));
+        let _ = app.update(Message::SiteStatus(StatusFilter::Status(Status::Available)));
+        let _ = app.update(Message::SiteRegion(RegionFilter::Country("US")));
+        let _ = app.update(Message::SiteResetFilters);
+        assert_eq!(app.site_category, CategoryFilter::Group("AI"));
+        assert!(app.site_show_results);
+        assert!(app.query.is_empty());
+        assert_eq!(app.site_status, StatusFilter::All);
+        assert_eq!(app.site_region, RegionFilter::All);
+        assert_eq!(
+            ip_report::Report::from_results(&app.site_results)
+                .totals
+                .completed(),
+            1
+        );
+        let _ = app.update(Message::SiteReport);
+        assert!(!app.site_show_results);
+        assert_eq!(app.site_category, CategoryFilter::All);
+        assert_eq!(
+            ip_report::Report::from_results(&app.site_results)
+                .totals
+                .completed(),
+            1
+        );
+    }
+
+    #[test]
+    fn category_retest_preserves_other_results_and_return_does_not_cancel_running_checks() {
+        let mut app = app();
+        app.snapshot.running = true;
+        app.site_results = ip_check::services()
+            .iter()
+            .map(|_| Some(result(ip_check::State::Confirmed, "美国")))
+            .collect();
+        let _ = app.update(Message::SiteSummaryFilter(
+            CategoryFilter::Group("AI"),
+            StatusFilter::All,
+        ));
+        let _ = app.update(Message::SiteRetest);
+        assert!(app.site_show_results);
+        assert!(app.site_has_run);
+        assert_eq!(app.site_category, CategoryFilter::Group("AI"));
+        for (index, service) in ip_check::services().iter().enumerate() {
+            assert_eq!(app.site_result(index).is_none(), service.group == "AI");
+        }
+        let checking: BTreeSet<_> = app
+            .site_busy
+            .iter()
+            .chain(app.site_queue.iter())
+            .cloned()
+            .collect();
+        assert_eq!(checking.len(), 5);
+        assert!(
+            ip_check::services()
+                .iter()
+                .filter(|service| checking.contains(&service.id))
+                .all(|service| service.group == "AI")
+        );
+        let generation = app.site_generation;
+        let _ = app.update(Message::SiteReport);
+        assert!(!app.site_show_results);
+        assert!(app.sites_running());
+        assert_eq!(generation, app.site_generation);
+        let _ = app.update(Message::SiteCancel);
+        assert!(!app.sites_running());
+        let _ = app.update(Message::SiteDone(
+            generation,
+            ip_check::services()[1].id.clone(),
+            result(ip_check::State::Confirmed, "美国"),
+        ));
+        assert!(app.site_result(1).is_none());
+    }
+
+    #[test]
+    fn one_key_check_opens_live_report_and_disabled_core_keeps_existing_results() {
+        let mut app = app();
+        app.site_results
+            .push(Some(result(ip_check::State::Identified, "美国")));
+        app.site_show_results = true;
+        let _ = app.update(Message::SiteAll);
+        assert!(app.site_show_results);
+        assert_eq!(app.site_results.len(), 1);
+        app.snapshot.running = true;
+        let _ = app.update(Message::SiteAll);
+        assert!(!app.site_show_results);
+        assert!(app.site_has_run);
+        assert!(app.sites_running());
+        assert!(app.site_results.is_empty());
+        assert_eq!(app.site_category, CategoryFilter::All);
+        assert_eq!(
+            app.site_busy.len() + app.site_queue.len(),
+            ip_check::services().len()
+        );
+        let generation = app.site_generation;
+        let _ = app.update(Message::SiteAll);
+        assert_eq!(generation, app.site_generation);
+        app.cancel_site_checks();
     }
 
     #[test]
