@@ -9,6 +9,7 @@ fn fixture(scene: &str) -> App {
     app.error = false;
     app.core_failure = None;
     app.notice_visible = false;
+    app.updates.checking = false;
     app.dark = !scene.ends_with("light");
     app.settings.active_profile = Some("preview".into());
     app.profiles.push(Profile {
@@ -18,7 +19,8 @@ fn fixture(scene: &str) -> App {
         updated: 0,
         usage: None,
     });
-    let scene = scene.trim_end_matches("-light");
+    let scene = scene.trim_end_matches("-light").replace("-compact", "");
+    let scene = scene.as_str();
     if scene.starts_with("proxies") {
         app.page = Page::Proxies;
         app.node_sort = match scene {
@@ -252,7 +254,7 @@ fn update(app: &mut App, message: Message) -> Task<Message> {
 pub(crate) fn run() -> iced::Result {
     typography::initialize();
     let scene = std::env::var("CLASH_UI_PREVIEW_SCENE").expect("preview scene");
-    let size = if scene == "ip-compact" {
+    let size = if scene.contains("-compact") {
         MIN_WINDOW_SIZE
     } else {
         DEFAULT_WINDOW_SIZE

@@ -828,17 +828,21 @@ impl App {
         };
         Subscription::batch([
             polling,
-            iced::keyboard::on_key_press(|key, modifiers| {
-                if modifiers.control() {
-                    if let iced::keyboard::Key::Character(value) = key {
-                        if value.eq_ignore_ascii_case("f") {
-                            return Some(Message::FocusSearch);
-                        }
-                        if let Ok(index) = value.parse::<usize>() {
-                            if (1..=Page::ALL.len()).contains(&index) {
-                                return Some(Message::Navigate(Page::ALL[index - 1]));
-                            }
-                        }
+            iced::keyboard::listen().filter_map(|event| {
+                if let iced::keyboard::Event::KeyPressed {
+                    key: iced::keyboard::Key::Character(value),
+                    modifiers,
+                    ..
+                } = event
+                    && modifiers.control()
+                {
+                    if value.eq_ignore_ascii_case("f") {
+                        return Some(Message::FocusSearch);
+                    }
+                    if let Ok(index) = value.parse::<usize>()
+                        && (1..=Page::ALL.len()).contains(&index)
+                    {
+                        return Some(Message::Navigate(Page::ALL[index - 1]));
                     }
                 }
                 None
@@ -2062,9 +2066,14 @@ impl App {
                 container(
                     aligned_row![
                         self.label(notice).size(13).width(Length::Fill),
-                        button(self.label("关闭").size(13))
-                            .style(rounded_text)
-                            .on_press(Message::DismissNotice)
+                        if self.updates.install_pending || self.updates.installing.is_some() {
+                            Element::from(Space::new().width(0))
+                        } else {
+                            button(self.label("关闭").size(13))
+                                .style(rounded_text)
+                                .on_press(Message::DismissNotice)
+                                .into()
+                        }
                     ]
                     .spacing(8),
                 )
@@ -2202,7 +2211,7 @@ impl App {
                 button(self.label(name).size(self.scaled(12)))
                     .padding([8, 14])
                     .style(if self.snapshot.mode == mode {
-                        rounded_primary
+                        ui_style::selected_button
                     } else {
                         rounded_secondary
                     })
@@ -2233,7 +2242,7 @@ impl App {
                 button(self.label(label).size(self.scaled(12)))
                     .padding([8, 14])
                     .style(if proxy_mode == mode {
-                        rounded_primary
+                        ui_style::selected_button
                     } else {
                         rounded_secondary
                     })
@@ -2491,11 +2500,14 @@ impl App {
             })
             .unwrap_or_else(|| "未测速".into());
         container(
-            column![
+            aligned_row![
                 button(
                     column![
                         aligned_row![
-                            self.label(node).size(15).width(Length::Fill),
+                            self.label(node)
+                                .size(15)
+                                .wrapping(text::Wrapping::WordOrGlyph)
+                                .width(Length::Fill),
                             self.label(label).size(13).color(
                                 delay
                                     .map(|d| self.latency_color(d))
@@ -2524,16 +2536,17 @@ impl App {
                 )
                 .padding(4)
                 .width(Length::Fill)
-                .style(rounded_text)
+                .style(if selected {
+                    ui_style::selected_button
+                } else {
+                    rounded_text
+                })
                 .on_press_maybe(
                     selectable.then(|| Message::Action(Action::Select(group.into(), node.into())))
                 ),
-                aligned_row![
-                    Space::new().width(Length::Fill),
-                    self.action("测速", Action::Delay(node.into()), self.snapshot.running)
-                ]
+                self.action("测速", Action::Delay(node.into()), self.snapshot.running)
             ]
-            .spacing(3),
+            .spacing(6),
         )
         .padding(8)
         .width(Length::FillPortion(1))
@@ -2846,7 +2859,12 @@ impl App {
                         entry.push(self.label(detail).size(self.scaled(10)).width(Length::Fill));
                 }
             }
-            list = list.push(container(entry).padding(8).style(panel));
+            list = list.push(
+                container(entry)
+                    .padding(8)
+                    .width(Length::Fill)
+                    .style(move |theme| ui_style::table_row(theme, index % 2 == 1)),
+            );
         }
         if visible == 0 {
             list = list.push(self.label("没有匹配的检测项目。"));
@@ -2908,7 +2926,6 @@ impl App {
                     .padding([5, 8])
                     .style(rounded_secondary)
                     .on_press(Message::SiteResetFilters),
-                Space::new().width(Length::Fill),
                 self.label(format!("匹配 {visible} 项"))
                     .size(self.scaled(10))
             ]

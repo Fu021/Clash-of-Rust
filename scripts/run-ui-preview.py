@@ -113,6 +113,7 @@ def main():
     pages = ['home', 'proxies-ascending', 'profiles', 'connections', 'rules', 'logs',
              'diagnostics', 'ip-summary', 'settings', 'home-failure', 'home-retrying']
     scenes = list(dict.fromkeys([scene+suffix for scene in pages for suffix in ('', '-light')] + scenes))
+    scenes += [scene+'-compact'+suffix for scene in pages for suffix in ('', '-light')]
     for scene in scenes:
         env = dict(os.environ, CLASH_UI_PREVIEW_SCENE=scene, WINIT_UNIX_BACKEND='x11',
                    WINIT_X11_SCALE_FACTOR='1', GSETTINGS_BACKEND='memory')
@@ -133,6 +134,8 @@ def main():
                 else:
                     raise RuntimeError('Preview window did not appear')
                 time.sleep(2)
+                subprocess.run(['xdotool', 'mousemove', '--window', window, '10', '10'],
+                               env=env, check=True)
                 runner.screenshot(window, output/(scene+'.png'), env)
                 if scene in ('ip-summary', 'ip-summary-light'):
                     selection_regression(window, scene, output, env, runner)
