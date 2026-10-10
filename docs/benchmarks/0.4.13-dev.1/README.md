@@ -27,7 +27,7 @@
 
 ## GUI 与内核进程
 
-固定输入为 2,000 节点、40 个组各包含全部节点、20,000 条规则。关闭系统代理和定时测速，无业务流量。每场景采样 10 秒，间隔 250 ms；以下为观测峰值 MiB。搜索 `node-` 匹配所有节点，截图随原始结果保存。
+固定输入为 2,000 节点、40 个组各包含全部节点、20,000 条规则。关闭系统代理和定时测速，无业务流量。每场景采样 10 秒，间隔 250 ms；以下为观测峰值 MiB。搜索 `node-` 匹配所有节点，保留修改前后搜索截图。
 
 | 场景 | GUI RSS 前 | GUI RSS 后 | GUI RSS 降低 | 内核 RSS 前 | 内核 RSS 后 | 合计 PSS 前 | 合计 PSS 后 |
 | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
@@ -51,11 +51,15 @@ RSS 包含共享页，跨进程相加可能重复计数；PSS 分摊共享页。
 | 平台检测常量及响应临时分配 | 静态借用、UTF-8 缓冲复用、借用 JSON 字段、字符切片迭代、丢弃正文不缓存 |
 | 每个检测重复创建两套客户端 | 并发复用，Cookie 独立，TLS 1.3 按需，弱缓存释放 |
 
-## 原始记录与复现
+## 验证与原始记录
 
-[验证记录及平台范围](VALIDATION.md)。
+[main 四平台 CI](https://github.com/Fu021/Clash-of-Rust/actions/runs/38011314312) 与 [0.4.13-dev.1 打包验证](https://github.com/Fu021/Clash-of-Rust/actions/runs/38011703689) 全部通过，包含安装后的程序、Windows Defender、Ubuntu 最新版 GUI/TUN 和附件来源/校验检查。应用已合并 main；此次打包设置 `check_only=true`，没有发布 Release。
 
-云端原始数据见 [cloud-before](cloud-before/README.md) 与 [cloud-after](cloud-after/README.md)。本目录 `before-*` 保留实施修复前取得的本地基线，未参与本报告的云端数值对照。
+本次内存数据来自 Linux dev 构建和短时固定负载。没有量化 Windows、Release 构建、业务流量、长期运行及互联网平台检测的内存收益。配置事务验证进程中断后的恢复，不宣称突然断电时的全局原子性。
+
+保留 [修改前 API 原始数据](cloud-before/api.jsonl)、[修改后 API 原始数据](cloud-after/api.jsonl)，以及两目录中的四个 GUI 场景 JSONL、环境元数据和搜索截图。删除未用于最终对照的旧基线和重复文本报告。
+
+测试订阅由 `scripts/run-memory-benchmark.py` 的 `fixture()` 生成；两目录保留 `gui-fixture.sha256`，用于核对输入。比较工具同时支持完整工作流产物中的 YAML 和精简归档中的校验文件。
 
 统一基准为 `examples/memory_benchmark.rs`；手动 Memory Benchmark 工作流各运行一次即可取得相同格式。生成此报告：
 

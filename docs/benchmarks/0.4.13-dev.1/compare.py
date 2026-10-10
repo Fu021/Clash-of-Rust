@@ -1,5 +1,6 @@
 """Generate a comparison from two downloaded Memory Benchmark artifacts."""
 import argparse
+import hashlib
 import json
 from pathlib import Path
 import statistics
@@ -36,6 +37,16 @@ def reduction(before, after):
     return '不可用' if not before or after is None else f'{(before-after)/before*100:.1f}%'
 
 
+def fixture_hash(root):
+    fixture = root/'gui-fixture.yaml'
+    if fixture.exists():
+        return hashlib.sha256(fixture.read_bytes()).hexdigest()
+    digest = (root/'gui-fixture.sha256').read_text().strip()
+    if len(digest) != 64 or any(char not in '0123456789abcdef' for char in digest):
+        raise ValueError('Invalid GUI fixture checksum')
+    return digest
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('before', type=Path)
@@ -46,7 +57,7 @@ def main():
     for key in ('profile', 'rows', 'repetitions', 'gui_sample_seconds', 'interval_ms', 'rustc', 'cpu_count'):
         if before[key] != after[key]:
             raise ValueError('Non-comparable benchmark parameter: '+key)
-    if (args.before/'gui-fixture.yaml').read_bytes() != (args.after/'gui-fixture.yaml').read_bytes():
+    if fixture_hash(args.before) != fixture_hash(args.after):
         raise ValueError('GUI workloads differ')
     def resource_hashes(metadata):
         resources = metadata['resources']
@@ -74,7 +85,7 @@ def main():
         p, r, t = (values[field] for field in ('peak_extra_heap_bytes', 'retained_extra_heap_bytes', 'elapsed_ms'))
         lines.append(f'| {key[0]} | {key[1]} | {key[2]} | {mib(p[0])} | {mib(p[1])} | {mib(r[0])} | {mib(r[1])} | {reduction(*r)} | {t[0]:.1f}/{t[1]:.1f} |')
     lines += ['', '文本共享增加哈希查找成本，耗时结果见上表；不同云端运行器的调度也会影响耗时。进程表同时保留没有改善的场景，不能将大快照和搜索场景的收益推广到首页。', '', '## GUI 与内核进程', '',
-              f"固定输入为 2,000 节点、40 个组各包含全部节点、20,000 条规则。关闭系统代理和定时测速，无业务流量。每场景采样 {before['gui_sample_seconds']} 秒，间隔 {before['interval_ms']} ms；以下为观测峰值 MiB。搜索 `node-` 匹配所有节点，截图随原始结果保存。", '',
+              f"固定输入为 2,000 节点、40 个组各包含全部节点、20,000 条规则。关闭系统代理和定时测速，无业务流量。每场景采样 {before['gui_sample_seconds']} 秒，间隔 {before['interval_ms']} ms；以下为观测峰值 MiB。搜索 `node-` 匹配所有节点，保留修改前后搜索截图。", '',
               '| 场景 | GUI RSS 前 | GUI RSS 后 | GUI RSS 降低 | 内核 RSS 前 | 内核 RSS 后 | 合计 PSS 前 | 合计 PSS 后 |',
               '| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: |']
     for scene in ('home', 'proxies-collapsed', 'proxies-search', 'home-after-proxies'):
@@ -94,8 +105,11 @@ def main():
               '| 搜索同时创建大量组和节点 widget | 每页四组、每组六十节点的全局上限 |',
               '| 平台检测常量及响应临时分配 | 静态借用、UTF-8 缓冲复用、借用 JSON 字段、字符切片迭代、丢弃正文不缓存 |',
               '| 每个检测重复创建两套客户端 | 并发复用，Cookie 独立，TLS 1.3 按需，弱缓存释放 |', '',
-              '## 原始记录与复现', '', '[验证记录及平台范围](VALIDATION.md)。', '',
-              '云端原始数据见 [cloud-before](cloud-before/README.md) 与 [cloud-after](cloud-after/README.md)。本目录 `before-*` 保留实施修复前取得的本地基线，未参与本报告的云端数值对照。', '',
+              '## 验证与原始记录', '',
+              '[main 四平台 CI](https://github.com/Fu021/Clash-of-Rust/actions/runs/38011314312) 与 [0.4.13-dev.1 打包验证](https://github.com/Fu021/Clash-of-Rust/actions/runs/38011703689) 全部通过，包含安装后的程序、Windows Defender、Ubuntu 最新版 GUI/TUN 和附件来源/校验检查。应用已合并 main；此次打包设置 `check_only=true`，没有发布 Release。', '',
+              '本次内存数据来自 Linux dev 构建和短时固定负载。没有量化 Windows、Release 构建、业务流量、长期运行及互联网平台检测的内存收益。配置事务验证进程中断后的恢复，不宣称突然断电时的全局原子性。', '',
+              '保留 [修改前 API 原始数据](cloud-before/api.jsonl)、[修改后 API 原始数据](cloud-after/api.jsonl)，以及两目录中的四个 GUI 场景 JSONL、环境元数据和搜索截图。删除未用于最终对照的旧基线和重复文本报告。', '',
+              '测试订阅由 `scripts/run-memory-benchmark.py` 的 `fixture()` 生成；两目录保留 `gui-fixture.sha256`，用于核对输入。比较工具同时支持完整工作流产物中的 YAML 和精简归档中的校验文件。', '',
               '统一基准为 `examples/memory_benchmark.rs`；手动 Memory Benchmark 工作流各运行一次即可取得相同格式。生成此报告：', '',
               '```bash', 'python3 docs/benchmarks/0.4.13-dev.1/compare.py docs/benchmarks/0.4.13-dev.1/cloud-before docs/benchmarks/0.4.13-dev.1/cloud-after --report /tmp/memory-comparison.md', '```', '']
     with args.report.open('x') as report:

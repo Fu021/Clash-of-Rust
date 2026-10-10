@@ -32,32 +32,17 @@ Windows 运行安装程序；Debian/Ubuntu 使用 `sudo apt install ./安装包�
 
 ## 内存占用
 
-实验环境：2026-10-08，Ubuntu 24.04.5 LTS x86_64，0.4.11 Release 构建，Rust 1.99.0，mihomo v1.19.32。
+`0.4.12` → `0.4.13-dev.1` 同条件对照：Ubuntu 22.04 x64、dev 构建，API 每项 50,000 条，三次独立进程取中位数。
 
-**GUI + 内核**：全新隔离配置、默认直连订阅、首页空闲、代理关闭；预热 3 秒后采样 10 秒，间隔 250 毫秒，共 40 次采样、一次独立运行。
-
-| 测量范围 | 平均值 | 观测峰值 |
+| API 快照 | 保留堆内存：前 → 后 | 降低 |
 | --- | ---: | ---: |
-| GUI RSS | 30.97 MiB | 30.98 MiB |
-| mihomo RSS | 42.57 MiB | 42.59 MiB |
-| **RSS 合计** | **73.55 MiB** | **73.56 MiB** |
-| **PSS 合计（实际物理内存占用的推荐参考）** | **55.75 MiB** | **55.76 MiB** |
-| USS 合计（私有驻留页） | 45.33 MiB | 45.35 MiB |
+| 规则 | 6.11 → 3.13 MiB | 48.7% |
+| 连接 | 23.30 → 12.37 MiB | 46.9% |
+| 代理节点 | 21.09 → 8.98 MiB | 57.4% |
 
-RSS 是进程当前驻留的物理内存，多个进程相加会重复计算共享页；PSS 将共享页按使用进程数分摊，推荐用于参考 GUI 与内核的合计物理内存占用；USS 仅统计进程独占的驻留页，不含共享页。
+2,000 节点、40 组、20,000 规则的全匹配搜索场景中，GUI RSS 从 127.33 降到 79.05 MiB；GUI 与内核合计 PSS 从 215.50 降到 166.49 MiB。首页内存基本不变，解析耗时有所增加。以上是固定负载的 dev 测量，不能直接作为 Release 日常占用。
 
-原始结果：[终端输出](docs/benchmarks/memory-app-0.4.11-ubuntu24.04.txt)、[逐次进程数据](docs/benchmarks/memory-app-0.4.11-ubuntu24.04.jsonl)。
-
-**API 解析堆内存**：每项解析 50,000 条数据，独立进程运行 3 次；以下为扣除基线后的 Rust 堆分配量。
-
-| 数据 | 响应 JSON | 新增堆内存峰值 | 解析完成后新增堆内存 |
-| --- | ---: | ---: | ---: |
-| 50,000 条规则 | 3.33 MiB | 6.44–6.67 MiB | 6.11 MiB |
-| 50,000 条连接 | 12.00 MiB | 23.65–23.79 MiB | 23.30 MiB |
-
-[统一测试程序](examples/memory_benchmark.rs)（API 解析、连续刷新与 GUI/内核进程采样）、[解析基准原始结果](docs/benchmarks/memory-0.4.11-ubuntu24.04.txt)。
-
-当前开发版的前后对照见 [0.4.13-dev.1 内存报告](docs/benchmarks/0.4.13-dev.1/README.md)。下面的统一基准既支持独立进程解析和连续刷新，也支持实际 GUI/内核采样：
+全部解析/刷新场景、耗时和原始记录见 [内存报告](docs/benchmarks/0.4.13-dev.1/README.md)。[统一基准](examples/memory_benchmark.rs)支持 API 堆内存及 GUI/内核 RSS、PSS、USS 采样：
 
 ```bash
 cargo build --release --locked --example memory_benchmark -j 1
@@ -99,7 +84,7 @@ cargo test --locked
 python scripts/test-build-tools.py
 ```
 
-CI 只编译、测试并保存原生程序；手动 Publish Release 复用这些程序完成打包和安装测试后发布，支持只测试不发布。手动 Memory Benchmark 可测指定提交的内存。操作与产物说明见 [工作流文档](docs/development/workflows.md)。
+CI 只编译、测试并保存原生程序；手动 Publish Release 复用这些程序完成打包和安装测试后发布，支持只测试不发布。手动 Memory Benchmark 可测指定提交的内存。操作与产物说明见 [工作流文档](docs/workflows.md)，客户端内更新测试见 [更新测试说明](docs/automatic-update.md)。
 
 ## License
 
