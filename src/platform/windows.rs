@@ -360,7 +360,10 @@ fn create_show_event(name: &str) -> Result<Handle> {
     };
     // A normal shortcut must be able to wake an elevated TUN instance. This
     // session-local event only reveals the window; the exit event stays private.
-    let sddl = wide("D:P(A;;GA;;;SY)(A;;GA;;;BA)(A;;0x100002;;;IU)S:(ML;;NW;;;ME)");
+    let sid = super::windows_autostart::user_sid()?;
+    let sddl = wide(&format!(
+        "D:P(A;;GA;;;SY)(A;;GA;;;BA)(A;;GA;;;{sid})(A;;0x100002;;;IU)S:(ML;;NW;;;ME)"
+    ));
     let mut descriptor = std::ptr::null_mut();
     if unsafe {
         ConvertStringSecurityDescriptorToSecurityDescriptorW(

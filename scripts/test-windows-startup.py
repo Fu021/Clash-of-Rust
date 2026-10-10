@@ -201,7 +201,15 @@ class Windows:
             environment = dict(environment, TEMP=self.user_temp, TMP=self.user_temp,
                                USERPROFILE=profile, LOCALAPPDATA=profile+'\\AppData\\Local',
                                APPDATA=profile+'\\AppData\\Roaming', USERNAME=self.username)
-        command = c.create_unicode_buffer(subprocess.list2cmdline([str(executable), *arguments]))
+        # cmd opens the redirected output inside the ordinary user's process;
+        # this avoids inheriting runner-service pipe handles across accounts.
+        import uuid
+        output = Path(self.user_temp)/('process-' + uuid.uuid4().hex + '.log')
+        shell = Path(os.environ['SystemRoot'])/'System32/cmd.exe'
+        command = c.create_unicode_buffer(
+            '"' + str(shell) + '" /D /S /C "' +
+            subprocess.list2cmdline([str(executable), *arguments]) +
+            ' > "' + str(output) + '" 2>&1"')
         env = c.create_unicode_buffer('\0'.join(f'{k}={v}' for k, v in sorted(environment.items())) + '\0\0')
         startup, process = StartupInfo(), ProcessInfo()
         startup.cb = c.sizeof(startup)
@@ -212,19 +220,25 @@ class Windows:
                 checked(self.security.OpenProcessToken(self.kernel.GetCurrentProcess(), 0x8B,
                                                        c.byref(original)))
                 token = original
-                checked(self.security.CreateProcessAsUserW(token, str(executable), command,
+                checked(self.security.CreateProcessAsUserW(token, str(shell), command,
                                                           None, None, False, 0x08000400, env,
                                                           str(executable.parent), c.byref(startup), c.byref(process)))
             else:
                 checked(self.security.CreateProcessWithLogonW(self.username, '.', self.password, 1,
-                                                             str(executable), command, 0x08000400,
+                                                             str(shell), command, 0x08000400,
                                                              env, str(executable.parent),
                                                              c.byref(startup), c.byref(process)))
         finally:
             if original:
                 self.kernel.CloseHandle(original)
         self.kernel.CloseHandle(process.thread)
+        process.output = output
         return process
+
+    def output(self, process):
+        if process.output.exists():
+            return process.output.read_text(encoding='utf-8', errors='replace')[-6000:]
+        return '(no process output)'
 
     def wait(self, process, seconds, expected=0):
         result = self.kernel.WaitForSingleObject(process.process, seconds * 1000)
@@ -232,7 +246,8 @@ class Windows:
             raise TimeoutError(f'Process {process.pid} did not finish: wait={result}')
         code = w.DWORD()
         checked(self.kernel.GetExitCodeProcess(process.process, c.byref(code)))
-        assert code.value == expected, f'Process {process.pid} failed: 0x{code.value:08x}, expected={expected}'
+        assert code.value == expected, (
+            f'Process {process.pid} failed: 0x{code.value:08x}, expected={expected}\n' + self.output(process))
 
     def stop(self, process, token):
         if token is not None:
@@ -251,7 +266,9 @@ class Windows:
 
     def cleanup(self, process):
         if self.kernel.WaitForSingleObject(process.process, 0) == 258:
-            self.kernel.TerminateProcess(process.process, 1)
+            import subprocess
+            subprocess.run(['taskkill', '/F', '/PID', str(process.pid), '/T'],
+                           stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
             self.kernel.WaitForSingleObject(process.process, 10000)
         self.kernel.CloseHandle(process.process)
 
@@ -266,7 +283,7 @@ def check_startup(api, executable, token, directory, background=False):
         while time.monotonic() < deadline:
             if api.kernel.WaitForSingleObject(process.process, 0) != 258:
                 api.wait(process, 0)
-                raise AssertionError('GUI exited before the core became ready')
+                raise AssertionError('GUI exited before the core became ready:\n' + api.output(process))
             try:
                 settings = json.loads((directory/'settings.json').read_text(encoding='utf-8'))
                 request = urllib.request.Request(f"http://127.0.0.1:{settings['controller_port']}/configs",
