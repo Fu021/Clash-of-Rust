@@ -37,15 +37,17 @@ pub(super) fn parse_output(text: &str) -> CheckResult {
         .unwrap_or(line);
     let lower = value.to_ascii_lowercase();
     let (state, summary) = if crate::flags::country_code(value.trim()).is_some() {
-        (State::Confirmed, "已识别地区")
-    } else if lower.starts_with("failed") || lower.contains("unexpected") || lower.is_empty() {
+        (State::Identified, "已识别地区")
+    } else if lower.starts_with("failed") {
+        (State::Failed, "检测失败")
+    } else if lower.contains("unexpected") || lower.is_empty() {
         (State::Unknown, "检测失败或结果未确认")
     } else if lower.starts_with("web reachable") {
         (State::Reachable, "网页可达")
     } else if lower.starts_with("web only") {
-        (State::Reachable, "仅网页可用")
+        (State::Partial, "仅网页可用")
     } else if lower.starts_with("originals only") || lower.starts_with("original only") {
-        (State::Reachable, "仅自制内容")
+        (State::Partial, "仅自制内容")
     } else if lower.starts_with("yes") {
         (State::Confirmed, "可用")
     } else if lower.starts_with("no") && lower.contains("unsupported region") {
@@ -76,5 +78,26 @@ pub(super) fn parse_output(text: &str) -> CheckResult {
         country,
         millis: 0,
         detail: format!("原生地区检测结果：{value}"),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn result_semantics_keep_region_partial_access_and_failures_distinct() {
+        for (output, state) in [
+            ("Platform: JP", State::Identified),
+            ("Platform: Yes (Region: JP)", State::Confirmed),
+            ("Platform: Originals Only", State::Partial),
+            ("Platform: Web Only", State::Partial),
+            ("Platform: Web Reachable", State::Reachable),
+            ("Platform: No (Unsupported Region)", State::Restricted),
+            ("Platform: Failed (Network Connection)", State::Failed),
+            ("Platform: Unexpected response", State::Unknown),
+        ] {
+            assert_eq!(parse_output(output).state, state, "{output}");
+        }
     }
 }

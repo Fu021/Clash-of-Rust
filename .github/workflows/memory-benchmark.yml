@@ -23,6 +23,10 @@ on:
         description: '每个 GUI 场景的采样秒数'
         type: string
         default: '10'
+      preview:
+        description: '附加实际界面截图，使用隔离的固定演示数据（dev.2 及之后）'
+        type: boolean
+        default: false
 permissions:
   contents: read
 jobs:
@@ -84,6 +88,14 @@ jobs:
         run: |
           import os, subprocess, sys
           subprocess.run(['dbus-run-session', '--', 'xvfb-run', '-a', '--server-args=-screen 0 1280x900x24', sys.executable, 'scripts/run-memory-benchmark.py', '--source', 'source', '--profile', os.environ['BUILD_PROFILE'], '--rows', os.environ['BENCH_ROWS'], '--repetitions', os.environ['BENCH_REPETITIONS'], '--seconds', os.environ['SAMPLE_SECONDS'], '--output', 'dist/memory'], check=True)
+      - name: Render actual UI previews
+        if: inputs.preview
+        shell: python
+        env:
+          BUILD_PROFILE: ${{ inputs.profile }}
+        run: |
+          import os, subprocess, sys
+          subprocess.run(['dbus-run-session', '--', 'xvfb-run', '-a', '--server-args=-screen 0 1280x900x24', sys.executable, 'source/scripts/run-ui-preview.py', '--source', 'source', '--profile', os.environ['BUILD_PROFILE'], '--output', 'dist/memory/ui-preview'], check=True)
       - uses: actions/upload-artifact@v6
         if: always()
         with:

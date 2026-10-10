@@ -18,6 +18,20 @@ pub struct Service {
     pub url: String,
 }
 
+impl Service {
+    pub fn information_only(&self) -> bool {
+        matches!(
+            self.id.as_str(),
+            "exit-ip"
+                | "MediaUnlockTest_Google"
+                | "MediaUnlockTest_NetflixCDN"
+                | "MediaUnlockTest_Spotify"
+                | "GameTest_Steam"
+                | "MediaUnlockTest_YouTube_CDN"
+        )
+    }
+}
+
 pub fn services() -> &'static [Service] {
     static SERVICES: OnceLock<Vec<Service>> = OnceLock::new();
     SERVICES.get_or_init(|| {
@@ -29,9 +43,12 @@ pub fn services() -> &'static [Service] {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum State {
     Confirmed,
+    Partial,
     Reachable,
+    Identified,
     Restricted,
     Unknown,
+    Failed,
 }
 
 #[derive(Debug, Clone)]
@@ -108,7 +125,7 @@ async fn check_with_client(service: &Service, client: &Client) -> Result<CheckRe
             .find_map(|line| line.strip_prefix("ip="))
             .context("响应没有出口 IP")?
             .parse()?;
-        result.state = State::Confirmed;
+        result.state = State::Identified;
         result.summary = ip.to_string();
         result.country = trace_country(&text, original.host_str().unwrap_or_default())
             .unwrap_or_else(|| "未提供".into());
