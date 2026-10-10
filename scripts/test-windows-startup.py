@@ -33,6 +33,10 @@ class ProcessInfo(c.Structure):
                 ('pid', w.DWORD), ('tid', w.DWORD)]
 
 
+class SecurityAttributes(c.Structure):
+    _fields_ = [('length', w.DWORD), ('descriptor', c.c_void_p), ('inherit', w.BOOL)]
+
+
 def checked(result):
     if not result:
         raise c.WinError(c.get_last_error())
@@ -44,6 +48,9 @@ class Windows:
         self.kernel = c.WinDLL('kernel32', use_last_error=True)
         self.security = c.WinDLL('advapi32', use_last_error=True)
         self.shell = c.WinDLL('shell32', use_last_error=True)
+        self.user = c.WinDLL('user32', use_last_error=True)
+        self.station = self.desktop_handle = None
+        self.desktop_name = None
         signatures = [
             (self.kernel, 'GetCurrentProcess', [], w.HANDLE),
             (self.kernel, 'CloseHandle', [w.HANDLE], w.BOOL),
@@ -66,10 +73,54 @@ class Windows:
              [w.HANDLE, w.LPCWSTR, w.LPWSTR, c.c_void_p, c.c_void_p, w.BOOL,
               w.DWORD, c.c_void_p, w.LPCWSTR, c.POINTER(StartupInfo), c.POINTER(ProcessInfo)], w.BOOL),
             (self.shell, 'IsUserAnAdmin', [], w.BOOL),
+            (self.security, 'ConvertStringSecurityDescriptorToSecurityDescriptorW',
+             [w.LPCWSTR, w.DWORD, c.POINTER(c.c_void_p), c.c_void_p], w.BOOL),
+            (self.user, 'GetProcessWindowStation', [], w.HANDLE),
+            (self.user, 'SetProcessWindowStation', [w.HANDLE], w.BOOL),
+            (self.user, 'CreateWindowStationW',
+             [w.LPCWSTR, w.DWORD, w.DWORD, c.POINTER(SecurityAttributes)], w.HANDLE),
+            (self.user, 'CloseWindowStation', [w.HANDLE], w.BOOL),
+            (self.user, 'CreateDesktopW',
+             [w.LPCWSTR, w.LPCWSTR, c.c_void_p, w.DWORD, w.DWORD,
+              c.POINTER(SecurityAttributes)], w.HANDLE),
+            (self.user, 'CloseDesktop', [w.HANDLE], w.BOOL),
         ]
         for library, name, args, result in signatures:
             function = getattr(library, name)
             function.argtypes, function.restype = args, result
+
+    def create_test_desktop(self):
+        import csv
+        import subprocess
+        sid = next(csv.reader(subprocess.check_output(
+            ['whoami', '/user', '/fo', 'csv', '/nh'], text=True).splitlines()))[1]
+        descriptor = c.c_void_p()
+        # The hosted runner's service desktop may grant only Administrators
+        # access. Give the test user's SID its own medium-integrity desktop;
+        # keep the existing runner desktop and its permissions unchanged.
+        sddl = f'D:P(A;;GA;;;SY)(A;;GA;;;BA)(A;;GA;;;{sid})S:(ML;;NW;;;ME)'
+        checked(self.security.ConvertStringSecurityDescriptorToSecurityDescriptorW(
+            sddl, 1, c.byref(descriptor), None))
+        previous = self.user.GetProcessWindowStation()
+        name = 'ClashStartupCI' + str(os.getpid())
+        try:
+            attributes = SecurityAttributes(c.sizeof(SecurityAttributes), descriptor.value, False)
+            self.station = checked(self.user.CreateWindowStationW(name, 0, 0xF037F, c.byref(attributes)))
+            checked(self.user.SetProcessWindowStation(self.station))
+            try:
+                self.desktop_handle = checked(self.user.CreateDesktopW(
+                    'Startup', None, None, 0, 0xF01FF, c.byref(attributes)))
+            finally:
+                checked(self.user.SetProcessWindowStation(previous))
+            self.desktop_name = name + '\\Startup'
+        finally:
+            self.kernel.LocalFree(descriptor)
+
+    def close_test_desktop(self):
+        if self.desktop_handle:
+            checked(self.user.CloseDesktop(self.desktop_handle))
+        if self.station:
+            checked(self.user.CloseWindowStation(self.station))
 
     def limited_token(self):
         original, limited = w.HANDLE(), w.HANDLE()
@@ -105,6 +156,7 @@ class Windows:
         env = c.create_unicode_buffer('\0'.join(f'{k}={v}' for k, v in sorted(environment.items())) + '\0\0')
         startup, process = StartupInfo(), ProcessInfo()
         startup.cb = c.sizeof(startup)
+        startup.desktop = self.desktop_name
         original = w.HANDLE()
         try:
             if token is None:
@@ -192,6 +244,7 @@ def main():
     assert api.shell.IsUserAnAdmin(), 'Expected an elevated CI runner so both contexts can be tested'
     limited = api.limited_token()
     try:
+        api.create_test_desktop()
         # These tests now run with real ordinary permissions, not just the
         # elevated runner token that masked the original startup failures.
         process = api.launch(test_binary, limited, dict(os.environ),
@@ -211,6 +264,7 @@ def main():
             check_startup(api, executable, None, migrated)
             check_startup(api, executable, limited, migrated)
     finally:
+        api.close_test_desktop()
         api.kernel.CloseHandle(limited)
     print('PASS: Windows startup checks use a verified non-admin medium-integrity token', flush=True)
 
