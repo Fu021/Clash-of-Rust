@@ -207,7 +207,7 @@ class Windows:
         output = Path(self.user_temp)/('process-' + uuid.uuid4().hex + '.log')
         shell = Path(os.environ['SystemRoot'])/'System32/cmd.exe'
         command = c.create_unicode_buffer(
-            '"' + str(shell) + '" /D /S /C "' +
+            '"' + str(shell) + '" /D /S /C "start "" /B /WAIT ' +
             subprocess.list2cmdline([str(executable), *arguments]) +
             ' > "' + str(output) + '" 2>&1"')
         env = c.create_unicode_buffer('\0'.join(f'{k}={v}' for k, v in sorted(environment.items())) + '\0\0')
