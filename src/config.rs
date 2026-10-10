@@ -297,31 +297,39 @@ fn apply_rules(map: &mut Mapping, overrides: &RuleOverrides) -> Result<()> {
         _ => bail!("订阅 rules 必须是规则列表"),
     };
     let same_rule = |a: &str, b: &str| {
+        let geoip = b
+            .split(',')
+            .next()
+            .is_some_and(|kind| kind.trim().eq_ignore_ascii_case("GEOIP"));
         let mut a = a.split(',').map(str::trim);
         let mut b = b.split(',').map(str::trim);
+        let mut index = 0;
         loop {
             match (a.next(), b.next()) {
                 (None, None) => break true,
                 (Some(a), Some(b)) if a.eq_ignore_ascii_case(b) => {}
+                (Some(a), Some(b))
+                    if geoip
+                        && index == 1
+                        && a.eq_ignore_ascii_case("Private")
+                        && b.eq_ignore_ascii_case("LAN") => {}
                 _ => break false,
             }
+            index += 1;
         }
     };
     let mut rules = Vec::with_capacity(previous.len() + SUBSCRIPTION_RULES.len());
     for (index, rule) in SUBSCRIPTION_RULES.iter().enumerate() {
-        if overrides.enabled[index] {
+        if overrides.enabled[index]
+            && !previous
+                .iter()
+                .any(|value| value.as_str().is_some_and(|line| same_rule(line, rule)))
+        {
             rules.push(Value::from(*rule));
         }
     }
     for rule in previous {
-        let line = rule.as_str().context("订阅规则必须是字符串")?;
-        if SUBSCRIPTION_RULES
-            .iter()
-            .enumerate()
-            .any(|(index, preset)| overrides.enabled[index] && same_rule(line, preset))
-        {
-            continue;
-        }
+        rule.as_str().context("订阅规则必须是字符串")?;
         rules.push(rule);
     }
     map.insert(Value::from("rules"), Value::Sequence(rules));
@@ -354,7 +362,13 @@ mod tests {
         let rules = config["rules"].as_sequence().unwrap();
         let expected: Vec<_> = SUBSCRIPTION_RULES
             .into_iter()
-            .chain(["MATCH,DIRECT", "DOMAIN,example.test,DIRECT", "MATCH,Proxy"])
+            .filter(|rule| *rule != "GEOSITE,CN,DIRECT")
+            .chain([
+                "MATCH,DIRECT",
+                "GEOSITE,cn,DIRECT",
+                "DOMAIN,example.test,DIRECT",
+                "MATCH,Proxy",
+            ])
             .map(Value::from)
             .collect();
         assert_eq!(*rules, expected);
@@ -367,6 +381,40 @@ mod tests {
         let disabled: Value =
             serde_yaml::from_str(&runtime_config(raw, &Settings::default()).unwrap()).unwrap();
         assert_eq!(disabled["rules"], original["rules"]);
+    }
+
+    #[test]
+    fn subscription_rules_already_present_are_unchanged_by_toggles() {
+        for (index, rule) in SUBSCRIPTION_RULES
+            .iter()
+            .enumerate()
+            .chain(std::iter::once((2, &"GEOIP,Private,DIRECT,no-resolve")))
+        {
+            let existing = rule.to_ascii_lowercase().replace(',', " , ");
+            let raw = format!(
+                "proxies: []\nrules:\n  - DOMAIN,example.test,DIRECT\n  - {existing}\n  - MATCH,DIRECT\n"
+            );
+            let original: Value = serde_yaml::from_str(&raw).unwrap();
+            for enabled in [true, false] {
+                let mut settings = Settings::default();
+                settings.rule_overrides.enabled[index] = enabled;
+                let config: Value =
+                    serde_yaml::from_str(&runtime_config(&raw, &settings).unwrap()).unwrap();
+                assert_eq!(config["rules"], original["rules"]);
+            }
+        }
+        let raw = format!(
+            "proxies: []\nrules:\n  - {}\n  - MATCH,DIRECT\n",
+            SUBSCRIPTION_RULES.join("\n  - ")
+        );
+        let original: Value = serde_yaml::from_str(&raw).unwrap();
+        let settings = Settings {
+            rule_overrides: RuleOverrides { enabled: [true; 5] },
+            ..Settings::default()
+        };
+        let config: Value =
+            serde_yaml::from_str(&runtime_config(&raw, &settings).unwrap()).unwrap();
+        assert_eq!(config["rules"], original["rules"]);
     }
 
     #[test]

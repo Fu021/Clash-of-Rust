@@ -3474,6 +3474,7 @@ impl App {
             self.title("订阅附加规则"),
             self.caption("勾选后保存，对订阅生效；更新订阅后保留，取消勾选恢复原规则。"),
             self.caption("附加规则优先匹配，保留订阅原有兜底规则；仅在规则模式下生效。"),
+            self.caption("订阅已有同样规则时保持原样，开关只补充缺少的规则。"),
         ]
         .spacing(10);
         let labels = [

@@ -140,6 +140,34 @@ async fn subscription_rule_overrides_survive_updates_and_restore_original_rules(
         std::fs::read_to_string(store.profile_path(&id).unwrap()).unwrap(),
         updated
     );
+    // An upstream update may add these rules itself. Toggling the overrides
+    // must then preserve their original contents and order in the live core.
+    let existing = format!(
+        "proxies: []\nrules:\n  - DOMAIN,updated.test,DIRECT\n  - {}\n  - MATCH,DIRECT\n",
+        clash_of_rust::config::SUBSCRIPTION_RULES.join("\n  - ")
+    );
+    std::fs::write(&source, &existing).unwrap();
+    engine
+        .import(
+            "test subscription".into(),
+            source.display().to_string(),
+            Some(id.clone()),
+        )
+        .await
+        .unwrap();
+    let original: serde_yaml::Value = serde_yaml::from_str(&existing).unwrap();
+    for enabled in [true, false] {
+        engine
+            .save_rule_overrides(RuleOverrides {
+                enabled: [enabled; 5],
+            })
+            .await
+            .unwrap();
+        let config: serde_yaml::Value =
+            serde_yaml::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
+        assert_eq!(config["rules"], original["rules"]);
+        assert_eq!(std::fs::read_to_string(&profile_path).unwrap(), existing);
+    }
     engine.stop().await.unwrap();
     engine.save_rule_overrides(overrides.clone()).await.unwrap();
     engine.start().await.unwrap();
