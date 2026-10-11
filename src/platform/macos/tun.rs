@@ -324,6 +324,9 @@ fn serve(socket: &Path, uid: u32, token: &str) -> Result<()> {
             }
             Err(error) => return Err(error.into()),
         };
+        // Darwin accept inherits the listener's nonblocking flag. The request
+        // and lease monitor require blocking reads; EAGAIN is not a disconnect.
+        stream.set_nonblocking(false)?;
         if peer_uid(&stream)? != uid {
             continue;
         }

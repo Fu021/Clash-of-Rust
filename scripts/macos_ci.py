@@ -47,11 +47,29 @@ def suite(name, operation):
 
 def logged(name, command, env=None, timeout=300):
     REPORT.mkdir(parents=True, exist_ok=True)
+    import threading
     with (REPORT/(name+'.log')).open('w') as log:
-        result = subprocess.run([str(v) for v in command], cwd=ROOT, env=env, stdout=log, stderr=subprocess.STDOUT, timeout=timeout)
-    if result.returncode:
-        print((REPORT/(name+'.log')).read_text(errors='replace')[-16000:])
-        raise RuntimeError(f'{name} exited {result.returncode}; full output: {name}.log')
+        process = subprocess.Popen([str(v) for v in command], cwd=ROOT, env=env,
+                                   stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+                                   text=True, encoding='utf-8', errors='replace')
+        def copy_output():
+            for line in process.stdout:
+                log.write(line)
+                log.flush()
+                sys.stdout.write(line)
+                sys.stdout.flush()
+        reader = threading.Thread(target=copy_output, daemon=True)
+        reader.start()
+        try:
+            result = process.wait(timeout=timeout)
+        except subprocess.TimeoutExpired:
+            process.kill()
+            process.wait()
+            raise
+        finally:
+            reader.join(timeout=5)
+    if result:
+        raise RuntimeError(f'{name} exited {result}; full output: {name}.log')
 
 
 def native_tests(tests, bundle):
@@ -60,6 +78,38 @@ def native_tests(tests, bundle):
     suite('Per-user autostart round trip', lambda: logged('native-autostart', [tests['library'], 'native_autostart_round_trip', '--ignored', '--test-threads=1']))
     suite('Proxy restore and later-owner protection', lambda: logged('native-proxy', ['sudo', '-n', 'env', 'GITHUB_ACTIONS=true', tests['library'], 'native_proxy_restore_round_trip', '--ignored', '--test-threads=1']))
     suite('Authorized core lease lifecycle', lambda: logged('native-tun', [tests['library'], 'native_tun_lease', '--ignored', '--test-threads=1'], env=dict(os.environ, MIHOMO_TEST_RESOURCES=str(bundle/'resources')), timeout=180))
+    suite('All pages in both themes', rendered_ui)
+
+
+def rendered_ui():
+    import struct, zlib
+    # Only this optional test target is rebuilt; production binaries stay intact.
+    command = ['cargo', 'test', '--release', '--locked', '--features', 'ui-preview',
+               '--test', 'ui_preview', '--no-run', '--message-format=json']
+    messages = subprocess.check_output(command, cwd=ROOT, text=True, timeout=600)
+    executables = [entry['executable'] for line in messages.splitlines()
+                   if (entry := json.loads(line)).get('reason') == 'compiler-artifact'
+                   and entry.get('executable') and entry['target']['name'] == 'ui_preview']
+    if len(executables) != 1: raise RuntimeError('UI capture executable is missing')
+    output = REPORT/'ui'
+    output.mkdir(exist_ok=True)
+    def chunk(kind, data): return struct.pack('>I', len(data))+kind+data+struct.pack('>I', zlib.crc32(kind+data)&0xffffffff)
+    for scene in ('home', 'proxies', 'profiles', 'connections', 'rules', 'logs', 'diagnostics', 'ip', 'settings'):
+        for suffix in ('', '-light'):
+            name = scene+suffix
+            destination = output/name
+            env = dict(os.environ, CLASH_UI_PREVIEW_SCENE=name, CLASH_UI_PREVIEW_OUTPUT=str(destination))
+            logged('ui-'+name, [executables[0]], env=env, timeout=60)
+            width, height = json.loads(destination.with_suffix('.json').read_text())
+            pixels = destination.with_suffix('.rgba').read_bytes()
+            if len(pixels) != width*height*4 or width < 800 or height < 450 or len(set(pixels)) < 16:
+                raise RuntimeError('UI rendered an empty/invalid screenshot: '+name)
+            stride = width*4
+            rows = b''.join(b'\x00'+pixels[y*stride:(y+1)*stride] for y in range(height))
+            image = b'\x89PNG\r\n\x1a\n'+chunk(b'IHDR', struct.pack('>IIBBBBB', width, height, 8, 6, 0, 0, 0))+chunk(b'IDAT', zlib.compress(rows))+chunk(b'IEND', b'')
+            destination.with_suffix('.png').write_bytes(image)
+            destination.with_suffix('.rgba').unlink()
+    return {'screenshots': 18, 'source': 'iced rendered pixels', 'data': 'isolated fixtures, not live network results'}
 
 
 @contextlib.contextmanager
@@ -197,7 +247,7 @@ def main():
     REPORT.mkdir(parents=True, exist_ok=True)
     planned = ['Compile, Clippy, unit tests and native integration', 'Real mihomo integration',
                'Native network service discovery', 'Per-user autostart round trip',
-               'Proxy restore and later-owner protection', 'Authorized core lease lifecycle']
+               'Proxy restore and later-owner protection', 'Authorized core lease lifecycle', 'All pages in both themes']
     write_json(REPORT/'report.json', {'schema': 1, 'arch': args.arch, 'status': 'running',
                'suites': [{'name': name, 'status': 'not_run'} for name in planned]})
     for name, command in [('proxy', ['/usr/sbin/scutil', '--proxy']),
