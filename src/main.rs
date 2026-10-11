@@ -377,6 +377,8 @@ enum Message {
     OpenRelease,
     ReleaseOpened(Result<(), String>),
     Tick,
+    #[cfg(target_os = "macos")]
+    MacTrayPumped,
     ToggleGroup(String),
     GroupPage(String, bool),
     GroupDelay(String),
@@ -1000,7 +1002,31 @@ impl App {
     }
 
     fn update(&mut self, message: Message) -> Task<Message> {
+        #[cfg(target_os = "macos")]
+        let pump = matches!(
+            &message,
+            Message::Tick | Message::Window((_, iced::window::Event::Opened { .. }))
+        );
+        let task = self.update_message(message);
+        #[cfg(target_os = "macos")]
+        if pump {
+            return Task::batch([
+                task,
+                iced::window::latest().and_then(|id| {
+                    iced::window::run(id, |_| {
+                        tray::pump();
+                        Message::MacTrayPumped
+                    })
+                }),
+            ]);
+        }
+        task
+    }
+
+    fn update_message(&mut self, message: Message) -> Task<Message> {
         match message {
+            #[cfg(target_os = "macos")]
+            Message::MacTrayPumped => {}
             Message::DismissNotice => {
                 self.notice_visible = false;
                 self.updates.failure = None;

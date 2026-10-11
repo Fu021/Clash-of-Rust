@@ -8,16 +8,16 @@ import shutil
 import subprocess
 import sys
 
-from build_support import ROOT, bundle_directory, host_arch, run, write_json
+from build_support import host_system, ROOT, bundle_directory, host_arch, run, write_json
 from workflow_artifacts import export_build, test_binaries
 
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument('--system', choices=('windows', 'linux'), required=True)
+    parser.add_argument('--system', choices=('windows', 'linux', 'macos'), required=True)
     parser.add_argument('--arch', choices=('x64', 'arm64'), required=True)
     args = parser.parse_args()
-    if (args.system, args.arch) != ('windows' if os.name == 'nt' else 'linux', host_arch()):
+    if (args.system, args.arch) != (host_system(), host_arch()):
         raise ValueError('CI must run on the selected native architecture')
     run(['cargo', 'fmt', '--all', '--', '--check'])
     if (args.system, args.arch) == ('linux', 'x64'):
@@ -48,6 +48,9 @@ def main():
         for name in ('native_kde_signal', 'no_tray_host'):
             run(['dbus-run-session', '--', tests['library'], name, '--ignored'])
         run(['dbus-run-session', '--', tests['tray_integration'], 'login_tray', '--ignored'])
+    elif args.system == 'macos':
+        from macos_ci import native_tests
+        native_tests(tests, bundle)
     else:
         from windows_ci import windows_tests
         windows_tests(tests, bundle)

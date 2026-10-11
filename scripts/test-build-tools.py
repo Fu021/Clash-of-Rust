@@ -332,7 +332,7 @@ class ReleaseTests(unittest.TestCase):
     def test_release_artifact_download_enforces_archive_hash_and_safe_complete_contents(self):
         with tempfile.TemporaryDirectory() as folder:
             directory=Path(folder)
-            self.assertEqual(len(release.download_package_files(self.artifact_client(),88,77,self.commit,self.version,directory/'good')),8)
+            self.assertEqual(len(release.download_package_files(self.artifact_client(),88,77,self.commit,self.version,directory/'good')),len(release.PACKAGES)*2)
             for key in ('bad_name','expired','bad_digest','duplicate','bad_receipt','bad_build'):
                 with self.subTest(key=key), self.assertRaises(ValueError):
                     release.download_package_files(self.artifact_client(**{key:True}),88,77,self.commit,self.version,directory/key)
@@ -421,14 +421,14 @@ class ReleaseTests(unittest.TestCase):
                 owner.fail('Unexpected publication request: '+path)
             return copy.deepcopy(self.release)
 
-    def test_release_publishes_only_after_eight_verified_uploads_and_can_resume_empty_starter(self):
+    def test_release_publishes_only_after_all_verified_uploads_and_can_resume_empty_starter(self):
         with tempfile.TemporaryDirectory() as folder:
             files=self.files(Path(folder))
             for starter in (False,True):
                 client=self.PublisherClient(self,starter=starter)
                 release.publish(client,self.commit,self.tag,self.notes,files)
                 self.assertFalse(client.release['draft'])
-                self.assertEqual(len(client.release['assets']),8)
+                self.assertEqual(len(client.release['assets']),len(release.PACKAGES)*2)
                 if starter:self.assertTrue(any(method=='DELETE' for _,method,_ in client.writes))
 
     def test_development_version_is_published_as_a_preview(self):

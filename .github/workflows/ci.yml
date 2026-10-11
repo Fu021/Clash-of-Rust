@@ -36,9 +36,20 @@ jobs:
             arch: arm64
             target: aarch64-unknown-linux-gnu
             python: '3.11'
+          - os: macos-15-intel
+            system: macos
+            arch: x64
+            python: '3.11'
+            target: x86_64-apple-darwin
+          - os: macos-latest
+            system: macos
+            arch: arm64
+            python: '3.11'
+            target: aarch64-apple-darwin
     runs-on: ${{ matrix.os }}
     env:
       PYTHONDONTWRITEBYTECODE: '1'
+      MACOSX_DEPLOYMENT_TARGET: '14.0'
       PYTHONUTF8: '1'
     defaults:
       run:
@@ -90,7 +101,23 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           import subprocess, sys
-          subprocess.run([sys.executable, 'scripts/run-ci.py', '--system', '${{ matrix.system }}', '--arch', '${{ matrix.arch }}'], check=True)
+          command = [sys.executable, 'scripts/run-ci.py', '--system', '${{ matrix.system }}', '--arch', '${{ matrix.arch }}']
+          if '${{ matrix.system }}' == 'macos':
+              command = [sys.executable, 'scripts/macos_ci.py', 'ci', '--arch', '${{ matrix.arch }}']
+          subprocess.run(command, check=True)
+      - name: Collect macOS diagnostics
+        if: always() && runner.os == 'macOS'
+        run: |
+          import subprocess, sys
+          subprocess.run([sys.executable, 'scripts/macos_ci.py', 'diagnostics', '--arch', '${{ matrix.arch }}'], check=True)
+      - name: Preserve macOS diagnostics
+        uses: actions/upload-artifact@v6
+        if: always() && runner.os == 'macOS'
+        with:
+          name: macos-${{ github.workflow == 'Rust' && 'ci' || 'package' }}-report-${{ matrix.arch }}
+          path: target/macos-report
+          if-no-files-found: error
+          retention-days: 14
       - name: Preserve Windows regression results
         uses: actions/upload-artifact@v6
         if: always() && runner.os == 'Windows'

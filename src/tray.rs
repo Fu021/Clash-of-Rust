@@ -40,6 +40,7 @@ pub struct Startup {
 }
 
 impl Startup {
+    #[cfg(not(target_os = "macos"))]
     pub fn new(timeout: Duration) -> Self {
         let (ready_tx, ready) = mpsc::channel();
         let (cancel, cancelled) = mpsc::channel();
@@ -76,6 +77,18 @@ impl Startup {
             ready,
             cancel,
             started,
+        }
+    }
+
+    #[cfg(target_os = "macos")]
+    pub fn new(_timeout: Duration) -> Self {
+        let (sender, ready) = mpsc::channel();
+        let (cancel, _cancelled) = mpsc::channel();
+        MAC_PENDING.lock().unwrap().push(sender);
+        Self {
+            ready,
+            cancel,
+            started: Instant::now(),
         }
     }
 
@@ -199,43 +212,11 @@ impl Drop for Guard {
     }
 }
 
+#[cfg(not(target_os = "macos"))]
 pub fn start() -> anyhow::Result<Guard> {
     #[cfg(any(windows, target_os = "linux"))]
     crate::platform::ensure_tray_available()?;
-    let events = EVENTS.get_or_init(|| {
-        let (sender, receiver) = async_channel::unbounded_channel();
-        // Native handlers can only be set once. Keep the current menu IDs
-        // separately so a retried creation never retains a failed menu.
-        MenuEvent::set_event_handler(Some(|event: MenuEvent| {
-            if let Some(events) = EVENTS.get()
-                && let Ok(commands) = events.commands.lock()
-                && let Some((_, command)) = commands.iter().find(|(id, _)| *id == event.id)
-            {
-                let _ = events.sender.send(command.clone());
-            }
-        }));
-        TrayIconEvent::set_event_handler(Some(|event| {
-            if matches!(
-                event,
-                TrayIconEvent::Click {
-                    button: MouseButton::Left,
-                    button_state: MouseButtonState::Up,
-                    ..
-                } | TrayIconEvent::DoubleClick {
-                    button: MouseButton::Left,
-                    ..
-                }
-            ) && let Some(events) = EVENTS.get()
-            {
-                let _ = events.sender.send(Command::Show);
-            }
-        }));
-        Events {
-            sender,
-            receiver: Mutex::new(receiver),
-            commands: std::sync::Mutex::new(Vec::new()),
-        }
-    });
+    let events = events();
     let (ready_tx, ready_rx) = mpsc::sync_channel(1);
     let (stop_tx, stop_rx) = mpsc::channel::<()>();
     // Only the newest state matters; a stalled tray must not accumulate polls.
@@ -254,53 +235,7 @@ pub fn start() -> anyhow::Result<Guard> {
             );
             windows_sys::Win32::System::Threading::GetCurrentThreadId()
         };
-        let created = (|| -> anyhow::Result<_> {
-            let menu = Menu::new();
-            let mut commands = Vec::new();
-            let show = MenuItem::new("显示窗口", true, None);
-            menu.append(&show)?;
-            commands.push((show.id().clone(), Command::Show));
-            let modes = Submenu::new("运行模式", true);
-            let rule = CheckMenuItem::new("规则模式", false, false, None);
-            let global = CheckMenuItem::new("全局模式", false, false, None);
-            let direct = CheckMenuItem::new("直连模式", false, false, None);
-            for (item, command) in [
-                (&rule, Command::Rule),
-                (&global, Command::Global),
-                (&direct, Command::Direct),
-            ] {
-                modes.append(item)?;
-                commands.push((item.id().clone(), command));
-            }
-            menu.append(&modes)?;
-            let proxy_modes = Submenu::new("代理模式", true);
-            let system_proxy = CheckMenuItem::new("系统代理", false, false, None);
-            let tun = CheckMenuItem::new("TUN模式", false, false, None);
-            let off = CheckMenuItem::new("关闭", true, true, None);
-            proxy_modes.append_items(&[&system_proxy, &tun, &off])?;
-            menu.append(&proxy_modes)?;
-            let exit = MenuItem::new("退出", true, None);
-            menu.append(&exit)?;
-            commands.push((system_proxy.id().clone(), Command::SystemProxy));
-            commands.push((tun.id().clone(), Command::Tun));
-            commands.push((off.id().clone(), Command::ProxyOff));
-            commands.push((exit.id().clone(), Command::Exit));
-            let checks = Checks {
-                modes: [(rule, "rule"), (global, "global"), (direct, "direct")],
-                system_proxy,
-                tun,
-                off,
-            };
-            let icon = TrayIconBuilder::new()
-                .with_title("Clash of Rust")
-                .with_tooltip("Clash of Rust")
-                .with_icon(tray_icon(crate::icons::Kind::App))
-                .with_menu(Box::new(menu))
-                .with_menu_on_left_click(false)
-                .build()?;
-            *events.commands.lock().unwrap() = commands;
-            Ok((icon, checks))
-        })();
+        let created = create_native(events);
         match created {
             Ok((icon, checks)) => {
                 let mut icon_kind = crate::icons::Kind::App;
@@ -369,6 +304,158 @@ pub fn start() -> anyhow::Result<Guard> {
             #[cfg(not(windows))]
             let _ = id;
             let _ = stop_tx.send(());
+        })),
+    })
+}
+
+fn events() -> &'static Events {
+    EVENTS.get_or_init(|| {
+        let (sender, receiver) = async_channel::unbounded_channel();
+        // Native handlers can only be set once. Keep the current menu IDs
+        // separately so a retried creation never retains a failed menu.
+        MenuEvent::set_event_handler(Some(|event: MenuEvent| {
+            if let Some(events) = EVENTS.get()
+                && let Ok(commands) = events.commands.lock()
+                && let Some((_, command)) = commands.iter().find(|(id, _)| *id == event.id)
+            {
+                let _ = events.sender.send(command.clone());
+            }
+        }));
+        TrayIconEvent::set_event_handler(Some(|event| {
+            if matches!(
+                event,
+                TrayIconEvent::Click {
+                    button: MouseButton::Left,
+                    button_state: MouseButtonState::Up,
+                    ..
+                } | TrayIconEvent::DoubleClick {
+                    button: MouseButton::Left,
+                    ..
+                }
+            ) && let Some(events) = EVENTS.get()
+            {
+                let _ = events.sender.send(Command::Show);
+            }
+        }));
+        Events {
+            sender,
+            receiver: Mutex::new(receiver),
+            commands: std::sync::Mutex::new(Vec::new()),
+        }
+    })
+}
+
+fn create_native(events: &Events) -> anyhow::Result<(tray_icon::TrayIcon, Checks)> {
+    let menu = Menu::new();
+    let mut commands = Vec::new();
+    let show = MenuItem::new("显示窗口", true, None);
+    menu.append(&show)?;
+    commands.push((show.id().clone(), Command::Show));
+    let modes = Submenu::new("运行模式", true);
+    let rule = CheckMenuItem::new("规则模式", false, false, None);
+    let global = CheckMenuItem::new("全局模式", false, false, None);
+    let direct = CheckMenuItem::new("直连模式", false, false, None);
+    for (item, command) in [
+        (&rule, Command::Rule),
+        (&global, Command::Global),
+        (&direct, Command::Direct),
+    ] {
+        modes.append(item)?;
+        commands.push((item.id().clone(), command));
+    }
+    menu.append(&modes)?;
+    let proxy_modes = Submenu::new("代理模式", true);
+    let system_proxy = CheckMenuItem::new("系统代理", false, false, None);
+    let tun = CheckMenuItem::new("TUN模式", false, false, None);
+    let off = CheckMenuItem::new("关闭", true, true, None);
+    proxy_modes.append_items(&[&system_proxy, &tun, &off])?;
+    menu.append(&proxy_modes)?;
+    let exit = MenuItem::new("退出", true, None);
+    menu.append(&exit)?;
+    commands.push((system_proxy.id().clone(), Command::SystemProxy));
+    commands.push((tun.id().clone(), Command::Tun));
+    commands.push((off.id().clone(), Command::ProxyOff));
+    commands.push((exit.id().clone(), Command::Exit));
+    let checks = Checks {
+        modes: [(rule, "rule"), (global, "global"), (direct, "direct")],
+        system_proxy,
+        tun,
+        off,
+    };
+    let icon = TrayIconBuilder::new()
+        .with_title("Clash of Rust")
+        .with_tooltip("Clash of Rust")
+        .with_icon(tray_icon(crate::icons::Kind::App))
+        .with_menu(Box::new(menu))
+        .with_menu_on_left_click(false)
+        .build()?;
+    *events.commands.lock().unwrap() = commands;
+    Ok((icon, checks))
+}
+
+#[cfg(target_os = "macos")]
+type Ready = mpsc::Sender<Result<Guard, String>>;
+#[cfg(target_os = "macos")]
+static MAC_PENDING: std::sync::Mutex<Vec<Ready>> = std::sync::Mutex::new(Vec::new());
+#[cfg(target_os = "macos")]
+struct MacNative {
+    icon: tray_icon::TrayIcon,
+    checks: Checks,
+    kind: crate::icons::Kind,
+    updates: watch::Receiver<State>,
+    stop: mpsc::Receiver<()>,
+}
+#[cfg(target_os = "macos")]
+thread_local! {
+    static MAC_NATIVE: std::cell::RefCell<Option<MacNative>> = const { std::cell::RefCell::new(None) };
+}
+/// Called through iced::window::run, after AppKit's event loop has started.
+/// Native creation, mutation and final destruction all stay on this thread.
+#[cfg(target_os = "macos")]
+pub fn pump() {
+    assert!(
+        unsafe { libc::pthread_main_np() } != 0,
+        "AppKit tray must stay on the main thread"
+    );
+    for pending in MAC_PENDING.lock().unwrap().drain(..) {
+        let result = start().map_err(|error| error.to_string());
+        let _ = pending.send(result);
+    }
+    MAC_NATIVE.with_borrow_mut(|native| {
+        if let Some(value) = native {
+            if !matches!(value.stop.try_recv(), Err(mpsc::TryRecvError::Empty)) {
+                *native = None;
+            } else if value.updates.has_changed().unwrap_or(false) {
+                let state = value.updates.borrow_and_update().clone();
+                update_icon(&value.icon, &mut value.kind, &state);
+                value.checks.update(state);
+            }
+        }
+    });
+}
+#[cfg(target_os = "macos")]
+pub fn start() -> anyhow::Result<Guard> {
+    anyhow::ensure!(
+        unsafe { libc::pthread_main_np() } != 0,
+        "macOS 托盘只能在主线程创建"
+    );
+    let (icon, checks) = create_native(events())?;
+    let (updates, receiver) = watch::channel(State::default());
+    let (stop, stopped) = mpsc::channel();
+    MAC_NATIVE.with_borrow_mut(|native| {
+        *native = Some(MacNative {
+            icon,
+            checks,
+            kind: crate::icons::Kind::App,
+            updates: receiver,
+            stop: stopped,
+        })
+    });
+    Ok(Guard {
+        updates,
+        thread_id: 0,
+        shutdown: Some(Box::new(move || {
+            let _ = stop.send(());
         })),
     })
 }

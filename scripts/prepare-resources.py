@@ -5,17 +5,17 @@ import os
 import shutil
 import time
 import zipfile
-from build_support import ROOT, bundle_directory, copy_static, download_asset, host_arch, read_json, sha256, write_json
+from build_support import host_system, ROOT, bundle_directory, copy_static, download_asset, host_arch, read_json, sha256, write_json
 
 
 def prepare(system, arch, proxy='', core_version='v1.19.32'):
-    if system not in ('windows', 'linux') or arch not in ('x64', 'arm64'):
-        raise ValueError('Supported targets: windows/linux, x64/arm64')
+    if system not in ('windows', 'linux', 'macos') or arch not in ('x64', 'arm64'):
+        raise ValueError('Supported targets: windows/linux/macos, x64/arm64')
     bundle = bundle_directory(system, arch)
     resources = bundle/'resources'
     resources.mkdir(parents=True, exist_ok=True)
     architecture = 'amd64' if arch == 'x64' else 'arm64'
-    asset_name = (f'mihomo-windows-{architecture}'+('-compatible' if arch == 'x64' else '')+f'-{core_version}.zip') if system == 'windows' else (f'mihomo-linux-{architecture}'+('-compatible' if arch == 'x64' else '')+f'-{core_version}.gz')
+    asset_name = (f'mihomo-windows-{architecture}'+('-compatible' if arch == 'x64' else '')+f'-{core_version}.zip') if system == 'windows' else (f"mihomo-{'darwin' if system == 'macos' else 'linux'}-{architecture}"+('-compatible' if arch == 'x64' else '')+f'-{core_version}.gz')
     release = read_json(f'https://api.github.com/repos/MetaCubeX/mihomo/releases/tags/{core_version}', proxy)
     asset = next((a for a in release['assets'] if a['name'] == asset_name), None)
     if asset is None:
@@ -60,7 +60,7 @@ def prepare(system, arch, proxy='', core_version='v1.19.32'):
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument('--system', choices=('windows','linux'), default='windows' if os.name == 'nt' else 'linux')
+    parser.add_argument('--system', choices=('windows','linux','macos'), default=host_system())
     parser.add_argument('--arch', choices=('x64','arm64'), default=host_arch())
     parser.add_argument('--proxy', default='')
     parser.add_argument('--core-version', default='v1.19.32')

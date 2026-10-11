@@ -127,7 +127,18 @@ fn main() {
     }
 }
 
-#[cfg(not(target_os = "linux"))]
+#[cfg(target_os = "macos")]
+fn main() {
+    match clash_of_rust::platform::macos::tun::launcher_main() {
+        Ok(code) => std::process::exit(code),
+        Err(error) => {
+            eprintln!("{error:#}");
+            std::process::exit(1);
+        }
+    }
+}
+
+#[cfg(not(any(target_os = "linux", target_os = "macos")))]
 fn main() {
     eprintln!("The TUN core launcher is only available on Linux");
     std::process::exit(1);

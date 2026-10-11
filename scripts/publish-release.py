@@ -21,13 +21,15 @@ import zipfile
 from build_support import ROOT, opener, sha256, validate_version
 
 CI_JOBS = {
-    'windows-x64', 'windows-arm64', 'linux-x64', 'linux-arm64',
+    'windows-x64', 'windows-arm64', 'linux-x64', 'linux-arm64', 'macos-x64', 'macos-arm64',
 }
 PACKAGES = {
     'package-windows-x64': 'windows-x64-setup.exe',
     'package-windows-arm64': 'windows-arm64-setup.exe',
     'package-linux-x64': 'linux-amd64.deb',
     'package-linux-arm64': 'linux-arm64.deb',
+    'package-macos-x64': 'macos-x64.dmg',
+    'package-macos-arm64': 'macos-arm64.dmg',
 }
 PACKAGE_JOBS = set(PACKAGES) | {'Ubuntu latest-x64 TUN and GUI'}
 
@@ -329,14 +331,14 @@ def main():
         local = validate_files(args.asset, version)
         require(all(sha256(local[name]) == sha256(path) for name, path in files.items()), 'Local assets differ from selected CI')
     print('Verified CI:', run['html_url'])
-    print('Verified version and all eight attachments:', tag)
+    print('Verified version and all twelve attachments:', tag)
     if args.check:
         print('Check complete; no release changes made')
         return
     url = publish(client, commit, tag, notes, files)
     if os.environ.get('GITHUB_STEP_SUMMARY'):
         with Path(os.environ['GITHUB_STEP_SUMMARY']).open('a', encoding='utf-8') as summary:
-            summary.write(f'[Published {tag}]({url}) — four installers and four SHA256 files verified.\n')
+            summary.write(f'[Published {tag}]({url}) — six installers and six SHA256 files verified.\n')
 
 
 if __name__ == '__main__':

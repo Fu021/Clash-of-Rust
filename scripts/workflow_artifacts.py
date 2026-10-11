@@ -17,7 +17,7 @@ from build_support import (ROOT, bundle_directory, package_version, sha256,
                            stage_resources, validate_binary_arch, validate_resources, file_version,
                            write_json)
 
-BUILD_NAMES = {f'build-{system}-{arch}' for system in ('windows', 'linux') for arch in ('x64', 'arm64')}
+BUILD_NAMES = {f'build-{system}-{arch}' for system in ('windows', 'linux', 'macos') for arch in ('x64', 'arm64')}
 ARCHIVE_NAME = 'build.tar.gz'
 TEST_NAMES = {'library', 'clash-of-rust', 'clash-tun-launcher', 'core_integration',
               'geo_download', 'linux_tun', 'tray_integration', 'memory_benchmark'}
@@ -203,7 +203,7 @@ def fetch_build(client, run_id, system, arch, root, expected_commit):
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('operation', choices=('export', 'fetch'))
-    parser.add_argument('--system', choices=('windows', 'linux'), required=True)
+    parser.add_argument('--system', choices=('windows', 'linux', 'macos'), required=True)
     parser.add_argument('--arch', choices=('x64', 'arm64'), required=True)
     parser.add_argument('--tests', type=Path)
     parser.add_argument('--output', type=Path, required=True)

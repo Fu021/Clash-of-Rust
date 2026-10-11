@@ -36,6 +36,13 @@ pub fn discover() -> Result<PathBuf> {
     if sibling.is_dir() {
         return Ok(sibling);
     }
+    #[cfg(target_os = "macos")]
+    if let Some(contents) = exe.parent().and_then(Path::parent) {
+        let resources = contents.join("Resources/resources");
+        if contents.file_name().is_some_and(|name| name == "Contents") && resources.is_dir() {
+            return Ok(resources);
+        }
+    }
     #[cfg(debug_assertions)]
     {
         let development = Path::new(env!("CARGO_MANIFEST_DIR")).join(if cfg!(windows) {
@@ -46,7 +53,12 @@ pub fn discover() -> Result<PathBuf> {
             }
         } else {
             format!(
-                "bundle/linux-{}/resources",
+                "bundle/{}-{}/resources",
+                if cfg!(target_os = "macos") {
+                    "macos"
+                } else {
+                    "linux"
+                },
                 if cfg!(target_arch = "aarch64") {
                     "arm64"
                 } else {
