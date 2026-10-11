@@ -1,6 +1,6 @@
 # macOS 开发与验收
 
-开发版本：0.5.3-dev.1。最低系统目标为 macOS 14；CI 原生覆盖 Intel (`macos-15-intel`) 和 Apple Silicon (`macos-latest`)，分别输出 x64 和 arm64 安装包。
+版本：0.5.3。最低系统目标为 macOS 14；CI 原生覆盖 Intel (`macos-15-intel`) 和 Apple Silicon (`macos-latest`)，分别输出 x64 和 arm64 安装包。
 
 ## 自动检查
 
@@ -17,7 +17,7 @@ CI 运行格式检查、Clippy、所有单元测试和真实 mihomo 集成测试
 - 开机启动采用当前用户的 `~/Library/LaunchAgents/org.clashofrust.desktop.plist`，以普通用户后台启动。启用后下次登录生效。
 - TUN 助手单独编译，不链接 AppKit/Cocoa 或 Iced 桌面库；CI 用 `otool` 核对依赖。TUN 首次使用请求管理员授权，只启动短期的内核服务；GUI 不提权。会话使用私有 Unix socket、用户身份与随机令牌验证，固定执行已验证并冻结的 mihomo。桥接断开后停止内核，未使用的授权服务在五分钟后退出，不安装永久 root 服务或 setuid 文件。后台登录启动不会弹出 TUN 授权。
 - DMG 中的 `.app` 拖入 Applications 即可安装。数据目录使用 macOS 用户 Application Support，不写入应用包。
-- 开发构建使用 ad-hoc 签名，可验证包完整性；它不提供 Apple Developer ID 信任或公证。正式分发前需要配置 Developer ID 签名和公证凭据。
+- 当前安装包使用 ad-hoc 签名，可验证包完整性；它不提供 Apple Developer ID 信任或公证。尚未配置 Developer ID 签名和公证凭据，首次下载后的 Gatekeeper 提示见 [Apple 说明](https://support.apple.com/zh-cn/102445)。
 
 ## 仍需交互式 Mac 验收
 
