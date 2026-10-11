@@ -22,6 +22,7 @@ def suite(name, operation):
     path = REPORT/'report.json'
     report = json.loads(path.read_text()) if path.exists() else {'schema': 1, 'status': 'running', 'suites': []}
     entry = {'name': name, 'status': 'running'}
+    report['suites'] = [e for e in report['suites'] if e.get('name') != name]
     report['suites'].append(entry)
     write_json(path, report)
     started = time.monotonic()
@@ -71,12 +72,13 @@ def mounted(package):
 
 
 def gui_smoke(app, label):
-    # Private HOME avoids existing user profiles, system proxy journals and ports.
+    # Private data directory avoids existing profiles and proxy journals.
     with tempfile.TemporaryDirectory(prefix='clash-gui-') as temporary:
         env = dict(os.environ, CLASH_OF_RUST_DATA_DIR=temporary)
         binary = app/'Contents/MacOS/clash-of-rust'
         with (REPORT/(label+'-gui.log')).open('w') as log:
-            process = subprocess.Popen([binary], env=env, stdout=log, stderr=subprocess.STDOUT)
+            process = subprocess.Popen([binary], env=env, stdout=log, stderr=subprocess.STDOUT, start_new_session=True)
+            version = None
             try:
                 deadline = time.monotonic()+45
                 proxy = urllib.request.build_opener(urllib.request.ProxyHandler({}))
@@ -86,7 +88,7 @@ def gui_smoke(app, label):
                     try:
                         settings = next(Path(temporary).rglob('settings.json'))
                         value = json.loads(settings.read_text())
-                        request = urllib.request.Request(f"http://127.0.0.1:{value['controller_port']}/version", headers={'Authorization': 'Bearer '+value['controller_secret']})
+                        request = urllib.request.Request(f"http://127.0.0.1:{value['controller_port']}/version", headers={'Authorization': 'Bearer '+value['secret']})
                         with proxy.open(request, timeout=1) as response: version = json.load(response)
                         break
                     except (OSError, KeyError, StopIteration, json.JSONDecodeError): time.sleep(.2)
@@ -116,7 +118,18 @@ FileHandle.standardOutput.write(data)
                 except subprocess.TimeoutExpired: process.kill(); process.wait()
                 # macOS user processes do not get Linux parent-death signals.
                 # Reap only this isolated GUI's child core, identified by parent.
-                subprocess.run(['/usr/bin/pkill', '-TERM', '-P', str(process.pid)], capture_output=True)
+                if version:
+                    import socket, signal
+                    deadline = time.monotonic()+5
+                    while time.monotonic() < deadline:
+                        try:
+                            with socket.create_connection(('127.0.0.1', value['controller_port']), timeout=.2): pass
+                        except OSError: break
+                        time.sleep(.1)
+                    else:
+                        try: os.killpg(process.pid, signal.SIGTERM)
+                        except ProcessLookupError: pass
+                        raise RuntimeError('GUI termination left its core listening')
 
 
 def package_tests(package, manifest, build):
@@ -152,9 +165,11 @@ def diagnostics(arch):
     for name, command in commands.items():
         try: logged('diagnostic-'+name, command, timeout=30)
         except Exception as error: (REPORT/(name+'-collection-error.txt')).write_text(str(error))
-    crash_dir = Path.home()/'Library/Logs/DiagnosticReports'
-    for path in crash_dir.glob('*'):
-        if path.name.startswith(('clash', 'mihomo')) and path.is_file(): shutil.copy2(path, REPORT/path.name)
+    for crash_dir in (Path.home()/'Library/Logs/DiagnosticReports', Path('/Library/Logs/DiagnosticReports')):
+        for path in crash_dir.glob('*'):
+            if path.name.startswith(('clash', 'mihomo')) and path.is_file():
+                try: shutil.copy2(path, REPORT/path.name)
+                except OSError: pass
     for pid in subprocess.check_output(['/usr/bin/pgrep', '-x', 'clash-of-rust'], text=True).split() if subprocess.run(['/usr/bin/pgrep', '-x', 'clash-of-rust'], capture_output=True).returncode == 0 else []:
         try: logged('thread-sample-'+pid, ['/usr/bin/sample', pid, '2'], timeout=10)
         except Exception: pass
@@ -179,6 +194,15 @@ def main():
     if sys.platform != 'darwin' or host_arch() != args.arch: raise ValueError('A matching native macOS runner is required')
     if args.operation == 'diagnostics': diagnostics(args.arch); return
     # All compilation, including failures, has a durable full-output transcript.
+    REPORT.mkdir(parents=True, exist_ok=True)
+    planned = ['Compile, Clippy, unit tests and native integration', 'Real mihomo integration',
+               'Native network service discovery', 'Per-user autostart round trip',
+               'Proxy restore and later-owner protection', 'Authorized core lease lifecycle']
+    write_json(REPORT/'report.json', {'schema': 1, 'arch': args.arch, 'status': 'running',
+               'suites': [{'name': name, 'status': 'not_run'} for name in planned]})
+    for name, command in [('proxy', ['/usr/sbin/scutil', '--proxy']),
+                          ('routes', ['/usr/sbin/netstat', '-rn']), ('interfaces', ['/sbin/ifconfig'])]:
+        logged('baseline-'+name, command)
     suite('Compile, Clippy, unit tests and native integration', lambda: logged('ci', [sys.executable, ROOT/'scripts/run-ci.py', '--system', 'macos', '--arch', args.arch], timeout=3300))
     report = json.loads((REPORT/'report.json').read_text()); report['status'] = 'passed'; write_json(REPORT/'report.json', report)
 

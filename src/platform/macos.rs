@@ -63,18 +63,20 @@ pub fn read() -> Result<ProxyState> {
     let key = cf::string("/NetworkServices")?;
     let value = unsafe { SCPreferencesPathGetValue(prefs.0, key.0) };
     ensure!(!value.is_null(), "没有可配置的 macOS 网络服务");
-    let services = cf::json(value)?;
     let mut state = ProxyState::new();
-    for (id, service) in services.as_object().context("网络服务格式无效")? {
-        if service.get("Interface").is_none() {
+    for id in cf::dictionary_keys(value)? {
+        let interface = cf::string(&format!("/NetworkServices/{id}/Interface"))?;
+        if unsafe { SCPreferencesPathGetValue(prefs.0, interface.0) }.is_null() {
             continue;
         }
-        state.insert(
-            id.clone(),
-            service
-                .get("Proxies")
-                .map(|value| ProxyValue::Text(value.to_string())),
-        );
+        let path = cf::string(&format!("/NetworkServices/{id}/Proxies"))?;
+        let value = unsafe { SCPreferencesPathGetValue(prefs.0, path.0) };
+        let proxy = if value.is_null() {
+            None
+        } else {
+            Some(ProxyValue::Text(cf::json(value)?.to_string()))
+        };
+        state.insert(id, proxy);
     }
     ensure!(!state.is_empty(), "没有可配置的 macOS 网络服务");
     Ok(state)
@@ -238,6 +240,12 @@ fn open(value: &std::ffi::OsStr) -> Result<()> {
     );
     Ok(())
 }
+pub fn show_requested() -> bool {
+    crate::config::Store::discover()
+        .ok()
+        .is_some_and(|store| std::fs::remove_file(store.root.join("show-window")).is_ok())
+}
+
 /// Quote separately for the shell and the AppleScript string literal.
 pub fn shell_quote(value: &str) -> String {
     format!("'{}'", value.replace('\'', "'\\''"))

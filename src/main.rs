@@ -115,6 +115,11 @@ fn main() -> iced::Result {
         let deadline = std::time::Instant::now() + Duration::from_secs(30);
         while file.try_lock().is_err() {
             if !update_restart() || std::time::Instant::now() >= deadline {
+                #[cfg(target_os = "macos")]
+                if !background_start() {
+                    let _ =
+                        clash_of_rust::config::atomic_write(&store.root.join("show-window"), b"");
+                }
                 return Ok(());
             }
             std::thread::sleep(Duration::from_millis(100));

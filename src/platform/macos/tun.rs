@@ -142,7 +142,7 @@ fn check_user_file(path: &Path, uid: u32, directory: bool) -> Result<()> {
     );
     Ok(())
 }
-fn core_path() -> Result<PathBuf> {
+fn core_path() -> Result<(PathBuf, String)> {
     let exe = std::env::current_exe()?;
     let parent = exe.parent().context("TUN 助手路径无效")?;
     let sibling = parent.join("resources");
@@ -164,7 +164,11 @@ fn core_path() -> Result<PathBuf> {
                 .context("内核校验信息缺失")?,
         "TUN 内核 SHA256 校验失败"
     );
-    Ok(core)
+    let expected = manifest["exe_sha256"]
+        .as_str()
+        .context("内核校验信息缺失")?
+        .to_owned();
+    Ok((core, expected))
 }
 fn terminate(child: &mut std::process::Child) {
     if child.try_wait().ok().flatten().is_some() {
@@ -290,14 +294,13 @@ fn serve(socket: &Path, uid: u32, token: &str) -> Result<()> {
         "TUN 服务身份无效"
     );
     check_user_file(socket.parent().context("TUN 会话路径无效")?, uid, true)?;
-    let source = core_path()?;
+    let (source, expected) = core_path()?;
     // Freeze the authorized executable in a root-private directory. A later
     // user-space app replacement must never change what this lease executes.
     let frozen = tempfile::Builder::new()
         .prefix("clash-core-root-")
         .tempdir()?;
     let core = frozen.path().join("mihomo");
-    let expected = crate::assets::hash_file(&source)?.0;
     std::fs::copy(&source, &core)?;
     ensure!(
         crate::assets::hash_file(&core)?.0 == expected,
@@ -397,7 +400,7 @@ pub fn launcher_main() -> Result<i32> {
                 "普通内核启动器不能以 root 运行"
             );
             unsafe {
-                libc::signal(libc::SIGTERM, user_stop as usize);
+                libc::signal(libc::SIGTERM, user_stop as *const () as usize);
             }
             let parent = unsafe { libc::getppid() };
             use std::os::unix::process::CommandExt;
@@ -453,7 +456,7 @@ mod tests {
             .unwrap()
             .port();
         let config = directory_path.join("config.yaml");
-        crate::config::atomic_write(&config, format!("mixed-port: {port}\nmode: direct\nlog-level: debug\ntun:\n  enable: true\n  stack: system\n  auto-route: false\n  auto-detect-interface: true\nrules: [MATCH,DIRECT]\n").as_bytes()).unwrap();
+        crate::config::atomic_write(&config, format!("mixed-port: {port}\nmode: direct\nlog-level: debug\ntun:\n  enable: true\n  stack: system\n  device: utun233\n  auto-route: false\n  auto-detect-interface: true\nrules: ['MATCH,DIRECT']\n").as_bytes()).unwrap();
         let mut server = Command::new("/usr/bin/sudo")
             .args(["-n"])
             .arg(&launcher)
@@ -481,7 +484,12 @@ mod tests {
         let ready = (|| {
             let deadline = Instant::now() + Duration::from_secs(20);
             while Instant::now() < deadline {
-                if std::net::TcpStream::connect(("127.0.0.1", port)).is_ok() {
+                if std::net::TcpStream::connect(("127.0.0.1", port)).is_ok()
+                    && Command::new("/sbin/ifconfig")
+                        .arg("utun233")
+                        .output()
+                        .is_ok_and(|output| output.status.success())
+                {
                     return true;
                 }
                 if bridge.try_wait().unwrap().is_some() {
@@ -498,6 +506,15 @@ mod tests {
         assert!(
             std::net::TcpStream::connect(("127.0.0.1", port)).is_err(),
             "root core survived bridge death"
+        );
+        assert!(
+            !Command::new("/sbin/ifconfig")
+                .arg("utun233")
+                .output()
+                .unwrap()
+                .status
+                .success(),
+            "TUN interface survived bridge death"
         );
         drop(session);
         server.wait().unwrap();

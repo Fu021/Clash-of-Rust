@@ -43,7 +43,6 @@ jobs:
           CI_RUN_ID: ${{ inputs.ci_run_id }}
           CHECK_ONLY: ${{ inputs.check_only }}
           PYTHONDONTWRITEBYTECODE: '1'
-      MACOSX_DEPLOYMENT_TARGET: '14.0'
         run: |
           import os, subprocess, sys
           command = [sys.executable, 'scripts/publish-release.py', '--resolve']
@@ -87,6 +86,7 @@ jobs:
     runs-on: ${{ matrix.os }}
     env:
       PYTHONDONTWRITEBYTECODE: '1'
+      MACOSX_DEPLOYMENT_TARGET: '14.0'
     defaults:
       run:
         shell: python

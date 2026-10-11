@@ -8,6 +8,8 @@ use unicode_script::Script;
 pub const ENGLISH_FONT: Font = Font {
     family: iced::font::Family::Name(if cfg!(windows) {
         "Segoe UI"
+    } else if cfg!(target_os = "macos") {
+        "Helvetica Neue"
     } else {
         "Noto Sans"
     }),
@@ -22,6 +24,8 @@ pub fn brand_size() -> f32 {
         let raw = system.raw();
         let family = if cfg!(windows) {
             "Segoe UI"
+        } else if cfg!(target_os = "macos") {
+            "Helvetica Neue"
         } else {
             "Noto Sans"
         };
@@ -51,10 +55,12 @@ impl Fallback for ChineseFallback {
     fn common_fallback(&self) -> &[&'static str] {
         &[
             "Segoe UI",
+            "Helvetica Neue",
             "Source Han Sans CN",
             "Source Han Sans SC",
             "Noto Sans CJK SC",
             "Noto Sans",
+            "Apple Color Emoji",
             "Segoe UI Emoji",
             "Segoe UI Symbol",
         ]

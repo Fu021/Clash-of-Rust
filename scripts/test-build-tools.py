@@ -57,12 +57,15 @@ class BuildTests(unittest.TestCase):
     def test_package_rejects_wrong_binary_architecture(self):
         with tempfile.TemporaryDirectory() as folder:
             path = Path(folder)/'binary'
-            for system, arch, machine in [('windows','x64',0x8664),('windows','arm64',0xaa64),('linux','x64',62),('linux','arm64',183)]:
+            for system, arch, machine in [('windows','x64',0x8664),('windows','arm64',0xaa64),('linux','x64',62),('linux','arm64',183),('macos','x64',0x01000007),('macos','arm64',0x0100000c)]:
                 header = bytearray(64)
                 if system == 'windows':
                     header[:2] = b'MZ'
                     struct.pack_into('<I',header,0x3c,64)
                     header.extend(b'PE\0\0'+struct.pack('<H',machine))
+                elif system == 'macos':
+                    header[:4] = b'\xcf\xfa\xed\xfe'
+                    struct.pack_into('<I',header,4,machine)
                 else:
                     header[:6] = b'\x7fELF\x02\x01'
                     struct.pack_into('<H',header,18,machine)

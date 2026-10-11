@@ -286,7 +286,7 @@ impl Engine {
         };
         #[cfg(not(target_os = "macos"))]
         let mut command = Command::new(executable);
-        command.kill_on_drop(true);
+        command.kill_on_drop(!cfg!(target_os = "macos"));
         #[cfg(windows)]
         command.creation_flags(0x08000000);
         Ok(command)
@@ -1450,6 +1450,13 @@ impl Drop for Engine {
             handle.abort();
         }
         if let Some(child) = &mut self.child {
+            #[cfg(target_os = "macos")]
+            if let Some(pid) = child.id() {
+                unsafe {
+                    libc::kill(pid as i32, libc::SIGTERM);
+                }
+            }
+            #[cfg(not(target_os = "macos"))]
             let _ = child.start_kill();
         }
     }

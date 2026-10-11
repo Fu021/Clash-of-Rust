@@ -77,6 +77,19 @@ pub fn text(value: Ref) -> Result<String> {
     );
     Ok(String::from_utf8(bytes)?)
 }
+pub fn dictionary_keys(value: Ref) -> Result<Vec<String>> {
+    ensure!(
+        !value.is_null() && unsafe { CFGetTypeID(value) == CFDictionaryGetTypeID() },
+        "系统字典类型无效"
+    );
+    let count = unsafe { CFDictionaryGetCount(value) };
+    ensure!((0..=4096).contains(&count), "系统字典过大");
+    let mut keys = vec![ptr::null(); count as usize];
+    unsafe {
+        CFDictionaryGetKeysAndValues(value, keys.as_mut_ptr(), ptr::null_mut());
+    }
+    keys.into_iter().map(text).collect()
+}
 pub fn json(value: Ref) -> Result<Value> {
     to_json(value, 0)
 }
