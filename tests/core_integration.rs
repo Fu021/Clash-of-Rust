@@ -39,6 +39,116 @@ fn free_port() -> u16 {
 }
 
 #[tokio::test]
+#[ignore = "Requires bundled resources; verifies suffix overrides route real connections and leave existing ones unchanged"]
+async fn custom_suffix_rules_route_new_domain_and_subdomain_connections() {
+    use clash_of_rust::rule_manager::{CustomRule, ProfileRules};
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+    use tokio::net::{TcpListener, TcpStream};
+    use tokio::time::{Duration, timeout};
+
+    // Keep each HTTP connection open on a local simulated destination; no public
+    // DNS or Internet access is needed to verify the core's matching behavior.
+    async fn connect(listener: &TcpListener, mixed: u16, host: &str) -> (TcpStream, TcpStream) {
+        timeout(Duration::from_secs(5), async {
+            let port = listener.local_addr().unwrap().port();
+            let mut client = TcpStream::connect(("127.0.0.1", mixed)).await.unwrap();
+            client
+                .write_all(
+                    format!("GET http://{host}:{port}/ HTTP/1.1\r\nHost: {host}:{port}\r\n\r\n")
+                        .as_bytes(),
+                )
+                .await
+                .unwrap();
+            let (mut destination, _) = listener.accept().await.unwrap();
+            let mut prefix = [0; 3];
+            destination.read_exact(&mut prefix).await.unwrap();
+            assert_eq!(&prefix, b"GET");
+            (client, destination)
+        })
+        .await
+        .expect("core did not route the simulated HTTP request")
+    }
+
+    let destination = TcpListener::bind(("127.0.0.1", 0)).await.unwrap();
+    let tmp = tempfile::tempdir().unwrap();
+    let store = Store::at(tmp.path().join("data")).unwrap();
+    let controller_port = free_port();
+    let mut mixed_port = free_port();
+    while mixed_port == controller_port {
+        mixed_port = free_port();
+    }
+    store
+        .save_settings(&Settings {
+            controller_port,
+            mixed_port,
+            ..Settings::default()
+        })
+        .unwrap();
+    let mut engine = Engine::with_resources(store, test_resources()).unwrap();
+    engine.start().await.unwrap();
+    let source = tmp.path().join("suffix.yaml");
+    std::fs::write(&source, "proxies: []\nhosts: {google.com: 127.0.0.1, mail.google.com: 127.0.0.1}\nproxy-groups: [{name: Proxy, type: select, proxies: [DIRECT]}]\nrules: [\"MATCH,Proxy\"]\n").unwrap();
+    engine
+        .import("suffix test".into(), source.display().to_string(), None)
+        .await
+        .unwrap();
+    let id = engine.profiles.last().unwrap().id.clone();
+    engine.activate(id.clone()).await.unwrap();
+    engine.select_mode("rule").await.unwrap();
+
+    let previous_socket = connect(&destination, mixed_port, "mail.google.com").await;
+    let before = engine.poll(Scope::Connections).await.unwrap();
+    let previous = before
+        .connections
+        .connections
+        .iter()
+        .find(|c| c.metadata.host.as_ref() == "mail.google.com")
+        .unwrap();
+    assert!(previous.rule.as_str().eq_ignore_ascii_case("Match"));
+    assert!(previous.chains.iter().any(|name| name.as_str() == "Proxy"));
+    let previous_id = previous.id.clone();
+
+    engine
+        .save_profile_rules(
+            &id,
+            ProfileRules {
+                custom: vec![CustomRule {
+                    id: uuid::Uuid::new_v4().to_string(),
+                    rule: "DOMAIN-SUFFIX,google.com,DIRECT".into(),
+                    enabled: true,
+                }],
+                ..Default::default()
+            },
+        )
+        .await
+        .unwrap();
+    let root_socket = connect(&destination, mixed_port, "google.com").await;
+    let subdomain_socket = connect(&destination, mixed_port, "mail.google.com").await;
+    let after = engine.poll(Scope::Connections).await.unwrap();
+    let old = after
+        .connections
+        .connections
+        .iter()
+        .find(|c| c.id == previous_id)
+        .unwrap();
+    assert!(old.rule.as_str().eq_ignore_ascii_case("Match"));
+    for host in ["google.com", "mail.google.com"] {
+        let new = after
+            .connections
+            .connections
+            .iter()
+            .find(|c| c.id != previous_id && c.metadata.host.as_ref() == host)
+            .unwrap();
+        assert!(new.rule.as_str().eq_ignore_ascii_case("DomainSuffix"));
+        assert_eq!(new.rule_payload.as_str(), "google.com");
+        assert!(new.chains.iter().any(|name| name.as_str() == "DIRECT"));
+        assert!(!new.chains.iter().any(|name| name.as_str() == "Proxy"));
+    }
+    engine.stop().await.unwrap();
+    drop((previous_socket, root_socket, subdomain_socket));
+}
+
+#[tokio::test]
 #[ignore = "Requires bundled resources; verifies rule override reload, update and rollback"]
 async fn subscription_rule_overrides_survive_updates_and_restore_original_rules() {
     use clash_of_rust::config::RuleOverrides;
@@ -665,5 +775,271 @@ async fn subscription_metadata_failures_leave_runtime_and_preferences_unchanged(
     assert_eq!(engine.settings.delay_interval_minutes, 10);
     assert_eq!(engine.settings.run_mode, "global");
     assert_eq!(engine.settings.active_profile.as_ref(), Some(&id));
+    engine.stop().await.unwrap();
+}
+
+#[tokio::test]
+#[ignore = "Requires bundled resources; validates rule drafts, ordering, isolation and rollback"]
+async fn rule_manager_preserves_originals_and_rolls_back_invalid_drafts() {
+    use clash_of_rust::rule_manager::{CustomRule, ProfileRules};
+    let tmp = tempfile::tempdir().unwrap();
+    let store = Store::at(tmp.path().join("data")).unwrap();
+    let controller_port = free_port();
+    let mut mixed_port = free_port();
+    while mixed_port == controller_port {
+        mixed_port = free_port();
+    }
+    store
+        .save_settings(&Settings {
+            controller_port,
+            mixed_port,
+            ..Settings::default()
+        })
+        .unwrap();
+    let mut engine = Engine::with_resources(store.clone(), test_resources()).unwrap();
+    engine.start().await.unwrap();
+    let default_id = engine.settings.active_profile.clone().unwrap();
+    let source = tmp.path().join("rules.yaml");
+    let raw = "proxies: []\nproxy-groups: [{name: Proxy, type: select, proxies: [DIRECT, REJECT]}]\nrules:\n  - DOMAIN,original.test,DIRECT\n  - MATCH,DIRECT\n";
+    std::fs::write(&source, raw).unwrap();
+    engine
+        .import("rules test".into(), source.display().to_string(), None)
+        .await
+        .unwrap();
+    let id = engine.profiles.last().unwrap().id.clone();
+    engine.activate(id.clone()).await.unwrap();
+    let custom = CustomRule {
+        id: uuid::Uuid::new_v4().to_string(),
+        rule: "DOMAIN,custom.test,Proxy".into(),
+        enabled: true,
+    };
+    let disabled = CustomRule {
+        id: uuid::Uuid::new_v4().to_string(),
+        rule: "DOMAIN,disabled.test,REJECT".into(),
+        enabled: false,
+    };
+    let doc = engine.rule_document(&id).unwrap();
+    let draft = ProfileRules {
+        enabled: [true, false, false, false, false],
+        custom: vec![custom.clone(), disabled.clone()],
+        order: vec![
+            doc.original[0].id.clone(),
+            format!("c:{}", custom.id),
+            format!("c:{}", disabled.id),
+            doc.original[1].id.clone(),
+        ],
+    };
+    engine.save_profile_rules(&id, draft.clone()).await.unwrap();
+    let runtime = store.runtime().join("config.yaml");
+    let read = || -> serde_yaml::Value {
+        serde_yaml::from_str(&std::fs::read_to_string(&runtime).unwrap()).unwrap()
+    };
+    assert_eq!(
+        read()["rules"][0].as_str(),
+        Some("GEOSITE,category-ads-all,REJECT")
+    );
+    assert_eq!(
+        read()["rules"][2].as_str(),
+        Some("DOMAIN,custom.test,Proxy")
+    );
+    assert_eq!(read()["rules"].as_sequence().unwrap().len(), 4);
+    assert_eq!(
+        std::fs::read_to_string(store.profile_path(&id).unwrap()).unwrap(),
+        raw
+    );
+    let before = std::fs::read_to_string(&runtime).unwrap();
+    let mut invalid = draft.clone();
+    invalid.custom[0].rule = "IP-CIDR,999.1.1.1/24,DIRECT".into();
+    assert!(engine.save_profile_rules(&id, invalid).await.is_err());
+    assert_eq!(std::fs::read_to_string(&runtime).unwrap(), before);
+    assert_eq!(
+        store.load_settings().unwrap().rule_profiles[&id].as_ref(),
+        &draft
+    );
+    // Editing an inactive profile validates its config without reloading the active one.
+    let inactive = ProfileRules {
+        custom: vec![CustomRule {
+            id: uuid::Uuid::new_v4().to_string(),
+            rule: "DOMAIN,inactive.test,REJECT".into(),
+            enabled: true,
+        }],
+        ..Default::default()
+    };
+    engine
+        .save_profile_rules(&default_id, inactive)
+        .await
+        .unwrap();
+    assert_eq!(std::fs::read_to_string(&runtime).unwrap(), before);
+    assert_eq!(engine.settings.active_profile.as_deref(), Some(id.as_str()));
+    // Removing a custom rule's policy in an upstream update fails atomically.
+    let renamed = raw.replace("name: Proxy", "name: Renamed");
+    std::fs::write(&source, &renamed).unwrap();
+    assert!(
+        engine
+            .import(
+                "rules test".into(),
+                source.display().to_string(),
+                Some(id.clone())
+            )
+            .await
+            .is_err()
+    );
+    assert_eq!(
+        std::fs::read_to_string(store.profile_path(&id).unwrap()).unwrap(),
+        raw
+    );
+    assert_eq!(std::fs::read_to_string(&runtime).unwrap(), before);
+    let updated = raw.replace("DOMAIN,original.test,DIRECT", "DOMAIN,new.test,DIRECT");
+    std::fs::write(&source, &updated).unwrap();
+    engine
+        .import(
+            "rules test".into(),
+            source.display().to_string(),
+            Some(id.clone()),
+        )
+        .await
+        .unwrap();
+    assert_eq!(read()["rules"][3].as_str(), Some("MATCH,DIRECT"));
+    let doc = engine.rule_document(&id).unwrap();
+    assert!(
+        doc.rows(&draft)
+            .1
+            .iter()
+            .any(|warning| warning.contains("已删除或更改"))
+    );
+    let before_restart = read()["rules"].clone();
+    engine.stop().await.unwrap();
+    engine.start().await.unwrap();
+    assert_eq!(read()["rules"], before_restart);
+    engine.delete_profile(&id).await.unwrap();
+    assert!(
+        !store
+            .load_settings()
+            .unwrap()
+            .rule_profiles
+            .contains_key(&id)
+    );
+    engine.stop().await.unwrap();
+}
+
+#[tokio::test]
+#[ignore = "Requires bundled resources; verifies live header selections across modes and reloads"]
+async fn header_node_follows_nested_selections_and_configuration_changes() {
+    let tmp = tempfile::tempdir().unwrap();
+    let store = Store::at(tmp.path().join("data")).unwrap();
+    let controller_port = free_port();
+    let mut mixed_port = free_port();
+    while mixed_port == controller_port {
+        mixed_port = free_port();
+    }
+    store
+        .save_settings(&Settings {
+            controller_port,
+            mixed_port,
+            ..Settings::default()
+        })
+        .unwrap();
+    let mut engine = Engine::with_resources(store, test_resources()).unwrap();
+    engine.start().await.unwrap();
+    assert_eq!(
+        engine
+            .poll_with_header(Scope::Home, true)
+            .await
+            .unwrap()
+            .active_node
+            .as_deref(),
+        Some("DIRECT")
+    );
+    let source = tmp.path().join("header.yaml");
+    let raw = "proxies: []\nproxy-groups:\n  - {name: '主/代理', type: select, proxies: ['自动选择', REJECT]}\n  - {name: 自动选择, type: select, proxies: [DIRECT, REJECT]}\nrules: [\"MATCH,主/代理\"]";
+    std::fs::write(&source, raw).unwrap();
+    engine
+        .import("header test".into(), source.display().to_string(), None)
+        .await
+        .unwrap();
+    let id = engine.profiles.last().unwrap().id.clone();
+    engine.activate(id.clone()).await.unwrap();
+    assert_eq!(
+        engine
+            .poll_with_header(Scope::Other, true)
+            .await
+            .unwrap()
+            .active_node
+            .as_deref(),
+        Some("DIRECT")
+    );
+    engine.api.select("自动选择", "REJECT").await.unwrap();
+    assert_eq!(
+        engine
+            .poll_with_header(Scope::Home, true)
+            .await
+            .unwrap()
+            .active_node
+            .as_deref(),
+        Some("REJECT")
+    );
+    assert_eq!(
+        engine
+            .poll_with_header(Scope::Proxies, true)
+            .await
+            .unwrap()
+            .active_node
+            .as_deref(),
+        Some("REJECT")
+    );
+    engine.select_mode("global").await.unwrap();
+    engine.api.select("GLOBAL", "DIRECT").await.unwrap();
+    assert_eq!(
+        engine
+            .poll_with_header(Scope::Home, true)
+            .await
+            .unwrap()
+            .active_node
+            .as_deref(),
+        Some("DIRECT")
+    );
+    engine.select_mode("rule").await.unwrap();
+    assert_eq!(
+        engine
+            .poll_with_header(Scope::Home, true)
+            .await
+            .unwrap()
+            .active_node
+            .as_deref(),
+        Some("REJECT")
+    );
+    engine.select_mode("direct").await.unwrap();
+    assert_eq!(
+        engine
+            .poll_with_header(Scope::Home, true)
+            .await
+            .unwrap()
+            .active_node
+            .as_deref(),
+        Some("DIRECT")
+    );
+    engine.select_mode("rule").await.unwrap();
+    std::fs::write(&source, raw.replace("MATCH,主/代理", "MATCH,DIRECT")).unwrap();
+    engine
+        .import("header test".into(), source.display().to_string(), Some(id))
+        .await
+        .unwrap();
+    assert_eq!(
+        engine
+            .poll_with_header(Scope::Home, true)
+            .await
+            .unwrap()
+            .active_node
+            .as_deref(),
+        Some("DIRECT")
+    );
+    assert!(
+        engine
+            .poll_with_header(Scope::Other, false)
+            .await
+            .unwrap()
+            .active_node
+            .is_none()
+    );
     engine.stop().await.unwrap();
 }

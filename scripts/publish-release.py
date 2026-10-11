@@ -96,7 +96,7 @@ def require(condition, message):
         raise ValueError(message)
 
 
-def verified_run(client, commit, run_id=None):
+def verified_run(client, commit, run_id=None, check_only=False):
     if run_id is None:
         query = urllib.parse.urlencode({'head_sha': commit, 'event': 'push', 'branch': 'main', 'per_page': 20})
         runs = client('/actions/workflows/ci.yml/runs?' + query)['workflow_runs']
@@ -104,11 +104,15 @@ def verified_run(client, commit, run_id=None):
         run_id = runs[0]['id']
     run = client(f'/actions/runs/{run_id}')
     require(run['path'].split('@', 1)[0] == '.github/workflows/ci.yml', 'Selected run is not the build CI')
-    require(run['event'] == 'push' and run['head_branch'] == 'main', 'Release requires main-branch push CI')
+    main_ci = run['event'] == 'push' and run['head_branch'] == 'main'
+    require(main_ci or (check_only and run['event'] == 'pull_request'),
+            'Release requires main-branch push CI; test-only packaging also accepts same-repository PR CI')
     require(run['head_repository']['full_name'].lower() == client.repo.lower(), 'CI repository mismatch')
     require(run['head_sha'] == commit, 'CI commit differs from the checked-out commit')
     require(run['status'] == 'completed' and run['conclusion'] == 'success', 'CI has not completed successfully')
-    require(client('/branches/main')['commit']['sha'] == commit, 'Main has changed; select its current successful CI')
+    branch = 'main' if main_ci else run['head_branch']
+    require(client('/branches/' + urllib.parse.quote(branch, safe=''))['commit']['sha'] == commit,
+            'Source branch has changed; select its current successful CI')
     jobs = client(f'/actions/runs/{run_id}/jobs?filter=latest&per_page=100')['jobs']
     require(len(jobs) == len(CI_JOBS) and {j['name'] for j in jobs} == CI_JOBS,
             'CI does not cover all four native platforms')
@@ -116,11 +120,14 @@ def verified_run(client, commit, run_id=None):
     return run
 
 
-def release_metadata(commit, tag=None, notes_path=None):
+def release_metadata(commit, tag=None, notes_path=None, check_only=False):
     require(bool(re.fullmatch(r'[0-9a-f]{40}', commit)), 'Invalid release commit')
     version = validate_version(tomllib.loads(git('show', commit + ':Cargo.toml'))['package']['version'])
     expected_tag = 'v' + version
     require(tag is None or tag == expected_tag, 'Release tag differs from the tested Cargo version')
+    if check_only:
+        require(notes_path is None, 'Release notes are not used by test-only packaging')
+        return version, expected_tag, ''
     # Read release notes from the tested Git tree, not uncommitted local files.
     notes = subprocess.check_output(['git', 'show', f'{commit}:docs/releases/{version}.md'], cwd=ROOT, text=True)
     if notes_path:
@@ -157,11 +164,11 @@ def build_artifacts(client, run_id):
     return {a['name']: {key: a[key] for key in ('id', 'name', 'digest')} for a in builds}
 
 
-def verified_package_run(client, run_id, commit):
+def verified_package_run(client, run_id, commit, check_only=False):
     run = client(f'/actions/runs/{run_id}')
     require(run['path'].split('@', 1)[0] == '.github/workflows/release.yml'
-            and run['event'] == 'workflow_dispatch' and run['head_branch'] == 'main',
-            'Packages must come from the manual main-branch release workflow')
+            and run['event'] == 'workflow_dispatch' and (run['head_branch'] == 'main' or check_only),
+            'Packages must come from the manual release workflow; branch packages require test-only mode')
     require(run['head_sha'] == commit and run['head_repository']['full_name'].lower() == client.repo.lower(),
             'Package workflow source differs from the selected CI')
     jobs = client(f'/actions/runs/{run_id}/jobs?filter=latest&per_page=100')['jobs']
@@ -291,7 +298,7 @@ def publish(client, commit, tag, notes, files):
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument('--run-id', type=int, help='Successful main CI run; omitted selects current commit CI')
+    parser.add_argument('--run-id', type=int, help='Successful CI run; PR CI requires --check and an explicit run ID')
     parser.add_argument('--check', action='store_true', help='Verify the complete packaging/tests run without publishing')
     parser.add_argument('--resolve', action='store_true', help='Verify CI and emit immutable source/run metadata for packaging')
     parser.add_argument('--package-run-id', type=int, help='Successful packaging run; defaults to the current Actions run')
@@ -304,8 +311,8 @@ def main():
     repo = repository()
     client = GitHub(repo, credential(repo), args.proxy)
     commit = git('rev-parse', 'HEAD')
-    run = verified_run(client, commit, args.run_id)
-    version, tag, notes = release_metadata(commit, args.tag, args.notes)
+    run = verified_run(client, commit, args.run_id, check_only=args.check)
+    version, tag, notes = release_metadata(commit, args.tag, args.notes, check_only=args.check)
     if args.resolve:
         build_artifacts(client, run['id'])
         if os.environ.get('GITHUB_OUTPUT'):
@@ -315,7 +322,7 @@ def main():
         return
     package_run_id = args.package_run_id or int(os.environ.get('GITHUB_RUN_ID', '0'))
     require(package_run_id > 0, 'Specify --package-run-id for the verified package workflow')
-    verified_package_run(client, package_run_id, commit)
+    verified_package_run(client, package_run_id, commit, check_only=args.check)
     directory = args.output_dir or ROOT / f"dist/release-{version}-run-{package_run_id}"
     files = download_package_files(client, package_run_id, run['id'], commit, version, directory)
     if args.asset:
