@@ -134,8 +134,8 @@ mod tests {
 
     #[test]
     fn samples_use_ids_and_actual_elapsed_time_and_reject_resets() {
-        let old = vec![row("closed", 100), row("a", 100), row("b", 600)];
-        let mut current = vec![row("b", 500), row("new", 900), row("a", 600)];
+        let old = [row("closed", 100), row("a", 100), row("b", 600)];
+        let mut current = [row("b", 500), row("new", 900), row("a", 600)];
         sample_rates(&mut current, &old, Duration::from_millis(2500));
         assert_eq!(current[2].rates.unwrap().download, 200);
         assert_eq!(current[2].rates.unwrap().upload, 0);
@@ -148,7 +148,7 @@ mod tests {
 
     #[test]
     fn numeric_order_toggles_and_unknown_rates_remain_last() {
-        let mut rows = vec![
+        let mut rows = [
             row("unknown", 0),
             row("small", 900 * 1024),
             row("large", 2 * 1024 * 1024),
