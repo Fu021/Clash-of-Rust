@@ -181,7 +181,7 @@ def main():
              'diagnostics', 'ip-summary', 'settings', 'home-failure', 'home-retrying', 'home-downloading']
     scenes = list(dict.fromkeys([scene+suffix for scene in pages for suffix in ('', '-light')] + scenes))
     scenes += [scene+'-compact'+suffix for scene in pages for suffix in ('', '-light')]
-    scenes += [scene+suffix for scene in ('settings-rules', 'settings-rules-enabled')
+    scenes += [scene+suffix for scene in ('rules-custom', 'rules-editor', 'rules-collapsed')
                for suffix in ('', '-light', '-compact', '-compact-light')]
     for scene in scenes:
         env = dict(os.environ, CLASH_UI_PREVIEW_SCENE=scene, WINIT_UNIX_BACKEND='x11',
@@ -203,11 +203,6 @@ def main():
                 else:
                     raise RuntimeError('Preview window did not appear')
                 time.sleep(2)
-                if scene.startswith('settings-rules'):
-                    subprocess.run(['xdotool', 'mousemove', '--window', window, '600', '300',
-                                    'click', '--repeat', '2',
-                                    '--delay', '100', '5'], env=env, check=True)
-                    time.sleep(0.3)
                 subprocess.run(['xdotool', 'mousemove', '--window', window, '10', '10'],
                                env=env, check=True)
                 runner.screenshot(window, output/(scene+'.png'), env)

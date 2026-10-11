@@ -1187,8 +1187,9 @@ impl App {
                 *self.connection_order.get_mut() = None;
                 self.site_detail = None;
                 if page == Page::Rules {
-                    if self.rule_state.document.is_some() {
-                        return Task::none();
+                    if let Some(doc) = &self.rule_state.document {
+                        let id = doc.profile_id.clone();
+                        return self.dispatch_scope(Action::LoadRules(id), Scope::Rules);
                     }
                     if let Some(id) = self.settings.active_profile.clone() {
                         return self.dispatch_scope(Action::LoadRules(id), Scope::Rules);
@@ -1756,11 +1757,19 @@ impl App {
                 self.autostart = reply.autostart;
                 if let Some(doc) = reply.rule_document
                     && self.page == Page::Rules
-                    && (reply.rules_applied || !self.rule_state.dirty())
                 {
-                    let rules =
-                        ProfileRules::for_profile(&reply.settings, &doc.profile_id, doc.builtin);
-                    self.rule_state.load(doc, rules);
+                    if reply.rules_applied
+                        || (!self.rule_state.dirty() && !self.rule_state.has_editor())
+                    {
+                        let rules = ProfileRules::for_profile(
+                            &reply.settings,
+                            &doc.profile_id,
+                            doc.builtin,
+                        );
+                        self.rule_state.load(doc, rules);
+                    } else {
+                        self.rule_state.refresh_document(doc);
+                    }
                 }
                 self.settings = reply.settings;
                 if let Some(profiles) = reply.profiles {

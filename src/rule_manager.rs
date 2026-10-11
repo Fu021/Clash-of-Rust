@@ -19,12 +19,9 @@ pub struct ProfileRules {
     pub order: Vec<String>,
 }
 impl ProfileRules {
-    pub fn for_profile(settings: &Settings, id: &str, builtin: bool) -> Self {
-        settings
-            .rule_profiles
-            .get(id)
-            .map(|rules| rules.as_ref().clone())
-            .unwrap_or_else(|| Self {
+    pub fn for_profile(settings: &Settings, id: &str, builtin: bool) -> Arc<Self> {
+        settings.rule_profiles.get(id).cloned().unwrap_or_else(|| {
+            Arc::new(Self {
                 enabled: if builtin {
                     [false; 5]
                 } else {
@@ -32,6 +29,7 @@ impl ProfileRules {
                 },
                 ..Self::default()
             })
+        })
     }
     pub fn validate(&self) -> Result<()> {
         if self.custom.len() > 1000 {
@@ -84,6 +82,7 @@ pub struct Row {
     pub raw: Arc<str>,
     pub source: Source,
     pub enabled: bool,
+    pub duplicate: bool,
 }
 #[derive(Debug, Clone)]
 pub struct Document {
@@ -124,7 +123,22 @@ impl Document {
         })
     }
     pub fn rows(&self, draft: &ProfileRules) -> (Vec<Row>, Vec<String>) {
-        compose(&self.original, draft, self.builtin)
+        let (rows, mut warnings) = compose(&self.original, draft, self.builtin);
+        let mut missing = BTreeSet::new();
+        for custom in draft.custom.iter().filter(|r| r.enabled) {
+            if let Ok(parts) = parts(&custom.rule)
+                && parts.kind != "SUB-RULE"
+                && !self.policies.iter().any(|p| p == parts.policy)
+            {
+                missing.insert(parts.policy);
+            }
+        }
+        for policy in missing {
+            warnings.push(format!(
+                "订阅中未找到策略“{policy}”，请确认名称或改选策略；应用时会再次校验。"
+            ));
+        }
+        (rows, warnings)
     }
 }
 
@@ -210,6 +224,7 @@ fn original_rows(map: &Mapping) -> Result<Vec<Row>> {
                 raw: Arc::from(raw),
                 source: Source::Subscription,
                 enabled: true,
+                duplicate: false,
             })
         })
         .collect()
@@ -226,15 +241,32 @@ pub fn same_shortcut(a: &str, b: &str) -> bool {
     }
 }
 fn compose(original: &[Row], draft: &ProfileRules, builtin: bool) -> (Vec<Row>, Vec<String>) {
-    let mut rows = Vec::with_capacity(original.len() + draft.custom.len() + 5);
+    let mut rows: Vec<Row> = Vec::with_capacity(original.len() + draft.custom.len() + 5);
     let mut warnings = Vec::new();
+    let mut duplicates = 0;
     for rule in &draft.custom {
+        let shortcut = SUBSCRIPTION_RULES
+            .iter()
+            .find(|shortcut| same_shortcut(&rule.rule, shortcut));
+        let duplicate = rule.enabled
+            && original.iter().chain(rows.iter()).any(|row: &Row| {
+                row.enabled
+                    && (row.raw.trim() == rule.rule.trim()
+                        || shortcut.is_some_and(|shortcut| same_shortcut(&row.raw, shortcut)))
+            });
+        duplicates += usize::from(duplicate);
         rows.push(Row {
             id: format!("c:{}", rule.id),
             raw: Arc::from(rule.rule.as_str()),
             source: Source::Custom,
-            enabled: rule.enabled,
+            enabled: rule.enabled && !duplicate,
+            duplicate,
         });
+    }
+    if duplicates > 0 {
+        warnings.push(format!(
+            "有 {duplicates} 条自定义规则已包含在订阅或其他规则中，保留原规则，不重复加入。"
+        ));
     }
     for (i, raw) in SUBSCRIPTION_RULES.iter().enumerate() {
         if !builtin
@@ -249,6 +281,7 @@ fn compose(original: &[Row], draft: &ProfileRules, builtin: bool) -> (Vec<Row>, 
                 raw: Arc::from(*raw),
                 source: Source::Shortcut,
                 enabled: true,
+                duplicate: false,
             });
         }
     }
@@ -457,5 +490,25 @@ mod tests {
             ProfileRules::for_profile(&settings, "default", true).enabled,
             [false; 5]
         );
+    }
+    #[test]
+    fn upstream_duplicates_are_not_reinserted_and_shortcuts_keep_case_compatibility() {
+        let doc = document(&[
+            "GEOSITE, CN ,DIRECT",
+            "DOMAIN,a.test,DIRECT",
+            "MATCH,DIRECT",
+        ]);
+        let draft = ProfileRules {
+            enabled: [false, false, false, true, false],
+            custom: vec![
+                custom("GEOSITE,CN,DIRECT", true),
+                custom("DOMAIN,a.test,DIRECT", true),
+            ],
+            ..Default::default()
+        };
+        let (rows, warnings) = doc.rows(&draft);
+        assert_eq!(rows.iter().filter(|r| r.enabled).count(), 3);
+        assert!(rows[..2].iter().all(|r| r.duplicate));
+        assert_eq!(warnings.len(), 1);
     }
 }

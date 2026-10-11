@@ -182,7 +182,7 @@ impl Editor {
 pub struct State {
     pub document: Option<Arc<Document>>,
     pub draft: ProfileRules,
-    saved: ProfileRules,
+    saved: Arc<ProfileRules>,
     rows: Vec<Row>,
     warnings: Vec<String>,
     selected: Option<String>,
@@ -219,17 +219,27 @@ impl State {
         self.editor.is_some()
     }
     pub fn dirty(&self) -> bool {
-        self.draft != self.saved
+        &self.draft != self.saved.as_ref()
     }
-    pub fn load(&mut self, document: Arc<Document>, rules: ProfileRules) {
+    pub fn load(&mut self, document: Arc<Document>, rules: Arc<ProfileRules>) {
         self.document = Some(document);
-        self.draft = rules.clone();
+        self.draft = rules.as_ref().clone();
         self.saved = rules;
         self.selected = None;
         self.editor = None;
         self.move_open = false;
         self.pending_profile = None;
         self.rebuild();
+    }
+    pub fn refresh_document(&mut self, document: Arc<Document>) {
+        if self
+            .document
+            .as_ref()
+            .is_some_and(|old| old.profile_id == document.profile_id)
+        {
+            self.document = Some(document);
+            self.rebuild();
+        }
     }
     pub fn release_document(&mut self) {
         self.document = None;
@@ -433,7 +443,7 @@ impl App {
                 state.rebuild();
             }
             Event::Discard => {
-                state.draft = state.saved.clone();
+                state.draft = state.saved.as_ref().clone();
                 state.editor = None;
                 state.move_open = false;
                 state.rebuild();
@@ -716,7 +726,9 @@ impl App {
                     p.payload
                 }
             });
-            let source = if !rule.enabled {
+            let source = if rule.duplicate {
+                format!("{} · 已包含", rule.source)
+            } else if !rule.enabled {
                 format!("{} · 停用", rule.source)
             } else {
                 rule.source.to_string()
@@ -814,6 +826,10 @@ impl App {
             self.list_pager(total, offset)
         ]
         .spacing(if compact { 5 } else { 8 });
+        if let Some(at) = selected_at {
+            page = page
+                .push(page_scroll(self.caption(state.rows[at].raw.as_ref()).size(11)).height(22));
+        }
         if !state.warnings.is_empty() {
             page = page.push(
                 container(page_scroll(self.caption(state.warnings.join("\n")).size(12)).height(40))
@@ -959,7 +975,7 @@ impl App {
                 aligned_row![
                     self.caption("策略").width(75),
                     self.selection(
-                        doc.policies.clone(),
+                        doc.policies.as_slice(),
                         editor.policy.clone(),
                         |policy| Message::Rules(Event::Policy(policy)),
                         250
@@ -1027,7 +1043,7 @@ mod tests {
         )
         .unwrap();
         let mut state = State::default();
-        state.load(Arc::new(doc), ProfileRules::default());
+        state.load(Arc::new(doc), Arc::new(ProfileRules::default()));
         state
     }
     #[test]
@@ -1042,7 +1058,7 @@ mod tests {
         assert_eq!(state.rows[0].source, Source::Custom);
         state.move_selected(1);
         assert_eq!(state.rows[1].source, Source::Custom);
-        state.draft = state.saved.clone();
+        state.draft = state.saved.as_ref().clone();
         state.rebuild();
         assert!(!state.dirty());
         assert_eq!(state.rows.len(), 2);
@@ -1056,5 +1072,35 @@ mod tests {
         state.editor.as_mut().unwrap().payload = "a.test".into();
         assert!(state.save_editor().is_err());
         assert!(!state.dirty());
+    }
+    #[test]
+    fn refreshing_subscription_preserves_pending_editor_and_draft() {
+        let mut state = state();
+        state.editor = Some(Editor::new(None, 1));
+        state.editor.as_mut().unwrap().payload = "b.test".into();
+        state.save_editor().unwrap();
+        let before = state.draft.clone();
+        state.editor = Some(Editor::new(None, 2));
+        let updated = Document::from_raw(
+            "test",
+            false,
+            "proxies: []\nrules: [\"DOMAIN,new.test,DIRECT\", \"MATCH,DIRECT\"]",
+        )
+        .unwrap();
+        state.refresh_document(Arc::new(updated));
+        assert_eq!(state.draft, before);
+        assert!(state.editor.is_some());
+        assert!(
+            state
+                .rows
+                .iter()
+                .any(|r| r.raw.as_ref() == "DOMAIN,new.test,DIRECT")
+        );
+        assert!(
+            !state
+                .rows
+                .iter()
+                .any(|r| r.raw.as_ref() == "DOMAIN,a.test,DIRECT")
+        );
     }
 }

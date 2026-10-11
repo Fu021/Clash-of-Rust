@@ -124,11 +124,31 @@ fn fixture(scene: &str) -> App {
             &previous,
             Duration::from_secs(1),
         );
-    } else if scene == "rules" {
+    } else if scene.starts_with("rules") {
         app.page = Page::Rules;
         let raw = "proxies: []\nproxy-groups: [{name: 代理选择, type: select, proxies: [DIRECT]}]\nrules:\n  - DOMAIN-SUFFIX,github.com,代理选择\n  - DOMAIN-SUFFIX,google.com,代理选择\n  - DOMAIN,localhost,DIRECT\n  - IP-CIDR,192.168.0.0/16,DIRECT\n  - GEOIP,CN,DIRECT\n  - MATCH,代理选择\n";
         let doc = rule_manager::Document::from_raw("preview", false, raw).unwrap();
-        app.rule_state.load(Arc::new(doc), ProfileRules::default());
+        app.rule_state
+            .load(Arc::new(doc), Arc::new(ProfileRules::default()));
+        if scene != "rules" {
+            for event in [
+                rules_view::Event::Toggle(0, true),
+                rules_view::Event::Toggle(4, true),
+                rules_view::Event::Add,
+                rules_view::Event::Kind("DOMAIN-SUFFIX".into()),
+                rules_view::Event::Payload("example.com".into()),
+                rules_view::Event::Policy("代理选择".into()),
+                rules_view::Event::SaveEditor,
+            ] {
+                let _ = app.update(Message::Rules(event));
+            }
+            if scene == "rules-editor" {
+                let _ = app.update(Message::Rules(rules_view::Event::Edit));
+            }
+            if scene == "rules-collapsed" {
+                let _ = app.update(Message::Rules(rules_view::Event::Collapse));
+            }
+        }
     } else if scene == "logs" {
         app.page = Page::Logs;
         app.snapshot.logs = [
@@ -153,9 +173,6 @@ fn fixture(scene: &str) -> App {
         app.page = Page::Settings;
         app.geo_status = "2026-10-10".into();
         app.updates.status = "已是最新版本".into();
-        if scene == "settings-rules-enabled" {
-            app.rule_state.draft.enabled = [true; 5];
-        }
     } else {
         app.page = Page::Websites;
         app.site_has_run = true;
