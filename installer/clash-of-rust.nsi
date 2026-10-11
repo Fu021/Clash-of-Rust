@@ -3,12 +3,13 @@ Unicode true
 !include "LogicLib.nsh"
 !include "x64.nsh"
 !include "FileFunc.nsh"
+!include "nsDialogs.nsh"
 
 !ifndef APP_VERSION
-!define APP_VERSION "0.5.1"
+!define APP_VERSION "0.5.2-dev.1"
 !endif
 !ifndef APP_NUMERIC_VERSION
-!define APP_NUMERIC_VERSION "0.5.1.0"
+!define APP_NUMERIC_VERSION "0.5.2.0"
 !endif
 !ifndef APP_ARCH
 !define APP_ARCH "x64"
@@ -69,6 +70,7 @@ VIAddVersionKey /LANG=2052 "LegalCopyright" "Clash of Rust contributors · GPL-3
   !define MUI_FINISHPAGE_SHOWREADME_FUNCTION CreateShortcuts
 !endif
 !insertmacro MUI_PAGE_FINISH
+UninstPage custom un.DataOptions un.DataOptionsLeave
 !insertmacro MUI_UNPAGE_CONFIRM
 !insertmacro MUI_UNPAGE_INSTFILES
 !insertmacro MUI_UNPAGE_FINISH
@@ -80,6 +82,10 @@ Var LegacyInstall
 Var KeepAutostart
 Var UpdateMode
 Var UpdateBackup
+Var DeleteUserData
+Var UserDataDir
+Var DataOptionsDialog
+Var DeleteDataCheckbox
 
 !macro CheckRunning PREFIX
   System::Call 'kernel32::OpenMutexW(i 0x100000, i 0, w "${APP_MUTEX}") p.r0'
@@ -358,12 +364,73 @@ FunctionEnd
 
 Function un.onInit
   SetRegView 64
+  ; Neither upgrades nor ordinary silent uninstall opt into deleting data.
+  StrCpy $DeleteUserData ${BST_UNCHECKED}
+  StrCpy $UserDataDir ""
   !ifdef INSTALLER_TESTING
     SetShellVarContext current
+    ; The smoke fixture never touches a real user's application data.
+    StrCpy $UserDataDir "$INSTDIR\test-user-data"
   !else
     SetShellVarContext all
+    ; Unlike shell variables, this is not redirected to ProgramData by the
+    ; all-users shortcut context. Match Store::discover's ProjectDirs path.
+    GetKnownFolderPath $0 {F1B32785-6FBA-4FCF-9D55-7B8E7F157091} ; FOLDERID_LocalAppData
+    ${If} $0 != ""
+      StrCpy $UserDataDir "$0\clash-of-rust\ClashOfRust"
+    ${EndIf}
   !endif
   !insertmacro CheckRunning uninit_
+FunctionEnd
+
+Function un.DataOptions
+  !insertmacro MUI_HEADER_TEXT "配置和数据" "选择是否同时删除当前 Windows 用户的 Clash of Rust 数据。"
+  nsDialogs::Create 1018
+  Pop $DataOptionsDialog
+  ${If} $DataOptionsDialog == error
+    Abort
+  ${EndIf}
+  ${NSD_CreateCheckbox} 0 12u 100% 14u "删除所有配置和数据"
+  Pop $DeleteDataCheckbox
+  ${NSD_SetState} $DeleteDataCheckbox $DeleteUserData
+  ${NSD_CreateLabel} 0 40u 100% 14u "勾选后会删除以下目录："
+  Pop $0
+  ${If} $UserDataDir == ""
+    EnableWindow $DeleteDataCheckbox 0
+    ${NSD_CreateLabel} 0 62u 100% 24u "无法确定数据目录，将保留配置和数据。"
+    Pop $0
+  ${Else}
+    ${NSD_CreateLabel} 0 62u 100% 24u "$UserDataDir"
+    Pop $0
+  ${EndIf}
+  nsDialogs::Show
+FunctionEnd
+
+Function un.DataOptionsLeave
+  ${NSD_GetState} $DeleteDataCheckbox $DeleteUserData
+FunctionEnd
+
+Function un.RemoveUserData
+  ${If} $DeleteUserData != ${BST_CHECKED}
+    Return
+  ${EndIf}
+  ${If} $UserDataDir == ""
+    Return
+  ${EndIf}
+  ; Only this application's fixed per-user directory is eligible. Never use
+  ; an environment override or recursively remove the installation directory.
+  IfFileExists "$UserDataDir" 0 data_removed
+  ClearErrors
+  RMDir /r "$UserDataDir"
+  ${If} ${Errors}
+    IfSilent data_remove_failed data_remove_prompt
+    data_remove_prompt:
+      MessageBox MB_OK|MB_ICONSTOP "部分配置或数据无法删除，卸载未完成。请关闭占用文件的程序后重试。$\r$\n$\r$\n$UserDataDir"
+    data_remove_failed:
+      SetErrorLevel 7
+      Abort
+  ${EndIf}
+  data_removed:
 FunctionEnd
 
 !ifndef INSTALLER_TESTING
@@ -384,7 +451,9 @@ Section "Uninstall"
   !else
     SetShellVarContext all
   !endif
-  ; Delete only files owned by this package. User configuration is elsewhere.
+  ; Always check again: the app could have started while the wizard was open.
+  !insertmacro CheckRunning unsection_
+  ; Delete only files owned by this package. Data deletion requires opt-in.
   !ifndef INSTALLER_TESTING
     ReadRegStr $0 HKCU "Software\ClashOfRust\Autostart" "Executable"
     ${If} $0 == "$INSTDIR\clash-of-rust.exe"
@@ -429,6 +498,7 @@ Section "Uninstall"
     Delete "$SMPROGRAMS\Clash of Rust\卸载 Clash of Rust.lnk"
     RMDir "$SMPROGRAMS\Clash of Rust"
   !endif
+  Call un.RemoveUserData
   DeleteRegKey ${PRODUCT_HIVE} "${PRODUCT_KEY}"
   Delete "$INSTDIR\uninstall.exe"
   RMDir "$INSTDIR"

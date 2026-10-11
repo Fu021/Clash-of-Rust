@@ -1,6 +1,8 @@
+pub mod active_route;
 pub mod api;
 pub mod assets;
 pub mod config;
+pub mod connection;
 pub mod engine;
 pub mod flags;
 pub mod icons;
@@ -13,6 +15,7 @@ mod profile_transaction;
 mod proxy;
 pub mod proxy_order;
 mod region_check;
+pub mod rule_manager;
 mod subscription;
 pub mod tray;
 pub mod update;

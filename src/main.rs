@@ -9,14 +9,18 @@ mod typography;
 pub(crate) mod ui_preview;
 #[path = "ui_style.rs"]
 mod ui_style;
+#[path = "window_state.rs"]
+mod window_state;
 
 use clash_of_rust::{
-    config::{Profile, RuleOverrides, SUBSCRIPTION_RULES, Settings, Store},
+    config::{Profile, Settings, Store},
+    connection::{self, Field as ConnectionField, Sort as ConnectionSort},
     engine::{Engine, ProxyMode, Scope, Snapshot},
     flags, icons, ip_check,
     ip_report::{self, CategoryFilter, RegionFilter, ResultSlot, Status, StatusFilter},
     platform, probe,
     proxy_order::{self, NodeSort},
+    rule_manager::{self, ProfileRules},
     tray, update,
 };
 use futures_util::{
@@ -46,6 +50,9 @@ macro_rules! aligned_row {
         iced::widget::row![$($child),*].align_y(iced::alignment::Vertical::Center)
     };
 }
+
+#[path = "rules_view.rs"]
+mod rules_view;
 
 fn main() -> iced::Result {
     #[cfg(windows)]
@@ -121,8 +128,12 @@ fn main() -> iced::Result {
     #[cfg(windows)]
     std::thread::spawn(platform::migrate_autostart);
     typography::initialize();
+    let window_state = startup_store()
+        .map(|store| window_state::State::load(&store))
+        .unwrap_or_default();
+    let initial_window_size = window_state.size();
     iced::application(
-        move || App::new(tray_startup.lock().unwrap().take()),
+        move || App::new(tray_startup.lock().unwrap().take(), window_state.clone()),
         App::update,
         App::view,
     )
@@ -135,7 +146,7 @@ fn main() -> iced::Result {
     })
     .default_font(typography::ENGLISH_FONT)
     .window(iced::window::Settings {
-        size: DEFAULT_WINDOW_SIZE,
+        size: initial_window_size,
         min_size: Some(MIN_WINDOW_SIZE),
         icon: Some(icons::window()),
         exit_on_close_request: false,
@@ -277,7 +288,8 @@ enum Action {
     Refresh,
     Start,
     SavePorts(u16, u16),
-    RuleOverrides(RuleOverrides),
+    SaveRules(String, ProfileRules),
+    LoadRules(String),
     Theme(bool),
     Autostart(bool),
     DelayInterval(u32),
@@ -304,6 +316,8 @@ struct Reply {
     settings: Settings,
     profiles: Option<Vec<Profile>>,
     snapshot: Option<Snapshot>,
+    rule_document: Option<Arc<rule_manager::Document>>,
+    rules_applied: bool,
     notice: Result<String, String>,
     running: bool,
     geo_status: String,
@@ -322,19 +336,21 @@ enum Message {
     Navigate(Page),
     Query(String),
     NodeSort(NodeSort),
+    ConnectionSort(ConnectionField),
     SiteCategory(CategoryFilter),
     SiteStatus(StatusFilter),
     SiteRegion(RegionFilter),
     SiteDetail(usize),
     SiteSummaryFilter(CategoryFilter, StatusFilter),
     SiteResetFilters,
-    SiteReportCategories,
+    SiteReport,
+    SiteRetest,
     ListPage(usize),
     ProfileName(String),
     ProfileSource(String),
     ControllerPort(String),
     MixedPort(String),
-    RuleToggle(usize, bool),
+    Rules(rules_view::Event),
     WindowWidth(String),
     WindowHeight(String),
     ResetWindowSize,
@@ -342,6 +358,9 @@ enum Message {
     ResizeWindow(u64, iced::Size, Option<iced::window::Id>),
     ReadWindowSize(Option<iced::window::Id>),
     WindowSize(iced::Size),
+    CaptureWindowState(u64, iced::window::Id),
+    WindowStateCaptured(u64, iced::Size, bool, Option<bool>),
+    WindowStateSaved(Result<(), String>),
     TestUrl(String),
     DnsHost(String),
     Dark(bool),
@@ -377,6 +396,7 @@ enum Message {
     Dns,
     DnsDone(Result<Vec<String>, String>),
     Window((iced::window::Id, iced::window::Event)),
+    ExitWindowState(Option<(iced::Size, bool, Option<bool>)>),
     ExitFinished(Result<(), String>),
 }
 
@@ -384,7 +404,7 @@ struct App {
     engine: Option<Arc<Mutex<Engine>>>,
     page: Page,
     settings: Settings,
-    rule_draft: RuleOverrides,
+    rule_state: rules_view::State,
     profiles: Vec<Profile>,
     snapshot: Snapshot,
     busy: bool,
@@ -401,6 +421,8 @@ struct App {
     node_delays: BTreeMap<String, u32>,
     node_sort: NodeSort,
     proxy_order: RefCell<BTreeMap<clash_of_rust::api::Text, Vec<usize>>>,
+    connection_sort: ConnectionSort,
+    connection_order: RefCell<Option<Vec<usize>>>,
     delay_generation: u64,
     delay_aborters: BTreeMap<String, AbortHandle>,
     periodic_aborter: Option<AbortHandle>,
@@ -415,7 +437,8 @@ struct App {
     site_status: StatusFilter,
     site_region: RegionFilter,
     site_detail: Option<usize>,
-    site_report_categories: bool,
+    site_show_results: bool,
+    site_has_run: bool,
     site_generation: u64,
     site_aborters: BTreeMap<String, AbortHandle>,
     site_busy: BTreeSet<String>,
@@ -434,6 +457,9 @@ struct App {
     window_height: String,
     size_revision: u64,
     size_pending: bool,
+    window_state: window_state::State,
+    window_state_revision: u64,
+    window_state_debounce: Option<iced::task::Handle>,
     dark: bool,
     autostart: bool,
     test_url: String,
@@ -443,9 +469,14 @@ struct App {
     updates: update::State,
 }
 
-async fn execute(engine: Arc<Mutex<Engine>>, action: Action, scope: Scope) -> Reply {
+async fn execute(engine: Arc<Mutex<Engine>>, action: Action, scope: Scope, header: bool) -> Reply {
     let start_requested = matches!(action, Action::Start);
-    let include_profiles = !matches!(action, Action::Refresh);
+    let include_profiles = !matches!(action, Action::Refresh | Action::LoadRules(_));
+    let rule_id = match &action {
+        Action::LoadRules(id) | Action::SaveRules(id, _) => Some(id.clone()),
+        _ => None,
+    };
+    let saving_rules = matches!(action, Action::SaveRules(..));
     let mut engine = engine.lock().await;
     let mut exit_after_start = false;
     let result: anyhow::Result<String> = async {
@@ -464,9 +495,15 @@ async fn execute(engine: Arc<Mutex<Engine>>, action: Action, scope: Scope) -> Re
                 engine.save_ports(controller, mixed).await?;
                 Ok("端口已保存，运行中的内核已自动重启".into())
             }
-            Action::RuleOverrides(overrides) => {
-                engine.save_rule_overrides(overrides).await?;
-                Ok("订阅附加规则已保存；运行中的配置已更新".into())
+            Action::LoadRules(_) => Ok(String::new()),
+            Action::SaveRules(id, rules) => {
+                engine.save_profile_rules(&id, rules).await?;
+                Ok(if engine.settings.active_profile.as_deref() == Some(&id) {
+                    "规则已保存并应用；新连接按新规则匹配"
+                } else {
+                    "规则已保存，启用该订阅时生效"
+                }
+                .into())
             }
             Action::Theme(dark) => {
                 let settings = Settings {
@@ -569,8 +606,23 @@ async fn execute(engine: Arc<Mutex<Engine>>, action: Action, scope: Scope) -> Re
         }
     }
     .await;
+    let rules_applied = saving_rules && result.is_ok();
     let mut notice = result.map_err(|e| format!("{e:#}"));
-    let snapshot = match engine.poll(scope).await {
+    let rule_document = rule_id.and_then(|id| match engine.rule_document(&id) {
+        Ok(doc) => Some(Arc::new(doc)),
+        Err(e) => {
+            notice = Err(format!("{e:#}"));
+            None
+        }
+    });
+    // The editor uses the original YAML, not the lossy core rule API. Avoid
+    // retaining a second complete rule list on this page.
+    let poll_scope = if scope == Scope::Rules {
+        Scope::Other
+    } else {
+        scope
+    };
+    let snapshot = match engine.poll_with_header(poll_scope, header).await {
         Ok(snapshot) => Some(snapshot),
         Err(e) => {
             if notice.as_ref().is_ok_and(|s| s.is_empty()) {
@@ -588,6 +640,8 @@ async fn execute(engine: Arc<Mutex<Engine>>, action: Action, scope: Scope) -> Re
         settings: engine.settings.clone(),
         profiles: include_profiles.then(|| engine.profiles.clone()),
         snapshot,
+        rule_document,
+        rules_applied,
         notice,
         running: engine.running(),
         geo_status: engine.geo_manifest.version.clone(),
@@ -597,8 +651,15 @@ async fn execute(engine: Arc<Mutex<Engine>>, action: Action, scope: Scope) -> Re
 }
 
 impl App {
-    fn new(tray_startup: Option<tray::Startup>) -> (Self, Task<Message>) {
-        Self::with_engine(startup_store().and_then(Engine::new), tray_startup)
+    fn new(
+        tray_startup: Option<tray::Startup>,
+        window_state: window_state::State,
+    ) -> (Self, Task<Message>) {
+        let (mut app, task) =
+            Self::with_engine(startup_store().and_then(Engine::new), tray_startup);
+        app.set_window_size(window_state.size());
+        app.window_state = window_state;
+        (app, task)
     }
 
     fn with_engine(
@@ -645,7 +706,7 @@ impl App {
         };
         let core_failure = engine.is_none().then(|| notice.clone());
         let mut app = Self {
-            rule_draft: settings.rule_overrides.clone(),
+            rule_state: rules_view::State::default(),
             node_sort: settings.node_sort,
             controller_port: settings.controller_port.to_string(),
             interval_input: settings.delay_interval_minutes.to_string(),
@@ -655,6 +716,9 @@ impl App {
             window_height: format!("{:.0}", DEFAULT_WINDOW_SIZE.height),
             size_revision: 0,
             size_pending: false,
+            window_state: window_state::State::default(),
+            window_state_revision: 0,
+            window_state_debounce: None,
             dark: settings.dark,
             autostart: platform::autostart_enabled().unwrap_or(false),
             engine,
@@ -680,6 +744,8 @@ impl App {
             testing_groups: BTreeSet::new(),
             node_delays: BTreeMap::new(),
             proxy_order: RefCell::new(BTreeMap::new()),
+            connection_sort: ConnectionSort::default(),
+            connection_order: RefCell::new(None),
             delay_generation: 0,
             delay_aborters: BTreeMap::new(),
             periodic_aborter: None,
@@ -692,7 +758,8 @@ impl App {
             site_status: StatusFilter::All,
             site_region: RegionFilter::All,
             site_detail: None,
-            site_report_categories: false,
+            site_show_results: false,
+            site_has_run: false,
             site_generation: 0,
             site_aborters: BTreeMap::new(),
             site_busy: BTreeSet::new(),
@@ -871,7 +938,15 @@ impl App {
         )
     }
 
-    fn dispatch(&mut self, action: Action) -> Task<Message> {
+    fn dispatch(&mut self, mut action: Action) -> Task<Message> {
+        if matches!(action, Action::Refresh)
+            && self.visible
+            && self.page == Page::Rules
+            && self.rule_state.document.is_none()
+            && let Some(id) = self.settings.active_profile.clone()
+        {
+            action = Action::LoadRules(id);
+        }
         let scope = if self.visible {
             self.page.scope()
         } else {
@@ -901,7 +976,7 @@ impl App {
             action,
             Action::Start
                 | Action::SavePorts(..)
-                | Action::RuleOverrides(_)
+                | Action::SaveRules(..)
                 | Action::Activate(_)
                 | Action::UpdateProfile(_)
                 | Action::DeleteProfile(_)
@@ -919,7 +994,7 @@ impl App {
         }
         self.busy = true;
         self.working = !matches!(action, Action::Refresh);
-        Task::perform(execute(engine, action, scope), |reply| {
+        Task::perform(execute(engine, action, scope, self.visible), |reply| {
             Message::Finished(Box::new(reply))
         })
     }
@@ -964,7 +1039,7 @@ impl App {
                         // initialized engine has no running process yet.
                         if let Ok(engine) = engine.try_lock() {
                             self.settings = engine.settings.clone();
-                            self.rule_draft = self.settings.rule_overrides.clone();
+                            self.rule_state = rules_view::State::default();
                             self.profiles = engine.profiles.clone();
                             self.geo_status = engine.geo_manifest.version.clone();
                             self.controller_port = self.settings.controller_port.to_string();
@@ -1097,20 +1172,46 @@ impl App {
                 }
             }
             Message::Navigate(page) => {
+                if self.page == Page::Rules
+                    && page != Page::Rules
+                    && !self.rule_state.dirty()
+                    && !self.rule_state.has_editor()
+                {
+                    self.rule_state.release_document();
+                }
                 self.page = page;
                 self.query.clear();
                 self.list_offset = 0;
                 self.snapshot.retain_scope(page.scope());
                 self.proxy_order.get_mut().clear();
+                *self.connection_order.get_mut() = None;
                 self.site_detail = None;
+                if page == Page::Rules {
+                    if let Some(doc) = &self.rule_state.document {
+                        let id = doc.profile_id.clone();
+                        return self.dispatch_scope(Action::LoadRules(id), Scope::Rules);
+                    }
+                    if let Some(id) = self.settings.active_profile.clone() {
+                        return self.dispatch_scope(Action::LoadRules(id), Scope::Rules);
+                    }
+                }
                 return self.dispatch(Action::Refresh);
             }
             Message::Query(value) => {
+                if self.page == Page::Rules {
+                    self.rule_state.clear_selection();
+                }
                 self.query = value;
                 self.group_offsets.clear();
                 self.list_offset = 0;
                 self.proxy_order.get_mut().clear();
+                *self.connection_order.get_mut() = None;
                 self.site_detail = None;
+            }
+            Message::ConnectionSort(field) => {
+                self.connection_sort.toggle(field);
+                *self.connection_order.get_mut() = None;
+                self.list_offset = 0;
             }
             Message::NodeSort(mode) => {
                 self.node_sort = mode;
@@ -1120,6 +1221,7 @@ impl App {
             }
             Message::SiteCategory(category) => {
                 self.site_category = category;
+                self.site_show_results = true;
                 self.list_offset = 0;
                 self.site_detail = None;
             }
@@ -1139,9 +1241,12 @@ impl App {
                 self.query.clear();
                 self.site_category = category;
                 self.site_status = status;
+                self.site_show_results = true;
             }
             Message::SiteResetFilters => {
+                let category = self.site_category;
                 self.reset_site_filters();
+                self.site_category = category;
                 self.list_offset = 0;
                 self.query.clear();
             }
@@ -1152,22 +1257,18 @@ impl App {
                     Some(index)
                 };
             }
-            Message::SiteReportCategories => {
-                self.site_report_categories = !self.site_report_categories;
+            Message::SiteReport => {
+                self.reset_site_filters();
+                self.query.clear();
+                self.list_offset = 0;
+                self.site_show_results = false;
             }
             Message::ListPage(offset) => self.list_offset = offset,
             Message::ProfileName(value) => self.profile_name = value,
             Message::ProfileSource(value) => self.profile_source = value,
             Message::ControllerPort(value) => self.controller_port = value,
             Message::MixedPort(value) => self.mixed_port = value,
-            Message::RuleToggle(index, enabled) => {
-                if !self.working
-                    && !self.exiting
-                    && let Some(rule) = self.rule_draft.enabled.get_mut(index)
-                {
-                    *rule = enabled;
-                }
-            }
+            Message::Rules(event) => return self.update_rules(event),
             Message::WindowWidth(value) => {
                 self.window_width = value;
                 return self.schedule_window_size();
@@ -1199,6 +1300,7 @@ impl App {
                     // Refresh native limits with the current display scale.
                     // Startup DPI detection can otherwise leave stale X11 hints.
                     return iced::window::set_min_size(id, Some(MIN_WINDOW_SIZE))
+                        .chain(iced::window::maximize(id, false))
                         .chain(iced::window::resize(id, size));
                 }
             }
@@ -1212,9 +1314,37 @@ impl App {
             }
             Message::ReadWindowSize(None) => {}
             Message::WindowSize(size) => self.set_window_size(size),
+            Message::CaptureWindowState(revision, id) => {
+                if revision == self.window_state_revision && !self.exiting {
+                    self.window_state_debounce = None;
+                    return read_window_state(id).map(move |(size, maximized, minimized)| {
+                        Message::WindowStateCaptured(revision, size, maximized, minimized)
+                    });
+                }
+            }
+            Message::WindowStateCaptured(revision, size, maximized, minimized) => {
+                if revision == self.window_state_revision
+                    && !self.size_pending
+                    && !self.exiting
+                    && self.window_state.capture(size, maximized, minimized)
+                {
+                    let state = self.window_state.clone();
+                    return Task::perform(
+                        async move { state.save().await.map_err(|error| format!("{error:#}")) },
+                        Message::WindowStateSaved,
+                    );
+                }
+            }
+            Message::WindowStateSaved(result) => {
+                if let Err(error) = result {
+                    self.notice = format!("无法保存窗口尺寸：{error}");
+                    self.error = true;
+                    self.notice_visible = true;
+                }
+            }
             Message::Window((id, iced::window::Event::Opened { .. })) => {
                 return iced::window::set_min_size(id, Some(MIN_WINDOW_SIZE))
-                    .chain(iced::window::resize(id, DEFAULT_WINDOW_SIZE));
+                    .chain(iced::window::resize(id, self.window_state.size()));
             }
             Message::Window((id, iced::window::Event::Rescaled(_))) => {
                 return iced::window::set_min_size(id, Some(MIN_WINDOW_SIZE))
@@ -1226,7 +1356,10 @@ impl App {
                 self.set_window_size(size);
                 // X11 can update WM_NORMAL_HINTS again while delivering the
                 // final resize after a DPI change. Apply limits after that event.
-                return iced::window::set_min_size(id, Some(MIN_WINDOW_SIZE));
+                return Task::batch([
+                    iced::window::set_min_size(id, Some(MIN_WINDOW_SIZE)),
+                    self.schedule_window_state(id),
+                ]);
             }
             Message::TestUrl(value) => self.test_url = value,
             Message::DnsHost(value) => self.dns_host = value,
@@ -1425,21 +1558,49 @@ impl App {
             }
 
             Message::SiteAll => {
-                if !self.snapshot.running
-                    || self.working
-                    || self.elevating
-                    || self.exiting
-                    || !self.site_busy.is_empty()
-                {
+                if !self.can_check_sites() {
                     return Task::none();
                 }
                 self.site_results.clear();
                 self.reset_site_filters();
+                self.query.clear();
+                self.site_show_results = false;
+                self.site_has_run = true;
                 self.list_offset = 0;
                 self.site_generation = self.site_generation.wrapping_add(1);
                 self.site_queue = ip_check::services()
                     .iter()
                     .map(|item| item.id.clone())
+                    .collect();
+                return self.start_site_queue();
+            }
+            Message::SiteRetest => {
+                if !self.can_check_sites() {
+                    return Task::none();
+                }
+                if self.site_category == CategoryFilter::All {
+                    return self.update(Message::SiteAll);
+                }
+                let CategoryFilter::Group(group) = self.site_category else {
+                    unreachable!();
+                };
+                self.reset_site_filters();
+                self.site_category = CategoryFilter::Group(group);
+                self.query.clear();
+                self.site_results
+                    .resize_with(ip_check::services().len(), || None);
+                self.site_generation = self.site_generation.wrapping_add(1);
+                self.site_has_run = true;
+                self.site_detail = None;
+                self.list_offset = 0;
+                self.site_queue = ip_check::services()
+                    .iter()
+                    .enumerate()
+                    .filter(|(_, service)| service.group == group)
+                    .map(|(index, service)| {
+                        self.site_results[index] = None;
+                        service.id.clone()
+                    })
                     .collect();
                 return self.start_site_queue();
             }
@@ -1594,12 +1755,33 @@ impl App {
                     return self.exit();
                 }
                 self.autostart = reply.autostart;
-                if self.settings.rule_overrides != reply.settings.rule_overrides {
-                    self.rule_draft = reply.settings.rule_overrides.clone();
+                if let Some(doc) = reply.rule_document
+                    && self.page == Page::Rules
+                {
+                    if reply.rules_applied
+                        || (!self.rule_state.dirty() && !self.rule_state.has_editor())
+                    {
+                        let rules = ProfileRules::for_profile(
+                            &reply.settings,
+                            &doc.profile_id,
+                            doc.builtin,
+                        );
+                        self.rule_state.load(doc, rules);
+                    } else {
+                        self.rule_state.refresh_document(doc);
+                    }
                 }
                 self.settings = reply.settings;
                 if let Some(profiles) = reply.profiles {
                     self.profiles = profiles;
+                    if self
+                        .rule_state
+                        .document
+                        .as_ref()
+                        .is_some_and(|doc| !self.profiles.iter().any(|p| p.id == doc.profile_id))
+                    {
+                        self.rule_state = rules_view::State::default();
+                    }
                 }
                 self.geo_status = reply.geo_status;
                 if self.snapshot.running && !reply.running {
@@ -1624,6 +1806,17 @@ impl App {
                 }
                 self.snapshot.running = reply.running;
                 if let Some(mut snapshot) = reply.snapshot {
+                    if let (Some(now), Some(previous)) = (
+                        snapshot.connections_sampled_at,
+                        self.snapshot.connections_sampled_at,
+                    ) && let Some(elapsed) = now.checked_duration_since(previous)
+                    {
+                        connection::sample_rates(
+                            &mut snapshot.connections.connections,
+                            &self.snapshot.connections.connections,
+                            elapsed,
+                        );
+                    }
                     if reply.scope == Scope::Proxies && snapshot.running {
                         self.proxy_order.get_mut().clear();
                         let proxies = &snapshot.proxies.proxies;
@@ -1653,9 +1846,12 @@ impl App {
                     if snapshot.running && !matches!(reply.scope, Scope::Home | Scope::Connections)
                     {
                         snapshot.connections = std::mem::take(&mut self.snapshot.connections);
+                        snapshot.connections_sampled_at =
+                            self.snapshot.connections_sampled_at.take();
                         snapshot.connection_count = self.snapshot.connection_count;
                     }
                     self.snapshot = snapshot;
+                    *self.connection_order.get_mut() = None;
                     self.snapshot.retain_scope(if self.visible {
                         self.page.scope()
                     } else {
@@ -1758,6 +1954,10 @@ impl App {
                 if self.tray.is_some() {
                     self.visible = false;
                     self.snapshot.retain_scope(Scope::Other);
+                    if !self.rule_state.dirty() && !self.rule_state.has_editor() {
+                        self.rule_state.release_document();
+                    }
+                    *self.connection_order.get_mut() = None;
                     let stop_stream = self.dispatch_scope(Action::Refresh, Scope::Other);
                     return Task::batch([
                         iced::window::set_mode(id, iced::window::Mode::Hidden),
@@ -1770,6 +1970,26 @@ impl App {
                     return Task::none();
                 }
                 return self.exit();
+            }
+            Message::ExitWindowState(captured) => {
+                if let Some((size, maximized, minimized)) = captured {
+                    self.window_state.capture(size, maximized, minimized);
+                }
+                let state = self.window_state.clone();
+                let engine = self.engine.clone();
+                return Task::perform(
+                    async move {
+                        if let Err(error) = state.save().await {
+                            eprintln!("无法保存窗口尺寸：{error:#}");
+                        }
+                        if let Some(engine) = engine {
+                            engine.lock().await.stop().await.map_err(|e| e.to_string())
+                        } else {
+                            Ok(())
+                        }
+                    },
+                    Message::ExitFinished,
+                );
             }
             Message::ExitFinished(result) => match result {
                 Ok(()) => return iced::exit(),
@@ -1797,15 +2017,14 @@ impl App {
         self.cancel_delay_checks();
         self.cancel_site_checks();
         self.tray_startup = None;
-        if let Some(engine) = self.engine.clone() {
-            self.exiting = true;
-            Task::perform(
-                async move { engine.lock().await.stop().await.map_err(|e| e.to_string()) },
-                Message::ExitFinished,
-            )
-        } else {
-            iced::exit()
+        self.exiting = true;
+        if let Some(handle) = self.window_state_debounce.take() {
+            handle.abort();
         }
+        iced::window::latest().then(|id| match id {
+            Some(id) => read_window_state(id).map(|state| Message::ExitWindowState(Some(state))),
+            None => Task::done(Message::ExitWindowState(None)),
+        })
     }
 
     fn start_site_queue(&mut self) -> Task<Message> {
@@ -1854,6 +2073,24 @@ impl App {
         }
     }
 
+    fn schedule_window_state(&mut self, id: iced::window::Id) -> Task<Message> {
+        self.window_state_revision = self.window_state_revision.wrapping_add(1);
+        if let Some(handle) = self.window_state_debounce.take() {
+            handle.abort();
+        }
+        if self.exiting {
+            return Task::none();
+        }
+        let revision = self.window_state_revision;
+        let (task, handle) = Task::perform(
+            async { tokio::time::sleep(Duration::from_millis(350)).await },
+            move |_| Message::CaptureWindowState(revision, id),
+        )
+        .abortable();
+        self.window_state_debounce = Some(handle);
+        task
+    }
+
     fn schedule_window_size(&mut self) -> Task<Message> {
         self.size_revision = self.size_revision.wrapping_add(1);
         self.size_pending = true;
@@ -1895,7 +2132,7 @@ impl App {
             action,
             Action::Import(..)
                 | Action::SavePorts(..)
-                | Action::RuleOverrides(_)
+                | Action::SaveRules(..)
                 | Action::Activate(_)
         ) {
             rounded_primary
@@ -1988,10 +2225,25 @@ impl App {
             .find(|p| Some(&p.id) == self.settings.active_profile.as_ref())
             .map(|p| p.name.as_str())
             .unwrap_or("选择配置");
+        let (page_title, page_description) = if self.page == Page::Websites {
+            if self.site_show_results {
+                (
+                    match self.site_category {
+                        CategoryFilter::All => "全部检测结果".into(),
+                        CategoryFilter::Group(group) => format!("{group} · 分类详情"),
+                    },
+                    "平台结果与检测依据",
+                )
+            } else {
+                ("IP检测".into(), "检测报告")
+            }
+        } else {
+            (self.page.name().into(), self.page.description())
+        };
         let header = aligned_row![
             column![
-                self.label(self.page.name()).size(24),
-                self.caption(self.page.description())
+                self.label(page_title).size(24),
+                self.caption(page_description)
             ]
             .spacing(3),
             Space::new().width(Length::Fill),
@@ -1999,10 +2251,61 @@ impl App {
                 container(self.label(status).size(13))
                     .padding([5, 9])
                     .style(move |theme: &Theme| ui_style::badge(theme, tone)),
-                button(self.caption(active))
-                    .padding([3, 8])
-                    .style(rounded_text)
-                    .on_press(Message::Navigate(Page::Profiles))
+                aligned_row![
+                    iced::widget::tooltip(
+                        button(
+                            container(self.caption(active).wrapping(text::Wrapping::None))
+                                .max_width(if compact { 100 } else { 150 })
+                                .clip(true)
+                        )
+                        .padding([3, 3])
+                        .style(rounded_text)
+                        .on_press(Message::Navigate(Page::Profiles)),
+                        container(self.label(active).size(13))
+                            .padding(8)
+                            .style(panel),
+                        iced::widget::tooltip::Position::Bottom
+                    ),
+                    self.caption("|"),
+                    iced::widget::tooltip(
+                        button(
+                            container(
+                                self.caption(self.snapshot.active_node.as_deref().unwrap_or(
+                                    if self.snapshot.running {
+                                        "节点待确认"
+                                    } else {
+                                        "未启用"
+                                    }
+                                ))
+                                .wrapping(text::Wrapping::None)
+                            )
+                            .max_width(if compact { 155 } else { 205 })
+                            .clip(true)
+                        )
+                        .padding([3, 3])
+                        .style(rounded_text)
+                        .on_press(Message::Navigate(Page::Proxies)),
+                        container(
+                            column![
+                                self.label(
+                                    self.snapshot
+                                        .active_node
+                                        .as_deref()
+                                        .unwrap_or("节点状态尚未确认")
+                                )
+                                .size(13),
+                                self.caption("规则模式显示默认匹配线路；各连接可能使用不同节点。")
+                                    .size(11)
+                            ]
+                            .spacing(5)
+                        )
+                        .padding(9)
+                        .width(320)
+                        .style(panel),
+                        iced::widget::tooltip::Position::Bottom
+                    )
+                ]
+                .spacing(4)
             ]
             .spacing(3)
             .align_x(iced::alignment::Horizontal::Right)
@@ -2027,7 +2330,7 @@ impl App {
                             } else {
                                 "内核启动失败或已退出"
                             }),
-                            scrollable(
+                            page_scroll(
                                 self.label(reason)
                                     .size(13)
                                     .wrapping(text::Wrapping::WordOrGlyph)
@@ -2147,7 +2450,7 @@ impl App {
                         progress.received as f64 / 1048576.0,
                         progress.total as f64 / 1048576.0
                     )),
-                    progress_bar(0.0..=100.0, percent as f32)
+                    progress_bar(0.0..=100.0, percent as f32).girth(5)
                 ]
                 .spacing(4),
             );
@@ -2305,7 +2608,7 @@ impl App {
             .color(self.secondary())
         ]
         .spacing(10);
-        scrollable(
+        page_scroll(
             column![
                 stats,
                 container(modes)
@@ -2483,7 +2786,7 @@ impl App {
                 self.selection(NodeSort::ALL, self.node_sort, Message::NodeSort, 185)
             ]
             .spacing(8),
-            scrollable(list).height(Length::Fill),
+            page_scroll(list).height(Length::Fill),
             self.pager(group_total, group_offset, GROUP_PAGE_SIZE)
         ]
         .spacing(8)
@@ -2635,148 +2938,237 @@ impl App {
         }
     }
 
-    fn site_report(&self, report: &ip_report::Report, region_count: usize) -> Element<'_, Message> {
-        let completed = report.totals.completed();
-        let compact = self.window_height.parse::<u16>().unwrap_or(700) < 560;
-        let show_categories = !compact || self.site_report_categories;
+    fn sites_running(&self) -> bool {
+        !self.site_busy.is_empty() || !self.site_queue.is_empty()
+    }
+
+    fn can_check_sites(&self) -> bool {
+        self.snapshot.running
+            && !self.working
+            && !self.elevating
+            && !self.exiting
+            && !self.sites_running()
+    }
+
+    fn site_status_buttons(
+        &self,
+        counts: &ip_report::Counts,
+        category: CategoryFilter,
+    ) -> Element<'_, Message> {
         let mut statuses = aligned_row![].spacing(6);
         for status in Status::ALL {
-            let count = report.totals.count(status);
+            let count = counts.count(status);
+            if count == 0 {
+                continue;
+            }
+            statuses = statuses.push(
+                button(
+                    self.label(format!("{status} {count}"))
+                        .size(13)
+                        .color(self.site_status_color(status)),
+                )
+                .padding([5, 8])
+                .style(
+                    if self.site_show_results && self.site_status == StatusFilter::Status(status) {
+                        ui_style::selected_button
+                    } else {
+                        rounded_secondary
+                    },
+                )
+                .on_press(Message::SiteSummaryFilter(
+                    category,
+                    StatusFilter::Status(status),
+                )),
+            );
+        }
+        statuses.wrap().into()
+    }
+
+    fn site_breakdown_bar(&self, counts: &ip_report::Counts) -> Element<'_, Message> {
+        let groups = [
+            (
+                counts.count(Status::Available) + counts.count(Status::Identified),
+                Status::Available,
+            ),
+            (
+                counts.count(Status::Partial)
+                    + counts.count(Status::Reachable)
+                    + counts.count(Status::Unknown),
+                Status::Partial,
+            ),
+            (
+                counts.count(Status::Restricted) + counts.count(Status::Failed),
+                Status::Restricted,
+            ),
+            (counts.count(Status::Untested), Status::Untested),
+        ];
+        let mut bar = iced::widget::row![].width(Length::Fill).height(4);
+        for (count, status) in groups {
             if count == 0 {
                 continue;
             }
             let ink = self.site_status_color(status);
-            statuses = statuses.push(
-                button(self.label(format!("{status} {count}")).size(13).color(ink))
-                    .padding([5, 8])
-                    .style(if self.site_status == StatusFilter::Status(status) {
-                        ui_style::selected_button
-                    } else {
-                        rounded_secondary
-                    })
-                    .on_press(Message::SiteSummaryFilter(
-                        CategoryFilter::All,
-                        StatusFilter::Status(status),
-                    )),
+            bar = bar.push(
+                container(Space::new())
+                    .width(Length::FillPortion(count as u16))
+                    .height(4)
+                    .style(move |_| container::Style {
+                        background: Some(ink.into()),
+                        ..Default::default()
+                    }),
             );
         }
-        let mut categories = column![].spacing(8);
-        if show_categories {
-            for pair in report.categories.chunks(2) {
-                let mut row = iced::widget::row![].spacing(8);
-                for category in pair {
-                    let mut states = aligned_row![].spacing(3);
-                    for status in Status::ALL {
-                        let count = category.counts.count(status);
-                        if count == 0 {
-                            continue;
-                        }
-                        states = states.push(
-                            button(
-                                self.label(format!("{status} {count}"))
-                                    .size(13)
-                                    .color(self.site_status_color(status)),
-                            )
-                            .padding([3, 4])
-                            .style(rounded_text)
-                            .on_press(Message::SiteSummaryFilter(
-                                CategoryFilter::Group(category.name),
-                                StatusFilter::Status(status),
-                            )),
-                        );
-                    }
-                    let selected = self.site_category == CategoryFilter::Group(category.name);
-                    row = row.push(
-                        container(
-                            column![
-                                button(
-                                    aligned_row![
-                                        self.label(category.name).size(15),
-                                        Space::new().width(Length::Fill),
-                                        self.label(format!(
-                                            "{}/{}",
-                                            category.counts.non_red(),
-                                            category.counts.total()
-                                        ))
-                                        .size(14)
-                                    ]
-                                    .spacing(6)
-                                )
-                                .width(Length::Fill)
-                                .padding(4)
-                                .style(rounded_text)
-                                .on_press(
-                                    Message::SiteSummaryFilter(
-                                        CategoryFilter::Group(category.name),
-                                        StatusFilter::All
-                                    )
-                                ),
-                                states.wrap()
-                            ]
-                            .spacing(3),
-                        )
-                        .padding(6)
-                        .width(Length::FillPortion(1))
-                        .style(if selected {
-                            ui_style::selected_panel
-                        } else {
-                            panel
-                        }),
-                    );
-                }
-                if pair.len() == 1 {
-                    row = row.push(Space::new().width(Length::FillPortion(1)));
-                }
-                categories = categories.push(row);
-            }
-        }
-        let toggle: Element<'_, Message> = if compact {
-            button(
-                self.label(if show_categories {
-                    "收起分类"
-                } else {
-                    "分类总结"
-                })
-                .size(13),
-            )
-            .padding([4, 6])
-            .style(rounded_secondary)
-            .on_press(Message::SiteReportCategories)
-            .into()
+        bar.into()
+    }
+
+    fn site_report(&self, report: &ip_report::Report, region_count: usize) -> Element<'_, Message> {
+        let completed = report.totals.completed();
+        let total = report.totals.total();
+        let running = self.sites_running();
+        let progress_label = if running {
+            "检测中"
+        } else if completed == total {
+            "检测完成"
+        } else if completed > 0 {
+            "部分完成"
+        } else if self.site_has_run {
+            "检测已停止"
         } else {
-            Space::new().width(0).into()
+            "尚未检测"
         };
-        let mut body = column![
-            aligned_row![
-                self.title(if completed == report.totals.total() {
-                    "检测总结"
-                } else {
-                    "检测总结 · 部分完成"
-                }),
-                Space::new().width(Length::Fill),
-                self.caption(format!("完成 {completed} / {}", report.totals.total())),
-                toggle
-            ]
-            .spacing(8),
-            statuses.wrap()
+        let mut actions = aligned_row![
+            self.title(progress_label),
+            Space::new().width(Length::Fill),
+            self.caption(format!("{completed} / {total}")),
+            button(self.label(if self.site_has_run {
+                "重新检测"
+            } else {
+                "一键检测"
+            }))
+            .padding([7, 12])
+            .style(rounded_primary)
+            .on_press_maybe(self.can_check_sites().then_some(Message::SiteAll)),
         ]
         .spacing(8);
-        if !compact {
-            let exit = self.site_result(0).and_then(|result| result.as_ref().ok());
-            body = body.push(self.caption(format!(
-                "出口 IP：{} · {} · 识别到 {region_count} 个地区",
-                exit.map_or("未获取", |r| r.summary.as_str()),
-                exit.map_or("未获取", |r| flags::country_text(&r.country))
-            )));
+        if running {
+            actions = actions.push(
+                button(self.label("取消检测"))
+                    .padding([7, 12])
+                    .style(rounded_secondary)
+                    .on_press(Message::SiteCancel),
+            );
         }
-        if show_categories {
-            body = body.push(scrollable(categories).height(if compact { 65 } else { 100 }));
+        let progress = container(
+            column![
+                actions,
+                progress_bar(0.0..=total as f32, completed as f32).girth(5),
+            ]
+            .spacing(10),
+        )
+        .padding(12)
+        .width(Length::Fill)
+        .style(panel);
+        let exit = self.site_result(0).and_then(|result| result.as_ref().ok());
+        let exit_info = container(
+            column![
+                aligned_row![
+                    self.title("出口 IP"),
+                    Space::new().width(Length::Fill),
+                    self.caption(format!("识别到 {region_count} 个地区"))
+                ]
+                .spacing(8),
+                self.label(format!(
+                    "{} · {}",
+                    exit.map_or("未获取", |r| r.summary.as_str()),
+                    exit.map_or("未获取", |r| flags::country_text(&r.country))
+                )),
+                self.site_status_buttons(&report.totals, CategoryFilter::All),
+            ]
+            .spacing(8),
+        )
+        .padding(12)
+        .width(Length::Fill)
+        .style(panel);
+        let columns = if self.window_width.parse::<u16>().unwrap_or(950) >= 900 {
+            3
+        } else {
+            2
+        };
+        let mut categories = column![].spacing(8);
+        for chunk in report.categories.chunks(columns) {
+            let mut cards = iced::widget::row![].spacing(8);
+            for category in chunk {
+                let mut states = aligned_row![].spacing(6);
+                for status in Status::ALL {
+                    let count = category.counts.count(status);
+                    if count == 0 {
+                        continue;
+                    }
+                    let short = match status {
+                        Status::Available => "可用",
+                        Status::Partial => "部分可用",
+                        Status::Reachable => "网页可达",
+                        Status::Identified => "信息识别",
+                        Status::Restricted => "受限",
+                        Status::Unknown => "未确认",
+                        Status::Failed => "失败",
+                        Status::Untested => "未检测",
+                    };
+                    states = states.push(
+                        self.label(format!("{short} {count}"))
+                            .size(13)
+                            .color(self.site_status_color(status)),
+                    );
+                }
+                cards = cards.push(
+                    button(
+                        column![
+                            aligned_row![
+                                self.label(category.name),
+                                Space::new().width(Length::Fill),
+                                self.label(format!(
+                                    "{}/{}",
+                                    category.counts.non_red(),
+                                    category.counts.total()
+                                )),
+                                self.caption("›")
+                            ]
+                            .spacing(6),
+                            container(states.wrap()).height(Length::Fill),
+                            self.site_breakdown_bar(&category.counts),
+                        ]
+                        .spacing(8),
+                    )
+                    .padding(12)
+                    .height(150)
+                    .width(Length::FillPortion(1))
+                    .style(rounded_secondary)
+                    .on_press(Message::SiteSummaryFilter(
+                        CategoryFilter::Group(category.name),
+                        StatusFilter::All,
+                    )),
+                );
+            }
+            for _ in chunk.len()..columns {
+                cards = cards.push(Space::new().width(Length::FillPortion(1)));
+            }
+            categories = categories.push(cards);
         }
-        container(body)
-            .padding(if compact { 10 } else { 12 })
-            .width(Length::Fill)
-            .style(panel)
-            .into()
+        let body = column![
+            progress,
+            exit_info,
+            aligned_row![
+                self.title("分类报告"),
+                Space::new().width(Length::Fill),
+                self.caption("单击分类查看详情")
+            ]
+            .spacing(8),
+            categories,
+            self.caption("分类计数包含绿色和黄色结果。"),
+        ]
+        .spacing(12)
+        .width(Length::Fill);
+        page_scroll(body).height(Length::Fill).into()
     }
 
     fn websites(&self) -> Element<'_, Message> {
@@ -2786,8 +3178,18 @@ impl App {
         let codes: BTreeSet<_> = self
             .site_results
             .iter()
-            .filter_map(|result| ip_report::region(result.as_ref()))
+            .enumerate()
+            .filter(|(index, _)| match self.site_category {
+                CategoryFilter::All => true,
+                CategoryFilter::Group(group) => services
+                    .get(*index)
+                    .is_some_and(|service| service.group == group),
+            })
+            .filter_map(|(_, result)| ip_report::region(result.as_ref()))
             .collect();
+        if !self.site_show_results {
+            return self.site_report(&report, codes.len());
+        }
         let matching = (0..services.len()).filter(|&index| self.site_matches(index, &query));
         let visible = matching.clone().count();
         let offset = self.list_offset.min(last_page_offset(visible));
@@ -2823,13 +3225,9 @@ impl App {
             country_row = country_row.push(self.label(country_text).size(self.scaled(10)));
             let mut entry = column![
                 aligned_row![
-                    self.label(format!("{:03}", index + 1))
-                        .size(self.scaled(10))
-                        .width(34),
                     self.label(&service.name)
                         .size(self.scaled(11))
                         .width(Length::FillPortion(3)),
-                    self.label(&service.group).size(self.scaled(10)).width(60),
                     self.label(state)
                         .size(self.scaled(10))
                         .color(if busy || queued {
@@ -2884,47 +3282,64 @@ impl App {
         if visible == 0 {
             list = list.push(self.label("没有匹配的检测项目。"));
         }
-        let mut page = column![
-            aligned_row![
-                self.search("搜索平台、地区或检测结果"),
-                self.label(format!(
-                    "已完成 {} / {}",
-                    report.totals.completed(),
-                    services.len()
-                ))
-                .size(self.scaled(10)),
-                button(self.label("一键检测"))
-                    .padding([5, 10])
-                    .style(rounded_primary)
-                    .on_press_maybe(
-                        (self.snapshot.running
-                            && self.site_busy.is_empty()
-                            && self.site_queue.is_empty())
-                        .then_some(Message::SiteAll)
-                    ),
-                button(self.label("取消"))
-                    .padding([5, 10])
-                    .style(rounded_secondary)
-                    .on_press_maybe(
-                        (!self.site_busy.is_empty() || !self.site_queue.is_empty())
-                            .then_some(Message::SiteCancel)
-                    )
-            ]
-            .spacing(8)
+        let counts = match self.site_category {
+            CategoryFilter::All => &report.totals,
+            CategoryFilter::Group(group) => report
+                .categories
+                .iter()
+                .find(|category| category.name == group)
+                .map_or(&report.totals, |category| &category.counts),
+        };
+        let mut actions = aligned_row![
+            button(self.label("‹ 返回报告"))
+                .padding([5, 8])
+                .style(rounded_text)
+                .on_press(Message::SiteReport),
+            Space::new().width(Length::Fill),
+            button(self.label(if self.site_category == CategoryFilter::All {
+                "重新检测"
+            } else {
+                "重新检测此分类"
+            }))
+            .padding([7, 12])
+            .style(rounded_secondary)
+            .on_press_maybe(self.can_check_sites().then_some(Message::SiteRetest)),
         ]
         .spacing(8);
-        if report.totals.completed() > 0 && self.site_busy.is_empty() && self.site_queue.is_empty()
-        {
-            page = page.push(self.site_report(&report, codes.len()));
+        if self.sites_running() {
+            actions = actions.push(
+                button(self.label("取消检测"))
+                    .padding([7, 12])
+                    .style(rounded_secondary)
+                    .on_press(Message::SiteCancel),
+            );
         }
-        let categories: Vec<_> = std::iter::once(CategoryFilter::All)
-            .chain(
-                report
-                    .categories
-                    .iter()
-                    .map(|category| CategoryFilter::Group(category.name)),
-            )
-            .collect();
+        let summary = container(
+            column![
+                aligned_row![
+                    self.title(format!(
+                        "{}   {} / {}",
+                        self.site_category,
+                        counts.non_red(),
+                        counts.total()
+                    )),
+                    Space::new().width(Length::Fill),
+                    self.caption(format!(
+                        "{} / {} 项已完成",
+                        counts.completed(),
+                        counts.total()
+                    ))
+                ]
+                .spacing(8),
+                self.site_status_buttons(counts, self.site_category),
+            ]
+            .spacing(8),
+        )
+        .padding(12)
+        .width(Length::Fill)
+        .style(panel);
+        let mut page =
+            column![actions, summary, self.search("搜索平台、地区或检测结果"),].spacing(8);
         let statuses: Vec<_> = std::iter::once(StatusFilter::All)
             .chain(Status::ALL.into_iter().map(StatusFilter::Status))
             .collect();
@@ -2932,28 +3347,49 @@ impl App {
             .into_iter()
             .chain(codes.into_iter().map(RegionFilter::Country))
             .collect();
+        let mut filters = aligned_row![].spacing(6);
+        if self.site_category == CategoryFilter::All {
+            let categories: Vec<_> = std::iter::once(CategoryFilter::All)
+                .chain(
+                    report
+                        .categories
+                        .iter()
+                        .map(|category| CategoryFilter::Group(category.name)),
+                )
+                .collect();
+            filters = filters.push(self.selection(
+                categories,
+                self.site_category,
+                Message::SiteCategory,
+                110,
+            ));
+        }
         page = page.push(
-            aligned_row![
-                self.selection(categories, self.site_category, Message::SiteCategory, 110),
-                self.selection(statuses, self.site_status, Message::SiteStatus, 150),
-                self.selection(regions, self.site_region, Message::SiteRegion, 150),
-                button(self.label("清除筛选").size(self.scaled(10)))
-                    .padding([5, 8])
-                    .style(rounded_secondary)
-                    .on_press(Message::SiteResetFilters),
-                self.label(format!("匹配 {visible} 项"))
-                    .size(self.scaled(10))
-            ]
-            .spacing(6)
-            .wrap(),
+            filters
+                .push(self.selection(statuses, self.site_status, Message::SiteStatus, 150))
+                .push(self.selection(regions, self.site_region, Message::SiteRegion, 150))
+                .push(
+                    button(self.label("清除筛选").size(self.scaled(10)))
+                        .padding([5, 8])
+                        .style(rounded_secondary)
+                        .on_press(Message::SiteResetFilters),
+                )
+                .push(
+                    self.label(format!("匹配 {visible} 项"))
+                        .size(self.scaled(10)),
+                )
+                .wrap(),
         );
+        let footer: Element<'_, Message> = if visible > PAGE_SIZE {
+            self.pager(visible, offset, PAGE_SIZE)
+        } else {
+            self.caption(format!("共 {visible} 项")).into()
+        };
         page.push(
             aligned_row![
-                self.label("序号").size(self.scaled(10)).width(34),
                 self.label("平台 / IP")
                     .size(self.scaled(10))
                     .width(Length::FillPortion(3)),
-                self.label("分类").size(self.scaled(10)).width(60),
                 self.label("检测结果")
                     .size(self.scaled(10))
                     .width(Length::FillPortion(3)),
@@ -2966,8 +3402,8 @@ impl App {
             .spacing(6)
             .padding([0, 8]),
         )
-        .push(scrollable(list).height(Length::Fill))
-        .push(self.pager(visible, offset, PAGE_SIZE))
+        .push(page_scroll(list).height(Length::Fill))
+        .push(footer)
         .into()
     }
 
@@ -3077,184 +3513,180 @@ impl App {
                 "导入订阅链接或本地 YAML 文件后，即可启用配置。",
             ));
         }
-        scrollable(column![form, self.title("当前订阅与配置"), list].spacing(14))
+        page_scroll(column![form, self.title("当前订阅与配置"), list].spacing(14))
             .height(Length::Fill)
             .into()
     }
 
+    fn connection_heading(
+        &self,
+        label: &'static str,
+        field: ConnectionField,
+    ) -> Element<'_, Message> {
+        let selected = self.connection_sort.field == Some(field);
+        let arrow = if selected {
+            if self.connection_sort.descending {
+                " ↓"
+            } else {
+                " ↑"
+            }
+        } else {
+            ""
+        };
+        button(
+            self.label(format!("{label}{arrow}"))
+                .size(12)
+                .color(if selected {
+                    self.theme().palette().text
+                } else {
+                    self.secondary()
+                }),
+        )
+        .padding([3, 0])
+        .width(Length::Fill)
+        .on_press(Message::ConnectionSort(field))
+        .style(ui_style::text_button)
+        .into()
+    }
+
     fn connections(&self) -> Element<'_, Message> {
-        let query = self.query.to_lowercase();
-        let entries = self.snapshot.connections.connections.iter().filter(|c| {
-            query.is_empty()
-                || query.split_whitespace().all(|word| {
-                    [
-                        c.metadata.host.as_ref(),
-                        c.metadata.destination_ip.as_ref(),
-                        c.metadata.process.as_str(),
-                        c.rule.as_str(),
-                    ]
-                    .into_iter()
-                    .chain(c.chains.iter().map(|name| name.as_str()))
-                    .any(|field| contains_query(field, word))
+        let mut cached = self.connection_order.borrow_mut();
+        let indices = cached.get_or_insert_with(|| {
+            let query = self.query.to_lowercase();
+            let connections = &self.snapshot.connections.connections;
+            let mut indices: Vec<_> = connections
+                .iter()
+                .enumerate()
+                .filter_map(|(index, c)| {
+                    (query.is_empty()
+                        || query.split_whitespace().all(|word| {
+                            [
+                                c.metadata.host.as_ref(),
+                                c.metadata.sniff_host.as_str(),
+                                c.metadata.destination_ip.as_ref(),
+                                c.rule.as_str(),
+                                c.rule_payload.as_str(),
+                            ]
+                            .into_iter()
+                            .chain(c.chains.iter().map(|name| name.as_str()))
+                            .any(|field| contains_query(field, word))
+                        }))
+                    .then_some(index)
                 })
+                .collect();
+            if self.connection_sort.field.is_some() {
+                indices.sort_unstable_by(|a, b| {
+                    self.connection_sort
+                        .compare(&connections[*a], &connections[*b])
+                });
+            }
+            indices
         });
-        let total = entries.clone().count();
+        let total = indices.len();
         let offset = self.list_offset.min(last_page_offset(total));
         let mut list = column![].spacing(0);
-        for (index, connection) in entries.skip(offset).take(PAGE_SIZE).enumerate() {
+        for (row_index, index) in indices.iter().skip(offset).take(PAGE_SIZE).enumerate() {
+            let connection = &self.snapshot.connections.connections[*index];
             let m = &connection.metadata;
-            let host = if m.host.is_empty() {
-                &m.destination_ip
-            } else {
-                &m.host
+            let rate = |value: Option<u64>| {
+                value.map_or_else(|| "—".into(), |value| format!("{}/s", bytes(value)))
             };
             list = list.push(
                 container(
                     aligned_row![
                         column![
-                            self.label(format!("{}:{}", host, m.destination_port))
-                                .size(14)
-                                .wrapping(text::Wrapping::WordOrGlyph),
-                            self.caption(format!(
-                                "{} · {}",
-                                m.network,
-                                if m.process.is_empty() {
-                                    "未知进程"
-                                } else {
-                                    &m.process
-                                }
+                            self.label(format!(
+                                "{}:{}",
+                                connection::name(connection),
+                                m.destination_port
                             ))
+                            .size(14)
+                            .wrapping(text::Wrapping::WordOrGlyph),
+                            self.caption(m.network.to_string())
                         ]
                         .spacing(4)
                         .width(Length::FillPortion(2)),
                         column![
-                            self.label(connection.rule.as_str()).size(14),
+                            self.label(if connection.rule_payload.is_empty() {
+                                connection.rule.to_string()
+                            } else {
+                                format!("{} ({})", connection.rule, connection.rule_payload)
+                            })
+                            .size(13)
+                            .wrapping(text::Wrapping::WordOrGlyph),
                             self.caption(connection.chains.join(" → "))
                                 .wrapping(text::Wrapping::WordOrGlyph)
                         ]
                         .spacing(4)
                         .width(Length::FillPortion(2)),
                         column![
-                            self.label(format!("↑ {}", bytes(connection.upload)))
+                            self.label(rate(connection.rates.map(|r| r.upload)))
                                 .size(13),
-                            self.label(format!("↓ {}", bytes(connection.download)))
-                                .size(13)
+                            self.caption(bytes(connection.upload))
                         ]
                         .spacing(4)
-                        .width(104),
+                        .width(96),
+                        column![
+                            self.label(rate(connection.rates.map(|r| r.download)))
+                                .size(13),
+                            self.caption(bytes(connection.download))
+                        ]
+                        .spacing(4)
+                        .width(96),
                         self.caption(presentation::date_text(&connection.start))
-                            .width(94),
+                            .width(86),
                         self.action(
                             "关闭",
                             Action::Close(connection.id.to_string()),
                             self.snapshot.running
                         )
                     ]
-                    .spacing(10),
+                    .spacing(8),
                 )
                 .padding(10)
                 .width(Length::Fill)
-                .style(move |theme: &Theme| ui_style::table_row(theme, index % 2 == 1)),
-            );
-        }
-        if total == 0 {
-            list = list
-                .push(self.empty_state("没有匹配的连接", "尝试更改搜索条件，或等待新的网络请求。"));
-        }
-        column![
-            aligned_row![
-                self.search("搜索域名、IP、进程或规则"),
-                self.caption(format!("匹配 {total} 条"))
-            ]
-            .spacing(10),
-            self.table_header(
-                aligned_row![
-                    self.label("目标 / 进程")
-                        .size(13)
-                        .width(Length::FillPortion(2)),
-                    self.label("规则 / 代理链")
-                        .size(13)
-                        .width(Length::FillPortion(2)),
-                    self.label("上传 / 下载").size(13).width(104),
-                    self.label("开始时间").size(13).width(94),
-                    self.label("操作").size(13).width(54)
-                ]
-                .spacing(10)
-                .into()
-            ),
-            container(scrollable(list).height(Length::Fill))
-                .width(Length::Fill)
-                .style(panel),
-            self.list_pager(total, offset)
-        ]
-        .spacing(10)
-        .into()
-    }
-
-    fn rules(&self) -> Element<'_, Message> {
-        let query = self.query.to_lowercase();
-        let entries = self
-            .snapshot
-            .rules
-            .rules
-            .iter()
-            .enumerate()
-            .filter(|(_, r)| {
-                query.is_empty()
-                    || query.split_whitespace().all(|word| {
-                        [r.kind.as_str(), r.payload.as_ref(), r.proxy.as_str()]
-                            .into_iter()
-                            .any(|field| contains_query(field, word))
-                    })
-            });
-        let total = entries.clone().count();
-        let offset = self.list_offset.min(last_page_offset(total));
-        let mut list = column![].spacing(0);
-        for (row, (index, rule)) in entries.skip(offset).take(PAGE_SIZE).enumerate() {
-            list = list.push(
-                container(
-                    aligned_row![
-                        self.caption(format!("{:04}", index + 1)).width(44),
-                        self.label(rule.kind.as_str()).size(13).width(145),
-                        self.label(rule.payload.as_ref())
-                            .size(14)
-                            .wrapping(text::Wrapping::WordOrGlyph)
-                            .width(Length::Fill),
-                        self.label(rule.proxy.as_str())
-                            .size(14)
-                            .color(self.accent())
-                            .width(120)
-                    ]
-                    .spacing(10),
-                )
-                .padding([12, 10])
-                .width(Length::Fill)
-                .style(move |theme: &Theme| ui_style::table_row(theme, row % 2 == 1)),
+                .style(move |theme: &Theme| ui_style::table_row(theme, row_index % 2 == 1)),
             );
         }
         if total == 0 {
             list = list.push(self.empty_state(
-                "没有匹配的规则",
-                "尝试更改搜索条件，或在内核启动后加载当前配置。",
+                "没有匹配的连接",
+                "仅显示当前连接；连接失败或已结束的请求请在日志页查看。",
             ));
         }
         column![
             aligned_row![
-                self.search("搜索规则类型、内容或策略"),
+                self.search("搜索域名、IP、规则或代理链"),
                 self.caption(format!("匹配 {total} 条"))
             ]
             .spacing(10),
             self.table_header(
                 aligned_row![
-                    self.label("序号").size(13).width(44),
-                    self.label("类型").size(13).width(145),
-                    self.label("规则内容").size(13).width(Length::Fill),
-                    self.label("策略").size(13).width(120)
+                    container(self.connection_heading("连接名称", ConnectionField::Name))
+                        .width(Length::FillPortion(2)),
+                    column![
+                        self.connection_heading("规则", ConnectionField::Rule),
+                        self.connection_heading("代理链", ConnectionField::Chain)
+                    ]
+                    .width(Length::FillPortion(2)),
+                    column![
+                        self.connection_heading("上传速度", ConnectionField::UploadRate),
+                        self.connection_heading("上传量", ConnectionField::UploadTotal)
+                    ]
+                    .width(96),
+                    column![
+                        self.connection_heading("下载速度", ConnectionField::DownloadRate),
+                        self.connection_heading("下载量", ConnectionField::DownloadTotal)
+                    ]
+                    .width(96),
+                    container(self.connection_heading("开始时间", ConnectionField::Start))
+                        .width(86),
+                    self.label("操作").size(12).width(54)
                 ]
-                .spacing(10)
+                .spacing(8)
                 .into()
             ),
-            container(scrollable(list).height(Length::Fill))
+            container(page_scroll(list).height(Length::Fill))
                 .width(Length::Fill)
                 .style(panel),
             self.list_pager(total, offset)
@@ -3375,7 +3807,7 @@ impl App {
                 .spacing(10)
                 .into()
             ),
-            container(scrollable(list).height(Length::Fill))
+            container(page_scroll(list).height(Length::Fill))
                 .width(Length::Fill)
                 .style(panel)
         ]
@@ -3471,7 +3903,7 @@ impl App {
                 "执行测试后，结果会显示在这里；网站和出口查询使用当前代理，DNS 使用系统解析。",
             ));
         }
-        scrollable(column![network, dns, results].spacing(14))
+        page_scroll(column![network, dns, results].spacing(14))
             .height(Length::Fill)
             .into()
     }
@@ -3482,48 +3914,6 @@ impl App {
     }
 
     fn settings_view(&self) -> Element<'_, Message> {
-        let mut rules = column![
-            self.title("订阅附加规则"),
-            self.caption("仅补充订阅缺少的规则，补充的规则优先匹配。"),
-        ]
-        .spacing(10);
-        let labels = [
-            "拦截广告",
-            "本地域名直连",
-            "私有 IP 直连",
-            "国内域名直连",
-            "国内 IP 直连",
-        ];
-        for pair in [0, 1, 2, 3, 4].chunks(2) {
-            let mut row = aligned_row![].spacing(16);
-            for &index in pair {
-                let rule = SUBSCRIPTION_RULES[index];
-                row = row.push(
-                    column![
-                        checkbox(self.rule_draft.enabled[index])
-                            .label(labels[index])
-                            .size(18)
-                            .text_size(15)
-                            .on_toggle_maybe(
-                                (!self.working && !self.exiting)
-                                    .then_some(move |enabled| Message::RuleToggle(index, enabled))
-                            ),
-                        self.caption(rule).wrapping(text::Wrapping::WordOrGlyph),
-                    ]
-                    .spacing(4)
-                    .width(Length::Fill),
-                );
-            }
-            if pair.len() == 1 {
-                row = row.push(Space::new().width(Length::Fill));
-            }
-            rules = rules.push(row);
-        }
-        rules = rules.push(self.action(
-            "保存并应用规则",
-            Action::RuleOverrides(self.rule_draft.clone()),
-            self.rule_draft != self.settings.rule_overrides,
-        ));
         let updates = column![
             self.label(format!("客户端更新 · 当前版本 {}", clash_of_rust::VERSION)),
             self.label(if self.updates.checking {
@@ -3639,17 +4029,13 @@ impl App {
             self.action("更新所有 Geo 数据", Action::UpdateGeo, true)
         ]
         .spacing(12);
-        scrollable(
+        page_scroll(
             column![
                 container(updates)
                     .padding(16)
                     .width(Length::Fill)
                     .style(panel),
                 container(ports)
-                    .padding(16)
-                    .width(Length::Fill)
-                    .style(panel),
-                container(rules)
                     .padding(16)
                     .width(Length::Fill)
                     .style(panel),
@@ -3721,6 +4107,21 @@ fn bytes(value: u64) -> String {
     } else {
         format!("{:.2} GiB", value as f64 / (1024.0 * 1024.0 * 1024.0))
     }
+}
+
+fn read_window_state(id: iced::window::Id) -> Task<(iced::Size, bool, Option<bool>)> {
+    iced::window::is_maximized(id).then(move |maximized| {
+        iced::window::is_minimized(id).then(move |minimized| {
+            iced::window::size(id).map(move |size| (size, maximized, minimized))
+        })
+    })
+}
+
+fn page_scroll<'a>(
+    content: impl Into<Element<'a, Message>>,
+) -> iced::widget::Scrollable<'a, Message> {
+    // Embed the scrollbar beside the content instead of covering its right edge.
+    scrollable(content).spacing(8)
 }
 
 fn panel(theme: &Theme) -> container::Style {
@@ -3823,11 +4224,105 @@ mod window_tests {
             );
         }
     }
+
+    #[test]
+    fn stale_or_maximized_geometry_cannot_replace_last_normal_dimensions() {
+        let mut app = app();
+        let normal = iced::Size::new(900.0, 500.0);
+        let _ = app.update(Message::WindowStateCaptured(0, normal, false, Some(false)));
+        assert_eq!(app.window_state.size(), normal);
+        let _ = app.schedule_window_state(iced::window::Id::unique());
+        let current = app.window_state_revision;
+        let large = iced::Size::new(1920.0, 1080.0);
+        let _ = app.update(Message::WindowStateCaptured(0, large, false, Some(false)));
+        let _ = app.update(Message::WindowStateCaptured(
+            current,
+            large,
+            true,
+            Some(false),
+        ));
+        let _ = app.update(Message::WindowStateCaptured(
+            current,
+            normal,
+            false,
+            Some(true),
+        ));
+        assert_eq!(app.window_state.size(), normal);
+        assert_eq!(app.window_state_revision, current);
+    }
+
+    #[test]
+    fn geometry_capture_during_pending_size_edit_keeps_last_normal_dimensions() {
+        let mut app = app();
+        let _ = app.update(Message::WindowWidth("1400".into()));
+        let _ = app.update(Message::WindowStateCaptured(
+            0,
+            iced::Size::new(1200.0, 700.0),
+            false,
+            Some(false),
+        ));
+        assert!(app.size_pending);
+        assert_eq!(app.window_state.size(), DEFAULT_WINDOW_SIZE);
+    }
 }
 
 #[cfg(test)]
 mod memory_tests {
     use super::*;
+
+    #[test]
+    fn connection_search_includes_sniffed_domain_and_matched_rule_payload() {
+        let mut app = App::with_engine(Err(anyhow::anyhow!("view test")), None).0;
+        app.snapshot.connections = serde_json::from_value(serde_json::json!({"connections":[
+            {"id":"sniffed", "metadata":{"host":"", "sniffHost":"mail.google.com", "destinationIP":"192.0.2.1"}, "rule":"DomainSuffix", "rulePayload":"google.com", "chains":["DIRECT"]},
+            {"id":"payload", "metadata":{"host":"192.0.2.2"}, "rule":"DomainSuffix", "rulePayload":"google.com", "chains":["Proxy"]},
+            {"id":"unrelated", "metadata":{"host":"example.test"}, "rule":"Match", "chains":["Proxy"]}
+        ]})).unwrap();
+        for (query, expected) in [
+            ("MAIL.GOOGLE.COM", vec![0]),
+            ("google.com", vec![0, 1]),
+            ("google.com direct", vec![0]),
+            ("192.0.2.2", vec![1]),
+        ] {
+            let _ = app.update(Message::Query(query.into()));
+            {
+                let _view = app.connections();
+            }
+            assert_eq!(app.connection_order.borrow().as_ref().unwrap(), &expected);
+        }
+    }
+
+    #[test]
+    fn connection_sort_applies_to_all_filtered_rows_before_pagination() {
+        let mut app = App::with_engine(Err(anyhow::anyhow!("view test")), None).0;
+        app.snapshot.connections = serde_json::from_value(serde_json::json!({"connections":
+            (0..125).map(|index| serde_json::json!({"id": index.to_string(),
+                "metadata": {"host": if index == 124 { "other.test" } else { "example.test" }, "process": "hidden-process"},
+                "download": index, "rule":"MATCH"})).collect::<Vec<_>>()
+        })).unwrap();
+        let _ = app.update(Message::Query("example.test".into()));
+        let _ = app.update(Message::ConnectionSort(ConnectionField::DownloadTotal));
+        {
+            let _view = app.connections();
+        }
+        {
+            let order = app.connection_order.borrow();
+            let order = order.as_ref().unwrap();
+            assert_eq!(order.len(), 124);
+            assert_eq!(order[0], 123);
+            assert_eq!(order[PAGE_SIZE], 63);
+        }
+        let _ = app.update(Message::ConnectionSort(ConnectionField::DownloadTotal));
+        {
+            let _view = app.connections();
+        }
+        assert_eq!(app.connection_order.borrow().as_ref().unwrap()[0], 0);
+        let _ = app.update(Message::Query("hidden-process".into()));
+        {
+            let _view = app.connections();
+        }
+        assert!(app.connection_order.borrow().as_ref().unwrap().is_empty());
+    }
 
     #[test]
     fn proxy_widget_count_is_bounded_across_many_expanded_groups() {
@@ -3922,6 +4417,8 @@ mod async_state_tests {
             start_requested: true,
             settings: app.settings.clone(),
             profiles: None,
+            rule_document: None,
+            rules_applied: false,
             snapshot: Some(Snapshot {
                 running: true,
                 ..Snapshot::default()
@@ -3945,6 +4442,8 @@ mod async_state_tests {
             start_requested: false,
             settings: app.settings.clone(),
             profiles: None,
+            rule_document: None,
+            rules_applied: false,
             snapshot: None,
             notice: Err("无法修改开机启动登录任务：拒绝访问 (0x80070005)".into()),
             running: false,
@@ -3960,6 +4459,8 @@ mod async_state_tests {
             start_requested: true,
             settings: app.settings.clone(),
             profiles: None,
+            rule_document: None,
+            rules_applied: false,
             snapshot: None,
             notice: Err("无法启动内核程序：拒绝访问".into()),
             running: false,
@@ -4107,6 +4608,7 @@ mod dev2_tests {
         assert_eq!(app.site_region, RegionFilter::All);
         assert_eq!(app.list_offset, 0);
         assert_eq!(app.site_detail, None);
+        assert!(app.site_show_results);
         assert!(app.site_matches(2, ""));
         assert_eq!(
             ip_report::Report::from_results(&app.site_results)
@@ -4114,6 +4616,115 @@ mod dev2_tests {
                 .completed(),
             2
         );
+    }
+
+    #[test]
+    fn report_navigation_and_filter_reset_keep_results_and_category_context() {
+        let mut app = app();
+        app.site_results
+            .resize_with(ip_check::services().len(), || None);
+        app.site_results[1] = Some(result(ip_check::State::Confirmed, "美国"));
+        let _ = app.update(Message::SiteSummaryFilter(
+            CategoryFilter::Group("AI"),
+            StatusFilter::All,
+        ));
+        let _ = app.update(Message::Query("chatgpt".into()));
+        let _ = app.update(Message::SiteStatus(StatusFilter::Status(Status::Available)));
+        let _ = app.update(Message::SiteRegion(RegionFilter::Country("US")));
+        let _ = app.update(Message::SiteResetFilters);
+        assert_eq!(app.site_category, CategoryFilter::Group("AI"));
+        assert!(app.site_show_results);
+        assert!(app.query.is_empty());
+        assert_eq!(app.site_status, StatusFilter::All);
+        assert_eq!(app.site_region, RegionFilter::All);
+        assert_eq!(
+            ip_report::Report::from_results(&app.site_results)
+                .totals
+                .completed(),
+            1
+        );
+        let _ = app.update(Message::SiteReport);
+        assert!(!app.site_show_results);
+        assert_eq!(app.site_category, CategoryFilter::All);
+        assert_eq!(
+            ip_report::Report::from_results(&app.site_results)
+                .totals
+                .completed(),
+            1
+        );
+    }
+
+    #[test]
+    fn category_retest_preserves_other_results_and_return_does_not_cancel_running_checks() {
+        let mut app = app();
+        app.snapshot.running = true;
+        app.site_results = ip_check::services()
+            .iter()
+            .map(|_| Some(result(ip_check::State::Confirmed, "美国")))
+            .collect();
+        let _ = app.update(Message::SiteSummaryFilter(
+            CategoryFilter::Group("AI"),
+            StatusFilter::All,
+        ));
+        let _ = app.update(Message::SiteRetest);
+        assert!(app.site_show_results);
+        assert!(app.site_has_run);
+        assert_eq!(app.site_category, CategoryFilter::Group("AI"));
+        for (index, service) in ip_check::services().iter().enumerate() {
+            assert_eq!(app.site_result(index).is_none(), service.group == "AI");
+        }
+        let checking: BTreeSet<_> = app
+            .site_busy
+            .iter()
+            .chain(app.site_queue.iter())
+            .cloned()
+            .collect();
+        assert_eq!(checking.len(), 5);
+        assert!(
+            ip_check::services()
+                .iter()
+                .filter(|service| checking.contains(&service.id))
+                .all(|service| service.group == "AI")
+        );
+        let generation = app.site_generation;
+        let _ = app.update(Message::SiteReport);
+        assert!(!app.site_show_results);
+        assert!(app.sites_running());
+        assert_eq!(generation, app.site_generation);
+        let _ = app.update(Message::SiteCancel);
+        assert!(!app.sites_running());
+        let _ = app.update(Message::SiteDone(
+            generation,
+            ip_check::services()[1].id.clone(),
+            result(ip_check::State::Confirmed, "美国"),
+        ));
+        assert!(app.site_result(1).is_none());
+    }
+
+    #[test]
+    fn one_key_check_opens_live_report_and_disabled_core_keeps_existing_results() {
+        let mut app = app();
+        app.site_results
+            .push(Some(result(ip_check::State::Identified, "美国")));
+        app.site_show_results = true;
+        let _ = app.update(Message::SiteAll);
+        assert!(app.site_show_results);
+        assert_eq!(app.site_results.len(), 1);
+        app.snapshot.running = true;
+        let _ = app.update(Message::SiteAll);
+        assert!(!app.site_show_results);
+        assert!(app.site_has_run);
+        assert!(app.sites_running());
+        assert!(app.site_results.is_empty());
+        assert_eq!(app.site_category, CategoryFilter::All);
+        assert_eq!(
+            app.site_busy.len() + app.site_queue.len(),
+            ip_check::services().len()
+        );
+        let generation = app.site_generation;
+        let _ = app.update(Message::SiteAll);
+        assert_eq!(generation, app.site_generation);
+        app.cancel_site_checks();
     }
 
     #[test]

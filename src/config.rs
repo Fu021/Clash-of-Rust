@@ -34,6 +34,8 @@ pub struct Settings {
     pub proxy_mode: crate::engine::ProxyMode,
     pub node_sort: crate::proxy_order::NodeSort,
     pub rule_overrides: RuleOverrides,
+    pub rule_profiles:
+        std::collections::BTreeMap<String, std::sync::Arc<crate::rule_manager::ProfileRules>>,
 }
 
 impl Default for Settings {
@@ -58,6 +60,7 @@ impl Default for Settings {
             proxy_mode: crate::engine::ProxyMode::Off,
             node_sort: crate::proxy_order::NodeSort::default(),
             rule_overrides: RuleOverrides::default(),
+            rule_profiles: Default::default(),
         }
     }
 }
@@ -78,6 +81,10 @@ impl Settings {
         }
         if self.secret.is_empty() {
             bail!("控制接口密钥不能为空");
+        }
+        for (id, rules) in &self.rule_profiles {
+            uuid::Uuid::parse_str(id).context("规则所属的订阅 ID 无效")?;
+            rules.validate()?;
         }
         Ok(())
     }
@@ -276,9 +283,22 @@ pub fn parse_profile(raw: &str) -> Result<Mapping> {
 }
 
 pub fn runtime_config(raw: &str, settings: &Settings) -> Result<String> {
+    runtime_config_with_rules(raw, settings, None, false)
+}
+
+pub fn runtime_config_with_rules(
+    raw: &str,
+    settings: &Settings,
+    rules: Option<&crate::rule_manager::ProfileRules>,
+    builtin: bool,
+) -> Result<String> {
     settings.validate()?;
     let mut map = parse_profile(raw)?;
-    apply_rules(&mut map, &settings.rule_overrides)?;
+    if let Some(rules) = rules {
+        crate::rule_manager::apply(&mut map, rules, builtin)?;
+    } else if !builtin {
+        apply_rules(&mut map, &settings.rule_overrides)?;
+    }
     // The application owns all ingress and controller settings. A subscription cannot
     // expose the API, load a dashboard, or silently enable TUN.
     for key in [
@@ -306,6 +326,8 @@ pub fn runtime_config(raw: &str, settings: &Settings) -> Result<String> {
     map.insert(Value::from("bind-address"), Value::from("127.0.0.1"));
     map.insert(Value::from("mode"), Value::from(settings.run_mode.clone()));
     map.insert(Value::from("log-level"), Value::from("info"));
+    // Process discovery is not used by this client's connection view.
+    map.insert(Value::from("find-process-mode"), Value::from("off"));
     // Geo downloads are explicitly managed by the application. Even the core's
     // missing-file fallback must not attempt Internet downloads during startup.
     map.insert(Value::from("geo-auto-update"), Value::from(false));
@@ -415,6 +437,20 @@ mod tests {
         assert_eq!(std::fs::read(&path).unwrap(), b"original");
         drop(reader);
         assert_eq!(std::fs::read_dir(directory.path()).unwrap().count(), 1);
+    }
+
+    #[test]
+    fn runtime_disables_process_lookup_even_when_subscription_enables_it() {
+        for mode in ["always", "strict", "off"] {
+            let raw = format!("proxies: []\nfind-process-mode: {mode}\n");
+            let config: Value =
+                serde_yaml::from_str(&runtime_config(&raw, &Settings::default()).unwrap()).unwrap();
+            assert_eq!(config["find-process-mode"].as_str(), Some("off"));
+            assert_eq!(
+                parse_profile(&raw).unwrap()[Value::from("find-process-mode")].as_str(),
+                Some(mode)
+            );
+        }
     }
 
     #[test]

@@ -93,6 +93,13 @@ pub(crate) struct TunStatus {
     pub enable: bool,
 }
 
+/// Header polling needs only the current selection, not members or delay history.
+#[derive(Debug, Default, Deserialize)]
+pub(crate) struct ProxySelection {
+    #[serde(default)]
+    pub now: String,
+}
+
 // Go serializes nil slices as null, rather than []. Both are valid API responses.
 fn null_default<'de, D, T>(deserializer: D) -> std::result::Result<T, D::Error>
 where
@@ -366,14 +373,19 @@ impl<'de> Deserialize<'de> for Network {
 pub struct Metadata {
     #[serde(default)]
     pub host: Box<str>,
+    #[serde(rename = "sniffHost", default)]
+    pub sniff_host: Text,
     #[serde(rename = "destinationIP", default)]
     pub destination_ip: Box<str>,
     #[serde(rename = "destinationPort", default)]
     pub destination_port: Text,
     #[serde(default)]
     pub network: Network,
-    #[serde(default)]
-    pub process: Text,
+}
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ConnectionRates {
+    pub upload: u64,
+    pub download: u64,
 }
 #[derive(Debug, Clone, Default, Deserialize)]
 pub struct Connection {
@@ -384,10 +396,14 @@ pub struct Connection {
     pub upload: u64,
     #[serde(default)]
     pub download: u64,
+    #[serde(skip)]
+    pub rates: Option<ConnectionRates>,
     #[serde(default, deserialize_with = "compact_vec")]
     pub chains: Vec<Text>,
     #[serde(default)]
     pub rule: Text,
+    #[serde(rename = "rulePayload", default)]
+    pub rule_payload: Text,
     #[serde(default)]
     pub start: Box<str>,
 }
@@ -491,6 +507,13 @@ impl Api {
             .send()
             .await
             .context("无法连接 mihomo 控制接口")?;
+        decode_json(Self::checked(response).await?).await
+    }
+    pub(crate) async fn proxy_selection(&self, name: &str) -> Result<ProxySelection> {
+        let response = self
+            .request(Method::GET, self.url(&["proxies", name])?)
+            .send()
+            .await?;
         decode_json(Self::checked(response).await?).await
     }
     pub async fn patch(&self, body: Value) -> Result<()> {
@@ -614,10 +637,6 @@ mod tests {
         let [a, b] = connections.connections.as_slice() else {
             panic!("missing connections")
         };
-        assert!(std::sync::Arc::ptr_eq(
-            &a.metadata.process.0,
-            &b.metadata.process.0
-        ));
         assert!(std::sync::Arc::ptr_eq(&a.chains[0].0, &b.chains[0].0));
         assert_eq!(a.metadata.network, Network::Tcp);
         assert_eq!(b.metadata.network, Network::Udp);

@@ -127,10 +127,12 @@ pub enum Scope {
 pub struct Snapshot {
     pub version: String,
     pub mode: String,
+    pub active_node: Option<String>,
     pub tun: bool,
     pub system_proxy: bool,
     pub proxies: Proxies,
     pub connections: Connections,
+    pub connections_sampled_at: Option<Instant>,
     pub connection_count: usize,
     pub rules: Rules,
     pub upload_rate: u64,
@@ -150,6 +152,7 @@ impl Snapshot {
         }
         if scope != Scope::Connections {
             self.connections.connections = Vec::new();
+            self.connections_sampled_at = None;
         }
         if scope != Scope::Logs {
             self.logs = Vec::new();
@@ -170,6 +173,7 @@ pub struct Engine {
     log_pump: Option<JoinHandle<()>>,
     last_totals: Option<(Instant, u64, u64)>,
     version: String,
+    node_root: Mutex<Option<String>>,
     // Held for the entire application lifetime; prevents two clients racing on recovery.
     _instance_lock: File,
 }
@@ -236,6 +240,7 @@ impl Engine {
             log_pump: None,
             last_totals: None,
             version: String::new(),
+            node_root: Mutex::new(None),
             _instance_lock: instance,
         })
     }
@@ -323,6 +328,7 @@ impl Engine {
         self.validate(&payload).await?;
         let path = self.store.runtime().join("config.yaml");
         atomic_write(&path, payload.as_bytes())?;
+        self.node_root.lock().expect("header route lock").take();
         drop(payload);
         let mut child = self
             .command()?
@@ -412,20 +418,53 @@ impl Engine {
     }
 
     fn profile_payload(&self, raw: &str, settings: &Settings, id: &str) -> Result<String> {
-        if self
+        let builtin = self.profiles.iter().any(|p| p.id == id && p.is_default());
+        crate::config::runtime_config_with_rules(
+            raw,
+            settings,
+            settings.rule_profiles.get(id).map(AsRef::as_ref),
+            builtin,
+        )
+    }
+
+    pub fn rule_document(&self, id: &str) -> Result<crate::rule_manager::Document> {
+        let profile = self
             .profiles
             .iter()
-            .any(|profile| profile.id == id && profile.is_default())
-        {
-            return runtime_config(
-                raw,
-                &Settings {
-                    rule_overrides: RuleOverrides::default(),
-                    ..settings.clone()
-                },
-            );
-        }
-        runtime_config(raw, settings)
+            .find(|p| p.id == id)
+            .context("订阅不存在")?;
+        let raw = read_profile(&self.store.profile_path(id)?)?;
+        crate::rule_manager::Document::from_raw(id, profile.is_default(), &raw)
+    }
+
+    pub async fn save_profile_rules(
+        &mut self,
+        id: &str,
+        rules: crate::rule_manager::ProfileRules,
+    ) -> Result<()> {
+        self.profiles
+            .iter()
+            .find(|p| p.id == id)
+            .context("订阅不存在")?;
+        rules.validate()?;
+        let mut settings = self.settings.clone();
+        settings
+            .rule_profiles
+            .insert(id.to_owned(), Arc::new(rules));
+        settings.validate()?;
+        let raw = read_profile(&self.store.profile_path(id)?)?;
+        let payload = self.profile_payload(&raw, &settings, id)?;
+        drop(raw);
+        let mut transaction = crate::profile_transaction::Transaction::new(&self.store.root)?;
+        transaction.stage(
+            &self.store.root.join("settings.json"),
+            &serde_json::to_vec_pretty(&settings)?,
+        )?;
+        let active = self.settings.active_profile.as_deref() == Some(id);
+        self.commit_profile(transaction, &payload, active).await?;
+        self.settings = settings;
+        append(&self.logs, "[客户端] 规则已校验并保存；原始订阅文件保留");
+        Ok(())
     }
 
     pub async fn save_rule_overrides(&mut self, rule_overrides: RuleOverrides) -> Result<()> {
@@ -641,6 +680,9 @@ impl Engine {
                 ),
             }
         }
+        if active {
+            self.node_root.lock().expect("header route lock").take();
+        }
         Ok(())
     }
 
@@ -785,6 +827,7 @@ impl Engine {
             .cloned()
             .collect();
         let mut settings = self.settings.clone();
+        settings.rule_profiles.remove(id);
         let payload = if active {
             let default = self
                 .profiles
@@ -803,11 +846,11 @@ impl Engine {
             &self.store.root.join("profiles.json"),
             &serde_json::to_vec_pretty(&profiles)?,
         )?;
+        transaction.stage(
+            &self.store.root.join("settings.json"),
+            &serde_json::to_vec_pretty(&settings)?,
+        )?;
         if let Some(payload) = payload {
-            transaction.stage(
-                &self.store.root.join("settings.json"),
-                &serde_json::to_vec_pretty(&settings)?,
-            )?;
             self.commit_profile(transaction, &payload, true).await?;
         } else {
             transaction.prepare()?;
@@ -1164,7 +1207,46 @@ impl Engine {
         Ok(path)
     }
 
+    async fn current_node(&self, mode: &str, proxies: &Proxies) -> Result<Option<String>> {
+        let default = if mode == "rule" {
+            let cached = self.node_root.lock().expect("header route lock").clone();
+            if let Some(root) = cached {
+                root
+            } else {
+                let raw = read_runtime_config(&self.store.runtime().join("config.yaml"))?;
+                let root = crate::active_route::root(&raw)?;
+                *self.node_root.lock().expect("header route lock") = Some(root.clone());
+                root
+            }
+        } else {
+            String::new()
+        };
+        let mut name = crate::active_route::start(mode, &default).to_owned();
+        if !proxies.proxies.is_empty() {
+            return Ok(crate::active_route::from_snapshot(&name, proxies));
+        }
+        let mut visited = std::collections::BTreeSet::new();
+        for _ in 0..crate::active_route::MAX_DEPTH {
+            if crate::active_route::terminal(&name) {
+                return Ok(Some(name));
+            }
+            if !visited.insert(name.clone()) {
+                return Ok(None);
+            }
+            let proxy = self.api.proxy_selection(&name).await?;
+            if proxy.now.is_empty() {
+                return Ok(Some(name));
+            }
+            name = proxy.now;
+        }
+        Ok(None)
+    }
+
     pub async fn poll(&mut self, scope: Scope) -> Result<Snapshot> {
+        self.poll_with_header(scope, false).await
+    }
+
+    pub async fn poll_with_header(&mut self, scope: Scope, header: bool) -> Result<Snapshot> {
         let mut snapshot = Snapshot::default();
         if let Some(child) = &mut self.child
             && let Some(status) = child.try_wait()?
@@ -1214,6 +1296,9 @@ impl Engine {
                 snapshot.connection_count = snapshot.connections.connections.len();
             }
             let now = Instant::now();
+            if scope == Scope::Connections {
+                snapshot.connections_sampled_at = Some(now);
+            }
             let up = snapshot.connections.upload_total;
             let down = snapshot.connections.download_total;
             if let Some((last, old_up, old_down)) = self.last_totals {
@@ -1228,6 +1313,18 @@ impl Engine {
         }
         if scope == Scope::Rules {
             snapshot.rules = self.api.get("rules").await?;
+        }
+        if header {
+            // Header failures do not erase useful page data or report a core
+            // failure. Hidden-window polling does not request any node details.
+            snapshot.active_node = tokio::time::timeout(
+                Duration::from_millis(900),
+                self.current_node(&snapshot.mode, &snapshot.proxies),
+            )
+            .await
+            .ok()
+            .and_then(Result::ok)
+            .flatten();
         }
         Ok(snapshot)
     }

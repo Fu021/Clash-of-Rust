@@ -5,6 +5,7 @@ fn fixture(scene: &str) -> App {
     let mut app = App::with_engine(Err(anyhow::anyhow!("isolated preview")), None).0;
     app.snapshot.running = true;
     app.snapshot.mode = "rule".into();
+    app.snapshot.active_node = Some("香港节点2".into());
     app.notice = "界面预览：固定演示数据，不代表真实网络检测结果。".into();
     app.error = false;
     app.core_failure = None;
@@ -68,6 +69,12 @@ fn fixture(scene: &str) -> App {
         app.snapshot.connection_count = 5;
         app.snapshot.connections.upload_total = 4 * 1024 * 1024;
         app.snapshot.connections.download_total = 120 * 1024 * 1024;
+        if scene == "home-downloading" {
+            app.updates.progress = Some(update::Progress {
+                received: 25 * 1024 * 1024,
+                total: 100 * 1024 * 1024,
+            });
+        }
         if scene == "home-failure" || scene == "home-retrying" {
             app.snapshot = Snapshot::default();
             app.core_failure = Some("混合端口 7897 被占用，请调整端口后重试。".into());
@@ -104,17 +111,45 @@ fn fixture(scene: &str) -> App {
             {"id":"2","metadata":{"host":"www.google.com","destinationPort":"443","network":"tcp","process":"chrome"},"rule":"MATCH","chains":["自动选择","香港02"],"upload":18432,"download":1258291,"start":"2026-10-10T14:31:08Z"},
             {"id":"3","metadata":{"host":"example.org","destinationPort":"443","network":"tcp","process":"curl"},"rule":"DOMAIN","chains":["DIRECT"],"upload":2048,"download":34816,"start":"2026-10-10T14:31:40Z"}
         ]})).unwrap();
-    } else if scene == "rules" {
+        let previous = app.snapshot.connections.connections.clone();
+        for (connection, upload, download) in [
+            (0, 24 * 1024, 256 * 1024),
+            (1, 8 * 1024, 2 * 1024 * 1024),
+            (2, 0, 0),
+        ] {
+            app.snapshot.connections.connections[connection].upload += upload;
+            app.snapshot.connections.connections[connection].download += download;
+        }
+        connection::sample_rates(
+            &mut app.snapshot.connections.connections,
+            &previous,
+            Duration::from_secs(1),
+        );
+    } else if scene.starts_with("rules") {
         app.page = Page::Rules;
-        app.snapshot.rules = serde_json::from_value(serde_json::json!({"rules":[
-            {"type":"DOMAIN-SUFFIX","payload":"github.com","proxy":"代理选择"},
-            {"type":"DOMAIN-SUFFIX","payload":"google.com","proxy":"代理选择"},
-            {"type":"DOMAIN","payload":"localhost","proxy":"DIRECT"},
-            {"type":"IP-CIDR","payload":"192.168.0.0/16","proxy":"DIRECT"},
-            {"type":"GEOIP","payload":"CN","proxy":"DIRECT"},
-            {"type":"MATCH","payload":"","proxy":"自动选择"}
-        ]}))
-        .unwrap();
+        let raw = "proxies: []\nproxy-groups: [{name: 代理选择, type: select, proxies: [DIRECT]}]\nrules:\n  - DOMAIN-SUFFIX,github.com,代理选择\n  - DOMAIN-SUFFIX,google.com,代理选择\n  - DOMAIN,localhost,DIRECT\n  - IP-CIDR,192.168.0.0/16,DIRECT\n  - GEOIP,CN,DIRECT\n  - MATCH,代理选择\n";
+        let doc = rule_manager::Document::from_raw("preview", false, raw).unwrap();
+        app.rule_state
+            .load(Arc::new(doc), Arc::new(ProfileRules::default()));
+        if scene != "rules" {
+            for event in [
+                rules_view::Event::Toggle(0, true),
+                rules_view::Event::Toggle(4, true),
+                rules_view::Event::Add,
+                rules_view::Event::Kind("DOMAIN-SUFFIX".into()),
+                rules_view::Event::Payload("example.com".into()),
+                rules_view::Event::Policy("代理选择".into()),
+                rules_view::Event::SaveEditor,
+            ] {
+                let _ = app.update(Message::Rules(event));
+            }
+            if scene == "rules-editor" {
+                let _ = app.update(Message::Rules(rules_view::Event::Edit));
+            }
+            if scene != "rules-collapsed" {
+                let _ = app.update(Message::Rules(rules_view::Event::Collapse));
+            }
+        }
     } else if scene == "logs" {
         app.page = Page::Logs;
         app.snapshot.logs = [
@@ -139,11 +174,9 @@ fn fixture(scene: &str) -> App {
         app.page = Page::Settings;
         app.geo_status = "2026-10-10".into();
         app.updates.status = "已是最新版本".into();
-        if scene == "settings-rules-enabled" {
-            app.rule_draft.enabled = [true; 5];
-        }
     } else {
         app.page = Page::Websites;
+        app.site_has_run = true;
         for (index, service) in ip_check::services().iter().enumerate() {
             let mut state = if index == 0 {
                 ip_check::State::Identified
@@ -212,15 +245,39 @@ fn fixture(scene: &str) -> App {
             app.site_results.push(Some(result));
         }
         match scene {
-            "ip-ai" => app.site_category = CategoryFilter::Group("AI"),
-            "ip-restricted" => app.site_status = StatusFilter::Status(Status::Restricted),
+            "ip-ai" => {
+                app.site_category = CategoryFilter::Group("AI");
+                app.site_show_results = true;
+            }
+            "ip-restricted" => {
+                app.site_status = StatusFilter::Status(Status::Restricted);
+                app.site_show_results = true;
+            }
             "ip-details" => {
                 app.site_category = CategoryFilter::Group("AI");
                 app.site_detail = Some(5);
+                app.site_show_results = true;
             }
-            "ip-partial" => {
+            "ip-empty" => {
+                app.site_results.clear();
+                app.site_has_run = false;
+            }
+            "ip-running" | "ip-partial" | "ip-category-partial" => {
                 for result in app.site_results.iter_mut().skip(42) {
                     *result = None;
+                }
+                if scene != "ip-partial" {
+                    app.site_busy.insert(ip_check::services()[42].id.clone());
+                    app.site_queue.extend(
+                        ip_check::services()
+                            .iter()
+                            .skip(43)
+                            .map(|service| service.id.clone()),
+                    );
+                }
+                if scene == "ip-category-partial" {
+                    app.site_category = CategoryFilter::Group("日本");
+                    app.site_show_results = true;
                 }
             }
             _ => {}
@@ -232,13 +289,18 @@ fn fixture(scene: &str) -> App {
 fn update(app: &mut App, message: Message) -> Task<Message> {
     if matches!(
         message,
-        Message::SiteSummaryFilter(..) | Message::SiteResetFilters | Message::NodeSort(_)
+        Message::SiteSummaryFilter(..)
+            | Message::SiteResetFilters
+            | Message::SiteReport
+            | Message::SiteDetail(_)
+            | Message::NodeSort(_)
+            | Message::ConnectionSort(_)
     ) {
         eprintln!("preview interaction: {message:?}");
     }
     match message {
         Message::Query(_)
-        | Message::RuleToggle(..)
+        | Message::Rules(_)
         | Message::NodeSort(_)
         | Message::ToggleGroup(_)
         | Message::GroupPage(..)
@@ -249,7 +311,15 @@ fn update(app: &mut App, message: Message) -> Task<Message> {
         | Message::SiteDetail(_)
         | Message::SiteSummaryFilter(..)
         | Message::SiteResetFilters
-        | Message::SiteReportCategories => app.update(message),
+        | Message::SiteReport => app.update(message),
+        Message::ConnectionSort(field) => {
+            let task = app.update(Message::ConnectionSort(field));
+            eprintln!(
+                "preview connection sort: {:?}, descending={}",
+                app.connection_sort.field, app.connection_sort.descending
+            );
+            task
+        }
         _ => Task::none(),
     }
 }

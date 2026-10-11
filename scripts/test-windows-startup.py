@@ -370,7 +370,7 @@ class Windows:
         self.kernel.CloseHandle(process.process)
 
 
-def check_startup(api, executable, token, directory, background=False):
+def check_startup(api, executable, token, directory, background=False, geometry=None):
     if not (directory/'settings.json').exists():
         # CI and local proxies may already occupy the application's defaults.
         # Use two distinct OS-selected ports while retaining all other defaults.
@@ -413,11 +413,118 @@ def check_startup(api, executable, token, directory, background=False):
         profiles = json.loads((directory/'profiles.json').read_text(encoding='utf-8'))
         assert profiles and settings['active_profile'], 'First-run default profile was not saved'
         assert not config.get('tun', {}).get('enable', False), 'Startup test must not enable TUN'
+        if geometry is not None:
+            check_window_geometry(api, directory, geometry)
         api.stop(process, token)
         print('PASS: real GUI, default profile, offline Geo, configuration saves and core startup;',
               'background=' + str(background), flush=True)
     finally:
         api.cleanup(process)
+
+
+def check_window_geometry(api, directory, scenario):
+    """Resize the real ordinary-user HWND, then verify saved logical dimensions."""
+    callback_type = c.WINFUNCTYPE(w.BOOL, w.HWND, w.LPARAM)
+    for name, arguments, result in [
+        ('EnumDesktopWindows', [w.HANDLE, callback_type, w.LPARAM], w.BOOL),
+        ('GetWindowTextW', [w.HWND, w.LPWSTR, c.c_int], c.c_int),
+        ('GetClientRect', [w.HWND, c.POINTER(w.RECT)], w.BOOL),
+        ('GetWindowRect', [w.HWND, c.POINTER(w.RECT)], w.BOOL),
+        ('GetDpiForWindow', [w.HWND], w.UINT),
+        ('SetWindowPos', [w.HWND, w.HWND, c.c_int, c.c_int, c.c_int, c.c_int, w.UINT], w.BOOL),
+        ('ShowWindow', [w.HWND, c.c_int], w.BOOL),
+        ('IsZoomed', [w.HWND], w.BOOL),
+        ('IsIconic', [w.HWND], w.BOOL),
+        ('GetThreadDesktop', [w.DWORD], w.HANDLE),
+        ('SetThreadDesktop', [w.HANDLE], w.BOOL),
+        ('SetThreadDpiAwarenessContext', [w.HANDLE], w.HANDLE),
+    ]:
+        function = getattr(api.user, name)
+        function.argtypes, function.restype = arguments, result
+    api.kernel.GetCurrentThreadId.restype = w.DWORD
+    station = api.user.GetProcessWindowStation()
+    desktop = api.user.GetThreadDesktop(api.kernel.GetCurrentThreadId())
+    checked(api.user.SetProcessWindowStation(api.station))
+    dpi_context = None
+    try:
+        checked(api.user.SetThreadDesktop(api.desktop_handle))
+        try:
+            dpi_context = checked(api.user.SetThreadDpiAwarenessContext(c.c_void_p(-4)))
+            def wait_for(predicate):
+                deadline = time.monotonic() + 15
+                while time.monotonic() < deadline:
+                    value = predicate()
+                    if value:
+                        return value
+                    time.sleep(.05)
+                raise AssertionError('Timed out waiting for real window geometry: ' + scenario)
+
+            def find_window():
+                matches = []
+                @callback_type
+                def visit(window, _):
+                    title = c.create_unicode_buffer(256)
+                    api.user.GetWindowTextW(window, title, len(title))
+                    if title.value == 'Clash of Rust · 原生代理客户端':
+                        matches.append(window)
+                    return True
+                checked(api.user.EnumDesktopWindows(api.desktop_handle, visit, 0))
+                return matches[0] if len(matches) == 1 else None
+
+            window = wait_for(find_window)
+            dpi = checked(api.user.GetDpiForWindow(window))
+            scale = dpi / 96
+            expected = {'width': 900, 'height': 500}
+            state_path = directory/'window-state.json'
+
+            def stored():
+                try:
+                    return json.loads(state_path.read_text('utf-8'))
+                except (OSError, ValueError):
+                    return None
+
+            def dimensions():
+                bounds = w.RECT()
+                checked(api.user.GetClientRect(window, c.byref(bounds)))
+                return (bounds.right - bounds.left) / scale, (bounds.bottom - bounds.top) / scale
+
+            def matches_expected():
+                width, height = dimensions()
+                return abs(width - expected['width']) <= 1 and abs(height - expected['height']) <= 1
+
+            if scenario == 'resize':
+                client, outer = w.RECT(), w.RECT()
+                checked(api.user.GetClientRect(window, c.byref(client)))
+                checked(api.user.GetWindowRect(window, c.byref(outer)))
+                frame_width = outer.right - outer.left - client.right + client.left
+                frame_height = outer.bottom - outer.top - client.bottom + client.top
+                checked(api.user.SetWindowPos(window, None, 0, 0,
+                    round(expected['width'] * scale) + frame_width,
+                    round(expected['height'] * scale) + frame_height, 0x16))
+                wait_for(matches_expected)
+                wait_for(lambda: stored() == expected)
+                api.user.ShowWindow(window, 3)  # SW_MAXIMIZE
+                wait_for(lambda: api.user.IsZoomed(window))
+                time.sleep(1.2)
+                assert stored() == expected, 'Maximization overwrote ordinary dimensions'
+                api.user.ShowWindow(window, 6)  # SW_MINIMIZE
+                wait_for(lambda: api.user.IsIconic(window))
+                time.sleep(1.2)
+                assert stored() == expected, 'Minimization overwrote ordinary dimensions'
+            else:
+                assert scenario == 'relaunch'
+                wait_for(matches_expected)
+                assert not api.user.IsZoomed(window) and not api.user.IsIconic(window)
+                assert stored() == expected
+            print(f'PASS: real Windows {scenario}; ordinary client=900x500 logical pixels; DPI={dpi}', flush=True)
+        finally:
+            if dpi_context is not None:
+                checked(api.user.SetThreadDpiAwarenessContext(dpi_context))
+    finally:
+        try:
+            checked(api.user.SetProcessWindowStation(station))
+        finally:
+            checked(api.user.SetThreadDesktop(desktop))
 
 
 def check_launcher(api, token, sid):
@@ -507,6 +614,8 @@ def main():
             fresh.mkdir()
             check_startup(api, executable, limited, fresh)
             check_startup(api, executable, limited, fresh, background=True)
+            check_startup(api, executable, limited, fresh, geometry='resize')
+            check_startup(api, executable, limited, fresh, geometry='relaunch')
             # Simulate a 0.4.12 data directory: new preferences must default
             # correctly without requiring users to discard their settings.
             old_settings = json.loads((fresh/'settings.json').read_text(encoding='utf-8'))

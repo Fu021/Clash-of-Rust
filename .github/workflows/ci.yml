@@ -46,6 +46,8 @@ jobs:
     steps:
       - uses: actions/checkout@v6
         with:
+          # Preserve one immutable source identity for PR builds and packaging.
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
           persist-credentials: false
       - uses: dtolnay/rust-toolchain@stable
         with:

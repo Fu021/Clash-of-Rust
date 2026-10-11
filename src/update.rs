@@ -218,7 +218,7 @@ fn newest(releases: Vec<Release>, current: &str) -> Result<Option<Available>> {
     let current = Version::parse(current).context("当前客户端版本号无效")?;
     let selected = releases
         .into_iter()
-        .filter(|release| !release.draft)
+        .filter(|release| !release.draft && !release.prerelease)
         .filter_map(|release| {
             let version = Version::parse(
                 release
@@ -227,6 +227,9 @@ fn newest(releases: Vec<Release>, current: &str) -> Result<Option<Available>> {
                     .unwrap_or(&release.tag_name),
             )
             .ok()?;
+            if !version.pre.is_empty() {
+                return None;
+            }
             version
                 .cmp_precedence(&current)
                 .is_gt()
@@ -932,16 +935,25 @@ mod tests {
     }
 
     #[test]
-    fn compares_numeric_versions_and_includes_github_previews() {
+    fn compares_numeric_versions_and_ignores_github_and_semantic_previews() {
         let releases = vec![
             release("v0.4.9", false),
             release("v0.4.10", true),
+            release("v0.5.0-dev.1", false),
             release("v0.4.2", false),
         ];
         let update = newest(releases, "0.4.1").unwrap().unwrap();
-        assert_eq!(update.version, "0.4.10");
-        assert!(update.preview);
-        assert_eq!(update.url, format!("{RELEASES_URL}/tag/v0.4.10"));
+        assert_eq!(update.version, "0.4.9");
+        assert!(!update.preview);
+        assert_eq!(update.url, format!("{RELEASES_URL}/tag/v0.4.9"));
+        assert!(
+            newest(
+                vec![release("v9.0.0", true), release("v10.0.0-rc.1", false)],
+                "0.4.1"
+            )
+            .unwrap()
+            .is_none()
+        );
     }
 
     #[test]
@@ -1014,16 +1026,15 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn reads_preview_release_metadata_without_retaining_notes() {
+    async fn ignores_preview_release_metadata() {
         let body = br#"[{"tag_name":"v0.4.2","draft":false,"prerelease":true,"body":"notes","html_url":"https://example.com"}]"#;
         let wire =
             format!("HTTP/1.1 200 OK\r\nContent-Length: {}\r\n\r\n", body.len()).into_bytes();
         let (url, server) = mock([wire, body.to_vec()].concat(), Duration::ZERO).await;
         let update = fetch(&client(Duration::from_secs(2)), &url, "0.4.1")
             .await
-            .unwrap()
             .unwrap();
-        assert_eq!(update.url, format!("{RELEASES_URL}/tag/v0.4.2"));
+        assert!(update.is_none());
         server.await.unwrap();
     }
 
@@ -1096,11 +1107,12 @@ mod tests {
                     .is_gt()
             );
         }
-        // An older client must detect the project's published preview releases.
+        // An older client must detect the project's published stable releases.
         let update = fetch(&client(Duration::from_secs(15)), API_URL, "0.0.0")
             .await
             .unwrap()
             .unwrap();
         assert!(update.url.starts_with(&format!("{RELEASES_URL}/tag/")));
+        assert!(!update.preview);
     }
 }

@@ -3,7 +3,7 @@ on:
   workflow_dispatch:
     inputs:
       ci_run_id:
-        description: '成功的 main CI 运行编号；留空使用当前提交的 CI'
+        description: '成功的 CI 编号；开发分支须启用 check_only 并指定同分支的 PR CI'
         required: false
         type: string
       check_only:
@@ -20,7 +20,7 @@ concurrency:
 jobs:
   resolve:
     name: Resolve verified CI
-    if: github.ref == 'refs/heads/main'
+    if: github.ref == 'refs/heads/main' || inputs.check_only
     runs-on: ubuntu-latest
     timeout-minutes: 10
     outputs:
@@ -41,10 +41,13 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
           CI_RUN_ID: ${{ inputs.ci_run_id }}
+          CHECK_ONLY: ${{ inputs.check_only }}
           PYTHONDONTWRITEBYTECODE: '1'
         run: |
           import os, subprocess, sys
           command = [sys.executable, 'scripts/publish-release.py', '--resolve']
+          if os.environ['CHECK_ONLY'] == 'true':
+              command.append('--check')
           if os.environ.get('CI_RUN_ID'):
               command += ['--run-id', str(int(os.environ['CI_RUN_ID']))]
           subprocess.run(command, check=True)
