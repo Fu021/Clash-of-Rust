@@ -58,7 +58,7 @@ def test_binaries(messages):
     return result
 
 
-def export_build(system, arch, tests, output):
+def export_build(system, arch, tests, output, binaries=None):
     output.mkdir(parents=True, exist_ok=True)
     archive = output/ARCHIVE_NAME
     if archive.exists():
@@ -69,7 +69,7 @@ def export_build(system, arch, tests, output):
         stage_resources(bundle_directory(system, arch)/'resources', payload, system)
         extension = '.exe' if system == 'windows' else ''
         for name in ('clash-of-rust', 'clash-tun-launcher'):
-            source = ROOT/'target/release'/(name+extension)
+            source = (binaries or ROOT/'target/release')/(name+extension)
             validate_binary_arch(source, system, arch)
             shutil.copy2(source, payload/source.name)
         paths = {}

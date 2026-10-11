@@ -7,7 +7,9 @@ use std::{
     process::Command,
     ptr,
 };
+mod authorization;
 mod cf;
+pub use authorization::{administrator, shell_quote};
 use cf::{Owned, Ref};
 pub mod tun;
 
@@ -246,25 +248,6 @@ pub fn show_requested() -> bool {
         .is_some_and(|store| std::fs::remove_file(store.root.join("show-window")).is_ok())
 }
 
-/// Quote separately for the shell and the AppleScript string literal.
-pub fn shell_quote(value: &str) -> String {
-    format!("'{}'", value.replace('\'', "'\\''"))
-}
-pub fn administrator(script: &str) -> Result<()> {
-    let literal = serde_json::to_string(script)?;
-    let output = Command::new("/usr/bin/osascript")
-        .args([
-            "-e",
-            &format!("do shell script {literal} with administrator privileges"),
-        ])
-        .output()?;
-    ensure!(
-        output.status.success(),
-        "管理员授权失败或已取消：{}",
-        String::from_utf8_lossy(&output.stderr).trim()
-    );
-    Ok(())
-}
 #[cfg(test)]
 mod tests {
     use super::*;

@@ -73,6 +73,12 @@ def logged(name, command, env=None, timeout=300):
 
 
 def native_tests(tests, bundle):
+    def launcher_dependencies():
+        output = subprocess.check_output(['/usr/bin/otool', '-L', bundle/'clash-tun-launcher'], text=True)
+        (REPORT/'launcher-libraries.log').write_text(output)
+        if any(name in output for name in ('AppKit.framework', 'Cocoa.framework', 'QuartzCore.framework')):
+            raise RuntimeError('TUN helper unexpectedly links GUI frameworks')
+    suite('TUN helper excludes GUI frameworks', launcher_dependencies)
     suite('Real mihomo integration', lambda: logged('core-integration', [tests['core_integration'], '--ignored', '--test-threads=1'], timeout=300))
     suite('Native network service discovery', lambda: logged('native-network', [tests['library'], 'native_network_services_can_be_read', '--ignored', '--test-threads=1']))
     suite('Per-user autostart round trip', lambda: logged('native-autostart', [tests['library'], 'native_autostart_round_trip', '--ignored', '--test-threads=1']))
@@ -246,7 +252,7 @@ def main():
     # All compilation, including failures, has a durable full-output transcript.
     REPORT.mkdir(parents=True, exist_ok=True)
     planned = ['Compile, Clippy, unit tests and native integration', 'Real mihomo integration',
-               'Native network service discovery', 'Per-user autostart round trip',
+               'TUN helper excludes GUI frameworks', 'Native network service discovery', 'Per-user autostart round trip',
                'Proxy restore and later-owner protection', 'Authorized core lease lifecycle', 'All pages in both themes']
     write_json(REPORT/'report.json', {'schema': 1, 'arch': args.arch, 'status': 'running',
                'suites': [{'name': name, 'status': 'not_run'} for name in planned]})

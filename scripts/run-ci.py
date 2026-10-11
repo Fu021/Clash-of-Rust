@@ -55,7 +55,9 @@ def main():
         from windows_ci import windows_tests
         windows_tests(tests, bundle)
     write_json(ROOT/'target/ci-tests.json', tests)
-    export_build(args.system, args.arch, tests, ROOT/'dist/build')
+    # Optional UI fixture compilation may rebuild Cargo's bin targets with its
+    # feature. Export the default-feature binaries frozen before native tests.
+    export_build(args.system, args.arch, tests, ROOT/'dist/build', binaries=bundle)
 
 
 if __name__ == '__main__':

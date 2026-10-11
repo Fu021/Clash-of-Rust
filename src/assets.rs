@@ -5,7 +5,7 @@ use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use std::{
     fs::File,
-    io::{Read, Write},
+    io::Write,
     path::{Path, PathBuf},
     time::{Duration, SystemTime, UNIX_EPOCH},
 };
@@ -86,21 +86,7 @@ pub fn core_path(resources: &Path) -> Result<PathBuf> {
     Ok(path)
 }
 
-pub fn hash_file(path: &Path) -> Result<(String, u64)> {
-    let mut file = File::open(path)?;
-    let mut hash = Sha256::new();
-    let mut buffer = [0; 64 * 1024];
-    let mut size = 0;
-    loop {
-        let n = file.read(&mut buffer)?;
-        if n == 0 {
-            break;
-        }
-        hash.update(&buffer[..n]);
-        size += n as u64;
-    }
-    Ok((format!("{:x}", hash.finalize()), size))
-}
+pub use crate::file_hash::hash_file;
 
 pub fn verify_geo(directory: &Path) -> Result<GeoManifest> {
     let manifest: GeoManifest = serde_json::from_slice(

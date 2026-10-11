@@ -4,6 +4,7 @@ pub mod assets;
 pub mod config;
 pub mod connection;
 pub mod engine;
+mod file_hash;
 pub mod flags;
 pub mod icons;
 pub mod ip_check;

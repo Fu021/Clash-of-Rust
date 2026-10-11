@@ -369,13 +369,45 @@ struct Capture {
 enum CaptureMessage {
     App(Message),
     Take,
+    TrayChecked,
     Captured(iced::window::Screenshot),
 }
 #[cfg(target_os = "macos")]
 fn capture_update(state: &mut Capture, message: CaptureMessage) -> Task<CaptureMessage> {
     match message {
         CaptureMessage::App(message) => update(&mut state.app, message).map(CaptureMessage::App),
-        CaptureMessage::Take => iced::window::latest()
+        CaptureMessage::Take => {
+            if std::env::var("CLASH_UI_PREVIEW_SCENE").as_deref() == Ok("home") {
+                return iced::window::latest().and_then(|id| {
+                    iced::window::run(id, |_| {
+                        // Exercise AppKit creation, all menu/icon states and final
+                        // destruction on the real GUI event loop's main thread.
+                        let guard = tray::start().expect("create main-thread tray");
+                        for (mode, system_proxy, tun) in [
+                            ("rule", false, false),
+                            ("global", true, false),
+                            ("direct", false, true),
+                        ] {
+                            guard.update(&Snapshot {
+                                running: true,
+                                mode: mode.into(),
+                                system_proxy,
+                                tun,
+                                ..Default::default()
+                            });
+                            tray::pump();
+                            tray::verify_native_state();
+                        }
+                        drop(guard);
+                        tray::pump();
+                        CaptureMessage::TrayChecked
+                    })
+                });
+            }
+            iced::window::latest()
+                .and_then(|id| iced::window::screenshot(id).map(CaptureMessage::Captured))
+        }
+        CaptureMessage::TrayChecked => iced::window::latest()
             .and_then(|id| iced::window::screenshot(id).map(CaptureMessage::Captured)),
         CaptureMessage::Captured(screenshot) => {
             let output = std::path::PathBuf::from(

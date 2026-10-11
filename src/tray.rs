@@ -459,3 +459,21 @@ pub fn start() -> anyhow::Result<Guard> {
         })),
     })
 }
+
+#[cfg(all(target_os = "macos", feature = "ui-preview"))]
+pub fn verify_native_state() {
+    assert!(unsafe { libc::pthread_main_np() } != 0);
+    MAC_NATIVE.with_borrow(|native| {
+        let native = native.as_ref().expect("native tray must be present");
+        let state = native.updates.borrow();
+        for (item, mode) in &native.checks.modes {
+            assert_eq!(item.is_checked(), state.running && state.mode == *mode);
+        }
+        assert_eq!(native.checks.system_proxy.is_checked(), state.system_proxy);
+        assert_eq!(native.checks.tun.is_checked(), state.tun);
+        assert_eq!(
+            native.checks.off.is_checked(),
+            !state.system_proxy && !state.tun
+        );
+    });
+}

@@ -379,17 +379,48 @@ fn bridge(socket: &Path, token: &str, arguments: &[String]) -> Result<i32> {
         },
     )?;
     stream.write_all(b"\n")?;
-    for line in BufReader::new(stream).lines() {
-        let event: Event = serde_json::from_str(&line?)?;
-        if let Some(line) = event.line {
-            println!("{line}");
-        }
-        if let Some(code) = event.exit {
-            return Ok(code);
-        }
+    // A GUI crash does not automatically kill its launcher child on macOS.
+    // Close the privileged lease when the GUI parent dies or sends SIGTERM.
+    unsafe {
+        libc::signal(libc::SIGTERM, user_stop as *const () as usize);
     }
-    bail!("TUN 服务意外退出")
+    let parent = unsafe { libc::getppid() };
+    ensure!(parent > 1, "客户端已退出，已取消 TUN 启动");
+    let done = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+    let watch_done = done.clone();
+    let monitor = stream.try_clone()?;
+    std::thread::spawn(move || {
+        while !watch_done.load(std::sync::atomic::Ordering::Relaxed) {
+            if unsafe { libc::getppid() } != parent
+                || USER_STOP.load(std::sync::atomic::Ordering::Relaxed)
+            {
+                let _ = monitor.shutdown(std::net::Shutdown::Both);
+                break;
+            }
+            std::thread::sleep(Duration::from_millis(50));
+        }
+    });
+    let result = (|| {
+        for line in BufReader::new(stream).lines() {
+            let event: Event = serde_json::from_str(&line?)?;
+            if let Some(line) = event.line {
+                println!("{line}");
+            }
+            if let Some(code) = event.exit {
+                return Ok(code);
+            }
+        }
+        if USER_STOP.load(std::sync::atomic::Ordering::Relaxed)
+            || unsafe { libc::getppid() } != parent
+        {
+            return Ok(0);
+        }
+        bail!("TUN 服务意外退出")
+    })();
+    done.store(true, std::sync::atomic::Ordering::Relaxed);
+    result
 }
+
 static USER_STOP: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
 extern "C" fn user_stop(_: i32) {
     USER_STOP.store(true, std::sync::atomic::Ordering::Relaxed);
@@ -501,14 +532,16 @@ mod tests {
             assert!(Instant::now() < deadline);
             std::thread::sleep(Duration::from_millis(50));
         }
-        let mut bridge = Command::new(&launcher)
-            .arg("--macos-bridge")
-            .arg(&socket)
-            .arg(&token)
-            .arg("-d")
-            .arg(&directory_path)
-            .arg("-f")
-            .arg(&config)
+        let script = format!(
+            "{} --macos-bridge {} {} -d {} -f {} & wait",
+            super::super::shell_quote(&launcher.to_string_lossy()),
+            super::super::shell_quote(&socket.to_string_lossy()),
+            super::super::shell_quote(&token),
+            super::super::shell_quote(&directory_path.to_string_lossy()),
+            super::super::shell_quote(&config.to_string_lossy())
+        );
+        let mut bridge = Command::new("/bin/sh")
+            .args(["-c", &script])
             .spawn()
             .unwrap();
         let ready = (|| {
