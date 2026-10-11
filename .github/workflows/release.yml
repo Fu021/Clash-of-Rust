@@ -146,11 +146,8 @@ jobs:
         env:
           PYTHONDONTWRITEBYTECODE: '1'
         run: |
-          import subprocess, sys, os
-          from pathlib import Path
-          sys.path.insert(0, 'scripts')
-          from test_release_compat import run_compatibility
-          run_compatibility()
+          import subprocess, sys
+          subprocess.run([sys.executable, 'scripts/test-release-package.py', '--ubuntu-latest'], check=True)
   publish:
     name: Publish verified release
     needs: [resolve, package, ubuntu_latest]
