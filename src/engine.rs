@@ -272,10 +272,17 @@ impl Engine {
         let executable = &core;
         #[cfg(target_os = "macos")]
         let mut command = {
-            let launcher = std::env::current_exe()?
-                .parent()
-                .context("无法定位内核启动器")?
-                .join("clash-tun-launcher");
+            // Locate the driver alongside these resources, not alongside an
+            // integration test executable (which may have a same-named harness).
+            let parent = self.resources.parent().context("无法定位内核启动器")?;
+            let launcher = if parent.file_name() == Some(std::ffi::OsStr::new("Resources"))
+                && parent.parent().and_then(|path| path.file_name())
+                    == Some(std::ffi::OsStr::new("Contents"))
+            {
+                parent.parent().unwrap().join("MacOS/clash-tun-launcher")
+            } else {
+                parent.join("clash-tun-launcher")
+            };
             if launcher.is_file() {
                 let mut command = Command::new(launcher);
                 command.arg("--macos-user-core").arg(&core);

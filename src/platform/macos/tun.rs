@@ -193,24 +193,91 @@ fn terminate(child: &mut std::process::Child) {
     let _ = child.kill();
     let _ = child.wait();
 }
-fn restore_cache_owner(directory: &Path, uid: u32) {
-    // Only the known core cache, never arbitrary paths/symlinks/hardlinks.
-    use std::os::fd::AsRawFd;
-    for name in ["cache.db", "cache.db-shm", "cache.db-wal"] {
-        if let Ok(file) = std::fs::OpenOptions::new()
-            .read(true)
-            .custom_flags(libc::O_NOFOLLOW)
-            .open(directory.join(name))
-            && let Ok(metadata) = file.metadata()
-            && metadata.is_file()
-            && metadata.uid() == 0
-            && metadata.nlink() == 1
-        {
-            unsafe {
-                libc::fchown(file.as_raw_fd(), uid, u32::MAX);
+fn restore_runtime_owner(directory: &std::fs::File, uid: u32) -> Result<()> {
+    use std::os::fd::{AsRawFd, FromRawFd};
+    fn visit(
+        directory: &std::fs::File,
+        uid: u32,
+        depth: usize,
+        remaining: &mut usize,
+    ) -> Result<()> {
+        ensure!(depth <= 32, "TUN 缓存目录层级过深");
+        // Enumerate an already-open directory. Never traverse a path supplied
+        // by a cache entry, follow links, or change a multiply-linked file.
+        let fd = unsafe { libc::dup(directory.as_raw_fd()) };
+        ensure!(fd >= 0, "无法读取 TUN 缓存目录");
+        let entries = unsafe { libc::fdopendir(fd) };
+        if entries.is_null() {
+            unsafe { libc::close(fd) };
+            bail!("无法列出 TUN 缓存目录");
+        }
+        struct Entries(*mut libc::DIR);
+        impl Drop for Entries {
+            fn drop(&mut self) {
+                unsafe { libc::closedir(self.0) };
             }
         }
+        let entries = Entries(entries);
+        let device = directory.metadata()?.dev();
+        loop {
+            unsafe { *libc::__error() = 0 };
+            let entry = unsafe { libc::readdir(entries.0) };
+            if entry.is_null() {
+                ensure!(
+                    std::io::Error::last_os_error().raw_os_error() == Some(0),
+                    "读取 TUN 缓存目录失败：{}",
+                    std::io::Error::last_os_error()
+                );
+                break;
+            }
+            let name = unsafe { std::ffi::CStr::from_ptr((*entry).d_name.as_ptr()) };
+            if matches!(name.to_bytes(), b"." | b"..") {
+                continue;
+            }
+            ensure!(*remaining > 0, "TUN 缓存文件数量过多");
+            *remaining -= 1;
+            let flags = libc::O_NOFOLLOW | libc::O_CLOEXEC;
+            let mut fd = unsafe {
+                libc::openat(
+                    directory.as_raw_fd(),
+                    name.as_ptr(),
+                    flags | libc::O_DIRECTORY,
+                )
+            };
+            if fd < 0 {
+                // Metadata-only opening avoids device/FIFO I/O side effects.
+                fd = unsafe {
+                    libc::openat(
+                        directory.as_raw_fd(),
+                        name.as_ptr(),
+                        flags | libc::O_EVTONLY,
+                    )
+                };
+            }
+            if fd < 0 {
+                continue;
+            }
+            let file = unsafe { std::fs::File::from_raw_fd(fd) };
+            let metadata = file.metadata()?;
+            if metadata.dev() != device || (metadata.uid() != 0 && metadata.uid() != uid) {
+                continue;
+            }
+            if metadata.is_dir() {
+                visit(&file, uid, depth + 1, remaining)?;
+            } else if !metadata.is_file() || metadata.nlink() != 1 {
+                continue;
+            }
+            if metadata.uid() == 0 {
+                ensure!(
+                    unsafe { libc::fchown(file.as_raw_fd(), uid, u32::MAX) } == 0,
+                    "无法恢复 TUN 缓存所有者：{}",
+                    std::io::Error::last_os_error()
+                );
+            }
+        }
+        Ok(())
     }
+    visit(directory, uid, 0, &mut 10_000)
 }
 fn run_core(mut stream: UnixStream, request: Request, uid: u32, core: &Path) -> Result<()> {
     let directory = request.directory.context("缺少 TUN 配置目录")?;
@@ -223,6 +290,16 @@ fn run_core(mut stream: UnixStream, request: Request, uid: u32, core: &Path) -> 
     );
     check_user_file(&directory, uid, true)?;
     check_user_file(&config, uid, false)?;
+    let runtime = std::fs::OpenOptions::new()
+        .read(true)
+        .custom_flags(libc::O_DIRECTORY | libc::O_NOFOLLOW | libc::O_CLOEXEC)
+        .open(&directory)?;
+    ensure!(
+        runtime.metadata()?.uid() == uid,
+        "TUN 配置目录所有者发生变化"
+    );
+    let monitor = stream.try_clone()?;
+    monitor.set_read_timeout(None)?;
     // Use only the installed core and a fixed argument set; no executable/shell
     // supplied by the socket caller. The lease dies when its bridge disconnects.
     let mut child = Command::new(core)
@@ -250,8 +327,6 @@ fn run_core(mut stream: UnixStream, request: Request, uid: u32, core: &Path) -> 
             }
         });
     }
-    let monitor = stream.try_clone()?;
-    monitor.set_read_timeout(None)?;
     std::thread::spawn(move || {
         use std::io::Read;
         let mut monitor = monitor;
@@ -291,7 +366,7 @@ fn run_core(mut stream: UnixStream, request: Request, uid: u32, core: &Path) -> 
     })();
     terminate(&mut child);
     let _ = stream.shutdown(std::net::Shutdown::Both);
-    restore_cache_owner(&directory, uid);
+    restore_runtime_owner(&runtime, uid)?;
     result
 }
 fn serve(socket: &Path, uid: u32, token: &str) -> Result<()> {
@@ -515,6 +590,53 @@ mod tests {
         let launcher = resources.parent().unwrap().join("clash-tun-launcher");
         let directory = tempfile::tempdir().unwrap();
         let directory_path = std::fs::canonicalize(directory.path()).unwrap();
+        let outside = tempfile::tempdir().unwrap();
+        let external_link = outside.path().join("symlink-target");
+        let external_hardlink = outside.path().join("hardlink-target");
+        for path in [&external_link, &external_hardlink] {
+            std::fs::write(path, b"external fixture").unwrap();
+        }
+        assert!(
+            Command::new("/usr/bin/sudo")
+                .args(["-n", "chown", "0"])
+                .arg(&external_link)
+                .arg(&external_hardlink)
+                .status()
+                .unwrap()
+                .success()
+        );
+        std::os::unix::fs::symlink(outside.path(), directory_path.join("linked-directory"))
+            .unwrap();
+        std::fs::hard_link(&external_hardlink, directory_path.join("linked-file")).unwrap();
+        // A real HTTP provider makes mihomo create nested root-owned cache
+        // files. The ordinary user must be able to update them after TUN stops.
+        let provider = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let provider_port = provider.local_addr().unwrap().port();
+        provider.set_nonblocking(true).unwrap();
+        let provider_server = std::thread::spawn(move || {
+            use std::io::Read;
+            let deadline = Instant::now() + Duration::from_secs(20);
+            while Instant::now() < deadline {
+                if let Ok((mut stream, _)) = provider.accept() {
+                    stream
+                        .set_read_timeout(Some(Duration::from_secs(2)))
+                        .unwrap();
+                    let mut request = [0; 4096];
+                    let _ = stream.read(&mut request);
+                    let body =
+                        "proxies:\n  - {name: fixture, type: http, server: 127.0.0.1, port: 1}\n";
+                    return write!(
+                        stream,
+                        "HTTP/1.1 200 OK\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+                        body.len()
+                    )
+                    .is_ok();
+                }
+                std::thread::sleep(Duration::from_millis(25));
+            }
+            false
+        });
+        let provider_cache = directory_path.join("providers/native.yaml");
         let socket = directory_path.join("core.sock");
         let token = uuid::Uuid::new_v4().to_string();
         let port = std::net::TcpListener::bind("127.0.0.1:0")
@@ -523,7 +645,7 @@ mod tests {
             .unwrap()
             .port();
         let config = directory_path.join("config.yaml");
-        crate::config::atomic_write(&config, format!("mixed-port: {port}\nmode: direct\nlog-level: debug\ntun:\n  enable: true\n  stack: system\n  device: utun233\n  auto-route: false\n  auto-detect-interface: true\nrules: ['MATCH,DIRECT']\n").as_bytes()).unwrap();
+        crate::config::atomic_write(&config, format!("mixed-port: {port}\nmode: direct\nlog-level: debug\nproxy-providers:\n  native:\n    type: http\n    url: http://127.0.0.1:{provider_port}/nodes.yaml\n    path: ./providers/native.yaml\n    interval: 3600\nproxy-groups:\n  - {{name: fixture, type: select, use: [native]}}\ntun:\n  enable: true\n  stack: system\n  device: utun233\n  auto-route: false\n  auto-detect-interface: true\nrules: ['MATCH,DIRECT']\n").as_bytes()).unwrap();
         let mut server = Command::new("/usr/bin/sudo")
             .args(["-n"])
             .arg(&launcher)
@@ -554,6 +676,9 @@ mod tests {
             let deadline = Instant::now() + Duration::from_secs(20);
             while Instant::now() < deadline {
                 if std::net::TcpStream::connect(("127.0.0.1", port)).is_ok()
+                    && provider_cache
+                        .metadata()
+                        .is_ok_and(|metadata| metadata.uid() == 0)
                     && Command::new("/sbin/ifconfig")
                         .arg("utun233")
                         .output()
@@ -572,6 +697,24 @@ mod tests {
         let _ = bridge.wait();
         let session = Session { directory, token };
         session.wait_idle().unwrap();
+        assert!(
+            provider_server.join().unwrap(),
+            "provider was not downloaded"
+        );
+        assert_eq!(provider_cache.metadata().unwrap().uid(), unsafe {
+            libc::getuid()
+        });
+        std::fs::write(&provider_cache, b"ordinary user cache update").unwrap();
+        assert_eq!(
+            external_link.metadata().unwrap().uid(),
+            0,
+            "followed an external symlink"
+        );
+        assert_eq!(
+            external_hardlink.metadata().unwrap().uid(),
+            0,
+            "changed an external hardlink"
+        );
         assert!(
             std::net::TcpStream::connect(("127.0.0.1", port)).is_err(),
             "root core survived bridge death"

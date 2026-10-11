@@ -100,17 +100,25 @@ fn main() -> iced::Result {
     };
     #[cfg(not(windows))]
     let _installation_guard = {
-        let Ok(store) = startup_store() else {
-            return Ok(());
+        let store = match startup_store() {
+            Ok(store) => store,
+            Err(error) => {
+                eprintln!("桌面数据目录初始化失败：{error:#}");
+                return Ok(());
+            }
         };
-        let Ok(file) = std::fs::OpenOptions::new()
+        let file = match std::fs::OpenOptions::new()
             .read(true)
             .write(true)
             .create(true)
             .truncate(false)
             .open(store.root.join("desktop.lock"))
-        else {
-            return Ok(());
+        {
+            Ok(file) => file,
+            Err(error) => {
+                eprintln!("无法打开桌面实例锁：{error}");
+                return Ok(());
+            }
         };
         let deadline = std::time::Instant::now() + Duration::from_secs(30);
         while file.try_lock().is_err() {

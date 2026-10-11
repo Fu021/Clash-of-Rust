@@ -155,7 +155,15 @@ def gui_smoke(app, label):
 import CoreGraphics
 let pid = Int(CommandLine.arguments[1])!
 let windows = CGWindowListCopyWindowInfo(.optionAll, kCGNullWindowID) as? [[String: Any]] ?? []
-let matching = windows.filter { ($0[kCGWindowOwnerPID as String] as? Int) == pid && ($0[kCGWindowLayer as String] as? Int) == 0 }
+let matching = windows.filter {
+    guard ($0[kCGWindowOwnerPID as String] as? Int) == pid,
+          ($0[kCGWindowLayer as String] as? Int) == 0,
+          ($0[kCGWindowIsOnscreen as String] as? Bool) == true,
+          let bounds = $0[kCGWindowBounds as String] as? [String: Any],
+          let width = bounds["Width"] as? NSNumber,
+          let height = bounds["Height"] as? NSNumber else { return false }
+    return width.doubleValue >= 800 && height.doubleValue >= 450
+}
 let data = try JSONSerialization.data(withJSONObject: matching, options: [.prettyPrinted, .sortedKeys])
 FileHandle.standardOutput.write(data)
 ''')
