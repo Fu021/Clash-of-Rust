@@ -86,6 +86,12 @@ impl Session {
     pub fn wait_idle(&self) -> Result<()> {
         self.request("ping")
     }
+    pub fn is_available(&self) -> bool {
+        // Connect without a ping: an active core owns the service until its
+        // lease ends, so waiting for a response would block behind that core.
+        UnixStream::connect(self.directory.path().join("core.sock"))
+            .is_ok_and(|stream| peer_uid(&stream).is_ok_and(|uid| uid == 0))
+    }
     pub fn command(&self) -> Result<tokio::process::Command> {
         let launcher = std::env::current_exe()?
             .parent()
@@ -579,8 +585,13 @@ mod tests {
                 .success(),
             "TUN interface survived bridge death"
         );
-        drop(session);
+        assert!(session.is_available());
+        session.request("stop").unwrap();
         server.wait().unwrap();
+        assert!(
+            !session.is_available(),
+            "stopped service was still reusable"
+        );
         assert!(ready, "authorized root core did not start its TUN/listener");
     }
 }

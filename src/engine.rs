@@ -348,6 +348,14 @@ impl Engine {
         if self.running() {
             bail!("内核已启动");
         }
+        #[cfg(target_os = "macos")]
+        if self
+            .mac_tun
+            .as_ref()
+            .is_some_and(|session| !session.is_available())
+        {
+            self.mac_tun = None;
+        }
         for port in [self.settings.controller_port, self.settings.mixed_port] {
             let _listener = std::net::TcpListener::bind(("127.0.0.1", port))
                 .with_context(|| format!("无法绑定端口 {port}，请检查占用或系统端口限制"))?;
@@ -1082,9 +1090,14 @@ impl Engine {
 
     #[cfg(target_os = "macos")]
     async fn prepare_mac_tun(&mut self, interactive: bool) -> Result<()> {
-        if self.mac_tun.is_some() {
+        if self
+            .mac_tun
+            .as_ref()
+            .is_some_and(|session| session.is_available())
+        {
             return Ok(());
         }
+        self.mac_tun = None;
         if !interactive {
             bail!("TUN 需要管理员授权，请打开客户端并点击 TUN 模式");
         }
