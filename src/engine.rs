@@ -414,20 +414,53 @@ impl Engine {
     }
 
     fn profile_payload(&self, raw: &str, settings: &Settings, id: &str) -> Result<String> {
-        if self
+        let builtin = self.profiles.iter().any(|p| p.id == id && p.is_default());
+        crate::config::runtime_config_with_rules(
+            raw,
+            settings,
+            settings.rule_profiles.get(id).map(AsRef::as_ref),
+            builtin,
+        )
+    }
+
+    pub fn rule_document(&self, id: &str) -> Result<crate::rule_manager::Document> {
+        let profile = self
             .profiles
             .iter()
-            .any(|profile| profile.id == id && profile.is_default())
-        {
-            return runtime_config(
-                raw,
-                &Settings {
-                    rule_overrides: RuleOverrides::default(),
-                    ..settings.clone()
-                },
-            );
-        }
-        runtime_config(raw, settings)
+            .find(|p| p.id == id)
+            .context("订阅不存在")?;
+        let raw = read_profile(&self.store.profile_path(id)?)?;
+        crate::rule_manager::Document::from_raw(id, profile.is_default(), &raw)
+    }
+
+    pub async fn save_profile_rules(
+        &mut self,
+        id: &str,
+        rules: crate::rule_manager::ProfileRules,
+    ) -> Result<()> {
+        self.profiles
+            .iter()
+            .find(|p| p.id == id)
+            .context("订阅不存在")?;
+        rules.validate()?;
+        let mut settings = self.settings.clone();
+        settings
+            .rule_profiles
+            .insert(id.to_owned(), Arc::new(rules));
+        settings.validate()?;
+        let raw = read_profile(&self.store.profile_path(id)?)?;
+        let payload = self.profile_payload(&raw, &settings, id)?;
+        drop(raw);
+        let mut transaction = crate::profile_transaction::Transaction::new(&self.store.root)?;
+        transaction.stage(
+            &self.store.root.join("settings.json"),
+            &serde_json::to_vec_pretty(&settings)?,
+        )?;
+        let active = self.settings.active_profile.as_deref() == Some(id);
+        self.commit_profile(transaction, &payload, active).await?;
+        self.settings = settings;
+        append(&self.logs, "[客户端] 规则已校验并保存；原始订阅文件保留");
+        Ok(())
     }
 
     pub async fn save_rule_overrides(&mut self, rule_overrides: RuleOverrides) -> Result<()> {
@@ -787,6 +820,7 @@ impl Engine {
             .cloned()
             .collect();
         let mut settings = self.settings.clone();
+        settings.rule_profiles.remove(id);
         let payload = if active {
             let default = self
                 .profiles
@@ -805,11 +839,11 @@ impl Engine {
             &self.store.root.join("profiles.json"),
             &serde_json::to_vec_pretty(&profiles)?,
         )?;
+        transaction.stage(
+            &self.store.root.join("settings.json"),
+            &serde_json::to_vec_pretty(&settings)?,
+        )?;
         if let Some(payload) = payload {
-            transaction.stage(
-                &self.store.root.join("settings.json"),
-                &serde_json::to_vec_pretty(&settings)?,
-            )?;
             self.commit_profile(transaction, &payload, true).await?;
         } else {
             transaction.prepare()?;

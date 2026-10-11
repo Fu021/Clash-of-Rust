@@ -14,6 +14,7 @@ mod profile_transaction;
 mod proxy;
 pub mod proxy_order;
 mod region_check;
+pub mod rule_manager;
 mod subscription;
 pub mod tray;
 pub mod update;

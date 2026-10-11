@@ -126,15 +126,9 @@ fn fixture(scene: &str) -> App {
         );
     } else if scene == "rules" {
         app.page = Page::Rules;
-        app.snapshot.rules = serde_json::from_value(serde_json::json!({"rules":[
-            {"type":"DOMAIN-SUFFIX","payload":"github.com","proxy":"代理选择"},
-            {"type":"DOMAIN-SUFFIX","payload":"google.com","proxy":"代理选择"},
-            {"type":"DOMAIN","payload":"localhost","proxy":"DIRECT"},
-            {"type":"IP-CIDR","payload":"192.168.0.0/16","proxy":"DIRECT"},
-            {"type":"GEOIP","payload":"CN","proxy":"DIRECT"},
-            {"type":"MATCH","payload":"","proxy":"自动选择"}
-        ]}))
-        .unwrap();
+        let raw = "proxies: []\nproxy-groups: [{name: 代理选择, type: select, proxies: [DIRECT]}]\nrules:\n  - DOMAIN-SUFFIX,github.com,代理选择\n  - DOMAIN-SUFFIX,google.com,代理选择\n  - DOMAIN,localhost,DIRECT\n  - IP-CIDR,192.168.0.0/16,DIRECT\n  - GEOIP,CN,DIRECT\n  - MATCH,代理选择\n";
+        let doc = rule_manager::Document::from_raw("preview", false, raw).unwrap();
+        app.rule_state.load(Arc::new(doc), ProfileRules::default());
     } else if scene == "logs" {
         app.page = Page::Logs;
         app.snapshot.logs = [
@@ -160,7 +154,7 @@ fn fixture(scene: &str) -> App {
         app.geo_status = "2026-10-10".into();
         app.updates.status = "已是最新版本".into();
         if scene == "settings-rules-enabled" {
-            app.rule_draft.enabled = [true; 5];
+            app.rule_state.draft.enabled = [true; 5];
         }
     } else {
         app.page = Page::Websites;
@@ -288,7 +282,7 @@ fn update(app: &mut App, message: Message) -> Task<Message> {
     }
     match message {
         Message::Query(_)
-        | Message::RuleToggle(..)
+        | Message::Rules(_)
         | Message::NodeSort(_)
         | Message::ToggleGroup(_)
         | Message::GroupPage(..)

@@ -13,13 +13,14 @@ mod ui_style;
 mod window_state;
 
 use clash_of_rust::{
-    config::{Profile, RuleOverrides, SUBSCRIPTION_RULES, Settings, Store},
+    config::{Profile, Settings, Store},
     connection::{self, Field as ConnectionField, Sort as ConnectionSort},
     engine::{Engine, ProxyMode, Scope, Snapshot},
     flags, icons, ip_check,
     ip_report::{self, CategoryFilter, RegionFilter, ResultSlot, Status, StatusFilter},
     platform, probe,
     proxy_order::{self, NodeSort},
+    rule_manager::{self, ProfileRules},
     tray, update,
 };
 use futures_util::{
@@ -49,6 +50,9 @@ macro_rules! aligned_row {
         iced::widget::row![$($child),*].align_y(iced::alignment::Vertical::Center)
     };
 }
+
+#[path = "rules_view.rs"]
+mod rules_view;
 
 fn main() -> iced::Result {
     #[cfg(windows)]
@@ -284,7 +288,8 @@ enum Action {
     Refresh,
     Start,
     SavePorts(u16, u16),
-    RuleOverrides(RuleOverrides),
+    SaveRules(String, ProfileRules),
+    LoadRules(String),
     Theme(bool),
     Autostart(bool),
     DelayInterval(u32),
@@ -311,6 +316,8 @@ struct Reply {
     settings: Settings,
     profiles: Option<Vec<Profile>>,
     snapshot: Option<Snapshot>,
+    rule_document: Option<Arc<rule_manager::Document>>,
+    rules_applied: bool,
     notice: Result<String, String>,
     running: bool,
     geo_status: String,
@@ -343,7 +350,7 @@ enum Message {
     ProfileSource(String),
     ControllerPort(String),
     MixedPort(String),
-    RuleToggle(usize, bool),
+    Rules(rules_view::Event),
     WindowWidth(String),
     WindowHeight(String),
     ResetWindowSize,
@@ -397,7 +404,7 @@ struct App {
     engine: Option<Arc<Mutex<Engine>>>,
     page: Page,
     settings: Settings,
-    rule_draft: RuleOverrides,
+    rule_state: rules_view::State,
     profiles: Vec<Profile>,
     snapshot: Snapshot,
     busy: bool,
@@ -464,7 +471,12 @@ struct App {
 
 async fn execute(engine: Arc<Mutex<Engine>>, action: Action, scope: Scope) -> Reply {
     let start_requested = matches!(action, Action::Start);
-    let include_profiles = !matches!(action, Action::Refresh);
+    let include_profiles = !matches!(action, Action::Refresh | Action::LoadRules(_));
+    let rule_id = match &action {
+        Action::LoadRules(id) | Action::SaveRules(id, _) => Some(id.clone()),
+        _ => None,
+    };
+    let saving_rules = matches!(action, Action::SaveRules(..));
     let mut engine = engine.lock().await;
     let mut exit_after_start = false;
     let result: anyhow::Result<String> = async {
@@ -483,9 +495,15 @@ async fn execute(engine: Arc<Mutex<Engine>>, action: Action, scope: Scope) -> Re
                 engine.save_ports(controller, mixed).await?;
                 Ok("端口已保存，运行中的内核已自动重启".into())
             }
-            Action::RuleOverrides(overrides) => {
-                engine.save_rule_overrides(overrides).await?;
-                Ok("订阅附加规则已保存；运行中的配置已更新".into())
+            Action::LoadRules(_) => Ok(String::new()),
+            Action::SaveRules(id, rules) => {
+                engine.save_profile_rules(&id, rules).await?;
+                Ok(if engine.settings.active_profile.as_deref() == Some(&id) {
+                    "规则已保存并应用"
+                } else {
+                    "规则已保存，启用该订阅时生效"
+                }
+                .into())
             }
             Action::Theme(dark) => {
                 let settings = Settings {
@@ -588,8 +606,23 @@ async fn execute(engine: Arc<Mutex<Engine>>, action: Action, scope: Scope) -> Re
         }
     }
     .await;
+    let rules_applied = saving_rules && result.is_ok();
     let mut notice = result.map_err(|e| format!("{e:#}"));
-    let snapshot = match engine.poll(scope).await {
+    let rule_document = rule_id.and_then(|id| match engine.rule_document(&id) {
+        Ok(doc) => Some(Arc::new(doc)),
+        Err(e) => {
+            notice = Err(format!("{e:#}"));
+            None
+        }
+    });
+    // The editor uses the original YAML, not the lossy core rule API. Avoid
+    // retaining a second complete rule list on this page.
+    let poll_scope = if scope == Scope::Rules {
+        Scope::Other
+    } else {
+        scope
+    };
+    let snapshot = match engine.poll(poll_scope).await {
         Ok(snapshot) => Some(snapshot),
         Err(e) => {
             if notice.as_ref().is_ok_and(|s| s.is_empty()) {
@@ -607,6 +640,8 @@ async fn execute(engine: Arc<Mutex<Engine>>, action: Action, scope: Scope) -> Re
         settings: engine.settings.clone(),
         profiles: include_profiles.then(|| engine.profiles.clone()),
         snapshot,
+        rule_document,
+        rules_applied,
         notice,
         running: engine.running(),
         geo_status: engine.geo_manifest.version.clone(),
@@ -671,7 +706,7 @@ impl App {
         };
         let core_failure = engine.is_none().then(|| notice.clone());
         let mut app = Self {
-            rule_draft: settings.rule_overrides.clone(),
+            rule_state: rules_view::State::default(),
             node_sort: settings.node_sort,
             controller_port: settings.controller_port.to_string(),
             interval_input: settings.delay_interval_minutes.to_string(),
@@ -903,7 +938,15 @@ impl App {
         )
     }
 
-    fn dispatch(&mut self, action: Action) -> Task<Message> {
+    fn dispatch(&mut self, mut action: Action) -> Task<Message> {
+        if matches!(action, Action::Refresh)
+            && self.visible
+            && self.page == Page::Rules
+            && self.rule_state.document.is_none()
+            && let Some(id) = self.settings.active_profile.clone()
+        {
+            action = Action::LoadRules(id);
+        }
         let scope = if self.visible {
             self.page.scope()
         } else {
@@ -933,7 +976,7 @@ impl App {
             action,
             Action::Start
                 | Action::SavePorts(..)
-                | Action::RuleOverrides(_)
+                | Action::SaveRules(..)
                 | Action::Activate(_)
                 | Action::UpdateProfile(_)
                 | Action::DeleteProfile(_)
@@ -996,7 +1039,7 @@ impl App {
                         // initialized engine has no running process yet.
                         if let Ok(engine) = engine.try_lock() {
                             self.settings = engine.settings.clone();
-                            self.rule_draft = self.settings.rule_overrides.clone();
+                            self.rule_state = rules_view::State::default();
                             self.profiles = engine.profiles.clone();
                             self.geo_status = engine.geo_manifest.version.clone();
                             self.controller_port = self.settings.controller_port.to_string();
@@ -1129,6 +1172,13 @@ impl App {
                 }
             }
             Message::Navigate(page) => {
+                if self.page == Page::Rules
+                    && page != Page::Rules
+                    && !self.rule_state.dirty()
+                    && !self.rule_state.has_editor()
+                {
+                    self.rule_state.release_document();
+                }
                 self.page = page;
                 self.query.clear();
                 self.list_offset = 0;
@@ -1136,9 +1186,20 @@ impl App {
                 self.proxy_order.get_mut().clear();
                 *self.connection_order.get_mut() = None;
                 self.site_detail = None;
+                if page == Page::Rules {
+                    if self.rule_state.document.is_some() {
+                        return Task::none();
+                    }
+                    if let Some(id) = self.settings.active_profile.clone() {
+                        return self.dispatch_scope(Action::LoadRules(id), Scope::Rules);
+                    }
+                }
                 return self.dispatch(Action::Refresh);
             }
             Message::Query(value) => {
+                if self.page == Page::Rules {
+                    self.rule_state.clear_selection();
+                }
                 self.query = value;
                 self.group_offsets.clear();
                 self.list_offset = 0;
@@ -1206,14 +1267,7 @@ impl App {
             Message::ProfileSource(value) => self.profile_source = value,
             Message::ControllerPort(value) => self.controller_port = value,
             Message::MixedPort(value) => self.mixed_port = value,
-            Message::RuleToggle(index, enabled) => {
-                if !self.working
-                    && !self.exiting
-                    && let Some(rule) = self.rule_draft.enabled.get_mut(index)
-                {
-                    *rule = enabled;
-                }
-            }
+            Message::Rules(event) => return self.update_rules(event),
             Message::WindowWidth(value) => {
                 self.window_width = value;
                 return self.schedule_window_size();
@@ -1700,12 +1754,25 @@ impl App {
                     return self.exit();
                 }
                 self.autostart = reply.autostart;
-                if self.settings.rule_overrides != reply.settings.rule_overrides {
-                    self.rule_draft = reply.settings.rule_overrides.clone();
+                if let Some(doc) = reply.rule_document
+                    && self.page == Page::Rules
+                    && (reply.rules_applied || !self.rule_state.dirty())
+                {
+                    let rules =
+                        ProfileRules::for_profile(&reply.settings, &doc.profile_id, doc.builtin);
+                    self.rule_state.load(doc, rules);
                 }
                 self.settings = reply.settings;
                 if let Some(profiles) = reply.profiles {
                     self.profiles = profiles;
+                    if self
+                        .rule_state
+                        .document
+                        .as_ref()
+                        .is_some_and(|doc| !self.profiles.iter().any(|p| p.id == doc.profile_id))
+                    {
+                        self.rule_state = rules_view::State::default();
+                    }
                 }
                 self.geo_status = reply.geo_status;
                 if self.snapshot.running && !reply.running {
@@ -1878,6 +1945,9 @@ impl App {
                 if self.tray.is_some() {
                     self.visible = false;
                     self.snapshot.retain_scope(Scope::Other);
+                    if !self.rule_state.dirty() && !self.rule_state.has_editor() {
+                        self.rule_state.release_document();
+                    }
                     *self.connection_order.get_mut() = None;
                     let stop_stream = self.dispatch_scope(Action::Refresh, Scope::Other);
                     return Task::batch([
@@ -2053,7 +2123,7 @@ impl App {
             action,
             Action::Import(..)
                 | Action::SavePorts(..)
-                | Action::RuleOverrides(_)
+                | Action::SaveRules(..)
                 | Action::Activate(_)
         ) {
             rounded_primary
@@ -3555,78 +3625,6 @@ impl App {
         .into()
     }
 
-    fn rules(&self) -> Element<'_, Message> {
-        let query = self.query.to_lowercase();
-        let entries = self
-            .snapshot
-            .rules
-            .rules
-            .iter()
-            .enumerate()
-            .filter(|(_, r)| {
-                query.is_empty()
-                    || query.split_whitespace().all(|word| {
-                        [r.kind.as_str(), r.payload.as_ref(), r.proxy.as_str()]
-                            .into_iter()
-                            .any(|field| contains_query(field, word))
-                    })
-            });
-        let total = entries.clone().count();
-        let offset = self.list_offset.min(last_page_offset(total));
-        let mut list = column![].spacing(0);
-        for (row, (index, rule)) in entries.skip(offset).take(PAGE_SIZE).enumerate() {
-            list = list.push(
-                container(
-                    aligned_row![
-                        self.caption(format!("{:04}", index + 1)).width(44),
-                        self.label(rule.kind.as_str()).size(13).width(145),
-                        self.label(rule.payload.as_ref())
-                            .size(14)
-                            .wrapping(text::Wrapping::WordOrGlyph)
-                            .width(Length::Fill),
-                        self.label(rule.proxy.as_str())
-                            .size(14)
-                            .color(self.accent())
-                            .width(120)
-                    ]
-                    .spacing(10),
-                )
-                .padding([12, 10])
-                .width(Length::Fill)
-                .style(move |theme: &Theme| ui_style::table_row(theme, row % 2 == 1)),
-            );
-        }
-        if total == 0 {
-            list = list.push(self.empty_state(
-                "没有匹配的规则",
-                "尝试更改搜索条件，或在内核启动后加载当前配置。",
-            ));
-        }
-        column![
-            aligned_row![
-                self.search("搜索规则类型、内容或策略"),
-                self.caption(format!("匹配 {total} 条"))
-            ]
-            .spacing(10),
-            self.table_header(
-                aligned_row![
-                    self.label("序号").size(13).width(44),
-                    self.label("类型").size(13).width(145),
-                    self.label("规则内容").size(13).width(Length::Fill),
-                    self.label("策略").size(13).width(120)
-                ]
-                .spacing(10)
-                .into()
-            ),
-            container(page_scroll(list).height(Length::Fill))
-                .width(Length::Fill)
-                .style(panel),
-            self.list_pager(total, offset)
-        ]
-        .spacing(10)
-        .into()
-    }
-
     fn table_header<'a>(&self, content: Element<'a, Message>) -> Element<'a, Message> {
         container(content)
             .padding(10)
@@ -3846,48 +3844,6 @@ impl App {
     }
 
     fn settings_view(&self) -> Element<'_, Message> {
-        let mut rules = column![
-            self.title("订阅附加规则"),
-            self.caption("仅补充订阅缺少的规则，补充的规则优先匹配。"),
-        ]
-        .spacing(10);
-        let labels = [
-            "拦截广告",
-            "本地域名直连",
-            "私有 IP 直连",
-            "国内域名直连",
-            "国内 IP 直连",
-        ];
-        for pair in [0, 1, 2, 3, 4].chunks(2) {
-            let mut row = aligned_row![].spacing(16);
-            for &index in pair {
-                let rule = SUBSCRIPTION_RULES[index];
-                row = row.push(
-                    column![
-                        checkbox(self.rule_draft.enabled[index])
-                            .label(labels[index])
-                            .size(18)
-                            .text_size(15)
-                            .on_toggle_maybe(
-                                (!self.working && !self.exiting)
-                                    .then_some(move |enabled| Message::RuleToggle(index, enabled))
-                            ),
-                        self.caption(rule).wrapping(text::Wrapping::WordOrGlyph),
-                    ]
-                    .spacing(4)
-                    .width(Length::Fill),
-                );
-            }
-            if pair.len() == 1 {
-                row = row.push(Space::new().width(Length::Fill));
-            }
-            rules = rules.push(row);
-        }
-        rules = rules.push(self.action(
-            "保存并应用规则",
-            Action::RuleOverrides(self.rule_draft.clone()),
-            self.rule_draft != self.settings.rule_overrides,
-        ));
         let updates = column![
             self.label(format!("客户端更新 · 当前版本 {}", clash_of_rust::VERSION)),
             self.label(if self.updates.checking {
@@ -4010,10 +3966,6 @@ impl App {
                     .width(Length::Fill)
                     .style(panel),
                 container(ports)
-                    .padding(16)
-                    .width(Length::Fill)
-                    .style(panel),
-                container(rules)
                     .padding(16)
                     .width(Length::Fill)
                     .style(panel),
@@ -4373,6 +4325,8 @@ mod async_state_tests {
             start_requested: true,
             settings: app.settings.clone(),
             profiles: None,
+            rule_document: None,
+            rules_applied: false,
             snapshot: Some(Snapshot {
                 running: true,
                 ..Snapshot::default()
@@ -4396,6 +4350,8 @@ mod async_state_tests {
             start_requested: false,
             settings: app.settings.clone(),
             profiles: None,
+            rule_document: None,
+            rules_applied: false,
             snapshot: None,
             notice: Err("无法修改开机启动登录任务：拒绝访问 (0x80070005)".into()),
             running: false,
@@ -4411,6 +4367,8 @@ mod async_state_tests {
             start_requested: true,
             settings: app.settings.clone(),
             profiles: None,
+            rule_document: None,
+            rules_applied: false,
             snapshot: None,
             notice: Err("无法启动内核程序：拒绝访问".into()),
             running: false,

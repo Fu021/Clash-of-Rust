@@ -34,6 +34,8 @@ pub struct Settings {
     pub proxy_mode: crate::engine::ProxyMode,
     pub node_sort: crate::proxy_order::NodeSort,
     pub rule_overrides: RuleOverrides,
+    pub rule_profiles:
+        std::collections::BTreeMap<String, std::sync::Arc<crate::rule_manager::ProfileRules>>,
 }
 
 impl Default for Settings {
@@ -58,6 +60,7 @@ impl Default for Settings {
             proxy_mode: crate::engine::ProxyMode::Off,
             node_sort: crate::proxy_order::NodeSort::default(),
             rule_overrides: RuleOverrides::default(),
+            rule_profiles: Default::default(),
         }
     }
 }
@@ -78,6 +81,10 @@ impl Settings {
         }
         if self.secret.is_empty() {
             bail!("控制接口密钥不能为空");
+        }
+        for (id, rules) in &self.rule_profiles {
+            uuid::Uuid::parse_str(id).context("规则所属的订阅 ID 无效")?;
+            rules.validate()?;
         }
         Ok(())
     }
@@ -276,9 +283,22 @@ pub fn parse_profile(raw: &str) -> Result<Mapping> {
 }
 
 pub fn runtime_config(raw: &str, settings: &Settings) -> Result<String> {
+    runtime_config_with_rules(raw, settings, None, false)
+}
+
+pub fn runtime_config_with_rules(
+    raw: &str,
+    settings: &Settings,
+    rules: Option<&crate::rule_manager::ProfileRules>,
+    builtin: bool,
+) -> Result<String> {
     settings.validate()?;
     let mut map = parse_profile(raw)?;
-    apply_rules(&mut map, &settings.rule_overrides)?;
+    if let Some(rules) = rules {
+        crate::rule_manager::apply(&mut map, rules, builtin)?;
+    } else if !builtin {
+        apply_rules(&mut map, &settings.rule_overrides)?;
+    }
     // The application owns all ingress and controller settings. A subscription cannot
     // expose the API, load a dashboard, or silently enable TUN.
     for key in [

@@ -667,3 +667,147 @@ async fn subscription_metadata_failures_leave_runtime_and_preferences_unchanged(
     assert_eq!(engine.settings.active_profile.as_ref(), Some(&id));
     engine.stop().await.unwrap();
 }
+
+#[tokio::test]
+#[ignore = "Requires bundled resources; validates rule drafts, ordering, isolation and rollback"]
+async fn rule_manager_preserves_originals_and_rolls_back_invalid_drafts() {
+    use clash_of_rust::rule_manager::{CustomRule, ProfileRules};
+    let tmp = tempfile::tempdir().unwrap();
+    let store = Store::at(tmp.path().join("data")).unwrap();
+    let controller_port = free_port();
+    let mut mixed_port = free_port();
+    while mixed_port == controller_port {
+        mixed_port = free_port();
+    }
+    store
+        .save_settings(&Settings {
+            controller_port,
+            mixed_port,
+            ..Settings::default()
+        })
+        .unwrap();
+    let mut engine = Engine::with_resources(store.clone(), test_resources()).unwrap();
+    engine.start().await.unwrap();
+    let default_id = engine.settings.active_profile.clone().unwrap();
+    let source = tmp.path().join("rules.yaml");
+    let raw = "proxies: []\nproxy-groups: [{name: Proxy, type: select, proxies: [DIRECT, REJECT]}]\nrules:\n  - DOMAIN,original.test,DIRECT\n  - MATCH,DIRECT\n";
+    std::fs::write(&source, raw).unwrap();
+    engine
+        .import("rules test".into(), source.display().to_string(), None)
+        .await
+        .unwrap();
+    let id = engine.profiles.last().unwrap().id.clone();
+    engine.activate(id.clone()).await.unwrap();
+    let custom = CustomRule {
+        id: uuid::Uuid::new_v4().to_string(),
+        rule: "DOMAIN,custom.test,Proxy".into(),
+        enabled: true,
+    };
+    let disabled = CustomRule {
+        id: uuid::Uuid::new_v4().to_string(),
+        rule: "DOMAIN,disabled.test,REJECT".into(),
+        enabled: false,
+    };
+    let doc = engine.rule_document(&id).unwrap();
+    let draft = ProfileRules {
+        enabled: [true, false, false, false, false],
+        custom: vec![custom.clone(), disabled.clone()],
+        order: vec![
+            doc.original[0].id.clone(),
+            format!("c:{}", custom.id),
+            format!("c:{}", disabled.id),
+            doc.original[1].id.clone(),
+        ],
+    };
+    engine.save_profile_rules(&id, draft.clone()).await.unwrap();
+    let runtime = store.runtime().join("config.yaml");
+    let read = || -> serde_yaml::Value {
+        serde_yaml::from_str(&std::fs::read_to_string(&runtime).unwrap()).unwrap()
+    };
+    assert_eq!(
+        read()["rules"][0].as_str(),
+        Some("GEOSITE,category-ads-all,REJECT")
+    );
+    assert_eq!(
+        read()["rules"][2].as_str(),
+        Some("DOMAIN,custom.test,Proxy")
+    );
+    assert_eq!(read()["rules"].as_sequence().unwrap().len(), 4);
+    assert_eq!(
+        std::fs::read_to_string(store.profile_path(&id).unwrap()).unwrap(),
+        raw
+    );
+    let before = std::fs::read_to_string(&runtime).unwrap();
+    let mut invalid = draft.clone();
+    invalid.custom[0].rule = "IP-CIDR,999.1.1.1/24,DIRECT".into();
+    assert!(engine.save_profile_rules(&id, invalid).await.is_err());
+    assert_eq!(std::fs::read_to_string(&runtime).unwrap(), before);
+    assert_eq!(
+        store.load_settings().unwrap().rule_profiles[&id].as_ref(),
+        &draft
+    );
+    // Editing an inactive profile validates its config without reloading the active one.
+    let inactive = ProfileRules {
+        custom: vec![CustomRule {
+            id: uuid::Uuid::new_v4().to_string(),
+            rule: "DOMAIN,inactive.test,REJECT".into(),
+            enabled: true,
+        }],
+        ..Default::default()
+    };
+    engine
+        .save_profile_rules(&default_id, inactive)
+        .await
+        .unwrap();
+    assert_eq!(std::fs::read_to_string(&runtime).unwrap(), before);
+    assert_eq!(engine.settings.active_profile.as_deref(), Some(id.as_str()));
+    // Removing a custom rule's policy in an upstream update fails atomically.
+    let renamed = raw.replace("name: Proxy", "name: Renamed");
+    std::fs::write(&source, &renamed).unwrap();
+    assert!(
+        engine
+            .import(
+                "rules test".into(),
+                source.display().to_string(),
+                Some(id.clone())
+            )
+            .await
+            .is_err()
+    );
+    assert_eq!(
+        std::fs::read_to_string(store.profile_path(&id).unwrap()).unwrap(),
+        raw
+    );
+    assert_eq!(std::fs::read_to_string(&runtime).unwrap(), before);
+    let updated = raw.replace("DOMAIN,original.test,DIRECT", "DOMAIN,new.test,DIRECT");
+    std::fs::write(&source, &updated).unwrap();
+    engine
+        .import(
+            "rules test".into(),
+            source.display().to_string(),
+            Some(id.clone()),
+        )
+        .await
+        .unwrap();
+    assert_eq!(read()["rules"][3].as_str(), Some("MATCH,DIRECT"));
+    let doc = engine.rule_document(&id).unwrap();
+    assert!(
+        doc.rows(&draft)
+            .1
+            .iter()
+            .any(|warning| warning.contains("已删除或更改"))
+    );
+    let before_restart = read()["rules"].clone();
+    engine.stop().await.unwrap();
+    engine.start().await.unwrap();
+    assert_eq!(read()["rules"], before_restart);
+    engine.delete_profile(&id).await.unwrap();
+    assert!(
+        !store
+            .load_settings()
+            .unwrap()
+            .rule_profiles
+            .contains_key(&id)
+    );
+    engine.stop().await.unwrap();
+}
