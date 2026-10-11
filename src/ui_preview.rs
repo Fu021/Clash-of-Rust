@@ -146,7 +146,7 @@ fn fixture(scene: &str) -> App {
             if scene == "rules-editor" {
                 let _ = app.update(Message::Rules(rules_view::Event::Edit));
             }
-            if scene == "rules-collapsed" {
+            if scene != "rules-collapsed" {
                 let _ = app.update(Message::Rules(rules_view::Event::Collapse));
             }
         }

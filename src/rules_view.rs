@@ -156,8 +156,11 @@ impl Editor {
         }
         if text {
             self.raw = self.form_raw();
+        } else if self.raw.trim().is_empty() {
+            self.payload.clear();
+            self.no_resolve = false;
         } else {
-            match rule_manager::parts(&self.raw) {
+            match rule_manager::draft_parts(&self.raw) {
                 Ok(p) if TYPES.contains(&p.kind) => {
                     self.kind = p.kind.into();
                     self.payload = p.payload.into();
@@ -203,7 +206,7 @@ impl Default for State {
             warnings: Vec::new(),
             selected: None,
             filter: Default::default(),
-            expanded: true,
+            expanded: false,
             editor: None,
             move_open: false,
             move_position: String::new(),
@@ -1072,6 +1075,56 @@ mod tests {
         state.editor.as_mut().unwrap().payload = "a.test".into();
         assert!(state.save_editor().is_err());
         assert!(!state.dirty());
+    }
+    #[test]
+    fn unfinished_editor_switches_modes_without_bypassing_save_validation() {
+        let mut state = state();
+        state.editor = Some(Editor::new(None, 1));
+        let editor = state.editor.as_mut().unwrap();
+        editor.set_mode(true);
+        editor.set_mode(false);
+        assert!(!editor.text_mode);
+        assert!(editor.error.is_empty());
+        assert!(state.save_editor().is_err());
+        assert!(!state.dirty());
+
+        let editor = state.editor.as_mut().unwrap();
+        editor.set_mode(true);
+        editor.raw.clear();
+        editor.set_mode(false);
+        assert!(!editor.text_mode);
+        assert!(editor.payload.is_empty());
+        assert!(editor.error.is_empty());
+
+        editor.set_mode(true);
+        editor.raw = "DOMAIN,example.com,".into();
+        editor.set_mode(false);
+        assert!(!editor.text_mode);
+        assert_eq!(editor.payload, "example.com");
+        assert!(editor.policy.is_empty());
+        assert!(state.save_editor().is_err());
+        assert!(!state.dirty());
+    }
+    #[test]
+    fn editor_mode_conversion_preserves_fields_and_complex_rules() {
+        let mut editor = Editor::new(None, 2);
+        editor.set_mode(true);
+        editor.raw = "IP-CIDR,192.168.0.0/16,REJECT,no-resolve".into();
+        editor.set_mode(false);
+        assert!(!editor.text_mode);
+        assert_eq!(editor.kind, "IP-CIDR");
+        assert_eq!(editor.payload, "192.168.0.0/16");
+        assert_eq!(editor.policy, "REJECT");
+        assert!(editor.no_resolve);
+        editor.set_mode(true);
+        assert_eq!(editor.raw, "IP-CIDR,192.168.0.0/16,REJECT,no-resolve");
+
+        let raw = "AND,((DOMAIN,a.test),(NETWORK,TCP)),REJECT";
+        editor.raw = raw.into();
+        editor.set_mode(false);
+        assert!(editor.text_mode);
+        assert_eq!(editor.raw, raw);
+        assert!(!editor.error.is_empty());
     }
     #[test]
     fn refreshing_subscription_preserves_pending_editor_and_draft() {

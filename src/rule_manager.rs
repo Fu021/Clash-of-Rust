@@ -150,6 +150,13 @@ pub struct Parts<'a> {
 }
 /// Split only top-level commas, so logical rules remain editable in text mode.
 pub fn parts(raw: &str) -> Result<Parts<'_>> {
+    parse_parts(raw, false)
+}
+/// Convert an unfinished editor draft without requiring its fields yet.
+pub fn draft_parts(raw: &str) -> Result<Parts<'_>> {
+    parse_parts(raw, true)
+}
+fn parse_parts(raw: &str, draft: bool) -> Result<Parts<'_>> {
     if raw.len() > 8192 || raw.contains(['\n', '\r', '\0']) {
         bail!("规则应为单行文本，且不超过 8192 字节");
     }
@@ -192,11 +199,11 @@ pub fn parts(raw: &str) -> Result<Parts<'_>> {
         bail!("规则格式应为 类型,内容,策略（MATCH 为 MATCH,策略）");
     }
     let policy = field(count - 1);
-    if policy.is_empty() {
+    if !draft && policy.is_empty() {
         bail!("请选择规则策略");
     }
     let payload = if count == 3 { field(1) } else { "" };
-    if count == 3 && payload.is_empty() {
+    if !draft && count == 3 && payload.is_empty() {
         bail!("规则内容不能为空");
     }
     Ok(Parts {
