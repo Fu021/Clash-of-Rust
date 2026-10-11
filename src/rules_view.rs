@@ -1,6 +1,7 @@
 //! Native rule manager; only the visible subscription and one page of widgets
 //! are retained. Rule changes remain drafts until the core validates them.
 use super::*;
+use iced::widget::column;
 use rule_manager::{CustomRule, Document, Row, Source};
 
 const TYPES: [&str; 18] = [
@@ -442,10 +443,8 @@ impl App {
                     && state.editor.is_none()
                     && let Some(doc) = &state.document
                 {
-                    return self.dispatch_scope(
-                        Action::SaveRules(doc.profile_id.clone(), state.draft.clone()),
-                        Scope::Rules,
-                    );
+                    let action = Action::SaveRules(doc.profile_id.clone(), state.draft.clone());
+                    return self.dispatch_scope(action, Scope::Rules);
                 }
             }
             Event::CloseEditor => {
