@@ -373,6 +373,8 @@ impl<'de> Deserialize<'de> for Network {
 pub struct Metadata {
     #[serde(default)]
     pub host: Box<str>,
+    #[serde(rename = "sniffHost", default)]
+    pub sniff_host: Text,
     #[serde(rename = "destinationIP", default)]
     pub destination_ip: Box<str>,
     #[serde(rename = "destinationPort", default)]
@@ -400,6 +402,8 @@ pub struct Connection {
     pub chains: Vec<Text>,
     #[serde(default)]
     pub rule: Text,
+    #[serde(rename = "rulePayload", default)]
+    pub rule_payload: Text,
     #[serde(default)]
     pub start: Box<str>,
 }

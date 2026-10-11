@@ -39,6 +39,116 @@ fn free_port() -> u16 {
 }
 
 #[tokio::test]
+#[ignore = "Requires bundled resources; verifies suffix overrides route real connections and leave existing ones unchanged"]
+async fn custom_suffix_rules_route_new_domain_and_subdomain_connections() {
+    use clash_of_rust::rule_manager::{CustomRule, ProfileRules};
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+    use tokio::net::{TcpListener, TcpStream};
+    use tokio::time::{Duration, timeout};
+
+    // Keep each HTTP connection open on a local simulated destination; no public
+    // DNS or Internet access is needed to verify the core's matching behavior.
+    async fn connect(listener: &TcpListener, mixed: u16, host: &str) -> (TcpStream, TcpStream) {
+        timeout(Duration::from_secs(5), async {
+            let port = listener.local_addr().unwrap().port();
+            let mut client = TcpStream::connect(("127.0.0.1", mixed)).await.unwrap();
+            client
+                .write_all(
+                    format!("GET http://{host}:{port}/ HTTP/1.1\r\nHost: {host}:{port}\r\n\r\n")
+                        .as_bytes(),
+                )
+                .await
+                .unwrap();
+            let (mut destination, _) = listener.accept().await.unwrap();
+            let mut prefix = [0; 3];
+            destination.read_exact(&mut prefix).await.unwrap();
+            assert_eq!(&prefix, b"GET");
+            (client, destination)
+        })
+        .await
+        .expect("core did not route the simulated HTTP request")
+    }
+
+    let destination = TcpListener::bind(("127.0.0.1", 0)).await.unwrap();
+    let tmp = tempfile::tempdir().unwrap();
+    let store = Store::at(tmp.path().join("data")).unwrap();
+    let controller_port = free_port();
+    let mut mixed_port = free_port();
+    while mixed_port == controller_port {
+        mixed_port = free_port();
+    }
+    store
+        .save_settings(&Settings {
+            controller_port,
+            mixed_port,
+            ..Settings::default()
+        })
+        .unwrap();
+    let mut engine = Engine::with_resources(store, test_resources()).unwrap();
+    engine.start().await.unwrap();
+    let source = tmp.path().join("suffix.yaml");
+    std::fs::write(&source, "proxies: []\nhosts: {google.com: 127.0.0.1, mail.google.com: 127.0.0.1}\nproxy-groups: [{name: Proxy, type: select, proxies: [DIRECT]}]\nrules: [\"MATCH,Proxy\"]\n").unwrap();
+    engine
+        .import("suffix test".into(), source.display().to_string(), None)
+        .await
+        .unwrap();
+    let id = engine.profiles.last().unwrap().id.clone();
+    engine.activate(id.clone()).await.unwrap();
+    engine.select_mode("rule").await.unwrap();
+
+    let previous_socket = connect(&destination, mixed_port, "mail.google.com").await;
+    let before = engine.poll(Scope::Connections).await.unwrap();
+    let previous = before
+        .connections
+        .connections
+        .iter()
+        .find(|c| c.metadata.host.as_ref() == "mail.google.com")
+        .unwrap();
+    assert!(previous.rule.as_str().eq_ignore_ascii_case("Match"));
+    assert!(previous.chains.iter().any(|name| name.as_str() == "Proxy"));
+    let previous_id = previous.id.clone();
+
+    engine
+        .save_profile_rules(
+            &id,
+            ProfileRules {
+                custom: vec![CustomRule {
+                    id: uuid::Uuid::new_v4().to_string(),
+                    rule: "DOMAIN-SUFFIX,google.com,DIRECT".into(),
+                    enabled: true,
+                }],
+                ..Default::default()
+            },
+        )
+        .await
+        .unwrap();
+    let root_socket = connect(&destination, mixed_port, "google.com").await;
+    let subdomain_socket = connect(&destination, mixed_port, "mail.google.com").await;
+    let after = engine.poll(Scope::Connections).await.unwrap();
+    let old = after
+        .connections
+        .connections
+        .iter()
+        .find(|c| c.id == previous_id)
+        .unwrap();
+    assert!(old.rule.as_str().eq_ignore_ascii_case("Match"));
+    for host in ["google.com", "mail.google.com"] {
+        let new = after
+            .connections
+            .connections
+            .iter()
+            .find(|c| c.id != previous_id && c.metadata.host.as_ref() == host)
+            .unwrap();
+        assert!(new.rule.as_str().eq_ignore_ascii_case("DomainSuffix"));
+        assert_eq!(new.rule_payload.as_str(), "google.com");
+        assert!(new.chains.iter().any(|name| name.as_str() == "DIRECT"));
+        assert!(!new.chains.iter().any(|name| name.as_str() == "Proxy"));
+    }
+    engine.stop().await.unwrap();
+    drop((previous_socket, root_socket, subdomain_socket));
+}
+
+#[tokio::test]
 #[ignore = "Requires bundled resources; verifies rule override reload, update and rollback"]
 async fn subscription_rule_overrides_survive_updates_and_restore_original_rules() {
     use clash_of_rust::config::RuleOverrides;

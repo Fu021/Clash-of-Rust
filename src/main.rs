@@ -499,7 +499,7 @@ async fn execute(engine: Arc<Mutex<Engine>>, action: Action, scope: Scope, heade
             Action::SaveRules(id, rules) => {
                 engine.save_profile_rules(&id, rules).await?;
                 Ok(if engine.settings.active_profile.as_deref() == Some(&id) {
-                    "规则已保存并应用"
+                    "规则已保存并应用；新连接按新规则匹配"
                 } else {
                     "规则已保存，启用该订阅时生效"
                 }
@@ -3562,8 +3562,10 @@ impl App {
                         || query.split_whitespace().all(|word| {
                             [
                                 c.metadata.host.as_ref(),
+                                c.metadata.sniff_host.as_str(),
                                 c.metadata.destination_ip.as_ref(),
                                 c.rule.as_str(),
+                                c.rule_payload.as_str(),
                             ]
                             .into_iter()
                             .chain(c.chains.iter().map(|name| name.as_str()))
@@ -3605,7 +3607,13 @@ impl App {
                         .spacing(4)
                         .width(Length::FillPortion(2)),
                         column![
-                            self.label(connection.rule.as_str()).size(13),
+                            self.label(if connection.rule_payload.is_empty() {
+                                connection.rule.to_string()
+                            } else {
+                                format!("{} ({})", connection.rule, connection.rule_payload)
+                            })
+                            .size(13)
+                            .wrapping(text::Wrapping::WordOrGlyph),
                             self.caption(connection.chains.join(" → "))
                                 .wrapping(text::Wrapping::WordOrGlyph)
                         ]
@@ -3641,8 +3649,10 @@ impl App {
             );
         }
         if total == 0 {
-            list = list
-                .push(self.empty_state("没有匹配的连接", "尝试更改搜索条件，或等待新的网络请求。"));
+            list = list.push(self.empty_state(
+                "没有匹配的连接",
+                "仅显示当前连接；连接失败或已结束的请求请在日志页查看。",
+            ));
         }
         column![
             aligned_row![
@@ -4259,6 +4269,28 @@ mod window_tests {
 #[cfg(test)]
 mod memory_tests {
     use super::*;
+
+    #[test]
+    fn connection_search_includes_sniffed_domain_and_matched_rule_payload() {
+        let mut app = App::with_engine(Err(anyhow::anyhow!("view test")), None).0;
+        app.snapshot.connections = serde_json::from_value(serde_json::json!({"connections":[
+            {"id":"sniffed", "metadata":{"host":"", "sniffHost":"mail.google.com", "destinationIP":"192.0.2.1"}, "rule":"DomainSuffix", "rulePayload":"google.com", "chains":["DIRECT"]},
+            {"id":"payload", "metadata":{"host":"192.0.2.2"}, "rule":"DomainSuffix", "rulePayload":"google.com", "chains":["Proxy"]},
+            {"id":"unrelated", "metadata":{"host":"example.test"}, "rule":"Match", "chains":["Proxy"]}
+        ]})).unwrap();
+        for (query, expected) in [
+            ("MAIL.GOOGLE.COM", vec![0]),
+            ("google.com", vec![0, 1]),
+            ("google.com direct", vec![0]),
+            ("192.0.2.2", vec![1]),
+        ] {
+            let _ = app.update(Message::Query(query.into()));
+            {
+                let _view = app.connections();
+            }
+            assert_eq!(app.connection_order.borrow().as_ref().unwrap(), &expected);
+        }
+    }
 
     #[test]
     fn connection_sort_applies_to_all_filtered_rows_before_pagination() {

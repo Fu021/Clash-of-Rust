@@ -181,7 +181,7 @@ impl Editor {
         self.error.clear();
     }
 }
-#[derive(Debug)]
+#[derive(Debug, Default)]
 pub struct State {
     pub document: Option<Arc<Document>>,
     pub draft: ProfileRules,
@@ -195,24 +195,6 @@ pub struct State {
     move_open: bool,
     move_position: String,
     pending_profile: Option<ProfileChoice>,
-}
-impl Default for State {
-    fn default() -> Self {
-        Self {
-            document: None,
-            draft: Default::default(),
-            saved: Default::default(),
-            rows: Vec::new(),
-            warnings: Vec::new(),
-            selected: None,
-            filter: Default::default(),
-            expanded: false,
-            editor: None,
-            move_open: false,
-            move_position: String::new(),
-            pending_profile: None,
-        }
-    }
 }
 impl State {
     pub fn clear_selection(&mut self) {

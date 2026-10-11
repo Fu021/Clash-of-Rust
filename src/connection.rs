@@ -112,7 +112,9 @@ impl Sort {
 }
 
 pub fn name(connection: &Connection) -> &str {
-    if connection.metadata.host.is_empty() {
+    if !connection.metadata.sniff_host.is_empty() {
+        connection.metadata.sniff_host.as_str()
+    } else if connection.metadata.host.is_empty() {
         &connection.metadata.destination_ip
     } else {
         &connection.metadata.host
@@ -193,6 +195,16 @@ mod tests {
         assert_eq!(sort.compare(&a, &b), Ordering::Greater);
         sort.toggle(Field::UploadRate);
         assert_eq!(sort.compare(&a, &b), Ordering::Less);
+    }
+
+    #[test]
+    fn sniffed_domain_is_retained_when_the_connection_only_has_an_ip() {
+        let connection: Connection = serde_json::from_value(serde_json::json!({
+            "id":"sniffed", "metadata":{"host":"", "sniffHost":"mail.google.com", "destinationIP":"192.0.2.1"},
+            "rule":"DomainSuffix", "rulePayload":"google.com"
+        })).unwrap();
+        assert_eq!(name(&connection), "mail.google.com");
+        assert_eq!(connection.rule_payload.as_str(), "google.com");
     }
 
     #[test]
