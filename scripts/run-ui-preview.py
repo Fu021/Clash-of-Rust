@@ -148,7 +148,7 @@ def connection_regression(window, scene, output, env, runner):
     if not any(a[2][y][194*3:350*3] != b[2][y][194*3:350*3] for y in range(195, 375)):
         raise RuntimeError('Connection rows did not change when toggling speed order')
     click(230, 158, 'Name', False, 'connections-name-ascending')
-    click(710, 169, 'DownloadTotal', True, 'connections-total-descending')
+    click(690, 169, 'DownloadTotal', True, 'connections-total-descending')
 
 
 def main():

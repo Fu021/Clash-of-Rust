@@ -3413,6 +3413,7 @@ impl App {
                 }),
         )
         .padding([3, 0])
+        .width(Length::Fill)
         .on_press(Message::ConnectionSort(field))
         .style(ui_style::text_button)
         .into()
