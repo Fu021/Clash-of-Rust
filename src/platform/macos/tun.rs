@@ -45,7 +45,7 @@ impl Session {
         );
         let socket = directory.path().join("core.sock");
         let script = format!(
-            "{} --macos-serve {} {} {} </dev/null >/dev/null 2>&1 &",
+            "{} --macos-authorize {} {} {}",
             super::shell_quote(&launcher.to_string_lossy()),
             super::shell_quote(&socket.to_string_lossy()),
             unsafe { libc::getuid() },
@@ -425,6 +425,33 @@ pub fn launcher_main() -> Result<i32> {
                 }
                 std::thread::sleep(Duration::from_millis(50));
             }
+        }
+        Some("--macos-authorize") if args.len() == 4 => {
+            ensure!(
+                unsafe { libc::geteuid() } == 0,
+                "TUN 授权助手需要管理员权限"
+            );
+            core_path()?;
+            let mut service = Command::new(std::env::current_exe()?)
+                .arg("--macos-serve")
+                .args(&args[1..])
+                .stdin(Stdio::null())
+                .stdout(Stdio::null())
+                .stderr(Stdio::null())
+                .spawn()?;
+            let deadline = Instant::now() + Duration::from_secs(10);
+            while !Path::new(&args[1]).exists() {
+                ensure!(
+                    service.try_wait()?.is_none(),
+                    "TUN 服务无法启动，请检查安装文件与会话目录权限"
+                );
+                if Instant::now() >= deadline {
+                    let _ = service.kill();
+                    bail!("TUN 服务启动超时");
+                }
+                std::thread::sleep(Duration::from_millis(50));
+            }
+            Ok(0)
         }
         Some("--macos-serve") if args.len() == 4 => {
             serve(Path::new(&args[1]), args[2].parse()?, &args[3])?;

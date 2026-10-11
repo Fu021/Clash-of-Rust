@@ -1073,8 +1073,8 @@ impl Engine {
         }
         #[cfg(target_os = "macos")]
         if self.settings.proxy_mode == ProxyMode::Tun {
-            self.prepare_mac_tun(!std::env::args_os().any(|arg| arg == "--background"))
-                .await?;
+            let interactive = !std::env::args_os().any(|arg| arg == "--background");
+            self.prepare_mac_tun(interactive).await?;
         }
         self.proxy_mode(self.settings.proxy_mode).await?;
         Ok(false)
