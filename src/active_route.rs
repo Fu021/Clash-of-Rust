@@ -1,12 +1,14 @@
 //! The header represents the default route, since rule mode can route individual
 //! connections through different groups. Resolve groups to their selected leaf.
-use crate::{api::Proxies, config::parse_profile, rule_manager::parts};
+use crate::{api::Proxies, rule_manager::parts};
 use anyhow::Result;
 use serde_yaml::Value;
 
 pub const MAX_DEPTH: usize = 16;
 pub fn root(raw: &str) -> Result<String> {
-    let map = parse_profile(raw)?;
+    // This is the validated runtime configuration, whose size limit is higher
+    // than the original subscription's after serialization and rule additions.
+    let map: serde_yaml::Mapping = serde_yaml::from_str(raw)?;
     if let Some(Value::Sequence(rules)) = map.get(Value::from("rules")) {
         for rule in rules.iter().filter_map(Value::as_str) {
             if let Ok(rule) = parts(rule)
@@ -86,5 +88,12 @@ mod tests {
         );
         assert!(from_snapshot("Cycle", &proxies).is_none());
         assert!(from_snapshot("Missing", &proxies).is_none());
+    }
+
+    #[test]
+    fn runtime_route_accepts_configs_larger_than_the_subscription_limit() {
+        let mut raw = String::from("proxies: []\nrules: [\"MATCH,Primary\"]\n# ");
+        raw.extend(std::iter::repeat_n('x', 10 * 1024 * 1024));
+        assert_eq!(root(&raw).unwrap(), "Primary");
     }
 }
