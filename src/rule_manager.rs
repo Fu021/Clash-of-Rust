@@ -155,12 +155,15 @@ pub fn parts(raw: &str) -> Result<Parts<'_>> {
     }
     let raw = raw.trim();
     let mut fields = Vec::new();
+    let logical = ["AND,", "OR,", "NOT,", "SUB-RULE,"]
+        .iter()
+        .any(|prefix| raw.starts_with(prefix));
     let mut depth = 0usize;
     let mut begin = 0;
     for (index, ch) in raw.char_indices() {
         match ch {
-            '(' => depth += 1,
-            ')' => {
+            '(' if logical => depth += 1,
+            ')' if logical => {
                 depth = depth.checked_sub(1).context("规则括号不匹配")?;
             }
             ',' if depth == 0 => {
@@ -471,6 +474,10 @@ mod tests {
     fn parser_preserves_logical_rules_and_rejects_multiline() {
         let p = parts("AND,((DOMAIN,a.test),(NETWORK,TCP)),DIRECT").unwrap();
         assert_eq!(p.policy, "DIRECT");
+        assert_eq!(
+            parts(r"DOMAIN-REGEX,[(]example[)],DIRECT").unwrap().payload,
+            "[(]example[)]"
+        );
         assert_eq!(p.payload, "((DOMAIN,a.test),(NETWORK,TCP))");
         assert!(parts("DOMAIN,a.test,DIRECT\nMATCH,REJECT").is_err());
         assert!(parts("MATCH,").is_err());

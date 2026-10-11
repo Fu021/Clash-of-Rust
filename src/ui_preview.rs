@@ -5,6 +5,7 @@ fn fixture(scene: &str) -> App {
     let mut app = App::with_engine(Err(anyhow::anyhow!("isolated preview")), None).0;
     app.snapshot.running = true;
     app.snapshot.mode = "rule".into();
+    app.snapshot.active_node = Some("香港节点2".into());
     app.notice = "界面预览：固定演示数据，不代表真实网络检测结果。".into();
     app.error = false;
     app.core_failure = None;

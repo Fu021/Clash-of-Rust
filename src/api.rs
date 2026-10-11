@@ -93,6 +93,13 @@ pub(crate) struct TunStatus {
     pub enable: bool,
 }
 
+/// Header polling needs only the current selection, not members or delay history.
+#[derive(Debug, Default, Deserialize)]
+pub(crate) struct ProxySelection {
+    #[serde(default)]
+    pub now: String,
+}
+
 // Go serializes nil slices as null, rather than []. Both are valid API responses.
 fn null_default<'de, D, T>(deserializer: D) -> std::result::Result<T, D::Error>
 where
@@ -496,6 +503,13 @@ impl Api {
             .send()
             .await
             .context("无法连接 mihomo 控制接口")?;
+        decode_json(Self::checked(response).await?).await
+    }
+    pub(crate) async fn proxy_selection(&self, name: &str) -> Result<ProxySelection> {
+        let response = self
+            .request(Method::GET, self.url(&["proxies", name])?)
+            .send()
+            .await?;
         decode_json(Self::checked(response).await?).await
     }
     pub async fn patch(&self, body: Value) -> Result<()> {

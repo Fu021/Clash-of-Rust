@@ -469,7 +469,7 @@ struct App {
     updates: update::State,
 }
 
-async fn execute(engine: Arc<Mutex<Engine>>, action: Action, scope: Scope) -> Reply {
+async fn execute(engine: Arc<Mutex<Engine>>, action: Action, scope: Scope, header: bool) -> Reply {
     let start_requested = matches!(action, Action::Start);
     let include_profiles = !matches!(action, Action::Refresh | Action::LoadRules(_));
     let rule_id = match &action {
@@ -622,7 +622,7 @@ async fn execute(engine: Arc<Mutex<Engine>>, action: Action, scope: Scope) -> Re
     } else {
         scope
     };
-    let snapshot = match engine.poll(poll_scope).await {
+    let snapshot = match engine.poll_with_header(poll_scope, header).await {
         Ok(snapshot) => Some(snapshot),
         Err(e) => {
             if notice.as_ref().is_ok_and(|s| s.is_empty()) {
@@ -994,7 +994,7 @@ impl App {
         }
         self.busy = true;
         self.working = !matches!(action, Action::Refresh);
-        Task::perform(execute(engine, action, scope), |reply| {
+        Task::perform(execute(engine, action, scope, self.visible), |reply| {
             Message::Finished(Box::new(reply))
         })
     }
@@ -2251,10 +2251,61 @@ impl App {
                 container(self.label(status).size(13))
                     .padding([5, 9])
                     .style(move |theme: &Theme| ui_style::badge(theme, tone)),
-                button(self.caption(active))
-                    .padding([3, 8])
-                    .style(rounded_text)
-                    .on_press(Message::Navigate(Page::Profiles))
+                aligned_row![
+                    iced::widget::tooltip(
+                        button(
+                            container(self.caption(active).wrapping(text::Wrapping::None))
+                                .max_width(if compact { 100 } else { 150 })
+                                .clip(true)
+                        )
+                        .padding([3, 3])
+                        .style(rounded_text)
+                        .on_press(Message::Navigate(Page::Profiles)),
+                        container(self.label(active).size(13))
+                            .padding(8)
+                            .style(panel),
+                        iced::widget::tooltip::Position::Bottom
+                    ),
+                    self.caption("|"),
+                    iced::widget::tooltip(
+                        button(
+                            container(
+                                self.caption(self.snapshot.active_node.as_deref().unwrap_or(
+                                    if self.snapshot.running {
+                                        "节点待确认"
+                                    } else {
+                                        "未启用"
+                                    }
+                                ))
+                                .wrapping(text::Wrapping::None)
+                            )
+                            .max_width(if compact { 155 } else { 205 })
+                            .clip(true)
+                        )
+                        .padding([3, 3])
+                        .style(rounded_text)
+                        .on_press(Message::Navigate(Page::Proxies)),
+                        container(
+                            column![
+                                self.label(
+                                    self.snapshot
+                                        .active_node
+                                        .as_deref()
+                                        .unwrap_or("节点状态尚未确认")
+                                )
+                                .size(13),
+                                self.caption("规则模式显示默认匹配线路；各连接可能使用不同节点。")
+                                    .size(11)
+                            ]
+                            .spacing(5)
+                        )
+                        .padding(9)
+                        .width(320)
+                        .style(panel),
+                        iced::widget::tooltip::Position::Bottom
+                    )
+                ]
+                .spacing(4)
             ]
             .spacing(3)
             .align_x(iced::alignment::Horizontal::Right)

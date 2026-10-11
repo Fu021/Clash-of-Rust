@@ -811,3 +811,125 @@ async fn rule_manager_preserves_originals_and_rolls_back_invalid_drafts() {
     );
     engine.stop().await.unwrap();
 }
+
+#[tokio::test]
+#[ignore = "Requires bundled resources; verifies live header selections across modes and reloads"]
+async fn header_node_follows_nested_selections_and_configuration_changes() {
+    let tmp = tempfile::tempdir().unwrap();
+    let store = Store::at(tmp.path().join("data")).unwrap();
+    let controller_port = free_port();
+    let mut mixed_port = free_port();
+    while mixed_port == controller_port {
+        mixed_port = free_port();
+    }
+    store
+        .save_settings(&Settings {
+            controller_port,
+            mixed_port,
+            ..Settings::default()
+        })
+        .unwrap();
+    let mut engine = Engine::with_resources(store, test_resources()).unwrap();
+    engine.start().await.unwrap();
+    assert_eq!(
+        engine
+            .poll_with_header(Scope::Home, true)
+            .await
+            .unwrap()
+            .active_node
+            .as_deref(),
+        Some("DIRECT")
+    );
+    let source = tmp.path().join("header.yaml");
+    let raw = "proxies: []\nproxy-groups:\n  - {name: '主/代理', type: select, proxies: ['自动选择', REJECT]}\n  - {name: 自动选择, type: select, proxies: [DIRECT, REJECT]}\nrules: [\"MATCH,主/代理\"]";
+    std::fs::write(&source, raw).unwrap();
+    engine
+        .import("header test".into(), source.display().to_string(), None)
+        .await
+        .unwrap();
+    let id = engine.profiles.last().unwrap().id.clone();
+    engine.activate(id.clone()).await.unwrap();
+    assert_eq!(
+        engine
+            .poll_with_header(Scope::Other, true)
+            .await
+            .unwrap()
+            .active_node
+            .as_deref(),
+        Some("DIRECT")
+    );
+    engine.api.select("自动选择", "REJECT").await.unwrap();
+    assert_eq!(
+        engine
+            .poll_with_header(Scope::Home, true)
+            .await
+            .unwrap()
+            .active_node
+            .as_deref(),
+        Some("REJECT")
+    );
+    assert_eq!(
+        engine
+            .poll_with_header(Scope::Proxies, true)
+            .await
+            .unwrap()
+            .active_node
+            .as_deref(),
+        Some("REJECT")
+    );
+    engine.select_mode("global").await.unwrap();
+    engine.api.select("GLOBAL", "DIRECT").await.unwrap();
+    assert_eq!(
+        engine
+            .poll_with_header(Scope::Home, true)
+            .await
+            .unwrap()
+            .active_node
+            .as_deref(),
+        Some("DIRECT")
+    );
+    engine.select_mode("rule").await.unwrap();
+    assert_eq!(
+        engine
+            .poll_with_header(Scope::Home, true)
+            .await
+            .unwrap()
+            .active_node
+            .as_deref(),
+        Some("REJECT")
+    );
+    engine.select_mode("direct").await.unwrap();
+    assert_eq!(
+        engine
+            .poll_with_header(Scope::Home, true)
+            .await
+            .unwrap()
+            .active_node
+            .as_deref(),
+        Some("DIRECT")
+    );
+    engine.select_mode("rule").await.unwrap();
+    std::fs::write(&source, raw.replace("MATCH,主/代理", "MATCH,DIRECT")).unwrap();
+    engine
+        .import("header test".into(), source.display().to_string(), Some(id))
+        .await
+        .unwrap();
+    assert_eq!(
+        engine
+            .poll_with_header(Scope::Home, true)
+            .await
+            .unwrap()
+            .active_node
+            .as_deref(),
+        Some("DIRECT")
+    );
+    assert!(
+        engine
+            .poll_with_header(Scope::Other, false)
+            .await
+            .unwrap()
+            .active_node
+            .is_none()
+    );
+    engine.stop().await.unwrap();
+}

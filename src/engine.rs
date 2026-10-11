@@ -127,6 +127,7 @@ pub enum Scope {
 pub struct Snapshot {
     pub version: String,
     pub mode: String,
+    pub active_node: Option<String>,
     pub tun: bool,
     pub system_proxy: bool,
     pub proxies: Proxies,
@@ -172,6 +173,7 @@ pub struct Engine {
     log_pump: Option<JoinHandle<()>>,
     last_totals: Option<(Instant, u64, u64)>,
     version: String,
+    node_root: Mutex<Option<String>>,
     // Held for the entire application lifetime; prevents two clients racing on recovery.
     _instance_lock: File,
 }
@@ -238,6 +240,7 @@ impl Engine {
             log_pump: None,
             last_totals: None,
             version: String::new(),
+            node_root: Mutex::new(None),
             _instance_lock: instance,
         })
     }
@@ -325,6 +328,7 @@ impl Engine {
         self.validate(&payload).await?;
         let path = self.store.runtime().join("config.yaml");
         atomic_write(&path, payload.as_bytes())?;
+        self.node_root.lock().expect("header route lock").take();
         drop(payload);
         let mut child = self
             .command()?
@@ -675,6 +679,9 @@ impl Engine {
                     disk.err().map_or("成功".into(), |e| e.to_string())
                 ),
             }
+        }
+        if active {
+            self.node_root.lock().expect("header route lock").take();
         }
         Ok(())
     }
@@ -1200,7 +1207,46 @@ impl Engine {
         Ok(path)
     }
 
+    async fn current_node(&self, mode: &str, proxies: &Proxies) -> Result<Option<String>> {
+        let default = if mode == "rule" {
+            let cached = self.node_root.lock().expect("header route lock").clone();
+            if let Some(root) = cached {
+                root
+            } else {
+                let raw = read_runtime_config(&self.store.runtime().join("config.yaml"))?;
+                let root = crate::active_route::root(&raw)?;
+                *self.node_root.lock().expect("header route lock") = Some(root.clone());
+                root
+            }
+        } else {
+            String::new()
+        };
+        let mut name = crate::active_route::start(mode, &default).to_owned();
+        if !proxies.proxies.is_empty() {
+            return Ok(crate::active_route::from_snapshot(&name, proxies));
+        }
+        let mut visited = std::collections::BTreeSet::new();
+        for _ in 0..crate::active_route::MAX_DEPTH {
+            if crate::active_route::terminal(&name) {
+                return Ok(Some(name));
+            }
+            if !visited.insert(name.clone()) {
+                return Ok(None);
+            }
+            let proxy = self.api.proxy_selection(&name).await?;
+            if proxy.now.is_empty() {
+                return Ok(Some(name));
+            }
+            name = proxy.now;
+        }
+        Ok(None)
+    }
+
     pub async fn poll(&mut self, scope: Scope) -> Result<Snapshot> {
+        self.poll_with_header(scope, false).await
+    }
+
+    pub async fn poll_with_header(&mut self, scope: Scope, header: bool) -> Result<Snapshot> {
         let mut snapshot = Snapshot::default();
         if let Some(child) = &mut self.child
             && let Some(status) = child.try_wait()?
@@ -1267,6 +1313,18 @@ impl Engine {
         }
         if scope == Scope::Rules {
             snapshot.rules = self.api.get("rules").await?;
+        }
+        if header {
+            // Header failures do not erase useful page data or report a core
+            // failure. Hidden-window polling does not request any node details.
+            snapshot.active_node = tokio::time::timeout(
+                Duration::from_millis(900),
+                self.current_node(&snapshot.mode, &snapshot.proxies),
+            )
+            .await
+            .ok()
+            .and_then(Result::ok)
+            .flatten();
         }
         Ok(snapshot)
     }
