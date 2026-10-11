@@ -306,6 +306,8 @@ pub fn runtime_config(raw: &str, settings: &Settings) -> Result<String> {
     map.insert(Value::from("bind-address"), Value::from("127.0.0.1"));
     map.insert(Value::from("mode"), Value::from(settings.run_mode.clone()));
     map.insert(Value::from("log-level"), Value::from("info"));
+    // Process discovery is not used by this client's connection view.
+    map.insert(Value::from("find-process-mode"), Value::from("off"));
     // Geo downloads are explicitly managed by the application. Even the core's
     // missing-file fallback must not attempt Internet downloads during startup.
     map.insert(Value::from("geo-auto-update"), Value::from(false));
@@ -415,6 +417,20 @@ mod tests {
         assert_eq!(std::fs::read(&path).unwrap(), b"original");
         drop(reader);
         assert_eq!(std::fs::read_dir(directory.path()).unwrap().count(), 1);
+    }
+
+    #[test]
+    fn runtime_disables_process_lookup_even_when_subscription_enables_it() {
+        for mode in ["always", "strict", "off"] {
+            let raw = format!("proxies: []\nfind-process-mode: {mode}\n");
+            let config: Value =
+                serde_yaml::from_str(&runtime_config(&raw, &Settings::default()).unwrap()).unwrap();
+            assert_eq!(config["find-process-mode"].as_str(), Some("off"));
+            assert_eq!(
+                parse_profile(&raw).unwrap()[Value::from("find-process-mode")].as_str(),
+                Some(mode)
+            );
+        }
     }
 
     #[test]

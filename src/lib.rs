@@ -1,6 +1,7 @@
 pub mod api;
 pub mod assets;
 pub mod config;
+pub mod connection;
 pub mod engine;
 pub mod flags;
 pub mod icons;

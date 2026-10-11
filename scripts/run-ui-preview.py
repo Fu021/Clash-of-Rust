@@ -127,6 +127,30 @@ def selection_regression(window, scene, output, env, runner):
     runner.screenshot(window, output/('ip-return-report'+('-light' if light else '')+'.png'), env)
 
 
+def connection_regression(window, scene, output, env, runner):
+    """Click actual sortable headers in both themes and capture both directions."""
+    def click(x, y, field, descending, stem):
+        subprocess.run(['xdotool', 'mousemove', '--window', window, str(x), str(y),
+                        'click', '1', 'mousemove', '--window', window, '10', '10'],
+                       env=env, check=True)
+        time.sleep(0.5)
+        log = (output/(scene+'.log')).read_text()
+        expected = 'preview connection sort: Some('+field+'), descending='+str(descending).lower()
+        if expected not in log:
+            raise RuntimeError('Expected real connection header interaction: '+expected)
+        runner.screenshot(window, output/(stem+('-light' if scene.endswith('light') else '')+'.png'), env)
+
+    click(710, 147, 'DownloadRate', True, 'connections-speed-descending')
+    click(710, 147, 'DownloadRate', False, 'connections-speed-ascending')
+    suffix = '-light' if scene.endswith('light') else ''
+    a = pixels(output/('connections-speed-descending'+suffix+'.png'))
+    b = pixels(output/('connections-speed-ascending'+suffix+'.png'))
+    if not any(a[2][y][194*3:350*3] != b[2][y][194*3:350*3] for y in range(195, 375)):
+        raise RuntimeError('Connection rows did not change when toggling speed order')
+    click(230, 158, 'Name', False, 'connections-name-ascending')
+    click(710, 169, 'DownloadTotal', True, 'connections-total-descending')
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--source', type=Path, required=True)
@@ -189,6 +213,8 @@ def main():
                 runner.screenshot(window, output/(scene+'.png'), env)
                 if scene in ('ip-summary', 'ip-summary-light'):
                     selection_regression(window, scene, output, env, runner)
+                if scene in ('connections', 'connections-light'):
+                    connection_regression(window, scene, output, env, runner)
             finally:
                 if process.poll() is None:
                     os.killpg(process.pid, signal.SIGTERM)

@@ -14,6 +14,7 @@ mod window_state;
 
 use clash_of_rust::{
     config::{Profile, RuleOverrides, SUBSCRIPTION_RULES, Settings, Store},
+    connection::{self, Field as ConnectionField, Sort as ConnectionSort},
     engine::{Engine, ProxyMode, Scope, Snapshot},
     flags, icons, ip_check,
     ip_report::{self, CategoryFilter, RegionFilter, ResultSlot, Status, StatusFilter},
@@ -328,6 +329,7 @@ enum Message {
     Navigate(Page),
     Query(String),
     NodeSort(NodeSort),
+    ConnectionSort(ConnectionField),
     SiteCategory(CategoryFilter),
     SiteStatus(StatusFilter),
     SiteRegion(RegionFilter),
@@ -412,6 +414,8 @@ struct App {
     node_delays: BTreeMap<String, u32>,
     node_sort: NodeSort,
     proxy_order: RefCell<BTreeMap<clash_of_rust::api::Text, Vec<usize>>>,
+    connection_sort: ConnectionSort,
+    connection_order: RefCell<Option<Vec<usize>>>,
     delay_generation: u64,
     delay_aborters: BTreeMap<String, AbortHandle>,
     periodic_aborter: Option<AbortHandle>,
@@ -705,6 +709,8 @@ impl App {
             testing_groups: BTreeSet::new(),
             node_delays: BTreeMap::new(),
             proxy_order: RefCell::new(BTreeMap::new()),
+            connection_sort: ConnectionSort::default(),
+            connection_order: RefCell::new(None),
             delay_generation: 0,
             delay_aborters: BTreeMap::new(),
             periodic_aborter: None,
@@ -1128,6 +1134,7 @@ impl App {
                 self.list_offset = 0;
                 self.snapshot.retain_scope(page.scope());
                 self.proxy_order.get_mut().clear();
+                *self.connection_order.get_mut() = None;
                 self.site_detail = None;
                 return self.dispatch(Action::Refresh);
             }
@@ -1136,7 +1143,13 @@ impl App {
                 self.group_offsets.clear();
                 self.list_offset = 0;
                 self.proxy_order.get_mut().clear();
+                *self.connection_order.get_mut() = None;
                 self.site_detail = None;
+            }
+            Message::ConnectionSort(field) => {
+                self.connection_sort.toggle(field);
+                *self.connection_order.get_mut() = None;
+                self.list_offset = 0;
             }
             Message::NodeSort(mode) => {
                 self.node_sort = mode;
@@ -1717,6 +1730,17 @@ impl App {
                 }
                 self.snapshot.running = reply.running;
                 if let Some(mut snapshot) = reply.snapshot {
+                    if let (Some(now), Some(previous)) = (
+                        snapshot.connections_sampled_at,
+                        self.snapshot.connections_sampled_at,
+                    ) && let Some(elapsed) = now.checked_duration_since(previous)
+                    {
+                        connection::sample_rates(
+                            &mut snapshot.connections.connections,
+                            &self.snapshot.connections.connections,
+                            elapsed,
+                        );
+                    }
                     if reply.scope == Scope::Proxies && snapshot.running {
                         self.proxy_order.get_mut().clear();
                         let proxies = &snapshot.proxies.proxies;
@@ -1746,9 +1770,12 @@ impl App {
                     if snapshot.running && !matches!(reply.scope, Scope::Home | Scope::Connections)
                     {
                         snapshot.connections = std::mem::take(&mut self.snapshot.connections);
+                        snapshot.connections_sampled_at =
+                            self.snapshot.connections_sampled_at.take();
                         snapshot.connection_count = self.snapshot.connection_count;
                     }
                     self.snapshot = snapshot;
+                    *self.connection_order.get_mut() = None;
                     self.snapshot.retain_scope(if self.visible {
                         self.page.scope()
                     } else {
@@ -1851,6 +1878,7 @@ impl App {
                 if self.tray.is_some() {
                     self.visible = false;
                     self.snapshot.retain_scope(Scope::Other);
+                    *self.connection_order.get_mut() = None;
                     let stop_stream = self.dispatch_scope(Action::Refresh, Scope::Other);
                     return Task::batch([
                         iced::window::set_mode(id, iced::window::Mode::Hidden),
@@ -3360,79 +3388,125 @@ impl App {
             .into()
     }
 
+    fn connection_heading(
+        &self,
+        label: &'static str,
+        field: ConnectionField,
+    ) -> Element<'_, Message> {
+        let selected = self.connection_sort.field == Some(field);
+        let arrow = if selected {
+            if self.connection_sort.descending {
+                " ↓"
+            } else {
+                " ↑"
+            }
+        } else {
+            ""
+        };
+        button(
+            self.label(format!("{label}{arrow}"))
+                .size(12)
+                .color(if selected {
+                    self.theme().palette().text
+                } else {
+                    self.secondary()
+                }),
+        )
+        .padding([3, 0])
+        .on_press(Message::ConnectionSort(field))
+        .style(ui_style::text_button)
+        .into()
+    }
+
     fn connections(&self) -> Element<'_, Message> {
-        let query = self.query.to_lowercase();
-        let entries = self.snapshot.connections.connections.iter().filter(|c| {
-            query.is_empty()
-                || query.split_whitespace().all(|word| {
-                    [
-                        c.metadata.host.as_ref(),
-                        c.metadata.destination_ip.as_ref(),
-                        c.metadata.process.as_str(),
-                        c.rule.as_str(),
-                    ]
-                    .into_iter()
-                    .chain(c.chains.iter().map(|name| name.as_str()))
-                    .any(|field| contains_query(field, word))
+        let mut cached = self.connection_order.borrow_mut();
+        let indices = cached.get_or_insert_with(|| {
+            let query = self.query.to_lowercase();
+            let connections = &self.snapshot.connections.connections;
+            let mut indices: Vec<_> = connections
+                .iter()
+                .enumerate()
+                .filter_map(|(index, c)| {
+                    (query.is_empty()
+                        || query.split_whitespace().all(|word| {
+                            [
+                                c.metadata.host.as_ref(),
+                                c.metadata.destination_ip.as_ref(),
+                                c.rule.as_str(),
+                            ]
+                            .into_iter()
+                            .chain(c.chains.iter().map(|name| name.as_str()))
+                            .any(|field| contains_query(field, word))
+                        }))
+                    .then_some(index)
                 })
+                .collect();
+            if self.connection_sort.field.is_some() {
+                indices.sort_unstable_by(|a, b| {
+                    self.connection_sort
+                        .compare(&connections[*a], &connections[*b])
+                });
+            }
+            indices
         });
-        let total = entries.clone().count();
+        let total = indices.len();
         let offset = self.list_offset.min(last_page_offset(total));
         let mut list = column![].spacing(0);
-        for (index, connection) in entries.skip(offset).take(PAGE_SIZE).enumerate() {
+        for (row_index, index) in indices.iter().skip(offset).take(PAGE_SIZE).enumerate() {
+            let connection = &self.snapshot.connections.connections[*index];
             let m = &connection.metadata;
-            let host = if m.host.is_empty() {
-                &m.destination_ip
-            } else {
-                &m.host
+            let rate = |value: Option<u64>| {
+                value.map_or_else(|| "—".into(), |value| format!("{}/s", bytes(value)))
             };
             list = list.push(
                 container(
                     aligned_row![
                         column![
-                            self.label(format!("{}:{}", host, m.destination_port))
-                                .size(14)
-                                .wrapping(text::Wrapping::WordOrGlyph),
-                            self.caption(format!(
-                                "{} · {}",
-                                m.network,
-                                if m.process.is_empty() {
-                                    "未知进程"
-                                } else {
-                                    &m.process
-                                }
+                            self.label(format!(
+                                "{}:{}",
+                                connection::name(connection),
+                                m.destination_port
                             ))
+                            .size(14)
+                            .wrapping(text::Wrapping::WordOrGlyph),
+                            self.caption(m.network.to_string())
                         ]
                         .spacing(4)
                         .width(Length::FillPortion(2)),
                         column![
-                            self.label(connection.rule.as_str()).size(14),
+                            self.label(connection.rule.as_str()).size(13),
                             self.caption(connection.chains.join(" → "))
                                 .wrapping(text::Wrapping::WordOrGlyph)
                         ]
                         .spacing(4)
                         .width(Length::FillPortion(2)),
                         column![
-                            self.label(format!("↑ {}", bytes(connection.upload)))
+                            self.label(rate(connection.rates.map(|r| r.upload)))
                                 .size(13),
-                            self.label(format!("↓ {}", bytes(connection.download)))
-                                .size(13)
+                            self.caption(bytes(connection.upload))
                         ]
                         .spacing(4)
-                        .width(104),
+                        .width(96),
+                        column![
+                            self.label(rate(connection.rates.map(|r| r.download)))
+                                .size(13),
+                            self.caption(bytes(connection.download))
+                        ]
+                        .spacing(4)
+                        .width(96),
                         self.caption(presentation::date_text(&connection.start))
-                            .width(94),
+                            .width(86),
                         self.action(
                             "关闭",
                             Action::Close(connection.id.to_string()),
                             self.snapshot.running
                         )
                     ]
-                    .spacing(10),
+                    .spacing(8),
                 )
                 .padding(10)
                 .width(Length::Fill)
-                .style(move |theme: &Theme| ui_style::table_row(theme, index % 2 == 1)),
+                .style(move |theme: &Theme| ui_style::table_row(theme, row_index % 2 == 1)),
             );
         }
         if total == 0 {
@@ -3441,23 +3515,34 @@ impl App {
         }
         column![
             aligned_row![
-                self.search("搜索域名、IP、进程或规则"),
+                self.search("搜索域名、IP、规则或代理链"),
                 self.caption(format!("匹配 {total} 条"))
             ]
             .spacing(10),
             self.table_header(
                 aligned_row![
-                    self.label("目标 / 进程")
-                        .size(13)
+                    container(self.connection_heading("连接名称", ConnectionField::Name))
                         .width(Length::FillPortion(2)),
-                    self.label("规则 / 代理链")
-                        .size(13)
-                        .width(Length::FillPortion(2)),
-                    self.label("上传 / 下载").size(13).width(104),
-                    self.label("开始时间").size(13).width(94),
-                    self.label("操作").size(13).width(54)
+                    column![
+                        self.connection_heading("规则", ConnectionField::Rule),
+                        self.connection_heading("代理链", ConnectionField::Chain)
+                    ]
+                    .width(Length::FillPortion(2)),
+                    column![
+                        self.connection_heading("上传速度", ConnectionField::UploadRate),
+                        self.connection_heading("上传量", ConnectionField::UploadTotal)
+                    ]
+                    .width(96),
+                    column![
+                        self.connection_heading("下载速度", ConnectionField::DownloadRate),
+                        self.connection_heading("下载量", ConnectionField::DownloadTotal)
+                    ]
+                    .width(96),
+                    container(self.connection_heading("开始时间", ConnectionField::Start))
+                        .width(86),
+                    self.label("操作").size(12).width(54)
                 ]
-                .spacing(10)
+                .spacing(8)
                 .into()
             ),
             container(page_scroll(list).height(Length::Fill))
@@ -4161,6 +4246,38 @@ mod window_tests {
 #[cfg(test)]
 mod memory_tests {
     use super::*;
+
+    #[test]
+    fn connection_sort_applies_to_all_filtered_rows_before_pagination() {
+        let mut app = App::with_engine(Err(anyhow::anyhow!("view test")), None).0;
+        app.snapshot.connections = serde_json::from_value(serde_json::json!({"connections":
+            (0..125).map(|index| serde_json::json!({"id": index.to_string(),
+                "metadata": {"host": if index == 124 { "other.test" } else { "example.test" }, "process": "hidden-process"},
+                "download": index, "rule":"MATCH"})).collect::<Vec<_>>()
+        })).unwrap();
+        let _ = app.update(Message::Query("example.test".into()));
+        let _ = app.update(Message::ConnectionSort(ConnectionField::DownloadTotal));
+        {
+            let _view = app.connections();
+        }
+        {
+            let order = app.connection_order.borrow();
+            let order = order.as_ref().unwrap();
+            assert_eq!(order.len(), 124);
+            assert_eq!(order[0], 123);
+            assert_eq!(order[PAGE_SIZE], 63);
+        }
+        let _ = app.update(Message::ConnectionSort(ConnectionField::DownloadTotal));
+        {
+            let _view = app.connections();
+        }
+        assert_eq!(app.connection_order.borrow().as_ref().unwrap()[0], 0);
+        let _ = app.update(Message::Query("hidden-process".into()));
+        {
+            let _view = app.connections();
+        }
+        assert!(app.connection_order.borrow().as_ref().unwrap().is_empty());
+    }
 
     #[test]
     fn proxy_widget_count_is_bounded_across_many_expanded_groups() {

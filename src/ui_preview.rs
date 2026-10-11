@@ -110,6 +110,20 @@ fn fixture(scene: &str) -> App {
             {"id":"2","metadata":{"host":"www.google.com","destinationPort":"443","network":"tcp","process":"chrome"},"rule":"MATCH","chains":["自动选择","香港02"],"upload":18432,"download":1258291,"start":"2026-10-10T14:31:08Z"},
             {"id":"3","metadata":{"host":"example.org","destinationPort":"443","network":"tcp","process":"curl"},"rule":"DOMAIN","chains":["DIRECT"],"upload":2048,"download":34816,"start":"2026-10-10T14:31:40Z"}
         ]})).unwrap();
+        let previous = app.snapshot.connections.connections.clone();
+        for (connection, upload, download) in [
+            (0, 24 * 1024, 256 * 1024),
+            (1, 8 * 1024, 2 * 1024 * 1024),
+            (2, 0, 0),
+        ] {
+            app.snapshot.connections.connections[connection].upload += upload;
+            app.snapshot.connections.connections[connection].download += download;
+        }
+        connection::sample_rates(
+            &mut app.snapshot.connections.connections,
+            &previous,
+            Duration::from_secs(1),
+        );
     } else if scene == "rules" {
         app.page = Page::Rules;
         app.snapshot.rules = serde_json::from_value(serde_json::json!({"rules":[
@@ -268,6 +282,7 @@ fn update(app: &mut App, message: Message) -> Task<Message> {
             | Message::SiteReport
             | Message::SiteDetail(_)
             | Message::NodeSort(_)
+            | Message::ConnectionSort(_)
     ) {
         eprintln!("preview interaction: {message:?}");
     }
@@ -285,6 +300,14 @@ fn update(app: &mut App, message: Message) -> Task<Message> {
         | Message::SiteSummaryFilter(..)
         | Message::SiteResetFilters
         | Message::SiteReport => app.update(message),
+        Message::ConnectionSort(field) => {
+            let task = app.update(Message::ConnectionSort(field));
+            eprintln!(
+                "preview connection sort: {:?}, descending={}",
+                app.connection_sort.field, app.connection_sort.descending
+            );
+            task
+        }
         _ => Task::none(),
     }
 }

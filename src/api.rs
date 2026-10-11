@@ -372,8 +372,11 @@ pub struct Metadata {
     pub destination_port: Text,
     #[serde(default)]
     pub network: Network,
-    #[serde(default)]
-    pub process: Text,
+}
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ConnectionRates {
+    pub upload: u64,
+    pub download: u64,
 }
 #[derive(Debug, Clone, Default, Deserialize)]
 pub struct Connection {
@@ -384,6 +387,8 @@ pub struct Connection {
     pub upload: u64,
     #[serde(default)]
     pub download: u64,
+    #[serde(skip)]
+    pub rates: Option<ConnectionRates>,
     #[serde(default, deserialize_with = "compact_vec")]
     pub chains: Vec<Text>,
     #[serde(default)]
@@ -614,10 +619,6 @@ mod tests {
         let [a, b] = connections.connections.as_slice() else {
             panic!("missing connections")
         };
-        assert!(std::sync::Arc::ptr_eq(
-            &a.metadata.process.0,
-            &b.metadata.process.0
-        ));
         assert!(std::sync::Arc::ptr_eq(&a.chains[0].0, &b.chains[0].0));
         assert_eq!(a.metadata.network, Network::Tcp);
         assert_eq!(b.metadata.network, Network::Udp);

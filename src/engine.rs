@@ -131,6 +131,7 @@ pub struct Snapshot {
     pub system_proxy: bool,
     pub proxies: Proxies,
     pub connections: Connections,
+    pub connections_sampled_at: Option<Instant>,
     pub connection_count: usize,
     pub rules: Rules,
     pub upload_rate: u64,
@@ -150,6 +151,7 @@ impl Snapshot {
         }
         if scope != Scope::Connections {
             self.connections.connections = Vec::new();
+            self.connections_sampled_at = None;
         }
         if scope != Scope::Logs {
             self.logs = Vec::new();
@@ -1214,6 +1216,9 @@ impl Engine {
                 snapshot.connection_count = snapshot.connections.connections.len();
             }
             let now = Instant::now();
+            if scope == Scope::Connections {
+                snapshot.connections_sampled_at = Some(now);
+            }
             let up = snapshot.connections.upload_total;
             let down = snapshot.connections.download_total;
             if let Some((last, old_up, old_down)) = self.last_totals {
