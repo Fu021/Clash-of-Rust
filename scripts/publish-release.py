@@ -21,13 +21,15 @@ import zipfile
 from build_support import ROOT, opener, sha256, validate_version
 
 CI_JOBS = {
-    'windows-x64', 'windows-arm64', 'linux-x64', 'linux-arm64',
+    'windows-x64', 'windows-arm64', 'linux-x64', 'linux-arm64', 'macos-x64', 'macos-arm64',
 }
 PACKAGES = {
     'package-windows-x64': 'windows-x64-setup.exe',
     'package-windows-arm64': 'windows-arm64-setup.exe',
     'package-linux-x64': 'linux-amd64.deb',
     'package-linux-arm64': 'linux-arm64.deb',
+    'package-macos-x64': 'macos-x64.dmg',
+    'package-macos-arm64': 'macos-arm64.dmg',
 }
 PACKAGE_JOBS = set(PACKAGES) | {'Ubuntu latest-x64 TUN and GUI'}
 
@@ -115,7 +117,7 @@ def verified_run(client, commit, run_id=None, check_only=False):
             'Source branch has changed; select its current successful CI')
     jobs = client(f'/actions/runs/{run_id}/jobs?filter=latest&per_page=100')['jobs']
     require(len(jobs) == len(CI_JOBS) and {j['name'] for j in jobs} == CI_JOBS,
-            'CI does not cover all four native platforms')
+            'CI does not cover all six native platforms')
     require(all(j['status'] == 'completed' and j['conclusion'] == 'success' for j in jobs), 'A required CI job did not pass')
     return run
 
@@ -142,7 +144,7 @@ def filenames(version):
 
 def validate_files(paths, version):
     files = {p.name: p for p in paths}
-    require(len(files) == len(paths) and set(files) == filenames(version), 'Expected exactly four installers and four checksum files')
+    require(len(files) == len(paths) and set(files) == filenames(version), 'Expected exactly six installers and six checksum files')
     for name, path in files.items():
         require(path.is_file() and not path.is_symlink(), 'Release asset must be a regular file: ' + name)
         if name.endswith('.sha256'):
@@ -329,14 +331,14 @@ def main():
         local = validate_files(args.asset, version)
         require(all(sha256(local[name]) == sha256(path) for name, path in files.items()), 'Local assets differ from selected CI')
     print('Verified CI:', run['html_url'])
-    print('Verified version and all eight attachments:', tag)
+    print('Verified version and all twelve attachments:', tag)
     if args.check:
         print('Check complete; no release changes made')
         return
     url = publish(client, commit, tag, notes, files)
     if os.environ.get('GITHUB_STEP_SUMMARY'):
         with Path(os.environ['GITHUB_STEP_SUMMARY']).open('a', encoding='utf-8') as summary:
-            summary.write(f'[Published {tag}]({url}) — four installers and four SHA256 files verified.\n')
+            summary.write(f'[Published {tag}]({url}) — six installers and six SHA256 files verified.\n')
 
 
 if __name__ == '__main__':

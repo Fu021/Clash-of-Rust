@@ -9,7 +9,7 @@ import shutil
 import sys
 import json
 import subprocess
-from build_support import ROOT, bundle_directory, copy_static, deb_version, file_version, host_arch, nsis, numeric_version, package_version, run, sha256, stage_resources, staging_directory, validate_binary_arch, validate_version
+from build_support import host_system, ROOT, bundle_directory, copy_static, deb_version, file_version, host_arch, nsis, numeric_version, package_version, run, sha256, stage_resources, staging_directory, validate_binary_arch, validate_version
 import importlib.util
 
 _spec = importlib.util.spec_from_file_location('prepare_resources', ROOT/'scripts/prepare-resources.py')
@@ -121,12 +121,12 @@ def main():
     parser.add_argument('--proxy', default='')
     parser.add_argument('--skip-prepare', action='store_true')
     parser.add_argument('--version', default=package_version())
-    parser.add_argument('--system', choices=('windows','linux'), default='windows' if os.name == 'nt' else 'linux')
+    parser.add_argument('--system', choices=('windows','linux','macos'), default=host_system())
     parser.add_argument('--arch', choices=('x64','arm64'), default=host_arch())
     parser.add_argument('--prebuilt', type=Path, help='Verified CI build directory; package without Cargo or downloads')
     args = parser.parse_args()
     version = validate_version(args.version)
-    host = 'windows' if os.name == 'nt' else 'linux' if sys.platform.startswith('linux') else 'unsupported'
+    host = host_system()
     if (args.system,args.arch) != (host,host_arch()):
         raise ValueError('Packaging requires a native build on the selected system/architecture')
     if args.system == 'linux':
@@ -153,6 +153,10 @@ def main():
             if file_version(artifact) != version:
                 raise ValueError('Installer PE version differs from package version')
             artifacts.append(artifact)
+        elif args.system == 'macos':
+            from macos_package import build_dmg
+            shutil.copy2(binary.with_name('clash-tun-launcher'), stage/'clash-tun-launcher')
+            artifacts.append(build_dmg(stage, version, args.arch))
         else:
             artifacts.append(build_deb(stage,version,args.arch))
     for artifact in artifacts:
@@ -179,7 +183,7 @@ def build_inputs(args, version):
         env.pop('CLASH_OF_RUST_BUILD_VERSION',None)
     else:
         env['CLASH_OF_RUST_BUILD_VERSION'] = version
-    run(['cargo','build','--release','--locked'],env=env)
+    run(['cargo','build','--release','--locked','--bins'],env=env)
     metadata = json.loads(subprocess.check_output(['cargo','metadata','--format-version','1','--no-deps','--offline'],cwd=ROOT))
     binary = Path(metadata['target_directory'])/'release'/('clash-of-rust.exe' if args.system == 'windows' else 'clash-of-rust')
     return resources, binary

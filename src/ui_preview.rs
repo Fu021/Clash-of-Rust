@@ -324,6 +324,7 @@ fn update(app: &mut App, message: Message) -> Task<Message> {
     }
 }
 
+#[cfg(not(target_os = "macos"))]
 pub(crate) fn run() -> iced::Result {
     typography::initialize();
     let scene = std::env::var("CLASH_UI_PREVIEW_SCENE").expect("preview scene");
@@ -351,6 +352,112 @@ pub(crate) fn run() -> iced::Result {
     })
     .window(iced::window::Settings {
         size,
+        min_size: Some(MIN_WINDOW_SIZE),
+        ..Default::default()
+    })
+    .run()
+}
+
+// Native screenshots use iced's rendered pixels rather than screen recording.
+// This test executable and its fixture data never enter distributed app bundles.
+#[cfg(target_os = "macos")]
+struct Capture {
+    app: App,
+}
+#[cfg(target_os = "macos")]
+#[derive(Debug, Clone)]
+enum CaptureMessage {
+    App(Message),
+    Take,
+    TrayChecked,
+    Captured(iced::window::Screenshot),
+}
+#[cfg(target_os = "macos")]
+fn capture_update(state: &mut Capture, message: CaptureMessage) -> Task<CaptureMessage> {
+    match message {
+        CaptureMessage::App(message) => update(&mut state.app, message).map(CaptureMessage::App),
+        CaptureMessage::Take => {
+            if std::env::var("CLASH_UI_PREVIEW_SCENE").as_deref() == Ok("home") {
+                return iced::window::latest().and_then(|id| {
+                    iced::window::run(id, |_| {
+                        // Exercise AppKit creation, all menu/icon states and final
+                        // destruction on the real GUI event loop's main thread.
+                        let guard = tray::start().expect("create main-thread tray");
+                        for (mode, system_proxy, tun) in [
+                            ("rule", false, false),
+                            ("global", true, false),
+                            ("direct", false, true),
+                        ] {
+                            guard.update(&Snapshot {
+                                running: true,
+                                mode: mode.into(),
+                                system_proxy,
+                                tun,
+                                ..Default::default()
+                            });
+                            tray::pump();
+                            tray::verify_native_state();
+                        }
+                        drop(guard);
+                        tray::pump();
+                        CaptureMessage::TrayChecked
+                    })
+                });
+            }
+            iced::window::latest()
+                .and_then(|id| iced::window::screenshot(id).map(CaptureMessage::Captured))
+        }
+        CaptureMessage::TrayChecked => iced::window::latest()
+            .and_then(|id| iced::window::screenshot(id).map(CaptureMessage::Captured)),
+        CaptureMessage::Captured(screenshot) => {
+            let output = std::path::PathBuf::from(
+                std::env::var_os("CLASH_UI_PREVIEW_OUTPUT").expect("capture output"),
+            );
+            std::fs::write(output.with_extension("rgba"), screenshot.as_ref())
+                .expect("save rendered pixels");
+            std::fs::write(
+                output.with_extension("json"),
+                serde_json::to_vec(&[screenshot.size.width, screenshot.size.height]).unwrap(),
+            )
+            .expect("save screenshot size");
+            iced::exit()
+        }
+    }
+}
+#[cfg(target_os = "macos")]
+fn capture_view(state: &Capture) -> Element<'_, CaptureMessage> {
+    state.app.view().map(CaptureMessage::App)
+}
+#[cfg(target_os = "macos")]
+pub(crate) fn run() -> iced::Result {
+    typography::initialize();
+    let scene = std::env::var("CLASH_UI_PREVIEW_SCENE").expect("preview scene");
+    iced::application(
+        move || {
+            (
+                Capture {
+                    app: fixture(&scene),
+                },
+                Task::perform(
+                    async {
+                        tokio::time::sleep(Duration::from_secs(2)).await;
+                    },
+                    |_| CaptureMessage::Take,
+                ),
+            )
+        },
+        capture_update,
+        capture_view,
+    )
+    .title("Clash of Rust · UI preview")
+    .theme(|state: &Capture| state.app.theme())
+    .default_font(typography::ENGLISH_FONT)
+    .settings(iced::Settings {
+        default_text_size: iced::Pixels(15.0),
+        ..Default::default()
+    })
+    .window(iced::window::Settings {
+        size: DEFAULT_WINDOW_SIZE,
         min_size: Some(MIN_WINDOW_SIZE),
         ..Default::default()
     })

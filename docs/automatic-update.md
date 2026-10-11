@@ -11,13 +11,13 @@
 | 下载即将完成时点击取消 | 若取消先被处理，不安装；若已进入安装阶段，取消下载按钮已撤掉 |
 | 代理回退或校验文件下载期间取消 | 停止本次更新，不继续尝试其他连接 |
 
-Windows ARM64 客户端应选择 `windows-arm64-setup.exe`；Linux ARM64 客户端应选择 `linux-arm64.deb`。CI 验证四种系统/架构的程序与内核；Publish Release 验证对应安装包，正式发布前需全部通过。
+Windows ARM64 客户端应选择 `windows-arm64-setup.exe`；Linux ARM64 客户端应选择 `linux-arm64.deb`；macOS Intel 与 Apple Silicon 分别选择 `macos-x64.dmg` 和 `macos-arm64.dmg`。CI 验证六种系统/架构的程序与内核；Publish Release 验证对应安装包，正式发布前需全部通过。
 
 ## 安装升级
 
 从已安装的旧版本检查更新，验证下载进度、系统安装授权、自动重启以及设置页显示新版本。客户端更新和订阅更新应自动选择代理和直连。
 
-Windows 自动安装需要完成 UAC 授权。Linux 普通用户需要 `pkexec` 与可用的桌面授权服务。
+Windows 自动安装需要完成 UAC 授权。Linux 普通用户需要 `pkexec` 与可用的桌面授权服务。macOS 挂载并校验 DMG 后替换应用，应用目录不可写时请求管理员授权；替换失败恢复旧版。macOS 的授权、取消与更新后启动仍需交互式验收，见 [macOS 测试清单](macos-ci-checklist.md)。
 
 每次重复升级测试前重新安装旧版本，订阅与个人设置应保留。
 

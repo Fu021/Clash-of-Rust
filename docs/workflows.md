@@ -2,22 +2,24 @@
 
 | 工作流 | 触发 | 职责 | 产物 |
 | --- | --- | --- | --- |
-| Rust / CI | main push、PR | 四平台编译、静态检查、代码与原生接口测试 | `build-{system}-{arch}`，保留 14 天 |
-| Publish Release | 手动 | 复用成功 CI 的程序，打包、安装后测试、发布 | 四个安装包及 SHA256；测试产物保留 14 天 |
+| Rust / CI | main push、PR | 六平台编译、静态检查、代码与原生接口测试 | `build-{system}-{arch}`，保留 14 天 |
+| Publish Release | 手动 | 复用成功 CI 的程序，打包、安装后测试、发布 | 六个安装包及 SHA256；测试产物保留 14 天 |
 | Memory Benchmark | 手动 | 测量一个远程分支、标签或提交的内存 | 原始 JSONL、报告、截图、构建日志；保留 30 天 |
 
-四个平台为 Windows x64 / ARM64、Linux x64 / ARM64。Ubuntu 最新版兼容验证在发布工作流中执行。
+六个平台为 Windows x64 / ARM64、Linux x64 / ARM64、macOS Intel / Apple Silicon。Ubuntu 最新版兼容验证在发布工作流中执行。
 
 ## CI
 
 - 使用同一个 Release profile 执行 Clippy、构建、全部 target 的测试，复用依赖编译缓存。
 - 生成代码检查集中在 Linux x64；通用 Python 构建工具和产物协议测试在 Linux x64 与两种 Windows 架构执行，Windows 同时检查原生 PE 版本。
-- 四个平台运行真实 mihomo 集成测试。Linux 原生 GSettings、KDE、托盘测试和 Windows 原生托盘、自启动、图标、更新辅助程序测试保留在 CI。
+- 六个平台运行真实 mihomo 集成测试。Linux 原生 GSettings、KDE、托盘测试和 Windows 原生托盘、自启动、图标、更新辅助程序测试保留在 CI。
 - 已构建的测试程序直接执行，避免每次过滤测试都调用 Cargo。
 - main 推送和 PR 更新触发 CI，避免同一 feature 分支的 push 与 PR 同时执行两套矩阵；分支开发通过 PR 验证。同分支的过时 CI 会取消。资源按平台与日期缓存，使用前仍校验官方哈希；应用和资源打包时使用白名单。
 - CI 不生成安装包。编译产物使用 tar 保存执行权限，附带提交 SHA、版本、平台、Cargo.lock 校验值、工具链和逐文件校验清单。
 
 Windows 的逐项覆盖、权限环境和发布包测试范围见 [Windows CI 测试清单](windows-ci-checklist.md)。原生测试按 8 组记录耗时与结果，失败时仍保留 `windows-ci-report-{arch}` 产物。
+
+macOS 的自动检查、诊断产物与交互式验收范围见 [macOS 测试清单](macos-ci-checklist.md)。Intel 使用 `macos-15-intel`，ARM 使用 `macos-latest`；失败时仍上传完整诊断报告。
 
 ## Publish Release
 
@@ -28,12 +30,13 @@ Windows 的逐项覆盖、权限环境和发布包测试范围见 [Windows CI �
 
 发布流程固定到所选 CI 的提交，不在打包阶段重新编译，也不重新下载资源。构建产物过期时需要重新运行 CI。
 
-1. 正式发布检查当前 main 与成功的 main push CI；开发分支仅测试时检查同仓库 PR CI 与当前分支提交一致。两种模式都要求四平台检查成功、四份构建产物完整。
-2. 四个平台并行获取、校验并打包已有程序。
+1. 正式发布检查当前 main 与成功的 main push CI；开发分支仅测试时检查同仓库 PR CI 与当前分支提交一致。两种模式都要求六平台检查成功、六份构建产物完整。
+2. 六个平台并行获取、校验并打包已有程序。
 3. Windows 测试最终安装包的安装、同版本更新、卸载及用户文件保留；继续执行隔离的失败恢复、退出、重装和旧版迁移测试；扫描 Defender。
 4. Linux 验证 DEB 内容、安装、GUI、后台启动、TUN 授权、DNS、路由与清理。
-5. 最新版 Ubuntu 通过 `scripts/test-release-package.py --ubuntu-latest` 验证，使用官方 HTTPS APT 镜像和有界下载等待，避免 Azure 镜像挂起；安装同一份 Ubuntu 22.04 构建的 DEB，再验证 GUI 和 TUN；不重复编译或打包。
-6. 最终步骤核对所有测试 job、安装包校验值、测试成功记录与来源 CI；八个附件上传并核对后才公开 Release。开发版本标记为 prerelease，不覆盖稳定版 latest。
+5. macOS 验证 `.app` / DMG 架构、版本、资源和签名，安装后启动真实 GUI 与内核。当前安装包采用 ad-hoc 签名，尚未配置 Developer ID 签名与 Apple 公证；自动测试不代替首次下载后的 Gatekeeper 交互验收。
+6. 最新版 Ubuntu 通过 `scripts/test-release-package.py --ubuntu-latest` 验证，使用官方 HTTPS APT 镜像和有界下载等待，避免 Azure 镜像挂起；安装同一份 Ubuntu 22.04 构建的 DEB，再验证 GUI 和 TUN；不重复编译或打包。
+7. 最终步骤核对所有测试 job、安装包校验值、测试成功记录与来源 CI；十二个附件上传并核对后才公开 Release。开发版本标记为 prerelease，不覆盖稳定版 latest。
 
 只有最终发布 job 有 `contents: write`；前面的编译和打包测试使用读取权限。
 

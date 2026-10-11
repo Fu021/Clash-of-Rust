@@ -6,7 +6,7 @@ from pathlib import Path
 import shutil
 import sys
 
-from build_support import ROOT, bundle_directory, host_arch, run, sha256, write_json
+from build_support import host_system, ROOT, bundle_directory, host_arch, run, sha256, write_json
 from workflow_artifacts import commit, verify_build
 
 
@@ -59,7 +59,7 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--ubuntu-latest', action='store_true',
                         help='Test the verified Ubuntu 22.04 package on the latest Ubuntu runner')
-    parser.add_argument('--system', choices=('windows', 'linux'))
+    parser.add_argument('--system', choices=('windows', 'linux', 'macos'))
     parser.add_argument('--arch', choices=('x64', 'arm64'))
     parser.add_argument('--build', type=Path)
     parser.add_argument('--ci-run-id', type=int)
@@ -72,7 +72,7 @@ def main():
         return
     if any(value is None for value in inputs):
         parser.error('--system, --arch, --build and --ci-run-id are required for packaging')
-    if (args.system, args.arch) != ('windows' if os.name == 'nt' else 'linux', host_arch()):
+    if (args.system, args.arch) != (host_system(), host_arch()):
         raise ValueError('Packaging tests require the selected native platform')
     manifest = verify_build(args.build, args.system, args.arch, commit())
     # The existing installer test constructs isolated fixture installers from
@@ -80,11 +80,14 @@ def main():
     shutil.copytree(args.build/'payload', bundle_directory(args.system, args.arch), dirs_exist_ok=True)
     run([sys.executable, ROOT/'scripts/build-installer.py', '--system', args.system,
          '--arch', args.arch, '--prebuilt', args.build])
-    extension = f'windows-{args.arch}-setup.exe' if args.system == 'windows' else f"linux-{'amd64' if args.arch == 'x64' else 'arm64'}.deb"
+    extension = f'windows-{args.arch}-setup.exe' if args.system == 'windows' else f'macos-{args.arch}.dmg' if args.system == 'macos' else f"linux-{'amd64' if args.arch == 'x64' else 'arm64'}.deb"
     package = ROOT/'dist'/f"Clash-of-Rust-{manifest['version']}-{extension}"
     if args.system == 'windows':
         run([sys.executable, ROOT/'scripts/test-installer.py', '--package', package])
         run([sys.executable, ROOT/'scripts/scan-defender.py', '--update-signatures', package])
+    elif args.system == 'macos':
+        from macos_ci import package_tests
+        package_tests(package, manifest, args.build)
     else:
         tun = args.build/manifest['tests']['linux_tun']
         linux_package_tests(package, tun)

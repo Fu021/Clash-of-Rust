@@ -100,21 +100,34 @@ fn main() -> iced::Result {
     };
     #[cfg(not(windows))]
     let _installation_guard = {
-        let Ok(store) = startup_store() else {
-            return Ok(());
+        let store = match startup_store() {
+            Ok(store) => store,
+            Err(error) => {
+                eprintln!("桌面数据目录初始化失败：{error:#}");
+                return Ok(());
+            }
         };
-        let Ok(file) = std::fs::OpenOptions::new()
+        let file = match std::fs::OpenOptions::new()
             .read(true)
             .write(true)
             .create(true)
             .truncate(false)
             .open(store.root.join("desktop.lock"))
-        else {
-            return Ok(());
+        {
+            Ok(file) => file,
+            Err(error) => {
+                eprintln!("无法打开桌面实例锁：{error}");
+                return Ok(());
+            }
         };
         let deadline = std::time::Instant::now() + Duration::from_secs(30);
         while file.try_lock().is_err() {
             if !update_restart() || std::time::Instant::now() >= deadline {
+                #[cfg(target_os = "macos")]
+                if !background_start() {
+                    let _ =
+                        clash_of_rust::config::atomic_write(&store.root.join("show-window"), b"");
+                }
                 return Ok(());
             }
             std::thread::sleep(Duration::from_millis(100));
@@ -377,6 +390,8 @@ enum Message {
     OpenRelease,
     ReleaseOpened(Result<(), String>),
     Tick,
+    #[cfg(target_os = "macos")]
+    MacTrayPumped,
     ToggleGroup(String),
     GroupPage(String, bool),
     GroupDelay(String),
@@ -1000,7 +1015,31 @@ impl App {
     }
 
     fn update(&mut self, message: Message) -> Task<Message> {
+        #[cfg(target_os = "macos")]
+        let pump = matches!(
+            &message,
+            Message::Tick | Message::Window((_, iced::window::Event::Opened { .. }))
+        );
+        let task = self.update_message(message);
+        #[cfg(target_os = "macos")]
+        if pump {
+            return Task::batch([
+                task,
+                iced::window::latest().and_then(|id| {
+                    iced::window::run(id, |_| {
+                        tray::pump();
+                        Message::MacTrayPumped
+                    })
+                }),
+            ]);
+        }
+        task
+    }
+
+    fn update_message(&mut self, message: Message) -> Task<Message> {
         match message {
+            #[cfg(target_os = "macos")]
+            Message::MacTrayPumped => {}
             Message::DismissNotice => {
                 self.notice_visible = false;
                 self.updates.failure = None;

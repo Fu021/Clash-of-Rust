@@ -3,7 +3,7 @@
 </p>
 <h1 align="center">Clash of Rust</h1>
 
-基于 mihomo 的原生 Rust 代理客户端。支持 **Windows（x64 / ARM64）** 和 **Debian/Ubuntu（amd64 / ARM64）**。版本 **0.5.2**，更新内容见 [发布说明](docs/releases/0.5.2.md)。
+基于 mihomo 的原生 Rust 代理客户端。支持 **Windows（x64 / ARM64）**、**Debian/Ubuntu（amd64 / ARM64）** 和 **macOS 14 及以上（Intel / Apple Silicon）**。版本 **0.5.3**，更新内容见 [发布说明](docs/releases/0.5.3.md)。
 
 ## Features
 
@@ -23,26 +23,30 @@
 
 | 平台 | 安装包 |
 | --- | --- |
-| Windows x64 | [Clash-of-Rust-0.5.2-windows-x64-setup.exe](https://github.com/Fu021/Clash-of-Rust/releases/download/v0.5.2/Clash-of-Rust-0.5.2-windows-x64-setup.exe) |
-| Windows ARM64 | [Clash-of-Rust-0.5.2-windows-arm64-setup.exe](https://github.com/Fu021/Clash-of-Rust/releases/download/v0.5.2/Clash-of-Rust-0.5.2-windows-arm64-setup.exe) |
-| Debian/Ubuntu amd64 | [Clash-of-Rust-0.5.2-linux-amd64.deb](https://github.com/Fu021/Clash-of-Rust/releases/download/v0.5.2/Clash-of-Rust-0.5.2-linux-amd64.deb) |
-| Debian/Ubuntu ARM64 | [Clash-of-Rust-0.5.2-linux-arm64.deb](https://github.com/Fu021/Clash-of-Rust/releases/download/v0.5.2/Clash-of-Rust-0.5.2-linux-arm64.deb) |
+| Windows x64 | [Clash-of-Rust-0.5.3-windows-x64-setup.exe](https://github.com/Fu021/Clash-of-Rust/releases/download/v0.5.3/Clash-of-Rust-0.5.3-windows-x64-setup.exe) |
+| Windows ARM64 | [Clash-of-Rust-0.5.3-windows-arm64-setup.exe](https://github.com/Fu021/Clash-of-Rust/releases/download/v0.5.3/Clash-of-Rust-0.5.3-windows-arm64-setup.exe) |
+| Debian/Ubuntu amd64 | [Clash-of-Rust-0.5.3-linux-amd64.deb](https://github.com/Fu021/Clash-of-Rust/releases/download/v0.5.3/Clash-of-Rust-0.5.3-linux-amd64.deb) |
+| Debian/Ubuntu ARM64 | [Clash-of-Rust-0.5.3-linux-arm64.deb](https://github.com/Fu021/Clash-of-Rust/releases/download/v0.5.3/Clash-of-Rust-0.5.3-linux-arm64.deb) |
+| macOS Intel | [Clash-of-Rust-0.5.3-macos-x64.dmg](https://github.com/Fu021/Clash-of-Rust/releases/download/v0.5.3/Clash-of-Rust-0.5.3-macos-x64.dmg) |
+| macOS Apple Silicon | [Clash-of-Rust-0.5.3-macos-arm64.dmg](https://github.com/Fu021/Clash-of-Rust/releases/download/v0.5.3/Clash-of-Rust-0.5.3-macos-arm64.dmg) |
 
 Windows 运行安装程序；Debian/Ubuntu 使用 `sudo apt install ./安装包文件名.deb`。升级保留订阅和个人设置；Windows 卸载可选删除全部配置和数据，默认不勾选。
+
+macOS 打开 DMG，将 **Clash of Rust.app** 拖入 **Applications（应用程序）** 后启动。系统代理和 TUN 按需请求管理员授权，登录自启以普通用户后台运行。当前 Mac 安装包使用 ad-hoc 签名，尚未进行 Developer ID 签名和 Apple 公证；首次打开若提示无法验证开发者，可确认来源及校验值后，在“系统设置 → 隐私与安全性”中选择“仍要打开”，见 [Apple 说明](https://support.apple.com/zh-cn/102445)。
 
 可能造成 Windows Defender 误判查杀，需自行规避。
 
 ## 内存占用
 
-实测版本 **0.5.2-dev.1**（`c10e11d`，0.5.2 发布前代码）；Ubuntu 22.04 x64、Release 构建，快捷规则、系统代理和 TUN 关闭，固定输入为 2,000 节点、40 组和 20,000 条规则：
+实测版本 **0.5.3-dev.1**（`1c442bb`，0.5.3 发布前代码）；Ubuntu 22.04 x64、Release 构建，快捷规则、系统代理和 TUN 关闭，固定输入为 2,000 节点、40 组和 20,000 条规则：
 
 | 场景 | GUI RSS | GUI 与内核合计 PSS |
 | --- | ---: | ---: |
-| 首页 | 68.39 MiB | 118.59 MiB |
-| 代理组折叠 | 71.54 MiB | 158.15 MiB |
-| 节点搜索 | 76.40 MiB | 164.99 MiB |
+| 首页 | 77.22 MiB | 128.27 MiB |
+| 代理组折叠 | 78.88 MiB | 166.53 MiB |
+| 节点搜索 | 83.75 MiB | 173.54 MiB |
 
-五项快捷规则全开时，首页 GUI RSS 为 78.99 MiB，合计 PSS 为 154.77 MiB。以上为每场景采样 10 秒、间隔 250 ms 的观测峰值，实际占用随配置和使用情况变化；RSS 含共享页，PSS 按比例分摊共享页。[测试记录](https://github.com/Fu021/Clash-of-Rust/actions/runs/38111568996)。
+五项快捷规则全开时，首页 GUI RSS 为 79.70 MiB，合计 PSS 为 153.82 MiB。以上为每场景采样 10 秒、间隔 250 ms 的观测峰值，实际占用随系统、配置和使用情况变化；RSS 含共享页，PSS 按比例分摊共享页。[测试记录](https://github.com/Fu021/Clash-of-Rust/actions/runs/38134965940)。
 
 ## 编译与打包
 
@@ -61,6 +65,13 @@ sudo apt install build-essential pkg-config dpkg-dev libglib2.0-dev libxkbcommon
 python3 scripts/build-installer.py
 ```
 
+**macOS**：安装 Xcode Command Line Tools，在 Intel 或 Apple Silicon Mac 上执行，生成对应架构的 DMG：
+
+```text
+xcode-select --install
+MACOSX_DEPLOYMENT_TARGET=14.0 python3 scripts/build-installer.py
+```
+
 资源已准备好可加 `--skip-prepare`；下载需要代理时可加 `--proxy http://127.0.0.1:7897`。Windows 使用 WSL 构建 Linux 包可执行 `python scripts/build-wsl.py --distro Ubuntu-22.04`，项目会同步到 Linux 文件系统编译。
 
 ## 开发与发布
@@ -73,7 +84,7 @@ python scripts/test-build-tools.py
 python scripts/test-workflow-artifacts.py
 ```
 
-开发分支通过 PR 运行四平台 CI，完成编译、测试并保存原生程序；手动 Publish Release 复用 main 的成功 CI 产物，完成打包和安装测试后发布，支持只测试不发布。手动 Memory Benchmark 可测指定提交的内存，并可附加实际界面预览。操作与产物说明见 [工作流文档](docs/workflows.md)，客户端内更新测试见 [更新测试说明](docs/automatic-update.md)。
+开发分支通过 PR 运行六平台 CI，完成编译、测试并保存原生程序；手动 Publish Release 复用 main 的成功 CI 产物，完成打包和安装测试后发布，支持只测试不发布。macOS 分别使用 Intel 和 Apple Silicon 原生 runner，保存逐项报告、日志、崩溃信息和深浅色界面截图，详见 [macOS 测试清单](docs/macos-ci-checklist.md)。手动 Memory Benchmark 可测指定提交的内存，并可附加实际界面预览。操作与产物说明见 [工作流文档](docs/workflows.md)，客户端内更新测试见 [更新测试说明](docs/automatic-update.md)。
 
 ## License
 

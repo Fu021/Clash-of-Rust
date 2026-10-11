@@ -17,7 +17,7 @@ from build_support import (ROOT, bundle_directory, package_version, sha256,
                            stage_resources, validate_binary_arch, validate_resources, file_version,
                            write_json)
 
-BUILD_NAMES = {f'build-{system}-{arch}' for system in ('windows', 'linux') for arch in ('x64', 'arm64')}
+BUILD_NAMES = {f'build-{system}-{arch}' for system in ('windows', 'linux', 'macos') for arch in ('x64', 'arm64')}
 ARCHIVE_NAME = 'build.tar.gz'
 TEST_NAMES = {'library', 'clash-of-rust', 'clash-tun-launcher', 'core_integration',
               'geo_download', 'linux_tun', 'tray_integration', 'memory_benchmark'}
@@ -58,7 +58,7 @@ def test_binaries(messages):
     return result
 
 
-def export_build(system, arch, tests, output):
+def export_build(system, arch, tests, output, binaries=None):
     output.mkdir(parents=True, exist_ok=True)
     archive = output/ARCHIVE_NAME
     if archive.exists():
@@ -69,7 +69,7 @@ def export_build(system, arch, tests, output):
         stage_resources(bundle_directory(system, arch)/'resources', payload, system)
         extension = '.exe' if system == 'windows' else ''
         for name in ('clash-of-rust', 'clash-tun-launcher'):
-            source = ROOT/'target/release'/(name+extension)
+            source = (binaries or ROOT/'target/release')/(name+extension)
             validate_binary_arch(source, system, arch)
             shutil.copy2(source, payload/source.name)
         paths = {}
@@ -203,7 +203,7 @@ def fetch_build(client, run_id, system, arch, root, expected_commit):
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('operation', choices=('export', 'fetch'))
-    parser.add_argument('--system', choices=('windows', 'linux'), required=True)
+    parser.add_argument('--system', choices=('windows', 'linux', 'macos'), required=True)
     parser.add_argument('--arch', choices=('x64', 'arm64'), required=True)
     parser.add_argument('--tests', type=Path)
     parser.add_argument('--output', type=Path, required=True)

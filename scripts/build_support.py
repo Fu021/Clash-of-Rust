@@ -34,6 +34,10 @@ def package_version():
     return re.search(r'^version\s*=\s*"([^\"]+)"', text, re.M)[1]
 
 
+def host_system():
+    return {'Windows': 'windows', 'Linux': 'linux', 'Darwin': 'macos'}[platform.system()]
+
+
 def host_arch():
     machine = platform.machine().lower()
     if machine in ('aarch64', 'arm64'):
@@ -44,8 +48,8 @@ def host_arch():
 
 
 def bundle_directory(system, arch):
-    if system not in ('windows', 'linux') or arch not in ('x64', 'arm64'):
-        raise ValueError('Supported targets: windows/linux, x64/arm64')
+    if system not in ('windows', 'linux', 'macos') or arch not in ('x64', 'arm64'):
+        raise ValueError('Supported targets: windows/linux/macos, x64/arm64')
     return ROOT/'bundle' if (system, arch) == ('windows', 'x64') else ROOT/f'bundle/{system}-{arch}'
 
 
@@ -62,6 +66,9 @@ def validate_binary_arch(path, system, arch):
         elif system == 'linux' and header[:6] == b'\x7fELF\x02\x01' and len(header) == 64:
             machine = struct.unpack_from('<H', header, 18)[0]
             expected = {'x64': 62, 'arm64': 183}[arch]
+        elif system == 'macos' and header[:4] == b'\xcf\xfa\xed\xfe' and len(header) == 64:
+            machine = struct.unpack_from('<I', header, 4)[0]
+            expected = {'x64': 0x01000007, 'arm64': 0x0100000c}[arch]
         else:
             raise ValueError('Expected a native 64-bit '+system+' binary')
         if machine != expected:

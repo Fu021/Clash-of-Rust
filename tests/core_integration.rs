@@ -18,7 +18,12 @@ fn test_resources() -> std::path::PathBuf {
                 }
             } else {
                 format!(
-                    "bundle/linux-{}/resources",
+                    "bundle/{}-{}/resources",
+                    if cfg!(target_os = "macos") {
+                        "macos"
+                    } else {
+                        "linux"
+                    },
                     if cfg!(target_arch = "aarch64") {
                         "arm64"
                     } else {

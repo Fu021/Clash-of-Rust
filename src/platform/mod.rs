@@ -33,14 +33,18 @@ mod windows_autostart;
 pub use linux_tun::{
     authorize_tun, check_tun_environment, core_has_tun_permissions, core_launcher, tun_helper_main,
 };
+#[cfg(target_os = "macos")]
+pub mod macos;
 #[cfg(windows)]
 mod windows;
 #[cfg(target_os = "linux")]
 use linux as native;
+#[cfg(target_os = "macos")]
+use macos as native;
 #[cfg(windows)]
 use windows as native;
 
-#[cfg(not(any(windows, target_os = "linux")))]
+#[cfg(not(any(windows, target_os = "linux", target_os = "macos")))]
 mod native {
     use super::*;
     pub fn read() -> Result<ProxyState> {
@@ -176,11 +180,11 @@ pub fn configured_proxy(scheme: &str) -> Result<Option<String>> {
 pub fn is_elevated() -> bool {
     windows::is_elevated()
 }
-#[cfg(target_os = "linux")]
+#[cfg(any(target_os = "linux", target_os = "macos"))]
 pub fn is_elevated() -> bool {
     unsafe { libc::geteuid() == 0 }
 }
-#[cfg(not(any(windows, target_os = "linux")))]
+#[cfg(not(any(windows, target_os = "linux", target_os = "macos")))]
 pub fn is_elevated() -> bool {
     false
 }
@@ -212,7 +216,11 @@ pub fn show_requested() -> bool {
 pub fn show_existing() {
     windows::signal_show();
 }
-#[cfg(not(windows))]
+#[cfg(target_os = "macos")]
+pub fn show_requested() -> bool {
+    macos::show_requested()
+}
+#[cfg(not(any(windows, target_os = "macos")))]
 pub fn show_requested() -> bool {
     false
 }
@@ -224,10 +232,12 @@ pub fn enable(journal_path: &Path, port: u16) -> Result<()> {
     if journal_path.exists() {
         bail!("存在未恢复的系统代理，请先关闭系统代理或重新启动客户端");
     }
-    let journal = Journal {
-        original: native::read()?,
-        owned: native::desired(port),
-    };
+    let original = native::read()?;
+    #[cfg(target_os = "macos")]
+    let owned = native::desired(&original, port)?;
+    #[cfg(not(target_os = "macos"))]
+    let owned = native::desired(port);
+    let journal = Journal { original, owned };
     // Persist restoration information before changing any OS setting.
     atomic_write(journal_path, &serde_json::to_vec_pretty(&journal)?)?;
     if let Err(error) = native::write(&journal.owned) {

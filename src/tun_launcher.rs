@@ -127,7 +127,32 @@ fn main() {
     }
 }
 
-#[cfg(not(target_os = "linux"))]
+// Compile only the driver and streaming hash into the Mac helper. In particular,
+// do not link the desktop library, AppKit, fonts or the iced renderer as root.
+#[cfg(all(target_os = "macos", not(test)))]
+#[path = "file_hash.rs"]
+mod assets;
+#[cfg(all(target_os = "macos", not(test)))]
+#[path = "platform/macos/authorization.rs"]
+mod authorization;
+#[cfg(all(target_os = "macos", not(test)))]
+use authorization::{administrator, shell_quote};
+#[cfg(all(target_os = "macos", not(test)))]
+#[allow(dead_code)]
+#[path = "platform/macos/tun.rs"]
+mod macos_tun;
+#[cfg(all(target_os = "macos", not(test)))]
+fn main() {
+    match macos_tun::launcher_main() {
+        Ok(code) => std::process::exit(code),
+        Err(error) => {
+            eprintln!("{error:#}");
+            std::process::exit(1);
+        }
+    }
+}
+
+#[cfg(not(any(target_os = "linux", target_os = "macos")))]
 fn main() {
     eprintln!("The TUN core launcher is only available on Linux");
     std::process::exit(1);

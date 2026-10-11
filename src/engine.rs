@@ -168,6 +168,8 @@ pub struct Engine {
     pub geo_manifest: GeoManifest,
     resources: PathBuf,
     child: Option<Child>,
+    #[cfg(target_os = "macos")]
+    mac_tun: Option<platform::macos::tun::Session>,
     logs: LogBuffer,
     readers: Vec<JoinHandle<()>>,
     log_pump: Option<JoinHandle<()>>,
@@ -235,6 +237,8 @@ impl Engine {
             resources,
             geo_manifest,
             child: None,
+            #[cfg(target_os = "macos")]
+            mac_tun: None,
             logs,
             readers: vec![],
             log_pump: None,
@@ -255,16 +259,54 @@ impl Engine {
         assets::core_path(&self.resources)
     }
     fn command(&self) -> Result<Command> {
+        #[cfg(target_os = "macos")]
+        if let Some(session) = &self.mac_tun {
+            let mut command = session.command()?;
+            command.kill_on_drop(true);
+            return Ok(command);
+        }
         let core = self.core()?;
         #[cfg(target_os = "linux")]
         let executable = platform::core_launcher(&core);
         #[cfg(not(target_os = "linux"))]
         let executable = &core;
+        #[cfg(target_os = "macos")]
+        let mut command = {
+            // Locate the driver alongside these resources, not alongside an
+            // integration test executable (which may have a same-named harness).
+            let parent = self.resources.parent().context("无法定位内核启动器")?;
+            let launcher = if parent.file_name() == Some(std::ffi::OsStr::new("Resources"))
+                && parent.parent().and_then(|path| path.file_name())
+                    == Some(std::ffi::OsStr::new("Contents"))
+            {
+                parent.parent().unwrap().join("MacOS/clash-tun-launcher")
+            } else {
+                parent.join("clash-tun-launcher")
+            };
+            if launcher.is_file() {
+                let mut command = Command::new(launcher);
+                command.arg("--macos-user-core").arg(&core);
+                command
+            } else {
+                Command::new(executable)
+            }
+        };
+        #[cfg(not(target_os = "macos"))]
         let mut command = Command::new(executable);
-        command.kill_on_drop(true);
+        command.kill_on_drop(!cfg!(target_os = "macos"));
         #[cfg(windows)]
         command.creation_flags(0x08000000);
         Ok(command)
+    }
+    fn validation_command(&self) -> Result<Command> {
+        #[cfg(target_os = "macos")]
+        {
+            let mut command = Command::new(self.core()?);
+            command.kill_on_drop(true);
+            Ok(command)
+        }
+        #[cfg(not(target_os = "macos"))]
+        self.command()
     }
     async fn validate(&self, payload: &str) -> Result<()> {
         self.validate_in(payload, &self.store.runtime()).await
@@ -274,7 +316,7 @@ impl Engine {
         let candidate = directory.join("candidate.yaml");
         atomic_write(&candidate, payload.as_bytes())?;
         let mut child = self
-            .command()?
+            .validation_command()?
             .arg("-t")
             .arg("-d")
             .arg(directory)
@@ -312,6 +354,14 @@ impl Engine {
     pub async fn start(&mut self) -> Result<()> {
         if self.running() {
             bail!("内核已启动");
+        }
+        #[cfg(target_os = "macos")]
+        if self
+            .mac_tun
+            .as_ref()
+            .is_some_and(|session| !session.is_available())
+        {
+            self.mac_tun = None;
         }
         for port in [self.settings.controller_port, self.settings.mixed_port] {
             let _listener = std::net::TcpListener::bind(("127.0.0.1", port))
@@ -395,9 +445,27 @@ impl Engine {
         self.set_logs(false);
         if let Some(mut child) = self.child.take() {
             if child.try_wait()?.is_none() {
+                #[cfg(target_os = "macos")]
+                if let Some(pid) = child.id() {
+                    unsafe {
+                        libc::kill(pid as i32, libc::SIGTERM);
+                    }
+                }
+                #[cfg(target_os = "macos")]
+                if tokio::time::timeout(Duration::from_secs(3), child.wait())
+                    .await
+                    .is_err()
+                {
+                    child.kill().await?;
+                }
+                #[cfg(not(target_os = "macos"))]
                 child.kill().await?;
             }
             child.wait().await?;
+            #[cfg(target_os = "macos")]
+            if let Some(session) = &self.mac_tun {
+                session.wait_idle()?;
+            }
         }
         for reader in self.readers.drain(..) {
             reader.abort();
@@ -977,6 +1045,10 @@ impl Engine {
         if mode == ProxyMode::Tun {
             self.prepare_linux_tun(true).await?;
         }
+        #[cfg(target_os = "macos")]
+        if mode == ProxyMode::Tun {
+            self.prepare_mac_tun(true).await?;
+        }
         let previous = crate::proxy::current(self).await?;
         let settings = Settings {
             proxy_mode: mode,
@@ -1014,8 +1086,42 @@ impl Engine {
             let interactive = !std::env::args_os().any(|arg| arg == "--background");
             self.prepare_linux_tun(interactive).await?;
         }
+        #[cfg(target_os = "macos")]
+        if self.settings.proxy_mode == ProxyMode::Tun {
+            let interactive = !std::env::args_os().any(|arg| arg == "--background");
+            self.prepare_mac_tun(interactive).await?;
+        }
         self.proxy_mode(self.settings.proxy_mode).await?;
         Ok(false)
+    }
+
+    #[cfg(target_os = "macos")]
+    async fn prepare_mac_tun(&mut self, interactive: bool) -> Result<()> {
+        if self
+            .mac_tun
+            .as_ref()
+            .is_some_and(|session| session.is_available())
+        {
+            return Ok(());
+        }
+        self.mac_tun = None;
+        if !interactive {
+            bail!("TUN 需要管理员授权，请打开客户端并点击 TUN 模式");
+        }
+        let previous = self.restart_state().await?.context("请先启动内核")?;
+        let session =
+            tokio::task::spawn_blocking(platform::macos::tun::Session::authorize).await??;
+        self.stop().await?;
+        self.mac_tun = Some(session);
+        if let Err(error) = self.resume(&previous).await {
+            self.stop_process().await?;
+            self.mac_tun = None;
+            self.resume(&previous)
+                .await
+                .context("TUN 授权失败后恢复原内核失败")?;
+            return Err(error.context("TUN 授权后内核重启失败，已恢复原模式"));
+        }
+        Ok(())
     }
 
     #[cfg(target_os = "linux")]
@@ -1364,6 +1470,13 @@ impl Drop for Engine {
             handle.abort();
         }
         if let Some(child) = &mut self.child {
+            #[cfg(target_os = "macos")]
+            if let Some(pid) = child.id() {
+                unsafe {
+                    libc::kill(pid as i32, libc::SIGTERM);
+                }
+            }
+            #[cfg(not(target_os = "macos"))]
             let _ = child.start_kill();
         }
     }

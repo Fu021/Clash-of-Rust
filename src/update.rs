@@ -171,6 +171,10 @@ fn package_name(version: &str) -> Option<String> {
         "linux-amd64.deb"
     } else if cfg!(all(target_os = "linux", target_arch = "aarch64")) {
         "linux-arm64.deb"
+    } else if cfg!(all(target_os = "macos", target_arch = "x86_64")) {
+        "macos-x64.dmg"
+    } else if cfg!(all(target_os = "macos", target_arch = "aarch64")) {
+        "macos-arm64.dmg"
     } else {
         return None;
     };
