@@ -34,6 +34,13 @@ impl MacFlow {
     }
     fn update(&mut self, message: Message) -> Task<Message> {
         let finished = matches!(&message, Message::Finished(_));
+        // Refreshes also produce Finished messages and can complete while an
+        // action is queued. Only an action's nonempty notice/error confirms it.
+        let action_finished = matches!(
+            &message,
+            Message::Finished(reply)
+                if !matches!(&reply.notice, Ok(notice) if notice.is_empty())
+        );
         let handoff = matches!(&message, Message::UpdateHandoff(_));
         let task = self.app.update(message);
         if handoff {
@@ -69,11 +76,11 @@ impl MacFlow {
         }
         if matches!(self.scenario.as_str(), "tun-cancel" | "tun-timeout")
             && self.phase == 1
-            && finished
+            && action_finished
         {
             self.phase = 10;
             self.record(serde_json::json!({}));
-        } else if self.scenario == "tun" && finished {
+        } else if self.scenario == "tun" && action_finished {
             if self.app.error {
                 self.phase = 10;
                 self.record(serde_json::json!({}));
