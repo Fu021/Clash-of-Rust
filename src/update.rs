@@ -48,6 +48,22 @@ pub struct Downloaded {
     version: String,
 }
 
+#[cfg(all(target_os = "macos", feature = "ui-preview"))]
+pub fn fixture_download(package: &std::path::Path, version: String) -> Result<Downloaded> {
+    let directory = tempfile::Builder::new()
+        .prefix("clash-of-rust-update-")
+        .tempdir()?;
+    let destination = directory.path().join("package.dmg");
+    std::fs::copy(package, &destination)?;
+    let sha256 = crate::assets::hash_file(&destination)?.0;
+    Ok(Downloaded {
+        directory,
+        package: destination,
+        sha256,
+        version,
+    })
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Available {
     pub version: String,

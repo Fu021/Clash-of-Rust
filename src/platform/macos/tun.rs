@@ -32,13 +32,16 @@ pub struct Session {
 }
 impl Session {
     pub fn authorize() -> Result<Self> {
-        let directory = tempfile::Builder::new().prefix("clash-tun-").tempdir()?;
-        std::fs::set_permissions(directory.path(), std::fs::Permissions::from_mode(0o700))?;
-        let token = uuid::Uuid::new_v4().to_string();
         let launcher = std::env::current_exe()?
             .parent()
             .context("无法定位 TUN 助手")?
             .join("clash-tun-launcher");
+        Self::authorize_with(&launcher, super::administrator)
+    }
+    fn authorize_with(launcher: &Path, authorize: impl FnOnce(&str) -> Result<()>) -> Result<Self> {
+        let directory = tempfile::Builder::new().prefix("clash-tun-").tempdir()?;
+        std::fs::set_permissions(directory.path(), std::fs::Permissions::from_mode(0o700))?;
+        let token = uuid::Uuid::new_v4().to_string();
         ensure!(
             launcher.is_file(),
             "TUN 助手缺失，请使用完整的 macOS 安装包"
@@ -51,7 +54,15 @@ impl Session {
             unsafe { libc::getuid() },
             super::shell_quote(&token)
         );
-        super::administrator(&script)?;
+        #[cfg(feature = "ui-preview")]
+        let script = if std::env::var("GITHUB_ACTIONS").as_deref() == Ok("true")
+            && std::env::var("CLASH_CI_SHORT_IDLE").as_deref() == Ok("true")
+        {
+            format!("{script} --ci-short-idle")
+        } else {
+            script
+        };
+        authorize(&script)?;
         let session = Self { directory, token };
         let deadline = Instant::now() + Duration::from_secs(10);
         loop {
@@ -369,7 +380,7 @@ fn run_core(mut stream: UnixStream, request: Request, uid: u32, core: &Path) -> 
     restore_runtime_owner(&runtime, uid)?;
     result
 }
-fn serve(socket: &Path, uid: u32, token: &str) -> Result<()> {
+fn serve(socket: &Path, uid: u32, token: &str, idle_limit: Duration) -> Result<()> {
     ensure!(
         unsafe { libc::geteuid() } == 0 && uid != 0 && uuid::Uuid::parse_str(token).is_ok(),
         "TUN 服务身份无效"
@@ -396,7 +407,7 @@ fn serve(socket: &Path, uid: u32, token: &str) -> Result<()> {
     );
     listener.set_nonblocking(true)?;
     let mut idle = Instant::now();
-    while idle.elapsed() < Duration::from_secs(300) && socket.exists() {
+    while idle.elapsed() < idle_limit && socket.exists() {
         let (mut stream, _) = match listener.accept() {
             Ok(value) => value,
             Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {
@@ -415,7 +426,6 @@ fn serve(socket: &Path, uid: u32, token: &str) -> Result<()> {
             Ok(value) if value.token == token => value,
             _ => continue,
         };
-        idle = Instant::now();
         match request.operation.as_str() {
             "ping" => {
                 stream.write_all(b"ready\n")?;
@@ -438,6 +448,9 @@ fn serve(socket: &Path, uid: u32, token: &str) -> Result<()> {
             }
             _ => {}
         }
+        // A running lease is activity, regardless of how long its core lived.
+        // Begin the reusable service's idle grace period after that lease ends.
+        idle = Instant::now();
     }
     let _ = std::fs::remove_file(socket);
     Ok(())
@@ -506,6 +519,16 @@ static USER_STOP: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool:
 extern "C" fn user_stop(_: i32) {
     USER_STOP.store(true, std::sync::atomic::Ordering::Relaxed);
 }
+fn session_idle_limit(args: &[String]) -> Result<Duration> {
+    if args.len() == 4 {
+        return Ok(Duration::from_secs(300));
+    }
+    #[cfg(feature = "ui-preview")]
+    if args.len() == 5 && args[4] == "--ci-short-idle" {
+        return Ok(Duration::from_secs(5));
+    }
+    bail!("TUN 会话参数无效")
+}
 pub fn launcher_main() -> Result<i32> {
     let args: Vec<String> = std::env::args().skip(1).collect();
     match args.first().map(String::as_str) {
@@ -541,7 +564,8 @@ pub fn launcher_main() -> Result<i32> {
                 std::thread::sleep(Duration::from_millis(50));
             }
         }
-        Some("--macos-authorize") if args.len() == 4 => {
+        Some("--macos-authorize") if args.len() >= 4 => {
+            session_idle_limit(&args)?;
             ensure!(
                 unsafe { libc::geteuid() } == 0,
                 "TUN 授权助手需要管理员权限"
@@ -568,8 +592,13 @@ pub fn launcher_main() -> Result<i32> {
             }
             Ok(0)
         }
-        Some("--macos-serve") if args.len() == 4 => {
-            serve(Path::new(&args[1]), args[2].parse()?, &args[3])?;
+        Some("--macos-serve") if args.len() >= 4 => {
+            serve(
+                Path::new(&args[1]),
+                args[2].parse()?,
+                &args[3],
+                session_idle_limit(&args)?,
+            )?;
             Ok(0)
         }
         Some("--macos-bridge") if args.len() >= 3 => {
@@ -637,8 +666,6 @@ mod tests {
             false
         });
         let provider_cache = directory_path.join("providers/native.yaml");
-        let socket = directory_path.join("core.sock");
-        let token = uuid::Uuid::new_v4().to_string();
         let port = std::net::TcpListener::bind("127.0.0.1:0")
             .unwrap()
             .local_addr()
@@ -646,15 +673,15 @@ mod tests {
             .port();
         let config = directory_path.join("config.yaml");
         crate::config::atomic_write(&config, format!("mixed-port: {port}\nmode: direct\nlog-level: debug\nproxy-providers:\n  native:\n    type: http\n    url: http://127.0.0.1:{provider_port}/nodes.yaml\n    path: ./providers/native.yaml\n    interval: 3600\nproxy-groups:\n  - {{name: fixture, type: select, use: [native]}}\ntun:\n  enable: true\n  stack: system\n  device: utun233\n  auto-route: false\n  auto-detect-interface: true\nrules: ['MATCH,DIRECT']\n").as_bytes()).unwrap();
-        let mut server = Command::new("/usr/bin/sudo")
-            .args(["-n"])
-            .arg(&launcher)
-            .arg("--macos-serve")
-            .arg(&socket)
-            .arg(unsafe { libc::getuid() }.to_string())
-            .arg(&token)
-            .spawn()
-            .unwrap();
+        let authorized = Session::authorize_with(&launcher, |script| {
+            super::super::authorization::without_dialog(&format!(
+                "/usr/bin/sudo -n /bin/sh -c {}",
+                super::super::shell_quote(script)
+            ))
+        })
+        .unwrap();
+        let socket = authorized.directory.path().join("core.sock");
+        let token = authorized.token.clone();
         let deadline = Instant::now() + Duration::from_secs(10);
         while !socket.exists() {
             assert!(Instant::now() < deadline);
@@ -695,7 +722,7 @@ mod tests {
         })();
         let _ = bridge.kill();
         let _ = bridge.wait();
-        let session = Session { directory, token };
+        let session = authorized;
         session.wait_idle().unwrap();
         assert!(
             provider_server.join().unwrap(),
@@ -730,7 +757,10 @@ mod tests {
         );
         assert!(session.is_available());
         session.request("stop").unwrap();
-        server.wait().unwrap();
+        let deadline = Instant::now() + Duration::from_secs(5);
+        while session.is_available() && Instant::now() < deadline {
+            std::thread::sleep(Duration::from_millis(50));
+        }
         assert!(
             !session.is_available(),
             "stopped service was still reusable"

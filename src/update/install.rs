@@ -32,6 +32,12 @@ pub struct InstallSession {
     helper_pid: u32,
 }
 impl InstallSession {
+    pub fn requires_shutdown(&self) -> bool {
+        cfg!(target_os = "macos")
+    }
+    pub fn cancel(&self) {
+        let _ = fs::write(self.directory.join("cancel"), b"");
+    }
     pub fn outcome(&self) -> Option<(String, bool)> {
         read_outcome(&self.directory).or_else(|| {
             (!parent_alive(self.helper_pid))
@@ -47,7 +53,11 @@ fn verify(plan: &Plan, directory: &Path) -> Result<()> {
     let mut file = fs::File::open(&plan.package).context("安装包已被删除或拦截")?;
     let mut hash = Sha256::new();
     let mut buffer = [0; 64 * 1024];
+    let deadline = Instant::now() + Duration::from_secs(240);
     loop {
+        if let Some((reason, true)) = read_outcome(&directory) {
+            bail!("{}", reason.strip_prefix("更新失败：").unwrap_or(&reason));
+        }
         let count = file.read(&mut buffer).context("无法读取安装包")?;
         if count == 0 {
             break;
@@ -105,11 +115,14 @@ pub fn handoff(download: Downloaded) -> Result<InstallSession> {
                 helper_pid: child.id(),
             });
         }
-        if let Some((reason, _)) = read_outcome(&directory) {
-            bail!("{}", reason.strip_prefix("更新失败：").unwrap_or(&reason));
-        }
         if child.try_wait()?.is_some() {
             bail!("安装助手意外退出，请检查安全软件");
+        }
+        if Instant::now() >= deadline {
+            let _ = fs::write(directory.join("cancel"), b"");
+            let _ = child.kill();
+            let _ = child.wait();
+            bail!("安装准备或授权超时，客户端仍在运行，请重试或手动安装");
         }
         std::thread::sleep(Duration::from_millis(100));
     }
@@ -130,18 +143,13 @@ pub fn ensure_installable() -> Result<PathBuf> {
         bail!("缺少 pkexec，无法请求安装授权");
     }
     #[cfg(target_os = "macos")]
-    if executable
-        .file_name()
-        .is_none_or(|name| name != "clash-of-rust")
-        || executable
-            .parent()
-            .and_then(Path::parent)
-            .is_none_or(|contents| contents.file_name().is_none_or(|name| name != "Contents"))
-    {
-        bail!("请先使用 DMG 安装客户端，再使用自动更新");
-    }
+    macos::ensure_installable(&executable)?;
     Ok(executable)
 }
+
+#[cfg(target_os = "macos")]
+#[path = "install/macos.rs"]
+mod macos;
 
 /// Called before application locks, GUI libraries, or any Tokio runtime.
 pub fn helper_main() -> bool {
@@ -163,6 +171,7 @@ pub fn helper_main() -> bool {
         install(&plan, &directory)?;
         Ok(plan)
     })();
+    let cancelled = directory.join("cancel").exists();
     let (message, error) = match &result {
         Ok(plan) => (format!("已更新至 {}", plan.version), false),
         Err(error) => (format!("更新失败：{error}"), true),
@@ -172,7 +181,8 @@ pub fn helper_main() -> bool {
         &serde_json::to_vec(&Outcome { message, error }).unwrap_or_default(),
     );
     // Before readiness the original GUI is still open and handles the error.
-    if directory.join("ready").exists()
+    if !cancelled
+        && directory.join("ready").exists()
         && let Ok(data) = fs::read(directory.join("plan.json"))
         && let Ok(plan) = serde_json::from_slice::<Plan>(&data)
     {
@@ -284,118 +294,7 @@ fn install(plan: &Plan, directory: &Path) -> Result<()> {
 
 #[cfg(target_os = "macos")]
 fn install(plan: &Plan, directory: &Path) -> Result<()> {
-    use crate::platform::macos::{administrator, shell_quote};
-    let app = plan
-        .executable
-        .parent()
-        .and_then(Path::parent)
-        .and_then(Path::parent)
-        .context("应用包路径无效")?;
-    let parent = app.parent().context("应用包目录无效")?;
-    let mount = directory.join("volume");
-    fs::create_dir(&mount)?;
-    let attached = Command::new("/usr/bin/hdiutil")
-        .args([
-            "attach",
-            "-readonly",
-            "-nobrowse",
-            "-noautoopen",
-            "-mountpoint",
-        ])
-        .arg(&mount)
-        .arg(&plan.package)
-        .output()?;
-    if !attached.status.success() {
-        bail!(
-            "无法挂载更新 DMG：{}",
-            String::from_utf8_lossy(&attached.stderr)
-        );
-    }
-    let result = (|| {
-        let replacement = mount.join("Clash of Rust.app");
-        let info = replacement.join("Contents/Info.plist");
-        for (key, expected) in [
-            ("CFBundleIdentifier", "org.clashofrust.desktop"),
-            ("ClashOfRustVersion", plan.version.as_str()),
-        ] {
-            let output = Command::new("/usr/bin/plutil")
-                .args(["-extract", key, "raw", "-o", "-"])
-                .arg(&info)
-                .output()?;
-            if !output.status.success()
-                || String::from_utf8_lossy(&output.stdout).trim() != expected
-            {
-                bail!("更新应用标识或版本不匹配");
-            }
-        }
-        if !Command::new("/usr/bin/codesign")
-            .args(["--verify", "--deep", "--strict"])
-            .arg(&replacement)
-            .status()?
-            .success()
-        {
-            bail!("更新应用签名校验失败");
-        }
-        let resources = replacement.join("Contents/Resources/resources");
-        crate::assets::verify_geo(&resources)?;
-        let record: serde_json::Value =
-            serde_json::from_slice(&fs::read(resources.join("core.json"))?)?;
-        if crate::assets::hash_file(&resources.join("mihomo"))?.0
-            != record["exe_sha256"].as_str().context("内核校验记录缺失")?
-        {
-            bail!("更新内核校验失败");
-        }
-        let staged = parent.join(format!(".clash-update-{}.app", uuid::Uuid::new_v4()));
-        let backup = parent.join(format!(".clash-backup-{}.app", uuid::Uuid::new_v4()));
-        // Complete validation and request permission before closing the GUI.
-        // Stage on the destination filesystem so both replacements are renames.
-        let local = Command::new("/usr/bin/ditto")
-            .arg(&replacement)
-            .arg(&staged)
-            .status()?
-            .success();
-        if !local {
-            let _ = fs::remove_dir_all(&staged);
-            administrator(&format!(
-                "/usr/bin/ditto {} {}",
-                shell_quote(&replacement.to_string_lossy()),
-                shell_quote(&staged.to_string_lossy())
-            ))?;
-        }
-        fs::write(directory.join("ready"), b"")?;
-        let deadline = Instant::now() + Duration::from_secs(45);
-        while parent_alive(plan.parent) && Instant::now() < deadline {
-            std::thread::sleep(Duration::from_millis(100));
-        }
-        if parent_alive(plan.parent) {
-            let _ = fs::remove_dir_all(&staged);
-            bail!("客户端未能正常退出，已保留旧版本");
-        }
-        let swapped = fs::rename(app, &backup).and_then(|_| fs::rename(&staged, app));
-        if swapped.is_err() {
-            if backup.exists() && !app.exists() {
-                let _ = fs::rename(&backup, app);
-            }
-            // User-owned installs need no dialog. System-owned installs request
-            // authorization for this fixed, already-validated app replacement.
-            administrator(&format!(
-                "/bin/mv {} {} && ( /bin/mv {} {} || {{ /bin/mv {} {}; exit 1; }} )",
-                shell_quote(&app.to_string_lossy()),
-                shell_quote(&backup.to_string_lossy()),
-                shell_quote(&staged.to_string_lossy()),
-                shell_quote(&app.to_string_lossy()),
-                shell_quote(&backup.to_string_lossy()),
-                shell_quote(&app.to_string_lossy())
-            ))?;
-        }
-        let _ = fs::remove_dir_all(&backup);
-        Ok(())
-    })();
-    let _ = Command::new("/usr/bin/hdiutil")
-        .arg("detach")
-        .arg(&mount)
-        .output();
-    result
+    macos::install(plan, directory)
 }
 
 #[cfg(not(any(windows, target_os = "linux", target_os = "macos")))]

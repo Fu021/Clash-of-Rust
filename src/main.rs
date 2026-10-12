@@ -1258,7 +1258,11 @@ impl App {
                 self.updates.install_pending = false;
                 match result {
                     Ok(directory) => {
+                        let shutdown = directory.requires_shutdown();
                         self.updates.installing = Some(directory);
+                        if shutdown {
+                            return self.exit();
+                        }
                     }
                     Err(reason) => self.updates.fail(reason),
                 }
@@ -2210,6 +2214,9 @@ impl App {
                     self.notice_visible = true;
                     self.notice = format!("退出失败：{error}");
                     if self.updates.busy() {
+                        if let Some(session) = &self.updates.installing {
+                            session.cancel();
+                        }
                         self.updates.progress = None;
                         self.updates.failure =
                             Some("更新失败：客户端无法正常退出，请检查代理恢复或内核状态".into());
@@ -2596,7 +2603,7 @@ impl App {
         let update_status = if self.updates.failure.is_some() {
             self.updates.failure.as_deref()
         } else if self.updates.install_pending || self.updates.installing.is_some() {
-            Some("正在安装更新，请完成系统授权…")
+            Some("正在准备或安装更新；需要时会请求系统授权…")
         } else {
             None
         };
