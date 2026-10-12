@@ -19,7 +19,7 @@ import time
 import urllib.request
 
 from build_support import ROOT, run, sha256, write_json
-from macos_package import APP_NAME, build_app
+from macos_package import APP_NAME, build_app, disk_image
 
 
 def free_port():
@@ -89,16 +89,16 @@ def relaunched_pid(directory):
 
 @contextlib.contextmanager
 def mount(package, destination):
-    run(['/usr/bin/hdiutil', 'attach', package, '-readonly', '-nobrowse', '-noautoopen', '-mountpoint', destination], timeout=60)
+    disk_image(['attach', package, '-readonly', '-nobrowse', '-noautoopen', '-mountpoint', destination], timeout=60)
     try:
         yield destination/APP_NAME
     finally:
-        run(['/usr/bin/hdiutil', 'detach', destination], timeout=60)
+        disk_image(['detach', destination], timeout=60)
 
 
 def dmg(app, destination):
-    run(['/usr/bin/hdiutil', 'create', '-volname', 'Clash native CI', '-srcfolder', app.parent,
-         '-format', 'UDZO', '-ov', destination], timeout=120)
+    disk_image(['create', '-volname', 'Clash native CI', '-srcfolder', app.parent,
+                '-fs', 'HFS+', '-format', 'UDZO', '-ov', destination], timeout=120)
     return destination
 
 

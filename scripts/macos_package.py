@@ -4,11 +4,36 @@ from pathlib import Path
 import plistlib
 import shutil
 import subprocess
+import sys
 import tempfile
+import time
 from build_support import ROOT, run, sha256, validate_binary_arch, write_json
 
 APP_NAME = 'Clash of Rust.app'
 BUNDLE_ID = 'org.clashofrust.desktop'
+
+
+def disk_image(arguments, timeout=120):
+    """Retry only DiskImages' transient busy error, within one total deadline."""
+    command = ['/usr/bin/hdiutil', *(str(value) for value in arguments)]
+    deadline = time.monotonic()+timeout
+    for attempt in range(5):
+        remaining = deadline-time.monotonic()
+        if remaining <= 0:
+            raise subprocess.TimeoutExpired(command, timeout)
+        result = subprocess.run(command, cwd=ROOT, capture_output=True, text=True,
+                                encoding='utf-8', errors='replace', timeout=remaining)
+        sys.stdout.write(result.stdout)
+        sys.stderr.write(result.stderr)
+        sys.stdout.flush()
+        sys.stderr.flush()
+        if result.returncode == 0:
+            return result
+        if 'Resource busy' not in result.stdout+result.stderr or attempt == 4:
+            raise subprocess.CalledProcessError(result.returncode, command,
+                                                result.stdout, result.stderr)
+        print(f'DiskImages resource busy; retry {attempt+1}/4', flush=True)
+        time.sleep(min(attempt+1, max(0, deadline-time.monotonic())))
 
 
 def build_app(payload, destination, version, arch):
@@ -63,8 +88,8 @@ def build_dmg(payload, version, arch):
         build_app(payload, root/APP_NAME, version, arch)
         (root/'Applications').symlink_to('/Applications')
         artifact.unlink(missing_ok=True)
-        run(['/usr/bin/hdiutil', 'create', '-volname', 'Clash of Rust', '-srcfolder', root,
-             '-format', 'UDZO', '-ov', artifact])
+        disk_image(['create', '-volname', 'Clash of Rust', '-srcfolder', root,
+                    '-fs', 'HFS+', '-format', 'UDZO', '-ov', artifact])
     profile = os.environ.get('MACOS_NOTARY_PROFILE')
     if profile:
         if os.environ.get('MACOS_SIGNING_IDENTITY', '-') == '-':

@@ -13,6 +13,7 @@ import time
 import urllib.request
 
 from build_support import ROOT, host_arch, run, validate_binary_arch, validate_resources, write_json, package_version
+from macos_package import disk_image
 
 REPORT = ROOT/'target/macos-report'
 
@@ -132,9 +133,9 @@ def rendered_ui():
 def mounted(package):
     with tempfile.TemporaryDirectory(prefix='clash-dmg-') as temporary:
         mount = Path(temporary)/'volume'
-        run(['/usr/bin/hdiutil', 'attach', package, '-readonly', '-nobrowse', '-noautoopen', '-mountpoint', mount], timeout=60)
+        disk_image(['attach', package, '-readonly', '-nobrowse', '-noautoopen', '-mountpoint', mount], timeout=60)
         try: yield mount
-        finally: run(['/usr/bin/hdiutil', 'detach', mount], timeout=60)
+        finally: disk_image(['detach', mount], timeout=60)
 
 
 def gui_smoke(app, label):
