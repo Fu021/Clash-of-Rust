@@ -235,7 +235,9 @@ def main():
         fixture = build_app(payload, root/'fixture'/APP_NAME, args.version, args.arch)
         with contextlib.ExitStack() as contexts:
             if args.package:
-                production = contexts.enter_context(mount(args.package, root/'production-volume'))
+                production = root/'production'/APP_NAME
+                with mount(args.package, root/'production-volume') as mounted_app:
+                    shutil.copytree(mounted_app, production)
                 valid = args.package
             else:
                 production = build_app(args.bundle, root/'production'/APP_NAME, args.version, args.arch)

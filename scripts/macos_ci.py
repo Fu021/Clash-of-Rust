@@ -233,12 +233,14 @@ def installed_package_tests(package, manifest, build):
             # Use the same already-built integration binary with installed resources.
             env = dict(os.environ, MIHOMO_TEST_RESOURCES=str(installed/'Contents/Resources/resources'))
             suite('Installed core rules/subscriptions', lambda: logged('installed-core', [build/manifest['tests']['core_integration'], '--ignored', '--test-threads=1'], env=env))
-            suite('Installed DMG authorization and update flows', lambda: logged('installed-flows',
-                [sys.executable, ROOT/'scripts/test-macos-flows.py', '--bundle', build/'payload',
-                 '--ui', build/manifest['tests']['macos_ui_fixture'],
-                 '--helper', build/manifest['tests']['macos_helper_fixture'],
-                 '--version', manifest['version'], '--arch', manifest['arch'],
-                 '--report', REPORT, '--label', 'installed', '--package', package], timeout=1200))
+    # The updater must attach this same DMG itself. Finish inspection and detach
+    # the outer volume before exercising actual update transactions.
+    suite('Installed DMG authorization and update flows', lambda: logged('installed-flows',
+        [sys.executable, ROOT/'scripts/test-macos-flows.py', '--bundle', build/'payload',
+         '--ui', build/manifest['tests']['macos_ui_fixture'],
+         '--helper', build/manifest['tests']['macos_helper_fixture'],
+         '--version', manifest['version'], '--arch', manifest['arch'],
+         '--report', REPORT, '--label', 'installed', '--package', package], timeout=1200))
 
 
 def diagnostics(arch):
