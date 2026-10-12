@@ -15,6 +15,12 @@ struct MacFlow {
 #[cfg(target_os = "macos")]
 impl MacFlow {
     fn record(&self, extra: serde_json::Value) {
+        let logs = self
+            .app
+            .engine
+            .as_ref()
+            .and_then(|engine| engine.try_lock().ok()?.export_logs().ok())
+            .and_then(|path| std::fs::read_to_string(path).ok());
         let payload = serde_json::json!({
             "scenario": self.scenario,
             "phase": self.phase,
@@ -24,6 +30,7 @@ impl MacFlow {
             "error": self.app.error,
             "notice": self.app.notice,
             "failure": self.app.updates.failure,
+            "core_logs": logs,
             "details": extra,
         });
         clash_of_rust::config::atomic_write(

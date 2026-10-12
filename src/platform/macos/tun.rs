@@ -460,6 +460,16 @@ fn bridge(socket: &Path, token: &str, arguments: &[String]) -> Result<i32> {
         arguments.len() == 4 && arguments[0] == "-d" && arguments[2] == "-f",
         "TUN 启动参数无效"
     );
+    // Darwin's /var and /tmp aliases (and custom data directories) may differ
+    // from their canonical paths. Send one canonical directory to the service
+    // while retaining its no-symlink check on the config file itself.
+    let directory = Path::new(&arguments[1]);
+    ensure!(
+        Path::new(&arguments[3]) == directory.join("config.yaml"),
+        "TUN 配置路径无效"
+    );
+    let directory = std::fs::canonicalize(directory)?;
+    let config = directory.join("config.yaml");
     let mut stream =
         UnixStream::connect(socket).context("TUN 授权会话已结束，请重新点击 TUN 模式")?;
     ensure!(peer_uid(&stream)? == 0, "TUN 服务不是管理员进程");
@@ -468,8 +478,8 @@ fn bridge(socket: &Path, token: &str, arguments: &[String]) -> Result<i32> {
         &Request {
             token: token.into(),
             operation: "start".into(),
-            directory: Some(arguments[1].clone().into()),
-            config: Some(arguments[3].clone().into()),
+            directory: Some(directory),
+            config: Some(config),
         },
     )?;
     stream.write_all(b"\n")?;
@@ -637,6 +647,8 @@ mod tests {
         std::os::unix::fs::symlink(outside.path(), directory_path.join("linked-directory"))
             .unwrap();
         std::fs::hard_link(&external_hardlink, directory_path.join("linked-file")).unwrap();
+        let runtime_alias = outside.path().join("runtime alias");
+        std::os::unix::fs::symlink(&directory_path, &runtime_alias).unwrap();
         // A real HTTP provider makes mihomo create nested root-owned cache
         // files. The ordinary user must be able to update them after TUN stops.
         let provider = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
@@ -692,8 +704,8 @@ mod tests {
             super::super::shell_quote(&launcher.to_string_lossy()),
             super::super::shell_quote(&socket.to_string_lossy()),
             super::super::shell_quote(&token),
-            super::super::shell_quote(&directory_path.to_string_lossy()),
-            super::super::shell_quote(&config.to_string_lossy())
+            super::super::shell_quote(&runtime_alias.to_string_lossy()),
+            super::super::shell_quote(&runtime_alias.join("config.yaml").to_string_lossy())
         );
         let mut bridge = Command::new("/bin/sh")
             .args(["-c", &script])

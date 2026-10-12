@@ -264,15 +264,17 @@ def main():
                     version = '0.0.0-ci-mismatch' if name == 'update-version' else args.version
                     entry['details'] = flow(name, fixture, package, version, args.report, args.label)
                     entry['status'] = 'passed'
-                except BaseException as error:
+                except Exception as error:
                     entry.update(status='failed', error=str(error))
                     report['status'] = 'failed'
-                    raise
                 finally:
                     entry['duration_seconds'] = round(time.monotonic()-started, 3)
                     write_json(report_path, report)
-            report['status'] = 'passed'
+            failed = [entry for entry in report['cases'] if entry['status'] == 'failed']
+            report['status'] = 'failed' if failed else 'passed'
             write_json(report_path, report)
+    if failed:
+        raise RuntimeError('Native flows failed: '+', '.join(entry['name'] for entry in failed)+'; '+str(report_path))
     print('PASS: signed GUI authorization, lease restart, DMG handoff, relaunch and rollback; '+str(report_path), flush=True)
 
 
