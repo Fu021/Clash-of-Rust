@@ -133,8 +133,8 @@ def flow(scenario, fixture, package, version, report, prefix):
         if scenario.startswith('update'):
             env.update(CLASH_CI_UPDATE_PACKAGE=str(package), CLASH_CI_UPDATE_VERSION=version)
         if system_owned:
-            run(['/usr/bin/sudo', '-n', 'chown', '-R', '0', install])
             install.chmod(0o755)
+            run(['/usr/bin/sudo', '-n', 'chown', '-R', '0', install])
         with contextlib.ExitStack() as contexts:
             if scenario == 'update-readonly':
                 image_source = root/'readonly-image'
