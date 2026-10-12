@@ -41,6 +41,11 @@ fn startup_path() -> Result<std::path::PathBuf> {
 pub fn autostart_enabled() -> Result<bool> {
     Ok(startup_path()?.exists())
 }
+pub fn show_requested() -> bool {
+    crate::config::Store::discover()
+        .ok()
+        .is_some_and(|store| std::fs::remove_file(store.root.join("show-window")).is_ok())
+}
 pub fn set_autostart(enabled: bool) -> Result<()> {
     let path = startup_path()?;
     if enabled {

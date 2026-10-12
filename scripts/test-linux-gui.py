@@ -14,6 +14,8 @@ import urllib.request
 import signal
 import socket
 import atexit
+import math
+import sys
 from pathlib import Path
 
 parser = argparse.ArgumentParser(description=__doc__)
@@ -24,6 +26,26 @@ parser.add_argument('--output', type=Path)
 parser.add_argument('--scales', type=float, nargs='+', default=[1.0],
                     help='X11 scale factors to test; fractional values require a display with DPI support')
 args = parser.parse_args()
+if args.output:
+    args.output.parent.mkdir(parents=True, exist_ok=True)
+    log_directory = args.output.parent / 'linux-x11-logs'
+    log_directory.mkdir(exist_ok=True)
+
+
+def write_logs(name, out, err):
+    if args.output:
+        (log_directory / (name + '.stdout.log')).write_bytes(out)
+        (log_directory / (name + '.stderr.log')).write_bytes(err)
+
+
+def error_report(kind, error, traceback):
+    if args.output:
+        args.output.write_text(json.dumps({'status': 'failed', 'error': str(error),
+                                          'cases': globals().get('results', [])}, indent=2) + '\n')
+    sys.__excepthook__(kind, error, traceback)
+
+
+sys.excepthook = error_report
 assert args.scales and all(0 < scale <= 4 for scale in args.scales), 'Invalid scale factors'
 assert os.environ.get('DISPLAY'), 'A graphical X11 DISPLAY is required'
 assert os.environ.get('DBUS_SESSION_BUS_ADDRESS'), 'Run under dbus-run-session'
@@ -125,10 +147,32 @@ def app_window(pid):
                     return win, title, attrs.width, attrs.height
     return None
 
+
+def hidden_app_windows(pid):
+    result = []
+    for win in windows():
+        if window_pid(win) != pid:
+            continue
+        name = c.c_void_p()
+        if X.XFetchName(display, win, c.byref(name)) and name.value:
+            title = c.string_at(name).decode(errors='replace')
+            X.XFree(name)
+            if title.startswith('Clash of Rust'):
+                attrs = Attributes()
+                X.XGetWindowAttributes(display, win, c.byref(attrs))
+                if attrs.map_state != 2:
+                    result.append(win)
+    return result
+
+
+def physical(value, scale):
+    # Match Rust/winit rounding rather than Python's ties-to-even rounding.
+    return math.floor(value * scale + 0.5)
+
 def check_window_size(pid, window, scale):
     hints, supplied = SizeHints(), c.c_long()
     assert X.XGetWMNormalHints(display, window, c.byref(hints), c.byref(supplied))
-    minimum = (round(800 * scale), round(450 * scale))
+    minimum = (physical(800, scale), physical(450, scale))
     assert hints.flags & (1 << 4), 'Native minimum size is missing'
     assert (hints.min_width, hints.min_height) == minimum, (
         scale, (hints.min_width, hints.min_height), minimum, app_window(pid))
@@ -137,7 +181,7 @@ def check_window_size(pid, window, scale):
     current = app_window(pid)
     widths = []
     for logical_width in (1100, 800, 950):
-        requested = round(logical_width * scale)
+        requested = physical(logical_width, scale)
         X.XResizeWindow(display, window, requested, current[3])
         X.XFlush(display)
         for _ in range(100):
@@ -160,21 +204,55 @@ for scale, background in ((scale, background) for scale in args.scales for backg
         Path(tmp, 'settings.json').write_text(json.dumps({'mixed_port': mixed_port, 'controller_port': controller_port, 'proxy_mode': 'off', 'secret': 'diagnostic-only'}))
         env = dict(os.environ, CLASH_OF_RUST_DATA_DIR=tmp, GSETTINGS_BACKEND='memory',
                    WINIT_X11_SCALE_FACTOR=str(scale))
+        env.pop('WAYLAND_DISPLAY', None)
+        env.pop('WAYLAND_SOCKET', None)
         command = [str(executable)] + (['--background'] if background else [])
         proc = subprocess.Popen(command, env=env, stdout=subprocess.PIPE, stderr=subprocess.PIPE, start_new_session=True)
+        name = str(scale) + ('-background' if background else '-foreground')
         try:
             window = None
+            started = time.monotonic()
             for _ in range(100):
+                if background and time.monotonic() - started < 2:
+                    assert not hidden_app_windows(proc.pid), 'Login startup must not create a hidden native window'
                 window = app_window(proc.pid)
                 if window or proc.poll() is not None:
                     break
                 time.sleep(0.1)
-            assert window, 'No mapped window (background=%s)' % background
+            if not window:
+                if proc.poll() is not None:
+                    out, err = proc.communicate(timeout=5)
+                    write_logs(name, out, err)
+                    raise AssertionError(('No mapped window', background, proc.returncode, err.decode(errors='replace')))
+                raise AssertionError('No mapped window (background=%s)' % background)
             app_class = window_class(window[0])
             assert app_class == ('clash-of-rust', 'clash-of-rust'), app_class
             time.sleep(3)
             assert proc.poll() is None, 'App exited before close'
+            # Opening the desktop launcher must show the running instance,
+            # including one started as a daemon, rather than launch another core.
+            secondary = subprocess.run([str(executable)], env=env, capture_output=True, timeout=10)
+            assert secondary.returncode == 0, secondary.stderr.decode(errors='replace')
+            marker = Path(tmp, 'show-window')
+            for _ in range(40):
+                if not marker.exists():
+                    break
+                time.sleep(0.05)
+            assert not marker.exists(), 'The running instance did not consume the launcher show request'
+            assert proc.poll() is None, 'Launcher replaced the existing instance'
             geometry = check_window_size(proc.pid, window[0], scale)
+            # Leave a non-default ordinary size, then verify an actual relaunch
+            # restores logical dimensions once, at each tested display scale.
+            normal = (1088, 632)
+            expected = tuple(physical(value, scale) for value in normal)
+            X.XResizeWindow(display, window[0], *expected)
+            X.XFlush(display)
+            for _ in range(100):
+                current = app_window(proc.pid)
+                if current and current[2:] == expected:
+                    break
+                time.sleep(0.05)
+            assert current and current[2:] == expected, (scale, expected, current)
             opener = urllib.request.build_opener(urllib.request.ProxyHandler({}))
             # The engine may persist its effective settings during startup.
             settings = json.loads(Path(tmp, 'settings.json').read_text())
@@ -194,13 +272,35 @@ for scale, background in ((scale, background) for scale in args.scales for backg
                 assert X.XSendEvent(display, window[0], 0, 0, c.byref(event))
                 X.XFlush(display)
             out, err = proc.communicate(timeout=15)
+            write_logs(name, out, err)
             assert proc.returncode == 0, (proc.returncode, err)
             assert not err, err.decode(errors='replace')
-            results.append({'background': background, 'geometry': geometry, 'mapped_window': window[1:], 'wm_class': app_class, 'core_version': core_version, 'close_exits': True, 'pending_tray_close_requires_confirmation': background, 'returncode': proc.returncode, 'stderr': err.decode()})
+            saved = json.loads(Path(tmp, 'window-state.json').read_text())
+            assert (saved['width'], saved['height']) == normal, (scale, saved)
+            proc = subprocess.Popen(command, env=env, stdout=subprocess.PIPE, stderr=subprocess.PIPE, start_new_session=True)
+            for _ in range(100):
+                restored = app_window(proc.pid)
+                if restored and restored[2:] == expected:
+                    break
+                if proc.poll() is not None:
+                    break
+                time.sleep(0.1)
+            assert restored and restored[2:] == expected, (scale, expected, restored)
+            time.sleep(0.5)
+            event.client.window = restored[0]
+            for _ in range(2 if background else 1):
+                assert X.XSendEvent(display, restored[0], 0, 0, c.byref(event))
+                X.XFlush(display)
+                time.sleep(1)
+            out, err = proc.communicate(timeout=15)
+            write_logs(name + '-relaunch', out, err)
+            assert proc.returncode == 0 and not err, (proc.returncode, err)
+            results.append({'background': background, 'geometry': geometry, 'mapped_window': window[1:], 'wm_class': app_class, 'core_version': core_version, 'close_exits': True, 'pending_tray_close_requires_confirmation': background, 'relaunch_logical_size': saved, 'relaunch_physical_size': restored[2:], 'returncode': proc.returncode, 'stderr': err.decode()})
         finally:
             if proc.poll() is None:
                 os.killpg(proc.pid, signal.SIGTERM)
-                proc.communicate(timeout=10)
+                out, err = proc.communicate(timeout=10)
+                write_logs(name + '-interrupted', out, err)
 print(json.dumps(results, ensure_ascii=False, indent=2))
 if args.output:
     args.output.write_text(json.dumps(results, ensure_ascii=False, indent=2) + '\n', encoding='utf-8')

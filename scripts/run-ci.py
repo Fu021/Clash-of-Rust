@@ -48,6 +48,13 @@ def main():
         for name in ('native_kde_signal', 'no_tray_host'):
             run(['dbus-run-session', '--', tests['library'], name, '--ignored'])
         run(['dbus-run-session', '--', tests['tray_integration'], 'login_tray', '--ignored'])
+        if args.arch == 'x64':
+            run(['dbus-run-session', '--', 'xvfb-run', '-a',
+                 '--server-args=-screen 0 3200x2400x24', sys.executable,
+                 ROOT/'scripts/test-linux-gui.py', '--executable', bundle/'clash-of-rust',
+                 '--scales', '1', '1.25', '1.5', '2', '--output', ROOT/'target/linux-window-report.json'])
+            run(['dbus-run-session', '--', sys.executable, ROOT/'scripts/test-linux-wayland.py',
+                 '--executable', bundle/'clash-of-rust', '--output', ROOT/'target/linux-wayland-report'])
     elif args.system == 'macos':
         from macos_ci import native_tests
         native_tests(tests, bundle)

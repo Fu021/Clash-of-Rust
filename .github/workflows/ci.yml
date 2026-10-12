@@ -95,7 +95,7 @@ jobs:
         run: |
           import subprocess
           subprocess.run(['sudo', 'apt-get', 'update'], check=True)
-          subprocess.run(['sudo', 'apt-get', 'install', '-y', 'libglib2.0-dev', 'libxkbcommon-dev', 'libwayland-dev', 'libx11-dev', 'libx11-xcb-dev', 'gsettings-desktop-schemas', 'dbus'], check=True)
+          subprocess.run(['sudo', 'apt-get', 'install', '-y', 'libglib2.0-dev', 'libxkbcommon-dev', 'libwayland-dev', 'libx11-dev', 'libx11-xcb-dev', 'gsettings-desktop-schemas', 'dbus', 'xvfb', 'xauth', 'weston', 'gdb', 'libxkbcommon-x11-0', 'libxcursor1', 'libxrandr2', 'libxi6', 'libxinerama1', 'libegl1', 'libegl-mesa0', 'libgl1-mesa-dri'], check=True)
       - name: Compile, test and export native binaries
         env:
           GH_TOKEN: ${{ github.token }}
@@ -124,6 +124,17 @@ jobs:
         with:
           name: windows-ci-report-${{ matrix.arch }}
           path: target/windows-ci-report.json
+          if-no-files-found: warn
+          retention-days: 14
+      - name: Preserve Linux window diagnostics
+        uses: actions/upload-artifact@v6
+        if: always() && runner.os == 'Linux' && matrix.arch == 'x64'
+        with:
+          name: linux-window-report-x64
+          path: |
+            target/linux-window-report.json
+            target/linux-x11-logs
+            target/linux-wayland-report
           if-no-files-found: warn
           retention-days: 14
       - uses: actions/upload-artifact@v6
