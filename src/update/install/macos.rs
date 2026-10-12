@@ -1,7 +1,7 @@
 //! Validate and stage an app before handing shutdown to its normal GUI.
 use super::{Plan, parent_alive};
 use crate::platform::macos::{administrator, run_command, shell_quote};
-use anyhow::{Context, Result, bail, ensure};
+use anyhow::{Context, Result, ensure};
 use std::{
     fs,
     io::Read,

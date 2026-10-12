@@ -53,11 +53,7 @@ fn verify(plan: &Plan, directory: &Path) -> Result<()> {
     let mut file = fs::File::open(&plan.package).context("安装包已被删除或拦截")?;
     let mut hash = Sha256::new();
     let mut buffer = [0; 64 * 1024];
-    let deadline = Instant::now() + Duration::from_secs(240);
     loop {
-        if let Some((reason, true)) = read_outcome(&directory) {
-            bail!("{}", reason.strip_prefix("更新失败：").unwrap_or(&reason));
-        }
         let count = file.read(&mut buffer).context("无法读取安装包")?;
         if count == 0 {
             break;
@@ -107,7 +103,11 @@ pub fn handoff(download: Downloaded) -> Result<InstallSession> {
         .arg(&directory)
         .spawn()
         .context("无法启动安装助手，请检查安全软件或权限")?;
+    let deadline = Instant::now() + Duration::from_secs(240);
     loop {
+        if let Some((reason, true)) = read_outcome(&directory) {
+            bail!("{}", reason.strip_prefix("更新失败：").unwrap_or(&reason));
+        }
         if directory.join("ready").exists() {
             let _ = download.directory.keep();
             return Ok(InstallSession {
