@@ -564,7 +564,23 @@ impl Engine {
         if settings.controller_port == self.settings.controller_port
             && settings.mixed_port == self.settings.mixed_port
         {
-            self.store.save_settings(&settings)?;
+            if (settings.dns_override != self.settings.dns_override
+                || settings.ipv6 != self.settings.ipv6)
+                && let Some(id) = settings.active_profile.as_deref()
+            {
+                let raw = read_profile(&self.store.profile_path(id)?)?;
+                let payload = self.profile_payload(&raw, &settings, id)?;
+                drop(raw);
+                let mut transaction =
+                    crate::profile_transaction::Transaction::new(&self.store.root)?;
+                transaction.stage(
+                    &self.store.root.join("settings.json"),
+                    &serde_json::to_vec_pretty(&settings)?,
+                )?;
+                self.commit_profile(transaction, &payload, true).await?;
+            } else {
+                self.store.save_settings(&settings)?;
+            }
             self.settings = settings;
             return Ok(());
         }

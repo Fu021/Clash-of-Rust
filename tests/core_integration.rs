@@ -44,6 +44,97 @@ fn free_port() -> u16 {
 }
 
 #[tokio::test]
+#[ignore = "Requires bundled resources; verifies live DNS/IPv6 changes, persistence and validation rollback"]
+async fn network_overrides_apply_live_and_rollback_rejected_subscription_dns() {
+    let tmp = tempfile::tempdir().unwrap();
+    let store = Store::at(tmp.path().to_owned()).unwrap();
+    let controller_port = free_port();
+    let mut mixed_port = free_port();
+    while mixed_port == controller_port {
+        mixed_port = free_port();
+    }
+    store
+        .save_settings(&Settings {
+            controller_port,
+            mixed_port,
+            ..Settings::default()
+        })
+        .unwrap();
+    let mut engine = Engine::with_resources(store.clone(), test_resources()).unwrap();
+    engine.start().await.unwrap();
+    let source = tmp.path().join("network.yaml");
+    let raw = "proxies: []\nproxy-groups: [{name: Proxy, type: select, proxies: [DIRECT, REJECT]}]\nrules: ['MATCH,DIRECT']\ndns: {enable: true, enhanced-mode: redir-host, ipv6: false, nameserver: [1.1.1.1], proxy-server-nameserver: [223.5.5.5]}\n";
+    std::fs::write(&source, raw).unwrap();
+    engine
+        .import("network test".into(), source.display().to_string(), None)
+        .await
+        .unwrap();
+    let id = engine.profiles.last().unwrap().id.clone();
+    engine.activate(id.clone()).await.unwrap();
+    let profile = store.profile_path(&id).unwrap();
+    let runtime = store.runtime().join("config.yaml");
+    for (dns_override, ipv6) in [(false, false), (false, true), (true, false), (true, true)] {
+        engine
+            .save_settings(Settings {
+                dns_override,
+                ipv6,
+                ..engine.settings.clone()
+            })
+            .await
+            .unwrap();
+        let actual: Value = engine.api.get("configs").await.unwrap();
+        assert_eq!(actual["ipv6"].as_bool(), Some(ipv6));
+        let payload: serde_yaml::Value =
+            serde_yaml::from_str(&std::fs::read_to_string(&runtime).unwrap()).unwrap();
+        assert_eq!(payload["dns"]["ipv6"].as_bool(), Some(ipv6));
+        assert_eq!(
+            payload["dns"]["enhanced-mode"].as_str(),
+            Some(if dns_override {
+                "fake-ip"
+            } else {
+                "redir-host"
+            })
+        );
+        assert_eq!(payload["tun"]["stack"].as_str(), Some("mips"));
+        let saved = store.load_settings().unwrap();
+        assert_eq!(saved.dns_override, dns_override);
+        assert_eq!(saved.ipv6, ipv6);
+        assert_eq!(std::fs::read_to_string(&profile).unwrap(), raw);
+    }
+    let old_runtime = std::fs::read(&runtime).unwrap();
+    let old_settings = std::fs::read(store.root.join("settings.json")).unwrap();
+    // A broken provider DNS URL is masked by enabled override but must be
+    // validated before restoring the provider's DNS configuration.
+    std::fs::write(&profile, raw.replace("1.1.1.1", "'https://['")).unwrap();
+    assert!(
+        engine
+            .save_settings(Settings {
+                dns_override: false,
+                ..engine.settings.clone()
+            })
+            .await
+            .is_err()
+    );
+    assert!(engine.settings.dns_override);
+    assert_eq!(std::fs::read(&runtime).unwrap(), old_runtime);
+    assert_eq!(
+        std::fs::read(store.root.join("settings.json")).unwrap(),
+        old_settings
+    );
+    assert!(engine.poll(Scope::Home).await.unwrap().running);
+    std::fs::write(&profile, raw).unwrap();
+    engine.stop().await.unwrap();
+    drop(engine);
+    let mut engine = Engine::with_resources(store.clone(), test_resources()).unwrap();
+    engine.start().await.unwrap();
+    assert!(engine.poll(Scope::Home).await.unwrap().running);
+    let persisted = store.load_settings().unwrap();
+    assert!(persisted.dns_override);
+    assert!(persisted.ipv6);
+    engine.stop().await.unwrap();
+}
+
+#[tokio::test]
 #[ignore = "Requires bundled resources; verifies suffix overrides route real connections and leave existing ones unchanged"]
 async fn custom_suffix_rules_route_new_domain_and_subdomain_connections() {
     use clash_of_rust::rule_manager::{CustomRule, ProfileRules};

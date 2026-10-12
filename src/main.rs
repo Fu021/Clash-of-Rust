@@ -337,6 +337,8 @@ enum Action {
     SaveRules(String, ProfileRules),
     LoadRules(String),
     Theme(bool),
+    DnsOverride(bool),
+    Ipv6(bool),
     Autostart(bool),
     DelayInterval(u32),
     NodeSort(NodeSort),
@@ -575,6 +577,24 @@ async fn execute(engine: Arc<Mutex<Engine>>, action: Action, scope: Scope, heade
                 };
                 engine.save_settings(settings).await?;
                 Ok("外观已自动保存".into())
+            }
+            Action::DnsOverride(dns_override) => {
+                engine
+                    .save_settings(Settings {
+                        dns_override,
+                        ..engine.settings.clone()
+                    })
+                    .await?;
+                Ok("DNS 覆盖设置已保存并应用".into())
+            }
+            Action::Ipv6(ipv6) => {
+                engine
+                    .save_settings(Settings {
+                        ipv6,
+                        ..engine.settings.clone()
+                    })
+                    .await?;
+                Ok("IPv6 设置已保存并应用".into())
             }
             Action::Autostart(enabled) => {
                 tokio::task::spawn_blocking(move || platform::set_autostart(enabled)).await??;
@@ -1046,6 +1066,8 @@ impl App {
             action,
             Action::Start
                 | Action::SavePorts(..)
+                | Action::DnsOverride(_)
+                | Action::Ipv6(_)
                 | Action::SaveRules(..)
                 | Action::Activate(_)
                 | Action::UpdateProfile(_)
@@ -4226,6 +4248,32 @@ impl App {
             .spacing(12),
         ]
         .spacing(12);
+        let network = column![
+            self.title("网络配置"),
+            checkbox(self.settings.dns_override)
+                .label("DNS 覆盖")
+                .size(self.scaled(16))
+                .text_size(self.scaled(12))
+                .on_toggle_maybe(
+                    (!self.working && !self.exiting && !self.updates.busy())
+                        .then_some(|enabled| Message::Action(Action::DnsOverride(enabled))),
+                ),
+            self.label("使用 Fake-IP 与腾讯、阿里 DNS，保留订阅的解析策略与过滤列表。")
+                .size(self.scaled(11))
+                .color(self.foreground()),
+            checkbox(self.settings.ipv6)
+                .label("启用 IPv6")
+                .size(self.scaled(16))
+                .text_size(self.scaled(12))
+                .on_toggle_maybe(
+                    (!self.working && !self.exiting && !self.updates.busy())
+                        .then_some(|enabled| Message::Action(Action::Ipv6(enabled))),
+                ),
+            self.label("同时控制内核与 DNS 的 IPv6，修改后自动保存并应用。")
+                .size(self.scaled(11))
+                .color(self.foreground()),
+        ]
+        .spacing(12);
         let geo = column![
             self.title("Geo 数据"),
             self.label(presentation::geo_version(&self.geo_status))
@@ -4241,6 +4289,10 @@ impl App {
                     .width(Length::Fill)
                     .style(panel),
                 container(ports)
+                    .padding(16)
+                    .width(Length::Fill)
+                    .style(panel),
+                container(network)
                     .padding(16)
                     .width(Length::Fill)
                     .style(panel),
