@@ -15,6 +15,7 @@ import signal
 import socket
 import atexit
 import math
+import sys
 from pathlib import Path
 
 parser = argparse.ArgumentParser(description=__doc__)
@@ -25,6 +26,26 @@ parser.add_argument('--output', type=Path)
 parser.add_argument('--scales', type=float, nargs='+', default=[1.0],
                     help='X11 scale factors to test; fractional values require a display with DPI support')
 args = parser.parse_args()
+if args.output:
+    args.output.parent.mkdir(parents=True, exist_ok=True)
+    log_directory = args.output.parent / 'linux-x11-logs'
+    log_directory.mkdir(exist_ok=True)
+
+
+def write_logs(name, out, err):
+    if args.output:
+        (log_directory / (name + '.stdout.log')).write_bytes(out)
+        (log_directory / (name + '.stderr.log')).write_bytes(err)
+
+
+def error_report(kind, error, traceback):
+    if args.output:
+        args.output.write_text(json.dumps({'status': 'failed', 'error': str(error),
+                                          'cases': globals().get('results', [])}, indent=2) + '\n')
+    sys.__excepthook__(kind, error, traceback)
+
+
+sys.excepthook = error_report
 assert args.scales and all(0 < scale <= 4 for scale in args.scales), 'Invalid scale factors'
 assert os.environ.get('DISPLAY'), 'A graphical X11 DISPLAY is required'
 assert os.environ.get('DBUS_SESSION_BUS_ADDRESS'), 'Run under dbus-run-session'
@@ -187,6 +208,7 @@ for scale, background in ((scale, background) for scale in args.scales for backg
         env.pop('WAYLAND_SOCKET', None)
         command = [str(executable)] + (['--background'] if background else [])
         proc = subprocess.Popen(command, env=env, stdout=subprocess.PIPE, stderr=subprocess.PIPE, start_new_session=True)
+        name = str(scale) + ('-background' if background else '-foreground')
         try:
             window = None
             started = time.monotonic()
@@ -197,7 +219,12 @@ for scale, background in ((scale, background) for scale in args.scales for backg
                 if window or proc.poll() is not None:
                     break
                 time.sleep(0.1)
-            assert window, 'No mapped window (background=%s)' % background
+            if not window:
+                if proc.poll() is not None:
+                    out, err = proc.communicate(timeout=5)
+                    write_logs(name, out, err)
+                    raise AssertionError(('No mapped window', background, proc.returncode, err.decode(errors='replace')))
+                raise AssertionError('No mapped window (background=%s)' % background)
             app_class = window_class(window[0])
             assert app_class == ('clash-of-rust', 'clash-of-rust'), app_class
             time.sleep(3)
@@ -234,6 +261,7 @@ for scale, background in ((scale, background) for scale in args.scales for backg
                 assert X.XSendEvent(display, window[0], 0, 0, c.byref(event))
                 X.XFlush(display)
             out, err = proc.communicate(timeout=15)
+            write_logs(name, out, err)
             assert proc.returncode == 0, (proc.returncode, err)
             assert not err, err.decode(errors='replace')
             saved = json.loads(Path(tmp, 'window-state.json').read_text())
@@ -254,12 +282,14 @@ for scale, background in ((scale, background) for scale in args.scales for backg
                 X.XFlush(display)
                 time.sleep(1)
             out, err = proc.communicate(timeout=15)
+            write_logs(name + '-relaunch', out, err)
             assert proc.returncode == 0 and not err, (proc.returncode, err)
             results.append({'background': background, 'geometry': geometry, 'mapped_window': window[1:], 'wm_class': app_class, 'core_version': core_version, 'close_exits': True, 'pending_tray_close_requires_confirmation': background, 'relaunch_logical_size': saved, 'relaunch_physical_size': restored[2:], 'returncode': proc.returncode, 'stderr': err.decode()})
         finally:
             if proc.poll() is None:
                 os.killpg(proc.pid, signal.SIGTERM)
-                proc.communicate(timeout=10)
+                out, err = proc.communicate(timeout=10)
+                write_logs(name + '-interrupted', out, err)
 print(json.dumps(results, ensure_ascii=False, indent=2))
 if args.output:
     args.output.write_text(json.dumps(results, ensure_ascii=False, indent=2) + '\n', encoding='utf-8')
