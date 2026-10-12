@@ -65,7 +65,10 @@ def check(executable, output, scale, background):
         for key in ('DISPLAY', 'WAYLAND_SOCKET', 'WINIT_X11_SCALE_FACTOR', 'WAYLAND_DEBUG'):
             env.pop(key, None)
         help_text = subprocess.check_output(['weston', '--help'], text=True)
-        renderer = '--renderer=pixman' if '--renderer=' in help_text else '--use-pixman'
+        # Weston 9's headless Pixman path can segfault in composite32 when
+        # repainting SHM/CSD surfaces. Mesa's software GL exercises the same
+        # Wayland protocol and rendering without requiring a GPU on CI.
+        renderer = '--renderer=gl' if '--renderer=' in help_text else '--use-gl'
         command = ['weston', '--backend=headless-backend.so', renderer,
                    '--width=3200', '--height=2400', '--scale=' + str(scale),
                    '--idle-time=0', '--no-config', '--socket=clash-wayland-test']
@@ -75,7 +78,7 @@ def check(executable, output, scale, background):
             command = ['gdb', '--batch', '--return-child-result', '-ex', 'run',
                        '-ex', 'thread apply all bt', '--args'] + command
         with (logs / 'compositor.log').open('w') as compositor_log:
-            compositor = subprocess.Popen(command, env=env, stdout=compositor_log,
+            compositor = subprocess.Popen(command, env=dict(env, LIBGL_ALWAYS_SOFTWARE='1'), stdout=compositor_log,
                                           stderr=compositor_log, start_new_session=True)
             try:
                 for _ in range(100):
@@ -133,6 +136,7 @@ def check(executable, output, scale, background):
                         native_windows = len(set(re.findall(r'get_xdg_surface\([^\n]*?wl_surface[@#](\d+)', trace)))
                         assert native_windows == 1, (name, native_windows)
                         return {'mode': name, 'status': 'passed', 'scale': scale,
+                                'compositor_renderer': 'mesa-software-gl',
                                 'rendered_physical_size': expected, 'core_version': core,
                                 'native_windows': native_windows}
                     finally:
