@@ -7,6 +7,7 @@ import json
 import os
 from pathlib import Path
 import re
+import shutil
 import signal
 import subprocess
 import tempfile
@@ -68,6 +69,11 @@ def check(executable, output, scale, background):
         command = ['weston', '--backend=headless-backend.so', renderer,
                    '--width=3200', '--height=2400', '--scale=' + str(scale),
                    '--idle-time=0', '--no-config', '--socket=clash-wayland-test']
+        # Keep a compositor backtrace when the headless test server crashes,
+        # instead of reporting its disconnected clients as application failures.
+        if shutil.which('gdb'):
+            command = ['gdb', '--batch', '--return-child-result', '-ex', 'run',
+                       '-ex', 'thread apply all bt', '--args'] + command
         with (logs / 'compositor.log').open('w') as compositor_log:
             compositor = subprocess.Popen(command, env=env, stdout=compositor_log,
                                           stderr=compositor_log, start_new_session=True)
@@ -86,22 +92,27 @@ def check(executable, output, scale, background):
                     app = subprocess.Popen([str(executable)] + (['--background'] if background else []),
                                            env=app_env, stdout=app_log, stderr=trace_log,
                                            start_new_session=True)
+                    def require_running():
+                        compositor_code, app_code = compositor.poll(), app.poll()
+                        if compositor_code is not None or app_code is not None:
+                            raise RuntimeError(f'{name}: compositor exit={compositor_code}, '
+                                               f'application exit={app_code}; see {logs}')
                     try:
                         started = time.monotonic()
                         expected = (950 * scale, 700 * scale)
                         for _ in range(200):
+                            require_running()
                             trace = trace_file.read_text(errors='replace')
                             if background and time.monotonic() - started < 2:
                                 assert 'get_xdg_surface(' not in trace, 'Login created a native window before display setup settled'
                             if root_buffer(trace) == expected:
                                 break
-                            if app.poll() is not None:
-                                raise RuntimeError('Application exited; see ' + str(trace_file))
                             time.sleep(0.1)
                         else:
                             raise AssertionError((name, expected, root_buffer(trace), str(trace_file)))
                         # A later Configure must not leave a differently scaled frame.
                         time.sleep(0.5)
+                        require_running()
                         trace = trace_file.read_text(errors='replace')
                         assert root_buffer(trace) == expected, (name, expected, root_buffer(trace))
                         settings = json.loads((data / 'settings.json').read_text())
@@ -109,13 +120,13 @@ def check(executable, output, scale, background):
                                   headers={'Authorization': 'Bearer ' + settings['secret']})
                         opener = urllib.request.build_opener(urllib.request.ProxyHandler({}))
                         for _ in range(150):
+                            require_running()
                             try:
                                 with opener.open(request, timeout=1) as response:
                                     core = json.load(response)
                                 break
                             except (OSError, ValueError):
-                                if app.poll() is not None:
-                                    raise RuntimeError('Application exited while waiting for its core')
+                                require_running()
                                 time.sleep(0.1)
                         else:
                             raise RuntimeError('Core did not become ready; see ' + str(trace_file))
@@ -125,6 +136,9 @@ def check(executable, output, scale, background):
                                 'rendered_physical_size': expected, 'core_version': core,
                                 'native_windows': native_windows}
                     finally:
+                        (logs / 'processes.json').write_text(json.dumps({
+                            'compositor_exit': compositor.poll(), 'application_exit': app.poll(),
+                        }, indent=2) + '\n')
                         stop(app)
             finally:
                 stop(compositor)
