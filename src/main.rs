@@ -579,21 +579,19 @@ async fn execute(engine: Arc<Mutex<Engine>>, action: Action, scope: Scope, heade
                 Ok("外观已自动保存".into())
             }
             Action::DnsOverride(dns_override) => {
-                engine
-                    .save_settings(Settings {
-                        dns_override,
-                        ..engine.settings.clone()
-                    })
-                    .await?;
+                let settings = Settings {
+                    dns_override,
+                    ..engine.settings.clone()
+                };
+                engine.save_settings(settings).await?;
                 Ok("DNS 覆盖设置已保存并应用".into())
             }
             Action::Ipv6(ipv6) => {
-                engine
-                    .save_settings(Settings {
-                        ipv6,
-                        ..engine.settings.clone()
-                    })
-                    .await?;
+                let settings = Settings {
+                    ipv6,
+                    ..engine.settings.clone()
+                };
+                engine.save_settings(settings).await?;
                 Ok("IPv6 设置已保存并应用".into())
             }
             Action::Autostart(enabled) => {
