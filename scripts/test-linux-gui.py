@@ -14,6 +14,7 @@ import urllib.request
 import signal
 import socket
 import atexit
+import math
 from pathlib import Path
 
 parser = argparse.ArgumentParser(description=__doc__)
@@ -125,10 +126,32 @@ def app_window(pid):
                     return win, title, attrs.width, attrs.height
     return None
 
+
+def hidden_app_windows(pid):
+    result = []
+    for win in windows():
+        if window_pid(win) != pid:
+            continue
+        name = c.c_void_p()
+        if X.XFetchName(display, win, c.byref(name)) and name.value:
+            title = c.string_at(name).decode(errors='replace')
+            X.XFree(name)
+            if title.startswith('Clash of Rust'):
+                attrs = Attributes()
+                X.XGetWindowAttributes(display, win, c.byref(attrs))
+                if attrs.map_state != 2:
+                    result.append(win)
+    return result
+
+
+def physical(value, scale):
+    # Match Rust/winit rounding rather than Python's ties-to-even rounding.
+    return math.floor(value * scale + 0.5)
+
 def check_window_size(pid, window, scale):
     hints, supplied = SizeHints(), c.c_long()
     assert X.XGetWMNormalHints(display, window, c.byref(hints), c.byref(supplied))
-    minimum = (round(800 * scale), round(450 * scale))
+    minimum = (physical(800, scale), physical(450, scale))
     assert hints.flags & (1 << 4), 'Native minimum size is missing'
     assert (hints.min_width, hints.min_height) == minimum, (
         scale, (hints.min_width, hints.min_height), minimum, app_window(pid))
@@ -137,7 +160,7 @@ def check_window_size(pid, window, scale):
     current = app_window(pid)
     widths = []
     for logical_width in (1100, 800, 950):
-        requested = round(logical_width * scale)
+        requested = physical(logical_width, scale)
         X.XResizeWindow(display, window, requested, current[3])
         X.XFlush(display)
         for _ in range(100):
@@ -160,11 +183,16 @@ for scale, background in ((scale, background) for scale in args.scales for backg
         Path(tmp, 'settings.json').write_text(json.dumps({'mixed_port': mixed_port, 'controller_port': controller_port, 'proxy_mode': 'off', 'secret': 'diagnostic-only'}))
         env = dict(os.environ, CLASH_OF_RUST_DATA_DIR=tmp, GSETTINGS_BACKEND='memory',
                    WINIT_X11_SCALE_FACTOR=str(scale))
+        env.pop('WAYLAND_DISPLAY', None)
+        env.pop('WAYLAND_SOCKET', None)
         command = [str(executable)] + (['--background'] if background else [])
         proc = subprocess.Popen(command, env=env, stdout=subprocess.PIPE, stderr=subprocess.PIPE, start_new_session=True)
         try:
             window = None
+            started = time.monotonic()
             for _ in range(100):
+                if background and time.monotonic() - started < 2:
+                    assert not hidden_app_windows(proc.pid), 'Login startup must not create a hidden native window'
                 window = app_window(proc.pid)
                 if window or proc.poll() is not None:
                     break
@@ -175,6 +203,18 @@ for scale, background in ((scale, background) for scale in args.scales for backg
             time.sleep(3)
             assert proc.poll() is None, 'App exited before close'
             geometry = check_window_size(proc.pid, window[0], scale)
+            # Leave a non-default ordinary size, then verify an actual relaunch
+            # restores logical dimensions once, at each tested display scale.
+            normal = (1088, 632)
+            expected = tuple(physical(value, scale) for value in normal)
+            X.XResizeWindow(display, window[0], *expected)
+            X.XFlush(display)
+            for _ in range(100):
+                current = app_window(proc.pid)
+                if current and current[2:] == expected:
+                    break
+                time.sleep(0.05)
+            assert current and current[2:] == expected, (scale, expected, current)
             opener = urllib.request.build_opener(urllib.request.ProxyHandler({}))
             # The engine may persist its effective settings during startup.
             settings = json.loads(Path(tmp, 'settings.json').read_text())
@@ -196,7 +236,26 @@ for scale, background in ((scale, background) for scale in args.scales for backg
             out, err = proc.communicate(timeout=15)
             assert proc.returncode == 0, (proc.returncode, err)
             assert not err, err.decode(errors='replace')
-            results.append({'background': background, 'geometry': geometry, 'mapped_window': window[1:], 'wm_class': app_class, 'core_version': core_version, 'close_exits': True, 'pending_tray_close_requires_confirmation': background, 'returncode': proc.returncode, 'stderr': err.decode()})
+            saved = json.loads(Path(tmp, 'window-state.json').read_text())
+            assert (saved['width'], saved['height']) == normal, (scale, saved)
+            proc = subprocess.Popen(command, env=env, stdout=subprocess.PIPE, stderr=subprocess.PIPE, start_new_session=True)
+            for _ in range(100):
+                restored = app_window(proc.pid)
+                if restored and restored[2:] == expected:
+                    break
+                if proc.poll() is not None:
+                    break
+                time.sleep(0.1)
+            assert restored and restored[2:] == expected, (scale, expected, restored)
+            time.sleep(0.5)
+            event.client.window = restored[0]
+            for _ in range(2 if background else 1):
+                assert X.XSendEvent(display, restored[0], 0, 0, c.byref(event))
+                X.XFlush(display)
+                time.sleep(1)
+            out, err = proc.communicate(timeout=15)
+            assert proc.returncode == 0 and not err, (proc.returncode, err)
+            results.append({'background': background, 'geometry': geometry, 'mapped_window': window[1:], 'wm_class': app_class, 'core_version': core_version, 'close_exits': True, 'pending_tray_close_requires_confirmation': background, 'relaunch_logical_size': saved, 'relaunch_physical_size': restored[2:], 'returncode': proc.returncode, 'stderr': err.decode()})
         finally:
             if proc.poll() is None:
                 os.killpg(proc.pid, signal.SIGTERM)

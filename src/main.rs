@@ -145,6 +145,35 @@ fn main() -> iced::Result {
         .map(|store| window_state::State::load(&store))
         .unwrap_or_default();
     let initial_window_size = window_state.size();
+    #[cfg(target_os = "linux")]
+    if background_start() {
+        // Login can precede the compositor's final output/DPI configuration.
+        // A hidden window created here retains that provisional configuration.
+        // Keep the tray/core running and create the native window on first show.
+        return iced::daemon(
+            move || {
+                let (mut app, task) =
+                    App::new(tray_startup.lock().unwrap().take(), window_state.clone());
+                let window = if app.visible {
+                    app.open_window()
+                } else {
+                    Task::none()
+                };
+                (app, Task::batch([task, window]))
+            },
+            App::update,
+            App::daemon_view,
+        )
+        .title("Clash of Rust · 原生代理客户端")
+        .theme(|app: &App, _| app.theme())
+        .subscription(App::subscription)
+        .settings(iced::Settings {
+            default_text_size: iced::Pixels(15.0),
+            ..Default::default()
+        })
+        .default_font(typography::ENGLISH_FONT)
+        .run();
+    }
     iced::application(
         move || App::new(tray_startup.lock().unwrap().take(), window_state.clone()),
         App::update,
@@ -158,20 +187,24 @@ fn main() -> iced::Result {
         ..Default::default()
     })
     .default_font(typography::ENGLISH_FONT)
-    .window(iced::window::Settings {
-        size: initial_window_size,
+    .window(window_settings(initial_window_size, !background_start()))
+    .run()
+}
+
+fn window_settings(size: iced::Size, visible: bool) -> iced::window::Settings {
+    iced::window::Settings {
+        size,
         min_size: Some(MIN_WINDOW_SIZE),
         icon: Some(icons::window()),
         exit_on_close_request: false,
-        visible: !background_start(),
+        visible,
         #[cfg(target_os = "linux")]
         platform_specific: iced::window::settings::PlatformSpecific {
             application_id: "clash-of-rust".into(),
             ..Default::default()
         },
         ..Default::default()
-    })
-    .run()
+    }
 }
 
 fn update_restart() -> bool {
@@ -369,6 +402,18 @@ enum Message {
     ResetWindowSize,
     ApplyWindowSize(u64, iced::Size),
     ResizeWindow(u64, iced::Size, Option<iced::window::Id>),
+    VerifyWindowSize(u64, iced::Size, iced::window::Id, u8),
+    WindowSizeConfirmed(
+        u64,
+        iced::Size,
+        iced::window::Id,
+        u8,
+        iced::Size,
+        bool,
+        Option<bool>,
+    ),
+    #[cfg(target_os = "linux")]
+    WindowCreated(iced::window::Id),
     ReadWindowSize(Option<iced::window::Id>),
     WindowSize(iced::Size),
     CaptureWindowState(u64, iced::window::Id),
@@ -472,6 +517,8 @@ struct App {
     window_height: String,
     size_revision: u64,
     size_pending: bool,
+    #[cfg(target_os = "linux")]
+    window_opening: bool,
     window_state: window_state::State,
     window_state_revision: u64,
     window_state_debounce: Option<iced::task::Handle>,
@@ -666,6 +713,11 @@ async fn execute(engine: Arc<Mutex<Engine>>, action: Action, scope: Scope, heade
 }
 
 impl App {
+    #[cfg(target_os = "linux")]
+    fn daemon_view(&self, _id: iced::window::Id) -> Element<'_, Message> {
+        self.view()
+    }
+
     fn new(
         tray_startup: Option<tray::Startup>,
         window_state: window_state::State,
@@ -731,6 +783,8 @@ impl App {
             window_height: format!("{:.0}", DEFAULT_WINDOW_SIZE.height),
             size_revision: 0,
             size_pending: false,
+            #[cfg(target_os = "linux")]
+            window_opening: false,
             window_state: window_state::State::default(),
             window_state_revision: 0,
             window_state_debounce: None,
@@ -1334,19 +1388,72 @@ impl App {
             }
             Message::ResizeWindow(revision, size, Some(id)) => {
                 if revision == self.size_revision {
-                    self.size_pending = false;
-                    self.set_window_size(size);
-                    // Refresh native limits with the current display scale.
-                    // Startup DPI detection can otherwise leave stale X11 hints.
-                    return iced::window::set_min_size(id, Some(MIN_WINDOW_SIZE))
+                    self.size_pending = true;
+                    self.window_width = format!("{:.0}", size.width);
+                    self.window_height = format!("{:.0}", size.height);
+                    self.window_state_revision = self.window_state_revision.wrapping_add(1);
+                    if let Some(handle) = self.window_state_debounce.take() {
+                        handle.abort();
+                    }
+                    // Drop provisional DPI-dependent limits before requesting
+                    // a resize. Winit applies the request asynchronously; keep
+                    // old native events out of the saved state until confirmed.
+                    return iced::window::set_min_size(id, None)
                         .chain(iced::window::maximize(id, false))
-                        .chain(iced::window::resize(id, size));
+                        .chain(iced::window::resize(id, size))
+                        .chain(verify_window_size(revision, size, id, 0));
                 }
             }
             Message::ResizeWindow(revision, _, None) => {
                 if revision == self.size_revision {
                     self.size_pending = false;
                 }
+            }
+            Message::VerifyWindowSize(revision, size, id, attempt) => {
+                if revision == self.size_revision && self.size_pending && !self.exiting {
+                    return read_window_state(id).map(move |(actual, maximized, minimized)| {
+                        Message::WindowSizeConfirmed(
+                            revision, size, id, attempt, actual, maximized, minimized,
+                        )
+                    });
+                }
+            }
+            Message::WindowSizeConfirmed(
+                revision,
+                size,
+                id,
+                attempt,
+                actual,
+                maximized,
+                minimized,
+            ) => {
+                if revision != self.size_revision || !self.size_pending || self.exiting {
+                    return Task::none();
+                }
+                if !window_size_matches(size, actual) && attempt < 2 {
+                    // The first Configure/Resized event refreshes iced's cached
+                    // display scale. Retry with that scale, without another click.
+                    return iced::window::resize(id, size).chain(verify_window_size(
+                        revision,
+                        size,
+                        id,
+                        attempt + 1,
+                    ));
+                }
+                self.size_pending = false;
+                self.set_window_size(actual);
+                let save = if window_size_matches(size, actual)
+                    && self.window_state.capture(actual, maximized, minimized)
+                {
+                    let state = self.window_state.clone();
+                    Task::perform(
+                        async move { state.save().await.map_err(|error| format!("{error:#}")) },
+                        Message::WindowStateSaved,
+                    )
+                } else {
+                    Task::none()
+                };
+                return Task::batch([iced::window::set_min_size(id, Some(MIN_WINDOW_SIZE)), save]);
             }
             Message::ReadWindowSize(Some(id)) => {
                 return iced::window::size(id).map(Message::WindowSize);
@@ -1382,10 +1489,21 @@ impl App {
                 }
             }
             Message::Window((id, iced::window::Event::Opened { .. })) => {
-                return iced::window::set_min_size(id, Some(MIN_WINDOW_SIZE))
-                    .chain(iced::window::resize(id, self.window_state.size()));
+                #[cfg(target_os = "linux")]
+                {
+                    self.window_opening = false;
+                }
+                self.size_revision = self.size_revision.wrapping_add(1);
+                return self.update(Message::ResizeWindow(
+                    self.size_revision,
+                    self.window_state.size(),
+                    Some(id),
+                ));
             }
             Message::Window((id, iced::window::Event::Rescaled(_))) => {
+                if self.size_pending {
+                    return Task::none();
+                }
                 return iced::window::set_min_size(id, Some(MIN_WINDOW_SIZE))
                     .chain(iced::window::size(id).map(Message::WindowSize));
             }
@@ -1396,7 +1514,11 @@ impl App {
                 // X11 can update WM_NORMAL_HINTS again while delivering the
                 // final resize after a DPI change. Apply limits after that event.
                 return Task::batch([
-                    iced::window::set_min_size(id, Some(MIN_WINDOW_SIZE)),
+                    if self.size_pending {
+                        Task::none()
+                    } else {
+                        iced::window::set_min_size(id, Some(MIN_WINDOW_SIZE))
+                    },
                     self.schedule_window_state(id),
                 ]);
             }
@@ -1721,7 +1843,14 @@ impl App {
                     refresh,
                 ]);
             }
-            Message::ShowWindow(None) => {}
+            Message::ShowWindow(None) => {
+                #[cfg(target_os = "linux")]
+                return self.open_window();
+            }
+            #[cfg(target_os = "linux")]
+            Message::WindowCreated(_id) => {
+                self.window_opening = false;
+            }
             Message::Tick => {
                 if let Some(startup) = &self.tray_startup {
                     if let Some(result) = startup.poll() {
@@ -2110,6 +2239,20 @@ impl App {
             self.window_width = format!("{:.0}", size.width);
             self.window_height = format!("{:.0}", size.height);
         }
+    }
+
+    #[cfg(target_os = "linux")]
+    fn open_window(&mut self) -> Task<Message> {
+        if self.window_opening || self.exiting {
+            return Task::none();
+        }
+        self.window_opening = true;
+        self.visible = true;
+        let (_, open) = iced::window::open(window_settings(self.window_state.size(), true));
+        Task::batch([
+            open.map(Message::WindowCreated),
+            self.dispatch(Action::Refresh),
+        ])
     }
 
     fn schedule_window_state(&mut self, id: iced::window::Id) -> Task<Message> {
@@ -4156,6 +4299,25 @@ fn read_window_state(id: iced::window::Id) -> Task<(iced::Size, bool, Option<boo
     })
 }
 
+fn verify_window_size(
+    revision: u64,
+    size: iced::Size,
+    id: iced::window::Id,
+    attempt: u8,
+) -> Task<Message> {
+    Task::perform(
+        async { tokio::time::sleep(Duration::from_millis(100)).await },
+        move |_| Message::VerifyWindowSize(revision, size, id, attempt),
+    )
+}
+
+fn window_size_matches(desired: iced::Size, actual: iced::Size) -> bool {
+    actual.width.is_finite()
+        && actual.height.is_finite()
+        && (desired.width - actual.width).abs() <= 1.0
+        && (desired.height - actual.height).abs() <= 1.0
+}
+
 fn page_scroll<'a>(
     content: impl Into<Element<'a, Message>>,
 ) -> iced::widget::Scrollable<'a, Message> {
@@ -4222,6 +4384,16 @@ mod window_tests {
             revision,
             DEFAULT_WINDOW_SIZE,
             Some(id),
+        ));
+        assert!(app.size_pending);
+        let _ = app.update(Message::WindowSizeConfirmed(
+            revision,
+            DEFAULT_WINDOW_SIZE,
+            id,
+            0,
+            DEFAULT_WINDOW_SIZE,
+            false,
+            Some(false),
         ));
         assert!(!app.size_pending);
         assert_eq!(
@@ -4302,6 +4474,101 @@ mod window_tests {
         ));
         assert!(app.size_pending);
         assert_eq!(app.window_state.size(), DEFAULT_WINDOW_SIZE);
+    }
+
+    #[test]
+    fn first_resize_with_provisional_dpi_is_retried_without_saving_it() {
+        let mut app = app();
+        let id = iced::window::Id::unique();
+        let _ = app.update(Message::ResetWindowSize);
+        let revision = app.size_revision;
+        let _ = app.update(Message::ResizeWindow(
+            revision,
+            DEFAULT_WINDOW_SIZE,
+            Some(id),
+        ));
+        let inflated = iced::Size::new(1900.0, 1400.0);
+        let _ = app.update(Message::Window((
+            id,
+            iced::window::Event::Resized(inflated),
+        )));
+        let _ = app.update(Message::WindowSizeConfirmed(
+            revision,
+            DEFAULT_WINDOW_SIZE,
+            id,
+            0,
+            inflated,
+            false,
+            Some(false),
+        ));
+        assert!(app.size_pending);
+        assert_eq!(app.window_state.size(), DEFAULT_WINDOW_SIZE);
+        assert_eq!(
+            (app.window_width.as_str(), app.window_height.as_str()),
+            ("950", "700")
+        );
+        let _ = app.update(Message::WindowSizeConfirmed(
+            revision,
+            DEFAULT_WINDOW_SIZE,
+            id,
+            1,
+            DEFAULT_WINDOW_SIZE,
+            false,
+            Some(false),
+        ));
+        assert!(!app.size_pending);
+        assert_eq!(app.window_state.size(), DEFAULT_WINDOW_SIZE);
+    }
+
+    #[test]
+    fn obsolete_resize_confirmation_cannot_finish_a_newer_edit() {
+        let mut app = app();
+        let id = iced::window::Id::unique();
+        let _ = app.update(Message::ResetWindowSize);
+        let obsolete = app.size_revision;
+        let _ = app.update(Message::WindowWidth("1200".into()));
+        let _ = app.update(Message::WindowSizeConfirmed(
+            obsolete,
+            DEFAULT_WINDOW_SIZE,
+            id,
+            0,
+            DEFAULT_WINDOW_SIZE,
+            false,
+            Some(false),
+        ));
+        assert!(app.size_pending);
+        assert_eq!(app.window_width, "1200");
+    }
+
+    #[test]
+    fn resize_confirmation_tolerates_fractional_dpi_rounding() {
+        assert!(window_size_matches(
+            DEFAULT_WINDOW_SIZE,
+            iced::Size::new(950.4, 699.6)
+        ));
+        assert!(!window_size_matches(
+            DEFAULT_WINDOW_SIZE,
+            iced::Size::new(1425.0, 1050.0)
+        ));
+        assert!(!window_size_matches(
+            DEFAULT_WINDOW_SIZE,
+            iced::Size::new(f32::NAN, 700.0)
+        ));
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn background_show_opens_only_one_window_with_saved_logical_geometry() {
+        let mut app = app();
+        let normal = iced::Size::new(1100.0, 650.0);
+        app.window_state.capture(normal, false, None);
+        app.visible = false;
+        let _ = app.update(Message::ShowWindow(None));
+        assert!(app.visible);
+        assert!(app.window_opening);
+        let _ = app.update(Message::ShowWindow(None));
+        assert!(app.window_opening);
+        assert_eq!(window_settings(app.window_state.size(), true).size, normal);
     }
 }
 
