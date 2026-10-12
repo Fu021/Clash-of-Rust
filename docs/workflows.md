@@ -6,12 +6,13 @@
 | Publish Release | 手动 | 复用成功 CI 的程序，打包、安装后测试、发布 | 六个安装包及 SHA256；测试产物保留 14 天 |
 | Memory Benchmark | 手动 | 测量一个远程分支、标签或提交的内存 | 原始 JSONL、报告、截图、构建日志；保留 30 天 |
 
-六个平台为 Windows x64 / ARM64、Linux x64 / ARM64、macOS Intel / Apple Silicon。Ubuntu 最新版兼容验证在发布工作流中执行。
+六个平台为 Windows x64 / ARM64、Linux x64 / ARM64、macOS Intel / Apple Silicon。Linux 安装包支持 Debian/Ubuntu，Ubuntu 仅支持 22.04 及以上；Ubuntu 最新版兼容验证在发布工作流中执行。
 
 ## CI
 
 - 使用同一个 Release profile 执行 Clippy、构建、全部 target 的测试，复用依赖编译缓存。
 - 生成代码检查集中在 Linux x64；通用 Python 构建工具和产物协议测试在 Linux x64 与两种 Windows 架构执行，Windows 同时检查原生 PE 版本。
+- Linux x64 增加真实 X11/Wayland 窗口检查：X11 覆盖 100%、125%、150%、200% 缩放，Wayland 覆盖 100%、200%；检查前台/后台启动和窗口尺寸，X11 同时检查最小尺寸、桌面图标唤起、普通窗口尺寸保存及重新启动。Wayland compositor 使用 Mesa 软件 GL 渲染，失败时记录退出状态和崩溃堆栈；`linux-window-report-x64` 产物保存报告和日志。
 - 六个平台运行真实 mihomo 集成测试。Linux 原生 GSettings、KDE、托盘测试和 Windows 原生托盘、自启动、图标、更新辅助程序测试保留在 CI。
 - 已构建的测试程序直接执行，避免每次过滤测试都调用 Cargo。
 - main 推送和 PR 更新触发 CI，避免同一 feature 分支的 push 与 PR 同时执行两套矩阵；分支开发通过 PR 验证。同分支的过时 CI 会取消。资源按平台与日期缓存，使用前仍校验官方哈希；应用和资源打包时使用白名单。

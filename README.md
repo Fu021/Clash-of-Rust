@@ -3,7 +3,7 @@
 </p>
 <h1 align="center">Clash of Rust</h1>
 
-基于 mihomo 的原生 Rust 代理客户端。支持 **Windows（x64 / ARM64）**、**Debian/Ubuntu（amd64 / ARM64）** 和 **macOS 14 及以上（Intel / Apple Silicon）**。版本 **0.5.3**，更新内容见 [发布说明](docs/releases/0.5.3.md)。
+基于 mihomo 的原生 Rust 代理客户端。支持 **Windows（x64 / ARM64）**、**Debian/Ubuntu（amd64 / ARM64，Ubuntu 仅支持 22.04 及以上）** 和 **macOS 14 及以上（Intel / Apple Silicon）**。版本 **0.5.4**，更新内容见 [发布说明](docs/releases/0.5.4.md)。
 
 ## Features
 
@@ -23,14 +23,14 @@
 
 | 平台 | 安装包 |
 | --- | --- |
-| Windows x64 | [Clash-of-Rust-0.5.3-windows-x64-setup.exe](https://github.com/Fu021/Clash-of-Rust/releases/download/v0.5.3/Clash-of-Rust-0.5.3-windows-x64-setup.exe) |
-| Windows ARM64 | [Clash-of-Rust-0.5.3-windows-arm64-setup.exe](https://github.com/Fu021/Clash-of-Rust/releases/download/v0.5.3/Clash-of-Rust-0.5.3-windows-arm64-setup.exe) |
-| Debian/Ubuntu amd64 | [Clash-of-Rust-0.5.3-linux-amd64.deb](https://github.com/Fu021/Clash-of-Rust/releases/download/v0.5.3/Clash-of-Rust-0.5.3-linux-amd64.deb) |
-| Debian/Ubuntu ARM64 | [Clash-of-Rust-0.5.3-linux-arm64.deb](https://github.com/Fu021/Clash-of-Rust/releases/download/v0.5.3/Clash-of-Rust-0.5.3-linux-arm64.deb) |
-| macOS Intel | [Clash-of-Rust-0.5.3-macos-x64.dmg](https://github.com/Fu021/Clash-of-Rust/releases/download/v0.5.3/Clash-of-Rust-0.5.3-macos-x64.dmg) |
-| macOS Apple Silicon | [Clash-of-Rust-0.5.3-macos-arm64.dmg](https://github.com/Fu021/Clash-of-Rust/releases/download/v0.5.3/Clash-of-Rust-0.5.3-macos-arm64.dmg) |
+| Windows x64 | [Clash-of-Rust-0.5.4-windows-x64-setup.exe](https://github.com/Fu021/Clash-of-Rust/releases/download/v0.5.4/Clash-of-Rust-0.5.4-windows-x64-setup.exe) |
+| Windows ARM64 | [Clash-of-Rust-0.5.4-windows-arm64-setup.exe](https://github.com/Fu021/Clash-of-Rust/releases/download/v0.5.4/Clash-of-Rust-0.5.4-windows-arm64-setup.exe) |
+| Debian / Ubuntu 22.04+ amd64 | [Clash-of-Rust-0.5.4-linux-amd64.deb](https://github.com/Fu021/Clash-of-Rust/releases/download/v0.5.4/Clash-of-Rust-0.5.4-linux-amd64.deb) |
+| Debian / Ubuntu 22.04+ ARM64 | [Clash-of-Rust-0.5.4-linux-arm64.deb](https://github.com/Fu021/Clash-of-Rust/releases/download/v0.5.4/Clash-of-Rust-0.5.4-linux-arm64.deb) |
+| macOS Intel | [Clash-of-Rust-0.5.4-macos-x64.dmg](https://github.com/Fu021/Clash-of-Rust/releases/download/v0.5.4/Clash-of-Rust-0.5.4-macos-x64.dmg) |
+| macOS Apple Silicon | [Clash-of-Rust-0.5.4-macos-arm64.dmg](https://github.com/Fu021/Clash-of-Rust/releases/download/v0.5.4/Clash-of-Rust-0.5.4-macos-arm64.dmg) |
 
-Windows 运行安装程序；Debian/Ubuntu 使用 `sudo apt install ./安装包文件名.deb`。升级保留订阅和个人设置；Windows 卸载可选删除全部配置和数据，默认不勾选。
+Windows 运行安装程序；Debian/Ubuntu（Ubuntu 仅支持 22.04 及以上）使用 `sudo apt install ./安装包文件名.deb`。升级保留订阅和个人设置；Windows 卸载可选删除全部配置和数据，默认不勾选。
 
 macOS 打开 DMG，将 **Clash of Rust.app** 拖入 **Applications（应用程序）** 后启动。系统代理和 TUN 按需请求管理员授权，登录自启以普通用户后台运行。当前 Mac 安装包使用 ad-hoc 签名，尚未进行 Developer ID 签名和 Apple 公证；首次打开若提示无法验证开发者，可确认来源及校验值后，在“系统设置 → 隐私与安全性”中选择“仍要打开”，见 [Apple 说明](https://support.apple.com/zh-cn/102445)。
 
@@ -38,15 +38,15 @@ macOS 打开 DMG，将 **Clash of Rust.app** 拖入 **Applications（应用程�
 
 ## 内存占用
 
-实测版本 **0.5.3-dev.1**（`1c442bb`，0.5.3 发布前代码）；Ubuntu 22.04 x64、Release 构建，快捷规则、系统代理和 TUN 关闭，固定输入为 2,000 节点、40 组和 20,000 条规则：
+实测版本 **0.5.4**（`93a2af8`）；Ubuntu 22.04 x64、Release 构建，快捷规则、系统代理和 TUN 关闭，固定输入为 2,000 节点、40 组和 20,000 条规则：
 
 | 场景 | GUI RSS | GUI 与内核合计 PSS |
 | --- | ---: | ---: |
-| 首页 | 77.22 MiB | 128.27 MiB |
-| 代理组折叠 | 78.88 MiB | 166.53 MiB |
-| 节点搜索 | 83.75 MiB | 173.54 MiB |
+| 首页 | 70.79 MiB | 120.51 MiB |
+| 代理组折叠 | 74.66 MiB | 159.28 MiB |
+| 节点搜索 | 79.27 MiB | 167.28 MiB |
 
-五项快捷规则全开时，首页 GUI RSS 为 79.70 MiB，合计 PSS 为 153.82 MiB。以上为每场景采样 10 秒、间隔 250 ms 的观测峰值，实际占用随系统、配置和使用情况变化；RSS 含共享页，PSS 按比例分摊共享页。[测试记录](https://github.com/Fu021/Clash-of-Rust/actions/runs/38134965940)。
+五项快捷规则全开时，首页 GUI RSS 为 79.77 MiB，合计 PSS 为 154.92 MiB。以上为每场景采样 10 秒、间隔 250 ms 的观测峰值，实际占用随系统、配置和使用情况变化；RSS 含共享页，PSS 按比例分摊共享页。[测试记录](https://github.com/Fu021/Clash-of-Rust/actions/runs/38275076942)。
 
 ## 编译与打包
 
@@ -58,7 +58,7 @@ macOS 打开 DMG，将 **Clash of Rust.app** 拖入 **Applications（应用程�
 python scripts/build-installer.py
 ```
 
-**Debian/Ubuntu**：安装构建依赖后执行：
+**Debian/Ubuntu（Ubuntu 仅支持 22.04 及以上）**：安装构建依赖后执行：
 
 ```text
 sudo apt install build-essential pkg-config dpkg-dev libglib2.0-dev libxkbcommon-dev libwayland-dev libx11-dev libx11-xcb-dev
