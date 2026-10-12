@@ -107,11 +107,23 @@ def check(executable, output, scale, background):
                         settings = json.loads((data / 'settings.json').read_text())
                         request = urllib.request.Request(f'http://127.0.0.1:{controller}/version',
                                   headers={'Authorization': 'Bearer ' + settings['secret']})
-                        with urllib.request.build_opener(urllib.request.ProxyHandler({})).open(request, timeout=3) as response:
-                            core = json.load(response)
+                        opener = urllib.request.build_opener(urllib.request.ProxyHandler({}))
+                        for _ in range(150):
+                            try:
+                                with opener.open(request, timeout=1) as response:
+                                    core = json.load(response)
+                                break
+                            except (OSError, ValueError):
+                                if app.poll() is not None:
+                                    raise RuntimeError('Application exited while waiting for its core')
+                                time.sleep(0.1)
+                        else:
+                            raise RuntimeError('Core did not become ready; see ' + str(trace_file))
+                        native_windows = len(set(re.findall(r'get_xdg_surface\([^\n]*?wl_surface[@#](\d+)', trace)))
+                        assert native_windows == 1, (name, native_windows)
                         return {'mode': name, 'status': 'passed', 'scale': scale,
                                 'rendered_physical_size': expected, 'core_version': core,
-                                'native_windows': len(set(re.findall(r'get_xdg_surface\([^\n]*?wl_surface[@#](\d+)', trace)))}
+                                'native_windows': native_windows}
                     finally:
                         stop(app)
             finally:

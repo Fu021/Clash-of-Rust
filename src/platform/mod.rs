@@ -216,11 +216,11 @@ pub fn show_requested() -> bool {
 pub fn show_existing() {
     windows::signal_show();
 }
-#[cfg(target_os = "macos")]
+#[cfg(any(target_os = "linux", target_os = "macos"))]
 pub fn show_requested() -> bool {
-    macos::show_requested()
+    native::show_requested()
 }
-#[cfg(not(any(windows, target_os = "macos")))]
+#[cfg(not(any(windows, target_os = "linux", target_os = "macos")))]
 pub fn show_requested() -> bool {
     false
 }

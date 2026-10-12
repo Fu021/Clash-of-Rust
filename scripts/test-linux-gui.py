@@ -229,6 +229,17 @@ for scale, background in ((scale, background) for scale in args.scales for backg
             assert app_class == ('clash-of-rust', 'clash-of-rust'), app_class
             time.sleep(3)
             assert proc.poll() is None, 'App exited before close'
+            # Opening the desktop launcher must show the running instance,
+            # including one started as a daemon, rather than launch another core.
+            secondary = subprocess.run([str(executable)], env=env, capture_output=True, timeout=10)
+            assert secondary.returncode == 0, secondary.stderr.decode(errors='replace')
+            marker = Path(tmp, 'show-window')
+            for _ in range(40):
+                if not marker.exists():
+                    break
+                time.sleep(0.05)
+            assert not marker.exists(), 'The running instance did not consume the launcher show request'
+            assert proc.poll() is None, 'Launcher replaced the existing instance'
             geometry = check_window_size(proc.pid, window[0], scale)
             # Leave a non-default ordinary size, then verify an actual relaunch
             # restores logical dimensions once, at each tested display scale.

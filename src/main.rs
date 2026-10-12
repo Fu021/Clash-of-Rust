@@ -123,7 +123,7 @@ fn main() -> iced::Result {
         let deadline = std::time::Instant::now() + Duration::from_secs(30);
         while file.try_lock().is_err() {
             if !update_restart() || std::time::Instant::now() >= deadline {
-                #[cfg(target_os = "macos")]
+                #[cfg(any(target_os = "linux", target_os = "macos"))]
                 if !background_start() {
                     let _ =
                         clash_of_rust::config::atomic_write(&store.root.join("show-window"), b"");
@@ -403,6 +403,7 @@ enum Message {
     ApplyWindowSize(u64, iced::Size),
     ResizeWindow(u64, iced::Size, Option<iced::window::Id>),
     VerifyWindowSize(u64, iced::Size, iced::window::Id, u8),
+    RetryWindowSize(u64, iced::Size, iced::window::Id, u8),
     WindowSizeConfirmed(
         u64,
         iced::Size,
@@ -1417,6 +1418,18 @@ impl App {
                         )
                     });
                 }
+                if !self.size_pending && !self.exiting {
+                    return iced::window::set_min_size(id, Some(MIN_WINDOW_SIZE));
+                }
+            }
+            Message::RetryWindowSize(revision, size, id, attempt) => {
+                if revision == self.size_revision && self.size_pending && !self.exiting {
+                    return iced::window::resize(id, size)
+                        .chain(verify_window_size(revision, size, id, attempt));
+                }
+                if !self.size_pending && !self.exiting {
+                    return iced::window::set_min_size(id, Some(MIN_WINDOW_SIZE));
+                }
             }
             Message::WindowSizeConfirmed(
                 revision,
@@ -1428,16 +1441,26 @@ impl App {
                 minimized,
             ) => {
                 if revision != self.size_revision || !self.size_pending || self.exiting {
+                    if !self.size_pending && !self.exiting {
+                        return iced::window::set_min_size(id, Some(MIN_WINDOW_SIZE));
+                    }
                     return Task::none();
                 }
                 if !window_size_matches(size, actual) && attempt < 2 {
-                    // The first Configure/Resized event refreshes iced's cached
-                    // display scale. Retry with that scale, without another click.
-                    return iced::window::resize(id, size).chain(verify_window_size(
-                        revision,
-                        size,
-                        id,
-                        attempt + 1,
+                    // A stale scale can map the request to the unchanged physical
+                    // size, producing no Resized event. First request a distinct
+                    // size to refresh the viewport, then apply the exact target.
+                    let provisional = iced::Size::new(
+                        if size.width >= 16384.0 {
+                            size.width - 2.0
+                        } else {
+                            size.width + 2.0
+                        },
+                        size.height,
+                    );
+                    return iced::window::resize(id, provisional).chain(Task::perform(
+                        async { tokio::time::sleep(Duration::from_millis(100)).await },
+                        move |_| Message::RetryWindowSize(revision, size, id, attempt + 1),
                     ));
                 }
                 self.size_pending = false;
