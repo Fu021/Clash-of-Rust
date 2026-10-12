@@ -20,6 +20,8 @@ struct Request {
     operation: String,
     directory: Option<PathBuf>,
     config: Option<PathBuf>,
+    #[serde(default)]
+    ports: Vec<u16>,
 }
 #[derive(Serialize, Deserialize)]
 struct Event {
@@ -86,6 +88,7 @@ impl Session {
                 operation: operation.into(),
                 directory: None,
                 config: None,
+                ports: Vec::new(),
             },
         )?;
         stream.write_all(b"\n")?;
@@ -103,7 +106,7 @@ impl Session {
         UnixStream::connect(self.directory.path().join("core.sock"))
             .is_ok_and(|stream| peer_uid(&stream).is_ok_and(|uid| uid == 0))
     }
-    pub fn command(&self) -> Result<tokio::process::Command> {
+    pub fn command(&self, controller: u16, mixed: u16) -> Result<tokio::process::Command> {
         let launcher = std::env::current_exe()?
             .parent()
             .context("无法定位 TUN 助手")?
@@ -113,6 +116,9 @@ impl Session {
             "--macos-bridge",
             &self.directory.path().join("core.sock").to_string_lossy(),
             &self.token,
+            "--probe-ports",
+            &controller.to_string(),
+            &mixed.to_string(),
         ]);
         Ok(command)
     }
@@ -130,6 +136,51 @@ fn peer_uid(stream: &UnixStream) -> Result<u32> {
         "无法确认 TUN 会话身份"
     );
     Ok(uid)
+}
+pub(crate) fn probe_port(port: u16) -> std::io::Result<std::net::TcpListener> {
+    use std::os::fd::{AsRawFd, FromRawFd};
+    let fd = unsafe { libc::socket(libc::AF_INET, libc::SOCK_STREAM, 0) };
+    if fd < 0 {
+        return Err(std::io::Error::last_os_error());
+    }
+    let listener = unsafe { std::net::TcpListener::from_raw_fd(fd) };
+    if unsafe { libc::fcntl(listener.as_raw_fd(), libc::F_SETFD, libc::FD_CLOEXEC) } < 0 {
+        return Err(std::io::Error::last_os_error());
+    }
+    let reuse: libc::c_int = 1;
+    let address = libc::sockaddr_in {
+        sin_len: std::mem::size_of::<libc::sockaddr_in>() as u8,
+        sin_family: libc::AF_INET as u8,
+        sin_port: port.to_be(),
+        sin_addr: libc::in_addr {
+            s_addr: u32::from_ne_bytes([127, 0, 0, 1]),
+        },
+        sin_zero: [0; 8],
+    };
+    if unsafe {
+        libc::setsockopt(
+            listener.as_raw_fd(),
+            libc::SOL_SOCKET,
+            libc::SO_REUSEADDR,
+            (&reuse as *const libc::c_int).cast(),
+            std::mem::size_of_val(&reuse) as libc::socklen_t,
+        )
+    } != 0
+    {
+        return Err(std::io::Error::last_os_error());
+    }
+    if unsafe {
+        libc::bind(
+            listener.as_raw_fd(),
+            (&address as *const libc::sockaddr_in).cast(),
+            address.sin_len as libc::socklen_t,
+        )
+    } != 0
+        || unsafe { libc::listen(listener.as_raw_fd(), 1) } != 0
+    {
+        return Err(std::io::Error::last_os_error());
+    }
+    Ok(listener)
 }
 fn request(stream: &UnixStream) -> Result<Request> {
     stream.set_read_timeout(Some(Duration::from_secs(5)))?;
@@ -309,6 +360,14 @@ fn run_core(mut stream: UnixStream, request: Request, uid: u32, core: &Path) -> 
         runtime.metadata()?.uid() == uid,
         "TUN 配置目录所有者发生变化"
     );
+    ensure!(request.ports.len() <= 2, "TUN 端口参数无效");
+    for port in request.ports {
+        ensure!(port != 0, "TUN 端口参数无效");
+        // Probe as the same identity that will bind the actual listeners.
+        // Darwin prevents a user probe from reusing root-owned TIME_WAIT state.
+        let _listener = probe_port(port)
+            .with_context(|| format!("无法绑定端口 {port}，请检查占用或系统端口限制"))?;
+    }
     let monitor = stream.try_clone()?;
     monitor.set_read_timeout(None)?;
     // Use only the installed core and a fixed argument set; no executable/shell
@@ -456,6 +515,15 @@ fn serve(socket: &Path, uid: u32, token: &str, idle_limit: Duration) -> Result<(
     Ok(())
 }
 fn bridge(socket: &Path, token: &str, arguments: &[String]) -> Result<i32> {
+    let (ports, arguments) = if arguments.first().map(String::as_str) == Some("--probe-ports") {
+        ensure!(arguments.len() == 7, "TUN 端口参数无效");
+        (
+            vec![arguments[1].parse::<u16>()?, arguments[2].parse::<u16>()?],
+            &arguments[3..],
+        )
+    } else {
+        (Vec::new(), arguments)
+    };
     ensure!(
         arguments.len() == 4 && arguments[0] == "-d" && arguments[2] == "-f",
         "TUN 启动参数无效"
@@ -480,6 +548,7 @@ fn bridge(socket: &Path, token: &str, arguments: &[String]) -> Result<i32> {
             operation: "start".into(),
             directory: Some(directory),
             config: Some(config),
+            ports,
         },
     )?;
     stream.write_all(b"\n")?;
@@ -699,8 +768,31 @@ mod tests {
             assert!(Instant::now() < deadline);
             std::thread::sleep(Duration::from_millis(50));
         }
+        // The root-side probe must reject a real listener, without starting a
+        // core or consuming the reusable authorization session.
+        let rejected = Command::new(&launcher)
+            .args([
+                "--macos-bridge",
+                &socket.to_string_lossy(),
+                &token,
+                "--probe-ports",
+                &provider_port.to_string(),
+                &port.to_string(),
+                "-d",
+                &runtime_alias.to_string_lossy(),
+                "-f",
+                &runtime_alias.join("config.yaml").to_string_lossy(),
+            ])
+            .output()
+            .unwrap();
+        assert!(!rejected.status.success());
+        assert!(
+            String::from_utf8_lossy(&rejected.stdout)
+                .contains(&format!("无法绑定端口 {provider_port}"))
+        );
+        authorized.wait_idle().unwrap();
         let script = format!(
-            "{} --macos-bridge {} {} -d {} -f {} & wait",
+            "{} --macos-bridge {} {} --probe-ports {port} {port} -d {} -f {} & wait",
             super::super::shell_quote(&launcher.to_string_lossy()),
             super::super::shell_quote(&socket.to_string_lossy()),
             super::super::shell_quote(&token),

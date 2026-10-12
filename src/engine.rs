@@ -34,10 +34,9 @@ fn mac_port_probe(port: u16) -> std::io::Result<tokio::net::TcpListener> {
     // Match Go's listener behavior. A graceful core shutdown can leave API
     // connections in TIME_WAIT; these do not prevent mihomo from rebinding.
     // Listen as well as bind so an active listener still fails the probe.
-    let socket = tokio::net::TcpSocket::new_v4()?;
-    socket.set_reuseaddr(true)?;
-    socket.bind(std::net::SocketAddr::from(([127, 0, 0, 1], port)))?;
-    socket.listen(1)
+    let listener = platform::macos::tun::probe_port(port)?;
+    listener.set_nonblocking(true)?;
+    tokio::net::TcpListener::from_std(listener)
 }
 
 #[derive(Default)]
@@ -272,7 +271,8 @@ impl Engine {
     fn command(&self) -> Result<Command> {
         #[cfg(target_os = "macos")]
         if let Some(session) = &self.mac_tun {
-            let mut command = session.command()?;
+            let mut command =
+                session.command(self.settings.controller_port, self.settings.mixed_port)?;
             command.kill_on_drop(true);
             return Ok(command);
         }
@@ -376,8 +376,10 @@ impl Engine {
         }
         for port in [self.settings.controller_port, self.settings.mixed_port] {
             #[cfg(target_os = "macos")]
-            let _listener = mac_port_probe(port)
-                .with_context(|| format!("无法绑定端口 {port}，请检查占用或系统端口限制"))?;
+            if self.mac_tun.is_none() {
+                let _listener = mac_port_probe(port)
+                    .with_context(|| format!("无法绑定端口 {port}，请检查占用或系统端口限制"))?;
+            }
             #[cfg(not(target_os = "macos"))]
             let _listener = std::net::TcpListener::bind(("127.0.0.1", port))
                 .with_context(|| format!("无法绑定端口 {port}，请检查占用或系统端口限制"))?;
