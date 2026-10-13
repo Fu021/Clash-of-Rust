@@ -8,7 +8,7 @@ import shutil
 import subprocess
 import sys
 
-from build_support import host_system, ROOT, bundle_directory, host_arch, run, write_json
+from build_support import host_system, ROOT, bundle_directory, host_arch, run, cargo_messages, write_json
 from workflow_artifacts import export_build, test_binaries
 
 
@@ -19,6 +19,14 @@ def main():
     args = parser.parse_args()
     if (args.system, args.arch) != (host_system(), host_arch()):
         raise ValueError('CI must run on the selected native architecture')
+    # Rust's target cache can also restore old diagnostic files. Keep compiled
+    # dependencies, but generate reports/screenshots from this commit afresh.
+    for name in ('claude-ui', 'claude-report'):
+        path = ROOT/'target'/name
+        if path.is_symlink():
+            path.unlink()
+        elif path.exists():
+            shutil.rmtree(path)
     run(['cargo', 'fmt', '--all', '--', '--check'])
     if (args.system, args.arch) == ('linux', 'x64'):
         run([sys.executable, ROOT/'scripts/native-detector-codegen.py', '--check'])
@@ -28,8 +36,8 @@ def main():
     # dependency compilation and produces the exact binaries released later.
     run(['cargo', 'clippy', '--release', '--all-targets', '--locked', '--', '-D', 'warnings'])
     run(['cargo', 'build', '--release', '--locked', '--bins'])
-    messages = subprocess.check_output(['cargo', 'test', '--release', '--locked', '--all-targets',
-                                        '--no-run', '--message-format=json'], cwd=ROOT, text=True)
+    messages = cargo_messages(['cargo', 'test', '--release', '--locked', '--all-targets',
+                              '--no-run', '--message-format=json'])
     tests = test_binaries(messages)
     run(['cargo', 'test', '--release', '--locked', '--all-targets', '--', '--test-threads=1'])
     spec = importlib.util.spec_from_file_location('prepare', ROOT/'scripts/prepare-resources.py')

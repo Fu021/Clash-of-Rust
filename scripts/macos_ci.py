@@ -12,7 +12,7 @@ import tempfile
 import time
 import urllib.request
 
-from build_support import ROOT, host_arch, run, validate_binary_arch, validate_resources, write_json, package_version
+from build_support import ROOT, host_arch, run, cargo_messages, validate_binary_arch, validate_resources, write_json, package_version
 from macos_package import disk_image
 
 REPORT = ROOT/'target/macos-report'
@@ -104,7 +104,7 @@ def rendered_ui():
     # Production binaries were frozen before this optional feature compilation.
     command = ['cargo', 'test', '--release', '--locked', '--features', 'ui-preview',
                '--test', 'ui_preview', '--no-run', '--message-format=json']
-    messages = subprocess.check_output(command, cwd=ROOT, text=True, timeout=600)
+    messages = cargo_messages(command, log=REPORT/'ui-build.jsonl', timeout=600)
     executables = [entry['executable'] for line in messages.splitlines()
                    if (entry := json.loads(line)).get('reason') == 'compiler-artifact'
                    and entry.get('executable') and entry['target']['name'] == 'ui_preview']

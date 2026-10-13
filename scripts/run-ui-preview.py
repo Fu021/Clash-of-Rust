@@ -9,6 +9,7 @@ import struct
 import subprocess
 import time
 import zlib
+from build_support import cargo_messages
 
 
 def pixels(path):
@@ -190,7 +191,7 @@ def main():
     if args.profile == 'release':
         command.append('--release')
     with (output/'build.log').open('x') as log:
-        messages = subprocess.check_output(command, cwd=source, text=True, stderr=log)
+        messages = cargo_messages(command, cwd=source, stderr=log, log=output/'build.jsonl')
     executables = [entry['executable'] for line in messages.splitlines()
                    if (entry := json.loads(line)).get('reason') == 'compiler-artifact'
                    and entry['target']['name'] == 'ui_preview' and entry.get('executable')]

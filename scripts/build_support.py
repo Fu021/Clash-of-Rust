@@ -24,6 +24,26 @@ def run(args, **kwargs):
     return subprocess.run([str(a) for a in args], check=True, cwd=ROOT, **kwargs)
 
 
+def cargo_messages(args, *, cwd=ROOT, log=None, timeout=None, stderr=None):
+    """Keep Cargo JSON diagnostics when compilation fails before artifact parsing."""
+    result = subprocess.run([str(a) for a in args], cwd=cwd, text=True,
+                            stdout=subprocess.PIPE, stderr=stderr, timeout=timeout)
+    if log is not None:
+        Path(log).parent.mkdir(parents=True, exist_ok=True)
+        Path(log).write_text(result.stdout, encoding='utf-8')
+    if result.returncode:
+        for line in result.stdout.splitlines():
+            try:
+                entry = json.loads(line)
+            except json.JSONDecodeError:
+                print(line, flush=True)
+                continue
+            if entry.get('reason') == 'compiler-message':
+                print(entry.get('message', {}).get('rendered', line), flush=True)
+        raise subprocess.CalledProcessError(result.returncode, args, output=result.stdout)
+    return result.stdout
+
+
 def sha256(path):
     with Path(path).open('rb') as stream:
         return hashlib.file_digest(stream, 'sha256').hexdigest()

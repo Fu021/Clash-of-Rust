@@ -57,7 +57,7 @@ pub fn cancel_for_test() {
         .find(|w| w.isKindOfClass(NSOpenPanel::class()))
         .expect("native file panel must be open");
     // Verified the native subclass before borrowing it as NSOpenPanel.
-    let panel = unsafe { &*(std::ptr::from_ref::<NSWindow>(window).cast::<NSOpenPanel>()) };
+    let panel = unsafe { &*(std::ptr::from_ref::<NSWindow>(&window).cast::<NSOpenPanel>()) };
     unsafe {
         panel.cancel(None);
     }

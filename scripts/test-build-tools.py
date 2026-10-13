@@ -22,6 +22,16 @@ _spec.loader.exec_module(release)
 
 
 class BuildTests(unittest.TestCase):
+    def test_failed_cargo_json_preserves_human_diagnostics(self):
+        message = json.dumps({'reason': 'compiler-message', 'message': {'rendered': 'error[E0308]: expected borrowed window'}})+'\n'
+        with tempfile.TemporaryDirectory() as directory, patch('build_support.subprocess.run') as runner, patch('sys.stdout', new_callable=io.StringIO) as output:
+            runner.return_value = subprocess.CompletedProcess(['cargo'], 101, stdout=message)
+            log = Path(directory)/'build.jsonl'
+            with self.assertRaises(subprocess.CalledProcessError):
+                build.cargo_messages(['cargo', 'test'], log=log)
+            self.assertEqual(log.read_text(), message)
+            self.assertIn('error[E0308]', output.getvalue())
+
     def test_asset_verification_checks_each_pe_independently(self):
         spec = importlib.util.spec_from_file_location('prepare_assets', build.ROOT/'scripts/prepare-assets.py')
         assets = importlib.util.module_from_spec(spec)
