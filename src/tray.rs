@@ -429,6 +429,7 @@ struct MacNative {
     kind: crate::icons::Kind,
     updates: watch::Receiver<State>,
     stop: mpsc::Receiver<()>,
+    retry_after: Instant,
 }
 #[cfg(target_os = "macos")]
 thread_local! {
@@ -446,10 +447,29 @@ pub fn pump() {
         if let Some(value) = native {
             if !matches!(value.stop.try_recv(), Err(mpsc::TryRecvError::Empty)) {
                 *native = None;
-            } else if value.updates.has_changed().unwrap_or(false) {
-                let state = value.updates.borrow_and_update().clone();
-                update_icon(&value.icon, &mut value.kind, &state);
-                value.checks.update(state);
+            } else {
+                if value.updates.has_changed().unwrap_or(false) {
+                    let state = value.updates.borrow_and_update().clone();
+                    update_icon(&value.icon, &mut value.kind, &state);
+                    value.checks.update(state);
+                }
+                let now = Instant::now();
+                if now >= value.retry_after && !mac_item_visible(&value.icon) {
+                    // A successful builder alone does not prove that AppKit
+                    // installed its status window. Recover a lost native item
+                    // while preserving its owner, menu IDs and confirmed state.
+                    value.retry_after = now + Duration::from_secs(5);
+                    let repair = value
+                        .icon
+                        .set_visible(false)
+                        .and_then(|()| value.icon.set_visible(true));
+                    if let Err(error) = repair {
+                        eprintln!("macOS 菜单栏图标恢复失败：{error}");
+                    } else if let Some(item) = value.icon.ns_status_item() {
+                        item.setVisible(true);
+                        eprintln!("macOS 菜单栏图标已重新注册");
+                    }
+                }
             }
         }
     });
@@ -476,6 +496,11 @@ pub fn start() -> anyhow::Result<Guard> {
         unsafe { libc::pthread_main_np() } != 0,
         "macOS 托盘只能在主线程创建"
     );
+    let mtm = objc2_foundation::MainThreadMarker::new().unwrap();
+    anyhow::ensure!(
+        objc2_app_kit::NSApplication::sharedApplication(mtm).isRunning(),
+        "macOS 桌面事件循环尚未启动"
+    );
     anyhow::ensure!(
         MAC_NATIVE.with_borrow(Option::is_none),
         "macOS 托盘已经创建"
@@ -490,6 +515,7 @@ pub fn start() -> anyhow::Result<Guard> {
             kind: crate::icons::Kind::App,
             updates: receiver,
             stop: stopped,
+            retry_after: Instant::now(),
         })
     });
     Ok(Guard {
@@ -499,6 +525,31 @@ pub fn start() -> anyhow::Result<Guard> {
             let _ = stop.send(());
         })),
     })
+}
+
+#[cfg(target_os = "macos")]
+fn mac_item_visible(icon: &tray_icon::TrayIcon) -> bool {
+    let mtm = objc2_foundation::MainThreadMarker::new().unwrap();
+    icon.ns_status_item().is_some_and(|item| {
+        item.isVisible()
+            && item.button(mtm).is_some_and(|button| {
+                button.image().is_some() && button.window().is_some_and(|window| window.isVisible())
+            })
+    })
+}
+
+#[cfg(all(target_os = "macos", feature = "ui-preview"))]
+pub fn remove_native_item_for_test() {
+    assert!(unsafe { libc::pthread_main_np() } != 0);
+    MAC_NATIVE.with_borrow_mut(|native| {
+        let native = native.as_mut().expect("native tray owner");
+        native
+            .icon
+            .set_visible(false)
+            .expect("remove native status item");
+        native.retry_after = Instant::now();
+        assert!(!mac_item_visible(&native.icon));
+    });
 }
 
 #[cfg(all(target_os = "macos", feature = "ui-preview"))]
@@ -516,6 +567,10 @@ pub fn verify_native_state() {
         let item = native.icon.ns_status_item().expect("native status item");
         let button = item.button(mtm).expect("native status button");
         assert!(item.isVisible(), "status item must be visible");
+        assert!(
+            button.window().is_some_and(|window| window.isVisible()),
+            "menu-bar status window must actually be visible"
+        );
         assert!(
             button.title().is_empty(),
             "menu bar must show only the icon"

@@ -815,6 +815,9 @@ fn capture_update(state: &mut Capture, message: CaptureMessage) -> Task<CaptureM
                             tray::pump();
                             tray::verify_native_state();
                         }
+                        tray::remove_native_item_for_test();
+                        tray::pump();
+                        tray::verify_native_state();
                         drop(guard);
                         tray::pump();
                         assert!(

@@ -1,6 +1,6 @@
 # macOS 开发与验收
 
-版本：0.5.6。最低系统目标为 macOS 14；CI 原生覆盖 Intel (`macos-15-intel`) 和 Apple Silicon (`macos-latest`)，分别输出 x64 和 arm64 安装包。
+开发版本：0.5.7-dev.1。最低系统目标为 macOS 14；CI 原生覆盖 Intel (`macos-15-intel`) 和 Apple Silicon (`macos-latest`)，分别输出 x64 和 arm64 安装包。
 
 ## 自动检查
 
@@ -16,7 +16,7 @@ CI 还用真正的 root TCP 连接重现跨用户 TIME_WAIT：确认旧进程已
 
 ## 实现与安装
 
-- 托盘创建、更新及销毁在 AppKit 主线程完成，初始化失败按时限重试；菜单栏仅显示紧凑图标。关闭窗口后可用 Dock 或菜单栏重新显示，菜单栏图标缺失时仍保留 Dock 恢复入口。Windows/Linux 保持现有线程实现。
+- 托盘创建、更新及销毁在 AppKit 主线程完成，确认桌面事件循环已启动后初始化，失败按时限重试；菜单栏仅显示系统模板图标。图标的原生状态窗口丢失时自动重新注册，重试有间隔限制。关闭窗口后可用 Dock 或菜单栏重新显示，菜单栏图标缺失时仍保留 Dock 恢复入口。Windows/Linux 保持现有线程实现。
 - 系统代理复用进程内的 Authorization Services 会话，先无交互验证有效权限，未发生变化时不写入；开机启动仅在已保存的系统代理模式、端口和当前设置均属于本客户端时沿用恢复记录。系统代理使用 SystemConfiguration 原生接口，保留各网络服务原先的 PAC、例外列表及代理设置；恢复前检查当前设置仍由客户端持有。
 - 开机启动开关只调整用户的 plist，避免卸载正在运行的客户端 LaunchAgent。开机启动采用当前用户的 `~/Library/LaunchAgents/org.clashofrust.desktop.plist`，以普通用户后台启动。启用后下次登录生效。
 - TUN 助手单独编译，不链接 AppKit/Cocoa 或 Iced 桌面库；CI 用 `otool` 核对依赖。TUN 首次使用请求管理员授权，只启动短期的内核服务；GUI 不提权。会话使用私有 Unix socket、用户身份与随机令牌验证，固定执行已验证并冻结的 mihomo。桥接断开后停止内核，未使用的授权服务在五分钟后退出，不安装永久 root 服务或 setuid 文件。后台登录启动不会弹出 TUN 授权。
