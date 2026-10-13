@@ -235,7 +235,7 @@ pub fn input(theme: &Theme, status: text_input::Status) -> text_input::Style {
 pub fn nav_icon(index: usize, dark_mode: bool) -> image::Handle {
     static ICONS: OnceLock<Vec<image::Handle>> = OnceLock::new();
     let icons = ICONS.get_or_init(|| {
-        let shapes: [&[(i32, i32, i32, i32)]; 9] = [
+        let shapes: [&[(i32, i32, i32, i32)]; 10] = [
             &[
                 (3, 11, 12, 3),
                 (12, 3, 21, 11),
@@ -311,6 +311,15 @@ pub fn nav_icon(index: usize, dark_mode: bool) -> image::Handle {
                 (9, 13, 9, 8),
             ],
             &[
+                (5, 4, 19, 4),
+                (19, 4, 19, 20),
+                (19, 20, 5, 20),
+                (5, 20, 5, 4),
+                (9, 12, 15, 12),
+                (12, 8, 12, 8),
+                (12, 16, 12, 16),
+            ],
+            &[
                 (3, 6, 21, 6),
                 (3, 12, 21, 12),
                 (3, 18, 21, 18),
@@ -362,7 +371,7 @@ pub fn nav_icon(index: usize, dark_mode: bool) -> image::Handle {
             })
             .collect()
     });
-    icons[index + if dark_mode { 9 } else { 0 }].clone()
+    icons[index + if dark_mode { 10 } else { 0 }].clone()
 }
 
 #[cfg(test)]

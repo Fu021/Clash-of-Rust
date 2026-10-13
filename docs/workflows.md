@@ -20,6 +20,8 @@
 
 Windows 的逐项覆盖、权限环境和发布包测试范围见 [Windows CI 测试清单](windows-ci-checklist.md)。原生测试按 8 组记录耗时与结果，失败时仍保留 `windows-ci-report-{arch}` 产物。
 
+Claude 地区检测额外保留 `claude-report-{system}-{arch}`。六平台测试无 GUI 的终端入口和回传；Linux x64 通过固定网络数据验证真实浏览器采样，并生成新页的双主题、最小窗口截图。测试范围与使用方法见 [地区检测说明](claude-region-detection.md)。
+
 macOS 的自动检查、诊断产物与交互式验收范围见 [macOS 测试清单](macos-ci-checklist.md)。Intel 使用 `macos-15-intel`，ARM 使用 `macos-latest`；失败时仍上传完整诊断报告。
 
 ## Publish Release

@@ -173,6 +173,11 @@ pub fn open_url(url: &str) -> Result<()> {
     }
     native::open_url(url)
 }
+/// Only the short-lived region diagnostic receiver may open an HTTP URL.
+pub fn open_diagnostic(url: &str) -> Result<()> {
+    crate::claude_check::browser::validate_submit_url(&format!("{url}report"))?;
+    native::open_url(url)
+}
 pub fn configured_proxy(scheme: &str) -> Result<Option<String>> {
     native::configured_proxy(scheme)
 }

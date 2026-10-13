@@ -6,6 +6,7 @@ mod presentation;
 mod typography;
 #[cfg(feature = "ui-preview")]
 #[path = "ui_preview.rs"]
+#[allow(dead_code)] // Called only from the optional screenshot test executable.
 pub(crate) mod ui_preview;
 #[path = "ui_style.rs"]
 mod ui_style;
@@ -51,10 +52,19 @@ macro_rules! aligned_row {
     };
 }
 
+#[path = "claude_view.rs"]
+mod claude_view;
 #[path = "rules_view.rs"]
 mod rules_view;
 
 fn main() -> iced::Result {
+    if let Some(result) = clash_of_rust::claude_check::system::helper_main() {
+        if let Err(error) = result {
+            eprintln!("终端地区检测失败：{error:#}");
+            std::process::exit(1);
+        }
+        return Ok(());
+    }
     #[cfg(windows)]
     if platform::autostart_helper_main() {
         return Ok(());
@@ -268,11 +278,12 @@ enum Page {
     Logs,
     Tests,
     Websites,
+    Claude,
     Settings,
 }
 
 impl Page {
-    const ALL: [Self; 9] = [
+    const ALL: [Self; 10] = [
         Self::Home,
         Self::Proxies,
         Self::Profiles,
@@ -281,6 +292,7 @@ impl Page {
         Self::Logs,
         Self::Tests,
         Self::Websites,
+        Self::Claude,
         Self::Settings,
     ];
     fn name(self) -> &'static str {
@@ -293,6 +305,7 @@ impl Page {
             Self::Logs => "日志",
             Self::Tests => "网络诊断",
             Self::Websites => "IP检测",
+            Self::Claude => "A÷检测",
             Self::Settings => "设置",
         }
     }
@@ -316,6 +329,7 @@ impl Page {
             Self::Logs => "内核与客户端的运行记录",
             Self::Tests => "网站响应、出口信息与 DNS 检查",
             Self::Websites => "当前出口与平台检测结果",
+            Self::Claude => "Claude 地区线索检测",
             Self::Settings => "客户端、网络与外观设置",
         }
     }
@@ -378,6 +392,7 @@ type DownloadResult = Arc<std::sync::Mutex<Option<Result<update::Downloaded, Str
 
 #[derive(Debug, Clone)]
 enum Message {
+    Claude(claude_view::Event),
     RestartCore,
     CoreReady(Result<CoreHandle, String>),
     DismissNotice,
@@ -468,6 +483,7 @@ struct App {
     page: Page,
     settings: Settings,
     rule_state: rules_view::State,
+    claude: claude_view::State,
     profiles: Vec<Profile>,
     snapshot: Snapshot,
     busy: bool,
@@ -793,6 +809,7 @@ impl App {
         let core_failure = engine.is_none().then(|| notice.clone());
         let mut app = Self {
             rule_state: rules_view::State::default(),
+            claude: claude_view::State::default(),
             node_sort: settings.node_sort,
             controller_port: settings.controller_port.to_string(),
             interval_input: settings.delay_interval_minutes.to_string(),
@@ -1007,6 +1024,12 @@ impl App {
                 .map(|_| Message::PeriodicDelay)
             },
             tray_events,
+            if self.claude.session.is_some() || self.claude.observing.is_some() {
+                iced::time::every(Duration::from_secs(1))
+                    .map(|_| Message::Claude(claude_view::Event::Tick))
+            } else {
+                Subscription::none()
+            },
             iced::window::events().map(Message::Window),
         ])
     }
@@ -1081,6 +1104,9 @@ impl App {
             self.cancel_site_checks();
             self.site_results.clear();
             self.reset_site_filters();
+            self.claude.close();
+            self.claude.reports = Default::default();
+            self.claude.status = "网络配置已改变，请重新检测地区线索。".into();
         }
         self.busy = true;
         self.working = !matches!(action, Action::Refresh);
@@ -1113,6 +1139,7 @@ impl App {
 
     fn update_message(&mut self, message: Message) -> Task<Message> {
         match message {
+            Message::Claude(event) => return self.claude_event(event),
             #[cfg(target_os = "macos")]
             Message::MacTrayPumped => {}
             Message::DismissNotice => {
@@ -1290,6 +1317,9 @@ impl App {
                 }
             }
             Message::Navigate(page) => {
+                if self.page == Page::Claude && page != Page::Claude {
+                    self.claude.close();
+                }
                 if self.page == Page::Rules
                     && page != Page::Rules
                     && !self.rule_state.dirty()
@@ -2006,6 +2036,9 @@ impl App {
                     self.expanded.clear();
                     self.group_offsets.clear();
                     self.cancel_site_checks();
+                    self.claude.close();
+                    self.claude.status =
+                        "内核已停止；已获得的报告保留，网络结果可能已过期。".into();
                 }
                 if reply.running {
                     self.core_failure = None;
@@ -2234,6 +2267,7 @@ impl App {
         }
         self.cancel_delay_checks();
         self.cancel_site_checks();
+        self.claude.close();
         self.tray_startup = None;
         self.exiting = true;
         if let Some(handle) = self.window_state_debounce.take() {
@@ -2696,6 +2730,7 @@ impl App {
             Page::Logs => self.logs(),
             Page::Tests => self.tests(),
             Page::Websites => self.websites(),
+            Page::Claude => self.claude_view(),
             Page::Settings => self.settings_view(),
         };
         aligned_row![

@@ -20,7 +20,7 @@ from build_support import (ROOT, bundle_directory, package_version, sha256,
 BUILD_NAMES = {f'build-{system}-{arch}' for system in ('windows', 'linux', 'macos') for arch in ('x64', 'arm64')}
 ARCHIVE_NAME = 'build.tar.gz'
 TEST_NAMES = {'library', 'clash-of-rust', 'clash-tun-launcher', 'core_integration',
-              'geo_download', 'linux_tun', 'tray_integration', 'memory_benchmark',
+              'geo_download', 'linux_tun', 'tray_integration', 'memory_benchmark', 'claude_diagnostics',
               'macos_ui_fixture', 'macos_helper_fixture'}
 
 

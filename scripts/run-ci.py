@@ -40,6 +40,16 @@ def main():
     extension = '.exe' if args.system == 'windows' else ''
     for name in ('clash-of-rust', 'clash-tun-launcher'):
         shutil.copy2(ROOT/'target/release'/(name+extension), bundle/(name+extension))
+    run([sys.executable, ROOT/'scripts/test-claude-diagnostics.py',
+         '--executable', bundle/('clash-of-rust'+extension), '--output', ROOT/'target/claude-report/terminal'])
+    if (args.system, args.arch) == ('linux', 'x64'):
+        run([sys.executable, '-m', 'pip', 'install', '--disable-pip-version-check', 'playwright==1.55.0'])
+        run([sys.executable, ROOT/'scripts/test-claude-diagnostics.py', '--browser', '--output', ROOT/'target/claude-report/browser'])
+        scenes = [scene+suffix for scene in ('claude', 'claude-web', 'claude-desktop', 'claude-code', 'claude-details', 'claude-empty')
+                  for suffix in ('', '-light', '-compact', '-compact-light')]
+        run(['dbus-run-session', '--', 'xvfb-run', '-a', '--server-args=-screen 0 1800x1200x24',
+             sys.executable, ROOT/'scripts/run-ui-preview.py', '--source', ROOT,
+             '--output', ROOT/'target/claude-ui', '--scenes', *scenes])
     # Invoke already-built test programs directly instead of repeating Cargo.
     if args.system == 'linux':
         run([tests['core_integration'], '--ignored', '--test-threads=1'])

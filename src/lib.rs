@@ -1,6 +1,7 @@
 pub mod active_route;
 pub mod api;
 pub mod assets;
+pub mod claude_check;
 pub mod config;
 pub mod connection;
 pub mod engine;

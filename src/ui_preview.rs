@@ -416,6 +416,9 @@ fn fixture(scene: &str) -> App {
             "系统 DNS · github.com → 140.82.112.4".into(),
             "测试失败：连接超时，请检查当前节点或重试。".into(),
         ];
+    } else if scene.starts_with("claude") {
+        app.page = Page::Claude;
+        app.claude = claude_view::fixture_state(scene);
     } else if scene.starts_with("settings") {
         app.page = Page::Settings;
         app.geo_status = "2026-10-10".into();
@@ -558,6 +561,9 @@ fn update(app: &mut App, message: Message) -> Task<Message> {
         | Message::SiteSummaryFilter(..)
         | Message::SiteResetFilters
         | Message::SiteReport => app.update(message),
+        Message::Claude(event @ (claude_view::Event::Tab(_) | claude_view::Event::Detail(_))) => {
+            app.update(Message::Claude(event))
+        }
         Message::ConnectionSort(field) => {
             let task = app.update(Message::ConnectionSort(field));
             eprintln!(

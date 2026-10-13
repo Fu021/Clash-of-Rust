@@ -156,6 +156,7 @@ def main():
     parser.add_argument('--source', type=Path, required=True)
     parser.add_argument('--output', type=Path, required=True)
     parser.add_argument('--profile', choices=('dev', 'release'), default='release')
+    parser.add_argument('--scenes', nargs='+', help='Render only these scenes, for targeted CI coverage')
     args = parser.parse_args()
     source = args.source.resolve(strict=True)
     output = args.output.resolve()
@@ -183,6 +184,12 @@ def main():
     scenes += [scene+'-compact'+suffix for scene in pages for suffix in ('', '-light')]
     scenes += [scene+suffix for scene in ('rules-custom', 'rules-editor', 'rules-collapsed')
                for suffix in ('', '-light', '-compact', '-compact-light')]
+    scenes += [scene+suffix for scene in ('claude', 'claude-web', 'claude-desktop', 'claude-code', 'claude-details', 'claude-empty')
+               for suffix in ('', '-light', '-compact', '-compact-light')]
+    if args.scenes:
+        unknown = set(args.scenes)-set(scenes)
+        if unknown: raise ValueError('Unknown UI preview scenes: '+', '.join(sorted(unknown)))
+        scenes = args.scenes
     for scene in scenes:
         env = dict(os.environ, CLASH_UI_PREVIEW_SCENE=scene, WINIT_UNIX_BACKEND='x11',
                    WINIT_X11_SCALE_FACTOR='1', GSETTINGS_BACKEND='memory')

@@ -112,7 +112,8 @@ def rendered_ui():
     output = REPORT/'ui'
     output.mkdir(exist_ok=True)
     def chunk(kind, data): return struct.pack('>I', len(data))+kind+data+struct.pack('>I', zlib.crc32(kind+data)&0xffffffff)
-    for scene in ('home', 'proxies', 'profiles', 'connections', 'rules', 'logs', 'diagnostics', 'ip', 'settings'):
+    scenes = ('home', 'proxies', 'profiles', 'connections', 'rules', 'logs', 'diagnostics', 'ip', 'claude', 'claude-web', 'claude-desktop', 'claude-code', 'claude-details', 'settings')
+    for scene in scenes:
         for suffix in ('', '-light'):
             name = scene+suffix
             destination = output/name
@@ -127,7 +128,7 @@ def rendered_ui():
             image = b'\x89PNG\r\n\x1a\n'+chunk(b'IHDR', struct.pack('>IIBBBBB', width, height, 8, 6, 0, 0, 0))+chunk(b'IDAT', zlib.compress(rows))+chunk(b'IEND', b'')
             destination.with_suffix('.png').write_bytes(image)
             destination.with_suffix('.rgba').unlink()
-    return {'screenshots': 18, 'source': 'iced rendered pixels', 'data': 'isolated fixtures, not live network results', 'executable': executables[0]}
+    return {'screenshots': len(scenes)*2, 'source': 'iced rendered pixels', 'data': 'isolated fixtures, not live network results', 'executable': executables[0]}
 
 
 @contextlib.contextmanager

@@ -1,6 +1,7 @@
 //! Optional main-thread screenshot harness; absent from distributed binaries.
 #[cfg(any(target_os = "linux", target_os = "macos"))]
-#[allow(dead_code)]
+// harness=false imports test modules without running their #[test] functions.
+#[allow(dead_code, unused_imports)]
 #[path = "../src/main.rs"]
 mod app;
 
