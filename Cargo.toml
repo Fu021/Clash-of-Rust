@@ -46,18 +46,22 @@ base64 = "0.22"
 tray-icon = { version = "0.26", default-features = false, features = ["ksni"] }
 
 [target.'cfg(windows)'.dependencies]
-windows = { version = "0.62", features = ["Win32_Foundation", "Win32_System_TaskScheduler", "Win32_System_Com", "Win32_System_Variant", "Win32_System_Ole"] }
+windows = { version = "0.62", features = ["Win32_Foundation", "Win32_System_TaskScheduler", "Win32_System_Com", "Win32_System_Variant", "Win32_System_Ole", "Win32_UI_Shell", "Win32_UI_Shell_Common"] }
 winreg = "0.55"
 windows-sys = { version = "0.61", features = ["Win32_UI_WindowsAndMessaging", "Win32_UI_Shell", "Win32_System_Com", "Win32_System_Registry", "Win32_System_Threading", "Win32_Security_Authorization", "Win32_System_Memory"] }
 
 [target.'cfg(unix)'.dependencies]
 libc = "0.2"
 
+[target.'cfg(target_os = "linux")'.dependencies]
+# Reuse tray-icon's D-Bus library for the desktop portal's native file chooser.
+zbus = { version = "5", default-features = false, features = ["tokio"] }
+
 [target.'cfg(target_os = "macos")'.dependencies]
 # Reuse the bindings already used by tray-icon; keep AppKit on the GUI thread.
 objc2 = "0.6"
-objc2-app-kit = { version = "0.3.2", default-features = false, features = ["std", "NSApplication", "NSResponder", "NSStatusItem", "NSStatusBarButton", "NSImage", "NSWindow"] }
-objc2-foundation = { version = "0.3.2", default-features = false, features = ["std", "NSObject", "NSThread", "NSString"] }
+objc2-app-kit = { version = "0.3.2", default-features = false, features = ["std", "NSApplication", "NSResponder", "NSStatusItem", "NSStatusBarButton", "NSImage", "NSWindow", "NSOpenPanel", "NSPanel", "NSSavePanel"] }
+objc2-foundation = { version = "0.3.2", default-features = false, features = ["std", "NSObject", "NSThread", "NSString", "NSURL", "NSArray"] }
 
 [dev-dependencies]
 # Process memory collection is used only by the benchmark, not the desktop app.

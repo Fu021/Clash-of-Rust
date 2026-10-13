@@ -45,8 +45,14 @@ def main():
     if (args.system, args.arch) == ('linux', 'x64'):
         run([sys.executable, '-m', 'pip', 'install', '--disable-pip-version-check', 'playwright==1.55.0'])
         run([sys.executable, ROOT/'scripts/test-claude-diagnostics.py', '--browser', '--output', ROOT/'target/claude-report/browser'])
-        scenes = [scene+suffix for scene in ('claude', 'claude-web', 'claude-desktop', 'claude-code', 'claude-details', 'claude-empty')
-                  for suffix in ('', '-light', '-compact', '-compact-light')]
+        scenes = [scene+suffix for scene in ('home', 'proxies-ascending', 'profiles', 'connections', 'rules', 'logs', 'diagnostics', 'ip-summary', 'settings',
+                  'claude', 'claude-web', 'claude-desktop', 'claude-code', 'claude-details', 'claude-empty',
+                  'profiles-edit', 'profiles-delete-active', 'profiles-delete-inactive', 'profiles-discard', 'connections-details',
+                  'rules-discard', 'rules-discard-editor', 'rules-switch-confirm', 'settings-large-text')
+                  for suffix in ('', '-light')]
+        scenes += [scene+suffix for scene in ('claude', 'claude-web', 'claude-desktop', 'claude-code', 'claude-details', 'claude-empty',
+                   'settings-large-text', 'profiles-edit', 'rules-discard-editor', 'connections-details')
+                   for suffix in ('-compact', '-compact-light')]
         run(['dbus-run-session', '--', 'xvfb-run', '-a', '--server-args=-screen 0 1800x1200x24',
              sys.executable, ROOT/'scripts/run-ui-preview.py', '--source', ROOT,
              '--output', ROOT/'target/claude-ui', '--scenes', *scenes])
@@ -55,6 +61,7 @@ def main():
         run([tests['core_integration'], '--ignored', '--test-threads=1'])
         run([tests['library'], 'native_gsettings', '--ignored'],
             env=dict(os.environ, GSETTINGS_BACKEND='memory'))
+        run(['dbus-run-session', '--', tests['file_dialog'], '--ignored', '--test-threads=1'])
         for name in ('native_kde_signal', 'no_tray_host'):
             run(['dbus-run-session', '--', tests['library'], name, '--ignored'])
         run(['dbus-run-session', '--', tests['tray_integration'], 'login_tray', '--ignored'])

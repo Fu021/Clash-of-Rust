@@ -516,6 +516,13 @@ impl Api {
             .await?;
         decode_json(Self::checked(response).await?).await
     }
+    pub(crate) async fn proxy_nodes(&self, name: &str) -> Result<Proxy> {
+        let response = self
+            .request(Method::GET, self.url(&["proxies", name])?)
+            .send()
+            .await?;
+        decode_json(Self::checked(response).await?).await
+    }
     pub async fn patch(&self, body: Value) -> Result<()> {
         Self::checked(
             self.request(Method::PATCH, self.url(&["configs"])?)

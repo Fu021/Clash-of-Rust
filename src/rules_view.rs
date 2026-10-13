@@ -93,6 +93,8 @@ pub enum Event {
     Discard,
     Apply,
     CloseEditor,
+    DiscardConfirmed,
+    CloseEditorConfirmed,
     TextMode(bool),
     Raw(String),
     Kind(String),
@@ -105,6 +107,7 @@ pub enum Event {
 }
 #[derive(Debug)]
 pub struct Editor {
+    original: (String, bool, String),
     id: Option<String>,
     raw: String,
     text_mode: bool,
@@ -121,7 +124,8 @@ impl Editor {
         let raw = rule.map_or("DOMAIN,,DIRECT", |r| r.rule.as_str());
         let parts = rule_manager::parts(raw).ok();
         let kind = parts.as_ref().map_or("DOMAIN", |p| p.kind).to_owned();
-        Self {
+        let mut editor = Self {
+            original: Default::default(),
             id: rule.map(|r| r.id.clone()),
             raw: raw.into(),
             text_mode: !TYPES.contains(&kind.as_str()),
@@ -132,7 +136,32 @@ impl Editor {
             enabled: rule.is_none_or(|r| r.enabled),
             position: position.to_string(),
             error: String::new(),
+        };
+        editor.original = (editor.content(), editor.enabled, editor.position.clone());
+        editor
+    }
+    fn content(&self) -> String {
+        if !self.text_mode {
+            return self.form_raw();
         }
+        match rule_manager::draft_parts(&self.raw) {
+            Ok(p) if TYPES.contains(&p.kind) => {
+                let raw = if p.kind == "MATCH" {
+                    format!("MATCH,{}", p.policy)
+                } else {
+                    format!("{},{},{}", p.kind, p.payload, p.policy)
+                };
+                if p.no_resolve {
+                    format!("{raw},no-resolve")
+                } else {
+                    raw
+                }
+            }
+            _ => self.raw.trim().into(),
+        }
+    }
+    fn modified(&self) -> bool {
+        (self.content(), self.enabled, self.position.clone()) != self.original
     }
     fn form_raw(&self) -> String {
         let mut raw = if self.kind == "MATCH" {
@@ -205,6 +234,9 @@ impl State {
     }
     pub fn dirty(&self) -> bool {
         &self.draft != self.saved.as_ref()
+    }
+    pub fn editor_modified(&self) -> bool {
+        self.editor.as_ref().is_some_and(Editor::modified)
     }
     pub fn load(&mut self, document: Arc<Document>, rules: Arc<ProfileRules>) {
         self.document = Some(document);
@@ -336,7 +368,7 @@ impl App {
                 {
                     return Task::none();
                 }
-                if state.dirty() || state.editor.is_some() {
+                if state.dirty() || state.editor_modified() {
                     state.pending_profile = Some(choice);
                 } else {
                     state.release_document();
@@ -428,6 +460,16 @@ impl App {
                 state.rebuild();
             }
             Event::Discard => {
+                if state.dirty() || state.editor_modified() {
+                    return self.ask(
+                        "放弃规则修改？",
+                        "当前未应用的规则顺序、快捷规则与自定义规则修改将被丢弃。".into(),
+                        "放弃修改",
+                        desktop_view::Pending::Rules(Event::DiscardConfirmed),
+                    );
+                }
+            }
+            Event::DiscardConfirmed => {
                 state.draft = state.saved.as_ref().clone();
                 state.editor = None;
                 state.move_open = false;
@@ -443,6 +485,22 @@ impl App {
                 }
             }
             Event::CloseEditor => {
+                if state.pending_profile.is_some() {
+                    state.pending_profile = None;
+                } else if state.editor_modified() {
+                    return self.ask(
+                        "放弃规则编辑？",
+                        "这条规则的编辑尚未加入草稿。关闭后将丢弃本次编辑，已有规则草稿仍会保留。"
+                            .into(),
+                        "放弃编辑",
+                        desktop_view::Pending::Rules(Event::CloseEditorConfirmed),
+                    );
+                } else {
+                    state.editor = None;
+                    state.move_open = false;
+                }
+            }
+            Event::CloseEditorConfirmed => {
                 state.editor = None;
                 state.move_open = false;
             }
@@ -509,7 +567,7 @@ impl App {
         enabled: bool,
         primary: bool,
     ) -> Element<'a, Message> {
-        button(self.label(label).size(12))
+        button(self.label(label).size(self.font_size(12)))
             .padding([7, 10])
             .style(if primary {
                 rounded_primary
@@ -530,10 +588,15 @@ impl App {
     ) -> Element<'a, Message> {
         text_input(placeholder, value)
             .font(typography::ENGLISH_FONT)
-            .size(13)
+            .size(self.font_size(13))
             .padding(9)
             .style(rounded_input)
             .on_input(move |v| Message::Rules(event(v)))
+            .on_submit(Message::Rules(if self.rule_state.move_open {
+                Event::MoveTo
+            } else {
+                Event::SaveEditor
+            }))
             .into()
     }
     pub(crate) fn rules(&self) -> Element<'_, Message> {
@@ -631,14 +694,14 @@ impl App {
                         column![
                             checkbox(!doc.builtin && (state.draft.enabled[i] || doc.included[i]))
                                 .label(label)
-                                .text_size(13)
-                                .size(16)
+                                .text_size(self.font_size(13))
+                                .size(self.font_size(16))
                                 .on_toggle_maybe(
                                     (editable && !doc.builtin && !doc.included[i])
                                         .then_some(move |on| Message::Rules(Event::Toggle(i, on)))
                                 ),
                             self.caption(clash_of_rust::config::SUBSCRIPTION_RULES[i])
-                                .size(11)
+                                .size(self.font_size(11))
                                 .wrapping(text::Wrapping::WordOrGlyph)
                         ]
                         .spacing(3)
@@ -721,21 +784,21 @@ impl App {
             let content = aligned_row![
                 self.caption(format!("{:04}", index + 1)).width(42),
                 self.label(parts.as_ref().map_or("规则", |p| p.kind))
-                    .size(12)
+                    .size(self.font_size(12))
                     .width(if compact { 95 } else { 115 }),
                 self.label(raw)
-                    .size(13)
+                    .size(self.font_size(13))
                     .wrapping(text::Wrapping::WordOrGlyph)
                     .width(Length::Fill),
                 self.label(parts.as_ref().map_or("", |p| p.policy))
-                    .size(13)
+                    .size(self.font_size(13))
                     .color(if rule.enabled {
                         self.accent()
                     } else {
                         self.secondary()
                     })
                     .width(85),
-                self.caption(source).size(11).width(90)
+                self.caption(source).size(self.font_size(11)).width(90)
             ]
             .spacing(7);
             list = list.push(
@@ -794,13 +857,15 @@ impl App {
             tools,
             self.table_header(
                 aligned_row![
-                    self.label("顺序").size(12).width(42),
+                    self.label("顺序").size(self.font_size(12)).width(42),
                     self.label("类型")
-                        .size(12)
+                        .size(self.font_size(12))
                         .width(if compact { 95 } else { 115 }),
-                    self.label("规则内容").size(12).width(Length::Fill),
-                    self.label("策略").size(12).width(85),
-                    self.label("来源").size(12).width(90)
+                    self.label("规则内容")
+                        .size(self.font_size(12))
+                        .width(Length::Fill),
+                    self.label("策略").size(self.font_size(12)).width(85),
+                    self.label("来源").size(self.font_size(12)).width(90)
                 ]
                 .spacing(7)
                 .into()
@@ -812,15 +877,26 @@ impl App {
         ]
         .spacing(if compact { 5 } else { 8 });
         if let Some(at) = selected_at {
-            page = page
-                .push(page_scroll(self.caption(state.rows[at].raw.as_ref()).size(11)).height(22));
+            page = page.push(
+                page_scroll(
+                    self.caption(state.rows[at].raw.as_ref())
+                        .size(self.font_size(11)),
+                )
+                .height(22),
+            );
         }
         if !state.warnings.is_empty() {
             page = page.push(
-                container(page_scroll(self.caption(state.warnings.join("\n")).size(12)).height(40))
-                    .padding(8)
-                    .width(Length::Fill)
-                    .style(|t| ui_style::badge(t, ui_style::Tone::Warning)),
+                container(
+                    page_scroll(
+                        self.caption(state.warnings.join("\n"))
+                            .size(self.font_size(12)),
+                    )
+                    .height(40),
+                )
+                .padding(8)
+                .width(Length::Fill)
+                .style(|t| ui_style::badge(t, ui_style::Tone::Warning)),
             );
         }
         page = page.push(
@@ -833,14 +909,14 @@ impl App {
                     } else {
                         "规则已保存"
                     })
-                    .size(13)
+                    .size(self.font_size(13))
                     .color(if state.dirty() {
                         ui_style::tone(&self.theme(), ui_style::Tone::Warning)
                     } else {
                         self.secondary()
                     }),
                     self.caption("应用前校验配置 · 订阅更新后保留自定义规则和排序")
-                        .size(11)
+                        .size(self.font_size(11))
                 ]
                 .spacing(3)
                 .width(Length::Fill),
@@ -860,7 +936,7 @@ impl App {
                 column![
                     self.title("切换订阅？"),
                     self.label(format!("切换到“{}”会放弃当前未应用的修改。", choice.name))
-                        .size(14),
+                        .size(self.font_size(14)),
                     aligned_row![
                         Space::new().width(Length::Fill),
                         self.rule_button("继续编辑", Event::CancelProfile, true, false),
@@ -913,7 +989,7 @@ impl App {
                     background: Some(Color::from_rgba(0.0, 0.0, 0.0, 0.52).into()),
                     ..container::Style::default()
                 });
-            stack![page, iced::widget::opaque(overlay)].into()
+            stack![page.map(|_| Message::Noop), iced::widget::opaque(overlay)].into()
         } else {
             page
         }
@@ -975,7 +1051,7 @@ impl App {
                 body = body.push(
                     checkbox(editor.no_resolve)
                         .label("no-resolve · 不主动解析域名")
-                        .text_size(13)
+                        .text_size(self.font_size(13))
                         .on_toggle(|v| Message::Rules(Event::NoResolve(v))),
                 );
             }
@@ -990,7 +1066,7 @@ impl App {
                 self.rule_input("从 1 开始的顺序", &editor.position, Event::Position),
                 checkbox(editor.enabled)
                     .label("启用")
-                    .text_size(13)
+                    .text_size(self.font_size(13))
                     .on_toggle(|v| Message::Rules(Event::Enabled(v)))
             ]
             .spacing(10),
@@ -998,7 +1074,7 @@ impl App {
         if !editor.error.is_empty() {
             body = body.push(
                 self.label(&editor.error)
-                    .size(13)
+                    .size(self.font_size(13))
                     .color(ui_style::tone(&self.theme(), ui_style::Tone::Danger)),
             );
         }

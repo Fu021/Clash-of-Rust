@@ -61,6 +61,37 @@ impl MacFlow {
         .unwrap();
     }
     fn update(&mut self, message: Message) -> Task<Message> {
+        if self.scenario == "native-quit" {
+            let finished = matches!(&message, Message::Finished(_));
+            if matches!(&message, Message::ExitFinished(Ok(()))) {
+                self.phase = 10;
+                let stopped = !self
+                    .app
+                    .engine
+                    .as_ref()
+                    .unwrap()
+                    .try_lock()
+                    .unwrap()
+                    .running();
+                self.record(serde_json::json!({ "native_quit": true, "core_stopped": stopped }));
+            }
+            let task = self.app.update(message);
+            if self.phase == 0 && finished && self.app.snapshot.running {
+                self.phase = 1;
+                self.record(serde_json::json!({}));
+                return Task::batch([
+                    task,
+                    iced::window::latest().and_then(|id| {
+                        iced::window::run(id, |_| {
+                            mac_desktop::pump().unwrap();
+                            mac_desktop::simulate_native_quit();
+                            Message::Tick
+                        })
+                    }),
+                ]);
+            }
+            return task;
+        }
         if self.scenario == "window-lifecycle" {
             return self.window_lifecycle(message);
         }
@@ -439,6 +470,12 @@ fn fixture(scene: &str) -> App {
     app.notice_visible = false;
     app.updates.checking = false;
     app.dark = !scene.ends_with("light");
+    app.settings.dark = app.dark;
+    app.settings.theme_mode = Some(if app.dark {
+        ThemeMode::Dark
+    } else {
+        ThemeMode::Light
+    });
     app.settings.active_profile = Some("preview".into());
     app.profiles.push(Profile {
         id: "preview".into(),
@@ -508,7 +545,7 @@ fn fixture(scene: &str) -> App {
             app.working = scene == "home-retrying";
             app.busy = app.working;
         }
-    } else if scene == "profiles" {
+    } else if scene.starts_with("profiles") {
         app.page = Page::Profiles;
         app.profile_name = "我的订阅".into();
         app.profile_source = "https://example.com/subscription".into();
@@ -531,7 +568,7 @@ fn fixture(scene: &str) -> App {
             updated: 1791590400,
             usage: None,
         });
-    } else if scene == "connections" {
+    } else if scene.starts_with("connections") {
         app.page = Page::Connections;
         app.snapshot.connections=serde_json::from_value(serde_json::json!({"connections":[
             {"id":"1","metadata":{"host":"api.github.com","destinationPort":"443","network":"tcp","process":"firefox"},"rule":"DOMAIN-SUFFIX","chains":["代理选择","香港02"],"upload":24576,"download":184320,"start":"2026-10-10T14:30:12Z"},
@@ -714,6 +751,48 @@ fn fixture(scene: &str) -> App {
             _ => {}
         }
     }
+    match scene {
+        "profiles-edit" => {
+            let _ = app.update(Message::EditProfile("preview".into()));
+        }
+        "profiles-delete-active" => {
+            let _ = app.update(Message::Action(Action::DeleteProfile("preview".into())));
+        }
+        "profiles-delete-inactive" => {
+            let _ = app.update(Message::Action(Action::DeleteProfile("backup".into())));
+        }
+        "profiles-discard" => {
+            let _ = app.update(Message::EditProfile("preview".into()));
+            let _ = app.update(Message::EditName("演示订阅（修改）".into()));
+            let _ = app.update(Message::CloseProfileEdit);
+        }
+        "connections-details" => {
+            app.connection_detail = Some("1".into());
+        }
+        "rules-discard" => {
+            let _ = app.update(Message::Rules(rules_view::Event::Discard));
+        }
+        "rules-discard-editor" => {
+            let _ = app.update(Message::Rules(rules_view::Event::Edit));
+            let _ = app.update(Message::Rules(rules_view::Event::Payload(
+                "changed.example.com".into(),
+            )));
+            let _ = app.update(Message::Rules(rules_view::Event::CloseEditor));
+        }
+        "rules-switch-confirm" => {
+            let _ = app.update(Message::Rules(rules_view::Event::Profile(
+                rules_view::ProfileChoice {
+                    id: "backup".into(),
+                    name: "备用订阅".into(),
+                },
+            )));
+        }
+        "settings-large-text" => {
+            app.settings.text_scale = 125;
+            app.settings.tray_speed = true;
+        }
+        _ => {}
+    }
     app
 }
 
@@ -726,11 +805,29 @@ fn update(app: &mut App, message: Message) -> Task<Message> {
             | Message::SiteDetail(_)
             | Message::NodeSort(_)
             | Message::ConnectionSort(_)
+            | Message::Key(_)
+            | Message::Query(_)
+            | Message::ConnectionDetail(_)
+            | Message::CloseConnectionDetail
+            | Message::CancelConfirm
+            | Message::EditName(_)
+            | Message::CloseProfileEdit
     ) {
         eprintln!("preview interaction: {message:?}");
     }
-    match message {
-        Message::Query(_)
+    let task = match message {
+        Message::Key(_)
+        | Message::Noop
+        | Message::Confirm
+        | Message::CancelConfirm
+        | Message::EditProfile(_)
+        | Message::EditName(_)
+        | Message::EditSource(_)
+        | Message::CloseProfileEdit
+        | Message::ConnectionDetail(_)
+        | Message::CloseConnectionDetail
+        | Message::Copy(_)
+        | Message::Query(_)
         | Message::Rules(_)
         | Message::NodeSort(_)
         | Message::ToggleGroup(_)
@@ -755,7 +852,15 @@ fn update(app: &mut App, message: Message) -> Task<Message> {
             task
         }
         _ => Task::none(),
-    }
+    };
+    eprintln!(
+        "preview desktop state: detail={}, confirmation={}, profile_editor={}, rule_editor={}",
+        app.connection_detail.is_some(),
+        app.confirmation.is_some(),
+        app.profile_editor.is_some(),
+        app.rule_state.has_editor()
+    );
+    task
 }
 
 #[cfg(not(target_os = "macos"))]
@@ -779,6 +884,7 @@ pub(crate) fn run() -> iced::Result {
     )
     .title("Clash of Rust · UI preview")
     .theme(App::theme)
+    .subscription(App::subscription)
     .default_font(typography::ENGLISH_FONT)
     .settings(iced::Settings {
         default_text_size: iced::Pixels(15.0),
@@ -917,6 +1023,23 @@ fn capture_tray_state(state: &mut Capture, stage: u8) -> Task<CaptureMessage> {
         tun,
         ..Default::default()
     });
+    if stage == 2 {
+        let tray = state.app.tray.as_ref().unwrap();
+        tray.nodes(Some(tray::Nodes {
+            group: "手动选择".into(),
+            selected: "DIRECT".into(),
+            names: vec!["DIRECT".into(), "REJECT".into()],
+            total: 2,
+        }));
+        tray.speed(
+            &Snapshot {
+                upload_rate: 24 * 1024,
+                download_rate: 1200 * 1024,
+                ..Default::default()
+            },
+            true,
+        );
+    }
     capture_tray_check(stage)
 }
 

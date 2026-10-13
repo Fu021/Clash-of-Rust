@@ -758,6 +758,73 @@ impl Engine {
         }))
     }
 
+    /// Editing source metadata does not replace the cached YAML. The explicit
+    /// Update action downloads and validates the new source transactionally.
+    pub fn edit_profile(&mut self, id: &str, name: &str, source: &str) -> Result<()> {
+        let name = name.trim();
+        let source = source.trim();
+        if name.is_empty() || source.is_empty() {
+            bail!("配置名称与来源不能为空");
+        }
+        if source.starts_with("http://") || source.starts_with("https://") {
+            reqwest::Url::parse(source).context("订阅 URL 无效")?;
+        } else if source.contains("://") {
+            bail!("订阅链接仅支持 HTTP 或 HTTPS");
+        }
+        let mut profiles = self.profiles.clone();
+        let profile = profiles
+            .iter_mut()
+            .find(|p| p.id == id)
+            .context("订阅已不存在")?;
+        if profile.is_default() {
+            bail!("默认直连配置不能编辑");
+        }
+        profile.name = name.to_owned();
+        profile.source = source.to_owned();
+        self.store.save_profiles(&profiles)?;
+        self.profiles = profiles;
+        Ok(())
+    }
+
+    /// Retain only one selectable decision group for the native menu. Fetching
+    /// the full proxies response every second would waste memory while hidden.
+    pub async fn tray_nodes(&self) -> Result<Option<crate::tray::Nodes>> {
+        if !self.running() {
+            return Ok(None);
+        }
+        let config: ConfigStatus = self.api.get("configs").await?;
+        let raw = read_runtime_config(&self.store.runtime().join("config.yaml"))?;
+        let root = crate::active_route::root(&raw)?;
+        drop(raw);
+        let mut name = crate::active_route::start(&config.mode, &root).to_owned();
+        let mut visited = std::collections::BTreeSet::new();
+        for _ in 0..crate::active_route::MAX_DEPTH {
+            if crate::active_route::terminal(&name) || !visited.insert(name.clone()) {
+                return Ok(None);
+            }
+            let proxy = self.api.proxy_nodes(&name).await?;
+            if proxy.kind == "Selector" && !proxy.all.is_empty() {
+                let total = proxy.all.len();
+                return Ok(Some(crate::tray::Nodes {
+                    group: name,
+                    selected: proxy.now.to_string(),
+                    names: proxy
+                        .all
+                        .into_iter()
+                        .take(200)
+                        .map(|n| n.to_string())
+                        .collect(),
+                    total,
+                }));
+            }
+            if proxy.now.is_empty() {
+                return Ok(None);
+            }
+            name = proxy.now.to_string();
+        }
+        Ok(None)
+    }
+
     pub async fn import(
         &mut self,
         name: String,
@@ -1519,8 +1586,8 @@ impl Engine {
             config.mode
         };
         snapshot.tun = config.tun.enable;
-        if matches!(scope, Scope::Home | Scope::Connections) {
-            if scope == Scope::Home {
+        if matches!(scope, Scope::Home | Scope::Connections) || self.settings.tray_speed {
+            if scope != Scope::Connections {
                 let stats: ConnectionStats = self.api.get("connections").await?;
                 snapshot.connection_count = stats.count;
                 snapshot.connections.upload_total = stats.upload_total;

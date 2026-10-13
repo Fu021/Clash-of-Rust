@@ -18,6 +18,8 @@ pub enum Command {
     SystemProxy,
     Tun,
     ProxyOff,
+    RefreshNodes,
+    Select(String, String),
     Exit,
 }
 struct Events {
@@ -123,12 +125,22 @@ pub struct Guard {
     thread_id: u32,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Nodes {
+    pub group: String,
+    pub selected: String,
+    pub names: Vec<String>,
+    pub total: usize,
+}
+
 #[derive(Clone, Default, PartialEq, Eq)]
 struct State {
     mode: String,
     system_proxy: bool,
     tun: bool,
     running: bool,
+    nodes: Option<std::sync::Arc<Nodes>>,
+    speed: Option<(u64, u64)>,
 }
 
 fn tray_icon(kind: crate::icons::Kind) -> Icon {
@@ -151,6 +163,27 @@ fn update_icon(icon: &tray_icon::TrayIcon, kind: &mut crate::icons::Kind, state:
             *kind = next;
         }
     }
+    let title = state
+        .speed
+        .map(|(up, down)| format!("↑ {}  ↓ {}", speed(up), speed(down)));
+    // Windows has no native tray title; its tooltip and menu show the rates.
+    #[cfg(target_os = "macos")]
+    icon.set_title(title.as_deref());
+    #[cfg(target_os = "linux")]
+    icon.set_title(Some(title.as_deref().unwrap_or("Clash of Rust")));
+    let tooltip = title.as_ref().map_or_else(
+        || "Clash of Rust".into(),
+        |s| format!("Clash of Rust · {s}"),
+    );
+    let _ = icon.set_tooltip(Some(tooltip));
+}
+
+fn speed(value: u64) -> String {
+    if value >= 1024 * 1024 {
+        format!("{:.1}M/s", value as f64 / 1048576.0)
+    } else {
+        format!("{}K/s", value / 1024)
+    }
 }
 
 impl Guard {
@@ -164,24 +197,52 @@ impl Guard {
         self.publish(snapshot, true);
     }
 
-    fn publish(&self, snapshot: &crate::engine::Snapshot, force: bool) {
-        let state = State {
-            mode: snapshot.mode.clone(),
-            system_proxy: snapshot.system_proxy,
-            tun: snapshot.tun,
-            running: snapshot.running,
-        };
-        let changed = self.updates.send_if_modified(|current| {
-            if !force && *current == state {
+    pub fn nodes(&self, nodes: Option<Nodes>) {
+        self.updates
+            .send_modify(|state| state.nodes = nodes.map(std::sync::Arc::new));
+        self.wake();
+    }
+    pub fn speed(&self, snapshot: &crate::engine::Snapshot, enabled: bool) {
+        let speed = enabled.then_some((snapshot.upload_rate, snapshot.download_rate));
+        if self.updates.send_if_modified(|state| {
+            if state.speed == speed {
                 false
             } else {
-                *current = state;
+                state.speed = speed;
+                true
+            }
+        }) {
+            self.wake();
+        }
+    }
+
+    fn publish(&self, snapshot: &crate::engine::Snapshot, force: bool) {
+        let changed = self.updates.send_if_modified(|current| {
+            if !force
+                && current.mode == snapshot.mode
+                && current.system_proxy == snapshot.system_proxy
+                && current.tun == snapshot.tun
+                && current.running == snapshot.running
+            {
+                false
+            } else {
+                current.mode.clone_from(&snapshot.mode);
+                current.system_proxy = snapshot.system_proxy;
+                current.tun = snapshot.tun;
+                current.running = snapshot.running;
+                if !snapshot.running {
+                    current.nodes = None;
+                }
                 true
             }
         });
         if !changed {
             return;
         }
+        self.wake();
+    }
+
+    fn wake(&self) {
         #[cfg(windows)]
         unsafe {
             windows_sys::Win32::UI::WindowsAndMessaging::PostThreadMessageW(
@@ -201,10 +262,15 @@ struct Checks {
     system_proxy: CheckMenuItem,
     tun: CheckMenuItem,
     off: CheckMenuItem,
+    nodes: Submenu,
+    node_items: Vec<CheckMenuItem>,
+    last_nodes: Option<std::sync::Arc<Nodes>>,
+    nodes_ready: bool,
+    traffic: MenuItem,
 }
 
 impl Checks {
-    fn update(&self, state: State) {
+    fn update(&mut self, state: State) {
         for (item, mode) in &self.modes {
             item.set_checked(state.running && state.mode == *mode);
             item.set_enabled(state.running);
@@ -214,6 +280,52 @@ impl Checks {
         self.tun.set_checked(state.tun);
         self.tun.set_enabled(state.running);
         self.off.set_checked(!state.system_proxy && !state.tun);
+        self.traffic.set_text(state.speed.map_or_else(
+            || "托盘速度显示已关闭".into(),
+            |(up, down)| format!("↑ {}  ↓ {}", speed(up), speed(down)),
+        ));
+        if !self.nodes_ready || self.last_nodes != state.nodes {
+            self.nodes_ready = true;
+            if let Some(events) = EVENTS.get() {
+                let mut commands = events.commands.lock().unwrap();
+                commands.retain(|(_, command)| !matches!(command, Command::Select(..)));
+                while self.nodes.remove_at(0).is_some() {}
+                self.node_items.clear();
+                if let Some(nodes) = &state.nodes {
+                    self.nodes.set_text(format!("节点 · {}", nodes.group));
+                    for name in &nodes.names {
+                        let item =
+                            CheckMenuItem::new(name, state.running, name == &nodes.selected, None);
+                        if self.nodes.append(&item).is_ok() {
+                            commands.push((
+                                item.id().clone(),
+                                Command::Select(nodes.group.clone(), name.clone()),
+                            ));
+                            self.node_items.push(item);
+                        }
+                    }
+                    if nodes.total > nodes.names.len() {
+                        let _ = self.nodes.append(&MenuItem::new(
+                            "更多节点请在代理页选择",
+                            false,
+                            None,
+                        ));
+                    }
+                } else {
+                    self.nodes.set_text("节点");
+                    let _ = self.nodes.append(&MenuItem::new(
+                        "当前路由没有可手动选择的组",
+                        false,
+                        None,
+                    ));
+                }
+                let refresh = MenuItem::new("刷新节点菜单", state.running, None);
+                let _ = self.nodes.append(&refresh);
+                commands.retain(|(_, command)| !matches!(command, Command::RefreshNodes));
+                commands.push((refresh.id().clone(), Command::RefreshNodes));
+            }
+            self.last_nodes = state.nodes;
+        }
     }
 }
 impl Drop for Guard {
@@ -249,7 +361,7 @@ pub fn start() -> anyhow::Result<Guard> {
         };
         let created = create_native(events);
         match created {
-            Ok((icon, checks)) => {
+            Ok((icon, mut checks)) => {
                 let mut icon_kind = crate::icons::Kind::App;
                 #[cfg(windows)]
                 let ready = ready_tx.send(Ok(thread_id));
@@ -382,6 +494,13 @@ fn create_native(events: &Events) -> anyhow::Result<(tray_icon::TrayIcon, Checks
     let off = CheckMenuItem::new("关闭", true, true, None);
     proxy_modes.append_items(&[&system_proxy, &tun, &off])?;
     menu.append(&proxy_modes)?;
+    let nodes = Submenu::new("节点", true);
+    let refresh = MenuItem::new("加载节点菜单", true, None);
+    nodes.append(&refresh)?;
+    menu.append(&nodes)?;
+    commands.push((refresh.id().clone(), Command::RefreshNodes));
+    let traffic = MenuItem::new("托盘速度显示已关闭", false, None);
+    menu.append(&traffic)?;
     let exit = MenuItem::new("退出", true, None);
     menu.append(&exit)?;
     commands.push((system_proxy.id().clone(), Command::SystemProxy));
@@ -393,6 +512,11 @@ fn create_native(events: &Events) -> anyhow::Result<(tray_icon::TrayIcon, Checks
         system_proxy,
         tun,
         off,
+        nodes,
+        node_items: Vec::new(),
+        last_nodes: None,
+        nodes_ready: false,
+        traffic,
     };
     let builder = TrayIconBuilder::new()
         .with_tooltip("Clash of Rust")
@@ -604,10 +728,19 @@ pub fn verify_native_state() {
             button.window().is_some_and(|window| window.isVisible()),
             "menu-bar status window must actually be visible"
         );
-        assert!(
-            button.title().is_empty(),
-            "menu bar must show only the icon"
-        );
+        let state = native.updates.borrow();
+        if state.speed.is_some() {
+            let title = button.title().to_string();
+            assert!(
+                title.contains('↑') && title.contains('↓'),
+                "enabled rates must appear beside the icon"
+            );
+        } else {
+            assert!(
+                button.title().is_empty(),
+                "disabled rates must leave only the icon"
+            );
+        }
         let image = button.image().expect("status item must contain artwork");
         assert!(
             image.isTemplate(),
@@ -626,7 +759,10 @@ pub fn verify_native_state() {
             window.frame(),
             window.backingScaleFactor()
         );
-        assert!(frame.size.width > 0.0 && frame.size.width <= 40.0);
+        assert!(
+            frame.size.width > 0.0
+                && frame.size.width <= if state.speed.is_some() { 300.0 } else { 40.0 }
+        );
         assert!(frame.size.height > 0.0);
         let target = button
             .subviews()
@@ -638,7 +774,13 @@ pub fn verify_native_state() {
         assert!((target_frame.size.height - button.bounds().size.height).abs() < 0.5);
         assert!(rect.size.width > 0);
         assert!(rect.size.height > 0);
-        let state = native.updates.borrow();
+        if let Some(nodes) = &state.nodes {
+            assert_eq!(native.checks.node_items.len(), nodes.names.len());
+            for (item, name) in native.checks.node_items.iter().zip(&nodes.names) {
+                assert_eq!(item.text(), *name);
+                assert_eq!(item.is_checked(), *name == nodes.selected);
+            }
+        }
         for (item, mode) in &native.checks.modes {
             assert_eq!(item.is_checked(), state.running && state.mode == *mode);
         }

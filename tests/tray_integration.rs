@@ -124,6 +124,32 @@ mod linux {
             "Clash of Rust"
         );
         assert_eq!(item.get_property::<String>("Status").unwrap(), "Active");
+        guard.speed(
+            &clash_of_rust::engine::Snapshot {
+                upload_rate: 2048,
+                download_rate: 1048576,
+                ..Default::default()
+            },
+            true,
+        );
+        let deadline = Instant::now() + Duration::from_secs(3);
+        while !item
+            .get_property::<String>("Title")
+            .unwrap()
+            .contains("1.0M/s")
+        {
+            assert!(Instant::now() < deadline, "host must receive enabled rates");
+            std::thread::sleep(Duration::from_millis(25));
+        }
+        guard.speed(&clash_of_rust::engine::Snapshot::default(), false);
+        let deadline = Instant::now() + Duration::from_secs(3);
+        while item.get_property::<String>("Title").unwrap() != "Clash of Rust" {
+            assert!(
+                Instant::now() < deadline,
+                "disabling rates must restore the normal title"
+            );
+            std::thread::sleep(Duration::from_millis(25));
+        }
         item.call::<_, _, ()>("Activate", &(0_i32, 0_i32)).unwrap();
         let runtime = tokio::runtime::Runtime::new().unwrap();
         assert!(matches!(

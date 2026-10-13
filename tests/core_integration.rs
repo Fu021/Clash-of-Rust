@@ -58,6 +58,63 @@ fn free_port() -> u16 {
 }
 
 #[tokio::test]
+#[ignore = "requires bundled resources; validates subscription edits and the actual tray group API"]
+async fn subscription_edit_preserves_cached_yaml_and_tray_can_select_unicode_group() {
+    let temp = tempfile::tempdir().unwrap();
+    let store = Store::at(temp.path().to_owned()).unwrap();
+    let controller_port = free_port();
+    let mut mixed_port = free_port();
+    while mixed_port == controller_port {
+        mixed_port = free_port();
+    }
+    store
+        .save_settings(&Settings {
+            controller_port,
+            mixed_port,
+            ..Default::default()
+        })
+        .unwrap();
+    let mut engine = Engine::with_resources(store.clone(), test_resources()).unwrap();
+    engine.start().await.unwrap();
+    let source = temp.path().join("subscription.yaml");
+    let raw = "proxies: []\nproxy-groups: [{name: '主要/节点', type: select, proxies: [DIRECT, REJECT]}]\nrules: ['MATCH,主要/节点']\n";
+    std::fs::write(&source, raw).unwrap();
+    engine
+        .import("original".into(), source.to_string_lossy().into(), None)
+        .await
+        .unwrap();
+    let id = engine.profiles.last().unwrap().id.clone();
+    engine.activate(id.clone()).await.unwrap();
+    let before = std::fs::read(store.runtime().join("config.yaml")).unwrap();
+    engine
+        .edit_profile(&id, "renamed", "https://example.com/sub")
+        .unwrap();
+    assert_eq!(
+        std::fs::read_to_string(store.profile_path(&id).unwrap()).unwrap(),
+        raw
+    );
+    assert_eq!(
+        std::fs::read(store.runtime().join("config.yaml")).unwrap(),
+        before
+    );
+    assert_eq!(store.profiles().unwrap().last().unwrap().name, "renamed");
+    assert!(engine.edit_profile(&id, "", "https://example.org").is_err());
+    assert_eq!(
+        engine.profiles.last().unwrap().source,
+        "https://example.com/sub"
+    );
+    let nodes = engine.tray_nodes().await.unwrap().unwrap();
+    assert_eq!(nodes.group, "主要/节点");
+    assert_eq!(nodes.names, ["DIRECT", "REJECT"]);
+    engine.api.select(&nodes.group, "REJECT").await.unwrap();
+    assert_eq!(
+        engine.tray_nodes().await.unwrap().unwrap().selected,
+        "REJECT"
+    );
+    engine.stop().await.unwrap();
+}
+
+#[tokio::test]
 #[ignore = "Requires bundled resources; verifies live DNS/IPv6 changes, persistence and validation rollback"]
 async fn network_overrides_apply_live_and_rollback_rejected_subscription_dns() {
     let tmp = tempfile::tempdir().unwrap();

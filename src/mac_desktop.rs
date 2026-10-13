@@ -6,7 +6,7 @@ use objc2::{
     runtime::{AnyObject, Bool, Imp, Sel},
     sel,
 };
-use objc2_app_kit::NSApplication;
+use objc2_app_kit::{NSApplication, NSApplicationTerminateReply};
 use objc2_foundation::{MainThreadMarker, NSObjectProtocol};
 use std::sync::{
     OnceLock,
@@ -14,6 +14,7 @@ use std::sync::{
 };
 
 static REOPEN: AtomicBool = AtomicBool::new(false);
+static QUIT: AtomicBool = AtomicBool::new(false);
 static INSTALLED: OnceLock<Result<(), String>> = OnceLock::new();
 
 // AppKit BOOL has different encodings on Intel and Apple Silicon. Use objc2's
@@ -30,7 +31,24 @@ unsafe extern "C-unwind" fn reopen(
     Bool::NO // The GUI restores/focuses its retained window; skip AppKit defaults.
 }
 
-pub(crate) fn pump() -> Result<bool, String> {
+#[derive(Debug, Clone)]
+pub(crate) struct Events {
+    pub reopen: bool,
+    pub quit: bool,
+}
+
+unsafe extern "C-unwind" fn quit(
+    _delegate: &AnyObject,
+    _selector: Sel,
+    _app: &NSApplication,
+) -> NSApplicationTerminateReply {
+    // AppKit's menu, Command-Q and Dock Quit converge here. Cancel native
+    // termination; the GUI saves geometry and stops the core before exiting.
+    QUIT.store(true, Ordering::Release);
+    NSApplicationTerminateReply::TerminateCancel
+}
+
+pub(crate) fn pump() -> Result<Events, String> {
     let mtm = MainThreadMarker::new().expect("Dock handling must run on the main thread");
     INSTALLED
         .get_or_init(|| {
@@ -39,6 +57,10 @@ pub(crate) fn pump() -> Result<bool, String> {
             let selector = sel!(applicationShouldHandleReopen:hasVisibleWindows:);
             if delegate.respondsToSelector(selector) {
                 return Err("macOS 应用委托已包含其他窗口恢复处理程序".into());
+            }
+            let quit_selector = sel!(applicationShouldTerminate:);
+            if delegate.respondsToSelector(quit_selector) {
+                return Err("macOS 应用委托已包含其他退出处理程序".into());
             }
             // ProtocolObject has no AnyObject accessor in objc2 0.6.4. Its
             // Message contract guarantees the same Objective-C object layout.
@@ -70,6 +92,28 @@ pub(crate) fn pump() -> Result<bool, String> {
             if !added.as_bool() {
                 return Err("无法注册 macOS Dock 窗口恢复事件".into());
             }
+            let encoding =
+                std::ffi::CString::new(format!("{}@:@", NSApplicationTerminateReply::ENCODING))
+                    .unwrap();
+            let added = unsafe {
+                ffi::class_addMethod(
+                    class.cast_mut(),
+                    quit_selector,
+                    std::mem::transmute::<
+                        unsafe extern "C-unwind" fn(
+                            &AnyObject,
+                            Sel,
+                            &NSApplication,
+                        )
+                            -> NSApplicationTerminateReply,
+                        Imp,
+                    >(quit),
+                    encoding.as_ptr(),
+                )
+            };
+            if !added.as_bool() {
+                return Err("无法注册 macOS 应用退出事件".into());
+            }
             // Refresh AppKit's optional-selector cache after adding the method.
             // The same retained winit delegate handles every existing callback.
             app.setDelegate(None);
@@ -78,7 +122,16 @@ pub(crate) fn pump() -> Result<bool, String> {
         })
         .as_ref()
         .map_err(Clone::clone)?;
-    Ok(REOPEN.swap(false, Ordering::AcqRel))
+    Ok(Events {
+        reopen: REOPEN.swap(false, Ordering::AcqRel),
+        quit: QUIT.swap(false, Ordering::AcqRel),
+    })
+}
+
+#[cfg(feature = "ui-preview")]
+pub(crate) fn simulate_native_quit() {
+    let mtm = MainThreadMarker::new().unwrap();
+    NSApplication::sharedApplication(mtm).terminate(None);
 }
 
 #[cfg(feature = "ui-preview")]

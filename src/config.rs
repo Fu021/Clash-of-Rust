@@ -21,6 +21,23 @@ pub struct RuleOverrides {
     pub enabled: [bool; 5],
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum ThemeMode {
+    System,
+    Light,
+    Dark,
+}
+impl std::fmt::Display for ThemeMode {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(match self {
+            Self::System => "跟随系统",
+            Self::Light => "浅色",
+            Self::Dark => "深色",
+        })
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(default)]
 pub struct Settings {
@@ -28,6 +45,10 @@ pub struct Settings {
     pub mixed_port: u16,
     pub secret: String,
     pub dark: bool,
+    // None preserves the explicit theme of settings saved by older versions.
+    pub theme_mode: Option<ThemeMode>,
+    pub text_scale: u16,
+    pub tray_speed: bool,
     pub dns_override: bool,
     pub ipv6: bool,
     pub delay_interval_minutes: u32,
@@ -56,6 +77,9 @@ impl Default for Settings {
             mixed_port: defaults.mixed_port,
             secret: uuid::Uuid::new_v4().to_string(),
             dark: defaults.dark,
+            theme_mode: None,
+            text_scale: 100,
+            tray_speed: false,
             dns_override: true,
             ipv6: true,
             delay_interval_minutes: 5,
@@ -71,6 +95,9 @@ impl Default for Settings {
 
 impl Settings {
     pub fn validate(&self) -> Result<()> {
+        if !(80..=150).contains(&self.text_scale) {
+            bail!("字号比例应为 80–150%");
+        }
         if !matches!(self.run_mode.as_str(), "rule" | "global" | "direct") {
             bail!("运行模式无效");
         }
@@ -425,6 +452,24 @@ fn apply_rules(map: &mut Mapping, overrides: &RuleOverrides) -> Result<()> {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn old_theme_is_preserved_and_new_appearance_options_have_small_defaults() {
+        let old: super::Settings = serde_json::from_str(r#"{"dark":false}"#).unwrap();
+        assert!(!old.dark);
+        assert!(old.theme_mode.is_none());
+        assert_eq!(old.text_scale, 100);
+        assert!(!old.tray_speed);
+        for scale in [0, 79, 151, u16::MAX] {
+            assert!(
+                super::Settings {
+                    text_scale: scale,
+                    ..Default::default()
+                }
+                .validate()
+                .is_err()
+            );
+        }
+    }
     use super::*;
     #[cfg(windows)]
     #[test]

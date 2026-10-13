@@ -5,6 +5,7 @@ pub mod claude_check;
 pub mod config;
 pub mod connection;
 pub mod engine;
+pub mod file_dialog;
 mod file_hash;
 pub mod flags;
 pub mod icons;

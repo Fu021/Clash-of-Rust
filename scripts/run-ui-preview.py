@@ -151,6 +151,30 @@ def connection_regression(window, scene, output, env, runner):
     click(690, 169, 'DownloadTotal', True, 'connections-total-descending')
 
 
+def desktop_regression(window, scene, output, env, runner):
+    """Deliver real native keyboard/mouse input, then inspect the App result."""
+    def command(*args):
+        subprocess.run(['xdotool', *args], env=env, check=True)
+        time.sleep(.4)
+    def check(expected):
+        if expected not in (output/(scene+'.log')).read_text():
+            raise RuntimeError('Desktop interaction missing: '+expected)
+    command('windowfocus', window)
+    command('key', '--window', window, 'ctrl+f')
+    command('type', '--window', window, 'keyboard.test')
+    check('Query("keyboard.test")')
+    command('key', '--window', window, 'ctrl+a', 'BackSpace')
+    # Row content outside the connection-name button opens the same details.
+    command('mousemove', '--window', window, '530', '213', 'click', '1')
+    check('ConnectionDetail(')
+    check('detail=true')
+    suffix = '-light' if scene.endswith('light') else ''
+    runner.screenshot(window, output/('connections-opened-by-row'+suffix+'.png'), env)
+    command('key', '--window', window, 'Escape')
+    if 'detail=false' not in (output/(scene+'.log')).read_text().split('detail=true')[-1]:
+        raise RuntimeError('Escape did not dismiss connection details')
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--source', type=Path, required=True)
@@ -186,6 +210,9 @@ def main():
                for suffix in ('', '-light', '-compact', '-compact-light')]
     scenes += [scene+suffix for scene in ('claude', 'claude-web', 'claude-desktop', 'claude-code', 'claude-details', 'claude-empty')
                for suffix in ('', '-light', '-compact', '-compact-light')]
+    scenes += [scene+suffix for scene in ('profiles-edit', 'profiles-delete-active', 'profiles-delete-inactive', 'profiles-discard',
+        'connections-details', 'rules-discard', 'rules-discard-editor', 'rules-switch-confirm', 'settings-large-text')
+        for suffix in ('', '-light', '-compact', '-compact-light')]
     if args.scenes:
         unknown = set(args.scenes)-set(scenes)
         if unknown: raise ValueError('Unknown UI preview scenes: '+', '.join(sorted(unknown)))
@@ -217,6 +244,7 @@ def main():
                     selection_regression(window, scene, output, env, runner)
                 if scene in ('connections', 'connections-light'):
                     connection_regression(window, scene, output, env, runner)
+                    desktop_regression(window, scene, output, env, runner)
             finally:
                 if process.poll() is None:
                     os.killpg(process.pid, signal.SIGTERM)

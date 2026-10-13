@@ -461,7 +461,7 @@ impl App {
         let mut tabs = aligned_row![].spacing(5);
         for tab in Tab::ALL {
             tabs = tabs.push(
-                button(self.label(tab.name()).size(13))
+                button(self.label(tab.name()).size(self.font_size(13)))
                     .style(if state.tab == tab {
                         ui_style::selected_button
                     } else {
@@ -481,12 +481,12 @@ impl App {
                 } else {
                     "开始检测"
                 })
-                .size(13)
+                .size(self.font_size(13))
             )
             .style(ui_style::primary)
             .padding([7, 12])
             .on_press_maybe((!state.busy()).then_some(event(Event::Start))),
-            button(self.label("导出报告").size(13))
+            button(self.label("导出报告").size(self.font_size(13)))
                 .style(ui_style::secondary_button)
                 .padding([7, 10])
                 .on_press_maybe(
@@ -512,18 +512,20 @@ impl App {
                         "正在检测地区线索…"
                     }),
                     Space::new().width(Length::Fill),
-                    button(self.label("停止").size(12))
+                    button(self.label("停止").size(self.font_size(12)))
                         .style(ui_style::text_button)
                         .on_press(event(Event::Cancel))
                 ])
                 .push(progress_bar(0.0..=1.0, progress).girth(4));
         }
         if !state.status.is_empty() {
-            body = body.push(self.label(&state.status).size(12).color(if state.error {
-                ui_style::tone(&self.theme(), ui_style::Tone::Danger)
-            } else {
-                self.secondary()
-            }));
+            body = body.push(self.label(&state.status).size(self.font_size(12)).color(
+                if state.error {
+                    ui_style::tone(&self.theme(), ui_style::Tone::Danger)
+                } else {
+                    self.secondary()
+                },
+            ));
         }
         let (measured, differences, unknown) = state
             .selected()
@@ -543,8 +545,8 @@ impl App {
         body = body.push(
             container(
                 column![
-                    self.label("地区线索报告").size(16),
-                    self.label(summary).size(20),
+                    self.label("地区线索报告").size(self.font_size(16)),
+                    self.label(summary).size(self.font_size(20)),
                     self.caption(
                         "分别展示实测与辅助线索；语言、字体和地区差异不直接判定服务资格。"
                     )
@@ -556,13 +558,13 @@ impl App {
             .style(ui_style::panel),
         );
         let actions = aligned_row![
-            button(self.label("浏览器检测").size(12))
+            button(self.label("浏览器检测").size(self.font_size(12)))
                 .style(ui_style::secondary_button)
                 .on_press_maybe((!state.session_starting).then_some(event(Event::Browser))),
-            button(self.label("复制 Code 检测命令").size(12))
+            button(self.label("复制 Code 检测命令").size(self.font_size(12)))
                 .style(ui_style::secondary_button)
                 .on_press_maybe((!state.session_starting).then_some(event(Event::CodeCommand))),
-            button(self.label("导入剪贴板采样").size(12))
+            button(self.label("导入剪贴板采样").size(self.font_size(12)))
                 .style(ui_style::secondary_button)
                 .on_press_maybe((!state.importing).then_some(event(Event::Import)))
         ]
@@ -572,7 +574,7 @@ impl App {
             body = body.push(aligned_row![
                 self.caption("本机回传入口已开启；离开此页即关闭，最长 20 分钟。"),
                 Space::new().width(Length::Fill),
-                button(self.label("关闭入口").size(12))
+                button(self.label("关闭入口").size(self.font_size(12)))
                     .style(ui_style::text_button)
                     .on_press(event(Event::CloseSession))
             ]);
@@ -581,7 +583,7 @@ impl App {
             body = body
                 .push(
                     text_input("在启动 Code 的终端运行", &state.command)
-                        .size(12)
+                        .size(self.font_size(12))
                         .style(ui_style::input),
                 )
                 .push(
@@ -591,12 +593,12 @@ impl App {
                 );
         }
         if state.tab == Tab::Web {
-            body = body.push(aligned_row![button(self.label("复制 Claude 页面采样脚本").size(12)).style(ui_style::secondary_button).on_press(event(Event::CopySiteScript)), Space::new().width(Length::Fill)]).push(self.caption("可在 Claude 网页开发者工具的 Console 运行，再导入脚本复制的 JSON，以确认该站点的时区、权限与同域出口。"));
+            body = body.push(aligned_row![button(self.label("复制 Claude 页面采样脚本").size(self.font_size(12))).style(ui_style::secondary_button).on_press(event(Event::CopySiteScript)), Space::new().width(Length::Fill)]).push(self.caption("可在 Claude 网页开发者工具的 Console 运行，再导入脚本复制的 JSON，以确认该站点的时区、权限与同域出口。"));
         }
         if state.tab == Tab::Desktop {
             body = body.push(
                 aligned_row![
-                    button(self.label("记录 Desktop 请求").size(12))
+                    button(self.label("记录 Desktop 请求").size(self.font_size(12)))
                         .style(ui_style::secondary_button)
                         .on_press_maybe(
                             (self.snapshot.running && !state.busy() && state.observing.is_none())
@@ -611,10 +613,10 @@ impl App {
         if let Some(group) = state.detail {
             results = results.push(
                 aligned_row![
-                    button(self.label("‹ 返回报告").size(12))
+                    button(self.label("‹ 返回报告").size(self.font_size(12)))
                         .style(ui_style::text_button)
                         .on_press(event(Event::Detail(None))),
-                    self.label(group.name()).size(18)
+                    self.label(group.name()).size(self.font_size(18))
                 ]
                 .spacing(10),
             );
@@ -638,7 +640,7 @@ impl App {
                     };
                     let mut item = column![
                         aligned_row![
-                            self.label(&signal.title).size(15),
+                            self.label(&signal.title).size(self.font_size(15)),
                             Space::new().width(Length::Fill),
                             container(
                                 self.label(if state.differs(report, signal) {
@@ -646,12 +648,12 @@ impl App {
                                 } else {
                                     signal.evidence.name()
                                 })
-                                .size(11)
+                                .size(self.font_size(11))
                             )
                             .padding([3, 7])
                             .style(move |theme: &Theme| ui_style::badge(theme, tone))
                         ],
-                        self.label(&signal.value).size(14),
+                        self.label(&signal.value).size(self.font_size(14)),
                         self.caption(format!("来源：{}", signal.source)),
                         self.caption(&signal.detail)
                     ]
@@ -671,7 +673,7 @@ impl App {
                         results = results.push(
                             container(
                                 column![
-                                    self.label(&route.host).size(14),
+                                    self.label(&route.host).size(self.font_size(14)),
                                     self.caption(format!("规则：{}", route.rule)),
                                     self.caption(format!("线路：{}", route.chain))
                                 ]
@@ -746,9 +748,9 @@ impl App {
             "待补充"
         };
         let mut lines = column![aligned_row![
-            self.label(group.name()).size(15),
+            self.label(group.name()).size(self.font_size(15)),
             Space::new().width(Length::Fill),
-            container(self.label(status).size(11))
+            container(self.label(status).size(self.font_size(11)))
                 .padding([3, 6])
                 .style(move |theme: &Theme| ui_style::badge(theme, tone))
         ]]
@@ -767,7 +769,7 @@ impl App {
         lines = lines.push(aligned_row![
             Space::new().width(Length::Fill),
             self.label(format!("查看详情 · {} 项 ›", entries.len()))
-                .size(12)
+                .size(self.font_size(12))
                 .color(ui_style::tone(&self.theme(), ui_style::Tone::Accent))
         ]);
         button(container(lines).padding(10).width(Length::Fill))

@@ -16,7 +16,7 @@ mod ui_style;
 mod window_state;
 
 use clash_of_rust::{
-    config::{Profile, Settings, Store},
+    config::{Profile, Settings, Store, ThemeMode},
     connection::{self, Field as ConnectionField, Sort as ConnectionSort},
     engine::{Engine, ProxyMode, Scope, Snapshot},
     flags, icons, ip_check,
@@ -64,6 +64,8 @@ macro_rules! aligned_row {
         iced::widget::row![$($child),*].align_y(iced::alignment::Vertical::Center)
     };
 }
+
+mod desktop_view;
 
 #[path = "claude_view.rs"]
 mod claude_view;
@@ -363,13 +365,17 @@ enum Action {
     SavePorts(u16, u16),
     SaveRules(String, ProfileRules),
     LoadRules(String),
-    Theme(bool),
+    Appearance(ThemeMode),
+    TextScale(u16),
+    TraySpeed(bool),
     DnsOverride(bool),
     Ipv6(bool),
     Autostart(bool),
     DelayInterval(u32),
     NodeSort(NodeSort),
     Import(String, String),
+    EditProfile(String, String, String),
+    RefreshTray,
     Activate(String),
     UpdateProfile(String),
     DeleteProfile(String),
@@ -398,6 +404,7 @@ struct Reply {
     geo_status: String,
     autostart: bool,
     exit_after_start: bool,
+    tray_nodes: Option<Option<tray::Nodes>>,
 }
 
 // The message can be cloned; only one receiver may consume the owned installer.
@@ -405,6 +412,25 @@ type DownloadResult = Arc<std::sync::Mutex<Option<Result<update::Downloaded, Str
 
 #[derive(Debug, Clone)]
 enum Message {
+    Key(iced::keyboard::Event),
+    SystemTheme(iced::theme::Mode),
+    Appearance(ThemeMode),
+    TextScale(u16),
+    TraySpeed(bool),
+    Confirm,
+    Noop,
+    CancelConfirm,
+    ConnectionDetail(String),
+    CloseConnectionDetail,
+    Copy(String),
+    EditProfile(String),
+    EditName(String),
+    EditSource(String),
+    SaveProfileEdit,
+    CloseProfileEdit,
+    ImportProfile,
+    PickFile(bool),
+    FilePicked(bool, Result<Option<std::path::PathBuf>, String>),
     Claude(claude_view::Event),
     RestartCore,
     CoreReady(Result<CoreHandle, String>),
@@ -452,7 +478,6 @@ enum Message {
     WindowStateSaved(Result<(), String>),
     TestUrl(String),
     DnsHost(String),
-    Dark(bool),
     Elevated(Result<(), String>),
     Action(Action),
     Finished(Box<Reply>),
@@ -467,7 +492,7 @@ enum Message {
     ReleaseOpened(Result<(), String>),
     Tick,
     #[cfg(target_os = "macos")]
-    MacTrayPumped(Result<bool, String>),
+    MacTrayPumped(Result<mac_desktop::Events, String>),
     #[cfg(all(target_os = "macos", feature = "ui-preview"))]
     MacWindowChecked(u8, serde_json::Value),
     ToggleGroup(String),
@@ -494,6 +519,12 @@ enum Message {
 }
 
 struct App {
+    confirmation: Option<desktop_view::Confirmation>,
+    profile_editor: Option<desktop_view::ProfileEditor>,
+    connection_detail: Option<String>,
+    picking_file: bool,
+    picking_profile: Option<String>,
+    system_dark: bool,
     engine: Option<Arc<Mutex<Engine>>>,
     page: Page,
     settings: Settings,
@@ -568,6 +599,16 @@ struct App {
 }
 
 async fn execute(engine: Arc<Mutex<Engine>>, action: Action, scope: Scope, header: bool) -> Reply {
+    let refresh_tray = matches!(
+        action,
+        Action::RefreshTray
+            | Action::Start
+            | Action::Activate(_)
+            | Action::DeleteProfile(_)
+            | Action::Mode(_)
+            | Action::Select(..)
+            | Action::SaveRules(..)
+    );
     let start_requested = matches!(action, Action::Start);
     let include_profiles = !matches!(action, Action::Refresh | Action::LoadRules(_));
     let rule_id = match &action {
@@ -580,6 +621,7 @@ async fn execute(engine: Arc<Mutex<Engine>>, action: Action, scope: Scope, heade
     let result: anyhow::Result<String> = async {
         match action {
             Action::Refresh => Ok(String::new()),
+            Action::RefreshTray => Ok(String::new()),
             Action::Start => {
                 if let Some(path) = elevation_path().filter(|path| path.exists()) {
                     engine.finish_elevation(&path).await?;
@@ -603,13 +645,29 @@ async fn execute(engine: Arc<Mutex<Engine>>, action: Action, scope: Scope, heade
                 }
                 .into())
             }
-            Action::Theme(dark) => {
+            Action::Appearance(theme_mode) => {
                 let settings = Settings {
-                    dark,
+                    theme_mode: Some(theme_mode),
                     ..engine.settings.clone()
                 };
                 engine.save_settings(settings).await?;
                 Ok("外观已自动保存".into())
+            }
+            Action::TextScale(text_scale) => {
+                let settings = Settings {
+                    text_scale,
+                    ..engine.settings.clone()
+                };
+                engine.save_settings(settings).await?;
+                Ok("字号已自动保存".into())
+            }
+            Action::TraySpeed(tray_speed) => {
+                let settings = Settings {
+                    tray_speed,
+                    ..engine.settings.clone()
+                };
+                engine.save_settings(settings).await?;
+                Ok("托盘显示已保存".into())
             }
             Action::DnsOverride(dns_override) => {
                 let settings = Settings {
@@ -663,6 +721,10 @@ async fn execute(engine: Arc<Mutex<Engine>>, action: Action, scope: Scope, heade
             Action::Import(name, source) => {
                 engine.import(name, source, None).await?;
                 Ok("配置已导入".into())
+            }
+            Action::EditProfile(id, name, source) => {
+                engine.edit_profile(&id, &name, &source)?;
+                Ok("订阅信息已保存；更改来源后，点击更新可重新载入配置。".into())
             }
             Action::Activate(id) => {
                 engine.activate(id).await?;
@@ -748,7 +810,13 @@ async fn execute(engine: Arc<Mutex<Engine>>, action: Action, scope: Scope, heade
     if let Err(error) = &notice {
         engine.record_failure(error);
     }
+    let tray_nodes = if refresh_tray {
+        Some(engine.tray_nodes().await.unwrap_or(None))
+    } else {
+        None
+    };
     Reply {
+        tray_nodes,
         scope,
         start_requested,
         settings: engine.settings.clone(),
@@ -821,6 +889,12 @@ impl App {
         };
         let core_failure = engine.is_none().then(|| notice.clone());
         let mut app = Self {
+            confirmation: None,
+            profile_editor: None,
+            connection_detail: None,
+            picking_file: false,
+            picking_profile: None,
+            system_dark: settings.dark,
             rule_state: rules_view::State::default(),
             claude: claude_view::State::default(),
             node_sort: settings.node_sort,
@@ -918,12 +992,18 @@ impl App {
                 Task::none()
             },
             update_task,
+            iced::system::theme().map(Message::SystemTheme),
         ]);
         (app, task)
     }
 
     fn scaled(&self, size: u16) -> f32 {
-        if size <= 10 { 13.0 } else { size as f32 * 1.25 }
+        (if size <= 10 { 13.0 } else { size as f32 * 1.25 }) * f32::from(self.settings.text_scale)
+            / 100.0
+    }
+
+    fn font_size(&self, size: u16) -> f32 {
+        f32::from(size) * f32::from(self.settings.text_scale) / 100.0
     }
 
     fn label<'a>(&self, value: impl text::IntoFragment<'a>) -> iced::widget::Text<'a> {
@@ -949,10 +1029,12 @@ impl App {
         )
     }
     fn caption<'a>(&self, value: impl text::IntoFragment<'a>) -> iced::widget::Text<'a> {
-        self.label(value).size(13).color(self.secondary())
+        self.label(value)
+            .size(self.font_size(13))
+            .color(self.secondary())
     }
     fn title<'a>(&self, value: impl text::IntoFragment<'a>) -> iced::widget::Text<'a> {
-        self.label(value).size(17)
+        self.label(value).size(self.font_size(17))
     }
     fn ready_to_retry(&self) -> bool {
         !self.snapshot.running
@@ -972,7 +1054,7 @@ impl App {
     ) -> Element<'a, Message> {
         let caption = self
             .label(selected.to_string())
-            .size(13)
+            .size(self.font_size(13))
             .wrapping(text::Wrapping::None);
         let field = pick_list(options, Some(selected), on_select)
             .font(typography::ENGLISH_FONT)
@@ -1028,6 +1110,23 @@ impl App {
             Subscription::none()
         };
         Subscription::batch([
+            iced::system::theme_changes().map(Message::SystemTheme),
+            desktop_view::theme_subscription(self.appearance_mode() == ThemeMode::System),
+            iced::event::listen_with(|event, status, _| {
+                if let iced::Event::Keyboard(ref key_event) = event
+                    && let iced::keyboard::Event::KeyPressed { key, modifiers, .. } = key_event
+                    && (matches!(
+                        key,
+                        iced::keyboard::Key::Named(iced::keyboard::key::Named::Escape)
+                    ) || (modifiers.command()
+                        && matches!(key, iced::keyboard::Key::Character(c) if c.eq_ignore_ascii_case("f") || (cfg!(target_os = "macos") && c.eq_ignore_ascii_case("q"))))
+                        || status == iced::event::Status::Ignored)
+                {
+                    Some(Message::Key(key_event.clone()))
+                } else {
+                    None
+                }
+            }),
             polling,
             iced::time::every(update::CHECK_INTERVAL).map(|_| Message::CheckUpdate),
             if self.settings.delay_interval_minutes == 0 {
@@ -1153,13 +1252,38 @@ impl App {
     }
 
     fn update_message(&mut self, message: Message) -> Task<Message> {
+        if let Some(task) = self.desktop_message(&message) {
+            return task;
+        }
         match message {
+            Message::Noop => {}
+            Message::Key(_)
+            | Message::SystemTheme(_)
+            | Message::Appearance(_)
+            | Message::TextScale(_)
+            | Message::TraySpeed(_)
+            | Message::Confirm
+            | Message::CancelConfirm
+            | Message::ConnectionDetail(_)
+            | Message::CloseConnectionDetail
+            | Message::Copy(_)
+            | Message::EditProfile(_)
+            | Message::EditName(_)
+            | Message::EditSource(_)
+            | Message::SaveProfileEdit
+            | Message::CloseProfileEdit
+            | Message::ImportProfile
+            | Message::PickFile(_)
+            | Message::FilePicked(..) => {}
             Message::Claude(event) => return self.claude_event(event),
             #[cfg(target_os = "macos")]
             Message::MacTrayPumped(result) => match result {
-                Ok(reopen) => {
+                Ok(events) => {
                     self.mac_reopen_ready = true;
-                    if reopen && !self.exiting {
+                    if events.quit && !self.exiting {
+                        return self.request_exit();
+                    }
+                    if events.reopen && !self.exiting {
                         return iced::window::latest().map(Message::ShowWindow);
                     }
                 }
@@ -1360,6 +1484,7 @@ impl App {
                     self.rule_state.release_document();
                 }
                 self.page = page;
+                self.connection_detail = None;
                 self.query.clear();
                 self.list_offset = 0;
                 self.snapshot.retain_scope(page.scope());
@@ -1633,9 +1758,8 @@ impl App {
             }
             Message::TestUrl(value) => self.test_url = value,
             Message::DnsHost(value) => self.dns_host = value,
-            Message::Dark(value) => {
-                self.dark = value;
-                return self.dispatch(Action::Theme(value));
+            Message::Action(Action::DeleteProfile(id)) => {
+                return self.confirm_delete(id);
             }
             Message::Action(Action::ProxyMode(ProxyMode::Tun))
                 if cfg!(windows) && !platform::is_elevated() =>
@@ -1925,7 +2049,7 @@ impl App {
                 }
                 match command {
                     tray::Command::Show => return iced::window::latest().map(Message::ShowWindow),
-                    tray::Command::Exit => return self.exit(),
+                    tray::Command::Exit => return self.request_exit(),
                     tray::Command::Rule => return self.dispatch(Action::Mode("rule".into())),
                     tray::Command::Global => return self.dispatch(Action::Mode("global".into())),
                     tray::Command::Direct => return self.dispatch(Action::Mode("direct".into())),
@@ -1939,6 +2063,10 @@ impl App {
                     }
                     tray::Command::ProxyOff => {
                         return self.dispatch(Action::ProxyMode(ProxyMode::Off));
+                    }
+                    tray::Command::RefreshNodes => return self.dispatch(Action::RefreshTray),
+                    tray::Command::Select(group, node) => {
+                        return self.dispatch(Action::Select(group, node));
                     }
                 }
             }
@@ -1967,6 +2095,7 @@ impl App {
                         match result {
                             Ok(tray) => {
                                 tray.update(&self.snapshot);
+                                tray.speed(&self.snapshot, self.settings.tray_speed);
                                 self.tray = Some(tray);
                                 self.tray_close_requested = false;
                             }
@@ -2006,7 +2135,7 @@ impl App {
                 if platform::show_requested() {
                     return iced::window::latest().map(Message::ShowWindow);
                 }
-                if !self.visible {
+                if !self.visible && !self.settings.tray_speed {
                     self.hidden_ticks = (self.hidden_ticks + 1) % 5;
                     if self.hidden_ticks != 0 {
                         return Task::none();
@@ -2049,6 +2178,12 @@ impl App {
                     }
                 }
                 self.settings = reply.settings;
+                self.sync_appearance();
+                if let Some(nodes) = reply.tray_nodes
+                    && let Some(tray) = &self.tray
+                {
+                    tray.nodes(nodes);
+                }
                 if let Some(profiles) = reply.profiles {
                     self.profiles = profiles;
                     if self
@@ -2140,9 +2275,13 @@ impl App {
                 }
                 if let Some(tray) = &self.tray {
                     tray.update(&self.snapshot);
+                    tray.speed(&self.snapshot, self.settings.tray_speed);
                 }
                 match reply.notice {
                     Ok(notice) if !notice.is_empty() => {
+                        if notice.starts_with("订阅信息已保存") {
+                            self.profile_editor = None;
+                        }
                         self.notice = notice;
                         self.error = false;
                         self.notice_visible = true;
@@ -2482,7 +2621,7 @@ impl App {
                         image(ui_style::nav_icon(index, self.dark))
                             .width(18)
                             .height(18),
-                        self.label(page.name()).size(15)
+                        self.label(page.name()).size(self.font_size(15))
                     ]
                     .spacing(9),
                 )
@@ -2496,14 +2635,17 @@ impl App {
                 .on_press(Message::Navigate(page)),
             );
         }
-        nav = nav
-            .push(Space::new().height(Length::Fill))
-            .push(self.caption(clash_of_rust::VERSION));
-        let sidebar = container(nav)
-            .width(168)
-            .height(Length::Fill)
-            .padding(12)
-            .style(sidebar_panel);
+        let sidebar = container(
+            column![
+                scrollable(nav).height(Length::Fill),
+                self.caption(clash_of_rust::VERSION)
+            ]
+            .spacing(12),
+        )
+        .width(168)
+        .height(Length::Fill)
+        .padding(12)
+        .style(sidebar_panel);
         let status = if self.exiting {
             "正在退出…"
         } else if self.working || self.elevating {
@@ -2543,13 +2685,13 @@ impl App {
         };
         let header = aligned_row![
             column![
-                self.label(page_title).size(24),
+                self.label(page_title).size(self.font_size(24)),
                 self.caption(page_description)
             ]
             .spacing(3),
             Space::new().width(Length::Fill),
             column![
-                container(self.label(status).size(13))
+                container(self.label(status).size(self.font_size(13)))
                     .padding([5, 9])
                     .style(move |theme: &Theme| ui_style::badge(theme, tone)),
                 aligned_row![
@@ -2562,7 +2704,7 @@ impl App {
                         .padding([3, 3])
                         .style(rounded_text)
                         .on_press(Message::Navigate(Page::Profiles)),
-                        container(self.label(active).size(13))
+                        container(self.label(active).size(self.font_size(13)))
                             .padding(8)
                             .style(panel),
                         iced::widget::tooltip::Position::Bottom
@@ -2594,9 +2736,9 @@ impl App {
                                         .as_deref()
                                         .unwrap_or("节点状态尚未确认")
                                 )
-                                .size(13),
+                                .size(self.font_size(13)),
                                 self.caption("规则模式显示默认匹配线路；各连接可能使用不同节点。")
-                                    .size(11)
+                                    .size(self.font_size(11))
                             ]
                             .spacing(5)
                         )
@@ -2633,7 +2775,7 @@ impl App {
                             }),
                             page_scroll(
                                 self.label(reason)
-                                    .size(13)
+                                    .size(self.font_size(13))
                                     .wrapping(text::Wrapping::WordOrGlyph)
                             )
                             .height(36)
@@ -2684,11 +2826,13 @@ impl App {
             body = body.push(
                 container(
                     aligned_row![
-                        self.label(notice).size(13).width(Length::Fill),
+                        self.label(notice)
+                            .size(self.font_size(13))
+                            .width(Length::Fill),
                         if self.updates.install_pending || self.updates.installing.is_some() {
                             Element::from(Space::new().width(0))
                         } else {
-                            button(self.label("关闭").size(13))
+                            button(self.label("关闭").size(self.font_size(13)))
                                 .style(rounded_text)
                                 .on_press(Message::DismissNotice)
                                 .into()
@@ -2768,7 +2912,7 @@ impl App {
             Page::Claude => self.claude_view(),
             Page::Settings => self.settings_view(),
         };
-        aligned_row![
+        let page: Element<'_, Message> = aligned_row![
             sidebar,
             container(body.push(content))
                 .padding(if compact { 10 } else { 16 })
@@ -2776,7 +2920,8 @@ impl App {
                 .height(Length::Fill)
         ]
         .height(Length::Fill)
-        .into()
+        .into();
+        self.desktop_overlay(page)
     }
 
     fn card<'a>(&self, title: &'a str, value: String, detail: &'a str) -> Element<'a, Message> {
@@ -3125,10 +3270,10 @@ impl App {
                     column![
                         aligned_row![
                             self.label(node)
-                                .size(15)
+                                .size(self.font_size(15))
                                 .wrapping(text::Wrapping::WordOrGlyph)
                                 .width(Length::Fill),
-                            self.label(label).size(13).color(
+                            self.label(label).size(self.font_size(13)).color(
                                 delay
                                     .map(|d| self.latency_color(d))
                                     .unwrap_or(self.secondary())
@@ -3143,7 +3288,7 @@ impl App {
                             } else {
                                 "选择节点"
                             })
-                            .size(13)
+                            .size(self.font_size(13))
                             .color(if selected {
                                 self.accent()
                             } else {
@@ -3266,7 +3411,7 @@ impl App {
             statuses = statuses.push(
                 button(
                     self.label(format!("{status} {count}"))
-                        .size(13)
+                        .size(self.font_size(13))
                         .color(self.site_status_color(status)),
                 )
                 .padding([5, 8])
@@ -3418,7 +3563,7 @@ impl App {
                     };
                     states = states.push(
                         self.label(format!("{short} {count}"))
-                            .size(13)
+                            .size(self.font_size(13))
                             .color(self.site_status_color(status)),
                     );
                 }
@@ -3716,14 +3861,16 @@ impl App {
                 self.caption("配置名称"),
                 text_input("例如：我的订阅", &self.profile_name)
                     .style(rounded_input)
-                    .size(15)
+                    .size(self.font_size(15))
                     .on_input(Message::ProfileName)
+                    .on_submit(Message::ImportProfile)
                     .padding(9),
                 self.caption("订阅链接或本地 YAML 路径"),
                 text_input("https://订阅地址 或 本地文件完整路径", &self.profile_source)
                     .style(rounded_input)
-                    .size(15)
+                    .size(self.font_size(15))
                     .on_input(Message::ProfileSource)
+                    .on_submit(Message::ImportProfile)
                     .padding(9),
                 aligned_row![
                     self.action(
@@ -3734,6 +3881,13 @@ impl App {
                         ),
                         !self.profile_source.trim().is_empty()
                     ),
+                    button(self.label("选择 YAML 文件"))
+                        .padding([7, 12])
+                        .style(rounded_secondary)
+                        .on_press_maybe(
+                            (!self.picking_file && !self.working && !self.exiting)
+                                .then_some(Message::PickFile(false))
+                        ),
                     self.action("打开配置目录", Action::OpenProfiles, true)
                 ]
                 .spacing(10)
@@ -3748,7 +3902,7 @@ impl App {
             let active = self.settings.active_profile.as_ref() == Some(&profile.id);
             let remote =
                 profile.source.starts_with("http://") || profile.source.starts_with("https://");
-            let update: Element<'_, Message> = if remote {
+            let update: Element<'_, Message> = if !profile.is_default() {
                 self.action("更新", Action::UpdateProfile(profile.id.clone()), true)
             } else {
                 Space::new().width(0).into()
@@ -3768,7 +3922,7 @@ impl App {
                         aligned_row![
                             self.title(&profile.name).width(Length::Fill),
                             if active {
-                                container(self.label("● 使用中").size(13))
+                                container(self.label("● 使用中").size(self.font_size(13)))
                                     .padding([4, 8])
                                     .style(|theme: &Theme| {
                                         ui_style::badge(theme, ui_style::Tone::Success)
@@ -3784,9 +3938,25 @@ impl App {
                             ),
                             update,
                             if profile.is_default() {
-                                Space::new().width(0).into()
+                                Element::from(Space::new().width(0))
                             } else {
-                                self.action("删除", Action::DeleteProfile(profile.id.clone()), true)
+                                aligned_row![
+                                    button(self.label("编辑"))
+                                        .padding([7, 12])
+                                        .style(rounded_secondary)
+                                        .on_press_maybe(
+                                            (!self.working && !self.exiting).then_some(
+                                                Message::EditProfile(profile.id.clone())
+                                            )
+                                        ),
+                                    self.action(
+                                        "删除",
+                                        Action::DeleteProfile(profile.id.clone()),
+                                        true
+                                    )
+                                ]
+                                .spacing(8)
+                                .into()
                             }
                         ]
                         .spacing(8),
@@ -3796,7 +3966,7 @@ impl App {
                         ))
                         .wrapping(text::Wrapping::WordOrGlyph),
                         self.label(presentation::subscription_usage(profile.usage.as_deref()))
-                            .size(14)
+                            .size(self.font_size(14))
                     ]
                     .spacing(10),
                 )
@@ -3837,7 +4007,7 @@ impl App {
         };
         button(
             self.label(format!("{label}{arrow}"))
-                .size(12)
+                .size(self.font_size(12))
                 .color(if selected {
                     self.theme().palette().text
                 } else {
@@ -3894,60 +4064,69 @@ impl App {
                 value.map_or_else(|| "—".into(), |value| format!("{}/s", bytes(value)))
             };
             list = list.push(
-                container(
-                    aligned_row![
-                        column![
-                            self.label(format!(
-                                "{}:{}",
-                                connection::name(connection),
-                                m.destination_port
-                            ))
-                            .size(14)
-                            .wrapping(text::Wrapping::WordOrGlyph),
-                            self.caption(m.network.to_string())
+                iced::widget::mouse_area(
+                    container(
+                        aligned_row![
+                            column![
+                                button(
+                                    self.label(format!(
+                                        "{}:{}",
+                                        connection::name(connection),
+                                        m.destination_port
+                                    ))
+                                    .size(self.font_size(14))
+                                    .wrapping(text::Wrapping::WordOrGlyph)
+                                )
+                                .style(rounded_text)
+                                .padding(0)
+                                .on_press(Message::ConnectionDetail(connection.id.to_string())),
+                                self.caption(m.network.to_string())
+                            ]
+                            .spacing(4)
+                            .width(Length::FillPortion(2)),
+                            column![
+                                self.label(if connection.rule_payload.is_empty() {
+                                    connection.rule.to_string()
+                                } else {
+                                    format!("{} ({})", connection.rule, connection.rule_payload)
+                                })
+                                .size(self.font_size(13))
+                                .wrapping(text::Wrapping::WordOrGlyph),
+                                self.caption(connection.chains.join(" → "))
+                                    .wrapping(text::Wrapping::WordOrGlyph)
+                            ]
+                            .spacing(4)
+                            .width(Length::FillPortion(2)),
+                            column![
+                                self.label(rate(connection.rates.map(|r| r.upload)))
+                                    .size(self.font_size(13)),
+                                self.caption(bytes(connection.upload))
+                            ]
+                            .spacing(4)
+                            .width(96),
+                            column![
+                                self.label(rate(connection.rates.map(|r| r.download)))
+                                    .size(self.font_size(13)),
+                                self.caption(bytes(connection.download))
+                            ]
+                            .spacing(4)
+                            .width(96),
+                            self.caption(presentation::date_text(&connection.start))
+                                .width(86),
+                            self.action(
+                                "关闭",
+                                Action::Close(connection.id.to_string()),
+                                self.snapshot.running
+                            )
                         ]
-                        .spacing(4)
-                        .width(Length::FillPortion(2)),
-                        column![
-                            self.label(if connection.rule_payload.is_empty() {
-                                connection.rule.to_string()
-                            } else {
-                                format!("{} ({})", connection.rule, connection.rule_payload)
-                            })
-                            .size(13)
-                            .wrapping(text::Wrapping::WordOrGlyph),
-                            self.caption(connection.chains.join(" → "))
-                                .wrapping(text::Wrapping::WordOrGlyph)
-                        ]
-                        .spacing(4)
-                        .width(Length::FillPortion(2)),
-                        column![
-                            self.label(rate(connection.rates.map(|r| r.upload)))
-                                .size(13),
-                            self.caption(bytes(connection.upload))
-                        ]
-                        .spacing(4)
-                        .width(96),
-                        column![
-                            self.label(rate(connection.rates.map(|r| r.download)))
-                                .size(13),
-                            self.caption(bytes(connection.download))
-                        ]
-                        .spacing(4)
-                        .width(96),
-                        self.caption(presentation::date_text(&connection.start))
-                            .width(86),
-                        self.action(
-                            "关闭",
-                            Action::Close(connection.id.to_string()),
-                            self.snapshot.running
-                        )
-                    ]
-                    .spacing(8),
+                        .spacing(8),
+                    )
+                    .padding(10)
+                    .width(Length::Fill)
+                    .style(move |theme: &Theme| ui_style::table_row(theme, row_index % 2 == 1)),
                 )
-                .padding(10)
-                .width(Length::Fill)
-                .style(move |theme: &Theme| ui_style::table_row(theme, row_index % 2 == 1)),
+                .on_press(Message::ConnectionDetail(connection.id.to_string()))
+                .interaction(iced::mouse::Interaction::Pointer),
             );
         }
         if total == 0 {
@@ -3983,7 +4162,7 @@ impl App {
                     .width(96),
                     container(self.connection_heading("开始时间", ConnectionField::Start))
                         .width(86),
-                    self.label("操作").size(12).width(54)
+                    self.label("操作").size(self.font_size(12)).width(54)
                 ]
                 .spacing(8)
                 .into()
@@ -4071,12 +4250,12 @@ impl App {
             list = list.push(
                 container(
                     aligned_row![
-                        container(self.label(level).size(12))
+                        container(self.label(level).size(self.font_size(12)))
                             .padding([4, 6])
                             .width(68)
                             .style(move |theme: &Theme| ui_style::badge(theme, tone)),
                         self.label(line.as_ref())
-                            .size(13)
+                            .size(self.font_size(13))
                             .wrapping(text::Wrapping::WordOrGlyph)
                             .width(Length::Fill)
                     ]
@@ -4103,8 +4282,8 @@ impl App {
             self.caption("最新记录在上方 · 最多保留 500 条，显示最近匹配的 150 条"),
             self.table_header(
                 aligned_row![
-                    self.label("级别").size(13).width(68),
-                    self.label("日志内容").size(13)
+                    self.label("级别").size(self.font_size(13)).width(68),
+                    self.label("日志内容").size(self.font_size(13))
                 ]
                 .spacing(10)
                 .into()
@@ -4125,7 +4304,7 @@ impl App {
                 self.caption("测试地址"),
                 text_input("https://example.com", &self.test_url)
                     .style(rounded_input)
-                    .size(15)
+                    .size(self.font_size(15))
                     .on_input(Message::TestUrl)
                     .padding(9),
                 aligned_row![
@@ -4152,7 +4331,7 @@ impl App {
                 aligned_row![
                     text_input("github.com", &self.dns_host)
                         .style(rounded_input)
-                        .size(15)
+                        .size(self.font_size(15))
                         .on_input(Message::DnsHost)
                         .padding(9),
                     button(self.label("解析域名"))
@@ -4178,18 +4357,21 @@ impl App {
             results = results.push(
                 container(
                     aligned_row![
-                        container(self.label(if failed { "失败" } else { "完成" }).size(13))
-                            .padding([4, 8])
-                            .style(move |theme: &Theme| ui_style::badge(
-                                theme,
-                                if failed {
-                                    ui_style::Tone::Danger
-                                } else {
-                                    ui_style::Tone::Success
-                                }
-                            )),
+                        container(
+                            self.label(if failed { "失败" } else { "完成" })
+                                .size(self.font_size(13))
+                        )
+                        .padding([4, 8])
+                        .style(move |theme: &Theme| ui_style::badge(
+                            theme,
+                            if failed {
+                                ui_style::Tone::Danger
+                            } else {
+                                ui_style::Tone::Success
+                            }
+                        )),
                         self.label(result)
-                            .size(14)
+                            .size(self.font_size(14))
                             .wrapping(text::Wrapping::WordOrGlyph)
                             .width(Length::Fill)
                     ]
@@ -4281,24 +4463,28 @@ impl App {
         let appearance = column![
             self.title("外观"),
             aligned_row![
-                button(self.label("深色").size(self.scaled(12)))
-                    .padding([7, 16])
-                    .style(if self.dark {
-                        rounded_primary
-                    } else {
-                        rounded_secondary
-                    })
-                    .on_press(Message::Dark(true)),
-                button(self.label("浅色").size(self.scaled(12)))
-                    .padding([7, 16])
-                    .style(if self.dark {
-                        rounded_secondary
-                    } else {
-                        rounded_primary
-                    })
-                    .on_press(Message::Dark(false))
+                self.label("主题"),
+                self.selection(
+                    [ThemeMode::System, ThemeMode::Light, ThemeMode::Dark].as_slice(),
+                    self.appearance_mode(),
+                    Message::Appearance,
+                    160
+                ),
+                self.label("字号"),
+                self.selection(
+                    [80u16, 90, 100, 110, 125, 150].as_slice(),
+                    self.settings.text_scale,
+                    Message::TextScale,
+                    100
+                ),
+                self.label("%")
             ]
             .spacing(12),
+            self.caption("字号独立于窗口尺寸与系统显示缩放。"),
+            checkbox(self.settings.tray_speed)
+                .label("托盘显示上传与下载速度")
+                .text_size(self.scaled(12))
+                .on_toggle_maybe((!self.working && !self.exiting).then_some(Message::TraySpeed)),
             aligned_row![
                 self.label("窗口大小"),
                 text_input("宽", &self.window_width)
@@ -4357,15 +4543,15 @@ impl App {
                     .padding(16)
                     .width(Length::Fill)
                     .style(panel),
+                container(appearance)
+                    .padding(16)
+                    .width(Length::Fill)
+                    .style(panel),
                 container(ports)
                     .padding(16)
                     .width(Length::Fill)
                     .style(panel),
                 container(network)
-                    .padding(16)
-                    .width(Length::Fill)
-                    .style(panel),
-                container(appearance)
                     .padding(16)
                     .width(Length::Fill)
                     .style(panel),
@@ -4878,6 +5064,7 @@ mod async_state_tests {
             geo_status: String::new(),
             autostart: false,
             exit_after_start: false,
+            tray_nodes: None,
         })));
         assert!(app.core_failure.is_none());
         let _ = app.update(Message::RestartCore);
@@ -4900,6 +5087,7 @@ mod async_state_tests {
             geo_status: String::new(),
             autostart: false,
             exit_after_start: false,
+            tray_nodes: None,
         })));
         assert_eq!(app.core_failure.as_deref(), Some("内核程序被系统阻止"));
         assert!(app.notice.contains("开机启动"));
@@ -4917,6 +5105,7 @@ mod async_state_tests {
             geo_status: String::new(),
             autostart: false,
             exit_after_start: false,
+            tray_nodes: None,
         })));
         assert_eq!(
             app.core_failure.as_deref(),
