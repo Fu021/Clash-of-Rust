@@ -1,4 +1,4 @@
-//! Native tray lives on its own event thread; only commands cross into the GUI.
+//! Native tray uses AppKit's main thread on macOS, its own thread elsewhere.
 use std::{
     sync::{OnceLock, mpsc},
     time::{Duration, Instant},
@@ -81,14 +81,19 @@ impl Startup {
     }
 
     #[cfg(target_os = "macos")]
-    pub fn new(_timeout: Duration) -> Self {
+    pub fn new(timeout: Duration) -> Self {
         let (sender, ready) = mpsc::channel();
-        let (cancel, _cancelled) = mpsc::channel();
-        MAC_PENDING.lock().unwrap().push(sender);
+        let (cancel, cancelled) = mpsc::channel();
+        let started = Instant::now();
+        MAC_PENDING.lock().unwrap().push(MacPending {
+            ready: sender,
+            cancelled,
+            deadline: started + timeout,
+        });
         Self {
             ready,
             cancel,
-            started: Instant::now(),
+            started,
         }
     }
 
@@ -382,21 +387,31 @@ fn create_native(events: &Events) -> anyhow::Result<(tray_icon::TrayIcon, Checks
         tun,
         off,
     };
-    let icon = TrayIconBuilder::new()
-        .with_title("Clash of Rust")
+    let builder = TrayIconBuilder::new()
         .with_tooltip("Clash of Rust")
         .with_icon(tray_icon(crate::icons::Kind::App))
         .with_menu(Box::new(menu))
-        .with_menu_on_left_click(false)
-        .build()?;
+        .with_menu_on_left_click(false);
+    // A text title beside the icon wastes scarce menu-bar space on notched Macs.
+    #[cfg(not(target_os = "macos"))]
+    let builder = builder.with_title("Clash of Rust");
+    let icon = builder.build()?;
+    #[cfg(target_os = "macos")]
+    if let Some(item) = icon.ns_status_item() {
+        item.setVisible(true);
+    }
     *events.commands.lock().unwrap() = commands;
     Ok((icon, checks))
 }
 
 #[cfg(target_os = "macos")]
-type Ready = mpsc::Sender<Result<Guard, String>>;
+struct MacPending {
+    ready: mpsc::Sender<Result<Guard, String>>,
+    cancelled: mpsc::Receiver<()>,
+    deadline: Instant,
+}
 #[cfg(target_os = "macos")]
-static MAC_PENDING: std::sync::Mutex<Vec<Ready>> = std::sync::Mutex::new(Vec::new());
+static MAC_PENDING: std::sync::Mutex<Vec<MacPending>> = std::sync::Mutex::new(Vec::new());
 #[cfg(target_os = "macos")]
 struct MacNative {
     icon: tray_icon::TrayIcon,
@@ -417,10 +432,6 @@ pub fn pump() {
         unsafe { libc::pthread_main_np() } != 0,
         "AppKit tray must stay on the main thread"
     );
-    for pending in MAC_PENDING.lock().unwrap().drain(..) {
-        let result = start().map_err(|error| error.to_string());
-        let _ = pending.send(result);
-    }
     MAC_NATIVE.with_borrow_mut(|native| {
         if let Some(value) = native {
             if !matches!(value.stop.try_recv(), Err(mpsc::TryRecvError::Empty)) {
@@ -432,12 +443,32 @@ pub fn pump() {
             }
         }
     });
+    MAC_PENDING.lock().unwrap().retain(|pending| {
+        if !matches!(pending.cancelled.try_recv(), Err(mpsc::TryRecvError::Empty)) {
+            return false;
+        }
+        match start() {
+            Ok(guard) => {
+                let _ = pending.ready.send(Ok(guard));
+                false
+            }
+            Err(error) if Instant::now() >= pending.deadline => {
+                let _ = pending.ready.send(Err(error.to_string()));
+                false
+            }
+            Err(_) => true,
+        }
+    });
 }
 #[cfg(target_os = "macos")]
 pub fn start() -> anyhow::Result<Guard> {
     anyhow::ensure!(
         unsafe { libc::pthread_main_np() } != 0,
         "macOS 托盘只能在主线程创建"
+    );
+    anyhow::ensure!(
+        MAC_NATIVE.with_borrow(Option::is_none),
+        "macOS 托盘已经创建"
     );
     let (icon, checks) = create_native(events())?;
     let (updates, receiver) = watch::channel(State::default());
@@ -461,10 +492,33 @@ pub fn start() -> anyhow::Result<Guard> {
 }
 
 #[cfg(all(target_os = "macos", feature = "ui-preview"))]
+pub fn native_present() -> bool {
+    assert!(unsafe { libc::pthread_main_np() } != 0);
+    MAC_NATIVE.with_borrow(Option::is_some)
+}
+
+#[cfg(all(target_os = "macos", feature = "ui-preview"))]
 pub fn verify_native_state() {
     assert!(unsafe { libc::pthread_main_np() } != 0);
     MAC_NATIVE.with_borrow(|native| {
         let native = native.as_ref().expect("native tray must be present");
+        let mtm = objc2_foundation::MainThreadMarker::new().unwrap();
+        let item = native.icon.ns_status_item().expect("native status item");
+        let button = item.button(mtm).expect("native status button");
+        assert!(item.isVisible(), "status item must be visible");
+        assert!(
+            button.title().is_empty(),
+            "menu bar must show only the icon"
+        );
+        let image = button.image().expect("status item must contain artwork");
+        assert!(image.size().width > 0.0 && image.size().height > 0.0);
+        assert!(image.size().width <= 22.0 && image.size().height <= 22.0);
+        let rect = native
+            .icon
+            .rect()
+            .expect("status button must have a window");
+        assert!(rect.size.width > 0.0 && rect.size.width <= 40.0);
+        assert!(rect.size.height > 0.0);
         let state = native.updates.borrow();
         for (item, mode) in &native.checks.modes {
             assert_eq!(item.is_checked(), state.running && state.mode == *mode);

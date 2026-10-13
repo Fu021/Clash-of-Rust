@@ -60,6 +60,9 @@ impl MacFlow {
         .unwrap();
     }
     fn update(&mut self, message: Message) -> Task<Message> {
+        if self.scenario == "window-lifecycle" {
+            return self.window_lifecycle(message);
+        }
         let finished = matches!(&message, Message::Finished(_));
         // Refreshes also produce Finished messages and can complete while an
         // action is queued. Only an action's nonempty notice/error confirms it.
@@ -202,6 +205,161 @@ impl MacFlow {
         }
         task
     }
+
+    fn window_lifecycle(&mut self, message: Message) -> Task<Message> {
+        let showing = matches!(message, Message::ShowWindow(Some(_)));
+        let checkpoint = match &message {
+            Message::MacWindowChecked(stage, value) => Some((*stage, value.clone())),
+            _ => None,
+        };
+        let task = self.app.update(message);
+        if self.phase == 0
+            && self.app.snapshot.running
+            && self.app.tray.is_some()
+            && self.app.mac_reopen_ready
+        {
+            self.phase = 1;
+            return Task::batch([task, Self::check_window(1)]);
+        }
+        if let Some((stage, value)) = checkpoint {
+            self.record(value.clone());
+            match stage {
+                1 => {
+                    assert_eq!(value["visible"], true, "initial native window");
+                    return Task::batch([
+                        task,
+                        iced::window::latest().and_then(|id| {
+                            iced::window::run(id, |_| {
+                                // Real red-close-button action reaches winit's
+                                // CloseRequested callback and App::update.
+                                mac_desktop::native_window().performClose(None);
+                                Message::Tick
+                            })
+                        }),
+                    ]);
+                }
+                2 => {
+                    assert_eq!(value["visible"], false, "close must hide the native window");
+                    assert!(!self.app.visible && !self.app.exiting);
+                    return Task::batch([task, Self::dock_reopen(false)]);
+                }
+                3 => {
+                    assert_eq!(
+                        value["visible"], true,
+                        "Dock must restore the native window"
+                    );
+                    assert_eq!(value["minimized"], false);
+                    // Keep Dock available when the menu-bar item is missing.
+                    drop(self.app.tray.take());
+                    self.phase = 4;
+                    return Task::batch([
+                        task,
+                        iced::window::latest().and_then(|id| {
+                            iced::window::run(id, |_| {
+                                tray::pump();
+                                assert!(!tray::native_present());
+                                mac_desktop::native_window().performClose(None);
+                                Message::Tick
+                            })
+                        }),
+                    ]);
+                }
+                5 => {
+                    assert_eq!(value["visible"], false);
+                    assert!(
+                        !self.app.exiting,
+                        "missing tray must not disable Dock reopen"
+                    );
+                    return Task::batch([task, Self::dock_reopen(true)]);
+                }
+                6 => {
+                    assert_eq!(value["visible"], true);
+                    assert_eq!(value["minimized"], false);
+                    self.phase = 7;
+                    return Task::batch([
+                        task,
+                        iced::window::latest().and_then(|id| {
+                            iced::window::minimize(id, true).chain(iced::window::run(id, |_| {
+                                assert!(mac_desktop::native_window().isMiniaturized());
+                                mac_desktop::simulate_dock_reopen(true);
+                                Message::Tick
+                            }))
+                        }),
+                    ]);
+                }
+                8 => {
+                    assert_eq!(value["visible"], true);
+                    assert_eq!(value["minimized"], false, "Dock must undo minimization");
+                    assert!(self.app.snapshot.running && !self.app.error);
+                    self.phase = 10;
+                    self.record(serde_json::json!({
+                        "native_window": value,
+                        "close_dock_reopen": true,
+                        "reopen_without_tray": true,
+                        "minimize_dock_reopen": true,
+                        "dock_delivery": "NSApplication delegate selector with both hasVisibleWindows values",
+                    }));
+                    return task;
+                }
+                _ => unreachable!(),
+            }
+        }
+        if self.phase == 1 && !self.app.visible {
+            self.phase = 2;
+            return Task::batch([task, Self::check_window(2)]);
+        }
+        if self.phase == 2 && self.app.visible {
+            self.phase = 3;
+            return Task::batch([task, Self::check_window(3)]);
+        }
+        if self.phase == 4 && !self.app.visible {
+            self.phase = 5;
+            return Task::batch([task, Self::check_window(5)]);
+        }
+        if self.phase == 5 && self.app.visible {
+            self.phase = 6;
+            return Task::batch([task, Self::check_window(6)]);
+        }
+        if self.phase == 7 && showing {
+            // Wait until ShowWindow has actually applied its native tasks.
+            self.phase = 8;
+            return Task::batch([task, Self::check_window(8)]);
+        }
+        task
+    }
+
+    fn check_window(stage: u8) -> Task<Message> {
+        Task::perform(
+            async { tokio::time::sleep(Duration::from_millis(300)).await },
+            |_| Message::Tick,
+        )
+        .chain(iced::window::latest().and_then(move |id| {
+            iced::window::run(id, move |_| {
+                let window = mac_desktop::native_window();
+                if tray::native_present() {
+                    tray::verify_native_state();
+                }
+                Message::MacWindowChecked(
+                    stage,
+                    serde_json::json!({
+                        "visible": window.isVisible(),
+                        "minimized": window.isMiniaturized(),
+                        "focused": window.isKeyWindow(),
+                        "tray_present": tray::native_present(),
+                    }),
+                )
+            })
+        }))
+    }
+
+    fn dock_reopen(has_visible_windows: bool) -> Task<Message> {
+        iced::window::latest().and_then(move |id| {
+            iced::window::run(id, move |_| {
+                mac_desktop::simulate_dock_reopen(has_visible_windows);
+                Message::Tick
+            })
+        })
+    }
     fn view(&self) -> Element<'_, Message> {
         self.app.view()
     }
@@ -224,7 +382,9 @@ pub(crate) fn run_macos_flow() -> iced::Result {
     let report = std::path::PathBuf::from(std::env::var_os("CLASH_CI_FLOW_REPORT").unwrap());
     iced::application(
         move || {
-            let (mut app, task) = App::with_engine(startup_store().and_then(Engine::new), None);
+            let startup = (scenario == "window-lifecycle")
+                .then(|| tray::Startup::new(Duration::from_secs(5)));
+            let (mut app, task) = App::with_engine(startup_store().and_then(Engine::new), startup);
             app.updates.started = true;
             (
                 MacFlow {
@@ -635,7 +795,17 @@ fn capture_update(state: &mut Capture, message: CaptureMessage) -> Task<CaptureM
                     iced::window::run(id, |_| {
                         // Exercise AppKit creation, all menu/icon states and final
                         // destruction on the real GUI event loop's main thread.
+                        drop(tray::Startup::new(Duration::from_secs(5)));
+                        tray::pump();
+                        assert!(
+                            !tray::native_present(),
+                            "cancelled startup must not create a tray"
+                        );
                         let guard = tray::start().expect("create main-thread tray");
+                        assert!(
+                            tray::start().is_err(),
+                            "retry must not replace the live tray"
+                        );
                         for (mode, system_proxy, tun) in [
                             ("rule", false, false),
                             ("global", true, false),
@@ -653,6 +823,10 @@ fn capture_update(state: &mut Capture, message: CaptureMessage) -> Task<CaptureM
                         }
                         drop(guard);
                         tray::pump();
+                        assert!(
+                            !tray::native_present(),
+                            "dropping the owner must remove the native item"
+                        );
                         CaptureMessage::TrayChecked
                     })
                 });

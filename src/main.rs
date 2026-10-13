@@ -1,5 +1,7 @@
 #![cfg_attr(all(windows, not(debug_assertions)), windows_subsystem = "windows")]
 
+#[cfg(target_os = "macos")]
+mod mac_desktop;
 #[path = "presentation.rs"]
 mod presentation;
 #[path = "typography.rs"]
@@ -454,7 +456,9 @@ enum Message {
     ReleaseOpened(Result<(), String>),
     Tick,
     #[cfg(target_os = "macos")]
-    MacTrayPumped,
+    MacTrayPumped(Result<bool, String>),
+    #[cfg(all(target_os = "macos", feature = "ui-preview"))]
+    MacWindowChecked(u8, serde_json::Value),
     ToggleGroup(String),
     GroupPage(String, bool),
     GroupDelay(String),
@@ -508,6 +512,8 @@ struct App {
     tray: Option<tray::Guard>,
     tray_startup: Option<tray::Startup>,
     tray_close_requested: bool,
+    #[cfg(target_os = "macos")]
+    mac_reopen_ready: bool,
     site_queue: VecDeque<String>,
     interval_input: String,
     periodic_testing: bool,
@@ -857,6 +863,8 @@ impl App {
             tray,
             tray_startup,
             tray_close_requested: false,
+            #[cfg(target_os = "macos")]
+            mac_reopen_ready: false,
             site_queue: VecDeque::new(),
             site_results: vec![],
             site_category: CategoryFilter::All,
@@ -1129,7 +1137,7 @@ impl App {
                 iced::window::latest().and_then(|id| {
                     iced::window::run(id, |_| {
                         tray::pump();
-                        Message::MacTrayPumped
+                        Message::MacTrayPumped(mac_desktop::pump())
                     })
                 }),
             ]);
@@ -1141,7 +1149,24 @@ impl App {
         match message {
             Message::Claude(event) => return self.claude_event(event),
             #[cfg(target_os = "macos")]
-            Message::MacTrayPumped => {}
+            Message::MacTrayPumped(result) => match result {
+                Ok(reopen) => {
+                    self.mac_reopen_ready = true;
+                    if reopen && !self.exiting {
+                        return iced::window::latest().map(Message::ShowWindow);
+                    }
+                }
+                Err(error) => {
+                    if self.notice != error {
+                        eprintln!("Dock 窗口恢复不可用：{error}");
+                        self.notice = error;
+                        self.error = true;
+                        self.notice_visible = true;
+                    }
+                }
+            },
+            #[cfg(all(target_os = "macos", feature = "ui-preview"))]
+            Message::MacWindowChecked(..) => {}
             Message::DismissNotice => {
                 self.notice_visible = false;
                 self.updates.failure = None;
@@ -2199,7 +2224,10 @@ impl App {
                 return self.dispatch(Action::Refresh);
             }
             Message::Window((id, iced::window::Event::CloseRequested)) => {
-                if self.tray.is_some() {
+                let can_reopen = self.tray.is_some();
+                #[cfg(target_os = "macos")]
+                let can_reopen = can_reopen || self.mac_reopen_ready;
+                if can_reopen {
                     self.visible = false;
                     self.snapshot.retain_scope(Scope::Other);
                     if !self.rule_state.dirty() && !self.rule_state.has_editor() {
