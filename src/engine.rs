@@ -786,6 +786,16 @@ impl Engine {
         Ok(())
     }
 
+    fn default_route(&self) -> Result<String> {
+        if let Some(root) = self.node_root.lock().expect("header route lock").clone() {
+            return Ok(root);
+        }
+        let raw = read_runtime_config(&self.store.runtime().join("config.yaml"))?;
+        let root = crate::active_route::root(&raw)?;
+        *self.node_root.lock().expect("header route lock") = Some(root.clone());
+        Ok(root)
+    }
+
     /// Retain only one selectable decision group for the native menu. Fetching
     /// the full proxies response every second would waste memory while hidden.
     pub async fn tray_nodes(&self) -> Result<Option<crate::tray::Nodes>> {
@@ -793,9 +803,7 @@ impl Engine {
             return Ok(None);
         }
         let config: ConfigStatus = self.api.get("configs").await?;
-        let raw = read_runtime_config(&self.store.runtime().join("config.yaml"))?;
-        let root = crate::active_route::root(&raw)?;
-        drop(raw);
+        let root = self.default_route()?;
         let mut name = crate::active_route::start(&config.mode, &root).to_owned();
         let mut visited = std::collections::BTreeSet::new();
         for _ in 0..crate::active_route::MAX_DEPTH {
@@ -1510,15 +1518,7 @@ impl Engine {
 
     async fn current_node(&self, mode: &str, proxies: &Proxies) -> Result<Option<String>> {
         let default = if mode == "rule" {
-            let cached = self.node_root.lock().expect("header route lock").clone();
-            if let Some(root) = cached {
-                root
-            } else {
-                let raw = read_runtime_config(&self.store.runtime().join("config.yaml"))?;
-                let root = crate::active_route::root(&raw)?;
-                *self.node_root.lock().expect("header route lock") = Some(root.clone());
-                root
-            }
+            self.default_route()?
         } else {
             String::new()
         };

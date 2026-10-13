@@ -1,3 +1,6 @@
+#[path = "support/file_dialog.rs"]
+mod file_dialog;
+
 use clash_of_rust::tray;
 use std::time::{Duration, Instant};
 

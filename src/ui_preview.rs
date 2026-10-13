@@ -61,6 +61,32 @@ impl MacFlow {
         .unwrap();
     }
     fn update(&mut self, message: Message) -> Task<Message> {
+        if self.scenario == "file-picker" {
+            let finished = matches!(&message, Message::Finished(_));
+            let opened = matches!(&message, Message::FilePickStarted(..));
+            let cancelled = matches!(&message, Message::FilePicked(false, Ok(None)));
+            let task = self.app.update(message);
+            if self.phase == 0 && finished && self.app.snapshot.running {
+                self.phase = 1;
+                return Task::batch([task, self.app.update(Message::PickFile(false))]);
+            }
+            if self.phase == 1 && opened {
+                return Task::batch([
+                    task,
+                    iced::window::latest().and_then(|id| {
+                        iced::window::run(id, |_| {
+                            clash_of_rust::file_dialog::cancel_for_test();
+                            Message::Tick
+                        })
+                    }),
+                ]);
+            }
+            if self.phase == 1 && cancelled {
+                self.phase = 10;
+                self.record(serde_json::json!({ "native_panel_cancelled": true, "pending": self.app.picking_file }));
+            }
+            return task;
+        }
         if self.scenario == "native-quit" {
             let finished = matches!(&message, Message::Finished(_));
             if matches!(&message, Message::ExitFinished(Ok(()))) {

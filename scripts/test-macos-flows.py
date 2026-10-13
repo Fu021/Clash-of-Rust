@@ -237,6 +237,10 @@ def flow(scenario, fixture, package, version, report, prefix):
                         assert record['system_authorization_sessions'] == 1, record
                         assert record['administrator_requests'] == 1, record
                         assert core_ready(data), 'Repeated mode switches interrupted the core'
+                    elif scenario == 'file-picker':
+                        assert not record['error'] and record['running'], record
+                        assert record['details']['native_panel_cancelled'] and not record['details']['pending'], record
+                        assert core_ready(data), 'The asynchronous file chooser interrupted the core'
                     elif scenario == 'native-quit':
                         assert record['exiting'] and not record['error'], record
                         assert record['details']['native_quit'] and record['details']['core_stopped'], record
@@ -330,7 +334,7 @@ def main():
         raise RuntimeError('Native disposable macOS Actions runner required')
     args.report.mkdir(parents=True, exist_ok=True)
     report_path = args.report/(args.label+'-flows.json')
-    names = ('native-quit', 'window-lifecycle', 'tun-cancel', 'tun-timeout', 'tun', 'proxy-switches', 'autostart', 'update-user', 'update-system', 'update-tun-user', 'update-tun-system', 'update-cancel',
+    names = ('file-picker', 'native-quit', 'window-lifecycle', 'tun-cancel', 'tun-timeout', 'tun', 'proxy-switches', 'autostart', 'update-user', 'update-system', 'update-tun-user', 'update-tun-system', 'update-cancel',
              'update-version', 'update-signature', 'update-arch', 'update-rollback', 'update-root-rollback', 'update-readonly')
     report = {'schema': 1, 'status': 'running', 'confirmation': 'CI substitute; real dialogs remain manual',
               'network_authorization': 'Fixed network right temporarily allowed on disposable CI, restored afterwards',

@@ -297,8 +297,12 @@ impl App {
                 let edit = *edit;
                 #[cfg(target_os = "macos")]
                 let task = iced::window::latest().and_then(move |id| {
-                    iced::window::run(id, move |_| {
-                        Message::FilePicked(edit, clash_of_rust::file_dialog::choose())
+                    iced::window::run(id, move |_| match clash_of_rust::file_dialog::begin() {
+                        Ok(receiver) => Message::FilePickStarted(
+                            edit,
+                            Arc::new(std::sync::Mutex::new(Some(receiver))),
+                        ),
+                        Err(error) => Message::FilePicked(edit, Err(error)),
                     })
                 });
                 #[cfg(not(target_os = "macos"))]
@@ -306,6 +310,22 @@ impl App {
                     Message::FilePicked(edit, r)
                 });
                 task
+            }
+            #[cfg(target_os = "macos")]
+            Message::FilePickStarted(edit, session) => {
+                let edit = *edit;
+                if let Some(receiver) = session.lock().unwrap().take() {
+                    Task::perform(
+                        async move {
+                            receiver
+                                .await
+                                .unwrap_or_else(|_| Err("文件选择器已关闭".into()))
+                        },
+                        move |result| Message::FilePicked(edit, result),
+                    )
+                } else {
+                    none()
+                }
             }
             Message::FilePicked(edit, result) => {
                 self.picking_file = false;
@@ -549,27 +569,7 @@ impl App {
             None
         };
         if let Some(dialog) = dialog {
-            let height = self
-                .window_height
-                .parse::<f32>()
-                .unwrap_or(700.0)
-                .max(450.0)
-                - 64.0;
-            let overlay = container(
-                container(scrollable(dialog).height(Length::Shrink))
-                    .padding(22)
-                    .width(590)
-                    .max_height(height)
-                    .style(panel),
-            )
-            .width(Length::Fill)
-            .height(Length::Fill)
-            .center_x(Length::Fill)
-            .center_y(Length::Fill)
-            .style(|_| container::Style {
-                background: Some(Color::from_rgba(0.0, 0.0, 0.0, 0.52).into()),
-                ..Default::default()
-            });
+            let overlay = self.modal(dialog);
             stack![
                 iced::widget::opaque(page.map(|_| Message::Noop)),
                 iced::widget::opaque(overlay)
@@ -578,6 +578,30 @@ impl App {
         } else {
             page
         }
+    }
+    pub(crate) fn modal<'a>(&self, dialog: Element<'a, Message>) -> Element<'a, Message> {
+        let height = self
+            .window_height
+            .parse::<f32>()
+            .unwrap_or(700.0)
+            .max(450.0)
+            - 64.0;
+        container(
+            container(scrollable(dialog).height(Length::Shrink))
+                .padding(22)
+                .width(590)
+                .max_height(height)
+                .style(panel),
+        )
+        .width(Length::Fill)
+        .height(Length::Fill)
+        .center_x(Length::Fill)
+        .center_y(Length::Fill)
+        .style(|_| container::Style {
+            background: Some(Color::from_rgba(0.0, 0.0, 0.0, 0.52).into()),
+            ..Default::default()
+        })
+        .into()
     }
 }
 

@@ -61,7 +61,7 @@ def main():
         run([tests['core_integration'], '--ignored', '--test-threads=1'])
         run([tests['library'], 'native_gsettings', '--ignored'],
             env=dict(os.environ, GSETTINGS_BACKEND='memory'))
-        run(['dbus-run-session', '--', tests['file_dialog'], '--ignored', '--test-threads=1'])
+        run(['dbus-run-session', '--', tests['tray_integration'], 'native_portal', '--ignored', '--test-threads=1'])
         for name in ('native_kde_signal', 'no_tray_host'):
             run(['dbus-run-session', '--', tests['library'], name, '--ignored'])
         run(['dbus-run-session', '--', tests['tray_integration'], 'login_tray', '--ignored'])

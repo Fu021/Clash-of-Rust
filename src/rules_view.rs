@@ -980,15 +980,7 @@ impl App {
             state.editor.as_ref().map(|e| self.rule_editor(e, doc))
         };
         if let Some(dialog) = dialog {
-            let overlay = container(container(dialog).padding(22).width(550).style(panel))
-                .width(Length::Fill)
-                .height(Length::Fill)
-                .center_x(Length::Fill)
-                .center_y(Length::Fill)
-                .style(|_| container::Style {
-                    background: Some(Color::from_rgba(0.0, 0.0, 0.0, 0.52).into()),
-                    ..container::Style::default()
-                });
+            let overlay = self.modal(dialog);
             stack![page.map(|_| Message::Noop), iced::widget::opaque(overlay)].into()
         } else {
             page

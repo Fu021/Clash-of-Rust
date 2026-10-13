@@ -409,6 +409,8 @@ struct Reply {
 
 // The message can be cloned; only one receiver may consume the owned installer.
 type DownloadResult = Arc<std::sync::Mutex<Option<Result<update::Downloaded, String>>>>;
+#[cfg(target_os = "macos")]
+type FilePickSession = Arc<std::sync::Mutex<Option<clash_of_rust::file_dialog::Session>>>;
 
 #[derive(Debug, Clone)]
 enum Message {
@@ -431,6 +433,8 @@ enum Message {
     ImportProfile,
     PickFile(bool),
     FilePicked(bool, Result<Option<std::path::PathBuf>, String>),
+    #[cfg(target_os = "macos")]
+    FilePickStarted(bool, FilePickSession),
     Claude(claude_view::Event),
     RestartCore,
     CoreReady(Result<CoreHandle, String>),
@@ -1275,6 +1279,8 @@ impl App {
             | Message::ImportProfile
             | Message::PickFile(_)
             | Message::FilePicked(..) => {}
+            #[cfg(target_os = "macos")]
+            Message::FilePickStarted(..) => {}
             Message::Claude(event) => return self.claude_event(event),
             #[cfg(target_os = "macos")]
             Message::MacTrayPumped(result) => match result {

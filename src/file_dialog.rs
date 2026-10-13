@@ -2,21 +2,67 @@
 use std::path::PathBuf;
 
 #[cfg(target_os = "macos")]
-pub fn choose() -> Result<Option<PathBuf>, String> {
-    use objc2_app_kit::{NSModalResponseOK, NSOpenPanel};
+pub type Session = tokio::sync::oneshot::Receiver<Result<Option<PathBuf>, String>>;
+
+#[cfg(target_os = "macos")]
+pub fn begin() -> Result<Session, String> {
+    use objc2::Message;
+    use objc2_app_kit::{NSApplication, NSModalResponseOK, NSOpenPanel};
     use objc2_foundation::MainThreadMarker;
     let mtm = MainThreadMarker::new().ok_or("文件选择器必须在 macOS 主线程运行")?;
     let panel = NSOpenPanel::openPanel(mtm);
     panel.setCanChooseDirectories(false);
     panel.setCanChooseFiles(true);
     panel.setAllowsMultipleSelection(false);
-    if panel.runModal() != NSModalResponseOK {
-        return Ok(None);
+    let app = NSApplication::sharedApplication(mtm);
+    let window = app
+        .windows()
+        .iter()
+        .find(|w| w.title().to_string().starts_with("Clash of Rust"))
+        .map(|w| w.retain())
+        .ok_or("没有可附加文件选择器的窗口")?;
+    let (sender, receiver) = tokio::sync::oneshot::channel();
+    let sender = std::cell::RefCell::new(Some(sender));
+    let selected_panel = panel.clone();
+    let block = block2::RcBlock::new(move |response: objc2_app_kit::NSModalResponse| {
+        let result = if response == NSModalResponseOK {
+            selected_panel
+                .URLs()
+                .firstObject()
+                .and_then(|url| url.path())
+                .map(|path| Some(PathBuf::from(path.to_string())))
+                .ok_or_else(|| "无法读取所选文件路径".into())
+        } else {
+            Ok(None)
+        };
+        // Complete asynchronously: never nest an AppKit run loop inside Iced.
+        unsafe {
+            selected_panel.orderOut(None);
+        }
+        if let Some(sender) = sender.borrow_mut().take() {
+            let _ = sender.send(result);
+        }
+    });
+    panel.beginSheetModalForWindow_completionHandler(&window, &block);
+    Ok(receiver)
+}
+
+#[cfg(all(target_os = "macos", feature = "ui-preview"))]
+pub fn cancel_for_test() {
+    use objc2::ClassType;
+    use objc2_app_kit::{NSApplication, NSOpenPanel, NSWindow};
+    use objc2_foundation::{MainThreadMarker, NSObjectProtocol};
+    let app = NSApplication::sharedApplication(MainThreadMarker::new().unwrap());
+    let windows = app.windows();
+    let window = windows
+        .iter()
+        .find(|w| w.isKindOfClass(NSOpenPanel::class()))
+        .expect("native file panel must be open");
+    // Verified the native subclass before borrowing it as NSOpenPanel.
+    let panel = unsafe { &*(std::ptr::from_ref::<NSWindow>(window).cast::<NSOpenPanel>()) };
+    unsafe {
+        panel.cancel(None);
     }
-    let urls = panel.URLs();
-    let url = urls.firstObject().ok_or("未选择文件")?;
-    let path = url.path().ok_or("无法读取所选文件路径")?;
-    Ok(Some(PathBuf::from(path.to_string())))
 }
 
 #[cfg(windows)]
