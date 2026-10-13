@@ -9,6 +9,7 @@ struct MacFlow {
     app: App,
     scenario: String,
     phase: u8,
+    window_retries: u8,
     report: std::path::PathBuf,
 }
 
@@ -278,18 +279,43 @@ impl MacFlow {
                     assert_eq!(value["visible"], true);
                     assert_eq!(value["minimized"], false);
                     self.phase = 7;
+                    self.window_retries = 0;
                     return Task::batch([
                         task,
                         iced::window::latest().and_then(|id| {
-                            iced::window::minimize(id, true).chain(iced::window::run(id, |_| {
-                                assert!(mac_desktop::native_window().isMiniaturized());
+                            iced::window::minimize(id, true).chain(Self::check_window(7))
+                        }),
+                    ]);
+                }
+                7 => {
+                    if value["minimized"] != true {
+                        self.window_retries += 1;
+                        assert!(
+                            self.window_retries < 10,
+                            "native minimization did not complete: {value}"
+                        );
+                        return Task::batch([task, Self::check_window(7)]);
+                    }
+                    self.window_retries = 0;
+                    return Task::batch([
+                        task,
+                        iced::window::latest().and_then(|id| {
+                            iced::window::run(id, |_| {
                                 mac_desktop::simulate_dock_reopen(true);
                                 Message::Tick
-                            }))
+                            })
                         }),
                     ]);
                 }
                 8 => {
+                    if value["visible"] != true || value["minimized"] != false {
+                        self.window_retries += 1;
+                        assert!(
+                            self.window_retries < 10,
+                            "native restore did not complete: {value}"
+                        );
+                        return Task::batch([task, Self::check_window(8)]);
+                    }
                     assert_eq!(value["visible"], true);
                     assert_eq!(value["minimized"], false, "Dock must undo minimization");
                     assert!(self.app.snapshot.running && !self.app.error);
@@ -386,6 +412,7 @@ pub(crate) fn run_macos_flow() -> iced::Result {
                     scenario: scenario.clone(),
                     report: report.clone(),
                     phase: 0,
+                    window_retries: 0,
                 },
                 task,
             )

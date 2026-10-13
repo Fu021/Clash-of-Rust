@@ -408,9 +408,7 @@ fn create_native(events: &Events) -> anyhow::Result<(tray_icon::TrayIcon, Checks
         .with_icon(tray_icon(crate::icons::Kind::App));
     let icon = builder.build()?;
     #[cfg(target_os = "macos")]
-    if let Some(item) = icon.ns_status_item() {
-        item.setVisible(true);
-    }
+    configure_mac_item(&icon);
     *events.commands.lock().unwrap() = commands;
     Ok((icon, checks))
 }
@@ -467,8 +465,8 @@ pub fn pump() {
                         .and_then(|()| value.icon.set_visible(true));
                     if let Err(error) = repair {
                         eprintln!("macOS 菜单栏图标恢复失败：{error}");
-                    } else if let Some(item) = value.icon.ns_status_item() {
-                        item.setVisible(true);
+                    } else {
+                        configure_mac_item(&value.icon);
                         eprintln!("macOS 菜单栏图标已重新注册");
                     }
                 }
@@ -532,6 +530,29 @@ pub fn start() -> anyhow::Result<Guard> {
             let _ = stop.send(());
         })),
     })
+}
+
+#[cfg(target_os = "macos")]
+fn configure_mac_item(icon: &tray_icon::TrayIcon) {
+    use objc2_app_kit::NSAutoresizingMaskOptions;
+    let mtm = objc2_foundation::MainThreadMarker::new().unwrap();
+    if let Some(item) = icon.ns_status_item() {
+        item.setVisible(true);
+        if let Some(button) = item.button(mtm) {
+            for view in button.subviews() {
+                // tray-icon 0.26 snapshots the button's initial frame, which
+                // can have zero height before AppKit finishes its layout. Keep
+                // its mouse-event view attached to the final button bounds.
+                if view.class().name() == c"TaoTrayTarget" {
+                    view.setAutoresizingMask(
+                        NSAutoresizingMaskOptions::ViewWidthSizable
+                            | NSAutoresizingMaskOptions::ViewHeightSizable,
+                    );
+                    view.setFrame(button.bounds());
+                }
+            }
+        }
+    }
 }
 
 #[cfg(target_os = "macos")]
@@ -607,6 +628,14 @@ pub fn verify_native_state() {
         );
         assert!(frame.size.width > 0.0 && frame.size.width <= 40.0);
         assert!(frame.size.height > 0.0);
+        let target = button
+            .subviews()
+            .into_iter()
+            .find(|view| view.class().name() == c"TaoTrayTarget")
+            .expect("tray mouse-event view must exist");
+        let target_frame = target.frame();
+        assert!((target_frame.size.width - button.bounds().size.width).abs() < 0.5);
+        assert!((target_frame.size.height - button.bounds().size.height).abs() < 0.5);
         assert!(rect.size.width > 0);
         assert!(rect.size.height > 0);
         let state = native.updates.borrow();
