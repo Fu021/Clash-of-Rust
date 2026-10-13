@@ -10,6 +10,7 @@ import json
 import os
 from pathlib import Path
 import plistlib
+import re
 import shutil
 import signal
 import socket
@@ -102,9 +103,74 @@ def dmg(app, destination):
     return destination
 
 
+@contextlib.contextmanager
+def network_authorization_for_ci():
+    # Only this fixed network right is changed on the disposable runner. Actual
+    # Authorization Services / SCPreferences calls still execute in the GUI.
+    right = 'system.services.systemconfiguration.network'
+    original = subprocess.check_output(['/usr/bin/security', 'authorizationdb', 'read', right], timeout=15)
+    subprocess.run(['/usr/bin/sudo', '-n', '/usr/bin/security', 'authorizationdb', 'write', right, 'allow'], check=True, timeout=15)
+    try:
+        yield
+    finally:
+        subprocess.run(['/usr/bin/sudo', '-n', '/usr/bin/security', 'authorizationdb', 'write', right], input=original, check=True, timeout=15)
+
+
+def autostart_flow(fixture, report, prefix):
+    label = 'org.clashofrust.desktop'
+    target = f'gui/{os.getuid()}/{label}'
+    agent = Path.home()/'Library/LaunchAgents'/f'{label}.plist'
+    assert not agent.exists(), 'Do not overwrite an existing login agent'
+    with tempfile.TemporaryDirectory(prefix='clash-login-flow-') as temporary:
+        root = Path(temporary)
+        app = root/APP_NAME
+        shutil.copytree(fixture, app)
+        data = root/'data'
+        data.mkdir()
+        controller, mixed = free_port(), free_port()
+        while mixed == controller:
+            mixed = free_port()
+        write_json(data/'settings.json', {'controller_port': controller, 'mixed_port': mixed,
+                                         'secret': 'isolated-login-ci'})
+        status = report/(prefix+'-autostart.json')
+        log = report/(prefix+'-autostart.log')
+        env = {'GITHUB_ACTIONS': 'true', 'CLASH_CI_FLOW': 'autostart',
+               'CLASH_CI_FLOW_REPORT': str(status), 'CLASH_OF_RUST_DATA_DIR': str(data)}
+        value = {'Label': label, 'ProgramArguments': [str(app/'Contents/MacOS/clash-of-rust'), '--background'],
+                 'RunAtLoad': True, 'LimitLoadToSessionType': 'Aqua', 'ProcessType': 'Interactive',
+                 'EnvironmentVariables': env, 'StandardOutPath': str(log), 'StandardErrorPath': str(log)}
+        agent.parent.mkdir(parents=True, exist_ok=True)
+        agent.write_bytes(plistlib.dumps(value))
+        try:
+            subprocess.run(['/bin/launchctl', 'bootstrap', f'gui/{os.getuid()}', agent], check=True, timeout=15)
+            def completed():
+                if status.exists():
+                    record = json.loads(status.read_text())
+                    if record['phase'] == 10:
+                        return record
+                job = subprocess.run(['/bin/launchctl', 'print', target], capture_output=True, text=True, timeout=5)
+                if job.returncode or not re.search(r'^\s*pid = \d+', job.stdout, re.M):
+                    raise RuntimeError('Changing autostart terminated its running LaunchAgent')
+            record = wait_for(completed, 'login agent autostart toggle')
+            assert not record['error'] and record['running'] and not record['exiting'], record
+            assert not agent.exists(), 'Autostart disable left the plist behind'
+            assert record['system_authorization_sessions'] == 0 and record['administrator_requests'] == 0, record
+            job = subprocess.check_output(['/bin/launchctl', 'print', target], text=True, timeout=5)
+            assert re.search(r'^\s*pid = \d+', job, re.M), 'Autostart toggle unloaded the running GUI service'
+            assert core_ready(data), 'Autostart toggle interrupted the running core'
+            record['launch_method'] = 'actual per-user LaunchAgent'
+            return record
+        finally:
+            subprocess.run(['/bin/launchctl', 'bootout', target], capture_output=True, timeout=15)
+            agent.unlink(missing_ok=True)
+            wait_for(lambda: not core_ready(data), 'login agent core cleanup', 15)
+
+
 def flow(scenario, fixture, package, version, report, prefix):
+    if scenario == 'autostart':
+        return autostart_flow(fixture, report, prefix)
     before = interfaces()
-    system_owned = scenario in ('update-system', 'update-cancel', 'update-root-rollback')
+    system_owned = scenario in ('update-system', 'update-tun-system', 'update-cancel', 'update-root-rollback')
     with tempfile.TemporaryDirectory(prefix="clash Mac ' 空格 ") as temporary:
         root = Path(temporary)
         install = root/'Applications'
@@ -160,13 +226,22 @@ def flow(scenario, fixture, package, version, report, prefix):
                         assert record['details']['lease_reused_after_long_run'], record
                         process.wait(timeout=30)
                         assert process.returncode == 0, process.returncode
-                    elif scenario in ('update-user', 'update-system', 'update-rollback', 'update-root-rollback'):
+                    elif scenario == 'proxy-switches':
+                        assert not record['error'] and record['running'] and not record['tun'], record
+                        assert record['system_authorization_sessions'] == 1, record
+                        assert record['administrator_requests'] == 1, record
+                        assert core_ready(data), 'Repeated mode switches interrupted the core'
+                    elif scenario in ('update-user', 'update-system', 'update-tun-user', 'update-tun-system', 'update-rollback', 'update-root-rollback'):
                         assert record['exiting'], 'Ready update did not request normal GUI shutdown'
                         directory = Path(record['details']['directory'])
                         process.wait(timeout=45)
                         assert process.returncode == 0, process.returncode
                         new_pid = wait_for(lambda: relaunched_pid(directory), scenario+' normal-user relaunch')
                         wait_for(lambda: core_ready(data), scenario+' restarted core')
+                        assert json.loads((data/'settings.json').read_text())['controller_port'] == controller, 'Update changed the controller port'
+                        if scenario.startswith('update-tun-'):
+                            assert record['details']['tun_to_system_before_update'], record
+                            assert json.loads((data/'settings.json').read_text())['proxy_mode'] == 'system', 'Update lost system proxy mode'
                         record['restarted_window_count'] = window_info(new_pid, report, prefix+'-'+scenario)
                         rollback = scenario.endswith('rollback')
                         assert (sha256(app/'Contents/MacOS/clash-of-rust') == old_hash) == rollback, 'App replacement/rollback did not match outcome'
@@ -184,7 +259,20 @@ def flow(scenario, fixture, package, version, report, prefix):
                     write_json(status, record)
                     return record
                 finally:
+                    proxy_cleanup_error = None
                     if process is not None:
+                        # New update/mode cases can leave System enabled in the
+                        # restarted GUI. Restore before SIGTERM and before its
+                        # isolated journal disappears, keeping runner traffic
+                        # away from a core we are about to stop.
+                        journal = data/'system-proxy.json'
+                        if journal.exists():
+                            try:
+                                subprocess.run([fixture/'Contents/MacOS/clash-of-rust'],
+                                               env=dict(os.environ, CLASH_CI_RESTORE_PROXY=str(journal)),
+                                               check=True, timeout=15)
+                            except Exception as error:
+                                proxy_cleanup_error = error
                         if status.exists():
                             recorded = json.loads(status.read_text())
                             update_directory = recorded.get('details', {}).get('directory')
@@ -204,6 +292,8 @@ def flow(scenario, fixture, package, version, report, prefix):
                         wait_for(lambda: not {v for v in interfaces()-before if v.startswith('utun')}, scenario+' TUN interface cleanup', 15)
                     if system_owned:
                         run(['/usr/bin/sudo', '-n', 'chown', '-R', str(os.getuid()), install])
+                    if proxy_cleanup_error:
+                        raise RuntimeError('System proxy cleanup failed') from proxy_cleanup_error
 
 
 def main():
@@ -221,9 +311,10 @@ def main():
         raise RuntimeError('Native disposable macOS Actions runner required')
     args.report.mkdir(parents=True, exist_ok=True)
     report_path = args.report/(args.label+'-flows.json')
-    names = ('tun-cancel', 'tun-timeout', 'tun', 'update-user', 'update-system', 'update-cancel',
+    names = ('tun-cancel', 'tun-timeout', 'tun', 'proxy-switches', 'autostart', 'update-user', 'update-system', 'update-tun-user', 'update-tun-system', 'update-cancel',
              'update-version', 'update-signature', 'update-arch', 'update-rollback', 'update-root-rollback', 'update-readonly')
     report = {'schema': 1, 'status': 'running', 'confirmation': 'CI substitute; real dialogs remain manual',
+              'network_authorization': 'Fixed network right temporarily allowed on disposable CI, restored afterwards',
               'cases': [{'name': name, 'status': 'not_run'} for name in names]}
     write_json(report_path, report)
     with tempfile.TemporaryDirectory(prefix='clash-native-flow-build-') as temporary:
@@ -234,6 +325,7 @@ def main():
         shutil.copy2(args.helper, payload/'clash-tun-launcher')
         fixture = build_app(payload, root/'fixture'/APP_NAME, args.version, args.arch)
         with contextlib.ExitStack() as contexts:
+            contexts.enter_context(network_authorization_for_ci())
             if args.package:
                 production = root/'production'/APP_NAME
                 with mount(args.package, root/'production-volume') as mounted_app:

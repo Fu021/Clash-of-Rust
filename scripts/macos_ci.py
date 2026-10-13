@@ -84,7 +84,8 @@ def native_tests(tests, bundle):
     suite('Native network service discovery', lambda: logged('native-network', [tests['library'], 'native_network_services_can_be_read', '--ignored', '--test-threads=1']))
     suite('Per-user autostart round trip', lambda: logged('native-autostart', [tests['library'], 'native_autostart_round_trip', '--ignored', '--test-threads=1']))
     suite('Native authorization quoting and cancellation', lambda: logged('native-authorization', [tests['library'], 'native_authorization_script', '--ignored', '--test-threads=1']))
-    suite('Proxy restore and later-owner protection', lambda: logged('native-proxy', ['sudo', '-n', 'env', 'GITHUB_ACTIONS=true', tests['library'], 'native_proxy_restore_round_trip', '--ignored', '--test-threads=1']))
+    suite('Root to user TCP port reuse', lambda: logged('native-port-reuse', [tests['library'], 'native_mac_root_to_user_port_reuse', '--ignored', '--test-threads=1'], timeout=90))
+    suite('Proxy restore and later-owner protection', lambda: logged('native-proxy', ['sudo', '-n', 'env', 'GITHUB_ACTIONS=true', 'MIHOMO_TEST_RESOURCES='+str(bundle/'resources'), tests['library'], 'native_proxy_restore_round_trip', '--ignored', '--test-threads=1']))
     suite('Authorized core lease lifecycle', lambda: logged('native-tun', [tests['library'], 'native_tun_lease', '--ignored', '--test-threads=1'], env=dict(os.environ, MIHOMO_TEST_RESOURCES=str(bundle/'resources')), timeout=180))
     capture = suite('All pages in both themes', rendered_ui)
     tests['macos_ui_fixture'] = capture['executable']
@@ -293,7 +294,7 @@ def main():
     REPORT.mkdir(parents=True, exist_ok=True)
     planned = ['Compile, Clippy, unit tests and native integration', 'Real mihomo integration',
                'TUN helper excludes GUI frameworks', 'Native network service discovery', 'Per-user autostart round trip',
-               'Native authorization quoting and cancellation', 'Proxy restore and later-owner protection',
+               'Native authorization quoting and cancellation', 'Root to user TCP port reuse', 'Proxy restore and later-owner protection',
                'Authorized core lease lifecycle', 'All pages in both themes', 'Signed GUI authorization and update flows']
     write_json(REPORT/'report.json', {'schema': 1, 'arch': args.arch, 'status': 'running',
                'suites': [{'name': name, 'status': 'not_run'} for name in planned]})

@@ -6,12 +6,20 @@ use std::{
     sync::mpsc,
     time::{Duration, Instant},
 };
+#[cfg(feature = "ui-preview")]
+static CI_AUTHORIZATIONS: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+#[cfg(feature = "ui-preview")]
+pub fn ci_authorizations() -> usize {
+    CI_AUTHORIZATIONS.load(std::sync::atomic::Ordering::Relaxed)
+}
 
 /// Quote separately for the shell and the AppleScript string literal.
 pub fn shell_quote(value: &str) -> String {
     format!("'{}'", value.replace('\'', "'\\''"))
 }
 pub fn administrator(script: &str) -> Result<()> {
+    #[cfg(feature = "ui-preview")]
+    CI_AUTHORIZATIONS.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
     // This executor exists only in screenshot/integration fixtures. Distributed
     // binaries never accept an environment variable as an authorization grant.
     #[cfg(feature = "ui-preview")]

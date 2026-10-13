@@ -6,9 +6,12 @@ use std::{
     path::{Path, PathBuf},
     process::Command,
     ptr,
+    sync::Mutex,
 };
 mod authorization;
 mod cf;
+#[cfg(feature = "ui-preview")]
+pub use authorization::ci_authorizations;
 pub use authorization::{administrator, run as run_command, shell_quote};
 use cf::{Owned, Ref};
 pub mod tun;
@@ -52,6 +55,17 @@ struct AuthorizationRights {
     items: *mut AuthorizationItem,
 }
 struct Authorization(Ref);
+// The opaque Security session has no thread affinity. All access, including
+// freeing it, is serialized by PROXY_AUTHORIZATION.
+unsafe impl Send for Authorization {}
+static PROXY_AUTHORIZATION: Mutex<Option<Authorization>> = Mutex::new(None);
+#[cfg(feature = "ui-preview")]
+static PROXY_AUTHORIZATION_CREATIONS: std::sync::atomic::AtomicUsize =
+    std::sync::atomic::AtomicUsize::new(0);
+#[cfg(feature = "ui-preview")]
+pub fn ci_proxy_authorization_creations() -> usize {
+    PROXY_AUTHORIZATION_CREATIONS.load(std::sync::atomic::Ordering::Relaxed)
+}
 impl Drop for Authorization {
     fn drop(&mut self) {
         unsafe { AuthorizationFree(self.0, 0) };
@@ -125,12 +139,27 @@ pub fn desired(original: &ProxyState, port: u16) -> Result<ProxyState> {
         .collect()
 }
 pub fn write(state: &ProxyState) -> Result<()> {
-    let mut auth = ptr::null();
-    ensure!(
-        unsafe { AuthorizationCreate(ptr::null(), ptr::null(), 0, &mut auth) } == 0,
-        "无法创建系统代理授权"
-    );
-    let auth = Authorization(auth);
+    let mut session = PROXY_AUTHORIZATION
+        .lock()
+        .map_err(|_| anyhow::anyhow!("系统代理授权会话不可用，请重新启动客户端"))?;
+    let current = read()?;
+    if state
+        .iter()
+        .all(|(id, value)| current.get(id) == Some(value))
+    {
+        return Ok(());
+    }
+    if session.is_none() {
+        let mut auth = ptr::null();
+        ensure!(
+            unsafe { AuthorizationCreate(ptr::null(), ptr::null(), 0, &mut auth) } == 0,
+            "无法创建系统代理授权"
+        );
+        *session = Some(Authorization(auth));
+        #[cfg(feature = "ui-preview")]
+        PROXY_AUTHORIZATION_CREATIONS.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    }
+    let auth = session.as_ref().unwrap();
     let mut item = AuthorizationItem {
         name: c"system.services.systemconfiguration.network".as_ptr(),
         value_length: 0,
@@ -141,14 +170,20 @@ pub fn write(state: &ProxyState) -> Result<()> {
         count: 1,
         items: &mut item,
     };
-    let status =
-        unsafe { AuthorizationCopyRights(auth.0, &rights, ptr::null(), 1 | 2, ptr::null()) };
+    // First reuse rights/credentials without interaction. Let Security decide
+    // whether renewed authorization is required; never cache an "allowed" bool.
+    let mut status =
+        unsafe { AuthorizationCopyRights(auth.0, &rights, ptr::null(), 2, ptr::null()) };
+    if status != 0 {
+        status =
+            unsafe { AuthorizationCopyRights(auth.0, &rights, ptr::null(), 1 | 2, ptr::null()) };
+    }
     ensure!(status != -60006, "已取消系统代理授权，原设置未改变");
     ensure!(
         status == 0,
         "系统代理授权失败（macOS Security {status}），原设置未改变"
     );
-    let prefs = preferences(Some(&auth))?;
+    let prefs = preferences(Some(auth))?;
     sc_check(
         unsafe { SCPreferencesLock(prefs.0, 0) },
         "锁定网络设置（其他程序占用时请重试）",
@@ -255,12 +290,8 @@ pub fn set_autostart(enabled: bool) -> Result<()> {
         super::super::config::atomic_write(&path, agent_text()?.as_bytes())?;
     } else if path.exists() {
         std::fs::remove_file(path)?;
-        let _ = Command::new("/bin/launchctl")
-            .args([
-                "bootout",
-                &format!("gui/{}/{LABEL}", unsafe { libc::getuid() }),
-            ])
-            .output();
+        // The plist determines startup at the next login. Booting out this
+        // LaunchAgent can terminate the very GUI changing its own setting.
     }
     Ok(())
 }
@@ -317,6 +348,39 @@ mod tests {
             crate::platform::enable(&journal, 17890).unwrap();
             assert!(crate::platform::is_owned(&journal).unwrap());
             assert!(crate::platform::restore(&journal).unwrap());
+            assert_eq!(read().unwrap(), original);
+            let store = crate::config::Store::at(temp.path().join("startup")).unwrap();
+            let startup_journal = store.root.join("system-proxy.json");
+            let settings = crate::config::Settings {
+                mixed_port: 17890,
+                proxy_mode: crate::proxy::ProxyMode::System,
+                ..Default::default()
+            };
+            store.save_settings(&settings).unwrap();
+            crate::platform::enable(&startup_journal, settings.mixed_port).unwrap();
+            let recorded = std::fs::read(&startup_journal).unwrap();
+            let configured = read().unwrap();
+            assert!(crate::platform::is_owned_at_port(&startup_journal, 17890).unwrap());
+            assert!(!crate::platform::is_owned_at_port(&startup_journal, 17891).unwrap());
+            let resources = PathBuf::from(std::env::var_os("MIHOMO_TEST_RESOURCES").unwrap());
+            let mut engine = crate::engine::Engine::with_resources(store, resources).unwrap();
+            assert_eq!(std::fs::read(&startup_journal).unwrap(), recorded);
+            assert_eq!(read().unwrap(), configured);
+            assert!(crate::platform::is_owned(&startup_journal).unwrap());
+            let occupied = std::net::TcpListener::bind(("127.0.0.1", settings.mixed_port)).unwrap();
+            let runtime = tokio::runtime::Builder::new_current_thread()
+                .enable_all()
+                .build()
+                .unwrap();
+            assert!(runtime.block_on(engine.start()).is_err());
+            assert!(
+                !startup_journal.exists(),
+                "failed startup must restore the previous OS proxy"
+            );
+            assert_eq!(read().unwrap(), original);
+            drop(occupied);
+            drop(engine);
+            assert!(!startup_journal.exists());
             assert_eq!(read().unwrap(), original);
             crate::platform::enable(&journal, 17891).unwrap();
             let later = desired(&original, 17892).unwrap();

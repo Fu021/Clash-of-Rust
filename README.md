@@ -3,7 +3,7 @@
 </p>
 <h1 align="center">Clash of Rust</h1>
 
-基于 mihomo 的原生 Rust 代理客户端。支持 **Windows（x64 / ARM64）**、**Debian/Ubuntu（amd64 / ARM64，Ubuntu 仅支持 22.04 及以上）** 和 **macOS 14 及以上（Intel / Apple Silicon）**。版本 **0.5.5**，更新内容见 [发布说明](docs/releases/0.5.5.md)。
+基于 mihomo 的原生 Rust 代理客户端。支持 **Windows（x64 / ARM64）**、**Debian/Ubuntu（amd64 / ARM64，Ubuntu 仅支持 22.04 及以上）** 和 **macOS 14 及以上（Intel / Apple Silicon）**。版本 **0.5.6**，更新内容见 [发布说明](docs/releases/0.5.6.md)。
 
 ## Features
 
@@ -24,30 +24,30 @@
 
 | 平台 | 安装包 |
 | --- | --- |
-| Windows x64 | [Clash-of-Rust-0.5.5-windows-x64-setup.exe](https://github.com/Fu021/Clash-of-Rust/releases/download/v0.5.5/Clash-of-Rust-0.5.5-windows-x64-setup.exe) |
-| Windows ARM64 | [Clash-of-Rust-0.5.5-windows-arm64-setup.exe](https://github.com/Fu021/Clash-of-Rust/releases/download/v0.5.5/Clash-of-Rust-0.5.5-windows-arm64-setup.exe) |
-| Debian / Ubuntu 22.04+ amd64 | [Clash-of-Rust-0.5.5-linux-amd64.deb](https://github.com/Fu021/Clash-of-Rust/releases/download/v0.5.5/Clash-of-Rust-0.5.5-linux-amd64.deb) |
-| Debian / Ubuntu 22.04+ ARM64 | [Clash-of-Rust-0.5.5-linux-arm64.deb](https://github.com/Fu021/Clash-of-Rust/releases/download/v0.5.5/Clash-of-Rust-0.5.5-linux-arm64.deb) |
-| macOS Intel | [Clash-of-Rust-0.5.5-macos-x64.dmg](https://github.com/Fu021/Clash-of-Rust/releases/download/v0.5.5/Clash-of-Rust-0.5.5-macos-x64.dmg) |
-| macOS Apple Silicon | [Clash-of-Rust-0.5.5-macos-arm64.dmg](https://github.com/Fu021/Clash-of-Rust/releases/download/v0.5.5/Clash-of-Rust-0.5.5-macos-arm64.dmg) |
+| Windows x64 | [Clash-of-Rust-0.5.6-windows-x64-setup.exe](https://github.com/Fu021/Clash-of-Rust/releases/download/v0.5.6/Clash-of-Rust-0.5.6-windows-x64-setup.exe) |
+| Windows ARM64 | [Clash-of-Rust-0.5.6-windows-arm64-setup.exe](https://github.com/Fu021/Clash-of-Rust/releases/download/v0.5.6/Clash-of-Rust-0.5.6-windows-arm64-setup.exe) |
+| Debian / Ubuntu 22.04+ amd64 | [Clash-of-Rust-0.5.6-linux-amd64.deb](https://github.com/Fu021/Clash-of-Rust/releases/download/v0.5.6/Clash-of-Rust-0.5.6-linux-amd64.deb) |
+| Debian / Ubuntu 22.04+ ARM64 | [Clash-of-Rust-0.5.6-linux-arm64.deb](https://github.com/Fu021/Clash-of-Rust/releases/download/v0.5.6/Clash-of-Rust-0.5.6-linux-arm64.deb) |
+| macOS Intel | [Clash-of-Rust-0.5.6-macos-x64.dmg](https://github.com/Fu021/Clash-of-Rust/releases/download/v0.5.6/Clash-of-Rust-0.5.6-macos-x64.dmg) |
+| macOS Apple Silicon | [Clash-of-Rust-0.5.6-macos-arm64.dmg](https://github.com/Fu021/Clash-of-Rust/releases/download/v0.5.6/Clash-of-Rust-0.5.6-macos-arm64.dmg) |
 
 Windows 运行安装程序；Debian/Ubuntu（Ubuntu 仅支持 22.04 及以上）使用 `sudo apt install ./安装包文件名.deb`。升级保留订阅和个人设置；Windows 卸载可选删除全部配置和数据，默认不勾选。
 
-macOS 打开 DMG，将 **Clash of Rust.app** 拖入 **Applications（应用程序）** 后启动。系统代理和 TUN 按需请求管理员授权，登录自启以普通用户后台运行。当前 Mac 安装包使用 ad-hoc 签名，尚未进行 Developer ID 签名和 Apple 公证；首次打开若提示无法验证开发者，可确认来源及校验值后，在“系统设置 → 隐私与安全性”中选择“仍要打开”，见 [Apple 说明](https://support.apple.com/zh-cn/102445)。
+macOS 打开 DMG，将 **Clash of Rust.app** 拖入 **Applications（应用程序）** 后启动。系统代理和 TUN 按需请求管理员授权并复用有效授权；登录自启以普通用户后台运行，开关自启无需管理员授权。当前 Mac 安装包使用 ad-hoc 签名，尚未进行 Developer ID 签名和 Apple 公证；首次打开若提示无法验证开发者，可确认来源及校验值后，在“系统设置 → 隐私与安全性”中选择“仍要打开”，见 [Apple 说明](https://support.apple.com/zh-cn/102445)。
 
 可能造成 Windows Defender 误判查杀，需自行规避。
 
 ## 内存占用
 
-实测版本 **0.5.5**（`3a2b9f4`）；Ubuntu 22.04 x64、Release 构建，DNS 覆盖与 IPv6 开启，快捷规则、系统代理和 TUN 关闭，固定输入为 2,000 节点、40 组和 20,000 条规则：
+实测版本 **0.5.6-dev.1**（`9fb4529`）；Ubuntu 22.04 x64、Release 构建，DNS 覆盖与 IPv6 开启，快捷规则、系统代理和 TUN 关闭，固定输入为 2,000 节点、40 组和 20,000 条规则：
 
 | 场景 | GUI RSS | GUI 与内核合计 PSS |
 | --- | ---: | ---: |
-| 首页 | 77.53 MiB | 129.27 MiB |
-| 代理组折叠 | 80.19 MiB | 168.44 MiB |
-| 节点搜索 | 85.44 MiB | 171.65 MiB |
+| 首页 | 76.99 MiB | 126.59 MiB |
+| 代理组折叠 | 78.41 MiB | 165.58 MiB |
+| 节点搜索 | 81.59 MiB | 168.74 MiB |
 
-五项快捷规则全开时，首页 GUI RSS 为 72.52 MiB，合计 PSS 为 145.88 MiB。以上为每场景采样 10 秒、间隔 250 ms 的观测峰值，实际占用随系统、配置和使用情况变化；RSS 含共享页，PSS 按比例分摊共享页。[测试记录](https://github.com/Fu021/Clash-of-Rust/actions/runs/38357029730)。
+五项快捷规则全开时，首页 GUI RSS 为 79.83 MiB，合计 PSS 为 154.20 MiB。以上为每场景采样 10 秒、间隔 250 ms 的观测峰值，实际占用随系统、配置和使用情况变化；RSS 含共享页，PSS 按比例分摊共享页。[测试记录](https://github.com/Fu021/Clash-of-Rust/actions/runs/38387791706)。
 
 ## 编译与打包
 
