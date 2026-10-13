@@ -88,7 +88,8 @@ impl Startup {
         MAC_PENDING.lock().unwrap().push(MacPending {
             ready: sender,
             cancelled,
-            deadline: started + timeout,
+            timeout,
+            deadline: None,
         });
         Self {
             ready,
@@ -418,7 +419,8 @@ fn create_native(events: &Events) -> anyhow::Result<(tray_icon::TrayIcon, Checks
 struct MacPending {
     ready: mpsc::Sender<Result<Guard, String>>,
     cancelled: mpsc::Receiver<()>,
-    deadline: Instant,
+    timeout: Duration,
+    deadline: Option<Instant>,
 }
 #[cfg(target_os = "macos")]
 static MAC_PENDING: std::sync::Mutex<Vec<MacPending>> = std::sync::Mutex::new(Vec::new());
@@ -473,16 +475,21 @@ pub fn pump() {
             }
         }
     });
-    MAC_PENDING.lock().unwrap().retain(|pending| {
+    MAC_PENDING.lock().unwrap().retain_mut(|pending| {
         if !matches!(pending.cancelled.try_recv(), Err(mpsc::TryRecvError::Empty)) {
             return false;
         }
+        // Mac startup waits for the GUI loop, unlike the background-thread
+        // implementation. Cold fonts/Geo loading must not consume this budget.
+        let deadline = *pending
+            .deadline
+            .get_or_insert_with(|| Instant::now() + pending.timeout);
         match start() {
             Ok(guard) => {
                 let _ = pending.ready.send(Ok(guard));
                 false
             }
-            Err(error) if Instant::now() >= pending.deadline => {
+            Err(error) if Instant::now() >= deadline => {
                 let _ = pending.ready.send(Err(error.to_string()));
                 false
             }
