@@ -36,11 +36,17 @@ fn test_resources() -> std::path::PathBuf {
 }
 
 fn free_port() -> u16 {
-    std::net::TcpListener::bind("127.0.0.1:0")
-        .unwrap()
-        .local_addr()
-        .unwrap()
-        .port()
+    // mihomo's mixed listener binds TCP and UDP on the same port. A TCP-only
+    // check can choose an occupied UDP port; then mihomo closes its new TCP
+    // listener while the controller remains available.
+    for _ in 0..100 {
+        let tcp = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let port = tcp.local_addr().unwrap().port();
+        if std::net::UdpSocket::bind(("127.0.0.1", port)).is_ok() {
+            return port;
+        }
+    }
+    panic!("could not allocate a port available for both TCP and UDP")
 }
 
 #[tokio::test]
@@ -144,10 +150,25 @@ async fn custom_suffix_rules_route_new_domain_and_subdomain_connections() {
 
     // Keep each HTTP connection open on a local simulated destination; no public
     // DNS or Internet access is needed to verify the core's matching behavior.
-    async fn connect(listener: &TcpListener, mixed: u16, host: &str) -> (TcpStream, TcpStream) {
-        timeout(Duration::from_secs(5), async {
+    async fn connect(
+        listener: &TcpListener,
+        mixed: u16,
+        host: &str,
+        engine: &Engine,
+    ) -> (TcpStream, TcpStream) {
+        let result = timeout(Duration::from_secs(5), async {
             let port = listener.local_addr().unwrap().port();
-            let mut client = TcpStream::connect(("127.0.0.1", mixed)).await.unwrap();
+            let mut client = loop {
+                match TcpStream::connect(("127.0.0.1", mixed)).await {
+                    Ok(client) => break client,
+                    Err(error) if error.kind() == std::io::ErrorKind::ConnectionRefused => {
+                        // Wait within the existing deadline for the listener;
+                        // do not retry requests or weaken rule assertions.
+                        tokio::time::sleep(Duration::from_millis(25)).await;
+                    }
+                    Err(error) => panic!("mixed port {mixed} connection failed: {error}"),
+                }
+            };
             client
                 .write_all(
                     format!("GET http://{host}:{port}/ HTTP/1.1\r\nHost: {host}:{port}\r\n\r\n")
@@ -161,8 +182,15 @@ async fn custom_suffix_rules_route_new_domain_and_subdomain_connections() {
             assert_eq!(&prefix, b"GET");
             (client, destination)
         })
-        .await
-        .expect("core did not route the simulated HTTP request")
+        .await;
+        result.unwrap_or_else(|error| {
+            let logs = engine
+                .export_logs()
+                .ok()
+                .and_then(|path| std::fs::read_to_string(path).ok())
+                .unwrap_or_default();
+            panic!("core did not route {host} through mixed port {mixed}: {error}\n{logs}")
+        })
     }
 
     let destination = TcpListener::bind(("127.0.0.1", 0)).await.unwrap();
@@ -192,7 +220,7 @@ async fn custom_suffix_rules_route_new_domain_and_subdomain_connections() {
     engine.activate(id.clone()).await.unwrap();
     engine.select_mode("rule").await.unwrap();
 
-    let previous_socket = connect(&destination, mixed_port, "mail.google.com").await;
+    let previous_socket = connect(&destination, mixed_port, "mail.google.com", &engine).await;
     let before = engine.poll(Scope::Connections).await.unwrap();
     let previous = before
         .connections
@@ -218,8 +246,8 @@ async fn custom_suffix_rules_route_new_domain_and_subdomain_connections() {
         )
         .await
         .unwrap();
-    let root_socket = connect(&destination, mixed_port, "google.com").await;
-    let subdomain_socket = connect(&destination, mixed_port, "mail.google.com").await;
+    let root_socket = connect(&destination, mixed_port, "google.com", &engine).await;
+    let subdomain_socket = connect(&destination, mixed_port, "mail.google.com", &engine).await;
     let after = engine.poll(Scope::Connections).await.unwrap();
     let old = after
         .connections
