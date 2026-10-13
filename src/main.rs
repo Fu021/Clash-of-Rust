@@ -4263,9 +4263,6 @@ impl App {
                     (!self.working && !self.exiting && !self.updates.busy())
                         .then_some(|enabled| Message::Action(Action::DnsOverride(enabled))),
                 ),
-            self.label("使用 Fake-IP 与腾讯、阿里 DNS，保留订阅的解析策略与过滤列表。")
-                .size(self.scaled(11))
-                .color(self.foreground()),
             checkbox(self.settings.ipv6)
                 .label("启用 IPv6")
                 .size(self.scaled(16))
@@ -4274,9 +4271,6 @@ impl App {
                     (!self.working && !self.exiting && !self.updates.busy())
                         .then_some(|enabled| Message::Action(Action::Ipv6(enabled))),
                 ),
-            self.label("同时控制内核与 DNS 的 IPv6，修改后自动保存并应用。")
-                .size(self.scaled(11))
-                .color(self.foreground()),
         ]
         .spacing(12);
         let geo = column![
