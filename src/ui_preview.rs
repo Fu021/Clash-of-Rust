@@ -776,7 +776,11 @@ struct Capture {
 enum CaptureMessage {
     App(Message),
     Take,
-    TrayChecked,
+    TrayStart,
+    TrayCreated,
+    TrayStateChecked(u8),
+    TrayRecovering,
+    TrayFinished,
     Captured(iced::window::Screenshot),
 }
 #[cfg(target_os = "macos")]
@@ -795,43 +799,65 @@ fn capture_update(state: &mut Capture, message: CaptureMessage) -> Task<CaptureM
                             !tray::native_present(),
                             "cancelled startup must not create a tray"
                         );
-                        let guard = tray::start().expect("create main-thread tray");
-                        assert!(
-                            tray::start().is_err(),
-                            "retry must not replace the live tray"
-                        );
-                        for (mode, system_proxy, tun) in [
-                            ("rule", false, false),
-                            ("global", true, false),
-                            ("direct", false, true),
-                        ] {
-                            guard.update(&Snapshot {
-                                running: true,
-                                mode: mode.into(),
-                                system_proxy,
-                                tun,
-                                ..Default::default()
-                            });
-                            tray::pump();
-                            tray::verify_native_state();
-                        }
-                        tray::remove_native_item_for_test();
-                        tray::pump();
-                        tray::verify_native_state();
-                        drop(guard);
-                        tray::pump();
-                        assert!(
-                            !tray::native_present(),
-                            "dropping the owner must remove the native item"
-                        );
-                        CaptureMessage::TrayChecked
+                        CaptureMessage::TrayStart
                     })
                 });
             }
             iced::window::latest()
                 .and_then(|id| iced::window::screenshot(id).map(CaptureMessage::Captured))
         }
-        CaptureMessage::TrayChecked => iced::window::latest()
+        CaptureMessage::TrayStart => {
+            state
+                .app
+                .tray_startup
+                .get_or_insert_with(|| tray::Startup::new(Duration::from_secs(5)));
+            iced::window::latest().and_then(|id| {
+                iced::window::run(id, |_| {
+                    tray::pump();
+                    CaptureMessage::TrayCreated
+                })
+            })
+        }
+        CaptureMessage::TrayCreated => {
+            let result = state.app.tray_startup.as_ref().unwrap().poll();
+            match result {
+                Some(result) => {
+                    state.app.tray = Some(result.expect("create main-thread tray"));
+                    state.app.tray_startup = None;
+                    capture_tray_state(state, 0)
+                }
+                None => Task::perform(
+                    async { tokio::time::sleep(Duration::from_millis(300)).await },
+                    |_| CaptureMessage::TrayStart,
+                ),
+            }
+        }
+        CaptureMessage::TrayStateChecked(stage) if stage < 2 => {
+            capture_tray_state(state, stage + 1)
+        }
+        CaptureMessage::TrayStateChecked(2) => iced::window::latest().and_then(|id| {
+            iced::window::run(id, |_| {
+                tray::remove_native_item_for_test();
+                tray::pump();
+                CaptureMessage::TrayRecovering
+            })
+        }),
+        CaptureMessage::TrayRecovering => capture_tray_check(3),
+        CaptureMessage::TrayStateChecked(3) => {
+            drop(state.app.tray.take());
+            iced::window::latest().and_then(|id| {
+                iced::window::run(id, |_| {
+                    tray::pump();
+                    assert!(
+                        !tray::native_present(),
+                        "dropping the owner removes its item"
+                    );
+                    CaptureMessage::TrayFinished
+                })
+            })
+        }
+        CaptureMessage::TrayStateChecked(_) => unreachable!(),
+        CaptureMessage::TrayFinished => iced::window::latest()
             .and_then(|id| iced::window::screenshot(id).map(CaptureMessage::Captured)),
         CaptureMessage::Captured(screenshot) => {
             let output = std::path::PathBuf::from(
@@ -847,6 +873,45 @@ fn capture_update(state: &mut Capture, message: CaptureMessage) -> Task<CaptureM
             iced::exit()
         }
     }
+}
+
+#[cfg(target_os = "macos")]
+fn capture_tray_state(state: &mut Capture, stage: u8) -> Task<CaptureMessage> {
+    let (mode, system_proxy, tun) = match stage {
+        0 => ("rule", false, false),
+        1 => ("global", true, false),
+        2 => ("direct", false, true),
+        _ => unreachable!(),
+    };
+    state.app.tray.as_ref().unwrap().update(&Snapshot {
+        running: true,
+        mode: mode.into(),
+        system_proxy,
+        tun,
+        ..Default::default()
+    });
+    capture_tray_check(stage)
+}
+
+#[cfg(target_os = "macos")]
+fn capture_tray_check(stage: u8) -> Task<CaptureMessage> {
+    // AppKit lays out a new status window after returning to its run loop.
+    // Keep the owner alive across that turn, including after recovery.
+    Task::perform(
+        async { tokio::time::sleep(Duration::from_millis(300)).await },
+        |_| CaptureMessage::App(Message::Tick),
+    )
+    .chain(iced::window::latest().and_then(move |id| {
+        iced::window::run(id, move |_| {
+            assert!(
+                tray::start().is_err(),
+                "retry must not replace the live tray"
+            );
+            tray::pump();
+            tray::verify_native_state();
+            CaptureMessage::TrayStateChecked(stage)
+        })
+    }))
 }
 #[cfg(target_os = "macos")]
 fn capture_view(state: &Capture) -> Element<'_, CaptureMessage> {

@@ -598,7 +598,16 @@ pub fn verify_native_state() {
             .icon
             .rect()
             .expect("status button must have a window");
-        assert!(rect.size.width > 0 && rect.size.width <= 40);
+        let frame = button.frame();
+        let window = button.window().unwrap();
+        eprintln!(
+            "native menu-bar geometry: button={frame:?}, window={:?}, scale={}, physical={rect:?}",
+            window.frame(),
+            window.backingScaleFactor()
+        );
+        assert!(frame.size.width > 0.0 && frame.size.width <= 40.0);
+        assert!(frame.size.height > 0.0);
+        assert!(rect.size.width > 0);
         assert!(rect.size.height > 0);
         let state = native.updates.borrow();
         for (item, mode) in &native.checks.modes {
