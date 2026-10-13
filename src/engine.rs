@@ -39,6 +39,44 @@ fn mac_port_probe(port: u16) -> std::io::Result<tokio::net::TcpListener> {
     tokio::net::TcpListener::from_std(listener)
 }
 
+#[cfg(target_os = "macos")]
+async fn wait_for_mac_port(port: u16, logs: &LogBuffer) -> std::io::Result<()> {
+    // A prior TUN core can leave root-owned TIME_WAIT sockets after it exits.
+    // Darwin denies reuse by the new ordinary-user core until those expire.
+    // An actual listener must still fail immediately; never stop its owner.
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(60);
+    let mut reported = false;
+    loop {
+        let error = match mac_port_probe(port) {
+            Ok(_) => return Ok(()),
+            Err(error) => error,
+        };
+        if error.kind() != std::io::ErrorKind::AddrInUse {
+            return Err(error);
+        }
+        match tokio::time::timeout(
+            Duration::from_millis(200),
+            tokio::net::TcpStream::connect(("127.0.0.1", port)),
+        )
+        .await
+        {
+            Ok(Err(ref refused)) if refused.kind() == std::io::ErrorKind::ConnectionRefused => {}
+            _ => return Err(error),
+        }
+        if tokio::time::Instant::now() >= deadline {
+            return Err(error);
+        }
+        if !reported {
+            append(
+                logs,
+                format!("[客户端] 端口 {port} 暂无监听服务，等待连接状态释放"),
+            );
+            reported = true;
+        }
+        tokio::time::sleep(Duration::from_millis(250)).await;
+    }
+}
+
 #[derive(Default)]
 struct LogFrames {
     pending: Vec<u8>,
@@ -214,12 +252,32 @@ impl Engine {
         crate::profile_transaction::recover(&store.root)?;
         let geo_manifest = assets::seed(&resources, &store.runtime())?;
         let logs = Arc::new(Mutex::new(VecDeque::new()));
-        match platform::restore(&store.root.join("system-proxy.json")) {
+        let settings = store.load_settings();
+        #[cfg(target_os = "macos")]
+        let keep_proxy = settings.as_ref().is_ok_and(|settings| {
+            settings.proxy_mode == ProxyMode::System
+                && platform::is_owned_at_port(
+                    &store.root.join("system-proxy.json"),
+                    settings.mixed_port,
+                )
+                .unwrap_or(false)
+        });
+        #[cfg(not(target_os = "macos"))]
+        let keep_proxy = false;
+        match if keep_proxy {
+            append(
+                &logs,
+                "[客户端] 继续使用上次运行的系统代理，保留原设置恢复记录",
+            );
+            Ok(false)
+        } else {
+            platform::restore(&store.root.join("system-proxy.json"))
+        } {
             Ok(true) => append(&logs, "[客户端] 已恢复上次运行遗留的系统代理"),
             Ok(false) => {}
             Err(e) => append(&logs, format!("[客户端] 代理恢复失败：{e}")),
         }
-        let mut settings = store.load_settings()?;
+        let mut settings = settings?;
         let mut profiles = store.profiles()?;
         if profiles.is_empty() {
             let raw = read_profile(&resources.join("default.yaml"))
@@ -377,7 +435,8 @@ impl Engine {
         for port in [self.settings.controller_port, self.settings.mixed_port] {
             #[cfg(target_os = "macos")]
             if self.mac_tun.is_none() {
-                let _listener = mac_port_probe(port)
+                wait_for_mac_port(port, &self.logs)
+                    .await
                     .with_context(|| format!("无法绑定端口 {port}，请检查占用或系统端口限制"))?;
             }
             #[cfg(not(target_os = "macos"))]
@@ -1561,6 +1620,58 @@ mod memory_tests {
         let rebound = mac_port_probe(address.port()).unwrap();
         assert!(mac_port_probe(address.port()).is_err());
         drop(rebound);
+    }
+
+    #[cfg(target_os = "macos")]
+    #[tokio::test]
+    async fn mac_port_wait_rejects_a_real_listener_without_waiting() {
+        let listener = mac_port_probe(0).unwrap();
+        let port = listener.local_addr().unwrap().port();
+        let logs = Arc::new(Mutex::new(VecDeque::new()));
+        let result = tokio::time::timeout(Duration::from_secs(1), wait_for_mac_port(port, &logs))
+            .await
+            .expect("an active listener must not trigger the TIME_WAIT delay");
+        assert_eq!(result.unwrap_err().kind(), std::io::ErrorKind::AddrInUse);
+        assert!(logs.lock().unwrap().is_empty());
+        drop(listener);
+        wait_for_mac_port(port, &logs).await.unwrap();
+    }
+
+    #[cfg(target_os = "macos")]
+    #[tokio::test]
+    #[ignore = "creates a root-owned TCP connection on disposable macOS Actions only"]
+    async fn native_mac_root_to_user_port_reuse() {
+        assert_eq!(std::env::var("GITHUB_ACTIONS").as_deref(), Ok("true"));
+        use std::io::BufRead;
+        let script = "import socket\ns=socket.socket()\ns.setsockopt(socket.SOL_SOCKET,socket.SO_REUSEADDR,1)\ns.settimeout(5)\ns.bind(('127.0.0.1',0))\ns.listen(1)\nprint(s.getsockname()[1],flush=True)\nc,_=s.accept()\nc.sendall(b'root connection')\nc.shutdown(socket.SHUT_WR)\nc.close()\ns.close()\n";
+        let mut server = std::process::Command::new("/usr/bin/sudo")
+            .args(["-n", "/usr/bin/python3", "-c", script])
+            .stdout(std::process::Stdio::piped())
+            .spawn()
+            .unwrap();
+        let mut port = String::new();
+        std::io::BufReader::new(server.stdout.take().unwrap())
+            .read_line(&mut port)
+            .unwrap();
+        let port: u16 = port.trim().parse().unwrap();
+        let mut connection = tokio::net::TcpStream::connect(("127.0.0.1", port))
+            .await
+            .unwrap();
+        let mut response = Vec::new();
+        connection.read_to_end(&mut response).await.unwrap();
+        drop(connection);
+        assert!(server.wait().unwrap().success());
+        assert_eq!(response, b"root connection");
+        assert_eq!(
+            mac_port_probe(port).unwrap_err().kind(),
+            std::io::ErrorKind::AddrInUse,
+            "the old process is gone but root-owned TIME_WAIT must reproduce the reported failure"
+        );
+        let logs = Arc::new(Mutex::new(VecDeque::new()));
+        wait_for_mac_port(port, &logs).await.unwrap();
+        assert!(!logs.lock().unwrap().is_empty());
+        let listener = mac_port_probe(port).unwrap();
+        assert_eq!(listener.local_addr().unwrap().port(), port);
     }
 
     #[tokio::test]

@@ -1,6 +1,6 @@
 # macOS 开发与验收
 
-版本：0.5.5。最低系统目标为 macOS 14；CI 原生覆盖 Intel (`macos-15-intel`) 和 Apple Silicon (`macos-latest`)，分别输出 x64 和 arm64 安装包。
+版本：0.5.6-dev.1。最低系统目标为 macOS 14；CI 原生覆盖 Intel (`macos-15-intel`) 和 Apple Silicon (`macos-latest`)，分别输出 x64 和 arm64 安装包。
 
 ## 自动检查
 
@@ -8,15 +8,17 @@ CI 运行格式检查、Clippy、所有单元测试和真实 mihomo 集成测试
 
 手动 Publish Release 复用 CI 二进制，生成 `.app` 和 `.dmg`，检查版本、架构、离线资源与签名，并测试安装后的真实 GUI 窗口及内核。开发分支使用 `check_only=true`；不会合并分支或发布 Release。内存基准工作流保持手动触发。
 
-CI 与安装后的 DMG 均执行 12 个原生 GUI 场景：TUN 授权取消、授权超时、长会话后的内核重启；用户目录与系统目录自动更新、更新取消、版本/签名/架构校验拒绝、两种目录的替换失败恢复，以及只读 DMG 运行。测试检查正常退出、应用内容、以普通用户重启、实际窗口与健康内核、TUN 和进程清理。CI 使用免密 sudo 替代人工授权确认，但仍经过 osascript 和实际授权入口；故障注入仅存在于测试夹具，不进入发行程序。
+CI 与安装后的 DMG 均执行 16 个原生 GUI 场景：TUN 授权取消、授权超时、长会话后的内核重启；用户目录与系统目录自动更新、更新取消、版本/签名/架构校验拒绝、两种目录的替换失败恢复，以及只读 DMG 运行；另覆盖 TUN 与系统代理反复切换、真实用户 LaunchAgent 下开关自启动，以及开过 TUN 后切系统代理再更新的两种安装目录。测试检查正常退出、应用内容、以普通用户重启、实际窗口与健康内核、TUN 和进程清理。CI 使用免密 sudo 替代人工授权确认，但仍经过 osascript 和实际授权入口；系统代理测试临时允许一次性 runner 的固定网络授权项，结束后恢复，仍调用真实 Authorization Services 与 SystemConfiguration；故障注入仅存在于测试夹具，不进入发行程序。
 
 每种 Mac 架构都上传 `macos-*-report-*`：逐项状态与耗时、完整编译/测试日志、系统与硬件信息、网络设置、进程列表、系统日志、应用崩溃报告，以及窗口截图和线程采样。CI 还用独立测试入口保存九个页面在深色、浅色两种主题下的 18 张实际渲染截图，并在真正的 GUI 主线程检查托盘创建、三种状态及销毁；测试入口不进入发行程序。runner 未授予屏幕录制权限时，截图明确标记不可用，不计为截图验收通过。
+
+CI 还用真正的 root TCP 连接重现跨用户 TIME_WAIT：确认旧进程已退出而普通用户仍无法绑定，等待连接状态释放后复用原端口；真实监听占用仍立即拒绝。
 
 ## 实现与安装
 
 - 托盘创建、更新及销毁在 AppKit 主线程完成，Windows/Linux 保持现有线程实现。
-- 系统代理使用 SystemConfiguration 原生接口，保留各网络服务原先的 PAC、例外列表及代理设置；恢复前检查当前设置仍由客户端持有。
-- 开机启动采用当前用户的 `~/Library/LaunchAgents/org.clashofrust.desktop.plist`，以普通用户后台启动。启用后下次登录生效。
+- 系统代理复用进程内的 Authorization Services 会话，先无交互验证有效权限，未发生变化时不写入；开机启动仅在已保存的系统代理模式、端口和当前设置均属于本客户端时沿用恢复记录。系统代理使用 SystemConfiguration 原生接口，保留各网络服务原先的 PAC、例外列表及代理设置；恢复前检查当前设置仍由客户端持有。
+- 开机启动开关只调整用户的 plist，避免卸载正在运行的客户端 LaunchAgent。开机启动采用当前用户的 `~/Library/LaunchAgents/org.clashofrust.desktop.plist`，以普通用户后台启动。启用后下次登录生效。
 - TUN 助手单独编译，不链接 AppKit/Cocoa 或 Iced 桌面库；CI 用 `otool` 核对依赖。TUN 首次使用请求管理员授权，只启动短期的内核服务；GUI 不提权。会话使用私有 Unix socket、用户身份与随机令牌验证，固定执行已验证并冻结的 mihomo。桥接断开后停止内核，未使用的授权服务在五分钟后退出，不安装永久 root 服务或 setuid 文件。后台登录启动不会弹出 TUN 授权。
 - DMG 中的 `.app` 拖入 Applications 即可安装。数据目录使用 macOS 用户 Application Support，不写入应用包。
 - 当前安装包使用 ad-hoc 签名，可验证包完整性；它不提供 Apple Developer ID 信任或公证。尚未配置 Developer ID 签名和公证凭据，首次下载后的 Gatekeeper 提示见 [Apple 说明](https://support.apple.com/zh-cn/102445)。

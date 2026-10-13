@@ -14,6 +14,24 @@ struct MacFlow {
 
 #[cfg(target_os = "macos")]
 impl MacFlow {
+    fn begin_update(&mut self, task: Task<Message>) -> Task<Message> {
+        self.app.updates.install_pending = true;
+        let package =
+            std::path::PathBuf::from(std::env::var_os("CLASH_CI_UPDATE_PACKAGE").unwrap());
+        let version = std::env::var("CLASH_CI_UPDATE_VERSION").unwrap();
+        let install = Task::perform(
+            async move {
+                let download =
+                    update::fixture_download(&package, version).map_err(|e| e.to_string())?;
+                tokio::task::spawn_blocking(move || update::handoff(download))
+                    .await
+                    .map_err(|e| e.to_string())?
+                    .map_err(|e| e.to_string())
+            },
+            Message::UpdateHandoff,
+        );
+        Task::batch([task, install])
+    }
     fn record(&self, extra: serde_json::Value) {
         let logs = self
             .app
@@ -31,6 +49,8 @@ impl MacFlow {
             "notice": self.app.notice,
             "failure": self.app.updates.failure,
             "core_logs": logs,
+            "system_authorization_sessions": platform::macos::ci_proxy_authorization_creations(),
+            "administrator_requests": platform::macos::ci_authorizations(),
             "details": extra,
         });
         clash_of_rust::config::atomic_write(
@@ -51,35 +71,89 @@ impl MacFlow {
         let handoff = matches!(&message, Message::UpdateHandoff(_));
         let task = self.app.update(message);
         if handoff {
+            let tun_to_system = self.phase == 3 && self.scenario.starts_with("update-tun-");
             self.phase = 10;
-            self.record(serde_json::json!({"directory": self.app.updates.installing.as_ref().map(|session| &session.directory)}));
+            self.record(serde_json::json!({
+                "directory": self.app.updates.installing.as_ref().map(|session| &session.directory),
+                "tun_to_system_before_update": tun_to_system,
+            }));
         }
         if self.phase == 0 && finished && self.app.snapshot.running {
             self.phase = 1;
             self.record(serde_json::json!({}));
-            if self.scenario.starts_with("update") {
-                self.app.updates.install_pending = true;
-                let package =
-                    std::path::PathBuf::from(std::env::var_os("CLASH_CI_UPDATE_PACKAGE").unwrap());
-                let version = std::env::var("CLASH_CI_UPDATE_VERSION").unwrap();
-                let install = Task::perform(
-                    async move {
-                        let download = update::fixture_download(&package, version)
-                            .map_err(|e| e.to_string())?;
-                        tokio::task::spawn_blocking(move || update::handoff(download))
-                            .await
-                            .map_err(|e| e.to_string())?
-                            .map_err(|e| e.to_string())
-                    },
-                    Message::UpdateHandoff,
-                );
-                return Task::batch([task, install]);
+            if self.scenario == "autostart" {
+                return Task::batch([
+                    task,
+                    self.app.update(Message::Action(Action::Autostart(true))),
+                ]);
+            }
+            if self.scenario.starts_with("update") && !self.scenario.starts_with("update-tun-") {
+                return self.begin_update(task);
             }
             return Task::batch([
                 task,
                 self.app
                     .update(Message::Action(Action::ProxyMode(ProxyMode::Tun))),
             ]);
+        }
+        if self.scenario == "autostart" && action_finished {
+            if self.app.error || (self.phase == 2 && !self.app.autostart) {
+                self.phase = 10;
+                self.record(serde_json::json!({}));
+            } else if self.phase == 1 && self.app.autostart {
+                self.phase = 2;
+                return Task::batch([
+                    task,
+                    self.app.update(Message::Action(Action::Autostart(false))),
+                ]);
+            }
+        }
+        if self.scenario == "proxy-switches" && action_finished {
+            let next = match (
+                self.phase,
+                self.app.snapshot.tun,
+                self.app.settings.proxy_mode,
+            ) {
+                (1, true, _) => Some(ProxyMode::System),
+                (2, false, ProxyMode::System) => Some(ProxyMode::Tun),
+                (3, true, _) => Some(ProxyMode::System),
+                (4, false, ProxyMode::System) => Some(ProxyMode::Off),
+                _ => None,
+            };
+            if self.app.error
+                || (self.phase == 5
+                    && !self.app.snapshot.tun
+                    && self.app.settings.proxy_mode == ProxyMode::Off)
+            {
+                self.phase = 10;
+                self.record(serde_json::json!({}));
+            } else if let Some(mode) = next {
+                self.phase += 1;
+                return Task::batch([
+                    task,
+                    self.app.update(Message::Action(Action::ProxyMode(mode))),
+                ]);
+            }
+        }
+        if self.scenario.starts_with("update-tun-") && action_finished {
+            if self.app.error {
+                self.phase = 10;
+                self.record(serde_json::json!({}));
+            } else if self.phase == 1 && self.app.snapshot.tun {
+                self.phase = 2;
+                return Task::batch([
+                    task,
+                    self.app
+                        .update(Message::Action(Action::ProxyMode(ProxyMode::System))),
+                ]);
+            } else if self.phase == 2
+                && !self.app.snapshot.tun
+                && self.app.settings.proxy_mode == ProxyMode::System
+                && !self.app.working
+            {
+                self.phase = 3;
+                return self.begin_update(task);
+            }
         }
         if matches!(self.scenario.as_str(), "tun-cancel" | "tun-timeout")
             && self.phase == 1

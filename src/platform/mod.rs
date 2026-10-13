@@ -277,6 +277,16 @@ pub fn is_owned(journal_path: &Path) -> Result<bool> {
     Ok(native::read()? == journal.owned)
 }
 
+#[cfg(target_os = "macos")]
+pub fn is_owned_at_port(journal_path: &Path, port: u16) -> Result<bool> {
+    if !journal_path.exists() {
+        return Ok(false);
+    }
+    let journal: Journal = serde_json::from_slice(&std::fs::read(journal_path)?)?;
+    Ok(native::desired(&journal.original, port)? == journal.owned
+        && native::read()? == journal.owned)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
