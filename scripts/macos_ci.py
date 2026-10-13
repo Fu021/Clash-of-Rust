@@ -12,7 +12,8 @@ import tempfile
 import time
 import urllib.request
 
-from build_support import ROOT, host_arch, run, validate_binary_arch, validate_resources, write_json
+from build_support import ROOT, host_arch, run, validate_binary_arch, validate_resources, write_json, package_version
+from macos_package import disk_image
 
 REPORT = ROOT/'target/macos-report'
 
@@ -82,9 +83,19 @@ def native_tests(tests, bundle):
     suite('Real mihomo integration', lambda: logged('core-integration', [tests['core_integration'], '--ignored', '--test-threads=1'], timeout=300))
     suite('Native network service discovery', lambda: logged('native-network', [tests['library'], 'native_network_services_can_be_read', '--ignored', '--test-threads=1']))
     suite('Per-user autostart round trip', lambda: logged('native-autostart', [tests['library'], 'native_autostart_round_trip', '--ignored', '--test-threads=1']))
+    suite('Native authorization quoting and cancellation', lambda: logged('native-authorization', [tests['library'], 'native_authorization_script', '--ignored', '--test-threads=1']))
     suite('Proxy restore and later-owner protection', lambda: logged('native-proxy', ['sudo', '-n', 'env', 'GITHUB_ACTIONS=true', tests['library'], 'native_proxy_restore_round_trip', '--ignored', '--test-threads=1']))
     suite('Authorized core lease lifecycle', lambda: logged('native-tun', [tests['library'], 'native_tun_lease', '--ignored', '--test-threads=1'], env=dict(os.environ, MIHOMO_TEST_RESOURCES=str(bundle/'resources')), timeout=180))
-    suite('All pages in both themes', rendered_ui)
+    capture = suite('All pages in both themes', rendered_ui)
+    tests['macos_ui_fixture'] = capture['executable']
+    run(['cargo', 'build', '--release', '--locked', '--features', 'ui-preview', '--bin', 'clash-tun-launcher'])
+    fixture_helper = REPORT/'macos-helper-fixture'
+    shutil.copy2(ROOT/'target/release/clash-tun-launcher', fixture_helper)
+    tests['macos_helper_fixture'] = str(fixture_helper)
+    suite('Signed GUI authorization and update flows', lambda: logged('native-flows',
+        [sys.executable, ROOT/'scripts/test-macos-flows.py', '--bundle', bundle,
+         '--ui', capture['executable'], '--helper', fixture_helper, '--version', package_version(),
+         '--arch', host_arch(), '--report', REPORT], timeout=1200))
 
 
 def rendered_ui():
@@ -115,16 +126,16 @@ def rendered_ui():
             image = b'\x89PNG\r\n\x1a\n'+chunk(b'IHDR', struct.pack('>IIBBBBB', width, height, 8, 6, 0, 0, 0))+chunk(b'IDAT', zlib.compress(rows))+chunk(b'IEND', b'')
             destination.with_suffix('.png').write_bytes(image)
             destination.with_suffix('.rgba').unlink()
-    return {'screenshots': 18, 'source': 'iced rendered pixels', 'data': 'isolated fixtures, not live network results'}
+    return {'screenshots': 18, 'source': 'iced rendered pixels', 'data': 'isolated fixtures, not live network results', 'executable': executables[0]}
 
 
 @contextlib.contextmanager
 def mounted(package):
     with tempfile.TemporaryDirectory(prefix='clash-dmg-') as temporary:
         mount = Path(temporary)/'volume'
-        run(['/usr/bin/hdiutil', 'attach', package, '-readonly', '-nobrowse', '-noautoopen', '-mountpoint', mount], timeout=60)
+        disk_image(['attach', package, '-readonly', '-nobrowse', '-noautoopen', '-mountpoint', mount], timeout=60)
         try: yield mount
-        finally: run(['/usr/bin/hdiutil', 'detach', mount], timeout=60)
+        finally: disk_image(['detach', mount], timeout=60)
 
 
 def gui_smoke(app, label):
@@ -223,6 +234,14 @@ def installed_package_tests(package, manifest, build):
             # Use the same already-built integration binary with installed resources.
             env = dict(os.environ, MIHOMO_TEST_RESOURCES=str(installed/'Contents/Resources/resources'))
             suite('Installed core rules/subscriptions', lambda: logged('installed-core', [build/manifest['tests']['core_integration'], '--ignored', '--test-threads=1'], env=env))
+    # The updater must attach this same DMG itself. Finish inspection and detach
+    # the outer volume before exercising actual update transactions.
+    suite('Installed DMG authorization and update flows', lambda: logged('installed-flows',
+        [sys.executable, ROOT/'scripts/test-macos-flows.py', '--bundle', build/'payload',
+         '--ui', build/manifest['tests']['macos_ui_fixture'],
+         '--helper', build/manifest['tests']['macos_helper_fixture'],
+         '--version', manifest['version'], '--arch', manifest['arch'],
+         '--report', REPORT, '--label', 'installed', '--package', package], timeout=1200))
 
 
 def diagnostics(arch):
@@ -255,6 +274,11 @@ def diagnostics(arch):
         with open(summary, 'a') as stream:
             stream.write(f'### macOS {arch} diagnostics\n\n| Check | Result | Seconds |\n|---|---|---|\n')
             for entry in report['suites']: stream.write(f"| {entry['name']} | {entry['status']} | {entry.get('duration_seconds', '')} |\n")
+            for path in sorted(REPORT.glob('*-flows.json')):
+                flows = json.loads(path.read_text())
+                stream.write(f'\n#### {path.stem}\n\n| Flow | Result | Seconds |\n|---|---|---|\n')
+                for case in flows['cases']:
+                    stream.write(f"| {case['name']} | {case['status']} | {case.get('duration_seconds', '')} |\n")
             stream.write('\nFull logs, window metadata, available screenshots and crash reports are in the macOS report artifact. Authorization dialogs, reboot/login and physical display tests remain manual.\n')
 
 
@@ -269,7 +293,8 @@ def main():
     REPORT.mkdir(parents=True, exist_ok=True)
     planned = ['Compile, Clippy, unit tests and native integration', 'Real mihomo integration',
                'TUN helper excludes GUI frameworks', 'Native network service discovery', 'Per-user autostart round trip',
-               'Proxy restore and later-owner protection', 'Authorized core lease lifecycle', 'All pages in both themes']
+               'Native authorization quoting and cancellation', 'Proxy restore and later-owner protection',
+               'Authorized core lease lifecycle', 'All pages in both themes', 'Signed GUI authorization and update flows']
     write_json(REPORT/'report.json', {'schema': 1, 'arch': args.arch, 'status': 'running',
                'suites': [{'name': name, 'status': 'not_run'} for name in planned]})
     for name, command in [('proxy', ['/usr/sbin/scutil', '--proxy']),

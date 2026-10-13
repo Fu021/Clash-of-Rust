@@ -9,7 +9,7 @@ use std::{
 };
 mod authorization;
 mod cf;
-pub use authorization::{administrator, shell_quote};
+pub use authorization::{administrator, run as run_command, shell_quote};
 use cf::{Owned, Ref};
 pub mod tun;
 
@@ -31,6 +31,25 @@ unsafe extern "C" {
 unsafe extern "C" {
     fn AuthorizationCreate(rights: Ref, environment: Ref, flags: u32, auth: *mut Ref) -> i32;
     fn AuthorizationFree(auth: Ref, flags: u32) -> i32;
+    fn AuthorizationCopyRights(
+        auth: Ref,
+        rights: *const AuthorizationRights,
+        environment: Ref,
+        flags: u32,
+        authorized: Ref,
+    ) -> i32;
+}
+#[repr(C)]
+struct AuthorizationItem {
+    name: *const std::ffi::c_char,
+    value_length: usize,
+    value: *mut std::ffi::c_void,
+    flags: u32,
+}
+#[repr(C)]
+struct AuthorizationRights {
+    count: u32,
+    items: *mut AuthorizationItem,
 }
 struct Authorization(Ref);
 impl Drop for Authorization {
@@ -112,8 +131,28 @@ pub fn write(state: &ProxyState) -> Result<()> {
         "无法创建系统代理授权"
     );
     let auth = Authorization(auth);
+    let mut item = AuthorizationItem {
+        name: c"system.services.systemconfiguration.network".as_ptr(),
+        value_length: 0,
+        value: ptr::null_mut(),
+        flags: 0,
+    };
+    let rights = AuthorizationRights {
+        count: 1,
+        items: &mut item,
+    };
+    let status =
+        unsafe { AuthorizationCopyRights(auth.0, &rights, ptr::null(), 1 | 2, ptr::null()) };
+    ensure!(status != -60006, "已取消系统代理授权，原设置未改变");
+    ensure!(
+        status == 0,
+        "系统代理授权失败（macOS Security {status}），原设置未改变"
+    );
     let prefs = preferences(Some(&auth))?;
-    sc_check(unsafe { SCPreferencesLock(prefs.0, 1) }, "锁定网络设置")?;
+    sc_check(
+        unsafe { SCPreferencesLock(prefs.0, 0) },
+        "锁定网络设置（其他程序占用时请重试）",
+    )?;
     let result = (|| {
         for (id, value) in state {
             ensure!(

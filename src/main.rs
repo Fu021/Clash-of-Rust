@@ -337,6 +337,8 @@ enum Action {
     SaveRules(String, ProfileRules),
     LoadRules(String),
     Theme(bool),
+    DnsOverride(bool),
+    Ipv6(bool),
     Autostart(bool),
     DelayInterval(u32),
     NodeSort(NodeSort),
@@ -575,6 +577,22 @@ async fn execute(engine: Arc<Mutex<Engine>>, action: Action, scope: Scope, heade
                 };
                 engine.save_settings(settings).await?;
                 Ok("外观已自动保存".into())
+            }
+            Action::DnsOverride(dns_override) => {
+                let settings = Settings {
+                    dns_override,
+                    ..engine.settings.clone()
+                };
+                engine.save_settings(settings).await?;
+                Ok("DNS 覆盖设置已保存并应用".into())
+            }
+            Action::Ipv6(ipv6) => {
+                let settings = Settings {
+                    ipv6,
+                    ..engine.settings.clone()
+                };
+                engine.save_settings(settings).await?;
+                Ok("IPv6 设置已保存并应用".into())
             }
             Action::Autostart(enabled) => {
                 tokio::task::spawn_blocking(move || platform::set_autostart(enabled)).await??;
@@ -1046,6 +1064,8 @@ impl App {
             action,
             Action::Start
                 | Action::SavePorts(..)
+                | Action::DnsOverride(_)
+                | Action::Ipv6(_)
                 | Action::SaveRules(..)
                 | Action::Activate(_)
                 | Action::UpdateProfile(_)
@@ -1238,7 +1258,11 @@ impl App {
                 self.updates.install_pending = false;
                 match result {
                     Ok(directory) => {
+                        let shutdown = directory.requires_shutdown();
                         self.updates.installing = Some(directory);
+                        if shutdown {
+                            return self.exit();
+                        }
                     }
                     Err(reason) => self.updates.fail(reason),
                 }
@@ -2190,6 +2214,9 @@ impl App {
                     self.notice_visible = true;
                     self.notice = format!("退出失败：{error}");
                     if self.updates.busy() {
+                        if let Some(session) = &self.updates.installing {
+                            session.cancel();
+                        }
                         self.updates.progress = None;
                         self.updates.failure =
                             Some("更新失败：客户端无法正常退出，请检查代理恢复或内核状态".into());
@@ -2576,7 +2603,7 @@ impl App {
         let update_status = if self.updates.failure.is_some() {
             self.updates.failure.as_deref()
         } else if self.updates.install_pending || self.updates.installing.is_some() {
-            Some("正在安装更新，请完成系统授权…")
+            Some("正在准备或安装更新；需要时会请求系统授权…")
         } else {
             None
         };
@@ -4226,6 +4253,26 @@ impl App {
             .spacing(12),
         ]
         .spacing(12);
+        let network = column![
+            self.title("网络配置"),
+            checkbox(self.settings.dns_override)
+                .label("DNS 覆盖")
+                .size(self.scaled(16))
+                .text_size(self.scaled(12))
+                .on_toggle_maybe(
+                    (!self.working && !self.exiting && !self.updates.busy())
+                        .then_some(|enabled| Message::Action(Action::DnsOverride(enabled))),
+                ),
+            checkbox(self.settings.ipv6)
+                .label("启用 IPv6")
+                .size(self.scaled(16))
+                .text_size(self.scaled(12))
+                .on_toggle_maybe(
+                    (!self.working && !self.exiting && !self.updates.busy())
+                        .then_some(|enabled| Message::Action(Action::Ipv6(enabled))),
+                ),
+        ]
+        .spacing(12);
         let geo = column![
             self.title("Geo 数据"),
             self.label(presentation::geo_version(&self.geo_status))
@@ -4241,6 +4288,10 @@ impl App {
                     .width(Length::Fill)
                     .style(panel),
                 container(ports)
+                    .padding(16)
+                    .width(Length::Fill)
+                    .style(panel),
+                container(network)
                     .padding(16)
                     .width(Length::Fill)
                     .style(panel),

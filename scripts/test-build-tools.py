@@ -22,6 +22,29 @@ _spec.loader.exec_module(release)
 
 
 class BuildTests(unittest.TestCase):
+    def test_disk_image_retries_only_busy_errors_and_bounds_attempts(self):
+        import macos_package as mac
+        busy = subprocess.CompletedProcess([], 1, '', 'hdiutil: create failed - Resource busy\n')
+        ok = subprocess.CompletedProcess([], 0, 'created\n', '')
+        denied = subprocess.CompletedProcess([], 1, '', 'Permission denied\n')
+        with patch.object(mac.time, 'sleep'), patch.object(mac.sys, 'stdout', io.StringIO()), patch.object(mac.sys, 'stderr', io.StringIO()):
+            with patch.object(mac.subprocess, 'run', side_effect=[busy, ok]) as execute:
+                mac.disk_image(['create', 'path with spaces.dmg'])
+                self.assertEqual(execute.call_count, 2)
+                self.assertEqual(execute.call_args.args[0][-1], 'path with spaces.dmg')
+            with patch.object(mac.subprocess, 'run', return_value=denied) as execute:
+                with self.assertRaises(subprocess.CalledProcessError):
+                    mac.disk_image(['attach', 'package.dmg'])
+                self.assertEqual(execute.call_count, 1)
+            with patch.object(mac.subprocess, 'run', return_value=busy) as execute:
+                with self.assertRaises(subprocess.CalledProcessError):
+                    mac.disk_image(['detach', '/Volumes/test'])
+                self.assertEqual(execute.call_count, 5)
+            with patch.object(mac.time, 'monotonic', side_effect=[0, 2]), patch.object(mac.subprocess, 'run') as execute:
+                with self.assertRaises(subprocess.TimeoutExpired):
+                    mac.disk_image(['create', 'package.dmg'], timeout=1)
+                execute.assert_not_called()
+
     def test_linux_helpers_are_distinct_inactive_native_copies(self):
         spec = importlib.util.spec_from_file_location('build_installer',build.ROOT/'scripts/build-installer.py')
         installer = importlib.util.module_from_spec(spec)

@@ -29,6 +29,16 @@ pub type LogBuffer = Arc<Mutex<VecDeque<Arc<str>>>>;
 
 const LOG_FRAME_LIMIT: usize = 64 * 1024;
 
+#[cfg(target_os = "macos")]
+fn mac_port_probe(port: u16) -> std::io::Result<tokio::net::TcpListener> {
+    // Match Go's listener behavior. A graceful core shutdown can leave API
+    // connections in TIME_WAIT; these do not prevent mihomo from rebinding.
+    // Listen as well as bind so an active listener still fails the probe.
+    let listener = platform::macos::tun::probe_port(port)?;
+    listener.set_nonblocking(true)?;
+    tokio::net::TcpListener::from_std(listener)
+}
+
 #[derive(Default)]
 struct LogFrames {
     pending: Vec<u8>,
@@ -261,7 +271,8 @@ impl Engine {
     fn command(&self) -> Result<Command> {
         #[cfg(target_os = "macos")]
         if let Some(session) = &self.mac_tun {
-            let mut command = session.command()?;
+            let mut command =
+                session.command(self.settings.controller_port, self.settings.mixed_port)?;
             command.kill_on_drop(true);
             return Ok(command);
         }
@@ -364,6 +375,12 @@ impl Engine {
             self.mac_tun = None;
         }
         for port in [self.settings.controller_port, self.settings.mixed_port] {
+            #[cfg(target_os = "macos")]
+            if self.mac_tun.is_none() {
+                let _listener = mac_port_probe(port)
+                    .with_context(|| format!("无法绑定端口 {port}，请检查占用或系统端口限制"))?;
+            }
+            #[cfg(not(target_os = "macos"))]
             let _listener = std::net::TcpListener::bind(("127.0.0.1", port))
                 .with_context(|| format!("无法绑定端口 {port}，请检查占用或系统端口限制"))?;
         }
@@ -564,7 +581,23 @@ impl Engine {
         if settings.controller_port == self.settings.controller_port
             && settings.mixed_port == self.settings.mixed_port
         {
-            self.store.save_settings(&settings)?;
+            if (settings.dns_override != self.settings.dns_override
+                || settings.ipv6 != self.settings.ipv6)
+                && let Some(id) = settings.active_profile.as_deref()
+            {
+                let raw = read_profile(&self.store.profile_path(id)?)?;
+                let payload = self.profile_payload(&raw, &settings, id)?;
+                drop(raw);
+                let mut transaction =
+                    crate::profile_transaction::Transaction::new(&self.store.root)?;
+                transaction.stage(
+                    &self.store.root.join("settings.json"),
+                    &serde_json::to_vec_pretty(&settings)?,
+                )?;
+                self.commit_profile(transaction, &payload, true).await?;
+            } else {
+                self.store.save_settings(&settings)?;
+            }
             self.settings = settings;
             return Ok(());
         }
@@ -1511,6 +1544,23 @@ mod memory_tests {
         emitted.clear();
         frames.push(&b"ok\n".repeat(30_000), |line| emitted.push(line.to_vec()));
         assert_eq!(emitted.len(), 30_000);
+    }
+
+    #[cfg(target_os = "macos")]
+    #[tokio::test]
+    async fn mac_port_probe_reuses_closed_connections_and_rejects_live_listeners() {
+        let listener = mac_port_probe(0).unwrap();
+        let address = listener.local_addr().unwrap();
+        assert!(mac_port_probe(address.port()).is_err());
+        let mut client = tokio::net::TcpStream::connect(address).await.unwrap();
+        let (server, _) = listener.accept().await.unwrap();
+        drop(server);
+        assert_eq!(client.read(&mut [0; 1]).await.unwrap(), 0);
+        drop(client);
+        drop(listener);
+        let rebound = mac_port_probe(address.port()).unwrap();
+        assert!(mac_port_probe(address.port()).is_err());
+        drop(rebound);
     }
 
     #[tokio::test]

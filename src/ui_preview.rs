@@ -1,6 +1,178 @@
 //! Deterministic screenshots of the real views. Feature-gated out of installers.
 use super::*;
 
+// Run the actual application state machine and real core from a signed fixture
+// app. Only input delivery and human confirmation are replaced; installers,
+// authorization scripts, socket leases and normal shutdown remain production code.
+#[cfg(target_os = "macos")]
+struct MacFlow {
+    app: App,
+    scenario: String,
+    phase: u8,
+    report: std::path::PathBuf,
+}
+
+#[cfg(target_os = "macos")]
+impl MacFlow {
+    fn record(&self, extra: serde_json::Value) {
+        let logs = self
+            .app
+            .engine
+            .as_ref()
+            .and_then(|engine| engine.try_lock().ok()?.export_logs().ok())
+            .and_then(|path| std::fs::read_to_string(path).ok());
+        let payload = serde_json::json!({
+            "scenario": self.scenario,
+            "phase": self.phase,
+            "running": self.app.snapshot.running,
+            "tun": self.app.snapshot.tun,
+            "exiting": self.app.exiting,
+            "error": self.app.error,
+            "notice": self.app.notice,
+            "failure": self.app.updates.failure,
+            "core_logs": logs,
+            "details": extra,
+        });
+        clash_of_rust::config::atomic_write(
+            &self.report,
+            &serde_json::to_vec_pretty(&payload).unwrap(),
+        )
+        .unwrap();
+    }
+    fn update(&mut self, message: Message) -> Task<Message> {
+        let finished = matches!(&message, Message::Finished(_));
+        // Refreshes also produce Finished messages and can complete while an
+        // action is queued. Only an action's nonempty notice/error confirms it.
+        let action_finished = matches!(
+            &message,
+            Message::Finished(reply)
+                if !matches!(&reply.notice, Ok(notice) if notice.is_empty())
+        );
+        let handoff = matches!(&message, Message::UpdateHandoff(_));
+        let task = self.app.update(message);
+        if handoff {
+            self.phase = 10;
+            self.record(serde_json::json!({"directory": self.app.updates.installing.as_ref().map(|session| &session.directory)}));
+        }
+        if self.phase == 0 && finished && self.app.snapshot.running {
+            self.phase = 1;
+            self.record(serde_json::json!({}));
+            if self.scenario.starts_with("update") {
+                self.app.updates.install_pending = true;
+                let package =
+                    std::path::PathBuf::from(std::env::var_os("CLASH_CI_UPDATE_PACKAGE").unwrap());
+                let version = std::env::var("CLASH_CI_UPDATE_VERSION").unwrap();
+                let install = Task::perform(
+                    async move {
+                        let download = update::fixture_download(&package, version)
+                            .map_err(|e| e.to_string())?;
+                        tokio::task::spawn_blocking(move || update::handoff(download))
+                            .await
+                            .map_err(|e| e.to_string())?
+                            .map_err(|e| e.to_string())
+                    },
+                    Message::UpdateHandoff,
+                );
+                return Task::batch([task, install]);
+            }
+            return Task::batch([
+                task,
+                self.app
+                    .update(Message::Action(Action::ProxyMode(ProxyMode::Tun))),
+            ]);
+        }
+        if matches!(self.scenario.as_str(), "tun-cancel" | "tun-timeout")
+            && self.phase == 1
+            && action_finished
+        {
+            self.phase = 10;
+            self.record(serde_json::json!({}));
+        } else if self.scenario == "tun" && action_finished {
+            if self.app.error {
+                self.phase = 10;
+                self.record(serde_json::json!({}));
+            } else if self.phase == 1 && self.app.snapshot.tun {
+                self.phase = 2;
+                // Exceed the fixture helper's 5s idle interval while the core is
+                // running, then restart it through the actual port-save action.
+                let port = std::net::TcpListener::bind("127.0.0.1:0")
+                    .unwrap()
+                    .local_addr()
+                    .unwrap()
+                    .port();
+                self.app.mixed_port = port.to_string();
+                self.record(serde_json::json!({"restart_port": port}));
+                return Task::batch([
+                    task,
+                    Task::perform(
+                        async { tokio::time::sleep(Duration::from_secs(6)).await },
+                        |_| Message::Action(Action::SavePorts(0, 0)),
+                    ),
+                ]);
+            } else if self.phase == 2 && self.app.snapshot.tun && !self.app.working {
+                // Periodic refreshes are also Finished messages; wait for the
+                // new mixed port to reach the persisted settings first.
+                if self.app.mixed_port == self.app.settings.mixed_port.to_string() {
+                    self.phase = 3;
+                    return Task::batch([
+                        task,
+                        self.app
+                            .update(Message::Action(Action::ProxyMode(ProxyMode::Off))),
+                    ]);
+                }
+            } else if self.phase == 3 && !self.app.snapshot.tun && !self.app.working {
+                self.phase = 10;
+                self.record(serde_json::json!({"lease_reused_after_long_run": true}));
+                return Task::batch([task, self.app.exit()]);
+            }
+        }
+        task
+    }
+    fn view(&self) -> Element<'_, Message> {
+        self.app.view()
+    }
+    fn theme(&self) -> Theme {
+        self.app.theme()
+    }
+    fn subscription(&self) -> Subscription<Message> {
+        self.app.subscription()
+    }
+}
+
+#[cfg(target_os = "macos")]
+pub(crate) fn run_macos_flow() -> iced::Result {
+    if update_restart() {
+        return super::main();
+    }
+    assert_eq!(std::env::var("GITHUB_ACTIONS").as_deref(), Ok("true"));
+    typography::initialize();
+    let scenario = std::env::var("CLASH_CI_FLOW").unwrap();
+    let report = std::path::PathBuf::from(std::env::var_os("CLASH_CI_FLOW_REPORT").unwrap());
+    iced::application(
+        move || {
+            let (mut app, task) = App::with_engine(startup_store().and_then(Engine::new), None);
+            app.updates.started = true;
+            (
+                MacFlow {
+                    app,
+                    scenario: scenario.clone(),
+                    report: report.clone(),
+                    phase: 0,
+                },
+                task,
+            )
+        },
+        MacFlow::update,
+        MacFlow::view,
+    )
+    .title("Clash of Rust · native macOS test")
+    .theme(MacFlow::theme)
+    .subscription(MacFlow::subscription)
+    .default_font(typography::ENGLISH_FONT)
+    .window(window_settings(DEFAULT_WINDOW_SIZE, true))
+    .run()
+}
+
 fn fixture(scene: &str) -> App {
     let mut app = App::with_engine(Err(anyhow::anyhow!("isolated preview")), None).0;
     app.snapshot.running = true;

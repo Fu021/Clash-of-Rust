@@ -20,6 +20,8 @@ struct Request {
     operation: String,
     directory: Option<PathBuf>,
     config: Option<PathBuf>,
+    #[serde(default)]
+    ports: Vec<u16>,
 }
 #[derive(Serialize, Deserialize)]
 struct Event {
@@ -32,13 +34,16 @@ pub struct Session {
 }
 impl Session {
     pub fn authorize() -> Result<Self> {
-        let directory = tempfile::Builder::new().prefix("clash-tun-").tempdir()?;
-        std::fs::set_permissions(directory.path(), std::fs::Permissions::from_mode(0o700))?;
-        let token = uuid::Uuid::new_v4().to_string();
         let launcher = std::env::current_exe()?
             .parent()
             .context("无法定位 TUN 助手")?
             .join("clash-tun-launcher");
+        Self::authorize_with(&launcher, super::administrator)
+    }
+    fn authorize_with(launcher: &Path, authorize: impl FnOnce(&str) -> Result<()>) -> Result<Self> {
+        let directory = tempfile::Builder::new().prefix("clash-tun-").tempdir()?;
+        std::fs::set_permissions(directory.path(), std::fs::Permissions::from_mode(0o700))?;
+        let token = uuid::Uuid::new_v4().to_string();
         ensure!(
             launcher.is_file(),
             "TUN 助手缺失，请使用完整的 macOS 安装包"
@@ -51,7 +56,15 @@ impl Session {
             unsafe { libc::getuid() },
             super::shell_quote(&token)
         );
-        super::administrator(&script)?;
+        #[cfg(feature = "ui-preview")]
+        let script = if std::env::var("GITHUB_ACTIONS").as_deref() == Ok("true")
+            && std::env::var("CLASH_CI_SHORT_IDLE").as_deref() == Ok("true")
+        {
+            format!("{script} --ci-short-idle")
+        } else {
+            script
+        };
+        authorize(&script)?;
         let session = Self { directory, token };
         let deadline = Instant::now() + Duration::from_secs(10);
         loop {
@@ -75,6 +88,7 @@ impl Session {
                 operation: operation.into(),
                 directory: None,
                 config: None,
+                ports: Vec::new(),
             },
         )?;
         stream.write_all(b"\n")?;
@@ -92,7 +106,7 @@ impl Session {
         UnixStream::connect(self.directory.path().join("core.sock"))
             .is_ok_and(|stream| peer_uid(&stream).is_ok_and(|uid| uid == 0))
     }
-    pub fn command(&self) -> Result<tokio::process::Command> {
+    pub fn command(&self, controller: u16, mixed: u16) -> Result<tokio::process::Command> {
         let launcher = std::env::current_exe()?
             .parent()
             .context("无法定位 TUN 助手")?
@@ -102,6 +116,9 @@ impl Session {
             "--macos-bridge",
             &self.directory.path().join("core.sock").to_string_lossy(),
             &self.token,
+            "--probe-ports",
+            &controller.to_string(),
+            &mixed.to_string(),
         ]);
         Ok(command)
     }
@@ -119,6 +136,51 @@ fn peer_uid(stream: &UnixStream) -> Result<u32> {
         "无法确认 TUN 会话身份"
     );
     Ok(uid)
+}
+pub(crate) fn probe_port(port: u16) -> std::io::Result<std::net::TcpListener> {
+    use std::os::fd::{AsRawFd, FromRawFd};
+    let fd = unsafe { libc::socket(libc::AF_INET, libc::SOCK_STREAM, 0) };
+    if fd < 0 {
+        return Err(std::io::Error::last_os_error());
+    }
+    let listener = unsafe { std::net::TcpListener::from_raw_fd(fd) };
+    if unsafe { libc::fcntl(listener.as_raw_fd(), libc::F_SETFD, libc::FD_CLOEXEC) } < 0 {
+        return Err(std::io::Error::last_os_error());
+    }
+    let reuse: libc::c_int = 1;
+    let address = libc::sockaddr_in {
+        sin_len: std::mem::size_of::<libc::sockaddr_in>() as u8,
+        sin_family: libc::AF_INET as u8,
+        sin_port: port.to_be(),
+        sin_addr: libc::in_addr {
+            s_addr: u32::from_ne_bytes([127, 0, 0, 1]),
+        },
+        sin_zero: [0; 8],
+    };
+    if unsafe {
+        libc::setsockopt(
+            listener.as_raw_fd(),
+            libc::SOL_SOCKET,
+            libc::SO_REUSEADDR,
+            (&reuse as *const libc::c_int).cast(),
+            std::mem::size_of_val(&reuse) as libc::socklen_t,
+        )
+    } != 0
+    {
+        return Err(std::io::Error::last_os_error());
+    }
+    if unsafe {
+        libc::bind(
+            listener.as_raw_fd(),
+            (&address as *const libc::sockaddr_in).cast(),
+            address.sin_len as libc::socklen_t,
+        )
+    } != 0
+        || unsafe { libc::listen(listener.as_raw_fd(), 1) } != 0
+    {
+        return Err(std::io::Error::last_os_error());
+    }
+    Ok(listener)
 }
 fn request(stream: &UnixStream) -> Result<Request> {
     stream.set_read_timeout(Some(Duration::from_secs(5)))?;
@@ -298,6 +360,14 @@ fn run_core(mut stream: UnixStream, request: Request, uid: u32, core: &Path) -> 
         runtime.metadata()?.uid() == uid,
         "TUN 配置目录所有者发生变化"
     );
+    ensure!(request.ports.len() <= 2, "TUN 端口参数无效");
+    for port in request.ports {
+        ensure!(port != 0, "TUN 端口参数无效");
+        // Probe as the same identity that will bind the actual listeners.
+        // Darwin prevents a user probe from reusing root-owned TIME_WAIT state.
+        let _listener = probe_port(port)
+            .with_context(|| format!("无法绑定端口 {port}，请检查占用或系统端口限制"))?;
+    }
     let monitor = stream.try_clone()?;
     monitor.set_read_timeout(None)?;
     // Use only the installed core and a fixed argument set; no executable/shell
@@ -369,7 +439,7 @@ fn run_core(mut stream: UnixStream, request: Request, uid: u32, core: &Path) -> 
     restore_runtime_owner(&runtime, uid)?;
     result
 }
-fn serve(socket: &Path, uid: u32, token: &str) -> Result<()> {
+fn serve(socket: &Path, uid: u32, token: &str, idle_limit: Duration) -> Result<()> {
     ensure!(
         unsafe { libc::geteuid() } == 0 && uid != 0 && uuid::Uuid::parse_str(token).is_ok(),
         "TUN 服务身份无效"
@@ -396,7 +466,7 @@ fn serve(socket: &Path, uid: u32, token: &str) -> Result<()> {
     );
     listener.set_nonblocking(true)?;
     let mut idle = Instant::now();
-    while idle.elapsed() < Duration::from_secs(300) && socket.exists() {
+    while idle.elapsed() < idle_limit && socket.exists() {
         let (mut stream, _) = match listener.accept() {
             Ok(value) => value,
             Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {
@@ -415,7 +485,6 @@ fn serve(socket: &Path, uid: u32, token: &str) -> Result<()> {
             Ok(value) if value.token == token => value,
             _ => continue,
         };
-        idle = Instant::now();
         match request.operation.as_str() {
             "ping" => {
                 stream.write_all(b"ready\n")?;
@@ -438,15 +507,37 @@ fn serve(socket: &Path, uid: u32, token: &str) -> Result<()> {
             }
             _ => {}
         }
+        // A running lease is activity, regardless of how long its core lived.
+        // Begin the reusable service's idle grace period after that lease ends.
+        idle = Instant::now();
     }
     let _ = std::fs::remove_file(socket);
     Ok(())
 }
 fn bridge(socket: &Path, token: &str, arguments: &[String]) -> Result<i32> {
+    let (ports, arguments) = if arguments.first().map(String::as_str) == Some("--probe-ports") {
+        ensure!(arguments.len() == 7, "TUN 端口参数无效");
+        (
+            vec![arguments[1].parse::<u16>()?, arguments[2].parse::<u16>()?],
+            &arguments[3..],
+        )
+    } else {
+        (Vec::new(), arguments)
+    };
     ensure!(
         arguments.len() == 4 && arguments[0] == "-d" && arguments[2] == "-f",
         "TUN 启动参数无效"
     );
+    // Darwin's /var and /tmp aliases (and custom data directories) may differ
+    // from their canonical paths. Send one canonical directory to the service
+    // while retaining its no-symlink check on the config file itself.
+    let directory = Path::new(&arguments[1]);
+    ensure!(
+        Path::new(&arguments[3]) == directory.join("config.yaml"),
+        "TUN 配置路径无效"
+    );
+    let directory = std::fs::canonicalize(directory)?;
+    let config = directory.join("config.yaml");
     let mut stream =
         UnixStream::connect(socket).context("TUN 授权会话已结束，请重新点击 TUN 模式")?;
     ensure!(peer_uid(&stream)? == 0, "TUN 服务不是管理员进程");
@@ -455,8 +546,9 @@ fn bridge(socket: &Path, token: &str, arguments: &[String]) -> Result<i32> {
         &Request {
             token: token.into(),
             operation: "start".into(),
-            directory: Some(arguments[1].clone().into()),
-            config: Some(arguments[3].clone().into()),
+            directory: Some(directory),
+            config: Some(config),
+            ports,
         },
     )?;
     stream.write_all(b"\n")?;
@@ -506,6 +598,16 @@ static USER_STOP: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool:
 extern "C" fn user_stop(_: i32) {
     USER_STOP.store(true, std::sync::atomic::Ordering::Relaxed);
 }
+fn session_idle_limit(args: &[String]) -> Result<Duration> {
+    if args.len() == 4 {
+        return Ok(Duration::from_secs(300));
+    }
+    #[cfg(feature = "ui-preview")]
+    if args.len() == 5 && args[4] == "--ci-short-idle" {
+        return Ok(Duration::from_secs(5));
+    }
+    bail!("TUN 会话参数无效")
+}
 pub fn launcher_main() -> Result<i32> {
     let args: Vec<String> = std::env::args().skip(1).collect();
     match args.first().map(String::as_str) {
@@ -541,7 +643,8 @@ pub fn launcher_main() -> Result<i32> {
                 std::thread::sleep(Duration::from_millis(50));
             }
         }
-        Some("--macos-authorize") if args.len() == 4 => {
+        Some("--macos-authorize") if args.len() >= 4 => {
+            session_idle_limit(&args)?;
             ensure!(
                 unsafe { libc::geteuid() } == 0,
                 "TUN 授权助手需要管理员权限"
@@ -568,8 +671,13 @@ pub fn launcher_main() -> Result<i32> {
             }
             Ok(0)
         }
-        Some("--macos-serve") if args.len() == 4 => {
-            serve(Path::new(&args[1]), args[2].parse()?, &args[3])?;
+        Some("--macos-serve") if args.len() >= 4 => {
+            serve(
+                Path::new(&args[1]),
+                args[2].parse()?,
+                &args[3],
+                session_idle_limit(&args)?,
+            )?;
             Ok(0)
         }
         Some("--macos-bridge") if args.len() >= 3 => {
@@ -608,6 +716,8 @@ mod tests {
         std::os::unix::fs::symlink(outside.path(), directory_path.join("linked-directory"))
             .unwrap();
         std::fs::hard_link(&external_hardlink, directory_path.join("linked-file")).unwrap();
+        let runtime_alias = outside.path().join("runtime alias");
+        std::os::unix::fs::symlink(&directory_path, &runtime_alias).unwrap();
         // A real HTTP provider makes mihomo create nested root-owned cache
         // files. The ordinary user must be able to update them after TUN stops.
         let provider = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
@@ -637,8 +747,6 @@ mod tests {
             false
         });
         let provider_cache = directory_path.join("providers/native.yaml");
-        let socket = directory_path.join("core.sock");
-        let token = uuid::Uuid::new_v4().to_string();
         let port = std::net::TcpListener::bind("127.0.0.1:0")
             .unwrap()
             .local_addr()
@@ -646,27 +754,50 @@ mod tests {
             .port();
         let config = directory_path.join("config.yaml");
         crate::config::atomic_write(&config, format!("mixed-port: {port}\nmode: direct\nlog-level: debug\nproxy-providers:\n  native:\n    type: http\n    url: http://127.0.0.1:{provider_port}/nodes.yaml\n    path: ./providers/native.yaml\n    interval: 3600\nproxy-groups:\n  - {{name: fixture, type: select, use: [native]}}\ntun:\n  enable: true\n  stack: system\n  device: utun233\n  auto-route: false\n  auto-detect-interface: true\nrules: ['MATCH,DIRECT']\n").as_bytes()).unwrap();
-        let mut server = Command::new("/usr/bin/sudo")
-            .args(["-n"])
-            .arg(&launcher)
-            .arg("--macos-serve")
-            .arg(&socket)
-            .arg(unsafe { libc::getuid() }.to_string())
-            .arg(&token)
-            .spawn()
-            .unwrap();
+        let authorized = Session::authorize_with(&launcher, |script| {
+            super::super::authorization::without_dialog(&format!(
+                "/usr/bin/sudo -n /bin/sh -c {}",
+                super::super::shell_quote(script)
+            ))
+        })
+        .unwrap();
+        let socket = authorized.directory.path().join("core.sock");
+        let token = authorized.token.clone();
         let deadline = Instant::now() + Duration::from_secs(10);
         while !socket.exists() {
             assert!(Instant::now() < deadline);
             std::thread::sleep(Duration::from_millis(50));
         }
+        // The root-side probe must reject a real listener, without starting a
+        // core or consuming the reusable authorization session.
+        let rejected = Command::new(&launcher)
+            .args([
+                "--macos-bridge",
+                &socket.to_string_lossy(),
+                &token,
+                "--probe-ports",
+                &provider_port.to_string(),
+                &port.to_string(),
+                "-d",
+                &runtime_alias.to_string_lossy(),
+                "-f",
+                &runtime_alias.join("config.yaml").to_string_lossy(),
+            ])
+            .output()
+            .unwrap();
+        assert!(!rejected.status.success());
+        assert!(
+            String::from_utf8_lossy(&rejected.stdout)
+                .contains(&format!("无法绑定端口 {provider_port}"))
+        );
+        authorized.wait_idle().unwrap();
         let script = format!(
-            "{} --macos-bridge {} {} -d {} -f {} & wait",
+            "{} --macos-bridge {} {} --probe-ports {port} {port} -d {} -f {} & wait",
             super::super::shell_quote(&launcher.to_string_lossy()),
             super::super::shell_quote(&socket.to_string_lossy()),
             super::super::shell_quote(&token),
-            super::super::shell_quote(&directory_path.to_string_lossy()),
-            super::super::shell_quote(&config.to_string_lossy())
+            super::super::shell_quote(&runtime_alias.to_string_lossy()),
+            super::super::shell_quote(&runtime_alias.join("config.yaml").to_string_lossy())
         );
         let mut bridge = Command::new("/bin/sh")
             .args(["-c", &script])
@@ -695,7 +826,7 @@ mod tests {
         })();
         let _ = bridge.kill();
         let _ = bridge.wait();
-        let session = Session { directory, token };
+        let session = authorized;
         session.wait_idle().unwrap();
         assert!(
             provider_server.join().unwrap(),
@@ -730,7 +861,10 @@ mod tests {
         );
         assert!(session.is_available());
         session.request("stop").unwrap();
-        server.wait().unwrap();
+        let deadline = Instant::now() + Duration::from_secs(5);
+        while session.is_available() && Instant::now() < deadline {
+            std::thread::sleep(Duration::from_millis(50));
+        }
         assert!(
             !session.is_available(),
             "stopped service was still reusable"

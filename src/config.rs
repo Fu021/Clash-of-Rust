@@ -28,6 +28,8 @@ pub struct Settings {
     pub mixed_port: u16,
     pub secret: String,
     pub dark: bool,
+    pub dns_override: bool,
+    pub ipv6: bool,
     pub delay_interval_minutes: u32,
     pub active_profile: Option<String>,
     pub run_mode: String,
@@ -54,6 +56,8 @@ impl Default for Settings {
             mixed_port: defaults.mixed_port,
             secret: uuid::Uuid::new_v4().to_string(),
             dark: defaults.dark,
+            dns_override: true,
+            ipv6: true,
             delay_interval_minutes: 5,
             active_profile: None,
             run_mode: "rule".into(),
@@ -328,6 +332,14 @@ pub fn runtime_config_with_rules(
     map.insert(Value::from("log-level"), Value::from("info"));
     // Process discovery is not used by this client's connection view.
     map.insert(Value::from("find-process-mode"), Value::from("off"));
+    map.insert(Value::from("tcp-concurrent"), Value::from(true));
+    map.insert(Value::from("unified-delay"), Value::from(true));
+    map.insert(Value::from("keep-alive-interval"), Value::from(30));
+    map.insert(Value::from("ipv6"), Value::from(settings.ipv6));
+    map.insert(
+        Value::from("geodata-loader"),
+        Value::from("memconservative"),
+    );
     // Geo downloads are explicitly managed by the application. Even the core's
     // missing-file fallback must not attempt Internet downloads during startup.
     map.insert(Value::from("geo-auto-update"), Value::from(false));
@@ -337,17 +349,40 @@ pub fn runtime_config_with_rules(
         _ => Mapping::new(),
     };
     tun.insert(Value::from("enable"), Value::from(false));
-    tun.entry(Value::from("stack"))
-        .or_insert(Value::from("mixed"));
+    tun.insert(Value::from("stack"), Value::from("mips"));
     tun.insert(Value::from("auto-route"), Value::from(true));
     tun.insert(Value::from("auto-detect-interface"), Value::from(true));
     tun.entry(Value::from("dns-hijack"))
         .or_insert(serde_yaml::to_value(["any:53"])?);
     map.insert(Value::from("tun"), Value::Mapping(tun));
-    if !map.contains_key(Value::from("dns")) {
-        map.insert(Value::from("dns"), serde_yaml::from_str("enable: true\nenhanced-mode: fake-ip\nnameserver:\n  - https://dns.alidns.com/dns-query\n  - https://cloudflare-dns.com/dns-query\n")?);
-    }
+    apply_dns(&mut map, settings)?;
     Ok(serde_yaml::to_string(&map)?)
+}
+
+fn apply_dns(map: &mut Mapping, settings: &Settings) -> Result<()> {
+    let mut dns = match map.remove(Value::from("dns")) {
+        None | Some(Value::Null) => Mapping::new(),
+        Some(Value::Mapping(dns)) => dns,
+        _ => bail!("订阅 dns 必须是配置对象"),
+    };
+    // FlClash's baseline owns these three fields, leaving provider-specific
+    // resolution policies, filters, hosts and listener settings intact.
+    if settings.dns_override || dns.is_empty() {
+        dns.insert(Value::from("enable"), Value::from(true));
+        dns.insert(Value::from("enhanced-mode"), Value::from("fake-ip"));
+        dns.insert(
+            Value::from("nameserver"),
+            serde_yaml::to_value([
+                "https://doh.pub/dns-query",
+                "https://dns.alidns.com/dns-query",
+            ])?,
+        );
+    }
+    // The IPv6 preference is independent of DNS override and authoritative
+    // for both the core's outbound support and its DNS AAAA responses.
+    dns.insert(Value::from("ipv6"), Value::from(settings.ipv6));
+    map.insert(Value::from("dns"), Value::Mapping(dns));
+    Ok(())
 }
 
 fn apply_rules(map: &mut Mapping, overrides: &RuleOverrides) -> Result<()> {
@@ -462,9 +497,96 @@ mod tests {
         settings.validate().unwrap();
         assert_eq!(settings.run_mode, "rule");
         assert_eq!(settings.proxy_mode, crate::engine::ProxyMode::Off);
+        assert!(settings.dns_override);
+        assert!(settings.ipv6);
         assert_eq!(settings.rule_overrides, RuleOverrides::default());
         assert_eq!(Settings::default().rule_overrides.enabled, [false; 5]);
         assert_eq!(settings.rule_overrides.enabled, [false; 5]);
+    }
+
+    #[test]
+    fn client_overrides_subscription_transport_defaults_without_modifying_the_source() {
+        let raw = "proxies: []\ntcp-concurrent: false\nunified-delay: false\nkeep-alive-interval: 5\nipv6: false\nlog-level: debug\ngeodata-loader: standard\ntun: {stack: gvisor, auto-detect-interface: false, mtu: 1400}\n";
+        let result: Value =
+            serde_yaml::from_str(&runtime_config(raw, &Settings::default()).unwrap()).unwrap();
+        assert_eq!(result["tcp-concurrent"].as_bool(), Some(true));
+        assert_eq!(result["unified-delay"].as_bool(), Some(true));
+        assert_eq!(result["keep-alive-interval"].as_u64(), Some(30));
+        assert_eq!(result["geodata-loader"].as_str(), Some("memconservative"));
+        assert_eq!(result["log-level"].as_str(), Some("info"));
+        assert_eq!(result["tun"]["stack"].as_str(), Some("mips"));
+        assert_eq!(result["tun"]["auto-detect-interface"].as_bool(), Some(true));
+        assert_eq!(result["tun"]["mtu"].as_u64(), Some(1400));
+        assert_eq!(
+            parse_profile(raw).unwrap()[Value::from("tcp-concurrent")].as_bool(),
+            Some(false)
+        );
+    }
+
+    #[test]
+    fn dns_and_ipv6_preferences_are_independent_and_preserve_provider_policies() {
+        let raw = "proxies: []\nipv6: false\ndns:\n  enable: false\n  enhanced-mode: redir-host\n  ipv6: false\n  nameserver: [1.1.1.1]\n  default-nameserver: [223.5.5.5]\n  nameserver-policy: {example.com: 119.29.29.29}\n  proxy-server-nameserver: [223.5.5.5]\n  direct-nameserver: [119.29.29.29]\n  fake-ip-filter: ['*.lan', localhost]\n  fake-ip-range: 198.19.0.1/16\n  cache-algorithm: arc\n  cache-max-size: 2048\n  listen: 127.0.0.1:1053\n";
+        let original = Value::Mapping(parse_profile(raw).unwrap());
+        for dns_override in [false, true] {
+            for ipv6 in [false, true] {
+                let settings = Settings {
+                    dns_override,
+                    ipv6,
+                    ..Settings::default()
+                };
+                let result: Value =
+                    serde_yaml::from_str(&runtime_config(raw, &settings).unwrap()).unwrap();
+                assert_eq!(result["ipv6"].as_bool(), Some(ipv6));
+                let mut expected = original["dns"].clone();
+                expected["ipv6"] = Value::from(ipv6);
+                if dns_override {
+                    expected["enable"] = Value::from(true);
+                    expected["enhanced-mode"] = Value::from("fake-ip");
+                    expected["nameserver"] = serde_yaml::to_value([
+                        "https://doh.pub/dns-query",
+                        "https://dns.alidns.com/dns-query",
+                    ])
+                    .unwrap();
+                }
+                assert_eq!(result["dns"], expected);
+                // Applying the same settings again must not grow or erase DNS fields.
+                let reapplied: Value = serde_yaml::from_str(
+                    &runtime_config(&serde_yaml::to_string(&result).unwrap(), &settings).unwrap(),
+                )
+                .unwrap();
+                assert_eq!(reapplied, result);
+            }
+        }
+    }
+
+    #[test]
+    fn dns_fallback_and_saved_preferences_survive_relaunch() {
+        let tmp = tempfile::tempdir().unwrap();
+        let store = Store::at(tmp.path().to_owned()).unwrap();
+        let settings = Settings {
+            dns_override: false,
+            ipv6: false,
+            ..Settings::default()
+        };
+        store.save_settings(&settings).unwrap();
+        let loaded = store.load_settings().unwrap();
+        assert!(!loaded.dns_override);
+        assert!(!loaded.ipv6);
+        for raw in [
+            "proxies: []",
+            "proxies: []\ndns: null",
+            "proxies: []\ndns: {}",
+        ] {
+            let result: Value =
+                serde_yaml::from_str(&runtime_config(raw, &loaded).unwrap()).unwrap();
+            assert_eq!(result["dns"]["enable"].as_bool(), Some(true));
+            assert_eq!(result["dns"]["ipv6"].as_bool(), Some(false));
+            assert_eq!(result["ipv6"].as_bool(), Some(false));
+            assert_eq!(result["dns"]["nameserver"].as_sequence().unwrap().len(), 2);
+        }
+        for raw in ["proxies: []\ndns: invalid", "proxies: []\ndns: []"] {
+            assert!(runtime_config(raw, &loaded).is_err());
+        }
     }
 
     #[test]
