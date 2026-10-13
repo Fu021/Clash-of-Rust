@@ -22,6 +22,60 @@ _spec.loader.exec_module(release)
 
 
 class BuildTests(unittest.TestCase):
+    def test_asset_verification_checks_each_pe_independently(self):
+        spec = importlib.util.spec_from_file_location('prepare_assets', build.ROOT/'scripts/prepare-assets.py')
+        assets = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(assets)
+
+        def executable(path, magic, group=True, complete=True):
+            data = bytearray(0x400)
+            pe, root = 0x80, 0x200
+            struct.pack_into('<I', data, 0x3c, pe)
+            data[pe:pe + 4] = b'PE\0\0'
+            struct.pack_into('<H', data, pe + 6, 1)
+            optional = pe + 24
+            size = 240 if magic == 0x20b else 224
+            struct.pack_into('<H', data, pe + 20, size)
+            struct.pack_into('<H', data, optional, magic)
+            directory = optional + (112 if magic == 0x20b else 96)
+            struct.pack_into('<I', data, directory + 16, 0x1000)
+            struct.pack_into('<IIII', data, optional + size + 8, 0x200, 0x1000, 0x200, root)
+            directories = [
+                (0, [(3, 0x80000020)] + ([(14, 0x80000040)] if group else [])),
+                (0x20, [(1, 0x80000060), (2, 0x80000080)]),
+                (0x40, [(1, 0x800000a0)]),
+                (0x60, [(1033, 0xc0)]), (0x80, [(1033, 0xd0)]), (0xa0, [(1033, 0xe0)]),
+            ]
+            for offset, entries in directories:
+                struct.pack_into('<HH', data, root + offset + 12, 0, len(entries))
+                for index, (name, target) in enumerate(entries):
+                    struct.pack_into('<II', data, root + offset + 16 + index * 8, name, target)
+            for offset, rva, length in ((0xc0, 0x1100, 2), (0xd0, 0x1102, 3), (0xe0, 0x1105, 1)):
+                struct.pack_into('<II', data, root + offset, rva, length)
+            data[root + 0x100:root + 0x106] = b'abcdeg' if complete else b'abxxxg'
+            path.write_bytes(data)
+
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            icons = root/'resources/icons'
+            icons.mkdir(parents=True)
+            frames = [(2, 38), (3, 40)]
+            ico = struct.pack('<HHH', 0, 1, 2)
+            ico += b''.join(struct.pack('<BBBBHHII', 1, 1, 0, 0, 1, 32, size, offset)
+                            for size, offset in frames) + b'abcde'
+            (icons/'app.ico').write_bytes(ico)
+            first, second, bad = root/'app.exe', root/'installer.exe', root/'bad.exe'
+            executable(first, 0x20b)
+            executable(second, 0x10b)
+            with patch.object(assets, 'ROOT', root), patch('sys.stdout', io.StringIO()):
+                assets.verify_icons([first, second])
+                executable(bad, 0x20b, group=False)
+                with self.assertRaises(AssertionError):
+                    assets.verify_icons([first, bad])
+                executable(bad, 0x10b, complete=False)
+                with self.assertRaises(AssertionError):
+                    assets.verify_icons([second, bad])
+
     def test_disk_image_retries_only_busy_errors_and_bounds_attempts(self):
         import macos_package as mac
         busy = subprocess.CompletedProcess([], 1, '', 'hdiutil: create failed - Resource busy\n')

@@ -43,6 +43,18 @@ macOS 的自动检查、诊断产物与交互式验收范围见 [macOS 测试清
 
 本地打包命令 `python scripts/build-installer.py` 仍支持编译并打包。工作流使用 `--prebuilt` 入口，拒绝不匹配的提交、版本、平台或文件校验值。
 
+## 静态资源维护
+
+图标和国旗使用统一入口，日常构建直接使用仓库中的成品：
+
+```text
+python scripts/prepare-assets.py icons
+python scripts/prepare-assets.py flags
+python scripts/prepare-assets.py verify-icons 路径/clash-of-rust.exe 路径/安装包.exe
+```
+
+`icons` 与 `flags` 仅在更新资源时执行，需要 Pillow；`flags` 可加 `--proxy`。图标源图保存在 `resources/icon-concepts/`，国旗与地区名称版本及许可见 [来源说明](../resources/flags/SOURCE.md)。`verify-icons` 只使用 Python 标准库，CI 和 Windows 打包继续执行此检查。
+
 ## Memory Benchmark
 
 在 Actions 中选择 **Memory Benchmark → Run workflow**：

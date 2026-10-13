@@ -14,7 +14,7 @@ def windows_tests(tests, bundle):
         ('offline-core-integration', [tests['core_integration'], '--ignored', '--test-threads=1']),
         ('native-tray', [tests['tray_integration'], '--ignored', '--test-threads=1']),
         ('elevated-task-permissions', [tests['library'], 'native_autostart', '--ignored']),
-        ('embedded-icons', [sys.executable, ROOT/'scripts/verify-icon-resources.py',
+        ('embedded-icons', [sys.executable, ROOT/'scripts/prepare-assets.py', 'verify-icons',
                             bundle/'clash-of-rust.exe']),
         ('update-helper-rejections', [sys.executable, ROOT/'scripts/test-update-helper.py',
                                      bundle/'clash-of-rust.exe']),

@@ -163,7 +163,7 @@ def main():
         artifact.with_name(artifact.name+'.sha256').write_text(sha256(artifact)+'\n',encoding='ascii')
         print('Package ready:',artifact)
     if args.system == 'windows':
-        run([sys.executable, ROOT/'scripts/verify-icon-resources.py',binary,artifact])
+        run([sys.executable, ROOT/'scripts/prepare-assets.py', 'verify-icons', binary, artifact])
 
 
 def build_inputs(args, version):

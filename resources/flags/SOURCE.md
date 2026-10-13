@@ -11,6 +11,6 @@ and Taiwan have no flag in this bundle or in the UI.
 English territory names: Unicode CLDR 46.0.0, Unicode License v3:
 https://github.com/unicode-org/cldr-json/tree/46.0.0
 
-`scripts/prepare-flags.py` reproduces these offline assets. Its development-only
+`python scripts/prepare-assets.py flags` reproduces these offline assets. Its development-only
 dependency is Pillow. The application never downloads flags or territory names.
 The full upstream licenses are included next to this file and in the installer.
