@@ -141,8 +141,14 @@ fn tray_icon(kind: crate::icons::Kind) -> Icon {
 
 fn update_icon(icon: &tray_icon::TrayIcon, kind: &mut crate::icons::Kind, state: &State) {
     let next = crate::icons::tray_kind(state.system_proxy, state.tun);
-    if next != *kind && icon.set_icon(Some(tray_icon(next))).is_ok() {
-        *kind = next;
+    if next != *kind {
+        #[cfg(target_os = "macos")]
+        let result = icon.set_icon_templated(Some(tray_icon(next)));
+        #[cfg(not(target_os = "macos"))]
+        let result = icon.set_icon(Some(tray_icon(next)));
+        if result.is_ok() {
+            *kind = next;
+        }
     }
 }
 
@@ -389,12 +395,16 @@ fn create_native(events: &Events) -> anyhow::Result<(tray_icon::TrayIcon, Checks
     };
     let builder = TrayIconBuilder::new()
         .with_tooltip("Clash of Rust")
-        .with_icon(tray_icon(crate::icons::Kind::App))
         .with_menu(Box::new(menu))
         .with_menu_on_left_click(false);
     // A text title beside the icon wastes scarce menu-bar space on notched Macs.
+    // AppKit template artwork follows the menu bar's light/dark appearance.
+    #[cfg(target_os = "macos")]
+    let builder = builder.with_icon_templated(tray_icon(crate::icons::Kind::App));
     #[cfg(not(target_os = "macos"))]
-    let builder = builder.with_title("Clash of Rust");
+    let builder = builder
+        .with_title("Clash of Rust")
+        .with_icon(tray_icon(crate::icons::Kind::App));
     let icon = builder.build()?;
     #[cfg(target_os = "macos")]
     if let Some(item) = icon.ns_status_item() {
@@ -511,14 +521,18 @@ pub fn verify_native_state() {
             "menu bar must show only the icon"
         );
         let image = button.image().expect("status item must contain artwork");
+        assert!(
+            image.isTemplate(),
+            "artwork must follow menu-bar appearance"
+        );
         assert!(image.size().width > 0.0 && image.size().height > 0.0);
         assert!(image.size().width <= 22.0 && image.size().height <= 22.0);
         let rect = native
             .icon
             .rect()
             .expect("status button must have a window");
-        assert!(rect.size.width > 0.0 && rect.size.width <= 40.0);
-        assert!(rect.size.height > 0.0);
+        assert!(rect.size.width > 0 && rect.size.width <= 40);
+        assert!(rect.size.height > 0);
         let state = native.updates.borrow();
         for (item, mode) in &native.checks.modes {
             assert_eq!(item.is_checked(), state.running && state.mode == *mode);
