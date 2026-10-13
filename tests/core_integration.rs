@@ -37,16 +37,24 @@ fn test_resources() -> std::path::PathBuf {
 
 fn free_port() -> u16 {
     // mihomo's mixed listener binds TCP and UDP on the same port. A TCP-only
-    // check can choose an occupied UDP port; then mihomo closes its new TCP
-    // listener while the controller remains available.
+    // check can choose an occupied/excluded UDP port; then mihomo closes its
+    // new TCP listener while the controller remains available. Let UDP's own
+    // allocator avoid its excluded ranges first. Retain rejected sockets so
+    // rapid retries cannot repeatedly select the same unsuitable candidate.
+    let mut rejected = Vec::new();
+    let mut last_error = None;
     for _ in 0..100 {
-        let tcp = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
-        let port = tcp.local_addr().unwrap().port();
-        if std::net::UdpSocket::bind(("127.0.0.1", port)).is_ok() {
-            return port;
+        let udp = std::net::UdpSocket::bind("127.0.0.1:0").unwrap();
+        let port = udp.local_addr().unwrap().port();
+        match std::net::TcpListener::bind(("127.0.0.1", port)) {
+            Ok(_tcp) => return port,
+            Err(error) => {
+                last_error = Some(error);
+                rejected.push(udp);
+            }
         }
     }
-    panic!("could not allocate a port available for both TCP and UDP")
+    panic!("could not allocate a port available for both TCP and UDP: {last_error:?}")
 }
 
 #[tokio::test]

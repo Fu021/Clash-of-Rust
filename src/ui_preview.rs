@@ -418,6 +418,7 @@ fn fixture(scene: &str) -> App {
         ];
     } else if scene.starts_with("claude") {
         app.page = Page::Claude;
+        app.snapshot.active_node = Some("美国节点1".into());
         app.claude = claude_view::fixture_state(scene);
     } else if scene.starts_with("settings") {
         app.page = Page::Settings;

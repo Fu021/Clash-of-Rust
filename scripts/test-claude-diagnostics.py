@@ -83,7 +83,7 @@ RTC_FIXTURE = """
 window.clashRtcClosed = 0;
 window.clashLocationRequests = 0;
 const locate = navigator.geolocation.getCurrentPosition.bind(navigator.geolocation);
-navigator.geolocation.getCurrentPosition = (...args) => { window.clashLocationRequests++; return locate(...args); };
+navigator.geolocation.getCurrentPosition = (...args) => { window.clashLocationRequests++; console.info('clash-fixture-location-request'); return locate(...args); };
 class FixturePeer {
     createDataChannel() {}
     async createOffer() { return {type:'offer',sdp:''}; }
@@ -96,7 +96,7 @@ class FixturePeer {
             this.onicecandidate({candidate:null});
         });
     }
-    close() { window.clashRtcClosed++; }
+    close() { window.clashRtcClosed++; console.info('clash-fixture-rtc-closed'); }
 }
 window.RTCPeerConnection = window.clashRtcMode === 'absent' ? undefined : FixturePeer;
 })();
@@ -104,7 +104,7 @@ window.RTCPeerConnection = window.clashRtcMode === 'absent' ? undefined : Fixtur
 
 
 def browsers(output):
-    from playwright.sync_api import sync_playwright
+    from playwright.sync_api import sync_playwright, expect
     chrome = next((shutil.which(name) for name in ('google-chrome', 'google-chrome-stable', 'chromium') if shutil.which(name)), None)
     if not chrome:
         raise RuntimeError('Install Chromium/Chrome before running the browser regression suite')
@@ -120,6 +120,7 @@ def browsers(output):
                 context = browser.new_context(locale=locale, timezone_id=timezone,
                                               geolocation={'latitude': 37.7, 'longitude': -122.4})
                 failures = []
+                events = []
                 images = []
                 context.add_init_script(f"window.clashRtcMode={json.dumps(mode)};\n"+RTC_FIXTURE)
                 def external(route):
@@ -135,38 +136,45 @@ def browsers(output):
                 context.route('**/*', external)
                 page = context.new_page()
                 page.on('pageerror', lambda error: failures.append(str(error)))
+                page.on('console', lambda message: events.append(message.text) if message.text.startswith('clash-fixture-') else None)
                 try:
                     page.goto(root)
                     page.click('#clash-region-start')
-                    page.wait_for_function("document.getElementById('clash-region-status').textContent.includes('已回传')", timeout=30000)
+                    expect(page.locator('#clash-region-status')).to_contain_text('已回传', timeout=30000)
                     assert len(reports) == 1 and not failures
                     report = reports[0]
                     assert report['kind'] == 'browser' and report['schema'] == 1
                     assert report['timezone'] == timezone and report['languages'][0] == locale
                     assert report['geolocation']['latitude'] is None
-                    assert page.evaluate('window.clashLocationRequests') == 0, 'Detection requested location without a click'
+                    assert 'clash-fixture-location-request' not in events, 'Detection requested location without a click'
                     if mode == 'complete':
                         assert report['ipv4'] == '8.8.8.8' and ':' in report['ipv6']
                         assert report['webrtc']['completed'] and 'fixture.local' in report['webrtc']['candidates']
-                        assert page.evaluate('window.clashRtcClosed') == 1
+                        assert events.count('clash-fixture-rtc-closed') == 1
                         assert report['dns_id'] == 'fixture123' and len(images) == 8
                         context.grant_permissions(['geolocation'])
                         page.click('#clash-region-location')
-                        page.wait_for_function("document.getElementById('clash-region-status').textContent.includes('已回传') && window.clashLocationRequests === 1", timeout=30000)
                         # Wait for the fresh collection and second HTTP report.
-                        page.wait_for_function("document.getElementById('clash-region-results').textContent.includes('37.7')", timeout=30000)
+                        expect(page.locator('#clash-region-results')).to_contain_text('37.7', timeout=30000)
+                        expect(page.locator('#clash-region-status')).to_contain_text('已回传', timeout=30000)
                         deadline = time.monotonic()+5
                         while len(reports) < 2 and time.monotonic() < deadline: time.sleep(.05)
                         assert len(reports) == 2 and reports[-1]['geolocation']['latitude'] == 37.7
+                        assert events.count('clash-fixture-location-request') == 1
                     elif mode == 'absent':
                         assert not report['webrtc']['supported'] and report['ipv6'] == ''
                     else:
                         assert not report['webrtc']['completed'] and report['webrtc']['error']
                         assert report['ipv4'] == report['ipv6'] == '' and report['dns_id'] == '' and report['dns_error']
-                        assert page.evaluate('window.clashRtcClosed') == 1
+                        assert events.count('clash-fixture-rtc-closed') == 1
                     page.screenshot(path=str(output/('browser-'+mode+'.png')), full_page=True)
                     cases.append({'case':mode, 'status':'passed', 'locale':locale, 'timezone':timezone,
                                   'location_only_on_click':True, 'external_services':'intercepted fixtures'})
+                except BaseException:
+                    write_json(output/('browser-'+mode+'-failure.json'), {'page_errors':failures, 'events':events, 'posted_samples':reports})
+                    try: page.screenshot(path=str(output/('browser-'+mode+'-failure.png')), full_page=True, timeout=5000)
+                    except Exception: pass
+                    raise
                 finally:
                     context.close(); server.shutdown(); server.server_close()
         finally: browser.close()

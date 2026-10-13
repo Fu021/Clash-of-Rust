@@ -704,7 +704,7 @@ impl App {
         if !has_reports {
             results = results.push(self.caption("网页版检测需要在常用浏览器中完成，Code 检测需要在实际终端运行；Desktop 的系统线索与请求观测分别展示。"));
         }
-        body.push(scrollable(results).height(Length::Fill))
+        body.push(page_scroll(results).height(Length::Fill))
             .height(Length::Fill)
             .into()
     }
@@ -728,17 +728,20 @@ impl App {
             .iter()
             .filter(|(_, s)| s.evidence == Evidence::Measured)
             .count();
+        let partial = measured < entries.len();
         let tone = if differences > 0 {
             ui_style::Tone::Warning
-        } else if measured > 0 {
+        } else if measured > 0 && !partial {
             ui_style::Tone::Success
         } else {
             ui_style::Tone::Muted
         };
         let status = if differences > 0 {
             "存在差异"
+        } else if measured > 0 && partial {
+            "部分确认"
         } else if measured > 0 {
-            "已有实测"
+            "已检测"
         } else {
             "待补充"
         };
