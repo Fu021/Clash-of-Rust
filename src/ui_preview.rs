@@ -798,6 +798,9 @@ fn fixture(scene: &str) -> App {
         "rules-discard" => {
             let _ = app.update(Message::Rules(rules_view::Event::Discard));
         }
+        "rules-exit-confirm" => {
+            let _ = app.request_exit();
+        }
         "rules-discard-editor" => {
             let _ = app.update(Message::Rules(rules_view::Event::Edit));
             let _ = app.update(Message::Rules(rules_view::Event::Payload(

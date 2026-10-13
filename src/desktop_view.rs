@@ -95,7 +95,7 @@ pub(crate) struct ProfileEditor {
     pub name: String,
     pub source: String,
     original: (String, String),
-    error: String,
+    pub error: String,
 }
 impl ProfileEditor {
     fn dirty(&self) -> bool {
@@ -104,6 +104,13 @@ impl ProfileEditor {
 }
 
 impl App {
+    fn profile_busy(&self) -> bool {
+        self.working
+            || self
+                .queued_actions
+                .iter()
+                .any(|a| matches!(a, Action::EditProfile(..)))
+    }
     pub(crate) fn appearance_mode(&self) -> ThemeMode {
         self.settings.theme_mode.unwrap_or(if self.settings.dark {
             ThemeMode::Dark
@@ -239,6 +246,9 @@ impl App {
                 none()
             }
             Message::CloseProfileEdit => {
+                if self.profile_busy() {
+                    return Some(none());
+                }
                 if self
                     .profile_editor
                     .as_ref()
@@ -256,7 +266,7 @@ impl App {
                 }
             }
             Message::SaveProfileEdit => {
-                if self.working || self.exiting || self.picking_file {
+                if self.profile_busy() || self.exiting || self.picking_file {
                     return Some(none());
                 }
                 if let Some(p) = &mut self.profile_editor {
@@ -368,7 +378,7 @@ impl App {
                         if self.confirmation.is_none()
                             && self.profile_editor.is_none()
                             && self.connection_detail.is_none()
-                            && !(self.page == Page::Rules && self.rule_state.has_editor())
+                            && !(self.page == Page::Rules && self.rule_state.modal_open())
                         {
                             iced::widget::operation::focus("page-search")
                         } else {
@@ -383,7 +393,24 @@ impl App {
                         self.request_exit()
                     }
                     Key::Named(Named::Tab) => {
-                        if modifiers.shift() {
+                        if self.confirmation.is_some()
+                            || self.profile_editor.is_some()
+                            || self.connection_detail.is_some()
+                            || (self.page == Page::Rules && self.rule_state.modal_open())
+                        {
+                            use iced::advanced::widget::operation::{focusable, scope};
+                            if modifiers.shift() {
+                                iced::advanced::widget::operate(scope(
+                                    "desktop-modal".into(),
+                                    focusable::focus_previous(),
+                                ))
+                            } else {
+                                iced::advanced::widget::operate(scope(
+                                    "desktop-modal".into(),
+                                    focusable::focus_next(),
+                                ))
+                            }
+                        } else if modifiers.shift() {
                             iced::widget::operation::focus_previous()
                         } else {
                             iced::widget::operation::focus_next()
@@ -468,7 +495,7 @@ impl App {
                         .size(self.font_size(15))
                         .padding(9)
                         .style(rounded_input)
-                        .on_input_maybe((!self.working).then_some(Message::EditName))
+                        .on_input_maybe((!self.profile_busy()).then_some(Message::EditName))
                         .on_submit(Message::SaveProfileEdit),
                     self.caption("订阅链接或本地 YAML 路径"),
                     text_input("来源", &p.source)
@@ -476,7 +503,7 @@ impl App {
                         .size(self.font_size(15))
                         .padding(9)
                         .style(rounded_input)
-                        .on_input_maybe((!self.working).then_some(Message::EditSource))
+                        .on_input_maybe((!self.profile_busy()).then_some(Message::EditSource))
                         .on_submit(Message::SaveProfileEdit),
                     self.caption("保存名称与来源；配置内容由订阅页的更新按钮重新载入。"),
                     self.label(&p.error)
@@ -493,12 +520,14 @@ impl App {
                         button(self.label("取消"))
                             .style(rounded_secondary)
                             .padding([8, 12])
-                            .on_press(Message::CloseProfileEdit),
+                            .on_press_maybe(
+                                (!self.profile_busy()).then_some(Message::CloseProfileEdit)
+                            ),
                         button(self.label("保存"))
                             .style(rounded_primary)
                             .padding([8, 12])
                             .on_press_maybe(
-                                (!self.working && !self.exiting && !self.picking_file)
+                                (!self.profile_busy() && !self.exiting && !self.picking_file)
                                     .then_some(Message::SaveProfileEdit)
                             )
                     ]
@@ -587,7 +616,8 @@ impl App {
             .max(450.0)
             - 64.0;
         container(
-            container(scrollable(dialog).height(Length::Shrink))
+            container(scrollable(dialog).spacing(10).height(Length::Shrink))
+                .id("desktop-modal")
                 .padding(22)
                 .width(590)
                 .max_height(height)

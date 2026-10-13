@@ -24,7 +24,7 @@ path = "src/tun_launcher.rs"
 anyhow = "1"
 chrono = { version = "0.4", default-features = false, features = ["clock", "std"] }
 directories = "6"
-iced = { version = "0.14", default-features = false, features = ["tiny-skia", "tokio", "x11", "wayland", "image-without-codecs"] }
+iced = { version = "0.14", default-features = false, features = ["tiny-skia", "tokio", "x11", "wayland", "image-without-codecs", "advanced"] }
 iced_graphics = { version = "0.14", default-features = false }
 cosmic-text = { version = "0.15", default-features = false, features = ["std"] }
 unicode-script = "0.5"

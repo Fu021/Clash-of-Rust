@@ -326,6 +326,19 @@ impl Checks {
             }
             self.last_nodes = state.nodes;
         }
+        // Native menu items toggle before the core accepts the selection.
+        // Restore confirmed marks even when the group contents did not change.
+        if let Some(nodes) = &self.last_nodes {
+            for (item, name) in self.node_items.iter().zip(&nodes.names) {
+                let selected = name == &nodes.selected;
+                if item.is_checked() != selected {
+                    item.set_checked(selected);
+                }
+                if item.is_enabled() != state.running {
+                    item.set_enabled(state.running);
+                }
+            }
+        }
     }
 }
 impl Drop for Guard {

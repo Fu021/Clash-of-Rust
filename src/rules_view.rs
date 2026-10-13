@@ -238,6 +238,9 @@ impl State {
     pub fn editor_modified(&self) -> bool {
         self.editor.as_ref().is_some_and(Editor::modified)
     }
+    pub fn modal_open(&self) -> bool {
+        self.editor.is_some() || self.move_open || self.pending_profile.is_some()
+    }
     pub fn load(&mut self, document: Arc<Document>, rules: Arc<ProfileRules>) {
         self.document = Some(document);
         self.draft = rules.as_ref().clone();
@@ -358,6 +361,7 @@ impl App {
         if self.working || self.elevating || self.exiting {
             return Task::none();
         }
+        let focus_editor = matches!(&event, Event::Add | Event::Edit);
         let state = &mut self.rule_state;
         match event {
             Event::Profile(choice) => {
@@ -558,7 +562,15 @@ impl App {
                 }
             }
         }
-        Task::none()
+        if focus_editor && let Some(editor) = &state.editor {
+            iced::widget::operation::focus(if editor.text_mode {
+                "rule-raw"
+            } else {
+                "rule-payload"
+            })
+        } else {
+            Task::none()
+        }
     }
     fn rule_button<'a>(
         &self,
@@ -586,7 +598,15 @@ impl App {
         value: &'a str,
         event: fn(String) -> Event,
     ) -> Element<'a, Message> {
+        let id = match event(String::new()) {
+            Event::Raw(_) => "rule-raw",
+            Event::Payload(_) => "rule-payload",
+            Event::Position(_) => "rule-position",
+            Event::MoveInput(_) => "rule-move",
+            _ => "rule-input",
+        };
         text_input(placeholder, value)
+            .id(id)
             .font(typography::ENGLISH_FONT)
             .size(self.font_size(13))
             .padding(9)

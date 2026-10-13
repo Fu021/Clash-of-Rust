@@ -48,7 +48,7 @@ def main():
         scenes = [scene+suffix for scene in ('home', 'proxies-ascending', 'profiles', 'connections', 'rules', 'logs', 'diagnostics', 'ip-summary', 'settings',
                   'claude', 'claude-web', 'claude-desktop', 'claude-code', 'claude-details', 'claude-empty',
                   'profiles-edit', 'profiles-delete-active', 'profiles-delete-inactive', 'profiles-discard', 'connections-details',
-                  'rules-discard', 'rules-discard-editor', 'rules-switch-confirm', 'settings-large-text')
+                  'rules-discard', 'rules-discard-editor', 'rules-switch-confirm', 'rules-exit-confirm', 'settings-large-text')
                   for suffix in ('', '-light')]
         scenes += [scene+suffix for scene in ('claude', 'claude-web', 'claude-desktop', 'claude-code', 'claude-details', 'claude-empty',
                    'settings-large-text', 'profiles-edit', 'rules-discard-editor', 'connections-details')

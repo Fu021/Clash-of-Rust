@@ -115,13 +115,18 @@ mod linux {
 
         // Verify the host sees the icon, rather than just a successful thread.
         let connection = zbus::blocking::Connection::session().unwrap();
-        let item = zbus::blocking::Proxy::new(
-            &connection,
-            service.as_str(),
-            "/StatusNotifierItem",
-            "org.kde.StatusNotifierItem",
-        )
-        .unwrap();
+        // SNI emits NewTitle, not the general PropertiesChanged signal. Query
+        // fresh values as an SNI host does instead of reusing D-Bus cached data.
+        let item: zbus::blocking::Proxy<'_> = zbus::blocking::proxy::Builder::new(&connection)
+            .destination(service.as_str())
+            .unwrap()
+            .path("/StatusNotifierItem")
+            .unwrap()
+            .interface("org.kde.StatusNotifierItem")
+            .unwrap()
+            .cache_properties(zbus::proxy::CacheProperties::No)
+            .build()
+            .unwrap();
         assert_eq!(
             item.get_property::<String>("Title").unwrap(),
             "Clash of Rust"

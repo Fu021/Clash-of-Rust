@@ -36,9 +36,7 @@ pub fn begin() -> Result<Session, String> {
             Ok(None)
         };
         // Complete asynchronously: never nest an AppKit run loop inside Iced.
-        unsafe {
-            selected_panel.orderOut(None);
-        }
+        selected_panel.orderOut(None);
         if let Some(sender) = sender.borrow_mut().take() {
             let _ = sender.send(result);
         }
@@ -99,6 +97,9 @@ fn windows_choose() -> Result<Option<PathBuf>, String> {
         }
         let _com = Com;
         let dialog: IFileOpenDialog = CoCreateInstance(&FileOpenDialog, None, CLSCTX_INPROC_SERVER)
+            .map_err(|e| e.to_string())?;
+        dialog
+            .SetTitle(windows::core::w!("Clash of Rust · 选择订阅文件"))
             .map_err(|e| e.to_string())?;
         dialog
             .SetOptions(FOS_FILEMUSTEXIST | FOS_FORCEFILESYSTEM)

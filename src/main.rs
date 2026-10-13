@@ -392,6 +392,7 @@ enum Action {
 
 #[derive(Debug, Clone)]
 struct Reply {
+    profile_edit: bool,
     scope: Scope,
     start_requested: bool,
     settings: Settings,
@@ -603,6 +604,7 @@ struct App {
 }
 
 async fn execute(engine: Arc<Mutex<Engine>>, action: Action, scope: Scope, header: bool) -> Reply {
+    let profile_edit = matches!(&action, Action::EditProfile(..));
     let refresh_tray = matches!(
         action,
         Action::RefreshTray
@@ -820,6 +822,7 @@ async fn execute(engine: Arc<Mutex<Engine>>, action: Action, scope: Scope, heade
         None
     };
     Reply {
+        profile_edit,
         tray_nodes,
         scope,
         start_requested,
@@ -2161,6 +2164,12 @@ impl App {
             }
             Message::Finished(reply) => {
                 let reply = *reply;
+                if reply.profile_edit
+                    && let Err(error) = &reply.notice
+                    && let Some(editor) = &mut self.profile_editor
+                {
+                    editor.error = error.clone();
+                }
                 self.busy = false;
                 self.working = false;
                 if reply.exit_after_start {
@@ -2397,7 +2406,7 @@ impl App {
                     self.notice = "桌面托盘正在初始化，请稍候；再次关闭窗口可退出程序。".into();
                     return Task::none();
                 }
-                return self.exit();
+                return self.request_exit();
             }
             Message::ExitWindowState(captured) => {
                 if let Some((size, maximized, minimized)) = captured {
@@ -5055,6 +5064,7 @@ mod async_state_tests {
         assert!(!app.busy);
         app.exiting = false;
         let _ = app.update(Message::Finished(Box::new(Reply {
+            profile_edit: false,
             scope: Scope::Home,
             start_requested: true,
             settings: app.settings.clone(),
@@ -5081,6 +5091,7 @@ mod async_state_tests {
         let mut app = app();
         app.core_failure = Some("内核程序被系统阻止".into());
         let _ = app.update(Message::Finished(Box::new(Reply {
+            profile_edit: false,
             scope: Scope::Other,
             start_requested: false,
             settings: app.settings.clone(),
@@ -5099,6 +5110,7 @@ mod async_state_tests {
         assert!(app.notice.contains("开机启动"));
         assert!(app.error && app.notice_visible);
         let _ = app.update(Message::Finished(Box::new(Reply {
+            profile_edit: false,
             scope: Scope::Home,
             start_requested: true,
             settings: app.settings.clone(),

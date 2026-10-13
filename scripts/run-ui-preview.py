@@ -211,7 +211,7 @@ def main():
     scenes += [scene+suffix for scene in ('claude', 'claude-web', 'claude-desktop', 'claude-code', 'claude-details', 'claude-empty')
                for suffix in ('', '-light', '-compact', '-compact-light')]
     scenes += [scene+suffix for scene in ('profiles-edit', 'profiles-delete-active', 'profiles-delete-inactive', 'profiles-discard',
-        'connections-details', 'rules-discard', 'rules-discard-editor', 'rules-switch-confirm', 'settings-large-text')
+        'connections-details', 'rules-discard', 'rules-discard-editor', 'rules-switch-confirm', 'rules-exit-confirm', 'settings-large-text')
         for suffix in ('', '-light', '-compact', '-compact-light')]
     if args.scenes:
         unknown = set(args.scenes)-set(scenes)

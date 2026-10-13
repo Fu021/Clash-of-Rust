@@ -1,5 +1,53 @@
 //! Exercise the production chooser against a real isolated D-Bus session,
 //! including cancellation and paths that require URI decoding.
+#[cfg(windows)]
+#[test]
+#[ignore = "requires a native Windows desktop; opens and closes the real STA file chooser"]
+fn native_file_picker_cancels_without_elevation() {
+    use std::time::{Duration, Instant};
+    use windows_sys::Win32::UI::WindowsAndMessaging::{
+        FindWindowW, GetWindowThreadProcessId, PostMessageW, WM_CLOSE,
+    };
+    let (sender, receiver) = std::sync::mpsc::sync_channel(1);
+    std::thread::spawn(move || {
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .unwrap();
+        let _ = sender.send(runtime.block_on(clash_of_rust::file_dialog::choose()));
+    });
+    let title: Vec<_> = "Clash of Rust · 选择订阅文件\0".encode_utf16().collect();
+    let deadline = Instant::now() + Duration::from_secs(20);
+    loop {
+        unsafe {
+            let window = FindWindowW(std::ptr::null(), title.as_ptr());
+            if !window.is_null() {
+                let mut owner = 0;
+                GetWindowThreadProcessId(window, &mut owner);
+                assert_eq!(
+                    owner,
+                    std::process::id(),
+                    "only cancel this test's own dialog"
+                );
+                assert_ne!(PostMessageW(window, WM_CLOSE, 0, 0), 0);
+                break;
+            }
+        }
+        assert!(
+            Instant::now() < deadline,
+            "native file chooser did not appear"
+        );
+        std::thread::sleep(Duration::from_millis(50));
+    }
+    assert_eq!(
+        receiver
+            .recv_timeout(Duration::from_secs(10))
+            .unwrap()
+            .unwrap(),
+        None
+    );
+}
+
 #[cfg(target_os = "linux")]
 mod linux {
     use std::{
