@@ -1,6 +1,8 @@
 //! Dock reopen support. Iced/winit's existing delegate retains all lifecycle duties.
+#[cfg(feature = "ui-preview")]
+use objc2::Message;
 use objc2::{
-    Encode, Message, ffi,
+    Encode, ffi,
     runtime::{AnyObject, Bool, Imp, Sel},
     sel,
 };
@@ -38,7 +40,14 @@ pub(crate) fn pump() -> Result<bool, String> {
             if delegate.respondsToSelector(selector) {
                 return Err("macOS 应用委托已包含其他窗口恢复处理程序".into());
             }
-            let class = delegate.as_any_object().class();
+            // ProtocolObject has no AnyObject accessor in objc2 0.6.4. Its
+            // Message contract guarantees the same Objective-C object layout.
+            let class = unsafe {
+                ffi::object_getClass(objc2::rc::Retained::as_ptr(&delegate).cast::<AnyObject>())
+            };
+            if class.is_null() {
+                return Err("无法读取 macOS 应用委托类型".into());
+            }
             // Add just the missing optional selector. Replacing the delegate
             // would break winit's launch, termination and event-loop callbacks.
             let encoding =
@@ -49,7 +58,7 @@ pub(crate) fn pump() -> Result<bool, String> {
             // and the registered class and implementation live for the process.
             let added = unsafe {
                 ffi::class_addMethod(
-                    (class as *const objc2::runtime::AnyClass).cast_mut(),
+                    class.cast_mut(),
                     selector,
                     std::mem::transmute::<
                         unsafe extern "C-unwind" fn(&AnyObject, Sel, &NSApplication, Bool) -> Bool,
