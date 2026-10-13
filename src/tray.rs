@@ -454,7 +454,7 @@ pub fn pump() {
                     value.checks.update(state);
                 }
                 let now = Instant::now();
-                if now >= value.retry_after && !mac_item_visible(&value.icon) {
+                if now >= value.retry_after && !mac_item_healthy(&value.icon) {
                     // A successful builder alone does not prove that AppKit
                     // installed its status window. Recover a lost native item
                     // while preserving its owner, menu IDs and confirmed state.
@@ -528,12 +528,17 @@ pub fn start() -> anyhow::Result<Guard> {
 }
 
 #[cfg(target_os = "macos")]
-fn mac_item_visible(icon: &tray_icon::TrayIcon) -> bool {
+fn mac_item_healthy(icon: &tray_icon::TrayIcon) -> bool {
     let mtm = objc2_foundation::MainThreadMarker::new().unwrap();
     icon.ns_status_item().is_some_and(|item| {
         item.isVisible()
             && item.button(mtm).is_some_and(|button| {
-                button.image().is_some() && button.window().is_some_and(|window| window.isVisible())
+                button.image().is_some()
+                    && button.window().is_some_and(|window| {
+                        // Fullscreen and automatic menu-bar hiding are normal;
+                        // do not continually recreate an intentionally hidden bar.
+                        window.isVisible() || !objc2_app_kit::NSMenu::menuBarVisible(mtm)
+                    })
             })
     })
 }
@@ -548,7 +553,7 @@ pub fn remove_native_item_for_test() {
             .set_visible(false)
             .expect("remove native status item");
         native.retry_after = Instant::now();
-        assert!(!mac_item_visible(&native.icon));
+        assert!(!mac_item_healthy(&native.icon));
     });
 }
 
