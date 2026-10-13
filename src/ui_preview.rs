@@ -241,7 +241,9 @@ impl MacFlow {
                 2 => {
                     assert_eq!(value["visible"], false, "close must hide the native window");
                     assert!(!self.app.visible && !self.app.exiting);
-                    return Task::batch([task, Self::dock_reopen(false)]);
+                    // The Python driver uses LaunchServices (open -a), which
+                    // must deliver AppKit's real reopen event to this process.
+                    return task;
                 }
                 3 => {
                     assert_eq!(
@@ -270,7 +272,7 @@ impl MacFlow {
                         !self.app.exiting,
                         "missing tray must not disable Dock reopen"
                     );
-                    return Task::batch([task, Self::dock_reopen(true)]);
+                    return task;
                 }
                 6 => {
                     assert_eq!(value["visible"], true);
@@ -297,7 +299,7 @@ impl MacFlow {
                         "close_dock_reopen": true,
                         "reopen_without_tray": true,
                         "minimize_dock_reopen": true,
-                        "dock_delivery": "NSApplication delegate selector with both hasVisibleWindows values",
+                        "dock_delivery": "LaunchServices reopens the same running app twice; native selector also exercises hasVisibleWindows=true",
                     }));
                     return task;
                 }
@@ -352,14 +354,6 @@ impl MacFlow {
         }))
     }
 
-    fn dock_reopen(has_visible_windows: bool) -> Task<Message> {
-        iced::window::latest().and_then(move |id| {
-            iced::window::run(id, move |_| {
-                mac_desktop::simulate_dock_reopen(has_visible_windows);
-                Message::Tick
-            })
-        })
-    }
     fn view(&self) -> Element<'_, Message> {
         self.app.view()
     }

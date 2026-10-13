@@ -213,9 +213,15 @@ def flow(scenario, fixture, package, version, report, prefix):
                 try:
                     process = subprocess.Popen([app/'Contents/MacOS/clash-of-rust'], env=env,
                                                stdout=log, stderr=subprocess.STDOUT, start_new_session=True)
+                    reopened_phases = set()
                     def completed():
                         if status.exists():
                             record = json.loads(status.read_text())
+                            if scenario == 'window-lifecycle' and record['phase'] in (2, 5) and record['phase'] not in reopened_phases:
+                                # Real LaunchServices delivery to an already running
+                                # signed app exercises the same path as Dock reopen.
+                                reopened_phases.add(record['phase'])
+                                subprocess.run(['/usr/bin/open', '-a', app], check=True, timeout=15)
                             if record['phase'] == 10:
                                 return record
                         if process.poll() is not None:
@@ -234,6 +240,7 @@ def flow(scenario, fixture, package, version, report, prefix):
                     elif scenario == 'window-lifecycle':
                         assert not record['error'] and record['running'] and not record['exiting'], record
                         assert all(record['details'][key] for key in ('close_dock_reopen', 'reopen_without_tray', 'minimize_dock_reopen')), record
+                        assert reopened_phases == {2, 5}, 'Both hidden-window cases must reopen through LaunchServices'
                         assert record['administrator_requests'] == 0 and record['system_authorization_sessions'] == 0, record
                         assert core_ready(data), 'Closing/reopening the window interrupted the core'
                         record['reopened_window_count'] = window_info(process.pid, report, prefix+'-'+scenario)

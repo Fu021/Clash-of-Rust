@@ -48,6 +48,13 @@ use tokio::sync::Mutex;
 const DEFAULT_WINDOW_SIZE: iced::Size = iced::Size::new(950.0, 700.0);
 const MIN_WINDOW_SIZE: iced::Size = iced::Size::new(800.0, 450.0);
 
+fn tray_unavailable(error: &str) -> String {
+    #[cfg(target_os = "macos")]
+    return format!("菜单栏图标不可用：{error}");
+    #[cfg(not(target_os = "macos"))]
+    format!("托盘不可用：{error}；关闭窗口将退出。")
+}
+
 macro_rules! aligned_row {
     ($($child:expr),* $(,)?) => {
         iced::widget::row![$($child),*].align_y(iced::alignment::Vertical::Center)
@@ -804,11 +811,7 @@ impl App {
             }
             Some(Err(e)) => {
                 tray_startup = None;
-                (
-                    None,
-                    format!("{notice} 托盘不可用：{e}；关闭窗口将退出。"),
-                    true,
-                )
+                (None, format!("{notice} {}", tray_unavailable(&e)), true)
             }
             None => (None, notice, error),
         };
@@ -1966,7 +1969,7 @@ impl App {
                             Err(error) => {
                                 self.error = true;
                                 self.notice_visible = true;
-                                self.notice = format!("托盘不可用：{error}；关闭窗口将退出。");
+                                self.notice = tray_unavailable(&error);
                                 if !self.visible {
                                     return iced::window::latest().map(Message::ShowWindow);
                                 }

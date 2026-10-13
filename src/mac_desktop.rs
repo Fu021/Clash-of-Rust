@@ -70,6 +70,10 @@ pub(crate) fn pump() -> Result<bool, String> {
             if !added.as_bool() {
                 return Err("无法注册 macOS Dock 窗口恢复事件".into());
             }
+            // Refresh AppKit's optional-selector cache after adding the method.
+            // The same retained winit delegate handles every existing callback.
+            app.setDelegate(None);
+            app.setDelegate(Some(&delegate));
             Ok(())
         })
         .as_ref()
