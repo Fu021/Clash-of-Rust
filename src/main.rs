@@ -50,9 +50,13 @@ const MIN_WINDOW_SIZE: iced::Size = iced::Size::new(800.0, 450.0);
 
 fn tray_unavailable(error: &str) -> String {
     #[cfg(target_os = "macos")]
-    return format!("菜单栏图标不可用：{error}");
+    {
+        format!("菜单栏图标不可用：{error}")
+    }
     #[cfg(not(target_os = "macos"))]
-    format!("托盘不可用：{error}；关闭窗口将退出。")
+    {
+        format!("托盘不可用：{error}；关闭窗口将退出。")
+    }
 }
 
 macro_rules! aligned_row {
