@@ -155,6 +155,8 @@ def autostart_flow(fixture, report, prefix):
             assert not record['error'] and record['running'] and not record['exiting'], record
             assert not agent.exists(), 'Autostart disable left the plist behind'
             assert record['system_authorization_sessions'] == 0 and record['administrator_requests'] == 0, record
+            job = subprocess.check_output(['/bin/launchctl', 'print', target], text=True, timeout=5)
+            assert re.search(r'^\s*pid = \d+', job, re.M), 'Autostart toggle unloaded the running GUI service'
             assert core_ready(data), 'Autostart toggle interrupted the running core'
             record['launch_method'] = 'actual per-user LaunchAgent'
             return record
@@ -257,7 +259,20 @@ def flow(scenario, fixture, package, version, report, prefix):
                     write_json(status, record)
                     return record
                 finally:
+                    proxy_cleanup_error = None
                     if process is not None:
+                        # New update/mode cases can leave System enabled in the
+                        # restarted GUI. Restore before SIGTERM and before its
+                        # isolated journal disappears, keeping runner traffic
+                        # away from a core we are about to stop.
+                        journal = data/'system-proxy.json'
+                        if journal.exists():
+                            try:
+                                subprocess.run([fixture/'Contents/MacOS/clash-of-rust'],
+                                               env=dict(os.environ, CLASH_CI_RESTORE_PROXY=str(journal)),
+                                               check=True, timeout=15)
+                            except Exception as error:
+                                proxy_cleanup_error = error
                         if status.exists():
                             recorded = json.loads(status.read_text())
                             update_directory = recorded.get('details', {}).get('directory')
@@ -277,6 +292,8 @@ def flow(scenario, fixture, package, version, report, prefix):
                         wait_for(lambda: not {v for v in interfaces()-before if v.startswith('utun')}, scenario+' TUN interface cleanup', 15)
                     if system_owned:
                         run(['/usr/bin/sudo', '-n', 'chown', '-R', str(os.getuid()), install])
+                    if proxy_cleanup_error:
+                        raise RuntimeError('System proxy cleanup failed') from proxy_cleanup_error
 
 
 def main():

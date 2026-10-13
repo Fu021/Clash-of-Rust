@@ -363,10 +363,22 @@ mod tests {
             assert!(crate::platform::is_owned_at_port(&startup_journal, 17890).unwrap());
             assert!(!crate::platform::is_owned_at_port(&startup_journal, 17891).unwrap());
             let resources = PathBuf::from(std::env::var_os("MIHOMO_TEST_RESOURCES").unwrap());
-            let engine = crate::engine::Engine::with_resources(store, resources).unwrap();
+            let mut engine = crate::engine::Engine::with_resources(store, resources).unwrap();
             assert_eq!(std::fs::read(&startup_journal).unwrap(), recorded);
             assert_eq!(read().unwrap(), configured);
             assert!(crate::platform::is_owned(&startup_journal).unwrap());
+            let occupied = std::net::TcpListener::bind(("127.0.0.1", settings.mixed_port)).unwrap();
+            let runtime = tokio::runtime::Builder::new_current_thread()
+                .enable_all()
+                .build()
+                .unwrap();
+            assert!(runtime.block_on(engine.start()).is_err());
+            assert!(
+                !startup_journal.exists(),
+                "failed startup must restore the previous OS proxy"
+            );
+            assert_eq!(read().unwrap(), original);
+            drop(occupied);
             drop(engine);
             assert!(!startup_journal.exists());
             assert_eq!(read().unwrap(), original);

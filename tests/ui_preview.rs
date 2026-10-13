@@ -6,6 +6,13 @@ mod app;
 
 fn main() {
     #[cfg(target_os = "macos")]
+    if let Some(journal) = std::env::var_os("CLASH_CI_RESTORE_PROXY") {
+        assert_eq!(std::env::var("GITHUB_ACTIONS").as_deref(), Ok("true"));
+        clash_of_rust::platform::restore(std::path::Path::new(&journal))
+            .expect("native flow cleanup must restore its system proxy");
+        return;
+    }
+    #[cfg(target_os = "macos")]
     if clash_of_rust::update::helper_main() {
         return;
     }
