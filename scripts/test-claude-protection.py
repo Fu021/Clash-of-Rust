@@ -70,15 +70,52 @@ def serve(cert, key):
                 self.answer({'ip': '1.2.3.4'})
             elif host == 'api.ip.sb':
                 self.answer({'ip': self.path.rsplit('/', 1)[-1], 'country_code': 'US', 'asn': 64500, 'asn_organization': 'Controlled test fixture'})
+            elif host == 'rdap.org':
+                self.send_response(302)
+                self.send_header('Location', 'https://rdap.arin.net/registry/ip/1.2.3.4')
+                self.send_header('Content-Length', '0')
+                self.end_headers()
+            elif host == 'rdap.arin.net':
+                self.answer({'startAddress': '1.0.0.0', 'endAddress': '1.255.255.255', 'name': 'Controlled registry', 'country': 'US'})
+            elif host == 'api.globalping.io':
+                self.answer({'status': 'finished', 'results': [{'probe': {'country': 'US', 'city': f'Fixture {index}'}, 'result': {'stats': {'min': 10, 'avg': 12, 'max': 15, 'loss': 0}}} for index in range(20)]})
+            elif host == 'speed.cloudflare.com':
+                self.send_response(200)
+                self.send_header('Content-Length', str(10*1024*1024))
+                self.send_header('Connection', 'close')
+                self.end_headers()
+                if self.command != 'HEAD':
+                    for _ in range(160):
+                        self.wfile.write(bytes(64*1024))
             else:
                 self.answer({'controlled_fixture': True})
 
         def do_POST(self):
             length = int(self.headers.get('Content-Length', '0'))
+            host = self.headers.get('Host', '').split(':')[0]
+            if host == 'speed.cloudflare.com':
+                if length != 2*1024*1024:
+                    self.send_error(400)
+                    return
+                remaining = length
+                while remaining:
+                    block = self.rfile.read(min(remaining, 64*1024))
+                    if not block:
+                        return
+                    remaining -= len(block)
+                self.answer({'controlled_upload_bytes': length})
+                return
             if length > 65536:
                 self.send_error(413)
                 return
             body = self.rfile.read(length)
+            if host == 'api.globalping.io':
+                request = json.loads(body)
+                if request.get('limit') != 20 or request.get('target') != '1.2.3.4':
+                    self.send_error(400)
+                    return
+                self.answer({'id': 'controlled-fixture'})
+                return
             if self.path.startswith('/dns-query'):
                 with lock:
                     metrics['doh'] += 1
@@ -117,6 +154,7 @@ def trusted_fixture(directory):
         raise RuntimeError('Native tests and temporary CA trust require a disposable Actions runner')
     cert, key = directory/'fixture.crt', directory/'fixture.key'
     names = ['api.ipify.org', 'api6.ipify.org', 'api.ip.sb', 'api.ipapi.is', 'www.cloudflare.com',
+             'rdap.org', 'rdap.arin.net', 'api.globalping.io', 'speed.cloudflare.com',
              'claude.ai', 'claude.com', 'api.anthropic.com', 'platform.claude.com']
     run(['openssl', 'req', '-x509', '-newkey', 'rsa:2048', '-nodes', '-days', '2',
          '-subj', '/CN=Clash of Rust disposable test fixture',

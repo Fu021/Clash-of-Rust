@@ -265,7 +265,21 @@ pub async fn run() {
     );
     let mut normal = hold(&client, "api.anthropic.com", servers.http).await;
     assert!(normal.chunk().await.unwrap().is_some());
-    let protected = capture(&mut engine, "保护开启后").await;
+    let mut protected = capture(&mut engine, "保护开启后").await;
+    let detector = check::client(Some(mixed_port)).unwrap();
+    for kind in [
+        check::additional::Kind::Registration,
+        check::additional::Kind::GlobalPing,
+        check::additional::Kind::Speed,
+    ] {
+        let results = check::additional::run(&detector, kind, "1.2.3.4")
+            .await
+            .unwrap();
+        assert!(!results.is_empty());
+        assert!(results.iter().all(|s| s.country.is_empty() && !s.risk));
+        protected.signals.extend(results);
+    }
+    protected.validate().unwrap();
     // Force a non-fake DNS lookup through the actual controller and assert
     // the TLS DNS request traversed the pinned SOCKS node.
     let url = engine.api.url(&["dns", "query"]).unwrap();
