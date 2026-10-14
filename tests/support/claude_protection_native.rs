@@ -302,8 +302,14 @@ pub async fn run() {
         .send()
         .await
         .unwrap();
-    assert!(response.status().is_success());
-    let body: serde_json::Value = response.json().await.unwrap();
+    let status = response.status();
+    let text = response.text().await.unwrap();
+    assert!(
+        status.is_success(),
+        "controlled DNS query failed: {status}: {text}; core logs: {:?}",
+        engine.poll(Scope::Logs).await.unwrap().logs
+    );
+    let body: serde_json::Value = serde_json::from_str(&text).unwrap();
     assert!(
         body["Answer"]
             .as_array()

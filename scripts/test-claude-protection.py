@@ -1,5 +1,6 @@
 """Temporary disposable-runner test, controlled HTTPS evidence and UI captures."""
 import argparse
+import base64
 import contextlib
 import hashlib
 import http.server
@@ -17,6 +18,7 @@ import tempfile
 import threading
 import time
 import uuid
+import urllib.parse
 
 from build_support import ROOT, run, write_json, host_system
 import workflow_artifacts
@@ -49,7 +51,10 @@ def serve(cert, key):
             host = self.headers.get('Host', '').split(':')[0]
             with lock:
                 metrics['hosts'][host] = metrics['hosts'].get(host, 0) + 1
-            if self.path.startswith('/metrics'):
+            if self.path.startswith('/dns-query'):
+                encoded = urllib.parse.parse_qs(urllib.parse.urlsplit(self.path).query).get('dns', [''])[0]
+                self.dns_response(base64.urlsafe_b64decode(encoded + '='*(-len(encoded)%4)))
+            elif self.path.startswith('/metrics'):
                 with lock:
                     self.answer(dict(metrics))
             elif self.path.startswith('/hold'):
@@ -118,26 +123,29 @@ def serve(cert, key):
                 self.answer({'id': 'controlled-fixture'})
                 return
             if self.path.startswith('/dns-query'):
-                with lock:
-                    metrics['doh'] += 1
-                position = 12
-                while position < len(body) and body[position]:
-                    position += 1 + body[position]
-                end = position + 5
-                qtype = struct.unpack('!H', body[position + 1:position + 3])[0]
-                address = bytes([203, 0, 113, 2]) if qtype == 1 else bytes.fromhex('20010db8000000000000000000000002')
-                if qtype not in (1, 28):
-                    response = body[:2] + struct.pack('!5H', 0x8180, 1, 0, 0, 0) + body[12:end]
-                else:
-                    response = body[:2] + struct.pack('!5H', 0x8180, 1, 1, 0, 0) + body[12:end]
-                    response += b'\xc0\x0c' + struct.pack('!HHIH', qtype, 1, 1, len(address)) + address
-                self.answer(response, 'application/dns-message')
+                self.dns_response(body)
             else:
                 request = json.loads(body)
                 response={'ip': request.get('q', '1.2.3.4'), 'company': 'Controlled test fixture', 'asn': 'AS64500', 'country': 'United States'}
                 if request.get('key'):
                     response.update({field:False for field in ('is_datacenter','is_mobile','is_proxy','is_vpn','is_tor','is_crawler','is_abuser')})
                 self.answer(response)
+
+        def dns_response(self, body):
+            with lock:
+                metrics['doh'] += 1
+            position = 12
+            while position < len(body) and body[position]:
+                position += 1 + body[position]
+            end = position + 5
+            qtype = struct.unpack('!H', body[position + 1:position + 3])[0]
+            address = bytes([203, 0, 113, 2]) if qtype == 1 else bytes.fromhex('20010db8000000000000000000000002')
+            if qtype not in (1, 28):
+                response = body[:2] + struct.pack('!5H', 0x8180, 1, 0, 0, 0) + body[12:end]
+            else:
+                response = body[:2] + struct.pack('!5H', 0x8180, 1, 1, 0, 0) + body[12:end]
+                response += b'\xc0\x0c' + struct.pack('!HHIH', qtype, 1, 1, len(address)) + address
+            self.answer(response, 'application/dns-message')
 
     class LocalServer(http.server.ThreadingHTTPServer):
         def server_bind(self):
@@ -163,15 +171,16 @@ def trusted_fixture(directory):
         raise RuntimeError('Native tests and temporary CA trust require a disposable Actions runner')
     cert, key = directory/'fixture.crt', directory/'fixture.key'
     ca, ca_key = directory/'ca.crt', directory/'ca.key'
+    ca_config = directory/'ca.cnf'
+    ca_config.write_text('[req]\nprompt=no\ndistinguished_name=dn\nx509_extensions=v3_ca\n[dn]\nCN=Clash of Rust disposable test root\n[v3_ca]\nbasicConstraints=critical,CA:TRUE\nkeyUsage=critical,keyCertSign,cRLSign\nsubjectKeyIdentifier=hash\nauthorityKeyIdentifier=keyid:always\n')
     names = ['api.ipify.org', 'api6.ipify.org', 'api.ip.sb', 'api.ipapi.is', 'www.cloudflare.com',
              'rdap.org', 'rdap.arin.net', 'api.globalping.io', 'speed.cloudflare.com',
              'claude.ai', 'claude.com', 'api.anthropic.com', 'platform.claude.com']
     run(['openssl', 'req', '-x509', '-newkey', 'rsa:2048', '-nodes', '-days', '2',
-         '-subj', '/CN=Clash of Rust disposable test root',
-         '-addext', 'basicConstraints=critical,CA:TRUE', '-addext', 'keyUsage=critical,keyCertSign,cRLSign',
+         '-sha256', '-config', ca_config,
          '-keyout', ca_key, '-out', ca])
     csr, extensions = directory/'fixture.csr', directory/'server.ext'
-    extensions.write_text('basicConstraints=critical,CA:FALSE\nkeyUsage=critical,digitalSignature,keyEncipherment\nextendedKeyUsage=serverAuth\nsubjectAltName=' + ','.join(['IP:127.0.0.1', 'IP:1.1.1.1', 'IP:8.8.8.8', *('DNS:'+name for name in names)])+'\n')
+    extensions.write_text('basicConstraints=critical,CA:FALSE\nkeyUsage=critical,digitalSignature,keyEncipherment\nextendedKeyUsage=serverAuth\nsubjectKeyIdentifier=hash\nauthorityKeyIdentifier=keyid,issuer\nsubjectAltName=' + ','.join(['IP:127.0.0.1', 'IP:1.1.1.1', 'IP:8.8.8.8', *('DNS:'+name for name in names)])+'\n')
     run(['openssl','req','-new','-newkey','rsa:2048','-nodes','-subj','/CN=Clash of Rust controlled service','-keyout',key,'-out',csr])
     run(['openssl','x509','-req','-in',csr,'-CA',ca,'-CAkey',ca_key,'-CAcreateserial','-days','2','-extfile',extensions,'-out',cert])
     run(['openssl','verify','-CAfile',ca,cert])
