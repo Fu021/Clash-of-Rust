@@ -85,13 +85,13 @@ async fn wait_for_mac_port(
 }
 
 #[derive(Default)]
-struct LogFrames {
+pub(crate) struct LogFrames {
     pending: Vec<u8>,
     discarding: bool,
 }
 
 impl LogFrames {
-    fn push(&mut self, mut chunk: &[u8], mut emit: impl FnMut(&[u8])) {
+    pub(crate) fn push(&mut self, mut chunk: &[u8], mut emit: impl FnMut(&[u8])) {
         while !chunk.is_empty() {
             let end = chunk.iter().position(|byte| *byte == b'\n');
             let used = end.map_or(chunk.len(), |end| end + 1);

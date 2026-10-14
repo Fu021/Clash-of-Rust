@@ -210,7 +210,7 @@ def main():
     scenes += [scene+suffix for scene in ('rules-custom', 'rules-editor', 'rules-collapsed')
                for suffix in ('', '-light', '-compact', '-compact-light')]
     scenes += [scene+suffix for scene in ('claude', 'claude-web', 'claude-desktop', 'claude-code', 'claude-details', 'claude-empty',
-        'claude-start-guide', 'claude-code-guide', 'claude-desktop-guide')
+        'claude-start-guide', 'claude-code-guide', 'claude-desktop-guide', 'claude-live')
                for suffix in ('', '-light', '-compact', '-compact-light')]
     scenes += [scene+suffix for scene in ('profiles-edit', 'profiles-delete-active', 'profiles-delete-inactive', 'profiles-discard',
         'connections-details', 'rules-discard', 'rules-discard-editor', 'rules-switch-confirm', 'rules-exit-confirm', 'settings-large-text')

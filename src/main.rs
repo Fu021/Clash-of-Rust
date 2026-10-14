@@ -1145,7 +1145,7 @@ impl App {
                 .map(|_| Message::PeriodicDelay)
             },
             tray_events,
-            if self.claude.session.is_some() || self.claude.observing.is_some() {
+            if self.claude.session.is_some() || self.claude.monitor_enabled {
                 iced::time::every(Duration::from_secs(1))
                     .map(|_| Message::Claude(claude_view::Event::Tick))
             } else {
@@ -2456,7 +2456,7 @@ impl App {
         }
         self.cancel_delay_checks();
         self.cancel_site_checks();
-        self.claude.close();
+        self.claude.shutdown();
         self.tray_startup = None;
         self.exiting = true;
         if let Some(handle) = self.window_state_debounce.take() {

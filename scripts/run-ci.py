@@ -55,12 +55,12 @@ def main():
         run([sys.executable, ROOT/'scripts/test-claude-diagnostics.py', '--browser', '--output', ROOT/'target/claude-report/browser'])
         scenes = [scene+suffix for scene in ('home', 'proxies-ascending', 'profiles', 'connections', 'rules', 'logs', 'diagnostics', 'ip-summary', 'settings',
                   'claude', 'claude-web', 'claude-desktop', 'claude-code', 'claude-details', 'claude-empty',
-                  'claude-start-guide', 'claude-code-guide', 'claude-desktop-guide',
+                  'claude-start-guide', 'claude-code-guide', 'claude-desktop-guide', 'claude-live',
                   'profiles-edit', 'profiles-delete-active', 'profiles-delete-inactive', 'profiles-discard', 'connections-details',
                   'rules-discard', 'rules-discard-editor', 'rules-switch-confirm', 'rules-exit-confirm', 'settings-large-text')
                   for suffix in ('', '-light')]
         scenes += [scene+suffix for scene in ('claude', 'claude-web', 'claude-desktop', 'claude-code', 'claude-details', 'claude-empty',
-                   'claude-start-guide', 'claude-code-guide', 'claude-desktop-guide',
+                   'claude-start-guide', 'claude-code-guide', 'claude-desktop-guide', 'claude-live',
                    'settings-large-text', 'profiles-edit', 'rules-discard-editor', 'connections-details')
                    for suffix in ('-compact', '-compact-light')]
         run(['dbus-run-session', '--', 'xvfb-run', '-a', '--server-args=-screen 0 1800x1200x24',
@@ -68,6 +68,8 @@ def main():
              '--output', ROOT/'target/claude-ui', '--scenes', *scenes])
     # Invoke already-built test programs directly instead of repeating Cargo.
     if args.system == 'linux':
+        run(['dbus-run-session', '--', 'xvfb-run', '-a', tests['claude_diagnostics'],
+             'native_terminal_diagnostic', '--ignored', '--test-threads=1'])
         run([tests['core_integration'], '--ignored', '--test-threads=1'])
         run([tests['library'], 'native_gsettings', '--ignored'],
             env=dict(os.environ, GSETTINGS_BACKEND='memory'))

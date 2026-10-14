@@ -272,7 +272,7 @@ pub async fn local(environment: Environment) -> Report {
             ),
             _ => Signal::unknown(group, "系统 HTTPS 代理", source, "系统代理读取失败。"),
         });
-        report.signals.push(Signal::unknown(group, "Desktop 内部地区环境", "客户端内部", "系统语言和时区已记录，但不能当作 Desktop 内部 JavaScript、定位权限或网络出口的实测结果。请在本页开始请求观测后操作 Desktop。"));
+        report.signals.push(Signal::unknown(group, "Desktop 内部地区环境", "客户端内部", "系统语言和时区已记录，但不能当作 Desktop 内部 JavaScript、定位权限或网络出口的实测结果。可开启 Claude 请求实时检测，再操作 Desktop。"));
         report.signals.push(Signal::unknown(
             group,
             "定位权限",
@@ -468,22 +468,23 @@ pub async fn code(offline: bool) -> Result<Report> {
     Ok(report)
 }
 
+pub(crate) fn shell_quote(value: &str) -> String {
+    #[cfg(windows)]
+    {
+        format!("'{}'", value.replace('\'', "''"))
+    }
+    #[cfg(not(windows))]
+    {
+        format!("'{}'", value.replace('\'', "'\\''"))
+    }
+}
+
 pub fn terminal_command(executable: &Path, submit: &str) -> String {
-    let quote = |value: &str| {
-        #[cfg(windows)]
-        {
-            format!("'{}'", value.replace('\'', "''"))
-        }
-        #[cfg(not(windows))]
-        {
-            format!("'{}'", value.replace('\'', "'\\''"))
-        }
-    };
     format!(
         "{}{} --claude-diagnose --submit {}",
         if cfg!(windows) { "& " } else { "" },
-        quote(&executable.to_string_lossy()),
-        quote(submit)
+        shell_quote(&executable.to_string_lossy()),
+        shell_quote(submit)
     )
 }
 
@@ -497,6 +498,7 @@ pub fn helper_main() -> Option<Result<()>> {
         let mut output = None;
         let mut submit = None;
         let mut offline = false;
+        let mut automatic = false;
         let mut args = args.into_iter().skip(1);
         while let Some(arg) = args.next() {
             match arg.to_str() {
@@ -513,6 +515,7 @@ pub fn helper_main() -> Option<Result<()>> {
                     )
                 }
                 Some("--offline") => offline = true,
+                Some("--automatic-terminal") => automatic = true,
                 _ => bail!("不支持的终端检测参数"),
             }
         }
@@ -520,7 +523,11 @@ pub fn helper_main() -> Option<Result<()>> {
             .enable_all()
             .build()?;
         runtime.block_on(async {
-            let report = code(offline).await?;
+            let mut report = code(offline).await?;
+            if automatic {
+                report.context = "自动新建终端会话；按此终端及项目的候选配置检测".into();
+                report.signals.push(Signal::new(Group::Code, "采样入口", "自动新建终端会话", "本应用打开的终端", Evidence::Measured, "新终端会加载启动配置；已运行的 Code 会话可能使用不同环境或启动参数，可在原终端运行复制的命令补充采样。"));
+            }
             let bytes = serde_json::to_vec_pretty(&report)?;
             if let Some(url) = submit {
                 browser::validate_submit_url(&url)?;

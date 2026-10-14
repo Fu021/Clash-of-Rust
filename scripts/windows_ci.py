@@ -14,6 +14,7 @@ def windows_tests(tests, bundle):
         ('offline-core-integration', [tests['core_integration'], '--ignored', '--test-threads=1']),
         ('native-tray', [tests['tray_integration'], 'native_tray', '--ignored', '--test-threads=1']),
         ('native-file-picker', [tests['tray_integration'], 'native_file_picker', '--ignored', '--test-threads=1']),
+        ('native-code-terminal', [tests['claude_diagnostics'], 'native_terminal_diagnostic', '--ignored', '--test-threads=1']),
         ('elevated-task-permissions', [tests['library'], 'native_autostart', '--ignored']),
         ('embedded-icons', [sys.executable, ROOT/'scripts/prepare-assets.py', 'verify-icons',
                             bundle/'clash-of-rust.exe']),

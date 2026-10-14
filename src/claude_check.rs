@@ -1,6 +1,8 @@
 //! Observable region signals, with explicit provenance rather than a risk score.
 pub mod browser;
+pub mod observe;
 pub mod system;
+pub mod terminal;
 
 use crate::{api, probe::country_name};
 use anyhow::{Context, Result, bail};
@@ -132,6 +134,10 @@ pub struct Route {
     pub host: String,
     pub rule: String,
     pub chain: String,
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub time: String,
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub outcome: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -172,11 +178,15 @@ impl Report {
                     s.ip.as_str(),
                 ]
             }))
-            .chain(
-                self.routes
-                    .iter()
-                    .flat_map(|r| [r.host.as_str(), r.rule.as_str(), r.chain.as_str()]),
-            )
+            .chain(self.routes.iter().flat_map(|r| {
+                [
+                    r.host.as_str(),
+                    r.rule.as_str(),
+                    r.chain.as_str(),
+                    r.time.as_str(),
+                    r.outcome.as_str(),
+                ]
+            }))
         {
             if value.len() > 2048 || value.chars().any(|c| c.is_control() && c != '\n') {
                 bail!("检测报告字段过长或包含控制字符");
@@ -327,6 +337,7 @@ fn connection_route(connection: api::Connection) -> Option<Route> {
             .chars()
             .take(512)
             .collect(),
+        ..Default::default()
     })
 }
 

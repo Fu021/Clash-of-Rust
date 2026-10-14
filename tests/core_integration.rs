@@ -58,6 +58,81 @@ fn free_port() -> u16 {
 }
 
 #[tokio::test]
+#[ignore = "requires bundled mihomo; verifies short Claude events without changing the log level"]
+async fn claude_event_stream_records_success_and_reject_with_silent_logging() {
+    use clash_of_rust::claude_check::{self, observe};
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+    let temp = tempfile::tempdir().unwrap();
+    let store = Store::at(temp.path().to_owned()).unwrap();
+    let controller_port = free_port();
+    let mut mixed_port = free_port();
+    while mixed_port == controller_port {
+        mixed_port = free_port();
+    }
+    store
+        .save_settings(&Settings {
+            controller_port,
+            mixed_port,
+            dns_override: false,
+            ..Default::default()
+        })
+        .unwrap();
+    let mut engine = Engine::with_resources(store, test_resources()).unwrap();
+    engine.start().await.unwrap();
+    let raw = temp.path().join("claude.yaml");
+    std::fs::write(&raw, "proxies: []\nhosts: {claude.ai: 127.0.0.1}\nproxy-groups: [{name: Claude, type: select, proxies: [DIRECT, REJECT]}]\nrules: ['DOMAIN-SUFFIX,claude.ai,Claude', 'MATCH,DIRECT']\ndns: {enable: false}\n").unwrap();
+    engine
+        .import("Claude fixture".into(), raw.to_string_lossy().into(), None)
+        .await
+        .unwrap();
+    let id = engine.profiles.last().unwrap().id.clone();
+    engine.activate(id).await.unwrap();
+    engine
+        .api
+        .patch(serde_json::json!({"log-level":"silent"}))
+        .await
+        .unwrap();
+    let monitor = observe::Session::start(engine.api.clone());
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let port = listener.local_addr().unwrap().port();
+    let server = tokio::spawn(async move {
+        let (mut socket, _) = listener.accept().await.unwrap();
+        let mut request = [0; 1024];
+        let _ = socket.read(&mut request).await.unwrap();
+        socket
+            .write_all(b"HTTP/1.1 204 No Content\r\nConnection: close\r\n\r\n")
+            .await
+            .unwrap();
+    });
+    tokio::time::sleep(std::time::Duration::from_millis(300)).await;
+    let client = claude_check::client(Some(mixed_port)).unwrap();
+    let target = format!("http://claude.ai:{port}/");
+    assert_eq!(client.get(&target).send().await.unwrap().status(), 204);
+    server.await.unwrap();
+    engine.api.select("Claude", "REJECT").await.unwrap();
+    let _ = client.get(target).send().await;
+    let snapshot = tokio::time::timeout(std::time::Duration::from_secs(8), async {
+        loop {
+            if let Some(snapshot) = monitor.after(0)
+                && snapshot.failures > 0
+            {
+                break snapshot;
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+        }
+    })
+    .await
+    .unwrap();
+    assert!(snapshot.routes.iter().any(|r| r.outcome == "连接已建立"));
+    assert!(snapshot.routes.iter().any(|r| r.outcome == "连接失败"));
+    assert!(snapshot.routes.iter().all(|r| r.host == "claude.ai"));
+    let config: Value = engine.api.get("configs").await.unwrap();
+    assert_eq!(config["log-level"], "silent");
+    drop(monitor);
+    engine.stop().await.unwrap();
+}
+
+#[tokio::test]
 #[ignore = "requires bundled resources; validates subscription edits and the actual tray group API"]
 async fn subscription_edit_preserves_cached_yaml_and_tray_can_select_unicode_group() {
     let temp = tempfile::tempdir().unwrap();
