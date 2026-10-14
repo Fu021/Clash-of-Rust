@@ -1203,14 +1203,14 @@ pub(crate) fn fixture_state(scene: &str) -> State {
         rule: "DOMAIN-SUFFIX claude.ai".into(),
         chain: "Claude → 美国节点1".into(),
         time: "2026-10-14T07:15:01Z".into(),
-        outcome: "连接已建立".into(),
+        outcome: "内核已选路".into(),
     });
     desktop.routes.push(check::Route {
         host: "api.anthropic.com".into(),
         rule: "MATCH".into(),
         chain: "Proxy → 美国节点1".into(),
         time: "2026-10-14T07:15:03Z".into(),
-        outcome: "连接已建立".into(),
+        outcome: "内核已选路".into(),
     });
     state.store(desktop);
     let mut code = Report::new(Environment::Code, "示例实际终端采样");

@@ -59,7 +59,7 @@ fn free_port() -> u16 {
 
 #[tokio::test]
 #[ignore = "requires bundled mihomo; verifies short Claude events without changing the log level"]
-async fn claude_event_stream_records_success_and_reject_with_silent_logging() {
+async fn claude_event_stream_records_routes_reject_and_dial_failure_with_silent_logging() {
     use clash_of_rust::claude_check::{self, observe};
     use tokio::io::{AsyncReadExt, AsyncWriteExt};
     let temp = tempfile::tempdir().unwrap();
@@ -110,7 +110,19 @@ async fn claude_event_stream_records_success_and_reject_with_silent_logging() {
     assert_eq!(client.get(&target).send().await.unwrap().status(), 204);
     server.await.unwrap();
     engine.api.select("Claude", "REJECT").await.unwrap();
-    let _ = client.get(target).send().await;
+    let _ = claude_check::client(Some(mixed_port))
+        .unwrap()
+        .get(&target)
+        .send()
+        .await;
+    engine.api.select("Claude", "DIRECT").await.unwrap();
+    // The one-shot upstream listener has closed. This is a real dial failure,
+    // whereas REJECT can return a synthetic connection and log normal routing.
+    let _ = claude_check::client(Some(mixed_port))
+        .unwrap()
+        .get(target)
+        .send()
+        .await;
     let snapshot = tokio::time::timeout(std::time::Duration::from_secs(8), async {
         loop {
             if let Some(snapshot) = monitor.after(0)
@@ -123,7 +135,13 @@ async fn claude_event_stream_records_success_and_reject_with_silent_logging() {
     })
     .await
     .unwrap();
-    assert!(snapshot.routes.iter().any(|r| r.outcome == "连接已建立"));
+    assert!(
+        snapshot
+            .routes
+            .iter()
+            .any(|r| r.outcome == "内核已选路" && r.chain.contains("DIRECT"))
+    );
+    assert!(snapshot.routes.iter().any(|r| r.chain.contains("REJECT")));
     assert!(snapshot.routes.iter().any(|r| r.outcome == "连接失败"));
     assert!(snapshot.routes.iter().all(|r| r.host == "claude.ai"));
     let config: Value = engine.api.get("configs").await.unwrap();

@@ -141,7 +141,7 @@ pub fn event(bytes: &[u8]) -> Option<Route> {
                 decision.strip_prefix("doesn't match any rule using ")?,
             )
         };
-        (rule, chain, "连接已建立")
+        (rule, chain, "内核已选路")
     };
     if rule.chars().chain(chain.chars()).any(char::is_control) {
         return None;
@@ -165,7 +165,15 @@ mod tests {
     fn accepts_domain_boundaries_and_success_failure_without_retaining_errors() {
         let route = event(&frame("[TCP] 127.0.0.1:123 --> www.claude.ai:443 match DomainSuffix(claude.ai) using 代理选择[美国节点]")).unwrap();
         assert_eq!(route.chain, "代理选择[美国节点]");
-        assert_eq!(route.outcome, "连接已建立");
+        assert_eq!(route.outcome, "内核已选路");
+        let rejected = event(&frame(
+            "[TCP] x --> claude.ai:443 match DomainSuffix(claude.ai) using Claude[REJECT]",
+        ))
+        .unwrap();
+        assert_eq!(
+            rejected.outcome, "内核已选路",
+            "Routing through REJECT does not establish a successful connection"
+        );
         let route = event(&frame("[UDP] dial 代理选择 (match DomainSuffix/anthropic.com) 127.0.0.1:123 --> api.anthropic.com:443 error: SECRET_TOKEN")).unwrap();
         assert_eq!(route.rule, "DomainSuffix/anthropic.com");
         assert_eq!(route.chain, "代理选择");
