@@ -1,7 +1,7 @@
 //! Native Iced region report with automatic browser sampling and client guides.
 use super::*;
 use clash_of_rust::claude_check::{
-    self as check, Environment, Evidence, Group, Report, Route, Signal, browser::Session,
+    self as check, Environment, Evidence, Group, Report, Signal, browser::Session,
 };
 use iced::widget::column;
 use std::time::Instant;
@@ -1007,7 +1007,7 @@ impl App {
             Guide::Desktop => {
                 let mut content = column![
                     self.title("Claude 请求实时检测"),
-                    self.label("开启后，持续记录内核识别到的 Claude 域名连接，适用于网页版、Desktop 和 Code。可正常使用客户端，无需限定在 20 秒内操作。"),
+                    self.label("开启后，持续记录内核识别到的 Claude 域名连接，适用于网页版、Desktop 和 Code。可正常使用客户端。"),
                     self.label("在 Desktop 分类查看时间、域名、匹配规则、线路与连接结果。关闭后保留记录；切换页面或隐藏窗口不会停止实时检测。"),
                     self.caption("保留最近 32 条明细与累计数量。不按进程区分，也不读取 HTTPS 请求内容。"),
                     checkbox(self.claude.monitor_enabled).label("实时检测 Claude 请求")
@@ -1016,7 +1016,7 @@ impl App {
                             .then_some(|enabled| Message::Claude(Event::Monitor(enabled))))
                 ].spacing(12);
                 if !self.snapshot.running {
-                    content = content.push(self.caption("请先启动内核，再开始观测。"));
+                    content = content.push(self.caption("请先启动内核，再开启实时检测。"));
                 }
                 if !self.claude.monitor_status.is_empty() { content = content.push(self.caption(&self.claude.monitor_status)); }
                 content.push(aligned_row![
@@ -1198,14 +1198,14 @@ pub(crate) fn fixture_state(scene: &str) -> State {
         "示例客户端状态",
         "不能将系统设置直接当作客户端内部环境。",
     ));
-    desktop.routes.push(Route {
+    desktop.routes.push(check::Route {
         host: "claude.ai".into(),
         rule: "DOMAIN-SUFFIX claude.ai".into(),
         chain: "Claude → 美国节点1".into(),
         time: "2026-10-14T07:15:01Z".into(),
         outcome: "连接已建立".into(),
     });
-    desktop.routes.push(Route {
+    desktop.routes.push(check::Route {
         host: "api.anthropic.com".into(),
         rule: "MATCH".into(),
         chain: "Proxy → 美国节点1".into(),
