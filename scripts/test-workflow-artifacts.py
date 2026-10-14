@@ -131,10 +131,13 @@ class ArtifactTests(unittest.TestCase):
     def test_gui_fixture_and_report_preserve_all_workloads_and_unknown_metrics(self):
         spec = importlib.util.spec_from_file_location('memory', build.ROOT/'scripts/run-memory-benchmark.py')
         module = importlib.util.module_from_spec(spec); spec.loader.exec_module(module)
-        fixture = module.fixture()
-        self.assertEqual(fixture.count('type: http'), 2000)
-        self.assertEqual(fixture.count('type: select'), 40)
-        self.assertEqual(fixture.count('DOMAIN-SUFFIX'), 20000)
+        self.assertEqual(module.fixture(), module.fixture('light'))
+        for workload, nodes, groups, rules in (('light', 100, 5, 1000), ('stress', 2000, 40, 20000)):
+            fixture = module.fixture(workload)
+            with self.subTest(workload=workload):
+                self.assertEqual(fixture.count('type: http'), nodes)
+                self.assertEqual(fixture.count('type: select'), groups)
+                self.assertEqual(fixture.count('DOMAIN-SUFFIX'), rules)
         with tempfile.TemporaryDirectory() as directory:
             output = Path(directory)
             rows = [{'type': 'api', 'workload': workload, 'mode': mode, 'refreshes': refresh,
@@ -145,11 +148,15 @@ class ArtifactTests(unittest.TestCase):
             sample = {'elapsed_ms': 0, 'gui': {'rss_bytes': 1048576}, 'core': {'rss_bytes': 2097152}, 'total': {'pss_bytes': None}}
             for scene in ('home', 'proxies-collapsed', 'proxies-search', 'home-after-proxies'):
                 (output/(scene+'.jsonl')).write_text(json.dumps(sample))
-            metadata = {'source_commit': self.commit, 'version': self.version, 'profile': 'release', 'repetitions': 1}
+            metadata = {'source_commit': self.commit, 'version': self.version, 'profile': 'release',
+                        'repetitions': 1, 'workload': 'light', 'rows': 1000,
+                        'gui_fixture': {'nodes': 100, 'groups': 5, 'rules': 1000}}
             with patch.dict(build.os.environ, {}, clear=True):module.summarize(output, metadata)
             report = (output/'README.md').read_text()
             self.assertIn('| proxies | streamed | 5 | 1.00 | 0.50 |', report)
             self.assertIn('| home | 1.00 | 2.00 | unknown |', report)
+            self.assertIn('100 nodes, 5 groups × 100 members, 1,000 rules', report)
+            self.assertNotIn('2,000 nodes', report)
 
 
 if __name__ == '__main__':

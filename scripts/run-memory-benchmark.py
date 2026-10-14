@@ -22,14 +22,21 @@ import zlib
 from build_support import ROOT, write_json
 
 
-def fixture():
-    nodes = ', '.join(f'node-{index}' for index in range(2000))
+WORKLOADS = {
+    'light': {'nodes': 100, 'groups': 5, 'rules': 1000, 'api_rows': 1000},
+    'stress': {'nodes': 2000, 'groups': 40, 'rules': 20000, 'api_rows': 50000},
+}
+
+
+def fixture(workload='light'):
+    counts = WORKLOADS[workload]
+    nodes = ', '.join(f'node-{index}' for index in range(counts['nodes']))
     return ('proxies:\n' + ''.join(
-        f'  - {{name: node-{index}, type: http, server: 127.0.0.1, port: 1}}\n' for index in range(2000))
+        f'  - {{name: node-{index}, type: http, server: 127.0.0.1, port: 1}}\n' for index in range(counts['nodes']))
         + 'proxy-groups:\n' + ''.join(
-            f'  - name: group-{group}\n    type: select\n    proxies: [{nodes}]\n' for group in range(40))
+            f'  - name: group-{group}\n    type: select\n    proxies: [{nodes}]\n' for group in range(counts['groups']))
         + 'rules:\n' + ''.join(
-            f'  - DOMAIN-SUFFIX,example-{index}.test,group-0\n' for index in range(20000))
+            f'  - DOMAIN-SUFFIX,example-{index}.test,group-0\n' for index in range(counts['rules']))
         + '  - MATCH,DIRECT\n')
 
 
@@ -118,7 +125,7 @@ def search_center(window, output, env):
     return 380, sum(runs[0])//2
 
 
-def gui_scenes(executable, benchmark, output, seconds, modern_layout=False, rule_overrides=None, prefix=''):
+def gui_scenes(executable, benchmark, output, seconds, modern_layout=False, rule_overrides=None, prefix='', workload='light'):
     env = dict(os.environ, GSETTINGS_BACKEND='memory', WINIT_UNIX_BACKEND='x11', WINIT_X11_SCALE_FACTOR='1')
     env.pop('WAYLAND_DISPLAY', None)
     with tempfile.TemporaryDirectory(prefix='memory-gui-') as directory, (output/(prefix+'gui.log')).open('x') as log:
@@ -135,7 +142,7 @@ def gui_scenes(executable, benchmark, output, seconds, modern_layout=False, rule
         if rule_overrides is not None:
             benchmark_settings['rule_overrides'] = rule_overrides
         write_json(data/'settings.json', benchmark_settings)
-        (data/'profiles'/f'{profile_id}.yaml').write_text(fixture(), encoding='utf-8')
+        (data/'profiles'/f'{profile_id}.yaml').write_text(fixture(workload), encoding='utf-8')
         write_json(data/'profiles.json', [{'id': profile_id, 'name': 'Memory workload', 'updated': 0,
                    'source': str(data/'profiles'/f'{profile_id}.yaml')}])
         env['CLASH_OF_RUST_DATA_DIR'] = str(data)
@@ -216,7 +223,8 @@ def summarize(output, metadata):
                     raise ValueError('Benchmark repetition count is incomplete')
                 peak, retained = (statistics.median(row[key] for row in samples)/1048576 for key in ('peak_extra_heap_bytes', 'retained_extra_heap_bytes'))
                 lines.append(f'| {workload} | {mode} | {refresh} | {peak:.2f} | {retained:.2f} |')
-    lines += ['', 'GUI subscription: 2,000 nodes, 40 groups × 2,000 members, 20,000 rules. Proxy off; scheduled delay checks off; no business traffic. Xvfb/X11; snapshots show the scene used.']
+    counts = metadata['gui_fixture']
+    lines += ['', f"Workload: `{metadata['workload']}`; API rows: {metadata['rows']:,}. GUI subscription: {counts['nodes']:,} nodes, {counts['groups']:,} groups × {counts['nodes']:,} members, {counts['rules']:,} rules. Proxy off; scheduled delay checks off; no business traffic. Xvfb/X11; snapshots show the scene used."]
     scenes = ['home', 'proxies-collapsed', 'proxies-search', 'home-after-proxies']
     if metadata.get('additional_gui_rules'):
         lines += ['', 'rules-* scenes enable all five subscription overrides with the subscription fallback unchanged in a fresh client/core process.']
@@ -242,11 +250,16 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--source', type=Path, required=True)
     parser.add_argument('--profile', choices=('dev', 'release'), default='release')
-    parser.add_argument('--rows', type=int, default=50000)
+    parser.add_argument('--workload', choices=WORKLOADS, default='light',
+                        help='light: small subscription (default); stress: the original large fixture')
+    parser.add_argument('--rows', type=int, help='Override the selected workload\'s API row count')
     parser.add_argument('--repetitions', type=int, default=3)
     parser.add_argument('--seconds', type=int, default=10)
     parser.add_argument('--output', type=Path, required=True)
     args = parser.parse_args()
+    counts = WORKLOADS[args.workload]
+    if args.rows is None:
+        args.rows = counts['api_rows']
     if not (1 <= args.rows <= 50000 and 1 <= args.repetitions <= 10 and 1 <= args.seconds <= 120):
         raise ValueError('Bounds: rows 1..50000, repetitions 1..10, GUI seconds 1..120')
     source, output = args.source.resolve(strict=True), args.output.resolve()
@@ -259,7 +272,9 @@ def main():
     metadata = {'source_commit': subprocess.check_output(['git', 'rev-parse', 'HEAD'], cwd=source, text=True).strip(),
                 'benchmark_commit': subprocess.check_output(['git', 'rev-parse', 'HEAD'], cwd=ROOT, text=True).strip(),
                 'version': tomllib.loads((source/'Cargo.toml').read_text())['package']['version'],
-                'profile': args.profile, 'rows': args.rows, 'repetitions': args.repetitions,
+                'profile': args.profile, 'workload': args.workload,
+                'gui_fixture': {key: counts[key] for key in ('nodes', 'groups', 'rules')},
+                'rows': args.rows, 'repetitions': args.repetitions,
                 'gui_sample_seconds': args.seconds, 'interval_ms': 250,
                 'os': platform.platform(), 'cpu_count': os.cpu_count(),
                 'rustc': subprocess.check_output(['rustc', '-Vv'], text=True).strip(),
@@ -268,7 +283,7 @@ def main():
     modern_layout = (source/'src/ui_style.rs').is_file()
     metadata['gui_navigation'] = 'current sidebar coordinates and detected search field' if modern_layout else 'legacy window coordinates'
     write_json(output/'metadata.json', metadata)
-    (output/'gui-fixture.yaml').write_text(fixture(), encoding='utf-8')
+    (output/'gui-fixture.yaml').write_text(fixture(args.workload), encoding='utf-8')
     command = ['cargo', 'build', '--locked', '--bins', '--example', 'memory_benchmark']
     if args.profile == 'release':
         command.append('--release')
@@ -288,11 +303,11 @@ def main():
     with (output/'api.txt').open('x') as text:
         subprocess.run([str(benchmark), 'suite', str(args.rows), str(args.repetitions), str(output/'api.jsonl')],
                        cwd=source, stdout=text, check=True)
-    gui_scenes(bundle/'clash-of-rust', benchmark, output, args.seconds, modern_layout)
+    gui_scenes(bundle/'clash-of-rust', benchmark, output, args.seconds, modern_layout, workload=args.workload)
     if 'pub rule_overrides:' in (source/'src/config.rs').read_text(encoding='utf-8'):
         overrides = {'enabled': [True]*5}
         gui_scenes(bundle/'clash-of-rust', benchmark, output, args.seconds, modern_layout,
-                   rule_overrides=overrides, prefix='rules-')
+                   rule_overrides=overrides, prefix='rules-', workload=args.workload)
         metadata['additional_gui_rules'] = overrides
         write_json(output/'metadata.json', metadata)
     summarize(output, metadata)

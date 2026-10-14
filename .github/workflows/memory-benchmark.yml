@@ -11,10 +11,15 @@ on:
         type: choice
         options: [release, dev]
         default: release
+      workload:
+        description: '测试强度；light 为低强度，stress 为原压力测试'
+        type: choice
+        options: [light, stress]
+        default: light
       rows:
-        description: '每项 API 测试的数据量'
+        description: '可选：覆盖 API 数据量；留空使用 light 1000 / stress 50000'
         type: string
-        default: '50000'
+        required: false
       repetitions:
         description: '每项 API 测试的独立进程重复次数'
         type: string
@@ -82,12 +87,16 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
           BUILD_PROFILE: ${{ inputs.profile }}
+          BENCH_WORKLOAD: ${{ inputs.workload }}
           BENCH_ROWS: ${{ inputs.rows }}
           BENCH_REPETITIONS: ${{ inputs.repetitions }}
           SAMPLE_SECONDS: ${{ inputs.sample_seconds }}
         run: |
           import os, subprocess, sys
-          subprocess.run(['dbus-run-session', '--', 'xvfb-run', '-a', '--server-args=-screen 0 1280x900x24', sys.executable, 'scripts/run-memory-benchmark.py', '--source', 'source', '--profile', os.environ['BUILD_PROFILE'], '--rows', os.environ['BENCH_ROWS'], '--repetitions', os.environ['BENCH_REPETITIONS'], '--seconds', os.environ['SAMPLE_SECONDS'], '--output', 'dist/memory'], check=True)
+          command = ['dbus-run-session', '--', 'xvfb-run', '-a', '--server-args=-screen 0 1280x900x24', sys.executable, 'scripts/run-memory-benchmark.py', '--source', 'source', '--profile', os.environ['BUILD_PROFILE'], '--workload', os.environ['BENCH_WORKLOAD'], '--repetitions', os.environ['BENCH_REPETITIONS'], '--seconds', os.environ['SAMPLE_SECONDS'], '--output', 'dist/memory']
+          if os.environ['BENCH_ROWS'].strip():
+              command += ['--rows', os.environ['BENCH_ROWS']]
+          subprocess.run(command, check=True)
       - name: Render actual UI previews
         if: inputs.preview
         shell: python
