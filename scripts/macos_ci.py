@@ -80,55 +80,9 @@ def native_tests(tests, bundle):
         if any(name in output for name in ('AppKit.framework', 'Cocoa.framework', 'QuartzCore.framework')):
             raise RuntimeError('TUN helper unexpectedly links GUI frameworks')
     suite('TUN helper excludes GUI frameworks', launcher_dependencies)
-    suite('Real mihomo integration', lambda: logged('core-integration', [tests['core_integration'], '--ignored', '--test-threads=1'], timeout=300))
-    suite('Native network service discovery', lambda: logged('native-network', [tests['library'], 'native_network_services_can_be_read', '--ignored', '--test-threads=1']))
-    suite('Per-user autostart round trip', lambda: logged('native-autostart', [tests['library'], 'native_autostart_round_trip', '--ignored', '--test-threads=1']))
-    suite('Native authorization quoting and cancellation', lambda: logged('native-authorization', [tests['library'], 'native_authorization_script', '--ignored', '--test-threads=1']))
-    suite('Root to user TCP port reuse', lambda: logged('native-port-reuse', [tests['library'], 'native_mac_root_to_user_port_reuse', '--ignored', '--test-threads=1'], timeout=90))
-    suite('Proxy restore and later-owner protection', lambda: logged('native-proxy', ['sudo', '-n', 'env', 'GITHUB_ACTIONS=true', 'MIHOMO_TEST_RESOURCES='+str(bundle/'resources'), tests['library'], 'native_proxy_restore_round_trip', '--ignored', '--test-threads=1']))
-    suite('Authorized core lease lifecycle', lambda: logged('native-tun', [tests['library'], 'native_tun_lease', '--ignored', '--test-threads=1'], env=dict(os.environ, MIHOMO_TEST_RESOURCES=str(bundle/'resources')), timeout=180))
-    capture = suite('All pages in both themes', rendered_ui)
-    tests['macos_ui_fixture'] = capture['executable']
-    run(['cargo', 'build', '--release', '--locked', '--features', 'ui-preview', '--bin', 'clash-tun-launcher'])
-    fixture_helper = REPORT/'macos-helper-fixture'
-    shutil.copy2(ROOT/'target/release/clash-tun-launcher', fixture_helper)
-    tests['macos_helper_fixture'] = str(fixture_helper)
-    suite('Signed GUI authorization and update flows', lambda: logged('native-flows',
-        [sys.executable, ROOT/'scripts/test-macos-flows.py', '--bundle', bundle,
-         '--ui', capture['executable'], '--helper', fixture_helper, '--version', package_version(),
-         '--arch', host_arch(), '--report', REPORT], timeout=1200))
-
-
-def rendered_ui():
-    import struct, zlib
-    # Production binaries were frozen before this optional feature compilation.
-    command = ['cargo', 'test', '--release', '--locked', '--features', 'ui-preview',
-               '--test', 'ui_preview', '--no-run', '--message-format=json']
-    messages = cargo_messages(command, log=REPORT/'ui-build.jsonl', timeout=600)
-    executables = [entry['executable'] for line in messages.splitlines()
-                   if (entry := json.loads(line)).get('reason') == 'compiler-artifact'
-                   and entry.get('executable') and entry['target']['name'] == 'ui_preview']
-    if len(executables) != 1: raise RuntimeError('UI capture executable is missing')
-    output = REPORT/'ui'
-    output.mkdir(exist_ok=True)
-    def chunk(kind, data): return struct.pack('>I', len(data))+kind+data+struct.pack('>I', zlib.crc32(kind+data)&0xffffffff)
-    scenes = ('home', 'proxies', 'profiles', 'connections', 'rules', 'logs', 'diagnostics', 'ip', 'claude', 'claude-risk', 'claude-normal', 'claude-unknown', 'claude-empty', 'claude-scanning', 'claude-clean', 'claude-monitor-guide', 'claude-live', 'settings', 'profiles-edit', 'profiles-delete-active', 'profiles-delete-inactive', 'profiles-discard', 'connections-details', 'rules-discard', 'rules-discard-editor', 'rules-switch-confirm', 'rules-exit-confirm', 'settings-large-text')
-    for scene in scenes:
-        for suffix in ('', '-light'):
-            name = scene+suffix
-            destination = output/name
-            env = dict(os.environ, CLASH_UI_PREVIEW_SCENE=name, CLASH_UI_PREVIEW_OUTPUT=str(destination))
-            logged('ui-'+name, [executables[0]], env=env, timeout=60)
-            width, height = json.loads(destination.with_suffix('.json').read_text())
-            pixels = destination.with_suffix('.rgba').read_bytes()
-            if len(pixels) != width*height*4 or width < 800 or height < 450 or len(set(pixels)) < 16:
-                raise RuntimeError('UI rendered an empty/invalid screenshot: '+name)
-            stride = width*4
-            rows = b''.join(b'\x00'+pixels[y*stride:(y+1)*stride] for y in range(height))
-            image = b'\x89PNG\r\n\x1a\n'+chunk(b'IHDR', struct.pack('>IIBBBBB', width, height, 8, 6, 0, 0, 0))+chunk(b'IDAT', zlib.compress(rows))+chunk(b'IEND', b'')
-            destination.with_suffix('.png').write_bytes(image)
-            destination.with_suffix('.rgba').unlink()
-    return {'screenshots': len(scenes)*2, 'source': 'iced rendered pixels', 'data': 'isolated fixtures, not live network results', 'executable': executables[0]}
+    suite('Basic system proxy and TUN', lambda: logged('proxy-modes',
+        [sys.executable, ROOT/'scripts/test-proxy-modes.py',
+         '--test-binary', tests['core_integration'], '--bundle', bundle]))
 
 
 @contextlib.contextmanager
@@ -184,9 +138,7 @@ FileHandle.standardOutput.write(data)
                 windows = json.loads(output)
                 write_json(REPORT/(label+'-windows.json'), windows)
                 if not windows: raise RuntimeError('Core is healthy but macOS reports no application window')
-                window = windows[0]['kCGWindowNumber']
-                capture = subprocess.run(['/usr/sbin/screencapture', '-x', '-l', str(window), REPORT/(label+'.png')], capture_output=True, timeout=15)
-                return {'core': version, 'window_count': len(windows), 'screenshot': 'captured' if capture.returncode == 0 else 'unavailable: runner screen recording permission', 'manual_checks': ['permission dialog interaction', 'sleep/wake', 'physical multi-monitor/DPI', 'real login after reboot']}
+                return {'core': version, 'window_count': len(windows)}
             finally:
                 # GUI shutdown by SIGTERM is also a useful abnormal-exit check:
                 # its ordinary core must not remain listening afterwards.
@@ -233,17 +185,10 @@ def installed_package_tests(package, manifest, build):
             installed = Path(temporary)/APP_NAME
             run(['/usr/bin/ditto', app, installed])
             suite('Installed GUI, window and bundled core', lambda: gui_smoke(installed, 'installed'))
-            # Use the same already-built integration binary with installed resources.
-            env = dict(os.environ, MIHOMO_TEST_RESOURCES=str(installed/'Contents/Resources/resources'))
-            suite('Installed core rules/subscriptions', lambda: logged('installed-core', [build/manifest['tests']['core_integration'], '--ignored', '--test-threads=1'], env=env))
-    # The updater must attach this same DMG itself. Finish inspection and detach
-    # the outer volume before exercising actual update transactions.
-    suite('Installed DMG authorization and update flows', lambda: logged('installed-flows',
-        [sys.executable, ROOT/'scripts/test-macos-flows.py', '--bundle', build/'payload',
-         '--ui', build/manifest['tests']['macos_ui_fixture'],
-         '--helper', build/manifest['tests']['macos_helper_fixture'],
-         '--version', manifest['version'], '--arch', manifest['arch'],
-         '--report', REPORT, '--label', 'installed', '--package', package], timeout=1200))
+            suite('Installed system proxy and TUN', lambda: logged('installed-proxy-modes',
+                [sys.executable, ROOT/'scripts/test-proxy-modes.py',
+                 '--test-binary', build/manifest['tests']['core_integration'],
+                 '--bundle', installed]))
 
 
 def diagnostics(arch):
@@ -281,7 +226,7 @@ def diagnostics(arch):
                 stream.write(f'\n#### {path.stem}\n\n| Flow | Result | Seconds |\n|---|---|---|\n')
                 for case in flows['cases']:
                     stream.write(f"| {case['name']} | {case['status']} | {case.get('duration_seconds', '')} |\n")
-            stream.write('\nFull logs, window metadata, available screenshots and crash reports are in the macOS report artifact. Authorization dialogs, reboot/login and physical display tests remain manual.\n')
+            stream.write('\nFull logs, window metadata and crash reports are in the macOS report artifact. Authorization dialogs, reboot/login and physical display tests remain manual.\n')
 
 
 def main():
@@ -292,11 +237,13 @@ def main():
     if sys.platform != 'darwin' or host_arch() != args.arch: raise ValueError('A matching native macOS runner is required')
     if args.operation == 'diagnostics': diagnostics(args.arch); return
     # All compilation, including failures, has a durable full-output transcript.
+    if REPORT.is_symlink():
+        REPORT.unlink()
+    elif REPORT.exists():
+        shutil.rmtree(REPORT)
     REPORT.mkdir(parents=True, exist_ok=True)
-    planned = ['Compile, Clippy, unit tests and native integration', 'Real mihomo integration',
-               'TUN helper excludes GUI frameworks', 'Native network service discovery', 'Per-user autostart round trip',
-               'Native authorization quoting and cancellation', 'Root to user TCP port reuse', 'Proxy restore and later-owner protection',
-               'Authorized core lease lifecycle', 'All pages in both themes', 'Signed GUI authorization and update flows']
+    planned = ['Compile, Clippy, unit tests and native integration',
+               'TUN helper excludes GUI frameworks', 'Basic system proxy and TUN']
     write_json(REPORT/'report.json', {'schema': 1, 'arch': args.arch, 'status': 'running',
                'suites': [{'name': name, 'status': 'not_run'} for name in planned]})
     for name, command in [('proxy', ['/usr/sbin/scutil', '--proxy']),

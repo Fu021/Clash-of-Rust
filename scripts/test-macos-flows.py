@@ -220,7 +220,7 @@ def flow(scenario, fixture, package, version, report, prefix):
     if scenario == 'system-lifecycle':
         return system_lifecycle(fixture, report, prefix)
     before = interfaces()
-    system_owned = scenario in ('update-system', 'update-tun-system', 'update-cancel', 'update-root-rollback')
+    system_owned = scenario in ('update-system', 'update-tun-system', 'update-cancel', 'update-root-rollback') or (scenario.startswith('update') and scenario.endswith('system'))
     with tempfile.TemporaryDirectory(prefix="clash Mac ' 空格 ") as temporary:
         root = Path(temporary)
         install = root/'Applications'
@@ -304,7 +304,7 @@ def flow(scenario, fixture, package, version, report, prefix):
                         assert record['administrator_requests'] == 0 and record['system_authorization_sessions'] == 0, record
                         assert core_ready(data), 'Closing/reopening the window interrupted the core'
                         record['reopened_window_count'] = window_info(process.pid, report, prefix+'-'+scenario)
-                    elif scenario in ('update-user', 'update-system', 'update-tun-user', 'update-tun-system', 'update-rollback', 'update-root-rollback'):
+                    elif scenario in ('update-user', 'update-system', 'update-tun-user', 'update-tun-system', 'update-rollback', 'update-root-rollback') or 'online' in scenario:
                         assert record['exiting'], 'Ready update did not request normal GUI shutdown'
                         directory = Path(record['details']['directory'])
                         process.wait(timeout=45)

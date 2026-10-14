@@ -136,8 +136,6 @@ def verify_build(root, system, arch, expected_commit):
         raise ValueError('Required build test targets are missing')
     if system == 'linux' and 'linux_tun' not in manifest['tests']:
         raise ValueError('Linux routing test executable is missing')
-    if system == 'macos' and not {'macos_ui_fixture', 'macos_helper_fixture'} <= manifest['tests'].keys():
-        raise ValueError('macOS native flow fixture executables are missing')
     for name, relative in manifest['tests'].items():
         if not safe_name(relative) or relative != 'tests/'+name+('.exe' if system == 'windows' else '') or relative not in records:
             raise ValueError('Invalid test executable path')

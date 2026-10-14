@@ -1,4 +1,5 @@
-//! Explicit opt-in tests against an official mihomo binary. No OS proxy/TUN changes.
+//! Explicit opt-in tests against an official mihomo binary.
+//! OS proxy/TUN smoke tests require scripts/test-proxy-modes.py on disposable CI.
 use clash_of_rust::{
     api::Proxies,
     config::{Settings, Store},
@@ -55,6 +56,121 @@ fn free_port() -> u16 {
         }
     }
     panic!("could not allocate a port available for both TCP and UDP: {last_error:?}")
+}
+
+#[tokio::test]
+#[ignore = "Requires the disposable native proxy/TUN CI wrapper"]
+async fn basic_system_proxy_and_tun() {
+    use clash_of_rust::{engine::ProxyMode, platform};
+    use std::time::Duration;
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+    assert_eq!(std::env::var("CLASH_PROXY_SMOKE").as_deref(), Ok("1"));
+    let temporary = tempfile::tempdir().unwrap();
+    let store = Store::at(temporary.path().join("data")).unwrap();
+    let controller_port = free_port();
+    let mut mixed_port = free_port();
+    while mixed_port == controller_port {
+        mixed_port = free_port();
+    }
+    store
+        .save_settings(&Settings {
+            controller_port,
+            mixed_port,
+            dns_override: false,
+            ipv6: false,
+            ..Default::default()
+        })
+        .unwrap();
+    let mut engine = Engine::with_resources(store.clone(), test_resources()).unwrap();
+    let profile = temporary.path().join("smoke.yaml");
+    let device = if cfg!(target_os = "macos") {
+        "utun233"
+    } else {
+        "ClashRustTest"
+    };
+    // Route only this documentation subnet. The runner's control traffic and
+    // Internet default route remain outside TUN even if a test aborts.
+    std::fs::write(&profile, format!("proxies: []\nrules: ['IP-CIDR,203.0.113.0/24,REJECT,no-resolve', 'MATCH,DIRECT']\nlog-level: debug\ndns: {{enable: false}}\ntun:\n  device: {device}\n  stack: system\n  route-address: [203.0.113.0/24]\n  dns-hijack: []\n")).unwrap();
+    engine
+        .import("Proxy smoke".into(), profile.display().to_string(), None)
+        .await
+        .unwrap();
+    engine
+        .activate(engine.profiles.last().unwrap().id.clone())
+        .await
+        .unwrap();
+    engine.start().await.unwrap();
+    engine.select_proxy_mode(ProxyMode::System).await.unwrap();
+    assert!(platform::is_owned_at_port(&store.root.join("system-proxy.json"), mixed_port).unwrap());
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let target = listener.local_addr().unwrap();
+    let server = tokio::spawn(async move {
+        let (mut socket, _) = listener.accept().await.unwrap();
+        let mut request = [0; 4096];
+        socket.read(&mut request).await.unwrap();
+        socket
+            .write_all(b"HTTP/1.1 200 OK\r\nContent-Length: 8\r\nConnection: close\r\n\r\nproxy-ok")
+            .await
+            .unwrap();
+    });
+    let client = reqwest::Client::builder()
+        .no_proxy()
+        .proxy(reqwest::Proxy::http(format!("http://127.0.0.1:{mixed_port}")).unwrap())
+        .timeout(Duration::from_secs(5))
+        .build()
+        .unwrap();
+    assert_eq!(
+        client
+            .get(format!("http://{target}/"))
+            .send()
+            .await
+            .unwrap()
+            .text()
+            .await
+            .unwrap(),
+        "proxy-ok"
+    );
+    server.await.unwrap();
+    engine.select_proxy_mode(ProxyMode::Tun).await.unwrap();
+    let state = engine.poll(Scope::Home).await.unwrap();
+    assert!(state.running && state.tun && !state.system_proxy);
+    engine.poll(Scope::Logs).await.unwrap();
+    tokio::time::sleep(Duration::from_millis(300)).await;
+    let direct = reqwest::Client::builder()
+        .no_proxy()
+        .timeout(Duration::from_secs(2))
+        .build()
+        .unwrap();
+    assert!(
+        direct
+            .get("http://203.0.113.2/tun-smoke")
+            .send()
+            .await
+            .is_err()
+    );
+    let mut captured = false;
+    for _ in 0..50 {
+        let logs = engine.poll(Scope::Logs).await.unwrap().logs;
+        if logs
+            .iter()
+            .any(|line| line.contains("203.0.113.2") && line.contains("REJECT"))
+        {
+            captured = true;
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(100)).await;
+    }
+    assert!(
+        captured,
+        "Unproxied traffic was not captured and routed by TUN"
+    );
+    engine.select_proxy_mode(ProxyMode::Off).await.unwrap();
+    let state = engine.poll(Scope::Home).await.unwrap();
+    assert!(!state.tun && !state.system_proxy);
+    engine.stop().await.unwrap();
+    assert!(!engine.running());
+    assert!(!store.root.join("system-proxy.json").exists());
+    println!("PASS: native system proxy, HTTP forwarding, TUN capture and cleanup");
 }
 
 #[tokio::test]

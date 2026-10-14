@@ -1,0 +1,77 @@
+name: Mac Online Update (temporary)
+on:
+  workflow_dispatch:
+    inputs:
+      target_tag:
+        description: Published stable Mac release to install
+        type: string
+        default: v0.5.8
+  pull_request:
+    paths:
+      - '.github/workflows/macos-online-update.yml'
+      - 'scripts/test-macos-online-update.py'
+permissions:
+  contents: read
+concurrency:
+  group: mac-online-update-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+jobs:
+  update:
+    name: mac-update-${{ matrix.arch }}
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 60
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: macos-15-intel
+            arch: x64
+            target: x86_64-apple-darwin
+          - os: macos-latest
+            arch: arm64
+            target: aarch64-apple-darwin
+    env:
+      MACOSX_DEPLOYMENT_TARGET: '14.0'
+      PYTHONDONTWRITEBYTECODE: '1'
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          persist-credentials: false
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: stable-${{ matrix.target }}
+      - uses: actions/setup-python@v6
+        with:
+          python-version: '3.11'
+          architecture: ${{ matrix.arch }}
+      - name: Build diagnostic installer and test online update
+        shell: python
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TARGET_TAG: ${{ inputs.target_tag || 'v0.5.8' }}
+        run: |
+          import os, subprocess, sys
+          subprocess.run([sys.executable, 'scripts/test-macos-online-update.py', '--arch', '${{ matrix.arch }}', '--target-tag', os.environ['TARGET_TAG']], check=True)
+      - name: Collect Mac diagnostics
+        if: always()
+        shell: python
+        run: |
+          import subprocess, sys
+          subprocess.run([sys.executable, 'scripts/macos_ci.py', 'diagnostics', '--arch', '${{ matrix.arch }}'], check=True)
+      - uses: actions/upload-artifact@v6
+        if: always()
+        with:
+          name: mac-online-update-report-${{ matrix.arch }}
+          path: |
+            target/macos-online-update-report/*.json
+            target/macos-online-update-report/*.log
+            target/macos-online-update-report/*.jsonl
+            target/macos-report
+          retention-days: 14
+      - uses: actions/upload-artifact@v6
+        with:
+          name: mac-online-update-installer-${{ matrix.arch }}
+          path: dist/*-update-test.1-macos-*.dmg
+          if-no-files-found: error
+          retention-days: 14

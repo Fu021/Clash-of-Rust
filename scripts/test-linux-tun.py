@@ -92,6 +92,7 @@ def main():
     parser.add_argument('--test-binary', type=Path, required=True)
     parser.add_argument('--uid', type=int, required=True)
     parser.add_argument('--inside-namespace', action='store_true')
+    parser.add_argument('--basic', action='store_true')
     args = parser.parse_args()
     assert os.geteuid() == 0 and args.uid != 0
     binary = args.test_binary.resolve(strict=True)
@@ -111,8 +112,10 @@ def main():
         run(['ip', 'link', 'set', 'uplink', 'up'])
         run(['ip', 'route', 'add', 'default', 'via', '192.0.2.254', 'dev', 'uplink'])
         with isolated_resolved():
-            run([binary, '--ignored', '--test-threads=1', '--nocapture'],
-                env=dict(os.environ, CLASH_TUN_TEST_NAMESPACE='1', GSETTINGS_BACKEND='memory'),
+            run([binary, *(['basic_system_proxy_and_tun', '--exact'] if args.basic else []),
+                 '--ignored', '--test-threads=1', '--nocapture'],
+                env=dict(os.environ, CLASH_TUN_TEST_NAMESPACE='1', CLASH_PROXY_SMOKE='1',
+                         MIHOMO_TEST_RESOURCES='/opt/clash-of-rust/resources', GSETTINGS_BACKEND='memory'),
                 preexec_fn=ordinary_user, timeout=180)
         return
 
@@ -130,30 +133,34 @@ def main():
     original = {path: attribute(path) for path in (core, launcher)}
     original_dns_mode = os.stat(dns_helper).st_mode & 0o7777
     try:
-        invalid = subprocess.run([executable, '--authorize-tun', 'unexpected'], capture_output=True)
-        assert invalid.returncode == 1 and '不接受其他参数' in invalid.stderr.decode()
-        denied = subprocess.run([executable, '--authorize-tun'], capture_output=True, preexec_fn=ordinary_user)
-        assert denied.returncode == 1 and '需要管理员权限' in denied.stderr.decode()
-        expected = bytes.fromhex('0100000200300000000000000000000000000000')
-        # Seed the previous version's grant and verify one-time migration.
-        os.setxattr(core, 'security.capability', expected)
-        run([executable, '--authorize-tun'])
-        run([executable, '--authorize-tun'])  # Idempotent authorization.
-        assert attribute(core) is None
-        assert attribute(launcher) == expected
-        assert attribute(executable) is None, 'The GUI must never receive network capabilities'
-        assert os.stat(dns_helper).st_mode & 0o7777 == 0o4755
-        # Enabling the bridge never grants arbitrary processes DNS authority.
-        for arguments in (['dns', 'uplink', '198.18.0.2'], ['flush-caches', 'uplink'],
-                          ['dns', '--help', '198.18.0.2']):
-            denied = subprocess.run([dns_helper, *arguments], capture_output=True,
-                                    preexec_fn=ordinary_user)
-            assert denied.returncode == 1, (arguments, denied.stderr)
+        if args.basic:
+            run([executable, '--authorize-tun'])
+        else:
+            invalid = subprocess.run([executable, '--authorize-tun', 'unexpected'], capture_output=True)
+            assert invalid.returncode == 1 and '不接受其他参数' in invalid.stderr.decode()
+            denied = subprocess.run([executable, '--authorize-tun'], capture_output=True, preexec_fn=ordinary_user)
+            assert denied.returncode == 1 and '需要管理员权限' in denied.stderr.decode()
+            expected = bytes.fromhex('0100000200300000000000000000000000000000')
+            # Seed the previous version's grant and verify one-time migration.
+            os.setxattr(core, 'security.capability', expected)
+            run([executable, '--authorize-tun'])
+            run([executable, '--authorize-tun'])  # Idempotent authorization.
+            assert attribute(core) is None
+            assert attribute(launcher) == expected
+            assert attribute(executable) is None, 'The GUI must never receive network capabilities'
+            assert os.stat(dns_helper).st_mode & 0o7777 == 0o4755
+            # Enabling the bridge never grants arbitrary processes DNS authority.
+            for arguments in (['dns', 'uplink', '198.18.0.2'], ['flush-caches', 'uplink'],
+                              ['dns', '--help', '198.18.0.2']):
+                denied = subprocess.run([dns_helper, *arguments], capture_output=True,
+                                        preexec_fn=ordinary_user)
+                assert denied.returncode == 1, (arguments, denied.stderr)
         run(['unshare', '--net', '--mount', sys.executable, Path(__file__).resolve(),
-             '--inside-namespace', '--test-binary', binary, '--uid', args.uid], timeout=200)
-        print(json.dumps({'native_authorization': True, 'ordinary_user': args.uid,
-                          'tun_switch_restart_cleanup': True, 'network_namespace': True,
-                          'resolved_without_polkit': True, 'legacy_grant_migration': True}))
+             '--inside-namespace', '--test-binary', binary, '--uid', args.uid,
+             *(['--basic'] if args.basic else [])], timeout=200)
+        print(json.dumps({'basic': args.basic, 'native_authorization': True, 'ordinary_user': args.uid,
+                          'tun_traffic_cleanup': True, 'network_namespace': True,
+                          'resolved_without_polkit': True, 'legacy_grant_migration': not args.basic}))
     finally:
         os.chmod(dns_helper, original_dns_mode)
         for path, value in original.items():

@@ -5,6 +5,7 @@ from ctypes import wintypes
 import os
 from pathlib import Path
 import subprocess
+import sys
 import time
 import uuid
 import winreg
@@ -147,7 +148,7 @@ def interactive_uninstall(executable, installed, delete_data):
                 process.wait(timeout=10)
 
 
-def production_package(package, binary, root):
+def production_package(package, binary, root, smoke=None):
     # Production registration/shortcuts belong only on a disposable hosted VM;
     # the detailed failure fixtures below retain their isolated registration.
     if os.environ.get('GITHUB_ACTIONS') != 'true':
@@ -166,12 +167,11 @@ def production_package(package, binary, root):
             assert winreg.QueryValueEx(registration, 'DisplayVersion')[0] == file_version(binary)
         assert sha256(installed/'clash-of-rust.exe') == sha256(binary)
         validate_resources(installed/'resources', 'windows')
+        if smoke:
+            run([sys.executable, ROOT/'scripts/test-proxy-modes.py',
+                 '--test-binary', smoke, '--bundle', installed])
         user_file = installed/'unrelated-user-file.txt'
         user_file.write_text('Preserve this unrelated file', encoding='utf-8')
-        expect(package, ['/S', f'/D={installed}'], 2)
-        expect(package, ['/S', '/UPDATE', f'/D={installed}'], 0)
-        assert sha256(installed/'clash-of-rust.exe') == sha256(binary)
-        assert user_file.is_file()
     finally:
         uninstaller = installed/'uninstall.exe'
         if uninstaller.is_file():
@@ -183,14 +183,18 @@ def production_package(package, binary, root):
             raise AssertionError('Production registration survived uninstall')
     except FileNotFoundError:
         pass
-    print('PASS: final production package installation, update and uninstall')
+    print('PASS: final production package installation, proxy/TUN and uninstall')
 
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--old-executable',type=Path,help='Optional real lower-version GUI executable for an upgrade fixture')
     parser.add_argument('--package', type=Path, help='Test the final production installer on a disposable Actions VM')
+    parser.add_argument('--basic', action='store_true')
+    parser.add_argument('--test-binary', type=Path)
     args = parser.parse_args()
+    if args.basic and (not args.package or not args.test_binary):
+        parser.error('--basic requires --package and --test-binary')
     if os.name != 'nt':
         raise RuntimeError('Installer smoke tests require Windows')
     if key_exists(TEST_KEY) or key_exists(LEGACY_KEY):
@@ -202,7 +206,10 @@ def main():
     root = ROOT/'dist'/('installer-test-'+uuid.uuid4().hex)
     root.mkdir(parents=True)
     if args.package:
-        production_package(args.package.resolve(strict=True), binary, root)
+        production_package(args.package.resolve(strict=True), binary, root,
+                           args.test_binary.resolve(strict=True) if args.test_binary else None)
+    if args.basic:
+        return
     installed, setup = root/'installed', root/'smoke-setup.exe'
     compiler = nsis()
     with staging_directory('installer-test') as stage:

@@ -104,7 +104,7 @@ jobs:
         run: |
           import subprocess
           subprocess.run(['sudo', 'apt-get', 'update'], check=True)
-          subprocess.run(['sudo', 'apt-get', 'install', '-y', 'dpkg-dev', 'dbus', 'xvfb', 'xauth', 'iproute2', 'util-linux'], check=True)
+          subprocess.run(['sudo', 'apt-get', 'install', '-y', 'dpkg-dev', 'dbus', 'iproute2', 'util-linux', 'libcap2-bin'], check=True)
       - name: Fetch verified native build
         env:
           GH_TOKEN: ${{ github.token }}
@@ -147,7 +147,7 @@ jobs:
           if-no-files-found: error
           retention-days: 14
   ubuntu_latest:
-    name: Ubuntu latest-x64 TUN and GUI
+    name: Ubuntu latest-x64 proxy and TUN
     needs: [resolve, package]
     runs-on: ubuntu-latest
     timeout-minutes: 20

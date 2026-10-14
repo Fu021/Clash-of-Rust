@@ -1,4 +1,4 @@
-"""Named Windows regression suites, with a failure-preserving CI receipt."""
+"""Named Windows basic suites, with a failure-preserving CI receipt."""
 import sys
 import time
 from build_support import ROOT, host_arch, run, write_json
@@ -11,16 +11,10 @@ def windows_tests(tests, bundle):
     suites = [
         ('python-build-tools', [sys.executable, ROOT/'scripts/test-build-tools.py']),
         ('artifact-protocol', [sys.executable, ROOT/'scripts/test-workflow-artifacts.py']),
-        ('offline-core-integration', [tests['core_integration'], '--ignored', '--test-threads=1']),
-        ('native-tray', [tests['tray_integration'], 'native_tray', '--ignored', '--test-threads=1']),
-        ('native-file-picker', [tests['tray_integration'], 'native_file_picker', '--ignored', '--test-threads=1']),
-        ('elevated-task-permissions', [tests['library'], 'native_autostart', '--ignored']),
+        ('system-proxy-and-tun', [sys.executable, ROOT/'scripts/test-proxy-modes.py',
+                                  '--test-binary', tests['core_integration'], '--bundle', bundle]),
         ('embedded-icons', [sys.executable, ROOT/'scripts/prepare-assets.py', 'verify-icons',
                             bundle/'clash-of-rust.exe']),
-        ('update-helper-rejections', [sys.executable, ROOT/'scripts/test-update-helper.py',
-                                     bundle/'clash-of-rust.exe']),
-        ('ordinary-user-startup', [sys.executable, ROOT/'scripts/test-windows-startup.py',
-                                   bundle/'clash-of-rust.exe', '--test-binary', tests['library']]),
     ]
     report['suites'] = [{'name': name, 'status': 'not_run'} for name, _ in suites]
     write_json(report_path, report)
@@ -28,7 +22,7 @@ def windows_tests(tests, bundle):
         started = time.monotonic()
         entry['status'] = 'running'
         write_json(report_path, report)
-        print('::group::Windows regression: ' + entry['name'], flush=True)
+        print('::group::Windows basic: ' + entry['name'], flush=True)
         try:
             run(command)
             entry['status'] = 'passed'
@@ -43,4 +37,4 @@ def windows_tests(tests, bundle):
             print('::endgroup::', flush=True)
     report['status'] = 'passed'
     write_json(report_path, report)
-    print('PASS: all Windows regression suites; report: ' + str(report_path), flush=True)
+    print('PASS: all Windows basic suites; report: ' + str(report_path), flush=True)

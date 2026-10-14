@@ -23,6 +23,10 @@ fn main() {
         return;
     }
     if std::env::var_os("CLASH_UI_PREVIEW_SCENE").is_none() {
+        #[cfg(target_os = "macos")]
+        if option_env!("CLASH_MAC_UPDATE_TEST") == Some("1") {
+            app::ui_preview::run_diagnostic_app().expect("diagnostic Mac app must run");
+        }
         return;
     }
     #[cfg(any(target_os = "linux", target_os = "macos"))]

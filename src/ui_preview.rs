@@ -1,6 +1,11 @@
 //! Deterministic screenshots of the real views. Feature-gated out of installers.
 use super::*;
 
+#[cfg(target_os = "macos")]
+pub(crate) fn run_diagnostic_app() -> iced::Result {
+    super::main()
+}
+
 // Run the actual application state machine and real core from a signed fixture
 // app. Only input delivery and human confirmation are replaced; installers,
 // authorization scripts, socket leases and normal shutdown remain production code.
@@ -16,6 +21,9 @@ struct MacFlow {
 #[cfg(target_os = "macos")]
 impl MacFlow {
     fn begin_update(&mut self, task: Task<Message>) -> Task<Message> {
+        if self.scenario.contains("online") {
+            return Task::batch([task, self.app.update(Message::CheckUpdate)]);
+        }
         let package =
             std::path::PathBuf::from(std::env::var_os("CLASH_CI_UPDATE_PACKAGE").unwrap());
         let version = std::env::var("CLASH_CI_UPDATE_VERSION").unwrap();
@@ -51,6 +59,13 @@ impl MacFlow {
         .unwrap();
     }
     fn update(&mut self, message: Message) -> Task<Message> {
+        let checked_online =
+            self.scenario.contains("online") && matches!(&message, Message::UpdateChecked(_));
+        let online_checkpoint = self.scenario.contains("online")
+            && matches!(
+                &message,
+                Message::UpdateProgress(..) | Message::UpdateDownloaded(..)
+            );
         if self.scenario == "file-picker" {
             let finished = matches!(&message, Message::Finished(_));
             let opened = matches!(&message, Message::FilePickStarted(..));
@@ -121,6 +136,28 @@ impl MacFlow {
         );
         let handoff = matches!(&message, Message::UpdateHandoff(_));
         let task = self.app.update(message);
+        if checked_online {
+            if self
+                .app
+                .updates
+                .available
+                .as_ref()
+                .is_some_and(|available| {
+                    available.version == std::env::var("CLASH_CI_UPDATE_VERSION").unwrap()
+                        && available.package.is_some()
+                })
+            {
+                self.record(serde_json::json!({"stage": "release_discovered", "version": self.app.updates.available.as_ref().unwrap().version}));
+                return Task::batch([task, self.app.update(Message::InstallUpdate)]);
+            }
+            self.phase = 10;
+            self.record(serde_json::json!({"stage": "discovery_failed"}));
+        }
+        if online_checkpoint {
+            self.record(
+                serde_json::json!({"stage": "download", "failure": self.app.updates.failure}),
+            );
+        }
         if handoff {
             let tun_to_system = self.phase == 3 && self.scenario.starts_with("update-tun-");
             self.phase = 10;
