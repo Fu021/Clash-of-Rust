@@ -372,8 +372,14 @@ pub fn serve(uid: u32) -> Result<()> {
     } else {
         None
     };
-    // Recover a previous daemon/GUI crash before accepting the next login.
-    restore_lease(&journal, &mut lease)?;
+    // Preserve a live GUI's lease when launchd restarts only the helper.
+    // Recover settings when the owning GUI has already exited.
+    if lease
+        .as_ref()
+        .is_some_and(|owned| unsafe { libc::kill(owned.owner as i32, 0) } != 0)
+    {
+        restore_lease(&journal, &mut lease)?;
+    }
     let socket = socket_path(uid);
     if socket.exists() {
         fs::remove_file(&socket)?;

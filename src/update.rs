@@ -65,7 +65,7 @@ impl Downloaded {
             .expect("download directory lock")
             .take()
         {
-            directory.keep();
+            let _ = directory.keep();
         }
     }
 }

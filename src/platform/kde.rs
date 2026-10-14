@@ -1,5 +1,6 @@
 //! KDE proxy configuration; preserves all unrelated KConfig entries.
 use super::*;
+use std::collections::BTreeMap;
 const KEYS: [&str; 7] = [
     "ProxyType",
     "httpProxy",

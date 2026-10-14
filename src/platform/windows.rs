@@ -1,4 +1,5 @@
 use super::*;
+use std::collections::BTreeMap;
 use winreg::{
     RegKey,
     enums::{HKEY_CURRENT_USER, KEY_READ, KEY_WRITE},
