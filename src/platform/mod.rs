@@ -282,6 +282,21 @@ pub fn is_owned(journal_path: &Path) -> Result<bool> {
 }
 
 #[cfg(target_os = "macos")]
+pub fn adopt_owned_proxy(journal_path: &Path) -> Result<()> {
+    if !journal_path.exists() {
+        return Ok(());
+    }
+    let journal: Journal = serde_json::from_slice(&std::fs::read(journal_path)?)?;
+    if native::read()? == journal.owned {
+        native::service::adopt_proxy(&journal.original, &journal.owned)?;
+    } else {
+        // A restarted helper may already have recovered a stale GUI journal.
+        std::fs::remove_file(journal_path)?;
+    }
+    Ok(())
+}
+
+#[cfg(target_os = "macos")]
 pub fn is_owned_at_port(journal_path: &Path, port: u16) -> Result<bool> {
     if !journal_path.exists() {
         return Ok(false);

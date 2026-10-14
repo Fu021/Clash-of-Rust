@@ -24,7 +24,11 @@ static STOP: AtomicBool = AtomicBool::new(false);
 #[derive(Deserialize, Serialize)]
 #[serde(tag = "operation", rename_all = "snake_case", deny_unknown_fields)]
 enum Request {
-    Status,
+    Status {},
+    Adopt {
+        original: ProxyState,
+        owned: ProxyState,
+    },
     Proxy {
         state: ProxyState,
         restore: bool,
@@ -140,14 +144,14 @@ fn bundled_core() -> Result<(PathBuf, String)> {
 
 pub fn ensure_available(interactive: bool) -> Result<()> {
     let (_, expected) = bundled_core()?;
-    if exchange(&Request::Status).is_ok_and(|status| status.core_sha256 == expected) {
+    if exchange(&Request::Status {}).is_ok_and(|status| status.core_sha256 == expected) {
         return Ok(());
     }
     // launchd may still be restoring the installed job during login.
     if paths(unsafe { libc::getuid() }).1.is_dir() {
         let deadline = Instant::now() + Duration::from_secs(3);
         while Instant::now() < deadline {
-            if exchange(&Request::Status).is_ok_and(|status| status.core_sha256 == expected) {
+            if exchange(&Request::Status {}).is_ok_and(|status| status.core_sha256 == expected) {
                 return Ok(());
             }
             std::thread::sleep(Duration::from_millis(100));
@@ -172,7 +176,7 @@ pub fn ensure_available(interactive: bool) -> Result<()> {
     ))?;
     let deadline = Instant::now() + Duration::from_secs(10);
     loop {
-        if exchange(&Request::Status).is_ok_and(|status| status.core_sha256 == expected) {
+        if exchange(&Request::Status {}).is_ok_and(|status| status.core_sha256 == expected) {
             return Ok(());
         }
         ensure!(
@@ -198,6 +202,14 @@ pub fn restore_proxy(state: &ProxyState) -> Result<()> {
     exchange(&Request::Proxy {
         state: state.clone(),
         restore: true,
+    })?;
+    Ok(())
+}
+
+pub fn adopt_proxy(original: &ProxyState, owned: &ProxyState) -> Result<()> {
+    exchange(&Request::Adopt {
+        original: original.clone(),
+        owned: owned.clone(),
     })?;
     Ok(())
 }
@@ -426,7 +438,21 @@ pub fn serve(uid: u32) -> Result<()> {
                     .read_until(b'\n', &mut bytes)?;
                 ensure!(bytes.last() == Some(&b'\n'), "网络助手请求过大或未完成");
                 match serde_json::from_slice::<Request>(&bytes)? {
-                    Request::Status => {}
+                    Request::Status {} => {}
+                    Request::Adopt { original, owned } => {
+                        ensure!(
+                            super::native_proxy::read()? == owned,
+                            "系统代理已被其他程序修改，请重新选择代理模式"
+                        );
+                        if lease.is_none() {
+                            lease = Some(ProxyLease {
+                                original,
+                                owned,
+                                owner: peer_pid(&stream)?,
+                            });
+                            save_lease(&journal, lease.as_ref().unwrap())?;
+                        }
+                    }
                     Request::Proxy { state, restore } => {
                         if !restore && lease.is_none() {
                             lease = Some(ProxyLease {

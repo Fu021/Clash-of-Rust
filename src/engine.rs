@@ -1244,6 +1244,10 @@ impl Engine {
     }
 
     pub async fn select_proxy_mode(&mut self, mode: ProxyMode) -> Result<()> {
+        #[cfg(target_os = "macos")]
+        if mode == ProxyMode::System {
+            self.prepare_mac_system(true).await?;
+        }
         #[cfg(target_os = "linux")]
         if mode == ProxyMode::Tun {
             self.prepare_linux_tun(true).await?;
@@ -1279,6 +1283,11 @@ impl Engine {
 
     /// Returns true when a successful UAC launch requires the GUI to exit.
     pub async fn restore_proxy_mode(&mut self) -> Result<bool> {
+        #[cfg(target_os = "macos")]
+        if self.settings.proxy_mode == ProxyMode::System {
+            let interactive = !std::env::args_os().any(|arg| arg == "--background");
+            self.prepare_mac_system(interactive).await?;
+        }
         if cfg!(windows) && self.settings.proxy_mode == ProxyMode::Tun && !platform::is_elevated() {
             self.prepare_elevation().await?;
             return Ok(true);
@@ -1296,6 +1305,17 @@ impl Engine {
         }
         self.proxy_mode(self.settings.proxy_mode).await?;
         Ok(false)
+    }
+
+    #[cfg(target_os = "macos")]
+    async fn prepare_mac_system(&self, interactive: bool) -> Result<()> {
+        let journal = self.journal();
+        tokio::task::spawn_blocking(move || {
+            platform::macos::service::ensure_available(interactive)?;
+            platform::adopt_owned_proxy(&journal)
+        })
+        .await??;
+        Ok(())
     }
 
     #[cfg(target_os = "macos")]
