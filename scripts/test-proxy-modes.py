@@ -56,6 +56,12 @@ def check(binary, bundle):
             stage = Path(temporary)
             shutil.copy2(binary, stage/'proxy-smoke')
             shutil.copy2(helper, stage/'clash-tun-launcher')
+            if bundle.suffix != '.app':
+                # Intel's raw Rust executable is unsigned until packaging.
+                # Give this isolated test copy the same ad-hoc signature used
+                # by build_app, preserving the exported prebuilt bytes.
+                run(['/usr/bin/codesign', '--force', '--sign', '-', stage/'clash-tun-launcher'])
+            run(['/usr/bin/codesign', '--verify', '--strict', stage/'clash-tun-launcher'])
             (stage/'resources').symlink_to(resources.resolve(), target_is_directory=True)
             command[0] = stage/'proxy-smoke'
             # Production helper and launchd service, ordinary-user client. Only

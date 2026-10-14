@@ -5,13 +5,14 @@
 | Rust / CI | main push、PR | 六平台编译、静态检查、代码与原生接口测试 | `build-{system}-{arch}`，保留 14 天 |
 | Publish Release | 手动 | 复用成功 CI 的程序，打包、安装后测试、发布 | 六个安装包及 SHA256；测试产物保留 14 天 |
 | Memory Benchmark | 手动 | 测量一个远程分支、标签或提交的内存 | 原始 JSONL、报告、截图、构建日志；保留 30 天 |
+| Mac Online Update（临时） | 首次 PR、手动 | 通过本机 HTTP 服务验证 Mac 在线更新 | 诊断 DMG、HTTP 与安装阶段报告；保留 14 天 |
 
 六个平台为 Windows x64 / ARM64、Linux x64 / ARM64、macOS Intel / Apple Silicon。Linux 安装包支持 Debian/Ubuntu，Ubuntu 仅支持 22.04 及以上；Ubuntu 最新版兼容验证在发布工作流中执行。
 
 ## CI
 
 - 六平台使用同一个 Release profile 完成格式检查、Clippy、编译和 Rust 常规测试。
-- 原生基础检查验证系统代理设置的真实写入、HTTP 转发、TUN 接管无显式代理的流量，以及关闭后的清理。Linux 使用隔离网络命名空间，Mac 使用真实 launchd 网络助手，Windows 使用 runner 的管理员权限。
+- 原生基础检查验证系统代理设置写入、HTTP 转发、TUN 接管无显式代理的流量，以及关闭后的清理。Linux 使用隔离网络命名空间及 GSettings 内存后端，不覆盖真实登录桌面的 dconf 持久化；Mac 使用真实 launchd 网络助手，Windows 使用 runner 的管理员权限。
 - 已解决问题的专项 GUI、窗口缩放、自启动、失败注入、浏览器及更新安装场景不在常规 CI 中执行。相关诊断脚本保留，可按问题单独运行。
 - Linux x64 手动 CI 可勾选 `linux_screenshots`，生成深浅色与最小窗口截图；默认关闭。截图编译在生产二进制冻结、导出后执行，不改变发布产物。
 - Linux x64 检查生成代码；通用 Python 构建工具和产物协议测试在 Linux x64 与两种 Windows 架构执行；Windows 另核对 PE 图标。
