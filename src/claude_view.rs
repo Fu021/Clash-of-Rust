@@ -33,6 +33,8 @@ pub enum Event {
     ConfirmProtection,
     ReputationKey(String),
     SaveReputationKey,
+    Additional(check::additional::Kind),
+    AdditionalResult(u64, Result<Vec<Signal>, String>),
     Cancel,
     ResultsPage(usize),
     ResultsFilter(Option<ResultKind>),
@@ -74,6 +76,7 @@ pub struct State {
     pub status: String,
     pub error: bool,
     reputation_key: String,
+    additional_busy: bool,
 }
 enum Entry<'a> {
     Config(&'a check::audit::Finding),
@@ -90,6 +93,9 @@ fn index(environment: Environment) -> usize {
     }
 }
 impl State {
+    pub(crate) fn clear_guard(&mut self) {
+        self.guard_status.clear();
+    }
     pub(crate) fn guard_report(&mut self, snapshot: &check::guard::Snapshot) {
         self.guard_status = format!(
             "{} · 已关闭 {} 条异常连接",
@@ -109,7 +115,7 @@ impl State {
             Group::Desktop,
             "实时保护与异常拦截",
             format!(
-                "已观察 {} 次请求 · 已关闭 {} 条异常连接 · 系统提示 {} 次",
+                "已观察 {} 次请求 · 已关闭 {} 条异常连接 · 系统提示请求 {} 次",
                 snapshot.total, snapshot.blocked, snapshot.alerts
             ),
             "内核事件与连接控制接口",
@@ -170,7 +176,11 @@ impl State {
             Entry::Signal(r, s) => {
                 if s.risk {
                     ResultKind::Risk
-                } else if s.evidence != Evidence::Measured || s.title == "实时保护与异常拦截"
+                } else if s.evidence != Evidence::Measured
+                    || matches!(
+                        s.title.as_str(),
+                        "实时保护与异常拦截" | "Claude 请求实时检测"
+                    )
                 {
                     ResultKind::Unknown
                 } else if matches!(s.group, Group::Exit | Group::WebRtc | Group::Dns)
@@ -229,6 +239,7 @@ impl State {
             || self.audit_busy
             || self.session_starting
             || self.importing
+            || self.additional_busy
     }
     pub fn close(&mut self) {
         self.generation = self.generation.wrapping_add(1);
@@ -246,6 +257,7 @@ impl State {
         self.network_busy = false;
         self.browser_busy = false;
         self.importing = false;
+        self.additional_busy = false;
     }
     pub fn shutdown(&mut self) {
         self.close();
@@ -295,6 +307,71 @@ impl App {
     pub(crate) fn claude_event(&mut self, event: Event) -> Task<Message> {
         let wrap = |event| Message::Claude(event);
         match event {
+            Event::Additional(kind) => {
+                if self.claude.busy() || self.working || self.exiting {
+                    return Task::none();
+                }
+                let Some(port) = self.snapshot.running.then_some(self.settings.mixed_port) else {
+                    self.claude.status = "请先启动内核并完成一次检测。".into();
+                    self.claude.error = true;
+                    return Task::none();
+                };
+                let ip = self.claude.reports[index(Environment::Core)]
+                    .as_ref()
+                    .and_then(|report| {
+                        report
+                            .signals
+                            .iter()
+                            .find(|s| !s.ip.is_empty() && s.group == Group::Exit)
+                    })
+                    .map(|signal| signal.ip.clone())
+                    .unwrap_or_default();
+                self.claude.guide = None;
+                self.claude.additional_busy = true;
+                self.claude.error = false;
+                self.claude.status = format!("正在进行{}…", kind.title());
+                let generation = self.claude.generation;
+                let (aborter, registration) = AbortHandle::new_pair();
+                self.claude.aborters.push(aborter);
+                return Task::perform(
+                    async move {
+                        Abortable::new(
+                            async move {
+                                let client =
+                                    check::client(Some(port)).map_err(|e| e.to_string())?;
+                                check::additional::run(&client, kind, &ip)
+                                    .await
+                                    .map_err(|e| e.to_string())
+                            },
+                            registration,
+                        )
+                        .await
+                        .unwrap_or_else(|_| Err("补充检测已取消".into()))
+                    },
+                    move |result| wrap(Event::AdditionalResult(generation, result)),
+                );
+            }
+            Event::AdditionalResult(generation, result) if generation == self.claude.generation => {
+                self.claude.additional_busy = false;
+                match result {
+                    Ok(signals) => {
+                        let report = self.claude.reports[index(Environment::Core)]
+                            .get_or_insert_with(|| {
+                                Report::new(Environment::Core, "内核探测与补充检测")
+                            });
+                        report
+                            .signals
+                            .retain(|old| !signals.iter().any(|new| new.title == old.title));
+                        let remaining = 80usize.saturating_sub(report.signals.len());
+                        report.signals.extend(signals.into_iter().take(remaining));
+                        self.claude.status = "补充检测完成，结果已加入报告。".into();
+                    }
+                    Err(error) => {
+                        self.claude.status = error;
+                        self.claude.error = true;
+                    }
+                }
+            }
             Event::ReputationKey(value) => self.claude.reputation_key = value,
             Event::SaveReputationKey => {
                 let key = self.claude.reputation_key.trim().to_owned();
@@ -943,6 +1020,15 @@ impl App {
                 self.caption("密钥仅保存在本机，以 HTTPS 请求正文提交给所选检测服务；不会交给浏览器、Claude 或写入报告。匿名接口有每日额度，失败不反复重试。"),
                 button(self.label("保存")).style(ui_style::primary)
                     .on_press_maybe((!self.working && !self.exiting).then_some(event(Event::SaveReputationKey))),
+                self.caption("补充检测需手动触发：注册信息查询公网出口归属；全球探针从最多 20 个远端位置测量出口 IP；小流量测速下载 10 MiB、上传 2 MiB。结果不代表 Claude 的账号资格。"),
+                aligned_row![
+                    button(self.label("注册信息")).style(ui_style::secondary_button)
+                        .on_press_maybe((self.snapshot.running && !self.claude.busy()).then_some(event(Event::Additional(check::additional::Kind::Registration)))),
+                    button(self.label("全球探针")).style(ui_style::secondary_button)
+                        .on_press_maybe((self.snapshot.running && !self.claude.busy()).then_some(event(Event::Additional(check::additional::Kind::GlobalPing)))),
+                    button(self.label("小流量测速")).style(ui_style::secondary_button)
+                        .on_press_maybe((self.snapshot.running && !self.claude.busy()).then_some(event(Event::Additional(check::additional::Kind::Speed)))),
+                ].spacing(8),
             ],
         };
         Some(

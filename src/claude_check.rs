@@ -1,4 +1,5 @@
 //! Observable region signals, with explicit provenance rather than a risk score.
+pub mod additional;
 pub mod audit;
 pub mod browser;
 pub mod enhanced;

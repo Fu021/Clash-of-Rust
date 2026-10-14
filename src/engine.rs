@@ -201,6 +201,9 @@ pub struct Snapshot {
 impl Snapshot {
     /// Release heap-backed page data, including spare vector capacity.
     pub fn retain_scope(&mut self, scope: Scope) {
+        if scope != Scope::Claude {
+            self.claude_guard = None;
+        }
         if scope != Scope::Proxies {
             self.proxies = Proxies::default();
         }

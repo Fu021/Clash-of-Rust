@@ -2253,6 +2253,8 @@ impl App {
                 if let Some(mut snapshot) = reply.snapshot {
                     if let Some(guard) = &snapshot.claude_guard {
                         self.claude.guard_report(guard);
+                    } else if reply.scope == Scope::Claude {
+                        self.claude.clear_guard();
                     }
                     if let (Some(now), Some(previous)) = (
                         snapshot.connections_sampled_at,
