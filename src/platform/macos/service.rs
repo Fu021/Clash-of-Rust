@@ -7,7 +7,7 @@ use std::{
     fs,
     io::{BufRead, BufReader, Read, Write},
     os::unix::{
-        fs::{MetadataExt, PermissionsExt},
+        fs::{MetadataExt, OpenOptionsExt, PermissionsExt},
         net::{UnixListener, UnixStream},
     },
     path::{Path, PathBuf},
@@ -277,6 +277,20 @@ fn checked(command: &mut Command, action: &str) -> Result<()> {
     Ok(())
 }
 
+fn copy_contents(source: &Path, destination: &Path) -> Result<()> {
+    // Darwin copyfile/STAT can retain a user's uid. Create a new root-owned
+    // inode and copy bytes only; never inherit source ownership or ACLs.
+    let mut source = fs::File::open(source)?;
+    let mut destination = fs::OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .mode(0o600)
+        .open(destination)?;
+    std::io::copy(&mut source, &mut destination)?;
+    destination.sync_all()?;
+    Ok(())
+}
+
 fn plist(label: &str, launcher: &Path, uid: u32) -> String {
     format!(
         "<?xml version=\"1.0\" encoding=\"UTF-8\"?><plist version=\"1.0\"><dict><key>Label</key><string>{label}</string><key>ProgramArguments</key><array><string>{}</string><string>--macos-network-service</string><string>{uid}</string></array><key>RunAtLoad</key><true/><key>KeepAlive</key><true/><key>ThrottleInterval</key><integer>3</integer><key>ExitTimeOut</key><integer>10</integer><key>Umask</key><integer>18</integer><key>StandardErrorPath</key><string>{}/network-service.log</string></dict></plist>\n",
@@ -331,7 +345,7 @@ pub fn install(uid: u32) -> Result<()> {
             &resources.join("core.json"),
         ),
     ] {
-        fs::copy(source, target)?;
+        copy_contents(source, target)?;
     }
     fs::set_permissions(&launcher, fs::Permissions::from_mode(0o755))?;
     fs::set_permissions(resources.join("mihomo"), fs::Permissions::from_mode(0o755))?;
@@ -339,6 +353,13 @@ pub fn install(uid: u32) -> Result<()> {
         resources.join("core.json"),
         fs::Permissions::from_mode(0o644),
     )?;
+    for path in [
+        &launcher,
+        &resources.join("mihomo"),
+        &resources.join("core.json"),
+    ] {
+        root_owned(path, false)?;
+    }
     ensure!(
         crate::assets::hash_file(&resources.join("mihomo"))?.0 == expected,
         "安装网络助手期间内核发生变化"
@@ -555,6 +576,29 @@ pub fn serve(uid: u32) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn copying_helper_contents_creates_a_private_inode_without_source_metadata() {
+        let directory = tempfile::tempdir().unwrap();
+        let source = directory.path().join("source");
+        let destination = directory.path().join("destination");
+        fs::write(&source, b"helper bytes").unwrap();
+        fs::set_permissions(&source, fs::Permissions::from_mode(0o777)).unwrap();
+        copy_contents(&source, &destination).unwrap();
+        assert_eq!(fs::read(&destination).unwrap(), b"helper bytes");
+        assert_eq!(destination.metadata().unwrap().uid(), unsafe {
+            libc::geteuid()
+        });
+        assert_eq!(destination.metadata().unwrap().mode() & 0o777, 0o600);
+        assert_ne!(
+            source.metadata().unwrap().ino(),
+            destination.metadata().unwrap().ino()
+        );
+        assert!(
+            copy_contents(&source, &destination).is_err(),
+            "overwrote an existing helper target"
+        );
+    }
+
     #[test]
     fn proxy_adoption_moves_ownership_without_losing_the_original_settings() {
         use crate::platform::ProxyValue;
