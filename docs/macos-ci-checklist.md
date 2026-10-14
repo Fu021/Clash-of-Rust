@@ -10,7 +10,7 @@ Publish Release 复用 CI 产物，核对 DMG/App 版本、架构、资源与签
 
 Mac 自动更新另外由临时 `Mac Online Update (temporary)` 工作流验证真实 Release 检查、SHA256、DMG 下载、安装与正常用户重启，详见 [工作流说明](workflows.md)。它仍使用 runner 的免密 sudo 代替人工确认，授权弹窗和首次下载后的 Gatekeeper 操作需要人工验收。
 
-每种架构上传报告、逐项耗时、完整日志、系统/网络状态与崩溃信息。Mac 不再生成常规截图；Linux x64 截图可手动开启。
+每种架构上传报告、逐项耗时、完整日志、系统/网络状态与崩溃信息。Mac 不再生成常规截图；六平台截图由独立工作流手动生成。
 
 ## 实现与安装
 

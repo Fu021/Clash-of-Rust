@@ -26,6 +26,11 @@ _defender_spec.loader.exec_module(defender)
 
 
 class BuildTests(unittest.TestCase):
+    def test_release_job_protocol_matches_workflow_display_names(self):
+        workflow = (build.ROOT/'.github/workflows/release.yml').read_text()
+        for name in release.PACKAGE_JOBS - set(release.PACKAGES):
+            self.assertIn('    name: '+name+'\n', workflow)
+
     def test_ci_replaces_cached_reports_and_preserves_compiled_dependencies(self):
         spec = importlib.util.spec_from_file_location('run_ci', build.ROOT/'scripts/run-ci.py')
         ci = importlib.util.module_from_spec(spec)

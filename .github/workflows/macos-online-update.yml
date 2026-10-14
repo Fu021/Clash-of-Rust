@@ -6,6 +6,10 @@ on:
         description: Published stable Mac release to install
         type: string
         default: v0.5.8
+      stock_probe:
+        description: Build a stock release with only its version lowered for manual update testing
+        type: boolean
+        default: false
   pull_request:
     types: [opened]
     paths:
@@ -51,9 +55,13 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
           TARGET_TAG: ${{ inputs.target_tag || 'v0.5.8' }}
+          STOCK_PROBE: ${{ inputs.stock_probe || false }}
         run: |
           import os, subprocess, sys
-          subprocess.run([sys.executable, 'scripts/test-macos-online-update.py', '--arch', '${{ matrix.arch }}', '--target-tag', os.environ['TARGET_TAG']], check=True)
+          command = [sys.executable, 'scripts/test-macos-online-update.py', '--arch', '${{ matrix.arch }}', '--target-tag', os.environ['TARGET_TAG']]
+          if os.environ['STOCK_PROBE'] == 'true':
+              command.append('--stock-probe')
+          subprocess.run(command, check=True)
       - name: Collect Mac diagnostics
         if: always()
         shell: python
@@ -73,6 +81,9 @@ jobs:
       - uses: actions/upload-artifact@v6
         with:
           name: mac-online-update-installer-${{ matrix.arch }}
-          path: dist/*-update-test.1-macos-*.dmg
+          path: |
+            dist/*-update-test.1-macos-*.dmg
+            dist/*-update-probe.1-macos-*.dmg
+            dist/*.sha256
           if-no-files-found: error
           retention-days: 14

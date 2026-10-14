@@ -3,12 +3,6 @@ on:
   push:
     branches: [main]
   pull_request:
-  workflow_dispatch:
-    inputs:
-      linux_screenshots:
-        description: Generate Linux x64 light/dark UI screenshots
-        type: boolean
-        default: false
 permissions:
   contents: read
 concurrency:
@@ -116,21 +110,6 @@ jobs:
         run: |
           import subprocess, sys
           subprocess.run([sys.executable, 'scripts/macos_ci.py', 'diagnostics', '--arch', '${{ matrix.arch }}'], check=True)
-      - name: Optional Linux screenshots
-        if: matrix.system == 'linux' && matrix.arch == 'x64' && inputs.linux_screenshots
-        run: |
-          import subprocess, sys
-          subprocess.run(['sudo', 'apt-get', 'install', '-y', 'xvfb', 'xauth', 'xdotool', 'x11-apps'], check=True)
-          scenes = [scene+suffix for scene in ('home', 'proxies-ascending', 'profiles', 'connections', 'rules', 'logs', 'diagnostics', 'ip-summary', 'settings', 'claude', 'claude-risk', 'claude-normal', 'claude-unknown', 'profiles-edit', 'connections-details', 'rules-editor', 'rules-collapsed', 'profiles-delete-active', 'profiles-discard') for suffix in ('', '-light', '-compact', '-compact-light')]
-          subprocess.run(['dbus-run-session', '--', 'xvfb-run', '-a', '--server-args=-screen 0 1800x1200x24', sys.executable, 'scripts/run-ui-preview.py', '--source', '.', '--output', 'target/linux-ui', '--scenes', *scenes], check=True)
-      - name: Preserve optional Linux screenshots
-        uses: actions/upload-artifact@v6
-        if: always() && matrix.system == 'linux' && matrix.arch == 'x64' && inputs.linux_screenshots
-        with:
-          name: linux-ui-screenshots-x64
-          path: target/linux-ui
-          if-no-files-found: error
-          retention-days: 14
       - name: Preserve macOS diagnostics
         uses: actions/upload-artifact@v6
         if: always() && runner.os == 'macOS'

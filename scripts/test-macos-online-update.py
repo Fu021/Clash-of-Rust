@@ -101,11 +101,64 @@ def fixture_build(version):
         lock.write_text(original_lock)
 
 
+def stock_probe(package, version, arch):
+    """Build the published source with only its version lowered, no test feature."""
+    from macos_ci import mounted
+    probe_version = version+'-update-probe.1'
+    reference = 'refs/tags/v'+version
+    run(['git', 'fetch', '--no-tags', 'origin', reference])
+    commit = subprocess.check_output(['git', 'rev-parse', 'FETCH_HEAD^{commit}'], cwd=ROOT, text=True).strip()
+    with tempfile.TemporaryDirectory(prefix='clash-stock-update-') as temporary:
+        directory = Path(temporary)
+        source = directory/'source'
+        run(['git', 'worktree', 'add', '--detach', source, commit])
+        try:
+            for name in ('Cargo.toml', 'Cargo.lock'):
+                path = source/name
+                text = path.read_text()
+                old = ('version = "'+version+'"') if name == 'Cargo.toml' else ('name = "clash-of-rust"\nversion = "'+version+'"')
+                new = old.replace('"'+version+'"', '"'+probe_version+'"')
+                if old not in text:
+                    raise ValueError('Published source version does not match target')
+                path.write_text(text.replace(old, new, 1))
+            environment = dict(os.environ, CARGO_TARGET_DIR=str(ROOT/'target/stock-probe'))
+            environment.pop('CLASH_MAC_UPDATE_TEST', None)
+            subprocess.run(['cargo', 'build', '--release', '--locked', '--bins'], cwd=source,
+                           env=environment, check=True)
+            changed = subprocess.check_output(['git', 'diff', '--name-only'], cwd=source, text=True).splitlines()
+            if set(changed) != {'Cargo.toml', 'Cargo.lock'}:
+                raise ValueError('Stock probe changed more than package versions')
+            payload = directory/'payload'
+            payload.mkdir()
+            with mounted(package) as volume:
+                released = volume/APP_NAME/'Contents/Resources'
+                shutil.copytree(released/'resources', payload/'resources')
+                shutil.copy2(released/'LICENSE', payload/'LICENSE')
+            for name in ('clash-of-rust', 'clash-tun-launcher'):
+                shutil.copy2(ROOT/'target/stock-probe/release'/name, payload/name)
+            (ROOT/'dist').mkdir(exist_ok=True)
+            result = build_dmg(payload, probe_version, arch)
+            write_json(REPORT/'report.json', {'schema': 1, 'status': 'manual_test_package',
+                       'source_commit': commit, 'source_tag': 'v'+version,
+                       'version': probe_version, 'target_version': version,
+                       'changes': changed, 'features': [], 'update_source': 'GitHub production release API',
+                       'resources': 'Unmodified resources from the published target DMG',
+                       'package': result.name, 'sha256': sha256(result)})
+            result.with_name(result.name+'.sha256').write_text(sha256(result)+'\n')
+            summary = os.environ.get('GITHUB_STEP_SUMMARY')
+            if summary:
+                with open(summary, 'a') as stream:
+                    stream.write(f'### Stock Mac update probe ({arch})\n\nPublished `{version}` source, only version lowered to `{probe_version}`. No test features or local update source. Update normally through GitHub to `{version}`.\n')
+        finally:
+            run(['git', 'worktree', 'remove', '--force', source])
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--arch', choices=('x64', 'arm64'), default=host_arch())
     parser.add_argument('--target-tag', default='v0.5.8')
     parser.add_argument('--serve-only', type=Path, metavar='DMG', help='Serve a stable target DMG for manual local testing')
+    parser.add_argument('--stock-probe', action='store_true', help='Package published source with only its version lowered for manual reproduction')
     args = parser.parse_args()
     version = args.target_tag.removeprefix('v')
     if not version or any(c not in '0123456789.' for c in version):
@@ -130,6 +183,9 @@ def main():
     package = REPORT/'target-package'/package_name
     if sha256(package) != package.with_name(package_name+'.sha256').read_text().strip():
         raise ValueError('Published target DMG failed SHA256 verification')
+    if args.stock_probe:
+        stock_probe(package, version, args.arch)
+        return
     test_version = version+'-update-test.1'
     ui = fixture_build(test_version)
     run(['python3', ROOT/'scripts/prepare-resources.py', '--system', 'macos', '--arch', args.arch])
