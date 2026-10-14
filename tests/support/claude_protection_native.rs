@@ -200,12 +200,22 @@ fn scoped_payload(payload: &str) -> String {
 }
 async fn scope_runner(engine: &Engine) {
     let payload = std::fs::read_to_string(engine.store.runtime().join("config.yaml")).unwrap();
-    let value: serde_yaml::Value = serde_yaml::from_str(&payload).unwrap();
+    let mut value: serde_yaml::Value = serde_yaml::from_str(&payload).unwrap();
     assert!(
         value["tun"]["route-address"].is_null(),
         "production protection must cover full routing"
     );
-    engine.api.reload(&scoped_payload(&payload)).await.unwrap();
+    let live: serde_json::Value = engine.api.get("configs").await.unwrap();
+    assert_eq!(
+        live["tun"]["enable"], true,
+        "protection must enable TUN before test scoping"
+    );
+    value["tun"]["enable"] = true.into();
+    engine
+        .api
+        .reload(&scoped_payload(&serde_yaml::to_string(&value).unwrap()))
+        .await
+        .unwrap();
 }
 
 pub async fn run() {
@@ -501,9 +511,9 @@ pub async fn run() {
     );
     engine.start().await.unwrap();
     assert!(!engine.restore_proxy_mode().await.unwrap());
-    scope_runner(&engine).await;
     let restarted = engine.poll(Scope::Claude).await.unwrap();
     assert!(restarted.tun && restarted.claude_guard.is_some());
+    scope_runner(&engine).await;
     assert_eq!(
         engine.settings.claude_protection.as_ref(),
         Some(&protection)
