@@ -248,27 +248,59 @@ pub async fn extend(client: &Client, report: &mut Report, reputation_key: Option
             "未得到有效结果，不能确认。",
         )
     }));
-    use futures_util::StreamExt;
-    let probes=futures_util::stream::iter(["claude.ai","platform.claude.com","api.anthropic.com"])
-        .map(|host| async move {
-            let mut timings=Vec::new();
-            let mut status=None;
-            let mut challenge=false;
-            for _ in 0..3 {
-                let started=std::time::Instant::now();
-                if let Ok(response)=client.head(format!("https://{host}/")).send().await {
-                    timings.push(started.elapsed().as_millis());
-                    status=Some(response.status().as_u16());
-                    challenge |= response.headers().get("cf-mitigated").is_some_and(|v|v=="challenge");
-                }
-            }
-            timings.sort_unstable();
-            let mut signal=if timings.is_empty() {Signal::unknown(Group::Connectivity,&format!("{host} 连通性"),"通过内核发起轻量 HTTPS 请求","三次请求均未取得响应，不能确认原因。")}
-                else {Signal::new(Group::Connectivity,&format!("{host} 连通性"),format!("响应 {}/3 · 中位 {} ms · HTTP {}",timings.len(),timings[timings.len()/2],status.unwrap()),"通过内核发起轻量 HTTPS 请求",Evidence::Measured,"测量包含连接、TLS 与服务器响应，不是 ICMP Ping；收到 HTTP 响应不等于可登录、可对话或验证码通过。")};
-            if challenge {signal.detail.push_str(" 服务器返回 Cloudflare 挑战标志；未自动完成验证码，也没有提交账号信息。");signal.risk=true;}
-            signal
-        }).buffer_unordered(3).collect::<Vec<_>>().await;
-    report.signals.extend(probes);
+    let (web, console, api) = tokio::join!(
+        connectivity(client, "claude.ai"),
+        connectivity(client, "platform.claude.com"),
+        connectivity(client, "api.anthropic.com")
+    );
+    report.signals.extend([web, console, api]);
+}
+
+async fn connectivity(client: &Client, host: &str) -> Signal {
+    let mut timings = Vec::new();
+    let mut status = None;
+    let mut challenge = false;
+    for _ in 0..3 {
+        let started = std::time::Instant::now();
+        if let Ok(response) = client.head(format!("https://{host}/")).send().await {
+            timings.push(started.elapsed().as_millis());
+            status = Some(response.status().as_u16());
+            challenge |= response
+                .headers()
+                .get("cf-mitigated")
+                .is_some_and(|v| v == "challenge");
+        }
+    }
+    timings.sort_unstable();
+    let mut signal = if timings.is_empty() {
+        Signal::unknown(
+            Group::Connectivity,
+            &format!("{host} 连通性"),
+            "通过内核发起轻量 HTTPS 请求",
+            "三次请求均未取得响应，不能确认原因。",
+        )
+    } else {
+        Signal::new(
+            Group::Connectivity,
+            &format!("{host} 连通性"),
+            format!(
+                "响应 {}/3 · 中位 {} ms · HTTP {}",
+                timings.len(),
+                timings[timings.len() / 2],
+                status.unwrap()
+            ),
+            "通过内核发起轻量 HTTPS 请求",
+            Evidence::Measured,
+            "测量包含连接、TLS 与服务器响应，不是 ICMP Ping；收到 HTTP 响应不等于可登录、可对话或验证码通过。",
+        )
+    };
+    if challenge {
+        signal
+            .detail
+            .push_str(" 服务器返回 Cloudflare 挑战标志；未自动完成验证码，也没有提交账号信息。");
+        signal.risk = true;
+    }
+    signal
 }
 
 pub async fn configuration(
