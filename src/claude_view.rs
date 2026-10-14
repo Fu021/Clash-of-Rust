@@ -129,7 +129,7 @@ impl State {
                 }
             }
             Entry::Signal(r, s) => {
-                if s.evidence != Evidence::Measured {
+                if s.evidence != Evidence::Measured || s.title == "Claude 请求实时检测" {
                     ResultKind::Unknown
                 } else if matches!(s.group, Group::Exit | Group::WebRtc | Group::Dns)
                     && self.differs(r, s)
@@ -1267,6 +1267,14 @@ mod tests {
             "test",
             "未获得候选",
         ));
+        report.signals.push(Signal::new(
+            Group::Desktop,
+            "Claude 请求实时检测",
+            "累计 100 条事件 · 失败 50",
+            "内核事件流",
+            Evidence::Measured,
+            "累计统计不能证明连接成功。",
+        ));
         report.routes.push(check::Route {
             host: "claude.ai".into(),
             chain: "Claude[node]".into(),
@@ -1274,7 +1282,7 @@ mod tests {
             ..Default::default()
         });
         state.store(report);
-        assert_eq!(state.counts(&state.entries()), [0, 0, 3]);
+        assert_eq!(state.counts(&state.entries()), [0, 0, 4]);
         let mut core = Report::new(Environment::Core, "test");
         let mut exit = Signal::new(
             Group::Exit,
@@ -1287,7 +1295,7 @@ mod tests {
         exit.country = "US".into();
         core.signals.push(exit);
         state.store(core);
-        assert_eq!(state.counts(&state.entries()), [1, 0, 3]);
+        assert_eq!(state.counts(&state.entries()), [1, 0, 4]);
     }
     #[test]
     fn measured_exit_differences_and_reject_or_failed_routes_are_risks() {
