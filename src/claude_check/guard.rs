@@ -54,14 +54,12 @@ impl Guard {
             let mut notification = AlertTask(None);
             loop {
                 tick.tick().await;
-                if notification.0.as_ref().is_some_and(|n| n.is_finished()) {
-                    if let Some(task) = notification.0.take() {
-                        if let Ok(Err(error)) = task.await {
-                            if let Ok(mut state) = captured.lock() {
-                                state.error = format!("连接已处理，但系统通知失败：{error}");
-                            }
-                        }
-                    }
+                if notification.0.as_ref().is_some_and(|n| n.is_finished())
+                    && let Some(task) = notification.0.take()
+                    && let Ok(Err(error)) = task.await
+                    && let Ok(mut state) = captured.lock()
+                {
+                    state.error = format!("连接已处理，但系统通知失败：{error}");
                 }
                 if let Some(events) = stream.after(revision) {
                     revision = events.revision;
