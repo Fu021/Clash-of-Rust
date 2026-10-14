@@ -9,6 +9,7 @@ import os
 from pathlib import Path
 import shutil
 import ssl
+import socketserver
 import struct
 import subprocess
 import sys
@@ -138,8 +139,16 @@ def serve(cert, key):
                     response.update({field:False for field in ('is_datacenter','is_mobile','is_proxy','is_vpn','is_tor','is_crawler','is_abuser')})
                 self.answer(response)
 
-    plain = http.server.ThreadingHTTPServer(('127.0.0.1', 0), Handler)
-    secure = http.server.ThreadingHTTPServer(('127.0.0.1', 0), Handler)
+    class LocalServer(http.server.ThreadingHTTPServer):
+        def server_bind(self):
+            # HTTPServer's getfqdn performs blocking reverse DNS on macOS;
+            # this fixture serves loopback only and never needs that lookup.
+            socketserver.TCPServer.server_bind(self)
+            self.server_name = 'localhost'
+            self.server_port = self.server_address[1]
+
+    plain = LocalServer(('127.0.0.1', 0), Handler)
+    secure = LocalServer(('127.0.0.1', 0), Handler)
     context = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
     context.load_cert_chain(cert, key)
     secure.socket = context.wrap_socket(secure.socket, server_side=True)
@@ -153,25 +162,31 @@ def trusted_fixture(directory):
     if os.environ.get('GITHUB_ACTIONS') != 'true':
         raise RuntimeError('Native tests and temporary CA trust require a disposable Actions runner')
     cert, key = directory/'fixture.crt', directory/'fixture.key'
+    ca, ca_key = directory/'ca.crt', directory/'ca.key'
     names = ['api.ipify.org', 'api6.ipify.org', 'api.ip.sb', 'api.ipapi.is', 'www.cloudflare.com',
              'rdap.org', 'rdap.arin.net', 'api.globalping.io', 'speed.cloudflare.com',
              'claude.ai', 'claude.com', 'api.anthropic.com', 'platform.claude.com']
     run(['openssl', 'req', '-x509', '-newkey', 'rsa:2048', '-nodes', '-days', '2',
-         '-subj', '/CN=Clash of Rust disposable test fixture',
-         '-addext', 'subjectAltName=' + ','.join(['IP:127.0.0.1', 'IP:1.1.1.1', 'IP:8.8.8.8', *('DNS:'+name for name in names)]),
-         '-keyout', key, '-out', cert])
-    digest = hashlib.sha1(ssl.PEM_cert_to_DER_cert(cert.read_text())).hexdigest()
+         '-subj', '/CN=Clash of Rust disposable test root',
+         '-addext', 'basicConstraints=critical,CA:TRUE', '-addext', 'keyUsage=critical,keyCertSign,cRLSign',
+         '-keyout', ca_key, '-out', ca])
+    csr, extensions = directory/'fixture.csr', directory/'server.ext'
+    extensions.write_text('basicConstraints=critical,CA:FALSE\nkeyUsage=critical,digitalSignature,keyEncipherment\nextendedKeyUsage=serverAuth\nsubjectAltName=' + ','.join(['IP:127.0.0.1', 'IP:1.1.1.1', 'IP:8.8.8.8', *('DNS:'+name for name in names)])+'\n')
+    run(['openssl','req','-new','-newkey','rsa:2048','-nodes','-subj','/CN=Clash of Rust controlled service','-keyout',key,'-out',csr])
+    run(['openssl','x509','-req','-in',csr,'-CA',ca,'-CAkey',ca_key,'-CAcreateserial','-days','2','-extfile',extensions,'-out',cert])
+    run(['openssl','verify','-CAfile',ca,cert])
+    digest = hashlib.sha1(ssl.PEM_cert_to_DER_cert(ca.read_text())).hexdigest()
     system = host_system()
     installed = None
     try:
         if system == 'linux':
             installed = Path('/usr/local/share/ca-certificates')/('cor-test-'+uuid.uuid4().hex+'.crt')
-            run(['sudo', 'cp', cert, installed])
+            run(['sudo', 'cp', ca, installed])
             run(['sudo', 'update-ca-certificates'])
         elif system == 'macos':
-            run(['sudo', 'security', 'add-trusted-cert', '-d', '-r', 'trustRoot', '-k', '/Library/Keychains/System.keychain', cert])
+            run(['sudo', 'security', 'add-trusted-cert', '-d', '-r', 'trustRoot', '-k', '/Library/Keychains/System.keychain', ca])
         else:
-            run(['certutil', '-addstore', 'Root', cert])
+            run(['certutil', '-addstore', 'Root', ca])
         yield cert, key
     finally:
         if installed:
