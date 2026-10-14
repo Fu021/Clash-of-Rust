@@ -175,6 +175,7 @@ pub enum Scope {
     Connections,
     Rules,
     Logs,
+    Claude,
     Other,
 }
 
@@ -194,6 +195,7 @@ pub struct Snapshot {
     pub download_rate: u64,
     pub logs: Vec<Arc<str>>,
     pub running: bool,
+    pub claude_guard: Option<crate::claude_check::guard::Snapshot>,
 }
 
 impl Snapshot {
@@ -233,6 +235,7 @@ pub struct Engine {
     last_totals: Option<(Instant, u64, u64)>,
     version: String,
     node_root: Mutex<Option<String>>,
+    protection_guard: Option<crate::claude_check::guard::Guard>,
     // Held for the entire application lifetime; prevents two clients racing on recovery.
     _instance_lock: File,
 }
@@ -249,6 +252,8 @@ struct RestartState {
 struct ElevationState {
     requested: RestartState,
     previous: RestartState,
+    #[serde(default)]
+    protection: Option<Arc<crate::claude_check::protection::Protection>>,
 }
 
 impl Engine {
@@ -324,6 +329,7 @@ impl Engine {
             last_totals: None,
             version: String::new(),
             node_root: Mutex::new(None),
+            protection_guard: None,
             _instance_lock: instance,
         })
     }
@@ -548,6 +554,7 @@ impl Engine {
     }
 
     async fn stop_process(&mut self) -> Result<()> {
+        self.protection_guard = None;
         if self.running()
             && let Ok(config) = self.api.get::<Value>("configs").await
             && config["tun"]["enable"].as_bool() == Some(true)
@@ -622,6 +629,7 @@ impl Engine {
         id: &str,
         rules: crate::rule_manager::ProfileRules,
     ) -> Result<()> {
+        self.require_unprotected_profile(id)?;
         self.profiles
             .iter()
             .find(|p| p.id == id)
@@ -648,6 +656,9 @@ impl Engine {
     }
 
     pub async fn save_rule_overrides(&mut self, rule_overrides: RuleOverrides) -> Result<()> {
+        if self.settings.claude_protection.is_some() {
+            bail!("请先关闭 Claude 保护，再修改快捷规则");
+        }
         let settings = Settings {
             rule_overrides,
             ..self.settings.clone()
@@ -673,6 +684,15 @@ impl Engine {
 
     pub async fn save_settings(&mut self, settings: Settings) -> Result<()> {
         settings.validate()?;
+        if self.settings.claude_protection.is_some()
+            && (settings.dns_override != self.settings.dns_override
+                || settings.ipv6 != self.settings.ipv6
+                || settings.active_profile != self.settings.active_profile
+                || settings.run_mode != self.settings.run_mode
+                || settings.proxy_mode != self.settings.proxy_mode)
+        {
+            bail!("请先关闭 A÷检测中的 Claude 保护，再更改网络设置");
+        }
         if settings.controller_port == self.settings.controller_port
             && settings.mixed_port == self.settings.mixed_port
         {
@@ -839,6 +859,9 @@ impl Engine {
         source: String,
         existing: Option<String>,
     ) -> Result<()> {
+        if let Some(id) = existing.as_deref() {
+            self.require_unprotected_profile(id)?;
+        }
         if source.trim().is_empty() {
             bail!("请输入订阅 URL 或本地 YAML 路径");
         }
@@ -958,6 +981,9 @@ impl Engine {
     }
 
     pub async fn activate(&mut self, id: String) -> Result<()> {
+        if self.settings.claude_protection.is_some() {
+            bail!("请先关闭 A÷检测中的 Claude 保护，再切换订阅");
+        }
         if !self.profiles.iter().any(|p| p.id == id) {
             bail!("配置不存在");
         }
@@ -1006,7 +1032,244 @@ impl Engine {
         if state.system_proxy && !platform::is_owned(&self.journal())? {
             self.system_proxy(true).await?;
         }
+        if state.tun {
+            self.start_protection_guard();
+        }
         Ok(())
+    }
+
+    fn require_unprotected_profile(&self, id: &str) -> Result<()> {
+        if self
+            .settings
+            .claude_protection
+            .as_ref()
+            .is_some_and(|p| p.profile_id == id)
+        {
+            bail!("请先关闭 A÷检测中的 Claude 保护，再修改正在使用的订阅与规则");
+        }
+        Ok(())
+    }
+    fn start_protection_guard(&mut self) {
+        if let Some(protection) = &self.settings.claude_protection
+            && self.running()
+            && self.protection_guard.is_none()
+        {
+            self.protection_guard = Some(crate::claude_check::guard::Guard::start(
+                self.api.clone(),
+                protection.node.clone(),
+            ));
+        }
+    }
+
+    async fn prepare_protection_tun(&mut self, interactive: bool) -> Result<()> {
+        #[cfg(target_os = "linux")]
+        self.prepare_linux_tun(interactive).await?;
+        #[cfg(target_os = "macos")]
+        self.prepare_mac_tun(interactive).await?;
+        #[cfg(not(any(target_os = "linux", target_os = "macos")))]
+        let _ = interactive;
+        Ok(())
+    }
+
+    /// The GUI, restart and disposable native tests all use this operation.
+    /// A successful Windows UAC handoff returns true so the old GUI can exit.
+    pub async fn claude_protection(&mut self, enabled: bool) -> Result<bool> {
+        use crate::claude_check::protection::{Previous, Protection};
+        if enabled == self.settings.claude_protection.is_some() {
+            return Ok(false);
+        }
+        if !enabled {
+            self.apply_claude_protection(None, None).await?;
+            return Ok(false);
+        }
+        let previous = self
+            .restart_state()
+            .await?
+            .context("请先启动内核并选择代理节点")?;
+        let node = self
+            .current_node(
+                if previous.mode == "direct" {
+                    "rule"
+                } else {
+                    &previous.mode
+                },
+                &Proxies::default(),
+            )
+            .await?
+            .context("无法确定当前代理节点，请先选择节点")?;
+        let proxy = self.api.proxy_nodes(&node).await?;
+        if crate::active_route::terminal(&node)
+            || !proxy.all.is_empty()
+            || matches!(proxy.kind.as_str(), "Direct" | "Reject" | "Pass")
+        {
+            bail!("请先选择具体代理节点；Claude 保护不能使用直连或未确定节点的代理组");
+        }
+        let protection = Protection::new(
+            self.settings
+                .active_profile
+                .clone()
+                .context("请先选择订阅")?,
+            node,
+            Previous {
+                mode: previous.mode.clone(),
+                proxy_mode: if previous.tun {
+                    ProxyMode::Tun
+                } else if previous.system_proxy {
+                    ProxyMode::System
+                } else {
+                    ProxyMode::Off
+                },
+                selectors: previous.selectors.clone(),
+            },
+        );
+        protection.validate()?;
+        if cfg!(windows) && !platform::is_elevated() {
+            let path = self.store.root.join("elevation.json");
+            let mut requested = previous.clone();
+            requested.mode = "rule".into();
+            requested.tun = true;
+            requested.system_proxy = false;
+            atomic_write(
+                &path,
+                &serde_json::to_vec(&ElevationState {
+                    requested,
+                    previous,
+                    protection: Some(Arc::new(protection)),
+                })?,
+            )?;
+            if let Err(error) = platform::elevate(&path) {
+                let _ = std::fs::remove_file(path);
+                return Err(error);
+            }
+            return Ok(true);
+        }
+        self.apply_claude_protection(Some(Arc::new(protection)), None)
+            .await?;
+        Ok(false)
+    }
+
+    async fn apply_claude_protection(
+        &mut self,
+        protection: Option<Arc<crate::claude_check::protection::Protection>>,
+        recovery: Option<RestartState>,
+    ) -> Result<()> {
+        let old = self.settings.clone();
+        let previous = recovery.or(self.restart_state().await?);
+        let candidate = Settings {
+            claude_protection: protection.clone(),
+            ..old.clone()
+        };
+        candidate.validate()?;
+        let id = candidate
+            .active_profile
+            .as_deref()
+            .context("请先选择订阅")?;
+        let raw = read_profile(&self.store.profile_path(id)?)?;
+        let mut next: serde_yaml::Value =
+            serde_yaml::from_str(&self.profile_payload(&raw, &candidate, id)?)?;
+        drop(raw);
+        let desired = if protection.is_some() {
+            RestartState {
+                mode: "rule".into(),
+                tun: true,
+                system_proxy: false,
+                selectors: previous
+                    .as_ref()
+                    .map_or_else(Vec::new, |s| s.selectors.clone()),
+            }
+        } else {
+            let saved = &old
+                .claude_protection
+                .as_ref()
+                .context("Claude 保护恢复记录缺失")?
+                .previous;
+            RestartState {
+                mode: saved.mode.clone(),
+                tun: saved.proxy_mode == ProxyMode::Tun,
+                system_proxy: saved.proxy_mode == ProxyMode::System,
+                selectors: saved.selectors.clone(),
+            }
+        };
+        next["mode"] = desired.mode.clone().into();
+        next["tun"]["enable"] = serde_yaml::Value::from(self.running() && desired.tun);
+        let next = serde_yaml::to_string(&next)?;
+        self.validate(&next).await?;
+        // Authorization is requested before the durable transaction is opened.
+        // Cancellation therefore cannot leave an enabled preference behind.
+        if protection.is_some() {
+            self.prepare_protection_tun(true).await?;
+        }
+        let path = self.store.runtime().join("config.yaml");
+        let mut original: serde_yaml::Value = serde_yaml::from_str(&read_runtime_config(&path)?)?;
+        if let Some(previous) = &previous {
+            original["mode"] = previous.mode.clone().into();
+            original["tun"]["enable"] = previous.tun.into();
+        }
+        let original = serde_yaml::to_string(&original)?;
+        let mut transaction = crate::profile_transaction::Transaction::new(&self.store.root)?;
+        transaction.stage(
+            &self.store.root.join("settings.json"),
+            &serde_json::to_vec_pretty(&candidate)?,
+        )?;
+        transaction.stage(&path, next.as_bytes())?;
+        // An interrupted enable recovers the old preferences; an interrupted
+        // disable recovers the protection and its *original* restoration record.
+        transaction.prepare()?;
+        self.protection_guard = None;
+        let changed = async {
+            if self.running() {
+                self.apply_protection_runtime(&next, &desired).await?;
+            } else {
+                platform::restore(&self.journal())?;
+            }
+            transaction.commit()?;
+            Ok::<_, anyhow::Error>(())
+        }
+        .await;
+        if let Err(error) = changed {
+            let runtime = if let Some(previous) = &previous {
+                self.apply_protection_runtime(&original, previous).await
+            } else {
+                Ok(())
+            };
+            let disk = transaction.rollback();
+            self.start_protection_guard();
+            return Err(error.context(format!(
+                "Claude 保护切换失败；运行状态恢复：{}；配置恢复：{}",
+                runtime.err().map_or("成功".into(), |e| e.to_string()),
+                disk.err().map_or("成功".into(), |e| e.to_string())
+            )));
+        }
+        self.settings = candidate;
+        self.start_protection_guard();
+        self.node_root.lock().expect("header route lock").take();
+        append(
+            &self.logs,
+            if protection.is_some() {
+                "[客户端] Claude 保护已启用：TUN、规则与代理 DoH；原设置恢复记录已保存"
+            } else {
+                "[客户端] Claude 保护已关闭，原代理模式、DNS 与规则已恢复"
+            },
+        );
+        Ok(())
+    }
+
+    async fn apply_protection_runtime(&self, payload: &str, state: &RestartState) -> Result<()> {
+        self.proxy_mode(ProxyMode::Off).await?;
+        self.api.reload(payload).await?;
+        self.healthy().await?;
+        for (group, node) in &state.selectors {
+            self.api.select(group, node).await?;
+        }
+        self.mode(&state.mode).await?;
+        self.proxy_mode(if state.tun {
+            ProxyMode::Tun
+        } else if state.system_proxy {
+            ProxyMode::System
+        } else {
+            ProxyMode::Off
+        })
+        .await
     }
 
     pub async fn prepare_elevation(&mut self) -> Result<()> {
@@ -1020,6 +1283,7 @@ impl Engine {
             &serde_json::to_vec(&ElevationState {
                 requested: state,
                 previous,
+                protection: self.settings.claude_protection.clone(),
             })?,
         )?;
         if let Err(error) = platform::elevate(&path) {
@@ -1032,6 +1296,14 @@ impl Engine {
     pub async fn finish_elevation(&mut self, path: &std::path::Path) -> Result<()> {
         let state: ElevationState = serde_json::from_slice(&std::fs::read(path)?)?;
         std::fs::remove_file(path)?;
+        if let Some(protection) = state.protection {
+            if !self.running() {
+                self.start().await?;
+            }
+            return self
+                .apply_claude_protection(Some(protection), Some(state.previous))
+                .await;
+        }
         let settings = Settings {
             run_mode: state.requested.mode.clone(),
             proxy_mode: ProxyMode::Tun,
@@ -1082,6 +1354,7 @@ impl Engine {
     }
 
     pub async fn delete_profile(&mut self, id: &str) -> Result<()> {
+        self.require_unprotected_profile(id)?;
         let profile = self
             .profiles
             .iter()
@@ -1142,6 +1415,7 @@ impl Engine {
         let manifest = assets::verify_geo(staged)?;
         let geo_settings = Settings {
             rule_overrides: RuleOverrides::default(),
+            claude_protection: None,
             ..self.settings.clone()
         };
         // Ask the actual core to read DAT, MMDB and ASN data before replacing anything.
@@ -1218,6 +1492,9 @@ impl Engine {
     }
 
     pub async fn select_mode(&mut self, mode: &str) -> Result<()> {
+        if self.settings.claude_protection.is_some() {
+            bail!("Claude 保护使用规则模式，请先关闭保护再切换模式");
+        }
         let current: ConfigStatus = self.api.get("configs").await?;
         let settings = Settings {
             run_mode: mode.into(),
@@ -1244,6 +1521,9 @@ impl Engine {
     }
 
     pub async fn select_proxy_mode(&mut self, mode: ProxyMode) -> Result<()> {
+        if self.settings.claude_protection.is_some() {
+            bail!("Claude 保护正在接管 TUN，请先在 A÷检测中关闭保护");
+        }
         #[cfg(target_os = "macos")]
         if mode == ProxyMode::System {
             self.prepare_mac_system(true).await?;
@@ -1283,6 +1563,25 @@ impl Engine {
 
     /// Returns true when a successful UAC launch requires the GUI to exit.
     pub async fn restore_proxy_mode(&mut self) -> Result<bool> {
+        if let Some(protection) = self.settings.claude_protection.clone() {
+            if cfg!(windows) && !platform::is_elevated() {
+                self.prepare_elevation().await?;
+                return Ok(true);
+            }
+            let interactive = !std::env::args_os().any(|arg| arg == "--background");
+            self.prepare_protection_tun(interactive).await?;
+            self.mode("rule").await?;
+            self.proxy_mode(ProxyMode::Tun).await?;
+            self.start_protection_guard();
+            append(
+                &self.logs,
+                format!(
+                    "[客户端] 已恢复 Claude 保护；原状态恢复记录保留，使用节点 {}",
+                    protection.node
+                ),
+            );
+            return Ok(false);
+        }
         #[cfg(target_os = "macos")]
         if self.settings.proxy_mode == ProxyMode::System {
             let interactive = !std::env::args_os().any(|arg| arg == "--background");
@@ -1574,6 +1873,7 @@ impl Engine {
             && let Some(status) = child.try_wait()?
         {
             self.child = None;
+            self.protection_guard = None;
             for reader in self.readers.drain(..) {
                 reader.abort();
             }
@@ -1587,6 +1887,9 @@ impl Engine {
             );
         }
         snapshot.running = self.running();
+        if scope == Scope::Claude {
+            snapshot.claude_guard = self.protection_guard.as_ref().map(|guard| guard.snapshot());
+        }
         snapshot.system_proxy = platform::is_owned(&self.journal())?;
         self.set_logs(scope == Scope::Logs);
         if scope == Scope::Logs {

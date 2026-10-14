@@ -4,6 +4,14 @@ use clash_of_rust::{
     config::{Settings, Store},
     engine::{Engine, Scope},
 };
+#[path = "support/claude_protection_native.rs"]
+mod claude_protection_native;
+
+#[tokio::test]
+#[ignore = "Temporary Claude protection workflow; disposable OS/network environment required"]
+async fn claude_protection_round_trip_and_guard() {
+    claude_protection_native::run().await;
+}
 
 fn test_resources() -> std::path::PathBuf {
     std::env::var_os("MIHOMO_TEST_RESOURCES")

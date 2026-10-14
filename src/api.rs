@@ -33,7 +33,14 @@ impl Read for JsonReader {
 }
 
 async fn decode_json<T: DeserializeOwned + Send + 'static>(
+    response: reqwest::Response,
+) -> Result<T> {
+    decode_json_with(response, |reader| serde_json::from_reader(reader)).await
+}
+
+async fn decode_json_with<T: Send + 'static>(
     mut response: reqwest::Response,
+    decode: impl FnOnce(std::io::BufReader<JsonReader>) -> serde_json::Result<T> + Send + 'static,
 ) -> Result<T> {
     if response
         .content_length()
@@ -43,7 +50,7 @@ async fn decode_json<T: DeserializeOwned + Send + 'static>(
     }
     let (sender, receiver) = tokio::sync::mpsc::channel(2);
     let parser = tokio::task::spawn_blocking(move || {
-        serde_json::from_reader(std::io::BufReader::with_capacity(
+        decode(std::io::BufReader::with_capacity(
             64 * 1024,
             JsonReader {
                 receiver,
@@ -508,6 +515,19 @@ impl Api {
             .await
             .context("无法连接 mihomo 控制接口")?;
         decode_json(Self::checked(response).await?).await
+    }
+    pub(crate) async fn unsafe_claude_connections(
+        &self,
+        node: String,
+    ) -> Result<Vec<crate::claude_check::guard::Row>> {
+        let response = self
+            .request(Method::GET, self.url(&["connections"])?)
+            .send()
+            .await?;
+        decode_json_with(Self::checked(response).await?, move |reader| {
+            crate::claude_check::guard::decode(reader, &node)
+        })
+        .await
     }
     pub(crate) async fn proxy_selection(&self, name: &str) -> Result<ProxySelection> {
         let response = self

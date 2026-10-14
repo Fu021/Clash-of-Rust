@@ -1,7 +1,10 @@
 //! Observable region signals, with explicit provenance rather than a risk score.
 pub mod audit;
 pub mod browser;
+pub mod enhanced;
+pub mod guard;
 pub mod observe;
+pub mod protection;
 pub mod system;
 
 use crate::{api, probe::country_name};
@@ -42,15 +45,21 @@ pub enum Group {
     Dns,
     Desktop,
     Code,
+    Quality,
+    Cloudflare,
+    Connectivity,
 }
 impl Group {
-    pub const ALL: [Self; 6] = [
+    pub const ALL: [Self; 9] = [
         Self::Exit,
         Self::Browser,
         Self::WebRtc,
         Self::Dns,
         Self::Desktop,
         Self::Code,
+        Self::Quality,
+        Self::Cloudflare,
+        Self::Connectivity,
     ];
     pub fn name(self) -> &'static str {
         match self {
@@ -60,6 +69,9 @@ impl Group {
             Self::Dns => "DNS 地区",
             Self::Desktop => "Claude Desktop",
             Self::Code => "Claude Code",
+            Self::Quality => "IP 归属与信誉",
+            Self::Cloudflare => "Cloudflare",
+            Self::Connectivity => "连通性",
         }
     }
 }
@@ -95,6 +107,8 @@ pub struct Signal {
     pub country: String,
     #[serde(default)]
     pub ip: String,
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub risk: bool,
 }
 impl Signal {
     pub fn new(
@@ -115,6 +129,7 @@ impl Signal {
             advice: String::new(),
             country: String::new(),
             ip: String::new(),
+            risk: false,
         }
     }
     pub fn unknown(group: Group, title: &str, source: &str, detail: impl Into<String>) -> Self {
@@ -138,6 +153,18 @@ pub struct Route {
     pub time: String,
     #[serde(default, skip_serializing_if = "String::is_empty")]
     pub outcome: String,
+}
+impl Route {
+    pub fn risky(&self) -> bool {
+        self.outcome == "连接失败"
+            || self.outcome.starts_with("异常连接")
+            || self
+                .chain
+                .split(" → ")
+                .any(|part| matches!(part.trim(), "DIRECT" | "REJECT" | "REJECT-DROP"))
+            || self.chain.ends_with("[DIRECT]")
+            || self.chain.ends_with("[REJECT]")
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -213,10 +240,11 @@ impl Report {
     pub fn differs(&self, signal: &Signal) -> bool {
         // Preferences are not a physical-location assertion. Display the
         // difference and its evidence, never a regional-denial probability.
-        (!signal.country.is_empty()
-            && self
-                .baseline_country()
-                .is_some_and(|base| base != signal.country))
+        signal.risk
+            || (!signal.country.is_empty()
+                && self
+                    .baseline_country()
+                    .is_some_and(|base| base != signal.country))
             || (signal.group == Group::WebRtc
                 && !signal.ip.is_empty()
                 && self
@@ -244,16 +272,7 @@ impl Report {
 }
 
 pub fn claude_host(host: &str) -> bool {
-    let host = host.trim_end_matches('.');
-    ["claude.ai", "claude.com", "anthropic.com"]
-        .iter()
-        .any(|suffix| {
-            host.eq_ignore_ascii_case(suffix)
-                || (host.len() > suffix.len()
-                    && host.as_bytes()[host.len() - suffix.len() - 1] == b'.'
-                    && host.as_bytes()[host.len() - suffix.len()..]
-                        .eq_ignore_ascii_case(suffix.as_bytes()))
-        })
+    protection::owned_host(host)
 }
 /// Deserialize one connection at a time and retain only relevant route facts.
 /// Observing the Desktop must not retain another complete connection snapshot.
@@ -313,7 +332,7 @@ fn connection_route(connection: api::Connection) -> Option<Route> {
     } else {
         &connection.metadata.host
     };
-    if !claude_host(host) {
+    if !(claude_host(host) || protection::associated_host(host)) {
         return None;
     }
     Some(Route {

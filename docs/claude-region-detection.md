@@ -50,3 +50,18 @@ Windows 使用 `clash-of-rust.exe`；此入口先于 GUI、托盘、内核和数
 六平台 Rust 常规测试覆盖配置发现、脱敏、域名边界、计数与详情、异步取消及 GUI 状态。独立 Code 诊断另有无需启动 GUI、内核或数据目录的离线脱敏测试。
 
 独立手动截图工作流可生成六平台的实际 Iced 深浅色截图，包含报告和风险详情。测试打包使用 Publish Release 的 `check_only` 模式，不发布 Release。
+# Claude 保护与扩展检测
+
+A÷检测中的“Claude 保护”默认关闭。开启时使用当前具体代理节点，将核心、关联服务、关键词及官方入站 IP 网段规则作为优先运行时覆盖，统一启用规则模式、TUN、严格路由、IPv6、TCP/UDP DNS 接管、经该节点的公网 DoH 与后台实时拦截。它不会改写原始订阅、用户规则或原 DNS/IPv6 偏好。
+
+开启前保存原运行模式、代理模式和节点选择；恢复记录随设置持久化。重启后继续保护并保留首次开启时的记录；关闭后移除覆盖并恢复原状态。开启/关闭均使用配置事务，未完成的事务在下一次启动时恢复。取消授权不会保存开启状态。保护期间须先关闭保护再切换当前订阅、更新其内容或修改网络模式与规则。
+
+公网解析使用 Cloudflare/Google DoH 并指定保护线路；节点引导解析使用直连阿里 DoH，局域网名称保留本地解析策略。订阅原有 DNS 分流、备用、直连解析与 TUN 排除项在保护期间被运行时覆盖，关闭后恢复。系统或浏览器绕行、独立 DoH、时区、语言和账号资格仍需独立验证，不能宣称消除所有风险。
+
+实时监测在隐藏窗口和切换页面后继续运行。它只关闭 Claude、所覆盖共享服务及官方入站 IP 范围中偏离指定节点的存续连接，不依据 DNS 地区差异或浏览器偏好断连，也不读取 HTTPS 内容或进程名。共享服务可能属于其他应用，开启确认框对此作出提示。通知与断连分开运行，提示合并去重；通知不可用时保留失败说明，不因此停止拦截。连接扫描逐条解析，只保留最多 128 条异常连接，展示最近 32 条记录。
+
+扩展检测包含多 STUN 的 IPv4/IPv6 候选与来源、Canvas 摘要、WebGL、Cookie 功能布尔值、Cloudflare trace、轻量 HTTPS 连通性、官方支持地区及 IP 归属/信誉。Cookie 内容和 Claude 凭据不读取。信誉字段由供应商提供，缺失或额度不足时显示未确认；可在“检测选项”填写自己的 ipapi.is 密钥，密钥以请求正文提交、不写入报告。浏览器指纹和第三方标签不等于 Claude 的账号判定。
+
+临时 `Claude Protection Validation` 工作流在六种原生 runner 上复用同一提交的 CI 产物，验证真实内核的 TUN、代理 DoH、TCP/UDP DNS、正常连接保留、异常直连/错误节点关闭、通知去重、重启与原状态恢复，并渲染开启前、开启后、拦截、风险详情、恢复及确认框的深浅色截图。HTTPS fixture 与临时 CA 只在一次性 Actions runner 中使用，测试结束撤销信任；报告与截图明确标为受控验证，不代表真实订阅出口、Claude 账号资格或真实服务可用性。
+
+规则参考官方 [Desktop 网络要求](https://code.claude.com/docs/en/desktop#network-access-requirements)、[Code 网络要求](https://code.claude.com/docs/en/network-config#network-access-requirements)、[入站 IP 网段](https://platform.claude.com/docs/en/api/ip-addresses)与 [Net.Coffee 分类](https://ip.net.coffee/claude/site.html)。不将出站网段当作入站网段，不以 NTP 能改变时区为依据添加规则。

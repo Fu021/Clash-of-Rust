@@ -51,6 +51,8 @@ pub struct Settings {
     pub tray_speed: bool,
     pub dns_override: bool,
     pub ipv6: bool,
+    pub claude_protection: Option<std::sync::Arc<crate::claude_check::protection::Protection>>,
+    pub ip_reputation_key: Option<String>,
     pub delay_interval_minutes: u32,
     pub active_profile: Option<String>,
     pub run_mode: String,
@@ -82,6 +84,8 @@ impl Default for Settings {
             tray_speed: false,
             dns_override: true,
             ipv6: true,
+            claude_protection: None,
+            ip_reputation_key: None,
             delay_interval_minutes: 5,
             active_profile: None,
             run_mode: "rule".into(),
@@ -113,9 +117,22 @@ impl Settings {
         if self.secret.is_empty() {
             bail!("控制接口密钥不能为空");
         }
+        if self
+            .ip_reputation_key
+            .as_ref()
+            .is_some_and(|key| key.len() > 512 || key.chars().any(char::is_control))
+        {
+            bail!("IP 信誉服务密钥格式无效");
+        }
         for (id, rules) in &self.rule_profiles {
             uuid::Uuid::parse_str(id).context("规则所属的订阅 ID 无效")?;
             rules.validate()?;
+        }
+        if let Some(protection) = &self.claude_protection {
+            protection.validate()?;
+            if self.active_profile.as_deref() != Some(&protection.profile_id) {
+                bail!("Claude 保护的订阅与当前订阅不一致");
+            }
         }
         Ok(())
     }
@@ -383,6 +400,7 @@ pub fn runtime_config_with_rules(
         .or_insert(serde_yaml::to_value(["any:53"])?);
     map.insert(Value::from("tun"), Value::Mapping(tun));
     apply_dns(&mut map, settings)?;
+    crate::claude_check::protection::apply(&mut map, settings)?;
     Ok(serde_yaml::to_string(&map)?)
 }
 
