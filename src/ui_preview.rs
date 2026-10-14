@@ -870,8 +870,8 @@ fn update(app: &mut App, message: Message) -> Task<Message> {
         | Message::SiteResetFilters
         | Message::SiteReport => app.update(message),
         Message::Claude(
-            event @ (claude_view::Event::Tab(_)
-            | claude_view::Event::Detail(_)
+            event @ (claude_view::Event::ResultsPage(_)
+            | claude_view::Event::ResultsFilter(_)
             | claude_view::Event::Guide(_)),
         ) => app.update(Message::Claude(event)),
         Message::ConnectionSort(field) => {

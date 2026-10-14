@@ -1,8 +1,8 @@
 //! Observable region signals, with explicit provenance rather than a risk score.
+pub mod audit;
 pub mod browser;
 pub mod observe;
 pub mod system;
-pub mod terminal;
 
 use crate::{api, probe::country_name};
 use anyhow::{Context, Result, bail};

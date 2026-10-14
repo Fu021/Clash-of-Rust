@@ -468,26 +468,6 @@ pub async fn code(offline: bool) -> Result<Report> {
     Ok(report)
 }
 
-pub(crate) fn shell_quote(value: &str) -> String {
-    #[cfg(windows)]
-    {
-        format!("'{}'", value.replace('\'', "''"))
-    }
-    #[cfg(not(windows))]
-    {
-        format!("'{}'", value.replace('\'', "'\\''"))
-    }
-}
-
-pub fn terminal_command(executable: &Path, submit: &str) -> String {
-    format!(
-        "{}{} --claude-diagnose --submit {}",
-        if cfg!(windows) { "& " } else { "" },
-        shell_quote(&executable.to_string_lossy()),
-        shell_quote(submit)
-    )
-}
-
 /// Runs before any tray, window, store, privilege or core initialization.
 pub fn helper_main() -> Option<Result<()>> {
     let args: Vec<_> = std::env::args_os().collect();
@@ -498,7 +478,6 @@ pub fn helper_main() -> Option<Result<()>> {
         let mut output = None;
         let mut submit = None;
         let mut offline = false;
-        let mut automatic = false;
         let mut args = args.into_iter().skip(1);
         while let Some(arg) = args.next() {
             match arg.to_str() {
@@ -515,7 +494,6 @@ pub fn helper_main() -> Option<Result<()>> {
                     )
                 }
                 Some("--offline") => offline = true,
-                Some("--automatic-terminal") => automatic = true,
                 _ => bail!("不支持的终端检测参数"),
             }
         }
@@ -523,11 +501,7 @@ pub fn helper_main() -> Option<Result<()>> {
             .enable_all()
             .build()?;
         runtime.block_on(async {
-            let mut report = code(offline).await?;
-            if automatic {
-                report.context = "自动新建终端会话；按此终端及项目的候选配置检测".into();
-                report.signals.push(Signal::new(Group::Code, "采样入口", "自动新建终端会话", "本应用打开的终端", Evidence::Measured, "新终端会加载启动配置；已运行的 Code 会话可能使用不同环境或启动参数，可在原终端运行复制的命令补充采样。"));
-            }
+            let report = code(offline).await?;
             let bytes = serde_json::to_vec_pretty(&report)?;
             if let Some(url) = submit {
                 browser::validate_submit_url(&url)?;

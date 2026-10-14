@@ -4,62 +4,39 @@ use clash_of_rust::claude_check::{
     self as check, Environment, Evidence, Group, Report, Signal, browser::Session,
 };
 use iced::widget::column;
-use std::time::Instant;
 
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
-pub enum Tab {
-    #[default]
-    Overview,
-    Web,
-    Desktop,
-    Code,
-}
-impl Tab {
-    const ALL: [Self; 4] = [Self::Overview, Self::Web, Self::Desktop, Self::Code];
-    fn name(self) -> &'static str {
-        match self {
-            Self::Overview => "总览",
-            Self::Web => "网页版",
-            Self::Desktop => "Desktop",
-            Self::Code => "Code",
-        }
-    }
-    fn environment(self) -> Option<Environment> {
-        match self {
-            Self::Overview => None,
-            Self::Web => Some(Environment::Web),
-            Self::Desktop => Some(Environment::Desktop),
-            Self::Code => Some(Environment::Code),
-        }
-    }
-}
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Guide {
-    Clients,
-    Code,
-    Desktop,
+    Monitor,
+    Supplement,
 }
-#[derive(Debug, Clone, Copy)]
-pub enum SessionAction {
-    Browser,
-    CopyCode,
-    AutoCode,
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ResultKind {
+    Normal,
+    Risk,
+    Unknown,
+}
+impl ResultKind {
+    fn name(self) -> &'static str {
+        match self {
+            Self::Normal => "正常项目",
+            Self::Risk => "风险项目",
+            Self::Unknown => "辅助线索与未确认项目",
+        }
+    }
 }
 #[derive(Debug, Clone)]
 pub enum Event {
     Start,
     Cancel,
-    Tab(Tab),
-    Detail(Option<Group>),
+    ResultsPage(usize),
+    ResultsFilter(Option<ResultKind>),
     Guide(Option<Guide>),
     Browser,
     BrowserOpened(u64, Result<(), String>),
-    CodeCommand,
-    CodeAuto,
-    CodeDirectory(String),
-    Terminal(u64, Result<Arc<check::terminal::Launch>, String>),
+    Audit(u64, check::audit::Audit),
     CloseSession,
-    Session(u64, SessionAction, Result<Session, String>),
+    Session(u64, Result<Session, String>),
     Local(u64, Report),
     Network(u64, Result<Report, String>),
     CopySiteScript,
@@ -75,8 +52,11 @@ pub enum Event {
 
 #[derive(Default)]
 pub struct State {
-    pub tab: Tab,
-    pub detail: Option<Group>,
+    pub results_page: usize,
+    pub results_filter: Option<ResultKind>,
+    pub audit: Option<check::audit::Audit>,
+    audit_busy: bool,
+    scan: Option<check::audit::Scan>,
     pub guide: Option<Guide>,
     pub reports: [Option<Report>; 4],
     pub session: Option<Session>,
@@ -92,16 +72,16 @@ pub struct State {
     local_busy: bool,
     network_busy: bool,
     browser_busy: bool,
-    code_busy: bool,
-    code_deadline: Option<Instant>,
-    terminal_starting: bool,
-    terminal: Option<Arc<check::terminal::Launch>>,
-    project_dir: String,
     importing: bool,
     session_starting: bool,
     pub status: String,
     pub error: bool,
-    command: String,
+}
+enum Entry<'a> {
+    Config(&'a check::audit::Finding),
+    Clean(&'a str),
+    Signal(&'a Report, &'a Signal),
+    Route(&'a check::Route),
 }
 fn index(environment: Environment) -> usize {
     match environment {
@@ -112,6 +92,90 @@ fn index(environment: Environment) -> usize {
     }
 }
 impl State {
+    fn entries(&self) -> Vec<Entry<'_>> {
+        let mut entries = Vec::new();
+        if let Some(audit) = &self.audit {
+            entries.extend(audit.findings.iter().map(Entry::Config));
+            entries.extend(audit.clean_files.iter().map(|path| Entry::Clean(path)));
+        }
+        entries.extend(
+            self.selected()
+                .flat_map(|r| r.routes.iter().map(Entry::Route)),
+        );
+        let mut signals: Vec<_> = self
+            .selected()
+            .flat_map(|r| r.signals.iter().map(move |s| (r, s)))
+            .collect();
+        signals.sort_by_key(|(r, s)| {
+            if self.differs(r, s) {
+                0
+            } else if s.group == Group::Exit {
+                1
+            } else {
+                2
+            }
+        });
+        entries.extend(signals.into_iter().map(|(r, s)| Entry::Signal(r, s)));
+        entries
+    }
+    fn kind(&self, entry: &Entry<'_>) -> ResultKind {
+        match entry {
+            Entry::Clean(_) => ResultKind::Normal,
+            Entry::Config(f) => {
+                if f.level == check::audit::Level::Incomplete {
+                    ResultKind::Unknown
+                } else {
+                    ResultKind::Risk
+                }
+            }
+            Entry::Signal(r, s) => {
+                if s.evidence != Evidence::Measured {
+                    ResultKind::Unknown
+                } else if matches!(s.group, Group::Exit | Group::WebRtc | Group::Dns)
+                    && self.differs(r, s)
+                {
+                    ResultKind::Risk
+                } else {
+                    ResultKind::Normal
+                }
+            }
+            Entry::Route(r) => {
+                if r.outcome == "连接失败"
+                    || ["DIRECT", "REJECT"].into_iter().any(|target| {
+                        r.chain.trim() == target || r.chain.trim().ends_with(&format!("[{target}]"))
+                    })
+                {
+                    ResultKind::Risk
+                } else {
+                    ResultKind::Unknown
+                }
+            }
+        }
+    }
+    fn counts(&self, entries: &[Entry<'_>]) -> [usize; 3] {
+        let mut counts = [0; 3];
+        for entry in entries {
+            counts[self.kind(entry) as usize] += 1;
+        }
+        if let Some(audit) = &self.audit {
+            counts[0] += audit.clean_count.saturating_sub(audit.clean_files.len());
+            counts[1] += (audit.issues + audit.reviews).saturating_sub(
+                audit
+                    .findings
+                    .iter()
+                    .filter(|f| f.level != check::audit::Level::Incomplete)
+                    .count(),
+            );
+            counts[2] += audit.unreadable.saturating_sub(
+                audit
+                    .findings
+                    .iter()
+                    .filter(|f| f.level == check::audit::Level::Incomplete)
+                    .count(),
+            );
+        }
+        counts
+    }
     fn differs(&self, report: &Report, signal: &Signal) -> bool {
         report.differs(signal)
             || (!signal.country.is_empty()
@@ -124,7 +188,7 @@ impl State {
         self.local_busy
             || self.network_busy
             || self.browser_busy
-            || self.code_busy
+            || self.audit_busy
             || self.session_starting
             || self.importing
     }
@@ -135,11 +199,10 @@ impl State {
         }
         self.session = None;
         self.guide = None;
-        self.command.clear();
-        self.terminal = None;
-        self.terminal_starting = false;
-        self.code_busy = false;
-        self.code_deadline = None;
+        if let Some(scan) = self.scan.take() {
+            scan.cancel();
+        }
+        self.audit_busy = false;
         self.session_starting = false;
         self.local_busy = false;
         self.network_busy = false;
@@ -165,10 +228,6 @@ impl State {
         if report.environment == Environment::Web {
             self.browser_busy = false;
         }
-        if report.environment == Environment::Code {
-            self.code_busy = false;
-            self.code_deadline = None;
-        }
         if report.environment == Environment::Desktop
             && self.monitor_enabled
             && let Some(previous) = &mut self.reports[index(Environment::Desktop)]
@@ -189,24 +248,21 @@ impl State {
         if self.error {
             return;
         }
-        self.status = if self.code_busy {
-            "正在检测新终端环境，等待 Code 报告回传…"
+        self.status = if self.audit_busy {
+            "正在扫描 Claude 项目配置…"
         } else if self.local_busy || self.network_busy {
-            "正在采集本机与内核地区线索…"
+            "正在检测本机与网络地区线索…"
         } else if self.browser_busy {
             "浏览器正在自动检测，等待报告回传…"
         } else if self.reports[index(Environment::Web)].is_some() {
-            "自动检测完成；可继续检测 Code 或开启 Claude 请求实时检测。"
+            "检测完成，配置风险和地区线索已列在下方。"
         } else {
-            "本机与内核采样完成；浏览器采样尚未完成，可重新检测。"
+            "配置与本机采样完成；浏览器采样尚未完成，可重新检测。"
         }
         .into();
     }
     fn selected(&self) -> impl Iterator<Item = &Report> {
-        self.reports
-            .iter()
-            .flatten()
-            .filter(|r| self.tab.environment().is_none_or(|e| r.environment == e))
+        self.reports.iter().flatten()
     }
     fn monitor_report(&mut self, snapshot: check::observe::Snapshot) {
         self.monitor_revision = snapshot.revision;
@@ -269,8 +325,11 @@ impl App {
                 self.claude.reports = Default::default();
                 self.claude.monitor_revision = 0;
                 self.claude.error = false;
-                self.claude.status = "正在采集地区线索，并自动打开浏览器检测…".into();
-                self.claude.guide = Some(Guide::Clients);
+                self.claude.status = "正在扫描项目配置，并自动打开浏览器检测…".into();
+                self.claude.results_page = 0;
+                self.claude.results_filter = None;
+                self.claude.audit = None;
+                self.claude.audit_busy = true;
                 self.claude.local_busy = true;
                 self.claude.network_busy = true;
                 let generation = self.claude.generation;
@@ -300,30 +359,40 @@ impl App {
                     },
                     move |result| wrap(Event::Network(generation, result)),
                 );
+                let cancel = check::audit::Scan::default();
+                self.claude.scan = Some(cancel.clone());
+                let mixed_port = self.settings.mixed_port;
+                let audit = Task::perform(
+                    async move {
+                        tokio::task::spawn_blocking(move || {
+                            check::audit::local(mixed_port, &cancel)
+                        })
+                        .await
+                        .unwrap_or_else(|_| check::audit::Audit {
+                            incomplete: true,
+                            ..Default::default()
+                        })
+                    },
+                    move |report| wrap(Event::Audit(generation, report)),
+                );
                 let browser = self.claude_event(Event::Browser);
-                return Task::batch([local, network, browser]);
+                return Task::batch([local, network, audit, browser]);
             }
             Event::Cancel => {
                 self.claude.close();
                 self.claude.status = "已停止检测，已获得的报告保留。".into();
             }
-            Event::Tab(tab) => {
-                self.claude.tab = tab;
-                self.claude.detail = None;
+            Event::ResultsPage(page) => self.claude.results_page = page,
+            Event::ResultsFilter(filter) => {
+                self.claude.results_filter = filter;
+                self.claude.results_page = 0;
             }
-            Event::Detail(group) => self.claude.detail = group,
-            Event::CodeDirectory(value) => self.claude.project_dir = value,
-            Event::Guide(guide) => {
-                self.claude.guide = guide;
-                match guide {
-                    Some(Guide::Code) => self.claude.tab = Tab::Code,
-                    Some(Guide::Desktop) => self.claude.tab = Tab::Desktop,
-                    _ => {}
-                }
-                self.claude.detail = None;
-                if guide == Some(Guide::Code) {
-                    return iced::widget::operation::focus("claude-code-directory");
-                }
+            Event::Guide(guide) => self.claude.guide = guide,
+            Event::Audit(generation, audit) if generation == self.claude.generation => {
+                self.claude.audit_busy = false;
+                self.claude.scan = None;
+                self.claude.audit = Some(audit);
+                self.claude.sampling_status();
             }
             Event::Local(generation, report) if generation == self.claude.generation => {
                 self.claude.local_busy = false;
@@ -343,94 +412,35 @@ impl App {
                     }
                 }
             }
-            Event::Browser | Event::CodeCommand | Event::CodeAuto => {
-                if self.exiting
-                    || self.claude.session_starting
-                    || (matches!(event, Event::CodeAuto) && self.claude.terminal_starting)
-                {
+            Event::Browser => {
+                if self.exiting || self.claude.session_starting {
                     return Task::none();
                 }
-                let action = match event {
-                    Event::CodeCommand => SessionAction::CopyCode,
-                    Event::CodeAuto => SessionAction::AutoCode,
-                    _ => SessionAction::Browser,
-                };
-                if matches!(action, SessionAction::Browser) {
-                    self.claude.browser_busy = true;
-                } else if matches!(action, SessionAction::AutoCode) && !self.claude.code_busy {
-                    self.claude.code_busy = true;
-                    self.claude.code_deadline = Some(Instant::now() + Duration::from_secs(120));
-                    self.claude.reports[index(Environment::Code)] = None;
-                    self.claude.error = false;
-                }
+                self.claude.browser_busy = true;
                 if let Some(session) = self.claude.session.as_ref().filter(|s| !s.finished()) {
-                    if !matches!(action, SessionAction::Browser) {
-                        match std::env::current_exe() {
-                            Ok(executable) => {
-                                if matches!(action, SessionAction::AutoCode) {
-                                    let submit = session.submit_url();
-                                    let directory = self.claude.project_dir.clone();
-                                    let generation = self.claude.generation;
-                                    self.claude.terminal_starting = true;
-                                    self.claude.status = "正在打开终端，自动检测 Code 环境…".into();
-                                    return Task::perform(
-                                        async move {
-                                            check::terminal::launch(check::terminal::Request {
-                                                executable: &executable,
-                                                submit: &submit,
-                                                directory: &directory,
-                                                offline: false,
-                                                keep_open: true,
-                                            })
-                                            .await
-                                            .map(Arc::new)
-                                            .map_err(|e| e.to_string())
-                                        },
-                                        move |result| wrap(Event::Terminal(generation, result)),
-                                    );
-                                }
-                                self.claude.command = check::system::terminal_command(
-                                    &executable,
-                                    &session.submit_url(),
-                                );
-                                self.claude.status =
-                                    "命令已复制；请在启动 Code 的同一终端、同一项目目录运行。"
-                                        .into();
-                                self.claude.error = false;
-                                return iced::clipboard::write(self.claude.command.clone());
-                            }
-                            Err(_) => {
-                                self.claude.code_busy = false;
-                                self.claude.status = "无法获得应用程序路径。".into();
-                                self.claude.error = true;
-                            }
-                        }
-                    } else {
-                        let url = session.url.clone();
-                        let generation = self.claude.generation;
-                        return Task::perform(
-                            async move {
-                                tokio::task::spawn_blocking(move || platform::open_diagnostic(&url))
-                                    .await
-                                    .map_err(|e| e.to_string())?
-                                    .map_err(|e| e.to_string())
-                            },
-                            move |result| wrap(Event::BrowserOpened(generation, result)),
-                        );
-                    }
-                } else if !self.claude.session_starting {
-                    self.claude.session_starting = true;
+                    let url = session.url.clone();
                     let generation = self.claude.generation;
-                    let port = self.snapshot.running.then_some(self.settings.mixed_port);
                     return Task::perform(
                         async move {
-                            Session::start(check::client(port).map_err(|e| e.to_string())?)
+                            tokio::task::spawn_blocking(move || platform::open_diagnostic(&url))
                                 .await
+                                .map_err(|e| e.to_string())?
                                 .map_err(|e| e.to_string())
                         },
-                        move |result| wrap(Event::Session(generation, action, result)),
+                        move |result| wrap(Event::BrowserOpened(generation, result)),
                     );
                 }
+                self.claude.session_starting = true;
+                let generation = self.claude.generation;
+                let port = self.snapshot.running.then_some(self.settings.mixed_port);
+                return Task::perform(
+                    async move {
+                        Session::start(check::client(port).map_err(|e| e.to_string())?)
+                            .await
+                            .map_err(|e| e.to_string())
+                    },
+                    move |result| wrap(Event::Session(generation, result)),
+                );
             }
             Event::BrowserOpened(generation, result)
                 if generation == self.claude.generation
@@ -446,47 +456,18 @@ impl App {
                     }
                 }
             }
-            Event::Session(generation, action, result)
+            Event::Session(generation, result)
                 if generation == self.claude.generation && self.claude.session_starting =>
             {
                 self.claude.session_starting = false;
                 match result {
                     Ok(session) => {
                         self.claude.session = Some(session);
-                        return self.claude_event(match action {
-                            SessionAction::CopyCode => Event::CodeCommand,
-                            SessionAction::AutoCode => Event::CodeAuto,
-                            SessionAction::Browser => Event::Browser,
-                        });
+                        return self.claude_event(Event::Browser);
                     }
                     Err(error) => {
-                        if matches!(action, SessionAction::Browser) {
-                            self.claude.browser_busy = false;
-                        } else if matches!(action, SessionAction::AutoCode) {
-                            self.claude.code_busy = false;
-                        }
+                        self.claude.browser_busy = false;
                         self.claude.status = error;
-                        self.claude.error = true;
-                    }
-                }
-            }
-            Event::Terminal(generation, result)
-                if generation == self.claude.generation
-                    && self.claude.terminal_starting
-                    && self.claude.session.is_some() =>
-            {
-                self.claude.terminal_starting = false;
-                match result {
-                    Ok(launch) => {
-                        self.claude.terminal = Some(launch);
-                        if self.claude.code_busy {
-                            self.claude.sampling_status();
-                        }
-                    }
-                    Err(error) => {
-                        self.claude.code_busy = false;
-                        self.claude.status =
-                            format!("自动终端检测失败：{error}。可复制命令手动检测。");
                         self.claude.error = true;
                     }
                 }
@@ -494,12 +475,8 @@ impl App {
             Event::CloseSession => {
                 self.claude.session = None;
                 self.claude.browser_busy = false;
-                self.claude.code_busy = false;
                 self.claude.session_starting = false;
-                self.claude.terminal_starting = false;
-                self.claude.terminal = None;
-                self.claude.command.clear();
-                self.claude.status = "浏览器与终端回传入口已关闭。".into();
+                self.claude.status = "浏览器回传入口已关闭。".into();
             }
             Event::CopySiteScript => {
                 self.claude.status = "脚本已复制：在 Claude 网页的开发者工具 Console 中运行，再导入脚本复制的 JSON。脚本不读取账号或 Cookie。".into();
@@ -563,7 +540,7 @@ impl App {
                     return Task::none();
                 };
                 let bytes = serde_json::to_vec_pretty(
-                    &serde_json::json!({"schema":1,"version":clash_of_rust::VERSION,"reports":self.claude.reports}),
+                    &serde_json::json!({"schema":1,"version":clash_of_rust::VERSION,"reports":self.claude.reports,"configuration_audit":self.claude.audit}),
                 );
                 return Task::perform(
                     async move {
@@ -608,12 +585,10 @@ impl App {
                     self.claude.stop_monitor();
                 } else if self.snapshot.running {
                     self.claude.monitor_enabled = true;
-                    self.claude.guide = Some(Guide::Desktop);
-                    self.claude.tab = Tab::Desktop;
-                    self.claude.detail = None;
+                    self.claude.guide = Some(Guide::Monitor);
                     return self.start_claude_monitor();
                 } else {
-                    self.claude.guide = Some(Guide::Desktop);
+                    self.claude.guide = Some(Guide::Monitor);
                     self.claude.monitor_status = "请先启动内核，再开启实时检测。".into();
                 }
             }
@@ -654,19 +629,6 @@ impl App {
                     self.claude.close();
                     return Task::none();
                 }
-                if self.claude.code_busy
-                    && self
-                        .claude
-                        .code_deadline
-                        .is_some_and(|t| Instant::now() >= t)
-                {
-                    self.claude.code_busy = false;
-                    self.claude.code_deadline = None;
-                    self.claude.status =
-                        "终端未及时回传。请查看已打开的终端，或复制命令在实际 Code 终端中重试。"
-                            .into();
-                    self.claude.error = true;
-                }
                 if let Some(session) = &self.claude.session {
                     if let Some(report) = session.next_report() {
                         let web = report.environment == Environment::Web;
@@ -675,14 +637,11 @@ impl App {
                         if web {
                             self.claude.sampling_status();
                         } else {
-                            self.claude.status = "已收到 Code 终端的采样报告。".into();
+                            self.claude.status = "已收到补充采样报告。".into();
                         }
                     } else if session.finished() {
                         self.claude.session = None;
                         self.claude.browser_busy = false;
-                        self.claude.code_busy = false;
-                        self.claude.terminal = None;
-                        self.claude.command.clear();
                         self.claude.status = "回传入口已到期，请重新打开。".into();
                     }
                 }
@@ -695,60 +654,48 @@ impl App {
     pub(crate) fn claude_view(&self) -> Element<'_, Message> {
         let event = |event| Message::Claude(event);
         let state = &self.claude;
-        let mut tabs = aligned_row![].spacing(5);
-        for tab in Tab::ALL {
-            tabs = tabs.push(
-                button(self.label(tab.name()).size(self.font_size(13)))
-                    .style(if state.tab == tab {
-                        ui_style::selected_button
+        let has_reports = state.audit.is_some() || state.reports.iter().any(Option::is_some);
+        let mut body = column![
+            aligned_row![
+                button(
+                    self.label(if has_reports {
+                        "重新检测"
                     } else {
-                        ui_style::secondary_button
+                        "开始检测"
                     })
-                    .padding([7, 11])
-                    .on_press(event(Event::Tab(tab))),
-            );
-        }
-        let has_reports = state.reports.iter().any(Option::is_some);
-        let controls = aligned_row![
-            tabs,
-            Space::new().width(Length::Fill),
-            button(
-                self.label(if has_reports {
-                    "重新检测"
-                } else {
-                    "开始检测"
-                })
-                .size(self.font_size(13))
-            )
-            .style(ui_style::primary)
-            .padding([7, 12])
-            .on_press_maybe((!state.busy()).then_some(event(Event::Start))),
-            button(self.label("导出报告").size(self.font_size(13)))
-                .style(ui_style::secondary_button)
-                .padding([7, 10])
-                .on_press_maybe(
-                    (has_reports && self.engine.is_some()).then_some(event(Event::Export))
+                    .size(self.font_size(13))
                 )
+                .style(ui_style::primary)
+                .padding([7, 12])
+                .on_press_maybe((!state.busy()).then_some(event(Event::Start))),
+                checkbox(state.monitor_enabled)
+                    .label("实时检测 Claude 请求")
+                    .text_size(self.scaled(12))
+                    .on_toggle_maybe(
+                        (!self.exiting && (self.snapshot.running || state.monitor_enabled))
+                            .then_some(|enabled| Message::Claude(Event::Monitor(enabled)))
+                    ),
+                Space::new().width(Length::Fill),
+                button(self.label("导出报告").size(self.font_size(13)))
+                    .style(ui_style::secondary_button)
+                    .padding([7, 10])
+                    .on_press_maybe(
+                        (has_reports && self.engine.is_some()).then_some(event(Event::Export))
+                    )
+            ]
+            .spacing(8)
         ]
         .spacing(8);
-        let mut body = column![controls].spacing(10);
         if state.busy() {
-            let progress = if state.code_busy {
-                0.0
-            } else {
-                (usize::from(!state.local_busy)
-                    + usize::from(!state.network_busy)
-                    + usize::from(!state.browser_busy && !state.session_starting))
-                    as f32
-                    / 3.0
-            };
+            let progress = (usize::from(!state.local_busy)
+                + usize::from(!state.network_busy)
+                + usize::from(!state.audit_busy)
+                + usize::from(!state.browser_busy && !state.session_starting))
+                as f32
+                / 4.0;
             body = body
                 .push(aligned_row![
-                    self.caption(if state.code_busy {
-                        "正在检测新终端环境…"
-                    } else {
-                        "正在检测地区线索…"
-                    }),
+                    self.caption("正在扫描配置与检测地区线索…"),
                     Space::new().width(Length::Fill),
                     button(self.label("停止").size(self.font_size(12)))
                         .style(ui_style::text_button)
@@ -765,342 +712,290 @@ impl App {
                 },
             ));
         }
-        let (measured, differences, unknown) = state
-            .selected()
-            .flat_map(|report| report.signals.iter().map(move |signal| (report, signal)))
-            .fold((0, 0, 0), |sum, (report, signal)| {
-                (
-                    sum.0 + usize::from(signal.evidence == Evidence::Measured),
-                    sum.1 + usize::from(state.differs(report, signal)),
-                    sum.2 + usize::from(signal.evidence == Evidence::Unknown),
-                )
-            });
-        let summary = if has_reports {
-            format!("实测 {measured} · 环境差异 {differences} · 未确认 {unknown}")
-        } else {
-            "本机、内核与浏览器自动检测；Code 与实时请求按需开启".into()
-        };
-        body = body.push(
-            container(
-                column![
-                    self.label("地区线索报告").size(self.font_size(16)),
-                    self.label(summary).size(self.font_size(20)),
-                    self.caption(
-                        "分别展示实测与辅助线索；语言、字体和地区差异不直接判定服务资格。"
-                    )
-                ]
-                .spacing(5),
-            )
-            .padding(13)
-            .width(Length::Fill)
-            .style(ui_style::panel),
-        );
-        let actions = aligned_row![
-            button(self.label("Code 检测").size(self.font_size(12)))
-                .style(ui_style::secondary_button)
-                .on_press(event(Event::Guide(Some(Guide::Code)))),
-            checkbox(state.monitor_enabled)
-                .label("实时检测 Claude 请求")
-                .text_size(self.scaled(12))
-                .on_toggle_maybe(
-                    (!self.exiting && (self.snapshot.running || state.monitor_enabled))
-                        .then_some(|enabled| Message::Claude(Event::Monitor(enabled)))
-                )
-        ]
-        .spacing(6);
-        body = body.push(actions);
+        if let Some(audit) = &state.audit {
+            body = body.push(self.caption(format!(
+                "已检查 {} 个已记录项目 · {} 份配置{}{}",
+                audit.projects,
+                audit.files,
+                if audit.missing_projects > 0 {
+                    format!(" · {} 个目录已不存在", audit.missing_projects)
+                } else {
+                    String::new()
+                },
+                if audit.incomplete {
+                    " · 扫描未完成，见下方说明"
+                } else {
+                    ""
+                }
+            )));
+        }
         if !state.monitor_status.is_empty() {
             body = body.push(self.caption(&state.monitor_status));
         }
         if state.session.is_some() {
             body = body.push(aligned_row![
-                self.caption("本机回传入口已开启；离开此页即关闭，最长 20 分钟。"),
+                self.caption("浏览器正在自动采样；离开此页会关闭回传入口。"),
                 Space::new().width(Length::Fill),
                 button(self.label("关闭入口").size(self.font_size(12)))
                     .style(ui_style::text_button)
-                    .on_press_maybe(
-                        (!state.session_starting && !state.terminal_starting)
-                            .then_some(event(Event::CloseSession))
-                    )
+                    .on_press(event(Event::CloseSession))
             ]);
         }
-        if state.tab == Tab::Web {
-            body = body.push(aligned_row![
-                button(self.label("复制 Claude 页面采样脚本").size(self.font_size(12)))
-                    .style(ui_style::secondary_button).on_press(event(Event::CopySiteScript)),
-                button(self.label("导入剪贴板采样").size(self.font_size(12)))
-                    .style(ui_style::secondary_button)
-                    .on_press_maybe((!state.importing).then_some(event(Event::Import))),
-                Space::new().width(Length::Fill)
-            ].spacing(6)).push(self.caption("可在 Claude 网页开发者工具的 Console 运行，再导入脚本复制的 JSON，以确认该站点的时区、权限与同域出口。"));
-        }
-        let mut results = column![].spacing(10);
-        if let Some(group) = state.detail {
-            results = results.push(
+        let mut entries = state.entries();
+        let counts = state.counts(&entries);
+        if state.results_filter.is_none() {
+            body = body.push(
                 aligned_row![
-                    button(self.label("‹ 返回报告").size(self.font_size(12)))
-                        .style(ui_style::text_button)
-                        .on_press(event(Event::Detail(None))),
-                    self.label(group.name()).size(self.font_size(18))
+                    self.claude_count_card(
+                        ResultKind::Normal,
+                        counts[0],
+                        "已确认且未发现上述问题",
+                        ui_style::Tone::Success
+                    ),
+                    self.claude_count_card(
+                        ResultKind::Risk,
+                        counts[1],
+                        "配置覆盖或网络差异，点击查看",
+                        ui_style::Tone::Warning
+                    )
                 ]
                 .spacing(10),
             );
-            for report in state.selected() {
-                let signals: Vec<_> = report.signals.iter().filter(|s| s.group == group).collect();
-                if signals.is_empty() && !(group == Group::Desktop && !report.routes.is_empty()) {
-                    continue;
-                }
-                results = results.push(self.caption(format!(
-                    "{} · {}",
-                    report.environment.name(),
-                    report.generated_at
-                )));
-                for signal in signals {
-                    let tone = if state.differs(report, signal) {
+            if counts[2] > 0 {
+                body = body.push(
+                    button(
+                        self.label(format!("另有 {} 项辅助线索或未确认结果 ›", counts[2]))
+                            .size(self.font_size(12)),
+                    )
+                    .style(ui_style::text_button)
+                    .on_press(event(Event::ResultsFilter(Some(ResultKind::Unknown)))),
+                );
+            }
+            if let Some(audit) = &state.audit
+                && audit.incomplete
+            {
+                body = body.push(self.caption("部分配置尚未完成检查，不能据此确认没有风险。"));
+            }
+            return body
+                .push(self.caption(
+                    "配置扫描仅覆盖已记录的项目和可读取文件；检测结果不代表 Claude 服务资格。",
+                ))
+                .push(Space::new().height(Length::Fill))
+                .height(Length::Fill)
+                .into();
+        }
+        let filter = state.results_filter.unwrap();
+        entries.retain(|entry| state.kind(entry) == filter);
+        body = body.push(
+            aligned_row![
+                button(self.label("‹ 返回报告").size(self.font_size(12)))
+                    .style(ui_style::text_button)
+                    .on_press(event(Event::ResultsFilter(None))),
+                self.label(filter.name()).size(self.font_size(17)),
+                Space::new().width(Length::Fill),
+                button(self.label("补充采样").size(self.font_size(12)))
+                    .style(ui_style::text_button)
+                    .on_press(event(Event::Guide(Some(Guide::Supplement))))
+            ]
+            .spacing(8),
+        );
+        let pages = entries.len().div_ceil(20).max(1);
+        let page = state.results_page.min(pages - 1);
+        let mut results = column![].spacing(8);
+        if entries.is_empty() {
+            results = results.push(self.caption(if state.busy() {
+                "检测结果会逐项显示。"
+            } else if has_reports {
+                "当前没有可展示的结果。"
+            } else {
+                "开始检测会自动扫描已记录的 Claude 项目配置，并打开默认浏览器采样。"
+            }));
+        }
+        if let Some(audit) = &state.audit {
+            let omitted = if filter == ResultKind::Normal {
+                audit.clean_count.saturating_sub(audit.clean_files.len())
+            } else {
+                audit.omitted
+            };
+            if omitted > 0 {
+                results = results
+                    .push(self.caption(format!("明细超过保留上限，另有 {} 项未展开。", omitted)));
+            }
+        }
+        for entry in entries.into_iter().skip(page * 20).take(20) {
+            let (title, value, source, detail, advice, badge, tone) = match entry {
+                Entry::Config(f) => (
+                    format!("配置 · {}", f.field),
+                    f.value.clone(),
+                    f.path.clone(),
+                    f.reason.clone(),
+                    f.advice.clone(),
+                    f.level.name(),
+                    match f.level {
+                        check::audit::Level::Issue => ui_style::Tone::Danger,
+                        check::audit::Level::Review => ui_style::Tone::Warning,
+                        check::audit::Level::Incomplete => ui_style::Tone::Muted,
+                    },
+                ),
+                Entry::Clean(path) => (
+                    "配置文件".into(),
+                    "未发现上述风险项".into(),
+                    path.into(),
+                    "已检查代理、API 地址、提供方及证书相关的配置字段。".into(),
+                    String::new(),
+                    "已检查",
+                    ui_style::Tone::Success,
+                ),
+                Entry::Signal(r, s) => (
+                    s.title.clone(),
+                    s.value.clone(),
+                    s.source.clone(),
+                    s.detail.clone(),
+                    s.advice.clone(),
+                    if state.differs(r, s) {
+                        "存在差异"
+                    } else {
+                        s.evidence.name()
+                    },
+                    if state.differs(r, s) {
                         ui_style::Tone::Warning
-                    } else if signal.evidence == Evidence::Measured {
+                    } else if s.evidence == Evidence::Measured {
                         ui_style::Tone::Success
                     } else {
                         ui_style::Tone::Muted
-                    };
-                    let mut item = column![
-                        aligned_row![
-                            self.label(&signal.title).size(self.font_size(15)),
-                            Space::new().width(Length::Fill),
-                            container(
-                                self.label(if state.differs(report, signal) {
-                                    "存在差异"
-                                } else {
-                                    signal.evidence.name()
-                                })
-                                .size(self.font_size(11))
-                            )
-                            .padding([3, 7])
-                            .style(move |theme: &Theme| ui_style::badge(theme, tone))
-                        ],
-                        self.label(&signal.value).size(self.font_size(14)),
-                        self.caption(format!("来源：{}", signal.source)),
-                        self.caption(&signal.detail)
-                    ]
-                    .spacing(5);
-                    if !signal.advice.is_empty() {
-                        item = item.push(self.caption(format!("建议：{}", signal.advice)));
-                    }
-                    results = results.push(
-                        container(item)
-                            .padding(12)
-                            .width(Length::Fill)
-                            .style(ui_style::panel),
-                    );
-                }
-                if group == Group::Desktop {
-                    for route in &report.routes {
-                        results = results.push(
-                            container(
-                                column![
-                                    self.label(&route.host).size(self.font_size(14)),
-                                    self.caption(format!(
-                                        "{}{}{}",
-                                        route.time,
-                                        if route.time.is_empty() || route.outcome.is_empty() {
-                                            ""
-                                        } else {
-                                            " · "
-                                        },
-                                        route.outcome
-                                    )),
-                                    self.caption(format!("规则：{}", route.rule)),
-                                    self.caption(format!("线路：{}", route.chain))
-                                ]
-                                .spacing(4),
-                            )
-                            .padding(12)
-                            .width(Length::Fill)
-                            .style(ui_style::panel),
-                        );
-                    }
-                }
-            }
-        } else {
-            let groups: &[Group] = match state.tab {
-                Tab::Overview => &Group::ALL,
-                Tab::Web => &[Group::Exit, Group::Browser, Group::WebRtc, Group::Dns],
-                Tab::Desktop => &[Group::Desktop],
-                Tab::Code => &[Group::Exit, Group::Dns, Group::Code],
+                    },
+                ),
+                Entry::Route(r) => (
+                    r.host.clone(),
+                    r.outcome.clone(),
+                    "内核实时事件流".into(),
+                    format!("{}\n规则：{}\n线路：{}", r.time, r.rule, r.chain),
+                    String::new(),
+                    if r.outcome == "连接失败" {
+                        "连接失败"
+                    } else {
+                        "已选路"
+                    },
+                    if r.outcome == "连接失败" {
+                        ui_style::Tone::Danger
+                    } else {
+                        ui_style::Tone::Muted
+                    },
+                ),
             };
-            for pair in groups.chunks(2) {
-                results = results.push(if pair.len() == 1 {
-                    self.claude_card(pair[0])
-                } else {
-                    aligned_row![self.claude_card(pair[0]), self.claude_card(pair[1])]
-                        .spacing(10)
-                        .into()
-                });
+            let mut item = column![aligned_row![
+                self.label(title).size(self.font_size(14)),
+                Space::new().width(Length::Fill),
+                container(self.label(badge).size(self.font_size(11)))
+                    .padding([3, 7])
+                    .style(move |theme: &Theme| ui_style::badge(theme, tone))
+            ]]
+            .spacing(5);
+            if !value.is_empty() {
+                item = item.push(self.label(value).size(self.font_size(14)));
             }
+            item = item
+                .push(self.caption(format!("来源：{source}")))
+                .push(self.caption(detail));
+            if !advice.is_empty() {
+                item = item.push(self.caption(format!("建议：{advice}")));
+            }
+            results = results.push(
+                container(item)
+                    .padding(11)
+                    .width(Length::Fill)
+                    .style(ui_style::panel),
+            );
         }
-        if !has_reports {
-            results = results.push(self.caption("开始检测会自动打开默认浏览器；Code 可自动打开终端采样，也可开启 Claude 请求实时检测。"));
+        body = body.push(page_scroll(results).height(Length::Fill));
+        if pages > 1 {
+            body = body.push(
+                aligned_row![
+                    self.caption(format!("第 {} / {} 页", page + 1, pages)),
+                    Space::new().width(Length::Fill),
+                    button(self.label("上一页"))
+                        .style(ui_style::secondary_button)
+                        .on_press_maybe((page > 0).then(|| event(Event::ResultsPage(page - 1)))),
+                    button(self.label("下一页"))
+                        .style(ui_style::secondary_button)
+                        .on_press_maybe(
+                            (page + 1 < pages).then(|| event(Event::ResultsPage(page + 1)))
+                        )
+                ]
+                .spacing(8),
+            );
         }
-        body.push(page_scroll(results).height(Length::Fill))
-            .height(Length::Fill)
-            .into()
+        body.height(Length::Fill).into()
     }
 
     pub(crate) fn claude_dialog(&self) -> Option<Element<'_, Message>> {
         let guide = self.claude.guide?;
         let event = |event| Message::Claude(event);
-        let close = button(self.label("关闭"))
-            .style(ui_style::secondary_button)
-            .padding([8, 12])
-            .on_press(event(Event::Guide(None)));
-        let mut body = match guide {
-            Guide::Clients => column![
-                self.title("还需完成客户端检测"),
-                self.label("本机、内核和默认浏览器会自动检测。Code 可自动打开终端补充采样；开启实时请求检测后，会持续记录经过内核的 Claude 域名连接。"),
-                self.caption("点击下方按钮查看操作步骤，也可以稍后从检测页继续。"),
+        let content = match guide {
+            Guide::Monitor => column![
+                self.title("Claude 请求实时检测"),
+                self.label("开启后，持续记录经过内核的 Claude 域名连接。正常使用网页、Desktop 或 Code 即可，在报告中查看具体线路。"),
+                self.caption("切换页面或隐藏窗口继续检测；关闭后保留最近 32 条记录。不读取 HTTPS 内容，也不按进程区分。")
+            ],
+            Guide::Supplement => column![
+                self.title("补充采样"),
+                self.label("自动浏览器检测来自本机检测页面。需要核对 Claude 网页本身的设置时，可在该网页的开发者工具 Console 运行采样脚本，再导入结果。"),
                 aligned_row![
-                    button(self.label("Code 检测")).style(ui_style::primary).padding([8, 12])
-                        .on_press(event(Event::Guide(Some(Guide::Code)))),
-                    button(self.label("实时请求检测")).style(ui_style::primary).padding([8, 12])
-                        .on_press(event(Event::Guide(Some(Guide::Desktop)))),
-                    Space::new().width(Length::Fill),
-                    close
+                    button(self.label("复制网页采样脚本")).style(ui_style::secondary_button)
+                        .on_press(event(Event::CopySiteScript)),
+                    button(self.label("导入剪贴板采样")).style(ui_style::secondary_button)
+                        .on_press_maybe((!self.claude.importing).then_some(event(Event::Import)))
                 ].spacing(8)
             ],
-            Guide::Code => {
-                let mut content = column![
-                    self.title("Code 检测"),
-                    self.label("选择项目目录后，点击“自动检测”，程序会打开终端并执行检测，结果自动回传。留空使用用户目录。"),
-                    text_input("项目目录（可选）", &self.claude.project_dir)
-                        .id("claude-code-directory")
-                        .padding(9).size(self.font_size(14)).style(ui_style::input)
-                        .on_input_maybe((!self.claude.code_busy && !self.claude.session_starting)
-                            .then_some(|value| Message::Claude(Event::CodeDirectory(value))))
-                        .on_submit_maybe((!self.claude.code_busy && !self.claude.session_starting && !self.exiting)
-                            .then_some(event(Event::CodeAuto))),
-                    self.caption("新终端会加载自己的启动配置。要核对已运行的 Code，可复制命令，在启动 Code 的同一终端、同一项目目录运行，并结合 /status 查看。"),
-                    self.caption("保持本应用的检测页打开。不会读取账号、Cookie 或 API 密钥。")
-                ].spacing(12);
-                if !self.claude.command.is_empty() {
-                    content = content.push(self.caption("命令已复制到剪贴板：")).push(
-                        text_input("检测命令", &self.claude.command)
-                            .size(self.font_size(12)).style(ui_style::input)
-                    );
-                }
-                if self.claude.code_busy {
-                    content = content.push(self.caption("正在自动检测，等待终端回传…"));
-                } else if self.claude.reports[index(Environment::Code)].is_some() {
-                    content = content.push(self.caption("Code 报告已回传，可关闭此窗口查看结果。"));
-                }
-                content.push(aligned_row![
-                    button(self.label("复制命令")).style(ui_style::secondary_button).padding([8, 12])
-                        .on_press_maybe((!self.claude.session_starting && !self.exiting)
-                            .then_some(event(Event::CodeCommand))),
+        };
+        Some(
+            content
+                .spacing(14)
+                .push(aligned_row![
                     Space::new().width(Length::Fill),
-                    close,
-                    button(self.label(if self.claude.code_busy { "正在检测…" } else { "自动检测" }))
-                        .style(ui_style::primary).padding([8, 12])
-                        .on_press_maybe((!self.claude.code_busy && !self.claude.session_starting && !self.exiting)
-                            .then_some(event(Event::CodeAuto)))
-                ].spacing(8))
-            }
-            Guide::Desktop => {
-                let mut content = column![
-                    self.title("Claude 请求实时检测"),
-                    self.label("开启后，持续记录内核识别到的 Claude 域名连接，适用于网页版、Desktop 和 Code。可正常使用客户端。"),
-                    self.label("在 Desktop 分类查看时间、域名、匹配规则、线路与连接结果。关闭后保留记录；切换页面或隐藏窗口不会停止实时检测。"),
-                    self.caption("保留最近 32 条明细与累计数量。不按进程区分，也不读取 HTTPS 请求内容。"),
-                    checkbox(self.claude.monitor_enabled).label("实时检测 Claude 请求")
-                        .text_size(self.scaled(14))
-                        .on_toggle_maybe((!self.exiting && (self.snapshot.running || self.claude.monitor_enabled))
-                            .then_some(|enabled| Message::Claude(Event::Monitor(enabled))))
-                ].spacing(12);
-                if !self.snapshot.running {
-                    content = content.push(self.caption("请先启动内核，再开启实时检测。"));
-                }
-                if !self.claude.monitor_status.is_empty() { content = content.push(self.caption(&self.claude.monitor_status)); }
-                content.push(aligned_row![
-                    Space::new().width(Length::Fill),
-                    close
-                ].spacing(8))
-            }
-        }.spacing(14);
-        if self.claude.error {
-            body = body.push(
-                self.label(&self.claude.status)
-                    .color(ui_style::tone(&self.theme(), ui_style::Tone::Danger)),
-            );
-        }
-        Some(body.into())
+                    button(self.label("知道了"))
+                        .style(ui_style::primary)
+                        .padding([8, 12])
+                        .on_press(event(Event::Guide(None)))
+                ])
+                .into(),
+        )
     }
 
-    fn claude_card(&self, group: Group) -> Element<'_, Message> {
-        let reports: Vec<_> = self.claude.selected().collect();
-        let entries: Vec<_> = reports
-            .iter()
-            .flat_map(|r| {
-                r.signals
-                    .iter()
-                    .filter(move |s| s.group == group)
-                    .map(move |s| (*r, s))
-            })
-            .collect();
-        let differences = entries
-            .iter()
-            .filter(|(r, s)| self.claude.differs(r, s))
-            .count();
-        let measured = entries
-            .iter()
-            .filter(|(_, s)| s.evidence == Evidence::Measured)
-            .count();
-        let partial = measured < entries.len();
-        let tone = if differences > 0 {
-            ui_style::Tone::Warning
-        } else if measured > 0 && !partial {
-            ui_style::Tone::Success
-        } else {
-            ui_style::Tone::Muted
-        };
-        let status = if differences > 0 {
-            "存在差异"
-        } else if measured > 0 && partial {
-            "部分确认"
-        } else if measured > 0 {
-            "已检测"
-        } else {
-            "待补充"
-        };
-        let mut lines = column![aligned_row![
-            self.label(group.name()).size(self.font_size(15)),
-            Space::new().width(Length::Fill),
-            container(self.label(status).size(self.font_size(11)))
-                .padding([3, 6])
-                .style(move |theme: &Theme| ui_style::badge(theme, tone))
-        ]]
-        .spacing(6);
-        if entries.is_empty() {
-            lines = lines.push(self.caption(match group {
-                Group::Browser | Group::WebRtc => "请在常用浏览器中完成检测",
-                Group::Code => "复制命令，在实际 Code 终端运行",
-                Group::Desktop => "检测系统线索，另行观测客户端请求",
-                _ => "检测结果会标明来源与实测范围",
-            }));
-        }
-        for (_, signal) in entries.iter().take(3) {
-            lines = lines.push(self.caption(format!("{}：{}", signal.title, signal.value)));
-        }
-        lines = lines.push(aligned_row![
-            Space::new().width(Length::Fill),
-            self.label(format!("查看详情 · {} 项 ›", entries.len()))
-                .size(self.font_size(12))
-                .color(ui_style::tone(&self.theme(), ui_style::Tone::Accent))
-        ]);
-        button(container(lines).padding(10).width(Length::Fill))
-            .style(ui_style::secondary_button)
-            .width(Length::Fill)
-            .padding(0)
-            .on_press(Message::Claude(Event::Detail(Some(group))))
-            .into()
+    fn claude_count_card(
+        &self,
+        kind: ResultKind,
+        count: usize,
+        description: &str,
+        tone: ui_style::Tone,
+    ) -> Element<'_, Message> {
+        button(
+            container(
+                column![
+                    self.label(match kind {
+                        ResultKind::Normal => "正常",
+                        ResultKind::Risk => "风险",
+                        ResultKind::Unknown => "未确认",
+                    })
+                    .size(self.font_size(15)),
+                    self.label(format!("{count} 项"))
+                        .size(self.font_size(30))
+                        .color(ui_style::tone(&self.theme(), tone)),
+                    self.caption(description.to_owned()),
+                    self.label("查看具体项目 ›")
+                        .size(self.font_size(12))
+                        .color(ui_style::tone(&self.theme(), ui_style::Tone::Accent))
+                ]
+                .spacing(8),
+            )
+            .padding(18)
+            .width(Length::Fill),
+        )
+        .width(Length::Fill)
+        .padding(0)
+        .style(ui_style::secondary_button)
+        .on_press(Message::Claude(Event::ResultsFilter(Some(kind))))
+        .into()
     }
 }
 
@@ -1111,7 +1006,7 @@ pub(crate) fn fixture_state(scene: &str) -> State {
     if scene == "claude-empty" {
         return state;
     }
-    state.status = "固定示例数据，用于检查界面布局。".into();
+    state.status = "检测完成，点击数量查看具体项目。".into();
     let mut core = Report::new(Environment::Core, "示例内核探测，不代表真实检测");
     let mut ip = Signal::new(
         Group::Exit,
@@ -1230,33 +1125,53 @@ pub(crate) fn fixture_state(scene: &str) -> State {
         "请在 Code /status 中确认托管来源与启动设置。",
     ));
     state.store(code);
+    let mut audit = check::audit::Audit {
+        projects: 6,
+        files: 9,
+        ..Default::default()
+    };
+    audit.findings.push(check::audit::Finding {
+        level: check::audit::Level::Review,
+        path: "/Users/demo/Projects/website/.claude/settings.local.json".into(),
+        field: "NO_PROXY".into(),
+        value: "包含 Claude 域名或全部地址".into(),
+        reason: "此配置可能让 Claude 请求绕过 HTTP 代理；TUN 是否接管需要结合实时请求确认。".into(),
+        advice: "移除不需要的绕过项，并重新启动相应会话验证。".into(),
+    });
+    audit.findings.push(check::audit::Finding {
+        level: check::audit::Level::Review,
+        path: "/Users/demo/Projects/tools/.claude/settings.json".into(),
+        field: "ANTHROPIC_BASE_URL".into(),
+        value: "https://relay.example.com/".into(),
+        reason: "API 地址被覆盖；本机官方域名的出口检测不能代表中转服务的远端出口。".into(),
+        advice: "确认目标地址是预期服务，并在实际会话中核对来源。".into(),
+    });
+    audit.reviews = audit.findings.len();
+    audit.clean_files = vec!["/Users/demo/.claude/settings.json".into()];
+    audit.clean_count = 1;
+    state.audit = Some(audit);
     match scene {
-        "claude-web" => state.tab = Tab::Web,
-        "claude-desktop" => state.tab = Tab::Desktop,
-        "claude-code" => state.tab = Tab::Code,
-        "claude-details" => state.detail = Some(Group::Browser),
-        "claude-start-guide" => {
-            state.guide = Some(Guide::Clients);
+        "claude-scanning" => {
             state.reports = Default::default();
+            state.audit = None;
+            state.audit_busy = true;
             state.local_busy = true;
             state.network_busy = true;
             state.browser_busy = true;
-            state.status = "正在采集地区线索，并自动打开浏览器检测…".into();
+            state.status = "正在扫描项目配置，并自动打开浏览器检测…".into();
         }
-        "claude-code-guide" => {
-            state.guide = Some(Guide::Code);
-            state.tab = Tab::Code;
-        }
+        "claude-risk" => state.results_filter = Some(ResultKind::Risk),
+        "claude-normal" => state.results_filter = Some(ResultKind::Normal),
+        "claude-unknown" => state.results_filter = Some(ResultKind::Unknown),
+        "claude-monitor-guide" => state.guide = Some(Guide::Monitor),
         "claude-live" => {
             state.monitor_enabled = true;
             state.monitor_status =
                 "实时检测中 · 累计 8 条事件 · 失败 0 · 保留最近 32 条明细".into();
-            state.tab = Tab::Desktop;
-            state.detail = Some(Group::Desktop);
         }
-        "claude-desktop-guide" => {
-            state.guide = Some(Guide::Desktop);
-            state.tab = Tab::Desktop;
+        "claude-clean" => {
+            state.audit.as_mut().unwrap().findings.clear();
+            state.audit.as_mut().unwrap().reviews = 0;
         }
         _ => {}
     }
@@ -1269,67 +1184,7 @@ mod tests {
     fn app() -> App {
         App::with_engine(Err(anyhow::anyhow!("isolated")), None).0
     }
-    #[test]
-    fn starting_detection_starts_browser_and_dismissing_guide_keeps_sampling() {
-        let mut app = app();
-        app.page = Page::Claude;
-        let _ = app.claude_event(Event::Start);
-        assert_eq!(app.claude.guide, Some(Guide::Clients));
-        assert!(app.claude.local_busy && app.claude.network_busy);
-        assert!(app.claude.browser_busy && app.claude.session_starting);
-        let generation = app.claude.generation;
-        let _ = app.claude_event(Event::Start);
-        assert_eq!(app.claude.generation, generation, "No overlapping runs");
-        let _ = app.desktop_message(&Message::Key(iced::keyboard::Event::KeyPressed {
-            key: iced::keyboard::Key::Named(iced::keyboard::key::Named::Escape),
-            modified_key: iced::keyboard::Key::Named(iced::keyboard::key::Named::Escape),
-            physical_key: iced::keyboard::key::Physical::Unidentified(
-                iced::keyboard::key::NativeCode::Unidentified,
-            ),
-            location: iced::keyboard::Location::Standard,
-            modifiers: iced::keyboard::Modifiers::empty(),
-            text: None,
-            repeat: false,
-        }));
-        assert!(app.claude.guide.is_none());
-        assert!(app.claude.busy());
-        assert_eq!(app.claude.generation, generation);
-    }
-    #[test]
-    fn cancellation_ignores_old_browser_and_session_callbacks() {
-        let mut app = app();
-        let _ = app.claude_event(Event::Start);
-        let old = app.claude.generation;
-        let _ = app.claude_event(Event::Cancel);
-        let stopped = app.claude.status.clone();
-        let _ = app.claude_event(Event::BrowserOpened(old, Err("stale open error".into())));
-        let _ = app.claude_event(Event::Session(
-            old,
-            SessionAction::Browser,
-            Err("stale session error".into()),
-        ));
-        assert!(!app.claude.busy() && !app.claude.error);
-        assert!(app.claude.guide.is_none());
-        assert_eq!(app.claude.status, stopped);
-        let _ = app.claude_event(Event::Start);
-        let _ = app.claude_event(Event::Session(
-            old,
-            SessionAction::Browser,
-            Err("old run".into()),
-        ));
-        assert!(app.claude.session_starting && app.claude.browser_busy);
-        assert!(!app.claude.error);
-    }
-    #[test]
-    fn receiver_failure_does_not_leave_detection_busy_after_local_results() {
-        let mut app = app();
-        let _ = app.claude_event(Event::Start);
-        let generation = app.claude.generation;
-        let _ = app.claude_event(Event::Session(
-            generation,
-            SessionAction::Browser,
-            Err("bind failed".into()),
-        ));
+    fn finish_local(app: &mut App, generation: u64) {
         let _ = app.claude_event(Event::Local(
             generation,
             Report::new(Environment::Desktop, "test"),
@@ -1338,49 +1193,53 @@ mod tests {
             generation,
             Ok(Report::new(Environment::Core, "test")),
         ));
-        assert!(!app.claude.busy());
-        assert!(app.claude.error);
-        assert_eq!(app.claude.status, "bind failed");
-        assert!(app.claude.reports[index(Environment::Desktop)].is_some());
-        assert!(app.claude.reports[index(Environment::Core)].is_some());
+        let _ = app.claude_event(Event::Audit(generation, check::audit::Audit::default()));
     }
     #[test]
-    fn cancelling_automatic_code_ignores_its_pending_receiver() {
+    fn start_runs_config_audit_and_browser_once_without_a_client_dialog() {
         let mut app = app();
-        let _ = app.claude_event(Event::CodeAuto);
+        let _ = app.claude_event(Event::Start);
+        assert!(app.claude.audit_busy && app.claude.local_busy && app.claude.network_busy);
+        assert!(app.claude.browser_busy && app.claude.session_starting);
+        assert!(app.claude.guide.is_none() && app.claude.scan.is_some());
         let generation = app.claude.generation;
-        assert!(app.claude.code_busy && app.claude.session_starting);
+        let _ = app.claude_event(Event::Start);
+        assert_eq!(app.claude.generation, generation);
+    }
+    #[test]
+    fn cancellation_ignores_old_audit_browser_and_receiver_results() {
+        let mut app = app();
+        let _ = app.claude_event(Event::Start);
+        let old = app.claude.generation;
         let _ = app.claude_event(Event::Cancel);
         let status = app.claude.status.clone();
-        let _ = app.claude_event(Event::Session(
-            generation,
-            SessionAction::AutoCode,
-            Err("old terminal".into()),
-        ));
-        assert!(!app.claude.busy());
-        assert!(app.claude.terminal.is_none());
+        let _ = app.claude_event(Event::Audit(old, check::audit::Audit::default()));
+        let _ = app.claude_event(Event::BrowserOpened(old, Err("stale".into())));
+        let _ = app.claude_event(Event::Session(old, Err("stale".into())));
+        assert!(!app.claude.busy() && !app.claude.error);
+        assert!(app.claude.audit.is_none() && app.claude.scan.is_none());
         assert_eq!(app.claude.status, status);
     }
+    #[test]
+    fn failed_browser_receiver_does_not_hide_config_results_or_stick_progress() {
+        let mut app = app();
+        let _ = app.claude_event(Event::Start);
+        let generation = app.claude.generation;
+        let _ = app.claude_event(Event::Session(generation, Err("bind failed".into())));
+        finish_local(&mut app, generation);
+        assert!(!app.claude.busy());
+        assert!(app.claude.error && app.claude.audit.is_some());
+        assert_eq!(app.claude.status, "bind failed");
+    }
     #[tokio::test]
-    async fn browser_report_is_required_to_finish_automatic_detection() {
+    async fn completion_waits_for_browser_without_late_launch_overwriting_report() {
         let mut app = app();
         app.page = Page::Claude;
         let _ = app.claude_event(Event::Start);
         let generation = app.claude.generation;
         let session = Session::start(check::client(None).unwrap()).await.unwrap();
-        let _ = app.claude_event(Event::Session(
-            generation,
-            SessionAction::Browser,
-            Ok(session),
-        ));
-        let _ = app.claude_event(Event::Local(
-            generation,
-            Report::new(Environment::Desktop, "test"),
-        ));
-        let _ = app.claude_event(Event::Network(
-            generation,
-            Ok(Report::new(Environment::Core, "test")),
-        ));
+        let _ = app.claude_event(Event::Session(generation, Ok(session)));
+        finish_local(&mut app, generation);
         assert!(app.claude.busy() && app.claude.browser_busy);
         let _ = app.claude_event(Event::Imported(
             generation,
@@ -1389,67 +1248,115 @@ mod tests {
         assert!(!app.claude.busy());
         let status = app.claude.status.clone();
         let _ = app.claude_event(Event::BrowserOpened(generation, Ok(())));
-        assert_eq!(
-            app.claude.status, status,
-            "Late launch result must not overwrite the report"
-        );
+        assert_eq!(app.claude.status, status);
     }
     #[test]
-    fn client_guides_do_not_start_monitor_until_switch_on() {
+    fn auxiliary_preferences_and_unconfirmed_routes_never_count_as_normal_or_risk() {
+        let mut state = State::default();
+        let mut report = Report::new(Environment::Web, "test");
+        report.signals.push(check::system::preference(
+            Group::Browser,
+            "时区",
+            "Asia/Shanghai",
+            "test",
+            Some("CN"),
+        ));
+        report.signals.push(Signal::unknown(
+            Group::WebRtc,
+            "WebRTC",
+            "test",
+            "未获得候选",
+        ));
+        report.routes.push(check::Route {
+            host: "claude.ai".into(),
+            chain: "Claude[node]".into(),
+            outcome: "内核已选路".into(),
+            ..Default::default()
+        });
+        state.store(report);
+        assert_eq!(state.counts(&state.entries()), [0, 0, 3]);
+        let mut core = Report::new(Environment::Core, "test");
+        let mut exit = Signal::new(
+            Group::Exit,
+            "出口",
+            "203.0.113.1",
+            "test",
+            Evidence::Measured,
+            "test",
+        );
+        exit.country = "US".into();
+        core.signals.push(exit);
+        state.store(core);
+        assert_eq!(state.counts(&state.entries()), [1, 0, 3]);
+    }
+    #[test]
+    fn measured_exit_differences_and_reject_or_failed_routes_are_risks() {
+        let mut state = State::default();
+        for (env, country) in [(Environment::Core, "US"), (Environment::Web, "JP")] {
+            let mut report = Report::new(env, "test");
+            let mut exit = Signal::new(
+                Group::Exit,
+                "出口",
+                country,
+                "test",
+                Evidence::Measured,
+                "test",
+            );
+            exit.country = country.into();
+            report.signals.push(exit);
+            if env == Environment::Web {
+                report.routes = vec![
+                    check::Route {
+                        chain: "Claude[REJECT]".into(),
+                        ..Default::default()
+                    },
+                    check::Route {
+                        chain: "Proxy[DIRECT]".into(),
+                        ..Default::default()
+                    },
+                    check::Route {
+                        chain: "Proxy[node]".into(),
+                        outcome: "连接失败".into(),
+                        ..Default::default()
+                    },
+                ];
+            }
+            state.store(report);
+        }
+        assert_eq!(state.counts(&state.entries()), [1, 4, 0]);
+    }
+    #[test]
+    fn filtered_detail_pages_reset_and_counts_include_omitted_config_rows() {
+        let mut app = app();
+        app.claude.audit = Some(check::audit::Audit {
+            clean_count: 700,
+            reviews: 1000,
+            omitted: 1000,
+            ..Default::default()
+        });
+        assert_eq!(app.claude.counts(&app.claude.entries()), [700, 1000, 0]);
+        let _ = app.claude_event(Event::ResultsPage(4));
+        let _ = app.claude_event(Event::ResultsFilter(Some(ResultKind::Risk)));
+        assert_eq!(app.claude.results_page, 0);
+        assert_eq!(app.claude.results_filter, Some(ResultKind::Risk));
+        let _ = app.claude_view();
+        let _ = app.claude_event(Event::ResultsFilter(None));
+        assert!(app.claude.results_filter.is_none());
+    }
+    #[test]
+    fn page_navigation_cancels_audit_but_keeps_opt_in_monitor() {
         let mut app = app();
         app.page = Page::Claude;
         app.snapshot.running = true;
-        for guide in [Guide::Clients, Guide::Code, Guide::Desktop] {
-            let _ = app.claude_event(Event::Guide(Some(guide)));
-            assert!(app.claude_dialog().is_some());
-            assert!(!app.claude.monitor_enabled);
-            assert!(app.claude.command.is_empty());
-        }
-        let _ = app.claude_event(Event::Guide(None));
-        assert!(app.claude_dialog().is_none());
-        let _ = app.claude_event(Event::Guide(Some(Guide::Desktop)));
         let _ = app.claude_event(Event::Monitor(true));
-        assert_eq!(app.claude.guide, Some(Guide::Desktop));
-        assert!(app.claude.monitor_enabled);
-        let epoch = app.claude.monitor_generation;
+        assert!(app.claude.monitor_enabled && app.claude_dialog().is_some());
+        let generation = app.claude.generation;
+        app.claude.audit_busy = true;
         let _ = app.update(Message::Navigate(Page::Home));
+        let _ = app.claude_event(Event::Audit(generation, check::audit::Audit::default()));
         assert!(app.claude.monitor_enabled);
-        assert_eq!(app.claude.monitor_generation, epoch);
+        assert!(app.claude.audit.is_none() && !app.claude.busy());
         let _ = app.claude_event(Event::Monitor(false));
         assert!(!app.claude.monitor_enabled);
-        assert_eq!(app.claude.tab, Tab::Desktop);
-    }
-    #[test]
-    fn leaving_page_cancels_pending_results_without_retaining_a_server() {
-        let mut app = app();
-        app.page = Page::Claude;
-        let generation = app.claude.generation;
-        app.claude.network_busy = true;
-        let _ = app.update(Message::Navigate(Page::Home));
-        let _ = app.claude_event(Event::Network(
-            generation,
-            Ok(Report::new(Environment::Core, "stale")),
-        ));
-        assert!(!app.claude.busy());
-        assert!(app.claude.reports.iter().all(Option::is_none));
-    }
-    #[test]
-    fn missing_desktop_connections_remain_unconfirmed() {
-        let mut state = State::default();
-        state.monitor_report(check::observe::Snapshot::default());
-        let report = state.reports[index(Environment::Desktop)].as_ref().unwrap();
-        assert_eq!(report.signals[0].evidence, Evidence::Unknown);
-        assert!(report.routes.is_empty());
-    }
-    #[test]
-    fn page_navigation_and_views_cover_all_three_environments() {
-        let mut app = app();
-        app.page = Page::Claude;
-        assert_eq!(Page::ALL[8].name(), "A÷检测");
-        for tab in Tab::ALL {
-            app.claude.tab = tab;
-            let _view = app.claude_view();
-        }
-        assert!(app.claude.session.is_none());
     }
 }
