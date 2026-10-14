@@ -7,7 +7,7 @@ on:
         required: false
         type: string
       check_only:
-        description: '完成打包和全部安装测试，但不发布 Release'
+        description: '完成打包和基础安装/代理测试，但不发布 Release'
         required: false
         default: false
         type: boolean

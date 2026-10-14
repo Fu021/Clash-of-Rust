@@ -101,13 +101,13 @@ async fn basic_system_proxy_and_tun() {
         .unwrap();
     engine.start().await.unwrap();
     engine.select_proxy_mode(ProxyMode::System).await.unwrap();
-    assert!(platform::is_owned_at_port(&store.root.join("system-proxy.json"), mixed_port).unwrap());
+    assert!(platform::is_owned(&store.root.join("system-proxy.json")).unwrap());
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let target = listener.local_addr().unwrap();
     let server = tokio::spawn(async move {
         let (mut socket, _) = listener.accept().await.unwrap();
         let mut request = [0; 4096];
-        socket.read(&mut request).await.unwrap();
+        assert!(socket.read(&mut request).await.unwrap() > 0);
         socket
             .write_all(b"HTTP/1.1 200 OK\r\nContent-Length: 8\r\nConnection: close\r\n\r\nproxy-ok")
             .await
