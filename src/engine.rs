@@ -1308,9 +1308,10 @@ impl Engine {
             return Ok(());
         }
         self.mac_tun = None;
-        if !interactive {
-            bail!("TUN 需要管理员授权，请打开客户端并点击 TUN 模式");
-        }
+        tokio::task::spawn_blocking(move || {
+            platform::macos::service::ensure_available(interactive)
+        })
+        .await??;
         let previous = self.restart_state().await?.context("请先启动内核")?;
         let session =
             tokio::task::spawn_blocking(platform::macos::tun::Session::authorize).await??;

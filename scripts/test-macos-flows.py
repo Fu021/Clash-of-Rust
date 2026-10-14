@@ -104,16 +104,58 @@ def dmg(app, destination):
 
 
 @contextlib.contextmanager
-def network_authorization_for_ci():
-    # Only this fixed network right is changed on the disposable runner. Actual
-    # Authorization Services / SCPreferences calls still execute in the GUI.
-    right = 'system.services.systemconfiguration.network'
-    original = subprocess.check_output(['/usr/bin/security', 'authorizationdb', 'read', right], timeout=15)
-    subprocess.run(['/usr/bin/sudo', '-n', '/usr/bin/security', 'authorizationdb', 'write', right, 'allow'], check=True, timeout=15)
+def network_service_for_ci():
+    uid = os.getuid()
+    label = f'org.clashofrust.network.{uid}'
+    directory = Path('/Library/PrivilegedHelperTools')/label
+    agent = Path('/Library/LaunchDaemons')/(label+'.plist')
+    assert not directory.exists() and not agent.exists(), 'Do not overwrite an existing network service'
     try:
         yield
     finally:
-        subprocess.run(['/usr/bin/sudo', '-n', '/usr/bin/security', 'authorizationdb', 'write', right], input=original, check=True, timeout=15)
+        if agent.exists() or directory.exists():
+            subprocess.run(['/usr/bin/sudo', '-n', '/bin/launchctl', 'bootout', 'system/'+label], capture_output=True, timeout=20)
+            subprocess.run(['/usr/bin/sudo', '-n', '/bin/rm', '-rf', directory, agent], check=True, timeout=20)
+
+
+def system_lifecycle(fixture, report, prefix):
+    with tempfile.TemporaryDirectory(prefix='clash-system-login-') as temporary:
+        root = Path(temporary)
+        app = root/APP_NAME
+        shutil.copytree(fixture, app)
+        data = root/'data'
+        data.mkdir()
+        controller, mixed = free_port(), free_port()
+        while mixed == controller: mixed = free_port()
+        write_json(data/'settings.json', {'controller_port': controller, 'mixed_port': mixed,
+                                         'secret': 'isolated-system-login-ci'})
+        records = []
+        label = f'org.clashofrust.network.{os.getuid()}'
+        for attempt in range(3):
+            if attempt == 2:
+                subprocess.run(['/usr/bin/sudo', '-n', '/bin/launchctl', 'kickstart', '-k', 'system/'+label], check=True, timeout=20)
+            status = report/(prefix+f'-system-lifecycle-{attempt}.json')
+            env = dict(os.environ, CLASH_CI_FLOW='system-lifecycle', CLASH_CI_FLOW_REPORT=str(status),
+                       CLASH_OF_RUST_DATA_DIR=str(data), CLASH_CI_AUTHORIZATION='sudo' if attempt == 0 else 'cancel')
+            with (report/(prefix+f'-system-lifecycle-{attempt}.log')).open('w') as log:
+                command = [app/'Contents/MacOS/clash-of-rust'] + ([] if attempt == 0 else ['--background'])
+                process = subprocess.Popen(command, env=env, stdout=log, stderr=subprocess.STDOUT, start_new_session=True)
+                try:
+                    record = wait_for(lambda: json.loads(status.read_text()) if status.exists() and json.loads(status.read_text())['phase'] == 10 else None,
+                                      'system proxy login/quit cycle')
+                    assert not record['error'] and record['details']['restored_system_mode'], record
+                    assert record['administrator_requests'] == (1 if attempt == 0 else 0), record
+                    assert record['system_authorization_sessions'] == 0, record
+                    process.wait(timeout=30)
+                    assert process.returncode == 0
+                    assert not core_ready(data), 'System proxy quit left the controller alive'
+                    assert not (data/'system-proxy.json').exists(), 'System proxy quit failed to restore its journal'
+                    records.append(record)
+                finally:
+                    if process.poll() is None:
+                        os.killpg(process.pid, signal.SIGTERM)
+                        process.wait(timeout=15)
+        return {'cycles': records, 'helper_restarted_by_launchd': True, 'later_authorization_forbidden': True}
 
 
 def autostart_flow(fixture, report, prefix):
@@ -169,6 +211,8 @@ def autostart_flow(fixture, report, prefix):
 def flow(scenario, fixture, package, version, report, prefix):
     if scenario == 'autostart':
         return autostart_flow(fixture, report, prefix)
+    if scenario == 'system-lifecycle':
+        return system_lifecycle(fixture, report, prefix)
     before = interfaces()
     system_owned = scenario in ('update-system', 'update-tun-system', 'update-cancel', 'update-root-rollback')
     with tempfile.TemporaryDirectory(prefix="clash Mac ' 空格 ") as temporary:
@@ -234,7 +278,7 @@ def flow(scenario, fixture, package, version, report, prefix):
                         assert process.returncode == 0, process.returncode
                     elif scenario == 'proxy-switches':
                         assert not record['error'] and record['running'] and not record['tun'], record
-                        assert record['system_authorization_sessions'] == 1, record
+                        assert record['system_authorization_sessions'] == 0, record
                         assert record['administrator_requests'] == 1, record
                         assert core_ready(data), 'Repeated mode switches interrupted the core'
                     elif scenario == 'file-picker':
@@ -334,10 +378,10 @@ def main():
         raise RuntimeError('Native disposable macOS Actions runner required')
     args.report.mkdir(parents=True, exist_ok=True)
     report_path = args.report/(args.label+'-flows.json')
-    names = ('file-picker', 'native-quit', 'window-lifecycle', 'tun-cancel', 'tun-timeout', 'tun', 'proxy-switches', 'autostart', 'update-user', 'update-system', 'update-tun-user', 'update-tun-system', 'update-cancel',
+    names = ('file-picker', 'native-quit', 'window-lifecycle', 'tun-cancel', 'tun-timeout', 'tun', 'proxy-switches', 'autostart', 'system-lifecycle', 'update-user', 'update-system', 'update-tun-user', 'update-tun-system', 'update-cancel',
              'update-version', 'update-signature', 'update-arch', 'update-rollback', 'update-root-rollback', 'update-readonly')
     report = {'schema': 1, 'status': 'running', 'confirmation': 'CI substitute; real dialogs remain manual',
-              'network_authorization': 'Fixed network right temporarily allowed on disposable CI, restored afterwards',
+              'network_authorization': 'Authorization database unchanged; only initial helper installation substitutes sudo for human confirmation',
               'cases': [{'name': name, 'status': 'not_run'} for name in names]}
     write_json(report_path, report)
     with tempfile.TemporaryDirectory(prefix='clash-native-flow-build-') as temporary:
@@ -348,7 +392,6 @@ def main():
         shutil.copy2(args.helper, payload/'clash-tun-launcher')
         fixture = build_app(payload, root/'fixture'/APP_NAME, args.version, args.arch)
         with contextlib.ExitStack() as contexts:
-            contexts.enter_context(network_authorization_for_ci())
             if args.package:
                 production = root/'production'/APP_NAME
                 with mount(args.package, root/'production-volume') as mounted_app:
@@ -379,7 +422,8 @@ def main():
                 try:
                     package = invalid.get(name.removeprefix('update-'), valid)
                     version = '0.0.0-ci-mismatch' if name == 'update-version' else args.version
-                    entry['details'] = flow(name, fixture, package, version, args.report, args.label)
+                    with network_service_for_ci():
+                        entry['details'] = flow(name, fixture, package, version, args.report, args.label)
                     entry['status'] = 'passed'
                 except Exception as error:
                     entry.update(status='failed', error=str(error))

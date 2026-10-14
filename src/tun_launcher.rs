@@ -136,11 +136,32 @@ mod assets;
 #[path = "platform/macos/authorization.rs"]
 mod authorization;
 #[cfg(all(target_os = "macos", not(test)))]
-use authorization::{administrator, shell_quote};
+use authorization::{administrator, run as run_command, shell_quote};
+#[cfg(all(target_os = "macos", not(test)))]
+#[allow(dead_code)]
+#[path = "platform/macos/cf.rs"]
+mod cf;
 #[cfg(all(target_os = "macos", not(test)))]
 #[allow(dead_code)]
 #[path = "platform/macos/tun.rs"]
 mod macos_tun;
+#[cfg(all(target_os = "macos", not(test)))]
+#[path = "platform/proxy_state.rs"]
+mod proxy_state;
+#[cfg(all(target_os = "macos", not(test)))]
+mod platform {
+    pub use crate::proxy_state::{ProxyState, ProxyValue};
+}
+#[cfg(all(target_os = "macos", not(test)))]
+#[allow(dead_code)]
+#[path = "platform/macos/native_proxy.rs"]
+mod native_proxy;
+#[cfg(all(target_os = "macos", not(test)))]
+#[allow(dead_code)]
+#[path = "platform/macos/service.rs"]
+mod service;
+#[cfg(all(target_os = "macos", not(test)))]
+use macos_tun as tun;
 #[cfg(all(target_os = "macos", not(test)))]
 fn main() {
     match macos_tun::launcher_main() {

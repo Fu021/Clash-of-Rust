@@ -1,5 +1,5 @@
 //! Validate and stage an app before handing shutdown to its normal GUI.
-use super::{Plan, parent_alive};
+use super::{Plan, parent_alive, stage};
 use crate::platform::macos::{administrator, run_command, shell_quote};
 use anyhow::{Context, Result, ensure};
 use std::{
@@ -153,12 +153,13 @@ fn privileged_transaction(
     // One authorization covers staging, the atomic swap, rollback and cleanup.
     // The GUI remains open until the validated staged app is ready to replace it.
     format!(
-        "set -eu\napp={}\nstaged={}\nbackup={}\nready={}\ncancel={}\nsuccess=0\ncleanup() {{\n  if [ \"$success\" = 0 ] && [ -d \"$backup\" ] && [ ! -e \"$app\" ]; then /bin/mv \"$backup\" \"$app\"; fi\n  /bin/rm -rf \"$staged\"\n}}\ntrap cleanup EXIT\n/usr/bin/ditto {} \"$staged\"\n/usr/bin/codesign --verify --deep --strict \"$staged\"\n[ ! -e \"$cancel\" ]\n/usr/bin/touch \"$ready\"\ni=0\nwhile /bin/kill -0 {parent} 2>/dev/null; do\n  [ ! -e \"$cancel\" ] || {{ echo '客户端取消了更新交接，已保留旧版本' >&2; exit 1; }}\n  [ \"$i\" -lt 450 ] || {{ echo '客户端未能正常退出，已保留旧版本' >&2; exit 1; }}\n  i=$((i+1))\n  /bin/sleep 0.1\ndone\n[ ! -e \"$cancel\" ]\n/bin/mv \"$app\" \"$backup\"\n{}\n/bin/mv \"$staged\" \"$app\"\nsuccess=1\n/bin/rm -rf \"$backup\"\n",
+        "set -eu\napp={}\nstaged={}\nbackup={}\nready={}\ncancel={}\ndirectory={}\nsuccess=0\ncleanup() {{\n  if [ \"$success\" = 0 ] && [ -d \"$backup\" ] && [ ! -e \"$app\" ]; then /bin/mv \"$backup\" \"$app\"; fi\n  /bin/rm -rf \"$staged\"\n}}\ntrap cleanup EXIT\n/usr/bin/ditto {} \"$staged\"\n/usr/bin/codesign --verify --deep --strict \"$staged\"\n[ -d \"$directory\" ]\n[ ! -e \"$cancel\" ]\n/usr/bin/touch \"$ready\"\ni=0\nwhile /bin/kill -0 {parent} 2>/dev/null; do\n  [ -d \"$directory\" ] && [ ! -e \"$cancel\" ] || {{ echo '客户端取消了更新交接，已保留旧版本' >&2; exit 1; }}\n  [ \"$i\" -lt 450 ] || {{ echo '客户端未能正常退出，已保留旧版本' >&2; exit 1; }}\n  i=$((i+1))\n  /bin/sleep 0.1\ndone\n[ -d \"$directory\" ]\n[ ! -e \"$cancel\" ]\n/bin/mv \"$app\" \"$backup\"\n{}\n/bin/mv \"$staged\" \"$app\"\nsuccess=1\n/bin/rm -rf \"$backup\"\n",
         shell_quote(&app.to_string_lossy()),
         shell_quote(&staged.to_string_lossy()),
         shell_quote(&backup.to_string_lossy()),
         shell_quote(&directory.join("ready").to_string_lossy()),
         shell_quote(&directory.join("cancel").to_string_lossy()),
+        shell_quote(&directory.to_string_lossy()),
         shell_quote(&replacement.to_string_lossy()),
         if fail_swap { "/usr/bin/false" } else { ":" },
     )
@@ -170,8 +171,9 @@ pub(super) fn install(plan: &Plan, directory: &Path) -> Result<()> {
     let app = app_path(&plan.executable)?;
     let parent = app.parent().context("应用包目录无效")?;
     let mount = directory.join("volume");
-    fs::create_dir(&mount)?;
-    checked(
+    fs::create_dir_all(&mount)?;
+    stage(directory, "正在挂载更新安装包…")?;
+    let attached = checked(
         Command::new("/usr/bin/hdiutil")
             .args([
                 "attach",
@@ -184,16 +186,26 @@ pub(super) fn install(plan: &Plan, directory: &Path) -> Result<()> {
             .arg(&plan.package),
         "挂载更新 DMG",
         60,
-    )?;
+    );
+    if let Err(error) = attached {
+        let _ = checked(
+            Command::new("/usr/bin/hdiutil").arg("detach").arg(&mount),
+            "清理未完成的更新挂载",
+            30,
+        );
+        return Err(error);
+    }
     let staged = parent.join(format!(".clash-update-{}.app", uuid::Uuid::new_v4()));
     let backup = parent.join(format!(".clash-backup-{}.app", uuid::Uuid::new_v4()));
     let result = (|| {
         let replacement = mount.join("Clash of Rust.app");
+        stage(directory, "正在校验更新应用、内核与资源…")?;
         verify_app(&replacement, &plan.version)?;
         let path = std::ffi::CString::new(parent.as_os_str().as_bytes())?;
         let local = unsafe { libc::access(path.as_ptr(), libc::W_OK | libc::X_OK) } == 0
             && fs::metadata(app)?.uid() == unsafe { libc::getuid() };
         if !local {
+            stage(directory, "正在请求安装授权，请完成系统确认…")?;
             return administrator(&privileged_transaction(
                 app,
                 &replacement,
@@ -203,6 +215,7 @@ pub(super) fn install(plan: &Plan, directory: &Path) -> Result<()> {
                 plan.parent,
             ));
         }
+        stage(directory, "正在准备更新文件…")?;
         checked(
             Command::new("/usr/bin/ditto")
                 .arg(&replacement)
@@ -216,7 +229,9 @@ pub(super) fn install(plan: &Plan, directory: &Path) -> Result<()> {
             "已取消更新，已保留旧版本"
         );
         fs::write(directory.join("ready"), b"")?;
+        stage(directory, "更新已准备好，正在退出旧客户端…")?;
         wait_for_shutdown(plan, directory)?;
+        stage(directory, "正在替换应用文件…")?;
         fs::rename(app, &backup).context("无法保存旧应用，已保留旧版本")?;
         #[cfg(feature = "ui-preview")]
         let swapped = if std::env::var("GITHUB_ACTIONS").as_deref() == Ok("true")
@@ -236,6 +251,9 @@ pub(super) fn install(plan: &Plan, directory: &Path) -> Result<()> {
         Ok(())
     })();
     let _ = fs::remove_dir_all(&staged);
+    if result.is_ok() {
+        let _ = stage(directory, "应用已更新，正在清理安装包并重启…");
+    }
     let _ = checked(
         Command::new("/usr/bin/hdiutil").arg("detach").arg(&mount),
         "卸载更新 DMG",

@@ -16,21 +16,11 @@ struct MacFlow {
 #[cfg(target_os = "macos")]
 impl MacFlow {
     fn begin_update(&mut self, task: Task<Message>) -> Task<Message> {
-        self.app.updates.install_pending = true;
         let package =
             std::path::PathBuf::from(std::env::var_os("CLASH_CI_UPDATE_PACKAGE").unwrap());
         let version = std::env::var("CLASH_CI_UPDATE_VERSION").unwrap();
-        let install = Task::perform(
-            async move {
-                let download =
-                    update::fixture_download(&package, version).map_err(|e| e.to_string())?;
-                tokio::task::spawn_blocking(move || update::handoff(download))
-                    .await
-                    .map_err(|e| e.to_string())?
-                    .map_err(|e| e.to_string())
-            },
-            Message::UpdateHandoff,
-        );
+        let download = Arc::new(update::fixture_download(&package, version).unwrap());
+        let install = self.app.install_download(download);
         Task::batch([task, install])
     }
     fn record(&self, extra: serde_json::Value) {
@@ -142,6 +132,18 @@ impl MacFlow {
         if self.phase == 0 && finished && self.app.snapshot.running {
             self.phase = 1;
             self.record(serde_json::json!({}));
+            if self.scenario == "system-lifecycle" {
+                if self.app.settings.proxy_mode == ProxyMode::System {
+                    self.phase = 10;
+                    self.record(serde_json::json!({"restored_system_mode": true}));
+                    return Task::batch([task, self.app.exit()]);
+                }
+                return Task::batch([
+                    task,
+                    self.app
+                        .update(Message::Action(Action::ProxyMode(ProxyMode::System))),
+                ]);
+            }
             if self.scenario == "autostart" {
                 return Task::batch([
                     task,
@@ -156,6 +158,11 @@ impl MacFlow {
                 self.app
                     .update(Message::Action(Action::ProxyMode(ProxyMode::Tun))),
             ]);
+        }
+        if self.scenario == "system-lifecycle" && self.phase == 1 && action_finished {
+            self.phase = 10;
+            self.record(serde_json::json!({"restored_system_mode": !self.app.error && self.app.settings.proxy_mode == ProxyMode::System}));
+            return Task::batch([task, self.app.exit()]);
         }
         if self.scenario == "autostart" && action_finished {
             if self.app.error || (self.phase == 2 && !self.app.autostart) {

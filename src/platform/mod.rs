@@ -2,14 +2,10 @@
 use crate::config::atomic_write;
 use anyhow::{Context, Result, bail};
 use serde::{Deserialize, Serialize};
-use std::{collections::BTreeMap, path::Path};
+use std::path::Path;
 
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-pub enum ProxyValue {
-    Text(String),
-    Number(u32),
-}
-pub type ProxyState = BTreeMap<String, Option<ProxyValue>>;
+mod proxy_state;
+pub use proxy_state::{ProxyState, ProxyValue};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 struct Journal {
@@ -268,6 +264,9 @@ pub fn restore(journal_path: &Path) -> Result<bool> {
     let current = native::read()?;
     let restored = current == journal.owned;
     if restored {
+        #[cfg(target_os = "macos")]
+        native::restore_write(&journal.original)?;
+        #[cfg(not(target_os = "macos"))]
         native::write(&journal.original)?;
     }
     std::fs::remove_file(journal_path)?;

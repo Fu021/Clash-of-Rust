@@ -1377,6 +1377,9 @@ impl App {
                     self.updates.fail(error.to_string());
                     return Task::none();
                 }
+                if let Some(download) = self.updates.cached_for(&available.version) {
+                    return self.install_download(download);
+                }
                 let (id, registration) = self.updates.begin_download(
                     available
                         .package
@@ -1427,20 +1430,7 @@ impl App {
                 }
                 match result {
                     Some(Ok(downloaded)) => {
-                        self.updates.install_pending = true;
-                        return Task::perform(
-                            async move {
-                                match tokio::task::spawn_blocking(move || {
-                                    update::handoff(downloaded)
-                                })
-                                .await
-                                {
-                                    Ok(result) => result.map_err(|error| error.to_string()),
-                                    Err(_) => Err("安装助手无法启动，请重试".into()),
-                                }
-                            },
-                            Message::UpdateHandoff,
-                        );
+                        return self.install_download(Arc::new(downloaded));
                     }
                     Some(Err(reason)) => self.updates.fail(reason),
                     None => return Task::none(),
@@ -2122,6 +2112,9 @@ impl App {
                         return iced::window::latest().map(Message::ShowWindow);
                     }
                 }
+                if self.updates.install_pending || self.updates.installing.is_some() {
+                    self.updates.poll_install_stage();
+                }
                 if let Some(session) = self.updates.installing.clone()
                     && let Some((message, error)) = session.outcome()
                 {
@@ -2448,6 +2441,19 @@ impl App {
             Message::Window(_) => {}
         }
         Task::none()
+    }
+
+    fn install_download(&mut self, downloaded: Arc<update::Downloaded>) -> Task<Message> {
+        self.updates.prepare_install(downloaded.clone());
+        Task::perform(
+            async move {
+                match tokio::task::spawn_blocking(move || update::handoff(downloaded)).await {
+                    Ok(result) => result.map_err(|error| error.to_string()),
+                    Err(_) => Err("安装助手无法启动，请重试".into()),
+                }
+            },
+            Message::UpdateHandoff,
+        )
     }
 
     fn exit(&mut self) -> Task<Message> {
@@ -2829,7 +2835,12 @@ impl App {
         let update_status = if self.updates.failure.is_some() {
             self.updates.failure.as_deref()
         } else if self.updates.install_pending || self.updates.installing.is_some() {
-            Some("正在准备或安装更新；需要时会请求系统授权…")
+            Some(
+                self.updates
+                    .install_stage
+                    .as_deref()
+                    .unwrap_or("正在准备或安装更新；需要时会请求系统授权…"),
+            )
         } else {
             None
         };

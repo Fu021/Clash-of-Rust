@@ -34,37 +34,39 @@ pub struct Session {
 }
 impl Session {
     pub fn authorize() -> Result<Self> {
-        let launcher = std::env::current_exe()?
-            .parent()
-            .context("无法定位 TUN 助手")?
-            .join("clash-tun-launcher");
-        Self::authorize_with(&launcher, super::administrator)
+        Self::open(super::service::open_tun)
     }
+    #[cfg(test)]
     fn authorize_with(launcher: &Path, authorize: impl FnOnce(&str) -> Result<()>) -> Result<Self> {
-        let directory = tempfile::Builder::new().prefix("clash-tun-").tempdir()?;
-        std::fs::set_permissions(directory.path(), std::fs::Permissions::from_mode(0o700))?;
-        let token = uuid::Uuid::new_v4().to_string();
         ensure!(
             launcher.is_file(),
             "TUN 助手缺失，请使用完整的 macOS 安装包"
         );
+        Self::open(|socket, token| {
+            let script = format!(
+                "{} --macos-authorize {} {} {}",
+                super::shell_quote(&launcher.to_string_lossy()),
+                super::shell_quote(&socket.to_string_lossy()),
+                unsafe { libc::getuid() },
+                super::shell_quote(token)
+            );
+            #[cfg(feature = "ui-preview")]
+            let script = if std::env::var("GITHUB_ACTIONS").as_deref() == Ok("true")
+                && std::env::var("CLASH_CI_SHORT_IDLE").as_deref() == Ok("true")
+            {
+                format!("{script} --ci-short-idle")
+            } else {
+                script
+            };
+            authorize(&script)
+        })
+    }
+    fn open(start: impl FnOnce(&Path, &str) -> Result<()>) -> Result<Self> {
+        let directory = tempfile::Builder::new().prefix("clash-tun-").tempdir()?;
+        std::fs::set_permissions(directory.path(), std::fs::Permissions::from_mode(0o700))?;
+        let token = uuid::Uuid::new_v4().to_string();
         let socket = directory.path().join("core.sock");
-        let script = format!(
-            "{} --macos-authorize {} {} {}",
-            super::shell_quote(&launcher.to_string_lossy()),
-            super::shell_quote(&socket.to_string_lossy()),
-            unsafe { libc::getuid() },
-            super::shell_quote(&token)
-        );
-        #[cfg(feature = "ui-preview")]
-        let script = if std::env::var("GITHUB_ACTIONS").as_deref() == Ok("true")
-            && std::env::var("CLASH_CI_SHORT_IDLE").as_deref() == Ok("true")
-        {
-            format!("{script} --ci-short-idle")
-        } else {
-            script
-        };
-        authorize(&script)?;
+        start(&socket, &token)?;
         let session = Self { directory, token };
         let deadline = Instant::now() + Duration::from_secs(10);
         loop {
@@ -210,7 +212,7 @@ fn check_user_file(path: &Path, uid: u32, directory: bool) -> Result<()> {
     );
     Ok(())
 }
-fn core_path() -> Result<(PathBuf, String)> {
+pub(crate) fn core_path() -> Result<(PathBuf, String)> {
     let exe = std::env::current_exe()?;
     let parent = exe.parent().context("TUN 助手路径无效")?;
     let sibling = parent.join("resources");
@@ -238,7 +240,7 @@ fn core_path() -> Result<(PathBuf, String)> {
         .to_owned();
     Ok((core, expected))
 }
-fn terminate(child: &mut std::process::Child) {
+pub(crate) fn terminate(child: &mut std::process::Child) {
     if child.try_wait().ok().flatten().is_some() {
         return;
     }
@@ -406,6 +408,9 @@ fn run_core(mut stream: UnixStream, request: Request, uid: u32, core: &Path) -> 
     });
     let result = (|| {
         loop {
+            if USER_STOP.load(std::sync::atomic::Ordering::Relaxed) {
+                break;
+            }
             match receive.recv_timeout(Duration::from_millis(100)) {
                 Ok(Some(line)) => {
                     serde_json::to_writer(
@@ -439,12 +444,21 @@ fn run_core(mut stream: UnixStream, request: Request, uid: u32, core: &Path) -> 
     restore_runtime_owner(&runtime, uid)?;
     result
 }
+pub(crate) fn validate_session_path(socket: &Path, uid: u32) -> Result<()> {
+    ensure!(
+        socket.is_absolute()
+            && socket.file_name().is_some_and(|name| name == "core.sock")
+            && !socket.exists(),
+        "TUN 会话路径无效"
+    );
+    check_user_file(socket.parent().context("TUN 会话路径无效")?, uid, true)
+}
 fn serve(socket: &Path, uid: u32, token: &str, idle_limit: Duration) -> Result<()> {
     ensure!(
         unsafe { libc::geteuid() } == 0 && uid != 0 && uuid::Uuid::parse_str(token).is_ok(),
         "TUN 服务身份无效"
     );
-    check_user_file(socket.parent().context("TUN 会话路径无效")?, uid, true)?;
+    validate_session_path(socket, uid)?;
     let (source, expected) = core_path()?;
     // Freeze the authorized executable in a root-private directory. A later
     // user-space app replacement must never change what this lease executes.
@@ -466,7 +480,10 @@ fn serve(socket: &Path, uid: u32, token: &str, idle_limit: Duration) -> Result<(
     );
     listener.set_nonblocking(true)?;
     let mut idle = Instant::now();
-    while idle.elapsed() < idle_limit && socket.exists() {
+    while idle.elapsed() < idle_limit
+        && socket.exists()
+        && !USER_STOP.load(std::sync::atomic::Ordering::Relaxed)
+    {
         let (mut stream, _) = match listener.accept() {
             Ok(value) => value,
             Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {
@@ -611,6 +628,14 @@ fn session_idle_limit(args: &[String]) -> Result<Duration> {
 pub fn launcher_main() -> Result<i32> {
     let args: Vec<String> = std::env::args().skip(1).collect();
     match args.first().map(String::as_str) {
+        Some("--macos-install-service") if args.len() == 2 => {
+            super::service::install(args[1].parse()?)?;
+            Ok(0)
+        }
+        Some("--macos-network-service") if args.len() == 2 => {
+            super::service::serve(args[1].parse()?)?;
+            Ok(0)
+        }
         Some("--macos-user-core") if args.len() >= 2 => {
             ensure!(
                 unsafe { libc::geteuid() } != 0,
@@ -672,6 +697,9 @@ pub fn launcher_main() -> Result<i32> {
             Ok(0)
         }
         Some("--macos-serve") if args.len() >= 4 => {
+            unsafe {
+                libc::signal(libc::SIGTERM, user_stop as *const () as usize);
+            }
             serve(
                 Path::new(&args[1]),
                 args[2].parse()?,

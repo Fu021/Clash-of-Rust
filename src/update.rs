@@ -10,7 +10,11 @@ use reqwest::{Client, StatusCode, Url};
 use semver::Version;
 use serde::Deserialize;
 use sha2::{Digest, Sha256};
-use std::{path::PathBuf, time::Duration};
+use std::{
+    path::{Path, PathBuf},
+    sync::{Arc, Mutex},
+    time::Duration,
+};
 use tokio::io::AsyncWriteExt;
 
 pub const RELEASES_URL: &str = "https://github.com/Fu021/Clash-of-Rust/releases";
@@ -42,10 +46,28 @@ pub struct Progress {
 
 #[derive(Debug)]
 pub struct Downloaded {
-    directory: tempfile::TempDir,
+    directory: Mutex<Option<tempfile::TempDir>>,
     package: PathBuf,
     sha256: String,
     version: String,
+}
+
+impl Downloaded {
+    pub fn directory(&self) -> &Path {
+        self.package
+            .parent()
+            .expect("downloaded package has an owned directory")
+    }
+    fn relinquish(&self) {
+        if let Some(directory) = self
+            .directory
+            .lock()
+            .expect("download directory lock")
+            .take()
+        {
+            directory.keep();
+        }
+    }
 }
 
 #[cfg(all(target_os = "macos", feature = "ui-preview"))]
@@ -57,7 +79,7 @@ pub fn fixture_download(package: &std::path::Path, version: String) -> Result<Do
     std::fs::copy(package, &destination)?;
     let sha256 = crate::assets::hash_file(&destination)?.0;
     Ok(Downloaded {
-        directory,
+        directory: Mutex::new(Some(directory)),
         package: destination,
         sha256,
         version,
@@ -81,6 +103,9 @@ pub struct State {
     pub progress: Option<Progress>,
     pub installing: Option<InstallSession>,
     pub install_pending: bool,
+    pub install_stage: Option<String>,
+    pub install_directory: Option<PathBuf>,
+    cached_download: Option<Arc<Downloaded>>,
     pub failure: Option<String>,
     pub outcome: Option<String>,
     download_id: u64,
@@ -102,7 +127,37 @@ impl State {
         self.progress.is_some() || self.installing.is_some() || self.install_pending
     }
 
+    pub fn cached_for(&self, version: &str) -> Option<Arc<Downloaded>> {
+        self.cached_download
+            .as_ref()
+            .filter(|download| download.version == version && download.package.is_file())
+            .cloned()
+    }
+
+    pub fn prepare_install(&mut self, download: Arc<Downloaded>) {
+        self.install_directory = Some(download.directory().to_owned());
+        self.cached_download = Some(download);
+        self.install_pending = true;
+        self.install_stage = Some("正在启动安装助手…".into());
+        self.failure = None;
+    }
+
+    pub fn poll_install_stage(&mut self) {
+        use std::io::Read;
+        if let Some(directory) = &self.install_directory
+            && let Ok(file) = std::fs::File::open(directory.join("stage.json"))
+        {
+            let mut bytes = Vec::new();
+            if file.take(4096).read_to_end(&mut bytes).is_ok()
+                && let Ok(stage) = serde_json::from_slice::<String>(&bytes)
+            {
+                self.install_stage = Some(stage);
+            }
+        }
+    }
+
     pub fn begin_download(&mut self, total: u64) -> (u64, AbortRegistration) {
+        self.cached_download = None;
         if let Some(handle) = self.download_abort.take() {
             handle.abort();
         }
@@ -146,6 +201,17 @@ impl State {
         self.progress = None;
         self.installing = None;
         self.install_pending = false;
+        self.install_directory = None;
+        self.install_stage = None;
+        if reason.contains("校验")
+            || reason.contains("签名")
+            || reason.contains("架构")
+            || reason.contains("版本")
+            || reason.contains("删除")
+            || reason.contains("超时")
+        {
+            self.cached_download = None;
+        }
         self.failure = Some(format!("更新失败：{reason}"));
     }
 
@@ -411,7 +477,7 @@ async fn download_package(
     )
     .await?;
     Ok(Downloaded {
-        directory,
+        directory: Mutex::new(Some(directory)),
         package: path,
         sha256: expected,
         version: available.version,
@@ -534,6 +600,65 @@ async fn release_bytes(mut response: reqwest::Response) -> Result<Vec<u8>> {
 mod tests {
     use super::*;
     use tokio::io::{AsyncReadExt, AsyncWriteExt};
+
+    #[test]
+    fn preparation_retry_reuses_only_the_same_verified_download_and_cleans_it_on_drop() {
+        let directory = tempfile::Builder::new()
+            .prefix("clash-of-rust-update-")
+            .tempdir()
+            .unwrap();
+        let root = directory.path().to_owned();
+        let package = root.join("package");
+        std::fs::write(&package, b"verified installer").unwrap();
+        let download = Arc::new(Downloaded {
+            directory: Mutex::new(Some(directory)),
+            package,
+            sha256: format!("{:x}", Sha256::digest(b"verified installer")),
+            version: "0.5.7".into(),
+        });
+        let mut state = State::default();
+        state.prepare_install(download.clone());
+        drop(download);
+        crate::config::atomic_write(
+            &root.join("stage.json"),
+            &serde_json::to_vec("正在校验更新应用…").unwrap(),
+        )
+        .unwrap();
+        state.poll_install_stage();
+        assert_eq!(state.install_stage.as_deref(), Some("正在校验更新应用…"));
+        state.fail("挂载更新 DMG 失败".into());
+        assert!(!state.busy());
+        assert!(state.cached_for("0.5.7").is_some());
+        assert!(state.cached_for("0.5.8").is_none());
+        assert!(root.exists());
+        drop(state);
+        assert!(!root.exists(), "abandoned retry retained its installer");
+    }
+
+    #[test]
+    fn invalid_or_timed_out_installer_is_never_reused() {
+        for reason in [
+            "安装包校验失败",
+            "更新签名无效",
+            "更新架构不匹配",
+            "安装授权超时",
+        ] {
+            let directory = tempfile::tempdir().unwrap();
+            let root = directory.path().to_owned();
+            let package = root.join("package");
+            std::fs::write(&package, b"fixture").unwrap();
+            let mut state = State::default();
+            state.prepare_install(Arc::new(Downloaded {
+                directory: Mutex::new(Some(directory)),
+                package,
+                sha256: String::new(),
+                version: "0.5.7".into(),
+            }));
+            state.fail(reason.into());
+            assert!(state.cached_for("0.5.7").is_none());
+            assert!(!root.exists());
+        }
+    }
 
     fn release(tag: &str, preview: bool) -> Release {
         Release {
@@ -947,7 +1072,7 @@ mod tests {
                 .collect::<Vec<_>>(),
             [0, body.len() as u64, 0, body.len() as u64]
         );
-        let directory = downloaded.directory.path().to_owned();
+        let directory = downloaded.directory().to_owned();
         drop(downloaded);
         assert!(!directory.exists());
         bad_task.await.unwrap();

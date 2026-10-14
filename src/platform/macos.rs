@@ -6,7 +6,6 @@ use std::{
     path::{Path, PathBuf},
     process::Command,
     ptr,
-    sync::Mutex,
 };
 mod authorization;
 mod cf;
@@ -18,103 +17,18 @@ pub mod tun;
 
 #[link(name = "SystemConfiguration", kind = "framework")]
 unsafe extern "C" {
-    fn SCPreferencesCreate(a: Ref, name: Ref, id: Ref) -> Ref;
-    fn SCPreferencesCreateWithAuthorization(a: Ref, name: Ref, id: Ref, auth: Ref) -> Ref;
-    fn SCPreferencesPathGetValue(prefs: Ref, path: Ref) -> Ref;
-    fn SCPreferencesPathSetValue(prefs: Ref, path: Ref, value: Ref) -> u8;
-    fn SCPreferencesPathRemoveValue(prefs: Ref, path: Ref) -> u8;
-    fn SCPreferencesLock(prefs: Ref, wait: u8) -> u8;
-    fn SCPreferencesUnlock(prefs: Ref) -> u8;
-    fn SCPreferencesCommitChanges(prefs: Ref) -> u8;
-    fn SCPreferencesApplyChanges(prefs: Ref) -> u8;
     fn SCDynamicStoreCopyProxies(store: Ref) -> Ref;
-    fn SCError() -> i32;
 }
-#[link(name = "Security", kind = "framework")]
-unsafe extern "C" {
-    fn AuthorizationCreate(rights: Ref, environment: Ref, flags: u32, auth: *mut Ref) -> i32;
-    fn AuthorizationFree(auth: Ref, flags: u32) -> i32;
-    fn AuthorizationCopyRights(
-        auth: Ref,
-        rights: *const AuthorizationRights,
-        environment: Ref,
-        flags: u32,
-        authorized: Ref,
-    ) -> i32;
-}
-#[repr(C)]
-struct AuthorizationItem {
-    name: *const std::ffi::c_char,
-    value_length: usize,
-    value: *mut std::ffi::c_void,
-    flags: u32,
-}
-#[repr(C)]
-struct AuthorizationRights {
-    count: u32,
-    items: *mut AuthorizationItem,
-}
-struct Authorization(Ref);
-// The opaque Security session has no thread affinity. All access, including
-// freeing it, is serialized by PROXY_AUTHORIZATION.
-unsafe impl Send for Authorization {}
-static PROXY_AUTHORIZATION: Mutex<Option<Authorization>> = Mutex::new(None);
-#[cfg(feature = "ui-preview")]
-static PROXY_AUTHORIZATION_CREATIONS: std::sync::atomic::AtomicUsize =
-    std::sync::atomic::AtomicUsize::new(0);
+mod native_proxy;
+pub mod service;
+pub use native_proxy::read;
 #[cfg(feature = "ui-preview")]
 pub fn ci_proxy_authorization_creations() -> usize {
-    PROXY_AUTHORIZATION_CREATIONS.load(std::sync::atomic::Ordering::Relaxed)
-}
-impl Drop for Authorization {
-    fn drop(&mut self) {
-        unsafe { AuthorizationFree(self.0, 0) };
-    }
-}
-fn preferences(auth: Option<&Authorization>) -> Result<Owned> {
-    let name = cf::string("Clash of Rust")?;
-    Owned::new(unsafe {
-        match auth {
-            Some(auth) => {
-                SCPreferencesCreateWithAuthorization(ptr::null(), name.0, ptr::null(), auth.0)
-            }
-            None => SCPreferencesCreate(ptr::null(), name.0, ptr::null()),
-        }
-    })
-}
-fn sc_check(ok: u8, action: &str) -> Result<()> {
-    ensure!(
-        ok != 0,
-        "{action}失败（macOS SystemConfiguration {}），请检查授权与网络服务",
-        unsafe { SCError() }
-    );
-    Ok(())
+    // SystemConfiguration now runs in the authorized helper, without Security dialogs.
+    0
 }
 pub fn description() -> &'static str {
     "macOS 网络服务代理（HTTP / HTTPS / SOCKS）"
-}
-pub fn read() -> Result<ProxyState> {
-    let prefs = preferences(None)?;
-    let key = cf::string("/NetworkServices")?;
-    let value = unsafe { SCPreferencesPathGetValue(prefs.0, key.0) };
-    ensure!(!value.is_null(), "没有可配置的 macOS 网络服务");
-    let mut state = ProxyState::new();
-    for id in cf::dictionary_keys(value)? {
-        let interface = cf::string(&format!("/NetworkServices/{id}/Interface"))?;
-        if unsafe { SCPreferencesPathGetValue(prefs.0, interface.0) }.is_null() {
-            continue;
-        }
-        let path = cf::string(&format!("/NetworkServices/{id}/Proxies"))?;
-        let value = unsafe { SCPreferencesPathGetValue(prefs.0, path.0) };
-        let proxy = if value.is_null() {
-            None
-        } else {
-            Some(ProxyValue::Text(cf::json(value)?.to_string()))
-        };
-        state.insert(id, proxy);
-    }
-    ensure!(!state.is_empty(), "没有可配置的 macOS 网络服务");
-    Ok(state)
 }
 pub fn desired(original: &ProxyState, port: u16) -> Result<ProxyState> {
     original
@@ -139,9 +53,6 @@ pub fn desired(original: &ProxyState, port: u16) -> Result<ProxyState> {
         .collect()
 }
 pub fn write(state: &ProxyState) -> Result<()> {
-    let mut session = PROXY_AUTHORIZATION
-        .lock()
-        .map_err(|_| anyhow::anyhow!("系统代理授权会话不可用，请重新启动客户端"))?;
     let current = read()?;
     if state
         .iter()
@@ -149,87 +60,16 @@ pub fn write(state: &ProxyState) -> Result<()> {
     {
         return Ok(());
     }
-    if session.is_none() {
-        let mut auth = ptr::null();
-        ensure!(
-            unsafe { AuthorizationCreate(ptr::null(), ptr::null(), 0, &mut auth) } == 0,
-            "无法创建系统代理授权"
-        );
-        *session = Some(Authorization(auth));
-        #[cfg(feature = "ui-preview")]
-        PROXY_AUTHORIZATION_CREATIONS.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    if unsafe { libc::geteuid() } == 0 {
+        return native_proxy::write(state);
     }
-    let auth = session.as_ref().unwrap();
-    let mut item = AuthorizationItem {
-        name: c"system.services.systemconfiguration.network".as_ptr(),
-        value_length: 0,
-        value: ptr::null_mut(),
-        flags: 0,
-    };
-    let rights = AuthorizationRights {
-        count: 1,
-        items: &mut item,
-    };
-    // First reuse rights/credentials without interaction. Let Security decide
-    // whether renewed authorization is required; never cache an "allowed" bool.
-    let mut status =
-        unsafe { AuthorizationCopyRights(auth.0, &rights, ptr::null(), 2, ptr::null()) };
-    if status != 0 {
-        status =
-            unsafe { AuthorizationCopyRights(auth.0, &rights, ptr::null(), 1 | 2, ptr::null()) };
+    service::write_proxy(state)
+}
+pub fn restore_write(state: &ProxyState) -> Result<()> {
+    if unsafe { libc::geteuid() } == 0 {
+        return native_proxy::write(state);
     }
-    ensure!(status != -60006, "已取消系统代理授权，原设置未改变");
-    ensure!(
-        status == 0,
-        "系统代理授权失败（macOS Security {status}），原设置未改变"
-    );
-    let prefs = preferences(Some(auth))?;
-    sc_check(
-        unsafe { SCPreferencesLock(prefs.0, 0) },
-        "锁定网络设置（其他程序占用时请重试）",
-    )?;
-    let result = (|| {
-        for (id, value) in state {
-            ensure!(
-                !id.is_empty() && id.chars().all(|c| c.is_ascii_alphanumeric() || c == '-'),
-                "网络服务标识无效"
-            );
-            let service = cf::string(&format!("/NetworkServices/{id}"))?;
-            ensure!(
-                !unsafe { SCPreferencesPathGetValue(prefs.0, service.0) }.is_null(),
-                "网络服务已发生变化，请重新启用系统代理"
-            );
-            let path = cf::string(&format!("/NetworkServices/{id}/Proxies"))?;
-            match value {
-                Some(ProxyValue::Text(text)) => {
-                    let value = cf::plist(&serde_json::from_str::<Value>(text)?)?;
-                    sc_check(
-                        unsafe { SCPreferencesPathSetValue(prefs.0, path.0, value.0) },
-                        "写入网络服务代理",
-                    )?;
-                }
-                None => {
-                    if !unsafe { SCPreferencesPathGetValue(prefs.0, path.0) }.is_null() {
-                        sc_check(
-                            unsafe { SCPreferencesPathRemoveValue(prefs.0, path.0) },
-                            "恢复网络服务代理",
-                        )?;
-                    }
-                }
-                _ => bail!("网络服务代理属性无效"),
-            }
-        }
-        sc_check(
-            unsafe { SCPreferencesCommitChanges(prefs.0) },
-            "保存网络设置",
-        )?;
-        sc_check(
-            unsafe { SCPreferencesApplyChanges(prefs.0) },
-            "应用网络设置",
-        )
-    })();
-    unsafe { SCPreferencesUnlock(prefs.0) };
-    result
+    service::restore_proxy(state)
 }
 pub fn configured_proxy(scheme: &str) -> Result<Option<String>> {
     let proxies = Owned::new(unsafe { SCDynamicStoreCopyProxies(ptr::null()) })?;

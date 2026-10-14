@@ -8,6 +8,7 @@ use std::{
     io::Read,
     path::{Path, PathBuf},
     process::{Command, Stdio},
+    sync::Arc,
     time::{Duration, Instant},
 };
 
@@ -80,14 +81,20 @@ fn command(executable: &Path) -> Command {
     command
 }
 
-pub fn handoff(download: Downloaded) -> Result<InstallSession> {
-    let directory = download.directory.path().to_owned();
+pub fn handoff(download: Arc<Downloaded>) -> Result<InstallSession> {
+    let directory = download.directory().to_owned();
+    for name in ["ready", "cancel", "outcome.json", "stage.json"] {
+        let path = directory.join(name);
+        if path.exists() {
+            fs::remove_file(path)?;
+        }
+    }
     let executable = ensure_installable()?;
     let plan = Plan {
-        package: download.package,
+        package: download.package.clone(),
         executable,
-        sha256: download.sha256,
-        version: download.version,
+        sha256: download.sha256.clone(),
+        version: download.version.clone(),
         parent: std::process::id(),
     };
     let helper = directory.join(if cfg!(windows) {
@@ -106,10 +113,13 @@ pub fn handoff(download: Downloaded) -> Result<InstallSession> {
     let deadline = Instant::now() + Duration::from_secs(240);
     loop {
         if let Some((reason, true)) = read_outcome(&directory) {
+            let _ = fs::write(directory.join("cancel"), b"");
+            let _ = child.kill();
+            let _ = child.wait();
             bail!("{}", reason.strip_prefix("更新失败：").unwrap_or(&reason));
         }
         if directory.join("ready").exists() {
-            let _ = download.directory.keep();
+            download.relinquish();
             return Ok(InstallSession {
                 directory,
                 helper_pid: child.id(),
@@ -174,7 +184,7 @@ pub fn helper_main() -> bool {
     let cancelled = directory.join("cancel").exists();
     let (message, error) = match &result {
         Ok(plan) => (format!("已更新至 {}", plan.version), false),
-        Err(error) => (format!("更新失败：{error}"), true),
+        Err(error) => (format!("更新失败：{error:#}"), true),
     };
     let _ = crate::config::atomic_write(
         &directory.join("outcome.json"),
@@ -200,6 +210,11 @@ pub fn helper_main() -> bool {
         }
     }
     true
+}
+
+#[cfg(target_os = "macos")]
+fn stage(directory: &Path, message: &str) -> Result<()> {
+    crate::config::atomic_write(&directory.join("stage.json"), &serde_json::to_vec(message)?)
 }
 
 pub fn read_outcome(directory: &Path) -> Option<(String, bool)> {
