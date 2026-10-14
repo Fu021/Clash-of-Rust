@@ -212,12 +212,20 @@ def notification_service(output):
     if host_system() != 'linux':
         yield
         return
-    # The bus starts before Xvfb; relying on D-Bus activation would give dunst
-    # no DISPLAY. Start the real service in the ordinary user's desktop session.
-    with (output/'notification-service.log').open('w') as log:
-        daemon = subprocess.Popen(['dunst','-verbosity','warn'],stdout=log,stderr=log)
+    # Filesystem Unix sockets remain reachable from the isolated net namespace;
+    # the default abstract session-bus socket does not.
+    original = os.environ.get('DBUS_SESSION_BUS_ADDRESS')
+    with tempfile.TemporaryDirectory(prefix='cor-notify-bus-') as directory, (output/'notification-service.log').open('w') as log:
+        address = 'unix:path='+str(Path(directory)/'bus')
+        bus = subprocess.Popen(['dbus-daemon','--session','--nofork','--address='+address],stdout=log,stderr=log)
+        os.environ['DBUS_SESSION_BUS_ADDRESS'] = address
+        daemon = None
         try:
             deadline = time.monotonic()+10
+            while not (Path(directory)/'bus').exists():
+                assert bus.poll() is None and time.monotonic()<deadline, 'Filesystem notification bus did not start'
+                time.sleep(.05)
+            daemon = subprocess.Popen(['dunst','-verbosity','warn'],stdout=log,stderr=log)
             while time.monotonic() < deadline:
                 assert daemon.poll() is None, 'Native notification service exited'
                 ready = subprocess.run(['gdbus','call','--session','--dest','org.freedesktop.DBus','--object-path','/org/freedesktop/DBus','--method','org.freedesktop.DBus.NameHasOwner','org.freedesktop.Notifications'],capture_output=True,text=True)
@@ -228,18 +236,53 @@ def notification_service(output):
                 raise RuntimeError('Native notification service did not become ready')
             yield
         finally:
-            daemon.terminate()
-            try:
-                daemon.wait(timeout=5)
-            except subprocess.TimeoutExpired:
-                daemon.kill();daemon.wait()
+            for process in (daemon, bus):
+                if process:
+                    process.terminate()
+                    try:
+                        process.wait(timeout=5)
+                    except subprocess.TimeoutExpired:
+                        process.kill();process.wait()
+            if original is None:
+                os.environ.pop('DBUS_SESSION_BUS_ADDRESS',None)
+            else:
+                os.environ['DBUS_SESSION_BUS_ADDRESS']=original
+
+
+@contextlib.contextmanager
+def ipv6_uplink(output):
+    # Mihomo checks physical-interface IPv6 at process startup. These VMs are
+    # IPv4-only; add only a documentation address, no IPv6 default gateway.
+    system=host_system()
+    if system=='linux':
+        yield  # The existing isolated namespace supplies its dummy IPv6 uplink.
+        return
+    address='2001:db8:1::1'
+    interface=None
+    if system=='macos':
+        route=subprocess.check_output(['/sbin/route','-n','get','default'],text=True)
+        interface=next(line.split(':',1)[1].strip() for line in route.splitlines() if line.strip().startswith('interface:'))
+        run(['sudo','/sbin/ifconfig',interface,'inet6',address,'prefixlen','64','alias'])
+    else:
+        command="$ErrorActionPreference='Stop'; $i=(Get-NetRoute -AddressFamily IPv4 -DestinationPrefix '0.0.0.0/0' | Sort-Object RouteMetric | Select-Object -First 1).InterfaceIndex; New-NetIPAddress -InterfaceIndex $i -AddressFamily IPv6 -IPAddress '2001:db8:1::1' -PrefixLength 64 -PolicyStore ActiveStore | Out-Null; Write-Output $i"
+        interface=subprocess.check_output(['powershell','-NoProfile','-NonInteractive','-Command',command],text=True).strip()
+    try:
+        time.sleep(2)  # Complete duplicate-address detection before core startup.
+        write_json(output/'ipv6-test-uplink.json',{'interface':interface,'address':address,'scope':'temporary documentation address; no IPv6 default route'})
+        yield
+    finally:
+        if system=='macos':
+            subprocess.run(['sudo','/sbin/ifconfig',interface,'inet6',address,'delete'],check=True)
+        else:
+            command="Remove-NetIPAddress -InterfaceIndex "+interface+" -IPAddress '2001:db8:1::1' -Confirm:$false -ErrorAction Stop"
+            subprocess.run(['powershell','-NoProfile','-NonInteractive','-Command',command],check=True)
 
 
 def check(build, output):
     manifest = json.loads((build/'manifest.json').read_text())
     report = output/'results.json'
     output.mkdir(parents=True, exist_ok=True)
-    with notification_service(output), tempfile.TemporaryDirectory(prefix='cor-claude-ca-') as temporary:
+    with notification_service(output), ipv6_uplink(output), tempfile.TemporaryDirectory(prefix='cor-claude-ca-') as temporary:
         with trusted_fixture(Path(temporary)) as (cert, key, ca):
             env = {'CLASH_CLAUDE_TEST_REPORT': str(report.resolve()), 'CLASH_CLAUDE_TEST_CERT': str(cert),
                    'CLASH_CLAUDE_TEST_CA': str(ca),
