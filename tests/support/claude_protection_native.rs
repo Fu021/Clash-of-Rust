@@ -120,7 +120,7 @@ impl Socks {
     }
 }
 async fn capture(engine: &mut Engine, label: &str) -> Report {
-    let client = check::client(Some(engine.settings.mixed_port)).unwrap();
+    let client = detector_client(engine.settings.mixed_port);
     let mut report = Report::new(
         check::Environment::Core,
         &format!(
@@ -168,6 +168,18 @@ async fn capture(engine: &mut Engine, label: &str) -> Report {
     }
     report.validate().unwrap();
     report
+}
+fn detector_client(port: u16) -> reqwest::Client {
+    let ca = std::fs::read(std::env::var_os("CLASH_CLAUDE_TEST_CA").unwrap()).unwrap();
+    reqwest::Client::builder()
+        .no_proxy()
+        .proxy(reqwest::Proxy::all(format!("http://127.0.0.1:{port}")).unwrap())
+        .add_root_certificate(reqwest::Certificate::from_pem(&ca).unwrap())
+        .connect_timeout(Duration::from_secs(4))
+        .timeout(Duration::from_secs(8))
+        .redirect(reqwest::redirect::Policy::none())
+        .build()
+        .unwrap()
 }
 async fn hold(client: &reqwest::Client, host: &str, port: u16) -> reqwest::Response {
     client
@@ -266,7 +278,7 @@ pub async fn run() {
     let mut normal = hold(&client, "api.anthropic.com", servers.http).await;
     assert!(normal.chunk().await.unwrap().is_some());
     let mut protected = capture(&mut engine, "保护开启后").await;
-    let detector = check::client(Some(mixed_port)).unwrap();
+    let detector = detector_client(mixed_port);
     for kind in [
         check::additional::Kind::Registration,
         check::additional::Kind::GlobalPing,

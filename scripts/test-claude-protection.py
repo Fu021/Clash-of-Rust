@@ -187,7 +187,7 @@ def trusted_fixture(directory):
             run(['sudo', 'security', 'add-trusted-cert', '-d', '-r', 'trustRoot', '-k', '/Library/Keychains/System.keychain', ca])
         else:
             run(['certutil', '-addstore', 'Root', ca])
-        yield cert, key
+        yield cert, key, ca
     finally:
         if installed:
             run(['sudo', 'rm', '-f', installed])
@@ -203,8 +203,9 @@ def check(build, output):
     report = output/'results.json'
     output.mkdir(parents=True, exist_ok=True)
     with tempfile.TemporaryDirectory(prefix='cor-claude-ca-') as temporary:
-        with trusted_fixture(Path(temporary)) as (cert, key):
+        with trusted_fixture(Path(temporary)) as (cert, key, ca):
             env = {'CLASH_CLAUDE_TEST_REPORT': str(report.resolve()), 'CLASH_CLAUDE_TEST_CERT': str(cert),
+                   'CLASH_CLAUDE_TEST_CA': str(ca),
                    'CLASH_CLAUDE_TEST_KEY': str(key), 'CLASH_CLAUDE_TEST_SCRIPT': str(Path(__file__).resolve()),
                    'CLASH_CLAUDE_TEST_PYTHON': sys.executable}
             original = {name: os.environ.get(name) for name in env}
