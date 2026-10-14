@@ -582,9 +582,10 @@ pub async fn run() {
         .as_mapping_mut()
         .unwrap()
         .remove(serde_yaml::Value::from("proxies"));
-    provider_profile["proxy-providers"] =
-        serde_yaml::to_value(serde_json::json!({"Feed":{"type":"file","path":"providers/fixture.yaml"}}))
-            .unwrap();
+    provider_profile["proxy-providers"] = serde_yaml::to_value(
+        serde_json::json!({"Feed":{"type":"file","path":"providers/fixture.yaml"}}),
+    )
+    .unwrap();
     provider_profile["proxy-groups"] =
         serde_yaml::to_value(serde_json::json!([{"name":"Main","type":"select","use":["Feed"]}]))
             .unwrap();
