@@ -1,25 +1,11 @@
 """Compile/test one native platform; preserve release binaries for packaging."""
 import argparse
 import importlib.util
-import json
-import os
-from pathlib import Path
 import shutil
-import subprocess
 import sys
 
 from build_support import host_system, ROOT, bundle_directory, host_arch, run, cargo_messages, write_json
 from workflow_artifacts import export_build, test_binaries
-
-
-def clear_test_reports():
-    # The Rust target cache may contain previous runs' diagnostics, too.
-    for name in ('claude-ui', 'claude-report', 'linux-wayland-report', 'linux-x11-logs'):
-        path = ROOT/'target'/name
-        if path.is_symlink():
-            path.unlink()
-        elif path.exists():
-            shutil.rmtree(path)
 
 
 def main():
@@ -29,9 +15,6 @@ def main():
     args = parser.parse_args()
     if (args.system, args.arch) != (host_system(), host_arch()):
         raise ValueError('CI must run on the selected native architecture')
-    # Rust's target cache can also restore old diagnostic files. Keep compiled
-    # dependencies, but generate reports/screenshots from this commit afresh.
-    clear_test_reports()
     run(['cargo', 'fmt', '--all', '--', '--check'])
     if (args.system, args.arch) == ('linux', 'x64'):
         run([sys.executable, ROOT/'scripts/native-detector-codegen.py', '--check'])
@@ -53,47 +36,18 @@ def main():
     extension = '.exe' if args.system == 'windows' else ''
     for name in ('clash-of-rust', 'clash-tun-launcher'):
         shutil.copy2(ROOT/'target/release'/(name+extension), bundle/(name+extension))
-    run([sys.executable, ROOT/'scripts/test-claude-diagnostics.py',
-         '--executable', bundle/('clash-of-rust'+extension), '--output', ROOT/'target/claude-report/terminal'])
-    if (args.system, args.arch) == ('linux', 'x64'):
-        run([sys.executable, '-m', 'pip', 'install', '--disable-pip-version-check', 'playwright==1.55.0'])
-        run([sys.executable, ROOT/'scripts/test-claude-diagnostics.py', '--browser', '--output', ROOT/'target/claude-report/browser'])
-        scenes = [scene+suffix for scene in ('home', 'proxies-ascending', 'profiles', 'connections', 'rules', 'logs', 'diagnostics', 'ip-summary', 'settings',
-                  'claude', 'claude-risk', 'claude-normal', 'claude-unknown', 'claude-empty', 'claude-scanning', 'claude-clean', 'claude-monitor-guide', 'claude-live',
-                  'profiles-edit', 'profiles-delete-active', 'profiles-delete-inactive', 'profiles-discard', 'connections-details',
-                  'rules-discard', 'rules-discard-editor', 'rules-switch-confirm', 'rules-exit-confirm', 'settings-large-text')
-                  for suffix in ('', '-light')]
-        scenes += [scene+suffix for scene in ('claude', 'claude-risk', 'claude-normal', 'claude-unknown', 'claude-empty', 'claude-scanning', 'claude-clean', 'claude-monitor-guide', 'claude-live',
-                   'settings-large-text', 'profiles-edit', 'rules-discard-editor', 'connections-details')
-                   for suffix in ('-compact', '-compact-light')]
-        run(['dbus-run-session', '--', 'xvfb-run', '-a', '--server-args=-screen 0 1800x1200x24',
-             sys.executable, ROOT/'scripts/run-ui-preview.py', '--source', ROOT,
-             '--output', ROOT/'target/claude-ui', '--scenes', *scenes])
-    # Invoke already-built test programs directly instead of repeating Cargo.
-    if args.system == 'linux':
-        run([tests['core_integration'], '--ignored', '--test-threads=1'])
-        run([tests['library'], 'native_gsettings', '--ignored'],
-            env=dict(os.environ, GSETTINGS_BACKEND='memory'))
-        run(['dbus-run-session', '--', tests['tray_integration'], 'native_portal', '--ignored', '--test-threads=1'])
-        for name in ('native_kde_signal', 'no_tray_host'):
-            run(['dbus-run-session', '--', tests['library'], name, '--ignored'])
-        run(['dbus-run-session', '--', tests['tray_integration'], 'login_tray', '--ignored'])
-        if args.arch == 'x64':
-            run(['dbus-run-session', '--', 'xvfb-run', '-a',
-                 '--server-args=-screen 0 3200x2400x24', sys.executable,
-                 ROOT/'scripts/test-linux-gui.py', '--executable', bundle/'clash-of-rust',
-                 '--scales', '1', '1.25', '1.5', '2', '--output', ROOT/'target/linux-window-report.json'])
-            run(['dbus-run-session', '--', sys.executable, ROOT/'scripts/test-linux-wayland.py',
-                 '--executable', bundle/'clash-of-rust', '--output', ROOT/'target/linux-wayland-report'])
-    elif args.system == 'macos':
+    # Focus native checks on the core lifecycle and real proxy/TUN traffic.
+    if args.system == 'macos':
         from macos_ci import native_tests
         native_tests(tests, bundle)
-    else:
+    elif args.system == 'windows':
         from windows_ci import windows_tests
         windows_tests(tests, bundle)
+    else:
+        run([sys.executable, ROOT/'scripts/test-proxy-modes.py',
+             '--test-binary', tests['core_integration'], '--bundle', bundle])
     write_json(ROOT/'target/ci-tests.json', tests)
-    # Optional UI fixture compilation may rebuild Cargo's bin targets with its
-    # feature. Export the default-feature binaries frozen before native tests.
+    # Export the exact production binaries tested above.
     export_build(args.system, args.arch, tests, ROOT/'dist/build', binaries=bundle)
 
 

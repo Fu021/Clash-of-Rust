@@ -31,7 +31,7 @@ PACKAGES = {
     'package-macos-x64': 'macos-x64.dmg',
     'package-macos-arm64': 'macos-arm64.dmg',
 }
-PACKAGE_JOBS = set(PACKAGES) | {'Ubuntu latest-x64 TUN and GUI'}
+PACKAGE_JOBS = set(PACKAGES) | {'Ubuntu latest-x64 proxy and TUN'}
 
 
 def git(*args):

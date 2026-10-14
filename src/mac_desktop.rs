@@ -1,6 +1,4 @@
 //! Dock reopen support. Iced/winit's existing delegate retains all lifecycle duties.
-#[cfg(feature = "ui-preview")]
-use objc2::Message;
 use objc2::{
     Encode, ffi,
     runtime::{AnyObject, Bool, Imp, Sel},
@@ -126,36 +124,4 @@ pub(crate) fn pump() -> Result<Events, String> {
         reopen: REOPEN.swap(false, Ordering::AcqRel),
         quit: QUIT.swap(false, Ordering::AcqRel),
     })
-}
-
-#[cfg(feature = "ui-preview")]
-pub(crate) fn simulate_native_quit() {
-    let mtm = MainThreadMarker::new().unwrap();
-    NSApplication::sharedApplication(mtm).terminate(None);
-}
-
-#[cfg(feature = "ui-preview")]
-pub(crate) fn native_window() -> objc2::rc::Retained<objc2_app_kit::NSWindow> {
-    let mtm = MainThreadMarker::new().unwrap();
-    NSApplication::sharedApplication(mtm)
-        .windows()
-        .iter()
-        .find(|window| window.title().to_string().starts_with("Clash of Rust"))
-        .expect("native application window exists")
-        .retain()
-}
-
-#[cfg(feature = "ui-preview")]
-pub(crate) fn simulate_dock_reopen(has_visible_windows: bool) {
-    let mtm = MainThreadMarker::new().unwrap();
-    let app = NSApplication::sharedApplication(mtm);
-    let delegate = app.delegate().expect("native application delegate exists");
-    assert!(delegate.respondsToSelector(sel!(applicationShouldHandleReopen:hasVisibleWindows:)));
-    // Exercise the selector that AppKit delivers for a Dock click, including its
-    // architecture-specific argument/result ABI, rather than calling ShowWindow.
-    let handled: Bool = unsafe {
-        objc2::msg_send![&*delegate, applicationShouldHandleReopen: &*app,
-                        hasVisibleWindows: Bool::new(has_visible_windows)]
-    };
-    assert!(!handled.as_bool());
 }

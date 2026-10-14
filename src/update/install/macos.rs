@@ -145,11 +145,6 @@ fn privileged_transaction(
     directory: &Path,
     parent: u32,
 ) -> String {
-    #[cfg(feature = "ui-preview")]
-    let fail_swap = std::env::var("GITHUB_ACTIONS").as_deref() == Ok("true")
-        && std::env::var("CLASH_CI_FAIL_SWAP").as_deref() == Ok("true");
-    #[cfg(not(feature = "ui-preview"))]
-    let fail_swap = false;
     // One authorization covers staging, the atomic swap, rollback and cleanup.
     // The GUI remains open until the validated staged app is ready to replace it.
     format!(
@@ -161,7 +156,7 @@ fn privileged_transaction(
         shell_quote(&directory.join("cancel").to_string_lossy()),
         shell_quote(&directory.to_string_lossy()),
         shell_quote(&replacement.to_string_lossy()),
-        if fail_swap { "/usr/bin/false" } else { ":" },
+        ":",
     )
 }
 
@@ -233,15 +228,6 @@ pub(super) fn install(plan: &Plan, directory: &Path) -> Result<()> {
         wait_for_shutdown(plan, directory)?;
         stage(directory, "正在替换应用文件…")?;
         fs::rename(app, &backup).context("无法保存旧应用，已保留旧版本")?;
-        #[cfg(feature = "ui-preview")]
-        let swapped = if std::env::var("GITHUB_ACTIONS").as_deref() == Ok("true")
-            && std::env::var("CLASH_CI_FAIL_SWAP").as_deref() == Ok("true")
-        {
-            Err(std::io::Error::other("injected rename failure"))
-        } else {
-            fs::rename(&staged, app)
-        };
-        #[cfg(not(feature = "ui-preview"))]
         let swapped = fs::rename(&staged, app);
         if let Err(error) = swapped {
             fs::rename(&backup, app).context("更新替换失败，恢复旧应用失败")?;

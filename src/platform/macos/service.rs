@@ -237,15 +237,12 @@ pub fn adopt_proxy(original: &ProxyState, owned: &ProxyState) -> Result<()> {
 
 pub fn open_tun(socket: &Path, token: &str) -> Result<()> {
     ensure_available(true)?;
-    #[cfg(feature = "ui-preview")]
-    let short_idle = std::env::var("GITHUB_ACTIONS").as_deref() == Ok("true")
-        && std::env::var("CLASH_CI_SHORT_IDLE").as_deref() == Ok("true");
-    #[cfg(not(feature = "ui-preview"))]
-    let short_idle = false;
     exchange(&Request::Tun {
         socket: socket.into(),
         token: token.into(),
-        short_idle,
+        // Preserve the existing helper protocol without accepting the removed
+        // diagnostic idle override.
+        short_idle: false,
     })?;
     Ok(())
 }
@@ -542,11 +539,6 @@ pub fn serve(uid: u32) -> Result<()> {
                             .stdin(Stdio::null())
                             .stdout(Stdio::null())
                             .stderr(Stdio::null());
-                        #[cfg(feature = "ui-preview")]
-                        if short_idle {
-                            command.arg("--ci-short-idle");
-                        }
-                        #[cfg(not(feature = "ui-preview"))]
                         ensure!(!short_idle, "TUN 会话参数无效");
                         children.push(command.spawn()?);
                     }

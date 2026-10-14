@@ -45,24 +45,6 @@ pub fn begin() -> Result<Session, String> {
     Ok(receiver)
 }
 
-#[cfg(all(target_os = "macos", feature = "ui-preview"))]
-pub fn cancel_for_test() {
-    use objc2::ClassType;
-    use objc2_app_kit::{NSApplication, NSOpenPanel, NSWindow};
-    use objc2_foundation::{MainThreadMarker, NSObjectProtocol};
-    let app = NSApplication::sharedApplication(MainThreadMarker::new().unwrap());
-    let windows = app.windows();
-    let window = windows
-        .iter()
-        .find(|w| w.isKindOfClass(NSOpenPanel::class()))
-        .expect("native file panel must be open");
-    // Verified the native subclass before borrowing it as NSOpenPanel.
-    let panel = unsafe { &*(std::ptr::from_ref::<NSWindow>(&window).cast::<NSOpenPanel>()) };
-    unsafe {
-        panel.cancel(None);
-    }
-}
-
 #[cfg(windows)]
 pub async fn choose() -> Result<Option<PathBuf>, String> {
     tokio::task::spawn_blocking(windows_choose)

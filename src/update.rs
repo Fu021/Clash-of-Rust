@@ -20,6 +20,7 @@ use tokio::io::AsyncWriteExt;
 pub const RELEASES_URL: &str = "https://github.com/Fu021/Clash-of-Rust/releases";
 pub const CHECK_INTERVAL: Duration = Duration::from_secs(6 * 60 * 60);
 const API_URL: &str = "https://api.github.com/repos/Fu021/Clash-of-Rust/releases?per_page=100";
+
 const RESPONSE_LIMIT: usize = 2 * 1024 * 1024;
 const PACKAGE_LIMIT: u64 = 512 * 1024 * 1024;
 
@@ -68,22 +69,6 @@ impl Downloaded {
             let _ = directory.keep();
         }
     }
-}
-
-#[cfg(all(target_os = "macos", feature = "ui-preview"))]
-pub fn fixture_download(package: &std::path::Path, version: String) -> Result<Downloaded> {
-    let directory = tempfile::Builder::new()
-        .prefix("clash-of-rust-update-")
-        .tempdir()?;
-    let destination = directory.path().join("package.dmg");
-    std::fs::copy(package, &destination)?;
-    let sha256 = crate::assets::hash_file(&destination)?.0;
-    Ok(Downloaded {
-        directory: Mutex::new(Some(directory)),
-        package: destination,
-        sha256,
-        version,
-    })
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]

@@ -26,33 +26,10 @@ _defender_spec.loader.exec_module(defender)
 
 
 class BuildTests(unittest.TestCase):
-    def test_ci_replaces_cached_reports_and_preserves_compiled_dependencies(self):
-        spec = importlib.util.spec_from_file_location('run_ci', build.ROOT/'scripts/run-ci.py')
-        ci = importlib.util.module_from_spec(spec)
-        spec.loader.exec_module(ci)
-        with tempfile.TemporaryDirectory() as directory:
-            root = Path(directory)
-            library = root/'target/release/deps/cache.rlib'
-            library.parent.mkdir(parents=True)
-            library.write_bytes(b'compiled dependency')
-            for name in ('claude-ui', 'claude-report', 'linux-wayland-report', 'linux-x11-logs'):
-                report = root/'target'/name/'foreground-1'
-                report.mkdir(parents=True)
-                (report/'geometry.json').write_text('{"stale":true}')
-            outside = root/'keep'
-            outside.mkdir()
-            marker = outside/'keep.txt'
-            marker.write_bytes(b'unrelated data')
-            if build.os.name != 'nt':
-                shutil.rmtree(root/'target/claude-report')
-                (root/'target/claude-report').symlink_to(outside, target_is_directory=True)
-            with patch.object(ci, 'ROOT', root):
-                ci.clear_test_reports()
-                ci.clear_test_reports()
-            self.assertEqual(library.read_bytes(), b'compiled dependency')
-            self.assertEqual(marker.read_bytes(), b'unrelated data')
-            for name in ('claude-ui', 'claude-report', 'linux-wayland-report', 'linux-x11-logs'):
-                self.assertFalse((root/'target'/name).exists())
+    def test_release_job_protocol_matches_workflow_display_names(self):
+        workflow = (build.ROOT/'.github/workflows/release.yml').read_text()
+        for name in release.PACKAGE_JOBS - set(release.PACKAGES):
+            self.assertIn('    name: '+name+'\n', workflow)
 
     def test_failed_cargo_json_preserves_human_diagnostics(self):
         message = json.dumps({'reason': 'compiler-message', 'message': {'rendered': 'error[E0308]: expected borrowed window'}})+'\n'

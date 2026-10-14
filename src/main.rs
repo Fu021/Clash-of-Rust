@@ -498,8 +498,6 @@ enum Message {
     Tick,
     #[cfg(target_os = "macos")]
     MacTrayPumped(Result<mac_desktop::Events, String>),
-    #[cfg(all(target_os = "macos", feature = "ui-preview"))]
-    MacWindowChecked(u8, serde_json::Value),
     ToggleGroup(String),
     GroupPage(String, bool),
     GroupDelay(String),
@@ -1305,8 +1303,6 @@ impl App {
                     }
                 }
             },
-            #[cfg(all(target_os = "macos", feature = "ui-preview"))]
-            Message::MacWindowChecked(..) => {}
             Message::DismissNotice => {
                 self.notice_visible = false;
                 self.updates.failure = None;
