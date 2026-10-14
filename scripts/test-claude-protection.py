@@ -331,9 +331,25 @@ def resolve(head, run_id):
     raise TimeoutError('Build CI did not finish within 45 minutes')
 
 
+def clean():
+    if os.environ.get('GITHUB_ACTIONS') != 'true':
+        raise RuntimeError('Only disposable workflow scratch output may be cleaned')
+    if (ROOT/'target').is_symlink():
+        raise RuntimeError('Unexpected symlink in workflow scratch root')
+    for name in ('claude-build','claude-validation','macos-report'):
+        path=ROOT/'target'/name
+        if path.is_symlink():
+            path.unlink()
+        elif path.is_dir():
+            shutil.rmtree(path)
+        elif path.exists():
+            raise RuntimeError('Unexpected file in workflow scratch output')
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     sub = parser.add_subparsers(dest='command', required=True)
+    sub.add_parser('clean')
     server = sub.add_parser('serve')
     server.add_argument('--cert', type=Path, required=True)
     server.add_argument('--key', type=Path, required=True)
@@ -348,6 +364,8 @@ def main():
         serve(args.cert, args.key)
     elif args.command == 'check':
         check(args.build.resolve(strict=True), args.output.resolve())
+    elif args.command == 'clean':
+        clean()
     else:
         run_id, commit = resolve(args.head, args.ci_run_id)
         with open(os.environ['GITHUB_OUTPUT'], 'a') as stream:
