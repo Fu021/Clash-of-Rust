@@ -564,6 +564,62 @@ pub async fn run() {
         "rejected activation changed preferences"
     );
     engine.select_mode("rule").await.unwrap();
+    let provider_path = store.runtime().join("providers/fixture.yaml");
+    clash_of_rust::config::atomic_write(&provider_path,format!("proxies: [{{name: FixtureA, type: socks5, server: 127.0.0.1, port: {}}}, {{name: FixtureB, type: socks5, server: 127.0.0.1, port: {}}}]\n",first.port,other.port).as_bytes()).unwrap();
+    let mut provider_profile: serde_yaml::Value = serde_yaml::from_str(&raw).unwrap();
+    provider_profile
+        .as_mapping_mut()
+        .unwrap()
+        .remove(serde_yaml::Value::from("proxies"));
+    provider_profile["proxy-providers"] =
+        serde_yaml::to_value(serde_json::json!({"Feed":{"type":"file","path":provider_path}}))
+            .unwrap();
+    provider_profile["proxy-groups"] =
+        serde_yaml::to_value(serde_json::json!([{"name":"Main","type":"select","use":["Feed"]}]))
+            .unwrap();
+    let provider_source = temp.path().join("provider-profile.yaml");
+    std::fs::write(
+        &provider_source,
+        serde_yaml::to_string(&provider_profile).unwrap(),
+    )
+    .unwrap();
+    engine
+        .import(
+            "集合订阅".into(),
+            provider_source.display().to_string(),
+            None,
+        )
+        .await
+        .unwrap();
+    let provider_id = engine.profiles.last().unwrap().id.clone();
+    engine.activate(provider_id).await.unwrap();
+    let provider_settings = serde_json::to_value(&engine.settings).unwrap();
+    engine.claude_protection(true).await.unwrap();
+    assert_eq!(
+        engine
+            .settings
+            .claude_protection
+            .as_ref()
+            .unwrap()
+            .provider
+            .as_deref(),
+        Some("Feed")
+    );
+    scope_runner(&engine).await;
+    let result = detector_client(mixed_port)
+        .get("https://api.anthropic.com/cdn-cgi/trace")
+        .send()
+        .await
+        .unwrap();
+    assert!(
+        result.status().is_success(),
+        "provider-backed protection did not route the request"
+    );
+    engine.claude_protection(false).await.unwrap();
+    assert_eq!(
+        serde_json::to_value(&engine.settings).unwrap(),
+        provider_settings
+    );
     engine.select_proxy_mode(ProxyMode::Off).await.unwrap();
     engine.stop().await.unwrap();
     assert!(!store.root.join("profile-transaction.json").exists());
@@ -571,7 +627,7 @@ pub async fn run() {
     let report = serde_json::json!({"schema":1,"environment":"controlled disposable native runner","version":clash_of_rust::VERSION,
         "before":before,"protected":protected,"blocked":blocked,"restored":restored,"protection":protection,
         "routing_scope":"Production full-route configuration asserted; native fixture routes limited to documentation IPv4/IPv6 and DNS test target to preserve runner control traffic",
-        "tests":["native TUN and system proxy","native IPv6 TUN traffic","public DoH via pinned node","real UDP DNS hijack","real TCP DNS hijack","normal Claude connection preserved","unrelated connection preserved","DIRECT connection closed","wrong-node connection closed","native notification request deduplicated and completed","restart preserves original snapshot","off/system/TUN restored exactly","rejected activation leaves preferences unchanged","subscription source unchanged"],
+        "tests":["native TUN and system proxy","native IPv6 TUN traffic","public DoH via pinned node","real UDP DNS hijack","real TCP DNS hijack","normal Claude connection preserved","unrelated connection preserved","DIRECT connection closed","wrong-node connection closed","native notification request deduplicated and completed","restart preserves original snapshot","off/system/TUN restored exactly","rejected activation leaves preferences unchanged","subscription source unchanged","provider-backed concrete node and restore"],
         "guard":guard});
     let output = std::path::PathBuf::from(std::env::var_os("CLASH_CLAUDE_TEST_REPORT").unwrap());
     clash_of_rust::config::atomic_write(&output, &serde_json::to_vec_pretty(&report).unwrap())

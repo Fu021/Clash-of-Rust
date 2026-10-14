@@ -478,6 +478,40 @@ fn count_connections<'de, D: serde::Deserializer<'de>>(deserializer: D) -> Resul
 }
 
 impl Api {
+    pub(crate) async fn provider_leaf(&self, name: &str) -> Result<Option<(String, String)>> {
+        #[derive(Deserialize)]
+        struct Node {
+            name: String,
+            #[serde(rename = "type")]
+            kind: String,
+        }
+        #[derive(Deserialize)]
+        struct Provider {
+            #[serde(default)]
+            proxies: Vec<Node>,
+        }
+        #[derive(Deserialize)]
+        struct Providers {
+            providers: BTreeMap<String, Provider>,
+        }
+        let response = self
+            .request(Method::GET, self.url(&["providers", "proxies"])?)
+            .send()
+            .await?;
+        let sources: Providers = decode_json(Self::checked(response).await?).await?;
+        let mut found = None;
+        for (provider, source) in sources.providers {
+            for node in source.proxies {
+                if node.name == name {
+                    if found.is_some() {
+                        bail!("代理集合中存在同名节点，请改名后再开启 Claude 保护");
+                    }
+                    found = Some((provider.clone(), node.kind));
+                }
+            }
+        }
+        Ok(found)
+    }
     pub fn new(settings: &Settings) -> Result<Self> {
         Ok(Self {
             client: Client::builder()

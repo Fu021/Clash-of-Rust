@@ -68,6 +68,8 @@ pub struct Previous {
 pub struct Protection {
     pub profile_id: String,
     pub node: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub provider: Option<String>,
     pub route: String,
     pub previous: Previous,
 }
@@ -76,6 +78,7 @@ impl Protection {
         Self {
             profile_id,
             node,
+            provider: None,
             route: format!("COR-Claude-{}", uuid::Uuid::new_v4().simple()),
             previous,
         }
@@ -91,6 +94,12 @@ impl Protection {
         ensure!(
             !crate::active_route::terminal(&self.node),
             "请先选择可用的代理节点"
+        );
+        ensure!(
+            self.provider.as_ref().is_none_or(|name| !name.is_empty()
+                && name.len() <= 512
+                && !name.chars().any(char::is_control)),
+            "Claude 保护的代理集合无效"
         );
         ensure!(
             self.route.starts_with("COR-Claude-")
@@ -159,6 +168,17 @@ pub fn apply(map: &mut Mapping, settings: &Settings) -> Result<()> {
         settings.active_profile.as_deref() == Some(&protection.profile_id),
         "请先关闭 Claude 保护再切换订阅"
     );
+    let group = if let Some(provider) = &protection.provider {
+        ensure!(
+            map.get(Value::from("proxy-providers"))
+                .and_then(Value::as_mapping)
+                .is_some_and(|providers| providers.contains_key(Value::from(provider.clone()))),
+            "保护节点的代理集合已不存在，请关闭保护后重新选择节点"
+        );
+        serde_json::json!({"name":protection.route,"type":"select","hidden":true,"empty-fallback":"REJECT","use":[provider],"filter":format!("^{}$",regex::escape(&protection.node))})
+    } else {
+        serde_json::json!({"name":protection.route,"type":"select","hidden":true,"empty-fallback":"REJECT","proxies":[protection.node]})
+    };
     let key = Value::from("proxy-groups");
     let groups = map
         .entry(key)
@@ -171,9 +191,7 @@ pub fn apply(map: &mut Mapping, settings: &Settings) -> Result<()> {
             .any(|g| g.get("name").and_then(Value::as_str) == Some(&protection.route)),
         "订阅包含同名的保护线路"
     );
-    groups.push(serde_yaml::to_value(
-        serde_json::json!({"name": protection.route, "type":"select", "proxies":[protection.node]}),
-    )?);
+    groups.push(serde_yaml::to_value(group)?);
 
     let original = map
         .remove(Value::from("rules"))
@@ -301,6 +319,44 @@ pub fn apply(map: &mut Mapping, settings: &Settings) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn provider_node_is_pinned_by_exact_name_without_rewriting_source() {
+        let id = uuid::Uuid::new_v4().to_string();
+        let raw = "proxy-providers: {Feed: {type: file, path: providers/feed.yaml}}\nproxy-groups: [{name: Main, type: select, use: [Feed]}]\nrules: ['MATCH,Main']\n";
+        let mut settings = Settings {
+            active_profile: Some(id.clone()),
+            ..Default::default()
+        };
+        let before = crate::config::runtime_config(raw, &settings).unwrap();
+        let mut protection = Protection::new(
+            id,
+            "Node (A)+".into(),
+            Previous {
+                mode: "rule".into(),
+                proxy_mode: ProxyMode::Off,
+                selectors: vec![],
+            },
+        );
+        protection.provider = Some("Feed".into());
+        settings.claude_protection = Some(std::sync::Arc::new(protection));
+        let value: Value =
+            serde_yaml::from_str(&crate::config::runtime_config(raw, &settings).unwrap()).unwrap();
+        let group = value["proxy-groups"].as_sequence().unwrap().last().unwrap();
+        assert_eq!(group["use"][0], "Feed");
+        assert_eq!(group["hidden"], true);
+        assert_eq!(group["empty-fallback"], "REJECT");
+        let filter = regex::Regex::new(group["filter"].as_str().unwrap()).unwrap();
+        assert!(filter.is_match("Node (A)+"));
+        assert!(!filter.is_match("Node AAA") && !filter.is_match("Other Node (A)+"));
+        let mut restarted: Settings =
+            serde_json::from_slice(&serde_json::to_vec(&settings).unwrap()).unwrap();
+        assert_eq!(restarted.claude_protection, settings.claude_protection);
+        restarted.claude_protection = None;
+        assert_eq!(
+            crate::config::runtime_config(raw, &restarted).unwrap(),
+            before
+        );
+    }
     #[test]
     fn overlay_does_not_change_preferences_and_can_be_removed_exactly() {
         let id = uuid::Uuid::new_v4().to_string();

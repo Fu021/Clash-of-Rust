@@ -7,7 +7,7 @@ use crate::{
     },
     platform,
 };
-use anyhow::{Context, Result, bail};
+use anyhow::{Context, Result, bail, ensure};
 use futures_util::StreamExt;
 use serde_json::{Value, json};
 use std::{
@@ -1089,25 +1089,67 @@ impl Engine {
             .restart_state()
             .await?
             .context("请先启动内核并选择代理节点")?;
-        let node = self
-            .current_node(
-                if previous.mode == "direct" {
-                    "rule"
-                } else {
-                    &previous.mode
-                },
-                &Proxies::default(),
-            )
-            .await?
-            .context("无法确定当前代理节点，请先选择节点")?;
-        let proxy = self.api.proxy_nodes(&node).await?;
-        if crate::active_route::terminal(&node)
-            || !proxy.all.is_empty()
-            || matches!(proxy.kind.as_str(), "Direct" | "Reject" | "Pass")
-        {
-            bail!("请先选择具体代理节点；Claude 保护不能使用直连或未确定节点的代理组");
+        let mode = if previous.mode == "direct" {
+            "rule"
+        } else {
+            &previous.mode
+        };
+        let root = self.default_route()?;
+        let mut node = crate::active_route::start(mode, &root).to_owned();
+        let mut visited = std::collections::BTreeSet::new();
+        let mut provider = None;
+        loop {
+            if crate::active_route::terminal(&node)
+                || visited.len() >= crate::active_route::MAX_DEPTH
+                || !visited.insert(node.clone())
+            {
+                bail!("请先选择具体代理节点；Claude 保护不能使用直连或未确定节点的代理组");
+            }
+            match self.api.proxy_nodes(&node).await {
+                Ok(proxy) if !proxy.now.is_empty() => node = proxy.now.to_string(),
+                Ok(proxy) => {
+                    ensure!(
+                        proxy.all.is_empty()
+                            && !matches!(
+                                proxy.kind.as_str(),
+                                "" | "Direct"
+                                    | "Reject"
+                                    | "Pass"
+                                    | "Compatible"
+                                    | "Selector"
+                                    | "URLTest"
+                                    | "Fallback"
+                                    | "LoadBalance"
+                            ),
+                        "请选择具体代理节点"
+                    );
+                    break;
+                }
+                Err(_) => {
+                    let (source, kind) = self
+                        .api
+                        .provider_leaf(&node)
+                        .await?
+                        .context("无法确定当前代理节点，请先选择节点")?;
+                    ensure!(
+                        !matches!(
+                            kind.as_str(),
+                            "Direct"
+                                | "Reject"
+                                | "Pass"
+                                | "Selector"
+                                | "URLTest"
+                                | "Fallback"
+                                | "LoadBalance"
+                        ),
+                        "请选择具体代理节点"
+                    );
+                    provider = Some(source);
+                    break;
+                }
+            }
         }
-        let protection = Protection::new(
+        let mut protection = Protection::new(
             self.settings
                 .active_profile
                 .clone()
@@ -1125,6 +1167,7 @@ impl Engine {
                 selectors: previous.selectors.clone(),
             },
         );
+        protection.provider = provider;
         protection.validate()?;
         if cfg!(windows) && !platform::is_elevated() {
             let path = self.store.root.join("elevation.json");

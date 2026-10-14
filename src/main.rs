@@ -2251,6 +2251,9 @@ impl App {
                 }
                 self.snapshot.running = reply.running;
                 if let Some(mut snapshot) = reply.snapshot {
+                    if let Some(protection) = &self.settings.claude_protection {
+                        snapshot.proxies.proxies.remove(protection.route.as_str());
+                    }
                     if let Some(guard) = &snapshot.claude_guard {
                         self.claude.guard_report(guard);
                     } else if reply.scope == Scope::Claude {
