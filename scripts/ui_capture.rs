@@ -29,6 +29,10 @@ fn render_update(_: &mut RenderState, message: RenderMessage) -> Task<RenderMess
     }
 }
 
+fn render_view(state: &RenderState) -> Element<'_, RenderMessage> {
+    state.app.view().map(|_| RenderMessage::Take)
+}
+
 pub(crate) fn run_render_capture() -> iced::Result {
     typography::initialize();
     let scene = std::env::var("CLASH_UI_PREVIEW_SCENE").unwrap();
@@ -51,7 +55,7 @@ pub(crate) fn run_render_capture() -> iced::Result {
             )
         },
         render_update,
-        |state: &RenderState| state.app.view().map(|_| RenderMessage::Take),
+        render_view,
     )
     .title("Clash of Rust · UI capture")
     .theme(|state: &RenderState| state.app.theme())
