@@ -318,6 +318,10 @@ def flow(scenario, fixture, package, version, report, prefix):
                         record['restarted_window_count'] = window_info(new_pid, report, prefix+'-'+scenario)
                         rollback = scenario.endswith('rollback')
                         assert (sha256(app/'Contents/MacOS/clash-of-rust') == old_hash) == rollback, 'App replacement/rollback did not match outcome'
+                        if 'online' in scenario:
+                            applied = plistlib.loads((app/'Contents/Info.plist').read_bytes())['ClashOfRustVersion']
+                            assert applied == version, 'Online update left the previous version installed'
+                            record['installed_version'] = applied
                         assert not list(install.glob('.clash-*.app')), 'Update left staged apps or backups behind'
                     else:
                         assert process.poll() is None and record['running'] and not record['exiting'], record

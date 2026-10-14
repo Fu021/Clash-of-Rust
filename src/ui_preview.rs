@@ -47,6 +47,9 @@ impl MacFlow {
             "error": self.app.error,
             "notice": self.app.notice,
             "failure": self.app.updates.failure,
+            "update_status": self.app.updates.status,
+            "install_stage": self.app.updates.install_stage,
+            "progress": self.app.updates.progress.as_ref().map(|value| serde_json::json!({"received": value.received, "total": value.total})),
             "core_logs": logs,
             "system_authorization_sessions": platform::macos::ci_proxy_authorization_creations(),
             "administrator_requests": platform::macos::ci_authorizations(),
@@ -57,6 +60,15 @@ impl MacFlow {
             &serde_json::to_vec_pretty(&payload).unwrap(),
         )
         .unwrap();
+        if self.scenario.contains("online") {
+            use std::io::Write;
+            let mut events = std::fs::OpenOptions::new()
+                .create(true)
+                .append(true)
+                .open(self.report.with_extension("events.jsonl"))
+                .unwrap();
+            writeln!(events, "{payload}").unwrap();
+        }
     }
     fn update(&mut self, message: Message) -> Task<Message> {
         let checked_online =
@@ -66,6 +78,10 @@ impl MacFlow {
                 &message,
                 Message::UpdateProgress(..) | Message::UpdateDownloaded(..)
             );
+        let online_install_tick = self.scenario.contains("online")
+            && self.phase != 10
+            && matches!(&message, Message::Tick)
+            && (self.app.updates.install_pending || self.app.updates.installing.is_some());
         if self.scenario == "file-picker" {
             let finished = matches!(&message, Message::Finished(_));
             let opened = matches!(&message, Message::FilePickStarted(..));
@@ -157,6 +173,9 @@ impl MacFlow {
             self.record(
                 serde_json::json!({"stage": "download", "failure": self.app.updates.failure}),
             );
+        }
+        if online_install_tick {
+            self.record(serde_json::json!({"stage": "installation"}));
         }
         if handoff {
             let tun_to_system = self.phase == 3 && self.scenario.starts_with("update-tun-");

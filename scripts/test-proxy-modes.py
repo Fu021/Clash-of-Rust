@@ -4,6 +4,8 @@ import importlib.util
 import os
 from pathlib import Path
 import sys
+import shutil
+import tempfile
 
 from build_support import ROOT, run, host_system
 
@@ -30,6 +32,8 @@ def check(binary, bundle):
                 run(['sudo', 'cp', '-a', str(bundle.resolve())+'/.', installed])
                 run(['sudo', 'cp', '/usr/bin/resolvectl', installed/'libexec/resolvectl'])
                 run(['sudo', 'chown', '-R', 'root:root', installed])
+                run(['sudo', 'chown', 'root:root', '/opt'])
+                run(['sudo', 'chmod', '-R', 'go-w', installed])
                 run(['sudo', 'chmod', '0755', '/opt', installed])
                 run(['sudo', sys.executable, ROOT/'scripts/test-linux-tun.py', '--basic',
                      '--test-binary', binary, '--uid', os.getuid()])
@@ -44,10 +48,19 @@ def check(binary, bundle):
         spec.loader.exec_module(module)
         report = ROOT/'target/macos-report'
         report.mkdir(parents=True, exist_ok=True)
-        with module.network_service_for_ci(report, 'proxy-smoke'):
+        with tempfile.TemporaryDirectory(prefix='clash-proxy-smoke-') as temporary, module.network_service_for_ci(report, 'proxy-smoke'):
+            # Mac's production service/bridge locates its bundled core relative
+            # to current_exe, rather than the integration-test environment.
+            # Preserve the installed app's seal; stage the unchanged test and
+            # helper next to a link to its actual signed resources instead.
+            stage = Path(temporary)
+            shutil.copy2(binary, stage/'proxy-smoke')
+            shutil.copy2(helper, stage/'clash-tun-launcher')
+            (stage/'resources').symlink_to(resources.resolve(), target_is_directory=True)
+            command[0] = stage/'proxy-smoke'
             # Production helper and launchd service, ordinary-user client. Only
             # initial administrative installation is performed by runner sudo.
-            run(['/usr/bin/sudo', '-n', helper, '--macos-install-service', os.getuid()])
+            run(['/usr/bin/sudo', '-n', stage/'clash-tun-launcher', '--macos-install-service', os.getuid()])
             run(command, env=env, timeout=90)
     else:
         run(command, env=env, timeout=90)
