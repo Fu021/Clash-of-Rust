@@ -487,6 +487,15 @@ pub async fn run() {
         tokio::time::sleep(Duration::from_millis(100)).await;
     }
     let blocked = capture(&mut engine, "异常直连与错误节点拦截后").await;
+    assert_eq!(
+        blocked
+            .routes
+            .iter()
+            .filter(|route| route.outcome == "异常连接已关闭")
+            .count(),
+        2,
+        "normal diagnostic traffic evicted the abnormal connection details"
+    );
     let notification = engine
         .poll(Scope::Claude)
         .await

@@ -2253,6 +2253,9 @@ impl App {
                 if let Some(mut snapshot) = reply.snapshot {
                     if let Some(protection) = &self.settings.claude_protection {
                         snapshot.proxies.proxies.remove(protection.route.as_str());
+                        for proxy in snapshot.proxies.proxies.values_mut() {
+                            proxy.all.retain(|name| name.as_str() != protection.route);
+                        }
                     }
                     if let Some(guard) = &snapshot.claude_guard {
                         self.claude.guard_report(guard);

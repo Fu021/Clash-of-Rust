@@ -87,7 +87,8 @@ impl Guard {
                             if suspicious_route(route, &node) {
                                 next_scan = Instant::now();
                             }
-                            retain_route(&mut state, route.clone());
+                            // Normal requests must not evict the bounded abnormal
+                            // connection ledger shown in the risk details.
                         }
                     }
                 }
@@ -131,7 +132,17 @@ impl Guard {
                         } else {
                             state.error =
                                 "异常连接关闭失败，请检查内核状态；不能确认拦截完成。".into();
-                            alert_hosts.insert(connection.host);
+                            alert_hosts.insert(connection.host.clone());
+                            retain_route(
+                                &mut state,
+                                Route {
+                                    host: connection.host,
+                                    rule: connection.rule,
+                                    chain: connection.chains.join(" → "),
+                                    time: chrono::Utc::now().to_rfc3339(),
+                                    outcome: "异常连接关闭失败".into(),
+                                },
+                            );
                         }
                     }
                 }
