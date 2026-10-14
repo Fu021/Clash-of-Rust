@@ -13,6 +13,8 @@ pub struct Snapshot {
     pub total: u64,
     pub blocked: u64,
     pub alerts: u64,
+    #[serde(default)]
+    pub notifications_completed: u64,
     pub connected: bool,
     pub error: String,
     pub routes: VecDeque<Route>,
@@ -56,10 +58,22 @@ impl Guard {
                 tick.tick().await;
                 if notification.0.as_ref().is_some_and(|n| n.is_finished())
                     && let Some(task) = notification.0.take()
-                    && let Ok(Err(error)) = task.await
-                    && let Ok(mut state) = captured.lock()
                 {
-                    state.error = format!("连接已处理，但系统通知失败：{error}");
+                    let result = task.await;
+                    if let Ok(mut state) = captured.lock() {
+                        match result {
+                            Ok(Ok(())) => {
+                                state.notifications_completed =
+                                    state.notifications_completed.saturating_add(1)
+                            }
+                            Ok(Err(error)) => {
+                                state.error = format!("连接已处理，但系统通知失败：{error}")
+                            }
+                            Err(error) => {
+                                state.error = format!("连接已处理，但系统通知任务失败：{error}")
+                            }
+                        }
+                    }
                 }
                 if let Some(events) = stream.after(revision) {
                     revision = events.revision;

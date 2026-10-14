@@ -177,6 +177,25 @@ async fn hold(client: &reqwest::Client, host: &str, port: u16) -> reqwest::Respo
         .unwrap()
 }
 
+fn scoped_payload(payload: &str) -> String {
+    // The production overlay is separately asserted to cover all routes.
+    // Limit the disposable test's live routes so the VM control agent does
+    // not lose its network to our deliberately synthetic DNS/node fixture.
+    let mut value: serde_yaml::Value = serde_yaml::from_str(payload).unwrap();
+    value["tun"]["route-address"] =
+        serde_yaml::to_value(["203.0.113.0/24", "8.8.8.8/32", "2001:db8::/64"]).unwrap();
+    serde_yaml::to_string(&value).unwrap()
+}
+async fn scope_runner(engine: &Engine) {
+    let payload = std::fs::read_to_string(engine.store.runtime().join("config.yaml")).unwrap();
+    let value: serde_yaml::Value = serde_yaml::from_str(&payload).unwrap();
+    assert!(
+        value["tun"]["route-address"].is_null(),
+        "production protection must cover full routing"
+    );
+    engine.api.reload(&scoped_payload(&payload)).await.unwrap();
+}
+
 pub async fn run() {
     assert_eq!(std::env::var("CLASH_PROXY_SMOKE").as_deref(), Ok("1"));
     let mut servers = Servers::start().await;
@@ -206,7 +225,7 @@ pub async fn run() {
         "ClashRustTest"
     };
     let raw = format!(
-        "proxies:\n  - {{name: FixtureA, type: socks5, server: 127.0.0.1, port: {}, udp: true}}\n  - {{name: FixtureB, type: socks5, server: 127.0.0.1, port: {}, udp: true}}\nproxy-groups: [{{name: Main, type: select, proxies: [FixtureA, FixtureB]}}]\nhosts: {{claude.ai: 127.0.0.1, api.anthropic.com: 127.0.0.1, shared.sentry.io: 127.0.0.1, example.org: 127.0.0.1}}\ndns: {{enable: true, enhanced-mode: redir-host, nameserver: ['https://127.0.0.1:{}/dns-query'], fake-ip-filter: ['dns-check.example']}}\ntun: {{device: {device}, route-address: [203.0.113.0/24], dns-hijack: []}}\nrules: ['DOMAIN-SUFFIX,claude.ai,DIRECT', 'DOMAIN,shared.sentry.io,DIRECT', 'MATCH,Main']\n",
+        "proxies:\n  - {{name: FixtureA, type: socks5, server: 127.0.0.1, port: {}, udp: true}}\n  - {{name: FixtureB, type: socks5, server: 127.0.0.1, port: {}, udp: true}}\nproxy-groups: [{{name: Main, type: select, proxies: [FixtureA, FixtureB]}}]\nhosts: {{claude.ai: 127.0.0.1, api.anthropic.com: 127.0.0.1, shared.sentry.io: 127.0.0.1, example.org: 127.0.0.1}}\ndns: {{enable: true, enhanced-mode: redir-host, nameserver: ['https://127.0.0.1:{}/dns-query'], fake-ip-filter: ['dns-check.example']}}\ntun: {{device: {device}, route-address: [203.0.113.0/24], dns-hijack: []}}\nrules: ['DOMAIN-SUFFIX,claude.ai,DIRECT', 'DOMAIN,shared.sentry.io,DIRECT', 'IP-CIDR6,2001:db8::/64,Main,no-resolve', 'MATCH,Main']\n",
         first.port, other.port, servers.https
     );
     std::fs::write(&profile, &raw).unwrap();
@@ -231,6 +250,7 @@ pub async fn run() {
     let original_runtime = std::fs::read(store.runtime().join("config.yaml")).unwrap();
     let original_profile = std::fs::read(store.profile_path(&id).unwrap()).unwrap();
     assert!(!engine.claude_protection(true).await.unwrap());
+    scope_runner(&engine).await;
     let protection = engine.settings.claude_protection.clone().unwrap();
     let snapshot = engine.poll(Scope::Claude).await.unwrap();
     assert!(snapshot.tun && !snapshot.system_proxy);
@@ -301,6 +321,18 @@ pub async fn run() {
     tcp.read_exact(&mut reply).await.unwrap();
     assert!(reply[..2] == query[..2] && reply.windows(4).any(|w| w == [203, 0, 113, 2]));
     drop(tcp);
+    let v6 = reqwest::Client::builder()
+        .no_proxy()
+        .timeout(Duration::from_secs(5))
+        .build()
+        .unwrap();
+    let mut response = v6
+        .get(format!("http://[2001:db8::2]:{}/hold", servers.http))
+        .send()
+        .await
+        .expect("native IPv6 TUN routing failed");
+    assert!(response.chunk().await.unwrap().is_some());
+    drop(response);
     let live_before: serde_json::Value = engine.api.get("connections").await.unwrap();
     assert!(
         live_before["connections"]
@@ -321,7 +353,7 @@ pub async fn run() {
     );
     engine
         .api
-        .reload(&serde_yaml::to_string(&attacked).unwrap())
+        .reload(&scoped_payload(&serde_yaml::to_string(&attacked).unwrap()))
         .await
         .unwrap();
     let mut unrelated = hold(&client, "example.org", servers.http).await;
@@ -365,7 +397,9 @@ pub async fn run() {
     );
     #[cfg(windows)]
     {
-        use windows_sys::Win32::UI::WindowsAndMessaging::{FindWindowW, GetWindowThreadProcessId};
+        use windows_sys::Win32::UI::WindowsAndMessaging::{
+            FindWindowW, GetWindowThreadProcessId, PostMessageW, WM_CLOSE,
+        };
         let title: Vec<u16> = "Clash of Rust · Claude 保护"
             .encode_utf16()
             .chain(Some(0))
@@ -378,6 +412,7 @@ pub async fn run() {
                 unsafe { GetWindowThreadProcessId(window, &mut pid) };
             }
             if pid == std::process::id() {
+                unsafe { PostMessageW(window, WM_CLOSE, 0, 0) };
                 break;
             }
             assert!(
@@ -386,6 +421,28 @@ pub async fn run() {
             );
             tokio::time::sleep(Duration::from_millis(100)).await;
         }
+    }
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(25);
+    loop {
+        let state = engine
+            .poll(Scope::Claude)
+            .await
+            .unwrap()
+            .claude_guard
+            .unwrap();
+        assert!(
+            state.error.is_empty(),
+            "native enforcement/notification failed: {}",
+            state.error
+        );
+        if state.notifications_completed >= 1 {
+            break;
+        }
+        assert!(
+            tokio::time::Instant::now() < deadline,
+            "native notification did not complete: {state:?}"
+        );
+        tokio::time::sleep(Duration::from_millis(100)).await;
     }
     let blocked = capture(&mut engine, "异常直连与错误节点拦截后").await;
     let notification = engine
@@ -411,6 +468,7 @@ pub async fn run() {
     );
     engine.start().await.unwrap();
     assert!(!engine.restore_proxy_mode().await.unwrap());
+    scope_runner(&engine).await;
     let restarted = engine.poll(Scope::Claude).await.unwrap();
     assert!(restarted.tun && restarted.claude_guard.is_some());
     assert_eq!(
@@ -439,6 +497,7 @@ pub async fn run() {
         engine.select_proxy_mode(mode).await.unwrap();
         let saved_settings = serde_json::to_value(&engine.settings).unwrap();
         engine.claude_protection(true).await.unwrap();
+        scope_runner(&engine).await;
         assert_eq!(
             engine
                 .settings
@@ -460,6 +519,7 @@ pub async fn run() {
     }
     engine.select_mode("direct").await.unwrap();
     engine.claude_protection(true).await.unwrap();
+    scope_runner(&engine).await;
     engine.claude_protection(false).await.unwrap();
     assert_eq!(engine.poll(Scope::Claude).await.unwrap().mode, "direct");
     engine.select_mode("global").await.unwrap();
@@ -478,7 +538,8 @@ pub async fn run() {
     assert!(!store.root.join("system-proxy.json").exists());
     let report = serde_json::json!({"schema":1,"environment":"controlled disposable native runner","version":clash_of_rust::VERSION,
         "before":before,"protected":protected,"blocked":blocked,"restored":restored,"protection":protection,
-        "tests":["native TUN and system proxy","public DoH via pinned node","real UDP DNS hijack","real TCP DNS hijack","normal Claude connection preserved","unrelated connection preserved","DIRECT connection closed","wrong-node connection closed","native notification request deduplicated","restart preserves original snapshot","off/system/TUN restored exactly","rejected activation leaves preferences unchanged","subscription source unchanged"],
+        "routing_scope":"Production full-route configuration asserted; native fixture routes limited to documentation IPv4/IPv6 and DNS test target to preserve runner control traffic",
+        "tests":["native TUN and system proxy","native IPv6 TUN traffic","public DoH via pinned node","real UDP DNS hijack","real TCP DNS hijack","normal Claude connection preserved","unrelated connection preserved","DIRECT connection closed","wrong-node connection closed","native notification request deduplicated and completed","restart preserves original snapshot","off/system/TUN restored exactly","rejected activation leaves preferences unchanged","subscription source unchanged"],
         "guard":guard});
     let output = std::path::PathBuf::from(std::env::var_os("CLASH_CLAUDE_TEST_REPORT").unwrap());
     clash_of_rust::config::atomic_write(&output, &serde_json::to_vec_pretty(&report).unwrap())

@@ -110,6 +110,9 @@ def main():
         run(['ip', 'link', 'add', 'uplink', 'type', 'dummy'])
         run(['ip', 'addr', 'add', '192.0.2.1/24', 'dev', 'uplink'])
         run(['ip', 'link', 'set', 'uplink', 'up'])
+        if args.test_case == 'claude_protection_round_trip_and_guard':
+            run(['ip', '-6', 'addr', 'add', '2001:db8:1::1/64', 'dev', 'uplink'])
+            run(['ip', '-6', 'route', 'add', 'default', 'via', '2001:db8:1::fe', 'dev', 'uplink'])
         run(['ip', 'route', 'add', 'default', 'via', '192.0.2.254', 'dev', 'uplink'])
         with isolated_resolved():
             run([binary, args.test_case, '--exact',

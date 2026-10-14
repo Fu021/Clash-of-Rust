@@ -66,4 +66,6 @@ A÷检测中的“Claude 保护”默认关闭。开启时使用当前具体代�
 
 临时 `Claude Protection Validation` 工作流在六种原生 runner 上复用同一提交的 CI 产物，验证真实内核的 TUN、代理 DoH、TCP/UDP DNS、正常连接保留、异常直连/错误节点关闭、通知去重、重启与原状态恢复，并渲染开启前、开启后、拦截、风险详情、恢复及确认框的深浅色截图。HTTPS fixture 与临时 CA 只在一次性 Actions runner 中使用，测试结束撤销信任；报告与截图明确标为受控验证，不代表真实订阅出口、Claude 账号资格或真实服务可用性。
 
+测试断言生产配置没有路由排除，再把一次性 runner 的实时测试路由限定到文档网段和 DNS 测试目标，避免受控 DNS/节点干扰 Actions 控制连接；实测涵盖 IPv4/IPv6 TUN 与 TCP/UDP DNS 接管，全局路由配置另由配置测试验证。
+
 规则参考官方 [Desktop 网络要求](https://code.claude.com/docs/en/desktop#network-access-requirements)、[Code 网络要求](https://code.claude.com/docs/en/network-config#network-access-requirements)、[入站 IP 网段](https://platform.claude.com/docs/en/api/ip-addresses)与 [Net.Coffee 分类](https://ip.net.coffee/claude/site.html)。不将出站网段当作入站网段，不以 NTP 能改变时区为依据添加规则。
