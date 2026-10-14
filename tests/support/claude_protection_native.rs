@@ -488,6 +488,7 @@ pub async fn run() {
         "native notification failed: {}",
         notification.error
     );
+    let guard = notification;
     drop((normal, unrelated, bad_direct, bad_node));
     // Recreate the engine as a genuine application restart. The persisted
     // restoration record must survive unchanged, including its pinned node.
