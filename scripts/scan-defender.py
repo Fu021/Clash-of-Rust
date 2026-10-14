@@ -4,6 +4,7 @@ import os
 from pathlib import Path
 import re
 import subprocess
+import time
 
 from build_support import sha256
 
@@ -24,6 +25,36 @@ def defender_command():
     raise RuntimeError('Windows Defender MpCmdRun.exe is unavailable; scan cannot be skipped')
 
 
+def update_signatures(timeout=300):
+    deadline = time.monotonic() + timeout
+    # MMPC is Microsoft's direct security-intelligence source. Avoid the
+    # runner's Windows Update queue, and wait only for its explicit MSI-busy error.
+    for delay in (15, 30, 45, 60, None):
+        command = [str(defender_command()), '-SignatureUpdate', '-MMPC']
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            raise subprocess.TimeoutExpired(command, timeout)
+        print('Updating Defender security intelligence:', command[0], flush=True)
+        result = subprocess.run(
+            command, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+            text=True, encoding='utf-8', errors='replace', timeout=remaining,
+        )
+        output = result.stdout or ''
+        if output:
+            print(output, end='' if output.endswith('\n') else '\n', flush=True)
+        if result.returncode == 0:
+            # The platform itself may have upgraded while we waited.
+            return defender_command()
+        busy = re.search(r'\b0x80070652\b', output.replace('\0', ''), re.IGNORECASE)
+        if not busy or delay is None:
+            raise subprocess.CalledProcessError(result.returncode, command, output=output)
+        remaining = deadline - time.monotonic()
+        if remaining <= delay:
+            raise subprocess.TimeoutExpired(command, timeout, output=output)
+        print(f'Defender installation is busy; retrying in {delay}s', flush=True)
+        time.sleep(delay)
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('installers', type=Path, nargs='+')
@@ -32,10 +63,8 @@ def main():
     installers = [path.resolve(strict=True) for path in args.installers]
     if any(not path.is_file() or path.suffix.lower() != '.exe' for path in installers):
         raise ValueError('Expected Windows .exe installer files')
-    command = defender_command()
+    command = update_signatures() if args.update_signatures else defender_command()
     print('Windows Defender:', command, flush=True)
-    if args.update_signatures:
-        subprocess.run([str(command), '-SignatureUpdate'], check=True, timeout=300)
     for installer in installers:
         digest = sha256(installer)
         print('Scanning:', installer.name, flush=True)

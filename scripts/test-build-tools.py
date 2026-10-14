@@ -20,6 +20,10 @@ _spec = importlib.util.spec_from_file_location('publish_release', build.ROOT/'sc
 release = importlib.util.module_from_spec(_spec)
 _spec.loader.exec_module(release)
 
+_defender_spec = importlib.util.spec_from_file_location('scan_defender', build.ROOT/'scripts/scan-defender.py')
+defender = importlib.util.module_from_spec(_defender_spec)
+_defender_spec.loader.exec_module(defender)
+
 
 class BuildTests(unittest.TestCase):
     def test_failed_cargo_json_preserves_human_diagnostics(self):
@@ -108,6 +112,92 @@ class BuildTests(unittest.TestCase):
                 with self.assertRaises(subprocess.TimeoutExpired):
                     mac.disk_image(['create', 'package.dmg'], timeout=1)
                 execute.assert_not_called()
+
+    def test_defender_update_waits_for_busy_installation_and_refreshes_binary(self):
+        busy = subprocess.CompletedProcess([], 2, 'ERROR: hr=0x80070652\n')
+        ok = subprocess.CompletedProcess([], 0, 'Signature update finished\n')
+        old, new = Path('old/MpCmdRun.exe'), Path('new/MpCmdRun.exe')
+        with patch.object(defender, 'defender_command', side_effect=[old, new, new]), \
+             patch.object(defender.time, 'monotonic', return_value=0), \
+             patch.object(defender.time, 'sleep') as sleep, \
+             patch.object(defender.subprocess, 'run', side_effect=[busy, ok]) as execute, \
+             patch('sys.stdout', io.StringIO()):
+            self.assertEqual(defender.update_signatures(), new)
+            sleep.assert_called_once_with(15)
+            self.assertEqual([call.args[0] for call in execute.call_args_list], [
+                [str(old), '-SignatureUpdate', '-MMPC'],
+                [str(new), '-SignatureUpdate', '-MMPC'],
+            ])
+
+    def test_defender_update_retries_only_exact_busy_error_and_bounds_waits(self):
+        with patch.object(defender, 'defender_command', return_value=Path('MpCmdRun.exe')), \
+             patch.object(defender.time, 'monotonic', return_value=0), \
+             patch.object(defender.time, 'sleep') as sleep, \
+             patch('sys.stdout', io.StringIO()):
+            for message in ('ERROR: hr=0x80070005', 'ERROR: hr=0x800706520', ''):
+                with self.subTest(message=message), \
+                     patch.object(defender.subprocess, 'run', return_value=subprocess.CompletedProcess([], 2, message)) as execute:
+                    with self.assertRaises(subprocess.CalledProcessError):
+                        defender.update_signatures()
+                    execute.assert_called_once()
+            sleep.assert_not_called()
+            # Some native tools redirect UTF-16 text; the HRESULT must remain recognizable.
+            busy = subprocess.CompletedProcess([], 2, '\0'.join('ERROR: 0X80070652'))
+            with patch.object(defender.subprocess, 'run', return_value=busy) as execute:
+                with self.assertRaises(subprocess.CalledProcessError):
+                    defender.update_signatures()
+                self.assertEqual(execute.call_count, 5)
+                self.assertEqual([call.args[0] for call in sleep.call_args_list], [15, 30, 45, 60])
+
+    def test_defender_update_preserves_total_timeout(self):
+        with patch.object(defender, 'defender_command', return_value=Path('MpCmdRun.exe')), \
+             patch.object(defender.time, 'monotonic', side_effect=[0, 2]), \
+             patch.object(defender.subprocess, 'run') as execute:
+            with self.assertRaises(subprocess.TimeoutExpired):
+                defender.update_signatures(timeout=1)
+            execute.assert_not_called()
+        busy = subprocess.CompletedProcess([], 2, 'ERROR: hr=0x80070652')
+        with patch.object(defender, 'defender_command', return_value=Path('MpCmdRun.exe')), \
+             patch.object(defender.time, 'monotonic', side_effect=[0, 0, 295]), \
+             patch.object(defender.time, 'sleep') as sleep, \
+             patch.object(defender.subprocess, 'run', return_value=busy) as execute, \
+             patch('sys.stdout', io.StringIO()):
+            with self.assertRaises(subprocess.TimeoutExpired):
+                defender.update_signatures()
+            self.assertEqual(execute.call_args.kwargs['timeout'], 300)
+            sleep.assert_not_called()
+
+    def test_defender_failed_update_cannot_proceed_to_scan(self):
+        with tempfile.TemporaryDirectory() as directory:
+            installer = Path(directory)/'installer.exe'
+            installer.write_bytes(b'installer fixture')
+            with patch.object(defender, 'update_signatures', side_effect=subprocess.CalledProcessError(2, ['update'])), \
+                 patch.object(defender.subprocess, 'run') as execute, \
+                 patch('sys.argv', ['scan-defender.py', '--update-signatures', str(installer)]):
+                with self.assertRaises(subprocess.CalledProcessError):
+                    defender.main()
+                execute.assert_not_called()
+
+    def test_defender_scan_blocks_threats_and_changed_installer(self):
+        with tempfile.TemporaryDirectory() as directory:
+            installer = Path(directory)/'installer.exe'
+            original = b'installer fixture'
+            installer.write_bytes(original)
+            with patch.object(defender, 'update_signatures', return_value=Path('new/MpCmdRun.exe')), \
+                 patch('sys.argv', ['scan-defender.py', '--update-signatures', str(installer)]), \
+                 patch('sys.stdout', io.StringIO()):
+                with patch.object(defender.subprocess, 'run', side_effect=subprocess.CalledProcessError(2, ['scan'])) as execute:
+                    with self.assertRaises(subprocess.CalledProcessError):
+                        defender.main()
+                    self.assertEqual(execute.call_args.args[0][0], str(Path('new/MpCmdRun.exe')))
+                    self.assertIn('-DisableRemediation', execute.call_args.args[0])
+                    self.assertTrue(execute.call_args.kwargs['check'])
+                def changed(*args, **kwargs):
+                    installer.write_bytes(b'changed fixture')
+                    return subprocess.CompletedProcess(args[0], 0)
+                with patch.object(defender.subprocess, 'run', side_effect=changed):
+                    with self.assertRaisesRegex(RuntimeError, 'Installer changed'):
+                        defender.main()
 
     def test_linux_helpers_are_distinct_inactive_native_copies(self):
         spec = importlib.util.spec_from_file_location('build_installer',build.ROOT/'scripts/build-installer.py')
