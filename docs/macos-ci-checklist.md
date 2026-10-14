@@ -1,6 +1,6 @@
 # macOS 开发与验收
 
-版本：0.5.7。最低系统目标为 macOS 14；CI 原生覆盖 Intel (`macos-15-intel`) 和 Apple Silicon (`macos-latest`)，分别输出 x64 和 arm64 安装包。
+版本：0.5.8。最低系统目标为 macOS 14；CI 原生覆盖 Intel (`macos-15-intel`) 和 Apple Silicon (`macos-latest`)，分别输出 x64 和 arm64 安装包。
 
 ## 自动检查
 
