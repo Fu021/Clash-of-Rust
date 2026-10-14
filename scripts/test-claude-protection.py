@@ -198,11 +198,39 @@ def trusted_fixture(directory):
             subprocess.run(['certutil', '-delstore', 'Root', digest], check=False)
 
 
+@contextlib.contextmanager
+def notification_service(output):
+    if host_system() != 'linux':
+        yield
+        return
+    # The bus starts before Xvfb; relying on D-Bus activation would give dunst
+    # no DISPLAY. Start the real service in the ordinary user's desktop session.
+    with (output/'notification-service.log').open('w') as log:
+        daemon = subprocess.Popen(['dunst','-verbosity','warn'],stdout=log,stderr=log)
+        try:
+            deadline = time.monotonic()+10
+            while time.monotonic() < deadline:
+                assert daemon.poll() is None, 'Native notification service exited'
+                ready = subprocess.run(['gdbus','call','--session','--dest','org.freedesktop.DBus','--object-path','/org/freedesktop/DBus','--method','org.freedesktop.DBus.NameHasOwner','org.freedesktop.Notifications'],capture_output=True,text=True)
+                if ready.returncode == 0 and 'true' in ready.stdout:
+                    break
+                time.sleep(.1)
+            else:
+                raise RuntimeError('Native notification service did not become ready')
+            yield
+        finally:
+            daemon.terminate()
+            try:
+                daemon.wait(timeout=5)
+            except subprocess.TimeoutExpired:
+                daemon.kill();daemon.wait()
+
+
 def check(build, output):
     manifest = json.loads((build/'manifest.json').read_text())
     report = output/'results.json'
     output.mkdir(parents=True, exist_ok=True)
-    with tempfile.TemporaryDirectory(prefix='cor-claude-ca-') as temporary:
+    with notification_service(output), tempfile.TemporaryDirectory(prefix='cor-claude-ca-') as temporary:
         with trusted_fixture(Path(temporary)) as (cert, key, ca):
             env = {'CLASH_CLAUDE_TEST_REPORT': str(report.resolve()), 'CLASH_CLAUDE_TEST_CERT': str(cert),
                    'CLASH_CLAUDE_TEST_CA': str(ca),
