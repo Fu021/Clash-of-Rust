@@ -1,4 +1,4 @@
-//! Native Iced region report and opt-in browser/terminal collection controls.
+//! Native Iced region report with automatic browser sampling and client guides.
 use super::*;
 use clash_of_rust::claude_check::{
     self as check, Environment, Evidence, Group, Report, Route, Signal, browser::Session,
@@ -33,13 +33,21 @@ impl Tab {
         }
     }
 }
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Guide {
+    Clients,
+    Code,
+    Desktop,
+}
 #[derive(Debug, Clone)]
 pub enum Event {
     Start,
     Cancel,
     Tab(Tab),
     Detail(Option<Group>),
+    Guide(Option<Guide>),
     Browser,
+    BrowserOpened(u64, Result<(), String>),
     CodeCommand,
     CloseSession,
     Session(u64, bool, Result<Session, String>),
@@ -60,6 +68,7 @@ pub enum Event {
 pub struct State {
     pub tab: Tab,
     pub detail: Option<Group>,
+    pub guide: Option<Guide>,
     pub reports: [Option<Report>; 4],
     pub session: Option<Session>,
     pub observing: Option<Instant>,
@@ -67,6 +76,7 @@ pub struct State {
     aborters: Vec<AbortHandle>,
     local_busy: bool,
     network_busy: bool,
+    browser_busy: bool,
     importing: bool,
     session_starting: bool,
     routes_busy: bool,
@@ -93,7 +103,11 @@ impl State {
                     .is_some_and(|reference| reference != signal.country))
     }
     pub fn busy(&self) -> bool {
-        self.local_busy || self.network_busy || self.importing
+        self.local_busy
+            || self.network_busy
+            || self.browser_busy
+            || self.session_starting
+            || self.importing
     }
     pub fn close(&mut self) {
         self.generation = self.generation.wrapping_add(1);
@@ -101,17 +115,37 @@ impl State {
             aborter.abort();
         }
         self.session = None;
+        self.guide = None;
         self.command.clear();
         self.observing = None;
         self.session_starting = false;
         self.routes_busy = false;
         self.local_busy = false;
         self.network_busy = false;
+        self.browser_busy = false;
         self.importing = false;
     }
     fn store(&mut self, report: Report) {
+        if report.environment == Environment::Web {
+            self.browser_busy = false;
+        }
         let index = index(report.environment);
         self.reports[index] = Some(report);
+    }
+    fn sampling_status(&mut self) {
+        if self.error {
+            return;
+        }
+        self.status = if self.local_busy || self.network_busy {
+            "正在采集本机与内核地区线索…"
+        } else if self.browser_busy {
+            "浏览器正在自动检测，等待报告回传…"
+        } else if self.reports[index(Environment::Web)].is_some() {
+            "自动检测完成；Code 与 Desktop 请按提示完成补充检测。"
+        } else {
+            "本机与内核采样完成；浏览器采样尚未完成，可重新检测。"
+        }
+        .into();
     }
     fn selected(&self) -> impl Iterator<Item = &Report> {
         self.reports
@@ -149,7 +183,8 @@ impl App {
                 self.claude.reports = Default::default();
                 self.claude.observed.clear();
                 self.claude.error = false;
-                self.claude.status = "正在采集本机与内核地区线索…".into();
+                self.claude.status = "正在采集地区线索，并自动打开浏览器检测…".into();
+                self.claude.guide = Some(Guide::Clients);
                 self.claude.local_busy = true;
                 self.claude.network_busy = true;
                 let generation = self.claude.generation;
@@ -179,7 +214,8 @@ impl App {
                     },
                     move |result| wrap(Event::Network(generation, result)),
                 );
-                return Task::batch([local, network]);
+                let browser = self.claude_event(Event::Browser);
+                return Task::batch([local, network, browser]);
             }
             Event::Cancel => {
                 if self.claude.observing.is_some() {
@@ -193,17 +229,26 @@ impl App {
                 self.claude.detail = None;
             }
             Event::Detail(group) => self.claude.detail = group,
+            Event::Guide(guide) => {
+                self.claude.guide = guide;
+                match guide {
+                    Some(Guide::Code) => self.claude.tab = Tab::Code,
+                    Some(Guide::Desktop) => self.claude.tab = Tab::Desktop,
+                    _ => {}
+                }
+                self.claude.detail = None;
+            }
             Event::Local(generation, report) if generation == self.claude.generation => {
                 self.claude.local_busy = false;
                 self.claude.store(report);
+                self.claude.sampling_status();
             }
             Event::Network(generation, result) if generation == self.claude.generation => {
                 self.claude.network_busy = false;
                 match result {
                     Ok(report) => {
                         self.claude.store(report);
-                        self.claude.status =
-                            "本机与内核采样完成；请补充常用浏览器和 Code 终端的检测。".into();
+                        self.claude.sampling_status();
                     }
                     Err(error) => {
                         self.claude.status = error;
@@ -212,7 +257,13 @@ impl App {
                 }
             }
             Event::Browser | Event::CodeCommand => {
+                if self.exiting || self.claude.session_starting {
+                    return Task::none();
+                }
                 let code = matches!(event, Event::CodeCommand);
+                if !code {
+                    self.claude.browser_busy = true;
+                }
                 if let Some(session) = self.claude.session.as_ref().filter(|s| !s.finished()) {
                     if code {
                         match std::env::current_exe() {
@@ -224,6 +275,7 @@ impl App {
                                 self.claude.status =
                                     "命令已复制；请在启动 Code 的同一终端、同一项目目录运行。"
                                         .into();
+                                self.claude.error = false;
                                 return iced::clipboard::write(self.claude.command.clone());
                             }
                             Err(_) => {
@@ -233,15 +285,15 @@ impl App {
                         }
                     } else {
                         let url = session.url.clone();
+                        let generation = self.claude.generation;
                         return Task::perform(
                             async move {
                                 tokio::task::spawn_blocking(move || platform::open_diagnostic(&url))
                                     .await
                                     .map_err(|e| e.to_string())?
-                                    .map(|_| "已打开浏览器入口，请在常用浏览器中完成检测。".into())
                                     .map_err(|e| e.to_string())
                             },
-                            move |result| wrap(Event::Completed(result)),
+                            move |result| wrap(Event::BrowserOpened(generation, result)),
                         );
                     }
                 } else if !self.claude.session_starting {
@@ -258,6 +310,20 @@ impl App {
                     );
                 }
             }
+            Event::BrowserOpened(generation, result)
+                if generation == self.claude.generation
+                    && self.claude.browser_busy
+                    && self.claude.session.is_some() =>
+            {
+                match result {
+                    Ok(()) => self.claude.sampling_status(),
+                    Err(error) => {
+                        self.claude.browser_busy = false;
+                        self.claude.status = format!("无法自动打开浏览器：{error}");
+                        self.claude.error = true;
+                    }
+                }
+            }
             Event::Session(generation, code, result) if generation == self.claude.generation => {
                 self.claude.session_starting = false;
                 match result {
@@ -270,6 +336,9 @@ impl App {
                         });
                     }
                     Err(error) => {
+                        if !code {
+                            self.claude.browser_busy = false;
+                        }
                         self.claude.status = error;
                         self.claude.error = true;
                     }
@@ -277,6 +346,7 @@ impl App {
             }
             Event::CloseSession => {
                 self.claude.session = None;
+                self.claude.browser_busy = false;
                 self.claude.command.clear();
                 self.claude.status = "浏览器与终端回传入口已关闭。".into();
             }
@@ -384,6 +454,8 @@ impl App {
                     return Task::none();
                 }
                 self.claude.observed.clear();
+                self.claude.guide = None;
+                self.claude.tab = Tab::Desktop;
                 self.claude.observing = Some(Instant::now() + Duration::from_secs(20));
                 self.claude.status = "接下来 20 秒请只操作 Claude Desktop，访问或发送一条消息；将按域名记录经过内核的连接。".into();
             }
@@ -394,11 +466,17 @@ impl App {
                 }
                 if let Some(session) = &self.claude.session {
                     if let Some(report) = session.next_report() {
+                        let web = report.environment == Environment::Web;
                         self.claude.store(report);
                         self.claude.error = false;
-                        self.claude.status = "已收到实际浏览器或 Code 终端的采样报告。".into();
+                        if web {
+                            self.claude.sampling_status();
+                        } else {
+                            self.claude.status = "已收到 Code 终端的采样报告。".into();
+                        }
                     } else if session.finished() {
                         self.claude.session = None;
+                        self.claude.browser_busy = false;
                         self.claude.command.clear();
                         self.claude.status = "回传入口已到期，请重新打开。".into();
                     }
@@ -502,7 +580,11 @@ impl App {
                     .as_secs_f32()
                     / 20.0
             } else {
-                (usize::from(!state.local_busy) + usize::from(!state.network_busy)) as f32 / 2.0
+                (usize::from(!state.local_busy)
+                    + usize::from(!state.network_busy)
+                    + usize::from(!state.browser_busy && !state.session_starting))
+                    as f32
+                    / 3.0
             };
             body = body
                 .push(aligned_row![
@@ -540,7 +622,7 @@ impl App {
         let summary = if has_reports {
             format!("实测 {measured} · 环境差异 {differences} · 未确认 {unknown}")
         } else {
-            "先检测本机与内核，再补充浏览器与终端采样".into()
+            "本机、内核与浏览器自动检测；Code 与 Desktop 按提示补充".into()
         };
         body = body.push(
             container(
@@ -558,15 +640,12 @@ impl App {
             .style(ui_style::panel),
         );
         let actions = aligned_row![
-            button(self.label("浏览器检测").size(self.font_size(12)))
+            button(self.label("Code 检测").size(self.font_size(12)))
                 .style(ui_style::secondary_button)
-                .on_press_maybe((!state.session_starting).then_some(event(Event::Browser))),
-            button(self.label("复制 Code 检测命令").size(self.font_size(12)))
+                .on_press(event(Event::Guide(Some(Guide::Code)))),
+            button(self.label("Desktop 检测").size(self.font_size(12)))
                 .style(ui_style::secondary_button)
-                .on_press_maybe((!state.session_starting).then_some(event(Event::CodeCommand))),
-            button(self.label("导入剪贴板采样").size(self.font_size(12)))
-                .style(ui_style::secondary_button)
-                .on_press_maybe((!state.importing).then_some(event(Event::Import)))
+                .on_press(event(Event::Guide(Some(Guide::Desktop))))
         ]
         .spacing(6);
         body = body.push(actions);
@@ -579,35 +658,15 @@ impl App {
                     .on_press(event(Event::CloseSession))
             ]);
         }
-        if !state.command.is_empty() {
-            body = body
-                .push(
-                    text_input("在启动 Code 的终端运行", &state.command)
-                        .size(self.font_size(12))
-                        .style(ui_style::input),
-                )
-                .push(
-                    self.caption(
-                        "请在 Code 使用的项目目录中运行；不会读取账号、Cookie 或 API 密钥。",
-                    ),
-                );
-        }
         if state.tab == Tab::Web {
-            body = body.push(aligned_row![button(self.label("复制 Claude 页面采样脚本").size(self.font_size(12))).style(ui_style::secondary_button).on_press(event(Event::CopySiteScript)), Space::new().width(Length::Fill)]).push(self.caption("可在 Claude 网页开发者工具的 Console 运行，再导入脚本复制的 JSON，以确认该站点的时区、权限与同域出口。"));
-        }
-        if state.tab == Tab::Desktop {
-            body = body.push(
-                aligned_row![
-                    button(self.label("记录 Desktop 请求").size(self.font_size(12)))
-                        .style(ui_style::secondary_button)
-                        .on_press_maybe(
-                            (self.snapshot.running && !state.busy() && state.observing.is_none())
-                                .then_some(event(Event::Observe))
-                        ),
-                    self.caption("20 秒内只操作 Desktop；按域名和时间关联，无法确认来源进程。")
-                ]
-                .spacing(8),
-            );
+            body = body.push(aligned_row![
+                button(self.label("复制 Claude 页面采样脚本").size(self.font_size(12)))
+                    .style(ui_style::secondary_button).on_press(event(Event::CopySiteScript)),
+                button(self.label("导入剪贴板采样").size(self.font_size(12)))
+                    .style(ui_style::secondary_button)
+                    .on_press_maybe((!state.importing).then_some(event(Event::Import))),
+                Space::new().width(Length::Fill)
+            ].spacing(6)).push(self.caption("可在 Claude 网页开发者工具的 Console 运行，再导入脚本复制的 JSON，以确认该站点的时区、权限与同域出口。"));
         }
         let mut results = column![].spacing(10);
         if let Some(group) = state.detail {
@@ -704,11 +763,92 @@ impl App {
             }
         }
         if !has_reports {
-            results = results.push(self.caption("网页版检测需要在常用浏览器中完成，Code 检测需要在实际终端运行；Desktop 的系统线索与请求观测分别展示。"));
+            results = results.push(self.caption("开始检测会自动打开默认浏览器；点击 Code 检测或 Desktop 检测，按提示完成实际客户端采样。"));
         }
         body.push(page_scroll(results).height(Length::Fill))
             .height(Length::Fill)
             .into()
+    }
+
+    pub(crate) fn claude_dialog(&self) -> Option<Element<'_, Message>> {
+        let guide = self.claude.guide?;
+        let event = |event| Message::Claude(event);
+        let close = button(self.label("关闭"))
+            .style(ui_style::secondary_button)
+            .padding([8, 12])
+            .on_press(event(Event::Guide(None)));
+        let mut body = match guide {
+            Guide::Clients => column![
+                self.title("还需完成客户端检测"),
+                self.label("本机、内核和默认浏览器会自动检测。Code 与 Desktop 需要在实际使用环境中补充采样，才能查看对应的地区线索。"),
+                self.caption("点击下方按钮查看操作步骤，也可以稍后从检测页继续。"),
+                aligned_row![
+                    button(self.label("Code 检测")).style(ui_style::primary).padding([8, 12])
+                        .on_press(event(Event::Guide(Some(Guide::Code)))),
+                    button(self.label("Desktop 检测")).style(ui_style::primary).padding([8, 12])
+                        .on_press(event(Event::Guide(Some(Guide::Desktop)))),
+                    Space::new().width(Length::Fill),
+                    close
+                ].spacing(8)
+            ],
+            Guide::Code => {
+                let mut content = column![
+                    self.title("Code 检测"),
+                    self.label("1. 点击“复制检测命令”。"),
+                    self.label("2. 在启动 Claude Code 的同一终端，切换到同一项目目录，粘贴并运行命令。"),
+                    self.label("3. 保持本应用的检测页打开，结果会自动回传到“Code”。"),
+                    self.caption("需要结合 Code 的 /status 核对实际会话设置。命令不会读取账号、Cookie 或 API 密钥。")
+                ].spacing(12);
+                if !self.claude.command.is_empty() {
+                    content = content.push(self.caption("命令已复制到剪贴板：")).push(
+                        text_input("检测命令", &self.claude.command)
+                            .size(self.font_size(12)).style(ui_style::input)
+                    );
+                    if self.claude.reports[index(Environment::Code)].is_some() {
+                        content = content.push(self.caption("Code 报告已回传，可关闭此窗口查看结果。"));
+                    }
+                }
+                content.push(aligned_row![
+                    Space::new().width(Length::Fill),
+                    close,
+                    button(self.label(if self.claude.session_starting { "准备命令…" } else { "复制检测命令" }))
+                        .style(ui_style::primary).padding([8, 12])
+                        .on_press_maybe((!self.claude.session_starting && !self.exiting)
+                            .then_some(event(Event::CodeCommand)))
+                ].spacing(8))
+            }
+            Guide::Desktop => {
+                let mut content = column![
+                    self.title("Desktop 检测"),
+                    self.label("1. 点击“开始观测”，随后切换到 Claude Desktop。"),
+                    self.label("2. 在接下来的 20 秒内，只操作 Claude Desktop，访问或发送一条消息。请求需要经过本应用的内核。"),
+                    self.label("3. 观测结束后，回到“Desktop”查看域名、匹配规则与代理链。"),
+                    self.caption("按域名与时间关联请求，无法确认来源进程；系统地区线索与请求观测分别展示。")
+                ].spacing(12);
+                if !self.snapshot.running {
+                    content = content.push(self.caption("请先启动内核，再开始观测。"));
+                } else if self.claude.busy() {
+                    content = content.push(self.caption("请等待自动检测完成后开始观测。"));
+                } else if self.claude.observing.is_some() {
+                    content = content.push(self.caption("正在观测，请在 Claude Desktop 中操作。"));
+                }
+                content.push(aligned_row![
+                    Space::new().width(Length::Fill),
+                    close,
+                    button(self.label("开始观测")).style(ui_style::primary).padding([8, 12])
+                        .on_press_maybe((self.snapshot.running && !self.claude.busy()
+                            && self.claude.observing.is_none() && !self.exiting)
+                            .then_some(event(Event::Observe)))
+                ].spacing(8))
+            }
+        }.spacing(14);
+        if self.claude.error {
+            body = body.push(
+                self.label(&self.claude.status)
+                    .color(ui_style::tone(&self.theme(), ui_style::Tone::Danger)),
+            );
+        }
+        Some(body.into())
     }
 
     fn claude_card(&self, group: Group) -> Element<'_, Message> {
@@ -908,6 +1048,22 @@ pub(crate) fn fixture_state(scene: &str) -> State {
         "claude-desktop" => state.tab = Tab::Desktop,
         "claude-code" => state.tab = Tab::Code,
         "claude-details" => state.detail = Some(Group::Browser),
+        "claude-start-guide" => {
+            state.guide = Some(Guide::Clients);
+            state.reports = Default::default();
+            state.local_busy = true;
+            state.network_busy = true;
+            state.browser_busy = true;
+            state.status = "正在采集地区线索，并自动打开浏览器检测…".into();
+        }
+        "claude-code-guide" => {
+            state.guide = Some(Guide::Code);
+            state.tab = Tab::Code;
+        }
+        "claude-desktop-guide" => {
+            state.guide = Some(Guide::Desktop);
+            state.tab = Tab::Desktop;
+        }
         _ => {}
     }
     state
@@ -918,6 +1074,121 @@ mod tests {
     use super::*;
     fn app() -> App {
         App::with_engine(Err(anyhow::anyhow!("isolated")), None).0
+    }
+    #[test]
+    fn starting_detection_starts_browser_and_dismissing_guide_keeps_sampling() {
+        let mut app = app();
+        app.page = Page::Claude;
+        let _ = app.claude_event(Event::Start);
+        assert_eq!(app.claude.guide, Some(Guide::Clients));
+        assert!(app.claude.local_busy && app.claude.network_busy);
+        assert!(app.claude.browser_busy && app.claude.session_starting);
+        let generation = app.claude.generation;
+        let _ = app.claude_event(Event::Start);
+        assert_eq!(app.claude.generation, generation, "No overlapping runs");
+        let _ = app.desktop_message(&Message::Key(iced::keyboard::Event::KeyPressed {
+            key: iced::keyboard::Key::Named(iced::keyboard::key::Named::Escape),
+            modified_key: iced::keyboard::Key::Named(iced::keyboard::key::Named::Escape),
+            physical_key: iced::keyboard::key::Physical::Unidentified(
+                iced::keyboard::key::NativeCode::Unidentified,
+            ),
+            location: iced::keyboard::Location::Standard,
+            modifiers: iced::keyboard::Modifiers::empty(),
+            text: None,
+            repeat: false,
+        }));
+        assert!(app.claude.guide.is_none());
+        assert!(app.claude.busy());
+        assert_eq!(app.claude.generation, generation);
+    }
+    #[test]
+    fn cancellation_ignores_old_browser_and_session_callbacks() {
+        let mut app = app();
+        let _ = app.claude_event(Event::Start);
+        let old = app.claude.generation;
+        let _ = app.claude_event(Event::Cancel);
+        let stopped = app.claude.status.clone();
+        let _ = app.claude_event(Event::BrowserOpened(old, Err("stale open error".into())));
+        let _ = app.claude_event(Event::Session(
+            old,
+            false,
+            Err("stale session error".into()),
+        ));
+        assert!(!app.claude.busy() && !app.claude.error);
+        assert!(app.claude.guide.is_none());
+        assert_eq!(app.claude.status, stopped);
+        let _ = app.claude_event(Event::Start);
+        let _ = app.claude_event(Event::Session(old, false, Err("old run".into())));
+        assert!(app.claude.session_starting && app.claude.browser_busy);
+        assert!(!app.claude.error);
+    }
+    #[test]
+    fn receiver_failure_does_not_leave_detection_busy_after_local_results() {
+        let mut app = app();
+        let _ = app.claude_event(Event::Start);
+        let generation = app.claude.generation;
+        let _ = app.claude_event(Event::Session(generation, false, Err("bind failed".into())));
+        let _ = app.claude_event(Event::Local(
+            generation,
+            Report::new(Environment::Desktop, "test"),
+        ));
+        let _ = app.claude_event(Event::Network(
+            generation,
+            Ok(Report::new(Environment::Core, "test")),
+        ));
+        assert!(!app.claude.busy());
+        assert!(app.claude.error);
+        assert_eq!(app.claude.status, "bind failed");
+        assert!(app.claude.reports[index(Environment::Desktop)].is_some());
+        assert!(app.claude.reports[index(Environment::Core)].is_some());
+    }
+    #[tokio::test]
+    async fn browser_report_is_required_to_finish_automatic_detection() {
+        let mut app = app();
+        app.page = Page::Claude;
+        let _ = app.claude_event(Event::Start);
+        let generation = app.claude.generation;
+        let session = Session::start(check::client(None).unwrap()).await.unwrap();
+        let _ = app.claude_event(Event::Session(generation, false, Ok(session)));
+        let _ = app.claude_event(Event::Local(
+            generation,
+            Report::new(Environment::Desktop, "test"),
+        ));
+        let _ = app.claude_event(Event::Network(
+            generation,
+            Ok(Report::new(Environment::Core, "test")),
+        ));
+        assert!(app.claude.busy() && app.claude.browser_busy);
+        let _ = app.claude_event(Event::Imported(
+            generation,
+            Ok(Report::new(Environment::Web, "test")),
+        ));
+        assert!(!app.claude.busy());
+        let status = app.claude.status.clone();
+        let _ = app.claude_event(Event::BrowserOpened(generation, Ok(())));
+        assert_eq!(
+            app.claude.status, status,
+            "Late launch result must not overwrite the report"
+        );
+    }
+    #[test]
+    fn client_guides_only_start_observation_after_confirmation() {
+        let mut app = app();
+        app.page = Page::Claude;
+        app.snapshot.running = true;
+        for guide in [Guide::Clients, Guide::Code, Guide::Desktop] {
+            let _ = app.claude_event(Event::Guide(Some(guide)));
+            assert!(app.claude_dialog().is_some());
+            assert!(app.claude.observing.is_none());
+            assert!(app.claude.command.is_empty());
+        }
+        let _ = app.claude_event(Event::Guide(None));
+        assert!(app.claude_dialog().is_none());
+        let _ = app.claude_event(Event::Guide(Some(Guide::Desktop)));
+        let _ = app.claude_event(Event::Observe);
+        assert!(app.claude.guide.is_none());
+        assert!(app.claude.observing.is_some());
+        assert_eq!(app.claude.tab, Tab::Desktop);
     }
     #[test]
     fn leaving_page_cancels_pending_results_without_retaining_a_server() {

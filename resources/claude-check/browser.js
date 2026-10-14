@@ -121,12 +121,14 @@ if (document.getElementById('clash-region-start')) {
         if (!response.ok) throw new Error();
         status.textContent = '检测报告已回传到 Clash of Rust。你可以关闭此页面。'; progress.value = 4;
     };
-    start.onclick = async () => {
+    const run = async () => {
+        if (start.disabled) return;
         start.disabled = true; locate.disabled = true; status.textContent = '采集浏览器与网络地区线索…'; progress.value = 1;
         try { data = await collectClaudeRegion({ root }); progress.value = 3; await submit(); }
         catch (_) { status.textContent = '回传失败；请确认应用中的检测入口仍开启。可以保存采样 JSON 后复制内容导入。'; }
         finally { start.disabled = false; locate.disabled = false; }
     };
+    start.onclick = run;
     locate.onclick = async () => {
         if (!navigator.geolocation) { status.textContent = '浏览器未提供定位功能。'; return; }
         if (!data) { status.textContent = '请先完成浏览器检测，再主动检测定位。'; return; }
@@ -145,4 +147,5 @@ if (document.getElementById('clash-region-start')) {
         const blob = new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' });
         const url = URL.createObjectURL(blob); const a = document.createElement('a'); a.href = url; a.download = 'claude-browser-sample.json'; a.click(); setTimeout(() => URL.revokeObjectURL(url), 1000);
     };
+    void run();
 }

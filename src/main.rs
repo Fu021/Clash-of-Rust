@@ -4495,7 +4495,6 @@ impl App {
                 self.label("%")
             ]
             .spacing(12),
-            self.caption("字号独立于窗口尺寸与系统显示缩放。"),
             checkbox(self.settings.tray_speed)
                 .label("托盘显示上传与下载速度")
                 .text_size(self.scaled(12))

@@ -869,9 +869,11 @@ fn update(app: &mut App, message: Message) -> Task<Message> {
         | Message::SiteSummaryFilter(..)
         | Message::SiteResetFilters
         | Message::SiteReport => app.update(message),
-        Message::Claude(event @ (claude_view::Event::Tab(_) | claude_view::Event::Detail(_))) => {
-            app.update(Message::Claude(event))
-        }
+        Message::Claude(
+            event @ (claude_view::Event::Tab(_)
+            | claude_view::Event::Detail(_)
+            | claude_view::Event::Guide(_)),
+        ) => app.update(Message::Claude(event)),
         Message::ConnectionSort(field) => {
             let task = app.update(Message::ConnectionSort(field));
             eprintln!(

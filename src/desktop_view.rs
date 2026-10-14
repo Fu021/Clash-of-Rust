@@ -378,6 +378,7 @@ impl App {
                         if self.confirmation.is_none()
                             && self.profile_editor.is_none()
                             && self.connection_detail.is_none()
+                            && self.claude.guide.is_none()
                             && !(self.page == Page::Rules && self.rule_state.modal_open())
                         {
                             iced::widget::operation::focus("page-search")
@@ -396,6 +397,7 @@ impl App {
                         if self.confirmation.is_some()
                             || self.profile_editor.is_some()
                             || self.connection_detail.is_some()
+                            || self.claude.guide.is_some()
                             || (self.page == Page::Rules && self.rule_state.modal_open())
                         {
                             use iced::advanced::widget::operation::{focusable, scope};
@@ -424,6 +426,9 @@ impl App {
                             self.desktop_message(&Message::CloseProfileEdit).unwrap()
                         } else if self.connection_detail.is_some() {
                             self.connection_detail = None;
+                            none()
+                        } else if self.claude.guide.is_some() {
+                            self.claude.guide = None;
                             none()
                         } else if self.page == Page::Rules {
                             self.update_rules(rules_view::Event::CloseEditor)
@@ -594,6 +599,8 @@ impl App {
                 body = body.push(self.label("此连接已结束，详情不再保留。"));
             }
             Some(body.into())
+        } else if self.page == Page::Claude {
+            self.claude_dialog()
         } else {
             None
         };

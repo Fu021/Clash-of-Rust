@@ -139,7 +139,7 @@ def browsers(output):
                 page.on('console', lambda message: events.append(message.text) if message.text.startswith('clash-fixture-') else None)
                 try:
                     page.goto(root)
-                    page.click('#clash-region-start')
+                    expect(page.locator('#clash-region-start')).to_be_disabled()
                     expect(page.locator('#clash-region-status')).to_contain_text('已回传', timeout=30000)
                     assert len(reports) == 1 and not failures
                     report = reports[0]
@@ -161,6 +161,17 @@ def browsers(output):
                         while len(reports) < 2 and time.monotonic() < deadline: time.sleep(.05)
                         assert len(reports) == 2 and reports[-1]['geolocation']['latitude'] == 37.7
                         assert events.count('clash-fixture-location-request') == 1
+                        page.route(root+'report', lambda route: route.fulfill(status=503, body='{}'))
+                        page.click('#clash-region-start')
+                        expect(page.locator('#clash-region-status')).to_contain_text('回传失败', timeout=30000)
+                        expect(page.locator('#clash-region-start')).to_be_enabled()
+                        expect(page.locator('#clash-region-download')).to_be_enabled()
+                        assert len(reports) == 2
+                        page.unroute(root+'report')
+                        page.click('#clash-region-start')
+                        expect(page.locator('#clash-region-status')).to_contain_text('已回传', timeout=30000)
+                        assert len(reports) == 3 and reports[-1]['geolocation']['latitude'] is None
+                        assert events.count('clash-fixture-location-request') == 1
                     elif mode == 'absent':
                         assert not report['webrtc']['supported'] and report['ipv6'] == ''
                     else:
@@ -169,7 +180,8 @@ def browsers(output):
                         assert events.count('clash-fixture-rtc-closed') == 1
                     page.screenshot(path=str(output/('browser-'+mode+'.png')), full_page=True)
                     cases.append({'case':mode, 'status':'passed', 'locale':locale, 'timezone':timezone,
-                                  'location_only_on_click':True, 'external_services':'intercepted fixtures'})
+                                  'automatic_on_load':True, 'location_only_on_click':True,
+                                  'callback_failure_retry':mode == 'complete', 'external_services':'intercepted fixtures'})
                 except BaseException:
                     write_json(output/('browser-'+mode+'-failure.json'), {'page_errors':failures, 'events':events, 'posted_samples':reports})
                     try: page.screenshot(path=str(output/('browser-'+mode+'-failure.png')), full_page=True, timeout=5000)

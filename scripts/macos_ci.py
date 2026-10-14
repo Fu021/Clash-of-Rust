@@ -112,7 +112,7 @@ def rendered_ui():
     output = REPORT/'ui'
     output.mkdir(exist_ok=True)
     def chunk(kind, data): return struct.pack('>I', len(data))+kind+data+struct.pack('>I', zlib.crc32(kind+data)&0xffffffff)
-    scenes = ('home', 'proxies', 'profiles', 'connections', 'rules', 'logs', 'diagnostics', 'ip', 'claude', 'claude-web', 'claude-desktop', 'claude-code', 'claude-details', 'settings', 'profiles-edit', 'profiles-delete-active', 'profiles-delete-inactive', 'profiles-discard', 'connections-details', 'rules-discard', 'rules-discard-editor', 'rules-switch-confirm', 'rules-exit-confirm', 'settings-large-text')
+    scenes = ('home', 'proxies', 'profiles', 'connections', 'rules', 'logs', 'diagnostics', 'ip', 'claude', 'claude-web', 'claude-desktop', 'claude-code', 'claude-details', 'claude-start-guide', 'claude-code-guide', 'claude-desktop-guide', 'settings', 'profiles-edit', 'profiles-delete-active', 'profiles-delete-inactive', 'profiles-discard', 'connections-details', 'rules-discard', 'rules-discard-editor', 'rules-switch-confirm', 'rules-exit-confirm', 'settings-large-text')
     for scene in scenes:
         for suffix in ('', '-light'):
             name = scene+suffix
