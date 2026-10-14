@@ -563,12 +563,15 @@ impl Api {
         })
         .await
     }
-    pub(crate) async fn proxy_selection(&self, name: &str) -> Result<ProxySelection> {
+    pub(crate) async fn proxy_selection(&self, name: &str) -> Result<Option<ProxySelection>> {
         let response = self
             .request(Method::GET, self.url(&["proxies", name])?)
             .send()
             .await?;
-        decode_json(Self::checked(response).await?).await
+        if response.status() == reqwest::StatusCode::NOT_FOUND {
+            return Ok(None); // Provider members do not have a /proxies/{name} entry.
+        }
+        decode_json(Self::checked(response).await?).await.map(Some)
     }
     pub(crate) async fn proxy_nodes(&self, name: &str) -> Result<Proxy> {
         let response = self

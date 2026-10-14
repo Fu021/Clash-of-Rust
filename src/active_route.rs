@@ -49,7 +49,10 @@ pub fn from_snapshot(root: &str, proxies: &Proxies) -> Option<String> {
             return None;
         }
         visited.push(name);
-        let proxy = proxies.proxies.get(name)?;
+        let Some(proxy) = proxies.proxies.get(name) else {
+            // A valid group's selected provider member is absent from this map.
+            return (visited.len() > 1).then(|| name.into());
+        };
         if proxy.now.as_str().is_empty() {
             return Some(name.into());
         }
@@ -80,6 +83,7 @@ mod tests {
             "Auto": {"type":"URLTest", "now":"日本节点"},
             "日本节点": {"type":"Trojan"},
             "Cycle": {"type":"Selector", "now":"Cycle"}
+            ,"Provider": {"type":"Selector", "now":"provider leaf", "all":["provider leaf"]}
         }}))
         .unwrap();
         assert_eq!(
@@ -88,6 +92,10 @@ mod tests {
         );
         assert!(from_snapshot("Cycle", &proxies).is_none());
         assert!(from_snapshot("Missing", &proxies).is_none());
+        assert_eq!(
+            from_snapshot("Provider", &proxies).as_deref(),
+            Some("provider leaf")
+        );
     }
 
     #[test]

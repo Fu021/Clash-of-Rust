@@ -1900,7 +1900,9 @@ impl Engine {
             if !visited.insert(name.clone()) {
                 return Ok(None);
             }
-            let proxy = self.api.proxy_selection(&name).await?;
+            let Some(proxy) = self.api.proxy_selection(&name).await? else {
+                return Ok((visited.len() > 1).then_some(name));
+            };
             if proxy.now.is_empty() {
                 return Ok(Some(name));
             }

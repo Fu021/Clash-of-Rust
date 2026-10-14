@@ -594,6 +594,15 @@ pub async fn run() {
         .unwrap();
     let provider_id = engine.profiles.last().unwrap().id.clone();
     engine.activate(provider_id).await.unwrap();
+    assert_eq!(
+        engine
+            .poll_with_header(Scope::Claude, true)
+            .await
+            .unwrap()
+            .active_node
+            .as_deref(),
+        Some("FixtureA")
+    );
     let provider_settings = serde_json::to_value(&engine.settings).unwrap();
     engine.claude_protection(true).await.unwrap();
     assert_eq!(
