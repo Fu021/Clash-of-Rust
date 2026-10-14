@@ -104,7 +104,7 @@ def dmg(app, destination):
 
 
 @contextlib.contextmanager
-def network_service_for_ci():
+def network_service_for_ci(report, name):
     uid = os.getuid()
     label = f'org.clashofrust.network.{uid}'
     directory = Path('/Library/PrivilegedHelperTools')/label
@@ -114,6 +114,12 @@ def network_service_for_ci():
         yield
     finally:
         if agent.exists() or directory.exists():
+            state = subprocess.run(['/usr/bin/sudo', '-n', '/bin/launchctl', 'print', 'system/'+label], capture_output=True, text=True, timeout=15)
+            (report/(name+'-network-service-launchd.log')).write_text(state.stdout+state.stderr)
+            service_log = directory/'network-service.log'
+            if service_log.exists():
+                output = subprocess.run(['/usr/bin/sudo', '-n', '/bin/cat', service_log], capture_output=True, text=True, timeout=15)
+                (report/(name+'-network-service.log')).write_text(output.stdout+output.stderr)
             subprocess.run(['/usr/bin/sudo', '-n', '/bin/launchctl', 'bootout', 'system/'+label], capture_output=True, timeout=20)
             subprocess.run(['/usr/bin/sudo', '-n', '/bin/rm', '-rf', directory, agent], check=True, timeout=20)
 
@@ -422,7 +428,7 @@ def main():
                 try:
                     package = invalid.get(name.removeprefix('update-'), valid)
                     version = '0.0.0-ci-mismatch' if name == 'update-version' else args.version
-                    with network_service_for_ci():
+                    with network_service_for_ci(args.report, args.label+'-'+name):
                         entry['details'] = flow(name, fixture, package, version, args.report, args.label)
                     entry['status'] = 'passed'
                 except Exception as error:

@@ -54,6 +54,24 @@ struct ProxyLease {
     owner: u32,
 }
 
+fn adopt_lease(
+    lease: &mut Option<ProxyLease>,
+    original: ProxyState,
+    owned: ProxyState,
+    owner: u32,
+) {
+    if let Some(current) = lease {
+        current.owned = owned;
+        current.owner = owner;
+    } else {
+        *lease = Some(ProxyLease {
+            original,
+            owned,
+            owner,
+        });
+    }
+}
+
 fn peer_pid(stream: &UnixStream) -> Result<u32> {
     use std::os::fd::AsRawFd;
     let mut pid: libc::pid_t = 0;
@@ -174,14 +192,17 @@ pub fn ensure_available(interactive: bool) -> Result<()> {
         super::shell_quote(&launcher.to_string_lossy()),
         unsafe { libc::getuid() }
     ))?;
-    let deadline = Instant::now() + Duration::from_secs(10);
+    let deadline = Instant::now() + Duration::from_secs(60);
     loop {
-        if exchange(&Request::Status {}).is_ok_and(|status| status.core_sha256 == expected) {
-            return Ok(());
-        }
+        let status = exchange(&Request::Status {});
+        let reason = match status {
+            Ok(status) if status.core_sha256 == expected => return Ok(()),
+            Ok(_) => "助手内核快照与当前应用不一致".into(),
+            Err(error) => format!("{error:#}"),
+        };
         ensure!(
             Instant::now() < deadline,
-            "网络助手安装后未就绪，请检查系统日志"
+            "网络助手安装后未就绪：{reason}；请检查系统日志"
         );
         std::thread::sleep(Duration::from_millis(100));
     }
@@ -258,8 +279,14 @@ fn checked(command: &mut Command, action: &str) -> Result<()> {
 
 fn plist(label: &str, launcher: &Path, uid: u32) -> String {
     format!(
-        "<?xml version=\"1.0\" encoding=\"UTF-8\"?><plist version=\"1.0\"><dict><key>Label</key><string>{label}</string><key>ProgramArguments</key><array><string>{}</string><string>--macos-network-service</string><string>{uid}</string></array><key>RunAtLoad</key><true/><key>KeepAlive</key><true/><key>ThrottleInterval</key><integer>3</integer><key>ExitTimeOut</key><integer>10</integer><key>Umask</key><integer>18</integer></dict></plist>\n",
-        super::cf::escape(&launcher.to_string_lossy())
+        "<?xml version=\"1.0\" encoding=\"UTF-8\"?><plist version=\"1.0\"><dict><key>Label</key><string>{label}</string><key>ProgramArguments</key><array><string>{}</string><string>--macos-network-service</string><string>{uid}</string></array><key>RunAtLoad</key><true/><key>KeepAlive</key><true/><key>ThrottleInterval</key><integer>3</integer><key>ExitTimeOut</key><integer>10</integer><key>Umask</key><integer>18</integer><key>StandardErrorPath</key><string>{}/network-service.log</string></dict></plist>\n",
+        super::cf::escape(&launcher.to_string_lossy()),
+        super::cf::escape(
+            &launcher
+                .parent()
+                .expect("installed helper directory")
+                .to_string_lossy()
+        )
     )
 }
 
@@ -361,8 +388,9 @@ pub fn serve(uid: u32) -> Result<()> {
     root_owned(&directory, true)?;
     root_owned(&directory.join("resources"), true)?;
     let executable = std::env::current_exe()?;
+    eprintln!("网络助手启动：{}", executable.display());
     ensure!(
-        executable == directory.join("clash-tun-launcher"),
+        executable.canonicalize()? == directory.join("clash-tun-launcher").canonicalize()?,
         "请使用已安装的网络助手"
     );
     for path in [
@@ -444,14 +472,8 @@ pub fn serve(uid: u32) -> Result<()> {
                             super::native_proxy::read()? == owned,
                             "系统代理已被其他程序修改，请重新选择代理模式"
                         );
-                        if lease.is_none() {
-                            lease = Some(ProxyLease {
-                                original,
-                                owned,
-                                owner: peer_pid(&stream)?,
-                            });
-                            save_lease(&journal, lease.as_ref().unwrap())?;
-                        }
+                        adopt_lease(&mut lease, original, owned, peer_pid(&stream)?);
+                        save_lease(&journal, lease.as_ref().unwrap())?;
                     }
                     Request::Proxy { state, restore } => {
                         if !restore && lease.is_none() {
@@ -533,6 +555,20 @@ pub fn serve(uid: u32) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn proxy_adoption_moves_ownership_without_losing_the_original_settings() {
+        use crate::platform::ProxyValue;
+        let original = ProxyState::from([("original".into(), None)]);
+        let owned = ProxyState::from([("owned".into(), Some(ProxyValue::Text("first".into())))]);
+        let mut lease = None;
+        adopt_lease(&mut lease, original.clone(), owned, 100);
+        let next = ProxyState::from([("owned".into(), Some(ProxyValue::Text("second".into())))]);
+        adopt_lease(&mut lease, ProxyState::new(), next.clone(), 200);
+        let lease = lease.unwrap();
+        assert_eq!(lease.original, original);
+        assert_eq!(lease.owned, next);
+        assert_eq!(lease.owner, 200);
+    }
     #[test]
     fn service_protocol_does_not_accept_executables_or_shell_commands() {
         for data in [
