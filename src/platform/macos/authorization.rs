@@ -6,43 +6,11 @@ use std::{
     sync::mpsc,
     time::{Duration, Instant},
 };
-#[cfg(feature = "ui-preview")]
-static CI_AUTHORIZATIONS: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
-#[cfg(feature = "ui-preview")]
-pub fn ci_authorizations() -> usize {
-    CI_AUTHORIZATIONS.load(std::sync::atomic::Ordering::Relaxed)
-}
-
 /// Quote separately for the shell and the AppleScript string literal.
 pub fn shell_quote(value: &str) -> String {
     format!("'{}'", value.replace('\'', "'\\''"))
 }
 pub fn administrator(script: &str) -> Result<()> {
-    #[cfg(feature = "ui-preview")]
-    CI_AUTHORIZATIONS.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-    // This executor exists only in screenshot/integration fixtures. Distributed
-    // binaries never accept an environment variable as an authorization grant.
-    #[cfg(feature = "ui-preview")]
-    if std::env::var("GITHUB_ACTIONS").as_deref() == Ok("true") {
-        match std::env::var("CLASH_CI_AUTHORIZATION").as_deref() {
-            Ok("sudo") => {
-                return execute_script(
-                    &format!("/usr/bin/sudo -n /bin/sh -c {}", shell_quote(script)),
-                    false,
-                );
-            }
-            Ok("cancel") => return execute_script("error number -128", false),
-            Ok("timeout") => {
-                run(
-                    Command::new("/usr/bin/osascript").args(["-e", "delay 5"]),
-                    "系统授权",
-                    Duration::from_millis(100),
-                )?;
-                return Ok(());
-            }
-            _ => {}
-        }
-    }
     execute_script(script, true)
 }
 

@@ -12,7 +12,7 @@ import tempfile
 import time
 import urllib.request
 
-from build_support import ROOT, host_arch, run, cargo_messages, validate_binary_arch, validate_resources, write_json, package_version
+from build_support import ROOT, host_arch, run, validate_binary_arch, validate_resources, write_json
 from macos_package import disk_image
 
 REPORT = ROOT/'target/macos-report'
@@ -221,11 +221,6 @@ def diagnostics(arch):
         with open(summary, 'a') as stream:
             stream.write(f'### macOS {arch} diagnostics\n\n| Check | Result | Seconds |\n|---|---|---|\n')
             for entry in report['suites']: stream.write(f"| {entry['name']} | {entry['status']} | {entry.get('duration_seconds', '')} |\n")
-            for path in sorted(REPORT.glob('*-flows.json')):
-                flows = json.loads(path.read_text())
-                stream.write(f'\n#### {path.stem}\n\n| Flow | Result | Seconds |\n|---|---|---|\n')
-                for case in flows['cases']:
-                    stream.write(f"| {case['name']} | {case['status']} | {case.get('duration_seconds', '')} |\n")
             stream.write('\nFull logs, window metadata and crash reports are in the macOS report artifact. Authorization dialogs, reboot/login and physical display tests remain manual.\n')
 
 

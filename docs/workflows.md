@@ -6,7 +6,6 @@
 | Publish Release | 手动 | 复用成功 CI 的程序，打包、安装后测试、发布 | 六个安装包及 SHA256；测试产物保留 14 天 |
 | Memory Benchmark | 手动 | 测量一个远程分支、标签或提交的内存 | 原始 JSONL、报告、截图、构建日志；保留 30 天 |
 | UI Screenshots | 手动 | 选择成功 CI 与平台，生成原生界面截图 | `ui-screenshots-{system}-{arch}`；保留 14 天 |
-| Mac Online Update（临时） | 首次 PR、手动 | 通过本机 HTTP 服务验证 Mac 在线更新 | 诊断 DMG、HTTP 与安装阶段报告；保留 14 天 |
 
 六个平台为 Windows x64 / ARM64、Linux x64 / ARM64、macOS Intel / Apple Silicon。Linux 安装包支持 Debian/Ubuntu，Ubuntu 仅支持 22.04 及以上；Ubuntu 最新版兼容验证在发布工作流中执行。
 
@@ -14,7 +13,7 @@
 
 - 六平台使用同一个 Release profile 完成格式检查、Clippy、编译和 Rust 常规测试。
 - 原生基础检查验证系统代理设置写入、HTTP 转发、TUN 接管无显式代理的流量，以及关闭后的清理。Linux 使用隔离网络命名空间及 GSettings 内存后端，不覆盖真实登录桌面的 dconf 持久化；Mac 使用真实 launchd 网络助手，Windows 使用 runner 的管理员权限。
-- 已解决问题的专项 GUI、窗口缩放、自启动、失败注入、浏览器及更新安装场景不在常规 CI 中执行。相关诊断脚本保留，可按问题单独运行。
+- CI 聚焦基础代理/TUN 与常规代码测试；已结束的专项排障脚本和临时更新工作流已移除。
 - CI 不执行截图，也不额外编译截图入口；截图由独立手动工作流按需生成。
 - Linux x64 检查生成代码；通用 Python 构建工具和产物协议测试在 Linux x64 与两种 Windows 架构执行；Windows 另核对 PE 图标。
 - main push、PR 更新触发 CI，过时的同分支运行自动取消。现有依赖与资源缓存策略保持不变。
@@ -51,16 +50,6 @@ Mac 的失败日志、系统与网络状态、崩溃报告保存在 `macos-ci-re
 
 六种原生 runner 使用 Iced 的渲染像素截图，Mac 不依赖系统屏幕录制权限。输出每页深浅色、普通/最小窗口及详情/确认框 PNG、索引、源码与 CI 产物身份、逐图哈希和日志。固定演示数据不包含账户或实际业务流量，不等同于真实网络检测结果。支持包含 `ui-preview` 场景的项目版本。
 
-## 临时 Mac 在线更新测试
-
-`Mac Online Update (temporary)` 单独覆盖 Intel 和 Apple Silicon；正常 CI 和发布不调用它。首次 PR 仅在临时工作流或测试脚本变化时验证，之后可手动触发；`target_tag` 指定已有正式版（默认 `v0.5.8`）。
-
-测试客户端编译为 `<目标版本>-update-test.1`，只在专用诊断构建中将更新源固定到 `http://127.0.0.1:18080`。本机服务提供 Release JSON、SHA256 与原版 DMG，验证真实检查、下载、校验、安装、普通用户重启及内核健康；覆盖用户目录/系统目录，以及开过 TUN 后切系统代理的两种目录。正式程序不接受更新源环境变量。`stock_probe=true` 则从目标正式版标签构建，仅降低 Cargo 版本号、不启用测试 feature，复用原正式 DMG 的资源，供用户通过 GitHub 正常更新复现问题。
-
-产物为两种架构的诊断 DMG 和逐阶段 JSON、HTTP 访问、GUI/助手日志。免密 sudo 仍替代人工点击授权，不能证明真实授权弹窗或 Gatekeeper 行为正确。诊断包仅供测试，临时工作流排查结束后可以删除。
-
-本地验证可运行 `python3 scripts/test-macos-online-update.py --serve-only /绝对路径/Clash-of-Rust-0.5.8-macos-arm64.dmg --arch arm64`，再启动诊断包中的程序并检查更新；服务仅监听本机。测试前退出正式程序，使用单独的测试数据目录。
-
 ## 静态资源维护
 
 图标和国旗使用统一入口，日常构建直接使用仓库中的成品：
@@ -80,7 +69,7 @@ python scripts/prepare-assets.py verify-icons 路径/clash-of-rust.exe 路径/�
 - `ref`：需要测量的远程分支、标签或提交 SHA（支持短 SHA）；留空测所选工作流分支。
 - `profile`：`release` 或 `dev`，默认 release。
 - `workload`：默认 `light`（低强度）；`stress` 保留原压力配置。
-- `rows`：可选覆盔每项 API 测试的条数，范围 1–50,000；留空时 `light` 使用 1,000，`stress` 使用 50,000。
+- `rows`：可选覆盖每项 API 测试的条数，范围 1–50,000；留空时 `light` 使用 1,000，`stress` 使用 50,000。
 - `repetitions`：每项 API 测试的独立进程次数，范围 1–10，默认 3。
 - `sample_seconds`：每个 GUI 场景的采样时间，范围 1–120 秒，默认 10 秒。
 - `preview`：额外生成实际界面截图，使用隔离的固定演示数据；dev.2 及之后支持，默认关闭。截图测试入口通过可选 feature 编译，不进入安装包。

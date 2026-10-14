@@ -21,20 +21,6 @@ pub const RELEASES_URL: &str = "https://github.com/Fu021/Clash-of-Rust/releases"
 pub const CHECK_INTERVAL: Duration = Duration::from_secs(6 * 60 * 60);
 const API_URL: &str = "https://api.github.com/repos/Fu021/Clash-of-Rust/releases?per_page=100";
 
-// Only diagnostic Mac builds can use the fixed loopback test server. Official
-// binaries contain no environment-controlled update source.
-#[cfg(all(feature = "ui-preview", target_os = "macos"))]
-fn loopback_update_test() -> bool {
-    option_env!("CLASH_MAC_UPDATE_TEST") == Some("1")
-}
-
-fn release_source() -> &'static str {
-    #[cfg(all(feature = "ui-preview", target_os = "macos"))]
-    if loopback_update_test() {
-        return "http://127.0.0.1:18080/releases";
-    }
-    RELEASES_URL
-}
 const RESPONSE_LIMIT: usize = 2 * 1024 * 1024;
 const PACKAGE_LIMIT: u64 = 512 * 1024 * 1024;
 
@@ -83,22 +69,6 @@ impl Downloaded {
             let _ = directory.keep();
         }
     }
-}
-
-#[cfg(all(target_os = "macos", feature = "ui-preview"))]
-pub fn fixture_download(package: &std::path::Path, version: String) -> Result<Downloaded> {
-    let directory = tempfile::Builder::new()
-        .prefix("clash-of-rust-update-")
-        .tempdir()?;
-    let destination = directory.path().join("package.dmg");
-    std::fs::copy(package, &destination)?;
-    let sha256 = crate::assets::hash_file(&destination)?.0;
-    Ok(Downloaded {
-        directory: Mutex::new(Some(directory)),
-        package: destination,
-        sha256,
-        version,
-    })
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -296,7 +266,7 @@ fn package(release: &Release, version: &str) -> Option<Package> {
     {
         return None;
     }
-    let mut url = Url::parse(release_source()).ok()?;
+    let mut url = Url::parse(RELEASES_URL).ok()?;
     url.path_segments_mut()
         .ok()?
         .push("download")
@@ -339,7 +309,7 @@ fn newest(releases: Vec<Release>, current: &str) -> Result<Option<Available>> {
         .max_by(|(left, _), (right, _)| left.cmp_precedence(right));
     Ok(selected.map(|(version, release)| {
         // Build the link from our repository, never an arbitrary URL in metadata.
-        let mut url = Url::parse(release_source()).expect("constant release URL");
+        let mut url = Url::parse(RELEASES_URL).expect("constant release URL");
         url.path_segments_mut()
             .expect("GitHub URL has a path")
             .push("tag")
@@ -558,15 +528,6 @@ async fn transfer(
 }
 
 pub async fn check(proxy_port: Option<u16>) -> Result<Option<Available>> {
-    #[cfg(all(feature = "ui-preview", target_os = "macos"))]
-    if loopback_update_test() {
-        return fetch(
-            &download_client_via(None, Duration::from_secs(12))?,
-            "http://127.0.0.1:18080/api/releases",
-            crate::VERSION,
-        )
-        .await;
-    }
     discovery::check(proxy_port).await
 }
 

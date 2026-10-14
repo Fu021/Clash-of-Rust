@@ -20,25 +20,13 @@ Unicode true
 !ifndef OUTPUT
   !define OUTPUT "..\dist\Clash-of-Rust-${APP_VERSION}-windows-${APP_ARCH}-setup.exe"
 !endif
-!ifdef INSTALLER_TESTING
-  !define PRODUCT_KEY "Software\Microsoft\Windows\CurrentVersion\Uninstall\ClashOfRustInstallerSmokeTest"
-  !define LEGACY_KEY "Software\Microsoft\Windows\CurrentVersion\Uninstall\ClashOfRustLegacySmokeTest"
-  !define APP_MUTEX "Local\ClashOfRust.InstallerSmoke"
-  !define APP_EXIT_EVENT "Local\ClashOfRust.InstallerSmoke.Exit"
-!else
   !define PRODUCT_KEY "Software\Microsoft\Windows\CurrentVersion\Uninstall\ClashOfRust"
   !define LEGACY_KEY "${PRODUCT_KEY}"
   !define APP_MUTEX "Local\ClashOfRust.Desktop"
   !define APP_EXIT_EVENT "Local\ClashOfRust.Exit"
-!endif
 
-!ifdef INSTALLER_TESTING
-  !define PRODUCT_HIVE HKCU
-  RequestExecutionLevel user
-!else
   !define PRODUCT_HIVE HKLM
   RequestExecutionLevel admin
-!endif
 
 Name "Clash of Rust"
 OutFile "${OUTPUT}"
@@ -62,13 +50,11 @@ VIAddVersionKey /LANG=2052 "LegalCopyright" "Clash of Rust contributors · GPL-3
 !insertmacro MUI_PAGE_LICENSE "${PAYLOAD}\LICENSE"
 !insertmacro MUI_PAGE_DIRECTORY
 !insertmacro MUI_PAGE_INSTFILES
-!ifndef INSTALLER_TESTING
   !define MUI_FINISHPAGE_RUN "$INSTDIR\clash-of-rust.exe"
   !define MUI_FINISHPAGE_RUN_TEXT "立即启动 Clash of Rust"
   !define MUI_FINISHPAGE_SHOWREADME ""
   !define MUI_FINISHPAGE_SHOWREADME_TEXT "添加快捷方式"
   !define MUI_FINISHPAGE_SHOWREADME_FUNCTION CreateShortcuts
-!endif
 !insertmacro MUI_PAGE_FINISH
 UninstPage custom un.DataOptions un.DataOptionsLeave
 !insertmacro MUI_UNPAGE_CONFIRM
@@ -117,11 +103,7 @@ Function .onInit
   !error "APP_ARCH must be x64 or arm64"
 !endif
   SetRegView 64
-  !ifdef INSTALLER_TESTING
-    SetShellVarContext current
-  !else
     SetShellVarContext all
-  !endif
   StrCpy $LegacyInstall 0
   StrCpy $KeepAutostart 0
   StrCpy $UpdateMode 0
@@ -159,14 +141,6 @@ Function .onInit
     ${If} $UpdateMode == 1
       Goto uninstall_existing
     ${EndIf}
-    !ifdef INSTALLER_TESTING
-      ; Only test builds can simulate accepting the reinstall question silently.
-      ${GetParameters} $0
-      ClearErrors
-      ${GetOptions} $0 "/TESTREINSTALL" $1
-      IfErrors test_no_confirmation uninstall_existing
-      test_no_confirmation:
-    !endif
     ; Ordinary silent reinstallation still requires explicit confirmation.
     IfSilent reinstall_silent reinstall_prompt
     reinstall_silent:
@@ -282,11 +256,7 @@ Section "Clash of Rust" MainSection
   ; Extraction failures must not look like a successful update to the helper.
   SetErrorLevel 6
   SetRegView 64
-  !ifdef INSTALLER_TESTING
-    SetShellVarContext current
-  !else
     SetShellVarContext all
-  !endif
   ClearErrors
   SetOutPath "$INSTDIR"
   File "${PAYLOAD}\clash-of-rust.exe"
@@ -316,13 +286,11 @@ Section "Clash of Rust" MainSection
     SetErrorLevel 6
     Abort
   ${EndIf}
-  !ifndef INSTALLER_TESTING
     ${If} $KeepAutostart == 1
       ; Native helper registers a least-privilege user logon task. It preserves
       ; a Run fallback if scheduling is disabled or unavailable.
       ExecWait '"$INSTDIR\clash-of-rust.exe" --autostart-enable' $0
     ${EndIf}
-  !endif
   WriteRegStr ${PRODUCT_HIVE} "${PRODUCT_KEY}" "DisplayName" "Clash of Rust"
   WriteRegStr ${PRODUCT_HIVE} "${PRODUCT_KEY}" "DisplayVersion" "${APP_VERSION}"
   WriteRegStr ${PRODUCT_HIVE} "${PRODUCT_KEY}" "Publisher" "Clash of Rust contributors"
@@ -337,12 +305,10 @@ Section "Clash of Rust" MainSection
     SetErrorLevel 6
     Abort
   ${EndIf}
-  !ifndef INSTALLER_TESTING
     ${If} $UpdateMode == 1
       ; Refresh existing links to use the new version's icon.
       Call CreateShortcuts
     ${EndIf}
-  !endif
   ${If} $UpdateBackup == 1
     Delete "$INSTDIR\clash-of-rust.update-backup.exe"
     StrCpy $UpdateBackup 0
@@ -367,11 +333,6 @@ Function un.onInit
   ; Neither upgrades nor ordinary silent uninstall opt into deleting data.
   StrCpy $DeleteUserData ${BST_UNCHECKED}
   StrCpy $UserDataDir ""
-  !ifdef INSTALLER_TESTING
-    SetShellVarContext current
-    ; The smoke fixture never touches a real user's application data.
-    StrCpy $UserDataDir "$INSTDIR\test-user-data"
-  !else
     SetShellVarContext all
     ; Unlike shell variables, this is not redirected to ProgramData by the
     ; all-users shortcut context. Match Store::discover's ProjectDirs path.
@@ -379,7 +340,6 @@ Function un.onInit
     ${If} $0 != ""
       StrCpy $UserDataDir "$0\clash-of-rust\ClashOfRust"
     ${EndIf}
-  !endif
   !insertmacro CheckRunning uninit_
 FunctionEnd
 
@@ -433,7 +393,6 @@ Function un.RemoveUserData
   data_removed:
 FunctionEnd
 
-!ifndef INSTALLER_TESTING
 Function CreateShortcuts
   SetShellVarContext all
   CreateDirectory "$SMPROGRAMS\Clash of Rust"
@@ -442,19 +401,13 @@ Function CreateShortcuts
   CreateShortcut "$DESKTOP\Clash of Rust.lnk" "$INSTDIR\clash-of-rust.exe" "" "$INSTDIR\resources\clash-of-rust-${APP_VERSION}.ico" 0
   System::Call 'shell32::SHChangeNotify(l 0x08000000, i 0, p 0, p 0)'
 FunctionEnd
-!endif
 
 Section "Uninstall"
   SetRegView 64
-  !ifdef INSTALLER_TESTING
-    SetShellVarContext current
-  !else
     SetShellVarContext all
-  !endif
   ; Always check again: the app could have started while the wizard was open.
   !insertmacro CheckRunning unsection_
   ; Delete only files owned by this package. Data deletion requires opt-in.
-  !ifndef INSTALLER_TESTING
     ReadRegStr $0 HKCU "Software\ClashOfRust\Autostart" "Executable"
     ${If} $0 == "$INSTDIR\clash-of-rust.exe"
       ExecWait '"$INSTDIR\clash-of-rust.exe" --autostart-remove' $0
@@ -464,7 +417,6 @@ Section "Uninstall"
         Abort
       ${EndIf}
     ${EndIf}
-  !endif
   ClearErrors
   Delete "$INSTDIR\clash-of-rust.exe"
   IfErrors uninstall_locked
@@ -488,7 +440,6 @@ Section "Uninstall"
   Delete "$INSTDIR\LICENSE"
   ; Clean up the README shipped by older versions.
   Delete "$INSTDIR\README.md"
-  !ifndef INSTALLER_TESTING
     Delete "$DESKTOP\Clash of Rust.lnk"
     ReadRegStr $0 HKCU "Software\Microsoft\Windows\CurrentVersion\Run" "ClashOfRust"
     ${If} $0 == '"$INSTDIR\clash-of-rust.exe" --background'
@@ -497,7 +448,6 @@ Section "Uninstall"
     Delete "$SMPROGRAMS\Clash of Rust\Clash of Rust.lnk"
     Delete "$SMPROGRAMS\Clash of Rust\卸载 Clash of Rust.lnk"
     RMDir "$SMPROGRAMS\Clash of Rust"
-  !endif
   Call un.RemoveUserData
   DeleteRegKey ${PRODUCT_HIVE} "${PRODUCT_KEY}"
   Delete "$INSTDIR\uninstall.exe"

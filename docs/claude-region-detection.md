@@ -47,6 +47,6 @@ Windows 使用 `clash-of-rust.exe`；此入口先于 GUI、托盘、内核和数
 
 ## 测试
 
-六平台 Rust 常规测试覆盖配置发现、脱敏、域名边界、计数与详情、异步取消及 GUI 状态。独立 Code 诊断、Chromium 浏览器采样和真实 mihomo 的 Claude 选路测试脚本保留为按需排查入口，不在基础 CI 自动执行。
+六平台 Rust 常规测试覆盖配置发现、脱敏、域名边界、计数与详情、异步取消及 GUI 状态。独立 Code 诊断另有无需启动 GUI、内核或数据目录的离线脱敏测试。
 
 独立手动截图工作流可生成六平台的实际 Iced 深浅色截图，包含报告和风险详情。测试打包使用 Publish Release 的 `check_only` 模式，不发布 Release。

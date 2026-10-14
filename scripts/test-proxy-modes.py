@@ -1,13 +1,35 @@
 """Focused native system proxy/HTTP/TUN traffic checks on disposable Actions VMs."""
 import argparse
-import importlib.util
+import contextlib
 import os
 from pathlib import Path
 import sys
 import shutil
 import tempfile
+import subprocess
 
 from build_support import ROOT, run, host_system
+
+
+@contextlib.contextmanager
+def macos_network_service(report):
+    label = f'org.clashofrust.network.{os.getuid()}'
+    directory = Path('/Library/PrivilegedHelperTools')/label
+    agent = Path('/Library/LaunchDaemons')/(label+'.plist')
+    if directory.exists() or agent.exists():
+        raise RuntimeError('Refusing to overwrite an existing network service')
+    try:
+        yield
+    finally:
+        if agent.exists() or directory.exists():
+            state = subprocess.run(['/usr/bin/sudo', '-n', '/bin/launchctl', 'print', 'system/'+label], capture_output=True, text=True, timeout=15)
+            (report/'proxy-smoke-network-service-launchd.log').write_text(state.stdout+state.stderr)
+            service_log = directory/'network-service.log'
+            if service_log.exists():
+                output = subprocess.run(['/usr/bin/sudo', '-n', '/bin/cat', service_log], capture_output=True, text=True, timeout=15)
+                (report/'proxy-smoke-network-service.log').write_text(output.stdout+output.stderr)
+            subprocess.run(['/usr/bin/sudo', '-n', '/bin/launchctl', 'bootout', 'system/'+label], capture_output=True, timeout=20)
+            subprocess.run(['/usr/bin/sudo', '-n', '/bin/rm', '-rf', directory, agent], check=True, timeout=20)
 
 
 def check(binary, bundle):
@@ -35,20 +57,17 @@ def check(binary, bundle):
                 run(['sudo', 'chown', 'root:root', '/opt'])
                 run(['sudo', 'chmod', '-R', 'go-w', installed])
                 run(['sudo', 'chmod', '0755', '/opt', installed])
-                run(['sudo', sys.executable, ROOT/'scripts/test-linux-tun.py', '--basic',
+                run(['sudo', sys.executable, ROOT/'scripts/test-linux-tun.py',
                      '--test-binary', binary, '--uid', os.getuid()])
             finally:
                 run(['sudo', 'rm', '-rf', installed])
         else:
-            run(['sudo', sys.executable, ROOT/'scripts/test-linux-tun.py', '--basic',
+            run(['sudo', sys.executable, ROOT/'scripts/test-linux-tun.py',
                  '--test-binary', binary, '--uid', os.getuid()])
     elif system == 'macos':
-        spec = importlib.util.spec_from_file_location('mac_flows', ROOT/'scripts/test-macos-flows.py')
-        module = importlib.util.module_from_spec(spec)
-        spec.loader.exec_module(module)
         report = ROOT/'target/macos-report'
         report.mkdir(parents=True, exist_ok=True)
-        with tempfile.TemporaryDirectory(prefix='clash-proxy-smoke-') as temporary, module.network_service_for_ci(report, 'proxy-smoke'):
+        with tempfile.TemporaryDirectory(prefix='clash-proxy-smoke-') as temporary, macos_network_service(report):
             # Mac's production service/bridge locates its bundled core relative
             # to current_exe, rather than the integration-test environment.
             # Preserve the installed app's seal; stage the unchanged test and

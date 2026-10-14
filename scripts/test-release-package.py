@@ -74,15 +74,15 @@ def main():
     if (args.system, args.arch) != (host_system(), host_arch()):
         raise ValueError('Packaging tests require the selected native platform')
     manifest = verify_build(args.build, args.system, args.arch, commit())
-    # The existing installer test constructs isolated fixture installers from
-    # this raw bundle; production installation tests consume the final package.
+    # Installed-program checks consume the final package and compare it with
+    # the verified CI bundle.
     shutil.copytree(args.build/'payload', bundle_directory(args.system, args.arch), dirs_exist_ok=True)
     run([sys.executable, ROOT/'scripts/build-installer.py', '--system', args.system,
          '--arch', args.arch, '--prebuilt', args.build])
     extension = f'windows-{args.arch}-setup.exe' if args.system == 'windows' else f'macos-{args.arch}.dmg' if args.system == 'macos' else f"linux-{'amd64' if args.arch == 'x64' else 'arm64'}.deb"
     package = ROOT/'dist'/f"Clash-of-Rust-{manifest['version']}-{extension}"
     if args.system == 'windows':
-        run([sys.executable, ROOT/'scripts/test-installer.py', '--basic', '--package', package,
+        run([sys.executable, ROOT/'scripts/test-installer.py', '--package', package,
              '--test-binary', args.build/manifest['tests']['core_integration']])
         run([sys.executable, ROOT/'scripts/scan-defender.py', '--update-signatures', package])
     elif args.system == 'macos':

@@ -6,9 +6,7 @@
 
 CI 原生覆盖 Intel 与 Apple Silicon，运行格式检查、Clippy、编译和 Rust 常规测试。基础检查使用真实 mihomo、launchd 网络助手与系统网络设置，验证系统代理写入、HTTP 转发、TUN 接管及关闭清理；同时用 `otool` 核对助手不链接 GUI 框架。
 
-Publish Release 复用 CI 产物，核对 DMG/App 版本、架构、资源与签名，启动安装后的真实 GUI/内核，并运行基础代理/TUN 检查。旧 20 项 GUI/安装回归、截图和专项权限测试不再常规执行。开发分支可用 `check_only=true` 打包而不发布。
-
-Mac 自动更新另外由临时 `Mac Online Update (temporary)` 工作流验证真实 Release 检查、SHA256、DMG 下载、安装与正常用户重启，详见 [工作流说明](workflows.md)。它仍使用 runner 的免密 sudo 代替人工确认，授权弹窗和首次下载后的 Gatekeeper 操作需要人工验收。
+Publish Release 复用 CI 产物，核对 DMG/App 版本、架构、资源与签名，启动安装后的真实 GUI/内核，并运行基础代理/TUN 检查。开发分支可用 `check_only=true` 打包而不发布；授权弹窗和首次下载后的 Gatekeeper 操作需要人工验收。
 
 每种架构上传报告、逐项耗时、完整日志、系统/网络状态与崩溃信息。Mac 不再生成常规截图；六平台截图由独立工作流手动生成。
 
@@ -42,4 +40,4 @@ sudo launchctl bootout "system/$service_label"
 sudo rm -rf "/Library/PrivilegedHelperTools/$service_label" "/Library/LaunchDaemons/$service_label.plist"
 ```
 
-助手停止前尝试恢复自己持有的系统代理并终止其内核会话，其他客户端后续写入的代理设置保持不动。基础检查和临时更新测试结束后移除本次安装的助手，并拒绝覆盖 runner 上预先存在的安装。
+助手停止前尝试恢复自己持有的系统代理并终止其内核会话，其他客户端后续写入的代理设置保持不动。基础检查结束后移除本次安装的助手，并拒绝覆盖 runner 上预先存在的安装。

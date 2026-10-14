@@ -20,10 +20,6 @@ on:
         type: choice
         default: both
         options: [both, normal, compact]
-  # Register the new manual workflow before it has been merged into main.
-  # This event runs no screenshot jobs.
-  pull_request:
-    paths: ['.github/workflows/ui-screenshots.yml']
 permissions:
   contents: read
   actions: read

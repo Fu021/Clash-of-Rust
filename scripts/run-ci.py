@@ -1,25 +1,11 @@
 """Compile/test one native platform; preserve release binaries for packaging."""
 import argparse
 import importlib.util
-import json
-import os
-from pathlib import Path
 import shutil
-import subprocess
 import sys
 
 from build_support import host_system, ROOT, bundle_directory, host_arch, run, cargo_messages, write_json
 from workflow_artifacts import export_build, test_binaries
-
-
-def clear_test_reports():
-    # The Rust target cache may contain previous runs' diagnostics, too.
-    for name in ('claude-ui', 'claude-report', 'linux-wayland-report', 'linux-x11-logs', 'linux-ui'):
-        path = ROOT/'target'/name
-        if path.is_symlink():
-            path.unlink()
-        elif path.exists():
-            shutil.rmtree(path)
 
 
 def main():
@@ -29,9 +15,6 @@ def main():
     args = parser.parse_args()
     if (args.system, args.arch) != (host_system(), host_arch()):
         raise ValueError('CI must run on the selected native architecture')
-    # Rust's target cache can also restore old diagnostic files. Keep compiled
-    # dependencies, but generate reports from this commit afresh.
-    clear_test_reports()
     run(['cargo', 'fmt', '--all', '--', '--check'])
     if (args.system, args.arch) == ('linux', 'x64'):
         run([sys.executable, ROOT/'scripts/native-detector-codegen.py', '--check'])

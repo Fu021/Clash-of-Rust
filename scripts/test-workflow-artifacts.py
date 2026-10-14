@@ -40,7 +40,7 @@ class ArtifactTests(unittest.TestCase):
             geo.append({'name': name, 'sha256': build.sha256(path), 'size': path.stat().st_size})
         build.write_json(resources/'geodata.json', {'files': geo})
         tests = {}
-        for name in ('library', 'clash-of-rust', 'core_integration', 'tray_integration', 'memory_benchmark', 'linux_tun'):
+        for name in ('library', 'clash-of-rust', 'core_integration', 'memory_benchmark'):
             path = root/'input/tests'/name
             path.parent.mkdir(exist_ok=True)
             path.write_bytes(header)
@@ -66,6 +66,23 @@ class ArtifactTests(unittest.TestCase):
                     build.write_json(root/'input/manifest.json', manifest)
                     with self.subTest(field=field), self.assertRaises(ValueError):
                         artifacts.verify_build(root/'input', 'linux', 'x64', self.commit)
+                # Cleanup must still reject a payload missing the smoke test
+                # consumed by the packaging jobs.
+                manifest = copy.deepcopy(original)
+                del manifest['tests']['core_integration']
+                build.write_json(root/'input/manifest.json', manifest)
+                with self.assertRaises(ValueError):
+                    artifacts.verify_build(root/'input', 'linux', 'x64', self.commit)
+                # Older CI artifacts remain usable by the screenshot workflow.
+                manifest = copy.deepcopy(original)
+                legacy = root/'input/tests/tray_integration'
+                legacy.write_bytes((root/'input/tests/library').read_bytes())
+                manifest['tests']['tray_integration'] = 'tests/tray_integration'
+                manifest['files']['tests/tray_integration'] = {
+                    'sha256': build.sha256(legacy), 'size': legacy.stat().st_size, 'executable': True}
+                build.write_json(root/'input/manifest.json', manifest)
+                self.assertEqual(artifacts.verify_build(root/'input', 'linux', 'x64', self.commit)['commit'], self.commit)
+                legacy.unlink()
                 build.write_json(root/'input/manifest.json', original)
                 (root/'input/payload/clash-of-rust').write_bytes(b'corrupt executable')
                 with self.assertRaises(ValueError):artifacts.verify_build(root/'input', 'linux', 'x64', self.commit)

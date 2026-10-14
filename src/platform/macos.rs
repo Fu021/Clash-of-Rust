@@ -9,8 +9,6 @@ use std::{
 };
 mod authorization;
 mod cf;
-#[cfg(feature = "ui-preview")]
-pub use authorization::ci_authorizations;
 pub use authorization::{administrator, run as run_command, shell_quote};
 use cf::{Owned, Ref};
 pub mod tun;
@@ -22,11 +20,6 @@ unsafe extern "C" {
 mod native_proxy;
 pub mod service;
 pub use native_proxy::read;
-#[cfg(feature = "ui-preview")]
-pub fn ci_proxy_authorization_creations() -> usize {
-    // SystemConfiguration now runs in the authorized helper, without Security dialogs.
-    0
-}
 pub fn description() -> &'static str {
     "macOS 网络服务代理（HTTP / HTTPS / SOCKS）"
 }

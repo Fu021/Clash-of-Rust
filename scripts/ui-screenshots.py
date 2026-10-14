@@ -128,7 +128,6 @@ def render(source, run_id, system, arch, output, sizes):
                     capture = directory/'pixels'
                     env = dict(os.environ, CLASH_UI_PREVIEW_SCENE=scene, CLASH_UI_PREVIEW_OUTPUT=str(capture),
                                CLASH_OF_RUST_DATA_DIR=str(directory/'data'), GSETTINGS_BACKEND='memory')
-                    env.pop('CLASH_MAC_UPDATE_TEST', None)
                     if system == 'linux':
                         env.update(WINIT_UNIX_BACKEND='x11', WINIT_X11_SCALE_FACTOR='1')
                         env.pop('WAYLAND_DISPLAY', None)
