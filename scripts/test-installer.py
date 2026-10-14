@@ -5,6 +5,7 @@ from pathlib import Path
 import subprocess
 import sys
 import tempfile
+import time
 import winreg
 from build_support import ROOT, bundle_directory, file_version, host_arch, run, sha256, validate_resources
 
@@ -55,6 +56,20 @@ def production_package(package, binary, root, smoke):
     print('PASS: final production package installation, proxy/TUN and uninstall')
 
 
+def cleanup(temporary):
+    # NSIS/Defender can briefly retain the executable after the process exits,
+    # especially under Windows ARM emulation. Persistent failures still fail.
+    deadline = time.monotonic() + 10
+    while True:
+        try:
+            temporary.cleanup()
+            return
+        except PermissionError:
+            if time.monotonic() >= deadline:
+                raise
+            time.sleep(0.1)
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--package', type=Path, required=True)
@@ -64,9 +79,12 @@ def main():
         raise RuntimeError('Installer smoke tests require Windows')
     binary = bundle_directory('windows', host_arch())/'clash-of-rust.exe'
     (ROOT/'dist').mkdir(exist_ok=True)
-    with tempfile.TemporaryDirectory(prefix='installer-test-', dir=ROOT/'dist') as temporary:
-        production_package(args.package.resolve(strict=True), binary, Path(temporary),
+    temporary = tempfile.TemporaryDirectory(prefix='installer-test-', dir=ROOT/'dist')
+    try:
+        production_package(args.package.resolve(strict=True), binary, Path(temporary.name),
                            args.test_binary.resolve(strict=True))
+    finally:
+        cleanup(temporary)
 
 
 if __name__ == '__main__':
