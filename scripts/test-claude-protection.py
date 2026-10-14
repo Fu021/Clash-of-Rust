@@ -259,13 +259,17 @@ def ipv6_uplink(output):
         return
     address='2001:db8:1::1'
     interface=None
+    original_dhcp=None
     if system=='macos':
         route=subprocess.check_output(['/sbin/route','-n','get','default'],text=True)
         interface=next(line.split(':',1)[1].strip() for line in route.splitlines() if line.strip().startswith('interface:'))
         run(['sudo','/sbin/ifconfig',interface,'inet6',address,'prefixlen','64','alias'])
     else:
-        command="$ErrorActionPreference='Stop'; $i=(Get-NetRoute -AddressFamily IPv4 -DestinationPrefix '0.0.0.0/0' | Sort-Object RouteMetric | Select-Object -First 1).InterfaceIndex; New-NetIPAddress -InterfaceIndex $i -AddressFamily IPv6 -IPAddress '2001:db8:1::1' -PrefixLength 64 -PolicyStore ActiveStore | Out-Null; Write-Output $i"
-        interface=subprocess.check_output(['powershell','-NoProfile','-NonInteractive','-Command',command],text=True).strip()
+        command="$ErrorActionPreference='Stop'; $i=(Get-NetRoute -AddressFamily IPv4 -DestinationPrefix '0.0.0.0/0' | Sort-Object RouteMetric | Select-Object -First 1).InterfaceIndex; $d=(Get-NetIPInterface -InterfaceIndex $i -AddressFamily IPv6).Dhcp.ToString(); New-NetIPAddress -InterfaceIndex $i -AddressFamily IPv6 -IPAddress '2001:db8:1::1' -PrefixLength 64 -PolicyStore ActiveStore | Out-Null; @{index=$i;dhcp=$d} | ConvertTo-Json -Compress"
+        previous=json.loads(subprocess.check_output(['powershell','-NoProfile','-NonInteractive','-Command',command],text=True))
+        interface=str(int(previous['index']))
+        original_dhcp=previous['dhcp']
+        assert original_dhcp in ('Enabled','Disabled')
     try:
         time.sleep(2)  # Complete duplicate-address detection before core startup.
         write_json(output/'ipv6-test-uplink.json',{'interface':interface,'address':address,'scope':'temporary documentation address; no IPv6 default route'})
@@ -274,7 +278,7 @@ def ipv6_uplink(output):
         if system=='macos':
             subprocess.run(['sudo','/sbin/ifconfig',interface,'inet6',address,'delete'],check=True)
         else:
-            command="Remove-NetIPAddress -InterfaceIndex "+interface+" -IPAddress '2001:db8:1::1' -Confirm:$false -ErrorAction Stop"
+            command="Remove-NetIPAddress -InterfaceIndex "+interface+" -IPAddress '2001:db8:1::1' -Confirm:$false -ErrorAction Stop; Set-NetIPInterface -InterfaceIndex "+interface+" -AddressFamily IPv6 -Dhcp "+original_dhcp+" -PolicyStore ActiveStore -ErrorAction Stop"
             subprocess.run(['powershell','-NoProfile','-NonInteractive','-Command',command],check=True)
 
 
