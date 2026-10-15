@@ -1,4 +1,5 @@
-//! Linux TUN launcher and fixed-operation DNS bridge. The GUI stays unprivileged.
+#![cfg_attr(all(windows, not(test)), windows_subsystem = "windows")]
+//! Native network helpers. The GUI stays unprivileged on every platform.
 #[cfg(target_os = "linux")]
 #[path = "platform/linux/tun/trusted.rs"]
 mod trusted;
@@ -177,7 +178,25 @@ fn main() {
     }
 }
 
-#[cfg(not(any(target_os = "linux", target_os = "macos")))]
+#[cfg(windows)]
+#[path = "../../../crates/client-core/src/storage/hash.rs"]
+mod file_hash;
+#[cfg(windows)]
+#[path = "platform/windows/service/mod.rs"]
+#[allow(dead_code)]
+mod windows_service;
+#[cfg(windows)]
+fn main() {
+    match windows_service::helper_main() {
+        Ok(code) => std::process::exit(code),
+        Err(error) => {
+            eprintln!("{error:#}");
+            std::process::exit(1);
+        }
+    }
+}
+
+#[cfg(not(any(windows, target_os = "linux", target_os = "macos")))]
 fn main() {
     eprintln!("The TUN core launcher is only available on Linux");
     std::process::exit(1);

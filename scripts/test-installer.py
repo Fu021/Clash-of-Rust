@@ -38,15 +38,25 @@ def production_package(package, binary, root, smoke):
             assert winreg.QueryValueEx(registration, 'DisplayVersion')[0] == file_version(binary)
         assert sha256(installed/'clash-of-rust.exe') == sha256(binary)
         validate_resources(installed/'resources', 'windows')
+        assert (installed/'clash-tun-launcher.exe').is_file()
+        run(['sc.exe', 'query', 'ClashOfRust.Network'])
         run([sys.executable, ROOT/'scripts/test-proxy-modes.py',
              '--test-binary', smoke, '--bundle', installed])
         user_file = installed/'unrelated-user-file.txt'
         user_file.write_text('Preserve this unrelated file', encoding='utf-8')
+        # Exercise the same explicit update mode used by the client. Service
+        # replacement must finish before installation reports success.
+        expect(package, ['/S', '/UPDATE', f'/D={installed}'], 0)
+        assert user_file.read_text(encoding='utf-8') == 'Preserve this unrelated file'
+        run([sys.executable, ROOT/'scripts/test-proxy-modes.py',
+             '--test-binary', smoke, '--bundle', installed])
     finally:
         uninstaller = installed/'uninstall.exe'
         if uninstaller.is_file():
             expect(uninstaller, ['/S', f'_?={installed}'], 0)
     assert not (installed/'clash-of-rust.exe').exists()
+    assert not (installed/'clash-tun-launcher.exe').exists()
+    assert subprocess.run(['sc.exe', 'query', 'ClashOfRust.Network'], capture_output=True).returncode == 1060
     assert user_file.is_file()
     try:
         with winreg.OpenKey(winreg.HKEY_LOCAL_MACHINE, key, 0, winreg.KEY_READ | winreg.KEY_WOW64_64KEY):

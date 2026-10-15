@@ -72,6 +72,30 @@ async fn basic_system_proxy_and_tun() {
     use std::time::Duration;
     use tokio::io::{AsyncReadExt, AsyncWriteExt};
     assert_eq!(std::env::var("CLASH_PROXY_SMOKE").as_deref(), Ok("1"));
+    #[cfg(windows)]
+    {
+        assert_eq!(std::env::var("CLASH_EXPECT_UNELEVATED").as_deref(), Ok("1"));
+        assert!(
+            !platform::is_elevated(),
+            "Windows TUN must work in an ordinary GUI token"
+        );
+        let directory = platform::windows_service::installed_directory().unwrap();
+        assert!(
+            std::fs::OpenOptions::new()
+                .write(true)
+                .open(directory.join("clash-tun-launcher.exe"))
+                .is_err(),
+            "ordinary users must not be able to replace the privileged helper"
+        );
+        assert!(
+            !std::process::Command::new(directory.join("clash-tun-launcher.exe"))
+                .arg("--windows-service-install")
+                .status()
+                .unwrap()
+                .success(),
+            "ordinary users must not install services without authorization"
+        );
+    }
     let temporary = tempfile::tempdir().unwrap();
     let store = Store::at(temporary.path().join("data")).unwrap();
     let controller_port = free_port();
@@ -171,6 +195,33 @@ async fn basic_system_proxy_and_tun() {
         captured,
         "Unproxied traffic was not captured and routed by TUN"
     );
+    #[cfg(windows)]
+    {
+        // Preserve TUN preference, but discard every in-memory Engine/session
+        // flag. Reopening must recover TUN without relaunching the GUI as admin.
+        engine.stop().await.unwrap();
+        drop(engine);
+        engine = Engine::with_resources(store.clone(), test_resources()).unwrap();
+        engine.start().await.unwrap();
+        engine.restore_proxy_mode().await.unwrap();
+        let state = engine.poll(Scope::Home).await.unwrap();
+        assert!(state.running && state.tun && !state.system_proxy);
+        assert!(!platform::is_elevated());
+        if let Some(path) = std::env::var_os("CLASH_SERVICE_CRASH_REPORT") {
+            clash_of_rust::config::atomic_write(
+                std::path::Path::new(&path),
+                &serde_json::to_vec(&serde_json::json!({
+                    "pid":std::process::id(), "controller":controller_port, "mixed":mixed_port,
+                    "temporary":temporary.path()
+                }))
+                .unwrap(),
+            )
+            .unwrap();
+            // The test driver kills this ordinary process, leaving the service
+            // to notice its dead owner and reap the privileged core by itself.
+            std::future::pending::<()>().await;
+        }
+    }
     engine.select_proxy_mode(ProxyMode::Off).await.unwrap();
     let state = engine.poll(Scope::Home).await.unwrap();
     assert!(!state.tun && !state.system_proxy);

@@ -358,7 +358,7 @@ use anyhow::Context;
 
 impl App {
     pub(crate) fn update_rules(&mut self, event: Event) -> Task<Message> {
-        if self.working || self.elevating || self.exiting {
+        if self.working || self.exiting {
             return Task::none();
         }
         let focus_editor = matches!(&event, Event::Add | Event::Edit);
@@ -587,8 +587,7 @@ impl App {
                 rounded_secondary
             })
             .on_press_maybe(
-                (enabled && !self.working && !self.elevating && !self.exiting)
-                    .then_some(Message::Rules(event)),
+                (enabled && !self.working && !self.exiting).then_some(Message::Rules(event)),
             )
             .into()
     }
@@ -631,7 +630,7 @@ impl App {
                 },
             );
         };
-        let editable = !self.working && !self.exiting && !self.elevating;
+        let editable = !self.working && !self.exiting;
         let compact = self.window_height.parse::<u16>().unwrap_or(700) < 560;
         let choices: Vec<_> = self
             .profiles

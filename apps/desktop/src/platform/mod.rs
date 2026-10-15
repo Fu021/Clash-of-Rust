@@ -39,6 +39,9 @@ pub use linux_tun::{
 pub mod macos;
 #[cfg(windows)]
 mod windows;
+#[cfg(windows)]
+#[path = "windows/service/mod.rs"]
+pub mod windows_service;
 #[cfg(target_os = "linux")]
 use linux as native;
 #[cfg(target_os = "macos")]
@@ -196,17 +199,9 @@ pub fn is_elevated() -> bool {
     false
 }
 #[cfg(windows)]
-pub fn elevate(path: &Path) -> Result<()> {
-    windows::elevate(path)
-}
-#[cfg(windows)]
 pub use windows::{autostart_helper_main, migrate_autostart};
 #[cfg(windows)]
 pub use windows::{installed_executable, launch_update_installer};
-#[cfg(not(windows))]
-pub fn elevate(_: &Path) -> Result<()> {
-    bail!("当前平台不支持 Windows UAC 提权")
-}
 #[cfg(windows)]
 pub fn exit_requested() -> bool {
     windows::exit_requested()

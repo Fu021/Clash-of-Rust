@@ -105,6 +105,8 @@ pub struct Engine {
     pub geo_manifest: GeoManifest,
     resources: PathBuf,
     child: Option<Child>,
+    #[cfg(windows)]
+    windows_tun: bool,
     #[cfg(target_os = "macos")]
     mac_tun: Option<platform::macos::tun::Session>,
     #[cfg(target_os = "macos")]
@@ -126,14 +128,6 @@ struct RestartState {
     tun: bool,
     system_proxy: bool,
     selectors: Vec<(String, String)>,
-}
-
-#[derive(serde::Serialize, serde::Deserialize)]
-struct ElevationState {
-    requested: RestartState,
-    previous: RestartState,
-    #[serde(default)]
-    protection: Option<Arc<crate::claude_check::protection::Protection>>,
 }
 
 impl Engine {
@@ -210,6 +204,8 @@ impl Engine {
             resources,
             geo_manifest,
             child: None,
+            #[cfg(windows)]
+            windows_tun: false,
             #[cfg(target_os = "macos")]
             mac_tun: None,
             #[cfg(target_os = "macos")]
@@ -235,6 +231,10 @@ impl Engine {
         assets::core_path(&self.resources)
     }
     fn command(&self) -> Result<Command> {
+        #[cfg(windows)]
+        if self.windows_tun {
+            return platform::windows_service::command();
+        }
         #[cfg(target_os = "macos")]
         if let Some(session) = &self.mac_tun {
             let mut command =
@@ -276,13 +276,15 @@ impl Engine {
         Ok(command)
     }
     fn validation_command(&self) -> Result<Command> {
-        #[cfg(target_os = "macos")]
+        #[cfg(any(windows, target_os = "macos"))]
         {
             let mut command = Command::new(self.core()?);
             command.kill_on_drop(true);
+            #[cfg(windows)]
+            command.creation_flags(0x08000000);
             Ok(command)
         }
-        #[cfg(not(target_os = "macos"))]
+        #[cfg(not(any(windows, target_os = "macos")))]
         self.command()
     }
     async fn validate(&self, payload: &str) -> Result<()> {
@@ -329,6 +331,16 @@ impl Engine {
         Ok(version["version"].as_str().unwrap_or("未知").to_owned())
     }
     pub async fn start(&mut self) -> Result<()> {
+        #[cfg(windows)]
+        if !self.running()
+            && (self.settings.proxy_mode == ProxyMode::Tun
+                || self.settings.claude_protection.is_some())
+        {
+            let interactive = !std::env::args_os().any(|arg| arg == "--background");
+            self.ensure_windows_service(interactive).await?;
+            self.windows_tun = true;
+        }
+
         let result = self.start_core().await;
         #[cfg(target_os = "macos")]
         if std::mem::take(&mut self.retained_startup_proxy) {
@@ -477,6 +489,22 @@ impl Engine {
             #[cfg(target_os = "macos")]
             if let Some(session) = &self.mac_tun {
                 session.wait_idle()?;
+            }
+        }
+        #[cfg(windows)]
+        if self.windows_tun {
+            let deadline = tokio::time::Instant::now() + Duration::from_secs(10);
+            loop {
+                if std::net::TcpListener::bind(("127.0.0.1", self.settings.controller_port)).is_ok()
+                    && std::net::TcpListener::bind(("127.0.0.1", self.settings.mixed_port)).is_ok()
+                {
+                    break;
+                }
+                ensure!(
+                    tokio::time::Instant::now() < deadline,
+                    "服务内核退出后端口仍被占用，请稍后重试"
+                );
+                tokio::time::sleep(Duration::from_millis(50)).await;
             }
         }
         for reader in self.readers.drain(..) {
@@ -961,25 +989,27 @@ impl Engine {
     }
 
     async fn prepare_protection_tun(&mut self, interactive: bool) -> Result<()> {
+        #[cfg(windows)]
+        self.prepare_windows_tun(interactive).await?;
         #[cfg(target_os = "linux")]
         self.prepare_linux_tun(interactive).await?;
         #[cfg(target_os = "macos")]
         self.prepare_mac_tun(interactive).await?;
-        #[cfg(not(any(target_os = "linux", target_os = "macos")))]
+        #[cfg(not(any(windows, target_os = "linux", target_os = "macos")))]
         let _ = interactive;
         Ok(())
     }
 
     /// The GUI, restart and disposable native tests all use this operation.
     /// A successful Windows UAC handoff returns true so the old GUI can exit.
-    pub async fn claude_protection(&mut self, enabled: bool) -> Result<bool> {
+    pub async fn claude_protection(&mut self, enabled: bool) -> Result<()> {
         use crate::claude_check::protection::{Previous, Protection};
         if enabled == self.settings.claude_protection.is_some() {
-            return Ok(false);
+            return Ok(());
         }
         if !enabled {
             self.apply_claude_protection(None, None).await?;
-            return Ok(false);
+            return Ok(());
         }
         let previous = self
             .restart_state()
@@ -1069,29 +1099,9 @@ impl Engine {
             protection.system_dns = platform::macos::dns::system_servers()?;
         }
         protection.validate()?;
-        if cfg!(windows) && !platform::is_elevated() {
-            let path = self.store.root.join("elevation.json");
-            let mut requested = previous.clone();
-            requested.mode = "rule".into();
-            requested.tun = true;
-            requested.system_proxy = false;
-            atomic_write(
-                &path,
-                &serde_json::to_vec(&ElevationState {
-                    requested,
-                    previous,
-                    protection: Some(Arc::new(protection)),
-                })?,
-            )?;
-            if let Err(error) = platform::elevate(&path) {
-                let _ = std::fs::remove_file(path);
-                return Err(error);
-            }
-            return Ok(true);
-        }
         self.apply_claude_protection(Some(Arc::new(protection)), None)
             .await?;
-        Ok(false)
+        Ok(())
     }
 
     async fn apply_claude_protection(
@@ -1144,6 +1154,10 @@ impl Engine {
         // Cancellation therefore cannot leave an enabled preference behind.
         if protection.is_some() {
             self.prepare_protection_tun(true).await?;
+        }
+        #[cfg(windows)]
+        if protection.is_none() && self.running() && desired.tun {
+            self.prepare_windows_tun(true).await?;
         }
         #[cfg(target_os = "macos")]
         if protection.is_none() && self.running() {
@@ -1242,87 +1256,6 @@ impl Engine {
         .await?;
         #[cfg(target_os = "macos")]
         self.mac_protection_dns(protected && state.tun).await?;
-        Ok(())
-    }
-
-    pub async fn prepare_elevation(&mut self) -> Result<()> {
-        let previous = self.restart_state().await?.context("请先启动内核")?;
-        let mut state = previous.clone();
-        state.tun = true;
-        state.system_proxy = false;
-        let path = self.store.root.join("elevation.json");
-        atomic_write(
-            &path,
-            &serde_json::to_vec(&ElevationState {
-                requested: state,
-                previous,
-                protection: self.settings.claude_protection.clone(),
-            })?,
-        )?;
-        if let Err(error) = platform::elevate(&path) {
-            let _ = std::fs::remove_file(path);
-            return Err(error);
-        }
-        Ok(())
-    }
-
-    pub async fn finish_elevation(&mut self, path: &std::path::Path) -> Result<()> {
-        let state: ElevationState = serde_json::from_slice(&std::fs::read(path)?)?;
-        std::fs::remove_file(path)?;
-        if let Some(protection) = state.protection {
-            if !self.running() {
-                self.start().await?;
-            }
-            return self
-                .apply_claude_protection(Some(protection), Some(state.previous))
-                .await;
-        }
-        let settings = Settings {
-            run_mode: state.requested.mode.clone(),
-            proxy_mode: ProxyMode::Tun,
-            ..self.settings.clone()
-        };
-        let mut transaction = match self.stage_mode_settings(&settings) {
-            Ok(transaction) => transaction,
-            Err(error) => {
-                self.resume(&state.previous)
-                    .await
-                    .context("无法保存提权模式，恢复原运行状态失败")?;
-                return Err(error.context("无法保存提权模式，已恢复原运行状态"));
-            }
-        };
-        let changed = async {
-            self.resume(&state.requested).await?;
-            transaction.commit()?;
-            Ok::<_, anyhow::Error>(())
-        }
-        .await;
-        if let Err(error) = changed {
-            let restored = if self.running() {
-                let mode = if state.previous.tun {
-                    ProxyMode::Tun
-                } else if state.previous.system_proxy {
-                    ProxyMode::System
-                } else {
-                    ProxyMode::Off
-                };
-                self.proxy_mode(mode).await
-            } else {
-                self.resume(&state.previous).await
-            };
-            let disk = transaction.rollback();
-            return match (restored, disk) {
-                (Ok(()), Ok(())) => {
-                    Err(error.context("TUN 提权后切换失败，已恢复原代理模式与设置"))
-                }
-                (runtime, disk) => Err(error.context(format!(
-                    "TUN 切换失败；运行状态恢复：{}；文件恢复：{}",
-                    runtime.err().map_or("成功".into(), |e| e.to_string()),
-                    disk.err().map_or("成功".into(), |e| e.to_string())
-                ))),
-            };
-        }
-        self.settings = settings;
         Ok(())
     }
 
@@ -1501,6 +1434,10 @@ impl Engine {
         if mode == ProxyMode::System {
             self.prepare_mac_system(true).await?;
         }
+        #[cfg(windows)]
+        if mode == ProxyMode::Tun {
+            self.prepare_windows_tun(true).await?;
+        }
         #[cfg(target_os = "linux")]
         if mode == ProxyMode::Tun {
             self.prepare_linux_tun(true).await?;
@@ -1534,13 +1471,8 @@ impl Engine {
         Ok(())
     }
 
-    /// Returns true when a successful UAC launch requires the GUI to exit.
-    pub async fn restore_proxy_mode(&mut self) -> Result<bool> {
+    pub async fn restore_proxy_mode(&mut self) -> Result<()> {
         if let Some(protection) = self.settings.claude_protection.clone() {
-            if cfg!(windows) && !platform::is_elevated() {
-                self.prepare_elevation().await?;
-                return Ok(true);
-            }
             let interactive = !std::env::args_os().any(|arg| arg == "--background");
             self.prepare_protection_tun(interactive).await?;
             self.mode("rule").await?;
@@ -1555,16 +1487,17 @@ impl Engine {
                     protection.node
                 ),
             );
-            return Ok(false);
+            return Ok(());
         }
         #[cfg(target_os = "macos")]
         if self.settings.proxy_mode == ProxyMode::System {
             let interactive = !std::env::args_os().any(|arg| arg == "--background");
             self.prepare_mac_system(interactive).await?;
         }
-        if cfg!(windows) && self.settings.proxy_mode == ProxyMode::Tun && !platform::is_elevated() {
-            self.prepare_elevation().await?;
-            return Ok(true);
+        #[cfg(windows)]
+        if self.settings.proxy_mode == ProxyMode::Tun {
+            let interactive = !std::env::args_os().any(|arg| arg == "--background");
+            self.prepare_windows_tun(interactive).await?;
         }
         #[cfg(target_os = "linux")]
         if self.settings.proxy_mode == ProxyMode::Tun {
@@ -1578,7 +1511,7 @@ impl Engine {
             self.prepare_mac_tun(interactive).await?;
         }
         self.proxy_mode(self.settings.proxy_mode).await?;
-        Ok(false)
+        Ok(())
     }
 
     #[cfg(target_os = "macos")]
@@ -1619,6 +1552,45 @@ impl Engine {
                 .context("TUN 授权失败后恢复原内核失败")?;
             return Err(error.context("TUN 授权后内核重启失败，已恢复原模式"));
         }
+        Ok(())
+    }
+
+    #[cfg(windows)]
+    async fn ensure_windows_service(&self, interactive: bool) -> Result<()> {
+        let helper = self
+            .resources
+            .parent()
+            .context("无法定位 Windows 网络助手")?
+            .join("clash-tun-launcher.exe");
+        tokio::task::spawn_blocking(move || {
+            platform::windows_service::ensure_available(&helper, interactive)
+        })
+        .await??;
+        Ok(())
+    }
+
+    #[cfg(windows)]
+    async fn prepare_windows_tun(&mut self, interactive: bool) -> Result<()> {
+        if self.windows_tun {
+            return Ok(());
+        }
+        // Complete installation/repair before interrupting the current route.
+        self.ensure_windows_service(interactive).await?;
+        let previous = self.restart_state().await?.context("请先启动内核")?;
+        self.stop().await?;
+        self.windows_tun = true;
+        if let Err(error) = self.resume(&previous).await {
+            self.stop_process().await?;
+            self.windows_tun = false;
+            self.resume(&previous)
+                .await
+                .context("服务启动失败后恢复原内核失败")?;
+            return Err(error.context("Windows 网络助手启动失败，已恢复原代理模式"));
+        }
+        append(
+            &self.logs,
+            "[客户端] Windows 网络服务已接管内核，桌面界面保持普通用户运行",
+        );
         Ok(())
     }
 

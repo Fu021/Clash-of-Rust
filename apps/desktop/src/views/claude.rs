@@ -1354,7 +1354,6 @@ mod tests {
             running: true,
             geo_status: String::new(),
             autostart: false,
-            exit_after_start: false,
             protection_changed: true,
             tray_nodes: None,
         })));

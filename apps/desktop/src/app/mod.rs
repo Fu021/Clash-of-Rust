@@ -97,25 +97,25 @@ pub(crate) fn run() -> iced::Result {
         platform::initialize_desktop();
     }
     #[cfg(windows)]
-    let elevated_handoff = elevation_path().is_some() || update_restart();
+    let update_handoff = update_restart();
     #[cfg(windows)]
     let _installation_guard = {
         let deadline = std::time::Instant::now() + Duration::from_secs(30);
         loop {
             match platform::application_guard() {
                 Ok(Some(guard)) => break guard,
-                Ok(None) if elevated_handoff && std::time::Instant::now() < deadline => {
+                Ok(None) if update_handoff && std::time::Instant::now() < deadline => {
                     std::thread::sleep(Duration::from_millis(250))
                 }
                 Ok(None) => {
-                    if !elevated_handoff && !background_start() {
+                    if !update_handoff && !background_start() {
                         platform::show_existing();
                     }
                     return Ok(());
                 }
                 Err(error) => {
                     eprintln!("桌面初始化失败：{error:#}");
-                    if !elevated_handoff && !background_start() {
+                    if !update_handoff && !background_start() {
                         platform::show_existing();
                     }
                     return Ok(());
@@ -236,28 +236,11 @@ fn update_restart() -> bool {
     std::env::args_os().any(|arg| arg == "--update-result")
 }
 
-fn elevation_path() -> Option<std::path::PathBuf> {
-    let mut args = std::env::args_os();
-    while let Some(arg) = args.next() {
-        if arg == "--elevated-tun" {
-            return args.next().map(std::path::PathBuf::from);
-        }
-    }
-    None
-}
 fn background_start() -> bool {
     std::env::args_os().any(|arg| arg == "--background")
 }
 fn startup_store() -> anyhow::Result<Store> {
-    if let Some(path) = elevation_path() {
-        Store::at(
-            path.parent()
-                .ok_or_else(|| anyhow::anyhow!("提权配置路径无效"))?
-                .to_owned(),
-        )
-    } else {
-        Store::discover()
-    }
+    Store::discover()
 }
 
 const PAGE_SIZE: usize = 60;
@@ -408,7 +391,6 @@ struct Reply {
     running: bool,
     geo_status: String,
     autostart: bool,
-    exit_after_start: bool,
     protection_changed: bool,
     tray_nodes: Option<Option<tray::Nodes>>,
 }
@@ -488,7 +470,6 @@ enum Message {
     WindowStateSaved(Result<(), String>),
     TestUrl(String),
     DnsHost(String),
-    Elevated(Result<(), String>),
     Action(Action),
     Finished(Box<Reply>),
     CheckUpdate,
@@ -542,7 +523,6 @@ struct App {
     snapshot: Snapshot,
     busy: bool,
     working: bool,
-    elevating: bool,
     pending_refresh: bool,
     queued_actions: VecDeque<Action>,
     probing: bool,
@@ -627,18 +607,13 @@ async fn execute(engine: Arc<Mutex<Engine>>, action: Action, scope: Scope, heade
     let saving_rules = matches!(action, Action::SaveRules(..));
     let protection_requested = matches!(action, Action::ClaudeProtection(_));
     let mut engine = engine.lock().await;
-    let mut exit_after_start = false;
     let result: anyhow::Result<String> = async {
         match action {
             Action::Refresh => Ok(String::new()),
             Action::RefreshTray => Ok(String::new()),
             Action::Start => {
-                if let Some(path) = elevation_path().filter(|path| path.exists()) {
-                    engine.finish_elevation(&path).await?;
-                } else {
-                    engine.start().await?;
-                    exit_after_start = engine.restore_proxy_mode().await?;
-                }
+                engine.start().await?;
+                engine.restore_proxy_mode().await?;
                 Ok("内核已启动".into())
             }
             Action::SavePorts(controller, mixed) => {
@@ -704,7 +679,7 @@ async fn execute(engine: Arc<Mutex<Engine>>, action: Action, scope: Scope, heade
                 Ok("UDP 设置已保存并应用".into())
             }
             Action::ClaudeProtection(enabled) => {
-                exit_after_start = engine.claude_protection(enabled).await?;
+                engine.claude_protection(enabled).await?;
                 Ok(if enabled {
                     "Claude 保护已启用，正在复测"
                 } else {
@@ -865,7 +840,6 @@ async fn execute(engine: Arc<Mutex<Engine>>, action: Action, scope: Scope, heade
         running: engine.running(),
         geo_status: engine.geo_manifest.version.clone(),
         autostart: platform::autostart_enabled().unwrap_or(false),
-        exit_after_start,
         protection_changed,
     }
 }
@@ -963,7 +937,6 @@ impl App {
             snapshot: Snapshot::default(),
             busy: false,
             working: false,
-            elevating: false,
             pending_refresh: false,
             queued_actions: VecDeque::new(),
             probing: false,
@@ -1078,7 +1051,6 @@ impl App {
         !self.snapshot.running
             && !self.busy
             && !self.working
-            && !self.elevating
             && !self.exiting
             && !self.updates.busy()
     }
@@ -1791,38 +1763,6 @@ impl App {
             Message::Action(Action::DeleteProfile(id)) => {
                 return self.confirm_delete(id);
             }
-            Message::Action(Action::ProxyMode(ProxyMode::Tun))
-                if cfg!(windows) && !platform::is_elevated() =>
-            {
-                if self.working || self.elevating || self.exiting {
-                    return Task::none();
-                }
-                if let Some(engine) = self.engine.clone() {
-                    self.elevating = true;
-                    return Task::perform(
-                        async move {
-                            engine
-                                .lock()
-                                .await
-                                .prepare_elevation()
-                                .await
-                                .map_err(|error| error.to_string())
-                        },
-                        Message::Elevated,
-                    );
-                }
-            }
-            Message::Elevated(result) => {
-                self.elevating = false;
-                match result {
-                    Ok(()) => return self.exit(),
-                    Err(error) => {
-                        self.error = true;
-                        self.notice_visible = true;
-                        self.notice = error;
-                    }
-                }
-            }
             Message::Action(Action::SavePorts(..)) => {
                 let ports = self.controller_port.parse::<u16>().and_then(|controller| {
                     self.mixed_port
@@ -1858,7 +1798,6 @@ impl App {
             Message::GroupDelay(group) => {
                 if !self.snapshot.running
                     || self.working
-                    || self.elevating
                     || self.periodic_testing
                     || self.testing_groups.len() >= 2
                     || !self.testing_groups.insert(group.clone())
@@ -1935,7 +1874,6 @@ impl App {
             Message::PeriodicDelay => {
                 if !self.snapshot.running
                     || self.working
-                    || self.elevating
                     || self.periodic_testing
                     || !self.testing_groups.is_empty()
                     || self.exiting
@@ -2034,7 +1972,6 @@ impl App {
             Message::SiteProbe(url) => {
                 if !self.snapshot.running
                     || self.working
-                    || self.elevating
                     || self.exiting
                     || self.site_busy.len() >= 3
                     || !self.site_busy.insert(url.clone())
@@ -2174,10 +2111,7 @@ impl App {
                         return Task::none();
                     }
                 }
-                if (self.snapshot.running || self.page == Page::Logs)
-                    && !self.busy
-                    && !self.elevating
-                {
+                if (self.snapshot.running || self.page == Page::Logs) && !self.busy {
                     let scope = if !self.visible || self.page == Page::Rules {
                         Scope::Other
                     } else {
@@ -2197,9 +2131,6 @@ impl App {
                 }
                 self.busy = false;
                 self.working = false;
-                if reply.exit_after_start {
-                    return self.exit();
-                }
                 self.autostart = reply.autostart;
                 if let Some(doc) = reply.rule_document
                     && self.page == Page::Rules
@@ -2656,11 +2587,7 @@ impl App {
             .padding([7, 12])
             .style(style)
             .on_press_maybe(
-                (enabled
-                    && !self.working
-                    && !self.elevating
-                    && self.engine.is_some()
-                    && !self.exiting)
+                (enabled && !self.working && self.engine.is_some() && !self.exiting)
                     .then_some(Message::Action(action)),
             )
             .into()
@@ -2721,14 +2648,14 @@ impl App {
         .style(sidebar_panel);
         let status = if self.exiting {
             "正在退出…"
-        } else if self.working || self.elevating {
+        } else if self.working {
             "正在处理…"
         } else if self.snapshot.running {
             "● 内核运行中"
         } else {
             "● 内核未启动"
         };
-        let tone = if self.working || self.elevating {
+        let tone = if self.working {
             ui_style::Tone::Warning
         } else if self.snapshot.running {
             ui_style::Tone::Success
@@ -2829,7 +2756,7 @@ impl App {
         .spacing(8);
         let mut body = column![header].spacing(if compact { 8 } else { 12 });
         if !self.snapshot.running {
-            let starting = self.working || self.elevating;
+            let starting = self.working;
             let reason = if starting {
                 "正在初始化配置并启动内核，请稍候…"
             } else {
@@ -3061,7 +2988,6 @@ impl App {
                     .on_press_maybe(
                         (self.snapshot.running
                             && !self.working
-                            && !self.elevating
                             && !self.exiting
                             && self.snapshot.mode != mode)
                             .then_some(Message::Action(Action::Mode(mode.into()))),
@@ -3091,7 +3017,6 @@ impl App {
                     })
                     .on_press_maybe(
                         (!self.working
-                            && !self.elevating
                             && !self.exiting
                             && self.engine.is_some()
                             && proxy_mode != mode
@@ -3329,7 +3254,6 @@ impl App {
         let selected = proxy.now.as_str() == node;
         let selectable = self.snapshot.running
             && !self.working
-            && !self.elevating
             && !self.exiting
             && proxy.kind == "Selector"
             && !selected;
@@ -3468,11 +3392,7 @@ impl App {
     }
 
     fn can_check_sites(&self) -> bool {
-        self.snapshot.running
-            && !self.working
-            && !self.elevating
-            && !self.exiting
-            && !self.sites_running()
+        self.snapshot.running && !self.working && !self.exiting && !self.sites_running()
     }
 
     fn site_status_buttons(
@@ -5152,7 +5072,6 @@ mod async_state_tests {
             running: true,
             geo_status: String::new(),
             autostart: false,
-            exit_after_start: false,
             protection_changed: false,
             tray_nodes: None,
         })));
@@ -5177,7 +5096,6 @@ mod async_state_tests {
             running: false,
             geo_status: String::new(),
             autostart: false,
-            exit_after_start: false,
             protection_changed: false,
             tray_nodes: None,
         })));
@@ -5197,7 +5115,6 @@ mod async_state_tests {
             running: false,
             geo_status: String::new(),
             autostart: false,
-            exit_after_start: false,
             protection_changed: false,
             tray_nodes: None,
         })));

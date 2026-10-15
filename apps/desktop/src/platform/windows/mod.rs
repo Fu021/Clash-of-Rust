@@ -482,29 +482,6 @@ mod show_event_tests {
 pub fn is_elevated() -> bool {
     unsafe { IsUserAnAdmin() != 0 }
 }
-pub fn elevate(path: &Path) -> Result<()> {
-    let executable = wide(&std::env::current_exe()?.to_string_lossy());
-    let background = std::env::args_os().any(|arg| arg == "--background");
-    let parameters = wide(&format!(
-        "--elevated-tun \"{}\"{}",
-        path.display(),
-        if background { " --background" } else { "" }
-    ));
-    let result = unsafe {
-        ShellExecuteW(
-            std::ptr::null_mut(),
-            wide("runas").as_ptr(),
-            executable.as_ptr(),
-            parameters.as_ptr(),
-            std::ptr::null(),
-            if background { 0 } else { 1 },
-        )
-    };
-    if result <= 32 {
-        bail!("提权未完成（UAC 取消或拒绝，错误 {result}），当前程序继续运行");
-    }
-    Ok(())
-}
 
 pub fn description() -> &'static str {
     "Windows 当前用户系统代理"
