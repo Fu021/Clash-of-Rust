@@ -22,9 +22,16 @@ def main():
     manifest = json.loads((build/'manifest.json').read_text())
     workflow_artifacts.verify_build(build, 'macos', host_arch(), workflow_artifacts.commit())
     REPORT.mkdir(parents=True, exist_ok=True)
+    errors = []
+    def attempt(name, operation):
+        try:
+            return suite(name, operation)
+        except Exception as error:
+            errors.append(f'{name}: {error}')
+            print(errors[-1], flush=True)
     library = build/manifest['tests']['library']
     env = dict(os.environ, CLASH_MAC_FIX_REPORT=str(REPORT/'update-launchd.json'))
-    suite('Updater survives real launchd job exit (including failing control)', lambda: logged(
+    attempt('Updater survives real launchd job exit (including failing control)', lambda: logged(
         'update-launchd', [library, 'update::install::tests::native_updates_survive_login_job_shutdown',
                            '--exact', '--ignored', '--nocapture'], env=env, timeout=90))
     spec = importlib.util.spec_from_file_location('claude_native_tests', ROOT/'scripts/test-claude-protection.py')
@@ -45,7 +52,7 @@ def main():
             original = {name: os.environ.get(name) for name in settings}
             os.environ.update(settings)
             try:
-                suite('System resolver through pinned DoH; restart, disable, exit and crash restore', lambda:
+                attempt('System resolver through pinned DoH; restart, disable, exit and crash restore', lambda:
                       proxy.check(build/manifest['tests']['core_integration'], build/'payload',
                                   test_case='macos_claude_system_dns'))
             finally:
@@ -55,8 +62,10 @@ def main():
                     else:
                         os.environ[name] = value
     report = json.loads((REPORT/'report.json').read_text())
-    report['status'] = 'passed'
+    report['status'] = 'failed' if errors else 'passed'
     write_json(REPORT/'report.json', report)
+    if errors:
+        raise RuntimeError('; '.join(errors))
 
 
 if __name__ == '__main__':

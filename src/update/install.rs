@@ -417,12 +417,14 @@ mod tests {
         struct Job {
             target: String,
             helper: Option<u32>,
+            plist: PathBuf,
         }
         impl Drop for Job {
             fn drop(&mut self) {
                 let _ = Command::new("/bin/launchctl")
                     .args(["bootout", &self.target])
                     .output();
+                let _ = fs::remove_file(&self.plist);
                 if let Some(pid) = self.helper
                     && unsafe { libc::getpgid(pid as libc::pid_t) } == pid as libc::pid_t
                 {
@@ -444,17 +446,31 @@ mod tests {
                 .unwrap();
             let directory = temporary.path();
             let label = format!("org.clashofrust.update-test.{}", uuid::Uuid::new_v4());
-            let domain = format!("user/{uid}");
+            let domain = format!("gui/{uid}");
+            let agents = directories::BaseDirs::new()
+                .unwrap()
+                .home_dir()
+                .join("Library/LaunchAgents");
+            fs::create_dir_all(&agents).unwrap();
+            let plist = agents.join(format!("{label}.plist"));
             let mut job = Job {
                 target: format!("{domain}/{label}"),
                 helper: None,
+                plist: plist.clone(),
             };
-            let plist = directory.join("job.plist");
-            fs::write(&plist, format!(
+            use std::io::Write;
+            let mut file = fs::OpenOptions::new()
+                .write(true)
+                .create_new(true)
+                .open(&plist)
+                .unwrap();
+            file.write_all(format!(
                 "<?xml version=\"1.0\"?><plist version=\"1.0\"><dict><key>Label</key><string>{label}</string><key>ProgramArguments</key><array><string>{}</string><string>update::install::tests::login_job_update_fixture</string><string>--exact</string><string>--ignored</string><string>--nocapture</string></array><key>EnvironmentVariables</key><dict><key>GITHUB_ACTIONS</key><string>true</string><key>CLASH_UPDATE_JOB_FIXTURE</key><string>{}</string><key>CLASH_UPDATE_JOB_DETACHED</key><string>{detached}</string></dict><key>RunAtLoad</key><true/><key>StandardErrorPath</key><string>{}</string><key>StandardOutPath</key><string>{}</string></dict></plist>",
                 xml(&std::env::current_exe().unwrap().to_string_lossy()), xml(&directory.to_string_lossy()),
                 xml(&directory.join("stderr.log").to_string_lossy()), xml(&directory.join("stdout.log").to_string_lossy())
-            )).unwrap();
+            ).as_bytes()).unwrap();
+            file.sync_all().unwrap();
+            drop(file);
             let boot = run_command(
                 Command::new("/bin/launchctl")
                     .args(["bootstrap", &domain])
