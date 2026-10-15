@@ -397,7 +397,12 @@ async fn udp_routing(
             logs.iter().any(|line| line.contains("[UDP]")
                 && line.contains(host)
                 && line.contains("REJECT")),
-            "missing native UDP rejection for {host}: {logs:?}"
+            "missing native UDP rejection for {host}: {:#?}",
+            logs.iter()
+                .rev()
+                .filter(|line| line.contains("[UDP]") || line.contains("TUN"))
+                .take(16)
+                .collect::<Vec<_>>()
         );
     }
     // An unrelated subscription flow still works, proving the sentinel and
@@ -426,10 +431,11 @@ async fn udp_routing(
     );
 
     // Exercise the same unsupported-node policy through native TUN, using
-    // fake DNS addresses inside the disposable documentation subnet only.
+    // fake DNS addresses inside the disposable fake-IP subnet only.
     let dns_port = free_port();
     candidate["dns"]["listen"] = format!("127.0.0.1:{dns_port}").into();
-    candidate["dns"]["fake-ip-range"] = "203.0.113.0/24".into();
+    // Keep the default fake-IP pool: changing it also changes the derived
+    // TUN interface address, which cannot safely be hot-swapped on Darwin.
     for host in HOSTS {
         candidate["hosts"]
             .as_mapping_mut()
@@ -464,8 +470,8 @@ async fn udp_routing(
             packet[length - 1],
         );
         assert_eq!(
-            &address.octets()[..3],
-            &[203, 0, 113],
+            &address.octets()[..2],
+            &[198, 18],
             "DNS did not return a scoped fake IP"
         );
         let socket = tokio::net::UdpSocket::bind("0.0.0.0:0").await.unwrap();
@@ -483,7 +489,12 @@ async fn udp_routing(
                 && line.contains(host)
                 && line.contains("REJECT")
                 && !line.contains("127.0.0.1:")),
-            "native TUN did not reject unsupported UDP for {host}: {logs:?}"
+            "native TUN did not reject unsupported UDP for {host}: {:#?}",
+            logs.iter()
+                .rev()
+                .filter(|line| line.contains("[UDP]") || line.contains("TUN"))
+                .take(16)
+                .collect::<Vec<_>>()
         );
     }
     // A UDP-capable node must keep UDP working through that very node.
@@ -661,8 +672,13 @@ fn scoped_payload(payload: &str) -> String {
     // Limit the disposable test's live routes so the VM control agent does
     // not lose its network to our deliberately synthetic DNS/node fixture.
     let mut value: serde_yaml::Value = serde_yaml::from_str(payload).unwrap();
-    value["tun"]["route-address"] =
-        serde_yaml::to_value(["203.0.113.0/24", "8.8.8.8/32", "2001:db8::/64"]).unwrap();
+    value["tun"]["route-address"] = serde_yaml::to_value([
+        "203.0.113.0/24",
+        "198.18.0.0/16",
+        "8.8.8.8/32",
+        "2001:db8::/64",
+    ])
+    .unwrap();
     serde_yaml::to_string(&value).unwrap()
 }
 async fn scope_runner(engine: &Engine) {
@@ -1275,7 +1291,7 @@ pub async fn run() {
     assert!(!store.root.join("system-proxy.json").exists());
     let report = serde_json::json!({"schema":1,"environment":"controlled disposable native runner","version":clash_of_rust::VERSION,
         "before":before,"protected":protected,"blocked":blocked,"restored":restored,"protection":protection,
-        "routing_scope":"Production full-route configuration asserted; native fixture routes limited to documentation IPv4/IPv6 and DNS test target to preserve runner control traffic",
+        "routing_scope":"Production full-route configuration asserted; native fixture routes limited to documentation IPv4/IPv6, the fake-IP test pool and DNS test target to preserve runner control traffic",
         "tests":["native TUN and system proxy","native IPv6 TUN traffic","public DoH via pinned node","real UDP DNS hijack","real TCP DNS hijack","normal Claude connection preserved","unrelated connection preserved","DIRECT connection closed","wrong-node connection closed","native notification request deduplicated and completed","restart preserves original snapshot","off/system/TUN restored exactly","rejected activation leaves preferences unchanged","subscription source unchanged","provider-backed concrete node and restore","cached-IP HTTP hostname routed","cached-IP TLS SNI routed","known hostname preserved despite alternate TLS SNI","unsupported UDP rejected before DIRECT","unsupported UDP over native TUN rejected","supported UDP preserved through pinned node","AnyTLS without udp fails closed","AnyTLS real UoT round trip"],
         "linux_visible_warning_and_cancellation":cfg!(target_os = "linux"),
         "udp_routing":udp_routing,
