@@ -2348,12 +2348,15 @@ impl App {
                 } else {
                     Task::none()
                 };
-                let protection_test =
-                    if protection_changed && self.page == Page::Claude && !self.error {
-                        self.claude_event(claude_view::Event::Start)
-                    } else {
-                        Task::none()
-                    };
+                let protection_test = if protection_changed
+                    && self.settings.claude_protection.is_some()
+                    && self.page == Page::Claude
+                    && !self.error
+                {
+                    self.claude_event(claude_view::Event::Start)
+                } else {
+                    Task::none()
+                };
                 return Task::batch([update_task, next_task, protection_test]);
             }
             Message::Probe(exit_ip) => {

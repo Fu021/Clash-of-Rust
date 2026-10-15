@@ -63,6 +63,7 @@ pub struct State {
     audit_busy: bool,
     scan: Option<check::audit::Scan>,
     pub guide: Option<Guide>,
+    protection_opened: Option<std::time::Instant>,
     pub reports: [Option<Report>; 4],
     pub session: Option<Session>,
     guard_status: String,
@@ -93,6 +94,12 @@ fn index(environment: Environment) -> usize {
     }
 }
 impl State {
+    fn protection_wait(&self) -> u64 {
+        self.protection_opened.map_or(3, |opened| {
+            let remaining = std::time::Duration::from_secs(3).saturating_sub(opened.elapsed());
+            remaining.as_secs() + u64::from(remaining.subsec_nanos() > 0)
+        })
+    }
     pub(crate) fn clear_guard(&mut self) {
         self.guard_status.clear();
     }
@@ -248,6 +255,7 @@ impl State {
         }
         self.session = None;
         self.guide = None;
+        self.protection_opened = None;
         if let Some(scan) = self.scan.take() {
             scan.cancel();
         }
@@ -385,15 +393,22 @@ impl App {
                 }
                 if enabled {
                     self.claude.guide = Some(Guide::Protection);
+                    self.claude.protection_opened = Some(std::time::Instant::now());
                 } else {
                     return self.dispatch(Action::ClaudeProtection(false));
                 }
             }
             Event::ConfirmProtection => {
-                self.claude.guide = None;
-                if self.working || self.exiting {
+                if self.claude.guide != Some(Guide::Protection)
+                    || self.claude.protection_wait() > 0
+                    || self.working
+                    || self.exiting
+                    || self.claude.busy()
+                {
                     return Task::none();
                 }
+                self.claude.guide = None;
+                self.claude.protection_opened = None;
                 return self.dispatch(Action::ClaudeProtection(true));
             }
             Event::Start => {
@@ -1008,8 +1023,12 @@ impl App {
                 self.label("实时监测到 Claude 或关联服务偏离保护节点时，会关闭对应连接并弹出系统提示；共享服务可能属于其他应用。"),
                 aligned_row![
                     Space::new().width(Length::Fill),
-                    button(self.label("开启并重新检测")).style(ui_style::primary)
-                        .on_press_maybe((!self.working && !self.exiting && !self.claude.busy()).then_some(event(Event::ConfirmProtection)))
+                    button(self.label(if self.claude.protection_wait() > 0 {
+                        format!("开启并重新检测（{} 秒）", self.claude.protection_wait())
+                    } else {
+                        "开启并重新检测".into()
+                    })).style(ui_style::primary)
+                        .on_press_maybe((self.claude.protection_wait() == 0 && !self.working && !self.exiting && !self.claude.busy()).then_some(event(Event::ConfirmProtection)))
                 ],
             ],
             Guide::Diagnostics => column![
@@ -1275,6 +1294,54 @@ mod tests {
             Ok(Report::new(Environment::Core, "test")),
         ));
         let _ = app.claude_event(Event::Audit(generation, check::audit::Audit::default()));
+    }
+    #[test]
+    fn protection_confirmation_waits_three_seconds_and_reopening_restarts_it() {
+        let mut app = app();
+        let _ = app.claude_event(Event::Protection(true));
+        assert_eq!(app.claude.protection_wait(), 3);
+        let _ = app.claude_event(Event::ConfirmProtection);
+        assert_eq!(app.claude.guide, Some(Guide::Protection));
+        app.claude.protection_opened =
+            Some(std::time::Instant::now() - Duration::from_millis(2900));
+        assert_eq!(app.claude.protection_wait(), 1);
+        let _ = app.claude_event(Event::ConfirmProtection);
+        assert_eq!(app.claude.guide, Some(Guide::Protection));
+        app.claude.protection_opened = Some(std::time::Instant::now() - Duration::from_secs(3));
+        assert_eq!(app.claude.protection_wait(), 0);
+        let _ = app.claude_event(Event::ConfirmProtection);
+        assert!(app.claude.guide.is_none());
+        app.working = false;
+        let _ = app.claude_event(Event::Protection(true));
+        assert_eq!(app.claude.protection_wait(), 3);
+    }
+    #[test]
+    fn disabling_protection_keeps_the_report_without_starting_browser_or_audit() {
+        let mut app = app();
+        app.page = Page::Claude;
+        app.updates.started = true;
+        app.claude.reports[0] = Some(Report::new(Environment::Core, "preserved"));
+        let generation = app.claude.generation;
+        let _ = app.update(Message::Finished(Box::new(Reply {
+            profile_edit: false,
+            scope: Scope::Claude,
+            start_requested: false,
+            settings: app.settings.clone(),
+            profiles: None,
+            rule_document: None,
+            rules_applied: false,
+            snapshot: None,
+            notice: Ok("Claude 保护已关闭".into()),
+            running: true,
+            geo_status: String::new(),
+            autostart: false,
+            exit_after_start: false,
+            protection_changed: true,
+            tray_nodes: None,
+        })));
+        assert_eq!(app.claude.generation, generation);
+        assert!(!app.claude.busy() && app.claude.session.is_none());
+        assert_eq!(app.claude.reports[0].as_ref().unwrap().context, "preserved");
     }
     #[test]
     fn start_runs_config_audit_and_browser_once_without_a_client_dialog() {

@@ -199,6 +199,8 @@ struct Connection {
     chains: Vec<String>,
     #[serde(default)]
     rule: String,
+    #[serde(rename = "rulePayload", default)]
+    rule_payload: String,
     metadata: Metadata,
 }
 #[derive(Debug, Deserialize)]
@@ -266,28 +268,69 @@ pub(crate) fn decode(reader: impl std::io::Read, node: &str) -> serde_json::Resu
         ) -> Result<Self::Value, A::Error> {
             let mut rows = Vec::new();
             while let Some(connection) = seq.next_element::<Connection>()? {
-                let host = if !connection.metadata.host.is_empty() {
-                    connection.metadata.host
-                } else if !connection.metadata.sniff_host.is_empty() {
-                    connection.metadata.sniff_host
-                } else {
-                    connection.metadata.destination_ip
+                let Some(host) = [
+                    &connection.metadata.host,
+                    &connection.metadata.sniff_host,
+                    &connection.metadata.destination_ip,
+                ]
+                .into_iter()
+                .find(|host| {
+                    protection::owned_host(host)
+                        || protection::associated_host(host)
+                        || protection::anthropic_ip(host)
+                }) else {
+                    continue;
                 };
                 if rows.len() < 128
                     && host.len() <= 253
                     && connection.id.len() <= 128
                     && connection.chains.len() <= 16
                     && connection.chains.iter().all(|s| s.len() <= 512)
-                    && (protection::owned_host(&host)
-                        || protection::associated_host(&host)
-                        || protection::anthropic_ip(&host))
                     && suspicious_chain(&connection.chains, self.0)
                 {
+                    let mut rule: String = connection.rule.chars().take(64).collect();
+                    if !connection.rule_payload.is_empty() {
+                        rule.push_str(&format!(
+                            " · {}",
+                            connection
+                                .rule_payload
+                                .chars()
+                                .take(256)
+                                .collect::<String>()
+                        ));
+                    }
+                    if !connection.metadata.sniff_host.is_empty()
+                        && !connection
+                            .metadata
+                            .host
+                            .eq_ignore_ascii_case(&connection.metadata.sniff_host)
+                    {
+                        rule.push_str(&format!(
+                            "；原域名：{}；嗅探域名：{}",
+                            connection
+                                .metadata
+                                .host
+                                .chars()
+                                .take(253)
+                                .collect::<String>(),
+                            connection
+                                .metadata
+                                .sniff_host
+                                .chars()
+                                .take(253)
+                                .collect::<String>()
+                        ));
+                    }
+                    let mut end = rule.len().min(1800);
+                    while !rule.is_char_boundary(end) {
+                        end -= 1;
+                    }
+                    rule.truncate(end);
                     rows.push(Row {
                         id: connection.id,
-                        host,
+                        host: host.clone(),
                         chains: connection.chains,
-                        rule: connection.rule.chars().take(256).collect(),
+                        rule,
                     });
                 }
             }
@@ -315,6 +358,24 @@ mod tests {
         ] {
             assert!(suspicious_chain(&chains, "node"));
         }
+    }
+    #[test]
+    fn keeps_rule_payload_and_both_hostnames_when_sniffing_changes_the_match() {
+        let bytes = serde_json::to_vec(&serde_json::json!({"connections":[
+            {"id":"outer","chains":["DIRECT"],"rule":"Domain","rulePayload":"outside.ech.test",
+             "metadata":{"host":"claude.ai","sniffHost":"outside.ech.test"}},
+            {"id":"sni","chains":["DIRECT"],"metadata":{"host":"shared.example","sniffHost":"s-cdn.anthropic.com"}},
+            {"id":"ip","chains":["DIRECT"],"metadata":{"host":"shared.example","destinationIP":"160.79.104.1"}},
+            {"id":"normal","chains":["node"],"metadata":{"host":"claude.ai","sniffHost":"outside.ech.test"}}
+        ]})).unwrap();
+        let rows = decode(bytes.as_slice(), "node").unwrap();
+        assert_eq!(rows.len(), 3);
+        assert_eq!(rows[0].host, "claude.ai");
+        assert!(
+            rows[0].rule.contains("outside.ech.test") && rows[0].rule.contains("原域名：claude.ai")
+        );
+        assert_eq!(rows[1].host, "s-cdn.anthropic.com");
+        assert_eq!(rows[2].host, "160.79.104.1");
     }
     #[test]
     fn retains_only_relevant_bounded_connections_without_credentials_or_processes() {

@@ -11,40 +11,7 @@ pub async fn show(title: &str, message: &str) -> Result<()> {
     );
     #[cfg(target_os = "linux")]
     {
-        let message = message
-            .replace('&', "&amp;")
-            .replace('<', "&lt;")
-            .replace('>', "&gt;");
-        let connection = zbus::Connection::session()
-            .await
-            .context("无法连接桌面通知服务")?;
-        let proxy = zbus::Proxy::new(
-            &connection,
-            "org.freedesktop.Notifications",
-            "/org/freedesktop/Notifications",
-            "org.freedesktop.Notifications",
-        )
-        .await?;
-        let hints = std::collections::HashMap::<&str, zbus::zvariant::Value<'_>>::from([(
-            "urgency",
-            zbus::zvariant::Value::from(2u8),
-        )]);
-        let _: u32 = proxy
-            .call(
-                "Notify",
-                &(
-                    "Clash of Rust",
-                    0u32,
-                    "dialog-warning",
-                    title,
-                    message.as_str(),
-                    Vec::<&str>::new(),
-                    hints,
-                    15000i32,
-                ),
-            )
-            .await
-            .context("系统未接受桌面通知")?;
+        linux_dialog(title, message).await?;
     }
     #[cfg(target_os = "macos")]
     {
@@ -118,6 +85,100 @@ pub async fn show(title: &str, message: &str) -> Result<()> {
         dismiss.1 = false;
     }
     Ok(())
+}
+
+#[cfg(target_os = "linux")]
+async fn linux_dialog(title: &str, message: &str) -> Result<()> {
+    use std::{process::Stdio, time::Duration};
+    use tokio::io::AsyncReadExt;
+    // A successful Notify reply only means the desktop queued the message;
+    // GNOME's notification preferences/Do Not Disturb may still hide it.
+    // Use a separate native dialog, also when the Iced window is hidden.
+    // The DEB declares the helper dependency; no shell or root GUI is used.
+    let kde = std::env::var("XDG_CURRENT_DESKTOP")
+        .is_ok_and(|desktop| desktop.split(':').any(|d| d.eq_ignore_ascii_case("KDE")));
+    let helpers = if kde {
+        ["kdialog", "zenity"]
+    } else {
+        ["zenity", "kdialog"]
+    };
+    let mut failure = String::new();
+    for helper in helpers {
+        let mut command = tokio::process::Command::new(helper);
+        if helper == "zenity" {
+            command.args([
+                "--warning",
+                "--no-markup",
+                "--title",
+                title,
+                "--text",
+                message,
+                "--width=460",
+                "--ok-label=知道了",
+            ]);
+        } else {
+            let escaped = message
+                .replace('&', "&amp;")
+                .replace('<', "&lt;")
+                .replace('>', "&gt;")
+                .replace('\n', "<br/>");
+            command.args(["--title", title, "--sorry", &format!("<qt>{escaped}</qt>")]);
+        }
+        let child = command
+            .stdin(Stdio::null())
+            .stdout(Stdio::null())
+            .stderr(Stdio::piped())
+            .kill_on_drop(true)
+            .spawn();
+        let mut child = match child {
+            Ok(child) => child,
+            Err(error) => {
+                failure = format!("{helper}: {error}");
+                continue;
+            }
+        };
+        let mut stderr = child
+            .stderr
+            .take()
+            .context("无法读取系统提示框状态")?
+            .take(4096);
+        let mut error = Vec::new();
+        let result = tokio::time::timeout(Duration::from_secs(15), async {
+            tokio::join!(child.wait(), stderr.read_to_end(&mut error))
+        })
+        .await;
+        let text = String::from_utf8_lossy(&error).to_ascii_lowercase();
+        let startup_failed = [
+            "cannot open display",
+            "failed to open display",
+            "could not connect to display",
+            "could not load the qt platform plugin",
+            "failed to initialize",
+        ]
+        .iter()
+        .any(|s| text.contains(s));
+        match result {
+            // Closing the dialog via its window decoration is acknowledgement.
+            Ok((Ok(status), Ok(_)))
+                if !startup_failed && (status.success() || status.code() == Some(1)) =>
+            {
+                return Ok(());
+            }
+            Err(_) => {
+                child.kill().await.context("无法关闭到期的系统提示框")?;
+                return Ok(());
+            }
+            Ok(result) => {
+                failure = format!(
+                    "{helper}: {result:?} {}",
+                    text.chars().take(256).collect::<String>()
+                )
+            }
+        }
+    }
+    anyhow::bail!(
+        "无法显示 Linux 系统提示框，请确认桌面会话有效并安装 zenity 或 kdialog（{failure}）"
+    )
 }
 
 #[cfg(test)]

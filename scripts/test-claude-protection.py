@@ -10,6 +10,7 @@ import os
 from pathlib import Path
 import shutil
 import ssl
+import socket
 import socketserver
 import struct
 import subprocess
@@ -165,6 +166,40 @@ def serve(cert, key):
     secure.serve_forever()
 
 
+def route_probe(mixed, target, port, host, tls):
+    """Keep a controlled SOCKS connection open for native route assertions."""
+    assert os.environ.get('GITHUB_ACTIONS') == 'true'
+    def receive(stream, size):
+        result = b''
+        while len(result) < size:
+            chunk = stream.recv(size-len(result))
+            assert chunk, 'Controlled SOCKS connection closed'
+            result += chunk
+        return result
+    stream = socket.create_connection(('127.0.0.1', mixed), timeout=8)
+    stream.sendall(b'\x05\x01\x00')
+    assert receive(stream, 2) == b'\x05\x00'
+    if target == '203.0.113.77':
+        address = b'\x01'+socket.inet_aton(target)
+    else:
+        address = b'\x03'+bytes([len(target)])+target.encode('ascii')
+    stream.sendall(b'\x05\x01\x00'+address+struct.pack('!H', port))
+    reply = receive(stream, 4)
+    assert reply[:2] == b'\x05\x00', reply
+    size = {1:4, 4:16}.get(reply[3])
+    if reply[3] == 3:
+        size = receive(stream, 1)[0]
+    receive(stream, size+2)
+    if tls:
+        context = ssl.create_default_context(cafile=os.environ['CLASH_CLAUDE_TEST_CA'])
+        stream = context.wrap_socket(stream, server_hostname=host)
+    stream.sendall(f'GET /hold HTTP/1.1\r\nHost: {host}\r\nConnection: close\r\n\r\n'.encode('ascii'))
+    assert b'200' in stream.recv(4096), 'Controlled route did not reach fixture'
+    print(json.dumps({'ready': True}), flush=True)
+    sys.stdin.read()
+    stream.close()
+
+
 @contextlib.contextmanager
 def trusted_fixture(directory):
     if os.environ.get('GITHUB_ACTIONS') != 'true':
@@ -175,7 +210,8 @@ def trusted_fixture(directory):
     ca_config.write_text('[req]\nprompt=no\ndistinguished_name=dn\nx509_extensions=v3_ca\n[dn]\nCN=Clash of Rust disposable test root\n[v3_ca]\nbasicConstraints=critical,CA:TRUE\nkeyUsage=critical,keyCertSign,cRLSign\nsubjectKeyIdentifier=hash\nauthorityKeyIdentifier=keyid:always\n')
     names = ['api.ipify.org', 'api6.ipify.org', 'api.ip.sb', 'api.ipapi.is', 'www.cloudflare.com',
              'rdap.org', 'rdap.arin.net', 'api.globalping.io', 'speed.cloudflare.com',
-             'claude.ai', 'claude.com', 'api.anthropic.com', 'platform.claude.com']
+             'claude.ai', 'claude.com', 'api.anthropic.com', 'platform.claude.com',
+             's-cdn.anthropic.com', 'outside.ech.test']
     run(['openssl', 'req', '-x509', '-newkey', 'rsa:2048', '-nodes', '-days', '2',
          '-sha256', '-config', ca_config,
          '-keyout', ca_key, '-out', ca])
@@ -208,35 +244,29 @@ def trusted_fixture(directory):
 
 
 @contextlib.contextmanager
-def notification_service(output):
+def desktop_session(output):
     if host_system() != 'linux':
         yield
         return
     # Filesystem Unix sockets remain reachable from the isolated net namespace;
     # the default abstract session-bus socket does not.
     original = os.environ.get('DBUS_SESSION_BUS_ADDRESS')
-    with tempfile.TemporaryDirectory(prefix='cor-notify-bus-') as directory, (output/'notification-service.log').open('w') as log:
+    with tempfile.TemporaryDirectory(prefix='cor-notify-bus-') as directory, (output/'desktop-session.log').open('w') as log:
         address = 'unix:path='+str(Path(directory)/'bus')
         bus = subprocess.Popen(['dbus-daemon','--session','--nofork','--address='+address],stdout=log,stderr=log)
         os.environ['DBUS_SESSION_BUS_ADDRESS'] = address
-        daemon = None
         try:
             deadline = time.monotonic()+10
             while not (Path(directory)/'bus').exists():
                 assert bus.poll() is None and time.monotonic()<deadline, 'Filesystem notification bus did not start'
                 time.sleep(.05)
-            daemon = subprocess.Popen(['dunst','-verbosity','warn'],stdout=log,stderr=log)
-            while time.monotonic() < deadline:
-                assert daemon.poll() is None, 'Native notification service exited'
-                ready = subprocess.run(['gdbus','call','--session','--dest','org.freedesktop.DBus','--object-path','/org/freedesktop/DBus','--method','org.freedesktop.DBus.NameHasOwner','org.freedesktop.Notifications'],capture_output=True,text=True)
-                if ready.returncode == 0 and 'true' in ready.stdout:
-                    break
-                time.sleep(.1)
-            else:
-                raise RuntimeError('Native notification service did not become ready')
+            # Deliberately run without a notification daemon: accepting Notify
+            # is insufficient evidence that a native warning is visible.
+            ready = subprocess.run(['gdbus','call','--session','--dest','org.freedesktop.DBus','--object-path','/org/freedesktop/DBus','--method','org.freedesktop.DBus.NameHasOwner','org.freedesktop.Notifications'],capture_output=True,text=True,check=True)
+            assert 'false' in ready.stdout, 'Unexpected desktop notification daemon'
             yield
         finally:
-            for process in (daemon, bus):
+            for process in (bus,):
                 if process:
                     process.terminate()
                     try:
@@ -286,7 +316,7 @@ def check(build, output):
     manifest = json.loads((build/'manifest.json').read_text())
     report = output/'results.json'
     output.mkdir(parents=True, exist_ok=True)
-    with notification_service(output), ipv6_uplink(output), tempfile.TemporaryDirectory(prefix='cor-claude-ca-') as temporary:
+    with desktop_session(output), ipv6_uplink(output), tempfile.TemporaryDirectory(prefix='cor-claude-ca-') as temporary:
         with trusted_fixture(Path(temporary)) as (cert, key, ca):
             env = {'CLASH_CLAUDE_TEST_REPORT': str(report.resolve()), 'CLASH_CLAUDE_TEST_CERT': str(cert),
                    'CLASH_CLAUDE_TEST_CA': str(ca),
@@ -353,6 +383,12 @@ def main():
     server = sub.add_parser('serve')
     server.add_argument('--cert', type=Path, required=True)
     server.add_argument('--key', type=Path, required=True)
+    probe = sub.add_parser('route-probe')
+    probe.add_argument('--mixed', type=int, required=True)
+    probe.add_argument('--target', choices=['203.0.113.77', 'claude.ai', 's-cdn.anthropic.com'], required=True)
+    probe.add_argument('--port', type=int, required=True)
+    probe.add_argument('--host', choices=['claude.ai', 's-cdn.anthropic.com', 'outside.ech.test'], required=True)
+    probe.add_argument('--tls', action='store_true')
     test = sub.add_parser('check')
     test.add_argument('--build', type=Path, required=True)
     test.add_argument('--output', type=Path, required=True)
@@ -362,6 +398,8 @@ def main():
     args = parser.parse_args()
     if args.command == 'serve':
         serve(args.cert, args.key)
+    elif args.command == 'route-probe':
+        route_probe(args.mixed, args.target, args.port, args.host, args.tls)
     elif args.command == 'check':
         check(args.build.resolve(strict=True), args.output.resolve())
     elif args.command == 'clean':

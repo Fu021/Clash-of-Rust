@@ -13,6 +13,120 @@ use std::{
 };
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
+#[cfg(target_os = "linux")]
+async fn visible_linux_dialog(title: &str) -> String {
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(10);
+    loop {
+        let found = tokio::process::Command::new("xdotool")
+            .args([
+                "search",
+                "--onlyvisible",
+                "--name",
+                &format!("^{}$", regex::escape(title)),
+            ])
+            .output()
+            .await
+            .unwrap();
+        if found.status.success() {
+            let window = String::from_utf8(found.stdout)
+                .unwrap()
+                .lines()
+                .next()
+                .unwrap()
+                .to_owned();
+            let pid = tokio::process::Command::new("xdotool")
+                .args(["getwindowpid", &window])
+                .output()
+                .await
+                .unwrap();
+            assert!(pid.status.success());
+            let pid: u32 = String::from_utf8(pid.stdout)
+                .unwrap()
+                .trim()
+                .parse()
+                .unwrap();
+            let status = std::fs::read_to_string(format!("/proc/{pid}/status")).unwrap();
+            assert!(
+                status.lines().any(|line| line
+                    .strip_prefix("PPid:")
+                    .is_some_and(|value| value.trim() == std::process::id().to_string())),
+                "native warning must belong to this test process"
+            );
+            return window;
+        }
+        assert!(
+            tokio::time::Instant::now() < deadline,
+            "native Linux warning did not become visible"
+        );
+        tokio::time::sleep(Duration::from_millis(100)).await;
+    }
+}
+
+async fn route_probe(
+    engine: &Engine,
+    target: &str,
+    host: &str,
+    tls: bool,
+) -> tokio::process::Child {
+    let mut command =
+        tokio::process::Command::new(std::env::var_os("CLASH_CLAUDE_TEST_PYTHON").unwrap());
+    command
+        .arg(std::env::var_os("CLASH_CLAUDE_TEST_SCRIPT").unwrap())
+        .args([
+            "route-probe",
+            "--mixed",
+            &engine.settings.mixed_port.to_string(),
+            "--target",
+            target,
+            "--host",
+            host,
+            "--port",
+            if tls { "443" } else { "80" },
+        ]);
+    if tls {
+        command.arg("--tls");
+    }
+    let mut child = command
+        .stdin(std::process::Stdio::piped())
+        .stdout(std::process::Stdio::piped())
+        .kill_on_drop(true)
+        .spawn()
+        .unwrap();
+    let mut reader = tokio::io::BufReader::new(child.stdout.take().unwrap());
+    let mut ready = String::new();
+    use tokio::io::AsyncBufReadExt;
+    tokio::time::timeout(Duration::from_secs(12), reader.read_line(&mut ready))
+        .await
+        .expect("cached-IP/SNI route probe timed out")
+        .unwrap();
+    assert!(
+        ready.contains("\"ready\": true"),
+        "cached-IP/SNI route probe failed for {target}/{host}"
+    );
+    let live: serde_json::Value = engine.api.get("connections").await.unwrap();
+    assert!(
+        live["connections"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|connection| {
+                let metadata = &connection["metadata"];
+                let identified = if target == "203.0.113.77" {
+                    metadata["sniffHost"].as_str() == Some(host)
+                } else {
+                    metadata["host"].as_str() == Some(target)
+                        && metadata["sniffHost"].as_str().is_none_or(str::is_empty)
+                };
+                identified
+                    && connection["chains"].as_array().is_some_and(|chain| {
+                        chain.iter().any(|v| v == "FixtureA") && chain.iter().all(|v| v != "DIRECT")
+                    })
+            }),
+        "cached-IP/SNI request did not use the protection node: {live}"
+    );
+    child
+}
+
 struct Servers {
     child: tokio::process::Child,
     http: u16,
@@ -58,7 +172,7 @@ impl Drop for Socks {
     }
 }
 impl Socks {
-    async fn start(https: u16) -> Self {
+    async fn start(http: u16, https: u16) -> Self {
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
         let port = listener.local_addr().unwrap().port();
         let doh = Arc::new(AtomicU64::new(0));
@@ -102,7 +216,11 @@ impl Socks {
                         }
                         let mut target = tokio::net::TcpStream::connect((
                             "127.0.0.1",
-                            if port == 443 { https } else { port },
+                            match port {
+                                443 => https,
+                                80 => http,
+                                _ => port,
+                            },
                         ))
                         .await?;
                         stream.write_all(&[5, 0, 0, 1, 127, 0, 0, 1, 0, 0]).await?;
@@ -221,8 +339,8 @@ async fn scope_runner(engine: &Engine) {
 pub async fn run() {
     assert_eq!(std::env::var("CLASH_PROXY_SMOKE").as_deref(), Ok("1"));
     let mut servers = Servers::start().await;
-    let first = Socks::start(servers.https).await;
-    let other = Socks::start(servers.https).await;
+    let first = Socks::start(servers.http, servers.https).await;
+    let other = Socks::start(servers.http, servers.https).await;
     let temp = tempfile::tempdir().unwrap();
     let store = Store::at(temp.path().join("data")).unwrap();
     let controller_port = free_port();
@@ -249,6 +367,9 @@ pub async fn run() {
     let raw = format!(
         "proxies:\n  - {{name: FixtureA, type: socks5, server: 127.0.0.1, port: {}, udp: true}}\n  - {{name: FixtureB, type: socks5, server: 127.0.0.1, port: {}, udp: true}}\nproxy-groups: [{{name: Main, type: select, proxies: [FixtureA, FixtureB]}}]\nhosts: {{claude.ai: 127.0.0.1, api.anthropic.com: 127.0.0.1, shared.sentry.io: 127.0.0.1, example.org: 127.0.0.1}}\ndns: {{enable: true, enhanced-mode: redir-host, nameserver: ['https://127.0.0.1:{}/dns-query'], fake-ip-filter: ['dns-check.example']}}\ntun: {{device: {device}, route-address: [203.0.113.0/24], dns-hijack: []}}\nrules: ['DOMAIN-SUFFIX,claude.ai,DIRECT', 'DOMAIN,shared.sentry.io,DIRECT', 'IP-CIDR6,2001:db8::/64,Main,no-resolve', 'MATCH,Main']\n",
         first.port, other.port, servers.https
+    );
+    let raw = format!(
+        "{raw}\nsniffer:\n  enable: true\n  force-dns-mapping: true\n  parse-pure-ip: false\n  override-destination: false\n  force-domain: ['+.claude.ai', '+.anthropic.com']\n  sniff:\n    HTTP: {{ports: [80]}}\n    TLS: {{ports: [443]}}\n"
     );
     std::fs::write(&profile, &raw).unwrap();
     engine
@@ -285,6 +406,39 @@ pub async fn run() {
         std::fs::read(store.profile_path(&id).unwrap()).unwrap(),
         original_profile
     );
+    let saved = std::fs::read_to_string(store.runtime().join("config.yaml")).unwrap();
+    let mut cache_probe: serde_yaml::Value = serde_yaml::from_str(&saved).unwrap();
+    let probe_rules = cache_probe["rules"].as_sequence_mut().unwrap();
+    let last = probe_rules.len() - 1;
+    probe_rules.insert(last, "IP-CIDR,203.0.113.0/24,DIRECT,no-resolve".into());
+    probe_rules.insert(0, "DOMAIN,outside.ech.test,DIRECT".into());
+    engine
+        .api
+        .reload(&scoped_payload(
+            &serde_yaml::to_string(&cache_probe).unwrap(),
+        ))
+        .await
+        .unwrap();
+    for (target, host, tls) in [
+        ("203.0.113.77", "claude.ai", false),
+        ("203.0.113.77", "s-cdn.anthropic.com", true),
+        ("claude.ai", "outside.ech.test", true),
+    ] {
+        let mut child = route_probe(&engine, target, host, tls).await;
+        child.kill().await.unwrap();
+    }
+    assert_eq!(
+        engine
+            .poll(Scope::Claude)
+            .await
+            .unwrap()
+            .claude_guard
+            .unwrap()
+            .blocked,
+        0,
+        "protected cached-IP/SNI requests must not fall back to reactive blocking"
+    );
+    engine.api.reload(&scoped_payload(&saved)).await.unwrap();
     let mut normal = hold(&client, "api.anthropic.com", servers.http).await;
     assert!(normal.chunk().await.unwrap().is_some());
     let mut protected = capture(&mut engine, "保护开启后").await;
@@ -437,6 +591,25 @@ pub async fn run() {
         guard.alerts, 1,
         "two related failures should produce one notification request"
     );
+    #[cfg(target_os = "linux")]
+    {
+        let window = visible_linux_dialog("Clash of Rust · Claude 保护").await;
+        let output =
+            std::path::PathBuf::from(std::env::var_os("CLASH_CLAUDE_TEST_REPORT").unwrap());
+        let status = tokio::process::Command::new("/usr/bin/import")
+            .args(["-window", &window])
+            .arg(output.with_file_name("linux-native-warning.png"))
+            .status()
+            .await
+            .unwrap();
+        assert!(status.success(), "native Linux warning screenshot failed");
+        let status = tokio::process::Command::new("xdotool")
+            .args(["key", "--window", &window, "Return"])
+            .status()
+            .await
+            .unwrap();
+        assert!(status.success());
+    }
     #[cfg(windows)]
     {
         use windows_sys::Win32::UI::WindowsAndMessaging::{
@@ -508,6 +681,32 @@ pub async fn run() {
         notification.error
     );
     let guard = notification;
+    #[cfg(target_os = "linux")]
+    {
+        let alert = tokio::spawn(clash_of_rust::platform::notification::show(
+            "Clash of Rust · Claude 保护（取消测试）",
+            "验证关闭保护时不会残留系统提示框。",
+        ));
+        let window = visible_linux_dialog("Clash of Rust · Claude 保护（取消测试）").await;
+        alert.abort();
+        assert!(alert.await.unwrap_err().is_cancelled());
+        let deadline = tokio::time::Instant::now() + Duration::from_secs(3);
+        loop {
+            let found = tokio::process::Command::new("xdotool")
+                .args(["getwindowname", &window])
+                .output()
+                .await
+                .unwrap();
+            if !found.status.success() {
+                break;
+            }
+            assert!(
+                tokio::time::Instant::now() < deadline,
+                "cancelled native warning remained visible"
+            );
+            tokio::time::sleep(Duration::from_millis(50)).await;
+        }
+    }
     drop((normal, unrelated, bad_direct, bad_node));
     // Recreate the engine as a genuine application restart. The persisted
     // restoration record must survive unchanged, including its pinned node.
@@ -657,7 +856,8 @@ pub async fn run() {
     let report = serde_json::json!({"schema":1,"environment":"controlled disposable native runner","version":clash_of_rust::VERSION,
         "before":before,"protected":protected,"blocked":blocked,"restored":restored,"protection":protection,
         "routing_scope":"Production full-route configuration asserted; native fixture routes limited to documentation IPv4/IPv6 and DNS test target to preserve runner control traffic",
-        "tests":["native TUN and system proxy","native IPv6 TUN traffic","public DoH via pinned node","real UDP DNS hijack","real TCP DNS hijack","normal Claude connection preserved","unrelated connection preserved","DIRECT connection closed","wrong-node connection closed","native notification request deduplicated and completed","restart preserves original snapshot","off/system/TUN restored exactly","rejected activation leaves preferences unchanged","subscription source unchanged","provider-backed concrete node and restore"],
+        "tests":["native TUN and system proxy","native IPv6 TUN traffic","public DoH via pinned node","real UDP DNS hijack","real TCP DNS hijack","normal Claude connection preserved","unrelated connection preserved","DIRECT connection closed","wrong-node connection closed","native notification request deduplicated and completed","restart preserves original snapshot","off/system/TUN restored exactly","rejected activation leaves preferences unchanged","subscription source unchanged","provider-backed concrete node and restore","cached-IP HTTP hostname routed","cached-IP TLS SNI routed","known hostname preserved despite alternate TLS SNI"],
+        "linux_visible_warning_and_cancellation":cfg!(target_os = "linux"),
         "guard":guard});
     let output = std::path::PathBuf::from(std::env::var_os("CLASH_CLAUDE_TEST_REPORT").unwrap());
     clash_of_rust::config::atomic_write(&output, &serde_json::to_vec_pretty(&report).unwrap())

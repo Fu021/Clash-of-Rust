@@ -248,6 +248,17 @@ pub fn apply(map: &mut Mapping, settings: &Settings) -> Result<()> {
     map.insert(Value::from("mode"), Value::from("rule"));
     map.insert(Value::from("ipv6"), Value::from(true));
 
+    // Keep a known DNS/proxy hostname authoritative. Subscription force-sniff
+    // settings can otherwise replace claude.ai with a shared CDN/ECH outer
+    // name before domain rules run. Bare-IP clients still need HTTP/SNI/QUIC
+    // discovery, e.g. when reusing a browser's pre-protection DNS cache.
+    map.insert(
+        Value::from("sniffer"),
+        serde_yaml::from_str::<Value>(
+            "enable: true\nforce-dns-mapping: false\nparse-pure-ip: true\noverride-destination: false\nsniff:\n  HTTP: {ports: [80, 8080-8880], override-destination: false}\n  TLS: {ports: [443, 8443], override-destination: false}\n  QUIC: {ports: [443, 8443], override-destination: false}\nforce-domain: []\nskip-domain: ['+.lan', '+.local', localhost, '+.home.arpa']\n",
+        )?,
+    );
+
     let dns = map
         .get_mut(Value::from("dns"))
         .and_then(Value::as_mapping_mut)
@@ -368,7 +379,7 @@ mod tests {
             proxy_mode: ProxyMode::System,
             ..Default::default()
         };
-        let raw = "proxies: [{name: 'node,&', type: socks5, server: 127.0.0.1, port: 1080}]\ndns: {enable: false, nameserver: [9.9.9.9], fallback: [8.8.8.8], nameserver-policy: {'+.google.com': 114.114.114.114}, direct-nameserver: [system], fake-ip-filter: ['*.lan']}\ntun: {route-address: [203.0.113.0/24], dns-hijack: []}\nrules: ['DOMAIN-SUFFIX,claude.ai,DIRECT', 'MATCH,DIRECT']\n";
+        let raw = "proxies: [{name: 'node,&', type: socks5, server: 127.0.0.1, port: 1080}]\ndns: {enable: false, nameserver: [9.9.9.9], fallback: [8.8.8.8], nameserver-policy: {'+.google.com': 114.114.114.114}, direct-nameserver: [system], fake-ip-filter: ['*.lan']}\ntun: {route-address: [203.0.113.0/24], dns-hijack: []}\nsniffer: {enable: false, force-dns-mapping: true, parse-pure-ip: false, force-domain: ['+.claude.ai'], skip-domain: ['+.*']}\nrules: ['DOMAIN-SUFFIX,claude.ai,DIRECT', 'MATCH,DIRECT']\n";
         let before = crate::config::runtime_config(raw, &settings).unwrap();
         settings.claude_protection = Some(std::sync::Arc::new(Protection::new(
             id,
@@ -384,6 +395,24 @@ mod tests {
         let map: Value = serde_yaml::from_str(&protected).unwrap();
         assert_eq!(map["mode"], "rule");
         assert_eq!(map["ipv6"], true);
+        assert_eq!(map["sniffer"]["enable"], true);
+        assert_eq!(map["sniffer"]["parse-pure-ip"], true);
+        assert_eq!(map["sniffer"]["force-dns-mapping"], false);
+        assert_eq!(map["sniffer"]["override-destination"], false);
+        assert!(
+            map["sniffer"]["force-domain"]
+                .as_sequence()
+                .unwrap()
+                .is_empty()
+        );
+        for protocol in ["HTTP", "TLS", "QUIC"] {
+            assert!(
+                !map["sniffer"]["sniff"][protocol]["ports"]
+                    .as_sequence()
+                    .unwrap()
+                    .is_empty()
+            );
+        }
         assert_eq!(map["tun"]["dns-hijack"].as_sequence().unwrap().len(), 2);
         assert!(map["tun"]["route-address"].is_null());
         assert!(map["dns"]["fallback"].is_null());

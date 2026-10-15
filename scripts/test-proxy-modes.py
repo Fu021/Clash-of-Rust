@@ -46,7 +46,7 @@ def check(binary, bundle, test_case='basic_system_proxy_and_tun'):
     if system == 'linux':
         sudo = ['sudo']
         if test_case == 'claude_protection_round_trip_and_guard':
-            sudo += ['--preserve-env=CLASH_CLAUDE_TEST_REPORT,CLASH_CLAUDE_TEST_CERT,CLASH_CLAUDE_TEST_CA,CLASH_CLAUDE_TEST_KEY,CLASH_CLAUDE_TEST_SCRIPT,CLASH_CLAUDE_TEST_PYTHON,DBUS_SESSION_BUS_ADDRESS,DISPLAY']
+            sudo += ['--preserve-env=CLASH_CLAUDE_TEST_REPORT,CLASH_CLAUDE_TEST_CERT,CLASH_CLAUDE_TEST_CA,CLASH_CLAUDE_TEST_KEY,CLASH_CLAUDE_TEST_SCRIPT,CLASH_CLAUDE_TEST_PYTHON,DBUS_SESSION_BUS_ADDRESS,DISPLAY,XAUTHORITY']
         installed = Path('/opt/clash-of-rust')
         if bundle.resolve() != installed:
             # Install only the raw tested binaries/resources, never package in CI.
