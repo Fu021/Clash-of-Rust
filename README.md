@@ -3,7 +3,7 @@
 </p>
 <h1 align="center">Clash of Rust</h1>
 
-基于 mihomo 的原生 Rust 代理客户端。支持 **Windows（x64 / ARM64）**、**Debian/Ubuntu（amd64 / ARM64，Ubuntu 仅支持 22.04 及以上）** 和 **macOS 14 及以上（Intel / Apple Silicon）**。版本 **0.5.8**，更新内容见 [发布说明](docs/releases/0.5.8.md)。
+基于 mihomo 的原生 Rust 代理客户端。支持 **Windows（x64 / ARM64）**、**Debian/Ubuntu（amd64 / ARM64，Ubuntu 仅支持 22.04 及以上）** 和 **macOS 14 及以上（Intel / Apple Silicon）**。开发版本 **0.5.9-dev.1**，更新内容见 [发布说明](docs/releases/0.5.9.md)。
 
 ## Features
 
@@ -11,13 +11,13 @@
 - **规则管理**：按订阅管理自定义规则，支持新增、编辑、启停与顺序调整，校验后应用；五项快捷规则默认收起且全部关闭，仅补充缺少的规则，保留原始订阅 YAML。
 - **离线就绪**：内置 mihomo 内核和 Geo 数据，支持一键更新 Geo 数据。
 - **IP 检测**：183 个检测项，覆盖出口 IP、GitHub、AI 服务与流媒体地区访问；一键检测显示分类报告，点击分类或状态查看详情，支持筛选与分类重测。
-- **A÷检测**：自动采集 Claude 地区线索并扫描已记录项目的配置，点击正常或风险数量查看详情；可选 Claude 保护与实时异常拦截，详见 [检测说明](docs/claude-region-detection.md)。
+- **A÷检测**：采集 Claude 地区、DNS、WebRTC 与浏览器线索，扫描已记录项目配置并分类展示；可选一键保护，固定节点并启用 TUN、加密 DNS 与异常连接拦截，关闭后恢复原设置，详见 [检测说明](docs/claude-region-detection.md)。
 - **便捷使用**：托盘快捷切换节点，可选显示上传与下载速度；支持后台开机自启、单实例与网络诊断，记住普通窗口尺寸；内核启动失败时可直接重试。
 - **客户端更新**：仅检查正式版，自动选择代理并回退，支持下载进度与取消；校验完成后自动安装与重启，失败时显示原因。
 
 ## 安装与使用
 
-从 [GitHub Releases](https://github.com/Fu021/Clash-of-Rust/releases) 下载对应系统和架构的安装包，附带 `.sha256` 校验文件。
+从 [GitHub Releases](https://github.com/Fu021/Clash-of-Rust/releases) 下载当前正式版对应系统和架构的安装包，附带 `.sha256` 校验文件。
 
 | 平台 | 安装包 |
 | --- | --- |
@@ -36,15 +36,15 @@ macOS 打开 DMG，将 **Clash of Rust.app** 拖入 **Applications（应用程�
 
 ## 内存占用
 
-实测版本 **0.5.8**（`77899e1`）；Ubuntu 22.04 x64、Release 构建，低强度固定输入为 **100 节点、5 个策略组、1,000 条规则**。DNS 覆盖与 IPv6 开启，快捷规则、系统代理和 TUN 关闭，无业务流量：
+实测版本 **0.5.9-dev.1**（`e5cdc2a`）；Ubuntu 22.04 x64、Release 构建，低强度固定输入为 **100 节点、5 个策略组、1,000 条规则**。DNS 覆盖、IPv6 与 UDP 开启，Claude 保护、快捷规则、系统代理和 TUN 关闭，无业务流量：
 
 | 场景 | GUI RSS | GUI 与内核合计 PSS |
 | --- | ---: | ---: |
-| 首页 | 34.26 MiB | 72.47 MiB |
-| 代理组折叠 | 35.19 MiB | 76.74 MiB |
-| 节点搜索 | 39.98 MiB | 84.56 MiB |
+| 首页 | 35.18 MiB | 73.75 MiB |
+| 代理组折叠 | 36.18 MiB | 78.86 MiB |
+| 节点搜索 | 40.94 MiB | 86.50 MiB |
 
-五项快捷规则全开时，首页 GUI RSS 为 34.64 MiB，合计 PSS 为 92.64 MiB。以上为每场景采样 10 秒、间隔 250 ms 的观测峰值，实际占用随系统、配置和使用情况变化；RSS 含共享页，PSS 按比例分摊共享页。[测试记录](https://github.com/Fu021/Clash-of-Rust/actions/runs/38562199658)。
+五项快捷规则全开时，首页 GUI RSS 为 34.24 MiB，合计 PSS 为 89.03 MiB。以上为每场景采样 10 秒、间隔 250 ms 的观测峰值，实际占用随系统、配置和使用情况变化；RSS 含共享页，PSS 按比例分摊共享页。[测试记录](https://github.com/Fu021/Clash-of-Rust/actions/runs/38681658363)。
 
 ## 编译与打包
 
