@@ -1,0 +1,50 @@
+import { Theme } from "../theme/palette.slint";
+import { Label, Caption, Heading, Panel, ActionButton, Field, Badge } from "../components/controls.slint";
+
+export component NetworkPage inherits Rectangle {
+    VerticalLayout {
+        spacing: 16px;
+        Panel {
+            height: 148px;
+            VerticalLayout {
+                padding: 18px; spacing: 12px;
+                Heading { text: "网站响应"; }
+                HorizontalLayout {
+                    spacing: 10px;
+                    Field { text: "https://www.gstatic.com/generate_204"; }
+                    ActionButton { text: "开始测试"; primary: true; }
+                }
+                HorizontalLayout {
+                    spacing: 10px;
+                    Badge { text: "HTTP 204"; tone: 1; }
+                    Caption { text: "42 ms · 通过当前代理访问"; }
+                }
+            }
+        }
+        Panel {
+            height: 132px;
+            VerticalLayout {
+                padding: 18px; spacing: 12px;
+                HorizontalLayout { Heading { text: "出口信息"; } ActionButton { text: "查询出口"; } }
+                HorizontalLayout {
+                    Label { text: "203.0.113.42"; color: Theme.accent; font-size: 24px; }
+                    Caption { text: "德国 · IPv4"; horizontal-alignment: right; }
+                }
+            }
+        }
+        Panel {
+            height: 148px;
+            VerticalLayout {
+                padding: 18px; spacing: 12px;
+                Heading { text: "系统 DNS 查询"; }
+                HorizontalLayout {
+                    spacing: 10px;
+                    Field { text: "github.com"; }
+                    ActionButton { text: "解析"; }
+                }
+                Caption { text: "github.com → 192.0.2.10 · 16 ms"; }
+            }
+        }
+        Rectangle { vertical-stretch: 1; }
+    }
+}

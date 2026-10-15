@@ -1,0 +1,350 @@
+// Independent design studies. All values are fixtures and no application callbacks are connected.
+import "../../../../resources/fonts/SourceHanSansCN-Regular.otf";
+
+global Skin {
+    in-out property <int> design: 0;
+    in-out property <bool> dark: false;
+    out property <color> canvas: dark ? (design == 2 ? #17181b : #111923) : (design == 1 ? #f6f7f2 : #f6f8fb);
+    out property <color> surface: dark ? (design == 1 ? #202e29 : design == 2 ? #222428 : #1c2735) : #ffffff;
+    out property <color> sidebar: dark ? (design == 1 ? #19251f : #1a222d) : (design == 1 ? #eaf0e7 : design == 2 ? #eef0f3 : #ffffff);
+    out property <color> inset: dark ? #26323d : (design == 1 ? #edf2eb : #f1f4f8);
+    out property <color> ink: dark ? #f1f5f9 : #141c29;
+    out property <color> secondary: dark ? #bdc8d5 : #4b596b;
+    out property <color> line: dark ? #3c4b5d : #d2d9e3;
+    out property <color> accent: dark ? (design == 2 ? #93b4ff : #8ce3c4) : (design == 2 ? #2563eb : design == 1 ? #326b51 : #0f766e);
+    out property <color> primary: design == 2 ? #2563eb : design == 1 ? #326b51 : #0f766e;
+    out property <color> wash: dark ? (design == 2 ? #25334e : #254137) : (design == 2 ? #e4ecff : design == 1 ? #dcebdc : #e7f4f0);
+    out property <length> radius: design == 1 ? 18px : design == 2 ? 4px : 8px;
+}
+
+component Ink inherits Text {
+    color: Skin.ink;
+    font-size: Skin.design == 2 ? 13px : 14px;
+    vertical-alignment: center;
+    overflow: elide;
+}
+
+component Muted inherits Ink { color: Skin.secondary; font-size: 12px; }
+
+component Surface inherits Rectangle {
+    background: Skin.surface;
+    border-width: Skin.design == 1 ? 0px : 1px;
+    border-color: Skin.line;
+    border-radius: Skin.radius;
+    @children
+}
+
+component Choice inherits Rectangle {
+    in property <string> text;
+    in property <bool> active;
+    in property <bool> primary;
+    callback clicked();
+    height: Skin.design == 2 ? 30px : 36px;
+    width: max(62px, caption.preferred-width + 24px);
+    horizontal-stretch: 0;
+    border-radius: Skin.design == 1 ? 18px : 5px;
+    border-width: 1px;
+    border-color: root.primary ? Skin.primary : root.active ? Skin.accent : Skin.line;
+    background: root.primary ? Skin.primary : root.active ? Skin.wash : Skin.surface;
+    caption := Ink {
+        width: parent.width; height: parent.height;
+        text: root.text;
+        font-size: 13px;
+        horizontal-alignment: center;
+        color: root.primary ? #ffffff : root.active ? Skin.accent : Skin.ink;
+    }
+    TouchArea { mouse-cursor: pointer; clicked => { root.clicked(); } }
+}
+
+component Stat inherits Rectangle {
+    in property <string> title;
+    in property <string> value;
+    in property <string> detail;
+    in property <bool> compact;
+    in property <bool> filled;
+    background: root.filled ? Skin.surface : transparent;
+    border-radius: Skin.radius;
+    Muted { x: 18px; y: 12px; height: 22px; text: root.title; }
+    Ink { x: 18px; y: 35px; height: 42px; text: root.value; font-size: root.compact ? 25px : 30px; color: Skin.accent; }
+    if root.detail != "": Muted { x: 18px; y: 79px; height: 20px; text: root.detail; }
+}
+
+component ModeRows inherits Surface {
+    property <int> mode: 0;
+    property <int> proxy: 0;
+    VerticalLayout {
+        padding: 18px; spacing: 14px;
+        Ink { text: "连接设置"; font-size: 16px; height: 28px; }
+        HorizontalLayout {
+            spacing: 8px;
+            Muted { text: "运行模式"; horizontal-stretch: 1; }
+            Choice { text: "规则"; active: root.mode == 0; clicked => { root.mode = 0; } }
+            Choice { text: "全局"; active: root.mode == 1; clicked => { root.mode = 1; } }
+            Choice { text: "直连"; active: root.mode == 2; clicked => { root.mode = 2; } }
+        }
+        Rectangle { height: 1px; background: Skin.line; }
+        HorizontalLayout {
+            spacing: 8px;
+            Muted { text: "代理模式"; horizontal-stretch: 1; }
+            Choice { text: "系统代理"; active: root.proxy == 0; clicked => { root.proxy = 0; } }
+            Choice { text: "TUN"; active: root.proxy == 1; clicked => { root.proxy = 1; } }
+            Choice { text: "关闭"; active: root.proxy == 2; clicked => { root.proxy = 2; } }
+        }
+    }
+}
+
+component NativeHome inherits Rectangle {
+    VerticalLayout {
+        spacing: 16px;
+        Surface {
+            height: 98px;
+            HorizontalLayout {
+                padding: 20px; spacing: 16px;
+                Rectangle {
+                    width: 40px; height: 40px; border-radius: 20px; background: Skin.wash;
+                    Ink { width: parent.width; height: parent.height; text: "✓"; horizontal-alignment: center; color: Skin.accent; font-size: 23px; }
+                }
+                VerticalLayout {
+                    horizontal-stretch: 1;
+                    Ink { text: "系统代理已连接"; font-size: 18px; }
+                    Muted { text: "当前节点 · 德国 01 · IPv6"; }
+                }
+                Choice { text: "查看代理 →"; }
+            }
+        }
+        Surface {
+            height: 124px;
+            HorizontalLayout {
+                Stat { title: "下载速度"; value: "1.28 MiB/s"; detail: "实时流量"; }
+                Rectangle { width: 1px; height: 76px; background: Skin.line; }
+                Stat { title: "上传速度"; value: "24.6 KiB/s"; detail: "实时流量"; }
+                Rectangle { width: 1px; height: 76px; background: Skin.line; }
+                Stat { title: "活跃连接"; value: "32"; detail: "当前连接"; }
+            }
+        }
+        ModeRows { height: 184px; }
+        Surface {
+            height: 104px;
+            VerticalLayout {
+                padding: 18px; spacing: 8px;
+                HorizontalLayout { Ink { text: "当前订阅"; } Muted { text: "累计流量 · 本次运行"; horizontal-alignment: right; } }
+                HorizontalLayout { Ink { text: "我的订阅"; color: Skin.accent; } Muted { text: "↑ 42.8 MiB     ↓ 1.36 GiB"; horizontal-alignment: right; } }
+            }
+        }
+        Rectangle { vertical-stretch: 1; }
+    }
+}
+
+component SoftHome inherits Rectangle {
+    property <int> mode: 0;
+    property <int> proxy: 0;
+    VerticalLayout {
+        spacing: 16px;
+        Rectangle {
+            height: 138px; background: Skin.wash; border-radius: 22px;
+            HorizontalLayout {
+                padding: 24px; spacing: 18px;
+                VerticalLayout {
+                    horizontal-stretch: 1; spacing: 6px;
+                    Ink { text: "连接已就绪"; font-size: 28px; }
+                    Ink { text: "德国 01 · IPv6"; color: Skin.accent; font-size: 17px; }
+                    Muted { text: "我的订阅 · 系统代理"; }
+                }
+                Rectangle {
+                    width: 66px; height: 66px; border-radius: 33px; background: Skin.primary;
+                    Ink { width: parent.width; height: parent.height; text: "✓"; font-size: 36px; color: #ffffff; horizontal-alignment: center; }
+                }
+            }
+        }
+        HorizontalLayout {
+            height: 112px; spacing: 14px;
+            Stat { title: "下载速度"; value: "1.28 MiB/s"; detail: "实时流量"; filled: true; }
+            Stat { title: "上传速度"; value: "24.6 KiB/s"; detail: "实时流量"; filled: true; }
+            Stat { title: "活跃连接"; value: "32"; detail: "当前连接"; filled: true; }
+        }
+        HorizontalLayout {
+            height: 150px; spacing: 14px;
+            Surface {
+                VerticalLayout {
+                    padding: 20px; spacing: 12px;
+                    Ink { text: "运行模式"; font-size: 17px; }
+                    Muted { text: "按规则选择连接出口"; }
+                    HorizontalLayout {
+                        spacing: 8px;
+                        Choice { text: "规则"; active: root.mode == 0; clicked => { root.mode = 0; } }
+                        Choice { text: "全局"; active: root.mode == 1; clicked => { root.mode = 1; } }
+                        Choice { text: "直连"; active: root.mode == 2; clicked => { root.mode = 2; } }
+                        Rectangle { horizontal-stretch: 1; }
+                    }
+                }
+            }
+            Surface {
+                VerticalLayout {
+                    padding: 20px; spacing: 12px;
+                    Ink { text: "代理模式"; font-size: 17px; }
+                    Muted { text: "选择本机流量接入方式"; }
+                    HorizontalLayout {
+                        spacing: 8px;
+                        Choice { text: "系统代理"; active: root.proxy == 0; clicked => { root.proxy = 0; } }
+                        Choice { text: "TUN"; active: root.proxy == 1; clicked => { root.proxy = 1; } }
+                        Choice { text: "关闭"; active: root.proxy == 2; clicked => { root.proxy = 2; } }
+                        Rectangle { horizontal-stretch: 1; }
+                    }
+                }
+            }
+        }
+        Surface {
+            height: 90px;
+            HorizontalLayout {
+                padding: 20px;
+                VerticalLayout { Muted { text: "累计上传"; } Ink { text: "42.8 MiB"; font-size: 22px; } }
+                VerticalLayout { Muted { text: "累计下载"; } Ink { text: "1.36 GiB"; font-size: 22px; } }
+                Muted { text: "本次运行"; horizontal-alignment: right; }
+            }
+        }
+        Rectangle { vertical-stretch: 1; }
+    }
+}
+
+component CompactHome inherits Rectangle {
+    VerticalLayout {
+        spacing: 12px;
+        HorizontalLayout {
+            height: 86px; spacing: 10px;
+            Surface { Stat { title: "下载速度"; value: "1.28 MiB/s"; compact: true; } }
+            Surface { Stat { title: "上传速度"; value: "24.6 KiB/s"; compact: true; } }
+            Surface { Stat { title: "活跃连接"; value: "32"; compact: true; } }
+            Surface { Stat { title: "累计下载"; value: "1.36 GiB"; compact: true; } }
+        }
+        Surface {
+            height: 66px;
+            HorizontalLayout {
+                padding: 14px; spacing: 8px;
+                Ink { text: "运行模式"; horizontal-stretch: 1; }
+                Choice { text: "规则"; active: true; }
+                Choice { text: "全局"; }
+                Choice { text: "直连"; }
+                Rectangle { width: 20px; }
+                Ink { text: "代理模式"; horizontal-stretch: 1; }
+                Choice { text: "系统代理"; active: true; }
+                Choice { text: "TUN"; }
+                Choice { text: "关闭"; }
+            }
+        }
+        Rectangle {
+            height: 32px;
+            Ink { x: 0px; y: 0px; height: parent.height; text: "当前连接"; font-size: 16px; }
+            Muted { x: 0px; y: 0px; width: parent.width; height: parent.height; text: "查看全部 32 条 →"; color: Skin.accent; horizontal-alignment: right; }
+        }
+        Surface {
+            height: 186px;
+            VerticalLayout {
+                spacing: 0px;
+                Rectangle {
+                    height: 42px; background: Skin.inset;
+                    HorizontalLayout {
+                        padding-left: 14px; padding-right: 14px; spacing: 14px;
+                        Muted { text: "连接名称"; width: (root.width - 70px) * 0.34; }
+                        Muted { text: "匹配线路"; width: (root.width - 70px) * 0.34; }
+                        Muted { text: "下载速度 ↓"; width: (root.width - 70px) * 0.16; }
+                        Muted { text: "下载量"; width: (root.width - 70px) * 0.16; }
+                    }
+                }
+                for item[i] in [
+                    {host: "api.github.com:443", route: "代理选择 → 德国 01", speed: "1.20 MiB/s", total: "12.4 MiB"},
+                    {host: "claude.ai:443", route: "代理选择 → 德国 01", speed: "86.4 KiB/s", total: "4.82 MiB"},
+                    {host: "example.com:443", route: "DIRECT", speed: "0 B/s", total: "34.0 KiB"}
+                ]: Rectangle {
+                    height: 48px;
+                    background: mod(i, 2) == 0 ? Skin.surface : Skin.inset;
+                    HorizontalLayout {
+                        padding-left: 14px; padding-right: 14px; spacing: 14px;
+                        Ink { text: item.host; width: (root.width - 70px) * 0.34; }
+                        Muted { text: item.route; width: (root.width - 70px) * 0.34; }
+                        Ink { text: item.speed; color: Skin.accent; width: (root.width - 70px) * 0.16; }
+                        Muted { text: item.total; width: (root.width - 70px) * 0.16; }
+                    }
+                }
+            }
+        }
+        Surface {
+            height: 106px;
+            VerticalLayout {
+                padding: 14px; spacing: 12px;
+                HorizontalLayout {
+                    Ink { text: "我的订阅  |  德国 01 · IPv6"; color: Skin.accent; }
+                    Muted { text: "累计上传 42.8 MiB"; horizontal-alignment: right; }
+                }
+                Rectangle { height: 1px; background: Skin.line; }
+                HorizontalLayout {
+                    Muted { text: "混合端口 7897    控制端口 9090"; }
+                    Muted { text: "mihomo v1.19.32"; horizontal-alignment: right; }
+                }
+            }
+        }
+        Rectangle { vertical-stretch: 1; }
+    }
+}
+
+export component StyleStudy inherits Window {
+    preferred-width: 1120px;
+    preferred-height: 780px;
+    min-width: 950px;
+    min-height: 700px;
+    title: "Clash of Rust · Slint 风格对照";
+    default-font-family: "Source Han Sans CN";
+    background: Skin.canvas;
+    in-out property <int> design <=> Skin.design;
+    in-out property <bool> dark <=> Skin.dark;
+    property <length> sidebar-width: root.design == 2 ? 172px : 192px;
+    property <[string]> names: ["首页", "代理", "订阅", "连接", "规则", "日志", "网络诊断", "IP 检测", "A÷检测", "设置"];
+    property <[image]> icons: [
+        @image-url("../icons/home.svg"), @image-url("../icons/proxies.svg"), @image-url("../icons/subscriptions.svg"),
+        @image-url("../icons/connections.svg"), @image-url("../icons/rules.svg"), @image-url("../icons/logs.svg"),
+        @image-url("../icons/network.svg"), @image-url("../icons/ip.svg"), @image-url("../icons/ai.svg"), @image-url("../icons/settings.svg")
+    ];
+    Rectangle {
+        x: 0px; y: 0px; width: root.sidebar-width; height: parent.height;
+        background: Skin.sidebar;
+        Rectangle { x: parent.width - 1px; y: 0px; width: 1px; height: parent.height; background: Skin.design == 1 ? transparent : Skin.line; }
+        Image { x: 18px; y: 24px; width: 24px; height: 24px; source: @image-url("../../../../resources/icons/app.png"); }
+        Ink { x: 50px; y: 18px; height: 32px; text: "Clash of Rust"; font-size: 15px; }
+        Muted { x: 50px; y: 46px; height: 20px; text: "原生代理客户端"; font-size: 11px; }
+        for name[i] in root.names: Rectangle {
+            x: 12px; y: 100px + i * 42px + (i >= 6 ? 24px : 0px);
+            width: parent.width - 24px; height: 38px;
+            border-radius: Skin.design == 1 ? 19px : Skin.radius;
+            background: i == 0 ? Skin.wash : transparent;
+            if i == 0 && Skin.design == 0: Rectangle { x: 0px; y: 10px; width: 3px; height: 18px; border-radius: 2px; background: Skin.accent; }
+            Image { x: 14px; y: 10px; width: 18px; height: 18px; source: root.icons[i]; colorize: i == 0 ? Skin.accent : Skin.secondary; }
+            Ink { x: 44px; y: 0px; width: parent.width - 48px; height: parent.height; text: name; color: i == 0 ? Skin.accent : Skin.ink; }
+        }
+        Muted { x: 26px; y: 352px; height: 20px; text: "工具"; font-size: 10px; }
+        Choice { x: 16px; y: parent.height - 126px; width: parent.width - 32px; text: root.design == 0 ? "方案 A · 简洁原生" : root.design == 1 ? "方案 B · 柔和卡片" : "方案 C · 紧凑工作台"; clicked => { root.design = mod(root.design + 1, 3); } }
+        Choice { x: 16px; y: parent.height - 82px; width: parent.width - 32px; text: root.dark ? "浅色外观" : "深色外观"; clicked => { root.dark = !root.dark; } }
+        Muted { x: 18px; y: parent.height - 36px; height: 20px; text: "0.5.11-dev.1"; font-size: 11px; }
+    }
+    Rectangle {
+        x: root.sidebar-width + 28px; y: 24px;
+        width: parent.width - root.sidebar-width - 56px; height: 64px;
+        Ink { x: 0px; y: 0px; height: 36px; text: "首页"; font-size: root.design == 2 ? 25px : 28px; }
+        Muted { x: 0px; y: 42px; height: 20px; text: "运行状态与流量概览"; }
+        Rectangle {
+            x: parent.width - 112px; y: 0px; width: 112px; height: 26px; background: Skin.wash; border-radius: Skin.design == 1 ? 13px : 5px;
+            Ink { width: parent.width; height: parent.height; text: "● 内核运行中"; color: Skin.accent; horizontal-alignment: center; font-size: 12px; }
+        }
+        Muted { x: 0px; y: 42px; width: parent.width; height: 20px; text: "我的订阅  |  德国 01 · IPv6"; horizontal-alignment: right; }
+    }
+    Rectangle {
+        x: root.sidebar-width + 28px; y: 112px;
+        width: parent.width - root.sidebar-width - 56px; height: parent.height - 160px;
+        if root.design == 0: NativeHome { }
+        if root.design == 1: SoftHome { }
+        if root.design == 2: CompactHome { }
+    }
+    Muted {
+        x: root.sidebar-width + 28px; y: parent.height - 32px;
+        width: parent.width - root.sidebar-width - 56px; height: 20px;
+        text: "风格预览 · 演示数据"; horizontal-alignment: right; font-size: 11px;
+    }
+}

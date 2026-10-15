@@ -1,0 +1,187 @@
+import { Theme } from "../theme/palette.slint";
+
+export component Label inherits Text {
+    color: Theme.ink;
+    font-size: 14px;
+    vertical-alignment: center;
+    overflow: elide;
+}
+
+export component Caption inherits Label {
+    font-size: 12px;
+    color: Theme.secondary;
+}
+
+export component Heading inherits Label {
+    font-size: 17px;
+    font-weight: 600;
+}
+
+export component Panel inherits Rectangle {
+    background: Theme.surface;
+    border-color: Theme.line;
+    border-width: 1px;
+    border-radius: 8px;
+    @children
+}
+
+export component ActionButton inherits Rectangle {
+    in property <string> text;
+    in property <bool> primary: false;
+    in property <bool> selected: false;
+    in property <bool> danger: false;
+    in property <bool> enabled: true;
+    callback clicked();
+    height: 36px;
+    width: max(62px, button-label.preferred-width + 26px);
+    horizontal-stretch: 0;
+    border-radius: 5px;
+    background: root.primary ? Theme.primary : root.selected ? Theme.accent-wash : area.has-hover ? Theme.inset : Theme.surface;
+    border-width: 1px;
+    border-color: root.primary ? Theme.primary : root.selected ? Theme.accent : Theme.line;
+    opacity: root.enabled ? 1 : 0.5;
+    button-label := Label {
+        width: parent.width;
+        height: parent.height;
+        text: root.text;
+        horizontal-alignment: center;
+        color: root.primary ? #ffffff : root.danger ? Theme.danger : root.selected ? Theme.accent : Theme.ink;
+        font-size: 13px;
+    }
+    area := TouchArea {
+        enabled: root.enabled;
+        mouse-cursor: pointer;
+        clicked => { root.clicked(); }
+    }
+}
+
+export component Badge inherits Rectangle {
+    in property <string> text;
+    // 0 accent, 1 success, 2 warning, 3 danger, 4 neutral.
+    in property <int> tone: 0;
+    height: 26px;
+    width: label.preferred-width + 18px;
+    horizontal-stretch: 0;
+    border-radius: 5px;
+    background: tone == 1 ? Theme.success-wash : tone == 2 ? Theme.warning-wash : tone == 3 ? Theme.danger-wash : tone == 4 ? Theme.inset : Theme.accent-wash;
+    label := Caption {
+        width: parent.width;
+        height: parent.height;
+        text: root.text;
+        color: root.tone == 1 ? Theme.success : root.tone == 2 ? Theme.warning : root.tone == 3 ? Theme.danger : root.tone == 4 ? Theme.secondary : Theme.accent;
+        horizontal-alignment: center;
+    }
+}
+
+export component AccentChoice inherits Rectangle {
+    in property <string> text;
+    in property <color> swatch;
+    callback clicked();
+    width: 138px;
+    height: 36px;
+    horizontal-stretch: 0;
+    border-radius: 5px;
+    border-width: 1px;
+    border-color: Theme.line;
+    background: area.has-hover ? Theme.inset : Theme.surface;
+    Rectangle { x: 12px; y: 10px; width: 16px; height: 16px; border-radius: 8px; background: root.swatch; }
+    Label { x: 38px; y: 0px; width: parent.width - 65px; height: parent.height; text: root.text; font-size: 13px; }
+    Caption { x: parent.width - 23px; y: 0px; width: 14px; height: parent.height; text: "⌄"; }
+    area := TouchArea { mouse-cursor: pointer; clicked => { root.clicked(); } }
+}
+
+export component Field inherits Rectangle {
+    in property <string> placeholder;
+    in-out property <string> text;
+    height: 38px;
+    min-width: 100px;
+    background: Theme.surface;
+    border-radius: 6px;
+    border-color: input.has-focus ? Theme.accent : Theme.line;
+    border-width: 1px;
+    input := TextInput {
+        x: 12px;
+        y: 7px;
+        width: parent.width - 24px;
+        height: parent.height - 14px;
+        text <=> root.text;
+        single-line: true;
+        font-size: 13px;
+        color: Theme.ink;
+        selection-background-color: Theme.primary;
+        selection-foreground-color: #ffffff;
+    }
+    if root.text == "": Caption {
+        x: 12px;
+        width: parent.width - 24px;
+        height: parent.height;
+        text: root.placeholder;
+        color: Theme.muted;
+    }
+}
+
+export component Toggle inherits Rectangle {
+    in property <bool> checked;
+    callback toggled(bool);
+    width: 38px;
+    height: 22px;
+    horizontal-stretch: 0;
+    vertical-stretch: 0;
+    border-radius: 11px;
+    background: root.checked ? Theme.primary : Theme.muted;
+    Rectangle {
+        x: root.checked ? 19px : 3px;
+        y: 3px;
+        width: 16px;
+        height: 16px;
+        border-radius: 8px;
+        background: #ffffff;
+    }
+    TouchArea {
+        mouse-cursor: pointer;
+        clicked => { root.toggled(!root.checked); }
+    }
+}
+
+export component SettingRow inherits Rectangle {
+    in property <string> title;
+    in property <string> description;
+    in-out property <bool> checked;
+    height: root.description == "" ? 54px : 68px;
+    Label { x: 16px; y: root.description == "" ? (parent.height - self.height) / 2 : 10px; height: 30px; width: parent.width - 90px; text: root.title; }
+    if root.description != "": Caption {
+        x: 16px; y: 35px; height: 22px; width: parent.width - 90px;
+        text: root.description;
+    }
+    Toggle {
+        x: parent.width - 54px;
+        y: (parent.height - self.height) / 2;
+        checked: root.checked;
+        toggled(value) => { root.checked = value; }
+    }
+}
+
+export component Metric inherits Panel {
+    in property <string> title;
+    in property <string> value;
+    in property <string> detail;
+    in property <bool> accent: true;
+    min-width: 140px;
+    height: 118px;
+    Caption { x: 18px; y: 14px; height: 24px; text: root.title; }
+    Label { x: 18px; y: 40px; height: 42px; text: root.value; font-size: 30px; color: root.accent ? Theme.accent : Theme.ink; }
+    Caption { x: 18px; y: 86px; height: 20px; text: root.detail; color: Theme.muted; }
+}
+
+export component Divider inherits Rectangle {
+    height: 1px;
+    background: Theme.subtle-line;
+}
+
+export component SectionTitle inherits Rectangle {
+    in property <string> title;
+    in property <string> detail;
+    height: 30px;
+    Heading { text: root.title; }
+    Caption { text: root.detail; horizontal-alignment: right; }
+}

@@ -1,0 +1,91 @@
+import { Theme, Demo } from "../theme/palette.slint";
+import { Label, Caption, Heading, Panel, ActionButton, Badge, Field } from "../components/controls.slint";
+
+struct Node { name: string, kind: string, delay: string }
+
+component NodeCard inherits Panel {
+    in property <Node> node;
+    in property <bool> selected: node.name == Demo.node;
+    height: 92px;
+    border-color: root.selected ? Theme.accent : Theme.line;
+    background: root.selected ? Theme.accent-wash : Theme.surface;
+    VerticalLayout {
+        padding: 15px; spacing: 6px;
+        HorizontalLayout {
+            Label { text: root.node.name; color: root.selected ? Theme.accent : Theme.ink; }
+            Label { text: root.node.delay; color: Theme.accent; horizontal-alignment: right; horizontal-stretch: 0; }
+        }
+        HorizontalLayout {
+            Caption { text: root.node.kind; }
+            Caption { text: root.selected ? "✓ 当前使用" : "点击切换"; horizontal-alignment: right; }
+        }
+    }
+    TouchArea { mouse-cursor: pointer; clicked => { Demo.node = root.node.name; } }
+}
+
+export component ProxiesPage inherits Rectangle {
+    property <string> search;
+    property <int> order: 0;
+    property <bool> expanded: true;
+    property <[Node]> nodes: root.order == 1 ? [
+        {name: "美国 01", kind: "VLESS · TCP", delay: "186 ms"},
+        {name: "德国 01 · IPv6", kind: "AnyTLS · UDP", delay: "148 ms"},
+        {name: "新加坡 01", kind: "Trojan · TCP", delay: "75 ms"},
+        {name: "日本 01", kind: "Shadowsocks · UDP", delay: "56 ms"},
+        {name: "香港 02", kind: "VLESS · UDP", delay: "34 ms"},
+        {name: "香港 01", kind: "AnyTLS · UDP", delay: "28 ms"}
+    ] : root.order == 2 ? [
+        {name: "德国 01 · IPv6", kind: "AnyTLS · UDP", delay: "148 ms"},
+        {name: "美国 01", kind: "VLESS · TCP", delay: "186 ms"},
+        {name: "日本 01", kind: "Shadowsocks · UDP", delay: "56 ms"},
+        {name: "香港 01", kind: "AnyTLS · UDP", delay: "28 ms"},
+        {name: "香港 02", kind: "VLESS · UDP", delay: "34 ms"},
+        {name: "新加坡 01", kind: "Trojan · TCP", delay: "75 ms"}
+    ] : [
+        {name: "香港 01", kind: "AnyTLS · UDP", delay: "28 ms"},
+        {name: "香港 02", kind: "VLESS · UDP", delay: "34 ms"},
+        {name: "日本 01", kind: "Shadowsocks · UDP", delay: "56 ms"},
+        {name: "新加坡 01", kind: "Trojan · TCP", delay: "75 ms"},
+        {name: "德国 01 · IPv6", kind: "AnyTLS · UDP", delay: "148 ms"},
+        {name: "美国 01", kind: "VLESS · TCP", delay: "186 ms"}
+    ];
+    VerticalLayout {
+        spacing: 16px;
+        HorizontalLayout {
+            spacing: 10px;
+            Field { placeholder: "搜索节点或代理组"; text <=> root.search; }
+            ActionButton { text: root.order == 0 ? "延迟 ↑" : root.order == 1 ? "延迟 ↓" : "名称排序"; clicked => { root.order = mod(root.order + 1, 3); } }
+            ActionButton { text: "全部测速"; primary: true; }
+        }
+        Panel {
+            height: 74px;
+            HorizontalLayout {
+                padding: 16px; spacing: 12px;
+                VerticalLayout { Heading { text: "代理选择"; } Caption { text: "手动选择 · 6 个节点"; } }
+                Badge { text: Demo.node; }
+                ActionButton { text: root.expanded ? "收起 ⌃" : "展开 ⌄"; clicked => { root.expanded = !root.expanded; } }
+            }
+        }
+        if root.expanded: VerticalLayout {
+            spacing: 12px;
+            for row in [0, 1, 2]: HorizontalLayout {
+                spacing: 12px;
+                for column in [0, 1]: NodeCard {
+                    width: (root.width - 12px) / 2;
+                    node: root.nodes[row * 2 + column];
+                    // The standalone preview uses exact matches. Rust models will filter live data.
+                    visible: root.search == "" || self.node.name == root.search || self.node.kind == root.search;
+                }
+            }
+        }
+        Panel {
+            height: 64px;
+            HorizontalLayout {
+                padding: 16px;
+                Label { text: "自动选择"; }
+                Caption { text: "URLTest · 香港 01 · 28 ms"; horizontal-alignment: right; }
+            }
+        }
+        Rectangle { vertical-stretch: 1; }
+    }
+}

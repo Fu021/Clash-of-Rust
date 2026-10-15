@@ -1,0 +1,82 @@
+import { Theme, Demo } from "../theme/palette.slint";
+import { Label, Caption, Heading, Panel, ActionButton, Toggle, Badge } from "../components/controls.slint";
+
+component ResultEntry inherits Panel {
+    in property <string> title;
+    in property <string> count;
+    in property <string> description;
+    in property <bool> risk: false;
+    callback clicked();
+    height: 118px;
+    VerticalLayout {
+        padding: 18px; spacing: 8px;
+        HorizontalLayout {
+            Heading { text: root.title; }
+            Label { text: root.count; font-size: 30px; color: root.risk ? Theme.danger : Theme.success; horizontal-alignment: right; }
+        }
+        HorizontalLayout {
+            Caption { text: root.description; }
+            Caption { text: "查看详情 →"; color: Theme.accent; horizontal-alignment: right; }
+        }
+    }
+    TouchArea { mouse-cursor: pointer; clicked => { root.clicked(); } }
+}
+
+export component AiCheckPage inherits Rectangle {
+    callback request-dialog(int);
+    property <bool> checking: false;
+    Timer { interval: 2s; running: root.checking; triggered => { root.checking = false; } }
+    VerticalLayout {
+        spacing: 16px;
+        Panel {
+            height: 132px;
+            border-color: Demo.protected ? Theme.accent : Theme.line;
+            VerticalLayout {
+                padding: 18px; spacing: 10px;
+                HorizontalLayout {
+                    spacing: 10px;
+                    Heading { text: "Claude 保护"; }
+                    Badge { text: Demo.protected ? "已开启" : "未开启"; tone: Demo.protected ? 1 : 4; }
+                    Rectangle { horizontal-stretch: 1; }
+                    Toggle { checked: Demo.protected; toggled(value) => { if value { root.request-dialog(3); } else { Demo.protected = false; } } }
+                }
+                Caption { text: Demo.protected ? "使用节点：" + Demo.node + " · 实时保护中" : "一键启用 TUN、广泛规则、代理 DNS 与实时拦截"; }
+                Caption { text: "可能影响其他应用与国内网站；关闭后恢复原状态。"; color: Theme.warning; }
+            }
+        }
+        HorizontalLayout {
+            spacing: 12px;
+            Heading { text: root.checking ? "正在检测本机与网络地区线索…" : "检测完成"; }
+            Caption { text: "浏览器自动检测 · 项目配置扫描"; horizontal-alignment: right; }
+            ActionButton { text: root.checking ? "检测中…" : "重新检测"; primary: true; enabled: !root.checking; clicked => { root.checking = true; } }
+        }
+        Rectangle {
+            height: 3px; background: Theme.subtle-line;
+            Rectangle { x: 0px; y: 0px; width: parent.width * (root.checking ? 0.55 : 1); height: parent.height; background: Theme.accent; }
+        }
+        HorizontalLayout {
+            spacing: 14px;
+            ResultEntry { title: "正常项目"; count: "61"; description: "网络出口、地区线索与配置"; clicked => { root.request-dialog(8); } }
+            ResultEntry { title: "风险项目"; count: "3"; description: "需要检查的环境差异与配置"; risk: true; clicked => { root.request-dialog(7); } }
+        }
+        Panel {
+            height: 80px;
+            HorizontalLayout {
+                padding: 18px; spacing: 12px;
+                VerticalLayout { horizontal-stretch: 1; Heading { text: "其他线索"; } Caption { text: "证据不足或需要进一步确认的结果"; } }
+                Label { text: "12"; font-size: 26px; color: Theme.warning; horizontal-stretch: 0; width: 38px; }
+                Label { text: "查看详情 →"; color: Theme.accent; width: 96px; horizontal-stretch: 0; horizontal-alignment: right; }
+            }
+            TouchArea { mouse-cursor: pointer; clicked => { root.request-dialog(9); } }
+        }
+        Panel {
+            height: 92px;
+            VerticalLayout {
+                padding: 16px; spacing: 8px;
+                Label { text: "出口地区：德国 · 浏览器：德国"; }
+                Caption { text: "结果反映本次采样；未确认的线索可进入详情继续检查。"; }
+            }
+        }
+        Rectangle { vertical-stretch: 1; }
+    }
+}

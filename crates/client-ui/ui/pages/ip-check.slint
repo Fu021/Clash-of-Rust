@@ -1,0 +1,67 @@
+import { Theme, Demo } from "../theme/palette.slint";
+import { Label, Caption, Heading, Panel, ActionButton, Badge, Metric } from "../components/controls.slint";
+
+component CategoryCard inherits Panel {
+    in property <string> title;
+    in property <string> count;
+    in property <string> detail;
+    in property <bool> warning: false;
+    callback clicked();
+    height: 112px;
+    VerticalLayout {
+        padding: 16px; spacing: 6px;
+        HorizontalLayout { Heading { text: root.title; } Label { text: root.count; color: root.warning ? Theme.warning : Theme.accent; horizontal-alignment: right; font-size: 22px; } }
+        Caption { text: root.detail; }
+        Caption { text: "查看分类详情  →"; color: Theme.accent; }
+    }
+    TouchArea { mouse-cursor: pointer; clicked => { root.clicked(); } }
+}
+
+export component IpCheckPage inherits Rectangle {
+    callback open-category(string);
+    property <int> progress: 183;
+    Timer { interval: 80ms; running: root.progress < 183; triggered => { root.progress += 3; } }
+    VerticalLayout {
+        spacing: 14px;
+        HorizontalLayout {
+            spacing: 10px;
+            Heading { text: "检测报告"; }
+            Caption { text: "完成 " + min(root.progress, 183) + " / 183"; horizontal-alignment: right; }
+            ActionButton { text: root.progress < 183 ? "检测中…" : "重新检测"; primary: true; enabled: root.progress >= 183; clicked => { root.progress = 0; } }
+        }
+        Rectangle {
+            height: 3px; background: Theme.subtle-line;
+            Rectangle { x: 0px; y: 0px; width: parent.width * min(root.progress, 183) / 183; height: parent.height; background: Theme.accent; }
+        }
+        Panel {
+            height: 96px;
+            HorizontalLayout {
+                padding: 18px; spacing: 24px;
+                VerticalLayout { Caption { text: "出口 IP"; } Label { text: "203.0.113.42"; font-size: 22px; color: Theme.accent; } }
+                VerticalLayout { Caption { text: "出口地区"; } Label { text: "德国"; font-size: 22px; } }
+                VerticalLayout { Caption { text: "识别地区"; } Label { text: "2 个地区"; font-size: 22px; } }
+            }
+        }
+        HorizontalLayout {
+            spacing: 8px;
+            Badge { text: "确认可用 74"; tone: 1; }
+            Badge { text: "仅网页可达 20"; tone: 2; }
+            Badge { text: "信息已识别 5"; }
+            Badge { text: "不可用或受限 36"; tone: 3; }
+            Badge { text: "未确认 / 失败 48"; tone: 4; }
+            Rectangle { horizontal-stretch: 1; }
+        }
+        HorizontalLayout {
+            spacing: 14px;
+            CategoryCard { title: "AI"; count: "4 / 5"; detail: "确认可用 3 · 网页可达 1 · 受限 1"; warning: true; clicked => { root.open-category("AI"); } }
+            CategoryCard { title: "全球"; count: "18 / 19"; detail: "确认可用 16 · 网页可达 2 · 受限 1"; clicked => { root.open-category("全球"); } }
+        }
+        HorizontalLayout {
+            spacing: 14px;
+            CategoryCard { title: "流媒体"; count: "12 / 18"; detail: "确认可用 8 · 网页可达 4 · 受限 6"; warning: true; clicked => { root.open-category("流媒体"); } }
+            CategoryCard { title: "地区服务"; count: "60 / 136"; detail: "按识别地区查看平台可用情况"; clicked => { root.open-category("地区服务"); } }
+        }
+        ActionButton { text: "IP 信息与全部检测结果  →"; clicked => { root.open-category("全部检测结果"); } }
+        Rectangle { vertical-stretch: 1; }
+    }
+}

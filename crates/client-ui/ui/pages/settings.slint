@@ -1,0 +1,87 @@
+import { ScrollView } from "std-widgets.slint";
+import { Theme, Demo } from "../theme/palette.slint";
+import { Label, Caption, Heading, Panel, ActionButton, AccentChoice, SettingRow, Divider, Field } from "../components/controls.slint";
+
+export component SettingsPage inherits Rectangle {
+    callback request-dialog(int);
+    ScrollView {
+        VerticalLayout {
+            spacing: 12px;
+            padding-right: 6px;
+            Heading { text: "外观"; height: 28px; }
+            Panel {
+                height: 172px;
+                VerticalLayout {
+                    padding: 16px; spacing: 8px;
+                    HorizontalLayout {
+                        spacing: 8px;
+                        Label { text: "主题"; }
+                        ActionButton { text: "深色"; selected: Theme.appearance == 0; clicked => { Theme.appearance = 0; } }
+                        ActionButton { text: "浅色"; selected: Theme.appearance == 1; clicked => { Theme.appearance = 1; } }
+                        ActionButton { text: "跟随系统"; selected: Theme.appearance == 2; clicked => { Theme.appearance = 2; } }
+                    }
+                    Divider { }
+                    HorizontalLayout {
+                        Label { text: "强调色"; }
+                        AccentChoice { text: Demo.accent-names[Demo.accent-preview]; swatch: Demo.accent-colors[Demo.accent-preview]; clicked => { root.request-dialog(10); } }
+                    }
+                    Divider { }
+                    HorizontalLayout {
+                        spacing: 8px;
+                        Label { text: "字号"; }
+                        ActionButton { text: "100% ⌄"; }
+                        ActionButton { text: "恢复默认窗口大小"; }
+                    }
+                }
+            }
+            Heading { text: "常规"; height: 28px; }
+            Panel {
+                height: 134px;
+                VerticalLayout {
+                    spacing: 0px;
+                    SettingRow { title: "开机自启动"; checked: false; height: 44px; }
+                    Divider { }
+                    SettingRow { title: "关闭窗口后继续后台运行"; checked: true; height: 44px; }
+                    Divider { }
+                    SettingRow { title: "托盘显示实时速度"; checked: true; height: 44px; }
+                }
+            }
+            Heading { text: "网络"; height: 28px; }
+            Panel {
+                height: 134px;
+                VerticalLayout {
+                    spacing: 0px;
+                    SettingRow { title: "DNS 覆盖"; checked: true; height: 44px; }
+                    Divider { }
+                    SettingRow { title: "启用 IPv6"; checked: true; height: 44px; }
+                    Divider { }
+                    SettingRow { title: "启用 UDP"; checked: true; height: 44px; }
+                }
+            }
+            Panel {
+                height: 118px;
+                VerticalLayout {
+                    padding: 16px; spacing: 10px;
+                    HorizontalLayout {
+                        spacing: 12px;
+                        Label { text: "混合端口"; }
+                        Field { text: "7897"; width: 120px; horizontal-stretch: 0; }
+                        Label { text: "控制端口"; }
+                        Field { text: "9090"; width: 120px; horizontal-stretch: 0; }
+                        ActionButton { text: "保存"; }
+                    }
+                    Caption { text: "日志级别：info · 出站网卡：TUN 自动检测"; }
+                }
+            }
+            Heading { text: "更新"; height: 28px; }
+            Panel {
+                height: 74px;
+                HorizontalLayout {
+                    padding: 16px;
+                    Label { text: "当前版本 0.5.11-dev.1"; }
+                    ActionButton { text: "检查更新"; }
+                }
+            }
+        }
+    }
+}

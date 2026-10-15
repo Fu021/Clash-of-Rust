@@ -1,0 +1,43 @@
+import { Theme, Demo } from "../theme/palette.slint";
+import { Label, Caption, Heading, Panel, ActionButton, Badge, Field } from "../components/controls.slint";
+
+export component SubscriptionsPage inherits Rectangle {
+    callback request-dialog(int);
+    VerticalLayout {
+        spacing: 16px;
+        HorizontalLayout {
+            spacing: 10px;
+            Field { placeholder: "搜索订阅"; }
+            ActionButton { text: "导入文件"; clicked => { root.request-dialog(5); } }
+            ActionButton { text: "+ 添加订阅"; primary: true; clicked => { root.request-dialog(5); } }
+        }
+        for profile[i] in ["我的订阅", "备用订阅", "默认直连"]: Panel {
+            height: i == 0 ? 166px : 118px;
+            border-color: Demo.profile == profile ? Theme.accent : Theme.line;
+            VerticalLayout {
+                padding: 18px; spacing: 12px;
+                HorizontalLayout {
+                    spacing: 10px;
+                    Heading { text: profile; }
+                    if Demo.profile == profile: Badge { text: "当前使用中"; tone: 1; }
+                    if Demo.profile != profile: ActionButton { text: "使用"; clicked => { Demo.profile = profile; } }
+                }
+                Caption { text: i == 2 ? "本地配置 · 保留默认直连" : "https://example.com/subscription"; }
+                if i == 0: Rectangle {
+                    height: 5px;
+                    background: Theme.inset;
+                    border-radius: 3px;
+                    Rectangle { x: 0px; y: 0px; width: parent.width * 0.24; height: parent.height; background: Theme.accent; border-radius: 3px; }
+                }
+                HorizontalLayout {
+                    spacing: 8px;
+                    Caption { text: i == 0 ? "24.6 / 100 GiB · 2026-12-31 到期" : i == 1 ? "上次更新：今天 10:26" : "内置配置"; }
+                    if i != 2: ActionButton { text: "更新"; }
+                    if i != 2: ActionButton { text: "编辑"; clicked => { root.request-dialog(5); } }
+                    if i != 2: ActionButton { text: "删除"; danger: true; clicked => { root.request-dialog(1); } }
+                }
+            }
+        }
+        Rectangle { vertical-stretch: 1; }
+    }
+}

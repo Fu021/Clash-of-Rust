@@ -1,0 +1,95 @@
+import { Theme, Demo } from "theme/palette.slint";
+import { Label, Caption, Badge, ActionButton } from "components/controls.slint";
+import { NavigationItem } from "components/navigation.slint";
+import { HomePage } from "pages/home.slint";
+import { ProxiesPage } from "pages/proxies.slint";
+import { SubscriptionsPage } from "pages/subscriptions.slint";
+import { ConnectionsPage } from "pages/connections.slint";
+import { RulesPage } from "pages/rules.slint";
+import { LogsPage } from "pages/logs.slint";
+import { NetworkPage } from "pages/network.slint";
+import { IpCheckPage } from "pages/ip-check.slint";
+import { AiCheckPage } from "pages/ai-check.slint";
+import { SettingsPage } from "pages/settings.slint";
+import { PreviewDialog } from "dialogs/preview-dialog.slint";
+import "../../../resources/fonts/SourceHanSansCN-Regular.otf";
+
+export component Preview inherits Window {
+    title: "Clash of Rust · Slint 界面预览";
+    preferred-width: 1120px;
+    preferred-height: 780px;
+    min-width: 850px;
+    min-height: 640px;
+    default-font-family: "Source Han Sans CN";
+    default-font-size: 14px;
+    background: Theme.canvas;
+    in-out property <bool> dark <=> Theme.system-dark;
+    in-out property <int> appearance <=> Theme.appearance;
+    in-out property <int> page: 0;
+    in-out property <int> dialog: 0;
+    property <[string]> titles: ["首页", "代理", "订阅", "连接", "规则", "日志", "网络诊断", "IP 检测", "A÷检测", "设置"];
+    property <[string]> subtitles: [
+        "运行状态与流量概览", "查看代理组与选择节点", "管理订阅与本地配置", "查看连接、实时速度与匹配线路", "快捷规则、自定义规则与匹配顺序",
+        "内核与客户端运行记录", "网站响应、出口信息与 DNS 检查", "按分类查看平台可用情况", "Claude 地区线索、配置风险与实时保护", "客户端、网络与外观设置"
+    ];
+    property <[image]> icons: [
+        @image-url("icons/home.svg"), @image-url("icons/proxies.svg"), @image-url("icons/subscriptions.svg"),
+        @image-url("icons/connections.svg"), @image-url("icons/rules.svg"), @image-url("icons/logs.svg"),
+        @image-url("icons/network.svg"), @image-url("icons/ip.svg"), @image-url("icons/ai.svg"), @image-url("icons/settings.svg")
+    ];
+    Rectangle {
+        x: 0px; y: 0px;
+        width: 192px;
+        height: parent.height;
+        background: Theme.sidebar;
+        Rectangle { x: parent.width - 1px; y: 0px; width: 1px; height: parent.height; background: Theme.line; }
+        Image { x: 18px; y: 24px; width: 24px; height: 24px; source: @image-url("../../../resources/icons/app.png"); }
+        Label { x: 50px; y: 18px; height: 32px; width: 132px; text: "Clash of Rust"; font-size: 15px; }
+        Caption { x: 50px; y: 46px; height: 20px; width: 130px; text: "原生代理客户端"; color: Theme.muted; font-size: 11px; }
+        for title[i] in root.titles: NavigationItem {
+            x: 12px; y: 100px + i * 42px + (i >= 6 ? 24px : 0px);
+            width: parent.width - 24px;
+            text: title;
+            icon: root.icons[i];
+            selected: root.page == i;
+            clicked => { root.page = i; }
+        }
+        Caption { x: 26px; y: 352px; height: 20px; text: "工具"; font-size: 10px; color: Theme.muted; }
+        Caption { x: 16px; y: parent.height - 38px; width: parent.width - 32px; height: 22px; text: "0.5.11-dev.1"; color: Theme.muted; }
+    }
+    Rectangle {
+        x: 220px; y: 24px; width: parent.width - 248px; height: 66px;
+        Label { x: 0px; y: 0px; width: parent.width - 220px; height: 36px; text: root.titles[root.page]; font-size: 28px; font-weight: 600; }
+        Caption { x: 0px; y: 42px; height: 22px; width: parent.width - 220px; text: root.subtitles[root.page]; }
+        Badge { x: parent.width - 120px; y: 0px; width: 120px; text: "● 内核运行中"; tone: 1; }
+        Caption { y: 42px; height: 22px; width: parent.width; text: Demo.profile + "  |  " + Demo.node; horizontal-alignment: right; }
+    }
+    Rectangle {
+        x: 220px; y: 112px;
+        width: parent.width - 248px;
+        height: parent.height - 160px;
+        if root.page == 0: HomePage { show-proxies => { root.page = 1; } }
+        if root.page == 1: ProxiesPage { }
+        if root.page == 2: SubscriptionsPage { request-dialog(kind) => { root.dialog = kind; } }
+        if root.page == 3: ConnectionsPage { }
+        if root.page == 4: RulesPage { request-dialog(kind) => { root.dialog = kind; } }
+        if root.page == 5: LogsPage { }
+        if root.page == 6: NetworkPage { }
+        if root.page == 7: IpCheckPage { open-category(title) => { Demo.detail-title = title; root.dialog = 6; } }
+        if root.page == 8: AiCheckPage { request-dialog(kind) => { root.dialog = kind; } }
+        if root.page == 9: SettingsPage { request-dialog(kind) => { root.dialog = kind; } }
+    }
+    Caption {
+        x: 220px; y: parent.height - 34px;
+        width: parent.width - 248px; height: 22px;
+        text: "界面预览 · 演示数据";
+        color: Theme.muted;
+        horizontal-alignment: right;
+        font-size: 11px;
+    }
+    if root.dialog != 0: PreviewDialog {
+        kind: root.dialog;
+        close => { root.dialog = 0; }
+        accept => { if root.dialog == 3 { Demo.protected = true; } root.dialog = 0; }
+    }
+}
