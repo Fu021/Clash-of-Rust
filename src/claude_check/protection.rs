@@ -434,7 +434,7 @@ mod tests {
             .collect();
         assert_eq!(overlay.len() % 2, 0);
         assert!(!overlay.is_empty());
-        for pair in overlay.chunks_exact(2) {
+        for pair in overlay.as_chunks::<2>().0 {
             assert_eq!(
                 pair[0].replace(
                     &settings.claude_protection.as_ref().unwrap().route,
