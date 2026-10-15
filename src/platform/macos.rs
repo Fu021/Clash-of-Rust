@@ -17,6 +17,7 @@ pub mod tun;
 unsafe extern "C" {
     fn SCDynamicStoreCopyProxies(store: Ref) -> Ref;
 }
+pub mod dns;
 mod native_proxy;
 pub mod service;
 pub use native_proxy::read;

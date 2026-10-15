@@ -295,6 +295,17 @@ impl Engine {
             Err(e) => append(&logs, format!("[客户端] 代理恢复失败：{e}")),
         }
         let mut settings = settings?;
+        #[cfg(target_os = "macos")]
+        {
+            platform::macos::service::protection_dns(false)
+                .context("恢复上次运行的系统 DNS 失败")?;
+            if let Some(protection) = &mut settings.claude_protection
+                && protection.system_dns.is_empty()
+            {
+                Arc::make_mut(protection).system_dns = platform::macos::dns::system_servers()?;
+                store.save_settings(&settings)?;
+            }
+        }
         let mut profiles = store.profiles()?;
         if profiles.is_empty() {
             let raw = read_profile(&resources.join("default.yaml"))
@@ -558,6 +569,8 @@ impl Engine {
 
     async fn stop_process(&mut self) -> Result<()> {
         self.protection_guard = None;
+        #[cfg(target_os = "macos")]
+        self.mac_protection_dns(false).await?;
         if self.running()
             && let Ok(config) = self.api.get::<Value>("configs").await
             && config["tun"]["enable"].as_bool() == Some(true)
@@ -1033,6 +1046,9 @@ impl Engine {
         }
         if state.tun {
             self.tun(true).await?;
+            #[cfg(target_os = "macos")]
+            self.mac_protection_dns(self.settings.claude_protection.is_some())
+                .await?;
         }
         if state.system_proxy && !platform::is_owned(&self.journal())? {
             self.system_proxy(true).await?;
@@ -1170,6 +1186,10 @@ impl Engine {
             },
         );
         protection.provider = provider;
+        #[cfg(target_os = "macos")]
+        {
+            protection.system_dns = platform::macos::dns::system_servers()?;
+        }
         protection.validate()?;
         if cfg!(windows) && !platform::is_elevated() {
             let path = self.store.root.join("elevation.json");
@@ -1266,8 +1286,11 @@ impl Engine {
         self.protection_guard = None;
         let changed = async {
             if self.running() {
-                self.apply_protection_runtime(&next, &desired).await?;
+                self.apply_protection_runtime(&next, &desired, protection.is_some())
+                    .await?;
             } else {
+                #[cfg(target_os = "macos")]
+                self.mac_protection_dns(false).await?;
                 platform::restore(&self.journal())?;
             }
             transaction.commit()?;
@@ -1276,7 +1299,8 @@ impl Engine {
         .await;
         if let Err(error) = changed {
             let runtime = if let Some(previous) = &previous {
-                self.apply_protection_runtime(&original, previous).await
+                self.apply_protection_runtime(&original, previous, old.claude_protection.is_some())
+                    .await
             } else {
                 Ok(())
             };
@@ -1302,7 +1326,16 @@ impl Engine {
         Ok(())
     }
 
-    async fn apply_protection_runtime(&self, payload: &str, state: &RestartState) -> Result<()> {
+    async fn apply_protection_runtime(
+        &self,
+        payload: &str,
+        state: &RestartState,
+        protected: bool,
+    ) -> Result<()> {
+        #[cfg(target_os = "macos")]
+        self.mac_protection_dns(false).await?;
+        #[cfg(not(target_os = "macos"))]
+        let _ = protected;
         self.proxy_mode(ProxyMode::Off).await?;
         self.api.reload(payload).await?;
         self.healthy().await?;
@@ -1317,7 +1350,10 @@ impl Engine {
         } else {
             ProxyMode::Off
         })
-        .await
+        .await?;
+        #[cfg(target_os = "macos")]
+        self.mac_protection_dns(protected && state.tun).await?;
+        Ok(())
     }
 
     pub async fn prepare_elevation(&mut self) -> Result<()> {
@@ -1620,6 +1656,8 @@ impl Engine {
             self.prepare_protection_tun(interactive).await?;
             self.mode("rule").await?;
             self.proxy_mode(ProxyMode::Tun).await?;
+            #[cfg(target_os = "macos")]
+            self.mac_protection_dns(true).await?;
             self.start_protection_guard();
             append(
                 &self.logs,
@@ -1782,6 +1820,10 @@ impl Engine {
     }
 
     async fn set_tun_state(&self, enabled: bool) -> Result<()> {
+        #[cfg(target_os = "macos")]
+        if !enabled {
+            self.mac_protection_dns(false).await?;
+        }
         #[cfg(target_os = "linux")]
         if enabled {
             platform::check_tun_environment()?;
@@ -1802,6 +1844,13 @@ impl Engine {
         if config["tun"]["enable"].as_bool() != Some(enabled) {
             bail!("TUN 状态未生效，请查看内核日志和权限");
         }
+        Ok(())
+    }
+
+    #[cfg(target_os = "macos")]
+    async fn mac_protection_dns(&self, enabled: bool) -> Result<()> {
+        tokio::task::spawn_blocking(move || platform::macos::service::protection_dns(enabled))
+            .await??;
         Ok(())
     }
 
@@ -2032,6 +2081,8 @@ impl Drop for Engine {
         // Best-effort recovery also covers initialization/runtime errors. A failed
         // restore leaves its journal for the next launch.
         let _ = platform::restore(&self.journal());
+        #[cfg(target_os = "macos")]
+        let _ = platform::macos::service::protection_dns(false);
         if let Some(handle) = self.log_pump.take() {
             handle.abort();
         }
