@@ -5,13 +5,16 @@ import subprocess
 import sys
 import tempfile
 
-from windows_ci import run_unelevated
+from windows_ci import allow_ordinary_user_directory, run_unelevated
 
 
 def main():
     if os.name != 'nt':
         raise RuntimeError('Windows token checks require Windows')
     with tempfile.TemporaryDirectory(prefix='windows-token-') as temporary:
+        # Python's private temporary directories can be owned by the elevated
+        # Administrators SID, which the ordinary child cannot use.
+        allow_ordinary_user_directory(temporary)
         report = Path(temporary)/'initialized.txt'
         child = (
             'import ctypes, os; from pathlib import Path; '

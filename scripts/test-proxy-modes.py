@@ -91,7 +91,7 @@ def check(binary, bundle, test_case='basic_system_proxy_and_tun'):
             run(['/usr/bin/sudo', '-n', stage/'clash-tun-launcher', '--macos-install-service', os.getuid()])
             run(command, env=env, timeout=240)
     elif system == 'windows':
-        from windows_ci import run_unelevated
+        from windows_ci import allow_ordinary_user_directory, run_unelevated
         # CI tests raw binaries; Publish Release has already installed the
         # package and its service. Only remove the registration we created.
         query = subprocess.run(['sc.exe', 'query', 'ClashOfRust.Network'], capture_output=True)
@@ -111,6 +111,7 @@ def check(binary, bundle, test_case='basic_system_proxy_and_tun'):
             # or an adapter preventing the next ordinary launch from using TUN.
             import json, socket, time
             with tempfile.TemporaryDirectory(prefix='windows-service-crash-') as temporary:
+                allow_ordinary_user_directory(temporary)
                 ready = Path(temporary)/'ready.json'
                 crashed = {}
                 def kill_owner(kernel, process):

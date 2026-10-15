@@ -4,6 +4,18 @@ import time
 from build_support import ROOT, host_arch, run, write_json
 
 
+def allow_ordinary_user_directory(path):
+    """Share only a test-owned fixture with the runner's unelevated token."""
+    import csv
+    import subprocess
+    identity = subprocess.check_output(['whoami', '/user', '/fo', 'csv', '/nh'], text=True)
+    sid = next(csv.reader(identity.splitlines()))[-1]
+    if not sid.startswith('S-1-'):
+        raise RuntimeError('Cannot identify the Windows fixture owner')
+    subprocess.run(['icacls', str(path), '/grant', f'*{sid}:(OI)(CI)M', '/Q'],
+                   check=True, capture_output=True)
+
+
 def run_unelevated(command, env, timeout=240, on_start=None, expected_code=0):
     """Run native checks with an actual medium-integrity, non-admin token."""
     import ctypes as c
