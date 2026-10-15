@@ -31,6 +31,12 @@ def production_package(package, binary, root, smoke):
                 raise RuntimeError('Existing production installation; refusing to replace it')
         except FileNotFoundError:
             pass
+    # Python 3.13's private temporary directory can be owned by the elevated
+    # runner's Administrators group. The ordinary test token must traverse it
+    # and read/execute the installed application, without granting write access
+    # or changing the production service directory's protected ACL.
+    from windows_ci import allow_ordinary_user_directory
+    allow_ordinary_user_directory(root, permissions='RX')
     installed = root/'production-installed'
     expect(package, ['/S', f'/D={installed}'], 0)
     try:

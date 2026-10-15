@@ -4,7 +4,7 @@ import time
 from build_support import ROOT, host_arch, run, write_json
 
 
-def allow_ordinary_user_directory(path):
+def allow_ordinary_user_directory(path, permissions='M'):
     """Share only a test-owned fixture with the runner's unelevated token."""
     import csv
     import subprocess
@@ -12,7 +12,7 @@ def allow_ordinary_user_directory(path):
     sid = next(csv.reader(identity.splitlines()))[-1]
     if not sid.startswith('S-1-'):
         raise RuntimeError('Cannot identify the Windows fixture owner')
-    subprocess.run(['icacls', str(path), '/grant', f'*{sid}:(OI)(CI)M', '/Q'],
+    subprocess.run(['icacls', str(path), '/grant', f'*{sid}:(OI)(CI){permissions}', '/Q'],
                    check=True, capture_output=True)
 
 
