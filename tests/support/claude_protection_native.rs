@@ -703,6 +703,7 @@ pub async fn run() {
             mixed_port,
             dns_override: false,
             ipv6: false,
+            udp: false,
             ..Default::default()
         })
         .unwrap();
@@ -728,6 +729,20 @@ pub async fn run() {
     let id = engine.profiles.last().unwrap().id.clone();
     engine.activate(id.clone()).await.unwrap();
     engine.start().await.unwrap();
+    for udp in [true, false] {
+        engine
+            .save_settings(Settings {
+                udp,
+                ..engine.settings.clone()
+            })
+            .await
+            .unwrap();
+        let proxies: serde_json::Value = engine.api.get("proxies").await.unwrap();
+        assert_eq!(
+            proxies["proxies"]["FixtureA"]["udp"], udp,
+            "UDP setting must apply to the running core"
+        );
+    }
     let client = reqwest::Client::builder()
         .no_proxy()
         .proxy(reqwest::Proxy::http(format!("http://127.0.0.1:{mixed_port}")).unwrap())
@@ -764,8 +779,23 @@ pub async fn run() {
     let snapshot = engine.poll(Scope::Claude).await.unwrap();
     assert!(snapshot.tun && !snapshot.system_proxy);
     assert_eq!(snapshot.mode, "rule");
+    let proxies: serde_json::Value = engine.api.get("proxies").await.unwrap();
+    assert_eq!(
+        proxies["proxies"]["FixtureA"]["udp"], true,
+        "protection must force UDP while leaving the saved preference off"
+    );
     assert!(
-        !engine.settings.dns_override && !engine.settings.ipv6,
+        engine
+            .save_settings(Settings {
+                udp: true,
+                ..engine.settings.clone()
+            })
+            .await
+            .is_err(),
+        "protection must prevent overwriting the saved UDP preference"
+    );
+    assert!(
+        !engine.settings.dns_override && !engine.settings.ipv6 && !engine.settings.udp,
         "temporary overlay must not rewrite preferences"
     );
     assert_eq!(
@@ -1217,6 +1247,12 @@ pub async fn run() {
             .provider
             .as_deref(),
         Some("Feed")
+    );
+    let proxies: serde_json::Value = engine.api.get("proxies").await.unwrap();
+    let route = &engine.settings.claude_protection.as_ref().unwrap().route;
+    assert_eq!(
+        proxies["proxies"][route]["udp"], true,
+        "provider-backed protection must force UDP"
     );
     scope_runner(&engine).await;
     let result = detector_client(mixed_port)

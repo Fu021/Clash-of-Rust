@@ -432,6 +432,7 @@ impl App {
                     });
                 let port = self.snapshot.running.then_some(self.settings.mixed_port);
                 let ipv6 = self.settings.ipv6;
+                let udp = self.settings.udp;
                 let dns_override = self.settings.dns_override;
                 let detection_settings = self.settings.clone();
                 let (aborter, registration) = AbortHandle::new_pair();
@@ -440,7 +441,7 @@ impl App {
                     async move {
                         Abortable::new(async move {
                         let mut report = Report::new(Environment::Core, "显式通过本应用内核探测；不代表浏览器或其他客户端实际出口");
-                        report.signals.push(Signal::new(Group::Dns, "保存的网络偏好", format!("DNS 覆盖{} · IPv6 {}", if dns_override { "开启" } else { "关闭" }, if ipv6 { "开启" } else { "关闭" }), "本应用设置", Evidence::Measured, "这些是保留的用户偏好；Claude 保护使用临时覆盖，实际状态见内核与网络实测。"));
+                        report.signals.push(Signal::new(Group::Dns, "保存的网络偏好", format!("DNS 覆盖{} · IPv6 {} · UDP {}", if dns_override { "开启" } else { "关闭" }, if ipv6 { "开启" } else { "关闭" }, if udp { "开启" } else { "关闭" }), "本应用设置", Evidence::Measured, "这些是保留的用户偏好；Claude 保护使用临时覆盖，实际状态见内核与网络实测。"));
                         if let Some(port) = port {
                             let client = check::client(Some(port)).map_err(|e| e.to_string())?;
                             check::network(&client, &mut report, "通过内核混合端口的探测请求；不会回退到直连").await;
@@ -1016,10 +1017,10 @@ impl App {
             ],
             Guide::Protection => column![
                 self.title("开启 Claude 保护"),
-                self.label("将使用当前具体代理节点，启用 TUN、严格路由、IPv6 接管、Claude 与关联服务规则，并让公网 DNS 通过该节点访问加密 DNS。"),
+                self.label("将使用当前具体代理节点，启用 TUN、严格路由、IPv6 接管和 UDP 转发，加入 Claude 与关联服务规则，并让公网 DNS 通过该节点访问加密 DNS。"),
                 self.label("广泛规则可能改变其他应用的监控、登录或客服连接；全局 DNS 变化可能影响国内网站与内网服务，节点故障时相关解析也可能失败。"),
                 self.caption("节点域名引导解析使用直连加密 DNS，局域网名称保留本地解析。浏览器独立 DNS、时区、语言和账号资格仍需检测确认，不能保证消除所有风险。"),
-                self.caption("原代理模式、DNS、规则和节点选择会保存，重启后仍保留；关闭保护会恢复。首次启用 TUN 可能需要系统授权。"),
+                self.caption("原代理模式、DNS、UDP、规则和节点选择会保存，重启后仍保留；关闭保护会恢复。首次启用 TUN 可能需要系统授权。"),
                 self.label("实时监测到 Claude 或关联服务偏离保护节点时，会关闭对应连接并弹出系统提示；共享服务可能属于其他应用。"),
                 aligned_row![
                     Space::new().width(Length::Fill),

@@ -690,6 +690,7 @@ impl Engine {
         if self.settings.claude_protection.is_some()
             && (settings.dns_override != self.settings.dns_override
                 || settings.ipv6 != self.settings.ipv6
+                || settings.udp != self.settings.udp
                 || settings.active_profile != self.settings.active_profile
                 || settings.run_mode != self.settings.run_mode
                 || settings.proxy_mode != self.settings.proxy_mode)
@@ -700,7 +701,8 @@ impl Engine {
             && settings.mixed_port == self.settings.mixed_port
         {
             if (settings.dns_override != self.settings.dns_override
-                || settings.ipv6 != self.settings.ipv6)
+                || settings.ipv6 != self.settings.ipv6
+                || settings.udp != self.settings.udp)
                 && let Some(id) = settings.active_profile.as_deref()
             {
                 let raw = read_profile(&self.store.profile_path(id)?)?;

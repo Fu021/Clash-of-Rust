@@ -371,6 +371,7 @@ enum Action {
     TraySpeed(bool),
     DnsOverride(bool),
     Ipv6(bool),
+    Udp(bool),
     ClaudeProtection(bool),
     ReputationKey(Option<String>),
     Autostart(bool),
@@ -693,6 +694,14 @@ async fn execute(engine: Arc<Mutex<Engine>>, action: Action, scope: Scope, heade
                 };
                 engine.save_settings(settings).await?;
                 Ok("IPv6 设置已保存并应用".into())
+            }
+            Action::Udp(udp) => {
+                let settings = Settings {
+                    udp,
+                    ..engine.settings.clone()
+                };
+                engine.save_settings(settings).await?;
+                Ok("UDP 设置已保存并应用".into())
             }
             Action::ClaudeProtection(enabled) => {
                 exit_after_start = engine.claude_protection(enabled).await?;
@@ -1232,6 +1241,7 @@ impl App {
                 | Action::SavePorts(..)
                 | Action::DnsOverride(_)
                 | Action::Ipv6(_)
+                | Action::Udp(_)
                 | Action::ClaudeProtection(_)
                 | Action::SaveRules(..)
                 | Action::Activate(_)
@@ -4593,6 +4603,17 @@ impl App {
                 .on_toggle_maybe(
                     (!self.working && !self.exiting && !self.updates.busy())
                         .then_some(|enabled| Message::Action(Action::Ipv6(enabled))),
+                ),
+            checkbox(self.settings.udp || self.settings.claude_protection.is_some())
+                .label("启用 UDP")
+                .size(self.scaled(16))
+                .text_size(self.scaled(12))
+                .on_toggle_maybe(
+                    (!self.working
+                        && !self.exiting
+                        && !self.updates.busy()
+                        && self.settings.claude_protection.is_none())
+                    .then_some(|enabled| Message::Action(Action::Udp(enabled))),
                 ),
         ]
         .spacing(12);
