@@ -835,10 +835,28 @@ impl App {
             if counts[2] > 0 {
                 body = body.push(
                     button(
-                        self.label(format!("另有 {} 项辅助线索或未确认结果 ›", counts[2]))
-                            .size(self.font_size(12)),
+                        aligned_row![
+                            column![
+                                self.label("其他线索").size(self.font_size(14)),
+                                self.caption("辅助线索与未确认结果")
+                            ]
+                            .spacing(3),
+                            Space::new().width(Length::Fill),
+                            container(
+                                self.label(format!("{} 项", counts[2]))
+                                    .size(self.font_size(13))
+                            )
+                            .padding([4, 9])
+                            .style(|theme: &Theme| ui_style::badge(theme, ui_style::Tone::Muted)),
+                            self.label("查看 ›")
+                                .size(self.font_size(13))
+                                .color(ui_style::tone(&self.theme(), ui_style::Tone::Accent)),
+                        ]
+                        .spacing(12),
                     )
-                    .style(ui_style::text_button)
+                    .width(Length::Fill)
+                    .padding([12, 16])
+                    .style(ui_style::secondary_button)
                     .on_press(event(Event::ResultsFilter(Some(ResultKind::Unknown)))),
                 );
             }
