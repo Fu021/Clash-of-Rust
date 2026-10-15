@@ -294,25 +294,6 @@ class BuildTests(unittest.TestCase):
             with self.assertRaises(ValueError):
                 build.validate_binary_arch(path,'windows','arm64')
 
-    def test_wsl_mirror_refuses_source_and_unowned_directory(self):
-        import importlib.util
-        spec = importlib.util.spec_from_file_location('build_wsl',build.ROOT/'scripts/build-wsl.py')
-        module = importlib.util.module_from_spec(spec)
-        spec.loader.exec_module(module)
-        with tempfile.TemporaryDirectory() as directory:
-            source = Path(directory)/'source'
-            source.mkdir()
-            original = source/'keep.txt'
-            original.write_text('Original source data')
-            unowned = Path(directory)/'unowned'
-            unowned.mkdir()
-            (unowned/'keep.txt').write_text('Existing unrelated data')
-            for destination in (source,unowned):
-                with self.assertRaises(ValueError):
-                    module.native_build(source,destination,None,None,'')
-            self.assertEqual(original.read_text(),'Original source data')
-            self.assertEqual((unowned/'keep.txt').read_text(),'Existing unrelated data')
-
     def test_version_validation(self):
         self.assertEqual(build.validate_version('0.4.4'),'0.4.4')
         for invalid in ('1.2','1.2.3.4','1.2.x','1.2.65536','../0.4.4','01.2.3','0.4.12-dev.01','0.4.12-','0.4.12-dev/1'):

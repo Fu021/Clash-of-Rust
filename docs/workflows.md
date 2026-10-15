@@ -2,82 +2,66 @@
 
 | 工作流 | 触发 | 职责 | 产物 |
 | --- | --- | --- | --- |
-| Rust / CI | main push、PR | 六平台编译、静态检查、代码与原生接口测试 | `build-{system}-{arch}`，保留 14 天 |
-| Publish Release | 手动 | 复用成功 CI 的程序，打包、安装后测试、发布 | 六个安装包及 SHA256；测试产物保留 14 天 |
-| Memory Benchmark | 手动 | 测量一个远程分支、标签或提交的内存 | 原始 JSONL、报告、截图、构建日志；保留 30 天 |
-| UI Screenshots | 手动 | 选择成功 CI 与平台，生成原生界面截图 | `ui-screenshots-{system}-{arch}`；保留 14 天 |
+| Rust / CI | main push、PR | 六平台编译、静态检查、源码单元测试、系统代理与 TUN 集成测试 | `build-{system}-{arch}`，保留 14 天 |
+| Publish Release | 手动 | 复用成功 CI 的程序，打包、安装后验证；可仅打包 | 六个安装包及 SHA256，测试产物保留 14 天 |
+| Memory Benchmark | 手动 | 对指定代码运行低强度或压力内存测试 | 原始数据、报告与构建日志，保留 30 天 |
 
 六个平台为 Windows x64 / ARM64、Linux x64 / ARM64、macOS Intel / Apple Silicon。Linux 安装包支持 Debian/Ubuntu，Ubuntu 仅支持 22.04 及以上；Ubuntu 最新版兼容验证在发布工作流中执行。
 
+编译、Clippy、测试与打包均在 Actions 执行，本地不构建。界面截图只使用 `scripts/preview-slint.py` 直接预览正式 Slint 组件，不再保留截图工作流、额外截图编译入口或旧 Iced 适配器。弃用工作流删除文件后，也需在 GitHub 上禁用。
+
 ## CI
 
-- 六平台使用同一个 Release profile 完成整个 workspace 的格式检查、Clippy、编译和 Rust 常规测试，分别保存共享业务库与桌面库的测试程序。移动端占位目录不参与构建。
-- 原生基础检查验证系统代理设置写入、HTTP 转发、TUN 接管无显式代理的流量，以及关闭后的清理。Linux 使用隔离网络命名空间及 GSettings 内存后端，不覆盖真实登录桌面的 dconf 持久化；Mac 使用真实 launchd 网络助手。Windows 只用管理员权限注册服务，实际代理/TUN 检查以中等完整性、非管理员令牌执行，并验证保存 TUN 后重新初始化、服务停止后普通用户重新启动、GUI 崩溃后的内核和端口清理，以及特权助手文件的写入限制。
-- CI 聚焦基础代理/TUN 与常规代码测试；已结束的专项排障脚本和临时更新工作流已移除。
-- CI 不执行截图，也不额外编译截图入口；截图由独立手动工作流按需生成。
-- Linux x64 检查生成代码；通用 Python 构建工具和产物协议测试在 Linux x64 与两种 Windows 架构执行；Windows 另核对 PE 图标。
-- main push、PR 更新触发 CI，过时的同分支运行自动取消。现有依赖与资源缓存策略保持不变。
-- CI 不生成安装包。构建产物附带提交 SHA、版本、平台、Cargo.lock 校验值、工具链和逐文件 SHA256；发布继续严格验证来源。
+- 六平台使用相同的 Release profile 完成整个 workspace 的格式检查、Clippy、编译和源码单元测试；移动端占位目录不参与构建。
+- 单元测试保留配置与规则、网络响应解析、认证信息脱敏、状态恢复、任务取消、列表复用与边界、实际指针交互等验证。已弃用的截图场景、CLI 专项集成测试和长期忽略的联网/平台手工回归入口已移除。
+- 真实系统集成测试只运行系统代理与 TUN：验证代理设置写入、HTTP 转发、TUN 接管无显式代理的流量、模式恢复及关闭清理。Linux 使用隔离网络命名空间和 GSettings 内存后端；macOS 使用真实 launchd 网络助手；Windows 先注册服务，再以普通用户令牌运行代理/TUN、恢复和服务清理检查。
+- Python 构建辅助与产物校验单元测试只在 Linux x64 执行一次。内存基准 example 不作为 CI 测试程序额外构建或运行。
+- main push、PR 更新触发 CI；过时运行自动取消。Actions 的依赖与资源缓存保留，本地构建产物与缓存不保留。
+- CI 不生成安装包。产物记录提交、版本、架构、Cargo.lock、工具链及逐文件校验值；仅附带发布后复用的 `core_integration` 代理/TUN 测试程序，不上传源码单元测试程序。清理后的产物采用 schema 2，只与同一提交的打包流程配套使用。
 
-Mac 的失败日志、系统与网络状态、崩溃报告保存在 `macos-ci-report-{arch}`；Windows 基础检查耗时保存在 `windows-ci-report-{arch}`。人工授权窗口、真实重启登录和物理显示器操作需要人工验收。
+macOS 失败日志、系统与网络状态、崩溃报告保存在 `macos-ci-report-{arch}`，Windows 集成检查结果保存在 `windows-ci-report-{arch}`。人工授权窗口、真实重启登录和物理显示器行为仍需人工验收。
 
 ## Publish Release
 
 在 Actions 中选择 **Publish Release → Run workflow**：
 
-- `ci_run_id`：成功的 main CI 运行编号；留空选择当前提交的 CI。开发分支测试包必须填写该分支当前提交的成功 PR CI 编号。
-- `check_only`：勾选后完成打包与基础安装/代理测试，最终不创建或修改 Release。可在开发分支执行，无需发布说明；安装包保存在本次运行的 `package-{system}-{arch}` 产物中。
+- `ci_run_id`：成功的当前提交 CI 编号；留空选择当前提交的 main CI。开发分支测试包必须填写当前分支、当前提交成功的 PR CI 编号。
+- `check_only`：勾选后完成打包与安装后验证，不创建或修改 Release；开发分支必须勾选。安装包在本次运行的 `package-{system}-{arch}` 附件中，无需下载到本地。
 
-发布流程固定到所选 CI 的提交，不在打包阶段重新编译，也不重新下载资源。构建产物过期时需要重新运行 CI。
+流程固定到所选 CI 的提交，核对六平台成功记录和产物身份，不重新编译，也不重新下载应用资源。过期或旧格式产物需要重新运行当前代码的 CI。
 
-1. 正式发布检查当前 main 与成功的 main push CI；开发分支仅测试时检查同仓库 PR CI 与当前分支提交一致。两种模式都要求六平台检查成功、六份构建产物完整。
-2. 六个平台并行获取、校验并打包已有程序。
-3. Windows 验证最终包安装、资源、网络服务注册、普通用户系统代理/TUN、客户端更新所用的 `/UPDATE` 安装路径、服务更新与卸载，以及用户文件保留；更新病毒库并扫描 Defender。更新、扫描或校验失败阻止上传。
-4. Linux 安装 DEB，验证普通用户的系统代理、HTTP 转发、TUN 接管与关闭清理。
-5. macOS 验证 `.app` / DMG 架构、版本、资源和签名，启动安装后的 GUI/内核，再验证系统代理和 TUN。当前为 ad-hoc 签名，未配置 Developer ID 与 Apple 公证。
-6. 最新版 Ubuntu 安装同一份 Ubuntu 22.04 DEB 并运行基础代理/TUN 检查，不重复编译或打包。
-7. 最终步骤核对所有测试 job、安装包校验值、测试成功记录与来源 CI；十二个附件上传并核对后才公开 Release。开发版本标记为 prerelease，不覆盖稳定版 latest。
+1. 六个平台获取并校验已有程序，再生成 Windows EXE、Linux DEB、macOS DMG。
+2. Windows 验证安装、服务注册、普通用户代理/TUN、更新安装路径、卸载与用户文件保留，并扫描 Defender；PE 图标在打包阶段核验。
+3. Linux 安装 DEB 后验证普通用户系统代理、HTTP 转发、TUN 接管与清理；最新版 Ubuntu 使用同一份 Ubuntu 22.04 DEB 再验证一次。
+4. macOS 核验 App/DMG 版本、架构、资源及签名，启动安装后的 GUI/内核并验证代理/TUN。当前使用 ad-hoc 签名，没有 Developer ID 与 Apple 公证。
+5. 核对安装包、校验值、成功记录及来源后，正式模式才公开 Release；`check_only` 仅保留 Actions 附件。开发版本标记为 prerelease，不覆盖稳定版 latest。
 
-只有最终发布 job 有 `contents: write`；前面的编译和打包测试使用读取权限。
+只有最终发布 job 有 `contents: write`。`scripts/build-installer.py` 必须接收 `--prebuilt` 的已验证 CI 产物，已移除本地 Cargo 构建回退和 WSL 构建脚本。
 
-本地打包命令 `python scripts/build-installer.py` 仍支持编译并打包。工作流使用 `--prebuilt` 入口，拒绝不匹配的提交、版本、平台或文件校验值。
+## UI 预览与静态资源
 
-## UI Screenshots
-
-独立手动工作流接受 `ci_run_id`（留空选最新成功 main CI），`platform`（全部/Windows/Linux/macOS），`architecture`（全部/x64/ARM64），`sizes`（普通/最小/两者）。可以选择仍有完整产物的历史 CI，不要求分支仍停在原提交。
-
-先确认六平台 CI 成功、源码来自本仓库、构建产物未过期，再固定到该提交并核对产物及依赖锁的哈希。正式程序不带固定演示场景入口，因此截图任务另编译隔离的截图程序：沿用所选提交的页面和演示场景，仅附加像素捕获适配器，不改变应用视图或 CI 二进制。额外编译和截图均不进入常规 CI。
-
-六种原生 runner 使用正式程序的 Slint 页面与软件渲染器截图（旧 CI 源码保留 Iced 兼容适配），Mac 不依赖系统屏幕录制权限。输出每页深浅色、普通/最小窗口及详情/确认框 PNG、索引、源码与 CI 产物身份、逐图哈希和日志。固定演示数据不包含账户或实际业务流量，不等同于真实网络检测结果。支持包含 `ui-preview` 场景的项目版本。
-
-## 静态资源维护
-
-图标和国旗使用统一入口，日常构建直接使用仓库中的成品：
+持久安装官方 Slint Viewer 后运行：
 
 ```text
-python scripts/prepare-assets.py icons
-python scripts/prepare-assets.py flags
-python scripts/prepare-assets.py verify-icons 路径/clash-of-rust.exe 路径/安装包.exe
+python3 scripts/preview-slint.py --dialogs --pairs
 ```
 
-`icons` 与 `flags` 仅在更新资源时执行，需要 Pillow；`flags` 可加 `--proxy`。图标源图保存在 `resources/icon-concepts/`，国旗与地区名称版本及许可见 [来源说明](../resources/flags/SOURCE.md)。`verify-icons` 只使用 Python 标准库，CI 和 Windows 打包继续执行此检查。
+脚本直接加载正式 `.slint` 组件和演示数据，不运行 Cargo 或真实内核。需要时生成 `dist/slint-preview`；历史截图与字体缓存可随 `dist` 删除。
+
+图标、国旗及许可证属于必要资源；日常构建使用仓库成品。仅在维护资源时使用 `scripts/prepare-assets.py icons` / `flags`。图标源图保留于 `resources/icon-concepts`，第三方来源见各资源目录的说明。平台检测直接维护 Rust，必要的公开检测数据与 AGPL 来源说明统一位于 `resources/ip-check`，不再保留 `vendor` 或 Shell 生成工具。
 
 ## Memory Benchmark
 
-在 Actions 中选择 **Memory Benchmark → Run workflow**：
+手动选择 `ref`（分支、标签或提交），默认测当前所选分支：
 
-- `ref`：需要测量的远程分支、标签或提交 SHA（支持短 SHA）；留空测所选工作流分支。
-- `profile`：`release` 或 `dev`，默认 release。
-- `workload`：默认 `light`（低强度）；`stress` 保留原压力配置。
-- `rows`：可选覆盖每项 API 测试的条数，范围 1–50,000；留空时 `light` 使用 1,000，`stress` 使用 50,000。
-- `repetitions`：每项 API 测试的独立进程次数，范围 1–10，默认 3。
-- `sample_seconds`：每个 GUI 场景的采样时间，范围 1–120 秒，默认 10 秒。
-- `preview`：额外生成实际界面截图，使用隔离的固定演示数据；dev.2 及之后支持，默认关闭。截图测试入口通过可选 feature 编译，不进入安装包。
+- `profile`：release 或 dev，默认 release。
+- `workload`：默认 light；stress 保留较大的压力输入。
+- `rows`：可选 API 行数，1–50,000；默认 light 为 1,000，stress 为 50,000。
+- `repetitions`：每项 API 测试的独立进程次数，1–10，默认 3。
+- `sample_seconds`：每个 GUI 场景采样 1–120 秒，默认 10 秒。
 
-一次运行只测一个代码版本，不自动选择或比较另一个版本。比较时分别运行两次，并保持工具链、profile、输入和环境一致。
+一次只测一个版本。比较时分别运行，保持工具链、profile、输入和环境一致；常规 CI 和打包不自动运行内存基准。
 
-统一 Rust 基准程序运行规则、连接、代理三类数据的流式/缓冲解析、1/5 次刷新，每项独立进程重复采样。GUI 使用隔离数据目录和 Xvfb，依次测首页、折叠代理组、搜索 `node-`、返回首页；默认低强度输入为 100 节点、5 组各含全部节点、1,000 条规则。`stress` 使用 2,000 节点、40 组、20,000 条规则。均关闭系统代理与定时测速，不生成业务流量；支持的版本会额外在五项快捷规则全开时重复四个场景。
+API 基准覆盖规则、连接、代理三类数据的流式/缓冲解析和 1/5 次刷新。GUI 在隔离数据目录、Xvfb 中采样首页、代理组折叠、节点搜索、返回首页；关闭系统代理与定时测速，不生成业务流量。light 为 100 节点、5 个代理组、1,000 条规则；stress 为 2,000 节点、40 个代理组、20,000 条规则。支持的版本另测五项快捷规则全开的同样场景。
 
-为了让较旧的提交也能接受相同测试，工作流仅替换所选代码的 example 基准程序，应用源码保持所选提交内容；记录应用提交和基准程序提交。基准程序位于 `crates/client-core/examples`，运行器兼容旧版根目录布局。该入口面向与 0.4.12 API 兼容的代码。
-
-产物包含 `metadata.json`、资源清单、完整输入订阅、API 数据、四个 GUI 场景的采样和截图、README 报告及构建日志。API 数值为 Rust 堆分配量；GUI/内核分别统计 RSS、PSS、USS，不能混用两类口径。采样峰值为观测峰值，内核内存波动不能直接归因于 Rust 改动。
+工作流只替换所选版本的 example 基准程序，兼容旧版目录布局，不改应用源码。产物包含版本与环境、提交身份、资源清单、输入订阅、API 数据、GUI/内核内存采样和报告，不生成截图。API 为 Rust 堆分配量；GUI/内核分别统计 RSS、PSS、USS，需区分口径；采样峰值为观测峰值。

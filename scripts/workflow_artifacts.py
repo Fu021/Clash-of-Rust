@@ -19,12 +19,8 @@ from build_support import (ROOT, bundle_directory, package_version, sha256,
 
 BUILD_NAMES = {f'build-{system}-{arch}' for system in ('windows', 'linux', 'macos') for arch in ('x64', 'arm64')}
 ARCHIVE_NAME = 'build.tar.gz'
-TEST_NAMES = {'library', 'client-core', 'client-ui', 'ui_models', 'clash-of-rust', 'clash-tun-launcher', 'core_integration',
-              'geo_download', 'linux_tun', 'tray_integration', 'memory_benchmark', 'claude_diagnostics',
-              'macos_ui_fixture', 'macos_helper_fixture'}
-# Accept historical CI payloads for the independent screenshot workflow. New
-# builds only require the targets still present in the selected source.
-REQUIRED_TEST_NAMES = {'library', 'clash-of-rust', 'core_integration', 'memory_benchmark'}
+BUILD_SCHEMA = 2
+TEST_NAMES = {'core_integration'}
 
 
 def commit():
@@ -45,25 +41,22 @@ def safe_name(name):
 
 
 def test_binaries(messages):
+    """Units run in CI; packaging needs only the native proxy/TUN executable."""
     result = {}
     for line in messages.splitlines():
         entry = json.loads(line)
         if entry.get('reason') != 'compiler-artifact' or not entry.get('profile', {}).get('test') or not entry.get('executable'):
             continue
         target = entry['target']
-        if not Path(target['src_path']).is_relative_to(ROOT):
+        if target['name'] != 'core_integration' or target['kind'] != ['test']:
             continue
-        role = ({'clash_of_rust': 'library', 'clash_client_core': 'client-core', 'clash_client_ui': 'client-ui'}.get(target['name'], target['name'])
-                if 'lib' in target['kind'] else target['name'])
-        if role not in TEST_NAMES or role in result:
-            raise ValueError('Unexpected or duplicate test executable: '+role)
-        result[role] = entry['executable']
-    if not REQUIRED_TEST_NAMES <= result.keys():
-        raise ValueError('Required test executables are missing')
-    if (ROOT/'crates/client-core/Cargo.toml').is_file() and 'client-core' not in result:
-        raise ValueError('Shared client library test executable is missing')
-    if (ROOT/'crates/client-ui/tests/models.rs').is_file() and 'ui_models' not in result:
-        raise ValueError('Slint model test executable is missing')
+        if not Path(target['src_path']).is_relative_to(ROOT):
+            raise ValueError('Proxy/TUN test is outside the selected source')
+        if 'core_integration' in result:
+            raise ValueError('Duplicate proxy/TUN test executable')
+        result['core_integration'] = entry['executable']
+    if set(result) != TEST_NAMES:
+        raise ValueError('Required proxy/TUN test executable is missing')
     return result
 
 
@@ -98,7 +91,7 @@ def export_build(system, arch, tests, output, binaries=None):
                     'clash-of-rust'+extension, 'clash-tun-launcher'+extension, 'mihomo'+extension}
                 records[relative] = {'sha256': sha256(path), 'size': path.stat().st_size,
                                      'executable': executable}
-        manifest = {'schema': 1, 'commit': commit(), 'version': package_version(),
+        manifest = {'schema': BUILD_SCHEMA, 'commit': commit(), 'version': package_version(),
                     'system': system, 'arch': arch, 'profile': 'release',
                     'cargo_lock_sha256': sha256(ROOT/'Cargo.lock'),
                     'rustc': subprocess.check_output(['rustc', '-Vv'], text=True).strip(),
@@ -122,7 +115,7 @@ def verify_build(root, system, arch, expected_commit):
     manifest = json.loads((root/'manifest.json').read_text(encoding='utf-8'))
     if (manifest.get('schema'), manifest.get('commit'), manifest.get('version'),
         manifest.get('system'), manifest.get('arch'), manifest.get('profile')) != (
-            1, expected_commit, package_version(), system, arch, 'release'):
+            BUILD_SCHEMA, expected_commit, package_version(), system, arch, 'release'):
         raise ValueError('Build metadata does not match the selected source and platform')
     if manifest.get('cargo_lock_sha256') != sha256(ROOT/'Cargo.lock'):
         raise ValueError('Build dependency lockfile differs from the selected source')
@@ -138,12 +131,8 @@ def verify_build(root, system, arch, expected_commit):
     actual = {path.relative_to(root).as_posix() for path in root.rglob('*') if path.is_file()}
     if actual != set(records) | {'manifest.json', 'source-artifact.json'} and actual != set(records) | {'manifest.json'}:
         raise ValueError('Build payload contains missing or unexpected files')
-    if not isinstance(manifest['tests'], dict) or not set(manifest['tests']) <= TEST_NAMES:
-        raise ValueError('Unexpected build test targets')
-    if not REQUIRED_TEST_NAMES <= manifest['tests'].keys():
-        raise ValueError('Required build test targets are missing')
-    if (ROOT/'crates/client-core/Cargo.toml').is_file() and 'client-core' not in manifest['tests']:
-        raise ValueError('Shared client library tests are missing from the build')
+    if not isinstance(manifest['tests'], dict) or set(manifest['tests']) != TEST_NAMES:
+        raise ValueError('Build must contain only the required proxy/TUN test')
     for name, relative in manifest['tests'].items():
         if not safe_name(relative) or relative != 'tests/'+name+('.exe' if system == 'windows' else '') or relative not in records:
             raise ValueError('Invalid test executable path')

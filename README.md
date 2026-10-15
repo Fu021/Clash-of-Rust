@@ -48,48 +48,28 @@ macOS 打开 DMG，将 **Clash of Rust.app** 拖入 **Applications（应用程�
 
 ## 编译与打包
 
-安装 Rust stable、Python 3.11+，在对应系统和架构上原生构建，输出位于 `dist/`。
+编译、静态检查、单元测试与系统代理/TUN 测试统一由 [GitHub Actions](https://github.com/Fu021/Clash-of-Rust/actions) 执行，覆盖六种系统与架构。本地仅编辑源码和使用 Slint Viewer 预览界面。
 
-**Windows**：安装 Visual Studio C++ Build Tools（对应架构工具与 Windows SDK），执行：
-
-```text
-python scripts/build-installer.py
-```
-
-**Debian/Ubuntu（Ubuntu 仅支持 22.04 及以上）**：安装构建依赖后执行：
-
-```text
-sudo apt install build-essential pkg-config dpkg-dev libglib2.0-dev libfontconfig1-dev libfreetype6-dev libxkbcommon-dev libwayland-dev libx11-dev libx11-xcb-dev
-python3 scripts/build-installer.py
-```
-
-**macOS**：安装 Xcode Command Line Tools，在 Intel 或 Apple Silicon Mac 上执行，生成对应架构的 DMG：
-
-```text
-xcode-select --install
-MACOSX_DEPLOYMENT_TARGET=14.0 python3 scripts/build-installer.py
-```
-
-资源已准备好可加 `--skip-prepare`；下载需要代理时可加 `--proxy http://127.0.0.1:7897`。Windows 使用 WSL 构建 Linux 包可执行 `python scripts/build-wsl.py --distro Ubuntu-22.04`，项目会同步到 Linux 文件系统编译。
+测试安装包：等待对应提交的 CI 成功，手动运行 **Publish Release**，填写 `ci_run_id` 并勾选 `check_only`；安装包保存在 Actions 附件中。打包直接复用 CI 产物，不再编译。正式发布使用同一工作流，详见 [工作流说明](docs/workflows.md)。
 
 ## 开发与发布
 
-项目使用 Cargo workspace：`crates/client-core` 保存共享配置、订阅、规则、检测、实时保护、Geo 更新和代理切换策略；`crates/client-ui` 保存 Slint 页面、共用控件与增量列表模型；`apps/desktop/src/application` 负责应用状态、任务调度和界面绑定，`apps/desktop` 的其他模块负责桌面内核管理及系统集成。共享库不依赖桌面应用，通知、系统代理等操作由各平台提供实现；移动端后续复用同一套业务逻辑。Android、iOS、移动桥接与移动内核目录目前仅占位。根目录运行 `cargo run` 默认启动桌面应用，资源和打包输出仍统一放在仓库根目录。
+项目使用 Cargo workspace：`crates/client-core` 保存共享配置、订阅、规则、检测、实时保护、Geo 更新和代理切换策略；`crates/client-ui` 保存 Slint 页面、共用控件与增量列表模型；`apps/desktop/src/application` 负责应用状态、任务调度和界面绑定，`apps/desktop` 的其他模块负责桌面内核管理及系统集成。共享库不依赖桌面应用，通知、系统代理等操作由各平台提供实现；移动端后续复用同一套业务逻辑。Android、iOS、移动桥接与移动内核目录目前仅占位。CI 统一编译整个工作区；资源与打包输出统一放在仓库根目录。
 
 Windows 开发版本使用按需启动的网络服务承接 TUN 权限，首次安装或修复时授权，GUI 保持普通权限；正常重启后复用服务注册，空闲服务自动退出。
 
+界面预览无需编译桌面程序，使用持久安装的 Slint Viewer：
+
 ```text
-cargo fmt --all -- --check
-cargo clippy --workspace --release --all-targets --locked -- -D warnings
-cargo test --workspace --release --all-targets --locked -- --test-threads=1
-python scripts/test-build-tools.py
-python scripts/test-workflow-artifacts.py
+python3 scripts/preview-slint.py --dialogs --pairs
 ```
+
+保留配置、规则、检测解析、状态恢复、内存边界和界面交互的源码单元测试；真实系统集成测试只覆盖系统代理与 TUN。旧版 Shell 参考实现已移除，平台检测直接维护原生 Rust。
 
 开发分支通过 PR 运行六平台 CI，完成编译、测试并保存原生程序；手动 Publish Release 复用 main 的成功 CI 产物，完成打包和安装测试后发布，支持只测试不发布。macOS 分别使用 Intel 和 Apple Silicon 原生 runner，保存基础代理/TUN 检查报告、日志和崩溃信息；六平台界面截图由独立手动工作流按需生成，详见 [macOS 测试清单](docs/macos-ci-checklist.md)。手动 Memory Benchmark 可测指定提交的内存，并可附加实际界面预览。操作与产物说明见 [工作流文档](docs/workflows.md)，客户端内更新测试见 [更新测试说明](docs/automatic-update.md)。
 
 ## License
 
-Rust 界面及原创通用代码采用 **GPL-3.0-only**，见 [LICENSE](LICENSE)。IP 检测复用的 RegionRestrictionCheck 源码及派生逻辑保留 **AGPL-3.0-only**，见 [授权及修改说明](vendor/region-restriction-check/SOURCE.md)；组合发行遵守 GPLv3/AGPLv3 第 13 条，包括适用时向远程网络用户提供完整对应源码。
+Rust 界面及原创通用代码采用 **GPL-3.0-only**，见 [LICENSE](LICENSE)。IP 检测复用的 RegionRestrictionCheck 源码及派生逻辑保留 **AGPL-3.0-only**，见 [授权及修改说明](resources/ip-check/SOURCE.md)；组合发行遵守 GPLv3/AGPLv3 第 13 条，包括适用时向远程网络用户提供完整对应源码。
 
 mihomo 采用 GPL-3.0，Slint 按 GPL-3.0 使用。第三方软件与数据来源见 [THIRD-PARTY-NOTICES.txt](resources/THIRD-PARTY-NOTICES.txt)。

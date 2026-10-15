@@ -6,16 +6,6 @@ default-run = "clash-of-rust"
 description = "A native Rust desktop client for mihomo"
 license.workspace = true
 
-[features]
-# Screenshot harness; never enabled for official application builds.
-ui-preview = []
-
-[[test]]
-name = "ui_preview"
-path = "tests/ui_preview.rs"
-harness = false
-required-features = ["ui-preview"]
-
 [[bin]]
 name = "clash-tun-launcher"
 path = "src/tun_launcher.rs"

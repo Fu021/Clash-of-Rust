@@ -232,7 +232,7 @@ def copy_static(bundle):
     ip = resources/'ip-check'
     ip.mkdir(exist_ok=True)
     for name in ('LICENSE', 'SOURCE.md'):
-        shutil.copy2(ROOT/'vendor/region-restriction-check'/name, ip/name)
+        shutil.copy2(ROOT/'resources/ip-check'/name, ip/name)
 
 
 def validate_resources(resources, system):

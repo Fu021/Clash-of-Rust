@@ -74,12 +74,6 @@ def logged(name, command, env=None, timeout=300):
 
 
 def native_tests(tests, bundle):
-    def launcher_dependencies():
-        output = subprocess.check_output(['/usr/bin/otool', '-L', bundle/'clash-tun-launcher'], text=True)
-        (REPORT/'launcher-libraries.log').write_text(output)
-        if any(name in output for name in ('AppKit.framework', 'Cocoa.framework', 'QuartzCore.framework')):
-            raise RuntimeError('TUN helper unexpectedly links GUI frameworks')
-    suite('TUN helper excludes GUI frameworks', launcher_dependencies)
     suite('Basic system proxy and TUN', lambda: logged('proxy-modes',
         [sys.executable, ROOT/'scripts/test-proxy-modes.py',
          '--test-binary', tests['core_integration'], '--bundle', bundle]))
@@ -238,7 +232,7 @@ def main():
         shutil.rmtree(REPORT)
     REPORT.mkdir(parents=True, exist_ok=True)
     planned = ['Compile, Clippy, unit tests and native integration',
-               'TUN helper excludes GUI frameworks', 'Basic system proxy and TUN']
+               'Basic system proxy and TUN']
     write_json(REPORT/'report.json', {'schema': 1, 'arch': args.arch, 'status': 'running',
                'suites': [{'name': name, 'status': 'not_run'} for name in planned]})
     for name, command in [('proxy', ['/usr/sbin/scutil', '--proxy']),

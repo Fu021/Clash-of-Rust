@@ -12,6 +12,7 @@ use std::{
     time::{Duration, Instant},
 };
 
+mod output;
 #[allow(
     clippy::all,
     unreachable_code,
@@ -19,12 +20,11 @@ use std::{
     unused_mut,
     unused_parens
 )]
-mod generated;
-mod output;
+mod platforms;
 
 pub async fn check(service: &Service, port: u16) -> Result<CheckResult> {
     let mut ctx = Context::new(port)?;
-    let text = generated::execute(&service.id, &mut ctx).await?;
+    let text = platforms::execute(&service.id, &mut ctx).await?;
     let mut result = output::parse_output(&text);
     result.millis = ctx.first_response_ms.unwrap_or(0);
     if service.information_only()
@@ -207,7 +207,7 @@ impl Context {
                 }
                 _ => {
                     self.failed = true;
-                    // Compatibility marker is consumed only by generated decisions.
+                    // Compatibility marker is consumed only by the ported decisions.
                     // Request errors never expose URL credentials or response bodies.
                     return Ok("curl: request failed (000)".into());
                 }
@@ -422,14 +422,14 @@ impl Variables {
                 "Media_Cookie",
                 Borrowed(include_str!(concat!(
                     env!("CARGO_MANIFEST_DIR"),
-                    "/../../vendor/region-restriction-check/cookies"
+                    "/../../resources/ip-check/cookies.txt"
                 ))),
             ),
             (
                 "IATACode",
                 Borrowed(include_str!(concat!(
                     env!("CARGO_MANIFEST_DIR"),
-                    "/../../vendor/region-restriction-check/IATACode.txt"
+                    "/../../resources/ip-check/IATACode.txt"
                 ))),
             ),
         ]))
@@ -967,7 +967,7 @@ mod tests {
 
     #[tokio::test]
     async fn every_catalog_detector_executes_with_native_mock_http() {
-        // Broad fixture exercises the generated request/parse chains without
+        // Broad fixture exercises the native request/parse chains without
         // depending on public services, credentials, DNS, or bundled tools.
         let fixture = r#"{"isp":"Netflix","client":{"isp":"Netflix"},"targets":[{"location":{"city":"Tokyo","country":"JP"},"url":"https://example.test/cdn"}],"error":{"name":"LOGIN_FORBIDDEN"},"cf_details":null,"result":{"value":"Success"},"data":{"country_code":86,"country":"CN"},"Region":{"isAllowed":true,"GeolocatedCountry":"JP"}}"#;
         let mut failures = Vec::new();
@@ -988,7 +988,7 @@ mod tests {
                 fixture
             };
             let (mut ctx, task) = mock(body, "").await;
-            if let Err(error) = generated::execute(&service.id, &mut ctx).await {
+            if let Err(error) = platforms::execute(&service.id, &mut ctx).await {
                 failures.push(format!("{}: {error:#}", service.id));
             }
             task.abort();
@@ -1006,7 +1006,7 @@ mod tests {
             (r#"{"Region":{"isAllowed":false}}"#, State::Restricted),
         ] {
             let (mut ctx, task) = mock(body, "").await;
-            let text = generated::execute("MediaUnlockTest_Dazn", &mut ctx)
+            let text = platforms::execute("MediaUnlockTest_Dazn", &mut ctx)
                 .await
                 .unwrap();
             assert_eq!(output::parse_output(&text).state, expected);
@@ -1014,7 +1014,7 @@ mod tests {
         }
         let (mut ctx, task) = mock("<html>verification</html>", "").await;
         assert!(
-            generated::execute("MediaUnlockTest_Dazn", &mut ctx)
+            platforms::execute("MediaUnlockTest_Dazn", &mut ctx)
                 .await
                 .is_err()
         );
@@ -1162,7 +1162,7 @@ mod tests {
                 .unwrap(),
         );
         ctx.test_origin = Some(origin);
-        let output = generated::execute("MediaUnlockTest_BahamutAnime", &mut ctx)
+        let output = platforms::execute("MediaUnlockTest_BahamutAnime", &mut ctx)
             .await
             .unwrap();
         assert_eq!(output::parse_output(&output).state, State::Confirmed);

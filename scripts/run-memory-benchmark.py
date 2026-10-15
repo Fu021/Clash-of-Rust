@@ -10,14 +10,12 @@ import shutil
 import signal
 import socket
 import statistics
-import struct
 import subprocess
 import sys
 import tempfile
 import time
 import urllib.request
 import uuid
-import zlib
 
 from build_support import ROOT, write_json, core_directory, desktop_directory, package_version
 
@@ -40,7 +38,7 @@ def fixture(workload='light'):
         + '  - MATCH,DIRECT\n')
 
 
-def screenshot(window, output, env):
+def window_pixels(window, env):
     x = c.CDLL('libX11.so.6')
     x.XOpenDisplay.argtypes = [c.c_char_p]
     x.XOpenDisplay.restype = c.c_void_p
@@ -63,7 +61,7 @@ def screenshot(window, output, env):
     x.XCloseDisplay.argtypes = [c.c_void_p]
     try:
         if not image or image.contents.bits_per_pixel != 32:
-            raise RuntimeError('Expected a 32-bit Xvfb screenshot')
+            raise RuntimeError('Expected 32-bit Xvfb pixels')
         data = image.contents
         raw = c.string_at(data.data, data.bytes_per_line*height)
         rows = []
@@ -71,47 +69,23 @@ def screenshot(window, output, env):
             row = raw[y*data.bytes_per_line:y*data.bytes_per_line+width*4]
             rgb = bytearray(width*3)
             rgb[0::3], rgb[1::3], rgb[2::3] = row[2::4], row[1::4], row[0::4]
-            rows.append(b'\0'+rgb)
-        def chunk(kind, value):
-            return struct.pack('>I', len(value))+kind+value+struct.pack('>I', zlib.crc32(kind+value))
-        output.write_bytes(b'\x89PNG\r\n\x1a\n'
-                           + chunk(b'IHDR', struct.pack('>IIBBBBB', width, height, 8, 2, 0, 0, 0))
-                           + chunk(b'IDAT', zlib.compress(b''.join(rows))) + chunk(b'IEND', b''))
+            rows.append(rgb)
+        return width, height, b''.join(rows)
     finally:
         if image:
             x.XDestroyImage(image)
         x.XCloseDisplay(display)
 
 
-def search_center(window, output, env):
-    """Locate the real search field after notices have changed its position."""
-    path = output/'search-focus.png'
-    screenshot(window, path, env)
-    png = path.read_bytes()
-    offset, compressed, dimensions = 8, bytearray(), None
-    while offset < len(png):
-        length = struct.unpack_from('>I', png, offset)[0]
-        kind = png[offset+4:offset+8]
-        data = png[offset+8:offset+8+length]
-        if kind == b'IHDR':
-            width, height, depth, color, _, _, interlaced = struct.unpack('>IIBBBBB', data)
-            if (depth, color, interlaced) != (8, 2, 0):
-                raise ValueError('Expected an RGB screenshot')
-            dimensions = width, height
-        elif kind == b'IDAT':
-            compressed.extend(data)
-        offset += length+12
-    if dimensions is None:
-        raise ValueError('Screenshot dimensions missing')
-    width, height = dimensions
-    raw, stride = zlib.decompress(compressed), width*3+1
-    if any(raw[y*stride] != 0 for y in range(height)):
-        raise ValueError('Expected unfiltered screenshot rows')
+def search_center(window, env):
+    """Locate the legacy search field in memory without producing a screenshot."""
+    width, height, raw = window_pixels(window, env)
+    stride = width*3
     runs, start = [], None
     # At the default 950 px window, only the search input has this border
     # on the content's left edge. Card/notice borders use other colors.
     for y in range(70, min(height-60, 250)):
-        pixel = raw[y*stride+1+184*3:y*stride+1+185*3]
+        pixel = raw[y*stride+184*3:y*stride+185*3]
         border = all(abs(a-b) <= 3 for a, b in zip(pixel, (100, 116, 139)))
         if border:
             if start is None:
@@ -179,7 +153,6 @@ def gui_scenes(executable, benchmark, output, seconds, modern_layout=False, slin
             def measure(name):
                 name = prefix+name
                 time.sleep(3)
-                screenshot(window, output/(name+'.png'), env)
                 with (output/(name+'.txt')).open('x') as text:
                     subprocess.run([str(benchmark), 'app', str(app.pid), str(seconds), '250',
                                     str(output/(name+'.jsonl'))], stdout=text, check=True, env=env)
@@ -191,7 +164,7 @@ def gui_scenes(executable, benchmark, output, seconds, modern_layout=False, slin
                 subprocess.run(['xdotool', 'key', '--clearmodifiers', 'ctrl+f'], env=env, check=True)
                 time.sleep(0.5)
             elif modern_layout:
-                click(*search_center(window, output, env))
+                click(*search_center(window, env))
             else:
                 click(380, 120)
             subprocess.run(['xdotool', 'windowfocus', '--sync', window], env=env, check=True)
@@ -201,7 +174,7 @@ def gui_scenes(executable, benchmark, output, seconds, modern_layout=False, slin
             measure('home-after-proxies')
         finally:
             # All tests use proxy off. Stop this owned process group, including
-            # the bundled core, even if screenshot/measurement fails.
+            # the bundled core, even if a measurement fails.
             try:
                 os.killpg(app.pid, signal.SIGTERM)
             except ProcessLookupError:

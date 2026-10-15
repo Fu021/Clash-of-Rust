@@ -20,14 +20,15 @@ Clash of Rust application source and installer scripts use GPL-3.0-only.
 RegionRestrictionCheck platform detector (upstream contributors):
 https://github.com/1-stream/RegionRestrictionCheck
 Revision: ef841d0a2910a44a6ca565e3a03de0f2282d83b3.
-The upstream source, adapted reference and derived Rust decisions retain AGPL-3.0-only.
+The derived Rust decisions and retained detector data use AGPL-3.0-only.
 License and source/modification notes are installed in resources/ip-check.
-Unmodified upstream source and the derived Rust source are in the corresponding repository revision.
+Upstream reference source: https://github.com/1-stream/RegionRestrictionCheck/tree/ef841d0a2910a44a6ca565e3a03de0f2282d83b3
+Derived Rust source is in crates/client-core/src/detection/regions/platforms.rs.
 Corresponding combined source: https://github.com/Fu021/Clash-of-Rust
 Use the source revision matching the application release. GPLv3/AGPLv3 section 13 applies to the combination.
 
 Native platform checks use upstream-derived RegionRestrictionCheck decisions
-compiled to Rust (AGPL-3.0-only). No Bash/MSYS, curl, GNU command-line tools,
+ported to Rust (AGPL-3.0-only). No Bash/MSYS, curl, GNU command-line tools,
 jq or OpenSSL runtime is bundled for these checks. Request/parse/cancellation
 code is in crates/client-core/src/detection/regions; Rust crate versions and licenses are in Cargo.lock
 and their corresponding upstream sources.

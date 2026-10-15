@@ -268,32 +268,3 @@ pub(super) fn notify_kde() -> Result<()> {
     }
     Ok(())
 }
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    #[test]
-    #[ignore = "Run with GSETTINGS_BACKEND=memory to isolate desktop settings"]
-    fn native_gsettings_round_trip_on_isolated_memory_backend() {
-        assert_eq!(std::env::var("GSETTINGS_BACKEND").unwrap(), "memory");
-        let schema = "org.gnome.system.proxy.http";
-        assert_eq!(setting(&["writable", schema, "port"]).unwrap(), "true");
-        setting(&["set", schema, "port", "7897"]).unwrap();
-        setting(&["set", schema, "host", "'127.0.0.1'"]).unwrap();
-        sync();
-        assert_eq!(setting(&["get", schema, "port"]).unwrap(), "7897");
-        assert_eq!(setting(&["get", schema, "host"]).unwrap(), "'127.0.0.1'");
-        assert!(setting(&["get", "missing.proxy.schema", "port"]).is_err());
-    }
-    #[test]
-    #[ignore = "Run under dbus-run-session to isolate the desktop D-Bus bus"]
-    fn native_kde_signal_on_isolated_bus() {
-        notify_kde().unwrap();
-    }
-
-    #[test]
-    #[ignore = "Run under dbus-run-session to isolate the desktop D-Bus bus"]
-    fn no_tray_host_on_isolated_bus() {
-        assert!(ensure_tray_available().is_err());
-    }
-}

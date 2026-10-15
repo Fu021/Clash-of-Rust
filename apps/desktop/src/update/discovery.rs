@@ -377,31 +377,4 @@ mod tests {
                 .starts_with("GET http://api.invalid/releases HTTP/1.1")
         );
     }
-
-    #[tokio::test]
-    #[ignore = "checks official GitHub stable redirect and asset headers without installing"]
-    async fn official_latest_detects_stable_version_and_installer_without_api() {
-        let route = Route {
-            label: "系统代理",
-            proxy: crate::platform::configured_proxy("https").unwrap(),
-        };
-        let response = client(&route)
-            .unwrap()
-            .get(LATEST_URL)
-            .send()
-            .await
-            .unwrap();
-        let available = latest_response(response, "0.0.0").await.unwrap().unwrap();
-        assert!(!available.preview);
-        let package = latest_package(&available, &route).await.unwrap().unwrap();
-        assert!(package.asset.size > 0 && package.asset.size <= PACKAGE_LIMIT);
-        assert_eq!(
-            package.asset.name,
-            package_name(&available.version).unwrap()
-        );
-        eprintln!(
-            "Stable-only discovery: {} ({} bytes)",
-            available.version, package.asset.size
-        );
-    }
 }

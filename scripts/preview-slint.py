@@ -14,7 +14,6 @@ import sys
 
 ROOT = Path(__file__).resolve().parents[1]
 ENTRY = ROOT / "crates/client-ui/ui/preview.slint"
-STYLE_ENTRY = ROOT / "crates/client-ui/ui/concepts/style-study.slint"
 PAGES = {
     "home": "首页",
     "proxies": "代理",
@@ -167,7 +166,6 @@ def main() -> None:
     parser.add_argument("--dialogs", action="store_true", help="also render confirmation, editing and result dialogs")
     parser.add_argument("--live", action="store_true", help="open the viewer with automatic reload")
     parser.add_argument("--check", action="store_true", help="only check Slint syntax and bindings")
-    parser.add_argument("--concepts", action="store_true", help="preview three alternative design directions")
     parser.add_argument("--pairs", action="store_true", help="also render light/dark pairs suitable for inline sharing")
     parser.add_argument("--full-settings", action="store_true", help="show all settings without scrolling in its page screenshot")
     parser.add_argument("--size", default="950x700")
@@ -194,7 +192,7 @@ def main() -> None:
                           '<fontconfig><include ignore_missing="yes">/etc/fonts/fonts.conf</include>'
                           f'<cachedir>{escape(str(cache))}</cachedir></fontconfig>', encoding="utf-8")
     env = {**os.environ, "FONTCONFIG_FILE": str(fontconfig), "SLINT_SCALE_FACTOR": "1"}
-    entry = STYLE_ENTRY if args.concepts else ENTRY
+    entry = ENTRY
     run_viewer(args.viewer, ["--check", str(entry)], env)
     if args.check:
         print("Slint UI syntax and bindings: OK")
@@ -204,33 +202,10 @@ def main() -> None:
     themes = ["light", "dark"] if args.theme == "both" else [args.theme]
     if args.live:
         fixture = fixtures / "live.json"
-        values = {"design": 0} if args.concepts else {"preview-page": list(PAGES).index(pages[0])}
-        fixture.write_text(json.dumps({**values, "dark" if args.concepts else "preview-dark": themes[0] == "dark"}))
+        values = {"preview-page": list(PAGES).index(pages[0])}
+        fixture.write_text(json.dumps({**values, "preview-dark": themes[0] == "dark"}))
         subprocess.run([args.viewer, "--auto-reload", "--load-data", str(fixture), str(entry)],
                        cwd=ROOT, env=env, check=True)
-        return
-
-    if args.concepts:
-        entries = []
-        for theme in themes:
-            for design, (name, label) in enumerate([
-                ("style-a", "A · 简洁原生"), ("style-b", "B · 柔和卡片"), ("style-c", "C · 紧凑工作台")
-            ]):
-                fixture = fixtures / f"{name}-{theme}.json"
-                fixture.write_text(json.dumps({"design": design, "dark": theme == "dark"}))
-                image = output / f"{name}-{theme}.png"
-                run_viewer(args.viewer, ["--load-data", str(fixture), "--size", args.size,
-                                       "--screenshot", str(image), str(entry)], env)
-                actual_width, actual_height = image_size(image)
-                entries.append({"page": name, "label": label, "dialog": 0, "theme": theme,
-                                "file": image.name, "width": actual_width, "height": actual_height})
-                print(f"Rendered {name}-{theme}: {actual_width}x{actual_height}", flush=True)
-        overviews = [overview(args.viewer, entries, theme, output, env) for theme in themes]
-        (output / "manifest.json").write_text(json.dumps({"entry": str(entry.relative_to(ROOT)),
-                                                         "screenshots": entries, "overviews": overviews},
-                                                        ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
-        gallery(entries, output)
-        print(f"Style comparison: {output / 'index.html'}")
         return
 
     scenes = [(name, PAGES[name], name, 0) for name in pages]

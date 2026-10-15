@@ -968,26 +968,6 @@ mod tests {
         server.await.unwrap();
     }
 
-    #[tokio::test]
-    #[ignore = "downloads the current official installer without executing it"]
-    async fn downloads_and_verifies_the_official_installer() {
-        let proxy = std::env::var("UPDATE_TEST_PROXY_PORT")
-            .ok()
-            .map(|value| value.parse::<u16>().unwrap());
-        let available = fetch(&client(Duration::from_secs(20)), API_URL, "0.0.0")
-            .await
-            .unwrap()
-            .unwrap();
-        let downloaded = download(available, proxy, |_| {}).await.unwrap();
-        assert!(downloaded.package.is_file());
-        eprintln!(
-            "Verified {}: {} bytes, SHA256 {} (not installed)",
-            downloaded.version,
-            std::fs::metadata(&downloaded.package).unwrap().len(),
-            downloaded.sha256
-        );
-    }
-
     async fn package_proxy(
         body: Vec<u8>,
         expected: String,
@@ -1229,27 +1209,5 @@ mod tests {
                 .contains("2 MiB")
         );
         server.await.unwrap();
-    }
-
-    #[tokio::test]
-    #[ignore = "requires access to the public GitHub API"]
-    async fn checks_official_release_feed() {
-        let result = check(None).await.unwrap();
-        eprintln!("Client {}: {result:?}", crate::VERSION);
-        if let Some(update) = result {
-            assert!(
-                Version::parse(&update.version)
-                    .unwrap()
-                    .cmp_precedence(&Version::parse(crate::VERSION).unwrap())
-                    .is_gt()
-            );
-        }
-        // An older client must detect the project's published stable releases.
-        let update = fetch(&client(Duration::from_secs(15)), API_URL, "0.0.0")
-            .await
-            .unwrap()
-            .unwrap();
-        assert!(update.url.starts_with(&format!("{RELEASES_URL}/tag/")));
-        assert!(!update.preview);
     }
 }

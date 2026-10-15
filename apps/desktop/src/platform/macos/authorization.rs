@@ -89,11 +89,6 @@ pub fn run(command: &mut Command, operation: &str, timeout: Duration) -> Result<
 }
 
 #[cfg(test)]
-pub(super) fn without_dialog(script: &str) -> Result<()> {
-    execute_script(script, false)
-}
-
-#[cfg(test)]
 mod tests {
     use super::*;
     #[test]
@@ -107,22 +102,5 @@ mod tests {
         .unwrap_err();
         assert!(error.to_string().contains("超时"));
         assert!(start.elapsed() < Duration::from_secs(2));
-    }
-    #[test]
-    #[ignore = "requires native macOS osascript; does not request administrator authorization"]
-    fn native_authorization_script_quotes_paths_and_reports_cancellation() {
-        let directory = tempfile::Builder::new()
-            .prefix("clash path ' 空格 ")
-            .tempdir()
-            .unwrap();
-        let marker = directory.path().join("quoted ' marker");
-        without_dialog(&format!(
-            "/usr/bin/touch {}",
-            shell_quote(&marker.to_string_lossy())
-        ))
-        .unwrap();
-        assert!(marker.exists());
-        let error = without_dialog("error number -128").unwrap_err();
-        assert!(error.to_string().contains("已取消系统授权"));
     }
 }

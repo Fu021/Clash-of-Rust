@@ -2027,45 +2027,6 @@ mod memory_tests {
         assert_eq!(result.unwrap_err().kind(), std::io::ErrorKind::AddrInUse);
     }
 
-    #[cfg(target_os = "macos")]
-    #[tokio::test]
-    #[ignore = "creates a root-owned TCP connection on disposable macOS Actions only"]
-    async fn native_mac_root_to_user_port_reuse() {
-        assert_eq!(std::env::var("GITHUB_ACTIONS").as_deref(), Ok("true"));
-        use std::io::BufRead;
-        let script = "import socket\ns=socket.socket()\ns.setsockopt(socket.SOL_SOCKET,socket.SO_REUSEADDR,1)\ns.settimeout(5)\ns.bind(('127.0.0.1',0))\ns.listen(1)\nprint(s.getsockname()[1],flush=True)\nc,_=s.accept()\nc.sendall(b'root connection')\nc.shutdown(socket.SHUT_WR)\nc.close()\ns.close()\n";
-        let mut server = std::process::Command::new("/usr/bin/sudo")
-            .args(["-n", "/usr/bin/python3", "-c", script])
-            .stdout(std::process::Stdio::piped())
-            .spawn()
-            .unwrap();
-        let mut port = String::new();
-        std::io::BufReader::new(server.stdout.take().unwrap())
-            .read_line(&mut port)
-            .unwrap();
-        let port: u16 = port.trim().parse().unwrap();
-        let mut connection = tokio::net::TcpStream::connect(("127.0.0.1", port))
-            .await
-            .unwrap();
-        let mut response = Vec::new();
-        connection.read_to_end(&mut response).await.unwrap();
-        drop(connection);
-        assert!(server.wait().unwrap().success());
-        assert_eq!(response, b"root connection");
-        assert_eq!(
-            mac_port_probe(port).unwrap_err().kind(),
-            std::io::ErrorKind::AddrInUse,
-            "the old process is gone but root-owned TIME_WAIT must reproduce the reported failure"
-        );
-        let logs = Arc::new(Mutex::new(VecDeque::new()));
-        wait_for_mac_port(port, &logs, Duration::ZERO)
-            .await
-            .unwrap();
-        assert!(!logs.lock().unwrap().is_empty());
-        let listener = mac_port_probe(port).unwrap();
-        assert_eq!(listener.local_addr().unwrap().port(), port);
-    }
-
     #[tokio::test]
     async fn validation_output_is_drained_after_capture_limit() {
         use tokio::io::AsyncWriteExt;

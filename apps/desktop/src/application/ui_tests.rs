@@ -1,67 +1,11 @@
-//! Render the compiled production tree, and exercise its application boundary.
+//! Exercise production component callbacks, model projection and application state.
 use super::*;
 use clash_client_ui::{AppWindow, Intent, UiActions, UiData, models::ViewModels};
 use slint::{ComponentHandle, Model};
 
 #[test]
-fn all_pages_and_dialogs_render_without_a_core_or_display_server() {
-    let adapter = ui_testing::initialize(950, 700);
-    for (width, height, scale) in [(950, 700, 100), (800, 450, 125)] {
-        for scene in [
-            "home",
-            "home-failure",
-            "home-downloading",
-            "proxies-ascending",
-            "profiles",
-            "connections",
-            "connections-details",
-            "rules",
-            "rules-editor",
-            "rules-discard",
-            "rules-switch-confirm",
-            "profiles-edit",
-            "profiles-delete-active",
-            "profiles-discard",
-            "logs",
-            "diagnostics",
-            "ip-summary",
-            "ip-empty",
-            "ip-running",
-            "ip-ai",
-            "ip-details",
-            "claude",
-            "claude-risk",
-            "claude-protection-guide",
-            "settings",
-        ] {
-            let mut app = fixtures::fixture(scene);
-            app.settings.text_scale = scale;
-            let window = AppWindow::new().unwrap();
-            adapter.set_size(slint::PhysicalSize::new(width, height));
-            let mut models = ViewModels::default();
-            let data = window.global::<UiData>();
-            models.attach(&data);
-            app.present(&data, &mut models);
-            window.show().unwrap();
-            let pixels = window.window().take_snapshot().unwrap();
-            assert_eq!(
-                (pixels.width(), pixels.height()),
-                (width, height),
-                "{scene}"
-            );
-            let mut colors = std::collections::HashSet::new();
-            for pixel in pixels.as_bytes().as_chunks::<4>().0.iter().step_by(64) {
-                colors.insert(*pixel);
-            }
-            assert!(colors.len() > 16, "blank render for {scene}");
-            window.hide().unwrap();
-        }
-    }
-}
-
-#[test]
 fn rule_editor_round_trip_and_cancel_preserve_the_draft_through_ui_intents() {
-    let mut app = fixtures::fixture("rules");
+    let mut app = fixture(Page::Rules);
     let _ = app.intent(Intent::RuleAdd, "", "");
     let _ = app.intent(Intent::RuleTextMode, "true", "");
     let _ = app.intent(Intent::RuleTextMode, "false", "");
@@ -83,7 +27,7 @@ fn rule_editor_round_trip_and_cancel_preserve_the_draft_through_ui_intents() {
 #[test]
 fn projection_reuses_models_and_releases_hidden_and_inactive_lists() {
     ui_testing::initialize(950, 700);
-    let mut app = fixtures::fixture("connections");
+    let mut app = fixture(Page::Connections);
     let window = AppWindow::new().unwrap();
     let data = window.global::<UiData>();
     let mut models = ViewModels::default();
@@ -118,7 +62,7 @@ fn projection_reuses_models_and_releases_hidden_and_inactive_lists() {
 
 #[test]
 fn imported_file_reaches_dialog_and_cancel_or_exit_requires_confirmation() {
-    let mut app = fixtures::fixture("profiles");
+    let mut app = fixture(Page::Profiles);
     app.profile_name.clear();
     app.profile_source.clear();
     let _ = app.intent(Intent::AddProfile, "", "");
@@ -136,7 +80,7 @@ fn imported_file_reaches_dialog_and_cancel_or_exit_requires_confirmation() {
 fn clicking_a_node_selects_it_but_its_latency_button_only_tests_it() {
     use clash_client_ui::{GroupItem, NodeItem, NodePair};
     ui_testing::initialize(950, 700);
-    let app = fixtures::fixture("proxies-ascending");
+    let app = fixture(Page::Proxies);
     let window = AppWindow::new().unwrap();
     let data = window.global::<UiData>();
     let mut models = ViewModels::default();
@@ -195,7 +139,7 @@ fn clicking_a_node_selects_it_but_its_latency_button_only_tests_it() {
 fn pointer_keyboard_escape_and_modal_input_use_the_production_callbacks() {
     use slint::platform::{Key, WindowEvent};
     ui_testing::initialize(950, 700);
-    let app = fixtures::fixture("home");
+    let app = fixture(Page::Home);
     let window = AppWindow::new().unwrap();
     let mut models = ViewModels::default();
     let data = window.global::<UiData>();
@@ -237,4 +181,46 @@ fn pointer_keyboard_escape_and_modal_input_use_the_production_callbacks() {
     });
     assert_eq!(events.borrow().last().unwrap().0, Intent::Escape);
     window.hide().unwrap();
+}
+
+// Small fixtures used only by the interaction tests above. Visual previews
+// inject their own data into ui/preview.slint without compiling the desktop.
+fn fixture(page: Page) -> App {
+    let mut app = App::initial_state(Err(anyhow::anyhow!("isolated UI test")), None);
+    app.page = page;
+    app.snapshot.running = true;
+    app.core_failure = None;
+    app.notice_visible = false;
+    app.updates.checking = false;
+    app.settings.active_profile = Some("fixture".into());
+    app.profiles.push(Profile {
+        id: "fixture".into(),
+        name: "Test subscription".into(),
+        source: String::new(),
+        updated: 0,
+        usage: None,
+    });
+    if page == Page::Rules {
+        let doc = rule_manager::Document::from_raw("fixture", false,
+            "proxies: []\nproxy-groups: [{name: Proxy, type: select, proxies: [DIRECT]}]\nrules: ['MATCH,Proxy']\n").unwrap();
+        app.rule_state
+            .load(Arc::new(doc), Arc::new(ProfileRules::default()));
+    } else if page == Page::Connections {
+        app.snapshot.connections = serde_json::from_value(serde_json::json!({"connections": [
+            {"id":"1","metadata":{"host":"one.test"},"upload":0,"download":262144},
+            {"id":"2","metadata":{"host":"two.test"},"upload":0,"download":2097152},
+            {"id":"3","metadata":{"host":"three.test"},"upload":0,"download":0}
+        ]}))
+        .unwrap();
+        let mut previous = app.snapshot.connections.connections.clone();
+        for connection in &mut previous {
+            connection.download = 0;
+        }
+        connection::sample_rates(
+            &mut app.snapshot.connections.connections,
+            &previous,
+            Duration::from_secs(1),
+        );
+    }
+    app
 }

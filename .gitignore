@@ -2,6 +2,7 @@
 /bin/
 /bundle/
 /dist/
+/ci-build/
 /tools/
 /.local-tools/
 

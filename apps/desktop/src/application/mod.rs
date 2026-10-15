@@ -5,8 +5,6 @@ use commands::{Action, Reply, execute};
 mod bindings;
 mod bootstrap;
 mod claude;
-#[cfg(any(test, feature = "ui-preview"))]
-mod fixtures;
 mod format;
 mod interaction;
 #[cfg(target_os = "macos")]
@@ -14,9 +12,7 @@ mod interaction;
 mod mac_desktop;
 mod presentation;
 mod rules;
-#[cfg(feature = "ui-preview")]
-pub(crate) mod ui_preview;
-#[cfg(any(test, feature = "ui-preview"))]
+#[cfg(test)]
 mod ui_testing;
 #[cfg(test)]
 mod ui_tests;

@@ -530,6 +530,16 @@ fn apply_rules(map: &mut Mapping, overrides: &RuleOverrides) -> Result<()> {
 #[cfg(test)]
 mod tests {
     #[test]
+    fn data_directory_is_exclusive() {
+        let tmp = tempfile::tempdir().unwrap();
+        let store = super::Store::at(tmp.path().to_owned()).unwrap();
+        let first = store.instance_lock().unwrap();
+        assert!(store.instance_lock().is_err());
+        drop(first);
+        assert!(store.instance_lock().is_ok());
+    }
+
+    #[test]
     fn old_theme_is_preserved_and_new_appearance_options_have_small_defaults() {
         let old: super::Settings = serde_json::from_str(r#"{"dark":false}"#).unwrap();
         assert!(!old.dark);

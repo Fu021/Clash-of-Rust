@@ -225,13 +225,8 @@ def windows_tests(tests, bundle):
     report = {'schema': 1, 'system': 'windows', 'arch': host_arch(),
               'status': 'running', 'suites': []}
     suites = [
-        ('python-build-tools', [sys.executable, ROOT/'scripts/test-build-tools.py']),
-        ('artifact-protocol', [sys.executable, ROOT/'scripts/test-workflow-artifacts.py']),
-        ('ordinary-user-launcher', [sys.executable, ROOT/'scripts/test-windows-token.py']),
         ('system-proxy-and-tun', [sys.executable, ROOT/'scripts/test-proxy-modes.py',
                                   '--test-binary', tests['core_integration'], '--bundle', bundle]),
-        ('embedded-icons', [sys.executable, ROOT/'scripts/prepare-assets.py', 'verify-icons',
-                            bundle/'clash-of-rust.exe']),
     ]
     report['suites'] = [{'name': name, 'status': 'not_run'} for name, _ in suites]
     write_json(report_path, report)

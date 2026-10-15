@@ -230,13 +230,3 @@ async fn basic_system_proxy_and_tun() {
     assert!(!store.root.join("system-proxy.json").exists());
     println!("PASS: native system proxy, HTTP forwarding, TUN capture and cleanup");
 }
-
-#[test]
-fn data_directory_is_exclusive() {
-    let tmp = tempfile::tempdir().unwrap();
-    let store = Store::at(tmp.path().to_owned()).unwrap();
-    let first = store.instance_lock().unwrap();
-    assert!(store.instance_lock().is_err());
-    drop(first);
-    assert!(store.instance_lock().is_ok());
-}
