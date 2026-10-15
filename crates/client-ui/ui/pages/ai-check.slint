@@ -1,82 +1,92 @@
-import { Theme, Demo } from "../theme/palette.slint";
-import { Label, Caption, Heading, Panel, ActionButton, Toggle, Badge } from "../components/controls.slint";
-
-component ResultEntry inherits Panel {
+import { ScrollView } from "std-widgets.slint";
+import { Theme } from "../theme/palette.slint";
+import { UiData, UiActions, Intent } from "../state.slint";
+import { Label, Caption, Heading, ContentPanel, RowPanel, ActionButton, Toggle, Badge, Paragraph } from "../components/controls.slint";
+component ResultEntry inherits ContentPanel {
     in property <string> title;
     in property <string> count;
     in property <string> description;
-    in property <bool> risk: false;
-    callback clicked();
-    height: 118px;
-    VerticalLayout {
-        padding: 18px; spacing: 8px;
-        HorizontalLayout {
-            Heading { text: root.title; }
-            Label { text: root.count; font-size: 30px; color: root.risk ? Theme.danger : Theme.success; horizontal-alignment: right; }
-        }
-        HorizontalLayout {
-            Caption { text: root.description; }
-            Caption { text: "查看详情 →"; color: Theme.accent; horizontal-alignment: right; }
-        }
+    in property <bool> risk;
+    interactive: true;
+    HorizontalLayout { cross-axis-alignment: center;
+        Heading { text: root.title; }
+        Label { text: root.count; font-size: 30px * Theme.text-scale; color: root.risk ? Theme.danger : Theme.success; horizontal-alignment: right; }
     }
-    TouchArea { mouse-cursor: pointer; clicked => { root.clicked(); } }
+    HorizontalLayout { cross-axis-alignment: center;
+        Caption { text: root.description; }
+        Caption { text: "查看详情 →"; color: Theme.accent; horizontal-alignment: right; }
+    }
 }
-
 export component AiCheckPage inherits Rectangle {
-    callback request-dialog(int);
-    property <bool> checking: false;
-    Timer { interval: 2s; running: root.checking; triggered => { root.checking = false; } }
-    VerticalLayout {
-        spacing: 16px;
-        Panel {
-            height: 132px;
-            border-color: Demo.protected ? Theme.accent : Theme.line;
-            VerticalLayout {
-                padding: 18px; spacing: 10px;
-                HorizontalLayout {
-                    spacing: 10px;
-                    Heading { text: "Claude 保护"; }
-                    Badge { text: Demo.protected ? "已开启" : "未开启"; tone: Demo.protected ? 1 : 4; }
+    ScrollView {
+        x: 0px; width: parent.width + Theme.content-gap;
+        VerticalLayout {
+            alignment: start; padding-right: Theme.content-gap; spacing: Theme.page-gap;
+            ContentPanel {
+                border-color: UiData.protected ? Theme.accent : Theme.line;
+                HorizontalLayout { cross-axis-alignment: center; spacing: Theme.content-gap;
+                    Heading { text: "Claude 保护"; horizontal-stretch: 0; }
+                    Badge { text: UiData.protected ? "已开启" : "未开启"; tone: UiData.protected ? 1 : 4; }
                     Rectangle { horizontal-stretch: 1; }
-                    Toggle { checked: Demo.protected; toggled(value) => { if value { root.request-dialog(3); } else { Demo.protected = false; } } }
+                    Toggle { enabled: !UiData.working && !UiData.exiting && !UiData.claude-busy && (UiData.running || UiData.protected); checked: UiData.protected; toggled(value) => { UiActions.dispatch(Intent.claude-protection, value ? "true" : "false", ""); } }
                 }
-                Caption { text: Demo.protected ? "使用节点：" + Demo.node + " · 实时保护中" : "一键启用 TUN、广泛规则、代理 DNS 与实时拦截"; }
+                Caption { text: UiData.protected ? "保护节点：" + UiData.protection-node : "一键启用 TUN、广泛规则、代理 DNS 与实时拦截"; }
                 Caption { text: "可能影响其他应用与国内网站；关闭后恢复原状态。"; color: Theme.warning; }
             }
-        }
-        HorizontalLayout {
-            spacing: 12px;
-            Heading { text: root.checking ? "正在检测本机与网络地区线索…" : "检测完成"; }
-            Caption { text: "浏览器自动检测 · 项目配置扫描"; horizontal-alignment: right; }
-            ActionButton { text: root.checking ? "检测中…" : "重新检测"; primary: true; enabled: !root.checking; clicked => { root.checking = true; } }
-        }
-        Rectangle {
-            height: 3px; background: Theme.subtle-line;
-            Rectangle { x: 0px; y: 0px; width: parent.width * (root.checking ? 0.55 : 1); height: parent.height; background: Theme.accent; }
-        }
-        HorizontalLayout {
-            spacing: 14px;
-            ResultEntry { title: "正常项目"; count: "61"; description: "网络出口、地区线索与配置"; clicked => { root.request-dialog(8); } }
-            ResultEntry { title: "风险项目"; count: "3"; description: "需要检查的环境差异与配置"; risk: true; clicked => { root.request-dialog(7); } }
-        }
-        Panel {
-            height: 80px;
-            HorizontalLayout {
-                padding: 18px; spacing: 12px;
-                VerticalLayout { horizontal-stretch: 1; Heading { text: "其他线索"; } Caption { text: "证据不足或需要进一步确认的结果"; } }
-                Label { text: "12"; font-size: 26px; color: Theme.warning; horizontal-stretch: 0; width: 38px; }
-                Label { text: "查看详情 →"; color: Theme.accent; width: 96px; horizontal-stretch: 0; horizontal-alignment: right; }
+            HorizontalLayout { cross-axis-alignment: center; spacing: Theme.content-gap;
+                Heading { text: UiData.claude-busy ? "正在检测…" : "地区线索检测"; }
+                ActionButton { text: "检测选项"; clicked => { UiActions.dispatch(Intent.claude-guide, "diagnostics", ""); } }
+                ActionButton { text: "导出报告"; enabled: UiData.ready; clicked => { UiActions.dispatch(Intent.claude-export, "", ""); } }
+                ActionButton { text: UiData.claude-busy ? "取消" : "开始检测"; primary: true; enabled: UiData.running; clicked => { UiActions.dispatch(UiData.claude-busy ? Intent.claude-cancel : Intent.claude-start, "", ""); } }
             }
-            TouchArea { mouse-cursor: pointer; clicked => { root.request-dialog(9); } }
-        }
-        Panel {
-            height: 92px;
-            VerticalLayout {
-                padding: 16px; spacing: 8px;
-                Label { text: "出口地区：德国 · 浏览器：德国"; }
-                Caption { text: "结果反映本次采样；未确认的线索可进入详情继续检查。"; }
+            if UiData.claude-busy: Rectangle { height: 3px; background: Theme.subtle-line;
+                Rectangle { x: 0px; y: 0px; width: parent.width * UiData.claude-progress; height: parent.height; background: Theme.accent; }
+            }
+            if UiData.claude-status != "": Paragraph { text: UiData.claude-status; font-size: Theme.detail-size; color: UiData.claude-error ? Theme.danger : Theme.secondary; }
+            if UiData.claude-audit != "": Caption { text: UiData.claude-audit; }
+            if UiData.claude-guard != "": Caption { text: UiData.claude-guard; }
+            if UiData.browser-session: RowPanel {
+                Caption { text: "浏览器正在自动采样；离开此页会关闭回传入口。"; }
+                ActionButton { text: "关闭入口"; clicked => { UiActions.dispatch(Intent.claude-close-session, "", ""); } }
+            }
+            if UiData.claude-filter < 0: VerticalLayout {
+                spacing: Theme.page-gap;
+                HorizontalLayout { cross-axis-alignment: center; spacing: Theme.page-gap;
+                    ResultEntry { width: (root.width - Theme.page-gap) / 2; title: "正常项目"; count: UiData.claude-normal; description: "网络出口、地区线索与配置"; clicked => { UiActions.dispatch(Intent.claude-filter, "0", ""); } }
+                    ResultEntry { width: (root.width - Theme.page-gap) / 2; title: "风险项目"; count: UiData.claude-risk; description: "需要检查的环境差异与配置"; risk: true; clicked => { UiActions.dispatch(Intent.claude-filter, "1", ""); } }
+                }
+                RowPanel {
+                    VerticalLayout { spacing: 4px; Heading { text: "其他线索"; } Caption { text: "证据不足或需要进一步确认的结果"; } }
+                    Label { text: UiData.claude-clues; font-size: 26px * Theme.text-scale; color: Theme.warning; horizontal-stretch: 0; }
+                    Caption { text: "查看详情 →"; color: Theme.accent; horizontal-stretch: 0; }
+                    interactive: true; clicked => { UiActions.dispatch(Intent.claude-filter, "2", ""); }
+                }
+                RowPanel {
+                    Caption { text: "浏览器自动采样 · 扫描已知 Claude 项目配置"; }
+                    ActionButton { text: "补充采样"; clicked => { UiActions.dispatch(Intent.claude-guide, "supplement", ""); } }
+                }
+            }
+            if UiData.claude-filter >= 0: VerticalLayout {
+                spacing: Theme.page-gap;
+                HorizontalLayout { cross-axis-alignment: center;
+                    ActionButton { text: "← 返回报告"; clicked => { UiActions.dispatch(Intent.claude-filter, "-1", ""); } }
+                    Caption { text: UiData.claude-result-status; horizontal-alignment: right; }
+                }
+                for result in UiData.claude-results: ContentPanel {
+                    HorizontalLayout { cross-axis-alignment: center; spacing: Theme.content-gap;
+                        Heading { text: result.title; }
+                        Badge { text: result.tone == 1 ? "正常" : result.tone == 3 ? "风险" : "线索"; tone: result.tone; }
+                    }
+                    Paragraph { text: result.value; }
+                    if result.detail != "": Paragraph { text: result.detail; font-size: Theme.detail-size; color: Theme.secondary; }
+                    if result.source != "": Paragraph { text: result.source; font-size: Theme.detail-size; color: Theme.muted; }
+                }
+                HorizontalLayout { cross-axis-alignment: center; spacing: Theme.content-gap;
+                    Caption { text: UiData.claude-result-status; }
+                    ActionButton { text: "上一页"; enabled: UiData.claude-previous; clicked => { UiActions.dispatch(Intent.claude-page, "" + (UiData.claude-result-page - 1), ""); } }
+                    ActionButton { text: "下一页"; enabled: UiData.claude-next; clicked => { UiActions.dispatch(Intent.claude-page, "" + (UiData.claude-result-page + 1), ""); } }
+                }
             }
         }
-        Rectangle { vertical-stretch: 1; }
     }
 }

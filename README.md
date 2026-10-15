@@ -59,7 +59,7 @@ python scripts/build-installer.py
 **Debian/Ubuntu（Ubuntu 仅支持 22.04 及以上）**：安装构建依赖后执行：
 
 ```text
-sudo apt install build-essential pkg-config dpkg-dev libglib2.0-dev libxkbcommon-dev libwayland-dev libx11-dev libx11-xcb-dev
+sudo apt install build-essential pkg-config dpkg-dev libglib2.0-dev libfontconfig1-dev libfreetype6-dev libxkbcommon-dev libwayland-dev libx11-dev libx11-xcb-dev
 python3 scripts/build-installer.py
 ```
 
@@ -74,7 +74,7 @@ MACOSX_DEPLOYMENT_TARGET=14.0 python3 scripts/build-installer.py
 
 ## 开发与发布
 
-项目使用 Cargo workspace：`crates/client-core` 保存共享配置、订阅、规则、检测、实时保护、Geo 更新和代理切换策略；`apps/desktop` 保存 Iced 界面、桌面内核管理及系统集成。共享库不依赖桌面应用，通知、系统代理等操作由各平台提供实现；移动端后续复用同一套业务逻辑。Android、iOS、移动桥接与移动内核目录目前仅占位。根目录运行 `cargo run` 默认启动桌面应用，资源和打包输出仍统一放在仓库根目录。
+项目使用 Cargo workspace：`crates/client-core` 保存共享配置、订阅、规则、检测、实时保护、Geo 更新和代理切换策略；`crates/client-ui` 保存 Slint 页面、共用控件与增量列表模型；`apps/desktop/src/application` 负责应用状态、任务调度和界面绑定，`apps/desktop` 的其他模块负责桌面内核管理及系统集成。共享库不依赖桌面应用，通知、系统代理等操作由各平台提供实现；移动端后续复用同一套业务逻辑。Android、iOS、移动桥接与移动内核目录目前仅占位。根目录运行 `cargo run` 默认启动桌面应用，资源和打包输出仍统一放在仓库根目录。
 
 Windows 开发版本使用按需启动的网络服务承接 TUN 权限，首次安装或修复时授权，GUI 保持普通权限；正常重启后复用服务注册，空闲服务自动退出。
 
@@ -92,4 +92,4 @@ python scripts/test-workflow-artifacts.py
 
 Rust 界面及原创通用代码采用 **GPL-3.0-only**，见 [LICENSE](LICENSE)。IP 检测复用的 RegionRestrictionCheck 源码及派生逻辑保留 **AGPL-3.0-only**，见 [授权及修改说明](vendor/region-restriction-check/SOURCE.md)；组合发行遵守 GPLv3/AGPLv3 第 13 条，包括适用时向远程网络用户提供完整对应源码。
 
-mihomo 采用 GPL-3.0，Iced 采用 MIT。第三方软件与数据来源见 [THIRD-PARTY-NOTICES.txt](resources/THIRD-PARTY-NOTICES.txt)。
+mihomo 采用 GPL-3.0，Slint 按 GPL-3.0 使用。第三方软件与数据来源见 [THIRD-PARTY-NOTICES.txt](resources/THIRD-PARTY-NOTICES.txt)。

@@ -35,7 +35,7 @@ pub fn begin() -> Result<Session, String> {
         } else {
             Ok(None)
         };
-        // Complete asynchronously: never nest an AppKit run loop inside Iced.
+        // Complete asynchronously: never nest an AppKit run loop inside Slint.
         selected_panel.orderOut(None);
         if let Some(sender) = sender.borrow_mut().take() {
             let _ = sender.send(result);

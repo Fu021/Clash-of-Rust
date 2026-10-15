@@ -129,7 +129,7 @@ fn main() {
 }
 
 // Compile only the driver and streaming hash into the Mac helper. In particular,
-// do not link the desktop library, AppKit, fonts or the iced renderer as root.
+// do not link the desktop library, AppKit, fonts or the Slint renderer as root.
 #[cfg(all(target_os = "macos", not(test)))]
 #[path = "../../../crates/client-core/src/storage/hash.rs"]
 mod assets;

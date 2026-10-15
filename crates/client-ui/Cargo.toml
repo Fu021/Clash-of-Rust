@@ -1,0 +1,15 @@
+[package]
+name = "clash-client-ui"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "Slint desktop views and incremental presentation models"
+
+[features]
+test-support = []
+
+[dependencies]
+slint = { workspace = true }
+
+[build-dependencies]
+slint-build = { workspace = true }

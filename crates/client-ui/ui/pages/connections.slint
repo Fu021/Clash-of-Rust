@@ -1,69 +1,63 @@
-import { Theme, Demo } from "../theme/palette.slint";
-import { Label, Caption, Panel, ActionButton, Badge, Field, Divider } from "../components/controls.slint";
-
-struct Connection { host: string, rule: string, route: string, up: string, down: string, upload: string, download: string }
-
+import { ScrollView } from "std-widgets.slint";
+import { Theme } from "../theme/palette.slint";
+import { UiData, UiActions, Intent } from "../state.slint";
+import { Label, Caption, Panel, ActionButton, Field, Badge } from "../components/controls.slint";
+component SortHeading inherits Rectangle {
+    in property <string> label;
+    in property <string> field;
+    height: max(22px, Theme.detail-size * 1.5);
+    Caption { width: parent.width; height: parent.height; text: root.label + (UiData.connection-sort == root.field ? (UiData.descending ? " ↓" : " ↑") : ""); }
+    TouchArea { mouse-cursor: pointer; clicked => { UiActions.dispatch(Intent.connection-sort, root.field, ""); } }
+}
 export component ConnectionsPage inherits Rectangle {
-    property <string> search;
-    property <bool> descending: true;
-    property <int> sort-column: 3;
-    property <[Connection]> rows: root.descending ? [
-        {host: "api.github.com:443", rule: "DOMAIN-SUFFIX", route: "代理选择 → 德国 01", up: "24 KiB/s", down: "1.20 MiB/s", upload: "42.6 KiB", download: "12.4 MiB"},
-        {host: "claude.ai:443", rule: "DOMAIN-SUFFIX", route: "代理选择 → 德国 01", up: "8.1 KiB/s", down: "86.4 KiB/s", upload: "18.2 KiB", download: "4.82 MiB"},
-        {host: "example.com:443", rule: "GEOIP", route: "DIRECT", up: "0 B/s", down: "0 B/s", upload: "2.0 KiB", download: "34.0 KiB"}
-    ] : [
-        {host: "example.com:443", rule: "GEOIP", route: "DIRECT", up: "0 B/s", down: "0 B/s", upload: "2.0 KiB", download: "34.0 KiB"},
-        {host: "claude.ai:443", rule: "DOMAIN-SUFFIX", route: "代理选择 → 德国 01", up: "8.1 KiB/s", down: "86.4 KiB/s", upload: "18.2 KiB", download: "4.82 MiB"},
-        {host: "api.github.com:443", rule: "DOMAIN-SUFFIX", route: "代理选择 → 德国 01", up: "24 KiB/s", down: "1.20 MiB/s", upload: "42.6 KiB", download: "12.4 MiB"}
-    ];
+    property <length> available: root.width - 24px - 48px - 72px;
+    property <length> host-column: root.available * 0.35;
+    property <length> rule-column: root.available * 0.31;
+    property <length> speed-column: root.available * 0.17;
     VerticalLayout {
-        spacing: 14px;
-        HorizontalLayout {
-            spacing: 10px;
-            Field { placeholder: "搜索域名、IP、规则或代理链"; text <=> root.search; }
-            Badge { text: "3 条连接"; tone: 4; }
-            ActionButton { text: "关闭全部"; danger: true; }
+        spacing: Theme.page-gap;
+        HorizontalLayout { cross-axis-alignment: center; spacing: Theme.content-gap;
+            Field { placeholder: "搜索域名、IP、规则或代理链"; focus-id: "page-search"; text <=> UiData.query; edited(value) => { UiActions.dispatch(Intent.query, value, ""); } }
+            Badge { text: UiData.connection-count + " 条连接"; tone: 4; }
+            ActionButton { text: "关闭全部"; danger: true; enabled: UiData.running && !UiData.working; clicked => { UiActions.dispatch(Intent.close-all, "", ""); } }
         }
         Panel {
-            min-height: 360px;
             vertical-stretch: 1;
             VerticalLayout {
                 spacing: 0px;
                 Rectangle {
-                    height: 58px; background: Theme.inset;
-                    HorizontalLayout {
-                        padding-left: 14px; padding-right: 14px; spacing: 10px;
-                        for title[i] in ["连接名称", "规则 / 代理链", "上传速度\n上传量", "下载速度\n下载量", "操作"]: Rectangle {
-                            horizontal-stretch: i < 2 ? 2 : 1;
-                            min-width: i < 2 ? 145px : 72px;
-                            Caption { x: 0px; width: parent.width; height: parent.height; text: title + (root.sort-column == i ? (root.descending ? " ↓" : " ↑") : ""); }
-                            TouchArea {
-                                mouse-cursor: pointer;
-                                clicked => { root.descending = root.sort-column == i ? !root.descending : true; root.sort-column = i; }
-                            }
+                    height: max(52px, Theme.detail-size * 3 + 8px); background: Theme.inset;
+                    HorizontalLayout { cross-axis-alignment: center; padding-left: 12px; padding-right: 12px; spacing: 12px;
+                        VerticalLayout { width: root.host-column; SortHeading { label: "连接名称"; field: "name"; } SortHeading { label: "开始时间"; field: "start"; } }
+                        VerticalLayout { width: root.rule-column; SortHeading { label: "规则"; field: "rule"; } SortHeading { label: "代理链"; field: "chain"; } }
+                        VerticalLayout { width: root.speed-column; SortHeading { label: "上传速度"; field: "upload-rate"; } SortHeading { label: "上传量"; field: "upload-total"; } }
+                        VerticalLayout { width: root.speed-column; SortHeading { label: "下载速度"; field: "download-rate"; } SortHeading { label: "下载量"; field: "download-total"; } }
+                        Caption { width: 72px; text: "操作"; }
+                    }
+                }
+                ScrollView {
+                    for connection[i] in UiData.connections: Rectangle {
+                        y: i * root.row-height;
+                        height: root.row-height;
+                        background: mod(i, 2) == 0 ? Theme.surface : Theme.inset;
+                        TouchArea { mouse-cursor: pointer; clicked => { UiActions.dispatch(Intent.connection-detail, connection.id, ""); } }
+                        HorizontalLayout { cross-axis-alignment: center; padding: 12px; spacing: 12px;
+                            VerticalLayout { width: root.host-column; spacing: 4px; Label { text: connection.host; } Caption { text: connection.detail; } }
+                            VerticalLayout { width: root.rule-column; spacing: 4px; Caption { text: connection.rule; } Caption { text: connection.route; } }
+                            VerticalLayout { width: root.speed-column; spacing: 4px; Label { text: connection.up; } Caption { text: connection.upload; } }
+                            VerticalLayout { width: root.speed-column; spacing: 4px; Label { text: connection.down; color: Theme.accent; } Caption { text: connection.download; } }
+                            ActionButton { width: 72px; text: "关闭"; danger: true; enabled: !UiData.working; clicked => { UiActions.dispatch(Intent.close-connection, connection.id, ""); } }
                         }
                     }
+                    content-height: UiData.connections.length * root.row-height;
                 }
-                for row[i] in root.rows: Rectangle {
-                    height: 96px;
-                    visible: root.search == "" || row.host == root.search || row.rule == root.search || row.route == root.search;
-                    background: mod(i, 2) == 0 ? Theme.surface : Theme.inset;
-                    HorizontalLayout {
-                        padding: 14px; spacing: 10px;
-                        VerticalLayout { horizontal-stretch: 2; min-width: 145px; Label { text: row.host; font-size: 13px; } Caption { text: "TCP · 10:31:26"; color: Theme.muted; } }
-                        VerticalLayout { horizontal-stretch: 2; min-width: 145px; Caption { text: row.rule; } Caption { text: row.route; } }
-                        VerticalLayout { min-width: 72px; horizontal-stretch: 1; Label { text: row.up; font-size: 13px; } Caption { text: row.upload; } }
-                        VerticalLayout { min-width: 72px; horizontal-stretch: 1; Label { text: row.down; font-size: 13px; color: Theme.accent; } Caption { text: row.download; } }
-                        Rectangle { min-width: 72px; horizontal-stretch: 1; ActionButton { y: (parent.height - self.height) / 2; text: "关闭"; danger: true; } }
-                    }
-                }
-                Rectangle { vertical-stretch: 1; }
             }
         }
-        HorizontalLayout {
-            Caption { text: "3 条 · 1–3"; }
-            ActionButton { text: "上一页"; enabled: false; }
-            ActionButton { text: "下一页"; enabled: false; }
+        HorizontalLayout { cross-axis-alignment: center; spacing: Theme.content-gap;
+            Caption { text: UiData.page-status; }
+            ActionButton { text: "上一页"; enabled: UiData.previous; clicked => { UiActions.dispatch(Intent.list-page, "" + max(0, UiData.page-offset - 60), ""); } }
+            ActionButton { text: "下一页"; enabled: UiData.next; clicked => { UiActions.dispatch(Intent.list-page, "" + (UiData.page-offset + 60), ""); } }
         }
     }
+    property <length> row-height: max(84px, Theme.body-size * 3 + 36px);
 }

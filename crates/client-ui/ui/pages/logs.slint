@@ -1,41 +1,35 @@
+import { ScrollView } from "std-widgets.slint";
 import { Theme } from "../theme/palette.slint";
+import { UiData, UiActions, Intent } from "../state.slint";
 import { Label, Caption, Panel, ActionButton, Field, Badge } from "../components/controls.slint";
-
 export component LogsPage inherits Rectangle {
-    property <bool> paused: false;
     VerticalLayout {
-        spacing: 14px;
-        HorizontalLayout {
-            spacing: 10px;
-            Field { placeholder: "搜索日志"; }
-            ActionButton { text: "全部级别 ⌄"; }
-            ActionButton { text: root.paused ? "继续" : "暂停"; clicked => { root.paused = !root.paused; } }
-            ActionButton { text: "清空"; }
+        spacing: Theme.page-gap;
+        HorizontalLayout { cross-axis-alignment: center; spacing: Theme.content-gap;
+            Field { placeholder: "搜索日志"; focus-id: "page-search"; text <=> UiData.query; edited(value) => { UiActions.dispatch(Intent.query, value, ""); } }
+            ActionButton { text: "导出"; enabled: UiData.ready && !UiData.working; clicked => { UiActions.dispatch(Intent.export-logs, "", ""); } }
+            ActionButton { text: "清空"; enabled: UiData.ready && !UiData.working; clicked => { UiActions.dispatch(Intent.clear-logs, "", ""); } }
         }
         Panel {
             vertical-stretch: 1;
-            VerticalLayout {
-                padding: 16px; spacing: 0px;
-                for entry in [
-                    {time: "10:31:28", level: "INFO", message: "[客户端] 配置已更新并生效"},
-                    {time: "10:31:27", level: "INFO", message: "[内核] TCP claude.ai:443 → 代理选择"},
-                    {time: "10:31:26", level: "INFO", message: "[内核] TCP api.github.com:443 → 代理选择"},
-                    {time: "10:31:24", level: "WARN", message: "[内核] DNS 查询超时，正在重试"},
-                    {time: "10:31:23", level: "INFO", message: "[客户端] 订阅更新完成，共载入 24 个节点"},
-                    {time: "10:31:22", level: "INFO", message: "[客户端] 已恢复节点选择与代理模式"},
-                    {time: "10:31:21", level: "INFO", message: "[客户端] mihomo 已启动，控制接口可用"}
-                ]: Rectangle {
-                    height: 53px;
-                    HorizontalLayout {
-                        spacing: 12px;
-                        Caption { text: entry.time; width: 66px; color: Theme.muted; }
-                        Badge { text: entry.level; tone: entry.level == "WARN" ? 2 : 4; width: 52px; }
-                        Label { text: entry.message; font-size: 13px; }
+            ScrollView {
+                VerticalLayout {
+                    alignment: start; padding: Theme.card-padding; spacing: Theme.content-gap;
+                    for entry in UiData.logs: Rectangle {
+                        height: max(44px, Theme.body-size * 1.5 + 16px);
+                        HorizontalLayout { cross-axis-alignment: center; spacing: Theme.page-gap;
+                            Caption { text: entry.time; width: 66px; }
+                            Badge { text: entry.level; tone: entry.tone; width: 52px; }
+                            Label { text: entry.message; }
+                        }
                     }
                 }
-                Rectangle { vertical-stretch: 1; }
             }
         }
-        Caption { text: root.paused ? "日志显示已暂停" : "实时更新中 · 最新日志显示在上方"; }
+        HorizontalLayout { cross-axis-alignment: center; spacing: Theme.content-gap;
+            Caption { text: UiData.page-status; }
+            ActionButton { text: "上一页"; enabled: UiData.previous; clicked => { UiActions.dispatch(Intent.list-page, "" + max(0, UiData.page-offset - 60), ""); } }
+            ActionButton { text: "下一页"; enabled: UiData.next; clicked => { UiActions.dispatch(Intent.list-page, "" + (UiData.page-offset + 60), ""); } }
+        }
     }
 }

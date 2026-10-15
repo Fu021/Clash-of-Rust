@@ -1,0 +1,171 @@
+// Presentation values only. Rust owns validation, effects and saved settings.
+export enum Intent {
+    navigate, query, dismiss-notice, restart-core, mode, proxy-mode,
+    node-sort, toggle-group, group-delay, group-page, select-node, node-delay,
+    list-page, connection-sort, connection-detail, close-connection, close-all,
+    profile-name, profile-source, import-profile, pick-file, open-profiles,
+    activate-profile, update-profile, delete-profile, edit-profile, add-profile,
+    edit-name, edit-source, save-profile, close-profile,
+    rule-profile, rule-confirm-profile, rule-cancel-profile, rule-collapse,
+    rule-toggle, rule-filter, rule-select, rule-add, rule-edit, rule-delete,
+    rule-enable, rule-move, rule-move-open, rule-move-input, rule-move-to,
+    rule-move-edge, rule-restore, rule-discard, rule-apply, rule-close-editor,
+    rule-text-mode, rule-raw, rule-kind, rule-payload, rule-policy, rule-no-resolve,
+    rule-enabled, rule-position, rule-save,
+    clear-logs, export-logs, test-url, dns-host, probe, dns,
+    site-all, site-cancel, site-category, site-open-category, site-status, site-region, site-detail,
+    site-reset, site-report, site-retest, site-probe,
+    claude-start, claude-cancel, claude-close-session, claude-protection, claude-confirm-protection,
+    claude-filter, claude-page, claude-guide, claude-browser, claude-copy-script,
+    claude-import, claude-export, claude-key, claude-save-key, claude-additional,
+    appearance, text-scale, accent-picker, tray-speed, dns-override, ipv6, udp,
+    autostart, controller-port, mixed-port, save-ports, window-width, window-height,
+    reset-window, interval-input, save-interval, update-geo,
+    check-update, install-update, cancel-update, open-release,
+    confirm, cancel-confirm, close-detail, copy, escape, focus-search, quit,
+}
+export struct Choice { id: string, label: string }
+export struct NodeItem { group: string, name: string, kind: string, delay: string, selected: bool, valid: bool }
+export struct NodePair { left: NodeItem, right: NodeItem }
+export struct GroupItem { id: string, title: string, detail: string, current: string, expanded: bool, testing: bool, page: string, previous: bool, next: bool, nodes: [NodePair] }
+export struct ProfileItem { id: string, name: string, source: string, detail: string, active: bool, local: bool }
+export struct ConnectionItem { id: string, host: string, detail: string, rule: string, route: string, up: string, down: string, upload: string, download: string }
+export struct RuleItem { id: string, position: string, kind: string, value: string, policy: string, source: string, selected: bool, enabled: bool }
+export struct LogItem { time: string, level: string, message: string, tone: int }
+export struct ReportItem { id: string, title: string, value: string, detail: string, source: string, tone: int, flag: image, flagged: bool }
+export struct CategoryItem { id: string, title: string, count: string, detail: string, tone: int }
+
+export struct CategoryPair { left: CategoryItem, right: CategoryItem }
+
+export global UiActions { callback dispatch(Intent, string, string); }
+export global UiData {
+    in-out property <int> page;
+    in-out property <string> version;
+    in-out property <bool> ready;
+    in-out property <bool> running;
+    in-out property <bool> working;
+    in-out property <bool> exiting;
+    in-out property <string> profile;
+    in-out property <string> node;
+    in-out property <string> notice;
+    in-out property <bool> notice-error;
+    in-out property <bool> retry-core;
+    in-out property <string> query;
+    in-out property <string> page-status;
+    in-out property <bool> previous;
+    in-out property <bool> next;
+    in-out property <int> page-offset;
+    in-out property <int> mode;
+    in-out property <int> proxy-mode;
+    in-out property <string> download-rate: "0 B/s";
+    in-out property <string> upload-rate: "0 B/s";
+    in-out property <string> connection-count: "0";
+    in-out property <string> upload-total: "0 B";
+    in-out property <string> download-total: "0 B";
+    in-out property <int> node-sort;
+    in-out property <[GroupItem]> groups;
+    in-out property <[ProfileItem]> profiles;
+    in-out property <[ConnectionItem]> connections;
+    in-out property <string> connection-sort;
+    in-out property <bool> descending: true;
+    in-out property <[RuleItem]> rules;
+    in-out property <[LogItem]> logs;
+    in-out property <[string]> network-results;
+    in-out property <[CategoryPair]> categories;
+    in-out property <[ReportItem]> site-results;
+    in-out property <[ReportItem]> claude-results;
+    in-out property <[string]> shortcuts;
+    in-out property <[bool]> shortcut-values;
+    in-out property <[bool]> shortcut-available;
+    in-out property <bool> shortcuts-open;
+    in-out property <[Choice]> rule-profiles;
+    in-out property <[string]> rule-profile-options;
+    in-out property <string> rule-profile;
+    in-out property <[string]> rule-types;
+    in-out property <[string]> rule-policies;
+    in-out property <string> rule-source: "全部来源";
+    in-out property <bool> rule-dirty;
+    in-out property <bool> rule-selected;
+    in-out property <bool> rule-custom;
+    in-out property <string> rule-detail;
+    in-out property <string> rule-warning;
+    in-out property <bool> protected;
+    in-out property <bool> claude-busy;
+    in-out property <bool> claude-error;
+    in-out property <float> claude-progress;
+    in-out property <string> claude-audit;
+    in-out property <string> claude-guard;
+    in-out property <string> protection-node;
+    in-out property <bool> browser-session;
+    in-out property <string> claude-status;
+    in-out property <string> claude-normal: "0";
+    in-out property <string> claude-risk: "0";
+    in-out property <string> claude-clues: "0";
+    in-out property <int> claude-filter: -1;
+    in-out property <string> claude-result-status;
+    in-out property <bool> claude-previous;
+    in-out property <bool> claude-next;
+    in-out property <int> claude-result-page;
+    in-out property <string> reputation-key;
+    in-out property <string> site-progress;
+    in-out property <float> site-fraction;
+    in-out property <bool> sites-busy;
+    in-out property <bool> sites-report: true;
+    in-out property <bool> sites-started;
+    in-out property <string> site-category: "全部分类";
+    in-out property <string> site-status: "全部结果";
+    in-out property <string> site-region: "全部识别地区";
+    in-out property <[string]> site-category-options;
+    in-out property <[string]> site-status-options;
+    in-out property <[string]> site-region-options;
+    in-out property <string> site-summary;
+    in-out property <[Choice]> site-counts;
+    in-out property <string> profile-name;
+    in-out property <string> profile-source;
+    in-out property <string> test-url;
+    in-out property <string> dns-host;
+    in-out property <bool> probing;
+    in-out property <int> appearance: 2;
+    in-out property <int> text-scale: 100;
+    in-out property <bool> dark;
+    in-out property <bool> autostart;
+    in-out property <bool> tray-speed;
+    in-out property <bool> dns-override;
+    in-out property <bool> ipv6;
+    in-out property <bool> udp;
+    in-out property <string> mixed-port;
+    in-out property <string> controller-port;
+    in-out property <bool> ports-dirty;
+    in-out property <string> window-width;
+    in-out property <string> window-height;
+    in-out property <string> interval;
+    in-out property <string> geo-status;
+    in-out property <string> update-status;
+    in-out property <bool> update-checking;
+    in-out property <bool> update-available;
+    in-out property <bool> update-busy;
+    in-out property <bool> update-downloading;
+    in-out property <float> update-fraction;
+    // Modal values are projections of the same validated application state.
+    in-out property <int> modal;
+    in-out property <string> modal-title;
+    in-out property <string> modal-description;
+    in-out property <string> modal-error;
+    in-out property <string> modal-accept;
+    in-out property <bool> modal-danger;
+    in-out property <bool> modal-can-accept;
+    in-out property <bool> import-open;
+    in-out property <string> edit-name;
+    in-out property <string> edit-source;
+    in-out property <bool> rule-text-mode;
+    in-out property <string> rule-raw;
+    in-out property <string> rule-kind;
+    in-out property <string> rule-payload;
+    in-out property <string> rule-policy;
+    in-out property <bool> rule-no-resolve;
+    in-out property <bool> rule-enabled;
+    in-out property <string> rule-position;
+    in-out property <string> rule-move-position;
+    in-out property <string> focus-target;
+    in-out property <int> focus-revision;
+}

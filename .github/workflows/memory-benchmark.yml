@@ -81,7 +81,7 @@ jobs:
         run: |
           import subprocess
           subprocess.run(['sudo', 'apt-get', 'update'], check=True)
-          subprocess.run(['sudo', 'apt-get', 'install', '-y', 'libglib2.0-dev', 'libxkbcommon-dev', 'libwayland-dev', 'libx11-dev', 'libx11-xcb-dev', 'libxkbcommon-x11-0', 'libxcursor1', 'libxrandr2', 'libxi6', 'libxinerama1', 'libegl1', 'gsettings-desktop-schemas', 'dbus', 'xvfb', 'xauth', 'xdotool'], check=True)
+          subprocess.run(['sudo', 'apt-get', 'install', '-y', 'libglib2.0-dev', 'libfontconfig1-dev', 'libfreetype6-dev', 'libxkbcommon-dev', 'libwayland-dev', 'libx11-dev', 'libx11-xcb-dev', 'libxkbcommon-x11-0', 'libxcursor1', 'libxrandr2', 'libxi6', 'libxinerama1', 'libegl1', 'gsettings-desktop-schemas', 'dbus', 'xvfb', 'xauth', 'xdotool'], check=True)
       - name: Benchmark the selected source
         shell: python
         env:

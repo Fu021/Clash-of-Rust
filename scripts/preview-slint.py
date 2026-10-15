@@ -170,17 +170,17 @@ def main() -> None:
     parser.add_argument("--concepts", action="store_true", help="preview three alternative design directions")
     parser.add_argument("--pairs", action="store_true", help="also render light/dark pairs suitable for inline sharing")
     parser.add_argument("--full-settings", action="store_true", help="show all settings without scrolling in its page screenshot")
-    parser.add_argument("--size", default="1120x780")
+    parser.add_argument("--size", default="950x700")
     parser.add_argument("--output", type=Path, default=ROOT / "dist/slint-preview")
     args = parser.parse_args()
     if not args.viewer:
         parser.error("Install the official prebuilt Slint Viewer in a persistent directory, or pass --viewer PATH.")
     try:
         width, height = map(int, args.size.lower().split("x"))
-        if width < 850 or height < 640 or width > 4096 or height > 4096:
+        if width < 800 or height < 450 or width > 4096 or height > 4096:
             raise ValueError
     except ValueError:
-        parser.error("--size must be WIDTHxHEIGHT, between 850x640 and 4096x4096")
+        parser.error("--size must be WIDTHxHEIGHT, between 800x450 and 4096x4096")
 
     output = args.output.resolve()
     output.mkdir(parents=True, exist_ok=True)
@@ -204,8 +204,8 @@ def main() -> None:
     themes = ["light", "dark"] if args.theme == "both" else [args.theme]
     if args.live:
         fixture = fixtures / "live.json"
-        values = {"design": 0} if args.concepts else {"page": list(PAGES).index(pages[0])}
-        fixture.write_text(json.dumps({**values, "dark": themes[0] == "dark"}))
+        values = {"design": 0} if args.concepts else {"preview-page": list(PAGES).index(pages[0])}
+        fixture.write_text(json.dumps({**values, "dark" if args.concepts else "preview-dark": themes[0] == "dark"}))
         subprocess.run([args.viewer, "--auto-reload", "--load-data", str(fixture), str(entry)],
                        cwd=ROOT, env=env, check=True)
         return
@@ -241,7 +241,7 @@ def main() -> None:
     for theme in themes:
         for name, label, page, dialog in scenes:
             fixture = fixtures / f"{name}-{theme}.json"
-            fixture.write_text(json.dumps({"page": list(PAGES).index(page), "dark": theme == "dark", "dialog": dialog}))
+            fixture.write_text(json.dumps({"preview-page": list(PAGES).index(page), "preview-dark": theme == "dark", "dialog": dialog}))
             image = output / f"{name}-{theme}.png"
             scene_size = f"{width}x{max(height, 1120)}" if args.full_settings and page == "settings" and not dialog else args.size
             run_viewer(args.viewer, ["--load-data", str(fixture), "--size", scene_size,

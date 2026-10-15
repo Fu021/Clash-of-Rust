@@ -1,50 +1,37 @@
+import { UiData, UiActions, Intent } from "../state.slint";
+import { ScrollView } from "std-widgets.slint";
 import { Theme } from "../theme/palette.slint";
-import { Label, Caption, Heading, Panel, ActionButton, Field, Badge } from "../components/controls.slint";
+import { Label, Caption, Heading, ContentPanel, ActionButton, Field, Badge, Paragraph } from "../components/controls.slint";
 
 export component NetworkPage inherits Rectangle {
-    VerticalLayout {
-        spacing: 16px;
-        Panel {
-            height: 148px;
-            VerticalLayout {
-                padding: 18px; spacing: 12px;
+    ScrollView {
+        x: 0px;
+        width: parent.width + Theme.content-gap;
+        VerticalLayout {
+            padding-right: Theme.content-gap;
+            spacing: Theme.page-gap;
+            ContentPanel {
                 Heading { text: "网站响应"; }
-                HorizontalLayout {
-                    spacing: 10px;
-                    Field { text: "https://www.gstatic.com/generate_204"; }
-                    ActionButton { text: "开始测试"; primary: true; }
-                }
-                HorizontalLayout {
-                    spacing: 10px;
-                    Badge { text: "HTTP 204"; tone: 1; }
-                    Caption { text: "42 ms · 通过当前代理访问"; }
+                HorizontalLayout { cross-axis-alignment: center;
+                    spacing: Theme.content-gap;
+                    Field { text <=> UiData.test-url; edited(value) => { UiActions.dispatch(Intent.test-url, value, ""); } }
+                    ActionButton { text: UiData.probing ? "测试中…" : "开始测试"; primary: true; enabled: !UiData.probing; clicked => { UiActions.dispatch(Intent.probe, "false", ""); } }
                 }
             }
-        }
-        Panel {
-            height: 132px;
-            VerticalLayout {
-                padding: 18px; spacing: 12px;
-                HorizontalLayout { Heading { text: "出口信息"; } ActionButton { text: "查询出口"; } }
-                HorizontalLayout {
-                    Label { text: "203.0.113.42"; color: Theme.accent; font-size: 24px; }
-                    Caption { text: "德国 · IPv4"; horizontal-alignment: right; }
-                }
+            ContentPanel {
+                HorizontalLayout { cross-axis-alignment: center; Heading { text: "出口信息"; } ActionButton { text: "查询出口"; enabled: !UiData.probing; clicked => { UiActions.dispatch(Intent.probe, "true", ""); } } }
             }
-        }
-        Panel {
-            height: 148px;
-            VerticalLayout {
-                padding: 18px; spacing: 12px;
+            ContentPanel {
                 Heading { text: "系统 DNS 查询"; }
-                HorizontalLayout {
-                    spacing: 10px;
-                    Field { text: "github.com"; }
-                    ActionButton { text: "解析"; }
+                HorizontalLayout { cross-axis-alignment: center;
+                    spacing: Theme.content-gap;
+                    Field { text <=> UiData.dns-host; edited(value) => { UiActions.dispatch(Intent.dns-host, value, ""); } }
+                    ActionButton { text: "解析"; enabled: !UiData.probing; clicked => { UiActions.dispatch(Intent.dns, "", ""); } }
                 }
-                Caption { text: "github.com → 192.0.2.10 · 16 ms"; }
+                Caption { text: "通过当前系统解析器查询"; }
             }
+            for line in UiData.network-results: ContentPanel { Paragraph { text: line; } }
+            Rectangle { vertical-stretch: 1; }
         }
-        Rectangle { vertical-stretch: 1; }
     }
 }

@@ -671,6 +671,15 @@ impl Api {
         .collect()
         .await)
     }
+    pub async fn close_connections(&self) -> Result<()> {
+        Self::checked(
+            self.request(Method::DELETE, self.url(&["connections"])?)
+                .send()
+                .await?,
+        )
+        .await?;
+        Ok(())
+    }
     pub async fn close_connection(&self, id: &str) -> Result<()> {
         Self::checked(
             self.request(Method::DELETE, self.url(&["connections", id])?)

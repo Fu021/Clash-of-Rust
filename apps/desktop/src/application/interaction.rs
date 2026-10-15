@@ -1,85 +1,9 @@
-//! Transient desktop interactions. Connection details resolve an ID in the
-//! current sample; neither details nor native menus keep connection history.
 use super::*;
-use iced::widget::column;
-
-// winit alone does not track GNOME's color-scheme preference on Wayland/X11.
-// Reuse the desktop portal bus, and listen only while following the system.
-pub(crate) fn theme_subscription(enabled: bool) -> Subscription<Message> {
-    #[cfg(target_os = "linux")]
-    if enabled {
-        return Subscription::run(|| {
-            iced::stream::channel(2, async |mut output| {
-                loop {
-                    let result: anyhow::Result<()> = async {
-                        use futures_util::StreamExt;
-                        let connection = zbus::Connection::session().await?;
-                        let settings = zbus::Proxy::new(
-                            &connection,
-                            "org.freedesktop.portal.Desktop",
-                            "/org/freedesktop/portal/desktop",
-                            "org.freedesktop.portal.Settings",
-                        )
-                        .await?;
-                        let mut changed = settings.receive_signal("SettingChanged").await?;
-                        let values: std::collections::HashMap<
-                            String,
-                            std::collections::HashMap<String, zbus::zvariant::OwnedValue>,
-                        > = settings
-                            .call("ReadAll", &(["org.freedesktop.appearance"].as_slice(),))
-                            .await?;
-                        if let Some(value) = values
-                            .get("org.freedesktop.appearance")
-                            .and_then(|v| v.get("color-scheme"))
-                            && let Ok(value) = u32::try_from(value)
-                        {
-                            output
-                                .send(Message::SystemTheme(if value == 1 {
-                                    iced::theme::Mode::Dark
-                                } else {
-                                    iced::theme::Mode::Light
-                                }))
-                                .await?;
-                        }
-                        while let Some(signal) = changed.next().await {
-                            let (namespace, key, value): (
-                                String,
-                                String,
-                                zbus::zvariant::OwnedValue,
-                            ) = signal.body().deserialize()?;
-                            if namespace == "org.freedesktop.appearance"
-                                && key == "color-scheme"
-                                && let Ok(value) = u32::try_from(&value)
-                            {
-                                output
-                                    .send(Message::SystemTheme(if value == 1 {
-                                        iced::theme::Mode::Dark
-                                    } else {
-                                        iced::theme::Mode::Light
-                                    }))
-                                    .await?;
-                            }
-                        }
-                        Ok(())
-                    }
-                    .await;
-                    if output.is_closed() {
-                        break;
-                    }
-                    let _ = result; // A missing portal leaves the native theme fallback.
-                    tokio::time::sleep(Duration::from_secs(30)).await;
-                }
-            })
-        });
-    }
-    let _ = enabled;
-    Subscription::none()
-}
-
 #[derive(Clone)]
 pub(crate) enum Pending {
     Delete(String),
     CloseProfile,
+    CloseImport,
     Rules(rules_view::Event),
     Exit,
 }
@@ -160,7 +84,8 @@ impl App {
         self.ask("删除订阅？", description, "删除订阅", Pending::Delete(id))
     }
     pub(crate) fn request_exit(&mut self) -> Task<Message> {
-        if self.rule_state.dirty()
+        if (self.import_open && (!self.profile_name.is_empty() || !self.profile_source.is_empty()))
+            || self.rule_state.dirty()
             || self.rule_state.editor_modified()
             || self
                 .profile_editor
@@ -173,22 +98,47 @@ impl App {
                 "放弃并退出",
                 Pending::Exit,
             );
-            return Task::batch([task, iced::window::latest().map(Message::ShowWindow)]);
+            return Task::batch([
+                task,
+                desktop_runtime::window::latest().map(Message::ShowWindow),
+            ]);
         }
         self.exit()
     }
     pub(crate) fn desktop_message(&mut self, message: &Message) -> Option<Task<Message>> {
         let none = Task::none;
         Some(match message {
+            Message::AccentDialog(open) => {
+                self.accent_open = *open;
+                none()
+            }
+            Message::ImportDialog(true) => {
+                self.import_open = true;
+                none()
+            }
+            Message::ImportDialog(false) => {
+                if !self.profile_name.is_empty() || !self.profile_source.is_empty() {
+                    self.ask(
+                        "放弃订阅草稿？",
+                        "名称或来源尚未导入，关闭后会丢弃本次草稿。".into(),
+                        "放弃修改",
+                        Pending::CloseImport,
+                    )
+                } else {
+                    self.import_open = false;
+                    none()
+                }
+            }
+
             Message::SystemTheme(mode) => {
-                self.system_dark = *mode == iced::theme::Mode::Dark;
+                self.system_dark = *mode == desktop_runtime::theme::Mode::Dark;
                 self.sync_appearance();
                 none()
             }
             Message::Appearance(mode) => self.dispatch(Action::Appearance(*mode)),
             Message::TextScale(scale) => self.dispatch(Action::TextScale(*scale)),
             Message::TraySpeed(enabled) => self.dispatch(Action::TraySpeed(*enabled)),
-            Message::Copy(value) => iced::clipboard::write(value.clone()),
+            Message::Copy(value) => desktop_runtime::clipboard::write(value.clone()),
             Message::ConnectionDetail(id) => {
                 self.connection_detail = Some(id.clone());
                 none()
@@ -207,6 +157,12 @@ impl App {
                 }
                 match self.confirmation.take().map(|c| c.pending) {
                     Some(Pending::Delete(id)) => self.dispatch(Action::DeleteProfile(id)),
+                    Some(Pending::CloseImport) => {
+                        self.import_open = false;
+                        self.profile_name.clear();
+                        self.profile_source.clear();
+                        none()
+                    }
                     Some(Pending::CloseProfile) => {
                         self.profile_editor = None;
                         none()
@@ -229,7 +185,9 @@ impl App {
                         original: (p.name.clone(), p.source.clone()),
                         error: String::new(),
                     });
-                    return Some(iced::widget::operation::focus("profile-edit-name"));
+                    return Some(desktop_runtime::widget::operation::focus(
+                        "profile-edit-name",
+                    ));
                 }
                 none()
             }
@@ -306,15 +264,14 @@ impl App {
                 };
                 let edit = *edit;
                 #[cfg(target_os = "macos")]
-                let task = iced::window::latest().and_then(move |id| {
-                    iced::window::run(id, move |_| match clash_of_rust::file_dialog::begin() {
+                let task =
+                    runtime::native::call(move |_| match clash_of_rust::file_dialog::begin() {
                         Ok(receiver) => Message::FilePickStarted(
                             edit,
                             Arc::new(std::sync::Mutex::new(Some(receiver))),
                         ),
                         Err(error) => Message::FilePicked(edit, Err(error)),
-                    })
-                });
+                    });
                 #[cfg(not(target_os = "macos"))]
                 let task = Task::perform(clash_of_rust::file_dialog::choose(), move |r| {
                     Message::FilePicked(edit, r)
@@ -368,8 +325,10 @@ impl App {
                 }
                 none()
             }
-            Message::Key(iced::keyboard::Event::KeyPressed { key, modifiers, .. }) => {
-                use iced::keyboard::{Key, key::Named};
+            Message::Key(desktop_runtime::keyboard::Event::KeyPressed {
+                key, modifiers, ..
+            }) => {
+                use desktop_runtime::keyboard::{Key, key::Named};
                 if !self.visible || self.exiting {
                     return Some(none());
                 }
@@ -377,11 +336,13 @@ impl App {
                     Key::Character(c) if modifiers.command() && c.eq_ignore_ascii_case("f") => {
                         if self.confirmation.is_none()
                             && self.profile_editor.is_none()
+                            && !self.import_open
+                            && !self.accent_open
                             && self.connection_detail.is_none()
                             && self.claude.guide.is_none()
                             && !(self.page == Page::Rules && self.rule_state.modal_open())
                         {
-                            iced::widget::operation::focus("page-search")
+                            desktop_runtime::widget::operation::focus("page-search")
                         } else {
                             none()
                         }
@@ -393,34 +354,14 @@ impl App {
                     {
                         self.request_exit()
                     }
-                    Key::Named(Named::Tab) => {
-                        if self.confirmation.is_some()
-                            || self.profile_editor.is_some()
-                            || self.connection_detail.is_some()
-                            || self.claude.guide.is_some()
-                            || (self.page == Page::Rules && self.rule_state.modal_open())
-                        {
-                            use iced::advanced::widget::operation::{focusable, scope};
-                            if modifiers.shift() {
-                                iced::advanced::widget::operate(scope(
-                                    "desktop-modal".into(),
-                                    focusable::focus_previous(),
-                                ))
-                            } else {
-                                iced::advanced::widget::operate(scope(
-                                    "desktop-modal".into(),
-                                    focusable::focus_next(),
-                                ))
-                            }
-                        } else if modifiers.shift() {
-                            iced::widget::operation::focus_previous()
-                        } else {
-                            iced::widget::operation::focus_next()
-                        }
-                    }
                     Key::Named(Named::Escape) => {
                         if self.confirmation.is_some() {
                             self.confirmation = None;
+                            none()
+                        } else if self.import_open {
+                            self.desktop_message(&Message::ImportDialog(false)).unwrap()
+                        } else if self.accent_open {
+                            self.accent_open = false;
                             none()
                         } else if self.profile_editor.is_some() {
                             self.desktop_message(&Message::CloseProfileEdit).unwrap()
@@ -445,208 +386,79 @@ impl App {
             _ => return None,
         })
     }
-    fn detail_row(&self, label: &str, value: String) -> Element<'_, Message> {
-        aligned_row![
-            self.caption(label.to_owned()).width(110),
-            self.label(value.clone())
-                .size(self.font_size(14))
-                .width(Length::Fill)
-                .wrapping(text::Wrapping::WordOrGlyph),
-            button(self.label("复制"))
-                .padding([5, 8])
-                .style(rounded_text)
-                .on_press_maybe(
-                    (!value.is_empty() && value != "—").then_some(Message::Copy(value))
-                )
-        ]
-        .spacing(10)
-        .into()
-    }
-    pub(crate) fn desktop_overlay<'a>(
-        &'a self,
-        page: Element<'a, Message>,
-    ) -> Element<'a, Message> {
-        let dialog: Option<Element<'a, Message>> = if let Some(c) = &self.confirmation {
-            Some(
-                column![
-                    self.title(&c.title),
-                    self.label(&c.description)
-                        .wrapping(text::Wrapping::WordOrGlyph),
-                    aligned_row![
-                        Space::new().width(Length::Fill),
-                        button(self.label("取消"))
-                            .style(rounded_secondary)
-                            .padding([8, 14])
-                            .on_press(Message::CancelConfirm),
-                        button(self.label(c.accept))
-                            .style(ui_style::danger_button)
-                            .padding([8, 14])
-                            .on_press_maybe(
-                                (!self.working && !self.exiting).then_some(Message::Confirm)
-                            )
-                    ]
-                    .spacing(10)
-                ]
-                .spacing(18)
-                .into(),
-            )
-        } else if let Some(p) = &self.profile_editor {
-            Some(
-                column![
-                    self.title("编辑订阅"),
-                    self.caption("配置名称"),
-                    text_input("配置名称", &p.name)
-                        .id("profile-edit-name")
-                        .size(self.font_size(15))
-                        .padding(9)
-                        .style(rounded_input)
-                        .on_input_maybe((!self.profile_busy()).then_some(Message::EditName))
-                        .on_submit(Message::SaveProfileEdit),
-                    self.caption("订阅链接或本地 YAML 路径"),
-                    text_input("来源", &p.source)
-                        .id("profile-edit-source")
-                        .size(self.font_size(15))
-                        .padding(9)
-                        .style(rounded_input)
-                        .on_input_maybe((!self.profile_busy()).then_some(Message::EditSource))
-                        .on_submit(Message::SaveProfileEdit),
-                    self.caption("保存名称与来源；配置内容由订阅页的更新按钮重新载入。"),
-                    self.label(&p.error)
-                        .color(ui_style::tone(&self.theme(), ui_style::Tone::Danger)),
-                    aligned_row![
-                        button(self.label("选择文件"))
-                            .style(rounded_secondary)
-                            .padding([8, 12])
-                            .on_press_maybe(
-                                (!self.picking_file && !self.working)
-                                    .then_some(Message::PickFile(true))
-                            ),
-                        Space::new().width(Length::Fill),
-                        button(self.label("取消"))
-                            .style(rounded_secondary)
-                            .padding([8, 12])
-                            .on_press_maybe(
-                                (!self.profile_busy()).then_some(Message::CloseProfileEdit)
-                            ),
-                        button(self.label("保存"))
-                            .style(rounded_primary)
-                            .padding([8, 12])
-                            .on_press_maybe(
-                                (!self.profile_busy() && !self.exiting && !self.picking_file)
-                                    .then_some(Message::SaveProfileEdit)
-                            )
-                    ]
-                    .spacing(8)
-                ]
-                .spacing(10)
-                .into(),
-            )
-        } else if let Some(id) = &self.connection_detail {
-            let mut body = column![
-                aligned_row![
-                    self.title("连接详情"),
-                    Space::new().width(Length::Fill),
-                    button(self.label("关闭详情"))
-                        .style(rounded_secondary)
-                        .padding([6, 10])
-                        .on_press(Message::CloseConnectionDetail)
-                ]
-                .spacing(8)
-            ]
-            .spacing(12);
-            if let Some(c) = self
-                .snapshot
-                .connections
-                .connections
-                .iter()
-                .find(|c| c.id.as_ref() == id)
-            {
-                let rate =
-                    |v: Option<u64>| v.map_or_else(|| "—".into(), |v| format!("{}/s", bytes(v)));
-                for (label, value) in [
-                    ("连接名称", connection::name(c).to_owned()),
-                    ("域名", c.metadata.host.to_string()),
-                    ("嗅探域名", c.metadata.sniff_host.to_string()),
-                    ("目标 IP", c.metadata.destination_ip.to_string()),
-                    ("目标端口", c.metadata.destination_port.to_string()),
-                    ("协议", c.metadata.network.to_string()),
-                    (
-                        "匹配规则",
-                        if c.rule_payload.is_empty() {
-                            c.rule.to_string()
-                        } else {
-                            format!("{},{}", c.rule, c.rule_payload)
-                        },
-                    ),
-                    ("代理链", c.chains.join(" → ")),
-                    ("上传速度", rate(c.rates.map(|r| r.upload))),
-                    ("下载速度", rate(c.rates.map(|r| r.download))),
-                    ("累计上传", bytes(c.upload)),
-                    ("累计下载", bytes(c.download)),
-                    ("开始时间", c.start.to_string()),
-                    ("连接 ID", c.id.to_string()),
-                ] {
-                    body = body.push(self.detail_row(
-                        label,
-                        if value.is_empty() {
-                            "—".into()
-                        } else {
-                            value
-                        },
-                    ));
+}
+pub(super) fn theme_updates() -> Task<Message> {
+    #[cfg(target_os = "linux")]
+    return Task::run(
+        desktop_runtime::stream::channel(2, async |mut output| {
+            loop {
+                let result: anyhow::Result<()> = async {
+                    use futures_util::StreamExt;
+                    let connection = zbus::Connection::session().await?;
+                    let settings = zbus::Proxy::new(
+                        &connection,
+                        "org.freedesktop.portal.Desktop",
+                        "/org/freedesktop/portal/desktop",
+                        "org.freedesktop.portal.Settings",
+                    )
+                    .await?;
+                    let mut changed = settings.receive_signal("SettingChanged").await?;
+                    let values: std::collections::HashMap<
+                        String,
+                        std::collections::HashMap<String, zbus::zvariant::OwnedValue>,
+                    > = settings
+                        .call("ReadAll", &(["org.freedesktop.appearance"].as_slice(),))
+                        .await?;
+                    if let Some(value) = values
+                        .get("org.freedesktop.appearance")
+                        .and_then(|v| v.get("color-scheme"))
+                        && let Ok(value) = u32::try_from(value)
+                    {
+                        output
+                            .send(Message::SystemTheme(if value == 1 {
+                                desktop_runtime::theme::Mode::Dark
+                            } else {
+                                desktop_runtime::theme::Mode::Light
+                            }))
+                            .await?;
+                    }
+                    while let Some(signal) = changed.next().await {
+                        let (namespace, key, value): (String, String, zbus::zvariant::OwnedValue) =
+                            signal.body().deserialize()?;
+                        if namespace == "org.freedesktop.appearance"
+                            && key == "color-scheme"
+                            && let Ok(value) = u32::try_from(&value)
+                        {
+                            output
+                                .send(Message::SystemTheme(if value == 1 {
+                                    desktop_runtime::theme::Mode::Dark
+                                } else {
+                                    desktop_runtime::theme::Mode::Light
+                                }))
+                                .await?;
+                        }
+                    }
+                    Ok(())
                 }
-            } else {
-                body = body.push(self.label("此连接已结束，详情不再保留。"));
+                .await;
+                if output.is_closed() {
+                    break;
+                }
+                let _ = result; // A missing portal leaves the native theme fallback.
+                tokio::time::sleep(Duration::from_secs(30)).await;
             }
-            Some(body.into())
-        } else if self.page == Page::Claude {
-            self.claude_dialog()
-        } else {
-            None
-        };
-        if let Some(dialog) = dialog {
-            let overlay = self.modal(dialog);
-            stack![
-                iced::widget::opaque(page.map(|_| Message::Noop)),
-                iced::widget::opaque(overlay)
-            ]
-            .into()
-        } else {
-            page
-        }
-    }
-    pub(crate) fn modal<'a>(&self, dialog: Element<'a, Message>) -> Element<'a, Message> {
-        let height = self
-            .window_height
-            .parse::<f32>()
-            .unwrap_or(700.0)
-            .max(450.0)
-            - 64.0;
-        container(
-            container(scrollable(dialog).spacing(10).height(Length::Shrink))
-                .id("desktop-modal")
-                .padding(22)
-                .width(590)
-                .max_height(height)
-                .style(panel),
-        )
-        .width(Length::Fill)
-        .height(Length::Fill)
-        .center_x(Length::Fill)
-        .center_y(Length::Fill)
-        .style(|_| container::Style {
-            background: Some(Color::from_rgba(0.0, 0.0, 0.0, 0.52).into()),
-            ..Default::default()
-        })
-        .into()
-    }
+        }),
+        |message| message,
+    );
+    #[cfg(not(target_os = "linux"))]
+    Task::none()
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
     fn app() -> App {
-        App::with_engine(Err(anyhow::anyhow!("isolated desktop test")), None).0
+        App::initial_state(Err(anyhow::anyhow!("isolated desktop test")), None)
     }
     fn rules(app: &mut App) {
         let doc = rule_manager::Document::from_raw(
@@ -736,15 +548,15 @@ mod tests {
         let mut app = app();
         let size = app.window_state.size();
         app.settings.theme_mode = Some(ThemeMode::System);
-        let _ = app.update(Message::SystemTheme(iced::theme::Mode::Light));
+        let _ = app.update(Message::SystemTheme(desktop_runtime::theme::Mode::Light));
         assert!(!app.dark);
-        let _ = app.update(Message::SystemTheme(iced::theme::Mode::Dark));
+        let _ = app.update(Message::SystemTheme(desktop_runtime::theme::Mode::Dark));
         assert!(app.dark);
         app.settings.theme_mode = Some(ThemeMode::Light);
-        let _ = app.update(Message::SystemTheme(iced::theme::Mode::Dark));
+        let _ = app.update(Message::SystemTheme(desktop_runtime::theme::Mode::Dark));
         assert!(!app.dark);
         app.settings.text_scale = 125;
-        assert_eq!(app.font_size(16), 20.0);
+        assert_eq!(app.settings.text_scale, 125);
         assert_eq!(app.window_state.size(), size);
     }
 }

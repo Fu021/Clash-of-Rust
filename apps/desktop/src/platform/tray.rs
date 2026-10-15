@@ -572,7 +572,7 @@ struct MacNative {
 thread_local! {
     static MAC_NATIVE: std::cell::RefCell<Option<MacNative>> = const { std::cell::RefCell::new(None) };
 }
-/// Called through iced::window::run, after AppKit's event loop has started.
+/// Called by the native desktop adapter after AppKit's event loop has started.
 /// Native creation, mutation and final destruction all stay on this thread.
 #[cfg(target_os = "macos")]
 pub fn pump() {

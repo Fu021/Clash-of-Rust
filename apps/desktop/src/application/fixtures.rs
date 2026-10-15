@@ -1,8 +1,7 @@
-//! Deterministic screenshots of the real views. Feature-gated out of installers.
+//! Deterministic, isolated state for UI checks; never constructs an Engine.
 use super::*;
-
-fn fixture(scene: &str) -> App {
-    let mut app = App::with_engine(Err(anyhow::anyhow!("isolated preview")), None).0;
+pub(super) fn fixture(scene: &str) -> App {
+    let mut app = App::initial_state(Err(anyhow::anyhow!("isolated preview")), None);
     app.snapshot.running = true;
     app.snapshot.mode = "rule".into();
     app.snapshot.active_node = Some("香港节点2".into());
@@ -339,107 +338,4 @@ fn fixture(scene: &str) -> App {
         _ => {}
     }
     app
-}
-
-fn update(app: &mut App, message: Message) -> Task<Message> {
-    if matches!(
-        message,
-        Message::SiteSummaryFilter(..)
-            | Message::SiteResetFilters
-            | Message::SiteReport
-            | Message::SiteDetail(_)
-            | Message::NodeSort(_)
-            | Message::ConnectionSort(_)
-            | Message::Key(_)
-            | Message::Query(_)
-            | Message::ConnectionDetail(_)
-            | Message::CloseConnectionDetail
-            | Message::CancelConfirm
-            | Message::EditName(_)
-            | Message::CloseProfileEdit
-    ) {
-        eprintln!("preview interaction: {message:?}");
-    }
-    let task = match message {
-        Message::Key(_)
-        | Message::Noop
-        | Message::Confirm
-        | Message::CancelConfirm
-        | Message::EditProfile(_)
-        | Message::EditName(_)
-        | Message::EditSource(_)
-        | Message::CloseProfileEdit
-        | Message::ConnectionDetail(_)
-        | Message::CloseConnectionDetail
-        | Message::Copy(_)
-        | Message::Query(_)
-        | Message::Rules(_)
-        | Message::NodeSort(_)
-        | Message::ToggleGroup(_)
-        | Message::GroupPage(..)
-        | Message::ListPage(_)
-        | Message::SiteCategory(_)
-        | Message::SiteStatus(_)
-        | Message::SiteRegion(_)
-        | Message::SiteDetail(_)
-        | Message::SiteSummaryFilter(..)
-        | Message::SiteResetFilters
-        | Message::SiteReport => app.update(message),
-        Message::Claude(
-            event @ (claude_view::Event::ResultsPage(_)
-            | claude_view::Event::ResultsFilter(_)
-            | claude_view::Event::Guide(_)),
-        ) => app.update(Message::Claude(event)),
-        Message::ConnectionSort(field) => {
-            let task = app.update(Message::ConnectionSort(field));
-            eprintln!(
-                "preview connection sort: {:?}, descending={}",
-                app.connection_sort.field, app.connection_sort.descending
-            );
-            task
-        }
-        _ => Task::none(),
-    };
-    eprintln!(
-        "preview desktop state: detail={}, confirmation={}, profile_editor={}, rule_editor={}",
-        app.connection_detail.is_some(),
-        app.confirmation.is_some(),
-        app.profile_editor.is_some(),
-        app.rule_state.has_editor()
-    );
-    task
-}
-
-pub(crate) fn run() -> iced::Result {
-    typography::initialize();
-    let scene = std::env::var("CLASH_UI_PREVIEW_SCENE").expect("preview scene");
-    let size = if scene.contains("-compact") {
-        MIN_WINDOW_SIZE
-    } else {
-        DEFAULT_WINDOW_SIZE
-    };
-    iced::application(
-        move || {
-            let mut app = fixture(&scene);
-            app.window_width = format!("{}", size.width);
-            app.window_height = format!("{}", size.height);
-            (app, Task::none())
-        },
-        update,
-        App::view,
-    )
-    .title("Clash of Rust · UI preview")
-    .theme(App::theme)
-    .subscription(App::subscription)
-    .default_font(typography::ENGLISH_FONT)
-    .settings(iced::Settings {
-        default_text_size: iced::Pixels(15.0),
-        ..Default::default()
-    })
-    .window(iced::window::Settings {
-        size,
-        min_size: Some(MIN_WINDOW_SIZE),
-        ..Default::default()
-    })
-    .run()
 }

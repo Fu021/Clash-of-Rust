@@ -15,7 +15,6 @@ Source Han Sans CN Regular (Adobe), embedded Chinese UI font:
 https://github.com/adobe-fonts/source-han-sans
 Distributed under SIL Open Font License 1.1.
 The complete font license is installed as resources/SourceHanSans-LICENSE.txt.
-Segoe UI is provided by Windows and is not redistributed by this application.
 Clash of Rust application source and installer scripts use GPL-3.0-only.
 
 RegionRestrictionCheck platform detector (upstream contributors):
@@ -40,3 +39,8 @@ The complete license is installed as resources/Twemoji-LICENSE.txt.
 English territory names: Unicode CLDR 46.0.0, Unicode License v3.
 https://github.com/unicode-org/cldr-json/tree/46.0.0
 The complete license is installed as resources/Unicode-LICENSE.txt.
+
+Slint 1.18.1 (SixtyFPS GmbH): https://github.com/slint-ui/slint/tree/v1.18.1
+Used under GPL-3.0-only; the GPLv3 license is installed as LICENSE.
+The desktop uses winit and the Slint software renderer. Dependency versions
+and corresponding upstream sources are recorded in Cargo.lock.

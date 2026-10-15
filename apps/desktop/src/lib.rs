@@ -12,9 +12,9 @@ pub mod claude_check;
 pub mod engine;
 #[path = "platform/file_dialog.rs"]
 pub mod file_dialog;
-#[path = "views/flags.rs"]
+#[path = "artwork/flags.rs"]
 pub mod flags;
-#[path = "views/icons.rs"]
+#[path = "artwork/icons.rs"]
 pub mod icons;
 #[path = "engine/network.rs"]
 mod network;

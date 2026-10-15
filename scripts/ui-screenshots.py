@@ -93,21 +93,26 @@ def render(source, run_id, system, arch, output, sizes, scenes=None):
     manifest = json.loads((build/'manifest.json').read_text())
     adapter = ROOT/'scripts/ui_capture.rs'
     desktop = build_support.desktop_directory(source)
-    preview = desktop/('src/views/ui_preview.rs' if desktop != source else 'src/ui_preview.rs')
-    harness = desktop/'tests/ui_preview.rs'
-    original_preview, original_harness = preview.read_bytes(), harness.read_bytes()
-    adapter_destination = preview.parent/'ui_capture_adapter.rs'
-    if adapter_destination.exists():
-        raise ValueError('Selected source already has a conflicting capture adapter')
-    shutil.copy2(adapter, adapter_destination)
-    preview.write_text(original_preview.decode()+'\n#[path = "ui_capture_adapter.rs"]\nmod render_capture;\npub(crate) use render_capture::run_render_capture;\n')
-    app_module = '../src/app/mod.rs' if desktop != source else '../src/main.rs'
-    harness.write_text(f'#[allow(dead_code, unused_imports)]\n#[path = "{app_module}"]\nmod app;\nfn main() {{ app::ui_preview::run_render_capture().expect("native render capture"); }}\n')
+    slint_ui = (desktop/'src/application/ui_preview.rs').exists()
+    original_preview = original_harness = None
+    adapter_destination = None
+    if not slint_ui:
+        # Preserve capture of historical CI builds that predate the Slint migration.
+        preview = desktop/('src/views/ui_preview.rs' if desktop != source else 'src/ui_preview.rs')
+        harness = desktop/'tests/ui_preview.rs'
+        original_preview, original_harness = preview.read_bytes(), harness.read_bytes()
+        adapter_destination = preview.parent/'ui_capture_adapter.rs'
+        if adapter_destination.exists():
+            raise ValueError('Selected source already has a conflicting capture adapter')
+        shutil.copy2(adapter, adapter_destination)
+        preview.write_text(original_preview.decode()+'\n#[path = "ui_capture_adapter.rs"]\nmod render_capture;\npub(crate) use render_capture::run_render_capture;\n')
+        app_module = '../src/app/mod.rs' if desktop != source else '../src/main.rs'
+        harness.write_text(f'#[allow(dead_code, unused_imports)]\n#[path = "{app_module}"]\nmod app;\nfn main() {{ app::ui_preview::run_render_capture().expect("native render capture"); }}\n')
     report = {'schema': 1, 'ci_run_id': run_id, 'commit': commit, 'version': manifest['version'],
               'system': system, 'arch': arch, 'source_artifact': json.loads((build/'source-artifact.json').read_text()),
               'ci_gui_sha256': manifest['files']['payload/clash-of-rust'+('.exe' if system == 'windows' else '')]['sha256'],
-              'adapter_sha256': sha256(adapter), 'data': 'Fixed demonstration data; no account or live network requests',
-              'rendering': 'Native Iced pixels from the selected source; screenshot-only harness compiled in this workflow',
+              'adapter_sha256': sha256(desktop/'src/application/ui_preview.rs' if slint_ui else adapter), 'data': 'Fixed demonstration data; no account or live network requests',
+              'rendering': ('Native Slint software renderer' if slint_ui else 'Native Iced renderer')+' from the selected source; screenshot-only harness compiled in this workflow',
               'status': 'running', 'images': []}
     write_json(output/'metadata.json', report)
     try:
@@ -145,9 +150,10 @@ def render(source, run_id, system, arch, output, sizes, scenes=None):
         report.update(status='failed', error=str(error))
         raise
     finally:
-        preview.write_bytes(original_preview)
-        harness.write_bytes(original_harness)
-        adapter_destination.unlink(missing_ok=True)
+        if not slint_ui:
+            preview.write_bytes(original_preview)
+            harness.write_bytes(original_harness)
+            adapter_destination.unlink(missing_ok=True)
         # Do not re-upload large CI binaries in a screenshot artifact.
         shutil.rmtree(build)
         write_json(output/'metadata.json', report)

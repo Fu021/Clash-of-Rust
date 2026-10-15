@@ -1,20 +1,56 @@
 import { Theme } from "../theme/palette.slint";
+import { UiData } from "../state.slint";
+import { ScrollView } from "std-widgets.slint";
 
-export component Label inherits Text {
-    color: Theme.ink;
-    font-size: 14px;
-    vertical-alignment: center;
-    overflow: elide;
+export component Label {
+    in property <string> text;
+    in property <brush> color: Theme.ink;
+    in property <length> font-size: Theme.body-size;
+    in property <int> font-weight: 400;
+    in property <TextVerticalAlignment> vertical-alignment: center;
+    in property <TextHorizontalAlignment> horizontal-alignment: left;
+    in property <TextOverflow> overflow: elide;
+    in property <TextWrap> wrap: no-wrap;
+    out property <FontMetrics> font-metrics: glyphs.font-metrics;
+    preferred-width: glyphs.preferred-width;
+    preferred-height: glyphs.preferred-height;
+    min-height: glyphs.preferred-height;
+    horizontal-stretch: 1;
+    vertical-stretch: 0;
+    // Center the visible letter area instead of the font's asymmetric line box.
+    // Using metrics keeps icons, text and controls aligned at every font size.
+    glyphs := Text {
+        width: parent.width;
+        height: self.preferred-height;
+        y: root.vertical-alignment == top ? 0px
+            : root.vertical-alignment == bottom ? parent.height - self.height
+            : (parent.height - self.height) / 2
+                + (self.font-metrics.cap-height - self.font-metrics.ascent - self.font-metrics.descent) / 2;
+        text: root.text;
+        color: root.color;
+        font-size: root.font-size;
+        font-weight: root.font-weight;
+        horizontal-alignment: root.horizontal-alignment;
+        overflow: root.overflow;
+        wrap: root.wrap;
+    }
 }
 
 export component Caption inherits Label {
-    font-size: 12px;
+    font-size: Theme.detail-size;
     color: Theme.secondary;
 }
 
 export component Heading inherits Label {
-    font-size: 17px;
+    font-size: Theme.heading-size;
     font-weight: 600;
+}
+
+export component Paragraph inherits Label {
+    wrap: word-wrap;
+    vertical-alignment: top;
+    // A nested box layout otherwise measures wrapped text as a single line.
+    height: self.preferred-height;
 }
 
 export component Panel inherits Rectangle {
@@ -25,33 +61,111 @@ export component Panel inherits Rectangle {
     @children
 }
 
+// Keep the padding intact when text, controls or conditional rows change size.
+export component ContentPanel inherits Panel {
+    in property <length> gap: Theme.content-gap;
+    in property <bool> interactive: false;
+    callback clicked();
+    vertical-stretch: 0;
+    height: content.preferred-height;
+    content := VerticalLayout {
+        alignment: start;
+        padding: Theme.card-padding;
+        spacing: root.gap;
+        @children
+    }
+    if root.interactive: TouchArea {
+        mouse-cursor: pointer;
+        clicked => { root.clicked(); }
+    }
+}
+
+export component RowPanel inherits Panel {
+    in property <bool> interactive: false;
+    callback clicked();
+    vertical-stretch: 0;
+    height: content.preferred-height;
+    content := HorizontalLayout {
+        cross-axis-alignment: center;
+        padding: Theme.card-padding;
+        spacing: Theme.page-gap;
+        @children
+    }
+    if root.interactive: TouchArea {
+        mouse-cursor: pointer;
+        clicked => { root.clicked(); }
+    }
+}
+
+export component SettingsSection inherits Rectangle {
+    in property <string> title;
+    vertical-stretch: 0;
+    height: content.preferred-height;
+    content := VerticalLayout {
+        alignment: start;
+        spacing: Theme.content-gap;
+        Heading { text: root.title; height: 28px; }
+        @children
+    }
+}
+
+component Chevron inherits Path {
+    in property <bool> expanded: false;
+    width: 12px;
+    height: 12px;
+    viewbox-width: 12;
+    viewbox-height: 12;
+    MoveTo { x: 2; y: root.expanded ? 8 : 4; }
+    LineTo { x: 6; y: root.expanded ? 4 : 8; }
+    LineTo { x: 10; y: root.expanded ? 8 : 4; }
+    stroke: Theme.secondary;
+    stroke-width: 1.5px;
+}
+
 export component ActionButton inherits Rectangle {
+    in property <bool> modal-control: false;
     in property <string> text;
     in property <bool> primary: false;
     in property <bool> selected: false;
     in property <bool> danger: false;
     in property <bool> enabled: true;
+    in property <bool> dropdown: false;
+    in property <bool> expanded: false;
     callback clicked();
-    height: 36px;
-    width: max(62px, button-label.preferred-width + 26px);
+    forward-focus: key-scope;
+    height: Theme.control-height;
+    width: max(68px, button-label.preferred-width + 28px + (root.dropdown ? 20px : 0px));
+    vertical-stretch: 0;
     horizontal-stretch: 0;
     border-radius: 5px;
     background: root.primary ? Theme.primary : root.selected ? Theme.accent-wash : area.has-hover ? Theme.inset : Theme.surface;
     border-width: 1px;
-    border-color: root.primary ? Theme.primary : root.selected ? Theme.accent : Theme.line;
+    border-color: root.primary ? Theme.primary : root.selected || key-scope.has-focus ? Theme.accent : Theme.line;
     opacity: root.enabled ? 1 : 0.5;
     button-label := Label {
-        width: parent.width;
+        width: parent.width - (root.dropdown ? 24px : 0px);
         height: parent.height;
         text: root.text;
         horizontal-alignment: center;
         color: root.primary ? #ffffff : root.danger ? Theme.danger : root.selected ? Theme.accent : Theme.ink;
-        font-size: 13px;
+        font-size: Theme.body-size;
+    }
+    if root.dropdown: Chevron {
+        x: parent.width - 24px;
+        y: (parent.height - self.height) / 2;
+        expanded: root.expanded;
     }
     area := TouchArea {
-        enabled: root.enabled;
+        enabled: root.enabled && (UiData.modal == 0 || root.modal-control);
         mouse-cursor: pointer;
-        clicked => { root.clicked(); }
+        clicked => { key-scope.focus(); root.clicked(); }
+    }
+    key-scope := FocusScope {
+        enabled: root.enabled && (UiData.modal == 0 || root.modal-control);
+        key-pressed(event) => {
+            if event.text == "\n" || event.text == " " { root.clicked(); return accept; }
+            return reject;
+        }
     }
 }
 
@@ -59,8 +173,9 @@ export component Badge inherits Rectangle {
     in property <string> text;
     // 0 accent, 1 success, 2 warning, 3 danger, 4 neutral.
     in property <int> tone: 0;
-    height: 26px;
-    width: label.preferred-width + 18px;
+    in property <length> width-limit: 320px;
+    height: 28px;
+    width: min(label.preferred-width + 18px, root.width-limit);
     horizontal-stretch: 0;
     border-radius: 5px;
     background: tone == 1 ? Theme.success-wash : tone == 2 ? Theme.warning-wash : tone == 3 ? Theme.danger-wash : tone == 4 ? Theme.inset : Theme.accent-wash;
@@ -74,26 +189,37 @@ export component Badge inherits Rectangle {
 }
 
 export component AccentChoice inherits Rectangle {
+    in property <bool> modal-control: false;
     in property <string> text;
     in property <color> swatch;
     callback clicked();
     width: 138px;
-    height: 36px;
+    height: Theme.control-height;
     horizontal-stretch: 0;
     border-radius: 5px;
     border-width: 1px;
     border-color: Theme.line;
     background: area.has-hover ? Theme.inset : Theme.surface;
-    Rectangle { x: 12px; y: 10px; width: 16px; height: 16px; border-radius: 8px; background: root.swatch; }
-    Label { x: 38px; y: 0px; width: parent.width - 65px; height: parent.height; text: root.text; font-size: 13px; }
-    Caption { x: parent.width - 23px; y: 0px; width: 14px; height: parent.height; text: "⌄"; }
+    Rectangle { x: 12px; y: (parent.height - self.height) / 2; width: 18px; height: 18px; border-radius: 9px; background: root.swatch; }
+    Label { x: 40px; y: 0px; width: parent.width - 67px; height: parent.height; text: root.text; }
+    Chevron { x: parent.width - 24px; y: (parent.height - self.height) / 2; }
     area := TouchArea { mouse-cursor: pointer; clicked => { root.clicked(); } }
 }
 
 export component Field inherits Rectangle {
+    in property <bool> modal-control: false;
     in property <string> placeholder;
     in-out property <string> text;
-    height: 38px;
+    in property <bool> secret: false;
+    in property <string> focus-id;
+    in property <int> focus-revision: UiData.focus-revision;
+    callback edited(string);
+    callback accepted();
+    forward-focus: input;
+    changed focus-revision => {
+        if root.focus-id != "" && UiData.focus-target == root.focus-id { input.focus(); }
+    }
+    height: Theme.control-height;
     min-width: 100px;
     background: Theme.surface;
     border-radius: 6px;
@@ -101,87 +227,133 @@ export component Field inherits Rectangle {
     border-width: 1px;
     input := TextInput {
         x: 12px;
-        y: 7px;
+        y: (parent.height + placeholder-label.font-metrics.cap-height) / 2 - placeholder-label.font-metrics.ascent;
         width: parent.width - 24px;
-        height: parent.height - 14px;
+        height: self.preferred-height;
         text <=> root.text;
+        enabled: UiData.modal == 0 || root.modal-control;
         single-line: true;
-        font-size: 13px;
+        input-type: root.secret ? InputType.password : InputType.text;
+        font-size: Theme.body-size;
         color: Theme.ink;
         selection-background-color: Theme.primary;
         selection-foreground-color: #ffffff;
+        edited => { root.edited(self.text); }
+        accepted => { root.accepted(); }
     }
-    if root.text == "": Caption {
+    placeholder-label := Caption {
+        visible: root.text == "";
         x: 12px;
         width: parent.width - 24px;
         height: parent.height;
         text: root.placeholder;
+        font-size: Theme.body-size;
         color: Theme.muted;
     }
 }
 
+export component Select inherits Rectangle {
+    in property <bool> modal-control: false;
+    in property <[string]> options;
+    in property <string> value;
+    callback selected(int);
+    height: Theme.control-height;
+    min-width: 100px;
+    ActionButton {
+        width: parent.width;
+        text: root.value;
+        dropdown: true;
+        modal-control: root.modal-control;
+        enabled: root.options.length > 0;
+        clicked => { popup.show(); }
+    }
+    popup := PopupWindow {
+        y: root.height + 4px;
+        width: max(root.width, 180px);
+        height: min(320px, root.options.length * (Theme.control-height + 4px) + 12px);
+        Rectangle {
+            background: Theme.surface;
+            border-color: Theme.line;
+            border-width: 1px;
+            border-radius: 6px;
+            ScrollView {
+                VerticalLayout {
+                    alignment: start;
+                    padding: 8px;
+                    spacing: 4px;
+                    for option[i] in root.options: ActionButton {
+                        modal-control: root.modal-control;
+                        text: option;
+                        selected: option == root.value;
+                        clicked => { popup.close(); root.selected(i); }
+                    }
+                }
+            }
+        }
+    }
+}
+
 export component Toggle inherits Rectangle {
+    forward-focus: toggle-focus;
+    in property <bool> modal-control: false;
     in property <bool> checked;
+    in property <bool> enabled: true;
     callback toggled(bool);
-    width: 38px;
-    height: 22px;
+    width: 40px;
+    height: 24px;
     horizontal-stretch: 0;
     vertical-stretch: 0;
-    border-radius: 11px;
+    border-radius: 12px;
     background: root.checked ? Theme.primary : Theme.muted;
+    opacity: root.enabled ? 1 : 0.5;
     Rectangle {
         x: root.checked ? 19px : 3px;
         y: 3px;
-        width: 16px;
-        height: 16px;
-        border-radius: 8px;
+        width: 18px;
+        height: 18px;
+        border-radius: 9px;
         background: #ffffff;
     }
+    toggle-focus := FocusScope {
+        enabled: root.enabled && (UiData.modal == 0 || root.modal-control);
+        key-pressed(event) => {
+            if event.text == " " || event.text == "\n" { root.toggled(!root.checked); return accept; }
+            return reject;
+        }
+    }
     TouchArea {
+        enabled: root.enabled && (UiData.modal == 0 || root.modal-control);
         mouse-cursor: pointer;
-        clicked => { root.toggled(!root.checked); }
+        clicked => { toggle-focus.focus(); root.toggled(!root.checked); }
     }
 }
 
 export component SettingRow inherits Rectangle {
+    in property <bool> modal-control: false;
     in property <string> title;
     in property <string> description;
     in-out property <bool> checked;
-    height: root.description == "" ? 54px : 68px;
-    Label { x: 16px; y: root.description == "" ? (parent.height - self.height) / 2 : 10px; height: 30px; width: parent.width - 90px; text: root.title; }
-    if root.description != "": Caption {
-        x: 16px; y: 35px; height: 22px; width: parent.width - 90px;
-        text: root.description;
+    in property <bool> enabled: true;
+    callback toggled(bool);
+    height: max(Theme.control-height, content.preferred-height);
+    content := HorizontalLayout {
+        cross-axis-alignment: center;
+        spacing: Theme.page-gap;
+        VerticalLayout {
+            spacing: 4px;
+            Label { text: root.title; }
+            if root.description != "": Caption { text: root.description; }
+        }
+        Toggle {
+            modal-control: root.modal-control;
+            enabled: root.enabled && (UiData.modal == 0 || root.modal-control);
+            checked: root.checked;
+            toggled(value) => { root.toggled(value); }
+        }
     }
-    Toggle {
-        x: parent.width - 54px;
-        y: (parent.height - self.height) / 2;
-        checked: root.checked;
-        toggled(value) => { root.checked = value; }
-    }
-}
-
-export component Metric inherits Panel {
-    in property <string> title;
-    in property <string> value;
-    in property <string> detail;
-    in property <bool> accent: true;
-    min-width: 140px;
-    height: 118px;
-    Caption { x: 18px; y: 14px; height: 24px; text: root.title; }
-    Label { x: 18px; y: 40px; height: 42px; text: root.value; font-size: 30px; color: root.accent ? Theme.accent : Theme.ink; }
-    Caption { x: 18px; y: 86px; height: 20px; text: root.detail; color: Theme.muted; }
 }
 
 export component Divider inherits Rectangle {
     height: 1px;
     background: Theme.subtle-line;
-}
-
-export component SectionTitle inherits Rectangle {
-    in property <string> title;
-    in property <string> detail;
-    height: 30px;
-    Heading { text: root.title; }
-    Caption { text: root.detail; horizontal-alignment: right; }
 }

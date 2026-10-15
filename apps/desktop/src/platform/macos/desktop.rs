@@ -1,4 +1,4 @@
-//! Dock reopen support. Iced/winit's existing delegate retains all lifecycle duties.
+//! Dock reopen support. Slint/winit's existing delegate retains all lifecycle duties.
 use objc2::{
     Encode, ffi,
     runtime::{AnyObject, Bool, Imp, Sel},

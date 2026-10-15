@@ -1,67 +1,79 @@
-import { Theme, Demo } from "../theme/palette.slint";
-import { Label, Caption, Heading, Panel, ActionButton, Badge, Metric } from "../components/controls.slint";
+import { ScrollView } from "std-widgets.slint";
+import { Theme } from "../theme/palette.slint";
+import { UiData, UiActions, Intent, CategoryItem } from "../state.slint";
+import { Label, Caption, Heading, ContentPanel, ActionButton, Field, Select, Badge, Paragraph } from "../components/controls.slint";
 
-component CategoryCard inherits Panel {
-    in property <string> title;
-    in property <string> count;
-    in property <string> detail;
-    in property <bool> warning: false;
-    callback clicked();
-    height: 112px;
-    VerticalLayout {
-        padding: 16px; spacing: 6px;
-        HorizontalLayout { Heading { text: root.title; } Label { text: root.count; color: root.warning ? Theme.warning : Theme.accent; horizontal-alignment: right; font-size: 22px; } }
-        Caption { text: root.detail; }
-        Caption { text: "查看分类详情  →"; color: Theme.accent; }
+component CategoryCard inherits ContentPanel {
+    in property <CategoryItem> item;
+    horizontal-stretch: 1;
+    interactive: true;
+    clicked => { UiActions.dispatch(Intent.site-open-category, root.item.id, ""); }
+    HorizontalLayout { cross-axis-alignment: center; spacing: Theme.content-gap;
+        Heading { text: root.item.title; }
+        Label { text: root.item.count; color: root.item.tone == 2 ? Theme.warning : Theme.accent; horizontal-alignment: right; font-size: 22px * Theme.text-scale; }
     }
-    TouchArea { mouse-cursor: pointer; clicked => { root.clicked(); } }
+    Caption { text: root.item.detail; }
+    Caption { text: "查看分类详情 →"; color: Theme.accent; }
 }
 
 export component IpCheckPage inherits Rectangle {
-    callback open-category(string);
-    property <int> progress: 183;
-    Timer { interval: 80ms; running: root.progress < 183; triggered => { root.progress += 3; } }
-    VerticalLayout {
-        spacing: 14px;
-        HorizontalLayout {
-            spacing: 10px;
-            Heading { text: "检测报告"; }
-            Caption { text: "完成 " + min(root.progress, 183) + " / 183"; horizontal-alignment: right; }
-            ActionButton { text: root.progress < 183 ? "检测中…" : "重新检测"; primary: true; enabled: root.progress >= 183; clicked => { root.progress = 0; } }
-        }
-        Rectangle {
-            height: 3px; background: Theme.subtle-line;
-            Rectangle { x: 0px; y: 0px; width: parent.width * min(root.progress, 183) / 183; height: parent.height; background: Theme.accent; }
-        }
-        Panel {
-            height: 96px;
-            HorizontalLayout {
-                padding: 18px; spacing: 24px;
-                VerticalLayout { Caption { text: "出口 IP"; } Label { text: "203.0.113.42"; font-size: 22px; color: Theme.accent; } }
-                VerticalLayout { Caption { text: "出口地区"; } Label { text: "德国"; font-size: 22px; } }
-                VerticalLayout { Caption { text: "识别地区"; } Label { text: "2 个地区"; font-size: 22px; } }
+    ScrollView {
+        x: 0px; width: parent.width + Theme.content-gap;
+        VerticalLayout {
+            alignment: start; padding-right: Theme.content-gap; spacing: Theme.page-gap;
+            HorizontalLayout { cross-axis-alignment: center; spacing: Theme.content-gap;
+                Heading { text: UiData.sites-report ? "检测报告" : UiData.site-category; }
+                Caption { text: UiData.site-progress; horizontal-alignment: right; }
+                if UiData.sites-busy: ActionButton { text: "取消"; clicked => { UiActions.dispatch(Intent.site-cancel, "", ""); } }
+                if !UiData.sites-busy: ActionButton { text: UiData.sites-started ? "重新检测" : "一键检测"; primary: true; enabled: UiData.running && !UiData.working; clicked => { UiActions.dispatch(Intent.site-all, "", ""); } }
+            }
+            Rectangle { height: 3px; background: Theme.subtle-line;
+                Rectangle { x: 0px; y: 0px; width: parent.width * UiData.site-fraction; height: parent.height; background: Theme.accent; }
+            }
+            if UiData.site-summary != "": ContentPanel { Paragraph { text: UiData.site-summary; } }
+            if UiData.sites-report: ScrollView {
+                height: Theme.control-height + Theme.content-gap;
+                HorizontalLayout { alignment: start; spacing: Theme.content-gap;
+                    for count in UiData.site-counts: ActionButton { text: count.label; clicked => { UiActions.dispatch(Intent.site-status, count.id, "all"); } }
+                }
+            }
+            if UiData.sites-report: VerticalLayout {
+                spacing: Theme.page-gap;
+                for pair in UiData.categories: HorizontalLayout { cross-axis-alignment: center; spacing: Theme.page-gap;
+                    CategoryCard { item: pair.left; }
+                    if pair.right.id != "": CategoryCard { item: pair.right; }
+                    if pair.right.id == "": Rectangle { horizontal-stretch: 1; }
+                }
+                ActionButton { text: "IP 信息与全部检测结果 →"; clicked => { UiActions.dispatch(Intent.site-open-category, "", ""); } }
+            }
+            if !UiData.sites-report: VerticalLayout {
+                spacing: Theme.page-gap;
+                HorizontalLayout { cross-axis-alignment: center; spacing: Theme.content-gap;
+                    ActionButton { text: "← 返回报告"; clicked => { UiActions.dispatch(Intent.site-report, "", ""); } }
+                    Field { placeholder: "搜索平台、地区或结果"; focus-id: "page-search"; text <=> UiData.query; edited(value) => { UiActions.dispatch(Intent.query, value, ""); } }
+                    ActionButton { text: "重测分类"; enabled: UiData.running && !UiData.sites-busy; clicked => { UiActions.dispatch(Intent.site-retest, "", ""); } }
+                }
+                HorizontalLayout { cross-axis-alignment: center; spacing: Theme.content-gap;
+                    Select { options: UiData.site-category-options; value: UiData.site-category; selected(index) => { UiActions.dispatch(Intent.site-category, self.options[index], ""); } }
+                    Select { options: UiData.site-status-options; value: UiData.site-status; selected(index) => { UiActions.dispatch(Intent.site-status, self.options[index], ""); } }
+                    Select { options: UiData.site-region-options; value: UiData.site-region; selected(index) => { UiActions.dispatch(Intent.site-region, self.options[index], ""); } }
+                    ActionButton { text: "清除筛选"; clicked => { UiActions.dispatch(Intent.site-reset, "", ""); } }
+                }
+                for result in UiData.site-results: ContentPanel {
+                    HorizontalLayout { cross-axis-alignment: center; spacing: Theme.content-gap;
+                        VerticalLayout { spacing: 4px; Label { text: result.title; } Caption { text: result.value; color: result.tone == 3 ? Theme.danger : result.tone == 2 ? Theme.warning : result.tone == 1 ? Theme.success : Theme.secondary; } }
+                        if result.flagged: Image { source: result.flag; width: 24px; height: 24px; image-fit: contain; }
+                        Caption { text: result.source; horizontal-alignment: right; }
+                        ActionButton { text: "详情"; clicked => { UiActions.dispatch(Intent.site-detail, result.id, ""); } }
+                        ActionButton { text: "重测"; enabled: UiData.running && !UiData.sites-busy; clicked => { UiActions.dispatch(Intent.site-probe, result.id, ""); } }
+                    }
+                }
+                HorizontalLayout { cross-axis-alignment: center; spacing: Theme.content-gap;
+                    Caption { text: UiData.page-status; }
+                    ActionButton { text: "上一页"; enabled: UiData.previous; clicked => { UiActions.dispatch(Intent.list-page, "" + max(0, UiData.page-offset - 60), ""); } }
+                    ActionButton { text: "下一页"; enabled: UiData.next; clicked => { UiActions.dispatch(Intent.list-page, "" + (UiData.page-offset + 60), ""); } }
+                }
             }
         }
-        HorizontalLayout {
-            spacing: 8px;
-            Badge { text: "确认可用 74"; tone: 1; }
-            Badge { text: "仅网页可达 20"; tone: 2; }
-            Badge { text: "信息已识别 5"; }
-            Badge { text: "不可用或受限 36"; tone: 3; }
-            Badge { text: "未确认 / 失败 48"; tone: 4; }
-            Rectangle { horizontal-stretch: 1; }
-        }
-        HorizontalLayout {
-            spacing: 14px;
-            CategoryCard { title: "AI"; count: "4 / 5"; detail: "确认可用 3 · 网页可达 1 · 受限 1"; warning: true; clicked => { root.open-category("AI"); } }
-            CategoryCard { title: "全球"; count: "18 / 19"; detail: "确认可用 16 · 网页可达 2 · 受限 1"; clicked => { root.open-category("全球"); } }
-        }
-        HorizontalLayout {
-            spacing: 14px;
-            CategoryCard { title: "流媒体"; count: "12 / 18"; detail: "确认可用 8 · 网页可达 4 · 受限 6"; warning: true; clicked => { root.open-category("流媒体"); } }
-            CategoryCard { title: "地区服务"; count: "60 / 136"; detail: "按识别地区查看平台可用情况"; clicked => { root.open-category("地区服务"); } }
-        }
-        ActionButton { text: "IP 信息与全部检测结果  →"; clicked => { root.open-category("全部检测结果"); } }
-        Rectangle { vertical-stretch: 1; }
     }
 }

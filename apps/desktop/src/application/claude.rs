@@ -1,9 +1,8 @@
-//! Native Iced region report with automatic browser sampling and client guides.
+//! Claude report state, classification and cancelable diagnostic tasks.
 use super::*;
 use clash_of_rust::claude_check::{
     self as check, Environment, Evidence, Group, Report, Signal, browser::Session,
 };
-use iced::widget::column;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Guide {
@@ -16,15 +15,6 @@ pub enum ResultKind {
     Normal,
     Risk,
     Unknown,
-}
-impl ResultKind {
-    fn name(self) -> &'static str {
-        match self {
-            Self::Normal => "正常项目",
-            Self::Risk => "风险项目",
-            Self::Unknown => "辅助线索与未确认项目",
-        }
-    }
 }
 #[derive(Debug, Clone)]
 pub enum Event {
@@ -60,26 +50,26 @@ pub struct State {
     pub results_page: usize,
     pub results_filter: Option<ResultKind>,
     pub audit: Option<check::audit::Audit>,
-    audit_busy: bool,
-    scan: Option<check::audit::Scan>,
+    pub(super) audit_busy: bool,
+    pub(super) scan: Option<check::audit::Scan>,
     pub guide: Option<Guide>,
-    protection_opened: Option<std::time::Instant>,
+    pub(super) protection_opened: Option<std::time::Instant>,
     pub reports: [Option<Report>; 4],
     pub session: Option<Session>,
-    guard_status: String,
-    generation: u64,
-    aborters: Vec<AbortHandle>,
-    local_busy: bool,
-    network_busy: bool,
-    browser_busy: bool,
-    importing: bool,
-    session_starting: bool,
+    pub(super) guard_status: String,
+    pub(super) generation: u64,
+    pub(super) aborters: Vec<AbortHandle>,
+    pub(super) local_busy: bool,
+    pub(super) network_busy: bool,
+    pub(super) browser_busy: bool,
+    pub(super) importing: bool,
+    pub(super) session_starting: bool,
     pub status: String,
     pub error: bool,
-    reputation_key: String,
-    additional_busy: bool,
+    pub(super) reputation_key: String,
+    pub(super) additional_busy: bool,
 }
-enum Entry<'a> {
+pub(super) enum Entry<'a> {
     Config(&'a check::audit::Finding),
     Clean(&'a str),
     Signal(&'a Report, &'a Signal),
@@ -94,7 +84,7 @@ fn index(environment: Environment) -> usize {
     }
 }
 impl State {
-    fn protection_wait(&self) -> u64 {
+    pub(super) fn protection_wait(&self) -> u64 {
         self.protection_opened.map_or(3, |opened| {
             let remaining = std::time::Duration::from_secs(3).saturating_sub(opened.elapsed());
             remaining.as_secs() + u64::from(remaining.subsec_nanos() > 0)
@@ -144,7 +134,7 @@ impl State {
         current.signals.retain(|s| s.title != "实时保护与异常拦截");
         current.signals.extend(report.signals);
     }
-    fn entries(&self) -> Vec<Entry<'_>> {
+    pub(super) fn entries(&self) -> Vec<Entry<'_>> {
         let mut entries = Vec::new();
         if let Some(audit) = &self.audit {
             entries.extend(audit.findings.iter().map(Entry::Config));
@@ -170,7 +160,7 @@ impl State {
         entries.extend(signals.into_iter().map(|(r, s)| Entry::Signal(r, s)));
         entries
     }
-    fn kind(&self, entry: &Entry<'_>) -> ResultKind {
+    pub(super) fn kind(&self, entry: &Entry<'_>) -> ResultKind {
         match entry {
             Entry::Clean(_) => ResultKind::Normal,
             Entry::Config(f) => {
@@ -207,7 +197,7 @@ impl State {
             }
         }
     }
-    fn counts(&self, entries: &[Entry<'_>]) -> [usize; 3] {
+    pub(super) fn counts(&self, entries: &[Entry<'_>]) -> [usize; 3] {
         let mut counts = [0; 3];
         for entry in entries {
             counts[self.kind(entry) as usize] += 1;
@@ -231,7 +221,7 @@ impl State {
         }
         counts
     }
-    fn differs(&self, report: &Report, signal: &Signal) -> bool {
+    pub(super) fn differs(&self, report: &Report, signal: &Signal) -> bool {
         report.differs(signal)
             || (!signal.country.is_empty()
                 && self.reports[index(Environment::Core)]
@@ -306,7 +296,7 @@ impl State {
         }
         .into();
     }
-    fn selected(&self) -> impl Iterator<Item = &Report> {
+    pub(super) fn selected(&self) -> impl Iterator<Item = &Report> {
         self.reports.iter().flatten()
     }
 }
@@ -586,11 +576,11 @@ impl App {
             }
             Event::CopySiteScript => {
                 self.claude.status = "脚本已复制：在 Claude 网页的开发者工具 Console 中运行，再导入脚本复制的 JSON。脚本不读取账号或 Cookie。".into();
-                return iced::clipboard::write(check::browser::site_script());
+                return desktop_runtime::clipboard::write(check::browser::site_script());
             }
             Event::Import => {
                 let generation = self.claude.generation;
-                return iced::clipboard::read()
+                return desktop_runtime::clipboard::read()
                     .map(move |text| wrap(Event::Clipboard(generation, text)));
             }
             Event::Clipboard(generation, text) if generation == self.claude.generation => {
@@ -713,414 +703,8 @@ impl App {
         }
         Task::none()
     }
-
-    pub(crate) fn claude_view(&self) -> Element<'_, Message> {
-        let event = |event| Message::Claude(event);
-        let state = &self.claude;
-        let has_reports = state.audit.is_some() || state.reports.iter().any(Option::is_some);
-        let mut body = column![
-            aligned_row![
-                button(
-                    self.label(if has_reports {
-                        "重新检测"
-                    } else {
-                        "开始检测"
-                    })
-                    .size(self.font_size(13))
-                )
-                .style(ui_style::primary)
-                .padding([7, 12])
-                .on_press_maybe((!state.busy()).then_some(event(Event::Start))),
-                Space::new().width(Length::Fill),
-                button(self.label("检测选项").size(self.font_size(12)))
-                    .style(ui_style::text_button)
-                    .on_press(event(Event::Guide(Some(Guide::Diagnostics)))),
-                button(self.label("导出报告").size(self.font_size(13)))
-                    .style(ui_style::secondary_button)
-                    .padding([7, 10])
-                    .on_press_maybe(
-                        (has_reports && self.engine.is_some()).then_some(event(Event::Export))
-                    )
-            ]
-            .spacing(8)
-        ]
-        .spacing(8);
-        let protection = self.settings.claude_protection.as_ref();
-        body = body.push(
-            container(column![
-                checkbox(protection.is_some()).label("Claude 保护")
-                    .text_size(self.scaled(13))
-                    .on_toggle_maybe((!self.working && !self.exiting && !state.busy() && (self.snapshot.running || protection.is_some()))
-                        .then_some(|enabled| Message::Claude(Event::Protection(enabled)))),
-                self.caption(if let Some(protection) = protection {
-                    format!("使用节点：{} · TUN、规则、代理 DNS 与实时拦截已开启；关闭后恢复原状态。", protection.node)
-                } else { "一键启用 TUN、广泛规则、代理 DNS 与实时拦截；可能影响其他应用与国内网站。".into() }),
-            ].spacing(5)).padding(10).width(Length::Fill).style(ui_style::panel)
-        );
-        if state.busy() {
-            let progress = (usize::from(!state.local_busy)
-                + usize::from(!state.network_busy)
-                + usize::from(!state.audit_busy)
-                + usize::from(!state.browser_busy && !state.session_starting))
-                as f32
-                / 4.0;
-            body = body
-                .push(aligned_row![
-                    self.caption("正在扫描配置与检测地区线索…"),
-                    Space::new().width(Length::Fill),
-                    button(self.label("停止").size(self.font_size(12)))
-                        .style(ui_style::text_button)
-                        .on_press(event(Event::Cancel))
-                ])
-                .push(progress_bar(0.0..=1.0, progress).girth(4));
-        }
-        if !state.status.is_empty() {
-            body = body.push(self.label(&state.status).size(self.font_size(12)).color(
-                if state.error {
-                    ui_style::tone(&self.theme(), ui_style::Tone::Danger)
-                } else {
-                    self.secondary()
-                },
-            ));
-        }
-        if let Some(audit) = &state.audit {
-            body = body.push(self.caption(format!(
-                "已检查 {} 个已记录项目 · {} 份配置{}{}",
-                audit.projects,
-                audit.files,
-                if audit.missing_projects > 0 {
-                    format!(" · {} 个目录已不存在", audit.missing_projects)
-                } else {
-                    String::new()
-                },
-                if audit.incomplete {
-                    " · 扫描未完成，见下方说明"
-                } else {
-                    ""
-                }
-            )));
-        }
-        if !state.guard_status.is_empty() {
-            body = body.push(self.caption(&state.guard_status));
-        }
-        if state.session.is_some() {
-            body = body.push(aligned_row![
-                self.caption("浏览器正在自动采样；离开此页会关闭回传入口。"),
-                Space::new().width(Length::Fill),
-                button(self.label("关闭入口").size(self.font_size(12)))
-                    .style(ui_style::text_button)
-                    .on_press(event(Event::CloseSession))
-            ]);
-        }
-        let mut entries = state.entries();
-        let counts = state.counts(&entries);
-        if state.results_filter.is_none() {
-            body = body.push(
-                aligned_row![
-                    self.claude_count_card(
-                        ResultKind::Normal,
-                        counts[0],
-                        "已确认且未发现上述问题",
-                        ui_style::Tone::Success
-                    ),
-                    self.claude_count_card(
-                        ResultKind::Risk,
-                        counts[1],
-                        "配置覆盖或网络差异，点击查看",
-                        ui_style::Tone::Warning
-                    )
-                ]
-                .spacing(10),
-            );
-            if counts[2] > 0 {
-                body = body.push(
-                    button(
-                        aligned_row![
-                            column![
-                                self.label("其他线索").size(self.font_size(14)),
-                                self.caption("辅助线索与未确认结果")
-                            ]
-                            .spacing(3),
-                            Space::new().width(Length::Fill),
-                            container(
-                                self.label(format!("{} 项", counts[2]))
-                                    .size(self.font_size(13))
-                            )
-                            .padding([4, 9])
-                            .style(|theme: &Theme| ui_style::badge(theme, ui_style::Tone::Muted)),
-                            self.label("查看 ›")
-                                .size(self.font_size(13))
-                                .color(ui_style::tone(&self.theme(), ui_style::Tone::Accent)),
-                        ]
-                        .spacing(12),
-                    )
-                    .width(Length::Fill)
-                    .padding([12, 16])
-                    .style(ui_style::secondary_button)
-                    .on_press(event(Event::ResultsFilter(Some(ResultKind::Unknown)))),
-                );
-            }
-            if let Some(audit) = &state.audit
-                && audit.incomplete
-            {
-                body = body.push(self.caption("部分配置尚未完成检查，不能据此确认没有风险。"));
-            }
-            return body
-                .push(self.caption(
-                    "配置扫描仅覆盖已记录的项目和可读取文件；检测结果不代表 Claude 服务资格。",
-                ))
-                .push(Space::new().height(Length::Fill))
-                .height(Length::Fill)
-                .into();
-        }
-        let filter = state.results_filter.unwrap();
-        entries.retain(|entry| state.kind(entry) == filter);
-        body = body.push(
-            aligned_row![
-                button(self.label("‹ 返回报告").size(self.font_size(12)))
-                    .style(ui_style::text_button)
-                    .on_press(event(Event::ResultsFilter(None))),
-                self.label(filter.name()).size(self.font_size(17)),
-                Space::new().width(Length::Fill),
-                button(self.label("补充采样").size(self.font_size(12)))
-                    .style(ui_style::text_button)
-                    .on_press(event(Event::Guide(Some(Guide::Supplement))))
-            ]
-            .spacing(8),
-        );
-        let pages = entries.len().div_ceil(20).max(1);
-        let page = state.results_page.min(pages - 1);
-        let mut results = column![].spacing(8);
-        if entries.is_empty() {
-            results = results.push(self.caption(if state.busy() {
-                "检测结果会逐项显示。"
-            } else if has_reports {
-                "当前没有可展示的结果。"
-            } else {
-                "开始检测会自动扫描已记录的 Claude 项目配置，并打开默认浏览器采样。"
-            }));
-        }
-        if let Some(audit) = &state.audit {
-            let omitted = if filter == ResultKind::Normal {
-                audit.clean_count.saturating_sub(audit.clean_files.len())
-            } else {
-                audit.omitted
-            };
-            if omitted > 0 {
-                results = results
-                    .push(self.caption(format!("明细超过保留上限，另有 {} 项未展开。", omitted)));
-            }
-        }
-        for entry in entries.into_iter().skip(page * 20).take(20) {
-            let (title, value, source, detail, advice, badge, tone) = match entry {
-                Entry::Config(f) => (
-                    format!("配置 · {}", f.field),
-                    f.value.clone(),
-                    f.path.clone(),
-                    f.reason.clone(),
-                    f.advice.clone(),
-                    f.level.name(),
-                    match f.level {
-                        check::audit::Level::Issue => ui_style::Tone::Danger,
-                        check::audit::Level::Review => ui_style::Tone::Warning,
-                        check::audit::Level::Incomplete => ui_style::Tone::Muted,
-                    },
-                ),
-                Entry::Clean(path) => (
-                    "配置文件".into(),
-                    "未发现上述风险项".into(),
-                    path.into(),
-                    "已检查代理、API 地址、提供方及证书相关的配置字段。".into(),
-                    String::new(),
-                    "已检查",
-                    ui_style::Tone::Success,
-                ),
-                Entry::Signal(r, s) => (
-                    s.title.clone(),
-                    s.value.clone(),
-                    s.source.clone(),
-                    s.detail.clone(),
-                    s.advice.clone(),
-                    if state.differs(r, s) {
-                        "存在差异"
-                    } else {
-                        s.evidence.name()
-                    },
-                    if state.differs(r, s) {
-                        ui_style::Tone::Warning
-                    } else if s.evidence == Evidence::Measured {
-                        ui_style::Tone::Success
-                    } else {
-                        ui_style::Tone::Muted
-                    },
-                ),
-                Entry::Route(r) => (
-                    r.host.clone(),
-                    r.outcome.clone(),
-                    "内核连接记录".into(),
-                    format!("{}\n规则：{}\n线路：{}", r.time, r.rule, r.chain),
-                    String::new(),
-                    if r.outcome.starts_with("异常连接") {
-                        "已拦截"
-                    } else if r.risky() {
-                        "异常线路"
-                    } else {
-                        "已选路"
-                    },
-                    if r.risky() {
-                        ui_style::Tone::Danger
-                    } else {
-                        ui_style::Tone::Muted
-                    },
-                ),
-            };
-            let mut item = column![aligned_row![
-                self.label(title).size(self.font_size(14)),
-                Space::new().width(Length::Fill),
-                container(self.label(badge).size(self.font_size(11)))
-                    .padding([3, 7])
-                    .style(move |theme: &Theme| ui_style::badge(theme, tone))
-            ]]
-            .spacing(5);
-            if !value.is_empty() {
-                item = item.push(self.label(value).size(self.font_size(14)));
-            }
-            item = item
-                .push(self.caption(format!("来源：{source}")))
-                .push(self.caption(detail));
-            if !advice.is_empty() {
-                item = item.push(self.caption(format!("建议：{advice}")));
-            }
-            results = results.push(
-                container(item)
-                    .padding(11)
-                    .width(Length::Fill)
-                    .style(ui_style::panel),
-            );
-        }
-        body = body.push(page_scroll(results).height(Length::Fill));
-        if pages > 1 {
-            body = body.push(
-                aligned_row![
-                    self.caption(format!("第 {} / {} 页", page + 1, pages)),
-                    Space::new().width(Length::Fill),
-                    button(self.label("上一页"))
-                        .style(ui_style::secondary_button)
-                        .on_press_maybe((page > 0).then(|| event(Event::ResultsPage(page - 1)))),
-                    button(self.label("下一页"))
-                        .style(ui_style::secondary_button)
-                        .on_press_maybe(
-                            (page + 1 < pages).then(|| event(Event::ResultsPage(page + 1)))
-                        )
-                ]
-                .spacing(8),
-            );
-        }
-        body.height(Length::Fill).into()
-    }
-
-    pub(crate) fn claude_dialog(&self) -> Option<Element<'_, Message>> {
-        let guide = self.claude.guide?;
-        let event = |event| Message::Claude(event);
-        let content = match guide {
-            Guide::Supplement => column![
-                self.title("补充采样"),
-                self.label("自动浏览器检测来自本机检测页面。需要核对 Claude 网页本身的设置时，可在该网页的开发者工具 Console 运行采样脚本，再导入结果。"),
-                aligned_row![
-                    button(self.label("复制网页采样脚本")).style(ui_style::secondary_button)
-                        .on_press(event(Event::CopySiteScript)),
-                    button(self.label("导入剪贴板采样")).style(ui_style::secondary_button)
-                        .on_press_maybe((!self.claude.importing).then_some(event(Event::Import)))
-                ].spacing(8)
-            ],
-            Guide::Protection => column![
-                self.title("开启 Claude 保护"),
-                self.label("将使用当前具体代理节点，启用 TUN、严格路由、IPv6 接管和 UDP 转发，加入 Claude 与关联服务规则，并让公网 DNS 通过该节点访问加密 DNS。"),
-                self.label("广泛规则可能改变其他应用的监控、登录或客服连接；全局 DNS 变化可能影响国内网站与内网服务，节点故障时相关解析也可能失败。"),
-                self.caption("节点域名引导解析使用直连加密 DNS，局域网名称保留本地解析。浏览器独立 DNS、时区、语言和账号资格仍需检测确认，不能保证消除所有风险。"),
-                self.caption("原代理模式、DNS、UDP、规则和节点选择会保存，重启后仍保留；关闭保护会恢复。首次启用 TUN 可能需要系统授权。"),
-                self.label("实时监测到 Claude 或关联服务偏离保护节点时，会关闭对应连接并弹出系统提示；共享服务可能属于其他应用。"),
-                aligned_row![
-                    Space::new().width(Length::Fill),
-                    button(self.label(if self.claude.protection_wait() > 0 {
-                        format!("开启并重新检测（{} 秒）", self.claude.protection_wait())
-                    } else {
-                        "开启并重新检测".into()
-                    })).style(ui_style::primary)
-                        .on_press_maybe((self.claude.protection_wait() == 0 && !self.working && !self.exiting && !self.claude.busy()).then_some(event(Event::ConfirmProtection)))
-                ],
-            ],
-            Guide::Diagnostics => column![
-                self.title("检测服务"),
-                self.label("IP 归属、ASN 与地区可匿名查询；完整的机房、VPN、代理、Tor 与滥用标签需要 ipapi.is 的个人 API 密钥。留空时相关项目显示未确认。"),
-                text_input("可选：ipapi.is API 密钥",&self.claude.reputation_key)
-                    .secure(true).style(rounded_input).on_input(|value|Message::Claude(Event::ReputationKey(value))),
-                self.caption("密钥仅保存在本机，以 HTTPS 请求正文提交给所选检测服务；不会交给浏览器、Claude 或写入报告。匿名接口有每日额度，失败不反复重试。"),
-                button(self.label("保存")).style(ui_style::primary)
-                    .on_press_maybe((!self.working && !self.exiting).then_some(event(Event::SaveReputationKey))),
-                self.caption("补充检测需手动触发：注册信息查询公网出口归属；全球探针从最多 20 个远端位置测量出口 IP；小流量测速下载 10 MiB、上传 2 MiB。结果不代表 Claude 的账号资格。"),
-                aligned_row![
-                    button(self.label("注册信息")).style(ui_style::secondary_button)
-                        .on_press_maybe((self.snapshot.running && !self.claude.busy()).then_some(event(Event::Additional(check::additional::Kind::Registration)))),
-                    button(self.label("全球探针")).style(ui_style::secondary_button)
-                        .on_press_maybe((self.snapshot.running && !self.claude.busy()).then_some(event(Event::Additional(check::additional::Kind::GlobalPing)))),
-                    button(self.label("小流量测速")).style(ui_style::secondary_button)
-                        .on_press_maybe((self.snapshot.running && !self.claude.busy()).then_some(event(Event::Additional(check::additional::Kind::Speed)))),
-                ].spacing(8),
-            ],
-        };
-        Some(
-            content
-                .spacing(14)
-                .push(aligned_row![
-                    Space::new().width(Length::Fill),
-                    button(self.label("知道了"))
-                        .style(ui_style::primary)
-                        .padding([8, 12])
-                        .on_press(event(Event::Guide(None)))
-                ])
-                .into(),
-        )
-    }
-
-    fn claude_count_card(
-        &self,
-        kind: ResultKind,
-        count: usize,
-        description: &str,
-        tone: ui_style::Tone,
-    ) -> Element<'_, Message> {
-        button(
-            container(
-                column![
-                    self.label(match kind {
-                        ResultKind::Normal => "正常",
-                        ResultKind::Risk => "风险",
-                        ResultKind::Unknown => "未确认",
-                    })
-                    .size(self.font_size(15)),
-                    self.label(format!("{count} 项"))
-                        .size(self.font_size(30))
-                        .color(ui_style::tone(&self.theme(), tone)),
-                    self.caption(description.to_owned()),
-                    self.label("查看具体项目 ›")
-                        .size(self.font_size(12))
-                        .color(ui_style::tone(&self.theme(), ui_style::Tone::Accent))
-                ]
-                .spacing(8),
-            )
-            .padding(18)
-            .width(Length::Fill),
-        )
-        .width(Length::Fill)
-        .padding(0)
-        .style(ui_style::secondary_button)
-        .on_press(Message::Claude(Event::ResultsFilter(Some(kind))))
-        .into()
-    }
 }
-
-#[cfg(feature = "ui-preview")]
+#[cfg(any(test, feature = "ui-preview"))]
 #[allow(dead_code)] // Production binaries compiled beside the harness do not use fixtures.
 pub(crate) fn fixture_state(scene: &str) -> State {
     let mut state = State::default();
@@ -1301,7 +885,7 @@ pub(crate) fn fixture_state(scene: &str) -> State {
 mod tests {
     use super::*;
     fn app() -> App {
-        App::with_engine(Err(anyhow::anyhow!("isolated")), None).0
+        App::initial_state(Err(anyhow::anyhow!("isolated")), None)
     }
     fn finish_local(app: &mut App, generation: u64) {
         let _ = app.claude_event(Event::Local(
@@ -1342,6 +926,7 @@ mod tests {
         app.claude.reports[0] = Some(Report::new(Environment::Core, "preserved"));
         let generation = app.claude.generation;
         let _ = app.update(Message::Finished(Box::new(Reply {
+            profile_import: false,
             profile_edit: false,
             scope: Scope::Claude,
             start_requested: false,
@@ -1513,7 +1098,7 @@ mod tests {
         let _ = app.claude_event(Event::ResultsFilter(Some(ResultKind::Risk)));
         assert_eq!(app.claude.results_page, 0);
         assert_eq!(app.claude.results_filter, Some(ResultKind::Risk));
-        let _ = app.claude_view();
+        assert!(app.claude.entries().is_empty());
         let _ = app.claude_event(Event::ResultsFilter(None));
         assert!(app.claude.results_filter.is_none());
     }

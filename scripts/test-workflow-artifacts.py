@@ -39,6 +39,13 @@ class ArtifactTests(unittest.TestCase):
                 tests = artifacts.test_binaries('\n'.join(entries))
                 self.assertEqual(tests['library'], str(root/'target/clash_of_rust'))
                 self.assertEqual(tests['client-core'], str(root/'target/clash_client_core'))
+                (root/'crates/client-ui').mkdir()
+                (root/'crates/client-ui/Cargo.toml').touch()
+                with self.assertRaisesRegex(ValueError, 'Slint library'):
+                    artifacts.test_binaries('\n'.join(entries))
+                entries.append(message('clash_client_ui', 'lib'))
+                tests = artifacts.test_binaries('\n'.join(entries))
+                self.assertEqual(tests['client-ui'], str(root/'target/clash_client_ui'))
 
     def fixture(self, root):
         (root/'Cargo.lock').write_text('fixture dependencies')

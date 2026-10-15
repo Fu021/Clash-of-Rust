@@ -1,8 +1,8 @@
 //! Remember ordinary window dimensions in logical pixels, independently of core settings.
+use super::runtime::Size;
 use super::{DEFAULT_WINDOW_SIZE, MIN_WINDOW_SIZE};
 use anyhow::{Context, Result};
 use clash_of_rust::config::{Store, atomic_write};
-use iced::Size;
 use serde::{Deserialize, Serialize};
 use std::{
     path::PathBuf,

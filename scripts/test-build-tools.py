@@ -34,7 +34,7 @@ class BuildTests(unittest.TestCase):
         dependencies = set(core.get('dependencies', {}))
         for target in core.get('target', {}).values():
             dependencies.update(target.get('dependencies', {}))
-        forbidden = {'clash-of-rust', 'iced', 'iced_graphics', 'cosmic-text',
+        forbidden = {'clash-of-rust', 'clash-client-ui', 'slint', 'iced', 'iced_graphics', 'cosmic-text',
                      'tray-icon', 'windows', 'windows-sys', 'winreg', 'zbus',
                      'objc2', 'objc2-app-kit', 'objc2-foundation', 'block2'}
         self.assertFalse(dependencies & forbidden)

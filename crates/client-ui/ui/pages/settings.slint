@@ -1,85 +1,94 @@
 import { ScrollView } from "std-widgets.slint";
-import { Theme, Demo } from "../theme/palette.slint";
-import { Label, Caption, Heading, Panel, ActionButton, AccentChoice, SettingRow, Divider, Field } from "../components/controls.slint";
-
+import { Theme, AccentPreview } from "../theme/palette.slint";
+import { UiData, UiActions, Intent } from "../state.slint";
+import { Label, Caption, ContentPanel, RowPanel, SettingsSection, ActionButton, AccentChoice, SettingRow, Divider, Field, Select, Paragraph } from "../components/controls.slint";
 export component SettingsPage inherits Rectangle {
-    callback request-dialog(int);
     ScrollView {
+        x: 0px; width: parent.width + Theme.content-gap;
         VerticalLayout {
-            spacing: 12px;
-            padding-right: 6px;
-            Heading { text: "外观"; height: 28px; }
-            Panel {
-                height: 172px;
-                VerticalLayout {
-                    padding: 16px; spacing: 8px;
-                    HorizontalLayout {
-                        spacing: 8px;
+            alignment: start; padding-right: Theme.content-gap; padding-bottom: Theme.card-padding; spacing: Theme.section-gap;
+            SettingsSection {
+                title: "外观";
+                ContentPanel {
+                    HorizontalLayout { cross-axis-alignment: center; spacing: Theme.content-gap;
                         Label { text: "主题"; }
-                        ActionButton { text: "深色"; selected: Theme.appearance == 0; clicked => { Theme.appearance = 0; } }
-                        ActionButton { text: "浅色"; selected: Theme.appearance == 1; clicked => { Theme.appearance = 1; } }
-                        ActionButton { text: "跟随系统"; selected: Theme.appearance == 2; clicked => { Theme.appearance = 2; } }
+                        ActionButton { text: "深色"; selected: UiData.appearance == 0; enabled: !UiData.working; clicked => { UiActions.dispatch(Intent.appearance, "0", ""); } }
+                        ActionButton { text: "浅色"; selected: UiData.appearance == 1; enabled: !UiData.working; clicked => { UiActions.dispatch(Intent.appearance, "1", ""); } }
+                        ActionButton { text: "跟随系统"; selected: UiData.appearance == 2; enabled: !UiData.working; clicked => { UiActions.dispatch(Intent.appearance, "2", ""); } }
                     }
                     Divider { }
-                    HorizontalLayout {
+                    HorizontalLayout { cross-axis-alignment: center;
                         Label { text: "强调色"; }
-                        AccentChoice { text: Demo.accent-names[Demo.accent-preview]; swatch: Demo.accent-colors[Demo.accent-preview]; clicked => { root.request-dialog(10); } }
+                        AccentChoice { text: AccentPreview.accent-names[AccentPreview.accent-preview]; swatch: AccentPreview.accent-colors[AccentPreview.accent-preview]; clicked => { UiActions.dispatch(Intent.accent-picker, "", ""); } }
                     }
                     Divider { }
-                    HorizontalLayout {
-                        spacing: 8px;
+                    HorizontalLayout { cross-axis-alignment: center; spacing: Theme.content-gap;
                         Label { text: "字号"; }
-                        ActionButton { text: "100% ⌄"; }
-                        ActionButton { text: "恢复默认窗口大小"; }
+                        Select { width: 100px; horizontal-stretch: 0; value: "" + UiData.text-scale + "%"; options: ["80%", "90%", "100%", "110%", "125%", "150%"]; selected(index) => { UiActions.dispatch(Intent.text-scale, self.options[index], ""); } }
+                        ActionButton { text: "恢复默认窗口大小"; clicked => { UiActions.dispatch(Intent.reset-window, "", ""); } }
+                    }
+                    Divider { }
+                    HorizontalLayout { cross-axis-alignment: center; spacing: Theme.content-gap;
+                        Label { text: "窗口大小"; }
+                        Field { width: 90px; horizontal-stretch: 0; text <=> UiData.window-width; edited(value) => { UiActions.dispatch(Intent.window-width, value, ""); } }
+                        Caption { text: "×"; horizontal-stretch: 0; }
+                        Field { width: 90px; horizontal-stretch: 0; text <=> UiData.window-height; edited(value) => { UiActions.dispatch(Intent.window-height, value, ""); } }
                     }
                 }
             }
-            Heading { text: "常规"; height: 28px; }
-            Panel {
-                height: 134px;
-                VerticalLayout {
-                    spacing: 0px;
-                    SettingRow { title: "开机自启动"; checked: false; height: 44px; }
+            SettingsSection {
+                title: "常规";
+                ContentPanel {
+                    SettingRow { title: "开机自启动"; checked: UiData.autostart; enabled: !UiData.working; toggled(value) => { UiActions.dispatch(Intent.autostart, value ? "true" : "false", ""); } }
                     Divider { }
-                    SettingRow { title: "关闭窗口后继续后台运行"; checked: true; height: 44px; }
-                    Divider { }
-                    SettingRow { title: "托盘显示实时速度"; checked: true; height: 44px; }
+                    SettingRow { title: "托盘显示上传与下载速度"; checked: UiData.tray-speed; enabled: !UiData.working; toggled(value) => { UiActions.dispatch(Intent.tray-speed, value ? "true" : "false", ""); } }
                 }
             }
-            Heading { text: "网络"; height: 28px; }
-            Panel {
-                height: 134px;
-                VerticalLayout {
-                    spacing: 0px;
-                    SettingRow { title: "DNS 覆盖"; checked: true; height: 44px; }
+            SettingsSection {
+                title: "网络";
+                ContentPanel {
+                    SettingRow { title: "DNS 覆盖"; checked: UiData.dns-override; enabled: !UiData.working && !UiData.update-busy; toggled(value) => { UiActions.dispatch(Intent.dns-override, value ? "true" : "false", ""); } }
                     Divider { }
-                    SettingRow { title: "启用 IPv6"; checked: true; height: 44px; }
+                    SettingRow { title: "启用 IPv6"; checked: UiData.ipv6; enabled: !UiData.working && !UiData.update-busy; toggled(value) => { UiActions.dispatch(Intent.ipv6, value ? "true" : "false", ""); } }
                     Divider { }
-                    SettingRow { title: "启用 UDP"; checked: true; height: 44px; }
+                    SettingRow { title: "启用 UDP"; checked: UiData.udp || UiData.protected; enabled: !UiData.working && !UiData.protected && !UiData.update-busy; toggled(value) => { UiActions.dispatch(Intent.udp, value ? "true" : "false", ""); } }
                 }
-            }
-            Panel {
-                height: 118px;
-                VerticalLayout {
-                    padding: 16px; spacing: 10px;
-                    HorizontalLayout {
-                        spacing: 12px;
+                ContentPanel {
+                    HorizontalLayout { cross-axis-alignment: center; spacing: Theme.content-gap;
                         Label { text: "混合端口"; }
-                        Field { text: "7897"; width: 120px; horizontal-stretch: 0; }
+                        Field { text <=> UiData.mixed-port; width: 100px; horizontal-stretch: 0; edited(value) => { UiActions.dispatch(Intent.mixed-port, value, ""); } }
                         Label { text: "控制端口"; }
-                        Field { text: "9090"; width: 120px; horizontal-stretch: 0; }
-                        ActionButton { text: "保存"; }
+                        Field { text <=> UiData.controller-port; width: 100px; horizontal-stretch: 0; edited(value) => { UiActions.dispatch(Intent.controller-port, value, ""); } }
                     }
+                    if UiData.ports-dirty: ActionButton { text: "保存并重启内核"; primary: true; enabled: !UiData.working; clicked => { UiActions.dispatch(Intent.save-ports, "", ""); } }
                     Caption { text: "日志级别：info · 出站网卡：TUN 自动检测"; }
                 }
             }
-            Heading { text: "更新"; height: 28px; }
-            Panel {
-                height: 74px;
-                HorizontalLayout {
-                    padding: 16px;
-                    Label { text: "当前版本 0.5.11-dev.1"; }
-                    ActionButton { text: "检查更新"; }
+            SettingsSection {
+                title: "定时测速";
+                RowPanel {
+                    Field { text <=> UiData.interval; width: 100px; horizontal-stretch: 0; edited(value) => { UiActions.dispatch(Intent.interval-input, value, ""); } }
+                    Caption { text: "分钟 · 0 表示关闭"; }
+                    ActionButton { text: "保存间隔"; enabled: !UiData.working; clicked => { UiActions.dispatch(Intent.save-interval, "", ""); } }
+                }
+            }
+            SettingsSection {
+                title: "Geo 数据";
+                RowPanel {
+                    Caption { text: UiData.geo-status; }
+                    ActionButton { text: "更新所有 Geo 数据"; enabled: UiData.ready && !UiData.working; clicked => { UiActions.dispatch(Intent.update-geo, "", ""); } }
+                }
+            }
+            SettingsSection {
+                title: "更新";
+                ContentPanel {
+                    Label { text: "当前版本 " + UiData.version; }
+                    Paragraph { text: UiData.update-status; font-size: Theme.detail-size; color: Theme.secondary; }
+                    HorizontalLayout { cross-axis-alignment: center; spacing: Theme.content-gap;
+                        ActionButton { text: "检查更新"; enabled: !UiData.update-checking && !UiData.update-busy; clicked => { UiActions.dispatch(Intent.check-update, "", ""); } }
+                        ActionButton { text: "查看 Release"; clicked => { UiActions.dispatch(Intent.open-release, "", ""); } }
+                        if UiData.update-available: ActionButton { text: "下载安装"; primary: true; enabled: !UiData.update-busy; clicked => { UiActions.dispatch(Intent.install-update, "", ""); } }
+                    }
                 }
             }
         }

@@ -93,7 +93,7 @@ async fn linux_dialog(title: &str, message: &str) -> Result<()> {
     use tokio::io::AsyncReadExt;
     // A successful Notify reply only means the desktop queued the message;
     // GNOME's notification preferences/Do Not Disturb may still hide it.
-    // Use a separate native dialog, also when the Iced window is hidden.
+    // Use a separate native dialog, also when the Slint window is hidden.
     // The DEB declares the helper dependency; no shell or root GUI is used.
     let kde = std::env::var("XDG_CURRENT_DESKTOP")
         .is_ok_and(|desktop| desktop.split(':').any(|d| d.eq_ignore_ascii_case("KDE")));

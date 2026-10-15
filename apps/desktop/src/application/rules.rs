@@ -1,10 +1,9 @@
 //! Native rule manager; only the visible subscription and one page of widgets
 //! are retained. Rule changes remain drafts until the core validates them.
 use super::*;
-use iced::widget::column;
 use rule_manager::{CustomRule, Document, Row, Source};
 
-const TYPES: [&str; 18] = [
+pub(super) const TYPES: [&str; 18] = [
     "DOMAIN",
     "DOMAIN-SUFFIX",
     "DOMAIN-KEYWORD",
@@ -24,7 +23,7 @@ const TYPES: [&str; 18] = [
     "DSCP",
     "MATCH",
 ];
-const SHORTCUT_LABELS: [&str; 5] = [
+pub(super) const SHORTCUT_LABELS: [&str; 5] = [
     "拦截广告",
     "本地域名直连",
     "私有 IP 直连",
@@ -51,7 +50,7 @@ impl std::fmt::Display for SourceFilter {
     }
 }
 impl SourceFilter {
-    fn matches(self, source: Source) -> bool {
+    pub(super) fn matches(self, source: Source) -> bool {
         self == Self::All
             || matches!(
                 (self, source),
@@ -107,17 +106,17 @@ pub enum Event {
 }
 #[derive(Debug)]
 pub struct Editor {
-    original: (String, bool, String),
-    id: Option<String>,
-    raw: String,
-    text_mode: bool,
-    kind: String,
-    payload: String,
-    policy: String,
-    no_resolve: bool,
-    enabled: bool,
-    position: String,
-    error: String,
+    pub(super) original: (String, bool, String),
+    pub(super) id: Option<String>,
+    pub(super) raw: String,
+    pub(super) text_mode: bool,
+    pub(super) kind: String,
+    pub(super) payload: String,
+    pub(super) policy: String,
+    pub(super) no_resolve: bool,
+    pub(super) enabled: bool,
+    pub(super) position: String,
+    pub(super) error: String,
 }
 impl Editor {
     fn new(rule: Option<&CustomRule>, position: usize) -> Self {
@@ -214,16 +213,16 @@ impl Editor {
 pub struct State {
     pub document: Option<Arc<Document>>,
     pub draft: ProfileRules,
-    saved: Arc<ProfileRules>,
-    rows: Vec<Row>,
-    warnings: Vec<String>,
-    selected: Option<String>,
-    filter: SourceFilter,
-    expanded: bool,
-    editor: Option<Editor>,
-    move_open: bool,
-    move_position: String,
-    pending_profile: Option<ProfileChoice>,
+    pub(super) saved: Arc<ProfileRules>,
+    pub(super) rows: Vec<Row>,
+    pub(super) warnings: Vec<String>,
+    pub(super) selected: Option<String>,
+    pub(super) filter: SourceFilter,
+    pub(super) expanded: bool,
+    pub(super) editor: Option<Editor>,
+    pub(super) move_open: bool,
+    pub(super) move_position: String,
+    pub(super) pending_profile: Option<ProfileChoice>,
 }
 impl State {
     pub fn clear_selection(&mut self) {
@@ -278,12 +277,12 @@ impl State {
             self.selected = None;
         }
     }
-    fn selected_index(&self) -> Option<usize> {
+    pub(super) fn selected_index(&self) -> Option<usize> {
         self.selected
             .as_ref()
             .and_then(|id| self.rows.iter().position(|r| &r.id == id))
     }
-    fn selected_custom(&self) -> Option<&CustomRule> {
+    pub(super) fn selected_custom(&self) -> Option<&CustomRule> {
         let row = &self.rows[self.selected_index()?];
         self.draft
             .custom
@@ -563,7 +562,7 @@ impl App {
             }
         }
         if focus_editor && let Some(editor) = &state.editor {
-            iced::widget::operation::focus(if editor.text_mode {
+            desktop_runtime::widget::operation::focus(if editor.text_mode {
                 "rule-raw"
             } else {
                 "rule-payload"
@@ -572,538 +571,7 @@ impl App {
             Task::none()
         }
     }
-    fn rule_button<'a>(
-        &self,
-        label: &'a str,
-        event: Event,
-        enabled: bool,
-        primary: bool,
-    ) -> Element<'a, Message> {
-        button(self.label(label).size(self.font_size(12)))
-            .padding([7, 10])
-            .style(if primary {
-                rounded_primary
-            } else {
-                rounded_secondary
-            })
-            .on_press_maybe(
-                (enabled && !self.working && !self.exiting).then_some(Message::Rules(event)),
-            )
-            .into()
-    }
-    fn rule_input<'a>(
-        &self,
-        placeholder: &'a str,
-        value: &'a str,
-        event: fn(String) -> Event,
-    ) -> Element<'a, Message> {
-        let id = match event(String::new()) {
-            Event::Raw(_) => "rule-raw",
-            Event::Payload(_) => "rule-payload",
-            Event::Position(_) => "rule-position",
-            Event::MoveInput(_) => "rule-move",
-            _ => "rule-input",
-        };
-        text_input(placeholder, value)
-            .id(id)
-            .font(typography::ENGLISH_FONT)
-            .size(self.font_size(13))
-            .padding(9)
-            .style(rounded_input)
-            .on_input(move |v| Message::Rules(event(v)))
-            .on_submit(Message::Rules(if self.rule_state.move_open {
-                Event::MoveTo
-            } else {
-                Event::SaveEditor
-            }))
-            .into()
-    }
-    pub(crate) fn rules(&self) -> Element<'_, Message> {
-        let state = &self.rule_state;
-        let Some(doc) = &state.document else {
-            return self.empty_state(
-                "规则管理",
-                if self.working {
-                    "正在加载订阅规则…"
-                } else {
-                    "请先添加或选择订阅配置。"
-                },
-            );
-        };
-        let editable = !self.working && !self.exiting;
-        let compact = self.window_height.parse::<u16>().unwrap_or(700) < 560;
-        let choices: Vec<_> = self
-            .profiles
-            .iter()
-            .map(|p| ProfileChoice {
-                id: p.id.clone(),
-                name: p.name.clone(),
-            })
-            .collect();
-        let selected = choices
-            .iter()
-            .find(|p| p.id == doc.profile_id)
-            .cloned()
-            .unwrap_or(ProfileChoice {
-                id: doc.profile_id.clone(),
-                name: "订阅配置".into(),
-            });
-        let profile_header = aligned_row![
-            self.selection(
-                choices,
-                selected,
-                |p| Message::Rules(Event::Profile(p)),
-                195
-            ),
-            self.caption(
-                if self.settings.active_profile.as_deref() == Some(&doc.profile_id) {
-                    "当前使用中"
-                } else {
-                    "未启用 · 修改仅保存到此订阅"
-                }
-            ),
-            Space::new().width(Length::Fill),
-            self.rule_button("新增规则", Event::Add, true, true)
-        ]
-        .spacing(8);
-        let enabled = if doc.builtin {
-            0
-        } else {
-            state
-                .draft
-                .enabled
-                .iter()
-                .enumerate()
-                .filter(|(i, on)| **on || doc.included[*i])
-                .count()
-        };
-        let expanded = state.expanded;
-        let mut shortcuts = column![
-            aligned_row![
-                self.title("快捷规则"),
-                self.caption(format!("已启用 {enabled}/5")),
-                Space::new().width(Length::Fill),
-                self.rule_button(
-                    if expanded { "收起" } else { "展开" },
-                    Event::Collapse,
-                    true,
-                    false
-                )
-            ]
-            .spacing(8)
-        ]
-        .spacing(8);
-        // Compact windows keep the card scrollable so no toolbar or report is covered.
-        let show_shortcuts = state.expanded;
-        if show_shortcuts {
-            let mut options = column![self.caption(if doc.builtin {
-                "默认直连配置保留原规则；快捷规则适用于订阅。"
-            } else {
-                "仅补充订阅缺少的规则，补充的规则优先匹配。"
-            })]
-            .spacing(8);
-            for pair in [0, 1, 2, 3, 4].chunks(2) {
-                let mut row = aligned_row![].spacing(12);
-                for &i in pair {
-                    let mut label = SHORTCUT_LABELS[i].to_owned();
-                    if doc.included[i] {
-                        label.push_str(" · 订阅已包含");
-                    }
-                    row = row.push(
-                        column![
-                            checkbox(!doc.builtin && (state.draft.enabled[i] || doc.included[i]))
-                                .label(label)
-                                .text_size(self.font_size(13))
-                                .size(self.font_size(16))
-                                .on_toggle_maybe(
-                                    (editable && !doc.builtin && !doc.included[i])
-                                        .then_some(move |on| Message::Rules(Event::Toggle(i, on)))
-                                ),
-                            self.caption(clash_of_rust::config::SUBSCRIPTION_RULES[i])
-                                .size(self.font_size(11))
-                                .wrapping(text::Wrapping::WordOrGlyph)
-                        ]
-                        .spacing(3)
-                        .width(Length::Fill),
-                    );
-                }
-                if pair.len() == 1 {
-                    row = row.push(Space::new().width(Length::Fill));
-                }
-                options = options.push(row);
-            }
-            if compact {
-                shortcuts = shortcuts.push(page_scroll(options).height(75));
-            } else {
-                shortcuts = shortcuts.push(options);
-            }
-        }
-        let query = self.query.to_lowercase();
-        let entries = state.rows.iter().enumerate().filter(|(_, r)| {
-            state.filter.matches(r.source)
-                && (query.is_empty()
-                    || query
-                        .split_whitespace()
-                        .all(|word| contains_query(&r.raw, word)))
-        });
-        let total = entries.clone().count();
-        let offset = self.list_offset.min(last_page_offset(total));
-        let selected_at = state.selected_index();
-        let custom = state.selected_custom();
-        let mut tools = aligned_row![
-            self.caption(selected_at.map_or_else(
-                || "选择一条规则调整顺序".into(),
-                |i| format!("已选择第 {} 条", i + 1)
-            )),
-            Space::new().width(Length::Fill),
-            self.rule_button(
-                "上移",
-                Event::Move(-1),
-                selected_at.is_some_and(|i| i > 0),
-                false
-            ),
-            self.rule_button(
-                "下移",
-                Event::Move(1),
-                selected_at.is_some_and(|i| i + 1 < state.rows.len()),
-                false
-            ),
-            self.rule_button("移到…", Event::MoveOpen, selected_at.is_some(), false),
-            self.rule_button("编辑", Event::Edit, custom.is_some(), false),
-            self.rule_button(
-                custom.map_or("停用", |r| if r.enabled { "停用" } else { "启用" }),
-                Event::Enable,
-                custom.is_some(),
-                false
-            ),
-            self.rule_button("删除", Event::Delete, custom.is_some(), false)
-        ]
-        .spacing(5);
-        if compact {
-            tools = tools.spacing(3);
-        }
-        let mut list = column![].spacing(2);
-        for (display_row, (index, rule)) in entries.skip(offset).take(PAGE_SIZE).enumerate() {
-            let parts = rule_manager::parts(&rule.raw).ok();
-            let active = state.selected.as_ref() == Some(&rule.id);
-            let raw = parts.as_ref().map_or(rule.raw.as_ref(), |p| {
-                if p.payload.is_empty() {
-                    "所有剩余连接"
-                } else {
-                    p.payload
-                }
-            });
-            let source = if rule.duplicate {
-                format!("{} · 已包含", rule.source)
-            } else if !rule.enabled {
-                format!("{} · 停用", rule.source)
-            } else {
-                rule.source.to_string()
-            };
-            let content = aligned_row![
-                self.caption(format!("{:04}", index + 1)).width(42),
-                self.label(parts.as_ref().map_or("规则", |p| p.kind))
-                    .size(self.font_size(12))
-                    .width(if compact { 95 } else { 115 }),
-                self.label(raw)
-                    .size(self.font_size(13))
-                    .wrapping(text::Wrapping::WordOrGlyph)
-                    .width(Length::Fill),
-                self.label(parts.as_ref().map_or("", |p| p.policy))
-                    .size(self.font_size(13))
-                    .color(if rule.enabled {
-                        self.accent()
-                    } else {
-                        self.secondary()
-                    })
-                    .width(85),
-                self.caption(source).size(self.font_size(11)).width(90)
-            ]
-            .spacing(7);
-            list = list.push(
-                button(content)
-                    .padding([9, 8])
-                    .width(Length::Fill)
-                    .style(move |theme: &Theme, _| {
-                        let row = if active {
-                            ui_style::selected_panel(theme)
-                        } else {
-                            ui_style::table_row(theme, display_row % 2 == 1)
-                        };
-                        button::Style {
-                            background: row.background,
-                            border: row.border,
-                            text_color: theme.palette().text,
-                            ..button::Style::default()
-                        }
-                    })
-                    .on_press_maybe(
-                        editable.then(|| Message::Rules(Event::Select(rule.id.clone()))),
-                    ),
-            );
-        }
-        if total == 0 {
-            list = list
-                .push(self.empty_state("没有匹配的规则", "调整搜索和来源筛选，或新增自定义规则。"));
-        }
-        let mut page = column![
-            profile_header,
-            container(shortcuts)
-                .padding(12)
-                .width(Length::Fill)
-                .style(panel),
-            aligned_row![
-                self.search("搜索规则类型、内容或策略"),
-                self.selection(
-                    [
-                        SourceFilter::All,
-                        SourceFilter::Custom,
-                        SourceFilter::Shortcut,
-                        SourceFilter::Subscription
-                    ],
-                    state.filter,
-                    |f| Message::Rules(Event::Filter(f)),
-                    115
-                ),
-                self.rule_button(
-                    "恢复订阅顺序",
-                    Event::Restore,
-                    !state.draft.order.is_empty(),
-                    false
-                )
-            ]
-            .spacing(8),
-            tools,
-            self.table_header(
-                aligned_row![
-                    self.label("顺序").size(self.font_size(12)).width(42),
-                    self.label("类型")
-                        .size(self.font_size(12))
-                        .width(if compact { 95 } else { 115 }),
-                    self.label("规则内容")
-                        .size(self.font_size(12))
-                        .width(Length::Fill),
-                    self.label("策略").size(self.font_size(12)).width(85),
-                    self.label("来源").size(self.font_size(12)).width(90)
-                ]
-                .spacing(7)
-                .into()
-            ),
-            container(page_scroll(list).height(Length::Fill))
-                .width(Length::Fill)
-                .style(panel),
-            self.list_pager(total, offset)
-        ]
-        .spacing(if compact { 5 } else { 8 });
-        if let Some(at) = selected_at {
-            page = page.push(
-                page_scroll(
-                    self.caption(state.rows[at].raw.as_ref())
-                        .size(self.font_size(11)),
-                )
-                .height(22),
-            );
-        }
-        if !state.warnings.is_empty() {
-            page = page.push(
-                container(
-                    page_scroll(
-                        self.caption(state.warnings.join("\n"))
-                            .size(self.font_size(12)),
-                    )
-                    .height(40),
-                )
-                .padding(8)
-                .width(Length::Fill)
-                .style(|t| ui_style::badge(t, ui_style::Tone::Warning)),
-            );
-        }
-        page = page.push(
-            aligned_row![
-                column![
-                    self.label(if self.working {
-                        "正在校验并应用…"
-                    } else if state.dirty() {
-                        "有未应用的修改"
-                    } else {
-                        "规则已保存"
-                    })
-                    .size(self.font_size(13))
-                    .color(if state.dirty() {
-                        ui_style::tone(&self.theme(), ui_style::Tone::Warning)
-                    } else {
-                        self.secondary()
-                    }),
-                    self.caption("应用前校验配置 · 订阅更新后保留自定义规则和排序")
-                        .size(self.font_size(11))
-                ]
-                .spacing(3)
-                .width(Length::Fill),
-                self.rule_button("放弃修改", Event::Discard, state.dirty(), false),
-                self.rule_button(
-                    "应用修改",
-                    Event::Apply,
-                    state.dirty() && self.engine.is_some(),
-                    true
-                )
-            ]
-            .spacing(8),
-        );
-        let page: Element<'_, Message> = page.into();
-        let dialog: Option<Element<'_, Message>> = if let Some(choice) = &state.pending_profile {
-            Some(
-                column![
-                    self.title("切换订阅？"),
-                    self.label(format!("切换到“{}”会放弃当前未应用的修改。", choice.name))
-                        .size(self.font_size(14)),
-                    aligned_row![
-                        Space::new().width(Length::Fill),
-                        self.rule_button("继续编辑", Event::CancelProfile, true, false),
-                        self.rule_button("放弃并切换", Event::ConfirmProfile, true, true)
-                    ]
-                    .spacing(8)
-                ]
-                .spacing(16)
-                .into(),
-            )
-        } else if state.move_open {
-            Some(
-                column![
-                    self.title("移动规则"),
-                    self.caption(format!(
-                        "指定位置 1–{}，包含当前筛选未显示的规则。",
-                        state.rows.len()
-                    )),
-                    self.rule_input("规则位置", &state.move_position, Event::MoveInput),
-                    aligned_row![
-                        self.rule_button("移到顶部", Event::MoveEdge(false), true, false),
-                        self.rule_button("移到底部", Event::MoveEdge(true), true, false),
-                        Space::new().width(Length::Fill),
-                        self.rule_button("取消", Event::CloseEditor, true, false),
-                        self.rule_button(
-                            "移动",
-                            Event::MoveTo,
-                            state
-                                .move_position
-                                .parse::<usize>()
-                                .is_ok_and(|i| i > 0 && i <= state.rows.len()),
-                            true
-                        )
-                    ]
-                    .spacing(8)
-                ]
-                .spacing(12)
-                .into(),
-            )
-        } else {
-            state.editor.as_ref().map(|e| self.rule_editor(e, doc))
-        };
-        if let Some(dialog) = dialog {
-            let overlay = self.modal(dialog);
-            stack![page.map(|_| Message::Noop), iced::widget::opaque(overlay)].into()
-        } else {
-            page
-        }
-    }
-    fn rule_editor<'a>(&self, editor: &'a Editor, doc: &'a Document) -> Element<'a, Message> {
-        let mut body = column![
-            self.title(if editor.id.is_some() {
-                "编辑自定义规则"
-            } else {
-                "新增自定义规则"
-            }),
-            aligned_row![
-                self.rule_button("表单", Event::TextMode(false), true, !editor.text_mode),
-                self.rule_button("规则文本", Event::TextMode(true), true, editor.text_mode)
-            ]
-            .spacing(8)
-        ]
-        .spacing(12);
-        if editor.text_mode {
-            body = body
-                .push(self.rule_input("DOMAIN,example.com,DIRECT", &editor.raw, Event::Raw))
-                .push(self.caption("支持完整 mihomo 规则；复杂逻辑规则使用文本编辑。"));
-        } else {
-            body = body.push(
-                aligned_row![
-                    self.caption("规则类型").width(75),
-                    self.selection(
-                        TYPES.map(str::to_owned),
-                        editor.kind.clone(),
-                        |kind| Message::Rules(Event::Kind(kind)),
-                        190
-                    )
-                ]
-                .spacing(8),
-            );
-            if editor.kind != "MATCH" {
-                body = body.push(self.rule_input(
-                    "规则内容，如 example.com 或 192.168.0.0/16",
-                    &editor.payload,
-                    Event::Payload,
-                ));
-            }
-            body = body.push(
-                aligned_row![
-                    self.caption("策略").width(75),
-                    self.selection(
-                        doc.policies.as_slice(),
-                        editor.policy.clone(),
-                        |policy| Message::Rules(Event::Policy(policy)),
-                        250
-                    )
-                ]
-                .spacing(8),
-            );
-            if matches!(
-                editor.kind.as_str(),
-                "GEOIP" | "IP-CIDR" | "IP-CIDR6" | "IP-ASN" | "RULE-SET"
-            ) {
-                body = body.push(
-                    checkbox(editor.no_resolve)
-                        .label("no-resolve · 不主动解析域名")
-                        .text_size(self.font_size(13))
-                        .on_toggle(|v| Message::Rules(Event::NoResolve(v))),
-                );
-            }
-            body = body.push(
-                self.caption(editor.form_raw())
-                    .wrapping(text::Wrapping::WordOrGlyph),
-            );
-        }
-        body = body.push(
-            aligned_row![
-                self.caption("插入位置").width(75),
-                self.rule_input("从 1 开始的顺序", &editor.position, Event::Position),
-                checkbox(editor.enabled)
-                    .label("启用")
-                    .text_size(self.font_size(13))
-                    .on_toggle(|v| Message::Rules(Event::Enabled(v)))
-            ]
-            .spacing(10),
-        );
-        if !editor.error.is_empty() {
-            body = body.push(
-                self.label(&editor.error)
-                    .size(self.font_size(13))
-                    .color(ui_style::tone(&self.theme(), ui_style::Tone::Danger)),
-            );
-        }
-        body = body.push(self.caption(
-            "修改保存为草稿，应用后生效。订阅原有规则可排序，编辑与删除仅作用于自定义规则。",
-        ));
-        body = body.push(
-            aligned_row![
-                Space::new().width(Length::Fill),
-                self.rule_button("取消", Event::CloseEditor, true, false),
-                self.rule_button("保存到草稿", Event::SaveEditor, true, true)
-            ]
-            .spacing(8),
-        );
-        page_scroll(body).height(Length::Shrink).into()
-    }
 }
-
 #[cfg(test)]
 mod tests {
     use super::*;

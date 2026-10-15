@@ -1,91 +1,59 @@
-import { Theme, Demo } from "../theme/palette.slint";
-import { Label, Caption, Heading, Panel, ActionButton, Badge, Field } from "../components/controls.slint";
+import { ScrollView } from "std-widgets.slint";
+import { Theme } from "../theme/palette.slint";
+import { UiData, UiActions, Intent, NodeItem } from "../state.slint";
+import { Label, Caption, Heading, ContentPanel, RowPanel, ActionButton, Badge, Field, Select } from "../components/controls.slint";
 
-struct Node { name: string, kind: string, delay: string }
-
-component NodeCard inherits Panel {
-    in property <Node> node;
-    in property <bool> selected: node.name == Demo.node;
-    height: 92px;
-    border-color: root.selected ? Theme.accent : Theme.line;
-    background: root.selected ? Theme.accent-wash : Theme.surface;
-    VerticalLayout {
-        padding: 15px; spacing: 6px;
-        HorizontalLayout {
-            Label { text: root.node.name; color: root.selected ? Theme.accent : Theme.ink; }
-            Label { text: root.node.delay; color: Theme.accent; horizontal-alignment: right; horizontal-stretch: 0; }
-        }
-        HorizontalLayout {
-            Caption { text: root.node.kind; }
-            Caption { text: root.selected ? "✓ 当前使用" : "点击切换"; horizontal-alignment: right; }
-        }
+component NodeCard inherits ContentPanel {
+    in property <NodeItem> node;
+    border-color: node.selected ? Theme.accent : Theme.line;
+    background: node.selected ? Theme.accent-wash : Theme.surface;
+    HorizontalLayout { cross-axis-alignment: center;
+        Label { text: root.node.name; color: root.node.selected ? Theme.accent : Theme.ink; }
+        Caption { text: root.node.delay; color: Theme.accent; horizontal-stretch: 0; }
     }
-    TouchArea { mouse-cursor: pointer; clicked => { Demo.node = root.node.name; } }
+    HorizontalLayout { cross-axis-alignment: center;
+        Caption { text: root.node.kind; }
+        ActionButton { text: root.node.selected ? "✓ 当前使用" : "选择"; enabled: UiData.running && !UiData.working; clicked => { UiActions.dispatch(Intent.select-node, root.node.group, root.node.name); } }
+        ActionButton { text: "测速"; enabled: UiData.running && !UiData.working; clicked => { UiActions.dispatch(Intent.node-delay, root.node.name, ""); } }
+    }
 }
-
 export component ProxiesPage inherits Rectangle {
-    property <string> search;
-    property <int> order: 0;
-    property <bool> expanded: true;
-    property <[Node]> nodes: root.order == 1 ? [
-        {name: "美国 01", kind: "VLESS · TCP", delay: "186 ms"},
-        {name: "德国 01 · IPv6", kind: "AnyTLS · UDP", delay: "148 ms"},
-        {name: "新加坡 01", kind: "Trojan · TCP", delay: "75 ms"},
-        {name: "日本 01", kind: "Shadowsocks · UDP", delay: "56 ms"},
-        {name: "香港 02", kind: "VLESS · UDP", delay: "34 ms"},
-        {name: "香港 01", kind: "AnyTLS · UDP", delay: "28 ms"}
-    ] : root.order == 2 ? [
-        {name: "德国 01 · IPv6", kind: "AnyTLS · UDP", delay: "148 ms"},
-        {name: "美国 01", kind: "VLESS · TCP", delay: "186 ms"},
-        {name: "日本 01", kind: "Shadowsocks · UDP", delay: "56 ms"},
-        {name: "香港 01", kind: "AnyTLS · UDP", delay: "28 ms"},
-        {name: "香港 02", kind: "VLESS · UDP", delay: "34 ms"},
-        {name: "新加坡 01", kind: "Trojan · TCP", delay: "75 ms"}
-    ] : [
-        {name: "香港 01", kind: "AnyTLS · UDP", delay: "28 ms"},
-        {name: "香港 02", kind: "VLESS · UDP", delay: "34 ms"},
-        {name: "日本 01", kind: "Shadowsocks · UDP", delay: "56 ms"},
-        {name: "新加坡 01", kind: "Trojan · TCP", delay: "75 ms"},
-        {name: "德国 01 · IPv6", kind: "AnyTLS · UDP", delay: "148 ms"},
-        {name: "美国 01", kind: "VLESS · TCP", delay: "186 ms"}
-    ];
-    VerticalLayout {
-        spacing: 16px;
-        HorizontalLayout {
-            spacing: 10px;
-            Field { placeholder: "搜索节点或代理组"; text <=> root.search; }
-            ActionButton { text: root.order == 0 ? "延迟 ↑" : root.order == 1 ? "延迟 ↓" : "名称排序"; clicked => { root.order = mod(root.order + 1, 3); } }
-            ActionButton { text: "全部测速"; primary: true; }
-        }
-        Panel {
-            height: 74px;
-            HorizontalLayout {
-                padding: 16px; spacing: 12px;
-                VerticalLayout { Heading { text: "代理选择"; } Caption { text: "手动选择 · 6 个节点"; } }
-                Badge { text: Demo.node; }
-                ActionButton { text: root.expanded ? "收起 ⌃" : "展开 ⌄"; clicked => { root.expanded = !root.expanded; } }
+    ScrollView {
+        x: 0px; width: parent.width + Theme.content-gap;
+        VerticalLayout {
+            alignment: start;
+            padding-right: Theme.content-gap; spacing: Theme.page-gap;
+            HorizontalLayout { cross-axis-alignment: center; spacing: Theme.content-gap;
+                Field { placeholder: "搜索节点或代理组"; focus-id: "page-search"; text <=> UiData.query; edited(value) => { UiActions.dispatch(Intent.query, value, ""); } }
+                Select { width: 172px; horizontal-stretch: 0; options: ["延迟从低到高", "延迟从高到低", "名称排序"]; value: self.options[UiData.node-sort]; selected(index) => { UiActions.dispatch(Intent.node-sort, "" + index, ""); } }
             }
-        }
-        if root.expanded: VerticalLayout {
-            spacing: 12px;
-            for row in [0, 1, 2]: HorizontalLayout {
-                spacing: 12px;
-                for column in [0, 1]: NodeCard {
-                    width: (root.width - 12px) / 2;
-                    node: root.nodes[row * 2 + column];
-                    // The standalone preview uses exact matches. Rust models will filter live data.
-                    visible: root.search == "" || self.node.name == root.search || self.node.kind == root.search;
+            for group in UiData.groups: ContentPanel {
+                HorizontalLayout { cross-axis-alignment: center; spacing: Theme.content-gap;
+                    VerticalLayout { spacing: 4px; Heading { text: group.title; } Caption { text: group.detail; } }
+                    Badge { text: group.current; width-limit: root.width * 0.34; }
+                    ActionButton { text: group.testing ? "测速中…" : "全部测速"; enabled: UiData.running && !UiData.working && !group.testing; clicked => { UiActions.dispatch(Intent.group-delay, group.id, ""); } }
+                    ActionButton { text: group.expanded ? "收起" : "展开"; dropdown: true; expanded: group.expanded; clicked => { UiActions.dispatch(Intent.toggle-group, group.id, ""); } }
+                }
+                if group.expanded: VerticalLayout {
+                    spacing: Theme.page-gap;
+                    for pair in group.nodes: HorizontalLayout { cross-axis-alignment: center; spacing: Theme.page-gap;
+                        NodeCard { width: (root.width - Theme.card-padding * 2 - Theme.page-gap) / 2; node: pair.left; }
+                        if pair.right.valid: NodeCard { width: (root.width - Theme.card-padding * 2 - Theme.page-gap) / 2; node: pair.right; }
+                        if !pair.right.valid: Rectangle { horizontal-stretch: 1; }
+                    }
+                    HorizontalLayout { cross-axis-alignment: center; spacing: Theme.content-gap;
+                        Caption { text: group.page; }
+                        ActionButton { text: "上一页"; enabled: group.previous; clicked => { UiActions.dispatch(Intent.group-page, group.id, "false"); } }
+                        ActionButton { text: "下一页"; enabled: group.next; clicked => { UiActions.dispatch(Intent.group-page, group.id, "true"); } }
+                    }
                 }
             }
-        }
-        Panel {
-            height: 64px;
-            HorizontalLayout {
-                padding: 16px;
-                Label { text: "自动选择"; }
-                Caption { text: "URLTest · 香港 01 · 28 ms"; horizontal-alignment: right; }
+            if UiData.groups.length == 0: ContentPanel { Caption { text: UiData.running ? "当前配置没有匹配的代理组" : "内核启动后显示代理组"; } }
+            HorizontalLayout { cross-axis-alignment: center; spacing: Theme.content-gap;
+                Caption { text: UiData.page-status; }
+                ActionButton { text: "上一页"; enabled: UiData.previous; clicked => { UiActions.dispatch(Intent.list-page, "" + max(0, UiData.page-offset - 4), ""); } }
+                ActionButton { text: "下一页"; enabled: UiData.next; clicked => { UiActions.dispatch(Intent.list-page, "" + (UiData.page-offset + 4), ""); } }
             }
         }
-        Rectangle { vertical-stretch: 1; }
     }
 }

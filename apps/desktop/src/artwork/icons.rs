@@ -1,5 +1,4 @@
 //! Shared artwork for the sidebar, native window, and tray.
-use std::sync::OnceLock;
 
 pub const SIZE: u32 = 128;
 const APP: &[u8] = include_bytes!(concat!(
@@ -28,18 +27,6 @@ pub fn pixels(kind: Kind) -> &'static [u8] {
         Kind::SystemProxy => SYSTEM,
         Kind::Tun => TUN,
     }
-}
-
-pub fn window() -> iced::window::Icon {
-    iced::window::icon::from_rgba(APP.to_vec(), SIZE, SIZE)
-        .expect("committed app icon must contain valid RGBA pixels")
-}
-
-pub fn sidebar() -> iced::widget::image::Handle {
-    static HANDLE: OnceLock<iced::widget::image::Handle> = OnceLock::new();
-    HANDLE
-        .get_or_init(|| iced::widget::image::Handle::from_rgba(SIZE, SIZE, APP))
-        .clone()
 }
 
 pub fn tray_kind(system_proxy: bool, tun: bool) -> Kind {

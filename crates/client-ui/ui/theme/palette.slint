@@ -1,5 +1,17 @@
 // Design A: solid surfaces, restrained outlines, and a neutral, legible palette.
 export global Theme {
+    in-out property <float> text-scale: 1;
+    out property <length> body-size: 15px * text-scale;
+    out property <length> detail-size: 14px * text-scale;
+    out property <length> heading-size: 18px * text-scale;
+    out property <length> control-height: max(40px, body-size * 1.5 + 16px);
+    // Shared spacing. Content cards size to their layouts, never to the window.
+    out property <length> card-padding: 16px;
+    out property <length> page-gap: 12px;
+    out property <length> content-gap: 8px;
+    out property <length> section-gap: 20px;
+    out property <length> dialog-padding: 24px;
+    out property <length> dialog-gap: 16px;
     // 0 dark, 1 light, 2 follow system. The preview supplies a mock system theme.
     in-out property <int> appearance: 2;
     in-out property <bool> system-dark: false;
@@ -24,12 +36,8 @@ export global Theme {
     out property <color> danger-wash: dark ? #402c39 : #fef2f2;
 }
 
-// Preview state has no network, file, privilege or application callbacks attached.
-export global Demo {
-    in-out property <string> profile: "我的订阅";
-    in-out property <string> node: "德国 01 · IPv6";
-    in-out property <bool> protected: false;
-    in-out property <string> detail-title: "AI";
+// Session-only accent picker placeholder; never changes network or saved settings.
+export global AccentPreview {
     // This only changes the picker/its button. It does not change Theme or settings.
     in-out property <int> accent-preview: 0;
     out property <[string]> accent-names: ["青绿", "蓝色", "紫色", "玫红", "琥珀", "石墨"];

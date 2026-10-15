@@ -8,7 +8,7 @@ license.workspace = true
 
 [features]
 # Screenshot harness; never enabled for official application builds.
-ui-preview = []
+ui-preview = ["clash-client-ui/test-support"]
 
 [[test]]
 name = "ui_preview"
@@ -22,13 +22,13 @@ path = "src/tun_launcher.rs"
 
 [dependencies]
 clash-client-core = { path = "../../crates/client-core" }
+clash-client-ui = { path = "../../crates/client-ui" }
+slint = { workspace = true }
+futures-channel = { workspace = true }
+arboard = { version = "3.7", default-features = false }
 anyhow = { workspace = true }
 chrono = { workspace = true }
 directories = { workspace = true }
-iced = { workspace = true }
-iced_graphics = { workspace = true }
-cosmic-text = { workspace = true }
-unicode-script = { workspace = true }
 reqwest = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
@@ -67,3 +67,6 @@ objc2-foundation = { version = "0.3.2", default-features = false, features = ["s
 
 [build-dependencies]
 semver = "1"
+
+[dev-dependencies]
+clash-client-ui = { path = "../../crates/client-ui", features = ["test-support"] }

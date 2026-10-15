@@ -1,6 +1,7 @@
 //! Offline bitmap flags avoid Windows font-dependent regional indicator rendering.
 pub use clash_client_core::countries::{country_code, country_text};
-use iced::widget::image::Handle;
+use slint::{Image, SharedPixelBuffer};
+use std::cell::OnceCell;
 use std::sync::OnceLock;
 
 const SIZE: u32 = 72;
@@ -21,7 +22,7 @@ fn codes() -> &'static Vec<String> {
     })
 }
 
-pub fn label(country: &str) -> (&str, Option<Handle>) {
+pub fn label(country: &str) -> (&str, Option<Image>) {
     let mut chars = country.char_indices();
     let Some((_, first)) = chars.next() else {
         return (country, None);
@@ -42,14 +43,21 @@ pub fn label(country: &str) -> (&str, Option<Handle>) {
     if matches!(code.as_str(), "HK" | "MO" | "TW") {
         return (text, None);
     }
-    static HANDLES: OnceLock<Vec<OnceLock<Handle>>> = OnceLock::new();
-    let handles = HANDLES.get_or_init(|| codes().iter().map(|_| OnceLock::new()).collect());
+    thread_local! {
+        static HANDLES: Vec<OnceCell<Image>> = codes().iter().map(|_| OnceCell::new()).collect();
+    }
     let handle = codes().iter().position(|item| item == &code).map(|index| {
-        handles[index]
-            .get_or_init(|| {
-                Handle::from_rgba(SIZE, SIZE, &PIXELS[index * BYTES..(index + 1) * BYTES])
-            })
-            .clone()
+        HANDLES.with(|handles| {
+            handles[index]
+                .get_or_init(|| {
+                    Image::from_rgba8(SharedPixelBuffer::clone_from_slice(
+                        &PIXELS[index * BYTES..(index + 1) * BYTES],
+                        SIZE,
+                        SIZE,
+                    ))
+                })
+                .clone()
+        })
     });
     (text, handle)
 }
