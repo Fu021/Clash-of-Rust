@@ -7,8 +7,9 @@ use windows_sys::Win32::{
         ERROR_NO_DATA, ERROR_PIPE_BUSY, ERROR_PIPE_CONNECTED, ERROR_PIPE_LISTENING, GetLastError,
     },
     Storage::FileSystem::{
-        CreateFileW, FILE_FLAG_FIRST_PIPE_INSTANCE, FILE_READ_DATA, FILE_WRITE_DATA, OPEN_EXISTING,
-        PIPE_ACCESS_DUPLEX, ReadFile, WriteFile,
+        CreateFileW, FILE_FLAG_FIRST_PIPE_INSTANCE, FILE_READ_ATTRIBUTES, FILE_READ_DATA,
+        FILE_WRITE_ATTRIBUTES, FILE_WRITE_DATA, OPEN_EXISTING, PIPE_ACCESS_DUPLEX, ReadFile,
+        WriteFile,
     },
     System::Pipes::{
         ConnectNamedPipe, CreateNamedPipeW, PIPE_NOWAIT, PIPE_REJECT_REMOTE_CLIENTS,
@@ -59,7 +60,11 @@ impl Pipe {
             let handle = unsafe {
                 CreateFileW(
                     wide(NAME).as_ptr(),
-                    FILE_READ_DATA | FILE_WRITE_DATA | 0x00100000,
+                    FILE_READ_DATA
+                        | FILE_WRITE_DATA
+                        | FILE_READ_ATTRIBUTES
+                        | FILE_WRITE_ATTRIBUTES
+                        | 0x00100000,
                     0,
                     std::ptr::null(),
                     OPEN_EXISTING,
@@ -98,19 +103,24 @@ impl Pipe {
         let mut offset = 0;
         while offset < bytes.len() {
             let mut written = 0;
-            ensure!(
-                unsafe {
-                    WriteFile(
-                        self.0.raw(),
-                        bytes[offset..].as_ptr(),
-                        (bytes.len() - offset) as u32,
-                        &mut written,
-                        std::ptr::null_mut(),
-                    )
-                } != 0,
-                "助手连接已关闭：{}",
-                std::io::Error::last_os_error()
-            );
+            let result = unsafe {
+                WriteFile(
+                    self.0.raw(),
+                    bytes[offset..].as_ptr(),
+                    (bytes.len() - offset) as u32,
+                    &mut written,
+                    std::ptr::null_mut(),
+                )
+            };
+            if result == 0 {
+                let code = unsafe { GetLastError() };
+                ensure!(
+                    code == ERROR_NO_DATA && Instant::now() < deadline,
+                    "助手连接已关闭或写入超时：{code}"
+                );
+                std::thread::sleep(Duration::from_millis(10));
+                continue;
+            }
             offset += written as usize;
             ensure!(Instant::now() < deadline, "助手写入超时");
             if written == 0 {

@@ -9,6 +9,7 @@ def run_unelevated(command, env, timeout=240, on_start=None, expected_code=0):
     import ctypes as c
     from ctypes import wintypes as w
     import subprocess
+    import contextlib
     kernel = c.WinDLL('kernel32', use_last_error=True)
     advapi = c.WinDLL('advapi32', use_last_error=True)
     class SID_ATTRIBUTES(c.Structure):
@@ -36,10 +37,74 @@ def run_unelevated(command, env, timeout=240, on_start=None, expected_code=0):
     advapi.CreateRestrictedToken.argtypes = [w.HANDLE, w.DWORD, w.DWORD, c.POINTER(SID_ATTRIBUTES), w.DWORD, w.LPVOID, w.DWORD, w.LPVOID, c.POINTER(w.HANDLE)]
     advapi.ConvertStringSidToSidW.argtypes = [w.LPCWSTR, c.POINTER(w.LPVOID)]
     advapi.SetTokenInformation.argtypes = [w.HANDLE, c.c_int, w.LPVOID, w.DWORD]
+    advapi.GetLengthSid.argtypes = [w.LPVOID]
+    advapi.GetLengthSid.restype = w.DWORD
     advapi.CreateProcessAsUserW.argtypes = [w.HANDLE, w.LPCWSTR, w.LPWSTR, w.LPVOID, w.LPVOID, w.BOOL, w.DWORD, w.LPVOID, w.LPCWSTR, c.POINTER(STARTUP), c.POINTER(PROCESS)]
     def require(ok):
         if not ok:
             raise c.WinError(c.get_last_error())
+    @contextlib.contextmanager
+    def desktop_access(token):
+        # Hosted runners can own a service desktop accessible only through the
+        # Administrators group. A filtered token needs its user's explicit ACE
+        # before user32 can initialize. Restore the original ACL after testing.
+        user32 = c.WinDLL('user32', use_last_error=True)
+        user32.GetProcessWindowStation.restype = w.HANDLE
+        user32.GetThreadDesktop.argtypes = [w.DWORD]
+        user32.GetThreadDesktop.restype = w.HANDLE
+        user32.GetUserObjectInformationW.argtypes = [w.HANDLE, c.c_int, w.LPVOID, w.DWORD, c.POINTER(w.DWORD)]
+        user32.OpenWindowStationW.argtypes = [w.LPCWSTR, w.BOOL, w.DWORD]
+        user32.OpenWindowStationW.restype = w.HANDLE
+        user32.OpenDesktopW.argtypes = [w.LPCWSTR, w.DWORD, w.BOOL, w.DWORD]
+        user32.OpenDesktopW.restype = w.HANDLE
+        user32.CloseWindowStation.argtypes = [w.HANDLE]
+        user32.CloseDesktop.argtypes = [w.HANDLE]
+        advapi.GetSecurityInfo.argtypes = [w.HANDLE, c.c_int, w.DWORD, w.LPVOID, w.LPVOID, c.POINTER(w.LPVOID), w.LPVOID, c.POINTER(w.LPVOID)]
+        advapi.SetSecurityInfo.argtypes = [w.HANDLE, c.c_int, w.DWORD, w.LPVOID, w.LPVOID, w.LPVOID, w.LPVOID]
+        class TRUSTEE(c.Structure):
+            _fields_ = [('multiple', w.LPVOID), ('operation', c.c_int), ('form', c.c_int), ('type', c.c_int), ('name', w.LPVOID)]
+        class ACCESS(c.Structure):
+            _fields_ = [('permissions', w.DWORD), ('mode', c.c_int), ('inheritance', w.DWORD), ('trustee', TRUSTEE)]
+        advapi.SetEntriesInAclW.argtypes = [w.ULONG, c.POINTER(ACCESS), w.LPVOID, c.POINTER(w.LPVOID)]
+        needed = w.DWORD()
+        advapi.GetTokenInformation(token, 1, None, 0, c.byref(needed))
+        user = c.create_string_buffer(needed.value)
+        require(advapi.GetTokenInformation(token, 1, user, len(user), c.byref(needed)))
+        sid = c.cast(user, c.POINTER(SID_ATTRIBUTES)).contents.sid
+        def name(handle):
+            text = c.create_unicode_buffer(512)
+            require(user32.GetUserObjectInformationW(handle, 2, text, c.sizeof(text), c.byref(needed)))
+            return text.value
+        station = name(user32.GetProcessWindowStation())
+        desktop = name(user32.GetThreadDesktop(kernel.GetCurrentThreadId()))
+        handles = [(user32.OpenWindowStationW(station, False, 0x60000), user32.CloseWindowStation),
+                   (user32.OpenDesktopW(desktop, 0, False, 0x60000), user32.CloseDesktop)]
+        saved = []
+        try:
+            for handle, _ in handles:
+                require(handle)
+                acl, descriptor, updated = w.LPVOID(), w.LPVOID(), w.LPVOID()
+                code = advapi.GetSecurityInfo(handle, 7, 4, None, None, c.byref(acl), None, c.byref(descriptor))
+                if code:
+                    raise c.WinError(code)
+                saved.append((handle, acl, descriptor, updated))
+                entry = ACCESS(0x10000000, 1, 0, TRUSTEE(None, 0, 0, 1, sid))
+                code = advapi.SetEntriesInAclW(1, c.byref(entry), acl, c.byref(updated))
+                if code:
+                    raise c.WinError(code)
+                code = advapi.SetSecurityInfo(handle, 7, 4, None, None, updated, None)
+                if code:
+                    raise c.WinError(code)
+            yield station+'\\'+desktop
+        finally:
+            for handle, acl, descriptor, updated in reversed(saved):
+                advapi.SetSecurityInfo(handle, 7, 4, None, None, acl, None)
+                kernel.LocalFree(descriptor)
+                if updated:
+                    kernel.LocalFree(updated)
+            for handle, close in handles:
+                if handle:
+                    close(handle)
     source, linked, token = w.HANDLE(), w.HANDLE(), w.HANDLE()
     process = PROCESS()
     admin_sid, medium_sid = w.LPVOID(), w.LPVOID()
@@ -54,7 +119,7 @@ def run_unelevated(command, env, timeout=240, on_start=None, expected_code=0):
             require(advapi.CreateRestrictedToken(source, 1, 1, c.byref(disabled), 0, None, 0, None, c.byref(token)))
         require(advapi.ConvertStringSidToSidW('S-1-16-8192', c.byref(medium_sid)))
         label = SID_ATTRIBUTES(medium_sid, 0x20)
-        require(advapi.SetTokenInformation(token, 25, c.byref(label), c.sizeof(label)))
+        require(advapi.SetTokenInformation(token, 25, c.byref(label), c.sizeof(label)+advapi.GetLengthSid(medium_sid)))
         startup = STARTUP()
         startup.cb = c.sizeof(startup)
         startup.flags = 0x100
@@ -63,16 +128,18 @@ def run_unelevated(command, env, timeout=240, on_start=None, expected_code=0):
         startup.stderr = kernel.GetStdHandle(-12 & 0xFFFFFFFF)
         environment = c.create_unicode_buffer('\0'.join(f'{k}={v}' for k, v in sorted(env.items(), key=lambda item: item[0].upper()))+'\0\0')
         arguments = c.create_unicode_buffer(subprocess.list2cmdline(list(map(str, command))))
-        require(advapi.CreateProcessAsUserW(token, str(command[0]), arguments, None, None, True, 0x08000400, environment, str(ROOT), c.byref(startup), c.byref(process)))
-        if on_start:
-            on_start(kernel, process.process)
-        if kernel.WaitForSingleObject(process.process, int(timeout*1000)) != 0:
-            kernel.TerminateProcess(process.process, 1)
-            raise TimeoutError('Non-admin Windows native checks timed out')
-        code = w.DWORD()
-        require(kernel.GetExitCodeProcess(process.process, c.byref(code)))
-        if code.value != expected_code:
-            raise subprocess.CalledProcessError(code.value, command)
+        with desktop_access(token) as desktop:
+            startup.desktop = desktop
+            require(advapi.CreateProcessAsUserW(token, str(command[0]), arguments, None, None, True, 0x08000400, environment, str(ROOT), c.byref(startup), c.byref(process)))
+            if on_start:
+                on_start(kernel, process.process)
+            if kernel.WaitForSingleObject(process.process, int(timeout*1000)) != 0:
+                kernel.TerminateProcess(process.process, 1)
+                raise TimeoutError('Non-admin Windows native checks timed out')
+            code = w.DWORD()
+            require(kernel.GetExitCodeProcess(process.process, c.byref(code)))
+            if code.value != expected_code:
+                raise subprocess.CalledProcessError(code.value, command)
     finally:
         for handle in (process.thread, process.process, token, linked, source):
             if handle:

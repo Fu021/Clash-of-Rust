@@ -52,7 +52,9 @@ pub fn ensure_available(source: &Path, interactive: bool) -> Result<()> {
     let installed = installed_directory()?.join("clash-tun-launcher.exe");
     let current = scm::exists()
         && installed.is_file()
-        && crate::file_hash::hash_file(source).ok() == crate::file_hash::hash_file(&installed).ok();
+        && crate::file_hash::hash_file(source).is_ok_and(|source| {
+            crate::file_hash::hash_file(&installed).is_ok_and(|installed| source == installed)
+        });
     if !current {
         ensure!(
             interactive,
