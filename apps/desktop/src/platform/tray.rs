@@ -156,7 +156,7 @@ fn update_icon(icon: &tray_icon::TrayIcon, kind: &mut crate::icons::Kind, state:
     let next = crate::icons::tray_kind(state.system_proxy, state.tun);
     if next != *kind {
         #[cfg(target_os = "macos")]
-        let result = icon.set_icon_templated(Some(tray_icon(next)));
+        let result = icon.set_icon_with_as_template(Some(tray_icon(next)), true);
         #[cfg(not(target_os = "macos"))]
         let result = icon.set_icon(Some(tray_icon(next)));
         if result.is_ok() {
@@ -538,7 +538,9 @@ fn create_native(events: &Events) -> anyhow::Result<(tray_icon::TrayIcon, Checks
     // A text title beside the icon wastes scarce menu-bar space on notched Macs.
     // AppKit template artwork follows the menu bar's light/dark appearance.
     #[cfg(target_os = "macos")]
-    let builder = builder.with_icon_templated(tray_icon(crate::icons::Kind::App));
+    let builder = builder
+        .with_icon(tray_icon(crate::icons::Kind::App))
+        .with_icon_as_template(true);
     #[cfg(not(target_os = "macos"))]
     let builder = builder
         .with_title("Clash of Rust")
@@ -677,7 +679,7 @@ fn configure_mac_item(icon: &tray_icon::TrayIcon) {
         item.setVisible(true);
         if let Some(button) = item.button(mtm) {
             for view in button.subviews() {
-                // tray-icon 0.26 snapshots the button's initial frame, which
+                // tray-icon snapshots the button's initial frame, which
                 // can have zero height before AppKit finishes its layout. Keep
                 // its mouse-event view attached to the final button bounds.
                 if view.class().name() == c"TaoTrayTarget" {

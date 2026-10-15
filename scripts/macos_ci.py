@@ -170,7 +170,7 @@ def startup_backtrace(binary, label):
     with tempfile.TemporaryDirectory(prefix='clash-startup-trace-') as directory:
         env = dict(os.environ, CLASH_OF_RUST_DATA_DIR=directory, RUST_BACKTRACE='full')
         command = ['/usr/bin/lldb', '--batch', '-o', 'settings set target.disable-aslr false',
-                   '-o', 'run', '-o', 'thread backtrace all', '-o', 'register read',
+                   '-o', 'run', '-k', 'thread backtrace all', '-k', 'register read',
                    '-o', 'quit', '--', str(binary)]
         with (REPORT/(label+'-native-backtrace.log')).open('w') as output:
             process = subprocess.Popen(command, env=env, cwd=ROOT, stdout=output,
