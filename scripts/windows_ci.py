@@ -46,6 +46,33 @@ def run_unelevated(command, env, timeout=240, on_start=None, expected_code=0):
     def require(ok):
         if not ok:
             raise c.WinError(c.get_last_error())
+    def token_defaults(token):
+        # Restricted tokens can retain an Administrators-only default DACL.
+        # CreateProcessAsUser uses it for the new process/thread objects; once
+        # Administrators is deny-only, the child cannot initialize itself.
+        # Give the actual user access before creating any child objects.
+        advapi.ConvertSidToStringSidW.argtypes = [w.LPVOID, c.POINTER(w.LPWSTR)]
+        advapi.ConvertStringSecurityDescriptorToSecurityDescriptorW.argtypes = [w.LPCWSTR, w.DWORD, c.POINTER(w.LPVOID), w.LPVOID]
+        advapi.GetSecurityDescriptorDacl.argtypes = [w.LPVOID, c.POINTER(w.BOOL), c.POINTER(w.LPVOID), c.POINTER(w.BOOL)]
+        needed = w.DWORD()
+        advapi.GetTokenInformation(token, 1, None, 0, c.byref(needed))
+        user = c.create_string_buffer(needed.value)
+        require(advapi.GetTokenInformation(token, 1, user, len(user), c.byref(needed)))
+        sid = c.cast(user, c.POINTER(SID_ATTRIBUTES)).contents.sid
+        text, descriptor = w.LPWSTR(), w.LPVOID()
+        try:
+            require(advapi.ConvertSidToStringSidW(sid, c.byref(text)))
+            sddl = 'D:P(A;;GA;;;SY)(A;;GA;;;' + text.value + ')'
+            require(advapi.ConvertStringSecurityDescriptorToSecurityDescriptorW(sddl, 1, c.byref(descriptor), None))
+            acl = w.LPVOID()
+            present, defaulted = w.BOOL(), w.BOOL()
+            require(advapi.GetSecurityDescriptorDacl(descriptor, c.byref(present), c.byref(acl), c.byref(defaulted)))
+            require(advapi.SetTokenInformation(token, 6, c.byref(acl), c.sizeof(acl)))
+        finally:
+            if descriptor:
+                kernel.LocalFree(descriptor)
+            if text:
+                kernel.LocalFree(c.cast(text, w.LPVOID))
     @contextlib.contextmanager
     def desktop_access(token):
         # Hosted runners can own a service desktop accessible only through the
@@ -140,13 +167,17 @@ def run_unelevated(command, env, timeout=240, on_start=None, expected_code=0):
                 raise subprocess.CalledProcessError(code, command)
             return
         if advapi.GetTokenInformation(source, 19, c.byref(linked), c.sizeof(linked), c.byref(needed)):
-            require(advapi.DuplicateTokenEx(linked, 0xF01FF, None, 2, 1, c.byref(token)))
-        else:
+            if not advapi.DuplicateTokenEx(linked, 0xF01FF, None, 2, 1, c.byref(token)):
+                # A host can expose an identification-only linked token.
+                if c.get_last_error() not in (5, 1314, 1346):
+                    raise c.WinError(c.get_last_error())
+        if not token:
             disabled = SID_ATTRIBUTES(admin_sid, 0)
             require(advapi.CreateRestrictedToken(source, 1, 1, c.byref(disabled), 0, None, 0, None, c.byref(token)))
         require(advapi.ConvertStringSidToSidW('S-1-16-8192', c.byref(medium_sid)))
         label = SID_ATTRIBUTES(medium_sid, 0x20)
         require(advapi.SetTokenInformation(token, 25, c.byref(label), c.sizeof(label)+advapi.GetLengthSid(medium_sid)))
+        token_defaults(token)
         startup = STARTUP()
         startup.cb = c.sizeof(startup)
         startup.flags = 0x100
@@ -184,6 +215,7 @@ def windows_tests(tests, bundle):
     suites = [
         ('python-build-tools', [sys.executable, ROOT/'scripts/test-build-tools.py']),
         ('artifact-protocol', [sys.executable, ROOT/'scripts/test-workflow-artifacts.py']),
+        ('ordinary-user-launcher', [sys.executable, ROOT/'scripts/test-windows-token.py']),
         ('system-proxy-and-tun', [sys.executable, ROOT/'scripts/test-proxy-modes.py',
                                   '--test-binary', tests['core_integration'], '--bundle', bundle]),
         ('embedded-icons', [sys.executable, ROOT/'scripts/prepare-assets.py', 'verify-icons',
