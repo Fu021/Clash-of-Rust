@@ -2,7 +2,7 @@
 pub use clash_client_core::{
     active_route, api, config, connection, ip_check, ip_report, probe, proxy_order, rule_manager,
 };
-pub(crate) use clash_client_core::{file_hash, profile_transaction};
+pub(crate) use clash_client_core::profile_transaction;
 #[path = "engine/assets.rs"]
 pub mod assets;
 #[path = "diagnostics/claude/mod.rs"]
