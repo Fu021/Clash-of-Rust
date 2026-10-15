@@ -40,6 +40,10 @@ def main():
     spec = importlib.util.spec_from_file_location('proxy_native_tests', ROOT/'scripts/test-proxy-modes.py')
     proxy = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(proxy)
+    attempt('Login-started protection can exit after helper loss; cancel and restore System/TUN/Off', lambda:
+            proxy.check(library, build/'payload',
+                        test_case='engine::macos_recovery_tests::background_protection_can_restore_modes_after_helper_loss',
+                        background=True))
     with fixture.ipv6_uplink(REPORT), tempfile.TemporaryDirectory(prefix='clash-mac-dns-ca-') as temporary:
         with fixture.trusted_fixture(Path(temporary)) as (cert, key, ca):
             settings = {

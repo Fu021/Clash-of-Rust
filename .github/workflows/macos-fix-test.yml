@@ -15,7 +15,7 @@ concurrency:
   cancel-in-progress: true
 jobs:
   resolve:
-    if: github.event_name == 'workflow_dispatch' || (github.head_ref == 'codex/fix-macos-dns-update' && github.event.pull_request.head.repo.full_name == github.repository)
+    if: github.event_name == 'workflow_dispatch' || (startsWith(github.head_ref, 'codex/fix-') && github.event.pull_request.head.repo.full_name == github.repository)
     runs-on: ubuntu-latest
     timeout-minutes: 50
     outputs:
