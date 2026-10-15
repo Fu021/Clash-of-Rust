@@ -4,33 +4,6 @@ use clash_of_rust::{
     config::{Settings, Store},
     engine::{Engine, Scope},
 };
-#[path = "support/claude_protection_native.rs"]
-mod claude_protection_native;
-
-#[cfg(target_os = "macos")]
-#[tokio::test]
-#[ignore = "temporary native DNS validation on a disposable Actions runner"]
-async fn macos_claude_system_dns() {
-    claude_protection_native::macos_dns().await;
-}
-
-#[cfg(target_os = "macos")]
-#[test]
-#[ignore = "child fixture for the macOS DNS owner-death check"]
-fn macos_dns_lease_fixture() {
-    assert_eq!(std::env::var("GITHUB_ACTIONS").as_deref(), Ok("true"));
-    clash_of_rust::platform::macos::service::protection_dns(true).unwrap();
-    println!("DNS_LEASE_READY");
-    use std::io::Write;
-    std::io::stdout().flush().unwrap();
-    std::thread::sleep(std::time::Duration::from_secs(60));
-}
-
-#[tokio::test]
-#[ignore = "Temporary Claude protection workflow; disposable OS/network environment required"]
-async fn claude_protection_round_trip_and_guard() {
-    claude_protection_native::run().await;
-}
 
 fn test_resources() -> std::path::PathBuf {
     std::env::var_os("MIHOMO_TEST_RESOURCES")

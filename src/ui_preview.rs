@@ -180,43 +180,6 @@ fn fixture(scene: &str) -> App {
         app.page = Page::Claude;
         app.snapshot.active_node = Some("美国节点1".into());
         app.claude = claude_view::fixture_state(scene);
-        if scene.starts_with("claude-validation") {
-            let path = std::path::PathBuf::from(
-                std::env::var_os("CLASH_CLAUDE_VALIDATION_REPORT")
-                    .expect("measured validation report"),
-            );
-            let bytes = std::fs::read(path).expect("read native validation report");
-            assert!(bytes.len() <= 256 * 1024);
-            let data: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
-            let key = if scene.contains("before") || scene.contains("warning") {
-                "before"
-            } else if scene.contains("blocked") {
-                "blocked"
-            } else if scene.contains("restored") {
-                "restored"
-            } else {
-                "protected"
-            };
-            let report: clash_of_rust::claude_check::Report =
-                serde_json::from_value(data[key].clone()).unwrap();
-            report.validate().unwrap();
-            app.claude = claude_view::State::default();
-            app.claude.reports[0] = Some(report);
-            app.claude.status = "受控网络验证报告；出口响应为测试数据，不代表真实订阅地区。".into();
-            app.profiles[0].name = "受控测试订阅".into();
-            app.snapshot.active_node = Some("FixtureA".into());
-            if key == "protected" || key == "blocked" {
-                app.settings.claude_protection =
-                    Some(serde_json::from_value(data["protection"].clone()).unwrap());
-                app.snapshot.tun = true;
-            }
-            if scene.contains("details") {
-                app.claude.results_filter = Some(claude_view::ResultKind::Risk);
-            }
-            if scene.contains("warning") {
-                app.claude.guide = Some(claude_view::Guide::Protection);
-            }
-        }
     } else if scene.starts_with("settings") {
         app.page = Page::Settings;
         app.geo_status = "2026-10-10".into();

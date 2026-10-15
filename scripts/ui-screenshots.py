@@ -77,7 +77,7 @@ def png(rgba, width, height, destination):
                            +chunk(b'IDAT', zlib.compress(pixels))+chunk(b'IEND', b''))
 
 
-def render(source, run_id, system, arch, output, sizes, scenes=None, report_file=None):
+def render(source, run_id, system, arch, output, sizes, scenes=None):
     if (host_system(), host_arch()) != (system, arch):
         raise ValueError('Screenshots require a matching native runner')
     client = github()
@@ -120,9 +120,6 @@ def render(source, run_id, system, arch, output, sizes, scenes=None, report_file
             raise ValueError('Screenshot harness executable missing')
         report['capture_executable_sha256'] = sha256(binaries[0])
         suffixes = ('', '-light') if sizes == 'normal' else ('-compact', '-compact-light') if sizes == 'compact' else ('', '-light', '-compact', '-compact-light')
-        if report_file:
-            report['data']='Actual native test results; controlled HTTPS responses are explicitly labelled, not real subscription exits'
-            report['validation_report_sha256']=sha256(report_file)
         for page in (scenes or PAGES):
             for suffix in suffixes:
                 scene = page+suffix
@@ -131,8 +128,6 @@ def render(source, run_id, system, arch, output, sizes, scenes=None, report_file
                     capture = directory/'pixels'
                     env = dict(os.environ, CLASH_UI_PREVIEW_SCENE=scene, CLASH_UI_PREVIEW_OUTPUT=str(capture),
                                CLASH_OF_RUST_DATA_DIR=str(directory/'data'), GSETTINGS_BACKEND='memory')
-                    if report_file:
-                        env['CLASH_CLAUDE_VALIDATION_REPORT']=str(Path(report_file).resolve(strict=True))
                     if system == 'linux':
                         env.update(WINIT_UNIX_BACKEND='x11', WINIT_X11_SCALE_FACTOR='1')
                         env.pop('WAYLAND_DISPLAY', None)
@@ -169,7 +164,6 @@ def main():
     parser.add_argument('--output', type=Path)
     parser.add_argument('--sizes', choices=('normal', 'compact', 'both'), default='both')
     parser.add_argument('--scenes', nargs='+')
-    parser.add_argument('--report-file', type=Path)
     args = parser.parse_args()
     if args.operation == 'resolve':
         resolve(args.ci_run_id, args.platform, args.architecture)
@@ -177,7 +171,7 @@ def main():
         if any(value is None for value in (args.source, args.ci_run_id, args.system, args.arch, args.output)):
             parser.error('render requires --source, --ci-run-id, --system, --arch and --output')
         args.output.mkdir(parents=True, exist_ok=False)
-        render(args.source, args.ci_run_id, args.system, args.arch, args.output, args.sizes, args.scenes, args.report_file)
+        render(args.source, args.ci_run_id, args.system, args.arch, args.output, args.sizes, args.scenes)
 
 
 if __name__ == '__main__':

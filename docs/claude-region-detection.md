@@ -64,14 +64,10 @@ A÷检测中的“Claude 保护”默认关闭。开启时使用当前具体代�
 
 异常记录单独保留，正常请求不会把它们挤出风险详情；删除失败时也记录域名、线路和失败状态，详情补充传输协议和入站类型。代理集合节点按集合与精确名称固定，节点缺失时拒绝连接，避免退回直连；同名集合节点无法可靠区分时要求先改名。每条保护规则紧跟拒绝回退规则，防止内核跳过不支持 UDP 的节点后继续匹配到直连；已被内核明确拒绝的请求不会重复触发异常关闭和系统提示。
 
-Linux 使用独立的 Zenity/KDialog 系统警告框，DEB 包声明对应工具及中文字库依赖，不再把桌面通知服务接收成功当成弹窗已显示；窗口隐藏时也可提醒，关闭保护时取消未完成的弹窗。临时工作流在没有通知守护进程的环境下检查窗口可见性、截图及取消清理。
+Linux 使用独立的 Zenity/KDialog 系统警告框，DEB 包声明对应工具及中文字库依赖，不再把桌面通知服务接收成功当成弹窗已显示；窗口隐藏时也可提醒，关闭保护时取消未完成的弹窗。
 
 扩展检测包含多 STUN 的 IPv4/IPv6 候选与来源、Canvas 摘要、WebGL、Cookie 功能布尔值、Cloudflare trace、轻量 HTTPS 连通性、官方支持地区及 IP 归属/信誉。Cookie 内容和 Claude 凭据不读取。信誉字段由供应商提供，缺失或额度不足时显示未确认；可在“检测选项”填写自己的 ipapi.is 密钥，密钥以请求正文提交、不写入报告。浏览器指纹和第三方标签不等于 Claude 的账号判定。
 
 检测选项还提供手动 RDAP 注册信息、最多 20 个 Globalping 远端探针和小流量测速。查询会向对应服务提交所查的公网出口 IP；测速下载 10 MiB、上传 2 MiB，使用分块传输。注册地区不等于出口物理地区，远端 ICMP 不等于本机访问 Claude 的延迟；这些补充测试不会在开启保护时自动运行。
-
-临时 `Claude Protection Validation` 工作流在六种原生 runner 上复用同一提交的 CI 产物，验证真实内核的 TUN、代理 DoH、TCP/UDP DNS、正常连接保留、异常直连/错误节点关闭、通知去重、重启与原状态恢复，并渲染开启前、开启后、拦截、风险详情、恢复及确认框的深浅色截图。HTTPS fixture 与临时 CA 只在一次性 Actions runner 中使用，测试结束撤销信任；报告与截图明确标为受控验证，不代表真实订阅出口、Claude 账号资格或真实服务可用性。
-
-测试断言生产配置没有路由排除，再把一次性 runner 的实时测试路由限定到文档网段和 DNS 测试目标，避免受控 DNS/节点干扰 Actions 控制连接；实测涵盖 IPv4/IPv6 TUN 与 TCP/UDP DNS 接管，全局路由配置另由配置测试验证。
 
 规则参考官方 [Desktop 网络要求](https://code.claude.com/docs/en/desktop#network-access-requirements)、[Code 网络要求](https://code.claude.com/docs/en/network-config#network-access-requirements)、[入站 IP 网段](https://platform.claude.com/docs/en/api/ip-addresses)与 [Net.Coffee 分类](https://ip.net.coffee/claude/site.html)。不将出站网段当作入站网段，不以 NTP 能改变时区为依据添加规则。

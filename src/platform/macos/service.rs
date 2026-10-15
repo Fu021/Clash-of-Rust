@@ -163,31 +163,6 @@ fn bundled_core() -> Result<(PathBuf, String)> {
     super::tun::core_path()
 }
 
-#[cfg(test)]
-pub(crate) mod test_authorization {
-    use super::*;
-    type Authorize = fn(&str) -> Result<()>;
-    pub(super) static AUTHORIZE: std::sync::Mutex<Option<Authorize>> = std::sync::Mutex::new(None);
-    pub(crate) struct Reset;
-    pub(crate) fn replace(authorize: Authorize) -> Reset {
-        assert!(AUTHORIZE.lock().unwrap().replace(authorize).is_none());
-        Reset
-    }
-    impl Drop for Reset {
-        fn drop(&mut self) {
-            *AUTHORIZE.lock().unwrap() = None;
-        }
-    }
-}
-
-fn authorize_install(script: &str) -> Result<()> {
-    #[cfg(test)]
-    if let Some(authorize) = *test_authorization::AUTHORIZE.lock().unwrap() {
-        return authorize(script);
-    }
-    super::administrator(script)
-}
-
 pub fn ensure_available(interactive: bool) -> Result<()> {
     let (_, expected) = bundled_core()?;
     if exchange(&Request::Status {}).is_ok_and(|status| status.core_sha256 == expected) {
@@ -215,7 +190,7 @@ pub fn ensure_available(interactive: bool) -> Result<()> {
         launcher.is_file(),
         "网络助手缺失，请使用完整的 macOS 安装包"
     );
-    authorize_install(&format!(
+    super::administrator(&format!(
         "{} --macos-install-service {}",
         super::shell_quote(&launcher.to_string_lossy()),
         unsafe { libc::getuid() }

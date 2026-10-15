@@ -32,7 +32,7 @@ def macos_network_service(report):
             subprocess.run(['/usr/bin/sudo', '-n', '/bin/rm', '-rf', directory, agent], check=True, timeout=20)
 
 
-def check(binary, bundle, test_case='basic_system_proxy_and_tun', background=False):
+def check(binary, bundle, test_case='basic_system_proxy_and_tun'):
     if os.environ.get('GITHUB_ACTIONS') != 'true':
         raise RuntimeError('Proxy/TUN checks require a disposable Actions runner')
     system = host_system()
@@ -43,8 +43,6 @@ def check(binary, bundle, test_case='basic_system_proxy_and_tun', background=Fal
         helper = bundle/'Contents/MacOS/clash-tun-launcher'
     env = dict(os.environ, CLASH_PROXY_SMOKE='1', MIHOMO_TEST_RESOURCES=str(resources.resolve()))
     command = [binary, test_case, '--exact', '--ignored', '--nocapture']
-    if background:
-        command += ['--', '--background']
     if system == 'linux':
         sudo = ['sudo']
         if test_case == 'claude_protection_round_trip_and_guard':
