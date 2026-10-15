@@ -43,22 +43,29 @@ fn test_resources() -> std::path::PathBuf {
 }
 
 fn free_port() -> u16 {
-    // mihomo's mixed listener binds TCP and UDP on the same port. A TCP-only
-    // check can choose an occupied/excluded UDP port; then mihomo closes its
-    // new TCP listener while the controller remains available. Let UDP's own
-    // allocator avoid its excluded ranges first. Retain rejected sockets so
-    // rapid retries cannot repeatedly select the same unsuitable candidate.
-    let mut rejected = Vec::new();
+    use std::sync::atomic::{AtomicU32, Ordering};
+    // mihomo's mixed/DNS listeners need the same port for TCP and UDP. Windows
+    // can allocate an ephemeral UDP port from a range excluded for TCP (and
+    // vice versa), so repeating either allocator can exhaust a short retry
+    // budget without reaching a usable port. Probe the unprivileged range
+    // directly; keep both sockets bound until their shared port is confirmed.
+    // The process offset and cursor spread concurrent test processes/calls.
+    const FIRST: u32 = 1024;
+    const COUNT: u32 = u16::MAX as u32 + 1 - FIRST;
+    static NEXT: AtomicU32 = AtomicU32::new(0);
     let mut last_error = None;
-    for _ in 0..100 {
-        let udp = std::net::UdpSocket::bind("127.0.0.1:0").unwrap();
-        let port = udp.local_addr().unwrap().port();
-        match std::net::TcpListener::bind(("127.0.0.1", port)) {
-            Ok(_tcp) => return port,
-            Err(error) => {
-                last_error = Some(error);
-                rejected.push(udp);
-            }
+    for _ in 0..COUNT {
+        let offset =
+            (std::process::id() % COUNT + NEXT.fetch_add(1, Ordering::Relaxed) % COUNT) % COUNT;
+        let port = (FIRST + offset) as u16;
+        let bindings = (|| -> std::io::Result<_> {
+            let tcp = std::net::TcpListener::bind(("127.0.0.1", port))?;
+            let udp = std::net::UdpSocket::bind(("127.0.0.1", port))?;
+            Ok((tcp, udp))
+        })();
+        match bindings {
+            Ok((_tcp, _udp)) => return port,
+            Err(error) => last_error = Some(error),
         }
     }
     panic!("could not allocate a port available for both TCP and UDP: {last_error:?}")
