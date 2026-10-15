@@ -5,8 +5,13 @@ edition.workspace = true
 license.workspace = true
 description = "Slint desktop views and incremental presentation models"
 
-[features]
-test-support = []
+[lib]
+# Integration tests link the normal UI library instead of compiling the generated tree twice.
+test = false
+
+[[test]]
+name = "ui_models"
+path = "tests/models.rs"
 
 [dependencies]
 slint = { workspace = true }

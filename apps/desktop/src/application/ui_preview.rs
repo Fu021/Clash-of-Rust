@@ -12,7 +12,7 @@ pub(crate) fn run() -> anyhow::Result<()> {
     };
     let headless = std::env::var_os("CLASH_UI_HEADLESS").is_some();
     if headless {
-        clash_client_ui::testing::initialize(size.width as u32, size.height as u32);
+        ui_testing::initialize(size.width as u32, size.height as u32);
     }
     let app = std::rc::Rc::new(RefCell::new(fixtures::fixture(&scene)));
     let window = AppWindow::new()?;

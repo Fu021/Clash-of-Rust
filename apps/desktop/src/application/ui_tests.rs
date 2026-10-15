@@ -5,7 +5,7 @@ use slint::{ComponentHandle, Model};
 
 #[test]
 fn all_pages_and_dialogs_render_without_a_core_or_display_server() {
-    let adapter = clash_client_ui::testing::initialize(950, 700);
+    let adapter = ui_testing::initialize(950, 700);
     for (width, height, scale) in [(950, 700, 100), (800, 450, 125)] {
         for scene in [
             "home",
@@ -82,7 +82,7 @@ fn rule_editor_round_trip_and_cancel_preserve_the_draft_through_ui_intents() {
 
 #[test]
 fn projection_reuses_models_and_releases_hidden_and_inactive_lists() {
-    clash_client_ui::testing::initialize(950, 700);
+    ui_testing::initialize(950, 700);
     let mut app = fixtures::fixture("connections");
     let window = AppWindow::new().unwrap();
     let data = window.global::<UiData>();
@@ -133,9 +133,75 @@ fn imported_file_reaches_dialog_and_cancel_or_exit_requires_confirmation() {
 }
 
 #[test]
+fn clicking_a_node_selects_it_but_its_latency_button_only_tests_it() {
+    use clash_client_ui::{GroupItem, NodeItem, NodePair};
+    use slint::platform::{PointerEventButton, WindowEvent};
+
+    ui_testing::initialize(950, 700);
+    let app = fixtures::fixture("proxies-ascending");
+    let window = AppWindow::new().unwrap();
+    let data = window.global::<UiData>();
+    let mut models = ViewModels::default();
+    models.attach(&data);
+    app.present(&data, &mut models);
+    models.set_groups(vec![(
+        GroupItem {
+            id: "Proxy".into(),
+            title: "Proxy".into(),
+            expanded: true,
+            ..Default::default()
+        },
+        vec![NodePair {
+            left: NodeItem {
+                group: "Proxy".into(),
+                name: "node-a".into(),
+                kind: "AnyTLS".into(),
+                valid: true,
+                ..Default::default()
+            },
+            ..Default::default()
+        }],
+    )]);
+    let events = std::rc::Rc::new(RefCell::new(Vec::new()));
+    let recorded = events.clone();
+    window
+        .global::<UiActions>()
+        .on_dispatch(move |intent, a, b| recorded.borrow_mut().push((intent, a, b)));
+    window.show().unwrap();
+    let _ = window.window().take_snapshot().unwrap();
+    let click = |x, y| {
+        let position = slint::LogicalPosition::new(x, y);
+        window.window().dispatch_event(WindowEvent::PointerPressed {
+            position,
+            button: PointerEventButton::Left,
+        });
+        window
+            .window()
+            .dispatch_event(WindowEvent::PointerReleased {
+                position,
+                button: PointerEventButton::Left,
+            });
+    };
+    click(250.0, 252.0);
+    assert_eq!(
+        events.borrow().as_slice(),
+        &[(Intent::SelectNode, "Proxy".into(), "node-a".into())],
+        "clicking the card must select the node in its own group"
+    );
+    events.borrow_mut().clear();
+    click(507.0, 298.0);
+    assert_eq!(
+        events.borrow().as_slice(),
+        &[(Intent::NodeDelay, "node-a".into(), "".into())],
+        "the latency button must consume the click without selecting the node"
+    );
+    window.hide().unwrap();
+}
+
+#[test]
 fn pointer_keyboard_escape_and_modal_input_use_the_production_callbacks() {
     use slint::platform::{Key, PointerEventButton, WindowEvent};
-    clash_client_ui::testing::initialize(950, 700);
+    ui_testing::initialize(950, 700);
     let app = fixtures::fixture("home");
     let window = AppWindow::new().unwrap();
     let mut models = ViewModels::default();

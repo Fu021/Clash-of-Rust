@@ -28,4 +28,6 @@ python3 scripts/preview-slint.py --page connections --size 800x450
 
 根目录 `cargo run` 启动正式桌面。`cargo test --workspace` 同时运行应用状态、任务取消、分页与模型复用测试，以及十个页面和主要弹窗在默认、小窗口尺寸下的软件渲染检查；无需显示服务器，也不会启动真实内核。
 
+节点卡片单击即选择，测速按钮独立操作；指针测试检查两者不会互相触发。模型测试作为独立测试目标复用正式界面库，避免再次编译生成的组件。
+
 `ui-preview` 为可选的隔离截图功能，官方安装包不启用。`tests/ui_preview.rs` 使用真实应用状态构建页面；`UI Screenshots` 工作流在六种原生 runner 上保存截图。设置 `CLASH_UI_HEADLESS=1` 可在无桌面环境运行相同截图入口。

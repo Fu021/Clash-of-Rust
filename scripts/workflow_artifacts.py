@@ -19,7 +19,7 @@ from build_support import (ROOT, bundle_directory, package_version, sha256,
 
 BUILD_NAMES = {f'build-{system}-{arch}' for system in ('windows', 'linux', 'macos') for arch in ('x64', 'arm64')}
 ARCHIVE_NAME = 'build.tar.gz'
-TEST_NAMES = {'library', 'client-core', 'client-ui', 'clash-of-rust', 'clash-tun-launcher', 'core_integration',
+TEST_NAMES = {'library', 'client-core', 'client-ui', 'ui_models', 'clash-of-rust', 'clash-tun-launcher', 'core_integration',
               'geo_download', 'linux_tun', 'tray_integration', 'memory_benchmark', 'claude_diagnostics',
               'macos_ui_fixture', 'macos_helper_fixture'}
 # Accept historical CI payloads for the independent screenshot workflow. New
@@ -62,8 +62,8 @@ def test_binaries(messages):
         raise ValueError('Required test executables are missing')
     if (ROOT/'crates/client-core/Cargo.toml').is_file() and 'client-core' not in result:
         raise ValueError('Shared client library test executable is missing')
-    if (ROOT/'crates/client-ui/Cargo.toml').is_file() and 'client-ui' not in result:
-        raise ValueError('Slint library test executable is missing')
+    if (ROOT/'crates/client-ui/tests/models.rs').is_file() and 'ui_models' not in result:
+        raise ValueError('Slint model test executable is missing')
     return result
 
 

@@ -5,7 +5,7 @@ import { Label, Caption, Heading, ContentPanel, ActionButton, Field, Select, Bad
 
 component CategoryCard inherits ContentPanel {
     in property <CategoryItem> item;
-    horizontal-stretch: 1;
+    horizontal-stretch: 1; preferred-width: 0px; min-width: 0px;
     interactive: true;
     clicked => { UiActions.dispatch(Intent.site-open-category, root.item.id, ""); }
     HorizontalLayout { cross-axis-alignment: center; spacing: Theme.content-gap;

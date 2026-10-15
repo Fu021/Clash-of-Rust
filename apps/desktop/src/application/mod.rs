@@ -16,6 +16,8 @@ mod presentation;
 mod rules;
 #[cfg(feature = "ui-preview")]
 pub(crate) mod ui_preview;
+#[cfg(any(test, feature = "ui-preview"))]
+mod ui_testing;
 #[cfg(test)]
 mod ui_tests;
 mod window_state;

@@ -68,15 +68,15 @@ export component ContentPanel inherits Panel {
     callback clicked();
     vertical-stretch: 0;
     height: content.preferred-height;
+    if root.interactive: TouchArea {
+        mouse-cursor: pointer;
+        clicked => { root.clicked(); }
+    }
     content := VerticalLayout {
         alignment: start;
         padding: Theme.card-padding;
         spacing: root.gap;
         @children
-    }
-    if root.interactive: TouchArea {
-        mouse-cursor: pointer;
-        clicked => { root.clicked(); }
     }
 }
 
@@ -85,15 +85,15 @@ export component RowPanel inherits Panel {
     callback clicked();
     vertical-stretch: 0;
     height: content.preferred-height;
+    if root.interactive: TouchArea {
+        mouse-cursor: pointer;
+        clicked => { root.clicked(); }
+    }
     content := HorizontalLayout {
         cross-axis-alignment: center;
         padding: Theme.card-padding;
         spacing: Theme.page-gap;
         @children
-    }
-    if root.interactive: TouchArea {
-        mouse-cursor: pointer;
-        clicked => { root.clicked(); }
     }
 }
 

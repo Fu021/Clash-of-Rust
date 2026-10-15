@@ -7,7 +7,7 @@ component ResultEntry inherits ContentPanel {
     in property <string> count;
     in property <string> description;
     in property <bool> risk;
-    interactive: true;
+    interactive: true; preferred-width: 0px; min-width: 0px; horizontal-stretch: 1;
     HorizontalLayout { cross-axis-alignment: center;
         Heading { text: root.title; }
         Label { text: root.count; font-size: 30px * Theme.text-scale; color: root.risk ? Theme.danger : Theme.success; horizontal-alignment: right; }
@@ -52,8 +52,8 @@ export component AiCheckPage inherits Rectangle {
             if UiData.claude-filter < 0: VerticalLayout {
                 spacing: Theme.page-gap;
                 HorizontalLayout { cross-axis-alignment: center; spacing: Theme.page-gap;
-                    ResultEntry { width: (root.width - Theme.page-gap) / 2; title: "正常项目"; count: UiData.claude-normal; description: "网络出口、地区线索与配置"; clicked => { UiActions.dispatch(Intent.claude-filter, "0", ""); } }
-                    ResultEntry { width: (root.width - Theme.page-gap) / 2; title: "风险项目"; count: UiData.claude-risk; description: "需要检查的环境差异与配置"; risk: true; clicked => { UiActions.dispatch(Intent.claude-filter, "1", ""); } }
+                    ResultEntry { title: "正常项目"; count: UiData.claude-normal; description: "网络出口、地区线索与配置"; clicked => { UiActions.dispatch(Intent.claude-filter, "0", ""); } }
+                    ResultEntry { title: "风险项目"; count: UiData.claude-risk; description: "需要检查的环境差异与配置"; risk: true; clicked => { UiActions.dispatch(Intent.claude-filter, "1", ""); } }
                 }
                 RowPanel {
                     VerticalLayout { spacing: 4px; Heading { text: "其他线索"; } Caption { text: "证据不足或需要进一步确认的结果"; } }
