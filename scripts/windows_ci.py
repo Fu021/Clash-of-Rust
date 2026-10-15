@@ -30,6 +30,8 @@ def run_unelevated(command, env, timeout=240, on_start=None, expected_code=0):
     kernel.WaitForSingleObject.argtypes = [w.HANDLE, w.DWORD]
     kernel.GetExitCodeProcess.argtypes = [w.HANDLE, c.POINTER(w.DWORD)]
     kernel.TerminateProcess.argtypes = [w.HANDLE, w.UINT]
+    kernel.SetErrorMode.argtypes = [w.UINT]
+    kernel.SetErrorMode.restype = w.UINT
     kernel.LocalFree.argtypes = [w.LPVOID]
     advapi.OpenProcessToken.argtypes = [w.HANDLE, w.DWORD, c.POINTER(w.HANDLE)]
     advapi.GetTokenInformation.argtypes = [w.HANDLE, c.c_int, w.LPVOID, w.DWORD, c.POINTER(w.DWORD)]
@@ -39,6 +41,7 @@ def run_unelevated(command, env, timeout=240, on_start=None, expected_code=0):
     advapi.SetTokenInformation.argtypes = [w.HANDLE, c.c_int, w.LPVOID, w.DWORD]
     advapi.GetLengthSid.argtypes = [w.LPVOID]
     advapi.GetLengthSid.restype = w.DWORD
+    advapi.CheckTokenMembership.argtypes = [w.HANDLE, w.LPVOID, c.POINTER(w.BOOL)]
     advapi.CreateProcessAsUserW.argtypes = [w.HANDLE, w.LPCWSTR, w.LPWSTR, w.LPVOID, w.LPVOID, w.BOOL, w.DWORD, w.LPVOID, w.LPCWSTR, c.POINTER(STARTUP), c.POINTER(PROCESS)]
     def require(ok):
         if not ok:
@@ -108,13 +111,37 @@ def run_unelevated(command, env, timeout=240, on_start=None, expected_code=0):
     source, linked, token = w.HANDLE(), w.HANDLE(), w.HANDLE()
     process = PROCESS()
     admin_sid, medium_sid = w.LPVOID(), w.LPVOID()
+    # Loader failures must become test failures, never modal error dialogs on
+    # a developer's desktop (or an unattended runner).
+    previous_error_mode = kernel.SetErrorMode(0x8003)
     try:
         require(advapi.OpenProcessToken(kernel.GetCurrentProcess(), 0xF01FF, c.byref(source)))
         needed = w.DWORD()
+        # A local developer may already be running at medium integrity. Its
+        # linked token is the elevated token, not a token we should duplicate.
+        # In particular, Windows can return ERROR_BAD_IMPERSONATION_LEVEL here.
+        elevation = w.DWORD()
+        require(advapi.GetTokenInformation(source, 20, c.byref(elevation), c.sizeof(elevation), c.byref(needed)))
+        require(advapi.ConvertStringSidToSidW('S-1-5-32-544', c.byref(admin_sid)))
+        member = w.BOOL()
+        require(advapi.CheckTokenMembership(None, admin_sid, c.byref(member)))
+        if not elevation.value and not member.value:
+            with subprocess.Popen(list(map(str, command)), env=env, cwd=ROOT,
+                                  creationflags=subprocess.CREATE_NO_WINDOW) as child:
+                try:
+                    if on_start:
+                        on_start(kernel, w.HANDLE(int(child._handle)))
+                    code = child.wait(timeout=timeout)
+                except BaseException:
+                    child.kill()
+                    child.wait()
+                    raise
+            if code != expected_code:
+                raise subprocess.CalledProcessError(code, command)
+            return
         if advapi.GetTokenInformation(source, 19, c.byref(linked), c.sizeof(linked), c.byref(needed)):
             require(advapi.DuplicateTokenEx(linked, 0xF01FF, None, 2, 1, c.byref(token)))
         else:
-            require(advapi.ConvertStringSidToSidW('S-1-5-32-544', c.byref(admin_sid)))
             disabled = SID_ATTRIBUTES(admin_sid, 0)
             require(advapi.CreateRestrictedToken(source, 1, 1, c.byref(disabled), 0, None, 0, None, c.byref(token)))
         require(advapi.ConvertStringSidToSidW('S-1-16-8192', c.byref(medium_sid)))
@@ -141,6 +168,7 @@ def run_unelevated(command, env, timeout=240, on_start=None, expected_code=0):
             if code.value != expected_code:
                 raise subprocess.CalledProcessError(code.value, command)
     finally:
+        kernel.SetErrorMode(previous_error_mode)
         for handle in (process.thread, process.process, token, linked, source):
             if handle:
                 kernel.CloseHandle(handle)
