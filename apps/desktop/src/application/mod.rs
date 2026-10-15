@@ -31,10 +31,7 @@ use clash_of_rust::{
     tray, update,
 };
 use claude as claude_view;
-use futures_util::{
-    SinkExt,
-    future::{AbortHandle, Abortable},
-};
+use futures_util::future::{AbortHandle, Abortable};
 use interaction as desktop_view;
 use rules as rules_view;
 use runtime as desktop_runtime;
@@ -741,7 +738,7 @@ impl App {
                 );
                 let port = self.snapshot.running.then_some(self.settings.mixed_port);
                 return Task::run(
-                    desktop_runtime::stream::channel(8, async move |mut output| {
+                    desktop_runtime::stream::channel(8, async move |output| {
                         let (sender, mut progress) = tokio::sync::mpsc::channel(4);
                         let download = futures_util::future::Abortable::new(
                             update::download(available, port, move |value| {

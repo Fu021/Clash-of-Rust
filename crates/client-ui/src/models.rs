@@ -60,6 +60,7 @@ impl ViewModels {
         reconcile(&self.logs, Vec::new());
         reconcile(&self.categories, Vec::new());
         reconcile(&self.site_results, Vec::new());
+        reconcile(&self.claude_results, Vec::new());
     }
 }
 
@@ -86,8 +87,10 @@ mod tests {
         models.set_groups(vec![(group, vec![pair])]);
         assert_eq!(nodes, models.groups.row_data(0).unwrap().nodes);
         assert_eq!(nodes.row_count(), 1);
+        models.claude_results.push(ReportItem::default());
         models.clear();
         assert_eq!(models.groups.row_count(), 0);
+        assert_eq!(models.claude_results.row_count(), 0);
         assert!(models.nodes.is_empty());
     }
 }

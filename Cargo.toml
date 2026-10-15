@@ -21,7 +21,6 @@ tokio = { version = "1", features = ["rt-multi-thread", "time", "sync", "net", "
 tempfile = "3"
 uuid = { version = "1", features = ["v4", "serde"] }
 futures-util = "0.3"
-futures-channel = "0.3"
 slint = { version = "=1.18.1", default-features = false, features = ["std", "compat-1-2", "backend-winit", "renderer-software", "software-renderer-path", "unstable-winit-030"] }
 slint-build = "=1.18.1"
 sha2 = "0.10"

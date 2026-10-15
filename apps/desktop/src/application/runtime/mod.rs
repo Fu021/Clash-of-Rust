@@ -72,10 +72,13 @@ pub mod stream {
     use super::*;
     pub fn channel<T: Send + 'static, F, Fut>(capacity: usize, producer: F) -> BoxStream<'static, T>
     where
-        F: FnOnce(futures_channel::mpsc::Sender<T>) -> Fut + Send + 'static,
+        F: FnOnce(tokio::sync::mpsc::Sender<T>) -> Fut + Send + 'static,
         Fut: Future<Output = ()> + Send + 'static,
     {
-        let (sender, receiver) = futures_channel::mpsc::channel(capacity);
+        let (sender, receiver) = tokio::sync::mpsc::channel(capacity);
+        let receiver = futures_util::stream::unfold(receiver, |mut receiver| async move {
+            receiver.recv().await.map(|value| (value, receiver))
+        });
         let producer = futures_util::stream::once(async move {
             producer(sender).await;
             None
@@ -102,8 +105,7 @@ mod tests {
         )
         .abortable();
         handle.abort();
-        let source = stream::channel(1, |mut sender| async move {
-            use futures_util::SinkExt;
+        let source = stream::channel(1, |sender| async move {
             sender.send(1).await.unwrap();
             sender.send(2).await.unwrap();
         });

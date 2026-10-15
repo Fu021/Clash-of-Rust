@@ -24,7 +24,6 @@ path = "src/tun_launcher.rs"
 clash-client-core = { path = "../../crates/client-core" }
 clash-client-ui = { path = "../../crates/client-ui" }
 slint = { workspace = true }
-futures-channel = { workspace = true }
 arboard = { version = "3.7", default-features = false }
 anyhow = { workspace = true }
 chrono = { workspace = true }

@@ -390,7 +390,7 @@ impl App {
 pub(super) fn theme_updates() -> Task<Message> {
     #[cfg(target_os = "linux")]
     return Task::run(
-        desktop_runtime::stream::channel(2, async |mut output| {
+        desktop_runtime::stream::channel(2, async |output| {
             loop {
                 let result: anyhow::Result<()> = async {
                     use futures_util::StreamExt;

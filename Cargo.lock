@@ -622,7 +622,6 @@ dependencies = [
  "clash-client-core",
  "clash-client-ui",
  "directories",
- "futures-channel",
  "futures-util",
  "hmac",
  "libc",
