@@ -180,6 +180,11 @@ fn retain_route(state: &mut Snapshot, route: Route) {
     state.routes.push_back(route);
 }
 pub fn suspicious_chain(chains: &[String], node: &str) -> bool {
+    // An explicit rejection has already stopped the request in the core.
+    // In particular the UDP fallback must not trigger another close/OS alert.
+    if chains.len() == 1 && matches!(chains[0].as_str(), "REJECT" | "REJECT-DROP") {
+        return false;
+    }
     // Both documented/native orders are accepted. A named group that happens
     // to contain the node text does not pass this exact-name comparison.
     chains.is_empty()
@@ -205,6 +210,10 @@ struct Connection {
 }
 #[derive(Debug, Deserialize)]
 struct Metadata {
+    #[serde(default)]
+    network: String,
+    #[serde(rename = "type", default)]
+    kind: String,
     #[serde(default)]
     host: String,
     #[serde(rename = "sniffHost", default)]
@@ -289,6 +298,9 @@ pub(crate) fn decode(reader: impl std::io::Read, node: &str) -> serde_json::Resu
                     && suspicious_chain(&connection.chains, self.0)
                 {
                     let mut rule: String = connection.rule.chars().take(64).collect();
+                    if rule.is_empty() {
+                        rule.push_str("未提供匹配规则");
+                    }
                     if !connection.rule_payload.is_empty() {
                         rule.push_str(&format!(
                             " · {}",
@@ -321,6 +333,29 @@ pub(crate) fn decode(reader: impl std::io::Read, node: &str) -> serde_json::Resu
                                 .collect::<String>()
                         ));
                     }
+                    if !connection.metadata.network.is_empty() {
+                        rule.push_str(&format!(
+                            "；传输：{}",
+                            connection
+                                .metadata
+                                .network
+                                .chars()
+                                .take(16)
+                                .collect::<String>()
+                                .to_ascii_uppercase()
+                        ));
+                    }
+                    if !connection.metadata.kind.is_empty() {
+                        rule.push_str(&format!(
+                            "；入站：{}",
+                            connection
+                                .metadata
+                                .kind
+                                .chars()
+                                .take(32)
+                                .collect::<String>()
+                        ));
+                    }
                     let mut end = rule.len().min(1800);
                     while !rule.is_char_boundary(end) {
                         end -= 1;
@@ -350,6 +385,8 @@ mod tests {
     fn detects_direct_and_wrong_nodes_without_prefix_false_positives() {
         assert!(!suspicious_chain(&["node".into(), "group".into()], "node"));
         assert!(!suspicious_chain(&["group".into(), "node".into()], "node"));
+        assert!(!suspicious_chain(&["REJECT".into()], "node"));
+        assert!(!suspicious_chain(&["REJECT-DROP".into()], "node"));
         for chains in [
             vec![],
             vec!["DIRECT".into()],
@@ -384,6 +421,19 @@ mod tests {
         let connections = decode(bytes.as_slice(), "node").unwrap();
         assert_eq!(connections.len(), 128);
         assert!(connections.iter().all(|r| r.host == "api.anthropic.com"));
+    }
+    #[test]
+    fn empty_rule_records_include_transport_and_inbound_without_private_metadata() {
+        let bytes = serde_json::to_vec(&serde_json::json!({"connections":[
+            {"id":"udp","chains":["DIRECT"],"rule":"", "metadata":{
+                "host":"claude.ai","network":"udp","type":"Tun","process":"private-process",
+                "sourceIP":"192.168.1.2", "sourcePort":"12345"
+            }}
+        ]}))
+        .unwrap();
+        let rows = decode(bytes.as_slice(), "node").unwrap();
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0].rule, "未提供匹配规则；传输：UDP；入站：Tun");
     }
     #[test]
     fn normal_connections_cannot_hide_a_later_unsafe_connection() {

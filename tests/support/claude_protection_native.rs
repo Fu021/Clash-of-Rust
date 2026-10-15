@@ -163,6 +163,7 @@ struct Socks {
     task: tokio::task::JoinHandle<()>,
     port: u16,
     doh: Arc<AtomicU64>,
+    udp: Arc<AtomicU64>,
 }
 impl Drop for Socks {
     fn drop(&mut self) {
@@ -175,9 +176,12 @@ impl Socks {
         let port = listener.local_addr().unwrap().port();
         let doh = Arc::new(AtomicU64::new(0));
         let counter = doh.clone();
+        let udp = Arc::new(AtomicU64::new(0));
+        let udp_counter = udp.clone();
         let task = tokio::spawn(async move {
             while let Ok((mut stream, _)) = listener.accept().await {
                 let counter = counter.clone();
+                let udp_counter = udp_counter.clone();
                 tokio::spawn(async move {
                     let result = async {
                         let mut hello = [0u8; 2];
@@ -188,7 +192,7 @@ impl Socks {
                         stream.write_all(&[5, 0]).await?;
                         let mut request = [0; 4];
                         stream.read_exact(&mut request).await?;
-                        anyhow::ensure!(request[1] == 1, "fixture supports TCP CONNECT");
+                        anyhow::ensure!(matches!(request[1], 1 | 3), "SOCKS command");
                         let host = match request[3] {
                             1 => {
                                 let mut ip = [0; 4];
@@ -209,6 +213,26 @@ impl Socks {
                             _ => anyhow::bail!("SOCKS address"),
                         };
                         let port = stream.read_u16().await?;
+                        if request[1] == 3 {
+                            let socket = tokio::net::UdpSocket::bind("127.0.0.1:0").await?;
+                            let port = socket.local_addr()?.port();
+                            let mut reply = vec![5, 0, 0, 1, 127, 0, 0, 1];
+                            reply.extend_from_slice(&port.to_be_bytes());
+                            stream.write_all(&reply).await?;
+                            let mut datagram = [0; 4096];
+                            let mut closed = [0; 1];
+                            loop {
+                                tokio::select! {
+                                    _ = stream.read(&mut closed) => break,
+                                    packet = socket.recv_from(&mut datagram) => {
+                                        let (length, source) = packet?;
+                                        udp_counter.fetch_add(1, Ordering::Relaxed);
+                                        socket.send_to(&datagram[..length], source).await?;
+                                    }
+                                }
+                            }
+                            return Ok(());
+                        }
                         if ["1.1.1.1", "8.8.8.8"].contains(&host.as_str()) {
                             counter.fetch_add(1, Ordering::Relaxed);
                         }
@@ -232,7 +256,12 @@ impl Socks {
                 });
             }
         });
-        Self { task, port, doh }
+        Self {
+            task,
+            port,
+            doh,
+            udp,
+        }
     }
 }
 async fn capture(engine: &mut Engine, label: &str) -> Report {
@@ -303,6 +332,328 @@ async fn hold(client: &reqwest::Client, host: &str, port: u16) -> reqwest::Respo
         .send()
         .await
         .unwrap()
+}
+
+fn udp_packet(host: &str, port: u16) -> Vec<u8> {
+    let mut packet = vec![0, 0, 0, 3, host.len() as u8];
+    packet.extend_from_slice(host.as_bytes());
+    packet.extend_from_slice(&port.to_be_bytes());
+    packet.extend_from_slice(b"claude-udp-regression");
+    packet
+}
+
+async fn udp_routing(
+    engine: &mut Engine,
+    saved: &str,
+    tcp_port: u16,
+    relay: &Socks,
+) -> serde_json::Value {
+    const HOSTS: [&str; 3] = ["claude.com", "claude.ai", "s-cdn.anthropic.com"];
+    let socket = tokio::net::UdpSocket::bind("127.0.0.1:0").await.unwrap();
+    let target = socket.local_addr().unwrap();
+    let delivered = Arc::new(AtomicU64::new(0));
+    let counter = delivered.clone();
+    let sentinel = tokio::spawn(async move {
+        let mut packet = [0; 4096];
+        while let Ok((length, source)) = socket.recv_from(&mut packet).await {
+            counter.fetch_add(1, Ordering::Relaxed);
+            socket.send_to(&packet[..length], source).await.unwrap();
+        }
+    });
+    let mut candidate: serde_yaml::Value = serde_yaml::from_str(saved).unwrap();
+    candidate["proxies"][0]["udp"] = false.into();
+    for host in HOSTS {
+        candidate["hosts"][host] = "127.0.0.1".into();
+    }
+    engine
+        .api
+        .reload(&scoped_payload(&serde_yaml::to_string(&candidate).unwrap()))
+        .await
+        .unwrap();
+    engine.poll(Scope::Logs).await.unwrap();
+    // The fixture sees traffic only if the core actually emits a DIRECT
+    // datagram. Checking guard counters alone would miss a brief DNS leak.
+    let mut sockets = Vec::new();
+    for index in 0..28 {
+        let socket = tokio::net::UdpSocket::bind("127.0.0.1:0").await.unwrap();
+        socket
+            .send_to(
+                &udp_packet(HOSTS[index % HOSTS.len()], target.port()),
+                ("127.0.0.1", engine.settings.mixed_port),
+            )
+            .await
+            .unwrap();
+        sockets.push(socket);
+    }
+    tokio::time::sleep(Duration::from_secs(2)).await;
+    assert_eq!(
+        delivered.load(Ordering::Relaxed),
+        0,
+        "unsupported protected UDP reached DIRECT before the guard could close it"
+    );
+    let logs = engine.poll(Scope::Logs).await.unwrap().logs;
+    for host in HOSTS {
+        assert!(
+            logs.iter().any(|line| line.contains("[UDP]")
+                && line.contains(host)
+                && line.contains("REJECT")),
+            "missing native UDP rejection for {host}: {logs:?}"
+        );
+    }
+    // An unrelated subscription flow still works, proving the sentinel and
+    // UDP ingress are live and that this isn't a blanket UDP shutdown.
+    let unrelated = tokio::net::UdpSocket::bind("127.0.0.1:0").await.unwrap();
+    unrelated
+        .send_to(
+            &udp_packet("example.org", target.port()),
+            ("127.0.0.1", engine.settings.mixed_port),
+        )
+        .await
+        .unwrap();
+    let mut packet = [0; 4096];
+    let (length, _) =
+        tokio::time::timeout(Duration::from_secs(5), unrelated.recv_from(&mut packet))
+            .await
+            .unwrap()
+            .unwrap();
+    assert!(packet[..length].ends_with(b"claude-udp-regression"));
+    assert_eq!(delivered.load(Ordering::Relaxed), 1);
+    let client = detector_client(engine.settings.mixed_port);
+    let mut tcp = hold(&client, "claude.ai", tcp_port).await;
+    assert!(
+        tcp.chunk().await.unwrap().is_some(),
+        "TCP fallback must remain usable"
+    );
+
+    // Exercise the same unsupported-node policy through native TUN, using
+    // fake DNS addresses inside the disposable documentation subnet only.
+    let dns_port = free_port();
+    candidate["dns"]["listen"] = format!("127.0.0.1:{dns_port}").into();
+    candidate["dns"]["fake-ip-range"] = "203.0.113.0/24".into();
+    for host in HOSTS {
+        candidate["hosts"]
+            .as_mapping_mut()
+            .unwrap()
+            .remove(serde_yaml::Value::from(host));
+    }
+    engine
+        .api
+        .reload(&scoped_payload(&serde_yaml::to_string(&candidate).unwrap()))
+        .await
+        .unwrap();
+    for host in HOSTS {
+        let dns = tokio::net::UdpSocket::bind("127.0.0.1:0").await.unwrap();
+        let mut query = vec![0x49, 0x52, 1, 0, 0, 1, 0, 0, 0, 0, 0, 0];
+        for label in host.split('.') {
+            query.push(label.len() as u8);
+            query.extend_from_slice(label.as_bytes());
+        }
+        query.extend_from_slice(&[0, 0, 1, 0, 1]);
+        dns.send_to(&query, ("127.0.0.1", dns_port)).await.unwrap();
+        let (length, _) = tokio::time::timeout(Duration::from_secs(5), dns.recv_from(&mut packet))
+            .await
+            .unwrap()
+            .unwrap();
+        assert!(
+            length > 16 && packet[..2] == query[..2] && packet[length - 6..length - 4] == [0, 4]
+        );
+        let address = std::net::Ipv4Addr::new(
+            packet[length - 4],
+            packet[length - 3],
+            packet[length - 2],
+            packet[length - 1],
+        );
+        assert_eq!(
+            &address.octets()[..3],
+            &[203, 0, 113],
+            "DNS did not return a scoped fake IP"
+        );
+        let socket = tokio::net::UdpSocket::bind("0.0.0.0:0").await.unwrap();
+        socket
+            .send_to(b"claude-native-tun-udp", (address, target.port()))
+            .await
+            .unwrap();
+        sockets.push(socket);
+    }
+    tokio::time::sleep(Duration::from_secs(2)).await;
+    let logs = engine.poll(Scope::Logs).await.unwrap().logs;
+    for host in HOSTS {
+        assert!(
+            logs.iter().any(|line| line.contains("[UDP]")
+                && line.contains(host)
+                && line.contains("REJECT")
+                && !line.contains("127.0.0.1:")),
+            "native TUN did not reject unsupported UDP for {host}: {logs:?}"
+        );
+    }
+    // A UDP-capable node must keep UDP working through that very node.
+    candidate = serde_yaml::from_str(saved).unwrap();
+    for host in HOSTS {
+        candidate["hosts"][host] = "127.0.0.1".into();
+    }
+    engine
+        .api
+        .reload(&scoped_payload(&serde_yaml::to_string(&candidate).unwrap()))
+        .await
+        .unwrap();
+    let before = relay.udp.load(Ordering::Relaxed);
+    for host in HOSTS {
+        let socket = tokio::net::UdpSocket::bind("127.0.0.1:0").await.unwrap();
+        socket
+            .send_to(
+                &udp_packet(host, target.port()),
+                ("127.0.0.1", engine.settings.mixed_port),
+            )
+            .await
+            .unwrap();
+        let (length, _) =
+            tokio::time::timeout(Duration::from_secs(5), socket.recv_from(&mut packet))
+                .await
+                .unwrap()
+                .unwrap();
+        assert!(packet[..length].ends_with(b"claude-udp-regression"));
+        sockets.push(socket);
+    }
+    assert_eq!(
+        relay.udp.load(Ordering::Relaxed) - before,
+        3,
+        "supported UDP bypassed the pinned node"
+    );
+    assert_eq!(
+        delivered.load(Ordering::Relaxed),
+        1,
+        "protected datagrams leaked to the DIRECT sentinel"
+    );
+    // Reproduce the reported AnyTLS case, including its real TLS + UoT data
+    // path. Merely using a UDP-capable SOCKS fixture would miss this default.
+    let anytls_directory = tempfile::tempdir().unwrap();
+    let anytls_port = free_port();
+    let config = serde_json::json!({
+        "mode":"rule", "log-level":"silent", "dns":{"enable":false}, "ipv6":true,
+        "listeners":[{"name":"anytls-regression", "type":"anytls", "listen":"127.0.0.1", "port":anytls_port,
+            "users":{"fixture":"temporary-regression-password"},
+            "certificate":std::fs::read_to_string(std::env::var_os("CLASH_CLAUDE_TEST_CERT").unwrap()).unwrap(),
+            "private-key":std::fs::read_to_string(std::env::var_os("CLASH_CLAUDE_TEST_KEY").unwrap()).unwrap()}],
+        "proxies":[], "rules":["MATCH,DIRECT"]
+    });
+    let path = anytls_directory.path().join("config.yaml");
+    std::fs::write(&path, serde_json::to_vec(&config).unwrap()).unwrap();
+    let mut server = tokio::process::Command::new(test_resources().join(if cfg!(windows) {
+        "mihomo.exe"
+    } else {
+        "mihomo"
+    }))
+    .arg("-d")
+    .arg(anytls_directory.path())
+    .arg("-f")
+    .arg(path)
+    .stdout(std::process::Stdio::null())
+    .stderr(std::process::Stdio::null())
+    .kill_on_drop(true)
+    .spawn()
+    .unwrap();
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(5);
+    loop {
+        if tokio::net::TcpStream::connect(("127.0.0.1", anytls_port))
+            .await
+            .is_ok()
+        {
+            break;
+        }
+        assert!(
+            tokio::time::Instant::now() < deadline && server.try_wait().unwrap().is_none(),
+            "AnyTLS loopback fixture failed to start"
+        );
+        tokio::time::sleep(Duration::from_millis(100)).await;
+    }
+    candidate["proxies"][0] =
+        serde_yaml::to_value(serde_json::json!({"name":"FixtureA","type":"anytls",
+        "server":"127.0.0.1","port":anytls_port,"password":"temporary-regression-password"}))
+        .unwrap();
+    for enabled in [false, true] {
+        if enabled {
+            candidate["proxies"][0]["udp"] = true.into();
+        }
+        engine
+            .api
+            .reload(&scoped_payload(&serde_yaml::to_string(&candidate).unwrap()))
+            .await
+            .unwrap();
+        let proxies: serde_json::Value = engine.api.get("proxies").await.unwrap();
+        let proxy = &proxies["proxies"]["FixtureA"];
+        assert_eq!(proxy["type"], "AnyTLS");
+        assert_eq!(
+            proxy["udp"], enabled,
+            "AnyTLS missing udp must not be treated as enabled"
+        );
+        for host in HOSTS {
+            let socket = tokio::net::UdpSocket::bind("127.0.0.1:0").await.unwrap();
+            socket
+                .send_to(
+                    &udp_packet(host, target.port()),
+                    ("127.0.0.1", engine.settings.mixed_port),
+                )
+                .await
+                .unwrap();
+            if enabled {
+                let (length, _) =
+                    tokio::time::timeout(Duration::from_secs(8), socket.recv_from(&mut packet))
+                        .await
+                        .unwrap()
+                        .unwrap();
+                assert!(
+                    packet[..length].ends_with(b"claude-udp-regression"),
+                    "AnyTLS UoT response mismatch"
+                );
+            }
+            sockets.push(socket);
+        }
+        tokio::time::sleep(Duration::from_secs(2)).await;
+        assert_eq!(
+            delivered.load(Ordering::Relaxed),
+            if enabled { 4 } else { 1 },
+            "AnyTLS UDP reached the sentinel through the wrong path"
+        );
+        if enabled {
+            let live: serde_json::Value = engine.api.get("connections").await.unwrap();
+            for host in HOSTS {
+                assert!(
+                    live["connections"].as_array().unwrap().iter().any(
+                        |row| row["metadata"]["host"] == host
+                            && row["metadata"]["network"] == "udp"
+                            && row["chains"]
+                                .as_array()
+                                .is_some_and(|chain| chain.iter().any(|s| s == "FixtureA")
+                                    && chain.iter().all(|s| s != "DIRECT"))
+                    ),
+                    "AnyTLS UDP did not use the pinned node: {host}: {live}"
+                );
+            }
+        }
+    }
+    server.kill().await.unwrap();
+    tokio::time::sleep(Duration::from_secs(2)).await;
+    let guard = engine
+        .poll(Scope::Claude)
+        .await
+        .unwrap()
+        .claude_guard
+        .unwrap();
+    assert_eq!(
+        guard.blocked, 0,
+        "normal/rejected UDP must not rely on reactive blocking: {guard:?}"
+    );
+    assert_eq!(
+        guard.alerts, 0,
+        "explicit core rejections must not cause OS warnings: {guard:?}"
+    );
+    sentinel.abort();
+    drop((sockets, unrelated, tcp));
+    engine.api.reload(&scoped_payload(saved)).await.unwrap();
+    serde_json::json!({"unsupported_socks_requests":28,"unsupported_native_tun_requests":3,
+        "protected_direct_datagrams":0,"supported_pinned_udp_responses":3,
+        "anytls_missing_udp_rejected":3,"anytls_uot_responses":3,
+        "unrelated_udp_preserved":true,"tcp_preserved":true,"guard_blocked":guard.blocked,"guard_alerts":guard.alerts})
 }
 
 fn scoped_payload(payload: &str) -> String {
@@ -471,6 +822,7 @@ pub async fn run() {
         child.kill().await.unwrap();
     }
     engine.api.reload(&scoped_payload(&saved)).await.unwrap();
+    let udp_routing = udp_routing(&mut engine, &saved, servers.http, &first).await;
     let mut normal = hold(&client, "api.anthropic.com", servers.http).await;
     assert!(normal.chunk().await.unwrap().is_some());
     let mut protected = capture(&mut engine, "保护开启后").await;
@@ -888,8 +1240,9 @@ pub async fn run() {
     let report = serde_json::json!({"schema":1,"environment":"controlled disposable native runner","version":clash_of_rust::VERSION,
         "before":before,"protected":protected,"blocked":blocked,"restored":restored,"protection":protection,
         "routing_scope":"Production full-route configuration asserted; native fixture routes limited to documentation IPv4/IPv6 and DNS test target to preserve runner control traffic",
-        "tests":["native TUN and system proxy","native IPv6 TUN traffic","public DoH via pinned node","real UDP DNS hijack","real TCP DNS hijack","normal Claude connection preserved","unrelated connection preserved","DIRECT connection closed","wrong-node connection closed","native notification request deduplicated and completed","restart preserves original snapshot","off/system/TUN restored exactly","rejected activation leaves preferences unchanged","subscription source unchanged","provider-backed concrete node and restore","cached-IP HTTP hostname routed","cached-IP TLS SNI routed","known hostname preserved despite alternate TLS SNI"],
+        "tests":["native TUN and system proxy","native IPv6 TUN traffic","public DoH via pinned node","real UDP DNS hijack","real TCP DNS hijack","normal Claude connection preserved","unrelated connection preserved","DIRECT connection closed","wrong-node connection closed","native notification request deduplicated and completed","restart preserves original snapshot","off/system/TUN restored exactly","rejected activation leaves preferences unchanged","subscription source unchanged","provider-backed concrete node and restore","cached-IP HTTP hostname routed","cached-IP TLS SNI routed","known hostname preserved despite alternate TLS SNI","unsupported UDP rejected before DIRECT","unsupported UDP over native TUN rejected","supported UDP preserved through pinned node","AnyTLS without udp fails closed","AnyTLS real UoT round trip"],
         "linux_visible_warning_and_cancellation":cfg!(target_os = "linux"),
+        "udp_routing":udp_routing,
         "guard":guard});
     let output = std::path::PathBuf::from(std::env::var_os("CLASH_CLAUDE_TEST_REPORT").unwrap());
     clash_of_rust::config::atomic_write(&output, &serde_json::to_vec_pretty(&report).unwrap())

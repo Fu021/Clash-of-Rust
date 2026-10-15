@@ -199,32 +199,23 @@ pub fn apply(map: &mut Mapping, settings: &Settings) -> Result<()> {
     let Value::Sequence(original) = original else {
         anyhow::bail!("订阅规则格式无效");
     };
-    let mut rules = Vec::with_capacity(original.len() + 40);
+    let mut rules = Vec::with_capacity(original.len() + 100);
     // The higher-priority overlay replaces only equal predicates in the runtime
     // copy. The subscription and user rule identities are never rewritten.
     for domain in OWNED_DOMAINS.iter().chain(ASSOCIATED_DOMAINS) {
-        rules.push(Value::from(format!(
-            "DOMAIN-SUFFIX,{domain},{}",
-            protection.route
-        )));
+        route_or_reject(&mut rules, "DOMAIN-SUFFIX", domain, protection, false);
     }
     for keyword in KEYWORDS {
-        rules.push(Value::from(format!(
-            "DOMAIN-KEYWORD,{keyword},{}",
-            protection.route
-        )));
+        route_or_reject(&mut rules, "DOMAIN-KEYWORD", keyword, protection, false);
     }
     for host in DIAGNOSTIC_HOSTS {
-        rules.push(Value::from(format!("DOMAIN,{host},{}", protection.route)));
+        route_or_reject(&mut rules, "DOMAIN", host, protection, false);
     }
     for (kind, payload) in [
         ("IP-CIDR", "160.79.104.0/23"),
         ("IP-CIDR6", "2607:6bc0::/48"),
     ] {
-        rules.push(Value::from(format!(
-            "{kind},{payload},{},no-resolve",
-            protection.route
-        )));
+        route_or_reject(&mut rules, kind, payload, protection, true);
     }
     let overlay_count = rules.len();
     for original in original {
@@ -327,6 +318,23 @@ pub fn apply(map: &mut Mapping, settings: &Settings) -> Result<()> {
     Ok(())
 }
 
+fn route_or_reject(
+    rules: &mut Vec<Value>,
+    kind: &str,
+    payload: &str,
+    protection: &Protection,
+    no_resolve: bool,
+) {
+    // Mihomo SKIPS a matching rule if the selected adapter does not support
+    // UDP. Without an adjacent fallback, QUIC can reach subscription DIRECT
+    // rules or even the core's implicit DIRECT default (with an empty rule).
+    // Preserve working UDP; reject only when the protected route is skipped.
+    let suffix = if no_resolve { ",no-resolve" } else { "" };
+    for route in [protection.route.as_str(), "REJECT"] {
+        rules.push(Value::from(format!("{kind},{payload},{route}{suffix}")));
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -419,12 +427,29 @@ mod tests {
         assert!(map["dns"]["direct-nameserver"].is_null());
         assert!(map["dns"]["nameserver-policy"]["+.google.com"].is_null());
         let rules = map["rules"].as_sequence().unwrap();
+        let overlay: Vec<_> = rules
+            .iter()
+            .map(|v| v.as_str().unwrap())
+            .take_while(|rule| *rule != "MATCH,DIRECT")
+            .collect();
+        assert_eq!(overlay.len() % 2, 0);
+        assert!(!overlay.is_empty());
+        for pair in overlay.chunks_exact(2) {
+            assert_eq!(
+                pair[0].replace(
+                    &settings.claude_protection.as_ref().unwrap().route,
+                    "REJECT"
+                ),
+                pair[1],
+                "every protected predicate needs an immediate fail-closed fallback"
+            );
+        }
         assert_eq!(
-            rules
+            overlay
                 .iter()
-                .filter(|v| v.as_str().unwrap().starts_with("DOMAIN-SUFFIX,claude.ai,"))
+                .filter(|rule| rule.starts_with("DOMAIN-SUFFIX,claude.ai,"))
                 .count(),
-            1
+            2
         );
         assert!(
             !rules
