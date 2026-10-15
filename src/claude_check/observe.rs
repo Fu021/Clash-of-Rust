@@ -110,7 +110,7 @@ pub fn event(bytes: &[u8]) -> Option<Route> {
     let (endpoint, decision) = destination.split_once(' ')?;
     let (host, port) = endpoint.rsplit_once(':')?;
     let host = host.trim_end_matches('.');
-    if !claude_host(host)
+    if !(claude_host(host) || super::protection::associated_host(host))
         || host.len() > 253
         || port.parse::<u16>().ok()? == 0
         || !host

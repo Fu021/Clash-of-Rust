@@ -92,6 +92,7 @@ def main():
     parser.add_argument('--test-binary', type=Path, required=True)
     parser.add_argument('--uid', type=int, required=True)
     parser.add_argument('--inside-namespace', action='store_true')
+    parser.add_argument('--test-case', default='basic_system_proxy_and_tun', choices=('basic_system_proxy_and_tun','claude_protection_round_trip_and_guard'))
     args = parser.parse_args()
     assert os.geteuid() == 0 and args.uid != 0
     binary = args.test_binary.resolve(strict=True)
@@ -109,13 +110,16 @@ def main():
         run(['ip', 'link', 'add', 'uplink', 'type', 'dummy'])
         run(['ip', 'addr', 'add', '192.0.2.1/24', 'dev', 'uplink'])
         run(['ip', 'link', 'set', 'uplink', 'up'])
+        if args.test_case == 'claude_protection_round_trip_and_guard':
+            run(['ip', '-6', 'addr', 'add', '2001:db8:1::1/64', 'dev', 'uplink'])
+            run(['ip', '-6', 'route', 'add', 'default', 'via', '2001:db8:1::fe', 'dev', 'uplink'])
         run(['ip', 'route', 'add', 'default', 'via', '192.0.2.254', 'dev', 'uplink'])
         with isolated_resolved():
-            run([binary, 'basic_system_proxy_and_tun', '--exact',
+            run([binary, args.test_case, '--exact',
                  '--ignored', '--test-threads=1', '--nocapture'],
                 env=dict(os.environ, CLASH_TUN_TEST_NAMESPACE='1', CLASH_PROXY_SMOKE='1',
                          MIHOMO_TEST_RESOURCES='/opt/clash-of-rust/resources', GSETTINGS_BACKEND='memory'),
-                preexec_fn=ordinary_user, timeout=180)
+                preexec_fn=ordinary_user, timeout=240)
         return
 
     executable = '/opt/clash-of-rust/clash-of-rust'
@@ -134,7 +138,7 @@ def main():
     try:
         run([executable, '--authorize-tun'])
         run(['unshare', '--net', '--mount', sys.executable, Path(__file__).resolve(),
-             '--inside-namespace', '--test-binary', binary, '--uid', args.uid], timeout=200)
+             '--inside-namespace', '--test-binary', binary, '--uid', args.uid, '--test-case', args.test_case], timeout=260)
         print(json.dumps({'basic': True, 'native_authorization': True, 'ordinary_user': args.uid,
                           'tun_traffic_cleanup': True, 'network_namespace': True,
                           'resolved_without_polkit': True}))

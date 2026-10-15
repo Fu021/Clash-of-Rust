@@ -53,27 +53,48 @@ async function collectClaudeRegion(options = {}) {
             emoji.push(`${name}：${colored ? '彩色字形' : ink ? '单色字形或字符回退' : '未获得字形'}`);
         }
     } else { emoji.push('Canvas 不可用'); }
+    let canvas_hash = '', webgl_vendor = '', webgl_renderer = '';
+    try {
+        if (context && crypto.subtle) {
+            const pixels = context.getImageData(0, 0, 160, 48).data;
+            canvas_hash = Array.from(new Uint8Array(await crypto.subtle.digest('SHA-256', pixels)), b => b.toString(16).padStart(2, '0')).join('');
+        }
+        const gl = document.createElement('canvas').getContext('webgl');
+        if (gl) {
+            const debug = gl.getExtension('WEBGL_debug_renderer_info');
+            webgl_vendor = String(gl.getParameter(debug ? debug.UNMASKED_VENDOR_WEBGL : gl.VENDOR)).slice(0, 256);
+            webgl_renderer = String(gl.getParameter(debug ? debug.UNMASKED_RENDERER_WEBGL : gl.RENDERER)).slice(0, 256);
+            const lose = gl.getExtension('WEBGL_lose_context'); if (lose) lose.loseContext();
+        }
+    } catch (_) {}
     const rtc = async () => {
-        const result = { supported: typeof RTCPeerConnection !== 'undefined', completed: false, candidates: [], error: '' };
+        const servers = ['stun:stun.cloudflare.com:3478', 'stun:stun.l.google.com:19302'];
+        const result = { supported: typeof RTCPeerConnection !== 'undefined', completed: false, candidates: [], samples: [], servers, error: '' };
         if (!result.supported) { result.error = '浏览器未提供 WebRTC'; return result; }
+        const probe = async server => {
         let peer;
         let timer;
+        let completed = false;
         try {
-            peer = new RTCPeerConnection({ iceServers: [{ urls: 'stun:stun.cloudflare.com:3478' }] });
+            peer = new RTCPeerConnection({ iceServers: [{ urls: server }] });
             peer.createDataChannel('region-diagnostic');
             const gathered = new Promise(resolve => {
                 timer = setTimeout(() => { result.error = 'ICE 收集超时'; resolve(); }, 4500);
                 peer.onicecandidate = event => {
-                    if (!event.candidate) { result.completed = true; resolve(); return; }
+                    if (!event.candidate) { completed = true; resolve(); return; }
                     const candidate = event.candidate;
                     const address = candidate.address || candidate.candidate.split(/\s+/)[4] || '';
                     if (address && result.candidates.length < 24 && !result.candidates.includes(address)) result.candidates.push(address);
+                    if (address && result.samples.length < 24) result.samples.push({ address, server, protocol: candidate.protocol || '', type: candidate.type || '' });
                 };
             });
             await peer.setLocalDescription(await peer.createOffer());
             await gathered;
         } catch (_) { result.error = 'WebRTC 被阻止或初始化失败'; }
         finally { clearTimeout(timer); if (peer) peer.close(); }
+        return completed;
+        };
+        result.completed = (await Promise.all(servers.map(probe))).every(Boolean);
         return result;
     };
     const dns = async () => {
@@ -84,7 +105,7 @@ async function collectClaudeRegion(options = {}) {
             if (!response.ok) throw new Error();
             const data = await response.json();
             if (!/^[a-zA-Z0-9-]{1,64}$/.test(data.id)) throw new Error();
-            for (let i = 0; i < 8; i++) { const image = new Image(); image.referrerPolicy = 'no-referrer'; image.src = `https://${i}.${data.id}.bash.ws/diagnostic.png`; images.push(image); }
+            for (let i = 0; i < 16; i++) { const image = new Image(); image.crossOrigin = 'anonymous'; image.referrerPolicy = 'no-referrer'; image.src = `https://${i}.${data.id}.bash.ws/diagnostic.png`; images.push(image); }
             await new Promise(resolve => setTimeout(resolve, 3500));
             return { id: data.id, error: '' };
         } catch (_) { return { id: '', error: 'DNS 测试服务不可用、被浏览器阻止或本地入口已关闭。' }; }
@@ -92,14 +113,15 @@ async function collectClaudeRegion(options = {}) {
     };
     let permission = '未确认';
     try { permission = (await navigator.permissions.query({ name: 'geolocation' })).state; } catch (_) {}
-    const [ipv4, ipv6, webrtc, dnsResult] = await Promise.all([exit('https://api.ipify.org?format=json'), exit('https://api6.ipify.org?format=json'), rtc(), dns()]);
+    const cf = async () => { try { const response = await deadlineFetch('https://www.cloudflare.com/cdn-cgi/trace'); return response.ok ? (await response.text()).slice(0, 2048) : ''; } catch (_) { return ''; } };
+    const [ipv4, ipv6, webrtc, dnsResult, cf_trace] = await Promise.all([exit('https://api.ipify.org?format=json'), exit('https://api6.ipify.org?format=json'), rtc(), dns(), cf()]);
     let trace = '';
-    if (options.site && location.protocol === 'https:' && /(^|\.)(claude\.ai|claude\.com|anthropic\.com)$/.test(location.hostname)) {
+    if (options.site && location.protocol === 'https:' && /(^|\.)(claude\.ai|claude\.com|claude\.app|claudeusercontent\.com|claudemcpcontent\.com|anthropic\.com)$/.test(location.hostname)) {
         try { const response = await deadlineFetch(location.origin + '/cdn-cgi/trace'); if (response.ok) trace = (await response.text()).slice(0, 2048); } catch (_) {}
     }
     const intl = Intl.DateTimeFormat().resolvedOptions();
     const format = new Intl.DateTimeFormat(undefined, { dateStyle: 'short' }).format(new Date(2026, 0, 23));
-    return { kind: 'browser', schema: 1, origin: location.origin, timezone: intl.timeZone || '', offset: new Date().getTimezoneOffset(), languages: Array.from(navigator.languages || [navigator.language]).filter(Boolean).slice(0, 24), locale: intl.locale || '', date_format: format, platform: navigator.platform || '', user_agent: navigator.userAgent || '', fonts, emoji, webrtc, ipv4, ipv6, dns_id: dnsResult.id, dns_error: dnsResult.error, trace, geolocation: { permission, latitude: null, longitude: null } };
+    return { kind: 'browser', schema: 1, origin: location.origin, timezone: intl.timeZone || '', offset: new Date().getTimezoneOffset(), languages: Array.from(navigator.languages || [navigator.language]).filter(Boolean).slice(0, 24), locale: intl.locale || '', date_format: format, platform: navigator.platform || '', user_agent: navigator.userAgent || '', fonts, emoji, canvas_hash, webgl_vendor, webgl_renderer, cookie_enabled: typeof navigator.cookieEnabled === 'boolean' ? navigator.cookieEnabled : null, webrtc, ipv4, ipv6, dns_id: dnsResult.id, dns_error: dnsResult.error, trace, cf_trace, geolocation: { permission, latitude: null, longitude: null } };
 }
 
 // The console sampler executes the collector only, without manipulating the

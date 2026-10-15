@@ -331,6 +331,7 @@ impl Page {
             Self::Connections => Scope::Connections,
             Self::Rules => Scope::Rules,
             Self::Logs => Scope::Logs,
+            Self::Claude => Scope::Claude,
             _ => Scope::Other,
         }
     }
@@ -370,6 +371,9 @@ enum Action {
     TraySpeed(bool),
     DnsOverride(bool),
     Ipv6(bool),
+    Udp(bool),
+    ClaudeProtection(bool),
+    ReputationKey(Option<String>),
     Autostart(bool),
     DelayInterval(u32),
     NodeSort(NodeSort),
@@ -405,6 +409,7 @@ struct Reply {
     geo_status: String,
     autostart: bool,
     exit_after_start: bool,
+    protection_changed: bool,
     tray_nodes: Option<Option<tray::Nodes>>,
 }
 
@@ -620,6 +625,7 @@ async fn execute(engine: Arc<Mutex<Engine>>, action: Action, scope: Scope, heade
         _ => None,
     };
     let saving_rules = matches!(action, Action::SaveRules(..));
+    let protection_requested = matches!(action, Action::ClaudeProtection(_));
     let mut engine = engine.lock().await;
     let mut exit_after_start = false;
     let result: anyhow::Result<String> = async {
@@ -688,6 +694,31 @@ async fn execute(engine: Arc<Mutex<Engine>>, action: Action, scope: Scope, heade
                 };
                 engine.save_settings(settings).await?;
                 Ok("IPv6 设置已保存并应用".into())
+            }
+            Action::Udp(udp) => {
+                let settings = Settings {
+                    udp,
+                    ..engine.settings.clone()
+                };
+                engine.save_settings(settings).await?;
+                Ok("UDP 设置已保存并应用".into())
+            }
+            Action::ClaudeProtection(enabled) => {
+                exit_after_start = engine.claude_protection(enabled).await?;
+                Ok(if enabled {
+                    "Claude 保护已启用，正在复测"
+                } else {
+                    "Claude 保护已关闭，原网络状态已恢复"
+                }
+                .into())
+            }
+            Action::ReputationKey(ip_reputation_key) => {
+                let settings = Settings {
+                    ip_reputation_key,
+                    ..engine.settings.clone()
+                };
+                engine.save_settings(settings).await?;
+                Ok("检测服务设置已保存；密钥不会写入报告".into())
             }
             Action::Autostart(enabled) => {
                 tokio::task::spawn_blocking(move || platform::set_autostart(enabled)).await??;
@@ -787,6 +818,7 @@ async fn execute(engine: Arc<Mutex<Engine>>, action: Action, scope: Scope, heade
     }
     .await;
     let rules_applied = saving_rules && result.is_ok();
+    let protection_changed = protection_requested && result.is_ok();
     let mut notice = result.map_err(|e| format!("{e:#}"));
     let rule_document = rule_id.and_then(|id| match engine.rule_document(&id) {
         Ok(doc) => Some(Arc::new(doc)),
@@ -834,6 +866,7 @@ async fn execute(engine: Arc<Mutex<Engine>>, action: Action, scope: Scope, heade
         geo_status: engine.geo_manifest.version.clone(),
         autostart: platform::autostart_enabled().unwrap_or(false),
         exit_after_start,
+        protection_changed,
     }
 }
 
@@ -1143,7 +1176,7 @@ impl App {
                 .map(|_| Message::PeriodicDelay)
             },
             tray_events,
-            if self.claude.session.is_some() || self.claude.monitor_enabled {
+            if self.claude.session.is_some() {
                 iced::time::every(Duration::from_secs(1))
                     .map(|_| Message::Claude(claude_view::Event::Tick))
             } else {
@@ -1208,6 +1241,8 @@ impl App {
                 | Action::SavePorts(..)
                 | Action::DnsOverride(_)
                 | Action::Ipv6(_)
+                | Action::Udp(_)
+                | Action::ClaudeProtection(_)
                 | Action::SaveRules(..)
                 | Action::Activate(_)
                 | Action::UpdateProfile(_)
@@ -2153,6 +2188,7 @@ impl App {
             }
             Message::Finished(reply) => {
                 let reply = *reply;
+                let protection_changed = reply.protection_changed;
                 if reply.profile_edit
                     && let Err(error) = &reply.notice
                     && let Some(editor) = &mut self.profile_editor
@@ -2225,6 +2261,17 @@ impl App {
                 }
                 self.snapshot.running = reply.running;
                 if let Some(mut snapshot) = reply.snapshot {
+                    if let Some(protection) = &self.settings.claude_protection {
+                        snapshot.proxies.proxies.remove(protection.route.as_str());
+                        for proxy in snapshot.proxies.proxies.values_mut() {
+                            proxy.all.retain(|name| name.as_str() != protection.route);
+                        }
+                    }
+                    if let Some(guard) = &snapshot.claude_guard {
+                        self.claude.guard_report(guard);
+                    } else if reply.scope == Scope::Claude {
+                        self.claude.clear_guard();
+                    }
                     if let (Some(now), Some(previous)) = (
                         snapshot.connections_sampled_at,
                         self.snapshot.connections_sampled_at,
@@ -2311,7 +2358,16 @@ impl App {
                 } else {
                     Task::none()
                 };
-                return Task::batch([update_task, next_task]);
+                let protection_test = if protection_changed
+                    && self.settings.claude_protection.is_some()
+                    && self.page == Page::Claude
+                    && !self.error
+                {
+                    self.claude_event(claude_view::Event::Start)
+                } else {
+                    Task::none()
+                };
+                return Task::batch([update_task, next_task, protection_test]);
             }
             Message::Probe(exit_ip) => {
                 if self.probing {
@@ -4548,6 +4604,17 @@ impl App {
                     (!self.working && !self.exiting && !self.updates.busy())
                         .then_some(|enabled| Message::Action(Action::Ipv6(enabled))),
                 ),
+            checkbox(self.settings.udp || self.settings.claude_protection.is_some())
+                .label("启用 UDP")
+                .size(self.scaled(16))
+                .text_size(self.scaled(12))
+                .on_toggle_maybe(
+                    (!self.working
+                        && !self.exiting
+                        && !self.updates.busy()
+                        && self.settings.claude_protection.is_none())
+                    .then_some(|enabled| Message::Action(Action::Udp(enabled))),
+                ),
         ]
         .spacing(12);
         let geo = column![
@@ -5086,6 +5153,7 @@ mod async_state_tests {
             geo_status: String::new(),
             autostart: false,
             exit_after_start: false,
+            protection_changed: false,
             tray_nodes: None,
         })));
         assert!(app.core_failure.is_none());
@@ -5110,6 +5178,7 @@ mod async_state_tests {
             geo_status: String::new(),
             autostart: false,
             exit_after_start: false,
+            protection_changed: false,
             tray_nodes: None,
         })));
         assert_eq!(app.core_failure.as_deref(), Some("内核程序被系统阻止"));
@@ -5129,6 +5198,7 @@ mod async_state_tests {
             geo_status: String::new(),
             autostart: false,
             exit_after_start: false,
+            protection_changed: false,
             tray_nodes: None,
         })));
         assert_eq!(

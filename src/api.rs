@@ -33,7 +33,14 @@ impl Read for JsonReader {
 }
 
 async fn decode_json<T: DeserializeOwned + Send + 'static>(
+    response: reqwest::Response,
+) -> Result<T> {
+    decode_json_with(response, |reader| serde_json::from_reader(reader)).await
+}
+
+async fn decode_json_with<T: Send + 'static>(
     mut response: reqwest::Response,
+    decode: impl FnOnce(std::io::BufReader<JsonReader>) -> serde_json::Result<T> + Send + 'static,
 ) -> Result<T> {
     if response
         .content_length()
@@ -43,7 +50,7 @@ async fn decode_json<T: DeserializeOwned + Send + 'static>(
     }
     let (sender, receiver) = tokio::sync::mpsc::channel(2);
     let parser = tokio::task::spawn_blocking(move || {
-        serde_json::from_reader(std::io::BufReader::with_capacity(
+        decode(std::io::BufReader::with_capacity(
             64 * 1024,
             JsonReader {
                 receiver,
@@ -471,6 +478,40 @@ fn count_connections<'de, D: serde::Deserializer<'de>>(deserializer: D) -> Resul
 }
 
 impl Api {
+    pub(crate) async fn provider_leaf(&self, name: &str) -> Result<Option<(String, String)>> {
+        #[derive(Deserialize)]
+        struct Node {
+            name: String,
+            #[serde(rename = "type")]
+            kind: String,
+        }
+        #[derive(Deserialize)]
+        struct Provider {
+            #[serde(default)]
+            proxies: Vec<Node>,
+        }
+        #[derive(Deserialize)]
+        struct Providers {
+            providers: BTreeMap<String, Provider>,
+        }
+        let response = self
+            .request(Method::GET, self.url(&["providers", "proxies"])?)
+            .send()
+            .await?;
+        let sources: Providers = decode_json(Self::checked(response).await?).await?;
+        let mut found = None;
+        for (provider, source) in sources.providers {
+            for node in source.proxies {
+                if node.name == name {
+                    if found.is_some() {
+                        bail!("代理集合中存在同名节点，请改名后再开启 Claude 保护");
+                    }
+                    found = Some((provider.clone(), node.kind));
+                }
+            }
+        }
+        Ok(found)
+    }
     pub fn new(settings: &Settings) -> Result<Self> {
         Ok(Self {
             client: Client::builder()
@@ -509,12 +550,28 @@ impl Api {
             .context("无法连接 mihomo 控制接口")?;
         decode_json(Self::checked(response).await?).await
     }
-    pub(crate) async fn proxy_selection(&self, name: &str) -> Result<ProxySelection> {
+    pub(crate) async fn unsafe_claude_connections(
+        &self,
+        node: String,
+    ) -> Result<Vec<crate::claude_check::guard::Row>> {
+        let response = self
+            .request(Method::GET, self.url(&["connections"])?)
+            .send()
+            .await?;
+        decode_json_with(Self::checked(response).await?, move |reader| {
+            crate::claude_check::guard::decode(reader, &node)
+        })
+        .await
+    }
+    pub(crate) async fn proxy_selection(&self, name: &str) -> Result<Option<ProxySelection>> {
         let response = self
             .request(Method::GET, self.url(&["proxies", name])?)
             .send()
             .await?;
-        decode_json(Self::checked(response).await?).await
+        if response.status() == reqwest::StatusCode::NOT_FOUND {
+            return Ok(None); // Provider members do not have a /proxies/{name} entry.
+        }
+        decode_json(Self::checked(response).await?).await.map(Some)
     }
     pub(crate) async fn proxy_nodes(&self, name: &str) -> Result<Proxy> {
         let response = self

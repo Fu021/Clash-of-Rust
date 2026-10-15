@@ -32,7 +32,7 @@ def macos_network_service(report):
             subprocess.run(['/usr/bin/sudo', '-n', '/bin/rm', '-rf', directory, agent], check=True, timeout=20)
 
 
-def check(binary, bundle):
+def check(binary, bundle, test_case='basic_system_proxy_and_tun'):
     if os.environ.get('GITHUB_ACTIONS') != 'true':
         raise RuntimeError('Proxy/TUN checks require a disposable Actions runner')
     system = host_system()
@@ -42,8 +42,11 @@ def check(binary, bundle):
         resources = bundle/'Contents/Resources/resources'
         helper = bundle/'Contents/MacOS/clash-tun-launcher'
     env = dict(os.environ, CLASH_PROXY_SMOKE='1', MIHOMO_TEST_RESOURCES=str(resources.resolve()))
-    command = [binary, 'basic_system_proxy_and_tun', '--exact', '--ignored', '--nocapture']
+    command = [binary, test_case, '--exact', '--ignored', '--nocapture']
     if system == 'linux':
+        sudo = ['sudo']
+        if test_case == 'claude_protection_round_trip_and_guard':
+            sudo += ['--preserve-env=CLASH_CLAUDE_TEST_REPORT,CLASH_CLAUDE_TEST_CERT,CLASH_CLAUDE_TEST_CA,CLASH_CLAUDE_TEST_KEY,CLASH_CLAUDE_TEST_SCRIPT,CLASH_CLAUDE_TEST_PYTHON,DBUS_SESSION_BUS_ADDRESS,DISPLAY,XAUTHORITY,GITHUB_ACTIONS']
         installed = Path('/opt/clash-of-rust')
         if bundle.resolve() != installed:
             # Install only the raw tested binaries/resources, never package in CI.
@@ -57,13 +60,13 @@ def check(binary, bundle):
                 run(['sudo', 'chown', 'root:root', '/opt'])
                 run(['sudo', 'chmod', '-R', 'go-w', installed])
                 run(['sudo', 'chmod', '0755', '/opt', installed])
-                run(['sudo', sys.executable, ROOT/'scripts/test-linux-tun.py',
-                     '--test-binary', binary, '--uid', os.getuid()])
+                run([*sudo, sys.executable, ROOT/'scripts/test-linux-tun.py',
+                     '--test-binary', binary, '--uid', os.getuid(), '--test-case', test_case])
             finally:
                 run(['sudo', 'rm', '-rf', installed])
         else:
-            run(['sudo', sys.executable, ROOT/'scripts/test-linux-tun.py',
-                 '--test-binary', binary, '--uid', os.getuid()])
+            run([*sudo, sys.executable, ROOT/'scripts/test-linux-tun.py',
+                 '--test-binary', binary, '--uid', os.getuid(), '--test-case', test_case])
     elif system == 'macos':
         report = ROOT/'target/macos-report'
         report.mkdir(parents=True, exist_ok=True)
@@ -86,9 +89,9 @@ def check(binary, bundle):
             # Production helper and launchd service, ordinary-user client. Only
             # initial administrative installation is performed by runner sudo.
             run(['/usr/bin/sudo', '-n', stage/'clash-tun-launcher', '--macos-install-service', os.getuid()])
-            run(command, env=env, timeout=90)
+            run(command, env=env, timeout=240)
     else:
-        run(command, env=env, timeout=90)
+        run(command, env=env, timeout=240)
 
 
 def main():

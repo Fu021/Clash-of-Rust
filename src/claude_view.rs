@@ -7,8 +7,9 @@ use iced::widget::column;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Guide {
-    Monitor,
     Supplement,
+    Protection,
+    Diagnostics,
 }
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ResultKind {
@@ -28,6 +29,12 @@ impl ResultKind {
 #[derive(Debug, Clone)]
 pub enum Event {
     Start,
+    Protection(bool),
+    ConfirmProtection,
+    ReputationKey(String),
+    SaveReputationKey,
+    Additional(check::additional::Kind),
+    AdditionalResult(u64, Result<Vec<Signal>, String>),
     Cancel,
     ResultsPage(usize),
     ResultsFilter(Option<ResultKind>),
@@ -45,8 +52,6 @@ pub enum Event {
     Imported(u64, Result<Report, String>),
     Export,
     Completed(Result<String, String>),
-    Monitor(bool),
-    MonitorStarted(u64, Result<check::observe::Session, String>),
     Tick,
 }
 
@@ -58,15 +63,10 @@ pub struct State {
     audit_busy: bool,
     scan: Option<check::audit::Scan>,
     pub guide: Option<Guide>,
+    protection_opened: Option<std::time::Instant>,
     pub reports: [Option<Report>; 4],
     pub session: Option<Session>,
-    pub monitor_enabled: bool,
-    monitor_starting: bool,
-    monitor: Option<check::observe::Session>,
-    monitor_generation: u64,
-    monitor_revision: u64,
-    monitor_key: Option<(u16, String)>,
-    monitor_status: String,
+    guard_status: String,
     generation: u64,
     aborters: Vec<AbortHandle>,
     local_busy: bool,
@@ -76,6 +76,8 @@ pub struct State {
     session_starting: bool,
     pub status: String,
     pub error: bool,
+    reputation_key: String,
+    additional_busy: bool,
 }
 enum Entry<'a> {
     Config(&'a check::audit::Finding),
@@ -92,6 +94,56 @@ fn index(environment: Environment) -> usize {
     }
 }
 impl State {
+    fn protection_wait(&self) -> u64 {
+        self.protection_opened.map_or(3, |opened| {
+            let remaining = std::time::Duration::from_secs(3).saturating_sub(opened.elapsed());
+            remaining.as_secs() + u64::from(remaining.subsec_nanos() > 0)
+        })
+    }
+    pub(crate) fn clear_guard(&mut self) {
+        self.guard_status.clear();
+    }
+    pub(crate) fn guard_report(&mut self, snapshot: &check::guard::Snapshot) {
+        self.guard_status = format!(
+            "{} · 已关闭 {} 条异常连接",
+            if snapshot.connected {
+                "后台实时保护中"
+            } else {
+                "实时保护暂未确认"
+            },
+            snapshot.blocked
+        );
+        let mut report = Report::new(
+            Environment::Desktop,
+            "Claude 保护的后台监测与拦截记录；共享服务无法按进程归属",
+        );
+        report.routes = snapshot.routes.iter().cloned().collect();
+        let mut signal = Signal::new(
+            Group::Desktop,
+            "实时保护与异常拦截",
+            format!(
+                "已观察 {} 次请求 · 已关闭 {} 条异常连接 · 系统提示请求 {} 次",
+                snapshot.total, snapshot.blocked, snapshot.alerts
+            ),
+            "内核事件与连接控制接口",
+            if snapshot.connected {
+                Evidence::Measured
+            } else {
+                Evidence::Unknown
+            },
+            "持续在后台运行；只处理 Claude 和保护规则关联的服务，偏离指定节点的存续连接会被关闭。未经过内核、已结束的请求及 HTTPS 内容无法据此检查。",
+        );
+        signal.risk = snapshot.blocked > 0 || !snapshot.error.is_empty();
+        if !snapshot.error.is_empty() {
+            signal.detail.push_str(&format!(" {}", snapshot.error));
+        }
+        report.signals.push(signal);
+        let current = self.reports[index(Environment::Desktop)]
+            .get_or_insert_with(|| Report::new(Environment::Desktop, "本机环境与实时保护"));
+        current.routes = report.routes;
+        current.signals.retain(|s| s.title != "实时保护与异常拦截");
+        current.signals.extend(report.signals);
+    }
     fn entries(&self) -> Vec<Entry<'_>> {
         let mut entries = Vec::new();
         if let Some(audit) = &self.audit {
@@ -129,7 +181,14 @@ impl State {
                 }
             }
             Entry::Signal(r, s) => {
-                if s.evidence != Evidence::Measured || s.title == "Claude 请求实时检测" {
+                if s.risk {
+                    ResultKind::Risk
+                } else if s.evidence != Evidence::Measured
+                    || matches!(
+                        s.title.as_str(),
+                        "实时保护与异常拦截" | "Claude 请求实时检测"
+                    )
+                {
                     ResultKind::Unknown
                 } else if matches!(s.group, Group::Exit | Group::WebRtc | Group::Dns)
                     && self.differs(r, s)
@@ -140,11 +199,7 @@ impl State {
                 }
             }
             Entry::Route(r) => {
-                if r.outcome == "连接失败"
-                    || ["DIRECT", "REJECT"].into_iter().any(|target| {
-                        r.chain.trim() == target || r.chain.trim().ends_with(&format!("[{target}]"))
-                    })
-                {
+                if r.risky() {
                     ResultKind::Risk
                 } else {
                     ResultKind::Unknown
@@ -191,6 +246,7 @@ impl State {
             || self.audit_busy
             || self.session_starting
             || self.importing
+            || self.additional_busy
     }
     pub fn close(&mut self) {
         self.generation = self.generation.wrapping_add(1);
@@ -199,6 +255,7 @@ impl State {
         }
         self.session = None;
         self.guide = None;
+        self.protection_opened = None;
         if let Some(scan) = self.scan.take() {
             scan.cancel();
         }
@@ -208,35 +265,23 @@ impl State {
         self.network_busy = false;
         self.browser_busy = false;
         self.importing = false;
+        self.additional_busy = false;
     }
     pub fn shutdown(&mut self) {
         self.close();
-        self.stop_monitor();
-    }
-    fn stop_monitor(&mut self) {
-        self.monitor_enabled = false;
-        if let Some(snapshot) = self.monitor.as_ref().and_then(|s| s.after(0)) {
-            self.monitor_report(snapshot);
-        }
-        self.monitor = None;
-        self.monitor_starting = false;
-        self.monitor_key = None;
-        self.monitor_generation = self.monitor_generation.wrapping_add(1);
-        self.monitor_status = "实时检测已停止，记录保留。".into();
     }
     fn store(&mut self, mut report: Report) {
         if report.environment == Environment::Web {
             self.browser_busy = false;
         }
         if report.environment == Environment::Desktop
-            && self.monitor_enabled
             && let Some(previous) = &mut self.reports[index(Environment::Desktop)]
         {
             report.signals.extend(
                 previous
                     .signals
                     .iter()
-                    .filter(|s| s.title == "Claude 请求实时检测")
+                    .filter(|s| s.title == "实时保护与异常拦截")
                     .cloned(),
             );
             report.routes = std::mem::take(&mut previous.routes);
@@ -264,66 +309,114 @@ impl State {
     fn selected(&self) -> impl Iterator<Item = &Report> {
         self.reports.iter().flatten()
     }
-    fn monitor_report(&mut self, snapshot: check::observe::Snapshot) {
-        self.monitor_revision = snapshot.revision;
-        self.monitor_status = format!(
-            "{} · 累计 {} 条事件 · 失败 {} · 保留最近 32 条明细",
-            if !self.monitor_enabled {
-                "已停止"
-            } else if snapshot.connected {
-                "实时检测中"
-            } else {
-                "等待内核事件流，断开后自动重连"
-            },
-            snapshot.total,
-            snapshot.failures
-        );
-        let report = self.reports[index(Environment::Desktop)].get_or_insert_with(|| {
-            Report::new(Environment::Desktop, "本机系统与 Claude 域名实时连接事件")
-        });
-        report.generated_at = chrono::Utc::now().to_rfc3339();
-        report.routes = snapshot.routes.into_iter().rev().collect();
-        report
-            .signals
-            .retain(|signal| signal.title != "Claude 请求实时检测");
-        report.signals.push(if report.routes.is_empty() {
-            Signal::unknown(Group::Desktop, "Claude 请求实时检测", "内核实时事件流", "尚未捕获内核识别到的 Claude 域名连接；请求可能未经过此内核或没有产生连接事件，不能当作已确认直连。")
-        } else {
-            Signal::new(Group::Desktop, "Claude 请求实时检测", self.monitor_status.clone(), "内核实时连接事件，适用于网页、Desktop 与 Code", Evidence::Measured, "记录内核识别到的 Claude 域名、时间、匹配规则、线路与连接结果。不会读取 HTTPS 请求内容；不按进程识别，不据此推断远端出口国家。")
-        });
-    }
 }
 
 impl App {
-    fn start_claude_monitor(&mut self) -> Task<Message> {
-        self.claude.monitor_generation = self.claude.monitor_generation.wrapping_add(1);
-        self.claude.monitor = None;
-        self.claude.monitor_revision = 0;
-        self.claude.monitor_starting = true;
-        self.claude.monitor_key =
-            Some((self.settings.controller_port, self.settings.secret.clone()));
-        self.claude.monitor_status = "正在连接内核实时事件流…".into();
-        let generation = self.claude.monitor_generation;
-        let settings = self.settings.clone();
-        Task::perform(
-            async move {
-                clash_of_rust::api::Api::new(&settings)
-                    .map(check::observe::Session::start)
-                    .map_err(|e| e.to_string())
-            },
-            move |result| Message::Claude(Event::MonitorStarted(generation, result)),
-        )
-    }
     pub(crate) fn claude_event(&mut self, event: Event) -> Task<Message> {
         let wrap = |event| Message::Claude(event);
         match event {
+            Event::Additional(kind) => {
+                if self.claude.busy() || self.working || self.exiting {
+                    return Task::none();
+                }
+                let Some(port) = self.snapshot.running.then_some(self.settings.mixed_port) else {
+                    self.claude.status = "请先启动内核并完成一次检测。".into();
+                    self.claude.error = true;
+                    return Task::none();
+                };
+                let ip = self.claude.reports[index(Environment::Core)]
+                    .as_ref()
+                    .and_then(|report| {
+                        report
+                            .signals
+                            .iter()
+                            .find(|s| !s.ip.is_empty() && s.group == Group::Exit)
+                    })
+                    .map(|signal| signal.ip.clone())
+                    .unwrap_or_default();
+                self.claude.guide = None;
+                self.claude.additional_busy = true;
+                self.claude.error = false;
+                self.claude.status = format!("正在进行{}…", kind.title());
+                let generation = self.claude.generation;
+                let (aborter, registration) = AbortHandle::new_pair();
+                self.claude.aborters.push(aborter);
+                return Task::perform(
+                    async move {
+                        Abortable::new(
+                            async move {
+                                let client =
+                                    check::client(Some(port)).map_err(|e| e.to_string())?;
+                                check::additional::run(&client, kind, &ip)
+                                    .await
+                                    .map_err(|e| e.to_string())
+                            },
+                            registration,
+                        )
+                        .await
+                        .unwrap_or_else(|_| Err("补充检测已取消".into()))
+                    },
+                    move |result| wrap(Event::AdditionalResult(generation, result)),
+                );
+            }
+            Event::AdditionalResult(generation, result) if generation == self.claude.generation => {
+                self.claude.additional_busy = false;
+                match result {
+                    Ok(signals) => {
+                        let report = self.claude.reports[index(Environment::Core)]
+                            .get_or_insert_with(|| {
+                                Report::new(Environment::Core, "内核探测与补充检测")
+                            });
+                        report
+                            .signals
+                            .retain(|old| !signals.iter().any(|new| new.title == old.title));
+                        let remaining = 80usize.saturating_sub(report.signals.len());
+                        report.signals.extend(signals.into_iter().take(remaining));
+                        self.claude.status = "补充检测完成，结果已加入报告。".into();
+                    }
+                    Err(error) => {
+                        self.claude.status = error;
+                        self.claude.error = true;
+                    }
+                }
+            }
+            Event::ReputationKey(value) => self.claude.reputation_key = value,
+            Event::SaveReputationKey => {
+                let key = self.claude.reputation_key.trim().to_owned();
+                self.claude.reputation_key.clear();
+                self.claude.guide = None;
+                return self.dispatch(Action::ReputationKey((!key.is_empty()).then_some(key)));
+            }
+            Event::Protection(enabled) => {
+                if self.working || self.exiting || self.claude.busy() {
+                    return Task::none();
+                }
+                if enabled {
+                    self.claude.guide = Some(Guide::Protection);
+                    self.claude.protection_opened = Some(std::time::Instant::now());
+                } else {
+                    return self.dispatch(Action::ClaudeProtection(false));
+                }
+            }
+            Event::ConfirmProtection => {
+                if self.claude.guide != Some(Guide::Protection)
+                    || self.claude.protection_wait() > 0
+                    || self.working
+                    || self.exiting
+                    || self.claude.busy()
+                {
+                    return Task::none();
+                }
+                self.claude.guide = None;
+                self.claude.protection_opened = None;
+                return self.dispatch(Action::ClaudeProtection(true));
+            }
             Event::Start => {
                 if self.claude.busy() || self.exiting {
                     return Task::none();
                 }
                 self.claude.close();
                 self.claude.reports = Default::default();
-                self.claude.monitor_revision = 0;
                 self.claude.error = false;
                 self.claude.status = "正在扫描项目配置，并自动打开浏览器检测…".into();
                 self.claude.results_page = 0;
@@ -339,18 +432,23 @@ impl App {
                     });
                 let port = self.snapshot.running.then_some(self.settings.mixed_port);
                 let ipv6 = self.settings.ipv6;
+                let udp = self.settings.udp;
                 let dns_override = self.settings.dns_override;
+                let detection_settings = self.settings.clone();
                 let (aborter, registration) = AbortHandle::new_pair();
                 self.claude.aborters.push(aborter);
                 let network = Task::perform(
                     async move {
                         Abortable::new(async move {
                         let mut report = Report::new(Environment::Core, "显式通过本应用内核探测；不代表浏览器或其他客户端实际出口");
-                        report.signals.push(Signal::new(Group::Dns, "客户端配置", format!("DNS 覆盖{} · IPv6 {}", if dns_override { "开启" } else { "关闭" }, if ipv6 { "开启" } else { "关闭" }), "本应用设置", Evidence::Measured, "配置状态与 DNS、IPv6 实测分别展示。"));
+                        report.signals.push(Signal::new(Group::Dns, "保存的网络偏好", format!("DNS 覆盖{} · IPv6 {} · UDP {}", if dns_override { "开启" } else { "关闭" }, if ipv6 { "开启" } else { "关闭" }, if udp { "开启" } else { "关闭" }), "本应用设置", Evidence::Measured, "这些是保留的用户偏好；Claude 保护使用临时覆盖，实际状态见内核与网络实测。"));
                         if let Some(port) = port {
                             let client = check::client(Some(port)).map_err(|e| e.to_string())?;
                             check::network(&client, &mut report, "通过内核混合端口的探测请求；不会回退到直连").await;
+                            report.signals.extend(check::enhanced::configuration(&clash_of_rust::api::Api::new(&detection_settings).map_err(|e|e.to_string())?, &detection_settings).await);
+                            if let Ok(routes)=clash_of_rust::api::Api::new(&detection_settings).map_err(|e|e.to_string())?.get::<check::ObservedConnections>("connections").await {report.routes=routes.connections;}
                             report.signals.extend(check::system_dns(&client, "本机系统解析器；结果查询通过内核").await);
+                            check::enhanced::extend(&client,&mut report,detection_settings.ip_reputation_key.as_deref()).await;
                         } else {
                             report.signals.push(Signal::unknown(Group::Exit, "内核出口", "内核探测", "内核未运行，没有回退到直连；仍可检测浏览器和 Code 的实际环境。"));
                         }
@@ -387,7 +485,15 @@ impl App {
                 self.claude.results_filter = filter;
                 self.claude.results_page = 0;
             }
-            Event::Guide(guide) => self.claude.guide = guide,
+            Event::Guide(guide) => {
+                if matches!(guide, Some(Guide::Diagnostics)) {
+                    self.claude.reputation_key =
+                        self.settings.ip_reputation_key.clone().unwrap_or_default();
+                } else {
+                    self.claude.reputation_key.clear();
+                }
+                self.claude.guide = guide;
+            }
             Event::Audit(generation, audit) if generation == self.claude.generation => {
                 self.claude.audit_busy = false;
                 self.claude.scan = None;
@@ -577,53 +683,10 @@ impl App {
                     self.claude.error = true;
                 }
             },
-            Event::Monitor(enabled) => {
-                if self.exiting {
-                    return Task::none();
-                }
-                if !enabled {
-                    self.claude.stop_monitor();
-                } else if self.snapshot.running {
-                    self.claude.monitor_enabled = true;
-                    self.claude.guide = Some(Guide::Monitor);
-                    return self.start_claude_monitor();
-                } else {
-                    self.claude.guide = Some(Guide::Monitor);
-                    self.claude.monitor_status = "请先启动内核，再开启实时检测。".into();
-                }
-            }
-            Event::MonitorStarted(generation, result)
-                if generation == self.claude.monitor_generation
-                    && self.claude.monitor_enabled
-                    && self.claude.monitor_starting =>
-            {
-                self.claude.monitor_starting = false;
-                match result {
-                    Ok(session) => self.claude.monitor = Some(session),
-                    Err(error) => {
-                        self.claude.stop_monitor();
-                        self.claude.monitor_status = format!("无法启动实时检测：{error}");
-                    }
-                }
-            }
             Event::Tick => {
                 if self.exiting {
                     self.claude.shutdown();
                     return Task::none();
-                }
-                if self.claude.monitor_enabled {
-                    let key = (self.settings.controller_port, self.settings.secret.clone());
-                    if self.snapshot.running && self.claude.monitor_key.as_ref() != Some(&key) {
-                        return self.start_claude_monitor();
-                    }
-                    if let Some(snapshot) = self
-                        .claude
-                        .monitor
-                        .as_ref()
-                        .and_then(|s| s.after(self.claude.monitor_revision))
-                    {
-                        self.claude.monitor_report(snapshot);
-                    }
                 }
                 if !self.visible || self.page != Page::Claude {
                     self.claude.close();
@@ -668,14 +731,10 @@ impl App {
                 .style(ui_style::primary)
                 .padding([7, 12])
                 .on_press_maybe((!state.busy()).then_some(event(Event::Start))),
-                checkbox(state.monitor_enabled)
-                    .label("实时检测 Claude 请求")
-                    .text_size(self.scaled(12))
-                    .on_toggle_maybe(
-                        (!self.exiting && (self.snapshot.running || state.monitor_enabled))
-                            .then_some(|enabled| Message::Claude(Event::Monitor(enabled)))
-                    ),
                 Space::new().width(Length::Fill),
+                button(self.label("检测选项").size(self.font_size(12)))
+                    .style(ui_style::text_button)
+                    .on_press(event(Event::Guide(Some(Guide::Diagnostics)))),
                 button(self.label("导出报告").size(self.font_size(13)))
                     .style(ui_style::secondary_button)
                     .padding([7, 10])
@@ -686,6 +745,18 @@ impl App {
             .spacing(8)
         ]
         .spacing(8);
+        let protection = self.settings.claude_protection.as_ref();
+        body = body.push(
+            container(column![
+                checkbox(protection.is_some()).label("Claude 保护")
+                    .text_size(self.scaled(13))
+                    .on_toggle_maybe((!self.working && !self.exiting && !state.busy() && (self.snapshot.running || protection.is_some()))
+                        .then_some(|enabled| Message::Claude(Event::Protection(enabled)))),
+                self.caption(if let Some(protection) = protection {
+                    format!("使用节点：{} · TUN、规则、代理 DNS 与实时拦截已开启；关闭后恢复原状态。", protection.node)
+                } else { "一键启用 TUN、广泛规则、代理 DNS 与实时拦截；可能影响其他应用与国内网站。".into() }),
+            ].spacing(5)).padding(10).width(Length::Fill).style(ui_style::panel)
+        );
         if state.busy() {
             let progress = (usize::from(!state.local_busy)
                 + usize::from(!state.network_busy)
@@ -729,8 +800,8 @@ impl App {
                 }
             )));
         }
-        if !state.monitor_status.is_empty() {
-            body = body.push(self.caption(&state.monitor_status));
+        if !state.guard_status.is_empty() {
+            body = body.push(self.caption(&state.guard_status));
         }
         if state.session.is_some() {
             body = body.push(aligned_row![
@@ -764,10 +835,28 @@ impl App {
             if counts[2] > 0 {
                 body = body.push(
                     button(
-                        self.label(format!("另有 {} 项辅助线索或未确认结果 ›", counts[2]))
-                            .size(self.font_size(12)),
+                        aligned_row![
+                            column![
+                                self.label("其他线索").size(self.font_size(14)),
+                                self.caption("辅助线索与未确认结果")
+                            ]
+                            .spacing(3),
+                            Space::new().width(Length::Fill),
+                            container(
+                                self.label(format!("{} 项", counts[2]))
+                                    .size(self.font_size(13))
+                            )
+                            .padding([4, 9])
+                            .style(|theme: &Theme| ui_style::badge(theme, ui_style::Tone::Muted)),
+                            self.label("查看 ›")
+                                .size(self.font_size(13))
+                                .color(ui_style::tone(&self.theme(), ui_style::Tone::Accent)),
+                        ]
+                        .spacing(12),
                     )
-                    .style(ui_style::text_button)
+                    .width(Length::Fill)
+                    .padding([12, 16])
+                    .style(ui_style::secondary_button)
                     .on_press(event(Event::ResultsFilter(Some(ResultKind::Unknown)))),
                 );
             }
@@ -868,15 +957,17 @@ impl App {
                 Entry::Route(r) => (
                     r.host.clone(),
                     r.outcome.clone(),
-                    "内核实时事件流".into(),
+                    "内核连接记录".into(),
                     format!("{}\n规则：{}\n线路：{}", r.time, r.rule, r.chain),
                     String::new(),
-                    if r.outcome == "连接失败" {
-                        "连接失败"
+                    if r.outcome.starts_with("异常连接") {
+                        "已拦截"
+                    } else if r.risky() {
+                        "异常线路"
                     } else {
                         "已选路"
                     },
-                    if r.outcome == "连接失败" {
+                    if r.risky() {
                         ui_style::Tone::Danger
                     } else {
                         ui_style::Tone::Muted
@@ -932,11 +1023,6 @@ impl App {
         let guide = self.claude.guide?;
         let event = |event| Message::Claude(event);
         let content = match guide {
-            Guide::Monitor => column![
-                self.title("Claude 请求实时检测"),
-                self.label("开启后，持续记录经过内核的 Claude 域名连接。正常使用网页、Desktop 或 Code 即可，在报告中查看具体线路。"),
-                self.caption("切换页面或隐藏窗口继续检测；关闭后保留最近 32 条记录。不读取 HTTPS 内容，也不按进程区分。")
-            ],
             Guide::Supplement => column![
                 self.title("补充采样"),
                 self.label("自动浏览器检测来自本机检测页面。需要核对 Claude 网页本身的设置时，可在该网页的开发者工具 Console 运行采样脚本，再导入结果。"),
@@ -946,6 +1032,41 @@ impl App {
                     button(self.label("导入剪贴板采样")).style(ui_style::secondary_button)
                         .on_press_maybe((!self.claude.importing).then_some(event(Event::Import)))
                 ].spacing(8)
+            ],
+            Guide::Protection => column![
+                self.title("开启 Claude 保护"),
+                self.label("将使用当前具体代理节点，启用 TUN、严格路由、IPv6 接管和 UDP 转发，加入 Claude 与关联服务规则，并让公网 DNS 通过该节点访问加密 DNS。"),
+                self.label("广泛规则可能改变其他应用的监控、登录或客服连接；全局 DNS 变化可能影响国内网站与内网服务，节点故障时相关解析也可能失败。"),
+                self.caption("节点域名引导解析使用直连加密 DNS，局域网名称保留本地解析。浏览器独立 DNS、时区、语言和账号资格仍需检测确认，不能保证消除所有风险。"),
+                self.caption("原代理模式、DNS、UDP、规则和节点选择会保存，重启后仍保留；关闭保护会恢复。首次启用 TUN 可能需要系统授权。"),
+                self.label("实时监测到 Claude 或关联服务偏离保护节点时，会关闭对应连接并弹出系统提示；共享服务可能属于其他应用。"),
+                aligned_row![
+                    Space::new().width(Length::Fill),
+                    button(self.label(if self.claude.protection_wait() > 0 {
+                        format!("开启并重新检测（{} 秒）", self.claude.protection_wait())
+                    } else {
+                        "开启并重新检测".into()
+                    })).style(ui_style::primary)
+                        .on_press_maybe((self.claude.protection_wait() == 0 && !self.working && !self.exiting && !self.claude.busy()).then_some(event(Event::ConfirmProtection)))
+                ],
+            ],
+            Guide::Diagnostics => column![
+                self.title("检测服务"),
+                self.label("IP 归属、ASN 与地区可匿名查询；完整的机房、VPN、代理、Tor 与滥用标签需要 ipapi.is 的个人 API 密钥。留空时相关项目显示未确认。"),
+                text_input("可选：ipapi.is API 密钥",&self.claude.reputation_key)
+                    .secure(true).style(rounded_input).on_input(|value|Message::Claude(Event::ReputationKey(value))),
+                self.caption("密钥仅保存在本机，以 HTTPS 请求正文提交给所选检测服务；不会交给浏览器、Claude 或写入报告。匿名接口有每日额度，失败不反复重试。"),
+                button(self.label("保存")).style(ui_style::primary)
+                    .on_press_maybe((!self.working && !self.exiting).then_some(event(Event::SaveReputationKey))),
+                self.caption("补充检测需手动触发：注册信息查询公网出口归属；全球探针从最多 20 个远端位置测量出口 IP；小流量测速下载 10 MiB、上传 2 MiB。结果不代表 Claude 的账号资格。"),
+                aligned_row![
+                    button(self.label("注册信息")).style(ui_style::secondary_button)
+                        .on_press_maybe((self.snapshot.running && !self.claude.busy()).then_some(event(Event::Additional(check::additional::Kind::Registration)))),
+                    button(self.label("全球探针")).style(ui_style::secondary_button)
+                        .on_press_maybe((self.snapshot.running && !self.claude.busy()).then_some(event(Event::Additional(check::additional::Kind::GlobalPing)))),
+                    button(self.label("小流量测速")).style(ui_style::secondary_button)
+                        .on_press_maybe((self.snapshot.running && !self.claude.busy()).then_some(event(Event::Additional(check::additional::Kind::Speed)))),
+                ].spacing(8),
             ],
         };
         Some(
@@ -1163,11 +1284,9 @@ pub(crate) fn fixture_state(scene: &str) -> State {
         "claude-risk" => state.results_filter = Some(ResultKind::Risk),
         "claude-normal" => state.results_filter = Some(ResultKind::Normal),
         "claude-unknown" => state.results_filter = Some(ResultKind::Unknown),
-        "claude-monitor-guide" => state.guide = Some(Guide::Monitor),
+        "claude-protection-guide" => state.guide = Some(Guide::Protection),
         "claude-live" => {
-            state.monitor_enabled = true;
-            state.monitor_status =
-                "实时检测中 · 累计 8 条事件 · 失败 0 · 保留最近 32 条明细".into();
+            state.guard_status = "实时检测中 · 累计 8 条事件 · 失败 0 · 保留最近 32 条明细".into();
         }
         "claude-clean" => {
             state.audit.as_mut().unwrap().findings.clear();
@@ -1194,6 +1313,54 @@ mod tests {
             Ok(Report::new(Environment::Core, "test")),
         ));
         let _ = app.claude_event(Event::Audit(generation, check::audit::Audit::default()));
+    }
+    #[test]
+    fn protection_confirmation_waits_three_seconds_and_reopening_restarts_it() {
+        let mut app = app();
+        let _ = app.claude_event(Event::Protection(true));
+        assert_eq!(app.claude.protection_wait(), 3);
+        let _ = app.claude_event(Event::ConfirmProtection);
+        assert_eq!(app.claude.guide, Some(Guide::Protection));
+        app.claude.protection_opened =
+            Some(std::time::Instant::now() - Duration::from_millis(2900));
+        assert_eq!(app.claude.protection_wait(), 1);
+        let _ = app.claude_event(Event::ConfirmProtection);
+        assert_eq!(app.claude.guide, Some(Guide::Protection));
+        app.claude.protection_opened = Some(std::time::Instant::now() - Duration::from_secs(3));
+        assert_eq!(app.claude.protection_wait(), 0);
+        let _ = app.claude_event(Event::ConfirmProtection);
+        assert!(app.claude.guide.is_none());
+        app.working = false;
+        let _ = app.claude_event(Event::Protection(true));
+        assert_eq!(app.claude.protection_wait(), 3);
+    }
+    #[test]
+    fn disabling_protection_keeps_the_report_without_starting_browser_or_audit() {
+        let mut app = app();
+        app.page = Page::Claude;
+        app.updates.started = true;
+        app.claude.reports[0] = Some(Report::new(Environment::Core, "preserved"));
+        let generation = app.claude.generation;
+        let _ = app.update(Message::Finished(Box::new(Reply {
+            profile_edit: false,
+            scope: Scope::Claude,
+            start_requested: false,
+            settings: app.settings.clone(),
+            profiles: None,
+            rule_document: None,
+            rules_applied: false,
+            snapshot: None,
+            notice: Ok("Claude 保护已关闭".into()),
+            running: true,
+            geo_status: String::new(),
+            autostart: false,
+            exit_after_start: false,
+            protection_changed: true,
+            tray_nodes: None,
+        })));
+        assert_eq!(app.claude.generation, generation);
+        assert!(!app.claude.busy() && app.claude.session.is_none());
+        assert_eq!(app.claude.reports[0].as_ref().unwrap().context, "preserved");
     }
     #[test]
     fn start_runs_config_audit_and_browser_once_without_a_client_dialog() {
@@ -1352,19 +1519,26 @@ mod tests {
         assert!(app.claude.results_filter.is_none());
     }
     #[test]
-    fn page_navigation_cancels_audit_but_keeps_opt_in_monitor() {
+    fn page_navigation_cancels_sampling_without_clearing_protection() {
         let mut app = app();
         app.page = Page::Claude;
-        app.snapshot.running = true;
-        let _ = app.claude_event(Event::Monitor(true));
-        assert!(app.claude.monitor_enabled && app.claude_dialog().is_some());
+        let id = uuid::Uuid::new_v4().to_string();
+        let saved = Arc::new(check::protection::Protection::new(
+            id.clone(),
+            "node".into(),
+            check::protection::Previous {
+                mode: "rule".into(),
+                proxy_mode: ProxyMode::Off,
+                selectors: vec![],
+            },
+        ));
+        app.settings.active_profile = Some(id);
+        app.settings.claude_protection = Some(saved.clone());
         let generation = app.claude.generation;
         app.claude.audit_busy = true;
         let _ = app.update(Message::Navigate(Page::Home));
         let _ = app.claude_event(Event::Audit(generation, check::audit::Audit::default()));
-        assert!(app.claude.monitor_enabled);
+        assert_eq!(app.settings.claude_protection.as_ref(), Some(&saved));
         assert!(app.claude.audit.is_none() && !app.claude.busy());
-        let _ = app.claude_event(Event::Monitor(false));
-        assert!(!app.claude.monitor_enabled);
     }
 }

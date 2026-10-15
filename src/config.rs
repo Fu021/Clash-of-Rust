@@ -51,6 +51,9 @@ pub struct Settings {
     pub tray_speed: bool,
     pub dns_override: bool,
     pub ipv6: bool,
+    pub udp: bool,
+    pub claude_protection: Option<std::sync::Arc<crate::claude_check::protection::Protection>>,
+    pub ip_reputation_key: Option<String>,
     pub delay_interval_minutes: u32,
     pub active_profile: Option<String>,
     pub run_mode: String,
@@ -82,6 +85,9 @@ impl Default for Settings {
             tray_speed: false,
             dns_override: true,
             ipv6: true,
+            udp: true,
+            claude_protection: None,
+            ip_reputation_key: None,
             delay_interval_minutes: 5,
             active_profile: None,
             run_mode: "rule".into(),
@@ -113,9 +119,22 @@ impl Settings {
         if self.secret.is_empty() {
             bail!("控制接口密钥不能为空");
         }
+        if self
+            .ip_reputation_key
+            .as_ref()
+            .is_some_and(|key| key.len() > 512 || key.chars().any(char::is_control))
+        {
+            bail!("IP 信誉服务密钥格式无效");
+        }
         for (id, rules) in &self.rule_profiles {
             uuid::Uuid::parse_str(id).context("规则所属的订阅 ID 无效")?;
             rules.validate()?;
+        }
+        if let Some(protection) = &self.claude_protection {
+            protection.validate()?;
+            if self.active_profile.as_deref() != Some(&protection.profile_id) {
+                bail!("Claude 保护的订阅与当前订阅不一致");
+            }
         }
         Ok(())
     }
@@ -383,7 +402,63 @@ pub fn runtime_config_with_rules(
         .or_insert(serde_yaml::to_value(["any:53"])?);
     map.insert(Value::from("tun"), Value::Mapping(tun));
     apply_dns(&mut map, settings)?;
+    crate::claude_check::protection::apply(&mut map, settings)?;
+    apply_udp(
+        &mut map,
+        settings.udp || settings.claude_protection.is_some(),
+    )?;
     Ok(serde_yaml::to_string(&map)?)
+}
+
+fn apply_udp(map: &mut Mapping, enabled: bool) -> Result<()> {
+    if let Some(proxies) = map
+        .get_mut(Value::from("proxies"))
+        .and_then(Value::as_sequence_mut)
+    {
+        for proxy in proxies.iter_mut().filter_map(Value::as_mapping_mut) {
+            proxy.insert(Value::from("udp"), Value::from(enabled));
+        }
+    }
+    if let Some(groups) = map
+        .get_mut(Value::from("proxy-groups"))
+        .and_then(Value::as_sequence_mut)
+    {
+        for group in groups.iter_mut().filter_map(Value::as_mapping_mut) {
+            group.insert(Value::from("disable-udp"), Value::from(!enabled));
+        }
+    }
+    if let Some(providers) = map
+        .get_mut(Value::from("proxy-providers"))
+        .and_then(Value::as_mapping_mut)
+    {
+        for provider in providers.values_mut().filter_map(Value::as_mapping_mut) {
+            let overrides = provider
+                .entry(Value::from("override"))
+                .or_insert(Value::Mapping(Mapping::new()));
+            if overrides.is_null() {
+                *overrides = Value::Mapping(Mapping::new());
+            }
+            let overrides = overrides
+                .as_mapping_mut()
+                .context("代理集合 override 必须是配置对象")?;
+            overrides.insert(Value::from("udp"), Value::from(enabled));
+            // Expressions run after fixed provider overrides. Keep the user's
+            // transforms, but make the client preference authoritative even
+            // after a provider refresh or a conflicting '.udp = false'.
+            if let Some(expressions) = overrides.get_mut(Value::from("override-expr"))
+                && !expressions.is_null()
+            {
+                let expressions = expressions
+                    .as_sequence_mut()
+                    .context("代理集合 override-expr 必须是列表")?;
+                let expression = Value::from(format!(".udp = {enabled}"));
+                if expressions.last() != Some(&expression) {
+                    expressions.push(expression);
+                }
+            }
+        }
+    }
+    Ok(())
 }
 
 fn apply_dns(map: &mut Mapping, settings: &Settings) -> Result<()> {
@@ -544,6 +619,7 @@ mod tests {
         assert_eq!(settings.proxy_mode, crate::engine::ProxyMode::Off);
         assert!(settings.dns_override);
         assert!(settings.ipv6);
+        assert!(settings.udp);
         assert_eq!(settings.rule_overrides, RuleOverrides::default());
         assert_eq!(Settings::default().rule_overrides.enabled, [false; 5]);
         assert_eq!(settings.rule_overrides.enabled, [false; 5]);
@@ -566,6 +642,71 @@ mod tests {
             parse_profile(raw).unwrap()[Value::from("tcp-concurrent")].as_bool(),
             Some(false)
         );
+    }
+
+    #[test]
+    fn udp_preference_covers_static_provider_and_group_settings_and_protection_forces_it_on() {
+        let raw = "proxies: [{name: node, type: anytls, server: 127.0.0.1, port: 443, password: fixture, udp: false, tfo: true, mptcp: false}]\nproxy-groups: [{name: Main, type: select, proxies: [node], disable-udp: true}]\nproxy-providers:\n  Remote:\n    type: http\n    url: https://example.org/nodes.yaml\n    override: {udp: false, tfo: true, udp-over-tcp: false, override-expr: ['.udp = false', '.name |= upcase']}\n  Local: {type: file, path: nodes.yaml, override: null}\n  Inline: {type: inline, payload: [{name: inline, type: socks5, server: 127.0.0.1, port: 1080}]}\nrules: ['MATCH,Main']\n";
+        for enabled in [false, true] {
+            let mut settings = Settings {
+                udp: enabled,
+                ..Default::default()
+            };
+            let plain = runtime_config(raw, &settings).unwrap();
+            assert_eq!(
+                runtime_config(&plain, &settings).unwrap(),
+                plain,
+                "runtime overlay must be idempotent"
+            );
+            for protected in [false, true] {
+                if protected {
+                    let id = uuid::Uuid::new_v4().to_string();
+                    settings.active_profile = Some(id.clone());
+                    settings.claude_protection = Some(std::sync::Arc::new(
+                        crate::claude_check::protection::Protection::new(
+                            id,
+                            "node".into(),
+                            crate::claude_check::protection::Previous {
+                                mode: "rule".into(),
+                                proxy_mode: crate::engine::ProxyMode::Off,
+                                selectors: vec![],
+                            },
+                        ),
+                    ));
+                }
+                let runtime: Value =
+                    serde_yaml::from_str(&runtime_config(raw, &settings).unwrap()).unwrap();
+                let effective = enabled || protected;
+                assert_eq!(runtime["proxies"][0]["udp"], effective);
+                assert_eq!(runtime["proxies"][0]["tfo"], true);
+                assert_eq!(runtime["proxies"][0]["mptcp"], false);
+                for group in runtime["proxy-groups"].as_sequence().unwrap() {
+                    assert_eq!(group["disable-udp"], !effective);
+                }
+                for name in ["Remote", "Local", "Inline"] {
+                    assert_eq!(
+                        runtime["proxy-providers"][name]["override"]["udp"],
+                        effective
+                    );
+                }
+                let overrides = &runtime["proxy-providers"]["Remote"]["override"];
+                assert_eq!(overrides["tfo"], true);
+                assert_eq!(
+                    overrides["udp-over-tcp"], false,
+                    "UDP forwarding must not force a protocol-specific UoT setting"
+                );
+                let expressions = overrides["override-expr"].as_sequence().unwrap();
+                assert_eq!(expressions[1], ".name |= upcase");
+                assert_eq!(
+                    expressions.last().unwrap(),
+                    &Value::from(format!(".udp = {effective}"))
+                );
+                assert_eq!(
+                    settings.udp, enabled,
+                    "protection must preserve the original preference"
+                );
+            }
+        }
     }
 
     #[test]
@@ -611,12 +752,14 @@ mod tests {
         let settings = Settings {
             dns_override: false,
             ipv6: false,
+            udp: false,
             ..Settings::default()
         };
         store.save_settings(&settings).unwrap();
         let loaded = store.load_settings().unwrap();
         assert!(!loaded.dns_override);
         assert!(!loaded.ipv6);
+        assert!(!loaded.udp);
         for raw in [
             "proxies: []",
             "proxies: []\ndns: null",

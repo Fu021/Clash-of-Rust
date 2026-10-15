@@ -10,7 +10,7 @@ use tokio::{
 const HTML: &str = include_str!("../../resources/claude-check/browser.html");
 pub const SCRIPT: &str = include_str!("../../resources/claude-check/browser.js");
 const CSS: &str = include_str!("../../resources/claude-check/browser.css");
-pub const CSP: &str = "default-src 'none'; script-src 'self'; style-src 'self'; connect-src 'self' https://api.ipify.org https://api6.ipify.org; img-src https://*.bash.ws; frame-ancestors 'none'; base-uri 'none'";
+pub const CSP: &str = "default-src 'none'; script-src 'self'; style-src 'self'; connect-src 'self' https://api.ipify.org https://api6.ipify.org https://www.cloudflare.com; img-src https://*.bash.ws; frame-ancestors 'none'; base-uri 'none'";
 
 #[derive(Debug, Default, Deserialize)]
 #[serde(default, deny_unknown_fields)]
@@ -34,6 +34,11 @@ pub struct BrowserData {
     pub dns_id: String,
     pub dns_error: String,
     pub trace: String,
+    pub cf_trace: String,
+    pub canvas_hash: String,
+    pub webgl_vendor: String,
+    pub webgl_renderer: String,
+    pub cookie_enabled: Option<bool>,
     pub geolocation: Location,
 }
 #[derive(Debug, Default, Deserialize)]
@@ -43,6 +48,17 @@ pub struct WebRtc {
     pub completed: bool,
     pub candidates: Vec<String>,
     pub error: String,
+    pub servers: Vec<String>,
+    pub samples: Vec<IceSample>,
+}
+#[derive(Debug, Default, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct IceSample {
+    pub address: String,
+    pub server: String,
+    pub protocol: String,
+    #[serde(rename = "type")]
+    pub kind: String,
 }
 #[derive(Debug, Default, Deserialize)]
 #[serde(default, deny_unknown_fields)]
@@ -60,6 +76,8 @@ impl BrowserData {
             || self.fonts.len() > 24
             || self.emoji.len() > 8
             || self.webrtc.candidates.len() > 24
+            || self.webrtc.samples.len() > 24
+            || self.webrtc.servers.len() > 4
         {
             bail!("浏览器报告格式无效");
         }
@@ -74,6 +92,10 @@ impl BrowserData {
             &self.dns_error,
             &self.webrtc.error,
             &self.trace,
+            &self.cf_trace,
+            &self.canvas_hash,
+            &self.webgl_vendor,
+            &self.webgl_renderer,
             &self.geolocation.permission,
         ]
         .into_iter()
@@ -81,7 +103,13 @@ impl BrowserData {
         .chain(self.fonts.iter())
         .chain(self.emoji.iter())
         .chain(self.webrtc.candidates.iter())
-        {
+        .chain(self.webrtc.servers.iter())
+        .chain(
+            self.webrtc
+                .samples
+                .iter()
+                .flat_map(|s| [&s.address, &s.server, &s.protocol, &s.kind]),
+        ) {
             if text.len() > 2048 || text.contains('\0') {
                 bail!("浏览器报告字段过长或无效");
             }
@@ -230,6 +258,57 @@ pub async fn report(data: BrowserData, client: &Client) -> Result<Report> {
         Evidence::Inferred,
         "记录国旗字形渲染特征，不将渲染能力、操作系统或字体推断为所在国家。",
     ));
+    for (title, value) in [
+        ("Canvas 指纹摘要", data.canvas_hash.as_str()),
+        ("WebGL 厂商", data.webgl_vendor.as_str()),
+        ("WebGL 渲染器", data.webgl_renderer.as_str()),
+    ] {
+        report.signals.push(if value.is_empty() {
+            Signal::unknown(
+                Group::Browser,
+                title,
+                source,
+                "浏览器未提供该值；隐私限制或功能不可用均可能导致此结果。",
+            )
+        } else {
+            Signal::new(
+                Group::Browser,
+                title,
+                value,
+                source,
+                Evidence::Inferred,
+                "本地采样的浏览器特征；不会上传原始图像，也不据此判断所在国家或账号风险。",
+            )
+        });
+    }
+    report
+        .signals
+        .push(if let Some(enabled) = data.cookie_enabled {
+            Signal::new(
+                Group::Browser,
+                "浏览器 Cookie 功能",
+                if enabled {
+                    "允许 Cookie"
+                } else {
+                    "禁用 Cookie"
+                },
+                source,
+                Evidence::Measured,
+                "仅 navigator.cookieEnabled 的布尔值；不读取 Cookie 内容、账号或会话。",
+            )
+        } else {
+            Signal::unknown(
+                Group::Browser,
+                "浏览器 Cookie 功能",
+                source,
+                "浏览器未提供状态；没有读取任何 Cookie 内容。",
+            )
+        });
+    report.signals.push(super::enhanced::cloudflare_trace(
+        &data.cf_trace,
+        "www.cloudflare.com",
+        "浏览器直接请求 Cloudflare trace",
+    ));
     let mut public = BTreeSet::new();
     let mut hidden = 0;
     for candidate in &data.webrtc.candidates {
@@ -252,12 +331,25 @@ pub async fn report(data: BrowserData, client: &Client) -> Result<Report> {
                 Group::WebRtc,
                 "WebRTC 公网候选",
                 &ip.to_string(),
-                "浏览器 ICE 候选；STUN: stun.cloudflare.com:3478",
+                "浏览器 ICE 候选；Cloudflare 与 Google STUN",
                 "公网候选可能揭示另一条网络路径；私网和 mDNS 地址没有当作公网泄漏。",
                 Evidence::Measured,
             )
             .await;
             signal.advice = "核对 TUN 对 UDP/IPv6 的接管与浏览器 WebRTC 设置。".into();
+            let samples = data
+                .webrtc
+                .samples
+                .iter()
+                .filter(|s| s.address == ip.to_string())
+                .take(4)
+                .map(|s| format!("{} · {} · {}", s.server, s.protocol, s.kind))
+                .collect::<Vec<_>>();
+            if !samples.is_empty() {
+                signal
+                    .detail
+                    .push_str(&format!(" 探针明细：{}。", samples.join("；")));
+            }
             report.signals.push(signal);
         }
     }
