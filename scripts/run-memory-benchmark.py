@@ -270,7 +270,7 @@ def main():
         destination.parent.mkdir(parents=True, exist_ok=True)
         text = benchmark_source.read_text()
         if core_directory(source) == source:
-            text = text.replace('use clash_client_core::{', 'use clash_of_rust::{')
+            text = text.replace('clash_client_core::', 'clash_of_rust::')
         destination.write_text(text)
     metadata = {'source_commit': subprocess.check_output(['git', 'rev-parse', 'HEAD'], cwd=source, text=True).strip(),
                 'benchmark_commit': subprocess.check_output(['git', 'rev-parse', 'HEAD'], cwd=ROOT, text=True).strip(),

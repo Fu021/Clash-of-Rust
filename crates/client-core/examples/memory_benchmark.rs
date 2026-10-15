@@ -127,7 +127,7 @@ async fn measure<T: serde::de::DeserializeOwned + Send + Count + 'static>(
     println!(
         "{}",
         serde_json::json!({
-            "type": "api", "version": clash_of_rust::VERSION,
+            "type": "api", "version": clash_client_core::VERSION,
             "profile": if cfg!(debug_assertions) { "dev" } else { "release" },
             "workload": path, "mode": mode, "rows": expected, "refreshes": refreshes,
             "payload_bytes": payload_size, "baseline_heap_bytes": baseline,
@@ -167,7 +167,7 @@ fn suite(arguments: &[String]) -> anyhow::Result<()> {
             file,
             "{}",
             serde_json::json!({
-                "type": "metadata", "version": clash_of_rust::VERSION,
+                "type": "metadata", "version": clash_client_core::VERSION,
                 "profile": if cfg!(debug_assertions) { "dev" } else { "release" },
                 "os": std::env::consts::OS, "arch": std::env::consts::ARCH,
                 "rows": rows, "repetitions": repetitions,

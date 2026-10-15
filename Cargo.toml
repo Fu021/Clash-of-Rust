@@ -33,7 +33,6 @@ sha1 = "0.10"
 base64 = "0.22"
 tray-icon = { version = "0.26", default-features = false, features = ["ksni"] }
 
-
 [profile.dev]
 # Keep line/function information while reducing development link/debug overhead.
 debug = 1
