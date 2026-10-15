@@ -1,7 +1,7 @@
 //! Bounded Claude connection events from mihomo's HTTP log subscription.
 //! No request bodies, process names or unrelated raw logs are retained.
 use super::{Route, claude_host};
-use crate::{api::Api, engine::LogFrames};
+use crate::{api::Api, runtime::logging::LogFrames};
 use futures_util::StreamExt;
 use serde::Deserialize;
 use std::{

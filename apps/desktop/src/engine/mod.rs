@@ -1,5 +1,5 @@
 use crate::{
-    api::{Api, ConfigStatus, ConnectionStats, Connections, Proxies, Rules},
+    api::{Api, ConfigStatus, ConnectionStats, Proxies},
     assets::{self, GeoManifest},
     config::{
         Profile, RuleOverrides, Settings, Store, atomic_write, parse_profile, read_profile,
@@ -18,16 +18,14 @@ use std::{
     time::{Duration, Instant, SystemTime, UNIX_EPOCH},
 };
 use tokio::{
-    io::{AsyncBufReadExt, AsyncRead, AsyncReadExt, BufReader},
+    io::{AsyncRead, AsyncReadExt},
     process::{Child, Command},
     task::JoinHandle,
 };
 
-pub const LOG_LIMIT: usize = 500;
 pub use crate::proxy::ProxyMode;
-pub type LogBuffer = Arc<Mutex<VecDeque<Arc<str>>>>;
-
-const LOG_FRAME_LIMIT: usize = 64 * 1024;
+use clash_client_core::runtime::logging::{LOG_FRAME_LIMIT, LogFrames, append, read_core_logs};
+pub use clash_client_core::runtime::logging::{LOG_LIMIT, LogBuffer};
 
 #[cfg(target_os = "macos")]
 fn mac_port_probe(port: u16) -> std::io::Result<tokio::net::TcpListener> {
@@ -84,39 +82,6 @@ async fn wait_for_mac_port(
     }
 }
 
-#[derive(Default)]
-pub(crate) struct LogFrames {
-    pending: Vec<u8>,
-    discarding: bool,
-}
-
-impl LogFrames {
-    pub(crate) fn push(&mut self, mut chunk: &[u8], mut emit: impl FnMut(&[u8])) {
-        while !chunk.is_empty() {
-            let end = chunk.iter().position(|byte| *byte == b'\n');
-            let used = end.map_or(chunk.len(), |end| end + 1);
-            if !self.discarding {
-                if self.pending.len() + used > LOG_FRAME_LIMIT {
-                    self.pending.clear();
-                    self.discarding = true;
-                } else if self.pending.is_empty() && end.is_some() {
-                    emit(&chunk[..used]);
-                } else {
-                    self.pending.extend_from_slice(&chunk[..used]);
-                    if end.is_some() {
-                        emit(&self.pending);
-                        self.pending.clear();
-                    }
-                }
-            }
-            if end.is_some() {
-                self.discarding = false;
-            }
-            chunk = &chunk[used..];
-        }
-    }
-}
-
 async fn capture_output(mut reader: impl AsyncRead + Unpin) -> std::io::Result<Vec<u8>> {
     let mut captured = Vec::new();
     let mut chunk = [0; 4096];
@@ -130,95 +95,7 @@ async fn capture_output(mut reader: impl AsyncRead + Unpin) -> std::io::Result<V
     }
 }
 
-fn append(logs: &LogBuffer, message: impl Into<String>) {
-    if let Ok(mut buffer) = logs.lock() {
-        if buffer.len() >= LOG_LIMIT {
-            buffer.pop_front();
-        }
-        let mut message = message.into();
-        if let Some((end, _)) = message.char_indices().nth(1000) {
-            message.truncate(end);
-        }
-        buffer.push_back(Arc::from(message));
-    }
-}
-
-async fn read_core_logs(reader: impl AsyncRead + Unpin, logs: LogBuffer) {
-    let mut reader = BufReader::new(reader);
-    let mut line = Vec::with_capacity(4096);
-    while let Ok(bytes) = reader.fill_buf().await {
-        if bytes.is_empty() {
-            if !line.is_empty() {
-                append(&logs, format!("[内核] {}", String::from_utf8_lossy(&line)));
-            }
-            break;
-        }
-        let end = bytes.iter().position(|byte| *byte == b'\n');
-        let used = end.map_or(bytes.len(), |end| end + 1);
-        line.extend_from_slice(&bytes[..used.min(4096 - line.len())]);
-        reader.consume(used);
-        if end.is_some() {
-            let text = String::from_utf8_lossy(&line);
-            append(
-                &logs,
-                format!("[内核] {}", text.trim_end_matches(['\r', '\n'])),
-            );
-            line.clear();
-        }
-    }
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum Scope {
-    Home,
-    Proxies,
-    Connections,
-    Rules,
-    Logs,
-    Claude,
-    Other,
-}
-
-#[derive(Debug, Clone, Default)]
-pub struct Snapshot {
-    pub version: String,
-    pub mode: String,
-    pub active_node: Option<String>,
-    pub tun: bool,
-    pub system_proxy: bool,
-    pub proxies: Proxies,
-    pub connections: Connections,
-    pub connections_sampled_at: Option<Instant>,
-    pub connection_count: usize,
-    pub rules: Rules,
-    pub upload_rate: u64,
-    pub download_rate: u64,
-    pub logs: Vec<Arc<str>>,
-    pub running: bool,
-    pub claude_guard: Option<crate::claude_check::guard::Snapshot>,
-}
-
-impl Snapshot {
-    /// Release heap-backed page data, including spare vector capacity.
-    pub fn retain_scope(&mut self, scope: Scope) {
-        if scope != Scope::Claude {
-            self.claude_guard = None;
-        }
-        if scope != Scope::Proxies {
-            self.proxies = Proxies::default();
-        }
-        if scope != Scope::Rules {
-            self.rules = Rules::default();
-        }
-        if scope != Scope::Connections {
-            self.connections.connections = Vec::new();
-            self.connections_sampled_at = None;
-        }
-        if scope != Scope::Logs {
-            self.logs = Vec::new();
-        }
-    }
-}
+pub use clash_client_core::runtime::snapshot::{Scope, Snapshot};
 
 pub struct Engine {
     pub store: Store,
@@ -1078,6 +955,7 @@ impl Engine {
             self.protection_guard = Some(crate::claude_check::guard::Guard::start(
                 self.api.clone(),
                 protection.node.clone(),
+                |title, message| async move { platform::notification::show(&title, &message).await },
             ));
         }
     }
@@ -2116,34 +1994,6 @@ impl Drop for Engine {
 #[cfg(test)]
 mod memory_tests {
     use super::*;
-    #[test]
-    fn log_frames_handle_fragmentation_batches_and_oversized_records() {
-        let mut frames = LogFrames::default();
-        let mut emitted = Vec::new();
-        frames.push(b"first", |line| emitted.push(line.to_vec()));
-        frames.push(b"\nsecond\nthird", |line| emitted.push(line.to_vec()));
-        frames.push(b"\n", |line| emitted.push(line.to_vec()));
-        assert_eq!(
-            emitted,
-            [
-                b"first\n".to_vec(),
-                b"second\n".to_vec(),
-                b"third\n".to_vec()
-            ]
-        );
-        emitted.clear();
-        for _ in 0..100 {
-            frames.push(&[b'x'; 2048], |line| emitted.push(line.to_vec()));
-            assert!(frames.pending.len() <= LOG_FRAME_LIMIT);
-        }
-        frames.push(b"tail\nvalid\n", |line| emitted.push(line.to_vec()));
-        assert_eq!(emitted, [b"valid\n".to_vec()]);
-        // A large network chunk may contain many small valid records.
-        emitted.clear();
-        frames.push(&b"ok\n".repeat(30_000), |line| emitted.push(line.to_vec()));
-        assert_eq!(emitted.len(), 30_000);
-    }
-
     #[cfg(target_os = "macos")]
     #[tokio::test]
     async fn mac_port_probe_reuses_closed_connections_and_rejects_live_listeners() {
@@ -2257,53 +2107,5 @@ mod memory_tests {
         let captured = capture_output(reader).await.unwrap();
         producer.await.unwrap();
         assert_eq!(captured.len(), LOG_FRAME_LIMIT);
-    }
-
-    #[test]
-    fn leaving_a_page_releases_data_and_vector_capacity() {
-        let mut snapshot = Snapshot::default();
-        snapshot.connections.connections.reserve(10_000);
-        snapshot.rules.rules.reserve(10_000);
-        snapshot
-            .proxies
-            .proxies
-            .insert("group".into(), Default::default());
-        snapshot.logs.push(Arc::from("log"));
-        snapshot.retain_scope(Scope::Rules);
-        assert_eq!(snapshot.connections.connections.capacity(), 0);
-        assert!(snapshot.proxies.proxies.is_empty());
-        assert_eq!(snapshot.logs.capacity(), 0);
-        assert!(snapshot.rules.rules.capacity() >= 10_000);
-        snapshot.retain_scope(Scope::Other);
-        assert_eq!(snapshot.rules.rules.capacity(), 0);
-    }
-
-    #[tokio::test]
-    async fn long_log_lines_are_bounded_and_next_line_survives() {
-        use tokio::io::AsyncWriteExt;
-        let (reader, mut writer) = tokio::io::duplex(64);
-        let producer = tokio::spawn(async move {
-            writer.write_all(&vec![b'x'; 100_000]).await.unwrap();
-            writer.write_all("\n下一行\n".as_bytes()).await.unwrap();
-        });
-        let logs = Arc::new(Mutex::new(VecDeque::new()));
-        read_core_logs(reader, logs.clone()).await;
-        producer.await.unwrap();
-        let buffer = logs.lock().unwrap();
-        assert_eq!(buffer.len(), 2);
-        assert_eq!(buffer[0].chars().count(), 1000);
-        assert_eq!(buffer[1].as_ref(), "[内核] 下一行");
-    }
-    #[test]
-    fn log_snapshots_share_text_and_history_is_bounded() {
-        let logs = Arc::new(Mutex::new(VecDeque::new()));
-        for i in 0..LOG_LIMIT + 10 {
-            append(&logs, format!("entry {i}"));
-        }
-        let buffer = logs.lock().unwrap();
-        assert_eq!(buffer.len(), LOG_LIMIT);
-        assert_eq!(buffer[0].as_ref(), "entry 10");
-        let snapshot: Vec<_> = buffer.iter().cloned().collect();
-        assert!(Arc::ptr_eq(&buffer[0], &snapshot[0]));
     }
 }

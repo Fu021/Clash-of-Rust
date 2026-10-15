@@ -11,6 +11,7 @@ pub mod connection;
 pub mod countries;
 #[path = "storage/hash.rs"]
 pub mod file_hash;
+pub mod geodata;
 #[path = "detection/ip/mod.rs"]
 pub mod ip_check;
 #[path = "detection/ip/report.rs"]
@@ -29,6 +30,7 @@ pub mod proxy_order;
 mod region_check;
 #[path = "rules/mod.rs"]
 pub mod rule_manager;
+pub mod runtime;
 pub mod subscription;
 
 pub const VERSION: &str = match option_env!("CLASH_OF_RUST_BUILD_VERSION") {

@@ -3,6 +3,7 @@ import hashlib
 import json
 from pathlib import Path
 import tempfile
+import tomllib
 import struct
 import shutil
 import subprocess
@@ -26,6 +27,22 @@ _defender_spec.loader.exec_module(defender)
 
 
 class BuildTests(unittest.TestCase):
+    def test_shared_core_has_no_desktop_toolkit_or_host_dependency(self):
+        core = tomllib.loads((build.core_directory()/'Cargo.toml').read_text())
+        # Mobile hosts must be able to use all shared policies without linking
+        # the desktop application, platform authorization code or GUI toolkits.
+        dependencies = set(core.get('dependencies', {}))
+        for target in core.get('target', {}).values():
+            dependencies.update(target.get('dependencies', {}))
+        forbidden = {'clash-of-rust', 'iced', 'iced_graphics', 'cosmic-text',
+                     'tray-icon', 'windows', 'windows-sys', 'winreg', 'zbus',
+                     'objc2', 'objc2-app-kit', 'objc2-foundation', 'block2'}
+        self.assertFalse(dependencies & forbidden)
+        for module in (build.core_directory()/'src').rglob('*.rs'):
+            text = module.read_text()
+            self.assertNotIn('crate::platform', text, str(module))
+            self.assertNotIn('crate::engine', text, str(module))
+
     def test_workspace_and_legacy_version_and_source_paths(self):
         self.assertEqual(build.manifest_version('[package]\nversion="0.4.12"\n'), '0.4.12')
         self.assertEqual(build.manifest_version('[workspace.package]\nversion="0.5.11-dev.1"\n'), '0.5.11-dev.1')

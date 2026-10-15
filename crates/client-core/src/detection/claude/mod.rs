@@ -1,7 +1,10 @@
 //! Observable region signals, with explicit provenance rather than a risk score.
 pub mod additional;
+pub mod audit;
 pub mod browser;
 pub mod enhanced;
+pub mod guard;
+pub mod observe;
 pub mod preferences;
 pub use crate::protection;
 

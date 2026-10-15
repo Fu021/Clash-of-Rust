@@ -41,7 +41,12 @@ impl Guard {
     pub fn snapshot(&self) -> Snapshot {
         self.0.state.lock().map(|s| s.clone()).unwrap_or_default()
     }
-    pub fn start(api: Api, node: String) -> Self {
+    /// The host supplies notifications; enforcement never depends on a GUI or OS toolkit.
+    pub fn start<N, F>(api: Api, node: String, notify: N) -> Self
+    where
+        N: Fn(String, String) -> F + Send + 'static,
+        F: std::future::Future<Output = anyhow::Result<()>> + Send + 'static,
+    {
         let state = Arc::new(Mutex::new(Snapshot::default()));
         let captured = state.clone();
         let task = tokio::spawn(async move {
@@ -169,10 +174,10 @@ impl Guard {
                             .join("、"),
                         node
                     );
-                    notification.0 = Some(tokio::spawn(async move {
-                        crate::platform::notification::show("Clash of Rust · Claude 保护", &message)
-                            .await
-                    }));
+                    notification.0 = Some(tokio::spawn(notify(
+                        "Clash of Rust · Claude 保护".into(),
+                        message,
+                    )));
                 }
             }
         });
@@ -387,6 +392,100 @@ pub(crate) fn decode(reader: impl std::io::Read, node: &str) -> serde_json::Resu
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[tokio::test]
+    async fn enforcement_closes_only_unsafe_routes_and_uses_the_host_notification() {
+        use std::sync::atomic::{AtomicBool, Ordering};
+        use tokio::{
+            io::{AsyncReadExt, AsyncWriteExt},
+            net::TcpListener,
+        };
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let closed = Arc::new(AtomicBool::new(false));
+        let captured = closed.clone();
+        let settings = crate::config::Settings {
+            controller_port: listener.local_addr().unwrap().port(),
+            secret: "fixture-shared-guard".into(),
+            ..Default::default()
+        };
+        let server = tokio::spawn(async move {
+            loop {
+                let (mut socket, _) = listener.accept().await.unwrap();
+                let mut request = Vec::new();
+                while !request.ends_with(b"\r\n\r\n") {
+                    let mut byte = [0];
+                    assert_eq!(socket.read(&mut byte).await.unwrap(), 1);
+                    request.push(byte[0]);
+                    assert!(request.len() < 16 * 1024);
+                }
+                let request = String::from_utf8(request).unwrap();
+                assert!(
+                    request
+                        .to_ascii_lowercase()
+                        .contains("authorization: bearer fixture-shared-guard")
+                );
+                let body = if request.starts_with("GET /connections ") {
+                    let connections = if captured.load(Ordering::SeqCst) {
+                        serde_json::json!([])
+                    } else {
+                        serde_json::json!([
+                            {"id":"unsafe","chains":["DIRECT"],"metadata":{"host":"claude.ai"}},
+                            {"id":"safe","chains":["node"],"metadata":{"host":"claude.ai"}},
+                            {"id":"unrelated","chains":["DIRECT"],"metadata":{"host":"example.org"}}
+                        ])
+                    };
+                    serde_json::to_vec(&serde_json::json!({"connections":connections})).unwrap()
+                } else if request.starts_with("DELETE /connections/unsafe ") {
+                    captured.store(true, Ordering::SeqCst);
+                    b"{}".to_vec()
+                } else {
+                    assert!(request.starts_with("GET /logs?level=info "));
+                    Vec::new()
+                };
+                socket
+                    .write_all(
+                        format!(
+                            "HTTP/1.1 200 OK\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+                            body.len()
+                        )
+                        .as_bytes(),
+                    )
+                    .await
+                    .unwrap();
+                socket.write_all(&body).await.unwrap();
+            }
+        });
+        let (sender, mut receiver) = tokio::sync::mpsc::unbounded_channel();
+        let guard = Guard::start(
+            Api::new(&settings).unwrap(),
+            "node".into(),
+            move |title, message| {
+                let sender = sender.clone();
+                async move {
+                    sender.send((title, message)).unwrap();
+                    Ok(())
+                }
+            },
+        );
+        let (title, message) = tokio::time::timeout(Duration::from_secs(5), receiver.recv())
+            .await
+            .unwrap()
+            .unwrap();
+        assert!(closed.load(Ordering::SeqCst));
+        assert!(title.contains("Claude"));
+        assert!(message.contains("claude.ai"));
+        assert!(!message.contains("example.org"));
+        assert_eq!(guard.snapshot().blocked, 1);
+        tokio::time::timeout(Duration::from_secs(3), async {
+            while guard.snapshot().notifications_completed != 1 {
+                tokio::time::sleep(Duration::from_millis(20)).await;
+            }
+        })
+        .await
+        .unwrap();
+        drop(guard);
+        server.abort();
+    }
+
     #[test]
     fn detects_direct_and_wrong_nodes_without_prefix_false_positives() {
         assert!(!suspicious_chain(&["node".into(), "group".into()], "node"));
