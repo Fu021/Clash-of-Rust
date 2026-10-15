@@ -67,7 +67,7 @@ async fn route_probe(
     target: &str,
     host: &str,
     tls: bool,
-) -> tokio::process::Child {
+) -> (tokio::process::Child, String) {
     let mut command =
         tokio::process::Command::new(std::env::var_os("CLASH_CLAUDE_TEST_PYTHON").unwrap());
     command
@@ -104,27 +104,25 @@ async fn route_probe(
         "cached-IP/SNI route probe failed for {target}/{host}"
     );
     let live: serde_json::Value = engine.api.get("connections").await.unwrap();
-    assert!(
-        live["connections"]
-            .as_array()
-            .unwrap()
-            .iter()
-            .any(|connection| {
-                let metadata = &connection["metadata"];
-                let identified = if target == "203.0.113.77" {
-                    metadata["sniffHost"].as_str() == Some(host)
-                } else {
-                    metadata["host"].as_str() == Some(target)
-                        && metadata["sniffHost"].as_str().is_none_or(str::is_empty)
-                };
-                identified
-                    && connection["chains"].as_array().is_some_and(|chain| {
-                        chain.iter().any(|v| v == "FixtureA") && chain.iter().all(|v| v != "DIRECT")
-                    })
-            }),
-        "cached-IP/SNI request did not use the protection node: {live}"
-    );
-    child
+    let connection = live["connections"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|connection| {
+            let metadata = &connection["metadata"];
+            let identified = if target == "203.0.113.77" {
+                metadata["sniffHost"].as_str() == Some(host)
+            } else {
+                metadata["host"].as_str() == Some(target)
+                    && metadata["sniffHost"].as_str().is_none_or(str::is_empty)
+            };
+            identified
+                && connection["chains"].as_array().is_some_and(|chain| {
+                    chain.iter().any(|v| v == "FixtureA") && chain.iter().all(|v| v != "DIRECT")
+                })
+        })
+        .unwrap_or_else(|| panic!("cached-IP/SNI request did not use the protection node: {live}"));
+    (child, connection["id"].as_str().unwrap().to_owned())
 }
 
 struct Servers {
@@ -388,6 +386,23 @@ pub async fn run() {
     let mut before_hold = hold(&client, "claude.ai", servers.http).await;
     assert!(before_hold.chunk().await.unwrap().is_some());
     let before = capture(&mut engine, "开启前").await;
+    // Dropping an unread streaming response need not remove its core tracker
+    // immediately on Linux. End the deliberately DIRECT before-sample at the
+    // controller, so it cannot contaminate the new-request/alert assertions.
+    let live: serde_json::Value = engine.api.get("connections").await.unwrap();
+    for connection in live["connections"].as_array().unwrap() {
+        if connection["metadata"]["host"] == "claude.ai"
+            && connection["chains"]
+                .as_array()
+                .is_some_and(|chain| chain.iter().any(|v| v == "DIRECT"))
+        {
+            engine
+                .api
+                .close_connection(connection["id"].as_str().unwrap())
+                .await
+                .unwrap();
+        }
+    }
     drop(before_hold);
     let original_settings = serde_json::to_value(&engine.settings).unwrap();
     let original_runtime = std::fs::read(store.runtime().join("config.yaml")).unwrap();
@@ -419,25 +434,42 @@ pub async fn run() {
         ))
         .await
         .unwrap();
+    let mut probes = Vec::new();
     for (target, host, tls) in [
         ("203.0.113.77", "claude.ai", false),
         ("203.0.113.77", "s-cdn.anthropic.com", true),
         ("claude.ai", "outside.ech.test", true),
     ] {
-        let mut child = route_probe(&engine, target, host, tls).await;
+        probes.push(route_probe(&engine, target, host, tls).await);
+    }
+    tokio::time::sleep(Duration::from_secs(2)).await;
+    let live: serde_json::Value = engine.api.get("connections").await.unwrap();
+    for (_, id) in &probes {
+        assert!(
+            live["connections"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|connection| connection["id"].as_str() == Some(id.as_str())
+                    && connection["chains"]
+                        .as_array()
+                        .is_some_and(|chain| chain.iter().any(|v| v == "FixtureA"))),
+            "normal cached-IP/SNI connection was closed during monitoring: {id}"
+        );
+    }
+    let state = engine
+        .poll(Scope::Claude)
+        .await
+        .unwrap()
+        .claude_guard
+        .unwrap();
+    assert_eq!(
+        state.blocked, 0,
+        "protected cached-IP/SNI requests must not fall back to reactive blocking: {state:?}"
+    );
+    for (mut child, _) in probes {
         child.kill().await.unwrap();
     }
-    assert_eq!(
-        engine
-            .poll(Scope::Claude)
-            .await
-            .unwrap()
-            .claude_guard
-            .unwrap()
-            .blocked,
-        0,
-        "protected cached-IP/SNI requests must not fall back to reactive blocking"
-    );
     engine.api.reload(&scoped_payload(&saved)).await.unwrap();
     let mut normal = hold(&client, "api.anthropic.com", servers.http).await;
     assert!(normal.chunk().await.unwrap().is_some());
