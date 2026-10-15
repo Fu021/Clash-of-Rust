@@ -25,6 +25,7 @@ GUI_DEPENDENCIES = (
     'libxcursor1', 'libxinerama1', 'libwayland-client0', 'libwayland-cursor0',
     'libfontconfig1', 'libfreetype6', 'gsettings-desktop-schemas', 'iproute2',
     'zenity | kdialog',
+    'fonts-wqy-microhei | fonts-noto-cjk',
 )
 
 

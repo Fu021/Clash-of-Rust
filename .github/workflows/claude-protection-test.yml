@@ -85,7 +85,7 @@ jobs:
         run: |
           import subprocess
           subprocess.run(['sudo','apt-get','update'],check=True)
-          subprocess.run(['sudo','apt-get','install','-y','libglib2.0-dev','libxkbcommon-dev','libwayland-dev','libx11-dev','libx11-xcb-dev','gsettings-desktop-schemas','dbus','xvfb','xauth','libxkbcommon-x11-0','libxcursor1','libxrandr2','libxi6','libxinerama1','libegl1','iproute2','util-linux','libcap2-bin','systemd','zenity','xdotool','imagemagick'],check=True)
+          subprocess.run(['sudo','apt-get','install','-y','libglib2.0-dev','libxkbcommon-dev','libwayland-dev','libx11-dev','libx11-xcb-dev','gsettings-desktop-schemas','dbus','xvfb','xauth','libxkbcommon-x11-0','libxcursor1','libxrandr2','libxi6','libxinerama1','libegl1','iproute2','util-linux','libcap2-bin','systemd','zenity','xdotool','imagemagick','fonts-wqy-microhei'],check=True)
       - name: Fetch verified CI build
         shell: python
         run: |
