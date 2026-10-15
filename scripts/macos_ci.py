@@ -6,6 +6,7 @@ import os
 from pathlib import Path
 import plistlib
 import shutil
+import signal
 import subprocess
 import sys
 import tempfile
@@ -133,6 +134,15 @@ FileHandle.standardOutput.write(data)
                 write_json(REPORT/(label+'-windows.json'), windows)
                 if not windows: raise RuntimeError('Core is healthy but macOS reports no application window')
                 return {'core': version, 'window_count': len(windows)}
+            except BaseException:
+                # A native crash can precede the core readiness response. Reap
+                # this isolated launch before collecting a fresh debugger trace.
+                try: os.killpg(process.pid, signal.SIGTERM)
+                except ProcessLookupError: pass
+                try: startup_backtrace(binary, label)
+                except Exception as error:
+                    (REPORT/(label+'-backtrace-error.txt')).write_text(str(error))
+                raise
             finally:
                 # GUI shutdown by SIGTERM is also a useful abnormal-exit check:
                 # its ordinary core must not remain listening afterwards.
@@ -142,7 +152,7 @@ FileHandle.standardOutput.write(data)
                 # macOS user processes do not get Linux parent-death signals.
                 # Reap only this isolated GUI's child core, identified by parent.
                 if version:
-                    import socket, signal
+                    import socket
                     deadline = time.monotonic()+5
                     while time.monotonic() < deadline:
                         try:
@@ -153,6 +163,28 @@ FileHandle.standardOutput.write(data)
                         try: os.killpg(process.pid, signal.SIGTERM)
                         except ProcessLookupError: pass
                         raise RuntimeError('GUI termination left its core listening')
+
+
+def startup_backtrace(binary, label):
+    """Capture native startup faults that occur before macOS writes an .ips file."""
+    with tempfile.TemporaryDirectory(prefix='clash-startup-trace-') as directory:
+        env = dict(os.environ, CLASH_OF_RUST_DATA_DIR=directory, RUST_BACKTRACE='full')
+        command = ['/usr/bin/lldb', '--batch', '-o', 'settings set target.disable-aslr false',
+                   '-o', 'run', '-o', 'thread backtrace all', '-o', 'register read',
+                   '-o', 'quit', '--', str(binary)]
+        with (REPORT/(label+'-native-backtrace.log')).open('w') as output:
+            process = subprocess.Popen(command, env=env, cwd=ROOT, stdout=output,
+                                       stderr=subprocess.STDOUT, start_new_session=True)
+            try:
+                process.wait(timeout=45)
+            except subprocess.TimeoutExpired:
+                output.write('\nDebugger launch did not stop within 45 seconds.\n')
+            finally:
+                try: os.killpg(process.pid, signal.SIGTERM)
+                except ProcessLookupError: pass
+                try: process.wait(timeout=5)
+                except subprocess.TimeoutExpired: process.kill(); process.wait()
+        print((REPORT/(label+'-native-backtrace.log')).read_text(), flush=True)
 
 
 def package_tests(package, manifest, build):
