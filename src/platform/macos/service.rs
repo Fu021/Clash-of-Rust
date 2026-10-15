@@ -16,7 +16,7 @@ use std::{
     time::{Duration, Instant},
 };
 
-const PROTOCOL: u32 = 1;
+const PROTOCOL: u32 = 2;
 const PREFIX: &str = "org.clashofrust.network";
 const LIMIT: u64 = 256 * 1024;
 static STOP: AtomicBool = AtomicBool::new(false);
@@ -25,6 +25,9 @@ static STOP: AtomicBool = AtomicBool::new(false);
 #[serde(tag = "operation", rename_all = "snake_case", deny_unknown_fields)]
 enum Request {
     Status {},
+    Dns {
+        enabled: bool,
+    },
     Adopt {
         original: ProxyState,
         owned: ProxyState,
@@ -247,6 +250,21 @@ pub fn open_tun(socket: &Path, token: &str) -> Result<()> {
     Ok(())
 }
 
+pub fn protection_dns(enabled: bool) -> Result<()> {
+    // No prompting or helper installation while cleaning up (including old
+    // protocol clients which never took ownership of DNS in the first place).
+    if !enabled
+        && !paths(unsafe { libc::getuid() })
+            .1
+            .join("dns-lease.json")
+            .exists()
+    {
+        return Ok(());
+    }
+    exchange(&Request::Dns { enabled })?;
+    Ok(())
+}
+
 fn root_owned(path: &Path, directory: bool) -> Result<()> {
     let metadata = fs::symlink_metadata(path)?;
     ensure!(
@@ -420,6 +438,17 @@ pub fn serve(uid: u32) -> Result<()> {
     }
     let (_, core_sha256) = bundled_core()?;
     let journal = directory.join("proxy-lease.json");
+    let dns_journal = directory.join("dns-lease.json");
+    if dns_journal.exists() {
+        root_owned(&dns_journal, false)?;
+    }
+    let mut dns_lease = super::dns::load(&dns_journal)?;
+    if dns_lease
+        .as_ref()
+        .is_some_and(super::dns::Lease::owner_exited)
+    {
+        super::dns::restore(&dns_journal, &mut dns_lease)?;
+    }
     let mut lease: Option<ProxyLease> = if journal.exists() {
         root_owned(&journal, false)?;
         let mut bytes = Vec::new();
@@ -456,6 +485,12 @@ pub fn serve(uid: u32) -> Result<()> {
     let mut children: Vec<Child> = Vec::new();
     let result = (|| -> Result<()> {
         while !STOP.load(Ordering::Relaxed) {
+            if dns_lease
+                .as_ref()
+                .is_some_and(super::dns::Lease::owner_exited)
+            {
+                let _ = super::dns::restore(&dns_journal, &mut dns_lease);
+            }
             if lease
                 .as_ref()
                 .is_some_and(|owned| unsafe { libc::kill(owned.owner as i32, 0) } != 0)
@@ -485,6 +520,20 @@ pub fn serve(uid: u32) -> Result<()> {
                 ensure!(bytes.last() == Some(&b'\n'), "网络助手请求过大或未完成");
                 match serde_json::from_slice::<Request>(&bytes)? {
                     Request::Status {} => {}
+                    Request::Dns { enabled } => {
+                        let caller = peer_pid(&stream)?;
+                        if enabled {
+                            super::dns::enable(&dns_journal, &mut dns_lease, caller)?;
+                        } else {
+                            ensure!(
+                                dns_lease
+                                    .as_ref()
+                                    .is_none_or(|lease| lease.owned_by(caller)),
+                                "DNS 正由其他客户端持有"
+                            );
+                            super::dns::restore(&dns_journal, &mut dns_lease)?;
+                        }
+                    }
                     Request::Adopt { original, owned } => {
                         ensure!(
                             super::native_proxy::read()? == owned,
@@ -557,12 +606,13 @@ pub fn serve(uid: u32) -> Result<()> {
         }
         Ok(())
     })();
+    let dns_restoration = super::dns::restore(&dns_journal, &mut dns_lease);
     let restoration = restore_lease(&journal, &mut lease);
     for mut child in children {
         super::tun::terminate(&mut child);
     }
     let _ = fs::remove_file(socket);
-    result.and(restoration)
+    result.and(dns_restoration).and(restoration)
 }
 
 #[cfg(test)]

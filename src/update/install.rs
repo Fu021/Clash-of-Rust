@@ -78,6 +78,14 @@ fn command(executable: &Path) -> Command {
         use std::os::windows::process::CommandExt;
         command.creation_flags(0x08000000); // CREATE_NO_WINDOW
     }
+    #[cfg(target_os = "macos")]
+    {
+        use std::os::unix::process::CommandExt;
+        // A login LaunchAgent's remaining process group is terminated when
+        // its GUI exits. The updater and replacement GUI must outlive that
+        // job instead of being killed between readiness and the app swap.
+        command.process_group(0);
+    }
     command
 }
 
@@ -345,6 +353,177 @@ fn parent_alive(pid: u32) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn update_processes_are_isolated_from_the_gui_process_group() {
+        let mut child = command(Path::new("/bin/sleep")).arg("30").spawn().unwrap();
+        let pid = child.id() as libc::pid_t;
+        let group = unsafe { libc::getpgid(pid) };
+        let original = unsafe { libc::getpgrp() };
+        let _ = child.kill();
+        let _ = child.wait();
+        assert_eq!(group, pid, "update process must lead its own process group");
+        assert_ne!(group, original, "update process inherited the GUI group");
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    #[ignore = "child fixture for the disposable launchd regression test"]
+    #[allow(
+        clippy::zombie_processes,
+        reason = "launchd must reap this job while its helper remains alive"
+    )]
+    fn login_job_update_fixture() {
+        assert_eq!(std::env::var("GITHUB_ACTIONS").as_deref(), Ok("true"));
+        let directory = PathBuf::from(std::env::var_os("CLASH_UPDATE_JOB_FIXTURE").unwrap());
+        let detached = std::env::var("CLASH_UPDATE_JOB_DETACHED").as_deref() == Ok("true");
+        let mut helper = if detached {
+            command(Path::new("/bin/sh"))
+        } else {
+            let mut command = Command::new("/bin/sh");
+            command
+                .stdin(Stdio::null())
+                .stdout(Stdio::null())
+                .stderr(Stdio::null());
+            command
+        };
+        let child = helper
+            .args(["-c", "while /bin/kill -0 \"$CLASH_UPDATE_OLD_PID\" 2>/dev/null; do /bin/sleep 0.1; done; /bin/sleep 2; /usr/bin/touch \"$CLASH_UPDATE_SURVIVOR\""])
+            .env("CLASH_UPDATE_OLD_PID", std::process::id().to_string())
+            .env("CLASH_UPDATE_SURVIVOR", directory.join("survived"))
+            .spawn()
+            .unwrap();
+        fs::write(
+            directory.join("child.json"),
+            serde_json::to_vec(&serde_json::json!({
+                "pid":child.id(), "group":unsafe {libc::getpgid(child.id() as libc::pid_t)},
+                "parent":std::process::id(), "parent_group":unsafe {libc::getpgrp()}
+            }))
+            .unwrap(),
+        )
+        .unwrap();
+        // Returning exits this one-test launchd job while its update child is
+        // still waiting. launchd then performs its real process-group cleanup.
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    #[ignore = "creates two owned user launchd jobs on a disposable macOS runner"]
+    fn native_updates_survive_login_job_shutdown() {
+        use crate::platform::macos::run_command;
+        assert_eq!(std::env::var("GITHUB_ACTIONS").as_deref(), Ok("true"));
+        let uid = unsafe { libc::getuid() };
+        assert!(uid != 0, "run the launchd test as the ordinary runner user");
+        struct Job {
+            target: String,
+            helper: Option<u32>,
+            plist: PathBuf,
+        }
+        impl Drop for Job {
+            fn drop(&mut self) {
+                let _ = Command::new("/bin/launchctl")
+                    .args(["bootout", &self.target])
+                    .output();
+                let _ = fs::remove_file(&self.plist);
+                if let Some(pid) = self.helper
+                    && unsafe { libc::getpgid(pid as libc::pid_t) } == pid as libc::pid_t
+                {
+                    unsafe { libc::kill(-(pid as libc::pid_t), libc::SIGTERM) };
+                }
+            }
+        }
+        fn xml(value: &str) -> String {
+            value
+                .replace('&', "&amp;")
+                .replace('<', "&lt;")
+                .replace('>', "&gt;")
+        }
+        let mut measurements = Vec::new();
+        for detached in [false, true] {
+            let temporary = tempfile::Builder::new()
+                .prefix("clash-launchd-update-")
+                .tempdir()
+                .unwrap();
+            let directory = temporary.path();
+            let label = format!("org.clashofrust.update-test.{}", uuid::Uuid::new_v4());
+            let domain = format!("gui/{uid}");
+            let agents = directories::BaseDirs::new()
+                .unwrap()
+                .home_dir()
+                .join("Library/LaunchAgents");
+            fs::create_dir_all(&agents).unwrap();
+            let plist = agents.join(format!("{label}.plist"));
+            let mut job = Job {
+                target: format!("{domain}/{label}"),
+                helper: None,
+                plist: plist.clone(),
+            };
+            use std::io::Write;
+            let mut file = fs::OpenOptions::new()
+                .write(true)
+                .create_new(true)
+                .open(&plist)
+                .unwrap();
+            file.write_all(format!(
+                "<?xml version=\"1.0\"?><plist version=\"1.0\"><dict><key>Label</key><string>{label}</string><key>ProgramArguments</key><array><string>{}</string><string>update::install::tests::login_job_update_fixture</string><string>--exact</string><string>--ignored</string><string>--nocapture</string></array><key>EnvironmentVariables</key><dict><key>GITHUB_ACTIONS</key><string>true</string><key>CLASH_UPDATE_JOB_FIXTURE</key><string>{}</string><key>CLASH_UPDATE_JOB_DETACHED</key><string>{detached}</string></dict><key>RunAtLoad</key><true/><key>StandardErrorPath</key><string>{}</string><key>StandardOutPath</key><string>{}</string></dict></plist>",
+                xml(&std::env::current_exe().unwrap().to_string_lossy()), xml(&directory.to_string_lossy()),
+                xml(&directory.join("stderr.log").to_string_lossy()), xml(&directory.join("stdout.log").to_string_lossy())
+            ).as_bytes()).unwrap();
+            file.sync_all().unwrap();
+            drop(file);
+            let boot = run_command(
+                Command::new("/bin/launchctl")
+                    .args(["bootstrap", &domain])
+                    .arg(&plist),
+                "启动更新进程组测试",
+                Duration::from_secs(10),
+            )
+            .unwrap();
+            assert!(
+                boot.status.success(),
+                "launchctl bootstrap: {}",
+                String::from_utf8_lossy(&boot.stderr)
+            );
+            let deadline = Instant::now() + Duration::from_secs(15);
+            let child: serde_json::Value = loop {
+                if let Ok(bytes) = fs::read(directory.join("child.json"))
+                    && let Ok(value) = serde_json::from_slice(&bytes)
+                {
+                    break value;
+                }
+                assert!(
+                    Instant::now() < deadline,
+                    "launchd fixture failed: {:?}",
+                    fs::read_to_string(directory.join("stderr.log"))
+                );
+                std::thread::sleep(Duration::from_millis(50));
+            };
+            let pid = child["pid"].as_u64().unwrap() as u32;
+            if detached {
+                job.helper = Some(pid);
+            }
+            assert_eq!(child["group"] == child["parent_group"], !detached);
+            if detached {
+                assert_eq!(child["group"], child["pid"]);
+            }
+            // The old job must actually exit before the survival window starts.
+            let parent = child["parent"].as_u64().unwrap() as libc::pid_t;
+            while unsafe { libc::kill(parent, 0) } == 0 {
+                assert!(Instant::now() < deadline, "launchd parent did not exit");
+                std::thread::sleep(Duration::from_millis(50));
+            }
+            std::thread::sleep(Duration::from_secs(4));
+            let survived = directory.join("survived").exists();
+            assert_eq!(
+                survived, detached,
+                "helper survival disagrees with process-group isolation: {child}"
+            );
+            measurements.push(serde_json::json!({"detached":detached, "survived_old_job":survived, "processes":child}));
+        }
+        if let Some(path) = std::env::var_os("CLASH_MAC_FIX_REPORT") {
+            fs::write(path, serde_json::to_vec_pretty(&measurements).unwrap()).unwrap();
+        }
+    }
     #[test]
     fn helper_rechecks_the_package_before_installing() {
         let directory = tempfile::tempdir().unwrap();

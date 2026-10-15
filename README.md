@@ -3,7 +3,7 @@
 </p>
 <h1 align="center">Clash of Rust</h1>
 
-基于 mihomo 的原生 Rust 代理客户端。支持 **Windows（x64 / ARM64）**、**Debian/Ubuntu（amd64 / ARM64，Ubuntu 仅支持 22.04 及以上）** 和 **macOS 14 及以上（Intel / Apple Silicon）**。版本 **0.5.9**，更新内容见 [发布说明](docs/releases/0.5.9.md)。
+基于 mihomo 的原生 Rust 代理客户端。支持 **Windows（x64 / ARM64）**、**Debian/Ubuntu（amd64 / ARM64，Ubuntu 仅支持 22.04 及以上）** 和 **macOS 14 及以上（Intel / Apple Silicon）**。版本 **0.5.10**，更新内容见 [发布说明](docs/releases/0.5.10.md)。
 
 ## Features
 
@@ -21,12 +21,12 @@
 
 | 平台 | 安装包 |
 | --- | --- |
-| Windows x64 | [Clash-of-Rust-0.5.9-windows-x64-setup.exe](https://github.com/Fu021/Clash-of-Rust/releases/download/v0.5.9/Clash-of-Rust-0.5.9-windows-x64-setup.exe) |
-| Windows ARM64 | [Clash-of-Rust-0.5.9-windows-arm64-setup.exe](https://github.com/Fu021/Clash-of-Rust/releases/download/v0.5.9/Clash-of-Rust-0.5.9-windows-arm64-setup.exe) |
-| Debian / Ubuntu 22.04+ amd64 | [Clash-of-Rust-0.5.9-linux-amd64.deb](https://github.com/Fu021/Clash-of-Rust/releases/download/v0.5.9/Clash-of-Rust-0.5.9-linux-amd64.deb) |
-| Debian / Ubuntu 22.04+ ARM64 | [Clash-of-Rust-0.5.9-linux-arm64.deb](https://github.com/Fu021/Clash-of-Rust/releases/download/v0.5.9/Clash-of-Rust-0.5.9-linux-arm64.deb) |
-| macOS Intel | [Clash-of-Rust-0.5.9-macos-x64.dmg](https://github.com/Fu021/Clash-of-Rust/releases/download/v0.5.9/Clash-of-Rust-0.5.9-macos-x64.dmg) |
-| macOS Apple Silicon | [Clash-of-Rust-0.5.9-macos-arm64.dmg](https://github.com/Fu021/Clash-of-Rust/releases/download/v0.5.9/Clash-of-Rust-0.5.9-macos-arm64.dmg) |
+| Windows x64 | [Clash-of-Rust-0.5.10-windows-x64-setup.exe](https://github.com/Fu021/Clash-of-Rust/releases/download/v0.5.10/Clash-of-Rust-0.5.10-windows-x64-setup.exe) |
+| Windows ARM64 | [Clash-of-Rust-0.5.10-windows-arm64-setup.exe](https://github.com/Fu021/Clash-of-Rust/releases/download/v0.5.10/Clash-of-Rust-0.5.10-windows-arm64-setup.exe) |
+| Debian / Ubuntu 22.04+ amd64 | [Clash-of-Rust-0.5.10-linux-amd64.deb](https://github.com/Fu021/Clash-of-Rust/releases/download/v0.5.10/Clash-of-Rust-0.5.10-linux-amd64.deb) |
+| Debian / Ubuntu 22.04+ ARM64 | [Clash-of-Rust-0.5.10-linux-arm64.deb](https://github.com/Fu021/Clash-of-Rust/releases/download/v0.5.10/Clash-of-Rust-0.5.10-linux-arm64.deb) |
+| macOS Intel | [Clash-of-Rust-0.5.10-macos-x64.dmg](https://github.com/Fu021/Clash-of-Rust/releases/download/v0.5.10/Clash-of-Rust-0.5.10-macos-x64.dmg) |
+| macOS Apple Silicon | [Clash-of-Rust-0.5.10-macos-arm64.dmg](https://github.com/Fu021/Clash-of-Rust/releases/download/v0.5.10/Clash-of-Rust-0.5.10-macos-arm64.dmg) |
 
 Windows 运行安装程序；Debian/Ubuntu（Ubuntu 仅支持 22.04 及以上）使用 `sudo apt install ./安装包文件名.deb`。升级保留订阅和个人设置；Windows 卸载可选删除全部配置和数据，默认不勾选。
 

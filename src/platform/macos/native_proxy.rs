@@ -31,6 +31,12 @@ fn sc_check(ok: u8, action: &str) -> Result<()> {
     Ok(())
 }
 pub fn read() -> Result<ProxyState> {
+    read_entity("Proxies")
+}
+pub(super) fn read_dns() -> Result<ProxyState> {
+    read_entity("DNS")
+}
+fn read_entity(entity: &str) -> Result<ProxyState> {
     let prefs = preferences()?;
     let key = cf::string("/NetworkServices")?;
     let value = unsafe { SCPreferencesPathGetValue(prefs.0, key.0) };
@@ -41,7 +47,7 @@ pub fn read() -> Result<ProxyState> {
         if unsafe { SCPreferencesPathGetValue(prefs.0, interface.0) }.is_null() {
             continue;
         }
-        let path = cf::string(&format!("/NetworkServices/{id}/Proxies"))?;
+        let path = cf::string(&format!("/NetworkServices/{id}/{entity}"))?;
         let value = unsafe { SCPreferencesPathGetValue(prefs.0, path.0) };
         let proxy = if value.is_null() {
             None
@@ -54,9 +60,15 @@ pub fn read() -> Result<ProxyState> {
     Ok(state)
 }
 pub fn write(state: &ProxyState) -> Result<()> {
+    write_entity("Proxies", state)
+}
+pub(super) fn write_dns(state: &ProxyState) -> Result<()> {
+    write_entity("DNS", state)
+}
+fn write_entity(entity: &str, state: &ProxyState) -> Result<()> {
     ensure!(
         unsafe { libc::geteuid() } == 0,
-        "系统代理必须通过已授权的网络助手设置"
+        "网络设置必须通过已授权的网络助手修改"
     );
     let prefs = preferences()?;
     sc_check(
@@ -74,7 +86,7 @@ pub fn write(state: &ProxyState) -> Result<()> {
                 !unsafe { SCPreferencesPathGetValue(prefs.0, service.0) }.is_null(),
                 "网络服务已发生变化，请重新启用系统代理"
             );
-            let path = cf::string(&format!("/NetworkServices/{id}/Proxies"))?;
+            let path = cf::string(&format!("/NetworkServices/{id}/{entity}"))?;
             match value {
                 Some(ProxyValue::Text(text)) => {
                     let value = cf::plist(&serde_json::from_str::<Value>(text)?)?;

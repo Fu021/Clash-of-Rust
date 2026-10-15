@@ -1,6 +1,8 @@
 //! A reversible runtime overlay. Preferences and subscription sources stay intact.
 use crate::config::Settings;
 use crate::proxy::ProxyMode;
+#[cfg(target_os = "macos")]
+use anyhow::Context;
 use anyhow::{Result, ensure};
 use serde::{Deserialize, Serialize};
 use serde_yaml::{Mapping, Value};
@@ -70,6 +72,10 @@ pub struct Protection {
     pub node: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub provider: Option<String>,
+    // macOS local-name resolution must keep the pre-takeover resolvers rather
+    // than feeding the new system DNS addresses back into the core itself.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub system_dns: Vec<String>,
     pub route: String,
     pub previous: Previous,
 }
@@ -79,12 +85,21 @@ impl Protection {
             profile_id,
             node,
             provider: None,
+            system_dns: vec![],
             route: format!("COR-Claude-{}", uuid::Uuid::new_v4().simple()),
             previous,
         }
     }
     pub fn validate(&self) -> Result<()> {
         uuid::Uuid::parse_str(&self.profile_id)?;
+        ensure!(
+            self.system_dns.len() <= 16
+                && self
+                    .system_dns
+                    .iter()
+                    .all(|s| s.parse::<std::net::IpAddr>().is_ok()),
+            "Claude 保护原 DNS 记录无效"
+        );
         ensure!(
             !self.node.is_empty()
                 && self.node.len() <= 512
@@ -288,6 +303,55 @@ pub fn apply(map: &mut Mapping, settings: &Settings) -> Result<()> {
     // Private names retain local resolution. These explicit exceptions are
     // shown to the user; no public failure falls back to the system resolver.
     dns.insert(Value::from("nameserver-policy"), serde_yaml::from_str::<Mapping>("'+.lan': system\n'+.local': system\nlocalhost: system\n'+.home.arpa': system\n'+.in-addr.arpa': system\n'+.ip6.arpa': system\n")?.into());
+    #[cfg(target_os = "macos")]
+    if !protection.system_dns.is_empty() {
+        let local: Vec<_> = protection
+            .system_dns
+            .iter()
+            .map(|ip| {
+                let ip: std::net::IpAddr = ip.parse().expect("validated original DNS");
+                format!("udp://{}#DIRECT", std::net::SocketAddr::new(ip, 53))
+            })
+            .collect();
+        let policy = dns
+            .get_mut(Value::from("nameserver-policy"))
+            .unwrap()
+            .as_mapping_mut()
+            .unwrap();
+        for value in policy.values_mut() {
+            *value = serde_yaml::to_value(&local)?;
+        }
+        // Recursive-DNS probes must reach the authoritative server, rather than
+        // stopping at a synthetic fake IP. Retain blacklist exceptions; other
+        // modes use a protection-only baseline without altering the subscription.
+        if dns
+            .get(Value::from("fake-ip-filter-mode"))
+            .and_then(Value::as_str)
+            .is_some_and(|mode| mode != "blacklist")
+        {
+            dns.insert(
+                Value::from("fake-ip-filter"),
+                serde_yaml::to_value([
+                    "+.lan",
+                    "+.local",
+                    "localhost",
+                    "+.home.arpa",
+                    "+.in-addr.arpa",
+                    "+.ip6.arpa",
+                ])?,
+            );
+        }
+        dns.insert(Value::from("fake-ip-filter-mode"), Value::from("blacklist"));
+        let filters = dns
+            .entry(Value::from("fake-ip-filter"))
+            .or_insert(Value::Sequence(vec![]))
+            .as_sequence_mut()
+            .context("fake-ip-filter 格式无效")?;
+        let probe = Value::from("+.bash.ws");
+        if !filters.contains(&probe) {
+            filters.push(probe);
+        }
+    }
     let tun = map
         .get_mut(Value::from("tun"))
         .and_then(Value::as_mapping_mut)
@@ -338,6 +402,53 @@ fn route_or_reject(
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn mac_dns_overlay_keeps_local_names_out_of_the_new_system_resolver() {
+        for mode in ["blacklist", "whitelist", "rule"] {
+            let id = uuid::Uuid::new_v4().to_string();
+            let raw = format!(
+                "proxies: [{{name: Node, type: socks5, server: 127.0.0.1, port: 1080}}]\ndns: {{fake-ip-filter-mode: {mode}, fake-ip-filter: []}}\nrules: ['MATCH,DIRECT']\n"
+            );
+            let mut settings = Settings {
+                active_profile: Some(id.clone()),
+                ..Default::default()
+            };
+            let before = crate::config::runtime_config(&raw, &settings).unwrap();
+            let mut protection = Protection::new(
+                id,
+                "Node".into(),
+                Previous {
+                    mode: "rule".into(),
+                    proxy_mode: ProxyMode::Off,
+                    selectors: vec![],
+                },
+            );
+            protection.system_dns = vec!["192.168.1.1".into(), "fd00::1".into()];
+            settings.claude_protection = Some(std::sync::Arc::new(protection));
+            let value: Value =
+                serde_yaml::from_str(&crate::config::runtime_config(&raw, &settings).unwrap())
+                    .unwrap();
+            assert_eq!(
+                value["dns"]["nameserver-policy"]["+.lan"],
+                serde_yaml::to_value(["udp://192.168.1.1:53#DIRECT", "udp://[fd00::1]:53#DIRECT"])
+                    .unwrap()
+            );
+            assert!(
+                value["dns"]["fake-ip-filter"]
+                    .as_sequence()
+                    .unwrap()
+                    .contains(&Value::from("+.bash.ws"))
+            );
+            let mut restarted: Settings =
+                serde_json::from_slice(&serde_json::to_vec(&settings).unwrap()).unwrap();
+            restarted.claude_protection = None;
+            assert_eq!(
+                crate::config::runtime_config(&raw, &restarted).unwrap(),
+                before
+            );
+        }
+    }
     #[test]
     fn provider_node_is_pinned_by_exact_name_without_rewriting_source() {
         let id = uuid::Uuid::new_v4().to_string();

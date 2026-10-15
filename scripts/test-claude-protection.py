@@ -27,6 +27,7 @@ import workflow_artifacts
 
 def serve(cert, key):
     metrics = {'doh': 0, 'hosts': {}}
+    original_dns = json.loads(os.environ.get('CLASH_CLAUDE_ORIGINAL_DNS', '[]'))
     lock = threading.Lock()
 
     class Handler(http.server.BaseHTTPRequestHandler):
@@ -136,8 +137,29 @@ def serve(cert, key):
             with lock:
                 metrics['doh'] += 1
             position = 12
+            labels = []
             while position < len(body) and body[position]:
+                labels.append(body[position+1:position+1+body[position]].decode('ascii').lower())
                 position += 1 + body[position]
+            name = '.'.join(labels)
+            if original_dns and not (name.endswith('.bash.ws') or name == 'dns-check.example'):
+                # The native Mac system-resolver test changes DNS for this
+                # disposable VM. Preserve runner/control-plane resolution by
+                # forwarding unrelated questions to the original LAN resolver.
+                # It is intentionally outside the scoped TUN routes.
+                for server in original_dns:
+                    if server in ('1.1.1.1', '8.8.8.8'):
+                        continue
+                    family = socket.AF_INET6 if ':' in server else socket.AF_INET
+                    try:
+                        with socket.socket(family, socket.SOCK_DGRAM) as upstream:
+                            upstream.settimeout(2)
+                            upstream.sendto(body, (server, 53))
+                            reply = upstream.recv(65535)
+                        return self.answer(reply, 'application/dns-message')
+                    except OSError:
+                        continue
+                raise RuntimeError('Original resolver unavailable for runner DNS')
             end = position + 5
             qtype = struct.unpack('!H', body[position + 1:position + 3])[0]
             address = bytes([203, 0, 113, 2]) if qtype == 1 else bytes.fromhex('20010db8000000000000000000000002')

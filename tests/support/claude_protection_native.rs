@@ -132,18 +132,25 @@ struct Servers {
 }
 impl Servers {
     async fn start() -> Self {
-        let mut child =
-            tokio::process::Command::new(std::env::var_os("CLASH_CLAUDE_TEST_PYTHON").unwrap())
-                .arg(std::env::var_os("CLASH_CLAUDE_TEST_SCRIPT").unwrap())
-                .arg("serve")
-                .arg("--cert")
-                .arg(std::env::var_os("CLASH_CLAUDE_TEST_CERT").unwrap())
-                .arg("--key")
-                .arg(std::env::var_os("CLASH_CLAUDE_TEST_KEY").unwrap())
-                .stdout(std::process::Stdio::piped())
-                .kill_on_drop(true)
-                .spawn()
-                .unwrap();
+        let mut command =
+            tokio::process::Command::new(std::env::var_os("CLASH_CLAUDE_TEST_PYTHON").unwrap());
+        #[cfg(target_os = "macos")]
+        command.env(
+            "CLASH_CLAUDE_ORIGINAL_DNS",
+            serde_json::to_string(&clash_of_rust::platform::macos::dns::system_servers().unwrap())
+                .unwrap(),
+        );
+        let mut child = command
+            .arg(std::env::var_os("CLASH_CLAUDE_TEST_SCRIPT").unwrap())
+            .arg("serve")
+            .arg("--cert")
+            .arg(std::env::var_os("CLASH_CLAUDE_TEST_CERT").unwrap())
+            .arg("--key")
+            .arg(std::env::var_os("CLASH_CLAUDE_TEST_KEY").unwrap())
+            .stdout(std::process::Stdio::piped())
+            .kill_on_drop(true)
+            .spawn()
+            .unwrap();
         let mut line = String::new();
         let mut reader = tokio::io::BufReader::new(child.stdout.take().unwrap());
         use tokio::io::AsyncBufReadExt;
@@ -675,11 +682,169 @@ fn scoped_payload(payload: &str) -> String {
     value["tun"]["route-address"] = serde_yaml::to_value([
         "203.0.113.0/24",
         "198.18.0.0/16",
+        "1.1.1.1/32",
         "8.8.8.8/32",
         "2001:db8::/64",
     ])
     .unwrap();
     serde_yaml::to_string(&value).unwrap()
+}
+
+#[cfg(target_os = "macos")]
+pub async fn macos_dns() {
+    use clash_of_rust::platform::macos::{dns, service};
+    let original_dns = dns::configured().unwrap();
+    let servers = Servers::start().await;
+    let first = Socks::start(servers.http, servers.https).await;
+    let temp = tempfile::tempdir().unwrap();
+    let store = Store::at(temp.path().join("data")).unwrap();
+    let controller_port = free_port();
+    let mut mixed_port = free_port();
+    while mixed_port == controller_port {
+        mixed_port = free_port();
+    }
+    store
+        .save_settings(&Settings {
+            controller_port,
+            mixed_port,
+            ..Default::default()
+        })
+        .unwrap();
+    let mut engine = Engine::with_resources(store.clone(), test_resources()).unwrap();
+    let profile = temp.path().join("subscription.yaml");
+    std::fs::write(&profile, format!("proxies: [{{name: FixtureA, type: socks5, server: 127.0.0.1, port: {}, udp: true}}]\nproxy-groups: [{{name: Main, type: select, proxies: [FixtureA]}}]\ndns: {{enable: true, nameserver: ['https://127.0.0.1:{}/dns-query']}}\ntun: {{device: utun233, route-address: [203.0.113.0/24]}}\nrules: ['MATCH,Main']\n", first.port, servers.https)).unwrap();
+    engine
+        .import(
+            "Mac 系统 DNS 验证".into(),
+            profile.display().to_string(),
+            None,
+        )
+        .await
+        .unwrap();
+    engine
+        .activate(engine.profiles.last().unwrap().id.clone())
+        .await
+        .unwrap();
+    engine.start().await.unwrap();
+    let before = serde_json::to_value(&engine.settings).unwrap();
+    assert!(!engine.claude_protection(true).await.unwrap());
+    scope_runner(&engine).await;
+    let protected_dns = dns::configured().unwrap();
+    assert_ne!(
+        protected_dns, original_dns,
+        "system DNS was never taken over"
+    );
+    async fn query(first: &Socks) {
+        let name = format!("{}.bash.ws", uuid::Uuid::new_v4().simple());
+        let before = first.doh.load(Ordering::Relaxed);
+        let addresses: Vec<_> = tokio::time::timeout(
+            Duration::from_secs(15),
+            tokio::net::lookup_host((name.as_str(), 443)),
+        )
+        .await
+        .expect("macOS system resolver timed out")
+        .unwrap()
+        .map(|a| a.ip())
+        .collect();
+        assert!(
+            addresses.iter().any(|a| a.to_string() == "203.0.113.2"),
+            "system resolver escaped the controlled DoH path: {addresses:?}"
+        );
+        assert!(
+            first.doh.load(Ordering::Relaxed) > before,
+            "system resolution did not use the pinned node's DoH"
+        );
+    }
+    query(&first).await;
+    let original_private_dns = engine
+        .settings
+        .claude_protection
+        .as_ref()
+        .unwrap()
+        .system_dns
+        .clone();
+    engine.stop().await.unwrap();
+    assert_eq!(
+        dns::configured().unwrap(),
+        original_dns,
+        "normal shutdown did not restore DNS"
+    );
+    drop(engine);
+    let mut engine = Engine::with_resources(store.clone(), test_resources()).unwrap();
+    assert_eq!(
+        engine
+            .settings
+            .claude_protection
+            .as_ref()
+            .unwrap()
+            .system_dns,
+        original_private_dns,
+        "restart overwrote original private DNS"
+    );
+    engine.start().await.unwrap();
+    assert!(!engine.restore_proxy_mode().await.unwrap());
+    scope_runner(&engine).await;
+    assert_eq!(
+        dns::configured().unwrap(),
+        protected_dns,
+        "restart did not retake DNS"
+    );
+    query(&first).await;
+    assert!(!engine.claude_protection(false).await.unwrap());
+    assert_eq!(
+        dns::configured().unwrap(),
+        original_dns,
+        "switch-off did not restore DNS"
+    );
+    assert_eq!(
+        serde_json::to_value(&engine.settings).unwrap(),
+        before,
+        "switch-off changed original preferences"
+    );
+    engine.stop().await.unwrap();
+    // Exercise the helper's real owner-death recovery. The child owns only a
+    // fixed DNS lease; killing it cannot affect any unrelated process or job.
+    let mut owner = tokio::process::Command::new(std::env::current_exe().unwrap())
+        .args([
+            "macos_dns_lease_fixture",
+            "--exact",
+            "--ignored",
+            "--nocapture",
+        ])
+        .stdout(std::process::Stdio::piped())
+        .kill_on_drop(true)
+        .spawn()
+        .unwrap();
+    use tokio::io::AsyncBufReadExt;
+    let mut stdout = tokio::io::BufReader::new(owner.stdout.take().unwrap()).lines();
+    tokio::time::timeout(Duration::from_secs(10), async {
+        while let Some(line) = stdout.next_line().await.unwrap() {
+            if line == "DNS_LEASE_READY" {
+                return;
+            }
+        }
+        panic!("DNS owner fixture exited before readiness");
+    })
+    .await
+    .unwrap();
+    assert_eq!(dns::configured().unwrap(), protected_dns);
+    assert!(
+        service::protection_dns(false).is_err(),
+        "another live owner lost its DNS lease"
+    );
+    owner.kill().await.unwrap();
+    owner.wait().await.unwrap();
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(10);
+    while dns::configured().unwrap() != original_dns {
+        assert!(
+            tokio::time::Instant::now() < deadline,
+            "helper failed to restore a crashed client's DNS"
+        );
+        tokio::time::sleep(Duration::from_millis(100)).await;
+    }
+    if let Some(path) = std::env::var_os("CLASH_MAC_DNS_REPORT") {
+        std::fs::write(path, serde_json::to_vec_pretty(&serde_json::json!({"system_resolver_via_pinned_doh":true,"restart_reapplied":true,"original_private_dns_preserved":true,"switch_off_restored":true,"normal_exit_restored":true,"crashed_owner_restored":true,"other_live_owner_preserved":true})).unwrap()).unwrap();
+    }
 }
 async fn scope_runner(engine: &Engine) {
     let payload = std::fs::read_to_string(engine.store.runtime().join("config.yaml")).unwrap();
