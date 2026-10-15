@@ -369,6 +369,10 @@ mod tests {
     #[cfg(target_os = "macos")]
     #[test]
     #[ignore = "child fixture for the disposable launchd regression test"]
+    #[allow(
+        clippy::zombie_processes,
+        reason = "launchd must reap this job while its helper remains alive"
+    )]
     fn login_job_update_fixture() {
         assert_eq!(std::env::var("GITHUB_ACTIONS").as_deref(), Ok("true"));
         let directory = PathBuf::from(std::env::var_os("CLASH_UPDATE_JOB_FIXTURE").unwrap());
