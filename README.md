@@ -66,7 +66,7 @@ python3 scripts/preview-slint.py --dialogs --pairs
 
 保留配置、规则、检测解析、状态恢复、内存边界和界面交互的源码单元测试；真实系统集成测试只覆盖系统代理与 TUN。旧版 Shell 参考实现已移除，平台检测直接维护原生 Rust。
 
-开发分支通过 PR 运行六平台 CI，完成编译、测试并保存原生程序；手动 Publish Release 复用 main 的成功 CI 产物，完成打包和安装测试后发布，支持只测试不发布。macOS 分别使用 Intel 和 Apple Silicon 原生 runner，保存基础代理/TUN 检查报告、日志和崩溃信息；六平台界面截图由独立手动工作流按需生成，详见 [macOS 测试清单](docs/macos-ci-checklist.md)。手动 Memory Benchmark 可测指定提交的内存，并可附加实际界面预览。操作与产物说明见 [工作流文档](docs/workflows.md)，客户端内更新测试见 [更新测试说明](docs/automatic-update.md)。
+macOS 的自动检查与人工验收范围见 [测试清单](docs/macos-ci-checklist.md)。Memory Benchmark 按需手动运行，保存采样数据与报告。操作与产物说明见 [工作流文档](docs/workflows.md)，客户端内更新测试见 [更新测试说明](docs/automatic-update.md)。
 
 ## License
 
