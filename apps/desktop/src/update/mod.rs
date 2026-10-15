@@ -776,13 +776,20 @@ mod tests {
                 .unwrap();
             socket.write_all(&body[..body.len() / 2]).await.unwrap();
             // Do not send the second half; cancellation must close the socket.
-            assert_eq!(
-                tokio::time::timeout(Duration::from_secs(3), socket.read(&mut request))
-                    .await
-                    .unwrap()
-                    .unwrap(),
-                0
-            );
+            // Closing a response with unread bytes can produce either FIN or
+            // RST, depending on the platform and how much data was buffered.
+            match tokio::time::timeout(Duration::from_secs(3), socket.read(&mut request))
+                .await
+                .unwrap()
+            {
+                Ok(0) => {}
+                Err(error)
+                    if matches!(
+                        error.kind(),
+                        std::io::ErrorKind::ConnectionReset | std::io::ErrorKind::ConnectionAborted
+                    ) => {}
+                result => panic!("cancellation did not close the download connection: {result:?}"),
+            }
         });
         let directory = tempfile::tempdir().unwrap();
         let root = directory.path().to_owned();
