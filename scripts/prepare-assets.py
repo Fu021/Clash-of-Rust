@@ -47,7 +47,7 @@ def prepare_flags(proxy):
 
     twemoji = 'https://raw.githubusercontent.com/twitter/twemoji/v14.0.2/'
     codes = re.search(r'ISO_CODES: &str = "([^"]+)"',
-                      (ROOT/'src/probe.rs').read_text(encoding='utf-8'))[1].split()
+                      (ROOT/'crates/client-core/src/detection/probe.rs').read_text(encoding='utf-8'))[1].split()
 
     def flag(code):
         name = '-'.join(f"{0x1f1e6 + ord(ch) - ord('A'):x}" for ch in code)

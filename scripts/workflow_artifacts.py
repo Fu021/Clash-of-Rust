@@ -19,7 +19,7 @@ from build_support import (ROOT, bundle_directory, package_version, sha256,
 
 BUILD_NAMES = {f'build-{system}-{arch}' for system in ('windows', 'linux', 'macos') for arch in ('x64', 'arm64')}
 ARCHIVE_NAME = 'build.tar.gz'
-TEST_NAMES = {'library', 'clash-of-rust', 'clash-tun-launcher', 'core_integration',
+TEST_NAMES = {'library', 'client-core', 'clash-of-rust', 'clash-tun-launcher', 'core_integration',
               'geo_download', 'linux_tun', 'tray_integration', 'memory_benchmark', 'claude_diagnostics',
               'macos_ui_fixture', 'macos_helper_fixture'}
 # Accept historical CI payloads for the independent screenshot workflow. New
@@ -53,12 +53,15 @@ def test_binaries(messages):
         target = entry['target']
         if not Path(target['src_path']).is_relative_to(ROOT):
             continue
-        role = 'library' if 'lib' in target['kind'] else target['name']
+        role = ({'clash_of_rust': 'library', 'clash_client_core': 'client-core'}.get(target['name'], target['name'])
+                if 'lib' in target['kind'] else target['name'])
         if role not in TEST_NAMES or role in result:
             raise ValueError('Unexpected or duplicate test executable: '+role)
         result[role] = entry['executable']
     if not REQUIRED_TEST_NAMES <= result.keys():
         raise ValueError('Required test executables are missing')
+    if (ROOT/'crates/client-core/Cargo.toml').is_file() and 'client-core' not in result:
+        raise ValueError('Shared client library test executable is missing')
     return result
 
 
@@ -137,6 +140,8 @@ def verify_build(root, system, arch, expected_commit):
         raise ValueError('Unexpected build test targets')
     if not REQUIRED_TEST_NAMES <= manifest['tests'].keys():
         raise ValueError('Required build test targets are missing')
+    if (ROOT/'crates/client-core/Cargo.toml').is_file() and 'client-core' not in manifest['tests']:
+        raise ValueError('Shared client library tests are missing from the build')
     for name, relative in manifest['tests'].items():
         if not safe_name(relative) or relative != 'tests/'+name+('.exe' if system == 'windows' else '') or relative not in records:
             raise ValueError('Invalid test executable path')

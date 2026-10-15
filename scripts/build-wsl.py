@@ -13,10 +13,10 @@ import shutil
 import subprocess
 import sys
 
-from build_support import ROOT, sha256, validate_version
+from build_support import ROOT, sha256, validate_version, package_version
 
-SOURCE_DIRECTORIES = ('src','scripts','resources','installer','vendor','examples','tests','docs','.github')
-SOURCE_FILES = ('Cargo.toml','Cargo.lock','build.rs','LICENSE','README.md','.gitattributes','.gitignore')
+SOURCE_DIRECTORIES = ('apps','crates','native','scripts','resources','installer','vendor','examples','docs','.github','.cargo')
+SOURCE_FILES = ('Cargo.toml','Cargo.lock','LICENSE','README.md','.gitattributes','.gitignore')
 
 
 def native_build(source, workspace, cargo_bin, cargo_home, proxy, version=None):
@@ -85,7 +85,7 @@ def native_build(source, workspace, cargo_bin, cargo_home, proxy, version=None):
     print('Native WSL source and Cargo target:',workspace,flush=True)
     subprocess.run([sys.executable,workspace/'scripts/build-installer.py',*options],cwd=workspace,env=environment,check=True)
     deb_arch = 'arm64' if arch == 'arm64' else 'amd64'
-    version = version or json.loads(subprocess.check_output(['cargo','metadata','--no-deps','--format-version','1','--offline'],cwd=workspace,env=environment))['packages'][0]['version']
+    version = version or package_version(workspace)
     artifact = workspace/f'dist/Clash-of-Rust-{version}-linux-{deb_arch}.deb'
     assert artifact.with_name(artifact.name+'.sha256').read_text().strip() == sha256(artifact)
     (source/'dist').mkdir(exist_ok=True)

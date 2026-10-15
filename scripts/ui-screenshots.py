@@ -92,15 +92,17 @@ def render(source, run_id, system, arch, output, sizes, scenes=None):
     workflow_artifacts.fetch_build(client, run_id, system, arch, build, commit)
     manifest = json.loads((build/'manifest.json').read_text())
     adapter = ROOT/'scripts/ui_capture.rs'
-    preview = source/'src/ui_preview.rs'
-    harness = source/'tests/ui_preview.rs'
+    desktop = build_support.desktop_directory(source)
+    preview = desktop/('src/views/ui_preview.rs' if desktop != source else 'src/ui_preview.rs')
+    harness = desktop/'tests/ui_preview.rs'
     original_preview, original_harness = preview.read_bytes(), harness.read_bytes()
-    adapter_destination = source/'src/ui_capture_adapter.rs'
+    adapter_destination = preview.parent/'ui_capture_adapter.rs'
     if adapter_destination.exists():
         raise ValueError('Selected source already has a conflicting capture adapter')
     shutil.copy2(adapter, adapter_destination)
     preview.write_text(original_preview.decode()+'\n#[path = "ui_capture_adapter.rs"]\nmod render_capture;\npub(crate) use render_capture::run_render_capture;\n')
-    harness.write_text('#[allow(dead_code, unused_imports)]\n#[path = "../src/main.rs"]\nmod app;\nfn main() { app::ui_preview::run_render_capture().expect("native render capture"); }\n')
+    app_module = '../src/app/mod.rs' if desktop != source else '../src/main.rs'
+    harness.write_text(f'#[allow(dead_code, unused_imports)]\n#[path = "{app_module}"]\nmod app;\nfn main() {{ app::ui_preview::run_render_capture().expect("native render capture"); }}\n')
     report = {'schema': 1, 'ci_run_id': run_id, 'commit': commit, 'version': manifest['version'],
               'system': system, 'arch': arch, 'source_artifact': json.loads((build/'source-artifact.json').read_text()),
               'ci_gui_sha256': manifest['files']['payload/clash-of-rust'+('.exe' if system == 'windows' else '')]['sha256'],

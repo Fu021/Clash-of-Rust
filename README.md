@@ -74,10 +74,12 @@ MACOSX_DEPLOYMENT_TARGET=14.0 python3 scripts/build-installer.py
 
 ## 开发与发布
 
+项目使用 Cargo workspace：`crates/client-core` 保存共享配置、订阅、规则和检测逻辑，`apps/desktop` 保存 Iced 界面、桌面内核管理及系统集成。Android、iOS、移动桥接与移动内核目录目前仅占位。根目录运行 `cargo run` 默认启动桌面应用，资源和打包输出仍统一放在仓库根目录。
+
 ```text
 cargo fmt --all -- --check
-cargo clippy --release --all-targets --locked -- -D warnings
-cargo test --release --all-targets --locked -- --test-threads=1
+cargo clippy --workspace --release --all-targets --locked -- -D warnings
+cargo test --workspace --release --all-targets --locked -- --test-threads=1
 python scripts/test-build-tools.py
 python scripts/test-workflow-artifacts.py
 ```

@@ -1,26 +1,14 @@
-[package]
-name = "clash-of-rust"
+[workspace]
+members = ["crates/client-core", "apps/desktop"]
+default-members = ["apps/desktop"]
+resolver = "3"
+
+[workspace.package]
 version = "0.5.11-dev.1"
 edition = "2024"
-default-run = "clash-of-rust"
-description = "A native Rust desktop client for mihomo"
 license = "GPL-3.0-only"
 
-[features]
-# Screenshot harness; never enabled for official application builds.
-ui-preview = []
-
-[[test]]
-name = "ui_preview"
-path = "tests/ui_preview.rs"
-harness = false
-required-features = ["ui-preview"]
-
-[[bin]]
-name = "clash-tun-launcher"
-path = "src/tun_launcher.rs"
-
-[dependencies]
+[workspace.dependencies]
 anyhow = "1"
 chrono = { version = "0.4", default-features = false, features = ["clock", "std"] }
 directories = "6"
@@ -33,7 +21,7 @@ serde = { version = "1", features = ["derive", "rc"] }
 serde_json = "1"
 serde_yaml = "0.9"
 semver = "1"
-tokio = { version = "1", features = ["rt-multi-thread", "process", "time", "sync", "net", "io-util", "fs", "macros"] }
+tokio = { version = "1", features = ["rt-multi-thread", "time", "sync", "net", "io-util", "fs", "macros"] }
 tempfile = "3"
 uuid = { version = "1", features = ["v4", "serde"] }
 futures-util = "0.3"
@@ -45,31 +33,6 @@ sha1 = "0.10"
 base64 = "0.22"
 tray-icon = { version = "0.26", default-features = false, features = ["ksni"] }
 
-[target.'cfg(windows)'.dependencies]
-windows = { version = "0.62", features = ["Win32_Foundation", "Win32_System_TaskScheduler", "Win32_System_Com", "Win32_System_Variant", "Win32_System_Ole", "Win32_UI_Shell", "Win32_UI_Shell_Common"] }
-winreg = "0.55"
-windows-sys = { version = "0.61", features = ["Win32_UI_WindowsAndMessaging", "Win32_UI_Shell", "Win32_System_Com", "Win32_System_Registry", "Win32_System_Threading", "Win32_Security_Authorization", "Win32_System_Memory"] }
-
-[target.'cfg(unix)'.dependencies]
-libc = "0.2"
-
-[target.'cfg(target_os = "linux")'.dependencies]
-# Reuse tray-icon's D-Bus library for the desktop portal's native file chooser.
-zbus = { version = "5", default-features = false, features = ["tokio"] }
-
-[target.'cfg(target_os = "macos")'.dependencies]
-block2 = "0.6"
-# Reuse the bindings already used by tray-icon; keep AppKit on the GUI thread.
-objc2 = "0.6"
-objc2-app-kit = { version = "0.3.2", default-features = false, features = ["std", "NSApplication", "NSResponder", "NSStatusItem", "NSStatusBarButton", "NSImage", "NSWindow", "NSOpenPanel", "NSPanel", "NSSavePanel", "block2"] }
-objc2-foundation = { version = "0.3.2", default-features = false, features = ["std", "NSObject", "NSThread", "NSString", "NSURL", "NSArray"] }
-
-[dev-dependencies]
-# Process memory collection is used only by the benchmark, not the desktop app.
-sysinfo = { version = "0.39", default-features = false, features = ["system"] }
-
-[build-dependencies]
-semver = "1"
 
 [profile.dev]
 # Keep line/function information while reducing development link/debug overhead.

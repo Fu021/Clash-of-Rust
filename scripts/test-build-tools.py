@@ -26,6 +26,24 @@ _defender_spec.loader.exec_module(defender)
 
 
 class BuildTests(unittest.TestCase):
+    def test_workspace_and_legacy_version_and_source_paths(self):
+        self.assertEqual(build.manifest_version('[package]\nversion="0.4.12"\n'), '0.4.12')
+        self.assertEqual(build.manifest_version('[workspace.package]\nversion="0.5.11-dev.1"\n'), '0.5.11-dev.1')
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            (root/'Cargo.toml').write_text('[package]\nversion="0.4.12"\n')
+            self.assertEqual(build.package_version(root), '0.4.12')
+            self.assertEqual(build.desktop_directory(root), root)
+            self.assertEqual(build.core_directory(root), root)
+            (root/'apps/desktop').mkdir(parents=True)
+            (root/'crates/client-core').mkdir(parents=True)
+            (root/'apps/desktop/Cargo.toml').touch()
+            (root/'crates/client-core/Cargo.toml').touch()
+            (root/'Cargo.toml').write_text('[workspace.package]\nversion="0.5.11-dev.1"\n')
+            self.assertEqual(build.package_version(root), '0.5.11-dev.1')
+            self.assertEqual(build.desktop_directory(root), root/'apps/desktop')
+            self.assertEqual(build.core_directory(root), root/'crates/client-core')
+
     def test_release_job_protocol_matches_workflow_display_names(self):
         workflow = (build.ROOT/'.github/workflows/release.yml').read_text()
         for name in release.PACKAGE_JOBS - set(release.PACKAGES):

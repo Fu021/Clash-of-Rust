@@ -19,7 +19,7 @@ import urllib.request
 import uuid
 import zlib
 
-from build_support import ROOT, write_json
+from build_support import ROOT, write_json, core_directory, desktop_directory, package_version
 
 
 WORKLOADS = {
@@ -264,14 +264,17 @@ def main():
         raise ValueError('Bounds: rows 1..50000, repetitions 1..10, GUI seconds 1..120')
     source, output = args.source.resolve(strict=True), args.output.resolve()
     output.mkdir(parents=True, exist_ok=False)
-    benchmark_source = ROOT/'examples/memory_benchmark.rs'
-    destination = source/'examples/memory_benchmark.rs'
+    benchmark_source = core_directory()/'examples/memory_benchmark.rs'
+    destination = core_directory(source)/'examples/memory_benchmark.rs'
     if destination.resolve() != benchmark_source.resolve():
-        shutil.copy2(benchmark_source, destination)
-    import tomllib
+        destination.parent.mkdir(parents=True, exist_ok=True)
+        text = benchmark_source.read_text()
+        if core_directory(source) == source:
+            text = text.replace('use clash_client_core::{', 'use clash_of_rust::{')
+        destination.write_text(text)
     metadata = {'source_commit': subprocess.check_output(['git', 'rev-parse', 'HEAD'], cwd=source, text=True).strip(),
                 'benchmark_commit': subprocess.check_output(['git', 'rev-parse', 'HEAD'], cwd=ROOT, text=True).strip(),
-                'version': tomllib.loads((source/'Cargo.toml').read_text())['package']['version'],
+                'version': package_version(source),
                 'profile': args.profile, 'workload': args.workload,
                 'gui_fixture': {key: counts[key] for key in ('nodes', 'groups', 'rules')},
                 'rows': args.rows, 'repetitions': args.repetitions,
@@ -280,11 +283,14 @@ def main():
                 'rustc': subprocess.check_output(['rustc', '-Vv'], text=True).strip(),
                 'started_at': datetime.datetime.now(datetime.timezone.utc).isoformat(),
                 'instrumentation': 'The workflow benchmark example replaces only the example in the selected checkout; application sources are unchanged.'}
-    modern_layout = (source/'src/ui_style.rs').is_file()
+    desktop = desktop_directory(source)
+    modern_layout = (desktop/'src/app/mod.rs').is_file() or (desktop/'src/ui_style.rs').is_file()
     metadata['gui_navigation'] = 'current sidebar coordinates and detected search field' if modern_layout else 'legacy window coordinates'
     write_json(output/'metadata.json', metadata)
     (output/'gui-fixture.yaml').write_text(fixture(args.workload), encoding='utf-8')
     command = ['cargo', 'build', '--locked', '--bins', '--example', 'memory_benchmark']
+    if desktop != source:
+        command.append('--workspace')
     if args.profile == 'release':
         command.append('--release')
     with (output/'build.log').open('x') as log:
@@ -304,7 +310,8 @@ def main():
         subprocess.run([str(benchmark), 'suite', str(args.rows), str(args.repetitions), str(output/'api.jsonl')],
                        cwd=source, stdout=text, check=True)
     gui_scenes(bundle/'clash-of-rust', benchmark, output, args.seconds, modern_layout, workload=args.workload)
-    if 'pub rule_overrides:' in (source/'src/config.rs').read_text(encoding='utf-8'):
+    settings_source = (core_directory(source)/'src/config/mod.rs' if desktop != source else source/'src/config.rs')
+    if 'pub rule_overrides:' in settings_source.read_text(encoding='utf-8'):
         overrides = {'enabled': [True]*5}
         gui_scenes(bundle/'clash-of-rust', benchmark, output, args.seconds, modern_layout,
                    rule_overrides=overrides, prefix='rules-', workload=args.workload)

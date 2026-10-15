@@ -22,12 +22,12 @@ def main():
         run([sys.executable, ROOT/'scripts/test-workflow-artifacts.py'])
     # One profile across Clippy, tests and production builds avoids a second
     # dependency compilation and produces the exact binaries released later.
-    run(['cargo', 'clippy', '--release', '--all-targets', '--locked', '--', '-D', 'warnings'])
-    run(['cargo', 'build', '--release', '--locked', '--bins'])
-    messages = cargo_messages(['cargo', 'test', '--release', '--locked', '--all-targets',
+    run(['cargo', 'clippy', '--workspace', '--release', '--all-targets', '--locked', '--', '-D', 'warnings'])
+    run(['cargo', 'build', '--workspace', '--release', '--locked', '--bins'])
+    messages = cargo_messages(['cargo', 'test', '--workspace', '--release', '--locked', '--all-targets',
                               '--no-run', '--message-format=json'])
     tests = test_binaries(messages)
-    run(['cargo', 'test', '--release', '--locked', '--all-targets', '--', '--test-threads=1'])
+    run(['cargo', 'test', '--workspace', '--release', '--locked', '--all-targets', '--', '--test-threads=1'])
     spec = importlib.util.spec_from_file_location('prepare', ROOT/'scripts/prepare-resources.py')
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)

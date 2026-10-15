@@ -1,0 +1,28 @@
+[package]
+name = "clash-client-core"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "Shared configuration, rules and network diagnostics for Clash of Rust"
+
+[dependencies]
+anyhow = { workspace = true }
+chrono = { workspace = true }
+directories = { workspace = true }
+reqwest = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+serde_yaml = { workspace = true }
+tokio = { workspace = true }
+tempfile = { workspace = true }
+uuid = { workspace = true }
+futures-util = { workspace = true }
+sha2 = { workspace = true }
+regex = { workspace = true }
+roxmltree = { workspace = true }
+hmac = { workspace = true }
+sha1 = { workspace = true }
+base64 = { workspace = true }
+
+[dev-dependencies]
+sysinfo = { version = "0.39", default-features = false, features = ["system"] }

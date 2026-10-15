@@ -30,7 +30,7 @@ Use the source revision matching the application release. GPLv3/AGPLv3 section 1
 Native platform checks use upstream-derived RegionRestrictionCheck decisions
 compiled to Rust (AGPL-3.0-only). No Bash/MSYS, curl, GNU command-line tools,
 jq or OpenSSL runtime is bundled for these checks. Request/parse/cancellation
-code is in src/region_check; Rust crate versions and licenses are in Cargo.lock
+code is in crates/client-core/src/detection/regions; Rust crate versions and licenses are in Cargo.lock
 and their corresponding upstream sources.
 
 Offline country flags: Twemoji v14.0.2, Copyright Twitter, Inc and other contributors.

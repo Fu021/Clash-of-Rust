@@ -21,6 +21,25 @@ class ArtifactTests(unittest.TestCase):
     commit = 'a'*40
     version = '0.4.12'
 
+    def test_workspace_library_tests_have_distinct_export_names(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            (root/'crates/client-core').mkdir(parents=True)
+            (root/'crates/client-core/Cargo.toml').touch()
+            def message(name, kind):
+                return json.dumps({'reason': 'compiler-artifact', 'profile': {'test': True},
+                                   'executable': str(root/'target'/name),
+                                   'target': {'name': name, 'kind': [kind], 'src_path': str(root/'source.rs')}})
+            entries = [message('clash_of_rust', 'lib'), message('clash-of-rust', 'bin'),
+                       message('core_integration', 'test'), message('memory_benchmark', 'example')]
+            with patch.object(artifacts, 'ROOT', root):
+                with self.assertRaisesRegex(ValueError, 'Shared client library'):
+                    artifacts.test_binaries('\n'.join(entries))
+                entries.append(message('clash_client_core', 'lib'))
+                tests = artifacts.test_binaries('\n'.join(entries))
+                self.assertEqual(tests['library'], str(root/'target/clash_of_rust'))
+                self.assertEqual(tests['client-core'], str(root/'target/clash_client_core'))
+
     def fixture(self, root):
         (root/'Cargo.lock').write_text('fixture dependencies')
         payload = root/'input/payload'

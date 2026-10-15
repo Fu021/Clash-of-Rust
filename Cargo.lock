@@ -461,6 +461,30 @@ dependencies = [
 ]
 
 [[package]]
+name = "clash-client-core"
+version = "0.5.11-dev.1"
+dependencies = [
+ "anyhow",
+ "base64 0.22.1",
+ "chrono",
+ "directories",
+ "futures-util",
+ "hmac",
+ "regex",
+ "reqwest",
+ "roxmltree",
+ "serde",
+ "serde_json",
+ "serde_yaml",
+ "sha1",
+ "sha2",
+ "sysinfo",
+ "tempfile",
+ "tokio",
+ "uuid",
+]
+
+[[package]]
 name = "clash-of-rust"
 version = "0.5.11-dev.1"
 dependencies = [
@@ -468,6 +492,7 @@ dependencies = [
  "base64 0.22.1",
  "block2 0.6.2",
  "chrono",
+ "clash-client-core",
  "cosmic-text",
  "directories",
  "futures-util",
@@ -487,7 +512,6 @@ dependencies = [
  "serde_yaml",
  "sha1",
  "sha2",
- "sysinfo",
  "tempfile",
  "tokio",
  "tray-icon",
