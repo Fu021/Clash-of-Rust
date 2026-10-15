@@ -158,6 +158,10 @@ mod platform {
 mod native_proxy;
 #[cfg(all(target_os = "macos", not(test)))]
 #[allow(dead_code)]
+#[path = "platform/macos/dns.rs"]
+mod dns;
+#[cfg(all(target_os = "macos", not(test)))]
+#[allow(dead_code)]
 #[path = "platform/macos/service.rs"]
 mod service;
 #[cfg(all(target_os = "macos", not(test)))]
