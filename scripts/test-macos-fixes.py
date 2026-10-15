@@ -40,7 +40,7 @@ def main():
     spec = importlib.util.spec_from_file_location('proxy_native_tests', ROOT/'scripts/test-proxy-modes.py')
     proxy = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(proxy)
-    with tempfile.TemporaryDirectory(prefix='clash-mac-dns-ca-') as temporary:
+    with fixture.ipv6_uplink(REPORT), tempfile.TemporaryDirectory(prefix='clash-mac-dns-ca-') as temporary:
         with fixture.trusted_fixture(Path(temporary)) as (cert, key, ca):
             settings = {
                 'CLASH_CLAUDE_TEST_CERT': str(cert), 'CLASH_CLAUDE_TEST_CA': str(ca),
