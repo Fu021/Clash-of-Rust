@@ -135,8 +135,6 @@ fn imported_file_reaches_dialog_and_cancel_or_exit_requires_confirmation() {
 #[test]
 fn clicking_a_node_selects_it_but_its_latency_button_only_tests_it() {
     use clash_client_ui::{GroupItem, NodeItem, NodePair};
-    use slint::platform::{PointerEventButton, WindowEvent};
-
     ui_testing::initialize(950, 700);
     let app = fixtures::fixture("proxies-ascending");
     let window = AppWindow::new().unwrap();
@@ -169,19 +167,14 @@ fn clicking_a_node_selects_it_but_its_latency_button_only_tests_it() {
         .on_dispatch(move |intent, a, b| recorded.borrow_mut().push((intent, a, b)));
     window.show().unwrap();
     let _ = window.window().take_snapshot().unwrap();
-    let click = |x, y| {
-        let position = slint::LogicalPosition::new(x, y);
-        window.window().dispatch_event(WindowEvent::PointerPressed {
-            position,
-            button: PointerEventButton::Left,
-        });
-        window
-            .window()
-            .dispatch_event(WindowEvent::PointerReleased {
-                position,
-                button: PointerEventButton::Left,
-            });
-    };
+    let click = |x, y| ui_testing::click(window.window(), x, y);
+    click(507.0, 298.0);
+    assert_eq!(
+        events.borrow().as_slice(),
+        &[(Intent::NodeDelay, "node-a".into(), "".into())],
+        "the first button click must run the action, not only focus it"
+    );
+    events.borrow_mut().clear();
     click(250.0, 252.0);
     assert_eq!(
         events.borrow().as_slice(),
@@ -200,7 +193,7 @@ fn clicking_a_node_selects_it_but_its_latency_button_only_tests_it() {
 
 #[test]
 fn pointer_keyboard_escape_and_modal_input_use_the_production_callbacks() {
-    use slint::platform::{Key, PointerEventButton, WindowEvent};
+    use slint::platform::{Key, WindowEvent};
     ui_testing::initialize(950, 700);
     let app = fixtures::fixture("home");
     let window = AppWindow::new().unwrap();
@@ -215,19 +208,7 @@ fn pointer_keyboard_escape_and_modal_input_use_the_production_callbacks() {
         .on_dispatch(move |intent, a, b| recorded.borrow_mut().push((intent, a, b)));
     window.show().unwrap();
     let _ = window.window().take_snapshot().unwrap();
-    let click = |x, y| {
-        let position = slint::LogicalPosition::new(x, y);
-        window.window().dispatch_event(WindowEvent::PointerPressed {
-            position,
-            button: PointerEventButton::Left,
-        });
-        window
-            .window()
-            .dispatch_event(WindowEvent::PointerReleased {
-                position,
-                button: PointerEventButton::Left,
-            });
-    };
+    let click = |x, y| ui_testing::click(window.window(), x, y);
     click(65.0, 156.0);
     assert_eq!(events.borrow().last().unwrap().0, Intent::Navigate);
     assert_eq!(events.borrow().last().unwrap().1, "1");

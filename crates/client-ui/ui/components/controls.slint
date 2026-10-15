@@ -155,17 +155,17 @@ export component ActionButton inherits Rectangle {
         y: (parent.height - self.height) / 2;
         expanded: root.expanded;
     }
-    area := TouchArea {
-        enabled: root.enabled && (UiData.modal == 0 || root.modal-control);
-        mouse-cursor: pointer;
-        clicked => { key-scope.focus(); root.clicked(); }
-    }
     key-scope := FocusScope {
         enabled: root.enabled && (UiData.modal == 0 || root.modal-control);
         key-pressed(event) => {
             if event.text == "\n" || event.text == " " { root.clicked(); return accept; }
             return reject;
         }
+    }
+    area := TouchArea {
+        enabled: root.enabled && (UiData.modal == 0 || root.modal-control);
+        mouse-cursor: pointer;
+        clicked => { key-scope.focus(); root.clicked(); }
     }
 }
 

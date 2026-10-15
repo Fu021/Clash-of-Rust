@@ -28,3 +28,21 @@ pub fn initialize(width: u32, height: u32) -> Rc<MinimalSoftwareWindow> {
     window.set_size(slint::PhysicalSize::new(width, height));
     window
 }
+
+#[cfg(test)]
+pub(super) fn click(window: &slint::Window, x: f32, y: f32) {
+    use slint::platform::{PointerEventButton, WindowEvent};
+    let position = slint::LogicalPosition::new(x, y);
+    // Match a real pointer sequence, including movement between adjacent hit
+    // regions and the press delay used by Slint's own click test helper.
+    window.dispatch_event(WindowEvent::PointerMoved { position });
+    window.dispatch_event(WindowEvent::PointerPressed {
+        position,
+        button: PointerEventButton::Left,
+    });
+    std::thread::sleep(std::time::Duration::from_millis(50));
+    window.dispatch_event(WindowEvent::PointerReleased {
+        position,
+        button: PointerEventButton::Left,
+    });
+}
