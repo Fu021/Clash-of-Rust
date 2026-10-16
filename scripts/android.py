@@ -1,5 +1,6 @@
 """Build Android on Actions and package the exact APK tested by its CI."""
 import argparse
+from collections import deque
 import io
 import json
 import os
@@ -28,6 +29,28 @@ MOBILE_TOOL = '19777044486779222400e9ca16c4306f9c6dbfa9'
 def run(command, **kwargs):
     print('+ ' + ' '.join(map(str, command)), flush=True)
     return subprocess.run(list(map(str, command)), check=True, **kwargs)
+
+
+def cargo_build(command, **kwargs):
+    """Retry transient dependency downloads, while preserving compiler failures."""
+    transient = re.compile(r'(?:HTTP(?:/[0-9.]+)?\s+|returned error:\s*)(?:429|50[0234])\b'
+                           r'|Could not resolve host|Failed to connect to|Connection timed out', re.I)
+    for attempt in range(3):
+        print('+ ' + ' '.join(map(str, command)), flush=True)
+        tail = deque(maxlen=160)
+        with subprocess.Popen(list(map(str, command)), stdout=subprocess.PIPE,
+                              stderr=subprocess.STDOUT, text=True, **kwargs) as process:
+            for line in process.stdout:
+                print(line, end='', flush=True)
+                tail.append(line)
+            status = process.wait()
+        if status == 0:
+            return
+        if attempt == 2 or not transient.search(''.join(tail)):
+            raise subprocess.CalledProcessError(status, command)
+        delay = 15 * (attempt + 1)
+        print(f'Transient dependency download failure; retrying in {delay}s', flush=True)
+        time.sleep(delay)
 
 
 def commit():
@@ -146,8 +169,8 @@ def build(arch):
         'CXXSTDLIB':'c++_static',
         'RUSTFLAGS':'-C link-arg=-Wl,-z,max-page-size=16384',
     })
-    run(['cargo', 'clippy', '-p', 'clash-android', '--target', target, '--release', '--locked', '--', '-D', 'warnings'], cwd=ROOT, env=env)
-    run(['cargo', 'build', '-p', 'clash-android', '--target', target, '--release', '--locked'], cwd=ROOT, env=env)
+    cargo_build(['cargo', 'clippy', '-p', 'clash-android', '--target', target, '--release', '--locked', '--', '-D', 'warnings'], cwd=ROOT, env=env)
+    cargo_build(['cargo', 'build', '-p', 'clash-android', '--target', target, '--release', '--locked'], cwd=ROOT, env=env)
     destination = ANDROID/'app/native-libs'/abi
     destination.mkdir(parents=True, exist_ok=True)
     shutil.copy2(ROOT/'target'/target/'release/libclash_mobile.so', destination)

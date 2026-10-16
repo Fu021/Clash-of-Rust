@@ -71,8 +71,8 @@ jobs:
         continue-on-error: true
         with:
           workspaces: source -> target
-          prefix-key: memory-ubuntu22-${{ inputs.profile }}
-          cache-on-failure: true
+          prefix-key: memory-ubuntu22-v2-${{ inputs.profile }}
+          cache-on-failure: false
           cache-bin: false
           cache-workspace-crates: false
       - uses: actions/setup-python@v6

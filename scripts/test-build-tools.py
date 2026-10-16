@@ -8,7 +8,7 @@ import struct
 import shutil
 import subprocess
 import unittest
-from unittest.mock import patch
+from unittest.mock import MagicMock, patch
 import build_support as build
 import android as android_build
 import workflow_storage as storage
@@ -29,6 +29,30 @@ _defender_spec.loader.exec_module(defender)
 
 
 class BuildTests(unittest.TestCase):
+    def test_android_dependency_retry_is_bounded_and_keeps_compiler_errors(self):
+        def process(status, output):
+            child = MagicMock()
+            child.__enter__.return_value = child
+            child.stdout = output.splitlines(keepends=True)
+            child.wait.return_value = status
+            return child
+        command = ['cargo', 'clippy', '--locked']
+        unavailable = 'fatal: requested URL returned error: 503\n'
+        with patch.object(android_build.subprocess, 'Popen', side_effect=[process(101, unavailable), process(0, 'Finished\n')]) as spawn, \
+             patch.object(android_build.time, 'sleep') as delay:
+            android_build.cargo_build(command)
+            self.assertEqual(spawn.call_count, 2)
+            delay.assert_called_once_with(15)
+        with patch.object(android_build.subprocess, 'Popen', side_effect=[process(101, unavailable) for _ in range(3)]) as spawn, \
+             patch.object(android_build.time, 'sleep'):
+            with self.assertRaises(subprocess.CalledProcessError): android_build.cargo_build(command)
+            self.assertEqual(spawn.call_count, 3)
+        with patch.object(android_build.subprocess, 'Popen', return_value=process(101, 'error[E0308]: mismatched types\n')) as spawn, \
+             patch.object(android_build.time, 'sleep') as delay:
+            with self.assertRaises(subprocess.CalledProcessError): android_build.cargo_build(command)
+            spawn.assert_called_once()
+            delay.assert_not_called()
+
     def test_cache_budget_evicts_old_lockfiles_then_least_recently_used_entries(self):
         def entry(number, key, size, ref='refs/heads/main'):
             return {'id': number, 'key': key, 'size_in_bytes': size, 'ref': ref,

@@ -1,4 +1,4 @@
-name: Rust
+name: CI
 on:
   push:
     branches: [main]
@@ -42,11 +42,33 @@ jobs:
         timeout-minutes: 5
         continue-on-error: true
         with:
-          prefix-key: android-${{ matrix.arch }}
-          cache-on-failure: true
+          prefix-key: android-v2-${{ matrix.arch }}
+          cache-on-failure: false
           cache-bin: false
           cache-workspace-crates: false
           save-if: ${{ github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository }}
+      - name: Identify Skia source dependency
+        if: matrix.arch == 'armv7'
+        id: skia
+        shell: python
+        run: |
+          import os, pathlib, tomllib
+          lock = tomllib.loads(pathlib.Path('Cargo.lock').read_text())
+          package = next(p for p in lock['package'] if p['name'] == 'skia-bindings')
+          with open(os.environ['GITHUB_OUTPUT'], 'a') as output:
+              output.write('version=' + package['version'] + '\n')
+              output.write('checksum=' + package['checksum'] + '\n')
+      - name: Cache complete ARMv7 Skia sources and third-party dependencies
+        if: matrix.arch == 'armv7'
+        uses: actions/cache@v5
+        timeout-minutes: 5
+        continue-on-error: true
+        with:
+          # Cargo's normal registry cache excludes the sources downloaded by
+          # Skia's build script. Include the crate's unpack marker as well, so
+          # Cargo will not discard this tree when extracting the crate again.
+          path: ~/.cargo/registry/src/*/skia-bindings-${{ steps.skia.outputs.version }}
+          key: skia-source-linux-${{ steps.skia.outputs.version }}-${{ steps.skia.outputs.checksum }}
       - uses: actions/setup-java@v5
         with:
           distribution: temurin
@@ -196,8 +218,8 @@ jobs:
         timeout-minutes: 5
         continue-on-error: true
         with:
-          prefix-key: native-release-${{ matrix.os }}
-          cache-on-failure: true
+          prefix-key: native-release-v2-${{ matrix.os }}
+          cache-on-failure: false
           cache-bin: false
           cache-workspace-crates: false
           save-if: ${{ github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository }}
@@ -251,7 +273,7 @@ jobs:
         uses: actions/upload-artifact@v6
         if: always() && runner.os == 'macOS'
         with:
-          name: macos-${{ github.workflow == 'Rust' && 'ci' || 'package' }}-report-${{ matrix.arch }}
+          name: macos-ci-report-${{ matrix.arch }}
           path: target/macos-report
           if-no-files-found: error
           retention-days: 3
