@@ -54,7 +54,8 @@ public class ProxyTunTest {
     }
     private static void verifyPresentation() throws Exception {
         await("Core is running but Slint still reports it as stopped",()->MainActivity.diagnostics().optBoolean("core_running"));
-        await("Default profile has no presented proxy groups",()->MainActivity.diagnostics().optInt("groups")>0);
+        // Large page models are presented lazily. Inspect the real proxy page
+        // after navigation instead of requiring its off-screen rows on Home.
         tab(1,1);
         await("Proxies page has no groups",()->MainActivity.diagnostics().optInt("groups")>0);
         tab(2,2);
