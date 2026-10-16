@@ -245,6 +245,9 @@ jobs:
           url: ${{ steps.tailnet.outcome == 'success' && vars.LOCAL_CACHE_URL || '' }}
           token: ${{ secrets.LOCAL_CACHE_TOKEN }}
           group: tools/android-go
+          # All ABI jobs use the same Linux host tools. The emulator job alone
+          # saves shared downloads after its integration checks pass.
+          save: ${{ matrix.arch == 'x64' }}
           paths: |
             ~/go/pkg/mod
             ~/go/bin/gomobile
@@ -270,6 +273,7 @@ jobs:
           url: ${{ steps.tailnet.outcome == 'success' && vars.LOCAL_CACHE_URL || '' }}
           token: ${{ secrets.LOCAL_CACHE_TOKEN }}
           group: dependencies/gradle-linux
+          save: ${{ matrix.arch == 'x64' }}
           key: gradle-${{ needs.inputs.outputs.gradle }}-java-17-${{ hashFiles('apps/android/**/*.gradle.kts', 'apps/android/gradle.properties') }}
           paths: |
             ~/.gradle/caches/modules-2
@@ -318,6 +322,7 @@ jobs:
           url: ${{ steps.tailnet.outcome == 'success' && vars.LOCAL_CACHE_URL || '' }}
           token: ${{ secrets.LOCAL_CACHE_TOKEN }}
           group: resources/android
+          save: ${{ matrix.arch == 'x64' }}
           paths: apps/android/app/offline-assets
           key: resources-${{ needs.inputs.outputs.resources }}
           restore-keys: resources-
