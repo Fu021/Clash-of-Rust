@@ -131,6 +131,10 @@ export component ActionButton inherits Rectangle {
     in property <bool> enabled: true;
     in property <bool> dropdown: false;
     in property <bool> expanded: false;
+    property <bool> interactive: root.enabled && (UiData.modal == 0 || root.modal-control);
+    // Mouse activation must not leave a focus highlight that resembles selection.
+    property <bool> keyboard-focus: false;
+    property <bool> pressed: root.interactive && area.pressed;
     callback clicked();
     forward-focus: key-scope;
     height: Theme.control-height;
@@ -138,9 +142,12 @@ export component ActionButton inherits Rectangle {
     vertical-stretch: 0;
     horizontal-stretch: 0;
     border-radius: 5px;
-    background: root.primary ? Theme.primary : root.selected ? Theme.accent-wash : area.has-hover ? Theme.inset : Theme.surface;
+    background: root.primary ? (root.pressed ? Theme.primary.darker(0.15) : Theme.primary)
+        : root.selected || root.pressed ? Theme.accent-wash
+        : root.interactive && area.has-hover ? Theme.inset : Theme.surface;
     border-width: 1px;
-    border-color: root.primary ? Theme.primary : root.selected || key-scope.has-focus ? Theme.accent : Theme.line;
+    border-color: root.interactive && root.keyboard-focus && key-scope.has-focus ? Theme.ink
+        : root.primary ? Theme.primary : root.selected || root.pressed ? Theme.accent : Theme.line;
     opacity: root.enabled ? 1 : 0.5;
     button-label := Label {
         width: parent.width - (root.dropdown ? 24px : 0px);
@@ -156,16 +163,18 @@ export component ActionButton inherits Rectangle {
         expanded: root.expanded;
     }
     key-scope := FocusScope {
-        enabled: root.enabled && (UiData.modal == 0 || root.modal-control);
+        enabled: root.interactive;
+        focus-gained(reason) => { root.keyboard-focus = reason == FocusReason.tab-navigation; }
         key-pressed(event) => {
+            root.keyboard-focus = true;
             if event.text == "\n" || event.text == " " { root.clicked(); return accept; }
             return reject;
         }
     }
     area := TouchArea {
-        enabled: root.enabled && (UiData.modal == 0 || root.modal-control);
+        enabled: root.interactive;
         mouse-cursor: pointer;
-        clicked => { key-scope.focus(); root.clicked(); }
+        clicked => { root.keyboard-focus = false; key-scope.focus(); root.clicked(); }
     }
 }
 
