@@ -24,8 +24,16 @@ if (post) {
   fs.appendFileSync(process.env.GITHUB_STATE, `cache_state=${state}\n`);
 }
 const script = path.resolve(__dirname, '../../../scripts/action_cache.py');
-const result = spawnSync('python', [script, post ? 'save' : 'restore', '--state', state], { stdio: 'inherit' });
-if (result.status !== 0) {
+// Cache writes are optional. A slow relay must not turn a tested build into
+// a workflow timeout; incomplete uploads never replace the previous snapshot.
+const result = spawnSync('python', [script, post ? 'save' : 'restore', '--state', state], {
+  stdio: 'inherit', timeout: post ? 10 * 60 * 1000 : undefined,
+});
+if (post && result.error?.code === 'ETIMEDOUT') {
+  const message = 'Private cache save exceeded 10 minutes; build results remain valid and incomplete uploads are discarded.';
+  console.log(`::warning::${message}`);
+  if (process.env.GITHUB_STEP_SUMMARY) fs.appendFileSync(process.env.GITHUB_STEP_SUMMARY, `\n${message}\n`);
+} else if (result.status !== 0) {
   console.log('::warning::Private cache helper failed; normal compilation remains enabled.');
 }
 if (!post) {
