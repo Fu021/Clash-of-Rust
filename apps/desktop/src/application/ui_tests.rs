@@ -80,7 +80,26 @@ fn connection_detail_exposes_all_fields_and_copies_the_same_values() {
         );
     }
     assert!(data.get_modal_copy().contains("下载速度：256.0 KiB/s"));
-    app.snapshot.connections.connections.clear();
+    let _ = app.update(Message::Finished(Box::new(Reply {
+        profile_edit: false,
+        profile_import: false,
+        scope: Scope::Connections,
+        start_requested: false,
+        settings: app.settings.clone(),
+        profiles: None,
+        snapshot: Some(Snapshot {
+            running: true,
+            ..Snapshot::default()
+        }),
+        rule_document: None,
+        rules_applied: false,
+        notice: Ok(String::new()),
+        running: true,
+        geo_status: String::new(),
+        autostart: false,
+        protection_changed: false,
+        tray_nodes: None,
+    })));
     app.present(&data, &mut models);
     assert_eq!(data.get_connection_details().row_count(), 0);
     assert!(data.get_modal_copy().is_empty());
