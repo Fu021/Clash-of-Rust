@@ -85,6 +85,10 @@ fn bootstrap(dns: &mut Mapping) -> Result<()> {
             dns.get(Value::from("nameserver"))
                 .filter(|value| nonempty(value))
         })
+        .or_else(|| {
+            dns.get(Value::from("default-nameserver"))
+                .filter(|value| nonempty(value))
+        })
         .cloned()
         .unwrap_or(serde_yaml::to_value(BOOTSTRAP)?);
     // A bootstrap lookup must never depend on the node it is trying to find.
@@ -99,9 +103,18 @@ fn bootstrap(dns: &mut Mapping) -> Result<()> {
                     .collect();
                 // System/DHCP resolvers have their own native routing. Ordinary
                 // IP, UDP, TCP, DoT and DoH all support the #DIRECT parameter.
-                if address == "system" || address.starts_with("dhcp://") {
+                if address == "system"
+                    || address.starts_with("system://")
+                    || address.starts_with("dhcp://")
+                {
                     return Ok(Value::String(address.to_owned()));
                 }
+                // Appending #DIRECT before normalizing a bare IPv6 literal
+                // prevents mihomo's pure-IP parser from adding the brackets.
+                let address = match address.parse::<std::net::IpAddr>() {
+                    Ok(std::net::IpAddr::V6(ip)) => format!("udp://[{ip}]"),
+                    _ => address.to_owned(),
+                };
                 let mut routed = format!("{address}#DIRECT");
                 for option in options {
                     routed.push('&');
@@ -494,6 +507,14 @@ mod tests {
         // Otherwise a previously working DoH hostname now depends on the same
         // unreachable fixed HTTPS IPs that caused this regression.
         assert!(!dns.contains_key(Value::from("default-nameserver")));
+        let mut dns: Mapping =
+            serde_yaml::from_str("default-nameserver: ['2001:db8::53']\n").unwrap();
+        bootstrap(&mut dns).unwrap();
+        assert_eq!(
+            dns["proxy-server-nameserver"][0],
+            "udp://[2001:db8::53]#DIRECT"
+        );
+        assert_eq!(dns["default-nameserver"][0], "udp://[2001:db8::53]#DIRECT");
     }
     #[cfg(target_os = "macos")]
     #[test]

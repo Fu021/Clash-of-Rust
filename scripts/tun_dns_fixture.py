@@ -68,7 +68,7 @@ async def http(reader, writer):
             body, content_type = json.dumps(METRICS).encode(), 'application/json'
         elif path.startswith('/dns-query?dns='):
             fixed = local in BOOTSTRAP or local == PUBLIC[2]
-            bootstrap = fixed or local == '192.0.2.254'
+            bootstrap = fixed or local in ('192.0.2.254', '2001:db8:1::fe')
             direct = peer in ('192.0.2.1', '2001:db8:1::1')
             if fixed and direct and BLOCK_FIXED_BOOTSTRAP:
                 # Model a network where the chosen public HTTPS IPs cannot be
