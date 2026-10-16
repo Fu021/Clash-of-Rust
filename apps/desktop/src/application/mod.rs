@@ -18,7 +18,7 @@ mod ui_testing;
 mod ui_tests;
 mod window_state;
 use clash_of_rust::{
-    config::{Profile, Settings, Store, ThemeMode},
+    config::{AccentColor, Profile, Settings, Store, ThemeMode},
     connection::{self, Field as ConnectionField, Sort as ConnectionSort},
     engine::{Engine, ProxyMode, Scope, Snapshot},
     ip_check,
@@ -580,6 +580,9 @@ impl App {
         }
         self.busy = true;
         self.working = !matches!(action, Action::Refresh);
+        if let Action::ClaudeProtection(enabled) = &action {
+            self.claude.protection_pending = Some(*enabled);
+        }
         Task::perform(execute(engine, action, scope, self.visible), |reply| {
             Message::Finished(Box::new(reply))
         })
@@ -941,8 +944,11 @@ impl App {
             }
             Message::ApplyWindowSize(revision, size) => {
                 if revision == self.size_revision {
-                    return desktop_runtime::window::latest()
-                        .map(move |id| Message::ResizeWindow(revision, size, id));
+                    return desktop_runtime::window::latest().then(move |id| match id {
+                        Some(id) => desktop_runtime::window::fit_size(id, size)
+                            .map(move |size| Message::ResizeWindow(revision, size, Some(id))),
+                        None => Task::done(Message::ResizeWindow(revision, size, None)),
+                    });
                 }
             }
             Message::ResizeWindow(revision, size, Some(id)) => {
@@ -1468,6 +1474,7 @@ impl App {
                 }
             }
             Message::Finished(reply) => {
+                self.claude.protection_pending = None;
                 let reply = *reply;
                 let protection_changed = reply.protection_changed;
                 if reply.profile_edit

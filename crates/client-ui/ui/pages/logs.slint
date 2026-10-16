@@ -18,7 +18,7 @@ export component LogsPage inherits Rectangle {
                     for entry in UiData.logs: Rectangle {
                         height: max(44px, Theme.body-size * 1.5 + 16px);
                         HorizontalLayout { cross-axis-alignment: center; spacing: Theme.page-gap;
-                            Caption { text: entry.time; width: 66px; }
+                            if entry.time != "": Caption { text: entry.time; width: 66px; horizontal-stretch: 0; }
                             Badge { text: entry.level; tone: entry.tone; width: 52px; }
                             Label { text: entry.message; }
                         }

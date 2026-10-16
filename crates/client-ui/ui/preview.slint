@@ -5,15 +5,17 @@ import { UiData } from "state.slint";
 export component Preview inherits AppWindow {
     in-out property <int> preview-page <=> UiData.page;
     in-out property <bool> preview-dark <=> UiData.dark;
+    in-out property <int> preview-accent <=> UiData.accent;
+    in-out property <bool> preview-protection-pending <=> UiData.protection-pending;
     in-out property <int> dialog;
     in-out property <bool> shortcuts-open <=> UiData.shortcuts-open;
     in-out property <bool> raw-rule <=> UiData.rule-text-mode;
     changed dialog => {
-        UiData.modal = root.dialog == 1 || root.dialog == 2 ? 1 : root.dialog == 3 ? 7 : root.dialog == 5 ? 2 : root.dialog == 6 ? 11 : root.dialog == 10 ? 12 : root.dialog;
+        UiData.modal = root.dialog == 1 || root.dialog == 2 ? 1 : root.dialog == 3 ? 7 : root.dialog == 5 ? 2 : root.dialog == 6 ? 11 : root.dialog == 10 ? 12 : root.dialog == 11 ? 10 : root.dialog;
         UiData.modal-can-accept = true;
-        UiData.modal-title = root.dialog == 1 ? "删除订阅？" : root.dialog == 2 ? "放弃未保存的修改？" : root.dialog == 3 ? "开启 Claude 保护？" : root.dialog == 4 ? "新建规则" : root.dialog == 5 ? "编辑订阅" : root.dialog == 6 ? "Netflix · 检测详情" : "强调色";
-        UiData.modal-description = root.dialog == 1 ? "将删除“备用订阅”及其配置文件。此操作无法撤销。" : root.dialog == 2 ? "尚有未应用的修改。放弃后将恢复已保存的规则。" : root.dialog == 3 ? "将固定当前节点，启用 TUN、代理 DNS、广泛规则与实时拦截。共享服务可能影响其他应用，关闭后恢复原设置。" : root.dialog == 6 ? "检测结果：确认可用\n识别地区：德国\n响应时间：128 ms\n\n以下为固定演示数据，不代表真实网络检测。" : root.dialog == 10 ? "强调色选择界面预留；暂不改变全局配色或保存设置。" : "";
-        UiData.modal-accept = root.dialog == 1 ? "删除订阅" : root.dialog == 2 ? "放弃修改" : root.dialog == 3 ? "开启保护" : root.dialog == 10 ? "完成" : root.dialog == 6 ? "" : "保存";
+        UiData.modal-title = root.dialog == 1 ? "删除订阅？" : root.dialog == 2 ? "放弃未保存的修改？" : root.dialog == 3 ? "开启 Claude 保护？" : root.dialog == 4 ? "新建规则" : root.dialog == 5 ? "编辑订阅" : root.dialog == 6 ? "Netflix · 检测详情" : root.dialog == 11 ? "连接详情" : "强调色";
+        UiData.modal-description = root.dialog == 1 ? "将删除“备用订阅”及其配置文件。此操作无法撤销。" : root.dialog == 2 ? "尚有未应用的修改。放弃后将恢复已保存的规则。" : root.dialog == 3 ? "将固定当前节点，启用 TUN、代理 DNS、广泛规则与实时拦截。共享服务可能影响其他应用，关闭后恢复原设置。" : root.dialog == 6 ? "检测结果：确认可用\n识别地区：德国\n响应时间：128 ms\n\n以下为固定演示数据，不代表真实网络检测。" : "";
+        UiData.modal-accept = root.dialog == 1 ? "删除订阅" : root.dialog == 2 ? "放弃修改" : root.dialog == 3 ? "开启保护" : root.dialog == 10 ? "完成" : root.dialog == 6 || root.dialog == 11 ? "" : "保存";
         UiData.modal-danger = root.dialog == 1 || root.dialog == 2;
         if root.dialog >= 7 && root.dialog <= 9 {
             UiData.modal = 0;
@@ -26,6 +28,17 @@ export component Preview inherits AppWindow {
         UiData.profile = "我的订阅"; UiData.node = "德国 01 · IPv6";
         UiData.download-rate = "1.24 MiB/s"; UiData.upload-rate = "28.6 KiB/s";
         UiData.connection-count = "24"; UiData.download-total = "386 MiB"; UiData.upload-total = "21.7 MiB";
+        UiData.protection-status = "正在开启保护，切换 TUN、规则与 DNS…";
+        UiData.connection-details = [
+            {label: "连接名称", value: "api.github.com"}, {label: "域名", value: "api.github.com"},
+            {label: "嗅探域名", value: "api.github.com"}, {label: "目标 IP", value: "140.82.112.6"},
+            {label: "目标端口", value: "443"}, {label: "协议", value: "tcp"},
+            {label: "匹配规则", value: "DOMAIN-SUFFIX github.com"},
+            {label: "代理链", value: "Proxy → 自动选择 → 德国 01 · IPv6"},
+            {label: "上传速度", value: "2.4 KiB/s"}, {label: "下载速度", value: "128 KiB/s"},
+            {label: "累计上传", value: "24 KiB"}, {label: "累计下载", value: "1.8 MiB"},
+            {label: "开始时间", value: "2026-10-16T10:31:20.123+08:00"},
+            {label: "连接 ID", value: "9f1a0f02-d63e-4cfe-832e-4ed947af10de"}];
         UiData.page-status = "3 条 · 1–3";
         UiData.groups = [{id: "Proxy", title: "Proxy", detail: "Selector · 6 个节点", current: "德国 01 · IPv6", expanded: true, testing: false, page: "6 个节点 · 1–6", previous: false, next: false,
             nodes: [
@@ -56,10 +69,10 @@ export component Preview inherits AppWindow {
             {id: "5", position: "5", kind: "GEOIP", value: "CN", policy: "DIRECT", source: "订阅", selected: false, enabled: true},
             {id: "6", position: "6", kind: "MATCH", value: "", policy: "Proxy", source: "订阅", selected: false, enabled: true}];
         UiData.logs = [
-            {time: "10:30:00", level: "INFO", message: "mihomo 已启动，控制接口可用", tone: 4},
-            {time: "10:30:01", level: "INFO", message: "配置已更新并生效", tone: 4},
-            {time: "10:31:20", level: "WARN", message: "DNS query failed, retrying", tone: 2},
-            {time: "10:31:25", level: "ERROR", message: "connection timeout: api.example.org:443", tone: 3}];
+            {time: "", level: "INFO", message: "mihomo 已启动，控制接口可用", tone: 4},
+            {time: "", level: "INFO", message: "配置已更新并生效", tone: 4},
+            {time: "", level: "WARN", message: "DNS query failed, retrying", tone: 2},
+            {time: "", level: "ERROR", message: "connection timeout: api.example.org:443", tone: 3}];
         UiData.test-url = "https://www.gstatic.com/generate_204"; UiData.dns-host = "github.com";
         UiData.network-results = ["网站响应 · HTTP 204 · 42 ms", "出口 IP · 203.0.113.42 · 德国", "系统 DNS · github.com → 140.82.112.4"];
         UiData.sites-started = true; UiData.site-progress = "完成 183 / 183"; UiData.site-fraction = 1;

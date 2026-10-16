@@ -40,6 +40,9 @@ pub fn latest() -> Task<Option<Id>> {
 pub fn size(id: Id) -> Task<Size> {
     native::call(move |host| host.window_size(id))
 }
+pub fn fit_size(id: Id, desired: Size) -> Task<Size> {
+    native::call(move |host| host.fit_window_size(id, desired))
+}
 pub fn is_maximized(id: Id) -> Task<bool> {
     native::call(move |host| host.maximized(id))
 }

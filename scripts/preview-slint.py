@@ -37,6 +37,7 @@ DIALOGS = {
     "ai-normal": ("正常项目详情", "ai-check", 8),
     "ai-clues": ("其他线索详情", "ai-check", 9),
     "accent-picker": ("强调色选择", "settings", 10),
+    "connection-details": ("连接详情", "connections", 11),
 }
 
 

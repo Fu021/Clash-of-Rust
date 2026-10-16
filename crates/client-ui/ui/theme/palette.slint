@@ -25,9 +25,10 @@ export global Theme {
     out property <color> muted: dark ? #a3afbf : #64748b;
     out property <color> line: dark ? #3c4b5d : #d2d9e3;
     out property <color> subtle-line: dark ? #334155 : #e2e8f0;
-    out property <color> accent: dark ? #8ce3c4 : #0f766e;
-    out property <color> accent-wash: dark ? #254137 : #e7f4f0;
-    out property <color> primary: #0f766e;
+    in-out property <int> accent-index: 0;
+    out property <color> accent: dark ? AccentPalette.dark-colors[accent-index] : AccentPalette.accent-colors[accent-index];
+    out property <color> accent-wash: dark ? AccentPalette.dark-washes[accent-index] : AccentPalette.light-washes[accent-index];
+    out property <color> primary: AccentPalette.accent-colors[accent-index];
     out property <color> success: dark ? #86efac : #166534;
     out property <color> success-wash: dark ? #203c34 : #edf8f0;
     out property <color> warning: dark ? #fcd34d : #92400e;
@@ -36,10 +37,11 @@ export global Theme {
     out property <color> danger-wash: dark ? #402c39 : #fef2f2;
 }
 
-// Session-only accent picker placeholder; never changes network or saved settings.
-export global AccentPreview {
-    // This only changes the picker/its button. It does not change Theme or settings.
-    in-out property <int> accent-preview: 0;
+// Shared swatches; the saved selection belongs to the application settings.
+export global AccentPalette {
     out property <[string]> accent-names: ["青绿", "蓝色", "紫色", "玫红", "琥珀", "石墨"];
     out property <[color]> accent-colors: [#0f766e, #2563eb, #7c3aed, #be185d, #b45309, #475569];
+    out property <[color]> dark-colors: [#8ce3c4, #93c5fd, #c4b5fd, #f9a8d4, #fcd34d, #cbd5e1];
+    out property <[color]> dark-washes: [#254137, #233a56, #362c50, #49283d, #433726, #334155];
+    out property <[color]> light-washes: [#e7f4f0, #eff6ff, #f3e8ff, #fdf2f8, #fffbeb, #f1f5f9];
 }

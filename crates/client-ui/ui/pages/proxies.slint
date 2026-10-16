@@ -1,7 +1,7 @@
 import { ScrollView } from "std-widgets.slint";
 import { Theme } from "../theme/palette.slint";
 import { UiData, UiActions, Intent, NodeItem } from "../state.slint";
-import { Label, Caption, Heading, ContentPanel, RowPanel, ActionButton, Badge, Field, Select } from "../components/controls.slint";
+import { Label, Caption, Heading, Chevron, ContentPanel, RowPanel, ActionButton, Badge, Field, Select } from "../components/controls.slint";
 
 component NodeCard inherits ContentPanel {
     in property <NodeItem> node;
@@ -32,10 +32,16 @@ export component ProxiesPage inherits Rectangle {
             }
             for group in UiData.groups: ContentPanel {
                 HorizontalLayout { cross-axis-alignment: center; spacing: Theme.content-gap;
-                    VerticalLayout { spacing: 4px; Heading { text: group.title; } Caption { text: group.detail; } }
-                    Badge { text: group.current; width-limit: root.width * 0.34; }
+                    header := Rectangle {
+                        horizontal-stretch: 1; height: max(Theme.control-height, heading.preferred-height);
+                        heading := HorizontalLayout { spacing: Theme.content-gap; cross-axis-alignment: center;
+                            VerticalLayout { spacing: 4px; Heading { text: group.title; } Caption { text: group.detail; } }
+                            Badge { text: group.current; width-limit: root.width * 0.28; }
+                            Chevron { expanded: group.expanded; }
+                        }
+                        TouchArea { mouse-cursor: pointer; clicked => { UiActions.dispatch(Intent.toggle-group, group.id, ""); } }
+                    }
                     ActionButton { text: group.testing ? "测速中…" : "全部测速"; enabled: UiData.running && !UiData.working && !group.testing; clicked => { UiActions.dispatch(Intent.group-delay, group.id, ""); } }
-                    ActionButton { text: group.expanded ? "收起" : "展开"; dropdown: true; expanded: group.expanded; clicked => { UiActions.dispatch(Intent.toggle-group, group.id, ""); } }
                 }
                 if group.expanded: VerticalLayout {
                     spacing: Theme.page-gap;

@@ -1,9 +1,9 @@
 import { ScrollView } from "std-widgets.slint";
-import { Theme, AccentPreview } from "../theme/palette.slint";
+import { Theme, AccentPalette } from "../theme/palette.slint";
 import { UiData, UiActions, Intent } from "../state.slint";
 import { Label, Caption, Paragraph, Heading, Panel, ContentPanel, ActionButton, Field, Select, SettingRow } from "../components/controls.slint";
 export component AppDialog inherits Rectangle {
-    in-out property <int> selected-accent: AccentPreview.accent-preview;
+    in-out property <int> selected-accent: UiData.accent;
     background: #00000065;
     TouchArea { }
     init => { modal-focus.focus(); }
@@ -85,9 +85,18 @@ export component AppDialog inherits Rectangle {
                             ActionButton { modal-control: true; text: "小流量测速"; enabled: UiData.running && !UiData.claude-busy; clicked => { UiActions.dispatch(Intent.claude-additional, "speed", ""); } }
                         }
                     }
-                    if UiData.modal == 10 || UiData.modal == 11: VerticalLayout {
-                        spacing: Theme.page-gap;
-                        ActionButton { modal-control: true; text: "复制详情"; clicked => { UiActions.dispatch(Intent.copy, UiData.modal-description, ""); } }
+                    if UiData.modal == 10: VerticalLayout {
+                        spacing: 0px;
+                        for item[i] in UiData.connection-details: Rectangle {
+                            height: max(44px, detail-row.preferred-height);
+                            background: mod(i, 2) == 0 ? Theme.inset : transparent;
+                            detail-row := HorizontalLayout {
+                                padding-left: 12px; padding-right: 12px; padding-top: 10px; padding-bottom: 10px;
+                                spacing: Theme.page-gap; cross-axis-alignment: start;
+                                Caption { text: item.label; width: 100px * Theme.text-scale; horizontal-stretch: 0; }
+                                Paragraph { text: item.value; }
+                            }
+                        }
                     }
                     if UiData.modal == 12: VerticalLayout {
                         spacing: Theme.page-gap;
@@ -97,8 +106,8 @@ export component AppDialog inherits Rectangle {
                                 border-radius: 8px; border-width: 1px;
                                 border-color: root.selected-accent == row * 3 + column ? Theme.accent : Theme.line;
                                 background: root.selected-accent == row * 3 + column ? Theme.accent-wash : Theme.surface;
-                                Rectangle { x: 12px; y: (parent.height - self.height) / 2; width: 24px; height: 24px; border-radius: 12px; background: AccentPreview.accent-colors[row * 3 + column]; }
-                                Label { x: 44px; height: parent.height; width: parent.width - 48px; text: AccentPreview.accent-names[row * 3 + column]; }
+                                Rectangle { x: 12px; y: (parent.height - self.height) / 2; width: 24px; height: 24px; border-radius: 12px; background: AccentPalette.accent-colors[row * 3 + column]; }
+                                Label { x: 44px; height: parent.height; width: parent.width - 48px; text: AccentPalette.accent-names[row * 3 + column]; }
                                 TouchArea { mouse-cursor: pointer; clicked => { root.selected-accent = row * 3 + column; } }
                             }
                         }
@@ -107,12 +116,17 @@ export component AppDialog inherits Rectangle {
                 }
             }
             HorizontalLayout { cross-axis-alignment: center; spacing: Theme.content-gap;
+                if UiData.modal == 10 || UiData.modal == 11: ActionButton {
+                    modal-control: true; text: "复制详情";
+                    enabled: UiData.modal != 10 || UiData.connection-details.length > 0;
+                    clicked => { UiActions.dispatch(Intent.copy, UiData.modal == 10 ? UiData.modal-copy : UiData.modal-description, ""); }
+                }
                 Rectangle { horizontal-stretch: 1; }
                 ActionButton { modal-control: true; text: UiData.modal-accept == "" ? "关闭" : "取消"; clicked => { UiActions.dispatch(Intent.cancel-confirm, "", ""); } }
                 if UiData.modal-accept != "": ActionButton { modal-control: true;
                     text: UiData.modal-accept; primary: !UiData.modal-danger; danger: UiData.modal-danger;
                     enabled: UiData.modal-can-accept && !UiData.working && !UiData.exiting;
-                    clicked => { if UiData.modal == 12 { AccentPreview.accent-preview = root.selected-accent; } UiActions.dispatch(Intent.confirm, "", ""); }
+                    clicked => { if UiData.modal == 12 { UiActions.dispatch(Intent.accent-color, "" + root.selected-accent, ""); } else { UiActions.dispatch(Intent.confirm, "", ""); } }
                 }
             }
         }

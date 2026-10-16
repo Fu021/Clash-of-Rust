@@ -28,6 +28,28 @@ pub enum ThemeMode {
     Light,
     Dark,
 }
+
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum AccentColor {
+    #[default]
+    Teal,
+    Blue,
+    Purple,
+    Rose,
+    Amber,
+    Slate,
+}
+impl AccentColor {
+    pub const ALL: [Self; 6] = [
+        Self::Teal,
+        Self::Blue,
+        Self::Purple,
+        Self::Rose,
+        Self::Amber,
+        Self::Slate,
+    ];
+}
 impl std::fmt::Display for ThemeMode {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.write_str(match self {
@@ -47,6 +69,7 @@ pub struct Settings {
     pub dark: bool,
     // None preserves the explicit theme of settings saved by older versions.
     pub theme_mode: Option<ThemeMode>,
+    pub accent_color: AccentColor,
     pub text_scale: u16,
     pub tray_speed: bool,
     pub dns_override: bool,
@@ -83,6 +106,7 @@ impl Default for Settings {
             secret: uuid::Uuid::new_v4().to_string(),
             dark: defaults.dark,
             theme_mode: None,
+            accent_color: AccentColor::default(),
             text_scale: 100,
             tray_speed: false,
             dns_override: true,
@@ -544,6 +568,7 @@ mod tests {
         let old: super::Settings = serde_json::from_str(r#"{"dark":false}"#).unwrap();
         assert!(!old.dark);
         assert!(old.theme_mode.is_none());
+        assert_eq!(old.accent_color, AccentColor::Teal);
         assert_eq!(old.text_scale, 100);
         assert!(!old.tray_speed);
         for scale in [0, 79, 151, u16::MAX] {
@@ -555,6 +580,20 @@ mod tests {
                 .validate()
                 .is_err()
             );
+        }
+    }
+    #[test]
+    fn accent_selection_is_saved_and_restored_without_changing_network_settings() {
+        let directory = tempfile::tempdir().unwrap();
+        let store = Store::at(directory.path().to_owned()).unwrap();
+        let mut settings = store.load_settings().unwrap();
+        let initial_port = settings.mixed_port;
+        for color in AccentColor::ALL {
+            settings.accent_color = color;
+            store.save_settings(&settings).unwrap();
+            let loaded = store.load_settings().unwrap();
+            assert_eq!(loaded.accent_color, color);
+            assert_eq!(loaded.mixed_port, initial_port);
         }
     }
     use super::*;

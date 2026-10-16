@@ -61,6 +61,33 @@ fn projection_reuses_models_and_releases_hidden_and_inactive_lists() {
 }
 
 #[test]
+fn connection_detail_exposes_all_fields_and_copies_the_same_values() {
+    ui_testing::initialize(950, 700);
+    let mut app = fixture(Page::Connections);
+    let window = AppWindow::new().unwrap();
+    let data = window.global::<UiData>();
+    let mut models = ViewModels::default();
+    models.attach(&data);
+    let _ = app.intent(Intent::ConnectionDetail, "1", "");
+    app.present(&data, &mut models);
+    let details = data.get_connection_details();
+    assert_eq!(details.row_count(), 14);
+    for row in details.iter() {
+        assert!(!row.value.is_empty());
+        assert!(
+            data.get_modal_copy()
+                .contains(&format!("{}：{}", row.label, row.value))
+        );
+    }
+    assert!(data.get_modal_copy().contains("下载速度：256.0 KiB/s"));
+    app.snapshot.connections.connections.clear();
+    app.present(&data, &mut models);
+    assert_eq!(data.get_connection_details().row_count(), 0);
+    assert!(data.get_modal_copy().is_empty());
+    assert!(data.get_modal_description().contains("已结束"));
+}
+
+#[test]
 fn imported_file_reaches_dialog_and_cancel_or_exit_requires_confirmation() {
     let mut app = fixture(Page::Profiles);
     app.profile_name.clear();
@@ -124,6 +151,12 @@ fn clicking_a_node_selects_it_but_its_latency_button_only_tests_it() {
         events.borrow().as_slice(),
         &[(Intent::SelectNode, "Proxy".into(), "node-a".into())],
         "clicking the card must select the node in its own group"
+    );
+    events.borrow_mut().clear();
+    click(260.0, 205.0);
+    assert_eq!(
+        events.borrow().as_slice(),
+        &[(Intent::ToggleGroup, "Proxy".into(), "".into())]
     );
     events.borrow_mut().clear();
     click(507.0, 298.0);

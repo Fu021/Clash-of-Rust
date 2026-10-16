@@ -13,6 +13,21 @@ use std::{
 };
 use tokio::sync::Mutex;
 
+#[cfg(any(target_os = "macos", test))]
+pub(super) fn fit_size(desired: Size, available: Size) -> Size {
+    let fit = |value: f32, limit: f32, minimum: f32| {
+        if limit.is_finite() && limit >= minimum {
+            value.min(limit.floor())
+        } else {
+            value
+        }
+    };
+    Size::new(
+        fit(desired.width, available.width, MIN_WINDOW_SIZE.width),
+        fit(desired.height, available.height, MIN_WINDOW_SIZE.height),
+    )
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 struct Dimensions {
     width: u16,
@@ -135,6 +150,22 @@ impl State {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn default_size_respects_the_available_content_area_on_small_screens() {
+        assert_eq!(
+            fit_size(DEFAULT_WINDOW_SIZE, Size::new(1440.0, 670.0)),
+            Size::new(950.0, 670.0)
+        );
+        assert_eq!(
+            fit_size(DEFAULT_WINDOW_SIZE, Size::new(1440.0, 900.0)),
+            DEFAULT_WINDOW_SIZE
+        );
+        assert_eq!(
+            fit_size(DEFAULT_WINDOW_SIZE, Size::new(f32::NAN, 0.0)),
+            DEFAULT_WINDOW_SIZE
+        );
+    }
 
     #[test]
     fn only_valid_ordinary_logical_dimensions_replace_the_saved_size() {

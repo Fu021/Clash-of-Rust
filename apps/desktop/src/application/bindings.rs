@@ -266,6 +266,23 @@ impl native::Host for DesktopHost {
             .as_ref()
             .is_some_and(|(current, window)| *current == id && window.window().is_maximized())
     }
+    fn fit_window_size(&self, _id: window::Id, desired: Size) -> Size {
+        #[cfg(target_os = "macos")]
+        if let Some((current, window)) = &self.window
+            && *current == _id
+            && let Some(Some(size)) = window.window().with_winit_window(|native| {
+                use winit::raw_window_handle::{HasWindowHandle, RawWindowHandle};
+                let handle = native.window_handle().ok()?;
+                let RawWindowHandle::AppKit(handle) = handle.as_raw() else {
+                    return None;
+                };
+                mac_desktop::available_content_size(handle.ns_view)
+            })
+        {
+            return window_state::fit_size(desired, size);
+        }
+        desired
+    }
     fn minimized(&self, id: window::Id) -> Option<bool> {
         self.window
             .as_ref()
@@ -557,6 +574,17 @@ impl App {
             }),
             Intent::TextScale => Message::TextScale(a.trim_end_matches('%').parse().unwrap_or(100)),
             Intent::AccentPicker => Message::AccentDialog(true),
+            Intent::AccentColor => {
+                let Some(color) = a
+                    .parse::<usize>()
+                    .ok()
+                    .and_then(|i| AccentColor::ALL.get(i).copied())
+                else {
+                    return Task::none();
+                };
+                self.accent_open = false;
+                Message::Action(Action::Accent(color))
+            }
             Intent::TraySpeed => Message::TraySpeed(boolean(a)),
             Intent::DnsOverride => Message::Action(Action::DnsOverride(boolean(a))),
             Intent::Ipv6 => Message::Action(Action::Ipv6(boolean(a))),

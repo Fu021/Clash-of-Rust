@@ -109,7 +109,7 @@ export component SettingsSection inherits Rectangle {
     }
 }
 
-component Chevron inherits Path {
+export component Chevron inherits Path {
     in property <bool> expanded: false;
     width: 12px;
     height: 12px;
@@ -190,6 +190,7 @@ export component Badge inherits Rectangle {
 
 export component AccentChoice inherits Rectangle {
     in property <bool> modal-control: false;
+    in property <bool> enabled: true;
     in property <string> text;
     in property <color> swatch;
     callback clicked();
@@ -203,7 +204,7 @@ export component AccentChoice inherits Rectangle {
     Rectangle { x: 12px; y: (parent.height - self.height) / 2; width: 18px; height: 18px; border-radius: 9px; background: root.swatch; }
     Label { x: 40px; y: 0px; width: parent.width - 67px; height: parent.height; text: root.text; }
     Chevron { x: parent.width - 24px; y: (parent.height - self.height) / 2; }
-    area := TouchArea { mouse-cursor: pointer; clicked => { root.clicked(); } }
+    area := TouchArea { enabled: root.enabled; mouse-cursor: pointer; clicked => { root.clicked(); } }
 }
 
 export component Field inherits Rectangle {

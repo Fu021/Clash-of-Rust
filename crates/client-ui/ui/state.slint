@@ -18,13 +18,14 @@ export enum Intent {
     claude-start, claude-cancel, claude-close-session, claude-protection, claude-confirm-protection,
     claude-filter, claude-page, claude-guide, claude-browser, claude-copy-script,
     claude-import, claude-export, claude-key, claude-save-key, claude-additional,
-    appearance, text-scale, accent-picker, tray-speed, dns-override, ipv6, udp,
+    appearance, text-scale, accent-picker, accent-color, tray-speed, dns-override, ipv6, udp,
     autostart, controller-port, mixed-port, save-ports, window-width, window-height,
     reset-window, interval-input, save-interval, update-geo,
     check-update, install-update, cancel-update, open-release,
     confirm, cancel-confirm, close-detail, copy, escape, focus-search, quit,
 }
 export struct Choice { id: string, label: string }
+export struct DetailItem { label: string, value: string }
 export struct NodeItem { group: string, name: string, kind: string, delay: string, selected: bool, valid: bool }
 export struct NodePair { left: NodeItem, right: NodeItem }
 export struct GroupItem { id: string, title: string, detail: string, current: string, expanded: bool, testing: bool, page: string, previous: bool, next: bool, nodes: [NodePair] }
@@ -39,6 +40,11 @@ export struct CategoryPair { left: CategoryItem, right: CategoryItem }
 
 export global UiActions { callback dispatch(Intent, string, string); }
 export global UiData {
+    in-out property <int> accent;
+    in-out property <[DetailItem]> connection-details;
+    in-out property <string> modal-copy;
+    in-out property <bool> protection-pending;
+    in-out property <string> protection-status;
     in-out property <int> page;
     in-out property <string> version;
     in-out property <bool> ready;

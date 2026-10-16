@@ -26,11 +26,19 @@ export component AiCheckPage inherits Rectangle {
                 border-color: UiData.protected ? Theme.accent : Theme.line;
                 HorizontalLayout { cross-axis-alignment: center; spacing: Theme.content-gap;
                     Heading { text: "Claude 保护"; horizontal-stretch: 0; }
-                    Badge { text: UiData.protected ? "已开启" : "未开启"; tone: UiData.protected ? 1 : 4; }
+                    Badge { text: UiData.protection-pending ? "切换中…" : UiData.protected ? "已开启" : "未开启"; tone: UiData.protected ? 1 : 4; }
                     Rectangle { horizontal-stretch: 1; }
                     Toggle { enabled: !UiData.working && !UiData.exiting && !UiData.claude-busy && (UiData.running || UiData.protected); checked: UiData.protected; toggled(value) => { UiActions.dispatch(Intent.claude-protection, value ? "true" : "false", ""); } }
                 }
-                Caption { text: UiData.protected ? "保护节点：" + UiData.protection-node : "一键启用 TUN、广泛规则、代理 DNS 与实时拦截"; }
+                Caption { text: UiData.protection-pending ? UiData.protection-status : UiData.protected ? "保护节点：" + UiData.protection-node : "一键启用 TUN、广泛规则、代理 DNS 与实时拦截"; }
+                if UiData.protection-pending: Rectangle {
+                    height: 3px; background: Theme.subtle-line; clip: true;
+                    Rectangle {
+                        height: parent.height; width: parent.width * 0.25;
+                        x: (parent.width + self.width) * mod(animation-tick(), 1400ms) / 1400ms - self.width;
+                        background: Theme.accent;
+                    }
+                }
                 Caption { text: "可能影响其他应用与国内网站；关闭后恢复原状态。"; color: Theme.warning; }
             }
             HorizontalLayout { cross-axis-alignment: center; spacing: Theme.content-gap;

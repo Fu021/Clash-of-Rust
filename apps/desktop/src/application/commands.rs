@@ -9,6 +9,7 @@ pub(super) enum Action {
     SaveRules(String, ProfileRules),
     LoadRules(String),
     Appearance(ThemeMode),
+    Accent(AccentColor),
     TextScale(u16),
     TraySpeed(bool),
     DnsOverride(bool),
@@ -113,6 +114,14 @@ pub(super) async fn execute(
                 };
                 engine.save_settings(settings).await?;
                 Ok("外观已自动保存".into())
+            }
+            Action::Accent(accent_color) => {
+                let settings = Settings {
+                    accent_color,
+                    ..engine.settings.clone()
+                };
+                engine.save_settings(settings).await?;
+                Ok("强调色已自动保存".into())
             }
             Action::TextScale(text_scale) => {
                 let settings = Settings {

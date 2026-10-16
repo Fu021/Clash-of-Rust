@@ -7,6 +7,7 @@ pub trait Host {
     fn current_window(&self) -> Option<window::Id>;
     fn open_window(&mut self, id: window::Id, settings: window::Settings);
     fn window_size(&self, id: window::Id) -> Size;
+    fn fit_window_size(&self, id: window::Id, desired: Size) -> Size;
     fn maximized(&self, id: window::Id) -> bool;
     fn minimized(&self, id: window::Id) -> Option<bool>;
     fn window_command(&mut self, id: window::Id, command: window::Command);

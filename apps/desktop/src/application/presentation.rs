@@ -40,6 +40,55 @@ fn tone(status: Status) -> i32 {
     }
 }
 
+fn connection_details(connection: &clash_of_rust::api::Connection) -> Vec<DetailItem> {
+    let rate = |value: Option<u64>| {
+        value.map_or_else(|| "—".into(), |value| format!("{}/s", bytes(value)))
+    };
+    [
+        ("连接名称", connection::name(connection).to_owned()),
+        ("域名", connection.metadata.host.to_string()),
+        ("嗅探域名", connection.metadata.sniff_host.to_string()),
+        ("目标 IP", connection.metadata.destination_ip.to_string()),
+        ("目标端口", connection.metadata.destination_port.to_string()),
+        ("协议", connection.metadata.network.to_string()),
+        (
+            "匹配规则",
+            format!("{} {}", connection.rule, connection.rule_payload)
+                .trim()
+                .to_owned(),
+        ),
+        (
+            "代理链",
+            connection
+                .chains
+                .iter()
+                .rev()
+                .map(|name| name.as_str())
+                .collect::<Vec<_>>()
+                .join(" → "),
+        ),
+        ("上传速度", rate(connection.rates.map(|value| value.upload))),
+        (
+            "下载速度",
+            rate(connection.rates.map(|value| value.download)),
+        ),
+        ("累计上传", bytes(connection.upload)),
+        ("累计下载", bytes(connection.download)),
+        ("开始时间", connection.start.to_string()),
+        ("连接 ID", connection.id.to_string()),
+    ]
+    .into_iter()
+    .map(|(label, value)| DetailItem {
+        label: label.into(),
+        value: if value.is_empty() {
+            "—".into()
+        } else {
+            value.into()
+        },
+    })
+    .collect()
+}
+
 impl App {
     pub(super) fn proxy_rows(&self) -> (usize, Vec<(GroupItem, Vec<NodePair>)>) {
         let query = self.query.to_lowercase();
@@ -270,6 +319,7 @@ impl App {
         set!(get_working, set_working, self.working);
         set!(get_exiting, set_exiting, self.exiting);
         set!(get_dark, set_dark, self.dark);
+        set!(get_accent, set_accent, self.settings.accent_color as i32);
         set!(
             get_appearance,
             set_appearance,
@@ -833,6 +883,15 @@ impl App {
         data.set_claude_status(self.claude.status.as_str().into());
         data.set_claude_error(self.claude.error);
         data.set_claude_guard(self.claude.guard_status.as_str().into());
+        data.set_protection_pending(self.claude.protection_pending.is_some());
+        data.set_protection_status(
+            match self.claude.protection_pending {
+                Some(true) => "正在开启保护，切换 TUN、规则与 DNS…",
+                Some(false) => "正在关闭保护，恢复原网络状态…",
+                None => "",
+            }
+            .into(),
+        );
         data.set_protection_node(
             self.settings
                 .claude_protection
@@ -956,6 +1015,9 @@ impl App {
         data.set_modal_accept("".into());
         data.set_modal_danger(false);
         data.set_modal_can_accept(!self.working && !self.exiting);
+        if self.connection_detail.is_none() {
+            data.set_connection_details(model(data.get_connection_details(), Vec::new()));
+        }
         let kind;
         if let Some(confirmation) = &self.confirmation {
             kind = 1;
@@ -1029,35 +1091,24 @@ impl App {
         } else if let Some(id) = &self.connection_detail {
             kind = 10;
             data.set_modal_title("连接详情".into());
-            let value = self
+            let connection = self
                 .snapshot
                 .connections
                 .connections
                 .iter()
-                .find(|connection| connection.id.as_ref() == id)
-                .map_or_else(
-                    || "该连接已结束。".into(),
-                    |connection| {
-                        format!(
-                            "{}:{}\n规则：{} {}\n线路：{}\n上传：{}\n下载：{}\n开始：{}",
-                            connection::name(connection),
-                            connection.metadata.destination_port,
-                            connection.rule,
-                            connection.rule_payload,
-                            connection
-                                .chains
-                                .iter()
-                                .rev()
-                                .map(|name| name.as_str())
-                                .collect::<Vec<_>>()
-                                .join(" → "),
-                            bytes(connection.upload),
-                            bytes(connection.download),
-                            format::date_text(&connection.start)
-                        )
-                    },
-                );
-            data.set_modal_description(value.into());
+                .find(|connection| connection.id.as_ref() == id);
+            let rows = connection.map_or_else(Vec::new, connection_details);
+            data.set_modal_copy(
+                rows.iter()
+                    .map(|row| format!("{}：{}", row.label, row.value))
+                    .collect::<Vec<_>>()
+                    .join("\n")
+                    .into(),
+            );
+            data.set_connection_details(model(data.get_connection_details(), rows));
+            if connection.is_none() {
+                data.set_modal_description("此连接已结束，详情不再保留。".into());
+            }
         } else if let Some(index) = self.site_detail {
             kind = 11;
             let service = &ip_check::services()[index];

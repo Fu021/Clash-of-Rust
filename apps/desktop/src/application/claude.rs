@@ -47,6 +47,7 @@ pub enum Event {
 
 #[derive(Default)]
 pub struct State {
+    pub protection_pending: Option<bool>,
     pub results_page: usize,
     pub results_filter: Option<ResultKind>,
     pub audit: Option<check::audit::Audit>,

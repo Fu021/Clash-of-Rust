@@ -1,5 +1,5 @@
 import { ScrollView } from "std-widgets.slint";
-import { Theme, AccentPreview } from "../theme/palette.slint";
+import { Theme, AccentPalette } from "../theme/palette.slint";
 import { UiData, UiActions, Intent } from "../state.slint";
 import { Label, Caption, ContentPanel, RowPanel, SettingsSection, ActionButton, AccentChoice, SettingRow, Divider, Field, Select, Paragraph } from "../components/controls.slint";
 export component SettingsPage inherits Rectangle {
@@ -19,13 +19,12 @@ export component SettingsPage inherits Rectangle {
                     Divider { }
                     HorizontalLayout { cross-axis-alignment: center;
                         Label { text: "强调色"; }
-                        AccentChoice { text: AccentPreview.accent-names[AccentPreview.accent-preview]; swatch: AccentPreview.accent-colors[AccentPreview.accent-preview]; clicked => { UiActions.dispatch(Intent.accent-picker, "", ""); } }
+                        AccentChoice { text: AccentPalette.accent-names[UiData.accent]; swatch: AccentPalette.accent-colors[UiData.accent]; enabled: !UiData.working; clicked => { UiActions.dispatch(Intent.accent-picker, "", ""); } }
                     }
                     Divider { }
                     HorizontalLayout { cross-axis-alignment: center; spacing: Theme.content-gap;
                         Label { text: "字号"; }
                         Select { width: 100px; horizontal-stretch: 0; value: "" + UiData.text-scale + "%"; options: ["80%", "90%", "100%", "110%", "125%", "150%"]; selected(index) => { UiActions.dispatch(Intent.text-scale, self.options[index], ""); } }
-                        ActionButton { text: "恢复默认窗口大小"; clicked => { UiActions.dispatch(Intent.reset-window, "", ""); } }
                     }
                     Divider { }
                     HorizontalLayout { cross-axis-alignment: center; spacing: Theme.content-gap;
@@ -33,6 +32,7 @@ export component SettingsPage inherits Rectangle {
                         Field { width: 90px; horizontal-stretch: 0; text <=> UiData.window-width; edited(value) => { UiActions.dispatch(Intent.window-width, value, ""); } }
                         Caption { text: "×"; horizontal-stretch: 0; }
                         Field { width: 90px; horizontal-stretch: 0; text <=> UiData.window-height; edited(value) => { UiActions.dispatch(Intent.window-height, value, ""); } }
+                        ActionButton { text: "恢复默认"; clicked => { UiActions.dispatch(Intent.reset-window, "", ""); } }
                     }
                 }
             }
@@ -47,13 +47,6 @@ export component SettingsPage inherits Rectangle {
             SettingsSection {
                 title: "网络";
                 ContentPanel {
-                    SettingRow { title: "DNS 覆盖"; checked: UiData.dns-override; enabled: !UiData.working && !UiData.update-busy; toggled(value) => { UiActions.dispatch(Intent.dns-override, value ? "true" : "false", ""); } }
-                    Divider { }
-                    SettingRow { title: "启用 IPv6"; checked: UiData.ipv6; enabled: !UiData.working && !UiData.update-busy; toggled(value) => { UiActions.dispatch(Intent.ipv6, value ? "true" : "false", ""); } }
-                    Divider { }
-                    SettingRow { title: "启用 UDP"; checked: UiData.udp || UiData.protected; enabled: !UiData.working && !UiData.protected && !UiData.update-busy; toggled(value) => { UiActions.dispatch(Intent.udp, value ? "true" : "false", ""); } }
-                }
-                ContentPanel {
                     HorizontalLayout { cross-axis-alignment: center; spacing: Theme.content-gap;
                         Label { text: "混合端口"; }
                         Field { text <=> UiData.mixed-port; width: 100px; horizontal-stretch: 0; edited(value) => { UiActions.dispatch(Intent.mixed-port, value, ""); } }
@@ -61,7 +54,12 @@ export component SettingsPage inherits Rectangle {
                         Field { text <=> UiData.controller-port; width: 100px; horizontal-stretch: 0; edited(value) => { UiActions.dispatch(Intent.controller-port, value, ""); } }
                     }
                     if UiData.ports-dirty: ActionButton { text: "保存并重启内核"; primary: true; enabled: !UiData.working; clicked => { UiActions.dispatch(Intent.save-ports, "", ""); } }
-                    Caption { text: "日志级别：info · 出站网卡：TUN 自动检测"; }
+                    Divider { }
+                    SettingRow { title: "DNS 覆盖"; checked: UiData.dns-override; enabled: !UiData.working && !UiData.update-busy; toggled(value) => { UiActions.dispatch(Intent.dns-override, value ? "true" : "false", ""); } }
+                    Divider { }
+                    SettingRow { title: "启用 IPv6"; checked: UiData.ipv6; enabled: !UiData.working && !UiData.update-busy; toggled(value) => { UiActions.dispatch(Intent.ipv6, value ? "true" : "false", ""); } }
+                    Divider { }
+                    SettingRow { title: "启用 UDP"; checked: UiData.udp || UiData.protected; enabled: !UiData.working && !UiData.protected && !UiData.update-busy; toggled(value) => { UiActions.dispatch(Intent.udp, value ? "true" : "false", ""); } }
                 }
             }
             SettingsSection {
