@@ -222,13 +222,16 @@ def endpoint(config):
 def request(config, path, method='GET', file=None, headers=None):
     url = endpoint(config)
     proxy = urllib.parse.urlsplit(config.get('proxy', ''))
+    # Large archives share the small cache host's uplink. Allow temporary
+    # backpressure without slowing metadata lookups or upstream version checks.
+    timeout = 120 if urllib.parse.urlsplit(path).path == '/v1/blob' else 30
     if proxy.hostname:
         if proxy.scheme != 'http' or proxy.hostname not in ('127.0.0.1', 'localhost') or url.scheme != 'http':
             raise ValueError('Cache proxy must be the local Tailscale userspace proxy')
-        connection = http.client.HTTPConnection(proxy.hostname, proxy.port, timeout=30)
+        connection = http.client.HTTPConnection(proxy.hostname, proxy.port, timeout=timeout)
         path = config['url'].rstrip('/') + path
     else:
-        connection = (http.client.HTTPSConnection if url.scheme == 'https' else http.client.HTTPConnection)(url.hostname, url.port, timeout=30)
+        connection = (http.client.HTTPSConnection if url.scheme == 'https' else http.client.HTTPConnection)(url.hostname, url.port, timeout=timeout)
     auth = {'Authorization': 'Bearer '+config['token'], **(headers or {})}
     connection.request(method, path, body=file, headers=auth)
     return connection, connection.getresponse()
