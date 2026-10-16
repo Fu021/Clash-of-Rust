@@ -13,12 +13,12 @@ export component MobileFixture inherits Rectangle {
         MobileData.groups = [
             {id: "Proxy", title: "Proxy", detail: "Selector · 6 个节点", current: "德国 01 · IPv6", expanded: true,
                 page: "6 个节点", nodes: [
-                    {left: {group: "Proxy", name: "DIRECT", kind: "Direct", delay: "未测速", valid: true},
-                     right: {group: "Proxy", name: "德国 01 · IPv6", kind: "AnyTLS", delay: "45 ms", valid: true, selected: true}},
-                    {left: {group: "Proxy", name: "新加坡 01", kind: "Trojan", delay: "76 ms", valid: true},
-                     right: {group: "Proxy", name: "日本 01", kind: "Shadowsocks", delay: "64 ms", valid: true}},
-                    {left: {group: "Proxy", name: "美国 01", kind: "VLESS", delay: "168 ms", valid: true},
-                     right: {group: "Proxy", name: "香港 02", kind: "VLESS", delay: "28 ms", valid: true}}
+                    {left: {group: "Proxy", name: "DIRECT", kind: "Direct", delay: "未测速", tone: 4, valid: true},
+                     right: {group: "Proxy", name: "德国 01 · IPv6", kind: "AnyTLS", delay: "45 ms", tone: 1, valid: true, selected: true}},
+                    {left: {group: "Proxy", name: "新加坡 01", kind: "Trojan", delay: "376 ms", tone: 2, valid: true},
+                     right: {group: "Proxy", name: "日本 01", kind: "Shadowsocks", delay: "64 ms", tone: 1, valid: true}},
+                    {left: {group: "Proxy", name: "美国 01", kind: "VLESS", delay: "868 ms", tone: 3, valid: true},
+                     right: {group: "Proxy", name: "香港 02", kind: "VLESS", delay: "28 ms", tone: 1, valid: true}}
                 ]},
             {id: "auto", title: "自动选择", detail: "URLTest · 5 个节点", current: "香港 02", expanded: false, nodes: []}
         ];

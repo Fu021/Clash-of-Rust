@@ -565,6 +565,26 @@ impl App {
         {
             return Task::none();
         }
+        if !self.exiting {
+            // Coalesce rapid appearance clicks while a network operation owns the engine.
+            self.queued_actions.retain(|queued| {
+                !matches!(
+                    (&action, queued),
+                    (Action::Appearance(_), Action::Appearance(_))
+                        | (Action::Accent(_), Action::Accent(_))
+                        | (Action::TextScale(_), Action::TextScale(_))
+                )
+            });
+            if (self.engine.is_some() || self.busy)
+                && self.queued_actions.len() < 16
+                && action.preview_appearance(&mut self.settings)
+            {
+                for queued in &self.queued_actions {
+                    queued.preview_appearance(&mut self.settings);
+                }
+                self.sync_appearance();
+            }
+        }
         if self.busy || self.exiting {
             if matches!(action, Action::Refresh) {
                 self.pending_refresh = true;
@@ -1551,6 +1571,10 @@ impl App {
                     }
                 }
                 self.settings = reply.settings;
+                // A completed Geo/network operation predates the queued appearance choices.
+                for queued in &self.queued_actions {
+                    queued.preview_appearance(&mut self.settings);
+                }
                 if !self
                     .queued_actions
                     .iter()

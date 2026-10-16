@@ -8,6 +8,8 @@ use slint::{
     winit_030::{EventResult, WinitWindowAccessor, winit},
 };
 use std::time::Instant;
+#[path = "repaint.rs"]
+mod repaint;
 
 thread_local! { static HOST: RefCell<Option<DesktopHost>> = const { RefCell::new(None) }; }
 fn enqueue(message: Message) {
@@ -155,6 +157,7 @@ impl native::Host for DesktopHost {
     fn open_window(&mut self, id: window::Id, settings: window::Settings) {
         if let Some((_, window)) = &self.window {
             let _ = window.show();
+            repaint::invalidate(window.window());
             return;
         }
         let window = match AppWindow::new() {
@@ -186,8 +189,15 @@ impl native::Host for DesktopHost {
         window.window().on_winit_window_event(move |window, event| {
             use winit::event::{ElementState, WindowEvent};
             match event {
+                WindowEvent::RedrawRequested => {
+                    repaint::before_draw(window);
+                }
+                WindowEvent::Occluded(false) => {
+                    repaint::invalidate(window);
+                }
                 WindowEvent::Resized(size) => {
                     let logical = size.to_logical::<f32>(f64::from(window.scale_factor()));
+                    repaint::invalidate_size(window, logical.width, logical.height);
                     enqueue(Message::Window((
                         id,
                         window::Event::Resized(Size::new(logical.width, logical.height)),
@@ -197,6 +207,7 @@ impl native::Host for DesktopHost {
                     enqueue(Message::Window((id, window::Event::Rescaled)))
                 }
                 WindowEvent::Focused(true) => {
+                    repaint::invalidate(window);
                     enqueue(Message::Window((id, window::Event::Focused)))
                 }
                 WindowEvent::ThemeChanged(theme) => enqueue(Message::SystemTheme(
@@ -303,6 +314,7 @@ impl native::Host for DesktopHost {
             }
             window::Command::Mode(window::Mode::Windowed) => {
                 let _ = window.show();
+                repaint::invalidate(window.window());
             }
             window::Command::Minimize(value) => window.window().set_minimized(value),
             window::Command::Maximize(value) => window.window().set_maximized(value),
@@ -670,4 +682,9 @@ impl App {
         self.accent_open = false;
         Task::none()
     }
+}
+
+#[cfg(test)]
+pub(super) fn invalidate_window_for_test(window: &slint::Window) {
+    repaint::invalidate(window);
 }

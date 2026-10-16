@@ -138,6 +138,7 @@ struct State {
     probe: (String, String),
     dns: String,
     geo: String,
+    geo_updating: bool,
     node_pages: BTreeMap<String, usize>,
     connection_page: usize,
     rule_page: usize,
@@ -269,6 +270,7 @@ enum Update {
     Claude(std::result::Result<core::claude_check::Report, String>),
     Log(String, String),
     Notice(String),
+    Geo(std::result::Result<(), String>),
     Checked(std::result::Result<Option<core::update::Package>, String>),
     DownloadProgress(u64, u64),
     Downloaded(std::result::Result<(), String>),
@@ -302,6 +304,7 @@ async fn run_loop(
         probe: ("尚未测试".into(), String::new()),
         dns: "尚未查询".into(),
         geo: "已内置离线数据".into(),
+        geo_updating: false,
         node_pages: BTreeMap::new(),
         connection_page: 0,
         rule_page: 0,
@@ -323,6 +326,7 @@ async fn run_loop(
     let mut checks: Option<tokio::task::JoinHandle<()>> = None;
     let mut claude_job: Option<tokio::task::JoinHandle<()>> = None;
     let mut log_job: Option<tokio::task::JoinHandle<()>> = None;
+    let mut geo_job: Option<tokio::task::JoinHandle<()>> = None;
     let mut log_port = 0;
     let mut last_delay = std::time::Instant::now();
     let mut delay_job: Option<tokio::task::JoinHandle<()>> = None;
@@ -364,6 +368,17 @@ async fn run_loop(
                                 let _=send.send(Update::Downloaded(result.map_err(|e|format!("{e:#}")))).await;
                             }));
                         }
+                    }
+                } else if intent == MobileIntent::UpdateGeo {
+                    if !state.geo_updating {
+                        state.geo_updating=true;
+                        let runtime=state.session.store.runtime();
+                        let port=state.session.running.then_some(state.session.settings.mixed_port);
+                        let send=updates.clone();
+                        geo_job=Some(tokio::spawn(async move {
+                            let result=core::geodata::download_geo(&runtime,port).await.map_err(|e|format!("{e:#}"));
+                            let _=send.send(Update::Geo(result)).await;
+                        }));
                     }
                 } else if matches!(intent, MobileIntent::SiteStart | MobileIntent::SiteRetest) {
                     if let Some(job) = checks.take() { job.abort(); }
@@ -450,6 +465,13 @@ async fn run_loop(
                     Some(Update::Claude(Err(error))) => {state.claude_status=format!("检测失败：{error}");state.notice=error;},
                     Some(Update::Log(level,message)) => state.logs.push_back((level,message)),
                     Some(Update::Notice(message))=>state.notice=message,
+                    Some(Update::Geo(result))=> {
+                        state.geo_updating=false;geo_job=None;
+                        match result.and_then(|()|state.session.initialize().map_err(|e|format!("{e:#}"))) {
+                            Ok(())=> {state.geo="已更新".into();state.notice="Geo 数据已更新".into();},
+                            Err(error)=>state.notice=format!("Geo 更新失败：{error}"),
+                        }
+                    }
                     Some(Update::Checked(result))=>{
                         state.update_busy=false;
                         match result {
@@ -578,6 +600,9 @@ async fn run_loop(
                 }
             }
         })?;
+    }
+    if let Some(job) = geo_job {
+        job.abort();
     }
     if let Some(job) = checks {
         job.abort();
@@ -932,16 +957,6 @@ async fn handle(state: &mut State, request: Request) -> Result<()> {
             session.store.save_settings(&next)?;
             session.settings = next;
         }
-        MobileIntent::UpdateGeo => {
-            core::geodata::download_geo(
-                &session.store.runtime(),
-                session.running.then_some(session.settings.mixed_port),
-            )
-            .await?;
-            state.geo = "已更新".into();
-            session.initialize()?;
-            state.notice = "Geo 数据已更新".into();
-        }
         MobileIntent::Probe => {
             let result = core::probe::website(a, session.settings.mixed_port, false).await?;
             state.probe = (result.detail, format!("{} ms", result.millis));
@@ -1053,6 +1068,7 @@ struct Projection {
     update_busy: bool,
     update_progress: f32,
     update_available: bool,
+    geo_updating: bool,
     site_summary: String,
     claude_status: String,
 }
@@ -1312,14 +1328,7 @@ fn project(state: &State) -> Projection {
         upload: bytes(s.connections.upload_total),
         download: bytes(s.connections.download_total),
         groups,
-        profiles: s
-            .profiles
-            .iter()
-            .filter(|p| {
-                state.page != 2 || query.is_empty() || p.name.to_lowercase().contains(&query)
-            })
-            .cloned()
-            .collect(),
+        profiles: s.profiles.iter().cloned().collect(),
         connections,
         rates: (
             format!("{}/s", bytes(s.rates.0)),
@@ -1352,6 +1361,7 @@ fn project(state: &State) -> Projection {
         update_busy: state.update_busy,
         update_progress: state.update_progress,
         update_available: state.update_package.is_some(),
+        geo_updating: state.geo_updating,
         site_summary: format!(
             "确认可用 {} · 网页可达 {} · 受限 {} · 失败 {}",
             report.totals.count(core::ip_report::Status::Available),
@@ -1381,6 +1391,7 @@ fn project(state: &State) -> Projection {
 fn apply(ui: &AndroidWindow, p: Projection) {
     let data = ui.global::<MobileData>();
     data.set_working(false);
+    data.set_geo_updating(p.geo_updating);
     data.set_probe_status(p.probe.0.into());
     data.set_probe_time(p.probe.1.into());
     data.set_dns_result(p.dns.into());
@@ -1622,11 +1633,8 @@ fn apply(ui: &AndroidWindow, p: Projection) {
                             selected: name == group.now.as_str(),
                             name: name.into(),
                             kind: node.kind.to_string().into(),
-                            delay: node
-                                .delay
-                                .map(|d| format!("{d} ms"))
-                                .unwrap_or_else(|| "未测速".into())
-                                .into(),
+                            delay: proxy_order::delay_label(node.delay).into(),
+                            tone: proxy_order::delay_tone(node.delay),
                             valid: true,
                         })
                         .collect::<Vec<_>>();

@@ -12,14 +12,14 @@ export component SettingsPage inherits Rectangle {
                 ContentPanel {
                     HorizontalLayout { cross-axis-alignment: center; spacing: Theme.content-gap;
                         Label { text: "主题"; }
-                        ActionButton { text: "深色"; selected: UiData.appearance == 0; enabled: !UiData.working; clicked => { UiActions.dispatch(Intent.appearance, "0", ""); } }
-                        ActionButton { text: "浅色"; selected: UiData.appearance == 1; enabled: !UiData.working; clicked => { UiActions.dispatch(Intent.appearance, "1", ""); } }
-                        ActionButton { text: "跟随系统"; selected: UiData.appearance == 2; enabled: !UiData.working; clicked => { UiActions.dispatch(Intent.appearance, "2", ""); } }
+                        ActionButton { text: "深色"; selected: UiData.appearance == 0; enabled: !UiData.exiting; clicked => { UiActions.dispatch(Intent.appearance, "0", ""); } }
+                        ActionButton { text: "浅色"; selected: UiData.appearance == 1; enabled: !UiData.exiting; clicked => { UiActions.dispatch(Intent.appearance, "1", ""); } }
+                        ActionButton { text: "跟随系统"; selected: UiData.appearance == 2; enabled: !UiData.exiting; clicked => { UiActions.dispatch(Intent.appearance, "2", ""); } }
                     }
                     Divider { }
                     HorizontalLayout { cross-axis-alignment: center;
                         Label { text: "强调色"; }
-                        AccentChoice { text: AccentPalette.accent-names[UiData.accent]; swatch: AccentPalette.accent-colors[UiData.accent]; enabled: !UiData.working; clicked => { UiActions.dispatch(Intent.accent-picker, "", ""); } }
+                        AccentChoice { text: AccentPalette.accent-names[UiData.accent]; swatch: AccentPalette.accent-colors[UiData.accent]; enabled: !UiData.exiting; clicked => { UiActions.dispatch(Intent.accent-picker, "", ""); } }
                     }
                     Divider { }
                     HorizontalLayout { cross-axis-alignment: center; spacing: Theme.content-gap;

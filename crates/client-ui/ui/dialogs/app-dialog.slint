@@ -130,7 +130,7 @@ export component AppDialog inherits Rectangle {
                 ActionButton { modal-control: true; text: UiData.modal-accept == "" ? "关闭" : "取消"; clicked => { UiActions.dispatch(Intent.cancel-confirm, "", ""); } }
                 if UiData.modal-accept != "": ActionButton { modal-control: true;
                     text: UiData.modal-accept; primary: !UiData.modal-danger; danger: UiData.modal-danger;
-                    enabled: UiData.modal-can-accept && !UiData.working && !UiData.exiting;
+                    enabled: UiData.modal-can-accept && (UiData.modal == 12 || !UiData.working) && !UiData.exiting;
                     clicked => { if UiData.modal == 12 { UiActions.dispatch(Intent.accent-color, "" + root.selected-accent, ""); } else { UiActions.dispatch(Intent.confirm, "", ""); } }
                 }
             }

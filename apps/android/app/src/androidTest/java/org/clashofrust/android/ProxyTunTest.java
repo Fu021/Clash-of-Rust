@@ -20,6 +20,7 @@ import static org.junit.Assert.*;
 public class ProxyTunTest {
     private static void pointer(int action,float x,float y,long down,long now) {
         MotionEvent event=MotionEvent.obtain(down,now,action,x,y,0);
+        event.setSource(android.view.InputDevice.SOURCE_TOUCHSCREEN);
         try { InstrumentationRegistry.getInstrumentation().sendPointerSync(event); }
         finally {event.recycle();}
     }
@@ -63,6 +64,19 @@ public class ProxyTunTest {
         pointer(MotionEvent.ACTION_UP,x,end,down,SystemClock.uptimeMillis());
         await("Touch swipe did not scroll Android settings",()->MainActivity.diagnostics().optDouble("settings_scroll_y") < -40);
         tab(0,0);
+        // The Activity must restore the same native UI/core after the launcher covers it.
+        shell("input keyevent KEYCODE_HOME");
+        shell("am start -W -n org.clashofrust.android/.MainActivity");
+        await("Returning from background lost the native UI",()->MainActivity.diagnostics().optBoolean("core_running"));
+        try {
+            shell("settings put system accelerometer_rotation 0");
+            shell("settings put system user_rotation 1");
+            await("Landscape surface did not resize",()-> {JSONObject s=MainActivity.diagnostics();return s.optDouble("width")>s.optDouble("height");});
+        } finally {
+            shell("settings put system user_rotation 0");
+        }
+        await("Portrait surface did not recover",()-> {JSONObject s=MainActivity.diagnostics();return s.optDouble("height")>s.optDouble("width");});
+        assertTrue(MainActivity.diagnostics().optBoolean("core_running"));
     }
     private interface Condition { boolean ready() throws Exception; }
     private static void await(String message, Condition condition) throws Exception {

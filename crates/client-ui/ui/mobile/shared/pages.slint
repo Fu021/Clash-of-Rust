@@ -74,7 +74,7 @@ component NodeCard inherits MCard {
     interactive: true; clicked => { MobileActions.request(MobileIntent.select-node, root.group, root.item.name); }
     HorizontalLayout { spacing: 8px; cross-axis-alignment: center;
         MText { text: root.item.name; font-weight: 600; color: root.selected ? Theme.accent : Theme.ink; }
-        MTag { text: root.item.delay; tone: root.item.delay == "超时" ? 3 : 0; }
+        MTag { text: root.item.delay; tone: root.item.tone; }
     }
     HorizontalLayout { cross-axis-alignment: center; spacing: 8px;
         MSmall { text: root.item.kind + (root.selected ? " · 使用中" : ""); }
@@ -121,10 +121,8 @@ export component MobileProxies inherits Rectangle {
 }
 export component MobileSubscriptions inherits Rectangle {
     MScroll { VerticalLayout { alignment: start; spacing: 12px; padding-bottom: 16px;
-        MField { placeholder: "搜索订阅"; text <=> MobileView.query; edited(value) => { MobileActions.request(MobileIntent.query, "profiles", value); } }
         HorizontalLayout { spacing: 8px;
             MButton { text: "+ 添加订阅"; primary: true; clicked => { MobileView.selected-id = ""; MobileView.profile-name = ""; MobileView.profile-source = ""; MobileView.detail = 3; } }
-            MButton { text: "导入文件"; clicked => { MobileActions.request(MobileIntent.pick-file, "", ""); } }
         }
         for profile in MobileData.profiles: MCard {
             selected: profile.active;

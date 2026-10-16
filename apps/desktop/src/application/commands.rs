@@ -38,6 +38,19 @@ pub(super) enum Action {
     UpdateGeo,
 }
 
+impl Action {
+    /// Preview only local appearance; persistence still uses the serialized engine queue.
+    pub(super) fn preview_appearance(&self, settings: &mut Settings) -> bool {
+        match self {
+            Self::Appearance(mode) => settings.theme_mode = Some(*mode),
+            Self::Accent(color) => settings.accent_color = *color,
+            Self::TextScale(scale) => settings.text_scale = *scale,
+            _ => return false,
+        }
+        true
+    }
+}
+
 #[derive(Debug, Clone)]
 pub(super) struct Reply {
     pub(super) profile_edit: bool,

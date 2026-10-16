@@ -164,19 +164,8 @@ impl App {
                             .get(name)
                             .map_or("", |node| node.kind.as_str())
                             .into(),
-                        delay: self
-                            .node_delay(name)
-                            .map_or_else(
-                                || "未测速".into(),
-                                |delay| {
-                                    if delay == 0 {
-                                        "超时".into()
-                                    } else {
-                                        format!("{delay} ms")
-                                    }
-                                },
-                            )
-                            .into(),
+                        delay: proxy_order::delay_label(self.node_delay(name)).into(),
+                        tone: proxy_order::delay_tone(self.node_delay(name)),
                     }
                 };
                 for pair in indices[start..(start + PAGE_SIZE).min(count)].chunks(2) {
@@ -547,13 +536,7 @@ impl App {
             models.set_groups(Vec::new());
         }
         if self.page == Page::Profiles {
-            let profiles: Vec<_> = self
-                .profiles
-                .iter()
-                .filter(|profile| {
-                    contains_query(&profile.name, &query) || contains_query(&profile.source, &query)
-                })
-                .collect();
+            let profiles: Vec<_> = self.profiles.iter().collect();
             self.pager(data, profiles.len(), PAGE_SIZE);
             reconcile(
                 &models.profiles,
@@ -1179,6 +1162,7 @@ impl App {
         } else if self.accent_open {
             kind = 12;
             data.set_modal_title("强调色".into());
+            data.set_modal_can_accept(!self.exiting);
             data.set_modal_accept("完成".into());
         } else {
             kind = 0;

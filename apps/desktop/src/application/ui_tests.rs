@@ -435,6 +435,101 @@ fn node_sort_popup_dispatches_each_clicked_option_and_reorders_real_models() {
 }
 
 #[test]
+fn a_discarded_software_surface_is_fully_repainted_after_restore() {
+    use slint::platform::software_renderer::RepaintBufferType;
+    let adapter = ui_testing::initialize(950, 700);
+    let app = fixture(Page::Settings);
+    let window = AppWindow::new().unwrap();
+    let data = window.global::<UiData>();
+    let mut models = ViewModels::default();
+    models.attach(&data);
+    app.present(&data, &mut models);
+    window.show().unwrap();
+    let mut before = vec![slint::Rgb8Pixel::default(); 950 * 700];
+    assert!(adapter.draw_if_needed(|renderer| {
+        renderer.set_repaint_buffer_type(RepaintBufferType::ReusedBuffer);
+        renderer.render(&mut before, 950);
+    }));
+    let mut restored = vec![slint::Rgb8Pixel::default(); 950 * 700];
+    // DWM/compositor invalidation is independent of changes to the UI models.
+    bindings::invalidate_window_for_test(window.window());
+    assert!(adapter.draw_if_needed(|renderer| {
+        renderer.render(&mut restored, 950);
+        renderer.set_repaint_buffer_type(RepaintBufferType::NewBuffer);
+    }));
+    assert_eq!(
+        before, restored,
+        "restored surface must contain the unchanged full window"
+    );
+    window.hide().unwrap();
+}
+
+#[test]
+fn appearance_remains_interactive_while_geo_owns_the_engine_and_late_reply_cannot_undo_it() {
+    ui_testing::initialize(950, 700);
+    let mut app = fixture(Page::Settings);
+    app.busy = true;
+    app.working = true;
+    app.updates.started = true;
+    let old_settings = app.settings.clone();
+    let window = AppWindow::new().unwrap();
+    let data = window.global::<UiData>();
+    let mut models = ViewModels::default();
+    models.attach(&data);
+    app.present(&data, &mut models);
+    let events = pointer_events(&window);
+    window.show().unwrap();
+    let _ = window.window().take_snapshot().unwrap();
+    ui_testing::click(window.window(), 840., 233.);
+    assert_eq!(events.borrow_mut().pop().unwrap().0, Intent::AccentPicker);
+    let _ = app.intent(Intent::AccentPicker, "", "");
+    app.present(&data, &mut models);
+    assert_eq!(data.get_modal(), 12);
+    assert!(data.get_modal_can_accept());
+    let _ = window.window().take_snapshot().unwrap();
+    ui_testing::click(window.window(), 475., 314.); // blue swatch
+    let _ = window.window().take_snapshot().unwrap();
+    ui_testing::click(window.window(), 710., 460.); // complete while Geo is still busy
+    let chosen = events
+        .borrow_mut()
+        .pop()
+        .expect("busy Geo must not disable appearance confirmation");
+    assert_eq!(chosen.0, Intent::AccentColor);
+    assert_eq!(chosen.1, "1");
+    let _ = app.intent(chosen.0, &chosen.1, &chosen.2);
+    app.present(&data, &mut models);
+    assert_eq!(data.get_accent(), 1);
+    for color in [2, 3, 5] {
+        let _ = app.intent(Intent::AccentColor, &color.to_string(), "");
+    }
+    assert_eq!(app.queued_actions.len(), 1, "rapid changes must coalesce");
+    let _ = app.update(Message::Finished(Box::new(Reply {
+        profile_edit: false,
+        profile_import: false,
+        scope: Scope::Other,
+        start_requested: false,
+        settings: old_settings,
+        profiles: None,
+        rule_document: None,
+        rules_applied: false,
+        snapshot: None,
+        notice: Ok("Geo 数据已更新".into()),
+        running: true,
+        geo_status: "更新完成".into(),
+        autostart: false,
+        protection_changed: false,
+        tray_nodes: None,
+    })));
+    app.present(&data, &mut models);
+    assert_eq!(
+        data.get_accent(),
+        5,
+        "old engine reply must preserve the most recent color"
+    );
+    window.hide().unwrap();
+}
+
+#[test]
 fn font_popup_changes_the_saved_request_and_rendered_font_at_fractional_scale() {
     use clash_client_ui::Theme;
     ui_testing::initialize(950, 700);

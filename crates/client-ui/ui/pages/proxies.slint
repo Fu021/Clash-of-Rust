@@ -12,7 +12,7 @@ component NodeCard inherits ContentPanel {
     background: node.selected ? Theme.accent-wash : Theme.surface;
     HorizontalLayout { cross-axis-alignment: center; spacing: Theme.content-gap;
         Label { text: root.node.name; color: root.node.selected ? Theme.accent : Theme.ink; }
-        Caption { text: root.node.delay; color: root.node.delay == "超时" ? Theme.danger : root.node.delay == "未测速" ? Theme.muted : Theme.accent; horizontal-stretch: 0; }
+        Caption { text: root.node.delay; color: root.node.tone == 1 ? Theme.success : root.node.tone == 2 ? Theme.warning : root.node.tone == 3 ? Theme.danger : Theme.muted; horizontal-stretch: 0; }
     }
     HorizontalLayout { cross-axis-alignment: center; spacing: Theme.content-gap;
         Caption { text: root.node.kind; }

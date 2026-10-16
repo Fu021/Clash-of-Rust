@@ -16,6 +16,11 @@ public final class VpnTileService extends TileService {
         TileService.requestListeningState(context,new ComponentName(context,VpnTileService.class));
     }
     @Override public void onStartListening() { super.onStartListening(); update(); }
+    // Android 13 and below have no PendingIntent overload. Never call this on 14+.
+    @android.annotation.SuppressLint("StartActivityAndCollapseDeprecated")
+    @SuppressWarnings("deprecation")
+    private void openLegacy(Intent intent) { startActivityAndCollapse(intent); }
+
     private void update() {
         Tile tile=getQsTile();
         if (tile!=null) {
@@ -39,7 +44,7 @@ public final class VpnTileService extends TileService {
                 .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK|Intent.FLAG_ACTIVITY_SINGLE_TOP);
             if (Build.VERSION.SDK_INT>=34) startActivityAndCollapse(PendingIntent.getActivity(this,3,open,
                 PendingIntent.FLAG_IMMUTABLE|PendingIntent.FLAG_UPDATE_CURRENT));
-            else startActivityAndCollapse(open);
+            else openLegacy(open);
         }
     }
 }
