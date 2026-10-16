@@ -1328,7 +1328,7 @@ fn project(state: &State) -> Projection {
         upload: bytes(s.connections.upload_total),
         download: bytes(s.connections.download_total),
         groups,
-        profiles: s.profiles.iter().cloned().collect(),
+        profiles: s.profiles.clone(),
         connections,
         rates: (
             format!("{}/s", bytes(s.rates.0)),
