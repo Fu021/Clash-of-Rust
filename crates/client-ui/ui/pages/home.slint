@@ -35,6 +35,7 @@ export component HomePage inherits Rectangle {
                     Label { text: !UiData.running ? "内核尚未运行" : UiData.proxy-mode == 0 ? "系统代理已连接" : UiData.proxy-mode == 1 ? "TUN 模式已连接" : "代理已关闭"; font-size: 18px; }
                     Caption { text: "当前节点 · " + UiData.node; }
                 }
+                if UiData.retry-core: ActionButton { text: "重启内核"; primary: true; enabled: !UiData.working; clicked => { UiActions.dispatch(Intent.restart-core, "", ""); } }
                 ActionButton { text: "查看代理 →"; clicked => { UiActions.dispatch(Intent.navigate, "1", ""); } }
             }
             RowPanel {

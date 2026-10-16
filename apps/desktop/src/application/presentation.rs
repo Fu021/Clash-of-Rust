@@ -47,8 +47,27 @@ fn connection_details(connection: &clash_of_rust::api::Connection) -> Vec<Detail
     [
         ("连接名称", connection::name(connection).to_owned()),
         ("域名", connection.metadata.host.to_string()),
-        ("嗅探域名", connection.metadata.sniff_host.to_string()),
-        ("目标 IP", connection.metadata.destination_ip.to_string()),
+        (
+            "嗅探域名",
+            if connection.metadata.sniff_host.is_empty() {
+                if connection.metadata.host.is_empty() {
+                    "内核未识别"
+                } else {
+                    "未嗅探（已有域名）"
+                }
+                .into()
+            } else {
+                connection.metadata.sniff_host.to_string()
+            },
+        ),
+        (
+            "目标 IP",
+            if connection.metadata.destination_ip.is_empty() {
+                "内核未提供（可能由代理端解析）".into()
+            } else {
+                connection.metadata.destination_ip.to_string()
+            },
+        ),
         ("目标端口", connection.metadata.destination_port.to_string()),
         ("协议", connection.metadata.network.to_string()),
         (
@@ -351,6 +370,22 @@ impl App {
         set!(get_ports_dirty, set_ports_dirty, self.ports_dirty());
         set!(get_retry_core, set_retry_core, self.ready_to_retry());
         set!(get_notice_error, set_notice_error, self.error);
+        set!(
+            get_notice_revision,
+            set_notice_revision,
+            self.notice_revision as i32
+        );
+        set!(
+            get_notification_busy,
+            set_notification_busy,
+            self.notification_busy
+        );
+        set!(
+            get_notice_elapsed,
+            set_notice_elapsed,
+            self.notice_started
+                .map_or(0.0, |started| started.elapsed().as_secs_f32())
+        );
         text!(
             get_notice,
             set_notice,

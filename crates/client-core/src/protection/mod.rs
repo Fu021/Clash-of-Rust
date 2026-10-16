@@ -57,6 +57,10 @@ pub const DOH: &[&str] = &["https://1.1.1.1/dns-query", "https://8.8.8.8/dns-que
 pub const BOOTSTRAP: &[&str] = &[
     "https://223.5.5.5/dns-query#DIRECT",
     "https://223.6.6.6/dns-query#DIRECT",
+    // Node bootstrap must survive a blocked resolver and either IP family.
+    // Application/public DNS still uses only the pinned protection route.
+    "https://1.0.0.1/dns-query#DIRECT",
+    "https://[2606:4700:4700::1111]/dns-query#DIRECT",
 ];
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]

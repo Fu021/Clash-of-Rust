@@ -1,6 +1,6 @@
 // Presentation values only. Rust owns validation, effects and saved settings.
 export enum Intent {
-    navigate, query, dismiss-notice, restart-core, mode, proxy-mode,
+    navigate, query, dismiss-notice, system-notification, restart-core, mode, proxy-mode,
     node-sort, toggle-group, group-delay, group-page, select-node, node-delay,
     list-page, connection-sort, connection-detail, close-connection, close-all,
     profile-name, profile-source, import-profile, pick-file, open-profiles,
@@ -55,6 +55,9 @@ export global UiData {
     in-out property <string> node;
     in-out property <string> notice;
     in-out property <bool> notice-error;
+    in-out property <int> notice-revision;
+    in-out property <float> notice-elapsed;
+    in-out property <bool> notification-busy;
     in-out property <bool> retry-core;
     in-out property <string> query;
     in-out property <string> page-status;

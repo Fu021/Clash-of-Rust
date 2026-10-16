@@ -53,7 +53,25 @@ export component AppWindow inherits Window {
     Rectangle {
         x: 0px; y: 0px; width: 176px; height: parent.height; background: Theme.sidebar;
         Rectangle { x: parent.width - 1px; width: 1px; height: parent.height; background: Theme.line; }
-        Image { x: 16px; y: 24px; width: 24px; height: 24px; source: @image-url("../../../resources/icons/app.png"); }
+        Rectangle {
+            x: 8px; y: 16px; width: 40px; height: 40px;
+            accessible-role: button;
+            accessible-label: "系统通知";
+            accessible-action-default => { if !UiData.notification-busy && UiData.modal == 0 { UiActions.dispatch(Intent.system-notification, "", ""); } }
+            Image { x: 8px; y: 8px; width: 24px; height: 24px; source: @image-url("../../../resources/icons/app.png"); }
+            FocusScope {
+                enabled: !UiData.notification-busy && UiData.modal == 0;
+                key-pressed(event) => {
+                    if event.text == Key.Return || event.text == " " { UiActions.dispatch(Intent.system-notification, "", ""); return accept; }
+                    return reject;
+                }
+            }
+            TouchArea {
+                enabled: !UiData.notification-busy && UiData.modal == 0;
+                mouse-cursor: pointer;
+                clicked => { UiActions.dispatch(Intent.system-notification, "", ""); }
+            }
+        }
         Label { x: 48px; y: 18px; height: 32px; width: 122px; text: "Clash of Rust"; font-size: 16px; }
         Caption { x: 48px; y: 46px; height: 22px; width: 122px; text: "原生代理客户端"; font-size: 12px; }
         nav := ScrollView {
@@ -88,11 +106,19 @@ export component AppWindow inherits Window {
                     }
                 }
             }
-            if UiData.notice != "": ContentPanel {
+            if UiData.notice != "": notice-panel := ContentPanel {
+                property <int> revision: UiData.notice-revision;
+                property <duration> started;
+                init => { self.started = animation-tick() - UiData.notice-elapsed * 1s; }
+                changed revision => { self.started = animation-tick() - UiData.notice-elapsed * 1s; }
+                property <float> progress: clamp((animation-tick() - self.started) / 8s, 0, 1);
                 HorizontalLayout { cross-axis-alignment: center; spacing: Theme.content-gap;
                     Paragraph { text: UiData.notice; color: UiData.notice-error ? Theme.danger : Theme.secondary; }
                     if UiData.retry-core: ActionButton { text: "重启内核"; primary: true; enabled: !UiData.working; clicked => { UiActions.dispatch(Intent.restart-core, "", ""); } }
                     ActionButton { text: "关闭"; clicked => { UiActions.dispatch(Intent.dismiss-notice, "", ""); } }
+                }
+                Rectangle { height: 2px; background: Theme.subtle-line;
+                    Rectangle { width: parent.width * notice-panel.progress; height: parent.height; background: UiData.notice-error ? Theme.danger : Theme.accent; }
                 }
             }
             if UiData.update-busy || UiData.update-available: ContentPanel {

@@ -222,6 +222,51 @@ async fn basic_system_proxy_and_tun() {
             std::future::pending::<()>().await;
         }
     }
+    #[cfg(target_os = "linux")]
+    {
+        // Full-route protection is safe only inside this disposable namespace.
+        // A live controller with an unreachable node must not commit a dead DNS
+        // configuration or strand the user in TUN. No Internet service is needed.
+        assert_eq!(
+            std::env::var("CLASH_TUN_TEST_NAMESPACE").as_deref(),
+            Ok("1")
+        );
+        engine.select_proxy_mode(ProxyMode::Off).await.unwrap();
+        let unreachable = free_port();
+        std::fs::write(&profile, format!("proxies: [{{name: offline, type: socks5, server: 127.0.0.1, port: {unreachable}}}]\nproxy-groups: [{{name: Main, type: select, proxies: [offline]}}]\nrules: ['MATCH,Main']\ndns: {{enable: false}}\ntun: {{device: {device}, route-address: [203.0.113.0/24], dns-hijack: []}}\n")).unwrap();
+        engine
+            .import(
+                "Protection rollback".into(),
+                profile.display().to_string(),
+                None,
+            )
+            .await
+            .unwrap();
+        engine
+            .activate(engine.profiles.last().unwrap().id.clone())
+            .await
+            .unwrap();
+        engine.select_proxy_mode(ProxyMode::System).await.unwrap();
+        let settings = std::fs::read(store.root.join("settings.json")).unwrap();
+        let runtime = std::fs::read(store.runtime().join("config.yaml")).unwrap();
+        let error = engine.claude_protection(true).await.unwrap_err();
+        assert!(
+            format!("{error:#}").contains("保护 DNS 连通验证失败"),
+            "{error:#}"
+        );
+        assert!(engine.settings.claude_protection.is_none());
+        assert_eq!(
+            settings,
+            std::fs::read(store.root.join("settings.json")).unwrap()
+        );
+        assert_eq!(
+            runtime,
+            std::fs::read(store.runtime().join("config.yaml")).unwrap()
+        );
+        let state = engine.poll(Scope::Home).await.unwrap();
+        assert!(state.running && state.system_proxy && !state.tun);
+        println!("PASS: failed protected DNS restores system proxy and saved configuration");
+    }
     engine.select_proxy_mode(ProxyMode::Off).await.unwrap();
     let state = engine.poll(Scope::Home).await.unwrap();
     assert!(!state.tun && !state.system_proxy);

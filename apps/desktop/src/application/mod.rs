@@ -10,6 +10,7 @@ mod interaction;
 #[cfg(target_os = "macos")]
 #[path = "../platform/macos/desktop.rs"]
 mod mac_desktop;
+mod notice;
 mod presentation;
 mod rules;
 #[cfg(test)]
@@ -167,6 +168,9 @@ enum Message {
     RestartCore,
     CoreReady(Result<CoreHandle, String>),
     DismissNotice,
+    NoticeExpired(u64),
+    SystemNotification,
+    NotificationFinished(Result<(), String>),
     Navigate(Page),
     Query(String),
     NodeSort(NodeSort),
@@ -308,6 +312,10 @@ struct App {
     error: bool,
     core_failure: Option<String>,
     notice_visible: bool,
+    notice_started: Option<std::time::Instant>,
+    notice_revision: u64,
+    notice_timer: Option<desktop_runtime::task::Handle>,
+    notification_busy: bool,
     query: String,
     list_offset: usize,
     profile_name: String,
@@ -438,6 +446,10 @@ impl App {
             error,
             core_failure,
             notice_visible: error,
+            notice_started: error.then(std::time::Instant::now),
+            notice_revision: 0,
+            notice_timer: None,
+            notification_busy: false,
             page: Page::Home,
             snapshot: Snapshot::default(),
             busy: false,
@@ -589,12 +601,14 @@ impl App {
     }
 
     fn update(&mut self, message: Message) -> Task<Message> {
+        let notice_revision = self.notice_revision;
         #[cfg(target_os = "macos")]
         let pump = matches!(
             &message,
             Message::Tick | Message::Window((_, desktop_runtime::window::Event::Opened { .. }))
         );
         let task = self.update_message(message);
+        let task = self.schedule_notice(notice_revision, task);
         #[cfg(target_os = "macos")]
         if pump {
             return Task::batch([
@@ -651,21 +665,44 @@ impl App {
                 Err(error) => {
                     if self.notice != error {
                         eprintln!("Dock 窗口恢复不可用：{error}");
-                        self.notice = error;
-                        self.error = true;
-                        self.notice_visible = true;
+                        self.show_notice(error, true);
                     }
                 }
             },
             Message::DismissNotice => {
-                self.notice_visible = false;
+                self.dismiss_notice();
                 self.updates.failure = None;
+            }
+            Message::NoticeExpired(revision) => {
+                if revision == self.notice_revision {
+                    self.dismiss_notice();
+                }
+            }
+            Message::SystemNotification => {
+                if self.notification_busy || self.exiting {
+                    return Task::none();
+                }
+                self.notification_busy = true;
+                return Task::perform(
+                    async {
+                        platform::notification::show("Clash of Rust", "喵!")
+                            .await
+                            .map_err(|error| format!("系统通知失败：{error:#}"))
+                    },
+                    Message::NotificationFinished,
+                );
+            }
+            Message::NotificationFinished(result) => {
+                self.notification_busy = false;
+                if let Err(error) = result {
+                    self.show_notice(error, true);
+                }
             }
             Message::RestartCore => {
                 if !self.ready_to_retry() {
                     return Task::none();
                 }
-                self.notice_visible = false;
+                self.dismiss_notice();
                 if self.engine.is_some() {
                     return self.dispatch(Action::Start);
                 }
@@ -708,9 +745,7 @@ impl App {
                     }
                     Err(error) => {
                         self.core_failure = Some(error.clone());
-                        self.notice = error;
-                        self.error = true;
-                        self.notice_visible = true;
+                        self.show_notice(error, true);
                         return self.check_update();
                     }
                 }
@@ -817,9 +852,7 @@ impl App {
             }
             Message::ReleaseOpened(result) => {
                 if let Err(error) = result {
-                    self.notice = format!("无法打开 Release 页面：{error}");
-                    self.error = true;
-                    self.notice_visible = true;
+                    self.show_notice(format!("无法打开 Release 页面：{error}"), true);
                 }
             }
             Message::Navigate(page) => {
@@ -1073,9 +1106,7 @@ impl App {
             }
             Message::WindowStateSaved(result) => {
                 if let Err(error) = result {
-                    self.notice = format!("无法保存窗口尺寸：{error}");
-                    self.error = true;
-                    self.notice_visible = true;
+                    self.show_notice(format!("无法保存窗口尺寸：{error}"), true);
                 }
             }
             Message::Window((id, desktop_runtime::window::Event::Opened { .. })) => {
@@ -1125,9 +1156,7 @@ impl App {
                         return self.dispatch(Action::SavePorts(controller_port, mixed_port));
                     }
                     Err(_) => {
-                        self.error = true;
-                        self.notice_visible = true;
-                        self.notice = "端口必须为 1–65535 的整数".into();
+                        self.show_notice("端口必须为 1–65535 的整数".into(), true);
                     }
                 }
             }
@@ -1186,18 +1215,18 @@ impl App {
                 match result {
                     Ok(delays) => {
                         let good = delays.values().filter(|d| **d > 0).count();
-                        self.notice = format!(
-                            "{group} 测速完成：{good}/{} 个节点可达，其余超时或失败",
-                            delays.len()
+                        self.show_notice(
+                            format!(
+                                "{group} 测速完成：{good}/{} 个节点可达，其余超时或失败",
+                                delays.len()
+                            ),
+                            false,
                         );
-                        self.error = false;
                         self.node_delays.extend(delays);
                         self.proxy_order.get_mut().clear();
                     }
                     Err(error) => {
-                        self.notice = format!("{group} 测速失败：{error}");
-                        self.error = true;
-                        self.notice_visible = true;
+                        self.show_notice(format!("{group} 测速失败：{error}"), true);
                     }
                 }
                 return self.dispatch(Action::Refresh);
@@ -1217,9 +1246,7 @@ impl App {
                     return self.dispatch(Action::DelayInterval(minutes));
                 }
                 _ => {
-                    self.error = true;
-                    self.notice_visible = true;
-                    self.notice = "请输入 0–1440 分钟，0 表示关闭定时测速".into();
+                    self.show_notice("请输入 0–1440 分钟，0 表示关闭定时测速".into(), true);
                 }
             },
             Message::PeriodicDelay => {
@@ -1419,9 +1446,7 @@ impl App {
                                 self.tray_close_requested = false;
                             }
                             Err(error) => {
-                                self.error = true;
-                                self.notice_visible = true;
-                                self.notice = tray_unavailable(&error);
+                                self.show_notice(tray_unavailable(&error), true);
                                 if !self.visible {
                                     return desktop_runtime::window::latest()
                                         .map(Message::ShowWindow);
@@ -1623,14 +1648,10 @@ impl App {
                         if notice.starts_with("订阅信息已保存") {
                             self.profile_editor = None;
                         }
-                        self.notice = notice;
-                        self.error = false;
-                        self.notice_visible = true;
+                        self.show_notice(notice, false);
                     }
                     Err(error) => {
-                        self.notice = error;
-                        self.error = true;
-                        self.notice_visible = true;
+                        self.show_notice(error, true);
                     }
                     _ => {}
                 }
@@ -1664,9 +1685,7 @@ impl App {
                     return Task::none();
                 }
                 if !self.snapshot.running {
-                    self.error = true;
-                    self.notice_visible = true;
-                    self.notice = "请先启动内核".into();
+                    self.show_notice("请先启动内核".into(), true);
                     return Task::none();
                 }
                 self.probing = true;
@@ -1741,7 +1760,10 @@ impl App {
                 }
                 if background_start() && self.tray_startup.is_some() && !self.tray_close_requested {
                     self.tray_close_requested = true;
-                    self.notice = "桌面托盘正在初始化，请稍候；再次关闭窗口可退出程序。".into();
+                    self.show_notice(
+                        "桌面托盘正在初始化，请稍候；再次关闭窗口可退出程序。".into(),
+                        false,
+                    );
                     return Task::none();
                 }
                 return self.request_exit();
@@ -1770,9 +1792,7 @@ impl App {
                 Ok(()) => return desktop_runtime::exit(),
                 Err(error) => {
                     self.exiting = false;
-                    self.error = true;
-                    self.notice_visible = true;
-                    self.notice = format!("退出失败：{error}");
+                    self.show_notice(format!("退出失败：{error}"), true);
                     if self.updates.busy() {
                         if let Some(session) = &self.updates.installing {
                             session.cancel();

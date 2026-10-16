@@ -80,6 +80,14 @@ fn connection_detail_exposes_all_fields_and_copies_the_same_values() {
         );
     }
     assert!(data.get_modal_copy().contains("下载速度：256.0 KiB/s"));
+    assert!(
+        data.get_modal_copy()
+            .contains("嗅探域名：未嗅探（已有域名）")
+    );
+    assert!(
+        data.get_modal_copy()
+            .contains("目标 IP：内核未提供（可能由代理端解析）")
+    );
     let _ = app.update(Message::Finished(Box::new(Reply {
         profile_edit: false,
         profile_import: false,
@@ -205,6 +213,19 @@ fn pointer_keyboard_escape_and_modal_input_use_the_production_callbacks() {
     window.show().unwrap();
     let _ = window.window().take_snapshot().unwrap();
     let click = |x, y| ui_testing::click(window.window(), x, y);
+    click(28.0, 36.0);
+    assert_eq!(
+        events.borrow().last().unwrap().0,
+        Intent::SystemNotification
+    );
+    events.borrow_mut().clear();
+    data.set_notification_busy(true);
+    click(28.0, 36.0);
+    assert!(
+        events.borrow().is_empty(),
+        "only one native notification may be active"
+    );
+    data.set_notification_busy(false);
     click(65.0, 156.0);
     assert_eq!(events.borrow().last().unwrap().0, Intent::Navigate);
     assert_eq!(events.borrow().last().unwrap().1, "1");
@@ -223,6 +244,7 @@ fn pointer_keyboard_escape_and_modal_input_use_the_production_callbacks() {
     data.set_modal_accept("删除".into());
     data.set_modal_can_accept(true);
     let _ = window.window().take_snapshot().unwrap();
+    click(28.0, 36.0);
     click(65.0, 156.0);
     assert!(
         events.borrow().is_empty(),

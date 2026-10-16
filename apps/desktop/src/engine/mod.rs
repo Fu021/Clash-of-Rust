@@ -1191,6 +1191,15 @@ impl Engine {
             if self.running() {
                 self.apply_protection_runtime(&next, &desired, protection.is_some())
                     .await?;
+                if protection.is_some() {
+                    // /version only proves the controller is alive. Validate
+                    // the pinned DNS route after TUN captures traffic and before
+                    // committing preferences; failure follows the same rollback.
+                    self.api
+                        .verify_dns()
+                        .await
+                        .context("保护 DNS 连通验证失败，请检查节点引导 DNS 与物理网卡路由")?;
+                }
             } else {
                 #[cfg(target_os = "macos")]
                 self.mac_protection_dns(false).await?;

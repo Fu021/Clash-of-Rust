@@ -317,9 +317,7 @@ impl App {
                         }
                     }
                     Err(error) => {
-                        self.notice.clone_from(error);
-                        self.error = true;
-                        self.notice_visible = true;
+                        self.show_notice(error.clone(), true);
                     }
                     Ok(None) => {}
                 }

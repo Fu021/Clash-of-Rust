@@ -605,6 +605,31 @@ impl Api {
         .await?;
         Ok(())
     }
+    /// Exercise the configured upstream resolver, bypassing the fake-IP layer.
+    /// A fresh name prevents a previous mode's cached answer masking a broken route.
+    pub async fn verify_dns(&self) -> Result<()> {
+        #[derive(Deserialize)]
+        struct Response {
+            #[serde(rename = "Status")]
+            status: u16,
+        }
+        let mut url = self.url(&["dns", "query"])?;
+        url.query_pairs_mut()
+            .append_pair(
+                "name",
+                &format!("{}.claude.ai", uuid::Uuid::new_v4().simple()),
+            )
+            .append_pair("type", "A");
+        let response = Self::checked(self.request(Method::GET, url).send().await?).await?;
+        let response: Response = decode_json(response).await?;
+        // NOERROR and NXDOMAIN both prove the upstream completed the query;
+        // SERVFAIL, REFUSED and malformed API documents do not.
+        if !matches!(response.status, 0 | 3) {
+            bail!("DNS 上游未完成查询（返回码 {}）", response.status);
+        }
+        Ok(())
+    }
+
     pub async fn select(&self, group: &str, name: &str) -> Result<()> {
         Self::checked(
             self.request(Method::PUT, self.url(&["proxies", group])?)
@@ -703,6 +728,55 @@ impl Api {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[tokio::test]
+    async fn protected_dns_check_uses_fresh_upstream_queries_and_rejects_failed_responses() {
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let api = Api::new(&Settings {
+            controller_port: listener.local_addr().unwrap().port(),
+            ..Default::default()
+        })
+        .unwrap();
+        let server = tokio::spawn(async move {
+            let mut queries = Vec::new();
+            for body in [
+                r#"{"Status":0}"#,
+                r#"{"Status":3}"#,
+                r#"{"Status":2}"#,
+                r#"{"Status":5}"#,
+                r#"{}"#,
+            ] {
+                let (mut socket, _) = listener.accept().await.unwrap();
+                let mut request = [0; 8192];
+                let count = socket.read(&mut request).await.unwrap();
+                let request = String::from_utf8_lossy(&request[..count]);
+                let target = request
+                    .lines()
+                    .next()
+                    .unwrap()
+                    .split_whitespace()
+                    .nth(1)
+                    .unwrap();
+                let url = Url::parse(&format!("http://localhost{target}")).unwrap();
+                assert_eq!(url.path(), "/dns/query");
+                let query: BTreeMap<_, _> = url.query_pairs().into_owned().collect();
+                assert_eq!(query["type"], "A");
+                assert!(query["name"].ends_with(".claude.ai"));
+                assert!(!queries.contains(&query["name"]));
+                queries.push(query["name"].clone());
+                let reply = format!(
+                    "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+                    body.len()
+                );
+                socket.write_all(reply.as_bytes()).await.unwrap();
+            }
+        });
+        for success in [true, true, false, false, false] {
+            assert_eq!(api.verify_dns().await.is_ok(), success);
+        }
+        server.await.unwrap();
+    }
+
     #[test]
     fn snapshots_share_repeated_text_and_release_the_intern_pool() {
         let connections: Connections = serde_json::from_str(r#"{"connections":[{"id":"1","metadata":{"network":"tcp","process":"browser"},"chains":["Auto","node"],"rule":"Domain"},{"id":"2","metadata":{"network":"udp","process":"browser"},"chains":["Auto","node"],"rule":"Domain"}]}"#).unwrap();

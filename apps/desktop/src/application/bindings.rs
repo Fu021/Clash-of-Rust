@@ -435,6 +435,7 @@ impl App {
             ),
             Intent::Query => Message::Query(a.into()),
             Intent::DismissNotice => Message::DismissNotice,
+            Intent::SystemNotification => Message::SystemNotification,
             Intent::RestartCore => Message::RestartCore,
             Intent::Mode => Message::Action(Action::Mode(
                 ["rule", "global", "direct"]

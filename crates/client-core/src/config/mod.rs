@@ -427,6 +427,7 @@ pub fn runtime_config_with_rules(
     tun.entry(Value::from("dns-hijack"))
         .or_insert(serde_yaml::to_value(["any:53"])?);
     map.insert(Value::from("tun"), Value::Mapping(tun));
+    apply_sniffer(&mut map)?;
     apply_dns(&mut map, settings)?;
     crate::claude_check::protection::apply(&mut map, settings)?;
     apply_udp(
@@ -434,6 +435,50 @@ pub fn runtime_config_with_rules(
         settings.udp || settings.claude_protection.is_some(),
     )?;
     Ok(serde_yaml::to_string(&map)?)
+}
+
+/// Learn unknown HTTP/SNI/QUIC hostnames without rewriting established destinations.
+/// Keep subscription port/skip choices; protection applies its stricter policy later.
+fn apply_sniffer(map: &mut Mapping) -> Result<()> {
+    let mut sniffer = match map.remove(Value::from("sniffer")) {
+        None | Some(Value::Null) => Mapping::new(),
+        Some(Value::Mapping(sniffer)) => sniffer,
+        _ => bail!("订阅 sniffer 必须是配置对象"),
+    };
+    for key in ["enable", "parse-pure-ip", "force-dns-mapping"] {
+        sniffer.insert(Value::from(key), Value::from(true));
+    }
+    sniffer.insert(Value::from("override-destination"), Value::from(false));
+    let protocols = sniffer
+        .entry(Value::from("sniff"))
+        .or_insert(Value::Mapping(Mapping::new()));
+    if protocols.is_null() {
+        *protocols = Value::Mapping(Mapping::new());
+    }
+    let protocols = protocols
+        .as_mapping_mut()
+        .context("订阅 sniff 必须是配置对象")?;
+    for (protocol, ports) in [
+        ("HTTP", "[80, 8080-8880]"),
+        ("TLS", "[443, 8443]"),
+        ("QUIC", "[443, 8443]"),
+    ] {
+        let options = protocols
+            .entry(Value::from(protocol))
+            .or_insert(Value::Mapping(Mapping::new()));
+        if options.is_null() {
+            *options = Value::Mapping(Mapping::new());
+        }
+        let options = options
+            .as_mapping_mut()
+            .context("订阅嗅探协议必须是配置对象")?;
+        options
+            .entry(Value::from("ports"))
+            .or_insert(serde_yaml::from_str(ports)?);
+        options.insert(Value::from("override-destination"), Value::from(false));
+    }
+    map.insert(Value::from("sniffer"), Value::Mapping(sniffer));
+    Ok(())
 }
 
 fn apply_udp(map: &mut Mapping, enabled: bool) -> Result<()> {
@@ -692,6 +737,26 @@ mod tests {
         assert_eq!(
             parse_profile(raw).unwrap()[Value::from("tcp-concurrent")].as_bool(),
             Some(false)
+        );
+    }
+
+    #[test]
+    fn sniffer_observes_unknown_hosts_without_rewriting_destinations_or_source() {
+        let raw = "proxies: []\nsniffer: {enable: false, parse-pure-ip: false, override-destination: true, skip-domain: ['+.example.test'], sniff: {TLS: {ports: [9443], override-destination: true}}}\n";
+        let runtime: Value =
+            serde_yaml::from_str(&runtime_config(raw, &Settings::default()).unwrap()).unwrap();
+        assert_eq!(runtime["sniffer"]["enable"], true);
+        assert_eq!(runtime["sniffer"]["parse-pure-ip"], true);
+        assert_eq!(runtime["sniffer"]["override-destination"], false);
+        assert_eq!(
+            runtime["sniffer"]["sniff"]["TLS"]["override-destination"],
+            false
+        );
+        assert_eq!(runtime["sniffer"]["sniff"]["TLS"]["ports"][0], 9443);
+        assert_eq!(runtime["sniffer"]["skip-domain"][0], "+.example.test");
+        assert_eq!(
+            parse_profile(raw).unwrap()[Value::from("sniffer")]["enable"],
+            false
         );
     }
 
