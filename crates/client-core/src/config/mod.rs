@@ -451,9 +451,12 @@ fn apply_sniffer(map: &mut Mapping) -> Result<()> {
     let sniffer = sniffer
         .as_mapping_mut()
         .context("订阅 sniffer 必须是配置对象")?;
-    for key in ["enable", "parse-pure-ip", "force-dns-mapping"] {
+    for key in ["enable", "parse-pure-ip"] {
         sniffer.insert(Value::from(key), Value::from(true));
     }
+    // A sniffed ECH outer name also changes rule matching in mihomo, even
+    // with override-destination=false. Existing DNS hostnames stay authoritative.
+    sniffer.insert(Value::from("force-dns-mapping"), Value::from(false));
     sniffer.insert(Value::from("override-destination"), Value::from(false));
     let protocols = sniffer
         .entry(Value::from("sniff"))
@@ -747,11 +750,12 @@ mod tests {
 
     #[test]
     fn sniffer_observes_unknown_hosts_without_rewriting_destinations_or_source() {
-        let raw = "proxies: []\nsniffer: {enable: false, parse-pure-ip: false, override-destination: true, skip-domain: ['+.example.test'], sniff: {TLS: {ports: [9443], override-destination: true}}}\n";
+        let raw = "proxies: []\nsniffer: {enable: false, parse-pure-ip: false, force-dns-mapping: true, override-destination: true, skip-domain: ['+.example.test'], sniff: {TLS: {ports: [9443], override-destination: true}}}\n";
         let runtime: Value =
             serde_yaml::from_str(&runtime_config(raw, &Settings::default()).unwrap()).unwrap();
         assert_eq!(runtime["sniffer"]["enable"], true);
         assert_eq!(runtime["sniffer"]["parse-pure-ip"], true);
+        assert_eq!(runtime["sniffer"]["force-dns-mapping"], false);
         assert_eq!(runtime["sniffer"]["override-destination"], false);
         assert_eq!(
             runtime["sniffer"]["sniff"]["TLS"]["override-destination"],
