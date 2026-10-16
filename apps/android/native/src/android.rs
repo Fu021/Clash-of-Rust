@@ -1,23 +1,24 @@
 use anyhow::{Context, Result, bail, ensure};
 use clash_mobile_runtime::{NativeHost, Session, core};
 use core::{api, config, proxy_order, rule_manager};
+use futures_util::{StreamExt, stream};
 use jni::{
     JNIEnv, JavaVM,
     objects::{GlobalRef, JClass, JObject, JString, JValue},
 };
 use serde_json::{Value, json};
-use slint::{ComponentHandle, Model, ModelRc, SharedString, VecModel};
+use slint::{ComponentHandle, Model, ModelRc, VecModel};
 use std::{
-    collections::VecDeque,
+    collections::{BTreeMap, VecDeque},
     path::PathBuf,
     rc::Rc,
-    sync::{Arc, OnceLock},
+    sync::{Arc, Mutex},
     time::Duration,
 };
 use tokio::sync::mpsc;
 
 slint::include_modules!();
-static EVENTS: OnceLock<mpsc::Sender<String>> = OnceLock::new();
+static EVENTS: Mutex<Option<mpsc::Sender<String>>> = Mutex::new(None);
 
 struct AndroidHost {
     vm: JavaVM,
@@ -85,13 +86,21 @@ pub extern "system" fn Java_org_clashofrust_android_MainActivity_nativeEvent(
     _: JClass<'_>,
     text: JString<'_>,
 ) {
-    if let Ok(value) = env.get_string(&text)
-        && let Some(sender) = EVENTS.get()
+    let value = env.get_string(&text).map(String::from);
+    if let Ok(value) = value
+        && let Ok(sender) = EVENTS.lock()
+        && let Some(sender) = sender.as_ref()
     {
-        let _ = sender.try_send(value.into());
+        let _ = sender.try_send(value);
     }
 }
 
+#[derive(Clone)]
+struct RuleForm {
+    kind: String,
+    payload: String,
+    policy: String,
+}
 struct Request {
     intent: MobileIntent,
     a: String,
@@ -109,6 +118,18 @@ struct State {
     connection_sort: String,
     ip_results: Vec<core::ip_report::ResultSlot>,
     claude: Option<core::claude_check::Report>,
+    category: String,
+    detecting: bool,
+    generation: u64,
+    visible: bool,
+    completed: Option<MobileIntent>,
+    probe: (String, String),
+    dns: String,
+    geo: String,
+    node_pages: BTreeMap<String, usize>,
+    connection_page: usize,
+    rule_page: usize,
+    rule_form: Option<RuleForm>,
 }
 
 #[unsafe(no_mangle)]
@@ -130,14 +151,23 @@ fn run(app: slint::android::AndroidApp) -> Result<()> {
     window
         .global::<MobileData>()
         .set_version(core::VERSION.into());
-    let (commands, mut receive) = mpsc::channel::<Request>(32);
-    let (events, mut native_events) = mpsc::channel::<String>(16);
-    let _ = EVENTS.set(events);
+    window
+        .global::<MobileData>()
+        .set_protection_supported(false);
+    let (commands, receive) = mpsc::channel::<Request>(32);
+    let (events, native_events) = mpsc::channel::<String>(16);
+    if let Ok(mut sender) = EVENTS.lock() {
+        *sender = Some(events);
+    }
     let weak = window.as_weak();
     window
         .global::<MobileActions>()
         .on_request(move |intent, a, b| {
             let Some(ui) = weak.upgrade() else { return };
+            ui.global::<MobileData>().set_working(!matches!(
+                intent,
+                MobileIntent::Query | MobileIntent::RuleTextMode
+            ));
             if commands
                 .try_send(Request {
                     intent,
@@ -147,6 +177,7 @@ fn run(app: slint::android::AndroidApp) -> Result<()> {
                 })
                 .is_err()
             {
+                ui.global::<MobileData>().set_working(false);
                 ui.invoke_notify("操作过于频繁，请稍后再试".into());
             }
         });
@@ -186,56 +217,264 @@ fn run(app: slint::android::AndroidApp) -> Result<()> {
         },
     );
     let weak = window.as_weak();
-    std::thread::Builder::new().name("mobile-runtime".into()).spawn(move || {
-        let result = (|| -> Result<()> {
-            let runtime = tokio::runtime::Builder::new_multi_thread().worker_threads(2).enable_all().build()?;
-            runtime.block_on(async move {
-                let mut state = State { session: Session::open(root, native)?, page: 0, query: String::new(),
-                    selected: String::new(), notice: String::new(), logs: VecDeque::new(), log_level: "全部等级".into(),
-                    connection_sort: "下载速度 ↓".into(), ip_results: vec![None; core::ip_check::services().len()], claude: None };
-                if let Err(error) = state.session.initialize() { state.notice = format!("内核启动失败：{error:#}"); }
-                let mut poll = tokio::time::interval(Duration::from_secs(1));
-                loop {
-                    state.page = current_page.load(std::sync::atomic::Ordering::Relaxed);
-                    tokio::select! {
-                        value = receive.recv() => {
-                            let Some(request) = value else { break; };
-                            state.selected = request.selected.clone();
-                            if let Err(error) = handle(&mut state, request).await { state.notice = format!("{error:#}"); }
+    std::thread::Builder::new()
+        .name("mobile-runtime".into())
+        .spawn(move || {
+            let result = (|| -> Result<()> {
+                let runtime = tokio::runtime::Builder::new_multi_thread()
+                    .worker_threads(2)
+                    .enable_all()
+                    .build()?;
+                runtime.block_on(run_loop(
+                    root,
+                    native,
+                    receive,
+                    native_events,
+                    weak,
+                    current_page,
+                ))
+            })();
+            if let Err(error) = result {
+                log::error!("Mobile runtime stopped: {error:#}");
+            }
+        })?;
+    window.run()?;
+    Ok(())
+}
+
+enum Update {
+    Ip(u64, usize, core::ip_report::ResultSlot),
+    IpDone(u64),
+    Claude(std::result::Result<core::claude_check::Report, String>),
+    Log(String, String),
+    Notice(String),
+}
+async fn run_loop(
+    root: PathBuf,
+    native: Arc<AndroidHost>,
+    mut receive: mpsc::Receiver<Request>,
+    mut native_events: mpsc::Receiver<String>,
+    weak: slint::Weak<AndroidWindow>,
+    current_page: Arc<std::sync::atomic::AtomicI32>,
+) -> Result<()> {
+    let mut state = State {
+        session: Session::open(root, native)?,
+        page: 0,
+        query: String::new(),
+        selected: String::new(),
+        notice: String::new(),
+        logs: VecDeque::new(),
+        log_level: "全部等级".into(),
+        connection_sort: "下载速度 ↓".into(),
+        ip_results: vec![None; core::ip_check::services().len()],
+        claude: None,
+        category: "AI".into(),
+        detecting: false,
+        generation: 0,
+        visible: true,
+        completed: None,
+        probe: ("尚未测试".into(), String::new()),
+        dns: "尚未查询".into(),
+        geo: "已内置离线数据".into(),
+        node_pages: BTreeMap::new(),
+        connection_page: 0,
+        rule_page: 0,
+        rule_form: None,
+    };
+    if let Err(error) = state.session.initialize() {
+        state.notice = format!("内核启动失败：{error:#}");
+    }
+    let (updates, mut update_rx) = mpsc::channel::<Update>(32);
+    let mut checks: Option<tokio::task::JoinHandle<()>> = None;
+    let mut claude_job: Option<tokio::task::JoinHandle<()>> = None;
+    let mut log_job: Option<tokio::task::JoinHandle<()>> = None;
+    let mut log_port = 0;
+    let mut last_delay = std::time::Instant::now();
+    let mut delay_job: Option<tokio::task::JoinHandle<()>> = None;
+    let mut poll = tokio::time::interval(Duration::from_secs(1));
+    let mut last_frame = std::time::Instant::now() - Duration::from_secs(1);
+    loop {
+        let page = current_page.load(std::sync::atomic::Ordering::Relaxed);
+        if page != state.page {
+            state.query.clear();
+            state.page = page;
+        }
+        let mut immediate = false;
+        tokio::select! {
+            value = receive.recv() => {
+                let Some(request) = value else { break; };
+                state.selected = request.selected.clone();
+                immediate = true;
+                let intent = request.intent;
+                if matches!(intent, MobileIntent::SiteStart | MobileIntent::SiteRetest) {
+                    if let Some(job) = checks.take() { job.abort(); }
+                    state.generation += 1; state.detecting = true;
+                    if intent == MobileIntent::SiteStart { state.ip_results.fill(None); }
+                    let generation = state.generation;
+                    let port = state.session.settings.mixed_port;
+                    let send = updates.clone();
+                    checks = Some(tokio::spawn(async move {
+                        let mut jobs = stream::iter(core::ip_check::services().iter().enumerate()
+                            .filter(|(_,service)| intent == MobileIntent::SiteStart || service.group == request.a)
+                            .map(|(index,service)| async move { (index, core::ip_check::check(&service.id,port).await.map_err(|e|e.to_string())) }))
+                            .buffer_unordered(4);
+                        while let Some((index,result)) = jobs.next().await {
+                            if send.send(Update::Ip(generation,index,Some(result))).await.is_err() { return; }
                         }
-                        value = native_events.recv() => {
-                            if let Some(value) = value {
-                                if let Err(error) = native_event(&mut state, &value).await { state.notice = format!("{error:#}"); }
+                        let _ = send.send(Update::IpDone(generation)).await;
+                    }));
+                } else if intent == MobileIntent::SiteCancel {
+                    if let Some(job) = checks.take() { job.abort(); }
+                    state.generation += 1; state.detecting = false;
+                } else if intent == MobileIntent::ClaudeStart {
+                    if let Some(job) = claude_job.take() { job.abort(); }
+                    let port = state.session.settings.mixed_port;
+                    let host = state.session.native.clone();
+                    let send = updates.clone();
+                    claude_job = Some(tokio::spawn(async move {
+                        let result = async {
+                            let client = core::claude_check::client(Some(port))?;
+                            let browser = core::claude_check::browser::Session::start(client.clone()).await?;
+                            host.request(json!({"op":"open-url","url":browser.url}))?;
+                            let mut report = core::claude_check::Report::new(core::claude_check::Environment::Core,"Android 网络环境");
+                            core::claude_check::network(&client,&mut report,"内核代理").await;
+                            core::claude_check::enhanced::extend(&client,&mut report,None).await;
+                            report.signals.extend(core::claude_check::system_dns(&client,"Android 系统").await);
+                            let deadline = tokio::time::Instant::now()+Duration::from_secs(120);
+                            loop {
+                                if let Some(sample)=browser.next_report() { report.signals.extend(sample.signals); break; }
+                                if tokio::time::Instant::now()>=deadline { break; }
+                                tokio::time::sleep(Duration::from_millis(500)).await;
                             }
-                        }
-                        _ = poll.tick() => {
-                            if let Err(error) = state.session.refresh(state.page).await {
-                                if state.logs.back().is_none_or(|(_, old)| old != &error.to_string()) {
-                                    state.logs.push_back(("WARN".into(), error.to_string()));
-                                }
-                            }
+                            Ok::<_,anyhow::Error>(report)
+                        }.await;
+                        let _ = send.send(Update::Claude(result.map_err(|e|e.to_string()))).await;
+                    }));
+                } else {
+                    match handle(&mut state, request).await {
+                        Ok(()) => state.completed = Some(intent),
+                        Err(error) => state.notice = format!("{error:#}"),
+                    }
+                }
+            }
+            value = native_events.recv() => {
+                if let Some(value) = value {
+                    immediate = true;
+                    if let Err(error) = native_event(&mut state,&value).await { state.notice=format!("{error:#}"); }
+                }
+            }
+            value = update_rx.recv() => {
+                match value {
+                    Some(Update::Ip(generation,index,result)) if generation == state.generation => state.ip_results[index]=result,
+                    Some(Update::IpDone(generation)) if generation == state.generation => { state.detecting=false; checks=None; }
+                    Some(Update::Claude(Ok(report))) => { state.claude=Some(report); state.notice="检测完成".into(); },
+                    Some(Update::Claude(Err(error))) => state.notice=error,
+                    Some(Update::Log(level,message)) => state.logs.push_back((level,message)),
+                    Some(Update::Notice(message))=>state.notice=message,
+                    _ => {}
+                }
+            }
+            _ = poll.tick() => {
+                let minutes=state.session.settings.delay_interval_minutes;
+                if minutes>0 && last_delay.elapsed()>=Duration::from_secs(minutes as u64*60) && delay_job.as_ref().is_none_or(|job|job.is_finished()) {
+                    last_delay=std::time::Instant::now();
+                    let api=state.session.api.clone();let send=updates.clone();
+                    delay_job=Some(tokio::spawn(async move { if let Err(error)=api.delay_all_nodes().await{let _=send.send(Update::Notice(format!("定时测速失败：{error}"))).await;} }));
+                }
+                if state.visible || state.session.vpn {
+                    let page = if state.visible { state.page } else { -1 };
+                    if let Err(error) = state.session.refresh(page).await {
+                        state.session.running=false;
+                        if state.logs.back().is_none_or(|(_,old)| old != &error.to_string()) {
+                            state.logs.push_back(("WARN".into(),error.to_string()));
                         }
                     }
-                    while state.logs.len() > 300 { state.logs.pop_front(); }
-                    let view = project(&state);
-                    let notice = std::mem::take(&mut state.notice);
-                    let weak = weak.clone();
-                    slint::invoke_from_event_loop(move || {
-                        if let Some(ui) = weak.upgrade() { apply(&ui, view); if !notice.is_empty() { ui.invoke_notify(notice.into()); } }
-                    })?;
+                    if state.session.vpn {
+                        let _ = state.session.native.request(json!({"op":"traffic", "down":format!("{}/s",bytes(state.session.rates.1)), "up":format!("{}/s",bytes(state.session.rates.0))}));
+                    }
+                } else {
+                    state.session.proxies=api::Proxies::default();
+                    state.session.connections.connections.clear();
+                    state.session.connections.connections.shrink_to_fit();
                 }
-                Ok(())
-            })
-        })();
-        if let Err(error) = result { log::error!("Mobile runtime stopped: {error:#}"); }
-    })?;
-    window.run()?;
+            }
+        }
+        if log_port != state.session.settings.controller_port {
+            if let Some(job) = log_job.take() {
+                job.abort();
+            }
+            log_port = state.session.settings.controller_port;
+            let api = state.session.api.clone();
+            let send = updates.clone();
+            log_job = Some(tokio::spawn(async move {
+                loop {
+                    if let Ok(mut response) = api.logs().await {
+                        let mut frames = core::runtime::logging::LogFrames::default();
+                        while let Ok(Some(chunk)) = response.chunk().await {
+                            frames.push(&chunk, |line| {
+                                if let Ok(value) = serde_json::from_slice::<Value>(line) {
+                                    let level = value["type"]
+                                        .as_str()
+                                        .unwrap_or("info")
+                                        .to_uppercase()
+                                        .replace("WARNING", "WARN");
+                                    let text = value["payload"]
+                                        .as_str()
+                                        .unwrap_or("")
+                                        .chars()
+                                        .take(8192)
+                                        .collect();
+                                    let _ = send.try_send(Update::Log(level, text));
+                                }
+                            });
+                        }
+                    }
+                    tokio::time::sleep(Duration::from_secs(2)).await;
+                }
+            }));
+        }
+        while state.logs.len() > 300 {
+            state.logs.pop_front();
+        }
+        if !state.visible || (!immediate && last_frame.elapsed() < Duration::from_millis(100)) {
+            continue;
+        }
+        last_frame = std::time::Instant::now();
+        let view = project(&state);
+        state.completed = None;
+        state.rule_form = None;
+        let notice = std::mem::take(&mut state.notice);
+        let weak = weak.clone();
+        slint::invoke_from_event_loop(move || {
+            if let Some(ui) = weak.upgrade() {
+                apply(&ui, view);
+                if !notice.is_empty() {
+                    ui.invoke_notify(notice.into());
+                }
+            }
+        })?;
+    }
+    if let Some(job) = checks {
+        job.abort();
+    }
+    if let Some(job) = claude_job {
+        job.abort();
+    }
+    if let Some(job) = log_job {
+        job.abort();
+    }
+    if let Some(job) = delay_job {
+        job.abort();
+    }
     Ok(())
 }
 
 async fn native_event(state: &mut State, raw: &str) -> Result<()> {
     let value: Value = serde_json::from_str(raw)?;
     match value["event"].as_str().unwrap_or("") {
+        "visible" => {
+            state.visible = value["value"].as_bool().unwrap_or(true);
+        }
         "vpn" => {
             state.session.vpn = value["value"].as_bool().unwrap_or(false);
         }
@@ -285,12 +524,22 @@ async fn handle(state: &mut State, request: Request) -> Result<()> {
         MobileIntent::SelectNode => {
             session.api.select(&a, &b).await?;
         }
+        MobileIntent::SavePorts => {
+            ensure!(!session.vpn, "请先断开 VPN，再修改端口");
+            let (mixed, controller) = a.split_once(',').context("端口格式无效")?;
+            let mut next = session.settings.clone();
+            next.mixed_port = mixed.parse()?;
+            next.controller_port = controller.parse()?;
+            session.commit_settings(next)?;
+            state.notice = "端口已保存".into();
+        }
         MobileIntent::NodeSort => {
             let mut next = session.settings.clone();
             next.node_sort = *proxy_order::NodeSort::ALL
                 .get(a.parse::<usize>()?)
                 .context("排序无效")?;
-            session.commit_settings(next)?;
+            session.store.save_settings(&next)?;
+            session.settings = next;
         }
         MobileIntent::NodeDelay => {
             if a == "all" {
@@ -300,12 +549,58 @@ async fn handle(state: &mut State, request: Request) -> Result<()> {
             }
             state.notice = "测速完成".into();
         }
-        MobileIntent::Query => state.query = b,
+        MobileIntent::Query => {
+            state.query = b;
+            state.node_pages.clear();
+            state.connection_page = 0;
+            state.rule_page = 0;
+        }
+        MobileIntent::NodePage => {
+            let value = state.node_pages.entry(a).or_default();
+            *value = value.saturating_add_signed(b.parse()?);
+        }
+        MobileIntent::ConnectionPage => {
+            state.connection_page = state.connection_page.saturating_add_signed(a.parse()?)
+        }
+        MobileIntent::RulePage => {
+            state.rule_page = state.rule_page.saturating_add_signed(a.parse()?)
+        }
+        MobileIntent::RuleTextMode => {
+            state.rule_form = if a.trim().is_empty() {
+                None
+            } else {
+                let parts = rule_manager::draft_parts(&a)?;
+                ensure!(
+                    !parts.no_resolve
+                        && [
+                            "DOMAIN-SUFFIX",
+                            "DOMAIN",
+                            "IP-CIDR",
+                            "IP-CIDR6",
+                            "GEOIP",
+                            "GEOSITE",
+                            "RULE-SET"
+                        ]
+                        .contains(&parts.kind),
+                    "此规则请继续使用文本编辑，以保留所有参数"
+                );
+                Some(RuleForm {
+                    kind: parts.kind.into(),
+                    payload: parts.payload.into(),
+                    policy: parts.policy.into(),
+                })
+            };
+        }
         MobileIntent::PickFile => {
             session.native.request(json!({"op":"pick-file"}))?;
         }
         MobileIntent::SaveProfile => {
-            session.save_profile(None, &a, &b, None).await?;
+            let id = session
+                .profiles
+                .iter()
+                .find(|p| p.id == selected)
+                .map(|p| p.id.clone());
+            session.save_profile(id.as_deref(), &a, &b, None).await?;
             state.notice = "订阅已保存".into();
         }
         MobileIntent::ActivateProfile => {
@@ -316,14 +611,46 @@ async fn handle(state: &mut State, request: Request) -> Result<()> {
             state.notice = "订阅已删除".into();
         }
         MobileIntent::UpdateProfile => {
-            bail!("当前订阅更新接入中；可先添加新地址并切换");
+            session.update_profile(&a).await?;
+            state.notice = "订阅已更新".into();
         }
         MobileIntent::CloseConnection => session.api.close_connection(&a).await?,
         MobileIntent::CloseAll => session.api.close_connections().await?,
         MobileIntent::ConnectionSort => state.connection_sort = a,
         MobileIntent::ConnectionDetail => state.selected = a,
         MobileIntent::Copy => {
-            session.native.request(json!({"op":"copy","text":a}))?;
+            let text = if let Some(id) = a.strip_prefix("connection:") {
+                let c = session
+                    .connections
+                    .connections
+                    .iter()
+                    .find(|c| c.id.as_ref() == id)
+                    .context("该连接已结束")?;
+                format!(
+                    "{}:{}\n域名: {}\n嗅探域名: {}\n目标 IP: {}\n协议: {}\n匹配规则: {} {}\n代理链: {}\n上传: {}  下载: {}\n开始时间: {}\n连接 ID: {}",
+                    core::connection::name(c),
+                    c.metadata.destination_port,
+                    c.metadata.host,
+                    c.metadata.sniff_host,
+                    c.metadata.destination_ip,
+                    c.metadata.network,
+                    c.rule,
+                    c.rule_payload,
+                    c.chains
+                        .iter()
+                        .rev()
+                        .map(|v| v.as_str())
+                        .collect::<Vec<_>>()
+                        .join(" → "),
+                    bytes(c.upload),
+                    bytes(c.download),
+                    c.start,
+                    c.id
+                )
+            } else {
+                a
+            };
+            session.native.request(json!({"op":"copy","text":text}))?;
             state.notice = "已复制".into();
         }
         MobileIntent::LogLevel => state.log_level = a,
@@ -345,7 +672,14 @@ async fn handle(state: &mut State, request: Request) -> Result<()> {
                 .context("快捷规则不存在")? = b == "true";
         }
         MobileIntent::RuleDelete => {
-            session.draft.custom.retain(|r| r.id != a);
+            ensure!(
+                a.starts_with("c:"),
+                "订阅原规则可调整顺序；只有自定义规则可以删除"
+            );
+            session
+                .draft
+                .custom
+                .retain(|r| r.id != a.trim_start_matches("c:"));
             session.draft.order.retain(|id| id != &a);
         }
         MobileIntent::RuleMove => {
@@ -367,7 +701,7 @@ async fn handle(state: &mut State, request: Request) -> Result<()> {
         MobileIntent::RuleDiscard => {
             session.draft = rule_manager::ProfileRules::for_profile(
                 &session.settings,
-                &session.profile().id,
+                &session.rule_profile,
                 false,
             )
             .as_ref()
@@ -381,7 +715,7 @@ async fn handle(state: &mut State, request: Request) -> Result<()> {
                 .context("订阅不存在")?
                 .id
                 .clone();
-            session.activate(&id)?;
+            session.select_rules(&id)?;
         }
         MobileIntent::DnsOverride | MobileIntent::Ipv6 | MobileIntent::Udp => {
             ensure!(
@@ -429,15 +763,17 @@ async fn handle(state: &mut State, request: Request) -> Result<()> {
                 session.running.then_some(session.settings.mixed_port),
             )
             .await?;
+            state.geo = "已更新".into();
+            session.initialize()?;
             state.notice = "Geo 数据已更新".into();
         }
         MobileIntent::Probe => {
             let result = core::probe::website(a, session.settings.mixed_port, false).await?;
-            state.notice = format!("{} · {} ms", result.detail, result.millis);
+            state.probe = (result.detail, format!("{} ms", result.millis));
         }
         MobileIntent::Dns => {
             let ips = session.api.resolve_domain(&a).await?;
-            state.notice = ips
+            state.dns = ips
                 .iter()
                 .map(ToString::to_string)
                 .collect::<Vec<_>>()
@@ -446,30 +782,7 @@ async fn handle(state: &mut State, request: Request) -> Result<()> {
         MobileIntent::SystemNotification => {
             session.native.request(json!({"op":"notify"}))?;
         }
-        MobileIntent::SiteStart | MobileIntent::SiteRetest => {
-            for (index, service) in core::ip_check::services().iter().enumerate() {
-                if intent == MobileIntent::SiteRetest && service.group != a {
-                    continue;
-                }
-                state.ip_results[index] = Some(
-                    core::ip_check::check(&service.id, session.settings.mixed_port)
-                        .await
-                        .map_err(|e| e.to_string()),
-                );
-            }
-        }
-        MobileIntent::ClaudeStart => {
-            let client = core::claude_check::client(Some(session.settings.mixed_port))?;
-            let mut report = core::claude_check::Report::new(
-                core::claude_check::Environment::Core,
-                "Android 网络环境",
-            );
-            core::claude_check::network(&client, &mut report, "内核代理").await;
-            report
-                .signals
-                .extend(core::claude_check::system_dns(&client, "Android 系统").await);
-            state.claude = Some(report);
-        }
+        MobileIntent::SiteCategory => state.category = a,
         MobileIntent::ExportReport => {
             session
                 .native
@@ -487,6 +800,23 @@ async fn handle(state: &mut State, request: Request) -> Result<()> {
 fn rows<T: Clone + 'static>(values: Vec<T>) -> ModelRc<T> {
     Rc::new(VecModel::from(values)).into()
 }
+fn stable<T: Clone + PartialEq + 'static>(old: ModelRc<T>, next: ModelRc<T>) -> ModelRc<T> {
+    if let Some(model) = old.as_any().downcast_ref::<VecModel<T>>() {
+        for (index, row) in next.iter().enumerate() {
+            if index >= model.row_count() {
+                model.push(row);
+            } else if model.row_data(index).as_ref() != Some(&row) {
+                model.set_row_data(index, row);
+            }
+        }
+        while model.row_count() > next.row_count() {
+            model.remove(model.row_count() - 1);
+        }
+        old
+    } else {
+        next
+    }
+}
 fn bytes(value: u64) -> String {
     let units = ["B", "KiB", "MiB", "GiB"];
     let mut size = value as f64;
@@ -501,6 +831,13 @@ fn bytes(value: u64) -> String {
         format!("{size:.1} {}", units[index])
     }
 }
+struct GroupView {
+    name: String,
+    group: api::Proxy,
+    nodes: Vec<(String, api::Proxy)>,
+    count: usize,
+    page: usize,
+}
 struct Projection {
     settings: config::Settings,
     running: bool,
@@ -510,15 +847,41 @@ struct Projection {
     total: usize,
     upload: String,
     download: String,
-    groups: Vec<(String, api::Proxy, Vec<(String, api::Proxy)>)>,
+    groups: Vec<GroupView>,
     profiles: Vec<config::Profile>,
     connections: Vec<api::Connection>,
-    rules: Vec<rule_manager::Row>,
+    rules: Vec<(usize, rule_manager::Row)>,
     policies: Vec<String>,
     shortcuts: [bool; 5],
     dirty: bool,
     logs: Vec<(String, String)>,
     details: Vec<(String, String)>,
+    rates: (String, String),
+    platform: Value,
+    rule_profile: String,
+    completed: Option<MobileIntent>,
+    categories: Vec<(String, String, String, i32)>,
+    sites: Vec<ReportRow>,
+    claude: Vec<ReportRow>,
+    claude_counts: (usize, usize, usize),
+    progress: (usize, usize),
+    detecting: bool,
+    exit: (String, String),
+    probe: (String, String),
+    dns: String,
+    geo: String,
+    connection_page: (usize, usize),
+    rule_page: (usize, usize),
+    rule_form: Option<RuleForm>,
+}
+struct ReportRow {
+    id: String,
+    title: String,
+    value: String,
+    detail: String,
+    source: String,
+    tone: i32,
+    country: String,
 }
 fn project(state: &State) -> Projection {
     let s = &state.session;
@@ -538,8 +901,17 @@ fn project(state: &State) -> Projection {
                     || name.as_str().to_lowercase().contains(&query)
             },
         );
+        let count = indices.len();
+        let page = state
+            .node_pages
+            .get(name.as_str())
+            .copied()
+            .unwrap_or(0)
+            .min(count.saturating_sub(1) / 48);
         let nodes = indices
             .into_iter()
+            .skip(page * 48)
+            .take(48)
             .map(|i| {
                 let name = group.all[i].to_string();
                 let proxy = s
@@ -551,20 +923,25 @@ fn project(state: &State) -> Projection {
                 (name, proxy)
             })
             .collect();
-        groups.push((name.to_string(), group.clone(), nodes));
+        groups.push(GroupView {
+            name: name.to_string(),
+            group: group.clone(),
+            nodes,
+            count,
+            page,
+        });
     }
-    let node = s
-        .raw()
-        .ok()
-        .and_then(|raw| core::active_route::root(&raw).ok())
-        .and_then(|root| core::active_route::from_snapshot(&root, &s.proxies))
-        .unwrap_or_default();
-    let document = s.document().ok();
+    let node = s.node.clone();
+    let document = if state.page == 4 {
+        s.document().ok()
+    } else {
+        None
+    };
     let (rules, _) = document
         .as_ref()
         .map(|d| d.rows(&s.draft))
         .unwrap_or_default();
-    let saved = rule_manager::ProfileRules::for_profile(&s.settings, &s.profile().id, false);
+    let saved = rule_manager::ProfileRules::for_profile(&s.settings, &s.rule_profile, false);
     let mut connections = s
         .connections
         .connections
@@ -581,7 +958,6 @@ fn project(state: &State) -> Projection {
                 .to_lowercase()
                 .contains(&query)
         })
-        .cloned()
         .collect::<Vec<_>>();
     let field = if state.connection_sort.starts_with("名称") {
         core::connection::Field::Name
@@ -597,6 +973,24 @@ fn project(state: &State) -> Projection {
         descending: state.connection_sort.ends_with('↓') || state.connection_sort.ends_with("Z–A"),
     };
     connections.sort_by(|a, b| sort.compare(a, b));
+    let connection_count = connections.len();
+    let connection_page = state
+        .connection_page
+        .min(connection_count.saturating_sub(1) / 50);
+    let connections = connections
+        .into_iter()
+        .skip(connection_page * 50)
+        .take(50)
+        .cloned()
+        .collect();
+    let rules = rules
+        .into_iter()
+        .enumerate()
+        .filter(|(_, r)| query.is_empty() || r.raw.to_lowercase().contains(&query))
+        .collect::<Vec<_>>();
+    let rule_count = rules.len();
+    let rule_page = state.rule_page.min(rule_count.saturating_sub(1) / 100);
+    let rules = rules.into_iter().skip(rule_page * 100).take(100).collect();
     let mut details = vec![];
     if let Some(c) = s
         .connections
@@ -642,27 +1036,135 @@ fn project(state: &State) -> Projection {
             ("连接 ID".into(), c.id.to_string()),
         ];
     }
+    let report = core::ip_report::Report::from_results(&state.ip_results);
+    let categories = report
+        .categories
+        .iter()
+        .map(|c| {
+            (
+                c.name.to_owned(),
+                format!("{} / {}", c.counts.non_red(), c.counts.total()),
+                format!(
+                    "可用与部分可达 {} · 其他 {}",
+                    c.counts.non_red(),
+                    c.counts.total() - c.counts.non_red()
+                ),
+                if c.counts.non_red() == c.counts.total() {
+                    1
+                } else {
+                    2
+                },
+            )
+        })
+        .collect();
+    let mut sites = vec![];
+    let mut exit = ("—".to_string(), "未检测".to_string());
+    for (index, service) in core::ip_check::services().iter().enumerate() {
+        let slot = state.ip_results.get(index).and_then(Option::as_ref);
+        if service.id == "exit-ip"
+            && let Some(Ok(value)) = slot
+        {
+            exit = (value.summary.clone(), value.country.clone());
+        }
+        if state.category != "all" && service.group != state.category {
+            continue;
+        }
+        let (value, detail, country, tone) = match slot {
+            Some(Ok(value)) => (
+                value.summary.clone(),
+                value.detail.clone(),
+                value.country.clone(),
+                match value.state {
+                    core::ip_check::State::Confirmed | core::ip_check::State::Identified => 1,
+                    core::ip_check::State::Partial
+                    | core::ip_check::State::Reachable
+                    | core::ip_check::State::Unknown => 2,
+                    _ => 3,
+                },
+            ),
+            Some(Err(error)) => ("检测失败".into(), error.clone(), String::new(), 3),
+            None => ("尚未检测".into(), String::new(), String::new(), 4),
+        };
+        sites.push(ReportRow {
+            id: service.id.clone(),
+            title: service.name.clone(),
+            value,
+            detail,
+            source: service.group.clone(),
+            tone,
+            country,
+        });
+    }
+    let mut claude = vec![];
+    let mut claude_counts = (0, 0, 0);
+    if let Some(report) = &state.claude {
+        for (index, signal) in report.signals.iter().enumerate() {
+            let tone = if report.differs(signal) {
+                claude_counts.1 += 1;
+                3
+            } else if signal.evidence == core::claude_check::Evidence::Measured {
+                claude_counts.0 += 1;
+                1
+            } else {
+                claude_counts.2 += 1;
+                2
+            };
+            claude.push(ReportRow {
+                id: index.to_string(),
+                title: signal.title.clone(),
+                value: signal.value.clone(),
+                detail: signal.detail.clone(),
+                source: signal.source.clone(),
+                tone,
+                country: signal.country.clone(),
+            });
+        }
+    }
     Projection {
         settings: s.settings.clone(),
         running: s.running,
         vpn: s.vpn,
         profile: s.profile().name.clone(),
         node,
-        total: s.connections.connections.len(),
+        total: s.count,
         upload: bytes(s.connections.upload_total),
         download: bytes(s.connections.download_total),
         groups,
         profiles: s
             .profiles
             .iter()
-            .filter(|p| query.is_empty() || p.name.to_lowercase().contains(&query))
+            .filter(|p| {
+                state.page != 2 || query.is_empty() || p.name.to_lowercase().contains(&query)
+            })
             .cloned()
             .collect(),
         connections,
-        rules: rules
-            .into_iter()
-            .filter(|r| query.is_empty() || r.raw.to_lowercase().contains(&query))
-            .collect(),
+        rates: (
+            format!("{}/s", bytes(s.rates.0)),
+            format!("{}/s", bytes(s.rates.1)),
+        ),
+        platform: s.platform.clone(),
+        rule_profile: s
+            .profiles
+            .iter()
+            .find(|p| p.id == s.rule_profile)
+            .map(|p| p.name.clone())
+            .unwrap_or_default(),
+        completed: state.completed,
+        categories,
+        sites,
+        claude,
+        claude_counts,
+        progress: (report.totals.completed(), report.totals.total()),
+        detecting: state.detecting,
+        exit,
+        probe: state.probe.clone(),
+        dns: state.dns.clone(),
+        geo: state.geo.clone(),
+        rules,
+        connection_page: (connection_page, connection_count),
+        rule_page: (rule_page, rule_count),
+        rule_form: state.rule_form.clone(),
         policies: document.map(|d| d.policies).unwrap_or_default(),
         shortcuts: s.draft.enabled,
         dirty: s.draft != *saved,
@@ -670,7 +1172,8 @@ fn project(state: &State) -> Projection {
             .logs
             .iter()
             .filter(|(level, line)| {
-                (state.log_level == "全部等级" || level == &state.log_level)
+                state.page == 5
+                    && (state.log_level == "全部等级" || level == &state.log_level)
                     && (query.is_empty() || line.to_lowercase().contains(&query))
             })
             .cloned()
@@ -681,6 +1184,120 @@ fn project(state: &State) -> Projection {
 
 fn apply(ui: &AndroidWindow, p: Projection) {
     let data = ui.global::<MobileData>();
+    data.set_working(false);
+    data.set_probe_status(p.probe.0.into());
+    data.set_probe_time(p.probe.1.into());
+    data.set_dns_result(p.dns.into());
+    data.set_geo_status(p.geo.into());
+    for (page, count, size, rules) in [
+        (p.connection_page.0, p.connection_page.1, 50, false),
+        (p.rule_page.0, p.rule_page.1, 100, true),
+    ] {
+        let label = format!(
+            "{} / {} · {count} 条",
+            page + 1,
+            count.div_ceil(size).max(1)
+        );
+        if rules {
+            data.set_rule_page(label.into());
+            data.set_rule_previous(page > 0);
+            data.set_rule_next((page + 1) * size < count);
+        } else {
+            data.set_connection_page(label.into());
+            data.set_connection_previous(page > 0);
+            data.set_connection_next((page + 1) * size < count);
+        }
+    }
+    if p.completed == Some(MobileIntent::RuleTextMode) {
+        let view = ui.global::<MobileView>();
+        if let Some(parts) = p.rule_form {
+            view.set_rule_kind(parts.kind.into());
+            view.set_rule_payload(parts.payload.into());
+            view.set_rule_policy(parts.policy.into());
+        }
+        view.set_rule_text_mode(false);
+    }
+    data.set_protection_supported(false);
+    data.set_upload_rate(p.rates.0.into());
+    data.set_download_rate(p.rates.1.into());
+    data.set_rule_profile(p.rule_profile.into());
+    let android = ui.global::<AndroidData>();
+    android.set_authorization_status(if p.vpn {
+        "已连接".into()
+    } else {
+        "查看授权".into()
+    });
+    android.set_notification_speeds(p.platform["notification_speeds"].as_bool().unwrap_or(true));
+    android.set_application_scope(match p.platform["excluded_apps"].as_u64().unwrap_or(0) {
+        0 => "所有应用".into(),
+        n => format!("已排除 {n} 个应用").into(),
+    });
+    if p.completed == Some(MobileIntent::SavePorts) {
+        android.set_ports_dirty(false);
+    }
+    if matches!(
+        p.completed,
+        Some(MobileIntent::SaveProfile | MobileIntent::RuleSave | MobileIntent::DeleteProfile)
+    ) {
+        ui.global::<MobileView>().set_draft_dirty(false);
+        ui.set_current_detail(0);
+    }
+    data.set_detecting(p.detecting);
+    data.set_progress(if p.progress.1 == 0 {
+        0.0
+    } else {
+        p.progress.0 as f32 / p.progress.1 as f32
+    });
+    data.set_site_progress(format!("完成 {} / {}", p.progress.0, p.progress.1).into());
+    data.set_exit_ip(p.exit.0.into());
+    data.set_exit_country(core::countries::country_text(&p.exit.1).into());
+    data.set_exit_flag(flag(&p.exit.1));
+    data.set_categories(stable(
+        data.get_categories(),
+        rows(
+            p.categories
+                .chunks(2)
+                .map(|pair| {
+                    let item = |c: &(String, String, String, i32)| CategoryItem {
+                        id: c.0.clone().into(),
+                        title: c.0.clone().into(),
+                        count: c.1.clone().into(),
+                        detail: c.2.clone().into(),
+                        tone: c.3,
+                    };
+                    CategoryPair {
+                        left: item(&pair[0]),
+                        right: pair.get(1).map(item).unwrap_or_default(),
+                    }
+                })
+                .collect(),
+        ),
+    ));
+    let result = |r: ReportRow| {
+        let flag = flag(&r.country);
+        ReportItem {
+            id: r.id.into(),
+            title: r.title.into(),
+            value: r.value.into(),
+            detail: r.detail.into(),
+            source: r.source.into(),
+            tone: r.tone,
+            flagged: flag.size().width > 0,
+            flag,
+        }
+    };
+    data.set_site_results(stable(
+        data.get_site_results(),
+        rows(p.sites.into_iter().map(result).collect()),
+    ));
+    data.set_claude_results(stable(
+        data.get_claude_results(),
+        rows(p.claude.into_iter().map(result).collect()),
+    ));
+    data.set_claude_normal(p.claude_counts.0.to_string().into());
+    data.set_claude_risk(p.claude_counts.1.to_string().into());
+    data.set_claude_clues(p.claude_counts.2.to_string().into());
+
     data.set_core_running(p.running);
     data.set_vpn_connected(p.vpn);
     data.set_profile(p.profile.into());
@@ -691,167 +1308,224 @@ fn apply(ui: &AndroidWindow, p: Projection) {
     data.set_dns_override(p.settings.dns_override);
     data.set_ipv6(p.settings.ipv6);
     data.set_udp(p.settings.udp);
-    data.set_mixed_port(p.settings.mixed_port.to_string().into());
-    data.set_controller_port(p.settings.controller_port.to_string().into());
-    data.set_interval(p.settings.delay_interval_minutes.to_string().into());
+    if !android.get_ports_dirty() {
+        data.set_mixed_port(p.settings.mixed_port.to_string().into());
+        data.set_controller_port(p.settings.controller_port.to_string().into());
+    }
+    if !ui.global::<MobileView>().get_interval_dirty() {
+        data.set_interval(p.settings.delay_interval_minutes.to_string().into());
+    }
+    if p.completed == Some(MobileIntent::Interval) {
+        ui.global::<MobileView>().set_interval_dirty(false);
+    }
     data.set_mode(match p.settings.run_mode.as_str() {
         "global" => 1,
         "direct" => 2,
         _ => 0,
     });
     data.set_rule_dirty(p.dirty);
-    data.set_shortcuts(rows(
-        [
-            "拦截广告",
-            "私有域名直连",
-            "私有 IP 直连",
-            "国内域名直连",
-            "国内 IP 直连",
-        ]
-        .into_iter()
-        .map(Into::into)
-        .collect(),
-    ));
-    data.set_shortcut_values(rows(p.shortcuts.into()));
-    data.set_rule_profiles(rows(
-        p.profiles.iter().map(|p| p.name.clone().into()).collect(),
-    ));
-    data.set_rule_policies(rows(p.policies.into_iter().map(Into::into).collect()));
-    data.set_connection_details(rows(
-        p.details
+    data.set_shortcuts(stable(
+        data.get_shortcuts(),
+        rows(
+            [
+                "拦截广告",
+                "私有域名直连",
+                "私有 IP 直连",
+                "国内域名直连",
+                "国内 IP 直连",
+            ]
             .into_iter()
-            .map(|(label, value)| DetailItem {
-                label: label.into(),
-                value: if value.is_empty() {
-                    "—".into()
-                } else {
-                    value.into()
-                },
-            })
+            .map(Into::into)
             .collect(),
+        ),
     ));
-    data.set_profiles(rows(
-        p.profiles
-            .into_iter()
-            .map(|profile| ProfileItem {
-                id: profile.id.clone().into(),
-                name: profile.name.into(),
-                source: profile.source.clone().into(),
-                detail: profile
-                    .usage
-                    .unwrap_or_else(|| format!("更新：{}", profile.updated))
-                    .into(),
-                active: p.settings.active_profile.as_deref() == Some(&profile.id),
-                local: profile.source.is_empty(),
-            })
-            .collect(),
+    data.set_shortcut_values(stable(data.get_shortcut_values(), rows(p.shortcuts.into())));
+    data.set_rule_profiles(stable(
+        data.get_rule_profiles(),
+        rows(p.profiles.iter().map(|p| p.name.clone().into()).collect()),
     ));
-    data.set_groups(rows(
-        p.groups
-            .into_iter()
-            .map(|(name, group, nodes)| {
-                let node_items = nodes
-                    .into_iter()
-                    .map(|(name, node)| NodeItem {
-                        group: group.now.to_string().into(),
-                        selected: name == group.now.as_str(),
-                        name: name.into(),
-                        kind: node.kind.to_string().into(),
-                        delay: node
-                            .delay
-                            .map(|d| format!("{d} ms"))
-                            .unwrap_or_else(|| "未测速".into())
-                            .into(),
-                        valid: true,
-                    })
-                    .collect::<Vec<_>>();
-                let count = node_items.len();
-                GroupItem {
-                    id: name.clone().into(),
-                    title: name.into(),
-                    detail: format!("{} · {count} 个节点", group.kind).into(),
-                    current: group.now.to_string().into(),
-                    expanded: true,
-                    nodes: rows(
-                        node_items
-                            .chunks(2)
-                            .map(|pair| NodePair {
-                                left: pair[0].clone(),
-                                right: pair.get(1).cloned().unwrap_or_default(),
-                            })
-                            .collect(),
-                    ),
-                    page: format!("{count} 个节点").into(),
-                    ..Default::default()
-                }
-            })
-            .collect(),
+    data.set_rule_policies(stable(
+        data.get_rule_policies(),
+        rows(p.policies.into_iter().map(Into::into).collect()),
     ));
-    data.set_connections(rows(
-        p.connections
-            .into_iter()
-            .map(|c| ConnectionItem {
-                id: c.id.to_string().into(),
-                host: format!(
-                    "{}:{}",
-                    core::connection::name(&c),
-                    c.metadata.destination_port
-                )
-                .into(),
-                detail: c.start.to_string().into(),
-                rule: format!("{} {}", c.rule, c.rule_payload).into(),
-                route: c
-                    .chains
-                    .iter()
-                    .rev()
-                    .map(|s| s.as_str())
-                    .collect::<Vec<_>>()
-                    .join(" → ")
-                    .into(),
-                up: format!("{}/s", bytes(c.rates.map(|r| r.upload).unwrap_or(0))).into(),
-                down: format!("{}/s", bytes(c.rates.map(|r| r.download).unwrap_or(0))).into(),
-                upload: bytes(c.upload).into(),
-                download: bytes(c.download).into(),
-            })
-            .collect(),
-    ));
-    data.set_rules(rows(
-        p.rules
-            .into_iter()
-            .enumerate()
-            .filter_map(|(index, row)| {
-                let parts = rule_manager::parts(&row.raw).ok()?;
-                Some(RuleItem {
-                    id: row.id.into(),
-                    position: (index + 1).to_string().into(),
-                    kind: parts.kind.into(),
-                    value: parts.payload.into(),
-                    policy: parts.policy.into(),
-                    source: row.source.to_string().into(),
-                    selected: false,
-                    enabled: row.enabled,
+    data.set_connection_details(stable(
+        data.get_connection_details(),
+        rows(
+            p.details
+                .into_iter()
+                .map(|(label, value)| DetailItem {
+                    label: label.into(),
+                    value: if value.is_empty() {
+                        "—".into()
+                    } else {
+                        value.into()
+                    },
                 })
-            })
-            .collect(),
+                .collect(),
+        ),
     ));
-    data.set_logs(rows(
-        p.logs
-            .into_iter()
-            .map(|(level, message)| LogItem {
-                tone: if level == "ERROR" {
-                    3
-                } else if level == "WARN" {
-                    2
-                } else {
-                    4
-                },
-                level: level.into(),
-                message: message.into(),
-                time: "".into(),
-            })
-            .collect(),
+    data.set_profiles(stable(
+        data.get_profiles(),
+        rows(
+            p.profiles
+                .into_iter()
+                .map(|profile| ProfileItem {
+                    id: profile.id.clone().into(),
+                    name: profile.name.into(),
+                    source: profile.source.clone().into(),
+                    detail: profile
+                        .usage
+                        .unwrap_or_else(|| format!("更新：{}", profile.updated))
+                        .into(),
+                    active: p.settings.active_profile.as_deref() == Some(&profile.id),
+                    local: profile.source.is_empty(),
+                })
+                .collect(),
+        ),
+    ));
+    let previous_groups = data.get_groups();
+    data.set_groups(stable(
+        previous_groups.clone(),
+        rows(
+            p.groups
+                .into_iter()
+                .enumerate()
+                .map(|(group_index, view)| {
+                    let GroupView {
+                        name,
+                        group,
+                        nodes,
+                        count,
+                        page,
+                    } = view;
+                    let group_id = name.clone();
+                    let node_items = nodes
+                        .into_iter()
+                        .map(|(name, node)| NodeItem {
+                            group: group_id.clone().into(),
+                            selected: name == group.now.as_str(),
+                            name: name.into(),
+                            kind: node.kind.to_string().into(),
+                            delay: node
+                                .delay
+                                .map(|d| format!("{d} ms"))
+                                .unwrap_or_else(|| "未测速".into())
+                                .into(),
+                            valid: true,
+                        })
+                        .collect::<Vec<_>>();
+                    GroupItem {
+                        id: name.clone().into(),
+                        title: name.into(),
+                        detail: format!("{} · {count} 个节点", group.kind).into(),
+                        current: group.now.to_string().into(),
+                        expanded: group_index == 0,
+                        nodes: stable(
+                            previous_groups
+                                .iter()
+                                .find(|old| old.id.as_str() == group_id)
+                                .map(|old| old.nodes)
+                                .unwrap_or_default(),
+                            rows(
+                                node_items
+                                    .chunks(2)
+                                    .map(|pair| NodePair {
+                                        left: pair[0].clone(),
+                                        right: pair.get(1).cloned().unwrap_or_default(),
+                                    })
+                                    .collect(),
+                            ),
+                        ),
+                        page: format!("{} / {} · {count} 个", page + 1, count.div_ceil(48).max(1))
+                            .into(),
+                        previous: page > 0,
+                        next: (page + 1) * 48 < count,
+                        ..Default::default()
+                    }
+                })
+                .collect(),
+        ),
+    ));
+    data.set_connections(stable(
+        data.get_connections(),
+        rows(
+            p.connections
+                .into_iter()
+                .map(|c| ConnectionItem {
+                    id: c.id.to_string().into(),
+                    host: format!(
+                        "{}:{}",
+                        core::connection::name(&c),
+                        c.metadata.destination_port
+                    )
+                    .into(),
+                    detail: c.start.to_string().into(),
+                    rule: format!("{} {}", c.rule, c.rule_payload).into(),
+                    route: c
+                        .chains
+                        .iter()
+                        .rev()
+                        .map(|s| s.as_str())
+                        .collect::<Vec<_>>()
+                        .join(" → ")
+                        .into(),
+                    up: format!("{}/s", bytes(c.rates.map(|r| r.upload).unwrap_or(0))).into(),
+                    down: format!("{}/s", bytes(c.rates.map(|r| r.download).unwrap_or(0))).into(),
+                    upload: bytes(c.upload).into(),
+                    download: bytes(c.download).into(),
+                })
+                .collect(),
+        ),
+    ));
+    data.set_rules(stable(
+        data.get_rules(),
+        rows(
+            p.rules
+                .into_iter()
+                .filter_map(|(index, row)| {
+                    let parts = rule_manager::parts(&row.raw).ok()?;
+                    Some(RuleItem {
+                        id: row.id.into(),
+                        position: (index + 1).to_string().into(),
+                        kind: parts.kind.into(),
+                        value: parts.payload.into(),
+                        policy: parts.policy.into(),
+                        source: row.source.to_string().into(),
+                        selected: false,
+                        enabled: row.enabled,
+                    })
+                })
+                .collect(),
+        ),
+    ));
+    data.set_logs(stable(
+        data.get_logs(),
+        rows(
+            p.logs
+                .into_iter()
+                .map(|(level, message)| LogItem {
+                    tone: if level == "ERROR" {
+                        3
+                    } else if level == "WARN" {
+                        2
+                    } else {
+                        4
+                    },
+                    level: level.into(),
+                    message: message.into(),
+                    time: "".into(),
+                })
+                .collect(),
+        ),
     ));
     let theme = ui.global::<Theme>();
+    theme.set_system_dark(p.platform["dark"].as_bool().unwrap_or(false));
+    ui.global::<MobileView>()
+        .set_node_sort(match p.settings.node_sort {
+            proxy_order::NodeSort::LatencyAscending => 0,
+            proxy_order::NodeSort::LatencyDescending => 1,
+            _ => 2,
+        });
     theme.set_appearance(match p.settings.theme_mode {
         Some(config::ThemeMode::Dark) => 0,
         Some(config::ThemeMode::Light) => 1,
@@ -864,4 +1538,36 @@ fn apply(ui: &AndroidWindow, p: Projection) {
             .position(|c| c == &p.settings.accent_color)
             .unwrap_or(0) as i32,
     );
+}
+
+fn flag(country: &str) -> slint::Image {
+    const PIXELS: &[u8] = include_bytes!("../../../../resources/flags/flags.rgba");
+    static CODES: std::sync::OnceLock<Vec<String>> = std::sync::OnceLock::new();
+    let codes = CODES.get_or_init(|| {
+        serde_json::from_str(include_str!("../../../../resources/flags/codes.json"))
+            .expect("flag codes")
+    });
+    let text = core::countries::country_text(country);
+    let code = core::countries::country_code(text).unwrap_or(text);
+    if matches!(code, "HK" | "MO" | "TW") {
+        return slint::Image::default();
+    }
+    let Some(index) = codes.iter().position(|c| c == code) else {
+        return slint::Image::default();
+    };
+    const BYTES: usize = 72 * 72 * 4;
+    thread_local! { static FLAGS:std::cell::RefCell<std::collections::BTreeMap<usize,slint::Image>>=std::cell::RefCell::default(); }
+    FLAGS.with(|flags| {
+        flags
+            .borrow_mut()
+            .entry(index)
+            .or_insert_with(|| {
+                slint::Image::from_rgba8(slint::SharedPixelBuffer::clone_from_slice(
+                    &PIXELS[index * BYTES..(index + 1) * BYTES],
+                    72,
+                    72,
+                ))
+            })
+            .clone()
+    })
 }

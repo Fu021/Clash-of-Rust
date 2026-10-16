@@ -110,7 +110,11 @@ export component MobileProxies inherits Rectangle {
                         if !pair.right.valid: Rectangle { }
                     }
                 }
-                MSmall { text: group.page; }
+                HorizontalLayout { spacing: 8px;
+                    MButton { text: "上一页"; enabled: group.previous; clicked => { MobileActions.request(MobileIntent.node-page, group.id, "-1"); } }
+                    MSmall { text: group.page; horizontal-alignment: center; }
+                    MButton { text: "下一页"; enabled: group.next; clicked => { MobileActions.request(MobileIntent.node-page, group.id, "1"); } }
+                }
             }
         }
     } }
@@ -119,7 +123,7 @@ export component MobileSubscriptions inherits Rectangle {
     MScroll { VerticalLayout { alignment: start; spacing: 12px; padding-bottom: 16px;
         MField { placeholder: "搜索订阅"; text <=> MobileView.query; edited(value) => { MobileActions.request(MobileIntent.query, "profiles", value); } }
         HorizontalLayout { spacing: 8px;
-            MButton { text: "+ 添加订阅"; primary: true; clicked => { MobileView.profile-name = ""; MobileView.profile-source = ""; MobileView.detail = 3; } }
+            MButton { text: "+ 添加订阅"; primary: true; clicked => { MobileView.selected-id = ""; MobileView.profile-name = ""; MobileView.profile-source = ""; MobileView.detail = 3; } }
             MButton { text: "导入文件"; clicked => { MobileActions.request(MobileIntent.pick-file, "", ""); } }
         }
         for profile in MobileData.profiles: MCard {
@@ -134,7 +138,7 @@ export component MobileSubscriptions inherits Rectangle {
                 MButton { text: profile.active ? "更新" : "启用"; selected: profile.active;
                     clicked => { MobileActions.request(profile.active ? MobileIntent.update-profile : MobileIntent.activate-profile, profile.id, ""); }
                 }
-                MButton { text: "编辑"; clicked => { MobileView.profile-name = profile.name; MobileView.profile-source = profile.source; MobileView.detail = 3; } }
+                MButton { text: "编辑"; clicked => { MobileView.selected-id = profile.id; MobileView.profile-name = profile.name; MobileView.profile-source = profile.source; MobileView.detail = 3; } }
                 MButton { text: "删除"; danger: true; clicked => { MobileView.selected-id = profile.id; MobileView.profile-name = profile.name; MobileView.detail = 4; } }
             }
         }
@@ -164,12 +168,17 @@ export component MobileConnections inherits Rectangle {
                 MButton { text: "关闭连接"; danger: true; clicked => { MobileActions.request(MobileIntent.close-connection, connection.id, ""); } }
             }
         }
+        HorizontalLayout { spacing: 8px;
+            MButton { text: "上一页"; enabled: MobileData.connection-previous; clicked => { MobileActions.request(MobileIntent.connection-page, "-1", ""); } }
+            MSmall { text: MobileData.connection-page; horizontal-alignment: center; }
+            MButton { text: "下一页"; enabled: MobileData.connection-next; clicked => { MobileActions.request(MobileIntent.connection-page, "1", ""); } }
+        }
     } }
 }
 export component MobileRules inherits Rectangle {
     MScroll { VerticalLayout { alignment: start; spacing: 12px; padding-bottom: 16px;
         HorizontalLayout { spacing: 8px;
-            MSelect { options: MobileData.rule-profiles; value: MobileData.profile; selected(index, value) => { MobileActions.request(MobileIntent.rule-select, value, "profile"); } }
+            MSelect { options: MobileData.rule-profiles; value: MobileData.rule-profile; selected(index, value) => { MobileActions.request(MobileIntent.rule-select, value, "profile"); } }
             MTag { text: MobileData.rule-dirty ? "尚未应用" : "已载入"; tone: MobileData.rule-dirty ? 2 : 4; }
         }
         MCard {
@@ -186,7 +195,7 @@ export component MobileRules inherits Rectangle {
         HorizontalLayout { spacing: 8px;
             MField { placeholder: "搜索规则"; text <=> MobileView.query; edited(value) => { MobileActions.request(MobileIntent.query, "rules", value); } }
             MButton { text: "+ 新建"; primary: true; width: 88px; horizontal-stretch: 0;
-                clicked => { MobileView.rule-payload = ""; MobileView.rule-raw = ""; MobileView.detail = 2; }
+                clicked => { MobileView.selected-id = ""; MobileView.rule-payload = ""; MobileView.rule-raw = ""; MobileView.detail = 2; }
             }
         }
         if MobileView.rule-selected: MCard {
@@ -195,7 +204,7 @@ export component MobileRules inherits Rectangle {
             HorizontalLayout { spacing: 8px;
                 MButton { text: "上移"; clicked => { MobileActions.request(MobileIntent.rule-move, "-1", ""); } }
                 MButton { text: "下移"; clicked => { MobileActions.request(MobileIntent.rule-move, "1", ""); } }
-                MButton { text: "编辑"; clicked => { MobileView.rule-payload = MobileView.selected-rule.value; MobileView.rule-kind = MobileView.selected-rule.kind; MobileView.rule-policy = MobileView.selected-rule.policy; MobileView.detail = 2; } }
+                MButton { text: "编辑"; clicked => { MobileView.rule-payload = MobileView.selected-rule.value; MobileView.rule-kind = MobileView.selected-rule.kind; MobileView.rule-policy = MobileView.selected-rule.policy; MobileView.rule-position = MobileView.selected-rule.position; MobileView.detail = 2; } }
                 MButton { text: "删除"; danger: true; clicked => { MobileActions.request(MobileIntent.rule-delete, MobileView.selected-id, ""); } }
             }
         }
@@ -210,6 +219,11 @@ export component MobileRules inherits Rectangle {
                 }
                 MTag { text: rule.policy; width-limit: 84px; }
             }
+        }
+        HorizontalLayout { spacing: 8px;
+            MButton { text: "上一页"; enabled: MobileData.rule-previous; clicked => { MobileActions.request(MobileIntent.rule-page, "-1", ""); } }
+            MSmall { text: MobileData.rule-page; horizontal-alignment: center; }
+            MButton { text: "下一页"; enabled: MobileData.rule-next; clicked => { MobileActions.request(MobileIntent.rule-page, "1", ""); } }
         }
         HorizontalLayout { spacing: 8px;
             MButton { text: "放弃修改"; enabled: MobileData.rule-dirty; clicked => { MobileView.pending-detail = 0; MobileView.detail = 12; } }
@@ -247,15 +261,15 @@ export component MobileNetwork inherits Rectangle {
             MHeading { text: "网站响应"; }
             MField { text <=> MobileView.test-url; }
             MButton { text: "开始测试"; primary: true; clicked => { MobileActions.request(MobileIntent.probe, MobileView.test-url, ""); } }
-            MRow { title: "HTTP 204"; value: "42 ms"; value-color: Theme.accent; arrow: false; interactive: false; }
+            MRow { title: MobileData.probe-status; value: MobileData.probe-time; value-color: Theme.accent; arrow: false; interactive: false; }
         }
         MCard {
             MHeading { text: "DNS 查询"; }
             MField { text <=> MobileView.dns-host; }
             MButton { text: "查询"; clicked => { MobileActions.request(MobileIntent.dns, MobileView.dns-host, ""); } }
-            MRow { title: "140.82.112.4"; subtitle: "A 记录 · 当前代理线路"; arrow: false; interactive: false; }
+            MRow { title: MobileData.dns-result; subtitle: "当前内核解析结果"; arrow: false; interactive: false; }
         }
-        MCard { MHeading { text: "出口信息"; } MRow { title: "203.0.113.42"; value: "德国"; arrow: false; interactive: false; } }
+        MCard { MHeading { text: "出口信息"; } MRow { title: MobileData.exit-ip; value: MobileData.exit-country; arrow: false; interactive: false; } }
     } }
 }
 component CategoryCard inherits MCard {
@@ -295,7 +309,7 @@ export component MobileIpCheck inherits Rectangle {
                 if pair.right.id != "": CategoryCard { item: pair.right; }
             }
         }
-        MButton { text: "IP 信息与全部结果"; clicked => { MobileView.category = "全部结果"; MobileView.detail = 6; } }
+        MButton { text: "IP 信息与全部结果"; clicked => { MobileView.category = "全部结果"; MobileActions.request(MobileIntent.site-category, "all", ""); MobileView.detail = 6; } }
     } }
 }
 component ClaudeCount inherits MCard {
@@ -312,7 +326,7 @@ export component MobileAiCheck inherits Rectangle {
     MScroll { VerticalLayout { alignment: start; spacing: 12px; padding-bottom: 16px;
         MCard {
             selected: MobileData.protected;
-            MSwitch { title: "Claude 保护"; checked: MobileData.protected; enabled: !MobileData.protection-pending;
+            MSwitch { title: MobileData.protection-supported ? "Claude 保护" : "Claude 保护 · 暂未开放"; checked: MobileData.protected; enabled: MobileData.protection-supported && !MobileData.protection-pending;
                 toggled(value) => { if value { MobileView.detail = 8; } else { MobileActions.request(MobileIntent.claude-protection, "false", ""); } }
             }
             MSmall { text: MobileData.protection-pending ? MobileData.protection-status : "固定节点 · VPN · 代理 DNS · 实时拦截"; wrap: word-wrap; }

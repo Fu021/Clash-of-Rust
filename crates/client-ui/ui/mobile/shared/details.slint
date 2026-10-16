@@ -18,8 +18,8 @@ export component MobileDetails inherits Rectangle {
             }
             if MobileView.detail == 2: MCard {
                 HorizontalLayout { spacing: 8px;
-                    MButton { text: "表单"; selected: !MobileView.rule-text-mode; clicked => { MobileView.rule-text-mode = false; } }
-                    MButton { text: "规则文本"; selected: MobileView.rule-text-mode; clicked => { MobileView.rule-text-mode = true; } }
+                    MButton { text: "表单"; selected: !MobileView.rule-text-mode; clicked => { MobileActions.request(MobileIntent.rule-text-mode, MobileView.rule-raw, "form"); } }
+                    MButton { text: "规则文本"; selected: MobileView.rule-text-mode; clicked => { MobileView.rule-raw = MobileView.rule-payload == "" ? "" : MobileView.rule-kind + "," + MobileView.rule-payload + "," + MobileView.rule-policy; MobileView.rule-text-mode = true; } }
                 }
                 if !MobileView.rule-text-mode: VerticalLayout { spacing: 12px;
                     MSmall { text: "规则类型"; }

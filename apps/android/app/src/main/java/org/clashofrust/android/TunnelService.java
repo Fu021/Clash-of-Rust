@@ -15,7 +15,8 @@ public final class TunnelService extends VpnService {
     private static volatile TunnelService instance;
     private static volatile boolean connected;
     private static volatile String lastError = "";
-    private final ExecutorService serial = Executors.newSingleThreadExecutor();
+    // One process-wide queue also orders cleanup against a newly created service.
+    private static final ExecutorService serial = Executors.newSingleThreadExecutor();
     private ParcelFileDescriptor descriptor;
     private boolean stopping;
     static boolean connected() { return connected; }
@@ -38,7 +39,7 @@ public final class TunnelService extends VpnService {
         if (descriptor != null || stopping) return;
         try {
             if (!CoreBridge.ready() || VpnService.prepare(this) != null) throw new IllegalStateException("VPN 授权或内核状态已失效");
-            boolean ipv6 = CoreBridge.config().contains("ipv6: true");
+            boolean ipv6 = CoreBridge.ipv6();
             Builder builder = new Builder().setSession("Clash of Rust").setMtu(1500)
                 .addAddress("198.18.0.1", 30).addRoute("0.0.0.0", 0).addDnsServer("198.18.0.2");
             if (ipv6) builder.addAddress("fdfe:dcba:9876::1", 126).addRoute("::", 0).addDnsServer("fdfe:dcba:9876::2");
@@ -81,7 +82,6 @@ public final class TunnelService extends VpnService {
     @Override public void onDestroy() {
         instance = null;
         serial.execute(this::cleanup);
-        serial.shutdown();
         super.onDestroy();
     }
     private Notification notification(String text) {
@@ -92,8 +92,10 @@ public final class TunnelService extends VpnService {
     }
     static void updateTraffic(Context context, String down, String up) {
         TunnelService active = instance;
-        if (active != null && connected && context.getSharedPreferences("MainActivity", MODE_PRIVATE)
-            .getBoolean("notification-speeds", true))
+        if (active != null && connected && context.getSharedPreferences("appearance", MODE_PRIVATE)
+            .getBoolean("notification-speeds", true)
+            && (Build.VERSION.SDK_INT < 33 || context.checkSelfPermission(android.Manifest.permission.POST_NOTIFICATIONS)
+                == android.content.pm.PackageManager.PERMISSION_GRANTED))
             active.getSystemService(NotificationManager.class).notify(1, active.notification("↓ " + down + "  ↑ " + up));
     }
 }

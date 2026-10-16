@@ -44,7 +44,7 @@ export component MaintenanceSettings inherits VerticalLayout {
     MCard {
         MText { text: "定时测速"; }
         HorizontalLayout { cross-axis-alignment: center; spacing: 10px;
-            MField { width: 72px; horizontal-stretch: 0; text <=> MobileData.interval; }
+            MField { width: 72px; horizontal-stretch: 0; text <=> MobileData.interval; edited(value) => { MobileView.interval-dirty = true; } }
             MSmall { text: "分钟 · 0 关闭"; }
             MButton { text: "保存"; width: 68px; horizontal-stretch: 0; clicked => { MobileActions.request(MobileIntent.interval, MobileData.interval, ""); } }
         }

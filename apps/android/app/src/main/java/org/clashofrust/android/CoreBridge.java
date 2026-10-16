@@ -11,9 +11,10 @@ import org.clashofrust.nativecore.mobile.Mobile;
 public final class CoreBridge {
     private static boolean started;
     private static String lastConfig = "";
+    private static boolean ipv6Enabled = true;
     private CoreBridge() {}
 
-    public static synchronized String start(Context context, String raw) throws Exception {
+    public static synchronized String start(Context context, String raw, boolean ipv6) throws Exception {
         File home = new File(context.getFilesDir(), "client/runtime");
         if (!home.isDirectory() && !home.mkdirs()) throw new IOException("无法创建内核目录");
         // Seed only absent files; keep complete user updates across app upgrades.
@@ -33,6 +34,7 @@ public final class CoreBridge {
         }
         if (started) Mobile.reload(raw); else { Mobile.start(home.toString(), raw); started = true; }
         lastConfig = raw;
+        ipv6Enabled = ipv6;
         return home.toString();
     }
 
@@ -42,6 +44,8 @@ public final class CoreBridge {
     }
     public static synchronized boolean ready() { return started; }
     public static synchronized String config() { return lastConfig; }
+    public static synchronized boolean ipv6() { return ipv6Enabled; }
+    public static synchronized void setIpv6(boolean enabled) { ipv6Enabled = enabled; }
     public static JSONObject state() throws Exception {
         return new JSONObject().put("running", ready()).put("vpn", TunnelService.connected())
             .put("error", TunnelService.error());

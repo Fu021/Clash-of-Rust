@@ -23,6 +23,12 @@ pub struct Session {
     pub proxies: Proxies,
     pub connections: Connections,
     pub sampled: Option<Instant>,
+    pub count: usize,
+    pub rates: (u64, u64),
+    pub platform: Value,
+    pub node: String,
+    pub rule_profile: String,
+    rule_document: Document,
     pub draft: ProfileRules,
     pub native: Arc<dyn NativeHost>,
 }
@@ -60,6 +66,12 @@ impl Session {
         let draft = ProfileRules::for_profile(&settings, id, false)
             .as_ref()
             .clone();
+        let document = Document::from_raw(
+            id,
+            false,
+            &core::config::read_profile(&store.profile_path(id)?)?,
+        )?;
+        let rule_profile = id.to_owned();
         let api = Api::new(&settings)?;
         Ok(Self {
             store,
@@ -71,6 +83,12 @@ impl Session {
             proxies: Proxies::default(),
             connections: Connections::default(),
             sampled: None,
+            count: 0,
+            rates: (0, 0),
+            platform: json!({}),
+            node: String::new(),
+            rule_profile,
+            rule_document: document,
             draft,
             native,
         })
@@ -85,7 +103,7 @@ impl Session {
         core::config::read_profile(&self.store.profile_path(&self.profile().id)?)
     }
     pub fn document(&self) -> Result<Document> {
-        Document::from_raw(&self.profile().id, false, &self.raw()?)
+        Ok(self.rule_document.clone())
     }
     pub fn runtime(&self, settings: &Settings) -> Result<String> {
         let id = settings.active_profile.as_deref().context("尚未选择订阅")?;
@@ -110,10 +128,6 @@ impl Session {
         settings.validate()?;
         let raw = self.runtime(&settings)?;
         let old_raw = self.runtime(&self.settings)?;
-        if self.running {
-            self.native
-                .request(json!({"op":"reload","config":raw,"ipv6":settings.ipv6}))?;
-        }
         let mut tx = core::profile_transaction::Transaction::new(&self.store.root)?;
         tx.stage(
             &self.store.root.join("settings.json"),
@@ -121,7 +135,16 @@ impl Session {
         )?;
         tx.stage(&self.store.runtime().join("config.yaml"), raw.as_bytes())?;
         tx.prepare()?;
+        if self.running
+            && let Err(error) = self
+                .native
+                .request(json!({"op":"reload","config":raw,"ipv6":settings.ipv6}))
+        {
+            tx.rollback()?;
+            return Err(error);
+        }
         if let Err(error) = tx.commit() {
+            tx.rollback().context("配置写入失败，磁盘恢复也失败")?;
             if self.running {
                 self.native
                     .request(json!({"op":"reload","config":old_raw,"ipv6":self.settings.ipv6}))
@@ -137,15 +160,24 @@ impl Session {
         let state = self.native.request(json!({"op":"state"}))?;
         self.running = state["running"].as_bool().unwrap_or(false);
         self.vpn = state["vpn"].as_bool().unwrap_or(false);
+        self.platform = state;
         if !self.running {
             return Ok(());
         }
         if page == 1 || page == 0 {
             self.proxies = self.api.get("proxies").await?;
+            if let Ok(root) = core::active_route::root(&self.raw()?)
+                && let Some(node) = core::active_route::from_snapshot(&root, &self.proxies)
+            {
+                self.node = node;
+            }
         } else {
             self.proxies = Proxies::default();
         }
-        if page == 0 || page == 3 || page == 8 {
+        let at = Instant::now();
+        let old_up = self.connections.upload_total;
+        let old_down = self.connections.download_total;
+        if page == 3 || page == 8 {
             let mut next: Connections = self.api.get("connections").await?;
             if let Some(at) = self.sampled {
                 core::connection::sample_rates(
@@ -154,12 +186,28 @@ impl Session {
                     at.elapsed(),
                 );
             }
-            self.sampled = Some(Instant::now());
+            self.count = next.connections.len();
             self.connections = next;
         } else {
-            self.connections = Connections::default();
-            self.sampled = None;
+            let stats: core::api::ConnectionStats = self.api.get("connections").await?;
+            self.count = stats.count;
+            self.connections = Connections {
+                upload_total: stats.upload_total,
+                download_total: stats.download_total,
+                connections: vec![],
+            };
         }
+        if let Some(previous) = self.sampled {
+            let elapsed = at.duration_since(previous).as_secs_f64();
+            if elapsed > 0.0 {
+                self.rates = (
+                    (self.connections.upload_total.saturating_sub(old_up) as f64 / elapsed) as u64,
+                    (self.connections.download_total.saturating_sub(old_down) as f64 / elapsed)
+                        as u64,
+                );
+            }
+        }
+        self.sampled = Some(at);
         Ok(())
     }
     pub async fn save_profile(
@@ -172,6 +220,12 @@ impl Session {
         ensure!(!name.trim().is_empty(), "订阅名称不能为空");
         let (raw, usage) = if let Some(raw) = content {
             (raw.to_owned(), None)
+        } else if source.is_empty() {
+            let id = id.context("本地配置需要导入文件")?;
+            (
+                core::config::read_profile(&self.store.profile_path(id)?)?,
+                None,
+            )
         } else {
             let url = core::probe::validate_url(source)?;
             core::subscription::download_routes(
@@ -199,20 +253,66 @@ impl Session {
         } else {
             profiles.push(profile);
         }
-        ensure!(
-            self.settings.active_profile.as_deref() != Some(&id),
-            "当前使用中的订阅请先切换后再编辑"
-        );
+        let active = self.settings.active_profile.as_deref() == Some(&id);
+        let old_raw = active.then(|| self.runtime(&self.settings)).transpose()?;
+        let new_runtime = if active {
+            let rules = ProfileRules::for_profile(&self.settings, &id, false);
+            Some(android_safe_config(
+                &core::config::runtime_config_with_rules(
+                    &raw,
+                    &self.settings,
+                    Some(&rules),
+                    false,
+                )?,
+            )?)
+        } else {
+            None
+        };
         let mut tx = core::profile_transaction::Transaction::new(&self.store.root)?;
         tx.stage(&self.store.profile_path(&id)?, raw.as_bytes())?;
         tx.stage(
             &self.store.root.join("profiles.json"),
             &serde_json::to_vec_pretty(&profiles)?,
         )?;
+        if let Some(raw) = &new_runtime {
+            tx.stage(&self.store.runtime().join("config.yaml"), raw.as_bytes())?;
+        }
         tx.prepare()?;
-        tx.commit()?;
+        if self.running
+            && let Some(raw) = &new_runtime
+            && let Err(error) = self
+                .native
+                .request(json!({"op":"reload","config":raw,"ipv6":self.settings.ipv6}))
+        {
+            tx.rollback()?;
+            return Err(error);
+        }
+        if let Err(error) = tx.commit() {
+            tx.rollback()?;
+            if self.running
+                && let Some(raw) = old_raw
+            {
+                self.native
+                    .request(json!({"op":"reload","config":raw,"ipv6":self.settings.ipv6}))?;
+            }
+            return Err(error);
+        }
         self.profiles = profiles;
+        if self.rule_profile == id {
+            self.rule_document = Document::from_raw(&id, false, &raw)?;
+        }
         Ok(())
+    }
+    pub async fn update_profile(&mut self, id: &str) -> Result<()> {
+        let profile = self
+            .profiles
+            .iter()
+            .find(|p| p.id == id)
+            .context("订阅不存在")?
+            .clone();
+        ensure!(!profile.source.is_empty(), "本地配置没有更新地址");
+        self.save_profile(Some(id), &profile.name, &profile.source, None)
+            .await
     }
     pub fn activate(&mut self, id: &str) -> Result<()> {
         ensure!(
@@ -223,9 +323,7 @@ impl Session {
         let mut next = self.settings.clone();
         next.active_profile = Some(id.into());
         self.commit_settings(next)?;
-        self.draft = ProfileRules::for_profile(&self.settings, id, false)
-            .as_ref()
-            .clone();
+        self.node.clear();
         Ok(())
     }
     pub fn delete(&mut self, id: &str) -> Result<()> {
@@ -240,7 +338,13 @@ impl Session {
             .cloned()
             .collect();
         ensure!(profiles.len() != self.profiles.len(), "订阅不存在");
+        let mut settings = self.settings.clone();
+        settings.rule_profiles.remove(id);
         let mut tx = core::profile_transaction::Transaction::new(&self.store.root)?;
+        tx.stage(
+            &self.store.root.join("settings.json"),
+            &serde_json::to_vec_pretty(&settings)?,
+        )?;
         tx.stage_remove(&self.store.profile_path(id)?)?;
         tx.stage(
             &self.store.root.join("profiles.json"),
@@ -249,10 +353,35 @@ impl Session {
         tx.prepare()?;
         tx.commit()?;
         self.profiles = profiles;
+        self.settings = settings;
+        if self.rule_profile == id {
+            self.draft = ProfileRules::default();
+            self.rule_profile = self.profile().id.clone();
+            self.draft = ProfileRules::for_profile(&self.settings, &self.rule_profile, false)
+                .as_ref()
+                .clone();
+            self.rule_document = Document::from_raw(&self.rule_profile, false, &self.raw()?)?;
+        }
+        Ok(())
+    }
+    pub fn select_rules(&mut self, id: &str) -> Result<()> {
+        ensure!(self.profiles.iter().any(|p| p.id == id), "订阅不存在");
+        let saved = ProfileRules::for_profile(&self.settings, &self.rule_profile, false);
+        ensure!(self.draft == *saved, "请先应用或放弃当前规则修改");
+        self.rule_document = Document::from_raw(
+            id,
+            false,
+            &core::config::read_profile(&self.store.profile_path(id)?)?,
+        )?;
+        self.rule_profile = id.to_owned();
+        self.draft = ProfileRules::for_profile(&self.settings, id, false)
+            .as_ref()
+            .clone();
         Ok(())
     }
     pub fn save_rule(&mut self, selected: &str, raw: &str, position: usize) -> Result<()> {
         core::rule_manager::parts(raw)?;
+        let selected = selected.strip_prefix("c:").unwrap_or(selected);
         let id = if self.draft.custom.iter().any(|r| r.id == selected) {
             selected.to_owned()
         } else {
@@ -268,22 +397,29 @@ impl Session {
         } else {
             self.draft.custom.push(rule);
         }
+        let key = format!("c:{id}");
         let (rows, _) = self.document()?.rows(&self.draft);
         let mut order: Vec<_> = rows
             .into_iter()
             .map(|r| r.id)
-            .filter(|key| key != &id)
+            .filter(|old| old != &key)
             .collect();
         let index = position.saturating_sub(1).min(order.len());
-        order.insert(index, id);
+        order.insert(index, key);
         self.draft.order = order;
         self.draft.validate()
     }
     pub fn apply_rules(&mut self) -> Result<()> {
         let mut next = self.settings.clone();
         next.rule_profiles
-            .insert(self.profile().id.clone(), Arc::new(self.draft.clone()));
-        self.commit_settings(next)
+            .insert(self.rule_profile.clone(), Arc::new(self.draft.clone()));
+        if next.active_profile.as_deref() == Some(&self.rule_profile) {
+            self.commit_settings(next)
+        } else {
+            self.store.save_settings(&next)?;
+            self.settings = next;
+            Ok(())
+        }
     }
 }
 
@@ -310,8 +446,10 @@ mod tests {
     }
     #[test]
     fn mobile_never_inherits_subscription_owned_routes_or_controller() {
-        let mut settings = Settings::default();
-        settings.ipv6 = false;
+        let settings = Settings {
+            ipv6: false,
+            ..Settings::default()
+        };
         let raw = "proxies: []\nrules: [MATCH,DIRECT]\ntun:\n  enable: true\n  auto-route: true\n  file-descriptor: 42\nexternal-controller: 0.0.0.0:1\n";
         let raw = core::config::runtime_config(raw, &settings).unwrap();
         let value: serde_yaml::Value =

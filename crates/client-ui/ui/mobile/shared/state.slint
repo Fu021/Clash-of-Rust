@@ -3,7 +3,7 @@
 import { GroupItem, ProfileItem, ConnectionItem, RuleItem, LogItem, CategoryPair, ReportItem, DetailItem } from "../../state.slint";
 
 export enum MobileIntent {
-    connect, disconnect, restart-core, mode, query, node-sort, select-node, node-delay, system-notification,
+    connect, disconnect, restart-core, mode, query, node-sort, node-page, connection-page, rule-page, rule-text-mode, select-node, node-delay, system-notification,
     import-profile, pick-file, activate-profile, update-profile, save-profile, delete-profile,
     connection-sort, connection-detail, close-connection, close-all, copy,
     rule-select, rule-add, rule-save, rule-move, rule-delete, rule-apply, rule-discard,
@@ -30,9 +30,17 @@ export global MobileData {
     in-out property <[GroupItem]> groups;
     in-out property <[ProfileItem]> profiles;
     in-out property <[ConnectionItem]> connections;
+    in-out property <string> connection-page;
+    in-out property <bool> connection-previous;
+    in-out property <bool> connection-next;
+    in-out property <string> rule-page;
+    in-out property <bool> rule-previous;
+    in-out property <bool> rule-next;
     in-out property <[DetailItem]> connection-details;
     in-out property <[RuleItem]> rules;
     in-out property <[string]> rule-profiles;
+    in-out property <string> rule-profile;
+    in-out property <bool> protection-supported: true;
     in-out property <[string]> rule-policies;
     in-out property <[LogItem]> logs;
     in-out property <[CategoryPair]> categories;
@@ -58,6 +66,9 @@ export global MobileData {
     in-out property <string> site-progress;
     in-out property <string> claude-status;
     in-out property <string> geo-status;
+    in-out property <string> probe-status: "尚未测试";
+    in-out property <string> probe-time;
+    in-out property <string> dns-result: "尚未查询";
     in-out property <string> mixed-port: "7897";
     in-out property <string> controller-port: "9090";
     in-out property <string> interval: "0";
@@ -75,6 +86,7 @@ export global MobileView {
     in-out property <int> node-sort: 2;
     in-out property <string> connection-sort: "下载速度 ↓";
     in-out property <string> log-level: "全部等级";
+    in-out property <bool> interval-dirty;
     in-out property <bool> shortcuts-open;
     in-out property <bool> rule-selected;
     in-out property <RuleItem> selected-rule;

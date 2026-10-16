@@ -22,6 +22,7 @@ android {
         val signingFile = System.getenv("ANDROID_KEYSTORE_PATH")
         if (signingFile != null) {
             create("distribution") {
+                storeType = "PKCS12"
                 storeFile = file(signingFile)
                 storePassword = System.getenv("ANDROID_KEYSTORE_PASSWORD")
                 keyAlias = System.getenv("ANDROID_KEY_ALIAS")
@@ -33,8 +34,8 @@ android {
         debug { isJniDebuggable = false }
         release {
             isMinifyEnabled = false
-            signingConfig = if (System.getenv("ANDROID_CI_TEST") == "1") signingConfigs.getByName("debug")
-                else signingConfigs.findByName("distribution")
+            signingConfig = signingConfigs.findByName("distribution")
+                ?: if (System.getenv("ANDROID_CI_TEST") == "1") signingConfigs.getByName("debug") else null
             vcsInfo { include = false }
         }
     }
@@ -44,7 +45,7 @@ android {
     }
     packaging {
         // NDK r28 and the Rust linker produce 16 KiB aligned ELF libraries.
-        jniLibs.useLegacyPackaging = false
+        jniLibs.useLegacyPackaging = true
         resources.excludes += setOf("META-INF/DEPENDENCIES", "META-INF/INDEX.LIST")
     }
     sourceSets["main"].jniLibs.srcDir(layout.projectDirectory.dir("native-libs"))

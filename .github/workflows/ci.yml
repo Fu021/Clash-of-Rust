@@ -50,6 +50,26 @@ jobs:
       - uses: gradle/actions/setup-gradle@v5
         with:
           gradle-version: '8.13'
+      - name: Load stable development signature when configured
+        shell: python
+        env:
+          DEV_KEYSTORE: ${{ secrets.ANDROID_DEV_KEYSTORE }}
+          DEV_PASSWORD: ${{ secrets.ANDROID_DEV_KEYSTORE_PASSWORD }}
+        run: |
+          import base64, os, pathlib
+          if os.environ.get('DEV_KEYSTORE') and os.environ.get('DEV_PASSWORD'):
+              password=os.environ['DEV_PASSWORD']
+              if '\n' in password or '\r' in password: raise ValueError('Invalid signing password')
+              path=pathlib.Path(os.environ['RUNNER_TEMP'])/'android-development.p12'
+              path.write_bytes(base64.b64decode(os.environ['DEV_KEYSTORE'],validate=True))
+              path.chmod(0o600)
+              with open(os.environ['GITHUB_ENV'],'a') as out:
+                  out.write('ANDROID_KEYSTORE_PATH='+str(path)+'\n')
+                  out.write('ANDROID_KEY_ALIAS=cor-android-dev\n')
+                  out.write('ANDROID_KEYSTORE_PASSWORD='+password+'\n')
+                  out.write('ANDROID_KEY_PASSWORD='+password+'\n')
+          else:
+              print('Using an ephemeral CI test signature; APKs from different CI runs cannot replace one another.')
       - name: Prepare Android toolchain
         shell: python
         run: |

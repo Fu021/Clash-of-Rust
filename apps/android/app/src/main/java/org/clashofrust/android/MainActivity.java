@@ -31,7 +31,8 @@ public final class MainActivity extends NativeActivity {
         // Let Slint handle native insets; do not install a second padded content view.
         getWindow().setSoftInputMode(android.view.WindowManager.LayoutParams.SOFT_INPUT_ADJUST_RESIZE);
     }
-    @Override protected void onResume() { super.onResume(); emit("resume", true); }
+    @Override protected void onResume() { super.onResume(); emit("visible", true); }
+    @Override protected void onPause() { emit("visible", false); super.onPause(); }
 
     /** Invoked by the Rust worker, never performs blocking work on the UI thread. */
     public String request(String input) {
@@ -39,9 +40,13 @@ public final class MainActivity extends NativeActivity {
             JSONObject data = new JSONObject(input);
             String op = data.getString("op");
             switch (op) {
-                case "initialize": CoreBridge.start(this, data.getString("config")); break;
-                case "reload": CoreBridge.reload(data.getString("config")); break;
-                case "state": return CoreBridge.state().toString();
+                case "initialize": CoreBridge.start(this, data.getString("config"), data.getBoolean("ipv6")); break;
+                case "reload": CoreBridge.reload(data.getString("config")); CoreBridge.setIpv6(data.getBoolean("ipv6")); break;
+                case "state": return CoreBridge.state()
+                    .put("dark", (getResources().getConfiguration().uiMode & android.content.res.Configuration.UI_MODE_NIGHT_MASK)
+                        == android.content.res.Configuration.UI_MODE_NIGHT_YES)
+                    .put("notification_speeds",getSharedPreferences("appearance",MODE_PRIVATE).getBoolean("notification-speeds",true))
+                    .put("excluded_apps",getSharedPreferences("vpn",MODE_PRIVATE).getStringSet("excluded",Collections.emptySet()).size()).toString();
                 case "connect": runOnUiThread(this::prepareVpn); break;
                 case "disconnect": TunnelService.stop(this); break;
                 case "traffic": TunnelService.updateTraffic(this, data.optString("down"), data.optString("up")); break;
@@ -69,7 +74,7 @@ public final class MainActivity extends NativeActivity {
                 case "battery-settings": runOnUiThread(() -> startActivity(new Intent(Settings.ACTION_IGNORE_BATTERY_OPTIMIZATION_SETTINGS))); break;
                 case "application-routing": runOnUiThread(this::applicationRouting); break;
                 case "notification-speeds":
-                    getPreferences(MODE_PRIVATE).edit().putBoolean("notification-speeds", data.getBoolean("value")).apply(); break;
+                    getSharedPreferences("appearance", MODE_PRIVATE).edit().putBoolean("notification-speeds", data.getBoolean("value")).apply(); break;
                 case "notify": runOnUiThread(this::notifyMeow); break;
                 case "open-url": {
                     Uri url = Uri.parse(data.getString("url"));

@@ -1,7 +1,5 @@
 """Build Android on Actions and package the exact APK tested by its CI."""
 import argparse
-import gzip
-import hashlib
 import io
 import json
 import os
@@ -17,6 +15,7 @@ import zipfile
 from build_support import ROOT, package_version, sha256, write_json
 
 ANDROID = ROOT / 'apps/android'
+ADB = str(Path(os.environ.get('ANDROID_HOME', '/nonexistent')) / 'platform-tools/adb')
 ABIS = {
     'arm64': ('arm64-v8a', 'aarch64-linux-android', 'aarch64-linux-android', 'arm64'),
     'armv7': ('armeabi-v7a', 'armv7-linux-androideabi', 'armv7a-linux-androideabi', 'arm'),
@@ -35,7 +34,7 @@ def commit():
 
 
 def gradle(*args, arch=None):
-    code = 512000 + int(subprocess.check_output(['git', 'rev-list', '--count', 'HEAD'], cwd=ROOT))
+    code = 1_000_000 + int(os.environ.get('GITHUB_RUN_NUMBER', '1'))
     command = ['gradle', '--no-daemon', '-p', ANDROID, '-PappVersion=' + package_version(), '-PappVersionCode=' + str(code)]
     if arch:
         command += ['-PappAbi=' + ABIS[arch][0]]
@@ -57,6 +56,12 @@ def seed_assets():
                                      'updated':int(time.time()), 'files':records})
     shutil.copy2(ROOT/'LICENSE', target/'LICENSE')
     shutil.copy2(ROOT/'resources/THIRD-PARTY-NOTICES.txt', target/'THIRD-PARTY-NOTICES.txt')
+    for directory in ('fonts', 'flags', 'ip-check'):
+        for path in (ROOT/'resources'/directory).iterdir():
+            if path.name.startswith(('LICENSE', 'SOURCE')):
+                destination = target/'licenses'/directory/path.name
+                destination.parent.mkdir(parents=True,exist_ok=True)
+                shutil.copy2(path,destination)
 
 
 def validate_apk(path, arch):
@@ -173,8 +178,8 @@ def test(arch, apk=None, test_apk=None):
         return
     apk = apk or ANDROID/'app/build/outputs/apk/release/app-release.apk'
     test_apk = test_apk or ANDROID/'app/build/outputs/apk/androidTest/release/app-release-androidTest.apk'
-    run(['adb','install','-r',apk])
-    run(['adb','install','-r',test_apk])
+    run([ADB,'install','-r',apk])
+    run([ADB,'install','-r',test_apk])
     import http.server
     import threading
     class Origin(http.server.BaseHTTPRequestHandler):
@@ -186,17 +191,17 @@ def test(arch, apk=None, test_apk=None):
         def log_message(self,*args): pass
     server=http.server.ThreadingHTTPServer(('0.0.0.0',18081),Origin)
     threading.Thread(target=server.serve_forever,daemon=True).start()
-    run(['adb','shell','appops','set','org.clashofrust.android','ACTIVATE_VPN','allow'])
-    try:
-        result = subprocess.run(['adb','shell','am','instrument','-w','org.clashofrust.android.test/androidx.test.runner.AndroidJUnitRunner'],
-                                text=True,capture_output=True,timeout=180)
-    finally:
-        server.shutdown(); server.server_close()
+    run([ADB,'shell','appops','set','org.clashofrust.android','ACTIVATE_VPN','allow'])
     report=ROOT/'target/android-report'/arch
     report.mkdir(parents=True,exist_ok=True)
-    (report/'instrumentation.txt').write_text(result.stdout+result.stderr)
-    log = subprocess.run(['adb','logcat','-d','-v','threadtime'],capture_output=True,text=True,timeout=30)
-    (report/'logcat.txt').write_text(log.stdout)
+    try:
+        result = subprocess.run([ADB,'shell','am','instrument','-w','org.clashofrust.android.test/androidx.test.runner.AndroidJUnitRunner'],
+                                text=True,capture_output=True,timeout=240)
+        (report/'instrumentation.txt').write_text(result.stdout+result.stderr)
+    finally:
+        server.shutdown(); server.server_close()
+        log = subprocess.run([ADB,'logcat','-d','-v','threadtime'],capture_output=True,text=True,timeout=30)
+        (report/'logcat.txt').write_text(log.stdout)
     print(result.stdout, flush=True)
     if result.returncode or 'FAILURES!!!' in result.stdout or 'OK (' not in result.stdout:
         raise RuntimeError('Android real proxy/TUN integration test failed')
@@ -218,8 +223,10 @@ def package(arch, run_id, check_only):
         key=os.environ.get('ANDROID_KEYSTORE_PATH')
         if not key: raise RuntimeError('Formal Android APKs require a persistent Android signing key')
         tool=Path(os.environ['ANDROID_HOME'])/'build-tools/36.0.0'
-        run([tool/'apksigner','sign','--ks',key,'--ks-key-alias',os.environ['ANDROID_KEY_ALIAS'],
-             '--ks-pass','env:ANDROID_KEYSTORE_PASSWORD','--key-pass','env:ANDROID_KEY_PASSWORD',apk])
+        # Instrumentation and its target must carry the same signature.
+        for path in (apk,root/'tests/androidTest.apk'):
+            run([tool/'apksigner','sign','--ks',key,'--ks-key-alias',os.environ['ANDROID_KEY_ALIAS'],
+                 '--ks-pass','env:ANDROID_KEYSTORE_PASSWORD','--key-pass','env:ANDROID_KEY_PASSWORD',path])
     sizes=validate_apk(apk,arch)
     tool=Path(os.environ['ANDROID_HOME'])/'build-tools/36.0.0'
     run([tool/'apksigner','verify','--verbose',apk])
@@ -235,7 +242,7 @@ def package(arch, run_id, check_only):
     summary=os.environ.get('GITHUB_STEP_SUMMARY')
     if summary:
         with open(summary,'a') as stream:
-            stream.write(f'\nAndroid {arch}: {sizes["apk_bytes"]/1024**2:.2f} MiB.\\n')
+            stream.write(f'\nAndroid {arch}: {sizes["apk_bytes"]/1024**2:.2f} MiB.\n')
 
 
 def main():
@@ -248,19 +255,19 @@ def main():
     if args.operation=='emulator':
         sdk=Path(os.environ['ANDROID_HOME'])
         manager=sdk/'cmdline-tools/latest/bin'
-        run([manager/'sdkmanager','system-images;android-35;google_apis;x86_64'])
+        run([manager/'sdkmanager','platform-tools','system-images;android-35;google_apis;x86_64'])
         run([manager/'avdmanager','create','avd','--force','--name','cor-ci','--device','pixel_6','--package','system-images;android-35;google_apis;x86_64'],input='no\n',text=True)
         report=ROOT/'target/android-report/x64'; report.mkdir(parents=True,exist_ok=True)
         with (report/'emulator.txt').open('w') as log:
             subprocess.Popen([sdk/'emulator/emulator','@cor-ci','-no-window','-no-audio','-no-boot-anim','-no-snapshot',
                 '-gpu','swiftshader_indirect','-memory','2048'],stdout=log,stderr=subprocess.STDOUT,start_new_session=True)
-        run(['adb','wait-for-device'],timeout=180)
+        run([ADB,'wait-for-device'],timeout=180)
         deadline=time.monotonic()+180
         while time.monotonic()<deadline:
-            if subprocess.check_output(['adb','shell','getprop','sys.boot_completed'],text=True).strip()=='1': break
+            if subprocess.check_output([ADB,'shell','getprop','sys.boot_completed'],text=True).strip()=='1': break
             time.sleep(2)
         else: raise RuntimeError('Android emulator did not finish booting')
-        run(['adb','shell','settings','put','global','private_dns_mode','off'])
+        run([ADB,'shell','settings','put','global','private_dns_mode','off'])
     elif args.operation=='build': build(args.arch)
     elif args.operation=='export': export_build(args.arch)
     elif args.operation=='test': test(args.arch)
