@@ -334,14 +334,14 @@ def main():
         local = validate_files(args.asset, version)
         require(all(sha256(local[name]) == sha256(path) for name, path in files.items()), 'Local assets differ from selected CI')
     print('Verified CI:', run['html_url'])
-    print('Verified version and all twelve attachments:', tag)
+    print(f'Verified version and all {len(files)} attachments:', tag)
     if args.check:
         print('Check complete; no release changes made')
         return
     url = publish(client, commit, tag, notes, files)
     if os.environ.get('GITHUB_STEP_SUMMARY'):
         with Path(os.environ['GITHUB_STEP_SUMMARY']).open('a', encoding='utf-8') as summary:
-            summary.write(f'[Published {tag}]({url}) — six installers and six SHA256 files verified.\n')
+            summary.write(f'[Published {tag}]({url}) — {len(PACKAGES)} packages and their SHA256 files verified.\n')
 
 
 if __name__ == '__main__':

@@ -466,7 +466,21 @@ pub fn android_safe_config(raw: &str) -> Result<String> {
     let tun = value["tun"].as_mapping_mut().context("TUN 配置无效")?;
     tun.clear();
     tun.insert("enable".into(), false.into());
-    value["dns"]["listen"] = "127.0.0.1:0".into();
+    // VpnService supplies our TUN address as the system DNS. Disabling the
+    // controller's DNS service would leave every VPN client without a resolver.
+    // Keep subscription upstreams/policies when the user's DNS override is off.
+    let dns = value["dns"].as_mapping_mut().context("DNS 配置无效")?;
+    dns.insert("enable".into(), true.into());
+    dns.insert("listen".into(), "127.0.0.1:0".into());
+    if dns
+        .get("nameserver")
+        .is_none_or(|v| v.is_null() || v.as_sequence().is_some_and(Vec::is_empty))
+    {
+        dns.insert(
+            "nameserver".into(),
+            serde_yaml::to_value(config::DEFAULT_DNS_NAMESERVERS)?,
+        );
+    }
     value["profile"]["store-selected"] = true.into();
     value["profile"]["store-fake-ip"] = true.into();
     Ok(serde_yaml::to_string(&value)?)
@@ -509,6 +523,30 @@ mod tests {
         assert_eq!(session.raw().unwrap(), before);
         assert!(session.delete(&session.profile().id.clone()).is_err());
         assert!(session.save_rule("", "", 1).is_err());
+    }
+    #[test]
+    fn vpn_dns_stays_available_with_override_off_and_subscription_dns_disabled() {
+        let settings = Settings {
+            dns_override: false,
+            ..Settings::default()
+        };
+        for upstreams in ["", "  nameserver: []\n", "  nameserver: [9.9.9.9]\n"] {
+            let raw = format!(
+                "proxies: []\nrules: [MATCH,DIRECT]\ndns:\n  enable: false\n  nameserver-policy: {{example.test: 1.1.1.1}}\n{upstreams}"
+            );
+            let raw = core::config::runtime_config(&raw, &settings).unwrap();
+            let value: serde_yaml::Value =
+                serde_yaml::from_str(&android_safe_config(&raw).unwrap()).unwrap();
+            assert_eq!(value["dns"]["enable"], true);
+            assert_eq!(value["dns"]["nameserver-policy"]["example.test"], "1.1.1.1");
+            let expected = if upstreams.contains("9.9.9.9") {
+                serde_yaml::to_value(["9.9.9.9"]).unwrap()
+            } else {
+                serde_yaml::to_value(config::DEFAULT_DNS_NAMESERVERS).unwrap()
+            };
+            assert_eq!(value["dns"]["nameserver"], expected);
+            assert!(!settings.dns_override);
+        }
     }
     #[test]
     fn failed_native_reload_restores_saved_settings_and_runtime() {
