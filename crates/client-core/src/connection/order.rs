@@ -5,9 +5,9 @@ use std::{cmp::Ordering, fmt};
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum NodeSort {
-    #[default]
     LatencyAscending,
     LatencyDescending,
+    #[default]
     Name,
 }
 

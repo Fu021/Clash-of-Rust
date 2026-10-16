@@ -12,7 +12,7 @@ export enum Intent {
     rule-move-edge, rule-restore, rule-discard, rule-apply, rule-close-editor,
     rule-text-mode, rule-raw, rule-kind, rule-payload, rule-policy, rule-no-resolve,
     rule-enabled, rule-position, rule-save,
-    clear-logs, export-logs, test-url, dns-host, probe, dns,
+    clear-logs, export-logs, log-level, log-detail, test-url, dns-host, probe, dns,
     site-all, site-cancel, site-category, site-open-category, site-status, site-region, site-detail,
     site-reset, site-report, site-retest, site-probe,
     claude-start, claude-cancel, claude-close-session, claude-protection, claude-confirm-protection,
@@ -79,6 +79,7 @@ export global UiData {
     in-out property <bool> descending: true;
     in-out property <[RuleItem]> rules;
     in-out property <[LogItem]> logs;
+    in-out property <string> log-level: "全部等级";
     in-out property <[string]> network-results;
     in-out property <[CategoryPair]> categories;
     in-out property <[ReportItem]> site-results;
@@ -128,6 +129,9 @@ export global UiData {
     in-out property <[string]> site-status-options;
     in-out property <[string]> site-region-options;
     in-out property <string> site-summary;
+    in-out property <image> site-exit-flag;
+    in-out property <bool> site-exit-flagged;
+    in-out property <string> site-exit-country;
     in-out property <[Choice]> site-counts;
     in-out property <string> profile-name;
     in-out property <string> profile-source;
@@ -159,6 +163,9 @@ export global UiData {
     in-out property <int> modal;
     in-out property <string> modal-title;
     in-out property <string> modal-description;
+    in-out property <image> modal-flag;
+    in-out property <bool> modal-flagged;
+    in-out property <string> modal-country;
     in-out property <string> modal-error;
     in-out property <string> modal-accept;
     in-out property <bool> modal-danger;

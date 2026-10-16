@@ -5,6 +5,7 @@ import { UiData } from "state.slint";
 export component Preview inherits AppWindow {
     in-out property <int> preview-page <=> UiData.page;
     in-out property <bool> preview-dark <=> UiData.dark;
+    in-out property <int> preview-text-scale <=> UiData.text-scale;
     in-out property <int> preview-accent <=> UiData.accent;
     in-out property <string> preview-notice <=> UiData.notice;
     in-out property <float> preview-notice-elapsed <=> UiData.notice-elapsed;
@@ -77,9 +78,11 @@ export component Preview inherits AppWindow {
             {time: "", level: "ERROR", message: "connection timeout: api.example.org:443", tone: 3}];
         UiData.test-url = "https://www.gstatic.com/generate_204"; UiData.dns-host = "github.com";
         UiData.network-results = ["网站响应 · HTTP 204 · 42 ms", "出口 IP · 203.0.113.42 · 德国", "系统 DNS · github.com → 140.82.112.4"];
+        UiData.node-sort = 2;
         UiData.sites-started = true; UiData.site-progress = "完成 183 / 183"; UiData.site-fraction = 1;
         UiData.site-counts = [{id: "确认可用", label: "确认可用 74"}, {id: "仅网页可达", label: "仅网页可达 20"}, {id: "信息已识别", label: "信息已识别 5"}, {id: "不可用或受限", label: "不可用或受限 36"}, {id: "结果未确认", label: "结果未确认 48"}];
-        UiData.site-summary = "出口 IP：203.0.113.42 · 德国";
+        UiData.site-summary = "出口 IP：203.0.113.42 · 各平台识别到 6 个地区";
+        UiData.site-exit-country = "德国";
         UiData.categories = [
             {left: {id: "AI", title: "AI", count: "4 / 5", detail: "确认可用 3 · 网页可达 1 · 受限 1", tone: 2}, right: {id: "全球", title: "全球", count: "16 / 19", detail: "确认可用 14 · 网页可达 2 · 受限 3", tone: 2}},
             {left: {id: "日本", title: "日本", count: "8 / 12", detail: "确认可用 6 · 网页可达 2 · 受限 4", tone: 2}, right: {id: "香港", title: "香港", count: "9 / 13", detail: "确认可用 8 · 网页可达 1 · 受限 4", tone: 2}},

@@ -23,23 +23,26 @@ fn codes() -> &'static Vec<String> {
 }
 
 pub fn label(country: &str) -> (&str, Option<Image>) {
-    let mut chars = country.char_indices();
-    let Some((_, first)) = chars.next() else {
-        return (country, None);
-    };
-    let Some((_, second)) = chars.next() else {
-        return (country, None);
-    };
-    if !(0x1f1e6..=0x1f1ff).contains(&u32::from(first))
-        || !(0x1f1e6..=0x1f1ff).contains(&u32::from(second))
-    {
-        return (country, None);
-    }
-    let code: String = [first, second]
-        .into_iter()
-        .filter_map(|ch| char::from_u32(u32::from(ch) - 0x1f1e6 + u32::from(b'A')))
-        .collect();
     let text = country_text(country);
+    let mut chars = country.chars();
+    let flag = match (chars.next(), chars.next()) {
+        (Some(a), Some(b))
+            if (0x1f1e6..=0x1f1ff).contains(&u32::from(a))
+                && (0x1f1e6..=0x1f1ff).contains(&u32::from(b)) =>
+        {
+            Some(
+                [a, b]
+                    .into_iter()
+                    .filter_map(|ch| char::from_u32(u32::from(ch) - 0x1f1e6 + u32::from(b'A')))
+                    .collect::<String>(),
+            )
+        }
+        _ => None,
+    };
+    let code = flag.or_else(|| country_code(text).map(str::to_owned));
+    let Some(code) = code else {
+        return (text, None);
+    };
     if matches!(code.as_str(), "HK" | "MO" | "TW") {
         return (text, None);
     }
@@ -72,6 +75,10 @@ mod tests {
         assert_eq!(country_code("No"), None);
         assert_eq!(label("🇺🇸 美国").0, "美国");
         assert!(label("🇺🇸 美国").1.is_some());
+        for country in ["🇩🇪 德国", "德国", "DE", "Germany"] {
+            assert!(label(country).1.is_some(), "{country}");
+        }
+        assert!(label("未识别").1.is_none());
         for country in ["香港", "澳门", "台湾", "🇭🇰 香港", "🇲🇴 澳门", "🇹🇼 台湾"]
         {
             assert!(label(country).1.is_none());

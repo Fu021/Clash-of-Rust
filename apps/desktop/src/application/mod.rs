@@ -1,5 +1,6 @@
 //! Application state and effects, independent of a GUI framework.
 mod commands;
+mod connection_lookup;
 mod runtime;
 use commands::{Action, Reply, execute};
 mod bindings;
@@ -7,6 +8,7 @@ mod bootstrap;
 mod claude;
 mod format;
 mod interaction;
+mod logs;
 #[cfg(target_os = "macos")]
 #[path = "../platform/macos/desktop.rs"]
 mod mac_desktop;
@@ -151,6 +153,10 @@ enum Message {
     CancelConfirm,
     ConnectionDetail(String),
     CloseConnectionDetail,
+    LogLevel(Option<logs::Level>),
+    LogDetail(String),
+    CloseLogDetail,
+    ConnectionResolved(u64, Result<String, String>),
     Copy(String),
     EditProfile(String),
     EditName(String),
@@ -188,6 +194,7 @@ enum Message {
     ProfileSource(String),
     ControllerPort(String),
     MixedPort(String),
+    SavePorts,
     Rules(rules_view::Event),
     WindowWidth(String),
     WindowHeight(String),
@@ -261,6 +268,9 @@ struct App {
     import_open: bool,
     accent_open: bool,
     connection_detail: Option<String>,
+    log_level: Option<logs::Level>,
+    log_detail: Option<String>,
+    connection_lookup: connection_lookup::Lookup,
     picking_file: bool,
     picking_profile: Option<String>,
     system_dark: bool,
@@ -418,6 +428,9 @@ impl App {
             import_open: false,
             accent_open: false,
             connection_detail: None,
+            log_level: None,
+            log_detail: None,
+            connection_lookup: connection_lookup::Lookup::default(),
             picking_file: false,
             picking_profile: None,
             system_dark: settings.dark,
@@ -636,6 +649,10 @@ impl App {
             | Message::Confirm
             | Message::CancelConfirm
             | Message::ConnectionDetail(_)
+            | Message::ConnectionResolved(..)
+            | Message::LogLevel(_)
+            | Message::LogDetail(_)
+            | Message::CloseLogDetail
             | Message::CloseConnectionDetail
             | Message::Copy(_)
             | Message::EditProfile(_)
@@ -867,7 +884,8 @@ impl App {
                     self.rule_state.release_document();
                 }
                 self.page = page;
-                self.connection_detail = None;
+                self.log_detail = None;
+                self.clear_connection_detail();
                 self.query.clear();
                 self.list_offset = 0;
                 self.snapshot.retain_scope(page.scope());
@@ -1145,7 +1163,7 @@ impl App {
             Message::Action(Action::DeleteProfile(id)) => {
                 return self.confirm_delete(id);
             }
-            Message::Action(Action::SavePorts(..)) => {
+            Message::SavePorts => {
                 let ports = self.controller_port.parse::<u16>().and_then(|controller| {
                     self.mixed_port
                         .parse::<u16>()
@@ -1533,6 +1551,16 @@ impl App {
                     }
                 }
                 self.settings = reply.settings;
+                if !self
+                    .queued_actions
+                    .iter()
+                    .any(|action| matches!(action, Action::NodeSort(_)))
+                    && self.node_sort != self.settings.node_sort
+                {
+                    self.node_sort = self.settings.node_sort;
+                    self.proxy_order.get_mut().clear();
+                    self.group_offsets.clear();
+                }
                 self.sync_appearance();
                 if let Some(nodes) = reply.tray_nodes
                     && let Some(tray) = &self.tray
@@ -1826,6 +1854,7 @@ impl App {
         }
         self.cancel_delay_checks();
         self.cancel_site_checks();
+        self.clear_connection_detail();
         self.claude.shutdown();
         self.tray_startup = None;
         self.exiting = true;
@@ -2793,7 +2822,7 @@ mod dev2_tests {
         let mut json = serde_json::to_value(Settings::default()).unwrap();
         json.as_object_mut().unwrap().remove("node_sort");
         let settings: Settings = serde_json::from_value(json).unwrap();
-        assert_eq!(settings.node_sort, NodeSort::LatencyAscending);
+        assert_eq!(settings.node_sort, NodeSort::Name);
         for mode in NodeSort::ALL {
             let settings = Settings {
                 node_sort: mode,

@@ -1,6 +1,7 @@
 import { ScrollView } from "std-widgets.slint";
 import { UiData, UiActions, Intent } from "state.slint";
 import { Theme } from "theme/palette.slint";
+export { Theme } from "theme/palette.slint";
 export { UiData, UiActions, Intent, Choice, DetailItem, NodeItem, NodePair, GroupItem, ProfileItem, ConnectionItem, RuleItem, LogItem, ReportItem, CategoryItem, CategoryPair } from "state.slint";
 import { Label, Caption, ContentPanel, Panel, ActionButton, Badge, Paragraph } from "components/controls.slint";
 import { NavigationItem } from "components/navigation.slint";
@@ -31,7 +32,7 @@ export component AppWindow inherits Window {
     default-font-size: Theme.body-size;
     icon: @image-url("../../../resources/icons/app.png");
     property <int> appearance: UiData.appearance;
-    property <float> font-scale: UiData.text-scale / 100;
+    property <float> font-scale: UiData.text-scale / 100.0;
     changed dark => { Theme.system-dark = root.dark; }
     changed appearance => { Theme.appearance = root.appearance; }
     changed font-scale => { Theme.text-scale = root.font-scale; }
@@ -72,19 +73,19 @@ export component AppWindow inherits Window {
                 clicked => { UiActions.dispatch(Intent.system-notification, "", ""); }
             }
         }
-        Label { x: 48px; y: 18px; height: 32px; width: 122px; text: "Clash of Rust"; font-size: 16px; }
-        Caption { x: 48px; y: 46px; height: 22px; width: 122px; text: "原生代理客户端"; font-size: 12px; }
+        Label { x: 48px; y: 18px; height: 32px; width: 122px; text: "Clash of Rust"; font-size: 16px * Theme.text-scale; }
+        Caption { x: 48px; y: 46px; height: 22px; width: 122px; text: "原生代理客户端"; font-size: 12px * Theme.text-scale; }
         nav := ScrollView {
             x: 0px; y: 92px; width: parent.width; height: parent.height - 144px;
             VerticalLayout { alignment: start; padding-left: 12px; padding-right: 12px; spacing: 4px;
                 for title[i] in root.titles: VerticalLayout {
                     spacing: 4px;
-                    if i == 6: Caption { text: "工具"; height: 24px; font-size: 12px; }
+                    if i == 6: Caption { text: "工具"; height: 24px; font-size: 12px * Theme.text-scale; }
                     NavigationItem { text: title; icon: root.icons[i]; selected: UiData.page == i; clicked => { UiActions.dispatch(Intent.navigate, "" + i, ""); } }
                 }
             }
         }
-        Caption { x: 16px; y: parent.height - 36px; height: 22px; width: parent.width - 32px; text: UiData.version; font-size: 13px; }
+        Caption { x: 16px; y: parent.height - 36px; height: 22px; width: parent.width - 32px; text: UiData.version; font-size: 13px * Theme.text-scale; }
     }
     Rectangle {
         x: 200px; y: 20px; width: parent.width - 224px; height: parent.height - 36px;

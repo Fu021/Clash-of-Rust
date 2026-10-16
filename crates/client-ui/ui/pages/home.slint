@@ -27,12 +27,12 @@ export component HomePage inherits Rectangle {
             RowPanel {
                 Rectangle {
                     width: 40px; height: 40px; border-radius: 20px; background: Theme.accent-wash;
-                    Label { width: parent.width; height: parent.height; text: "✓"; font-size: 23px; color: Theme.accent; horizontal-alignment: center; }
+                    Label { width: parent.width; height: parent.height; text: "✓"; font-size: 23px * Theme.text-scale; color: Theme.accent; horizontal-alignment: center; }
                 }
                 VerticalLayout {
                     spacing: 4px;
                     horizontal-stretch: 1;
-                    Label { text: !UiData.running ? "内核尚未运行" : UiData.proxy-mode == 0 ? "系统代理已连接" : UiData.proxy-mode == 1 ? "TUN 模式已连接" : "代理已关闭"; font-size: 18px; }
+                    Label { text: !UiData.running ? "内核尚未运行" : UiData.proxy-mode == 0 ? "系统代理已连接" : UiData.proxy-mode == 1 ? "TUN 模式已连接" : "代理已关闭"; font-size: 18px * Theme.text-scale; }
                     Caption { text: "当前节点 · " + UiData.node; }
                 }
                 if UiData.retry-core: ActionButton { text: "重启内核"; primary: true; enabled: !UiData.working; clicked => { UiActions.dispatch(Intent.restart-core, "", ""); } }
@@ -46,7 +46,7 @@ export component HomePage inherits Rectangle {
                 TrafficMetric { title: "活跃连接"; value: UiData.connection-count; detail: "当前连接"; }
             }
             ContentPanel {
-                Label { text: "连接设置"; font-size: 16px; height: 28px; }
+                Label { text: "连接设置"; font-size: 16px * Theme.text-scale; height: 28px; }
                 HorizontalLayout { cross-axis-alignment: center;
                     spacing: Theme.content-gap;
                     Caption { text: "运行模式"; horizontal-stretch: 1; }

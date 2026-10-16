@@ -8,7 +8,7 @@ export component RulesPage inherits Rectangle {
         VerticalLayout {
             alignment: start; padding-right: Theme.content-gap; spacing: Theme.page-gap;
             HorizontalLayout { cross-axis-alignment: center; spacing: Theme.content-gap;
-                Select { options: UiData.rule-profile-options; value: UiData.rule-profile; selected(index) => { UiActions.dispatch(Intent.rule-profile, UiData.rule-profiles[index].id, ""); } }
+                Select { options: UiData.rule-profile-options; value: UiData.rule-profile; selected(index, value) => { UiActions.dispatch(Intent.rule-profile, UiData.rule-profiles[index].id, ""); } }
                 Badge { text: UiData.rule-dirty ? "尚未应用" : "已载入"; tone: UiData.rule-dirty ? 2 : 1; }
                 ActionButton { text: "放弃修改"; enabled: UiData.rule-dirty && !UiData.working; clicked => { UiActions.dispatch(Intent.rule-discard, "", ""); } }
                 ActionButton { text: "应用修改"; primary: true; enabled: UiData.rule-dirty && !UiData.working; clicked => { UiActions.dispatch(Intent.rule-apply, "", ""); } }
@@ -32,24 +32,8 @@ export component RulesPage inherits Rectangle {
             }
             HorizontalLayout { cross-axis-alignment: center; spacing: Theme.content-gap;
                 Field { placeholder: "搜索规则类型、内容或策略"; focus-id: "page-search"; text <=> UiData.query; edited(value) => { UiActions.dispatch(Intent.query, value, ""); } }
-                Select { width: 120px; horizontal-stretch: 0; options: ["全部来源", "自定义", "快捷规则", "订阅"]; value: UiData.rule-source; selected(index) => { UiActions.dispatch(Intent.rule-filter, "" + index, ""); } }
+                Select { width: 120px; horizontal-stretch: 0; options: ["全部来源", "自定义", "快捷规则", "订阅"]; value: UiData.rule-source; selected(index, value) => { UiActions.dispatch(Intent.rule-filter, "" + index, ""); } }
                 ActionButton { text: "+ 新建规则"; primary: true; enabled: UiData.rule-types.length > 0 && !UiData.working; clicked => { UiActions.dispatch(Intent.rule-add, "", ""); } }
-            }
-            ContentPanel {
-                for rule in UiData.rules: Rectangle {
-                    height: max(60px, Theme.body-size * 3 + 12px);
-                    background: rule.selected ? Theme.accent-wash : Theme.surface;
-                    HorizontalLayout { cross-axis-alignment: center; padding: Theme.content-gap; spacing: Theme.content-gap;
-                        Caption { text: rule.position; width: 32px; }
-                        VerticalLayout { spacing: 4px; horizontal-stretch: 1;
-                            Label { text: rule.kind + " · " + rule.value; }
-                            Caption { text: rule.source + (rule.enabled ? "" : " · 已停用"); }
-                        }
-                        Badge { text: rule.policy; width-limit: root.width * 0.2; }
-                        ActionButton { text: rule.selected ? "已选择" : "选择"; selected: rule.selected; clicked => { UiActions.dispatch(Intent.rule-select, rule.id, ""); } }
-                    }
-                }
-                if UiData.rules.length == 0: Caption { text: "没有匹配的规则"; height: Theme.control-height; }
             }
             if UiData.rule-selected: ContentPanel {
                 Paragraph { text: UiData.rule-detail; }
@@ -66,6 +50,22 @@ export component RulesPage inherits Rectangle {
                     ActionButton { text: "删除"; danger: true; enabled: UiData.rule-custom && !UiData.working; clicked => { UiActions.dispatch(Intent.rule-delete, "", ""); } }
                     ActionButton { text: "恢复订阅顺序"; enabled: !UiData.working; clicked => { UiActions.dispatch(Intent.rule-restore, "", ""); } }
                 }
+            }
+            ContentPanel {
+                for rule in UiData.rules: Rectangle {
+                    height: max(60px, Theme.body-size * 3 + 12px);
+                    background: rule.selected ? Theme.accent-wash : Theme.surface;
+                    HorizontalLayout { cross-axis-alignment: center; padding: Theme.content-gap; spacing: Theme.content-gap;
+                        Caption { text: rule.position; width: 32px; }
+                        VerticalLayout { spacing: 4px; horizontal-stretch: 1;
+                            Label { text: rule.kind + " · " + rule.value; }
+                            Caption { text: rule.source + (rule.enabled ? "" : " · 已停用"); }
+                        }
+                        Badge { text: rule.policy; width-limit: root.width * 0.2; }
+                        ActionButton { text: rule.selected ? "已选择" : "选择"; selected: rule.selected; clicked => { UiActions.dispatch(Intent.rule-select, rule.id, ""); } }
+                    }
+                }
+                if UiData.rules.length == 0: Caption { text: "没有匹配的规则"; height: Theme.control-height; }
             }
             if UiData.rule-warning != "": ContentPanel { Paragraph { text: UiData.rule-warning; color: Theme.warning; } }
             HorizontalLayout { cross-axis-alignment: center; spacing: Theme.content-gap;

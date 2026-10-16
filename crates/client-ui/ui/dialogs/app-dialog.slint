@@ -11,7 +11,7 @@ export component AppDialog inherits Rectangle {
     dialog := Panel {
         x: (parent.width - self.width) / 2;
         y: (parent.height - self.height) / 2;
-        width: min(parent.width - 48px, UiData.modal == 10 || UiData.modal == 11 ? 700px : 600px);
+        width: min(parent.width - 48px, UiData.modal == 10 || UiData.modal == 11 || UiData.modal == 13 ? 700px : 600px);
         height: min(parent.height - 48px, content.preferred-height);
         content := VerticalLayout {
             padding: Theme.dialog-padding; spacing: Theme.dialog-gap;
@@ -21,6 +21,11 @@ export component AppDialog inherits Rectangle {
                 preferred-height: body.preferred-height;
                 body := VerticalLayout {
                     alignment: start; padding-right: Theme.content-gap; spacing: Theme.page-gap;
+                    if UiData.modal-country != "": HorizontalLayout {
+                        cross-axis-alignment: center; spacing: Theme.content-gap;
+                        if UiData.modal-flagged: Image { source: UiData.modal-flag; width: 24px; height: 24px; image-fit: contain; }
+                        Label { text: UiData.modal-country; }
+                    }
                     if UiData.modal-description != "": Paragraph { text: UiData.modal-description; }
                     if UiData.modal == 2: VerticalLayout {
                         spacing: Theme.page-gap;
@@ -50,7 +55,7 @@ export component AppDialog inherits Rectangle {
                             spacing: Theme.page-gap;
                             HorizontalLayout { cross-axis-alignment: center; spacing: Theme.content-gap;
                                 Caption { text: "类型"; width: 80px; }
-                                Select { modal-control: true; value: UiData.rule-kind; options: UiData.rule-types; selected(index) => { UiActions.dispatch(Intent.rule-kind, self.options[index], ""); } }
+                                Select { modal-control: true; value: UiData.rule-kind; options: UiData.rule-types; selected(index, value) => { UiActions.dispatch(Intent.rule-kind, value, ""); } }
                             }
                             HorizontalLayout { cross-axis-alignment: center; spacing: Theme.content-gap;
                                 Caption { text: "匹配内容"; width: 80px; }
@@ -58,7 +63,7 @@ export component AppDialog inherits Rectangle {
                             }
                             HorizontalLayout { cross-axis-alignment: center; spacing: Theme.content-gap;
                                 Caption { text: "策略"; width: 80px; }
-                                Select { modal-control: true; value: UiData.rule-policy; options: UiData.rule-policies; selected(index) => { UiActions.dispatch(Intent.rule-policy, self.options[index], ""); } }
+                                Select { modal-control: true; value: UiData.rule-policy; options: UiData.rule-policies; selected(index, value) => { UiActions.dispatch(Intent.rule-policy, value, ""); } }
                             }
                             if (UiData.rule-kind == "GEOIP" || UiData.rule-kind == "IP-CIDR" || UiData.rule-kind == "IP-CIDR6" || UiData.rule-kind == "IP-ASN" || UiData.rule-kind == "RULE-SET"): SettingRow { modal-control: true; title: "no-resolve"; checked: UiData.rule-no-resolve; toggled(value) => { UiActions.dispatch(Intent.rule-no-resolve, value ? "true" : "false", ""); } }
                         }
@@ -116,10 +121,10 @@ export component AppDialog inherits Rectangle {
                 }
             }
             HorizontalLayout { cross-axis-alignment: center; spacing: Theme.content-gap;
-                if UiData.modal == 10 || UiData.modal == 11: ActionButton {
-                    modal-control: true; text: "复制详情";
+                if UiData.modal == 10 || UiData.modal == 11 || UiData.modal == 13: ActionButton {
+                    modal-control: true; text: UiData.modal == 13 ? "复制全文" : "复制详情";
                     enabled: UiData.modal != 10 || UiData.connection-details.length > 0;
-                    clicked => { UiActions.dispatch(Intent.copy, UiData.modal == 10 ? UiData.modal-copy : UiData.modal-description, ""); }
+                    clicked => { UiActions.dispatch(Intent.copy, UiData.modal-copy, ""); }
                 }
                 Rectangle { horizontal-stretch: 1; }
                 ActionButton { modal-control: true; text: UiData.modal-accept == "" ? "关闭" : "取消"; clicked => { UiActions.dispatch(Intent.cancel-confirm, "", ""); } }

@@ -40,7 +40,10 @@ fn tone(status: Status) -> i32 {
     }
 }
 
-fn connection_details(connection: &clash_of_rust::api::Connection) -> Vec<DetailItem> {
+fn connection_details(
+    connection: &clash_of_rust::api::Connection,
+    resolved: &str,
+) -> Vec<DetailItem> {
     let rate = |value: Option<u64>| {
         value.map_or_else(|| "—".into(), |value| format!("{}/s", bytes(value)))
     };
@@ -49,21 +52,12 @@ fn connection_details(connection: &clash_of_rust::api::Connection) -> Vec<Detail
         ("域名", connection.metadata.host.to_string()),
         (
             "嗅探域名",
-            if connection.metadata.sniff_host.is_empty() {
-                if connection.metadata.host.is_empty() {
-                    "内核未识别"
-                } else {
-                    "未嗅探（已有域名）"
-                }
-                .into()
-            } else {
-                connection.metadata.sniff_host.to_string()
-            },
+            connection_lookup::hostname(connection).to_owned(),
         ),
         (
             "目标 IP",
             if connection.metadata.destination_ip.is_empty() {
-                "内核未提供（可能由代理端解析）".into()
+                resolved.to_owned()
             } else {
                 connection.metadata.destination_ip.to_string()
             },
@@ -597,13 +591,19 @@ impl App {
         } else {
             reconcile(&models.rules, Vec::new());
         }
+        data.set_log_level(self.log_level.map_or("全部等级", logs::Level::label).into());
         if self.page == Page::Logs {
             let logs: Vec<_> = self
                 .snapshot
                 .logs
                 .iter()
                 .rev()
-                .filter(|line| contains_query(line, &query))
+                .filter_map(|line| {
+                    let level = logs::Level::of(line);
+                    (self.log_level.is_none_or(|selected| selected == level)
+                        && contains_query(line, &query))
+                    .then_some((line, level))
+                })
                 .collect();
             self.pager(data, logs.len(), PAGE_SIZE);
             reconcile(
@@ -611,27 +611,11 @@ impl App {
                 logs.into_iter()
                     .skip(data.get_page_offset() as usize)
                     .take(PAGE_SIZE)
-                    .map(|line| {
-                        let tone = if line.to_ascii_lowercase().contains("error") {
-                            3
-                        } else if line.to_ascii_lowercase().contains("warn") {
-                            2
-                        } else {
-                            4
-                        };
-                        LogItem {
-                            time: "".into(),
-                            level: if tone == 3 {
-                                "ERROR"
-                            } else if tone == 2 {
-                                "WARN"
-                            } else {
-                                "INFO"
-                            }
-                            .into(),
-                            message: line.as_ref().into(),
-                            tone,
-                        }
+                    .map(|(line, level)| LogItem {
+                        time: "".into(),
+                        level: level.label().into(),
+                        message: line.as_ref().into(),
+                        tone: level.tone(),
                     })
                     .collect(),
             );
@@ -817,13 +801,18 @@ impl App {
                 || "完成检测后显示出口与各类平台结果".into(),
                 |exit| {
                     format!(
-                        "出口 IP：{} · 出口地区：{} · 各平台识别到 {} 个地区",
-                        exit.summary, exit.country, region_count
+                        "出口 IP：{} · 各平台识别到 {} 个地区",
+                        exit.summary, region_count
                     )
                 },
             )
             .into(),
         );
+        let (country, flag) =
+            crate::artwork::flags::label(exit.map_or("", |exit| exit.country.as_str()));
+        data.set_site_exit_country(country.into());
+        data.set_site_exit_flagged(flag.is_some());
+        data.set_site_exit_flag(flag.unwrap_or_default());
         let categories: Vec<_> = report
             .categories
             .into_iter()
@@ -1046,6 +1035,10 @@ impl App {
 
     fn present_dialog(&self, data: &UiData<'_>) {
         data.set_modal_error("".into());
+        data.set_modal_copy("".into());
+        data.set_modal_country("".into());
+        data.set_modal_flagged(false);
+        data.set_modal_flag(slint::Image::default());
         data.set_modal_description("".into());
         data.set_modal_accept("".into());
         data.set_modal_danger(false);
@@ -1132,7 +1125,10 @@ impl App {
                 .connections
                 .iter()
                 .find(|connection| connection.id.as_ref() == id);
-            let rows = connection.map_or_else(Vec::new, connection_details);
+            let rows = connection.map_or_else(Vec::new, |connection| {
+                let resolved = self.connection_lookup.addresses(connection);
+                connection_details(connection, resolved)
+            });
             data.set_modal_copy(
                 rows.iter()
                     .map(|row| format!("{}：{}", row.label, row.value))
@@ -1144,21 +1140,42 @@ impl App {
             if connection.is_none() {
                 data.set_modal_description("此连接已结束，详情不再保留。".into());
             }
+        } else if let Some(line) = &self.log_detail {
+            kind = 13;
+            data.set_modal_title("日志详情".into());
+            data.set_modal_description(line.as_str().into());
+            data.set_modal_copy(line.as_str().into());
         } else if let Some(index) = self.site_detail {
             kind = 11;
             let service = &ip_check::services()[index];
             data.set_modal_title(service.name.as_str().into());
             data.set_modal_description(
                 match self.site_result(index) {
-                    Some(Ok(result)) => format!(
-                        "{}\n{}\n{} ms\n\n{}",
-                        result.summary, result.country, result.millis, result.detail
-                    ),
+                    Some(Ok(result)) => {
+                        let (country, flag) = crate::artwork::flags::label(&result.country);
+                        data.set_modal_country(country.into());
+                        data.set_modal_flagged(flag.is_some());
+                        data.set_modal_flag(flag.unwrap_or_default());
+                        format!(
+                            "{}\n{} ms\n\n{}",
+                            result.summary, result.millis, result.detail
+                        )
+                    }
                     Some(Err(error)) => error.clone(),
                     None => "尚未完成检测".into(),
                 }
                 .into(),
             );
+            data.set_modal_copy(if data.get_modal_country().is_empty() {
+                data.get_modal_description()
+            } else {
+                format!(
+                    "{}\n{}",
+                    data.get_modal_country(),
+                    data.get_modal_description()
+                )
+                .into()
+            });
         } else if self.accent_open {
             kind = 12;
             data.set_modal_title("强调色".into());

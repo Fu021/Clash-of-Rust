@@ -139,12 +139,26 @@ impl App {
             Message::TextScale(scale) => self.dispatch(Action::TextScale(*scale)),
             Message::TraySpeed(enabled) => self.dispatch(Action::TraySpeed(*enabled)),
             Message::Copy(value) => desktop_runtime::clipboard::write(value.clone()),
-            Message::ConnectionDetail(id) => {
-                self.connection_detail = Some(id.clone());
+            Message::LogLevel(level) => {
+                self.log_level = *level;
+                self.list_offset = 0;
+                none()
+            }
+            Message::LogDetail(line) => {
+                self.log_detail = Some(line.clone());
+                none()
+            }
+            Message::CloseLogDetail => {
+                self.log_detail = None;
+                none()
+            }
+            Message::ConnectionDetail(id) => self.open_connection_detail(id),
+            Message::ConnectionResolved(generation, result) => {
+                self.accept_connection_addresses(*generation, result);
                 none()
             }
             Message::CloseConnectionDetail => {
-                self.connection_detail = None;
+                self.clear_connection_detail();
                 none()
             }
             Message::CancelConfirm => {
@@ -363,8 +377,11 @@ impl App {
                             none()
                         } else if self.profile_editor.is_some() {
                             self.desktop_message(&Message::CloseProfileEdit).unwrap()
+                        } else if self.log_detail.is_some() {
+                            self.log_detail = None;
+                            none()
                         } else if self.connection_detail.is_some() {
-                            self.connection_detail = None;
+                            self.clear_connection_detail();
                             none()
                         } else if self.claude.guide.is_some() {
                             self.claude.guide = None;

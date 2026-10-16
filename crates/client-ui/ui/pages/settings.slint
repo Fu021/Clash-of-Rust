@@ -24,7 +24,7 @@ export component SettingsPage inherits Rectangle {
                     Divider { }
                     HorizontalLayout { cross-axis-alignment: center; spacing: Theme.content-gap;
                         Label { text: "字号"; }
-                        Select { width: 100px; horizontal-stretch: 0; value: "" + UiData.text-scale + "%"; options: ["80%", "90%", "100%", "110%", "125%", "150%"]; selected(index) => { UiActions.dispatch(Intent.text-scale, self.options[index], ""); } }
+                        Select { width: 100px; horizontal-stretch: 0; value: "" + UiData.text-scale + "%"; options: ["80%", "90%", "100%", "110%", "125%", "150%"]; selected(index, value) => { UiActions.dispatch(Intent.text-scale, value, ""); } }
                     }
                     Divider { }
                     HorizontalLayout { cross-axis-alignment: center; spacing: Theme.content-gap;

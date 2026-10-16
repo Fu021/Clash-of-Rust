@@ -30,7 +30,15 @@ export component IpCheckPage inherits Rectangle {
             Rectangle { height: 3px; background: Theme.subtle-line;
                 Rectangle { x: 0px; y: 0px; width: parent.width * UiData.site-fraction; height: parent.height; background: Theme.accent; }
             }
-            if UiData.site-summary != "": ContentPanel { Paragraph { text: UiData.site-summary; } }
+            if UiData.site-summary != "": ContentPanel {
+                Paragraph { text: UiData.site-summary; }
+                if UiData.site-exit-country != "": HorizontalLayout {
+                    cross-axis-alignment: center; spacing: Theme.content-gap;
+                    Caption { text: "出口地区："; horizontal-stretch: 0; }
+                    if UiData.site-exit-flagged: Image { source: UiData.site-exit-flag; width: 24px; height: 24px; image-fit: contain; }
+                    Label { text: UiData.site-exit-country; }
+                }
+            }
             if UiData.sites-report: ScrollView {
                 height: Theme.control-height + Theme.content-gap;
                 HorizontalLayout { alignment: start; spacing: Theme.content-gap;
@@ -54,9 +62,9 @@ export component IpCheckPage inherits Rectangle {
                     ActionButton { text: "重测分类"; enabled: UiData.running && !UiData.sites-busy; clicked => { UiActions.dispatch(Intent.site-retest, "", ""); } }
                 }
                 HorizontalLayout { cross-axis-alignment: center; spacing: Theme.content-gap;
-                    Select { options: UiData.site-category-options; value: UiData.site-category; selected(index) => { UiActions.dispatch(Intent.site-category, self.options[index], ""); } }
-                    Select { options: UiData.site-status-options; value: UiData.site-status; selected(index) => { UiActions.dispatch(Intent.site-status, self.options[index], ""); } }
-                    Select { options: UiData.site-region-options; value: UiData.site-region; selected(index) => { UiActions.dispatch(Intent.site-region, self.options[index], ""); } }
+                    Select { options: UiData.site-category-options; value: UiData.site-category; selected(index, value) => { UiActions.dispatch(Intent.site-category, value, ""); } }
+                    Select { options: UiData.site-status-options; value: UiData.site-status; selected(index, value) => { UiActions.dispatch(Intent.site-status, value, ""); } }
+                    Select { options: UiData.site-region-options; value: UiData.site-region; selected(index, value) => { UiActions.dispatch(Intent.site-region, value, ""); } }
                     ActionButton { text: "清除筛选"; clicked => { UiActions.dispatch(Intent.site-reset, "", ""); } }
                 }
                 for result in UiData.site-results: ContentPanel {

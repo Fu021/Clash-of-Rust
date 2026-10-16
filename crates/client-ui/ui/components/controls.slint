@@ -257,7 +257,7 @@ export component Select inherits Rectangle {
     in property <bool> modal-control: false;
     in property <[string]> options;
     in property <string> value;
-    callback selected(int);
+    callback selected(int, string);
     height: Theme.control-height;
     min-width: 100px;
     ActionButton {
@@ -269,6 +269,7 @@ export component Select inherits Rectangle {
         clicked => { popup.show(); }
     }
     popup := PopupWindow {
+        close-policy: close-on-click-outside;
         y: root.height + 4px;
         width: max(root.width, 180px);
         height: min(320px, root.options.length * (Theme.control-height + 4px) + 12px);
@@ -283,10 +284,11 @@ export component Select inherits Rectangle {
                     padding: 8px;
                     spacing: 4px;
                     for option[i] in root.options: ActionButton {
+                        width: popup.width - 16px;
                         modal-control: root.modal-control;
                         text: option;
                         selected: option == root.value;
-                        clicked => { popup.close(); root.selected(i); }
+                        clicked => { root.selected(i, option); popup.close(); }
                     }
                 }
             }

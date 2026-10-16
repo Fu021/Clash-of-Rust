@@ -605,29 +605,20 @@ impl Api {
         .await?;
         Ok(())
     }
-    /// Exercise the configured upstream resolver, bypassing the fake-IP layer.
-    /// A fresh name prevents a previous mode's cached answer masking a broken route.
-    pub async fn verify_dns(&self) -> Result<()> {
-        #[derive(Deserialize)]
-        struct Response {
-            #[serde(rename = "Status")]
-            status: u16,
-        }
-        let mut url = self.url(&["dns", "query"])?;
-        url.query_pairs_mut()
-            .append_pair(
-                "name",
-                &format!("{}.claude.ai", uuid::Uuid::new_v4().simple()),
-            )
-            .append_pair("type", "A");
-        let response = Self::checked(self.request(Method::GET, url).send().await?).await?;
-        let response: Response = decode_json(response).await?;
-        // NOERROR and NXDOMAIN both prove the upstream completed the query;
-        // SERVFAIL, REFUSED and malformed API documents do not.
-        if !matches!(response.status, 0 | 3) {
-            bail!("DNS 上游未完成查询（返回码 {}）", response.status);
-        }
-        Ok(())
+    /// Query real upstream addresses; the controller endpoint bypasses fake-IP.
+    /// Never fall back to the host's plaintext system resolver here.
+    pub async fn resolve_domain(&self, host: &str) -> Result<Vec<std::net::IpAddr>> {
+        let query = |kind: &'static str| async move {
+            let mut url = self.url(&["dns", "query"])?;
+            url.query_pairs_mut()
+                .append_pair("name", host)
+                .append_pair("type", kind);
+            let response = Self::checked(self.request(Method::GET, url).send().await?).await?;
+            let answer: crate::dns::Answer = decode_json(response).await?;
+            answer.addresses()
+        };
+        let (v4, v6) = tokio::join!(query("A"), query("AAAA"));
+        crate::dns::combine(v4, v6)
     }
 
     pub async fn select(&self, group: &str, name: &str) -> Result<()> {
@@ -729,7 +720,7 @@ impl Api {
 mod tests {
     use super::*;
     #[tokio::test]
-    async fn protected_dns_check_uses_fresh_upstream_queries_and_rejects_failed_responses() {
+    async fn connection_dns_queries_both_families_and_keeps_a_working_family() {
         use tokio::io::{AsyncReadExt, AsyncWriteExt};
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
         let api = Api::new(&Settings {
@@ -738,14 +729,8 @@ mod tests {
         })
         .unwrap();
         let server = tokio::spawn(async move {
-            let mut queries = Vec::new();
-            for body in [
-                r#"{"Status":0}"#,
-                r#"{"Status":3}"#,
-                r#"{"Status":2}"#,
-                r#"{"Status":5}"#,
-                r#"{}"#,
-            ] {
+            let mut types = Vec::new();
+            for _ in 0..2 {
                 let (mut socket, _) = listener.accept().await.unwrap();
                 let mut request = [0; 8192];
                 let count = socket.read(&mut request).await.unwrap();
@@ -760,20 +745,26 @@ mod tests {
                 let url = Url::parse(&format!("http://localhost{target}")).unwrap();
                 assert_eq!(url.path(), "/dns/query");
                 let query: BTreeMap<_, _> = url.query_pairs().into_owned().collect();
-                assert_eq!(query["type"], "A");
-                assert!(query["name"].ends_with(".claude.ai"));
-                assert!(!queries.contains(&query["name"]));
-                queries.push(query["name"].clone());
+                assert_eq!(query["name"], "example.test");
+                types.push(query["type"].clone());
+                let body = if query["type"] == "A" {
+                    r#"{"Status":0,"Answer":[{"type":1,"data":"203.0.113.2"},{"type":5,"data":"alias.test."}]}"#
+                } else {
+                    r#"{"Status":2}"#
+                };
                 let reply = format!(
                     "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
                     body.len()
                 );
                 socket.write_all(reply.as_bytes()).await.unwrap();
             }
+            types.sort();
+            assert_eq!(types, ["A", "AAAA"]);
         });
-        for success in [true, true, false, false, false] {
-            assert_eq!(api.verify_dns().await.is_ok(), success);
-        }
+        assert_eq!(
+            api.resolve_domain("example.test").await.unwrap(),
+            ["203.0.113.2".parse::<std::net::IpAddr>().unwrap()]
+        );
         server.await.unwrap();
     }
 

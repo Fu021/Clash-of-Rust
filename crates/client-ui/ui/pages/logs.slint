@@ -1,12 +1,13 @@
 import { ScrollView } from "std-widgets.slint";
 import { Theme } from "../theme/palette.slint";
 import { UiData, UiActions, Intent } from "../state.slint";
-import { Label, Caption, Panel, ActionButton, Field, Badge } from "../components/controls.slint";
+import { Label, Caption, Panel, ActionButton, Field, Badge, Select } from "../components/controls.slint";
 export component LogsPage inherits Rectangle {
     VerticalLayout {
         spacing: Theme.page-gap;
         HorizontalLayout { cross-axis-alignment: center; spacing: Theme.content-gap;
             Field { placeholder: "搜索日志"; focus-id: "page-search"; text <=> UiData.query; edited(value) => { UiActions.dispatch(Intent.query, value, ""); } }
+            Select { width: 132px; horizontal-stretch: 0; options: ["全部等级", "TRACE", "DEBUG", "INFO", "WARN", "ERROR"]; value: UiData.log-level; selected(index, value) => { UiActions.dispatch(Intent.log-level, value, ""); } }
             ActionButton { text: "导出"; enabled: UiData.ready && !UiData.working; clicked => { UiActions.dispatch(Intent.export-logs, "", ""); } }
             ActionButton { text: "清空"; enabled: UiData.ready && !UiData.working; clicked => { UiActions.dispatch(Intent.clear-logs, "", ""); } }
         }
@@ -16,11 +17,23 @@ export component LogsPage inherits Rectangle {
                 VerticalLayout {
                     alignment: start; padding: Theme.card-padding; spacing: Theme.content-gap;
                     for entry in UiData.logs: Rectangle {
-                        height: max(44px, Theme.body-size * 1.5 + 16px);
+                        height: max(44px, Theme.control-height + 8px);
+                        accessible-role: button;
+                        accessible-label: entry.message;
+                        accessible-action-default => { if UiData.modal == 0 { UiActions.dispatch(Intent.log-detail, entry.message, ""); } }
+                        FocusScope {
+                            enabled: UiData.modal == 0;
+                            key-pressed(event) => {
+                                if event.text == Key.Return || event.text == " " { UiActions.dispatch(Intent.log-detail, entry.message, ""); return accept; }
+                                return reject;
+                            }
+                        }
+                        TouchArea { enabled: UiData.modal == 0; mouse-cursor: pointer; clicked => { UiActions.dispatch(Intent.log-detail, entry.message, ""); } }
                         HorizontalLayout { cross-axis-alignment: center; spacing: Theme.page-gap;
                             if entry.time != "": Caption { text: entry.time; width: 66px; horizontal-stretch: 0; }
-                            Badge { text: entry.level; tone: entry.tone; width: 52px; }
+                            Badge { text: entry.level; tone: entry.tone; width: 60px * Theme.text-scale; }
                             Label { text: entry.message; }
+                            ActionButton { text: "复制"; clicked => { UiActions.dispatch(Intent.copy, entry.message, ""); } }
                         }
                     }
                 }

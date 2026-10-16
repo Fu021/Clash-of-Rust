@@ -508,6 +508,8 @@ impl App {
             Intent::RuleEnabled => Message::Rules(R::Enabled(boolean(a))),
             Intent::RulePosition => Message::Rules(R::Position(a.into())),
             Intent::RuleSave => Message::Rules(R::SaveEditor),
+            Intent::LogLevel => Message::LogLevel(logs::Level::parse(a)),
+            Intent::LogDetail => Message::LogDetail(a.into()),
             Intent::ClearLogs => Message::Action(Action::ClearLogs),
             Intent::ExportLogs => Message::Action(Action::ExportLogs),
             Intent::TestUrl => Message::TestUrl(a.into()),
@@ -593,7 +595,7 @@ impl App {
             Intent::Autostart => Message::Action(Action::Autostart(boolean(a))),
             Intent::ControllerPort => Message::ControllerPort(a.into()),
             Intent::MixedPort => Message::MixedPort(a.into()),
-            Intent::SavePorts => Message::Action(Action::SavePorts(0, 0)),
+            Intent::SavePorts => Message::SavePorts,
             Intent::WindowWidth => Message::WindowWidth(a.into()),
             Intent::WindowHeight => Message::WindowHeight(a.into()),
             Intent::ResetWindow => Message::ResetWindowSize,
@@ -660,6 +662,9 @@ impl App {
         }
         if self.connection_detail.is_some() {
             return self.update(Message::CloseConnectionDetail);
+        }
+        if self.log_detail.is_some() {
+            return self.update(Message::CloseLogDetail);
         }
         self.site_detail = None;
         self.accent_open = false;

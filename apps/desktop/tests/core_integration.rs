@@ -119,9 +119,49 @@ async fn basic_system_proxy_and_tun() {
     } else {
         "ClashRustTest"
     };
+    let dns = tokio::net::UdpSocket::bind("127.0.0.1:0").await.unwrap();
+    let dns_address = dns.local_addr().unwrap();
+    let dns_server = tokio::spawn(async move {
+        for _ in 0..2 {
+            let mut packet = [0; 4096];
+            let (count, peer) = tokio::time::timeout(
+                std::time::Duration::from_secs(20),
+                dns.recv_from(&mut packet),
+            )
+            .await
+            .unwrap()
+            .unwrap();
+            let mut end = 12;
+            while end < count && packet[end] != 0 {
+                end += usize::from(packet[end]) + 1;
+            }
+            end += 5;
+            assert!(end <= count);
+            let kind = u16::from_be_bytes([packet[end - 4], packet[end - 3]]);
+            let mut response = packet[..end].to_vec();
+            response[2..12].copy_from_slice(&[0x81, 0x80, 0, 1, 0, 1, 0, 0, 0, 0]);
+            response.extend_from_slice(&[0xc0, 0x0c]);
+            response.extend_from_slice(&kind.to_be_bytes());
+            response.extend_from_slice(&[0, 1, 0, 0, 0, 0]);
+            let address: std::net::IpAddr = if kind == 1 {
+                "203.0.113.7"
+            } else {
+                "2001:db8::7"
+            }
+            .parse()
+            .unwrap();
+            let bytes = match address {
+                std::net::IpAddr::V4(ip) => ip.octets().to_vec(),
+                std::net::IpAddr::V6(ip) => ip.octets().to_vec(),
+            };
+            response.extend_from_slice(&(bytes.len() as u16).to_be_bytes());
+            response.extend_from_slice(&bytes);
+            dns.send_to(&response, peer).await.unwrap();
+        }
+    });
     // Route only this documentation subnet. The runner's control traffic and
     // Internet default route remain outside TUN even if a test aborts.
-    std::fs::write(&profile, format!("proxies: []\nrules: ['IP-CIDR,203.0.113.0/24,REJECT,no-resolve', 'MATCH,DIRECT']\nlog-level: debug\ndns: {{enable: false}}\ntun:\n  device: {device}\n  stack: system\n  route-address: [203.0.113.0/24]\n  dns-hijack: []\n")).unwrap();
+    std::fs::write(&profile, format!("proxies: []\nrules: ['IP-CIDR,203.0.113.0/24,REJECT,no-resolve', 'MATCH,DIRECT']\nlog-level: debug\ndns: {{enable: true, enhanced-mode: redir-host, nameserver: ['{dns_address}']}}\ntun:\n  device: {device}\n  stack: system\n  route-address: [203.0.113.0/24]\n  dns-hijack: []\n")).unwrap();
     engine
         .import("Proxy smoke".into(), profile.display().to_string(), None)
         .await
@@ -131,6 +171,15 @@ async fn basic_system_proxy_and_tun() {
         .await
         .unwrap();
     engine.start().await.unwrap();
+    let addresses = engine
+        .api
+        .resolve_domain("connection.example.test")
+        .await
+        .unwrap();
+    assert!(addresses.contains(&"203.0.113.7".parse().unwrap()));
+    assert!(addresses.contains(&"2001:db8::7".parse().unwrap()));
+    dns_server.await.unwrap();
+    println!("PASS: real mihomo DNS API returns IPv4 and IPv6 for connection details");
     engine.select_proxy_mode(ProxyMode::System).await.unwrap();
     assert!(platform::is_owned(&store.root.join("system-proxy.json")).unwrap());
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
@@ -225,8 +274,9 @@ async fn basic_system_proxy_and_tun() {
     #[cfg(target_os = "linux")]
     {
         // Full-route protection is safe only inside this disposable namespace.
-        // A live controller with an unreachable node must not commit a dead DNS
-        // configuration or strand the user in TUN. No Internet service is needed.
+        // An offline node must not make an external DNS check veto a valid
+        // native transition. Verify activation and full restoration independently
+        // of Internet access (the namespace deliberately has none).
         assert_eq!(
             std::env::var("CLASH_TUN_TEST_NAMESPACE").as_deref(),
             Ok("1")
@@ -249,11 +299,11 @@ async fn basic_system_proxy_and_tun() {
         engine.select_proxy_mode(ProxyMode::System).await.unwrap();
         let settings = std::fs::read(store.root.join("settings.json")).unwrap();
         let runtime = std::fs::read(store.runtime().join("config.yaml")).unwrap();
-        let error = engine.claude_protection(true).await.unwrap_err();
-        assert!(
-            format!("{error:#}").contains("保护 DNS 连通验证失败"),
-            "{error:#}"
-        );
+        engine.claude_protection(true).await.unwrap();
+        assert!(engine.settings.claude_protection.is_some());
+        let active = engine.poll(Scope::Home).await.unwrap();
+        assert!(active.running && active.tun && !active.system_proxy);
+        engine.claude_protection(false).await.unwrap();
         assert!(engine.settings.claude_protection.is_none());
         assert_eq!(
             settings,
@@ -265,7 +315,9 @@ async fn basic_system_proxy_and_tun() {
         );
         let state = engine.poll(Scope::Home).await.unwrap();
         assert!(state.running && state.system_proxy && !state.tun);
-        println!("PASS: failed protected DNS restores system proxy and saved configuration");
+        println!(
+            "PASS: protected TUN activates offline and restores system proxy and saved configuration"
+        );
     }
     engine.select_proxy_mode(ProxyMode::Off).await.unwrap();
     let state = engine.poll(Scope::Home).await.unwrap();
