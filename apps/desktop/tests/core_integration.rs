@@ -5,6 +5,10 @@ use clash_of_rust::{
     engine::{Engine, Scope},
 };
 
+#[cfg(target_os = "linux")]
+#[path = "support/protected_dns.rs"]
+mod protected_dns;
+
 fn test_resources() -> std::path::PathBuf {
     std::env::var_os("MIHOMO_TEST_RESOURCES")
         .map(std::path::PathBuf::from)
@@ -272,53 +276,7 @@ async fn basic_system_proxy_and_tun() {
         }
     }
     #[cfg(target_os = "linux")]
-    {
-        // Full-route protection is safe only inside this disposable namespace.
-        // An offline node must not make an external DNS check veto a valid
-        // native transition. Verify activation and full restoration independently
-        // of Internet access (the namespace deliberately has none).
-        assert_eq!(
-            std::env::var("CLASH_TUN_TEST_NAMESPACE").as_deref(),
-            Ok("1")
-        );
-        engine.select_proxy_mode(ProxyMode::Off).await.unwrap();
-        let unreachable = free_port();
-        std::fs::write(&profile, format!("proxies: [{{name: offline, type: socks5, server: 127.0.0.1, port: {unreachable}}}]\nproxy-groups: [{{name: Main, type: select, proxies: [offline]}}]\nrules: ['MATCH,Main']\ndns: {{enable: false}}\ntun: {{device: {device}, route-address: [203.0.113.0/24], dns-hijack: []}}\n")).unwrap();
-        engine
-            .import(
-                "Protection rollback".into(),
-                profile.display().to_string(),
-                None,
-            )
-            .await
-            .unwrap();
-        engine
-            .activate(engine.profiles.last().unwrap().id.clone())
-            .await
-            .unwrap();
-        engine.select_proxy_mode(ProxyMode::System).await.unwrap();
-        let settings = std::fs::read(store.root.join("settings.json")).unwrap();
-        let runtime = std::fs::read(store.runtime().join("config.yaml")).unwrap();
-        engine.claude_protection(true).await.unwrap();
-        assert!(engine.settings.claude_protection.is_some());
-        let active = engine.poll(Scope::Home).await.unwrap();
-        assert!(active.running && active.tun && !active.system_proxy);
-        engine.claude_protection(false).await.unwrap();
-        assert!(engine.settings.claude_protection.is_none());
-        assert_eq!(
-            settings,
-            std::fs::read(store.root.join("settings.json")).unwrap()
-        );
-        assert_eq!(
-            runtime,
-            std::fs::read(store.runtime().join("config.yaml")).unwrap()
-        );
-        let state = engine.poll(Scope::Home).await.unwrap();
-        assert!(state.running && state.system_proxy && !state.tun);
-        println!(
-            "PASS: protected TUN activates offline and restores system proxy and saved configuration"
-        );
-    }
+    protected_dns::run(&mut engine, &profile).await;
     engine.select_proxy_mode(ProxyMode::Off).await.unwrap();
     let state = engine.poll(Scope::Home).await.unwrap();
     assert!(!state.tun && !state.system_proxy);
