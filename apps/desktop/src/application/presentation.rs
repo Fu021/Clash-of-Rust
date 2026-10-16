@@ -809,7 +809,7 @@ impl App {
             .into(),
         );
         let (country, flag) =
-            crate::artwork::flags::label(exit.map_or("", |exit| exit.country.as_str()));
+            clash_of_rust::flags::label(exit.map_or("", |exit| exit.country.as_str()));
         data.set_site_exit_country(country.into());
         data.set_site_exit_flagged(flag.is_some());
         data.set_site_exit_flag(flag.unwrap_or_default());
@@ -1152,7 +1152,7 @@ impl App {
             data.set_modal_description(
                 match self.site_result(index) {
                     Some(Ok(result)) => {
-                        let (country, flag) = crate::artwork::flags::label(&result.country);
+                        let (country, flag) = clash_of_rust::flags::label(&result.country);
                         data.set_modal_country(country.into());
                         data.set_modal_flagged(flag.is_some());
                         data.set_modal_flag(flag.unwrap_or_default());
