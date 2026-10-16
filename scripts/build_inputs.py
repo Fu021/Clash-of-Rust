@@ -14,6 +14,7 @@ import subprocess
 import sys
 import tomllib
 import urllib.error
+import urllib.parse
 import xml.etree.ElementTree as ET
 
 from build_support import ROOT, read_json, opener, sha256, write_json
@@ -60,9 +61,27 @@ def resource_release(name, cached, proxy='', version=None):
         return read_json('https://api.github.com/repos/' + repo + '/releases/' + endpoint, proxy)
     except (OSError, ValueError, http.client.HTTPException) as error:
         value = json.loads(cached.read_text()) if cached.is_file() else {}
-        if value.get('release') and (version is None or value['release'].get('tag_name') == version):
+        release = value.get('release')
+        # Migrate verified resource receipts created before full upstream
+        # metadata was retained. Their URLs and digests suffice to reuse the
+        # existing files; prepare-resources still checks every actual file.
+        checksum = lambda text: isinstance(text, str) and re.fullmatch(r'[0-9a-fA-F]{64}', text)
+        if not release and name == 'mihomo' and value.get('source') and value.get('version') and checksum(value.get('archive_sha256')):
+            release = {'tag_name':value['version'], 'published_at':'cached', 'assets':[
+                {'name':urllib.parse.unquote(urllib.parse.urlsplit(value['source']).path.rsplit('/',1)[-1]),
+                 'browser_download_url':value['source'], 'digest':'sha256:'+value['archive_sha256'].lower()}]}
+        if not release and name == 'geo' and value.get('version') and value.get('files'):
+            tag, _, published = value['version'].partition(' | ')
+            if {entry.get('name') for entry in value['files']} == set(GEO.values()) and all(
+                    checksum(entry.get('sha256')) and entry.get('source') and isinstance(entry.get('size'), int)
+                    for entry in value['files']):
+                release = {'tag_name':tag, 'published_at':published or 'cached', 'assets':[
+                    {'name':urllib.parse.unquote(urllib.parse.urlsplit(entry['source']).path.rsplit('/',1)[-1]),
+                     'browser_download_url':entry['source'], 'digest':'sha256:'+entry['sha256'].lower(), 'size':entry['size']}
+                    for entry in value['files']]}
+        if release and (version is None or release.get('tag_name') == version):
             print('::warning::Upstream unavailable; using cached verified ' + name + ' release metadata.')
-            return value['release']
+            return release
         raise RuntimeError(name + ' upstream is unavailable and no verified release metadata is cached') from error
 
 

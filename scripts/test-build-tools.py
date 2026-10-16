@@ -213,6 +213,29 @@ class BuildTests(unittest.TestCase):
                 with self.assertRaisesRegex(RuntimeError, 'no verified'):
                     build_inputs.resource_release('mihomo', path, version='v9.0.0')
 
+    def test_network_fallback_can_migrate_legacy_resource_receipts(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            path = Path(temporary)/'core.json'
+            value = {'version':'v1.2.3','source':'https://github.com/MetaCubeX/mihomo/releases/download/v1.2.3/mihomo-linux-arm64-v1.2.3.gz',
+                     'archive_sha256':'a'*64,'exe_sha256':'b'*64}
+            path.write_text(json.dumps(value))
+            with patch.object(build_inputs, 'component', return_value=None), \
+                 patch.object(build_inputs, 'read_json', side_effect=urllib.error.URLError('offline')):
+                release = build_inputs.resource_release('mihomo', path)
+                self.assertEqual(release['tag_name'], 'v1.2.3')
+                self.assertEqual(release['assets'][0]['digest'], 'sha256:'+'a'*64)
+                value['archive_sha256'] = 'invalid'; path.write_text(json.dumps(value))
+                with self.assertRaisesRegex(RuntimeError, 'no verified'):
+                    build_inputs.resource_release('mihomo', path)
+                records = [{'name':local,'sha256':'c'*64,'size':1,'source':'https://example.test/'+remote}
+                           for remote, local in build_inputs.GEO.items()]
+                path.write_text(json.dumps({'version':'latest | 2026-10-16','files':records}))
+                release = build_inputs.resource_release('geo', path)
+                self.assertEqual({asset['name'] for asset in release['assets']}, set(build_inputs.GEO))
+                path.write_text(json.dumps({'version':'latest','files':records[:1]}))
+                with self.assertRaisesRegex(RuntimeError, 'no verified'):
+                    build_inputs.resource_release('geo', path)
+
     def test_cache_login_restores_mac_dns_including_automatic_search_domains(self):
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
