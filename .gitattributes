@@ -12,5 +12,5 @@
 *.ico binary
 *.rgba binary
 *.otf binary
-vendor/region-restriction-check/cookies text eol=lf
-vendor/region-restriction-check/IATACode.txt text eol=lf
+resources/ip-check/cookies.txt text eol=lf
+resources/ip-check/IATACode.txt text eol=lf

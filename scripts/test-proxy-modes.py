@@ -45,8 +45,6 @@ def check(binary, bundle, test_case='basic_system_proxy_and_tun'):
     command = [binary, test_case, '--exact', '--ignored', '--nocapture']
     if system == 'linux':
         sudo = ['sudo']
-        if test_case == 'claude_protection_round_trip_and_guard':
-            sudo += ['--preserve-env=CLASH_CLAUDE_TEST_REPORT,CLASH_CLAUDE_TEST_CERT,CLASH_CLAUDE_TEST_CA,CLASH_CLAUDE_TEST_KEY,CLASH_CLAUDE_TEST_SCRIPT,CLASH_CLAUDE_TEST_PYTHON,DBUS_SESSION_BUS_ADDRESS,DISPLAY,XAUTHORITY,GITHUB_ACTIONS']
         installed = Path('/opt/clash-of-rust')
         if bundle.resolve() != installed:
             # Install only the raw tested binaries/resources, never package in CI.
@@ -90,6 +88,58 @@ def check(binary, bundle, test_case='basic_system_proxy_and_tun'):
             # initial administrative installation is performed by runner sudo.
             run(['/usr/bin/sudo', '-n', stage/'clash-tun-launcher', '--macos-install-service', os.getuid()])
             run(command, env=env, timeout=240)
+    elif system == 'windows':
+        from windows_ci import allow_ordinary_user_directory, run_unelevated
+        # CI tests raw binaries; Publish Release has already installed the
+        # package and its service. Only remove the registration we created.
+        query = subprocess.run(['sc.exe', 'query', 'ClashOfRust.Network'], capture_output=True)
+        own_service = query.returncode == 1060
+        if query.returncode not in (0, 1060):
+            raise RuntimeError('Cannot inspect Windows network service')
+        if own_service:
+            run([helper, '--windows-service-install'])
+        try:
+            env['CLASH_EXPECT_UNELEVATED'] = '1'
+            run_unelevated(command, env)
+            # Recreate the machine boot condition: SCM registration survives,
+            # the privileged process is gone, and a normal user starts it again.
+            run([helper, '--windows-service-stop'])
+            run_unelevated(command, env)
+            # A GUI crash must not leave a SYSTEM core, open controller ports,
+            # or an adapter preventing the next ordinary launch from using TUN.
+            import json, socket, time
+            with tempfile.TemporaryDirectory(prefix='windows-service-crash-') as temporary:
+                allow_ordinary_user_directory(temporary)
+                ready = Path(temporary)/'ready.json'
+                crashed = {}
+                def kill_owner(kernel, process):
+                    deadline = time.monotonic()+45
+                    while not ready.is_file():
+                        if time.monotonic() >= deadline:
+                            kernel.TerminateProcess(process, 0xCAFE)
+                            raise TimeoutError('Ordinary TUN crash fixture did not become ready')
+                        time.sleep(0.1)
+                    crashed.update(json.loads(ready.read_text()))
+                    if not kernel.TerminateProcess(process, 0xCAFE):
+                        raise RuntimeError('Could not simulate ordinary GUI process loss')
+                run_unelevated(command, dict(env, CLASH_SERVICE_CRASH_REPORT=str(ready)),
+                               on_start=kill_owner, expected_code=0xCAFE)
+                deadline = time.monotonic()+15
+                for port in (crashed['controller'], crashed['mixed']):
+                    while True:
+                        with socket.socket() as listener:
+                            try:
+                                listener.bind(('127.0.0.1', port))
+                                break
+                            except OSError:
+                                if time.monotonic() >= deadline:
+                                    raise RuntimeError('Service core survived its ordinary GUI owner')
+                                time.sleep(0.1)
+                shutil.rmtree(crashed['temporary'])
+            run_unelevated(command, env)
+        finally:
+            if own_service:
+                run([helper, '--windows-service-uninstall'])
     else:
         run(command, env=env, timeout=240)
 

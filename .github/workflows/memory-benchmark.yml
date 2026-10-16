@@ -28,10 +28,6 @@ on:
         description: '每个 GUI 场景的采样秒数'
         type: string
         default: '10'
-      preview:
-        description: '附加实际界面截图，使用隔离的固定演示数据（dev.2 及之后）'
-        type: boolean
-        default: false
 permissions:
   contents: read
 jobs:
@@ -81,7 +77,7 @@ jobs:
         run: |
           import subprocess
           subprocess.run(['sudo', 'apt-get', 'update'], check=True)
-          subprocess.run(['sudo', 'apt-get', 'install', '-y', 'libglib2.0-dev', 'libxkbcommon-dev', 'libwayland-dev', 'libx11-dev', 'libx11-xcb-dev', 'libxkbcommon-x11-0', 'libxcursor1', 'libxrandr2', 'libxi6', 'libxinerama1', 'libegl1', 'gsettings-desktop-schemas', 'dbus', 'xvfb', 'xauth', 'xdotool'], check=True)
+          subprocess.run(['sudo', 'apt-get', 'install', '-y', 'libglib2.0-dev', 'libfontconfig1-dev', 'libfreetype6-dev', 'libxkbcommon-dev', 'libwayland-dev', 'libx11-dev', 'libx11-xcb-dev', 'libxkbcommon-x11-0', 'libxcursor1', 'libxrandr2', 'libxi6', 'libxinerama1', 'libegl1', 'gsettings-desktop-schemas', 'dbus', 'xvfb', 'xauth', 'xdotool'], check=True)
       - name: Benchmark the selected source
         shell: python
         env:
@@ -97,14 +93,6 @@ jobs:
           if os.environ['BENCH_ROWS'].strip():
               command += ['--rows', os.environ['BENCH_ROWS']]
           subprocess.run(command, check=True)
-      - name: Render actual UI previews
-        if: inputs.preview
-        shell: python
-        env:
-          BUILD_PROFILE: ${{ inputs.profile }}
-        run: |
-          import os, subprocess, sys
-          subprocess.run(['dbus-run-session', '--', 'xvfb-run', '-a', '--server-args=-screen 0 1280x900x24', sys.executable, 'source/scripts/run-ui-preview.py', '--source', 'source', '--profile', os.environ['BUILD_PROFILE'], '--output', 'dist/memory/ui-preview'], check=True)
       - uses: actions/upload-artifact@v6
         if: always()
         with:

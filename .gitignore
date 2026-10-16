@@ -2,6 +2,7 @@
 /bin/
 /bundle/
 /dist/
+/ci-build/
 /tools/
 /.local-tools/
 
@@ -23,6 +24,7 @@ __pycache__/
 *.pyc
 
 # Local environment and credentials
+/AGENTS.md
 .env
 .env.*
 !.env.example

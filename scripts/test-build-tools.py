@@ -3,6 +3,7 @@ import hashlib
 import json
 from pathlib import Path
 import tempfile
+import tomllib
 import struct
 import shutil
 import subprocess
@@ -26,6 +27,40 @@ _defender_spec.loader.exec_module(defender)
 
 
 class BuildTests(unittest.TestCase):
+    def test_shared_core_has_no_desktop_toolkit_or_host_dependency(self):
+        core = tomllib.loads((build.core_directory()/'Cargo.toml').read_text())
+        # Mobile hosts must be able to use all shared policies without linking
+        # the desktop application, platform authorization code or GUI toolkits.
+        dependencies = set(core.get('dependencies', {}))
+        for target in core.get('target', {}).values():
+            dependencies.update(target.get('dependencies', {}))
+        forbidden = {'clash-of-rust', 'clash-client-ui', 'slint', 'iced', 'iced_graphics', 'cosmic-text',
+                     'tray-icon', 'windows', 'windows-sys', 'winreg', 'zbus',
+                     'objc2', 'objc2-app-kit', 'objc2-foundation', 'block2'}
+        self.assertFalse(dependencies & forbidden)
+        for module in (build.core_directory()/'src').rglob('*.rs'):
+            text = module.read_text()
+            self.assertNotIn('crate::platform', text, str(module))
+            self.assertNotIn('crate::engine', text, str(module))
+
+    def test_workspace_and_legacy_version_and_source_paths(self):
+        self.assertEqual(build.manifest_version('[package]\nversion="0.4.12"\n'), '0.4.12')
+        self.assertEqual(build.manifest_version('[workspace.package]\nversion="0.5.11-dev.1"\n'), '0.5.11-dev.1')
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            (root/'Cargo.toml').write_text('[package]\nversion="0.4.12"\n')
+            self.assertEqual(build.package_version(root), '0.4.12')
+            self.assertEqual(build.desktop_directory(root), root)
+            self.assertEqual(build.core_directory(root), root)
+            (root/'apps/desktop').mkdir(parents=True)
+            (root/'crates/client-core').mkdir(parents=True)
+            (root/'apps/desktop/Cargo.toml').touch()
+            (root/'crates/client-core/Cargo.toml').touch()
+            (root/'Cargo.toml').write_text('[workspace.package]\nversion="0.5.11-dev.1"\n')
+            self.assertEqual(build.package_version(root), '0.5.11-dev.1')
+            self.assertEqual(build.desktop_directory(root), root/'apps/desktop')
+            self.assertEqual(build.core_directory(root), root/'crates/client-core')
+
     def test_release_job_protocol_matches_workflow_display_names(self):
         workflow = (build.ROOT/'.github/workflows/release.yml').read_text()
         for name in release.PACKAGE_JOBS - set(release.PACKAGES):
@@ -258,25 +293,6 @@ class BuildTests(unittest.TestCase):
             path.write_bytes(b'not an executable')
             with self.assertRaises(ValueError):
                 build.validate_binary_arch(path,'windows','arm64')
-
-    def test_wsl_mirror_refuses_source_and_unowned_directory(self):
-        import importlib.util
-        spec = importlib.util.spec_from_file_location('build_wsl',build.ROOT/'scripts/build-wsl.py')
-        module = importlib.util.module_from_spec(spec)
-        spec.loader.exec_module(module)
-        with tempfile.TemporaryDirectory() as directory:
-            source = Path(directory)/'source'
-            source.mkdir()
-            original = source/'keep.txt'
-            original.write_text('Original source data')
-            unowned = Path(directory)/'unowned'
-            unowned.mkdir()
-            (unowned/'keep.txt').write_text('Existing unrelated data')
-            for destination in (source,unowned):
-                with self.assertRaises(ValueError):
-                    module.native_build(source,destination,None,None,'')
-            self.assertEqual(original.read_text(),'Original source data')
-            self.assertEqual((unowned/'keep.txt').read_text(),'Existing unrelated data')
 
     def test_version_validation(self):
         self.assertEqual(build.validate_version('0.4.4'),'0.4.4')

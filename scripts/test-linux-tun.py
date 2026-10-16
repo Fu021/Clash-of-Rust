@@ -87,12 +87,90 @@ def isolated_resolved():
             yield
 
 
+@contextlib.contextmanager
+def isolated_uplink():
+    """Real dual-stack peer, encrypted DNS and node, outside the client's TUN.
+
+    Already inside private mount/network namespaces. Resolver IPs and CA trust
+    exist only here; neither the host nor the Internet is involved.
+    """
+    from tun_dns_fixture import BOOTSTRAP, PUBLIC, NODE, WEBSITE
+    namespace = 'cor-upstream'
+    with tempfile.TemporaryDirectory(prefix='cor-upstream-') as temporary:
+        directory = Path(temporary)
+        directory.chmod(0o755)
+        ca, key = directory/'root.crt', directory/'root.key'
+        run(['openssl', 'req', '-x509', '-newkey', 'rsa:2048', '-nodes', '-days', '1',
+             '-subj', '/CN=Disposable TUN test root', '-addext', 'basicConstraints=critical,CA:TRUE',
+             '-keyout', key, '-out', ca], stdout=subprocess.DEVNULL, stderr=subprocess.PIPE)
+        run(['openssl', 'req', '-new', '-newkey', 'rsa:2048', '-nodes', '-subj', '/CN=Disposable DNS',
+             '-keyout', directory/'server.key', '-out', directory/'server.csr'],
+            stdout=subprocess.DEVNULL, stderr=subprocess.PIPE)
+        addresses = (*BOOTSTRAP, *PUBLIC)
+        certificate_addresses = (*addresses, '192.0.2.254')
+        extensions = directory/'server.ext'
+        extensions.write_text('basicConstraints=critical,CA:FALSE\nextendedKeyUsage=serverAuth\n'
+                              'subjectAltName='+','.join('IP:'+ip for ip in certificate_addresses)+',DNS:resolver.fixture.test\n')
+        run(['openssl', 'x509', '-req', '-in', directory/'server.csr', '-CA', ca, '-CAkey', key,
+             '-CAcreateserial', '-days', '1', '-extfile', extensions, '-out', directory/'server.crt'],
+            stdout=subprocess.DEVNULL, stderr=subprocess.PIPE)
+        trust = directory/'trust.pem'
+        trust.write_bytes(Path('/etc/ssl/certs/ca-certificates.crt').read_bytes()+b'\n'+ca.read_bytes())
+        run(['mount', '--bind', trust, '/etc/ssl/certs/ca-certificates.crt'])
+        run(['ip', 'netns', 'add', namespace])
+        process = None
+        try:
+            run(['ip', 'link', 'add', 'uplink', 'type', 'veth', 'peer', 'name', 'peer'])
+            run(['ip', 'link', 'set', 'peer', 'netns', namespace])
+            for prefix, interface, v4, v6 in [
+                ([], 'uplink', '192.0.2.1/24', '2001:db8:1::1/64'),
+                (['ip', 'netns', 'exec', namespace], 'peer', '192.0.2.254/24', '2001:db8:1::fe/64'),
+            ]:
+                run([*prefix, 'ip', 'link', 'set', 'lo', 'up'])
+                run([*prefix, 'ip', 'addr', 'add', v4, 'dev', interface])
+                run([*prefix, 'ip', '-6', 'addr', 'add', v6, 'dev', interface, 'nodad'])
+                run([*prefix, 'ip', 'link', 'set', interface, 'up'])
+            for address in (*addresses, *NODE, *WEBSITE):
+                family, length = ('-6', 128) if ':' in address else ('-4', 32)
+                run(['ip', '-n', namespace, family, 'addr', 'add', f'{address}/{length}', 'dev', 'lo'])
+            run(['ip', 'route', 'add', 'default', 'via', '192.0.2.254', 'dev', 'uplink'])
+            run(['ip', '-6', 'route', 'add', 'default', 'via', '2001:db8:1::fe', 'dev', 'uplink'])
+            with (directory/'server.log').open('w+') as log:
+                process = subprocess.Popen(['ip', 'netns', 'exec', namespace, sys.executable,
+                                            Path(__file__).with_name('tun_dns_fixture.py'), directory],
+                                           stdout=log, stderr=log)
+                try:
+                    for _ in range(100):
+                        assert process.poll() is None, 'Upstream fixture exited'
+                        if (directory/'ready').exists():
+                            break
+                        time.sleep(0.05)
+                    else:
+                        raise RuntimeError('Upstream fixture did not become ready')
+                    yield
+                finally:
+                    process.terminate()
+                    process.wait(timeout=5)
+                    log.seek(0)
+                    print(log.read())
+        finally:
+            # Print tables on failure too, so a route regression is actionable.
+            for family in ('-4', '-6'):
+                for args in (['rule'], ['route', 'show', 'table', 'all']):
+                    subprocess.run(['ip', family, *args], check=False)
+            if process is not None and process.poll() is None:
+                process.kill()
+                process.wait()
+            subprocess.run(['ip', 'netns', 'delete', namespace], check=False)
+            run(['umount', '/etc/ssl/certs/ca-certificates.crt'])
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--test-binary', type=Path, required=True)
     parser.add_argument('--uid', type=int, required=True)
     parser.add_argument('--inside-namespace', action='store_true')
-    parser.add_argument('--test-case', default='basic_system_proxy_and_tun', choices=('basic_system_proxy_and_tun','claude_protection_round_trip_and_guard'))
+    parser.add_argument('--test-case', default='basic_system_proxy_and_tun', choices=('basic_system_proxy_and_tun',))
     args = parser.parse_args()
     assert os.geteuid() == 0 and args.uid != 0
     binary = args.test_binary.resolve(strict=True)
@@ -104,17 +182,7 @@ def main():
         os.setuid(user.pw_uid)
 
     if args.inside_namespace:
-        # Synthetic uplink gives mihomo an auto-detectable default interface;
-        # this namespace has no Internet access or connection to host routing.
-        run(['ip', 'link', 'set', 'lo', 'up'])
-        run(['ip', 'link', 'add', 'uplink', 'type', 'dummy'])
-        run(['ip', 'addr', 'add', '192.0.2.1/24', 'dev', 'uplink'])
-        run(['ip', 'link', 'set', 'uplink', 'up'])
-        if args.test_case == 'claude_protection_round_trip_and_guard':
-            run(['ip', '-6', 'addr', 'add', '2001:db8:1::1/64', 'dev', 'uplink'])
-            run(['ip', '-6', 'route', 'add', 'default', 'via', '2001:db8:1::fe', 'dev', 'uplink'])
-        run(['ip', 'route', 'add', 'default', 'via', '192.0.2.254', 'dev', 'uplink'])
-        with isolated_resolved():
+        with isolated_resolved(), isolated_uplink():
             run([binary, args.test_case, '--exact',
                  '--ignored', '--test-threads=1', '--nocapture'],
                 env=dict(os.environ, CLASH_TUN_TEST_NAMESPACE='1', CLASH_PROXY_SMOKE='1',

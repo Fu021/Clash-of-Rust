@@ -1,0 +1,79 @@
+import { UiData, UiActions, Intent } from "../state.slint";
+import { ScrollView } from "std-widgets.slint";
+import { Theme } from "../theme/palette.slint";
+import { Label, Caption, ContentPanel, RowPanel, ActionButton, Divider } from "../components/controls.slint";
+
+component TrafficMetric inherits Rectangle {
+    in property <string> title;
+    in property <string> value;
+    in property <string> detail;
+    preferred-width: 0px;
+    height: content.preferred-height;
+    content := VerticalLayout {
+        spacing: 4px;
+        Caption { text: root.title; }
+        Label { text: root.value; font-size: 30px * Theme.text-scale; color: Theme.accent; }
+        Caption { text: root.detail; }
+    }
+}
+
+export component HomePage inherits Rectangle {
+    ScrollView {
+        x: 0px;
+        width: parent.width + Theme.content-gap;
+        VerticalLayout {
+            padding-right: Theme.content-gap;
+            spacing: Theme.page-gap;
+            RowPanel {
+                Rectangle {
+                    width: 40px; height: 40px; border-radius: 20px; background: Theme.accent-wash;
+                    Label { width: parent.width; height: parent.height; text: "✓"; font-size: 23px * Theme.text-scale; color: Theme.accent; horizontal-alignment: center; }
+                }
+                VerticalLayout {
+                    spacing: 4px;
+                    horizontal-stretch: 1;
+                    Label { text: !UiData.running ? "内核尚未运行" : UiData.proxy-mode == 0 ? "系统代理已连接" : UiData.proxy-mode == 1 ? "TUN 模式已连接" : "代理已关闭"; font-size: 18px * Theme.text-scale; }
+                    Caption { text: "当前节点 · " + UiData.node; }
+                }
+                if UiData.retry-core: ActionButton { text: "重启内核"; primary: true; enabled: !UiData.working; clicked => { UiActions.dispatch(Intent.restart-core, "", ""); } }
+                ActionButton { text: "查看代理 →"; clicked => { UiActions.dispatch(Intent.navigate, "1", ""); } }
+            }
+            RowPanel {
+                metric := TrafficMetric { title: "下载速度"; value: UiData.download-rate; detail: "实时流量"; }
+                Rectangle { width: 1px; height: metric.height; background: Theme.subtle-line; }
+                TrafficMetric { title: "上传速度"; value: UiData.upload-rate; detail: "实时流量"; }
+                Rectangle { width: 1px; height: metric.height; background: Theme.subtle-line; }
+                TrafficMetric { title: "活跃连接"; value: UiData.connection-count; detail: "当前连接"; }
+            }
+            ContentPanel {
+                Label { text: "连接设置"; font-size: 16px * Theme.text-scale; height: 28px; }
+                HorizontalLayout { cross-axis-alignment: center;
+                    spacing: Theme.content-gap;
+                    Caption { text: "运行模式"; horizontal-stretch: 1; }
+                    ActionButton { text: "规则"; enabled: UiData.running && !UiData.working; selected: UiData.mode == 0; clicked => { UiActions.dispatch(Intent.mode, "0", ""); } }
+                    ActionButton { text: "全局"; enabled: UiData.running && !UiData.working; selected: UiData.mode == 1; clicked => { UiActions.dispatch(Intent.mode, "1", ""); } }
+                    ActionButton { text: "直连"; enabled: UiData.running && !UiData.working; selected: UiData.mode == 2; clicked => { UiActions.dispatch(Intent.mode, "2", ""); } }
+                }
+                Divider { }
+                HorizontalLayout { cross-axis-alignment: center;
+                    spacing: Theme.content-gap;
+                    Caption { text: "代理模式"; horizontal-stretch: 1; }
+                    ActionButton { text: "系统代理"; enabled: UiData.running && !UiData.working; selected: UiData.proxy-mode == 0; clicked => { UiActions.dispatch(Intent.proxy-mode, "0", ""); } }
+                    ActionButton { text: "TUN"; enabled: UiData.running && !UiData.working; selected: UiData.proxy-mode == 1; clicked => { UiActions.dispatch(Intent.proxy-mode, "1", ""); } }
+                    ActionButton { text: "关闭"; enabled: UiData.running && !UiData.working; selected: UiData.proxy-mode == 2; clicked => { UiActions.dispatch(Intent.proxy-mode, "2", ""); } }
+                }
+            }
+            ContentPanel {
+                HorizontalLayout { cross-axis-alignment: center;
+                    Label { text: "当前订阅"; }
+                    Caption { text: "累计流量 · 本次运行"; horizontal-alignment: right; }
+                }
+                HorizontalLayout { cross-axis-alignment: center;
+                    Label { text: UiData.profile; color: Theme.accent; }
+                    Caption { text: "↑ " + UiData.upload-total + "     ↓ " + UiData.download-total; horizontal-alignment: right; }
+                }
+            }
+            Rectangle { vertical-stretch: 1; }
+        }
+    }
+}

@@ -15,22 +15,22 @@ Source Han Sans CN Regular (Adobe), embedded Chinese UI font:
 https://github.com/adobe-fonts/source-han-sans
 Distributed under SIL Open Font License 1.1.
 The complete font license is installed as resources/SourceHanSans-LICENSE.txt.
-Segoe UI is provided by Windows and is not redistributed by this application.
 Clash of Rust application source and installer scripts use GPL-3.0-only.
 
 RegionRestrictionCheck platform detector (upstream contributors):
 https://github.com/1-stream/RegionRestrictionCheck
 Revision: ef841d0a2910a44a6ca565e3a03de0f2282d83b3.
-The upstream source, adapted reference and derived Rust decisions retain AGPL-3.0-only.
+The derived Rust decisions and retained detector data use AGPL-3.0-only.
 License and source/modification notes are installed in resources/ip-check.
-Unmodified upstream source and the derived Rust source are in the corresponding repository revision.
+Upstream reference source: https://github.com/1-stream/RegionRestrictionCheck/tree/ef841d0a2910a44a6ca565e3a03de0f2282d83b3
+Derived Rust source is in crates/client-core/src/detection/regions/platforms.rs.
 Corresponding combined source: https://github.com/Fu021/Clash-of-Rust
 Use the source revision matching the application release. GPLv3/AGPLv3 section 13 applies to the combination.
 
 Native platform checks use upstream-derived RegionRestrictionCheck decisions
-compiled to Rust (AGPL-3.0-only). No Bash/MSYS, curl, GNU command-line tools,
+ported to Rust (AGPL-3.0-only). No Bash/MSYS, curl, GNU command-line tools,
 jq or OpenSSL runtime is bundled for these checks. Request/parse/cancellation
-code is in src/region_check; Rust crate versions and licenses are in Cargo.lock
+code is in crates/client-core/src/detection/regions; Rust crate versions and licenses are in Cargo.lock
 and their corresponding upstream sources.
 
 Offline country flags: Twemoji v14.0.2, Copyright Twitter, Inc and other contributors.
@@ -40,3 +40,8 @@ The complete license is installed as resources/Twemoji-LICENSE.txt.
 English territory names: Unicode CLDR 46.0.0, Unicode License v3.
 https://github.com/unicode-org/cldr-json/tree/46.0.0
 The complete license is installed as resources/Unicode-LICENSE.txt.
+
+Slint 1.18.1 (SixtyFPS GmbH): https://github.com/slint-ui/slint/tree/v1.18.1
+Used under GPL-3.0-only; the GPLv3 license is installed as LICENSE.
+The desktop uses winit and the Slint software renderer. Dependency versions
+and corresponding upstream sources are recorded in Cargo.lock.

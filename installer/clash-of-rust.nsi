@@ -260,6 +260,7 @@ Section "Clash of Rust" MainSection
   ClearErrors
   SetOutPath "$INSTDIR"
   File "${PAYLOAD}\clash-of-rust.exe"
+  File "${PAYLOAD}\clash-tun-launcher.exe"
   File "${PAYLOAD}\LICENSE"
   SetOutPath "$INSTDIR\resources"
   File /oname=clash-of-rust-${APP_VERSION}.ico "${__FILEDIR__}\..\resources\icons\app.ico"
@@ -282,6 +283,14 @@ Section "Clash of Rust" MainSection
   SetOutPath "$INSTDIR"
   WriteUninstaller "$INSTDIR\uninstall.exe"
   ${If} ${Errors}
+    Call RestoreUpdate
+    SetErrorLevel 6
+    Abort
+  ${EndIf}
+  ; The installer's existing administrator grant registers the demand-start
+  ; service once. Ordinary GUI launches and TUN switches never elevate it.
+  ExecWait '"$INSTDIR\clash-tun-launcher.exe" --windows-service-install' $0
+  ${If} $0 != 0
     Call RestoreUpdate
     SetErrorLevel 6
     Abort
@@ -408,6 +417,14 @@ Section "Uninstall"
   ; Always check again: the app could have started while the wizard was open.
   !insertmacro CheckRunning unsection_
   ; Delete only files owned by this package. Data deletion requires opt-in.
+  IfFileExists "$INSTDIR\clash-tun-launcher.exe" 0 service_removed
+    ExecWait '"$INSTDIR\clash-tun-launcher.exe" --windows-service-uninstall' $0
+    ${If} $0 != 0
+      MessageBox MB_OK|MB_ICONSTOP "无法移除网络助手，请关闭 TUN 后重试卸载。"
+      SetErrorLevel 6
+      Abort
+    ${EndIf}
+  service_removed:
     ReadRegStr $0 HKCU "Software\ClashOfRust\Autostart" "Executable"
     ${If} $0 == "$INSTDIR\clash-of-rust.exe"
       ExecWait '"$INSTDIR\clash-of-rust.exe" --autostart-remove' $0
@@ -419,6 +436,8 @@ Section "Uninstall"
     ${EndIf}
   ClearErrors
   Delete "$INSTDIR\clash-of-rust.exe"
+  IfErrors uninstall_locked
+  Delete "$INSTDIR\clash-tun-launcher.exe"
   IfErrors uninstall_locked
   Delete "$INSTDIR\resources\mihomo.exe"
   IfErrors uninstall_locked

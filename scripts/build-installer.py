@@ -1,4 +1,4 @@
-"""Build native Windows EXE or Debian DEB packages for x64 and ARM64."""
+"""Package verified native CI binaries; never compile application code."""
 import argparse
 import gzip
 import hashlib
@@ -7,17 +7,8 @@ from pathlib import Path
 import os
 import shutil
 import sys
-import json
 import subprocess
-from build_support import host_system, ROOT, bundle_directory, copy_static, deb_version, file_version, host_arch, nsis, numeric_version, package_version, run, sha256, stage_resources, staging_directory, validate_binary_arch, validate_version
-import importlib.util
-
-_spec = importlib.util.spec_from_file_location('prepare_resources', ROOT/'scripts/prepare-resources.py')
-_module = importlib.util.module_from_spec(_spec)
-_spec.loader.exec_module(_module)
-prepare = _module.prepare
-
-
+from build_support import host_system, ROOT, deb_version, file_version, host_arch, nsis, numeric_version, package_version, run, sha256, stage_resources, staging_directory, validate_binary_arch
 # GUI libraries loaded dynamically do not appear in ELF DT_NEEDED.
 GUI_DEPENDENCIES = (
     'libxkbcommon0', 'libxkbcommon-x11-0', 'libx11-6', 'libx11-xcb1',
@@ -121,13 +112,11 @@ def _build_deb(payload, version, arch, work):
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--proxy', default='')
-    parser.add_argument('--skip-prepare', action='store_true')
-    parser.add_argument('--version', default=package_version())
     parser.add_argument('--system', choices=('windows','linux','macos'), default=host_system())
     parser.add_argument('--arch', choices=('x64','arm64'), default=host_arch())
-    parser.add_argument('--prebuilt', type=Path, help='Verified CI build directory; package without Cargo or downloads')
+    parser.add_argument('--prebuilt', type=Path, required=True, help='Verified CI build directory; package without Cargo or downloads')
     args = parser.parse_args()
-    version = validate_version(args.version)
+    version = package_version()
     host = host_system()
     if (args.system,args.arch) != (host,host_arch()):
         raise ValueError('Packaging requires a native build on the selected system/architecture')
@@ -150,6 +139,7 @@ def main():
         if args.system == 'linux':
             stage_linux_helpers(binary,stage,args.arch)
         if args.system == 'windows':
+            shutil.copy2(binary.with_name('clash-tun-launcher.exe'), stage/'clash-tun-launcher.exe')
             artifact = ROOT/f'dist/Clash-of-Rust-{version}-windows-{args.arch}-setup.exe'
             run([nsis(args.proxy),'/V2','/INPUTCHARSET','UTF8',f'/DAPP_VERSION={version}',f'/DAPP_NUMERIC_VERSION={numeric_version(version)}',f'/DAPP_ARCH={args.arch}',f'/DPAYLOAD={stage}',f'/DOUTPUT={artifact}',ROOT/'installer/clash-of-rust.nsi'])
             if file_version(artifact) != version:
@@ -169,26 +159,12 @@ def main():
 
 
 def build_inputs(args, version):
-    if args.prebuilt:
-        from workflow_artifacts import commit, verify_build
-        verify_build(args.prebuilt, args.system, args.arch, commit())
-        if version != package_version():
-            raise ValueError('Prebuilt application version cannot be overridden')
-        payload = args.prebuilt/'payload'
-        return payload/'resources', payload/('clash-of-rust.exe' if args.system == 'windows' else 'clash-of-rust')
-    resources = bundle_directory(args.system,args.arch)/'resources'
-    if not args.skip_prepare:
-        resources = prepare(args.system,args.arch,args.proxy)
-    copy_static(resources.parent)
-    env = dict(os.environ)
-    if version == package_version():
-        env.pop('CLASH_OF_RUST_BUILD_VERSION',None)
-    else:
-        env['CLASH_OF_RUST_BUILD_VERSION'] = version
-    run(['cargo','build','--release','--locked','--bins'],env=env)
-    metadata = json.loads(subprocess.check_output(['cargo','metadata','--format-version','1','--no-deps','--offline'],cwd=ROOT))
-    binary = Path(metadata['target_directory'])/'release'/('clash-of-rust.exe' if args.system == 'windows' else 'clash-of-rust')
-    return resources, binary
+    from workflow_artifacts import commit, verify_build
+    verify_build(args.prebuilt, args.system, args.arch, commit())
+    if version != package_version():
+        raise ValueError('Prebuilt application version cannot be overridden')
+    payload = args.prebuilt/'payload'
+    return payload/'resources', payload/('clash-of-rust.exe' if args.system == 'windows' else 'clash-of-rust')
 
 
 if __name__ == '__main__':

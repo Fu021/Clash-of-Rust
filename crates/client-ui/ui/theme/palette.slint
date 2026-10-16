@@ -1,0 +1,47 @@
+// Design A: solid surfaces, restrained outlines, and a neutral, legible palette.
+export global Theme {
+    in-out property <float> text-scale: 1;
+    out property <length> body-size: 15px * text-scale;
+    out property <length> detail-size: 14px * text-scale;
+    out property <length> heading-size: 18px * text-scale;
+    out property <length> control-height: max(40px, body-size * 1.5 + 16px);
+    // Shared spacing. Content cards size to their layouts, never to the window.
+    out property <length> card-padding: 16px;
+    out property <length> page-gap: 12px;
+    out property <length> content-gap: 8px;
+    out property <length> section-gap: 20px;
+    out property <length> dialog-padding: 24px;
+    out property <length> dialog-gap: 16px;
+    // 0 dark, 1 light, 2 follow system. The preview supplies a mock system theme.
+    in-out property <int> appearance: 2;
+    in-out property <bool> system-dark: false;
+    out property <bool> dark: appearance == 0 || (appearance == 2 && system-dark);
+    out property <color> canvas: dark ? #111923 : #f6f8fb;
+    out property <color> sidebar: dark ? #1a222d : #ffffff;
+    out property <color> surface: dark ? #1c2735 : #ffffff;
+    out property <color> inset: dark ? #26323d : #f1f4f8;
+    out property <color> ink: dark ? #f1f5f9 : #141c29;
+    out property <color> secondary: dark ? #bdc8d5 : #4b596b;
+    out property <color> muted: dark ? #a3afbf : #64748b;
+    out property <color> line: dark ? #3c4b5d : #d2d9e3;
+    out property <color> subtle-line: dark ? #334155 : #e2e8f0;
+    in-out property <int> accent-index: 0;
+    out property <color> accent: dark ? AccentPalette.dark-colors[accent-index] : AccentPalette.accent-colors[accent-index];
+    out property <color> accent-wash: dark ? AccentPalette.dark-washes[accent-index] : AccentPalette.light-washes[accent-index];
+    out property <color> primary: AccentPalette.accent-colors[accent-index];
+    out property <color> success: dark ? #86efac : #166534;
+    out property <color> success-wash: dark ? #203c34 : #edf8f0;
+    out property <color> warning: dark ? #fcd34d : #92400e;
+    out property <color> warning-wash: dark ? #3b3428 : #fff7e5;
+    out property <color> danger: dark ? #fca5a5 : #b91c1c;
+    out property <color> danger-wash: dark ? #402c39 : #fef2f2;
+}
+
+// Shared swatches; the saved selection belongs to the application settings.
+export global AccentPalette {
+    out property <[string]> accent-names: ["青绿", "蓝色", "紫色", "玫红", "琥珀", "石墨"];
+    out property <[color]> accent-colors: [#0f766e, #2563eb, #7c3aed, #be185d, #b45309, #475569];
+    out property <[color]> dark-colors: [#8ce3c4, #93c5fd, #c4b5fd, #f9a8d4, #fcd34d, #cbd5e1];
+    out property <[color]> dark-washes: [#254137, #233a56, #362c50, #49283d, #433726, #334155];
+    out property <[color]> light-washes: [#e7f4f0, #eff6ff, #f3e8ff, #fdf2f8, #fffbeb, #f1f5f9];
+}

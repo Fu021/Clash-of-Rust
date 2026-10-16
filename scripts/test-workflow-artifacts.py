@@ -21,6 +21,25 @@ class ArtifactTests(unittest.TestCase):
     commit = 'a'*40
     version = '0.4.12'
 
+    def test_only_proxy_tun_test_is_exported_after_units_run_in_ci(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            def message(name, kind):
+                return json.dumps({'reason': 'compiler-artifact', 'profile': {'test': True},
+                                   'executable': str(root/'target'/name),
+                                   'target': {'name': name, 'kind': [kind], 'src_path': str(root/'source.rs')}})
+            entries = [message('clash_of_rust', 'lib'), message('clash_client_core', 'lib'),
+                       message('clash-of-rust', 'bin'), message('ui_models', 'test'),
+                       message('memory_benchmark', 'example')]
+            with patch.object(artifacts, 'ROOT', root):
+                with self.assertRaisesRegex(ValueError, 'Required proxy/TUN'):
+                    artifacts.test_binaries('\n'.join(entries))
+                entries.append(message('core_integration', 'test'))
+                self.assertEqual(artifacts.test_binaries('\n'.join(entries)),
+                                 {'core_integration': str(root/'target/core_integration')})
+                with self.assertRaisesRegex(ValueError, 'Duplicate proxy/TUN'):
+                    artifacts.test_binaries('\n'.join([*entries, entries[-1]]))
+
     def fixture(self, root):
         (root/'Cargo.lock').write_text('fixture dependencies')
         payload = root/'input/payload'
@@ -40,7 +59,7 @@ class ArtifactTests(unittest.TestCase):
             geo.append({'name': name, 'sha256': build.sha256(path), 'size': path.stat().st_size})
         build.write_json(resources/'geodata.json', {'files': geo})
         tests = {}
-        for name in ('library', 'clash-of-rust', 'core_integration', 'memory_benchmark'):
+        for name in ('core_integration',):
             path = root/'input/tests'/name
             path.parent.mkdir(exist_ok=True)
             path.write_bytes(header)
@@ -49,7 +68,7 @@ class ArtifactTests(unittest.TestCase):
                    {'sha256': build.sha256(path), 'size': path.stat().st_size,
                     'executable': path.name in tests or path.name in ('clash-of-rust', 'clash-tun-launcher', 'mihomo')}
                    for path in (root/'input').rglob('*') if path.is_file()}
-        manifest = {'schema': 1, 'commit': self.commit, 'version': self.version, 'system': 'linux',
+        manifest = {'schema': artifacts.BUILD_SCHEMA, 'commit': self.commit, 'version': self.version, 'system': 'linux',
                     'arch': 'x64', 'profile': 'release', 'cargo_lock_sha256': build.sha256(root/'Cargo.lock'),
                     'tests': tests, 'files': records}
         build.write_json(root/'input/manifest.json', manifest)
@@ -61,7 +80,7 @@ class ArtifactTests(unittest.TestCase):
             original = self.fixture(root)
             with patch.object(artifacts, 'ROOT', root), patch.object(artifacts, 'package_version', return_value=self.version):
                 self.assertEqual(artifacts.verify_build(root/'input', 'linux', 'x64', self.commit)['commit'], self.commit)
-                for field, value in (('commit', 'b'*40), ('arch', 'arm64'), ('profile', 'dev'), ('cargo_lock_sha256', '0'*64)):
+                for field, value in (('schema', 1), ('commit', 'b'*40), ('arch', 'arm64'), ('profile', 'dev'), ('cargo_lock_sha256', '0'*64)):
                     manifest = copy.deepcopy(original); manifest[field] = value
                     build.write_json(root/'input/manifest.json', manifest)
                     with self.subTest(field=field), self.assertRaises(ValueError):
@@ -73,16 +92,11 @@ class ArtifactTests(unittest.TestCase):
                 build.write_json(root/'input/manifest.json', manifest)
                 with self.assertRaises(ValueError):
                     artifacts.verify_build(root/'input', 'linux', 'x64', self.commit)
-                # Older CI artifacts remain usable by the screenshot workflow.
                 manifest = copy.deepcopy(original)
-                legacy = root/'input/tests/tray_integration'
-                legacy.write_bytes((root/'input/tests/library').read_bytes())
-                manifest['tests']['tray_integration'] = 'tests/tray_integration'
-                manifest['files']['tests/tray_integration'] = {
-                    'sha256': build.sha256(legacy), 'size': legacy.stat().st_size, 'executable': True}
+                manifest['tests']['library'] = 'tests/core_integration'
                 build.write_json(root/'input/manifest.json', manifest)
-                self.assertEqual(artifacts.verify_build(root/'input', 'linux', 'x64', self.commit)['commit'], self.commit)
-                legacy.unlink()
+                with self.assertRaises(ValueError):
+                    artifacts.verify_build(root/'input', 'linux', 'x64', self.commit)
                 build.write_json(root/'input/manifest.json', original)
                 (root/'input/payload/clash-of-rust').write_bytes(b'corrupt executable')
                 with self.assertRaises(ValueError):artifacts.verify_build(root/'input', 'linux', 'x64', self.commit)
@@ -138,11 +152,11 @@ class ArtifactTests(unittest.TestCase):
         args = argparse.Namespace(prebuilt=Path('ci-build'), system='linux', arch='x64')
         with patch.object(artifacts, 'verify_build'), patch.object(artifacts, 'commit', return_value=self.commit), \
              patch.object(module, 'package_version', return_value=self.version), \
-             patch.object(module, 'run') as run, patch.object(module, 'prepare') as prepare:
+             patch.object(module, 'run') as run, patch.object(build, 'download') as download:
             resources, binary = module.build_inputs(args, self.version)
             self.assertEqual(binary, Path('ci-build/payload/clash-of-rust'))
             self.assertEqual(resources, Path('ci-build/payload/resources'))
-            run.assert_not_called(); prepare.assert_not_called()
+            run.assert_not_called(); download.assert_not_called()
             with self.assertRaises(ValueError):module.build_inputs(args, '9.9.9')
 
     def test_gui_fixture_and_report_preserve_all_workloads_and_unknown_metrics(self):

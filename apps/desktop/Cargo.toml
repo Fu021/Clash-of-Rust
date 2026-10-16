@@ -1,0 +1,63 @@
+[package]
+name = "clash-of-rust"
+version.workspace = true
+edition.workspace = true
+default-run = "clash-of-rust"
+description = "A native Rust desktop client for mihomo"
+license.workspace = true
+
+[[bin]]
+name = "clash-tun-launcher"
+path = "src/tun_launcher.rs"
+
+[dependencies]
+clash-client-core = { path = "../../crates/client-core" }
+clash-client-ui = { path = "../../crates/client-ui" }
+slint = { workspace = true }
+arboard = { version = "3.7", default-features = false }
+anyhow = { workspace = true }
+chrono = { workspace = true }
+directories = { workspace = true }
+reqwest = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+serde_yaml = { workspace = true }
+semver = { workspace = true }
+tokio = { workspace = true, features = ["process"] }
+tempfile = { workspace = true }
+uuid = { workspace = true }
+futures-util = { workspace = true }
+sha2 = { workspace = true }
+regex = { workspace = true }
+roxmltree = { workspace = true }
+hmac = { workspace = true }
+sha1 = { workspace = true }
+base64 = { workspace = true }
+
+[target.'cfg(not(target_os = "macos"))'.dependencies]
+tray-icon = { workspace = true }
+
+[target.'cfg(windows)'.dependencies]
+windows = { version = "0.62", features = ["Win32_Foundation", "Win32_System_TaskScheduler", "Win32_System_Com", "Win32_System_Variant", "Win32_System_Ole", "Win32_UI_Shell", "Win32_UI_Shell_Common"] }
+winreg = "0.55"
+windows-sys = { version = "0.61", features = ["Win32_UI_WindowsAndMessaging", "Win32_UI_Shell", "Win32_System_Com", "Win32_System_Registry", "Win32_System_Threading", "Win32_System_Services", "Win32_System_Pipes", "Win32_System_IO", "Win32_System_JobObjects", "Win32_System_SystemInformation", "Win32_System_Diagnostics_ToolHelp", "Win32_Storage_FileSystem", "Win32_Security_Authorization", "Win32_System_Memory"] }
+
+[target.'cfg(unix)'.dependencies]
+libc = "0.2"
+
+[target.'cfg(target_os = "linux")'.dependencies]
+# Reuse tray-icon's D-Bus library for the desktop portal's native file chooser.
+zbus = { version = "5", default-features = false, features = ["tokio"] }
+
+[target.'cfg(target_os = "macos")'.dependencies]
+# Share Slint's muda 0.19: two versions register incompatible MudaMenuItem
+# Objective-C classes and can overwrite native menu objects during startup.
+tray-icon = { version = "=0.24.2", default-features = false }
+block2 = "0.6"
+# Reuse the bindings already used by tray-icon; keep AppKit on the GUI thread.
+objc2 = "0.6"
+objc2-app-kit = { version = "0.3.2", default-features = false, features = ["std", "NSApplication", "NSResponder", "NSStatusItem", "NSStatusBarButton", "NSImage", "NSWindow", "NSView", "NSScreen", "NSOpenPanel", "NSPanel", "NSSavePanel", "block2"] }
+objc2-foundation = { version = "0.3.2", default-features = false, features = ["std", "NSObject", "NSThread", "NSString", "NSURL", "NSArray"] }
+
+[build-dependencies]
+semver = "1"

@@ -1,0 +1,44 @@
+import { ScrollView } from "std-widgets.slint";
+import { Theme } from "../theme/palette.slint";
+import { UiData, UiActions, Intent } from "../state.slint";
+import { Label, Caption, Heading, ContentPanel, ActionButton, Badge, Field } from "../components/controls.slint";
+export component SubscriptionsPage inherits Rectangle {
+    ScrollView {
+        x: 0px; width: parent.width + Theme.content-gap;
+        VerticalLayout {
+            alignment: start; padding-right: Theme.content-gap; spacing: Theme.page-gap;
+            HorizontalLayout { cross-axis-alignment: center; spacing: Theme.content-gap;
+                Field { placeholder: "搜索订阅"; focus-id: "page-search"; text <=> UiData.query; edited(value) => { UiActions.dispatch(Intent.query, value, ""); } }
+                ActionButton { text: "打开目录"; enabled: UiData.ready; clicked => { UiActions.dispatch(Intent.open-profiles, "", ""); } }
+                ActionButton { text: "导入文件"; enabled: UiData.ready && !UiData.working; clicked => { UiActions.dispatch(Intent.pick-file, "false", ""); } }
+                ActionButton { text: "+ 添加订阅"; primary: true; enabled: UiData.ready && !UiData.working; clicked => { UiActions.dispatch(Intent.add-profile, "", ""); } }
+            }
+            if UiData.profile-source != "": ContentPanel {
+                Caption { text: "待导入：" + UiData.profile-source; }
+                ActionButton { text: "导入所选配置"; primary: true; enabled: !UiData.working; clicked => { UiActions.dispatch(Intent.add-profile, "", ""); } }
+            }
+            for profile in UiData.profiles: ContentPanel {
+                border-color: profile.active ? Theme.accent : Theme.line;
+                HorizontalLayout { cross-axis-alignment: center; spacing: Theme.content-gap;
+                    height: Theme.control-height;
+                    Heading { text: profile.name; }
+                    if profile.active: Badge { text: "当前使用中"; tone: 1; }
+                    if !profile.active: ActionButton { text: "使用"; enabled: !UiData.working; clicked => { UiActions.dispatch(Intent.activate-profile, profile.id, ""); } }
+                }
+                Caption { text: profile.source; }
+                HorizontalLayout { cross-axis-alignment: center; spacing: Theme.content-gap;
+                    Caption { text: profile.detail; }
+                    if !profile.local: ActionButton { text: "更新"; enabled: !UiData.working; clicked => { UiActions.dispatch(Intent.update-profile, profile.id, ""); } }
+                    if !profile.local: ActionButton { text: "编辑"; enabled: !UiData.working; clicked => { UiActions.dispatch(Intent.edit-profile, profile.id, ""); } }
+                    if !profile.local: ActionButton { text: "删除"; danger: true; enabled: !UiData.working; clicked => { UiActions.dispatch(Intent.delete-profile, profile.id, ""); } }
+                }
+            }
+            HorizontalLayout { cross-axis-alignment: center; spacing: Theme.content-gap;
+                Caption { text: UiData.page-status; }
+                ActionButton { text: "上一页"; enabled: UiData.previous; clicked => { UiActions.dispatch(Intent.list-page, "" + max(0, UiData.page-offset - 60), ""); } }
+                ActionButton { text: "下一页"; enabled: UiData.next; clicked => { UiActions.dispatch(Intent.list-page, "" + (UiData.page-offset + 60), ""); } }
+            }
+            if UiData.profiles.length == 0: ContentPanel { Caption { text: "导入订阅链接或本地 YAML 文件后，即可启用配置。"; } }
+        }
+    }
+}

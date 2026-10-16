@@ -1,0 +1,25 @@
+import { Theme } from "../theme/palette.slint";
+import { UiData } from "../state.slint";
+import { Label } from "controls.slint";
+
+export component NavigationItem inherits Rectangle {
+    in property <string> text;
+    in property <image> icon;
+    in property <bool> selected;
+    callback clicked();
+    forward-focus: key-scope;
+    height: Theme.control-height;
+    border-radius: 8px;
+    background: root.selected ? Theme.accent-wash : area.has-hover ? Theme.surface : transparent;
+    if root.selected: Rectangle { x: 0px; y: (parent.height - self.height) / 2; width: 3px; height: 20px; background: Theme.accent; border-radius: 2px; }
+    Image { x: 14px; y: (parent.height - self.height) / 2; width: 18px; height: 18px; source: root.icon; colorize: root.selected ? Theme.accent : Theme.secondary; }
+    Label { x: 44px; y: 0px; width: parent.width - 48px; height: parent.height; text: root.text; color: root.selected ? Theme.accent : Theme.ink; }
+    key-scope := FocusScope {
+        enabled: UiData.modal == 0;
+        key-pressed(event) => {
+            if event.text == " " || event.text == "\n" { root.clicked(); return accept; }
+            return reject;
+        }
+    }
+    area := TouchArea { mouse-cursor: pointer; clicked => { key-scope.focus(); root.clicked(); } }
+}

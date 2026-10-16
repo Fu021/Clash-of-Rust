@@ -1,0 +1,48 @@
+//! Headless software window for deterministic rendering and input tests.
+//! Uses the same renderer, compiled components and models as the desktop.
+use slint::platform::{
+    Platform, PlatformError, WindowAdapter,
+    software_renderer::{MinimalSoftwareWindow, RepaintBufferType},
+};
+use std::rc::Rc;
+
+thread_local! {
+    static WINDOW: Rc<MinimalSoftwareWindow> = MinimalSoftwareWindow::new(RepaintBufferType::NewBuffer);
+    static INSTALLED: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+}
+struct Headless;
+impl Platform for Headless {
+    fn create_window_adapter(&self) -> Result<Rc<dyn WindowAdapter>, PlatformError> {
+        Ok(WINDOW.with(Clone::clone))
+    }
+}
+pub fn initialize(width: u32, height: u32) -> Rc<MinimalSoftwareWindow> {
+    INSTALLED.with(|installed| {
+        if !installed.get() {
+            slint::platform::set_platform(Box::new(Headless))
+                .expect("install isolated Slint test backend");
+            installed.set(true);
+        }
+    });
+    let window = WINDOW.with(Clone::clone);
+    window.set_size(slint::PhysicalSize::new(width, height));
+    window
+}
+
+#[cfg(test)]
+pub(super) fn click(window: &slint::Window, x: f32, y: f32) {
+    use slint::platform::{PointerEventButton, WindowEvent};
+    let position = slint::LogicalPosition::new(x, y);
+    // Match a real pointer sequence, including movement between adjacent hit
+    // regions and the press delay used by Slint's own click test helper.
+    window.dispatch_event(WindowEvent::PointerMoved { position });
+    window.dispatch_event(WindowEvent::PointerPressed {
+        position,
+        button: PointerEventButton::Left,
+    });
+    std::thread::sleep(std::time::Duration::from_millis(50));
+    window.dispatch_event(WindowEvent::PointerReleased {
+        position,
+        button: PointerEventButton::Left,
+    });
+}

@@ -12,13 +12,12 @@ from pathlib import Path
 import re
 import subprocess
 import sys
-import tomllib
 import urllib.error
 import urllib.parse
 import urllib.request
 import zipfile
 
-from build_support import ROOT, opener, sha256, validate_version
+from build_support import ROOT, opener, sha256, validate_version, manifest_version
 
 CI_JOBS = {
     'windows-x64', 'windows-arm64', 'linux-x64', 'linux-arm64', 'macos-x64', 'macos-arm64',
@@ -124,7 +123,7 @@ def verified_run(client, commit, run_id=None, check_only=False):
 
 def release_metadata(commit, tag=None, notes_path=None, check_only=False):
     require(bool(re.fullmatch(r'[0-9a-f]{40}', commit)), 'Invalid release commit')
-    version = validate_version(tomllib.loads(git('show', commit + ':Cargo.toml'))['package']['version'])
+    version = validate_version(manifest_version(git('show', commit + ':Cargo.toml')))
     expected_tag = 'v' + version
     require(tag is None or tag == expected_tag, 'Release tag differs from the tested Cargo version')
     if check_only:

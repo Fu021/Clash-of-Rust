@@ -1,0 +1,100 @@
+// The production component, with isolated example values for the Rust-free viewer.
+import { AppWindow } from "app.slint";
+import { UiData } from "state.slint";
+
+export component Preview inherits AppWindow {
+    in-out property <int> preview-page <=> UiData.page;
+    in-out property <bool> preview-dark <=> UiData.dark;
+    in-out property <int> preview-text-scale <=> UiData.text-scale;
+    in-out property <int> preview-accent <=> UiData.accent;
+    in-out property <string> preview-notice <=> UiData.notice;
+    in-out property <float> preview-notice-elapsed <=> UiData.notice-elapsed;
+    in-out property <bool> preview-protection-pending <=> UiData.protection-pending;
+    in-out property <int> dialog;
+    in-out property <bool> shortcuts-open <=> UiData.shortcuts-open;
+    in-out property <bool> raw-rule <=> UiData.rule-text-mode;
+    changed dialog => {
+        UiData.modal = root.dialog == 1 || root.dialog == 2 ? 1 : root.dialog == 3 ? 7 : root.dialog == 5 ? 2 : root.dialog == 6 ? 11 : root.dialog == 10 ? 12 : root.dialog == 11 ? 10 : root.dialog;
+        UiData.modal-can-accept = true;
+        UiData.modal-title = root.dialog == 1 ? "删除订阅？" : root.dialog == 2 ? "放弃未保存的修改？" : root.dialog == 3 ? "开启 Claude 保护？" : root.dialog == 4 ? "新建规则" : root.dialog == 5 ? "编辑订阅" : root.dialog == 6 ? "Netflix · 检测详情" : root.dialog == 11 ? "连接详情" : "强调色";
+        UiData.modal-description = root.dialog == 1 ? "将删除“备用订阅”及其配置文件。此操作无法撤销。" : root.dialog == 2 ? "尚有未应用的修改。放弃后将恢复已保存的规则。" : root.dialog == 3 ? "将固定当前节点，启用 TUN、代理 DNS、广泛规则与实时拦截。共享服务可能影响其他应用，关闭后恢复原设置。" : root.dialog == 6 ? "检测结果：确认可用\n识别地区：德国\n响应时间：128 ms\n\n以下为固定演示数据，不代表真实网络检测。" : "";
+        UiData.modal-accept = root.dialog == 1 ? "删除订阅" : root.dialog == 2 ? "放弃修改" : root.dialog == 3 ? "开启保护" : root.dialog == 10 ? "完成" : root.dialog == 6 || root.dialog == 11 ? "" : "保存";
+        UiData.modal-danger = root.dialog == 1 || root.dialog == 2;
+        if root.dialog >= 7 && root.dialog <= 9 {
+            UiData.modal = 0;
+            UiData.claude-filter = root.dialog == 7 ? 1 : root.dialog == 8 ? 0 : 2;
+        }
+    }
+    init => {
+        UiData.version = "0.5.11";
+        UiData.ready = true; UiData.running = true;
+        UiData.profile = "我的订阅"; UiData.node = "德国 01 · IPv6";
+        UiData.download-rate = "1.24 MiB/s"; UiData.upload-rate = "28.6 KiB/s";
+        UiData.connection-count = "24"; UiData.download-total = "386 MiB"; UiData.upload-total = "21.7 MiB";
+        UiData.protection-status = "正在开启保护，切换 TUN、规则与 DNS…";
+        UiData.connection-details = [
+            {label: "连接名称", value: "api.github.com"}, {label: "域名", value: "api.github.com"},
+            {label: "嗅探域名", value: "api.github.com"}, {label: "目标 IP", value: "140.82.112.6"},
+            {label: "目标端口", value: "443"}, {label: "协议", value: "tcp"},
+            {label: "匹配规则", value: "DOMAIN-SUFFIX github.com"},
+            {label: "代理链", value: "Proxy → 自动选择 → 德国 01 · IPv6"},
+            {label: "上传速度", value: "2.4 KiB/s"}, {label: "下载速度", value: "128 KiB/s"},
+            {label: "累计上传", value: "24 KiB"}, {label: "累计下载", value: "1.8 MiB"},
+            {label: "开始时间", value: "2026-10-16T10:31:20.123+08:00"},
+            {label: "连接 ID", value: "9f1a0f02-d63e-4cfe-832e-4ed947af10de"}];
+        UiData.page-status = "3 条 · 1–3";
+        UiData.groups = [{id: "Proxy", title: "Proxy", detail: "Selector · 6 个节点", current: "德国 01 · IPv6", expanded: true, testing: false, page: "6 个节点 · 1–6", previous: false, next: false,
+            nodes: [
+                {left: {group: "Proxy", name: "德国 01 · IPv6", kind: "AnyTLS", delay: "45 ms", selected: true, valid: true}, right: {group: "Proxy", name: "香港 02", kind: "VLESS", delay: "28 ms", selected: false, valid: true}},
+                {left: {group: "Proxy", name: "日本 01", kind: "Shadowsocks", delay: "64 ms", selected: false, valid: true}, right: {group: "Proxy", name: "新加坡 01", kind: "Trojan", delay: "76 ms", selected: false, valid: true}},
+                {left: {group: "Proxy", name: "美国 01", kind: "VLESS", delay: "168 ms", selected: false, valid: true}, right: {group: "Proxy", name: "DIRECT", kind: "Direct", delay: "未测速", selected: false, valid: true}}
+            ]}];
+        UiData.profiles = [
+            {id: "main", name: "我的订阅", source: "https://example.com/subscription", detail: "已用 2.4 GiB / 100 GiB · 更新于 2026-10-15 10:30", active: true, local: false},
+            {id: "backup", name: "备用订阅", source: "https://example.org/sub", detail: "更新于 2026-10-14 18:20", active: false, local: false},
+            {id: "default", name: "默认直连", source: "default.yaml", detail: "本地配置", active: false, local: true}];
+        UiData.connections = [
+            {id: "1", host: "api.github.com:443", detail: "tcp · 10:31:20", rule: "DOMAIN-SUFFIX github.com", route: "Proxy → 德国 01", up: "2.4 KiB/s", down: "128 KiB/s", upload: "24 KiB", download: "1.8 MiB"},
+            {id: "2", host: "www.google.com:443", detail: "tcp · 10:31:24", rule: "MATCH", route: "Proxy → 德国 01", up: "1.8 KiB/s", down: "86 KiB/s", upload: "18 KiB", download: "980 KiB"},
+            {id: "3", host: "example.org:443", detail: "tcp · 10:31:28", rule: "DOMAIN example.org", route: "DIRECT", up: "0 B/s", down: "0 B/s", upload: "2 KiB", download: "34 KiB"}];
+        UiData.rule-profile = "我的订阅"; UiData.rule-profile-options = ["我的订阅", "备用订阅"];
+        UiData.rule-profiles = [{id: "main", label: "我的订阅"}, {id: "backup", label: "备用订阅"}];
+        UiData.rule-types = ["DOMAIN-SUFFIX", "DOMAIN", "IP-CIDR", "GEOIP", "GEOSITE"];
+        UiData.rule-policies = ["DIRECT", "REJECT", "Proxy"];
+        UiData.rule-kind = "DOMAIN-SUFFIX"; UiData.rule-policy = "DIRECT"; UiData.rule-enabled = true; UiData.rule-position = "1";
+        UiData.shortcuts = ["拦截广告", "私有域名直连", "私有 IP 直连", "国内域名直连", "国内 IP 直连"];
+        UiData.shortcut-values = [false, false, false, false, false]; UiData.shortcut-available = [true, true, true, true, true];
+        UiData.rules = [
+            {id: "1", position: "1", kind: "DOMAIN-SUFFIX", value: "github.com", policy: "Proxy", source: "订阅", selected: false, enabled: true},
+            {id: "2", position: "2", kind: "DOMAIN-SUFFIX", value: "google.com", policy: "Proxy", source: "订阅", selected: false, enabled: true},
+            {id: "3", position: "3", kind: "DOMAIN", value: "localhost", policy: "DIRECT", source: "订阅", selected: false, enabled: true},
+            {id: "4", position: "4", kind: "IP-CIDR", value: "192.168.0.0/16", policy: "DIRECT", source: "订阅", selected: false, enabled: true},
+            {id: "5", position: "5", kind: "GEOIP", value: "CN", policy: "DIRECT", source: "订阅", selected: false, enabled: true},
+            {id: "6", position: "6", kind: "MATCH", value: "", policy: "Proxy", source: "订阅", selected: false, enabled: true}];
+        UiData.logs = [
+            {time: "", level: "INFO", message: "mihomo 已启动，控制接口可用", tone: 4},
+            {time: "", level: "INFO", message: "配置已更新并生效", tone: 4},
+            {time: "", level: "WARN", message: "DNS query failed, retrying", tone: 2},
+            {time: "", level: "ERROR", message: "connection timeout: api.example.org:443", tone: 3}];
+        UiData.test-url = "https://www.gstatic.com/generate_204"; UiData.dns-host = "github.com";
+        UiData.network-results = ["网站响应 · HTTP 204 · 42 ms", "出口 IP · 203.0.113.42 · 德国", "系统 DNS · github.com → 140.82.112.4"];
+        UiData.node-sort = 2;
+        UiData.sites-started = true; UiData.site-progress = "完成 183 / 183"; UiData.site-fraction = 1;
+        UiData.site-counts = [{id: "确认可用", label: "确认可用 74"}, {id: "仅网页可达", label: "仅网页可达 20"}, {id: "信息已识别", label: "信息已识别 5"}, {id: "不可用或受限", label: "不可用或受限 36"}, {id: "结果未确认", label: "结果未确认 48"}];
+        UiData.site-summary = "出口 IP：203.0.113.42 · 各平台识别到 6 个地区";
+        UiData.site-exit-country = "德国";
+        UiData.categories = [
+            {left: {id: "AI", title: "AI", count: "4 / 5", detail: "确认可用 3 · 网页可达 1 · 受限 1", tone: 2}, right: {id: "全球", title: "全球", count: "16 / 19", detail: "确认可用 14 · 网页可达 2 · 受限 3", tone: 2}},
+            {left: {id: "日本", title: "日本", count: "8 / 12", detail: "确认可用 6 · 网页可达 2 · 受限 4", tone: 2}, right: {id: "香港", title: "香港", count: "9 / 13", detail: "确认可用 8 · 网页可达 1 · 受限 4", tone: 2}},
+            {left: {id: "欧洲", title: "欧洲", count: "12 / 12", detail: "确认可用 12 · 网页可达 0 · 受限 0", tone: 1}, right: {id: "台湾", title: "台湾", count: "8 / 13", detail: "确认可用 8 · 网页可达 0 · 受限 5", tone: 2}}];
+        UiData.claude-normal = "18"; UiData.claude-risk = "2"; UiData.claude-clues = "5";
+        UiData.claude-status = "检测完成 · 浏览器自动采样已回传";
+        UiData.claude-results = [{flag: @image-url("icons/ip.svg"), flagged: false, id: "1", title: "DNS 地区线索", value: "发现与代理出口不同的地区", detail: "请核对浏览器安全 DNS 与系统 DNS 配置。此处为固定演示结果。", source: "浏览器采样", tone: 3}];
+        UiData.claude-result-status = "1 条 · 1–1";
+        UiData.dns-override = true; UiData.ipv6 = true; UiData.udp = true;
+        UiData.mixed-port = "7897"; UiData.controller-port = "9090";
+        UiData.window-width = "950"; UiData.window-height = "700"; UiData.interval = "0";
+        UiData.geo-status = "2026-10-15"; UiData.update-status = "已是最新版本";
+        UiData.edit-name = "我的订阅"; UiData.edit-source = "https://example.com/subscription";
+    }
+}

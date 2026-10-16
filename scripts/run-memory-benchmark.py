@@ -10,16 +10,14 @@ import shutil
 import signal
 import socket
 import statistics
-import struct
 import subprocess
 import sys
 import tempfile
 import time
 import urllib.request
 import uuid
-import zlib
 
-from build_support import ROOT, write_json
+from build_support import ROOT, write_json, core_directory, desktop_directory, package_version
 
 
 WORKLOADS = {
@@ -40,7 +38,7 @@ def fixture(workload='light'):
         + '  - MATCH,DIRECT\n')
 
 
-def screenshot(window, output, env):
+def window_pixels(window, env):
     x = c.CDLL('libX11.so.6')
     x.XOpenDisplay.argtypes = [c.c_char_p]
     x.XOpenDisplay.restype = c.c_void_p
@@ -63,7 +61,7 @@ def screenshot(window, output, env):
     x.XCloseDisplay.argtypes = [c.c_void_p]
     try:
         if not image or image.contents.bits_per_pixel != 32:
-            raise RuntimeError('Expected a 32-bit Xvfb screenshot')
+            raise RuntimeError('Expected 32-bit Xvfb pixels')
         data = image.contents
         raw = c.string_at(data.data, data.bytes_per_line*height)
         rows = []
@@ -71,47 +69,23 @@ def screenshot(window, output, env):
             row = raw[y*data.bytes_per_line:y*data.bytes_per_line+width*4]
             rgb = bytearray(width*3)
             rgb[0::3], rgb[1::3], rgb[2::3] = row[2::4], row[1::4], row[0::4]
-            rows.append(b'\0'+rgb)
-        def chunk(kind, value):
-            return struct.pack('>I', len(value))+kind+value+struct.pack('>I', zlib.crc32(kind+value))
-        output.write_bytes(b'\x89PNG\r\n\x1a\n'
-                           + chunk(b'IHDR', struct.pack('>IIBBBBB', width, height, 8, 2, 0, 0, 0))
-                           + chunk(b'IDAT', zlib.compress(b''.join(rows))) + chunk(b'IEND', b''))
+            rows.append(rgb)
+        return width, height, b''.join(rows)
     finally:
         if image:
             x.XDestroyImage(image)
         x.XCloseDisplay(display)
 
 
-def search_center(window, output, env):
-    """Locate the real search field after notices have changed its position."""
-    path = output/'search-focus.png'
-    screenshot(window, path, env)
-    png = path.read_bytes()
-    offset, compressed, dimensions = 8, bytearray(), None
-    while offset < len(png):
-        length = struct.unpack_from('>I', png, offset)[0]
-        kind = png[offset+4:offset+8]
-        data = png[offset+8:offset+8+length]
-        if kind == b'IHDR':
-            width, height, depth, color, _, _, interlaced = struct.unpack('>IIBBBBB', data)
-            if (depth, color, interlaced) != (8, 2, 0):
-                raise ValueError('Expected an RGB screenshot')
-            dimensions = width, height
-        elif kind == b'IDAT':
-            compressed.extend(data)
-        offset += length+12
-    if dimensions is None:
-        raise ValueError('Screenshot dimensions missing')
-    width, height = dimensions
-    raw, stride = zlib.decompress(compressed), width*3+1
-    if any(raw[y*stride] != 0 for y in range(height)):
-        raise ValueError('Expected unfiltered screenshot rows')
+def search_center(window, env):
+    """Locate the legacy search field in memory without producing a screenshot."""
+    width, height, raw = window_pixels(window, env)
+    stride = width*3
     runs, start = [], None
     # At the default 950 px window, only the search input has this border
     # on the content's left edge. Card/notice borders use other colors.
     for y in range(70, min(height-60, 250)):
-        pixel = raw[y*stride+1+184*3:y*stride+1+185*3]
+        pixel = raw[y*stride+184*3:y*stride+185*3]
         border = all(abs(a-b) <= 3 for a, b in zip(pixel, (100, 116, 139)))
         if border:
             if start is None:
@@ -125,7 +99,7 @@ def search_center(window, output, env):
     return 380, sum(runs[0])//2
 
 
-def gui_scenes(executable, benchmark, output, seconds, modern_layout=False, rule_overrides=None, prefix='', workload='light'):
+def gui_scenes(executable, benchmark, output, seconds, modern_layout=False, slint_layout=False, rule_overrides=None, prefix='', workload='light'):
     env = dict(os.environ, GSETTINGS_BACKEND='memory', WINIT_UNIX_BACKEND='x11', WINIT_X11_SCALE_FACTOR='1')
     env.pop('WAYLAND_DISPLAY', None)
     with tempfile.TemporaryDirectory(prefix='memory-gui-') as directory, (output/(prefix+'gui.log')).open('x') as log:
@@ -179,25 +153,28 @@ def gui_scenes(executable, benchmark, output, seconds, modern_layout=False, rule
             def measure(name):
                 name = prefix+name
                 time.sleep(3)
-                screenshot(window, output/(name+'.png'), env)
                 with (output/(name+'.txt')).open('x') as text:
                     subprocess.run([str(benchmark), 'app', str(app.pid), str(seconds), '250',
                                     str(output/(name+'.jsonl'))], stdout=text, check=True, env=env)
             measure('home')
-            click(70, 126 if modern_layout else 108)
+            click(70, 156 if slint_layout else 126 if modern_layout else 108)
             measure('proxies-collapsed')
-            if modern_layout:
-                click(*search_center(window, output, env))
+            if slint_layout:
+                subprocess.run(['xdotool', 'windowfocus', '--sync', window], env=env, check=True)
+                subprocess.run(['xdotool', 'key', '--clearmodifiers', 'ctrl+f'], env=env, check=True)
+                time.sleep(0.5)
+            elif modern_layout:
+                click(*search_center(window, env))
             else:
                 click(380, 120)
             subprocess.run(['xdotool', 'windowfocus', '--sync', window], env=env, check=True)
             subprocess.run(['xdotool', 'type', '--delay', '100', '--clearmodifiers', 'node-'], env=env, check=True)
             measure('proxies-search')
-            click(70, 83 if modern_layout else 70)
+            click(70, 112 if slint_layout else 83 if modern_layout else 70)
             measure('home-after-proxies')
         finally:
             # All tests use proxy off. Stop this owned process group, including
-            # the bundled core, even if screenshot/measurement fails.
+            # the bundled core, even if a measurement fails.
             try:
                 os.killpg(app.pid, signal.SIGTERM)
             except ProcessLookupError:
@@ -264,14 +241,17 @@ def main():
         raise ValueError('Bounds: rows 1..50000, repetitions 1..10, GUI seconds 1..120')
     source, output = args.source.resolve(strict=True), args.output.resolve()
     output.mkdir(parents=True, exist_ok=False)
-    benchmark_source = ROOT/'examples/memory_benchmark.rs'
-    destination = source/'examples/memory_benchmark.rs'
+    benchmark_source = core_directory()/'examples/memory_benchmark.rs'
+    destination = core_directory(source)/'examples/memory_benchmark.rs'
     if destination.resolve() != benchmark_source.resolve():
-        shutil.copy2(benchmark_source, destination)
-    import tomllib
+        destination.parent.mkdir(parents=True, exist_ok=True)
+        text = benchmark_source.read_text()
+        if core_directory(source) == source:
+            text = text.replace('clash_client_core::', 'clash_of_rust::')
+        destination.write_text(text)
     metadata = {'source_commit': subprocess.check_output(['git', 'rev-parse', 'HEAD'], cwd=source, text=True).strip(),
                 'benchmark_commit': subprocess.check_output(['git', 'rev-parse', 'HEAD'], cwd=ROOT, text=True).strip(),
-                'version': tomllib.loads((source/'Cargo.toml').read_text())['package']['version'],
+                'version': package_version(source),
                 'profile': args.profile, 'workload': args.workload,
                 'gui_fixture': {key: counts[key] for key in ('nodes', 'groups', 'rules')},
                 'rows': args.rows, 'repetitions': args.repetitions,
@@ -280,11 +260,15 @@ def main():
                 'rustc': subprocess.check_output(['rustc', '-Vv'], text=True).strip(),
                 'started_at': datetime.datetime.now(datetime.timezone.utc).isoformat(),
                 'instrumentation': 'The workflow benchmark example replaces only the example in the selected checkout; application sources are unchanged.'}
-    modern_layout = (source/'src/ui_style.rs').is_file()
+    desktop = desktop_directory(source)
+    slint_layout = (desktop/'src/application/bindings.rs').is_file()
+    modern_layout = slint_layout or (desktop/'src/app/mod.rs').is_file() or (desktop/'src/ui_style.rs').is_file()
     metadata['gui_navigation'] = 'current sidebar coordinates and detected search field' if modern_layout else 'legacy window coordinates'
     write_json(output/'metadata.json', metadata)
     (output/'gui-fixture.yaml').write_text(fixture(args.workload), encoding='utf-8')
     command = ['cargo', 'build', '--locked', '--bins', '--example', 'memory_benchmark']
+    if desktop != source:
+        command.append('--workspace')
     if args.profile == 'release':
         command.append('--release')
     with (output/'build.log').open('x') as log:
@@ -303,10 +287,11 @@ def main():
     with (output/'api.txt').open('x') as text:
         subprocess.run([str(benchmark), 'suite', str(args.rows), str(args.repetitions), str(output/'api.jsonl')],
                        cwd=source, stdout=text, check=True)
-    gui_scenes(bundle/'clash-of-rust', benchmark, output, args.seconds, modern_layout, workload=args.workload)
-    if 'pub rule_overrides:' in (source/'src/config.rs').read_text(encoding='utf-8'):
+    gui_scenes(bundle/'clash-of-rust', benchmark, output, args.seconds, modern_layout, slint_layout=slint_layout, workload=args.workload)
+    settings_source = (core_directory(source)/'src/config/mod.rs' if desktop != source else source/'src/config.rs')
+    if 'pub rule_overrides:' in settings_source.read_text(encoding='utf-8'):
         overrides = {'enabled': [True]*5}
-        gui_scenes(bundle/'clash-of-rust', benchmark, output, args.seconds, modern_layout,
+        gui_scenes(bundle/'clash-of-rust', benchmark, output, args.seconds, modern_layout, slint_layout=slint_layout,
                    rule_overrides=overrides, prefix='rules-', workload=args.workload)
         metadata['additional_gui_rules'] = overrides
         write_json(output/'metadata.json', metadata)

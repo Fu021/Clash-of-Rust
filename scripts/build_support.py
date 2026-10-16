@@ -14,6 +14,7 @@ import time
 import urllib.parse
 import urllib.request
 import zipfile
+import tomllib
 
 ROOT = Path(__file__).resolve().parent.parent
 RESOURCE_NAMES = ('default.yaml', 'settings-defaults.json', 'THIRD-PARTY-NOTICES.txt')
@@ -49,9 +50,23 @@ def sha256(path):
         return hashlib.file_digest(stream, 'sha256').hexdigest()
 
 
-def package_version():
-    text = (ROOT/'Cargo.toml').read_text(encoding='utf-8')
-    return re.search(r'^version\s*=\s*"([^\"]+)"', text, re.M)[1]
+def manifest_version(text):
+    manifest = tomllib.loads(text)
+    return manifest.get('package', manifest.get('workspace', {}).get('package', {}))['version']
+
+
+def package_version(source=None):
+    return manifest_version(((Path(source) if source else ROOT)/'Cargo.toml').read_text(encoding='utf-8'))
+
+
+def desktop_directory(source=None):
+    source = Path(source) if source else ROOT
+    return source/'apps/desktop' if (source/'apps/desktop/Cargo.toml').is_file() else source
+
+
+def core_directory(source=None):
+    source = Path(source) if source else ROOT
+    return source/'crates/client-core' if (source/'crates/client-core/Cargo.toml').is_file() else source
 
 
 def host_system():
@@ -217,7 +232,7 @@ def copy_static(bundle):
     ip = resources/'ip-check'
     ip.mkdir(exist_ok=True)
     for name in ('LICENSE', 'SOURCE.md'):
-        shutil.copy2(ROOT/'vendor/region-restriction-check'/name, ip/name)
+        shutil.copy2(ROOT/'resources/ip-check'/name, ip/name)
 
 
 def validate_resources(resources, system):

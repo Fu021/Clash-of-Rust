@@ -1,0 +1,152 @@
+import { ScrollView } from "std-widgets.slint";
+import { UiData, UiActions, Intent } from "state.slint";
+import { Theme } from "theme/palette.slint";
+export { Theme } from "theme/palette.slint";
+export { UiData, UiActions, Intent, Choice, DetailItem, NodeItem, NodePair, GroupItem, ProfileItem, ConnectionItem, RuleItem, LogItem, ReportItem, CategoryItem, CategoryPair } from "state.slint";
+import { Label, Caption, ContentPanel, Panel, ActionButton, Badge, Paragraph } from "components/controls.slint";
+import { NavigationItem } from "components/navigation.slint";
+import { HomePage } from "pages/home.slint";
+import { ProxiesPage } from "pages/proxies.slint";
+import { SubscriptionsPage } from "pages/subscriptions.slint";
+import { ConnectionsPage } from "pages/connections.slint";
+import { RulesPage } from "pages/rules.slint";
+import { LogsPage } from "pages/logs.slint";
+import { NetworkPage } from "pages/network.slint";
+import { IpCheckPage } from "pages/ip-check.slint";
+import { AiCheckPage } from "pages/ai-check.slint";
+import { SettingsPage } from "pages/settings.slint";
+import { AppDialog } from "dialogs/app-dialog.slint";
+import "../../../resources/fonts/SourceHanSansCN-Regular.otf";
+export component AppWindow inherits Window {
+    title: "Clash of Rust · 原生代理客户端";
+    preferred-width: 950px;
+    preferred-height: 700px;
+    background: Theme.canvas;
+    in-out property <bool> dark <=> UiData.dark;
+    in-out property <int> page <=> UiData.page;
+    in-out property <length> window-min-width: 800px;
+    in-out property <length> window-min-height: 450px;
+    min-width: root.window-min-width;
+    min-height: root.window-min-height;
+    default-font-family: "Source Han Sans CN";
+    default-font-size: Theme.body-size;
+    icon: @image-url("../../../resources/icons/app.png");
+    property <int> appearance: UiData.appearance;
+    property <float> font-scale: UiData.text-scale / 100.0;
+    changed dark => { Theme.system-dark = root.dark; }
+    changed appearance => { Theme.appearance = root.appearance; }
+    changed font-scale => { Theme.text-scale = root.font-scale; }
+    property <int> accent: UiData.accent;
+    changed accent => { Theme.accent-index = root.accent; }
+    property <[string]> titles: ["首页", "代理", "订阅", "连接", "规则", "日志", "网络诊断", "IP 检测", "A÷检测", "设置"];
+    property <[string]> subtitles: ["运行状态与流量概览", "查看代理组与选择节点", "管理订阅与本地配置", "查看连接、实时速度与匹配线路", "快捷规则、自定义规则与匹配顺序", "内核与客户端运行记录", "网站响应、出口信息与 DNS 检查", "按分类查看平台可用情况", "Claude 地区线索、配置风险与实时保护", "客户端、网络与外观设置"];
+    property <[image]> icons: [@image-url("icons/home.svg"), @image-url("icons/proxies.svg"), @image-url("icons/subscriptions.svg"), @image-url("icons/connections.svg"), @image-url("icons/rules.svg"), @image-url("icons/logs.svg"), @image-url("icons/network.svg"), @image-url("icons/ip.svg"), @image-url("icons/ai.svg"), @image-url("icons/settings.svg")];
+    forward-focus: keys;
+    keys := FocusScope {
+        width: parent.width; height: parent.height;
+        key-pressed(event) => {
+            if event.text == Key.Escape {
+                UiActions.dispatch(Intent.escape, "", "");
+                return accept;
+            }
+            return reject;
+        }
+    Rectangle {
+        x: 0px; y: 0px; width: 176px; height: parent.height; background: Theme.sidebar;
+        Rectangle { x: parent.width - 1px; width: 1px; height: parent.height; background: Theme.line; }
+        Rectangle {
+            x: 8px; y: 16px; width: 40px; height: 40px;
+            accessible-role: button;
+            accessible-label: "系统通知";
+            accessible-action-default => { if !UiData.notification-busy && UiData.modal == 0 { UiActions.dispatch(Intent.system-notification, "", ""); } }
+            Image { x: 8px; y: 8px; width: 24px; height: 24px; source: @image-url("../../../resources/icons/app.png"); }
+            FocusScope {
+                enabled: !UiData.notification-busy && UiData.modal == 0;
+                key-pressed(event) => {
+                    if event.text == Key.Return || event.text == " " { UiActions.dispatch(Intent.system-notification, "", ""); return accept; }
+                    return reject;
+                }
+            }
+            TouchArea {
+                enabled: !UiData.notification-busy && UiData.modal == 0;
+                mouse-cursor: pointer;
+                clicked => { UiActions.dispatch(Intent.system-notification, "", ""); }
+            }
+        }
+        Label { x: 48px; y: 18px; height: 32px; width: 122px; text: "Clash of Rust"; font-size: 16px * Theme.text-scale; }
+        Caption { x: 48px; y: 46px; height: 22px; width: 122px; text: "原生代理客户端"; font-size: 12px * Theme.text-scale; }
+        nav := ScrollView {
+            x: 0px; y: 92px; width: parent.width; height: parent.height - 144px;
+            VerticalLayout { alignment: start; padding-left: 12px; padding-right: 12px; spacing: 4px;
+                for title[i] in root.titles: VerticalLayout {
+                    spacing: 4px;
+                    if i == 6: Caption { text: "工具"; height: 24px; font-size: 12px * Theme.text-scale; }
+                    NavigationItem { text: title; icon: root.icons[i]; selected: UiData.page == i; clicked => { UiActions.dispatch(Intent.navigate, "" + i, ""); } }
+                }
+            }
+        }
+        Caption { x: 16px; y: parent.height - 36px; height: 22px; width: parent.width - 32px; text: UiData.version; font-size: 13px * Theme.text-scale; }
+    }
+    Rectangle {
+        x: 200px; y: 20px; width: parent.width - 224px; height: parent.height - 36px;
+        VerticalLayout {
+            spacing: Theme.page-gap;
+            Rectangle {
+                height: max(72px, header.preferred-height);
+                header := HorizontalLayout { cross-axis-alignment: center; spacing: Theme.page-gap;
+                    VerticalLayout { spacing: 4px;
+                        Label { text: root.titles[UiData.page]; font-size: 26px * Theme.text-scale; font-weight: 600; }
+                        Caption { text: root.subtitles[UiData.page]; }
+                    }
+                    VerticalLayout { width: 250px; spacing: 8px;
+                        HorizontalLayout { cross-axis-alignment: center;
+                            Rectangle { horizontal-stretch: 1; }
+                            Badge { text: UiData.running ? "● 内核运行中" : UiData.ready ? "● 内核未启动" : "● 正在初始化"; tone: UiData.running ? 1 : 4; }
+                        }
+                        Caption { text: UiData.profile + (UiData.node != "" ? "  |  " + UiData.node : ""); horizontal-alignment: right; }
+                    }
+                }
+            }
+            if UiData.notice != "": notice-panel := ContentPanel {
+                property <int> revision: UiData.notice-revision;
+                property <duration> started;
+                init => { self.started = animation-tick() - UiData.notice-elapsed * 1s; }
+                changed revision => { self.started = animation-tick() - UiData.notice-elapsed * 1s; }
+                property <float> progress: clamp((animation-tick() - self.started) / 8s, 0, 1);
+                HorizontalLayout { cross-axis-alignment: center; spacing: Theme.content-gap;
+                    Paragraph { text: UiData.notice; color: UiData.notice-error ? Theme.danger : Theme.secondary; }
+                    if UiData.retry-core: ActionButton { text: "重启内核"; primary: true; enabled: !UiData.working; clicked => { UiActions.dispatch(Intent.restart-core, "", ""); } }
+                    ActionButton { text: "关闭"; clicked => { UiActions.dispatch(Intent.dismiss-notice, "", ""); } }
+                }
+                Rectangle { height: 2px; background: Theme.subtle-line;
+                    Rectangle { x: 0px; y: 0px; width: parent.width * notice-panel.progress; height: parent.height; background: UiData.notice-error ? Theme.danger : Theme.accent; }
+                }
+            }
+            if UiData.update-busy || UiData.update-available: ContentPanel {
+                HorizontalLayout { cross-axis-alignment: center; spacing: Theme.content-gap;
+                    Label { text: UiData.update-status; }
+                    if UiData.update-downloading: ActionButton { text: "取消"; clicked => { UiActions.dispatch(Intent.cancel-update, "", ""); } }
+                    if UiData.update-available && !UiData.update-busy: ActionButton { text: "下载安装"; primary: true; clicked => { UiActions.dispatch(Intent.install-update, "", ""); } }
+                }
+                if UiData.update-downloading: Rectangle { height: 3px; background: Theme.subtle-line;
+                    Rectangle { x: 0px; y: 0px; width: parent.width * UiData.update-fraction; height: parent.height; background: Theme.accent; }
+                }
+            }
+            Rectangle {
+                vertical-stretch: 1; min-height: 0px;
+                if UiData.page == 0: HomePage { }
+                if UiData.page == 1: ProxiesPage { }
+                if UiData.page == 2: SubscriptionsPage { }
+                if UiData.page == 3: ConnectionsPage { }
+                if UiData.page == 4: RulesPage { }
+                if UiData.page == 5: LogsPage { }
+                if UiData.page == 6: NetworkPage { }
+                if UiData.page == 7: IpCheckPage { }
+                if UiData.page == 8: AiCheckPage { }
+                if UiData.page == 9: SettingsPage { }
+            }
+        }
+    }
+    if UiData.modal != 0: AppDialog { }
+    }
+}
