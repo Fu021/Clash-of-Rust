@@ -316,6 +316,10 @@ def main():
         run([ADB,'shell','settings','put','global','private_dns_mode','off'])
         run([ADB,'shell','input','keyevent','KEYCODE_WAKEUP'])
         run([ADB,'shell','wm','dismiss-keyguard'])
+        # Standard UI-test setup: the launcher's animated input sink can outlive
+        # Activity.onResume. Keep system transitions deterministic in CI only.
+        for setting in ('window_animation_scale','transition_animation_scale','animator_duration_scale'):
+            run([ADB,'shell','settings','put','global',setting,'0'])
     elif args.operation=='build': build(args.arch)
     elif args.operation=='export': export_build(args.arch)
     elif args.operation=='test': test(args.arch)

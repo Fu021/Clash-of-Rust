@@ -21,13 +21,14 @@ public class ProxyTunTest {
     private static void pointer(int action,float x,float y,long down,long now) {
         MotionEvent event=MotionEvent.obtain(down,now,action,x,y,0);
         event.setSource(android.view.InputDevice.SOURCE_TOUCHSCREEN);
-        try { InstrumentationRegistry.getInstrumentation().sendPointerSync(event); }
+        try { assertTrue("Android rejected touch input", InstrumentationRegistry.getInstrumentation().getUiAutomation().injectInputEvent(event,true)); }
         finally {event.recycle();}
     }
     private static void tap(float x,float y) {
         long start=SystemClock.uptimeMillis();
         pointer(MotionEvent.ACTION_DOWN,x,y,start,start);
-        pointer(MotionEvent.ACTION_UP,x,y,start,start+50);
+        SystemClock.sleep(50);
+        pointer(MotionEvent.ACTION_UP,x,y,start,SystemClock.uptimeMillis());
     }
     private static void shell(String command) throws Exception {
         try (InputStream in=new android.os.ParcelFileDescriptor.AutoCloseInputStream(
@@ -70,6 +71,7 @@ public class ProxyTunTest {
         await("Activity did not reach the background",()->inStage(androidx.test.runner.lifecycle.Stage.STOPPED,false));
         shell("am start -W -n org.clashofrust.android/.MainActivity");
         await("Activity did not resume with window focus",()->inStage(androidx.test.runner.lifecycle.Stage.RESUMED,true));
+        waitForAppWindow();
         // Actual pointer navigation proves the resumed UI is processing new events.
         tab(1,1);tab(0,0);
         android.app.UiAutomation automation=InstrumentationRegistry.getInstrumentation().getUiAutomation();
@@ -88,6 +90,14 @@ public class ProxyTunTest {
         }
         assertTrue(MainActivity.diagnostics().optBoolean("core_running"));
     }
+    private static void waitForAppWindow() throws Exception {
+        android.app.UiAutomation automation=InstrumentationRegistry.getInstrumentation().getUiAutomation();
+        automation.waitForIdle(500,10000);
+        await("Clash window is not the active input window",()-> {
+            android.view.accessibility.AccessibilityNodeInfo root=automation.getRootInActiveWindow();
+            return root!=null && "org.clashofrust.android".contentEquals(root.getPackageName());
+        });
+    }
     private static boolean inStage(androidx.test.runner.lifecycle.Stage stage,boolean focused) {
         java.util.concurrent.atomic.AtomicBoolean matched=new java.util.concurrent.atomic.AtomicBoolean();
         InstrumentationRegistry.getInstrumentation().runOnMainSync(()-> {
@@ -104,7 +114,7 @@ public class ProxyTunTest {
             if (condition.ready()) return;
             Thread.sleep(100);
         }
-        fail(message);
+        fail(message+"; actual UI: "+MainActivity.diagnostics());
     }
     private static String value(String yaml, String name) {
         for (String line : yaml.split("\n")) {
@@ -127,6 +137,8 @@ public class ProxyTunTest {
         Context context = InstrumentationRegistry.getInstrumentation().getTargetContext();
         context.startActivity(new Intent(context, MainActivity.class).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK));
         await("Native UI did not start its core; inspect logcat", CoreBridge::ready);
+        await("Activity did not receive focus",()->inStage(androidx.test.runner.lifecycle.Stage.RESUMED,true));
+        waitForAppWindow();
         verifyPresentation();
         String raw = CoreBridge.config();
         String secret = value(raw,"secret");
