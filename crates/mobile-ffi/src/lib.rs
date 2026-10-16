@@ -47,9 +47,9 @@ pub struct Snapshot {
     at: Instant,
 }
 impl Snapshot {
-    pub async fn fetch(api: &Api, page: i32) -> Result<Self> {
+    pub async fn fetch(api: &Api, page: i32, refresh_route: bool) -> Result<Self> {
         let proxies = async {
-            if matches!(page, 0 | 1) {
+            if refresh_route || matches!(page, 0 | 1) {
                 api.get("proxies").await.map(Some)
             } else {
                 Ok(None)
@@ -224,11 +224,12 @@ impl Session {
         tx.stage(&self.store.runtime().join("config.yaml"), raw.as_bytes())?;
         tx.prepare()?;
         let protection_changed = self.settings.claude_protection != settings.claude_protection;
-        if protection_changed && self.settings.claude_protection.is_some() {
-            if let Err(error) = self.native.request(json!({"op":"protection-pause"})) {
-                tx.rollback()?;
-                return Err(error);
-            }
+        if protection_changed
+            && self.settings.claude_protection.is_some()
+            && let Err(error) = self.native.request(json!({"op":"protection-pause"}))
+        {
+            tx.rollback()?;
+            return Err(error);
         }
         if self.running
             && let Err(error) = self
@@ -436,6 +437,8 @@ impl Session {
         self.profiles = profiles;
         if let Some(raw) = new_runtime {
             self.route = core::active_route::root(&raw)?;
+            self.node.clear();
+            self.clear_snapshot();
         }
         if self.rule_profile == id {
             self.rule_document = Document::from_raw(&id, false, &raw)?;
@@ -597,7 +600,7 @@ pub async fn prepare_protection(
     raw: &str,
     vpn: bool,
 ) -> Result<core::claude_check::protection::Protection> {
-    use core::claude_check::protection::{Previous, Protection};
+    use crate::core::claude_check::protection::{Previous, Protection};
     let proxies: Proxies = api.get("proxies").await?;
     let root = core::active_route::root(raw)?;
     let mode = if settings.run_mode == "direct" {
@@ -747,7 +750,7 @@ mod tests {
     }
     #[tokio::test]
     async fn mobile_protection_survives_reopen_and_restores_network_preferences() {
-        use core::claude_check::protection::{Previous, Protection};
+        use crate::core::claude_check::protection::{Previous, Protection};
         let root = tempfile::tempdir().unwrap();
         let native = Arc::new(Fake);
         let mut session = Session::open(root.path().into(), native.clone()).unwrap();

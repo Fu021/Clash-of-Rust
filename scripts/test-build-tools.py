@@ -139,6 +139,21 @@ class BuildTests(unittest.TestCase):
             local_cache.unpack(archive, [root/'restored'])
             self.assertEqual((root/'restored/Cargo.lock').read_bytes(), b'locked source versions')
 
+    def test_unchanged_archives_ignore_temporary_locks_and_need_no_reupload(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            (root/'module.zip').write_bytes(b'cached source')
+            fingerprint = local_cache.fingerprint([root])
+            (root/'download.lock').write_bytes(b'temporary lock')
+            self.assertEqual(local_cache.fingerprint([root]), fingerprint)
+            config = {'kind':'archives', 'available':True, 'save':True, 'hit':False,
+                      'fingerprint':fingerprint}
+            with patch.object(local_cache, 'cache_paths', return_value=[root]), \
+                 patch.object(local_cache, 'cache_report') as report, patch.object(local_cache, 'pack') as pack:
+                local_cache.save(config)
+                pack.assert_not_called()
+                self.assertIn('unchanged', report.call_args.args[2])
+
     def test_source_dependency_network_failure_restores_previous_snapshot_but_bad_constraints_fail(self):
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
@@ -172,6 +187,39 @@ class BuildTests(unittest.TestCase):
                 self.assertEqual(build_inputs.resource_release('mihomo', path), cached)
                 with self.assertRaisesRegex(RuntimeError, 'no verified'):
                     build_inputs.resource_release('mihomo', path, version='v9.0.0')
+
+    def test_cache_login_restores_mac_dns_including_automatic_search_domains(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            original = {'dnsservers':['9.9.9.9','2620:fe::fe'], 'searchdomains':[]}
+            state = copy.deepcopy(original)
+            def get(command, **kwargs):
+                values = state[command[1][4:]]
+                return '\n'.join(values) if values else "There aren't any Search Domains set on Ethernet."
+            def set_value(command, **kwargs):
+                values = command[5:]
+                state[command[3][4:]] = [] if values == ['Empty'] else values
+            with patch.object(local_cache.sys, 'platform', 'darwin'), \
+                 patch.object(local_cache, 'Path', side_effect=lambda path: root/path), \
+                 patch.object(local_cache.subprocess, 'check_output', side_effect=get), \
+                 patch.object(local_cache.subprocess, 'run', side_effect=set_value):
+                local_cache.preserve_network()
+                state.update(dnsservers=['100.100.100.100'], searchdomains=['tailnet.example'])
+                local_cache.preserve_network(restore=True)
+            self.assertEqual(state, original)
+
+    def test_nsis_version_query_failure_uses_only_verified_cached_compiler(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            compiler = root/'tools/nsis/current/makensis.exe'
+            compiler.parent.mkdir(parents=True)
+            compiler.write_bytes(b'verified compiler')
+            (root/'tools/nsis/tool.json').write_text(json.dumps({'compiler_sha256':build.sha256(compiler)}))
+            with patch.object(build, 'ROOT', root), patch.object(build_inputs, 'component', return_value=None), \
+                 patch.object(build_inputs, 'nsis_release', side_effect=urllib.error.URLError('unavailable')):
+                self.assertEqual(build.nsis(), compiler)
+                compiler.write_bytes(b'corrupt')
+                with self.assertRaises(urllib.error.URLError): build.nsis()
 
     def test_android_dependency_retry_is_bounded_and_keeps_compiler_errors(self):
         def process(status, output):

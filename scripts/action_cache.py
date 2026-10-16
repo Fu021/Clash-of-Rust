@@ -16,6 +16,7 @@ import shutil
 import socket
 import sqlite3
 import subprocess
+import sys
 import tarfile
 import tempfile
 import threading
@@ -42,7 +43,10 @@ def fingerprint(paths):
     for index, root in enumerate(paths):
         root = Path(root)
         for path in sorted(root.rglob('*')) if root.is_dir() else [root]:
-            if path.is_file() and not path.is_symlink():
+            parts = path.relative_to(root).parts if path != root else (path.name,)
+            if (path.is_file() and not path.is_symlink()
+                    and not any(p in ('incremental', '__pycache__') for p in parts)
+                    and (not path.name.endswith('.lock') or path.name == 'Cargo.lock')):
                 value.update(str(index).encode())
                 value.update((path.relative_to(root).as_posix() if path != root else '.').encode())
                 value.update(digest(path).encode())
@@ -277,8 +281,8 @@ def save(config):
     paths = cache_paths(config)
     if not any(p.exists() for p in paths):
         return
-    if config.get('hit') and (config['kind'] == 'rust'
-                             or config.get('fingerprint') == fingerprint(paths)):
+    if ((config.get('hit') and config['kind'] == 'rust')
+            or (config['kind'] != 'rust' and config.get('fingerprint') == fingerprint(paths))):
         cache_report(config, 'save', 'unchanged; reused existing cache')
         return
     with tempfile.TemporaryDirectory(prefix='actions-cache-', dir=os.environ.get('RUNNER_TEMP')) as temporary:
@@ -526,13 +530,38 @@ def inventory():
     print('Saved authenticated private cache inventory:', output)
 
 
+def preserve_network(restore=False):
+    """The upstream macOS login action overwrites Ethernet DNS even with accept-dns=false."""
+    if sys.platform != 'darwin':
+        return
+    snapshot = Path('target/cache-network.json')
+    if restore:
+        value = json.loads(snapshot.read_text())
+        for kind in ('dnsservers', 'searchdomains'):
+            subprocess.run(['sudo', '-n', 'networksetup', '-set'+kind, 'Ethernet',
+                            *(value[kind] or ['Empty'])], check=True)
+        print('Restored original runner DNS and search domains after cache login.')
+        return
+    value = {}
+    for kind in ('dnsservers', 'searchdomains'):
+        text = subprocess.check_output(['networksetup', '-get'+kind, 'Ethernet'], text=True).strip()
+        value[kind] = [] if text.startswith(("There aren't any", "You haven't set")) else text.splitlines()
+        if kind == 'dnsservers':
+            for address in value[kind]:
+                ipaddress.ip_address(address)
+    snapshot.parent.mkdir(parents=True, exist_ok=True)
+    write_json(snapshot, value)
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument('operation', choices=('restore', 'save', 'serve', 'status', 'inventory'))
+    parser.add_argument('operation', choices=('restore', 'save', 'serve', 'status', 'inventory', 'network-save', 'network-restore'))
     parser.add_argument('--state', type=Path)
     parser.add_argument('--root', type=Path, default=DEFAULT_ROOT)
     args = parser.parse_args()
-    if args.operation == 'inventory':
+    if args.operation in ('network-save', 'network-restore'):
+        preserve_network(args.operation == 'network-restore')
+    elif args.operation == 'inventory':
         inventory()
     elif args.operation == 'serve':
         serve(args.root)

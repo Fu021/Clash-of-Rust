@@ -13,7 +13,12 @@ final class ProtectionRuntime {
     private static volatile Context context;
     private static native String nativeConfigure(String json);
     private static native String nativeState();
+    private static native String nativeRecover(String root);
     private ProtectionRuntime() {}
+    static synchronized void recover(Context owner) throws Exception {
+        JSONObject response = new JSONObject(nativeRecover(new File(owner.getFilesDir(),"client").getAbsolutePath()));
+        if (response.has("error")) throw new IOException(response.getString("error"));
+    }
     static synchronized void pause(Context owner) throws Exception {
         context = owner.getApplicationContext();
         JSONObject response = new JSONObject(nativeConfigure("{\"enabled\":false}"));

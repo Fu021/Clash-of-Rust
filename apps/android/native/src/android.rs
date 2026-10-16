@@ -599,8 +599,8 @@ async fn run_loop(
                             }
                             let mut next=before;
                             next.claude_protection=Some(Arc::new(protection));
-                            state.session.native.request(json!({"op":"vpn-plan","enabled":true}))?;
                             state.session.commit_settings(next)?;
+                            state.session.native.request(json!({"op":"vpn-plan","enabled":true}))?;
                             state.guard_snapshot=Default::default();
                             state.session.native.request(json!({"op":"reconnect"}))?;
                             state.protection_status="正在连接保护 VPN，请完成系统授权…".into();
@@ -687,15 +687,18 @@ async fn run_loop(
             } else if state.session.running && refresh_job.is_none() {
                 let api = state.session.api.clone();
                 let page = if state.visible { state.page } else { -1 };
+                let refresh_route = state.visible && state.session.proxies.proxies.is_empty();
                 let generation = refresh_generation;
                 let send = updates.clone();
                 refresh_job = Some(tokio::spawn(async move {
-                    let result =
-                        tokio::time::timeout(Duration::from_secs(3), Snapshot::fetch(&api, page))
-                            .await
-                            .context("控制接口刷新超时")
-                            .and_then(|result| result)
-                            .map_err(|error| format!("{error:#}"));
+                    let result = tokio::time::timeout(
+                        Duration::from_secs(3),
+                        Snapshot::fetch(&api, page, refresh_route),
+                    )
+                    .await
+                    .context("控制接口刷新超时")
+                    .and_then(|result| result)
+                    .map_err(|error| format!("{error:#}"));
                     let _ = send.send(Update::Snapshot(generation, result)).await;
                 }));
             }

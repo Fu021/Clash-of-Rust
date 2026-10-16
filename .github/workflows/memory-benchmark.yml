@@ -72,6 +72,13 @@ jobs:
       - uses: actions/setup-python@v6
         with:
           python-version: '3.11'
+      - name: Remember original macOS DNS before cache login
+        if: runner.os == 'macOS'
+        id: original_dns
+        shell: python
+        run: |
+          import subprocess, sys
+          subprocess.run([sys.executable, 'scripts/action_cache.py', 'network-save'], check=True)
       - name: Connect to private cache network
         id: tailnet
         if: vars.TS_OAUTH_CLIENT_ID != '' && vars.TS_AUDIENCE != ''
@@ -87,6 +94,12 @@ jobs:
           timeout: 45s
           args: --accept-dns=false
           tailscaled-args: --tun=userspace-networking --outbound-http-proxy-listen=127.0.0.1:19082
+      - name: Restore macOS DNS after cache login
+        if: always() && runner.os == 'macOS' && steps.original_dns.outcome == 'success'
+        shell: python
+        run: |
+          import subprocess, sys
+          subprocess.run([sys.executable, 'scripts/action_cache.py', 'network-restore'], check=True)
       - name: Preserve host routing after private cache login
         if: steps.tailnet.outcome == 'success'
         shell: python

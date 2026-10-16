@@ -46,6 +46,7 @@ public final class CoreBridge {
     public static synchronized boolean ready() { return started; }
     public static synchronized void restore(Context context) throws Exception {
         if (started) return;
+        ProtectionRuntime.recover(context);
         File runtime = new File(context.getFilesDir(), "client/runtime/config.yaml");
         File settings = new File(context.getFilesDir(), "client/settings.json");
         if (!runtime.isFile() || !settings.isFile() || runtime.length() > 20 * 1024 * 1024 || settings.length() > 10 * 1024 * 1024)

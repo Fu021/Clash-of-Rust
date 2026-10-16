@@ -40,6 +40,26 @@ static STATE: Mutex<(bool, core::claude_check::guard::Snapshot)> = Mutex::new((
     },
 ));
 
+#[unsafe(no_mangle)]
+pub extern "system" fn Java_org_clashofrust_android_ProtectionRuntime_nativeRecover(
+    mut env: JNIEnv<'_>,
+    _: JClass<'_>,
+    root: JString<'_>,
+) -> jni::sys::jstring {
+    let result = (|| -> Result<()> {
+        let root: String = env.get_string(&root)?.into();
+        core::profile_transaction::recover(std::path::Path::new(&root))?;
+        Ok(())
+    })();
+    let response = match result {
+        Ok(()) => json!({"ok":true}),
+        Err(error) => json!({"error":format!("恢复配置事务失败：{error:#}")}),
+    };
+    env.new_string(response.to_string())
+        .map(JString::into_raw)
+        .unwrap_or(std::ptr::null_mut())
+}
+
 struct Notifications {
     vm: JavaVM,
     class: GlobalRef,

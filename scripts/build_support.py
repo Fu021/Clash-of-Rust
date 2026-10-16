@@ -2,6 +2,7 @@
 import contextlib
 import ctypes
 import hashlib
+import http.client
 import json
 import os
 import platform
@@ -288,7 +289,7 @@ def nsis(proxy=''):
         finally:
             installer.unlink(missing_ok=True)
             shutil.rmtree(stage, ignore_errors=True)
-    except (OSError, ValueError, subprocess.SubprocessError):
+    except (OSError, ValueError, http.client.HTTPException, subprocess.SubprocessError):
         if not valid or not compiler.is_file() or sha256(compiler) != previous['compiler_sha256']:
             raise
         print('::warning::NSIS upstream unavailable; using the verified cached installer compiler.')
