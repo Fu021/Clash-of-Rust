@@ -44,8 +44,15 @@ public final class TunnelService extends VpnService {
                 .addAddress("198.18.0.1", 30).addRoute("0.0.0.0", 0).addDnsServer("198.18.0.2");
             if (ipv6) builder.addAddress("fdfe:dcba:9876::1", 126).addRoute("::", 0).addDnsServer("fdfe:dcba:9876::2");
             // Do not allow IPv6 to escape the VPN when disabled: omitting its family blocks it.
-            for (String name : getSharedPreferences("vpn", MODE_PRIVATE).getStringSet("excluded", Collections.emptySet()))
-                builder.addDisallowedApplication(name);
+            java.util.Set<String> exclusions=getSharedPreferences("vpn", MODE_PRIVATE).getStringSet("excluded",Collections.emptySet());
+            java.util.Set<String> valid=new java.util.HashSet<>();
+            for (String name : exclusions) {
+                try {builder.addDisallowedApplication(name);valid.add(name);}
+                catch (android.content.pm.PackageManager.NameNotFoundException removed) {
+                    android.util.Log.i("ClashOfRust","Removed an uninstalled application from VPN exclusions");
+                }
+            }
+            if (!valid.equals(exclusions)) getSharedPreferences("vpn",MODE_PRIVATE).edit().putStringSet("excluded",valid).apply();
             if (Build.VERSION.SDK_INT >= 29) builder.setMetered(false);
             Intent open = new Intent(this, MainActivity.class);
             builder.setConfigureIntent(PendingIntent.getActivity(this, 0, open, PendingIntent.FLAG_IMMUTABLE | PendingIntent.FLAG_UPDATE_CURRENT));

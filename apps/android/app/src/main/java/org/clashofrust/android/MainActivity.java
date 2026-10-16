@@ -33,7 +33,13 @@ public final class MainActivity extends NativeActivity {
         if (Build.VERSION.SDK_INT >= 33) getOnBackInvokedDispatcher().registerOnBackInvokedCallback(
             android.window.OnBackInvokedDispatcher.PRIORITY_DEFAULT, () -> emit("back",true));
     }
-    @Override public void onBackPressed() { emit("back",true); }
+    // NativeActivity cannot use ComponentActivity. API 33+ dispatches through
+    // OnBackInvokedDispatcher above; this entry is solely for API 26–32.
+    @android.annotation.SuppressLint("GestureBackNavigation")
+    @Override public void onBackPressed() {
+        if (Build.VERSION.SDK_INT < 33) emit("back",true);
+        else super.onBackPressed();
+    }
     @Override protected void onResume() { super.onResume(); emit("visible", true); }
     @Override protected void onPause() { emit("visible", false); super.onPause(); }
 

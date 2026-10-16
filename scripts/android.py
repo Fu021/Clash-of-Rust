@@ -133,7 +133,13 @@ def build(arch):
          '-javapkg', 'org.clashofrust.nativecore', '-ldflags=-s -w -extldflags=-Wl,-z,max-page-size=16384',
          '-o', aar, '.'], cwd=core, env=env)
     seed_assets()
-    run(gradle('assembleRelease', 'assembleReleaseAndroidTest', 'lintRelease', arch=arch), cwd=ROOT)
+    try:
+        run(gradle('assembleRelease', 'assembleReleaseAndroidTest', 'lintRelease', arch=arch), cwd=ROOT)
+    finally:
+        report=ROOT/'target/android-report'/arch
+        report.mkdir(parents=True,exist_ok=True)
+        for path in (ANDROID/'app/build/reports').glob('lint-results-release.*'):
+            shutil.copy2(path,report/path.name)
     apk = ANDROID/'app/build/outputs/apk/release/app-release.apk'
     sizes = validate_apk(apk, arch)
     report = {'commit':commit(), 'arch':arch, 'version':package_version(), **sizes}
@@ -213,6 +219,8 @@ def test(arch, apk=None, test_apk=None):
         log = subprocess.run([ADB,'logcat','-d','-v','threadtime'],capture_output=True,text=True,timeout=30)
         (report/'logcat.txt').write_text(log.stdout)
     print(result.stdout, flush=True)
+    if 'Android startup:' in log.stdout or 'Mobile runtime stopped:' in log.stdout:
+        raise RuntimeError('Native Android UI/runtime failed; inspect logcat')
     if result.returncode or 'FAILURES!!!' in result.stdout or 'OK (' not in result.stdout:
         raise RuntimeError('Android real proxy/TUN integration test failed')
 
