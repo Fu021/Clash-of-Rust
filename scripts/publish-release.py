@@ -22,7 +22,7 @@ from build_support import ROOT, opener, sha256, validate_version, manifest_versi
 CI_JOBS = {
     'windows-x64', 'windows-arm64', 'linux-x64', 'linux-arm64', 'macos-x64', 'macos-arm64',
 }
-CI_JOBS |= {'android-arm64', 'android-armv7', 'android-x64'}
+CI_JOBS |= {'android-arm64', 'android-armv7', 'android-x64', 'Actions cache budget'}
 PACKAGES = {
     'package-windows-x64': 'windows-x64-setup.exe',
     'package-windows-arm64': 'windows-arm64-setup.exe',

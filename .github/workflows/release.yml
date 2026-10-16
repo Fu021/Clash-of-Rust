@@ -11,6 +11,8 @@ on:
         required: false
         default: false
         type: boolean
+env:
+  SEGMENT_DOWNLOAD_TIMEOUT_MINS: '2'
 permissions:
   actions: read
   contents: read
@@ -105,6 +107,14 @@ jobs:
           import subprocess
           subprocess.run(['sudo', 'apt-get', 'update'], check=True)
           subprocess.run(['sudo', 'apt-get', 'install', '-y', 'dpkg-dev', 'dbus', 'iproute2', 'util-linux', 'libcap2-bin', 'xvfb', 'x11-utils'], check=True)
+      - name: Cache Windows installer compiler
+        if: runner.os == 'Windows'
+        uses: actions/cache@v5
+        timeout-minutes: 5
+        continue-on-error: true
+        with:
+          path: tools/nsis
+          key: tools-nsis-3.13-v1
       - name: Fetch verified native build
         env:
           GH_TOKEN: ${{ github.token }}
@@ -279,3 +289,24 @@ jobs:
           if os.environ['CHECK_ONLY'] == 'true':
               command.append('--check')
           subprocess.run(command, check=True)
+  cache_budget:
+    name: Actions cache budget
+    needs: [publish]
+    if: always()
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: read
+      actions: write
+    concurrency:
+      group: actions-cache-budget
+      cancel-in-progress: false
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+      - name: Trim obsolete dependencies and enforce 8 GiB cache budget
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PYTHONDONTWRITEBYTECODE: '1'
+        run: python3 scripts/workflow_storage.py

@@ -34,6 +34,20 @@ def commit():
     return subprocess.check_output(['git', 'rev-parse', 'HEAD'], cwd=ROOT, text=True).strip()
 
 
+def ensure_binding_tool(name):
+    package = 'golang.org/x/mobile/cmd/' + name
+    executable = shutil.which(name)
+    if executable:
+        metadata = subprocess.run(['go', 'version', '-m', executable], text=True, capture_output=True)
+        records = [line.split() for line in metadata.stdout.splitlines()]
+        if metadata.returncode == 0 and ['path', package] in records and any(
+                len(record) >= 3 and record[:2] == ['mod', 'golang.org/x/mobile']
+                and record[2].endswith('-' + MOBILE_TOOL[:12]) for record in records):
+            print('Reusing verified binding tool:', name, flush=True)
+            return
+    run(['go', 'install', package + '@' + MOBILE_TOOL])
+
+
 def gradle(*args, arch=None):
     code = 1_000_000 + int(os.environ.get('GITHUB_RUN_NUMBER', '1'))
     command = ['gradle', '--no-daemon', '-p', ANDROID, '-PappVersion=' + package_version(), '-PappVersionCode=' + str(code)]
@@ -138,8 +152,8 @@ def build(arch):
     destination.mkdir(parents=True, exist_ok=True)
     shutil.copy2(ROOT/'target'/target/'release/libclash_mobile.so', destination)
     # Android's supported backend is Skia, not the desktop software renderer.
-    run(['go', 'install', 'golang.org/x/mobile/cmd/gomobile@'+MOBILE_TOOL])
-    run(['go', 'install', 'golang.org/x/mobile/cmd/gobind@'+MOBILE_TOOL])
+    ensure_binding_tool('gomobile')
+    ensure_binding_tool('gobind')
     env['ANDROID_NDK_HOME'] = str(ndk)
     core = ANDROID/'core'
     run(['go', 'mod', 'tidy'], cwd=core, env=env)

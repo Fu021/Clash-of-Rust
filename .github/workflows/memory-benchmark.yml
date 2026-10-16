@@ -28,6 +28,8 @@ on:
         description: '每个 GUI 场景的采样秒数'
         type: string
         default: '10'
+env:
+  SEGMENT_DOWNLOAD_TIMEOUT_MINS: '2'
 permissions:
   contents: read
 jobs:
@@ -65,10 +67,14 @@ jobs:
           persist-credentials: false
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
+        timeout-minutes: 5
+        continue-on-error: true
         with:
           workspaces: source -> target
           prefix-key: memory-ubuntu22-${{ inputs.profile }}
           cache-on-failure: true
+          cache-bin: false
+          cache-workspace-crates: false
       - uses: actions/setup-python@v6
         with:
           python-version: '3.11'
@@ -100,3 +106,24 @@ jobs:
           path: dist/memory
           if-no-files-found: warn
           retention-days: 30
+  cache_budget:
+    name: Actions cache budget
+    needs: [benchmark]
+    if: always()
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: read
+      actions: write
+    concurrency:
+      group: actions-cache-budget
+      cancel-in-progress: false
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+      - name: Trim obsolete dependencies and enforce 8 GiB cache budget
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PYTHONDONTWRITEBYTECODE: '1'
+        run: python3 scripts/workflow_storage.py

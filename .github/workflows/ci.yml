@@ -3,6 +3,8 @@ on:
   push:
     branches: [main]
   pull_request:
+env:
+  SEGMENT_DOWNLOAD_TIMEOUT_MINS: '2'
 permissions:
   contents: read
 concurrency:
@@ -37,20 +39,42 @@ jobs:
           targets: ${{ matrix.target }}
           components: clippy
       - uses: Swatinem/rust-cache@v2
+        timeout-minutes: 5
+        continue-on-error: true
         with:
           prefix-key: android-${{ matrix.arch }}
           cache-on-failure: true
+          cache-bin: false
+          cache-workspace-crates: false
+          save-if: ${{ github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository }}
       - uses: actions/setup-java@v5
         with:
           distribution: temurin
           java-version: '17'
       - uses: actions/setup-go@v6
+        id: go
         with:
           go-version-file: apps/android/core/go.mod
+          # Cache modules/tools below; the Go build directory is disposable.
           cache: false
+      - name: Cache Android Go dependencies and binding tools
+        uses: actions/cache@v5
+        timeout-minutes: 5
+        continue-on-error: true
+        with:
+          path: |
+            ~/go/pkg/mod
+            ~/go/bin/gomobile
+            ~/go/bin/gobind
+          key: android-go-${{ runner.os }}-${{ runner.arch }}-${{ steps.go.outputs.go-version }}-${{ hashFiles('apps/android/core/go.mod', 'apps/android/core/go.sum') }}
+          restore-keys: android-go-${{ runner.os }}-${{ runner.arch }}-${{ steps.go.outputs.go-version }}-
       - uses: gradle/actions/setup-gradle@v5
         with:
           gradle-version: '8.13'
+          # One matrix leg writes the shared downloaded modules, not one per ABI.
+          cache-read-only: ${{ matrix.arch != 'x64' }}
+          cache-cleanup: on-success
+          gradle-home-cache-includes: caches/modules-2
       - name: Load stable development signature when configured
         shell: python
         env:
@@ -169,9 +193,14 @@ jobs:
           toolchain: stable-${{ matrix.target }}
           components: rustfmt, clippy
       - uses: Swatinem/rust-cache@v2
+        timeout-minutes: 5
+        continue-on-error: true
         with:
           prefix-key: native-release-${{ matrix.os }}
           cache-on-failure: true
+          cache-bin: false
+          cache-workspace-crates: false
+          save-if: ${{ github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository }}
       - uses: actions/setup-python@v6
         with:
           python-version: ${{ matrix.python }}
@@ -187,10 +216,14 @@ jobs:
           with open(os.environ['GITHUB_OUTPUT'], 'a') as output:
               output.write('day=' + datetime.datetime.now(datetime.timezone.utc).strftime('%Y-%m-%d') + '\n')
       - uses: actions/cache@v5
+        timeout-minutes: 5
+        continue-on-error: true
         with:
+          # Only downloaded core/Geo dependencies. Never cache our own binaries.
           path: |
             bin
-            bundle
+            bundle/resources
+            bundle/${{ matrix.system }}-${{ matrix.arch }}/resources
           key: resources-${{ matrix.system }}-${{ matrix.arch }}-${{ hashFiles('scripts/prepare-resources.py', 'scripts/build_support.py') }}-${{ steps.environment.outputs.day }}
           restore-keys: |
             resources-${{ matrix.system }}-${{ matrix.arch }}-${{ hashFiles('scripts/prepare-resources.py', 'scripts/build_support.py') }}-
@@ -239,3 +272,31 @@ jobs:
           if-no-files-found: error
           compression-level: 0
           retention-days: 14
+  cache_budget:
+    name: Actions cache budget
+    needs: [android, check]
+    if: always()
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: read
+      actions: write
+    concurrency:
+      group: actions-cache-budget
+      cancel-in-progress: false
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          persist-credentials: false
+      - name: Trim obsolete dependencies and enforce 8 GiB cache budget
+        shell: python
+        env:
+          GH_TOKEN: ${{ github.token }}
+          CACHE_READ_ONLY: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name != github.repository }}
+          PYTHONDONTWRITEBYTECODE: '1'
+        run: |
+          import os, subprocess, sys
+          command = [sys.executable, 'scripts/workflow_storage.py']
+          if os.environ['CACHE_READ_ONLY'] == 'true': command.append('--read-only')
+          subprocess.run(command, check=True)

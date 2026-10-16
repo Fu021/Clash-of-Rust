@@ -11,6 +11,7 @@ import unittest
 from unittest.mock import patch
 import build_support as build
 import android as android_build
+import workflow_storage as storage
 import copy
 import importlib.util
 import io
@@ -28,6 +29,64 @@ _defender_spec.loader.exec_module(defender)
 
 
 class BuildTests(unittest.TestCase):
+    def test_cache_budget_evicts_old_lockfiles_then_least_recently_used_entries(self):
+        def entry(number, key, size, ref='refs/heads/main'):
+            return {'id': number, 'key': key, 'size_in_bytes': size, 'ref': ref,
+                    'last_accessed_at': f'2026-10-16T10:00:{number:02d}Z',
+                    'created_at': f'2026-10-16T09:00:{number:02d}Z'}
+        old = entry(1, 'native-release-linux-check-Linux-x64-aaaaaaaa-bbbbbbbb', 30)
+        new = entry(2, 'native-release-linux-check-Linux-x64-aaaaaaaa-cccccccc', 30)
+        go = entry(3, 'android-go-Linux-X64-version-modules', 40)
+        gradle = entry(4, 'gradle-content-unique-blob', 40)
+        # Stale revisions are removed even below budget; current dependencies
+        # are otherwise preserved. An 80-byte budget also evicts the oldest.
+        self.assertEqual([c['id'] for c in storage.eviction_plan([old, new, go, gradle], 200)], [1])
+        self.assertEqual([c['id'] for c in storage.eviction_plan([old, new, go, gradle], 80)], [1, 2])
+        other_branch = entry(5, old['key'], 30, 'refs/pull/18/merge')
+        self.assertEqual(storage.eviction_plan([new, other_branch], 100), [])
+        self.assertEqual(storage.eviction_plan([gradle], 10), [gradle])
+        with self.assertRaises(ValueError): storage.eviction_plan([], 0)
+
+    def test_cache_cleanup_rechecks_size_and_fork_report_never_deletes(self):
+        entries = [{'id': 1, 'key': 'tool-one', 'ref': 'refs/heads/main', 'size_in_bytes': 30,
+                    'last_accessed_at': '2026-10-15', 'created_at': '2026-10-15'},
+                   {'id': 2, 'key': 'tool-two', 'ref': 'refs/heads/main', 'size_in_bytes': 50,
+                    'last_accessed_at': '2026-10-16', 'created_at': '2026-10-16'}]
+        writes = []
+        def client(path, method='GET'):
+            if method == 'DELETE':
+                writes.append(path)
+                entries[:] = [e for e in entries if not path.endswith('/' + str(e['id']))]
+                return
+            return {'actions_caches': copy.deepcopy(entries)}
+        with patch.dict(build.os.environ, {}, clear=True), patch.object(storage.time, 'sleep'):
+            report = storage.prune(client, 50, read_only=True)
+            self.assertEqual(writes, [])
+            self.assertEqual(report['after'], 80)
+            report = storage.prune(client, 50)
+            self.assertEqual(writes, ['/actions/caches/1'])
+            self.assertEqual(report['after'], 50)
+            self.assertEqual(report['removed'], 1)
+
+    def test_cache_inventory_reads_every_page(self):
+        calls = []
+        def client(path):
+            calls.append(path)
+            return {'actions_caches': list(range(100)) if path.endswith('&page=1') else [100]}
+        self.assertEqual(len(storage.caches(client)), 101)
+        self.assertEqual(calls, ['/actions/caches?per_page=100&page=1', '/actions/caches?per_page=100&page=2'])
+
+    def test_android_binding_cache_requires_the_pinned_tool_metadata(self):
+        expected = 'path\tgolang.org/x/mobile/cmd/gomobile\nmod\tgolang.org/x/mobile\tv0.0.0-date-' + android_build.MOBILE_TOOL[:12] + '\thash\n'
+        with patch.object(android_build.shutil, 'which', return_value='/tools/gomobile'), \
+             patch.object(android_build.subprocess, 'run') as inspect, patch.object(android_build, 'run') as install:
+            inspect.return_value = subprocess.CompletedProcess([], 0, expected, '')
+            android_build.ensure_binding_tool('gomobile')
+            install.assert_not_called()
+            inspect.return_value = subprocess.CompletedProcess([], 0, expected.replace(android_build.MOBILE_TOOL[:12], 'outdated'), '')
+            android_build.ensure_binding_tool('gomobile')
+            install.assert_called_once_with(['go', 'install', 'golang.org/x/mobile/cmd/gomobile@' + android_build.MOBILE_TOOL])
+
     def test_android_identity_accepts_old_and_current_aapt2_but_rejects_wrong_hosts(self):
         identity="package: name='org.clashofrust.android' versionCode='1000281' versionName='0.5.12-dev.1'\n"
         for name in ('sdkVersion','minSdkVersion'):
