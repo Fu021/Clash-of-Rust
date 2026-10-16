@@ -137,14 +137,14 @@ jobs:
           name: macos-${{ github.workflow == 'Rust' && 'ci' || 'package' }}-report-${{ matrix.arch }}
           path: target/macos-report
           if-no-files-found: error
-          retention-days: 14
+          retention-days: 3
       - uses: actions/upload-artifact@v6
         if: runner.os == 'Linux' && matrix.arch == 'x64'
         with:
           name: linux-tun-test-x64
           path: dist/linux-tun-test
           if-no-files-found: error
-          retention-days: 14
+          retention-days: 3
       - uses: actions/upload-artifact@v6
         with:
           name: package-${{ matrix.system }}-${{ matrix.arch }}
@@ -155,7 +155,7 @@ jobs:
             dist/*.sha256
             dist/package-receipt.json
           if-no-files-found: error
-          retention-days: 14
+          retention-days: 3
   ubuntu_latest:
     name: Ubuntu latest-x64 proxy and TUN
     needs: [resolve, package]
@@ -251,14 +251,14 @@ jobs:
             dist/*.sha256
             dist/package-receipt.json
           if-no-files-found: error
-          retention-days: 14
+          retention-days: 3
       - uses: actions/upload-artifact@v6
         if: always() && matrix.arch == 'x64'
         with:
           name: android-package-test-report
           path: target/android-report
           if-no-files-found: warn
-          retention-days: 14
+          retention-days: 3
   publish:
     name: Publish verified release
     needs: [resolve, package, ubuntu_latest, android]
