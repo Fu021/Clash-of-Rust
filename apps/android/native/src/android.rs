@@ -270,7 +270,7 @@ enum Update {
     Claude(std::result::Result<core::claude_check::Report, String>),
     Log(String, String),
     Notice(String),
-    Geo(std::result::Result<(), String>),
+    Geo(std::result::Result<core::geodata::GeoManifest, String>),
     Checked(std::result::Result<Option<core::update::Package>, String>),
     DownloadProgress(u64, u64),
     Downloaded(std::result::Result<(), String>),
@@ -467,8 +467,8 @@ async fn run_loop(
                     Some(Update::Notice(message))=>state.notice=message,
                     Some(Update::Geo(result))=> {
                         state.geo_updating=false;geo_job=None;
-                        match result.and_then(|()|state.session.initialize().map_err(|e|format!("{e:#}"))) {
-                            Ok(())=> {state.geo="已更新".into();state.notice="Geo 数据已更新".into();},
+                        match result.and_then(|manifest|state.session.initialize().map(|()|manifest).map_err(|e|format!("{e:#}"))) {
+                            Ok(manifest)=> {state.geo=manifest.version;state.notice="Geo 数据已更新".into();},
                             Err(error)=>state.notice=format!("Geo 更新失败：{error}"),
                         }
                     }

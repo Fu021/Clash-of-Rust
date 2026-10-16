@@ -6,8 +6,9 @@ use ::windows::{
         System::{
             Com::{
                 CLSCTX_INPROC_SERVER, CoCreateInstance, IPersistFile,
-                StructuredStorage::PROPVARIANT,
+                StructuredStorage::{PROPVARIANT, PVCHF_DEFAULT, PropVariantChangeType},
             },
+            Variant::VT_LPWSTR,
             WinRT::{RO_INIT_MULTITHREADED, RoInitialize, RoUninitialize},
         },
         UI::Shell::{IShellLinkW, PropertiesSystem::IPropertyStore, ShellLink},
@@ -77,7 +78,14 @@ fn register_shortcut() -> Result<()> {
         shortcut.SetPath(PCWSTR(exe.as_ptr()))?;
         shortcut.SetDescription(::windows::core::w!("Clash of Rust"))?;
         let properties: IPropertyStore = shortcut.cast()?;
-        properties.SetValue(&APP_ID_KEY, &PROPVARIANT::from(APP_ID))?;
+        let mut app_id = PROPVARIANT::default();
+        PropVariantChangeType(
+            &mut app_id,
+            &PROPVARIANT::from(APP_ID),
+            PVCHF_DEFAULT,
+            VT_LPWSTR,
+        )?;
+        properties.SetValue(&APP_ID_KEY, &app_id)?;
         properties.Commit()?;
         let file: IPersistFile = shortcut.cast()?;
         file.Save(PCWSTR(destination.as_ptr()), true)?;

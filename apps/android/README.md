@@ -23,7 +23,7 @@ A÷检测目前支持网络、DNS 和自动浏览器采样；桌面项目扫描�
 
 所有编译、测试和构建在现有 CI / Publish Release 中执行，本地无需 Android SDK 或 Rust 构建。
 
-CI 使用 SDK 36、NDK r28、Java 17、Gradle 8.13、Go 1.26 与 Slint 1.18.1；三种 ABI 分别编译，验证 APK 架构和 64 位 ELF 的 16 KiB 对齐。x86_64 Android 模拟器实际启动 Slint 宿主，验证界面内核状态、默认策略组、订阅、标签导航和设置触摸滚动，再验证本机代理 HTTP 转发、系统 TUN 接管、DNS、快捷磁贴连接/断开及路由恢复。结果与 logcat 在 `android-report-*` 附件。
+CI 使用 SDK 36、NDK r28、Java 17、Gradle 8.13、Go 1.26 与 Slint 1.18.1；三种 ABI 分别编译，验证 APK 架构和 64 位 ELF 的 16 KiB 对齐。x86_64 Android 模拟器实际启动 Slint 宿主，验证界面内核状态、默认策略组、订阅、标签导航、设置触摸滚动、后台返回与横竖屏恢复，再验证本机代理 HTTP 转发、系统 TUN 接管、DNS、快捷磁贴连接/断开及路由恢复。结果与 logcat 在 `android-report-*` 附件。
 
 成功 CI 上传 `build-android-{arm64,armv7,x64}`。Publish Release 必须复用对应提交的产物，`check_only` 生成测试 APK 与 SHA256，不合并、不发布；x86_64 包在最终签名后再次运行代理/TUN 测试。APK 按架构提供，现代手机和平板通常选择 ARM64。
 

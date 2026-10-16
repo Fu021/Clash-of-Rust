@@ -100,7 +100,7 @@ mod windows {
             }
             WM_TIMER if wparam == DRAG_TIMER => {
                 // Request a normal winit paint instead of starting a nested Slint event loop.
-                unsafe {
+                let _ = unsafe {
                     ::windows::Win32::Graphics::Gdi::RedrawWindow(
                         Some(::windows::Win32::Foundation::HWND(hwnd)),
                         None,
