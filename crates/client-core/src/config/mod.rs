@@ -440,11 +440,17 @@ pub fn runtime_config_with_rules(
 /// Learn unknown HTTP/SNI/QUIC hostnames without rewriting established destinations.
 /// Keep subscription port/skip choices; protection applies its stricter policy later.
 fn apply_sniffer(map: &mut Mapping) -> Result<()> {
-    let mut sniffer = match map.remove(Value::from("sniffer")) {
-        None | Some(Value::Null) => Mapping::new(),
-        Some(Value::Mapping(sniffer)) => sniffer,
-        _ => bail!("订阅 sniffer 必须是配置对象"),
-    };
+    // Mutate in place: Mapping::remove uses swap removal. A new root key
+    // between tun and dns otherwise changes their order on every regeneration.
+    let sniffer = map
+        .entry(Value::from("sniffer"))
+        .or_insert(Value::Mapping(Mapping::new()));
+    if sniffer.is_null() {
+        *sniffer = Value::Mapping(Mapping::new());
+    }
+    let sniffer = sniffer
+        .as_mapping_mut()
+        .context("订阅 sniffer 必须是配置对象")?;
     for key in ["enable", "parse-pure-ip", "force-dns-mapping"] {
         sniffer.insert(Value::from(key), Value::from(true));
     }
@@ -477,7 +483,6 @@ fn apply_sniffer(map: &mut Mapping) -> Result<()> {
             .or_insert(serde_yaml::from_str(ports)?);
         options.insert(Value::from("override-destination"), Value::from(false));
     }
-    map.insert(Value::from("sniffer"), Value::Mapping(sniffer));
     Ok(())
 }
 
