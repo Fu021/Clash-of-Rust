@@ -117,14 +117,14 @@ def rust_keys(source, compiler, environment):
             dependencies.update((name+'='+value).encode())
     generation = rust_environment_key(compiler, environment) + dependencies.hexdigest()
     sources = hashlib.sha256()
-    for directory in ('apps', 'crates', 'resources', 'scripts'):
+    for directory in ('apps', 'crates', 'resources', 'scripts', '.github'):
         for path in sorted((source/directory).rglob('*')):
             relative = path.relative_to(source/directory).parts
             if not path.is_file() or any(part in ('target', '.gradle', '__pycache__', 'generated-res', 'native-libs', 'offline-assets') for part in relative):
                 continue
             if directory == 'apps' and relative[:3] == ('android', 'app', 'build'):
                 continue
-            if directory != 'resources' and path.suffix not in ('.rs', '.slint', '.toml', '.py'):
+            if directory != 'resources' and path.suffix not in ('.rs', '.slint', '.toml', '.py', '.yml', '.yaml', '.cjs'):
                 continue
             sources.update(path.relative_to(source).as_posix().encode())
             sources.update(path.read_bytes())

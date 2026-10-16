@@ -54,6 +54,12 @@ class BuildTests(unittest.TestCase):
             changed, compatible = local_cache.rust_keys(root, b'compiler one', {})
             self.assertNotEqual(key, changed)
             self.assertEqual(prefix, compatible)
+            (root/'.github/workflows').mkdir(parents=True)
+            workflow = root/'.github/workflows/ci.yml'
+            workflow.write_text('ndk: 28')
+            before = local_cache.rust_keys(root, b'compiler one', {})[0]
+            workflow.write_text('ndk: 29')
+            self.assertNotEqual(before, local_cache.rust_keys(root, b'compiler one', {})[0])
             (root/'Cargo.lock').write_text('slint = 1.19.0')
             new_prefix = local_cache.rust_keys(root, b'compiler one', {})[1]
             self.assertNotEqual(prefix, new_prefix)

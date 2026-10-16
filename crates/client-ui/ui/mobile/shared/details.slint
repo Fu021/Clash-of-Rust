@@ -144,7 +144,10 @@ export component MobileModal inherits Rectangle {
                         : root.seconds > 0 ? "开启保护（" + root.seconds + " 秒）" : "开启保护";
                     clicked => {
                         if MobileView.detail == 4 { MobileActions.request(MobileIntent.delete-profile, MobileView.selected-id, ""); }
-                        else if MobileView.detail == 8 { MobileActions.request(MobileIntent.claude-protection, "true", ""); }
+                        else if MobileView.detail == 8 {
+                            MobileActions.request(MobileIntent.claude-protection, "true", "");
+                            MobileView.detail = 0;
+                        }
                         else {
                             MobileView.draft-dirty = false;
                             if MobileView.pending-detail == 0 { MobileActions.request(MobileIntent.rule-discard, "", ""); }

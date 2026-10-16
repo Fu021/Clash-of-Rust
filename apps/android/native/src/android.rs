@@ -628,10 +628,9 @@ async fn run_loop(
                             state.protection_status="正在连接保护 VPN，请完成系统授权…".into();
                             Ok(())
                         })();
-                        if let Err(error)=applied {
-                            if let Err(restore)=rollback_protection(&mut state,&format!("保护开启失败：{error:#}")) {
-                                state.notice=format!("保护开启失败：{error:#}；恢复失败：{restore:#}");
-                            }
+                        if let Err(error)=applied
+                            && let Err(restore)=rollback_protection(&mut state,&format!("保护开启失败：{error:#}")) {
+                            state.notice=format!("保护开启失败：{error:#}；恢复失败：{restore:#}");
                         }
                         refresh_requested=true;
                     }
