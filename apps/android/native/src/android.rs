@@ -124,6 +124,7 @@ struct ProtectionChange {
     enabled: bool,
     generation: Option<u64>,
     deadline: std::time::Instant,
+    verified: bool,
 }
 struct State {
     session: Session,
@@ -266,6 +267,7 @@ enum Update {
     IpDone(u64),
     Claude(std::result::Result<core::claude_check::Report, String>),
     Protection(std::result::Result<core::claude_check::protection::Protection, String>),
+    ProtectionDns(std::time::Instant, std::result::Result<(), String>),
     Address(u64, String, String),
     Log(String, String),
     Notice(String),
@@ -345,6 +347,7 @@ async fn run_loop(
                     .unwrap_or(0),
             ),
             deadline: std::time::Instant::now() + Duration::from_secs(120),
+            verified: false,
         });
         state.protection_status = "正在恢复保护 VPN…".into();
         if let Err(error) = state.session.native.request(json!({"op":"reconnect"})) {
@@ -355,6 +358,7 @@ async fn run_loop(
     let mut checks: Option<tokio::task::JoinHandle<()>> = None;
     let mut claude_job: Option<tokio::task::JoinHandle<()>> = None;
     let mut protection_job: Option<tokio::task::JoinHandle<()>> = None;
+    let mut protection_dns_job: Option<tokio::task::JoinHandle<()>> = None;
     let mut address_job: Option<tokio::task::JoinHandle<()>> = None;
     let mut address_generation = 0u64;
     let mut log_job: Option<tokio::task::JoinHandle<()>> = None;
@@ -484,9 +488,11 @@ async fn run_loop(
                     }));
                 } else if intent == MobileIntent::ClaudeProtection && request.a == "true" {
                     if state.protection_change.is_none() && state.session.settings.claude_protection.is_none() {
+                        if let Some(job) = protection_dns_job.take() { job.abort(); }
                         state.protection_change = Some(ProtectionChange {
                             before: state.session.settings.clone(), before_vpn: state.session.vpn, enabled: true,
                             generation: None, deadline: std::time::Instant::now()+Duration::from_secs(120),
+                            verified: false,
                         });
                         state.protection_status="正在确认当前代理节点…".into();
                         let api=state.session.api.clone();let settings=state.session.settings.clone();
@@ -561,6 +567,22 @@ async fn run_loop(
             }
             value = update_rx.recv() => {
                 match value {
+                    Some(Update::ProtectionDns(token, result)) => {
+                        if let Some(change) = state.protection_change.as_mut()
+                            && change.deadline == token {
+                            protection_dns_job = None;
+                            match result {
+                                Ok(()) => change.verified = true,
+                                Err(error) => {
+                                    if let Err(restore) = rollback_protection(&mut state, &format!("保护 DNS 验证失败：{error}")) {
+                                        state.notice = format!("保护 DNS 验证失败：{error}；恢复失败：{restore:#}");
+                                    }
+                                }
+                            }
+                            refresh_requested = true;
+                            immediate = true;
+                        }
+                    }
                     Some(Update::Address(generation, id, value)) if generation == address_generation => {
                         address_job = None;
                         state.connection_address = (id, value);
@@ -677,6 +699,36 @@ async fn run_loop(
             if let Err(error) = observe_protection(&mut state) {
                 state.notice = format!("保护状态异常：{error:#}");
                 state.logs.push_back(("ERROR".into(), state.notice.clone()));
+            }
+            if let Some(change) = &state.protection_change
+                && change.enabled
+                && !change.verified
+                && protection_dns_job.is_none()
+                && change.generation.is_some_and(|old| {
+                    state.session.platform["vpn_generation"]
+                        .as_u64()
+                        .unwrap_or(0)
+                        > old
+                })
+                && state.session.vpn
+                && state.guard_snapshot.connected
+            {
+                let api = state.session.api.clone();
+                let token = change.deadline;
+                let send = updates.clone();
+                state.protection_status = "正在验证保护节点与加密 DNS…".into();
+                protection_dns_job = Some(tokio::spawn(async move {
+                    let result = tokio::time::timeout(
+                        Duration::from_secs(20),
+                        api.resolve_domain("www.cloudflare.com"),
+                    )
+                    .await
+                    .context("保护 DNS 查询超时")
+                    .and_then(|value| value)
+                    .map(|_| ())
+                    .map_err(|error| format!("{error:#}"));
+                    let _ = send.send(Update::ProtectionDns(token, result)).await;
+                }));
             }
             if !state.session.running || (!state.visible && !state.session.vpn) {
                 if let Some(job) = refresh_job.take() {
@@ -801,6 +853,9 @@ async fn run_loop(
     if let Some(job) = protection_job {
         job.abort();
     }
+    if let Some(job) = protection_dns_job {
+        job.abort();
+    }
     if let Some(job) = log_job {
         job.abort();
     }
@@ -882,7 +937,8 @@ fn observe_protection(state: &mut State) -> Result<()> {
         let ready = if desired {
             state.session.vpn
                 && generation > change.generation.unwrap_or(0)
-                && (!change.enabled || (active && state.guard_snapshot.connected))
+                && (!change.enabled
+                    || (active && state.guard_snapshot.connected && change.verified))
         } else {
             !state.session.vpn && !active
         };
@@ -1291,6 +1347,7 @@ async fn handle(state: &mut State, request: Request) -> Result<()> {
                 enabled: false,
                 generation: Some(session.platform["vpn_generation"].as_u64().unwrap_or(0)),
                 deadline: std::time::Instant::now() + Duration::from_secs(30),
+                verified: false,
             });
             state.protection_status = "正在恢复原网络状态…".into();
             let result = async {

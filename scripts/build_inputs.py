@@ -1,6 +1,7 @@
 """Resolve one dependency snapshot per CI, then reuse it unchanged for packaging."""
 import argparse
 import base64
+from concurrent.futures import ThreadPoolExecutor
 import datetime
 import hashlib
 import http.client
@@ -117,13 +118,14 @@ def maven_latest(group, artifact, current):
 
 def refresh_command(command, paths, warnings):
     before = {path: (ROOT / path).read_bytes() if (ROOT / path).exists() else None for path in paths}
+    print('Checking source dependencies:', ' '.join(command), flush=True)
     try:
         result = subprocess.run(command, cwd=ROOT, text=True, stdout=subprocess.PIPE,
-                                stderr=subprocess.STDOUT, timeout=300)
+                                stderr=subprocess.STDOUT, timeout=180)
     except subprocess.TimeoutExpired:
         result = subprocess.CompletedProcess(command, 1, 'Dependency metadata refresh timed out')
     if not result.returncode:
-        print('Refreshed source dependencies:', ' '.join(command))
+        print('Refreshed source dependencies:', ' '.join(command), flush=True)
         return
     for path, value in before.items():
         if value is None:
@@ -139,7 +141,7 @@ def refresh_command(command, paths, warnings):
         raise RuntimeError('Dependency resolution failed; this was not a network fallback')
     warning = 'Upstream unavailable; retained compatible cached/repository dependencies: ' + ' '.join(command)
     warnings.append(warning)
-    print('::warning::' + warning)
+    print('::warning::' + warning, flush=True)
 
 
 def resolve(directory):
@@ -157,19 +159,23 @@ def resolve(directory):
                'sccache': lambda: stable_release('mozilla/sccache'),
                'nsis': nsis_release, 'gradle': gradle_release,
                'tailscale': lambda: {'version': read_json('https://pkgs.tailscale.com/stable/?mode=json')['Version']}}
-    for name, query in queries.items():
-        try:
-            value = query()
-            upstream[name] = {**value, 'resolution': 'upstream'}
-        except (OSError, ValueError, KeyError, TypeError, http.client.HTTPException) as error:
-            cached = previous.get('upstream', {}).get(name)
-            if cached:
-                upstream[name] = {**cached, 'resolution': 'cache'}
-                warning = name + ': upstream unavailable (' + type(error).__name__ + '); using cached version'
-            else:
-                warning = name + ': no upstream metadata or previous snapshot; repository/tool default is required'
-            warnings.append(warning)
-            print('::warning::' + warning)
+    with ThreadPoolExecutor(max_workers=len(queries)) as workers:
+        pending = {name: workers.submit(query) for name, query in queries.items()}
+        print('Checking upstream metadata:', ', '.join(queries), flush=True)
+        for name, future in pending.items():
+            try:
+                value = future.result()
+                upstream[name] = {**value, 'resolution': 'upstream'}
+                print(name + ': ' + value.get('version', value.get('tag_name', 'resolved')), flush=True)
+            except (OSError, ValueError, KeyError, TypeError, http.client.HTTPException) as error:
+                cached = previous.get('upstream', {}).get(name)
+                if cached:
+                    upstream[name] = {**cached, 'resolution': 'cache'}
+                    warning = name + ': upstream unavailable (' + type(error).__name__ + '); using cached version'
+                else:
+                    warning = name + ': no upstream metadata or previous snapshot; repository/tool default is required'
+                warnings.append(warning)
+                print('::warning::' + warning, flush=True)
     refresh_command(['cargo', 'update'], ('Cargo.lock',), warnings)
     go = ['go', '-C', str(ROOT / 'apps/android/core')]
     go_files = ('apps/android/core/go.mod', 'apps/android/core/go.sum')

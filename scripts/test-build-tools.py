@@ -190,7 +190,7 @@ class BuildTests(unittest.TestCase):
                 with self.assertRaisesRegex(RuntimeError, 'not a network'):
                     build_inputs.refresh_command(['cargo','update'], ('Cargo.lock',), [])
             with patch.object(build_inputs, 'ROOT', root), patch.object(build_inputs.subprocess, 'run',
-                    side_effect=subprocess.TimeoutExpired(['cargo','update'],300)):
+                    side_effect=subprocess.TimeoutExpired(['cargo','update'],180)):
                 warnings = []
                 build_inputs.refresh_command(['cargo','update'], ('Cargo.lock',), warnings)
                 self.assertTrue(warnings)
