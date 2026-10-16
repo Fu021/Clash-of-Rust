@@ -9,7 +9,7 @@ export enum MobileIntent {
     rule-select, rule-edit, rule-add, rule-save, rule-move, rule-delete, rule-apply, rule-discard,
     rule-shortcut, log-level, clear-logs, export-logs, probe, dns,
     site-start, site-cancel, site-category, site-retest, claude-start, claude-protection, export-report,
-    appearance, accent, text-scale, dns-override, ipv6, udp, save-ports, interval, update-geo,
+    appearance, accent, text-scale, dns-override, ipv6, udp, save-ports, interval, update-geo, check-update, install-update,
 }
 export global MobileActions { callback request(MobileIntent, string, string); }
 
@@ -64,6 +64,7 @@ export global MobileData {
     in-out property <bool> detecting;
     in-out property <float> progress: 1;
     in-out property <string> site-progress;
+    in-out property <string> site-summary;
     in-out property <string> claude-status;
     in-out property <string> geo-status;
     in-out property <string> probe-status: "尚未测试";
@@ -114,12 +115,15 @@ export global MobileView {
     in-out property <length> safe-left;
     in-out property <length> safe-right;
     in-out property <length> keyboard-inset;
+    in-out property <length> settings-scroll-y;
+    in-out property <length> settings-content-height;
+    in-out property <length> settings-viewport-height;
     callback navigate(int);
-    navigate(p) => {
+    navigate(destination) => {
         if self.draft-dirty {
-            self.pending-page = p; self.pending-detail = self.detail; self.detail = 12;
+            self.pending-page = destination; self.pending-detail = self.detail; self.detail = 12;
         } else {
-            self.page = p; self.detail = 0; self.query = ""; self.rule-selected = false;
+            self.page = destination; self.detail = 0; self.query = ""; self.rule-selected = false;
         }
     }
     callback back();

@@ -95,7 +95,7 @@ export component MobileProxies inherits Rectangle {
         for group in MobileData.groups: group-card := MCard {
             property <bool> expanded: group.expanded;
             HorizontalLayout { cross-axis-alignment: center; spacing: 8px;
-                MRow { title: group.title; subtitle: group.detail; value: group-card.expanded ? "收起 ⌃" : "展开 ⌄"; arrow: false;
+                MRow { title: group.title; subtitle: group.detail; value: group-card.expanded ? "收起" : "展开"; expandable: true; expanded: group-card.expanded;
                     clicked => { group-card.expanded = !group-card.expanded; }
                 }
                 if root.width > 580px: MTag { text: group.current; width-limit: 180px; }
@@ -182,7 +182,7 @@ export component MobileRules inherits Rectangle {
             MTag { text: MobileData.rule-dirty ? "尚未应用" : "已载入"; tone: MobileData.rule-dirty ? 2 : 4; }
         }
         MCard {
-            MRow { title: "快捷规则"; value: MobileView.shortcuts-open ? "收起 ⌃" : "展开 ⌄"; arrow: false;
+            MRow { title: "快捷规则"; value: MobileView.shortcuts-open ? "收起" : "展开"; expandable: true; expanded: MobileView.shortcuts-open;
                 clicked => { MobileView.shortcuts-open = !MobileView.shortcuts-open; }
             }
             MSmall { text: "仅补充订阅缺少的规则，补充的规则优先匹配"; wrap: word-wrap; }
@@ -195,7 +195,8 @@ export component MobileRules inherits Rectangle {
         HorizontalLayout { spacing: 8px;
             MField { placeholder: "搜索规则"; text <=> MobileView.query; edited(value) => { MobileActions.request(MobileIntent.query, "rules", value); } }
             MButton { text: "+ 新建"; primary: true; width: 88px; horizontal-stretch: 0;
-                clicked => { MobileView.selected-id = ""; MobileView.rule-payload = ""; MobileView.rule-raw = ""; MobileView.detail = 2; }
+                clicked => { MobileView.selected-id = ""; MobileView.rule-kind = "DOMAIN-SUFFIX"; MobileView.rule-policy = "DIRECT"; MobileView.rule-position = "1";
+                    MobileView.rule-payload = ""; MobileView.rule-raw = ""; MobileView.rule-text-mode = false; MobileView.draft-dirty = false; MobileView.detail = 2; }
             }
         }
         if MobileView.rule-selected: MCard {
@@ -299,7 +300,7 @@ export component MobileIpCheck inherits Rectangle {
                 Image { source: MobileData.exit-flag; width: 24px; height: 24px; image-fit: contain; }
                 MHeading { text: MobileData.exit-country + " · " + MobileData.exit-ip; }
             }
-            MSmall { text: "确认可用 74 · 网页可达 20 · 受限 36"; wrap: word-wrap; }
+            MSmall { text: MobileData.site-summary; wrap: word-wrap; }
         }
         for pair in MobileData.categories: VerticalLayout { spacing: 12px;
             if root.width < 540px: CategoryCard { item: pair.left; }

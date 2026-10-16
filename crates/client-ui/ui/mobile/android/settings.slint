@@ -1,6 +1,6 @@
-import { MobileData, MobileActions, MobileIntent } from "../shared/state.slint";
+import { MobileData, MobileView, MobileActions, MobileIntent } from "../shared/state.slint";
 import { AndroidData, AndroidActions, AndroidIntent } from "state.slint";
-import { MText, MSmall, MHeading, MCard, MButton, MRow, MDivider, MSwitch, MField, MScroll } from "../shared/controls.slint";
+import { MText, MSmall, MHeading, MCard, MButton, MRow, MDivider, MSwitch, MField, MScroll, MProgress } from "../shared/controls.slint";
 import { AppearanceSettings, NetworkToggles, MaintenanceSettings } from "../shared/settings.slint";
 
 component AndroidNetwork inherits VerticalLayout {
@@ -37,11 +37,21 @@ component AndroidConnection inherits VerticalLayout {
 }
 component AndroidAbout inherits MCard {
     MRow { title: "当前版本"; value: MobileData.version; arrow: false; interactive: false; }
-    MSmall { text: AndroidData.update-status; }
-    MButton { text: "检查更新"; clicked => { AndroidActions.request(AndroidIntent.check-update, ""); } }
+    MSmall { text: AndroidData.update-status; wrap: word-wrap; }
+    if AndroidData.update-busy: MProgress { value: AndroidData.update-progress; indeterminate: AndroidData.update-progress == 0; }
+    HorizontalLayout { spacing: 8px;
+        MButton { text: "检查更新"; enabled: !AndroidData.update-busy; clicked => { MobileActions.request(MobileIntent.check-update, "", ""); } }
+        if AndroidData.update-available: MButton { text: "安装更新"; primary: true; enabled: !AndroidData.update-busy;
+            clicked => { MobileActions.request(MobileIntent.install-update, "", ""); }
+        }
+    }
 }
 export component AndroidSettings inherits Rectangle {
     MScroll {
+        content-y <=> MobileView.settings-scroll-y;
+        changed content-height => { MobileView.settings-content-height = self.content-height; }
+        changed height => { MobileView.settings-viewport-height = self.height; }
+        init => { MobileView.settings-content-height = self.content-height; MobileView.settings-viewport-height = self.height; }
         if root.width < 760px: VerticalLayout { alignment: start; spacing: 20px; padding-bottom: 20px;
             AppearanceSettings { } AndroidNetwork { } AndroidConnection { } MaintenanceSettings { } AndroidAbout { }
         }

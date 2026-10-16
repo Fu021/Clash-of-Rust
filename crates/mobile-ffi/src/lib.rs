@@ -13,6 +13,18 @@ pub trait NativeHost: Send + Sync + 'static {
     fn request(&self, value: Value) -> Result<Value>;
 }
 
+/// Native status objects may contain an empty error; only actual failures fail a request.
+pub fn native_response(value: Value) -> Result<Value> {
+    if let Some(message) = value
+        .get("error")
+        .and_then(Value::as_str)
+        .filter(|s| !s.trim().is_empty())
+    {
+        anyhow::bail!("{message}");
+    }
+    Ok(value)
+}
+
 pub struct Session {
     pub store: Store,
     pub settings: Settings,
@@ -489,6 +501,16 @@ pub fn android_safe_config(raw: &str) -> Result<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn normal_native_status_is_not_an_error_and_vpn_errors_do_not_hide_the_core() {
+        for value in [
+            json!({"running":true,"error":""}),
+            json!({"running":true,"vpn_error":"VPN denied"}),
+        ] {
+            assert_eq!(native_response(value).unwrap()["running"], true);
+        }
+        assert!(native_response(json!({"error":"Failed to initialize"})).is_err());
+    }
     struct Fake;
     impl NativeHost for Fake {
         fn request(&self, _: Value) -> Result<Value> {

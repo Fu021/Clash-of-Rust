@@ -50,6 +50,7 @@ android {
     }
     sourceSets["main"].jniLibs.srcDir(layout.projectDirectory.dir("native-libs"))
     sourceSets["main"].assets.srcDir(layout.projectDirectory.dir("offline-assets"))
+    sourceSets["main"].res.srcDir(layout.projectDirectory.dir("generated-res"))
     lint { abortOnError = true }
 }
 dependencies {

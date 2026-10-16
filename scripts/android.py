@@ -46,6 +46,11 @@ def seed_assets():
     from build_support import read_json, download_asset
     target = ANDROID/'app/offline-assets'
     target.mkdir(parents=True, exist_ok=True)
+    # Reuse the approved desktop artwork; Android applies its own launcher mask.
+    logo=ANDROID/'app/generated-res/drawable-nodpi/app_logo.png'
+    logo.parent.mkdir(parents=True,exist_ok=True)
+    shutil.copy2(ROOT/'resources/icon-concepts/app-blue-transparent.png',logo)
+    shutil.copy2(ROOT/'resources/icons/app.png',logo.with_name('notification_logo.png'))
     release = read_json('https://api.github.com/repos/MetaCubeX/meta-rules-dat/releases/latest')
     records = []
     for remote, local in {'geoip.dat':'GeoIP.dat', 'geosite.dat':'GeoSite.dat', 'country.mmdb':'Country.mmdb', 'GeoLite2-ASN.mmdb':'ASN.mmdb'}.items():
@@ -309,6 +314,8 @@ def main():
             time.sleep(2)
         else: raise RuntimeError('Android emulator did not finish booting')
         run([ADB,'shell','settings','put','global','private_dns_mode','off'])
+        run([ADB,'shell','input','keyevent','KEYCODE_WAKEUP'])
+        run([ADB,'shell','wm','dismiss-keyguard'])
     elif args.operation=='build': build(args.arch)
     elif args.operation=='export': export_build(args.arch)
     elif args.operation=='test': test(args.arch)

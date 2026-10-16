@@ -27,6 +27,7 @@ __pycache__/
 /apps/android/app/libs/
 /apps/android/app/native-libs/
 /apps/android/app/offline-assets/
+/apps/android/app/generated-res/
 /apps/android/local.properties
 /apps/android/*.keystore
 

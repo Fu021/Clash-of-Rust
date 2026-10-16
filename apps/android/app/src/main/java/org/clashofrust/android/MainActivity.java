@@ -17,8 +17,12 @@ public final class MainActivity extends NativeActivity {
     static { System.loadLibrary("clash_mobile"); }
     private static final int VPN = 10, OPEN = 11, SAVE = 12, NOTIFICATIONS = 13;
     private boolean vpnPrompt;
+    private boolean tileConnect;
+    boolean waitingForInstallPermission;
     private String exportContent;
     private static native void nativeEvent(String value);
+    private static native String nativeDiagnostics();
+    static JSONObject diagnostics() throws Exception { return new JSONObject(nativeDiagnostics()); }
 
     static void emit(String event, Object value) {
         try { nativeEvent(new JSONObject().put("event", event).put("value", value).toString()); }
@@ -27,11 +31,21 @@ public final class MainActivity extends NativeActivity {
         }
     }
     @Override public void onCreate(Bundle state) {
+        tileConnect=VpnTileService.CONNECT.equals(getIntent().getAction());
         super.onCreate(state);
+        UpdateInstaller.pruneInstalled(this);
         // Let Slint handle native insets; do not install a second padded content view.
         getWindow().setSoftInputMode(android.view.WindowManager.LayoutParams.SOFT_INPUT_ADJUST_RESIZE);
+        configureSystemBars(false);
         if (Build.VERSION.SDK_INT >= 33) getOnBackInvokedDispatcher().registerOnBackInvokedCallback(
             android.window.OnBackInvokedDispatcher.PRIORITY_DEFAULT, () -> emit("back",true));
+    }
+    @Override protected void onNewIntent(Intent intent) {
+        super.onNewIntent(intent); setIntent(intent);
+        if (VpnTileService.CONNECT.equals(intent.getAction())) { tileConnect=true; connectFromTile(); }
+    }
+    private void connectFromTile() {
+        if (tileConnect && CoreBridge.ready()) { tileConnect=false; prepareVpn(); }
     }
     // NativeActivity cannot use ComponentActivity. API 33+ dispatches through
     // OnBackInvokedDispatcher above; this entry is solely for API 26–32.
@@ -40,7 +54,14 @@ public final class MainActivity extends NativeActivity {
         if (Build.VERSION.SDK_INT < 33) emit("back",true);
         else super.onBackPressed();
     }
-    @Override protected void onResume() { super.onResume(); emit("visible", true); }
+    @Override protected void onResume() {
+        super.onResume(); emit("visible", true);
+        if (waitingForInstallPermission) {
+            waitingForInstallPermission=false;
+            if (getPackageManager().canRequestPackageInstalls()) UpdateInstaller.launch(this);
+            else emit("notice","尚未允许安装更新，可在设置页点击安装更新重试");
+        }
+    }
     @Override protected void onPause() { emit("visible", false); super.onPause(); }
 
     /** Invoked by the Rust worker, never performs blocking work on the UI thread. */
@@ -49,7 +70,7 @@ public final class MainActivity extends NativeActivity {
             JSONObject data = new JSONObject(input);
             String op = data.getString("op");
             switch (op) {
-                case "initialize": CoreBridge.start(this, data.getString("config"), data.getBoolean("ipv6")); break;
+                case "initialize": CoreBridge.start(this, data.getString("config"), data.getBoolean("ipv6")); runOnUiThread(this::connectFromTile); break;
                 case "reload": CoreBridge.reload(data.getString("config")); CoreBridge.setIpv6(data.getBoolean("ipv6")); break;
                 case "state": return CoreBridge.state()
                     .put("dark", (getResources().getConfiguration().uiMode & android.content.res.Configuration.UI_MODE_NIGHT_MASK)
@@ -59,6 +80,8 @@ public final class MainActivity extends NativeActivity {
                 case "connect": runOnUiThread(this::prepareVpn); break;
                 case "disconnect": TunnelService.stop(this); break;
                 case "traffic": TunnelService.updateTraffic(this, data.optString("down"), data.optString("up")); break;
+                case "system-bars": runOnUiThread(() -> configureSystemBars(data.optBoolean("dark"))); break;
+                case "install-update": UpdateInstaller.request(this); break;
                 case "copy": {
                     String text = data.getString("text");
                     runOnUiThread(() -> ((android.content.ClipboardManager)getSystemService(CLIPBOARD_SERVICE))
@@ -100,6 +123,27 @@ public final class MainActivity extends NativeActivity {
             try { return new JSONObject().put("error", error.toString()).toString(); }
             catch (Exception impossible) { return "{\"error\":\"Android request failed\"}"; }
         }
+    }
+    @SuppressWarnings("deprecation")
+    private void configureSystemBars(boolean dark) {
+        android.view.Window window=getWindow();
+        window.setStatusBarColor(android.graphics.Color.TRANSPARENT);
+        window.setNavigationBarColor(android.graphics.Color.TRANSPARENT);
+        if (Build.VERSION.SDK_INT>=30) {
+            window.setDecorFitsSystemWindows(false);
+            android.view.WindowInsetsController controller=window.getInsetsController();
+            if (controller!=null) {
+                int light=android.view.WindowInsetsController.APPEARANCE_LIGHT_STATUS_BARS
+                    |android.view.WindowInsetsController.APPEARANCE_LIGHT_NAVIGATION_BARS;
+                controller.setSystemBarsAppearance(dark?0:light,light);
+            }
+        } else {
+            int flags=android.view.View.SYSTEM_UI_FLAG_LAYOUT_STABLE|android.view.View.SYSTEM_UI_FLAG_LAYOUT_FULLSCREEN
+                |android.view.View.SYSTEM_UI_FLAG_LAYOUT_HIDE_NAVIGATION;
+            if (!dark) flags|=android.view.View.SYSTEM_UI_FLAG_LIGHT_STATUS_BAR|android.view.View.SYSTEM_UI_FLAG_LIGHT_NAVIGATION_BAR;
+            window.getDecorView().setSystemUiVisibility(flags);
+        }
+        if (Build.VERSION.SDK_INT>=29) window.setNavigationBarContrastEnforced(false);
     }
     private void prepareVpn() {
         if (vpnPrompt || TunnelService.connected()) return;

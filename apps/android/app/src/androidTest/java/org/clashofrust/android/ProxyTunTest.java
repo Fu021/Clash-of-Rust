@@ -3,6 +3,8 @@ package org.clashofrust.android;
 import android.content.*;
 import android.net.*;
 import android.os.Build;
+import android.os.SystemClock;
+import android.view.MotionEvent;
 import androidx.test.ext.junit.runners.AndroidJUnit4;
 import androidx.test.platform.app.InstrumentationRegistry;
 import java.io.*;
@@ -16,6 +18,52 @@ import static org.junit.Assert.*;
 /** Uses the packaged Slint Activity, embedded core and the real Android VPN. */
 @RunWith(AndroidJUnit4.class)
 public class ProxyTunTest {
+    private static void pointer(int action,float x,float y,long down,long now) {
+        MotionEvent event=MotionEvent.obtain(down,now,action,x,y,0);
+        try { InstrumentationRegistry.getInstrumentation().sendPointerSync(event); }
+        finally {event.recycle();}
+    }
+    private static void tap(float x,float y) {
+        long start=SystemClock.uptimeMillis();
+        pointer(MotionEvent.ACTION_DOWN,x,y,start,start);
+        pointer(MotionEvent.ACTION_UP,x,y,start,start+50);
+    }
+    private static void shell(String command) throws Exception {
+        try (InputStream in=new android.os.ParcelFileDescriptor.AutoCloseInputStream(
+            InstrumentationRegistry.getInstrumentation().getUiAutomation().executeShellCommand(command))) {
+            byte[] bytes=new byte[1024];while (in.read(bytes)!=-1) { }
+        }
+    }
+    private static void tab(int index,int page) throws Exception {
+        JSONObject ui=MainActivity.diagnostics();float scale=(float)ui.getDouble("scale");
+        tap((float)ui.getDouble("width")*(index+0.5f)/5*scale,
+            ((float)ui.getDouble("height")-(float)ui.getDouble("safe_bottom")-38)*scale);
+        await("UI tab did not navigate to "+page,()->MainActivity.diagnostics().optInt("page",-1)==page);
+    }
+    private static void verifyPresentation() throws Exception {
+        await("Core is running but Slint still reports it as stopped",()->MainActivity.diagnostics().optBoolean("core_running"));
+        await("Default profile has no presented proxy groups",()->MainActivity.diagnostics().optInt("groups")>0);
+        tab(1,1);
+        await("Proxies page has no groups",()->MainActivity.diagnostics().optInt("groups")>0);
+        tab(2,2);
+        await("Subscription page is empty",()->MainActivity.diagnostics().optInt("profiles")>0);
+        tab(4,9);
+        await("Settings does not expose scrollable content",()->{
+            JSONObject s=MainActivity.diagnostics();
+            return s.optDouble("settings_content_height")>s.optDouble("settings_viewport_height")+100;
+        });
+        JSONObject ui=MainActivity.diagnostics();float scale=(float)ui.getDouble("scale");
+        float x=(float)ui.getDouble("width")*0.55f*scale;
+        float start=((float)ui.getDouble("height")-(float)ui.getDouble("safe_bottom")-120)*scale;
+        float end=((float)ui.getDouble("safe_top")+160)*scale;
+        long down=SystemClock.uptimeMillis();pointer(MotionEvent.ACTION_DOWN,x,start,down,down);
+        for (int i=1;i<=15;i++) {
+            SystemClock.sleep(25);pointer(MotionEvent.ACTION_MOVE,x,start+(end-start)*i/15,down,SystemClock.uptimeMillis());
+        }
+        pointer(MotionEvent.ACTION_UP,x,end,down,SystemClock.uptimeMillis());
+        await("Touch swipe did not scroll Android settings",()->MainActivity.diagnostics().optDouble("settings_scroll_y") < -40);
+        tab(0,0);
+    }
     private interface Condition { boolean ready() throws Exception; }
     private static void await(String message, Condition condition) throws Exception {
         long deadline = System.nanoTime() + 30_000_000_000L;
@@ -46,6 +94,7 @@ public class ProxyTunTest {
         Context context = InstrumentationRegistry.getInstrumentation().getTargetContext();
         context.startActivity(new Intent(context, MainActivity.class).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK));
         await("Native UI did not start its core; inspect logcat", CoreBridge::ready);
+        verifyPresentation();
         String raw = CoreBridge.config();
         String secret = value(raw,"secret");
         int mixed = Integer.parseInt(value(raw,"mixed-port"));
@@ -56,8 +105,10 @@ public class ProxyTunTest {
         assertNotNull(new JSONObject(read(new URL("http://"+controller+"/version"),java.net.Proxy.NO_PROXY,secret)).getString("version"));
         assertNull("CI must grant VPN consent through Android appops", VpnService.prepare(context));
         CoreBridge.reload(raw + "\nhosts:\n  android-tun.test: 10.0.2.2\n");
+        shell("cmd statusbar add-tile org.clashofrust.android/.VpnTileService");
         for (int cycle=0; cycle<2; cycle++) {
-            context.startForegroundService(new Intent(context,TunnelService.class));
+            if (cycle==0) context.startForegroundService(new Intent(context,TunnelService.class));
+            else shell("cmd statusbar click-tile org.clashofrust.android/.VpnTileService");
             await("VPN did not connect; inspect logcat", () -> {
                 if (!TunnelService.error().isEmpty()) throw new IOException(TunnelService.error());
                 return TunnelService.connected();
@@ -84,7 +135,8 @@ public class ProxyTunTest {
                 }
                 assertTrue("No real TUN connection was observed; a direct-only test must fail",observed);
             } finally { connection.disconnect(); }
-            TunnelService.stop(context);
+            if (cycle==0) TunnelService.stop(context);
+            else shell("cmd statusbar click-tile org.clashofrust.android/.VpnTileService");
             await("VPN routes remained after disconnect", () -> {
                 NetworkCapabilities capabilities=connectivity.getNetworkCapabilities(connectivity.getActiveNetwork());
                 return !TunnelService.connected() && capabilities != null && !capabilities.hasTransport(NetworkCapabilities.TRANSPORT_VPN);

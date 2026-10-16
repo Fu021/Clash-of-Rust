@@ -62,6 +62,7 @@ public final class TunnelService extends VpnService {
             android.util.Log.i("ClashOfRust", "VPN established; starting embedded TUN");
             Mobile.startTun(descriptor.getFd(), ipv6);
             connected = true; lastError = "";
+            VpnTileService.refresh(this);
             android.util.Log.i("ClashOfRust", "Embedded TUN started");
             getSystemService(NotificationManager.class).notify(1, notification("VPN 已连接"));
             MainActivity.emit("vpn", true);
@@ -74,6 +75,7 @@ public final class TunnelService extends VpnService {
     }
     private void cleanup() {
         connected = false;
+        VpnTileService.refresh(this);
         try { Mobile.stopTun(); } catch (Exception error) { android.util.Log.e("ClashOfRust", "Stop TUN", error); }
         if (descriptor != null) {
             try { descriptor.close(); } catch (Exception error) { android.util.Log.e("ClashOfRust", "Close TUN descriptor", error); }

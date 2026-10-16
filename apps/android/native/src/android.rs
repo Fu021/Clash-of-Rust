@@ -19,6 +19,8 @@ use tokio::sync::mpsc;
 
 slint::include_modules!();
 static EVENTS: Mutex<Option<mpsc::Sender<String>>> = Mutex::new(None);
+// Also included in exported diagnostics. Contains view counts/status, never URLs or secrets.
+static PRESENTATION: Mutex<String> = Mutex::new(String::new());
 
 struct AndroidHost {
     vm: JavaVM,
@@ -35,21 +37,16 @@ impl AndroidHost {
         };
         Ok(Self { vm, activity })
     }
-    fn root(&self) -> Result<PathBuf> {
+    fn directory(&self, method: &str) -> Result<PathBuf> {
         let mut env = self.vm.attach_current_thread()?;
         let directory = env
-            .call_method(
-                self.activity.as_obj(),
-                "getFilesDir",
-                "()Ljava/io/File;",
-                &[],
-            )?
+            .call_method(self.activity.as_obj(), method, "()Ljava/io/File;", &[])?
             .l()?;
         let path = env
             .call_method(directory, "getAbsolutePath", "()Ljava/lang/String;", &[])?
             .l()?;
         let text: String = env.get_string(&JString::from(path))?.into();
-        Ok(PathBuf::from(text).join("client"))
+        Ok(PathBuf::from(text))
     }
 }
 impl NativeHost for AndroidHost {
@@ -72,11 +69,7 @@ impl NativeHost for AndroidHost {
             env.exception_clear()?;
             bail!("Android 原生操作失败");
         }
-        let result = result?;
-        if let Some(message) = result.get("error").and_then(Value::as_str) {
-            bail!("{message}");
-        }
-        Ok(result)
+        clash_mobile_runtime::native_response(result?)
     }
 }
 
@@ -93,6 +86,17 @@ pub extern "system" fn Java_org_clashofrust_android_MainActivity_nativeEvent(
     {
         let _ = sender.try_send(value);
     }
+}
+
+#[unsafe(no_mangle)]
+pub extern "system" fn Java_org_clashofrust_android_MainActivity_nativeDiagnostics(
+    env: JNIEnv<'_>,
+    _: JClass<'_>,
+) -> jni::sys::jstring {
+    let snapshot = PRESENTATION.lock().map(|s| s.clone()).unwrap_or_default();
+    env.new_string(if snapshot.is_empty() { "{}" } else { &snapshot })
+        .map(JString::into_raw)
+        .unwrap_or(std::ptr::null_mut())
 }
 
 #[derive(Clone)]
@@ -125,6 +129,7 @@ struct State {
     connection_sort: String,
     ip_results: Vec<core::ip_report::ResultSlot>,
     claude: Option<core::claude_check::Report>,
+    claude_status: String,
     category: String,
     detecting: bool,
     generation: u64,
@@ -138,6 +143,12 @@ struct State {
     rule_page: usize,
     rule_form: Option<RuleForm>,
     rule_editor: Option<RuleEditor>,
+    update_package: Option<core::update::Package>,
+    update_status: String,
+    update_busy: bool,
+    update_progress: f32,
+    update_downloaded: bool,
+    update_path: PathBuf,
 }
 
 #[unsafe(no_mangle)]
@@ -153,7 +164,8 @@ fn android_main(app: slint::android::AndroidApp) {
 }
 fn run(app: slint::android::AndroidApp) -> Result<()> {
     let native = Arc::new(AndroidHost::new(&app)?);
-    let root = native.root()?;
+    let root = native.directory("getFilesDir")?.join("client");
+    let update_path = native.directory("getCacheDir")?.join("updates/update.apk");
     slint::android::init(app)?;
     let window = AndroidWindow::new()?;
     window
@@ -235,6 +247,7 @@ fn run(app: slint::android::AndroidApp) -> Result<()> {
                     .build()?;
                 runtime.block_on(run_loop(
                     root,
+                    update_path,
                     native,
                     receive,
                     native_events,
@@ -256,9 +269,13 @@ enum Update {
     Claude(std::result::Result<core::claude_check::Report, String>),
     Log(String, String),
     Notice(String),
+    Checked(std::result::Result<Option<core::update::Package>, String>),
+    DownloadProgress(u64, u64),
+    Downloaded(std::result::Result<(), String>),
 }
 async fn run_loop(
     root: PathBuf,
+    update_path: PathBuf,
     native: Arc<AndroidHost>,
     mut receive: mpsc::Receiver<Request>,
     mut native_events: mpsc::Receiver<String>,
@@ -276,6 +293,7 @@ async fn run_loop(
         connection_sort: "下载速度 ↓".into(),
         ip_results: vec![None; core::ip_check::services().len()],
         claude: None,
+        claude_status: "尚未检测".into(),
         category: "AI".into(),
         detecting: false,
         generation: 0,
@@ -289,9 +307,17 @@ async fn run_loop(
         rule_page: 0,
         rule_form: None,
         rule_editor: None,
+        update_package: None,
+        update_status: "尚未检查更新".into(),
+        update_busy: false,
+        update_progress: 0.0,
+        update_downloaded: false,
+        update_path,
     };
     if let Err(error) = state.session.initialize() {
         state.notice = format!("内核启动失败：{error:#}");
+        log::error!("{}", state.notice);
+        state.logs.push_back(("ERROR".into(), state.notice.clone()));
     }
     let (updates, mut update_rx) = mpsc::channel::<Update>(32);
     let mut checks: Option<tokio::task::JoinHandle<()>> = None;
@@ -302,6 +328,9 @@ async fn run_loop(
     let mut delay_job: Option<tokio::task::JoinHandle<()>> = None;
     let mut poll = tokio::time::interval(Duration::from_secs(1));
     let mut last_frame = std::time::Instant::now() - Duration::from_secs(1);
+    let mut system_bars_dark = None;
+    let mut update_job: Option<tokio::task::JoinHandle<()>> = None;
+    let mut last_update_check = std::time::Instant::now() - Duration::from_secs(6 * 60 * 60);
     loop {
         let page = current_page.load(std::sync::atomic::Ordering::Relaxed);
         if page != state.page {
@@ -315,7 +344,28 @@ async fn run_loop(
                 state.selected = request.selected.clone();
                 immediate = true;
                 let intent = request.intent;
-                if matches!(intent, MobileIntent::SiteStart | MobileIntent::SiteRetest) {
+                if intent==MobileIntent::CheckUpdate {
+                    if !state.update_busy {
+                        state.update_busy=true;state.update_status="正在检查更新…".into();state.update_progress=0.0;
+                        last_update_check=std::time::Instant::now();
+                        update_job=Some(start_update_check(state.session.settings.mixed_port,updates.clone()));
+                    }
+                } else if intent==MobileIntent::InstallUpdate {
+                    if !state.update_busy && let Some(package)=state.update_package.clone() {
+                        if state.update_downloaded && state.update_path.is_file() {
+                            if let Err(error)=state.session.native.request(json!({"op":"install-update"})) {state.notice=format!("{error:#}");}
+                        } else {
+                            state.update_busy=true;state.update_status="正在下载更新…".into();state.update_progress=0.0;
+                            let path=state.update_path.clone();
+                            let port=state.session.settings.mixed_port;let send=updates.clone();
+                            update_job=Some(tokio::spawn(async move {
+                                let report=send.clone();
+                                let result=core::update::download(&package,Some(port),&path,move|n,total|{let _=report.try_send(Update::DownloadProgress(n,total));}).await;
+                                let _=send.send(Update::Downloaded(result.map_err(|e|format!("{e:#}")))).await;
+                            }));
+                        }
+                    }
+                } else if matches!(intent, MobileIntent::SiteStart | MobileIntent::SiteRetest) {
                     if let Some(job) = checks.take() { job.abort(); }
                     state.generation += 1; state.detecting = true;
                     if intent == MobileIntent::SiteStart { state.ip_results.fill(None); }
@@ -350,6 +400,7 @@ async fn run_loop(
                     }));
                 } else if intent == MobileIntent::ClaudeStart {
                     if let Some(job) = claude_job.take() { job.abort(); }
+                    state.claude=None;state.claude_status="正在检测，浏览器将自动采样…".into();
                     let port = state.session.settings.mixed_port;
                     let host = state.session.native.clone();
                     let send = updates.clone();
@@ -375,7 +426,11 @@ async fn run_loop(
                 } else {
                     match handle(&mut state, request).await {
                         Ok(()) => state.completed = Some(intent),
-                        Err(error) => state.notice = format!("{error:#}"),
+                        Err(error) => {
+                            state.notice = format!("{error:#}");
+                            log::error!("{}",state.notice);
+                            state.logs.push_back(("ERROR".into(),state.notice.clone()));
+                        }
                     }
                 }
             }
@@ -391,14 +446,44 @@ async fn run_loop(
                 match value {
                     Some(Update::Ip(generation,index,result)) if generation == state.generation => state.ip_results[index]=result,
                     Some(Update::IpDone(generation)) if generation == state.generation => { state.detecting=false; checks=None; }
-                    Some(Update::Claude(Ok(report))) => { state.claude=Some(report); state.notice="检测完成".into(); },
-                    Some(Update::Claude(Err(error))) => state.notice=error,
+                    Some(Update::Claude(Ok(report))) => { state.claude=Some(report); state.claude_status="检测完成 · 浏览器及网络采样已结束".into(); state.notice="检测完成".into(); },
+                    Some(Update::Claude(Err(error))) => {state.claude_status=format!("检测失败：{error}");state.notice=error;},
                     Some(Update::Log(level,message)) => state.logs.push_back((level,message)),
                     Some(Update::Notice(message))=>state.notice=message,
+                    Some(Update::Checked(result))=>{
+                        state.update_busy=false;
+                        match result {
+                            Ok(package)=>{
+                                state.update_status=package.as_ref().map(|p|format!("发现新版本 {} · {:.1} MiB",p.version,p.size as f64/1024.0/1024.0))
+                                    .unwrap_or_else(||"当前没有更新的 Android 正式版".into());
+                                state.update_downloaded=state.update_downloaded && state.update_package.as_ref().map(|p|&p.version)==package.as_ref().map(|p|&p.version);
+                                state.update_package=package;
+                            }
+                            Err(error)=>state.update_status=error,
+                        }
+                    }
+                    Some(Update::DownloadProgress(n,total))=>{
+                        state.update_progress=n as f32/total.max(1) as f32;
+                        state.update_status=format!("正在下载更新… {:.0}%",state.update_progress*100.0);
+                    }
+                    Some(Update::Downloaded(result))=>{
+                        state.update_busy=false;
+                        match result {
+                            Ok(())=>{
+                                state.update_downloaded=true;state.update_status="下载完成，请在系统界面确认安装".into();
+                                if let Err(error)=state.session.native.request(json!({"op":"install-update"})) {state.notice=format!("{error:#}");}
+                            }
+                            Err(error)=>state.update_status=error,
+                        }
+                    }
                     _ => {}
                 }
             }
             _ = poll.tick() => {
+                if state.session.running && !state.update_busy && last_update_check.elapsed()>=Duration::from_secs(6*60*60) {
+                    last_update_check=std::time::Instant::now();state.update_busy=true;state.update_status="正在检查更新…".into();
+                    update_job=Some(start_update_check(state.session.settings.mixed_port,updates.clone()));
+                }
                 let minutes=state.session.settings.delay_interval_minutes;
                 if minutes>0 && last_delay.elapsed()>=Duration::from_secs(minutes as u64*60) && delay_job.as_ref().is_none_or(|job|job.is_finished()) {
                     last_delay=std::time::Instant::now();
@@ -408,9 +493,10 @@ async fn run_loop(
                 if state.visible || state.session.vpn {
                     let page = if state.visible { state.page } else { -1 };
                     if let Err(error) = state.session.refresh(page).await {
-                        state.session.running=false;
-                        if state.logs.back().is_none_or(|(_,old)| old != &error.to_string()) {
-                            state.logs.push_back(("WARN".into(),error.to_string()));
+                        let message=format!("状态刷新失败：{error:#}");
+                        if state.logs.back().is_none_or(|(_,old)| old != &message) {
+                            log::warn!("{message}");
+                            state.logs.push_back(("WARN".into(),message));
                         }
                     }
                     if state.session.vpn {
@@ -464,6 +550,20 @@ async fn run_loop(
             continue;
         }
         last_frame = std::time::Instant::now();
+        let dark = match state.session.settings.theme_mode {
+            Some(config::ThemeMode::Dark) => true,
+            Some(config::ThemeMode::Light) => false,
+            _ => state.session.platform["dark"].as_bool().unwrap_or(false),
+        };
+        if system_bars_dark != Some(dark)
+            && state
+                .session
+                .native
+                .request(json!({"op":"system-bars","dark":dark}))
+                .is_ok()
+        {
+            system_bars_dark = Some(dark);
+        }
         let view = project(&state);
         state.completed = None;
         state.rule_form = None;
@@ -491,7 +591,26 @@ async fn run_loop(
     if let Some(job) = delay_job {
         job.abort();
     }
+    if let Some(job) = update_job {
+        job.abort();
+    }
     Ok(())
+}
+
+fn start_update_check(port: u16, send: mpsc::Sender<Update>) -> tokio::task::JoinHandle<()> {
+    tokio::spawn(async move {
+        let suffix = if cfg!(target_arch = "aarch64") {
+            "android-arm64.apk"
+        } else if cfg!(target_arch = "arm") {
+            "android-armv7.apk"
+        } else {
+            "android-x64.apk"
+        };
+        let result = core::update::check(core::VERSION, suffix, Some(port)).await;
+        let _ = send
+            .send(Update::Checked(result.map_err(|e| format!("{e:#}"))))
+            .await;
+    })
 }
 
 async fn native_event(state: &mut State, raw: &str) -> Result<()> {
@@ -682,7 +801,8 @@ async fn handle(state: &mut State, request: Request) -> Result<()> {
         MobileIntent::ClearLogs => state.logs.clear(),
         MobileIntent::ExportLogs => {
             session.native.request(json!({"op":"export","name":"clash-of-rust-logs.txt",
-                "content":state.logs.iter().map(|(level,line)|format!("[{level}] {line}")).collect::<Vec<_>>().join("\n")}))?;
+                "content":format!("Android UI: {}\n{}",PRESENTATION.lock().map(|s|s.clone()).unwrap_or_default(),
+                    state.logs.iter().map(|(level,line)|format!("[{level}] {line}")).collect::<Vec<_>>().join("\n"))}))?;
         }
         MobileIntent::RuleEdit => {
             let (rows, _) = session.document()?.rows(&session.draft);
@@ -929,6 +1049,12 @@ struct Projection {
     rule_page: (usize, usize),
     rule_form: Option<RuleForm>,
     rule_editor: Option<RuleEditor>,
+    update_status: String,
+    update_busy: bool,
+    update_progress: f32,
+    update_available: bool,
+    site_summary: String,
+    claude_status: String,
 }
 struct ReportRow {
     id: String,
@@ -1222,6 +1348,19 @@ fn project(state: &State) -> Projection {
         rule_page: (rule_page, rule_count),
         rule_form: state.rule_form.clone(),
         rule_editor: state.rule_editor.clone(),
+        update_status: state.update_status.clone(),
+        update_busy: state.update_busy,
+        update_progress: state.update_progress,
+        update_available: state.update_package.is_some(),
+        site_summary: format!(
+            "确认可用 {} · 网页可达 {} · 受限 {} · 失败 {}",
+            report.totals.count(core::ip_report::Status::Available),
+            report.totals.count(core::ip_report::Status::Partial)
+                + report.totals.count(core::ip_report::Status::Reachable),
+            report.totals.count(core::ip_report::Status::Restricted),
+            report.totals.count(core::ip_report::Status::Failed)
+        ),
+        claude_status: state.claude_status.clone(),
         policies: document.map(|d| d.policies).unwrap_or_default(),
         shortcuts: s.draft.enabled,
         dirty: s.draft != *saved,
@@ -1246,6 +1385,8 @@ fn apply(ui: &AndroidWindow, p: Projection) {
     data.set_probe_time(p.probe.1.into());
     data.set_dns_result(p.dns.into());
     data.set_geo_status(p.geo.into());
+    data.set_site_summary(p.site_summary.into());
+    data.set_claude_status(p.claude_status.into());
     for (page, count, size, rules) in [
         (p.connection_page.0, p.connection_page.1, 50, false),
         (p.rule_page.0, p.rule_page.1, 100, true),
@@ -1293,6 +1434,10 @@ fn apply(ui: &AndroidWindow, p: Projection) {
     data.set_download_rate(p.rates.1.into());
     data.set_rule_profile(p.rule_profile.into());
     let android = ui.global::<AndroidData>();
+    android.set_update_status(p.update_status.into());
+    android.set_update_busy(p.update_busy);
+    android.set_update_progress(p.update_progress);
+    android.set_update_available(p.update_available);
     android.set_authorization_status(if p.vpn {
         "已连接".into()
     } else {
@@ -1619,6 +1764,22 @@ fn apply(ui: &AndroidWindow, p: Projection) {
             .position(|c| c == &p.settings.accent_color)
             .unwrap_or(0) as i32,
     );
+    let dark = theme.get_dark();
+    // Read back the actual Slint globals; diagnostics must reveal stale presentation too.
+    if let Ok(mut snapshot) = PRESENTATION.lock() {
+        let view = ui.global::<MobileView>();
+        let scale = ui.window().scale_factor();
+        let size = ui.window().size();
+        *snapshot = json!({"core_running":data.get_core_running(),"vpn":data.get_vpn_connected(),
+            "page":ui.get_current_page(),"detail":ui.get_current_detail(),
+            "groups":data.get_groups().row_count(),"profiles":data.get_profiles().row_count(),
+            "logs":data.get_logs().row_count(),"dark":dark,
+            "width":size.width as f32/scale,"height":size.height as f32/scale,"scale":scale,
+            "safe_top":view.get_safe_top(),"safe_bottom":view.get_safe_bottom(),
+            "settings_scroll_y":view.get_settings_scroll_y(),"settings_content_height":view.get_settings_content_height(),
+            "settings_viewport_height":view.get_settings_viewport_height()})
+        .to_string();
+    }
 }
 
 fn flag(country: &str) -> slint::Image {

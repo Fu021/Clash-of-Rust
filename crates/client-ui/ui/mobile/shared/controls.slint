@@ -1,4 +1,3 @@
-import { ScrollView } from "std-widgets.slint";
 import { Theme } from "../../theme/palette.slint";
 import { MobileView } from "state.slint";
 
@@ -13,9 +12,8 @@ export component MText {
     min-width: 0px; preferred-width: glyphs.preferred-width;
     min-height: glyphs.preferred-height; preferred-height: glyphs.preferred-height;
     glyphs := Text {
-        width: parent.width; height: self.preferred-height;
-        y: (parent.height - self.height) / 2
-            + (self.font-metrics.cap-height - self.font-metrics.ascent - self.font-metrics.descent) / 2;
+        width: parent.width; height: parent.height;
+        vertical-alignment: center;
         text: root.text; color: root.color; font-size: root.font-size; font-weight: root.font-weight;
         horizontal-alignment: root.horizontal-alignment; wrap: root.wrap; overflow: elide;
     }
@@ -23,7 +21,20 @@ export component MText {
 export component MSmall inherits MText { font-size: 14px * Theme.text-scale; color: Theme.secondary; }
 export component MHeading inherits MText { font-size: 19px * Theme.text-scale; font-weight: 600; }
 export component MParagraph inherits MText { wrap: word-wrap; height: self.preferred-height; }
-export component MScroll inherits ScrollView { mouse-drag-pan-enabled: true; }
+// A touch viewport with an explicit content extent. Do not inherit a desktop
+// ScrollView whose generated wrapper can constrain conditional layouts to the
+// visible height, leaving Android with no scrollable overflow.
+export component MScroll inherits Flickable {
+    min-width: 0px; min-height: 0px;
+    horizontal-stretch: 1; vertical-stretch: 1;
+    interactive: true; mouse-drag-pan-enabled: true;
+    content-width: root.width;
+    content-height: max(root.height, content.preferred-height);
+    content := VerticalLayout {
+        width: root.width; height: self.preferred-height;
+        alignment: start; spacing: 0px; @children
+    }
+}
 export component MCard inherits Rectangle {
     in property <bool> selected;
     in property <bool> interactive;
@@ -41,6 +52,7 @@ export component MButton inherits Rectangle {
     in property <bool> primary;
     in property <bool> selected;
     in property <bool> danger;
+    in property <bool> dropdown;
     in property <bool> enabled: true;
     property <bool> interactive: root.enabled && (!MobileView.modal || root.modal-control);
     property <bool> keyboard-focus;
@@ -55,10 +67,13 @@ export component MButton inherits Rectangle {
     border-color: root.enabled && root.keyboard-focus && keys.has-focus ? Theme.ink
         : root.primary ? Theme.primary : root.selected || (area.pressed && root.enabled) ? Theme.accent : Theme.line;
     opacity: root.enabled ? 1 : 0.5;
-    label := MText { width: parent.width - 12px; x: 6px; height: parent.height;
+    label := MText { width: parent.width - 12px - (root.dropdown ? 24px : 0px); x: 6px; height: parent.height;
         text: root.text; horizontal-alignment: center;
         color: root.primary ? #ffffff : root.danger ? Theme.danger : root.selected ? Theme.accent : Theme.ink;
         font-size: 15px * Theme.text-scale;
+    }
+    if root.dropdown: Image { source: @image-url("../../icons/chevron-down.svg");
+        x: parent.width - 28px; y: (parent.height - 18px) / 2; width: 18px; height: 18px; colorize: Theme.secondary;
     }
     keys := FocusScope {
         enabled: root.interactive;
@@ -79,6 +94,8 @@ export component MRow inherits Rectangle {
     in property <string> value;
     in property <color> value-color: Theme.secondary;
     in property <bool> arrow: true;
+    in property <bool> expandable;
+    in property <bool> expanded;
     in property <bool> interactive: true;
     callback clicked();
     vertical-stretch: 0; min-width: 0px; height: max(52px, content.preferred-height + 12px);
@@ -88,9 +105,19 @@ export component MRow inherits Rectangle {
             if root.subtitle != "": MSmall { text: root.subtitle; wrap: word-wrap; }
         }
         if root.value != "": MSmall { text: root.value; color: root.value-color; horizontal-stretch: 0; }
-        if root.arrow: MSmall { text: "›"; width: 16px; horizontal-stretch: 0; horizontal-alignment: right; font-size: 22px; }
+        if root.arrow: Image {
+            source: root.expandable ? (root.expanded ? @image-url("../../icons/chevron-up.svg") : @image-url("../../icons/chevron-down.svg")) : @image-url("../../icons/chevron-right.svg");
+            width: 18px; height: 18px; horizontal-stretch: 0; colorize: Theme.secondary;
+        }
     }
     TouchArea { enabled: root.interactive && !MobileView.modal; mouse-cursor: root.interactive ? pointer : default; clicked => { root.clicked(); } }
+}
+export component MBackButton inherits MButton {
+    text: ""; width: 48px; height: 48px; horizontal-stretch: 0;
+    accessible-role: button; accessible-label: "返回";
+    Image { source: @image-url("../../icons/chevron-left.svg");
+        width: 24px; height: 24px; x: 12px; y: 12px; colorize: Theme.ink;
+    }
 }
 export component MDivider inherits Rectangle { height: 1px; vertical-stretch: 0; background: Theme.subtle-line; }
 export component MSwitch inherits Rectangle {
@@ -130,7 +157,7 @@ export component MSelect inherits Rectangle {
     in property <string> value;
     callback selected(int, string);
     height: max(48px, 16px * Theme.text-scale + 24px); vertical-stretch: 0; min-width: 0px;
-    MButton { width: parent.width; text: root.value + "  ⌄"; clicked => { popup.show(); } }
+    MButton { width: parent.width; text: root.value; dropdown: true; clicked => { popup.show(); } }
     popup := PopupWindow {
         y: root.height + 4px; width: max(root.width, 200px);
         height: min(300px, root.options.length * 52px + 16px);

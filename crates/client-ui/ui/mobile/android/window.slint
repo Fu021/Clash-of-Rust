@@ -10,6 +10,7 @@ import "../../../../../resources/fonts/SourceHanSansCN-Regular.otf";
 
 export component AndroidWindow inherits Window {
     default-font-family: "Source Han Sans CN";
+    background: Theme.canvas;
     property <length> top: self.safe-area-insets.top;
     property <length> bottom: self.safe-area-insets.bottom;
     property <length> left: self.safe-area-insets.left;
@@ -36,5 +37,5 @@ export component AndroidWindow inherits Window {
         MobileView.safe-top = self.top; MobileView.safe-bottom = self.bottom;
         MobileView.safe-left = self.left; MobileView.safe-right = self.right;
     }
-    AndroidSurface { }
+    AndroidSurface { width: parent.width; height: parent.height; }
 }

@@ -1,7 +1,7 @@
 // Responsive chrome only. Each platform supplies its own routes and pages.
 import { Theme } from "../../theme/palette.slint";
 import { MobileData, MobileView, MobileActions, MobileIntent } from "state.slint";
-import { MText, MSmall, MHeading, MParagraph, MCard, MButton, MTag, MNav, MScroll, MProgress } from "controls.slint";
+import { MText, MSmall, MHeading, MParagraph, MCard, MButton, MBackButton, MTag, MNav, MScroll, MProgress } from "controls.slint";
 import { MobileDetails, MobileModal } from "details.slint";
 
 export component MobileFrame inherits Rectangle {
@@ -22,10 +22,11 @@ export component MobileFrame inherits Rectangle {
     property <bool> bottom: root.narrow && MobileView.keyboard-inset == 0px;
     property <length> nav-width: root.narrow ? 0px : root.expanded ? root.sidebar-width : 76px;
     property <length> content-padding: root.expanded ? 24px : 16px;
-    property <length> header-height: root.short ? 52px : 88px;
+    property <length> header-height: max(root.short ? 52px : 88px, header-content.preferred-height + 12px);
     property <bool> detail-page: MobileView.detail > 0 && !MobileView.modal;
+    property <bool> has-back: (root.detail-page && !root.pane) || (!root.expanded && MobileView.page >= 3 && MobileView.page <= 8);
     property <bool> pane: body.width >= 880px && root.detail-page && MobileView.detail != 2 && MobileView.detail != 3;
-    property <string> detail-title: MobileView.detail == 1 ? "风险项目" : MobileView.detail == 2 ? "编辑规则" : MobileView.detail == 3 ? "编辑订阅" : MobileView.detail == 5 ? "连接详情" : MobileView.detail == 6 ? MobileView.category : MobileView.detail == 7 ? "正常项目" : MobileView.detail == 9 ? "其他线索" : "日志详情";
+    property <string> detail-title: MobileView.detail == 1 ? "风险项目" : MobileView.detail == 2 ? "编辑规则" : MobileView.detail == 3 ? (MobileView.selected-id == "" ? "添加订阅" : "编辑订阅") : MobileView.detail == 5 ? "连接详情" : MobileView.detail == 6 ? MobileView.category : MobileView.detail == 7 ? "正常项目" : MobileView.detail == 9 ? "其他线索" : "日志详情";
     property <duration> notice-start;
     property <int> notice-revision: MobileView.notice-revision;
     property <float> notice-elapsed: MobileView.notice-elapsed;
@@ -57,14 +58,14 @@ export component MobileFrame inherits Rectangle {
                 }
                 MScroll { vertical-stretch: 1; min-height: 0px;
                     if root.expanded: VerticalLayout { alignment: start; spacing: 4px;
-                        for p in root.sidebar-pages: MNav { height: 48px; text: root.titles[p]; icon: root.icons[p]; selected: MobileView.page == p;
-                            clicked => { MobileView.navigate(p); }
+                        for route-id in root.sidebar-pages: MNav { height: 48px; text: root.titles[route-id]; icon: root.icons[route-id]; selected: MobileView.page == route-id;
+                            clicked => { MobileView.navigate(route-id); }
                         }
                     }
                     if !root.expanded: VerticalLayout { alignment: start; spacing: root.short ? 0px : 8px;
-                        for p in root.primary-pages: MNav { height: root.short ? 56px : 68px; stacked: true; pill: root.tab-pill;
-                            text: root.titles[p]; icon: root.icons[p]; selected: MobileView.page == p || (p == 10 && MobileView.page >= 3 && MobileView.page <= 8);
-                            clicked => { MobileView.navigate(p); }
+                        for route-id in root.primary-pages: MNav { height: root.short ? 56px : 68px; stacked: true; pill: root.tab-pill;
+                            text: root.titles[route-id]; icon: root.icons[route-id]; selected: MobileView.page == route-id || (route-id == 10 && MobileView.page >= 3 && MobileView.page <= 8);
+                            clicked => { MobileView.navigate(route-id); }
                         }
                     }
                 }
@@ -74,16 +75,18 @@ export component MobileFrame inherits Rectangle {
         header := Rectangle {
             x: MobileView.safe-left + root.nav-width + root.content-padding; y: MobileView.safe-top;
             width: root.usable-width - root.nav-width - root.content-padding * 2; height: root.header-height;
-            HorizontalLayout { spacing: 10px; cross-axis-alignment: center;
-                if (root.detail-page && !root.pane) || (!root.expanded && MobileView.page >= 3 && MobileView.page <= 8): MButton {
-                    text: "‹"; width: 40px; horizontal-stretch: 0;
-                    clicked => { if root.detail-page { MobileView.back(); } else { MobileView.navigate(10); } }
-                }
-                VerticalLayout { spacing: 8px; alignment: center;
+            header-content := VerticalLayout { spacing: 4px; alignment: center;
+                HorizontalLayout { spacing: 10px; cross-axis-alignment: center;
+                    if root.has-back: MBackButton {
+                        clicked => { if root.detail-page { MobileView.back(); } else { MobileView.navigate(10); } }
+                    }
                     MHeading { text: root.detail-page && !root.pane ? root.detail-title : root.titles[MobileView.page]; font-size: (root.short ? 21px : root.title-size) * Theme.text-scale; }
-                    if !root.short: MSmall { text: MobileData.profile + "  |  " + MobileData.node; }
+                    if !root.detail-page: MTag { text: MobileData.core-running ? "● 运行中" : "○ 未运行"; tone: MobileData.core-running ? 0 : 4; }
                 }
-                if !root.detail-page: MTag { text: MobileData.core-running ? "● 运行中" : "○ 未运行"; tone: MobileData.core-running ? 0 : 4; }
+                if !root.short: HorizontalLayout {
+                    if root.has-back: Rectangle { width: 58px; horizontal-stretch: 0; }
+                    MSmall { text: MobileData.profile + "  |  " + MobileData.node; }
+                }
             }
         }
         notice := Rectangle {
@@ -118,11 +121,11 @@ export component MobileFrame inherits Rectangle {
         if root.bottom: Rectangle {
             x: 0px; y: root.height - MobileView.safe-bottom - root.tab-height;
             width: root.width; height: root.tab-height + MobileView.safe-bottom; background: Theme.sidebar;
-            Rectangle { height: 1px; width: parent.width; background: Theme.line; }
+            Rectangle { x: 0px; y: 0px; height: 1px; width: parent.width; background: Theme.line; }
             HorizontalLayout { x: MobileView.safe-left + 8px; y: 4px; width: root.usable-width - 16px; height: root.tab-height - 8px; spacing: 4px;
-                for p in root.primary-pages: MNav { stacked: true; pill: root.tab-pill;
-                    text: root.titles[p]; icon: root.icons[p]; selected: MobileView.page == p || (p == 10 && MobileView.page >= 3 && MobileView.page <= 8);
-                    clicked => { MobileView.navigate(p); }
+                for route-id in root.primary-pages: MNav { stacked: true; pill: root.tab-pill;
+                    text: root.titles[route-id]; icon: root.icons[route-id]; selected: MobileView.page == route-id || (route-id == 10 && MobileView.page >= 3 && MobileView.page <= 8);
+                    clicked => { MobileView.navigate(route-id); }
                 }
             }
         }

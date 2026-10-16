@@ -660,6 +660,7 @@ dependencies = [
  "regex",
  "reqwest",
  "roxmltree 0.20.0",
+ "semver",
  "serde",
  "serde_json",
  "serde_yaml",
