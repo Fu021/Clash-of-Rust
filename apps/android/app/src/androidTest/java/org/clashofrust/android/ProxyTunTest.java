@@ -64,19 +64,38 @@ public class ProxyTunTest {
         pointer(MotionEvent.ACTION_UP,x,end,down,SystemClock.uptimeMillis());
         await("Touch swipe did not scroll Android settings",()->MainActivity.diagnostics().optDouble("settings_scroll_y") < -40);
         tab(0,0);
-        // The Activity must restore the same native UI/core after the launcher covers it.
-        shell("input keyevent KEYCODE_HOME");
+        // Wait for the launcher transition to finish before reopening. Issuing
+        // HOME and am-start back-to-back can let the late HOME pause our Activity.
+        shell("am start -W -a android.intent.action.MAIN -c android.intent.category.HOME");
+        await("Activity did not reach the background",()->inStage(androidx.test.runner.lifecycle.Stage.STOPPED,false));
         shell("am start -W -n org.clashofrust.android/.MainActivity");
-        await("Returning from background lost the native UI",()->MainActivity.diagnostics().optBoolean("core_running"));
+        await("Activity did not resume with window focus",()->inStage(androidx.test.runner.lifecycle.Stage.RESUMED,true));
+        // Actual pointer navigation proves the resumed UI is processing new events.
+        tab(1,1);tab(0,0);
+        android.app.UiAutomation automation=InstrumentationRegistry.getInstrumentation().getUiAutomation();
         try {
-            shell("settings put system accelerometer_rotation 0");
-            shell("settings put system user_rotation 1");
+            assertTrue("Window manager rejected landscape rotation",automation.setRotation(android.app.UiAutomation.ROTATION_FREEZE_90));
+            await("System display did not enter landscape",()->InstrumentationRegistry.getInstrumentation().getTargetContext()
+                .getResources().getConfiguration().orientation==android.content.res.Configuration.ORIENTATION_LANDSCAPE);
             await("Landscape surface did not resize",()-> {JSONObject s=MainActivity.diagnostics();return s.optDouble("width")>s.optDouble("height");});
         } finally {
-            shell("settings put system user_rotation 0");
+            automation.setRotation(android.app.UiAutomation.ROTATION_FREEZE_0);
         }
-        await("Portrait surface did not recover",()-> {JSONObject s=MainActivity.diagnostics();return s.optDouble("height")>s.optDouble("width");});
+        try {
+            await("Portrait surface did not recover",()-> {JSONObject s=MainActivity.diagnostics();return s.optDouble("height")>s.optDouble("width");});
+        } finally {
+            automation.setRotation(android.app.UiAutomation.ROTATION_UNFREEZE);
+        }
         assertTrue(MainActivity.diagnostics().optBoolean("core_running"));
+    }
+    private static boolean inStage(androidx.test.runner.lifecycle.Stage stage,boolean focused) {
+        java.util.concurrent.atomic.AtomicBoolean matched=new java.util.concurrent.atomic.AtomicBoolean();
+        InstrumentationRegistry.getInstrumentation().runOnMainSync(()-> {
+            for (android.app.Activity activity:androidx.test.runner.lifecycle.ActivityLifecycleMonitorRegistry.getInstance().getActivitiesInStage(stage)) {
+                if (activity instanceof MainActivity && (!focused || activity.hasWindowFocus())) matched.set(true);
+            }
+        });
+        return matched.get();
     }
     private interface Condition { boolean ready() throws Exception; }
     private static void await(String message, Condition condition) throws Exception {
