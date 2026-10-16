@@ -72,12 +72,23 @@ pub const BOOTSTRAP: &[&str] = &[
 // always use DOH through the pinned node below. Replacing a working private,
 // ISP or subscription resolver with fixed public HTTPS IPs can make the node
 // itself unresolvable (and therefore break every proxied DNS request).
-fn bootstrap(dns: &mut Mapping) -> Result<()> {
+fn bootstrap(dns: &mut Mapping, system_dns: &[String]) -> Result<()> {
     let nonempty = |value: &Value| match value {
         Value::String(text) => !text.trim().is_empty(),
         Value::Sequence(items) => !items.is_empty(),
         _ => false,
     };
+    let explicit_node_dns = dns
+        .get(Value::from("proxy-server-nameserver"))
+        .is_some_and(nonempty);
+    // Without a dedicated node resolver, mihomo previously used the general
+    // DNS policy for node names too. Preserve split DNS for that purpose only.
+    if !explicit_node_dns
+        && !dns.contains_key(Value::from("proxy-server-nameserver-policy"))
+        && let Some(policy) = dns.get(Value::from("nameserver-policy")).cloned()
+    {
+        dns.insert(Value::from("proxy-server-nameserver-policy"), policy);
+    }
     let original = dns
         .get(Value::from("proxy-server-nameserver"))
         .filter(|value| nonempty(value))
@@ -93,7 +104,7 @@ fn bootstrap(dns: &mut Mapping) -> Result<()> {
         .unwrap_or(serde_yaml::to_value(BOOTSTRAP)?);
     // A bootstrap lookup must never depend on the node it is trying to find.
     // Keep resolver transports and options, but remove proxy-group selection.
-    fn direct(value: Value) -> Result<Value> {
+    fn direct(value: Value, system_dns: &[String]) -> Result<Value> {
         match value {
             Value::String(text) => {
                 let (address, options) = text.split_once('#').unwrap_or((&text, ""));
@@ -107,6 +118,23 @@ fn bootstrap(dns: &mut Mapping) -> Result<()> {
                     || address.starts_with("system://")
                     || address.starts_with("dhcp://")
                 {
+                    // macOS takes over system DNS for Safari. A dynamic system
+                    // resolver would then recurse through the protected node.
+                    if (address == "system" || address.starts_with("system://"))
+                        && !system_dns.is_empty()
+                    {
+                        return serde_yaml::to_value(
+                            system_dns
+                                .iter()
+                                .map(|ip| {
+                                    let ip: std::net::IpAddr =
+                                        ip.parse().expect("validated original DNS");
+                                    format!("udp://{}#DIRECT", std::net::SocketAddr::new(ip, 53))
+                                })
+                                .collect::<Vec<_>>(),
+                        )
+                        .map_err(Into::into);
+                    }
                     return Ok(Value::String(address.to_owned()));
                 }
                 // Appending #DIRECT before normalizing a bare IPv6 literal
@@ -122,20 +150,28 @@ fn bootstrap(dns: &mut Mapping) -> Result<()> {
                 }
                 Ok(Value::String(routed))
             }
-            Value::Sequence(items) => items
-                .into_iter()
-                .map(direct)
-                .collect::<Result<Vec<_>>>()
-                .map(Value::Sequence),
+            Value::Sequence(items) => {
+                let mut routed = Vec::with_capacity(items.len());
+                for item in items {
+                    match direct(item, system_dns)? {
+                        Value::Sequence(values) => routed.extend(values),
+                        value => routed.push(value),
+                    }
+                }
+                Ok(Value::Sequence(routed))
+            }
             _ => anyhow::bail!("节点 DNS 必须是地址或地址列表"),
         }
     }
-    dns.insert(Value::from("proxy-server-nameserver"), direct(original)?);
+    dns.insert(
+        Value::from("proxy-server-nameserver"),
+        direct(original, system_dns)?,
+    );
     if let Some(policy) = dns.get_mut(Value::from("proxy-server-nameserver-policy"))
         && let Some(policy) = policy.as_mapping_mut()
     {
         for value in policy.values_mut() {
-            *value = direct(value.clone())?;
+            *value = direct(value.clone(), system_dns)?;
         }
     }
     if let Some(default) = dns
@@ -143,7 +179,10 @@ fn bootstrap(dns: &mut Mapping) -> Result<()> {
         .filter(|value| nonempty(value))
         .cloned()
     {
-        dns.insert(Value::from("default-nameserver"), direct(default)?);
+        dns.insert(
+            Value::from("default-nameserver"),
+            direct(default, system_dns)?,
+        );
     }
     Ok(())
 }
@@ -358,7 +397,7 @@ pub fn apply(map: &mut Mapping, settings: &Settings) -> Result<()> {
         .get_mut(Value::from("dns"))
         .and_then(Value::as_mapping_mut)
         .ok_or_else(|| anyhow::anyhow!("DNS 配置缺失"))?;
-    bootstrap(dns)?;
+    bootstrap(dns, &protection.system_dns)?;
     for key in [
         "nameserver-policy",
         "fallback",
@@ -486,7 +525,7 @@ mod tests {
     #[test]
     fn bootstrap_preserves_working_node_resolvers_without_a_proxy_dependency() {
         let mut dns: Mapping = serde_yaml::from_str("nameserver: ['https://192.0.2.2/dns-query#Main']\ndefault-nameserver: ['192.0.2.53']\nproxy-server-nameserver: ['tls://192.0.2.54#Main&ecs=192.0.2.1', 'system']\nproxy-server-nameserver-policy: {'+.node.test': 'udp://192.0.2.55#Main'}\n").unwrap();
-        bootstrap(&mut dns).unwrap();
+        bootstrap(&mut dns, &[]).unwrap();
         assert_eq!(
             dns["proxy-server-nameserver"],
             serde_yaml::to_value(["tls://192.0.2.54#DIRECT&ecs=192.0.2.1", "system"]).unwrap()
@@ -498,7 +537,7 @@ mod tests {
         assert_eq!(dns["default-nameserver"][0], "192.0.2.53#DIRECT");
         dns.remove(Value::from("proxy-server-nameserver"));
         dns.remove(Value::from("default-nameserver"));
-        bootstrap(&mut dns).unwrap();
+        bootstrap(&mut dns, &[]).unwrap();
         assert_eq!(
             dns["proxy-server-nameserver"][0],
             "https://192.0.2.2/dns-query#DIRECT"
@@ -509,12 +548,30 @@ mod tests {
         assert!(!dns.contains_key(Value::from("default-nameserver")));
         let mut dns: Mapping =
             serde_yaml::from_str("default-nameserver: ['2001:db8::53']\n").unwrap();
-        bootstrap(&mut dns).unwrap();
+        bootstrap(&mut dns, &[]).unwrap();
         assert_eq!(
             dns["proxy-server-nameserver"][0],
             "udp://[2001:db8::53]#DIRECT"
         );
         assert_eq!(dns["default-nameserver"][0], "udp://[2001:db8::53]#DIRECT");
+        let mut dns: Mapping = serde_yaml::from_str(
+            "proxy-server-nameserver: [system]\ndefault-nameserver: [system]\n",
+        )
+        .unwrap();
+        bootstrap(&mut dns, &["192.0.2.53".into(), "2001:db8::53".into()]).unwrap();
+        let captured = serde_yaml::to_value([
+            "udp://192.0.2.53:53#DIRECT",
+            "udp://[2001:db8::53]:53#DIRECT",
+        ])
+        .unwrap();
+        assert_eq!(dns["proxy-server-nameserver"], captured);
+        assert_eq!(dns["default-nameserver"], captured);
+        let mut dns: Mapping = serde_yaml::from_str("nameserver: ['https://192.0.2.2/dns-query']\nnameserver-policy: {'+.node.test': '192.0.2.53'}\n").unwrap();
+        bootstrap(&mut dns, &[]).unwrap();
+        assert_eq!(
+            dns["proxy-server-nameserver-policy"]["+.node.test"],
+            "192.0.2.53#DIRECT"
+        );
     }
     #[cfg(target_os = "macos")]
     #[test]
