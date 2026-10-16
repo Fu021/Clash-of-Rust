@@ -160,6 +160,13 @@ def build(arch):
     toolchain = ndk/'toolchains/llvm/prebuilt/linux-x86_64/bin'
     clang = toolchain/(clang_target+'26-clang')
     env = dict(os.environ)
+    # Fetch Skia's pinned HarfBuzz commit from the official upstream. The
+    # Googlesource mirror has returned 503; git-sync-deps still verifies the
+    # exact DEPS commit. Scope the rewrite to this build, not global Git config.
+    git_config = int(env.get('GIT_CONFIG_COUNT', '0'))
+    env['GIT_CONFIG_COUNT'] = str(git_config + 1)
+    env[f'GIT_CONFIG_KEY_{git_config}'] = 'url.https://github.com/harfbuzz/harfbuzz.git.insteadOf'
+    env[f'GIT_CONFIG_VALUE_{git_config}'] = 'https://chromium.googlesource.com/external/github.com/harfbuzz/harfbuzz.git'
     env.update({
         'CARGO_TARGET_'+target.upper().replace('-', '_')+'_LINKER':str(clang),
         'CC_'+target.replace('-', '_'):str(clang),
