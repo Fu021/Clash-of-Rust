@@ -53,7 +53,12 @@ pub const DIAGNOSTIC_HOSTS: &[&str] = &[
     "stun.cloudflare.com",
     "stun.l.google.com",
 ];
-pub const DOH: &[&str] = &["https://1.1.1.1/dns-query", "https://8.8.8.8/dns-query"];
+pub const DOH: &[&str] = &[
+    "https://1.1.1.1/dns-query",
+    "https://8.8.8.8/dns-query",
+    "https://[2606:4700:4700::1111]/dns-query",
+    "https://[2001:4860:4860::8888]/dns-query",
+];
 pub const BOOTSTRAP: &[&str] = &[
     "https://223.5.5.5/dns-query#DIRECT",
     "https://223.6.6.6/dns-query#DIRECT",
@@ -535,6 +540,32 @@ mod tests {
                     .unwrap()
                     .is_empty()
             );
+        }
+        for (key, route) in [
+            (
+                "nameserver",
+                settings.claude_protection.as_ref().unwrap().route.as_str(),
+            ),
+            ("default-nameserver", "DIRECT"),
+            ("proxy-server-nameserver", "DIRECT"),
+        ] {
+            let addresses: Vec<std::net::IpAddr> = map["dns"][key]
+                .as_sequence()
+                .unwrap()
+                .iter()
+                .map(|value| {
+                    let url = reqwest::Url::parse(value.as_str().unwrap()).unwrap();
+                    assert_eq!(url.scheme(), "https");
+                    assert_eq!(url.fragment(), Some(route));
+                    url.host_str()
+                        .unwrap()
+                        .trim_matches(['[', ']'])
+                        .parse()
+                        .unwrap()
+                })
+                .collect();
+            assert!(addresses.iter().any(std::net::IpAddr::is_ipv4));
+            assert!(addresses.iter().any(std::net::IpAddr::is_ipv6));
         }
         assert_eq!(map["tun"]["dns-hijack"].as_sequence().unwrap().len(), 2);
         assert!(map["tun"]["route-address"].is_null());
