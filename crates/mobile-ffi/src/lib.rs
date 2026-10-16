@@ -29,6 +29,7 @@ pub struct Session {
     pub node: String,
     pub rule_profile: String,
     rule_document: Document,
+    route: String,
     pub draft: ProfileRules,
     pub native: Arc<dyn NativeHost>,
 }
@@ -41,10 +42,6 @@ impl Session {
         let mut profiles = store.profiles()?;
         if profiles.is_empty() {
             let id = uuid::Uuid::new_v4().to_string();
-            atomic_write(
-                &store.profile_path(&id)?,
-                include_bytes!("../../../resources/default.yaml"),
-            )?;
             profiles.push(Profile {
                 id: id.clone(),
                 name: "默认直连".into(),
@@ -52,9 +49,25 @@ impl Session {
                 updated: 0,
                 usage: None,
             });
-            settings.active_profile = Some(id);
-            store.save_profiles(&profiles)?;
-            store.save_settings(&settings)?;
+            settings.active_profile = Some(id.clone());
+            let mut tx = core::profile_transaction::Transaction::new(&store.root)?;
+            tx.stage(
+                &store.profile_path(&id)?,
+                include_bytes!("../../../resources/default.yaml"),
+            )?;
+            tx.stage(
+                &store.root.join("profiles.json"),
+                &serde_json::to_vec_pretty(&profiles)?,
+            )?;
+            tx.stage(
+                &store.root.join("settings.json"),
+                &serde_json::to_vec_pretty(&settings)?,
+            )?;
+            tx.prepare()?;
+            if let Err(error) = tx.commit() {
+                tx.rollback()?;
+                return Err(error);
+            }
         }
         ensure!(
             profiles
@@ -72,6 +85,8 @@ impl Session {
             &core::config::read_profile(&store.profile_path(id)?)?,
         )?;
         let rule_profile = id.to_owned();
+        let route =
+            core::active_route::root(&core::config::read_profile(&store.profile_path(id)?)?)?;
         let api = Api::new(&settings)?;
         Ok(Self {
             store,
@@ -89,6 +104,7 @@ impl Session {
             node: String::new(),
             rule_profile,
             rule_document: document,
+            route,
             draft,
             native,
         })
@@ -122,6 +138,7 @@ impl Session {
             .request(json!({"op":"initialize","config":raw,"ipv6":self.settings.ipv6}))?;
         atomic_write(&self.store.runtime().join("config.yaml"), raw.as_bytes())?;
         self.running = true;
+        self.route = core::active_route::root(&raw)?;
         Ok(())
     }
     pub fn commit_settings(&mut self, settings: Settings) -> Result<()> {
@@ -141,6 +158,9 @@ impl Session {
                 .request(json!({"op":"reload","config":raw,"ipv6":settings.ipv6}))
         {
             tx.rollback()?;
+            self.native
+                .request(json!({"op":"reload","config":old_raw,"ipv6":self.settings.ipv6}))
+                .context("内核拒绝配置后恢复失败")?;
             return Err(error);
         }
         if let Err(error) = tx.commit() {
@@ -153,6 +173,7 @@ impl Session {
             return Err(error);
         }
         self.api = Api::new(&settings)?;
+        self.route = core::active_route::root(&raw)?;
         self.settings = settings;
         Ok(())
     }
@@ -166,9 +187,8 @@ impl Session {
         }
         if page == 1 || page == 0 {
             self.proxies = self.api.get("proxies").await?;
-            if let Ok(root) = core::active_route::root(&self.raw()?)
-                && let Some(node) = core::active_route::from_snapshot(&root, &self.proxies)
-            {
+            let root = core::active_route::start(&self.settings.run_mode, &self.route);
+            if let Some(node) = core::active_route::from_snapshot(root, &self.proxies) {
                 self.node = node;
             }
         } else {
@@ -218,6 +238,13 @@ impl Session {
         content: Option<&str>,
     ) -> Result<()> {
         ensure!(!name.trim().is_empty(), "订阅名称不能为空");
+        ensure!(
+            !self
+                .profiles
+                .iter()
+                .any(|p| p.name == name.trim() && Some(p.id.as_str()) != id),
+            "订阅名称已存在"
+        );
         let (raw, usage) = if let Some(raw) = content {
             (raw.to_owned(), None)
         } else if source.is_empty() {
@@ -285,6 +312,10 @@ impl Session {
                 .request(json!({"op":"reload","config":raw,"ipv6":self.settings.ipv6}))
         {
             tx.rollback()?;
+            if let Some(raw) = &old_raw {
+                self.native
+                    .request(json!({"op":"reload","config":raw,"ipv6":self.settings.ipv6}))?;
+            }
             return Err(error);
         }
         if let Err(error) = tx.commit() {
@@ -298,6 +329,9 @@ impl Session {
             return Err(error);
         }
         self.profiles = profiles;
+        if let Some(raw) = new_runtime {
+            self.route = core::active_route::root(&raw)?;
+        }
         if self.rule_profile == id {
             self.rule_document = Document::from_raw(&id, false, &raw)?;
         }
@@ -351,7 +385,10 @@ impl Session {
             &serde_json::to_vec_pretty(&profiles)?,
         )?;
         tx.prepare()?;
-        tx.commit()?;
+        if let Err(error) = tx.commit() {
+            tx.rollback()?;
+            return Err(error);
+        }
         self.profiles = profiles;
         self.settings = settings;
         if self.rule_profile == id {
@@ -472,5 +509,32 @@ mod tests {
         assert_eq!(session.raw().unwrap(), before);
         assert!(session.delete(&session.profile().id.clone()).is_err());
         assert!(session.save_rule("", "", 1).is_err());
+    }
+    #[test]
+    fn failed_native_reload_restores_saved_settings_and_runtime() {
+        struct RejectIpv4;
+        impl NativeHost for RejectIpv4 {
+            fn request(&self, value: Value) -> Result<Value> {
+                ensure!(
+                    value["op"] != "reload" || value["ipv6"] != false,
+                    "simulated native reload failure"
+                );
+                Ok(json!({"ok":true}))
+            }
+        }
+        let root = tempfile::tempdir().unwrap();
+        let mut session = Session::open(root.path().into(), Arc::new(RejectIpv4)).unwrap();
+        session.initialize().unwrap();
+        let before = std::fs::read(session.store.runtime().join("config.yaml")).unwrap();
+        let mut next = session.settings.clone();
+        next.ipv6 = false;
+        assert!(session.commit_settings(next).is_err());
+        assert!(session.settings.ipv6);
+        assert!(session.store.load_settings().unwrap().ipv6);
+        assert_eq!(
+            std::fs::read(session.store.runtime().join("config.yaml")).unwrap(),
+            before
+        );
+        assert!(!core::profile_transaction::recover(&session.store.root).unwrap());
     }
 }

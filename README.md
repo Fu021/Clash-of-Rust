@@ -48,13 +48,13 @@ macOS 打开 DMG，将 **Clash of Rust.app** 拖入 **Applications（应用程�
 
 ## 编译与打包
 
-[GitHub Actions](https://github.com/Fu021/Clash-of-Rust/actions) 覆盖六种系统与架构的编译、静态检查、单元测试与系统代理/TUN 测试；界面可使用 Slint Viewer 独立预览，无需编译桌面程序。
+[GitHub Actions](https://github.com/Fu021/Clash-of-Rust/actions) 覆盖六种桌面系统与架构及三种 Android ABI 的编译、检查、单元测试与代理/TUN 测试；界面可使用 Slint Viewer 独立预览，无需编译桌面程序。
 
 测试安装包：等待对应提交的 CI 成功，手动运行 **Publish Release**，填写 `ci_run_id` 并勾选 `check_only`；安装包保存在 Actions 附件中。打包直接复用 CI 产物，不再编译。正式发布使用同一工作流，详见 [工作流说明](docs/workflows.md)。
 
 ## 开发与发布
 
-Cargo workspace 分为共享业务（`crates/client-core`）、Slint 界面（`crates/client-ui`）与桌面宿主（`apps/desktop`）。Android/iOS 目前仅保留宿主及桥接占位，后续复用共享业务。
+Cargo workspace 分为共享业务（`crates/client-core`）、Slint 界面（`crates/client-ui`）与桌面宿主（`apps/desktop`）。Android 开发版使用独立 Slint 原生宿主与系统 VPN，构建及 APK 打包复用现有工作流，见 [Android 开发说明](apps/android/README.md)；iOS 保留独立界面与宿主占位。
 
 安装 Slint Viewer 后可独立预览界面：
 

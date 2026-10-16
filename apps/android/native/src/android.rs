@@ -191,8 +191,8 @@ fn run(app: slint::android::AndroidApp) -> Result<()> {
                 AndroidIntent::NotificationSpeeds => "notification-speeds",
                 AndroidIntent::BatterySettings => "battery-settings",
                 AndroidIntent::CheckUpdate => "open-url",
+                AndroidIntent::Background => "background",
                 AndroidIntent::SavePorts => return, // Routed through MobileActions below.
-                _ => return,
             };
             let request = if op == "open-url" {
                 json!({"op":op,"url":"https://github.com/Fu021/Clash-of-Rust/releases"})
@@ -313,10 +313,12 @@ async fn run_loop(
                     let generation = state.generation;
                     let port = state.session.settings.mixed_port;
                     let send = updates.clone();
+                    let targets=core::ip_check::services().iter().enumerate()
+                        .filter(|(_,service)| intent == MobileIntent::SiteStart || service.group == request.a)
+                        .map(|(index,service)|(index,service.id.clone())).collect::<Vec<_>>();
                     checks = Some(tokio::spawn(async move {
-                        let mut jobs = stream::iter(core::ip_check::services().iter().enumerate()
-                            .filter(|(_,service)| intent == MobileIntent::SiteStart || service.group == request.a)
-                            .map(|(index,service)| async move { (index, core::ip_check::check(&service.id,port).await.map_err(|e|e.to_string())) }))
+                        let mut jobs = stream::iter(targets)
+                            .map(move |(index,id)|async move {(index,core::ip_check::check(&id,port).await.map_err(|e|e.to_string()))})
                             .buffer_unordered(4);
                         while let Some((index,result)) = jobs.next().await {
                             if send.send(Update::Ip(generation,index,Some(result))).await.is_err() { return; }
@@ -360,7 +362,9 @@ async fn run_loop(
             value = native_events.recv() => {
                 if let Some(value) = value {
                     immediate = true;
-                    if let Err(error) = native_event(&mut state,&value).await { state.notice=format!("{error:#}"); }
+                    if serde_json::from_str::<Value>(&value).ok().is_some_and(|v|v["event"]=="back") {
+                        let weak=weak.clone();slint::invoke_from_event_loop(move||{if let Some(ui)=weak.upgrade(){ui.invoke_native_back();}})?;
+                    } else if let Err(error) = native_event(&mut state,&value).await { state.notice=format!("{error:#}"); }
                 }
             }
             value = update_rx.recv() => {
@@ -482,15 +486,23 @@ async fn native_event(state: &mut State, raw: &str) -> Result<()> {
             state.notice = value["value"].as_str().unwrap_or("").into();
         }
         "file" => {
+            let base = value["value"]["name"].as_str().unwrap_or("导入配置");
+            let mut name = base.to_owned();
+            let mut suffix = 2;
+            while state.session.profiles.iter().any(|p| p.name == name) {
+                name = format!("{base} ({suffix})");
+                suffix += 1;
+            }
             state
                 .session
                 .save_profile(
                     None,
-                    value["value"]["name"].as_str().unwrap_or("导入配置"),
+                    &name,
                     "",
                     Some(value["value"]["content"].as_str().context("导入内容为空")?),
                 )
                 .await?;
+            state.completed = Some(MobileIntent::SaveProfile);
             state.notice = "配置已导入，请选择启用".into();
         }
         _ => {}

@@ -1,6 +1,7 @@
 // Production Android entry. No preview values, fake status bar or fixtures.
 import { AndroidSurface } from "app.slint";
 import { MobileView } from "../shared/state.slint";
+import { AndroidActions, AndroidIntent } from "state.slint";
 export { MobileData, MobileView, MobileActions, MobileIntent } from "../shared/state.slint";
 export { AndroidData, AndroidActions, AndroidIntent } from "state.slint";
 export { Theme } from "../../theme/palette.slint";
@@ -18,6 +19,13 @@ export component AndroidWindow inherits Window {
     in-out property <string> selected-id <=> MobileView.selected-id;
     in-out property <string> query <=> MobileView.query;
     in-out property <string> rule-edit-id;
+    callback native-back();
+    native-back => {
+        if MobileView.modal { MobileView.detail=MobileView.detail==12 ? MobileView.pending-detail : 0; }
+        else if MobileView.detail>0 {MobileView.back();}
+        else if MobileView.page!=0 { MobileView.navigate(0); }
+        else { AndroidActions.request(AndroidIntent.background, ""); }
+    }
     callback notify(string);
     notify(message) => { MobileView.notify(message); }
     changed top => { MobileView.safe-top = self.top; }

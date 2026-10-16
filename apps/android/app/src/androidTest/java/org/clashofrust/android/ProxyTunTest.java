@@ -59,6 +59,13 @@ public class ProxyTunTest {
         for (int cycle=0; cycle<2; cycle++) {
             context.startForegroundService(new Intent(context,TunnelService.class));
             await("VPN did not connect: "+TunnelService.error(), TunnelService::connected);
+            ConnectivityManager connectivity=context.getSystemService(ConnectivityManager.class);
+            await("Android did not make the VPN its active network", () -> {
+                NetworkCapabilities capabilities=connectivity.getNetworkCapabilities(connectivity.getActiveNetwork());
+                return capabilities!=null && capabilities.hasTransport(NetworkCapabilities.TRANSPORT_VPN);
+            });
+            // A settings reload must preserve the independently owned Android TUN.
+            CoreBridge.reload(CoreBridge.config());
             // This request has NO explicit proxy. It must traverse the OS TUN.
             HttpURLConnection connection = (HttpURLConnection)new URL("http://android-tun.test:18081/hold").openConnection(java.net.Proxy.NO_PROXY);
             connection.setConnectTimeout(5000); connection.setReadTimeout(5000);
@@ -75,7 +82,6 @@ public class ProxyTunTest {
                 assertTrue("No real TUN connection was observed; a direct-only test must fail",observed);
             } finally { connection.disconnect(); }
             TunnelService.stop(context);
-            ConnectivityManager connectivity=context.getSystemService(ConnectivityManager.class);
             await("VPN routes remained after disconnect", () -> {
                 NetworkCapabilities capabilities=connectivity.getNetworkCapabilities(connectivity.getActiveNetwork());
                 return !TunnelService.connected() && capabilities != null && !capabilities.hasTransport(NetworkCapabilities.TRANSPORT_VPN);

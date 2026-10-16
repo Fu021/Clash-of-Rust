@@ -120,7 +120,7 @@ def verified_run(client, commit, run_id=None, check_only=False):
             'Source branch has changed; select its current successful CI')
     jobs = client(f'/actions/runs/{run_id}/jobs?filter=latest&per_page=100')['jobs']
     require(len(jobs) == len(CI_JOBS) and {j['name'] for j in jobs} == CI_JOBS,
-            'CI does not cover all six native platforms')
+            'CI does not cover all required desktop platforms and Android ABIs')
     require(all(j['status'] == 'completed' and j['conclusion'] == 'success' for j in jobs), 'A required CI job did not pass')
     return run
 
@@ -147,7 +147,7 @@ def filenames(version):
 
 def validate_files(paths, version):
     files = {p.name: p for p in paths}
-    require(len(files) == len(paths) and set(files) == filenames(version), 'Expected exactly six installers and six checksum files')
+    require(len(files) == len(paths) and set(files) == filenames(version), 'Expected the complete installer/APK and checksum set')
     for name, path in files.items():
         require(path.is_file() and not path.is_symlink(), 'Release asset must be a regular file: ' + name)
         if name.endswith('.sha256'):

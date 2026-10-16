@@ -10,6 +10,7 @@
     </queries>
     <application android:label="Clash of Rust" android:icon="@drawable/ic_app"
         android:allowBackup="false" android:usesCleartextTraffic="true"
+        android:enableOnBackInvokedCallback="true"
         android:theme="@android:style/Theme.Material.Light.NoActionBar">
         <activity android:name=".MainActivity" android:exported="true"
             android:launchMode="singleTask" android:windowSoftInputMode="adjustResize"

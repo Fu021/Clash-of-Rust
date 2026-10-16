@@ -3,6 +3,7 @@ import argparse
 import io
 import json
 import os
+import re
 from pathlib import Path
 import shutil
 import struct
@@ -88,8 +89,16 @@ def validate_apk(path, arch):
                     start = offset + size * index
                     if struct.unpack_from('<I', data, start)[0] == 1 and struct.unpack_from('<Q', data, start+48)[0] < 16384:
                         raise ValueError('Native library is not 16 KiB aligned: '+name)
-        return {'apk_bytes':path.stat().st_size, 'native_compressed_bytes':sum(archive.getinfo(n).compress_size for n in libraries),
-                'native_bytes':sum(archive.getinfo(n).file_size for n in libraries)}
+        sizes={'apk_bytes':path.stat().st_size, 'native_compressed_bytes':sum(archive.getinfo(n).compress_size for n in libraries),
+               'native_bytes':sum(archive.getinfo(n).file_size for n in libraries)}
+    tool=Path(os.environ['ANDROID_HOME'])/'build-tools/36.0.0/aapt2'
+    metadata=subprocess.check_output([str(tool),'dump','badging',str(path)],text=True)
+    package=re.search(r"package: name='([^']+)' versionCode='([0-9]+)' versionName='([^']+)'",metadata)
+    if not package or package[1]!='org.clashofrust.android' or package[3]!=package_version():
+        raise ValueError('APK package/version differs from source')
+    if "sdkVersion:'26'" not in metadata or "targetSdkVersion:'36'" not in metadata:
+        raise ValueError('APK SDK range differs from selected Android host')
+    return {**sizes,'version_code':int(package[2])}
 
 
 def build(arch):
@@ -107,6 +116,7 @@ def build(arch):
         'CXXSTDLIB':'c++_static',
         'RUSTFLAGS':'-C link-arg=-Wl,-z,max-page-size=16384',
     })
+    run(['cargo', 'clippy', '-p', 'clash-android', '--target', target, '--release', '--locked', '--', '-D', 'warnings'], cwd=ROOT, env=env)
     run(['cargo', 'build', '-p', 'clash-android', '--target', target, '--release', '--locked'], cwd=ROOT, env=env)
     destination = ANDROID/'app/native-libs'/abi
     destination.mkdir(parents=True, exist_ok=True)

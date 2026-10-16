@@ -30,7 +30,10 @@ public final class MainActivity extends NativeActivity {
         super.onCreate(state);
         // Let Slint handle native insets; do not install a second padded content view.
         getWindow().setSoftInputMode(android.view.WindowManager.LayoutParams.SOFT_INPUT_ADJUST_RESIZE);
+        if (Build.VERSION.SDK_INT >= 33) getOnBackInvokedDispatcher().registerOnBackInvokedCallback(
+            android.window.OnBackInvokedDispatcher.PRIORITY_DEFAULT, () -> emit("back",true));
     }
+    @Override public void onBackPressed() { emit("back",true); }
     @Override protected void onResume() { super.onResume(); emit("visible", true); }
     @Override protected void onPause() { emit("visible", false); super.onPause(); }
 
@@ -70,6 +73,7 @@ public final class MainActivity extends NativeActivity {
                     });
                     break;
                 }
+                case "background": runOnUiThread(() -> moveTaskToBack(true)); break;
                 case "vpn-settings": runOnUiThread(() -> startActivity(new Intent(Settings.ACTION_VPN_SETTINGS))); break;
                 case "battery-settings": runOnUiThread(() -> startActivity(new Intent(Settings.ACTION_IGNORE_BATTERY_OPTIMIZATION_SETTINGS))); break;
                 case "application-routing": runOnUiThread(this::applicationRouting); break;
@@ -102,6 +106,8 @@ public final class MainActivity extends NativeActivity {
     }
     private void startVpn() {
         startForegroundService(new Intent(this, TunnelService.class));
+        if (Build.VERSION.SDK_INT >= 33 && checkSelfPermission(android.Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED)
+            requestPermissions(new String[]{android.Manifest.permission.POST_NOTIFICATIONS}, 14);
     }
     @Override protected void onActivityResult(int request, int result, Intent data) {
         super.onActivityResult(request, result, data);
@@ -135,7 +141,11 @@ public final class MainActivity extends NativeActivity {
                             if (out.size() + count > 10 * 1024 * 1024) throw new IOException("订阅超过 10 MiB");
                             out.write(buffer, 0, count);
                         }
-                        JSONObject file = new JSONObject().put("name", "导入配置")
+                        String name="导入配置";
+                        try (android.database.Cursor cursor=getContentResolver().query(uri,new String[]{android.provider.OpenableColumns.DISPLAY_NAME},null,null,null)) {
+                            if (cursor!=null && cursor.moveToFirst()) name=cursor.getString(0);
+                        }
+                        JSONObject file = new JSONObject().put("name", name)
                             .put("content", out.toString(StandardCharsets.UTF_8.name()));
                         emit("file", file);
                     }
