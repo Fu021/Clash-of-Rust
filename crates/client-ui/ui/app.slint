@@ -118,7 +118,7 @@ export component AppWindow inherits Window {
                     ActionButton { text: "关闭"; clicked => { UiActions.dispatch(Intent.dismiss-notice, "", ""); } }
                 }
                 Rectangle { height: 2px; background: Theme.subtle-line;
-                    Rectangle { width: parent.width * notice-panel.progress; height: parent.height; background: UiData.notice-error ? Theme.danger : Theme.accent; }
+                    Rectangle { x: 0px; y: 0px; width: parent.width * notice-panel.progress; height: parent.height; background: UiData.notice-error ? Theme.danger : Theme.accent; }
                 }
             }
             if UiData.update-busy || UiData.update-available: ContentPanel {
