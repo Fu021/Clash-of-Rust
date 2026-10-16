@@ -1191,9 +1191,15 @@ impl Engine {
             if self.running() {
                 self.apply_protection_runtime(&next, &desired, protection.is_some())
                     .await?;
-                // Activation follows the same transaction as main: configuration,
-                // selectors and native routing must succeed. External DNS/site
-                // availability belongs to the report, not an enable/disable gate.
+                if protection.is_some() {
+                    // /version and tun.enable do not prove network availability.
+                    // Use the core's actual upstream DNS path (not fake-IP or the
+                    // host resolver) before committing a full-route takeover.
+                    self.api
+                        .resolve_domain("www.cloudflare.com")
+                        .await
+                        .context("保护节点或加密 DNS 无法连通，请检查节点和节点 DNS 配置")?;
+                }
             } else {
                 #[cfg(target_os = "macos")]
                 self.mac_protection_dns(false).await?;

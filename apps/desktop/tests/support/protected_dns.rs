@@ -117,8 +117,44 @@ pub async fn run(engine: &mut Engine, profile: &std::path::Path) {
         })
         .await
         .unwrap();
-    for node in ["node.fixture.test", "node6.fixture.test"] {
-        std::fs::write(profile, format!("proxies: [{{name: fixture, type: socks5, server: {node}, port: 1080, udp: true}}]\nproxy-groups: [{{name: Main, type: select, proxies: [fixture]}}]\nrules: ['MATCH,Main']\ndns:\n  enable: true\n  enhanced-mode: fake-ip\n  nameserver: ['https://223.5.5.5/dns-query#DIRECT']\n  fake-ip-filter: ['+.fixture.test']\ntun: {{device: ClashRustTest, route-address: [203.0.113.0/24], dns-hijack: []}}\n")).unwrap();
+    for (node, fixed_blocked, explicit, resolver_hostname) in [
+        ("node.fixture.test", false, false, false),
+        ("node6.fixture.test", false, false, false),
+        ("node.fixture.test", true, true, false),
+        ("node6.fixture.test", true, false, false),
+        ("node6.fixture.test", true, true, true),
+    ] {
+        let bootstrap = if resolver_hostname {
+            "resolver.fixture.test"
+        } else if fixed_blocked {
+            "192.0.2.254"
+        } else {
+            "223.5.5.5"
+        };
+        let node_dns = if explicit {
+            format!("  proxy-server-nameserver: ['https://{bootstrap}/dns-query#DIRECT']\n")
+        } else {
+            String::new()
+        };
+        let default_dns = if resolver_hostname {
+            "  default-nameserver: ['udp://192.0.2.254:53']\n"
+        } else {
+            ""
+        };
+        reqwest::Client::builder()
+            .no_proxy()
+            .build()
+            .unwrap()
+            .get(format!(
+                "http://192.0.2.254:18080/block-fixed-bootstrap/{}",
+                if fixed_blocked { "on" } else { "off" }
+            ))
+            .send()
+            .await
+            .unwrap()
+            .error_for_status()
+            .unwrap();
+        std::fs::write(profile, format!("proxies: [{{name: fixture, type: socks5, server: {node}, port: 1080, udp: true}}]\nproxy-groups: [{{name: Main, type: select, proxies: [fixture]}}]\nrules: ['MATCH,Main']\ndns:\n  enable: true\n  enhanced-mode: fake-ip\n  nameserver: ['https://{bootstrap}/dns-query#DIRECT']\n{node_dns}{default_dns}  fake-ip-filter: ['+.fixture.test']\ntun: {{device: ClashRustTest, route-address: [203.0.113.0/24], dns-hijack: []}}\n")).unwrap();
         engine
             .import(
                 format!("DNS uplink {node}"),
@@ -200,9 +236,57 @@ pub async fn run(engine: &mut Engine, profile: &std::path::Path) {
             "Public DNS bypassed the node: {after}"
         );
         assert_eq!(after["plaintext_dns"], 0, "Plaintext DNS leaked: {after}");
+        assert_eq!(
+            after["bootstrap_public_lookup"], 0,
+            "Public name leaked to bootstrap: {after}"
+        );
+        if resolver_hostname {
+            assert!(
+                after["resolver_bootstrap"].as_u64().unwrap()
+                    > before["resolver_bootstrap"].as_u64().unwrap()
+            );
+        }
         println!(
-            "PASS: {node}: bootstrap DoH, pinned DoH A/AAAA, UDP/TCP TUN DNS, HTTP, cold restart and exact restore; {after}"
+            "PASS: {node}, fixed DNS blocked={fixed_blocked}, explicit node DNS={explicit}, resolver hostname={resolver_hostname}: bootstrap DoH, pinned DoH A/AAAA, UDP/TCP TUN DNS, HTTP, cold restart and exact restore; {after}"
         );
         engine.select_proxy_mode(ProxyMode::Off).await.unwrap();
     }
+    engine.select_proxy_mode(ProxyMode::System).await.unwrap();
+    let settings = std::fs::read(engine.store.root.join("settings.json")).unwrap();
+    let runtime = std::fs::read(engine.store.runtime().join("config.yaml")).unwrap();
+    let control = reqwest::Client::builder()
+        .no_proxy()
+        .timeout(Duration::from_secs(3))
+        .build()
+        .unwrap();
+    control
+        .get("http://192.0.2.254:18080/block-public-dns/on")
+        .send()
+        .await
+        .unwrap();
+    let result = engine.claude_protection(true).await;
+    assert!(
+        result.is_err(),
+        "A broken DNS path must not commit protection as enabled"
+    );
+    assert!(format!("{:#}", result.unwrap_err()).contains("加密 DNS"));
+    assert!(engine.settings.claude_protection.is_none());
+    assert_eq!(
+        settings,
+        std::fs::read(engine.store.root.join("settings.json")).unwrap()
+    );
+    assert_eq!(
+        runtime,
+        std::fs::read(engine.store.runtime().join("config.yaml")).unwrap()
+    );
+    let state = engine.poll(Scope::Home).await.unwrap();
+    assert!(state.running && state.system_proxy && !state.tun);
+    control
+        .get("http://192.0.2.254:18080/block-public-dns/off")
+        .send()
+        .await
+        .unwrap();
+    println!(
+        "PASS: unreachable protected DoH rejects activation and restores system proxy and configuration"
+    );
 }

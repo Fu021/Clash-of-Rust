@@ -16,7 +16,10 @@ PUBLIC = ('1.1.1.1', '8.8.8.8', '2606:4700:4700::1111', '2001:4860:4860::8888')
 NODE = ('203.0.113.10', '2001:db8:2::10')
 WEBSITE = ('203.0.113.20', '2001:db8:2::20')
 METRICS = {'bootstrap': 0, 'proxied_dns': 0, 'direct_public_dns': 0,
-           'node_connections': 0, 'web': 0, 'plaintext_dns': 0}
+           'node_connections': 0, 'web': 0, 'plaintext_dns': 0,
+           'bootstrap_public_lookup': 0, 'resolver_bootstrap': 0}
+BLOCK_FIXED_BOOTSTRAP = False
+BLOCK_PUBLIC_DNS = False
 
 
 def dns_response(query, bootstrap):
@@ -29,10 +32,15 @@ def dns_response(query, bootstrap):
     kind, _ = struct.unpack('!HH', query[end:end + 4])
     end += 4
     name = '.'.join(labels)
-    address = NODE if name.startswith(('node.', 'node6.')) else WEBSITE
+    if name == 'resolver.fixture.test':
+        address = ('192.0.2.254', '2001:db8:1::fe')
+    else:
+        address = NODE if name.startswith(('node.', 'node6.')) else WEBSITE
     # Bootstrap may resolve only node names. A public lookup sent here would
     # constitute a privacy regression even if it received a usable answer.
     allowed = not bootstrap or name.startswith(('node.', 'node6.'))
+    if not allowed:
+        METRICS['bootstrap_public_lookup'] += 1
     if name.startswith('node6.') and kind == 1:
         allowed = False
     answer = allowed and kind in (1, 28)
@@ -44,16 +52,31 @@ def dns_response(query, bootstrap):
 
 
 async def http(reader, writer):
+    global BLOCK_FIXED_BOOTSTRAP, BLOCK_PUBLIC_DNS
     try:
         head = await asyncio.wait_for(reader.readuntil(b'\r\n\r\n'), 8)
         path = head.split(b' ', 2)[1].decode('ascii')
         local = writer.get_extra_info('sockname')[0]
         peer = writer.get_extra_info('peername')[0]
-        if path == '/metrics':
+        if path.startswith('/block-fixed-bootstrap/'):
+            BLOCK_FIXED_BOOTSTRAP = path.endswith('/on')
+            body, content_type = b'ok', 'text/plain'
+        elif path.startswith('/block-public-dns/'):
+            BLOCK_PUBLIC_DNS = path.endswith('/on')
+            body, content_type = b'ok', 'text/plain'
+        elif path == '/metrics':
             body, content_type = json.dumps(METRICS).encode(), 'application/json'
         elif path.startswith('/dns-query?dns='):
-            bootstrap = local in BOOTSTRAP or local == PUBLIC[2]
+            fixed = local in BOOTSTRAP or local == PUBLIC[2]
+            bootstrap = fixed or local == '192.0.2.254'
             direct = peer in ('192.0.2.1', '2001:db8:1::1')
+            if fixed and direct and BLOCK_FIXED_BOOTSTRAP:
+                # Model a network where the chosen public HTTPS IPs cannot be
+                # reached. The subscription's own encrypted bootstrap remains
+                # available at the peer IP, without changing production URLs.
+                return
+            if not direct and BLOCK_PUBLIC_DNS:
+                return
             if bootstrap and direct:
                 METRICS['bootstrap'] += 1
             elif not direct:
@@ -94,7 +117,7 @@ async def socks(reader, writer):
             host = (await reader.readexactly((await reader.readexactly(1))[0])).decode('ascii')
         port = struct.unpack('!H', await reader.readexactly(2))[0]
         # Only the fixtures are reachable. Domain requests have no OS lookup.
-        if host not in (*BOOTSTRAP, *PUBLIC, *WEBSITE):
+        if host not in (*BOOTSTRAP, *PUBLIC, *WEBSITE, '192.0.2.254'):
             host = WEBSITE[0]
         incoming, remote = await asyncio.open_connection(host, port)
         METRICS['node_connections'] += 1
@@ -120,7 +143,10 @@ class PlaintextDNS(asyncio.DatagramProtocol):
         self.transport = transport
 
     def datagram_received(self, data, peer):
-        METRICS['plaintext_dns'] += 1
+        # This one infrastructure name is intentionally bootstrapped by the
+        # subscription's original default-nameserver, never a public query.
+        infrastructure = b'\x08resolver\x07fixture\x04test\x00' in data
+        METRICS['resolver_bootstrap' if infrastructure else 'plaintext_dns'] += 1
         self.transport.sendto(dns_response(data, False), peer)
 
 

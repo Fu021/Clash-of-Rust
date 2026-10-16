@@ -107,9 +107,10 @@ def isolated_uplink():
              '-keyout', directory/'server.key', '-out', directory/'server.csr'],
             stdout=subprocess.DEVNULL, stderr=subprocess.PIPE)
         addresses = (*BOOTSTRAP, *PUBLIC)
+        certificate_addresses = (*addresses, '192.0.2.254')
         extensions = directory/'server.ext'
         extensions.write_text('basicConstraints=critical,CA:FALSE\nextendedKeyUsage=serverAuth\n'
-                              'subjectAltName='+','.join('IP:'+ip for ip in addresses)+'\n')
+                              'subjectAltName='+','.join('IP:'+ip for ip in certificate_addresses)+',DNS:resolver.fixture.test\n')
         run(['openssl', 'x509', '-req', '-in', directory/'server.csr', '-CA', ca, '-CAkey', key,
              '-CAcreateserial', '-days', '1', '-extfile', extensions, '-out', directory/'server.crt'],
             stdout=subprocess.DEVNULL, stderr=subprocess.PIPE)

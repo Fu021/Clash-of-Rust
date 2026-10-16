@@ -68,6 +68,73 @@ pub const BOOTSTRAP: &[&str] = &[
     "https://[2606:4700:4700::1111]/dns-query#DIRECT",
 ];
 
+// Only node/DNS-server bootstrap uses these resolvers. Public domain lookups
+// always use DOH through the pinned node below. Replacing a working private,
+// ISP or subscription resolver with fixed public HTTPS IPs can make the node
+// itself unresolvable (and therefore break every proxied DNS request).
+fn bootstrap(dns: &mut Mapping) -> Result<()> {
+    let nonempty = |value: &Value| match value {
+        Value::String(text) => !text.trim().is_empty(),
+        Value::Sequence(items) => !items.is_empty(),
+        _ => false,
+    };
+    let original = dns
+        .get(Value::from("proxy-server-nameserver"))
+        .filter(|value| nonempty(value))
+        .or_else(|| {
+            dns.get(Value::from("nameserver"))
+                .filter(|value| nonempty(value))
+        })
+        .cloned()
+        .unwrap_or(serde_yaml::to_value(BOOTSTRAP)?);
+    // A bootstrap lookup must never depend on the node it is trying to find.
+    // Keep resolver transports and options, but remove proxy-group selection.
+    fn direct(value: Value) -> Result<Value> {
+        match value {
+            Value::String(text) => {
+                let (address, options) = text.split_once('#').unwrap_or((&text, ""));
+                let options: Vec<_> = options
+                    .split('&')
+                    .filter(|option| option.contains('='))
+                    .collect();
+                // System/DHCP resolvers have their own native routing. Ordinary
+                // IP, UDP, TCP, DoT and DoH all support the #DIRECT parameter.
+                if address == "system" || address.starts_with("dhcp://") {
+                    return Ok(Value::String(address.to_owned()));
+                }
+                let mut routed = format!("{address}#DIRECT");
+                for option in options {
+                    routed.push('&');
+                    routed.push_str(option);
+                }
+                Ok(Value::String(routed))
+            }
+            Value::Sequence(items) => items
+                .into_iter()
+                .map(direct)
+                .collect::<Result<Vec<_>>>()
+                .map(Value::Sequence),
+            _ => anyhow::bail!("节点 DNS 必须是地址或地址列表"),
+        }
+    }
+    dns.insert(Value::from("proxy-server-nameserver"), direct(original)?);
+    if let Some(policy) = dns.get_mut(Value::from("proxy-server-nameserver-policy"))
+        && let Some(policy) = policy.as_mapping_mut()
+    {
+        for value in policy.values_mut() {
+            *value = direct(value.clone())?;
+        }
+    }
+    if let Some(default) = dns
+        .get(Value::from("default-nameserver"))
+        .filter(|value| nonempty(value))
+        .cloned()
+    {
+        dns.insert(Value::from("default-nameserver"), direct(default)?);
+    }
+    Ok(())
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Previous {
     pub mode: String,
@@ -278,9 +345,9 @@ pub fn apply(map: &mut Mapping, settings: &Settings) -> Result<()> {
         .get_mut(Value::from("dns"))
         .and_then(Value::as_mapping_mut)
         .ok_or_else(|| anyhow::anyhow!("DNS 配置缺失"))?;
+    bootstrap(dns)?;
     for key in [
         "nameserver-policy",
-        "proxy-server-nameserver-policy",
         "fallback",
         "fallback-filter",
         "direct-nameserver",
@@ -300,14 +367,6 @@ pub fn apply(map: &mut Mapping, settings: &Settings) -> Result<()> {
                 .map(|s| format!("{s}#{}", protection.route))
                 .collect::<Vec<_>>(),
         )?,
-    );
-    dns.insert(
-        Value::from("default-nameserver"),
-        serde_yaml::to_value(BOOTSTRAP)?,
-    );
-    dns.insert(
-        Value::from("proxy-server-nameserver"),
-        serde_yaml::to_value(BOOTSTRAP)?,
     );
     // Private names retain local resolution. These explicit exceptions are
     // shown to the user; no public failure falls back to the system resolver.
@@ -411,6 +470,31 @@ fn route_or_reject(
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn bootstrap_preserves_working_node_resolvers_without_a_proxy_dependency() {
+        let mut dns: Mapping = serde_yaml::from_str("nameserver: ['https://192.0.2.2/dns-query#Main']\ndefault-nameserver: ['192.0.2.53']\nproxy-server-nameserver: ['tls://192.0.2.54#Main&ecs=192.0.2.1', 'system']\nproxy-server-nameserver-policy: {'+.node.test': 'udp://192.0.2.55#Main'}\n").unwrap();
+        bootstrap(&mut dns).unwrap();
+        assert_eq!(
+            dns["proxy-server-nameserver"],
+            serde_yaml::to_value(["tls://192.0.2.54#DIRECT&ecs=192.0.2.1", "system"]).unwrap()
+        );
+        assert_eq!(
+            dns["proxy-server-nameserver-policy"]["+.node.test"],
+            "udp://192.0.2.55#DIRECT"
+        );
+        assert_eq!(dns["default-nameserver"][0], "192.0.2.53#DIRECT");
+        dns.remove(Value::from("proxy-server-nameserver"));
+        dns.remove(Value::from("default-nameserver"));
+        bootstrap(&mut dns).unwrap();
+        assert_eq!(
+            dns["proxy-server-nameserver"][0],
+            "https://192.0.2.2/dns-query#DIRECT"
+        );
+        // Missing default-nameserver must retain the core's normal bootstrap.
+        // Otherwise a previously working DoH hostname now depends on the same
+        // unreachable fixed HTTPS IPs that caused this regression.
+        assert!(!dns.contains_key(Value::from("default-nameserver")));
+    }
     #[cfg(target_os = "macos")]
     #[test]
     fn mac_dns_overlay_keeps_local_names_out_of_the_new_system_resolver() {
@@ -541,15 +625,9 @@ mod tests {
                     .is_empty()
             );
         }
-        for (key, route) in [
-            (
-                "nameserver",
-                settings.claude_protection.as_ref().unwrap().route.as_str(),
-            ),
-            ("default-nameserver", "DIRECT"),
-            ("proxy-server-nameserver", "DIRECT"),
-        ] {
-            let addresses: Vec<std::net::IpAddr> = map["dns"][key]
+        {
+            let route = settings.claude_protection.as_ref().unwrap().route.as_str();
+            let addresses: Vec<std::net::IpAddr> = map["dns"]["nameserver"]
                 .as_sequence()
                 .unwrap()
                 .iter()
@@ -567,6 +645,8 @@ mod tests {
             assert!(addresses.iter().any(std::net::IpAddr::is_ipv4));
             assert!(addresses.iter().any(std::net::IpAddr::is_ipv6));
         }
+        assert!(map["dns"]["default-nameserver"].is_null());
+        assert_eq!(map["dns"]["proxy-server-nameserver"][0], "9.9.9.9#DIRECT");
         assert_eq!(map["tun"]["dns-hijack"].as_sequence().unwrap().len(), 2);
         assert!(map["tun"]["route-address"].is_null());
         assert!(map["dns"]["fallback"].is_null());

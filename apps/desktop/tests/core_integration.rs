@@ -276,7 +276,18 @@ async fn basic_system_proxy_and_tun() {
         }
     }
     #[cfg(target_os = "linux")]
-    protected_dns::run(&mut engine, &profile).await;
+    {
+        use futures_util::FutureExt;
+        if let Err(panic) = std::panic::AssertUnwindSafe(protected_dns::run(&mut engine, &profile))
+            .catch_unwind()
+            .await
+        {
+            for line in engine.poll(Scope::Logs).await.unwrap().logs {
+                eprintln!("{line}");
+            }
+            std::panic::resume_unwind(panic);
+        }
+    }
     engine.select_proxy_mode(ProxyMode::Off).await.unwrap();
     let state = engine.poll(Scope::Home).await.unwrap();
     assert!(!state.tun && !state.system_proxy);
