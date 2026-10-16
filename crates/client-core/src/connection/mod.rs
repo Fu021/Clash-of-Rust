@@ -53,11 +53,14 @@ pub struct Sort {
 
 impl Sort {
     pub fn toggle(&mut self, field: Field) {
-        if self.field == Some(field) {
-            self.descending = !self.descending;
-        } else {
+        let initial_descending = !matches!(field, Field::Name | Field::Rule | Field::Chain);
+        if self.field != Some(field) {
             self.field = Some(field);
-            self.descending = !matches!(field, Field::Name | Field::Rule | Field::Chain);
+            self.descending = initial_descending;
+        } else if self.descending == initial_descending {
+            self.descending = !initial_descending;
+        } else {
+            *self = Self::default();
         }
     }
 
@@ -180,6 +183,41 @@ mod tests {
         assert!(sort.descending);
         rows.sort_unstable_by(|a, b| sort.compare(a, b));
         assert_eq!(rows[0].id.as_ref(), "large");
+    }
+
+    #[test]
+    fn every_column_cycles_back_to_source_order_and_switching_columns_restarts() {
+        for field in [
+            Field::Name,
+            Field::Rule,
+            Field::Chain,
+            Field::UploadRate,
+            Field::DownloadRate,
+            Field::UploadTotal,
+            Field::DownloadTotal,
+            Field::Start,
+        ] {
+            let mut sort = Sort::default();
+            let first_descending = !matches!(field, Field::Name | Field::Rule | Field::Chain);
+            sort.toggle(field);
+            assert_eq!(sort.field, Some(field));
+            assert_eq!(sort.descending, first_descending);
+            sort.toggle(field);
+            assert_eq!(sort.field, Some(field));
+            assert_eq!(sort.descending, !first_descending);
+            sort.toggle(field);
+            assert!(sort.field.is_none());
+            assert!(!sort.descending);
+            assert_eq!(sort.compare(&row("a", 10), &row("b", 20)), Ordering::Equal);
+            sort.toggle(field);
+            assert_eq!(sort.descending, first_descending);
+        }
+        let mut sort = Sort::default();
+        sort.toggle(Field::DownloadRate);
+        sort.toggle(Field::DownloadRate);
+        sort.toggle(Field::UploadRate);
+        assert_eq!(sort.field, Some(Field::UploadRate));
+        assert!(sort.descending);
     }
 
     #[test]

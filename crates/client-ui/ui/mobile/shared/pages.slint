@@ -226,7 +226,7 @@ export component MobileRules inherits Rectangle {
             MButton { text: "下一页"; enabled: MobileData.rule-next; clicked => { MobileActions.request(MobileIntent.rule-page, "1", ""); } }
         }
         HorizontalLayout { spacing: 8px;
-            MButton { text: "放弃修改"; enabled: MobileData.rule-dirty; clicked => { MobileView.pending-detail = 0; MobileView.detail = 12; } }
+            MButton { text: "放弃修改"; enabled: MobileData.rule-dirty; clicked => { MobileView.pending-page = -1; MobileView.pending-detail = 0; MobileView.detail = 12; } }
             MButton { text: "应用修改"; primary: true; enabled: MobileData.rule-dirty; clicked => { MobileActions.request(MobileIntent.rule-apply, "", ""); } }
         }
     } }

@@ -285,15 +285,23 @@ def main():
         sdk=Path(os.environ['ANDROID_HOME'])
         manager=sdk/'cmdline-tools/latest/bin'
         run([manager/'sdkmanager','platform-tools','system-images;android-35;google_apis;x86_64'])
-        run([manager/'avdmanager','create','avd','--force','--name','cor-ci','--device','pixel_6','--package','system-images;android-35;google_apis;x86_64'],input='no\n',text=True)
+        device_root=Path(os.environ['RUNNER_TEMP'])/'cor-emulator'
+        user_home=device_root/'.android'; avds=user_home/'avd'
+        avds.mkdir(parents=True,exist_ok=True)
+        env=dict(os.environ,ANDROID_USER_HOME=str(user_home),ANDROID_AVD_HOME=str(avds),ANDROID_SDK_HOME=str(device_root))
+        run([manager/'avdmanager','create','avd','--force','--name','cor-ci','--path',avds/'cor-ci.avd',
+             '--device','pixel_6','--package','system-images;android-35;google_apis;x86_64'],input='no\n',text=True,env=env)
         report=ROOT/'target/android-report/x64'; report.mkdir(parents=True,exist_ok=True)
         with (report/'emulator.txt').open('w') as log:
-            subprocess.Popen([sdk/'emulator/emulator','@cor-ci','-no-window','-no-audio','-no-boot-anim','-no-snapshot',
-                '-gpu','swiftshader_indirect','-memory','2048'],stdout=log,stderr=subprocess.STDOUT,start_new_session=True)
-        run([ADB,'wait-for-device'],timeout=180)
+            process=subprocess.Popen([sdk/'emulator/emulator','-avd','cor-ci','-no-window','-no-audio','-no-boot-anim','-no-snapshot',
+                '-gpu','swiftshader_indirect','-memory','2048'],env=env,stdout=log,stderr=subprocess.STDOUT,start_new_session=True)
+        run([ADB,'start-server'],env=env,timeout=30)
         deadline=time.monotonic()+180
         while time.monotonic()<deadline:
-            if subprocess.check_output([ADB,'shell','getprop','sys.boot_completed'],text=True).strip()=='1': break
+            if process.poll() is not None:
+                raise RuntimeError('Android emulator exited: '+(report/'emulator.txt').read_text()[-4000:])
+            ready=subprocess.run([ADB,'shell','getprop','sys.boot_completed'],env=env,capture_output=True,text=True,timeout=10)
+            if ready.returncode==0 and ready.stdout.strip()=='1':break
             time.sleep(2)
         else: raise RuntimeError('Android emulator did not finish booting')
         run([ADB,'shell','settings','put','global','private_dns_mode','off'])

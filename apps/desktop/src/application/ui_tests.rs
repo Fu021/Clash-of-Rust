@@ -61,6 +61,73 @@ fn projection_reuses_models_and_releases_hidden_and_inactive_lists() {
 }
 
 #[test]
+fn connection_sort_clicks_redraw_the_header_immediately_and_third_click_restores_rows() {
+    ui_testing::initialize(950, 700);
+    let mut app = fixture(Page::Connections);
+    let window = AppWindow::new().unwrap();
+    let data = window.global::<UiData>();
+    let mut models = ViewModels::default();
+    models.attach(&data);
+    app.present(&data, &mut models);
+    let events = pointer_events(&window);
+    window.show().unwrap();
+    let header = || {
+        let image = window.window().take_snapshot().unwrap();
+        image
+            .as_bytes()
+            .chunks_exact(image.width() as usize * 4)
+            .skip(156)
+            .take(52)
+            .flat_map(|row| row[200 * 4..926 * 4].iter().copied())
+            .collect::<Vec<_>>()
+    };
+    let before = header();
+    let original = data
+        .get_connections()
+        .iter()
+        .map(|row| row.id)
+        .collect::<Vec<_>>();
+    for (x, field) in [(780., "download-rate"), (670., "upload-rate")] {
+        let mut frames = Vec::new();
+        for click in 0..3 {
+            ui_testing::click(window.window(), x, 174.);
+            let event = events
+                .borrow_mut()
+                .pop()
+                .expect("heading must dispatch one sort intent");
+            assert_eq!(event.0, Intent::ConnectionSort);
+            assert_eq!(event.1, field);
+            let _ = app.intent(event.0, &event.1, &event.2);
+            app.present(&data, &mut models);
+            assert_eq!(data.get_page(), Page::Connections as i32);
+            assert_eq!(
+                data.get_connection_sort(),
+                if click == 2 { "" } else { field }
+            );
+            assert_eq!(data.get_descending(), click == 0);
+            frames.push(header());
+        }
+        assert_ne!(
+            frames[0], before,
+            "first click must render a down arrow without navigation"
+        );
+        assert_ne!(
+            frames[1], frames[0],
+            "second click must render an up arrow immediately"
+        );
+        assert_eq!(frames[2], before, "third click must remove the indicator");
+        assert_eq!(
+            data.get_connections()
+                .iter()
+                .map(|row| row.id)
+                .collect::<Vec<_>>(),
+            original
+        );
+    }
+    window.hide().unwrap();
+}
+
+#[test]
 fn connection_detail_exposes_all_fields_and_copies_the_same_values() {
     ui_testing::initialize(950, 700);
     let mut app = fixture(Page::Connections);

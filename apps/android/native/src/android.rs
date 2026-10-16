@@ -337,6 +337,17 @@ async fn run_loop(
                 } else if intent == MobileIntent::SiteCancel {
                     if let Some(job) = checks.take() { job.abort(); }
                     state.generation += 1; state.detecting = false;
+                } else if intent == MobileIntent::NodeDelay {
+                    if let Some(job)=delay_job.take(){job.abort();}
+                    last_delay=std::time::Instant::now();
+                    let api=state.session.api.clone();let send=updates.clone();
+                    state.notice="正在测速".into();
+                    delay_job=Some(tokio::spawn(async move{
+                        let result=if request.a=="all"{api.delay_all_nodes().await.map(|_|())}
+                            else{api.delay(&request.a).await.map(|_|())};
+                        let text=match result {Ok(())=>"测速完成".into(),Err(error)=>format!("测速失败：{error}")};
+                        let _=send.send(Update::Notice(text)).await;
+                    }));
                 } else if intent == MobileIntent::ClaudeStart {
                     if let Some(job) = claude_job.take() { job.abort(); }
                     let port = state.session.settings.mixed_port;
@@ -562,14 +573,6 @@ async fn handle(state: &mut State, request: Request) -> Result<()> {
                 .context("排序无效")?;
             session.store.save_settings(&next)?;
             session.settings = next;
-        }
-        MobileIntent::NodeDelay => {
-            if a == "all" {
-                session.api.delay_all_nodes().await?;
-            } else {
-                session.api.delay(&a).await?;
-            }
-            state.notice = "测速完成".into();
         }
         MobileIntent::Query => {
             state.query = b;

@@ -145,9 +145,9 @@ export component MobileModal inherits Rectangle {
                         else if MobileView.detail == 8 { MobileActions.request(MobileIntent.claude-protection, "true", ""); }
                         else {
                             MobileView.draft-dirty = false;
-                            MobileActions.request(MobileIntent.rule-discard, "", "");
-                            if MobileView.pending-page >= 0 { MobileView.page = MobileView.pending-page; }
-                            MobileView.detail = 0;
+                            if MobileView.pending-detail == 0 { MobileActions.request(MobileIntent.rule-discard, "", ""); }
+                            if MobileView.pending-page >= 0 { MobileView.navigate(MobileView.pending-page); }
+                            MobileView.pending-page = -1; MobileView.detail = 0;
                         }
                     }
                 }
