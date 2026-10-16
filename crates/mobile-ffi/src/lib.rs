@@ -478,7 +478,7 @@ pub fn android_safe_config(raw: &str) -> Result<String> {
     {
         dns.insert(
             "nameserver".into(),
-            serde_yaml::to_value(config::DEFAULT_DNS_NAMESERVERS)?,
+            serde_yaml::to_value(core::config::DEFAULT_DNS_NAMESERVERS)?,
         );
     }
     value["profile"]["store-selected"] = true.into();
@@ -501,7 +501,7 @@ mod tests {
             ipv6: false,
             ..Settings::default()
         };
-        let raw = "proxies: []\nrules: [MATCH,DIRECT]\ntun:\n  enable: true\n  auto-route: true\n  file-descriptor: 42\nexternal-controller: 0.0.0.0:1\n";
+        let raw = "proxies: []\nrules: ['MATCH,DIRECT']\ntun:\n  enable: true\n  auto-route: true\n  file-descriptor: 42\nexternal-controller: 0.0.0.0:1\n";
         let raw = core::config::runtime_config(raw, &settings).unwrap();
         let value: serde_yaml::Value =
             serde_yaml::from_str(&android_safe_config(&raw).unwrap()).unwrap();
@@ -532,7 +532,7 @@ mod tests {
         };
         for upstreams in ["", "  nameserver: []\n", "  nameserver: [9.9.9.9]\n"] {
             let raw = format!(
-                "proxies: []\nrules: [MATCH,DIRECT]\ndns:\n  enable: false\n  nameserver-policy: {{example.test: 1.1.1.1}}\n{upstreams}"
+                "proxies: []\nrules: ['MATCH,DIRECT']\ndns:\n  enable: false\n  nameserver-policy: {{example.test: 1.1.1.1}}\n{upstreams}"
             );
             let raw = core::config::runtime_config(&raw, &settings).unwrap();
             let value: serde_yaml::Value =
@@ -542,7 +542,7 @@ mod tests {
             let expected = if upstreams.contains("9.9.9.9") {
                 serde_yaml::to_value(["9.9.9.9"]).unwrap()
             } else {
-                serde_yaml::to_value(config::DEFAULT_DNS_NAMESERVERS).unwrap()
+                serde_yaml::to_value(core::config::DEFAULT_DNS_NAMESERVERS).unwrap()
             };
             assert_eq!(value["dns"]["nameserver"], expected);
             assert!(!settings.dns_override);
