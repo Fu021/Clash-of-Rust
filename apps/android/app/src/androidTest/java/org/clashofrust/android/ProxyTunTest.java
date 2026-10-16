@@ -37,10 +37,20 @@ public class ProxyTunTest {
         }
     }
     private static void tab(int index,int page) throws Exception {
-        JSONObject ui=MainActivity.diagnostics();float scale=(float)ui.getDouble("scale");
-        tap((float)ui.getDouble("width")*(index+0.5f)/5*scale,
-            ((float)ui.getDouble("height")-(float)ui.getDouble("safe_bottom")-38)*scale);
-        await("UI tab did not navigate to "+page,()->MainActivity.diagnostics().optInt("page",-1)==page);
+        // Activity focus and accessibility readiness precede the compositor's
+        // removal of ActivityRecordInputSink on some Android 15 emulator boots.
+        // A globally injected event may be accepted yet discarded by that sink.
+        // Navigation is idempotent: keep using real touches until the actual
+        // Slint page changes, and fail if the UI remains unresponsive.
+        await("UI tab did not navigate to "+page,()-> {
+            JSONObject ui=MainActivity.diagnostics();
+            if (ui.optInt("page",-1)==page) return true;
+            float scale=(float)ui.getDouble("scale");
+            tap((float)ui.getDouble("width")*(index+0.5f)/5*scale,
+                ((float)ui.getDouble("height")-(float)ui.getDouble("safe_bottom")-38)*scale);
+            SystemClock.sleep(500);
+            return MainActivity.diagnostics().optInt("page",-1)==page;
+        });
     }
     private static void verifyPresentation() throws Exception {
         await("Core is running but Slint still reports it as stopped",()->MainActivity.diagnostics().optBoolean("core_running"));
