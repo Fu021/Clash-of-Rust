@@ -2585,7 +2585,7 @@ mod async_state_tests {
         app.busy = true;
         app.controller_port = "9999".into();
         app.mixed_port = "8888".into();
-        let _ = app.update(Message::Action(Action::SavePorts(0, 0)));
+        let _ = app.update(Message::SavePorts);
         app.settings.run_mode = "global".into();
         app.settings.delay_interval_minutes = 10;
         assert!(matches!(

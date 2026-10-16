@@ -537,13 +537,13 @@ fn setting_and_toolbar_intents_preserve_their_values_in_the_command_queue() {
 fn ip_report_uses_bitmaps_in_summary_rows_and_details() {
     ui_testing::initialize(950, 700);
     let mut app = fixture(Page::Websites);
-    app.site_results[0] = Some(Ok(ip_check::CheckResult {
+    app.site_results.push(Some(Ok(ip_check::CheckResult {
         state: ip_check::State::Identified,
         summary: "203.0.113.2".into(),
         country: "🇩🇪 德国".into(),
         millis: 4,
         detail: String::new(),
-    }));
+    })));
     let window = AppWindow::new().unwrap();
     let data = window.global::<UiData>();
     let mut models = ViewModels::default();
