@@ -7,7 +7,8 @@ import { AndroidSettings } from "settings.slint";
 export component AndroidSurface inherits MobileFrame {
     primary-pages: [0, 1, 2, 10, 9];
     sidebar-pages: [0, 1, 2, 3, 4, 5, 6, 7, 8, 9];
-    tab-pill: true; title-size: 24px; sidebar-width: 192px; tab-height: 76px;
+    tab-pill: true; title-size: 24px; sidebar-width: 192px; tab-height: 56px;
+    compact-system-insets: true;
     centered-modal: false;
     if MobileView.page == 0: MobileHome { }
     if MobileView.page == 1: MobileProxies { }

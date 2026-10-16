@@ -4,7 +4,7 @@ import { MText, MSmall, MHeading, MParagraph, MCard, MButton, MRow, MDivider, MF
 
 export component MobileDetails inherits Rectangle {
     VerticalLayout { spacing: 12px;
-        MScroll { VerticalLayout { alignment: start; spacing: 12px; padding-bottom: 16px;
+        MScroll { VerticalLayout { width: root.width; alignment: start; spacing: 12px; padding-bottom: 16px;
             if MobileView.detail == 5: MCard {
                 for row[i] in MobileData.connection-details: VerticalLayout { spacing: 8px;
                     MSmall { text: row.label; }
@@ -132,6 +132,7 @@ export component MobileModal inherits Rectangle {
                 if MobileView.detail == 11: VerticalLayout { spacing: 8px;
                     for row in [0, 1, 2]: HorizontalLayout { spacing: 8px;
                         for column in [0, 1]: MButton { modal-control: true; text: AccentPalette.accent-names[row * 2 + column]; selected: Theme.accent-index == row * 2 + column;
+                            show-swatch: true; swatch: Theme.dark ? AccentPalette.dark-colors[row * 2 + column] : AccentPalette.accent-colors[row * 2 + column];
                             clicked => { Theme.accent-index = row * 2 + column; MobileActions.request(MobileIntent.accent, "" + Theme.accent-index, ""); }
                         }
                     }

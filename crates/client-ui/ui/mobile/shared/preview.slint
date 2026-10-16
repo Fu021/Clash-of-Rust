@@ -22,6 +22,10 @@ export component MobilePreviewSurface inherits Rectangle {
     in-out property <bool> preview-protection-pending <=> MobileData.protection-pending;
     in-out property <string> preview-notice <=> MobileView.notice;
     in-out property <float> preview-notice-elapsed <=> MobileView.notice-elapsed;
+    in-out property <bool> preview-sparse;
+    changed preview-sparse => {
+        if root.preview-sparse { MobileData.profiles = [MobileData.profiles[0]]; }
+    }
     changed preview-dark => { Theme.system-dark = root.preview-dark; }
     changed text-scale => { Theme.text-scale = root.text-scale; }
     MobileFixture { }

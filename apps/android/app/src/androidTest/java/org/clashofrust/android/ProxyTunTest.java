@@ -175,6 +175,19 @@ public class ProxyTunTest {
             });
             // A settings reload must preserve the independently owned Android TUN.
             CoreBridge.reload(CoreBridge.config());
+            if (cycle == 0) {
+                shell("am start -W -a android.intent.action.MAIN -c android.intent.category.HOME");
+                await("VPN Activity did not enter background",()->inStage(androidx.test.runner.lifecycle.Stage.STOPPED,false));
+                assertTrue("Closing the UI disconnected the foreground VPN", TunnelService.connected());
+                assertTrue("Explicit disconnect must be remembered for sticky recovery",
+                    context.getSharedPreferences("vpn",Context.MODE_PRIVATE).getBoolean("desired",false));
+                assertEquals("cor-android-network-ok", read(new URL("http://android-tun.test:18081/probe"),java.net.Proxy.NO_PROXY,null));
+                shell("am start -W -n org.clashofrust.android/.MainActivity");
+                await("VPN Activity did not resume",()->inStage(androidx.test.runner.lifecycle.Stage.RESUMED,true));
+                long previousGeneration = TunnelService.generation();
+                context.startForegroundService(new Intent(context,TunnelService.class).setAction(TunnelService.RECONFIGURE));
+                await("VPN did not reconfigure",()->TunnelService.connected() && TunnelService.generation()>previousGeneration);
+            }
             // This request has NO explicit proxy. It must traverse the OS TUN.
             HttpURLConnection connection = (HttpURLConnection)new URL("http://android-tun.test:18081/hold").openConnection(java.net.Proxy.NO_PROXY);
             connection.setConnectTimeout(5000); connection.setReadTimeout(5000);
@@ -197,6 +210,8 @@ public class ProxyTunTest {
                 return !TunnelService.connected() && capabilities != null && !capabilities.hasTransport(NetworkCapabilities.TRANSPORT_VPN);
             });
             assertEquals("cor-android-network-ok",read(new URL("http://10.0.2.2:18081/probe"),java.net.Proxy.NO_PROXY,null));
+            assertFalse("Explicit disconnect must not restart on sticky recovery",
+                context.getSharedPreferences("vpn",Context.MODE_PRIVATE).getBoolean("desired",true));
         }
     }
 }

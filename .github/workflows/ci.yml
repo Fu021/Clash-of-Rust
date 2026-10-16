@@ -5,14 +5,83 @@ on:
   pull_request:
 env:
   SEGMENT_DOWNLOAD_TIMEOUT_MINS: '2'
+  BUILD_INPUTS_DIR: target/dependency-snapshot
 permissions:
   contents: read
 concurrency:
   group: ci-${{ github.event.pull_request.number || github.ref }}
   cancel-in-progress: true
 jobs:
+  inputs:
+    name: Resolve build inputs
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    permissions:
+      contents: read
+      id-token: write
+    outputs:
+      resources: ${{ steps.resolve.outputs.resources }}
+      tailscale: ${{ steps.resolve.outputs.tailscale }}
+      sccache: ${{ steps.resolve.outputs.sccache }}
+      gradle: ${{ steps.resolve.outputs.gradle }}
+      nsis: ${{ steps.resolve.outputs.nsis }}
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          persist-credentials: false
+      - uses: actions/setup-python@v6
+        with:
+          python-version: '3.11'
+          check-latest: true
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: actions/setup-go@v6
+        with:
+          go-version: stable
+          check-latest: true
+          cache: false
+      - name: Connect for dependency snapshot fallback
+        id: tailnet
+        if: vars.TS_OAUTH_CLIENT_ID != '' && vars.TS_AUDIENCE != '' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository)
+        uses: tailscale/github-action@v4
+        continue-on-error: true
+        timeout-minutes: 3
+        with:
+          oauth-client-id: ${{ vars.TS_OAUTH_CLIENT_ID }}
+          audience: ${{ vars.TS_AUDIENCE }}
+          tags: tag:github-action-cache
+          version: '1.94.2'
+          retry: '1'
+          timeout: 45s
+          args: --accept-dns=false
+          tailscaled-args: --tun=userspace-networking --outbound-http-proxy-listen=127.0.0.1:19082
+      - name: Keep runner routing unchanged
+        if: steps.tailnet.outcome == 'success'
+        run: sudo -n tailscale set --accept-routes=false --accept-dns=false
+      - name: Restore last compatible dependency snapshot
+        uses: ./.github/actions/local-cache
+        with:
+          url: ${{ steps.tailnet.outcome == 'success' && vars.LOCAL_CACHE_URL || '' }}
+          token: ${{ secrets.LOCAL_CACHE_TOKEN }}
+          group: dependencies/build-inputs
+          paths: target/dependency-snapshot
+          key: source-${{ hashFiles('Cargo.lock', 'Cargo.toml', 'apps/**/Cargo.toml', 'crates/**/Cargo.toml', '.cargo/**', 'apps/android/core/go.*', 'apps/android/**/*.gradle.kts', 'apps/android/gradle.properties') }}-${{ github.run_id }}-${{ github.run_attempt }}
+          restore-keys: source-${{ hashFiles('Cargo.lock', 'Cargo.toml', 'apps/**/Cargo.toml', 'crates/**/Cargo.toml', '.cargo/**', 'apps/android/core/go.*', 'apps/android/**/*.gradle.kts', 'apps/android/gradle.properties') }}-
+      - name: Check upstream and freeze source dependencies
+        id: resolve
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PYTHONDONTWRITEBYTECODE: '1'
+        run: python3 scripts/build_inputs.py resolve
+      - uses: actions/upload-artifact@v6
+        with:
+          name: dependency-snapshot
+          path: target/dependency-snapshot
+          retention-days: 3
+          if-no-files-found: error
   android:
     name: android-${{ matrix.arch }}
+    needs: inputs
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -40,6 +109,13 @@ jobs:
       - uses: actions/setup-python@v6
         with:
           python-version: '3.11'
+          check-latest: true
+      - uses: actions/download-artifact@v7
+        with:
+          name: dependency-snapshot
+          path: target/dependency-snapshot
+      - name: Apply the resolved source dependency snapshot
+        run: python3 scripts/build_inputs.py apply
       - name: Connect to private cache network
         id: tailnet
         if: vars.TS_OAUTH_CLIENT_ID != '' && vars.TS_AUDIENCE != '' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository)
@@ -49,12 +125,22 @@ jobs:
         with:
           oauth-client-id: ${{ vars.TS_OAUTH_CLIENT_ID }}
           audience: ${{ vars.TS_AUDIENCE }}
-          tags: tag:ci-cache
-          version: '1.94.2'
+          tags: tag:github-action-cache
+          version: ${{ needs.inputs.outputs.tailscale }}
           retry: '1'
           timeout: 45s
-          args: --accept-dns=false --accept-routes=false
+          args: --accept-dns=false
           tailscaled-args: --tun=userspace-networking --outbound-http-proxy-listen=127.0.0.1:19082
+      - name: Preserve host routing after private cache login
+        if: steps.tailnet.outcome == 'success'
+        shell: python
+        run: |
+          import os, shutil, subprocess
+          # The official action supplies --accept-routes itself. Passing it a
+          # second time is rejected; turn it off after login, before any tests.
+          command = [shutil.which('tailscale') or 'tailscale', 'set', '--accept-routes=false', '--accept-dns=false']
+          if os.name != 'nt': command = ['sudo', '-n', *command]
+          subprocess.run(command, check=True)
       - uses: dtolnay/rust-toolchain@stable
         with:
           targets: ${{ matrix.target }}
@@ -119,6 +205,7 @@ jobs:
         id: go
         with:
           go-version-file: apps/android/core/go.mod
+          check-latest: true
           # Cache modules/tools below; the Go build directory is disposable.
           cache: false
       - name: Restore private Go dependencies and binding tools
@@ -132,7 +219,8 @@ jobs:
             ~/go/pkg/mod
             ~/go/bin/gomobile
             ~/go/bin/gobind
-          key: ${{ runner.os }}-${{ runner.arch }}-${{ steps.go.outputs.go-version }}-${{ hashFiles('apps/android/core/go.mod', 'apps/android/core/go.sum', 'scripts/android.py') }}
+          key: go-${{ runner.os }}-${{ runner.arch }}-${{ steps.go.outputs.go-version }}-${{ hashFiles('apps/android/core/go.mod', 'apps/android/core/go.sum', 'scripts/android.py') }}
+          restore-keys: go-
       - name: Bootstrap existing Go cache
         if: steps.go_local.outputs.restored != 'true'
         uses: actions/cache/restore@v5
@@ -152,14 +240,15 @@ jobs:
           url: ${{ steps.tailnet.outcome == 'success' && vars.LOCAL_CACHE_URL || '' }}
           token: ${{ secrets.LOCAL_CACHE_TOKEN }}
           group: dependencies/gradle-linux
-          key: gradle-8.13-java-17-${{ hashFiles('apps/android/**/*.gradle.kts', 'apps/android/gradle.properties') }}
+          key: gradle-${{ needs.inputs.outputs.gradle }}-java-17-${{ hashFiles('apps/android/**/*.gradle.kts', 'apps/android/gradle.properties') }}
           paths: |
             ~/.gradle/caches/modules-2
             ~/.gradle/permwrapper/dists
             ~/.gradle/wrapper/dists
+          restore-keys: gradle-
       - uses: gradle/actions/setup-gradle@v5
         with:
-          gradle-version: '8.13'
+          gradle-version: ${{ needs.inputs.outputs.gradle }}
           cache-disabled: ${{ steps.gradle_local.outputs.restored == 'true' }}
           cache-read-only: true
           cache-cleanup: on-success
@@ -193,6 +282,15 @@ jobs:
           subprocess.run([str(manager),'platforms;android-36','build-tools;36.0.0','ndk;28.2.13676358'],check=True)
           with open(os.environ['GITHUB_ENV'],'a') as out:
               out.write('ANDROID_NDK_ROOT='+str(sdk/'ndk/28.2.13676358')+'\n')
+      - name: Restore shared verified Android Geo resources
+        uses: ./.github/actions/local-cache
+        with:
+          url: ${{ steps.tailnet.outcome == 'success' && vars.LOCAL_CACHE_URL || '' }}
+          token: ${{ secrets.LOCAL_CACHE_TOKEN }}
+          group: resources/android
+          paths: apps/android/app/offline-assets
+          key: resources-${{ needs.inputs.outputs.resources }}
+          restore-keys: resources-
       - name: Compile Android application and embedded core
         env:
           GH_TOKEN: ${{ github.token }}
@@ -228,6 +326,7 @@ jobs:
           retention-days: 3
   check:
     name: ${{ matrix.system }}-${{ matrix.arch }}
+    needs: inputs
     timeout-minutes: 60
     permissions:
       contents: read
@@ -283,7 +382,14 @@ jobs:
       - uses: actions/setup-python@v6
         with:
           python-version: ${{ matrix.python }}
+          check-latest: true
           architecture: ${{ matrix.arch }}
+      - uses: actions/download-artifact@v7
+        with:
+          name: dependency-snapshot
+          path: target/dependency-snapshot
+      - name: Apply the resolved source dependency snapshot
+        run: python3 scripts/build_inputs.py apply
       - name: Connect to private cache network
         id: tailnet
         if: vars.TS_OAUTH_CLIENT_ID != '' && vars.TS_AUDIENCE != '' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository)
@@ -293,12 +399,22 @@ jobs:
         with:
           oauth-client-id: ${{ vars.TS_OAUTH_CLIENT_ID }}
           audience: ${{ vars.TS_AUDIENCE }}
-          tags: tag:ci-cache
-          version: '1.94.2'
+          tags: tag:github-action-cache
+          version: ${{ needs.inputs.outputs.tailscale }}
           retry: '1'
           timeout: 45s
-          args: --accept-dns=false --accept-routes=false
+          args: --accept-dns=false
           tailscaled-args: --tun=userspace-networking --outbound-http-proxy-listen=127.0.0.1:19082
+      - name: Preserve host routing after private cache login
+        if: steps.tailnet.outcome == 'success'
+        shell: python
+        run: |
+          import os, shutil, subprocess
+          # The official action supplies --accept-routes itself. Passing it a
+          # second time is rejected; turn it off after login, before any tests.
+          command = [shutil.which('tailscale') or 'tailscale', 'set', '--accept-routes=false', '--accept-dns=false']
+          if os.name != 'nt': command = ['sudo', '-n', *command]
+          subprocess.run(command, check=True)
       - uses: dtolnay/rust-toolchain@stable
         with:
           toolchain: stable-${{ matrix.target }}
@@ -344,7 +460,7 @@ jobs:
         uses: mozilla-actions/sccache-action@v0.0.11
         continue-on-error: true
         with:
-          version: v0.18.0
+          version: ${{ needs.inputs.outputs.sccache }}
           disable_annotations: true
       - name: Restore bounded macOS compilation results
         if: runner.os == 'macOS' && steps.compiler_cache.outcome == 'success'
@@ -379,12 +495,9 @@ jobs:
           url: ${{ steps.tailnet.outcome == 'success' && vars.LOCAL_CACHE_URL || '' }}
           token: ${{ secrets.LOCAL_CACHE_TOKEN }}
           group: resources/${{ matrix.system }}-${{ matrix.arch }}
-          paths: |
-            bin
-            bundle/resources
-            bundle/${{ matrix.system }}-${{ matrix.arch }}/resources
-          key: ${{ hashFiles('scripts/prepare-resources.py', 'scripts/build_support.py') }}-${{ steps.environment.outputs.day }}
-          restore-keys: ${{ hashFiles('scripts/prepare-resources.py', 'scripts/build_support.py') }}-
+          paths: ${{ matrix.system == 'windows' && matrix.arch == 'x64' && 'bundle/resources' || format('bundle/{0}-{1}/resources', matrix.system, matrix.arch) }}
+          key: resources-${{ needs.inputs.outputs.resources }}
+          restore-keys: resources-
       - name: Bootstrap existing resource cache
         if: steps.resource_local.outputs.restored != 'true'
         uses: actions/cache/restore@v5
@@ -455,13 +568,14 @@ jobs:
           retention-days: 3
   cache_budget:
     name: Actions cache budget
-    needs: [android, check]
+    needs: [inputs, android, check]
     if: always()
     runs-on: ubuntu-latest
     timeout-minutes: 5
     permissions:
       contents: read
       actions: write
+      id-token: write
     concurrency:
       group: actions-cache-budget
       cancel-in-progress: false
@@ -481,3 +595,35 @@ jobs:
           command = [sys.executable, 'scripts/workflow_storage.py']
           if os.environ['CACHE_READ_ONLY'] == 'true': command.append('--read-only')
           subprocess.run(command, check=True)
+      - name: Connect for final private cache inventory
+        id: tailnet
+        if: vars.TS_OAUTH_CLIENT_ID != '' && vars.TS_AUDIENCE != '' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository)
+        uses: tailscale/github-action@v4
+        continue-on-error: true
+        with:
+          oauth-client-id: ${{ vars.TS_OAUTH_CLIENT_ID }}
+          audience: ${{ vars.TS_AUDIENCE }}
+          tags: tag:github-action-cache
+          version: ${{ needs.inputs.outputs.tailscale || '1.94.2' }}
+          retry: '1'
+          timeout: 45s
+          args: --accept-dns=false
+          tailscaled-args: --tun=userspace-networking --outbound-http-proxy-listen=127.0.0.1:19082
+      - name: Report the cache after all successful uploads
+        if: steps.tailnet.outcome == 'success'
+        continue-on-error: true
+        env:
+          CACHE_URL: ${{ vars.LOCAL_CACHE_URL }}
+          CACHE_TOKEN: ${{ secrets.LOCAL_CACHE_TOKEN }}
+          CACHE_PROXY: http://127.0.0.1:19082
+          PYTHONDONTWRITEBYTECODE: '1'
+        run: |
+          sudo -n tailscale set --accept-routes=false --accept-dns=false
+          python3 scripts/action_cache.py inventory
+      - uses: actions/upload-artifact@v6
+        if: steps.tailnet.outcome == 'success'
+        with:
+          name: private-cache-inventory
+          path: target/cache-inventory.json
+          retention-days: 3
+          if-no-files-found: warn

@@ -2,6 +2,95 @@
 use crate::api::{Connection, ConnectionRates};
 use std::{cmp::Ordering, time::Duration};
 
+pub fn hostname(connection: &Connection) -> &str {
+    if connection.metadata.sniff_host.is_empty() {
+        connection.metadata.host.as_ref()
+    } else {
+        connection.metadata.sniff_host.as_ref()
+    }
+}
+
+/// A selected connection may omit its remote address. Both hosts use the core
+/// resolver and encrypted proxy fallback, never the host's plaintext resolver.
+pub async fn resolve_target(
+    api: &crate::api::Api,
+    host: &str,
+    port: u16,
+) -> anyhow::Result<String> {
+    if let Ok(ip) = host.parse::<std::net::IpAddr>() {
+        return Ok(ip.to_string());
+    }
+    anyhow::ensure!(!host.is_empty(), "域名为空");
+    tokio::time::timeout(Duration::from_secs(16), async {
+        let ips = match api.resolve_domain(host).await {
+            Ok(ips) => ips,
+            Err(_) => crate::dns::through_proxy(host, port).await?,
+        };
+        Ok(ips
+            .iter()
+            .map(ToString::to_string)
+            .collect::<Vec<_>>()
+            .join("\n"))
+    })
+    .await
+    .map_err(|_| anyhow::anyhow!("目标地址查询超时"))?
+}
+
+pub fn detail_values(connection: &Connection, resolved: &str) -> Vec<(&'static str, String)> {
+    fn bytes(value: u64) -> String {
+        let mut size = value as f64;
+        let mut index = 0;
+        let units = ["B", "KiB", "MiB", "GiB", "TiB"];
+        while size >= 1024. && index < units.len() - 1 {
+            size /= 1024.;
+            index += 1;
+        }
+        if index == 0 {
+            format!("{value} B")
+        } else {
+            format!("{size:.1} {}", units[index])
+        }
+    }
+    let rate = |value: Option<u64>| value.map_or_else(|| "—".into(), |v| format!("{}/s", bytes(v)));
+    vec![
+        ("连接名称", name(connection).to_owned()),
+        ("域名", connection.metadata.host.to_string()),
+        ("嗅探域名", hostname(connection).to_owned()),
+        (
+            "目标 IP",
+            if connection.metadata.destination_ip.is_empty() {
+                resolved.to_owned()
+            } else {
+                connection.metadata.destination_ip.to_string()
+            },
+        ),
+        ("目标端口", connection.metadata.destination_port.to_string()),
+        ("协议", connection.metadata.network.to_string()),
+        (
+            "匹配规则",
+            format!("{} {}", connection.rule, connection.rule_payload)
+                .trim()
+                .to_owned(),
+        ),
+        (
+            "代理链",
+            connection
+                .chains
+                .iter()
+                .rev()
+                .map(|s| s.as_str())
+                .collect::<Vec<_>>()
+                .join(" → "),
+        ),
+        ("上传速度", rate(connection.rates.map(|r| r.upload))),
+        ("下载速度", rate(connection.rates.map(|r| r.download))),
+        ("累计上传", bytes(connection.upload)),
+        ("累计下载", bytes(connection.download)),
+        ("开始时间", connection.start.to_string()),
+        ("连接 ID", connection.id.to_string()),
+    ]
+}
+
 pub fn sample_rates(current: &mut [Connection], previous: &[Connection], elapsed: Duration) {
     for connection in current.iter_mut() {
         connection.rates = None;

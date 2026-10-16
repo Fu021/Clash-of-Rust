@@ -81,12 +81,22 @@ jobs:
         with:
           oauth-client-id: ${{ vars.TS_OAUTH_CLIENT_ID }}
           audience: ${{ vars.TS_AUDIENCE }}
-          tags: tag:ci-cache
+          tags: tag:github-action-cache
           version: '1.94.2'
           retry: '1'
           timeout: 45s
-          args: --accept-dns=false --accept-routes=false
+          args: --accept-dns=false
           tailscaled-args: --tun=userspace-networking --outbound-http-proxy-listen=127.0.0.1:19082
+      - name: Preserve host routing after private cache login
+        if: steps.tailnet.outcome == 'success'
+        shell: python
+        run: |
+          import os, shutil, subprocess
+          # The official action supplies --accept-routes itself. Passing it a
+          # second time is rejected; turn it off after login, before any tests.
+          command = [shutil.which('tailscale') or 'tailscale', 'set', '--accept-routes=false', '--accept-dns=false']
+          if os.name != 'nt': command = ['sudo', '-n', *command]
+          subprocess.run(command, check=True)
       - name: Restore private benchmark compilation
         id: rust_local
         uses: ./.github/actions/local-cache

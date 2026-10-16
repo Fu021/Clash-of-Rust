@@ -17,9 +17,11 @@ public final class MainActivity extends NativeActivity {
     static { System.loadLibrary("clash_mobile"); }
     private static final int VPN = 10, OPEN = 11, SAVE = 12, NOTIFICATIONS = 13;
     private boolean vpnPrompt;
+    private boolean vpnReconfigure;
     private boolean tileConnect;
     boolean waitingForInstallPermission;
     private String exportContent;
+    private String notificationTitle, notificationMessage;
     private static native void nativeEvent(String value);
     private static native String nativeDiagnostics();
     static JSONObject diagnostics() throws Exception { return new JSONObject(nativeDiagnostics()); }
@@ -78,7 +80,13 @@ public final class MainActivity extends NativeActivity {
                     .put("notification_speeds",getSharedPreferences("appearance",MODE_PRIVATE).getBoolean("notification-speeds",true))
                     .put("excluded_apps",getSharedPreferences("vpn",MODE_PRIVATE).getStringSet("excluded",Collections.emptySet()).size()).toString();
                 case "connect": runOnUiThread(this::prepareVpn); break;
+                case "reconnect": runOnUiThread(() -> prepareVpn(true)); break;
                 case "disconnect": TunnelService.stop(this); break;
+                case "protection-sync": ProtectionRuntime.sync(this); break;
+                case "protection-pause": ProtectionRuntime.pause(this); break;
+                case "vpn-plan":
+                    getSharedPreferences("vpn", MODE_PRIVATE).edit().putBoolean("desired", data.getBoolean("enabled")).commit();
+                    break;
                 case "traffic": TunnelService.updateTraffic(this, data.optString("down"), data.optString("up")); break;
                 case "system-bars": runOnUiThread(() -> configureSystemBars(data.optBoolean("dark"))); break;
                 case "install-update": UpdateInstaller.request(this); break;
@@ -108,7 +116,16 @@ public final class MainActivity extends NativeActivity {
                 case "application-routing": runOnUiThread(this::applicationRouting); break;
                 case "notification-speeds":
                     getSharedPreferences("appearance", MODE_PRIVATE).edit().putBoolean("notification-speeds", data.getBoolean("value")).apply(); break;
-                case "notify": runOnUiThread(this::notifyMeow); break;
+                case "notify": {
+                    String title = data.optString("title", "Clash of Rust"), message = data.optString("message", "喵!");
+                    if (!SystemNotifications.permitted(this) && data.optBoolean("request_permission")) {
+                        runOnUiThread(() -> {
+                            notificationTitle = title; notificationMessage = message;
+                            requestPermissions(new String[]{android.Manifest.permission.POST_NOTIFICATIONS}, NOTIFICATIONS);
+                        });
+                    } else SystemNotifications.show(this, title, message);
+                    break;
+                }
                 case "open-url": {
                     Uri url = Uri.parse(data.getString("url"));
                     if (!"https".equals(url.getScheme()) && !"http".equals(url.getScheme()))
@@ -146,16 +163,23 @@ public final class MainActivity extends NativeActivity {
         if (Build.VERSION.SDK_INT>=29) window.setNavigationBarContrastEnforced(false);
     }
     private void prepareVpn() {
-        if (vpnPrompt || TunnelService.connected()) return;
+        prepareVpn(false);
+    }
+    private void prepareVpn(boolean reconfigure) {
+        if (vpnPrompt || (TunnelService.connected() && !reconfigure)) return;
         if (!CoreBridge.ready()) { emit("error", "请先启动内核"); return; }
         Intent permission = VpnService.prepare(this);
+        vpnReconfigure = reconfigure;
         if (permission == null) startVpn(); else {
             vpnPrompt = true;
             startActivityForResult(permission, VPN);
         }
     }
     private void startVpn() {
-        startForegroundService(new Intent(this, TunnelService.class));
+        Intent start = new Intent(this, TunnelService.class);
+        if (vpnReconfigure) start.setAction(TunnelService.RECONFIGURE);
+        vpnReconfigure = false;
+        startForegroundService(start);
         if (Build.VERSION.SDK_INT >= 33 && checkSelfPermission(android.Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED)
             requestPermissions(new String[]{android.Manifest.permission.POST_NOTIFICATIONS}, 14);
     }
@@ -163,7 +187,11 @@ public final class MainActivity extends NativeActivity {
         super.onActivityResult(request, result, data);
         if (request == VPN) {
             vpnPrompt = false;
-            if (result == RESULT_OK) startVpn(); else emit("error", "VPN 授权已取消");
+            if (result == RESULT_OK) startVpn(); else {
+                vpnReconfigure = false;
+                emit("vpn-cancelled", true);
+                emit("error", "VPN 授权已取消");
+            }
             return;
         }
         if (request != OPEN && request != SAVE) return;
@@ -205,6 +233,11 @@ public final class MainActivity extends NativeActivity {
         worker.shutdown();
     }
     private void applicationRouting() {
+        try {
+            if (CoreBridge.protectedMode(this)) {
+                emit("notice", "请先关闭 Claude 保护，再修改应用分流"); return;
+            }
+        } catch (Exception error) { emit("error", error.toString()); return; }
         if (TunnelService.connected()) {
             new AlertDialog.Builder(this).setMessage("请先断开 VPN，再修改应用分流。")
                 .setPositiveButton("知道了", null).show(); return;
@@ -229,18 +262,15 @@ public final class MainActivity extends NativeActivity {
                 emit("notice", "应用分流已保存，下次连接时生效");
             }).show();
     }
-    private void notifyMeow() {
-        if (Build.VERSION.SDK_INT >= 33 && checkSelfPermission(android.Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED) {
-            requestPermissions(new String[]{android.Manifest.permission.POST_NOTIFICATIONS}, NOTIFICATIONS);
-            return;
-        }
-        NotificationManager manager = getSystemService(NotificationManager.class);
-        manager.createNotificationChannel(new NotificationChannel("messages", "消息", NotificationManager.IMPORTANCE_DEFAULT));
-        manager.notify(2, new Notification.Builder(this, "messages").setSmallIcon(R.drawable.ic_app)
-            .setContentTitle("Clash of Rust").setContentText("喵!").setAutoCancel(true).build());
-    }
     @Override public void onRequestPermissionsResult(int request, String[] permissions, int[] results) {
         super.onRequestPermissionsResult(request, permissions, results);
-        if (request == NOTIFICATIONS && results.length > 0 && results[0] == PackageManager.PERMISSION_GRANTED) notifyMeow();
+        if (request == NOTIFICATIONS) {
+            String title = notificationTitle, message = notificationMessage;
+            notificationTitle = null; notificationMessage = null;
+            if (results.length > 0 && results[0] == PackageManager.PERMISSION_GRANTED && title != null && message != null) {
+                try { SystemNotifications.show(this, title, message); }
+                catch (Exception error) { emit("error", error.toString()); }
+            } else emit("notice", "未获得系统通知权限，Claude 保护通知将无法显示");
+        }
     }
 }

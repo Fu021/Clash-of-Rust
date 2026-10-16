@@ -1,5 +1,27 @@
 import { Theme } from "../../theme/palette.slint";
-import { MobileView } from "state.slint";
+import { MobileView, MobileData, MobileActions, MobileIntent } from "state.slint";
+
+export component MAppIcon inherits Rectangle {
+    width: 44px; height: 44px;
+    accessible-role: button;
+    accessible-label: "发送系统通知";
+    accessible-action-default => { if !MobileView.modal { MobileActions.request(MobileIntent.system-notification, "", ""); } }
+    Image { width: 28px; height: 28px; x: (parent.width - self.width) / 2; y: (parent.height - self.height) / 2;
+        source: @image-url("../../../../../resources/icons/app.png");
+    }
+    FocusScope {
+        width: parent.width; height: parent.height;
+        enabled: !MobileView.modal;
+        key-pressed(event) => {
+            if event.text == Key.Return || event.text == " " { MobileActions.request(MobileIntent.system-notification, "", ""); return accept; }
+            return reject;
+        }
+        TouchArea { width: parent.width; height: parent.height;
+            enabled: !MobileView.modal;
+            clicked => { MobileActions.request(MobileIntent.system-notification, "", ""); }
+        }
+    }
+}
 
 export component MText {
     in property <string> text;
@@ -12,8 +34,9 @@ export component MText {
     min-width: 0px; preferred-width: glyphs.preferred-width;
     min-height: glyphs.preferred-height; preferred-height: glyphs.preferred-height;
     glyphs := Text {
-        width: parent.width; height: parent.height;
-        vertical-alignment: center;
+        width: parent.width; height: parent.height; vertical-alignment: center;
+        // Keep a stable drawing box when text changes during native startup.
+        y: (self.font-metrics.cap-height - self.font-metrics.ascent - self.font-metrics.descent) / 2;
         text: root.text; color: root.color; font-size: root.font-size; font-weight: root.font-weight;
         horizontal-alignment: root.horizontal-alignment; wrap: root.wrap; overflow: elide;
     }
@@ -31,7 +54,8 @@ export component MScroll inherits Flickable {
     content-width: root.width;
     content-height: max(root.height, content.preferred-height);
     content := VerticalLayout {
-        width: root.width; height: self.preferred-height;
+        x: 0px; y: 0px; width: root.width; height: self.preferred-height;
+        vertical-stretch: 0;
         alignment: start; spacing: 0px; @children
     }
 }
@@ -53,6 +77,8 @@ export component MButton inherits Rectangle {
     in property <bool> selected;
     in property <bool> danger;
     in property <bool> dropdown;
+    in property <bool> show-swatch;
+    in property <color> swatch;
     in property <bool> enabled: true;
     property <bool> interactive: root.enabled && (!MobileView.modal || root.modal-control);
     property <bool> keyboard-focus;
@@ -67,7 +93,11 @@ export component MButton inherits Rectangle {
     border-color: root.enabled && root.keyboard-focus && keys.has-focus ? Theme.ink
         : root.primary ? Theme.primary : root.selected || (area.pressed && root.enabled) ? Theme.accent : Theme.line;
     opacity: root.enabled ? 1 : 0.5;
-    label := MText { width: parent.width - 12px - (root.dropdown ? 24px : 0px); x: 6px; height: parent.height;
+    if root.show-swatch: Rectangle {
+        x: 12px; y: (parent.height - 16px) / 2; width: 16px; height: 16px;
+        border-radius: 8px; background: root.swatch;
+    }
+    label := MText { width: parent.width - 12px - (root.dropdown ? 24px : 0px) - (root.show-swatch ? 26px : 0px); x: root.show-swatch ? 32px : 6px; height: parent.height;
         text: root.text; horizontal-alignment: center;
         color: root.primary ? #ffffff : root.danger ? Theme.danger : root.selected ? Theme.accent : Theme.ink;
         font-size: 15px * Theme.text-scale;
@@ -93,6 +123,8 @@ export component MRow inherits Rectangle {
     in property <string> subtitle;
     in property <string> value;
     in property <color> value-color: Theme.secondary;
+    in property <bool> show-swatch;
+    in property <color> swatch;
     in property <bool> arrow: true;
     in property <bool> expandable;
     in property <bool> expanded;
@@ -104,6 +136,7 @@ export component MRow inherits Rectangle {
             MText { text: root.title; }
             if root.subtitle != "": MSmall { text: root.subtitle; wrap: word-wrap; }
         }
+        if root.show-swatch: Rectangle { width: 16px; height: 16px; horizontal-stretch: 0; border-radius: 8px; background: root.swatch; }
         if root.value != "": MSmall { text: root.value; color: root.value-color; horizontal-stretch: 0; }
         if root.arrow: Image {
             source: root.expandable ? (root.expanded ? @image-url("../../icons/chevron-up.svg") : @image-url("../../icons/chevron-down.svg")) : @image-url("../../icons/chevron-right.svg");
@@ -191,6 +224,26 @@ export component MProgress inherits Rectangle {
         background: Theme.accent;
     }
 }
+// Keep the message, action and lifetime indicator in one padded layout, just
+// like the desktop notice. Absolute offsets must not place controls below it.
+export component MNotice inherits Rectangle {
+    in property <string> text;
+    in property <float> progress;
+    callback dismissed();
+    height: content.preferred-height;
+    border-radius: 8px; border-width: 1px; border-color: Theme.line; background: Theme.surface;
+    drop-shadow-blur: 16px; drop-shadow-offset-y: 4px; drop-shadow-color: #00000030;
+    TouchArea { }
+    content := VerticalLayout { alignment: start; padding: Theme.card-padding; spacing: Theme.content-gap;
+        HorizontalLayout { cross-axis-alignment: center; spacing: Theme.content-gap;
+            MParagraph { text: root.text; font-size: Theme.body-size; color: Theme.secondary; }
+            MButton { modal-control: true; text: "关闭"; width: 68px; horizontal-stretch: 0;
+                clicked => { root.dismissed(); }
+            }
+        }
+        MProgress { height: 2px; value: root.progress; }
+    }
+}
 export component MNav inherits Rectangle {
     in property <string> text;
     in property <image> icon;
@@ -201,7 +254,7 @@ export component MNav inherits Rectangle {
     min-height: 48px; border-radius: root.stacked ? 12px : 6px;
     background: root.selected && root.pill ? Theme.accent-wash : area.pressed ? Theme.inset : transparent;
     if root.selected && !root.stacked: Rectangle { x: 0px; width: 3px; height: 20px; y: (parent.height - self.height) / 2; background: Theme.accent; border-radius: 2px; }
-    if root.stacked: VerticalLayout { padding-top: 8px; padding-bottom: 8px; spacing: 5px; alignment: center;
+    if root.stacked: VerticalLayout { padding-top: 4px; padding-bottom: 4px; spacing: 4px; alignment: center;
         Rectangle { height: 22px; Image { x: (parent.width - 22px) / 2; source: root.icon; width: 22px; height: 22px; colorize: root.selected ? Theme.accent : Theme.secondary; } }
         MSmall { text: root.text; font-size: 12px * Theme.text-scale; horizontal-alignment: center; color: root.selected ? Theme.accent : Theme.secondary; font-weight: root.selected ? 600 : 400; }
     }

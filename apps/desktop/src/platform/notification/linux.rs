@@ -1,13 +1,24 @@
 use anyhow::{Context, Result};
 use std::collections::HashMap;
+use tokio::sync::Mutex;
 use zbus::zvariant::Value;
 
+// GNOME tracks the sender's unique bus name. Disconnecting immediately after
+// Notify can destroy its notification source before the banner is presented.
+static CONNECTION: Mutex<Option<zbus::Connection>> = Mutex::const_new(None);
+
 pub(super) async fn show(title: &str, message: &str) -> Result<()> {
-    let connection = zbus::Connection::session()
-        .await
-        .context("无法连接桌面通知会话")?;
+    let mut retained = CONNECTION.lock().await;
+    if retained.as_ref().is_none_or(zbus::Connection::is_closed) {
+        *retained = Some(
+            zbus::Connection::session()
+                .await
+                .context("无法连接桌面通知会话")?,
+        );
+    }
+    let connection = retained.as_ref().expect("connected notification session");
     let proxy = zbus::Proxy::new(
-        &connection,
+        connection,
         "org.freedesktop.Notifications",
         "/org/freedesktop/Notifications",
         "org.freedesktop.Notifications",
@@ -16,6 +27,7 @@ pub(super) async fn show(title: &str, message: &str) -> Result<()> {
     let hints = HashMap::from([
         ("desktop-entry", Value::from("clash-of-rust")),
         ("urgency", Value::from(1u8)),
+        ("resident", Value::from(false)),
     ]);
     // The body supports markup; encode external host/node text as literal text.
     let body = escape(message);

@@ -13,7 +13,7 @@ export component AppearanceSettings inherits VerticalLayout {
             }
         }
         MDivider { }
-        MRow { title: "强调色"; value: AccentPalette.accent-names[Theme.accent-index]; clicked => { MobileView.detail = 11; } }
+        MRow { title: "强调色"; value: AccentPalette.accent-names[Theme.accent-index]; show-swatch: true; swatch: Theme.accent; clicked => { MobileView.detail = 11; } }
         MDivider { }
         HorizontalLayout { cross-axis-alignment: center; spacing: 12px;
             MText { text: "字号"; }
@@ -26,15 +26,15 @@ export component AppearanceSettings inherits VerticalLayout {
 }
 export component NetworkToggles inherits VerticalLayout {
     alignment: start; spacing: 8px;
-    MSwitch { title: "DNS 覆盖"; checked: MobileData.dns-override;
+    MSwitch { title: "DNS 覆盖"; checked: MobileData.dns-override || MobileData.protected; enabled: !MobileData.protected && !MobileData.protection-pending;
         toggled(value) => { MobileActions.request(MobileIntent.dns-override, value ? "true" : "false", ""); }
     }
     MDivider { }
-    MSwitch { title: "启用 IPv6"; checked: MobileData.ipv6;
+    MSwitch { title: "启用 IPv6"; checked: MobileData.ipv6 || MobileData.protected; enabled: !MobileData.protected && !MobileData.protection-pending;
         toggled(value) => { MobileActions.request(MobileIntent.ipv6, value ? "true" : "false", ""); }
     }
     MDivider { }
-    MSwitch { title: "启用 UDP"; checked: MobileData.udp || MobileData.protected; enabled: !MobileData.protected;
+    MSwitch { title: "启用 UDP"; checked: MobileData.udp || MobileData.protected; enabled: !MobileData.protected && !MobileData.protection-pending;
         toggled(value) => { MobileActions.request(MobileIntent.udp, value ? "true" : "false", ""); }
     }
 }

@@ -26,9 +26,9 @@
             </intent-filter>
         </activity>
         <service android:name=".TunnelService" android:permission="android.permission.BIND_VPN_SERVICE"
-            android:exported="true" android:foregroundServiceType="specialUse">
+            android:exported="true" android:foregroundServiceType="specialUse" android:stopWithTask="false">
             <intent-filter><action android:name="android.net.VpnService" /></intent-filter>
-            <meta-data android:name="android.net.VpnService.SUPPORTS_ALWAYS_ON" android:value="false" />
+            <meta-data android:name="android.net.VpnService.SUPPORTS_ALWAYS_ON" android:value="true" />
             <property android:name="android.app.PROPERTY_SPECIAL_USE_FGS_SUBTYPE" android:value="User initiated VPN tunnel" />
         </service>
         <service android:name=".VpnTileService" android:permission="android.permission.BIND_QUICK_SETTINGS_TILE"

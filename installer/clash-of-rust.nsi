@@ -460,6 +460,7 @@ Section "Uninstall"
   ; Clean up the README shipped by older versions.
   Delete "$INSTDIR\README.md"
     Delete "$DESKTOP\Clash of Rust.lnk"
+    DeleteRegKey HKCU "Software\Classes\AppUserModelId\org.clashofrust.desktop"
     ReadRegStr $0 HKCU "Software\Microsoft\Windows\CurrentVersion\Run" "ClashOfRust"
     ${If} $0 == '"$INSTDIR\clash-of-rust.exe" --background'
       DeleteRegValue HKCU "Software\Microsoft\Windows\CurrentVersion\Run" "ClashOfRust"

@@ -4,6 +4,7 @@ import android.content.Context;
 import java.io.*;
 import java.nio.file.Files;
 import java.nio.file.StandardCopyOption;
+import java.nio.charset.StandardCharsets;
 import org.json.JSONObject;
 import org.clashofrust.nativecore.mobile.Mobile;
 
@@ -43,11 +44,30 @@ public final class CoreBridge {
         Mobile.reload(raw); lastConfig = raw;
     }
     public static synchronized boolean ready() { return started; }
+    public static synchronized void restore(Context context) throws Exception {
+        if (started) return;
+        File runtime = new File(context.getFilesDir(), "client/runtime/config.yaml");
+        File settings = new File(context.getFilesDir(), "client/settings.json");
+        if (!runtime.isFile() || !settings.isFile() || runtime.length() > 20 * 1024 * 1024 || settings.length() > 10 * 1024 * 1024)
+            throw new IOException("没有可恢复的内核配置，请打开应用连接");
+        JSONObject saved = new JSONObject(new String(Files.readAllBytes(settings.toPath()), StandardCharsets.UTF_8));
+        boolean ipv6 = saved.optBoolean("ipv6", true) || saved.optJSONObject("claude_protection") != null;
+        start(context, new String(Files.readAllBytes(runtime.toPath()), StandardCharsets.UTF_8), ipv6);
+    }
+    static boolean protectedMode(Context context) throws Exception {
+        File settings = new File(context.getFilesDir(), "client/settings.json");
+        if (!settings.isFile()) return false;
+        if (settings.length() > 10 * 1024 * 1024) throw new IOException("保护配置超过大小限制");
+        return new JSONObject(new String(Files.readAllBytes(settings.toPath()), StandardCharsets.UTF_8))
+            .optJSONObject("claude_protection") != null;
+    }
     public static synchronized String config() { return lastConfig; }
     public static synchronized boolean ipv6() { return ipv6Enabled; }
     public static synchronized void setIpv6(boolean enabled) { ipv6Enabled = enabled; }
     public static JSONObject state() throws Exception {
         return new JSONObject().put("running", ready()).put("vpn", TunnelService.connected())
+            .put("vpn_generation", TunnelService.generation())
+            .put("protection", ProtectionRuntime.state())
             .put("vpn_error", TunnelService.error());
     }
 }

@@ -2,6 +2,7 @@ import { MobilePreviewSurface } from "../shared/preview.slint";
 import { AndroidSurface } from "app.slint";
 import "../../../../../resources/fonts/SourceHanSansCN-Regular.otf";
 import { AndroidData } from "state.slint";
+import { MobileData } from "../shared/state.slint";
 export component AndroidPreview inherits Window {
     preferred-width: 393px; preferred-height: 852px;
     default-font-family: "Source Han Sans CN";
@@ -20,9 +21,13 @@ export component AndroidPreview inherits Window {
     in-out property <bool> preview-protection-pending <=> scene.preview-protection-pending;
     in-out property <string> preview-notice <=> scene.preview-notice;
     in-out property <float> preview-notice-elapsed <=> scene.preview-notice-elapsed;
+    in-out property <bool> preview-sparse <=> scene.preview-sparse;
     scene := MobilePreviewSurface {
         inset-top: 28px; inset-bottom: 24px; preview-connected: true;
         AndroidSurface { }
     }
-    init => { AndroidData.authorization-status = "已允许"; }
+    init => {
+        AndroidData.authorization-status = "已允许";
+        MobileData.protection-supported = true;
+    }
 }

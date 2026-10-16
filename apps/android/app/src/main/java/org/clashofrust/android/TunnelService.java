@@ -12,16 +12,20 @@ import org.json.JSONObject;
 
 /** The foreground service owns the TUN; closing the window leaves it connected. */
 public final class TunnelService extends VpnService {
+    static final String RECONFIGURE = "org.clashofrust.android.RECONFIGURE";
     private static volatile TunnelService instance;
     private static volatile boolean connected;
     private static volatile String lastError = "";
+    private static volatile long generation;
     // One process-wide queue also orders cleanup against a newly created service.
     private static final ExecutorService serial = Executors.newSingleThreadExecutor();
     private ParcelFileDescriptor descriptor;
     private boolean stopping;
     static boolean connected() { return connected; }
     static String error() { return lastError; }
+    static long generation() { return generation; }
     static void stop(Context context) {
+        context.getSharedPreferences("vpn", MODE_PRIVATE).edit().putBoolean("desired", false).apply();
         TunnelService active = instance;
         if (active != null) active.serial.execute(active::disconnect);
     }
@@ -31,14 +35,25 @@ public final class TunnelService extends VpnService {
         manager.createNotificationChannel(new NotificationChannel("vpn", "VPN 连接", NotificationManager.IMPORTANCE_LOW));
     }
     @Override public int onStartCommand(Intent intent, int flags, int startId) {
+        boolean restore = intent == null;
+        boolean alwaysOn = Build.VERSION.SDK_INT >= 29 && isAlwaysOn();
+        if (restore && !alwaysOn && !getSharedPreferences("vpn", MODE_PRIVATE).getBoolean("desired", false)) {
+            stopSelf(); return START_NOT_STICKY;
+        }
+        getSharedPreferences("vpn", MODE_PRIVATE).edit().putBoolean("desired", true).apply();
         startForeground(1, notification("正在连接…"));
-        serial.execute(this::connect);
-        return START_NOT_STICKY;
+        boolean reconfigure = intent != null && RECONFIGURE.equals(intent.getAction());
+        serial.execute(() -> {
+            if (reconfigure) cleanup();
+            connect();
+        });
+        return START_STICKY;
     }
     private void connect() {
         if (descriptor != null || stopping) return;
         try {
-            if (!CoreBridge.ready() || VpnService.prepare(this) != null) throw new IllegalStateException("VPN 授权或内核状态已失效");
+            CoreBridge.restore(this);
+            if (VpnService.prepare(this) != null) throw new IllegalStateException("VPN 授权已失效，请打开应用重新连接");
             boolean ipv6 = CoreBridge.ipv6();
             Builder builder = new Builder().setSession("Clash of Rust").setMtu(1500)
                 .addAddress("198.18.0.1", 30).addRoute("0.0.0.0", 0).addDnsServer("198.18.0.2");
@@ -46,13 +61,16 @@ public final class TunnelService extends VpnService {
             // Do not allow IPv6 to escape the VPN when disabled: omitting its family blocks it.
             java.util.Set<String> exclusions=getSharedPreferences("vpn", MODE_PRIVATE).getStringSet("excluded",Collections.emptySet());
             java.util.Set<String> valid=new java.util.HashSet<>();
-            for (String name : exclusions) {
+            // Broad protection must cover excluded apps too; keep the user's
+            // preferences intact so disconnecting protection restores them.
+            for (String name : CoreBridge.protectedMode(this) ? Collections.<String>emptySet() : exclusions) {
                 try {builder.addDisallowedApplication(name);valid.add(name);}
                 catch (android.content.pm.PackageManager.NameNotFoundException removed) {
                     android.util.Log.i("ClashOfRust","Removed an uninstalled application from VPN exclusions");
                 }
             }
-            if (!valid.equals(exclusions)) getSharedPreferences("vpn",MODE_PRIVATE).edit().putStringSet("excluded",valid).apply();
+            if (!CoreBridge.protectedMode(this) && !valid.equals(exclusions))
+                getSharedPreferences("vpn",MODE_PRIVATE).edit().putStringSet("excluded",valid).apply();
             if (Build.VERSION.SDK_INT >= 29) builder.setMetered(false);
             Intent open = new Intent(this, MainActivity.class);
             builder.setConfigureIntent(PendingIntent.getActivity(this, 0, open, PendingIntent.FLAG_IMMUTABLE | PendingIntent.FLAG_UPDATE_CURRENT));
@@ -62,6 +80,8 @@ public final class TunnelService extends VpnService {
             android.util.Log.i("ClashOfRust", "VPN established; starting embedded TUN");
             Mobile.startTun(descriptor.getFd(), ipv6);
             connected = true; lastError = "";
+            generation++;
+            ProtectionRuntime.sync(this);
             VpnTileService.refresh(this);
             android.util.Log.i("ClashOfRust", "Embedded TUN started");
             getSystemService(NotificationManager.class).notify(1, notification("VPN 已连接"));
@@ -82,15 +102,21 @@ public final class TunnelService extends VpnService {
             descriptor = null;
         }
         Mobile.setProtector(null);
+        try { ProtectionRuntime.sync(this); }
+        catch (Exception error) { android.util.Log.e("ClashOfRust", "Stop protection", error); }
         MainActivity.emit("vpn", false);
     }
     private void disconnect() {
         stopping = true;
+        getSharedPreferences("vpn", MODE_PRIVATE).edit().putBoolean("desired", false).apply();
         cleanup();
         stopForeground(STOP_FOREGROUND_REMOVE);
         stopSelf();
     }
-    @Override public void onRevoke() { serial.execute(this::disconnect); }
+    @Override public void onRevoke() {
+        lastError = "VPN 授权已被系统撤回";
+        serial.execute(this::disconnect);
+    }
     @Override public void onDestroy() {
         instance = null;
         serial.execute(this::cleanup);

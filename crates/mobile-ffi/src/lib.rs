@@ -11,6 +11,19 @@ use std::{path::PathBuf, sync::Arc, time::Instant};
 
 pub trait NativeHost: Send + Sync + 'static {
     fn request(&self, value: Value) -> Result<Value>;
+    fn notify(&self, title: &str, message: &str, interactive: bool) -> Result<()> {
+        ensure!(
+            title.len() <= 128
+                && message.len() <= 2048
+                && !title.contains('\0')
+                && !message.contains('\0'),
+            "系统通知内容无效"
+        );
+        self.request(
+            json!({"op":"notify","title":title,"message":message,"request_permission":interactive}),
+        )?;
+        Ok(())
+    }
 }
 
 /// Native status objects may contain an empty error; only actual failures fail a request.
@@ -25,6 +38,46 @@ pub fn native_response(value: Value) -> Result<Value> {
     Ok(value)
 }
 
+/// Controller I/O runs outside the presentation loop. A host can cancel an old
+/// snapshot when navigating or replacing the controller without losing UI events.
+pub struct Snapshot {
+    proxies: Option<Proxies>,
+    connections: Option<Connections>,
+    stats: core::api::ConnectionStats,
+    at: Instant,
+}
+impl Snapshot {
+    pub async fn fetch(api: &Api, page: i32) -> Result<Self> {
+        let proxies = async {
+            if matches!(page, 0 | 1) {
+                api.get("proxies").await.map(Some)
+            } else {
+                Ok(None)
+            }
+        };
+        let connections = async {
+            if matches!(page, 3 | 8) {
+                let connections: Connections = api.get("connections").await?;
+                let stats = core::api::ConnectionStats {
+                    count: connections.connections.len(),
+                    upload_total: connections.upload_total,
+                    download_total: connections.download_total,
+                };
+                Ok::<_, anyhow::Error>((Some(connections), stats))
+            } else {
+                Ok((None, api.get("connections").await?))
+            }
+        };
+        let (proxies, (connections, stats)) = tokio::try_join!(proxies, connections)?;
+        Ok(Self {
+            proxies,
+            connections,
+            stats,
+            at: Instant::now(),
+        })
+    }
+}
+
 pub struct Session {
     pub store: Store,
     pub settings: Settings,
@@ -35,6 +88,7 @@ pub struct Session {
     pub proxies: Proxies,
     pub connections: Connections,
     pub sampled: Option<Instant>,
+    connection_sampled: Option<Instant>,
     pub count: usize,
     pub rates: (u64, u64),
     pub platform: Value,
@@ -110,6 +164,7 @@ impl Session {
             proxies: Proxies::default(),
             connections: Connections::default(),
             sampled: None,
+            connection_sampled: None,
             count: 0,
             rates: (0, 0),
             platform: json!({}),
@@ -130,8 +185,8 @@ impl Session {
     pub fn raw(&self) -> Result<String> {
         core::config::read_profile(&self.store.profile_path(&self.profile().id)?)
     }
-    pub fn document(&self) -> Result<Document> {
-        Ok(self.rule_document.clone())
+    pub fn document(&self) -> &Document {
+        &self.rule_document
     }
     pub fn runtime(&self, settings: &Settings) -> Result<String> {
         let id = settings.active_profile.as_deref().context("尚未选择订阅")?;
@@ -146,11 +201,15 @@ impl Session {
     }
     pub fn initialize(&mut self) -> Result<()> {
         let raw = self.runtime(&self.settings)?;
-        self.native
-            .request(json!({"op":"initialize","config":raw,"ipv6":self.settings.ipv6}))?;
+        self.native.request(
+            json!({"op":"initialize","config":raw,"ipv6":effective_ipv6(&self.settings)}),
+        )?;
         atomic_write(&self.store.runtime().join("config.yaml"), raw.as_bytes())?;
         self.running = true;
         self.route = core::active_route::root(&raw)?;
+        if self.settings.claude_protection.is_some() {
+            self.native.request(json!({"op":"protection-sync"}))?;
+        }
         Ok(())
     }
     pub fn commit_settings(&mut self, settings: Settings) -> Result<()> {
@@ -164,41 +223,70 @@ impl Session {
         )?;
         tx.stage(&self.store.runtime().join("config.yaml"), raw.as_bytes())?;
         tx.prepare()?;
+        let protection_changed = self.settings.claude_protection != settings.claude_protection;
+        if protection_changed && self.settings.claude_protection.is_some() {
+            if let Err(error) = self.native.request(json!({"op":"protection-pause"})) {
+                tx.rollback()?;
+                return Err(error);
+            }
+        }
         if self.running
             && let Err(error) = self
                 .native
-                .request(json!({"op":"reload","config":raw,"ipv6":settings.ipv6}))
+                .request(json!({"op":"reload","config":raw,"ipv6":effective_ipv6(&settings)}))
         {
             tx.rollback()?;
             self.native
-                .request(json!({"op":"reload","config":old_raw,"ipv6":self.settings.ipv6}))
+                .request(
+                    json!({"op":"reload","config":old_raw,"ipv6":effective_ipv6(&self.settings)}),
+                )
                 .context("内核拒绝配置后恢复失败")?;
+            if protection_changed {
+                self.native.request(json!({"op":"protection-sync"}))?;
+            }
             return Err(error);
         }
         if let Err(error) = tx.commit() {
             tx.rollback().context("配置写入失败，磁盘恢复也失败")?;
             if self.running {
                 self.native
-                    .request(json!({"op":"reload","config":old_raw,"ipv6":self.settings.ipv6}))
+                    .request(json!({"op":"reload","config":old_raw,"ipv6":effective_ipv6(&self.settings)}))
                     .context("配置保存失败，内核恢复也失败")?;
+            }
+            if protection_changed {
+                self.native.request(json!({"op":"protection-sync"}))?;
             }
             return Err(error);
         }
         self.api = Api::new(&settings)?;
         self.route = core::active_route::root(&raw)?;
         self.settings = settings;
+        if protection_changed {
+            self.native.request(json!({"op":"protection-sync"}))?;
+        }
         Ok(())
     }
-    pub async fn refresh(&mut self, page: i32) -> Result<()> {
+    pub fn observe_native(&mut self) -> Result<()> {
         let state = self.native.request(json!({"op":"state"}))?;
         self.running = state["running"].as_bool().unwrap_or(false);
         self.vpn = state["vpn"].as_bool().unwrap_or(false);
         self.platform = state;
         if !self.running {
-            return Ok(());
+            self.clear_snapshot();
         }
-        if page == 1 || page == 0 {
-            self.proxies = self.api.get("proxies").await?;
+        Ok(())
+    }
+    pub fn clear_snapshot(&mut self) {
+        self.proxies = Proxies::default();
+        self.connections = Connections::default();
+        self.count = 0;
+        self.rates = (0, 0);
+        self.sampled = None;
+        self.connection_sampled = None;
+    }
+    pub fn apply_snapshot(&mut self, snapshot: Snapshot) {
+        if let Some(proxies) = snapshot.proxies {
+            self.proxies = proxies;
             let root = core::active_route::start(&self.settings.run_mode, &self.route);
             if let Some(node) = core::active_route::from_snapshot(root, &self.proxies) {
                 self.node = node;
@@ -206,41 +294,44 @@ impl Session {
         } else {
             self.proxies = Proxies::default();
         }
-        let at = Instant::now();
-        let old_up = self.connections.upload_total;
-        let old_down = self.connections.download_total;
-        if page == 3 || page == 8 {
-            let mut next: Connections = self.api.get("connections").await?;
-            if let Some(at) = self.sampled {
+        if let Some(previous) = self.sampled {
+            let elapsed = snapshot.at.duration_since(previous).as_secs_f64();
+            if elapsed > 0.0 {
+                self.rates = (
+                    (snapshot
+                        .stats
+                        .upload_total
+                        .saturating_sub(self.connections.upload_total) as f64
+                        / elapsed) as u64,
+                    (snapshot
+                        .stats
+                        .download_total
+                        .saturating_sub(self.connections.download_total)
+                        as f64
+                        / elapsed) as u64,
+                );
+            }
+        }
+        if let Some(mut next) = snapshot.connections {
+            if let Some(previous) = self.connection_sampled {
                 core::connection::sample_rates(
                     &mut next.connections,
                     &self.connections.connections,
-                    at.elapsed(),
+                    snapshot.at.duration_since(previous),
                 );
             }
-            self.count = next.connections.len();
             self.connections = next;
+            self.connection_sampled = Some(snapshot.at);
         } else {
-            let stats: core::api::ConnectionStats = self.api.get("connections").await?;
-            self.count = stats.count;
-            self.connections = Connections {
-                upload_total: stats.upload_total,
-                download_total: stats.download_total,
-                connections: vec![],
-            };
+            // A bounded first screen stays available during navigation. Do not
+            // retain a full busy connection table on unrelated mobile pages.
+            self.connections.connections.truncate(50);
+            self.connections.connections.shrink_to_fit();
         }
-        if let Some(previous) = self.sampled {
-            let elapsed = at.duration_since(previous).as_secs_f64();
-            if elapsed > 0.0 {
-                self.rates = (
-                    (self.connections.upload_total.saturating_sub(old_up) as f64 / elapsed) as u64,
-                    (self.connections.download_total.saturating_sub(old_down) as f64 / elapsed)
-                        as u64,
-                );
-            }
-        }
-        self.sampled = Some(at);
-        Ok(())
+        self.count = snapshot.stats.count;
+        self.connections.upload_total = snapshot.stats.upload_total;
+        self.connections.download_total = snapshot.stats.download_total;
+        self.sampled = Some(snapshot.at);
     }
     pub async fn save_profile(
         &mut self,
@@ -321,12 +412,13 @@ impl Session {
             && let Some(raw) = &new_runtime
             && let Err(error) = self
                 .native
-                .request(json!({"op":"reload","config":raw,"ipv6":self.settings.ipv6}))
+                .request(json!({"op":"reload","config":raw,"ipv6":effective_ipv6(&self.settings)}))
         {
             tx.rollback()?;
             if let Some(raw) = &old_raw {
-                self.native
-                    .request(json!({"op":"reload","config":raw,"ipv6":self.settings.ipv6}))?;
+                self.native.request(
+                    json!({"op":"reload","config":raw,"ipv6":effective_ipv6(&self.settings)}),
+                )?;
             }
             return Err(error);
         }
@@ -335,8 +427,9 @@ impl Session {
             if self.running
                 && let Some(raw) = old_raw
             {
-                self.native
-                    .request(json!({"op":"reload","config":raw,"ipv6":self.settings.ipv6}))?;
+                self.native.request(
+                    json!({"op":"reload","config":raw,"ipv6":effective_ipv6(&self.settings)}),
+                )?;
             }
             return Err(error);
         }
@@ -368,8 +461,29 @@ impl Session {
         ensure!(self.profiles.iter().any(|p| p.id == id), "订阅不存在");
         let mut next = self.settings.clone();
         next.active_profile = Some(id.into());
+        // Keep an unapplied rules draft attached to its original subscription.
+        // Otherwise the rule page follows the newly active subscription.
+        let follow =
+            self.draft == *ProfileRules::for_profile(&self.settings, &self.rule_profile, false);
+        let document = if follow {
+            Some(Document::from_raw(
+                id,
+                false,
+                &core::config::read_profile(&self.store.profile_path(id)?)?,
+            )?)
+        } else {
+            None
+        };
         self.commit_settings(next)?;
         self.node.clear();
+        self.clear_snapshot();
+        if let Some(document) = document {
+            self.rule_profile = id.to_owned();
+            self.rule_document = document;
+            self.draft = ProfileRules::for_profile(&self.settings, id, false)
+                .as_ref()
+                .clone();
+        }
         Ok(())
     }
     pub fn delete(&mut self, id: &str) -> Result<()> {
@@ -447,7 +561,7 @@ impl Session {
             self.draft.custom.push(rule);
         }
         let key = format!("c:{id}");
-        let (rows, _) = self.document()?.rows(&self.draft);
+        let (rows, _) = self.document().rows(&self.draft);
         let mut order: Vec<_> = rows
             .into_iter()
             .map(|r| r.id)
@@ -470,6 +584,101 @@ impl Session {
             Ok(())
         }
     }
+}
+
+pub fn effective_ipv6(settings: &Settings) -> bool {
+    settings.ipv6 || settings.claude_protection.is_some()
+}
+
+/// Both mobile hosts reuse the desktop overlay, provider resolution and guard.
+pub async fn prepare_protection(
+    api: &Api,
+    settings: &Settings,
+    raw: &str,
+    vpn: bool,
+) -> Result<core::claude_check::protection::Protection> {
+    use core::claude_check::protection::{Previous, Protection};
+    let proxies: Proxies = api.get("proxies").await?;
+    let root = core::active_route::root(raw)?;
+    let mode = if settings.run_mode == "direct" {
+        "rule"
+    } else {
+        &settings.run_mode
+    };
+    let mut node = core::active_route::start(mode, &root).to_owned();
+    let mut visited = std::collections::BTreeSet::new();
+    let mut provider = None;
+    loop {
+        ensure!(
+            !core::active_route::terminal(&node)
+                && visited.len() < core::active_route::MAX_DEPTH
+                && visited.insert(node.clone()),
+            "请先选择具体代理节点"
+        );
+        match api.proxy_nodes(&node).await {
+            Ok(proxy) if !proxy.now.is_empty() => node = proxy.now.to_string(),
+            Ok(proxy) => {
+                ensure!(
+                    proxy.all.is_empty()
+                        && !matches!(
+                            proxy.kind.as_str(),
+                            "" | "Direct"
+                                | "Reject"
+                                | "Pass"
+                                | "Compatible"
+                                | "Selector"
+                                | "URLTest"
+                                | "Fallback"
+                                | "LoadBalance"
+                        ),
+                    "请选择具体代理节点"
+                );
+                break;
+            }
+            Err(_) => {
+                let (source, kind) = api
+                    .provider_leaf(&node)
+                    .await?
+                    .context("当前代理节点不存在")?;
+                ensure!(
+                    !matches!(
+                        kind.as_str(),
+                        "Direct"
+                            | "Reject"
+                            | "Pass"
+                            | "Selector"
+                            | "URLTest"
+                            | "Fallback"
+                            | "LoadBalance"
+                    ),
+                    "请选择具体代理节点"
+                );
+                provider = Some(source);
+                break;
+            }
+        }
+    }
+    let mut protection = Protection::new(
+        settings.active_profile.clone().context("请先选择订阅")?,
+        node,
+        Previous {
+            mode: settings.run_mode.clone(),
+            proxy_mode: if vpn {
+                core::model::ProxyMode::Tun
+            } else {
+                core::model::ProxyMode::Off
+            },
+            selectors: proxies
+                .proxies
+                .iter()
+                .filter(|(_, p)| p.kind.as_str() == "Selector" && !p.now.is_empty())
+                .map(|(name, p)| (name.to_string(), p.now.to_string()))
+                .collect(),
+        },
+    );
+    protection.provider = provider;
+    protection.validate()?;
+    Ok(protection)
 }
 
 /// OS routing belongs to VpnService, never to subscription YAML or Linux ioctls.
@@ -518,6 +727,72 @@ mod tests {
         }
     }
     #[test]
+    fn logo_and_guard_notifications_share_a_validated_native_request() {
+        struct Recorder(std::sync::Mutex<Vec<Value>>);
+        impl NativeHost for Recorder {
+            fn request(&self, value: Value) -> Result<Value> {
+                self.0.lock().unwrap().push(value);
+                Ok(json!({"ok":true}))
+            }
+        }
+        let host = Recorder(Default::default());
+        host.notify("Clash of Rust", "喵!", true).unwrap();
+        host.notify("Claude 保护", "异常连接已关闭", false).unwrap();
+        assert!(host.notify("invalid\0title", "body", false).is_err());
+        let requests = host.0.lock().unwrap();
+        assert_eq!(requests.len(), 2);
+        assert!(requests.iter().all(|request| request["op"] == "notify"));
+        assert_eq!(requests[0]["request_permission"], true);
+        assert_eq!(requests[1]["request_permission"], false);
+    }
+    #[tokio::test]
+    async fn mobile_protection_survives_reopen_and_restores_network_preferences() {
+        use core::claude_check::protection::{Previous, Protection};
+        let root = tempfile::tempdir().unwrap();
+        let native = Arc::new(Fake);
+        let mut session = Session::open(root.path().into(), native.clone()).unwrap();
+        session.save_profile(None, "测试订阅", "", Some(
+            "proxies: [{name: Test, type: socks5, server: 127.0.0.1, port: 1080}]\nrules: ['MATCH,Test']\n"
+        )).await.unwrap();
+        let profile = session
+            .profiles
+            .iter()
+            .find(|p| p.name == "测试订阅")
+            .unwrap()
+            .id
+            .clone();
+        session.activate(&profile).unwrap();
+        let mut before = session.settings.clone();
+        before.ipv6 = false;
+        before.udp = false;
+        before.dns_override = false;
+        session.commit_settings(before.clone()).unwrap();
+        let raw = session.runtime(&before).unwrap();
+        let mut next = before.clone();
+        next.claude_protection = Some(Arc::new(Protection::new(
+            profile,
+            "Test".into(),
+            Previous {
+                mode: before.run_mode.clone(),
+                proxy_mode: core::model::ProxyMode::Off,
+                selectors: Default::default(),
+            },
+        )));
+        session.commit_settings(next).unwrap();
+        assert!(effective_ipv6(&session.settings));
+        assert!(!session.settings.ipv6 && !session.settings.udp && !session.settings.dns_override);
+        let active: serde_yaml::Value =
+            serde_yaml::from_str(&session.runtime(&session.settings).unwrap()).unwrap();
+        assert_eq!(active["ipv6"], true);
+        assert_eq!(active["tun"]["enable"], false);
+        let mut reopened = Session::open(root.path().into(), native).unwrap();
+        assert!(reopened.settings.claude_protection.is_some());
+        reopened.commit_settings(before).unwrap();
+        assert!(!effective_ipv6(&reopened.settings));
+        assert_eq!(reopened.runtime(&reopened.settings).unwrap(), raw);
+        assert!(!core::profile_transaction::recover(&reopened.store.root).unwrap());
+    }
+    #[test]
     fn mobile_never_inherits_subscription_owned_routes_or_controller() {
         let settings = Settings {
             ipv6: false,
@@ -545,6 +820,104 @@ mod tests {
         assert_eq!(session.raw().unwrap(), before);
         assert!(session.delete(&session.profile().id.clone()).is_err());
         assert!(session.save_rule("", "", 1).is_err());
+    }
+    #[tokio::test]
+    async fn switching_profiles_follows_active_rules_without_losing_a_draft() {
+        let root = tempfile::tempdir().unwrap();
+        let mut session = Session::open(root.path().into(), Arc::new(Fake)).unwrap();
+        let original = session.profile().id.clone();
+        session
+            .save_profile(
+                None,
+                "另一订阅",
+                "",
+                Some("proxies: []\nrules: ['DOMAIN,example.test,DIRECT', 'MATCH,DIRECT']\n"),
+            )
+            .await
+            .unwrap();
+        let next = session
+            .profiles
+            .iter()
+            .find(|p| p.name == "另一订阅")
+            .unwrap()
+            .id
+            .clone();
+        session.activate(&next).unwrap();
+        assert_eq!(session.rule_profile, next);
+        assert!(
+            session
+                .document()
+                .original
+                .iter()
+                .any(|r| r.raw.contains("example.test"))
+        );
+        session
+            .save_rule("", "DOMAIN-SUFFIX,draft.test,DIRECT", 1)
+            .unwrap();
+        let draft = session.draft.clone();
+        session.activate(&original).unwrap();
+        assert_eq!(session.profile().id, original);
+        assert_eq!(session.rule_profile, next);
+        assert_eq!(session.draft, draft);
+        assert!(session.select_rules(&original).is_err());
+    }
+    #[test]
+    fn background_stats_keep_a_bounded_first_screen_and_correct_rate_interval() {
+        let root = tempfile::tempdir().unwrap();
+        let mut session = Session::open(root.path().into(), Arc::new(Fake)).unwrap();
+        let at = Instant::now();
+        let connections = |upload| Connections {
+            upload_total: upload,
+            connections: (0..80)
+                .map(|id| core::api::Connection {
+                    id: id.to_string().into(),
+                    upload,
+                    ..Default::default()
+                })
+                .collect(),
+            ..Default::default()
+        };
+        session.apply_snapshot(Snapshot {
+            proxies: None,
+            connections: Some(connections(10)),
+            stats: core::api::ConnectionStats {
+                count: 80,
+                upload_total: 10,
+                download_total: 0,
+            },
+            at,
+        });
+        session.apply_snapshot(Snapshot {
+            proxies: None,
+            connections: None,
+            stats: core::api::ConnectionStats {
+                count: 90,
+                upload_total: 110,
+                download_total: 0,
+            },
+            at: at + std::time::Duration::from_secs(1),
+        });
+        assert_eq!(session.count, 90);
+        assert_eq!(session.connections.connections.len(), 50);
+        assert_eq!(session.rates.0, 100);
+        session.apply_snapshot(Snapshot {
+            proxies: None,
+            connections: Some(connections(210)),
+            stats: core::api::ConnectionStats {
+                count: 80,
+                upload_total: 210,
+                download_total: 0,
+            },
+            at: at + std::time::Duration::from_secs(2),
+        });
+        assert_eq!(
+            session.connections.connections[0].rates.unwrap().upload,
+            100
+        );
+        session.clear_snapshot();
+        assert_eq!(session.count, 0);
+        assert!(session.connections.connections.is_empty());
+        assert_eq!(session.rates, (0, 0));
     }
     #[test]
     fn vpn_dns_stays_available_with_override_off_and_subscription_dns_disabled() {

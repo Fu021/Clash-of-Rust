@@ -44,62 +44,17 @@ fn connection_details(
     connection: &clash_of_rust::api::Connection,
     resolved: &str,
 ) -> Vec<DetailItem> {
-    let rate = |value: Option<u64>| {
-        value.map_or_else(|| "—".into(), |value| format!("{}/s", bytes(value)))
-    };
-    [
-        ("连接名称", connection::name(connection).to_owned()),
-        ("域名", connection.metadata.host.to_string()),
-        (
-            "嗅探域名",
-            connection_lookup::hostname(connection).to_owned(),
-        ),
-        (
-            "目标 IP",
-            if connection.metadata.destination_ip.is_empty() {
-                resolved.to_owned()
+    connection::detail_values(connection, resolved)
+        .into_iter()
+        .map(|(label, value)| DetailItem {
+            label: label.into(),
+            value: if value.is_empty() {
+                "—".into()
             } else {
-                connection.metadata.destination_ip.to_string()
+                value.into()
             },
-        ),
-        ("目标端口", connection.metadata.destination_port.to_string()),
-        ("协议", connection.metadata.network.to_string()),
-        (
-            "匹配规则",
-            format!("{} {}", connection.rule, connection.rule_payload)
-                .trim()
-                .to_owned(),
-        ),
-        (
-            "代理链",
-            connection
-                .chains
-                .iter()
-                .rev()
-                .map(|name| name.as_str())
-                .collect::<Vec<_>>()
-                .join(" → "),
-        ),
-        ("上传速度", rate(connection.rates.map(|value| value.upload))),
-        (
-            "下载速度",
-            rate(connection.rates.map(|value| value.download)),
-        ),
-        ("累计上传", bytes(connection.upload)),
-        ("累计下载", bytes(connection.download)),
-        ("开始时间", connection.start.to_string()),
-        ("连接 ID", connection.id.to_string()),
-    ]
-    .into_iter()
-    .map(|(label, value)| DetailItem {
-        label: label.into(),
-        value: if value.is_empty() {
-            "—".into()
-        } else {
-            value.into()
-        },
-    })
-    .collect()
+        })
+        .collect()
 }
 
 impl App {

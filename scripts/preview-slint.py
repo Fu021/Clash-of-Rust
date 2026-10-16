@@ -75,8 +75,10 @@ def mobile_preview(args) -> None:
             values = {'preview-page': page, 'preview-dark': dark, 'preview-detail': detail,
                       'inset-top': 0 if short else 24 if width >= 640 else 54 if platform == 'ios' else 28,
                       'inset-bottom': 21 if short else 30 if platform == 'ios' else 24,
-                      'inset-left': 44 if short else 0, 'inset-right': 44 if short else 0,
+                      'inset-left': 44 if short and platform == 'ios' else 0,
+                      'inset-right': 44 if short and platform == 'ios' else 0,
                       'text-scale': scale, 'preview-connected': connected, 'preview-keyboard': keyboard,
+                      'preview-notice': args.notice, 'preview-notice-elapsed': args.notice_elapsed,
                       **extra}
             fixture = fixtures / (name + '.json')
             fixture.write_text(json.dumps(values), encoding='utf-8')
@@ -96,11 +98,14 @@ def mobile_preview(args) -> None:
         if args.page == 'all':
             for name, label, size, page, dark, detail, scale in [
                 ('phone-landscape', '手机横屏 · 首页', '852x393', 0, False, 0, 1),
+                ('landscape-rules', '手机横屏 · 规则', '852x393', 4, False, 0, 1),
+                ('landscape-connections', '手机横屏 · 连接', '852x393', 3, False, 0, 1),
                 ('pad-portrait', 'Pad 竖屏 · 代理', '834x1194', 1, False, 0, 1),
                 ('pad-landscape', 'Pad 横屏 · 代理', '1194x834', 1, True, 0, 1),
                 ('pad-connections', 'Pad 横屏 · 连接详情', '1194x834', 3, False, 5, 1),
                 ('pad-risk', 'Pad 横屏 · 风险详情', '1194x834', 8, True, 1, 1),
                 ('pad-settings', 'Pad 横屏 · 设置', '1194x834', 9, False, 0, 1),
+                ('settings-full', '设置 · 完整内容', '1194x1200', 9, False, 0, 1),
                 ('pad-split', 'Pad 分屏 · 检测报告', '507x834', 8, False, 0, 1),
                 ('small-phone', '小屏手机', '360x780', 9, False, 0, 1),
                 ('large-text', '大字号 · 125%', '393x852', 8, False, 0, 1.25),
@@ -121,6 +126,9 @@ def mobile_preview(args) -> None:
             render('rules-shortcuts', '快捷规则', page=4, **{'preview-shortcuts': True})
             render('protection-pending', '切换期间进度', page=8, **{'preview-protection-pending': True})
             render('notice', '通知与消退进度', **{'preview-notice': '配置已更新，当前连接保持运行。', 'preview-notice-elapsed': 3})
+            render('notice-over-modal', '通知位于弹窗上方', page=9, detail=11,
+                   **{'preview-notice': '强调色已保存。', 'preview-notice-elapsed': 3})
+            render('sparse-subscriptions', '少量内容置顶', page=2, **{'preview-sparse': True})
         (output / 'manifest.json').write_text(json.dumps(entries, ensure_ascii=False, indent=2), encoding='utf-8')
         gallery(entries, output)
         if args.pairs:
@@ -129,7 +137,7 @@ def mobile_preview(args) -> None:
             ('phone-main', ['home-light', 'proxies-light', 'subscriptions-light', 'connections-light']),
             ('phone-tools', ['rules-light', 'logs-light', 'network-light', 'tools-light']),
             ('phone-reports', ['ip-check-light', 'ai-check-light', 'settings-light', 'risk-detail']),
-            ('phone-dark', ['home-dark', 'ai-check-dark', 'settings-dark', 'protection']),
+            ('phone-dark', ['home-dark', 'ai-check-dark', 'settings-dark', 'logs-dark']),
             ('phone-details', ['connection-details', 'log-detail', 'rule-editor', 'ip-category']),
             ('phone-confirmations', ['delete-confirm', 'draft-confirm', 'accent-picker', 'rule-keyboard']),
         ]:
@@ -295,6 +303,8 @@ def main() -> None:
     parser.add_argument("--check", action="store_true", help="only check Slint syntax and bindings")
     parser.add_argument("--pairs", action="store_true", help="also render light/dark pairs suitable for inline sharing")
     parser.add_argument("--full-settings", action="store_true", help="show all settings without scrolling in its page screenshot")
+    parser.add_argument("--notice", default="", help="show a floating notification using the production component")
+    parser.add_argument("--notice-elapsed", type=float, default=3, help="elapsed notification lifetime in seconds")
     parser.add_argument("--size")
     parser.add_argument("--output", type=Path)
     args = parser.parse_args()
@@ -351,7 +361,8 @@ def main() -> None:
     for theme in themes:
         for name, label, page, dialog in scenes:
             fixture = fixtures / f"{name}-{theme}.json"
-            fixture.write_text(json.dumps({"preview-page": list(PAGES).index(page), "preview-dark": theme == "dark", "dialog": dialog}))
+            fixture.write_text(json.dumps({"preview-page": list(PAGES).index(page), "preview-dark": theme == "dark", "dialog": dialog,
+                                           "preview-notice": args.notice, "preview-notice-elapsed": args.notice_elapsed}))
             image = output / f"{name}-{theme}.png"
             scene_size = f"{width}x{max(height, 1120)}" if args.full_settings and page == "settings" and not dialog else args.size
             run_viewer(args.viewer, ["--load-data", str(fixture), "--size", scene_size,

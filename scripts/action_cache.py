@@ -37,6 +37,34 @@ def digest(path):
     return value.hexdigest()
 
 
+def fingerprint(paths):
+    value = hashlib.sha256()
+    for index, root in enumerate(paths):
+        root = Path(root)
+        for path in sorted(root.rglob('*')) if root.is_dir() else [root]:
+            if path.is_file() and not path.is_symlink():
+                value.update(str(index).encode())
+                value.update((path.relative_to(root).as_posix() if path != root else '.').encode())
+                value.update(digest(path).encode())
+    return value.hexdigest()
+
+
+def cache_report(config, operation, result, size=0):
+    # Allowlist public fields. The action state also contains a credential.
+    record = {'group': config['group'], 'key': config['key'], 'operation': operation,
+              'result': result, 'bytes': size, 'run_id': os.environ.get('GITHUB_RUN_ID', ''),
+              'commit': os.environ.get('GITHUB_SHA', '')}
+    directory = Path(os.environ.get('GITHUB_WORKSPACE', '.'))/'target/cache-report'
+    directory.mkdir(parents=True, exist_ok=True)
+    name = hashlib.sha256((config['group']+operation).encode()).hexdigest()[:16]+'.json'
+    write_json(directory/name, record)
+    if summary := os.environ.get('GITHUB_STEP_SUMMARY'):
+        with open(summary, 'a') as output:
+            output.write('\n### Private cache '+operation+'\n\n'
+                         '| Group | Result | Size | Key |\n| --- | --- | --- | --- |\n'
+                         f'| {record["group"]} | {result} | {size/1024**2:.1f} MiB | {record["key"]} |\n')
+
+
 def write_json(path, value):
     path = Path(path)
     temporary = path.with_name(path.name + '.new')
@@ -110,7 +138,7 @@ def pack(paths, destination, rust=False):
         if not (info.isfile() or info.isdir()):
             return None
         parts = PurePosixPath(info.name).parts
-        if any(p in ('incremental', '__pycache__') for p in parts) or info.name.endswith('.lock'):
+        if any(p in ('incremental', '__pycache__') for p in parts) or (info.name.endswith('.lock') and parts[-1] != 'Cargo.lock'):
             return None
         # Executable test/application outputs are exported as verified artifacts,
         # not dependency caches. Keep build-script executables and library data.
@@ -208,12 +236,14 @@ def restore(config):
     config['resolved_paths'] = [str(p) for p in cache_paths(config)]
     if not config['url'] or not config['token']:
         print('Local cache is not configured; using normal builds.')
+        cache_report(config, 'restore', 'not configured; normal build')
         return
     query = urllib.parse.urlencode({'group': config['group'], 'key': config['key'], 'prefix': '\n'.join(config['prefix'])})
     with response(config, '/v1/lookup?'+query) as reply:
         if reply.status == 404:
             config['available'] = True
             print('Local cache miss:', config['group'])
+            cache_report(config, 'restore', 'miss; upstream/repository inputs required')
             return
         if reply.status != 200:
             raise RuntimeError(f'Cache lookup HTTP {reply.status}')
@@ -234,41 +264,58 @@ def restore(config):
         paths = [Path(p) for p in config['resolved_paths']]
         unpack(archive, paths)
     config.update(available=True, restored=True, hit=record['key'] == config['key'])
+    if config['kind'] != 'rust':
+        config['fingerprint'] = fingerprint(paths)
+    cache_report(config, 'restore', 'exact' if config['hit'] else 'compatible snapshot', record['size'])
     print('Restored local cache:', config['group'], f'{record["size"]/1024**2:.1f} MiB', 'exact' if config['hit'] else 'compatible generation')
 
 
 def save(config):
-    if not config.get('available') or config.get('hit') or not config['save']:
+    if not config.get('available') or not config['save']:
         return
     # Globs such as Cargo's Skia source directory may not exist until compilation.
     paths = cache_paths(config)
     if not any(p.exists() for p in paths):
         return
+    if config.get('hit') and (config['kind'] == 'rust'
+                             or config.get('fingerprint') == fingerprint(paths)):
+        cache_report(config, 'save', 'unchanged; reused existing cache')
+        return
     with tempfile.TemporaryDirectory(prefix='actions-cache-', dir=os.environ.get('RUNNER_TEMP')) as temporary:
         archive = Path(temporary)/'cache.tar.gz'
         pack(paths, archive, rust=config['kind'] == 'rust')
         query = urllib.parse.urlencode({'group': config['group'], 'key': config['key']})
-        headers = {'Content-Length': str(archive.stat().st_size), 'X-Content-SHA256': digest(archive), 'Content-Type': 'application/octet-stream'}
+        sequence = int(os.environ.get('GITHUB_RUN_ID', '0'))*1000 + min(int(os.environ.get('GITHUB_RUN_ATTEMPT', '0')), 999)
+        headers = {'Content-Length': str(archive.stat().st_size), 'X-Content-SHA256': digest(archive),
+                   'X-Cache-Sequence': str(sequence), 'Content-Type': 'application/octet-stream'}
         with archive.open('rb') as incoming, response(config, '/v1/blob?'+query, method='PUT', file=incoming, headers=headers) as reply:
             if reply.status not in (200, 201, 409):
                 raise RuntimeError(f'Cache upload HTTP {reply.status}')
+            cache_report(config, 'save', 'superseded; newer cache retained' if reply.status == 409
+                         else 'saved; older snapshot replaced', archive.stat().st_size)
         print('Saved local cache:', config['group'], f'{archive.stat().st_size/1024**2:.1f} MiB')
 
 
 class Store:
-    def __init__(self, root, budget=40*1024**3, min_free=15*1024**3, versions=2):
+    def __init__(self, root, budget=40*1024**3, min_free=15*1024**3, versions=1):
         self.root = Path(root)
         self.budget, self.min_free, self.versions = budget, min_free, versions
         self.lock = threading.RLock()
         self.reservations = 0
-        for name in ('data', 'incoming', 'config', 'logs'):
+        for name in ('data', 'state', 'logs'):
             (self.root/name).mkdir(mode=0o700, parents=True, exist_ok=True)
+        # Keep upload staging on the same mount as the final archive so an
+        # isolated service can publish completed uploads with an atomic rename.
+        self.incoming = self.root/'data'/'.incoming'
+        self.incoming.mkdir(mode=0o700, parents=True, exist_ok=True)
         with self.database() as database:
             database.execute('CREATE TABLE IF NOT EXISTS entries (id TEXT, category TEXT, key TEXT, size INTEGER, sha256 TEXT, accessed REAL, created REAL, PRIMARY KEY(category,id))')
+            if 'sequence' not in {row[1] for row in database.execute('PRAGMA table_info(entries)')}:
+                database.execute('ALTER TABLE entries ADD COLUMN sequence INTEGER NOT NULL DEFAULT 0')
 
     @contextmanager
     def database(self):
-        database = sqlite3.connect(self.root/'config/index.sqlite', timeout=30)
+        database = sqlite3.connect(self.root/'state/index.sqlite', timeout=30)
         database.row_factory = sqlite3.Row
         try:
             with database:
@@ -293,25 +340,28 @@ class Store:
                         return {'schema': SCHEMA, 'group': group, **{k: row[k] for k in ('id', 'key', 'size', 'sha256')}}
         return None
 
-    def prune(self, incoming=0):
+    def prune(self, incoming=0, protected_group=None):
         with self.lock, self.database() as database:
-            for path in (self.root/'incoming').glob('*.part'):
-                if path.stat().st_mtime < time.time() - 86400:
-                    path.unlink(missing_ok=True)
+            for path in self.incoming.glob('*.part'):
+                try:
+                    if path.stat().st_mtime < time.time() - 86400:
+                        path.unlink(missing_ok=True)
+                except FileNotFoundError:
+                    pass  # A concurrent failed upload may already have removed it.
             rows = database.execute('SELECT * FROM entries ORDER BY accessed DESC,created DESC,rowid DESC').fetchall()
             total = sum(row['size'] for row in rows)
-            free = shutil.disk_usage(self.root).free
+            free = shutil.disk_usage(self.root/'data').free
             counts = {}
             remove = []
-            for row in rows:
+            for row in sorted(rows, key=lambda row: (row['sequence'], row['created']), reverse=True):
                 group = row['category']
                 counts[group] = counts.get(group, 0) + 1
-                if counts[group] > self.versions:
+                if counts[group] > self.versions and group != protected_group:
                     remove.append(row)
             total -= sum(row['size'] for row in remove)
             free += sum(row['size'] for row in remove)
             for row in reversed(rows):
-                if row not in remove and (total + self.reservations + incoming > self.budget or free - self.reservations - incoming < self.min_free):
+                if row not in remove and row['category'] != protected_group and (total + self.reservations + incoming > self.budget or free - self.reservations - incoming < self.min_free):
                     remove.append(row)
                     total -= row['size']
                     free += row['size']
@@ -319,23 +369,23 @@ class Store:
                 self.path(row['category'], row['id']).unlink(missing_ok=True)
                 database.execute('DELETE FROM entries WHERE category=? AND id=?', (row['category'], row['id']))
 
-    def put(self, group, key, length, checksum, stream):
+    def put(self, group, key, length, checksum, stream, sequence=0):
         valid_group(group); valid_key(key)
-        if not 0 < length <= 8*1024**3 or not re.fullmatch('[0-9a-f]{64}', checksum):
+        if not 0 < length <= 8*1024**3 or not re.fullmatch('[0-9a-f]{64}', checksum) or not 0 <= sequence < 2**63:
             raise ValueError('Invalid cache upload')
         identifier = hashlib.sha256(key.encode()).hexdigest()
         with self.lock:
             if self.reservations + length > self.budget:
                 raise OSError('Upload exceeds cache budget')
-            self.prune(length)
+            self.prune(length, protected_group=group)
             with self.database() as database:
                 used = database.execute('SELECT COALESCE(SUM(size),0) FROM entries').fetchone()[0]
-            if used + self.reservations + length > self.budget or shutil.disk_usage(self.root).free - self.reservations - length < self.min_free:
+            if used + self.reservations + length > self.budget or shutil.disk_usage(self.root/'data').free - self.reservations - length < self.min_free:
                 raise OSError('Insufficient cache disk space')
             self.reservations += length
         temporary = None
         try:
-            with tempfile.NamedTemporaryFile(dir=self.root/'incoming', suffix='.part', delete=False) as output:
+            with tempfile.NamedTemporaryFile(dir=self.incoming, suffix='.part', delete=False) as output:
                 temporary = Path(output.name)
                 remaining = length
                 actual = hashlib.sha256()
@@ -349,12 +399,15 @@ class Store:
                 raise ValueError('Cache upload checksum mismatch')
             with self.lock, self.database() as database:
                 destination = self.path(group, identifier)
-                if database.execute('SELECT 1 FROM entries WHERE category=? AND id=?', (group, identifier)).fetchone() and destination.is_file():
-                    return
+                newest = database.execute('SELECT MAX(sequence) FROM entries WHERE category=?', (group,)).fetchone()[0] or 0
+                previous = database.execute('SELECT sequence FROM entries WHERE category=? AND id=?', (group, identifier)).fetchone()
+                if newest > sequence or (previous and previous[0] >= sequence and destination.is_file()):
+                    return False
                 destination.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
                 temporary.replace(destination)
                 stamp = time.time()
-                database.execute('INSERT OR REPLACE INTO entries VALUES (?,?,?,?,?,?,?)', (identifier, group, key, length, checksum, stamp, stamp))
+                database.execute('INSERT OR REPLACE INTO entries VALUES (?,?,?,?,?,?,?,?)', (identifier, group, key, length, checksum, stamp, stamp, sequence))
+                return True
         finally:
             if temporary:
                 temporary.unlink(missing_ok=True)
@@ -365,7 +418,9 @@ class Store:
     def status(self):
         with self.database() as database:
             groups = database.execute('SELECT category,COUNT(*) AS count,SUM(size) AS bytes FROM entries GROUP BY category ORDER BY category').fetchall()
-        return {'root': str(self.root), 'budget_gib': self.budget/1024**3, 'free_gib': shutil.disk_usage(self.root).free/1024**3, 'groups': [dict(row) for row in groups]}
+            entries = [dict(row) for row in database.execute('SELECT category,key,size,sha256,created,accessed,sequence FROM entries ORDER BY category')]
+        return {'root': str(self.root), 'budget_gib': self.budget/1024**3, 'free_gib': shutil.disk_usage(self.root/'data').free/1024**3,
+                'groups': [dict(row) for row in groups], 'entries': entries}
 
 
 class Handler(BaseHTTPRequestHandler):
@@ -399,6 +454,9 @@ class Handler(BaseHTTPRequestHandler):
             return
         query = urllib.parse.parse_qs(url.query)
         try:
+            if url.path == '/v1/inventory':
+                self.json_reply(200, self.server.store.status())
+                return
             group = query['group'][0]
             if url.path == '/v1/lookup':
                 result = self.server.store.lookup(group, query['key'][0], query.get('prefix', [''])[0].splitlines())
@@ -423,8 +481,8 @@ class Handler(BaseHTTPRequestHandler):
             self.json_reply(404, {'error': 'Unknown endpoint'}); return
         query = urllib.parse.parse_qs(url.query)
         try:
-            self.server.store.put(query['group'][0], query['key'][0], int(self.headers['Content-Length']), self.headers['X-Content-SHA256'], self.rfile)
-            self.json_reply(201, {'saved': True})
+            saved = self.server.store.put(query['group'][0], query['key'][0], int(self.headers['Content-Length']), self.headers['X-Content-SHA256'], self.rfile, int(self.headers.get('X-Cache-Sequence', '0')))
+            self.json_reply(201 if saved else 409, {'saved': saved})
         except (KeyError, ValueError, TypeError):
             self.json_reply(400, {'error': 'Invalid cache upload'})
         except OSError:
@@ -446,13 +504,37 @@ def serve(root):
     server.serve_forever()
 
 
+def inventory():
+    config = {'url': os.environ.get('CACHE_URL', ''), 'token': os.environ.get('CACHE_TOKEN', ''),
+              'proxy': os.environ.get('CACHE_PROXY', '')}
+    if not config['url'] or not config['token']:
+        print('Private cache inventory skipped: connection is not configured.')
+        return
+    with response(config, '/v1/inventory') as reply:
+        if reply.status != 200:
+            raise RuntimeError('Private cache inventory HTTP ' + str(reply.status))
+        value = json.load(reply)
+    output = Path('target/cache-inventory.json')
+    output.parent.mkdir(parents=True, exist_ok=True)
+    write_json(output, value)
+    if summary := os.environ.get('GITHUB_STEP_SUMMARY'):
+        with open(summary, 'a') as stream:
+            stream.write('\n## Private cache inventory\n\n| Group | Size | Run | Key |\n| --- | --- | --- | --- |\n')
+            for entry in value.get('entries', []):
+                stream.write(f'| {entry["category"]} | {entry["size"]/1024**2:.1f} MiB | {entry["sequence"]//1000} | {entry["key"]} |\n')
+            stream.write('\nEach group keeps its latest validated snapshot. Older concurrent jobs cannot overwrite a newer snapshot.\n')
+    print('Saved authenticated private cache inventory:', output)
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument('operation', choices=('restore', 'save', 'serve', 'status'))
+    parser.add_argument('operation', choices=('restore', 'save', 'serve', 'status', 'inventory'))
     parser.add_argument('--state', type=Path)
     parser.add_argument('--root', type=Path, default=DEFAULT_ROOT)
     args = parser.parse_args()
-    if args.operation == 'serve':
+    if args.operation == 'inventory':
+        inventory()
+    elif args.operation == 'serve':
         serve(args.root)
     elif args.operation == 'status':
         settings = json.loads((args.root/'config/server.json').read_text())

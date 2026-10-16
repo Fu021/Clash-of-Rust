@@ -59,16 +59,19 @@ def commit():
 
 def ensure_binding_tool(name):
     package = 'golang.org/x/mobile/cmd/' + name
+    selected = re.search(r'(?m)^(?:require\s+)?\s*golang.org/x/mobile\s+(v\S+)',
+                         (ANDROID/'core/go.mod').read_text())
+    revision = selected[1] if selected else MOBILE_TOOL
     executable = shutil.which(name)
     if executable:
         metadata = subprocess.run(['go', 'version', '-m', executable], text=True, capture_output=True)
         records = [line.split() for line in metadata.stdout.splitlines()]
         if metadata.returncode == 0 and ['path', package] in records and any(
                 len(record) >= 3 and record[:2] == ['mod', 'golang.org/x/mobile']
-                and record[2].endswith('-' + MOBILE_TOOL[:12]) for record in records):
+                and (record[2] == revision or record[2].endswith('-' + revision[:12])) for record in records):
             print('Reusing verified binding tool:', name, flush=True)
             return
-    run(['go', 'install', package + '@' + MOBILE_TOOL])
+    run(['go', 'install', package + '@' + revision])
 
 
 def gradle(*args, arch=None):
@@ -81,6 +84,7 @@ def gradle(*args, arch=None):
 
 def seed_assets():
     from build_support import read_json, download_asset
+    from build_inputs import resource_release
     target = ANDROID/'app/offline-assets'
     target.mkdir(parents=True, exist_ok=True)
     # Reuse the approved desktop artwork; Android applies its own launcher mask.
@@ -88,7 +92,7 @@ def seed_assets():
     logo.parent.mkdir(parents=True,exist_ok=True)
     shutil.copy2(ROOT/'resources/icon-concepts/app-blue-transparent.png',logo)
     shutil.copy2(ROOT/'resources/icons/app.png',logo.with_name('notification_logo.png'))
-    release = read_json('https://api.github.com/repos/MetaCubeX/meta-rules-dat/releases/latest')
+    release = resource_release('geo', target/'geodata.json')
     records = []
     for remote, local in {'geoip.dat':'GeoIP.dat', 'geosite.dat':'GeoSite.dat', 'country.mmdb':'Country.mmdb', 'GeoLite2-ASN.mmdb':'ASN.mmdb'}.items():
         item = next(a for a in release['assets'] if a['name'] == remote)
@@ -96,7 +100,7 @@ def seed_assets():
         records.append({'name': local, 'source': item['browser_download_url'],
                         'sha256': item['digest'].removeprefix('sha256:'), 'size': item['size']})
     write_json(target/'geodata.json', {'version':release['tag_name']+' | '+release['published_at'],
-                                     'updated':int(time.time()), 'files':records})
+                                     'updated':int(time.time()), 'files':records, 'release': release})
     shutil.copy2(ROOT/'LICENSE', target/'LICENSE')
     shutil.copy2(ROOT/'resources/THIRD-PARTY-NOTICES.txt', target/'THIRD-PARTY-NOTICES.txt')
     for directory in ('fonts', 'flags', 'ip-check'):
@@ -195,7 +199,7 @@ def build(arch):
     ensure_binding_tool('gobind')
     env['ANDROID_NDK_HOME'] = str(ndk)
     core = ANDROID/'core'
-    run(['go', 'mod', 'tidy'], cwd=core, env=env)
+    run(['go', 'mod', 'tidy', '-diff'], cwd=core, env=env)
     aar = ANDROID/'app/libs/mihomo.aar'
     aar.parent.mkdir(parents=True, exist_ok=True)
     run(['gomobile', 'bind', '-target', 'android/'+go_arch, '-androidapi', '26',
@@ -233,6 +237,10 @@ def export_build(arch):
                 'profile':'release', 'cargo_lock_sha256':sha256(ROOT/'Cargo.lock'),
                 'files':{name:{'sha256':sha256(path),'size':path.stat().st_size,'executable':False} for name,path in records.items()},
                 'tests':{'android-proxy-tun':'tests/androidTest.apk'}}
+    from build_inputs import manifest as input_manifest, toolchain_report
+    if snapshot := input_manifest():
+        manifest['build_inputs'] = snapshot
+        manifest['toolchain'] = toolchain_report()
     with tarfile.open(output/ARCHIVE_NAME, 'w:gz', compresslevel=1) as tar:
         for name,path in records.items():
             tar.add(path, arcname=name)
@@ -244,6 +252,11 @@ def export_build(arch):
 
 def verify_build(root, arch, expected_commit):
     manifest = json.loads((root/'manifest.json').read_text())
+    from build_inputs import manifest as input_manifest
+    if snapshot := input_manifest():
+        frozen = manifest.get('build_inputs', {})
+        if any(frozen.get(key) != snapshot.get(key) for key in ('commit', 'baseline', 'constraints', 'files')):
+            raise ValueError('Android dependency snapshot differs from the verified CI')
     expected = {'payload/app.apk', 'tests/androidTest.apk'}
     if (manifest.get('schema'),manifest.get('commit'),manifest.get('version'),manifest.get('system'),
         manifest.get('arch'),manifest.get('profile'),manifest.get('cargo_lock_sha256')) != (
@@ -327,9 +340,10 @@ def package(arch, run_id, check_only):
     # x64 receives the same emulator proxy/TUN test after final signing.
     test(arch,apk,root/'tests/androidTest.apk')
     artifact=json.loads((root/'source-artifact.json').read_text())
+    from build_inputs import package_contents
     write_json(output/'package-receipt.json',{'schema':1,'commit':commit(),'version':package_version(),
         'ci_run_id':run_id,'system':'android','arch':arch,'package':name,'tests_passed':True,
-        'build_artifact':artifact,'sha256':digest})
+        'build_artifact':artifact,'sha256':digest,'contents':package_contents(root)})
     summary=os.environ.get('GITHUB_STEP_SUMMARY')
     if summary:
         with open(summary,'a') as stream:

@@ -183,6 +183,8 @@ def main():
     }
     if args.system == 'linux' and args.arch == 'x64':
         receipt['linux_tun_test_sha256'] = sha256(ROOT/'dist/linux-tun-test')
+    from build_inputs import package_contents
+    receipt['contents'] = package_contents(args.build)
     write_json(ROOT/'dist/package-receipt.json', receipt)
 
 

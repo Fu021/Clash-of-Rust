@@ -19,6 +19,7 @@ export component IosPreview inherits Window {
     in-out property <bool> preview-protection-pending <=> scene.preview-protection-pending;
     in-out property <string> preview-notice <=> scene.preview-notice;
     in-out property <float> preview-notice-elapsed <=> scene.preview-notice-elapsed;
+    in-out property <bool> preview-sparse <=> scene.preview-sparse;
     scene := MobilePreviewSurface {
         inset-top: 54px; inset-bottom: 30px; preview-connected: true;
         IosSurface { }

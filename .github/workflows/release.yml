@@ -13,6 +13,7 @@ on:
         type: boolean
 env:
   SEGMENT_DOWNLOAD_TIMEOUT_MINS: '2'
+  BUILD_INPUTS_DIR: target/dependency-snapshot
 permissions:
   actions: read
   contents: read
@@ -29,6 +30,8 @@ jobs:
       commit: ${{ steps.source.outputs.commit }}
       ci_run_id: ${{ steps.source.outputs.ci_run_id }}
       version: ${{ steps.source.outputs.version }}
+      nsis: ${{ steps.tools.outputs.nsis }}
+      tailscale: ${{ steps.tools.outputs.tailscale }}
     steps:
       - uses: actions/checkout@v6
         with:
@@ -37,6 +40,7 @@ jobs:
       - uses: actions/setup-python@v6
         with:
           python-version: '3.11'
+          check-latest: true
       - name: Verify CI and freeze source
         id: source
         shell: python
@@ -53,6 +57,26 @@ jobs:
           if os.environ.get('CI_RUN_ID'):
               command += ['--run-id', str(int(os.environ['CI_RUN_ID']))]
           subprocess.run(command, check=True)
+      - uses: actions/download-artifact@v7
+        with:
+          name: dependency-snapshot
+          path: target/dependency-snapshot
+          run-id: ${{ steps.source.outputs.ci_run_id }}
+          github-token: ${{ github.token }}
+      - name: Apply CI dependencies and refresh packaging tools
+        id: tools
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PYTHONDONTWRITEBYTECODE: '1'
+        run: |
+          python3 scripts/build_inputs.py apply
+          python3 scripts/build_inputs.py packaging
+      - uses: actions/upload-artifact@v6
+        with:
+          name: packaging-dependency-snapshot
+          path: target/dependency-snapshot
+          retention-days: 3
+          if-no-files-found: error
   package:
     name: package-${{ matrix.system }}-${{ matrix.arch }}
     needs: resolve
@@ -104,7 +128,14 @@ jobs:
       - uses: actions/setup-python@v6
         with:
           python-version: ${{ matrix.python }}
+          check-latest: true
           architecture: ${{ matrix.arch }}
+      - uses: actions/download-artifact@v7
+        with:
+          name: packaging-dependency-snapshot
+          path: target/dependency-snapshot
+      - name: Apply the verified CI dependency snapshot
+        run: python3 scripts/build_inputs.py apply
       - name: Install Linux packaging/test dependencies
         if: runner.os == 'Linux'
         run: |
@@ -120,11 +151,18 @@ jobs:
         with:
           oauth-client-id: ${{ vars.TS_OAUTH_CLIENT_ID }}
           audience: ${{ vars.TS_AUDIENCE }}
-          tags: tag:ci-cache
-          version: '1.94.2'
+          tags: tag:github-action-cache
+          version: ${{ needs.resolve.outputs.tailscale }}
           retry: '1'
           timeout: 45s
-          args: --accept-dns=false --accept-routes=false
+          args: --accept-dns=false
+      - name: Preserve host routing after private cache login
+        if: steps.tailnet.outcome == 'success'
+        shell: python
+        run: |
+          import shutil, subprocess
+          # The official action already supplies --accept-routes during login.
+          subprocess.run([shutil.which('tailscale') or 'tailscale', 'set', '--accept-routes=false', '--accept-dns=false'], check=True)
       - name: Restore private Windows installer compiler
         id: nsis_local
         if: runner.os == 'Windows'
@@ -134,7 +172,8 @@ jobs:
           token: ${{ secrets.LOCAL_CACHE_TOKEN }}
           group: tools/nsis
           paths: tools/nsis
-          key: nsis-3.13-v1
+          key: nsis-${{ needs.resolve.outputs.nsis }}
+          restore-keys: nsis-
       - name: Bootstrap existing installer compiler
         if: runner.os == 'Windows' && steps.nsis_local.outputs.restored != 'true'
         uses: actions/cache/restore@v5
@@ -225,6 +264,12 @@ jobs:
         with:
           ref: ${{ needs.resolve.outputs.commit }}
           persist-credentials: false
+      - uses: actions/download-artifact@v7
+        with:
+          name: packaging-dependency-snapshot
+          path: target/dependency-snapshot
+      - name: Apply the verified CI dependency snapshot
+        run: python3 scripts/build_inputs.py apply
       - uses: actions/setup-java@v5
         with:
           distribution: temurin
@@ -304,6 +349,7 @@ jobs:
       - uses: actions/setup-python@v6
         with:
           python-version: '3.11'
+          check-latest: true
       - name: Verify packages and publish or finish test-only run
         shell: python
         env:
@@ -319,13 +365,14 @@ jobs:
           subprocess.run(command, check=True)
   cache_budget:
     name: Actions cache budget
-    needs: [publish]
+    needs: [resolve, publish]
     if: always()
     runs-on: ubuntu-latest
     timeout-minutes: 5
     permissions:
       contents: read
       actions: write
+      id-token: write
     concurrency:
       group: actions-cache-budget
       cancel-in-progress: false
@@ -338,3 +385,35 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           PYTHONDONTWRITEBYTECODE: '1'
         run: python3 scripts/workflow_storage.py
+      - name: Connect for final private cache inventory
+        id: tailnet
+        if: vars.TS_OAUTH_CLIENT_ID != '' && vars.TS_AUDIENCE != ''
+        uses: tailscale/github-action@v4
+        continue-on-error: true
+        with:
+          oauth-client-id: ${{ vars.TS_OAUTH_CLIENT_ID }}
+          audience: ${{ vars.TS_AUDIENCE }}
+          tags: tag:github-action-cache
+          version: ${{ needs.resolve.outputs.tailscale || '1.94.2' }}
+          retry: '1'
+          timeout: 45s
+          args: --accept-dns=false
+          tailscaled-args: --tun=userspace-networking --outbound-http-proxy-listen=127.0.0.1:19082
+      - name: Report the cache after all successful uploads
+        if: steps.tailnet.outcome == 'success'
+        continue-on-error: true
+        env:
+          CACHE_URL: ${{ vars.LOCAL_CACHE_URL }}
+          CACHE_TOKEN: ${{ secrets.LOCAL_CACHE_TOKEN }}
+          CACHE_PROXY: http://127.0.0.1:19082
+          PYTHONDONTWRITEBYTECODE: '1'
+        run: |
+          sudo -n tailscale set --accept-routes=false --accept-dns=false
+          python3 scripts/action_cache.py inventory
+      - uses: actions/upload-artifact@v6
+        if: steps.tailnet.outcome == 'success'
+        with:
+          name: packaging-private-cache-inventory
+          path: target/cache-inventory.json
+          retention-days: 3
+          if-no-files-found: warn

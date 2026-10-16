@@ -13,6 +13,8 @@ import build_support as build
 import android as android_build
 import workflow_storage as storage
 import action_cache as local_cache
+import build_inputs
+import os
 import copy
 import importlib.util
 import io
@@ -31,6 +33,14 @@ _defender_spec.loader.exec_module(defender)
 
 
 class BuildTests(unittest.TestCase):
+    def setUp(self):
+        # Fixtures must not inherit the workflow's real dependency snapshot.
+        directory = tempfile.TemporaryDirectory()
+        self.addCleanup(directory.cleanup)
+        override = patch.dict(os.environ, {'BUILD_INPUTS_DIR': directory.name})
+        override.start()
+        self.addCleanup(override.stop)
+
     def test_local_rust_cache_invalidates_dependencies_compiler_and_build_flags(self):
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
@@ -76,7 +86,7 @@ class BuildTests(unittest.TestCase):
             with self.assertRaises(ValueError): store.put('rust/linux-x64', 'generation-one', len(payload), checksum, io.BytesIO(b'short'))
             with self.assertRaises(ValueError): store.put('rust/linux-x64', 'generation-one', len(payload), '0'*64, io.BytesIO(payload))
             self.assertIsNone(store.lookup('rust/linux-x64', 'generation-one', []))
-            self.assertEqual(list((Path(temporary)/'incoming').iterdir()), [])
+            self.assertEqual(list(store.incoming.iterdir()), [])
             store.put('rust/linux-x64', 'generation-one', len(payload), checksum, io.BytesIO(payload))
             record = store.lookup('rust/linux-x64', 'generation-one', [])
             other = b'another-cache'
@@ -101,6 +111,61 @@ class BuildTests(unittest.TestCase):
             local_cache.endpoint({'url':address})
         for address in ('http://1.1.1.1', 'http://10.0.0.1', 'https://user:password@example.com', 'file:///tmp/cache'):
             with self.assertRaises(ValueError): local_cache.endpoint({'url':address})
+
+    def test_cache_replacement_rejects_stale_jobs_and_keeps_old_data_on_failed_upload(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            store = local_cache.Store(temporary, budget=1000, min_free=0)
+            def put(key, data, sequence):
+                return store.put('dependencies/source', key, len(data), hashlib.sha256(data).hexdigest(), io.BytesIO(data), sequence)
+            self.assertTrue(put('snapshot-one', b'old', 100))
+            with self.assertRaises(ValueError):
+                store.put('dependencies/source', 'snapshot-two', 10, '0'*64, io.BytesIO(b'short'), 200)
+            self.assertIsNotNone(store.lookup('dependencies/source', 'snapshot-one', []))
+            self.assertTrue(put('snapshot-two', b'new', 200))
+            self.assertFalse(put('snapshot-one', b'stale', 100))
+            self.assertIsNone(store.lookup('dependencies/source', 'snapshot-one', []))
+            self.assertTrue(put('snapshot-two', b'newer content', 300))
+            record = store.lookup('dependencies/source', 'snapshot-two', [])
+            self.assertEqual(store.path(record['group'], record['id']).read_bytes(), b'newer content')
+            self.assertEqual(len(store.status()['entries']), 1)
+
+    def test_dependency_snapshot_archives_keep_lockfiles(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            source = root/'snapshot'; source.mkdir()
+            (source/'Cargo.lock').write_bytes(b'locked source versions')
+            archive = root/'cache.tar.gz'
+            local_cache.pack([source], archive)
+            local_cache.unpack(archive, [root/'restored'])
+            self.assertEqual((root/'restored/Cargo.lock').read_bytes(), b'locked source versions')
+
+    def test_source_dependency_network_failure_restores_previous_snapshot_but_bad_constraints_fail(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            lock = root/'Cargo.lock'; lock.write_bytes(b'cached')
+            def failure(*args, **kwargs):
+                lock.write_bytes(b'incomplete replacement')
+                return subprocess.CompletedProcess(args[0], 1, '503 Service Unavailable')
+            with patch.object(build_inputs, 'ROOT', root), patch.object(build_inputs.subprocess, 'run', side_effect=failure):
+                warnings = []
+                build_inputs.refresh_command(['cargo','update'], ('Cargo.lock',), warnings)
+                self.assertTrue(warnings)
+                self.assertEqual(lock.read_bytes(), b'cached')
+            with patch.object(build_inputs, 'ROOT', root), patch.object(build_inputs.subprocess, 'run',
+                    return_value=subprocess.CompletedProcess([],1,'failed to select a version: incompatible constraints')):
+                with self.assertRaisesRegex(RuntimeError, 'not a network'):
+                    build_inputs.refresh_command(['cargo','update'], ('Cargo.lock',), [])
+
+    def test_release_metadata_network_fallback_respects_explicit_version(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            path = Path(temporary)/'core.json'
+            cached = {'tag_name':'v1.2.3','assets':[]}
+            path.write_text(json.dumps({'release':cached}))
+            with patch.object(build_inputs, 'component', return_value=None), \
+                 patch.object(build_inputs, 'read_json', side_effect=urllib.error.URLError('network unavailable')):
+                self.assertEqual(build_inputs.resource_release('mihomo', path), cached)
+                with self.assertRaisesRegex(RuntimeError, 'no verified'):
+                    build_inputs.resource_release('mihomo', path, version='v9.0.0')
 
     def test_android_dependency_retry_is_bounded_and_keeps_compiler_errors(self):
         def process(status, output):
@@ -177,15 +242,17 @@ class BuildTests(unittest.TestCase):
         self.assertEqual(calls, ['/actions/caches?per_page=100&page=1', '/actions/caches?per_page=100&page=2'])
 
     def test_android_binding_cache_requires_the_pinned_tool_metadata(self):
-        expected = 'path\tgolang.org/x/mobile/cmd/gomobile\nmod\tgolang.org/x/mobile\tv0.0.0-date-' + android_build.MOBILE_TOOL[:12] + '\thash\n'
+        import re
+        version = re.search(r'golang.org/x/mobile\s+(v\S+)', (android_build.ANDROID/'core/go.mod').read_text())[1]
+        expected = 'path\tgolang.org/x/mobile/cmd/gomobile\nmod\tgolang.org/x/mobile\t' + version + '\thash\n'
         with patch.object(android_build.shutil, 'which', return_value='/tools/gomobile'), \
              patch.object(android_build.subprocess, 'run') as inspect, patch.object(android_build, 'run') as install:
             inspect.return_value = subprocess.CompletedProcess([], 0, expected, '')
             android_build.ensure_binding_tool('gomobile')
             install.assert_not_called()
-            inspect.return_value = subprocess.CompletedProcess([], 0, expected.replace(android_build.MOBILE_TOOL[:12], 'outdated'), '')
+            inspect.return_value = subprocess.CompletedProcess([], 0, expected.replace(version, 'v0.0.0-outdated'), '')
             android_build.ensure_binding_tool('gomobile')
-            install.assert_called_once_with(['go', 'install', 'golang.org/x/mobile/cmd/gomobile@' + android_build.MOBILE_TOOL])
+            install.assert_called_once_with(['go', 'install', 'golang.org/x/mobile/cmd/gomobile@' + version])
 
     def test_android_identity_accepts_old_and_current_aapt2_but_rejects_wrong_hosts(self):
         identity="package: name='org.clashofrust.android' versionCode='1000281' versionName='0.5.12-dev.1'\n"
