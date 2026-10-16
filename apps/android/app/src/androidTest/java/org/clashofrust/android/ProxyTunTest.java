@@ -119,6 +119,10 @@ public class ProxyTunTest {
         return matched.get();
     }
     private interface Condition { boolean ready() throws Exception; }
+    private static boolean vpnActive(ConnectivityManager connectivity) {
+        NetworkCapabilities capabilities=connectivity.getNetworkCapabilities(connectivity.getActiveNetwork());
+        return capabilities!=null && capabilities.hasTransport(NetworkCapabilities.TRANSPORT_VPN);
+    }
     private static void await(String message, Condition condition) throws Exception {
         long deadline = System.nanoTime() + 30_000_000_000L;
         while (System.nanoTime() < deadline) {
@@ -170,10 +174,7 @@ public class ProxyTunTest {
                 return TunnelService.connected();
             });
             ConnectivityManager connectivity=context.getSystemService(ConnectivityManager.class);
-            await("Android did not make the VPN its active network", () -> {
-                NetworkCapabilities capabilities=connectivity.getNetworkCapabilities(connectivity.getActiveNetwork());
-                return capabilities!=null && capabilities.hasTransport(NetworkCapabilities.TRANSPORT_VPN);
-            });
+            await("Android did not make the VPN its active network", () -> vpnActive(connectivity));
             // A settings reload must preserve the independently owned Android TUN.
             CoreBridge.reload(CoreBridge.config());
             if (cycle == 0) {
@@ -186,8 +187,29 @@ public class ProxyTunTest {
                 shell("am start -W -n org.clashofrust.android/.MainActivity");
                 await("VPN Activity did not resume",()->inStage(androidx.test.runner.lifecycle.Stage.RESUMED,true));
                 long previousGeneration = TunnelService.generation();
-                context.startForegroundService(new Intent(context,TunnelService.class).setAction(TunnelService.RECONFIGURE));
-                await("VPN did not reconfigure",()->TunnelService.connected() && TunnelService.generation()>previousGeneration);
+                java.util.concurrent.atomic.AtomicBoolean monitoring=new java.util.concurrent.atomic.AtomicBoolean(true);
+                java.util.concurrent.atomic.AtomicBoolean bypassed=new java.util.concurrent.atomic.AtomicBoolean();
+                java.util.concurrent.atomic.AtomicReference<Throwable> samplingError=new java.util.concurrent.atomic.AtomicReference<>();
+                Thread routes=new Thread(()-> {
+                    try {
+                        while (monitoring.get()) {
+                            Network active=connectivity.getActiveNetwork();
+                            NetworkCapabilities capabilities=connectivity.getNetworkCapabilities(active);
+                            if (active!=null && capabilities!=null && !capabilities.hasTransport(NetworkCapabilities.TRANSPORT_VPN)
+                                && active.equals(connectivity.getActiveNetwork())) bypassed.set(true);
+                            SystemClock.sleep(10);
+                        }
+                    } catch (Throwable error) {samplingError.set(error);}
+                },"vpn-route-check");
+                routes.setDaemon(true); routes.start();
+                try {
+                    context.startForegroundService(new Intent(context,TunnelService.class).setAction(TunnelService.RECONFIGURE));
+                    await("VPN did not reconfigure",()->TunnelService.connected() && TunnelService.generation()>previousGeneration);
+                    await("Android did not restore VPN routing after reconfigure",()->vpnActive(connectivity));
+                } finally { monitoring.set(false); routes.join(1000); }
+                assertFalse("VPN route monitor did not finish",routes.isAlive());
+                assertNull("Could not monitor VPN handover: "+samplingError.get(),samplingError.get());
+                assertFalse("VPN reconfigure exposed the underlying network",bypassed.get());
             }
             // Open a fresh OS socket after each VPN rebuild. HttpURLConnection
             // can reuse a pooled connection created on the previous network.

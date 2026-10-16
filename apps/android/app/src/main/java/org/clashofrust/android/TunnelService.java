@@ -43,14 +43,14 @@ public final class TunnelService extends VpnService {
         getSharedPreferences("vpn", MODE_PRIVATE).edit().putBoolean("desired", true).apply();
         startForeground(1, notification("正在连接…"));
         boolean reconfigure = intent != null && RECONFIGURE.equals(intent.getAction());
-        serial.execute(() -> {
-            if (reconfigure) cleanup();
-            connect();
-        });
+        serial.execute(() -> connect(reconfigure));
         return START_STICKY;
     }
-    private void connect() {
-        if (descriptor != null || stopping) return;
+    private void connect(boolean reconfigure) {
+        if (stopping || (descriptor != null && !reconfigure)) return;
+        ParcelFileDescriptor previous = descriptor;
+        ParcelFileDescriptor replacement = null;
+        boolean established = false;
         try {
             CoreBridge.restore(this);
             if (VpnService.prepare(this) != null) throw new IllegalStateException("VPN 授权已失效，请打开应用重新连接");
@@ -74,11 +74,22 @@ public final class TunnelService extends VpnService {
             if (Build.VERSION.SDK_INT >= 29) builder.setMetered(false);
             Intent open = new Intent(this, MainActivity.class);
             builder.setConfigureIntent(PendingIntent.getActivity(this, 0, open, PendingIntent.FLAG_IMMUTABLE | PendingIntent.FLAG_UPDATE_CURRENT));
-            Mobile.setProtector(fd -> protect(fd));
-            descriptor = builder.establish();
-            if (descriptor == null) throw new IllegalStateException("系统拒绝建立 VPN");
+            // Establish before closing the old interface. Android deactivates
+            // the old VPN atomically when the replacement succeeds; closing it
+            // first exposes the underlying network during every reconfigure.
+            ProtectionRuntime.pause(this);
+            if (previous == null) Mobile.setProtector(fd -> protect(fd));
+            replacement = builder.establish();
+            if (replacement == null) throw new IllegalStateException("系统拒绝建立 VPN");
+            established = true;
+            connected = false;
+            if (previous != null) Mobile.stopTun();
             android.util.Log.i("ClashOfRust", "VPN established; starting embedded TUN");
-            Mobile.startTun(descriptor.getFd(), ipv6);
+            Mobile.startTun(replacement.getFd(), ipv6);
+            descriptor = replacement;
+            replacement = null;
+            closeDescriptor(previous);
+            previous = null;
             connected = true; lastError = "";
             generation++;
             ProtectionRuntime.sync(this);
@@ -87,20 +98,49 @@ public final class TunnelService extends VpnService {
             getSystemService(NotificationManager.class).notify(1, notification("VPN 已连接"));
             MainActivity.emit("vpn", true);
         } catch (Exception error) {
+            closeDescriptor(replacement);
             lastError = error.toString();
             android.util.Log.e("ClashOfRust", "VPN startup failed", error);
+            boolean keepPrevious = false;
+            if (previous != null && !established) {
+                try { keepPrevious = VpnService.prepare(this) == null; }
+                catch (RuntimeException revoked) { android.util.Log.w("ClashOfRust", "VPN permission is unavailable", revoked); }
+            }
+            if (keepPrevious) {
+                // A rejected replacement leaves the old descriptor valid.
+                // Resume its guard and keep the working connection available.
+                connected = true;
+                try { ProtectionRuntime.sync(this); }
+                catch (Exception guard) {
+                    lastError += "; 保护恢复失败：" + guard;
+                    android.util.Log.e("ClashOfRust", "Restore protection after rejected VPN replacement", guard);
+                }
+                try {
+                    VpnTileService.refresh(this);
+                    getSystemService(NotificationManager.class).notify(1, notification("VPN 重建失败，原连接已保留"));
+                } catch (RuntimeException status) { android.util.Log.w("ClashOfRust", "Update preserved VPN status", status); }
+                MainActivity.emit("error", "VPN 重建失败，原连接已保留：" + lastError);
+                return;
+            }
+            if (previous != null) {
+                closeDescriptor(previous);
+                if (descriptor == previous) descriptor = null;
+            }
             MainActivity.emit("error", "VPN 启动失败：" + lastError);
             disconnect();
         }
+    }
+    private static void closeDescriptor(ParcelFileDescriptor value) {
+        if (value == null) return;
+        try { value.close(); }
+        catch (Exception error) { android.util.Log.e("ClashOfRust", "Close TUN descriptor", error); }
     }
     private void cleanup() {
         connected = false;
         VpnTileService.refresh(this);
         try { Mobile.stopTun(); } catch (Exception error) { android.util.Log.e("ClashOfRust", "Stop TUN", error); }
-        if (descriptor != null) {
-            try { descriptor.close(); } catch (Exception error) { android.util.Log.e("ClashOfRust", "Close TUN descriptor", error); }
-            descriptor = null;
-        }
+        closeDescriptor(descriptor);
+        descriptor = null;
         Mobile.setProtector(null);
         try { ProtectionRuntime.sync(this); }
         catch (Exception error) { android.util.Log.e("ClashOfRust", "Stop protection", error); }
