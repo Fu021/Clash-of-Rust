@@ -1,0 +1,475 @@
+"""Private Actions cache client/server; compilation always stays on the runner."""
+import argparse
+from contextlib import contextmanager
+import hashlib
+import http.client
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+import ipaddress
+import json
+import logging
+from logging.handlers import RotatingFileHandler
+import os
+from pathlib import Path, PurePosixPath
+import re
+import secrets
+import shutil
+import socket
+import sqlite3
+import subprocess
+import tarfile
+import tempfile
+import threading
+import time
+import urllib.error
+import urllib.parse
+import urllib.request
+
+SCHEMA = 1
+CHUNK = 1024 * 1024
+DEFAULT_ROOT = Path('/home/coder/github_action_cache')
+
+
+def digest(path):
+    value = hashlib.sha256()
+    with Path(path).open('rb') as stream:
+        for block in iter(lambda: stream.read(CHUNK), b''):
+            value.update(block)
+    return value.hexdigest()
+
+
+def write_json(path, value):
+    path = Path(path)
+    temporary = path.with_name(path.name + '.new')
+    temporary.write_text(json.dumps(value, ensure_ascii=False, indent=2), encoding='utf-8')
+    temporary.chmod(0o600)
+    temporary.replace(path)
+
+
+def valid_group(group):
+    parts = group.split('/')
+    if not 1 <= len(parts) <= 3 or any(not re.fullmatch(r'[a-z0-9][a-z0-9_-]{0,63}', p) for p in parts):
+        raise ValueError('Invalid cache group')
+    return group
+
+
+def valid_key(key):
+    if not key or len(key) > 512 or any(ord(c) < 33 or ord(c) > 126 for c in key):
+        raise ValueError('Invalid cache key')
+    return key
+
+
+def rust_keys(source, compiler, environment):
+    """Dependency changes never match an older dependency generation."""
+    source = Path(source)
+    dependencies = hashlib.sha256(compiler)
+    files = {source/'Cargo.lock', source/'Cargo.toml'}
+    for directory in ('apps', 'crates', '.cargo'):
+        base = source/directory
+        files.update(base.rglob('Cargo.toml'))
+        if directory == '.cargo':
+            files.update(p for p in base.rglob('*') if p.is_file())
+    for path in sorted(files):
+        if path.is_file():
+            dependencies.update(path.relative_to(source).as_posix().encode())
+            dependencies.update(path.read_bytes())
+    for name, value in sorted(environment.items()):
+        if name.startswith(('RUST', 'CARGO_PROFILE_', 'CARGO_TARGET_', 'CC_', 'CXX_')):
+            dependencies.update((name+'='+value).encode())
+    generation = f'v{SCHEMA}-' + dependencies.hexdigest()
+    sources = hashlib.sha256()
+    for directory in ('apps', 'crates', 'resources', 'scripts'):
+        for path in sorted((source/directory).rglob('*')):
+            relative = path.relative_to(source/directory).parts
+            if not path.is_file() or any(part in ('target', '.gradle', '__pycache__', 'generated-res', 'native-libs', 'offline-assets') for part in relative):
+                continue
+            if directory == 'apps' and relative[:3] == ('android', 'app', 'build'):
+                continue
+            if directory != 'resources' and path.suffix not in ('.rs', '.slint', '.toml', '.py'):
+                continue
+            sources.update(path.relative_to(source).as_posix().encode())
+            sources.update(path.read_bytes())
+    return generation + '-' + sources.hexdigest(), generation + '-'
+
+
+def cache_paths(config):
+    if config['kind'] == 'rust':
+        cargo = Path(os.environ.get('CARGO_HOME', str(Path.home()/'.cargo')))
+        return [cargo/'registry/index', cargo/'registry/cache', cargo/'git/db', Path(config['source'])/'target']
+    result = []
+    import glob
+    for pattern in config['paths'].splitlines():
+        if pattern := pattern.strip():
+            expanded = os.path.expandvars(os.path.expanduser(pattern))
+            matches = sorted(glob.glob(expanded)) if glob.has_magic(expanded) else [expanded]
+            result.extend(Path(p).absolute() for p in matches)
+    return result
+
+
+def pack(paths, destination, rust=False):
+    def include(info):
+        if not (info.isfile() or info.isdir()):
+            return None
+        parts = PurePosixPath(info.name).parts
+        if any(p in ('incremental', '__pycache__') for p in parts) or info.name.endswith('.lock'):
+            return None
+        # Executable test/application outputs are exported as verified artifacts,
+        # not dependency caches. Keep build-script executables and library data.
+        if rust and (info.name.endswith('.exe') or (len(parts) > 2 and parts[-2] == 'deps' and '.' not in parts[-1])):
+            return None
+        info.uid = info.gid = 0
+        info.uname = info.gname = ''
+        return info
+    with tarfile.open(destination, 'w:gz', compresslevel=1) as archive:
+        for index, path in enumerate(paths):
+            if path.exists() and not path.is_symlink():
+                archive.add(path, arcname=str(index), filter=include)
+
+
+def unpack(archive_path, paths):
+    with tarfile.open(archive_path, 'r:gz') as archive:
+        members = archive.getmembers()
+        if len(members) > 500_000 or sum(m.size for m in members) > 60 * 1024**3:
+            raise ValueError('Cache archive exceeds extraction limits')
+        destinations = []
+        for member in members:
+            parts = PurePosixPath(member.name).parts
+            if not parts or not parts[0].isdigit() or int(parts[0]) >= len(paths) or any(p in ('.', '..') or '\\' in p or ':' in p for p in parts):
+                raise ValueError('Invalid cache archive path')
+            if not (member.isfile() or member.isdir()) or member.name.startswith('/'):
+                raise ValueError('Cache links and special files are forbidden')
+            root = paths[int(parts[0])]
+            destination = root.joinpath(*parts[1:])
+            if root.is_symlink() or (destination != root and not destination.resolve().is_relative_to(root.resolve())) or destination.is_symlink():
+                raise ValueError('Cache destination escapes its root')
+            destinations.append((member, destination))
+        for member, destination in destinations:
+            if member.isdir():
+                destination.mkdir(parents=True, exist_ok=True)
+            else:
+                destination.parent.mkdir(parents=True, exist_ok=True)
+                with archive.extractfile(member) as incoming, destination.open('wb') as output:
+                    shutil.copyfileobj(incoming, output, CHUNK)
+                destination.chmod(member.mode & 0o777)
+                os.utime(destination, (member.mtime, member.mtime))
+
+
+def endpoint(config):
+    url = urllib.parse.urlsplit(config['url'])
+    if url.username or url.password or url.query or url.fragment or url.path not in ('', '/'):
+        raise ValueError('Invalid cache service URL')
+    if url.scheme == 'http':
+        address = ipaddress.ip_address(url.hostname)
+        if not address.is_loopback and address not in ipaddress.ip_network('100.64.0.0/10'):
+            raise ValueError('Plain HTTP is restricted to loopback/Tailscale addresses')
+    elif url.scheme != 'https':
+        raise ValueError('Cache service requires HTTPS or Tailscale transport')
+    return url
+
+
+def request(config, path, method='GET', file=None, headers=None):
+    url = endpoint(config)
+    proxy = urllib.parse.urlsplit(config.get('proxy', ''))
+    if proxy.hostname:
+        if proxy.scheme != 'http' or proxy.hostname not in ('127.0.0.1', 'localhost') or url.scheme != 'http':
+            raise ValueError('Cache proxy must be the local Tailscale userspace proxy')
+        connection = http.client.HTTPConnection(proxy.hostname, proxy.port, timeout=30)
+        path = config['url'].rstrip('/') + path
+    else:
+        connection = (http.client.HTTPSConnection if url.scheme == 'https' else http.client.HTTPConnection)(url.hostname, url.port, timeout=30)
+    auth = {'Authorization': 'Bearer '+config['token'], **(headers or {})}
+    connection.request(method, path, body=file, headers=auth)
+    return connection, connection.getresponse()
+
+
+@contextmanager
+def response(config, path, **kwargs):
+    connection, reply = request(config, path, **kwargs)
+    try:
+        yield reply
+    finally:
+        reply.close()
+        connection.close()
+
+
+def restore(config):
+    config.update(hit=False, restored=False, available=False)
+    if config['kind'] == 'rust':
+        compiler = subprocess.check_output(['rustc', '-vV'])
+        key, prefix = rust_keys(config['source'], compiler, dict(os.environ))
+        config['key'] += '-' + key
+        config['prefix'] = [config['base_key'] + '-' + prefix]
+        if output := os.environ.get('GITHUB_ENV'):
+            with open(output, 'a') as stream:
+                stream.write('CARGO_INCREMENTAL=0\n')
+    else:
+        generation = f'v{SCHEMA}-' + hashlib.sha256(config['paths'].encode()).hexdigest()[:16] + '-'
+        config['key'] = generation + config['key']
+        config['prefix'] = [generation + p for p in config['prefix']]
+    config['resolved_paths'] = [str(p) for p in cache_paths(config)]
+    if not config['url'] or not config['token']:
+        print('Local cache is not configured; using normal builds.')
+        return
+    query = urllib.parse.urlencode({'group': config['group'], 'key': config['key'], 'prefix': '\n'.join(config['prefix'])})
+    with response(config, '/v1/lookup?'+query) as reply:
+        if reply.status == 404:
+            config['available'] = True
+            print('Local cache miss:', config['group'])
+            return
+        if reply.status != 200:
+            raise RuntimeError(f'Cache lookup HTTP {reply.status}')
+        record = json.load(reply)
+    if record.get('schema') != SCHEMA or record['group'] != config['group'] or not re.fullmatch('[0-9a-f]{64}', record['id']):
+        raise ValueError('Invalid cache metadata')
+    if record['key'] != config['key'] and not any(record['key'].startswith(p) for p in config['prefix']):
+        raise ValueError('Cache generation mismatch')
+    with tempfile.TemporaryDirectory(prefix='actions-cache-', dir=os.environ.get('RUNNER_TEMP')) as temporary:
+        archive = Path(temporary)/'cache.tar.gz'
+        with response(config, '/v1/blob?'+urllib.parse.urlencode({'group': config['group'], 'id': record['id']})) as reply:
+            if reply.status != 200:
+                raise RuntimeError(f'Cache download HTTP {reply.status}')
+            with archive.open('wb') as output:
+                shutil.copyfileobj(reply, output, CHUNK)
+        if archive.stat().st_size != record['size'] or digest(archive) != record['sha256']:
+            raise ValueError('Cache archive checksum mismatch')
+        paths = [Path(p) for p in config['resolved_paths']]
+        unpack(archive, paths)
+    config.update(available=True, restored=True, hit=record['key'] == config['key'])
+    print('Restored local cache:', config['group'], f'{record["size"]/1024**2:.1f} MiB', 'exact' if config['hit'] else 'compatible generation')
+
+
+def save(config):
+    if not config.get('available') or config.get('hit') or not config['save']:
+        return
+    # Globs such as Cargo's Skia source directory may not exist until compilation.
+    paths = cache_paths(config)
+    if not any(p.exists() for p in paths):
+        return
+    with tempfile.TemporaryDirectory(prefix='actions-cache-', dir=os.environ.get('RUNNER_TEMP')) as temporary:
+        archive = Path(temporary)/'cache.tar.gz'
+        pack(paths, archive, rust=config['kind'] == 'rust')
+        query = urllib.parse.urlencode({'group': config['group'], 'key': config['key']})
+        headers = {'Content-Length': str(archive.stat().st_size), 'X-Content-SHA256': digest(archive), 'Content-Type': 'application/octet-stream'}
+        with archive.open('rb') as incoming, response(config, '/v1/blob?'+query, method='PUT', file=incoming, headers=headers) as reply:
+            if reply.status not in (200, 201, 409):
+                raise RuntimeError(f'Cache upload HTTP {reply.status}')
+        print('Saved local cache:', config['group'], f'{archive.stat().st_size/1024**2:.1f} MiB')
+
+
+class Store:
+    def __init__(self, root, budget=40*1024**3, min_free=15*1024**3, versions=2):
+        self.root = Path(root)
+        self.budget, self.min_free, self.versions = budget, min_free, versions
+        self.lock = threading.RLock()
+        self.reservations = 0
+        for name in ('data', 'incoming', 'config', 'logs'):
+            (self.root/name).mkdir(mode=0o700, parents=True, exist_ok=True)
+        with self.database() as database:
+            database.execute('CREATE TABLE IF NOT EXISTS entries (id TEXT, category TEXT, key TEXT, size INTEGER, sha256 TEXT, accessed REAL, created REAL, PRIMARY KEY(category,id))')
+
+    @contextmanager
+    def database(self):
+        database = sqlite3.connect(self.root/'config/index.sqlite', timeout=30)
+        database.row_factory = sqlite3.Row
+        try:
+            with database:
+                yield database
+        finally:
+            database.close()
+
+    def path(self, group, identifier):
+        valid_group(group)
+        if not re.fullmatch('[0-9a-f]{64}', identifier):
+            raise ValueError('Invalid cache identifier')
+        return self.root/'data'/group/(identifier+'.tar.gz')
+
+    def lookup(self, group, key, prefixes):
+        valid_group(group); valid_key(key)
+        with self.lock, self.database() as database:
+            rows = database.execute('SELECT * FROM entries WHERE category=? ORDER BY accessed DESC,created DESC,rowid DESC', (group,)).fetchall()
+            for wanted in (key, *prefixes):
+                for row in rows:
+                    if (row['key'] == wanted if wanted == key else row['key'].startswith(wanted)) and self.path(group, row['id']).is_file():
+                        database.execute('UPDATE entries SET accessed=? WHERE category=? AND id=?', (time.time(), group, row['id']))
+                        return {'schema': SCHEMA, 'group': group, **{k: row[k] for k in ('id', 'key', 'size', 'sha256')}}
+        return None
+
+    def prune(self, incoming=0):
+        with self.lock, self.database() as database:
+            for path in (self.root/'incoming').glob('*.part'):
+                if path.stat().st_mtime < time.time() - 86400:
+                    path.unlink(missing_ok=True)
+            rows = database.execute('SELECT * FROM entries ORDER BY accessed DESC,created DESC,rowid DESC').fetchall()
+            total = sum(row['size'] for row in rows)
+            free = shutil.disk_usage(self.root).free
+            counts = {}
+            remove = []
+            for row in rows:
+                group = row['category']
+                counts[group] = counts.get(group, 0) + 1
+                if counts[group] > self.versions:
+                    remove.append(row)
+            total -= sum(row['size'] for row in remove)
+            free += sum(row['size'] for row in remove)
+            for row in reversed(rows):
+                if row not in remove and (total + self.reservations + incoming > self.budget or free - self.reservations - incoming < self.min_free):
+                    remove.append(row)
+                    total -= row['size']
+                    free += row['size']
+            for row in remove:
+                self.path(row['category'], row['id']).unlink(missing_ok=True)
+                database.execute('DELETE FROM entries WHERE category=? AND id=?', (row['category'], row['id']))
+
+    def put(self, group, key, length, checksum, stream):
+        valid_group(group); valid_key(key)
+        if not 0 < length <= 8*1024**3 or not re.fullmatch('[0-9a-f]{64}', checksum):
+            raise ValueError('Invalid cache upload')
+        identifier = hashlib.sha256(key.encode()).hexdigest()
+        with self.lock:
+            if self.reservations + length > self.budget:
+                raise OSError('Upload exceeds cache budget')
+            self.prune(length)
+            with self.database() as database:
+                used = database.execute('SELECT COALESCE(SUM(size),0) FROM entries').fetchone()[0]
+            if used + self.reservations + length > self.budget or shutil.disk_usage(self.root).free - self.reservations - length < self.min_free:
+                raise OSError('Insufficient cache disk space')
+            self.reservations += length
+        temporary = None
+        try:
+            with tempfile.NamedTemporaryFile(dir=self.root/'incoming', suffix='.part', delete=False) as output:
+                temporary = Path(output.name)
+                remaining = length
+                actual = hashlib.sha256()
+                while remaining:
+                    block = stream.read(min(CHUNK, remaining))
+                    if not block:
+                        raise ValueError('Incomplete cache upload')
+                    output.write(block); actual.update(block); remaining -= len(block)
+                output.flush(); os.fsync(output.fileno())
+            if actual.hexdigest() != checksum:
+                raise ValueError('Cache upload checksum mismatch')
+            with self.lock, self.database() as database:
+                destination = self.path(group, identifier)
+                if database.execute('SELECT 1 FROM entries WHERE category=? AND id=?', (group, identifier)).fetchone() and destination.is_file():
+                    return
+                destination.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
+                temporary.replace(destination)
+                stamp = time.time()
+                database.execute('INSERT OR REPLACE INTO entries VALUES (?,?,?,?,?,?,?)', (identifier, group, key, length, checksum, stamp, stamp))
+        finally:
+            if temporary:
+                temporary.unlink(missing_ok=True)
+            with self.lock:
+                self.reservations -= length
+                self.prune()
+
+    def status(self):
+        with self.database() as database:
+            groups = database.execute('SELECT category,COUNT(*) AS count,SUM(size) AS bytes FROM entries GROUP BY category ORDER BY category').fetchall()
+        return {'root': str(self.root), 'budget_gib': self.budget/1024**3, 'free_gib': shutil.disk_usage(self.root).free/1024**3, 'groups': [dict(row) for row in groups]}
+
+
+class Handler(BaseHTTPRequestHandler):
+    def setup(self):
+        super().setup()
+        self.connection.settimeout(60)
+
+    def log_message(self, _format, *args):
+        code = args[1] if len(args) > 1 else ''
+        self.server.logger.info('%s %s %s %s', self.client_address[0], self.command, urllib.parse.urlsplit(self.path).path, code)
+
+    def json_reply(self, status, value):
+        body = json.dumps(value).encode()
+        self.send_response(status); self.send_header('Content-Type', 'application/json'); self.send_header('Content-Length', str(len(body))); self.end_headers()
+        self.wfile.write(body)
+
+    def authenticated(self):
+        expected = self.server.config['token_sha256']
+        actual = hashlib.sha256(self.headers.get('Authorization', '').removeprefix('Bearer ').encode()).hexdigest()
+        if not secrets.compare_digest(actual, expected):
+            self.json_reply(401, {'error': 'Authentication required'})
+            return False
+        return True
+
+    def do_GET(self):
+        url = urllib.parse.urlsplit(self.path)
+        if url.path == '/health':
+            self.json_reply(200, {'schema': SCHEMA, 'status': 'ready'})
+            return
+        if not self.authenticated():
+            return
+        query = urllib.parse.parse_qs(url.query)
+        try:
+            group = query['group'][0]
+            if url.path == '/v1/lookup':
+                result = self.server.store.lookup(group, query['key'][0], query.get('prefix', [''])[0].splitlines())
+                self.json_reply(200 if result else 404, result or {'error': 'Cache miss'})
+            elif url.path == '/v1/blob':
+                path = self.server.store.path(group, query['id'][0])
+                with path.open('rb') as incoming:
+                    self.send_response(200); self.send_header('Content-Length', str(path.stat().st_size)); self.end_headers()
+                    shutil.copyfileobj(incoming, self.wfile, CHUNK)
+            else:
+                self.json_reply(404, {'error': 'Unknown endpoint'})
+        except FileNotFoundError:
+            self.json_reply(404, {'error': 'Cache miss'})
+        except (KeyError, ValueError):
+            self.json_reply(400, {'error': 'Invalid cache request'})
+
+    def do_PUT(self):
+        if not self.authenticated():
+            return
+        url = urllib.parse.urlsplit(self.path)
+        if url.path != '/v1/blob':
+            self.json_reply(404, {'error': 'Unknown endpoint'}); return
+        query = urllib.parse.parse_qs(url.query)
+        try:
+            self.server.store.put(query['group'][0], query['key'][0], int(self.headers['Content-Length']), self.headers['X-Content-SHA256'], self.rfile)
+            self.json_reply(201, {'saved': True})
+        except (KeyError, ValueError, TypeError):
+            self.json_reply(400, {'error': 'Invalid cache upload'})
+        except OSError:
+            self.json_reply(507, {'error': 'Cache storage unavailable'})
+
+
+def serve(root):
+    os.umask(0o077)
+    config = json.loads((root/'config/server.json').read_text())
+    address = ipaddress.ip_address(config['bind'])
+    if not address.is_loopback and address not in ipaddress.ip_network('100.64.0.0/10'):
+        raise ValueError('The cache server may only bind to loopback or Tailscale')
+    server = ThreadingHTTPServer((str(address), config['port']), Handler)
+    server.config = config
+    server.store = Store(root, config['budget_gib']*1024**3, config['min_free_gib']*1024**3)
+    server.logger = logging.getLogger('actions-cache')
+    server.logger.setLevel(logging.INFO)
+    server.logger.addHandler(RotatingFileHandler(root/'logs/server.log', maxBytes=1024**2, backupCount=2))
+    server.serve_forever()
+
+
+def main():
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument('operation', choices=('restore', 'save', 'serve', 'status'))
+    parser.add_argument('--state', type=Path)
+    parser.add_argument('--root', type=Path, default=DEFAULT_ROOT)
+    args = parser.parse_args()
+    if args.operation == 'serve':
+        serve(args.root)
+    elif args.operation == 'status':
+        settings = json.loads((args.root/'config/server.json').read_text())
+        print(json.dumps(Store(args.root, settings['budget_gib']*1024**3, settings['min_free_gib']*1024**3).status(), ensure_ascii=False, indent=2))
+    else:
+        config = json.loads(args.state.read_text())
+        try:
+            (restore if args.operation == 'restore' else save)(config)
+        except (OSError, ValueError, RuntimeError, tarfile.TarError, http.client.HTTPException) as error:
+            # A cache outage must never prevent normal builds/tests. Do not log
+            # exceptions containing request headers, URLs or credential values.
+            status = re.search(r'HTTP [0-9]{3}', str(error))
+            detail = type(error).__name__ + (' '+status[0] if status else '')
+            print('::warning::Local cache unavailable ('+detail+'); normal compilation remains enabled.')
+        finally:
+            write_json(args.state, config)
+
+
+if __name__ == '__main__':
+    main()

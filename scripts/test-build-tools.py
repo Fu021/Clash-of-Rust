@@ -12,12 +12,14 @@ from unittest.mock import MagicMock, patch
 import build_support as build
 import android as android_build
 import workflow_storage as storage
+import action_cache as local_cache
 import copy
 import importlib.util
 import io
 import urllib.error
 import urllib.parse
 import zipfile
+import tarfile
 
 _spec = importlib.util.spec_from_file_location('publish_release', build.ROOT/'scripts/publish-release.py')
 release = importlib.util.module_from_spec(_spec)
@@ -29,6 +31,77 @@ _defender_spec.loader.exec_module(defender)
 
 
 class BuildTests(unittest.TestCase):
+    def test_local_rust_cache_invalidates_dependencies_compiler_and_build_flags(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            (root/'Cargo.lock').write_text('slint = 1.18.1')
+            (root/'Cargo.toml').write_text('[workspace]')
+            (root/'crates/ui').mkdir(parents=True)
+            ui = root/'crates/ui/view.slint'
+            ui.write_text('old UI')
+            key, prefix = local_cache.rust_keys(root, b'compiler one', {})
+            ui.write_text('new UI')
+            changed, compatible = local_cache.rust_keys(root, b'compiler one', {})
+            self.assertNotEqual(key, changed)
+            self.assertEqual(prefix, compatible)
+            (root/'Cargo.lock').write_text('slint = 1.19.0')
+            new_prefix = local_cache.rust_keys(root, b'compiler one', {})[1]
+            self.assertNotEqual(prefix, new_prefix)
+            self.assertNotEqual(new_prefix, local_cache.rust_keys(root, b'compiler two', {})[1])
+            self.assertNotEqual(new_prefix, local_cache.rust_keys(root, b'compiler one', {'RUSTFLAGS':'-C target-cpu=native'})[1])
+
+    def test_local_cache_archives_preserve_data_and_reject_escaping_links(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            source = root/'source'; source.mkdir()
+            (source/'module').write_bytes(b'valid cached dependency')
+            archive = root/'cache.tar.gz'
+            local_cache.pack([source], archive)
+            restored = root/'restored'
+            local_cache.unpack(archive, [restored])
+            self.assertEqual((restored/'module').read_bytes(), b'valid cached dependency')
+            escape = 'escape-' + root.name
+            for name, kind in [('0/../../'+escape, tarfile.REGTYPE), ('0/link', tarfile.SYMTYPE)]:
+                with tarfile.open(archive, 'w:gz') as output:
+                    info=tarfile.TarInfo(name); info.type=kind; info.linkname='../../'+escape
+                    output.addfile(info)
+                with self.assertRaises(ValueError): local_cache.unpack(archive, [restored])
+            self.assertFalse((root.parent/escape).exists())
+
+    def test_local_cache_uploads_are_atomic_checked_and_immutable(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            store = local_cache.Store(temporary, budget=1000, min_free=0)
+            payload = b'verified-cache'
+            checksum = hashlib.sha256(payload).hexdigest()
+            with self.assertRaises(ValueError): store.put('rust/linux-x64', 'generation-one', len(payload), checksum, io.BytesIO(b'short'))
+            with self.assertRaises(ValueError): store.put('rust/linux-x64', 'generation-one', len(payload), '0'*64, io.BytesIO(payload))
+            self.assertIsNone(store.lookup('rust/linux-x64', 'generation-one', []))
+            self.assertEqual(list((Path(temporary)/'incoming').iterdir()), [])
+            store.put('rust/linux-x64', 'generation-one', len(payload), checksum, io.BytesIO(payload))
+            record = store.lookup('rust/linux-x64', 'generation-one', [])
+            other = b'another-cache'
+            store.put('rust/linux-x64', 'generation-one', len(other), hashlib.sha256(other).hexdigest(), io.BytesIO(other))
+            self.assertEqual(store.path(record['group'], record['id']).read_bytes(), payload)
+            self.assertEqual(store.lookup('rust/linux-x64', 'generation-two', ['generation-'])['key'], 'generation-one')
+            with self.assertRaises(ValueError): store.path('../../escape', record['id'])
+
+    def test_local_cache_pruning_keeps_recent_generations_and_respects_budget(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            store = local_cache.Store(temporary, budget=100, min_free=0, versions=2)
+            with patch.object(local_cache.time, 'time', return_value=100):
+                for key in ('old', 'current', 'new'):
+                    store.put('compiler/macos-arm64', key, 20, hashlib.sha256(b'a'*20).hexdigest(), io.BytesIO(b'a'*20))
+            self.assertEqual(store.status()['groups'][0]['count'], 2)
+            with self.assertRaises(OSError):
+                store.put('rust/linux-x64', 'too-large', 101, hashlib.sha256(b'x'*101).hexdigest(), io.BytesIO(b'x'*101))
+            self.assertEqual(store.status()['groups'][0]['count'], 2)
+
+    def test_local_cache_plain_http_is_limited_to_private_tailnet_transport(self):
+        for address in ('http://100.64.3.1:19081', 'http://127.0.0.1:19081', 'https://cache.example.com'):
+            local_cache.endpoint({'url':address})
+        for address in ('http://1.1.1.1', 'http://10.0.0.1', 'https://user:password@example.com', 'file:///tmp/cache'):
+            with self.assertRaises(ValueError): local_cache.endpoint({'url':address})
+
     def test_android_dependency_retry_is_bounded_and_keeps_compiler_errors(self):
         def process(status, output):
             child = MagicMock()

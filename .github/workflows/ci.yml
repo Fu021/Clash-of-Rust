@@ -14,6 +14,9 @@ jobs:
   android:
     name: android-${{ matrix.arch }}
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      id-token: write
     timeout-minutes: 60
     strategy:
       fail-fast: false
@@ -34,11 +37,39 @@ jobs:
           ref: ${{ github.event.pull_request.head.sha || github.sha }}
           persist-credentials: false
           fetch-depth: 0
+      - uses: actions/setup-python@v6
+        with:
+          python-version: '3.11'
+      - name: Connect to private cache network
+        id: tailnet
+        if: vars.TS_OAUTH_CLIENT_ID != '' && vars.TS_AUDIENCE != '' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository)
+        uses: tailscale/github-action@v4
+        timeout-minutes: 3
+        continue-on-error: true
+        with:
+          oauth-client-id: ${{ vars.TS_OAUTH_CLIENT_ID }}
+          audience: ${{ vars.TS_AUDIENCE }}
+          tags: tag:ci-cache
+          version: '1.94.2'
+          retry: '1'
+          timeout: 45s
+          args: --accept-dns=false --accept-routes=false
+          tailscaled-args: --tun=userspace-networking --outbound-http-proxy-listen=127.0.0.1:19082
       - uses: dtolnay/rust-toolchain@stable
         with:
           targets: ${{ matrix.target }}
           components: clippy
+      - name: Restore private Android Rust cache
+        id: rust_local
+        uses: ./.github/actions/local-cache
+        with:
+          url: ${{ steps.tailnet.outcome == 'success' && vars.LOCAL_CACHE_URL || '' }}
+          token: ${{ secrets.LOCAL_CACHE_TOKEN }}
+          group: rust/android-${{ matrix.arch }}
+          kind: rust
+          key: release-${{ matrix.target }}
       - uses: Swatinem/rust-cache@v2
+        if: steps.rust_local.outputs.restored != 'true'
         timeout-minutes: 5
         continue-on-error: true
         with:
@@ -46,7 +77,8 @@ jobs:
           cache-on-failure: false
           cache-bin: false
           cache-workspace-crates: false
-          save-if: ${{ github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository }}
+          # Bootstrap from existing GitHub caches once; new snapshots go local.
+          save-if: false
       - name: Identify Skia source dependency
         if: matrix.arch == 'armv7'
         id: skia
@@ -58,9 +90,19 @@ jobs:
           with open(os.environ['GITHUB_OUTPUT'], 'a') as output:
               output.write('version=' + package['version'] + '\n')
               output.write('checksum=' + package['checksum'] + '\n')
-      - name: Cache complete ARMv7 Skia sources and third-party dependencies
+      - name: Restore private ARMv7 Skia source dependencies
+        id: skia_local
         if: matrix.arch == 'armv7'
-        uses: actions/cache@v5
+        uses: ./.github/actions/local-cache
+        with:
+          url: ${{ steps.tailnet.outcome == 'success' && vars.LOCAL_CACHE_URL || '' }}
+          token: ${{ secrets.LOCAL_CACHE_TOKEN }}
+          group: dependencies/skia-armv7
+          key: ${{ runner.os }}-${{ runner.arch }}-${{ steps.skia.outputs.version }}-${{ steps.skia.outputs.checksum }}
+          paths: ~/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/skia-bindings-${{ steps.skia.outputs.version }}
+      - name: Bootstrap existing ARMv7 Skia source cache
+        if: matrix.arch == 'armv7' && steps.skia_local.outputs.restored != 'true'
+        uses: actions/cache/restore@v5
         timeout-minutes: 5
         continue-on-error: true
         with:
@@ -79,8 +121,21 @@ jobs:
           go-version-file: apps/android/core/go.mod
           # Cache modules/tools below; the Go build directory is disposable.
           cache: false
-      - name: Cache Android Go dependencies and binding tools
-        uses: actions/cache@v5
+      - name: Restore private Go dependencies and binding tools
+        id: go_local
+        uses: ./.github/actions/local-cache
+        with:
+          url: ${{ steps.tailnet.outcome == 'success' && vars.LOCAL_CACHE_URL || '' }}
+          token: ${{ secrets.LOCAL_CACHE_TOKEN }}
+          group: tools/android-go
+          paths: |
+            ~/go/pkg/mod
+            ~/go/bin/gomobile
+            ~/go/bin/gobind
+          key: ${{ runner.os }}-${{ runner.arch }}-${{ steps.go.outputs.go-version }}-${{ hashFiles('apps/android/core/go.mod', 'apps/android/core/go.sum', 'scripts/android.py') }}
+      - name: Bootstrap existing Go cache
+        if: steps.go_local.outputs.restored != 'true'
+        uses: actions/cache/restore@v5
         timeout-minutes: 5
         continue-on-error: true
         with:
@@ -90,11 +145,23 @@ jobs:
             ~/go/bin/gobind
           key: android-go-${{ runner.os }}-${{ runner.arch }}-${{ steps.go.outputs.go-version }}-${{ hashFiles('apps/android/core/go.mod', 'apps/android/core/go.sum') }}
           restore-keys: android-go-${{ runner.os }}-${{ runner.arch }}-${{ steps.go.outputs.go-version }}-
+      - name: Restore private Gradle dependencies and distribution
+        id: gradle_local
+        uses: ./.github/actions/local-cache
+        with:
+          url: ${{ steps.tailnet.outcome == 'success' && vars.LOCAL_CACHE_URL || '' }}
+          token: ${{ secrets.LOCAL_CACHE_TOKEN }}
+          group: dependencies/gradle-linux
+          key: gradle-8.13-java-17-${{ hashFiles('apps/android/**/*.gradle.kts', 'apps/android/gradle.properties') }}
+          paths: |
+            ~/.gradle/caches/modules-2
+            ~/.gradle/permwrapper/dists
+            ~/.gradle/wrapper/dists
       - uses: gradle/actions/setup-gradle@v5
         with:
           gradle-version: '8.13'
-          # One matrix leg writes the shared downloaded modules, not one per ABI.
-          cache-read-only: ${{ matrix.arch != 'x64' }}
+          cache-disabled: ${{ steps.gradle_local.outputs.restored == 'true' }}
+          cache-read-only: true
           cache-cleanup: on-success
           gradle-home-cache-includes: caches/modules-2
       - name: Load stable development signature when configured
@@ -162,6 +229,9 @@ jobs:
   check:
     name: ${{ matrix.system }}-${{ matrix.arch }}
     timeout-minutes: 60
+    permissions:
+      contents: read
+      id-token: write
     strategy:
       fail-fast: false
       matrix:
@@ -210,11 +280,40 @@ jobs:
           # Preserve one immutable source identity for PR builds and packaging.
           ref: ${{ github.event.pull_request.head.sha || github.sha }}
           persist-credentials: false
+      - uses: actions/setup-python@v6
+        with:
+          python-version: ${{ matrix.python }}
+          architecture: ${{ matrix.arch }}
+      - name: Connect to private cache network
+        id: tailnet
+        if: vars.TS_OAUTH_CLIENT_ID != '' && vars.TS_AUDIENCE != '' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository)
+        uses: tailscale/github-action@v4
+        timeout-minutes: 3
+        continue-on-error: true
+        with:
+          oauth-client-id: ${{ vars.TS_OAUTH_CLIENT_ID }}
+          audience: ${{ vars.TS_AUDIENCE }}
+          tags: tag:ci-cache
+          version: '1.94.2'
+          retry: '1'
+          timeout: 45s
+          args: --accept-dns=false --accept-routes=false
+          tailscaled-args: --tun=userspace-networking --outbound-http-proxy-listen=127.0.0.1:19082
       - uses: dtolnay/rust-toolchain@stable
         with:
           toolchain: stable-${{ matrix.target }}
           components: rustfmt, clippy
+      - name: Restore private native Rust cache
+        id: rust_local
+        uses: ./.github/actions/local-cache
+        with:
+          url: ${{ steps.tailnet.outcome == 'success' && vars.LOCAL_CACHE_URL || '' }}
+          token: ${{ secrets.LOCAL_CACHE_TOKEN }}
+          group: rust/${{ matrix.system }}-${{ matrix.arch }}
+          kind: rust
+          key: release-${{ matrix.target }}
       - uses: Swatinem/rust-cache@v2
+        if: steps.rust_local.outputs.restored != 'true'
         timeout-minutes: 5
         continue-on-error: true
         with:
@@ -222,11 +321,7 @@ jobs:
           cache-on-failure: false
           cache-bin: false
           cache-workspace-crates: ${{ runner.os == 'macOS' }}
-          save-if: ${{ github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository }}
-      - uses: actions/setup-python@v6
-        with:
-          python-version: ${{ matrix.python }}
-          architecture: ${{ matrix.arch }}
+          save-if: false
       - name: Verify architecture and select resource cache date
         id: environment
         run: |
@@ -253,7 +348,18 @@ jobs:
           disable_annotations: true
       - name: Restore bounded macOS compilation results
         if: runner.os == 'macOS' && steps.compiler_cache.outcome == 'success'
-        uses: actions/cache@v5
+        id: compiler_local
+        uses: ./.github/actions/local-cache
+        with:
+          url: ${{ steps.tailnet.outcome == 'success' && vars.LOCAL_CACHE_URL || '' }}
+          token: ${{ secrets.LOCAL_CACHE_TOKEN }}
+          group: compiler/macos-${{ matrix.arch }}
+          paths: ${{ env.SCCACHE_DIR }}
+          key: ${{ steps.environment.outputs.compiler }}-${{ hashFiles('Cargo.lock', 'Cargo.toml', '.cargo/**', 'apps/**/*.rs', 'apps/**/Cargo.toml', 'crates/**/*.rs', 'crates/**/*.slint', 'crates/**/Cargo.toml', 'resources/**', 'scripts/*.py', '.github/workflows/ci.yml') }}
+          restore-keys: ${{ steps.environment.outputs.compiler }}-
+      - name: Bootstrap existing macOS compiler cache
+        if: runner.os == 'macOS' && steps.compiler_cache.outcome == 'success' && steps.compiler_local.outputs.restored != 'true'
+        uses: actions/cache/restore@v5
         timeout-minutes: 5
         continue-on-error: true
         with:
@@ -266,7 +372,22 @@ jobs:
           import os
           with open(os.environ['GITHUB_ENV'], 'a') as output:
               output.write('RUSTC_WRAPPER=' + os.environ['SCCACHE_PATH'] + '\n')
-      - uses: actions/cache@v5
+      - name: Restore private core and Geo resources
+        id: resource_local
+        uses: ./.github/actions/local-cache
+        with:
+          url: ${{ steps.tailnet.outcome == 'success' && vars.LOCAL_CACHE_URL || '' }}
+          token: ${{ secrets.LOCAL_CACHE_TOKEN }}
+          group: resources/${{ matrix.system }}-${{ matrix.arch }}
+          paths: |
+            bin
+            bundle/resources
+            bundle/${{ matrix.system }}-${{ matrix.arch }}/resources
+          key: ${{ hashFiles('scripts/prepare-resources.py', 'scripts/build_support.py') }}-${{ steps.environment.outputs.day }}
+          restore-keys: ${{ hashFiles('scripts/prepare-resources.py', 'scripts/build_support.py') }}-
+      - name: Bootstrap existing resource cache
+        if: steps.resource_local.outputs.restored != 'true'
+        uses: actions/cache/restore@v5
         timeout-minutes: 5
         continue-on-error: true
         with:

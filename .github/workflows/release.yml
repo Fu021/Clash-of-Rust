@@ -57,6 +57,10 @@ jobs:
     name: package-${{ matrix.system }}-${{ matrix.arch }}
     needs: resolve
     timeout-minutes: 45
+    permissions:
+      actions: read
+      contents: read
+      id-token: write
     strategy:
       fail-fast: false
       matrix:
@@ -107,9 +111,33 @@ jobs:
           import subprocess
           subprocess.run(['sudo', 'apt-get', 'update'], check=True)
           subprocess.run(['sudo', 'apt-get', 'install', '-y', 'dpkg-dev', 'dbus', 'iproute2', 'util-linux', 'libcap2-bin', 'xvfb', 'x11-utils'], check=True)
-      - name: Cache Windows installer compiler
+      - name: Connect to private installer cache
+        id: tailnet
+        if: runner.os == 'Windows' && vars.TS_OAUTH_CLIENT_ID != '' && vars.TS_AUDIENCE != ''
+        uses: tailscale/github-action@v4
+        timeout-minutes: 3
+        continue-on-error: true
+        with:
+          oauth-client-id: ${{ vars.TS_OAUTH_CLIENT_ID }}
+          audience: ${{ vars.TS_AUDIENCE }}
+          tags: tag:ci-cache
+          version: '1.94.2'
+          retry: '1'
+          timeout: 45s
+          args: --accept-dns=false --accept-routes=false
+      - name: Restore private Windows installer compiler
+        id: nsis_local
         if: runner.os == 'Windows'
-        uses: actions/cache@v5
+        uses: ./.github/actions/local-cache
+        with:
+          url: ${{ steps.tailnet.outcome == 'success' && vars.LOCAL_CACHE_URL || '' }}
+          token: ${{ secrets.LOCAL_CACHE_TOKEN }}
+          group: tools/nsis
+          paths: tools/nsis
+          key: nsis-3.13-v1
+      - name: Bootstrap existing installer compiler
+        if: runner.os == 'Windows' && steps.nsis_local.outputs.restored != 'true'
+        uses: actions/cache/restore@v5
         timeout-minutes: 5
         continue-on-error: true
         with:

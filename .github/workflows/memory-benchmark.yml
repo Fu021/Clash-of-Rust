@@ -36,6 +36,9 @@ jobs:
   benchmark:
     name: Linux x64 memory benchmark
     runs-on: ubuntu-22.04
+    permissions:
+      contents: read
+      id-token: write
     timeout-minutes: 60
     env:
       PYTHONDONTWRITEBYTECODE: '1'
@@ -66,7 +69,36 @@ jobs:
           path: source
           persist-credentials: false
       - uses: dtolnay/rust-toolchain@stable
+      - uses: actions/setup-python@v6
+        with:
+          python-version: '3.11'
+      - name: Connect to private cache network
+        id: tailnet
+        if: vars.TS_OAUTH_CLIENT_ID != '' && vars.TS_AUDIENCE != ''
+        uses: tailscale/github-action@v4
+        timeout-minutes: 3
+        continue-on-error: true
+        with:
+          oauth-client-id: ${{ vars.TS_OAUTH_CLIENT_ID }}
+          audience: ${{ vars.TS_AUDIENCE }}
+          tags: tag:ci-cache
+          version: '1.94.2'
+          retry: '1'
+          timeout: 45s
+          args: --accept-dns=false --accept-routes=false
+          tailscaled-args: --tun=userspace-networking --outbound-http-proxy-listen=127.0.0.1:19082
+      - name: Restore private benchmark compilation
+        id: rust_local
+        uses: ./.github/actions/local-cache
+        with:
+          url: ${{ steps.tailnet.outcome == 'success' && vars.LOCAL_CACHE_URL || '' }}
+          token: ${{ secrets.LOCAL_CACHE_TOKEN }}
+          group: rust/memory-linux-x64-${{ inputs.profile }}
+          kind: rust
+          source: source
+          key: memory-${{ inputs.profile }}
       - uses: Swatinem/rust-cache@v2
+        if: steps.rust_local.outputs.restored != 'true'
         timeout-minutes: 5
         continue-on-error: true
         with:
@@ -75,9 +107,7 @@ jobs:
           cache-on-failure: false
           cache-bin: false
           cache-workspace-crates: false
-      - uses: actions/setup-python@v6
-        with:
-          python-version: '3.11'
+          save-if: false
       - name: Install benchmark dependencies
         shell: python
         run: |
