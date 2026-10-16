@@ -24,6 +24,7 @@ __pycache__/
 *.pyc
 
 # Local environment and credentials
+/AGENTS.md
 .env
 .env.*
 !.env.example
