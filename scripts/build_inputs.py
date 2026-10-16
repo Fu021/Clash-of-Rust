@@ -3,6 +3,7 @@ import argparse
 import base64
 import datetime
 import hashlib
+import http.client
 import json
 import os
 from pathlib import Path
@@ -56,7 +57,7 @@ def resource_release(name, cached, proxy='', version=None):
     endpoint = 'tags/' + version if version else 'latest'
     try:
         return read_json('https://api.github.com/repos/' + repo + '/releases/' + endpoint, proxy)
-    except (OSError, ValueError) as error:
+    except (OSError, ValueError, http.client.HTTPException) as error:
         value = json.loads(cached.read_text()) if cached.is_file() else {}
         if value.get('release') and (version is None or value['release'].get('tag_name') == version):
             print('::warning::Upstream unavailable; using cached verified ' + name + ' release metadata.')
@@ -116,7 +117,11 @@ def maven_latest(group, artifact, current):
 
 def refresh_command(command, paths, warnings):
     before = {path: (ROOT / path).read_bytes() if (ROOT / path).exists() else None for path in paths}
-    result = subprocess.run(command, cwd=ROOT, text=True, stdout=subprocess.PIPE, stderr=subprocess.STDOUT)
+    try:
+        result = subprocess.run(command, cwd=ROOT, text=True, stdout=subprocess.PIPE,
+                                stderr=subprocess.STDOUT, timeout=300)
+    except subprocess.TimeoutExpired:
+        result = subprocess.CompletedProcess(command, 1, 'Dependency metadata refresh timed out')
     if not result.returncode:
         print('Refreshed source dependencies:', ' '.join(command))
         return
@@ -156,7 +161,7 @@ def resolve(directory):
         try:
             value = query()
             upstream[name] = {**value, 'resolution': 'upstream'}
-        except (OSError, ValueError, KeyError, TypeError) as error:
+        except (OSError, ValueError, KeyError, TypeError, http.client.HTTPException) as error:
             cached = previous.get('upstream', {}).get(name)
             if cached:
                 upstream[name] = {**cached, 'resolution': 'cache'}
@@ -188,7 +193,7 @@ def resolve(directory):
         try:
             updated = maven_latest(group, artifact, match[2])
             target.write_text(re.sub(pattern, lambda m: m[1] + updated + m[3], text))
-        except (OSError, ValueError, ET.ParseError) as error:
+        except (OSError, ValueError, ET.ParseError, http.client.HTTPException) as error:
             warnings.append(artifact + ': upstream unavailable (' + type(error).__name__ + '); retained source snapshot')
     files = {}
     for relative in FILES:
@@ -232,7 +237,7 @@ def packaging(directory):
         raise ValueError('Packaging requires the verified CI dependency snapshot')
     try:
         value['upstream']['nsis'] = {**nsis_release(), 'resolution': 'upstream'}
-    except (OSError, ValueError, KeyError) as error:
+    except (OSError, ValueError, KeyError, http.client.HTTPException) as error:
         if value['upstream'].get('nsis'):
             value['upstream']['nsis']['resolution'] = 'cache'
         value['warnings'].append('Installer upstream unavailable; using verified CI tool metadata.')

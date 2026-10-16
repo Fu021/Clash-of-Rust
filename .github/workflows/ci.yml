@@ -36,6 +36,7 @@ jobs:
           check-latest: true
       - uses: dtolnay/rust-toolchain@stable
       - uses: actions/setup-go@v6
+        id: go
         with:
           go-version: stable
           check-latest: true
@@ -58,6 +59,30 @@ jobs:
       - name: Keep runner routing unchanged
         if: steps.tailnet.outcome == 'success'
         run: sudo -n tailscale set --accept-routes=false --accept-dns=false
+      - name: Restore source registry metadata and verified archives
+        uses: ./.github/actions/local-cache
+        with:
+          url: ${{ steps.tailnet.outcome == 'success' && vars.LOCAL_CACHE_URL || '' }}
+          token: ${{ secrets.LOCAL_CACHE_TOKEN }}
+          group: dependencies/cargo-source
+          paths: |
+            ~/.cargo/registry/index
+            ~/.cargo/registry/cache
+            ~/.cargo/git/db
+          key: source-${{ hashFiles('Cargo.lock') }}-${{ github.run_id }}-${{ github.run_attempt }}
+          restore-keys: source-
+      - name: Restore source module downloads and binding tools
+        uses: ./.github/actions/local-cache
+        with:
+          url: ${{ steps.tailnet.outcome == 'success' && vars.LOCAL_CACHE_URL || '' }}
+          token: ${{ secrets.LOCAL_CACHE_TOKEN }}
+          group: tools/android-go
+          paths: |
+            ~/go/pkg/mod
+            ~/go/bin/gomobile
+            ~/go/bin/gobind
+          key: go-resolver-${{ steps.go.outputs.go-version }}-${{ hashFiles('apps/android/core/go.*') }}
+          restore-keys: go-
       - name: Restore last compatible dependency snapshot
         uses: ./.github/actions/local-cache
         with:
@@ -115,7 +140,10 @@ jobs:
           name: dependency-snapshot
           path: target/dependency-snapshot
       - name: Apply the resolved source dependency snapshot
-        run: python3 scripts/build_inputs.py apply
+        shell: python
+        run: |
+          import subprocess, sys
+          subprocess.run([sys.executable, 'scripts/build_inputs.py', 'apply'], check=True)
       - name: Connect to private cache network
         id: tailnet
         if: vars.TS_OAUTH_CLIENT_ID != '' && vars.TS_AUDIENCE != '' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository)
@@ -389,7 +417,10 @@ jobs:
           name: dependency-snapshot
           path: target/dependency-snapshot
       - name: Apply the resolved source dependency snapshot
-        run: python3 scripts/build_inputs.py apply
+        shell: python
+        run: |
+          import subprocess, sys
+          subprocess.run([sys.executable, 'scripts/build_inputs.py', 'apply'], check=True)
       - name: Connect to private cache network
         id: tailnet
         if: vars.TS_OAUTH_CLIENT_ID != '' && vars.TS_AUDIENCE != '' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository)

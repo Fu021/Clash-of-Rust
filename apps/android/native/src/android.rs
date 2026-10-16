@@ -978,6 +978,10 @@ async fn handle(state: &mut State, request: Request) -> Result<()> {
     let session = &mut state.session;
     match intent {
         MobileIntent::Connect | MobileIntent::Disconnect => {
+            ensure!(
+                intent != MobileIntent::Disconnect || session.settings.claude_protection.is_none(),
+                "请先关闭 Claude 保护，再断开 VPN"
+            );
             session.native.request(
                 json!({"op":if intent == MobileIntent::Connect {"connect"} else {"disconnect"}}),
             )?;
@@ -1278,7 +1282,7 @@ async fn handle(state: &mut State, request: Request) -> Result<()> {
             session
                 .native
                 .request(json!({"op":"export","name":"claude-report.json",
-                "content":serde_json::to_string_pretty(&state.claude)?}))?;
+                "content":serde_json::to_string_pretty(&json!({"detection":state.claude,"enforcement":state.guard_snapshot,"protection_enabled":session.settings.claude_protection.is_some()}))?}))?;
         }
         MobileIntent::ClaudeProtection => {
             let Some(saved) = session.settings.claude_protection.clone() else {

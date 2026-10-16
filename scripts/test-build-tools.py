@@ -155,6 +155,12 @@ class BuildTests(unittest.TestCase):
                     return_value=subprocess.CompletedProcess([],1,'failed to select a version: incompatible constraints')):
                 with self.assertRaisesRegex(RuntimeError, 'not a network'):
                     build_inputs.refresh_command(['cargo','update'], ('Cargo.lock',), [])
+            with patch.object(build_inputs, 'ROOT', root), patch.object(build_inputs.subprocess, 'run',
+                    side_effect=subprocess.TimeoutExpired(['cargo','update'],300)):
+                warnings = []
+                build_inputs.refresh_command(['cargo','update'], ('Cargo.lock',), warnings)
+                self.assertTrue(warnings)
+                self.assertEqual(lock.read_bytes(), b'cached')
 
     def test_release_metadata_network_fallback_respects_explicit_version(self):
         with tempfile.TemporaryDirectory() as temporary:

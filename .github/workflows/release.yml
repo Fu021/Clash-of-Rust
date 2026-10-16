@@ -135,7 +135,10 @@ jobs:
           name: packaging-dependency-snapshot
           path: target/dependency-snapshot
       - name: Apply the verified CI dependency snapshot
-        run: python3 scripts/build_inputs.py apply
+        shell: python
+        run: |
+          import subprocess, sys
+          subprocess.run([sys.executable, 'scripts/build_inputs.py', 'apply'], check=True)
       - name: Install Linux packaging/test dependencies
         if: runner.os == 'Linux'
         run: |
@@ -269,7 +272,10 @@ jobs:
           name: packaging-dependency-snapshot
           path: target/dependency-snapshot
       - name: Apply the verified CI dependency snapshot
-        run: python3 scripts/build_inputs.py apply
+        shell: python
+        run: |
+          import subprocess, sys
+          subprocess.run([sys.executable, 'scripts/build_inputs.py', 'apply'], check=True)
       - uses: actions/setup-java@v5
         with:
           distribution: temurin

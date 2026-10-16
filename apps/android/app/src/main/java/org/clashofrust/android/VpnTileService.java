@@ -36,7 +36,18 @@ public final class VpnTileService extends TileService {
     }
     @SuppressWarnings("deprecation")
     private void toggle() {
-        if (TunnelService.connected()) { TunnelService.stop(this); return; }
+        if (TunnelService.connected()) {
+            try {
+                if (CoreBridge.protectedMode(this)) {
+                    SystemNotifications.show(this,"Claude 保护","请先在 A÷检测中关闭 Claude 保护，再断开 VPN。");
+                    return;
+                }
+            } catch (Exception error) {
+                android.util.Log.e("ClashOfRust","Cannot safely disconnect protected VPN",error);
+                return;
+            }
+            TunnelService.stop(this); return;
+        }
         if (CoreBridge.ready() && VpnService.prepare(this)==null) {
             startForegroundService(new Intent(this,TunnelService.class));
         } else {
