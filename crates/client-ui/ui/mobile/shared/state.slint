@@ -1,0 +1,121 @@
+// Mobile presentation contract. Native hosts supply data and execute requests.
+// Only domain row types are reused; mobile views never read desktop UiData.
+import { GroupItem, ProfileItem, ConnectionItem, RuleItem, LogItem, CategoryPair, ReportItem, DetailItem } from "../../state.slint";
+
+export enum MobileIntent {
+    connect, disconnect, restart-core, mode, query, node-sort, select-node, node-delay, system-notification,
+    import-profile, pick-file, activate-profile, update-profile, save-profile, delete-profile,
+    connection-sort, connection-detail, close-connection, close-all, copy,
+    rule-select, rule-add, rule-save, rule-move, rule-delete, rule-apply, rule-discard,
+    rule-shortcut, log-level, clear-logs, export-logs, probe, dns,
+    site-start, site-cancel, site-category, site-retest, claude-start, claude-protection, export-report,
+    appearance, accent, text-scale, dns-override, ipv6, udp, save-ports, interval, update-geo,
+}
+export global MobileActions { callback request(MobileIntent, string, string); }
+
+export global MobileData {
+    in-out property <string> version;
+    in-out property <bool> core-running;
+    // VPN session status belongs to the platform, independently of the core.
+    in-out property <bool> vpn-connected;
+    in-out property <bool> working;
+    in-out property <string> profile;
+    in-out property <string> node;
+    in-out property <string> download-rate;
+    in-out property <string> upload-rate;
+    in-out property <string> connection-count;
+    in-out property <string> download-total;
+    in-out property <string> upload-total;
+    in-out property <int> mode;
+    in-out property <[GroupItem]> groups;
+    in-out property <[ProfileItem]> profiles;
+    in-out property <[ConnectionItem]> connections;
+    in-out property <[DetailItem]> connection-details;
+    in-out property <[RuleItem]> rules;
+    in-out property <[string]> rule-profiles;
+    in-out property <[string]> rule-policies;
+    in-out property <[LogItem]> logs;
+    in-out property <[CategoryPair]> categories;
+    in-out property <[ReportItem]> site-results;
+    in-out property <[ReportItem]> claude-results;
+    in-out property <image> exit-flag;
+    in-out property <string> exit-country;
+    in-out property <string> exit-ip;
+    in-out property <string> claude-normal;
+    in-out property <string> claude-risk;
+    in-out property <string> claude-clues;
+    in-out property <[string]> shortcuts;
+    in-out property <[bool]> shortcut-values;
+    in-out property <bool> rule-dirty;
+    in-out property <bool> dns-override: true;
+    in-out property <bool> ipv6: true;
+    in-out property <bool> udp: true;
+    in-out property <bool> protected;
+    in-out property <bool> protection-pending;
+    in-out property <string> protection-status;
+    in-out property <bool> detecting;
+    in-out property <float> progress: 1;
+    in-out property <string> site-progress;
+    in-out property <string> claude-status;
+    in-out property <string> geo-status;
+    in-out property <string> mixed-port: "7897";
+    in-out property <string> controller-port: "9090";
+    in-out property <string> interval: "0";
+}
+
+// Navigation and editing state is separate from both domain and platform state.
+export global MobileView {
+    in-out property <int> page;
+    // 1 risks, 2 rule editor, 3 profile editor, 4 delete, 5 connection,
+    // 6 IP category, 7 normal, 8 protection, 9 clues, 10 log, 11 accent, 12 draft.
+    in-out property <int> detail;
+    out property <bool> modal: self.detail == 4 || self.detail == 8 || self.detail == 11 || self.detail == 12;
+    in-out property <string> selected-id;
+    in-out property <string> query;
+    in-out property <int> node-sort: 2;
+    in-out property <string> connection-sort: "下载速度 ↓";
+    in-out property <string> log-level: "全部等级";
+    in-out property <bool> shortcuts-open;
+    in-out property <bool> rule-selected;
+    in-out property <RuleItem> selected-rule;
+    in-out property <bool> rule-text-mode;
+    in-out property <bool> draft-dirty;
+    in-out property <int> pending-page: -1;
+    in-out property <int> pending-detail;
+    in-out property <string> rule-kind: "DOMAIN-SUFFIX";
+    in-out property <string> rule-payload;
+    in-out property <string> rule-policy: "DIRECT";
+    in-out property <string> rule-raw;
+    in-out property <string> rule-position: "1";
+    in-out property <string> profile-name;
+    in-out property <string> profile-source;
+    in-out property <string> log-message;
+    in-out property <string> category: "AI";
+    in-out property <string> site-status: "全部结果";
+    in-out property <string> test-url: "https://www.gstatic.com/generate_204";
+    in-out property <string> dns-host: "github.com";
+    in-out property <string> notice;
+    in-out property <int> notice-revision;
+    in-out property <float> notice-elapsed;
+    in-out property <length> safe-top;
+    in-out property <length> safe-bottom;
+    in-out property <length> safe-left;
+    in-out property <length> safe-right;
+    in-out property <length> keyboard-inset;
+    callback navigate(int);
+    navigate(p) => {
+        if self.draft-dirty {
+            self.pending-page = p; self.pending-detail = self.detail; self.detail = 12;
+        } else {
+            self.page = p; self.detail = 0; self.query = ""; self.rule-selected = false;
+        }
+    }
+    callback back();
+    back => {
+        if self.draft-dirty {
+            self.pending-page = -1; self.pending-detail = self.detail; self.detail = 12;
+        } else { self.detail = 0; }
+    }
+    callback notify(string);
+    notify(message) => { self.notice = message; self.notice-elapsed = 0; self.notice-revision += 1; }
+}

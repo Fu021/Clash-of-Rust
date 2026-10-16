@@ -1,0 +1,28 @@
+import { MobilePreviewSurface } from "../shared/preview.slint";
+import { AndroidSurface } from "app.slint";
+import "../../../../../resources/fonts/SourceHanSansCN-Regular.otf";
+import { AndroidData } from "state.slint";
+export component AndroidPreview inherits Window {
+    preferred-width: 393px; preferred-height: 852px;
+    default-font-family: "Source Han Sans CN";
+    in-out property <int> preview-page <=> scene.preview-page;
+    in-out property <int> preview-detail <=> scene.preview-detail;
+    in-out property <bool> preview-dark <=> scene.preview-dark;
+    in-out property <bool> preview-connected <=> scene.preview-connected;
+    in-out property <length> inset-top <=> scene.inset-top;
+    in-out property <length> inset-bottom <=> scene.inset-bottom;
+    in-out property <length> inset-left <=> scene.inset-left;
+    in-out property <length> inset-right <=> scene.inset-right;
+    in-out property <length> preview-keyboard <=> scene.preview-keyboard;
+    in-out property <float> text-scale <=> scene.text-scale;
+    in-out property <bool> preview-selected-rule <=> scene.preview-selected-rule;
+    in-out property <bool> preview-shortcuts <=> scene.preview-shortcuts;
+    in-out property <bool> preview-protection-pending <=> scene.preview-protection-pending;
+    in-out property <string> preview-notice <=> scene.preview-notice;
+    in-out property <float> preview-notice-elapsed <=> scene.preview-notice-elapsed;
+    scene := MobilePreviewSurface {
+        inset-top: 28px; inset-bottom: 24px; preview-connected: true;
+        AndroidSurface { }
+    }
+    init => { AndroidData.authorization-status = "已允许"; }
+}

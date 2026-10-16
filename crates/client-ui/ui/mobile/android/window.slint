@@ -1,0 +1,32 @@
+// Production Android entry. No preview values, fake status bar or fixtures.
+import { AndroidSurface } from "app.slint";
+import { MobileView } from "../shared/state.slint";
+export { MobileData, MobileView, MobileActions, MobileIntent } from "../shared/state.slint";
+export { AndroidData, AndroidActions, AndroidIntent } from "state.slint";
+export { Theme } from "../../theme/palette.slint";
+export { GroupItem, NodeItem, NodePair, ProfileItem, ConnectionItem, RuleItem, LogItem, CategoryItem, CategoryPair, ReportItem, DetailItem } from "../../state.slint";
+import "../../../../../resources/fonts/SourceHanSansCN-Regular.otf";
+
+export component AndroidWindow inherits Window {
+    default-font-family: "Source Han Sans CN";
+    property <length> top: self.safe-area-insets.top;
+    property <length> bottom: self.safe-area-insets.bottom;
+    property <length> left: self.safe-area-insets.left;
+    property <length> right: self.safe-area-insets.right;
+    in-out property <int> current-page <=> MobileView.page;
+    in-out property <int> current-detail <=> MobileView.detail;
+    in-out property <string> selected-id <=> MobileView.selected-id;
+    in-out property <string> query <=> MobileView.query;
+    in-out property <string> rule-edit-id;
+    callback notify(string);
+    notify(message) => { MobileView.notify(message); }
+    changed top => { MobileView.safe-top = self.top; }
+    changed bottom => { MobileView.safe-bottom = self.bottom; }
+    changed left => { MobileView.safe-left = self.left; }
+    changed right => { MobileView.safe-right = self.right; }
+    init => {
+        MobileView.safe-top = self.top; MobileView.safe-bottom = self.bottom;
+        MobileView.safe-left = self.left; MobileView.safe-right = self.right;
+    }
+    AndroidSurface { }
+}

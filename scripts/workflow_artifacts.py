@@ -18,6 +18,7 @@ from build_support import (ROOT, bundle_directory, package_version, sha256,
                            write_json)
 
 BUILD_NAMES = {f'build-{system}-{arch}' for system in ('windows', 'linux', 'macos') for arch in ('x64', 'arm64')}
+BUILD_NAMES |= {f'build-android-{arch}' for arch in ('arm64', 'armv7', 'x64')}
 ARCHIVE_NAME = 'build.tar.gz'
 BUILD_SCHEMA = 2
 TEST_NAMES = {'core_integration'}
@@ -112,6 +113,9 @@ def export_build(system, arch, tests, output, binaries=None):
 
 
 def verify_build(root, system, arch, expected_commit):
+    if system == 'android':
+        from android import verify_build as verify_android
+        return verify_android(root, arch, expected_commit)
     manifest = json.loads((root/'manifest.json').read_text(encoding='utf-8'))
     if (manifest.get('schema'), manifest.get('commit'), manifest.get('version'),
         manifest.get('system'), manifest.get('arch'), manifest.get('profile')) != (

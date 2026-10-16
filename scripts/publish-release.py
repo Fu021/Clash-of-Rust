@@ -22,6 +22,7 @@ from build_support import ROOT, opener, sha256, validate_version, manifest_versi
 CI_JOBS = {
     'windows-x64', 'windows-arm64', 'linux-x64', 'linux-arm64', 'macos-x64', 'macos-arm64',
 }
+CI_JOBS |= {'android-arm64', 'android-armv7', 'android-x64'}
 PACKAGES = {
     'package-windows-x64': 'windows-x64-setup.exe',
     'package-windows-arm64': 'windows-arm64-setup.exe',
@@ -29,6 +30,9 @@ PACKAGES = {
     'package-linux-arm64': 'linux-arm64.deb',
     'package-macos-x64': 'macos-x64.dmg',
     'package-macos-arm64': 'macos-arm64.dmg',
+    'package-android-arm64': 'android-arm64.apk',
+    'package-android-armv7': 'android-armv7.apk',
+    'package-android-x64': 'android-x64.apk',
 }
 PACKAGE_JOBS = set(PACKAGES) | {'Ubuntu latest-x64 proxy and TUN'}
 

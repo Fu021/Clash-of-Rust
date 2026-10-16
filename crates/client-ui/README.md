@@ -1,4 +1,4 @@
-# Slint 桌面界面
+# Slint 界面
 
 采用 A「简洁原生」风格，十个页面与各类确认、编辑、详情弹窗共用 `ui/app.slint`。支持深色、浅色、跟随系统、字号缩放及六种强调色；外观设置自动保存。
 
@@ -29,3 +29,50 @@ python3 scripts/preview-slint.py --page connections --size 800x450
 正式程序的编译、Clippy 和测试统一由 GitHub Actions 执行。本地使用上面的 Slint Viewer 直接预览界面，不编译桌面应用；截图工作流与可选 Rust 截图入口已移除。
 
 源码单元测试保留任务取消、规则草稿、连接排序、模型复用与释放、真实指针输入和弹窗保护；无需显示服务器，不启动真实内核。节点卡片单击选择，测速按钮独立操作，测试确认按钮第一次点击便执行且不会顺带选择节点。模型测试复用正式界面库，避免重复编译组件。
+
+## Android / iOS 界面原型
+
+移动端沿用当前桌面的配色、图标、卡片与操作层次，正文 16px、辅助信息 14px、触控区至少 48px。Android 与 iOS 分别维护页面组合、导航入口、设置与系统操作协议，未来可独立增减功能：
+
+```text
+ui/mobile/
+├── shared/
+│   ├── state.slint       # 移动数据、操作协议与导航/草稿状态
+│   ├── controls.slint    # 触控控件与滚动
+│   ├── frame.slint       # 底栏、侧栏、安全区、键盘与通知
+│   ├── pages.slint       # 共用业务页面
+│   ├── details.slint     # 详情、编辑与确认
+│   ├── settings.slint    # 共用外观、网络开关、Geo 分组
+│   ├── fixtures.slint    # 仅预览使用的演示数据
+│   └── preview.slint     # 仅预览使用的状态栏与键盘示意
+├── android/
+│   ├── app.slint         # Android 页面与导航组合
+│   ├── settings.slint    # VPN、应用分流、通知速度、电池与端口
+│   ├── state.slint       # Android 数据与原生操作协议
+│   └── preview.slint
+├── ios/
+│   ├── app.slint         # iPhone / iPad 页面与导航组合
+│   ├── settings.slint    # 按需连接、系统 VPN 与版本信息
+│   ├── state.slint       # iOS 数据与原生操作协议
+│   └── preview.slint
+└── preview-data/         # 固定预览资源
+```
+
+`MobileData` 不依赖桌面 `UiData`，只复用不含平台行为的列表行类型；界面请求交由未来宿主执行，VPN 会话与内核进程状态分别传入。移动端不显示桌面安装器、托盘或窗口尺寸。两端都保留订阅、节点、连接、规则、日志、网络诊断、IP 检测和 A÷检测。
+
+当前仍是界面原型：`apps/android`、`apps/ios` 与 `crates/mobile-ffi` 保持占位，未接入实际 VPN、文件选择、系统授权或移动业务。预览使用固定数据；可直接操作导航、主题、强调色、字号、下拉菜单、策略组展开、编辑草稿与确认倒计时，网络、保存、排序、筛选等宿主请求尚无执行器。
+
+```sh
+python3 scripts/preview-slint.py --mobile --check
+python3 scripts/preview-slint.py --mobile --platform both --theme both --pairs
+python3 scripts/preview-slint.py --mobile --platform android --page proxies --size 834x1194
+python3 scripts/preview-slint.py --mobile --platform ios --page settings --size 1194x834
+```
+
+输出分别位于 `dist/mobile-preview/android/` 与 `dist/mobile-preview/ios/`。涵盖全部页面、深浅色、手机横屏、Pad 双方向和分屏、小屏、125% 字号、未连接、通知进度及详情/编辑/确认场景。宽度均为逻辑尺寸，布局按扣除安全区后的可用宽高决定：
+
+- 宽度不足 640 且非短窗口：底部五个入口，详情进入独立页面；工具页收纳连接、规则、日志和检测入口。
+- 中等宽度或高度不足 480：紧凑侧栏，减少横屏头部占用；节点按内容空间改为双列。
+- 可用宽度至少 1024、非短窗口：完整侧栏；内容宽度达到 880 时支持列表与详情并排，设置分两列。
+
+原生宿主以后提供安全区与键盘遮挡量，不能重复扣除系统已经缩小的视口；状态栏只是预览示意。导航与草稿状态独立于布局，删除、离开未保存的编辑须确认。宿主接入时还需保存各页滚动位置、接续旋转前的任务，并按平台能力处理权限、后台运行、更新与文件导入。

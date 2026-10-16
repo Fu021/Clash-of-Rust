@@ -1,0 +1,53 @@
+import { MobileData, MobileActions, MobileIntent } from "../shared/state.slint";
+import { AndroidData, AndroidActions, AndroidIntent } from "state.slint";
+import { MText, MSmall, MHeading, MCard, MButton, MRow, MDivider, MSwitch, MField, MScroll } from "../shared/controls.slint";
+import { AppearanceSettings, NetworkToggles, MaintenanceSettings } from "../shared/settings.slint";
+
+component AndroidNetwork inherits VerticalLayout {
+    alignment: start; spacing: 10px;
+    MHeading { text: "网络"; }
+    MCard {
+        HorizontalLayout { spacing: 12px; cross-axis-alignment: center;
+            MText { text: "混合端口"; }
+            MField { width: 96px; horizontal-stretch: 0; text <=> MobileData.mixed-port; edited(value) => { AndroidData.ports-dirty = true; } }
+        }
+        HorizontalLayout { spacing: 12px; cross-axis-alignment: center;
+            MText { text: "控制端口"; }
+            MField { width: 96px; horizontal-stretch: 0; text <=> MobileData.controller-port; edited(value) => { AndroidData.ports-dirty = true; } }
+        }
+        if AndroidData.ports-dirty: MButton { text: "保存端口"; primary: true; clicked => { AndroidActions.request(AndroidIntent.save-ports, MobileData.mixed-port + "," + MobileData.controller-port); } }
+        MDivider { }
+        NetworkToggles { }
+    }
+}
+component AndroidConnection inherits VerticalLayout {
+    alignment: start; spacing: 10px;
+    MHeading { text: "连接与系统"; }
+    MCard {
+        MRow { title: "VPN 设置"; value: AndroidData.authorization-status; clicked => { AndroidActions.request(AndroidIntent.vpn-settings, ""); } }
+        MDivider { }
+        MRow { title: "应用分流"; value: AndroidData.application-scope; clicked => { AndroidActions.request(AndroidIntent.application-routing, ""); } }
+        MDivider { }
+        MSwitch { title: "通知显示实时速度"; checked: AndroidData.notification-speeds;
+            toggled(value) => { AndroidActions.request(AndroidIntent.notification-speeds, value ? "true" : "false"); }
+        }
+        MDivider { }
+        MRow { title: "电池与后台运行"; clicked => { AndroidActions.request(AndroidIntent.battery-settings, ""); } }
+    }
+}
+component AndroidAbout inherits MCard {
+    MRow { title: "当前版本"; value: MobileData.version; arrow: false; interactive: false; }
+    MSmall { text: AndroidData.update-status; }
+    MButton { text: "检查更新"; clicked => { AndroidActions.request(AndroidIntent.check-update, ""); } }
+}
+export component AndroidSettings inherits Rectangle {
+    MScroll {
+        if root.width < 760px: VerticalLayout { alignment: start; spacing: 20px; padding-bottom: 20px;
+            AppearanceSettings { } AndroidNetwork { } AndroidConnection { } MaintenanceSettings { } AndroidAbout { }
+        }
+        if root.width >= 760px: HorizontalLayout { spacing: 20px; width: root.width;
+            VerticalLayout { alignment: start; spacing: 20px; AppearanceSettings { } AndroidConnection { } }
+            VerticalLayout { alignment: start; spacing: 20px; AndroidNetwork { } MaintenanceSettings { } AndroidAbout { } }
+        }
+    }
+}

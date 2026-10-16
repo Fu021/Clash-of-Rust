@@ -9,6 +9,89 @@ concurrency:
   group: ci-${{ github.event.pull_request.number || github.ref }}
   cancel-in-progress: true
 jobs:
+  android:
+    name: android-${{ matrix.arch }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - arch: arm64
+            target: aarch64-linux-android
+          - arch: armv7
+            target: armv7-linux-androideabi
+          - arch: x64
+            target: x86_64-linux-android
+    env:
+      PYTHONDONTWRITEBYTECODE: '1'
+      ANDROID_CI_TEST: '1'
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          persist-credentials: false
+          fetch-depth: 0
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+      - uses: Swatinem/rust-cache@v2
+        with:
+          prefix-key: android-${{ matrix.arch }}
+          cache-on-failure: true
+      - uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: '17'
+      - uses: actions/setup-go@v6
+        with:
+          go-version-file: apps/android/core/go.mod
+          cache: false
+      - uses: gradle/actions/setup-gradle@v5
+        with:
+          gradle-version: '8.13'
+      - name: Prepare Android toolchain
+        shell: python
+        run: |
+          import os, pathlib, subprocess
+          sdk=pathlib.Path(os.environ['ANDROID_HOME'])
+          manager=sdk/'cmdline-tools/latest/bin/sdkmanager'
+          subprocess.run([str(manager),'platforms;android-36','build-tools;36.0.0','ndk;28.2.13676358'],check=True)
+          with open(os.environ['GITHUB_ENV'],'a') as out:
+              out.write('ANDROID_NDK_ROOT='+str(sdk/'ndk/28.2.13676358')+'\n')
+      - name: Compile Android application and embedded core
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: python3 scripts/android.py build --arch ${{ matrix.arch }}
+      - name: Start Android test device
+        if: matrix.arch == 'x64'
+        run: |
+          sudo chmod a+rw /dev/kvm
+          python3 scripts/android.py emulator --arch x64
+      - name: Verify real Android proxy and TUN traffic
+        if: matrix.arch == 'x64'
+        run: python3 scripts/android.py test --arch x64
+      - name: Export tested Android compilation
+        run: python3 scripts/android.py export --arch ${{ matrix.arch }}
+      - uses: actions/upload-artifact@v6
+        with:
+          name: build-android-${{ matrix.arch }}
+          path: |
+            dist/android-build/build.tar.gz
+            dist/android-build/build.tar.gz.sha256
+          compression-level: 0
+          if-no-files-found: error
+          retention-days: 14
+      - uses: actions/upload-artifact@v6
+        if: always()
+        with:
+          name: android-report-${{ matrix.arch }}
+          path: |
+            target/android-report
+            apps/android/core/go.mod
+            apps/android/core/go.sum
+          if-no-files-found: warn
+          retention-days: 14
   check:
     name: ${{ matrix.system }}-${{ matrix.arch }}
     timeout-minutes: 60

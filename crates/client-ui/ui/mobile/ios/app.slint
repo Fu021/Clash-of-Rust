@@ -1,0 +1,23 @@
+import { MobileView } from "../shared/state.slint";
+import { MobileFrame } from "../shared/frame.slint";
+import { MobileHome, MobileProxies, MobileSubscriptions, MobileConnections, MobileRules, MobileLogs, MobileNetwork, MobileIpCheck, MobileAiCheck, MobileTools } from "../shared/pages.slint";
+import { IosSettings } from "settings.slint";
+
+// iOS owns its routes and native settings independently of Android.
+export component IosSurface inherits MobileFrame {
+    primary-pages: [0, 1, 2, 10, 9];
+    sidebar-pages: [0, 1, 2, 3, 4, 5, 6, 7, 8, 9];
+    tab-pill: false; title-size: 28px; sidebar-width: 208px; tab-height: 68px;
+    centered-modal: true;
+    if MobileView.page == 0: MobileHome { }
+    if MobileView.page == 1: MobileProxies { }
+    if MobileView.page == 2: MobileSubscriptions { }
+    if MobileView.page == 3: MobileConnections { }
+    if MobileView.page == 4: MobileRules { }
+    if MobileView.page == 5: MobileLogs { }
+    if MobileView.page == 6: MobileNetwork { }
+    if MobileView.page == 7: MobileIpCheck { }
+    if MobileView.page == 8: MobileAiCheck { }
+    if MobileView.page == 9: IosSettings { }
+    if MobileView.page == 10: MobileTools { }
+}

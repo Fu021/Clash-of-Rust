@@ -1,0 +1,7 @@
+// iOS-only presentation and native requests. Android does not import this file.
+export enum IosIntent { on-demand, vpn-settings, system-settings, version-info }
+export global IosActions { callback request(IosIntent, string); }
+export global IosData {
+    in-out property <bool> on-demand;
+    in-out property <string> vpn-profile: "Clash of Rust";
+}

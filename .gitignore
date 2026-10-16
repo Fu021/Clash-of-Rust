@@ -22,6 +22,13 @@ Thumbs.db
 Desktop.ini
 __pycache__/
 *.pyc
+/apps/android/.gradle/
+/apps/android/**/build/
+/apps/android/app/libs/
+/apps/android/app/native-libs/
+/apps/android/app/offline-assets/
+/apps/android/local.properties
+/apps/android/*.keystore
 
 # Local environment and credentials
 /AGENTS.md

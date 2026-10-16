@@ -171,9 +171,87 @@ jobs:
         run: |
           import subprocess, sys
           subprocess.run([sys.executable, 'scripts/test-release-package.py', '--ubuntu-latest'], check=True)
+  android:
+    name: package-android-${{ matrix.arch }}
+    needs: resolve
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        arch: [arm64, armv7, x64]
+    env:
+      PYTHONDONTWRITEBYTECODE: '1'
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          ref: ${{ needs.resolve.outputs.commit }}
+          persist-credentials: false
+      - uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: '17'
+      - name: Prepare Android package tools
+        shell: python
+        run: |
+          import os, pathlib, subprocess
+          manager=pathlib.Path(os.environ['ANDROID_HOME'])/'cmdline-tools/latest/bin/sdkmanager'
+          subprocess.run([str(manager),'build-tools;36.0.0'],check=True)
+      - name: Start Android package test device
+        if: matrix.arch == 'x64'
+        run: |
+          sudo chmod a+rw /dev/kvm
+          python3 scripts/android.py emulator --arch x64
+      - name: Load distribution signing key
+        if: ${{ !inputs.check_only }}
+        shell: python
+        env:
+          SIGNING_KEY: ${{ secrets.ANDROID_KEYSTORE }}
+          KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
+          KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
+          KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
+        run: |
+          import base64, os, pathlib
+          if not all(os.environ.get(key) for key in ('SIGNING_KEY','KEYSTORE_PASSWORD','KEY_ALIAS','KEY_PASSWORD')):
+              raise RuntimeError('Android 正式发布须配置长期签名密钥；测试包请启用 check_only')
+          path=pathlib.Path(os.environ['RUNNER_TEMP'])/'android-distribution.p12'
+          path.write_bytes(base64.b64decode(os.environ['SIGNING_KEY'],validate=True))
+          path.chmod(0o600)
+          with open(os.environ['GITHUB_ENV'],'a') as out:
+              for key,value in {'ANDROID_KEYSTORE_PATH':str(path),'ANDROID_KEYSTORE_PASSWORD':os.environ['KEYSTORE_PASSWORD'],
+                  'ANDROID_KEY_ALIAS':os.environ['KEY_ALIAS'],'ANDROID_KEY_PASSWORD':os.environ['KEY_PASSWORD']}.items():
+                  if '\n' in value or '\r' in value: raise ValueError('Invalid signing value')
+                  out.write(key+'='+value+'\n')
+      - name: Package verified Android APK
+        shell: python
+        env:
+          GH_TOKEN: ${{ github.token }}
+          CHECK_ONLY: ${{ inputs.check_only }}
+        run: |
+          import os, subprocess, sys
+          command=[sys.executable,'scripts/android.py','package','--arch','${{ matrix.arch }}',
+              '--run-id','${{ needs.resolve.outputs.ci_run_id }}']
+          if os.environ['CHECK_ONLY']=='true': command.append('--check')
+          subprocess.run(command,check=True)
+      - uses: actions/upload-artifact@v6
+        with:
+          name: package-android-${{ matrix.arch }}
+          path: |
+            dist/*.apk
+            dist/*.sha256
+            dist/package-receipt.json
+          if-no-files-found: error
+          retention-days: 14
+      - uses: actions/upload-artifact@v6
+        if: always() && matrix.arch == 'x64'
+        with:
+          name: android-package-test-report
+          path: target/android-report
+          if-no-files-found: warn
+          retention-days: 14
   publish:
     name: Publish verified release
-    needs: [resolve, package, ubuntu_latest]
+    needs: [resolve, package, ubuntu_latest, android]
     runs-on: ubuntu-latest
     timeout-minutes: 30
     permissions:
