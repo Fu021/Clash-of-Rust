@@ -58,7 +58,10 @@ public class ProxyTunTest {
         CoreBridge.reload(raw + "\nhosts:\n  android-tun.test: 10.0.2.2\n");
         for (int cycle=0; cycle<2; cycle++) {
             context.startForegroundService(new Intent(context,TunnelService.class));
-            await("VPN did not connect: "+TunnelService.error(), TunnelService::connected);
+            await("VPN did not connect; inspect logcat", () -> {
+                if (!TunnelService.error().isEmpty()) throw new IOException(TunnelService.error());
+                return TunnelService.connected();
+            });
             ConnectivityManager connectivity=context.getSystemService(ConnectivityManager.class);
             await("Android did not make the VPN its active network", () -> {
                 NetworkCapabilities capabilities=connectivity.getNetworkCapabilities(connectivity.getActiveNetwork());

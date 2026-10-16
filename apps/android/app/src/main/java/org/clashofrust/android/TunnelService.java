@@ -59,12 +59,15 @@ public final class TunnelService extends VpnService {
             Mobile.setProtector(fd -> protect(fd));
             descriptor = builder.establish();
             if (descriptor == null) throw new IllegalStateException("系统拒绝建立 VPN");
+            android.util.Log.i("ClashOfRust", "VPN established; starting embedded TUN");
             Mobile.startTun(descriptor.getFd(), ipv6);
             connected = true; lastError = "";
+            android.util.Log.i("ClashOfRust", "Embedded TUN started");
             getSystemService(NotificationManager.class).notify(1, notification("VPN 已连接"));
             MainActivity.emit("vpn", true);
         } catch (Exception error) {
             lastError = error.toString();
+            android.util.Log.e("ClashOfRust", "VPN startup failed", error);
             MainActivity.emit("error", "VPN 启动失败：" + lastError);
             disconnect();
         }

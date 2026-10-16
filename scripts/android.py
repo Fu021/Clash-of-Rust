@@ -141,6 +141,10 @@ def build(arch):
     aar = ANDROID/'app/libs/mihomo.aar'
     aar.parent.mkdir(parents=True, exist_ok=True)
     run(['gomobile', 'bind', '-target', 'android/'+go_arch, '-androidapi', '26',
+         # VpnService owns routing and package exclusions. The default Android
+         # listener tries to read root-only /data/system/packages.xml; cmfa
+         # selects the upstream app-hosted path. Our TUN explicitly uses gVisor.
+         '-tags', 'cmfa,with_gvisor',
          '-javapkg', 'org.clashofrust.nativecore', '-ldflags=-s -w -extldflags=-Wl,-z,max-page-size=16384',
          '-o', aar, '.'], cwd=core, env=env)
     seed_assets()
