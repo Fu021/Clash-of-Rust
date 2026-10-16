@@ -221,7 +221,7 @@ jobs:
           prefix-key: native-release-v2-${{ matrix.os }}
           cache-on-failure: false
           cache-bin: false
-          cache-workspace-crates: false
+          cache-workspace-crates: ${{ runner.os == 'macOS' }}
           save-if: ${{ github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository }}
       - uses: actions/setup-python@v6
         with:
@@ -230,13 +230,42 @@ jobs:
       - name: Verify architecture and select resource cache date
         id: environment
         run: |
-          import subprocess, sys, os, datetime
+          import subprocess, sys, os, datetime, hashlib, pathlib
           sys.path.insert(0, 'scripts')
           from build_support import host_arch
           assert host_arch() == '${{ matrix.arch }}'
           assert 'host: ${{ matrix.target }}' in subprocess.check_output(['rustc', '-vV'], text=True)
           with open(os.environ['GITHUB_OUTPUT'], 'a') as output:
               output.write('day=' + datetime.datetime.now(datetime.timezone.utc).strftime('%Y-%m-%d') + '\n')
+              output.write('compiler=' + hashlib.sha256(subprocess.check_output(['rustc', '-vV'])).hexdigest()[:16] + '\n')
+          if sys.platform == 'darwin':
+              with open(os.environ['GITHUB_ENV'], 'a') as env:
+                  env.write('SCCACHE_DIR=' + str(pathlib.Path(os.environ['RUNNER_TEMP']) / 'compiler-cache') + '\n')
+                  env.write('SCCACHE_CACHE_SIZE=512M\n')
+                  env.write('SCCACHE_BASEDIRS=' + os.environ['GITHUB_WORKSPACE'] + '\n')
+      - name: Install macOS compiler cache
+        if: runner.os == 'macOS'
+        id: compiler_cache
+        uses: mozilla-actions/sccache-action@v0.0.11
+        continue-on-error: true
+        with:
+          version: v0.18.0
+          disable_annotations: true
+      - name: Restore bounded macOS compilation results
+        if: runner.os == 'macOS' && steps.compiler_cache.outcome == 'success'
+        uses: actions/cache@v5
+        timeout-minutes: 5
+        continue-on-error: true
+        with:
+          path: ${{ env.SCCACHE_DIR }}
+          key: macos-compiler-${{ matrix.arch }}-${{ steps.environment.outputs.compiler }}-${{ hashFiles('Cargo.lock', 'Cargo.toml', '.cargo/**', 'apps/**/*.rs', 'apps/**/Cargo.toml', 'crates/**/*.rs', 'crates/**/*.slint', 'crates/**/Cargo.toml', 'resources/**', 'scripts/*.py', '.github/workflows/ci.yml') }}
+          restore-keys: macos-compiler-${{ matrix.arch }}-${{ steps.environment.outputs.compiler }}-
+      - name: Enable macOS compiler cache
+        if: runner.os == 'macOS' && steps.compiler_cache.outcome == 'success'
+        run: |
+          import os
+          with open(os.environ['GITHUB_ENV'], 'a') as output:
+              output.write('RUSTC_WRAPPER=' + os.environ['SCCACHE_PATH'] + '\n')
       - uses: actions/cache@v5
         timeout-minutes: 5
         continue-on-error: true
@@ -264,6 +293,15 @@ jobs:
           if '${{ matrix.system }}' == 'macos':
               command = [sys.executable, 'scripts/macos_ci.py', 'ci', '--arch', '${{ matrix.arch }}']
           subprocess.run(command, check=True)
+      - name: Report macOS compiler cache hits
+        if: always() && runner.os == 'macOS' && steps.compiler_cache.outcome == 'success'
+        continue-on-error: true
+        run: |
+          import os, pathlib, subprocess
+          result = subprocess.run([os.environ['SCCACHE_PATH'], '--stop-server'], text=True, capture_output=True)
+          print(result.stdout)
+          with pathlib.Path(os.environ['GITHUB_STEP_SUMMARY']).open('a') as output:
+              output.write('### macOS compiler cache (512 MiB cap)\n```text\n' + result.stdout + '\n```\n')
       - name: Collect macOS failure diagnostics
         if: failure() && runner.os == 'macOS'
         run: |

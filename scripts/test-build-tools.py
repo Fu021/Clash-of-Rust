@@ -68,6 +68,9 @@ class BuildTests(unittest.TestCase):
         self.assertEqual([c['id'] for c in storage.eviction_plan([old, new, go, gradle], 80)], [1, 2])
         other_branch = entry(5, old['key'], 30, 'refs/pull/18/merge')
         self.assertEqual(storage.eviction_plan([new, other_branch], 100), [])
+        compiler_old = entry(6, 'macos-compiler-arm64-' + 'a'*16 + '-' + 'b'*64, 20)
+        compiler_new = entry(7, 'macos-compiler-arm64-' + 'a'*16 + '-' + 'c'*64, 20)
+        self.assertEqual(storage.eviction_plan([compiler_old, compiler_new], 100), [compiler_old])
         self.assertEqual(storage.eviction_plan([gradle], 10), [gradle])
         with self.assertRaises(ValueError): storage.eviction_plan([], 0)
 

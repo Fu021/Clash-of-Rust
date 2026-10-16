@@ -27,6 +27,8 @@ def lineage(key):
     # per native target and branch; obsolete lockfiles must not accumulate.
     if key.startswith(('native-release-', 'android-', 'memory-ubuntu22-')):
         return re.sub(r'-[0-9a-f]{8,}-[0-9a-f]{8,}$', '', key)
+    if key.startswith('macos-compiler-'):
+        return re.sub(r'-[0-9a-f]{16}-[0-9a-f]{64}$', '', key)
     if key.startswith('resources-'):
         return re.sub(r'-\d{4}-\d{2}-\d{2}$', '', key)
     # Gradle's shared content entries reference each other: do not deduplicate
