@@ -90,8 +90,16 @@ def valid_key(key):
     return key
 
 
+def rust_environment_key(compiler, environment):
+    value = hashlib.sha256(compiler)
+    for name, item in sorted(environment.items()):
+        if name.startswith(('RUST', 'CARGO_PROFILE_', 'CARGO_TARGET_', 'CC_', 'CXX_')):
+            value.update((name+'='+item).encode())
+    return f'v{SCHEMA}-' + value.hexdigest() + '-'
+
+
 def rust_keys(source, compiler, environment):
-    """Dependency changes never match an older dependency generation."""
+    """Changed dependencies invalidate exact hits; Cargo validates compatible objects."""
     source = Path(source)
     dependencies = hashlib.sha256(compiler)
     files = {source/'Cargo.lock', source/'Cargo.toml'}
@@ -107,7 +115,7 @@ def rust_keys(source, compiler, environment):
     for name, value in sorted(environment.items()):
         if name.startswith(('RUST', 'CARGO_PROFILE_', 'CARGO_TARGET_', 'CC_', 'CXX_')):
             dependencies.update((name+'='+value).encode())
-    generation = f'v{SCHEMA}-' + dependencies.hexdigest()
+    generation = rust_environment_key(compiler, environment) + dependencies.hexdigest()
     sources = hashlib.sha256()
     for directory in ('apps', 'crates', 'resources', 'scripts'):
         for path in sorted((source/directory).rglob('*')):
@@ -138,16 +146,29 @@ def cache_paths(config):
 
 
 def pack(paths, destination, rust=False):
+    targets = {str(index) for index, path in enumerate(paths) if path.name == 'target'} if rust else set()
     def include(info):
         if not (info.isfile() or info.isdir()):
             return None
         parts = PurePosixPath(info.name).parts
+        if parts[0] in targets and len(parts) > 1:
+            # Never let an old target/dependency-snapshot overwrite this run's
+            # resolved inputs. Diagnostics, test staging and reports are not
+            # compiler caches either.
+            native = parts[1] in ('release', '.rustc_info.json', 'CACHEDIR.TAG')
+            cross = bool(re.fullmatch(r'(?:aarch64|armv7|x86_64)-[a-z0-9_-]+', parts[1]))
+            if not native and not (cross and (len(parts) == 2 or parts[2] == 'release')):
+                return None
         if any(p in ('incremental', '__pycache__') for p in parts) or (info.name.endswith('.lock') and parts[-1] != 'Cargo.lock'):
             return None
         # Executable test/application outputs are exported as verified artifacts,
         # not dependency caches. Keep build-script executables and library data.
-        if rust and (info.name.endswith('.exe') or (len(parts) > 2 and parts[-2] == 'deps' and '.' not in parts[-1])):
-            return None
+        if rust:
+            build_script = 'build' in parts[1:-1]
+            if ((info.name.endswith('.exe') and not build_script)
+                    or (len(parts) > 2 and parts[-2] == 'deps' and '.' not in parts[-1])
+                    or parts[-1] in ('clash-of-rust', 'clash-tun-launcher', 'libclash_mobile.so')):
+                return None
         info.uid = info.gid = 0
         info.uname = info.gname = ''
         return info
@@ -229,7 +250,8 @@ def restore(config):
         compiler = subprocess.check_output(['rustc', '-vV'])
         key, prefix = rust_keys(config['source'], compiler, dict(os.environ))
         config['key'] += '-' + key
-        config['prefix'] = [config['base_key'] + '-' + prefix]
+        config['prefix'] = [config['base_key'] + '-' + prefix,
+                            config['base_key'] + '-' + rust_environment_key(compiler, dict(os.environ))]
         if output := os.environ.get('GITHUB_ENV'):
             with open(output, 'a') as stream:
                 stream.write('CARGO_INCREMENTAL=0\n')

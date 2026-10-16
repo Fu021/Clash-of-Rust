@@ -641,6 +641,7 @@ dependencies = [
  "futures-util",
  "jni 0.21.1",
  "log",
+ "serde",
  "serde_json",
  "slint",
  "slint-build",

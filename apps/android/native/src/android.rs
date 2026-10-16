@@ -1103,27 +1103,18 @@ async fn handle(state: &mut State, request: Request) -> Result<()> {
                     .iter()
                     .find(|c| c.id.as_ref() == id)
                     .context("该连接已结束")?;
-                format!(
-                    "{}:{}\n域名: {}\n嗅探域名: {}\n目标 IP: {}\n协议: {}\n匹配规则: {} {}\n代理链: {}\n上传: {}  下载: {}\n开始时间: {}\n连接 ID: {}",
-                    core::connection::name(c),
-                    c.metadata.destination_port,
-                    c.metadata.host,
-                    c.metadata.sniff_host,
-                    c.metadata.destination_ip,
-                    c.metadata.network,
-                    c.rule,
-                    c.rule_payload,
-                    c.chains
-                        .iter()
-                        .rev()
-                        .map(|v| v.as_str())
-                        .collect::<Vec<_>>()
-                        .join(" → "),
-                    bytes(c.upload),
-                    bytes(c.download),
-                    c.start,
-                    c.id
-                )
+                let resolved = if state.connection_address.0 == id {
+                    state.connection_address.1.as_str()
+                } else {
+                    ""
+                };
+                core::connection::detail_values(c, resolved)
+                    .into_iter()
+                    .map(|(label, value)| {
+                        format!("{label}: {}", if value.is_empty() { "—" } else { &value })
+                    })
+                    .collect::<Vec<_>>()
+                    .join("\n")
             } else {
                 a
             };

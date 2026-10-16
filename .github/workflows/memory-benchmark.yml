@@ -83,7 +83,7 @@ jobs:
         id: tailnet
         if: vars.TS_OAUTH_CLIENT_ID != '' && vars.TS_AUDIENCE != ''
         uses: tailscale/github-action@v4
-        timeout-minutes: 3
+        timeout-minutes: ${{ runner.os == 'macOS' && 10 || 3 }}
         continue-on-error: true
         with:
           oauth-client-id: ${{ vars.TS_OAUTH_CLIENT_ID }}

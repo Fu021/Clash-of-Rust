@@ -91,7 +91,9 @@ jobs:
           group: dependencies/build-inputs
           paths: target/dependency-snapshot
           key: source-${{ hashFiles('Cargo.lock', 'Cargo.toml', 'apps/**/Cargo.toml', 'crates/**/Cargo.toml', '.cargo/**', 'apps/android/core/go.*', 'apps/android/**/*.gradle.kts', 'apps/android/gradle.properties') }}-${{ github.run_id }}-${{ github.run_attempt }}
-          restore-keys: source-${{ hashFiles('Cargo.lock', 'Cargo.toml', 'apps/**/Cargo.toml', 'crates/**/Cargo.toml', '.cargo/**', 'apps/android/core/go.*', 'apps/android/**/*.gradle.kts', 'apps/android/gradle.properties') }}-
+          restore-keys: |
+            source-${{ hashFiles('Cargo.lock', 'Cargo.toml', 'apps/**/Cargo.toml', 'crates/**/Cargo.toml', '.cargo/**', 'apps/android/core/go.*', 'apps/android/**/*.gradle.kts', 'apps/android/gradle.properties') }}-
+            source-
       - name: Check upstream and freeze source dependencies
         id: resolve
         env:
@@ -432,7 +434,7 @@ jobs:
         id: tailnet
         if: vars.TS_OAUTH_CLIENT_ID != '' && vars.TS_AUDIENCE != '' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository)
         uses: tailscale/github-action@v4
-        timeout-minutes: 3
+        timeout-minutes: ${{ runner.os == 'macOS' && 10 || 3 }}
         continue-on-error: true
         with:
           oauth-client-id: ${{ vars.TS_OAUTH_CLIENT_ID }}

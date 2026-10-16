@@ -64,9 +64,10 @@ def ensure_binding_tool(name):
     revision = selected[1] if selected else MOBILE_TOOL
     executable = shutil.which(name)
     if executable:
+        compiler = subprocess.check_output(['go', 'env', 'GOVERSION'], text=True).strip()
         metadata = subprocess.run(['go', 'version', '-m', executable], text=True, capture_output=True)
         records = [line.split() for line in metadata.stdout.splitlines()]
-        if metadata.returncode == 0 and ['path', package] in records and any(
+        if metadata.returncode == 0 and records and records[0][-1] == compiler and ['path', package] in records and any(
                 len(record) >= 3 and record[:2] == ['mod', 'golang.org/x/mobile']
                 and (record[2] == revision or record[2].endswith('-' + revision[:12])) for record in records):
             print('Reusing verified binding tool:', name, flush=True)

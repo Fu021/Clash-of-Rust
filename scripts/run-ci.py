@@ -17,8 +17,10 @@ def main():
         raise ValueError('CI must run on the selected native architecture')
     run(['cargo', 'fmt', '--all', '--', '--check'])
     if (args.system, args.arch) == ('linux', 'x64'):
-        run([sys.executable, ROOT/'scripts/test-build-tools.py'])
-        run([sys.executable, ROOT/'scripts/test-workflow-artifacts.py'])
+        # Fault-injection fixtures intentionally print network/validation errors.
+        # Show their captured output only when a test fails.
+        run([sys.executable, ROOT/'scripts/test-build-tools.py', '--buffer'])
+        run([sys.executable, ROOT/'scripts/test-workflow-artifacts.py', '--buffer'])
     # One profile across Clippy, tests and production builds avoids a second
     # dependency compilation and produces the exact binaries released later.
     run(['cargo', 'clippy', '--workspace', '--release', '--all-targets', '--locked', '--', '-D', 'warnings'])

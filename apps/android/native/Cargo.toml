@@ -13,6 +13,7 @@ crate-type = ["cdylib"]
 clash-mobile-runtime = { path = "../../../crates/mobile-ffi" }
 slint = { version = "=1.18.1", default-features = false, features = ["std", "compat-1-2", "backend-android-activity-06", "renderer-skia-opengl"] }
 anyhow.workspace = true
+serde.workspace = true
 serde_json.workspace = true
 tokio.workspace = true
 futures-util.workspace = true

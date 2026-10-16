@@ -57,6 +57,10 @@ class BuildTests(unittest.TestCase):
             (root/'Cargo.lock').write_text('slint = 1.19.0')
             new_prefix = local_cache.rust_keys(root, b'compiler one', {})[1]
             self.assertNotEqual(prefix, new_prefix)
+            # The compiler-compatible fallback may retain unrelated libraries;
+            # Cargo still resolves/builds against the new lockfile.
+            self.assertTrue(prefix.startswith(local_cache.rust_environment_key(b'compiler one', {})))
+            self.assertTrue(new_prefix.startswith(local_cache.rust_environment_key(b'compiler one', {})))
             self.assertNotEqual(new_prefix, local_cache.rust_keys(root, b'compiler two', {})[1])
             self.assertNotEqual(new_prefix, local_cache.rust_keys(root, b'compiler one', {'RUSTFLAGS':'-C target-cpu=native'})[1])
 
@@ -153,6 +157,21 @@ class BuildTests(unittest.TestCase):
                 local_cache.save(config)
                 pack.assert_not_called()
                 self.assertIn('unchanged', report.call_args.args[2])
+
+    def test_rust_cache_keeps_build_scripts_without_archiving_application_or_test_binaries(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            source = root/'target'
+            names = ('release/build/tool/build-script-build.exe', 'release/deps/dep.rlib',
+                     'release/clash-of-rust.exe', 'release/clash-of-rust', 'release/deps/unit-test',
+                     'dependency-snapshot/inputs.json', 'cache-network.json', 'android-report/logcat.txt')
+            for name in names:
+                path = source/name; path.parent.mkdir(parents=True, exist_ok=True); path.write_bytes(b'binary')
+            archive = root/'cache.tar.gz'
+            local_cache.pack([source], archive, rust=True)
+            local_cache.unpack(archive, [root/'restored'])
+            files = sorted(p.relative_to(root/'restored').as_posix() for p in (root/'restored').rglob('*') if p.is_file())
+            self.assertEqual(files, ['release/build/tool/build-script-build.exe', 'release/deps/dep.rlib'])
 
     def test_source_dependency_network_failure_restores_previous_snapshot_but_bad_constraints_fail(self):
         with tempfile.TemporaryDirectory() as temporary:
@@ -298,13 +317,18 @@ class BuildTests(unittest.TestCase):
     def test_android_binding_cache_requires_the_pinned_tool_metadata(self):
         import re
         version = re.search(r'golang.org/x/mobile\s+(v\S+)', (android_build.ANDROID/'core/go.mod').read_text())[1]
-        expected = 'path\tgolang.org/x/mobile/cmd/gomobile\nmod\tgolang.org/x/mobile\t' + version + '\thash\n'
+        expected = '/tools/gomobile: go1.26.0\npath\tgolang.org/x/mobile/cmd/gomobile\nmod\tgolang.org/x/mobile\t' + version + '\thash\n'
         with patch.object(android_build.shutil, 'which', return_value='/tools/gomobile'), \
+             patch.object(android_build.subprocess, 'check_output', return_value='go1.26.0\n'), \
              patch.object(android_build.subprocess, 'run') as inspect, patch.object(android_build, 'run') as install:
             inspect.return_value = subprocess.CompletedProcess([], 0, expected, '')
             android_build.ensure_binding_tool('gomobile')
             install.assert_not_called()
             inspect.return_value = subprocess.CompletedProcess([], 0, expected.replace(version, 'v0.0.0-outdated'), '')
+            android_build.ensure_binding_tool('gomobile')
+            install.assert_called_once_with(['go', 'install', 'golang.org/x/mobile/cmd/gomobile@' + version])
+            install.reset_mock()
+            inspect.return_value = subprocess.CompletedProcess([], 0, expected.replace('go1.26.0', 'go1.25.0'), '')
             android_build.ensure_binding_tool('gomobile')
             install.assert_called_once_with(['go', 'install', 'golang.org/x/mobile/cmd/gomobile@' + version])
 
