@@ -87,12 +87,13 @@ pub(crate) fn run() -> anyhow::Result<()> {
         }
         file
     };
-    #[cfg(target_os = "linux")]
-    slint::set_xdg_app_id("clash-of-rust")?;
     slint::BackendSelector::new()
         .backend_name("winit".into())
         .renderer_name("software".into())
         .select()?;
+    // The application ID requires a platform, and must precede window creation.
+    #[cfg(target_os = "linux")]
+    slint::set_xdg_app_id("clash-of-rust")?;
     // Publish the native icon before cold font loading and Geo integrity checks.
     let tray_startup = std::sync::Mutex::new(Some(tray::Startup::new(Duration::from_secs(
         if background_start() { 120 } else { 5 },

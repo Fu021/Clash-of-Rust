@@ -3,11 +3,90 @@ import argparse
 import json
 import os
 from pathlib import Path
+import re
+import select
 import shutil
+import signal
+import subprocess
 import sys
+import tempfile
+import time
 
 from build_support import host_system, ROOT, bundle_directory, host_arch, run, sha256, write_json
 from workflow_artifacts import commit, verify_build
+
+
+def linux_gui_smoke():
+    """Boot the installed GUI in an isolated X11/DBus session, without screenshots."""
+    if os.environ.get('GITHUB_ACTIONS') != 'true':
+        raise RuntimeError('Installed GUI tests require a disposable GitHub Actions runner')
+    processes = []
+    with tempfile.TemporaryDirectory(prefix='cor-linux-gui-') as temporary:
+        with (Path(temporary)/'startup.log').open('w+') as log:
+            try:
+                read_fd, write_fd = os.pipe()
+                try:
+                    display = subprocess.Popen(
+                        ['Xvfb', '-displayfd', str(write_fd), '-screen', '0',
+                         '1280x900x24', '-nolisten', 'tcp', '-ac'],
+                        pass_fds=(write_fd,), stdout=log, stderr=subprocess.STDOUT,
+                        start_new_session=True)
+                    processes.append(display)
+                finally:
+                    os.close(write_fd)
+                with os.fdopen(read_fd) as display_output:
+                    if not select.select([display_output], [], [], 10)[0]:
+                        raise RuntimeError('Xvfb did not provide a display within 10 seconds')
+                    number = display_output.readline().strip()
+                if not number.isdecimal() or display.poll() is not None:
+                    raise RuntimeError('Xvfb failed to initialize')
+                env = dict(os.environ, DISPLAY=':'+number,
+                           CLASH_OF_RUST_DATA_DIR=str(Path(temporary)/'profile'),
+                           GSETTINGS_BACKEND='memory')
+                for key in ('WAYLAND_DISPLAY', 'WAYLAND_SOCKET', 'DBUS_SESSION_BUS_ADDRESS'):
+                    env.pop(key, None)
+                application = subprocess.Popen(
+                    ['dbus-run-session', '--', '/opt/clash-of-rust/clash-of-rust'],
+                    env=env, stdout=log, stderr=subprocess.STDOUT, start_new_session=True)
+                processes.append(application)
+                deadline = time.monotonic()+45
+                while time.monotonic() < deadline:
+                    if application.poll() is not None:
+                        raise RuntimeError(f'Installed GUI exited with status {application.returncode}')
+                    tree = subprocess.check_output(
+                        ['xwininfo', '-root', '-tree'], env=env, text=True, timeout=5)
+                    windows = re.findall(r'^\s*(0x[0-9a-fA-F]+)\s+"Clash of Rust', tree, re.M)
+                    for window in windows:
+                        info = subprocess.check_output(
+                            ['xwininfo', '-id', window], env=env, text=True, timeout=5)
+                        width = re.search(r'Width:\s+(\d+)', info)
+                        height = re.search(r'Height:\s+(\d+)', info)
+                        if ('Map State: IsViewable' in info and width and height
+                                and int(width[1]) >= 800 and int(height[1]) >= 450):
+                            time.sleep(2)
+                            if application.poll() is not None:
+                                raise RuntimeError('Installed GUI exited after showing its window')
+                            print(f'Installed Linux GUI started: {width[1]}×{height[1]} mapped window',
+                                  flush=True)
+                            return
+                    time.sleep(0.25)
+                raise RuntimeError('Installed GUI did not show a usable window within 45 seconds')
+            except Exception:
+                log.flush()
+                log.seek(0)
+                print(log.read(), flush=True)
+                raise
+            finally:
+                for process in reversed(processes):
+                    try:
+                        os.killpg(process.pid, signal.SIGTERM)
+                    except ProcessLookupError:
+                        pass
+                    try:
+                        process.wait(timeout=5)
+                    except subprocess.TimeoutExpired:
+                        os.killpg(process.pid, signal.SIGKILL)
+                        process.wait(timeout=5)
 
 
 def linux_package_tests(package, tun_test, structure=True):
@@ -22,6 +101,7 @@ def linux_package_tests(package, tun_test, structure=True):
         run(['sudo', 'apt-get', 'install', '-y', 'systemd-resolved'])
     run([sys.executable, ROOT/'scripts/test-proxy-modes.py',
          '--test-binary', tun_test, '--bundle', '/opt/clash-of-rust'])
+    linux_gui_smoke()
 
 
 def run_compatibility():
@@ -48,7 +128,8 @@ def run_compatibility():
            'Acquire::https::Timeout=30', '-o', 'Acquire::Retries=2', '-o',
            'Acquire::Languages=none']
     run([*apt, '-o', 'APT::Update::Error-Mode=any', 'update'], timeout=300)
-    run([*apt, 'install', '-y', 'dbus', 'iproute2', 'util-linux', 'libcap2-bin'], timeout=600)
+    run([*apt, 'install', '-y', 'dbus', 'iproute2', 'util-linux', 'libcap2-bin',
+         'xvfb', 'x11-utils'], timeout=600)
     # Package structure was tested in the native packaging job. This job tests
     # its proxy and routing against the newer distribution, without repackaging.
     linux_package_tests(packages[0], binary, structure=False)
