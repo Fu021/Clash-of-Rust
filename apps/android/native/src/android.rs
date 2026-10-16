@@ -101,6 +101,13 @@ struct RuleForm {
     payload: String,
     policy: String,
 }
+#[derive(Clone)]
+struct RuleEditor {
+    form: RuleForm,
+    raw: String,
+    position: usize,
+    text_mode: bool,
+}
 struct Request {
     intent: MobileIntent,
     a: String,
@@ -130,6 +137,7 @@ struct State {
     connection_page: usize,
     rule_page: usize,
     rule_form: Option<RuleForm>,
+    rule_editor: Option<RuleEditor>,
 }
 
 #[unsafe(no_mangle)]
@@ -280,6 +288,7 @@ async fn run_loop(
         connection_page: 0,
         rule_page: 0,
         rule_form: None,
+        rule_editor: None,
     };
     if let Err(error) = state.session.initialize() {
         state.notice = format!("内核启动失败：{error:#}");
@@ -447,6 +456,7 @@ async fn run_loop(
         let view = project(&state);
         state.completed = None;
         state.rule_form = None;
+        state.rule_editor = None;
         let notice = std::mem::take(&mut state.notice);
         let weak = weak.clone();
         slint::invoke_from_event_loop(move || {
@@ -671,6 +681,36 @@ async fn handle(state: &mut State, request: Request) -> Result<()> {
             session.native.request(json!({"op":"export","name":"clash-of-rust-logs.txt",
                 "content":state.logs.iter().map(|(level,line)|format!("[{level}] {line}")).collect::<Vec<_>>().join("\n")}))?;
         }
+        MobileIntent::RuleEdit => {
+            let (rows, _) = session.document()?.rows(&session.draft);
+            let (index, row) = rows
+                .iter()
+                .enumerate()
+                .find(|(_, row)| row.id == a)
+                .context("规则已不存在，请重新选择")?;
+            let parts = rule_manager::parts(&row.raw)?;
+            let text_mode = parts.no_resolve
+                || ![
+                    "DOMAIN-SUFFIX",
+                    "DOMAIN",
+                    "IP-CIDR",
+                    "IP-CIDR6",
+                    "GEOIP",
+                    "GEOSITE",
+                    "RULE-SET",
+                ]
+                .contains(&parts.kind);
+            state.rule_editor = Some(RuleEditor {
+                form: RuleForm {
+                    kind: parts.kind.into(),
+                    payload: parts.payload.into(),
+                    policy: parts.policy.into(),
+                },
+                raw: row.raw.to_string(),
+                position: index + 1,
+                text_mode,
+            });
+        }
         MobileIntent::RuleSave => {
             session.save_rule(&selected, &a, b.parse()?)?;
             state.notice = "已保存到草稿，请应用修改".into();
@@ -885,6 +925,7 @@ struct Projection {
     connection_page: (usize, usize),
     rule_page: (usize, usize),
     rule_form: Option<RuleForm>,
+    rule_editor: Option<RuleEditor>,
 }
 struct ReportRow {
     id: String,
@@ -1177,6 +1218,7 @@ fn project(state: &State) -> Projection {
         connection_page: (connection_page, connection_count),
         rule_page: (rule_page, rule_count),
         rule_form: state.rule_form.clone(),
+        rule_editor: state.rule_editor.clone(),
         policies: document.map(|d| d.policies).unwrap_or_default(),
         shortcuts: s.draft.enabled,
         dirty: s.draft != *saved,
@@ -1228,6 +1270,20 @@ fn apply(ui: &AndroidWindow, p: Projection) {
             view.set_rule_policy(parts.policy.into());
         }
         view.set_rule_text_mode(false);
+    }
+    if let Some(editor) = p.rule_editor {
+        let view = ui.global::<MobileView>();
+        view.set_rule_kind(editor.form.kind.into());
+        view.set_rule_payload(editor.form.payload.into());
+        view.set_rule_policy(editor.form.policy.into());
+        view.set_rule_raw(editor.raw.into());
+        view.set_rule_position(editor.position.to_string().into());
+        view.set_rule_text_mode(editor.text_mode);
+        view.set_draft_dirty(false);
+        ui.set_current_detail(2);
+    }
+    if p.completed == Some(MobileIntent::RuleSelect) {
+        ui.global::<MobileView>().set_rule_selected(false);
     }
     data.set_protection_supported(false);
     data.set_upload_rate(p.rates.0.into());
@@ -1510,6 +1566,16 @@ fn apply(ui: &AndroidWindow, p: Projection) {
                 .collect(),
         ),
     ));
+    if ui.get_current_page() == 4 && ui.global::<MobileView>().get_rule_selected() {
+        let view = ui.global::<MobileView>();
+        let selected = view.get_selected_id();
+        if let Some(row) = data.get_rules().iter().find(|r| r.id == selected) {
+            view.set_selected_rule(row);
+        } else {
+            view.set_rule_selected(false);
+            view.set_selected_id("".into());
+        }
+    }
     data.set_logs(stable(
         data.get_logs(),
         rows(

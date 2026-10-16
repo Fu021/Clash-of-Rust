@@ -43,9 +43,8 @@ export component MobileDetails inherits Rectangle {
             if MobileView.detail == 3: MCard {
                 MSmall { text: "订阅名称"; }
                 MField { placeholder: "输入名称"; text <=> MobileView.profile-name; edited(value) => { MobileView.draft-dirty = true; } }
-                MSmall { text: "订阅地址或本地文件"; }
+                MSmall { text: "订阅地址（本地配置可留空）"; }
                 MField { placeholder: "https://example.com/subscription"; text <=> MobileView.profile-source; edited(value) => { MobileView.draft-dirty = true; } }
-                MButton { text: "选择文件"; clicked => { MobileActions.request(MobileIntent.pick-file, "profile", ""); } }
             }
             if MobileView.detail == 6: VerticalLayout { spacing: 12px;
                 HorizontalLayout { spacing: 8px;

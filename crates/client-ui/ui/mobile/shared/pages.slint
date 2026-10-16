@@ -204,7 +204,7 @@ export component MobileRules inherits Rectangle {
             HorizontalLayout { spacing: 8px;
                 MButton { text: "上移"; clicked => { MobileActions.request(MobileIntent.rule-move, "-1", ""); } }
                 MButton { text: "下移"; clicked => { MobileActions.request(MobileIntent.rule-move, "1", ""); } }
-                MButton { text: "编辑"; clicked => { MobileView.rule-payload = MobileView.selected-rule.value; MobileView.rule-kind = MobileView.selected-rule.kind; MobileView.rule-policy = MobileView.selected-rule.policy; MobileView.rule-position = MobileView.selected-rule.position; MobileView.detail = 2; } }
+                MButton { text: MobileView.selected-rule.source == "自定义" ? "编辑" : "复制编辑"; clicked => { MobileActions.request(MobileIntent.rule-edit, MobileView.selected-id, ""); } }
                 MButton { text: "删除"; danger: true; clicked => { MobileActions.request(MobileIntent.rule-delete, MobileView.selected-id, ""); } }
             }
         }
