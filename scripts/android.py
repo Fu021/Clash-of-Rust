@@ -164,9 +164,18 @@ def build(arch):
     # Googlesource mirror has returned 503; git-sync-deps still verifies the
     # exact DEPS commit. Scope the rewrite to this build, not global Git config.
     git_config = int(env.get('GIT_CONFIG_COUNT', '0'))
-    env['GIT_CONFIG_COUNT'] = str(git_config + 1)
-    env[f'GIT_CONFIG_KEY_{git_config}'] = 'url.https://github.com/harfbuzz/harfbuzz.git.insteadOf'
-    env[f'GIT_CONFIG_VALUE_{git_config}'] = 'https://chromium.googlesource.com/external/github.com/harfbuzz/harfbuzz.git'
+    for key, value in (
+        ('url.https://github.com/harfbuzz/harfbuzz.git.insteadOf',
+         'https://chromium.googlesource.com/external/github.com/harfbuzz/harfbuzz.git'),
+        # Google's ICU mirror has failed during HTTP/2/Git v2 pack negotiation.
+        # The same pinned commit is accessible with the conservative protocols.
+        ('http.version', 'HTTP/1.1'),
+        ('protocol.version', '1'),
+    ):
+        env[f'GIT_CONFIG_KEY_{git_config}'] = key
+        env[f'GIT_CONFIG_VALUE_{git_config}'] = value
+        git_config += 1
+    env['GIT_CONFIG_COUNT'] = str(git_config)
     env.update({
         'CARGO_TARGET_'+target.upper().replace('-', '_')+'_LINKER':str(clang),
         'CC_'+target.replace('-', '_'):str(clang),

@@ -68,7 +68,7 @@ jobs:
           # Skia's build script. Include the crate's unpack marker as well, so
           # Cargo will not discard this tree when extracting the crate again.
           path: ~/.cargo/registry/src/*/skia-bindings-${{ steps.skia.outputs.version }}
-          key: skia-source-linux-${{ steps.skia.outputs.version }}-${{ steps.skia.outputs.checksum }}
+          key: skia-source-${{ runner.os }}-${{ runner.arch }}-${{ steps.skia.outputs.version }}-${{ steps.skia.outputs.checksum }}
       - uses: actions/setup-java@v5
         with:
           distribution: temurin
