@@ -10,6 +10,7 @@ import subprocess
 import unittest
 from unittest.mock import patch
 import build_support as build
+import android as android_build
 import copy
 import importlib.util
 import io
@@ -27,6 +28,15 @@ _defender_spec.loader.exec_module(defender)
 
 
 class BuildTests(unittest.TestCase):
+    def test_android_identity_accepts_old_and_current_aapt2_but_rejects_wrong_hosts(self):
+        identity="package: name='org.clashofrust.android' versionCode='1000281' versionName='0.5.12-dev.1'\n"
+        for name in ('sdkVersion','minSdkVersion'):
+            output=identity+name+":'26'\ntargetSdkVersion:'36'\n"
+            self.assertEqual(android_build.apk_identity(output,'0.5.12-dev.1'),1000281)
+            for invalid in (output.replace(":'26'",":'25'"),output.replace(":'36'",":'35'"),
+                            output.replace('org.clashofrust.android','another.app'),output.replace('0.5.12-dev.1','0.5.11')):
+                with self.assertRaises(ValueError): android_build.apk_identity(invalid,'0.5.12-dev.1')
+
     def test_shared_core_has_no_desktop_toolkit_or_host_dependency(self):
         core = tomllib.loads((build.core_directory()/'Cargo.toml').read_text())
         # Mobile hosts must be able to use all shared policies without linking

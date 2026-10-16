@@ -93,12 +93,23 @@ def validate_apk(path, arch):
                'native_bytes':sum(archive.getinfo(n).file_size for n in libraries)}
     tool=Path(os.environ['ANDROID_HOME'])/'build-tools/36.0.0/aapt2'
     metadata=subprocess.check_output([str(tool),'dump','badging',str(path)],text=True)
+    report=ROOT/'target/android-report'/arch
+    report.mkdir(parents=True,exist_ok=True)
+    (report/'apk-badging.txt').write_text(metadata)
+    return {**sizes,'version_code':apk_identity(metadata,package_version())}
+
+
+def apk_identity(metadata, version):
     package=re.search(r"package: name='([^']+)' versionCode='([0-9]+)' versionName='([^']+)'",metadata)
-    if not package or package[1]!='org.clashofrust.android' or package[3]!=package_version():
+    if not package or package[1]!='org.clashofrust.android' or package[3]!=version:
         raise ValueError('APK package/version differs from source')
-    if "sdkVersion:'26'" not in metadata or "targetSdkVersion:'36'" not in metadata:
+    # Current aapt2 calls this minSdkVersion; older versions print sdkVersion.
+    minimum=re.search(r"(?m)^(?:minSdkVersion|sdkVersion):'([0-9]+)'$",metadata)
+    target=re.search(r"(?m)^targetSdkVersion:'([0-9]+)'$",metadata)
+    if not minimum or minimum[1]!='26' or not target or target[1]!='36':
         raise ValueError('APK SDK range differs from selected Android host')
-    return {**sizes,'version_code':int(package[2])}
+    return int(package[2])
+
 
 
 def build(arch):
