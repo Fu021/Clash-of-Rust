@@ -20,6 +20,7 @@ public final class TunnelService extends VpnService {
     // One process-wide queue also orders cleanup against a newly created service.
     private static final ExecutorService serial = Executors.newSingleThreadExecutor();
     private ParcelFileDescriptor descriptor;
+    private String interfaceName;
     private boolean stopping;
     static boolean connected() { return connected; }
     static String error() { return lastError; }
@@ -77,19 +78,26 @@ public final class TunnelService extends VpnService {
             // Establish before closing the old interface. Android deactivates
             // the old VPN atomically when the replacement succeeds; closing it
             // first exposes the underlying network during every reconfigure.
-            ProtectionRuntime.pause(this);
-            if (previous == null) Mobile.setProtector(fd -> protect(fd));
-            replacement = builder.establish();
-            if (replacement == null) throw new IllegalStateException("系统拒绝建立 VPN");
-            established = true;
-            connected = false;
-            if (previous != null) Mobile.stopTun();
-            android.util.Log.i("ClashOfRust", "VPN established; starting embedded TUN");
-            Mobile.startTun(replacement.getFd(), ipv6);
-            descriptor = replacement;
-            replacement = null;
-            closeDescriptor(previous);
-            previous = null;
+            try (VpnRouting routes=new VpnRouting(this,previous==null ? null : interfaceName,ipv6)) {
+                ProtectionRuntime.pause(this);
+                if (previous == null) Mobile.setProtector(fd -> protect(fd));
+                replacement = builder.establish();
+                if (replacement == null) throw new IllegalStateException("系统拒绝建立 VPN");
+                established = true;
+                connected = false;
+                if (previous != null) Mobile.stopTun();
+                android.util.Log.i("ClashOfRust", "VPN established; starting embedded TUN");
+                Mobile.startTun(replacement.getFd(), ipv6);
+                descriptor = replacement;
+                replacement = null;
+                // The VPN Network object can remain unchanged while netd is
+                // still moving its routes. Publish readiness only after the
+                // new interface arrives through the ordered network callback.
+                interfaceName=routes.await();
+                closeDescriptor(previous);
+                previous = null;
+                android.util.Log.i("ClashOfRust", "VPN routing ready on "+interfaceName);
+            }
             connected = true; lastError = "";
             generation++;
             ProtectionRuntime.sync(this);
@@ -141,6 +149,7 @@ public final class TunnelService extends VpnService {
         try { Mobile.stopTun(); } catch (Exception error) { android.util.Log.e("ClashOfRust", "Stop TUN", error); }
         closeDescriptor(descriptor);
         descriptor = null;
+        interfaceName = null;
         Mobile.setProtector(null);
         try { ProtectionRuntime.sync(this); }
         catch (Exception error) { android.util.Log.e("ClashOfRust", "Stop protection", error); }
