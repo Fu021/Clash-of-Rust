@@ -213,7 +213,8 @@ class EvidenceTests(unittest.TestCase):
         denied = manager.SECCOMP_RET_ERRNO | manager.EPERM
         self.assertEqual(evaluate(arch, syscalls["unshare"]), denied)
         self.assertEqual(evaluate(arch, syscalls["setns"]), denied)
-        self.assertEqual(evaluate(arch, syscalls["clone3"]), denied)
+        self.assertEqual(evaluate(arch, syscalls["clone3"]),
+                         manager.SECCOMP_RET_ERRNO | manager.ENOSYS)
         self.assertEqual(evaluate(arch, syscalls["clone"]), manager.SECCOMP_RET_ALLOW)
         self.assertEqual(
             evaluate(arch, syscalls["clone"], manager.CLONE_NAMESPACE_FLAGS & -manager.CLONE_NAMESPACE_FLAGS),

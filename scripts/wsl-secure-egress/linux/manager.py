@@ -61,6 +61,7 @@ SYSCALLS = {
 SECCOMP_RET_ERRNO = 0x00050000
 SECCOMP_RET_ALLOW = 0x7FFF0000
 EPERM = 1
+ENOSYS = 38
 CLONE_NAMESPACE_FLAGS = (
     0x00000080  # CLONE_NEWTIME
     | 0x00020000  # CLONE_NEWNS
@@ -204,7 +205,7 @@ def seccomp_filter():
     label('check_setns')
     jump(bpf_jmp_jeq, syscalls['setns'], 'deny', 'check_clone3')
     label('check_clone3')
-    jump(bpf_jmp_jeq, syscalls['clone3'], 'deny', 'check_clone')
+    jump(bpf_jmp_jeq, syscalls['clone3'], 'clone3_unavailable', 'check_clone')
     label('check_clone')
     jump(bpf_jmp_jeq, syscalls['clone'], 'load_clone_flags', 'allow')
     label('load_clone_flags')
@@ -214,6 +215,8 @@ def seccomp_filter():
     stmt(bpf_ret_k, allow)
     label('deny')
     stmt(bpf_ret_k, deny)
+    label('clone3_unavailable')
+    stmt(bpf_ret_k, SECCOMP_RET_ERRNO | ENOSYS)
 
     encoded = bytearray()
     for index, instruction in enumerate(statements):
