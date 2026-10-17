@@ -1,18 +1,476 @@
-name: Rust
+name: CI
 on:
   push:
     branches: [main, feat/wsl-secure-egress]
   pull_request:
   workflow_dispatch:
+env:
+  SEGMENT_DOWNLOAD_TIMEOUT_MINS: '2'
+  BUILD_INPUTS_DIR: dependency-snapshot
 permissions:
   contents: read
 concurrency:
   group: ci-${{ github.event.pull_request.number || github.ref }}
   cancel-in-progress: true
 jobs:
+  inputs:
+    name: Resolve build inputs
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    permissions:
+      contents: read
+      id-token: write
+    outputs:
+      go: ${{ steps.go.outputs.go-version }}
+      resources: ${{ steps.resolve.outputs.resources }}
+      tailscale: ${{ steps.resolve.outputs.tailscale }}
+      gradle: ${{ steps.resolve.outputs.gradle }}
+      nsis: ${{ steps.resolve.outputs.nsis }}
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          persist-credentials: false
+      - uses: actions/setup-python@v6
+        with:
+          python-version: '3.11'
+          check-latest: true
+      - name: Validate common build and package logic
+        env:
+          PYTHONDONTWRITEBYTECODE: '1'
+        run: |
+          node --check .github/actions/local-cache/index.cjs
+          python3 scripts/test-build-tools.py --buffer
+          python3 scripts/test-workflow-artifacts.py --buffer
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: actions/setup-go@v6
+        id: go
+        with:
+          go-version: stable
+          check-latest: true
+          cache: false
+      - name: Connect for dependency snapshot fallback
+        id: tailnet
+        if: vars.TS_OAUTH_CLIENT_ID != '' && vars.TS_AUDIENCE != '' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository)
+        uses: tailscale/github-action@v4
+        continue-on-error: true
+        timeout-minutes: 3
+        with:
+          oauth-client-id: ${{ vars.TS_OAUTH_CLIENT_ID }}
+          audience: ${{ vars.TS_AUDIENCE }}
+          tags: tag:github-action-cache
+          version: '1.94.2'
+          retry: '1'
+          timeout: 45s
+          args: --accept-dns=false
+          tailscaled-args: --tun=userspace-networking --outbound-http-proxy-listen=127.0.0.1:19082
+      - name: Keep runner routing unchanged
+        if: steps.tailnet.outcome == 'success'
+        run: sudo -n tailscale set --accept-routes=false --accept-dns=false
+      - name: Restore GitHub source registry metadata
+        id: source_github
+        uses: actions/cache@v5
+        continue-on-error: true
+        timeout-minutes: 5
+        with:
+          path: |
+            ~/.cargo/registry/index
+            ~/.cargo/registry/cache
+            ~/.cargo/git/db
+          key: source-cargo-${{ hashFiles('Cargo.lock') }}-${{ github.run_id }}-${{ github.run_attempt }}
+          restore-keys: source-cargo-
+      - name: Restore local fallback for source registry metadata
+        uses: ./.github/actions/local-cache
+        with:
+          github-hit: ${{ steps.source_github.outcome == 'success' && steps.source_github.outputs.cache-hit || '' }}
+          github-failed: ${{ steps.source_github.outcome == 'failure' }}
+          url: ${{ steps.tailnet.outcome == 'success' && vars.LOCAL_CACHE_URL || '' }}
+          token: ${{ secrets.LOCAL_CACHE_TOKEN }}
+          group: dependencies/cargo-source
+          paths: |
+            ~/.cargo/registry/index
+            ~/.cargo/registry/cache
+            ~/.cargo/git/db
+          key: source-${{ hashFiles('Cargo.lock') }}-${{ github.run_id }}-${{ github.run_attempt }}
+          restore-keys: source-
+      - name: Restore GitHub source module downloads
+        id: source_go_github
+        uses: actions/cache@v5
+        continue-on-error: true
+        timeout-minutes: 5
+        with:
+          path: |
+            ~/go/pkg/mod/cache/download
+            ~/go/bin/gomobile
+            ~/go/bin/gobind
+          key: source-go-${{ steps.go.outputs.go-version }}-${{ hashFiles('apps/android/core/go.mod', 'apps/android/core/go.sum') }}-${{ github.run_id }}-${{ github.run_attempt }}
+          restore-keys: |
+            source-go-${{ steps.go.outputs.go-version }}-
+            android-go-${{ runner.os }}-${{ runner.arch }}-${{ steps.go.outputs.go-version }}-
+      - name: Restore local fallback for source module downloads
+        uses: ./.github/actions/local-cache
+        with:
+          github-hit: ${{ steps.source_go_github.outcome == 'success' && steps.source_go_github.outputs.cache-hit || '' }}
+          github-failed: ${{ steps.source_go_github.outcome == 'failure' }}
+          url: ${{ steps.tailnet.outcome == 'success' && vars.LOCAL_CACHE_URL || '' }}
+          token: ${{ secrets.LOCAL_CACHE_TOKEN }}
+          group: tools/android-go
+          # Saving large optional mirrors must not delay the platform matrix.
+          # The x64 job writes the same verified mirror after its VPN tests.
+          save: false
+          paths: |
+            ~/go/pkg/mod/cache/download
+            ~/go/bin/gomobile
+            ~/go/bin/gobind
+          key: go-${{ steps.go.outputs.go-version }}-${{ hashFiles('apps/android/core/go.mod', 'apps/android/core/go.sum') }}
+          restore-keys: go-
+      - name: Restore GitHub dependency snapshot
+        id: snapshot_github
+        uses: actions/cache@v5
+        continue-on-error: true
+        timeout-minutes: 5
+        with:
+          path: ${{ env.BUILD_INPUTS_DIR }}
+          key: source-inputs-${{ hashFiles('Cargo.lock', 'Cargo.toml', 'apps/**/Cargo.toml', 'crates/**/Cargo.toml', '.cargo/**', 'apps/android/core/go.*', 'apps/android/**/*.gradle.kts', 'apps/android/gradle.properties') }}-${{ github.run_id }}-${{ github.run_attempt }}
+          restore-keys: source-inputs-
+      - name: Restore local fallback for dependency snapshot
+        uses: ./.github/actions/local-cache
+        with:
+          github-hit: ${{ steps.snapshot_github.outcome == 'success' && steps.snapshot_github.outputs.cache-hit || '' }}
+          github-failed: ${{ steps.snapshot_github.outcome == 'failure' }}
+          url: ${{ steps.tailnet.outcome == 'success' && vars.LOCAL_CACHE_URL || '' }}
+          token: ${{ secrets.LOCAL_CACHE_TOKEN }}
+          group: dependencies/build-inputs
+          paths: ${{ env.BUILD_INPUTS_DIR }}
+          key: source-${{ hashFiles('Cargo.lock', 'Cargo.toml', 'apps/**/Cargo.toml', 'crates/**/Cargo.toml', '.cargo/**', 'apps/android/core/go.*', 'apps/android/**/*.gradle.kts', 'apps/android/gradle.properties') }}-${{ github.run_id }}-${{ github.run_attempt }}
+          restore-keys: |
+            source-${{ hashFiles('Cargo.lock', 'Cargo.toml', 'apps/**/Cargo.toml', 'crates/**/Cargo.toml', '.cargo/**', 'apps/android/core/go.*', 'apps/android/**/*.gradle.kts', 'apps/android/gradle.properties') }}-
+            source-
+      - name: Check upstream and freeze source dependencies
+        id: resolve
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PYTHONDONTWRITEBYTECODE: '1'
+        run: python3 scripts/build_inputs.py resolve
+      - name: Prepare shared Android source downloads
+        run: python3 scripts/build_inputs.py share-go --directory target/shared-go
+      - uses: actions/upload-artifact@v6
+        with:
+          name: android-shared-dependencies
+          path: target/shared-go
+          compression-level: 0
+          retention-days: 3
+          if-no-files-found: error
+      - uses: actions/upload-artifact@v6
+        with:
+          name: dependency-snapshot
+          path: ${{ env.BUILD_INPUTS_DIR }}
+          retention-days: 3
+          if-no-files-found: error
+  android:
+    name: android-${{ matrix.arch }}
+    needs: inputs
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      id-token: write
+    timeout-minutes: 60
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - arch: arm64
+            target: aarch64-linux-android
+          - arch: armv7
+            target: armv7-linux-androideabi
+          - arch: x64
+            target: x86_64-linux-android
+    env:
+      PYTHONDONTWRITEBYTECODE: '1'
+      ANDROID_CI_TEST: '1'
+      GOCACHE: ${{ github.workspace }}/target/go-build
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          persist-credentials: false
+          fetch-depth: 0
+      - uses: actions/setup-python@v6
+        with:
+          python-version: '3.11'
+          check-latest: true
+      - uses: actions/download-artifact@v7
+        with:
+          name: dependency-snapshot
+          path: ${{ env.BUILD_INPUTS_DIR }}
+      - name: Apply the resolved source dependency snapshot
+        shell: python
+        run: |
+          import subprocess, sys
+          subprocess.run([sys.executable, 'scripts/build_inputs.py', 'apply'], check=True)
+      - name: Connect to private cache network
+        id: tailnet
+        if: vars.TS_OAUTH_CLIENT_ID != '' && vars.TS_AUDIENCE != '' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository)
+        uses: tailscale/github-action@v4
+        timeout-minutes: 3
+        continue-on-error: true
+        with:
+          oauth-client-id: ${{ vars.TS_OAUTH_CLIENT_ID }}
+          audience: ${{ vars.TS_AUDIENCE }}
+          tags: tag:github-action-cache
+          version: ${{ needs.inputs.outputs.tailscale }}
+          retry: '1'
+          timeout: 45s
+          args: --accept-dns=false
+          tailscaled-args: --tun=userspace-networking --outbound-http-proxy-listen=127.0.0.1:19082
+      - name: Preserve host routing after private cache login
+        if: steps.tailnet.outcome == 'success'
+        shell: python
+        run: |
+          import os, shutil, subprocess
+          # The official action supplies --accept-routes itself. Passing it a
+          # second time is rejected; turn it off after login, before any tests.
+          command = [shutil.which('tailscale') or 'tailscale', 'set', '--accept-routes=false', '--accept-dns=false']
+          if os.name != 'nt': command = ['sudo', '-n', *command]
+          subprocess.run(command, check=True)
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+          components: clippy
+      - uses: Swatinem/rust-cache@v2
+        timeout-minutes: 5
+        continue-on-error: true
+        id: rust_github
+        with:
+          prefix-key: android-v2-${{ matrix.arch }}
+          cache-on-failure: false
+          cache-bin: false
+          cache-workspace-crates: false
+          # GitHub keeps dependency objects; the local tier retains the full mirror.
+          save-if: true
+      - name: Restore local fallback for Android Rust cache
+        id: rust_local
+        uses: ./.github/actions/local-cache
+        with:
+          github-hit: ${{ steps.rust_github.outcome == 'success' && steps.rust_github.outputs.cache-hit || '' }}
+          github-failed: ${{ steps.rust_github.outcome == 'failure' }}
+          url: ${{ steps.tailnet.outcome == 'success' && vars.LOCAL_CACHE_URL || '' }}
+          token: ${{ secrets.LOCAL_CACHE_TOKEN }}
+          group: rust/android-${{ matrix.arch }}
+          kind: rust
+          key: release-${{ matrix.target }}
+      - name: Identify Skia source dependency
+        if: matrix.arch == 'armv7'
+        id: skia
+        shell: python
+        run: |
+          import os, pathlib, tomllib
+          lock = tomllib.loads(pathlib.Path('Cargo.lock').read_text())
+          package = next(p for p in lock['package'] if p['name'] == 'skia-bindings')
+          with open(os.environ['GITHUB_OUTPUT'], 'a') as output:
+              output.write('version=' + package['version'] + '\n')
+              output.write('checksum=' + package['checksum'] + '\n')
+      - name: Restore GitHub ARMv7 Skia source cache
+        if: matrix.arch == 'armv7'
+        uses: actions/cache@v5
+        timeout-minutes: 5
+        continue-on-error: true
+        id: skia_github
+        with:
+          # Cargo's normal registry cache excludes the sources downloaded by
+          # Skia's build script. Include the crate's unpack marker as well, so
+          # Cargo will not discard this tree when extracting the crate again.
+          path: ~/.cargo/registry/src/*/skia-bindings-${{ steps.skia.outputs.version }}
+          key: skia-source-${{ runner.os }}-${{ runner.arch }}-${{ steps.skia.outputs.version }}-${{ steps.skia.outputs.checksum }}
+      - name: Restore local fallback for ARMv7 Skia source dependencies
+        id: skia_local
+        if: matrix.arch == 'armv7'
+        uses: ./.github/actions/local-cache
+        with:
+          github-hit: ${{ steps.skia_github.outcome == 'success' && steps.skia_github.outputs.cache-hit || '' }}
+          github-failed: ${{ steps.skia_github.outcome == 'failure' }}
+          url: ${{ steps.tailnet.outcome == 'success' && vars.LOCAL_CACHE_URL || '' }}
+          token: ${{ secrets.LOCAL_CACHE_TOKEN }}
+          group: dependencies/skia-armv7
+          immutable: true
+          key: ${{ runner.os }}-${{ runner.arch }}-${{ steps.skia.outputs.version }}-${{ steps.skia.outputs.checksum }}
+          paths: ~/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/skia-bindings-${{ steps.skia.outputs.version }}
+      - uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: '17'
+      - uses: actions/setup-go@v6
+        id: go
+        with:
+          go-version: ${{ needs.inputs.outputs.go }}
+          # Cache modules/tools below; the Go build directory is disposable.
+          cache: false
+      - uses: actions/download-artifact@v7
+        with:
+          name: android-shared-dependencies
+          path: target/shared-go
+      - name: Restore verified shared source downloads
+        run: python3 scripts/build_inputs.py restore-go --directory target/shared-go
+      - name: Register verified source mirror for background saving
+        if: matrix.arch == 'x64'
+        uses: ./.github/actions/local-cache
+        with:
+          # The artifact already supplied all files. Never download them again.
+          github-hit: 'true'
+          url: ${{ steps.tailnet.outcome == 'success' && vars.LOCAL_CACHE_URL || '' }}
+          token: ${{ secrets.LOCAL_CACHE_TOKEN }}
+          group: tools/android-go
+          paths: |
+            ~/go/pkg/mod/cache/download
+            ~/go/bin/gomobile
+            ~/go/bin/gobind
+          key: go-${{ needs.inputs.outputs.go }}-${{ hashFiles('apps/android/core/go.mod', 'apps/android/core/go.sum') }}
+          restore-keys: go-
+      - name: Restore GitHub Android Go compilation results
+        id: go_build_github
+        uses: actions/cache@v5
+        continue-on-error: true
+        timeout-minutes: 5
+        with:
+          path: ${{ env.GOCACHE }}
+          key: android-go-build-${{ matrix.arch }}-${{ needs.inputs.outputs.go }}-${{ hashFiles('apps/android/core/**', 'scripts/android.py', '.github/workflows/ci.yml') }}
+          restore-keys: android-go-build-${{ matrix.arch }}-${{ needs.inputs.outputs.go }}-
+      - name: Restore local fallback for Android Go compilation
+        uses: ./.github/actions/local-cache
+        with:
+          github-hit: ${{ steps.go_build_github.outcome == 'success' && steps.go_build_github.outputs.cache-hit || '' }}
+          github-failed: ${{ steps.go_build_github.outcome == 'failure' }}
+          url: ${{ steps.tailnet.outcome == 'success' && vars.LOCAL_CACHE_URL || '' }}
+          token: ${{ secrets.LOCAL_CACHE_TOKEN }}
+          group: compiler/android-go-${{ matrix.arch }}
+          paths: ${{ env.GOCACHE }}
+          immutable: true
+          key: go-${{ needs.inputs.outputs.go }}-${{ hashFiles('apps/android/core/**', 'scripts/android.py', '.github/workflows/ci.yml') }}
+          restore-keys: go-${{ needs.inputs.outputs.go }}-
+      - name: Restore GitHub Gradle dependencies and distribution
+        id: gradle_github
+        uses: actions/cache@v5
+        continue-on-error: true
+        timeout-minutes: 5
+        with:
+          key: gradle-linux-${{ needs.inputs.outputs.gradle }}-java-17-${{ hashFiles('apps/android/**/*.gradle.kts', 'apps/android/gradle.properties') }}
+          restore-keys: gradle-linux-
+          path: |
+            ~/.gradle/caches/modules-2
+            ~/.gradle/permwrapper/dists
+            ~/.gradle/wrapper/dists
+      - name: Restore local fallback for Gradle dependencies and distribution
+        id: gradle_local
+        uses: ./.github/actions/local-cache
+        with:
+          github-hit: ${{ steps.gradle_github.outcome == 'success' && steps.gradle_github.outputs.cache-hit || '' }}
+          github-failed: ${{ steps.gradle_github.outcome == 'failure' }}
+          url: ${{ steps.tailnet.outcome == 'success' && vars.LOCAL_CACHE_URL || '' }}
+          token: ${{ secrets.LOCAL_CACHE_TOKEN }}
+          group: dependencies/gradle-linux
+          immutable: true
+          save: ${{ matrix.arch == 'x64' }}
+          key: gradle-${{ needs.inputs.outputs.gradle }}-java-17-${{ hashFiles('apps/android/**/*.gradle.kts', 'apps/android/gradle.properties') }}
+          paths: |
+            ~/.gradle/caches/modules-2
+            ~/.gradle/permwrapper/dists
+            ~/.gradle/wrapper/dists
+          restore-keys: gradle-
+      - uses: gradle/actions/setup-gradle@v5
+        with:
+          gradle-version: ${{ needs.inputs.outputs.gradle }}
+          cache-disabled: true
+      - name: Load stable development signature when configured
+        shell: python
+        env:
+          DEV_KEYSTORE: ${{ secrets.ANDROID_DEV_KEYSTORE }}
+          DEV_PASSWORD: ${{ secrets.ANDROID_DEV_KEYSTORE_PASSWORD }}
+        run: |
+          import base64, os, pathlib
+          if os.environ.get('DEV_KEYSTORE') and os.environ.get('DEV_PASSWORD'):
+              password=os.environ['DEV_PASSWORD']
+              if '\n' in password or '\r' in password: raise ValueError('Invalid signing password')
+              path=pathlib.Path(os.environ['RUNNER_TEMP'])/'android-development.p12'
+              path.write_bytes(base64.b64decode(os.environ['DEV_KEYSTORE'],validate=True))
+              path.chmod(0o600)
+              with open(os.environ['GITHUB_ENV'],'a') as out:
+                  out.write('ANDROID_KEYSTORE_PATH='+str(path)+'\n')
+                  out.write('ANDROID_KEY_ALIAS=cor-android-dev\n')
+                  out.write('ANDROID_KEYSTORE_PASSWORD='+password+'\n')
+                  out.write('ANDROID_KEY_PASSWORD='+password+'\n')
+          else:
+              print('Using an ephemeral CI test signature; APKs from different CI runs cannot replace one another.')
+      - name: Prepare Android toolchain
+        shell: python
+        run: |
+          import os, pathlib, subprocess
+          sdk=pathlib.Path(os.environ['ANDROID_HOME'])
+          manager=sdk/'cmdline-tools/latest/bin/sdkmanager'
+          subprocess.run([str(manager),'platforms;android-36','build-tools;36.0.0','ndk;28.2.13676358'],check=True)
+          with open(os.environ['GITHUB_ENV'],'a') as out:
+              out.write('ANDROID_NDK_ROOT='+str(sdk/'ndk/28.2.13676358')+'\n')
+      - name: Restore GitHub Android Geo resources
+        id: geo_github
+        uses: actions/cache@v5
+        continue-on-error: true
+        timeout-minutes: 5
+        with:
+          path: apps/android/app/offline-assets
+          key: resources-android-${{ needs.inputs.outputs.resources }}
+          restore-keys: resources-android-
+      - name: Restore local fallback for Android Geo resources
+        uses: ./.github/actions/local-cache
+        with:
+          github-hit: ${{ steps.geo_github.outcome == 'success' && steps.geo_github.outputs.cache-hit || '' }}
+          github-failed: ${{ steps.geo_github.outcome == 'failure' }}
+          url: ${{ steps.tailnet.outcome == 'success' && vars.LOCAL_CACHE_URL || '' }}
+          token: ${{ secrets.LOCAL_CACHE_TOKEN }}
+          group: resources/android
+          immutable: true
+          save: ${{ matrix.arch == 'x64' }}
+          paths: apps/android/app/offline-assets
+          key: resources-${{ needs.inputs.outputs.resources }}
+          restore-keys: resources-
+      - name: Compile Android application and embedded core
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: python3 scripts/android.py build --arch ${{ matrix.arch }}
+      - name: Start Android test device
+        if: matrix.arch == 'x64'
+        run: |
+          sudo chmod a+rw /dev/kvm
+          python3 scripts/android.py emulator --arch x64
+      - name: Verify real Android proxy and TUN traffic
+        if: matrix.arch == 'x64'
+        run: python3 scripts/android.py test --arch x64
+      - name: Export tested Android compilation
+        run: python3 scripts/android.py export --arch ${{ matrix.arch }}
+      - uses: actions/upload-artifact@v6
+        with:
+          name: build-android-${{ matrix.arch }}
+          path: |
+            dist/android-build/build.tar.gz
+            dist/android-build/build.tar.gz.sha256
+          compression-level: 0
+          if-no-files-found: error
+          retention-days: 3
+      - uses: actions/upload-artifact@v6
+        if: always()
+        with:
+          name: android-report-${{ matrix.arch }}
+          path: |
+            target/android-report
+            apps/android/core/go.mod
+            apps/android/core/go.sum
+          if-no-files-found: warn
+          retention-days: 3
   check:
     name: ${{ matrix.system }}-${{ matrix.arch }}
+    needs: inputs
     timeout-minutes: 60
+    permissions:
+      contents: read
+      id-token: write
     strategy:
       fail-fast: false
       matrix:
@@ -61,36 +519,150 @@ jobs:
           # Preserve one immutable source identity for PR builds and packaging.
           ref: ${{ github.event.pull_request.head.sha || github.sha }}
           persist-credentials: false
+      - uses: actions/setup-python@v6
+        with:
+          python-version: ${{ matrix.python }}
+          check-latest: true
+          architecture: ${{ matrix.arch }}
+      - uses: actions/download-artifact@v7
+        with:
+          name: dependency-snapshot
+          path: ${{ env.BUILD_INPUTS_DIR }}
+      - name: Apply the resolved source dependency snapshot
+        shell: python
+        run: |
+          import subprocess, sys
+          subprocess.run([sys.executable, 'scripts/build_inputs.py', 'apply'], check=True)
+      - name: Remember original macOS DNS before cache login
+        if: runner.os == 'macOS'
+        id: original_dns
+        shell: python
+        run: |
+          import subprocess, sys
+          subprocess.run([sys.executable, 'scripts/action_cache.py', 'network-save'], check=True)
+      - name: Connect to private cache network
+        id: tailnet
+        if: vars.TS_OAUTH_CLIENT_ID != '' && vars.TS_AUDIENCE != '' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository)
+        uses: tailscale/github-action@v4
+        timeout-minutes: ${{ runner.os == 'macOS' && 8 || 3 }}
+        continue-on-error: true
+        with:
+          oauth-client-id: ${{ vars.TS_OAUTH_CLIENT_ID }}
+          audience: ${{ vars.TS_AUDIENCE }}
+          tags: tag:github-action-cache
+          version: ${{ needs.inputs.outputs.tailscale }}
+          retry: '1'
+          timeout: 45s
+          args: --accept-dns=false
+          tailscaled-args: --tun=userspace-networking --outbound-http-proxy-listen=127.0.0.1:19082
+      - name: Restore macOS DNS after cache login
+        if: always() && runner.os == 'macOS' && steps.original_dns.outcome == 'success'
+        shell: python
+        run: |
+          import subprocess, sys
+          subprocess.run([sys.executable, 'scripts/action_cache.py', 'network-restore'], check=True)
+      - name: Preserve host routing after private cache login
+        if: steps.tailnet.outcome == 'success'
+        shell: python
+        run: |
+          import os, shutil, subprocess
+          # The official action supplies --accept-routes itself. Passing it a
+          # second time is rejected; turn it off after login, before any tests.
+          command = [shutil.which('tailscale') or 'tailscale', 'set', '--accept-routes=false', '--accept-dns=false']
+          if os.name != 'nt': command = ['sudo', '-n', *command]
+          subprocess.run(command, check=True)
       - uses: dtolnay/rust-toolchain@stable
         with:
           toolchain: stable-${{ matrix.target }}
           components: rustfmt, clippy
       - uses: Swatinem/rust-cache@v2
+        timeout-minutes: 5
+        continue-on-error: true
+        id: rust_github
         with:
-          prefix-key: native-release-${{ matrix.os }}
-          cache-on-failure: true
-      - uses: actions/setup-python@v6
-        with:
-          python-version: ${{ matrix.python }}
-          architecture: ${{ matrix.arch }}
-      - name: Verify architecture and select resource cache date
-        id: environment
+          prefix-key: native-release-v2-${{ matrix.os }}
+          key: ${{ (runner.os == 'macOS' || runner.os == 'Windows') && format('workspace-{0}', hashFiles('apps/**/*.rs', 'crates/**/*.rs', 'crates/**/*.slint', 'resources/**')) || '' }}
+          cache-on-failure: false
+          cache-bin: false
+          # Source hashes are checked before restoring workspace mtimes; changed
+          # crates are invalidated explicitly, even for an older source branch.
+          cache-workspace-crates: ${{ runner.os == 'macOS' || runner.os == 'Windows' }}
+          cache-directories: ${{ runner.temp }}/workspace-sources
+          save-if: true
+      - name: Check whether native dependency objects were restored
+        id: rust_paths
         run: |
-          import subprocess, sys, os, datetime
+          import os, pathlib, sys
+          sys.path.insert(0, 'scripts')
+          from action_cache import github_restored
+          cargo = pathlib.Path(os.environ.get('CARGO_HOME', str(pathlib.Path.home()/'.cargo')))
+          with open(os.environ['GITHUB_ENV'], 'a') as environment:
+              environment.write('WORKSPACE_SOURCE_CACHE=' + str(pathlib.Path(os.environ['RUNNER_TEMP'])/'workspace-sources/source.json') + '\n')
+          with open(os.environ['GITHUB_OUTPUT'], 'a') as output:
+              output.write('needed=' + str(not github_restored({'kind':'rust', 'source':'.', 'github_hit':'false'})).lower() + '\n')
+              for name, path in [('registry', cargo/'registry'), ('git', cargo/'git'), ('target', pathlib.Path('target').absolute())]:
+                  output.write(name + '=' + str(path) + '\n')
+      - name: Restore compatible GitHub workspace compilation
+        id: rust_fallback
+        if: steps.rust_paths.outputs.needed == 'true' && (runner.os == 'macOS' || runner.os == 'Windows')
+        uses: actions/cache/restore@v5
+        continue-on-error: true
+        timeout-minutes: 5
+        with:
+          # A source-specific exact key must still restore prior dependency and
+          # workspace objects. These paths match rust-cache's archive version.
+          path: |
+            ${{ steps.rust_paths.outputs.registry }}
+            ${{ steps.rust_paths.outputs.git }}
+            ${{ steps.rust_paths.outputs.target }}
+            ${{ runner.temp }}/workspace-sources
+          key: native-release-v2-${{ matrix.os }}-fallback-${{ github.run_id }}
+          restore-keys: native-release-v2-${{ matrix.os }}-
+      - name: Restore local fallback for native Rust cache
+        id: rust_local
+        uses: ./.github/actions/local-cache
+        with:
+          github-hit: ${{ steps.rust_fallback.outputs.cache-matched-key != '' && 'false' || steps.rust_github.outcome == 'success' && steps.rust_github.outputs.cache-hit || '' }}
+          github-failed: ${{ steps.rust_fallback.outcome == 'failure' || (steps.rust_github.outcome == 'failure' && steps.rust_fallback.outputs.cache-matched-key == '') }}
+          url: ${{ steps.tailnet.outcome == 'success' && vars.LOCAL_CACHE_URL || '' }}
+          token: ${{ secrets.LOCAL_CACHE_TOKEN }}
+          group: rust/${{ matrix.system }}-${{ matrix.arch }}
+          kind: rust
+          key: release-${{ matrix.target }}
+      - name: Verify native architecture
+        run: |
+          import subprocess, sys
           sys.path.insert(0, 'scripts')
           from build_support import host_arch
           assert host_arch() == '${{ matrix.arch }}'
           assert 'host: ${{ matrix.target }}' in subprocess.check_output(['rustc', '-vV'], text=True)
-          with open(os.environ['GITHUB_OUTPUT'], 'a') as output:
-              output.write('day=' + datetime.datetime.now(datetime.timezone.utc).strftime('%Y-%m-%d') + '\n')
-      - uses: actions/cache@v5
+      - name: Restore GitHub resource cache
+        uses: actions/cache@v5
+        timeout-minutes: 5
+        continue-on-error: true
+        id: resource_github
         with:
+          # Only downloaded core/Geo dependencies. Never cache our own binaries.
           path: |
             bin
-            bundle
-          key: resources-${{ matrix.system }}-${{ matrix.arch }}-${{ hashFiles('scripts/prepare-resources.py', 'scripts/build_support.py') }}-${{ steps.environment.outputs.day }}
+            bundle/resources
+            bundle/${{ matrix.system }}-${{ matrix.arch }}/resources
+          key: resources-${{ matrix.system }}-${{ matrix.arch }}-${{ hashFiles('scripts/prepare-resources.py', 'scripts/build_support.py') }}-${{ needs.inputs.outputs.resources }}
           restore-keys: |
             resources-${{ matrix.system }}-${{ matrix.arch }}-${{ hashFiles('scripts/prepare-resources.py', 'scripts/build_support.py') }}-
+      - name: Restore local fallback for core and Geo resources
+        id: resource_local
+        uses: ./.github/actions/local-cache
+        with:
+          github-hit: ${{ steps.resource_github.outcome == 'success' && steps.resource_github.outputs.cache-hit || '' }}
+          github-failed: ${{ steps.resource_github.outcome == 'failure' }}
+          url: ${{ steps.tailnet.outcome == 'success' && vars.LOCAL_CACHE_URL || '' }}
+          token: ${{ secrets.LOCAL_CACHE_TOKEN }}
+          group: resources/${{ matrix.system }}-${{ matrix.arch }}
+          immutable: true
+          paths: ${{ matrix.system == 'windows' && matrix.arch == 'x64' && 'bundle/resources' || format('bundle/{0}-{1}/resources', matrix.system, matrix.arch) }}
+          key: resources-${{ needs.inputs.outputs.resources }}
+          restore-keys: resources-
       - name: Install Linux build/test dependencies
         if: runner.os == 'Linux'
         run: |
@@ -115,10 +687,10 @@ jobs:
         uses: actions/upload-artifact@v6
         if: always() && runner.os == 'macOS'
         with:
-          name: macos-${{ github.workflow == 'Rust' && 'ci' || 'package' }}-report-${{ matrix.arch }}
+          name: macos-ci-report-${{ matrix.arch }}
           path: target/macos-report
           if-no-files-found: error
-          retention-days: 14
+          retention-days: 3
       - name: Preserve Windows basic test results
         uses: actions/upload-artifact@v6
         if: always() && runner.os == 'Windows'
@@ -126,7 +698,7 @@ jobs:
           name: windows-ci-report-${{ matrix.arch }}
           path: target/windows-ci-report.json
           if-no-files-found: warn
-          retention-days: 14
+          retention-days: 3
       - uses: actions/upload-artifact@v6
         with:
           name: build-${{ matrix.system }}-${{ matrix.arch }}
@@ -135,4 +707,65 @@ jobs:
             dist/build/build.tar.gz.sha256
           if-no-files-found: error
           compression-level: 0
-          retention-days: 14
+          retention-days: 3
+  cache_budget:
+    name: Actions cache budget
+    needs: [inputs, android, check]
+    if: always()
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: read
+      actions: write
+      id-token: write
+    concurrency:
+      group: actions-cache-budget
+      cancel-in-progress: false
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          persist-credentials: false
+      - name: Trim obsolete dependencies and enforce 9 GiB cache budget
+        shell: python
+        env:
+          GH_TOKEN: ${{ github.token }}
+          CACHE_READ_ONLY: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name != github.repository }}
+          PYTHONDONTWRITEBYTECODE: '1'
+        run: |
+          import os, subprocess, sys
+          command = [sys.executable, 'scripts/workflow_storage.py']
+          if os.environ['CACHE_READ_ONLY'] == 'true': command.append('--read-only')
+          subprocess.run(command, check=True)
+      - name: Connect for final private cache inventory
+        id: tailnet
+        if: vars.TS_OAUTH_CLIENT_ID != '' && vars.TS_AUDIENCE != '' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository)
+        uses: tailscale/github-action@v4
+        continue-on-error: true
+        with:
+          oauth-client-id: ${{ vars.TS_OAUTH_CLIENT_ID }}
+          audience: ${{ vars.TS_AUDIENCE }}
+          tags: tag:github-action-cache
+          version: ${{ needs.inputs.outputs.tailscale || '1.94.2' }}
+          retry: '1'
+          timeout: 45s
+          args: --accept-dns=false
+          tailscaled-args: --tun=userspace-networking --outbound-http-proxy-listen=127.0.0.1:19082
+      - name: Report the cache after all successful uploads
+        if: steps.tailnet.outcome == 'success'
+        continue-on-error: true
+        env:
+          CACHE_URL: ${{ vars.LOCAL_CACHE_URL }}
+          CACHE_TOKEN: ${{ secrets.LOCAL_CACHE_TOKEN }}
+          CACHE_PROXY: http://127.0.0.1:19082
+          PYTHONDONTWRITEBYTECODE: '1'
+        run: |
+          sudo -n tailscale set --accept-routes=false --accept-dns=false
+          python3 scripts/action_cache.py inventory
+      - uses: actions/upload-artifact@v6
+        if: steps.tailnet.outcome == 'success'
+        with:
+          name: private-cache-inventory
+          path: target/cache-inventory.json
+          retention-days: 3
+          if-no-files-found: warn

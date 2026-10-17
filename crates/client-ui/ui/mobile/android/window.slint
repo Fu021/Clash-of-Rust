@@ -1,0 +1,44 @@
+// Production Android entry. No preview values, fake status bar or fixtures.
+import { AndroidSurface } from "app.slint";
+import { MobileView, MobileActions, MobileIntent } from "../shared/state.slint";
+import { AndroidActions, AndroidIntent } from "state.slint";
+import { Theme } from "../../theme/palette.slint";
+export { MobileData, MobileView, MobileActions, MobileIntent } from "../shared/state.slint";
+export { AndroidData, AndroidActions, AndroidIntent } from "state.slint";
+export { Theme } from "../../theme/palette.slint";
+export { MobileTypography } from "../shared/typography.slint";
+export { GroupItem, NodeItem, NodePair, ProfileItem, ConnectionItem, RuleItem, LogItem, CategoryItem, CategoryPair, ReportItem, DetailItem } from "../../state.slint";
+import "../../../../../resources/fonts/SourceHanSansCN-Regular.otf";
+
+export component AndroidWindow inherits Window {
+    default-font-family: "Source Han Sans CN";
+    background: Theme.canvas;
+    property <length> top: self.safe-area-insets.top;
+    property <length> bottom: self.safe-area-insets.bottom;
+    property <length> left: self.safe-area-insets.left;
+    property <length> right: self.safe-area-insets.right;
+    in-out property <int> current-page <=> MobileView.page;
+    in-out property <int> current-detail <=> MobileView.detail;
+    in-out property <string> selected-id <=> MobileView.selected-id;
+    in-out property <string> query <=> MobileView.query;
+    in-out property <string> rule-edit-id;
+    changed current-page => { MobileActions.request(MobileIntent.navigate, "" + root.current-page, ""); }
+    callback native-back();
+    native-back => {
+        if MobileView.modal { MobileView.detail=MobileView.detail==12 ? MobileView.pending-detail : 0; }
+        else if MobileView.detail>0 {MobileView.back();}
+        else if MobileView.page!=0 { MobileView.navigate(0); }
+        else { AndroidActions.request(AndroidIntent.background, ""); }
+    }
+    callback notify(string);
+    notify(message) => { MobileView.notify(message); }
+    changed top => { MobileView.safe-top = self.top; }
+    changed bottom => { MobileView.safe-bottom = self.bottom; }
+    changed left => { MobileView.safe-left = self.left; }
+    changed right => { MobileView.safe-right = self.right; }
+    init => {
+        MobileView.safe-top = self.top; MobileView.safe-bottom = self.bottom;
+        MobileView.safe-left = self.left; MobileView.safe-right = self.right;
+    }
+    AndroidSurface { width: parent.width; height: parent.height; }
+}

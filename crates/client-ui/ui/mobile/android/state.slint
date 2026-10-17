@@ -1,0 +1,13 @@
+// Android-only presentation and native requests. iOS does not import this file.
+export enum AndroidIntent { vpn-settings, application-routing, notification-speeds, battery-settings, check-update, save-ports, background }
+export global AndroidActions { callback request(AndroidIntent, string); }
+export global AndroidData {
+    in-out property <bool> notification-speeds: true;
+    in-out property <bool> ports-dirty;
+    in-out property <string> authorization-status: "未授权";
+    in-out property <string> application-scope: "所有应用";
+    in-out property <string> update-status: "尚未检查更新";
+    in-out property <bool> update-busy;
+    in-out property <bool> update-available;
+    in-out property <float> update-progress;
+}

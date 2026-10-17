@@ -1,0 +1,58 @@
+import { MobileTypography } from "typography.slint";
+import { Theme, AccentPalette } from "../../theme/palette.slint";
+import { MobileData, MobileView, MobileActions, MobileIntent } from "state.slint";
+import { MText, MSmall, MHeading, MCard, MButton, MRow, MDivider, MSwitch, MField, MSelect } from "controls.slint";
+
+export component AppearanceSettings inherits VerticalLayout {
+    in property <bool> custom-font-size: true;
+    alignment: start; spacing: 10px;
+    MHeading { text: "外观"; }
+    MCard {
+        MSmall { text: "主题"; }
+        GridLayout { spacing: MobileTypography.small-gap;
+            for label[i] in ["深色", "浅色", "跟随系统"]: MButton { text: label; selected: Theme.appearance == i;
+                col: Theme.text-scale > 1.25 ? 0 : i; row: Theme.text-scale > 1.25 ? i : 0;
+                clicked => { Theme.appearance = i; MobileActions.request(MobileIntent.appearance, "" + i, ""); }
+            }
+        }
+        MDivider { }
+        MRow { title: "强调色"; value: AccentPalette.accent-names[Theme.accent-index]; show-swatch: true; swatch: Theme.accent; clicked => { MobileView.detail = 11; } }
+        if root.custom-font-size: MDivider { }
+        if root.custom-font-size: HorizontalLayout { cross-axis-alignment: center; spacing: MobileTypography.gap;
+            MText { text: "字号"; }
+            MSelect { width: 128px; horizontal-stretch: 0; options: ["80%", "90%", "100%", "110%", "125%", "150%"];
+                value: "" + round(Theme.text-scale * 100) + "%";
+                selected(index, value) => { Theme.text-scale = [0.8, 0.9, 1.0, 1.1, 1.25, 1.5][index]; MobileActions.request(MobileIntent.text-scale, value, ""); }
+            }
+        }
+    }
+}
+export component NetworkToggles inherits VerticalLayout {
+    alignment: start; spacing: MobileTypography.small-gap;
+    MSwitch { title: "DNS 覆盖"; checked: MobileData.dns-override || MobileData.protected; enabled: !MobileData.protected && !MobileData.protection-pending;
+        toggled(value) => { MobileActions.request(MobileIntent.dns-override, value ? "true" : "false", ""); }
+    }
+    MDivider { }
+    MSwitch { title: "启用 IPv6"; checked: MobileData.ipv6 || MobileData.protected; enabled: !MobileData.protected && !MobileData.protection-pending;
+        toggled(value) => { MobileActions.request(MobileIntent.ipv6, value ? "true" : "false", ""); }
+    }
+    MDivider { }
+    MSwitch { title: "启用 UDP"; checked: MobileData.udp || MobileData.protected; enabled: !MobileData.protected && !MobileData.protection-pending;
+        toggled(value) => { MobileActions.request(MobileIntent.udp, value ? "true" : "false", ""); }
+    }
+}
+export component MaintenanceSettings inherits VerticalLayout {
+    alignment: start; spacing: 10px;
+    MHeading { text: "测速与 Geo"; }
+    MCard {
+        MText { text: "定时测速"; }
+        HorizontalLayout { cross-axis-alignment: center; spacing: 10px;
+            MField { width: 72px; horizontal-stretch: 0; text <=> MobileData.interval; edited(value) => { MobileView.interval-dirty = true; } }
+            MSmall { text: "分钟 · 0 关闭"; }
+            MButton { text: "保存"; width: max(68px, MobileTypography.font-size(15) * 2 + 16px); horizontal-stretch: 0; clicked => { MobileActions.request(MobileIntent.interval, MobileData.interval, ""); } }
+        }
+        MDivider { }
+        MRow { title: "Geo 数据"; value: MobileData.geo-status; arrow: false; interactive: false; }
+        MButton { text: MobileData.geo-updating ? "正在更新 Geo 数据…" : "更新所有 Geo 数据"; enabled: !MobileData.working && !MobileData.geo-updating; clicked => { MobileActions.request(MobileIntent.update-geo, "", ""); } }
+    }
+}

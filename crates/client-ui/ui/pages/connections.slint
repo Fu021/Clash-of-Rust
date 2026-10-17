@@ -5,11 +5,36 @@ import { Label, Caption, Panel, ActionButton, Field, Badge } from "../components
 component SortHeading inherits Rectangle {
     in property <string> label;
     in property <string> field;
+    in property <bool> active;
+    in property <bool> descending;
     height: max(22px, Theme.detail-size * 1.5);
-    Caption { width: parent.width; height: parent.height; text: root.label + (UiData.connection-sort == root.field ? (UiData.descending ? " ↓" : " ↑") : ""); }
+    min-width: 0px; preferred-width: 0px; horizontal-stretch: 1;
+    accessible-role: button;
+    accessible-label: root.label + (root.active ? (root.descending ? " ↓" : " ↑") : "");
+    accessible-action-default => { UiActions.dispatch(Intent.connection-sort, root.field, ""); }
+    HorizontalLayout { spacing: 4px;
+        Caption { text: root.label; min-width: 0px; color: root.active ? Theme.accent : Theme.secondary; }
+        // Keep the indicator's geometry stable, including when no sort is active.
+        // A path does not depend on fallback-font shaping or empty text metrics.
+        Rectangle { width: 16px; horizontal-stretch: 0;
+            Path {
+                x: 2px; y: (parent.height - self.height) / 2;
+                width: 12px; height: 12px; viewbox-width: 12; viewbox-height: 12;
+                stroke: root.active ? Theme.accent : transparent;
+                stroke-width: 1.5px;
+                MoveTo { x: 6; y: root.descending ? 1 : 11; }
+                LineTo { x: 6; y: root.descending ? 11 : 1; }
+                MoveTo { x: 2; y: root.descending ? 7 : 5; }
+                LineTo { x: 6; y: root.descending ? 11 : 1; }
+                LineTo { x: 10; y: root.descending ? 7 : 5; }
+            }
+        }
+    }
     TouchArea { mouse-cursor: pointer; clicked => { UiActions.dispatch(Intent.connection-sort, root.field, ""); } }
 }
 export component ConnectionsPage inherits Rectangle {
+    property <string> sort-field: UiData.connection-sort;
+    property <bool> sort-descending: UiData.descending;
     property <length> available: root.width - 24px - 48px - 72px;
     property <length> host-column: root.available * 0.35;
     property <length> rule-column: root.available * 0.31;
@@ -26,12 +51,13 @@ export component ConnectionsPage inherits Rectangle {
             VerticalLayout {
                 spacing: 0px;
                 Rectangle {
-                    height: max(52px, Theme.detail-size * 3 + 8px); background: Theme.inset;
+                    height: max(52px, Theme.detail-size * 3 + 8px); background: Theme.surface;
+                    Rectangle { y: parent.height - 1px; height: 1px; width: parent.width; background: Theme.line; }
                     HorizontalLayout { cross-axis-alignment: center; padding-left: 12px; padding-right: 12px; spacing: 12px;
-                        VerticalLayout { width: root.host-column; SortHeading { label: "连接名称"; field: "name"; } SortHeading { label: "开始时间"; field: "start"; } }
-                        VerticalLayout { width: root.rule-column; SortHeading { label: "规则"; field: "rule"; } SortHeading { label: "代理链"; field: "chain"; } }
-                        VerticalLayout { width: root.speed-column; SortHeading { label: "上传速度"; field: "upload-rate"; } SortHeading { label: "上传量"; field: "upload-total"; } }
-                        VerticalLayout { width: root.speed-column; SortHeading { label: "下载速度"; field: "download-rate"; } SortHeading { label: "下载量"; field: "download-total"; } }
+                        VerticalLayout { width: root.host-column; SortHeading { label: "连接名称"; field: "name"; active: root.sort-field == "name"; descending: root.sort-descending; } SortHeading { label: "开始时间"; field: "start"; active: root.sort-field == "start"; descending: root.sort-descending; } }
+                        VerticalLayout { width: root.rule-column; SortHeading { label: "规则"; field: "rule"; active: root.sort-field == "rule"; descending: root.sort-descending; } SortHeading { label: "代理链"; field: "chain"; active: root.sort-field == "chain"; descending: root.sort-descending; } }
+                        VerticalLayout { width: root.speed-column; SortHeading { label: "上传速度"; field: "upload-rate"; active: root.sort-field == "upload-rate"; descending: root.sort-descending; } SortHeading { label: "上传量"; field: "upload-total"; active: root.sort-field == "upload-total"; descending: root.sort-descending; } }
+                        VerticalLayout { width: root.speed-column; SortHeading { label: "下载速度"; field: "download-rate"; active: root.sort-field == "download-rate"; descending: root.sort-descending; } SortHeading { label: "下载量"; field: "download-total"; active: root.sort-field == "download-total"; descending: root.sort-descending; } }
                         Caption { width: 72px; text: "操作"; }
                     }
                 }
@@ -39,7 +65,8 @@ export component ConnectionsPage inherits Rectangle {
                     for connection[i] in UiData.connections: Rectangle {
                         y: i * root.row-height;
                         height: root.row-height;
-                        background: mod(i, 2) == 0 ? Theme.surface : Theme.inset;
+                        background: Theme.surface;
+                        Rectangle { y: parent.height - 1px; height: 1px; width: parent.width; background: Theme.subtle-line; }
                         TouchArea { mouse-cursor: pointer; clicked => { UiActions.dispatch(Intent.connection-detail, connection.id, ""); } }
                         HorizontalLayout { cross-axis-alignment: center; padding: 12px; spacing: 12px;
                             VerticalLayout { width: root.host-column; spacing: 4px; Label { text: connection.host; } Caption { text: connection.detail; } }

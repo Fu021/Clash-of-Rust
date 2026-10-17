@@ -87,6 +87,10 @@ pub(crate) fn run() -> anyhow::Result<()> {
         }
         file
     };
+    #[cfg(windows)]
+    if let Err(error) = platform::notification::prepare_process() {
+        eprintln!("通知窗口身份初始化失败：{error:#}");
+    }
     slint::BackendSelector::new()
         .backend_name("winit".into())
         .renderer_name("software".into())

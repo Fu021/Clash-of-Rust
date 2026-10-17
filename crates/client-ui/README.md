@@ -1,4 +1,4 @@
-# Slint 桌面界面
+# Slint 界面
 
 采用 A「简洁原生」风格，十一个页面与各类确认、编辑、详情弹窗共用 `ui/app.slint`。支持深色、浅色、跟随系统、字号缩放及六种强调色；外观设置自动保存。
 
@@ -9,7 +9,7 @@
 
 默认窗口 **950×700**，最小 **800×450**；正文与按钮 15px，辅助信息 14px，控件至少 40px。间距集中在 `Theme`：卡片内边距 16px、卡片间距 12px、内容间距 8px、设置分组间距 20px，弹窗内边距 24px、分区间距 16px。字体放大时控件随内容增高，超出窗口的内容滚动显示。
 
-正式应用使用 winit 与软件渲染器，无需 WebView、Qt 或 GPU 渲染器。系统代理、TUN、托盘、Dock、自动更新与文件选择仍由桌面平台模块负责；共享业务库不依赖 Slint，Android/iOS 继续预留。
+正式应用使用 winit 与软件渲染器，无需 WebView、Qt 或 GPU 渲染器。系统代理、TUN、托盘、Dock、自动更新与文件选择仍由桌面平台模块负责；共享业务库不依赖 Slint，Android 使用独立原生宿主，iOS 保留占位。
 
 ## 无需 Rust 编译的外观预览
 
@@ -41,3 +41,49 @@ WSL 原生页追加为索引 **10**，原有页面索引不变。`Intent::WslAct
 发行版最多 128 行，检查与日志各 256 行；发行版/检查超限使用明确的未展示提示行，日志保留最新记录。展示文本按 UTF-8 字符边界限制长度，截断加省略号。这些限制不代替脱敏，desktop/core 必须只提交安全文本。`tests/wsl/mod.rs` 复用 `ui_models` 测试入口，覆盖代次极值、证据清理、模型身份、行数上限与多字节文本边界；由 Actions 运行。
 
 desktop 测试覆盖预检与执行参数、Test 为 preview、默认 Rollback 保留 guard、restore-confirm 取消不执行、busy 时输入和重复动作不可触发、权限不足仅展示安全管理员命令、旧代次/旧 operation_id 不回写，以及连接成功但 strict 证据缺失仍为 Blocked。CI 是否实际执行这些测试只能以对应 Actions 运行记录为准。仍需补充真实 WSL/Hyper-V、运行中发行版恢复阻止和 Docker Desktop 后端故障测试；未适配的 Docker 不计功能通过。Viewer 可用 JSON `{"preview-page":10}` 直接预览；`preview-wsl-busy` 与 `preview-wsl-supported` 可切换固定演示状态。
+## Android / iOS 界面
+
+移动端沿用当前桌面的配色、图标、卡片与操作层次，正文 16px、辅助信息 14px、触控区至少 48px。Android 与 iOS 分别维护页面组合、导航入口、设置与系统操作协议，未来可独立增减功能：
+
+```text
+ui/mobile/
+├── shared/
+│   ├── state.slint       # 移动数据、操作协议与导航/草稿状态
+│   ├── controls.slint    # 触控控件与滚动
+│   ├── frame.slint       # 底栏、侧栏、安全区、键盘与通知
+│   ├── pages.slint       # 共用业务页面
+│   ├── details.slint     # 详情、编辑与确认
+│   ├── settings.slint    # 共用外观、网络开关、Geo 分组
+│   ├── fixtures.slint    # 仅预览使用的演示数据
+│   └── preview.slint     # 仅预览使用的状态栏与键盘示意
+├── android/
+│   ├── app.slint         # Android 页面与导航组合
+│   ├── settings.slint    # VPN、应用分流、通知速度、电池与端口
+│   ├── state.slint       # Android 数据与原生操作协议
+│   └── preview.slint
+├── ios/
+│   ├── app.slint         # iPhone / iPad 页面与导航组合
+│   ├── settings.slint    # 按需连接、系统 VPN 与版本信息
+│   ├── state.slint       # iOS 数据与原生操作协议
+│   └── preview.slint
+└── preview-data/         # 固定预览资源
+```
+
+`MobileData` 不依赖桌面 `UiData`，只复用不含平台行为的列表行类型；界面请求交由各平台宿主执行，VPN 会话与内核进程状态分别传入。移动端不显示桌面安装器、托盘或窗口尺寸。两端都保留订阅、节点、连接、规则、日志、网络诊断、IP 检测和 A÷检测。
+
+Android 已接入 `apps/android/native`、`apps/android/app` 与 `crates/mobile-ffi`：正式窗口不导入 fixtures，业务操作进入共享会话，VPN、文件与通知进入 Android 宿主，详见 [Android 说明](../../apps/android/README.md)。iOS 保持独立界面原型和宿主占位。两端预览仍使用固定数据，只用于检查外观与导航，不能代替实际设备上的操作验证。
+
+```sh
+python3 scripts/preview-slint.py --mobile --check
+python3 scripts/preview-slint.py --mobile --platform both --theme both --pairs
+python3 scripts/preview-slint.py --mobile --platform android --page proxies --size 834x1194
+python3 scripts/preview-slint.py --mobile --platform ios --page settings --size 1194x834
+```
+
+输出分别位于 `dist/mobile-preview/android/` 与 `dist/mobile-preview/ios/`。涵盖全部页面、深浅色、手机横屏、Pad 双方向和分屏、小屏、125% 字号、未连接、通知进度及详情/编辑/确认场景。宽度均为逻辑尺寸，布局按扣除安全区后的可用宽高决定：
+
+- 宽度不足 640 且非短窗口：底部五个入口，详情进入独立页面；工具页收纳连接、规则、日志和检测入口。
+- 中等宽度或高度不足 480：紧凑侧栏，减少横屏头部占用；节点按内容空间改为双列。
+- 可用宽度至少 1024、非短窗口：完整侧栏；内容宽度达到 880 时支持列表与详情并排，设置分两列。
+
+Android 正式窗口从后端读取安全区；键盘与视口由系统调整，iOS 宿主以后提供对应值，不能重复扣除系统已经缩小的视口；状态栏只是预览示意。导航与草稿状态独立于布局，删除、离开未保存的编辑须确认。宿主接入时还需保存各页滚动位置、接续旋转前的任务，并按平台能力处理权限、后台运行、更新与文件导入。

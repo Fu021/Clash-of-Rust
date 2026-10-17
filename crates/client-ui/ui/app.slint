@@ -108,21 +108,6 @@ export component AppWindow inherits Window {
                     }
                 }
             }
-            if UiData.notice != "": notice-panel := ContentPanel {
-                property <int> revision: UiData.notice-revision;
-                property <duration> started;
-                init => { self.started = animation-tick() - UiData.notice-elapsed * 1s; }
-                changed revision => { self.started = animation-tick() - UiData.notice-elapsed * 1s; }
-                property <float> progress: clamp((animation-tick() - self.started) / 8s, 0, 1);
-                HorizontalLayout { cross-axis-alignment: center; spacing: Theme.content-gap;
-                    Paragraph { text: UiData.notice; color: UiData.notice-error ? Theme.danger : Theme.secondary; }
-                    if UiData.retry-core: ActionButton { text: "重启内核"; primary: true; enabled: !UiData.working; clicked => { UiActions.dispatch(Intent.restart-core, "", ""); } }
-                    ActionButton { text: "关闭"; clicked => { UiActions.dispatch(Intent.dismiss-notice, "", ""); } }
-                }
-                Rectangle { height: 2px; background: Theme.subtle-line;
-                    Rectangle { x: 0px; y: 0px; width: parent.width * notice-panel.progress; height: parent.height; background: UiData.notice-error ? Theme.danger : Theme.accent; }
-                }
-            }
             if UiData.update-busy || UiData.update-available: ContentPanel {
                 HorizontalLayout { cross-axis-alignment: center; spacing: Theme.content-gap;
                     Label { text: UiData.update-status; }
@@ -150,5 +135,25 @@ export component AppWindow inherits Window {
         }
     }
     if UiData.modal != 0: AppDialog { }
+    // Draw after AppDialog so notices never resize a page and remain dismissible.
+    if UiData.notice != "": notice-panel := ContentPanel {
+        x: (parent.width - self.width) / 2; y: 16px;
+        width: min(640px, parent.width - 48px);
+        drop-shadow-blur: 20px; drop-shadow-offset-y: 4px; drop-shadow-color: #00000030;
+        interactive: true;
+        property <int> revision: UiData.notice-revision;
+        property <duration> started;
+        init => { self.started = animation-tick() - UiData.notice-elapsed * 1s; }
+        changed revision => { self.started = animation-tick() - UiData.notice-elapsed * 1s; }
+        property <float> progress: clamp((animation-tick() - self.started) / 8s, 0, 1);
+        HorizontalLayout { cross-axis-alignment: center; spacing: Theme.content-gap;
+            Paragraph { text: UiData.notice; color: UiData.notice-error ? Theme.danger : Theme.secondary; }
+            if UiData.retry-core: ActionButton { modal-control: true; text: "重启内核"; primary: true; enabled: !UiData.working; clicked => { UiActions.dispatch(Intent.restart-core, "", ""); } }
+            ActionButton { modal-control: true; text: "关闭"; clicked => { UiActions.dispatch(Intent.dismiss-notice, "", ""); } }
+        }
+        Rectangle { height: 2px; background: Theme.subtle-line;
+            Rectangle { x: 0px; y: 0px; width: parent.width * notice-panel.progress; height: parent.height; background: UiData.notice-error ? Theme.danger : Theme.accent; }
+        }
+    }
     }
 }

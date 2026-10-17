@@ -2,6 +2,7 @@
 import contextlib
 import ctypes
 import hashlib
+import http.client
 import json
 import os
 import platform
@@ -283,21 +284,50 @@ def stage_resources(source, stage, system):
 
 
 def nsis(proxy=''):
-    compiler = ROOT/'tools/nsis/nsis-3.13/makensis.exe'
-    if compiler.is_file():
-        return compiler
-    archive = ROOT/'tools/nsis-3.13.zip'
-    download('https://downloads.sourceforge.net/project/nsis/NSIS%203/3.13/nsis-3.13.zip', archive, proxy)
+    from build_inputs import component, nsis_release
     destination = ROOT/'tools/nsis'
-    with zipfile.ZipFile(archive) as bundle:
-        for member in bundle.infolist():
-            target = (destination/member.filename).resolve()
-            if not target.is_relative_to(destination.resolve()):
-                raise ValueError('Unsafe NSIS archive path')
-        bundle.extractall(destination)
-    if not compiler.is_file():
-        raise FileNotFoundError(compiler)
-    return compiler
+    receipt = destination/'tool.json'
+    previous = json.loads(receipt.read_text()) if receipt.is_file() else {}
+    compiler = destination/'current/makensis.exe'
+    valid = compiler.is_file() and previous.get('compiler_sha256') == sha256(compiler)
+    try:
+        selected = component('nsis') or nsis_release()
+        if valid and previous.get('installer_sha256') == selected['sha256']:
+            return compiler
+        installer = ROOT/'tools/nsis-installer.exe'
+        stage = ROOT/'tools/nsis-stage'
+        try:
+            download(selected['url'], installer, proxy, selected['sha256'])
+            shutil.rmtree(stage, ignore_errors=True)
+            subprocess.run([str(installer), '/S', '/D='+str(stage)], check=True, timeout=120)
+            candidate = stage/'makensis.exe'
+            if not candidate.is_file():
+                raise FileNotFoundError('Verified NSIS installer did not install makensis.exe')
+            record = {'version': selected['version'], 'installer_sha256': selected['sha256'],
+                      'source': selected['url'], 'compiler_sha256': sha256(candidate)}
+            shutil.rmtree(destination, ignore_errors=True)
+            destination.mkdir(parents=True)
+            stage.replace(destination/'current')
+            write_json(receipt, record)
+            return compiler
+        finally:
+            # Windows may still hold the self-extractor after its parent exits.
+            # Cleanup must not discard a successfully installed, hashed tool.
+            for attempt in range(3):
+                try:
+                    installer.unlink(missing_ok=True)
+                    break
+                except OSError:
+                    if attempt == 2:
+                        print('::warning::NSIS temporary download is still locked; runner cleanup will remove it.')
+                    else:
+                        time.sleep(0.5 * (attempt + 1))
+            shutil.rmtree(stage, ignore_errors=True)
+    except (OSError, ValueError, http.client.HTTPException, subprocess.SubprocessError):
+        if not valid or not compiler.is_file() or sha256(compiler) != previous['compiler_sha256']:
+            raise
+        print('::warning::NSIS upstream unavailable; using the verified cached installer compiler.')
+        return compiler
 
 
 @contextlib.contextmanager

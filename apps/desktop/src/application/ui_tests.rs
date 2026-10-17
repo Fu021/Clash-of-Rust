@@ -261,6 +261,159 @@ fn projection_reuses_models_and_releases_hidden_and_inactive_lists() {
 }
 
 #[test]
+fn connection_sort_clicks_redraw_the_header_immediately_and_third_click_restores_rows() {
+    use slint::platform::software_renderer::RepaintBufferType;
+    let adapter = ui_testing::initialize(950, 700);
+    let mut app = fixture(Page::Connections);
+    let window = AppWindow::new().unwrap();
+    let data = window.global::<UiData>();
+    let mut models = ViewModels::default();
+    models.attach(&data);
+    app.present(&data, &mut models);
+    let events = pointer_events(&window);
+    window.show().unwrap();
+    let mut pixels = vec![slint::Rgb8Pixel::default(); 950 * 700];
+    let mut header = || {
+        assert!(adapter.draw_if_needed(|renderer| {
+            renderer.set_repaint_buffer_type(RepaintBufferType::ReusedBuffer);
+            renderer.render(&mut pixels, 950);
+            let mut reference = vec![slint::Rgb8Pixel::default(); 950 * 700];
+            renderer.set_repaint_buffer_type(RepaintBufferType::NewBuffer);
+            renderer.render(&mut reference, 950);
+            assert!(
+                pixels == reference,
+                "partial repaint differs from a fresh frame at pixel {:?}",
+                pixels.iter().zip(&reference).position(|(a, b)| a != b)
+            );
+            renderer.set_repaint_buffer_type(RepaintBufferType::ReusedBuffer);
+            // Changing buffer modes clears Slint's damage cache. Warm it now,
+            // so the next click really renders incrementally into this buffer.
+            renderer.render(&mut pixels, 950);
+        }));
+        pixels
+            .as_chunks::<950>()
+            .0
+            .iter()
+            .skip(156)
+            .take(52)
+            .flat_map(|row| row[200..926].iter().copied())
+            .collect::<Vec<_>>()
+    };
+    let before = header();
+    let original = data
+        .get_connections()
+        .iter()
+        .map(|row| row.id)
+        .collect::<Vec<_>>();
+    for (x, y, field, first_descending) in [
+        (780., 174., "download-rate", true),
+        (780., 197., "download-total", true),
+        (670., 174., "upload-rate", true),
+        (670., 197., "upload-total", true),
+        (480., 174., "rule", false),
+        (480., 197., "chain", false),
+        (260., 174., "name", false),
+        (260., 197., "start", true),
+    ] {
+        let mut frames = Vec::new();
+        for click in 0..3 {
+            ui_testing::click(window.window(), x, y);
+            let event = events
+                .borrow_mut()
+                .pop()
+                .expect("heading must dispatch one sort intent");
+            assert_eq!(event.0, Intent::ConnectionSort);
+            assert_eq!(event.1, field);
+            let _ = app.intent(event.0, &event.1, &event.2);
+            app.present(&data, &mut models);
+            assert_eq!(data.get_page(), Page::Connections as i32);
+            assert_eq!(
+                data.get_connection_sort(),
+                if click == 2 { "" } else { field }
+            );
+            assert_eq!(
+                data.get_descending(),
+                match click {
+                    0 => first_descending,
+                    1 => !first_descending,
+                    _ => false,
+                },
+                "wrong direction for {field} on click {click}"
+            );
+            frames.push(header());
+        }
+        assert_ne!(
+            frames[0], before,
+            "first click must render an arrow without navigation"
+        );
+        assert_ne!(
+            frames[1], frames[0],
+            "second click must reverse the arrow immediately"
+        );
+        assert_eq!(frames[2], before, "third click must remove the indicator");
+        assert_eq!(
+            data.get_connections()
+                .iter()
+                .map(|row| row.id)
+                .collect::<Vec<_>>(),
+            original
+        );
+    }
+    // Record the normal down-arrow frame, then return to unsorted before a
+    // burst of real pointer events with no rendered frame between callbacks.
+    let _ = app.intent(Intent::ConnectionSort, "download-rate", "");
+    app.present(&data, &mut models);
+    let expected = header();
+    for _ in 0..2 {
+        let _ = app.intent(Intent::ConnectionSort, "download-rate", "");
+    }
+    app.present(&data, &mut models);
+    assert_eq!(header(), before);
+    for _ in 0..4 {
+        for (x, y) in [(670., 174.), (480., 197.), (260., 174.), (780., 174.)] {
+            ui_testing::rapid_click(window.window(), x, y);
+        }
+    }
+    let pending = std::mem::take(&mut *events.borrow_mut());
+    assert_eq!(pending.len(), 16, "rapid clicks must each dispatch once");
+    for (index, (intent, a, b)) in pending.into_iter().enumerate() {
+        let _ = app.intent(intent, &a, &b);
+        if index % 3 == 0 {
+            // A completed background connection refresh must not overwrite
+            // newer sort intent while the queued UI commands are being drained.
+            let mut snapshot = app.snapshot.clone();
+            snapshot.connections.connections[0].download += 4096;
+            let _ = app.update(Message::Finished(Box::new(Reply {
+                profile_edit: false,
+                profile_import: false,
+                scope: Scope::Connections,
+                start_requested: false,
+                settings: app.settings.clone(),
+                profiles: None,
+                snapshot: Some(snapshot),
+                rule_document: None,
+                rules_applied: false,
+                notice: Ok(String::new()),
+                running: true,
+                geo_status: String::new(),
+                autostart: false,
+                protection_changed: false,
+                tray_nodes: None,
+            })));
+        }
+        app.present(&data, &mut models);
+    }
+    assert_eq!(data.get_connection_sort(), "download-rate");
+    assert!(data.get_descending());
+    assert_eq!(
+        header(),
+        expected,
+        "burst clicks must paint the final arrow"
+    );
+    window.hide().unwrap();
+}
+
+#[test]
 fn connection_detail_exposes_all_fields_and_copies_the_same_values() {
     ui_testing::initialize(950, 700);
     let mut app = fixture(Page::Connections);
@@ -373,6 +526,16 @@ fn clicking_a_node_selects_it_but_its_latency_button_only_tests_it() {
         &[(Intent::SelectNode, "Proxy".into(), "node-a".into())],
         "clicking the card must select the node in its own group"
     );
+    events.borrow_mut().clear();
+    data.set_protected(true);
+    let _ = window.window().take_snapshot().unwrap();
+    click(250.0, 252.0);
+    assert!(
+        events.borrow().is_empty(),
+        "protected nodes must not dispatch a selection"
+    );
+    data.set_protected(false);
+    let _ = window.window().take_snapshot().unwrap();
     events.borrow_mut().clear();
     click(260.0, 205.0);
     assert_eq!(
@@ -564,6 +727,101 @@ fn node_sort_popup_dispatches_each_clicked_option_and_reorders_real_models() {
             matches!(app.queued_actions.pop_back(), Some(Action::NodeSort(mode)) if mode == NodeSort::ALL[index])
         );
     }
+    window.hide().unwrap();
+}
+
+#[test]
+fn a_discarded_software_surface_is_fully_repainted_after_restore() {
+    use slint::platform::software_renderer::RepaintBufferType;
+    let adapter = ui_testing::initialize(950, 700);
+    let app = fixture(Page::Settings);
+    let window = AppWindow::new().unwrap();
+    let data = window.global::<UiData>();
+    let mut models = ViewModels::default();
+    models.attach(&data);
+    app.present(&data, &mut models);
+    window.show().unwrap();
+    let mut before = vec![slint::Rgb8Pixel::default(); 950 * 700];
+    assert!(adapter.draw_if_needed(|renderer| {
+        renderer.set_repaint_buffer_type(RepaintBufferType::ReusedBuffer);
+        renderer.render(&mut before, 950);
+    }));
+    let mut restored = vec![slint::Rgb8Pixel::default(); 950 * 700];
+    // DWM/compositor invalidation is independent of changes to the UI models.
+    bindings::invalidate_window_for_test(window.window());
+    assert!(adapter.draw_if_needed(|renderer| {
+        renderer.render(&mut restored, 950);
+        renderer.set_repaint_buffer_type(RepaintBufferType::NewBuffer);
+    }));
+    assert_eq!(
+        before, restored,
+        "restored surface must contain the unchanged full window"
+    );
+    window.hide().unwrap();
+}
+
+#[test]
+fn appearance_remains_interactive_while_geo_owns_the_engine_and_late_reply_cannot_undo_it() {
+    ui_testing::initialize(950, 700);
+    let mut app = fixture(Page::Settings);
+    app.busy = true;
+    app.working = true;
+    app.updates.started = true;
+    let old_settings = app.settings.clone();
+    let window = AppWindow::new().unwrap();
+    let data = window.global::<UiData>();
+    let mut models = ViewModels::default();
+    models.attach(&data);
+    app.present(&data, &mut models);
+    let events = pointer_events(&window);
+    window.show().unwrap();
+    let _ = window.window().take_snapshot().unwrap();
+    ui_testing::click(window.window(), 840., 233.);
+    assert_eq!(events.borrow_mut().pop().unwrap().0, Intent::AccentPicker);
+    let _ = app.intent(Intent::AccentPicker, "", "");
+    app.present(&data, &mut models);
+    assert_eq!(data.get_modal(), 12);
+    assert!(data.get_modal_can_accept());
+    let _ = window.window().take_snapshot().unwrap();
+    ui_testing::click(window.window(), 475., 314.); // blue swatch
+    let _ = window.window().take_snapshot().unwrap();
+    ui_testing::click(window.window(), 710., 460.); // complete while Geo is still busy
+    let chosen = events
+        .borrow_mut()
+        .pop()
+        .expect("busy Geo must not disable appearance confirmation");
+    assert_eq!(chosen.0, Intent::AccentColor);
+    assert_eq!(chosen.1, "1");
+    let _ = app.intent(chosen.0, &chosen.1, &chosen.2);
+    app.present(&data, &mut models);
+    assert_eq!(data.get_accent(), 1);
+    for color in [2, 3, 5] {
+        let _ = app.intent(Intent::AccentColor, &color.to_string(), "");
+    }
+    assert_eq!(app.queued_actions.len(), 1, "rapid changes must coalesce");
+    let _ = app.update(Message::Finished(Box::new(Reply {
+        profile_edit: false,
+        profile_import: false,
+        scope: Scope::Other,
+        start_requested: false,
+        settings: old_settings,
+        profiles: None,
+        rule_document: None,
+        rules_applied: false,
+        snapshot: None,
+        notice: Ok("Geo 数据已更新".into()),
+        running: true,
+        geo_status: "更新完成".into(),
+        autostart: false,
+        protection_changed: false,
+        tray_nodes: None,
+    })));
+    app.present(&data, &mut models);
+    assert_eq!(
+        data.get_accent(),
+        5,
+        "old engine reply must preserve the most recent color"
+    );
     window.hide().unwrap();
 }
 

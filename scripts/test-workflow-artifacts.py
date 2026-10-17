@@ -5,6 +5,7 @@ import hashlib
 import importlib.util
 import io
 import json
+import os
 from pathlib import Path
 import struct
 import tarfile
@@ -18,6 +19,13 @@ import workflow_artifacts as artifacts
 
 
 class ArtifactTests(unittest.TestCase):
+    def setUp(self):
+        directory = tempfile.TemporaryDirectory()
+        self.addCleanup(directory.cleanup)
+        override = patch.dict(os.environ, {'BUILD_INPUTS_DIR': directory.name})
+        override.start()
+        self.addCleanup(override.stop)
+
     commit = 'a'*40
     version = '0.4.12'
 

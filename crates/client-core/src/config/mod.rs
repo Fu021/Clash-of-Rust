@@ -545,6 +545,12 @@ fn apply_udp(map: &mut Mapping, enabled: bool) -> Result<()> {
     Ok(())
 }
 
+/// Shared fallback used when a host needs DNS but the subscription provides none.
+pub const DEFAULT_DNS_NAMESERVERS: [&str; 2] = [
+    "https://doh.pub/dns-query",
+    "https://dns.alidns.com/dns-query",
+];
+
 fn apply_dns(map: &mut Mapping, settings: &Settings) -> Result<()> {
     let mut dns = match map.remove(Value::from("dns")) {
         None | Some(Value::Null) => Mapping::new(),
@@ -558,10 +564,7 @@ fn apply_dns(map: &mut Mapping, settings: &Settings) -> Result<()> {
         dns.insert(Value::from("enhanced-mode"), Value::from("fake-ip"));
         dns.insert(
             Value::from("nameserver"),
-            serde_yaml::to_value([
-                "https://doh.pub/dns-query",
-                "https://dns.alidns.com/dns-query",
-            ])?,
+            serde_yaml::to_value(DEFAULT_DNS_NAMESERVERS)?,
         );
     }
     // The IPv6 preference is independent of DNS override and authoritative

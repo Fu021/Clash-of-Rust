@@ -11,6 +11,9 @@ on:
         required: false
         default: false
         type: boolean
+env:
+  SEGMENT_DOWNLOAD_TIMEOUT_MINS: '2'
+  BUILD_INPUTS_DIR: dependency-snapshot
 permissions:
   actions: read
   contents: read
@@ -27,6 +30,8 @@ jobs:
       commit: ${{ steps.source.outputs.commit }}
       ci_run_id: ${{ steps.source.outputs.ci_run_id }}
       version: ${{ steps.source.outputs.version }}
+      nsis: ${{ steps.tools.outputs.nsis }}
+      tailscale: ${{ steps.tools.outputs.tailscale }}
     steps:
       - uses: actions/checkout@v6
         with:
@@ -35,6 +40,7 @@ jobs:
       - uses: actions/setup-python@v6
         with:
           python-version: '3.11'
+          check-latest: true
       - name: Verify CI and freeze source
         id: source
         shell: python
@@ -51,10 +57,34 @@ jobs:
           if os.environ.get('CI_RUN_ID'):
               command += ['--run-id', str(int(os.environ['CI_RUN_ID']))]
           subprocess.run(command, check=True)
+      - uses: actions/download-artifact@v7
+        with:
+          name: dependency-snapshot
+          path: ${{ env.BUILD_INPUTS_DIR }}
+          run-id: ${{ steps.source.outputs.ci_run_id }}
+          github-token: ${{ github.token }}
+      - name: Apply CI dependencies and refresh packaging tools
+        id: tools
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PYTHONDONTWRITEBYTECODE: '1'
+        run: |
+          python3 scripts/build_inputs.py apply
+          python3 scripts/build_inputs.py packaging
+      - uses: actions/upload-artifact@v6
+        with:
+          name: packaging-dependency-snapshot
+          path: ${{ env.BUILD_INPUTS_DIR }}
+          retention-days: 3
+          if-no-files-found: error
   package:
     name: package-${{ matrix.system }}-${{ matrix.arch }}
     needs: resolve
     timeout-minutes: 45
+    permissions:
+      actions: read
+      contents: read
+      id-token: write
     strategy:
       fail-fast: false
       matrix:
@@ -98,13 +128,68 @@ jobs:
       - uses: actions/setup-python@v6
         with:
           python-version: ${{ matrix.python }}
+          check-latest: true
           architecture: ${{ matrix.arch }}
+      - uses: actions/download-artifact@v7
+        with:
+          name: packaging-dependency-snapshot
+          path: ${{ env.BUILD_INPUTS_DIR }}
+      - name: Apply the verified CI dependency snapshot
+        shell: python
+        run: |
+          import subprocess, sys
+          subprocess.run([sys.executable, 'scripts/build_inputs.py', 'apply'], check=True)
       - name: Install Linux packaging/test dependencies
         if: runner.os == 'Linux'
         run: |
           import subprocess
           subprocess.run(['sudo', 'apt-get', 'update'], check=True)
           subprocess.run(['sudo', 'apt-get', 'install', '-y', 'dpkg-dev', 'dbus', 'iproute2', 'util-linux', 'libcap2-bin', 'xvfb', 'x11-utils'], check=True)
+      - name: Connect to private installer cache
+        id: tailnet
+        if: runner.os == 'Windows' && vars.TS_OAUTH_CLIENT_ID != '' && vars.TS_AUDIENCE != ''
+        uses: tailscale/github-action@v4
+        timeout-minutes: 3
+        continue-on-error: true
+        with:
+          oauth-client-id: ${{ vars.TS_OAUTH_CLIENT_ID }}
+          audience: ${{ vars.TS_AUDIENCE }}
+          tags: tag:github-action-cache
+          version: ${{ needs.resolve.outputs.tailscale }}
+          retry: '1'
+          timeout: 45s
+          args: --accept-dns=false
+      - name: Preserve host routing after private cache login
+        if: steps.tailnet.outcome == 'success'
+        shell: python
+        run: |
+          import shutil, subprocess
+          # The official action already supplies --accept-routes during login.
+          subprocess.run([shutil.which('tailscale') or 'tailscale', 'set', '--accept-routes=false', '--accept-dns=false'], check=True)
+      - name: Restore GitHub installer compiler
+        if: runner.os == 'Windows'
+        uses: actions/cache@v5
+        timeout-minutes: 5
+        continue-on-error: true
+        id: nsis_github
+        with:
+          path: tools/nsis
+          key: tools-nsis-${{ needs.resolve.outputs.nsis }}
+          restore-keys: tools-nsis-
+      - name: Restore local fallback for Windows installer compiler
+        id: nsis_local
+        if: runner.os == 'Windows'
+        uses: ./.github/actions/local-cache
+        with:
+          github-hit: ${{ steps.nsis_github.outcome == 'success' && steps.nsis_github.outputs.cache-hit || '' }}
+          github-failed: ${{ steps.nsis_github.outcome == 'failure' }}
+          url: ${{ steps.tailnet.outcome == 'success' && vars.LOCAL_CACHE_URL || '' }}
+          token: ${{ secrets.LOCAL_CACHE_TOKEN }}
+          group: tools/nsis
+          immutable: true
+          paths: tools/nsis
+          key: nsis-${{ needs.resolve.outputs.nsis }}
+          restore-keys: nsis-
       - name: Fetch verified native build
         env:
           GH_TOKEN: ${{ github.token }}
@@ -124,17 +209,17 @@ jobs:
         uses: actions/upload-artifact@v6
         if: always() && runner.os == 'macOS'
         with:
-          name: macos-${{ github.workflow == 'Rust' && 'ci' || 'package' }}-report-${{ matrix.arch }}
+          name: macos-package-report-${{ matrix.arch }}
           path: target/macos-report
           if-no-files-found: error
-          retention-days: 14
+          retention-days: 3
       - uses: actions/upload-artifact@v6
         if: runner.os == 'Linux' && matrix.arch == 'x64'
         with:
           name: linux-tun-test-x64
           path: dist/linux-tun-test
           if-no-files-found: error
-          retention-days: 14
+          retention-days: 3
       - uses: actions/upload-artifact@v6
         with:
           name: package-${{ matrix.system }}-${{ matrix.arch }}
@@ -145,7 +230,7 @@ jobs:
             dist/*.sha256
             dist/package-receipt.json
           if-no-files-found: error
-          retention-days: 14
+          retention-days: 3
   ubuntu_latest:
     name: Ubuntu latest-x64 proxy and TUN
     needs: [resolve, package]
@@ -171,9 +256,96 @@ jobs:
         run: |
           import subprocess, sys
           subprocess.run([sys.executable, 'scripts/test-release-package.py', '--ubuntu-latest'], check=True)
+  android:
+    name: package-android-${{ matrix.arch }}
+    needs: resolve
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        arch: [arm64, armv7, x64]
+    env:
+      PYTHONDONTWRITEBYTECODE: '1'
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          ref: ${{ needs.resolve.outputs.commit }}
+          persist-credentials: false
+      - uses: actions/download-artifact@v7
+        with:
+          name: packaging-dependency-snapshot
+          path: ${{ env.BUILD_INPUTS_DIR }}
+      - name: Apply the verified CI dependency snapshot
+        shell: python
+        run: |
+          import subprocess, sys
+          subprocess.run([sys.executable, 'scripts/build_inputs.py', 'apply'], check=True)
+      - uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: '17'
+      - name: Prepare Android package tools
+        shell: python
+        run: |
+          import os, pathlib, subprocess
+          manager=pathlib.Path(os.environ['ANDROID_HOME'])/'cmdline-tools/latest/bin/sdkmanager'
+          subprocess.run([str(manager),'build-tools;36.0.0'],check=True)
+      - name: Start Android package test device
+        if: matrix.arch == 'x64'
+        run: |
+          sudo chmod a+rw /dev/kvm
+          python3 scripts/android.py emulator --arch x64
+      - name: Load distribution signing key
+        if: ${{ !inputs.check_only }}
+        shell: python
+        env:
+          SIGNING_KEY: ${{ secrets.ANDROID_KEYSTORE }}
+          KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
+          KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
+          KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
+        run: |
+          import base64, os, pathlib
+          if not all(os.environ.get(key) for key in ('SIGNING_KEY','KEYSTORE_PASSWORD','KEY_ALIAS','KEY_PASSWORD')):
+              raise RuntimeError('Android 正式发布须配置长期签名密钥；测试包请启用 check_only')
+          path=pathlib.Path(os.environ['RUNNER_TEMP'])/'android-distribution.p12'
+          path.write_bytes(base64.b64decode(os.environ['SIGNING_KEY'],validate=True))
+          path.chmod(0o600)
+          with open(os.environ['GITHUB_ENV'],'a') as out:
+              for key,value in {'ANDROID_KEYSTORE_PATH':str(path),'ANDROID_KEYSTORE_PASSWORD':os.environ['KEYSTORE_PASSWORD'],
+                  'ANDROID_KEY_ALIAS':os.environ['KEY_ALIAS'],'ANDROID_KEY_PASSWORD':os.environ['KEY_PASSWORD']}.items():
+                  if '\n' in value or '\r' in value: raise ValueError('Invalid signing value')
+                  out.write(key+'='+value+'\n')
+      - name: Package verified Android APK
+        shell: python
+        env:
+          GH_TOKEN: ${{ github.token }}
+          CHECK_ONLY: ${{ inputs.check_only }}
+        run: |
+          import os, subprocess, sys
+          command=[sys.executable,'scripts/android.py','package','--arch','${{ matrix.arch }}',
+              '--run-id','${{ needs.resolve.outputs.ci_run_id }}']
+          if os.environ['CHECK_ONLY']=='true': command.append('--check')
+          subprocess.run(command,check=True)
+      - uses: actions/upload-artifact@v6
+        with:
+          name: package-android-${{ matrix.arch }}
+          path: |
+            dist/*.apk
+            dist/*.sha256
+            dist/package-receipt.json
+          if-no-files-found: error
+          retention-days: 3
+      - uses: actions/upload-artifact@v6
+        if: always() && matrix.arch == 'x64'
+        with:
+          name: android-package-test-report
+          path: target/android-report
+          if-no-files-found: warn
+          retention-days: 3
   publish:
     name: Publish verified release
-    needs: [resolve, package, ubuntu_latest]
+    needs: [resolve, package, ubuntu_latest, android]
     runs-on: ubuntu-latest
     timeout-minutes: 30
     permissions:
@@ -188,6 +360,7 @@ jobs:
       - uses: actions/setup-python@v6
         with:
           python-version: '3.11'
+          check-latest: true
       - name: Verify packages and publish or finish test-only run
         shell: python
         env:
@@ -201,3 +374,57 @@ jobs:
           if os.environ['CHECK_ONLY'] == 'true':
               command.append('--check')
           subprocess.run(command, check=True)
+  cache_budget:
+    name: Actions cache budget
+    needs: [resolve, publish]
+    if: always()
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: read
+      actions: write
+      id-token: write
+    concurrency:
+      group: actions-cache-budget
+      cancel-in-progress: false
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+      - name: Trim obsolete dependencies and enforce 9 GiB cache budget
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PYTHONDONTWRITEBYTECODE: '1'
+        run: python3 scripts/workflow_storage.py
+      - name: Connect for final private cache inventory
+        id: tailnet
+        if: vars.TS_OAUTH_CLIENT_ID != '' && vars.TS_AUDIENCE != ''
+        uses: tailscale/github-action@v4
+        continue-on-error: true
+        with:
+          oauth-client-id: ${{ vars.TS_OAUTH_CLIENT_ID }}
+          audience: ${{ vars.TS_AUDIENCE }}
+          tags: tag:github-action-cache
+          version: ${{ needs.resolve.outputs.tailscale || '1.94.2' }}
+          retry: '1'
+          timeout: 45s
+          args: --accept-dns=false
+          tailscaled-args: --tun=userspace-networking --outbound-http-proxy-listen=127.0.0.1:19082
+      - name: Report the cache after all successful uploads
+        if: steps.tailnet.outcome == 'success'
+        continue-on-error: true
+        env:
+          CACHE_URL: ${{ vars.LOCAL_CACHE_URL }}
+          CACHE_TOKEN: ${{ secrets.LOCAL_CACHE_TOKEN }}
+          CACHE_PROXY: http://127.0.0.1:19082
+          PYTHONDONTWRITEBYTECODE: '1'
+        run: |
+          sudo -n tailscale set --accept-routes=false --accept-dns=false
+          python3 scripts/action_cache.py inventory
+      - uses: actions/upload-artifact@v6
+        if: steps.tailnet.outcome == 'success'
+        with:
+          name: packaging-private-cache-inventory
+          path: target/cache-inventory.json
+          retention-days: 3
+          if-no-files-found: warn

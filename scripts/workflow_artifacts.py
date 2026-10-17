@@ -19,6 +19,7 @@ from build_support import (ROOT, WSL_EGRESS_LINUX, WSL_EGRESS_SERVER, WSL_EGRESS
                            write_json)
 
 BUILD_NAMES = {f'build-{system}-{arch}' for system in ('windows', 'linux', 'macos') for arch in ('x64', 'arm64')}
+BUILD_NAMES |= {f'build-android-{arch}' for arch in ('arm64', 'armv7', 'x64')}
 ARCHIVE_NAME = 'build.tar.gz'
 BUILD_SCHEMA = 2
 TEST_NAMES = {'core_integration'}
@@ -101,6 +102,9 @@ def export_build(system, arch, tests, output, binaries=None):
                     'cargo_lock_sha256': sha256(ROOT/'Cargo.lock'),
                     'rustc': subprocess.check_output(['rustc', '-Vv'], text=True).strip(),
                     'tests': paths, 'files': records}
+        from build_inputs import verified_manifest, toolchain_report
+        manifest['build_inputs'] = verified_manifest()
+        manifest['toolchain'] = toolchain_report()
         write_json(root/'manifest.json', manifest)
         with tarfile.open(archive, 'w:gz', compresslevel=1) as tar:
             for path in sorted(root.rglob('*')):
@@ -117,6 +121,9 @@ def export_build(system, arch, tests, output, binaries=None):
 
 
 def verify_build(root, system, arch, expected_commit):
+    if system == 'android':
+        from android import verify_build as verify_android
+        return verify_android(root, arch, expected_commit)
     manifest = json.loads((root/'manifest.json').read_text(encoding='utf-8'))
     if (manifest.get('schema'), manifest.get('commit'), manifest.get('version'),
         manifest.get('system'), manifest.get('arch'), manifest.get('profile')) != (
@@ -124,6 +131,11 @@ def verify_build(root, system, arch, expected_commit):
         raise ValueError('Build metadata does not match the selected source and platform')
     if manifest.get('cargo_lock_sha256') != sha256(ROOT/'Cargo.lock'):
         raise ValueError('Build dependency lockfile differs from the selected source')
+    from build_inputs import manifest as input_manifest
+    if snapshot := input_manifest():
+        frozen = manifest.get('build_inputs', {})
+        if any(frozen.get(key) != snapshot.get(key) for key in ('commit', 'baseline', 'constraints', 'files')):
+            raise ValueError('Build dependency snapshot differs from the verified CI')
     records = manifest['files']
     extension = '.exe' if system == 'windows' else ''
     required = {'payload/LICENSE', 'payload/clash-of-rust'+extension,

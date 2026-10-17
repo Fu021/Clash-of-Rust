@@ -89,6 +89,9 @@ async def http(reader, writer):
             body, content_type = dns_response(query, bootstrap), 'application/dns-message'
         else:
             METRICS['web'] += 1
+            if path == '/auto-check':
+                # Keep loopback measurements nonzero on fast CI hosts.
+                await asyncio.sleep(0.03)
             body, content_type = b'protected-ok', 'text/plain'
         writer.write(f'HTTP/1.1 200 OK\r\nContent-Type: {content_type}\r\nContent-Length: {len(body)}\r\nConnection: close\r\n\r\n'.encode() + body)
         await writer.drain()
@@ -101,6 +104,10 @@ async def http(reader, writer):
 async def socks(reader, writer):
     remote = None
     try:
+        if writer.get_extra_info('sockname')[1] == 1081:
+            # A second, deliberately slower route makes Auto re-selection
+            # deterministic without relying on public Internet latency.
+            await asyncio.sleep(0.2)
         version, size = await reader.readexactly(2)
         assert version == 5
         await reader.readexactly(size)
@@ -158,7 +165,8 @@ async def main(directory):
         for port in (80, 443, 18080):
             servers.append(await asyncio.start_server(http, host, port, family=family,
                                                      ssl=context if port == 443 else None))
-        servers.append(await asyncio.start_server(socks, host, 1080, family=family))
+        for port in (1080,1081):
+            servers.append(await asyncio.start_server(socks, host, port, family=family))
     loop = asyncio.get_running_loop()
     transport, _ = await loop.create_datagram_endpoint(PlaintextDNS, local_addr=('0.0.0.0', 53))
     (directory/'ready').write_text('ready')

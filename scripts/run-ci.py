@@ -15,10 +15,11 @@ def main():
     args = parser.parse_args()
     if (args.system, args.arch) != (host_system(), host_arch()):
         raise ValueError('CI must run on the selected native architecture')
+    from action_cache import workspace_sources
+    workspace_sources(ROOT)
     run(['cargo', 'fmt', '--all', '--', '--check'])
-    if (args.system, args.arch) == ('linux', 'x64'):
-        run([sys.executable, ROOT/'scripts/test-build-tools.py'])
-        run([sys.executable, ROOT/'scripts/test-workflow-artifacts.py'])
+    # Shared Python checks run in the workflow's prerequisite job, before the
+    # platform matrix restores any large compiler caches.
     # One profile across Clippy, tests and production builds avoids a second
     # dependency compilation and produces the exact binaries released later.
     run(['cargo', 'clippy', '--workspace', '--release', '--all-targets', '--locked', '--', '-D', 'warnings'])
@@ -50,6 +51,7 @@ def main():
     write_json(ROOT/'target/ci-tests.json', tests)
     # Export the exact production binaries tested above.
     export_build(args.system, args.arch, tests, ROOT/'dist/build', binaries=bundle)
+    workspace_sources(ROOT, save=True)
 
 
 if __name__ == '__main__':

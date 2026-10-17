@@ -361,6 +361,13 @@ impl App {
     ) -> (Self, Task<Message>) {
         let mut app =
             Self::initial_state(Err(anyhow::anyhow!("正在初始化内核与配置…")), tray_startup);
+        // Read the small settings file before creating the first surface. Core,
+        // Geo and network initialization remain on the background worker.
+        if let Ok(settings) = startup_store().and_then(|store| store.load_settings()) {
+            app.system_dark = settings.dark;
+            app.settings = settings;
+            app.sync_appearance();
+        }
         app.set_window_size(window_state.size());
         app.window_state = window_state;
         app.core_failure = None;
@@ -384,6 +391,14 @@ impl App {
                 task,
                 desktop_runtime::window::latest().map(Message::ReadWindowSize),
                 desktop_runtime::system::theme().map(Message::SystemTheme),
+                Task::perform(
+                    async {
+                        if let Err(error) = platform::notification::initialize().await {
+                            eprintln!("系统通知授权未开启：{error:#}");
+                        }
+                    },
+                    |_| Message::Tick,
+                ),
             ]),
         )
     }
@@ -573,10 +588,40 @@ impl App {
     }
 
     fn dispatch_scope(&mut self, action: Action, scope: Scope) -> Task<Message> {
+        if matches!(action, Action::Select(..))
+            && (self.settings.claude_protection.is_some()
+                || self.claude.protection_pending.is_some())
+        {
+            self.show_notice(
+                "Claude 保护已锁定当前节点，请先关闭保护再切换节点".into(),
+                false,
+            );
+            return Task::none();
+        }
         if (self.updates.install_pending || self.updates.installing.is_some())
             && !matches!(action, Action::Refresh)
         {
             return Task::none();
+        }
+        if !self.exiting {
+            // Coalesce rapid appearance clicks while a network operation owns the engine.
+            self.queued_actions.retain(|queued| {
+                !matches!(
+                    (&action, queued),
+                    (Action::Appearance(_), Action::Appearance(_))
+                        | (Action::Accent(_), Action::Accent(_))
+                        | (Action::TextScale(_), Action::TextScale(_))
+                )
+            });
+            if (self.engine.is_some() || self.busy)
+                && self.queued_actions.len() < 16
+                && action.preview_appearance(&mut self.settings)
+            {
+                for queued in &self.queued_actions {
+                    queued.preview_appearance(&mut self.settings);
+                }
+                self.sync_appearance();
+            }
         }
         if self.busy || self.exiting {
             if matches!(action, Action::Refresh) {
@@ -1205,6 +1250,16 @@ impl App {
                 }
             }
             Message::Action(action) => {
+                if let Action::Delay(node) = &action
+                    && self
+                        .snapshot
+                        .proxies
+                        .proxies
+                        .get(node.as_str())
+                        .is_some_and(|proxy| matches!(proxy.kind.as_str(), "URLTest" | "Fallback"))
+                {
+                    return self.update(Message::GroupDelay(node.clone()));
+                }
                 self.proxy_order.get_mut().clear();
                 if let Action::Delay(node) = &action {
                     self.node_delays.remove(node);
@@ -1577,6 +1632,10 @@ impl App {
                     }
                 }
                 self.settings = reply.settings;
+                // A completed Geo/network operation predates the queued appearance choices.
+                for queued in &self.queued_actions {
+                    queued.preview_appearance(&mut self.settings);
+                }
                 if !self
                     .queued_actions
                     .iter()
@@ -1659,8 +1718,13 @@ impl App {
                             .retain(|name| proxies.contains_key(name.as_str()));
                         self.group_offsets
                             .retain(|name, _| proxies.contains_key(name.as_str()));
-                        self.node_delays
-                            .retain(|name, _| proxies.contains_key(name.as_str()));
+                        let members = proxies
+                            .values()
+                            .flat_map(|p| p.all.iter().map(|n| n.as_str()))
+                            .collect::<BTreeSet<_>>();
+                        self.node_delays.retain(|name, _| {
+                            proxies.contains_key(name.as_str()) || members.contains(name.as_str())
+                        });
                     }
                     // Rules are static between explicit refreshes. Keep only the
                     // current page's data, including when an older poll finishes.
