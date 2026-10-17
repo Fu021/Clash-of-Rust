@@ -119,7 +119,8 @@ def command(argv, ns=None, data=None, okay=False, timeout=25):
     if result.returncode and not okay:
         # Command arguments/output may contain endpoint addresses or keys.
         executable = Path(argv[0]).name if argv else 'unknown'
-        operation = argv[1] if len(argv) > 1 else '-'
+        operation = next((token for token in argv[1:]
+                          if token not in ('-4', '-6', '-j', '-N')), '-')
         raise Blocked(f'Linux command failed ({executable} {operation!r}, exit '
                       f'{result.returncode}, ns={ns or "root"}); guard retained; '
                       'no command output disclosed.')
