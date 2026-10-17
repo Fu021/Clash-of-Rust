@@ -182,6 +182,7 @@ jobs:
         uses: ./.github/actions/local-cache
         with:
           github-hit: ${{ steps.nsis_github.outcome == 'success' && steps.nsis_github.outputs.cache-hit || '' }}
+          github-failed: ${{ steps.nsis_github.outcome == 'failure' }}
           url: ${{ steps.tailnet.outcome == 'success' && vars.LOCAL_CACHE_URL || '' }}
           token: ${{ secrets.LOCAL_CACHE_TOKEN }}
           group: tools/nsis

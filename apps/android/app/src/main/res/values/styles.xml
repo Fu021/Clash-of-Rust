@@ -7,12 +7,17 @@
         <item name="android:colorBackground">@color/launch_canvas</item>
         <item name="android:windowLightStatusBar">@bool/launch_light_bars</item>
         <item name="android:windowActionModeOverlay">true</item>
+        <!-- Before API 31 the system cannot persist our per-app night mode.
+             Wait for the correctly themed Activity instead of a light preview. -->
+        <item name="android:windowDisablePreview">true</item>
     </style>
     <style name="ClientTheme" parent="ClientBase" />
-    <style name="ClientDarkBase" parent="ClientTheme">
+    <style name="ClientDarkBase" parent="android:style/Theme.Material.NoActionBar">
         <item name="android:windowBackground">#111923</item>
         <item name="android:colorBackground">#111923</item>
         <item name="android:windowLightStatusBar">false</item>
+        <item name="android:windowActionModeOverlay">true</item>
+        <item name="android:windowDisablePreview">true</item>
     </style>
     <style name="ClientDark" parent="ClientDarkBase" />
     <style name="ClientLight" parent="ClientTheme">

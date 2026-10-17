@@ -37,6 +37,9 @@ inputs:
   github-hit:
     description: GitHub cache-hit output; ambiguous Rust prefix hits are checked for restored objects
     required: false
+  github-failed:
+    description: Discard an interrupted GitHub restore before using the private fallback
+    default: 'false'
 outputs:
   cache-hit:
     description: The exact current cache key was restored

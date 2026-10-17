@@ -128,6 +128,7 @@ def workspace_sources(source, save=False):
     """
     source = Path(source)
     snapshot = source/'target/workspace-sources.json'
+    external = Path(os.environ['WORKSPACE_SOURCE_CACHE']) if os.environ.get('WORKSPACE_SOURCE_CACHE') else None
     tracked = subprocess.check_output(['git', 'ls-files', '-z'], cwd=source).decode().split('\0')
     names = [name for name in tracked if name and (name.startswith(('apps/', 'crates/', 'resources/', '.cargo/'))
              or name in ('Cargo.toml', 'Cargo.lock', 'LICENSE'))]
@@ -152,8 +153,17 @@ def workspace_sources(source, save=False):
                for name, children in directories.items()}
     if save:
         snapshot.parent.mkdir(parents=True, exist_ok=True)
-        write_json(snapshot, {'schema': 1, 'files': files, 'directories': folders})
+        value = {'schema': 1, 'files': files, 'directories': folders}
+        write_json(snapshot, value)
+        if external:
+            # rust-cache deletes non-compiler files from target before saving.
+            # Keep its source receipt outside target; the private mirror uses
+            # the copy inside target without duplicating compiler objects.
+            external.parent.mkdir(parents=True, exist_ok=True)
+            write_json(external, value)
         return
+    if external and external.is_file():
+        snapshot = external
     if not snapshot.is_file() or snapshot.is_symlink() or snapshot.stat().st_size > 8*1024**2:
         return
     try:
@@ -173,8 +183,34 @@ def workspace_sources(source, save=False):
         owners = [directory for directory in packages if name.startswith(directory + '/')]
         if owners:
             invalid.add(packages[max(owners, key=len)])
-        else:
+        elif name.startswith(('resources/', '.cargo/')) or name in ('Cargo.toml', 'LICENSE'):
             invalid.update(packages.values())  # Shared resources/manifest changed.
+        # Cargo.lock changes are handled by Cargo's dependency fingerprints.
+        # A reqwest update alone must not discard unrelated Slint/UI objects.
+    # Mobile builds compile shared .slint files outside their own crate. Honor
+    # the public rerun-if-changed directives emitted by those build scripts,
+    # instead of assuming every input lives under the owning Cargo.toml.
+    changed_paths = [(source/name).resolve() for name in changed]
+    if changed_paths:
+        patterns = ('release/build/*/output', 'release/build/*/*/output',
+                    '*/release/build/*/output', '*/release/build/*/*/output')
+        for pattern in patterns:
+            for output in (source/'target').glob(pattern):
+                owners = [(directory, package) for directory, package in packages.items()
+                          if any(name == package or name.startswith(package + '-')
+                                 for name in (output.parent.name, output.parent.parent.name))]
+                for directory, package in owners:
+                    if package in invalid:
+                        continue
+                    for line in output.read_text(encoding='utf-8', errors='replace').splitlines():
+                        match = re.match(r'cargo::?rerun-if-changed=(.+)', line)
+                        if not match:
+                            continue
+                        path = Path(match[1])
+                        watched = (path if path.is_absolute() else source/directory/path).resolve()
+                        if any(path == watched or path.is_relative_to(watched) for path in changed_paths):
+                            invalid.add(package)
+                            break
     restored = 0
     for values, old in ((files, previous['files']), (folders, previous.get('directories', {}))):
         for name, record in values.items():
@@ -188,7 +224,8 @@ def workspace_sources(source, save=False):
     for pattern in ('release/.fingerprint', '*/release/.fingerprint'):
         for directory in (source/'target').glob(pattern):
             for package in invalid:
-                for artifact in directory.glob(package + '-*'):
+                # Cargo supports both <package>-<hash> and <package>/<hash>.
+                for artifact in [directory/package, *directory.glob(package + '-*')]:
                     if artifact.is_dir() and not artifact.is_symlink():
                         shutil.rmtree(artifact)
     print(f'Workspace cache: verified {restored} source/directory timestamps; '
@@ -334,10 +371,48 @@ def unpack(archive_path, paths):
                 destination.mkdir(parents=True, exist_ok=True)
             else:
                 destination.parent.mkdir(parents=True, exist_ok=True)
-                with archive.extractfile(member) as incoming, destination.open('wb') as output:
-                    shutil.copyfileobj(incoming, output, CHUNK)
-                destination.chmod(member.mode & 0o777)
-                os.utime(destination, (member.mtime, member.mtime))
+                temporary = None
+                try:
+                    with tempfile.NamedTemporaryFile(dir=destination.parent, prefix='.cache-extract-', delete=False) as output:
+                        temporary = Path(output.name)
+                        with archive.extractfile(member) as incoming:
+                            shutil.copyfileobj(incoming, output, CHUNK)
+                    temporary.chmod(member.mode & 0o777)
+                    os.utime(temporary, (member.mtime, member.mtime))
+                    temporary.replace(destination)
+                finally:
+                    if temporary:
+                        temporary.unlink(missing_ok=True)
+
+
+def discard_restore(config):
+    """A failed restore must not leave fresh fingerprints beside partial objects."""
+    if os.environ.get('GITHUB_ACTIONS') != 'true':
+        raise ValueError('Interrupted cache cleanup is restricted to Actions runners')
+    def remove(path):
+        if path.is_symlink() or path.is_file():
+            path.unlink(missing_ok=True)
+        elif path.is_dir():
+            shutil.rmtree(path)
+    paths = cache_paths(config)
+    if config['kind'] == 'rust':
+        for path in paths[:-1]:
+            remove(path)
+        target = paths[-1]
+        if target.is_dir() and not target.is_symlink():
+            remove(target/'release')
+            for child in target.iterdir():
+                if re.fullmatch(r'(?:aarch64|armv7|x86_64)-[a-z0-9_-]+', child.name) and not child.is_symlink():
+                    remove(child/'release')
+            for name in ('workspace-sources.json', '.rustc_info.json'):
+                remove(target/name)
+        if external := os.environ.get('WORKSPACE_SOURCE_CACHE'):
+            remove(Path(external))
+    else:
+        for path in paths:
+            remove(path)
+    config.update(hit=False, restored=False, private_exact=False, mirror_required=True)
+    print('Discarded interrupted compiler/download cache; source snapshots and reports preserved.', flush=True)
 
 
 def endpoint(config):
@@ -398,7 +473,10 @@ def restore(config):
         config['key'] = generation + config['key']
         config['prefix'] = [generation + p for p in config['prefix']]
     config['resolved_paths'] = [str(p) for p in cache_paths(config)]
-    github = github_restored(config)
+    github = github_restored(config) and not config.get('github_failed')
+    config['github_supplied'] = github
+    if config.get('github_failed') and not github:
+        discard_restore(config)
     if github:
         config.update(restored=True, hit=config['github_hit'] == 'true')
     if not config['url'] or not config['token']:
@@ -449,6 +527,7 @@ def restore(config):
                 raise ValueError('Cache archive checksum mismatch')
         paths = [Path(p) for p in config['resolved_paths']]
         with phase(config, 'extract'):
+            config['restore_started'] = True
             unpack(archive, paths)
     config.update(available=True, restored=True, hit=record['key'] == config['key'])
     if config['kind'] == 'rust':
@@ -556,6 +635,18 @@ class Store:
                         database.execute('UPDATE entries SET accessed=? WHERE category=? AND id=?', (time.time(), group, row['id']))
                         return {'schema': SCHEMA, 'group': group, **{k: row[k] for k in ('id', 'key', 'size', 'sha256')}}
         return None
+
+    def fetch(self, group, identifier):
+        path = self.path(group, identifier)
+        with self.lock, self.database() as database:
+            if not path.is_file() or not database.execute(
+                    'SELECT 1 FROM entries WHERE category=? AND id=?', (group, identifier)).fetchone():
+                raise FileNotFoundError('Cache miss')
+            # Index-based restores fetch shards directly, without a per-shard
+            # metadata lookup. Those reads must refresh LRU priority too.
+            database.execute('UPDATE entries SET accessed=? WHERE category=? AND id=?',
+                             (time.time(), group, identifier))
+        return path
 
     def prune(self, incoming=0, protected_group=None):
         with self.lock, self.database() as database:
@@ -679,9 +770,9 @@ class Handler(BaseHTTPRequestHandler):
                 result = self.server.store.lookup(group, query['key'][0], query.get('prefix', [''])[0].splitlines())
                 self.json_reply(200 if result else 404, result or {'error': 'Cache miss'})
             elif url.path == '/v1/blob':
-                path = self.server.store.path(group, query['id'][0])
+                path = self.server.store.fetch(group, query['id'][0])
                 with path.open('rb') as incoming:
-                    self.send_response(200); self.send_header('Content-Length', str(path.stat().st_size)); self.end_headers()
+                    self.send_response(200); self.send_header('Content-Length', str(os.fstat(incoming.fileno()).st_size)); self.end_headers()
                     shutil.copyfileobj(incoming, self.wfile, CHUNK)
             else:
                 self.json_reply(404, {'error': 'Unknown endpoint'})
@@ -702,6 +793,12 @@ class Handler(BaseHTTPRequestHandler):
             self.json_reply(201 if saved else 409, {'saved': saved})
         except (KeyError, ValueError, TypeError):
             self.json_reply(400, {'error': 'Invalid cache upload'})
+        except (TimeoutError, ConnectionError):
+            # A slow/disconnected uploader is not a disk-capacity failure.
+            try:
+                self.json_reply(408, {'error': 'Cache upload interrupted'})
+            except (TimeoutError, ConnectionError):
+                pass
         except OSError:
             self.json_reply(507, {'error': 'Cache storage unavailable'})
 
@@ -791,6 +888,8 @@ def main():
             status = re.search(r'HTTP [0-9]{3}', str(error))
             detail = type(error).__name__ + (' '+status[0] if status else '')
             print('::warning::Local cache unavailable ('+detail+'); normal compilation remains enabled.')
+            if args.operation == 'restore' and config.get('restore_started') and not config.get('github_supplied'):
+                discard_restore(config)
         finally:
             write_json(args.state, config)
 

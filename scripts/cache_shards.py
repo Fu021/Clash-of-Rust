@@ -102,6 +102,7 @@ def restore(config, github):
                 # one shard. Keep the remaining verified dependencies useful.
                 missing.append(i)
                 return 0
+            config['restore_started'] = True
             cache.unpack(archive, paths)
             archive.unlink()
             return shard['size']
