@@ -121,7 +121,14 @@ def command(argv, ns=None, data=None, okay=False, timeout=25):
         executable = Path(argv[0]).name if argv else 'unknown'
         operation = next((token for token in argv[1:]
                           if token not in ('-4', '-6', '-j', '-N')), '-')
-        raise Blocked(f'Linux command failed ({executable} {operation!r}, exit '
+        try:
+            position = argv.index(operation)
+            action = (argv[position + 1] if operation in
+                      ('rule', 'route', 'addr', 'link') and len(argv) > position + 1 else '')
+        except ValueError:
+            action = ''
+        detail = ' '.join(x for x in (operation, action) if x)
+        raise Blocked(f'Linux command failed ({executable} {detail!r}, exit '
                       f'{result.returncode}, ns={ns or "root"}); guard retained; '
                       'no command output disclosed.')
     return result
