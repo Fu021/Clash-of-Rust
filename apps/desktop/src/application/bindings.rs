@@ -176,6 +176,13 @@ impl native::Host for DesktopHost {
                     if let Some(host) = slot.borrow_mut().as_mut() {
                         let task = host.app.intent(intent, a.as_str(), b.as_str());
                         host.sync();
+                        if intent == Intent::ConnectionSort
+                            && let Some((_, window)) = &host.window
+                        {
+                            // Sorting can reorder every row. Invalidate the software
+                            // surface too, so the header is painted in the same frame.
+                            repaint::invalidate(window.window());
+                        }
                         host.spawn(task);
                     }
                 })

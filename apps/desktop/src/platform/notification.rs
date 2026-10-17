@@ -8,14 +8,21 @@ mod macos;
 #[cfg(windows)]
 mod windows;
 
-/// macOS remembers this decision; subsequent launches do not show another prompt.
+/// Prepare native notification identity/permission without sending a toast.
 /// Permission preparation does not send a test notification or block core startup.
 pub async fn initialize() -> Result<()> {
+    #[cfg(windows)]
+    windows::initialize().await?;
     #[cfg(target_os = "macos")]
     tokio::time::timeout(std::time::Duration::from_secs(120), macos::initialize())
         .await
         .context("等待 macOS 通知授权超时")??;
     Ok(())
+}
+
+#[cfg(windows)]
+pub fn prepare_process() -> Result<()> {
+    windows::prepare_process()
 }
 
 pub async fn show(title: &str, message: &str) -> Result<()> {

@@ -62,7 +62,8 @@ fn projection_reuses_models_and_releases_hidden_and_inactive_lists() {
 
 #[test]
 fn connection_sort_clicks_redraw_the_header_immediately_and_third_click_restores_rows() {
-    ui_testing::initialize(950, 700);
+    use slint::platform::software_renderer::RepaintBufferType;
+    let adapter = ui_testing::initialize(950, 700);
     let mut app = fixture(Page::Connections);
     let window = AppWindow::new().unwrap();
     let data = window.global::<UiData>();
@@ -71,14 +72,25 @@ fn connection_sort_clicks_redraw_the_header_immediately_and_third_click_restores
     app.present(&data, &mut models);
     let events = pointer_events(&window);
     window.show().unwrap();
-    let header = || {
-        let image = window.window().take_snapshot().unwrap();
-        image
-            .as_bytes()
-            .chunks_exact(image.width() as usize * 4)
+    let mut pixels = vec![slint::Rgb8Pixel::default(); 950 * 700];
+    let mut header = || {
+        assert!(adapter.draw_if_needed(|renderer| {
+            renderer.set_repaint_buffer_type(RepaintBufferType::ReusedBuffer);
+            renderer.render(&mut pixels, 950);
+            let mut reference = vec![slint::Rgb8Pixel::default(); 950 * 700];
+            renderer.set_repaint_buffer_type(RepaintBufferType::NewBuffer);
+            renderer.render(&mut reference, 950);
+            renderer.set_repaint_buffer_type(RepaintBufferType::ReusedBuffer);
+            assert_eq!(
+                pixels, reference,
+                "partial repaint must match a fresh frame"
+            );
+        }));
+        pixels
+            .chunks_exact(950)
             .skip(156)
             .take(52)
-            .flat_map(|row| row[200 * 4..926 * 4].iter().copied())
+            .flat_map(|row| row[200..926].iter().copied())
             .collect::<Vec<_>>()
     };
     let before = header();
@@ -87,10 +99,19 @@ fn connection_sort_clicks_redraw_the_header_immediately_and_third_click_restores
         .iter()
         .map(|row| row.id)
         .collect::<Vec<_>>();
-    for (x, field) in [(780., "download-rate"), (670., "upload-rate")] {
+    for (x, y, field) in [
+        (780., 174., "download-rate"),
+        (780., 197., "download-total"),
+        (670., 174., "upload-rate"),
+        (670., 197., "upload-total"),
+        (480., 174., "rule"),
+        (480., 197., "chain"),
+        (260., 174., "name"),
+        (260., 197., "start"),
+    ] {
         let mut frames = Vec::new();
         for click in 0..3 {
-            ui_testing::click(window.window(), x, 174.);
+            ui_testing::click(window.window(), x, y);
             let event = events
                 .borrow_mut()
                 .pop()

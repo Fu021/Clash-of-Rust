@@ -13,9 +13,21 @@ component SortHeading inherits Rectangle {
     accessible-label: root.label + (root.active ? (root.descending ? " ↓" : " ↑") : "");
     accessible-action-default => { UiActions.dispatch(Intent.connection-sort, root.field, ""); }
     HorizontalLayout { spacing: 4px;
-        Caption { text: root.label; min-width: 0px; }
-        Caption { width: max(16px, Theme.detail-size * 1.1); horizontal-stretch: 0;
-            horizontal-alignment: center; text: root.active ? (root.descending ? "↓" : "↑") : "";
+        Caption { text: root.label; min-width: 0px; color: root.active ? Theme.accent : Theme.secondary; }
+        // Keep the indicator's geometry stable, including when no sort is active.
+        // A path does not depend on fallback-font shaping or empty text metrics.
+        Rectangle { width: 16px; horizontal-stretch: 0;
+            Path {
+                x: 2px; y: (parent.height - self.height) / 2;
+                width: 12px; height: 12px; viewbox-width: 12; viewbox-height: 12;
+                stroke: root.active ? Theme.accent : transparent;
+                stroke-width: 1.5px;
+                MoveTo { x: 6; y: root.descending ? 1 : 11; }
+                LineTo { x: 6; y: root.descending ? 11 : 1; }
+                MoveTo { x: 2; y: root.descending ? 7 : 5; }
+                LineTo { x: 6; y: root.descending ? 11 : 1; }
+                LineTo { x: 10; y: root.descending ? 7 : 5; }
+            }
         }
     }
     TouchArea { mouse-cursor: pointer; clicked => { UiActions.dispatch(Intent.connection-sort, root.field, ""); } }
