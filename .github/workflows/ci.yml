@@ -5,7 +5,7 @@ on:
   pull_request:
 env:
   SEGMENT_DOWNLOAD_TIMEOUT_MINS: '2'
-  BUILD_INPUTS_DIR: target/dependency-snapshot
+  BUILD_INPUTS_DIR: dependency-snapshot
 permissions:
   contents: read
 concurrency:
@@ -89,7 +89,7 @@ jobs:
           url: ${{ steps.tailnet.outcome == 'success' && vars.LOCAL_CACHE_URL || '' }}
           token: ${{ secrets.LOCAL_CACHE_TOKEN }}
           group: dependencies/build-inputs
-          paths: target/dependency-snapshot
+          paths: ${{ env.BUILD_INPUTS_DIR }}
           key: source-${{ hashFiles('Cargo.lock', 'Cargo.toml', 'apps/**/Cargo.toml', 'crates/**/Cargo.toml', '.cargo/**', 'apps/android/core/go.*', 'apps/android/**/*.gradle.kts', 'apps/android/gradle.properties') }}-${{ github.run_id }}-${{ github.run_attempt }}
           restore-keys: |
             source-${{ hashFiles('Cargo.lock', 'Cargo.toml', 'apps/**/Cargo.toml', 'crates/**/Cargo.toml', '.cargo/**', 'apps/android/core/go.*', 'apps/android/**/*.gradle.kts', 'apps/android/gradle.properties') }}-
@@ -103,7 +103,7 @@ jobs:
       - uses: actions/upload-artifact@v6
         with:
           name: dependency-snapshot
-          path: target/dependency-snapshot
+          path: ${{ env.BUILD_INPUTS_DIR }}
           retention-days: 3
           if-no-files-found: error
   android:
@@ -140,7 +140,7 @@ jobs:
       - uses: actions/download-artifact@v7
         with:
           name: dependency-snapshot
-          path: target/dependency-snapshot
+          path: ${{ env.BUILD_INPUTS_DIR }}
       - name: Apply the resolved source dependency snapshot
         shell: python
         run: |
@@ -422,7 +422,7 @@ jobs:
       - uses: actions/download-artifact@v7
         with:
           name: dependency-snapshot
-          path: target/dependency-snapshot
+          path: ${{ env.BUILD_INPUTS_DIR }}
       - name: Apply the resolved source dependency snapshot
         shell: python
         run: |

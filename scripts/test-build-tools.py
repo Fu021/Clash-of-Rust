@@ -269,6 +269,73 @@ class BuildTests(unittest.TestCase):
                 compiler.write_bytes(b'corrupt')
                 with self.assertRaises(urllib.error.URLError): build.nsis()
 
+    def test_nsis_completed_install_survives_a_locked_temporary_download(self):
+        for persistent in (False, True):
+            with self.subTest(persistent=persistent), tempfile.TemporaryDirectory() as temporary:
+                root = Path(temporary)
+                installer = root/'tools/nsis-installer.exe'
+                compiler = root/'tools/nsis/current/makensis.exe'
+                selected = {'version':'test', 'url':'https://example.test/nsis.exe', 'sha256':'1'*64}
+                original_unlink = Path.unlink
+                attempts = []
+                def unlink(path, *args, **kwargs):
+                    if path == installer:
+                        attempts.append(path)
+                        if persistent or len(attempts) == 1:
+                            raise PermissionError('installer still open')
+                    return original_unlink(path, *args, **kwargs)
+                def install(*args, **kwargs):
+                    candidate = root/'tools/nsis-stage/makensis.exe'
+                    candidate.parent.mkdir(parents=True)
+                    candidate.write_bytes(b'installed compiler')
+                def download(*args, **kwargs):
+                    installer.parent.mkdir(parents=True, exist_ok=True)
+                    installer.write_bytes(b'installer')
+                with patch.object(build, 'ROOT', root), patch.object(build_inputs, 'component', return_value=selected), \
+                     patch.object(build, 'download', side_effect=download), \
+                     patch.object(build.subprocess, 'run', side_effect=install), \
+                     patch.object(Path, 'unlink', unlink), patch.object(build.time, 'sleep'):
+                    self.assertEqual(build.nsis(), compiler)
+                    self.assertEqual(build.nsis(), compiler)
+                self.assertEqual(len(attempts), 3 if persistent else 2)
+                self.assertEqual(compiler.read_bytes(), b'installed compiler')
+                receipt = json.loads((root/'tools/nsis/tool.json').read_text())
+                self.assertEqual(receipt['compiler_sha256'], build.sha256(compiler))
+
+    def test_dependency_cli_and_readers_share_the_configured_snapshot_directory(self):
+        directory = Path(os.environ['BUILD_INPUTS_DIR'])
+        (directory/'inputs.json').write_text(json.dumps({'marker':'selected snapshot'}))
+        self.assertEqual(build_inputs.manifest(), {'marker':'selected snapshot'})
+        with patch.object(build_inputs, 'apply') as apply, \
+             patch('sys.argv', ['build_inputs.py', 'apply']):
+            build_inputs.main()
+            apply.assert_called_once_with(directory)
+
+    def test_export_rejects_missing_stale_or_modified_dependency_snapshots(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            snapshot = Path(os.environ['BUILD_INPUTS_DIR'])/'inputs.json'
+            with patch.object(build_inputs, 'ROOT', root), \
+                 patch.object(build_inputs, 'current_commit', return_value='current'):
+                with self.assertRaisesRegex(ValueError, 'requires the current'):
+                    build_inputs.verified_manifest()
+                files = {}
+                for name in build_inputs.FILES:
+                    path = root/name
+                    path.parent.mkdir(parents=True, exist_ok=True)
+                    path.write_text('resolved '+name)
+                    files[name] = build.sha256(path)
+                value = {'schema':1, 'commit':'old', 'files':files}
+                snapshot.write_text(json.dumps(value))
+                with self.assertRaisesRegex(ValueError, 'requires the current'):
+                    build_inputs.verified_manifest()
+                value['commit'] = 'current'
+                snapshot.write_text(json.dumps(value))
+                self.assertEqual(build_inputs.verified_manifest(), value)
+                (root/'Cargo.lock').write_text('changed after resolving')
+                with self.assertRaisesRegex(ValueError, 'changed after resolution: Cargo.lock'):
+                    build_inputs.verified_manifest()
+
     def test_android_dependency_retry_is_bounded_and_keeps_compiler_errors(self):
         def process(status, output):
             child = MagicMock()

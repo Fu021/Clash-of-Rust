@@ -3,6 +3,7 @@
 /bundle/
 /dist/
 /ci-build/
+/dependency-snapshot/
 /tools/
 /.local-tools/
 

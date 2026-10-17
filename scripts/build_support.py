@@ -287,7 +287,17 @@ def nsis(proxy=''):
             write_json(receipt, record)
             return compiler
         finally:
-            installer.unlink(missing_ok=True)
+            # Windows may still hold the self-extractor after its parent exits.
+            # Cleanup must not discard a successfully installed, hashed tool.
+            for attempt in range(3):
+                try:
+                    installer.unlink(missing_ok=True)
+                    break
+                except OSError:
+                    if attempt == 2:
+                        print('::warning::NSIS temporary download is still locked; runner cleanup will remove it.')
+                    else:
+                        time.sleep(0.5 * (attempt + 1))
             shutil.rmtree(stage, ignore_errors=True)
     except (OSError, ValueError, http.client.HTTPException, subprocess.SubprocessError):
         if not valid or not compiler.is_file() or sha256(compiler) != previous['compiler_sha256']:

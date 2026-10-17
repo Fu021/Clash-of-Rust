@@ -97,10 +97,9 @@ def export_build(system, arch, tests, output, binaries=None):
                     'cargo_lock_sha256': sha256(ROOT/'Cargo.lock'),
                     'rustc': subprocess.check_output(['rustc', '-Vv'], text=True).strip(),
                     'tests': paths, 'files': records}
-        from build_inputs import manifest as input_manifest, toolchain_report
-        if snapshot := input_manifest():
-            manifest['build_inputs'] = snapshot
-            manifest['toolchain'] = toolchain_report()
+        from build_inputs import verified_manifest, toolchain_report
+        manifest['build_inputs'] = verified_manifest()
+        manifest['toolchain'] = toolchain_report()
         write_json(root/'manifest.json', manifest)
         with tarfile.open(archive, 'w:gz', compresslevel=1) as tar:
             for path in sorted(root.rglob('*')):

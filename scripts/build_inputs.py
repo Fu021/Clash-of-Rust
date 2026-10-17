@@ -46,6 +46,19 @@ def manifest(directory=None):
     return json.loads(path.read_text()) if path.is_file() else None
 
 
+def verified_manifest():
+    value = manifest()
+    if not value or value.get('schema') != 1 or value.get('commit') != current_commit():
+        raise ValueError('Build export requires the current verified dependency snapshot')
+    if set(value.get('files', {})) != set(FILES):
+        raise ValueError('Build dependency snapshot is incomplete')
+    for relative, checksum in value['files'].items():
+        path = ROOT / relative
+        if not path.is_file() or sha256(path) != checksum:
+            raise ValueError('Build dependencies changed after resolution: ' + relative)
+    return value
+
+
 def component(name):
     value = manifest()
     return value.get('upstream', {}).get(name) if value else None
@@ -332,7 +345,7 @@ def toolchain_report():
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('operation', choices=('resolve', 'apply', 'packaging'))
-    parser.add_argument('--directory', type=Path, default=SNAPSHOT)
+    parser.add_argument('--directory', type=Path, default=Path(os.environ.get('BUILD_INPUTS_DIR', SNAPSHOT)))
     args = parser.parse_args()
     {'resolve': resolve, 'apply': apply, 'packaging': packaging}[args.operation](args.directory)
 

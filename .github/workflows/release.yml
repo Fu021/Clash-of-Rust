@@ -13,7 +13,7 @@ on:
         type: boolean
 env:
   SEGMENT_DOWNLOAD_TIMEOUT_MINS: '2'
-  BUILD_INPUTS_DIR: target/dependency-snapshot
+  BUILD_INPUTS_DIR: dependency-snapshot
 permissions:
   actions: read
   contents: read
@@ -60,7 +60,7 @@ jobs:
       - uses: actions/download-artifact@v7
         with:
           name: dependency-snapshot
-          path: target/dependency-snapshot
+          path: ${{ env.BUILD_INPUTS_DIR }}
           run-id: ${{ steps.source.outputs.ci_run_id }}
           github-token: ${{ github.token }}
       - name: Apply CI dependencies and refresh packaging tools
@@ -74,7 +74,7 @@ jobs:
       - uses: actions/upload-artifact@v6
         with:
           name: packaging-dependency-snapshot
-          path: target/dependency-snapshot
+          path: ${{ env.BUILD_INPUTS_DIR }}
           retention-days: 3
           if-no-files-found: error
   package:
@@ -133,7 +133,7 @@ jobs:
       - uses: actions/download-artifact@v7
         with:
           name: packaging-dependency-snapshot
-          path: target/dependency-snapshot
+          path: ${{ env.BUILD_INPUTS_DIR }}
       - name: Apply the verified CI dependency snapshot
         shell: python
         run: |
@@ -270,7 +270,7 @@ jobs:
       - uses: actions/download-artifact@v7
         with:
           name: packaging-dependency-snapshot
-          path: target/dependency-snapshot
+          path: ${{ env.BUILD_INPUTS_DIR }}
       - name: Apply the verified CI dependency snapshot
         shell: python
         run: |

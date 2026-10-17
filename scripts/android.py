@@ -238,10 +238,9 @@ def export_build(arch):
                 'profile':'release', 'cargo_lock_sha256':sha256(ROOT/'Cargo.lock'),
                 'files':{name:{'sha256':sha256(path),'size':path.stat().st_size,'executable':False} for name,path in records.items()},
                 'tests':{'android-proxy-tun':'tests/androidTest.apk'}}
-    from build_inputs import manifest as input_manifest, toolchain_report
-    if snapshot := input_manifest():
-        manifest['build_inputs'] = snapshot
-        manifest['toolchain'] = toolchain_report()
+    from build_inputs import verified_manifest, toolchain_report
+    manifest['build_inputs'] = verified_manifest()
+    manifest['toolchain'] = toolchain_report()
     with tarfile.open(output/ARCHIVE_NAME, 'w:gz', compresslevel=1) as tar:
         for name,path in records.items():
             tar.add(path, arcname=name)
