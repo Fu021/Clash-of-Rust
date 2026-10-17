@@ -30,6 +30,17 @@ CHUNK = 1024 * 1024
 DEFAULT_ROOT = Path('/home/coder/github_action_cache')
 
 
+@contextmanager
+def phase(config, name):
+    started = time.monotonic()
+    try:
+        yield
+    finally:
+        seconds = round(time.monotonic() - started, 3)
+        config.setdefault('timings', {})[name] = seconds
+        print(f'Private cache {config["group"]}: {name} {seconds:.3f}s', flush=True)
+
+
 def digest(path):
     value = hashlib.sha256()
     with Path(path).open('rb') as stream:
@@ -58,6 +69,10 @@ def cache_report(config, operation, result, size=0):
     record = {'group': config['group'], 'key': config['key'], 'operation': operation,
               'result': result, 'bytes': size, 'run_id': os.environ.get('GITHUB_RUN_ID', ''),
               'commit': os.environ.get('GITHUB_SHA', '')}
+    phases = ('lookup', 'download', 'verify', 'extract', 'fingerprint', 'compress', 'upload')
+    record['timings_seconds'] = {name: config['timings'][name] for name in phases if name in config.get('timings', {})}
+    if config.get('started') is not None:
+        record['timings_seconds']['total'] = round(time.monotonic() - config['started'], 3)
     directory = Path(os.environ.get('GITHUB_WORKSPACE', '.'))/'target/cache-report'
     directory.mkdir(parents=True, exist_ok=True)
     name = hashlib.sha256((config['group']+operation).encode()).hexdigest()[:16]+'.json'
@@ -67,6 +82,10 @@ def cache_report(config, operation, result, size=0):
             output.write('\n### Private cache '+operation+'\n\n'
                          '| Group | Result | Size | Key |\n| --- | --- | --- | --- |\n'
                          f'| {record["group"]} | {result} | {size/1024**2:.1f} MiB | {record["key"]} |\n')
+            if record['timings_seconds']:
+                output.write('\n| Phase | Seconds |\n| --- | ---: |\n')
+                for name,seconds in record['timings_seconds'].items():
+                    output.write(f'| {name} | {seconds:.3f} |\n')
 
 
 def write_json(path, value):
@@ -249,6 +268,7 @@ def response(config, path, **kwargs):
 
 def restore(config):
     config.update(hit=False, restored=False, available=False)
+    config.update(timings={}, started=time.monotonic())
     if config['kind'] == 'rust':
         compiler = subprocess.check_output(['rustc', '-vV'])
         key, prefix = rust_keys(config['source'], compiler, dict(os.environ))
@@ -268,33 +288,37 @@ def restore(config):
         cache_report(config, 'restore', 'not configured; normal build')
         return
     query = urllib.parse.urlencode({'group': config['group'], 'key': config['key'], 'prefix': '\n'.join(config['prefix'])})
-    with response(config, '/v1/lookup?'+query) as reply:
-        if reply.status == 404:
-            config['available'] = True
-            print('Local cache miss:', config['group'])
-            cache_report(config, 'restore', 'miss; upstream/repository inputs required')
-            return
-        if reply.status != 200:
-            raise RuntimeError(f'Cache lookup HTTP {reply.status}')
-        record = json.load(reply)
+    with phase(config, 'lookup'), response(config, '/v1/lookup?'+query) as reply:
+        status = reply.status
+        record = json.load(reply) if status == 200 else None
+    if status == 404:
+        config['available'] = True
+        print('Local cache miss:', config['group'])
+        cache_report(config, 'restore', 'miss; upstream/repository inputs required')
+        return
+    if status != 200:
+        raise RuntimeError(f'Cache lookup HTTP {status}')
     if record.get('schema') != SCHEMA or record['group'] != config['group'] or not re.fullmatch('[0-9a-f]{64}', record['id']):
         raise ValueError('Invalid cache metadata')
     if record['key'] != config['key'] and not any(record['key'].startswith(p) for p in config['prefix']):
         raise ValueError('Cache generation mismatch')
     with tempfile.TemporaryDirectory(prefix='actions-cache-', dir=os.environ.get('RUNNER_TEMP')) as temporary:
         archive = Path(temporary)/'cache.tar.gz'
-        with response(config, '/v1/blob?'+urllib.parse.urlencode({'group': config['group'], 'id': record['id']})) as reply:
+        with phase(config, 'download'), response(config, '/v1/blob?'+urllib.parse.urlencode({'group': config['group'], 'id': record['id']})) as reply:
             if reply.status != 200:
                 raise RuntimeError(f'Cache download HTTP {reply.status}')
             with archive.open('wb') as output:
                 shutil.copyfileobj(reply, output, CHUNK)
-        if archive.stat().st_size != record['size'] or digest(archive) != record['sha256']:
-            raise ValueError('Cache archive checksum mismatch')
+        with phase(config, 'verify'):
+            if archive.stat().st_size != record['size'] or digest(archive) != record['sha256']:
+                raise ValueError('Cache archive checksum mismatch')
         paths = [Path(p) for p in config['resolved_paths']]
-        unpack(archive, paths)
+        with phase(config, 'extract'):
+            unpack(archive, paths)
     config.update(available=True, restored=True, hit=record['key'] == config['key'])
     if config['kind'] != 'rust':
-        config['fingerprint'] = fingerprint(paths)
+        with phase(config, 'fingerprint'):
+            config['fingerprint'] = fingerprint(paths)
     cache_report(config, 'restore', 'exact' if config['hit'] else 'compatible snapshot', record['size'])
     print('Restored local cache:', config['group'], f'{record["size"]/1024**2:.1f} MiB', 'exact' if config['hit'] else 'compatible generation')
 
@@ -302,26 +326,34 @@ def restore(config):
 def save(config):
     if not config.get('available') or not config['save']:
         return
+    config.update(timings={}, started=time.monotonic())
     # Globs such as Cargo's Skia source directory may not exist until compilation.
     paths = cache_paths(config)
     if not any(p.exists() for p in paths):
         return
-    if ((config.get('hit') and config['kind'] == 'rust')
-            or (config['kind'] != 'rust' and config.get('fingerprint') == fingerprint(paths))):
+    unchanged = config.get('hit') and config['kind'] == 'rust'
+    if config['kind'] != 'rust':
+        with phase(config, 'fingerprint'):
+            unchanged = config.get('fingerprint') == fingerprint(paths)
+    if unchanged:
         cache_report(config, 'save', 'unchanged; reused existing cache')
         return
     with tempfile.TemporaryDirectory(prefix='actions-cache-', dir=os.environ.get('RUNNER_TEMP')) as temporary:
         archive = Path(temporary)/'cache.tar.gz'
-        pack(paths, archive, rust=config['kind'] == 'rust')
+        with phase(config, 'compress'):
+            pack(paths, archive, rust=config['kind'] == 'rust')
         query = urllib.parse.urlencode({'group': config['group'], 'key': config['key']})
         sequence = int(os.environ.get('GITHUB_RUN_ID', '0'))*1000 + min(int(os.environ.get('GITHUB_RUN_ATTEMPT', '0')), 999)
-        headers = {'Content-Length': str(archive.stat().st_size), 'X-Content-SHA256': digest(archive),
+        with phase(config, 'verify'):
+            checksum = digest(archive)
+        headers = {'Content-Length': str(archive.stat().st_size), 'X-Content-SHA256': checksum,
                    'X-Cache-Sequence': str(sequence), 'Content-Type': 'application/octet-stream'}
-        with archive.open('rb') as incoming, response(config, '/v1/blob?'+query, method='PUT', file=incoming, headers=headers) as reply:
+        with phase(config, 'upload'), archive.open('rb') as incoming, response(config, '/v1/blob?'+query, method='PUT', file=incoming, headers=headers) as reply:
             if reply.status not in (200, 201, 409):
                 raise RuntimeError(f'Cache upload HTTP {reply.status}')
-            cache_report(config, 'save', 'superseded; newer cache retained' if reply.status == 409
-                         else 'saved; older snapshot replaced', archive.stat().st_size)
+            superseded = reply.status == 409
+        cache_report(config, 'save', 'superseded; newer cache retained' if superseded
+                     else 'saved; older snapshot replaced', archive.stat().st_size)
         print('Saved local cache:', config['group'], f'{archive.stat().st_size/1024**2:.1f} MiB')
 
 

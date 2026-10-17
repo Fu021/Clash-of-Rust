@@ -88,6 +88,21 @@ class BuildTests(unittest.TestCase):
                 with self.assertRaises(ValueError): local_cache.unpack(archive, [restored])
             self.assertFalse((root.parent/escape).exists())
 
+    def test_cache_timing_report_never_copies_credentials_or_private_action_state(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root=Path(temporary)
+            config={'group':'rust/linux-x64','key':'verified','token':'never-publish-this-token',
+                    'url':'http://100.64.3.1:19081','started':10,
+                    'timings':{'download':1.25,'token':'never-publish-this-token'}}
+            with patch.dict(os.environ,{'GITHUB_WORKSPACE':str(root),'GITHUB_STEP_SUMMARY':str(root/'summary.txt')}), \
+                    patch.object(local_cache.time,'monotonic',return_value=12):
+                local_cache.cache_report(config,'restore','exact',1024)
+            report=next((root/'target/cache-report').glob('*.json'))
+            self.assertEqual(json.loads(report.read_text())['timings_seconds'],{'download':1.25,'total':2})
+            for path in (report,root/'summary.txt'):
+                self.assertNotIn(config['token'],path.read_text())
+                self.assertNotIn(config['url'],path.read_text())
+
     def test_local_cache_uploads_are_atomic_checked_and_immutable(self):
         with tempfile.TemporaryDirectory() as temporary:
             store = local_cache.Store(temporary, budget=1000, min_free=0)
