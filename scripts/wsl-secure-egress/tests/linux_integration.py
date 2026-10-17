@@ -370,12 +370,14 @@ class Fixture:
         self.attest()
         return [*self.manager_argv("run"), "--scope-attestation", self.attestation, "--"]
 
-    def launch(self, prefix, code, config, *, ordinary=False, inherit_fds=()):
+    def launch(self, prefix, code, config, *, ordinary=False, inherit_fds=(),
+               capture_stderr=False):
         identity = dict(user=UID, group=GID, extra_groups=()) if ordinary else {}
         # /usr/local and /opt are intentionally absent inside manager's bwrap.
         process = subprocess.Popen([*map(str, prefix), PAYLOAD_PYTHON, "-I", "-u", "-c", code,
                                     json.dumps(config)], stdin=subprocess.PIPE,
-                                   stdout=subprocess.PIPE, stderr=subprocess.DEVNULL,
+                                   stdout=subprocess.PIPE,
+                                   stderr=subprocess.PIPE if capture_stderr else subprocess.DEVNULL,
                                    text=True, pass_fds=inherit_fds, **identity)
         self.processes.append(process)
         return process
@@ -625,11 +627,14 @@ table inet cor_fixture_observe {
         expected_namespaces["net"] = Path(f"/run/netns/{GATEWAY}").stat().st_ino
         handle = os.open(f"/run/netns/{VPS}", os.O_RDONLY)
         try:
-            process = self.launch(self.managed_prefix(), SANDBOX_AUDIT, {}, inherit_fds=(handle,))
+            process = self.launch(self.managed_prefix(), SANDBOX_AUDIT, {},
+                                  inherit_fds=(handle,), capture_stderr=True)
         finally:
             os.close(handle)
-        out, _ = process.communicate(timeout=20)
-        require(process.returncode == 0, "sandbox inspection workload failed")
+        out, error = process.communicate(timeout=20)
+        require(process.returncode == 0,
+                f"sandbox inspection workload failed (exit={process.returncode}): "
+                f"{(error or '').strip()[-500:]}")
         try:
             result = json.loads(out)
         except ValueError:
