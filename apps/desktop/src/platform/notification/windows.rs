@@ -15,8 +15,9 @@ use ::windows::{
             WinRT::{RO_INIT_MULTITHREADED, RoInitialize, RoUninitialize},
         },
         UI::Shell::{
-            IShellLinkW, PropertiesSystem::IPropertyStore, SHCNE_UPDATEITEM, SHCNF_FLUSHNOWAIT,
-            SHCNF_PATHW, SHChangeNotify, SetCurrentProcessExplicitAppUserModelID, ShellLink,
+            IShellLinkW, PropertiesSystem::IPropertyStore, SHCNE_CREATE, SHCNE_UPDATEITEM,
+            SHCNF_FLUSHNOWAIT, SHCNF_PATHW, SHChangeNotify,
+            SetCurrentProcessExplicitAppUserModelID, ShellLink,
         },
     },
     core::{GUID, HSTRING, Interface, PCWSTR},
@@ -187,11 +188,16 @@ fn register_shortcut() -> Result<()> {
         .join("Microsoft/Windows/Start Menu/Programs/Clash of Rust");
     std::fs::create_dir_all(&directory)?;
     let path = directory.join("Clash of Rust.lnk");
+    let existed = path.exists();
     save_shortcut(&path, &executable)?;
     let destination = wide(&path);
     unsafe {
         SHChangeNotify(
-            SHCNE_UPDATEITEM,
+            if existed {
+                SHCNE_UPDATEITEM
+            } else {
+                SHCNE_CREATE
+            },
             SHCNF_PATHW | SHCNF_FLUSHNOWAIT,
             Some(destination.as_ptr().cast()),
             None,

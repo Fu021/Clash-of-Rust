@@ -105,15 +105,15 @@ fn connection_sort_clicks_redraw_the_header_immediately_and_third_click_restores
         .iter()
         .map(|row| row.id)
         .collect::<Vec<_>>();
-    for (x, y, field) in [
-        (780., 174., "download-rate"),
-        (780., 197., "download-total"),
-        (670., 174., "upload-rate"),
-        (670., 197., "upload-total"),
-        (480., 174., "rule"),
-        (480., 197., "chain"),
-        (260., 174., "name"),
-        (260., 197., "start"),
+    for (x, y, field, first_descending) in [
+        (780., 174., "download-rate", true),
+        (780., 197., "download-total", true),
+        (670., 174., "upload-rate", true),
+        (670., 197., "upload-total", true),
+        (480., 174., "rule", false),
+        (480., 197., "chain", false),
+        (260., 174., "name", false),
+        (260., 197., "start", true),
     ] {
         let mut frames = Vec::new();
         for click in 0..3 {
@@ -131,16 +131,24 @@ fn connection_sort_clicks_redraw_the_header_immediately_and_third_click_restores
                 data.get_connection_sort(),
                 if click == 2 { "" } else { field }
             );
-            assert_eq!(data.get_descending(), click == 0);
+            assert_eq!(
+                data.get_descending(),
+                match click {
+                    0 => first_descending,
+                    1 => !first_descending,
+                    _ => false,
+                },
+                "wrong direction for {field} on click {click}"
+            );
             frames.push(header());
         }
         assert_ne!(
             frames[0], before,
-            "first click must render a down arrow without navigation"
+            "first click must render an arrow without navigation"
         );
         assert_ne!(
             frames[1], frames[0],
-            "second click must render an up arrow immediately"
+            "second click must reverse the arrow immediately"
         );
         assert_eq!(frames[2], before, "third click must remove the indicator");
         assert_eq!(
