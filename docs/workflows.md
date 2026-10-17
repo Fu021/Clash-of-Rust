@@ -54,6 +54,24 @@ macOS 失败日志、系统与网络状态、崩溃报告保存在 `macos-ci-rep
 
 只有最终发布 job 有 `contents: write`。`scripts/build-installer.py` 必须接收 `--prebuilt` 的已验证 CI 产物，已移除本地 Cargo 构建回退和 WSL 构建脚本。
 
+平台检查分别集中在 `scripts/windows_ci.py`、`scripts/macos_ci.py` 和 Linux 的隔离网络夹具中；`scripts/test-release-package.py` 统一调度。Windows 安装、更新、卸载与 Defender 扫描复用同一模块，不再保留独立的命令行包装脚本。
+
+## 手动验收与助手清理
+
+Actions 验证基础安装、系统代理和 TUN；首次授权与取消、真实注销登录和重启、休眠、多显示器、系统通知仍需实机检查。更新验收应从旧版本开始，确认下载可取消和重试、校验失败不安装、安装失败可恢复旧版，升级后保留订阅与个人设置。
+
+Windows 更新需要完成 UAC，Linux 需要 `pkexec` 与桌面授权服务。macOS 数据保存在用户 Application Support，系统代理与 TUN 共用 launchd 网络助手，GUI 以普通用户运行；已有助手可供后台自启复用，退出恢复不应重新索取授权。首次下载后的 Gatekeeper 提示按 [Apple 说明](https://support.apple.com/zh-cn/102445)处理。
+
+macOS 卸载前关闭代理并退出客户端，再按需移除当前用户的网络助手：
+
+```sh
+service_label="org.clashofrust.network.$(id -u)"
+sudo launchctl bootout "system/$service_label"
+sudo rm -rf "/Library/PrivilegedHelperTools/$service_label" "/Library/LaunchDaemons/$service_label.plist"
+```
+
+助手停止前会尝试恢复自己仍持有的代理设置并终止内核会话。测试夹具仅移除本次创建的助手，拒绝覆盖已有安装。
+
 ## UI 预览与静态资源
 
 持久安装官方 Slint Viewer 后运行：
