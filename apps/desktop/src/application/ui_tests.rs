@@ -30,6 +30,7 @@ fn wsl_projection_separates_transport_exit_protection_and_invalidates_on_edit() 
     use clash_client_core::wsl::Action as W;
     ui_testing::initialize(950, 700);
     let mut app = fixture(Page::Wsl);
+    app.wsl.draft.backend = clash_client_core::wsl::Backend::Tailscale;
     let window = AppWindow::new().unwrap();
     let data = window.global::<UiData>();
     let mut models = ViewModels::default();

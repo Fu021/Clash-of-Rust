@@ -10,7 +10,7 @@ Run on 2026-10-17 in the `Clash-of-Rust` worktree:
 | Check | Result | Scope |
 | --- | --- | --- |
 | PowerShell module parser | PASS | Syntax only |
-| `tests/windows-unit.ps1` | PASS, 50 assertions | Mocked host boundaries; no WSL, firewall, DNS or route mutation |
+| `tests/windows-unit.ps1` | PASS, 56 assertions | Mocked host boundaries; no WSL, firewall, DNS or route mutation |
 | `tests/linux_static_test.py` | PASS, 17 tests | Portable evidence/gate logic; no kernel operations |
 | `tests/server_unit.py` | PASS, 4 tests | Offline VPS profile validation |
 | `scripts/test-build-tools.py` | PASS, 36 tests, 1 skipped | Build/resource validation; Windows PE version read skipped locally |
@@ -20,7 +20,7 @@ Run on 2026-10-17 in the `Clash-of-Rust` worktree:
 | `cargo fmt --all -- --check` | PASS | Local Rust workspace |
 | `cargo build --workspace --locked --offline` | PASS | Local Windows workspace build |
 | `cargo clippy --workspace --all-targets --locked --offline -- -D warnings` | PASS | Local Windows workspace |
-| Rust tests excluding existing GUI singleton conflict | PASS, 150 + 6 + 38 | Existing `clash-of-rust` process prevented one Windows singleton test |
+| Rust tests excluding two environment-dependent Windows checks | PASS, 301; 2 skipped by name; 1 ignored by test annotation | Active GUI singleton and Task Scheduler access-denied checks cannot pass in this session |
 
 ## Not executed locally
 
@@ -38,17 +38,39 @@ Run on 2026-10-17 in the `Clash-of-Rust` worktree:
 ## 2026-10-17 local verification
 
 - Windows baseline was checked before WSL-related work: `ipgw.neu.edu.cn` returned
-  HTTP 302 and `api.okinto.com` returned HTTP 200 with certificate validation
-  enabled.
-- WSL 3.0.3 and Ubuntu-22.04 were inspected read-only. The distro has the
-  required namespace tools, but `wireguard-tools` is not installed.
-- The actual integration entry point refused to run because its explicit
-  `CI=true` and `COR_EGRESS_ISOLATED_CI=1` gates are intentionally absent in a
-  normal WSL distro. No kernel mutation was performed. An attempted package
-  installation was abandoned because the distro's configured proxy
-  `127.0.0.1:18001` was unavailable; no package was installed.
-- The WSL integration result remains `NOT_RUN`; the GitHub disposable Linux
-  runner is the authoritative environment for that test.
+  HTTP 200 and `api.okinto.com` returned HTTP 200 with certificate validation
+  enabled at 2026-10-17 23:13 Asia/Taipei.
+- The active distribution is Ubuntu-22.04. Read-only inspection confirmed NAT
+  mode, `eth0` on the private WSL subnet, and no IPv6 default route. The distro
+  was not stopped or restarted during this test run.
+- `tests/windows-unit.ps1`: PASS, 56 assertions. No WSL start, firewall
+  modification, route change or DNS change.
+- `tests/linux_static_test.py`: PASS, 17 tests, executed inside Ubuntu-22.04.
+  The tests mock operating-system calls and perform no kernel mutation.
+- A subsequent rerun after the upstream merge was refused by the WSL service
+  with `E_ACCESSDENIED`; that invocation is recorded as unavailable and does
+  not replace the earlier executed PASS.
+- `tests/server_unit.py`: PASS, 4 tests. Offline VPS profile validation only.
+- `python3 -m compileall -q scripts/wsl-secure-egress`: NOT_RUN; the WSL
+  command was denied by the WSL service with `E_ACCESSDENIED`.
+- `cargo fmt --all -- --check`: PASS.
+- `cargo build --workspace --locked`: PASS, Windows workspace.
+- `cargo clippy --workspace --all-targets --locked --offline -- -D warnings`:
+  PASS.
+- `cargo test --workspace --locked --offline`: the full run failed in two
+  environment-dependent desktop tests: the existing Clash of Rust GUI owns the
+  singleton mutex, and Windows denied Task Scheduler access.
+- After fixing the WSL projection test fixture to request the same Tailscale
+  backend as its report, its targeted rerun passed. The full workspace rerun
+  excluding only those two environment-dependent tests passed 301 tests; 2 were
+  skipped by name and 1 CI-only integration test remained ignored. The exact
+  command was `cargo test --workspace --locked --offline -- --skip
+  ordinary_user_can_initialize_desktop_control --skip
+  scheduler_access_denied_falls_back_to_working_user_startup`.
+- `git diff --check`: PASS.
+- The disposable Linux namespace integration and Windows WFP integration were
+  not run locally. Their explicit isolated-runner gates remain required; real
+  WSL/Hyper-V and German VPS acceptance remain `NOT_RUN`.
 - Bubblewrap 0.6.1 is present in Ubuntu-22.04 and does not support
   `--disable-userns`. A disposable probe confirmed that nested user namespace
   creation succeeds without an additional restriction. The workload sandbox
@@ -60,10 +82,15 @@ Run on 2026-10-17 in the `Clash-of-Rust` worktree:
   cases, then failed when starting the inspection workload. Rust CI exposed an
   overly permissive recovery-phase check; it now accepts only explicit terminal
   status phases. These CI fixes are pending a new hosted run.
-- Current host configuration was inspected read-only: `.wslconfig` still uses
-  `networkingMode=mirrored`; Hyper-V WSL policy remains `NotConfigured`.
-  Repository support for NAT and Hyper-V default-deny exists, but neither has
-  been applied on this machine.
+- Upstream `upstream/main` was refreshed to commit `e2fb6f1` on 2026-10-17 and
+  merged into this branch as commit `4f9b7d7`. The upstream change consolidated
+  Windows CI checks and removed obsolete maintenance files; the WSL feature
+  files were retained by the merge.
+- Current host configuration was inspected read-only: `.wslconfig` uses
+  `networkingMode=nat`. Hyper-V WSL firewall policy has not been verified as
+  configured by this project on this machine. Repository support for NAT and
+  Hyper-V default-deny exists, but the effective production guard has not been
+  installed or accepted here.
 
 ## Acceptance rule
 

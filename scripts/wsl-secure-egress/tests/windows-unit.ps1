@@ -98,6 +98,12 @@ $module = Import-Module (Join-Path $PSScriptRoot '../WslSecureEgress.psm1') -For
     Assert-Equal ([regex]::Matches($updated,'(?im)^autoProxy=').Count) 1 'merge has one proxy setting'
     Assert-Equal ($updated.Contains('networkingMode=nat')) $true 'NAT declared'
     Assert-Equal ($updated.Contains('dnsTunneling=false')) $true 'no host DNS tunnel fallback'
+    Assert-Equal ((Get-WslEgressConfigValue $updated 'wsl2' 'networkingMode')) 'nat' 'NAT is in wsl2'
+    Assert-Equal ((Get-WslEgressConfigValue $updated 'wsl2' 'localhostForwarding')) 'false' 'localhost forwarding is in wsl2'
+    Assert-Equal ((Get-WslEgressConfigValue $updated 'experimental' 'dnsTunneling')) 'false' 'DNS tunneling is experimental'
+    Assert-Equal ((Get-WslEgressConfigValue $updated 'experimental' 'autoProxy')) 'false' 'auto proxy is experimental'
+    Assert-Equal ((Get-WslEgressConfigValue $updated 'experimental' 'firewall')) 'true' 'firewall is experimental'
+    Assert-Equal ((Get-WslEgressConfigValue $updated 'wsl2' 'dnsTunneling')) $null 'DNS tunneling is not in wsl2'
     Assert-Equal (ConvertTo-WslEgressConfig $updated) (ConvertTo-WslEgressConfig (ConvertTo-WslEgressConfig $updated)) 'merge idempotent'
     [pscustomobject]@{ suite = 'windows-offline'; result = 'PASS'; assertions = $script:TestCount
         network_tests = 'NOT_RUN'; wsl_started = $false; firewall_modified = $false } | ConvertTo-Json -Compress

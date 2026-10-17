@@ -37,3 +37,6 @@ __pycache__/
 .env
 .env.*
 !.env.example
+
+# Local rollback snapshots for authorized network changes
+/ClashOfRust-network-backups/

@@ -112,25 +112,40 @@ function Protect-WslEgressDirectory([string]$Path) {
 }
 
 function ConvertTo-WslEgressConfig([string]$Text) {
-    $owned = @('networkingmode','dnstunneling','autoproxy','firewall','localhostforwarding')
-    $settings = @('networkingMode=nat','dnsTunneling=false','autoProxy=false','firewall=true','localhostForwarding=false')
+    $ownedBySection = @{
+        wsl2 = @('networkingmode', 'localhostforwarding')
+        experimental = @('dnstunneling', 'autoproxy', 'firewall')
+    }
+    $settingsBySection = [ordered]@{
+        wsl2 = @('networkingMode=nat', 'localhostForwarding=false')
+        experimental = @('dnsTunneling=false', 'autoProxy=false', 'firewall=true')
+    }
+    $owned = @($ownedBySection.Values | ForEach-Object { $_ }) | Select-Object -Unique
     $lines = New-Object 'Collections.Generic.List[string]'
-    $section = ''; $written = $false
+    $section = ''
+    $written = @{ wsl2 = $false; experimental = $false }
+    function Add-WslEgressSectionSettings([string]$Name) {
+        if ($Name -in $settingsBySection.Keys -and -not $written[$Name]) {
+            foreach ($setting in $settingsBySection[$Name]) { $lines.Add($setting) }
+            $written[$Name] = $true
+        }
+    }
     foreach ($line in ($Text.TrimEnd([char[]]"`r`n") -split '\r?\n')) {
         if ($line -match '^\s*\[([^]]+)\]') {
-            if ($section -eq 'wsl2' -and -not $written) {
-                foreach ($setting in $settings) { $lines.Add($setting) }; $written = $true
-            }
+            Add-WslEgressSectionSettings $section
             $section = $Matches[1].ToLowerInvariant()
         }
-        if ($section -in @('wsl2','experimental') -and $line -match '^\s*([^#;=]+?)\s*=') {
+        if ($section -in @('wsl2', 'experimental') -and $line -match '^\s*([^#;=]+?)\s*=') {
             if ($owned -contains $Matches[1].Trim().ToLowerInvariant()) { continue }
         }
         $lines.Add($line)
     }
-    if (-not $written) {
-        if ($section -ne 'wsl2') { $lines.Add('[wsl2]') }
-        foreach ($setting in $settings) { $lines.Add($setting) }
+    Add-WslEgressSectionSettings $section
+    foreach ($targetSection in $settingsBySection.Keys) {
+        if (-not $written[$targetSection]) {
+            $lines.Add("[$targetSection]")
+            foreach ($setting in $settingsBySection[$targetSection]) { $lines.Add($setting) }
+        }
     }
     ($lines -join "`r`n") + "`r`n"
 }
@@ -424,7 +439,11 @@ function Read-WslEgressProfile([string]$Path) {
 }
 
 function Get-WslEgressSettings {
-    $setting = Get-NetFirewallHyperVVMSetting -PolicyStore ActiveStore -Name $script:Creator -ErrorAction Stop
+    Get-WslEgressSettingsFromStore -PolicyStore ActiveStore
+}
+
+function Get-WslEgressSettingsFromStore([string]$PolicyStore) {
+    $setting = Get-NetFirewallHyperVVMSetting -PolicyStore $PolicyStore -Name $script:Creator -ErrorAction Stop
     [ordered]@{
         Enabled = $setting.Enabled
         DefaultInboundAction = $setting.DefaultInboundAction
@@ -432,6 +451,10 @@ function Get-WslEgressSettings {
         AllowHostPolicyMerge = $setting.AllowHostPolicyMerge
         LoopbackEnabled = $setting.LoopbackEnabled
     }
+}
+
+function Get-WslEgressPersistentSettings {
+    Get-WslEgressSettingsFromStore -PolicyStore PersistentStore
 }
 
 function Get-WslEgressGuardAudit([object]$State) {
@@ -442,7 +465,7 @@ function Get-WslEgressGuardAudit([object]$State) {
         [string]$setting.LoopbackEnabled -ne 'False') { $issues += 'effective_settings_differ' }
     $allows = @(Get-NetFirewallHyperVRule -PolicyStore ActiveStore -ErrorAction Stop | Where-Object {
         [string]$_.Enabled -eq 'True' -and [string]$_.Direction -eq 'Outbound' -and
-        [string]$_.Action -eq 'Allow'
+        [string]$_.Action -eq 'Allow' -and [string]$_.VMCreatorId -eq $script:Creator
     })
     foreach ($rule in $allows) {
         if ($rule.Name -ne ($script:Prefix + 'Endpoint')) { $issues += 'foreign_outbound_allow'; continue }
@@ -636,9 +659,9 @@ function Get-WslEgressWindowsConfigAudit([object]$State) {
     $text = if (Test-Path -LiteralPath $path -PathType Leaf) { [IO.File]::ReadAllText($path) } else { '' }
     $values = [ordered]@{
         networking_mode = Get-WslEgressConfigValue $text 'wsl2' 'networkingMode'
-        dns_tunneling = Get-WslEgressConfigValue $text 'wsl2' 'dnsTunneling'
-        auto_proxy = Get-WslEgressConfigValue $text 'wsl2' 'autoProxy'
-        firewall = Get-WslEgressConfigValue $text 'wsl2' 'firewall'
+        dns_tunneling = Get-WslEgressConfigValue $text 'experimental' 'dnsTunneling'
+        auto_proxy = Get-WslEgressConfigValue $text 'experimental' 'autoProxy'
+        firewall = Get-WslEgressConfigValue $text 'experimental' 'firewall'
         localhost_forwarding = Get-WslEgressConfigValue $text 'wsl2' 'localhostForwarding'
     }
     $valid = $currentHash -eq $expectedHash -and
@@ -761,6 +784,7 @@ function Set-WslEgressPersistentGuard([object]$State) {
 
 function Set-WslEgressEndpoint([object]$State, [bool]$Enabled) {
     $existing = @(Get-NetFirewallHyperVRule -PolicyStore PersistentStore -Name ($script:Prefix + 'Endpoint') -ErrorAction SilentlyContinue)
+    if ($existing.Count -gt 1) { throw 'Multiple owned endpoint rules exist; preserving them for manual review.' }
     if ($existing.Count -gt 0) {
         # Verify ownership against the exact tuple before changing an object.
         $rule = $existing[0]
@@ -869,7 +893,9 @@ function Invoke-WslEgressOperation {
                 manager_distro = [string]$profile.manager_distro; endpoint_ipv4 = [string]$profile.endpoint_ipv4
                 endpoint_port = [int]$profile.endpoint_port; endpoint_enabled = $false
                 linux_profile_path = (New-WslEgressUnixPath ([string]$ProfilePath))
-                before_settings = (Get-WslEgressSettings); after_settings = $null
+                before_persistent_settings = (Get-WslEgressPersistentSettings)
+                before_effective_settings = (Get-WslEgressSettings)
+                after_settings = $null
                 created_at = (Get-Date -Format o); distributions = @($distributions.name)
                 docker_backends = $dockerPaths; wslconfig = $null; distro_configs = @()
                 settings_written = $false; endpoint_rule_written = $false
@@ -938,7 +964,11 @@ function Invoke-WslEgressOperation {
             if ($runningNames.Count -gt 0) { throw 'All WSL processes must be stopped manually before restoring host access.' }
             $current = Get-WslEgressSettings
             if (($current | ConvertTo-Json -Compress) -ne ($state.after_settings | ConvertTo-Json -Compress)) { throw 'Host settings changed since installation; automatic restore refused.' }
-            $before = $state.before_settings
+            $before = if ($state.PSObject.Properties['before_persistent_settings']) {
+                $state.before_persistent_settings
+            } else {
+                $state.before_settings
+            }
             # Close the outer transport before asking the manager to remove its
             # owned namespaces and guard. Then restore every per-distro file while
             # the host default deny is still active.
