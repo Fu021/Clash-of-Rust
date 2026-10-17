@@ -344,8 +344,9 @@ def restore(config):
         paths = [Path(p) for p in config['resolved_paths']]
         with phase(config, 'extract'):
             unpack(archive, paths)
-    config.update(available=True, restored=True, hit=record['key'] == config['key'],
-                  mirror_required=not private_current(config, record))
+    config.update(available=True, restored=True, hit=record['key'] == config['key'])
+    if config['kind'] == 'rust':
+        config['mirror_required'] = not private_current(config, record)
     if config['kind'] != 'rust':
         with phase(config, 'fingerprint'):
             config['fingerprint'] = fingerprint(paths)

@@ -110,6 +110,9 @@ jobs:
           url: ${{ steps.tailnet.outcome == 'success' && vars.LOCAL_CACHE_URL || '' }}
           token: ${{ secrets.LOCAL_CACHE_TOKEN }}
           group: tools/android-go
+          # The emulator job saves the complete module/tool mirror only after
+          # the resolved dependencies have passed the Android integration tests.
+          save: false
           paths: |
             ~/go/pkg/mod
             ~/go/bin/gomobile
