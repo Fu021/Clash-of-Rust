@@ -117,8 +117,8 @@ class TCP6(TCP4): address_family = socket.AF_INET6
 class UDP6(UDP4): address_family = socket.AF_INET6
 servers = []
 for cls, handler, address, port in [
-    (TCP4, TCP, "0.0.0.0", 18080), (UDP4, UDP, "0.0.0.0", 18080),
-    (TCP4, TCP, "0.0.0.0", 53), (UDP4, UDP, "0.0.0.0", 53),
+    (TCP4, TCP, "0.0.0.0", 18080), (UDP4, UDP, "198.51.100.10", 18080),
+    (TCP4, TCP, "0.0.0.0", 53), (UDP4, UDP, "10.77.0.1", 53),
     (TCP4, TCP, "192.0.2.2", 51820), (UDP4, UDP, "192.0.2.2", 51821),
     (TCP6, TCP, "2001:db8:77::10", 18080),
     (UDP6, UDP, "2001:db8:77::10", 18080),
@@ -540,7 +540,10 @@ table inet cor_fixture_observe {
         after = self.observe()
         tunnel = managed if via_tunnel is None else via_tunnel
         path = "tunnel" if tunnel else "direct"
-        require(result["reply"] and len(records) == 1, f"{label}: no unique nonce echo/receipt")
+        require(result["reply"] and len(records) == 1,
+                f"{label}: no unique nonce echo/receipt "
+                f"(reply={bool(result.get('reply'))}, receipts={len(records)}, "
+                f"error={result.get('error', 'none')})")
         require(records[0].get("kind") == mode, f"{label}: receiver protocol mismatch")
         require(after[path] > before[path], f"{label}: no receiving-interface counter increase")
         if tunnel:

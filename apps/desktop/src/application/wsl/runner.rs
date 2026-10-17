@@ -3,7 +3,7 @@ use std::ffi::OsString;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[cfg_attr(not(windows), allow(dead_code))]
-pub(super) enum Error {
+pub(in crate::application) enum Error {
     Unsupported,
     Unavailable,
     SystemAccount,
