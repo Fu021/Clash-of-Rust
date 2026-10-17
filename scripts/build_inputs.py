@@ -164,9 +164,11 @@ def refresh_command(command, paths, warnings):
             (ROOT / path).unlink(missing_ok=True)
         else:
             (ROOT / path).write_bytes(value)
-    network = re.compile(r'timed? ?out|timeout|network|connection|resolve host|download|'
-                         r'HTTP.*(?:40[3489]|50[0-9])|status code.*(?:40[3489]|50[0-9])|'
+    network = re.compile(r'timed? ?out|timeout|network|connection|resolve host|no such host|'
+                         r'name resolution|no route to host|download|'
+                         r'HTTP.*(?:40[3489]|429|50[0-9])|status code.*(?:40[3489]|429|50[0-9])|'
                          r'failed to fetch|unable to access|TLS|SSL|unreachable|'
+                         r'\b429\b.*Too Many Requests|'
                          r'\b50[0-9]\b.*(?:Unavailable|Gateway|Error)', re.I)
     if not network.search(result.stdout):
         print(result.stdout, flush=True)

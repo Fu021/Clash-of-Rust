@@ -183,14 +183,19 @@ class BuildTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
             lock = root/'Cargo.lock'; lock.write_bytes(b'cached')
-            def failure(*args, **kwargs):
-                lock.write_bytes(b'incomplete replacement')
-                return subprocess.CompletedProcess(args[0], 1, '503 Service Unavailable')
-            with patch.object(build_inputs, 'ROOT', root), patch.object(build_inputs.subprocess, 'run', side_effect=failure):
-                warnings = []
-                build_inputs.refresh_command(['cargo','update'], ('Cargo.lock',), warnings)
-                self.assertTrue(warnings)
-                self.assertEqual(lock.read_bytes(), b'cached')
+            for message in ('503 Service Unavailable', '429 Too Many Requests',
+                            'reading https://proxy.example/module: 429 Too Many Requests',
+                            'go: Get "https://proxy.example": dial tcp: lookup proxy.example: no such host',
+                            'dial tcp 192.0.2.1:443: no route to host'):
+                def failure(*args, **kwargs):
+                    lock.write_bytes(b'incomplete replacement')
+                    return subprocess.CompletedProcess(args[0], 1, message)
+                with self.subTest(message=message), patch.object(build_inputs, 'ROOT', root), \
+                     patch.object(build_inputs.subprocess, 'run', side_effect=failure):
+                    warnings = []
+                    build_inputs.refresh_command(['cargo','update'], ('Cargo.lock',), warnings)
+                    self.assertTrue(warnings)
+                    self.assertEqual(lock.read_bytes(), b'cached')
             with patch.object(build_inputs, 'ROOT', root), patch.object(build_inputs.subprocess, 'run',
                     return_value=subprocess.CompletedProcess([],1,'failed to select a version: incompatible constraints')):
                 with self.assertRaisesRegex(RuntimeError, 'not a network'):
