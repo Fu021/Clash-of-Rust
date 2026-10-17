@@ -669,11 +669,9 @@ class Manager:
             ['rule', 'add', 'pref', str(RULE_PREFS[5]), 'iif', self.s['uplink'],
              'to', TRANSPORT_IP + '/32', 'protocol', 'icmp', 'lookup', 'main'],
         ]
-        # These must precede the catch-all secure rule. Give the secure rule a
-        # later priority, keeping PMTU exceptions precise by iif/protocol/subnet.
-        for cidr in sorted({x['source_cidr'] for x in self.s['forward_sources']}):
-            commands.insert(-1, ['rule', 'add', 'pref', str(RULE_PREFS[4]), 'iif', 'lo',
-                                 'to', cidr, 'protocol', 'icmp', 'lookup', 'main'])
+        # Linux 6.x iproute2 rejects protocol selectors on FRA_DST rules. The
+        # forwarded-client PMTU exceptions are not needed here: the only local
+        # sender is the WireGuard socket in TRANSPORT, which uses pref 10075.
         commands.append(['rule', 'add', 'pref', str(RULE_PREFS[3]), 'lookup', ROUTE_TABLE])
         for args in commands:
             try:
