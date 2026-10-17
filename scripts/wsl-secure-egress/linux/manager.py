@@ -665,23 +665,27 @@ class Manager:
             ['route', 'add', 'default', 'via', BUS_GW_IP, 'dev', BUS_IF, 'src', BUS_ROOT_IP, 'mtu', str(TUNNEL_MTU), 'metric', '10', 'table', ROUTE_TABLE],
             ['rule', 'add', 'pref', str(RULE_PREFS[0]), 'iif', ROOT_IF, 'from', TRANSPORT_IP + '/32', 'to', p['endpoint_ipv4'] + '/32', 'lookup', 'main'],
             ['rule', 'add', 'pref', str(RULE_PREFS[1]), 'iif', self.s['uplink'], 'from', p['endpoint_ipv4'] + '/32', 'to', TRANSPORT_IP + '/32', 'lookup', 'main'],
-            ['rule', 'add', 'pref', str(RULE_PREFS[5]), 'iif', self.s['uplink'],
-             'to', TRANSPORT_IP + '/32', 'ip', 'protocol', 'icmp', 'lookup', 'main'],
             ['rule', 'add', 'pref', str(RULE_PREFS[2]), 'iif', BUS_IF, 'lookup', 'main'],
+            ['rule', 'add', 'pref', str(RULE_PREFS[5]), 'iif', self.s['uplink'],
+             'to', TRANSPORT_IP + '/32', 'ipproto', 'icmp', 'lookup', 'main'],
         ]
         # These must precede the catch-all secure rule. Give the secure rule a
         # later priority, keeping PMTU exceptions precise by iif/protocol/subnet.
         for cidr in sorted({x['source_cidr'] for x in self.s['forward_sources']}):
             commands.insert(-1, ['rule', 'add', 'pref', str(RULE_PREFS[4]), 'iif', 'lo',
-                                 'to', cidr, 'ip', 'protocol', 'icmp', 'lookup', 'main'])
+                                 'to', cidr, 'ipproto', 'icmp', 'lookup', 'main'])
         commands.append(['rule', 'add', 'pref', str(RULE_PREFS[3]), 'lookup', ROUTE_TABLE])
         for args in commands:
             try:
                 command(['ip', '-4', *args])
             except Blocked as exc:
                 preference = args[args.index('pref') + 1] if 'pref' in args else 'none'
+                fields = []
+                for key in ('iif', 'ipproto', 'lookup'):
+                    if key in args:
+                        fields.append(f'{key}={args[args.index(key) + 1]}')
                 raise Blocked(f'{exc} policy={args[0]}:{args[1]} '
-                              f'pref={preference}') from None
+                              f'pref={preference} ' + ' '.join(fields)) from None
             # Store each completed owned operation and its current kernel digest.
             self.s['routing']['commands'].append(args)
             self.s['routing']['hash'] = self.routing_hash()
