@@ -118,7 +118,8 @@ def command(argv, ns=None, data=None, okay=False, timeout=25):
         raise Blocked('Required Linux command unavailable or timed out.') from None
     if result.returncode and not okay:
         # Command arguments/output may contain endpoint addresses or keys.
-        raise Blocked('Linux operation failed; guard retained; no command output disclosed.')
+        raise Blocked(f'Linux command failed (exit {result.returncode}); '
+                      'guard retained; no command output disclosed.')
     return result
 
 
@@ -1119,7 +1120,9 @@ def main(argv=None):
             print(json.dumps(event, sort_keys=True), file=sys.stderr if args.action == 'run' else sys.stdout)
             return 0 if event['outcome'] == 'succeeded' else 2
     except (Blocked, ValueError, KeyError, TypeError, IndexError, OSError, configparser.Error) as exc:
-        message = str(exc) if isinstance(exc, Blocked) else 'Invalid configuration or Linux operation failed; no sensitive details disclosed.'
+        message = (str(exc) if isinstance(exc, Blocked)
+                   else f'{type(exc).__name__}: invalid configuration or Linux '
+                        'operation failed; no sensitive details disclosed.')
         if manager:
             if (manager.dirty or manager.close_requested) and not manager.safe_closed:
                 try:
