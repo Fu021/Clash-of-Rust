@@ -634,7 +634,7 @@ table inet cor_fixture_observe {
         out, error = process.communicate(timeout=20)
         require(process.returncode == 0,
                 f"sandbox inspection workload failed (exit={process.returncode}): "
-                f"{(error or '').strip()[-500:]}")
+                f"{(error or '').strip()[:1500]}")
         try:
             result = json.loads(out)
         except ValueError:
