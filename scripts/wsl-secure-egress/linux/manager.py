@@ -118,8 +118,11 @@ def command(argv, ns=None, data=None, okay=False, timeout=25):
         raise Blocked('Required Linux command unavailable or timed out.') from None
     if result.returncode and not okay:
         # Command arguments/output may contain endpoint addresses or keys.
-        raise Blocked(f'Linux command failed (exit {result.returncode}); '
-                      'guard retained; no command output disclosed.')
+        executable = Path(argv[0]).name if argv else 'unknown'
+        subcommand = argv[1] if len(argv) > 1 and not argv[1].startswith('-') else '-'
+        raise Blocked(f'Linux command failed ({executable} {subcommand}, exit '
+                      f'{result.returncode}, ns={ns or "root"}); guard retained; '
+                      'no command output disclosed.')
     return result
 
 
