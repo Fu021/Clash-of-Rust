@@ -764,6 +764,13 @@ impl Api {
             .proxies
             .values()
             .flat_map(|proxy| proxy.all.iter())
+            .chain(
+                proxies
+                    .proxies
+                    .iter()
+                    .filter(|(_, proxy)| automatic(proxy))
+                    .map(|(name, _)| name),
+            )
             .filter(|name| {
                 proxies.proxies.get(name.as_str()).is_none_or(|proxy| {
                     (proxy.all.is_empty() || automatic(proxy))
