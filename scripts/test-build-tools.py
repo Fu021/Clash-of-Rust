@@ -269,6 +269,8 @@ class BuildTests(unittest.TestCase):
             for name in ('release/deps/bad.rlib','aarch64-linux-android/release/deps/bad.rlib',
                          'dependency-snapshot/inputs.json','android-report/logcat.txt'):
                 path=target/name;path.parent.mkdir(parents=True,exist_ok=True);path.write_bytes(b'preserve only reports/inputs')
+            unpacked=root/'cargo/registry/src/crate/lib.rs'
+            unpacked.parent.mkdir(parents=True);unpacked.write_bytes(b'incomplete restored source')
             with patch.dict(os.environ,{'GITHUB_ACTIONS':'true','CARGO_HOME':str(root/'cargo'),
                                        'WORKSPACE_SOURCE_CACHE':str(root/'external/source.json')}):
                 local_cache.discard_restore({'kind':'rust','source':str(root)})
@@ -276,6 +278,7 @@ class BuildTests(unittest.TestCase):
             self.assertFalse((target/'aarch64-linux-android/release').exists())
             self.assertTrue((target/'dependency-snapshot/inputs.json').exists())
             self.assertTrue((target/'android-report/logcat.txt').exists())
+            self.assertFalse(unpacked.exists())
 
     def test_github_hit_only_checks_private_metadata_and_reuses_current_mirror(self):
         with tempfile.TemporaryDirectory() as temporary:

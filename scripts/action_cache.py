@@ -393,11 +393,18 @@ def discard_restore(config):
         if path.is_symlink() or path.is_file():
             path.unlink(missing_ok=True)
         elif path.is_dir():
-            shutil.rmtree(path)
+            def writable_retry(operation, name, _error):
+                os.chmod(name, 0o700)
+                operation(name)
+            shutil.rmtree(path, onerror=writable_retry)
     paths = cache_paths(config)
     if config['kind'] == 'rust':
         for path in paths[:-1]:
             remove(path)
+        # rust-cache also restores unpacked -sys crates and Git checkouts.
+        # Cargo must reconstruct those from verified downloads after a failure.
+        remove(paths[0].parent/'src')
+        remove(paths[2].parent/'checkouts')
         target = paths[-1]
         if target.is_dir() and not target.is_symlink():
             remove(target/'release')
