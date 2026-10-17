@@ -13,8 +13,12 @@ try {
         if ($state.owner -ne 'ClashOfRust.WslEgress' -or $state.phase -ne 'restored') { exit 2 }
     } elseif ($service) { exit 2 }
     if ($service -and $Execute) {
-        $binary = [IO.Path]::GetFullPath((Join-Path $PSScriptRoot '../../clash-wsl-guardian.exe'))
-        if ($service.PathName -ne ('"' + $binary + '" --service')) { exit 2 }
+        # The guardian service must run from a protected package directory under
+        # Program Files: either the helper package or an application package
+        # installed there. The helper package is the documented layout, so a
+        # check against this script's own copy would block every real uninstall.
+        if ($service.StartName -notin @('LocalSystem', 'NT AUTHORITY\SYSTEM')) { exit 2 }
+        if (-not (Test-WslEgressGuardianServicePath ([string]$service.PathName))) { exit 2 }
         Stop-Service -Name 'ClashOfRust.WslEgress' -ErrorAction Stop
         & (Join-Path $env:SystemRoot 'System32\sc.exe') delete 'ClashOfRust.WslEgress' | Out-Null
         if ($LASTEXITCODE -ne 0) { exit 1 }

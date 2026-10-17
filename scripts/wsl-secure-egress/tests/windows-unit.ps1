@@ -152,6 +152,22 @@ $module = Import-Module (Join-Path $PSScriptRoot '../WslSecureEgress.psm1') -For
     Assert-Equal ($upgradeText.Contains('repair-config')) $true 'live upgrade reruns the manager repair path'
     Assert-Equal ($upgradeText.Contains('-ReviewedUpgrade')) $true 'live upgrade uses the atomic reviewed upgrade gate'
     Assert-Equal ($upgradeText.Contains('Set-WslEgressEndpoint $state $true')) $false 'live upgrade never opens the endpoint'
+    $uninstallCheckPath = Join-Path $PSScriptRoot '../Uninstall-Check.ps1'
+    $uninstallTokens = $null
+    $uninstallErrors = $null
+    [void][System.Management.Automation.Language.Parser]::ParseFile($uninstallCheckPath, [ref]$uninstallTokens, [ref]$uninstallErrors)
+    Assert-Equal @($uninstallErrors).Count 0 'installer uninstall gate parses'
+    # Uninstall must recognise the documented helper-package service location;
+    # comparing against this script's own copy blocked every real uninstall.
+    $programFiles = [Environment]::GetFolderPath([Environment+SpecialFolder]::ProgramFiles)
+    $helperGuardian = Join-Path $programFiles 'Clash of Rust WSL\clash-wsl-guardian.exe'
+    $appGuardian = Join-Path $programFiles 'Clash of Rust\clash-wsl-guardian.exe'
+    Assert-Equal (Test-WslEgressGuardianServicePath ('"' + $helperGuardian + '" --service')) $true 'helper-package guardian service location is accepted'
+    Assert-Equal (Test-WslEgressGuardianServicePath ('"' + $appGuardian + '" --service')) $true 'application-package guardian service location is accepted'
+    Assert-Equal (Test-WslEgressGuardianServicePath ('"' + (Join-Path $PSScriptRoot '../../clash-wsl-guardian.exe') + '" --service')) $false 'guardian service outside Program Files is refused'
+    Assert-Equal (Test-WslEgressGuardianServicePath ($helperGuardian + ' --service')) $false 'unquoted service command line is refused'
+    Assert-Equal (Test-WslEgressGuardianServicePath ('"' + $helperGuardian + '"')) $false 'service command line without the service switch is refused'
+    Assert-Equal (Test-WslEgressGuardianServicePath ('"' + (Join-Path $programFiles 'Clash of Rust WSL\clash-wsl-guardian-other.exe') + '" --service')) $false 'a different binary in the helper directory is refused'
     [pscustomobject]@{ suite = 'windows-offline'; result = 'PASS'; assertions = $script:TestCount
         network_tests = 'NOT_RUN'; wsl_started = $false; firewall_modified = $false } | ConvertTo-Json -Compress
 }

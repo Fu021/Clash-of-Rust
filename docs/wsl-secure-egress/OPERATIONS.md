@@ -86,6 +86,14 @@ audit service matches its expected path. The installer does not remove Docker
 or WSL data. If the check fails, uninstall stops and retains the recovery
 tooling.
 
+The audit service is accepted from either protected package location: the
+helper package directory `%ProgramFiles%\Clash of Rust WSL` or an application
+package installed under `%ProgramFiles%\Clash of Rust`. Any other image path,
+account or command line keeps the service, the journal and the recovery
+payload in place and refuses to uninstall. That refusal is intentional: it
+means an unowned or relocated guardian owns the service name, so the removal
+must be reviewed by hand instead of being forced.
+
 ## VPS service
 
 The dedicated VPS service under

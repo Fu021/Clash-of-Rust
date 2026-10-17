@@ -201,12 +201,85 @@ Two failures happened before that PASS and are recorded rather than replaced:
    was added as an opt-in for redacted fixture stdout/stderr when a manager JSON
    event is missing. Default CI output stays redacted.
 
+## 2026-10-18 CI failure, root cause and deterministic fixture fix
+
+GitHub Actions run
+[39063692775](https://github.com/Sonder4/Clash-of-Rust/actions/runs/39063692775)
+for commit `f6e2542` failed the isolated suite at
+`missing-tunnel-existing-tcp: timeout without a deny counter is not proof`.
+The Windows/Rust workflow for the same commit passed. The first local rerun
+afterwards failed on the same case with `sent=True errno=None
+error=TimeoutError`.
+
+Root cause, taken from the fixture rather than from the product: the case
+deleted the managed WireGuard link and then added a fixture fallback route, but
+the pre-established socket had selected the tunnel address `10.77.0.2/32` as
+its source. Once that address disappeared with the device, the kernel refused
+the flow during route lookup, so nftables never saw a packet and the guard
+counter could not move. The case was proving that a deleted source address
+blackholes a socket, not that the guard drops it.
+
+A first attempt to accept a named local `errno` as refusal evidence was
+reverted before commit: it weakened a real proof into a weaker one and still
+did not hold, because the kernel retransmit path swallows route lookup
+failures instead of reporting them to the application.
+
+The fixture now reassigns `10.77.0.2/32` to the fallback link, so the
+pre-existing flow stays routable and its packets must reach the guard. The
+negative rule is unchanged and strict: every negative case still requires a
+deny-counter increase, no receiver nonce and unchanged direct-path counters.
+The same change makes the case deterministic for both scopes, because the
+ordinary (root-namespace) session never lost its source address and already
+produced counter evidence.
+
+Executed after the fix on this host:
+
+| Check | Result | Scope |
+| --- | --- | --- |
+| Full isolated suite in Ubuntu-22.04 | PASS, 86 cases | Disposable net/PID namespaces with the fixture VPS; no Windows, WSL host or real VPS configuration participated |
+| `missing-tunnel-existing-tcp` evidence | PASS, deny counter 30 -> 35 | Pre-established managed flow genuinely dropped by the guard after tunnel loss |
+| `missing-tunnel-existing-shared-tcp` evidence | PASS, deny counter 37 -> 42 | Same for the ordinary-namespace session |
+| `python3 -m compileall` and `sh -n` launchers | PASS | Syntax only |
+| `linux_static_test.py` | PASS, 21 tests | Portable evidence/gate logic |
+| `acceptance_harness_unit.py` | PASS, 3 tests | Endpoint validation |
+| `server_unit.py` | PASS, 24 tests | Offline VPS profile validation |
+| `payload_unit.py` | PASS, 32 tests | Real Linux root ownership, flock and atomic exchange |
+| `provision_unit.py` | PASS, 18 tests | Mocked host boundaries only |
+| `windows-unit.ps1` (Windows PowerShell 5.1) | PASS, 86 assertions | Mocked host boundaries; no WSL, firewall, DNS or route mutation |
+
+Evidence: `ClashOfRust-network-backups/wsl-local-20261018/linux-egress-integration-20261017-221209.json`
+(`outcome=passed`, 86 cases). Run `39063692775` is recorded as the failure it
+was; it is not replaced or reinterpreted.
+
+The same change set fixes an installer defect found by the independent
+read-only Windows review: the uninstall gate compared the live
+`ClashOfRust.WslEgress` image path against the copy next to the script, while
+the reviewed helper package is what installs the service under
+`%ProgramFiles%\Clash of Rust WSL`. Any uninstall or ordinary reinstall on this
+host would therefore have stopped with exit code 2 forever. The gate now
+accepts exactly the two protected package locations and still requires a
+`LocalSystem` account, an exact `--service` command line and a journal that
+reached `restored`. The live service on this host
+(`"C:\Program Files\Clash of Rust WSL\clash-wsl-guardian.exe" --service`,
+`LocalSystem`) is accepted by the new check; the deletion itself was not
+executed, because the active generation must keep its guardian.
+
+The review also raised two follow-ups that are **not** fixed here and are
+tracked for a later change: update mode (`/S /UPDATE`) does not run the WSL
+guard pre-check that the ordinary path runs and restores only the main
+executable if extraction fails, and several accepted-but-unused broker
+parameters (`-Distro`, `-EndpointIPv4`, `-EndpointPort`) are forwarded from the
+GUI without being read.
+
 ## Acceptance rule
 
 Positive connectivity requires a receiver-observed nonce, the expected source
 and counter evidence. A send success or timeout alone is not proof. A negative
 test requires a deny counter, no receiver nonce and unchanged direct-path
-counters. Real production fault injection is not authorized.
+counters. When a fixture would otherwise let the kernel refuse a flow before
+nftables sees it, the fixture must be extended until the traffic really reaches
+the guard; weakening the rule instead is not an acceptable fix. Real production
+fault injection is not authorized.
 
 Update this document after GitHub Actions and any approved VPS/WSL acceptance
 with the exact commit, run URL and per-scenario result.

@@ -559,6 +559,23 @@ function Install-WslEgressGuardian {
     Start-Service -Name 'ClashOfRust.WslEgress' -ErrorAction Stop
 }
 
+function Test-WslEgressGuardianServicePath([string]$PathName) {
+    # The guardian service may only run from a protected package directory. The
+    # reviewed helper package normally installs it, but an application package
+    # installed under Program Files is equally canonical. Accept exactly those
+    # two locations so a foreign or relocated service is never removed.
+    $programFiles = [Environment]::GetFolderPath([Environment+SpecialFolder]::ProgramFiles)
+    if (-not $programFiles) { return $false }
+    $match = [regex]::Match([string]$PathName, '^"([^"]+)" --service$')
+    if (-not $match.Success) { return $false }
+    try { $binary = [IO.Path]::GetFullPath($match.Groups[1].Value) } catch { return $false }
+    foreach ($root in @('Clash of Rust WSL', 'Clash of Rust')) {
+        $expected = [IO.Path]::GetFullPath((Join-Path $programFiles ($root + '\clash-wsl-guardian.exe')))
+        if ($binary -ieq $expected) { return $true }
+    }
+    return $false
+}
+
 function Get-WslEgressDockerPaths {
     $candidates = @((Join-Path ([Environment]::GetFolderPath([Environment+SpecialFolder]::ProgramFiles)) 'Docker\Docker\resources\com.docker.backend.exe'))
     foreach ($key in @('HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall\Docker Desktop',
@@ -1170,4 +1187,4 @@ function Invoke-WslEgressOperation {
     } finally { $mutex.ReleaseMutex(); $mutex.Dispose() }
 }
 
-Export-ModuleMember -Function Invoke-WslEgressOperation,New-WslEgressResponse,Invoke-WslEgressGuardianAudit
+Export-ModuleMember -Function Invoke-WslEgressOperation,New-WslEgressResponse,Invoke-WslEgressGuardianAudit,Test-WslEgressGuardianServicePath

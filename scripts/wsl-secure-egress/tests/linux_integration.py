@@ -132,7 +132,7 @@ threading.Event().wait()
 
 
 CLIENT = r'''
-import json, socket, struct, sys
+import errno, json, socket, struct, sys
 config = json.loads(sys.argv[1])
 def configure():
     global mode, host, port, dns, udp, sock
@@ -148,7 +148,7 @@ def read_exact(size):
     result = b""
     while len(result) < size:
         data = sock.recv(size-len(result))
-        if not data: raise OSError("unexpected EOF")
+        if not data: raise OSError(errno.ECONNRESET, "unexpected EOF")
         result += data
     return result
 def probe(nonce):
@@ -179,6 +179,7 @@ def probe(nonce):
             result["reply"] = reply == packet
     except OSError as error:
         result["error"] = type(error).__name__
+        result["errno"] = error.errno
     return result
 def once():
     try:
@@ -186,6 +187,7 @@ def once():
         result = probe(config["nonce"])
     except OSError as error:
         result = dict(nonce=config["nonce"], sent=False, reply=False, error=type(error).__name__)
+        result["errno"] = error.errno
     return result
 if config.get("worker"):
     print(json.dumps(dict(ready=True)), flush=True)
@@ -599,7 +601,11 @@ table inet cor_fixture_observe {
         require(not result["reply"] and not self.receipts(token), f"{label}: denied nonce reached receiver")
         require(after["direct"] == before["direct"], f"{label}: direct packet escaped")
         if not route_refusal:
-            require(denied_after > denied_before, f"{label}: timeout without a deny counter is not proof")
+            require(denied_after > denied_before,
+                    f"{label}: timeout without a deny counter is not proof "
+                    f"(sent={bool(result.get('sent'))} "
+                    f"errno={result.get('errno')!r} "
+                    f"error={result.get('error', 'none')})")
         self.evidence.append(dict(case=label, result="PASS", nonce=token, received=0,
                                   before=before, after=after,
                                   denyBefore=denied_before, denyAfter=denied_after,
@@ -847,6 +853,14 @@ table inet cor_fixture_observe {
             command(["ip", "addr", "add", address, "dev", iface], namespace=ns)
             command(["ip", "link", "set", iface, "up"], namespace=ns)
         command(["ip", "route", "add", "default", "via", "203.0.113.2"], namespace=GATEWAY)
+        # A socket that was established through the tunnel selected the tunnel
+        # address as its source. Once the tunnel device is gone that source no
+        # longer exists, so the kernel refuses the flow during route lookup and
+        # nftables never sees a packet: the guard counter could not move and the
+        # case degenerated into a silent timeout. Reassigning the tunnel address
+        # to the fixture fallback link keeps the flow routable, which forces its
+        # packets through the guard; the guard must then drop and count them.
+        command(["ip", "addr", "add", "10.77.0.2/32", "dev", "fixture-fail"], namespace=GATEWAY)
         command(["nft", "-f", "-"], namespace=VPS, input=
                 'add rule inet cor_fixture_observe input iifname "vps-fallback" counter name direct\n')
         for mode in ("tcp", "udp"):
