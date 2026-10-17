@@ -143,9 +143,10 @@ impl State {
             && self.last_report.as_ref().is_some_and(|report| {
                 report.action == Action::Status
                     && report.outcome == super::Outcome::Succeeded
-                    && report.phase != "running"
-                    && report.phase != "starting"
-                    && report.phase != "failed_closed_requested"
+                    && matches!(
+                        report.phase.as_str(),
+                        "uninstalled" | "restored" | "installed_closed" | "connected_unverified"
+                    )
             })
     }
 

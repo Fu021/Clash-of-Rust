@@ -88,6 +88,39 @@ mod tests {
     }
 
     #[test]
+    fn only_explicit_terminal_status_phases_settle_recovery() {
+        for phase in [
+            "uninstalled",
+            "restored",
+            "installed_closed",
+            "connected_unverified",
+        ] {
+            let mut app = app();
+            app.wsl.inspection_required = true;
+            let ticket = app
+                .wsl
+                .evidence
+                .begin(request(contract::Action::Status))
+                .unwrap();
+            let raw = serde_json::json!({
+                "schema_version":1, "operation_id":uuid::Uuid::new_v4().to_string(),
+                "generation":1, "action":"Status", "outcome":"succeeded",
+                "protection":"unknown", "phase":phase, "backend":"WireGuard",
+                "message":"inspected", "distributions":[], "checks":[], "logs":[]
+            });
+            let _ = app.wsl_event(Event::Finished(
+                ticket,
+                Box::new(Ok(Report::parse(&raw.to_string()).unwrap())),
+                String::new(),
+            ));
+            assert!(
+                !app.wsl.inspection_required,
+                "phase {phase} should settle recovery"
+            );
+        }
+    }
+
+    #[test]
     fn rejected_mutation_report_locks_without_retaining_evidence() {
         let mut app = app();
         let ticket = app

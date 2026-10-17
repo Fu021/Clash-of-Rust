@@ -13,6 +13,7 @@ import json
 import os
 from pathlib import Path
 import socket
+import struct
 import subprocess
 import sys
 import unittest
@@ -28,6 +29,11 @@ with patch.object(subprocess, "run", side_effect=AssertionError("command during 
         patch.object(subprocess, "Popen", side_effect=AssertionError("process during import")), \
         patch.object(socket, "socket", side_effect=AssertionError("socket during import")):
     spec.loader.exec_module(harness)
+manager_path = HERE.parent / "linux" / "manager.py"
+manager_spec = importlib.util.spec_from_file_location("cor_egress_manager", manager_path)
+manager = importlib.util.module_from_spec(manager_spec)
+with patch.object(subprocess, "run", side_effect=AssertionError("command during import")):
+    manager_spec.loader.exec_module(manager)
 
 
 class GateTests(unittest.TestCase):
@@ -171,6 +177,59 @@ class EvidenceTests(unittest.TestCase):
         self.assertIn('icmp type 3 icmp code 4 ct state related counter accept', source)
         self.assertIn('PREF_TRANSPORT_PMTU = 10072', source)
         self.assertIn('PREF_DEFAULT_DENY = 10074', source)
+
+    def test_sandbox_seccomp_denies_namespace_entry_and_creation(self):
+        program = manager.seccomp_filter()
+        instructions = [struct.unpack_from("HBBI", program, offset)
+                        for offset in range(0, len(program), 8)]
+        self.assertTrue(instructions)
+        self.assertTrue(all(len(instruction) == 4 for instruction in instructions))
+
+        def evaluate(arch, syscall, arg0=0):
+            data = bytearray(32)
+            struct.pack_into("I", data, manager.SECCOMP_ARCH_OFFSET, arch)
+            struct.pack_into("I", data, manager.SECCOMP_NR_OFFSET, syscall)
+            struct.pack_into("I", data, manager.SECCOMP_ARG0_OFFSET, arg0)
+            accumulator = 0
+            pc = 0
+            while pc < len(instructions):
+                code, jump_true, jump_false, value = instructions[pc]
+                if code == 0x20:  # BPF_LD | BPF_W | BPF_ABS
+                    accumulator = struct.unpack_from("I", data, value)[0]
+                    pc += 1
+                elif code == 0x15:  # BPF_JMP | BPF_JEQ | BPF_K
+                    pc += (jump_true if accumulator == value else jump_false) + 1
+                elif code == 0x45:  # BPF_JMP | BPF_JSET | BPF_K
+                    pc += (jump_true if accumulator & value else jump_false) + 1
+                elif code == 0x06:  # BPF_RET | BPF_K
+                    return value
+                else:
+                    self.fail(f"unexpected seccomp opcode 0x{code:x}")
+            self.fail("seccomp program fell through")
+
+        arch_name = manager.platform.machine().lower()
+        arch = manager.AUDIT_ARCHES[arch_name]
+        syscalls = manager.SYSCALLS[arch_name]
+        denied = manager.SECCOMP_RET_ERRNO | manager.EPERM
+        self.assertEqual(evaluate(arch, syscalls["unshare"]), denied)
+        self.assertEqual(evaluate(arch, syscalls["setns"]), denied)
+        self.assertEqual(evaluate(arch, syscalls["clone3"]), denied)
+        self.assertEqual(evaluate(arch, syscalls["clone"]), manager.SECCOMP_RET_ALLOW)
+        self.assertEqual(
+            evaluate(arch, syscalls["clone"], manager.CLONE_NAMESPACE_FLAGS & -manager.CLONE_NAMESPACE_FLAGS),
+            denied,
+        )
+        self.assertEqual(evaluate(arch, syscalls["clone"], 0x00000100), manager.SECCOMP_RET_ALLOW)
+        source = manager_path.read_text(encoding="utf-8")
+        self.assertIn("'unshare'", source)
+        self.assertIn("'setns'", source)
+        self.assertIn("'clone3'", source)
+        self.assertIn("'--seccomp'", source)
+
+    def test_sandbox_seccomp_refuses_unknown_architecture(self):
+        with patch.object(manager.platform, "machine", return_value="unknown-cpu"):
+            with self.assertRaisesRegex(manager.Blocked, "Unsupported architecture"):
+                manager.seccomp_filter()
 
     def test_nonce_generator_has_unique_dns_safe_labels(self):
         tokens = {harness.nonce() for _ in range(100)}

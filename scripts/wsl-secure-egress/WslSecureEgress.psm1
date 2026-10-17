@@ -8,7 +8,7 @@ $script:StateRoot = Join-Path $env:ProgramData 'ClashOfRust\WslEgress'
 $script:LinuxHelper = '/usr/local/lib/cor-egress/manager'
 
 function New-WslEgressResponse {
-    param([string]$Action, [string]$Backend = 'Tailscale',
+    param([string]$Action, [string]$Backend = 'WireGuard',
         [string]$Outcome = 'not_run', [string]$Phase = 'uninstalled',
         [string]$Protection = 'unknown', [string]$Message = '', [long]$Generation = 0)
     [ordered]@{
@@ -787,7 +787,7 @@ function Set-WslEgressEndpoint([object]$State, [bool]$Enabled) {
 
 function Invoke-WslEgressOperation {
     [CmdletBinding()]
-    param([string]$Action = 'Doctor', [string]$Backend = 'Tailscale', [string]$Distro = 'COR-Egress',
+    param([string]$Action = 'Doctor', [string]$Backend = 'WireGuard', [string]$Distro = 'COR-Egress',
         [string]$ProfilePath, [string]$EndpointIPv4, [int]$EndpointPort = 51820,
         [switch]$Execute, [switch]$RestoreOriginalNetwork)
     $result = New-WslEgressResponse -Action $Action -Backend $Backend

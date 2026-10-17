@@ -34,7 +34,10 @@ operator steps; the project does not download or import a rootfs.
 
 The manager verifies that required commands exist but does not install them.
 The WSL kernel must provide WireGuard and the distribution must permit mount,
-PID, IPC and user namespaces. Bubblewrap must support `--disable-userns`.
+PID, IPC and user namespaces. Bubblewrap must support `--seccomp`; newer
+versions may additionally provide `--disable-userns`, but that optional flag
+is not required because the helper's seccomp filter blocks nested namespace
+creation and switching.
 
 Unsupported kernel, WSL version or policy fields produce `BLOCKED`. A timeout
 or missing output is never treated as a successful close. Windows Doctor and

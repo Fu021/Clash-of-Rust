@@ -5,8 +5,8 @@ use std::net::Ipv4Addr;
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub enum Backend {
     #[default]
-    Tailscale,
     WireGuard,
+    Tailscale,
 }
 
 impl Backend {

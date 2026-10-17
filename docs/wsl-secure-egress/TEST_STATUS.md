@@ -11,7 +11,7 @@ Run on 2026-10-17 in the `Clash-of-Rust` worktree:
 | --- | --- | --- |
 | PowerShell module parser | PASS | Syntax only |
 | `tests/windows-unit.ps1` | PASS, 50 assertions | Mocked host boundaries; no WSL, firewall, DNS or route mutation |
-| `tests/linux_static_test.py` | PASS, 15 tests | Portable evidence/gate logic; no kernel operations |
+| `tests/linux_static_test.py` | PASS, 17 tests | Portable evidence/gate logic; no kernel operations |
 | `tests/server_unit.py` | PASS, 4 tests | Offline VPS profile validation |
 | `scripts/test-build-tools.py` | PASS, 36 tests, 1 skipped | Build/resource validation; Windows PE version read skipped locally |
 | `scripts/test-workflow-artifacts.py` | PASS, 6 tests | Immutable artifact logic |
@@ -49,6 +49,21 @@ Run on 2026-10-17 in the `Clash-of-Rust` worktree:
   `127.0.0.1:18001` was unavailable; no package was installed.
 - The WSL integration result remains `NOT_RUN`; the GitHub disposable Linux
   runner is the authoritative environment for that test.
+- Bubblewrap 0.6.1 is present in Ubuntu-22.04 and does not support
+  `--disable-userns`. A disposable probe confirmed that nested user namespace
+  creation succeeds without an additional restriction. The workload sandbox
+  now installs a seccomp filter that denies `unshare`, `setns`, `clone3`, and
+  namespace-flagged `clone`, while retaining normal process creation. The
+  isolated integration suite has not yet been rerun in GitHub Actions.
+- The two GitHub runs for commit `5865aaf` were inspected. The Linux disposable
+  integration reached and passed its direct-egress, DNS, IPv6, and attestation
+  cases, then failed when starting the inspection workload. Rust CI exposed an
+  overly permissive recovery-phase check; it now accepts only explicit terminal
+  status phases. These CI fixes are pending a new hosted run.
+- Current host configuration was inspected read-only: `.wslconfig` still uses
+  `networkingMode=mirrored`; Hyper-V WSL policy remains `NotConfigured`.
+  Repository support for NAT and Hyper-V default-deny exists, but neither has
+  been applied on this machine.
 
 ## Acceptance rule
 

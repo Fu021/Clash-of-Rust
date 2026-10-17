@@ -13,6 +13,7 @@ import ipaddress
 import json
 import os
 from pathlib import Path
+import platform
 import re
 import shutil
 import stat
@@ -21,6 +22,7 @@ import sys
 import tempfile
 import time
 import uuid
+import struct
 
 STATE = Path('/var/lib/cor-egress')
 PROFILE = Path('/etc/cor-egress/profile.json')
@@ -45,6 +47,30 @@ PREF_DEFAULT_DENY = 10074
 TUNNEL_MTU = 1380
 WG_PORT = 51821
 ENV = {'PATH': '/usr/sbin:/usr/bin:/sbin:/bin', 'LC_ALL': 'C', 'LANG': 'C'}
+SECCOMP_ARCH_OFFSET = 4
+SECCOMP_NR_OFFSET = 0
+SECCOMP_ARG0_OFFSET = 16
+AUDIT_ARCHES = {
+    'x86_64': 0xC000003E,
+    'aarch64': 0xC00000B7,
+}
+SYSCALLS = {
+    'x86_64': {'unshare': 272, 'setns': 308, 'clone': 56, 'clone3': 435},
+    'aarch64': {'unshare': 97, 'setns': 268, 'clone': 220, 'clone3': 435},
+}
+SECCOMP_RET_ERRNO = 0x00050000
+SECCOMP_RET_ALLOW = 0x7FFF0000
+EPERM = 1
+CLONE_NAMESPACE_FLAGS = (
+    0x00000080  # CLONE_NEWTIME
+    | 0x00020000  # CLONE_NEWNS
+    | 0x02000000  # CLONE_NEWCGROUP
+    | 0x04000000  # CLONE_NEWUTS
+    | 0x08000000  # CLONE_NEWIPC
+    | 0x10000000  # CLONE_NEWUSER
+    | 0x20000000  # CLONE_NEWPID
+    | 0x40000000  # CLONE_NEWNET
+)
 
 
 class Blocked(Exception):
@@ -139,6 +165,73 @@ def command(argv, ns=None, data=None, okay=False, timeout=25):
     return result
 
 
+def seccomp_filter():
+    """Return classic-BPF rules that deny namespace creation/switching.
+
+    Bubblewrap applies these rules after it has created the namespaces needed
+    for the workload. Blocking only namespace-related clone flags preserves
+    ordinary subprocesses while preventing a sandbox escape through a nested
+    namespace.
+    """
+    statements = []
+    labels = {}
+
+    def label(name):
+        labels[name] = len(statements)
+
+    def stmt(code, value):
+        statements.append(('stmt', code, value))
+
+    def jump(code, value, true_label, false_label):
+        statements.append(('jump', code, value, true_label, false_label))
+
+    bpf_ld_w_abs = 0x00 | 0x00 | 0x20
+    bpf_jmp_jeq = 0x05 | 0x00 | 0x10
+    bpf_jmp_jset = 0x05 | 0x00 | 0x40
+    bpf_ret_k = 0x06 | 0x00
+    deny = SECCOMP_RET_ERRNO | EPERM
+    allow = SECCOMP_RET_ALLOW
+
+    audit_arch = AUDIT_ARCHES.get(platform.machine().lower())
+    syscalls = SYSCALLS.get(platform.machine().lower())
+    if audit_arch is None or syscalls is None:
+        raise Blocked('Unsupported architecture for sandbox seccomp.')
+    stmt(bpf_ld_w_abs, SECCOMP_ARCH_OFFSET)
+    jump(bpf_jmp_jeq, audit_arch, 'arch_ok', 'deny')
+    label('arch_ok')
+    stmt(bpf_ld_w_abs, SECCOMP_NR_OFFSET)
+    jump(bpf_jmp_jeq, syscalls['unshare'], 'deny', 'check_setns')
+    label('check_setns')
+    jump(bpf_jmp_jeq, syscalls['setns'], 'deny', 'check_clone3')
+    label('check_clone3')
+    jump(bpf_jmp_jeq, syscalls['clone3'], 'deny', 'check_clone')
+    label('check_clone')
+    jump(bpf_jmp_jeq, syscalls['clone'], 'load_clone_flags', 'allow')
+    label('load_clone_flags')
+    stmt(bpf_ld_w_abs, SECCOMP_ARG0_OFFSET)
+    jump(bpf_jmp_jset, CLONE_NAMESPACE_FLAGS, 'deny', 'allow')
+    label('allow')
+    stmt(bpf_ret_k, allow)
+    label('deny')
+    stmt(bpf_ret_k, deny)
+
+    encoded = bytearray()
+    for index, instruction in enumerate(statements):
+        if instruction[0] == 'stmt':
+            _, code, value = instruction
+            encoded.extend(struct.pack('HBBI', code, 0, 0, value))
+            continue
+        _, code, value, true_label, false_label = instruction
+        true_index = labels[true_label]
+        false_index = labels[false_label]
+        true_jump = true_index - index - 1
+        false_jump = false_index - index - 1
+        if not 0 <= true_jump <= 255 or not 0 <= false_jump <= 255:
+            raise Blocked('Sandbox seccomp program is too large.')
+        encoded.extend(struct.pack('HBBI', code, true_jump, false_jump, value))
+    return bytes(encoded)
+
+
 def json_command(argv, ns=None):
     return json.loads(command(argv, ns=ns).stdout)
 
@@ -149,7 +242,7 @@ def dependencies():
     if missing:
         raise Blocked('Missing dependencies: ' + ', '.join(missing))
     help_text = command(['bwrap', '--help']).stdout.decode()
-    if any(x not in help_text for x in ['--unshare-user', '--unshare-pid', '--cap-drop', '--disable-userns']):
+    if any(x not in help_text for x in ['--unshare-user', '--unshare-pid', '--cap-drop', '--seccomp']):
         raise Blocked('bubblewrap lacks required isolation options.')
 
 
@@ -990,28 +1083,41 @@ class Manager:
                 '--inh-caps=-all', '--ambient-caps=-all', '--bounding-set=-all',
                 'bwrap', '--die-with-parent', '--new-session', '--unshare-user',
                 '--unshare-pid', '--unshare-ipc', '--unshare-uts', '--unshare-cgroup-try',
-                '--disable-userns', '--cap-drop', 'ALL', '--uid', str(p['uid']), '--gid', str(p['gid']),
+                '--cap-drop', 'ALL', '--uid', str(p['uid']), '--gid', str(p['gid']),
                 '--clearenv', '--setenv', 'PATH', '/usr/bin:/bin', '--setenv', 'HOME', '/home/sandbox',
                 '--setenv', 'LANG', 'C.UTF-8', '--setenv', 'TZ', 'Europe/Berlin',
                 '--tmpfs', '/', '--proc', '/proc', '--dev', '/dev', '--tmpfs', '/tmp',
                 '--dir', '/home', '--dir', '/home/sandbox', '--dir', '/etc']
-        for name in ['/usr', '/bin', '/sbin', '/lib', '/lib64']:
-            if Path(name).is_symlink():
-                argv += ['--symlink', os.readlink(name), name]
-            elif Path(name).is_dir():
-                argv += ['--ro-bind', name, name]
-        # /usr/local can contain control sockets; hide it even though /usr is readable.
-        argv += ['--tmpfs', '/usr/local']
-        if Path('/usr/lib/wsl').exists():
-            argv += ['--tmpfs', '/usr/lib/wsl']
-        for name in ['resolv.conf', 'passwd', 'group', 'nsswitch.conf', 'hosts']:
-            argv += ['--ro-bind', str(root / name), '/etc/' + name]
-        if Path('/etc/ssl/certs').is_dir():
-            argv += ['--ro-bind', '/etc/ssl/certs', '/etc/ssl/certs']
-        argv += ['--chdir', '/home/sandbox', '--', *self.args.command]
-        # Preserve stdio for interactive commands; never inherit controller/namespace fds.
-        fcntl.flock(self.lock.fileno(), fcntl.LOCK_UN)
-        result = subprocess.run(argv, env=ENV, cwd='/', close_fds=True, check=False)
+        bwrap_help = command(['bwrap', '--help']).stdout.decode()
+        seccomp_file = tempfile.TemporaryFile()
+        try:
+            seccomp_file.write(seccomp_filter())
+            seccomp_file.flush()
+            seccomp_file.seek(0)
+            seccomp_fd = seccomp_file.fileno()
+            argv += ['--seccomp', str(seccomp_fd)]
+            if '--disable-userns' in bwrap_help:
+                argv += ['--disable-userns']
+            for name in ['/usr', '/bin', '/sbin', '/lib', '/lib64']:
+                if Path(name).is_symlink():
+                    argv += ['--symlink', os.readlink(name), name]
+                elif Path(name).is_dir():
+                    argv += ['--ro-bind', name, name]
+            # /usr/local can contain control sockets; hide it even though /usr is readable.
+            argv += ['--tmpfs', '/usr/local']
+            if Path('/usr/lib/wsl').exists():
+                argv += ['--tmpfs', '/usr/lib/wsl']
+            for name in ['resolv.conf', 'passwd', 'group', 'nsswitch.conf', 'hosts']:
+                argv += ['--ro-bind', str(root / name), '/etc/' + name]
+            if Path('/etc/ssl/certs').is_dir():
+                argv += ['--ro-bind', '/etc/ssl/certs', '/etc/ssl/certs']
+            argv += ['--chdir', '/home/sandbox', '--', *self.args.command]
+            # Preserve stdio for interactive commands; never inherit controller/namespace fds.
+            fcntl.flock(self.lock.fileno(), fcntl.LOCK_UN)
+            result = subprocess.run(argv, env=ENV, cwd='/', close_fds=True,
+                                    pass_fds=(seccomp_fd,), check=False)
+        finally:
+            seccomp_file.close()
         self.checks.append({'name': 'workload-exit', 'outcome': 'Passed' if result.returncode == 0 else 'Failed',
                             'exit_code': result.returncode})
         return self.event('run', 'Succeeded' if result.returncode == 0 else 'Failed',

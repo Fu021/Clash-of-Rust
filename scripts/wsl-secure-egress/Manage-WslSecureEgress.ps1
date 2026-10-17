@@ -11,7 +11,7 @@
 param(
     [ValidateSet('Doctor','Status','Install','Start','Stop','Test','Rollback','Uninstall')]
     [string]$Action = 'Doctor',
-    [ValidateSet('Tailscale','WireGuard')][string]$Backend = 'Tailscale',
+    [ValidateSet('Tailscale','WireGuard')][string]$Backend = 'WireGuard',
     [string]$Distro = 'COR-Egress',
     [string]$ProfilePath,
     [string]$EndpointIPv4,
