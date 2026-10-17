@@ -22,6 +22,7 @@ import urllib.error
 import urllib.parse
 import zipfile
 import tarfile
+from contextlib import nullcontext
 
 _spec = importlib.util.spec_from_file_location('publish_release', build.ROOT/'scripts/publish-release.py')
 release = importlib.util.module_from_spec(_spec)
@@ -102,6 +103,98 @@ class BuildTests(unittest.TestCase):
             for path in (report,root/'summary.txt'):
                 self.assertNotIn(config['token'],path.read_text())
                 self.assertNotIn(config['url'],path.read_text())
+
+    def test_github_hit_only_checks_private_metadata_and_reuses_current_mirror(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root=Path(temporary)
+            (root/'module.zip').write_bytes(b'GitHub restored source')
+            config={'group':'dependencies/source','key':'current','base_key':'current',
+                    'kind':'archives','paths':str(root),'prefix':['compatible-'],
+                    'url':'http://127.0.0.1:19081','token':'test-only','save':True,'github_hit':'true'}
+            generation='v'+str(local_cache.SCHEMA)+'-'+hashlib.sha256(str(root).encode()).hexdigest()[:16]+'-'
+            record={'schema':local_cache.SCHEMA,'group':config['group'],'key':generation+'current','id':'a'*64}
+            reply=io.BytesIO(json.dumps(record).encode()); reply.status=200
+            with patch.object(local_cache,'response',return_value=nullcontext(reply)) as request, \
+                    patch.object(local_cache,'cache_report'),patch.object(local_cache,'pack') as pack:
+                local_cache.restore(config)
+                self.assertTrue(config['restored'])
+                self.assertFalse(config['mirror_required'])
+                request.assert_called_once()
+                self.assertTrue(request.call_args.args[1].startswith('/v1/lookup?'))
+                local_cache.save(config)
+                pack.assert_not_called()
+
+    def test_github_hit_with_no_private_copy_registers_a_required_mirror(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root=Path(temporary)
+            (root/'module.zip').write_bytes(b'GitHub restored source')
+            config={'group':'dependencies/source','key':'current','base_key':'current',
+                    'kind':'archives','paths':str(root),'prefix':[],
+                    'url':'http://127.0.0.1:19081','token':'test-only','save':True,'github_hit':'true'}
+            reply=io.BytesIO(); reply.status=404
+            with patch.object(local_cache,'response',return_value=nullcontext(reply)) as request, \
+                    patch.object(local_cache,'cache_report'):
+                local_cache.restore(config)
+                self.assertTrue(config['restored'])
+                self.assertTrue(config['available'])
+                self.assertTrue(config['mirror_required'])
+                request.assert_called_once()
+
+            uploaded=[]
+            def upload(_config,path,**kwargs):
+                self.assertEqual(kwargs['method'],'PUT')
+                self.assertTrue(path.startswith('/v1/blob?'))
+                uploaded.append(kwargs['file'].read())
+                result=io.BytesIO(); result.status=201
+                return nullcontext(result)
+            with patch.object(local_cache,'response',side_effect=upload),patch.object(local_cache,'cache_report'):
+                local_cache.save(config)
+            self.assertEqual(len(uploaded),1)
+            self.assertTrue(uploaded[0])
+
+    def test_rust_compatible_github_hit_avoids_a_second_download_but_empty_miss_does_not(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root=Path(temporary)
+            config={'kind':'rust','source':str(root),'github_hit':'false'}
+            self.assertFalse(local_cache.github_restored(config))
+            deps=root/'target/release/deps'; deps.mkdir(parents=True)
+            (deps/'not-an-object.d').write_text('build metadata')
+            (deps/'empty.rlib').touch()
+            self.assertFalse(local_cache.github_restored(config))
+            (deps/'dependency.rlib').write_bytes(b'restored dependency')
+            self.assertTrue(local_cache.github_restored(config))
+            config['github_hit']=''
+            self.assertFalse(local_cache.github_restored(config))
+
+    def test_rust_private_mirror_reuses_sources_but_invalidates_changed_dependencies_and_compiler(self):
+        config={'kind':'rust','key':'compiler-dependencies-new-source',
+                'prefix':['compiler-dependencies-','compiler-']}
+        self.assertTrue(local_cache.private_current(config,{'key':'compiler-dependencies-old-source'}))
+        self.assertFalse(local_cache.private_current(config,{'key':'compiler-old-dependencies-old-source'}))
+        self.assertFalse(local_cache.private_current(config,{'key':'old-compiler-dependencies-old-source'}))
+        self.assertFalse(local_cache.private_current(config,None))
+
+    def test_github_miss_restores_a_verified_private_archive(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root=Path(temporary); source=root/'source'; source.mkdir()
+            (source/'module.zip').write_bytes(b'private dependency')
+            archive=root/'cache.tar.gz'; local_cache.pack([source],archive)
+            destination=root/'restored'
+            config={'group':'dependencies/source','key':'current','base_key':'current',
+                    'kind':'archives','paths':str(destination),'prefix':[],
+                    'url':'http://127.0.0.1:19081','token':'test-only','save':True,'github_hit':''}
+            generation='v'+str(local_cache.SCHEMA)+'-'+hashlib.sha256(str(destination).encode()).hexdigest()[:16]+'-'
+            record={'schema':local_cache.SCHEMA,'group':config['group'],'key':generation+'current',
+                    'id':'a'*64,'size':archive.stat().st_size,'sha256':local_cache.digest(archive)}
+            def reply(_config,path):
+                result=io.BytesIO(json.dumps(record).encode() if path.startswith('/v1/lookup?') else archive.read_bytes())
+                result.status=200
+                return nullcontext(result)
+            with patch.object(local_cache,'response',side_effect=reply) as request,patch.object(local_cache,'cache_report'):
+                local_cache.restore(config)
+                self.assertTrue(config['restored'])
+                self.assertEqual((destination/'module.zip').read_bytes(),b'private dependency')
+                self.assertEqual(request.call_count,2)
 
     def test_local_cache_uploads_are_atomic_checked_and_immutable(self):
         with tempfile.TemporaryDirectory() as temporary:
@@ -400,6 +493,19 @@ class BuildTests(unittest.TestCase):
         compiler_new = entry(7, 'macos-compiler-arm64-' + 'a'*16 + '-' + 'c'*64, 20)
         self.assertEqual(storage.eviction_plan([compiler_old, compiler_new], 100), [compiler_old])
         self.assertEqual(storage.eviction_plan([gradle], 10), [gradle])
+        desktop=entry(8,'native-release-v2-macos-15-intel-check-Linux-x64-aaaaaaaa-bbbbbbbb',60)
+        linux=entry(9,'native-release-v2-ubuntu-22.04-check-Linux-x64-aaaaaaaa-bbbbbbbb',60)
+        self.assertEqual([c['id'] for c in storage.eviction_plan([desktop,linux],60)],[9])
+        source_old=entry(10,'source-cargo-'+'a'*64+'-1-1',10)
+        source_new=entry(11,'source-cargo-'+'b'*64+'-2-1',10)
+        self.assertEqual([c['id'] for c in storage.eviction_plan([source_old,source_new],100)],[10])
+        for older,newer in (
+                ('android-go-Linux-X64-1.26.0-'+'a'*64,'android-go-Linux-X64-1.27.0-'+'b'*64),
+                ('skia-source-Linux-X64-0.153.3-'+'a'*64,'skia-source-Linux-X64-0.154.0-'+'b'*64),
+                ('resources-macos-x64-'+'a'*64+'-2026-10-16','resources-macos-x64-'+'b'*64+'-'+'c'*64),
+                ('tools-nsis-'+'a'*64,'tools-nsis-'+'b'*64),
+                ('action-setup-tailscale/1.94.2/Linux-amd64','action-setup-tailscale/1.104.1/Linux-amd64')):
+            self.assertEqual(storage.lineage(older),storage.lineage(newer))
         with self.assertRaises(ValueError): storage.eviction_plan([], 0)
 
     def test_cache_cleanup_rechecks_size_and_fork_report_never_deletes(self):

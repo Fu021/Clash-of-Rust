@@ -38,6 +38,7 @@ jobs:
         env:
           PYTHONDONTWRITEBYTECODE: '1'
         run: |
+          node --check .github/actions/local-cache/index.cjs
           python3 scripts/test-build-tools.py --buffer
           python3 scripts/test-workflow-artifacts.py --buffer
       - uses: dtolnay/rust-toolchain@stable
@@ -65,9 +66,22 @@ jobs:
       - name: Keep runner routing unchanged
         if: steps.tailnet.outcome == 'success'
         run: sudo -n tailscale set --accept-routes=false --accept-dns=false
-      - name: Restore source registry metadata and verified archives
+      - name: Restore GitHub source registry metadata
+        id: source_github
+        uses: actions/cache@v5
+        continue-on-error: true
+        timeout-minutes: 5
+        with:
+          path: |
+            ~/.cargo/registry/index
+            ~/.cargo/registry/cache
+            ~/.cargo/git/db
+          key: source-cargo-${{ hashFiles('Cargo.lock') }}-${{ github.run_id }}-${{ github.run_attempt }}
+          restore-keys: source-cargo-
+      - name: Restore local fallback for source registry metadata
         uses: ./.github/actions/local-cache
         with:
+          github-hit: ${{ steps.source_github.outcome == 'success' && steps.source_github.outputs.cache-hit || '' }}
           url: ${{ steps.tailnet.outcome == 'success' && vars.LOCAL_CACHE_URL || '' }}
           token: ${{ secrets.LOCAL_CACHE_TOKEN }}
           group: dependencies/cargo-source
@@ -77,9 +91,22 @@ jobs:
             ~/.cargo/git/db
           key: source-${{ hashFiles('Cargo.lock') }}-${{ github.run_id }}-${{ github.run_attempt }}
           restore-keys: source-
-      - name: Restore source module downloads and binding tools
+      - name: Restore GitHub source module downloads
+        id: source_go_github
+        uses: actions/cache@v5
+        continue-on-error: true
+        timeout-minutes: 5
+        with:
+          path: |
+            ~/go/pkg/mod
+            ~/go/bin/gomobile
+            ~/go/bin/gobind
+          key: android-go-${{ runner.os }}-${{ runner.arch }}-${{ steps.go.outputs.go-version }}-${{ hashFiles('apps/android/core/go.mod', 'apps/android/core/go.sum') }}
+          restore-keys: android-go-${{ runner.os }}-${{ runner.arch }}-${{ steps.go.outputs.go-version }}-
+      - name: Restore local fallback for source module downloads
         uses: ./.github/actions/local-cache
         with:
+          github-hit: ${{ steps.source_go_github.outcome == 'success' && steps.source_go_github.outputs.cache-hit || '' }}
           url: ${{ steps.tailnet.outcome == 'success' && vars.LOCAL_CACHE_URL || '' }}
           token: ${{ secrets.LOCAL_CACHE_TOKEN }}
           group: tools/android-go
@@ -89,9 +116,19 @@ jobs:
             ~/go/bin/gobind
           key: go-resolver-${{ steps.go.outputs.go-version }}-${{ hashFiles('apps/android/core/go.*') }}
           restore-keys: go-
-      - name: Restore last compatible dependency snapshot
+      - name: Restore GitHub dependency snapshot
+        id: snapshot_github
+        uses: actions/cache@v5
+        continue-on-error: true
+        timeout-minutes: 5
+        with:
+          path: ${{ env.BUILD_INPUTS_DIR }}
+          key: source-inputs-${{ hashFiles('Cargo.lock', 'Cargo.toml', 'apps/**/Cargo.toml', 'crates/**/Cargo.toml', '.cargo/**', 'apps/android/core/go.*', 'apps/android/**/*.gradle.kts', 'apps/android/gradle.properties') }}-${{ github.run_id }}-${{ github.run_attempt }}
+          restore-keys: source-inputs-
+      - name: Restore local fallback for dependency snapshot
         uses: ./.github/actions/local-cache
         with:
+          github-hit: ${{ steps.snapshot_github.outcome == 'success' && steps.snapshot_github.outputs.cache-hit || '' }}
           url: ${{ steps.tailnet.outcome == 'success' && vars.LOCAL_CACHE_URL || '' }}
           token: ${{ secrets.LOCAL_CACHE_TOKEN }}
           group: dependencies/build-inputs
@@ -181,26 +218,27 @@ jobs:
         with:
           targets: ${{ matrix.target }}
           components: clippy
-      - name: Restore private Android Rust cache
-        id: rust_local
-        uses: ./.github/actions/local-cache
-        with:
-          url: ${{ steps.tailnet.outcome == 'success' && vars.LOCAL_CACHE_URL || '' }}
-          token: ${{ secrets.LOCAL_CACHE_TOKEN }}
-          group: rust/android-${{ matrix.arch }}
-          kind: rust
-          key: release-${{ matrix.target }}
       - uses: Swatinem/rust-cache@v2
-        if: steps.rust_local.outputs.restored != 'true'
         timeout-minutes: 5
         continue-on-error: true
+        id: rust_github
         with:
           prefix-key: android-v2-${{ matrix.arch }}
           cache-on-failure: false
           cache-bin: false
           cache-workspace-crates: false
-          # Bootstrap from existing GitHub caches once; new snapshots go local.
-          save-if: false
+          # GitHub keeps dependency objects; the local tier retains the full mirror.
+          save-if: true
+      - name: Restore local fallback for Android Rust cache
+        id: rust_local
+        uses: ./.github/actions/local-cache
+        with:
+          github-hit: ${{ steps.rust_github.outcome == 'success' && steps.rust_github.outputs.cache-hit || '' }}
+          url: ${{ steps.tailnet.outcome == 'success' && vars.LOCAL_CACHE_URL || '' }}
+          token: ${{ secrets.LOCAL_CACHE_TOKEN }}
+          group: rust/android-${{ matrix.arch }}
+          kind: rust
+          key: release-${{ matrix.target }}
       - name: Identify Skia source dependency
         if: matrix.arch == 'armv7'
         id: skia
@@ -212,27 +250,29 @@ jobs:
           with open(os.environ['GITHUB_OUTPUT'], 'a') as output:
               output.write('version=' + package['version'] + '\n')
               output.write('checksum=' + package['checksum'] + '\n')
-      - name: Restore private ARMv7 Skia source dependencies
-        id: skia_local
+      - name: Restore GitHub ARMv7 Skia source cache
         if: matrix.arch == 'armv7'
-        uses: ./.github/actions/local-cache
-        with:
-          url: ${{ steps.tailnet.outcome == 'success' && vars.LOCAL_CACHE_URL || '' }}
-          token: ${{ secrets.LOCAL_CACHE_TOKEN }}
-          group: dependencies/skia-armv7
-          key: ${{ runner.os }}-${{ runner.arch }}-${{ steps.skia.outputs.version }}-${{ steps.skia.outputs.checksum }}
-          paths: ~/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/skia-bindings-${{ steps.skia.outputs.version }}
-      - name: Bootstrap existing ARMv7 Skia source cache
-        if: matrix.arch == 'armv7' && steps.skia_local.outputs.restored != 'true'
-        uses: actions/cache/restore@v5
+        uses: actions/cache@v5
         timeout-minutes: 5
         continue-on-error: true
+        id: skia_github
         with:
           # Cargo's normal registry cache excludes the sources downloaded by
           # Skia's build script. Include the crate's unpack marker as well, so
           # Cargo will not discard this tree when extracting the crate again.
           path: ~/.cargo/registry/src/*/skia-bindings-${{ steps.skia.outputs.version }}
           key: skia-source-${{ runner.os }}-${{ runner.arch }}-${{ steps.skia.outputs.version }}-${{ steps.skia.outputs.checksum }}
+      - name: Restore local fallback for ARMv7 Skia source dependencies
+        id: skia_local
+        if: matrix.arch == 'armv7'
+        uses: ./.github/actions/local-cache
+        with:
+          github-hit: ${{ steps.skia_github.outcome == 'success' && steps.skia_github.outputs.cache-hit || '' }}
+          url: ${{ steps.tailnet.outcome == 'success' && vars.LOCAL_CACHE_URL || '' }}
+          token: ${{ secrets.LOCAL_CACHE_TOKEN }}
+          group: dependencies/skia-armv7
+          key: ${{ runner.os }}-${{ runner.arch }}-${{ steps.skia.outputs.version }}-${{ steps.skia.outputs.checksum }}
+          paths: ~/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/skia-bindings-${{ steps.skia.outputs.version }}
       - uses: actions/setup-java@v5
         with:
           distribution: temurin
@@ -244,10 +284,23 @@ jobs:
           check-latest: true
           # Cache modules/tools below; the Go build directory is disposable.
           cache: false
-      - name: Restore private Go dependencies and binding tools
+      - name: Restore GitHub Go cache
+        uses: actions/cache@v5
+        timeout-minutes: 5
+        continue-on-error: true
+        id: go_github
+        with:
+          path: |
+            ~/go/pkg/mod
+            ~/go/bin/gomobile
+            ~/go/bin/gobind
+          key: android-go-${{ runner.os }}-${{ runner.arch }}-${{ steps.go.outputs.go-version }}-${{ hashFiles('apps/android/core/go.mod', 'apps/android/core/go.sum') }}
+          restore-keys: android-go-${{ runner.os }}-${{ runner.arch }}-${{ steps.go.outputs.go-version }}-
+      - name: Restore local fallback for Go dependencies and binding tools
         id: go_local
         uses: ./.github/actions/local-cache
         with:
+          github-hit: ${{ steps.go_github.outcome == 'success' && steps.go_github.outputs.cache-hit || '' }}
           url: ${{ steps.tailnet.outcome == 'success' && vars.LOCAL_CACHE_URL || '' }}
           token: ${{ secrets.LOCAL_CACHE_TOKEN }}
           group: tools/android-go
@@ -260,22 +313,23 @@ jobs:
             ~/go/bin/gobind
           key: go-${{ runner.os }}-${{ runner.arch }}-${{ steps.go.outputs.go-version }}-${{ hashFiles('apps/android/core/go.mod', 'apps/android/core/go.sum', 'scripts/android.py') }}
           restore-keys: go-
-      - name: Bootstrap existing Go cache
-        if: steps.go_local.outputs.restored != 'true'
-        uses: actions/cache/restore@v5
-        timeout-minutes: 5
+      - name: Restore GitHub Gradle dependencies and distribution
+        id: gradle_github
+        uses: actions/cache@v5
         continue-on-error: true
+        timeout-minutes: 5
         with:
+          key: gradle-linux-${{ needs.inputs.outputs.gradle }}-java-17-${{ hashFiles('apps/android/**/*.gradle.kts', 'apps/android/gradle.properties') }}
+          restore-keys: gradle-linux-
           path: |
-            ~/go/pkg/mod
-            ~/go/bin/gomobile
-            ~/go/bin/gobind
-          key: android-go-${{ runner.os }}-${{ runner.arch }}-${{ steps.go.outputs.go-version }}-${{ hashFiles('apps/android/core/go.mod', 'apps/android/core/go.sum') }}
-          restore-keys: android-go-${{ runner.os }}-${{ runner.arch }}-${{ steps.go.outputs.go-version }}-
-      - name: Restore private Gradle dependencies and distribution
+            ~/.gradle/caches/modules-2
+            ~/.gradle/permwrapper/dists
+            ~/.gradle/wrapper/dists
+      - name: Restore local fallback for Gradle dependencies and distribution
         id: gradle_local
         uses: ./.github/actions/local-cache
         with:
+          github-hit: ${{ steps.gradle_github.outcome == 'success' && steps.gradle_github.outputs.cache-hit || '' }}
           url: ${{ steps.tailnet.outcome == 'success' && vars.LOCAL_CACHE_URL || '' }}
           token: ${{ secrets.LOCAL_CACHE_TOKEN }}
           group: dependencies/gradle-linux
@@ -289,10 +343,7 @@ jobs:
       - uses: gradle/actions/setup-gradle@v5
         with:
           gradle-version: ${{ needs.inputs.outputs.gradle }}
-          cache-disabled: ${{ steps.gradle_local.outputs.restored == 'true' }}
-          cache-read-only: true
-          cache-cleanup: on-success
-          gradle-home-cache-includes: caches/modules-2
+          cache-disabled: true
       - name: Load stable development signature when configured
         shell: python
         env:
@@ -322,9 +373,19 @@ jobs:
           subprocess.run([str(manager),'platforms;android-36','build-tools;36.0.0','ndk;28.2.13676358'],check=True)
           with open(os.environ['GITHUB_ENV'],'a') as out:
               out.write('ANDROID_NDK_ROOT='+str(sdk/'ndk/28.2.13676358')+'\n')
-      - name: Restore shared verified Android Geo resources
+      - name: Restore GitHub Android Geo resources
+        id: geo_github
+        uses: actions/cache@v5
+        continue-on-error: true
+        timeout-minutes: 5
+        with:
+          path: apps/android/app/offline-assets
+          key: resources-android-${{ needs.inputs.outputs.resources }}
+          restore-keys: resources-android-
+      - name: Restore local fallback for Android Geo resources
         uses: ./.github/actions/local-cache
         with:
+          github-hit: ${{ steps.geo_github.outcome == 'success' && steps.geo_github.outputs.cache-hit || '' }}
           url: ${{ steps.tailnet.outcome == 'success' && vars.LOCAL_CACHE_URL || '' }}
           token: ${{ secrets.LOCAL_CACHE_TOKEN }}
           group: resources/android
@@ -476,35 +537,35 @@ jobs:
         with:
           toolchain: stable-${{ matrix.target }}
           components: rustfmt, clippy
-      - name: Restore private native Rust cache
+      - uses: Swatinem/rust-cache@v2
+        timeout-minutes: 5
+        continue-on-error: true
+        id: rust_github
+        with:
+          prefix-key: native-release-v2-${{ matrix.os }}
+          cache-on-failure: false
+          cache-bin: false
+          cache-workspace-crates: false
+          save-if: true
+      - name: Restore local fallback for native Rust cache
         id: rust_local
         uses: ./.github/actions/local-cache
         with:
+          github-hit: ${{ steps.rust_github.outcome == 'success' && steps.rust_github.outputs.cache-hit || '' }}
           url: ${{ steps.tailnet.outcome == 'success' && vars.LOCAL_CACHE_URL || '' }}
           token: ${{ secrets.LOCAL_CACHE_TOKEN }}
           group: rust/${{ matrix.system }}-${{ matrix.arch }}
           kind: rust
           key: release-${{ matrix.target }}
-      - uses: Swatinem/rust-cache@v2
-        if: steps.rust_local.outputs.restored != 'true'
-        timeout-minutes: 5
-        continue-on-error: true
-        with:
-          prefix-key: native-release-v2-${{ matrix.os }}
-          cache-on-failure: false
-          cache-bin: false
-          cache-workspace-crates: ${{ runner.os == 'macOS' }}
-          save-if: false
-      - name: Verify architecture and select resource cache date
+      - name: Verify architecture and identify compiler cache
         id: environment
         run: |
-          import subprocess, sys, os, datetime, hashlib, pathlib
+          import subprocess, sys, os, hashlib, pathlib
           sys.path.insert(0, 'scripts')
           from build_support import host_arch
           assert host_arch() == '${{ matrix.arch }}'
           assert 'host: ${{ matrix.target }}' in subprocess.check_output(['rustc', '-vV'], text=True)
           with open(os.environ['GITHUB_OUTPUT'], 'a') as output:
-              output.write('day=' + datetime.datetime.now(datetime.timezone.utc).strftime('%Y-%m-%d') + '\n')
               output.write('compiler=' + hashlib.sha256(subprocess.check_output(['rustc', '-vV'])).hexdigest()[:16] + '\n')
           if sys.platform == 'darwin':
               with open(os.environ['GITHUB_ENV'], 'a') as env:
@@ -519,56 +580,59 @@ jobs:
         with:
           version: ${{ needs.inputs.outputs.sccache }}
           disable_annotations: true
+      - name: Restore GitHub macOS compiler cache
+        if: runner.os == 'macOS' && steps.compiler_cache.outcome == 'success'
+        uses: actions/cache@v5
+        timeout-minutes: 5
+        continue-on-error: true
+        id: compiler_github
+        with:
+          path: ${{ env.SCCACHE_DIR }}
+          key: macos-compiler-${{ matrix.arch }}-${{ steps.environment.outputs.compiler }}-${{ hashFiles('Cargo.lock', 'Cargo.toml', '.cargo/**', 'apps/**/*.rs', 'apps/**/Cargo.toml', 'crates/**/*.rs', 'crates/**/*.slint', 'crates/**/Cargo.toml', 'resources/**', 'scripts/*.py', '.github/workflows/ci.yml') }}
+          restore-keys: macos-compiler-${{ matrix.arch }}-${{ steps.environment.outputs.compiler }}-
       - name: Restore bounded macOS compilation results
         if: runner.os == 'macOS' && steps.compiler_cache.outcome == 'success'
         id: compiler_local
         uses: ./.github/actions/local-cache
         with:
+          github-hit: ${{ steps.compiler_github.outcome == 'success' && steps.compiler_github.outputs.cache-hit || '' }}
           url: ${{ steps.tailnet.outcome == 'success' && vars.LOCAL_CACHE_URL || '' }}
           token: ${{ secrets.LOCAL_CACHE_TOKEN }}
           group: compiler/macos-${{ matrix.arch }}
           paths: ${{ env.SCCACHE_DIR }}
           key: ${{ steps.environment.outputs.compiler }}-${{ hashFiles('Cargo.lock', 'Cargo.toml', '.cargo/**', 'apps/**/*.rs', 'apps/**/Cargo.toml', 'crates/**/*.rs', 'crates/**/*.slint', 'crates/**/Cargo.toml', 'resources/**', 'scripts/*.py', '.github/workflows/ci.yml') }}
           restore-keys: ${{ steps.environment.outputs.compiler }}-
-      - name: Bootstrap existing macOS compiler cache
-        if: runner.os == 'macOS' && steps.compiler_cache.outcome == 'success' && steps.compiler_local.outputs.restored != 'true'
-        uses: actions/cache/restore@v5
-        timeout-minutes: 5
-        continue-on-error: true
-        with:
-          path: ${{ env.SCCACHE_DIR }}
-          key: macos-compiler-${{ matrix.arch }}-${{ steps.environment.outputs.compiler }}-${{ hashFiles('Cargo.lock', 'Cargo.toml', '.cargo/**', 'apps/**/*.rs', 'apps/**/Cargo.toml', 'crates/**/*.rs', 'crates/**/*.slint', 'crates/**/Cargo.toml', 'resources/**', 'scripts/*.py', '.github/workflows/ci.yml') }}
-          restore-keys: macos-compiler-${{ matrix.arch }}-${{ steps.environment.outputs.compiler }}-
       - name: Enable macOS compiler cache
         if: runner.os == 'macOS' && steps.compiler_cache.outcome == 'success'
         run: |
           import os
           with open(os.environ['GITHUB_ENV'], 'a') as output:
               output.write('RUSTC_WRAPPER=' + os.environ['SCCACHE_PATH'] + '\n')
-      - name: Restore private core and Geo resources
-        id: resource_local
-        uses: ./.github/actions/local-cache
-        with:
-          url: ${{ steps.tailnet.outcome == 'success' && vars.LOCAL_CACHE_URL || '' }}
-          token: ${{ secrets.LOCAL_CACHE_TOKEN }}
-          group: resources/${{ matrix.system }}-${{ matrix.arch }}
-          paths: ${{ matrix.system == 'windows' && matrix.arch == 'x64' && 'bundle/resources' || format('bundle/{0}-{1}/resources', matrix.system, matrix.arch) }}
-          key: resources-${{ needs.inputs.outputs.resources }}
-          restore-keys: resources-
-      - name: Bootstrap existing resource cache
-        if: steps.resource_local.outputs.restored != 'true'
-        uses: actions/cache/restore@v5
+      - name: Restore GitHub resource cache
+        uses: actions/cache@v5
         timeout-minutes: 5
         continue-on-error: true
+        id: resource_github
         with:
           # Only downloaded core/Geo dependencies. Never cache our own binaries.
           path: |
             bin
             bundle/resources
             bundle/${{ matrix.system }}-${{ matrix.arch }}/resources
-          key: resources-${{ matrix.system }}-${{ matrix.arch }}-${{ hashFiles('scripts/prepare-resources.py', 'scripts/build_support.py') }}-${{ steps.environment.outputs.day }}
+          key: resources-${{ matrix.system }}-${{ matrix.arch }}-${{ hashFiles('scripts/prepare-resources.py', 'scripts/build_support.py') }}-${{ needs.inputs.outputs.resources }}
           restore-keys: |
             resources-${{ matrix.system }}-${{ matrix.arch }}-${{ hashFiles('scripts/prepare-resources.py', 'scripts/build_support.py') }}-
+      - name: Restore local fallback for core and Geo resources
+        id: resource_local
+        uses: ./.github/actions/local-cache
+        with:
+          github-hit: ${{ steps.resource_github.outcome == 'success' && steps.resource_github.outputs.cache-hit || '' }}
+          url: ${{ steps.tailnet.outcome == 'success' && vars.LOCAL_CACHE_URL || '' }}
+          token: ${{ secrets.LOCAL_CACHE_TOKEN }}
+          group: resources/${{ matrix.system }}-${{ matrix.arch }}
+          paths: ${{ matrix.system == 'windows' && matrix.arch == 'x64' && 'bundle/resources' || format('bundle/{0}-{1}/resources', matrix.system, matrix.arch) }}
+          key: resources-${{ needs.inputs.outputs.resources }}
+          restore-keys: resources-
       - name: Install Linux build/test dependencies
         if: runner.os == 'Linux'
         run: |
@@ -641,7 +705,7 @@ jobs:
         with:
           ref: ${{ github.event.pull_request.head.sha || github.sha }}
           persist-credentials: false
-      - name: Trim obsolete dependencies and enforce 8 GiB cache budget
+      - name: Trim obsolete dependencies and enforce 9 GiB cache budget
         shell: python
         env:
           GH_TOKEN: ${{ github.token }}

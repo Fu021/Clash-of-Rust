@@ -1,4 +1,4 @@
-"""Keep Actions dependency/tool caches within a repository-wide 8 GiB budget."""
+"""Keep the hot Actions cache below 9 GiB; full archives remain on the private host."""
 import argparse
 import os
 from pathlib import Path
@@ -8,7 +8,7 @@ import urllib.error
 
 from workflow_artifacts import release_module
 
-BUDGET = 8 * 1024**3
+BUDGET = 9 * 1024**3
 
 
 def caches(client):
@@ -23,6 +23,14 @@ def caches(client):
 
 
 def lineage(key):
+    if key.startswith(('android-go-', 'skia-source-')):
+        return re.sub(r'-[^-]+-[0-9a-f]{64}$', '', key)
+    if key.startswith('gradle-linux-'):
+        return 'gradle-linux'
+    if key.startswith('tools-nsis-'):
+        return 'tools-nsis'
+    if key.startswith('action-setup-tailscale/'):
+        return 'tailscale/' + key.rsplit('/', 1)[-1]
     # Rust caches differ by compiler/dependency hashes. Keep the newest revision
     # per native target and branch; obsolete lockfiles must not accumulate.
     if key.startswith(('native-release-', 'android-', 'memory-ubuntu22-')):
@@ -30,10 +38,29 @@ def lineage(key):
     if key.startswith('macos-compiler-'):
         return re.sub(r'-[0-9a-f]{16}-[0-9a-f]{64}$', '', key)
     if key.startswith('resources-'):
-        return re.sub(r'-\d{4}-\d{2}-\d{2}$', '', key)
+        return re.sub(r'-(?:[0-9a-f]{64}-)?(?:[0-9a-f]{64}|\d{4}-\d{2}-\d{2})$', '', key)
+    if key.startswith('source-cargo-'):
+        return 'source-cargo'
+    if key.startswith('source-inputs-'):
+        return 'source-inputs'
     # Gradle's shared content entries reference each other: do not deduplicate
     # those by prefix. Only the global least-recently-used budget applies.
     return key
+
+
+def priority(entry):
+    key = entry['key']
+    # Retain small shared source/tools first, then slow desktop compilers.
+    # The fast Linux jobs can overlap a private fallback with those compilations.
+    if key.startswith(('resources-', 'source-', 'android-go-', 'gradle-linux-', 'skia-source-', 'tools-nsis-', 'action-setup-tailscale/')):
+        return 4
+    if key.startswith(('macos-compiler-', 'native-release-')) and ('macos' in key or 'windows' in key):
+        return 3
+    if key.startswith('android-'):
+        return 2
+    if key.startswith('memory-'):
+        return 0
+    return 1
 
 
 def eviction_plan(entries, budget=BUDGET):
@@ -51,7 +78,7 @@ def eviction_plan(entries, budget=BUDGET):
             seen.add(family)
             keep.append(entry)
     size = sum(c['size_in_bytes'] for c in keep)
-    for entry in reversed(keep):
+    for entry in sorted(keep, key=lambda c: (priority(c), c['last_accessed_at'], c['created_at'], c['id'])):
         if size <= budget:
             break
         remove.append(entry)

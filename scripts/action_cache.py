@@ -164,6 +164,20 @@ def cache_paths(config):
     return result
 
 
+def github_restored(config):
+    hit = config.get('github_hit')
+    if hit not in ('true', 'false'):
+        return False
+    if config['kind'] != 'rust' or hit == 'true':
+        return True
+    # rust-cache reports false for both a prefix hit and a miss. It is the only
+    # step that can populate target before this action; require real dependency
+    # objects before treating that ambiguous result as a restored cache.
+    target = Path(config['source'])/'target'
+    return any(path.stat().st_size for pattern in ('**/deps/*.rlib', '**/deps/*.rmeta', '**/deps/*.a')
+               for path in target.glob(pattern) if path.is_file() and not path.is_symlink())
+
+
 def pack(paths, destination, rust=False):
     targets = {str(index) for index, path in enumerate(paths) if path.name == 'target'} if rust else set()
     def include(info):
@@ -283,25 +297,40 @@ def restore(config):
         config['key'] = generation + config['key']
         config['prefix'] = [generation + p for p in config['prefix']]
     config['resolved_paths'] = [str(p) for p in cache_paths(config)]
+    github = github_restored(config)
+    if github:
+        config.update(restored=True, hit=config['github_hit'] == 'true', github_restored=True)
     if not config['url'] or not config['token']:
-        print('Local cache is not configured; using normal builds.')
-        cache_report(config, 'restore', 'not configured; normal build')
+        cache_report(config, 'restore', 'GitHub cache restored; private mirror unavailable' if github
+                     else 'not configured; normal build')
         return
     query = urllib.parse.urlencode({'group': config['group'], 'key': config['key'], 'prefix': '\n'.join(config['prefix'])})
     with phase(config, 'lookup'), response(config, '/v1/lookup?'+query) as reply:
         status = reply.status
         record = json.load(reply) if status == 200 else None
-    if status == 404:
+    if status == 404 and not github:
         config['available'] = True
         print('Local cache miss:', config['group'])
         cache_report(config, 'restore', 'miss; upstream/repository inputs required')
         return
-    if status != 200:
+    if status not in (200, 404):
         raise RuntimeError(f'Cache lookup HTTP {status}')
-    if record.get('schema') != SCHEMA or record['group'] != config['group'] or not re.fullmatch('[0-9a-f]{64}', record['id']):
-        raise ValueError('Invalid cache metadata')
-    if record['key'] != config['key'] and not any(record['key'].startswith(p) for p in config['prefix']):
-        raise ValueError('Cache generation mismatch')
+    if record is not None:
+        if record.get('schema') != SCHEMA or record['group'] != config['group'] or not re.fullmatch('[0-9a-f]{64}', record['id']):
+            raise ValueError('Invalid cache metadata')
+        if record['key'] != config['key'] and not any(record['key'].startswith(p) for p in config['prefix']):
+            raise ValueError('Cache generation mismatch')
+    if github:
+        # GitHub supplied the data already. Only inspect private metadata; never
+        # download the same archive twice. Source-only edits do not require a
+        # new full Rust dependency mirror when compiler and lockfiles match.
+        config['available'] = True
+        config['mirror_required'] = not private_current(config, record)
+        if config['kind'] != 'rust':
+            with phase(config, 'fingerprint'):
+                config['fingerprint'] = fingerprint([Path(p) for p in config['resolved_paths']])
+        cache_report(config, 'restore', 'GitHub cache restored; private metadata checked')
+        return
     with tempfile.TemporaryDirectory(prefix='actions-cache-', dir=os.environ.get('RUNNER_TEMP')) as temporary:
         archive = Path(temporary)/'cache.tar.gz'
         with phase(config, 'download'), response(config, '/v1/blob?'+urllib.parse.urlencode({'group': config['group'], 'id': record['id']})) as reply:
@@ -331,10 +360,11 @@ def save(config):
     paths = cache_paths(config)
     if not any(p.exists() for p in paths):
         return
-    unchanged = config.get('hit') and config['kind'] == 'rust'
+    unchanged = (config.get('hit') or config.get('github_restored')) and config['kind'] == 'rust'
     if config['kind'] != 'rust':
         with phase(config, 'fingerprint'):
             unchanged = config.get('fingerprint') == fingerprint(paths)
+    unchanged = unchanged and not config.get('mirror_required', False)
     if unchanged:
         cache_report(config, 'save', 'unchanged; reused existing cache')
         return
@@ -355,6 +385,14 @@ def save(config):
         cache_report(config, 'save', 'superseded; newer cache retained' if superseded
                      else 'saved; older snapshot replaced', archive.stat().st_size)
         print('Saved local cache:', config['group'], f'{archive.stat().st_size/1024**2:.1f} MiB')
+
+
+def private_current(config, record):
+    if record is None:
+        return False
+    if config['kind'] == 'rust':
+        return record['key'].startswith(config['prefix'][0])
+    return record['key'] == config['key']
 
 
 class Store:

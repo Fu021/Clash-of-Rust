@@ -19,6 +19,7 @@ if (post) {
     prefix: input('restore-keys').split('\n').map(s => s.trim()).filter(Boolean),
     paths: input('paths'), kind: input('kind', 'archives'),
     source: path.resolve(input('source', '.')), save: input('save', 'true') === 'true',
+    github_hit: input('github-hit'),
   };
   fs.writeFileSync(state, JSON.stringify(config), { mode: 0o600 });
   fs.appendFileSync(process.env.GITHUB_STATE, `cache_state=${state}\n`);

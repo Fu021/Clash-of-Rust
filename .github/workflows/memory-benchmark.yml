@@ -110,27 +110,28 @@ jobs:
           command = [shutil.which('tailscale') or 'tailscale', 'set', '--accept-routes=false', '--accept-dns=false']
           if os.name != 'nt': command = ['sudo', '-n', *command]
           subprocess.run(command, check=True)
-      - name: Restore private benchmark compilation
-        id: rust_local
-        uses: ./.github/actions/local-cache
-        with:
-          url: ${{ steps.tailnet.outcome == 'success' && vars.LOCAL_CACHE_URL || '' }}
-          token: ${{ secrets.LOCAL_CACHE_TOKEN }}
-          group: rust/memory-linux-x64-${{ inputs.profile }}
-          kind: rust
-          source: source
-          key: memory-${{ inputs.profile }}
       - uses: Swatinem/rust-cache@v2
-        if: steps.rust_local.outputs.restored != 'true'
         timeout-minutes: 5
         continue-on-error: true
+        id: rust_github
         with:
           workspaces: source -> target
           prefix-key: memory-ubuntu22-v2-${{ inputs.profile }}
           cache-on-failure: false
           cache-bin: false
           cache-workspace-crates: false
-          save-if: false
+          save-if: true
+      - name: Restore local fallback for benchmark compilation
+        id: rust_local
+        uses: ./.github/actions/local-cache
+        with:
+          github-hit: ${{ steps.rust_github.outcome == 'success' && steps.rust_github.outputs.cache-hit || '' }}
+          url: ${{ steps.tailnet.outcome == 'success' && vars.LOCAL_CACHE_URL || '' }}
+          token: ${{ secrets.LOCAL_CACHE_TOKEN }}
+          group: rust/memory-linux-x64-${{ inputs.profile }}
+          kind: rust
+          source: source
+          key: memory-${{ inputs.profile }}
       - name: Install benchmark dependencies
         shell: python
         run: |
@@ -175,7 +176,7 @@ jobs:
       - uses: actions/checkout@v6
         with:
           persist-credentials: false
-      - name: Trim obsolete dependencies and enforce 8 GiB cache budget
+      - name: Trim obsolete dependencies and enforce 9 GiB cache budget
         env:
           GH_TOKEN: ${{ github.token }}
           PYTHONDONTWRITEBYTECODE: '1'

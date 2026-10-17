@@ -31,6 +31,9 @@ inputs:
   save:
     description: Save successful jobs only; false restores without writing
     default: 'true'
+  github-hit:
+    description: GitHub cache-hit output; ambiguous Rust prefix hits are checked for restored objects
+    required: false
 outputs:
   cache-hit:
     description: The exact current cache key was restored
