@@ -3,16 +3,17 @@
 </p>
 <h1 align="center">Clash of Rust</h1>
 
-基于 mihomo 的原生 Rust 代理客户端。支持 **Windows（x64 / ARM64）**、**Debian/Ubuntu（amd64 / ARM64，Ubuntu 仅支持 22.04 及以上）** 和 **macOS 14 及以上（Intel / Apple Silicon）**。版本 **0.5.11**，更新内容见 [发布说明](docs/releases/0.5.11.md)。
+基于 mihomo 的原生 Rust 代理客户端。支持 **Windows（x64 / ARM64）**、**Debian/Ubuntu（amd64 / ARM64，Ubuntu 仅支持 22.04 及以上）**、**macOS 14 及以上（Intel / Apple Silicon）** 和 **Android 8.0 及以上（ARM64 / ARMv7 / x86_64）**。版本 **0.6.0**，更新内容见 [发布说明](docs/releases/0.6.0.md)。
 
 ## Features
 
-- **轻量**：Rust + Slint 原生桌面界面，无需 WebView，页面数据按需加载。
+- **轻量**：Rust + Slint 原生界面，无需 WebView，页面数据按需加载。
+- **Android**：手机、横屏与平板布局，内嵌内核与系统 VPN，支持应用分流、快捷设置磁贴、Claude 保护和客户端更新。
 - **离线就绪**：内置 mihomo 内核和 Geo 数据，支持一键更新 Geo 数据。
 - **IP 检测**：183 个检测项，覆盖出口 IP、GitHub、AI 服务与流媒体地区访问；一键检测显示分类报告，点击分类或状态查看详情，支持筛选与分类重测。
 - **A÷检测**：采集 Claude 地区、DNS、WebRTC 与浏览器线索，扫描已记录项目配置并分类展示；可选一键保护，固定节点并启用 TUN、加密 DNS 与异常连接拦截，关闭后恢复原设置，详见 [检测说明](docs/claude-region-detection.md)。
 - **便捷使用**：托盘快捷切换节点，可选显示上传与下载速度；支持后台开机自启、单实例与网络诊断，记住普通窗口尺寸；内核启动失败时可直接重试。
-- **客户端更新**：仅检查正式版，自动选择代理并回退，支持下载进度与取消；校验完成后自动安装与重启，失败时显示原因。
+- **客户端更新**：仅检查正式版，支持下载进度与取消；校验完成后桌面自动安装与重启，Android 由系统确认安装，失败时显示原因。
 
 ## 安装与使用
 
@@ -20,16 +21,19 @@
 
 | 平台 | 安装包 |
 | --- | --- |
-| Windows x64 | [Clash-of-Rust-0.5.11-windows-x64-setup.exe](https://github.com/Fu021/Clash-of-Rust/releases/download/v0.5.11/Clash-of-Rust-0.5.11-windows-x64-setup.exe) |
-| Windows ARM64 | [Clash-of-Rust-0.5.11-windows-arm64-setup.exe](https://github.com/Fu021/Clash-of-Rust/releases/download/v0.5.11/Clash-of-Rust-0.5.11-windows-arm64-setup.exe) |
-| Debian / Ubuntu 22.04+ amd64 | [Clash-of-Rust-0.5.11-linux-amd64.deb](https://github.com/Fu021/Clash-of-Rust/releases/download/v0.5.11/Clash-of-Rust-0.5.11-linux-amd64.deb) |
-| Debian / Ubuntu 22.04+ ARM64 | [Clash-of-Rust-0.5.11-linux-arm64.deb](https://github.com/Fu021/Clash-of-Rust/releases/download/v0.5.11/Clash-of-Rust-0.5.11-linux-arm64.deb) |
-| macOS Intel | [Clash-of-Rust-0.5.11-macos-x64.dmg](https://github.com/Fu021/Clash-of-Rust/releases/download/v0.5.11/Clash-of-Rust-0.5.11-macos-x64.dmg) |
-| macOS Apple Silicon | [Clash-of-Rust-0.5.11-macos-arm64.dmg](https://github.com/Fu021/Clash-of-Rust/releases/download/v0.5.11/Clash-of-Rust-0.5.11-macos-arm64.dmg) |
+| Windows x64 | [Clash-of-Rust-0.6.0-windows-x64-setup.exe](https://github.com/Fu021/Clash-of-Rust/releases/download/v0.6.0/Clash-of-Rust-0.6.0-windows-x64-setup.exe) |
+| Windows ARM64 | [Clash-of-Rust-0.6.0-windows-arm64-setup.exe](https://github.com/Fu021/Clash-of-Rust/releases/download/v0.6.0/Clash-of-Rust-0.6.0-windows-arm64-setup.exe) |
+| Debian / Ubuntu 22.04+ amd64 | [Clash-of-Rust-0.6.0-linux-amd64.deb](https://github.com/Fu021/Clash-of-Rust/releases/download/v0.6.0/Clash-of-Rust-0.6.0-linux-amd64.deb) |
+| Debian / Ubuntu 22.04+ ARM64 | [Clash-of-Rust-0.6.0-linux-arm64.deb](https://github.com/Fu021/Clash-of-Rust/releases/download/v0.6.0/Clash-of-Rust-0.6.0-linux-arm64.deb) |
+| macOS Intel | [Clash-of-Rust-0.6.0-macos-x64.dmg](https://github.com/Fu021/Clash-of-Rust/releases/download/v0.6.0/Clash-of-Rust-0.6.0-macos-x64.dmg) |
+| macOS Apple Silicon | [Clash-of-Rust-0.6.0-macos-arm64.dmg](https://github.com/Fu021/Clash-of-Rust/releases/download/v0.6.0/Clash-of-Rust-0.6.0-macos-arm64.dmg) |
+| Android ARM64（多数手机与平板） | [Clash-of-Rust-0.6.0-android-arm64.apk](https://github.com/Fu021/Clash-of-Rust/releases/download/v0.6.0/Clash-of-Rust-0.6.0-android-arm64.apk) |
+| Android ARMv7 | [Clash-of-Rust-0.6.0-android-armv7.apk](https://github.com/Fu021/Clash-of-Rust/releases/download/v0.6.0/Clash-of-Rust-0.6.0-android-armv7.apk) |
+| Android x86_64 | [Clash-of-Rust-0.6.0-android-x64.apk](https://github.com/Fu021/Clash-of-Rust/releases/download/v0.6.0/Clash-of-Rust-0.6.0-android-x64.apk) |
 
 Windows 运行安装程序；Debian/Ubuntu（Ubuntu 仅支持 22.04 及以上）使用 `sudo apt install ./安装包文件名.deb`。升级保留订阅和个人设置；Windows 卸载可选删除全部配置和数据，默认不勾选。
 
-macOS 打开 DMG，将 **Clash of Rust.app** 拖入 **Applications（应用程序）** 后启动。
+macOS 打开 DMG，将 **Clash of Rust.app** 拖入 **Applications（应用程序）** 后启动。Android 安装对应架构的 APK，首次连接允许 VPN 授权；可在系统快捷设置中添加开关磁贴。
 
 可能造成 Windows Defender 误判查杀，需自行规避。
 
@@ -54,7 +58,7 @@ macOS 打开 DMG，将 **Clash of Rust.app** 拖入 **Applications（应用程�
 
 ## 开发与发布
 
-Cargo workspace 分为共享业务（`crates/client-core`）、Slint 界面（`crates/client-ui`）与桌面宿主（`apps/desktop`）。Android 开发版使用独立 Slint 原生宿主与系统 VPN，构建及 APK 打包复用现有工作流，见 [Android 开发说明](apps/android/README.md)；iOS 保留独立界面与宿主占位。
+Cargo workspace 分为共享业务（`crates/client-core`）、Slint 界面（`crates/client-ui`）与桌面宿主（`apps/desktop`）。Android 使用独立 Slint 原生宿主与系统 VPN，并通过移动桥接（`crates/mobile-ffi`）复用共享业务，见 [Android 开发说明](apps/android/README.md)；iOS 保留独立界面与宿主占位。
 
 安装 Slint Viewer 后可独立预览界面：
 

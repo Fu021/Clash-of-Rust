@@ -4,7 +4,7 @@ default-members = ["apps/desktop"]
 resolver = "3"
 
 [workspace.package]
-version = "0.5.12-dev.1"
+version = "0.6.0"
 edition = "2024"
 license = "GPL-3.0-only"
 
