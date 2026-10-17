@@ -104,6 +104,12 @@ $module = Import-Module (Join-Path $PSScriptRoot '../WslSecureEgress.psm1') -For
     try { Assert-WslEgressProfileForState $profile $profileState } catch { $rejected = $true }
     Assert-Equal $rejected $true 'start refuses a profile that differs from the installed endpoint'
     Assert-Equal (New-WslEgressUnixPath 'C:\Private\egress.json') '/mnt/c/Private/egress.json' 'profile path maps to WSL mount path'
+    $streamRejected = $false
+    try { $null = New-WslEgressUnixPath 'C:\Private\egress.json:ads' } catch { $streamRejected = $true }
+    Assert-Equal $streamRejected $true 'an alternate-stream profile path is refused'
+    $networkRejected = $false
+    try { $null = New-WslEgressUnixPath '\\server\share\egress.json' } catch { $networkRejected = $true }
+    Assert-Equal $networkRejected $true 'a network profile path is refused'
     $old = "[wsl2]`n# keep memory preference`nmemory=8GB`n[experimental]`nnetworkingMode=mirrored # legacy`nautoProxy=true`ndnsTunneling=true`nignoredPorts=3000`n"
     $updated = ConvertTo-WslEgressConfig $old
     Assert-Equal ($updated.Contains('memory=8GB')) $true 'merge preserves unrelated values'
@@ -168,6 +174,37 @@ $module = Import-Module (Join-Path $PSScriptRoot '../WslSecureEgress.psm1') -For
     Assert-Equal (Test-WslEgressGuardianServicePath ($helperGuardian + ' --service')) $false 'unquoted service command line is refused'
     Assert-Equal (Test-WslEgressGuardianServicePath ('"' + $helperGuardian + '"')) $false 'service command line without the service switch is refused'
     Assert-Equal (Test-WslEgressGuardianServicePath ('"' + (Join-Path $programFiles 'Clash of Rust WSL\clash-wsl-guardian-other.exe') + '" --service')) $false 'a different binary in the helper directory is refused'
+    # Install must adopt a guardian service that another canonical package
+    # already registered; both layouts share the fixed service name.
+    $script:MockPackageBinary = $appGuardian
+    $script:MockService = $null
+    $script:MockCreatedBinary = $null
+    $script:MockStarted = 0
+    function script:Get-WslEgressGuardianPackageBinary { $script:MockPackageBinary }
+    function script:Get-CimInstance { if ($script:MockService) { $script:MockService } }
+    function script:New-Service {
+        param($Name, $DisplayName, $BinaryPathName, $StartupType, $Description)
+        $script:MockCreatedBinary = [string]$BinaryPathName
+    }
+    function script:Start-Service { param($Name) $script:MockStarted++ }
+    Assert-Equal (Get-WslEgressGuardianServiceCommand $appGuardian) ('"' + $appGuardian + '" --service') 'the created service command line is the pinned form'
+    Assert-Equal (Test-WslEgressGuardianServicePath (Get-WslEgressGuardianServiceCommand $appGuardian)) $true 'the created command line is an accepted canonical location'
+    Assert-Equal (Test-WslEgressGuardianServiceIdentity ([pscustomobject]@{ PathName = ('"' + $helperGuardian + '" --service'); StartName = 'LocalSystem' })) $true 'a helper-package system service is owned'
+    Assert-Equal (Test-WslEgressGuardianServiceIdentity ([pscustomobject]@{ PathName = ('"' + $appGuardian + '" --service'); StartName = 'NT AUTHORITY\SYSTEM' })) $true 'an application-package system service is owned'
+    Assert-Equal (Test-WslEgressGuardianServiceIdentity ([pscustomobject]@{ PathName = ('"' + (Join-Path $PSScriptRoot '../../clash-wsl-guardian.exe') + '" --service'); StartName = 'LocalSystem' })) $false 'a service outside Program Files is not owned'
+    Assert-Equal (Test-WslEgressGuardianServiceIdentity ([pscustomobject]@{ PathName = ('"' + $helperGuardian + '" --service'); StartName = 'NT AUTHORITY\LocalService' })) $false 'a non-system account is not owned'
+    Assert-Equal (Test-WslEgressGuardianServiceIdentity $null) $false 'an absent service is not owned'
+    $script:MockService = [pscustomobject]@{ PathName = ('"' + $helperGuardian + '" --service'); StartName = 'LocalSystem'; StartMode = 'Auto' }
+    Install-WslEgressGuardian
+    $script:TestCount++
+    Assert-Equal $script:MockCreatedBinary $null 'an existing canonical service is adopted instead of recreated'
+    Assert-Equal $script:MockStarted 1 'the adopted service is started'
+    $script:MockService = [pscustomobject]@{ PathName = ('"' + (Join-Path $PSScriptRoot '../../clash-wsl-guardian.exe') + '" --service'); StartName = 'LocalSystem'; StartMode = 'Auto' }
+    $script:MockStarted = 0
+    $foreignRejected = $false
+    try { Install-WslEgressGuardian } catch { $foreignRejected = $true }
+    Assert-Equal $foreignRejected $true 'a foreign service image keeps installation closed'
+    Assert-Equal $script:MockStarted 0 'a refused service is never started'
     [pscustomobject]@{ suite = 'windows-offline'; result = 'PASS'; assertions = $script:TestCount
         network_tests = 'NOT_RUN'; wsl_started = $false; firewall_modified = $false } | ConvertTo-Json -Compress
 }

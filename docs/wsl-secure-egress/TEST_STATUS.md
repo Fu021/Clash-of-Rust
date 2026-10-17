@@ -271,6 +271,36 @@ executable if extraction fails, and several accepted-but-unused broker
 parameters (`-Distro`, `-EndpointIPv4`, `-EndpointPort`) are forwarded from the
 GUI without being read.
 
+## 2026-10-18 independent reviews and install-path fixes
+
+Two read-only review agents inspected commit `8b7fe19`: one for the Windows
+side (broker, firewall, installer, GUI) and one for the Linux side (manager,
+harness, contract). Neither found a P0 or an exploitable fail-open path. The
+Windows review raised two P1 items; the uninstall half was already fixed in
+`8b7fe19`, and this change set fixes the install half.
+
+Fixes in this change set:
+
+| Item | Fix |
+| --- | --- |
+| Guardian service identity at install time | A service already registered by either canonical package (`%ProgramFiles%\Clash of Rust WSL` or `%ProgramFiles%\Clash of Rust`) is adopted after the account, image path and automatic start mode are verified, instead of aborting the installation on a path comparison against the running copy |
+| Alternate data stream profile path | `New-WslEgressUnixPath` rejected a second colon only when it appeared at index 1, so `C:\Private\egress.json:ads` was accepted; any colon after the drive colon is now refused |
+| Stale documentation | `linux/CONTRACT.md` said 14 portable tests (now 21); `SECURITY_MODEL.md` claimed Linux rejects Tailscale install and start (Linux installs a closed deny guard and only `start` refuses the backend) |
+
+Executed after the changes on this host (Windows PowerShell 5.1):
+
+| Check | Result | Scope |
+| --- | --- | --- |
+| `tests/windows-unit.ps1` | PASS, 100 assertions (was 86) | Mocked host boundaries; the guardian service boundary is replaced by fixtures, no service, WSL, firewall, DNS or route was touched |
+| New install-adoption assertions | PASS | A `LocalSystem` service from either canonical package is adopted without recreating it, is started once, and a foreign image is refused and never started |
+| Extended-service-path assertion | PASS | The command line the installer writes is accepted by the ownership predicate that uninstall uses |
+| Alternate-stream and network path assertions | PASS | `C:\Private\egress.json:ads` and `\\server\share\egress.json` are refused (`GetFullPath` returns the stream path unchanged, so the check, not the framework, is what refuses it) |
+| PowerShell parser (module, broker, uninstall gate, guardian audit, helper install, unit suite) | PASS | Syntax only |
+
+Not executed and not claimed: the live guardian service was not re-registered,
+no WSL distribution was started, and no firewall, DNS, route or Hyper-V object
+was modified by these tests.
+
 ## Acceptance rule
 
 Positive connectivity requires a receiver-observed nonce, the expected source

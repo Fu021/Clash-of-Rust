@@ -73,8 +73,10 @@ separate acceptance gates until executed.
 
 Tailscale is preferred by the product requirement, but a heartbeat, GUI
 ordering or asynchronous exit-node callback cannot prove that the outer
-boundary exists before Linux networking starts. Both Windows and Linux
-therefore reject Tailscale installation/start in this branch.
+boundary exists before Linux networking starts. Windows therefore refuses
+Tailscale install and start. Linux accepts a Tailscale profile only as a closed
+deny guard: `start` refuses that backend, so no transport is ever created in
+this branch.
 
 The supported backend is WireGuard with a fixed numeric IPv4 endpoint, UDP port
 and peer public key. DNS bootstrap does not occur. Runtime failure does not

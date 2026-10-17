@@ -196,7 +196,7 @@ all reserved object names are absent; collisions remain Blocked.
 
 ## Isolated CI entry points
 
-Portable evidence/gate checks (14 tests, no subprocess or socket is executed):
+Portable evidence/gate checks (21 tests, no subprocess or socket is executed):
 
 ```text
 python -B scripts/wsl-secure-egress/tests/linux_static_test.py

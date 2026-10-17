@@ -94,6 +94,12 @@ payload in place and refuses to uninstall. That refusal is intentional: it
 means an unowned or relocated guardian owns the service name, so the removal
 must be reviewed by hand instead of being forced.
 
+Install applies the same ownership rule. When either canonical package already
+registered the fixed service name, the installation adopts that image: it
+verifies the account, the location and the automatic start mode, but it never
+rewrites the command line of a live service. Only a foreign account or an image
+outside `%ProgramFiles%` stops the installation before the host guard opens.
+
 ## VPS service
 
 The dedicated VPS service under

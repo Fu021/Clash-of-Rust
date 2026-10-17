@@ -58,7 +58,9 @@ function New-WslEgressUnixPath([string]$Path) {
     if (-not $Path -or $Path.Length -gt 65536 -or $Path.IndexOf([char]0) -ge 0 -or
         $Path -notmatch '^[A-Za-z]:\\') { throw 'An absolute local Windows profile path is required.' }
     $full = [IO.Path]::GetFullPath($Path)
-    if ($full -match '^\\\\' -or $full.IndexOf(':') -ge 0 -and $full.IndexOf(':') -ne 1) {
+    # The drive colon sits at index 1 after the absolute-path check above. Any
+    # further colon is an alternate data stream, which WSL cannot address.
+    if ($full -match '^\\\\' -or $full.Substring(2).IndexOf(':') -ge 0) {
         throw 'Network and alternate-stream profile paths are unsupported.'
     }
     $relative = $full.Substring(3).Replace('\', '/')
@@ -533,27 +535,51 @@ function Get-WslEgressClosureAudit([object]$State) {
     [pscustomobject]@{ confirmed = [bool]$confirmed }
 }
 
-function Install-WslEgressGuardian {
+function Get-WslEgressGuardianServiceCommand([string]$Binary) { '"' + $Binary + '" --service' }
+
+function Get-WslEgressGuardianPackageBinary {
+    # The service image must come from the protected package that ships next to
+    # this module; a checkout, user directory or junction is never acceptable.
     $binary = [IO.Path]::GetFullPath((Join-Path $PSScriptRoot '../../clash-wsl-guardian.exe'))
     if (-not (Test-Path -LiteralPath $binary -PathType Leaf)) { throw 'The packaged WSL guardian binary is missing.' }
     $programFiles = [Environment]::GetFolderPath([Environment+SpecialFolder]::ProgramFiles)
     if (-not $binary.StartsWith($programFiles.TrimEnd('\') + '\', [StringComparison]::OrdinalIgnoreCase)) {
         throw 'A service may only be installed from the protected Program Files package.'
     }
-    $expected = '"' + $binary + '" --service'
+    $binary
+}
+
+function Test-WslEgressGuardianServiceIdentity([object]$Service) {
+    # The helper package and the application package are both canonical Program
+    # Files layouts, so a service created by either copy is owned: rewriting the
+    # image of a live service is riskier than running the other audited copy,
+    # and each canonical copy pins the resources of its own package. Only a
+    # foreign account or an image outside Program Files is refused.
+    if (-not $Service) { return $false }
+    if ([string]$Service.StartName -notin @('LocalSystem', 'NT AUTHORITY\SYSTEM')) { return $false }
+    return (Test-WslEgressGuardianServicePath ([string]$Service.PathName))
+}
+
+function Install-WslEgressGuardian {
+    $expected = Get-WslEgressGuardianServiceCommand (Get-WslEgressGuardianPackageBinary)
     $service = Get-CimInstance Win32_Service -Filter "Name='ClashOfRust.WslEgress'"
     if ($service) {
-        if ($service.PathName -ne $expected -or $service.StartName -notin @('LocalSystem','NT AUTHORITY\SYSTEM')) {
+        if (-not (Test-WslEgressGuardianServiceIdentity $service)) {
             throw 'WSL guardian service identity differs from the owned service.'
         }
     } else {
         New-Service -Name 'ClashOfRust.WslEgress' -DisplayName 'Clash of Rust WSL Egress Audit' `
             -BinaryPathName $expected -StartupType Automatic -Description 'Audits persistent WSL egress policy; never opens the guard or launches user WSL.' | Out-Null
     }
-    & (Join-Path $env:SystemRoot 'System32\sc.exe') config 'ClashOfRust.WslEgress' start= auto | Out-Null
-    if ($LASTEXITCODE -ne 0) { throw 'The WSL guardian service startup mode could not be persisted.' }
-    $configured = Get-CimInstance Win32_Service -Filter "Name='ClashOfRust.WslEgress'"
-    if (-not $configured -or $configured.StartMode -ne 'Auto') {
+    # Cold-boot enforcement needs a persisted automatic start. An adopted service
+    # that already reports Auto is left untouched and verified by the readback
+    # below; anything else is reconfigured and re-read.
+    if (-not $service -or [string]$service.StartMode -ne 'Auto') {
+        & (Join-Path $env:SystemRoot 'System32\sc.exe') config 'ClashOfRust.WslEgress' start= auto | Out-Null
+        if ($LASTEXITCODE -ne 0) { throw 'The WSL guardian service startup mode could not be persisted.' }
+        $service = Get-CimInstance Win32_Service -Filter "Name='ClashOfRust.WslEgress'"
+    }
+    if (-not $service -or [string]$service.StartMode -ne 'Auto') {
         throw 'The WSL guardian service is not configured to start automatically.'
     }
     Start-Service -Name 'ClashOfRust.WslEgress' -ErrorAction Stop
