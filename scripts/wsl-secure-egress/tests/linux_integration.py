@@ -461,7 +461,17 @@ table inet cor_fixture_observe {
     def receipts(self, token):
         path = WORK / "receipts.jsonl"
         records = [json.loads(line) for line in path.read_text().splitlines()] if path.exists() else []
-        return [record for record in records if record["nonce"] == token]
+        # UDP receiver threads and the filesystem may expose the append after
+        # the echo has arrived. Poll for a bounded interval, while the caller
+        # still rejects a missing nonce and performs a positive control.
+        deadline = time.monotonic() + 2
+        while True:
+            matched = [record for record in records if record["nonce"] == token]
+            if matched or time.monotonic() >= deadline:
+                return matched
+            time.sleep(0.02)
+            records = ([json.loads(line) for line in path.read_text().splitlines()]
+                       if path.exists() else [])
 
     def observe(self):
         objects = json.loads(command(["nft", "-j", "list", "table", "inet", "cor_fixture_observe"],

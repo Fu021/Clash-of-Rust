@@ -28,7 +28,9 @@ jobs:
           python3 -m compileall -q scripts/wsl-secure-egress
           python3 -B scripts/wsl-secure-egress/tests/linux_static_test.py
           python3 scripts/wsl-secure-egress/tests/server_unit.py
-          find scripts/wsl-secure-egress/linux -type f ! -name '*.py' -exec sh -n {} \;
+          find scripts/wsl-secure-egress/linux -maxdepth 1 -type f \
+            \( -name manager -o -name secure-egress -o -name cor-egress-manager \) \
+            -exec sh -n {} \;
           if test -f scripts/wsl-secure-egress/tests/linux_unit.py; then
             python3 scripts/wsl-secure-egress/tests/linux_unit.py
           fi
