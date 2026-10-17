@@ -13,11 +13,6 @@ import android.service.quicksettings.TileService;
 public final class VpnTileService extends TileService {
     private static java.lang.ref.WeakReference<VpnTileService> listening = new java.lang.ref.WeakReference<>(null);
     static final String CONNECT="org.clashofrust.android.CONNECT";
-    static int displayedState() {
-        VpnTileService active=listening.get();
-        Tile tile=active==null?null:active.getQsTile();
-        return tile==null?-1:tile.getState();
-    }
     static void refresh(Context context) {
         new android.os.Handler(android.os.Looper.getMainLooper()).post(()-> {
             VpnTileService active=listening.get();

@@ -30,10 +30,13 @@ public class ProxyTunTest {
         SystemClock.sleep(50);
         pointer(MotionEvent.ACTION_UP,x,y,start,SystemClock.uptimeMillis());
     }
-    private static void shell(String command) throws Exception {
+    private static String shell(String command) throws Exception {
         try (InputStream in=new android.os.ParcelFileDescriptor.AutoCloseInputStream(
             InstrumentationRegistry.getInstrumentation().getUiAutomation().executeShellCommand(command))) {
-            byte[] bytes=new byte[1024];while (in.read(bytes)!=-1) { }
+            ByteArrayOutputStream output=new ByteArrayOutputStream();
+            byte[] bytes=new byte[1024];int count;
+            while ((count=in.read(bytes))!=-1) output.write(bytes,0,count);
+            return output.toString(StandardCharsets.UTF_8.name());
         }
     }
     private static void tab(int index,int page) throws Exception {
@@ -361,12 +364,20 @@ public class ProxyTunTest {
         assertTrue("Previous test must leave a persisted config",CoreBridge.restorable(context));
         assertNull("First-use test must already grant real VPN consent",VpnService.prepare(context));
         assertFalse(inStage(androidx.test.runner.lifecycle.Stage.RESUMED,false));
-        String previousTiles=android.provider.Settings.Secure.getString(context.getContentResolver(),"sysui_qs_tiles");
+        // Android 14+ blocks application-side reads of this system-owned key,
+        // even under instrumentation. Only the shell prepares the test fixture.
+        String previousTiles=shell("settings get secure sysui_qs_tiles").trim();
+        if (previousTiles.equals("null")) previousTiles=null;
         try {
             // A tile appended after the emulator's defaults may be off-screen.
             // Make it visible so this verifies the real, listening System UI tile.
-            quickTiles(context,"custom(org.clashofrust.android/.VpnTileService),internet,bt");
+            quickTiles(context,"custom("+new ComponentName(context,VpnTileService.class).flattenToString()+"),internet,bt");
             shell("cmd statusbar add-tile org.clashofrust.android/.VpnTileService");
+            shell("cmd statusbar expand-settings");
+            await("Quick tile was not rendered by System UI",()->tileState()!=-1);
+            VpnTileService.refresh(context);
+            await("Quick tile did not become visible",()->tileState()==android.service.quicksettings.Tile.STATE_INACTIVE);
+            assertFalse("Listening to a tile must not start the core",CoreBridge.ready());
             shell("cmd statusbar click-tile org.clashofrust.android/.VpnTileService");
             await("Cold quick tile did not connect",()-> {
                 if (!TunnelService.error().isEmpty()) throw new IOException(TunnelService.error());
@@ -403,8 +414,17 @@ public class ProxyTunTest {
         } finally { automation.dropShellPermissionIdentity(); }
     }
     private static int tileState() {
-        java.util.concurrent.atomic.AtomicInteger state=new java.util.concurrent.atomic.AtomicInteger(-1);
-        InstrumentationRegistry.getInstrumentation().runOnMainSync(()->state.set(VpnTileService.displayedState()));
-        return state.get();
+        // Active TileService bindings may end immediately after updateTile().
+        // Inspect the actual toggle rendered by System UI, not service lifetime.
+        android.view.accessibility.AccessibilityNodeInfo root=InstrumentationRegistry.getInstrumentation()
+            .getUiAutomation().getRootInActiveWindow();
+        if (root==null || !"com.android.systemui".contentEquals(root.getPackageName())) return -1;
+        for (android.view.accessibility.AccessibilityNodeInfo label:root.findAccessibilityNodeInfosByText("Clash of Rust")) {
+            for (android.view.accessibility.AccessibilityNodeInfo view=label;view!=null;view=view.getParent()) {
+                if (view.isCheckable()) return !view.isEnabled() || !view.isClickable()?android.service.quicksettings.Tile.STATE_UNAVAILABLE
+                    :view.isChecked()?android.service.quicksettings.Tile.STATE_ACTIVE:android.service.quicksettings.Tile.STATE_INACTIVE;
+            }
+        }
+        return -1;
     }
 }
