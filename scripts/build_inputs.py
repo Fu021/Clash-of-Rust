@@ -196,9 +196,44 @@ def refresh_go():
     files = ('apps/android/core/go.mod', 'apps/android/core/go.sum')
     refresh_command([*go, 'get', '-tool', 'golang.org/x/mobile/cmd/gomobile@latest',
                      'golang.org/x/mobile/cmd/gobind@latest'], files, warnings)
-    refresh_command([*go, 'get', '-u', './...'], files, warnings)
+    # Query the declared module paths directly. `go get -u ./...` also probes
+    # alternative parent modules for packages (e.g. go4.org/netipx -> go4.org),
+    # repeatedly hanging on unrelated archives despite a complete source cache.
+    modules = json.loads(subprocess.check_output([*go, 'mod', 'edit', '-json'], text=True, timeout=15))['Require']
+    def latest(module):
+        escaped = ''.join('!' + c.lower() if c.isupper() else c for c in module['Path'])
+        try:
+            with opener().open('https://proxy.golang.org/' + escaped + '/@latest', timeout=8) as reply:
+                version = json.load(reply)['Version']
+            if go_version(version) > go_version(module['Version']):
+                return module['Path'] + '@' + version, None
+            return None, None
+        except (OSError, ValueError, KeyError, http.client.HTTPException) as error:
+            return None, module['Path'] + ': latest metadata unavailable (' + type(error).__name__ + '); retained cached version'
+    with ThreadPoolExecutor(max_workers=8) as workers:
+        selected = list(workers.map(latest, modules))
+    updates = []
+    for update, warning in selected:
+        if update:
+            updates.append(update)
+        if warning:
+            warnings.append(warning)
+            print('::warning::' + warning, flush=True)
+    if updates:
+        refresh_command([*go, 'get', *updates], files, warnings)
+    else:
+        print('Checked all declared Go modules; no newer available versions.', flush=True)
     refresh_command([*go, 'mod', 'tidy'], files, warnings)
     return warnings
+
+
+def go_version(value):
+    match = re.fullmatch(r'v(\d+)\.(\d+)\.(\d+)(?:-([0-9A-Za-z.-]+))?(?:\+[0-9A-Za-z.-]+)?', value)
+    if not match:
+        raise ValueError('Invalid Go module version')
+    pre = match[4]
+    identifiers = tuple((0, int(p)) if p.isdigit() else (1, p) for p in pre.split('.')) if pre else ()
+    return (*map(int, match.group(1, 2, 3)), pre is None, identifiers)
 
 
 def resolve(directory):
@@ -365,12 +400,45 @@ def toolchain_report():
     return tools
 
 
+def shared_go(directory, restore=False):
+    """Restore shared downloads once, then fan them out through this run's artifact."""
+    import action_cache
+    directory.mkdir(parents=True, exist_ok=True)
+    archive = directory / 'go-source.tar.gz'
+    receipt = directory / 'receipt.json'
+    # Keep canonical downloads rather than both the ZIP and an expanded copy.
+    # Go reconstructs/validates module sources locally from these cached ZIPs.
+    paths = [Path.home() / 'go/pkg/mod/cache/download', Path.home() / 'go/bin/gomobile', Path.home() / 'go/bin/gobind']
+    hashes = {path: sha256(ROOT / path) for path in FILES if path.endswith(('go.mod', 'go.sum'))}
+    if restore:
+        value = json.loads(receipt.read_text())
+        if (value.get('schema') != 1 or value.get('commit') != current_commit()
+                or value.get('go_files') != hashes or archive.is_symlink()
+                or archive.stat().st_size != value.get('size') or sha256(archive) != value.get('sha256')):
+            raise ValueError('Shared Android dependencies differ from this CI snapshot')
+        action_cache.unpack(archive, paths)
+        print('Restored verified Android source downloads from this CI run.')
+        return
+    from android import ensure_binding_tool
+    subprocess.run(['go', '-C', str(ROOT / 'apps/android/core'), 'mod', 'download'], check=True, timeout=180)
+    ensure_binding_tool('gomobile')
+    ensure_binding_tool('gobind')
+    subprocess.run(['go', '-C', str(ROOT / 'apps/android/core'), 'mod', 'verify'], check=True)
+    action_cache.pack(paths, archive)
+    write_json(receipt, {'schema': 1, 'commit': current_commit(), 'go_files': hashes,
+                         'size': archive.stat().st_size, 'sha256': sha256(archive)})
+    print(f'Shared Android source archive: {archive.stat().st_size / 1024**2:.1f} MiB')
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument('operation', choices=('resolve', 'apply', 'packaging'))
+    parser.add_argument('operation', choices=('resolve', 'apply', 'packaging', 'share-go', 'restore-go'))
     parser.add_argument('--directory', type=Path, default=Path(os.environ.get('BUILD_INPUTS_DIR', SNAPSHOT)))
     args = parser.parse_args()
-    {'resolve': resolve, 'apply': apply, 'packaging': packaging}[args.operation](args.directory)
+    if args.operation in ('share-go', 'restore-go'):
+        shared_go(args.directory, args.operation == 'restore-go')
+    else:
+        {'resolve': resolve, 'apply': apply, 'packaging': packaging}[args.operation](args.directory)
 
 
 if __name__ == '__main__':

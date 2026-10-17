@@ -23,6 +23,7 @@ def caches(client):
 
 
 def lineage(key):
+    key = re.sub(r'-workspace-[0-9a-f]{64}', '', key)
     if key.startswith(('android-go-', 'skia-source-')):
         return re.sub(r'-[^-]+-[0-9a-f]{64}$', '', key)
     if key.startswith('gradle-linux-'):
@@ -43,6 +44,8 @@ def lineage(key):
         return 'source-cargo'
     if key.startswith('source-inputs-'):
         return 'source-inputs'
+    if key.startswith('source-go-'):
+        return 'source-go'
     # Gradle's shared content entries reference each other: do not deduplicate
     # those by prefix. Only the global least-recently-used budget applies.
     return key
@@ -52,6 +55,8 @@ def priority(entry):
     key = entry['key']
     # Retain small shared source/tools first, then slow desktop compilers.
     # The fast Linux jobs can overlap a private fallback with those compilations.
+    if key.startswith('android-go-build-'):
+        return 1  # Rebuildable objects must not evict shared downloads/Mac caches.
     if key.startswith(('resources-', 'source-', 'android-go-', 'gradle-linux-', 'skia-source-', 'tools-nsis-', 'action-setup-tailscale/')):
         return 4
     if key.startswith('native-release-') and ('macos' in key or 'windows' in key):
@@ -71,8 +76,9 @@ def eviction_plan(entries, budget=BUDGET):
     keep = []
     remove = []
     for entry in recent:
-        if entry['key'].startswith('macos-compiler-'):
-            remove.append(entry)  # Retired duplicate sccache layer.
+        if (entry['key'].startswith('macos-compiler-')
+                or (entry['key'].startswith('android-go-') and not entry['key'].startswith('android-go-build-'))):
+            remove.append(entry)  # Retired duplicate compiler/source layers.
             continue
         family = (entry['ref'], lineage(entry['key']))
         if family in seen:

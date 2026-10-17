@@ -105,6 +105,32 @@ class BuildTests(unittest.TestCase):
             version('0.6.1','new')
             self.assertNotEqual(first,local_cache.rust_keys(root,b'compiler',{})[1])
 
+    def test_workspace_cache_verifies_contents_before_restoring_times_and_invalidates_changed_crates(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root=Path(temporary)
+            for name in ('ui','core'):
+                folder=root/'crates'/name;folder.mkdir(parents=True)
+                (folder/'Cargo.toml').write_text('[package]\nname="clash-'+name+'"\nversion="1.0.0"\n')
+                (folder/'lib.rs').write_bytes(b'original source')
+            paths=sorted(p.relative_to(root).as_posix() for p in root.rglob('*') if p.is_file())
+            tracked='\0'.join(paths).encode()
+            ui=root/'crates/ui/lib.rs';core=root/'crates/core/lib.rs'
+            previous=core.stat().st_mtime_ns
+            with patch.object(local_cache.subprocess,'check_output',return_value=tracked):
+                local_cache.workspace_sources(root,save=True)
+                for name in ('ui','core'):
+                    target=root/'target/release/.fingerprint'/('clash-'+name+'-hash')
+                    target.mkdir(parents=True);(target/'lib-info').write_bytes(b'fingerprint')
+                # Checkout made unchanged sources newer. Conversely, changed
+                # contents can belong to an older branch timestamp.
+                os.utime(core,ns=(previous+1_000_000,previous+1_000_000))
+                ui.write_bytes(b'changed source');os.utime(ui,ns=(1,1))
+                local_cache.workspace_sources(root)
+            self.assertEqual(core.stat().st_mtime_ns,previous)
+            self.assertEqual(ui.read_bytes(),b'changed source')
+            self.assertFalse((root/'target/release/.fingerprint/clash-ui-hash').exists())
+            self.assertTrue((root/'target/release/.fingerprint/clash-core-hash/lib-info').exists())
+
     def test_rust_shards_only_upload_changed_buckets_and_verify_before_extracting(self):
         with tempfile.TemporaryDirectory() as temporary:
             root=Path(temporary)
@@ -162,6 +188,29 @@ class BuildTests(unittest.TestCase):
         for field,value in (('id','../escape'),('size',-1),('sha256','bad')):
             with self.subTest(field=field),self.assertRaises(ValueError):
                 cache_shards.validate({**record,field:value},record['group'])
+
+    def test_shared_android_sources_require_the_current_lockfiles_and_archive_digest(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root=Path(temporary);home=root/'home';out=root/'shared'
+            (home/'go/pkg/mod/cache/download/example/@v').mkdir(parents=True)
+            module=home/'go/pkg/mod/cache/download/example/@v/v1.0.0.zip';module.write_bytes(b'verified source zip')
+            (home/'go/bin').mkdir(parents=True)
+            for tool in ('gomobile','gobind'): (home/'go/bin'/tool).write_bytes(b'verified tool')
+            (root/'apps/android/core').mkdir(parents=True)
+            mod=root/'apps/android/core/go.mod';mod.write_bytes(b'module test')
+            (root/'apps/android/core/go.sum').write_bytes(b'checksums')
+            with patch.object(build_inputs,'ROOT',root),patch.object(build_inputs.Path,'home',return_value=home), \
+                    patch.object(build_inputs,'current_commit',return_value='a'*40), \
+                    patch.object(android_build,'ensure_binding_tool'),patch.object(build_inputs.subprocess,'run'):
+                build_inputs.shared_go(out)
+                module.unlink()
+                build_inputs.shared_go(out,restore=True)
+                self.assertEqual(module.read_bytes(),b'verified source zip')
+                mod.write_bytes(b'changed dependency')
+                with self.assertRaises(ValueError): build_inputs.shared_go(out,restore=True)
+                mod.write_bytes(b'module test')
+                archive=out/'go-source.tar.gz';archive.write_bytes(archive.read_bytes()+b'tampered')
+                with self.assertRaises(ValueError): build_inputs.shared_go(out,restore=True)
 
     def test_cache_timing_report_never_copies_credentials_or_private_action_state(self):
         with tempfile.TemporaryDirectory() as temporary:
@@ -261,6 +310,17 @@ class BuildTests(unittest.TestCase):
                 config['private_exact']=True
                 local_cache.save(config)
                 sharded.assert_called_once()
+
+    def test_immutable_downloads_do_not_reupload_build_script_mutations(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root=Path(temporary);(root/'source').write_bytes(b'pinned source')
+            config={'kind':'archives','paths':str(root),'group':'dependencies/skia-armv7','key':'crate-checksum',
+                    'available':True,'save':True,'hit':True,'immutable':True}
+            with patch.object(local_cache,'pack') as pack,patch.object(local_cache,'fingerprint') as fingerprint, \
+                    patch.object(local_cache,'cache_report'):
+                local_cache.save(config)
+                pack.assert_not_called()
+                fingerprint.assert_not_called()
 
     def test_github_miss_restores_a_verified_private_archive(self):
         with tempfile.TemporaryDirectory() as temporary:
@@ -403,6 +463,29 @@ class BuildTests(unittest.TestCase):
                 build_inputs.refresh_command(['cargo','update'], ('Cargo.lock',), warnings)
                 self.assertTrue(warnings)
                 self.assertEqual(lock.read_bytes(), b'cached')
+
+    def test_go_refresh_checks_exact_modules_without_downgrades_and_retains_unreachable_versions(self):
+        modules=[{'Path':'go4.org/netipx','Version':'v0.0.0-20260823151212-3075585bcbeb'},
+                 {'Path':'example.org/Module','Version':'v1.2.0'},
+                 {'Path':'example.org/offline','Version':'v2.0.0'}]
+        queries=[]
+        class Fetch:
+            def open(self,url,**kwargs):
+                queries.append(url)
+                if '/offline/' in url: raise urllib.error.URLError('offline')
+                value='v1.3.0' if '!module' in url else 'v0.0.0-20260112195520-a5071408f32f'
+                return io.BytesIO(json.dumps({'Version':value}).encode())
+        with patch.object(build_inputs.subprocess,'check_output',return_value=json.dumps({'Require':modules})), \
+                patch.object(build_inputs,'opener',return_value=Fetch()),patch.object(build_inputs,'refresh_command') as update:
+            warnings=build_inputs.refresh_go()
+        commands=[call.args[0] for call in update.call_args_list]
+        self.assertTrue(any(command[-1]=='example.org/Module@v1.3.0' for command in commands))
+        self.assertFalse(any('-u' in command or './...' in command for command in commands))
+        self.assertIn('https://proxy.golang.org/go4.org/netipx/@latest',queries)
+        self.assertFalse(any(url.endswith('/go4.org/@latest') for url in queries))
+        self.assertTrue(any('offline' in warning for warning in warnings))
+        self.assertGreater(build_inputs.go_version('v1.0.0'),build_inputs.go_version('v1.0.0-rc.1'))
+        self.assertGreater(build_inputs.go_version('v1.0.0-rc.10'),build_inputs.go_version('v1.0.0-rc.2'))
 
     def test_release_metadata_network_fallback_respects_explicit_version(self):
         with tempfile.TemporaryDirectory() as temporary:
@@ -569,7 +652,7 @@ class BuildTests(unittest.TestCase):
                     'created_at': f'2026-10-16T09:00:{number:02d}Z'}
         old = entry(1, 'native-release-linux-check-Linux-x64-aaaaaaaa-bbbbbbbb', 30)
         new = entry(2, 'native-release-linux-check-Linux-x64-aaaaaaaa-cccccccc', 30)
-        go = entry(3, 'android-go-Linux-X64-version-modules', 40)
+        go = entry(3, 'source-go-version-modules', 40)
         gradle = entry(4, 'gradle-content-unique-blob', 40)
         # Stale revisions are removed even below budget; current dependencies
         # are otherwise preserved. An 80-byte budget also evicts the oldest.
@@ -580,6 +663,8 @@ class BuildTests(unittest.TestCase):
         compiler_old = entry(6, 'macos-compiler-arm64-' + 'a'*16 + '-' + 'b'*64, 20)
         compiler_new = entry(7, 'macos-compiler-arm64-' + 'a'*16 + '-' + 'c'*64, 20)
         self.assertEqual(storage.eviction_plan([compiler_old, compiler_new], 100), [compiler_new,compiler_old])
+        legacy=entry(12,'android-go-Linux-X64-old-modules',20)
+        self.assertEqual(storage.eviction_plan([legacy],100),[legacy])
         self.assertEqual(storage.eviction_plan([gradle], 10), [gradle])
         desktop=entry(8,'native-release-v2-macos-15-intel-check-Linux-x64-aaaaaaaa-bbbbbbbb',60)
         linux=entry(9,'native-release-v2-ubuntu-22.04-check-Linux-x64-aaaaaaaa-bbbbbbbb',60)

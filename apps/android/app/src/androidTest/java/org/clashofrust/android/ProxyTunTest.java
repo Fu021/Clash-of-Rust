@@ -58,8 +58,9 @@ public class ProxyTunTest {
     private static void verifyPresentation() throws Exception {
         await("Core is running but Slint still reports it as stopped",()->MainActivity.diagnostics().optBoolean("core_running"));
         JSONObject initial=MainActivity.diagnostics();
+        Context context=InstrumentationRegistry.getInstrumentation().getTargetContext();
         assertEquals("The first Slint frame used a different theme from saved appearance",
-            Appearance.dark(Appearance.mode(InstrumentationRegistry.getInstrumentation().getTargetContext())),
+            Appearance.dark(context,Appearance.mode(context)),
             initial.getBoolean("startup_dark"));
         // Assert the real Slint state follows system SP conversion, including
         // Android 14+ nonlinear scaling and a live font-size change.

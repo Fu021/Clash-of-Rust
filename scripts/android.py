@@ -160,6 +160,8 @@ def apk_identity(metadata, version):
 
 
 def build(arch):
+    from action_cache import workspace_sources
+    workspace_sources(ROOT)
     abi, target, clang_target, go_arch = ABIS[arch]
     ndk = Path(os.environ['ANDROID_NDK_ROOT'])
     toolchain = ndk/'toolchains/llvm/prebuilt/linux-x86_64/bin'
@@ -223,6 +225,7 @@ def build(arch):
     report = {'commit':commit(), 'arch':arch, 'version':package_version(), **sizes}
     write_json(ROOT/'target/android-report'/arch/'build.json', report)
     print(json.dumps(report), flush=True)
+    workspace_sources(ROOT, save=True)
 
 
 def export_build(arch):

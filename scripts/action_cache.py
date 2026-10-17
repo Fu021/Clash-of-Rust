@@ -118,6 +118,83 @@ def rust_environment_key(compiler, environment):
     return f'v{SCHEMA}-' + value.hexdigest() + '-'
 
 
+def workspace_sources(source, save=False):
+    """Reuse unchanged workspace objects without trusting checkout timestamps.
+
+    Cargo normally rebuilds workspace crates after every checkout because their
+    source mtimes are newer than restored objects. Restore a previous mtime only
+    after hashing the current contents; invalidate changed crates explicitly,
+    including a branch whose commit/source timestamp predates the cache.
+    """
+    source = Path(source)
+    snapshot = source/'target/workspace-sources.json'
+    tracked = subprocess.check_output(['git', 'ls-files', '-z'], cwd=source).decode().split('\0')
+    names = [name for name in tracked if name and (name.startswith(('apps/', 'crates/', 'resources/', '.cargo/'))
+             or name in ('Cargo.toml', 'Cargo.lock', 'LICENSE'))]
+    files, directories, packages = {}, {}, {}
+    for name in names:
+        path = source/name
+        if not path.is_file() or path.is_symlink():
+            continue
+        checksum = digest(path)
+        files[name] = {'sha256': checksum, 'mtime_ns': path.stat().st_mtime_ns}
+        if path.name == 'Cargo.toml':
+            package = tomllib.loads(path.read_text(encoding='utf-8')).get('package', {}).get('name')
+            if package:
+                packages[path.parent.relative_to(source).as_posix()] = package
+        for parent in path.relative_to(source).parents:
+            if parent == Path('.'):
+                continue
+            relative = parent.as_posix()
+            directories.setdefault(relative, []).append((name, checksum))
+    folders = {name: {'sha256': hashlib.sha256(json.dumps(children).encode()).hexdigest(),
+                      'mtime_ns': (source/name).stat().st_mtime_ns}
+               for name, children in directories.items()}
+    if save:
+        snapshot.parent.mkdir(parents=True, exist_ok=True)
+        write_json(snapshot, {'schema': 1, 'files': files, 'directories': folders})
+        return
+    if not snapshot.is_file() or snapshot.is_symlink() or snapshot.stat().st_size > 8*1024**2:
+        return
+    try:
+        previous = json.loads(snapshot.read_text())
+        if (previous.get('schema') != 1 or not isinstance(previous.get('files'), dict)
+                or not isinstance(previous.get('directories'), dict)
+                or any(not isinstance(record, dict) for record in previous['files'].values())
+                or any(not isinstance(record, dict) for record in previous['directories'].values())):
+            return
+    except (ValueError, OSError):
+        return
+    now = time.time_ns()
+    changed = {name for name in set(files) | set(previous['files'])
+               if files.get(name, {}).get('sha256') != previous['files'].get(name, {}).get('sha256')}
+    invalid = set()
+    for name in changed:
+        owners = [directory for directory in packages if name.startswith(directory + '/')]
+        if owners:
+            invalid.add(packages[max(owners, key=len)])
+        else:
+            invalid.update(packages.values())  # Shared resources/manifest changed.
+    restored = 0
+    for values, old in ((files, previous['files']), (folders, previous.get('directories', {}))):
+        for name, record in values.items():
+            saved = old.get(name, {})
+            stamp = saved.get('mtime_ns')
+            if (record['sha256'] == saved.get('sha256') and isinstance(stamp, int) and 0 < stamp <= now):
+                os.utime(source/name, ns=(now, stamp))
+                restored += 1
+    # Content changes always invalidate their owning crate, independently of
+    # clock skew or how old that branch/commit is. Cargo rebuilds dependants.
+    for pattern in ('release/.fingerprint', '*/release/.fingerprint'):
+        for directory in (source/'target').glob(pattern):
+            for package in invalid:
+                for artifact in directory.glob(package + '-*'):
+                    if artifact.is_dir() and not artifact.is_symlink():
+                        shutil.rmtree(artifact)
+    print(f'Workspace cache: verified {restored} source/directory timestamps; '
+          f'invalidated {len(invalid)} changed crates.', flush=True)
+
+
 def rust_keys(source, compiler, environment):
     """Changed dependencies invalidate exact hits; Cargo validates compatible objects."""
     source = Path(source)
@@ -207,7 +284,7 @@ def archive_filter(paths, rust=False):
             # Never let an old target/dependency-snapshot overwrite this run's
             # resolved inputs. Diagnostics, test staging and reports are not
             # compiler caches either.
-            native = parts[1] in ('release', '.rustc_info.json', 'CACHEDIR.TAG')
+            native = parts[1] in ('release', '.rustc_info.json', 'CACHEDIR.TAG', 'workspace-sources.json')
             cross = bool(re.fullmatch(r'(?:aarch64|armv7|x86_64)-[a-z0-9_-]+', parts[1]))
             if not native and not (cross and (len(parts) == 2 or parts[2] == 'release')):
                 return None
@@ -355,7 +432,7 @@ def restore(config):
         # new full Rust dependency mirror when compiler and lockfiles match.
         config['available'] = True
         config['mirror_required'] = not private_current(config, record)
-        if config['kind'] != 'rust':
+        if config['kind'] != 'rust' and not config.get('immutable'):
             with phase(config, 'fingerprint'):
                 config['fingerprint'] = fingerprint([Path(p) for p in config['resolved_paths']])
         cache_report(config, 'restore', 'GitHub cache restored; private metadata checked')
@@ -376,7 +453,7 @@ def restore(config):
     config.update(available=True, restored=True, hit=record['key'] == config['key'])
     if config['kind'] == 'rust':
         config['mirror_required'] = not private_current(config, record)
-    if config['kind'] != 'rust':
+    if config['kind'] != 'rust' and not config.get('immutable'):
         with phase(config, 'fingerprint'):
             config['fingerprint'] = fingerprint(paths)
     cache_report(config, 'restore', 'exact' if config['hit'] else 'compatible snapshot', record['size'])
@@ -390,6 +467,9 @@ def save(config):
     # Globs such as Cargo's Skia source directory may not exist until compilation.
     paths = cache_paths(config)
     if not any(p.exists() for p in paths):
+        return
+    if config.get('immutable') and config.get('hit') and not config.get('mirror_required'):
+        cache_report(config, 'save', 'verified immutable version reused')
         return
     # The sharded mirror can retain fresh workspace objects cheaply too. Only
     # skip an exact source/toolchain snapshot; a dependency-only GitHub hit must

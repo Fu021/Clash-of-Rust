@@ -1,0 +1,9 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <style name="ClientTheme" parent="ClientBase">
+        <item name="android:windowLightNavigationBar">@bool/launch_light_bars</item>
+    </style>
+    <style name="ClientDark" parent="ClientDarkBase">
+        <item name="android:windowLightNavigationBar">false</item>
+    </style>
+</resources>

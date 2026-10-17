@@ -26,18 +26,23 @@ final class Appearance {
         }
         return 2;
     }
-    static boolean systemDark() {
+    static boolean systemDark(Context context) {
         // The Activity's resources can reflect our per-app override on API 31+.
         // Following the system must read the system configuration instead.
+        int mode = context.getSystemService(UiModeManager.class).getNightMode();
+        if (mode == UiModeManager.MODE_NIGHT_YES) return true;
+        if (mode == UiModeManager.MODE_NIGHT_NO) return false;
         return (Resources.getSystem().getConfiguration().uiMode & Configuration.UI_MODE_NIGHT_MASK)
             == Configuration.UI_MODE_NIGHT_YES;
     }
-    static boolean dark(int mode) { return mode == 0 || (mode == 2 && systemDark()); }
+    static boolean dark(Context context, int mode) { return mode == 0 || (mode == 2 && systemDark(context)); }
     static void persistSystemMode(Context context, int mode) {
         if (Build.VERSION.SDK_INT >= 31 && mode != appliedMode) {
             appliedMode = mode;
             context.getSystemService(UiModeManager.class).setApplicationNightMode(
                 mode == 0 ? UiModeManager.MODE_NIGHT_YES : mode == 1 ? UiModeManager.MODE_NIGHT_NO
+                    // AUTO clears the per-package override (UI_MODE_NIGHT_UNDEFINED)
+                    // in UiModeManagerService; the global system mode then applies.
                     : UiModeManager.MODE_NIGHT_AUTO);
         }
     }

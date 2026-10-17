@@ -20,6 +20,7 @@ if (post) {
     paths: input('paths'), kind: input('kind', 'archives'),
     source: path.resolve(input('source', '.')), save: input('save', 'true') === 'true',
     github_hit: input('github-hit'),
+    immutable: input('immutable', 'false') === 'true',
   };
   fs.writeFileSync(state, JSON.stringify(config), { mode: 0o600 });
   fs.appendFileSync(process.env.GITHUB_STATE, `cache_state=${state}\n`);

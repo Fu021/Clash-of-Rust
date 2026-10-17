@@ -37,7 +37,7 @@ public final class MainActivity extends NativeActivity {
         }
     }
     @Override public void onCreate(Bundle state) {
-        boolean dark = Appearance.dark(Appearance.mode(this));
+        boolean dark = Appearance.dark(this, Appearance.mode(this));
         setTheme(dark ? R.style.ClientDark : R.style.ClientLight);
         tileConnect=VpnTileService.CONNECT.equals(getIntent().getAction());
         super.onCreate(state);
@@ -82,7 +82,7 @@ public final class MainActivity extends NativeActivity {
                 case "reload": CoreBridge.reload(data.getString("config")); CoreBridge.setIpv6(data.getBoolean("ipv6")); break;
                 case "state": return CoreBridge.state()
                     .put("font_sizes",systemFontSizes())
-                    .put("dark", Appearance.systemDark())
+                    .put("dark", Appearance.systemDark(this))
                     .put("notification_speeds",getSharedPreferences("appearance",MODE_PRIVATE).getBoolean("notification-speeds",true))
                     .put("excluded_apps",getSharedPreferences("vpn",MODE_PRIVATE).getStringSet("excluded",Collections.emptySet()).size()).toString();
                 case "connect": TunnelService.clearError(); runOnUiThread(this::prepareVpn); break;
@@ -111,7 +111,7 @@ public final class MainActivity extends NativeActivity {
                     break;
                 case "traffic": TunnelService.updateTraffic(this, data.optString("down"), data.optString("up")); break;
                 case "appearance": return new JSONObject().put("mode",Appearance.mode(this))
-                    .put("dark",Appearance.systemDark()).put("font_sizes",systemFontSizes()).toString();
+                    .put("dark",Appearance.systemDark(this)).put("font_sizes",systemFontSizes()).toString();
                 case "system-bars": runOnUiThread(() -> {
                     Appearance.persistSystemMode(this,data.optInt("mode",2));
                     configureSystemBars(data.optBoolean("dark"));

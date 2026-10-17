@@ -31,6 +31,9 @@ inputs:
   save:
     description: Save successful jobs only; false restores without writing
     default: 'true'
+  immutable:
+    description: Fully versioned downloads do not change after an exact verified hit
+    default: 'false'
   github-hit:
     description: GitHub cache-hit output; ambiguous Rust prefix hits are checked for restored objects
     required: false

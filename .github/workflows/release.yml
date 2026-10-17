@@ -185,6 +185,7 @@ jobs:
           url: ${{ steps.tailnet.outcome == 'success' && vars.LOCAL_CACHE_URL || '' }}
           token: ${{ secrets.LOCAL_CACHE_TOKEN }}
           group: tools/nsis
+          immutable: true
           paths: tools/nsis
           key: nsis-${{ needs.resolve.outputs.nsis }}
           restore-keys: nsis-
