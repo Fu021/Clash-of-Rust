@@ -32,7 +32,7 @@ export component MobileFrame inherits Rectangle {
     property <bool> expanded: root.usable-width >= 1024px && !root.short;
     property <bool> bottom: root.narrow && MobileView.keyboard-inset == 0px;
     property <length> nav-width: root.narrow ? 0px : root.expanded ? root.sidebar-width : 76px;
-    property <length> content-padding: root.expanded ? 24px : 16px;
+    property <length> content-padding: root.expanded ? 24px : MobileTypography.padding;
     property <length> header-height: max(root.short ? 56px : 72px * MobileTypography.density, header-content.preferred-height + 16px);
     // Android keeps the gesture inset inside the navigation surface, without
     // adding a second empty strip below it. iOS retains its own safe-area policy.

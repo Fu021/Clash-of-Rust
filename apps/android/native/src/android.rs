@@ -586,12 +586,13 @@ async fn run_loop(
                         immediate = true;
                     }
                     Some(Update::Delays(generation,result)) if generation==state.delay_generation => {
+                        let all=matches!(state.delay_scope,Some(DelayScope::All));
                         delay_job=None;state.delay_scope=None;
                         match result {
                             Ok(values)=> {
                                 let failed=values.values().filter(|&&delay|delay==0).count();
                                 state.notice=format!("测速完成 · {} 项，{} 项超时",values.len(),failed);
-                                state.node_delays.extend(values);
+                                if all {state.node_delays=values;} else {state.node_delays.extend(values);}
                             }
                             Err(error)=>state.notice=format!("测速失败：{error}"),
                         }
@@ -603,7 +604,9 @@ async fn run_loop(
                         match result {
                             Ok(snapshot) => {
                                 state.session.apply_snapshot(snapshot);
-                                state.node_delays.retain(|name,_|state.session.proxies.proxies.contains_key(name.as_str()));
+                                let members=state.session.proxies.proxies.values().flat_map(|p|p.all.iter().map(|n|n.as_str()))
+                                    .collect::<std::collections::BTreeSet<_>>();
+                                state.node_delays.retain(|name,_|state.session.proxies.proxies.contains_key(name.as_str())||members.contains(name.as_str()));
                             }
                             Err(error) => {
                                 let message = format!("状态刷新失败：{error}");
@@ -1479,6 +1482,10 @@ async fn handle(state: &mut State, request: Request) -> Result<()> {
                 next.claude_protection = None;
                 next.run_mode = saved.previous.mode.clone();
                 session.commit_settings(next)?;
+                session
+                    .api
+                    .restore_automatic_groups(&saved.locked_groups, &saved.fixed_groups)
+                    .await?;
                 let current: api::Proxies = session.api.get("proxies").await?;
                 for (group, node) in &saved.previous.selectors {
                     if current
@@ -1650,7 +1657,7 @@ fn project(state: &State) -> Projection {
             |node| {
                 state
                     .node_delays
-                    .get(node.as_str())
+                    .get(node)
                     .copied()
                     .or_else(|| s.proxies.proxies.get(node).and_then(|n| n.delay))
             },
@@ -2386,7 +2393,7 @@ fn apply(ui: &AndroidWindow, p: Projection) {
             "page":ui.get_current_page(),"detail":ui.get_current_detail(),
             "groups":data.get_groups().row_count(),"profiles":data.get_profiles().row_count(),
             "logs":data.get_logs().row_count(),"dark":dark,"text_scale":theme.get_text_scale(),
-            "body_size":theme.get_text_scale()*16.,
+            "body_size":typography.invoke_font_size(16),
             "width":size.width as f32/scale,"height":size.height as f32/scale,"scale":scale,
             "safe_top":view.get_safe_top(),"safe_bottom":view.get_safe_bottom(),
             "settings_scroll_y":view.get_settings_scroll_y(),"settings_content_height":view.get_settings_content_height(),

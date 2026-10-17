@@ -1208,6 +1208,10 @@ impl Engine {
                         .wait_for_dns("www.cloudflare.com", Duration::from_secs(30))
                         .await
                         .context("保护节点或加密 DNS 无法连通，请检查节点和节点 DNS 配置")?;
+                } else if let Some(saved) = &old.claude_protection {
+                    self.api
+                        .restore_automatic_groups(&saved.locked_groups, &saved.fixed_groups)
+                        .await?;
                 }
             } else {
                 #[cfg(target_os = "macos")]
@@ -1219,12 +1223,25 @@ impl Engine {
         }
         .await;
         if let Err(error) = changed {
-            let runtime = if let Some(previous) = &previous {
-                self.apply_protection_runtime(&original, previous, old.claude_protection.is_some())
-                    .await
-            } else {
-                Ok(())
-            };
+            let runtime = async {
+                if let Some(previous) = &previous {
+                    self.apply_protection_runtime(
+                        &original,
+                        previous,
+                        old.claude_protection.is_some(),
+                    )
+                    .await?;
+                    if old.claude_protection.is_none()
+                        && let Some(saved) = &protection
+                    {
+                        self.api
+                            .restore_automatic_groups(&saved.locked_groups, &saved.fixed_groups)
+                            .await?;
+                    }
+                }
+                Ok::<_, anyhow::Error>(())
+            }
+            .await;
             let disk = transaction.rollback();
             self.start_protection_guard();
             return Err(error.context(format!(

@@ -9,8 +9,9 @@ export component AppearanceSettings inherits VerticalLayout {
     MHeading { text: "外观"; }
     MCard {
         MSmall { text: "主题"; }
-        HorizontalLayout { spacing: MobileTypography.small-gap;
+        GridLayout { spacing: MobileTypography.small-gap;
             for label[i] in ["深色", "浅色", "跟随系统"]: MButton { text: label; selected: Theme.appearance == i;
+                col: Theme.text-scale > 1.25 ? 0 : i; row: Theme.text-scale > 1.25 ? i : 0;
                 clicked => { Theme.appearance = i; MobileActions.request(MobileIntent.appearance, "" + i, ""); }
             }
         }

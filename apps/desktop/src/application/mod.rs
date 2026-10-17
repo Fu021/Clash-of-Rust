@@ -1685,8 +1685,13 @@ impl App {
                             .retain(|name| proxies.contains_key(name.as_str()));
                         self.group_offsets
                             .retain(|name, _| proxies.contains_key(name.as_str()));
-                        self.node_delays
-                            .retain(|name, _| proxies.contains_key(name.as_str()));
+                        let members = proxies
+                            .values()
+                            .flat_map(|p| p.all.iter().map(|n| n.as_str()))
+                            .collect::<BTreeSet<_>>();
+                        self.node_delays.retain(|name, _| {
+                            proxies.contains_key(name.as_str()) || members.contains(name.as_str())
+                        });
                     }
                     // Rules are static between explicit refreshes. Keep only the
                     // current page's data, including when an older poll finishes.

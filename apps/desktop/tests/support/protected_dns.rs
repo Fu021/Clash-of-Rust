@@ -166,7 +166,7 @@ pub async fn run(engine: &mut Engine, profile: &std::path::Path) {
             .unwrap()
             .error_for_status()
             .unwrap();
-        std::fs::write(profile, format!("proxies: [{{name: fixture, type: socks5, server: {node}, port: 1080, udp: true}}, {{name: Other, type: socks5, server: {node}, port: 1080, udp: true}}]\nproxy-groups: [{{name: Main, type: select, proxies: [Auto]}}, {{name: Auto, type: url-test, proxies: [fixture, Other], url: 'http://claude.ai/auto-check', interval: 3600, lazy: true}}]\nrules: ['MATCH,Main']\ndns:\n  enable: true\n  enhanced-mode: fake-ip\n  nameserver: ['https://{bootstrap}/dns-query#DIRECT']\n{node_dns}{default_dns}  fake-ip-filter: ['+.fixture.test']\ntun: {{device: ClashRustTest, route-address: [203.0.113.0/24], dns-hijack: []}}\n")).unwrap();
+        std::fs::write(profile, format!("proxies: [{{name: fixture, type: socks5, server: {node}, port: 1080, udp: true}}, {{name: Other, type: socks5, server: {node}, port: 1081, udp: true}}]\nproxy-groups: [{{name: Main, type: select, proxies: [Auto]}}, {{name: Auto, type: url-test, proxies: [fixture, Other], url: 'http://claude.ai/auto-check', interval: 3600, lazy: true}}]\nrules: ['MATCH,Main']\ndns:\n  enable: true\n  enhanced-mode: fake-ip\n  nameserver: ['https://{bootstrap}/dns-query#DIRECT']\n{node_dns}{default_dns}  fake-ip-filter: ['+.fixture.test']\ntun: {{device: ClashRustTest, route-address: [203.0.113.0/24], dns-hijack: []}}\n")).unwrap();
         engine
             .import(
                 format!("DNS uplink {node}"),
@@ -180,6 +180,50 @@ pub async fn run(engine: &mut Engine, profile: &std::path::Path) {
             .await
             .unwrap();
         engine.select_proxy_mode(ProxyMode::System).await.unwrap();
+        // Real URLTest API: release a manual choice after bounded probes at
+        // the subscription's own URL, rather than permanently PUT the winner.
+        engine.api.select("Auto", "Other").await.unwrap();
+        let controller = reqwest::Client::builder()
+            .no_proxy()
+            .timeout(Duration::from_secs(8))
+            .build()
+            .unwrap();
+        let auto_url = format!(
+            "http://127.0.0.1:{}/proxies/Auto",
+            engine.settings.controller_port
+        );
+        let forced: serde_json::Value = controller
+            .get(&auto_url)
+            .bearer_auth(&engine.settings.secret)
+            .send()
+            .await
+            .unwrap()
+            .json()
+            .await
+            .unwrap();
+        assert_eq!(forced["fixed"], "Other");
+        let measured = engine.api.delay_group("Auto").await.unwrap();
+        let auto: serde_json::Value = controller
+            .get(&auto_url)
+            .bearer_auth(&engine.settings.secret)
+            .send()
+            .await
+            .unwrap()
+            .json()
+            .await
+            .unwrap();
+        assert_eq!(auto["fixed"], "");
+        assert_eq!(auto["testUrl"], "http://claude.ai/auto-check");
+        assert!(measured["fixture"] > 0 && measured["Other"] > 0);
+        assert!(
+            measured["fixture"] < measured["Other"],
+            "Fixture must have a slower alternative"
+        );
+        assert_eq!(
+            auto["now"], "fixture",
+            "Manual group testing must restore automatic selection"
+        );
+        assert_eq!(measured["Auto"], measured[auto["now"].as_str().unwrap()]);
         let store = engine.store.clone();
         let settings = std::fs::read(store.root.join("settings.json")).unwrap();
         let runtime = std::fs::read(store.runtime().join("config.yaml")).unwrap();
@@ -226,6 +270,20 @@ pub async fn run(engine: &mut Engine, profile: &std::path::Path) {
             .await
             .expect("Cold-start protected DNS/HTTP must work");
         engine.claude_protection(false).await.unwrap();
+        let auto: serde_json::Value = controller
+            .get(&auto_url)
+            .bearer_auth(&engine.settings.secret)
+            .send()
+            .await
+            .unwrap()
+            .json()
+            .await
+            .unwrap();
+        assert_eq!(auto["type"], "URLTest");
+        assert_eq!(
+            auto["fixed"], "",
+            "Disabling protection must restore automatic selection after restart"
+        );
         assert_eq!(
             settings,
             std::fs::read(store.root.join("settings.json")).unwrap()

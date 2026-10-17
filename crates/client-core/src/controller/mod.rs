@@ -1,5 +1,5 @@
 use crate::config::Settings;
-use anyhow::{Context, Result, bail};
+use anyhow::{Context, Result, bail, ensure};
 use reqwest::{Client, Method, Url};
 use serde::{Deserialize, Serialize, de::DeserializeOwned};
 use serde_json::{Value, json};
@@ -105,6 +105,8 @@ pub struct TunStatus {
 pub struct ProxySelection {
     #[serde(default)]
     pub now: String,
+    #[serde(rename = "type", default)]
+    pub kind: Text,
 }
 
 // Go serializes nil slices as null, rather than []. Both are valid API responses.
@@ -276,6 +278,10 @@ pub struct Proxy {
     pub now: Text,
     #[serde(rename = "testUrl", default)]
     pub test_url: Text,
+    #[serde(rename = "expectedStatus", default)]
+    pub expected_status: Text,
+    #[serde(default)]
+    pub fixed: Text,
     #[serde(default, deserialize_with = "compact_vec")]
     pub all: Vec<Text>,
     #[serde(
@@ -665,16 +671,76 @@ impl Api {
         Ok(())
     }
     pub async fn delay(&self, name: &str) -> Result<u32> {
-        self.delay_at(name, "https://www.gstatic.com/generate_204")
+        self.delay_at(name, "https://www.gstatic.com/generate_204", "")
             .await
     }
-    async fn delay_at(&self, name: &str, test_url: &str) -> Result<u32> {
+    async fn delay_at(&self, name: &str, test_url: &str, expected: &str) -> Result<u32> {
         let mut url = self.url(&["proxies", name, "delay"])?;
         url.query_pairs_mut()
             .append_pair("url", test_url)
-            .append_pair("timeout", "5000");
+            .append_pair("timeout", "5000")
+            .append_pair("expected", expected);
+        let response = self.request(Method::GET, url).send().await?;
+        if response.status() == reqwest::StatusCode::NOT_FOUND {
+            let (provider, _) = self.provider_leaf(name).await?.context("测速节点不存在")?;
+            return self
+                .provider_delay(name, test_url, expected, &provider)
+                .await;
+        }
+        let response = Self::checked(response).await?;
+        Ok(response.json::<Delay>().await?.delay)
+    }
+
+    async fn provider_delay(
+        &self,
+        name: &str,
+        test_url: &str,
+        expected: &str,
+        provider: &str,
+    ) -> Result<u32> {
+        let mut url = self.url(&["providers", "proxies", provider, name, "healthcheck"])?;
+        url.query_pairs_mut()
+            .append_pair("url", test_url)
+            .append_pair("timeout", "5000")
+            .append_pair("expected", expected);
         let response = Self::checked(self.request(Method::GET, url).send().await?).await?;
         Ok(response.json::<Delay>().await?.delay)
+    }
+
+    async fn provider_routes(
+        &self,
+        wanted: &std::collections::BTreeSet<Text>,
+    ) -> Result<BTreeMap<Text, Text>> {
+        #[derive(Deserialize)]
+        struct Node {
+            name: Text,
+        }
+        #[derive(Deserialize)]
+        struct Source {
+            #[serde(default)]
+            proxies: Vec<Node>,
+        }
+        #[derive(Deserialize)]
+        struct Sources {
+            providers: BTreeMap<Text, Source>,
+        }
+        let response = self
+            .request(Method::GET, self.url(&["providers", "proxies"])?)
+            .send()
+            .await?;
+        let sources: Sources = decode_json(Self::checked(response).await?).await?;
+        let mut routes = BTreeMap::new();
+        for (provider, source) in sources.providers {
+            for node in source.proxies {
+                if wanted.contains(&node.name) {
+                    ensure!(
+                        routes.insert(node.name, provider.clone()).is_none(),
+                        "代理集合包含同名节点，无法确定测速目标"
+                    );
+                }
+            }
+        }
+        Ok(routes)
     }
 
     pub async fn delay_group(&self, group: &str) -> Result<BTreeMap<String, u32>> {
@@ -699,11 +765,12 @@ impl Api {
             .values()
             .flat_map(|proxy| proxy.all.iter())
             .filter(|name| {
-                proxies.proxies.get(name.as_str()).is_some_and(|proxy| {
-                    !matches!(
-                        proxy.kind.as_str(),
-                        "Direct" | "Reject" | "Compatible" | "Pass"
-                    )
+                proxies.proxies.get(name.as_str()).is_none_or(|proxy| {
+                    (proxy.all.is_empty() || automatic(proxy))
+                        && !matches!(
+                            proxy.kind.as_str(),
+                            "Direct" | "Reject" | "Compatible" | "Pass"
+                        )
                 })
             })
             .cloned()
@@ -713,8 +780,8 @@ impl Api {
     }
 
     pub async fn delay_node(&self, name: &str) -> Result<BTreeMap<String, u32>> {
-        let proxy = self.proxy_nodes(name).await?;
-        if automatic(&proxy) {
+        let proxy = self.proxy_selection(name).await?;
+        if proxy.is_some_and(|p| matches!(p.kind.as_str(), "URLTest" | "Fallback")) {
             self.delay_group(name).await
         } else {
             Ok(BTreeMap::from([(
@@ -724,12 +791,58 @@ impl Api {
         }
     }
 
-    async fn measure_delays(&self, names: Vec<Text>, url: &str) -> BTreeMap<String, u32> {
+    pub async fn restore_automatic_groups(
+        &self,
+        locked: &BTreeMap<String, String>,
+        fixed: &BTreeMap<String, String>,
+    ) -> Result<()> {
+        if locked.is_empty() {
+            return Ok(());
+        }
+        let proxies: Proxies = self.get("proxies").await?;
+        for group in locked.keys() {
+            let Some(proxy) = proxies.proxies.get(group.as_str()).filter(|p| automatic(p)) else {
+                continue;
+            };
+            if let Some(node) = fixed.get(group).filter(|node| {
+                proxy
+                    .all
+                    .iter()
+                    .any(|candidate| candidate.as_str() == node.as_str())
+            }) {
+                self.select(group, node).await?;
+            } else {
+                self.unfix(group).await?;
+            }
+        }
+        Ok(())
+    }
+    async fn unfix(&self, group: &str) -> Result<()> {
+        Self::checked(
+            self.request(Method::DELETE, self.url(&["proxies", group])?)
+                .send()
+                .await?,
+        )
+        .await?;
+        Ok(())
+    }
+
+    async fn measure_delays(
+        &self,
+        names: Vec<Text>,
+        url: &str,
+        expected: &str,
+        providers: &BTreeMap<Text, Text>,
+    ) -> BTreeMap<String, u32> {
         use futures_util::{StreamExt, stream};
         stream::iter(names.into_iter().map(|name| async move {
             (
                 name.to_string(),
-                self.delay_at(&name, url).await.unwrap_or(0),
+                match providers.get(name.as_str()) {
+                    Some(provider) => self.provider_delay(&name, url, expected, provider).await,
+                    None => self.delay_at(&name, url, expected).await,
+                }
+                .unwrap_or(0),
             )
         }))
         .buffer_unordered(6)
@@ -768,6 +881,15 @@ impl Api {
                 }
             }
         }
+        let missing = seen
+            .into_iter()
+            .filter(|name| !proxies.proxies.contains_key(name.as_str()))
+            .collect::<std::collections::BTreeSet<_>>();
+        let providers = if missing.is_empty() {
+            BTreeMap::new()
+        } else {
+            self.provider_routes(&missing).await?
+        };
         let covered: std::collections::BTreeSet<_> = automatic_groups
             .iter()
             .filter_map(|name| proxies.proxies.get(name.as_str()))
@@ -787,9 +909,7 @@ impl Api {
                     && !proxies.proxies.get(name.as_str()).is_some_and(automatic)
             })
             .collect();
-        let mut delays = self
-            .measure_delays(targets, "https://www.gstatic.com/generate_204")
-            .await;
+        let mut delays = BTreeMap::new();
         for name in automatic_groups {
             let group = &proxies.proxies[name.as_str()];
             let url = if group.test_url.is_empty() {
@@ -806,22 +926,29 @@ impl Api {
                         .cloned()
                         .collect(),
                     url,
+                    &group.expected_status,
+                    &providers,
                 )
                 .await;
             // Clears both a previous manual override and URLTest's cached winner
             // AFTER its own URL has fresh measurements. Selector groups created
             // by Claude protection never enter this branch.
-            Self::checked(
-                self.request(Method::DELETE, self.url(&["proxies", &name])?)
-                    .send()
-                    .await?,
-            )
-            .await?;
+            self.unfix(&name).await?;
             let current = self.proxy_nodes(&name).await?;
             let delay = values.get(current.now.as_str()).copied().unwrap_or(0);
             delays.extend(values);
             delays.insert(name.to_string(), delay);
         }
+        // Test selectors only after their automatic children have fresh winners.
+        delays.extend(
+            self.measure_delays(
+                targets,
+                "https://www.gstatic.com/generate_204",
+                "",
+                &providers,
+            )
+            .await,
+        );
         Ok(delays)
     }
     pub async fn close_connections(&self) -> Result<()> {
@@ -1123,7 +1250,7 @@ mod tests {
                     let request = String::from_utf8(request).unwrap();
                     assert!(request.to_lowercase().contains("authorization: bearer group-secret"));
                     let (status, body) = if request.starts_with("GET /proxies HTTP") {
-                        ("200 OK", r#"{"proxies":{"test":{"type":"Selector","now":"n0","all":["n0","n1","n2","n3","n4","n5","n6","n7","bad"]}}}"#)
+                        ("200 OK", r#"{"proxies":{"test":{"type":"Selector","now":"n0","all":["n0","n1","n2","n3","n4","n5","n6","n7","bad"]},"n0":{"type":"Socks5"},"n1":{"type":"Socks5"},"n2":{"type":"Socks5"},"n3":{"type":"Socks5"},"n4":{"type":"Socks5"},"n5":{"type":"Socks5"},"n6":{"type":"Socks5"},"n7":{"type":"Socks5"},"bad":{"type":"Socks5"}}}"#)
                     } else {
                         assert!(request.contains("/delay?url="));
                         assert!(request.contains("timeout=5000"));
@@ -1192,7 +1319,7 @@ mod tests {
                 let (status, body) = if request.starts_with("GET /proxies HTTP") {
                     (
                         "200 OK",
-                        r#"{"proxies":{"Auto":{"type":"URLTest","testUrl":"https://health.example/check","now":"b","all":["a","b","DIRECT"]},"Manual":{"type":"Selector","all":["Auto","a","b"]},"a":{"type":"Shadowsocks","all":[]},"b":{"type":"Trojan","all":[]},"DIRECT":{"type":"Direct","all":[]}}}"#,
+                        r#"{"proxies":{"Auto":{"type":"URLTest","testUrl":"https://health.example/check","expectedStatus":"204","now":"b","all":["a","b","DIRECT"]},"Manual":{"type":"Selector","all":["Auto","a","b"]},"GLOBAL":{"type":"Selector","all":["Manual","Auto"]},"a":{"type":"Shadowsocks","all":[]},"b":{"type":"Trojan","all":[]},"DIRECT":{"type":"Direct","all":[]}}}"#,
                     )
                 } else if request.starts_with("GET /proxies/a/delay?") {
                     ("200 OK", r#"{"delay":99}"#)
@@ -1215,10 +1342,14 @@ mod tests {
                 };
                 if request.contains("/delay?") {
                     let path = request.split_whitespace().nth(1).unwrap();
-                    let url = url::Url::parse(&format!("http://localhost{path}")).unwrap();
+                    let url = Url::parse(&format!("http://localhost{path}")).unwrap();
                     assert!(url.query_pairs().any(
                         |(key, value)| key == "url" && value == "https://health.example/check"
                     ));
+                    assert!(
+                        url.query_pairs()
+                            .any(|(key, value)| key == "expected" && value == "204")
+                    );
                 }
                 socket.write_all(format!("HTTP/1.1 {status}\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}", body.len()).as_bytes()).await.unwrap();
                 requests.push(request);
@@ -1250,6 +1381,101 @@ mod tests {
         assert!(url.as_str().contains("%2F"));
         assert!(url.query().is_none());
         assert!(url.fragment().is_none());
+    }
+    #[tokio::test]
+    async fn automatic_group_probes_provider_members_without_loading_each_provider_again() {
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let port = listener.local_addr().unwrap().port();
+        let server = tokio::spawn(async move {
+            for index in 0..5 {
+                let (mut socket, _) = listener.accept().await.unwrap();
+                let mut buf = [0; 4096];
+                let n = socket.read(&mut buf).await.unwrap();
+                let req = String::from_utf8_lossy(&buf[..n]);
+                let (path, body) = match index {
+                    0 => (
+                        "GET /proxies HTTP",
+                        r#"{"proxies":{"Auto":{"type":"URLTest","testUrl":"https://health.example/check","now":"provided /1","all":["provided /1"]}}}"#,
+                    ),
+                    1 => (
+                        "GET /providers/proxies HTTP",
+                        r#"{"providers":{"Feed":{"proxies":[{"name":"provided /1","type":"Socks5"}]}}}"#,
+                    ),
+                    2 => (
+                        "GET /providers/proxies/Feed/provided%20%2F1/healthcheck?",
+                        r#"{"delay":45}"#,
+                    ),
+                    3 => ("DELETE /proxies/Auto HTTP", ""),
+                    _ => (
+                        "GET /proxies/Auto HTTP",
+                        r#"{"type":"URLTest","now":"provided /1","all":["provided /1"]}"#,
+                    ),
+                };
+                assert!(req.starts_with(path), "{req}");
+                let status = if index == 3 {
+                    "204 No Content"
+                } else {
+                    "200 OK"
+                };
+                socket.write_all(format!("HTTP/1.1 {status}\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",body.len()).as_bytes()).await.unwrap();
+            }
+        });
+        let api = Api::new(&Settings {
+            controller_port: port,
+            ..Default::default()
+        })
+        .unwrap();
+        let delays = api.delay_all_nodes().await.unwrap();
+        assert_eq!(
+            delays,
+            BTreeMap::from([("Auto".into(), 45), ("provided /1".into(), 45)])
+        );
+        server.await.unwrap();
+    }
+    #[tokio::test]
+    async fn automatic_group_restore_releases_only_previously_automatic_choices() {
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let port = listener.local_addr().unwrap().port();
+        let server = tokio::spawn(async move {
+            for index in 0..3 {
+                let (mut socket, _) = listener.accept().await.unwrap();
+                let mut buf = [0; 4096];
+                let n = socket.read(&mut buf).await.unwrap();
+                let req = String::from_utf8_lossy(&buf[..n]);
+                let body = if index == 0 {
+                    assert!(req.starts_with("GET /proxies HTTP"));
+                    r#"{"proxies":{"Auto":{"type":"URLTest","all":["a","b"]},"Sticky":{"type":"Fallback","all":["a","b"]}}}"#
+                } else {
+                    if index == 1 {
+                        assert!(req.starts_with("DELETE /proxies/Auto HTTP"));
+                    } else {
+                        assert!(req.starts_with("PUT /proxies/Sticky HTTP"));
+                        assert!(req.contains(r#""name":"b""#));
+                    }
+                    ""
+                };
+                let status = if index == 0 {
+                    "200 OK"
+                } else {
+                    "204 No Content"
+                };
+                socket.write_all(format!("HTTP/1.1 {status}\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",body.len()).as_bytes()).await.unwrap();
+            }
+        });
+        let api = Api::new(&Settings {
+            controller_port: port,
+            ..Default::default()
+        })
+        .unwrap();
+        api.restore_automatic_groups(
+            &BTreeMap::from([("Auto".into(), "a".into()), ("Sticky".into(), "b".into())]),
+            &BTreeMap::from([("Sticky".into(), "b".into())]),
+        )
+        .await
+        .unwrap();
+        server.await.unwrap();
     }
     #[tokio::test]
     async fn controller_auth_and_patch_contract() {

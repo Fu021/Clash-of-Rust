@@ -3,7 +3,7 @@ import { Theme } from "../../theme/palette.slint";
 import { MobileView, MobileActions, MobileIntent } from "state.slint";
 
 export component MAppIcon inherits Rectangle {
-    width: 44px; height: 44px;
+    width: 48px; height: 48px;
     accessible-role: button;
     accessible-label: "发送系统通知";
     accessible-action-default => { if !MobileView.modal { MobileActions.request(MobileIntent.system-notification, "", ""); } }
@@ -131,7 +131,7 @@ export component MRow inherits Rectangle {
     in property <bool> expanded;
     in property <bool> interactive: true;
     callback clicked();
-    vertical-stretch: 0; min-width: 0px; height: max(52px, content.preferred-height + 12px);
+    vertical-stretch: 0; min-width: 0px; height: max(48px, 52px * MobileTypography.density, content.preferred-height + MobileTypography.gap);
     content := HorizontalLayout { cross-axis-alignment: center; spacing: 10px;
         VerticalLayout { spacing: 6px;
             MText { text: root.title; }
@@ -160,7 +160,7 @@ export component MSwitch inherits Rectangle {
     in property <bool> checked;
     in property <bool> enabled: true;
     callback toggled(bool);
-    vertical-stretch: 0; height: max(52px, content.preferred-height + 12px);
+    vertical-stretch: 0; height: max(48px, 52px * MobileTypography.density, content.preferred-height + MobileTypography.gap);
     opacity: root.enabled ? 1 : 0.5;
     content := HorizontalLayout { spacing: MobileTypography.gap; cross-axis-alignment: center;
         VerticalLayout { spacing: 6px; MText { text: root.title; } if root.subtitle != "": MSmall { text: root.subtitle; wrap: word-wrap; } }
@@ -209,7 +209,7 @@ export component MTag inherits Rectangle {
     in property <string> text;
     in property <int> tone;
     in property <length> width-limit: 240px;
-    height: max(28px, label.preferred-height + 8px); width: min(root.width-limit, label.preferred-width + 16px);
+    height: max(24px, 28px * MobileTypography.density, label.preferred-height + MobileTypography.small-gap); width: min(root.width-limit, label.preferred-width + MobileTypography.padding);
     horizontal-stretch: 0; vertical-stretch: 0; border-radius: 5px;
     background: root.tone == 4 ? Theme.inset : root.tone == 3 ? Theme.danger-wash : root.tone == 2 ? Theme.warning-wash : root.tone == 1 ? Theme.success-wash : Theme.accent-wash;
     label := MSmall { width: parent.width; height: parent.height; text: root.text; horizontal-alignment: center;

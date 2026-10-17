@@ -206,6 +206,8 @@ pub struct Protection {
     pub system_dns: Vec<String>,
     #[serde(default, skip_serializing_if = "std::collections::BTreeMap::is_empty")]
     pub locked_groups: std::collections::BTreeMap<String, String>,
+    #[serde(default, skip_serializing_if = "std::collections::BTreeMap::is_empty")]
+    pub fixed_groups: std::collections::BTreeMap<String, String>,
     pub route: String,
     pub previous: Previous,
 }
@@ -217,12 +219,22 @@ impl Protection {
             provider: None,
             system_dns: vec![],
             locked_groups: Default::default(),
+            fixed_groups: Default::default(),
             route: format!("COR-Claude-{}", uuid::Uuid::new_v4().simple()),
             previous,
         }
     }
     pub fn validate(&self) -> Result<()> {
         uuid::Uuid::parse_str(&self.profile_id)?;
+        ensure!(
+            self.fixed_groups
+                .iter()
+                .all(|(group, node)| self.locked_groups.contains_key(group)
+                    && !node.is_empty()
+                    && node.len() <= 512
+                    && !node.chars().any(char::is_control)),
+            "Claude 保护的自动组恢复记录无效"
+        );
         ensure!(
             self.locked_groups.len() <= 4096
                 && self
@@ -285,6 +297,16 @@ impl Protection {
         Ok(())
     }
     pub fn capture_automatic_groups(&mut self, proxies: &crate::api::Proxies) {
+        self.fixed_groups = proxies
+            .proxies
+            .iter()
+            .filter(|(_, p)| {
+                matches!(p.kind.as_str(), "URLTest" | "Fallback")
+                    && !p.now.is_empty()
+                    && !p.fixed.is_empty()
+            })
+            .map(|(name, p)| (name.to_string(), p.fixed.to_string()))
+            .collect();
         self.locked_groups = proxies
             .proxies
             .iter()
@@ -598,7 +620,7 @@ mod tests {
         };
         let before = crate::config::runtime_config(raw, &settings).unwrap();
         let proxies = serde_json::from_value::<crate::api::Proxies>(serde_json::json!({"proxies":{
-            "Auto":{"type":"URLTest","now":"node.[1]`x","all":["node.[1]`x","Other"]},
+            "Auto":{"type":"URLTest","now":"node.[1]`x","fixed":"Other","all":["node.[1]`x","Other"]},
             "Main":{"type":"Selector","now":"Auto","all":["Auto"]}}}))
         .unwrap();
         let mut protection = Protection::new(
@@ -615,6 +637,10 @@ mod tests {
         settings.claude_protection = Some(std::sync::Arc::new(protection));
         let mut restored: Settings =
             serde_json::from_slice(&serde_json::to_vec(&settings).unwrap()).unwrap();
+        assert_eq!(
+            restored.claude_protection.as_ref().unwrap().fixed_groups["Auto"],
+            "Other"
+        );
         let protected: Value =
             serde_yaml::from_str(&crate::config::runtime_config(raw, &restored).unwrap()).unwrap();
         let group = &protected["proxy-groups"][0];

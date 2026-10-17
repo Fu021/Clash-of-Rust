@@ -41,8 +41,9 @@ component TrafficCard inherits MCard {
 component ModeCard inherits MCard {
     MHeading { text: "连接设置"; }
     MSmall { text: "运行模式"; }
-    HorizontalLayout { spacing: MobileTypography.small-gap;
+    GridLayout { spacing: MobileTypography.small-gap;
         for label[i] in ["规则", "全局", "直连"]: MButton { text: label; selected: MobileData.mode == i;
+            col: Theme.text-scale > 1.25 ? 0 : i; row: Theme.text-scale > 1.25 ? i : 0;
             clicked => { MobileActions.request(MobileIntent.mode, "" + i, ""); }
         }
     }
