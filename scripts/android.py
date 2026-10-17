@@ -285,6 +285,17 @@ def test(arch, apk=None, test_apk=None):
     import http.server
     import threading
     class Origin(http.server.BaseHTTPRequestHandler):
+        protocol_version = 'HTTP/1.1'
+        def do_CONNECT(self):
+            # Only the test core can reach this origin for the reserved target.
+            # The emulator's directly reachable host alias cannot prove TUN
+            # capture: use a negative control and a real HTTP proxy handshake.
+            if self.path != '198.51.100.1:18081':
+                self.send_error(403)
+                return
+            self.send_response(200, 'Connection established'); self.end_headers(); self.wfile.flush()
+            self.close_connection = False
+            self.handle_one_request()
         def do_GET(self):
             body=b'cor-android-network-ok'
             self.send_response(200); self.send_header('Content-Length',str(4096 if self.path=='/hold' else len(body))); self.end_headers()

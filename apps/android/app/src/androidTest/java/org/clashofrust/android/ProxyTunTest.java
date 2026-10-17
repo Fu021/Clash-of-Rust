@@ -148,6 +148,49 @@ public class ProxyTunTest {
             return out.toString(StandardCharsets.UTF_8.name());
         } finally { connection.disconnect(); }
     }
+    private static void noTunRoute() throws Exception {
+        try (Socket connection=new Socket(java.net.Proxy.NO_PROXY)) {
+            try {connection.connect(new InetSocketAddress("198.51.100.1",18081),1000);}
+            catch (IOException blocked) {return;}
+            fail("Reserved test origin was reachable without VPN; negative control is invalid");
+        }
+    }
+    private static void tunCarriesSocket(String controller,String secret) throws Exception {
+        // The physical network cannot reach this reserved address. Only the
+        // test core's explicit HTTP outbound can relay it to the host origin.
+        // Keep a fresh socket open and require its exact TUN source port too.
+        try (Socket connection=new Socket(java.net.Proxy.NO_PROXY)) {
+            connection.connect(new InetSocketAddress("198.51.100.1",18081),5000);
+            connection.setSoTimeout(5000);
+            connection.getOutputStream().write(("GET /hold HTTP/1.1\r\nHost: 198.51.100.1\r\nConnection: close\r\n\r\n")
+                .getBytes(StandardCharsets.US_ASCII));
+            BufferedReader stream=new BufferedReader(new InputStreamReader(connection.getInputStream(),StandardCharsets.US_ASCII));
+            String status=stream.readLine();
+            assertNotNull("Held TUN request returned no HTTP response",status);
+            assertTrue("Held TUN request failed: "+status,status.contains(" 200 "));
+            boolean headersComplete=false;
+            for (int header=0;header<100;header++) {
+                String line=stream.readLine();
+                if (line==null) break;
+                if (line.isEmpty()) {headersComplete=true;break;}
+            }
+            assertTrue("Incomplete held HTTP response",headersComplete);
+            assertTrue(stream.read() >= 0);
+            JSONObject records=new JSONObject(read(new URL("http://"+controller+"/connections"),java.net.Proxy.NO_PROXY,secret));
+            JSONArray connections=records.getJSONArray("connections");
+            boolean observed=false;
+            for (int i=0;i<connections.length();i++) {
+                JSONObject record=connections.getJSONObject(i);
+                JSONObject metadata=record.getJSONObject("metadata");
+                if (metadata.optString("type").equalsIgnoreCase("Tun")
+                    && metadata.optInt("sourcePort")==connection.getLocalPort()
+                    && metadata.optInt("destinationPort")==18081
+                    && record.getJSONArray("chains").toString().contains("CI-TUN-origin")) observed=true;
+            }
+            assertTrue("No matching TUN connection: "+connection.getLocalSocketAddress()+" -> "+connection.getRemoteSocketAddress()
+                +"; a direct-only test must fail; records="+records,observed);
+        }
+    }
     @Test public void localProxyAndRealTunCarryTrafficAndDisconnectCleanly() throws Exception {
         Context context = InstrumentationRegistry.getInstrumentation().getTargetContext();
         context.startActivity(new Intent(context, MainActivity.class).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK));
@@ -164,7 +207,13 @@ public class ProxyTunTest {
         assertEquals("cor-android-network-ok", read(new URL("http://10.0.2.2:18081/probe"),proxy,null));
         assertNotNull(new JSONObject(read(new URL("http://"+controller+"/version"),java.net.Proxy.NO_PROXY,secret)).getString("version"));
         assertNull("CI must grant VPN consent through Android appops", VpnService.prepare(context));
-        CoreBridge.reload(raw + "\nhosts:\n  android-tun.test: 10.0.2.2\n");
+        noTunRoute();
+        CoreBridge.reload("mixed-port: "+mixed+"\nexternal-controller: "+controller+"\nsecret: "+JSONObject.quote(secret)
+            +"\nmode: rule\nipv6: true\nfind-process-mode: off\n"
+            +"dns:\n  enable: true\n  enhanced-mode: fake-ip\n  nameserver: [https://1.1.1.1/dns-query]\n"
+            +"hosts:\n  android-tun.test: 10.0.2.2\n"
+            +"proxies:\n  - {name: CI-TUN-origin, type: http, server: 10.0.2.2, port: 18081}\n"
+            +"rules:\n  - IP-CIDR,198.51.100.1/32,CI-TUN-origin,no-resolve\n  - MATCH,DIRECT\n");
         shell("cmd statusbar add-tile org.clashofrust.android/.VpnTileService");
         for (int cycle=0; cycle<2; cycle++) {
             if (cycle==0) context.startForegroundService(new Intent(context,TunnelService.class));
@@ -175,6 +224,7 @@ public class ProxyTunTest {
             });
             ConnectivityManager connectivity=context.getSystemService(ConnectivityManager.class);
             await("Android did not make the VPN its active network", () -> vpnActive(connectivity));
+            tunCarriesSocket(controller,secret);
             // A settings reload must preserve the independently owned Android TUN.
             CoreBridge.reload(CoreBridge.config());
             if (cycle == 0) {
@@ -211,39 +261,7 @@ public class ProxyTunTest {
                 assertNull("Could not monitor VPN handover: "+samplingError.get(),samplingError.get());
                 assertFalse("VPN reconfigure exposed the underlying network",bypassed.get());
             }
-            // Open a fresh OS socket after each VPN rebuild. HttpURLConnection
-            // can reuse a pooled connection created on the previous network.
-            try (Socket connection = new Socket(java.net.Proxy.NO_PROXY)) {
-                connection.connect(new InetSocketAddress("android-tun.test",18081),5000);
-                connection.setSoTimeout(5000);
-                connection.getOutputStream().write(("GET /hold HTTP/1.1\r\nHost: android-tun.test\r\nConnection: close\r\n\r\n")
-                    .getBytes(StandardCharsets.US_ASCII));
-                BufferedReader stream=new BufferedReader(new InputStreamReader(connection.getInputStream(),StandardCharsets.US_ASCII));
-                String status=stream.readLine();
-                assertNotNull("Held TUN request returned no HTTP response",status);
-                assertTrue("Held TUN request failed: "+status,status.contains(" 200 "));
-                boolean headersComplete=false;
-                for (int header=0;header<100;header++) {
-                    String line=stream.readLine();
-                    if (line==null) break;
-                    if (line.isEmpty()) {headersComplete=true;break;}
-                }
-                assertTrue("Incomplete held HTTP response",headersComplete);
-                assertTrue(stream.read() >= 0);
-                JSONObject records = new JSONObject(read(new URL("http://"+controller+"/connections"),java.net.Proxy.NO_PROXY,secret));
-                JSONArray connections = records.getJSONArray("connections");
-                boolean observed=false;
-                for (int i=0; i<connections.length(); i++) {
-                    JSONObject metadata=connections.getJSONObject(i).getJSONObject("metadata");
-                    // Android may reuse a DNS result across VPN generations,
-                    // so host can be empty. Match this exact live socket instead.
-                    if (metadata.optString("type").equalsIgnoreCase("Tun")
-                        && metadata.optInt("sourcePort")==connection.getLocalPort()
-                        && metadata.optInt("destinationPort")==18081) observed=true;
-                }
-                assertTrue("No real TUN connection was observed for port "+connection.getLocalPort()
-                    +"; a direct-only test must fail; records="+records,observed);
-            }
+            tunCarriesSocket(controller,secret);
             if (cycle==0) TunnelService.stop(context);
             else shell("cmd statusbar click-tile org.clashofrust.android/.VpnTileService");
             await("VPN routes remained after disconnect", () -> {
@@ -251,6 +269,7 @@ public class ProxyTunTest {
                 return !TunnelService.connected() && capabilities != null && !capabilities.hasTransport(NetworkCapabilities.TRANSPORT_VPN);
             });
             assertEquals("cor-android-network-ok",read(new URL("http://10.0.2.2:18081/probe"),java.net.Proxy.NO_PROXY,null));
+            noTunRoute();
             assertFalse("Explicit disconnect must not restart on sticky recovery",
                 context.getSharedPreferences("vpn",Context.MODE_PRIVATE).getBoolean("desired",true));
         }
