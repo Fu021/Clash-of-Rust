@@ -174,6 +174,15 @@ class BuildTests(unittest.TestCase):
         self.assertFalse(local_cache.private_current(config,{'key':'old-compiler-dependencies-old-source'}))
         self.assertFalse(local_cache.private_current(config,None))
 
+    def test_current_full_rust_dependencies_are_not_uploaded_again_for_source_only_edits(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root=Path(temporary); (root/'target').mkdir()
+            config={'kind':'rust','source':str(root),'group':'rust/linux-x64','key':'new-source',
+                    'available':True,'save':True,'hit':False,'mirror_required':False}
+            with patch.object(local_cache,'pack') as pack,patch.object(local_cache,'cache_report'):
+                local_cache.save(config)
+                pack.assert_not_called()
+
     def test_github_miss_restores_a_verified_private_archive(self):
         with tempfile.TemporaryDirectory() as temporary:
             root=Path(temporary); source=root/'source'; source.mkdir()

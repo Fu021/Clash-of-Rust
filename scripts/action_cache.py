@@ -299,7 +299,7 @@ def restore(config):
     config['resolved_paths'] = [str(p) for p in cache_paths(config)]
     github = github_restored(config)
     if github:
-        config.update(restored=True, hit=config['github_hit'] == 'true', github_restored=True)
+        config.update(restored=True, hit=config['github_hit'] == 'true')
     if not config['url'] or not config['token']:
         cache_report(config, 'restore', 'GitHub cache restored; private mirror unavailable' if github
                      else 'not configured; normal build')
@@ -344,7 +344,8 @@ def restore(config):
         paths = [Path(p) for p in config['resolved_paths']]
         with phase(config, 'extract'):
             unpack(archive, paths)
-    config.update(available=True, restored=True, hit=record['key'] == config['key'])
+    config.update(available=True, restored=True, hit=record['key'] == config['key'],
+                  mirror_required=not private_current(config, record))
     if config['kind'] != 'rust':
         with phase(config, 'fingerprint'):
             config['fingerprint'] = fingerprint(paths)
@@ -360,7 +361,10 @@ def save(config):
     paths = cache_paths(config)
     if not any(p.exists() for p in paths):
         return
-    unchanged = (config.get('hit') or config.get('github_restored')) and config['kind'] == 'rust'
+    # A source-only edit rebuilds workspace crates, but does not change the
+    # dependency mirror. Re-upload only when its compiler/dependency generation
+    # changed, regardless of which tier supplied the objects.
+    unchanged = config['kind'] == 'rust' and (config.get('hit') or config.get('mirror_required') is False)
     if config['kind'] != 'rust':
         with phase(config, 'fingerprint'):
             unchanged = config.get('fingerprint') == fingerprint(paths)
