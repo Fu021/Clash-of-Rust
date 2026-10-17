@@ -8,7 +8,6 @@
 ## Features
 
 - **轻量**：Rust + Slint 原生界面，无需 WebView，页面数据按需加载。
-- **Android**：手机、横屏与平板布局，内嵌内核与系统 VPN，支持应用分流、快捷设置磁贴、Claude 保护和客户端更新。
 - **离线就绪**：内置 mihomo 内核和 Geo 数据，支持一键更新 Geo 数据。
 - **IP 检测**：183 个检测项，覆盖出口 IP、GitHub、AI 服务与流媒体地区访问；一键检测显示分类报告，点击分类或状态查看详情，支持筛选与分类重测。
 - **A÷检测**：采集 Claude 地区、DNS、WebRTC 与浏览器线索，扫描已记录项目配置并分类展示；可选一键保护，固定节点并启用 TUN、加密 DNS 与异常连接拦截，关闭后恢复原设置，详见 [检测说明](docs/claude-region-detection.md)。
@@ -39,16 +38,16 @@ macOS 打开 DMG，将 **Clash of Rust.app** 拖入 **Applications（应用程�
 
 ## 内存占用
 
-实测版本 **0.5.11-dev.1**（`5b09faf`）；Ubuntu 22.04 x64、Release 构建、Slint 软件渲染，低强度固定输入为 **100 节点、5 个策略组、1,000 条规则**。DNS 覆盖、IPv6 与 UDP 开启，Claude 保护、快捷规则、系统代理和 TUN 关闭，无业务流量：
+实测版本 **0.6.0**（`843ed2a`）；Ubuntu 22.04 x64、Rust 1.99.1、Release 构建、Slint 软件渲染，mihomo v1.19.32；低强度固定输入为 **100 节点、5 个策略组、1,000 条规则**。DNS 覆盖、IPv6 与 UDP 开启，Claude 保护、快捷规则、系统代理和 TUN 关闭，无业务流量：
 
 | 场景 | GUI RSS | GUI 与内核合计 PSS |
 | --- | ---: | ---: |
-| 首页 | 43.46 MiB | 81.67 MiB |
-| 代理组折叠 | 44.36 MiB | 86.34 MiB |
-| 节点搜索 | 53.07 MiB | 97.51 MiB |
-| 返回首页 | 53.14 MiB | 97.60 MiB |
+| 首页 | 44.32 MiB | 82.65 MiB |
+| 代理组折叠 | 45.11 MiB | 86.71 MiB |
+| 节点搜索 | 53.92 MiB | 98.83 MiB |
+| 返回首页 | 53.99 MiB | 98.90 MiB |
 
-五项快捷规则全开时，首页 GUI RSS 为 43.43 MiB，合计 PSS 为 99.07 MiB。以上为每场景采样 10 秒、间隔 250 ms 的观测峰值，实际占用随系统、配置和使用情况变化；RSS 含共享页，PSS 按比例分摊共享页。[测试记录](https://github.com/Fu021/Clash-of-Rust/actions/runs/38878584013)。
+五项快捷规则全开时，首页 GUI RSS 为 43.41 MiB，合计 PSS 为 98.30 MiB。以上为每场景采样 10 秒、间隔 250 ms 的观测峰值，实际占用随系统、配置和使用情况变化；RSS 含共享页，PSS 按比例分摊共享页。[测试记录](https://github.com/Fu021/Clash-of-Rust/actions/runs/39024865167)。
 
 ## 编译与打包
 
