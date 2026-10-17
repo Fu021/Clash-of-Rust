@@ -1,0 +1,15 @@
+[Unit]
+Description=Clash of Rust dedicated WSL WireGuard and DNS
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/usr/bin/python3 -I /usr/local/lib/cor-wsl-egress/manage.py start --execute
+ExecStop=/usr/bin/python3 -I /usr/local/lib/cor-wsl-egress/manage.py stop --execute
+# The dedicated interface is removed on Stop; no global firewall flush.
+UMask=0077
+
+[Install]
+WantedBy=multi-user.target

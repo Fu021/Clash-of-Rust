@@ -18,6 +18,11 @@ use std::{
 use tokio::io::AsyncWriteExt;
 
 pub const RELEASES_URL: &str = "https://github.com/Fu021/Clash-of-Rust/releases";
+/// This fork has a WSL policy owner absent from official release packages.
+/// Re-enable only after a fork-owned update and migration channel exists.
+pub const SELF_UPDATE_ENABLED: bool = false;
+pub const FORK_UPDATE_NOTICE: &str =
+    "WSL Secure Egress 定制版：已停用官方自动更新，请使用经审查的 fork 安装包，避免覆盖 WSL 功能。";
 pub const CHECK_INTERVAL: Duration = Duration::from_secs(6 * 60 * 60);
 const API_URL: &str = "https://api.github.com/repos/Fu021/Clash-of-Rust/releases?per_page=100";
 
@@ -379,6 +384,9 @@ pub async fn download(
     proxy_port: Option<u16>,
     report: impl FnMut(Progress),
 ) -> Result<Downloaded> {
+    if !SELF_UPDATE_ENABLED {
+        bail!("{FORK_UPDATE_NOTICE}");
+    }
     if cfg!(windows)
         && Version::parse(&available.version)
             .context("新版本号无效")?
@@ -528,6 +536,9 @@ async fn transfer(
 }
 
 pub async fn check(proxy_port: Option<u16>) -> Result<Option<Available>> {
+    if !SELF_UPDATE_ENABLED {
+        bail!("{FORK_UPDATE_NOTICE}");
+    }
     discovery::check(proxy_port).await
 }
 
@@ -584,6 +595,29 @@ async fn release_bytes(mut response: reqwest::Response) -> Result<Vec<u8>> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[tokio::test]
+    async fn fork_update_gate_prevents_discovery_and_package_network_requests() {
+        assert!(
+            check(None)
+                .await
+                .unwrap_err()
+                .to_string()
+                .contains("定制版")
+        );
+        let result = download(
+            Available {
+                version: "99.0.0".into(),
+                url: RELEASES_URL.into(),
+                preview: false,
+                package: None,
+            },
+            None,
+            |_| panic!("a disabled update must never report download progress"),
+        )
+        .await;
+        assert!(result.unwrap_err().to_string().contains("定制版"));
+    }
     use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
     #[test]

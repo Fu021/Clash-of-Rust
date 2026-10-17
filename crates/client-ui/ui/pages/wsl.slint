@@ -1,0 +1,131 @@
+import { ScrollView } from "std-widgets.slint";
+import { UiData, UiActions, Intent } from "../state.slint";
+import { Theme } from "../theme/palette.slint";
+import { Label, Caption, Heading, Paragraph, ContentPanel, ActionButton, Field, Badge, Divider } from "../components/controls.slint";
+
+component WslActionButton inherits ActionButton {
+    in property <string> action;
+    in property <string> mode: "execute";
+    enabled: UiData.wsl-supported && !UiData.wsl-busy && !UiData.exiting;
+    clicked => { UiActions.dispatch(Intent.wsl-action, root.action, root.mode); }
+}
+
+component WslInputField inherits Field {
+    in property <string> argument;
+    enabled: UiData.wsl-supported && !UiData.wsl-busy && !UiData.exiting;
+    opacity: root.enabled ? 1 : 0.5;
+    edited(value) => { UiActions.dispatch(Intent.wsl-input, root.argument, value); }
+}
+
+export component WslPage inherits Rectangle {
+    property <bool> logs-open: false;
+    ScrollView {
+        width: parent.width + Theme.content-gap;
+        VerticalLayout {
+            alignment: start;
+            padding-right: Theme.content-gap;
+            padding-bottom: Theme.card-padding;
+            spacing: Theme.page-gap;
+            ContentPanel {
+                HorizontalLayout { cross-axis-alignment: center; spacing: Theme.content-gap;
+                    Heading { text: "WSL Secure Egress"; }
+                    Badge { text: UiData.wsl-busy ? "处理中…" : UiData.wsl-status; tone: UiData.wsl-busy ? 2 : 4; }
+                }
+                if !UiData.wsl-supported: Paragraph { text: "仅 Windows 支持此管理入口；当前平台不可执行。"; color: Theme.warning; }
+                HorizontalLayout { spacing: Theme.content-gap;
+                    WslActionButton { text: "Doctor"; action: "Doctor"; mode: "preview"; }
+                    WslActionButton { text: "刷新状态"; action: "Status"; mode: "preview"; }
+                    WslActionButton { text: "安装预检"; action: "Install"; mode: "preview"; }
+                }
+                HorizontalLayout { spacing: Theme.content-gap;
+                    WslActionButton { text: "执行安装"; action: "Install"; }
+                    WslActionButton { text: "连接"; action: "Start"; primary: true; }
+                    WslActionButton { text: "断开 · 留保护"; action: "Stop"; }
+                }
+                HorizontalLayout { spacing: Theme.content-gap;
+                    WslActionButton { text: "测试"; action: "Test"; mode: "preview"; }
+                    ActionButton { text: root.logs-open ? "收起日志" : "查看日志"; clicked => { root.logs-open = !root.logs-open; } }
+                    WslActionButton { text: "回退 · 保留保护"; action: "Rollback"; }
+                }
+                WslActionButton { text: "恢复原网络…"; action: "Rollback"; mode: "restore-confirm"; danger: true; }
+                Paragraph { text: "默认回退仅断开隧道、保留保护。恢复原网络会撤销保护，需另行确认，且仅允许所有 WSL 发行版均已停止时执行。"; font-size: Theme.detail-size; color: Theme.warning; }
+                Paragraph { text: "Doctor、状态与安装预检只读，不启动 WSL。执行操作异步运行；权限不足时阻止执行，请在管理员终端手动执行经校验的命令。"; font-size: Theme.detail-size; color: Theme.secondary; }
+            }
+            ContentPanel {
+                Heading { text: "连接配置"; }
+                HorizontalLayout { cross-axis-alignment: center; spacing: Theme.content-gap;
+                    Caption { text: "隧道后端"; }
+                    ActionButton { text: "Tailscale（优先）"; selected: UiData.wsl-backend == "Tailscale"; enabled: UiData.wsl-supported && !UiData.wsl-busy && !UiData.exiting; clicked => { UiActions.dispatch(Intent.wsl-input, "backend", "Tailscale"); } }
+                    ActionButton { text: "WireGuard"; selected: UiData.wsl-backend == "WireGuard"; enabled: UiData.wsl-supported && !UiData.wsl-busy && !UiData.exiting; clicked => { UiActions.dispatch(Intent.wsl-input, "backend", "WireGuard"); } }
+                }
+                Caption { text: "VPS IPv4 与端口"; }
+                HorizontalLayout { spacing: Theme.content-gap;
+                    WslInputField { text <=> UiData.wsl-endpoint-ipv4; argument: "endpoint-ipv4"; placeholder: "固定端点 IPv4"; }
+                    WslInputField { width: 120px; horizontal-stretch: 0; text <=> UiData.wsl-endpoint-port; argument: "endpoint-port"; placeholder: "端口"; }
+                }
+                Caption { text: "操作发行版（不缩小全 WSL 保护范围）"; }
+                WslInputField { text <=> UiData.wsl-distro; argument: "distro"; placeholder: "发行版名称"; }
+                Caption { text: "私密 JSON 配置文件路径"; }
+                WslInputField { text <=> UiData.wsl-profile-path; argument: "profile-path"; placeholder: "填写本机私密 JSON 路径"; }
+                Paragraph { text: "这里只传递路径，不读取或展示配置内容、密钥与令牌。端点或配置变化后需取得新代次证据；不会沿用旧出口验收。"; font-size: Theme.detail-size; color: Theme.secondary; }
+            }
+            ContentPanel {
+                Heading { text: "管理员终端操作"; }
+                Paragraph { text: "权限不足时需在管理员终端手动执行。此处只显示与复制经参数校验的命令；复制不代表已授权、已执行或已建立保护，也不会自动提权。"; font-size: Theme.detail-size; color: Theme.secondary; }
+                if UiData.wsl-admin-command == "": Caption { text: "尚无可复制命令；请先完成配置与安装预检。"; }
+                if UiData.wsl-admin-command != "": Paragraph { text: UiData.wsl-admin-command; font-size: Theme.detail-size; }
+                if UiData.wsl-admin-command != "": ActionButton { text: "复制管理员命令"; clicked => { UiActions.dispatch(Intent.copy, UiData.wsl-admin-command, ""); } }
+            }
+            ContentPanel {
+                Heading { text: "状态与证据"; }
+                Caption { text: "generation " + UiData.wsl-generation + "  ·  phase " + UiData.wsl-phase; }
+                Paragraph { text: UiData.wsl-message; }
+                Divider { }
+                HorizontalLayout { spacing: Theme.content-gap;
+                    Caption { text: UiData.wsl-backend + " 隧道连接"; }
+                    Label { text: UiData.wsl-tunnel; horizontal-alignment: right; }
+                }
+                HorizontalLayout { spacing: Theme.content-gap;
+                    Caption { text: "实际德国 IPv4 出口"; }
+                    Label { text: UiData.wsl-exit; horizontal-alignment: right; }
+                }
+                HorizontalLayout { spacing: Theme.content-gap;
+                    Caption { text: "保护验证"; }
+                    Label { text: UiData.wsl-protection; color: UiData.wsl-protection == "verified" ? Theme.success : Theme.warning; horizontal-alignment: right; }
+                }
+                HorizontalLayout { spacing: Theme.content-gap;
+                    Caption { text: "功能验收"; }
+                    Label { text: UiData.wsl-functional; horizontal-alignment: right; }
+                }
+                Paragraph { text: "strict 全 WSL 冷启动隔离未证明时必须 Blocked。隧道已连接、德国出口、保护已验证及功能通过分别判定；IPv4-only，IPv6 必须拒绝。"; font-size: Theme.detail-size; color: Theme.warning; }
+            }
+            ContentPanel {
+                Heading { text: "全部发行版覆盖"; }
+                if UiData.wsl-distributions.length == 0: Paragraph { text: "尚无发行版覆盖证据；不可视为全部受保护。"; color: Theme.warning; }
+                for distro in UiData.wsl-distributions: VerticalLayout {
+                    spacing: 4px;
+                    Divider { }
+                    Paragraph { text: distro.name + "  ·  " + distro.state; }
+                    Paragraph { text: "coverage: " + distro.coverage; color: Theme.secondary; font-size: Theme.detail-size; }
+                }
+                Divider { }
+                Paragraph { text: "Docker Desktop：保留发行版、镜像与卷；独立适配前外网必须封闭。实际封闭状态以本代次 coverage/checks 为准，未适配不计功能通过。"; color: Theme.warning; font-size: Theme.detail-size; }
+                Paragraph { text: "Windows 日常联网与校园认证/API 必须保留；本页不会通过关闭共享 Clash 核心、网卡或系统 DNS 来测试断连。"; color: Theme.secondary; font-size: Theme.detail-size; }
+            }
+            ContentPanel {
+                Heading { text: "本代次检查"; }
+                if UiData.wsl-checks.length == 0: Caption { text: "尚未运行检查。"; }
+                for check in UiData.wsl-checks: VerticalLayout {
+                    spacing: 4px;
+                    Paragraph { text: check.label; }
+                    Paragraph { text: check.value; color: Theme.secondary; font-size: Theme.detail-size; }
+                }
+            }
+            if root.logs-open: ContentPanel {
+                Heading { text: "脱敏日志 · 最近记录"; }
+                if UiData.wsl-logs.length == 0: Caption { text: "暂无日志。"; }
+                for line in UiData.wsl-logs: Paragraph { text: line; font-size: Theme.detail-size; color: Theme.secondary; }
+            }
+        }
+    }
+}

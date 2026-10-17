@@ -35,6 +35,8 @@ def main():
     extension = '.exe' if args.system == 'windows' else ''
     for name in ('clash-of-rust', 'clash-tun-launcher'):
         shutil.copy2(ROOT/'target/release'/(name+extension), bundle/(name+extension))
+    if args.system == 'windows':
+        shutil.copy2(ROOT/'target/release/clash-wsl-guardian.exe', bundle/'clash-wsl-guardian.exe')
     # Focus native checks on the core lifecycle and real proxy/TUN traffic.
     if args.system == 'macos':
         from macos_ci import native_tests

@@ -3,6 +3,206 @@ use super::*;
 use clash_client_ui::{AppWindow, Intent, UiActions, UiData, models::ViewModels};
 use slint::{ComponentHandle, Model};
 
+fn wsl_report(
+    action: clash_client_core::wsl::Action,
+    generation: u64,
+) -> clash_client_core::wsl::Report {
+    clash_client_core::wsl::Report::parse(&serde_json::json!({
+        "schema_version": 1, "operation_id": uuid::Uuid::new_v4().to_string(),
+        "generation": generation, "action": action, "outcome": "succeeded",
+        "protection": "verified", "phase": "connected_unverified", "backend": "Tailscale",
+        "message": "Operation completed. Packet-level, exit-location, and reboot verification remain separate.",
+        "distributions": [
+            {"name":"Ubuntu", "state":"running", "coverage":"not_enrolled"},
+            {"name":"docker-desktop", "state":"stopped", "coverage":"blocked"}
+        ],
+        "checks": [
+            {"id":"tailscale_connected", "result":"PASS", "detail":""},
+            {"id":"german_exit", "result":"PASS", "detail":""},
+            {"id":"ipv4_only", "result":"PASS", "detail":""},
+            {"id":"cold_boot", "result":"NOT_RUN", "detail":""}
+        ], "logs": ["token=must-never-reach-ui"]
+    }).to_string()).unwrap()
+}
+
+#[test]
+fn wsl_projection_separates_transport_exit_protection_and_invalidates_on_edit() {
+    use clash_client_core::wsl::Action as W;
+    ui_testing::initialize(950, 700);
+    let mut app = fixture(Page::Wsl);
+    let window = AppWindow::new().unwrap();
+    let data = window.global::<UiData>();
+    let mut models = ViewModels::default();
+    models.attach(&data);
+    let ticket = app
+        .wsl
+        .evidence
+        .begin(app.wsl.draft.request(W::Test, false))
+        .unwrap();
+    let _ = app.update(Message::Wsl(wsl::Event::Finished(
+        ticket,
+        Box::new(Ok(wsl_report(W::Test, u64::MAX))),
+        String::new(),
+    )));
+    app.present(&data, &mut models);
+    assert_eq!(data.get_page(), 10);
+    assert_eq!(data.get_wsl_generation(), u64::MAX.to_string().as_str());
+    assert_eq!(data.get_wsl_tunnel(), "已验证连接");
+    assert_eq!(data.get_wsl_exit(), "DE · IPv4 已验证");
+    assert_eq!(data.get_wsl_protection(), "blocked");
+    assert!(data.get_wsl_functional().starts_with("Blocked"));
+    assert_eq!(data.get_wsl_distributions().row_count(), 2);
+    assert_eq!(
+        data.get_wsl_distributions().row_data(1).unwrap().coverage,
+        "blocked"
+    );
+    assert_eq!(data.get_wsl_logs().row_data(0).unwrap(), "[redacted]");
+    let original = data.get_wsl_distributions();
+    app.present(&data, &mut models);
+    assert_eq!(original, data.get_wsl_distributions());
+
+    let _ = app.intent(Intent::WslInput, "backend", "WireGuard");
+    app.present(&data, &mut models);
+    assert_eq!(data.get_wsl_backend(), "WireGuard");
+    assert_eq!(data.get_wsl_distributions().row_count(), 0);
+    assert_eq!(data.get_wsl_checks().row_count(), 0);
+    assert_eq!(data.get_wsl_logs().row_count(), 0);
+    assert!(data.get_wsl_tunnel().starts_with("unknown"));
+    assert!(data.get_wsl_exit().starts_with("unknown"));
+    assert_eq!(data.get_wsl_protection(), "blocked");
+    assert_eq!(data.get_wsl_status(), "not_run");
+}
+
+#[test]
+fn wsl_busy_inputs_and_stale_callbacks_do_not_disturb_the_active_operation() {
+    use clash_client_core::wsl::Action as W;
+    let mut app = fixture(Page::Wsl);
+    let first = app
+        .wsl
+        .evidence
+        .begin(app.wsl.draft.request(W::Status, false))
+        .unwrap();
+    let original = app.wsl.draft.clone();
+    let _ = app.intent(Intent::WslInput, "profile-path", r"C:\Private\changed.json");
+    assert_eq!(app.wsl.draft, original);
+    let _ = app.update(Message::Wsl(wsl::Event::Finished(
+        first.clone(),
+        Box::new(Ok(wsl_report(W::Status, 10))),
+        String::new(),
+    )));
+    let current = app
+        .wsl
+        .evidence
+        .begin(app.wsl.draft.request(W::Status, false))
+        .unwrap();
+    let _ = app.update(Message::Wsl(wsl::Event::Finished(
+        first,
+        Box::new(Ok(wsl_report(W::Status, 9))),
+        "stale command".into(),
+    )));
+    assert!(app.wsl.evidence.busy());
+    assert!(app.wsl.evidence.report().is_none());
+    let _ = app.update(Message::Wsl(wsl::Event::Finished(
+        current,
+        Box::new(Ok(wsl_report(W::Status, 11))),
+        String::new(),
+    )));
+    assert!(!app.wsl.evidence.busy());
+    assert_eq!(app.wsl.evidence.service_generation(), Some(11));
+}
+
+#[test]
+fn wsl_restore_requires_a_separate_confirmation_and_cancel_keeps_policy_untouched() {
+    ui_testing::initialize(950, 700);
+    let mut app = fixture(Page::Wsl);
+    let window = AppWindow::new().unwrap();
+    let data = window.global::<UiData>();
+    let mut models = ViewModels::default();
+    models.attach(&data);
+    let _ = app.intent(Intent::Navigate, "10", "");
+    assert_eq!(app.page, Page::Wsl);
+    let _ = app.intent(Intent::WslAction, "Rollback", "restore-confirm");
+    assert!(matches!(
+        app.confirmation.as_ref().unwrap().pending,
+        desktop_view::Pending::WslRestore(_)
+    ));
+    assert!(!app.wsl.evidence.busy());
+    app.present(&data, &mut models);
+    assert!(data.get_modal_title().contains("撤销本轮保护"));
+    assert!(data.get_modal_danger());
+    let original = app.wsl.draft.clone();
+    let _ = app.intent(Intent::WslInput, "backend", "WireGuard");
+    assert_eq!(
+        app.wsl.draft, original,
+        "confirmation freezes its exact inputs"
+    );
+    let _ = app.intent(Intent::CancelConfirm, "", "");
+    assert!(app.confirmation.is_none());
+    assert!(!app.wsl.evidence.busy());
+}
+
+#[test]
+fn fork_rejects_official_update_discovery_and_installation_callbacks() {
+    let mut app = fixture(Page::Settings);
+    let _ = app.check_update();
+    assert!(!app.updates.checking);
+    assert!(app.updates.status.contains("定制版"));
+    let available = clash_of_rust::update::Available {
+        version: "99.0.0".into(),
+        url: clash_of_rust::update::RELEASES_URL.into(),
+        preview: false,
+        package: None,
+    };
+    let _ = app.update(Message::UpdateChecked(Ok(Some(available.clone()))));
+    assert!(app.updates.available.is_none());
+    app.updates.available = Some(available);
+    let _ = app.update(Message::InstallUpdate);
+    assert!(app.updates.available.is_none());
+    assert!(!app.updates.busy());
+}
+
+#[test]
+fn wsl_native_buttons_dispatch_preview_and_busy_state_keeps_navigation_available() {
+    ui_testing::initialize(950, 700);
+    let app = fixture(Page::Wsl);
+    let window = AppWindow::new().unwrap();
+    let data = window.global::<UiData>();
+    let mut models = ViewModels::default();
+    models.attach(&data);
+    app.present(&data, &mut models);
+    // Exercise the same Windows-only page on every CI renderer without running
+    // any helper. Only production callback values are recorded by this window.
+    data.set_wsl_supported(true);
+    let events = pointer_events(&window);
+    window.show().unwrap();
+    let _ = window.window().take_snapshot().unwrap();
+    let mut doctor_y = None;
+    // Text metrics vary across platforms; probe the small first-row region,
+    // not the full window, and never execute any recorded network intent.
+    for y in (144..216).step_by(8) {
+        events.borrow_mut().clear();
+        ui_testing::click(window.window(), 250.0, y as f32);
+        if events.borrow().iter().any(|(intent, action, mode)| {
+            *intent == Intent::WslAction && action == "Doctor" && mode == "preview"
+        }) {
+            doctor_y = Some(y as f32);
+            break;
+        }
+    }
+    let doctor_y = doctor_y.expect("native Doctor button must emit the read-only preview intent");
+    events.borrow_mut().clear();
+    data.set_wsl_busy(true);
+    let _ = window.window().take_snapshot().unwrap();
+    ui_testing::click(window.window(), 250.0, doctor_y);
+    assert!(
+        events.borrow().is_empty(),
+        "busy controls must suppress duplicate operations"
+    );
+    ui_testing::click(window.window(), 65.0, 156.0);
+    assert_eq!(events.borrow().last().unwrap().0, Intent::Navigate);
+    window.hide().unwrap();
+}
+
 #[test]
 fn rule_editor_round_trip_and_cancel_preserve_the_draft_through_ui_intents() {
     let mut app = fixture(Page::Rules);

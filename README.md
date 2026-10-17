@@ -13,6 +13,7 @@
 - **A÷检测**：采集 Claude 地区、DNS、WebRTC 与浏览器线索，扫描已记录项目配置并分类展示；可选一键保护，固定节点并启用 TUN、加密 DNS 与异常连接拦截，关闭后恢复原设置，详见 [检测说明](docs/claude-region-detection.md)。
 - **便捷使用**：托盘快捷切换节点，可选显示上传与下载速度；支持后台开机自启、单实例与网络诊断，记住普通窗口尺寸；内核启动失败时可直接重试。
 - **客户端更新**：仅检查正式版，自动选择代理并回退，支持下载进度与取消；校验完成后自动安装与重启，失败时显示原因。
+- **WSL Secure Egress（定制分支）**：原生管理页提供预检、安装、连接、状态、测试、回退和卸载。Windows 原有双栈网络不变；WSL 业务流量固定经德国 VPS 的 IPv4 WireGuard 出口，IPv6 与隧道故障保持失败关闭。Tailscale 严格冷启动边界未验证前保持 BLOCKED。实现状态、限制与恢复步骤见 [WSL Secure Egress](docs/wsl-secure-egress/README.md)。
 
 ## 安装与使用
 
@@ -62,7 +63,7 @@ Cargo workspace 分为共享业务（`crates/client-core`）、Slint 界面（`c
 python3 scripts/preview-slint.py --dialogs --pairs
 ```
 
-测试、内存基准与发布流程见 [工作流文档](docs/workflows.md)；平台验收与更新验证见 [macOS 测试清单](docs/macos-ci-checklist.md) 和 [更新测试说明](docs/automatic-update.md)。
+测试、内存基准与发布流程见 [工作流文档](docs/workflows.md)；平台验收与更新验证见 [macOS 测试清单](docs/macos-ci-checklist.md) 和 [更新测试说明](docs/automatic-update.md)。此 fork 禁用官方自动更新，避免上游包覆盖 WSL 策略资源；升级与回退见 [WSL 运维指南](docs/wsl-secure-egress/OPERATIONS.md)。
 
 ## License
 

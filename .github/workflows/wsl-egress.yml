@@ -1,0 +1,64 @@
+name: WSL Secure Egress
+on:
+  push:
+    branches: [feat/wsl-secure-egress]
+  pull_request:
+  workflow_dispatch:
+permissions:
+  contents: read
+concurrency:
+  group: wsl-egress-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+jobs:
+  linux:
+    name: Linux isolated data plane
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+      - name: Dependencies for disposable namespace tests
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y iproute2 nftables wireguard-tools bubblewrap util-linux libcap2-bin
+          sudo modprobe wireguard
+      - name: Syntax and profile/state tests
+        run: |
+          python3 -m compileall -q scripts/wsl-secure-egress
+          python3 -B scripts/wsl-secure-egress/tests/linux_static_test.py
+          python3 scripts/wsl-secure-egress/tests/server_unit.py
+          find scripts/wsl-secure-egress/linux -type f ! -name '*.py' -exec sh -n {} \;
+          if test -f scripts/wsl-secure-egress/tests/linux_unit.py; then
+            python3 scripts/wsl-secure-egress/tests/linux_unit.py
+          fi
+      - name: Actual namespace and controlled receiver tests
+        run: |
+          set -o pipefail
+          sudo env CI=true COR_EGRESS_ISOLATED_CI=1 python3 scripts/wsl-secure-egress/tests/linux_integration.py --execute-isolated | tee linux-wsl-egress-results.jsonl
+      - uses: actions/upload-artifact@v6
+        if: always()
+        with:
+          name: wsl-egress-linux-evidence
+          path: linux-wsl-egress-results.jsonl
+          if-no-files-found: warn
+  windows:
+    name: Windows offline and isolated WFP probe
+    runs-on: windows-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+      - name: Offline host policy tests
+        shell: powershell
+        run: ./scripts/wsl-secure-egress/tests/windows-unit.ps1
+      - name: Real WFP IPv4/IPv6 TCP/UDP loopback test
+        shell: powershell
+        run: ./scripts/wsl-secure-egress/tests/windows-wfp.ps1 -ExecuteIsolated | Out-File -Encoding utf8 windows-wsl-egress-results.json
+      - uses: actions/upload-artifact@v6
+        if: always()
+        with:
+          name: wsl-egress-windows-evidence
+          path: windows-wsl-egress-results.json
+          if-no-files-found: warn

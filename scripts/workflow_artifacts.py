@@ -13,7 +13,8 @@ import tarfile
 import tempfile
 import zipfile
 
-from build_support import (ROOT, bundle_directory, package_version, sha256,
+from build_support import (ROOT, WSL_EGRESS_LINUX, WSL_EGRESS_SERVER, WSL_EGRESS_TOP,
+                           bundle_directory, package_version, sha256,
                            stage_resources, validate_binary_arch, validate_resources, file_version,
                            write_json)
 
@@ -74,6 +75,10 @@ def export_build(system, arch, tests, output, binaries=None):
             source = (binaries or ROOT/'target/release')/(name+extension)
             validate_binary_arch(source, system, arch)
             shutil.copy2(source, payload/source.name)
+        if system == 'windows':
+            source = (binaries or ROOT/'target/release')/'clash-wsl-guardian.exe'
+            validate_binary_arch(source, system, arch)
+            shutil.copy2(source, payload/source.name)
         paths = {}
         for name, source in tests.items():
             if name not in TEST_NAMES:
@@ -88,7 +93,7 @@ def export_build(system, arch, tests, output, binaries=None):
             if path.is_file():
                 relative = path.relative_to(root).as_posix()
                 executable = relative.startswith('tests/') or path.name in {
-                    'clash-of-rust'+extension, 'clash-tun-launcher'+extension, 'mihomo'+extension}
+                    'clash-of-rust'+extension, 'clash-tun-launcher'+extension, 'clash-wsl-guardian.exe', 'mihomo'+extension}
                 records[relative] = {'sha256': sha256(path), 'size': path.stat().st_size,
                                      'executable': executable}
         manifest = {'schema': BUILD_SCHEMA, 'commit': commit(), 'version': package_version(),
@@ -128,6 +133,14 @@ def verify_build(root, system, arch, expected_commit):
                 *(f'payload/resources/{name}' for name in ('GeoIP.dat', 'GeoSite.dat', 'Country.mmdb', 'ASN.mmdb'))}
     if not required <= records.keys():
         raise ValueError('Build manifest omits a required native payload file')
+    if system == 'windows' and 'payload/clash-wsl-guardian.exe' not in records:
+        raise ValueError('Build manifest omits the WSL guardian')
+    if system == 'windows':
+        required_wsl = {'payload/resources/wsl-secure-egress/'+name for name in WSL_EGRESS_TOP}
+        required_wsl |= {'payload/resources/wsl-secure-egress/linux/'+name for name in WSL_EGRESS_LINUX}
+        required_wsl |= {'payload/resources/wsl-secure-egress/server/'+name for name in WSL_EGRESS_SERVER}
+        if not required_wsl <= records.keys():
+            raise ValueError('Build manifest omits a WSL secure egress resource')
     actual = {path.relative_to(root).as_posix() for path in root.rglob('*') if path.is_file()}
     if actual != set(records) | {'manifest.json', 'source-artifact.json'} and actual != set(records) | {'manifest.json'}:
         raise ValueError('Build payload contains missing or unexpected files')
@@ -147,6 +160,8 @@ def verify_build(root, system, arch, expected_commit):
     payload = root/'payload'
     for name in ('clash-of-rust', 'clash-tun-launcher'):
         validate_binary_arch(payload/(name+extension), system, arch)
+    if system == 'windows':
+        validate_binary_arch(payload/'clash-wsl-guardian.exe', system, arch)
     validate_binary_arch(payload/'resources'/('mihomo'+extension), system, arch)
     validate_resources(payload/'resources', system)
     if system == 'windows' and file_version(payload/'clash-of-rust.exe') != manifest['version']:

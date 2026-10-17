@@ -1,0 +1,7 @@
+#!/bin/sh
+# Fixed, root-owned entry point. Never use the caller's Python module path.
+set -eu
+PATH=/usr/sbin:/usr/bin:/sbin:/bin
+export PATH
+unset PYTHONPATH PYTHONHOME PYTHONSTARTUP LD_PRELOAD LD_LIBRARY_PATH
+exec /usr/bin/python3 -I /usr/local/lib/cor-egress/manager.py "$@"

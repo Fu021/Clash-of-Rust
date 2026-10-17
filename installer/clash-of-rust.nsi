@@ -213,6 +213,28 @@ FunctionEnd
 
 Function RemoveExisting
   ${If} $ExistingDir != ""
+      ; A guarded WSL installation cannot run its uninstaller: that path
+      ; intentionally refuses to remove recovery resources. Preserve its
+      ; journal and payload, replace only the application-owned files, and
+      ; retain the service/recovery tooling until an explicit rollback.
+      IfFileExists "$ExistingDir\resources\wsl-secure-egress\Uninstall-Check.ps1" 0 remove_ordinary
+      ExecWait '"$SYSDIR\WindowsPowerShell\v1.0\powershell.exe" -NoLogo -NoProfile -NonInteractive -File "$ExistingDir\resources\wsl-secure-egress\Uninstall-Check.ps1"' $0
+      ${If} $0 != 0
+        MessageBox MB_OK|MB_ICONSTOP "WSL 安全网络恢复状态未知。保留现有安装和恢复资料，未开始升级。"
+        SetErrorLevel 5
+        Abort
+      ${EndIf}
+      ${If} $0 == 0
+        ClearErrors
+        Rename "$ExistingDir\clash-of-rust.exe" "$ExistingDir\clash-of-rust.replace-backup.exe"
+        IfErrors uninstall_failed
+        Rename "$ExistingDir\clash-tun-launcher.exe" "$ExistingDir\clash-tun-launcher.replace-backup.exe"
+        IfErrors uninstall_failed
+        Rename "$ExistingDir\clash-wsl-guardian.exe" "$ExistingDir\clash-wsl-guardian.replace-backup.exe"
+        IfErrors uninstall_failed
+        Goto removal_done
+      ${EndIf}
+      remove_ordinary:
       IfFileExists "$ExistingDir\uninstall.exe" 0 uninstall_failed
       ClearErrors
       ExecWait '"$ExistingDir\uninstall.exe" /S _?=$ExistingDir' $ResultCode
@@ -261,6 +283,7 @@ Section "Clash of Rust" MainSection
   SetOutPath "$INSTDIR"
   File "${PAYLOAD}\clash-of-rust.exe"
   File "${PAYLOAD}\clash-tun-launcher.exe"
+  File "${PAYLOAD}\clash-wsl-guardian.exe"
   File "${PAYLOAD}\LICENSE"
   SetOutPath "$INSTDIR\resources"
   File /oname=clash-of-rust-${APP_VERSION}.ico "${__FILEDIR__}\..\resources\icons\app.ico"
@@ -274,6 +297,9 @@ Section "Clash of Rust" MainSection
   File "${PAYLOAD}\resources\default.yaml"
   File "${PAYLOAD}\resources\settings-defaults.json"
   File "${PAYLOAD}\resources\THIRD-PARTY-NOTICES.txt"
+  SetOutPath "$INSTDIR\resources\wsl-secure-egress"
+  File /r "${PAYLOAD}\resources\wsl-secure-egress\*"
+  SetOutPath "$INSTDIR\resources"
   File /oname=SourceHanSans-LICENSE.txt "${__FILEDIR__}\..\resources\fonts\LICENSE.txt"
   File /oname=Twemoji-LICENSE.txt "${__FILEDIR__}\..\resources\flags\LICENSE-Twemoji.txt"
   File /oname=Unicode-LICENSE.txt "${__FILEDIR__}\..\resources\flags\LICENSE-Unicode.txt"
@@ -416,6 +442,15 @@ Section "Uninstall"
     SetShellVarContext all
   ; Always check again: the app could have started while the wizard was open.
   !insertmacro CheckRunning unsection_
+  ; An active WSL guard must retain its audited runtime and offline recovery.
+  IfFileExists "$INSTDIR\resources\wsl-secure-egress\Uninstall-Check.ps1" 0 wsl_guard_removed
+    ExecWait '"$SYSDIR\WindowsPowerShell\v1.0\powershell.exe" -NoLogo -NoProfile -NonInteractive -File "$INSTDIR\resources\wsl-secure-egress\Uninstall-Check.ps1" -Execute' $0
+    ${If} $0 != 0
+      MessageBox MB_OK|MB_ICONSTOP "WSL 安全网络仍受保护或恢复状态未知。请先使用其定向回滚恢复原网络，再卸载；不会删除防护或 WSL/Docker 数据。"
+      SetErrorLevel 7
+      Abort
+    ${EndIf}
+  wsl_guard_removed:
   ; Delete only files owned by this package. Data deletion requires opt-in.
   IfFileExists "$INSTDIR\clash-tun-launcher.exe" 0 service_removed
     ExecWait '"$INSTDIR\clash-tun-launcher.exe" --windows-service-uninstall' $0
@@ -439,6 +474,8 @@ Section "Uninstall"
   IfErrors uninstall_locked
   Delete "$INSTDIR\clash-tun-launcher.exe"
   IfErrors uninstall_locked
+  Delete "$INSTDIR\clash-wsl-guardian.exe"
+  IfErrors uninstall_locked
   Delete "$INSTDIR\resources\mihomo.exe"
   IfErrors uninstall_locked
   Delete "$INSTDIR\resources\GeoIP.dat"
@@ -454,6 +491,7 @@ Section "Uninstall"
   Delete "$INSTDIR\resources\Twemoji-LICENSE.txt"
   Delete "$INSTDIR\resources\Unicode-LICENSE.txt"
   RMDir /r "$INSTDIR\resources\ip-check"
+  RMDir /r "$INSTDIR\resources\wsl-secure-egress"
   Delete "$INSTDIR\resources\clash-of-rust-*.ico"
   RMDir "$INSTDIR\resources"
   Delete "$INSTDIR\LICENSE"

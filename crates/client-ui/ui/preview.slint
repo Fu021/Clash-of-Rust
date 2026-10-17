@@ -13,6 +13,9 @@ export component Preview inherits AppWindow {
     in-out property <int> dialog;
     in-out property <bool> shortcuts-open <=> UiData.shortcuts-open;
     in-out property <bool> raw-rule <=> UiData.rule-text-mode;
+    in-out property <bool> preview-wsl-supported <=> UiData.wsl-supported;
+    in-out property <bool> preview-wsl-busy <=> UiData.wsl-busy;
+    in-out property <string> preview-wsl-admin-command <=> UiData.wsl-admin-command;
     changed dialog => {
         UiData.modal = root.dialog == 1 || root.dialog == 2 ? 1 : root.dialog == 3 ? 7 : root.dialog == 5 ? 2 : root.dialog == 6 ? 11 : root.dialog == 10 ? 12 : root.dialog == 11 ? 10 : root.dialog;
         UiData.modal-can-accept = true;
@@ -96,5 +99,28 @@ export component Preview inherits AppWindow {
         UiData.window-width = "950"; UiData.window-height = "700"; UiData.interval = "0";
         UiData.geo-status = "2026-10-15"; UiData.update-status = "已是最新版本";
         UiData.edit-name = "我的订阅"; UiData.edit-source = "https://example.com/subscription";
+        // WSL fixtures are deliberately incomplete; no live helper or network is used.
+        UiData.wsl-supported = true;
+        UiData.wsl-backend = "Tailscale";
+        UiData.wsl-endpoint-ipv4 = "203.0.113.42";
+        UiData.wsl-endpoint-port = "51820";
+        UiData.wsl-distro = "COR-Egress";
+        UiData.wsl-profile-path = "C:\\Private\\egress-profile.json";
+        UiData.wsl-status = "blocked";
+        UiData.wsl-protection = "blocked";
+        UiData.wsl-tunnel = "connected · 演示";
+        UiData.wsl-exit = "DE IPv4 · 演示";
+        UiData.wsl-functional = "NOT_RUN";
+        UiData.wsl-generation = "1792195200000";
+        UiData.wsl-phase = "strict-coverage";
+        UiData.wsl-message = "固定演示数据：隧道与出口已有线索，但全 WSL 冷启动保护未证明，保持 Blocked。";
+        UiData.wsl-distributions = [
+            {name: "COR-Egress", state: "Running", coverage: "managed · 演示"},
+            {name: "Ubuntu", state: "Stopped", coverage: "unknown · 冷启动待验证"},
+            {name: "docker-desktop", state: "Stopped", coverage: "blocked · 未适配，功能 NOT_RUN"}];
+        UiData.wsl-checks = [
+            {label: "strict-cold-start · NOT_RUN", value: "未证明所有发行版启动前隔离，不能验收保护。"},
+            {label: "docker-desktop · NOT_RUN", value: "独立适配前封闭外网；保留镜像、卷和发行版数据。"}];
+        UiData.wsl-logs = ["[演示] Doctor 已完成只读盘点。", "[演示] strict 冷启动证据缺失，功能未验收。"];
     }
 }

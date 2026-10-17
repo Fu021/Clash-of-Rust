@@ -329,6 +329,36 @@ class BuildTests(unittest.TestCase):
             redirected = build.SafeRedirect().redirect_request(source,None,302,'Found',{},destination)
             self.assertIsNone(redirected.get_header('Authorization'))
 
+    def test_wsl_egress_resource_allowlist_rejects_missing_and_extra_files(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            resources = root/'resources'
+            wsl = resources/'wsl-secure-egress'
+            wsl.mkdir(parents=True)
+            for name in build.WSL_EGRESS_TOP:
+                (wsl/name).write_text('fixture '+name)
+            for folder, names in (('linux', build.WSL_EGRESS_LINUX),
+                                  ('server', build.WSL_EGRESS_SERVER)):
+                (wsl/folder).mkdir()
+                for name in names:
+                    (wsl/folder/name).write_text('fixture '+name)
+            (resources/'mihomo.exe').write_bytes(b'core')
+            build.write_json(resources/'core.json', {'exe_sha256': build.sha256(resources/'mihomo.exe')})
+            geo = []
+            for name in build.GEO_NAMES:
+                (resources/name).write_text('fixture '+name)
+                geo.append({'name': name, 'sha256': build.sha256(resources/name),
+                            'size': (resources/name).stat().st_size})
+            build.write_json(resources/'geodata.json', {'files': geo})
+            build.validate_resources(resources, 'windows')
+            (wsl/'injected.txt').write_text('unexpected')
+            with self.assertRaisesRegex(ValueError, 'resource set'):
+                build.validate_resources(resources, 'windows')
+            (wsl/'injected.txt').unlink()
+            (wsl/'server/manage.py').unlink()
+            with self.assertRaisesRegex(ValueError, 'resource set'):
+                build.validate_resources(resources, 'windows')
+
     def resources(self,source):
         source.mkdir()
         (source/'mihomo.exe').write_bytes(b'core')
@@ -339,6 +369,15 @@ class BuildTests(unittest.TestCase):
             path.write_bytes(name.encode())
             records.append({'name':name,'size':path.stat().st_size,'sha256':build.sha256(path)})
         build.write_json(source/'geodata.json',{'files':records})
+        wsl = source/'wsl-secure-egress'
+        wsl.mkdir()
+        for name in build.WSL_EGRESS_TOP:
+            (wsl/name).write_bytes(('fixture '+name).encode())
+        for folder, names in (('linux', build.WSL_EGRESS_LINUX),
+                              ('server', build.WSL_EGRESS_SERVER)):
+            (wsl/folder).mkdir()
+            for name in names:
+                (wsl/folder/name).write_bytes(('fixture '+name).encode())
 
     def test_staging_excludes_old_runtime_and_checks_all_payload_hashes(self):
         with tempfile.TemporaryDirectory() as folder:

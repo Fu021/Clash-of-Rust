@@ -10,6 +10,10 @@ license.workspace = true
 name = "clash-tun-launcher"
 path = "src/tun_launcher.rs"
 
+[[bin]]
+name = "clash-wsl-guardian"
+path = "src/wsl_guardian.rs"
+
 [dependencies]
 clash-client-core = { path = "../../crates/client-core" }
 clash-client-ui = { path = "../../crates/client-ui" }

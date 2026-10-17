@@ -77,6 +77,8 @@ pub struct Settings {
     pub udp: bool,
     pub claude_protection: Option<std::sync::Arc<crate::claude_check::protection::Protection>>,
     pub ip_reputation_key: Option<String>,
+    #[serde(default)]
+    pub wsl: crate::wsl::WslSettings,
     pub delay_interval_minutes: u32,
     pub active_profile: Option<String>,
     pub run_mode: String,
@@ -114,6 +116,7 @@ impl Default for Settings {
             udp: true,
             claude_protection: None,
             ip_reputation_key: None,
+            wsl: crate::wsl::WslSettings::default(),
             delay_interval_minutes: 5,
             active_profile: None,
             run_mode: "rule".into(),
@@ -127,6 +130,7 @@ impl Default for Settings {
 
 impl Settings {
     pub fn validate(&self) -> Result<()> {
+        self.wsl.validate()?;
         if !(80..=150).contains(&self.text_scale) {
             bail!("字号比例应为 80–150%");
         }

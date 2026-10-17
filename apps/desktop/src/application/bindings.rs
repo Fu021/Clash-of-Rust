@@ -396,6 +396,8 @@ impl App {
         use rules_view::Event as R;
         let boolean = |value: &str| value == "true";
         let message = match intent {
+            Intent::WslInput => Message::Wsl(wsl::Event::Input(a.into(), b.into())),
+            Intent::WslAction => Message::Wsl(wsl::Event::Action(a.into(), b.into())),
             Intent::PickFile => {
                 if !boolean(a) {
                     self.import_open = true;

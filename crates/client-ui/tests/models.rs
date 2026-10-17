@@ -2,6 +2,8 @@
 use clash_client_ui::{models::ViewModels, *};
 use slint::Model;
 
+mod wsl;
+
 #[test]
 fn refresh_retains_nested_models_and_releases_removed_groups() {
     let mut models = ViewModels::default();

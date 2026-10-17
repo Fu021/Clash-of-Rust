@@ -19,6 +19,11 @@ import tomllib
 ROOT = Path(__file__).resolve().parent.parent
 RESOURCE_NAMES = ('default.yaml', 'settings-defaults.json', 'THIRD-PARTY-NOTICES.txt')
 GEO_NAMES = ('GeoIP.dat', 'GeoSite.dat', 'Country.mmdb', 'ASN.mmdb')
+WSL_EGRESS_TOP = ('DockerEgressGuard.cs', 'Guardian-Audit.ps1', 'Uninstall-Check.ps1',
+                  'Manage-WslSecureEgress.ps1', 'WslSecureEgress.psm1')
+WSL_EGRESS_LINUX = ('CONTRACT.md', 'cor-egress-manager', 'install-payload.py',
+                    'manager', 'manager.py', 'secure-egress')
+WSL_EGRESS_SERVER = ('cor-wsl-egress.service', 'manage.py')
 
 
 def run(args, **kwargs):
@@ -233,6 +238,17 @@ def copy_static(bundle):
     ip.mkdir(exist_ok=True)
     for name in ('LICENSE', 'SOURCE.md'):
         shutil.copy2(ROOT/'resources/ip-check'/name, ip/name)
+    # Ship only reviewed runtime resources, never local profiles, snapshots,
+    # caches or CI fixtures. Manifest export hashes every shipped byte.
+    source = ROOT/'scripts/wsl-secure-egress'
+    destination = resources/'wsl-secure-egress'
+    destination.mkdir(parents=True, exist_ok=True)
+    for name in WSL_EGRESS_TOP:
+        shutil.copy2(source/name, destination/name)
+    for directory, names in (('linux', WSL_EGRESS_LINUX), ('server', WSL_EGRESS_SERVER)):
+        (destination/directory).mkdir()
+        for name in names:
+            shutil.copy2(source/directory/name, destination/directory/name)
 
 
 def validate_resources(resources, system):
@@ -247,6 +263,14 @@ def validate_resources(resources, system):
         path = resources/record['name']
         if path.stat().st_size != record['size'] or sha256(path) != record['sha256']:
             raise ValueError('Geo checksum mismatch: '+path.name)
+    wsl = resources/'wsl-secure-egress'
+    if wsl.exists():
+        expected = set(WSL_EGRESS_TOP)
+        expected |= {'linux/'+name for name in WSL_EGRESS_LINUX}
+        expected |= {'server/'+name for name in WSL_EGRESS_SERVER}
+        actual = {path.relative_to(wsl).as_posix() for path in wsl.rglob('*') if path.is_file()}
+        if actual != expected or any(path.is_symlink() for path in wsl.rglob('*')):
+            raise ValueError('WSL secure egress resource set differs from its allowlist')
 
 
 def stage_resources(source, stage, system):

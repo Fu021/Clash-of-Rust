@@ -140,6 +140,7 @@ def main():
             stage_linux_helpers(binary,stage,args.arch)
         if args.system == 'windows':
             shutil.copy2(binary.with_name('clash-tun-launcher.exe'), stage/'clash-tun-launcher.exe')
+            shutil.copy2(binary.with_name('clash-wsl-guardian.exe'), stage/'clash-wsl-guardian.exe')
             artifact = ROOT/f'dist/Clash-of-Rust-{version}-windows-{args.arch}-setup.exe'
             run([nsis(args.proxy),'/V2','/INPUTCHARSET','UTF8',f'/DAPP_VERSION={version}',f'/DAPP_NUMERIC_VERSION={numeric_version(version)}',f'/DAPP_ARCH={args.arch}',f'/DPAYLOAD={stage}',f'/DOUTPUT={artifact}',ROOT/'installer/clash-of-rust.nsi'])
             if file_version(artifact) != version:

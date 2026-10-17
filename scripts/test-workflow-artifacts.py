@@ -58,6 +58,15 @@ class ArtifactTests(unittest.TestCase):
             path.write_text('fixture '+name)
             geo.append({'name': name, 'sha256': build.sha256(path), 'size': path.stat().st_size})
         build.write_json(resources/'geodata.json', {'files': geo})
+        wsl = resources/'wsl-secure-egress'
+        wsl.mkdir()
+        for name in build.WSL_EGRESS_TOP:
+            (wsl/name).write_text('fixture '+name)
+        for folder, names in (('linux', build.WSL_EGRESS_LINUX),
+                              ('server', build.WSL_EGRESS_SERVER)):
+            (wsl/folder).mkdir()
+            for name in names:
+                (wsl/folder/name).write_text('fixture '+name)
         tests = {}
         for name in ('core_integration',):
             path = root/'input/tests'/name

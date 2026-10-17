@@ -5,6 +5,7 @@ pub(crate) enum Pending {
     CloseProfile,
     CloseImport,
     Rules(rules_view::Event),
+    WslRestore(clash_client_core::wsl::WslSettings),
     Exit,
 }
 
@@ -182,6 +183,9 @@ impl App {
                         none()
                     }
                     Some(Pending::Rules(event)) => self.update_rules(event),
+                    Some(Pending::WslRestore(draft)) => {
+                        self.wsl_event(wsl::Event::RestoreConfirmed(draft))
+                    }
                     Some(Pending::Exit) => self.exit(),
                     None => none(),
                 }

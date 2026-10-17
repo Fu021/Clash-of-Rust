@@ -23,9 +23,11 @@ export enum Intent {
     reset-window, interval-input, save-interval, update-geo,
     check-update, install-update, cancel-update, open-release,
     confirm, cancel-confirm, close-detail, copy, escape, focus-search, quit,
+    wsl-action, wsl-input,
 }
 export struct Choice { id: string, label: string }
 export struct DetailItem { label: string, value: string }
+export struct WslDistributionItem { name: string, state: string, coverage: string }
 export struct NodeItem { group: string, name: string, kind: string, delay: string, selected: bool, valid: bool }
 export struct NodePair { left: NodeItem, right: NodeItem }
 export struct GroupItem { id: string, title: string, detail: string, current: string, expanded: bool, testing: bool, page: string, previous: bool, next: bool, nodes: [NodePair] }
@@ -40,6 +42,28 @@ export struct CategoryPair { left: CategoryItem, right: CategoryItem }
 
 export global UiActions { callback dispatch(Intent, string, string); }
 export global UiData {
+    // Windows-only helper projections. Generation is decimal u64, never a Slint int/float.
+    in-out property <bool> wsl-supported: false;
+    in-out property <bool> wsl-busy: false;
+    in-out property <string> wsl-backend: "Tailscale";
+    in-out property <string> wsl-endpoint-ipv4;
+    in-out property <string> wsl-endpoint-port;
+    in-out property <string> wsl-distro;
+    // A private JSON path only; the UI never reads or renders its contents.
+    in-out property <string> wsl-profile-path;
+    // Validated, absolute administrator command supplied by desktop; never executed here.
+    in-out property <string> wsl-admin-command;
+    in-out property <string> wsl-status: "not_run";
+    in-out property <string> wsl-protection: "unknown";
+    in-out property <string> wsl-tunnel: "unknown";
+    in-out property <string> wsl-exit: "unknown";
+    in-out property <string> wsl-functional: "not_run";
+    in-out property <string> wsl-generation: "0";
+    in-out property <string> wsl-phase: "idle";
+    in-out property <string> wsl-message: "尚未检查；不代表已建立保护。";
+    in-out property <[WslDistributionItem]> wsl-distributions;
+    in-out property <[DetailItem]> wsl-checks;
+    in-out property <[string]> wsl-logs;
     in-out property <int> accent;
     in-out property <[DetailItem]> connection-details;
     in-out property <string> modal-copy;

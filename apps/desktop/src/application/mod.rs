@@ -20,6 +20,7 @@ mod ui_testing;
 #[cfg(test)]
 mod ui_tests;
 mod window_state;
+mod wsl;
 use clash_of_rust::{
     config::{AccentColor, Profile, Settings, Store, ThemeMode},
     connection::{self, Field as ConnectionField, Sort as ConnectionSort},
@@ -100,10 +101,11 @@ enum Page {
     Websites,
     Claude,
     Settings,
+    Wsl,
 }
 
 impl Page {
-    const ALL: [Self; 10] = [
+    const ALL: [Self; 11] = [
         Self::Home,
         Self::Proxies,
         Self::Profiles,
@@ -114,6 +116,7 @@ impl Page {
         Self::Websites,
         Self::Claude,
         Self::Settings,
+        Self::Wsl,
     ];
     fn scope(self) -> Scope {
         match self {
@@ -171,6 +174,7 @@ enum Message {
     #[cfg(target_os = "macos")]
     FilePickStarted(bool, FilePickSession),
     Claude(claude_view::Event),
+    Wsl(wsl::Event),
     RestartCore,
     CoreReady(Result<CoreHandle, String>),
     DismissNotice,
@@ -279,6 +283,7 @@ struct App {
     settings: Settings,
     rule_state: rules_view::State,
     claude: claude_view::State,
+    wsl: wsl::State,
     profiles: Vec<Profile>,
     snapshot: Snapshot,
     busy: bool,
@@ -436,6 +441,7 @@ impl App {
             system_dark: settings.dark,
             rule_state: rules_view::State::default(),
             claude: claude_view::State::default(),
+            wsl: wsl::State::new(settings.wsl.clone()),
             node_sort: settings.node_sort,
             controller_port: settings.controller_port.to_string(),
             interval_input: settings.delay_interval_minutes.to_string(),
@@ -508,6 +514,7 @@ impl App {
             test_results: vec![],
             updates: update::State::default(),
         };
+        app.updates.status = update::FORK_UPDATE_NOTICE.into();
         if let Some((message, error)) = update::startup_outcome() {
             if error {
                 app.updates.failure = Some(message);
@@ -528,6 +535,12 @@ impl App {
     }
 
     fn check_update(&mut self) -> Task<Message> {
+        if !update::SELF_UPDATE_ENABLED {
+            self.updates.checking = false;
+            self.updates.available = None;
+            self.updates.status = update::FORK_UPDATE_NOTICE.into();
+            return Task::none();
+        }
         if self.exiting || !self.updates.begin() {
             return Task::none();
         }
@@ -668,6 +681,7 @@ impl App {
             #[cfg(target_os = "macos")]
             Message::FilePickStarted(..) => {}
             Message::Claude(event) => return self.claude_event(event),
+            Message::Wsl(event) => return self.wsl_event(event),
             #[cfg(target_os = "macos")]
             Message::MacTrayPumped(result) => match result {
                 Ok(events) => {
@@ -749,6 +763,9 @@ impl App {
                         // initialized engine has no running process yet.
                         if let Ok(engine) = engine.try_lock() {
                             self.settings = engine.settings.clone();
+                            // Loading the ordinary core must not discard an
+                            // independent WSL operation or a user's new draft.
+                            self.wsl.load_preferences(self.settings.wsl.clone());
                             self.rule_state = rules_view::State::default();
                             self.profiles = engine.profiles.clone();
                             self.geo_status = engine.geo_manifest.version.clone();
@@ -768,8 +785,17 @@ impl App {
                 }
             }
             Message::CheckUpdate => return self.check_update(),
-            Message::UpdateChecked(result) => self.updates.finish(result),
+            Message::UpdateChecked(result) => {
+                if update::SELF_UPDATE_ENABLED {
+                    self.updates.finish(result);
+                }
+            }
             Message::InstallUpdate => {
+                if !update::SELF_UPDATE_ENABLED {
+                    self.updates.available = None;
+                    self.updates.status = update::FORK_UPDATE_NOTICE.into();
+                    return Task::none();
+                }
                 if self.exiting || self.updates.busy() || self.updates.checking {
                     return Task::none();
                 }
@@ -1836,6 +1862,11 @@ impl App {
     }
 
     fn install_download(&mut self, downloaded: Arc<update::Downloaded>) -> Task<Message> {
+        if !update::SELF_UPDATE_ENABLED {
+            self.updates.available = None;
+            self.updates.status = update::FORK_UPDATE_NOTICE.into();
+            return Task::none();
+        }
         self.updates.prepare_install(downloaded.clone());
         Task::perform(
             async move {

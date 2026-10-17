@@ -218,6 +218,7 @@ export component AccentChoice inherits Rectangle {
 
 export component Field inherits Rectangle {
     in property <bool> modal-control: false;
+    in property <bool> enabled: true;
     in property <string> placeholder;
     in-out property <string> text;
     in property <bool> secret: false;
@@ -227,7 +228,7 @@ export component Field inherits Rectangle {
     callback accepted();
     forward-focus: input;
     changed focus-revision => {
-        if root.focus-id != "" && UiData.focus-target == root.focus-id { input.focus(); }
+        if root.enabled && root.focus-id != "" && UiData.focus-target == root.focus-id { input.focus(); }
     }
     height: Theme.control-height;
     min-width: 100px;
@@ -241,7 +242,7 @@ export component Field inherits Rectangle {
         width: parent.width - 24px;
         height: self.preferred-height;
         text <=> root.text;
-        enabled: UiData.modal == 0 || root.modal-control;
+        enabled: root.enabled && (UiData.modal == 0 || root.modal-control);
         single-line: true;
         input-type: root.secret ? InputType.password : InputType.text;
         font-size: Theme.body-size;

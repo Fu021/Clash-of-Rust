@@ -526,14 +526,19 @@ impl App {
         text!(
             get_update_status,
             set_update_status,
-            self.updates
-                .failure
-                .as_deref()
-                .or(self.updates.outcome.as_deref())
-                .or(self.updates.install_stage.as_deref())
-                .unwrap_or(&self.updates.status)
+            if !update::SELF_UPDATE_ENABLED {
+                update::FORK_UPDATE_NOTICE
+            } else {
+                self.updates
+                    .failure
+                    .as_deref()
+                    .or(self.updates.outcome.as_deref())
+                    .or(self.updates.install_stage.as_deref())
+                    .unwrap_or(&self.updates.status)
+            }
         );
         data.set_network_results(strings(data.get_network_results(), &self.test_results));
+        self.present_wsl(data, models);
         if !self.visible {
             models.clear();
             return;
