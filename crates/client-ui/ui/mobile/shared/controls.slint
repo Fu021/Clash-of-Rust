@@ -190,8 +190,8 @@ export component MSelect inherits Rectangle {
     in property <[string]> options;
     in property <string> value;
     callback selected(int, string);
-    height: max(48px, MobileTypography.font-size(16) + 24px); vertical-stretch: 0; min-width: 0px;
-    MButton { width: parent.width; text: root.value; dropdown: true; clicked => { popup.show(); } }
+    height: button.height; vertical-stretch: 0; min-width: 0px;
+    button := MButton { width: parent.width; text: root.value; dropdown: true; clicked => { popup.show(); } }
     popup := PopupWindow {
         y: root.height + 4px; width: max(root.width, 200px);
         height: min(300px, root.options.length * 52px + 16px);

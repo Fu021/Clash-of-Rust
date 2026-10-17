@@ -382,7 +382,7 @@ impl App {
                 Task::perform(
                     async {
                         if let Err(error) = platform::notification::initialize().await {
-                            log::info!("系统通知授权未开启：{error:#}");
+                            eprintln!("系统通知授权未开启：{error:#}");
                         }
                     },
                     |_| Message::Tick,

@@ -2258,7 +2258,6 @@ fn apply(ui: &AndroidWindow, p: Projection) {
                             .into(),
                         previous: page > 0,
                         next: (page + 1) * 48 < count,
-                        ..Default::default()
                     }
                 })
                 .collect(),

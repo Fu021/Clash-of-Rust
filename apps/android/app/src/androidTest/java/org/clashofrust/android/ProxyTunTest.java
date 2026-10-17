@@ -361,26 +361,46 @@ public class ProxyTunTest {
         assertTrue("Previous test must leave a persisted config",CoreBridge.restorable(context));
         assertNull("First-use test must already grant real VPN consent",VpnService.prepare(context));
         assertFalse(inStage(androidx.test.runner.lifecycle.Stage.RESUMED,false));
-        shell("cmd statusbar add-tile org.clashofrust.android/.VpnTileService");
-        shell("cmd statusbar click-tile org.clashofrust.android/.VpnTileService");
-        await("Cold quick tile did not connect",()-> {
-            if (!TunnelService.error().isEmpty()) throw new IOException(TunnelService.error());
-            return TunnelService.connected();
-        });
-        assertTrue(CoreBridge.ready());
-        shell("cmd statusbar expand-settings");
-        await("Quick tile did not display its connected state",()->tileState()==android.service.quicksettings.Tile.STATE_ACTIVE);
-        assertFalse("Quick tile opened the Activity",inStage(androidx.test.runner.lifecycle.Stage.RESUMED,false));
-        assertFalse(inStage(androidx.test.runner.lifecycle.Stage.STARTED,false));
-        assertFalse(inStage(androidx.test.runner.lifecycle.Stage.CREATED,false));
-        String raw=CoreBridge.config();
-        tunCarriesSocket(value(raw,"external-controller"),value(raw,"secret"));
-        shell("cmd statusbar click-tile org.clashofrust.android/.VpnTileService");
-        await("Cold tile did not disconnect",()->!TunnelService.connected());
-        await("Quick tile remained visually enabled after disconnect",()->tileState()==android.service.quicksettings.Tile.STATE_INACTIVE);
-        shell("cmd statusbar collapse");
-        noTunRoute();
-        assertFalse(inStage(androidx.test.runner.lifecycle.Stage.RESUMED,false));
+        String previousTiles=android.provider.Settings.Secure.getString(context.getContentResolver(),"sysui_qs_tiles");
+        try {
+            // A tile appended after the emulator's defaults may be off-screen.
+            // Make it visible so this verifies the real, listening System UI tile.
+            quickTiles(context,"custom(org.clashofrust.android/.VpnTileService),internet,bt");
+            shell("cmd statusbar add-tile org.clashofrust.android/.VpnTileService");
+            shell("cmd statusbar click-tile org.clashofrust.android/.VpnTileService");
+            await("Cold quick tile did not connect",()-> {
+                if (!TunnelService.error().isEmpty()) throw new IOException(TunnelService.error());
+                return TunnelService.connected();
+            });
+            assertTrue(CoreBridge.ready());
+            shell("cmd statusbar expand-settings");
+            await("Quick tile did not display its connected state",()->tileState()==android.service.quicksettings.Tile.STATE_ACTIVE);
+            assertFalse("Quick tile opened the Activity",inStage(androidx.test.runner.lifecycle.Stage.RESUMED,false));
+            assertFalse(inStage(androidx.test.runner.lifecycle.Stage.STARTED,false));
+            assertFalse(inStage(androidx.test.runner.lifecycle.Stage.CREATED,false));
+            String raw=CoreBridge.config();
+            tunCarriesSocket(value(raw,"external-controller"),value(raw,"secret"));
+            shell("cmd statusbar click-tile org.clashofrust.android/.VpnTileService");
+            await("Cold tile did not disconnect",()->!TunnelService.connected());
+            await("Quick tile remained visually enabled after disconnect",()->tileState()==android.service.quicksettings.Tile.STATE_INACTIVE);
+            noTunRoute();
+            assertFalse(inStage(androidx.test.runner.lifecycle.Stage.RESUMED,false));
+        } finally {
+            try { shell("cmd statusbar collapse"); }
+            finally {
+                try { quickTiles(context,previousTiles); }
+                finally { TunnelService.stop(context); }
+            }
+        }
+    }
+    private static void quickTiles(Context context,String value) {
+        if (Build.VERSION.SDK_INT<29) throw new AssertionError("Tile UI regression requires Android 10+");
+        android.app.UiAutomation automation=InstrumentationRegistry.getInstrumentation().getUiAutomation();
+        automation.adoptShellPermissionIdentity("android.permission.WRITE_SECURE_SETTINGS");
+        try {
+            assertTrue("Cannot prepare visible quick tile",android.provider.Settings.Secure.putString(
+                context.getContentResolver(),"sysui_qs_tiles",value));
+        } finally { automation.dropShellPermissionIdentity(); }
     }
     private static int tileState() {
         java.util.concurrent.atomic.AtomicInteger state=new java.util.concurrent.atomic.AtomicInteger(-1);

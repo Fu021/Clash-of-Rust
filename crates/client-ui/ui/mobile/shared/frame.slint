@@ -36,7 +36,8 @@ export component MobileFrame inherits Rectangle {
     property <length> header-height: max(root.short ? 56px : 72px * MobileTypography.density, header-content.preferred-height + 16px);
     // Android keeps the gesture inset inside the navigation surface, without
     // adding a second empty strip below it. iOS retains its own safe-area policy.
-    property <length> bottom-height: max(root.tab-height, MobileTypography.font-size(12) + 38px) + (root.compact-system-insets ? max(8px, MobileView.safe-bottom) : MobileView.safe-bottom);
+    property <length> nav-content-height: max(root.tab-height, MobileTypography.font-size(12) * 1.5 + 38px);
+    property <length> bottom-height: root.nav-content-height + (root.compact-system-insets ? max(8px, MobileView.safe-bottom) : MobileView.safe-bottom);
     property <bool> detail-page: MobileView.detail > 0 && !MobileView.modal;
     property <bool> has-back: (root.detail-page && !root.pane) || (!root.expanded && MobileView.page >= 3 && MobileView.page <= 8);
     property <bool> pane: body.width >= 880px && root.detail-page && MobileView.detail != 2 && MobileView.detail != 3;
@@ -131,7 +132,7 @@ export component MobileFrame inherits Rectangle {
             x: 0px; y: root.height - root.bottom-height;
             width: root.width; height: root.bottom-height; background: Theme.sidebar;
             Rectangle { x: 0px; y: 0px; height: 1px; width: parent.width; background: Theme.line; }
-            HorizontalLayout { x: MobileView.safe-left + 8px; y: 4px; width: root.usable-width - 16px; height: root.tab-height; spacing: 4px;
+            HorizontalLayout { x: MobileView.safe-left + 8px; y: 4px; width: root.usable-width - 16px; height: root.nav-content-height; spacing: 4px;
                 for route-id in root.primary-pages: MNav { stacked: true; pill: root.tab-pill;
                     text: root.titles[route-id]; icon: root.icons[route-id]; selected: MobileView.page == route-id || (route-id == 10 && MobileView.page >= 3 && MobileView.page <= 8);
                     clicked => { MobileView.navigate(route-id); }
