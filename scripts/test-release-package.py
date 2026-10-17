@@ -163,9 +163,8 @@ def main():
     extension = f'windows-{args.arch}-setup.exe' if args.system == 'windows' else f'macos-{args.arch}.dmg' if args.system == 'macos' else f"linux-{'amd64' if args.arch == 'x64' else 'arm64'}.deb"
     package = ROOT/'dist'/f"Clash-of-Rust-{manifest['version']}-{extension}"
     if args.system == 'windows':
-        run([sys.executable, ROOT/'scripts/test-installer.py', '--package', package,
-             '--test-binary', args.build/manifest['tests']['core_integration']])
-        run([sys.executable, ROOT/'scripts/scan-defender.py', '--update-signatures', package])
+        from windows_ci import package_tests
+        package_tests(package, manifest, args.build)
     elif args.system == 'macos':
         from macos_ci import package_tests
         package_tests(package, manifest, args.build)

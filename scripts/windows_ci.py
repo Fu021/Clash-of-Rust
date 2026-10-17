@@ -1,13 +1,17 @@
-"""Named Windows basic suites, with a failure-preserving CI receipt."""
+"""Windows CI, installed-package checks and Defender verification on Actions."""
+import os
+from pathlib import Path
+import re
+import subprocess
 import sys
+import tempfile
 import time
-from build_support import ROOT, host_arch, run, write_json
+from build_support import ROOT, file_version, host_arch, run, sha256, validate_resources, write_json
 
 
 def allow_ordinary_user_directory(path, permissions='M'):
     """Share only a test-owned fixture with the runner's unelevated token."""
     import csv
-    import subprocess
     identity = subprocess.check_output(['whoami', '/user', '/fo', 'csv', '/nh'], text=True)
     sid = next(csv.reader(identity.splitlines()))[-1]
     if not sid.startswith('S-1-'):
@@ -20,7 +24,6 @@ def run_unelevated(command, env, timeout=240, on_start=None, expected_code=0):
     """Run native checks with an actual medium-integrity, non-admin token."""
     import ctypes as c
     from ctypes import wintypes as w
-    import subprocess
     import contextlib
     kernel = c.WinDLL('kernel32', use_last_error=True)
     advapi = c.WinDLL('advapi32', use_last_error=True)
@@ -250,3 +253,157 @@ def windows_tests(tests, bundle):
     report['status'] = 'passed'
     write_json(report_path, report)
     print('PASS: all Windows basic suites; report: ' + str(report_path), flush=True)
+
+
+def _installer_exit(executable,args,code,timeout=60):
+    with subprocess.Popen([str(executable),*map(str,args)],
+                          creationflags=subprocess.CREATE_NO_WINDOW) as process:
+        actual = process.wait(timeout=timeout)
+    if actual != code:
+        raise RuntimeError(f'{executable.name}: expected exit {code}, got {actual}')
+
+
+def _verify_installed_package(package, binary, root, smoke):
+    import winreg
+    if os.environ.get('GITHUB_ACTIONS') != 'true':
+        raise RuntimeError('Production package tests require a disposable Actions runner')
+    key = r'Software\Microsoft\Windows\CurrentVersion\Uninstall\ClashOfRust'
+    for hive in (winreg.HKEY_LOCAL_MACHINE, winreg.HKEY_CURRENT_USER):
+        try:
+            with winreg.OpenKey(hive, key, 0, winreg.KEY_READ | winreg.KEY_WOW64_64KEY):
+                raise RuntimeError('Existing production installation; refusing to replace it')
+        except FileNotFoundError:
+            pass
+    # Python 3.13's private temporary directory can be owned by the elevated
+    # runner's Administrators group. The ordinary test token must traverse it
+    # and read/execute the installed application, without granting write access
+    # or changing the production service directory's protected ACL.
+    allow_ordinary_user_directory(root, permissions='RX')
+    installed = root/'production-installed'
+    _installer_exit(package, ['/S', f'/D={installed}'], 0)
+    try:
+        with winreg.OpenKey(winreg.HKEY_LOCAL_MACHINE, key, 0, winreg.KEY_READ | winreg.KEY_WOW64_64KEY) as registration:
+            assert winreg.QueryValueEx(registration, 'DisplayVersion')[0] == file_version(binary)
+        assert sha256(installed/'clash-of-rust.exe') == sha256(binary)
+        validate_resources(installed/'resources', 'windows')
+        assert (installed/'clash-tun-launcher.exe').is_file()
+        run(['sc.exe', 'query', 'ClashOfRust.Network'])
+        run([sys.executable, ROOT/'scripts/test-proxy-modes.py',
+             '--test-binary', smoke, '--bundle', installed])
+        user_file = installed/'unrelated-user-file.txt'
+        user_file.write_text('Preserve this unrelated file', encoding='utf-8')
+        # Exercise the same explicit update mode used by the client. Service
+        # replacement must finish before installation reports success.
+        _installer_exit(package, ['/S', '/UPDATE', f'/D={installed}'], 0)
+        assert user_file.read_text(encoding='utf-8') == 'Preserve this unrelated file'
+        run([sys.executable, ROOT/'scripts/test-proxy-modes.py',
+             '--test-binary', smoke, '--bundle', installed])
+    finally:
+        uninstaller = installed/'uninstall.exe'
+        if uninstaller.is_file():
+            _installer_exit(uninstaller, ['/S', f'_?={installed}'], 0)
+    assert not (installed/'clash-of-rust.exe').exists()
+    assert not (installed/'clash-tun-launcher.exe').exists()
+    assert subprocess.run(['sc.exe', 'query', 'ClashOfRust.Network'], capture_output=True).returncode == 1060
+    assert user_file.is_file()
+    try:
+        with winreg.OpenKey(winreg.HKEY_LOCAL_MACHINE, key, 0, winreg.KEY_READ | winreg.KEY_WOW64_64KEY):
+            raise AssertionError('Production registration survived uninstall')
+    except FileNotFoundError:
+        pass
+    print('PASS: final production package installation, proxy/TUN and uninstall')
+
+
+def _cleanup_installer(temporary):
+    # NSIS/Defender can briefly retain the executable after the process exits,
+    # especially under Windows ARM emulation. Persistent failures still fail.
+    deadline = time.monotonic() + 10
+    while True:
+        try:
+            temporary.cleanup()
+            return
+        except PermissionError:
+            if time.monotonic() >= deadline:
+                raise
+            time.sleep(0.1)
+
+
+def defender_command():
+    if os.name != 'nt':
+        raise RuntimeError('Windows Defender scans require Windows')
+    platform = Path(os.environ['ProgramData'])/'Microsoft/Windows Defender/Platform'
+    candidates = sorted(
+        platform.glob('*/MpCmdRun.exe'),
+        key=lambda path: tuple(int(n) for n in re.findall(r'\d+', path.parent.name)),
+        reverse=True,
+    )
+    candidates.append(Path(os.environ['ProgramFiles'])/'Windows Defender/MpCmdRun.exe')
+    for candidate in candidates:
+        if candidate.is_file():
+            return candidate
+    raise RuntimeError('Windows Defender MpCmdRun.exe is unavailable; scan cannot be skipped')
+
+
+def update_signatures(timeout=300):
+    deadline = time.monotonic() + timeout
+    # MMPC is Microsoft's direct security-intelligence source. Avoid the
+    # runner's Windows Update queue, and wait only for its explicit MSI-busy error.
+    for delay in (15, 30, 45, 60, None):
+        command = [str(defender_command()), '-SignatureUpdate', '-MMPC']
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            raise subprocess.TimeoutExpired(command, timeout)
+        print('Updating Defender security intelligence:', command[0], flush=True)
+        result = subprocess.run(
+            command, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+            text=True, encoding='utf-8', errors='replace', timeout=remaining,
+        )
+        output = result.stdout or ''
+        if output:
+            print(output, end='' if output.endswith('\n') else '\n', flush=True)
+        if result.returncode == 0:
+            # The platform itself may have upgraded while we waited.
+            return defender_command()
+        busy = re.search(r'\b0x80070652\b', output.replace('\0', ''), re.IGNORECASE)
+        if not busy or delay is None:
+            raise subprocess.CalledProcessError(result.returncode, command, output=output)
+        remaining = deadline - time.monotonic()
+        if remaining <= delay:
+            raise subprocess.TimeoutExpired(command, timeout, output=output)
+        print(f'Defender installation is busy; retrying in {delay}s', flush=True)
+        time.sleep(delay)
+
+
+def scan_installers(installers):
+    installers = [path.resolve(strict=True) for path in installers]
+    if any(not path.is_file() or path.suffix.lower() != '.exe' for path in installers):
+        raise ValueError('Expected Windows .exe installer files')
+    command = update_signatures()
+    print('Windows Defender:', command, flush=True)
+    for installer in installers:
+        digest = sha256(installer)
+        print('Scanning:', installer.name, flush=True)
+        # A custom scan ignores exclusions and scans archives. Keeping detected
+        # files unmodified makes a threat return nonzero and blocks CI upload.
+        subprocess.run([
+            str(command), '-Scan', '-ScanType', '3', '-File', str(installer),
+            '-DisableRemediation',
+        ], check=True, timeout=300)
+        if sha256(installer) != digest:
+            raise RuntimeError('Installer changed during Defender scan: '+installer.name)
+        print('PASS: Defender scan completed:', installer.name, digest, flush=True)
+
+
+def package_tests(package, manifest, build):
+    """Check installation, proxy/TUN, update, uninstall and the final installer."""
+    if os.name != 'nt':
+        raise RuntimeError('Installer tests require Windows')
+    (ROOT/'dist').mkdir(exist_ok=True)
+    temporary = tempfile.TemporaryDirectory(prefix='installer-test-', dir=ROOT/'dist')
+    try:
+        _verify_installed_package(package.resolve(strict=True), build/'payload/clash-of-rust.exe',
+                           Path(temporary.name),
+                           (build/manifest['tests']['core_integration']).resolve(strict=True))
+    finally:
+        _cleanup_installer(temporary)
+    scan_installers([package])

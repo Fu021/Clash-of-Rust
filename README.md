@@ -65,7 +65,7 @@ Cargo workspace 分为共享业务（`crates/client-core`）、Slint 界面（`c
 python3 scripts/preview-slint.py --dialogs --pairs
 ```
 
-测试、内存基准与发布流程见 [工作流文档](docs/workflows.md)；平台验收与更新验证见 [macOS 测试清单](docs/macos-ci-checklist.md) 和 [更新测试说明](docs/automatic-update.md)。
+测试、内存基准、发布流程及手动验收说明见 [工作流文档](docs/workflows.md)。
 
 ## License
 
