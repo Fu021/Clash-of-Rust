@@ -31,6 +31,16 @@ pub fn initialize(width: u32, height: u32) -> Rc<MinimalSoftwareWindow> {
 
 #[cfg(test)]
 pub(super) fn click(window: &slint::Window, x: f32, y: f32) {
+    pointer_click(window, x, y, std::time::Duration::from_millis(50));
+}
+
+#[cfg(test)]
+pub(super) fn rapid_click(window: &slint::Window, x: f32, y: f32) {
+    pointer_click(window, x, y, std::time::Duration::ZERO);
+}
+
+#[cfg(test)]
+fn pointer_click(window: &slint::Window, x: f32, y: f32, delay: std::time::Duration) {
     use slint::platform::{PointerEventButton, WindowEvent};
     let position = slint::LogicalPosition::new(x, y);
     // Match a real pointer sequence, including movement between adjacent hit
@@ -40,7 +50,9 @@ pub(super) fn click(window: &slint::Window, x: f32, y: f32) {
         position,
         button: PointerEventButton::Left,
     });
-    std::thread::sleep(std::time::Duration::from_millis(50));
+    if !delay.is_zero() {
+        std::thread::sleep(delay);
+    }
     window.dispatch_event(WindowEvent::PointerReleased {
         position,
         button: PointerEventButton::Left,

@@ -80,14 +80,20 @@ fn connection_sort_clicks_redraw_the_header_immediately_and_third_click_restores
             let mut reference = vec![slint::Rgb8Pixel::default(); 950 * 700];
             renderer.set_repaint_buffer_type(RepaintBufferType::NewBuffer);
             renderer.render(&mut reference, 950);
-            renderer.set_repaint_buffer_type(RepaintBufferType::ReusedBuffer);
-            assert_eq!(
-                pixels, reference,
-                "partial repaint must match a fresh frame"
+            assert!(
+                pixels == reference,
+                "partial repaint differs from a fresh frame at pixel {:?}",
+                pixels.iter().zip(&reference).position(|(a, b)| a != b)
             );
+            renderer.set_repaint_buffer_type(RepaintBufferType::ReusedBuffer);
+            // Changing buffer modes clears Slint's damage cache. Warm it now,
+            // so the next click really renders incrementally into this buffer.
+            renderer.render(&mut pixels, 950);
         }));
         pixels
-            .chunks_exact(950)
+            .as_chunks::<950>()
+            .0
+            .iter()
             .skip(156)
             .take(52)
             .flat_map(|row| row[200..926].iter().copied())
@@ -145,6 +151,57 @@ fn connection_sort_clicks_redraw_the_header_immediately_and_third_click_restores
             original
         );
     }
+    // Record the normal down-arrow frame, then return to unsorted before a
+    // burst of real pointer events with no rendered frame between callbacks.
+    let _ = app.intent(Intent::ConnectionSort, "download-rate", "");
+    app.present(&data, &mut models);
+    let expected = header();
+    for _ in 0..2 {
+        let _ = app.intent(Intent::ConnectionSort, "download-rate", "");
+    }
+    app.present(&data, &mut models);
+    assert_eq!(header(), before);
+    for _ in 0..4 {
+        for (x, y) in [(670., 174.), (480., 197.), (260., 174.), (780., 174.)] {
+            ui_testing::rapid_click(window.window(), x, y);
+        }
+    }
+    let pending = std::mem::take(&mut *events.borrow_mut());
+    assert_eq!(pending.len(), 16, "rapid clicks must each dispatch once");
+    for (index, (intent, a, b)) in pending.into_iter().enumerate() {
+        let _ = app.intent(intent, &a, &b);
+        if index % 3 == 0 {
+            // A completed background connection refresh must not overwrite
+            // newer sort intent while the queued UI commands are being drained.
+            let mut snapshot = app.snapshot.clone();
+            snapshot.connections.connections[0].download += 4096;
+            let _ = app.update(Message::Finished(Box::new(Reply {
+                profile_edit: false,
+                profile_import: false,
+                scope: Scope::Connections,
+                start_requested: false,
+                settings: app.settings.clone(),
+                profiles: None,
+                snapshot: Some(snapshot),
+                rule_document: None,
+                rules_applied: false,
+                notice: Ok(String::new()),
+                running: true,
+                geo_status: String::new(),
+                autostart: false,
+                protection_changed: false,
+                tray_nodes: None,
+            })));
+        }
+        app.present(&data, &mut models);
+    }
+    assert_eq!(data.get_connection_sort(), "download-rate");
+    assert!(data.get_descending());
+    assert_eq!(
+        header(),
+        expected,
+        "burst clicks must paint the final arrow"
+    );
     window.hide().unwrap();
 }
 

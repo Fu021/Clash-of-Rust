@@ -213,8 +213,9 @@ fn activator_property() -> Result<PROPVARIANT> {
     let mut value = PROPVARIANT::default();
     unsafe {
         pointer.write(ACTIVATOR);
-        value.Anonymous.Anonymous.vt = VT_CLSID;
-        value.Anonymous.Anonymous.Anonymous.puuid = pointer;
+        let variant = &mut *value.Anonymous.Anonymous;
+        variant.vt = VT_CLSID;
+        variant.Anonymous.puuid = pointer;
     }
     Ok(value)
 }
