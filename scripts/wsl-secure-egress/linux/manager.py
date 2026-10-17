@@ -664,7 +664,6 @@ class Manager:
         ]
         # These must precede the catch-all secure rule. Give the secure rule a
         # later priority, keeping PMTU exceptions precise by iif/protocol/subnet.
-        commands[5] = ['rule', 'add', 'pref', str(RULE_PREFS[3]), 'iif', BUS_IF, 'lookup', 'main'] if False else commands[5]
         for cidr in sorted({x['source_cidr'] for x in self.s['forward_sources']}):
             commands.insert(-1, ['rule', 'add', 'pref', str(RULE_PREFS[4]), 'iif', 'lo', 'to', cidr, 'ipproto', 'icmp', 'lookup', 'main'])
         for args in commands:
