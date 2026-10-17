@@ -357,7 +357,9 @@ class Fixture:
             event = json.loads(result.stdout)
         except ValueError:
             raise Failure(f"manager {action}: missing JSON event") from None
-        require(event.get("outcome") == outcome, f"manager {action}: unexpected outcome")
+        require(event.get("outcome") == outcome,
+                f"manager {action}: unexpected outcome {event.get('outcome')!r} "
+                f"phase={event.get('phase')!r} message={event.get('message')!r}")
         require(event.get("schema_version", event.get("schema")) == 1,
                 f"manager {action}: unexpected schema")
         require(result.returncode == (0 if outcome == "succeeded" else 2),

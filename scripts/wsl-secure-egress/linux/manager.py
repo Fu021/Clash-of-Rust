@@ -772,7 +772,6 @@ class Manager:
             if cidr == BUS_ROOT_IP + '/32':
                 continue  # the connected /30 already routes this source
             command(['ip', 'route', 'add', cidr, 'via', BUS_ROOT_IP, 'dev', GW_BUS_IF], ns=GW)
-        # wg0's encrypted socket remains in its birthplace transport namespace.
         command(['ip', 'link', 'add', 'wg0', 'type', 'wireguard'], ns=TRANSPORT)
         keyfile = STATE / 'wireguard.key'
         atomic(keyfile, (p['private_key'] + '\n').encode())
