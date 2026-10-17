@@ -34,6 +34,12 @@ jobs:
         with:
           python-version: '3.11'
           check-latest: true
+      - name: Validate common build and package logic
+        env:
+          PYTHONDONTWRITEBYTECODE: '1'
+        run: |
+          python3 scripts/test-build-tools.py --buffer
+          python3 scripts/test-workflow-artifacts.py --buffer
       - uses: dtolnay/rust-toolchain@stable
       - uses: actions/setup-go@v6
         id: go

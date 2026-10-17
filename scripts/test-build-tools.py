@@ -171,7 +171,8 @@ class BuildTests(unittest.TestCase):
             fingerprint = local_cache.fingerprint([root])
             (root/'download.lock').write_bytes(b'temporary lock')
             self.assertEqual(local_cache.fingerprint([root]), fingerprint)
-            config = {'kind':'archives', 'available':True, 'save':True, 'hit':False,
+            config = {'group':'dependencies/source', 'key':'verified',
+                      'kind':'archives', 'available':True, 'save':True, 'hit':False,
                       'fingerprint':fingerprint}
             with patch.object(local_cache, 'cache_paths', return_value=[root]), \
                  patch.object(local_cache, 'cache_report') as report, patch.object(local_cache, 'pack') as pack:
