@@ -1,0 +1,24 @@
+import { MobileView } from "../shared/state.slint";
+import { MobileFrame } from "../shared/frame.slint";
+import { MobileHome, MobileProxies, MobileSubscriptions, MobileConnections, MobileRules, MobileLogs, MobileNetwork, MobileIpCheck, MobileAiCheck, MobileTools } from "../shared/pages.slint";
+import { AndroidSettings } from "settings.slint";
+
+// Android owns this composition and may replace/add pages without iOS changes.
+export component AndroidSurface inherits MobileFrame {
+    primary-pages: [0, 1, 2, 10, 9];
+    sidebar-pages: [0, 1, 2, 3, 4, 5, 6, 7, 8, 9];
+    tab-pill: true; title-size: 24px; sidebar-width: 192px; tab-height: 56px;
+    compact-system-insets: true;
+    centered-modal: false;
+    if MobileView.page == 0: MobileHome { }
+    if MobileView.page == 1: MobileProxies { }
+    if MobileView.page == 2: MobileSubscriptions { }
+    if MobileView.page == 3: MobileConnections { }
+    if MobileView.page == 4: MobileRules { }
+    if MobileView.page == 5: MobileLogs { }
+    if MobileView.page == 6: MobileNetwork { }
+    if MobileView.page == 7: MobileIpCheck { }
+    if MobileView.page == 8: MobileAiCheck { }
+    if MobileView.page == 9: AndroidSettings { }
+    if MobileView.page == 10: MobileTools { }
+}

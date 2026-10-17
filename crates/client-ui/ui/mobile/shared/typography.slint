@@ -1,0 +1,20 @@
+import { Theme } from "../../theme/palette.slint";
+
+// Native Android supplies SP -> logical-pixel conversions for each size. This
+// preserves Android 14's nonlinear accessibility scaling instead of multiplying
+// every heading by Configuration.fontScale. iOS and previews use the fallback.
+export global MobileTypography {
+    in-out property <bool> system-fonts;
+    in-out property <[float]> sizes;
+    public pure function font-size(sp: int) -> length {
+        if self.system-fonts && sp >= 10 && sp <= 40 && self.sizes.length == 31 {
+            return self.sizes[sp - 10] * 1px;
+        }
+        return sp * 1px * Theme.text-scale;
+    }
+    // Adjust visual density gently; touch targets remain at least 48 logical px.
+    out property <float> density: clamp(Theme.text-scale, 0.85, 1.2);
+    out property <length> gap: 12px * self.density;
+    out property <length> small-gap: 8px * self.density;
+    out property <length> padding: 16px * self.density;
+}

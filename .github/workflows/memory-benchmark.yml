@@ -28,12 +28,17 @@ on:
         description: '每个 GUI 场景的采样秒数'
         type: string
         default: '10'
+env:
+  SEGMENT_DOWNLOAD_TIMEOUT_MINS: '2'
 permissions:
   contents: read
 jobs:
   benchmark:
     name: Linux x64 memory benchmark
     runs-on: ubuntu-22.04
+    permissions:
+      contents: read
+      id-token: write
     timeout-minutes: 60
     env:
       PYTHONDONTWRITEBYTECODE: '1'
@@ -64,14 +69,69 @@ jobs:
           path: source
           persist-credentials: false
       - uses: dtolnay/rust-toolchain@stable
-      - uses: Swatinem/rust-cache@v2
-        with:
-          workspaces: source -> target
-          prefix-key: memory-ubuntu22-${{ inputs.profile }}
-          cache-on-failure: true
       - uses: actions/setup-python@v6
         with:
           python-version: '3.11'
+      - name: Remember original macOS DNS before cache login
+        if: runner.os == 'macOS'
+        id: original_dns
+        shell: python
+        run: |
+          import subprocess, sys
+          subprocess.run([sys.executable, 'scripts/action_cache.py', 'network-save'], check=True)
+      - name: Connect to private cache network
+        id: tailnet
+        if: vars.TS_OAUTH_CLIENT_ID != '' && vars.TS_AUDIENCE != ''
+        uses: tailscale/github-action@v4
+        timeout-minutes: ${{ runner.os == 'macOS' && 10 || 3 }}
+        continue-on-error: true
+        with:
+          oauth-client-id: ${{ vars.TS_OAUTH_CLIENT_ID }}
+          audience: ${{ vars.TS_AUDIENCE }}
+          tags: tag:github-action-cache
+          version: '1.94.2'
+          retry: '1'
+          timeout: 45s
+          args: --accept-dns=false
+          tailscaled-args: --tun=userspace-networking --outbound-http-proxy-listen=127.0.0.1:19082
+      - name: Restore macOS DNS after cache login
+        if: always() && runner.os == 'macOS' && steps.original_dns.outcome == 'success'
+        shell: python
+        run: |
+          import subprocess, sys
+          subprocess.run([sys.executable, 'scripts/action_cache.py', 'network-restore'], check=True)
+      - name: Preserve host routing after private cache login
+        if: steps.tailnet.outcome == 'success'
+        shell: python
+        run: |
+          import os, shutil, subprocess
+          # The official action supplies --accept-routes itself. Passing it a
+          # second time is rejected; turn it off after login, before any tests.
+          command = [shutil.which('tailscale') or 'tailscale', 'set', '--accept-routes=false', '--accept-dns=false']
+          if os.name != 'nt': command = ['sudo', '-n', *command]
+          subprocess.run(command, check=True)
+      - uses: Swatinem/rust-cache@v2
+        timeout-minutes: 5
+        continue-on-error: true
+        id: rust_github
+        with:
+          workspaces: source -> target
+          prefix-key: memory-ubuntu22-v2-${{ inputs.profile }}
+          cache-on-failure: false
+          cache-bin: false
+          cache-workspace-crates: false
+          save-if: true
+      - name: Restore local fallback for benchmark compilation
+        id: rust_local
+        uses: ./.github/actions/local-cache
+        with:
+          github-hit: ${{ steps.rust_github.outcome == 'success' && steps.rust_github.outputs.cache-hit || '' }}
+          url: ${{ steps.tailnet.outcome == 'success' && vars.LOCAL_CACHE_URL || '' }}
+          token: ${{ secrets.LOCAL_CACHE_TOKEN }}
+          group: rust/memory-linux-x64-${{ inputs.profile }}
+          kind: rust
+          source: source
+          key: memory-${{ inputs.profile }}
       - name: Install benchmark dependencies
         shell: python
         run: |
@@ -99,4 +159,25 @@ jobs:
           name: memory-results-${{ github.run_id }}
           path: dist/memory
           if-no-files-found: warn
-          retention-days: 30
+          retention-days: 3
+  cache_budget:
+    name: Actions cache budget
+    needs: [benchmark]
+    if: always()
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: read
+      actions: write
+    concurrency:
+      group: actions-cache-budget
+      cancel-in-progress: false
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+      - name: Trim obsolete dependencies and enforce 9 GiB cache budget
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PYTHONDONTWRITEBYTECODE: '1'
+        run: python3 scripts/workflow_storage.py

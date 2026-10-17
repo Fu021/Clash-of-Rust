@@ -1,0 +1,152 @@
+import { MobileTypography } from "typography.slint";
+// Responsive chrome only. Each platform supplies its own routes and pages.
+import { Theme } from "../../theme/palette.slint";
+import { MobileData, MobileView, MobileActions, MobileIntent } from "state.slint";
+import { MText, MSmall, MHeading, MButton, MBackButton, MTag, MNav, MScroll, MNotice, MAppIcon } from "controls.slint";
+import { MobileDetails, MobileModal } from "details.slint";
+
+component HeaderStatus inherits VerticalLayout {
+    spacing: 6px; alignment: center; min-width: 0px;
+    HorizontalLayout { alignment: end;
+        MTag { text: MobileData.core-running ? "● 内核运行中" : "○ 内核未运行"; tone: MobileData.core-running ? 1 : 4; }
+    }
+    MSmall { text: MobileData.profile + (MobileData.node != "" ? "  |  " + MobileData.node : ""); horizontal-alignment: right; }
+}
+
+export component MobileFrame inherits Rectangle {
+    in property <[int]> primary-pages;
+    in property <[int]> sidebar-pages;
+    in property <bool> tab-pill;
+    in property <length> title-size: 24px;
+    in property <length> sidebar-width: 192px;
+    in property <length> tab-height: 72px;
+    in property <bool> centered-modal;
+    in property <bool> compact-system-insets;
+    in property <[string]> titles: ["首页", "代理", "订阅", "连接", "规则", "日志", "网络诊断", "IP 检测", "A÷检测", "设置", "工具"];
+    property <[image]> icons: [@image-url("../../icons/home.svg"), @image-url("../../icons/proxies.svg"), @image-url("../../icons/subscriptions.svg"), @image-url("../../icons/connections.svg"), @image-url("../../icons/rules.svg"), @image-url("../../icons/logs.svg"), @image-url("../../icons/network.svg"), @image-url("../../icons/ip.svg"), @image-url("../../icons/ai.svg"), @image-url("../../icons/settings.svg"), @image-url("../../icons/network.svg")];
+    property <length> usable-width: root.width - MobileView.safe-left - MobileView.safe-right;
+    property <length> usable-height: max(0px, root.height - MobileView.safe-top - MobileView.safe-bottom - MobileView.keyboard-inset);
+    property <bool> short: root.height - MobileView.safe-top - MobileView.safe-bottom < 480px;
+    property <bool> narrow: root.usable-width < 640px && !root.short;
+    property <bool> stacked-header: root.narrow && Theme.text-scale > 1.25;
+    property <bool> expanded: root.usable-width >= 1024px && !root.short;
+    property <bool> bottom: root.narrow && MobileView.keyboard-inset == 0px;
+    property <length> nav-width: root.narrow ? 0px : root.expanded ? root.sidebar-width : 76px;
+    property <length> content-padding: root.expanded ? 24px : MobileTypography.padding;
+    property <length> header-height: max(root.short ? 56px : 72px * MobileTypography.density, header-content.preferred-height + 16px);
+    // Android keeps the gesture inset inside the navigation surface, without
+    // adding a second empty strip below it. iOS retains its own safe-area policy.
+    property <length> nav-content-height: max(root.tab-height, MobileTypography.font-size(12) * 1.5 + 38px);
+    property <length> bottom-height: root.nav-content-height + (root.compact-system-insets ? max(8px, MobileView.safe-bottom) : MobileView.safe-bottom);
+    property <bool> detail-page: MobileView.detail > 0 && !MobileView.modal;
+    property <bool> has-back: (root.detail-page && !root.pane) || (!root.expanded && MobileView.page >= 3 && MobileView.page <= 8);
+    property <bool> pane: body.width >= 880px && root.detail-page && MobileView.detail != 2 && MobileView.detail != 3;
+    property <string> detail-title: MobileView.detail == 1 ? "风险项目" : MobileView.detail == 2 ? "编辑规则" : MobileView.detail == 3 ? (MobileView.selected-id == "" ? "添加订阅" : "编辑订阅") : MobileView.detail == 5 ? "连接详情" : MobileView.detail == 6 ? MobileView.category : MobileView.detail == 7 ? "正常项目" : MobileView.detail == 9 ? "其他线索" : "日志详情";
+    property <duration> notice-start;
+    property <int> notice-revision: MobileView.notice-revision;
+    property <float> notice-elapsed: MobileView.notice-elapsed;
+    changed notice-revision => { root.notice-start = animation-tick() - MobileView.notice-elapsed * 1s; }
+    changed notice-elapsed => { root.notice-start = animation-tick() - MobileView.notice-elapsed * 1s; }
+    init => { root.notice-start = animation-tick() - MobileView.notice-elapsed * 1s; }
+    background: Theme.canvas;
+    Timer { running: MobileView.notice != ""; interval: 100ms;
+        triggered => { if animation-tick() - root.notice-start >= 8s { MobileView.notice = ""; } }
+    }
+    keys := FocusScope {
+        width: parent.width; height: parent.height;
+        capture-key-pressed(event) => {
+            if event.text == Key.Escape && !MobileView.modal {
+                if root.detail-page { MobileView.back(); }
+                else if MobileView.page >= 3 && MobileView.page <= 8 { MobileView.navigate(10); }
+                return accept;
+            }
+            return reject;
+        }
+        if root.nav-width > 0px: Rectangle {
+            // Paint behind the system bars/cutouts; inset interactive content only.
+            x: 0px; y: 0px; width: MobileView.safe-left + root.nav-width;
+            height: root.height - MobileView.keyboard-inset;
+            background: Theme.sidebar;
+            Rectangle { x: parent.width - 1px; width: 1px; height: parent.height; background: Theme.line; }
+            VerticalLayout { x: MobileView.safe-left; y: MobileView.safe-top;
+                width: root.nav-width; height: root.usable-height;
+                padding: MobileTypography.small-gap; spacing: 10px;
+                if !root.short: HorizontalLayout { height: 64px; spacing: 10px; padding-left: root.expanded ? 8px : 14px; cross-axis-alignment: center;
+                    MAppIcon { }
+                    if root.expanded: MText { text: "Clash of Rust"; font-weight: 600; }
+                }
+                MScroll { vertical-stretch: 1; min-height: 0px;
+                    if root.expanded: VerticalLayout { alignment: start; spacing: 4px;
+                        for route-id in root.sidebar-pages: MNav { height: 48px; text: root.titles[route-id]; icon: root.icons[route-id]; selected: MobileView.page == route-id;
+                            clicked => { MobileView.navigate(route-id); }
+                        }
+                    }
+                    if !root.expanded: VerticalLayout { alignment: start; spacing: root.short ? 0px : 8px;
+                        for route-id in root.primary-pages: MNav { height: root.short ? 56px : 68px; stacked: true; pill: root.tab-pill;
+                            text: root.titles[route-id]; icon: root.icons[route-id]; selected: MobileView.page == route-id || (route-id == 10 && MobileView.page >= 3 && MobileView.page <= 8);
+                            clicked => { MobileView.navigate(route-id); }
+                        }
+                    }
+                }
+                if root.expanded: MSmall { height: 28px; text: MobileData.version; }
+            }
+        }
+        header := Rectangle {
+            x: MobileView.safe-left + root.nav-width + root.content-padding; y: MobileView.safe-top;
+            width: root.usable-width - root.nav-width - root.content-padding * 2; height: root.header-height;
+            header-content := VerticalLayout { spacing: MobileTypography.small-gap;
+              HorizontalLayout { spacing: 10px; cross-axis-alignment: center;
+                if root.has-back: MBackButton {
+                    clicked => { if root.detail-page { MobileView.back(); } else { MobileView.navigate(10); } }
+                }
+                if !root.has-back && root.narrow: MAppIcon { }
+                MHeading { text: root.detail-page && !root.pane ? root.detail-title : root.titles[MobileView.page];
+                    font-size: root.short ? MobileTypography.font-size(21) : MobileTypography.font-size(round(root.title-size / 1px));
+                    horizontal-stretch: 0;
+                }
+                if !root.stacked-header: HeaderStatus { }
+              }
+              if root.stacked-header: HeaderStatus { }
+            }
+        }
+        body := Rectangle {
+            x: header.x; y: header.y + header.height + 4px; width: header.width;
+            height: max(0px, root.usable-height - (self.y - MobileView.safe-top) - (root.bottom ? root.bottom-height - MobileView.safe-bottom : 0px));
+            HorizontalLayout { spacing: MobileTypography.padding;
+                Rectangle {
+                    page-host := Rectangle { x: 0px; y: 0px; width: parent.width; height: parent.height; visible: !root.detail-page || root.pane; @children }
+                    if root.detail-page && !root.pane: MobileDetails { width: parent.width; height: parent.height; }
+                }
+                if root.pane: Rectangle { width: 344px;
+                    VerticalLayout { spacing: MobileTypography.gap;
+                        HorizontalLayout { spacing: MobileTypography.small-gap; cross-axis-alignment: center;
+                            MHeading { text: root.detail-title; }
+                            MButton { text: "关闭"; width: max(64px, MobileTypography.font-size(15) * 2 + 16px); horizontal-stretch: 0; clicked => { MobileView.back(); } }
+                        }
+                        MobileDetails { }
+                    }
+                }
+            }
+        }
+        if root.bottom: Rectangle {
+            x: 0px; y: root.height - root.bottom-height;
+            width: root.width; height: root.bottom-height; background: Theme.sidebar;
+            Rectangle { x: 0px; y: 0px; height: 1px; width: parent.width; background: Theme.line; }
+            HorizontalLayout { x: MobileView.safe-left + 8px; y: 4px; width: root.usable-width - 16px; height: root.nav-content-height; spacing: 4px;
+                for route-id in root.primary-pages: MNav { stacked: true; pill: root.tab-pill;
+                    text: root.titles[route-id]; icon: root.icons[route-id]; selected: MobileView.page == route-id || (route-id == 10 && MobileView.page >= 3 && MobileView.page <= 8);
+                    clicked => { MobileView.navigate(route-id); }
+                }
+            }
+        }
+        if MobileView.modal: MobileModal { centered: root.centered-modal || root.expanded; }
+        // Last sibling: notifications overlay both page content and modal sheets.
+        if MobileView.notice != "": MNotice {
+            x: MobileView.safe-left + (root.usable-width - self.width) / 2;
+            y: MobileView.safe-top + 8px; width: min(600px, root.usable-width - 24px);
+            text: MobileView.notice;
+            progress: clamp((animation-tick() - root.notice-start) / 8s, 0, 1);
+            dismissed => { MobileView.notice = ""; }
+        }
+    }
+}

@@ -2,9 +2,9 @@
 
 | 工作流 | 触发 | 职责 | 产物 |
 | --- | --- | --- | --- |
-| Rust / CI | main push、PR | 六平台编译、静态检查、源码单元测试、系统代理与 TUN 集成测试 | `build-{system}-{arch}`，保留 14 天 |
-| Publish Release | 手动 | 复用成功 CI 的程序，打包、安装后验证；可仅打包 | 六个安装包及 SHA256，测试产物保留 14 天 |
-| Memory Benchmark | 手动 | 对指定代码运行低强度或压力内存测试 | 原始数据、报告与构建日志，保留 30 天 |
+| CI | main push、PR | 六种桌面平台与三种 Android ABI 编译、检查、源码单元测试、代理与 TUN 集成测试 | `build-{system}-{arch}`，保留 3 天 |
+| Publish Release | 手动 | 复用成功 CI 的程序，打包、安装后验证；可仅打包 | 六个桌面安装包、三个 APK 及 SHA256，测试产物保留 3 天 |
+| Memory Benchmark | 手动 | 对指定代码运行低强度或压力内存测试 | 原始数据、报告与构建日志，保留 3 天 |
 
 六个平台为 Windows x64 / ARM64、Linux x64 / ARM64、macOS Intel / Apple Silicon。Linux 安装包支持 Debian/Ubuntu，Ubuntu 仅支持 22.04 及以上；Ubuntu 最新版兼容验证在发布工作流中执行。
 
@@ -12,13 +12,25 @@
 
 ## CI
 
-- 六平台使用相同的 Release profile 完成整个 workspace 的格式检查、Clippy、编译和源码单元测试；移动端占位目录不参与构建。
+先生成一次 `dependency-snapshot`：每次查询源码依赖、内核、Geo 数据与独立工具更新，在声明的兼容约束内选取新版本。上游超时、503 等网络错误使用兼容的已验证缓存；缓存缺失或校验失败时明确报告。所有平台应用同一份快照，Publish Release 继续复用这些已测试版本。
+
+缓存先从 GitHub 恢复，未命中或服务故障时再访问 Tailscale 私网中的 `/home/coder/github_action_cache`，两边都没有才从上游获取。每轮依然查询上游更新；工具链、锁文件和资源版本参与缓存身份，兼容的旧编译对象仍由 Cargo 校验和重编。Publish Release 复用本轮成功 CI 的依赖快照，不重新选版本。
+
+本地保存完整的依赖、编译对象和必要工具快照，每类只保留最新一份；新内容完整上传后替换旧内容，旧运行不能覆盖较新的快照。GitHub 保存精简的编译依赖和常用下载内容，预算 9 GiB，优先保留公共源依赖、资源、工具与较慢的 macOS/Windows 编译缓存，淘汰旧版本及低优先级内容。GitHub 命中时只核对本地副本的元数据，不重复下载；本地 Rust 依赖镜像仍匹配工具链与依赖声明时，仅修改应用源码不再重传整份镜像。两边仅在任务成功后保存；依赖快照、测试报告、安装包不进入编译缓存。
+
+私网服务使用独立访问令牌，只可写自己的数据、索引和日志目录。各任务总结记录缓存来源、版本、大小与分阶段耗时，最终 `private-cache-inventory` 列出本地快照的校验值和占用。
+
+单次缓存保存最多等待 10 分钟；超时会报告，但不使已通过的编译与测试失效，未完成的上传也不替换有效缓存。
+
+- 六种桌面平台使用相同的 Release profile 完成整个 workspace 的格式检查、Clippy、编译和源码单元测试，包括共享移动会话；Android 另用三种 ABI 构建实际 Slint/Java/Go 宿主，iOS 不参与构建。
 - 单元测试保留配置与规则、网络响应解析、认证信息脱敏、状态恢复、任务取消、列表复用与边界、实际指针交互等验证。已弃用的截图场景、CLI 专项集成测试和长期忽略的联网/平台手工回归入口已移除。
 - 真实系统集成测试只运行系统代理与 TUN：验证代理设置写入、HTTP 转发、TUN 接管无显式代理的流量、模式恢复及关闭清理。Linux 使用隔离网络命名空间和 GSettings 内存后端；macOS 使用真实 launchd 网络助手；Windows 先注册服务，再以普通用户令牌运行代理/TUN、恢复和服务清理检查。
 - Linux TUN 测试在独立双栈上游中使用正式保护覆盖，验证域名节点的引导解析、经节点的 DoH A/AAAA、TCP/UDP DNS 接管、HTTP 转发、冷启动及原设置恢复；额外阻断固定公网引导 DNS，验证订阅解析器仍可用。上游记录公网明文 DNS 与绕过节点的公网 DNS，发生泄漏即失败。保护 DNS 全部不可达时必须拒绝开启并恢复原网络。隔离环境使用专用测试 CA，保留 TLS 证书校验，不访问外网。
-- Python 构建辅助与产物校验单元测试只在 Linux x64 执行一次。内存基准 example 不作为 CI 测试程序额外构建或运行。
-- main push、PR 更新触发 CI；过时运行自动取消。Actions 的依赖与资源缓存保留，本地构建产物与缓存不保留。
-- CI 不生成安装包。产物记录提交、版本、架构、Cargo.lock、工具链及逐文件校验值；仅附带发布后复用的 `core_integration` 代理/TUN 测试程序，不上传源码单元测试程序。清理后的产物采用 schema 2，只与同一提交的打包流程配套使用。
+- Python 构建辅助与产物校验单元测试在前置依赖解析任务中执行一次，失败时不启动各平台下载与编译。内存基准 example 不作为 CI 测试程序额外构建或运行。
+- main push、PR 更新触发 CI；过时运行自动取消。项目目录不保留本地编译与构建缓存。
+- 桌面 CI 不生成安装包；Android CI 生成供安装测试与发布复用的 APK。产物记录提交、版本、架构、Cargo.lock、工具链及逐文件校验值；仅附带发布后复用的 `core_integration` 代理/TUN 测试程序，不上传源码单元测试程序。清理后的产物采用 schema 2，只与同一提交的打包流程配套使用。
+
+Android x86_64 使用 API 35 模拟器运行真实代理/TUN 流量测试，验证正式界面的内核状态、默认策略组、订阅导航和设置触摸滚动，以及系统 VPN 授权、DNS、套接字保护、快捷磁贴连接/断开和路由恢复；ARM64/ARMv7 完成实际编译、Gradle lint 与架构校验，仍需真机验收。Android 测试结果、体积报告和 logcat 保存在 `android-report-{arch}`，固定开发签名与构建说明见 [Android 宿主](../apps/android/README.md)。
 
 macOS 失败日志、系统与网络状态、崩溃报告保存在 `macos-ci-report-{arch}`，Windows 集成检查结果保存在 `windows-ci-report-{arch}`。人工授权窗口、真实重启登录和物理显示器行为仍需人工验收。
 
@@ -29,13 +41,14 @@ macOS 失败日志、系统与网络状态、崩溃报告保存在 `macos-ci-rep
 - `ci_run_id`：成功的当前提交 CI 编号；留空选择当前提交的 main CI。开发分支测试包必须填写当前分支、当前提交成功的 PR CI 编号。
 - `check_only`：勾选后完成打包与安装后验证，不创建或修改 Release；开发分支必须勾选。安装包在本次运行的 `package-{system}-{arch}` 附件中，无需下载到本地。
 
-流程固定到所选 CI 的提交，核对六平台成功记录和产物身份，不重新编译，也不重新下载应用资源。过期或旧格式产物需要重新运行当前代码的 CI。
+流程固定到所选 CI 的提交与依赖快照，核对六种桌面平台及三种 Android ABI 的成功记录和产物身份，不重新编译，也不重新下载应用资源。过期或旧格式产物需要重新运行当前代码的 CI。
 
 1. 六个平台获取并校验已有程序，再生成 Windows EXE、Linux DEB、macOS DMG。
 2. Windows 验证安装、服务注册、普通用户代理/TUN、更新安装路径、卸载与用户文件保留，并扫描 Defender；PE 图标在打包阶段核验。
 3. Linux 安装 DEB 后验证普通用户系统代理、HTTP 转发、TUN 接管与清理；最新版 Ubuntu 使用同一份 Ubuntu 22.04 DEB 再验证一次。
 4. macOS 核验 App/DMG 版本、架构、资源及签名，启动安装后的 GUI/内核并验证代理/TUN。当前使用 ad-hoc 签名，没有 Developer ID 与 Apple 公证。
-5. 核对安装包、校验值、成功记录及来源后，正式模式才公开 Release；`check_only` 仅保留 Actions 附件。开发版本标记为 prerelease，不覆盖稳定版 latest。
+5. Android 复用三种 ABI 的已编译 APK，检查签名、架构与 16 KiB 对齐；x86_64 最终包再运行代理/TUN 测试。`check_only` 保留固定开发签名，正式发布要求单独配置长期签名。
+6. 核对安装包、校验值、成功记录及来源后，正式模式才公开 Release；`check_only` 仅保留 Actions 附件。开发版本标记为 prerelease，不覆盖稳定版 latest。
 
 只有最终发布 job 有 `contents: write`。`scripts/build-installer.py` 必须接收 `--prebuilt` 的已验证 CI 产物，已移除本地 Cargo 构建回退和 WSL 构建脚本。
 

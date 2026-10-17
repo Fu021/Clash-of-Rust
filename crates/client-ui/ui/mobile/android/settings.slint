@@ -1,0 +1,64 @@
+import { MobileTypography } from "../shared/typography.slint";
+import { MobileData, MobileView, MobileActions, MobileIntent } from "../shared/state.slint";
+import { AndroidData, AndroidActions, AndroidIntent } from "state.slint";
+import { MText, MSmall, MHeading, MCard, MButton, MRow, MDivider, MSwitch, MField, MScroll, MProgress } from "../shared/controls.slint";
+import { AppearanceSettings, NetworkToggles, MaintenanceSettings } from "../shared/settings.slint";
+
+component AndroidNetwork inherits VerticalLayout {
+    alignment: start; spacing: 10px;
+    MHeading { text: "网络"; }
+    MCard {
+        HorizontalLayout { spacing: MobileTypography.gap; cross-axis-alignment: center;
+            MText { text: "混合端口"; }
+            MField { width: 96px; horizontal-stretch: 0; text <=> MobileData.mixed-port; edited(value) => { AndroidData.ports-dirty = true; } }
+        }
+        HorizontalLayout { spacing: MobileTypography.gap; cross-axis-alignment: center;
+            MText { text: "控制端口"; }
+            MField { width: 96px; horizontal-stretch: 0; text <=> MobileData.controller-port; edited(value) => { AndroidData.ports-dirty = true; } }
+        }
+        if AndroidData.ports-dirty: MButton { text: "保存端口"; primary: true; clicked => { MobileActions.request(MobileIntent.save-ports, MobileData.mixed-port + "," + MobileData.controller-port, ""); } }
+        MDivider { }
+        NetworkToggles { }
+    }
+}
+component AndroidConnection inherits VerticalLayout {
+    alignment: start; spacing: 10px;
+    MHeading { text: "连接与系统"; }
+    MCard {
+        MRow { title: "VPN 设置"; value: AndroidData.authorization-status; clicked => { AndroidActions.request(AndroidIntent.vpn-settings, ""); } }
+        MDivider { }
+        MRow { title: "应用分流"; value: AndroidData.application-scope; clicked => { AndroidActions.request(AndroidIntent.application-routing, ""); } }
+        MDivider { }
+        MSwitch { title: "通知显示实时速度"; checked: AndroidData.notification-speeds;
+            toggled(value) => { AndroidActions.request(AndroidIntent.notification-speeds, value ? "true" : "false"); }
+        }
+        MDivider { }
+        MRow { title: "电池与后台运行"; clicked => { AndroidActions.request(AndroidIntent.battery-settings, ""); } }
+    }
+}
+component AndroidAbout inherits MCard {
+    MRow { title: "当前版本"; value: MobileData.version; arrow: false; interactive: false; }
+    MSmall { text: AndroidData.update-status; wrap: word-wrap; }
+    if AndroidData.update-busy: MProgress { value: AndroidData.update-progress; indeterminate: AndroidData.update-progress == 0; }
+    HorizontalLayout { spacing: MobileTypography.small-gap;
+        MButton { text: "检查更新"; enabled: !AndroidData.update-busy; clicked => { MobileActions.request(MobileIntent.check-update, "", ""); } }
+        if AndroidData.update-available: MButton { text: "安装更新"; primary: true; enabled: !AndroidData.update-busy;
+            clicked => { MobileActions.request(MobileIntent.install-update, "", ""); }
+        }
+    }
+}
+export component AndroidSettings inherits Rectangle {
+    MScroll {
+        content-y <=> MobileView.settings-scroll-y;
+        changed content-height => { MobileView.settings-content-height = self.content-height; }
+        changed height => { MobileView.settings-viewport-height = self.height; }
+        init => { MobileView.settings-content-height = self.content-height; MobileView.settings-viewport-height = self.height; }
+        if root.width < 760px: VerticalLayout { alignment: start; spacing: 20px; padding-bottom: 20px;
+            AppearanceSettings { custom-font-size: false; } AndroidNetwork { } AndroidConnection { } MaintenanceSettings { } AndroidAbout { }
+        }
+        if root.width >= 760px: HorizontalLayout { spacing: 20px; width: root.width;
+            VerticalLayout { alignment: start; spacing: 20px; AppearanceSettings { custom-font-size: false; } AndroidConnection { } }
+            VerticalLayout { alignment: start; spacing: 20px; AndroidNetwork { } MaintenanceSettings { } AndroidAbout { } }
+        }
+    }
+}

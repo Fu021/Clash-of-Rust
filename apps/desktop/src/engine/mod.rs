@@ -766,6 +766,7 @@ impl Engine {
                         .map(|n| n.to_string())
                         .collect(),
                     total,
+                    locked: self.settings.claude_protection.is_some(),
                 }));
             }
             if proxy.now.is_empty() {
@@ -1024,6 +1025,7 @@ impl Engine {
         let mut node = crate::active_route::start(mode, &root).to_owned();
         let mut visited = std::collections::BTreeSet::new();
         let mut provider = None;
+        let mut route_groups = std::collections::BTreeMap::new();
         loop {
             if crate::active_route::terminal(&node)
                 || visited.len() >= crate::active_route::MAX_DEPTH
@@ -1032,7 +1034,12 @@ impl Engine {
                 bail!("请先选择具体代理节点；Claude 保护不能使用直连或未确定节点的代理组");
             }
             match self.api.proxy_nodes(&node).await {
-                Ok(proxy) if !proxy.now.is_empty() => node = proxy.now.to_string(),
+                Ok(proxy) if !proxy.now.is_empty() => {
+                    if matches!(proxy.kind.as_str(), "URLTest" | "Fallback" | "LoadBalance") {
+                        route_groups.insert(node.clone(), proxy.now.to_string());
+                    }
+                    node = proxy.now.to_string();
+                }
                 Ok(proxy) => {
                     ensure!(
                         proxy.all.is_empty()
@@ -1094,6 +1101,8 @@ impl Engine {
             },
         );
         protection.provider = provider;
+        protection.capture_automatic_groups(&self.api.get("proxies").await?);
+        protection.locked_groups.extend(route_groups);
         #[cfg(target_os = "macos")]
         {
             protection.system_dns = platform::macos::dns::system_servers()?;
@@ -1196,9 +1205,13 @@ impl Engine {
                     // Use the core's actual upstream DNS path (not fake-IP or the
                     // host resolver) before committing a full-route takeover.
                     self.api
-                        .resolve_domain("www.cloudflare.com")
+                        .wait_for_dns("www.cloudflare.com", Duration::from_secs(30))
                         .await
                         .context("保护节点或加密 DNS 无法连通，请检查节点和节点 DNS 配置")?;
+                } else if let Some(saved) = &old.claude_protection {
+                    self.api
+                        .restore_automatic_groups(&saved.locked_groups, &saved.fixed_groups)
+                        .await?;
                 }
             } else {
                 #[cfg(target_os = "macos")]
@@ -1210,12 +1223,25 @@ impl Engine {
         }
         .await;
         if let Err(error) = changed {
-            let runtime = if let Some(previous) = &previous {
-                self.apply_protection_runtime(&original, previous, old.claude_protection.is_some())
-                    .await
-            } else {
-                Ok(())
-            };
+            let runtime = async {
+                if let Some(previous) = &previous {
+                    self.apply_protection_runtime(
+                        &original,
+                        previous,
+                        old.claude_protection.is_some(),
+                    )
+                    .await?;
+                    if old.claude_protection.is_none()
+                        && let Some(saved) = &protection
+                    {
+                        self.api
+                            .restore_automatic_groups(&saved.locked_groups, &saved.fixed_groups)
+                            .await?;
+                    }
+                }
+                Ok::<_, anyhow::Error>(())
+            }
+            .await;
             let disk = transaction.rollback();
             self.start_protection_guard();
             return Err(error.context(format!(
@@ -1404,6 +1430,14 @@ impl Engine {
         )?;
         transaction.prepare()?;
         Ok(transaction)
+    }
+
+    pub async fn select_node(&self, group: &str, node: &str) -> Result<()> {
+        ensure!(
+            self.settings.claude_protection.is_none(),
+            "Claude 保护已锁定当前节点，请先关闭保护再切换节点"
+        );
+        self.api.select(group, node).await
     }
 
     pub async fn select_mode(&mut self, mode: &str) -> Result<()> {
@@ -1804,6 +1838,9 @@ impl Engine {
     }
 
     async fn current_node(&self, mode: &str, proxies: &Proxies) -> Result<Option<String>> {
+        if let Some(protection) = &self.settings.claude_protection {
+            return Ok(Some(protection.node.clone()));
+        }
         let default = if mode == "rule" {
             self.default_route()?
         } else {

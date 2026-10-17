@@ -1,0 +1,104 @@
+// Fixed, offline demonstration data. Imported only by the Viewer entry points.
+import { MobileData, MobileView } from "state.slint";
+
+export component MobileFixture inherits Rectangle {
+    width: 0px; height: 0px;
+    init => {
+        MobileData.version = "0.6.0";
+        MobileData.site-summary = "确认可用 74 · 网页可达 20 · 受限 36";
+        MobileData.core-running = true;
+        MobileData.profile = "我的订阅"; MobileData.node = "德国 01 · IPv6";
+        MobileData.download-rate = "1.24 MiB/s"; MobileData.upload-rate = "28.6 KiB/s";
+        MobileData.connection-count = "24"; MobileData.download-total = "386 MiB"; MobileData.upload-total = "21.7 MiB";
+        MobileData.connection-page = "1 / 1 · 24 条";
+        MobileData.rule-page = "1 / 1 · 4 条";
+        MobileData.groups = [
+            {id: "Proxy", title: "Proxy", detail: "Selector · 6 个节点", current: "德国 01 · IPv6", expanded: true,
+                page: "6 个节点", nodes: [
+                    {left: {group: "Proxy", name: "DIRECT", kind: "Direct", delay: "未测速", tone: 4, valid: true},
+                     right: {group: "Proxy", name: "德国 01 · IPv6", kind: "AnyTLS", delay: "45 ms", tone: 1, valid: true, selected: true}},
+                    {left: {group: "Proxy", name: "新加坡 01", kind: "Trojan", delay: "376 ms", tone: 2, valid: true},
+                     right: {group: "Proxy", name: "日本 01", kind: "Shadowsocks", delay: "64 ms", tone: 1, valid: true}},
+                    {left: {group: "Proxy", name: "美国 01", kind: "VLESS", delay: "868 ms", tone: 3, valid: true},
+                     right: {group: "Proxy", name: "香港 02", kind: "VLESS", delay: "28 ms", tone: 1, valid: true}}
+                ]},
+            {id: "auto", title: "自动选择", detail: "URLTest · 5 个节点", current: "香港 02", expanded: false, nodes: []}
+        ];
+        MobileData.profiles = [
+            {id: "main", name: "我的订阅", source: "https://example.com/subscription", detail: "2.4 GiB / 100 GiB · 10:30 更新", active: true},
+            {id: "backup", name: "备用订阅", source: "https://example.org/sub", detail: "2026-10-15 18:20 更新"},
+            {id: "local", name: "默认直连", source: "default.yaml", detail: "本地配置", local: true}
+        ];
+        MobileData.connections = [
+            {id: "1", host: "api.github.com:443", detail: "tcp · 10:31:20", rule: "DOMAIN-SUFFIX github.com", route: "Proxy → 德国 01 · IPv6", up: "2.4 KiB/s", down: "128 KiB/s", upload: "24 KiB", download: "1.8 MiB"},
+            {id: "2", host: "www.google.com:443", detail: "tcp · 10:31:24", rule: "DOMAIN-SUFFIX google.com", route: "Proxy → 德国 01 · IPv6", up: "1.8 KiB/s", down: "86 KiB/s", upload: "18 KiB", download: "980 KiB"},
+            {id: "3", host: "example.org:443", detail: "tcp · 10:31:28", rule: "DOMAIN example.org", route: "DIRECT", up: "0 B/s", down: "0 B/s", upload: "2 KiB", download: "34 KiB"}
+        ];
+        MobileData.connection-details = [
+            {label: "连接名称", value: "api.github.com:443"},
+            {label: "网络 / 类型", value: "TCP · TUN"},
+            {label: "域名", value: "api.github.com"},
+            {label: "嗅探域名", value: "api.github.com"},
+            {label: "目标 IP", value: "140.82.112.6"},
+            {label: "目标端口", value: "443"},
+            {label: "来源地址", value: "198.18.0.1:53218"},
+            {label: "入站", value: "tun-in"},
+            {label: "匹配规则", value: "DOMAIN-SUFFIX,github.com"},
+            {label: "代理链", value: "Proxy → 德国 01 · IPv6"},
+            {label: "下载 / 上传速度", value: "128 KiB/s / 2.4 KiB/s"},
+            {label: "下载 / 上传量", value: "1.8 MiB / 24 KiB"},
+            {label: "开始时间", value: "2026-10-16 10:31:20"},
+            {label: "连接 ID", value: "c4a7cfc7-8e42-4b34-a06e-5f225fdc803a"}
+        ];
+        MobileData.shortcuts = ["拦截广告", "私有域名直连", "私有 IP 直连", "国内域名直连", "国内 IP 直连"];
+        MobileData.shortcut-values = [false, false, false, false, false];
+        MobileData.rule-profile = "我的订阅";
+        MobileData.rule-profiles = ["我的订阅", "备用订阅"];
+        MobileData.rule-policies = ["DIRECT", "REJECT", "Proxy", "自动选择"];
+        MobileData.rules = [
+            {id: "1", position: "1", kind: "DOMAIN-SUFFIX", value: "google.com", policy: "DIRECT", source: "自定义", enabled: true},
+            {id: "2", position: "2", kind: "DOMAIN-SUFFIX", value: "github.com", policy: "Proxy", source: "订阅", enabled: true},
+            {id: "3", position: "3", kind: "GEOIP", value: "CN", policy: "DIRECT", source: "订阅", enabled: true},
+            {id: "4", position: "4", kind: "MATCH", value: "", policy: "Proxy", source: "订阅", enabled: true}
+        ];
+        MobileData.logs = [
+            {time: "10:30:00", level: "INFO", message: "mihomo 已启动，控制接口可用，VPN 会话已建立。", tone: 4},
+            {time: "10:31:20", level: "INFO", message: "[TCP] 198.18.0.1:53218 → api.github.com:443 match DomainSuffix(github.com) using Proxy[德国 01 · IPv6]", tone: 4},
+            {time: "10:31:24", level: "WARN", message: "[DNS] query example.invalid: temporary failure; retrying with the configured resolver. 演示长日志，可点击查看并复制全文。", tone: 2},
+            {time: "10:31:28", level: "DEBUG", message: "配置已更新，规则与 DNS 覆盖已生效。", tone: 4}
+        ];
+        MobileData.site-progress = "完成 183 / 183";
+        MobileData.exit-ip = "203.0.113.42"; MobileData.exit-country = "德国";
+        MobileData.exit-flag = @image-url("../preview-data/de.svg");
+        MobileData.categories = [
+            {left: {id: "AI", title: "AI", count: "4 / 5", detail: "确认可用 3 · 网页可达 1 · 受限 1", tone: 2},
+             right: {id: "全球", title: "全球", count: "16 / 19", detail: "确认可用 14 · 网页可达 2 · 受限 3", tone: 2}},
+            {left: {id: "日本", title: "日本", count: "8 / 12", detail: "确认可用 6 · 网页可达 2 · 受限 4", tone: 2},
+             right: {id: "香港", title: "香港", count: "9 / 13", detail: "确认可用 8 · 网页可达 1 · 受限 4", tone: 2}},
+            {left: {id: "欧洲", title: "欧洲", count: "12 / 12", detail: "确认可用 12 · 网页可达 0 · 受限 0", tone: 1},
+             right: {id: "台湾", title: "台湾", count: "8 / 13", detail: "确认可用 8 · 网页可达 0 · 受限 5", tone: 2}}
+        ];
+        MobileData.site-results = [
+            {id: "chatgpt", title: "ChatGPT", value: "可用 · 识别地区：德国 · 246 ms", source: "服务响应", tone: 1},
+            {id: "claude", title: "Claude", value: "可用 · 识别地区：德国 · 312 ms", source: "服务响应", tone: 1},
+            {id: "gemini", title: "Gemini", value: "网页可达，登录后可用情况待确认", source: "网页响应", tone: 2},
+            {id: "copilot", title: "Copilot", value: "可用 · 识别地区：德国 · 218 ms", source: "服务响应", tone: 1},
+            {id: "other", title: "其他 AI 服务", value: "当前地区不可用", source: "服务响应", tone: 3}
+        ];
+        MobileData.claude-normal = "18"; MobileData.claude-risk = "2"; MobileData.claude-clues = "5";
+        MobileData.claude-status = "检测完成 · 浏览器采样已回传";
+        MobileData.claude-results = [
+            {id: "dns", title: "递归 DNS 地区", value: "DNS 地区与代理出口不同", detail: "检查系统与浏览器 DNS 设置。", source: "浏览器采样 · 固定演示结果", tone: 3},
+            {id: "route", title: "关联服务直连", value: "assets-proxy.anthropic.com", detail: "发现 DIRECT 连接，尚未启用保护。", source: "内核连接记录 · 固定演示结果", tone: 3},
+            {id: "exit", title: "出口地区", value: "德国 · 与当前节点一致", detail: "未发现地区冲突。", source: "服务响应", tone: 1},
+            {id: "site", title: "Claude 网页", value: "网页可达", detail: "未携带账户 Cookie。", source: "匿名服务响应", tone: 1},
+            {id: "shared", title: "共享服务域名", value: "Cloudflare 等服务也被其他应用使用", detail: "广泛规则可能影响这些应用的连接。", source: "规则与网络线索", tone: 2}
+        ];
+        MobileData.geo-status = "2026-10-15";
+        MobileView.profile-name = "我的订阅"; MobileView.profile-source = "https://example.com/subscription";
+        MobileView.rule-payload = "google.com"; MobileView.rule-raw = "DOMAIN-SUFFIX,google.com,DIRECT";
+        MobileView.selected-rule = MobileData.rules[0]; MobileView.selected-id = "1";
+        MobileView.log-message = MobileData.logs[2].message;
+        MobileView.pending-detail = 2;
+    }
+}

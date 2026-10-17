@@ -135,7 +135,17 @@ def check(binary, bundle, test_case='basic_system_proxy_and_tun'):
                                 if time.monotonic() >= deadline:
                                     raise RuntimeError('Service core survived its ordinary GUI owner')
                                 time.sleep(0.1)
-                shutil.rmtree(crashed['temporary'])
+                # Listener closure precedes the core's final file/Defender handle
+                # release on Windows. Keep a bounded cleanup wait; do not hide a
+                # surviving process or permanent permissions failure.
+                deadline = time.monotonic()+10
+                while Path(crashed['temporary']).exists():
+                    try:
+                        shutil.rmtree(crashed['temporary'])
+                    except OSError as error:
+                        if getattr(error,'winerror',None) not in (5,32,145) or time.monotonic()>=deadline:
+                            raise
+                        time.sleep(0.1)
             run_unelevated(command, env)
         finally:
             if own_service:

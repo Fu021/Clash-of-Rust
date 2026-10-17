@@ -26,7 +26,7 @@ export enum Intent {
 }
 export struct Choice { id: string, label: string }
 export struct DetailItem { label: string, value: string }
-export struct NodeItem { group: string, name: string, kind: string, delay: string, selected: bool, valid: bool }
+export struct NodeItem { group: string, name: string, kind: string, delay: string, tone: int, selected: bool, valid: bool }
 export struct NodePair { left: NodeItem, right: NodeItem }
 export struct GroupItem { id: string, title: string, detail: string, current: string, expanded: bool, testing: bool, page: string, previous: bool, next: bool, nodes: [NodePair] }
 export struct ProfileItem { id: string, name: string, source: string, detail: string, active: bool, local: bool }

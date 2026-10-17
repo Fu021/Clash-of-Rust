@@ -44,62 +44,17 @@ fn connection_details(
     connection: &clash_of_rust::api::Connection,
     resolved: &str,
 ) -> Vec<DetailItem> {
-    let rate = |value: Option<u64>| {
-        value.map_or_else(|| "—".into(), |value| format!("{}/s", bytes(value)))
-    };
-    [
-        ("连接名称", connection::name(connection).to_owned()),
-        ("域名", connection.metadata.host.to_string()),
-        (
-            "嗅探域名",
-            connection_lookup::hostname(connection).to_owned(),
-        ),
-        (
-            "目标 IP",
-            if connection.metadata.destination_ip.is_empty() {
-                resolved.to_owned()
+    connection::detail_values(connection, resolved)
+        .into_iter()
+        .map(|(label, value)| DetailItem {
+            label: label.into(),
+            value: if value.is_empty() {
+                "—".into()
             } else {
-                connection.metadata.destination_ip.to_string()
+                value.into()
             },
-        ),
-        ("目标端口", connection.metadata.destination_port.to_string()),
-        ("协议", connection.metadata.network.to_string()),
-        (
-            "匹配规则",
-            format!("{} {}", connection.rule, connection.rule_payload)
-                .trim()
-                .to_owned(),
-        ),
-        (
-            "代理链",
-            connection
-                .chains
-                .iter()
-                .rev()
-                .map(|name| name.as_str())
-                .collect::<Vec<_>>()
-                .join(" → "),
-        ),
-        ("上传速度", rate(connection.rates.map(|value| value.upload))),
-        (
-            "下载速度",
-            rate(connection.rates.map(|value| value.download)),
-        ),
-        ("累计上传", bytes(connection.upload)),
-        ("累计下载", bytes(connection.download)),
-        ("开始时间", connection.start.to_string()),
-        ("连接 ID", connection.id.to_string()),
-    ]
-    .into_iter()
-    .map(|(label, value)| DetailItem {
-        label: label.into(),
-        value: if value.is_empty() {
-            "—".into()
-        } else {
-            value.into()
-        },
-    })
-    .collect()
+        })
+        .collect()
 }
 
 impl App {
@@ -164,19 +119,8 @@ impl App {
                             .get(name)
                             .map_or("", |node| node.kind.as_str())
                             .into(),
-                        delay: self
-                            .node_delay(name)
-                            .map_or_else(
-                                || "未测速".into(),
-                                |delay| {
-                                    if delay == 0 {
-                                        "超时".into()
-                                    } else {
-                                        format!("{delay} ms")
-                                    }
-                                },
-                            )
-                            .into(),
+                        delay: proxy_order::delay_label(self.node_delay(name)).into(),
+                        tone: proxy_order::delay_tone(self.node_delay(name)),
                     }
                 };
                 for pair in indices[start..(start + PAGE_SIZE).min(count)].chunks(2) {
@@ -547,13 +491,7 @@ impl App {
             models.set_groups(Vec::new());
         }
         if self.page == Page::Profiles {
-            let profiles: Vec<_> = self
-                .profiles
-                .iter()
-                .filter(|profile| {
-                    contains_query(&profile.name, &query) || contains_query(&profile.source, &query)
-                })
-                .collect();
+            let profiles: Vec<_> = self.profiles.iter().collect();
             self.pager(data, profiles.len(), PAGE_SIZE);
             reconcile(
                 &models.profiles,
@@ -1179,6 +1117,7 @@ impl App {
         } else if self.accent_open {
             kind = 12;
             data.set_modal_title("强调色".into());
+            data.set_modal_can_accept(!self.exiting);
             data.set_modal_accept("完成".into());
         } else {
             kind = 0;

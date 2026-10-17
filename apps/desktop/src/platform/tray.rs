@@ -131,6 +131,7 @@ pub struct Nodes {
     pub selected: String,
     pub names: Vec<String>,
     pub total: usize,
+    pub locked: bool,
 }
 
 #[derive(Clone, Default, PartialEq, Eq)]
@@ -292,10 +293,18 @@ impl Checks {
                 while self.nodes.remove_at(0).is_some() {}
                 self.node_items.clear();
                 if let Some(nodes) = &state.nodes {
-                    self.nodes.set_text(format!("节点 · {}", nodes.group));
+                    self.nodes.set_text(format!(
+                        "节点 · {}{}",
+                        nodes.group,
+                        if nodes.locked { " · 已锁定" } else { "" }
+                    ));
                     for name in &nodes.names {
-                        let item =
-                            CheckMenuItem::new(name, state.running, name == &nodes.selected, None);
+                        let item = CheckMenuItem::new(
+                            name,
+                            state.running && !nodes.locked,
+                            name == &nodes.selected,
+                            None,
+                        );
                         if self.nodes.append(&item).is_ok() {
                             commands.push((
                                 item.id().clone(),
@@ -334,8 +343,8 @@ impl Checks {
                 if item.is_checked() != selected {
                     item.set_checked(selected);
                 }
-                if item.is_enabled() != state.running {
-                    item.set_enabled(state.running);
+                if item.is_enabled() != (state.running && !nodes.locked) {
+                    item.set_enabled(state.running && !nodes.locked);
                 }
             }
         }

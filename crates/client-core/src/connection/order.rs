@@ -66,6 +66,25 @@ fn special(name: &str) -> u8 {
     }
 }
 
+/// Semantic latency status shared by desktop and mobile; never an accent color.
+/// 1 green (< 300 ms), 2 amber (< 800 ms), 3 red (slow/timeout), 4 untested.
+pub fn delay_tone(delay: Option<u32>) -> i32 {
+    match delay {
+        None => 4,
+        Some(0 | 800..) => 3,
+        Some(1..300) => 1,
+        Some(_) => 2,
+    }
+}
+
+pub fn delay_label(delay: Option<u32>) -> String {
+    match delay {
+        None => "未测速".into(),
+        Some(0) => "超时".into(),
+        Some(ms) => format!("{ms} ms"),
+    }
+}
+
 fn latency(delay: Option<u32>) -> (u8, u32) {
     match delay {
         Some(value) if value > 0 => (0, value),
@@ -110,6 +129,24 @@ pub fn sorted_indices<T: AsRef<str>>(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn latency_status_preserves_unknown_timeout_and_thresholds() {
+        for (delay, tone) in [
+            (None, 4),
+            (Some(0), 3),
+            (Some(1), 1),
+            (Some(299), 1),
+            (Some(300), 2),
+            (Some(799), 2),
+            (Some(800), 3),
+        ] {
+            assert_eq!(delay_tone(delay), tone);
+        }
+        assert_eq!(delay_label(None), "未测速");
+        assert_eq!(delay_label(Some(0)), "超时");
+        assert_eq!(delay_label(Some(42)), "42 ms");
+    }
 
     #[test]
     fn natural_names_handle_numbers_unicode_case_and_large_values() {

@@ -1,0 +1,48 @@
+name: Private local cache
+description: Restore and save authenticated cache archives through the private tailnet
+inputs:
+  url:
+    description: Private cache service URL
+    required: false
+  token:
+    description: Cache access token
+    required: false
+  proxy:
+    description: Runner-local Tailscale userspace HTTP proxy
+    required: false
+  group:
+    description: Human-readable category/platform directory on the cache host
+    required: true
+  key:
+    description: Tool version or build profile identity
+    required: true
+  restore-keys:
+    description: Compatible key prefixes (Rust generations are computed automatically)
+    required: false
+  paths:
+    description: Newline-separated runner paths; computed automatically for Rust
+    required: false
+  kind:
+    description: archives or rust
+    default: archives
+  source:
+    description: Cargo workspace directory
+    default: .
+  save:
+    description: Save successful jobs only; false restores without writing
+    default: 'true'
+  github-hit:
+    description: GitHub cache-hit output; ambiguous Rust prefix hits are checked for restored objects
+    required: false
+outputs:
+  cache-hit:
+    description: The exact current cache key was restored
+  restored:
+    description: An exact or compatible generation was restored
+  available:
+    description: The private service answered successfully
+runs:
+  using: node24
+  main: index.cjs
+  post: index.cjs
+  post-if: success()

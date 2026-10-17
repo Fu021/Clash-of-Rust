@@ -77,22 +77,10 @@ impl App {
         let generation = self.connection_lookup.generation;
         let (task, handle) = Task::perform(
             async move {
-                tokio::time::timeout(Duration::from_secs(16), async move {
-                    let api = engine.lock().await.api.clone();
-                    let ips = match api.resolve_domain(&host).await {
-                        Ok(ips) => ips,
-                        Err(_) => clash_client_core::dns::through_proxy(&host, port).await?,
-                    };
-                    Ok::<_, anyhow::Error>(
-                        ips.iter()
-                            .map(ToString::to_string)
-                            .collect::<Vec<_>>()
-                            .join("\n"),
-                    )
-                })
-                .await
-                .map_err(|_| "目标地址查询超时".to_owned())?
-                .map_err(|_| "未查到目标地址".to_owned())
+                let api = engine.lock().await.api.clone();
+                clash_client_core::connection::resolve_target(&api, &host, port)
+                    .await
+                    .map_err(|_| "未查到目标地址".to_owned())
             },
             move |result| Message::ConnectionResolved(generation, result),
         )

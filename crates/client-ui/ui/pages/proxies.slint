@@ -6,17 +6,17 @@ import { Label, Caption, Heading, Chevron, ContentPanel, RowPanel, ActionButton,
 component NodeCard inherits ContentPanel {
     in property <NodeItem> node;
     preferred-width: 0px; min-width: 0px; horizontal-stretch: 1;
-    interactive: UiData.running && !UiData.working;
+    interactive: UiData.running && !UiData.working && !UiData.protected && !UiData.protection-pending;
     clicked => { UiActions.dispatch(Intent.select-node, root.node.group, root.node.name); }
     border-color: node.selected ? Theme.accent : Theme.line;
     background: node.selected ? Theme.accent-wash : Theme.surface;
     HorizontalLayout { cross-axis-alignment: center; spacing: Theme.content-gap;
         Label { text: root.node.name; color: root.node.selected ? Theme.accent : Theme.ink; }
-        Caption { text: root.node.delay; color: root.node.delay == "超时" ? Theme.danger : root.node.delay == "未测速" ? Theme.muted : Theme.accent; horizontal-stretch: 0; }
+        Caption { text: root.node.delay; color: root.node.tone == 1 ? Theme.success : root.node.tone == 2 ? Theme.warning : root.node.tone == 3 ? Theme.danger : Theme.muted; horizontal-stretch: 0; }
     }
     HorizontalLayout { cross-axis-alignment: center; spacing: Theme.content-gap;
         Caption { text: root.node.kind; }
-        if root.node.selected: Badge { text: "使用中"; tone: 1; }
+        if root.node.selected: Badge { text: UiData.protected ? "已锁定" : "使用中"; tone: 1; }
         ActionButton { text: "测速"; enabled: UiData.running && !UiData.working; clicked => { UiActions.dispatch(Intent.node-delay, root.node.name, ""); } }
     }
 }

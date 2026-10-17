@@ -41,6 +41,136 @@ DIALOGS = {
 }
 
 
+def mobile_preview(args) -> None:
+    """Preview the independent Android/iOS entries without building a native host."""
+    platforms = ['android', 'ios'] if args.platform == 'both' else [args.platform]
+    for platform in platforms:
+        entry = ROOT / f'crates/client-ui/ui/mobile/{platform}/preview.slint'
+        run_viewer(args.viewer, ['--check', str(entry)], dict(os.environ))
+    if args.check:
+        print('Android/iOS Slint syntax and bindings: OK')
+        return
+    try:
+        width, height = map(int, (args.size or '393x852').lower().split('x'))
+        if not (320 <= width <= 4096 and 320 <= height <= 4096):
+            raise ValueError
+    except ValueError:
+        raise RuntimeError('--size must be WIDTHxHEIGHT, between 320x320 and 4096x4096')
+    base = (args.output or ROOT / 'dist/mobile-preview').resolve()
+    pages = {**PAGES, 'tools': '工具'}
+    names = list(pages) if args.page == 'all' else [args.page]
+    themes = [False, True] if args.theme == 'both' else [args.theme == 'dark']
+    for platform in platforms:
+        entry = ROOT / f'crates/client-ui/ui/mobile/{platform}/preview.slint'
+        output = base / platform
+        fixtures = output / 'fixtures'
+        fixtures.mkdir(parents=True, exist_ok=True)
+        env = {**os.environ, 'SLINT_SCALE_FACTOR': '1', 'XDG_CACHE_HOME': str(output / 'cache')}
+        entries = []
+
+        def render(name, label, size='393x852', page=0, dark=False, detail=0,
+                   scale=1, connected=True, keyboard=0, **extra):
+            width, height = map(int, size.split('x'))
+            short = height < 480
+            values = {'preview-page': page, 'preview-dark': dark, 'preview-detail': detail,
+                      'inset-top': 0 if short else 24 if width >= 640 else 54 if platform == 'ios' else 28,
+                      'inset-bottom': 21 if short else 30 if platform == 'ios' else 24,
+                      'inset-left': 44 if short and platform == 'ios' else 0,
+                      'inset-right': 44 if short and platform == 'ios' else 0,
+                      'text-scale': scale, 'preview-connected': connected, 'preview-keyboard': keyboard,
+                      'preview-notice': args.notice, 'preview-notice-elapsed': args.notice_elapsed,
+                      **extra}
+            fixture = fixtures / (name + '.json')
+            fixture.write_text(json.dumps(values), encoding='utf-8')
+            path = output / (name + '.png')
+            run_viewer(args.viewer, ['--load-data', str(fixture), '--size', size,
+                                    '--screenshot', str(path), str(entry)], env)
+            if image_size(path) != (width, height):
+                raise RuntimeError(f'{name}: unexpected screenshot dimensions: {image_size(path)}')
+            entries.append({'file': path.name, 'label': label, 'width': width, 'height': height,
+                            'theme': 'dark' if dark else 'light', 'dialog': detail, 'page': page})
+            print(f'Rendered {platform}/{name}', flush=True)
+
+        for name in names:
+            for dark in themes:
+                render(f'{name}-{"dark" if dark else "light"}', pages[name],
+                       args.size or '393x852', list(pages).index(name), dark, scale=args.text_scale)
+        if args.page == 'all':
+            for name, label, size, page, dark, detail, scale in [
+                ('phone-landscape', '手机横屏 · 首页', '852x393', 0, False, 0, 1),
+                ('landscape-rules', '手机横屏 · 规则', '852x393', 4, False, 0, 1),
+                ('landscape-connections', '手机横屏 · 连接', '852x393', 3, False, 0, 1),
+                ('pad-portrait', 'Pad 竖屏 · 代理', '834x1194', 1, False, 0, 1),
+                ('pad-landscape', 'Pad 横屏 · 代理', '1194x834', 1, True, 0, 1),
+                ('pad-connections', 'Pad 横屏 · 连接详情', '1194x834', 3, False, 5, 1),
+                ('pad-risk', 'Pad 横屏 · 风险详情', '1194x834', 8, True, 1, 1),
+                ('pad-settings', 'Pad 横屏 · 设置', '1194x834', 9, False, 0, 1),
+                ('settings-full', '设置 · 完整内容', '1194x1200', 9, False, 0, 1),
+                ('pad-split', 'Pad 分屏 · 检测报告', '507x834', 8, False, 0, 1),
+                ('small-phone', '小屏手机', '360x780', 9, False, 0, 1),
+                ('large-text', '大字号 · 125%', '393x852', 8, False, 0, 1.25),
+                ('risk-detail', '风险项目详情', '393x852', 8, False, 1, 1),
+                ('rule-editor', '规则编辑', '393x852', 4, False, 2, 1),
+                ('connection-details', '连接详情', '393x852', 3, False, 5, 1),
+                ('log-detail', '日志全文', '393x852', 5, False, 10, 1),
+                ('ip-category', '分类检测详情', '393x852', 7, False, 6, 1),
+                ('delete-confirm', '删除确认', '393x852', 2, False, 4, 1),
+                ('draft-confirm', '草稿保护', '393x852', 4, False, 12, 1),
+                ('protection', '保护确认', '393x852', 8, True, 8, 1),
+                ('accent-picker', '强调色', '393x852', 9, False, 11, 1),
+            ]:
+                render(name, label, size, page, dark, detail, scale)
+            render('disconnected', '连接前状态', connected=False)
+            render('rule-keyboard', '键盘避让', page=4, detail=2, keyboard=300)
+            render('rule-selected', '规则操作置顶', page=4, **{'preview-selected-rule': True})
+            render('rules-shortcuts', '快捷规则', page=4, **{'preview-shortcuts': True})
+            render('protection-pending', '切换期间进度', page=8, **{'preview-protection-pending': True})
+            render('notice', '通知与消退进度', **{'preview-notice': '配置已更新，当前连接保持运行。', 'preview-notice-elapsed': 3})
+            render('notice-over-modal', '通知位于弹窗上方', page=9, detail=11,
+                   **{'preview-notice': '强调色已保存。', 'preview-notice-elapsed': 3})
+            render('sparse-subscriptions', '少量内容置顶', page=2, **{'preview-sparse': True})
+        (output / 'manifest.json').write_text(json.dumps(entries, ensure_ascii=False, indent=2), encoding='utf-8')
+        gallery(entries, output)
+        if args.pairs:
+            pairs(args.viewer, entries, output, env)
+        for name, selected in [
+            ('phone-main', ['home-light', 'proxies-light', 'subscriptions-light', 'connections-light']),
+            ('phone-tools', ['rules-light', 'logs-light', 'network-light', 'tools-light']),
+            ('phone-reports', ['ip-check-light', 'ai-check-light', 'settings-light', 'risk-detail']),
+            ('phone-dark', ['home-dark', 'ai-check-dark', 'settings-dark', 'logs-dark']),
+            ('phone-details', ['connection-details', 'log-detail', 'rule-editor', 'ip-category']),
+            ('phone-confirmations', ['delete-confirm', 'draft-confirm', 'accent-picker', 'rule-keyboard']),
+        ]:
+            items = [e for filename in selected for e in entries if e['file'] == filename + '.png']
+            if not items:
+                continue
+            mobile_sheet(args.viewer, output, name, items, env)
+        print(f'{platform}: {output / "index.html"}', flush=True)
+
+
+def mobile_sheet(viewer, output, name, items, env):
+    """Compose unmodified screenshots with Slint Image items, at native scale."""
+    cell_width = max(item['width'] for item in items)
+    cell_height = max(item['height'] for item in items)
+    rows = (len(items) + 1) // 2
+    sheet_width = 48 + cell_width * 2
+    sheet_height = 24 + rows * (cell_height + 58)
+    source = ['import ' + json.dumps(str(ROOT / 'resources/fonts/SourceHanSansCN-Regular.otf')) + ';',
+              'export component Sheet inherits Window {',
+              f'width: {sheet_width}px; height: {sheet_height}px; background: #e8edf4;',
+              'default-font-family: "Source Han Sans CN";']
+    for i, item in enumerate(items):
+        x, y = 16 + i % 2 * (cell_width + 16), 12 + i // 2 * (cell_height + 58)
+        source.append(f'Text {{ x: {x}px; y: {y}px; width: {cell_width}px; height: 36px; '
+                      f'text: {json.dumps(item["label"], ensure_ascii=False)}; font-size: 18px; color: #141c29; }}')
+        source.append(f'Image {{ x: {x}px; y: {y+42}px; width: {item["width"]}px; height: {item["height"]}px; '
+                      f'source: @image-url({json.dumps(item["file"])}); }}')
+    source.append('}')
+    sheet = output / (name + '.slint')
+    sheet.write_text('\n'.join(source), encoding='utf-8')
+    run_viewer(viewer, ['--screenshot', str(output / (name + '.png')), str(sheet)], env)
+
+
 def run_viewer(viewer: str, arguments: list[str], env: dict[str, str]) -> None:
     result = subprocess.run([viewer, *arguments], cwd=ROOT, env=env, text=True,
                             stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=90)
@@ -50,6 +180,8 @@ def run_viewer(viewer: str, arguments: list[str], env: dict[str, str]) -> None:
         print(result.stderr, end="", file=sys.stderr)
     if result.returncode:
         raise RuntimeError(f"Slint Viewer exited with {result.returncode}")
+    if "ignoring unknown property:" in result.stderr:
+        raise RuntimeError("Preview data references a property missing from the selected Slint entry")
 
 
 def image_size(path: Path) -> tuple[int, int]:
@@ -162,24 +294,41 @@ def pairs(viewer: str, entries: list[dict], output: Path, env: dict[str, str]) -
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--viewer", default=shutil.which("slint-viewer"))
-    parser.add_argument("--page", choices=["all", *PAGES], default="all")
+    parser.add_argument("--page", choices=["all", *PAGES, "tools"], default="all")
+    parser.add_argument("--mobile", action="store_true", help="render the separate adaptive Android/iOS UI study")
+    parser.add_argument("--platform", choices=["android", "ios", "both"], default="both", help="mobile platform entry")
     parser.add_argument("--theme", choices=["light", "dark", "both"], default="both")
     parser.add_argument("--dialogs", action="store_true", help="also render confirmation, editing and result dialogs")
     parser.add_argument("--live", action="store_true", help="open the viewer with automatic reload")
     parser.add_argument("--check", action="store_true", help="only check Slint syntax and bindings")
     parser.add_argument("--pairs", action="store_true", help="also render light/dark pairs suitable for inline sharing")
     parser.add_argument("--full-settings", action="store_true", help="show all settings without scrolling in its page screenshot")
-    parser.add_argument("--size", default="950x700")
-    parser.add_argument("--output", type=Path, default=ROOT / "dist/slint-preview")
+    parser.add_argument("--notice", default="", help="show a floating notification using the production component")
+    parser.add_argument("--notice-elapsed", type=float, default=3, help="elapsed notification lifetime in seconds")
+    parser.add_argument("--size")
+    parser.add_argument("--text-scale", type=float, default=1, help="mobile font preview factor (native Android uses system SP conversions)")
+    parser.add_argument("--output", type=Path)
     args = parser.parse_args()
     if not args.viewer:
         parser.error("Install the official prebuilt Slint Viewer in a persistent directory, or pass --viewer PATH.")
+    if args.mobile:
+        mobile_preview(args)
+        return
+    if args.page == 'tools':
+        parser.error('--page tools is only available with --mobile')
+    args.size = args.size or '950x700'
+    args.output = args.output or ROOT / 'dist/slint-preview'
     try:
         width, height = map(int, args.size.lower().split("x"))
         if width < 800 or height < 450 or width > 4096 or height > 4096:
             raise ValueError
     except ValueError:
         parser.error("--size must be WIDTHxHEIGHT, between 800x450 and 4096x4096")
+
+    if args.check:
+        run_viewer(args.viewer, ["--check", str(ENTRY)], dict(os.environ))
+        print("Slint UI syntax and bindings: OK")
+        return
 
     output = args.output.resolve()
     output.mkdir(parents=True, exist_ok=True)
@@ -195,10 +344,6 @@ def main() -> None:
     env = {**os.environ, "FONTCONFIG_FILE": str(fontconfig), "SLINT_SCALE_FACTOR": "1"}
     entry = ENTRY
     run_viewer(args.viewer, ["--check", str(entry)], env)
-    if args.check:
-        print("Slint UI syntax and bindings: OK")
-        return
-
     pages = list(PAGES) if args.page == "all" else [args.page]
     themes = ["light", "dark"] if args.theme == "both" else [args.theme]
     if args.live:
@@ -217,7 +362,8 @@ def main() -> None:
     for theme in themes:
         for name, label, page, dialog in scenes:
             fixture = fixtures / f"{name}-{theme}.json"
-            fixture.write_text(json.dumps({"preview-page": list(PAGES).index(page), "preview-dark": theme == "dark", "dialog": dialog}))
+            fixture.write_text(json.dumps({"preview-page": list(PAGES).index(page), "preview-dark": theme == "dark", "dialog": dialog,
+                                           "preview-notice": args.notice, "preview-notice-elapsed": args.notice_elapsed}))
             image = output / f"{name}-{theme}.png"
             scene_size = f"{width}x{max(height, 1120)}" if args.full_settings and page == "settings" and not dialog else args.size
             run_viewer(args.viewer, ["--load-data", str(fixture), "--size", scene_size,
