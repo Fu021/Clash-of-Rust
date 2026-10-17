@@ -21,6 +21,7 @@ import tarfile
 import tempfile
 import threading
 import time
+import tomllib
 import urllib.error
 import urllib.parse
 import urllib.request
@@ -130,12 +131,30 @@ def rust_keys(source, compiler, environment):
     for path in sorted(files):
         if path.is_file():
             dependencies.update(path.relative_to(source).as_posix().encode())
-            dependencies.update(path.read_bytes())
+            content = path.read_bytes()
+            if path.name in ('Cargo.toml', 'Cargo.lock'):
+                # A client version bump is not a new third-party dependency.
+                # Keep every dependency constraint, feature and build profile.
+                try:
+                    parsed = tomllib.loads(content.decode())
+                    if path.name == 'Cargo.lock':
+                        for package in parsed.get('package', []):
+                            if 'source' not in package:
+                                package.pop('version', None)
+                    else:
+                        parsed.get('workspace', {}).get('package', {}).pop('version', None)
+                        parsed.get('package', {}).pop('version', None)
+                    content = json.dumps(parsed, sort_keys=True).encode()
+                except (ValueError, UnicodeDecodeError):
+                    pass  # Invalid manifests must still invalidate the cache.
+            dependencies.update(content)
     for name, value in sorted(environment.items()):
         if name.startswith(('RUST', 'CARGO_PROFILE_', 'CARGO_TARGET_', 'CC_', 'CXX_')):
             dependencies.update((name+'='+value).encode())
     generation = rust_environment_key(compiler, environment) + dependencies.hexdigest()
     sources = hashlib.sha256()
+    if (source/'Cargo.toml').is_file():
+        sources.update((source/'Cargo.toml').read_bytes())
     for directory in ('apps', 'crates', 'resources', 'scripts', '.github'):
         for path in sorted((source/directory).rglob('*')):
             relative = path.relative_to(source/directory).parts
@@ -178,7 +197,7 @@ def github_restored(config):
                for path in target.glob(pattern) if path.is_file() and not path.is_symlink())
 
 
-def pack(paths, destination, rust=False):
+def archive_filter(paths, rust=False):
     targets = {str(index) for index, path in enumerate(paths) if path.name == 'target'} if rust else set()
     def include(info):
         if not (info.isfile() or info.isdir()):
@@ -205,6 +224,11 @@ def pack(paths, destination, rust=False):
         info.uid = info.gid = 0
         info.uname = info.gname = ''
         return info
+    return include
+
+
+def pack(paths, destination, rust=False):
+    include = archive_filter(paths, rust)
     with tarfile.open(destination, 'w:gz', compresslevel=1) as archive:
         for index, path in enumerate(paths):
             if path.exists() and not path.is_symlink():
@@ -304,6 +328,10 @@ def restore(config):
         cache_report(config, 'restore', 'GitHub cache restored; private mirror unavailable' if github
                      else 'not configured; normal build')
         return
+    if config['kind'] == 'rust':
+        import cache_shards
+        if cache_shards.restore(config, github):
+            return
     query = urllib.parse.urlencode({'group': config['group'], 'key': config['key'], 'prefix': '\n'.join(config['prefix'])})
     with phase(config, 'lookup'), response(config, '/v1/lookup?'+query) as reply:
         status = reply.status
@@ -320,6 +348,7 @@ def restore(config):
             raise ValueError('Invalid cache metadata')
         if record['key'] != config['key'] and not any(record['key'].startswith(p) for p in config['prefix']):
             raise ValueError('Cache generation mismatch')
+        config['private_exact'] = record['key'] == config['key']
     if github:
         # GitHub supplied the data already. Only inspect private metadata; never
         # download the same archive twice. Source-only edits do not require a
@@ -362,16 +391,20 @@ def save(config):
     paths = cache_paths(config)
     if not any(p.exists() for p in paths):
         return
-    # A source-only edit rebuilds workspace crates, but does not change the
-    # dependency mirror. Re-upload only when its compiler/dependency generation
-    # changed, regardless of which tier supplied the objects.
-    unchanged = config['kind'] == 'rust' and (config.get('hit') or config.get('mirror_required') is False)
+    # The sharded mirror can retain fresh workspace objects cheaply too. Only
+    # skip an exact source/toolchain snapshot; a dependency-only GitHub hit must
+    # not prevent updated workspace/NDK outputs reaching the private tier.
+    unchanged = config['kind'] == 'rust' and config.get('private_exact', False)
     if config['kind'] != 'rust':
         with phase(config, 'fingerprint'):
             unchanged = config.get('fingerprint') == fingerprint(paths)
     unchanged = unchanged and not config.get('mirror_required', False)
     if unchanged:
         cache_report(config, 'save', 'unchanged; reused existing cache')
+        return
+    if config['kind'] == 'rust':
+        import cache_shards
+        cache_shards.save(config, paths)
         return
     with tempfile.TemporaryDirectory(prefix='actions-cache-', dir=os.environ.get('RUNNER_TEMP')) as temporary:
         archive = Path(temporary)/'cache.tar.gz'

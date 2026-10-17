@@ -22,7 +22,6 @@ jobs:
     outputs:
       resources: ${{ steps.resolve.outputs.resources }}
       tailscale: ${{ steps.resolve.outputs.tailscale }}
-      sccache: ${{ steps.resolve.outputs.sccache }}
       gradle: ${{ steps.resolve.outputs.gradle }}
       nsis: ${{ steps.resolve.outputs.nsis }}
     steps:
@@ -509,7 +508,7 @@ jobs:
         id: tailnet
         if: vars.TS_OAUTH_CLIENT_ID != '' && vars.TS_AUDIENCE != '' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository)
         uses: tailscale/github-action@v4
-        timeout-minutes: ${{ runner.os == 'macOS' && 10 || 3 }}
+        timeout-minutes: 3
         continue-on-error: true
         with:
           oauth-client-id: ${{ vars.TS_OAUTH_CLIENT_ID }}
@@ -548,7 +547,9 @@ jobs:
           prefix-key: native-release-v2-${{ matrix.os }}
           cache-on-failure: false
           cache-bin: false
-          cache-workspace-crates: false
+          # Preserve Slint-generated/workspace libraries on the slow Mac runners.
+          # They replace the retired duplicate 512 MiB sccache layer.
+          cache-workspace-crates: ${{ runner.os == 'macOS' }}
           save-if: true
       - name: Restore local fallback for native Rust cache
         id: rust_local
@@ -560,57 +561,13 @@ jobs:
           group: rust/${{ matrix.system }}-${{ matrix.arch }}
           kind: rust
           key: release-${{ matrix.target }}
-      - name: Verify architecture and identify compiler cache
-        id: environment
+      - name: Verify native architecture
         run: |
-          import subprocess, sys, os, hashlib, pathlib
+          import subprocess, sys
           sys.path.insert(0, 'scripts')
           from build_support import host_arch
           assert host_arch() == '${{ matrix.arch }}'
           assert 'host: ${{ matrix.target }}' in subprocess.check_output(['rustc', '-vV'], text=True)
-          with open(os.environ['GITHUB_OUTPUT'], 'a') as output:
-              output.write('compiler=' + hashlib.sha256(subprocess.check_output(['rustc', '-vV'])).hexdigest()[:16] + '\n')
-          if sys.platform == 'darwin':
-              with open(os.environ['GITHUB_ENV'], 'a') as env:
-                  env.write('SCCACHE_DIR=' + str(pathlib.Path(os.environ['RUNNER_TEMP']) / 'compiler-cache') + '\n')
-                  env.write('SCCACHE_CACHE_SIZE=512M\n')
-                  env.write('SCCACHE_BASEDIRS=' + os.environ['GITHUB_WORKSPACE'] + '\n')
-      - name: Install macOS compiler cache
-        if: runner.os == 'macOS'
-        id: compiler_cache
-        uses: mozilla-actions/sccache-action@v0.0.11
-        continue-on-error: true
-        with:
-          version: ${{ needs.inputs.outputs.sccache }}
-          disable_annotations: true
-      - name: Restore GitHub macOS compiler cache
-        if: runner.os == 'macOS' && steps.compiler_cache.outcome == 'success'
-        uses: actions/cache@v5
-        timeout-minutes: 5
-        continue-on-error: true
-        id: compiler_github
-        with:
-          path: ${{ env.SCCACHE_DIR }}
-          key: macos-compiler-${{ matrix.arch }}-${{ steps.environment.outputs.compiler }}-${{ hashFiles('Cargo.lock', 'Cargo.toml', '.cargo/**', 'apps/**/*.rs', 'apps/**/Cargo.toml', 'crates/**/*.rs', 'crates/**/*.slint', 'crates/**/Cargo.toml', 'resources/**', 'scripts/*.py', '.github/workflows/ci.yml') }}
-          restore-keys: macos-compiler-${{ matrix.arch }}-${{ steps.environment.outputs.compiler }}-
-      - name: Restore bounded macOS compilation results
-        if: runner.os == 'macOS' && steps.compiler_cache.outcome == 'success'
-        id: compiler_local
-        uses: ./.github/actions/local-cache
-        with:
-          github-hit: ${{ steps.compiler_github.outcome == 'success' && steps.compiler_github.outputs.cache-hit || '' }}
-          url: ${{ steps.tailnet.outcome == 'success' && vars.LOCAL_CACHE_URL || '' }}
-          token: ${{ secrets.LOCAL_CACHE_TOKEN }}
-          group: compiler/macos-${{ matrix.arch }}
-          paths: ${{ env.SCCACHE_DIR }}
-          key: ${{ steps.environment.outputs.compiler }}-${{ hashFiles('Cargo.lock', 'Cargo.toml', '.cargo/**', 'apps/**/*.rs', 'apps/**/Cargo.toml', 'crates/**/*.rs', 'crates/**/*.slint', 'crates/**/Cargo.toml', 'resources/**', 'scripts/*.py', '.github/workflows/ci.yml') }}
-          restore-keys: ${{ steps.environment.outputs.compiler }}-
-      - name: Enable macOS compiler cache
-        if: runner.os == 'macOS' && steps.compiler_cache.outcome == 'success'
-        run: |
-          import os
-          with open(os.environ['GITHUB_ENV'], 'a') as output:
-              output.write('RUSTC_WRAPPER=' + os.environ['SCCACHE_PATH'] + '\n')
       - name: Restore GitHub resource cache
         uses: actions/cache@v5
         timeout-minutes: 5
@@ -651,15 +608,6 @@ jobs:
           if '${{ matrix.system }}' == 'macos':
               command = [sys.executable, 'scripts/macos_ci.py', 'ci', '--arch', '${{ matrix.arch }}']
           subprocess.run(command, check=True)
-      - name: Report macOS compiler cache hits
-        if: always() && runner.os == 'macOS' && steps.compiler_cache.outcome == 'success'
-        continue-on-error: true
-        run: |
-          import os, pathlib, subprocess
-          result = subprocess.run([os.environ['SCCACHE_PATH'], '--stop-server'], text=True, capture_output=True)
-          print(result.stdout)
-          with pathlib.Path(os.environ['GITHUB_STEP_SUMMARY']).open('a') as output:
-              output.write('### macOS compiler cache (512 MiB cap)\n```text\n' + result.stdout + '\n```\n')
       - name: Collect macOS failure diagnostics
         if: failure() && runner.os == 'macOS'
         run: |

@@ -152,10 +152,18 @@ def refresh_command(command, paths, warnings):
     before = {path: (ROOT / path).read_bytes() if (ROOT / path).exists() else None for path in paths}
     print('Checking source dependencies:', ' '.join(command), flush=True)
     try:
+        environment = dict(os.environ)
+        if command[0] == 'go':
+            # Avoid falling through from the public module proxy to unbounded
+            # git/vanity-host probes for every transitive dependency.
+            environment.setdefault('GOPROXY', 'https://proxy.golang.org')
         result = subprocess.run(command, cwd=ROOT, text=True, stdout=subprocess.PIPE,
-                                stderr=subprocess.STDOUT, timeout=180)
-    except subprocess.TimeoutExpired:
-        result = subprocess.CompletedProcess(command, 1, 'Dependency metadata refresh timed out')
+                                stderr=subprocess.STDOUT, timeout=90, env=environment)
+    except subprocess.TimeoutExpired as error:
+        partial = error.stdout or ''
+        if isinstance(partial, bytes):
+            partial = partial.decode(errors='replace')
+        result = subprocess.CompletedProcess(command, 1, partial + '\nDependency metadata refresh timed out after 90s')
     if not result.returncode:
         print('Refreshed source dependencies:', ' '.join(command), flush=True)
         return
@@ -176,6 +184,21 @@ def refresh_command(command, paths, warnings):
     warning = 'Upstream unavailable; retained compatible cached/repository dependencies: ' + ' '.join(command)
     warnings.append(warning)
     print('::warning::' + warning, flush=True)
+    # Keep the upstream host/reason when falling back; a generic warning hid
+    # repeated Go timeouts in earlier runs. Never publish URL credentials.
+    detail = re.sub(r'(https?://)[^\s/@]+:[^\s/@]+@', r'\1[redacted]@', result.stdout)
+    print('\n'.join(detail.splitlines()[-12:])[-4096:], flush=True)
+
+
+def refresh_go():
+    warnings = []
+    go = ['go', '-C', str(ROOT / 'apps/android/core')]
+    files = ('apps/android/core/go.mod', 'apps/android/core/go.sum')
+    refresh_command([*go, 'get', '-tool', 'golang.org/x/mobile/cmd/gomobile@latest',
+                     'golang.org/x/mobile/cmd/gobind@latest'], files, warnings)
+    refresh_command([*go, 'get', '-u', './...'], files, warnings)
+    refresh_command([*go, 'mod', 'tidy'], files, warnings)
+    return warnings
 
 
 def resolve(directory):
@@ -190,10 +213,12 @@ def resolve(directory):
     upstream = {}
     queries = {'mihomo': lambda: stable_release('MetaCubeX/mihomo'),
                'geo': lambda: stable_release('MetaCubeX/meta-rules-dat'),
-               'sccache': lambda: stable_release('mozilla/sccache'),
                'nsis': nsis_release, 'gradle': gradle_release,
                'tailscale': lambda: {'version': read_json('https://pkgs.tailscale.com/stable/?mode=json')['Version']}}
-    with ThreadPoolExecutor(max_workers=len(queries)) as workers:
+    with ThreadPoolExecutor(max_workers=len(queries) + 2) as workers:
+        rust_warnings = []
+        rust = workers.submit(refresh_command, ['cargo', 'update'], ('Cargo.lock',), rust_warnings)
+        go = workers.submit(refresh_go)
         pending = {name: workers.submit(query) for name, query in queries.items()}
         print('Checking upstream metadata:', ', '.join(queries), flush=True)
         for name, future in pending.items():
@@ -210,13 +235,9 @@ def resolve(directory):
                     warning = name + ': no upstream metadata or previous snapshot; repository/tool default is required'
                 warnings.append(warning)
                 print('::warning::' + warning, flush=True)
-    refresh_command(['cargo', 'update'], ('Cargo.lock',), warnings)
-    go = ['go', '-C', str(ROOT / 'apps/android/core')]
-    go_files = ('apps/android/core/go.mod', 'apps/android/core/go.sum')
-    refresh_command([*go, 'get', '-tool', 'golang.org/x/mobile/cmd/gomobile@latest',
-                     'golang.org/x/mobile/cmd/gobind@latest'], go_files, warnings)
-    refresh_command([*go, 'get', '-u', './...'], go_files, warnings)
-    refresh_command([*go, 'mod', 'tidy'], go_files, warnings)
+        rust.result()
+        warnings.extend(rust_warnings)
+        warnings.extend(go.result())
     for path, group, artifact, pattern in [
         ('apps/android/build.gradle.kts', 'com.android.tools.build', 'gradle',
          r'(id\("com.android.application"\) version ")([0-9.]+)(")'),
@@ -257,8 +278,8 @@ def resolve(directory):
     if output := os.environ.get('GITHUB_OUTPUT'):
         with open(output, 'a') as stream:
             stream.write('resources=' + resource_key(upstream) + '\n')
-            for name, fallback in (('tailscale', '1.94.2'), ('sccache', 'v0.18.0'), ('gradle', '8.13')):
-                version = upstream.get(name, {}).get('version' if name != 'sccache' else 'tag_name', fallback)
+            for name, fallback in (('tailscale', '1.94.2'), ('gradle', '8.13')):
+                version = upstream.get(name, {}).get('version', fallback)
                 if not re.fullmatch(r'v?[0-9.]+', version):
                     raise ValueError('Invalid resolved tool version')
                 stream.write(name + '=' + version + '\n')
@@ -332,7 +353,7 @@ def toolchain_report():
     """Record the actual runner tools, in addition to resolved dependency versions."""
     tools = {'python': sys.version.split()[0]}
     for name, args in {'rustc': ['-vV'], 'cargo': ['--version'], 'go': ['version'],
-                       'java': ['-version'], 'gradle': ['--version'], 'sccache': ['--version']}.items():
+                       'java': ['-version'], 'gradle': ['--version']}.items():
         if executable := shutil.which(name):
             result = subprocess.run([executable, *args], capture_output=True, text=True, timeout=60)
             tools[name] = (result.stdout + result.stderr).strip()[:8192]

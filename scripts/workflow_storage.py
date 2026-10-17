@@ -54,7 +54,7 @@ def priority(entry):
     # The fast Linux jobs can overlap a private fallback with those compilations.
     if key.startswith(('resources-', 'source-', 'android-go-', 'gradle-linux-', 'skia-source-', 'tools-nsis-', 'action-setup-tailscale/')):
         return 4
-    if key.startswith(('macos-compiler-', 'native-release-')) and ('macos' in key or 'windows' in key):
+    if key.startswith('native-release-') and ('macos' in key or 'windows' in key):
         return 3
     if key.startswith('android-'):
         return 2
@@ -71,6 +71,9 @@ def eviction_plan(entries, budget=BUDGET):
     keep = []
     remove = []
     for entry in recent:
+        if entry['key'].startswith('macos-compiler-'):
+            remove.append(entry)  # Retired duplicate sccache layer.
+            continue
         family = (entry['ref'], lineage(entry['key']))
         if family in seen:
             remove.append(entry)
@@ -78,7 +81,8 @@ def eviction_plan(entries, budget=BUDGET):
             seen.add(family)
             keep.append(entry)
     size = sum(c['size_in_bytes'] for c in keep)
-    for entry in sorted(keep, key=lambda c: (priority(c), c['last_accessed_at'], c['created_at'], c['id'])):
+    for entry in sorted(keep, key=lambda c: (priority(c), c['ref'] == 'refs/heads/main',
+                                           c['last_accessed_at'], c['created_at'], c['id'])):
         if size <= budget:
             break
         remove.append(entry)

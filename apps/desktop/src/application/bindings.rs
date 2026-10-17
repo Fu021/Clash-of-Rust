@@ -1,6 +1,6 @@
 //! The only desktop adapter that knows about Slint or winit.
 use super::*;
-use clash_client_ui::{AppWindow, Intent, UiActions, UiData, models::ViewModels};
+use clash_client_ui::{AppWindow, Intent, Theme, UiActions, UiData, models::ViewModels};
 use futures_util::StreamExt;
 use runtime::{Size, native, window};
 use slint::{
@@ -193,10 +193,29 @@ impl native::Host for DesktopHost {
             slint::CloseRequestResponse::KeepWindowShown
         });
         let mut modifiers = winit::keyboard::ModifiersState::empty();
+        let mut first_frame = true;
         window.window().on_winit_window_event(move |window, event| {
             use winit::event::{ElementState, WindowEvent};
             match event {
                 WindowEvent::RedrawRequested => {
+                    if first_frame {
+                        first_frame = false;
+                        // The native window only exists once the event loop is
+                        // active. Resolve System before its very first paint.
+                        if let Some(Some(theme)) = window.with_winit_window(|native| native.theme())
+                        {
+                            HOST.with(|slot| {
+                                if let Some(host) = slot.borrow_mut().as_mut() {
+                                    host.app.system_dark = theme == winit::window::Theme::Dark;
+                                    host.app.sync_appearance();
+                                    host.sync();
+                                    if let Some((_, ui)) = &host.window {
+                                        ui.global::<Theme>().set_system_dark(host.app.system_dark);
+                                    }
+                                }
+                            });
+                        }
+                    }
                     repaint::before_draw(window);
                 }
                 WindowEvent::Occluded(false) => {
@@ -259,6 +278,18 @@ impl native::Host for DesktopHost {
             settings.size.height,
         ));
         self.window = Some((id, window));
+        if let Some((_, window)) = &self.window {
+            // Slint changed callbacks run later; initialize the first frame now.
+            let theme = window.global::<Theme>();
+            theme.set_appearance(match self.app.appearance_mode() {
+                ThemeMode::Dark => 0,
+                ThemeMode::Light => 1,
+                ThemeMode::System => 2,
+            });
+            theme.set_system_dark(self.app.system_dark);
+            theme.set_accent_index(self.app.settings.accent_color as i32);
+            theme.set_text_scale(f32::from(self.app.settings.text_scale) / 100.);
+        }
         self.sync();
         if settings.visible
             && let Some((_, window)) = &self.window

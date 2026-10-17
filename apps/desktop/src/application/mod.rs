@@ -356,6 +356,13 @@ impl App {
     ) -> (Self, Task<Message>) {
         let mut app =
             Self::initial_state(Err(anyhow::anyhow!("正在初始化内核与配置…")), tray_startup);
+        // Read the small settings file before creating the first surface. Core,
+        // Geo and network initialization remain on the background worker.
+        if let Ok(settings) = startup_store().and_then(|store| store.load_settings()) {
+            app.system_dark = settings.dark;
+            app.settings = settings;
+            app.sync_appearance();
+        }
         app.set_window_size(window_state.size());
         app.window_state = window_state;
         app.core_failure = None;

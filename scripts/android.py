@@ -328,6 +328,11 @@ def test(arch, apk=None, test_apk=None):
         server.shutdown(); server.server_close()
         log = subprocess.run([ADB,'logcat','-d','-v','threadtime'],capture_output=True,text=True,timeout=30)
         (report/'logcat.txt').write_text(log.stdout)
+        for name, command in {'connectivity':['dumpsys','connectivity'],
+                              'routes':['ip','route','show','table','all'],
+                              'vpn':['dumpsys','vpn_management']}.items():
+            details=subprocess.run([ADB,'shell',*command],capture_output=True,text=True,timeout=15)
+            (report/(name+'.txt')).write_text(details.stdout+details.stderr)
     if 'Android startup:' in log.stdout or 'Mobile runtime stopped:' in log.stdout:
         raise RuntimeError('Native Android UI/runtime failed; inspect logcat')
 

@@ -37,12 +37,14 @@ public final class MainActivity extends NativeActivity {
         }
     }
     @Override public void onCreate(Bundle state) {
+        boolean dark = Appearance.dark(Appearance.mode(this));
+        setTheme(dark ? R.style.ClientDark : R.style.ClientLight);
         tileConnect=VpnTileService.CONNECT.equals(getIntent().getAction());
         super.onCreate(state);
         UpdateInstaller.pruneInstalled(this);
         // Let Slint handle native insets; do not install a second padded content view.
         getWindow().setSoftInputMode(android.view.WindowManager.LayoutParams.SOFT_INPUT_ADJUST_RESIZE);
-        configureSystemBars(false);
+        configureSystemBars(dark);
         if (Build.VERSION.SDK_INT >= 33) getOnBackInvokedDispatcher().registerOnBackInvokedCallback(
             android.window.OnBackInvokedDispatcher.PRIORITY_DEFAULT, () -> emit("back",true));
     }
@@ -80,8 +82,7 @@ public final class MainActivity extends NativeActivity {
                 case "reload": CoreBridge.reload(data.getString("config")); CoreBridge.setIpv6(data.getBoolean("ipv6")); break;
                 case "state": return CoreBridge.state()
                     .put("font_sizes",systemFontSizes())
-                    .put("dark", (getResources().getConfiguration().uiMode & android.content.res.Configuration.UI_MODE_NIGHT_MASK)
-                        == android.content.res.Configuration.UI_MODE_NIGHT_YES)
+                    .put("dark", Appearance.systemDark())
                     .put("notification_speeds",getSharedPreferences("appearance",MODE_PRIVATE).getBoolean("notification-speeds",true))
                     .put("excluded_apps",getSharedPreferences("vpn",MODE_PRIVATE).getStringSet("excluded",Collections.emptySet()).size()).toString();
                 case "connect": TunnelService.clearError(); runOnUiThread(this::prepareVpn); break;
@@ -109,7 +110,12 @@ public final class MainActivity extends NativeActivity {
                     getSharedPreferences("vpn", MODE_PRIVATE).edit().putBoolean("desired", data.getBoolean("enabled")).commit();
                     break;
                 case "traffic": TunnelService.updateTraffic(this, data.optString("down"), data.optString("up")); break;
-                case "system-bars": runOnUiThread(() -> configureSystemBars(data.optBoolean("dark"))); break;
+                case "appearance": return new JSONObject().put("mode",Appearance.mode(this))
+                    .put("dark",Appearance.systemDark()).put("font_sizes",systemFontSizes()).toString();
+                case "system-bars": runOnUiThread(() -> {
+                    Appearance.persistSystemMode(this,data.optInt("mode",2));
+                    configureSystemBars(data.optBoolean("dark"));
+                }); break;
                 case "install-update": UpdateInstaller.request(this); break;
                 case "copy": {
                     String text = data.getString("text");
