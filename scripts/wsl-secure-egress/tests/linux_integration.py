@@ -356,7 +356,13 @@ class Fixture:
         try:
             event = json.loads(result.stdout)
         except ValueError:
-            raise Failure(f"manager {action}: missing JSON event") from None
+            detail = ""
+            if os.environ.get("COR_EGRESS_TEST_DEBUG") == "1":
+                # Opt-in only: fixture keys and paths are synthetic, but workflow
+                # logs remain redacted by default.
+                detail = (f" stdout={result.stdout[-2000:]!r}"
+                          f" stderr={result.stderr[-2000:]!r}")
+            raise Failure(f"manager {action}: missing JSON event{detail}") from None
         require(event.get("outcome") == outcome,
                 f"manager {action}: unexpected outcome {event.get('outcome')!r} "
                 f"phase={event.get('phase')!r} message={event.get('message')!r}")
@@ -559,8 +565,14 @@ table inet cor_fixture_observe {
 
     def negative(self, label, mode="tcp", host=TARGET, port=18080, *, managed=False,
                  namespace=None, persistent=None, worker=None, probe_namespace=None,
-                 route_refusal=False):
-        self.control(mode, host, port)
+                 route_refusal=False, control_host=None, control_port=None):
+        # A blocked destination cannot also be the positive control endpoint.
+        # DNS UDP, for example, is intentionally bound only on the managed
+        # resolver address rather than on every address in the fixture, so both
+        # the pre-probe and the post-probe control must use the declared
+        # control endpoint instead of the blocked destination.
+        control = (control_host or host, control_port or port)
+        self.control(mode, *control)
         before = self.observe()
         denied_before = self.deny_counters(namespace)
         route_evidence = None
@@ -583,7 +595,7 @@ table inet cor_fixture_observe {
         time.sleep(0.15)
         after = self.observe()
         denied_after = self.deny_counters(namespace)
-        self.control(mode, host, port)
+        self.control(mode, *control)
         require(not result["reply"] and not self.receipts(token), f"{label}: denied nonce reached receiver")
         require(after["direct"] == before["direct"], f"{label}: direct packet escaped")
         if not route_refusal:
@@ -779,10 +791,11 @@ table inet cor_fixture_observe {
             self.positive("running-container-" + mode, mode, RESOLVER, 53,
                           via_tunnel=True, namespace=FIXTURE_SOURCE)
             self.negative("managed-unauthorized-" + mode, mode, TARGET, 53,
-                          managed=True, namespace=GATEWAY)
-            self.negative("shared-unauthorized-" + mode, mode, TARGET, 53)
+                          managed=True, namespace=GATEWAY, control_host=RESOLVER)
+            self.negative("shared-unauthorized-" + mode, mode, TARGET, 53,
+                          control_host=RESOLVER)
             self.negative("container-unauthorized-" + mode, mode, TARGET, 53,
-                          probe_namespace=FIXTURE_SOURCE)
+                          probe_namespace=FIXTURE_SOURCE, control_host=RESOLVER)
         for mode in ("tcp", "udp"):
             self.negative("managed-ipv6-" + mode, mode, TARGET6, managed=True,
                           namespace=GATEWAY, route_refusal=True)

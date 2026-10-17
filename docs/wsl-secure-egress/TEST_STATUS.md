@@ -28,7 +28,7 @@ Run on 2026-10-17 in the `Clash-of-Rust` worktree:
 | --- | --- | --- |
 | Full Rust test command including GUI singleton test | FAIL (environment) | Existing `clash-of-rust` process holds the expected single-instance mutex |
 | Real WSL2/Hyper-V firewall and Windows-to-Linux calls | NOT_RUN | Disposable Windows runner and WSL environment |
-| Linux namespace/nftables/WireGuard integration | NOT_RUN | Disposable root Linux runner |
+| Linux namespace/nftables/WireGuard integration | PASS, 86 cases | Real Ubuntu-22.04 WSL2 root; see the 2026-10-18 local WSL section below |
 | Real Docker WFP TCP/UDP loopback probe | NOT_RUN | Disposable administrator Windows runner |
 | Cold boot, reboot, sleep/resume and network switch | NOT_RUN | Disposable WSL/Hyper-V environment |
 | Actual German IPv4 exit and receiver-source evidence | NOT_RUN | Authorized VPS and controlled receiver |
@@ -155,6 +155,51 @@ executed end to end:
 
 Still `NOT_RUN` on this host: Windows cold boot, sleep/resume, physical network
 switch and independent geolocation corroboration.
+
+## 2026-10-18 local WSL isolated integration run
+
+Executed inside the real distribution, not a container: Ubuntu-22.04, kernel
+`6.18.54.1-microsoft-standard-WSL2`, root, repository copied to a Linux-native
+temporary directory first (the suite mounts tmpfs over `/mnt`, so a copy under
+`/mnt/e` cannot be the run directory).
+
+| Check | Result | Scope |
+| --- | --- | --- |
+| `tests/linux_integration.py --execute-isolated` | PASS, 86 cases | Disposable net/mount/PID namespaces with the fixture VPS, WireGuard transport and nftables guard; no Windows, WSL host or real VPS configuration participated |
+| `python3 -m compileall -q scripts/wsl-secure-egress` | PASS | Syntax only |
+| `tests/linux_static_test.py` | PASS, 21 tests | Portable evidence/gate logic |
+| `tests/acceptance_harness_unit.py` | PASS, 3 tests | Endpoint validation |
+| `tests/server_unit.py` | PASS, 24 tests | Offline VPS profile validation |
+| `tests/payload_unit.py` | PASS, 32 tests | Real Linux root ownership, flock and atomic exchange on disposable directories under `/root` |
+| `tests/provision_unit.py` | PASS, 18 tests | Mocked host boundaries only |
+| `find scripts/wsl-secure-egress/linux ... -exec sh -n` | PASS | Shell syntax of the managed launchers |
+| `cargo build --workspace --locked --offline` and `cargo build -p clash-of-rust --bins --release --locked --offline` | PASS | Produced `target/release/clash-of-rust.exe`, `clash-tun-launcher.exe`, `clash-wsl-guardian.exe` |
+
+Evidence: `ClashOfRust-network-backups/wsl-local-20261018/linux-egress-integration-20261017-214237.json`
+(`outcome=passed`, 86 cases). The suite reports the same limits as CI: the
+Windows/WSL/Hyper-V effective audit, cold boot and real VPS/geography checks are
+`notRun` inside it.
+
+Two failures happened before that PASS and are recorded rather than replaced:
+
+1. `manager install` returned `blocked` with `Private path ownership, symlink or
+   permissions check failed.` The cause was the host, not the manager: an earlier
+   automation defect ran `cp -a <repo>/. /` inside WSL, which copies the source
+   directory attributes onto an existing destination and therefore left `/`
+   owned by the desktop user with mode `0777`. The guard correctly refuses to
+   install private state in that condition. The duplicated tree was moved to
+   `/root/quarantine-root-repo-copy-20261018` and `/` was restored to
+   `root:root 0755`; `/usr`, `/etc`, `/var`, `/root`, `/home`, `/mnt` and the
+   `init`/`.package-cache-mutate` files were not modified, and `/.local-tools`
+   and `/.cargo` were left in place.
+2. `managed-unauthorized-dns-udp` then failed with `receiver positive control
+   failed`, the same defect that failed CI. The negative-case helper re-probed
+   the intentionally blocked destination as its trailing positive control; the
+   fixture DNS receiver binds only the managed resolver address for UDP, so the
+   control could never observe a receipt. Both the pre-probe and the post-probe
+   control now use the declared control endpoint, and `COR_EGRESS_TEST_DEBUG=1`
+   was added as an opt-in for redacted fixture stdout/stderr when a manager JSON
+   event is missing. Default CI output stays redacted.
 
 ## Acceptance rule
 
