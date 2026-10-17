@@ -77,8 +77,9 @@ generation N stable across start/stop**. A mismatch blocks the action.
    exception is created at installation. Shared `eth0` is never moved.
 3. In **each other distro**, install the same trusted payload then invoke
    `configure --generation N` with the same profile stdin. It owns only local
-   `/etc/wsl.conf` (disable generated resolver and Windows interop) and
-   `/etc/resolv.conf` (fixed tunnel resolver), with snapshots and CAS restoration.
+   `/etc/wsl.conf` (disable generated resolver, generated hosts and Windows
+   interop), `/etc/resolv.conf` (fixed tunnel resolver) and `/etc/hosts`
+   (loopback only), with snapshots and CAS restoration.
    It creates no WireGuard device and no shared firewall. Windows owns distro
    enumeration, shutdown/restart, `.wslconfig` DNS tunneling, and effective audit.
 4. Manager install sets `[boot] command=/usr/local/lib/cor-egress/manager guard`.

@@ -95,7 +95,9 @@ def validate(profile):
 
 
 def table_exists():
-    return run(['nft', 'list', 'table', 'inet', TABLE], allow_failure=True).returncode == 0
+    tables = json.loads(run(['nft', '-j', 'list', 'tables']).stdout)
+    return any(item.get('table', {}).get('family') == 'inet' and
+               item['table'].get('name') == TABLE for item in tables['nftables'])
 
 
 def table_digest():
@@ -110,27 +112,101 @@ def table_digest():
     return sha(json.dumps(clean(raw), sort_keys=True).encode())
 
 
+def boot_id():
+    return Path('/proc/sys/kernel/random/boot_id').read_text().strip()
+
+
+def interface():
+    links = json.loads(run(['ip', '-j', 'link', 'show']).stdout)
+    return next((link for link in links if link['ifname'] == INTERFACE), None)
+
+
+def reconcile_boot(state):
+    current = boot_id()
+    previous = state.get('boot_id')
+    if previous == current:
+        return
+    # Journals from before boot identity was recorded can also outlive all
+    # runtime objects. Never carry their PID or forwarding snapshot into a restart.
+    present_table, present_link = table_exists(), interface()
+    if previous is not None and (present_table or present_link):
+        raise ValueError('VPS objects exist in a new boot; ownership is unproven.')
+    if not present_table and not present_link:
+        for key in ('dns_pid', 'dns_start_time', 'interface_index', 'table_hash',
+                    'forward_before', 'forward_written'):
+            state.pop(key, None)
+        if state['phase'] in ('starting', 'running'):
+            state['phase'] = 'stopped'
+    state['boot_id'] = current
+    save(state)
+
+
+def dns_identity(pid):
+    process = Path('/proc')/str(pid)
+    try:
+        fields = (process/'stat').read_text().rsplit(')', 1)[1].split()
+        if fields[0] in ('Z', 'X'):
+            return None
+        command = (process/'cmdline').read_bytes().split(b'\0')
+    except FileNotFoundError:
+        return None
+    expected = ('--conf-file='+str(ROOT/'dnsmasq.conf')).encode()
+    if not command or Path(os.fsdecode(command[0])).name != 'dnsmasq' or expected not in command:
+        raise ValueError('DNS PID was reused; preserving process.')
+    return fields[19]  # /proc/PID/stat field 22: process start time.
+
+
+def dns_running(state):
+    pid = state.get('dns_pid')
+    if not pid:
+        return False
+    identity = dns_identity(pid)
+    if identity is None:
+        return False
+    if state.get('dns_start_time') not in (None, identity):
+        raise ValueError('DNS PID was reused; preserving process.')
+    return True
+
+
+def assert_interface(state, link):
+    if state.get('interface_index') not in (None, link['ifindex']):
+        raise ValueError('Interface ownership changed; preserving it.')
+    public = run(['wg', 'show', INTERFACE, 'public-key']).stdout.decode().strip()
+    # setconf may fail after link creation, before a public key exists. Only
+    # the recorded ifindex in this boot may authorize deleting that empty link.
+    pending = (state['phase'] == 'starting' and public in ('', '(none)') and
+               state.get('interface_index') == link['ifindex'])
+    if public != state['server_public_key'] and not pending:
+        raise ValueError('Interface ownership changed; preserving it.')
+
+
 def stop(state):
+    reconcile_boot(state)
     # Bring down the authenticated interface BEFORE removing its restriction.
-    if table_exists():
+    present_table = table_exists()
+    if present_table:
         if table_digest() != state.get('table_hash'):
             raise ValueError('VPS firewall changed externally; preserving it.')
-    if run(['ip', 'link', 'show', INTERFACE], allow_failure=True).returncode == 0:
-        public = run(['wg', 'show', INTERFACE, 'public-key']).stdout.decode().strip()
-        if public != state['server_public_key']:
-            raise ValueError('Interface ownership changed; preserving it.')
+    link = interface()
+    if link:
+        assert_interface(state, link)
+    active_dns = dns_running(state)
+    if link:
         run(['ip', 'link', 'set', INTERFACE, 'down'])
         run(['ip', 'link', 'delete', INTERFACE])
-    if table_exists():
+    if present_table:
         run(['nft', 'delete', 'table', 'inet', TABLE])
-    if state.get('dns_pid'):
-        process = Path('/proc')/str(state['dns_pid'])
-        if process.exists():
-            command = (process/'cmdline').read_bytes().split(b'\0')
-            if str(ROOT/'dnsmasq.conf').encode() not in b' '.join(command):
-                raise ValueError('DNS PID was reused; preserving process.')
-            os.kill(state['dns_pid'], 15)
-        state['dns_pid'] = None
+    if active_dns:
+        os.kill(state['dns_pid'], 15)
+        # Do not start a replacement DNS server until the old listener is gone.
+        for _ in range(100):
+            if not dns_running(state):
+                break
+            time.sleep(0.05)
+        else:
+            raise ValueError('Private DNS did not stop; retry after its exit.')
+    for key in ('dns_pid', 'dns_start_time', 'interface_index', 'table_hash'):
+        state.pop(key, None)
     state['phase'] = 'stopped'
     save(state)
 
@@ -142,11 +218,19 @@ def start(state):
         path = ROOT/name
         if path.is_symlink() or sha(path.read_bytes()) != expected:
             raise ValueError('Private configuration changed after installation.')
-    if state['phase'] == 'running':
-        if not table_exists() or table_digest() != state['table_hash']:
-            raise ValueError('Running service policy differs.')
-        return
-    if table_exists() or run(['ip', 'link', 'show', INTERFACE], allow_failure=True).returncode == 0:
+    reconcile_boot(state)
+    if state['phase'] in ('starting', 'running'):
+        if state['phase'] == 'running' and table_exists():
+            if table_digest() != state.get('table_hash'):
+                raise ValueError('Running service policy differs.')
+            link = interface()
+            if link:
+                assert_interface(state, link)
+                if ('UP' in link.get('flags', []) and dns_running(state) and
+                        Path('/proc/sys/net/ipv4/ip_forward').read_text().strip() == '1'):
+                    return
+        stop(state)
+    if table_exists() or interface():
         raise ValueError('Dedicated object name collision; no overwrite.')
     route = json.loads(run(['ip', '-4', '-j', 'route', 'get', str(resolver)]).stdout)[0]
     uplink = route['dev']
@@ -166,35 +250,51 @@ def start(state):
         iifname "{INTERFACE}" oifname != "{uplink}" counter drop;
         iifname "{INTERFACE}" ip daddr {{ 0.0.0.0/8, 10.0.0.0/8, 127.0.0.0/8, 169.254.0.0/16, 172.16.0.0/12, 192.168.0.0/16, 224.0.0.0/4 }} counter drop;
         oifname "{INTERFACE}" ip daddr != {peer} counter drop;
-        oifname "{INTERFACE}" ct state != established,related counter drop;
+        # Return traffic entering from the public uplink has not yet traversed
+        # the forward hook, so conntrack can still classify its first SYN-ACK as
+        # new. The separate reply-direction tuple is restricted to this peer.
+        oifname "{INTERFACE}" ip daddr {peer} counter accept;
+        oifname "{INTERFACE}" counter drop;
       }}
       chain nat_out {{ type nat hook postrouting priority srcnat; policy accept;
         iifname "{INTERFACE}" oifname "{uplink}" ip saddr {peer} masquerade;
       }}
     }}\n'''
-    # Construct the restrictive firewall before bringing up the interface.
-    run(['nft', '-f', '-'], data=rules.encode())
-    state['table_hash'] = table_digest()
+    # Persist the recovery phase before the first runtime mutation. A failed
+    # start must never leave a journal claiming a healthy running service.
     state['phase'] = 'starting'
     save(state)
-    run(['ip', 'link', 'add', INTERFACE, 'type', 'wireguard'])
-    run(['wg', 'setconf', INTERFACE, str(ROOT/'wireguard.conf')])
-    run(['ip', 'address', 'add', str(address), 'dev', INTERFACE])
-    run(['ip', 'link', 'set', INTERFACE, 'mtu', '1380', 'up'])
-    forward = Path('/proc/sys/net/ipv4/ip_forward')
-    state.setdefault('forward_before', forward.read_text().strip())
-    save(state)
-    run(['sysctl', '-q', '-w', 'net.ipv4.ip_forward=1'])
-    state['forward_written'] = '1'
-    with open(ROOT/'dns.log', 'ab') as log:
-        process = subprocess.Popen(['dnsmasq', '--keep-in-foreground', '--conf-file='+str(ROOT/'dnsmasq.conf')],
-                                   stdout=log, stderr=log, env=ENV, start_new_session=True)
-    state['dns_pid'] = process.pid
-    state['phase'] = 'running'
-    save(state)
-    time.sleep(0.1)
-    if process.poll() is not None:
-        raise ValueError('Private DNS failed to start; inspect protected VPS log.')
+    try:
+        # Construct the restrictive firewall before bringing up the interface.
+        run(['nft', '-f', '-'], data=rules.encode())
+        state['table_hash'] = table_digest()
+        save(state)
+        run(['ip', 'link', 'add', INTERFACE, 'type', 'wireguard'])
+        state['interface_index'] = interface()['ifindex']
+        save(state)
+        run(['wg', 'setconf', INTERFACE, str(ROOT/'wireguard.conf')])
+        run(['ip', 'address', 'add', str(address), 'dev', INTERFACE])
+        run(['ip', 'link', 'set', INTERFACE, 'mtu', '1380', 'up'])
+        forward = Path('/proc/sys/net/ipv4/ip_forward')
+        state.setdefault('forward_before', forward.read_text().strip())
+        state['forward_written'] = '1'  # Write ahead of the sysctl mutation.
+        save(state)
+        run(['sysctl', '-q', '-w', 'net.ipv4.ip_forward=1'])
+        with open(ROOT/'dns.log', 'ab') as log:
+            process = subprocess.Popen(['dnsmasq', '--keep-in-foreground', '--conf-file='+str(ROOT/'dnsmasq.conf')],
+                                       stdout=log, stderr=log, env=ENV, start_new_session=True)
+        state['dns_pid'] = process.pid
+        state['dns_start_time'] = dns_identity(process.pid)
+        save(state)
+        time.sleep(0.1)
+        if process.poll() is not None or not dns_running(state):
+            raise ValueError('Private DNS failed to start; inspect protected VPS log.')
+        state['phase'] = 'running'
+        save(state)
+    except Exception:
+        state['phase'] = 'starting'
+        stop(state)  # Ownership checks retain drifted resources for recovery.
+        raise
 
 
 def main():
@@ -227,7 +327,7 @@ def main():
                 raise ValueError('Expected a private JSON profile, at most 64 KiB.')
             profile = json.loads(raw)
             address, peer, resolver = validate(profile)
-            if table_exists() or run(['ip', 'link', 'show', INTERFACE], allow_failure=True).returncode == 0:
+            if table_exists() or interface():
                 raise ValueError('Dedicated object collision.')
             # Existing port listeners must be reviewed before allocating a port.
             listeners = run(['ss', '-H', '-lun']).stdout.decode()
@@ -242,7 +342,7 @@ def main():
             dns = (f'no-resolv\nno-hosts\nbind-interfaces\ninterface={INTERFACE}\nlisten-address={address.ip}\n'
                    f'server={resolver}\nuser=nobody\ngroup=nogroup\ncache-size=256\n').encode()
             files = {'profile.json': raw, 'wireguard.conf': config, 'dnsmasq.conf': dns}
-            state = {'schema': 1, 'owner': 'ClashOfRust.WslEgress.VPS', 'phase': 'installed',
+            state = {'schema': 1, 'owner': 'ClashOfRust.WslEgress.VPS', 'phase': 'installed', 'boot_id': boot_id(),
                      'server_public_key': public, 'files': {name: sha(data) for name, data in files.items()}}
             save(state)  # preserve ownership before creating resources
             for name, data in files.items():
@@ -255,9 +355,11 @@ def main():
             stop(state)
             if args.action != 'stop' and 'forward_written' in state:
                 current = Path('/proc/sys/net/ipv4/ip_forward').read_text().strip()
-                if current != state['forward_written']:
+                if current not in (state['forward_written'], state['forward_before']):
                     raise ValueError('Forwarding changed externally; automatic restore refused.')
-                run(['sysctl', '-q', '-w', 'net.ipv4.ip_forward='+state['forward_before']])
+                if current != state['forward_before']:
+                    run(['sysctl', '-q', '-w', 'net.ipv4.ip_forward='+state['forward_before']])
+            if args.action != 'stop':
                 state['phase'] = 'restored'
                 save(state)
         return {'outcome': 'succeeded', 'phase': state['phase'], 'runtime_acceptance': 'NOT_RUN',

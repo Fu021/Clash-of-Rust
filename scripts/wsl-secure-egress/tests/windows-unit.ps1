@@ -19,6 +19,7 @@ $module = Import-Module (Join-Path $PSScriptRoot '../WslSecureEgress.psm1') -For
     function script:Save-WslEgressJson { throw 'Unexpected state write in offline test.' }
     function script:Set-WslEgressPersistentGuard { throw 'Unexpected firewall mutation in offline test.' }
     function script:Set-WslEgressEndpoint { throw 'Unexpected endpoint mutation in offline test.' }
+    function script:Start-WslEgressLifetime { throw 'Unexpected WSL lifetime process in offline test.' }
 
     $count = 0
     function Assert-Equal($Actual, $Expected, [string]$Label) {
@@ -26,6 +27,20 @@ $module = Import-Module (Join-Path $PSScriptRoot '../WslSecureEgress.psm1') -For
         $script:TestCount++
     }
     $script:TestCount = 0
+    $connections = @(ConvertFrom-WslEgressConnections '[{"url":"https://portal.example.test/","accepted_statuses":[200,302]},{"url":"https://api.example.test/","accepted_statuses":[200]}]')
+    Assert-Equal $connections.Count 2 'JSON baseline array is enumerated under Windows PowerShell 5.1'
+    Assert-Equal ([uri]$connections[0].url).Host 'portal.example.test' 'each baseline entry has one URI'
+    Assert-Equal $connections[1].accepted_statuses.Count 1 'accepted status list remains attached to its own URI'
+    Assert-Equal (ConvertTo-WslEgressProcessArgument '--distribution') '--distribution' 'WSL options remain unquoted'
+    Assert-Equal (ConvertTo-WslEgressProcessArgument 'Ubuntu-22.04') 'Ubuntu-22.04' 'simple WSL argument remains unquoted'
+    Assert-Equal (ConvertTo-WslEgressProcessArgument 'a b') '"a b"' 'spaced argument is quoted'
+    $roundtrip = ConvertTo-WslEgressOrderedState ('{"empty":[],"single":["one"],"multiple":["one","two"],"map":{}}' | ConvertFrom-Json)
+    Assert-Equal ($roundtrip.empty -is [Array]) $true 'empty journal arrays retain array identity'
+    Assert-Equal $roundtrip.empty.Count 0 'empty journal array has no synthetic dictionary item'
+    Assert-Equal ($roundtrip.single -is [Array]) $true 'single-item journal arrays retain array identity'
+    Assert-Equal $roundtrip.single.Count 1 'single-item journal array has one item'
+    Assert-Equal $roundtrip.multiple.Count 2 'multi-item journal array retains both items'
+    Assert-Equal ($roundtrip.map -is [Collections.IDictionary]) $true 'JSON maps remain dictionaries'
     $doctor = Invoke-WslEgressOperation -Action Doctor
     Assert-Equal $doctor.outcome 'succeeded' 'doctor works without administrator'
     Assert-Equal $doctor.protection 'unknown' 'uninstalled does not claim protection'
@@ -105,6 +120,38 @@ $module = Import-Module (Join-Path $PSScriptRoot '../WslSecureEgress.psm1') -For
     Assert-Equal ((Get-WslEgressConfigValue $updated 'experimental' 'firewall')) 'true' 'firewall is experimental'
     Assert-Equal ((Get-WslEgressConfigValue $updated 'wsl2' 'dnsTunneling')) $null 'DNS tunneling is not in wsl2'
     Assert-Equal (ConvertTo-WslEgressConfig $updated) (ConvertTo-WslEgressConfig (ConvertTo-WslEgressConfig $updated)) 'merge idempotent'
+    function script:Get-WslEgressSettings {
+        [ordered]@{Enabled='True';DefaultInboundAction='Block';DefaultOutboundAction='Block';AllowHostPolicyMerge='False';LoopbackEnabled='False'}
+    }
+    $script:RuleFixture = [pscustomobject]@{
+        Name='ClashOfRust-WslEgress-Endpoint';Enabled='True';Direction='Outbound';Action='Allow'
+        VMCreatorId='{40E0AC32-46A5-438A-A0B2-2B479E8F2E90}'
+        RemoteAddresses='203.0.113.8';RemotePorts='51820';Protocol='UDP'
+    }
+    function script:Get-NetFirewallHyperVRule { $script:RuleFixture }
+    $auditState = [ordered]@{endpoint_ipv4='203.0.113.8';endpoint_port=51820;endpoint_enabled=$true}
+    Assert-Equal (Get-WslEgressGuardAudit $auditState).valid $true 'Hyper-V scalar address and port audit matches the complete tuple'
+    $script:RuleFixture.RemoteAddresses = @('203.0.113.8')
+    $script:RuleFixture.RemotePorts = @('51820')
+    Assert-Equal (Get-WslEgressGuardAudit $auditState).valid $true 'Hyper-V array address and port audit also matches'
+    $script:RuleFixture.RemotePorts = '51821'
+    Assert-Equal (Get-WslEgressGuardAudit $auditState).valid $false 'different scalar endpoint port is rejected'
+    Assert-Equal (Get-WslEgressClosureAudit $null).confirmed $false 'absent state cannot establish endpoint closure'
+    Assert-Equal (Get-WslEgressClosureAudit $auditState).confirmed $false 'enabled endpoint is not reported closed'
+    $script:RuleFixture.Enabled = 'False'
+    $auditState.endpoint_enabled = $false
+    Assert-Equal (Get-WslEgressClosureAudit $auditState).confirmed $true 'disabled endpoint and effective deny establish static closure'
+    function script:Get-WslEgressSettings { throw 'Fixture effective-policy read failure.' }
+    Assert-Equal (Get-WslEgressClosureAudit $auditState).confirmed $false 'failed policy readback cannot claim closure'
+    $upgradePath = Join-Path $PSScriptRoot '../Update-LiveWslPayload.ps1'
+    $tokens = $null
+    $errors = $null
+    [void][System.Management.Automation.Language.Parser]::ParseFile($upgradePath, [ref]$tokens, [ref]$errors)
+    Assert-Equal @($errors).Count 0 'live payload upgrade script parses'
+    $upgradeText = Get-Content -LiteralPath $upgradePath -Raw
+    Assert-Equal ($upgradeText.Contains('repair-config')) $true 'live upgrade reruns the manager repair path'
+    Assert-Equal ($upgradeText.Contains('-ReviewedUpgrade')) $true 'live upgrade uses the atomic reviewed upgrade gate'
+    Assert-Equal ($upgradeText.Contains('Set-WslEgressEndpoint $state $true')) $false 'live upgrade never opens the endpoint'
     [pscustomobject]@{ suite = 'windows-offline'; result = 'PASS'; assertions = $script:TestCount
         network_tests = 'NOT_RUN'; wsl_started = $false; firewall_modified = $false } | ConvertTo-Json -Compress
 }

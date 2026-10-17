@@ -92,6 +92,70 @@ Run on 2026-10-17 in the `Clash-of-Rust` worktree:
   Hyper-V default-deny exists, but the effective production guard has not been
   installed or accepted here.
 
+## 2026-10-18 live WSL acceptance (Windows host, Ubuntu-22.04)
+
+Admin-level Start and Stop transactions were executed through the reviewed
+PowerShell UAC path. Addresses and packet payloads are omitted; raw reports stay
+in the ignored local backup directory.
+
+| Check | Result | Evidence and limits |
+| --- | --- | --- |
+| Windows baseline before start | PASS | `ipgw.neu.edu.cn` HTTP 200 and `api.okinto.com` HTTP 200, TLS validated, 02:05:25 Asia/Taipei |
+| WSL host NAT readback | PASS | `eth0` on the WSL private `/20`, default route to the WSL gateway only, no global IPv6, `/etc/resolv.conf` nameserver is the tunnel resolver |
+| `.wslconfig` readback | PASS | `networkingMode=nat`, `dnsTunneling=false`, `autoProxy=false`, `firewall=true`, `localhostForwarding=false` |
+| Admin `Start -Execute` | PASS | 02:15:24; generation `1792256171034`; endpoint enabled with host policy audit PASS |
+| Controlled live acceptance, ordinary WSL | PASS | DNS nonce observed on the tunnel and upstream, HTTPS 200 via IPv4, VPS-observed source match, IPv6 connect failed, no clear uplink nonce |
+| Controlled live acceptance, isolated launcher | PASS | Interfaces exactly `lo`, `cor-bg0`, `wg0`; UID 1000; all capability sets zero; `NoNewPrivs=1`; `/mnt/c` and `ipconfig.exe` hidden; same DNS/HTTPS/IPv6/VPS evidence |
+| Windows baseline after stop and restart | PASS | both mandatory Windows URLs HTTP 200 with TLS validation at 02:14:02 |
+| Isolated CI data-plane and Windows WFP fixture runs | NOT_RUN locally | Tracked separately in GitHub Actions after the branch is pushed |
+
+The live acceptance report is
+`ClashOfRust-network-backups/wsl-host-20261018/live-acceptance-20261018-021627.json`.
+An earlier run at 02:13:02 is retained as FAIL: the ordinary path passed, but
+the isolated launcher correctly refused a stale Windows attestation and the
+aggregate result was failed. It was not silently replaced.
+
+### Hosts isolation upgrade, fail-closed and recovery
+
+The user explicitly authorized administrator elevation. The upgrade was then
+executed end to end:
+
+- `Stop -Execute` closed the endpoint and removed the owned namespaces; the
+  mandatory Windows URL baseline returned HTTP 200 with TLS validation at
+  02:34:27 Asia/Taipei.
+- `Update-LiveWslPayload.ps1 -Execute` completed with the atomic reviewed
+  upgrade and wrote a protected receipt. `owned_config_matches=true`,
+  `interop_runtime_disabled=true`, `endpoint_enabled=false`.
+- Readback inside Ubuntu-22.04: `generateResolvConf=false`,
+  `generateHosts=false`, interop `enabled=false`,
+  `appendWindowsPath=false`, `/etc/resolv.conf` nameserver is the fixed tunnel
+  resolver, and `/etc/hosts` contains only `127.0.0.1 localhost`,
+  `127.0.1.1 Xuan` and `::1 localhost ip6-localhost ip6-loopback`. The
+  installed `manager.py` SHA256 matched the repository file.
+- `Start -Execute` recreated the namespaces and enabled the fixed endpoint.
+  The post-upgrade acceptance at 02:36:27 returned PASS for both
+  `ordinary-wsl` and `isolated-launcher`, including `hosts_leak_free=true`,
+  `interop_disabled=true`, IPv6 denial and VPS receiver evidence.
+- Controlled fail-closed test: the owned VPS receiver reported `READY`, the
+  administrator `Stop -Execute` closed the endpoint, the ordinary WSL client
+  failed with `TimeoutError` and `connected=false`, and the receiver reported
+  `received=false` with `NO_RECEIPT`. Suite outcome: passed.
+- Recovery: `Start -Execute` succeeded, both mandatory Windows URLs returned
+  HTTP 200 with TLS validation at 02:38:47, host policy audit was PASS, and a
+  final acceptance at 02:39:00 returned PASS for both scopes again.
+- Offline suites after the change: `windows-unit.ps1` PASS, 79 assertions;
+  `linux_static_test.py` PASS, 21 tests; payload unit PASS, 32 tests;
+  provision unit PASS, 18 tests; server unit PASS, 24 tests; Python
+  compilation PASS; acceptance-harness endpoint validation PASS, 3 tests.
+- The acceptance scripts previously contained a hard-coded probe address that
+  could make a fail-closed result meaningless. They now require the fixed
+  public IPv4 endpoint to be supplied from the private profile and reject
+  missing, non-numeric or private values. Real endpoint values are not written
+  to reports or Git.
+
+Still `NOT_RUN` on this host: Windows cold boot, sleep/resume, physical network
+switch and independent geolocation corroboration.
+
 ## Acceptance rule
 
 Positive connectivity requires a receiver-observed nonce, the expected source

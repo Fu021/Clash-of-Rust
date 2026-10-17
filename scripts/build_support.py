@@ -247,7 +247,7 @@ def copy_static(bundle):
     for name in WSL_EGRESS_TOP:
         shutil.copy2(source/name, destination/name)
     for directory, names in (('linux', WSL_EGRESS_LINUX), ('server', WSL_EGRESS_SERVER)):
-        (destination/directory).mkdir()
+        (destination/directory).mkdir(exist_ok=True)
         for name in names:
             shutil.copy2(source/directory/name, destination/directory/name)
 

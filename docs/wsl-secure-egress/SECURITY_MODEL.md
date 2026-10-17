@@ -37,9 +37,25 @@ VPS path, and IPv6 is denied rather than routed locally.
    sets `no_new_privs`, hides Windows mounts and host sockets, and refuses
    inherited directory/socket file descriptors.
 
+6. **Name resolution.** Managed distributions set `generateResolvConf=false`
+   and `generateHosts=false`. `/etc/resolv.conf` contains only the fixed tunnel
+   resolver, and `/etc/hosts` is replaced with a loopback-only file containing
+   the distribution's own hostname. The automatically generated Docker/Windows
+   host aliases (`host.docker.internal`, `gateway.docker.internal`,
+   `kubernetes.docker.internal`) are removed, so an application cannot resolve
+   a Windows or Docker host address from its local name database. The launcher
+   uses an even smaller `/etc/hosts` containing only `127.0.0.1 localhost`.
+
 The Windows boundary remains the outer fail-closed control. A Linux manager
 failure, transport loss, GUI exit or audit-service failure does not enable
 direct Windows networking for WSL.
+
+WSL may retain its shared `WSLInterop` binary handler even when the distro file
+sets `interop.enabled=false`. The manager therefore verifies the handler is
+the expected `/init` PE registration, records its prior state, and disables
+that exact handler during installation and boot guard loading. Unknown
+handlers are preserved and block the operation. Restoring the original
+registration requires the matching journal and unchanged handler state.
 
 ## Boot and reconnect
 

@@ -181,7 +181,7 @@ function Restore-WslEgressConfig([object]$State) {
 }
 
 function Install-WslEgressPayload {
-    param([object]$State, [string]$Distro)
+    param([object]$State, [string]$Distro, [switch]$ReviewedUpgrade)
     $runtimeNames = @('manager', 'manager.py', 'secure-egress', 'cor-egress-manager')
     $source = Join-Path $PSScriptRoot 'linux'
     $installer = Join-Path $source 'install-payload.py'
@@ -246,8 +246,10 @@ print(json.dumps({'schema':1,'schema_version':1,'action':'stage-payload','outcom
     try {
         $stageResult = $staged.Output | ConvertFrom-Json
         if ($stageResult.outcome -ne 'succeeded' -or $stageResult.stage -ne $stage) { throw 'Linux staging response mismatch.' }
-        $install = Invoke-WslEgressProcess -Arguments @('--distribution',$Distro,'--user','root','--exec',
-            '/usr/bin/python3','-I',($stage + '/install-payload.py'),'--payload',$stage,'--manifest',($stage + '/sha256.json')) `
+        $installArguments = @('--distribution',$Distro,'--user','root','--exec',
+            '/usr/bin/python3','-I',($stage + '/install-payload.py'),'--payload',$stage,'--manifest',($stage + '/sha256.json'))
+        if ($ReviewedUpgrade) { $installArguments += '--reviewed-upgrade' }
+        $install = Invoke-WslEgressProcess -Arguments $installArguments `
             -TimeoutSeconds 60
         if ($install.ExitCode -ne 0) { throw 'Hash-pinned Linux payload installation failed.' }
         $installResult = $install.Output | ConvertFrom-Json
@@ -288,6 +290,12 @@ function Read-WslEgressState {
     if (-not (Test-Path -LiteralPath $path)) { return $null }
     $state = ConvertTo-WslEgressOrderedState (Get-Content -LiteralPath $path -Raw | ConvertFrom-Json)
     if ($state.schema_version -ne 1 -or $state.owner -ne 'ClashOfRust.WslEgress') { throw 'Unknown state owner.' }
+    # Older broker versions serialized an empty JSON array as {} on reread.
+    # Recover only the known empty distro list; the scope audit still compares
+    # it with the complete current set of ordinary distributions.
+    if ($state.distro_configs -is [Collections.IDictionary] -and $state.distro_configs.Count -eq 0) {
+        $state.distro_configs = @()
+    }
     $state
 }
 
@@ -298,6 +306,11 @@ function ConvertTo-WslEgressOrderedState([object]$Value) {
         foreach ($key in $Value.Keys) { $result[[string]$key] = ConvertTo-WslEgressOrderedState $Value[$key] }
         return $result
     }
+    if ($Value -is [Collections.IEnumerable] -and $Value -isnot [string]) {
+        $items = New-Object 'Collections.Generic.List[object]'
+        foreach ($item in $Value) { $items.Add((ConvertTo-WslEgressOrderedState $item)) }
+        return ,($items.ToArray())
+    }
     if ($Value -is [Management.Automation.PSCustomObject]) {
         $result = [ordered]@{}
         foreach ($property in $Value.PSObject.Properties) {
@@ -305,10 +318,15 @@ function ConvertTo-WslEgressOrderedState([object]$Value) {
         }
         return $result
     }
-    if ($Value -is [Collections.IEnumerable] -and $Value -isnot [string]) {
-        return @($Value | ForEach-Object { ConvertTo-WslEgressOrderedState $_ })
-    }
     $Value
+}
+
+function ConvertTo-WslEgressProcessArgument([string]$Argument) {
+    if ($Argument.IndexOf([char]0) -ge 0) { throw 'Invalid argument.' }
+    # WSL parses its own options before using Windows argv rules for --exec.
+    # Quoting an option such as "--list" makes WSL treat it as a Linux command.
+    if ($Argument -and $Argument -notmatch '[\s"]') { return $Argument }
+    '"' + ([regex]::Replace(([regex]::Replace($Argument, '(\\*)"', '$1$1\"')), '(\\+)$', '$1$1')) + '"'
 }
 
 function Invoke-WslEgressProcess {
@@ -321,23 +339,25 @@ function Invoke-WslEgressProcess {
     $start.RedirectStandardError = $true; $start.RedirectStandardInput = $true
     # Windows PowerShell lacks ArgumentList. Quote each argument using the
     # CommandLineToArgvW backslash rules; never use cmd /c or a shell command.
-    $quoted = foreach ($argument in $Arguments) {
-        if ($argument.IndexOf([char]0) -ge 0) { throw 'Invalid argument.' }
-        '"' + ([regex]::Replace(([regex]::Replace($argument, '(\\*)"', '$1$1\"')), '(\\+)$', '$1$1')) + '"'
-    }
+    $quoted = foreach ($argument in $Arguments) { ConvertTo-WslEgressProcessArgument $argument }
     $start.Arguments = $quoted -join ' '
     if ($UnicodeOutput) { $start.StandardOutputEncoding = [Text.Encoding]::Unicode }
     else { $start.StandardOutputEncoding = New-Object Text.UTF8Encoding($false) }
     $start.StandardErrorEncoding = $start.StandardOutputEncoding
-    $start.StandardInputEncoding = New-Object Text.UTF8Encoding($false)
     $process = New-Object Diagnostics.Process
     $process.StartInfo = $start
     try {
         if (-not $process.Start()) { throw 'WSL process did not start.' }
         $output = $process.StandardOutput.ReadToEndAsync()
         $errors = $process.StandardError.ReadToEndAsync()
-        if ($InputText) { $process.StandardInput.Write($InputText) }
-        $process.StandardInput.Close()
+        # .NET Framework (Windows PowerShell 5.1) has no
+        # ProcessStartInfo.StandardInputEncoding. Write UTF-8 directly and close
+        # the underlying pipe without the framework writer adding a preamble.
+        if ($InputText) {
+            $bytes = (New-Object Text.UTF8Encoding($false)).GetBytes($InputText)
+            $process.StandardInput.BaseStream.Write($bytes, 0, $bytes.Length)
+        }
+        $process.StandardInput.BaseStream.Close()
         if (-not $process.WaitForExit($TimeoutSeconds * 1000)) {
             # Killing this Windows broker does NOT certify Linux task exit.
             $process.Kill()
@@ -366,12 +386,19 @@ function Get-WslEgressRunningDistributions {
     @($running.Output -split '[\r\n]+' | ForEach-Object { $_.Trim([char]0).Trim() } | Where-Object { $_ })
 }
 
+function ConvertFrom-WslEgressConnections([string]$Text) {
+    $connections = ConvertFrom-Json -InputObject $Text
+    foreach ($connection in $connections) { $connection }
+}
+
 function Get-WslEgressBaseline {
     $results = @()
     # Availability obligations are private deployment data, not upstream defaults.
     $path = Join-Path $env:LOCALAPPDATA 'ClashOfRust\WslEgress\protected-connections.json'
     if (-not (Test-Path -LiteralPath $path -PathType Leaf)) { throw 'Configure the private mandatory-connection baseline before network deployment.' }
-    $connections = @(Get-Content -LiteralPath $path -Raw | ConvertFrom-Json)
+    # Windows PowerShell 5.1 emits a JSON array as one pipeline object. Assign
+    # first, then enumerate the value, so each URL is checked independently.
+    $connections = @(ConvertFrom-WslEgressConnections ([IO.File]::ReadAllText($path)))
     if ($connections.Count -eq 0 -or $connections.Count -gt 16) { throw 'Invalid mandatory connection list.' }
     foreach ($connection in $connections) {
         $uri = [uri]$connection.url
@@ -470,9 +497,9 @@ function Get-WslEgressGuardAudit([object]$State) {
     foreach ($rule in $allows) {
         if ($rule.Name -ne ($script:Prefix + 'Endpoint')) { $issues += 'foreign_outbound_allow'; continue }
         if (@($rule.RemoteAddresses).Count -ne 1 -or
-            [string]$rule.RemoteAddresses[0] -notin @([string]$State.endpoint_ipv4, ([string]$State.endpoint_ipv4 + '/32')) -or
+            [string]@($rule.RemoteAddresses)[0] -notin @([string]$State.endpoint_ipv4, ([string]$State.endpoint_ipv4 + '/32')) -or
             [string]$rule.Protocol -notin @('UDP','17') -or
-            @($rule.RemotePorts).Count -ne 1 -or [string]$rule.RemotePorts[0] -ne [string]$State.endpoint_port) {
+            @($rule.RemotePorts).Count -ne 1 -or [string]@($rule.RemotePorts)[0] -ne [string]$State.endpoint_port) {
             $issues += 'endpoint_rule_differ'
         }
     }
@@ -495,6 +522,15 @@ function Invoke-WslEgressGuardianAudit {
         generation = $state.generation; policy_matches = $audit.valid
         issues = @($audit.issues); runtime_acceptance = 'NOT_RUN' }
     Save-WslEgressJson $record (Join-Path $script:StateRoot 'guardian-audit.json')
+}
+
+function Get-WslEgressClosureAudit([object]$State) {
+    $confirmed = $false
+    if ($State) {
+        try { $confirmed = -not $State.endpoint_enabled -and (Get-WslEgressGuardAudit $State).valid }
+        catch { $confirmed = $false }
+    }
+    [pscustomobject]@{ confirmed = [bool]$confirmed }
 }
 
 function Install-WslEgressGuardian {
@@ -756,6 +792,10 @@ function Invoke-WslEgressDistroConfiguration([object]$State, [object]$Profile, [
         }
     }
     Stop-WslEgressDistribution ([string]$State.manager_distro)
+    # The WSL VM can outlive distro termination. Reload global networking and
+    # shared interop state after the complete set of distro files is ready.
+    $shutdown = Invoke-WslEgressProcess -Arguments @('--shutdown') -TimeoutSeconds 45
+    if ($shutdown.ExitCode -ne 0) { throw 'WSL VM shutdown failed; host guard remains closed.' }
     $State.distro_configs = @($configured)
     Save-WslEgressJson $State (Join-Path $script:StateRoot 'state.json')
     # Restart after all wsl.conf changes, then collect runtime facts. The host
@@ -807,6 +847,45 @@ function Set-WslEgressEndpoint([object]$State, [bool]$Enabled) {
     Save-WslEgressJson $State (Join-Path $script:StateRoot 'state.json')
     Assert-WslEgressBaseline @(Get-WslEgressBaseline)
     if (-not (Get-WslEgressGuardAudit $State).valid) { throw 'Endpoint effective policy verification failed.' }
+}
+
+function Start-WslEgressLifetime([object]$State, [object]$Profile) {
+    # systemd/kernel tunnel objects do not themselves keep a WSL session alive.
+    # A fixed, unprivileged sleep command supplies liveness only. Its death is
+    # never permission to bypass either persistent firewall boundary.
+    if ([string]$State.manager_distro -notmatch '^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$' -or
+        [int]$Profile.uid -lt 1000 -or [int]$Profile.gid -lt 1000) { throw 'Invalid lifetime identity.' }
+    $executable = Join-Path $env:SystemRoot 'System32\wsl.exe'
+    $arguments = @('--distribution',[string]$State.manager_distro,'--user','root','--exec',
+        '/usr/bin/setpriv','--no-new-privs','--reuid',[string][int]$Profile.uid,
+        '--regid',[string][int]$Profile.gid,'--clear-groups','--inh-caps=-all',
+        '--ambient-caps=-all','--bounding-set=-all','/usr/bin/sleep','infinity') -join ' '
+    if ($State.Contains('lifetime') -and $State.lifetime) {
+        $old = Get-Process -Id ([int]$State.lifetime.pid) -ErrorAction SilentlyContinue
+        if ($old) {
+            try {
+                if (-not $old.HasExited -and
+                    $old.StartTime.ToUniversalTime().Ticks -eq [long]$State.lifetime.started_ticks -and
+                    [string]$old.Path -eq $executable -and
+                    [string]$State.lifetime.arguments -eq $arguments) { return }
+            } finally { $old.Dispose() }
+        }
+    }
+    # Give the native WSL client its own hidden console. Redirecting it to
+    # pipes owned by this short-lived broker would close its stdio on exit.
+    $process = Start-Process -FilePath $executable -ArgumentList $arguments `
+        -WorkingDirectory (Join-Path $env:SystemRoot 'System32') -WindowStyle Hidden -PassThru
+    try {
+        if ($process.WaitForExit(300)) { throw 'WSL lifetime command exited; transport remains closed.' }
+        $State['lifetime'] = [ordered]@{
+            pid = $process.Id; started_ticks = $process.StartTime.ToUniversalTime().Ticks
+            arguments = $arguments; generation = [long]$State.generation
+        }
+        Save-WslEgressJson $State (Join-Path $script:StateRoot 'state.json')
+    } finally {
+        # Disposing the local handle does not kill the independent WSL session.
+        $process.Dispose()
+    }
 }
 
 function Invoke-WslEgressOperation {
@@ -869,24 +948,30 @@ function Invoke-WslEgressOperation {
     $mutex = New-Object Threading.Mutex($false, 'Global\ClashOfRust.WslEgress.Operation')
     if (-not $mutex.WaitOne(0)) { $mutex.Dispose(); throw 'Another operation is active.' }
     $completionWritten = $false
+    $stage = 'baseline'
     try {
         Assert-WslEgressBaseline @(Get-WslEgressBaseline)
+        $stage = 'running_distribution_inventory'
         $runningNames = @(Get-WslEgressRunningDistributions)
         foreach ($item in $distributions) {
             $item.state = if ($runningNames -contains $item.name) { 'running' } else { 'stopped' }
         }
         if ($Action -eq 'Install') {
             if ($state) { throw 'Already installed. Use the existing journal; do not overwrite its snapshot.' }
+            $stage = 'private_profile_validation'
             $profile = Read-WslEgressProfile $ProfilePath
             if ($profile.backend -ne 'WireGuard') { throw 'Only the strict fixed-endpoint profile can be installed.' }
             if (@($distributions | Where-Object { $_.name -eq $profile.manager_distro }).Count -ne 1) { throw 'Prepare the declared manager distribution before installation.' }
+            $stage = 'stopped_distribution_gate'
             if ($runningNames.Count -ne 0) { throw 'Save work and stop all WSL distributions manually before the initial cutover.' }
+            $stage = 'docker_inventory'
             $dockerPaths = @(Get-WslEgressDockerPaths)
             $dockerRegistered = @($distributions | Where-Object { $_.name -match '^docker-desktop(?:-data)?$' }).Count -gt 0
             if (@($distributions | Where-Object { $_.name -match '^docker-desktop' }).Count -gt 0 -and $dockerPaths.Count -eq 0) {
                 throw 'Docker Desktop is registered but its host backend identity is unknown; no protection is claimed.'
             }
             if (-not $dockerRegistered) { $dockerPaths = @() }
+            $stage = 'state_directory'
             Protect-WslEgressDirectory $script:StateRoot
             $state = [ordered]@{ schema_version = 1; owner = 'ClashOfRust.WslEgress'; owner_sid = $sid
                 generation = [DateTimeOffset]::UtcNow.ToUnixTimeMilliseconds(); backend = 'WireGuard'; phase = 'preparing'
@@ -902,33 +987,46 @@ function Invoke-WslEgressOperation {
                 operation_id = [string]$result.operation_id
             }
             Save-WslEgressJson $state (Join-Path $script:StateRoot 'state.json')
+            $stage = 'hyperv_guard'
             Set-WslEgressPersistentGuard $state
+            $stage = 'docker_guard'
             Set-WslEgressDockerGuard $state
+            $stage = 'guardian_service'
             Install-WslEgressGuardian
+            $stage = 'windows_config'
             Install-WslEgressConfig $state
+            $stage = 'linux_payload'
             Install-WslEgressPayload $state ([string]$state.manager_distro)
             # Only start Linux after the host is already closed. Install receives
             # secrets through stdin, never argv, stdout, or an exported report.
             $linuxProfile = [ordered]@{}
             foreach ($property in $profile.PSObject.Properties) { $linuxProfile[$property.Name] = $property.Value }
             $linuxProfile['manager_distro'] = [string]$state.manager_distro
+            $stage = 'linux_install'
             $linux = Invoke-WslEgressLinux $state 'install' ($linuxProfile | ConvertTo-Json -Depth 12 -Compress) `
                 -AdditionalArguments @('--acknowledge-shared-guard')
             if ($linux.outcome -ne 'succeeded') { throw 'Linux install did not complete; the host guard remains closed.' }
+            $stage = 'distro_configuration'
             Invoke-WslEgressDistroConfiguration $state $profile $distributions
             $state.phase = 'installed_closed'
         } elseif (-not $state) { throw 'Not installed.' }
         elseif ($Action -eq 'Start') {
+            $stage = 'host_guard_audit'
             if (-not (Get-WslEgressGuardAudit $state).valid) { throw 'Host guard is not effective.' }
             $profile = Read-WslEgressProfile $ProfilePath
             Assert-WslEgressProfileForState $profile $state
+            $stage = 'wsl_lifetime'
+            Start-WslEgressLifetime $state $profile
+            $stage = 'scope_audit'
             $attestation = Get-WslEgressScopeAttestation $state
             if (-not $attestation.effective_audit_passed) {
                 throw 'Current WSL distro, Hyper-V, DNS-tunneling or Docker audit is incomplete; endpoint remains closed.'
             }
+            $stage = 'linux_start'
             $linux = Invoke-WslEgressLinux $state 'start' ($attestation | ConvertTo-Json -Depth 8 -Compress)
             if ($linux.outcome -ne 'succeeded') { throw 'Linux start failed; endpoint remains closed.' }
             try {
+                $stage = 'endpoint_enable'
                 Set-WslEgressEndpoint $state $true
             } catch {
                 # Enabling and its mandatory readbacks are one transaction. If
@@ -1030,20 +1128,38 @@ function Invoke-WslEgressOperation {
         $completionWritten = $true
         return $result
     } catch {
+        if ($state -and $Action -eq 'Start' -and $stage -ne 'baseline') {
+            try { Set-WslEgressEndpoint $state $false } catch { }
+        }
+        $closure = Get-WslEgressClosureAudit $state
+        $failurePhase = if ($closure.confirmed) { 'failed_closed_requested' } else { 'closure_unverified' }
         if ($state) {
-            $state.phase = 'failed_closed_requested'
+            $state.phase = $failurePhase
             Save-WslEgressJson $state (Join-Path $script:StateRoot 'state.json')
             $result.generation = [long]$state.generation
             $result.backend = [string]$state.backend
         }
         $result.outcome = 'failed'
-        $result.phase = 'failed_closed_requested'
-        $result.message = 'Operation failed; the host guard remains closed where installed.'
+        $result.phase = $failurePhase
+        $result.message = if ($closure.confirmed) {
+            'Operation failed. Effective host policy confirms the endpoint is disabled; Linux acceptance remains separate.'
+        } else {
+            'Operation failed. Endpoint closure could not be confirmed; inspect the protected journal before further use.'
+        }
+        $result.checks += [ordered]@{
+            id = 'endpoint_closure'; result = $(if ($closure.confirmed) { 'PASS' } else { 'FAIL' })
+            detail = 'Effective default-deny and disabled endpoint readback; no packet-level inference.'
+        }
+        $result.checks += [ordered]@{ id = 'failure_stage'; result = 'FAIL'; detail = $stage }
+        $result.checks += [ordered]@{
+            id = 'exception_class'; result = 'FAIL'
+            detail = $_.Exception.GetType().Name + ':line=' + [string]$_.InvocationInfo.ScriptLineNumber
+        }
         if ($state -and -not $completionWritten) {
             $completion = [ordered]@{
                 schema_version = 1; operation_id = [string]$result.operation_id
                 generation = [long]$state.generation; action = $Action
-                outcome = 'failed'; phase = 'failed_closed_requested'; backend = [string]$state.backend
+                outcome = 'failed'; phase = $failurePhase; backend = [string]$state.backend
                 completed_at = (Get-Date -Format o)
             }
             try {

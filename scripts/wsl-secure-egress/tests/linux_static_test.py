@@ -16,6 +16,7 @@ import socket
 import struct
 import subprocess
 import sys
+import tempfile
 import unittest
 from unittest.mock import Mock, patch
 
@@ -37,6 +38,46 @@ with patch.object(subprocess, "run", side_effect=AssertionError("command during 
 
 
 class GateTests(unittest.TestCase):
+    def test_sandbox_staging_remains_traversable_under_private_umask(self):
+        with tempfile.TemporaryDirectory() as folder, patch.object(manager, 'private_path'):
+            before = os.umask(0o077)
+            try:
+                path = manager.sandbox_directory(Path(folder)/'sandbox')
+            finally:
+                os.umask(before)
+            self.assertEqual(path.stat().st_mode & 0o777, 0o755)
+    def test_only_the_known_wsl_pe_handler_can_be_disabled(self):
+        known = 'enabled\ninterpreter /init\nflags: PF\noffset 0\nmagic 4d5a\n'
+        instance = object.__new__(manager.Manager)
+        instance.s = {}
+        instance.save = Mock()
+        registration = Mock()
+        registration.exists.return_value = True
+        registration.read_text.side_effect = [known, known.replace('enabled', 'disabled', 1)]
+        with patch.object(manager, 'INTEROP', registration):
+            instance.interop_guard()
+        registration.write_text.assert_called_once_with('0')
+        self.assertEqual(instance.s['interop_guard']['before'], 'enabled')
+        self.assertTrue(instance.save.called)
+        for text in (known.replace('/init', '/foreign'), known.replace('4d5a', '7f454c46')):
+            registration = Mock()
+            registration.exists.return_value = True
+            registration.read_text.return_value = text
+            with patch.object(manager, 'INTEROP', registration):
+                with self.assertRaises(manager.Blocked):
+                    instance.interop_guard()
+            registration.write_text.assert_not_called()
+
+    def test_interop_restore_respects_later_changes(self):
+        instance = object.__new__(manager.Manager)
+        instance.s = {'interop_guard': {'before': 'enabled', 'written': 'disabled'}}
+        instance.save = Mock()
+        with patch.object(instance, 'interop_state', return_value='enabled'), \
+                patch.object(manager, 'INTEROP') as registration:
+            with self.assertRaises(manager.Blocked):
+                instance.restore_interop_guard()
+        registration.write_text.assert_not_called()
+
     def test_all_three_explicit_gates_are_required(self):
         for execute in (False, True):
             for ci in (None, "false", "TRUE", "1", "true"):
@@ -177,6 +218,13 @@ class EvidenceTests(unittest.TestCase):
         self.assertIn('icmp type 3 icmp code 4 ct state related counter accept', source)
         self.assertIn('PREF_TRANSPORT_PMTU = 10072', source)
         self.assertIn('PREF_DEFAULT_DENY = 10074', source)
+
+    def test_wsl_host_generation_is_disabled_and_hosts_are_owned(self):
+        source = (HERE.parent / "linux" / "manager.py").read_text(encoding="utf-8")
+        self.assertIn("'generateHosts': 'false'", source)
+        self.assertIn("self.snapshot('/etc/hosts'", source)
+        self.assertIn("127.0.0.1 localhost", source)
+        self.assertNotIn("host.docker.internal", source)
 
     def test_sandbox_seccomp_denies_namespace_entry_and_creation(self):
         program = manager.seccomp_filter()

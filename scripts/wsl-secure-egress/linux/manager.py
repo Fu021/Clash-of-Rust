@@ -16,6 +16,7 @@ from pathlib import Path
 import platform
 import re
 import shutil
+import socket
 import stat
 import subprocess
 import sys
@@ -46,6 +47,7 @@ PREF_BUSINESS_MAIN = 10073
 PREF_DEFAULT_DENY = 10074
 TUNNEL_MTU = 1380
 WG_PORT = 51821
+INTEROP = Path('/proc/sys/fs/binfmt_misc/WSLInterop')
 ENV = {'PATH': '/usr/sbin:/usr/bin:/sbin:/bin', 'LC_ALL': 'C', 'LANG': 'C'}
 SECCOMP_ARCH_OFFSET = 4
 SECCOMP_NR_OFFSET = 0
@@ -137,6 +139,16 @@ def atomic(path, data, mode=0o600):
     finally:
         if os.path.exists(temp):
             os.unlink(temp)
+
+
+def sandbox_directory(path):
+    path = Path(path)
+    path.mkdir(mode=0o755, exist_ok=True)
+    private_path(path, directory=True)
+    # main() sets umask 077 for secret files. These directories contain only
+    # the non-secret resolver/passwd fixtures which the dropped UID must bind.
+    path.chmod(0o755)
+    return path
 
 
 def command(argv, ns=None, data=None, okay=False, timeout=25):
@@ -534,7 +546,8 @@ class Manager:
                 for key, value in parser.items(section):
                     parser.set(canonical, key, value)
                 parser.remove_section(section)
-        for section, values in {'network': {'generateResolvConf': 'false'},
+        for section, values in {'network': {'generateResolvConf': 'false',
+                                             'generateHosts': 'false'},
                                 'interop': {'enabled': 'false', 'appendWindowsPath': 'false'}}.items():
             if not parser.has_section(section):
                 parser.add_section(section)
@@ -562,6 +575,61 @@ class Manager:
         # Shared applications and the sandbox use the same fixed tunnel resolver.
         resolver = self.p.get('resolver_ipv4', '192.0.2.1')
         self.snapshot('/etc/resolv.conf', f'nameserver {resolver}\noptions timeout:2 attempts:1\n'.encode())
+        hostname = socket.gethostname().strip()
+        if not re.fullmatch(r'[A-Za-z0-9][A-Za-z0-9.-]{0,252}', hostname):
+            hostname = 'wsl'
+        hosts = f'127.0.0.1 localhost\n127.0.1.1 {hostname}\n::1 localhost ip6-localhost ip6-loopback\n'
+        self.snapshot('/etc/hosts', hosts.encode())
+
+    @staticmethod
+    def interop_state():
+        if not INTEROP.exists():
+            return None
+        lines = INTEROP.read_text().splitlines()
+        if (not lines or lines[0] not in ('enabled', 'disabled') or
+                'interpreter /init' not in lines or 'offset 0' not in lines or
+                'magic 4d5a' not in lines):
+            raise Blocked('WSLInterop handler differs from the known WSL PE handler; preserving it.')
+        return lines[0]
+
+    def interop_guard(self):
+        # WSL can retain/register this shared kernel handler despite
+        # interop.enabled=false. Disable only the exact /init PE handler.
+        current = self.interop_state()
+        if current is None:
+            return
+        if 'interop_guard' not in self.s:
+            self.s['interop_guard'] = {'before': current, 'written': 'disabled'}
+            self.save()
+        if current == 'enabled':
+            INTEROP.write_text('0')
+        if self.interop_state() != 'disabled':
+            raise Blocked('WSLInterop handler could not be disabled; transport remains closed.')
+
+    def restore_interop_guard(self):
+        record = self.s.get('interop_guard')
+        if not record:
+            return
+        current = self.interop_state()
+        if current is not None and current != record['written']:
+            raise Blocked('WSLInterop handler changed; restore refused.')
+        if current == 'disabled' and record['before'] == 'enabled':
+            INTEROP.write_text('1')
+            if self.interop_state() != 'enabled':
+                raise Blocked('Original WSLInterop registration could not be restored.')
+        self.s.pop('interop_guard', None)
+        self.save()
+
+    def repair_config(self):
+        self.load()
+        self.assert_table()
+        if self.s.get('phase') != 'Guarded' or self.s.get('namespaces'):
+            raise Blocked('Configuration repair requires a closed guard with no transport namespaces.')
+        self.distro_prepare()
+        self.interop_guard()
+        result = self.audit_config()
+        result['action'] = 'repair-config'
+        return result
 
     def attestation(self, stdin=False):
         path = self.args.scope_attestation or self.s.get('attestation')
@@ -620,6 +688,7 @@ class Manager:
         self.replace_table(self.root_rules(), initial=True)  # deny before DNS/files/backend networking
         self.safe_closed = True
         self.distro_prepare()
+        self.interop_guard()
         self.s['phase'] = 'Guarded'
         if self.args.scope_attestation:
             self.s['attestation'] = str(self.args.scope_attestation)
@@ -1033,6 +1102,7 @@ class Manager:
         else:
             self.replace_table(self.root_rules())
         self.safe_closed = True
+        self.interop_guard()
         self.s['root_namespace'] = os.readlink('/proc/self/ns/net')
         self.s['phase'] = 'Guarded'
         self.save()
@@ -1069,12 +1139,8 @@ class Manager:
                 raise Blocked('Workload stdio must use a pipe, TTY or /dev/null; host descriptors refused.')
         # A new, allowlisted root avoids Windows mounts, host Unix sockets, netns handles,
         # /run, user homes, /sys, host /proc and inherited host control channels.
-        root = Path('/run/cor-egress-sandbox')
-        root.mkdir(mode=0o755, exist_ok=True)
-        private_path(root, directory=True)
-        root = root / self.s['owner']
-        root.mkdir(mode=0o755, exist_ok=True)
-        private_path(root, directory=True)
+        root = sandbox_directory('/run/cor-egress-sandbox')
+        root = sandbox_directory(root / self.s['owner'])
         for name, content in {
             'resolv.conf': f"nameserver {p['resolver_ipv4']}\noptions timeout:2 attempts:1\n",
             'passwd': f"sandbox:x:{p['uid']}:{p['gid']}:Sandbox:/home/sandbox:/bin/sh\n",
@@ -1087,7 +1153,7 @@ class Manager:
                 'bwrap', '--die-with-parent', '--new-session', '--unshare-user',
                 '--unshare-pid', '--unshare-ipc', '--unshare-uts', '--unshare-cgroup-try',
                 '--cap-drop', 'ALL', '--uid', str(p['uid']), '--gid', str(p['gid']),
-                '--clearenv', '--setenv', 'PATH', '/usr/bin:/bin', '--setenv', 'HOME', '/home/sandbox',
+                '--clearenv', '--setenv', 'PATH', '/usr/bin:/bin:/usr/sbin:/sbin', '--setenv', 'HOME', '/home/sandbox',
                 '--setenv', 'LANG', 'C.UTF-8', '--setenv', 'TZ', 'Europe/Berlin',
                 '--tmpfs', '/', '--proc', '/proc', '--dev', '/dev', '--tmpfs', '/tmp',
                 '--dir', '/home', '--dir', '/home/sandbox', '--dir', '/etc']
@@ -1214,6 +1280,7 @@ class Manager:
             self.s['phase'] = 'GuardReleased'
             self.save()
         self.restore_files()
+        self.restore_interop_guard()
         emergency = self.s.get('emergency')
         if emergency:
             r = command(['nft', '-j', 'list', 'table', 'inet', emergency['name']], okay=True)
@@ -1237,7 +1304,7 @@ class Manager:
 
 def parse(argv=None):
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument('action', choices=['install', 'configure', 'audit-config', 'restore-config', 'status', 'start', 'stop', 'run', 'test', 'rollback', 'uninstall', 'guard'])
+    parser.add_argument('action', choices=['install', 'configure', 'audit-config', 'repair-config', 'restore-config', 'status', 'start', 'stop', 'run', 'test', 'rollback', 'uninstall', 'guard'])
     parser.add_argument('--profile', type=Path, default=PROFILE)
     parser.add_argument('--generation', type=int)
     parser.add_argument('--scope-attestation', type=Path)
@@ -1284,7 +1351,7 @@ def main(argv=None):
                 manager.close_requested = True
                 event = manager.boot_guard()
             else:
-                method = {'run': 'sandbox', 'restore-config': 'restore_config', 'audit-config': 'audit_config'}.get(args.action, args.action)
+                method = {'run': 'sandbox', 'restore-config': 'restore_config', 'audit-config': 'audit_config', 'repair-config': 'repair_config'}.get(args.action, args.action)
                 action = manager.rollback if args.action in ('rollback', 'uninstall') else getattr(manager, method)
                 event = action()
             print(json.dumps(event, sort_keys=True), file=sys.stderr if args.action == 'run' else sys.stdout)

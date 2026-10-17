@@ -70,6 +70,45 @@ class BuildTests(unittest.TestCase):
             self.assertNotEqual(new_prefix, local_cache.rust_keys(root, b'compiler two', {})[1])
             self.assertNotEqual(new_prefix, local_cache.rust_keys(root, b'compiler one', {'RUSTFLAGS':'-C target-cpu=native'})[1])
 
+    def test_copy_static_is_idempotent_for_an_existing_wsl_resource_tree(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            (root/'resources').mkdir()
+            (root/'resources/ip-check').mkdir()
+            wsl = root/'scripts/wsl-secure-egress'
+            for name in build.RESOURCE_NAMES:
+                (root/'resources'/name).write_text(name)
+            for relative in ('fonts/LICENSE.txt', 'flags/LICENSE-Twemoji.txt',
+                             'flags/LICENSE-Unicode.txt'):
+                path = root/'resources'/relative
+                path.parent.mkdir(parents=True, exist_ok=True)
+                path.write_text(relative)
+            for name in ('LICENSE', 'SOURCE.md'):
+                (root/'resources/ip-check'/name).write_text(name)
+            for name in build.WSL_EGRESS_TOP:
+                path = wsl/name
+                path.parent.mkdir(parents=True, exist_ok=True)
+                path.write_text(name)
+            for directory, names in (('linux', build.WSL_EGRESS_LINUX),
+                                     ('server', build.WSL_EGRESS_SERVER)):
+                for name in names:
+                    path = wsl/directory/name
+                    path.parent.mkdir(parents=True, exist_ok=True)
+                    path.write_text(name)
+            (root/'LICENSE').write_text('license')
+            bundle = root/'bundle/linux-x64'
+            bundle.mkdir(parents=True)
+            with patch.object(build, 'ROOT', root):
+                build.copy_static(bundle)
+                build.copy_static(bundle)
+            copied = bundle/'resources/wsl-secure-egress'
+            self.assertEqual(
+                {path.relative_to(copied).as_posix() for path in copied.rglob('*') if path.is_file()},
+                set(build.WSL_EGRESS_TOP)
+                | {'linux/'+name for name in build.WSL_EGRESS_LINUX}
+                | {'server/'+name for name in build.WSL_EGRESS_SERVER},
+            )
+
     def test_local_cache_archives_preserve_data_and_reject_escaping_links(self):
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)

@@ -23,11 +23,17 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y iproute2 nftables wireguard-tools bubblewrap util-linux libcap2-bin
           sudo modprobe wireguard
+          if test -r /proc/sys/kernel/apparmor_restrict_unprivileged_userns; then
+            sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
+          fi
       - name: Syntax and profile/state tests
         run: |
           python3 -m compileall -q scripts/wsl-secure-egress
           python3 -B scripts/wsl-secure-egress/tests/linux_static_test.py
+          python3 -B scripts/wsl-secure-egress/tests/acceptance_harness_unit.py
           python3 scripts/wsl-secure-egress/tests/server_unit.py
+          sudo python3 -I -B scripts/wsl-secure-egress/tests/payload_unit.py
+          python3 scripts/wsl-secure-egress/tests/provision_unit.py
           find scripts/wsl-secure-egress/linux -maxdepth 1 -type f \
             \( -name manager -o -name secure-egress -o -name cor-egress-manager \) \
             -exec sh -n {} \;

@@ -94,3 +94,50 @@ subscription services. It changes only its own interface, nftables table,
 private DNS process and the IPv4 forwarding sysctl. Deploy only after reviewing
 the XUAN VPS reference and taking a current backup. A server operation is not
 performed by the Windows client automatically.
+
+On Windows, `scripts/wsl-secure-egress/prepare-vps.py` prepares a new private
+profile and installs the reviewed server files over an existing SSH alias.
+It requires preinstalled `wireguard-tools`, `dnsmasq-base`, iproute2 and nftables;
+it does not install a global DNS service. Supply `--ssh-alias`,
+`--identity-file`, `--distro`, and `--profile` explicitly, then add `--execute`
+after reviewing the preview. Profiles must live in
+`%LOCALAPPDATA%\ClashOfRust\WslEgress`, outside the repository.
+
+Only the client's public key is sent to the VPS. The new private client key
+remains in the protected local profile; the server generates its own key.
+The VPS deployment records its service file hashes and exact added UFW rules
+in `/var/lib/cor-wsl-egress/deployment.json`. An interrupted deployment retains
+the pending client profile and the recovery journal. With the same SSH options,
+`--rollback-server --execute` stops the dedicated service and removes only
+matching owned UFW entries; private recovery files are retained.
+
+## Existing WSL and local builds
+
+The manager distro name comes from the private profile; it may be an existing
+ordinary distro such as `Ubuntu-22.04`. Prepare its dependencies before the
+default-deny cutover. Do not import or delete a distro just to match the
+documentation's example name.
+
+`linux/retire-legacy.py` is a separate, explicit migration tool for the known
+XUAN WSL service names. It stops/disables those units, suppresses the old Docker
+unit's unsafe privileged-container cleanup, and installs a final APT DIRECT
+override. It retains original service files and credential-bearing proxy files.
+Its metadata-only journal can be stored in the project's ignored
+`ClashOfRust-network-backups` directory. Use the same journal with
+`--rollback --execute` to restore only those service states and the owned
+override. This is not a general Mihomo or firewall uninstaller.
+
+For a local source build, build `clash-wsl-guardian.exe` from the reviewed
+worktree, then run `Install-HostTools.ps1 -GuardianExe <built-exe>` first as a
+preview. Its `-Execute` operation installs only the fixed guardian and reviewed
+resources under Program Files, with administrators/SYSTEM write access and
+ordinary-user read/execute access. It does not install another desktop client.
+`-UpdatePreparedPackage` is limited to a prepared helper package with no
+guardian service or active deployment journal; live upgrades require a separate
+reviewed transaction. Use `Update-LiveWslPayload.ps1` for an installed
+generation: close the transport with `Stop -Execute`, run the upgrade script as
+administrator, confirm the owned-config audit, then reconnect with
+`Start -Execute`.
+
+Windows PowerShell 5.1 is tested separately: JSON array enumeration, WSL option
+quoting, and UTF-8 stdin transfer differ from modern PowerShell/.NET.
