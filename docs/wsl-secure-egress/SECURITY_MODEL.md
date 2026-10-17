@@ -6,7 +6,9 @@ This feature protects outbound traffic from enrolled WSL2 distributions and
 native Linux container forwarding inside those distributions. It keeps the
 Windows host's adapters, IPv4/IPv6 connectivity, DNS and existing Clash/Mihomo
 service outside the tunnel. Protected Linux workloads intentionally have
-IPv4-only Internet access.
+IPv4-only Internet access. WSL has no NEU, domestic-site, campus, LAN, or
+Windows-host direct exceptions: every permitted Internet flow uses the fixed
+VPS path, and IPv6 is denied rather than routed locally.
 
 ## Enforcement layers
 

@@ -163,6 +163,15 @@ class EvidenceTests(unittest.TestCase):
         for path in (HERE / "linux_integration.py", HERE / "linux_static_test.py"):
             compile(path.read_text(encoding="utf-8"), str(path), "exec")
 
+    def test_transport_pmtu_policy_rule_uses_supported_selectors(self):
+        manager_path = HERE.parent / "linux" / "manager.py"
+        source = manager_path.read_text(encoding="utf-8")
+        self.assertIn("'to', TRANSPORT_IP + '/32', 'lookup', 'main'", source)
+        self.assertNotIn("'protocol', 'icmp'", source)
+        self.assertIn('icmp type 3 icmp code 4 ct state related counter accept', source)
+        self.assertIn('PREF_TRANSPORT_PMTU = 10072', source)
+        self.assertIn('PREF_DEFAULT_DENY = 10074', source)
+
     def test_nonce_generator_has_unique_dns_safe_labels(self):
         tokens = {harness.nonce() for _ in range(100)}
         self.assertEqual(len(tokens), 100)

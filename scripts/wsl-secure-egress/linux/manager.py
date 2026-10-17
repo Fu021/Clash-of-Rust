@@ -37,6 +37,11 @@ BUS_ROOT_IP = '169.254.241.1'
 BUS_GW_IP = '169.254.241.2'
 ROUTE_TABLE = '10077'
 RULE_PREFS = (10070, 10071, 10072, 10073, 10074, 10075)
+PREF_ROOT_ENDPOINT = 10070
+PREF_UPLINK_ENDPOINT = 10071
+PREF_TRANSPORT_PMTU = 10072
+PREF_BUSINESS_MAIN = 10073
+PREF_DEFAULT_DENY = 10074
 TUNNEL_MTU = 1380
 WG_PORT = 51821
 ENV = {'PATH': '/usr/sbin:/usr/bin:/sbin:/bin', 'LC_ALL': 'C', 'LANG': 'C'}
@@ -198,7 +203,11 @@ def clean_nft(obj):
 def table_hash(ns=None):
     r = command(['nft', '-j', 'list', 'table', 'inet', TABLE], ns=ns, okay=True)
     if r.returncode:
-        return None
+        # Only nft's explicit missing-object response proves absence. Permission,
+        # namespace or netlink failures must not be mistaken for an absent guard.
+        if r.returncode == 1 and b'No such file or directory' in r.stderr:
+            return None
+        raise Blocked('Unable to verify owned nft guard state.')
     return digest(encode(clean_nft(json.loads(r.stdout))))
 
 
@@ -663,16 +672,16 @@ class Manager:
         commands = [
             ['route', 'add', 'unreachable', 'default', 'metric', '42760', 'table', ROUTE_TABLE],
             ['route', 'add', 'default', 'via', BUS_GW_IP, 'dev', BUS_IF, 'src', BUS_ROOT_IP, 'mtu', str(TUNNEL_MTU), 'metric', '10', 'table', ROUTE_TABLE],
-            ['rule', 'add', 'pref', str(RULE_PREFS[0]), 'iif', ROOT_IF, 'from', TRANSPORT_IP + '/32', 'to', p['endpoint_ipv4'] + '/32', 'lookup', 'main'],
-            ['rule', 'add', 'pref', str(RULE_PREFS[1]), 'iif', self.s['uplink'], 'from', p['endpoint_ipv4'] + '/32', 'to', TRANSPORT_IP + '/32', 'lookup', 'main'],
-            ['rule', 'add', 'pref', str(RULE_PREFS[2]), 'iif', BUS_IF, 'lookup', 'main'],
-            ['rule', 'add', 'pref', str(RULE_PREFS[5]), 'iif', self.s['uplink'],
-             'to', TRANSPORT_IP + '/32', 'protocol', 'icmp', 'lookup', 'main'],
+            ['rule', 'add', 'pref', str(PREF_ROOT_ENDPOINT), 'iif', ROOT_IF, 'from', TRANSPORT_IP + '/32', 'to', p['endpoint_ipv4'] + '/32', 'lookup', 'main'],
+            ['rule', 'add', 'pref', str(PREF_UPLINK_ENDPOINT), 'iif', self.s['uplink'], 'from', p['endpoint_ipv4'] + '/32', 'to', TRANSPORT_IP + '/32', 'lookup', 'main'],
+            ['rule', 'add', 'pref', str(PREF_TRANSPORT_PMTU), 'iif', self.s['uplink'],
+             'to', TRANSPORT_IP + '/32', 'lookup', 'main'],
+            ['rule', 'add', 'pref', str(PREF_BUSINESS_MAIN), 'iif', BUS_IF, 'lookup', 'main'],
+            ['rule', 'add', 'pref', str(PREF_DEFAULT_DENY), 'lookup', ROUTE_TABLE],
         ]
-        # Linux 6.x iproute2 rejects protocol selectors on FRA_DST rules. The
-        # forwarded-client PMTU exceptions are not needed here: the only local
-        # sender is the WireGuard socket in TRANSPORT, which uses pref 10075.
-        commands.append(['rule', 'add', 'pref', str(RULE_PREFS[3]), 'lookup', ROUTE_TABLE])
+        # Route PMTU replies back to the transport namespace by ingress/destination.
+        # Its nftables input guard still limits delivery to the WireGuard tuple
+        # and related ICMP errors; this rule does not authorize other traffic.
         for args in commands:
             try:
                 command(['ip', '-4', *args])
@@ -743,7 +752,9 @@ class Manager:
           chain output {{ type filter hook output priority -150; policy drop;
             oifname "{NS_IF}" ip saddr {TRANSPORT_IP} ip daddr {endpoint} udp sport {WG_PORT} udp dport {port} counter accept; counter drop; }}
           chain input {{ type filter hook input priority -150; policy drop;
-            iifname "{NS_IF}" ip saddr {endpoint} ip daddr {TRANSPORT_IP} udp sport {port} udp dport {WG_PORT} ct state established counter accept; counter drop; }}
+            iifname "{NS_IF}" ip saddr {endpoint} ip daddr {TRANSPORT_IP} udp sport {port} udp dport {WG_PORT} ct state established counter accept;
+            iifname "{NS_IF}" ip saddr {endpoint} ip daddr {TRANSPORT_IP} icmp type 3 icmp code 4 ct state related counter accept;
+            counter drop; }}
           chain forward {{ type filter hook forward priority -150; policy drop; counter drop; }}
         }}\n'''
         self.replace_table(transport_rules, TRANSPORT, initial=True)
@@ -1010,6 +1021,10 @@ class Manager:
         # Preflight EVERY file before restoring any file; never overwrite later edits.
         for name, rec in list(self.s.get('files', {}).items()):
             path = Path(name)
+            if rec.get('exists') and rec.get('link') is None:
+                backup = private_path(rec['backup'])
+                if digest(backup.read_bytes()) != rec.get('original_hash'):
+                    raise Blocked('Snapshot digest mismatch; no managed files were restored.')
             original = (path.is_symlink() and os.readlink(path) == rec['link']) if rec['link'] is not None else (
                 (not path.exists() and not path.is_symlink()) if not rec['exists'] else
                 (not path.is_symlink() and path.is_file() and digest(path.read_bytes()) == rec.get('original_hash')))
@@ -1046,28 +1061,55 @@ class Manager:
             del self.s['files'][name]
             self.save()
 
+    def remove_owned_profile(self):
+        profile = Path(self.s['profile'])
+        if not profile.exists() and not profile.is_symlink():
+            return
+        if profile.is_symlink() or not profile.is_file() or digest(profile.read_bytes()) != self.s.get('profile_hash'):
+            raise Blocked('Managed profile changed during partial install; preserving it.')
+        profile.unlink()
+        sync_directory(profile.parent)
+
     def rollback(self):
         if not self.args.release_guard:
             raise Blocked('rollback/uninstall requires --release-guard after Windows withdrawal and stopped workloads.')
         self.same_generation()
         if self.s.get('phase') == 'RolledBack':
             return self.event(self.args.action, 'Succeeded', 'Generation already rolled back; recovery artifacts retained.')
-        if self.s.get('phase') != 'ReleasingGuard':
-            self.stop()
+        if self.s.get('phase') == 'Installing' and 'root' not in self.s.get('tables', {}):
+            # A failure before the root guard was persisted cannot be repaired by
+            # stop(), which intentionally refuses unowned nft state. Verify that
+            # no table exists, then remove only this transaction's profile/files.
+            if table_hash() is not None:
+                raise Blocked('Partial install has an unrecorded nft table; manual review required.')
             self.restore_files()
+            self.remove_owned_profile()
+            self.s['phase'] = 'RolledBack'
+            self.save()
+            return self.event(self.args.action, 'Succeeded',
+                              'Partial install rolled back; no owned nft guard was present.')
+        if self.s.get('phase') not in ('ReleasingGuard', 'GuardReleased'):
+            self.stop()
             self.assert_table()
             self.s['phase'] = 'ReleasingGuard'
             self.save()
+        if self.s.get('phase') == 'ReleasingGuard':
+            # Keep the boot deny command until the live guard is confirmed gone.
+            # A crash before that point therefore restarts closed.
+            if table_hash() is not None:
+                self.assert_table()
+                command(['nft', 'delete', 'table', 'inet', TABLE])
+            if table_hash() is not None:
+                raise Blocked('Owned nft guard remains after delete; boot guard retained.')
+            self.s['tables'].pop('root', None)
+            self.s['phase'] = 'GuardReleased'
+            self.save()
+        self.restore_files()
         emergency = self.s.get('emergency')
         if emergency:
             r = command(['nft', '-j', 'list', 'table', 'inet', emergency['name']], okay=True)
             if r.returncode == 0 and digest(encode(clean_nft(json.loads(r.stdout)))) != emergency['hash']:
                 raise Blocked('Emergency deny table drift; later changes preserved.')
-        if table_hash() is not None:
-            self.assert_table()
-            command(['nft', 'delete', 'table', 'inet', TABLE])
-        self.s['tables'].pop('root', None)
-        self.save()
         if emergency:
             if command(['nft', '-j', 'list', 'table', 'inet', emergency['name']], okay=True).returncode == 0:
                 command(['nft', 'delete', 'table', 'inet', emergency['name']])

@@ -113,10 +113,11 @@ generation N stable across start/stop**. A mismatch blocks the action.
    IPv4/UDP endpoint route, creates wg0 there and moves wg0 into the workload
    gateway namespace. A second business pair `cor-eb0`/`cor-bg0` carries ordinary
    shared WSL workloads to the gateway, whose real interfaces are `lo`, `wg0`,
-   `cor-bg0`. Reserved policy table `10077` and priorities `10070`–`10073` route
+   `cor-bg0`. Reserved policy table `10077` and priorities `10070`–`10074` route
    IPv4 business traffic into this pair; only precisely matched transport and
    business-return ingress consult main. The table has an unreachable default
    plus the preferred gateway route, preventing fallback to main after link loss.
+   WSL has no NEU, domestic-site, campus, LAN, or host-direct route exception.
    Root OUTPUT permits necessary loopback and the business veth with owned local
    sources. Root FORWARD permits registered container sources and the encrypted
    endpoint tuple with scoped returns. Gateway FORWARD permits business to wg0

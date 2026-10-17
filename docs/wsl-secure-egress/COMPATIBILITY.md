@@ -8,7 +8,7 @@
 | WSL networking | NAT mode; `dnsTunneling=false`, `autoProxy=false`, `firewall=true`, `localhostForwarding=false` |
 | Management distro | Existing `COR-Egress` rootfs with Python 3, iproute2, nftables, WireGuard kernel support, wireguard-tools, util-linux and bubblewrap |
 | Backend | Fixed IPv4/UDP WireGuard endpoint |
-| Traffic | IPv4 TCP/UDP/ICMP and DNS port 53 through a dedicated VPS resolver |
+| Traffic | All permitted IPv4 TCP/UDP/ICMP and DNS port 53 through a dedicated VPS resolver; no WSL domestic/campus bypass |
 | Container forwarding | Existing native Linux bridges with private IPv4 subnets |
 
 The broker requires a positive generation and refuses unknown or changed WSL
