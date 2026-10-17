@@ -94,7 +94,7 @@ def mobile_preview(args) -> None:
         for name in names:
             for dark in themes:
                 render(f'{name}-{"dark" if dark else "light"}', pages[name],
-                       args.size or '393x852', list(pages).index(name), dark)
+                       args.size or '393x852', list(pages).index(name), dark, scale=args.text_scale)
         if args.page == 'all':
             for name, label, size, page, dark, detail, scale in [
                 ('phone-landscape', '手机横屏 · 首页', '852x393', 0, False, 0, 1),
@@ -306,6 +306,7 @@ def main() -> None:
     parser.add_argument("--notice", default="", help="show a floating notification using the production component")
     parser.add_argument("--notice-elapsed", type=float, default=3, help="elapsed notification lifetime in seconds")
     parser.add_argument("--size")
+    parser.add_argument("--text-scale", type=float, default=1, help="mobile font preview factor (native Android uses system SP conversions)")
     parser.add_argument("--output", type=Path)
     args = parser.parse_args()
     if not args.viewer:

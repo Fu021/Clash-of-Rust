@@ -289,7 +289,13 @@ impl Session {
         if let Some(proxies) = snapshot.proxies {
             self.proxies = proxies;
             let root = core::active_route::start(&self.settings.run_mode, &self.route);
-            if let Some(node) = core::active_route::from_snapshot(root, &self.proxies) {
+            if let Some(node) = self
+                .settings
+                .claude_protection
+                .as_ref()
+                .map(|p| p.node.clone())
+                .or_else(|| core::active_route::from_snapshot(root, &self.proxies))
+            {
                 self.node = node;
             }
         } else {
@@ -611,6 +617,7 @@ pub async fn prepare_protection(
     let mut node = core::active_route::start(mode, &root).to_owned();
     let mut visited = std::collections::BTreeSet::new();
     let mut provider = None;
+    let mut route_groups = std::collections::BTreeMap::new();
     loop {
         ensure!(
             !core::active_route::terminal(&node)
@@ -619,7 +626,12 @@ pub async fn prepare_protection(
             "请先选择具体代理节点"
         );
         match api.proxy_nodes(&node).await {
-            Ok(proxy) if !proxy.now.is_empty() => node = proxy.now.to_string(),
+            Ok(proxy) if !proxy.now.is_empty() => {
+                if matches!(proxy.kind.as_str(), "URLTest" | "Fallback" | "LoadBalance") {
+                    route_groups.insert(node.clone(), proxy.now.to_string());
+                }
+                node = proxy.now.to_string();
+            }
             Ok(proxy) => {
                 ensure!(
                     proxy.all.is_empty()
@@ -680,6 +692,8 @@ pub async fn prepare_protection(
         },
     );
     protection.provider = provider;
+    protection.capture_automatic_groups(&proxies);
+    protection.locked_groups.extend(route_groups);
     protection.validate()?;
     Ok(protection)
 }

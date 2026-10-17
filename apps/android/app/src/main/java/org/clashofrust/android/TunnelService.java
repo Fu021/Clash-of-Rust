@@ -24,6 +24,7 @@ public final class TunnelService extends VpnService {
     private boolean stopping;
     static boolean connected() { return connected; }
     static String error() { return lastError; }
+    static void clearError() { lastError = ""; }
     static long generation() { return generation; }
     static void stop(Context context) {
         context.getSharedPreferences("vpn", MODE_PRIVATE).edit().putBoolean("desired", false).apply();
@@ -42,6 +43,7 @@ public final class TunnelService extends VpnService {
             stopSelf(); return START_NOT_STICKY;
         }
         getSharedPreferences("vpn", MODE_PRIVATE).edit().putBoolean("desired", true).apply();
+        clearError();
         startForeground(1, notification("正在连接…"));
         boolean reconfigure = intent != null && RECONFIGURE.equals(intent.getAction());
         serial.execute(() -> connect(reconfigure));

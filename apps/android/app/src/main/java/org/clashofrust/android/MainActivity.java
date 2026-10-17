@@ -18,6 +18,10 @@ public final class MainActivity extends NativeActivity {
     private static final int VPN = 10, OPEN = 11, SAVE = 12, NOTIFICATIONS = 13;
     private boolean vpnPrompt;
     private boolean vpnReconfigure;
+    private boolean vpnAuthorizationOnly;
+    private long vpnAuthorizationRequest;
+    private static volatile String vpnAuthorizationState = "{}";
+    static JSONObject authorizationState() throws Exception { return new JSONObject(vpnAuthorizationState); }
     private boolean tileConnect;
     boolean waitingForInstallPermission;
     private String exportContent;
@@ -75,12 +79,29 @@ public final class MainActivity extends NativeActivity {
                 case "initialize": CoreBridge.start(this, data.getString("config"), data.getBoolean("ipv6")); runOnUiThread(this::connectFromTile); break;
                 case "reload": CoreBridge.reload(data.getString("config")); CoreBridge.setIpv6(data.getBoolean("ipv6")); break;
                 case "state": return CoreBridge.state()
+                    .put("font_sizes",systemFontSizes())
                     .put("dark", (getResources().getConfiguration().uiMode & android.content.res.Configuration.UI_MODE_NIGHT_MASK)
                         == android.content.res.Configuration.UI_MODE_NIGHT_YES)
                     .put("notification_speeds",getSharedPreferences("appearance",MODE_PRIVATE).getBoolean("notification-speeds",true))
                     .put("excluded_apps",getSharedPreferences("vpn",MODE_PRIVATE).getStringSet("excluded",Collections.emptySet()).size()).toString();
-                case "connect": runOnUiThread(this::prepareVpn); break;
-                case "reconnect": runOnUiThread(() -> prepareVpn(true)); break;
+                case "connect": TunnelService.clearError(); runOnUiThread(this::prepareVpn); break;
+                case "reconnect": TunnelService.clearError(); runOnUiThread(() -> prepareVpn(true)); break;
+                case "authorize-vpn": {
+                    long request = data.getLong("request");
+                    runOnUiThread(() -> authorizeVpn(request));
+                    break;
+                }
+                case "cancel-vpn-authorization": {
+                    long request = data.getLong("request");
+                    runOnUiThread(() -> {
+                        if (vpnAuthorizationOnly && vpnAuthorizationRequest == request)
+                            try {
+                                vpnAuthorizationRequest = 0;
+                                vpnAuthorizationState = new JSONObject().put("request",request).put("status","cancelled").toString();
+                            } catch (Exception error) { emit("error",error.toString()); }
+                    });
+                    break;
+                }
                 case "disconnect": TunnelService.stop(this); break;
                 case "protection-sync": ProtectionRuntime.sync(this); break;
                 case "protection-pause": ProtectionRuntime.pause(this); break;
@@ -141,6 +162,14 @@ public final class MainActivity extends NativeActivity {
             catch (Exception impossible) { return "{\"error\":\"Android request failed\"}"; }
         }
     }
+
+    private org.json.JSONArray systemFontSizes() throws Exception {
+        android.util.DisplayMetrics metrics=getResources().getDisplayMetrics();
+        org.json.JSONArray sizes=new org.json.JSONArray();
+        for (int sp=10;sp<=40;sp++) sizes.put(android.util.TypedValue.applyDimension(
+            android.util.TypedValue.COMPLEX_UNIT_SP,sp,metrics)/metrics.density);
+        return sizes;
+    }
     @SuppressWarnings("deprecation")
     private void configureSystemBars(boolean dark) {
         android.view.Window window=getWindow();
@@ -165,6 +194,39 @@ public final class MainActivity extends NativeActivity {
     private void prepareVpn() {
         prepareVpn(false);
     }
+    private void authorizationResult(long request, boolean granted, String error) {
+        try {
+            JSONObject result = new JSONObject().put("request", request).put("status", granted ? "granted" : "denied")
+                .put("granted", granted).put("error", error);
+            vpnAuthorizationState = result.toString();
+            emit("vpn-authorized", result);
+        } catch (Exception failure) { emit("error", failure.toString()); }
+    }
+    private void authorizeVpn(long request) {
+        if (vpnPrompt) {
+            authorizationResult(request, false, "已有 VPN 授权正在进行");
+            return;
+        }
+        try {
+            Intent permission = VpnService.prepare(this);
+            if (permission == null) {
+                authorizationResult(request, true, "");
+                return;
+            }
+            // Consent alone must not start a VPN or change the active DNS.
+            // Rust applies protection only after this matching result returns.
+            vpnAuthorizationOnly = true;
+            vpnAuthorizationRequest = request;
+            vpnPrompt = true;
+            vpnAuthorizationState = new JSONObject().put("request",request).put("status","pending").toString();
+            startActivityForResult(permission, VPN);
+        } catch (Exception error) {
+            vpnPrompt = false;
+            vpnAuthorizationOnly = false;
+            vpnAuthorizationRequest = 0;
+            authorizationResult(request, false, error.toString());
+        }
+    }
     private void prepareVpn(boolean reconfigure) {
         if (vpnPrompt || (TunnelService.connected() && !reconfigure)) return;
         if (!CoreBridge.ready()) { emit("error", "请先启动内核"); return; }
@@ -187,6 +249,16 @@ public final class MainActivity extends NativeActivity {
         super.onActivityResult(request, result, data);
         if (request == VPN) {
             vpnPrompt = false;
+            if (vpnAuthorizationOnly) {
+                long pending = vpnAuthorizationRequest;
+                vpnAuthorizationOnly = false;
+                vpnAuthorizationRequest = 0;
+                if (pending != 0) {
+                    boolean granted = result == RESULT_OK && VpnService.prepare(this) == null;
+                    authorizationResult(pending, granted, granted ? "" : "VPN 授权已取消或失效");
+                }
+                return;
+            }
             if (result == RESULT_OK) startVpn(); else {
                 vpnReconfigure = false;
                 emit("vpn-cancelled", true);

@@ -1,3 +1,4 @@
+import { MobileTypography } from "typography.slint";
 import { ListView } from "std-widgets.slint";
 import { Theme } from "../../theme/palette.slint";
 import { NodeItem, CategoryItem, ConnectionItem, RuleItem } from "../../state.slint";
@@ -11,14 +12,14 @@ component StatusCard inherits MCard {
             MText { width: parent.width; height: parent.height; text: MobileData.vpn-connected ? "✓" : "○"; color: Theme.accent; horizontal-alignment: center; font-size: 23px; }
         }
         VerticalLayout { spacing: 5px;
-            MHeading { text: MobileData.vpn-connected ? "VPN 已连接" : "VPN 未连接"; }
+            MHeading { text: MobileData.vpn-connected ? "VPN 已连接" : "VPN 未连接"; wrap: word-wrap; }
             MSmall { text: MobileData.core-running ? "内核运行中" : "内核尚未运行"; }
         }
-        MTag { text: MobileData.vpn-connected ? "已连接" : "未连接"; tone: MobileData.vpn-connected ? 0 : 4; }
+        if Theme.text-scale <= 1.25: MTag { text: MobileData.vpn-connected ? "已连接" : "未连接"; tone: MobileData.vpn-connected ? 0 : 4; }
     }
-    MText { text: MobileData.node; color: Theme.accent; font-size: 20px * Theme.text-scale; font-weight: 600; }
+    MText { text: MobileData.node; color: Theme.accent; font-size: MobileTypography.font-size(20); font-weight: 600; }
     MSmall { text: MobileData.profile; }
-    HorizontalLayout { spacing: 8px;
+    HorizontalLayout { spacing: MobileTypography.small-gap;
         MButton { text: MobileData.vpn-connected ? "断开连接" : "连接 VPN"; primary: true; enabled: !MobileData.working;
             clicked => { MobileActions.request(MobileData.vpn-connected ? MobileIntent.disconnect : MobileIntent.connect, "", ""); }
         }
@@ -29,9 +30,9 @@ component StatusCard inherits MCard {
 }
 component TrafficCard inherits MCard {
     MHeading { text: "实时流量"; }
-    HorizontalLayout { spacing: 12px;
-        VerticalLayout { spacing: 8px; MSmall { text: "下载速度"; } MText { text: MobileData.vpn-connected ? MobileData.download-rate : "0 B/s"; color: Theme.accent; font-size: 24px * Theme.text-scale; } }
-        VerticalLayout { spacing: 8px; MSmall { text: "上传速度"; } MText { text: MobileData.vpn-connected ? MobileData.upload-rate : "0 B/s"; color: Theme.accent; font-size: 24px * Theme.text-scale; } }
+    GridLayout { spacing: MobileTypography.gap;
+        VerticalLayout { col: 0; row: 0; spacing: MobileTypography.small-gap; MSmall { text: "下载速度"; } MText { text: MobileData.vpn-connected ? MobileData.download-rate : "0 B/s"; color: Theme.accent; font-size: MobileTypography.font-size(24); } }
+        VerticalLayout { col: Theme.text-scale > 1.25 ? 0 : 1; row: Theme.text-scale > 1.25 ? 1 : 0; spacing: MobileTypography.small-gap; MSmall { text: "上传速度"; } MText { text: MobileData.vpn-connected ? MobileData.upload-rate : "0 B/s"; color: Theme.accent; font-size: MobileTypography.font-size(24); } }
     }
     MDivider { }
     MRow { title: "活跃连接"; value: MobileData.connection-count + " 条"; clicked => { MobileView.navigate(3); } }
@@ -40,7 +41,7 @@ component TrafficCard inherits MCard {
 component ModeCard inherits MCard {
     MHeading { text: "连接设置"; }
     MSmall { text: "运行模式"; }
-    HorizontalLayout { spacing: 8px;
+    HorizontalLayout { spacing: MobileTypography.small-gap;
         for label[i] in ["规则", "全局", "直连"]: MButton { text: label; selected: MobileData.mode == i;
             clicked => { MobileActions.request(MobileIntent.mode, "" + i, ""); }
         }
@@ -50,7 +51,7 @@ component ModeCard inherits MCard {
 }
 component QuickCard inherits MCard {
     MHeading { text: "快捷入口"; }
-    HorizontalLayout { spacing: 8px;
+    HorizontalLayout { spacing: MobileTypography.small-gap;
         MButton { text: "IP 检测"; clicked => { MobileView.navigate(7); } }
         MButton { text: "A÷检测"; clicked => { MobileView.navigate(8); } }
     }
@@ -58,12 +59,12 @@ component QuickCard inherits MCard {
 }
 export component MobileHome inherits Rectangle {
     MScroll {
-        if root.width < 640px: VerticalLayout { alignment: start; spacing: 12px; padding-bottom: 16px;
+        if root.width < 640px: VerticalLayout { alignment: start; spacing: MobileTypography.gap; padding-bottom: MobileTypography.padding;
             StatusCard { } TrafficCard { } ModeCard { } QuickCard { }
         }
-        if root.width >= 640px: HorizontalLayout { spacing: 16px; width: root.width;
-            VerticalLayout { alignment: start; spacing: 12px; StatusCard { } ModeCard { } }
-            VerticalLayout { alignment: start; spacing: 12px; TrafficCard { } QuickCard { } }
+        if root.width >= 640px: HorizontalLayout { spacing: MobileTypography.padding; width: root.width;
+            VerticalLayout { alignment: start; spacing: MobileTypography.gap; StatusCard { } ModeCard { } }
+            VerticalLayout { alignment: start; spacing: MobileTypography.gap; TrafficCard { } QuickCard { } }
         }
     }
 }
@@ -72,46 +73,52 @@ component NodeCard inherits MCard {
     in property <NodeItem> item;
     in property <string> group;
     selected: root.item.selected;
-    interactive: true; clicked => { MobileActions.request(MobileIntent.select-node, root.group, root.item.name); }
-    HorizontalLayout { spacing: 8px; cross-axis-alignment: center;
+    interactive: MobileData.core-running && !MobileData.protected && !MobileData.protection-pending;
+    clicked => { MobileActions.request(MobileIntent.select-node, root.group, root.item.name); }
+    HorizontalLayout { spacing: MobileTypography.small-gap; cross-axis-alignment: center;
         MText { text: root.item.name; font-weight: 600; color: root.selected ? Theme.accent : Theme.ink; }
         MTag { text: root.item.delay; tone: root.item.tone; }
     }
-    HorizontalLayout { cross-axis-alignment: center; spacing: 8px;
-        MSmall { text: root.item.kind + (root.selected ? " · 使用中" : ""); }
-        MButton { text: "测速"; width: 68px; horizontal-stretch: 0;
+    HorizontalLayout { cross-axis-alignment: center; spacing: MobileTypography.small-gap;
+        MSmall { text: root.item.kind + (root.selected ? (MobileData.protected ? " · 已锁定" : " · 使用中") : ""); }
+        MButton { text: "测速"; width: max(68px, MobileTypography.font-size(15) * 2 + 16px); horizontal-stretch: 0; enabled: !MobileData.delay-busy && !MobileData.protection-pending;
             clicked => { MobileActions.request(MobileIntent.node-delay, root.item.name, ""); }
         }
     }
 }
 export component MobileProxies inherits Rectangle {
-    MScroll { VerticalLayout { alignment: start; spacing: 12px; padding-bottom: 16px;
+    MScroll { VerticalLayout { alignment: start; spacing: MobileTypography.gap; padding-bottom: MobileTypography.padding;
         MField { placeholder: "搜索节点或策略组"; text <=> MobileView.query; edited(value) => { MobileActions.request(MobileIntent.query, "proxies", value); } }
-        HorizontalLayout { spacing: 8px;
+        HorizontalLayout { spacing: MobileTypography.small-gap;
             MSelect { options: ["延迟从低到高", "延迟从高到低", "名称排序"]; value: self.options[MobileView.node-sort];
                 selected(index, value) => { MobileView.node-sort = index; MobileActions.request(MobileIntent.node-sort, "" + index, ""); }
             }
-            MButton { text: "全部测速"; width: 100px; horizontal-stretch: 0; clicked => { MobileActions.request(MobileIntent.node-delay, "all", ""); } }
+            MButton { text: MobileData.delay-busy ? "测速中…" : "全部测速"; width: max(100px, MobileTypography.font-size(15) * 4 + 16px); horizontal-stretch: 0; enabled: MobileData.core-running && !MobileData.delay-busy && !MobileData.protection-pending;
+                clicked => { MobileActions.request(MobileIntent.delay-all, "", ""); }
+            }
         }
         for group in MobileData.groups: group-card := MCard {
             property <bool> expanded: group.expanded;
-            HorizontalLayout { cross-axis-alignment: center; spacing: 8px;
+            HorizontalLayout { cross-axis-alignment: center; spacing: MobileTypography.small-gap;
                 MRow { title: group.title; subtitle: group.detail; value: group-card.expanded ? "收起" : "展开"; expandable: true; expanded: group-card.expanded;
                     clicked => { group-card.expanded = !group-card.expanded; }
                 }
                 if root.width > 580px: MTag { text: group.current; width-limit: 180px; }
+                MButton { text: group.testing ? "测速中…" : "组测速"; width: max(82px, MobileTypography.font-size(15) * 3 + 16px); horizontal-stretch: 0; enabled: MobileData.core-running && !MobileData.delay-busy && !MobileData.protection-pending;
+                    clicked => { MobileActions.request(MobileIntent.group-delay, group.id, ""); }
+                }
             }
             if group-card.expanded: VerticalLayout { spacing: 10px;
                 for pair in group.nodes: VerticalLayout { spacing: 10px;
                     if root.width < 620px: NodeCard { item: pair.left; group: group.id; }
                     if root.width < 620px && pair.right.valid: NodeCard { item: pair.right; group: group.id; }
-                    if root.width >= 620px: HorizontalLayout { spacing: 12px;
+                    if root.width >= 620px: HorizontalLayout { spacing: MobileTypography.gap;
                         NodeCard { item: pair.left; group: group.id; }
                         if pair.right.valid: NodeCard { item: pair.right; group: group.id; }
                         if !pair.right.valid: Rectangle { }
                     }
                 }
-                HorizontalLayout { spacing: 8px;
+                HorizontalLayout { spacing: MobileTypography.small-gap;
                     MButton { text: "上一页"; enabled: group.previous; clicked => { MobileActions.request(MobileIntent.node-page, group.id, "-1"); } }
                     MSmall { text: group.page; horizontal-alignment: center; }
                     MButton { text: "下一页"; enabled: group.next; clicked => { MobileActions.request(MobileIntent.node-page, group.id, "1"); } }
@@ -121,19 +128,19 @@ export component MobileProxies inherits Rectangle {
     } }
 }
 export component MobileSubscriptions inherits Rectangle {
-    MScroll { VerticalLayout { alignment: start; spacing: 12px; padding-bottom: 16px;
-        HorizontalLayout { spacing: 8px;
+    MScroll { VerticalLayout { alignment: start; spacing: MobileTypography.gap; padding-bottom: MobileTypography.padding;
+        HorizontalLayout { spacing: MobileTypography.small-gap;
             MButton { text: "+ 添加订阅"; primary: true; clicked => { MobileView.selected-id = ""; MobileView.profile-name = ""; MobileView.profile-source = ""; MobileView.detail = 3; } }
         }
         for profile in MobileData.profiles: MCard {
             selected: profile.active;
-            HorizontalLayout { cross-axis-alignment: center; spacing: 8px;
+            HorizontalLayout { cross-axis-alignment: center; spacing: MobileTypography.small-gap;
                 MHeading { text: profile.name; }
                 MTag { text: profile.active ? "当前使用中" : profile.local ? "本地" : "订阅"; tone: profile.active ? 0 : 4; }
             }
             MSmall { text: profile.detail; wrap: word-wrap; }
             MSmall { text: profile.source; }
-            HorizontalLayout { spacing: 8px;
+            HorizontalLayout { spacing: MobileTypography.small-gap;
                 MButton { text: profile.active ? (profile.local ? "使用中" : "更新") : "启用"; selected: profile.active; enabled: !profile.active || !profile.local;
                     clicked => { MobileActions.request(profile.active ? MobileIntent.update-profile : MobileIntent.activate-profile, profile.id, ""); }
                 }
@@ -144,34 +151,34 @@ export component MobileSubscriptions inherits Rectangle {
     } }
 }
 component ConnectionsToolbar inherits VerticalLayout {
-    alignment: start; spacing: 12px; vertical-stretch: 0;
+    alignment: start; spacing: MobileTypography.gap; vertical-stretch: 0;
     MField { placeholder: "搜索域名、IP、规则或线路"; text <=> MobileView.query; edited(value) => { MobileActions.request(MobileIntent.query, "connections", value); } }
-    HorizontalLayout { spacing: 8px;
+    HorizontalLayout { spacing: MobileTypography.small-gap;
         MSelect { value: MobileView.connection-sort; options: ["下载速度 ↓", "下载速度 ↑", "上传速度 ↓", "上传速度 ↑", "下载量 ↓", "下载量 ↑", "名称 A–Z", "名称 Z–A"];
             selected(index, value) => { MobileView.connection-sort = value; MobileActions.request(MobileIntent.connection-sort, value, ""); }
         }
-        MButton { text: "关闭全部"; width: 100px; horizontal-stretch: 0; danger: true; clicked => { MobileActions.request(MobileIntent.close-all, "", ""); } }
+        MButton { text: "关闭全部"; width: max(100px, MobileTypography.font-size(15) * 4 + 16px); horizontal-stretch: 0; danger: true; clicked => { MobileActions.request(MobileIntent.close-all, "", ""); } }
     }
     MSmall { text: MobileData.connection-count + " 条活跃连接"; }
 }
 component ConnectionsRow inherits MCard {
     in property <ConnectionItem> item;
     interactive: true; clicked => { MobileView.selected-id = root.item.id; MobileActions.request(MobileIntent.connection-detail, root.item.id, ""); MobileView.detail = 5; }
-    MHeading { text: root.item.host; font-size: 17px * Theme.text-scale; }
+    MHeading { text: root.item.host; font-size: MobileTypography.font-size(17); }
     MSmall { text: root.item.rule; }
     MSmall { text: root.item.route; wrap: word-wrap; }
-    HorizontalLayout { spacing: 12px;
+    HorizontalLayout { spacing: MobileTypography.gap;
         VerticalLayout { spacing: 6px; MSmall { text: "下载速度"; } MText { text: root.item.down; color: Theme.accent; } MSmall { text: "累计 " + root.item.download; } }
         VerticalLayout { spacing: 6px; MSmall { text: "上传速度"; } MText { text: root.item.up; color: Theme.accent; } MSmall { text: "累计 " + root.item.upload; } }
     }
-    HorizontalLayout { spacing: 8px;
+    HorizontalLayout { spacing: MobileTypography.small-gap;
         MButton { text: "查看详情"; clicked => { MobileView.selected-id = root.item.id; MobileActions.request(MobileIntent.connection-detail, root.item.id, ""); MobileView.detail = 5; } }
         MButton { text: "关闭连接"; danger: true; clicked => { MobileActions.request(MobileIntent.close-connection, root.item.id, ""); } }
     }
 }
 component ConnectionsFooter inherits VerticalLayout {
-    alignment: start; spacing: 12px; vertical-stretch: 0;
-    HorizontalLayout { spacing: 8px;
+    alignment: start; spacing: MobileTypography.gap; vertical-stretch: 0;
+    HorizontalLayout { spacing: MobileTypography.small-gap;
         MButton { text: "上一页"; enabled: MobileData.connection-previous; clicked => { MobileActions.request(MobileIntent.connection-page, "-1", ""); } }
         MSmall { text: MobileData.connection-page; horizontal-alignment: center; }
         MButton { text: "下一页"; enabled: MobileData.connection-next; clicked => { MobileActions.request(MobileIntent.connection-page, "1", ""); } }
@@ -179,7 +186,7 @@ component ConnectionsFooter inherits VerticalLayout {
 }
 export component MobileConnections inherits Rectangle {
     property <bool> compact: root.height < 420px;
-    if !root.compact: VerticalLayout { spacing: 12px;
+    if !root.compact: VerticalLayout { spacing: MobileTypography.gap;
         ConnectionsToolbar {  }
         ListView { min-height: 0px; vertical-stretch: 1;
             for entry in MobileData.connections: Rectangle { height: card.height + 12px;
@@ -204,8 +211,8 @@ export component MobileConnections inherits Rectangle {
 
 component RulesToolbar inherits VerticalLayout {
     in property <length> available-height: 600px;
-    alignment: start; spacing: 12px; vertical-stretch: 0;
-    HorizontalLayout { spacing: 8px;
+    alignment: start; spacing: MobileTypography.gap; vertical-stretch: 0;
+    HorizontalLayout { spacing: MobileTypography.small-gap;
         MSelect { options: MobileData.rule-profiles; value: MobileData.rule-profile; selected(index, value) => { MobileActions.request(MobileIntent.rule-select, value, "profile"); } }
         MTag { text: MobileData.rule-dirty ? "尚未应用" : "已载入"; tone: MobileData.rule-dirty ? 2 : 4; }
     }
@@ -215,14 +222,14 @@ component RulesToolbar inherits VerticalLayout {
         }
         MSmall { text: "仅补充订阅缺少的规则，补充的规则优先匹配"; wrap: word-wrap; }
         if MobileView.shortcuts-open: MScroll { height: min(180px, root.available-height * 0.3); vertical-stretch: 0;
-          VerticalLayout { alignment: start; spacing: 8px;
+          VerticalLayout { alignment: start; spacing: MobileTypography.small-gap;
             for title[i] in MobileData.shortcuts: MSwitch { title: title; checked: MobileData.shortcut-values[i];
                 toggled(value) => { MobileActions.request(MobileIntent.rule-shortcut, "" + i, value ? "true" : "false"); }
             }
           }
         }
     }
-    HorizontalLayout { spacing: 8px;
+    HorizontalLayout { spacing: MobileTypography.small-gap;
         MField { placeholder: "搜索规则"; text <=> MobileView.query; edited(value) => { MobileActions.request(MobileIntent.query, "rules", value); } }
         MButton { text: "+ 新建"; primary: true; width: 88px; horizontal-stretch: 0;
             clicked => { MobileView.selected-id = ""; MobileView.rule-kind = "DOMAIN-SUFFIX"; MobileView.rule-policy = "DIRECT"; MobileView.rule-position = "1";
@@ -230,9 +237,9 @@ component RulesToolbar inherits VerticalLayout {
         }
     }
     if MobileView.rule-selected: MCard {
-        MHeading { text: "已选择 · " + MobileView.selected-rule.value; font-size: 17px * Theme.text-scale; }
+        MHeading { text: "已选择 · " + MobileView.selected-rule.value; font-size: MobileTypography.font-size(17); }
         MSmall { text: MobileView.selected-rule.kind + " · " + MobileView.selected-rule.policy; }
-        HorizontalLayout { spacing: 8px;
+        HorizontalLayout { spacing: MobileTypography.small-gap;
             MButton { text: "上移"; clicked => { MobileActions.request(MobileIntent.rule-move, "-1", ""); } }
             MButton { text: "下移"; clicked => { MobileActions.request(MobileIntent.rule-move, "1", ""); } }
             MButton { text: MobileView.selected-rule.source == "自定义" ? "编辑" : "复制编辑"; clicked => { MobileActions.request(MobileIntent.rule-edit, MobileView.selected-id, ""); } }
@@ -244,7 +251,7 @@ component RulesRow inherits MCard {
     in property <RuleItem> item;
     selected: MobileView.rule-selected && MobileView.selected-id == root.item.id;
     interactive: true; clicked => { MobileView.rule-selected = true; MobileView.selected-rule = root.item; MobileView.selected-id = root.item.id; }
-    HorizontalLayout { spacing: 8px; cross-axis-alignment: center;
+    HorizontalLayout { spacing: MobileTypography.small-gap; cross-axis-alignment: center;
         MSmall { text: root.item.position; width: 24px; horizontal-stretch: 0; }
         VerticalLayout { spacing: 7px;
             MText { text: root.item.value == "" ? root.item.kind : root.item.value; font-weight: 600; }
@@ -254,20 +261,20 @@ component RulesRow inherits MCard {
     }
 }
 component RulesFooter inherits VerticalLayout {
-    alignment: start; spacing: 12px; vertical-stretch: 0;
-    HorizontalLayout { spacing: 8px;
+    alignment: start; spacing: MobileTypography.gap; vertical-stretch: 0;
+    HorizontalLayout { spacing: MobileTypography.small-gap;
         MButton { text: "上一页"; enabled: MobileData.rule-previous; clicked => { MobileActions.request(MobileIntent.rule-page, "-1", ""); } }
         MSmall { text: MobileData.rule-page; horizontal-alignment: center; }
         MButton { text: "下一页"; enabled: MobileData.rule-next; clicked => { MobileActions.request(MobileIntent.rule-page, "1", ""); } }
     }
-    HorizontalLayout { spacing: 8px;
+    HorizontalLayout { spacing: MobileTypography.small-gap;
         MButton { text: "放弃修改"; enabled: MobileData.rule-dirty; clicked => { MobileView.pending-page = -1; MobileView.pending-detail = 0; MobileView.detail = 12; } }
         MButton { text: "应用修改"; primary: true; enabled: MobileData.rule-dirty; clicked => { MobileActions.request(MobileIntent.rule-apply, "", ""); } }
     }
 }
 export component MobileRules inherits Rectangle {
     property <bool> compact: root.height < 520px || Theme.text-scale > 1.25 || (MobileView.rule-selected && MobileView.shortcuts-open);
-    if !root.compact: VerticalLayout { spacing: 12px;
+    if !root.compact: VerticalLayout { spacing: MobileTypography.gap;
         RulesToolbar { available-height: root.height; }
         ListView { min-height: 0px; vertical-stretch: 1;
             for entry in MobileData.rules: Rectangle { height: card.height + 12px;
@@ -291,25 +298,25 @@ export component MobileRules inherits Rectangle {
 }
 
 export component MobileLogs inherits Rectangle {
-    VerticalLayout { spacing: 12px;
+    VerticalLayout { spacing: MobileTypography.gap;
         MField { placeholder: "搜索日志内容"; text <=> MobileView.query; edited(value) => { MobileActions.request(MobileIntent.query, "logs", value); } }
-        HorizontalLayout { spacing: 8px;
+        HorizontalLayout { spacing: MobileTypography.small-gap;
             MSelect { options: ["全部等级", "TRACE", "DEBUG", "INFO", "WARN", "ERROR"]; value: MobileView.log-level;
                 selected(index, value) => { MobileView.log-level = value; MobileActions.request(MobileIntent.log-level, value, ""); }
             }
-            MButton { text: "导出"; width: 68px; horizontal-stretch: 0; clicked => { MobileActions.request(MobileIntent.export-logs, "", ""); } }
-            MButton { text: "清空"; width: 68px; horizontal-stretch: 0; clicked => { MobileActions.request(MobileIntent.clear-logs, "", ""); } }
+            MButton { text: "导出"; width: max(68px, MobileTypography.font-size(15) * 2 + 16px); horizontal-stretch: 0; clicked => { MobileActions.request(MobileIntent.export-logs, "", ""); } }
+            MButton { text: "清空"; width: max(68px, MobileTypography.font-size(15) * 2 + 16px); horizontal-stretch: 0; clicked => { MobileActions.request(MobileIntent.clear-logs, "", ""); } }
         }
         ListView { min-height: 0px; vertical-stretch: 1;
         for entry in MobileData.logs: Rectangle { height: card.height + 12px;
         card := MCard { x: 0px; y: 0px; width: parent.width;
             interactive: true; clicked => { MobileView.log-message = entry.message; MobileView.detail = 10; }
-            HorizontalLayout { spacing: 8px; cross-axis-alignment: center;
+            HorizontalLayout { spacing: MobileTypography.small-gap; cross-axis-alignment: center;
                 MTag { text: entry.level; tone: entry.tone; }
                 MSmall { text: entry.time; horizontal-alignment: right; }
             }
-            Text { text: entry.message; color: Theme.ink; wrap: word-wrap; overflow: elide; vertical-alignment: top; min-width: 0px; height: 44px * Theme.text-scale; font-size: 14px * Theme.text-scale; }
-            HorizontalLayout { spacing: 8px;
+            Text { text: entry.message; color: Theme.ink; wrap: word-wrap; overflow: elide; vertical-alignment: top; min-width: 0px; height: MobileTypography.font-size(14) * 3.2; font-size: MobileTypography.font-size(14); }
+            HorizontalLayout { spacing: MobileTypography.small-gap;
                 MButton { text: "查看全文"; clicked => { MobileView.log-message = entry.message; MobileView.detail = 10; } }
                 MButton { text: "复制"; clicked => { MobileActions.request(MobileIntent.copy, entry.message, ""); } }
             }
@@ -318,7 +325,7 @@ export component MobileLogs inherits Rectangle {
     }
 }
 export component MobileNetwork inherits Rectangle {
-    MScroll { VerticalLayout { alignment: start; spacing: 12px; padding-bottom: 16px;
+    MScroll { VerticalLayout { alignment: start; spacing: MobileTypography.gap; padding-bottom: MobileTypography.padding;
         MCard {
             MHeading { text: "网站响应"; }
             MField { text <=> MobileView.test-url; }
@@ -337,18 +344,18 @@ export component MobileNetwork inherits Rectangle {
 component CategoryCard inherits MCard {
     in property <CategoryItem> item;
     interactive: true; clicked => { MobileView.category = root.item.title; MobileView.site-status = "全部结果"; MobileActions.request(MobileIntent.site-category, root.item.id, ""); MobileView.detail = 6; }
-    HorizontalLayout { spacing: 8px; cross-axis-alignment: center;
+    HorizontalLayout { spacing: MobileTypography.small-gap; cross-axis-alignment: center;
         MHeading { text: root.item.title; }
-        MText { text: root.item.count; color: root.item.tone == 2 ? Theme.warning : Theme.accent; font-size: 24px * Theme.text-scale; horizontal-alignment: right; }
+        MText { text: root.item.count; color: root.item.tone == 2 ? Theme.warning : Theme.accent; font-size: MobileTypography.font-size(24); horizontal-alignment: right; }
     }
     MSmall { text: root.item.detail; wrap: word-wrap; }
     MSmall { text: "查看分类详情 →"; color: Theme.accent; }
 }
 export component MobileIpCheck inherits Rectangle {
-    MScroll { VerticalLayout { alignment: start; spacing: 12px; padding-bottom: 16px;
-        HorizontalLayout { spacing: 8px; cross-axis-alignment: center;
+    MScroll { VerticalLayout { alignment: start; spacing: MobileTypography.gap; padding-bottom: MobileTypography.padding;
+        HorizontalLayout { spacing: MobileTypography.small-gap; cross-axis-alignment: center;
             MHeading { text: "检测报告"; }
-            MButton { text: MobileData.detecting ? "取消" : "重新检测"; primary: true; width: 100px; horizontal-stretch: 0;
+            MButton { text: MobileData.detecting ? "取消" : "重新检测"; primary: true; width: max(100px, MobileTypography.font-size(15) * 4 + 16px); horizontal-stretch: 0;
                 clicked => { MobileActions.request(MobileData.detecting ? MobileIntent.site-cancel : MobileIntent.site-start, "", ""); }
             }
         }
@@ -356,17 +363,17 @@ export component MobileIpCheck inherits Rectangle {
         MProgress { value: MobileData.progress; }
         MCard {
             MSmall { text: "当前出口"; }
-            HorizontalLayout { spacing: 8px; cross-axis-alignment: center;
+            HorizontalLayout { spacing: MobileTypography.small-gap; cross-axis-alignment: center;
                 // Offline bitmap; rendering never depends on an emoji font.
                 Image { source: MobileData.exit-flag; width: 24px; height: 24px; image-fit: contain; }
                 MHeading { text: MobileData.exit-country + " · " + MobileData.exit-ip; }
             }
             MSmall { text: MobileData.site-summary; wrap: word-wrap; }
         }
-        for pair in MobileData.categories: VerticalLayout { spacing: 12px;
+        for pair in MobileData.categories: VerticalLayout { spacing: MobileTypography.gap;
             if root.width < 540px: CategoryCard { item: pair.left; }
             if root.width < 540px && pair.right.id != "": CategoryCard { item: pair.right; }
-            if root.width >= 540px: HorizontalLayout { spacing: 12px;
+            if root.width >= 540px: HorizontalLayout { spacing: MobileTypography.gap;
                 CategoryCard { item: pair.left; }
                 if pair.right.id != "": CategoryCard { item: pair.right; }
             }
@@ -381,11 +388,11 @@ component ClaudeCount inherits MCard {
     callback opened();
     interactive: true; clicked => { root.opened(); }
     MHeading { text: root.title; }
-    MText { text: root.count; color: root.risk ? Theme.danger : Theme.success; font-size: 34px * Theme.text-scale; }
+    MText { text: root.count; color: root.risk ? Theme.danger : Theme.success; font-size: MobileTypography.font-size(34); }
     MSmall { text: "查看详情 →"; color: Theme.accent; }
 }
 export component MobileAiCheck inherits Rectangle {
-    MScroll { VerticalLayout { alignment: start; spacing: 12px; padding-bottom: 16px;
+    MScroll { VerticalLayout { alignment: start; spacing: MobileTypography.gap; padding-bottom: MobileTypography.padding;
         MCard {
             selected: MobileData.protected;
             MSwitch { title: MobileData.protection-supported ? "Claude 保护" : "Claude 保护 · 暂未开放"; checked: MobileData.protected; enabled: MobileData.protection-supported && !MobileData.protection-pending;
@@ -395,12 +402,12 @@ export component MobileAiCheck inherits Rectangle {
             if MobileData.protection-pending: MProgress { indeterminate: true; }
             MSmall { text: "可能影响其他应用与国内网站；关闭后恢复原状态。"; color: Theme.warning; wrap: word-wrap; }
         }
-        HorizontalLayout { spacing: 8px;
+        HorizontalLayout { spacing: MobileTypography.small-gap;
             MButton { text: "开始检测"; primary: true; clicked => { MobileActions.request(MobileIntent.claude-start, "", ""); } }
             MButton { text: "导出报告"; clicked => { MobileActions.request(MobileIntent.export-report, "claude", ""); } }
         }
         MSmall { text: MobileData.claude-status; wrap: word-wrap; }
-        HorizontalLayout { spacing: 12px;
+        HorizontalLayout { spacing: MobileTypography.gap;
             ClaudeCount { title: "正常项目"; count: MobileData.claude-normal; opened => { MobileView.detail = 7; } }
             ClaudeCount { title: "风险项目"; count: MobileData.claude-risk; risk: true; opened => { MobileView.detail = 1; } }
         }
@@ -410,7 +417,7 @@ export component MobileAiCheck inherits Rectangle {
     } }
 }
 export component MobileTools inherits Rectangle {
-    MScroll { VerticalLayout { alignment: start; spacing: 12px; padding-bottom: 16px;
+    MScroll { VerticalLayout { alignment: start; spacing: MobileTypography.gap; padding-bottom: MobileTypography.padding;
         MCard { MHeading { text: "网络管理"; }
             MRow { title: "连接"; subtitle: "实时速率、流量与连接详情"; clicked => { MobileView.navigate(3); } } MDivider { }
             MRow { title: "规则"; subtitle: "快捷规则、自定义规则与顺序"; clicked => { MobileView.navigate(4); } } MDivider { }

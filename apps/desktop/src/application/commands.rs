@@ -82,6 +82,7 @@ pub(super) async fn execute(
         action,
         Action::RefreshTray
             | Action::Start
+            | Action::ClaudeProtection(_)
             | Action::Activate(_)
             | Action::DeleteProfile(_)
             | Action::Mode(_)
@@ -264,7 +265,7 @@ pub(super) async fn execute(
                 .into())
             }
             Action::Select(group, node) => {
-                engine.api.select(&group, &node).await?;
+                engine.select_node(&group, &node).await?;
                 Ok(format!("已选择 {node}"))
             }
             Action::Delay(node) => {

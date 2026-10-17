@@ -1,8 +1,17 @@
+import { MobileTypography } from "typography.slint";
 // Responsive chrome only. Each platform supplies its own routes and pages.
 import { Theme } from "../../theme/palette.slint";
 import { MobileData, MobileView, MobileActions, MobileIntent } from "state.slint";
 import { MText, MSmall, MHeading, MButton, MBackButton, MTag, MNav, MScroll, MNotice, MAppIcon } from "controls.slint";
 import { MobileDetails, MobileModal } from "details.slint";
+
+component HeaderStatus inherits VerticalLayout {
+    spacing: 6px; alignment: center; min-width: 0px;
+    HorizontalLayout { alignment: end;
+        MTag { text: MobileData.core-running ? "● 内核运行中" : "○ 内核未运行"; tone: MobileData.core-running ? 1 : 4; }
+    }
+    MSmall { text: MobileData.profile + (MobileData.node != "" ? "  |  " + MobileData.node : ""); horizontal-alignment: right; }
+}
 
 export component MobileFrame inherits Rectangle {
     in property <[int]> primary-pages;
@@ -19,14 +28,15 @@ export component MobileFrame inherits Rectangle {
     property <length> usable-height: max(0px, root.height - MobileView.safe-top - MobileView.safe-bottom - MobileView.keyboard-inset);
     property <bool> short: root.height - MobileView.safe-top - MobileView.safe-bottom < 480px;
     property <bool> narrow: root.usable-width < 640px && !root.short;
+    property <bool> stacked-header: root.narrow && Theme.text-scale > 1.25;
     property <bool> expanded: root.usable-width >= 1024px && !root.short;
     property <bool> bottom: root.narrow && MobileView.keyboard-inset == 0px;
     property <length> nav-width: root.narrow ? 0px : root.expanded ? root.sidebar-width : 76px;
     property <length> content-padding: root.expanded ? 24px : 16px;
-    property <length> header-height: max(root.short ? 56px : 72px, header-content.preferred-height + 16px);
+    property <length> header-height: max(root.short ? 56px : 72px * MobileTypography.density, header-content.preferred-height + 16px);
     // Android keeps the gesture inset inside the navigation surface, without
     // adding a second empty strip below it. iOS retains its own safe-area policy.
-    property <length> bottom-height: root.tab-height + (root.compact-system-insets ? max(8px, MobileView.safe-bottom) : MobileView.safe-bottom);
+    property <length> bottom-height: max(root.tab-height, MobileTypography.font-size(12) + 38px) + (root.compact-system-insets ? max(8px, MobileView.safe-bottom) : MobileView.safe-bottom);
     property <bool> detail-page: MobileView.detail > 0 && !MobileView.modal;
     property <bool> has-back: (root.detail-page && !root.pane) || (!root.expanded && MobileView.page >= 3 && MobileView.page <= 8);
     property <bool> pane: body.width >= 880px && root.detail-page && MobileView.detail != 2 && MobileView.detail != 3;
@@ -59,7 +69,7 @@ export component MobileFrame inherits Rectangle {
             Rectangle { x: parent.width - 1px; width: 1px; height: parent.height; background: Theme.line; }
             VerticalLayout { x: MobileView.safe-left; y: MobileView.safe-top;
                 width: root.nav-width; height: root.usable-height;
-                padding: 8px; spacing: 10px;
+                padding: MobileTypography.small-gap; spacing: 10px;
                 if !root.short: HorizontalLayout { height: 64px; spacing: 10px; padding-left: root.expanded ? 8px : 14px; cross-axis-alignment: center;
                     MAppIcon { }
                     if root.expanded: MText { text: "Clash of Rust"; font-weight: 600; }
@@ -83,36 +93,34 @@ export component MobileFrame inherits Rectangle {
         header := Rectangle {
             x: MobileView.safe-left + root.nav-width + root.content-padding; y: MobileView.safe-top;
             width: root.usable-width - root.nav-width - root.content-padding * 2; height: root.header-height;
-            header-content := HorizontalLayout { spacing: 10px; cross-axis-alignment: center;
+            header-content := VerticalLayout { spacing: MobileTypography.small-gap;
+              HorizontalLayout { spacing: 10px; cross-axis-alignment: center;
                 if root.has-back: MBackButton {
                     clicked => { if root.detail-page { MobileView.back(); } else { MobileView.navigate(10); } }
                 }
                 if !root.has-back && root.narrow: MAppIcon { }
                 MHeading { text: root.detail-page && !root.pane ? root.detail-title : root.titles[MobileView.page];
-                    font-size: (root.short ? 21px : root.title-size) * Theme.text-scale;
+                    font-size: root.short ? MobileTypography.font-size(21) : MobileTypography.font-size(round(root.title-size / 1px));
                     horizontal-stretch: 0;
                 }
-                VerticalLayout { spacing: 6px; alignment: center; min-width: 0px;
-                    HorizontalLayout { alignment: end;
-                        MTag { text: MobileData.core-running ? "● 内核运行中" : "○ 内核未运行"; tone: MobileData.core-running ? 1 : 4; }
-                    }
-                    MSmall { text: MobileData.profile + (MobileData.node != "" ? "  |  " + MobileData.node : ""); horizontal-alignment: right; }
-                }
+                if !root.stacked-header: HeaderStatus { }
+              }
+              if root.stacked-header: HeaderStatus { }
             }
         }
         body := Rectangle {
             x: header.x; y: header.y + header.height + 4px; width: header.width;
             height: max(0px, root.usable-height - (self.y - MobileView.safe-top) - (root.bottom ? root.bottom-height - MobileView.safe-bottom : 0px));
-            HorizontalLayout { spacing: 16px;
+            HorizontalLayout { spacing: MobileTypography.padding;
                 Rectangle {
                     page-host := Rectangle { x: 0px; y: 0px; width: parent.width; height: parent.height; visible: !root.detail-page || root.pane; @children }
                     if root.detail-page && !root.pane: MobileDetails { width: parent.width; height: parent.height; }
                 }
                 if root.pane: Rectangle { width: 344px;
-                    VerticalLayout { spacing: 12px;
-                        HorizontalLayout { spacing: 8px; cross-axis-alignment: center;
+                    VerticalLayout { spacing: MobileTypography.gap;
+                        HorizontalLayout { spacing: MobileTypography.small-gap; cross-axis-alignment: center;
                             MHeading { text: root.detail-title; }
-                            MButton { text: "关闭"; width: 64px; horizontal-stretch: 0; clicked => { MobileView.back(); } }
+                            MButton { text: "关闭"; width: max(64px, MobileTypography.font-size(15) * 2 + 16px); horizontal-stretch: 0; clicked => { MobileView.back(); } }
                         }
                         MobileDetails { }
                     }

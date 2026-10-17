@@ -11,11 +11,25 @@ import android.service.quicksettings.TileService;
 
 /** System Quick Settings entry; shares the same service and consent as the app. */
 public final class VpnTileService extends TileService {
+    private static java.lang.ref.WeakReference<VpnTileService> listening = new java.lang.ref.WeakReference<>(null);
     static final String CONNECT="org.clashofrust.android.CONNECT";
+    static int displayedState() {
+        VpnTileService active=listening.get();
+        Tile tile=active==null?null:active.getQsTile();
+        return tile==null?-1:tile.getState();
+    }
     static void refresh(Context context) {
+        new android.os.Handler(android.os.Looper.getMainLooper()).post(()-> {
+            VpnTileService active=listening.get();
+            if (active!=null) active.update();
+        });
         TileService.requestListeningState(context,new ComponentName(context,VpnTileService.class));
     }
-    @Override public void onStartListening() { super.onStartListening(); update(); }
+    @Override public void onStartListening() { super.onStartListening(); listening=new java.lang.ref.WeakReference<>(this); update(); }
+    @Override public void onStopListening() {
+        if (listening.get()==this) listening.clear();
+        super.onStopListening();
+    }
     // Android 13 and below have no PendingIntent overload. Never call this on 14+.
     @android.annotation.SuppressLint("StartActivityAndCollapseDeprecated")
     @SuppressWarnings("deprecation")
@@ -48,7 +62,9 @@ public final class VpnTileService extends TileService {
             }
             TunnelService.stop(this); return;
         }
-        if (CoreBridge.ready() && VpnService.prepare(this)==null) {
+        if (VpnService.prepare(this)==null && (CoreBridge.ready() || CoreBridge.restorable(this))) {
+            // TunnelService restores the persisted core itself. A cold process
+            // is not a reason to bring the Activity in front of the user's app.
             startForegroundService(new Intent(this,TunnelService.class));
         } else {
             Intent open=new Intent(this,MainActivity.class).setAction(CONNECT)

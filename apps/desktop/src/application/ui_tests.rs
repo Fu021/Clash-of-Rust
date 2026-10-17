@@ -241,6 +241,16 @@ fn clicking_a_node_selects_it_but_its_latency_button_only_tests_it() {
         "clicking the card must select the node in its own group"
     );
     events.borrow_mut().clear();
+    data.set_protected(true);
+    let _ = window.window().take_snapshot().unwrap();
+    click(250.0, 252.0);
+    assert!(
+        events.borrow().is_empty(),
+        "protected nodes must not dispatch a selection"
+    );
+    data.set_protected(false);
+    let _ = window.window().take_snapshot().unwrap();
+    events.borrow_mut().clear();
     click(260.0, 205.0);
     assert_eq!(
         events.borrow().as_slice(),

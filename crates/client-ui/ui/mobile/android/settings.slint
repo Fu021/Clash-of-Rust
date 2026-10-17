@@ -1,3 +1,4 @@
+import { MobileTypography } from "../shared/typography.slint";
 import { MobileData, MobileView, MobileActions, MobileIntent } from "../shared/state.slint";
 import { AndroidData, AndroidActions, AndroidIntent } from "state.slint";
 import { MText, MSmall, MHeading, MCard, MButton, MRow, MDivider, MSwitch, MField, MScroll, MProgress } from "../shared/controls.slint";
@@ -7,11 +8,11 @@ component AndroidNetwork inherits VerticalLayout {
     alignment: start; spacing: 10px;
     MHeading { text: "网络"; }
     MCard {
-        HorizontalLayout { spacing: 12px; cross-axis-alignment: center;
+        HorizontalLayout { spacing: MobileTypography.gap; cross-axis-alignment: center;
             MText { text: "混合端口"; }
             MField { width: 96px; horizontal-stretch: 0; text <=> MobileData.mixed-port; edited(value) => { AndroidData.ports-dirty = true; } }
         }
-        HorizontalLayout { spacing: 12px; cross-axis-alignment: center;
+        HorizontalLayout { spacing: MobileTypography.gap; cross-axis-alignment: center;
             MText { text: "控制端口"; }
             MField { width: 96px; horizontal-stretch: 0; text <=> MobileData.controller-port; edited(value) => { AndroidData.ports-dirty = true; } }
         }
@@ -39,7 +40,7 @@ component AndroidAbout inherits MCard {
     MRow { title: "当前版本"; value: MobileData.version; arrow: false; interactive: false; }
     MSmall { text: AndroidData.update-status; wrap: word-wrap; }
     if AndroidData.update-busy: MProgress { value: AndroidData.update-progress; indeterminate: AndroidData.update-progress == 0; }
-    HorizontalLayout { spacing: 8px;
+    HorizontalLayout { spacing: MobileTypography.small-gap;
         MButton { text: "检查更新"; enabled: !AndroidData.update-busy; clicked => { MobileActions.request(MobileIntent.check-update, "", ""); } }
         if AndroidData.update-available: MButton { text: "安装更新"; primary: true; enabled: !AndroidData.update-busy;
             clicked => { MobileActions.request(MobileIntent.install-update, "", ""); }
@@ -53,10 +54,10 @@ export component AndroidSettings inherits Rectangle {
         changed height => { MobileView.settings-viewport-height = self.height; }
         init => { MobileView.settings-content-height = self.content-height; MobileView.settings-viewport-height = self.height; }
         if root.width < 760px: VerticalLayout { alignment: start; spacing: 20px; padding-bottom: 20px;
-            AppearanceSettings { } AndroidNetwork { } AndroidConnection { } MaintenanceSettings { } AndroidAbout { }
+            AppearanceSettings { custom-font-size: false; } AndroidNetwork { } AndroidConnection { } MaintenanceSettings { } AndroidAbout { }
         }
         if root.width >= 760px: HorizontalLayout { spacing: 20px; width: root.width;
-            VerticalLayout { alignment: start; spacing: 20px; AppearanceSettings { } AndroidConnection { } }
+            VerticalLayout { alignment: start; spacing: 20px; AppearanceSettings { custom-font-size: false; } AndroidConnection { } }
             VerticalLayout { alignment: start; spacing: 20px; AndroidNetwork { } MaintenanceSettings { } AndroidAbout { } }
         }
     }

@@ -1,3 +1,4 @@
+import { MobileTypography } from "typography.slint";
 import { Theme } from "../../theme/palette.slint";
 import { MobileView, MobileActions, MobileIntent } from "state.slint";
 
@@ -26,7 +27,7 @@ export component MAppIcon inherits Rectangle {
 export component MText {
     in property <string> text;
     in property <color> color: Theme.ink;
-    in property <length> font-size: 16px * Theme.text-scale;
+    in property <length> font-size: MobileTypography.font-size(16);
     in property <int> font-weight: 400;
     in property <TextHorizontalAlignment> horizontal-alignment: left;
     in property <TextWrap> wrap: no-wrap;
@@ -41,8 +42,8 @@ export component MText {
         horizontal-alignment: root.horizontal-alignment; wrap: root.wrap; overflow: elide;
     }
 }
-export component MSmall inherits MText { font-size: 14px * Theme.text-scale; color: Theme.secondary; }
-export component MHeading inherits MText { font-size: 19px * Theme.text-scale; font-weight: 600; }
+export component MSmall inherits MText { font-size: MobileTypography.font-size(14); color: Theme.secondary; }
+export component MHeading inherits MText { font-size: MobileTypography.font-size(19); font-weight: 600; }
 export component MParagraph inherits MText { wrap: word-wrap; height: self.preferred-height; }
 // A touch viewport with an explicit content extent. Do not inherit a desktop
 // ScrollView whose generated wrapper can constrain conditional layouts to the
@@ -68,7 +69,7 @@ export component MCard inherits Rectangle {
     background: root.selected ? Theme.accent-wash : Theme.surface;
     border-width: 1px; border-color: root.selected ? Theme.accent : Theme.line; border-radius: 10px;
     if root.interactive: TouchArea { enabled: !MobileView.modal; mouse-cursor: pointer; clicked => { root.clicked(); } }
-    content := VerticalLayout { alignment: start; padding: 16px; spacing: 12px; @children }
+    content := VerticalLayout { alignment: start; padding: MobileTypography.padding; spacing: MobileTypography.gap; @children }
 }
 export component MButton inherits Rectangle {
     in property <bool> modal-control;
@@ -100,7 +101,7 @@ export component MButton inherits Rectangle {
     label := MText { width: parent.width - 12px - (root.dropdown ? 24px : 0px) - (root.show-swatch ? 26px : 0px); x: root.show-swatch ? 32px : 6px; height: parent.height;
         text: root.text; horizontal-alignment: center;
         color: root.primary ? #ffffff : root.danger ? Theme.danger : root.selected ? Theme.accent : Theme.ink;
-        font-size: 15px * Theme.text-scale;
+        font-size: MobileTypography.font-size(15);
     }
     if root.dropdown: Image { source: @image-url("../../icons/chevron-down.svg");
         x: parent.width - 28px; y: (parent.height - 18px) / 2; width: 18px; height: 18px; colorize: Theme.secondary;
@@ -161,7 +162,7 @@ export component MSwitch inherits Rectangle {
     callback toggled(bool);
     vertical-stretch: 0; height: max(52px, content.preferred-height + 12px);
     opacity: root.enabled ? 1 : 0.5;
-    content := HorizontalLayout { spacing: 12px; cross-axis-alignment: center;
+    content := HorizontalLayout { spacing: MobileTypography.gap; cross-axis-alignment: center;
         VerticalLayout { spacing: 6px; MText { text: root.title; } if root.subtitle != "": MSmall { text: root.subtitle; wrap: word-wrap; } }
         Rectangle { width: 44px; height: 26px; horizontal-stretch: 0; border-radius: 13px; background: root.checked ? Theme.primary : Theme.muted;
             Rectangle { x: root.checked ? 21px : 3px; y: 3px; width: 20px; height: 20px; border-radius: 10px; background: #ffffff; }
@@ -179,7 +180,7 @@ export component MField inherits Rectangle {
     border-color: input.has-focus ? Theme.accent : Theme.line;
     input := TextInput { x: 12px; width: parent.width - 24px; height: parent.height;
         enabled: !MobileView.modal;
-        text <=> root.text; font-size: 16px * Theme.text-scale; color: Theme.ink; single-line: true; vertical-alignment: center;
+        text <=> root.text; font-size: MobileTypography.font-size(16); color: Theme.ink; single-line: true; vertical-alignment: center;
         selection-background-color: Theme.primary; selection-foreground-color: #ffffff;
         edited => { root.edited(self.text); }
     }
@@ -189,14 +190,14 @@ export component MSelect inherits Rectangle {
     in property <[string]> options;
     in property <string> value;
     callback selected(int, string);
-    height: max(48px, 16px * Theme.text-scale + 24px); vertical-stretch: 0; min-width: 0px;
+    height: max(48px, MobileTypography.font-size(16) + 24px); vertical-stretch: 0; min-width: 0px;
     MButton { width: parent.width; text: root.value; dropdown: true; clicked => { popup.show(); } }
     popup := PopupWindow {
         y: root.height + 4px; width: max(root.width, 200px);
         height: min(300px, root.options.length * 52px + 16px);
         close-policy: close-on-click-outside;
         Rectangle { background: Theme.surface; border-radius: 8px; border-width: 1px; border-color: Theme.line;
-            MScroll { VerticalLayout { alignment: start; spacing: 4px; padding: 8px;
+            MScroll { VerticalLayout { alignment: start; spacing: 4px; padding: MobileTypography.small-gap;
                 for option[i] in root.options: MButton { width: popup.width - 16px; text: option; selected: option == root.value;
                     clicked => { root.selected(i, option); popup.close(); }
                 }
@@ -236,8 +237,8 @@ export component MNotice inherits Rectangle {
     TouchArea { }
     content := VerticalLayout { alignment: start; padding: Theme.card-padding; spacing: Theme.content-gap;
         HorizontalLayout { cross-axis-alignment: center; spacing: Theme.content-gap;
-            MParagraph { text: root.text; font-size: Theme.body-size; color: Theme.secondary; }
-            MButton { modal-control: true; text: "关闭"; width: 68px; horizontal-stretch: 0;
+            MParagraph { text: root.text; font-size: MobileTypography.font-size(15); color: Theme.secondary; }
+            MButton { modal-control: true; text: "关闭"; width: max(68px, MobileTypography.font-size(15) * 2 + 16px); horizontal-stretch: 0;
                 clicked => { root.dismissed(); }
             }
         }
@@ -256,9 +257,9 @@ export component MNav inherits Rectangle {
     if root.selected && !root.stacked: Rectangle { x: 0px; width: 3px; height: 20px; y: (parent.height - self.height) / 2; background: Theme.accent; border-radius: 2px; }
     if root.stacked: VerticalLayout { padding-top: 4px; padding-bottom: 4px; spacing: 4px; alignment: center;
         Rectangle { height: 22px; Image { x: (parent.width - 22px) / 2; source: root.icon; width: 22px; height: 22px; colorize: root.selected ? Theme.accent : Theme.secondary; } }
-        MSmall { text: root.text; font-size: 12px * Theme.text-scale; horizontal-alignment: center; color: root.selected ? Theme.accent : Theme.secondary; font-weight: root.selected ? 600 : 400; }
+        MSmall { text: root.text; font-size: MobileTypography.font-size(12); horizontal-alignment: center; color: root.selected ? Theme.accent : Theme.secondary; font-weight: root.selected ? 600 : 400; }
     }
-    if !root.stacked: HorizontalLayout { padding-left: 14px; padding-right: 12px; spacing: 12px; cross-axis-alignment: center;
+    if !root.stacked: HorizontalLayout { padding-left: 14px; padding-right: 12px; spacing: MobileTypography.gap; cross-axis-alignment: center;
         Image { source: root.icon; width: 20px; height: 20px; colorize: root.selected ? Theme.accent : Theme.secondary; }
         MText { text: root.text; color: root.selected ? Theme.accent : Theme.secondary; font-weight: root.selected ? 600 : 400; }
     }

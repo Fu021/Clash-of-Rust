@@ -6,7 +6,7 @@ import { Label, Caption, Heading, Chevron, ContentPanel, RowPanel, ActionButton,
 component NodeCard inherits ContentPanel {
     in property <NodeItem> node;
     preferred-width: 0px; min-width: 0px; horizontal-stretch: 1;
-    interactive: UiData.running && !UiData.working;
+    interactive: UiData.running && !UiData.working && !UiData.protected && !UiData.protection-pending;
     clicked => { UiActions.dispatch(Intent.select-node, root.node.group, root.node.name); }
     border-color: node.selected ? Theme.accent : Theme.line;
     background: node.selected ? Theme.accent-wash : Theme.surface;
@@ -16,7 +16,7 @@ component NodeCard inherits ContentPanel {
     }
     HorizontalLayout { cross-axis-alignment: center; spacing: Theme.content-gap;
         Caption { text: root.node.kind; }
-        if root.node.selected: Badge { text: "使用中"; tone: 1; }
+        if root.node.selected: Badge { text: UiData.protected ? "已锁定" : "使用中"; tone: 1; }
         ActionButton { text: "测速"; enabled: UiData.running && !UiData.working; clicked => { UiActions.dispatch(Intent.node-delay, root.node.name, ""); } }
     }
 }

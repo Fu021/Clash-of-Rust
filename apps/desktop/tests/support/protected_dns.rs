@@ -102,6 +102,18 @@ async fn protected_traffic(engine: &mut Engine) {
     }
     let actual: serde_json::Value = engine.api.get("configs").await.unwrap();
     assert_eq!(actual["tun"]["enable"], true);
+    let protection = engine.settings.claude_protection.as_ref().unwrap();
+    let auto = engine.api.proxy_nodes("Auto").await.unwrap();
+    assert_eq!(auto.kind.as_str(), "Selector");
+    assert_eq!(
+        auto.all.iter().map(|n| n.as_str()).collect::<Vec<_>>(),
+        vec![protection.node.as_str()]
+    );
+    assert_eq!(auto.now.as_str(), protection.node);
+    assert!(
+        engine.select_node("Auto", "Other").await.is_err(),
+        "Protected groups must reject node changes"
+    );
 }
 
 pub async fn run(engine: &mut Engine, profile: &std::path::Path) {
@@ -154,7 +166,7 @@ pub async fn run(engine: &mut Engine, profile: &std::path::Path) {
             .unwrap()
             .error_for_status()
             .unwrap();
-        std::fs::write(profile, format!("proxies: [{{name: fixture, type: socks5, server: {node}, port: 1080, udp: true}}]\nproxy-groups: [{{name: Main, type: select, proxies: [fixture]}}]\nrules: ['MATCH,Main']\ndns:\n  enable: true\n  enhanced-mode: fake-ip\n  nameserver: ['https://{bootstrap}/dns-query#DIRECT']\n{node_dns}{default_dns}  fake-ip-filter: ['+.fixture.test']\ntun: {{device: ClashRustTest, route-address: [203.0.113.0/24], dns-hijack: []}}\n")).unwrap();
+        std::fs::write(profile, format!("proxies: [{{name: fixture, type: socks5, server: {node}, port: 1080, udp: true}}, {{name: Other, type: socks5, server: {node}, port: 1080, udp: true}}]\nproxy-groups: [{{name: Main, type: select, proxies: [Auto]}}, {{name: Auto, type: url-test, proxies: [fixture, Other], url: 'http://claude.ai/auto-check', interval: 3600, lazy: true}}]\nrules: ['MATCH,Main']\ndns:\n  enable: true\n  enhanced-mode: fake-ip\n  nameserver: ['https://{bootstrap}/dns-query#DIRECT']\n{node_dns}{default_dns}  fake-ip-filter: ['+.fixture.test']\ntun: {{device: ClashRustTest, route-address: [203.0.113.0/24], dns-hijack: []}}\n")).unwrap();
         engine
             .import(
                 format!("DNS uplink {node}"),

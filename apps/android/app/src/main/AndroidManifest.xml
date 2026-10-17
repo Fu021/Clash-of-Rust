@@ -18,7 +18,7 @@
             android:exported="false" android:grantUriPermissions="true" />
         <activity android:name=".MainActivity" android:exported="true"
             android:launchMode="singleTask" android:windowSoftInputMode="adjustResize"
-            android:configChanges="orientation|keyboardHidden|screenSize|screenLayout|smallestScreenSize|density|uiMode|keyboard|navigation">
+            android:configChanges="orientation|keyboardHidden|screenSize|screenLayout|smallestScreenSize|density|uiMode|fontScale|keyboard|navigation">
             <meta-data android:name="android.app.lib_name" android:value="clash_mobile" />
             <intent-filter>
                 <action android:name="android.intent.action.MAIN" />

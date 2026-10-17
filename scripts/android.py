@@ -304,22 +304,32 @@ def test(arch, apk=None, test_apk=None):
         def log_message(self,*args): pass
     server=http.server.ThreadingHTTPServer(('0.0.0.0',18081),Origin)
     threading.Thread(target=server.serve_forever,daemon=True).start()
-    run([ADB,'shell','appops','set','org.clashofrust.android','ACTIVATE_VPN','allow'])
+    # Exercise Android's real first-use dialog; pre-granting consent hides
+    # ordering bugs between authorization, protection DNS and VPN startup.
+    run([ADB,'shell','appops','set','org.clashofrust.android','ACTIVATE_VPN','default'])
     report=ROOT/'target/android-report'/arch
     report.mkdir(parents=True,exist_ok=True)
     try:
-        result = subprocess.run([ADB,'shell','am','instrument','-w','org.clashofrust.android.test/androidx.test.runner.AndroidJUnitRunner'],
-                                text=True,capture_output=True,timeout=240)
-        (report/'instrumentation.txt').write_text(result.stdout+result.stderr)
+        outputs=[]
+        for case in ('localProxyAndRealTunCarryTrafficAndDisconnectCleanly',
+                     'quickTileRestoresColdCoreWithoutOpeningTheActivity'):
+            if case.startswith('quickTile'):
+                run([ADB,'shell','am','force-stop','org.clashofrust.android'])
+            result = subprocess.run([ADB,'shell','am','instrument','-w','-e','class',
+                'org.clashofrust.android.ProxyTunTest#'+case,
+                'org.clashofrust.android.test/androidx.test.runner.AndroidJUnitRunner'],
+                text=True,capture_output=True,timeout=240)
+            outputs.append(case+'\n'+result.stdout+result.stderr)
+            (report/'instrumentation.txt').write_text('\n\n'.join(outputs))
+            print(result.stdout,flush=True)
+            if result.returncode or 'FAILURES!!!' in result.stdout or 'OK (' not in result.stdout:
+                raise RuntimeError('Android real proxy/TUN integration test failed: '+case)
     finally:
         server.shutdown(); server.server_close()
         log = subprocess.run([ADB,'logcat','-d','-v','threadtime'],capture_output=True,text=True,timeout=30)
         (report/'logcat.txt').write_text(log.stdout)
-    print(result.stdout, flush=True)
     if 'Android startup:' in log.stdout or 'Mobile runtime stopped:' in log.stdout:
         raise RuntimeError('Native Android UI/runtime failed; inspect logcat')
-    if result.returncode or 'FAILURES!!!' in result.stdout or 'OK (' not in result.stdout:
-        raise RuntimeError('Android real proxy/TUN integration test failed')
 
 
 def package(arch, run_id, check_only):

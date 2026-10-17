@@ -379,6 +379,14 @@ impl App {
                 task,
                 desktop_runtime::window::latest().map(Message::ReadWindowSize),
                 desktop_runtime::system::theme().map(Message::SystemTheme),
+                Task::perform(
+                    async {
+                        if let Err(error) = platform::notification::initialize().await {
+                            log::info!("系统通知授权未开启：{error:#}");
+                        }
+                    },
+                    |_| Message::Tick,
+                ),
             ]),
         )
     }
@@ -560,6 +568,16 @@ impl App {
     }
 
     fn dispatch_scope(&mut self, action: Action, scope: Scope) -> Task<Message> {
+        if matches!(action, Action::Select(..))
+            && (self.settings.claude_protection.is_some()
+                || self.claude.protection_pending.is_some())
+        {
+            self.show_notice(
+                "Claude 保护已锁定当前节点，请先关闭保护再切换节点".into(),
+                false,
+            );
+            return Task::none();
+        }
         if (self.updates.install_pending || self.updates.installing.is_some())
             && !matches!(action, Action::Refresh)
         {
@@ -1199,6 +1217,16 @@ impl App {
                 }
             }
             Message::Action(action) => {
+                if let Action::Delay(node) = &action
+                    && self
+                        .snapshot
+                        .proxies
+                        .proxies
+                        .get(node.as_str())
+                        .is_some_and(|proxy| matches!(proxy.kind.as_str(), "URLTest" | "Fallback"))
+                {
+                    return self.update(Message::GroupDelay(node.clone()));
+                }
                 self.proxy_order.get_mut().clear();
                 if let Action::Delay(node) = &action {
                     self.node_delays.remove(node);

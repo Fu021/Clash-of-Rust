@@ -204,6 +204,8 @@ pub struct Protection {
     // than feeding the new system DNS addresses back into the core itself.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub system_dns: Vec<String>,
+    #[serde(default, skip_serializing_if = "std::collections::BTreeMap::is_empty")]
+    pub locked_groups: std::collections::BTreeMap<String, String>,
     pub route: String,
     pub previous: Previous,
 }
@@ -214,12 +216,26 @@ impl Protection {
             node,
             provider: None,
             system_dns: vec![],
+            locked_groups: Default::default(),
             route: format!("COR-Claude-{}", uuid::Uuid::new_v4().simple()),
             previous,
         }
     }
     pub fn validate(&self) -> Result<()> {
         uuid::Uuid::parse_str(&self.profile_id)?;
+        ensure!(
+            self.locked_groups.len() <= 4096
+                && self
+                    .locked_groups
+                    .iter()
+                    .all(|(group, node)| !group.is_empty()
+                        && !node.is_empty()
+                        && group.len() <= 512
+                        && node.len() <= 512
+                        && !group.chars().any(char::is_control)
+                        && !node.chars().any(char::is_control)),
+            "Claude 保护自动组锁定记录无效"
+        );
         ensure!(
             self.system_dns.len() <= 16
                 && self
@@ -268,6 +284,22 @@ impl Protection {
         );
         Ok(())
     }
+    pub fn capture_automatic_groups(&mut self, proxies: &crate::api::Proxies) {
+        self.locked_groups = proxies
+            .proxies
+            .iter()
+            .filter(|(_, proxy)| {
+                matches!(proxy.kind.as_str(), "URLTest" | "Fallback" | "LoadBalance")
+                    && !proxy.now.is_empty()
+            })
+            .map(|(name, proxy)| (name.to_string(), proxy.now.to_string()))
+            .collect();
+    }
+}
+
+fn exact_group_pattern(name: &str) -> String {
+    // mihomo separates multiple filters with backticks, including literal names.
+    format!("^{}$", regex::escape(name).replace('`', r"\x60"))
 }
 
 pub fn owned_host(host: &str) -> bool {
@@ -318,7 +350,7 @@ pub fn apply(map: &mut Mapping, settings: &Settings) -> Result<()> {
                 .is_some_and(|providers| providers.contains_key(Value::from(provider.clone()))),
             "保护节点的代理集合已不存在，请关闭保护后重新选择节点"
         );
-        serde_json::json!({"name":protection.route,"type":"select","hidden":true,"empty-fallback":"REJECT","use":[provider],"filter":format!("^{}$",regex::escape(&protection.node))})
+        serde_json::json!({"name":protection.route,"type":"select","hidden":true,"empty-fallback":"REJECT","use":[provider],"filter":exact_group_pattern(&protection.node)})
     } else {
         serde_json::json!({"name":protection.route,"type":"select","hidden":true,"empty-fallback":"REJECT","proxies":[protection.node]})
     };
@@ -328,6 +360,40 @@ pub fn apply(map: &mut Mapping, settings: &Settings) -> Result<()> {
         .or_insert(Value::Sequence(vec![]))
         .as_sequence_mut()
         .ok_or_else(|| anyhow::anyhow!("订阅代理组格式无效"))?;
+    for group in groups.iter_mut() {
+        let Some(selected) = group
+            .get("name")
+            .and_then(Value::as_str)
+            .and_then(|name| protection.locked_groups.get(name))
+        else {
+            continue;
+        };
+        if !matches!(
+            group.get("type").and_then(Value::as_str),
+            Some("url-test" | "fallback" | "load-balance")
+        ) {
+            continue;
+        }
+        let group = group
+            .as_mapping_mut()
+            .ok_or_else(|| anyhow::anyhow!("自动组配置无效"))?;
+        group.insert("type".into(), "select".into());
+        group.insert("filter".into(), exact_group_pattern(selected).into());
+        // Raw members skip mihomo's positive provider filter. This exclusion
+        // also locks them, while preserving the original provider ownership.
+        group.insert(
+            "exclude-filter".into(),
+            format!(
+                "^(?!{})",
+                exact_group_pattern(selected).trim_start_matches('^')
+            )
+            .into(),
+        );
+        group.remove(Value::from("exclude-type"));
+        group.insert("empty-fallback".into(), "REJECT".into());
+        group.insert("interval".into(), 0.into());
+        group.insert("lazy".into(), true.into());
+    }
     ensure!(
         !groups
             .iter()
@@ -522,6 +588,48 @@ fn route_or_reject(
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn automatic_groups_stay_pinned_after_restart_and_restore_on_disable() {
+        let id = uuid::Uuid::new_v4().to_string();
+        let raw = "proxies: [{name: 'node.[1]`x', type: socks5, server: 127.0.0.1, port: 1080}, {name: Other, type: socks5, server: 127.0.0.1, port: 1081}]\nproxy-providers: {Feed: {type: file, path: providers/feed.yaml}}\nproxy-groups: [{name: Auto, type: url-test, url: 'https://health.example/check', proxies: ['node.[1]`x', Other], use: [Feed], tolerance: 80, interval: 300}]\nrules: ['MATCH,Auto']\n";
+        let mut settings = Settings {
+            active_profile: Some(id.clone()),
+            ..Default::default()
+        };
+        let before = crate::config::runtime_config(raw, &settings).unwrap();
+        let proxies = serde_json::from_value::<crate::api::Proxies>(serde_json::json!({"proxies":{
+            "Auto":{"type":"URLTest","now":"node.[1]`x","all":["node.[1]`x","Other"]},
+            "Main":{"type":"Selector","now":"Auto","all":["Auto"]}}}))
+        .unwrap();
+        let mut protection = Protection::new(
+            id,
+            "node.[1]`x".into(),
+            Previous {
+                mode: "rule".into(),
+                proxy_mode: ProxyMode::Off,
+                selectors: vec![],
+            },
+        );
+        protection.capture_automatic_groups(&proxies);
+        assert_eq!(protection.locked_groups.len(), 1);
+        settings.claude_protection = Some(std::sync::Arc::new(protection));
+        let mut restored: Settings =
+            serde_json::from_slice(&serde_json::to_vec(&settings).unwrap()).unwrap();
+        let protected: Value =
+            serde_yaml::from_str(&crate::config::runtime_config(raw, &restored).unwrap()).unwrap();
+        let group = &protected["proxy-groups"][0];
+        assert_eq!(group["type"], "select");
+        assert_eq!(group["empty-fallback"], "REJECT");
+        assert_eq!(group["filter"], r"^node\.\[1\]\x60x$");
+        assert_eq!(group["exclude-filter"], r"^(?!node\.\[1\]\x60x$)");
+        assert_eq!(group["use"][0], "Feed");
+        assert_eq!(group["proxies"][1], "Other");
+        restored.claude_protection = None;
+        assert_eq!(
+            crate::config::runtime_config(raw, &restored).unwrap(),
+            before
+        );
+    }
     #[test]
     fn bootstrap_preserves_working_node_resolvers_without_a_proxy_dependency() {
         let mut dns: Mapping = serde_yaml::from_str("nameserver: ['https://192.0.2.2/dns-query#Main']\ndefault-nameserver: ['192.0.2.53']\nproxy-server-nameserver: ['tls://192.0.2.54#Main&ecs=192.0.2.1', 'system']\nproxy-server-nameserver-policy: {'+.node.test': 'udp://192.0.2.55#Main'}\n").unwrap();

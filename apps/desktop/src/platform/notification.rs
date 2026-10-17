@@ -8,6 +8,16 @@ mod macos;
 #[cfg(windows)]
 mod windows;
 
+/// macOS remembers this decision; subsequent launches do not show another prompt.
+/// Permission preparation does not send a test notification or block core startup.
+pub async fn initialize() -> Result<()> {
+    #[cfg(target_os = "macos")]
+    tokio::time::timeout(std::time::Duration::from_secs(120), macos::initialize())
+        .await
+        .context("等待 macOS 通知授权超时")??;
+    Ok(())
+}
+
 pub async fn show(title: &str, message: &str) -> Result<()> {
     ensure!(
         title.len() <= 128

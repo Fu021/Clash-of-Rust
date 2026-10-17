@@ -36,6 +36,7 @@ define_class!(
 unsafe impl Send for NotificationDelegate {}
 unsafe impl Sync for NotificationDelegate {}
 static DELEGATE: OnceLock<Retained<NotificationDelegate>> = OnceLock::new();
+static AUTHORIZATION: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
 
 type Completion = tokio::sync::oneshot::Receiver<Result<(), String>>;
 fn error_text(error: *mut NSError) -> Option<String> {
@@ -92,12 +93,16 @@ fn deliver(title: &str, message: &str) -> Completion {
         .addNotificationRequest_withCompletionHandler(&request, Some(&callback));
     receiver
 }
-pub(super) async fn show(title: &str, message: &str) -> Result<()> {
+pub(super) async fn initialize() -> Result<()> {
+    let _request = AUTHORIZATION.lock().await;
     let permission = objc2::rc::autoreleasepool(|_| authorize())?;
     permission
         .await
         .context("macOS 通知授权未完成")?
-        .map_err(anyhow::Error::msg)?;
+        .map_err(anyhow::Error::msg)
+}
+pub(super) async fn show(title: &str, message: &str) -> Result<()> {
+    initialize().await?;
     let delivered = objc2::rc::autoreleasepool(|_| deliver(title, message));
     delivered
         .await

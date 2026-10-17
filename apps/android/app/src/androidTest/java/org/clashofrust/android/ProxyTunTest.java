@@ -54,6 +54,21 @@ public class ProxyTunTest {
     }
     private static void verifyPresentation() throws Exception {
         await("Core is running but Slint still reports it as stopped",()->MainActivity.diagnostics().optBoolean("core_running"));
+        // Assert the real Slint state follows system SP conversion, including
+        // Android 14+ nonlinear scaling and a live font-size change.
+        try {
+            for (String value:new String[]{"0.85","2.0","1.0"}) {
+                shell("settings put system font_scale "+value);
+                await("Slint font size did not follow Android "+value,()-> {
+                    android.util.DisplayMetrics metrics=InstrumentationRegistry.getInstrumentation()
+                        .getTargetContext().getResources().getDisplayMetrics();
+                    float expected=android.util.TypedValue.applyDimension(android.util.TypedValue.COMPLEX_UNIT_SP,16,metrics)/metrics.density;
+                    double actual=MainActivity.diagnostics().optDouble("body_size",-1);
+                    return Math.abs(expected-actual)<0.1 && (value.equals("1.0")?Math.abs(actual-16)<0.1:
+                        value.equals("0.85")?actual<15:actual>20);
+                });
+            }
+        } finally {shell("settings put system font_scale 1.0");}
         // Large page models are presented lazily. Inspect the real proxy page
         // after navigation instead of requiring its off-screen rows on Home.
         tab(1,1);
@@ -155,6 +170,67 @@ public class ProxyTunTest {
             fail("Reserved test origin was reachable without VPN; negative control is invalid");
         }
     }
+    private static void consent(boolean allow) throws Exception {
+        await("Android VPN consent dialog was not actionable",()-> {
+            android.view.accessibility.AccessibilityNodeInfo root=InstrumentationRegistry.getInstrumentation()
+                .getUiAutomation().getRootInActiveWindow();
+            if (root==null || !"com.android.vpndialogs".contentEquals(root.getPackageName())) return false;
+            for (android.view.accessibility.AccessibilityNodeInfo check:root.findAccessibilityNodeInfosByViewId("android:id/checkbox"))
+                if (check.isCheckable() && !check.isChecked())
+                    check.performAction(android.view.accessibility.AccessibilityNodeInfo.ACTION_CLICK);
+            for (android.view.accessibility.AccessibilityNodeInfo button:root.findAccessibilityNodeInfosByViewId(
+                allow ? "android:id/button1" : "android:id/button2"))
+                if (button.isEnabled()) return button.performAction(android.view.accessibility.AccessibilityNodeInfo.ACTION_CLICK);
+            return false;
+        });
+    }
+    private static void authorization(long request,String status) throws Exception {
+        await("VPN authorization did not reach "+status,()-> {
+            JSONObject state=MainActivity.authorizationState();
+            return state.optLong("request")==request && status.equals(state.optString("status"));
+        });
+    }
+    private static void verifyFirstVpnConsent(Context context,String original) throws Exception {
+        java.util.concurrent.atomic.AtomicReference<MainActivity> owner=new java.util.concurrent.atomic.AtomicReference<>();
+        InstrumentationRegistry.getInstrumentation().runOnMainSync(()-> {
+            for (android.app.Activity activity:androidx.test.runner.lifecycle.ActivityLifecycleMonitorRegistry.getInstance()
+                .getActivitiesInStage(androidx.test.runner.lifecycle.Stage.RESUMED))
+                if (activity instanceof MainActivity) owner.set((MainActivity)activity);
+        });
+        MainActivity activity=owner.get();assertNotNull(activity);
+        assertNotNull("Test must start without pre-granted VPN consent",VpnService.prepare(context));
+        activity.request("{\"op\":\"authorize-vpn\",\"request\":101}");
+        authorization(101,"pending");
+        assertEquals("DNS changed while waiting for consent",original,CoreBridge.config());
+        assertFalse(TunnelService.connected());
+        consent(false);authorization(101,"denied");
+        assertNotNull(VpnService.prepare(context));
+        assertEquals(original,CoreBridge.config());
+
+        activity.request("{\"op\":\"authorize-vpn\",\"request\":102}");
+        authorization(102,"pending");
+        activity.request("{\"op\":\"cancel-vpn-authorization\",\"request\":102}");
+        authorization(102,"cancelled");
+        // A late Allow after timeout/cancellation must not start the VPN.
+        consent(true);
+        await("Late VPN permission was not delivered",()->VpnService.prepare(context)==null
+            && inStage(androidx.test.runner.lifecycle.Stage.RESUMED,true));
+        authorization(102,"cancelled");
+        assertFalse("Cancelled consent started a VPN",TunnelService.connected());
+        assertEquals(original,CoreBridge.config());
+
+        shell("appops set org.clashofrust.android ACTIVATE_VPN default");
+        assertNotNull(VpnService.prepare(context));
+        activity.request("{\"op\":\"authorize-vpn\",\"request\":103}");
+        authorization(103,"pending");consent(true);authorization(103,"granted");
+        await("Activity did not resume after consent",()->inStage(androidx.test.runner.lifecycle.Stage.RESUMED,true));
+        assertNull(VpnService.prepare(context));
+        assertFalse("Consent must wait for configuration before connecting",TunnelService.connected());
+        assertEquals(original,CoreBridge.config());
+        activity.request("{\"op\":\"authorize-vpn\",\"request\":104}");
+        authorization(104,"granted");
+        assertFalse(TunnelService.connected());
+    }
     private static void tunCarriesSocket(String controller,String secret) throws Exception {
         // The physical network cannot reach this reserved address. Only the
         // test core's explicit HTTP outbound can relay it to the host origin.
@@ -199,6 +275,7 @@ public class ProxyTunTest {
         waitForAppWindow();
         verifyPresentation();
         String raw = CoreBridge.config();
+        verifyFirstVpnConsent(context,raw);
         String secret = value(raw,"secret");
         int mixed = Integer.parseInt(value(raw,"mixed-port"));
         String controller = value(raw,"external-controller");
@@ -206,7 +283,7 @@ public class ProxyTunTest {
         java.net.Proxy proxy = new java.net.Proxy(java.net.Proxy.Type.HTTP,new InetSocketAddress("127.0.0.1",mixed));
         assertEquals("cor-android-network-ok", read(new URL("http://10.0.2.2:18081/probe"),proxy,null));
         assertNotNull(new JSONObject(read(new URL("http://"+controller+"/version"),java.net.Proxy.NO_PROXY,secret)).getString("version"));
-        assertNull("CI must grant VPN consent through Android appops", VpnService.prepare(context));
+        assertNull("The real consent dialog must grant VPN permission", VpnService.prepare(context));
         noTunRoute();
         CoreBridge.reload("mixed-port: "+mixed+"\nexternal-controller: "+controller+"\nsecret: "+JSONObject.quote(secret)
             +"\nmode: rule\nipv6: true\nfind-process-mode: off\n"
@@ -273,5 +350,41 @@ public class ProxyTunTest {
             assertFalse("Explicit disconnect must not restart on sticky recovery",
                 context.getSharedPreferences("vpn",Context.MODE_PRIVATE).getBoolean("desired",true));
         }
+        // The next instrumentation starts in a fresh process and must restore
+        // this known test route without opening the Activity.
+        java.nio.file.Files.write(new File(context.getFilesDir(),"client/runtime/config.yaml").toPath(),
+            CoreBridge.config().getBytes(StandardCharsets.UTF_8));
+    }
+    @Test public void quickTileRestoresColdCoreWithoutOpeningTheActivity() throws Exception {
+        Context context=InstrumentationRegistry.getInstrumentation().getTargetContext();
+        assertFalse("Cold tile fixture must use a fresh process",CoreBridge.ready());
+        assertTrue("Previous test must leave a persisted config",CoreBridge.restorable(context));
+        assertNull("First-use test must already grant real VPN consent",VpnService.prepare(context));
+        assertFalse(inStage(androidx.test.runner.lifecycle.Stage.RESUMED,false));
+        shell("cmd statusbar add-tile org.clashofrust.android/.VpnTileService");
+        shell("cmd statusbar click-tile org.clashofrust.android/.VpnTileService");
+        await("Cold quick tile did not connect",()-> {
+            if (!TunnelService.error().isEmpty()) throw new IOException(TunnelService.error());
+            return TunnelService.connected();
+        });
+        assertTrue(CoreBridge.ready());
+        shell("cmd statusbar expand-settings");
+        await("Quick tile did not display its connected state",()->tileState()==android.service.quicksettings.Tile.STATE_ACTIVE);
+        assertFalse("Quick tile opened the Activity",inStage(androidx.test.runner.lifecycle.Stage.RESUMED,false));
+        assertFalse(inStage(androidx.test.runner.lifecycle.Stage.STARTED,false));
+        assertFalse(inStage(androidx.test.runner.lifecycle.Stage.CREATED,false));
+        String raw=CoreBridge.config();
+        tunCarriesSocket(value(raw,"external-controller"),value(raw,"secret"));
+        shell("cmd statusbar click-tile org.clashofrust.android/.VpnTileService");
+        await("Cold tile did not disconnect",()->!TunnelService.connected());
+        await("Quick tile remained visually enabled after disconnect",()->tileState()==android.service.quicksettings.Tile.STATE_INACTIVE);
+        shell("cmd statusbar collapse");
+        noTunRoute();
+        assertFalse(inStage(androidx.test.runner.lifecycle.Stage.RESUMED,false));
+    }
+    private static int tileState() {
+        java.util.concurrent.atomic.AtomicInteger state=new java.util.concurrent.atomic.AtomicInteger(-1);
+        InstrumentationRegistry.getInstrumentation().runOnMainSync(()->state.set(VpnTileService.displayedState()));
+        return state.get();
     }
 }
