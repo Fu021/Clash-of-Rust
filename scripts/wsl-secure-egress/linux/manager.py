@@ -665,13 +665,15 @@ class Manager:
             ['route', 'add', 'default', 'via', BUS_GW_IP, 'dev', BUS_IF, 'src', BUS_ROOT_IP, 'mtu', str(TUNNEL_MTU), 'metric', '10', 'table', ROUTE_TABLE],
             ['rule', 'add', 'pref', str(RULE_PREFS[0]), 'iif', ROOT_IF, 'from', TRANSPORT_IP + '/32', 'to', p['endpoint_ipv4'] + '/32', 'lookup', 'main'],
             ['rule', 'add', 'pref', str(RULE_PREFS[1]), 'iif', self.s['uplink'], 'from', p['endpoint_ipv4'] + '/32', 'to', TRANSPORT_IP + '/32', 'lookup', 'main'],
-            ['rule', 'add', 'pref', str(RULE_PREFS[5]), 'iif', self.s['uplink'], 'to', TRANSPORT_IP + '/32', 'ipproto', 'icmp', 'lookup', 'main'],
+            ['rule', 'add', 'pref', str(RULE_PREFS[5]), 'iif', self.s['uplink'],
+             'to', TRANSPORT_IP + '/32', 'ip', 'protocol', 'icmp', 'lookup', 'main'],
             ['rule', 'add', 'pref', str(RULE_PREFS[2]), 'iif', BUS_IF, 'lookup', 'main'],
         ]
         # These must precede the catch-all secure rule. Give the secure rule a
         # later priority, keeping PMTU exceptions precise by iif/protocol/subnet.
         for cidr in sorted({x['source_cidr'] for x in self.s['forward_sources']}):
-            commands.insert(-1, ['rule', 'add', 'pref', str(RULE_PREFS[4]), 'iif', 'lo', 'to', cidr, 'ipproto', 'icmp', 'lookup', 'main'])
+            commands.insert(-1, ['rule', 'add', 'pref', str(RULE_PREFS[4]), 'iif', 'lo',
+                                 'to', cidr, 'ip', 'protocol', 'icmp', 'lookup', 'main'])
         commands.append(['rule', 'add', 'pref', str(RULE_PREFS[3]), 'lookup', ROUTE_TABLE])
         for args in commands:
             try:
