@@ -15,6 +15,8 @@ def main():
     args = parser.parse_args()
     if (args.system, args.arch) != (host_system(), host_arch()):
         raise ValueError('CI must run on the selected native architecture')
+    from action_cache import workspace_sources
+    workspace_sources(ROOT)
     run(['cargo', 'fmt', '--all', '--', '--check'])
     # Shared Python checks run in the workflow's prerequisite job, before the
     # platform matrix restores any large compiler caches.
@@ -47,6 +49,7 @@ def main():
     write_json(ROOT/'target/ci-tests.json', tests)
     # Export the exact production binaries tested above.
     export_build(args.system, args.arch, tests, ROOT/'dist/build', binaries=bundle)
+    workspace_sources(ROOT, save=True)
 
 
 if __name__ == '__main__':

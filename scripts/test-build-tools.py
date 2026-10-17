@@ -13,6 +13,7 @@ import build_support as build
 import android as android_build
 import workflow_storage as storage
 import action_cache as local_cache
+import cache_shards
 import build_inputs
 import os
 import copy
@@ -89,6 +90,155 @@ class BuildTests(unittest.TestCase):
                 with self.assertRaises(ValueError): local_cache.unpack(archive, [restored])
             self.assertFalse((root.parent/escape).exists())
 
+    def test_rust_cache_version_bump_preserves_dependencies_but_feature_changes_do_not(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root=Path(temporary)
+            def version(value, feature='old'):
+                (root/'Cargo.toml').write_text('[workspace.package]\nversion="'+value+'"\n'
+                    '[workspace.dependencies]\nslint={version="1",features=["'+feature+'"]}\n')
+                (root/'Cargo.lock').write_text('[[package]]\nname="clash"\nversion="'+value+'"\n'
+                    '[[package]]\nname="slint"\nversion="1.0.0"\nsource="registry+test"\n')
+            version('0.6.0')
+            first=local_cache.rust_keys(root,b'compiler',{})[1]
+            version('0.6.1')
+            self.assertEqual(first,local_cache.rust_keys(root,b'compiler',{})[1])
+            version('0.6.1','new')
+            self.assertNotEqual(first,local_cache.rust_keys(root,b'compiler',{})[1])
+
+    def test_workspace_cache_verifies_contents_before_restoring_times_and_invalidates_changed_crates(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root=Path(temporary)
+            for name in ('ui','core'):
+                folder=root/'crates'/name;folder.mkdir(parents=True)
+                (folder/'Cargo.toml').write_text('[package]\nname="clash-'+name+'"\nversion="1.0.0"\n')
+                (folder/'lib.rs').write_bytes(b'original source')
+            java=root/'apps/android/app/MainActivity.java';java.parent.mkdir(parents=True)
+            java.write_bytes(b'original Java host')
+            paths=sorted(p.relative_to(root).as_posix() for p in root.rglob('*') if p.is_file())
+            tracked='\0'.join(paths).encode()
+            ui=root/'crates/ui/lib.rs';core=root/'crates/core/lib.rs'
+            previous=core.stat().st_mtime_ns
+            with patch.object(local_cache.subprocess,'check_output',return_value=tracked), \
+                    patch.dict(os.environ,{'WORKSPACE_SOURCE_CACHE':str(root/'external/source.json')}):
+                local_cache.workspace_sources(root,save=True)
+                for name in ('ui','core'):
+                    target=root/'target/release/.fingerprint'/('clash-'+name+'-hash')
+                    target.mkdir(parents=True);(target/'lib-info').write_bytes(b'fingerprint')
+                v2=root/'target/release/.fingerprint/clash-ui/another-hash'
+                v2.mkdir(parents=True);(v2/'lib-info').write_bytes(b'fingerprint')
+                # Checkout made unchanged sources newer. Conversely, changed
+                # contents can belong to an older branch timestamp.
+                os.utime(core,ns=(previous+1_000_000,previous+1_000_000))
+                ui.write_bytes(b'changed source');os.utime(ui,ns=(1,1))
+                java.write_bytes(b'changed Android host; unrelated to desktop Rust libraries')
+                local_cache.workspace_sources(root)
+            self.assertEqual(core.stat().st_mtime_ns,previous)
+            self.assertEqual(ui.read_bytes(),b'changed source')
+            self.assertFalse((root/'target/release/.fingerprint/clash-ui-hash').exists())
+            self.assertFalse(v2.exists())
+            self.assertTrue((root/'target/release/.fingerprint/clash-core-hash/lib-info').exists())
+
+    def test_workspace_cache_invalidates_shared_slint_consumers_outside_the_ui_crate(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root=Path(temporary);ui=root/'crates/ui';mobile=root/'apps/android/native'
+            ui.mkdir(parents=True);mobile.mkdir(parents=True)
+            (ui/'Cargo.toml').write_text('[package]\nname="clash-ui"\nversion="1.0.0"\n')
+            (mobile/'Cargo.toml').write_text('[package]\nname="clash-android"\nversion="1.0.0"\n')
+            view=ui/'mobile.slint';view.write_bytes(b'old component')
+            paths='\0'.join(p.relative_to(root).as_posix() for p in root.rglob('*') if p.is_file()).encode()
+            with patch.object(local_cache.subprocess,'check_output',return_value=paths), \
+                    patch.dict(os.environ,{'WORKSPACE_SOURCE_CACHE':str(root/'external/source.json')}):
+                local_cache.workspace_sources(root,save=True)
+                profile=root/'target/aarch64-linux-android/release'
+                output=profile/'build/clash-android-hash/output';output.parent.mkdir(parents=True)
+                output.write_text('cargo:rerun-if-changed='+str(view)+'\n')
+                fingerprint=profile/'.fingerprint/clash-android-hash';fingerprint.mkdir(parents=True)
+                (fingerprint/'lib-info').write_bytes(b'cached fingerprint')
+                view.write_bytes(b'new component');os.utime(view,ns=(1,1))
+                local_cache.workspace_sources(root)
+                self.assertFalse(fingerprint.exists())
+
+    def test_rust_shards_only_upload_changed_buckets_and_verify_before_extracting(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root=Path(temporary)
+            source=root/'target/release/deps';source.mkdir(parents=True)
+            for number in range(80): (source/f'dep{number}.rlib').write_bytes(f'dependency-{number}'.encode())
+            config={'group':'rust/linux-x64','key':'generation-source-one','prefix':['generation-','compiler-'],
+                    'resolved_paths':[str(root/'target')],'kind':'rust'}
+            store=local_cache.Store(root/'server',budget=10*1024**2,min_free=0)
+            uploads=[]
+            def request(_config,path,method='GET',file=None,headers=None):
+                url=urllib.parse.urlsplit(path);query=urllib.parse.parse_qs(url.query)
+                group=query['group'][0]
+                if url.path=='/v1/lookup':
+                    value=store.lookup(group,query['key'][0],query.get('prefix',[''])[0].splitlines())
+                    reply=io.BytesIO(json.dumps(value).encode());reply.status=200 if value else 404
+                elif method=='PUT':
+                    payload=file.read();uploads.append((group,len(payload)))
+                    saved=store.put(group,query['key'][0],len(payload),headers['X-Content-SHA256'],io.BytesIO(payload),
+                                    int(headers['X-Cache-Sequence']))
+                    reply=io.BytesIO();reply.status=201 if saved else 409
+                else:
+                    blob=store.path(group,query['id'][0])
+                    reply=io.BytesIO(blob.read_bytes() if blob.exists() else b'');reply.status=200 if blob.exists() else 404
+                return nullcontext(reply)
+            with patch.object(local_cache,'response',side_effect=request),patch.object(local_cache,'cache_report'), \
+                    patch.dict(os.environ,{'GITHUB_RUN_ID':'1','GITHUB_RUN_ATTEMPT':'1'}):
+                cache_shards.save(config,[root/'target'])
+                self.assertGreater(len(uploads),2)
+                initial_bytes=sum(size for _,size in uploads)
+                target=root/'restored'
+                restored={**config,'resolved_paths':[str(target)]}
+                self.assertTrue(cache_shards.restore(restored,False))
+                self.assertEqual((target/'release/deps/dep5.rlib').read_bytes(),b'dependency-5')
+                # Updating one dependency sends one bucket and the small index,
+                # rather than another complete target archive.
+                (source/'dep5.rlib').write_bytes(b'updated-dependency')
+                uploads.clear()
+                config.update(key='generation-source-two',shard_index=restored['shard_index'])
+                with patch.dict(os.environ,{'GITHUB_RUN_ID':'2'}): cache_shards.save(config,[root/'target'])
+                self.assertEqual(len(uploads),2)
+                self.assertLess(sum(size for _,size in uploads),initial_bytes)
+                restored.update(key=config['key'])
+                self.assertTrue(cache_shards.restore(restored,False))
+                self.assertEqual((target/'release/deps/dep5.rlib').read_bytes(),b'updated-dependency')
+                shard=next(s for s in restored['shard_index']['shards'] if s)
+                store.path(shard['group'],shard['id']).write_bytes(b'corrupt')
+                with self.assertRaisesRegex(ValueError,'Incomplete|checksum'):
+                    cache_shards.restore(restored,False)
+
+    def test_rust_shards_reject_indexes_pointing_outside_their_cache_group(self):
+        record={'schema':local_cache.SCHEMA,'group':'rust/linux-x64/p00','key':'compiler-object',
+                'id':'a'*64,'sha256':'b'*64,'size':1024}
+        cache_shards.validate(record,'rust/linux-x64/p00')
+        with self.assertRaises(ValueError): cache_shards.validate(record,'rust/windows-x64/p00')
+        for field,value in (('id','../escape'),('size',-1),('sha256','bad')):
+            with self.subTest(field=field),self.assertRaises(ValueError):
+                cache_shards.validate({**record,field:value},record['group'])
+
+    def test_shared_android_sources_require_the_current_lockfiles_and_archive_digest(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root=Path(temporary);home=root/'home';out=root/'shared'
+            (home/'go/pkg/mod/cache/download/example/@v').mkdir(parents=True)
+            module=home/'go/pkg/mod/cache/download/example/@v/v1.0.0.zip';module.write_bytes(b'verified source zip')
+            (home/'go/bin').mkdir(parents=True)
+            for tool in ('gomobile','gobind'): (home/'go/bin'/tool).write_bytes(b'verified tool')
+            (root/'apps/android/core').mkdir(parents=True)
+            mod=root/'apps/android/core/go.mod';mod.write_bytes(b'module test')
+            (root/'apps/android/core/go.sum').write_bytes(b'checksums')
+            with patch.object(build_inputs,'ROOT',root),patch.object(build_inputs.Path,'home',return_value=home), \
+                    patch.object(build_inputs,'current_commit',return_value='a'*40), \
+                    patch.object(android_build,'ensure_binding_tool'),patch.object(build_inputs.subprocess,'run'):
+                build_inputs.shared_go(out)
+                module.unlink()
+                build_inputs.shared_go(out,restore=True)
+                self.assertEqual(module.read_bytes(),b'verified source zip')
+                mod.write_bytes(b'changed dependency')
+                with self.assertRaises(ValueError): build_inputs.shared_go(out,restore=True)
+                mod.write_bytes(b'module test')
+                archive=out/'go-source.tar.gz';archive.write_bytes(archive.read_bytes()+b'tampered')
+                with self.assertRaises(ValueError): build_inputs.shared_go(out,restore=True)
+
     def test_cache_timing_report_never_copies_credentials_or_private_action_state(self):
         with tempfile.TemporaryDirectory() as temporary:
             root=Path(temporary)
@@ -103,6 +253,32 @@ class BuildTests(unittest.TestCase):
             for path in (report,root/'summary.txt'):
                 self.assertNotIn(config['token'],path.read_text())
                 self.assertNotIn(config['url'],path.read_text())
+
+    def test_interrupted_extraction_keeps_existing_files_and_compiler_cleanup_preserves_reports(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root=Path(temporary);source=root/'source';source.mkdir()
+            (source/'object.rlib').write_bytes(b'new complete object')
+            archive=root/'cache.tar.gz';local_cache.pack([source],archive)
+            restored=root/'restored';restored.mkdir();object_file=restored/'object.rlib'
+            object_file.write_bytes(b'old valid object')
+            with patch.object(local_cache.shutil,'copyfileobj',side_effect=OSError('disk write interrupted')):
+                with self.assertRaises(OSError):local_cache.unpack(archive,[restored])
+            self.assertEqual(object_file.read_bytes(),b'old valid object')
+            self.assertEqual(list(restored.glob('.cache-extract-*')),[])
+            target=root/'target'
+            for name in ('release/deps/bad.rlib','aarch64-linux-android/release/deps/bad.rlib',
+                         'dependency-snapshot/inputs.json','android-report/logcat.txt'):
+                path=target/name;path.parent.mkdir(parents=True,exist_ok=True);path.write_bytes(b'preserve only reports/inputs')
+            unpacked=root/'cargo/registry/src/crate/lib.rs'
+            unpacked.parent.mkdir(parents=True);unpacked.write_bytes(b'incomplete restored source')
+            with patch.dict(os.environ,{'GITHUB_ACTIONS':'true','CARGO_HOME':str(root/'cargo'),
+                                       'WORKSPACE_SOURCE_CACHE':str(root/'external/source.json')}):
+                local_cache.discard_restore({'kind':'rust','source':str(root)})
+            self.assertFalse((target/'release').exists())
+            self.assertFalse((target/'aarch64-linux-android/release').exists())
+            self.assertTrue((target/'dependency-snapshot/inputs.json').exists())
+            self.assertTrue((target/'android-report/logcat.txt').exists())
+            self.assertFalse(unpacked.exists())
 
     def test_github_hit_only_checks_private_metadata_and_reuses_current_mirror(self):
         with tempfile.TemporaryDirectory() as temporary:
@@ -174,14 +350,30 @@ class BuildTests(unittest.TestCase):
         self.assertFalse(local_cache.private_current(config,{'key':'old-compiler-dependencies-old-source'}))
         self.assertFalse(local_cache.private_current(config,None))
 
-    def test_current_full_rust_dependencies_are_not_uploaded_again_for_source_only_edits(self):
+    def test_source_only_changes_use_shards_but_exact_private_snapshots_are_not_uploaded(self):
         with tempfile.TemporaryDirectory() as temporary:
             root=Path(temporary); (root/'target').mkdir()
             config={'kind':'rust','source':str(root),'group':'rust/linux-x64','key':'new-source',
                     'available':True,'save':True,'hit':False,'mirror_required':False}
-            with patch.object(local_cache,'pack') as pack,patch.object(local_cache,'cache_report'):
+            with patch.object(local_cache,'pack') as pack,patch.object(local_cache,'cache_report'), \
+                    patch.object(cache_shards,'save') as sharded:
                 local_cache.save(config)
                 pack.assert_not_called()
+                sharded.assert_called_once()
+                config['private_exact']=True
+                local_cache.save(config)
+                sharded.assert_called_once()
+
+    def test_immutable_downloads_do_not_reupload_build_script_mutations(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root=Path(temporary);(root/'source').write_bytes(b'pinned source')
+            config={'kind':'archives','paths':str(root),'group':'dependencies/skia-armv7','key':'crate-checksum',
+                    'available':True,'save':True,'hit':True,'immutable':True}
+            with patch.object(local_cache,'pack') as pack,patch.object(local_cache,'fingerprint') as fingerprint, \
+                    patch.object(local_cache,'cache_report'):
+                local_cache.save(config)
+                pack.assert_not_called()
+                fingerprint.assert_not_called()
 
     def test_github_miss_restores_a_verified_private_archive(self):
         with tempfile.TemporaryDirectory() as temporary:
@@ -216,6 +408,10 @@ class BuildTests(unittest.TestCase):
             self.assertEqual(list(store.incoming.iterdir()), [])
             store.put('rust/linux-x64', 'generation-one', len(payload), checksum, io.BytesIO(payload))
             record = store.lookup('rust/linux-x64', 'generation-one', [])
+            with patch.object(local_cache.time,'time',return_value=9_999_999_999):
+                self.assertEqual(store.fetch(record['group'],record['id']).read_bytes(),payload)
+            with store.database() as database:
+                self.assertEqual(database.execute('SELECT accessed FROM entries').fetchone()[0],9_999_999_999)
             other = b'another-cache'
             store.put('rust/linux-x64', 'generation-one', len(other), hashlib.sha256(other).hexdigest(), io.BytesIO(other))
             self.assertEqual(store.path(record['group'], record['id']).read_bytes(), payload)
@@ -324,6 +520,29 @@ class BuildTests(unittest.TestCase):
                 build_inputs.refresh_command(['cargo','update'], ('Cargo.lock',), warnings)
                 self.assertTrue(warnings)
                 self.assertEqual(lock.read_bytes(), b'cached')
+
+    def test_go_refresh_checks_exact_modules_without_downgrades_and_retains_unreachable_versions(self):
+        modules=[{'Path':'go4.org/netipx','Version':'v0.0.0-20260823151212-3075585bcbeb'},
+                 {'Path':'example.org/Module','Version':'v1.2.0'},
+                 {'Path':'example.org/offline','Version':'v2.0.0'}]
+        queries=[]
+        class Fetch:
+            def open(self,url,**kwargs):
+                queries.append(url)
+                if '/offline/' in url: raise urllib.error.URLError('offline')
+                value='v1.3.0' if '!module' in url else 'v0.0.0-20260112195520-a5071408f32f'
+                return io.BytesIO(json.dumps({'Version':value}).encode())
+        with patch.object(build_inputs.subprocess,'check_output',return_value=json.dumps({'Require':modules})), \
+                patch.object(build_inputs,'opener',return_value=Fetch()),patch.object(build_inputs,'refresh_command') as update:
+            warnings=build_inputs.refresh_go()
+        commands=[call.args[0] for call in update.call_args_list]
+        self.assertTrue(any(command[-1]=='example.org/Module@v1.3.0' for command in commands))
+        self.assertFalse(any('-u' in command or './...' in command for command in commands))
+        self.assertIn('https://proxy.golang.org/go4.org/netipx/@latest',queries)
+        self.assertFalse(any(url.endswith('/go4.org/@latest') for url in queries))
+        self.assertTrue(any('offline' in warning for warning in warnings))
+        self.assertGreater(build_inputs.go_version('v1.0.0'),build_inputs.go_version('v1.0.0-rc.1'))
+        self.assertGreater(build_inputs.go_version('v1.0.0-rc.10'),build_inputs.go_version('v1.0.0-rc.2'))
 
     def test_release_metadata_network_fallback_respects_explicit_version(self):
         with tempfile.TemporaryDirectory() as temporary:
@@ -490,7 +709,7 @@ class BuildTests(unittest.TestCase):
                     'created_at': f'2026-10-16T09:00:{number:02d}Z'}
         old = entry(1, 'native-release-linux-check-Linux-x64-aaaaaaaa-bbbbbbbb', 30)
         new = entry(2, 'native-release-linux-check-Linux-x64-aaaaaaaa-cccccccc', 30)
-        go = entry(3, 'android-go-Linux-X64-version-modules', 40)
+        go = entry(3, 'source-go-version-modules', 40)
         gradle = entry(4, 'gradle-content-unique-blob', 40)
         # Stale revisions are removed even below budget; current dependencies
         # are otherwise preserved. An 80-byte budget also evicts the oldest.
@@ -500,7 +719,9 @@ class BuildTests(unittest.TestCase):
         self.assertEqual(storage.eviction_plan([new, other_branch], 100), [])
         compiler_old = entry(6, 'macos-compiler-arm64-' + 'a'*16 + '-' + 'b'*64, 20)
         compiler_new = entry(7, 'macos-compiler-arm64-' + 'a'*16 + '-' + 'c'*64, 20)
-        self.assertEqual(storage.eviction_plan([compiler_old, compiler_new], 100), [compiler_old])
+        self.assertEqual(storage.eviction_plan([compiler_old, compiler_new], 100), [compiler_new,compiler_old])
+        legacy=entry(12,'android-go-Linux-X64-old-modules',20)
+        self.assertEqual(storage.eviction_plan([legacy],100),[legacy])
         self.assertEqual(storage.eviction_plan([gradle], 10), [gradle])
         desktop=entry(8,'native-release-v2-macos-15-intel-check-Linux-x64-aaaaaaaa-bbbbbbbb',60)
         linux=entry(9,'native-release-v2-ubuntu-22.04-check-Linux-x64-aaaaaaaa-bbbbbbbb',60)

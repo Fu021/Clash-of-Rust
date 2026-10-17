@@ -160,6 +160,8 @@ def apk_identity(metadata, version):
 
 
 def build(arch):
+    from action_cache import workspace_sources
+    workspace_sources(ROOT)
     abi, target, clang_target, go_arch = ABIS[arch]
     ndk = Path(os.environ['ANDROID_NDK_ROOT'])
     toolchain = ndk/'toolchains/llvm/prebuilt/linux-x86_64/bin'
@@ -223,6 +225,7 @@ def build(arch):
     report = {'commit':commit(), 'arch':arch, 'version':package_version(), **sizes}
     write_json(ROOT/'target/android-report'/arch/'build.json', report)
     print(json.dumps(report), flush=True)
+    workspace_sources(ROOT, save=True)
 
 
 def export_build(arch):
@@ -328,6 +331,11 @@ def test(arch, apk=None, test_apk=None):
         server.shutdown(); server.server_close()
         log = subprocess.run([ADB,'logcat','-d','-v','threadtime'],capture_output=True,text=True,timeout=30)
         (report/'logcat.txt').write_text(log.stdout)
+        for name, command in {'connectivity':['dumpsys','connectivity'],
+                              'routes':['ip','route','show','table','all'],
+                              'vpn':['dumpsys','vpn_management']}.items():
+            details=subprocess.run([ADB,'shell',*command],capture_output=True,text=True,timeout=15)
+            (report/(name+'.txt')).write_text(details.stdout+details.stderr)
     if 'Android startup:' in log.stdout or 'Mobile runtime stopped:' in log.stdout:
         raise RuntimeError('Native Android UI/runtime failed; inspect logcat')
 

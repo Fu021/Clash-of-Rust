@@ -20,6 +20,8 @@ if (post) {
     paths: input('paths'), kind: input('kind', 'archives'),
     source: path.resolve(input('source', '.')), save: input('save', 'true') === 'true',
     github_hit: input('github-hit'),
+    github_failed: input('github-failed', 'false') === 'true',
+    immutable: input('immutable', 'false') === 'true',
   };
   fs.writeFileSync(state, JSON.stringify(config), { mode: 0o600 });
   fs.appendFileSync(process.env.GITHUB_STATE, `cache_state=${state}\n`);
@@ -28,10 +30,13 @@ const script = path.resolve(__dirname, '../../../scripts/action_cache.py');
 // Cache writes are optional. A slow relay must not turn a tested build into
 // a workflow timeout; incomplete uploads never replace the previous snapshot.
 const result = spawnSync('python', [script, post ? 'save' : 'restore', '--state', state], {
-  stdio: 'inherit', timeout: post ? 10 * 60 * 1000 : undefined,
+  // A healthy cold download can occupy the host's shared 200 Mbit link for
+  // several minutes. Do not kill extraction and then compile mixed objects.
+  // Socket deadlines handle outages; only optional writes have a hard budget.
+  stdio: 'inherit', timeout: post ? 5 * 60 * 1000 : undefined,
 });
 if (post && result.error?.code === 'ETIMEDOUT') {
-  const message = 'Private cache save exceeded 10 minutes; build results remain valid and incomplete uploads are discarded.';
+  const message = 'Private cache save exceeded 5 minutes; completed shards remain reusable and incomplete uploads are discarded.';
   console.log(`::warning::${message}`);
   if (process.env.GITHUB_STEP_SUMMARY) fs.appendFileSync(process.env.GITHUB_STEP_SUMMARY, `\n${message}\n`);
 } else if (result.status !== 0) {

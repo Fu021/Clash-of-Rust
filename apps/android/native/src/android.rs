@@ -22,6 +22,7 @@ static EVENTS: Mutex<Option<mpsc::Sender<String>>> = Mutex::new(None);
 static AUTHORIZATION_REQUEST: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
 // Also included in exported diagnostics. Contains view counts/status, never URLs or secrets.
 static PRESENTATION: Mutex<String> = Mutex::new(String::new());
+static FIRST_APPEARANCE: Mutex<Option<bool>> = Mutex::new(None);
 
 struct AndroidHost {
     vm: JavaVM,
@@ -95,7 +96,11 @@ pub extern "system" fn Java_org_clashofrust_android_MainActivity_nativeDiagnosti
     _: JClass<'_>,
 ) -> jni::sys::jstring {
     let snapshot = PRESENTATION.lock().map(|s| s.clone()).unwrap_or_default();
-    env.new_string(if snapshot.is_empty() { "{}" } else { &snapshot })
+    let mut snapshot: Value = serde_json::from_str(&snapshot).unwrap_or_else(|_| json!({}));
+    if let Ok(first) = FIRST_APPEARANCE.lock() {
+        snapshot["startup_dark"] = json!(*first);
+    }
+    env.new_string(snapshot.to_string())
         .map(JString::into_raw)
         .unwrap_or(std::ptr::null_mut())
 }
@@ -188,6 +193,17 @@ fn run(app: slint::android::AndroidApp) -> Result<()> {
     let update_path = native.directory("getCacheDir")?.join("updates/update.apk");
     slint::android::init(app)?;
     let window = AndroidWindow::new()?;
+    // No engine/Geo/network work precedes the first correctly themed frame.
+    let appearance = native.request(json!({"op":"appearance"}))?;
+    let theme = window.global::<Theme>();
+    theme.set_appearance(appearance["mode"].as_i64().unwrap_or(2) as i32);
+    theme.set_system_dark(appearance["dark"].as_bool().unwrap_or(false));
+    if let Ok(mut first) = FIRST_APPEARANCE.lock() {
+        *first = Some(theme.get_dark());
+    }
+    if let Some(size) = appearance["font_sizes"].get(6).and_then(Value::as_f64) {
+        theme.set_text_scale(size as f32 / 16.);
+    }
     window
         .global::<MobileData>()
         .set_version(core::VERSION.into());
@@ -388,7 +404,7 @@ async fn run_loop(
     let mut refresh_job: Option<tokio::task::JoinHandle<()>> = None;
     let mut refresh_generation = 0u64;
     let mut last_frame = std::time::Instant::now() - Duration::from_secs(1);
-    let mut system_bars_dark = None;
+    let mut system_bars_state = None;
     let mut update_job: Option<tokio::task::JoinHandle<()>> = None;
     let mut last_update_check = std::time::Instant::now() - Duration::from_secs(6 * 60 * 60);
     loop {
@@ -810,14 +826,19 @@ async fn run_loop(
             Some(config::ThemeMode::Light) => false,
             _ => state.session.platform["dark"].as_bool().unwrap_or(false),
         };
-        if system_bars_dark != Some(dark)
+        let appearance = match state.session.settings.theme_mode {
+            Some(config::ThemeMode::Dark) => 0,
+            Some(config::ThemeMode::Light) => 1,
+            _ => 2,
+        };
+        if system_bars_state != Some((appearance, dark))
             && state
                 .session
                 .native
-                .request(json!({"op":"system-bars","dark":dark}))
+                .request(json!({"op":"system-bars","dark":dark,"mode":appearance}))
                 .is_ok()
         {
-            system_bars_dark = Some(dark);
+            system_bars_state = Some((appearance, dark));
         }
         if state.page == 4 {
             if state.rule_rows.is_none() {

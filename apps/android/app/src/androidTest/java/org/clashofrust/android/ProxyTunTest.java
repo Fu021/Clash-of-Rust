@@ -57,6 +57,11 @@ public class ProxyTunTest {
     }
     private static void verifyPresentation() throws Exception {
         await("Core is running but Slint still reports it as stopped",()->MainActivity.diagnostics().optBoolean("core_running"));
+        JSONObject initial=MainActivity.diagnostics();
+        Context context=InstrumentationRegistry.getInstrumentation().getTargetContext();
+        assertEquals("The first Slint frame used a different theme from saved appearance",
+            Appearance.dark(context,Appearance.mode(context)),
+            initial.getBoolean("startup_dark"));
         // Assert the real Slint state follows system SP conversion, including
         // Android 14+ nonlinear scaling and a live font-size change.
         try {
@@ -158,6 +163,7 @@ public class ProxyTunTest {
     private static String read(URL url, java.net.Proxy proxy, String secret) throws Exception {
         HttpURLConnection connection = (HttpURLConnection)url.openConnection(proxy);
         connection.setConnectTimeout(5000); connection.setReadTimeout(5000);
+        connection.setRequestProperty("Connection", "close");
         if (secret != null) connection.setRequestProperty("Authorization", "Bearer " + secret);
         try (InputStream in = connection.getInputStream()) {
             ByteArrayOutputStream out = new ByteArrayOutputStream();
@@ -235,6 +241,45 @@ public class ProxyTunTest {
         assertFalse(TunnelService.connected());
     }
     private static void tunCarriesSocket(String controller,String secret) throws Exception {
+        // NetworkCallbacks describe the control plane. A just-replaced VPN can
+        // still be waiting for netd's UID routes; require fresh real traffic,
+        // with a bounded deadline, rather than sleeping or rerunning the test.
+        long deadline=SystemClock.elapsedRealtime()+15000;
+        IOException last=null;
+        do {
+            try { assertTunSocket(controller,secret); return; }
+            catch (IOException transition) { last=transition; }
+            SystemClock.sleep(100);
+        } while (SystemClock.elapsedRealtime()<deadline);
+        throw new IOException("VPN data path did not become ready; "+networkState(),last);
+    }
+    private static String networkState() {
+        ConnectivityManager manager=InstrumentationRegistry.getInstrumentation().getTargetContext()
+            .getSystemService(ConnectivityManager.class);
+        Network current=manager.getActiveNetwork();
+        return "active="+current+"; capabilities="+manager.getNetworkCapabilities(current)
+            +"; links="+manager.getLinkProperties(current)+"; VPN="+TunnelService.connected()
+            +"; generation="+TunnelService.generation()+"; error="+TunnelService.error();
+    }
+    private static void awaitDirectRecovery(ConnectivityManager manager) throws Exception {
+        long deadline=SystemClock.elapsedRealtime()+15000;
+        IOException last=null;
+        do {
+            Network network=manager.getActiveNetwork();
+            NetworkCapabilities caps=manager.getNetworkCapabilities(network);
+            if (!TunnelService.connected() && caps!=null && !caps.hasTransport(NetworkCapabilities.TRANSPORT_VPN)) {
+                try {
+                    // Never bind a Network explicitly: that could hide a broken
+                    // default route. Open a new default-network connection.
+                    assertEquals("cor-android-network-ok",read(new URL("http://10.0.2.2:18081/probe"),java.net.Proxy.NO_PROXY,null));
+                    if (network.equals(manager.getActiveNetwork())) { noTunRoute(); return; }
+                } catch (IOException transition) { last=transition; }
+            }
+            SystemClock.sleep(100);
+        } while (SystemClock.elapsedRealtime()<deadline);
+        throw new IOException("Default network did not recover after VPN disconnect; "+networkState(),last);
+    }
+    private static void assertTunSocket(String controller,String secret) throws Exception {
         // The physical network cannot reach this reserved address. Only the
         // test core's explicit HTTP outbound can relay it to the host origin.
         // Keep a fresh socket open and require its exact TUN source port too.
@@ -272,6 +317,14 @@ public class ProxyTunTest {
     }
     @Test public void localProxyAndRealTunCarryTrafficAndDisconnectCleanly() throws Exception {
         Context context = InstrumentationRegistry.getInstrumentation().getTargetContext();
+        // A light emulator must still launch an explicitly dark app correctly
+        // on its first frame, before the core/settings worker is ready.
+        shell("cmd uimode night no");
+        File settings=new File(context.getFilesDir(),"client/settings.json");
+        settings.getParentFile().mkdirs();
+        JSONObject saved=settings.isFile()?new JSONObject(new String(java.nio.file.Files.readAllBytes(settings.toPath()),StandardCharsets.UTF_8)):new JSONObject();
+        saved.put("theme_mode","dark");
+        java.nio.file.Files.write(settings.toPath(),saved.toString().getBytes(StandardCharsets.UTF_8));
         context.startActivity(new Intent(context, MainActivity.class).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK));
         await("Native UI did not start its core; inspect logcat", CoreBridge::ready);
         await("Activity did not receive focus",()->inStage(androidx.test.runner.lifecycle.Stage.RESUMED,true));
@@ -336,6 +389,7 @@ public class ProxyTunTest {
                     context.startForegroundService(new Intent(context,TunnelService.class).setAction(TunnelService.RECONFIGURE));
                     await("VPN did not reconfigure",()->TunnelService.connected() && TunnelService.generation()>previousGeneration);
                     await("Android did not restore VPN routing after reconfigure",()->vpnActive(connectivity));
+                    tunCarriesSocket(controller,secret);
                 } finally { monitoring.set(false); routes.join(1000); }
                 assertFalse("VPN route monitor did not finish",routes.isAlive());
                 assertNull("Could not monitor VPN handover: "+samplingError.get(),samplingError.get());
@@ -348,8 +402,7 @@ public class ProxyTunTest {
                 NetworkCapabilities capabilities=connectivity.getNetworkCapabilities(connectivity.getActiveNetwork());
                 return !TunnelService.connected() && capabilities != null && !capabilities.hasTransport(NetworkCapabilities.TRANSPORT_VPN);
             });
-            assertEquals("cor-android-network-ok",read(new URL("http://10.0.2.2:18081/probe"),java.net.Proxy.NO_PROXY,null));
-            noTunRoute();
+            awaitDirectRecovery(connectivity);
             assertFalse("Explicit disconnect must not restart on sticky recovery",
                 context.getSharedPreferences("vpn",Context.MODE_PRIVATE).getBoolean("desired",true));
         }
