@@ -82,6 +82,10 @@ python3 scripts/preview-slint.py --dialogs --pairs
 
 测试、内存基准、发布流程及手动验收说明见 [工作流文档](docs/workflows.md)。
 
+## 参与贡献
+
+欢迎 AI 辅助的 PR；请尽量先在本地完成相关验证，并阅读[贡献者须知](.github/CONTRIBUTING.md)，了解 CI、缓存服务器与工作流变更约定。
+
 ## License
 
 Rust 界面及原创通用代码采用 **GPL-3.0-only**，见 [LICENSE](LICENSE)。IP 检测复用的 RegionRestrictionCheck 源码及派生逻辑保留 **AGPL-3.0-only**，见 [授权及修改说明](resources/ip-check/SOURCE.md)；组合发行遵守 GPLv3/AGPLv3 第 13 条，包括适用时向远程网络用户提供完整对应源码。
