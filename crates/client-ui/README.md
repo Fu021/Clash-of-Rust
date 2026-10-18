@@ -26,7 +26,7 @@ python3 scripts/preview-slint.py --page connections --size 800x450
 
 ## 应用与交互验证
 
-正式程序的编译、Clippy 和测试统一由 GitHub Actions 执行。本地使用上面的 Slint Viewer 直接预览界面，不编译桌面应用；截图工作流与可选 Rust 截图入口已移除。
+正式程序可通过本地 Rust 工具链或 GitHub Actions 编译、Clippy 和运行源码单元测试，入口见[项目 README](../../README.md#编译与打包)。只检查外观时可使用上面的 Slint Viewer，无需编译桌面应用；截图工作流与可选 Rust 截图入口已移除。
 
 源码单元测试保留任务取消、规则草稿、连接排序、模型复用与释放、真实指针输入和弹窗保护；无需显示服务器，不启动真实内核。节点卡片单击选择，测速按钮独立操作，测试确认按钮第一次点击便执行且不会顺带选择节点。模型测试复用正式界面库，避免重复编译组件。
 

@@ -8,7 +8,38 @@
 
 六个平台为 Windows x64 / ARM64、Linux x64 / ARM64、macOS Intel / Apple Silicon。Linux 安装包支持 Debian/Ubuntu，Ubuntu 仅支持 22.04 及以上；Ubuntu 最新版兼容验证在发布工作流中执行。
 
-编译、Clippy、测试与打包均在 Actions 执行，本地不构建。界面截图只使用 `scripts/preview-slint.py` 直接预览正式 Slint 组件，不再保留截图工作流、额外截图编译入口或旧 Iced 适配器。弃用工作流删除文件后，也需在 GitHub 上禁用。
+贡献者可使用本地工具链编译、Clippy、源码单元测试与打包，也可使用 Actions；无需为了本地验证而推送代码。正式发布继续复用成功 CI 的产物，真实系统代理/TUN 自动化测试在可丢弃的 Actions 环境中执行。界面可使用 `scripts/preview-slint.py` 直接预览正式 Slint 组件，不依赖桌面程序编译；弃用工作流删除文件后，也需在 GitHub 上禁用。
+
+## 本地打包
+
+桌面打包须在与目标系统、架构一致的机器上进行。除 README 中的原生编译依赖外，还需 Go（版本满足 `apps/android/core/go.mod`，供共享依赖快照脚本使用）；Linux 打包需 `dpkg-dev`，macOS 需系统 `hdiutil`、`codesign`，Windows 的 NSIS 由脚本下载并校验。
+
+在仓库根目录执行以下命令。依赖快照脚本会查询兼容更新，可能修改 `Cargo.lock`、Android Go 锁文件及 Gradle 依赖声明，提交前应检查这些差异。
+
+```sh
+python3 scripts/build_inputs.py resolve
+cargo build -p clash-of-rust --release --locked --bins
+python3 scripts/prepare-resources.py
+```
+
+再导出带校验清单的本地程序与测试程序，并打包。以下命令可用于 Bash 或 PowerShell；Windows 可用 `python` 替代 `python3`：
+
+```sh
+python3 -X utf8 -c "
+import sys
+from pathlib import Path
+sys.path.insert(0, 'scripts')
+from build_support import host_system, host_arch, cargo_messages
+from workflow_artifacts import test_binaries, export_build, extract_build
+messages = cargo_messages(['cargo', 'test', '-p', 'clash-of-rust', '--test', 'core_integration', '--release', '--locked', '--no-run', '--message-format=json'])
+tests = test_binaries(messages)
+archive = export_build(host_system(), host_arch(), tests, Path('dist/local-export'))
+extract_build(archive, Path('dist/local-build'))
+"
+python3 scripts/build-installer.py --prebuilt dist/local-build
+```
+
+安装包与 SHA256 输出到 `dist/`。重复打包前清理自己生成的 `dist/local-export`、`dist/local-build`，或在命令中换用新目录。`--no-run` 仅编译集成测试程序，不执行代理/TUN 系统测试；本地产物清单不代表已经通过 CI，也不会创建 Release。`build-installer.py --prebuilt` 需要上述完整产物目录，不能直接传入 `target/release/`。`run-ci.py` 包含专用系统集成测试，不作为普通本地构建入口。
 
 ## CI
 
@@ -29,7 +60,7 @@ Go 按声明的模块路径查询更新，避免探测无关父模块；不降�
 - 真实系统集成测试只运行系统代理与 TUN：验证代理设置写入、HTTP 转发、TUN 接管无显式代理的流量、模式恢复及关闭清理。Linux 使用隔离网络命名空间和 GSettings 内存后端；macOS 使用真实 launchd 网络助手；Windows 先注册服务，再以普通用户令牌运行代理/TUN、恢复和服务清理检查。
 - Linux TUN 测试在独立双栈上游中使用正式保护覆盖，验证域名节点的引导解析、经节点的 DoH A/AAAA、TCP/UDP DNS 接管、HTTP 转发、冷启动及原设置恢复；额外阻断固定公网引导 DNS，验证订阅解析器仍可用。上游记录公网明文 DNS 与绕过节点的公网 DNS，发生泄漏即失败。保护 DNS 全部不可达时必须拒绝开启并恢复原网络。隔离环境使用专用测试 CA，保留 TLS 证书校验，不访问外网。
 - Python 构建辅助与产物校验单元测试在前置依赖解析任务中执行一次，失败时不启动各平台下载与编译。内存基准 example 不作为 CI 测试程序额外构建或运行。
-- main push、PR 更新触发 CI；过时运行自动取消。项目目录不保留本地编译与构建缓存。
+- main push、PR 更新触发 CI；过时运行自动取消。本地生成的编译、打包产物和缓存已在 `.gitignore` 中排除，不应提交。
 - 桌面 CI 不生成安装包；Android CI 生成供安装测试与发布复用的 APK。产物记录提交、版本、架构、Cargo.lock、工具链及逐文件校验值；仅附带发布后复用的 `core_integration` 代理/TUN 测试程序，不上传源码单元测试程序。清理后的产物采用 schema 2，只与同一提交的打包流程配套使用。
 
 Android x86_64 使用 API 35 模拟器运行真实代理/TUN 流量测试，验证正式界面的内核状态、默认策略组、订阅导航和设置触摸滚动，以及系统 VPN 授权、DNS、套接字保护、快捷磁贴连接/断开和路由恢复；ARM64/ARMv7 完成实际编译、Gradle lint 与架构校验，仍需真机验收。Android 测试结果、体积报告和 logcat 保存在 `android-report-{arch}`，固定开发签名与构建说明见 [Android 宿主](../apps/android/README.md)。
@@ -52,7 +83,7 @@ macOS 失败日志、系统与网络状态、崩溃报告保存在 `macos-ci-rep
 5. Android 复用三种 ABI 的已编译 APK，检查签名、架构与 16 KiB 对齐；x86_64 最终包再运行代理/TUN 测试。`check_only` 保留固定开发签名，正式发布要求单独配置长期签名。
 6. 核对安装包、校验值、成功记录及来源后，正式模式才公开 Release；`check_only` 仅保留 Actions 附件。开发版本标记为 prerelease，不覆盖稳定版 latest。
 
-只有最终发布 job 有 `contents: write`。`scripts/build-installer.py` 必须接收 `--prebuilt` 的已验证 CI 产物，已移除本地 Cargo 构建回退和 WSL 构建脚本。
+只有最终发布 job 有 `contents: write`。发布工作流向 `scripts/build-installer.py --prebuilt` 传入已验证的 CI 产物；本地打包可传入按上述步骤生成的本地产物。打包器只校验与组装，不隐式调用 Cargo。
 
 平台检查分别集中在 `scripts/windows_ci.py`、`scripts/macos_ci.py` 和 Linux 的隔离网络夹具中；`scripts/test-release-package.py` 统一调度。Windows 安装、更新、卸载与 Defender 扫描复用同一模块，不再保留独立的命令行包装脚本。
 
