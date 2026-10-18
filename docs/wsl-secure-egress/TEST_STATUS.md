@@ -301,6 +301,34 @@ Not executed and not claimed: the live guardian service was not re-registered,
 no WSL distribution was started, and no firewall, DNS, route or Hyper-V object
 was modified by these tests.
 
+## 2026-10-18 CI, package verification and the local install gate
+
+Head commit `19ea903` on the `Sonder4` fork was verified by GitHub Actions, and
+the same commit was packaged into an installer that was downloaded and
+hash-checked on this host.
+
+| Check | Result | Evidence |
+| --- | --- | --- |
+| `WSL Secure Egress` workflow, push | PASS | run 39067005355 on `19ea903` |
+| `CI` workflow, push | PASS | run 39067005271 on `19ea903` |
+| `CI` workflow, pull request | PASS | run 39068106473, event `pull_request`, all ten `CI_JOBS` successful on `19ea903` |
+| `Publish Release` test-only packaging | PARTIAL | run 39070338528: `package-windows-x64` PASS; `package-windows-arm64` cancelled and `Publish verified release` skipped because `check_only` was set |
+| `Clash-of-Rust-0.6.0-windows-x64-setup.exe` | PASS | SHA-256 `5e282cdc36e4d8e966c6b812a38aa964a431842d47d2d6ae0fcc728d80e3e84a` recomputed locally and identical to the published `.sha256`; `package-receipt.json` names commit `19ea903…` and CI run 39068106473 |
+
+Local update attempt on this host, recorded from the commands that ran:
+
+| Step | Result |
+| --- | --- |
+| Read-only baseline before the update | PASS. Installed package was 0.5.11 in `D:\Clash of Rust` with no `resources\wsl-secure-egress`; `ipgw.neu.edu.cn` and `api.okinto.com` both returned HTTP 200; guardian audit `policy_matches: true`; broker status `host_policy PASS`, phase `connected_unverified`, backend WireGuard. Evidence: `ClashOfRust-network-backups\install-20261018\pre-install-verification.json` |
+| User-data snapshot before the update | PASS. `%LOCALAPPDATA%\clash-of-rust\ClashOfRust` copied to `ClashOfRust-network-backups\install-20261018\userdata-pre-update` (13 files, 37,529,812 bytes). The EFS-encrypted `%LOCALAPPDATA%\ClashOfRust\WslEgress` profile was left untouched and is not part of the copy |
+| Graceful client exit through `Local\ClashOfRust.Exit` | PASS. The GUI exited in 6.5 s and stopped its core; both mandatory URLs still returned HTTP 200 with the client stopped |
+| Elevated uninstall and install of the verified package | BLOCKED, environment. `Start-Process -Verb RunAs` returned `ERROR_CANCELLED` four times; `consent.exe` was observed running, so the consent dialog was raised and then dismissed without an answer. Creating a `Highest` run-level task is refused for the filtered token (`Access is denied`). Completing a per-machine install therefore needs one interactive consent click |
+| Fork build running locally, WSL page visible, copied admin command | NOT_RUN — depends on the blocked step |
+| Reboot, sleep/resume and physical network switch | NOT_RUN |
+
+The package, hash and CI conclusions above were read back from the GitHub API;
+the local rows are the recorded output of the commands that actually ran.
+
 ## Acceptance rule
 
 Positive connectivity requires a receiver-observed nonce, the expected source
