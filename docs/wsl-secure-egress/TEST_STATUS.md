@@ -311,7 +311,8 @@ hash-checked on this host.
 | --- | --- | --- |
 | `WSL Secure Egress` workflow, push | PASS | run 39067005355 on `19ea903` |
 | `CI` workflow, push | PASS | run 39067005271 on `19ea903` |
-| `CI` workflow, pull request | PASS | run 39068106473, event `pull_request`, all ten `CI_JOBS` successful on `19ea903` |
+| `CI` workflow, pull request | PASS | run 39068106473 on `19ea903`, then run 39082984419 after the documentation commit `0003cd6`; both events are `pull_request` with all ten `CI_JOBS` successful |
+| `WSL Secure Egress` workflow, pull request | PASS | run 39082984425 on the branch head `0003cd6` |
 | `Publish Release` test-only packaging | PARTIAL | run 39070338528: `package-windows-x64` PASS; `package-windows-arm64` cancelled and `Publish verified release` skipped because `check_only` was set |
 | `Clash-of-Rust-0.6.0-windows-x64-setup.exe` | PASS | SHA-256 `5e282cdc36e4d8e966c6b812a38aa964a431842d47d2d6ae0fcc728d80e3e84a` recomputed locally and identical to the published `.sha256`; `package-receipt.json` names commit `19ea903…` and CI run 39068106473 |
 
@@ -328,6 +329,11 @@ Local update attempt on this host, recorded from the commands that ran:
 
 The package, hash and CI conclusions above were read back from the GitHub API;
 the local rows are the recorded output of the commands that actually ran.
+
+The packaged installer corresponds to `19ea903`. The commits listed after it on
+this branch edit this test record only, so they do not change the installed
+binary; any further commit that touches this document alone has the same
+property.
 
 ## Acceptance rule
 
