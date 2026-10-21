@@ -21,7 +21,10 @@ fn main() {
     }
     let result = args::parse(std::env::args().skip(1)).and_then(|args| {
         if args.help {
-            print!("{}", args::help(&args.path));
+            use std::io::Write;
+            std::io::stdout()
+                .lock()
+                .write_all(args::help(&args.path).as_bytes())?;
             return Ok(());
         }
         #[cfg(windows)]

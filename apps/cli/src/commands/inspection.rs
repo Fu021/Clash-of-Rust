@@ -481,6 +481,11 @@ async fn claude(args: &Args) -> Result<()> {
         );
     }
     if args.path == "claude watch" {
+        let meta = backend::live(args).await?;
+        let mut identity = (meta.settings.controller_port, meta.settings.secret.clone());
+        let mut observer = claude_check::observe::Session::start(Api::new(&meta.settings)?);
+        let mut revision = 0;
+        let mut observed = Value::Null;
         loop {
             let poll: Poll = backend::request(
                 args,
@@ -490,25 +495,40 @@ async fn claude(args: &Args) -> Result<()> {
                 },
             )
             .await?;
+            let next = (
+                poll.meta.settings.controller_port,
+                poll.meta.settings.secret.clone(),
+            );
+            if next != identity {
+                observer = claude_check::observe::Session::start(Api::new(&poll.meta.settings)?);
+                identity = next;
+                revision = 0;
+            }
+            if let Some(snapshot) = observer.after(revision) {
+                revision = snapshot.revision;
+                observed = json!({"connected":snapshot.connected,"total":snapshot.total,"failures":snapshot.failures,"routes":snapshot.routes});
+            }
             output::emit(
                 args,
-                json!({"running":poll.meta.running,"enabled":poll.meta.settings.claude_protection.is_some(),"guard":poll.snapshot.claude_guard}),
+                json!({"running":poll.meta.running,"enabled":poll.meta.settings.claude_protection.is_some(),"guard":poll.snapshot.claude_guard,"observed":observed}),
             )?;
             tokio::time::sleep(args.interval()?).await;
         }
     }
     if args.path == "claude audit" && args.flag("offline") {
-        let cancel = claude_check::audit::Scan::default();
+        let cancel = AuditScan(claude_check::audit::Scan::default());
+        let worker = cancel.0.clone();
         let audit =
-            tokio::task::spawn_blocking(move || claude_check::audit::local(0, &cancel)).await?;
+            tokio::task::spawn_blocking(move || claude_check::audit::local(0, &worker)).await?;
         let report = claude_check::system::code(true).await?;
         return output::emit(args, json!({"terminal":report,"projects":audit}));
     }
     let meta = backend::live(args).await?;
     if args.path == "claude audit" {
-        let cancel = claude_check::audit::Scan::default();
+        let cancel = AuditScan(claude_check::audit::Scan::default());
+        let worker = cancel.0.clone();
         let port = meta.settings.mixed_port;
-        let task = tokio::task::spawn_blocking(move || claude_check::audit::local(port, &cancel));
+        let task = tokio::task::spawn_blocking(move || claude_check::audit::local(port, &worker));
         let report = claude_check::system::code(false).await?;
         return output::emit(args, json!({"terminal":report,"projects":task.await?}));
     }
@@ -540,11 +560,24 @@ async fn claude(args: &Args) -> Result<()> {
         meta.settings.ip_reputation_key.as_deref(),
     )
     .await;
+    if let Ok(observed) = Api::new(&meta.settings)?
+        .get::<claude_check::ObservedConnections>("connections")
+        .await
+    {
+        report.routes = observed.connections;
+    }
     let (normal, risk, clues) = report.counts();
     output::emit(
         args,
         json!({"normal":normal,"risk":risk,"clues":clues,"report":report}),
     )
+}
+
+struct AuditScan(claude_check::audit::Scan);
+impl Drop for AuditScan {
+    fn drop(&mut self) {
+        self.0.cancel();
+    }
 }
 
 #[cfg(test)]

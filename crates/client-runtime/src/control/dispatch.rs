@@ -54,7 +54,13 @@ pub(super) async fn execute(
         }
         Command::Shutdown => {
             engine.stop().await?;
-            return Ok(json!({"shutdown": owner == Owner::Daemon}));
+            return Ok(
+                json!({"shutdown": owner == Owner::Daemon && super::gui_pid(&engine.store)?.is_none()}),
+            );
+        }
+        Command::Quit => {
+            engine.stop().await?;
+            return Ok(json!({"shutdown":owner==Owner::Daemon}));
         }
         Command::Settings { settings, expected } => {
             anyhow::ensure!(
@@ -88,7 +94,15 @@ pub(super) async fn execute(
         Command::RuleDocument { id } => {
             return Ok(serde_json::to_value(engine.rule_document(&id)?)?);
         }
-        Command::SaveRules { id, rules } => engine.save_profile_rules(&id, rules).await?,
+        Command::SaveRules {
+            id,
+            rules,
+            expected,
+        } => {
+            engine
+                .save_profile_rules_checked(&id, rules, expected)
+                .await?
+        }
         Command::Select { group, node } => {
             start(&mut engine).await?;
             engine.select_node(&group, &node).await?;
@@ -177,9 +191,17 @@ pub(super) async fn execute(
                 .await?
                 .ok_or_else(|| anyhow::anyhow!("已经是最新正式版"))?;
             let download = Arc::new(crate::update::download(available, port, |_| {}).await?);
-            let session =
-                tokio::task::spawn_blocking(move || crate::update::handoff(download)).await??;
+            let gui = super::gui_pid(&engine.store)?;
+            let parent = gui.unwrap_or_else(std::process::id);
+            let session = tokio::task::spawn_blocking(move || {
+                crate::update::handoff_owner(download, parent, gui.is_some())
+            })
+            .await??;
             if let Err(error) = engine.stop().await {
+                session.cancel();
+                return Err(error);
+            }
+            if let Err(error) = super::request_gui_exit(&engine.store) {
                 session.cancel();
                 return Err(error);
             }

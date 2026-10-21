@@ -31,7 +31,7 @@ cor stop
 
 GUI 已运行时，CLI 通过带随机密钥的本机接口操作同一内核。GUI 未运行时，需要后台的命令会自动启动 `cor run --no-core`；查询、修改配置不会自行开启系统代理。需要网络的命令会启动内核并恢复已保存的代理模式。`status`、`stop`、`help`、`version`、补全生成不会启动后台。
 
-每个数据目录只有一个运行层所有者；随后打开的 GUI 会接入该后台。退出 GUI 会停止内核及其独立后台。`cor stop` 会停止内核、恢复网络；独立后台同时退出，现有 GUI 窗口保留。
+每个数据目录只有一个运行层所有者；随后打开的 GUI 会接入该后台。退出 GUI 会停止内核及其独立后台。`cor stop` 会停止内核、恢复网络；没有关联窗口时独立后台同时退出；有关联窗口时保留后台，窗口可直接重新启动内核。
 
 ## 帮助、脚本与输出
 
@@ -51,7 +51,7 @@ GUI 已运行时，CLI 通过带随机密钥的本机接口操作同一内核。
 
 JSON 每行使用 `{"schema":1,"command":"命令","data":...}` 外层。`--json` 和 `--jsonl` 二选一；持续命令可输出多份采样，推荐使用 `--jsonl`。进度、授权提示和错误写入 stderr，结果写入 stdout。导出文件原子替换，Unix 下权限为 0600。日志内容是原始诊断文本，可能包含域名、IP 或第三方服务返回的信息，分享前请检查。
 
-`--` 后的内容作为原样位置参数；例如名称以 `-` 开头时使用它。`Ctrl+C` 结束持续查询；若后台已收到修改请求，修改可能继续完成，请重新查询状态。`cor run` 收到 Ctrl+C/SIGTERM 后先恢复网络再退出。
+`--` 后的内容作为原样位置参数；例如名称以 `-` 开头时使用它。`Ctrl+C` 结束持续查询；若后台已收到修改请求，修改可能继续完成，请重新查询状态。`cor run` 收到 Ctrl+C/SIGTERM 后先恢复网络，再关闭与该后台关联的窗口并退出。
 
 | 退出码 | 含义 |
 | --- | --- |
@@ -170,11 +170,11 @@ cor rule move c:完整UUID 1
 | `claude audit [--offline -o FILE]` | 检查当前终端和已记录的项目配置；离线模式不启动内核或请求检测网站 |
 | `claude browser [--open -o FILE]` | 创建本机真实浏览器采样入口并等待报告 |
 | `claude protect [on\|off] [--yes]` | 可逆保护、锁定节点、TUN/DNS/规则覆盖及实时异常流量拦截 |
-| `claude watch [--interval 1]` | 查看拦截记录与监测状态 |
+| `claude watch [--interval 1]` | 只读观察 Claude 相关请求的真实线路；保护开启时同时查看拦截状态 |
 
 `config set` 支持 `controller_port`、`mixed_port`、`secret`、`dark`、`theme_mode`、`accent_color`、`text_scale`、`tray_speed`、`dns_override`、`ipv6`、`udp`、`ip_reputation_key`、`delay_interval_minutes`、`node_sort`。值先按 JSON 解析，否则视为字符串，例如 `cor config set ipv6 false`、`cor config set theme_mode dark`。枚举取值见 `config get`；模式、订阅、规则、保护必须使用各自命令，不能绕过保护锁定。
 
-检测报告表示真实观察结果；单项检测失败记为 Failed，不将网络失败当作“可用”。浏览器采样需要用户打开本机入口，在没有真实浏览器的 SSH 会话中不会伪造 WebRTC/指纹结果。报告不读取 Claude 账户 Cookie、令牌或登录内容。项目审计使用 CLI 所在的当前工作目录和终端环境，不套用 GUI/后台启动时的环境。
+检测完成的退出码为 0，可用性与风险应读取报告字段，不能只看退出码。检测报告表示真实观察结果；单项检测失败记为 Failed，不将网络失败当作“可用”。浏览器采样需要用户打开本机入口，在没有真实浏览器的 SSH 会话中不会伪造 WebRTC/指纹结果。报告不读取 Claude 账户 Cookie、令牌或登录内容。项目审计使用 CLI 所在的当前工作目录和终端环境，不套用 GUI/后台启动时的环境。
 
 保护开启会强制 TUN、UDP、加密 DNS 及广泛的 Claude 关联规则，可能影响共享服务；关闭按现有保护恢复机制还原此前配置。操作系统授权仍需用户同意。保护状态持久保存，重启后按原有机制恢复；节点、模式和网络覆盖设置在保护期间保持锁定。
 
@@ -185,7 +185,7 @@ cor rule move c:完整UUID 1
 | `geo status` / `geo update` | 查看或校验更新 Geo 数据 |
 | `update check` | 仅检查正式版，忽略 prerelease |
 | `update download -o FILE` | 下载并校验当前平台安装包，不安装 |
-| `update install --yes` | 由运行层下载、校验并交给系统安装，成功交接后退出所有者 |
+| `update install --yes` | 由运行层下载、校验并交给系统安装，成功交接后退出所有者；有窗口时关闭并在安装后重新打开窗口，无窗口时安装后用 `cor start` 恢复后台 |
 | `autostart [on\|off]` | 普通桌面程序登录自启 |
 | `service install --yes` | 为当前用户配置 CLI 后台登录自启 |
 | `service remove --yes` / `service status` | 删除或查询 CLI 后台登录自启 |

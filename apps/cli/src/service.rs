@@ -15,8 +15,12 @@ pub fn execute(args: &Args) -> Result<()> {
             "service remove" => Some(false),
             _ => None,
         };
-        let enabled =
-            clash_client_runtime::platform::headless_startup(&backend::store(args)?.root, enabled)?;
+        let resources = args.get("resources").map(backend::absolute).transpose()?;
+        let enabled = clash_client_runtime::platform::headless_startup(
+            &backend::store(args)?.root,
+            resources.as_deref(),
+            enabled,
+        )?;
         output::emit(
             args,
             json!({"enabled":enabled,"scope":"current-user-logon"}),

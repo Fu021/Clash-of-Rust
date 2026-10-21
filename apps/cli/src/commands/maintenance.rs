@@ -189,7 +189,12 @@ async fn update(args: &Args) -> Result<()> {
     // Do not make output::emit interpret --output a second time.
     let value = json!({"path":output_path,"sha256":downloaded.sha256()});
     if args.flag("json") || args.flag("jsonl") {
-        println!("{}", json!({"schema":1,"command":args.path,"data":value}));
+        use std::io::Write;
+        writeln!(
+            std::io::stdout().lock(),
+            "{}",
+            json!({"schema":1,"command":args.path,"data":value})
+        )?;
     } else if !args.flag("quiet") {
         eprintln!(
             "已保存：{}\nSHA256：{}",

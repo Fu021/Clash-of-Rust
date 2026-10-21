@@ -145,7 +145,26 @@ impl Engine {
         if let Some(engine) = Self::attach(&store, &resources)? {
             return Ok(engine);
         }
-        let instance = store.instance_lock()?;
+        let instance = match store.instance_lock() {
+            Ok(instance) => instance,
+            Err(error) => {
+                // The other owner may still be seeding resources before its
+                // endpoint is published. Attach without recovering its journals.
+                let deadline = Instant::now() + Duration::from_secs(10);
+                loop {
+                    if let Some(engine) = Self::attach(&store, &resources)? {
+                        return Ok(engine);
+                    }
+                    if let Ok(instance) = store.instance_lock() {
+                        break instance;
+                    }
+                    if Instant::now() >= deadline {
+                        return Err(error);
+                    }
+                    std::thread::sleep(Duration::from_millis(100));
+                }
+            }
+        };
         crate::profile_transaction::recover(&store.root)?;
         let geo_manifest = assets::seed(&resources, &store.runtime())?;
         let logs = Arc::new(Mutex::new(VecDeque::new()));
@@ -587,15 +606,34 @@ impl Engine {
         id: &str,
         rules: crate::rule_manager::ProfileRules,
     ) -> Result<()> {
+        self.save_profile_rules_checked(id, rules, None).await
+    }
+
+    pub async fn save_profile_rules_checked(
+        &mut self,
+        id: &str,
+        rules: crate::rule_manager::ProfileRules,
+        expected: Option<String>,
+    ) -> Result<()> {
         if self.remote.is_some() {
             self.remote_mutate(ControlCommand::SaveRules {
                 id: id.into(),
                 rules: rules.clone(),
+                expected,
             })
             .await?;
             return Ok(());
         }
         self.require_unprotected_profile(id)?;
+        if let Some(expected) = expected {
+            let builtin = self.profiles.iter().any(|p| p.id == id && p.is_default());
+            let current =
+                crate::rule_manager::ProfileRules::for_profile(&self.settings, id, builtin);
+            ensure!(
+                crate::rule_manager::revision(&current)? == expected,
+                "规则已被另一客户端修改，草稿已保留；请刷新并检查修改后重新应用"
+            );
+        }
         self.profiles
             .iter()
             .find(|p| p.id == id)

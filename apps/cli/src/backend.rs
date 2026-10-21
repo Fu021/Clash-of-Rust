@@ -99,7 +99,9 @@ pub async fn connect(args: &Args, spawn: bool) -> Result<Option<Remote>> {
         {
             return Ok(Some(remote));
         }
-        if let Some(status) = child.try_wait()? {
+        if let Some(status) = child.try_wait()?
+            && store.instance_lock().is_ok()
+        {
             bail!(Unavailable(format!(
                 "后台启动失败（{status}）；请查看 {}",
                 log.display()
@@ -218,7 +220,10 @@ pub async fn run(args: &Args) -> Result<()> {
             }
         }
     }
-    engine.lock().await.stop().await?;
+    let mut owner = engine.lock().await;
+    let closing = control::request_gui_exit(&owner.store);
+    owner.stop().await?;
+    closing?;
     Ok(())
 }
 pub async fn interrupted() -> Result<()> {

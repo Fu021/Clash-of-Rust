@@ -87,6 +87,7 @@ pub(crate) fn run() -> anyhow::Result<()> {
         }
         file
     };
+    let _gui_session = clash_of_rust::control::GuiSession::register(startup_store()?)?;
     #[cfg(windows)]
     if let Err(error) = platform::notification::prepare_process() {
         eprintln!("通知窗口身份初始化失败：{error:#}");

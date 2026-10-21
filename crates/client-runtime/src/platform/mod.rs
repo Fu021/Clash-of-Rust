@@ -167,8 +167,12 @@ pub fn autostart_enabled() -> Result<bool> {
     native::autostart_enabled()
 }
 #[cfg(windows)]
-pub fn headless_startup(data: &Path, enabled: Option<bool>) -> Result<bool> {
-    let backend = windows_autostart::Backend::headless(data)?;
+pub fn headless_startup(
+    data: &Path,
+    resources: Option<&Path>,
+    enabled: Option<bool>,
+) -> Result<bool> {
+    let backend = windows_autostart::Backend::headless(data, resources)?;
     if let Some(enabled) = enabled {
         backend.set(enabled)?;
     }

@@ -344,7 +344,27 @@ async fn basic_system_proxy_and_tun() {
     );
     let secret = console(&cli, &store, &["config", "get", "secret"]).await;
     assert_eq!(secret["secret"], "[已隐藏]");
+    let meta: Meta = remote.request(Control::Meta).await.unwrap();
+    let active = meta.settings.active_profile.clone().unwrap();
+    let builtin = meta
+        .profiles
+        .iter()
+        .find(|p| p.id == active)
+        .unwrap()
+        .is_default();
+    let previous =
+        clash_of_rust::rule_manager::ProfileRules::for_profile(&meta.settings, &active, builtin);
+    let revision = clash_of_rust::rule_manager::revision(&previous).unwrap();
     console(&cli, &store, &["rule", "add", "DOMAIN,cli.test,REJECT"]).await;
+    let conflict = engine
+        .lock()
+        .await
+        .save_profile_rules_checked(&active, previous.as_ref().clone(), Some(revision))
+        .await;
+    assert!(
+        conflict.is_err(),
+        "a stale GUI draft must not replace a console edit"
+    );
     let rules = console(&cli, &store, &["rule", "list"]).await;
     let rule = rules["items"]
         .as_array()
@@ -367,5 +387,43 @@ async fn basic_system_proxy_and_tun() {
     let _: serde_json::Value = remote.request(Control::Shutdown).await.unwrap();
     assert!(!engine.lock().await.running());
     assert!(!store.root.join("system-proxy.json").exists());
+    drop(engine);
+    // With the GUI owner gone, the same binary must create and clean up its own
+    // headless owner rather than relying on the test process's runtime.
+    let resources = test_resources();
+    let output = tokio::process::Command::new(&cli)
+        .arg("--data-dir")
+        .arg(&store.root)
+        .arg("--resources")
+        .arg(resources)
+        .args(["--json", "start"])
+        .output()
+        .await
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert_eq!(console(&cli, &store, &["status"]).await["running"], true);
+    let gui = clash_of_rust::control::GuiSession::register(store.clone()).unwrap();
+    console(&cli, &store, &["stop"]).await;
+    assert!(
+        store.root.join("control.json").exists(),
+        "an attached GUI must retain a usable backend"
+    );
+    assert_eq!(console(&cli, &store, &["status"]).await["running"], false);
+    drop(gui);
+    console(&cli, &store, &["stop"]).await;
+    for _ in 0..100 {
+        if !store.root.join("control.json").exists() {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(50)).await;
+    }
+    assert!(
+        !store.root.join("control.json").exists(),
+        "CLI owner did not exit"
+    );
     println!("PASS: native system proxy, HTTP forwarding, TUN capture and cleanup");
 }

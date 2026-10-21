@@ -19,6 +19,11 @@ struct Plan {
     sha256: String,
     version: String,
     parent: u32,
+    #[serde(default = "default_restart")]
+    restart: bool,
+}
+fn default_restart() -> bool {
+    true
 }
 
 #[derive(Serialize, Deserialize)]
@@ -90,6 +95,13 @@ fn command(executable: &Path) -> Command {
 }
 
 pub fn handoff(download: Arc<Downloaded>) -> Result<InstallSession> {
+    handoff_owner(download, std::process::id(), true)
+}
+pub fn handoff_owner(
+    download: Arc<Downloaded>,
+    parent: u32,
+    restart: bool,
+) -> Result<InstallSession> {
     let directory = download.directory().to_owned();
     for name in ["ready", "cancel", "outcome.json", "stage.json"] {
         let path = directory.join(name);
@@ -103,7 +115,8 @@ pub fn handoff(download: Arc<Downloaded>) -> Result<InstallSession> {
         executable,
         sha256: download.sha256.clone(),
         version: download.version.clone(),
-        parent: std::process::id(),
+        parent,
+        restart,
     };
     let helper = directory.join(if cfg!(windows) {
         "update-helper.exe"
@@ -210,7 +223,7 @@ pub fn helper_main() -> bool {
         while parent_alive(plan.parent) && Instant::now() < deadline {
             std::thread::sleep(Duration::from_millis(100));
         }
-        if !parent_alive(plan.parent) {
+        if !parent_alive(plan.parent) && plan.restart {
             let _ = command(&plan.executable)
                 .arg("--update-result")
                 .arg(&directory)
@@ -377,6 +390,7 @@ mod tests {
             sha256: format!("{:x}", Sha256::digest(b"verified bytes")),
             version: "0.4.6".into(),
             parent: std::process::id(),
+            restart: true,
         };
         verify(&plan, directory.path()).unwrap();
         fs::write(path, b"tampered").unwrap();

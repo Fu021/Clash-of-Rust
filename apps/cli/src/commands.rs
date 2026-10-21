@@ -18,7 +18,10 @@ pub async fn execute(args: &Args) -> Result<()> {
             json!({"version":clash_client_core::VERSION,"os":std::env::consts::OS,"arch":std::env::consts::ARCH}),
         ),
         "completion" => {
-            print!("{}", crate::args::completion(&args.positional[0])?);
+            use std::io::Write;
+            std::io::stdout()
+                .lock()
+                .write_all(crate::args::completion(&args.positional[0])?.as_bytes())?;
             Ok(())
         }
         "start" | "restart" => {

@@ -107,7 +107,12 @@ impl Engine {
 
     pub async fn shutdown_owner(&mut self) -> Result<()> {
         if let Some(remote) = &self.remote {
-            let _: Value = remote.request(ControlCommand::Shutdown).await?;
+            let result: Result<Value> = remote.request(ControlCommand::Quit).await;
+            if let Err(error) = result
+                && self.store.instance_lock().is_err()
+            {
+                return Err(error);
+            }
             self.remote_running = false;
             return Ok(());
         }

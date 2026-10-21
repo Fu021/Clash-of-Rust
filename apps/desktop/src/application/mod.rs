@@ -1568,6 +1568,7 @@ impl App {
                     update::cleanup(&session.directory);
                 }
                 if platform::exit_requested()
+                    || clash_of_rust::control::gui_exit_requested()
                     || self.engine.as_ref().is_some_and(|engine| {
                         engine
                             .try_lock()

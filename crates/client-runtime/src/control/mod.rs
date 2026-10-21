@@ -1,5 +1,6 @@
 //! Authenticated, local-only commands shared by GUI and CLI owners.
 mod dispatch;
+mod gui;
 mod mutations;
 mod transport;
 use crate::{
@@ -7,6 +8,7 @@ use crate::{
     config::{Profile, Settings},
     engine::{ProxyMode, Scope},
 };
+pub use gui::{GuiSession, gui_exit_requested, gui_pid, request_gui_exit};
 pub use mutations::RuleChange;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -53,6 +55,7 @@ pub enum Command {
     Stop,
     Restart,
     Shutdown,
+    Quit,
     Settings {
         settings: Settings,
         expected: Option<Value>,
@@ -94,6 +97,7 @@ pub enum Command {
     SaveRules {
         id: String,
         rules: crate::rule_manager::ProfileRules,
+        expected: Option<String>,
     },
     Select {
         group: String,

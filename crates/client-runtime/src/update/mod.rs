@@ -4,7 +4,8 @@ mod install;
 use anyhow::{Context, Result, bail};
 use futures_util::future::{AbortHandle, AbortRegistration};
 pub use install::{
-    InstallSession, cleanup, ensure_installable, handoff, helper_main, startup_outcome,
+    InstallSession, cleanup, ensure_installable, handoff, handoff_owner, helper_main,
+    startup_outcome,
 };
 use reqwest::{Client, StatusCode, Url};
 use semver::Version;

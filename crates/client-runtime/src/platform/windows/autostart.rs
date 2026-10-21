@@ -145,7 +145,7 @@ impl Backend {
         format!("\"{}\" {}", self.executable.display(), self.arguments)
     }
 
-    pub fn headless(data: &Path) -> Result<Self> {
+    pub fn headless(data: &Path, resources: Option<&Path>) -> Result<Self> {
         let mut backend = Self::current()?;
         backend.executable = std::env::current_exe()?;
         backend.task_name = format!("ClashOfRustCLI-{}", backend.sid);
@@ -153,8 +153,14 @@ impl Backend {
         backend.run_name = "ClashOfRustCLI".into();
         let path = data.to_string_lossy();
         anyhow::ensure!(!path.contains(['\"', '\n', '\r', '\0']), "后台数据目录无效");
-        let path = path.trim_end_matches('\\');
-        backend.arguments = format!("run --data-dir \"{path}\"");
+        let trailing = path.chars().rev().take_while(|c| *c == '\\').count();
+        backend.arguments = format!("run --data-dir \"{path}{}\"", "\\".repeat(trailing));
+        if let Some(resources) = resources {
+            let path = resources.to_string_lossy();
+            anyhow::ensure!(!path.contains(['\"', '\n', '\r', '\0']), "资源目录无效");
+            let trailing = path.chars().rev().take_while(|c| *c == '\\').count();
+            backend.arguments += &format!(" --resources \"{path}{}\"", "\\".repeat(trailing));
+        }
         Ok(backend)
     }
 

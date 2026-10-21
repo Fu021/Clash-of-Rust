@@ -159,7 +159,8 @@ mod tests {
     }
     #[test]
     fn original_rules_are_read_only_and_new_rules_keep_order() {
-        let doc = Document::from_raw("test", false, "rules: [\"MATCH,DIRECT\"]").unwrap();
+        let doc =
+            Document::from_raw("test", false, "proxies: []\nrules: [\"MATCH,DIRECT\"]").unwrap();
         let mut draft = ProfileRules::default();
         assert!(rule(&doc, &mut draft, RuleChange::Remove { rule: "1".into() }).is_err());
         rule(
