@@ -377,6 +377,7 @@ async fn diagnose(args: &Args) -> Result<()> {
 }
 
 async fn ip(args: &Args) -> Result<()> {
+    use clash_client_core::ip_report::{Counts, Status};
     let category = args.get("category");
     let filter = args.get("filter").unwrap_or("").to_lowercase();
     let services: Vec<_> = ip_check::services()
@@ -409,6 +410,8 @@ async fn ip(args: &Args) -> Result<()> {
     let mut tasks = tokio::task::JoinSet::new();
     let mut results = Vec::new();
     let mut counts = BTreeMap::<String, usize>::new();
+    let mut totals = Counts::default();
+    let mut categories = BTreeMap::<String, Counts>::new();
     loop {
         while tasks.len() < 3 {
             let Some(service) = waiting.pop_front() else {
@@ -416,7 +419,11 @@ async fn ip(args: &Args) -> Result<()> {
             };
             tasks.spawn(async move {
                 let mut row = json!({"id":service.id,"name":service.name,"category":service.group});
-                match ip_check::check(&service.id, port).await {
+                let outcome = ip_check::check(&service.id, port)
+                    .await
+                    .map_err(|error| format!("{error:#}"));
+                let status = Status::of(Some(&outcome));
+                match outcome {
                     Ok(result) => {
                         row["state"] = json!(format!("{:?}", result.state));
                         row["summary"] = json!(result.summary);
@@ -429,13 +436,18 @@ async fn ip(args: &Args) -> Result<()> {
                         row["detail"] = json!(format!("{error:#}"));
                     }
                 }
-                row
+                (row, status)
             });
         }
         let Some(row) = tasks.join_next().await else {
             break;
         };
-        let row = row?;
+        let (row, status) = row?;
+        totals.0[status as usize] += 1;
+        categories
+            .entry(row["category"].as_str().unwrap_or("其他").into())
+            .or_default()
+            .0[status as usize] += 1;
         *counts
             .entry(row["state"].as_str().unwrap_or("Failed").into())
             .or_default() += 1;
@@ -451,13 +463,10 @@ async fn ip(args: &Args) -> Result<()> {
         results.push(row);
     }
     results.sort_by(|a, b| a["id"].as_str().cmp(&b["id"].as_str()));
-    let usable = counts.get("Confirmed").copied().unwrap_or(0)
-        + counts.get("Partial").copied().unwrap_or(0)
-        + counts.get("Reachable").copied().unwrap_or(0)
-        + counts.get("Identified").copied().unwrap_or(0);
+    let categories:Vec<_>=categories.into_iter().map(|(name,counts)|json!({"name":name,"total":counts.total(),"completed":counts.completed(),"non_red":counts.non_red(),"confirmed_available":counts.count(Status::Available)})).collect();
     output::emit(
         args,
-        json!({"event":"report","total":results.len(),"usable":usable,"counts":counts,"results":results}),
+        json!({"event":"report","total":results.len(),"non_red":totals.non_red(),"confirmed_available":totals.count(Status::Available),"counts":counts,"categories":categories,"results":results}),
     )
 }
 

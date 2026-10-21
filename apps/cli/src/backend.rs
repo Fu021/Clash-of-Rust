@@ -6,12 +6,9 @@ use clash_client_runtime::{
     engine::{Engine, Scope},
 };
 use serde::de::DeserializeOwned;
-use std::{
-    path::PathBuf,
-    process::{Command as Process, Stdio},
-    sync::Arc,
-    time::Duration,
-};
+#[cfg(not(windows))]
+use std::process::Stdio;
+use std::{path::PathBuf, process::Command as Process, sync::Arc, time::Duration};
 use tokio::sync::Mutex;
 
 #[derive(Debug)]
@@ -77,6 +74,7 @@ pub async fn connect(args: &Args, spawn: bool) -> Result<Option<Remote>> {
     if let Some(path) = args.get("resources") {
         process.arg("--resources").arg(absolute(path)?);
     }
+    #[cfg(not(windows))]
     process
         .stdin(Stdio::null())
         .stdout(Stdio::null())
@@ -87,10 +85,15 @@ pub async fn connect(args: &Args, spawn: bool) -> Result<Option<Remote>> {
         process.process_group(0);
     }
     #[cfg(windows)]
-    {
-        use std::os::windows::process::CommandExt;
-        process.creation_flags(0x08000000);
-    }
+    let mut child = clash_client_runtime::platform::spawn_background_console(
+        std::path::Path::new(process.get_program()),
+        &process
+            .get_args()
+            .map(std::ffi::OsStr::to_owned)
+            .collect::<Vec<_>>(),
+        &file,
+    )?;
+    #[cfg(not(windows))]
     let mut child = process.spawn().context("启动无界面后台失败")?;
     let deadline = tokio::time::Instant::now() + Duration::from_secs(30);
     loop {
@@ -234,6 +237,14 @@ pub async fn interrupted() -> Result<()> {
         tokio::select! { result=tokio::signal::ctrl_c()=>{result?;}, _=terminate.recv()=>{} }
     }
     #[cfg(not(unix))]
-    tokio::signal::ctrl_c().await?;
+    if let Err(error) = tokio::signal::ctrl_c().await {
+        use std::io::IsTerminal;
+        if std::io::stdin().is_terminal() {
+            return Err(error.into());
+        }
+        // Windowless Windows login processes have no console control source.
+        // Their graceful shutdown comes from the authenticated control endpoint.
+        std::future::pending::<()>().await;
+    }
     Ok(())
 }

@@ -41,6 +41,11 @@ pub mod macos;
 #[cfg(windows)]
 mod windows;
 #[cfg(windows)]
+#[path = "windows/process.rs"]
+mod windows_process;
+#[cfg(windows)]
+pub use windows_process::{BackgroundChild, spawn as spawn_background_console};
+#[cfg(windows)]
 #[path = "windows/service/mod.rs"]
 pub mod windows_service;
 #[cfg(target_os = "linux")]

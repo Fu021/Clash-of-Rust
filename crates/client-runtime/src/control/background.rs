@@ -3,11 +3,7 @@
 #[cfg(windows)]
 pub fn helper_main() -> Option<anyhow::Result<()>> {
     use anyhow::{Context, ensure};
-    use std::{
-        ffi::OsStr,
-        os::windows::process::CommandExt,
-        process::{Command, Stdio},
-    };
+    use std::ffi::OsStr;
     let mut args = std::env::args_os().skip(1);
     if args.next().as_deref() != Some(OsStr::new("--cli-background")) {
         return None;
@@ -37,14 +33,9 @@ pub fn helper_main() -> Option<anyhow::Result<()>> {
             .append(true)
             .open(store.root.join("daemon.log"))?;
         let console = std::env::current_exe()?.with_file_name("cor.exe");
-        Command::new(console)
-            .args(["start", "--quiet"])
-            .args(forwarded)
-            .creation_flags(0x08000000)
-            .stdin(Stdio::null())
-            .stdout(Stdio::null())
-            .stderr(log)
-            .spawn()?;
+        let mut arguments = vec!["start".into(), "--quiet".into()];
+        arguments.extend(forwarded);
+        crate::platform::spawn_background_console(&console, &arguments, &log)?;
         Ok(())
     })())
 }
