@@ -392,6 +392,9 @@ mod tests {
             parent: std::process::id(),
             restart: true,
         };
+        let mut legacy = serde_json::to_value(&plan).unwrap();
+        legacy.as_object_mut().unwrap().remove("restart");
+        assert!(serde_json::from_value::<Plan>(legacy).unwrap().restart);
         verify(&plan, directory.path()).unwrap();
         fs::write(path, b"tampered").unwrap();
         assert!(verify(&plan, directory.path()).is_err());

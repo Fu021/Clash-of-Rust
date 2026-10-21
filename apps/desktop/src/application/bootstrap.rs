@@ -1,6 +1,10 @@
 //! Process helpers and the single-instance guard precede GUI initialization.
 use super::*;
 pub(crate) fn run() -> anyhow::Result<()> {
+    #[cfg(windows)]
+    if let Some(result) = clash_of_rust::control::background_helper_main() {
+        return result;
+    }
     if let Some(result) = clash_of_rust::claude_check::system::helper_main() {
         if let Err(error) = result {
             eprintln!("终端地区检测失败：{error:#}");

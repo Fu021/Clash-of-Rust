@@ -1,5 +1,9 @@
 //! Authenticated, local-only commands shared by GUI and CLI owners.
+#[cfg(windows)]
+mod background;
 mod dispatch;
+#[cfg(windows)]
+pub use background::helper_main as background_helper_main;
 mod gui;
 mod mutations;
 mod transport;

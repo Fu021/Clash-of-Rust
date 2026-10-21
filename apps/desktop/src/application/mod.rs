@@ -1586,7 +1586,9 @@ impl App {
                         return Task::none();
                     }
                 }
-                if (self.snapshot.running || self.page == Page::Logs) && !self.busy {
+                // The console can start a stopped core or change preferences.
+                // A stopped owner returns metadata without querying mihomo.
+                if self.engine.is_some() && !self.busy {
                     let scope = if !self.visible || self.page == Page::Rules {
                         Scope::Other
                     } else {

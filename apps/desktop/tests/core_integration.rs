@@ -215,6 +215,7 @@ async fn basic_system_proxy_and_tun() {
         "proxy-ok"
     );
     server.await.unwrap();
+    println!("PASS: native system proxy and HTTP forwarding");
     engine.select_proxy_mode(ProxyMode::Tun).await.unwrap();
     let state = engine.poll(Scope::Home).await.unwrap();
     assert!(state.running && state.tun && !state.system_proxy);
@@ -248,6 +249,7 @@ async fn basic_system_proxy_and_tun() {
         captured,
         "Unproxied traffic was not captured and routed by TUN"
     );
+    println!("PASS: unproxied traffic captured by TUN");
     #[cfg(windows)]
     {
         // Preserve TUN preference, but discard every in-memory Engine/session
@@ -294,6 +296,7 @@ async fn basic_system_proxy_and_tun() {
     engine.stop().await.unwrap();
     assert!(!engine.running());
     assert!(!store.root.join("system-proxy.json").exists());
+    println!("CLI smoke: creating the shared control endpoint");
     // Exercise the same native proxy/TUN lifecycle through the authenticated
     // console transport, including a GUI facade attaching without a second core.
     let engine = std::sync::Arc::new(tokio::sync::Mutex::new(engine));
@@ -305,6 +308,7 @@ async fn basic_system_proxy_and_tun() {
         .unwrap();
     use clash_of_rust::control::{Command as Control, Meta};
     let _: serde_json::Value = remote.request(Control::Start).await.unwrap();
+    println!("CLI smoke: shared owner started; attaching GUI facade");
     let attach_store = store.clone();
     let facade =
         tokio::task::spawn_blocking(move || Engine::with_resources(attach_store, test_resources()))
@@ -313,6 +317,7 @@ async fn basic_system_proxy_and_tun() {
             .unwrap();
     assert!(facade.is_remote() && facade.running());
     drop(facade); // Must not stop the owner or restore its network state.
+    println!("CLI smoke: GUI facade attached and released without stopping the owner");
     let cli =
         std::env::var_os("MIHOMO_TEST_CLI").expect("native wrapper must provide the bundled CLI");
     async fn console(
@@ -320,14 +325,20 @@ async fn basic_system_proxy_and_tun() {
         store: &Store,
         args: &[&str],
     ) -> serde_json::Value {
-        let output = tokio::process::Command::new(executable)
-            .arg("--data-dir")
-            .arg(&store.root)
-            .args(["--json", "--yes"])
-            .args(args)
-            .output()
-            .await
-            .unwrap();
+        println!("CLI smoke: {args:?}");
+        let output = tokio::time::timeout(
+            Duration::from_secs(45),
+            tokio::process::Command::new(executable)
+                .kill_on_drop(true)
+                .arg("--data-dir")
+                .arg(&store.root)
+                .args(["--json", "--yes", "--timeout", "30"])
+                .args(args)
+                .output(),
+        )
+        .await
+        .expect("console did not exit within 45 seconds")
+        .unwrap();
         assert!(
             output.status.success(),
             "CLI {args:?}: {}",
@@ -391,6 +402,8 @@ async fn basic_system_proxy_and_tun() {
     // With the GUI owner gone, the same binary must create and clean up its own
     // headless owner rather than relying on the test process's runtime.
     let resources = test_resources();
+    println!("CLI smoke: starting a standalone owner");
+    #[cfg(not(windows))]
     let output = tokio::process::Command::new(&cli)
         .arg("--data-dir")
         .arg(&store.root)
@@ -400,12 +413,35 @@ async fn basic_system_proxy_and_tun() {
         .output()
         .await
         .unwrap();
+    #[cfg(windows)]
+    let output = tokio::process::Command::new(
+        std::path::Path::new(&cli).with_file_name("clash-of-rust.exe"),
+    )
+    .arg("--cli-background")
+    .arg("--data-dir")
+    .arg(&store.root)
+    .arg("--resources")
+    .arg(resources)
+    .output()
+    .await
+    .unwrap();
     assert!(
         output.status.success(),
         "{}",
         String::from_utf8_lossy(&output.stderr)
     );
-    assert_eq!(console(&cli, &store, &["status"]).await["running"], true);
+    let mut started = false;
+    for _ in 0..100 {
+        if console(&cli, &store, &["status"]).await["running"] == true {
+            started = true;
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(100)).await;
+    }
+    assert!(
+        started,
+        "the CLI login/start entry did not start its own core"
+    );
     let gui = clash_of_rust::control::GuiSession::register(store.clone()).unwrap();
     console(&cli, &store, &["stop"]).await;
     assert!(

@@ -147,14 +147,17 @@ impl Backend {
 
     pub fn headless(data: &Path, resources: Option<&Path>) -> Result<Self> {
         let mut backend = Self::current()?;
-        backend.executable = std::env::current_exe()?;
+        backend.executable = crate::platform::autostart_executable()?;
         backend.task_name = format!("ClashOfRustCLI-{}", backend.sid);
         backend.marker_key = "Software\\ClashOfRust\\CLIStartup".into();
         backend.run_name = "ClashOfRustCLI".into();
         let path = data.to_string_lossy();
         anyhow::ensure!(!path.contains(['\"', '\n', '\r', '\0']), "后台数据目录无效");
         let trailing = path.chars().rev().take_while(|c| *c == '\\').count();
-        backend.arguments = format!("run --data-dir \"{path}{}\"", "\\".repeat(trailing));
+        backend.arguments = format!(
+            "--cli-background --data-dir \"{path}{}\"",
+            "\\".repeat(trailing)
+        );
         if let Some(resources) = resources {
             let path = resources.to_string_lossy();
             anyhow::ensure!(!path.contains(['\"', '\n', '\r', '\0']), "资源目录无效");
