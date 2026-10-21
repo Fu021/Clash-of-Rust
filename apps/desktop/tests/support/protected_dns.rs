@@ -184,13 +184,15 @@ pub async fn run(engine: &mut Engine, profile: &std::path::Path) {
             )
             .await
             .unwrap();
+        // Activate the fixture with the mode already saved, so the runtime
+        // file baseline includes it (select_mode itself only patches the API).
+        let mode = if explicit { "global" } else { "rule" };
+        engine.select_mode(mode).await.unwrap();
         engine
             .activate(engine.profiles.last().unwrap().id.clone())
             .await
             .unwrap();
         engine.select_proxy_mode(ProxyMode::System).await.unwrap();
-        let mode = if explicit { "global" } else { "rule" };
-        engine.select_mode(mode).await.unwrap();
         if mode == "global" {
             engine.select_node("GLOBAL", "DIRECT").await.unwrap();
             let before = std::fs::read(engine.store.root.join("settings.json")).unwrap();
@@ -317,6 +319,13 @@ pub async fn run(engine: &mut Engine, profile: &std::path::Path) {
         );
         let state = engine.poll(Scope::Home).await.unwrap();
         assert!(state.running && state.system_proxy && !state.tun);
+        assert_eq!(state.mode, mode);
+        if mode == "global" {
+            assert_eq!(
+                engine.api.proxy_nodes("GLOBAL").await.unwrap().now.as_str(),
+                "Main"
+            );
+        }
         let after = metrics().await;
         for key in ["bootstrap", "proxied_dns", "node_connections", "web"] {
             assert!(
