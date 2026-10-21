@@ -45,9 +45,17 @@ impl ViewModels {
             .retain(|key, _| groups.iter().any(|(group, _)| group.id.as_str() == key));
         let mut rows = Vec::with_capacity(groups.len());
         for (mut group, nodes) in groups {
-            let model = self.nodes.entry(group.id.to_string()).or_default();
-            reconcile(model, nodes);
-            group.nodes = model.clone().into();
+            if nodes.is_empty() {
+                // A closing disclosure can own the old model for its short
+                // fade. Drop the backend reference immediately, without
+                // mutating the rows still being drawn by that disclosure.
+                self.nodes.remove(group.id.as_str());
+                group.nodes = Default::default();
+            } else {
+                let model = self.nodes.entry(group.id.to_string()).or_default();
+                reconcile(model, nodes);
+                group.nodes = model.clone().into();
+            }
             rows.push(group);
         }
         reconcile(&self.groups, rows);

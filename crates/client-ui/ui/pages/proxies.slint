@@ -1,7 +1,7 @@
-import { PageSurface, Disclosure, Motion } from "../components/motion.slint";
+import { PageSurface, Disclosure } from "../components/motion.slint";
 import { ScrollView } from "std-widgets.slint";
 import { Theme } from "../theme/palette.slint";
-import { UiData, UiActions, Intent, NodeItem } from "../state.slint";
+import { UiData, UiActions, Intent, NodeItem, NodePair } from "../state.slint";
 import { Label, Caption, Heading, Chevron, ContentPanel, RowPanel, ActionButton, Badge, Field, Select } from "../components/controls.slint";
 
 component NodeCard inherits ContentPanel {
@@ -32,21 +32,18 @@ export component ProxiesPage inherits PageSurface {
                 Select { width: 172px; horizontal-stretch: 0; options: ["延迟从低到高", "延迟从高到低", "名称排序"]; value: self.options[UiData.node-sort]; selected(index, value) => { UiActions.dispatch(Intent.node-sort, "" + index, ""); } }
             }
             for group in UiData.groups: group-card := ContentPanel {
-                property <bool> source-expanded: group.expanded;
+                property <[NodePair]> closing-nodes;
+                property <string> closing-page;
                 property <bool> expanded: group.expanded;
-                changed source-expanded => { if !collapse.running { self.expanded = self.source-expanded; } }
+                property <bool> mounted: group-body.mounted;
+                changed mounted => { if !self.mounted { self.closing-nodes = []; self.closing-page = ""; } }
+                changed expanded => { if self.expanded { self.closing-nodes = []; self.closing-page = ""; } }
                 callback toggle();
                 toggle => {
-                    if self.expanded { self.expanded = false; collapse.restart(); }
-                    else {
-                        collapse.stop(); self.expanded = true;
-                        if !group.expanded { UiActions.dispatch(Intent.toggle-group, group.id, ""); }
-                    }
-                }
-                // Collapsing is presentation-only. Release backend rows after
-                // the visual exit, without copying or permanently caching them.
-                collapse := Timer { interval: Motion.active ? Motion.reveal + 16ms : 1ms;
-                    triggered => { self.stop(); if !group-card.expanded && group.expanded { UiActions.dispatch(Intent.toggle-group, group.id, ""); } }
+                    if group.expanded { self.closing-nodes = group.nodes; self.closing-page = group.page; }
+                    // Persist expansion immediately. Only the view retains the
+                    // last model briefly; leaving the page releases it too.
+                    UiActions.dispatch(Intent.toggle-group, group.id, "");
                 }
                 HorizontalLayout { cross-axis-alignment: center; spacing: Theme.content-gap;
                     header := Rectangle {
@@ -63,13 +60,13 @@ export component ProxiesPage inherits PageSurface {
                 group-body := Disclosure { expanded: group-card.expanded;
                     if group-body.mounted: VerticalLayout {
                         spacing: Theme.page-gap;
-                        for pair in group.nodes: HorizontalLayout { cross-axis-alignment: center; spacing: Theme.page-gap;
+                        for pair in (group.expanded ? group.nodes : group-card.closing-nodes): HorizontalLayout { cross-axis-alignment: center; spacing: Theme.page-gap;
                             NodeCard { node: pair.left; }
                             if pair.right.valid: NodeCard { node: pair.right; }
                             if !pair.right.valid: Rectangle { horizontal-stretch: 1; }
                         }
                         HorizontalLayout { cross-axis-alignment: center; spacing: Theme.content-gap;
-                            Caption { text: group.page; }
+                            Caption { text: group.expanded ? group.page : group-card.closing-page; }
                             ActionButton { text: "上一页"; enabled: group.previous; clicked => { UiActions.dispatch(Intent.group-page, group.id, "false"); } }
                             ActionButton { text: "下一页"; enabled: group.next; clicked => { UiActions.dispatch(Intent.group-page, group.id, "true"); } }
                         }

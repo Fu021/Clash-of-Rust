@@ -1063,7 +1063,9 @@ fn motion_does_not_delay_connection_sort_arrow_or_third_click_reset() {
         let immediately = motion_frame(&window, 0);
         let header = |pixels: &[u8]| {
             pixels
-                .chunks_exact(950 * 4)
+                .as_chunks::<{ 950 * 4 }>()
+                .0
+                .iter()
                 .skip(156)
                 .take(52)
                 .flat_map(|row| row[740 * 4..820 * 4].iter().copied())
@@ -1127,7 +1129,7 @@ fn copy_feedback_waits_for_matching_native_ack_and_resets_without_resizing() {
 }
 
 #[test]
-fn motion_group_collapse_cancels_on_reopen_and_releases_node_models_after_exit() {
+fn motion_group_collapse_is_persisted_before_exit_and_navigation_drops_nodes() {
     ui_testing::initialize(950, 700);
     let mut app = fixture(Page::Proxies);
     app.expanded.insert("Proxy".into());
@@ -1141,37 +1143,36 @@ fn motion_group_collapse_cancels_on_reopen_and_releases_node_models_after_exit()
     let mut models = ViewModels::default();
     models.attach(&data);
     app.present(&data, &mut models);
-    let nodes = data.get_groups().row_data(0).unwrap().nodes;
-    assert_eq!(nodes.row_count(), 1);
     let events = pointer_events(&window);
     window.global::<clash_client_ui::Motion>().set_enabled(true);
     window.show().unwrap();
     motion_frame(&window, 250);
-    ui_testing::rapid_click(window.window(), 400., 185.);
-    motion_frame(&window, 30);
-    assert_eq!(nodes.row_count(), 1);
-    ui_testing::rapid_click(window.window(), 400., 185.);
-    motion_frame(&window, 250);
-    assert!(
-        events.borrow().is_empty(),
-        "reopening must cancel the pending collapse"
-    );
-    assert_eq!(nodes.row_count(), 1);
-    ui_testing::rapid_click(window.window(), 400., 185.);
-    motion_frame(&window, 250);
-    let (intent, a, b) = events
-        .borrow_mut()
-        .pop()
-        .expect("one collapse after the exit");
-    assert_eq!(intent, Intent::ToggleGroup);
-    assert!(events.borrow().is_empty());
-    let _ = app.intent(intent, &a, &b);
+    for expanded in [false, true, false] {
+        ui_testing::rapid_click(window.window(), 400., 185.);
+        let (intent, a, b) = events
+            .borrow_mut()
+            .pop()
+            .expect("expansion changes immediately");
+        assert_eq!(intent, Intent::ToggleGroup);
+        assert!(events.borrow().is_empty());
+        let _ = app.intent(intent, &a, &b);
+        app.present(&data, &mut models);
+        assert_eq!(app.expanded.contains("Proxy"), expanded);
+        assert_eq!(
+            data.get_groups().row_data(0).unwrap().nodes.row_count(),
+            usize::from(expanded)
+        );
+        motion_frame(&window, 30);
+    }
+    // Leave before the final collapse finishes: its state must not be lost.
+    let _ = app.intent(Intent::Navigate, "0", "");
     app.present(&data, &mut models);
     motion_frame(&window, 250);
-    assert_eq!(
-        nodes.row_count(),
-        0,
-        "collapsed groups must release the real node model"
+    assert_eq!(models.groups.row_count(), 0);
+    assert!(!app.expanded.contains("Proxy"));
+    assert!(
+        events.borrow().is_empty(),
+        "no delayed group command after leaving"
     );
     window.hide().unwrap();
 }
