@@ -633,7 +633,7 @@ dependencies = [
 
 [[package]]
 name = "clash-android"
-version = "0.6.0"
+version = "0.6.1"
 dependencies = [
  "android_logger",
  "anyhow",
@@ -650,7 +650,7 @@ dependencies = [
 
 [[package]]
 name = "clash-client-core"
-version = "0.6.0"
+version = "0.6.1"
 dependencies = [
  "anyhow",
  "base64 0.22.1",
@@ -675,7 +675,7 @@ dependencies = [
 
 [[package]]
 name = "clash-client-ui"
-version = "0.6.0"
+version = "0.6.1"
 dependencies = [
  "slint",
  "slint-build",
@@ -683,7 +683,7 @@ dependencies = [
 
 [[package]]
 name = "clash-mobile-runtime"
-version = "0.6.0"
+version = "0.6.1"
 dependencies = [
  "anyhow",
  "clash-client-core",
@@ -698,7 +698,7 @@ dependencies = [
 
 [[package]]
 name = "clash-of-rust"
-version = "0.6.0"
+version = "0.6.1"
 dependencies = [
  "anyhow",
  "arboard",
