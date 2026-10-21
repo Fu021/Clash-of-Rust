@@ -1,8 +1,9 @@
+import { PageSurface } from "../components/motion.slint";
 import { ScrollView } from "std-widgets.slint";
 import { Theme } from "../theme/palette.slint";
 import { UiData, UiActions, Intent } from "../state.slint";
-import { Label, Caption, Panel, ActionButton, Field, Badge, Select } from "../components/controls.slint";
-export component LogsPage inherits Rectangle {
+import { Label, Caption, Panel, ActionButton, Field, Badge, Select, CopyButton } from "../components/controls.slint";
+export component LogsPage inherits PageSurface {
     VerticalLayout {
         spacing: Theme.page-gap;
         HorizontalLayout { cross-axis-alignment: center; spacing: Theme.content-gap;
@@ -33,7 +34,7 @@ export component LogsPage inherits Rectangle {
                             if entry.time != "": Caption { text: entry.time; width: 66px; horizontal-stretch: 0; }
                             Badge { text: entry.level; tone: entry.tone; width: 60px * Theme.text-scale; }
                             Label { text: entry.message; }
-                            ActionButton { text: "复制"; clicked => { UiActions.dispatch(Intent.copy, entry.message, ""); } }
+                            CopyButton { value: entry.message; }
                         }
                     }
                 }

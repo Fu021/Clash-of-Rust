@@ -1,0 +1,36 @@
+import { Motion, Presence, ProgressTrack } from "motion.slint";
+import { Theme } from "../theme/palette.slint";
+import { UiData, UiActions, Intent } from "../state.slint";
+import { ContentPanel, Paragraph, ActionButton } from "controls.slint";
+
+export component DesktopNotice inherits Rectangle {
+    presence := Presence { open: UiData.notice != ""; }
+    out property <bool> mounted: presence.mounted;
+    property <string> message;
+    property <string> source: UiData.notice;
+    property <int> revision: UiData.notice-revision;
+    property <duration> started;
+    changed source => { if self.source != "" { self.message = self.source; } }
+    init => { self.message = UiData.notice; self.started = animation-tick() - UiData.notice-elapsed * 1s; }
+    changed revision => { self.started = animation-tick() - UiData.notice-elapsed * 1s; }
+    y: 16px - (1 - presence.progress) * 8px;
+    height: panel.preferred-height;
+    visible: presence.mounted;
+    opacity: presence.progress;
+    panel := VerticalLayout {
+        if presence.mounted: ContentPanel {
+            drop-shadow-blur: 20px; drop-shadow-offset-y: 4px; drop-shadow-color: #00000030;
+            interactive: true;
+            HorizontalLayout { cross-axis-alignment: center; spacing: Theme.content-gap;
+                Paragraph { text: root.message; color: UiData.notice-error ? Theme.danger : Theme.secondary; }
+                if UiData.retry-core: ActionButton { modal-control: true; text: "重启内核"; primary: true; enabled: UiData.notice != "" && !UiData.working; clicked => { UiActions.dispatch(Intent.restart-core, "", ""); } }
+                ActionButton { modal-control: true; text: "关闭"; enabled: UiData.notice != ""; clicked => { UiActions.dispatch(Intent.dismiss-notice, "", ""); } }
+            }
+            ProgressTrack {
+                height: 2px; smooth: false;
+                value: clamp((animation-tick() - root.started) / 8s, 0, 1);
+                track: Theme.subtle-line; fill: UiData.notice-error ? Theme.danger : Theme.accent;
+            }
+        }
+    }
+}

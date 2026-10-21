@@ -103,6 +103,12 @@ async fn protected_traffic(engine: &mut Engine) {
     let actual: serde_json::Value = engine.api.get("configs").await.unwrap();
     assert_eq!(actual["tun"]["enable"], true);
     let protection = engine.settings.claude_protection.as_ref().unwrap();
+    assert_eq!(actual["mode"], protection.run_mode());
+    if protection.run_mode() == "global" {
+        let global = engine.api.proxy_nodes("GLOBAL").await.unwrap();
+        assert_eq!(global.now.as_str(), protection.node);
+        assert_eq!(global.all.len(), 1);
+    }
     let auto = engine.api.proxy_nodes("Auto").await.unwrap();
     assert_eq!(auto.kind.as_str(), "Selector");
     assert_eq!(
@@ -114,6 +120,9 @@ async fn protected_traffic(engine: &mut Engine) {
         engine.select_node("Auto", "Other").await.is_err(),
         "Protected groups must reject node changes"
     );
+    for mode in ["rule", "global", "direct"] {
+        assert!(engine.select_mode(mode).await.is_err());
+    }
 }
 
 pub async fn run(engine: &mut Engine, profile: &std::path::Path) {
@@ -175,11 +184,27 @@ pub async fn run(engine: &mut Engine, profile: &std::path::Path) {
             )
             .await
             .unwrap();
+        // Activate the fixture with the mode already saved, so the runtime
+        // file baseline includes it (select_mode itself only patches the API).
+        let mode = if explicit { "global" } else { "rule" };
+        engine.select_mode(mode).await.unwrap();
         engine
             .activate(engine.profiles.last().unwrap().id.clone())
             .await
             .unwrap();
         engine.select_proxy_mode(ProxyMode::System).await.unwrap();
+        if mode == "global" {
+            engine.select_node("GLOBAL", "DIRECT").await.unwrap();
+            let before = std::fs::read(engine.store.root.join("settings.json")).unwrap();
+            let rejected = engine.claude_protection(true).await.unwrap_err();
+            assert!(rejected.to_string().contains("DIRECT"));
+            assert!(engine.settings.claude_protection.is_none());
+            assert_eq!(
+                before,
+                std::fs::read(engine.store.root.join("settings.json")).unwrap()
+            );
+            engine.select_node("GLOBAL", "Main").await.unwrap();
+        }
         // Real URLTest API: release a manual choice after bounded probes at
         // the subscription's own URL, rather than permanently PUT the winner.
         engine.api.select("Auto", "Other").await.unwrap();
@@ -294,6 +319,13 @@ pub async fn run(engine: &mut Engine, profile: &std::path::Path) {
         );
         let state = engine.poll(Scope::Home).await.unwrap();
         assert!(state.running && state.system_proxy && !state.tun);
+        assert_eq!(state.mode, mode);
+        if mode == "global" {
+            assert_eq!(
+                engine.api.proxy_nodes("GLOBAL").await.unwrap().now.as_str(),
+                "Main"
+            );
+        }
         let after = metrics().await;
         for key in ["bootstrap", "proxied_dns", "node_connections", "web"] {
             assert!(

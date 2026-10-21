@@ -620,6 +620,10 @@ pub async fn prepare_protection(
     let mut route_groups = std::collections::BTreeMap::new();
     loop {
         ensure!(
+            mode != "global" || node != "DIRECT",
+            "当前全局出口为 DIRECT，请先选择代理节点再开启 Claude 保护"
+        );
+        ensure!(
             !core::active_route::terminal(&node)
                 && visited.len() < core::active_route::MAX_DEPTH
                 && visited.insert(node.clone()),
@@ -727,6 +731,76 @@ pub fn android_safe_config(raw: &str) -> Result<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[tokio::test]
+    async fn protection_checks_the_actual_global_chain_and_rejects_nested_direct() {
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+        for (mode, global, nested, allowed) in [
+            ("global", "DIRECT", "Node", false),
+            ("global", "Main", "DIRECT", false),
+            ("global", "Main", "Node", true),
+            ("rule", "DIRECT", "Node", true),
+        ] {
+            let proxies = json!({
+                "GLOBAL":{"type":"Selector","now":global,"all":["DIRECT","Main"]},
+                "Main":{"type":"URLTest","now":nested,"all":["DIRECT","Node"]},
+                "DIRECT":{"type":"Direct"},
+                "Node":{"type":"Trojan"}
+            });
+            let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+            let port = listener.local_addr().unwrap().port();
+            let server = tokio::spawn(async move {
+                loop {
+                    let (mut stream, _) = listener.accept().await.unwrap();
+                    let mut request = Vec::new();
+                    while !request.ends_with(b"\r\n\r\n") {
+                        let mut chunk = [0; 512];
+                        let count = stream.read(&mut chunk).await.unwrap();
+                        assert!(count > 0 && request.len() + count <= 8192);
+                        request.extend_from_slice(&chunk[..count]);
+                    }
+                    let request = String::from_utf8_lossy(&request);
+                    assert!(request.starts_with("GET "));
+                    let path = request.split_whitespace().nth(1).unwrap();
+                    let body = if path == "/proxies" {
+                        json!({"proxies":proxies}).to_string()
+                    } else {
+                        proxies[path.strip_prefix("/proxies/").unwrap()].to_string()
+                    };
+                    stream.write_all(format!(
+                        "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+                        body.len(), body
+                    ).as_bytes()).await.unwrap();
+                }
+            });
+            let settings = Settings {
+                active_profile: Some(uuid::Uuid::new_v4().to_string()),
+                run_mode: mode.into(),
+                controller_port: port,
+                ..Default::default()
+            };
+            let result = prepare_protection(
+                &Api::new(&settings).unwrap(),
+                &settings,
+                "proxies: []\nrules: ['MATCH,Main']\n",
+                false,
+            )
+            .await;
+            server.abort();
+            if allowed {
+                let saved = result.unwrap();
+                assert_eq!(saved.node, "Node");
+                assert_eq!(saved.run_mode(), mode);
+                assert_eq!(
+                    saved.locked_groups.get("Main").map(String::as_str),
+                    Some("Node")
+                );
+            } else {
+                assert!(result.unwrap_err().to_string().contains("DIRECT"));
+                assert!(settings.claude_protection.is_none());
+            }
+        }
+    }
+
     #[test]
     fn normal_native_status_is_not_an_error_and_vpn_errors_do_not_hide_the_core() {
         for value in [

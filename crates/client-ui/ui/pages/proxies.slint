@@ -1,6 +1,7 @@
+import { PageSurface, Disclosure } from "../components/motion.slint";
 import { ScrollView } from "std-widgets.slint";
 import { Theme } from "../theme/palette.slint";
-import { UiData, UiActions, Intent, NodeItem } from "../state.slint";
+import { UiData, UiActions, Intent, NodeItem, NodePair } from "../state.slint";
 import { Label, Caption, Heading, Chevron, ContentPanel, RowPanel, ActionButton, Badge, Field, Select } from "../components/controls.slint";
 
 component NodeCard inherits ContentPanel {
@@ -20,7 +21,7 @@ component NodeCard inherits ContentPanel {
         ActionButton { text: "测速"; enabled: UiData.running && !UiData.working; clicked => { UiActions.dispatch(Intent.node-delay, root.node.name, ""); } }
     }
 }
-export component ProxiesPage inherits Rectangle {
+export component ProxiesPage inherits PageSurface {
     ScrollView {
         x: 0px; width: parent.width + Theme.content-gap;
         VerticalLayout {
@@ -30,30 +31,45 @@ export component ProxiesPage inherits Rectangle {
                 Field { placeholder: "搜索节点或代理组"; focus-id: "page-search"; text <=> UiData.query; edited(value) => { UiActions.dispatch(Intent.query, value, ""); } }
                 Select { width: 172px; horizontal-stretch: 0; options: ["延迟从低到高", "延迟从高到低", "名称排序"]; value: self.options[UiData.node-sort]; selected(index, value) => { UiActions.dispatch(Intent.node-sort, "" + index, ""); } }
             }
-            for group in UiData.groups: ContentPanel {
+            for group in UiData.groups: group-card := ContentPanel {
+                property <[NodePair]> closing-nodes;
+                property <string> closing-page;
+                property <bool> expanded: group.expanded;
+                property <bool> mounted: group-body.mounted;
+                changed mounted => { if !self.mounted { self.closing-nodes = []; self.closing-page = ""; } }
+                changed expanded => { if self.expanded { self.closing-nodes = []; self.closing-page = ""; } }
+                callback toggle();
+                toggle => {
+                    if group.expanded { self.closing-nodes = group.nodes; self.closing-page = group.page; }
+                    // Persist expansion immediately. Only the view retains the
+                    // last model briefly; leaving the page releases it too.
+                    UiActions.dispatch(Intent.toggle-group, group.id, "");
+                }
                 HorizontalLayout { cross-axis-alignment: center; spacing: Theme.content-gap;
                     header := Rectangle {
                         horizontal-stretch: 1; height: max(Theme.control-height, heading.preferred-height);
                         heading := HorizontalLayout { spacing: Theme.content-gap; cross-axis-alignment: center;
                             VerticalLayout { spacing: 4px; Heading { text: group.title; } Caption { text: group.detail; } }
                             Badge { text: group.current; width-limit: root.width * 0.28; }
-                            Chevron { expanded: group.expanded; }
+                            Chevron { expanded: group-card.expanded; }
                         }
-                        TouchArea { mouse-cursor: pointer; clicked => { UiActions.dispatch(Intent.toggle-group, group.id, ""); } }
+                        TouchArea { mouse-cursor: pointer; clicked => { group-card.toggle(); } }
                     }
-                    ActionButton { text: group.testing ? "测速中…" : "全部测速"; enabled: UiData.running && !UiData.working && !group.testing; clicked => { UiActions.dispatch(Intent.group-delay, group.id, ""); } }
+                    ActionButton { text: group.testing ? "测速中…" : "全部测速"; busy: group.testing; enabled: UiData.running && !UiData.working && !group.testing; clicked => { UiActions.dispatch(Intent.group-delay, group.id, ""); } }
                 }
-                if group.expanded: VerticalLayout {
-                    spacing: Theme.page-gap;
-                    for pair in group.nodes: HorizontalLayout { cross-axis-alignment: center; spacing: Theme.page-gap;
-                        NodeCard { node: pair.left; }
-                        if pair.right.valid: NodeCard { node: pair.right; }
-                        if !pair.right.valid: Rectangle { horizontal-stretch: 1; }
-                    }
-                    HorizontalLayout { cross-axis-alignment: center; spacing: Theme.content-gap;
-                        Caption { text: group.page; }
-                        ActionButton { text: "上一页"; enabled: group.previous; clicked => { UiActions.dispatch(Intent.group-page, group.id, "false"); } }
-                        ActionButton { text: "下一页"; enabled: group.next; clicked => { UiActions.dispatch(Intent.group-page, group.id, "true"); } }
+                group-body := Disclosure { expanded: group-card.expanded;
+                    if group-body.mounted: VerticalLayout {
+                        spacing: Theme.page-gap;
+                        for pair in (group.expanded ? group.nodes : group-card.closing-nodes): HorizontalLayout { cross-axis-alignment: center; spacing: Theme.page-gap;
+                            NodeCard { node: pair.left; }
+                            if pair.right.valid: NodeCard { node: pair.right; }
+                            if !pair.right.valid: Rectangle { horizontal-stretch: 1; }
+                        }
+                        HorizontalLayout { cross-axis-alignment: center; spacing: Theme.content-gap;
+                            Caption { text: group.expanded ? group.page : group-card.closing-page; }
+                            ActionButton { text: "上一页"; enabled: group.previous; clicked => { UiActions.dispatch(Intent.group-page, group.id, "false"); } }
+                            ActionButton { text: "下一页"; enabled: group.next; clicked => { UiActions.dispatch(Intent.group-page, group.id, "true"); } }
+                        }
                     }
                 }
             }

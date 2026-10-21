@@ -274,6 +274,7 @@ impl App {
         set!(get_ready, set_ready, self.engine.is_some());
         set!(get_running, set_running, self.snapshot.running);
         set!(get_working, set_working, self.working);
+        set!(get_geo_updating, set_geo_updating, self.geo_updating);
         set!(get_exiting, set_exiting, self.exiting);
         set!(get_dark, set_dark, self.dark);
         set!(get_accent, set_accent, self.settings.accent_color as i32);
@@ -1034,7 +1035,7 @@ impl App {
                     kind = 7;
                     let wait = self.claude.protection_wait();
                     data.set_modal_title("开启 Claude 保护？".into());
-                    data.set_modal_description("将使用当前具体节点，启用 TUN、严格路由、IPv6 接管、UDP、广泛规则、加密 DNS 与实时异常连接拦截。\n\n这些设置可能影响其他应用、国内网站与内网服务；节点故障时相关解析也可能失败。节点域名沿用原节点 DNS 在本地解析；公网域名通过保护节点使用加密 DNS，局域网名称保留本地解析。\n\n原代理模式、DNS、UDP、规则和节点选择会保存；重启后仍保留，关闭保护后恢复。\n\n不能保证消除所有地区线索或满足服务的账号资格要求。".into());
+                    data.set_modal_description("将锁定当前具体节点和运行模式（规则或全局），启用 TUN、严格路由、IPv6 接管、UDP、广泛规则、加密 DNS 与实时异常连接拦截。全局出口为 DIRECT 时无法开启；直连模式下将使用规则模式。\n\n这些设置可能影响其他应用、国内网站与内网服务；节点故障时相关解析也可能失败。节点域名沿用原节点 DNS 在本地解析；公网域名通过保护节点使用加密 DNS，局域网名称保留本地解析。\n\n原代理模式、DNS、UDP、规则和节点选择会保存；重启后仍保留，关闭保护后恢复。\n\n不能保证消除所有地区线索或满足服务的账号资格要求。".into());
                     data.set_modal_accept(if wait == 0 {
                         "开启并重新检测".into()
                     } else {

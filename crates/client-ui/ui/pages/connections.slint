@@ -1,3 +1,4 @@
+import { PageSurface } from "../components/motion.slint";
 import { ScrollView } from "std-widgets.slint";
 import { Theme } from "../theme/palette.slint";
 import { UiData, UiActions, Intent } from "../state.slint";
@@ -32,7 +33,7 @@ component SortHeading inherits Rectangle {
     }
     TouchArea { mouse-cursor: pointer; clicked => { UiActions.dispatch(Intent.connection-sort, root.field, ""); } }
 }
-export component ConnectionsPage inherits Rectangle {
+export component ConnectionsPage inherits PageSurface {
     property <string> sort-field: UiData.connection-sort;
     property <bool> sort-descending: UiData.descending;
     property <length> available: root.width - 24px - 48px - 72px;

@@ -1,8 +1,11 @@
 // The production component, with isolated example values for the Rust-free viewer.
 import { AppWindow } from "app.slint";
 import { UiData } from "state.slint";
+import { Motion } from "components/motion.slint";
 
 export component Preview inherits AppWindow {
+    in-out property <bool> preview-motion;
+    changed preview-motion => { Motion.enabled = root.preview-motion; }
     in-out property <int> preview-page <=> UiData.page;
     in-out property <bool> preview-dark <=> UiData.dark;
     in-out property <int> preview-text-scale <=> UiData.text-scale;
@@ -26,7 +29,8 @@ export component Preview inherits AppWindow {
         }
     }
     init => {
-        UiData.version = "0.6.0";
+        Motion.enabled = root.preview-motion;
+        UiData.version = "0.6.1";
         UiData.ready = true; UiData.running = true;
         UiData.profile = "我的订阅"; UiData.node = "德国 01 · IPv6";
         UiData.download-rate = "1.24 MiB/s"; UiData.upload-rate = "28.6 KiB/s";

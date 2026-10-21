@@ -1,9 +1,11 @@
+import { PageSurface, Presence } from "../../components/motion.slint";
 import { MobileTypography } from "typography.slint";
 import { Theme, AccentPalette } from "../../theme/palette.slint";
 import { MobileData, MobileView, MobileActions, MobileIntent } from "state.slint";
-import { MText, MSmall, MHeading, MParagraph, MCard, MButton, MRow, MDivider, MField, MSelect, MTag, MScroll } from "controls.slint";
+import { MText, MSmall, MHeading, MParagraph, MCard, MButton, MRow, MDivider, MField, MSelect, MTag, MScroll, MCopyButton } from "controls.slint";
 
-export component MobileDetails inherits Rectangle {
+export component MobileDetails inherits PageSurface {
+    motion-revision: MobileView.detail;
     VerticalLayout { spacing: MobileTypography.gap;
         MScroll { VerticalLayout { width: root.width; alignment: start; spacing: MobileTypography.gap; padding-bottom: MobileTypography.padding;
             if MobileView.detail == 5: MCard {
@@ -82,8 +84,8 @@ export component MobileDetails inherits Rectangle {
             }
         } }
         if MobileView.detail == 5 || MobileView.detail == 10: HorizontalLayout { spacing: MobileTypography.small-gap;
-            MButton { text: MobileView.detail == 5 ? "复制详情" : "复制全文";
-                clicked => { MobileActions.request(MobileIntent.copy, MobileView.detail == 10 ? MobileView.log-message : "connection:" + MobileView.selected-id, ""); }
+            MCopyButton { label: MobileView.detail == 5 ? "复制详情" : "复制全文";
+                value: MobileView.detail == 10 ? MobileView.log-message : "connection:" + MobileView.selected-id;
             }
             MButton { text: "关闭"; clicked => { MobileView.back(); } }
         }
@@ -102,65 +104,76 @@ export component MobileDetails inherits Rectangle {
 
 export component MobileModal inherits Rectangle {
     in property <bool> centered;
+    presence := Presence { open: MobileView.modal; }
+    visible: presence.mounted;
     in-out property <int> seconds: 3;
-    property <int> kind: MobileView.detail;
-    changed kind => { root.seconds = 3; }
-    background: #00000066;
-    init => { modal-keys.focus(); }
-    TouchArea { }
-    modal-keys := FocusScope {
-        width: parent.width; height: parent.height;
-        key-pressed(event) => {
-            if event.text == Key.Escape {
-                MobileView.detail = MobileView.detail == 12 ? MobileView.pending-detail : 0; return accept;
-            }
-            return reject;
-        }
-        Timer { running: MobileView.detail == 8 && root.seconds > 0; interval: 1s; triggered => { root.seconds -= 1; } }
-        dialog := Rectangle {
-            width: min(parent.width - 32px - MobileView.safe-left - MobileView.safe-right, 480px);
-            height: content.preferred-height;
-            x: (parent.width - self.width) / 2;
-            y: root.centered ? (parent.height - self.height) / 2 : max(MobileView.safe-top, parent.height - self.height - MobileView.safe-bottom - 12px);
-            background: Theme.surface; border-radius: 12px; border-width: 1px; border-color: Theme.line;
-            content := VerticalLayout { alignment: start; spacing: MobileTypography.padding; padding: 24px;
-                MHeading { text: MobileView.detail == 4 ? "删除此订阅？" : MobileView.detail == 8 ? "开启 Claude 保护？" : MobileView.detail == 12 ? "放弃未保存的修改？" : "强调色"; }
-                if MobileView.detail != 11: MParagraph {
-                    text: MobileView.detail == 4 ? "将删除“" + MobileView.profile-name + "”及其配置文件。此操作无法撤销。"
-                        : MobileView.detail == 8 ? "将固定当前节点，启用 VPN、广泛规则、代理 DNS 与实时拦截。可能影响其他应用与国内网站；关闭后恢复原状态。"
-                        : "尚有未保存的内容，离开后将丢弃本次编辑。";
+    property <int> source-kind: MobileView.detail;
+    property <int> kind;
+    changed source-kind => { if MobileView.modal { root.kind = root.source-kind; root.seconds = 3; } }
+    init => { root.kind = MobileView.detail; }
+    if presence.mounted: Rectangle {
+        opacity: presence.progress;
+        property <bool> opened: MobileView.modal;
+        changed opened => { if self.opened { modal-keys.focus(); } }
+        background: #00000066;
+        init => { modal-keys.focus(); }
+        TouchArea { }
+        modal-keys := FocusScope {
+            enabled: MobileView.modal;
+            width: parent.width; height: parent.height;
+            key-pressed(event) => {
+                if event.text == Key.Escape {
+                    MobileView.detail = root.kind == 12 ? MobileView.pending-detail : 0; return accept;
                 }
-                if MobileView.detail == 11: VerticalLayout { spacing: MobileTypography.small-gap;
-                    for row in [0, 1, 2]: HorizontalLayout { spacing: MobileTypography.small-gap;
-                        for column in [0, 1]: MButton { modal-control: true; text: AccentPalette.accent-names[row * 2 + column]; selected: Theme.accent-index == row * 2 + column;
-                            show-swatch: true; swatch: Theme.dark ? AccentPalette.dark-colors[row * 2 + column] : AccentPalette.accent-colors[row * 2 + column];
-                            clicked => { Theme.accent-index = row * 2 + column; MobileActions.request(MobileIntent.accent, "" + Theme.accent-index, ""); }
+                return reject;
+            }
+            Timer { running: MobileView.modal && root.kind == 8 && root.seconds > 0; interval: 1s; triggered => { root.seconds -= 1; } }
+            dialog := Rectangle {
+                width: min(parent.width - 32px - MobileView.safe-left - MobileView.safe-right, 480px);
+                height: content.preferred-height;
+                x: (parent.width - self.width) / 2;
+                y: root.centered ? (parent.height - self.height) / 2 : max(MobileView.safe-top, parent.height - self.height - MobileView.safe-bottom - 12px) + (1 - presence.progress) * (root.centered ? 8px : 20px);
+                background: Theme.surface; border-radius: 12px; border-width: 1px; border-color: Theme.line;
+                content := VerticalLayout { alignment: start; spacing: MobileTypography.padding; padding: 24px;
+                    MHeading { text: root.kind == 4 ? "删除此订阅？" : root.kind == 8 ? "开启 Claude 保护？" : root.kind == 12 ? "放弃未保存的修改？" : "强调色"; }
+                    if root.kind != 11: MParagraph {
+                        text: root.kind == 4 ? "将删除“" + MobileView.profile-name + "”及其配置文件。此操作无法撤销。"
+                            : root.kind == 8 ? "将锁定当前节点和运行模式（规则或全局），启用 VPN、广泛规则、代理 DNS 与实时拦截。全局出口为 DIRECT 时无法开启；直连模式下将使用规则模式。可能影响其他应用与国内网站；关闭后恢复原状态。"
+                            : "尚有未保存的内容，离开后将丢弃本次编辑。";
+                    }
+                    if root.kind == 11: VerticalLayout { spacing: MobileTypography.small-gap;
+                        for row in [0, 1, 2]: HorizontalLayout { spacing: MobileTypography.small-gap;
+                            for column in [0, 1]: MButton { modal-control: true; text: AccentPalette.accent-names[row * 2 + column]; selected: Theme.accent-index == row * 2 + column;
+                                show-swatch: true; swatch: Theme.dark ? AccentPalette.dark-colors[row * 2 + column] : AccentPalette.accent-colors[row * 2 + column];
+                                clicked => { Theme.accent-index = row * 2 + column; MobileActions.request(MobileIntent.accent, "" + Theme.accent-index, ""); }
+                            }
                         }
                     }
-                }
-                if MobileView.detail != 11: MButton {
-                    modal-control: true; primary: MobileView.detail == 8; danger: MobileView.detail == 4 || MobileView.detail == 12;
-                    enabled: MobileView.detail != 8 || root.seconds == 0;
-                    text: MobileView.detail == 4 ? "删除订阅" : MobileView.detail == 12 ? "放弃修改"
-                        : root.seconds > 0 ? "开启保护（" + root.seconds + " 秒）" : "开启保护";
-                    clicked => {
-                        if MobileView.detail == 4 { MobileActions.request(MobileIntent.delete-profile, MobileView.selected-id, ""); }
-                        else if MobileView.detail == 8 {
-                            MobileActions.request(MobileIntent.claude-protection, "true", "");
-                            MobileView.detail = 0;
-                        }
-                        else {
-                            MobileView.draft-dirty = false;
-                            if MobileView.pending-detail == 0 { MobileActions.request(MobileIntent.rule-discard, "", ""); }
-                            if MobileView.pending-page >= 0 { MobileView.navigate(MobileView.pending-page); }
-                            MobileView.pending-page = -1; MobileView.detail = 0;
+                    if root.kind != 11: MButton {
+                        modal-control: true; primary: root.kind == 8; danger: root.kind == 4 || root.kind == 12;
+                        enabled: root.kind != 8 || root.seconds == 0;
+                        text: root.kind == 4 ? "删除订阅" : root.kind == 12 ? "放弃修改"
+                            : root.seconds > 0 ? "开启保护（" + root.seconds + " 秒）" : "开启保护";
+                        clicked => {
+                            if root.kind == 4 { MobileActions.request(MobileIntent.delete-profile, MobileView.selected-id, ""); }
+                            else if root.kind == 8 {
+                                MobileActions.request(MobileIntent.claude-protection, "true", "");
+                                MobileView.detail = 0;
+                            }
+                            else {
+                                MobileView.draft-dirty = false;
+                                if MobileView.pending-detail == 0 { MobileActions.request(MobileIntent.rule-discard, "", ""); }
+                                if MobileView.pending-page >= 0 { MobileView.navigate(MobileView.pending-page); }
+                                MobileView.pending-page = -1; MobileView.detail = 0;
+                            }
                         }
                     }
-                }
-                MButton { modal-control: true; text: MobileView.detail == 11 ? "完成" : MobileView.detail == 12 ? "继续编辑" : "取消";
-                    clicked => { MobileView.detail = MobileView.detail == 12 ? MobileView.pending-detail : 0; }
+                    MButton { modal-control: true; text: root.kind == 11 ? "完成" : root.kind == 12 ? "继续编辑" : "取消";
+                        clicked => { MobileView.detail = root.kind == 12 ? MobileView.pending-detail : 0; }
+                    }
                 }
             }
         }
+        if !MobileView.modal: TouchArea { }
     }
 }

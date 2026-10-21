@@ -22,7 +22,7 @@ static EVENTS: Mutex<Option<mpsc::Sender<String>>> = Mutex::new(None);
 static AUTHORIZATION_REQUEST: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
 // Also included in exported diagnostics. Contains view counts/status, never URLs or secrets.
 static PRESENTATION: Mutex<String> = Mutex::new(String::new());
-static FIRST_APPEARANCE: Mutex<Option<bool>> = Mutex::new(None);
+static FIRST_APPEARANCE: Mutex<Option<(bool, i32)>> = Mutex::new(None);
 
 struct AndroidHost {
     vm: JavaVM,
@@ -97,8 +97,11 @@ pub extern "system" fn Java_org_clashofrust_android_MainActivity_nativeDiagnosti
 ) -> jni::sys::jstring {
     let snapshot = PRESENTATION.lock().map(|s| s.clone()).unwrap_or_default();
     let mut snapshot: Value = serde_json::from_str(&snapshot).unwrap_or_else(|_| json!({}));
-    if let Ok(first) = FIRST_APPEARANCE.lock() {
-        snapshot["startup_dark"] = json!(*first);
+    if let Ok(first) = FIRST_APPEARANCE.lock()
+        && let Some((dark, accent)) = *first
+    {
+        snapshot["startup_dark"] = json!(dark);
+        snapshot["startup_accent"] = json!(accent);
     }
     env.new_string(snapshot.to_string())
         .map(JString::into_raw)
@@ -140,6 +143,7 @@ struct State {
     query: String,
     selected: String,
     notice: String,
+    copied: (i32, Arc<str>),
     logs: VecDeque<(String, String)>,
     log_level: String,
     connection_sort: String,
@@ -187,6 +191,13 @@ fn android_main(app: slint::android::AndroidApp) {
         log::error!("Android startup: {error:#}");
     }
 }
+fn accent_index(color: config::AccentColor) -> i32 {
+    config::AccentColor::ALL
+        .iter()
+        .position(|candidate| *candidate == color)
+        .unwrap_or(0) as i32
+}
+
 fn run(app: slint::android::AndroidApp) -> Result<()> {
     let native = Arc::new(AndroidHost::new(&app)?);
     let root = native.directory("getFilesDir")?.join("client");
@@ -198,8 +209,11 @@ fn run(app: slint::android::AndroidApp) -> Result<()> {
     let theme = window.global::<Theme>();
     theme.set_appearance(appearance["mode"].as_i64().unwrap_or(2) as i32);
     theme.set_system_dark(appearance["dark"].as_bool().unwrap_or(false));
+    theme.set_accent_index(accent_index(
+        serde_json::from_value(appearance["accent_color"].clone()).unwrap_or_default(),
+    ));
     if let Ok(mut first) = FIRST_APPEARANCE.lock() {
-        *first = Some(theme.get_dark());
+        *first = Some((theme.get_dark(), theme.get_accent_index()));
     }
     if let Some(size) = appearance["font_sizes"].get(6).and_then(Value::as_f64) {
         theme.set_text_scale(size as f32 / 16.);
@@ -318,6 +332,7 @@ async fn run_loop(
         query: String::new(),
         selected: String::new(),
         notice: String::new(),
+        copied: Default::default(),
         logs: VecDeque::new(),
         log_level: "全部等级".into(),
         connection_sort: "下载速度 ↓".into(),
@@ -1294,6 +1309,7 @@ async fn handle(state: &mut State, request: Request) -> Result<()> {
         MobileIntent::ConnectionSort => state.connection_sort = a,
         MobileIntent::ConnectionDetail => state.selected = a,
         MobileIntent::Copy => {
+            let key = a.clone();
             let text = if let Some(id) = a.strip_prefix("connection:") {
                 let c = session
                     .connections
@@ -1317,6 +1333,7 @@ async fn handle(state: &mut State, request: Request) -> Result<()> {
                 a
             };
             session.native.request(json!({"op":"copy","text":text}))?;
+            state.copied = (state.copied.0.wrapping_add(1), key.into());
             state.notice = "已复制".into();
         }
         MobileIntent::LogLevel => state.log_level = a,
@@ -1603,6 +1620,7 @@ struct GroupView {
     testing: bool,
 }
 struct Projection {
+    copied: (i32, Arc<str>),
     page: i32,
     settings: config::Settings,
     running: bool,
@@ -1915,6 +1933,7 @@ fn project(state: &State) -> Projection {
         });
     }
     Projection {
+        copied: state.copied.clone(),
         page: state.page,
         settings: s.settings.clone(),
         running: s.running,
@@ -1993,6 +2012,11 @@ fn apply(ui: &AndroidWindow, p: Projection) {
         return;
     }
     let data = ui.global::<MobileData>();
+    let view = ui.global::<MobileView>();
+    if view.get_copy_revision() != p.copied.0 {
+        view.set_copy_value(p.copied.1.as_ref().into());
+        view.set_copy_revision(p.copied.0);
+    }
     data.set_working(false);
     data.set_geo_updating(p.geo_updating);
     data.set_delay_busy(p.delay_busy);
@@ -2153,11 +2177,13 @@ fn apply(ui: &AndroidWindow, p: Projection) {
         ui.global::<MobileView>().set_interval_dirty(false);
     }
     data.set_mode(
-        match if p.settings.claude_protection.is_some() {
-            "rule"
-        } else {
-            p.settings.run_mode.as_str()
-        } {
+        match p
+            .settings
+            .claude_protection
+            .as_ref()
+            .map_or(p.settings.run_mode.as_str(), |protection| {
+                protection.run_mode()
+            }) {
             "global" => 1,
             "direct" => 2,
             _ => 0,
@@ -2397,12 +2423,7 @@ fn apply(ui: &AndroidWindow, p: Projection) {
         theme.set_text_scale(1.);
         typography.set_system_fonts(false);
     }
-    theme.set_accent_index(
-        config::AccentColor::ALL
-            .iter()
-            .position(|c| c == &p.settings.accent_color)
-            .unwrap_or(0) as i32,
-    );
+    theme.set_accent_index(accent_index(p.settings.accent_color));
     let dark = theme.get_dark();
     // Read back the actual Slint globals; diagnostics must reveal stale presentation too.
     if let Ok(mut snapshot) = PRESENTATION.lock() {
@@ -2412,7 +2433,7 @@ fn apply(ui: &AndroidWindow, p: Projection) {
         *snapshot = json!({"core_running":data.get_core_running(),"vpn":data.get_vpn_connected(),
             "page":ui.get_current_page(),"detail":ui.get_current_detail(),
             "groups":data.get_groups().row_count(),"profiles":data.get_profiles().row_count(),
-            "logs":data.get_logs().row_count(),"dark":dark,"text_scale":theme.get_text_scale(),
+            "logs":data.get_logs().row_count(),"dark":dark,"accent":theme.get_accent_index(),"text_scale":theme.get_text_scale(),
             "body_size":typography.invoke_font_size(16),
             "width":size.width as f32/scale,"height":size.height as f32/scale,"scale":scale,
             "safe_top":view.get_safe_top(),"safe_bottom":view.get_safe_bottom(),

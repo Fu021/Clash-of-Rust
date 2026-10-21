@@ -1,3 +1,4 @@
+import { PageSurface, ProgressTrack } from "../components/motion.slint";
 import { ScrollView } from "std-widgets.slint";
 import { Theme } from "../theme/palette.slint";
 import { UiData, UiActions, Intent } from "../state.slint";
@@ -17,7 +18,8 @@ component ResultEntry inherits ContentPanel {
         Caption { text: "查看详情 →"; color: Theme.accent; horizontal-alignment: right; }
     }
 }
-export component AiCheckPage inherits Rectangle {
+export component AiCheckPage inherits PageSurface {
+    motion-revision: UiData.claude-filter + 1;
     ScrollView {
         x: 0px; width: parent.width + Theme.content-gap;
         VerticalLayout {
@@ -31,14 +33,7 @@ export component AiCheckPage inherits Rectangle {
                     Toggle { enabled: !UiData.working && !UiData.exiting && !UiData.claude-busy && (UiData.running || UiData.protected); checked: UiData.protected; toggled(value) => { UiActions.dispatch(Intent.claude-protection, value ? "true" : "false", ""); } }
                 }
                 Caption { text: UiData.protection-pending ? UiData.protection-status : UiData.protected ? "保护节点：" + UiData.protection-node : "一键启用 TUN、广泛规则、代理 DNS 与实时拦截"; }
-                if UiData.protection-pending: Rectangle {
-                    height: 3px; background: Theme.subtle-line; clip: true;
-                    Rectangle {
-                        height: parent.height; width: parent.width * 0.25;
-                        x: (parent.width + self.width) * mod(animation-tick(), 1400ms) / 1400ms - self.width;
-                        background: Theme.accent;
-                    }
-                }
+                if UiData.protection-pending: ProgressTrack { indeterminate: true; track: Theme.subtle-line; fill: Theme.accent; }
                 Caption { text: "可能影响其他应用与国内网站；关闭后恢复原状态。"; color: Theme.warning; }
             }
             HorizontalLayout { cross-axis-alignment: center; spacing: Theme.content-gap;
@@ -47,9 +42,7 @@ export component AiCheckPage inherits Rectangle {
                 ActionButton { text: "导出报告"; enabled: UiData.ready; clicked => { UiActions.dispatch(Intent.claude-export, "", ""); } }
                 ActionButton { text: UiData.claude-busy ? "取消" : "开始检测"; primary: true; enabled: UiData.running; clicked => { UiActions.dispatch(UiData.claude-busy ? Intent.claude-cancel : Intent.claude-start, "", ""); } }
             }
-            if UiData.claude-busy: Rectangle { height: 3px; background: Theme.subtle-line;
-                Rectangle { x: 0px; y: 0px; width: parent.width * UiData.claude-progress; height: parent.height; background: Theme.accent; }
-            }
+            if UiData.claude-busy: ProgressTrack { value: UiData.claude-progress; track: Theme.subtle-line; fill: Theme.accent; }
             if UiData.claude-status != "": Paragraph { text: UiData.claude-status; font-size: Theme.detail-size; color: UiData.claude-error ? Theme.danger : Theme.secondary; }
             if UiData.claude-audit != "": Caption { text: UiData.claude-audit; }
             if UiData.claude-guard != "": Caption { text: UiData.claude-guard; }

@@ -1,3 +1,4 @@
+import { PageSurface } from "../../components/motion.slint";
 import { MobileTypography } from "../shared/typography.slint";
 import { MobileData, MobileView, MobileActions, MobileIntent } from "../shared/state.slint";
 import { AndroidData, AndroidActions, AndroidIntent } from "state.slint";
@@ -41,13 +42,13 @@ component AndroidAbout inherits MCard {
     MSmall { text: AndroidData.update-status; wrap: word-wrap; }
     if AndroidData.update-busy: MProgress { value: AndroidData.update-progress; indeterminate: AndroidData.update-progress == 0; }
     HorizontalLayout { spacing: MobileTypography.small-gap;
-        MButton { text: "检查更新"; enabled: !AndroidData.update-busy; clicked => { MobileActions.request(MobileIntent.check-update, "", ""); } }
+        MButton { text: "检查更新"; busy: AndroidData.update-busy; enabled: !AndroidData.update-busy; clicked => { MobileActions.request(MobileIntent.check-update, "", ""); } }
         if AndroidData.update-available: MButton { text: "安装更新"; primary: true; enabled: !AndroidData.update-busy;
             clicked => { MobileActions.request(MobileIntent.install-update, "", ""); }
         }
     }
 }
-export component AndroidSettings inherits Rectangle {
+export component AndroidSettings inherits PageSurface {
     MScroll {
         content-y <=> MobileView.settings-scroll-y;
         changed content-height => { MobileView.settings-content-height = self.content-height; }

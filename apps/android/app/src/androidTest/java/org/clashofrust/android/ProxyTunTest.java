@@ -62,6 +62,10 @@ public class ProxyTunTest {
         assertEquals("The first Slint frame used a different theme from saved appearance",
             Appearance.dark(context,Appearance.mode(context)),
             initial.getBoolean("startup_dark"));
+        assertEquals("The first Slint frame must use the saved purple accent instead of default green",
+            2, initial.getInt("startup_accent"));
+        assertEquals("The settings worker must preserve the startup accent",
+            initial.getInt("startup_accent"), initial.getInt("accent"));
         // Assert the real Slint state follows system SP conversion, including
         // Android 14+ nonlinear scaling and a live font-size change.
         try {
@@ -324,6 +328,7 @@ public class ProxyTunTest {
         settings.getParentFile().mkdirs();
         JSONObject saved=settings.isFile()?new JSONObject(new String(java.nio.file.Files.readAllBytes(settings.toPath()),StandardCharsets.UTF_8)):new JSONObject();
         saved.put("theme_mode","dark");
+        saved.put("accent_color","purple");
         java.nio.file.Files.write(settings.toPath(),saved.toString().getBytes(StandardCharsets.UTF_8));
         context.startActivity(new Intent(context, MainActivity.class).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK));
         await("Native UI did not start its core; inspect logcat", CoreBridge::ready);

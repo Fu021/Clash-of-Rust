@@ -1,3 +1,4 @@
+import { PageSurface } from "../components/motion.slint";
 import { UiData, UiActions, Intent } from "../state.slint";
 import { ScrollView } from "std-widgets.slint";
 import { Theme } from "../theme/palette.slint";
@@ -17,7 +18,7 @@ component TrafficMetric inherits Rectangle {
     }
 }
 
-export component HomePage inherits Rectangle {
+export component HomePage inherits PageSurface {
     ScrollView {
         x: 0px;
         width: parent.width + Theme.content-gap;
@@ -50,9 +51,9 @@ export component HomePage inherits Rectangle {
                 HorizontalLayout { cross-axis-alignment: center;
                     spacing: Theme.content-gap;
                     Caption { text: "运行模式"; horizontal-stretch: 1; }
-                    ActionButton { text: "规则"; enabled: UiData.running && !UiData.working; selected: UiData.mode == 0; clicked => { UiActions.dispatch(Intent.mode, "0", ""); } }
-                    ActionButton { text: "全局"; enabled: UiData.running && !UiData.working; selected: UiData.mode == 1; clicked => { UiActions.dispatch(Intent.mode, "1", ""); } }
-                    ActionButton { text: "直连"; enabled: UiData.running && !UiData.working; selected: UiData.mode == 2; clicked => { UiActions.dispatch(Intent.mode, "2", ""); } }
+                    ActionButton { text: "规则"; enabled: UiData.running && !UiData.working && !UiData.protected && !UiData.protection-pending; selected: UiData.mode == 0; clicked => { UiActions.dispatch(Intent.mode, "0", ""); } }
+                    ActionButton { text: "全局"; enabled: UiData.running && !UiData.working && !UiData.protected && !UiData.protection-pending; selected: UiData.mode == 1; clicked => { UiActions.dispatch(Intent.mode, "1", ""); } }
+                    ActionButton { text: "直连"; enabled: UiData.running && !UiData.working && !UiData.protected && !UiData.protection-pending; selected: UiData.mode == 2; clicked => { UiActions.dispatch(Intent.mode, "2", ""); } }
                 }
                 Divider { }
                 HorizontalLayout { cross-axis-alignment: center;

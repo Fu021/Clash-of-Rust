@@ -9,12 +9,24 @@ use std::rc::Rc;
 thread_local! {
     static WINDOW: Rc<MinimalSoftwareWindow> = MinimalSoftwareWindow::new(RepaintBufferType::NewBuffer);
     static INSTALLED: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+    static EPOCH: std::time::Instant = std::time::Instant::now();
+    static ADVANCE: std::cell::Cell<std::time::Duration> = const { std::cell::Cell::new(std::time::Duration::ZERO) };
 }
 struct Headless;
 impl Platform for Headless {
     fn create_window_adapter(&self) -> Result<Rc<dyn WindowAdapter>, PlatformError> {
         Ok(WINDOW.with(Clone::clone))
     }
+    fn duration_since_start(&self) -> std::time::Duration {
+        EPOCH.with(std::time::Instant::elapsed) + ADVANCE.with(std::cell::Cell::get)
+    }
+}
+
+#[cfg(test)]
+pub(super) fn advance(milliseconds: u64) {
+    slint::platform::update_timers_and_animations();
+    ADVANCE.with(|clock| clock.set(clock.get() + std::time::Duration::from_millis(milliseconds)));
+    slint::platform::update_timers_and_animations();
 }
 pub fn initialize(width: u32, height: u32) -> Rc<MinimalSoftwareWindow> {
     INSTALLED.with(|installed| {

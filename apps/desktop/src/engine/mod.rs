@@ -1027,6 +1027,10 @@ impl Engine {
         let mut provider = None;
         let mut route_groups = std::collections::BTreeMap::new();
         loop {
+            ensure!(
+                mode != "global" || node != "DIRECT",
+                "当前全局出口为 DIRECT，请先选择代理节点再开启 Claude 保护"
+            );
             if crate::active_route::terminal(&node)
                 || visited.len() >= crate::active_route::MAX_DEPTH
                 || !visited.insert(node.clone())
@@ -1133,14 +1137,19 @@ impl Engine {
         let mut next: serde_yaml::Value =
             serde_yaml::from_str(&self.profile_payload(&raw, &candidate, id)?)?;
         drop(raw);
-        let desired = if protection.is_some() {
+        let desired = if let Some(protection) = &protection {
+            let mut selectors = previous
+                .as_ref()
+                .map_or_else(Vec::new, |s| s.selectors.clone());
+            if protection.run_mode() == "global" {
+                selectors.retain(|(group, _)| group != "GLOBAL");
+                selectors.push(("GLOBAL".into(), protection.node.clone()));
+            }
             RestartState {
-                mode: "rule".into(),
+                mode: protection.run_mode().into(),
                 tun: true,
                 system_proxy: false,
-                selectors: previous
-                    .as_ref()
-                    .map_or_else(Vec::new, |s| s.selectors.clone()),
+                selectors,
             }
         } else {
             let saved = &old
@@ -1256,7 +1265,7 @@ impl Engine {
         append(
             &self.logs,
             if protection.is_some() {
-                "[客户端] Claude 保护已启用：TUN、规则与代理 DoH；原设置恢复记录已保存"
+                "[客户端] Claude 保护已启用：TUN、模式与节点锁定、代理 DoH；原设置恢复记录已保存"
             } else {
                 "[客户端] Claude 保护已关闭，原代理模式、DNS 与规则已恢复"
             },
@@ -1442,7 +1451,7 @@ impl Engine {
 
     pub async fn select_mode(&mut self, mode: &str) -> Result<()> {
         if self.settings.claude_protection.is_some() {
-            bail!("Claude 保护使用规则模式，请先关闭保护再切换模式");
+            bail!("Claude 保护已锁定当前运行模式，请先关闭保护再切换模式");
         }
         let current: ConfigStatus = self.api.get("configs").await?;
         let settings = Settings {
@@ -1518,7 +1527,7 @@ impl Engine {
         if let Some(protection) = self.settings.claude_protection.clone() {
             let interactive = !std::env::args_os().any(|arg| arg == "--background");
             self.prepare_protection_tun(interactive).await?;
-            self.mode("rule").await?;
+            self.mode(protection.run_mode()).await?;
             self.proxy_mode(ProxyMode::Tun).await?;
             #[cfg(target_os = "macos")]
             self.mac_protection_dns(true).await?;

@@ -1,6 +1,6 @@
 //! The only desktop adapter that knows about Slint or winit.
 use super::*;
-use clash_client_ui::{AppWindow, Intent, Theme, UiActions, UiData, models::ViewModels};
+use clash_client_ui::{AppWindow, Intent, Motion, Theme, UiActions, UiData, models::ViewModels};
 use futures_util::StreamExt;
 use runtime::{Size, native, window};
 use slint::{
@@ -194,12 +194,19 @@ impl native::Host for DesktopHost {
         });
         let mut modifiers = winit::keyboard::ModifiersState::empty();
         let mut first_frame = true;
+        let first_frame_ui = window.as_weak();
         window.window().on_winit_window_event(move |window, event| {
             use winit::event::{ElementState, WindowEvent};
             match event {
                 WindowEvent::RedrawRequested => {
                     if first_frame {
                         first_frame = false;
+                        let restore_motion = first_frame_ui.upgrade().map(|ui| {
+                            let motion = ui.global::<Motion>();
+                            let enabled = motion.get_enabled();
+                            motion.set_enabled(false);
+                            (ui.as_weak(), enabled)
+                        });
                         // The native window only exists once the event loop is
                         // active. Resolve System before its very first paint.
                         if let Some(Some(theme)) = window.with_winit_window(|native| native.theme())
@@ -212,6 +219,15 @@ impl native::Host for DesktopHost {
                                     if let Some((_, ui)) = &host.window {
                                         ui.global::<Theme>().set_system_dark(host.app.system_dark);
                                     }
+                                }
+                            });
+                        }
+                        if let Some((weak, enabled)) = restore_motion {
+                            // The first frame uses the resolved appearance in
+                            // full. Only later user changes should transition.
+                            Timer::single_shot(Duration::from_millis(16), move || {
+                                if let Some(ui) = weak.upgrade() {
+                                    ui.global::<Motion>().set_enabled(enabled);
                                 }
                             });
                         }
@@ -382,7 +398,16 @@ impl native::Host for DesktopHost {
             self.clipboard = arboard::Clipboard::new().ok();
         }
         if let Some(clipboard) = &mut self.clipboard {
-            let _ = clipboard.set_text(text);
+            match clipboard.set_text(text.as_str()) {
+                Ok(()) => {
+                    if let Some((_, window)) = &self.window {
+                        let data = window.global::<UiData>();
+                        data.set_copy_value(text.into());
+                        data.set_copy_revision(data.get_copy_revision().wrapping_add(1));
+                    }
+                }
+                Err(error) => self.app.show_notice(format!("复制失败：{error}"), true),
+            }
         }
     }
     fn focus(&mut self, target: &str) {

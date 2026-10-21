@@ -348,7 +348,7 @@ def main() -> None:
     themes = ["light", "dark"] if args.theme == "both" else [args.theme]
     if args.live:
         fixture = fixtures / "live.json"
-        values = {"preview-page": list(PAGES).index(pages[0])}
+        values = {"preview-page": list(PAGES).index(pages[0]), "preview-motion": True}
         fixture.write_text(json.dumps({**values, "preview-dark": themes[0] == "dark"}))
         subprocess.run([args.viewer, "--auto-reload", "--load-data", str(fixture), str(entry)],
                        cwd=ROOT, env=env, check=True)

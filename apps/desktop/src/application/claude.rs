@@ -948,5 +948,11 @@ mod tests {
         let _ = app.claude_event(Event::Audit(generation, check::audit::Audit::default()));
         assert_eq!(app.settings.claude_protection.as_ref(), Some(&saved));
         assert!(app.claude.audit.is_none() && !app.claude.busy());
+        for mode in ["rule", "global", "direct"] {
+            let _ = app.dispatch(Action::Mode(mode.into()));
+            assert!(app.queued_actions.is_empty());
+            assert!(app.notice.contains("锁定当前运行模式"));
+            assert_eq!(app.settings.claude_protection.as_ref(), Some(&saved));
+        }
     }
 }

@@ -110,8 +110,7 @@ public final class MainActivity extends NativeActivity {
                     getSharedPreferences("vpn", MODE_PRIVATE).edit().putBoolean("desired", data.getBoolean("enabled")).commit();
                     break;
                 case "traffic": TunnelService.updateTraffic(this, data.optString("down"), data.optString("up")); break;
-                case "appearance": return new JSONObject().put("mode",Appearance.mode(this))
-                    .put("dark",Appearance.systemDark(this)).put("font_sizes",systemFontSizes()).toString();
+                case "appearance": return Appearance.startup(this).put("font_sizes",systemFontSizes()).toString();
                 case "system-bars": runOnUiThread(() -> {
                     Appearance.persistSystemMode(this,data.optInt("mode",2));
                     configureSystemBars(data.optBoolean("dark"));
@@ -119,8 +118,16 @@ public final class MainActivity extends NativeActivity {
                 case "install-update": UpdateInstaller.request(this); break;
                 case "copy": {
                     String text = data.getString("text");
-                    runOnUiThread(() -> ((android.content.ClipboardManager)getSystemService(CLIPBOARD_SERVICE))
-                        .setPrimaryClip(ClipData.newPlainText("Clash of Rust", text)));
+                    java.util.concurrent.FutureTask<Void> copied = new java.util.concurrent.FutureTask<>(() -> {
+                        ((android.content.ClipboardManager)getSystemService(CLIPBOARD_SERVICE))
+                            .setPrimaryClip(ClipData.newPlainText("Clash of Rust", text));
+                        return null;
+                    });
+                    if (Looper.myLooper() == Looper.getMainLooper()) copied.run();
+                    else runOnUiThread(copied);
+                    // A queued runnable is not a clipboard acknowledgement.
+                    try { copied.get(3, java.util.concurrent.TimeUnit.SECONDS); }
+                    catch (Exception error) { copied.cancel(false); throw error; }
                     break;
                 }
                 case "pick-file": runOnUiThread(() -> startActivityForResult(

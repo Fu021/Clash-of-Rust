@@ -1,0 +1,111 @@
+// Shared timing and lifecycle. No animation clock is kept alive while idle.
+export global Motion {
+    in-out property <bool> initialized;
+    in-out property <bool> enabled: true;
+    out property <bool> active: initialized && enabled;
+    out property <duration> fast: 100ms;
+    out property <duration> control: 160ms;
+    out property <duration> reveal: 200ms;
+    out property <duration> appearance: 200ms;
+}
+
+// Apply the saved appearance before enabling transitions on subsequent changes.
+export component MotionScope {
+    Timer {
+        interval: 1ms;
+        running: !Motion.initialized;
+        triggered => { self.stop(); Motion.initialized = true; }
+    }
+}
+
+export component Entrance {
+    in property <int> revision;
+    property <bool> revealed;
+    out property <float> progress: self.revealed ? 1 : 0;
+    animate progress { duration: Motion.reveal; easing: ease-out; enabled: Motion.active && self.revealed; }
+    init => {
+        if Motion.active { reveal.restart(); } else { self.revealed = true; }
+    }
+    changed revision => {
+        if Motion.active { self.revealed = false; reveal.restart(); }
+        else { self.revealed = true; }
+    }
+    reveal := Timer { interval: 1ms; triggered => { self.stop(); root.revealed = true; } }
+}
+
+// Keep closing content only while it still has visible pixels. Deriving the
+// lifetime from the animated value also reverses rapid reopen operations,
+// without an extra timer or a callback racing conditional destruction.
+export component Presence {
+    in property <bool> open;
+    out property <float> progress: self.open ? 1 : 0;
+    out property <bool> mounted: self.open || self.progress > 0;
+    animate progress { duration: Motion.reveal; easing: ease-out; enabled: Motion.active; }
+}
+
+// Pages remain conditional: only the newly selected page enters, no page cache.
+export component PageSurface inherits Rectangle {
+    in property <int> motion-revision;
+    entrance := Entrance { revision: root.motion-revision; }
+    opacity: entrance.progress;
+    clip: true;
+    Rectangle {
+        width: parent.width; height: parent.height;
+        y: (1 - entrance.progress) * 6px;
+        @children
+    }
+}
+
+export component Disclosure inherits Rectangle {
+    in property <bool> expanded;
+    out property <bool> mounted: presence.mounted;
+    vertical-stretch: 0;
+    height: body.preferred-height * presence.progress;
+    clip: true;
+    opacity: presence.progress;
+    presence := Presence { open: root.expanded; }
+    body := VerticalLayout {
+        y: 0px; height: self.preferred-height; alignment: start; spacing: 0px;
+        @children
+    }
+    // The fading children cannot receive another operation while collapsing.
+    if !root.expanded && presence.mounted: TouchArea { }
+}
+
+export component ProgressTrack inherits Rectangle {
+    in property <float> value;
+    in property <bool> indeterminate;
+    in property <bool> smooth: true;
+    in property <color> track;
+    in property <color> fill;
+    property <float> displayed: clamp(root.value, 0, 1);
+    animate displayed { duration: Motion.control; easing: ease-out; enabled: Motion.active && root.smooth && root.value > 0; }
+    height: 3px; vertical-stretch: 0; clip: true; background: root.track;
+    animate background { duration: Motion.appearance; enabled: Motion.active; }
+    if !root.indeterminate: Rectangle { width: parent.width * root.displayed; height: parent.height; background: root.fill; }
+    if root.indeterminate: Rectangle {
+        width: parent.width * 0.25; height: parent.height; background: root.fill;
+        x: Motion.active ? (parent.width + self.width) * mod(animation-tick(), 1400ms) / 1400ms - self.width : parent.width * 0.375;
+    }
+}
+
+// Acknowledgements come from the native clipboard, never from the click itself.
+export component CopyFeedback {
+    in property <int> revision;
+    in property <string> acknowledged;
+    in property <string> value;
+    in property <bool> any-value;
+    property <bool> pending;
+    out property <bool> copied;
+    callback requested();
+    requested => { self.pending = true; self.copied = false; reset.stop(); }
+    changed revision => {
+        if self.pending {
+            self.pending = false;
+            self.copied = self.any-value || self.acknowledged == self.value;
+            if self.copied { reset.restart(); }
+        }
+    }
+    changed value => { self.pending = false; self.copied = false; reset.stop(); }
+    reset := Timer { interval: 1s; triggered => { self.stop(); root.copied = false; } }
+}
