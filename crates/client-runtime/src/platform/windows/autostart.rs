@@ -121,6 +121,7 @@ fn xml_escape(text: &str) -> String {
 
 pub(super) struct Backend {
     executable: PathBuf,
+    arguments: String,
     sid: String,
     task_name: String,
     marker_key: String,
@@ -131,7 +132,8 @@ impl Backend {
     pub fn current() -> Result<Self> {
         let sid = user_sid()?;
         Ok(Self {
-            executable: std::env::current_exe()?,
+            executable: crate::platform::autostart_executable()?,
+            arguments: "--background".into(),
             task_name: format!("ClashOfRust-{sid}"),
             sid,
             marker_key: "Software\\ClashOfRust\\Autostart".into(),
@@ -140,7 +142,20 @@ impl Backend {
     }
 
     fn command(&self) -> String {
-        format!("\"{}\" --background", self.executable.display())
+        format!("\"{}\" {}", self.executable.display(), self.arguments)
+    }
+
+    pub fn headless(data: &Path) -> Result<Self> {
+        let mut backend = Self::current()?;
+        backend.executable = std::env::current_exe()?;
+        backend.task_name = format!("ClashOfRustCLI-{}", backend.sid);
+        backend.marker_key = "Software\\ClashOfRust\\CLIStartup".into();
+        backend.run_name = "ClashOfRustCLI".into();
+        let path = data.to_string_lossy();
+        anyhow::ensure!(!path.contains(['\"', '\n', '\r', '\0']), "后台数据目录无效");
+        let path = path.trim_end_matches('\\');
+        backend.arguments = format!("run --data-dir \"{path}\"");
+        Ok(backend)
     }
 
     fn marked(&self) -> bool {
@@ -247,6 +262,7 @@ impl Backend {
     }
 
     fn xml(&self) -> String {
+        let arguments = xml_escape(&self.arguments);
         let sid = xml_escape(&self.sid);
         let executable = xml_escape(&self.executable.to_string_lossy());
         let directory = xml_escape(
@@ -263,7 +279,7 @@ impl Backend {
  <Triggers><LogonTrigger><Enabled>true</Enabled><UserId>{sid}</UserId></LogonTrigger></Triggers>
  <Principals><Principal id="User"><UserId>{sid}</UserId><LogonType>InteractiveToken</LogonType><RunLevel>LeastPrivilege</RunLevel></Principal></Principals>
  <Settings><MultipleInstancesPolicy>IgnoreNew</MultipleInstancesPolicy><DisallowStartIfOnBatteries>false</DisallowStartIfOnBatteries><StopIfGoingOnBatteries>false</StopIfGoingOnBatteries><StartWhenAvailable>true</StartWhenAvailable><RunOnlyIfNetworkAvailable>false</RunOnlyIfNetworkAvailable><Enabled>true</Enabled><ExecutionTimeLimit>PT0S</ExecutionTimeLimit><Priority>5</Priority></Settings>
- <Actions Context="User"><Exec><Command>{executable}</Command><Arguments>--background</Arguments><WorkingDirectory>{directory}</WorkingDirectory></Exec></Actions>
+ <Actions Context="User"><Exec><Command>{executable}</Command><Arguments>{arguments}</Arguments><WorkingDirectory>{directory}</WorkingDirectory></Exec></Actions>
 </Task>"#
         )
     }

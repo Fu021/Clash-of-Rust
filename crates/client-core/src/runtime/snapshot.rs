@@ -1,8 +1,9 @@
 //! Page data shared by clients, with bounded lifetime and explicit release of inactive data.
 use crate::api::{Connections, Proxies, Rules};
+use serde::{Deserialize, Serialize};
 use std::{sync::Arc, time::Instant};
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum Scope {
     Home,
     Proxies,
@@ -13,7 +14,7 @@ pub enum Scope {
     Other,
 }
 
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct Snapshot {
     pub version: String,
     pub mode: String,
@@ -22,6 +23,7 @@ pub struct Snapshot {
     pub system_proxy: bool,
     pub proxies: Proxies,
     pub connections: Connections,
+    #[serde(skip)]
     pub connections_sampled_at: Option<Instant>,
     pub connection_count: usize,
     pub rules: Rules,

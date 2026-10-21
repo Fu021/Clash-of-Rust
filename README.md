@@ -40,6 +40,10 @@ macOS 打开 DMG，将 **Clash of Rust.app** 拖入 **Applications（应用程�
 
 可能造成 Windows Defender 误判查杀，需自行规避。
 
+## 命令行
+
+桌面安装包内附带无界面的 `cor`，支持内核、订阅、节点、规则、连接、日志、IP/Claude 检测与后台服务管理，并与正在运行的窗口共用内核。运行 `cor help` 查看全部命令，`cor help <命令>` 查看参数与示例。安装路径、脚本调用和授权说明见 [CLI 使用文档](docs/cli.md)。
+
 ## 内存占用
 
 实测版本 **0.6.1**（`fa3ceef`）；Ubuntu 22.04 x64、Rust 1.99.1、Release 构建、Slint 软件渲染，mihomo v1.19.32；低强度固定输入为 **100 节点、5 个策略组、1,000 条规则**。DNS 覆盖、IPv6 与 UDP 开启，Claude 保护、快捷规则、系统代理和 TUN 关闭，无业务流量：
@@ -63,10 +67,10 @@ macOS 打开 DMG，将 **Clash of Rust.app** 拖入 **Applications（应用程�
 
 ```sh
 python3 scripts/prepare-resources.py
-cargo build -p clash-of-rust --bins --locked
+cargo build -p clash-of-rust -p clash-cli --bins --locked
 ```
 
-桌面程序和网络助手生成在 `target/debug/`，内核与 Geo 资源生成在 `bundle/`。Windows 可用 `python` 替代 `python3`。需要 Windows EXE、Linux DEB 或 macOS DMG 时，按 [本地打包步骤](docs/workflows.md#本地打包)生成；Android 本地工具链与 APK 构建见 [Android 开发说明](apps/android/README.md#本地构建)。
+桌面程序、`cor` 命令行和网络助手生成在 `target/debug/`，内核与 Geo 资源生成在 `bundle/`。Windows 可用 `python` 替代 `python3`。需要 Windows EXE、Linux DEB 或 macOS DMG 时，按 [本地打包步骤](docs/workflows.md#本地打包)生成；Android 本地工具链与 APK 构建见 [Android 开发说明](apps/android/README.md#本地构建)。
 
 ### 选项二：GitHub Actions
 
@@ -76,7 +80,7 @@ cargo build -p clash-of-rust --bins --locked
 
 ## 开发与发布
 
-Cargo workspace 分为共享业务（`crates/client-core`）、Slint 界面（`crates/client-ui`）与桌面宿主（`apps/desktop`）。Android 使用独立 Slint 原生宿主与系统 VPN，并通过移动桥接（`crates/mobile-ffi`）复用共享业务，见 [Android 开发说明](apps/android/README.md)；iOS 保留独立界面与宿主占位。
+Cargo workspace 分为共享业务（`crates/client-core`）、共享原生运行层（`crates/client-runtime`）、Slint 界面（`crates/client-ui`）、桌面宿主（`apps/desktop`）与命令行（`apps/cli`）。Android 使用独立 Slint 原生宿主与系统 VPN，并通过移动桥接（`crates/mobile-ffi`）复用共享业务，见 [Android 开发说明](apps/android/README.md)；iOS 保留独立界面与宿主占位。
 
 安装 Slint Viewer 后可独立预览界面：
 

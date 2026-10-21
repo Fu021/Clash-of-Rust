@@ -56,7 +56,7 @@ class ArtifactTests(unittest.TestCase):
         header = bytearray(64)
         header[:6] = b'\x7fELF\x02\x01'
         struct.pack_into('<H', header, 18, 62)
-        for path in (payload/'clash-of-rust', payload/'clash-tun-launcher', resources/'mihomo'):
+        for path in (payload/'clash-of-rust', payload/'clash-tun-launcher', payload/'cor', resources/'mihomo'):
             path.write_bytes(header)
         (payload/'LICENSE').write_text('fixture license')
         build.write_json(resources/'core.json', {'exe_sha256': build.sha256(resources/'mihomo')})
@@ -74,7 +74,7 @@ class ArtifactTests(unittest.TestCase):
             tests[name] = 'tests/'+name
         records = {path.relative_to(root/'input').as_posix():
                    {'sha256': build.sha256(path), 'size': path.stat().st_size,
-                    'executable': path.name in tests or path.name in ('clash-of-rust', 'clash-tun-launcher', 'mihomo')}
+                    'executable': path.name in tests or path.name in ('clash-of-rust', 'clash-tun-launcher', 'cor', 'mihomo')}
                    for path in (root/'input').rglob('*') if path.is_file()}
         manifest = {'schema': artifacts.BUILD_SCHEMA, 'commit': self.commit, 'version': self.version, 'system': 'linux',
                     'arch': 'x64', 'profile': 'release', 'cargo_lock_sha256': build.sha256(root/'Cargo.lock'),

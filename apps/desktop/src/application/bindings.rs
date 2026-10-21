@@ -113,7 +113,13 @@ pub(super) fn run(
     if !host.app.exiting
         && let Some(engine) = host.app.engine.clone()
     {
-        let _ = worker.block_on(async { engine.lock().await.stop().await });
+        let _ = worker.block_on(async {
+            let mut engine = engine.lock().await;
+            if !engine.is_remote() {
+                engine.stop().await?;
+            }
+            Ok::<_, anyhow::Error>(())
+        });
     }
     if let Some(error) = host.fatal {
         anyhow::bail!(error);

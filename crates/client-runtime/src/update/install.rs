@@ -147,7 +147,7 @@ pub fn handoff(download: Arc<Downloaded>) -> Result<InstallSession> {
 }
 
 pub fn ensure_installable() -> Result<PathBuf> {
-    let executable = std::env::current_exe().context("无法定位当前客户端")?;
+    let executable = crate::platform::autostart_executable().context("无法定位当前客户端")?;
     #[cfg(windows)]
     if !crate::platform::installed_executable(&executable)? {
         bail!("请先使用 EXE 安装程序安装客户端，再使用自动更新");

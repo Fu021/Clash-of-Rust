@@ -71,7 +71,7 @@ def export_build(system, arch, tests, output, binaries=None):
         payload = root/'payload'
         stage_resources(bundle_directory(system, arch)/'resources', payload, system)
         extension = '.exe' if system == 'windows' else ''
-        for name in ('clash-of-rust', 'clash-tun-launcher'):
+        for name in ('clash-of-rust', 'clash-tun-launcher', 'cor'):
             source = (binaries or ROOT/'target/release')/(name+extension)
             validate_binary_arch(source, system, arch)
             shutil.copy2(source, payload/source.name)
@@ -89,7 +89,7 @@ def export_build(system, arch, tests, output, binaries=None):
             if path.is_file():
                 relative = path.relative_to(root).as_posix()
                 executable = relative.startswith('tests/') or path.name in {
-                    'clash-of-rust'+extension, 'clash-tun-launcher'+extension, 'mihomo'+extension}
+                    'clash-of-rust'+extension, 'clash-tun-launcher'+extension, 'cor'+extension, 'mihomo'+extension}
                 records[relative] = {'sha256': sha256(path), 'size': path.stat().st_size,
                                      'executable': executable}
         manifest = {'schema': BUILD_SCHEMA, 'commit': commit(), 'version': package_version(),
@@ -134,7 +134,7 @@ def verify_build(root, system, arch, expected_commit):
     records = manifest['files']
     extension = '.exe' if system == 'windows' else ''
     required = {'payload/LICENSE', 'payload/clash-of-rust'+extension,
-                'payload/clash-tun-launcher'+extension,
+                'payload/clash-tun-launcher'+extension, 'payload/cor'+extension,
                 'payload/resources/mihomo'+extension,
                 'payload/resources/core.json', 'payload/resources/geodata.json',
                 *(f'payload/resources/{name}' for name in ('GeoIP.dat', 'GeoSite.dat', 'Country.mmdb', 'ASN.mmdb'))}
@@ -157,7 +157,7 @@ def verify_build(root, system, arch, expected_commit):
         if os.name != 'nt':
             path.chmod(0o755 if record['executable'] else 0o644)
     payload = root/'payload'
-    for name in ('clash-of-rust', 'clash-tun-launcher'):
+    for name in ('clash-of-rust', 'clash-tun-launcher', 'cor'):
         validate_binary_arch(payload/(name+extension), system, arch)
     validate_binary_arch(payload/'resources'/('mihomo'+extension), system, arch)
     validate_resources(payload/'resources', system)

@@ -54,6 +54,12 @@ pub struct Downloaded {
 }
 
 impl Downloaded {
+    pub fn package_path(&self) -> &Path {
+        &self.package
+    }
+    pub fn sha256(&self) -> &str {
+        &self.sha256
+    }
     pub fn directory(&self) -> &Path {
         self.package
             .parent()

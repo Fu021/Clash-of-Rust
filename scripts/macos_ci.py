@@ -202,7 +202,7 @@ def installed_package_tests(package, manifest, build):
         info = plistlib.loads((app/'Contents/Info.plist').read_bytes())
         if (info['CFBundleIdentifier'], info['ClashOfRustVersion'], info['LSMinimumSystemVersion']) != (BUNDLE_ID, manifest['version'], '14.0'):
             raise ValueError('Installed app metadata differs from CI')
-        for name in ('clash-of-rust', 'clash-tun-launcher'):
+        for name in ('clash-of-rust', 'clash-tun-launcher', 'cor'):
             validate_binary_arch(app/'Contents/MacOS'/name, 'macos', manifest['arch'])
         validate_binary_arch(app/'Contents/Resources/resources/mihomo', 'macos', manifest['arch'])
         validate_resources(app/'Contents/Resources/resources', 'macos')

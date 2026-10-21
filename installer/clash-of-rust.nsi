@@ -170,6 +170,8 @@ Function ShutdownExisting
   ${EndIf}
   ; Request normal exit. The GUI restores its proxy and stops its own core.
   ; Never extract/run a second GUI executable or force-kill other processes.
+  IfFileExists "$ExistingDir\cor.exe" 0 +2
+    ExecWait '"$ExistingDir\cor.exe" --quiet stop' $0
   System::Call 'kernel32::OpenMutexW(i 0x100000, i 0, w "${APP_MUTEX}") p.r0 ?e'
   Pop $1
   ${If} $0 == 0
@@ -260,6 +262,7 @@ Section "Clash of Rust" MainSection
   ClearErrors
   SetOutPath "$INSTDIR"
   File "${PAYLOAD}\clash-of-rust.exe"
+  File "${PAYLOAD}\cor.exe"
   File "${PAYLOAD}\clash-tun-launcher.exe"
   File "${PAYLOAD}\LICENSE"
   SetOutPath "$INSTDIR\resources"
@@ -436,6 +439,8 @@ Section "Uninstall"
     ${EndIf}
   ClearErrors
   Delete "$INSTDIR\clash-of-rust.exe"
+  IfErrors uninstall_locked
+  Delete "$INSTDIR\cor.exe"
   IfErrors uninstall_locked
   Delete "$INSTDIR\clash-tun-launcher.exe"
   IfErrors uninstall_locked

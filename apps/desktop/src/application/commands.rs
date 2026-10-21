@@ -281,7 +281,7 @@ pub(super) async fn execute(
                 Ok("连接已全部关闭".into())
             }
             Action::ClearLogs => {
-                engine.clear_logs();
+                engine.clear_logs()?;
                 Ok("日志已清空".into())
             }
             Action::ExportLogs => {

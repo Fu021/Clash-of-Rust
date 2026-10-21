@@ -61,7 +61,7 @@ pub struct CustomRule {
     pub rule: String,
     pub enabled: bool,
 }
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum Source {
     Custom,
     Shortcut,
@@ -76,7 +76,7 @@ impl std::fmt::Display for Source {
         })
     }
 }
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Row {
     pub id: String,
     pub raw: Arc<str>,
@@ -84,7 +84,7 @@ pub struct Row {
     pub enabled: bool,
     pub duplicate: bool,
 }
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Document {
     pub profile_id: String,
     pub builtin: bool,

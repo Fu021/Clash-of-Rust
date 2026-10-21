@@ -350,6 +350,13 @@ struct App {
     updates: update::State,
 }
 
+async fn initialize_engine() -> anyhow::Result<CoreHandle> {
+    let engine = tokio::task::spawn_blocking(|| startup_store().and_then(Engine::new)).await??;
+    let engine = Arc::new(Mutex::new(engine));
+    clash_of_rust::control::serve(&engine, clash_of_rust::control::Owner::Gui).await?;
+    Ok(CoreHandle(engine))
+}
+
 impl App {
     fn new(
         tray_startup: Option<tray::Startup>,
@@ -373,10 +380,8 @@ impl App {
         app.working = true;
         let task = Task::perform(
             async {
-                tokio::task::spawn_blocking(|| startup_store().and_then(Engine::new))
+                initialize_engine()
                     .await
-                    .map_err(|error| format!("初始化任务失败：{error}"))?
-                    .map(|engine| CoreHandle(Arc::new(Mutex::new(engine))))
                     .map_err(|error| format!("初始化失败：{error:#}"))
             },
             Message::CoreReady,
@@ -785,10 +790,8 @@ impl App {
                 self.working = true;
                 return Task::perform(
                     async {
-                        tokio::task::spawn_blocking(|| startup_store().and_then(Engine::new))
+                        initialize_engine()
                             .await
-                            .map_err(|error| format!("初始化任务失败：{error}"))?
-                            .map(|engine| CoreHandle(Arc::new(Mutex::new(engine))))
                             .map_err(|error| format!("初始化失败：{error:#}"))
                     },
                     Message::CoreReady,
@@ -1564,7 +1567,13 @@ impl App {
                     }
                     update::cleanup(&session.directory);
                 }
-                if platform::exit_requested() {
+                if platform::exit_requested()
+                    || self.engine.as_ref().is_some_and(|engine| {
+                        engine
+                            .try_lock()
+                            .is_ok_and(|engine| engine.exit_requested())
+                    })
+                {
                     return self.exit();
                 }
                 if platform::show_requested() {
@@ -1887,7 +1896,12 @@ impl App {
                             eprintln!("无法保存窗口尺寸：{error:#}");
                         }
                         if let Some(engine) = engine {
-                            engine.lock().await.stop().await.map_err(|e| e.to_string())
+                            engine
+                                .lock()
+                                .await
+                                .shutdown_owner()
+                                .await
+                                .map_err(|e| e.to_string())
                         } else {
                             Ok(())
                         }

@@ -151,23 +151,62 @@ pub fn core_launcher(core: &Path) -> &Path {
 }
 
 pub fn authorize_tun(core: &Path) -> Result<()> {
+    authorize(core, false)
+}
+
+pub fn authorize_tun_terminal(core: &Path) -> Result<()> {
+    authorize(core, true)
+}
+
+fn installed_authorized() -> Result<bool> {
+    let launcher = File::options()
+        .read(true)
+        .custom_flags(libc::O_NOFOLLOW)
+        .open(LAUNCHER)?;
+    trusted::trusted_metadata(&launcher.metadata()?, false)?;
+    let mut attribute = [0u8; 20];
+    let size = unsafe {
+        libc::fgetxattr(
+            launcher.as_raw_fd(),
+            c"security.capability".as_ptr(),
+            attribute.as_mut_ptr().cast(),
+            attribute.len(),
+        )
+    };
+    Ok(size == 20
+        && attribute == capability_attribute()
+        && trusted::installed_dns_helper()?.metadata()?.mode() & 0o7777 == 0o4755)
+}
+
+fn authorize(core: &Path, terminal: bool) -> Result<()> {
     ensure!(
         core == Path::new(CORE),
         "自动 TUN 授权仅支持 DEB 安装的内核，请先安装客户端"
     );
     ensure!(
-        std::env::current_exe()? == Path::new(EXECUTABLE),
+        matches!(std::env::current_exe()?.as_path(), path if path == Path::new(EXECUTABLE) || path == Path::new("/opt/clash-of-rust/cor")),
         "请从已安装的客户端请求 TUN 授权"
     );
     // Also validate before showing the authorization prompt.
     let _resources = installed_resources()?;
+    if installed_authorized()? {
+        return Ok(());
+    }
     ensure!(
         Path::new("/usr/bin/pkexec").is_file(),
         "缺少 pkexec，请安装 pkexec 后重新开启 TUN"
     );
-    let status = Command::new("/usr/bin/pkexec")
-        .args(["--disable-internal-agent", EXECUTABLE, HELPER_ARGUMENT])
-        .stdin(std::process::Stdio::null())
+    let mut command = Command::new("/usr/bin/pkexec");
+    if !terminal {
+        command.arg("--disable-internal-agent");
+    }
+    let status = command
+        .args([EXECUTABLE, HELPER_ARGUMENT])
+        .stdin(if terminal {
+            std::process::Stdio::inherit()
+        } else {
+            std::process::Stdio::null()
+        })
         .stdout(std::process::Stdio::null())
         .stderr(std::process::Stdio::piped())
         .output()

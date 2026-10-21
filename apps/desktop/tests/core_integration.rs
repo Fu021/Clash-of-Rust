@@ -294,5 +294,33 @@ async fn basic_system_proxy_and_tun() {
     engine.stop().await.unwrap();
     assert!(!engine.running());
     assert!(!store.root.join("system-proxy.json").exists());
+    // Exercise the same native proxy/TUN lifecycle through the authenticated
+    // console transport, including a GUI facade attaching without a second core.
+    let engine = std::sync::Arc::new(tokio::sync::Mutex::new(engine));
+    clash_of_rust::control::serve(&engine, clash_of_rust::control::Owner::Daemon)
+        .await
+        .unwrap();
+    let remote = clash_of_rust::control::Remote::discover(&store, Duration::from_secs(60))
+        .unwrap()
+        .unwrap();
+    use clash_of_rust::control::{Command as Control, Meta};
+    let _: serde_json::Value = remote.request(Control::Start).await.unwrap();
+    let attach_store = store.clone();
+    let facade =
+        tokio::task::spawn_blocking(move || Engine::with_resources(attach_store, test_resources()))
+            .await
+            .unwrap()
+            .unwrap();
+    assert!(facade.is_remote() && facade.running());
+    drop(facade); // Must not stop the owner or restore its network state.
+    for mode in [ProxyMode::System, ProxyMode::Tun, ProxyMode::Off] {
+        let _: serde_json::Value = remote.request(Control::Proxy { mode }).await.unwrap();
+        let meta: Meta = remote.request(Control::Meta).await.unwrap();
+        assert!(meta.running);
+        assert_eq!(meta.settings.proxy_mode, mode);
+    }
+    let _: serde_json::Value = remote.request(Control::Shutdown).await.unwrap();
+    assert!(!engine.lock().await.running());
+    assert!(!store.root.join("system-proxy.json").exists());
     println!("PASS: native system proxy, HTTP forwarding, TUN capture and cleanup");
 }

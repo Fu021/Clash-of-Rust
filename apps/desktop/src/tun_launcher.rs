@@ -1,11 +1,11 @@
 #![cfg_attr(all(windows, not(test)), windows_subsystem = "windows")]
 //! Native network helpers. The GUI stays unprivileged on every platform.
 #[cfg(target_os = "linux")]
-#[path = "platform/linux/tun/trusted.rs"]
+#[path = "../../../crates/client-runtime/src/platform/linux/tun/trusted.rs"]
 mod trusted;
 
 #[cfg(target_os = "linux")]
-#[path = "platform/linux/tun/dns.rs"]
+#[path = "../../../crates/client-runtime/src/platform/linux/tun/dns.rs"]
 mod dns;
 
 #[cfg(target_os = "linux")]
@@ -134,20 +134,20 @@ fn main() {
 #[path = "../../../crates/client-core/src/storage/hash.rs"]
 mod assets;
 #[cfg(all(target_os = "macos", not(test)))]
-#[path = "platform/macos/authorization.rs"]
+#[path = "../../../crates/client-runtime/src/platform/macos/authorization.rs"]
 mod authorization;
 #[cfg(all(target_os = "macos", not(test)))]
 use authorization::{administrator, run as run_command, shell_quote};
 #[cfg(all(target_os = "macos", not(test)))]
 #[allow(dead_code)]
-#[path = "platform/macos/cf.rs"]
+#[path = "../../../crates/client-runtime/src/platform/macos/cf.rs"]
 mod cf;
 #[cfg(all(target_os = "macos", not(test)))]
 #[allow(dead_code)]
-#[path = "platform/macos/tun.rs"]
+#[path = "../../../crates/client-runtime/src/platform/macos/tun.rs"]
 mod macos_tun;
 #[cfg(all(target_os = "macos", not(test)))]
-#[path = "platform/proxy_state.rs"]
+#[path = "../../../crates/client-runtime/src/platform/proxy_state.rs"]
 mod proxy_state;
 #[cfg(all(target_os = "macos", not(test)))]
 mod platform {
@@ -155,15 +155,15 @@ mod platform {
 }
 #[cfg(all(target_os = "macos", not(test)))]
 #[allow(dead_code)]
-#[path = "platform/macos/dns.rs"]
+#[path = "../../../crates/client-runtime/src/platform/macos/dns.rs"]
 mod dns;
 #[cfg(all(target_os = "macos", not(test)))]
 #[allow(dead_code)]
-#[path = "platform/macos/native_proxy.rs"]
+#[path = "../../../crates/client-runtime/src/platform/macos/native_proxy.rs"]
 mod native_proxy;
 #[cfg(all(target_os = "macos", not(test)))]
 #[allow(dead_code)]
-#[path = "platform/macos/service.rs"]
+#[path = "../../../crates/client-runtime/src/platform/macos/service.rs"]
 mod service;
 #[cfg(all(target_os = "macos", not(test)))]
 use macos_tun as tun;
@@ -182,7 +182,7 @@ fn main() {
 #[path = "../../../crates/client-core/src/storage/hash.rs"]
 mod file_hash;
 #[cfg(windows)]
-#[path = "platform/windows/service/mod.rs"]
+#[path = "../../../crates/client-runtime/src/platform/windows/service/mod.rs"]
 #[allow(dead_code)]
 mod windows_service;
 #[cfg(windows)]

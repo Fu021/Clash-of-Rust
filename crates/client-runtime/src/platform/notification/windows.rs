@@ -171,7 +171,10 @@ fn register_identity() -> Result<()> {
     protocol.set_value("", &"URL:Clash of Rust notification")?;
     protocol.set_value("URL Protocol", &"")?;
     let (command, _) = protocol.create_subkey(r"shell\open\command")?;
-    command.set_value("", &activation_command(&std::env::current_exe()?))?;
+    command.set_value(
+        "",
+        &activation_command(&crate::platform::autostart_executable()?),
+    )?;
     Ok(())
 }
 
@@ -181,7 +184,7 @@ fn activation_command(executable: &Path) -> String {
 }
 
 fn register_shortcut() -> Result<()> {
-    let executable = std::env::current_exe()?;
+    let executable = crate::platform::autostart_executable()?;
     let roaming = std::env::var_os("APPDATA").context("无法定位当前用户开始菜单")?;
     // Per-user identity also supports the portable package without administrator access.
     let directory = std::path::PathBuf::from(roaming)
