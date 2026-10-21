@@ -313,6 +313,51 @@ async fn basic_system_proxy_and_tun() {
             .unwrap();
     assert!(facade.is_remote() && facade.running());
     drop(facade); // Must not stop the owner or restore its network state.
+    let cli =
+        std::env::var_os("MIHOMO_TEST_CLI").expect("native wrapper must provide the bundled CLI");
+    async fn console(
+        executable: &std::ffi::OsStr,
+        store: &Store,
+        args: &[&str],
+    ) -> serde_json::Value {
+        let output = tokio::process::Command::new(executable)
+            .arg("--data-dir")
+            .arg(&store.root)
+            .args(["--json", "--yes"])
+            .args(args)
+            .output()
+            .await
+            .unwrap();
+        assert!(
+            output.status.success(),
+            "CLI {args:?}: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        serde_json::from_slice::<serde_json::Value>(&output.stdout).unwrap()["data"].take()
+    }
+    let status = console(&cli, &store, &["status"]).await;
+    assert_eq!(status["running"], true);
+    console(&cli, &store, &["config", "set", "dark", "true"]).await;
+    assert_eq!(
+        console(&cli, &store, &["config", "get", "dark"]).await["dark"],
+        true
+    );
+    let secret = console(&cli, &store, &["config", "get", "secret"]).await;
+    assert_eq!(secret["secret"], "[已隐藏]");
+    console(&cli, &store, &["rule", "add", "DOMAIN,cli.test,REJECT"]).await;
+    let rules = console(&cli, &store, &["rule", "list"]).await;
+    let rule = rules["items"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|r| r["rule"] == "DOMAIN,cli.test,REJECT")
+        .unwrap();
+    console(
+        &cli,
+        &store,
+        &["rule", "remove", rule["id"].as_str().unwrap()],
+    )
+    .await;
     for mode in [ProxyMode::System, ProxyMode::Tun, ProxyMode::Off] {
         let _: serde_json::Value = remote.request(Control::Proxy { mode }).await.unwrap();
         let meta: Meta = remote.request(Control::Meta).await.unwrap();

@@ -186,7 +186,7 @@ def main():
             run([binary, args.test_case, '--exact',
                  '--ignored', '--test-threads=1', '--nocapture'],
                 env=dict(os.environ, CLASH_TUN_TEST_NAMESPACE='1', CLASH_PROXY_SMOKE='1',
-                         MIHOMO_TEST_RESOURCES='/opt/clash-of-rust/resources', GSETTINGS_BACKEND='memory'),
+                         MIHOMO_TEST_RESOURCES='/opt/clash-of-rust/resources', MIHOMO_TEST_CLI='/opt/clash-of-rust/cor', GSETTINGS_BACKEND='memory'),
                 preexec_fn=ordinary_user, timeout=240)
         return
 
