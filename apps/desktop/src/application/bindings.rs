@@ -382,7 +382,16 @@ impl native::Host for DesktopHost {
             self.clipboard = arboard::Clipboard::new().ok();
         }
         if let Some(clipboard) = &mut self.clipboard {
-            let _ = clipboard.set_text(text);
+            match clipboard.set_text(text.as_str()) {
+                Ok(()) => {
+                    if let Some((_, window)) = &self.window {
+                        let data = window.global::<UiData>();
+                        data.set_copy_value(text.into());
+                        data.set_copy_revision(data.get_copy_revision().wrapping_add(1));
+                    }
+                }
+                Err(error) => self.app.show_notice(format!("复制失败：{error}"), true),
+            }
         }
     }
     fn focus(&mut self, target: &str) {

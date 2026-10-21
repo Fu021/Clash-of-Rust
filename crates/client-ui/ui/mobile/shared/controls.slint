@@ -1,9 +1,13 @@
+import { Motion, Entrance, ProgressTrack, CopyFeedback } from "../../components/motion.slint";
+import { Chevron } from "../../components/controls.slint";
 import { MobileTypography } from "typography.slint";
 import { Theme } from "../../theme/palette.slint";
 import { MobileView, MobileActions, MobileIntent } from "state.slint";
 
 export component MAppIcon inherits Rectangle {
-    width: 48px; height: 48px;
+    width: 48px; height: 48px; border-radius: 8px;
+    background: icon-area.pressed ? Theme.accent-wash : icon-area.has-hover ? Theme.inset : transparent;
+    animate background { duration: Motion.fast; enabled: Motion.active; }
     accessible-role: button;
     accessible-label: "发送系统通知";
     accessible-action-default => { if !MobileView.modal { MobileActions.request(MobileIntent.system-notification, "", ""); } }
@@ -17,7 +21,7 @@ export component MAppIcon inherits Rectangle {
             if event.text == Key.Return || event.text == " " { MobileActions.request(MobileIntent.system-notification, "", ""); return accept; }
             return reject;
         }
-        TouchArea { width: parent.width; height: parent.height;
+        icon-area := TouchArea { width: parent.width; height: parent.height;
             enabled: !MobileView.modal;
             clicked => { MobileActions.request(MobileIntent.system-notification, "", ""); }
         }
@@ -38,7 +42,7 @@ export component MText {
         width: parent.width; height: parent.height; vertical-alignment: center;
         // Keep a stable drawing box when text changes during native startup.
         y: (self.font-metrics.cap-height - self.font-metrics.ascent - self.font-metrics.descent) / 2;
-        text: root.text; color: root.color; font-size: root.font-size; font-weight: root.font-weight;
+        text: root.text; color: root.color; animate color { duration: Motion.control; enabled: Motion.active; } font-size: root.font-size; font-weight: root.font-weight;
         horizontal-alignment: root.horizontal-alignment; wrap: root.wrap; overflow: elide;
     }
 }
@@ -68,6 +72,7 @@ export component MCard inherits Rectangle {
     height: content.preferred-height;
     background: root.selected ? Theme.accent-wash : Theme.surface;
     border-width: 1px; border-color: root.selected ? Theme.accent : Theme.line; border-radius: 10px;
+    animate background, border-color { duration: Motion.control; enabled: Motion.active; }
     if root.interactive: TouchArea { enabled: !MobileView.modal; mouse-cursor: pointer; clicked => { root.clicked(); } }
     content := VerticalLayout { alignment: start; padding: MobileTypography.padding; spacing: MobileTypography.gap; @children }
 }
@@ -81,30 +86,36 @@ export component MButton inherits Rectangle {
     in property <bool> show-swatch;
     in property <color> swatch;
     in property <bool> enabled: true;
-    property <bool> interactive: root.enabled && (!MobileView.modal || root.modal-control);
+    in property <bool> busy;
+    in property <bool> success;
+    out property <length> press-offset: area.pressed && root.interactive ? 1px : 0px;
+    animate press-offset { duration: Motion.fast; easing: ease-out; enabled: Motion.active; }
+    property <bool> interactive: root.enabled && !root.busy && (!MobileView.modal || root.modal-control);
     property <bool> keyboard-focus;
     callback clicked();
     forward-focus: keys;
     min-width: 0px; preferred-width: 0px; horizontal-stretch: 1;
     height: max(48px, label.preferred-height + 24px); vertical-stretch: 0;
     background: root.primary ? (area.pressed && root.enabled ? Theme.primary.darker(0.15) : Theme.primary)
-        : root.selected || (area.pressed && root.enabled) ? Theme.accent-wash
+        : root.success ? Theme.success-wash : root.selected || (area.pressed && root.enabled) ? Theme.accent-wash
         : area.has-hover && root.enabled ? Theme.inset : Theme.surface;
     border-width: 1px; border-radius: 6px;
     border-color: root.enabled && root.keyboard-focus && keys.has-focus ? Theme.ink
         : root.primary ? Theme.primary : root.selected || (area.pressed && root.enabled) ? Theme.accent : Theme.line;
-    opacity: root.enabled ? 1 : 0.5;
+    opacity: root.enabled || root.busy ? 1 : 0.5;
+    animate background, border-color, opacity { duration: Motion.fast; enabled: Motion.active; }
+    if root.busy: ProgressTrack { y: parent.height - 3px; width: parent.width; indeterminate: true; track: transparent; fill: root.primary ? #ffffff : Theme.accent; }
     if root.show-swatch: Rectangle {
-        x: 12px; y: (parent.height - 16px) / 2; width: 16px; height: 16px;
+        x: 12px; y: (parent.height - 16px) / 2 + root.press-offset; width: 16px; height: 16px;
         border-radius: 8px; background: root.swatch;
     }
-    label := MText { width: parent.width - 12px - (root.dropdown ? 24px : 0px) - (root.show-swatch ? 26px : 0px); x: root.show-swatch ? 32px : 6px; height: parent.height;
+    label := MText { y: root.press-offset; width: parent.width - 12px - (root.dropdown ? 24px : 0px) - (root.show-swatch ? 26px : 0px); x: root.show-swatch ? 32px : 6px; height: parent.height;
         text: root.text; horizontal-alignment: center;
-        color: root.primary ? #ffffff : root.danger ? Theme.danger : root.selected ? Theme.accent : Theme.ink;
+        color: root.primary ? #ffffff : root.danger ? Theme.danger : root.success ? Theme.success : root.selected ? Theme.accent : Theme.ink;
         font-size: MobileTypography.font-size(15);
     }
     if root.dropdown: Image { source: @image-url("../../icons/chevron-down.svg");
-        x: parent.width - 28px; y: (parent.height - 18px) / 2; width: 18px; height: 18px; colorize: Theme.secondary;
+        x: parent.width - 28px; y: (parent.height - 18px) / 2 + root.press-offset; width: 18px; height: 18px; colorize: Theme.secondary;
     }
     keys := FocusScope {
         enabled: root.interactive;
@@ -139,8 +150,9 @@ export component MRow inherits Rectangle {
         }
         if root.show-swatch: Rectangle { width: 16px; height: 16px; horizontal-stretch: 0; border-radius: 8px; background: root.swatch; }
         if root.value != "": MSmall { text: root.value; color: root.value-color; horizontal-stretch: 0; }
-        if root.arrow: Image {
-            source: root.expandable ? (root.expanded ? @image-url("../../icons/chevron-up.svg") : @image-url("../../icons/chevron-down.svg")) : @image-url("../../icons/chevron-right.svg");
+        if root.arrow && root.expandable: Chevron { expanded: root.expanded; horizontal-stretch: 0; }
+        if root.arrow && !root.expandable: Image {
+            source: @image-url("../../icons/chevron-right.svg");
             width: 18px; height: 18px; horizontal-stretch: 0; colorize: Theme.secondary;
         }
     }
@@ -150,7 +162,7 @@ export component MBackButton inherits MButton {
     text: ""; width: 48px; height: 48px; horizontal-stretch: 0;
     accessible-role: button; accessible-label: "返回";
     Image { source: @image-url("../../icons/chevron-left.svg");
-        width: 24px; height: 24px; x: 12px; y: 12px; colorize: Theme.ink;
+        width: 24px; height: 24px; x: 12px; y: 12px + root.press-offset; colorize: Theme.ink;
     }
 }
 export component MDivider inherits Rectangle { height: 1px; vertical-stretch: 0; background: Theme.subtle-line; }
@@ -162,10 +174,12 @@ export component MSwitch inherits Rectangle {
     callback toggled(bool);
     vertical-stretch: 0; height: max(48px, 52px * MobileTypography.density, content.preferred-height + MobileTypography.gap);
     opacity: root.enabled ? 1 : 0.5;
+    animate opacity { duration: Motion.control; enabled: Motion.active; }
     content := HorizontalLayout { spacing: MobileTypography.gap; cross-axis-alignment: center;
         VerticalLayout { spacing: 6px; MText { text: root.title; } if root.subtitle != "": MSmall { text: root.subtitle; wrap: word-wrap; } }
         Rectangle { width: 44px; height: 26px; horizontal-stretch: 0; border-radius: 13px; background: root.checked ? Theme.primary : Theme.muted;
-            Rectangle { x: root.checked ? 21px : 3px; y: 3px; width: 20px; height: 20px; border-radius: 10px; background: #ffffff; }
+            animate background { duration: Motion.control; enabled: Motion.active; }
+            Rectangle { x: root.checked ? 21px : 3px; animate x { duration: Motion.control; easing: ease-out; enabled: Motion.active; } y: 3px; width: 20px; height: 20px; border-radius: 10px; background: #ffffff; }
         }
     }
     TouchArea { enabled: root.enabled && !MobileView.modal; mouse-cursor: pointer; clicked => { root.toggled(!root.checked); } }
@@ -178,6 +192,7 @@ export component MField inherits Rectangle {
     height: max(48px, input.preferred-height + 20px); min-width: 0px; vertical-stretch: 0;
     background: Theme.surface; border-radius: 6px; border-width: 1px;
     border-color: input.has-focus ? Theme.accent : Theme.line;
+    animate border-color, background { duration: Motion.fast; enabled: Motion.active; }
     input := TextInput { x: 12px; width: parent.width - 24px; height: parent.height;
         enabled: !MobileView.modal;
         text <=> root.text; font-size: MobileTypography.font-size(16); color: Theme.ink; single-line: true; vertical-alignment: center;
@@ -196,7 +211,7 @@ export component MSelect inherits Rectangle {
         y: root.height + 4px; width: max(root.width, 200px);
         height: min(300px, root.options.length * 52px + 16px);
         close-policy: close-on-click-outside;
-        Rectangle { background: Theme.surface; border-radius: 8px; border-width: 1px; border-color: Theme.line;
+        Rectangle { entrance := Entrance { } opacity: entrance.progress; background: Theme.surface; border-radius: 8px; border-width: 1px; border-color: Theme.line;
             MScroll { VerticalLayout { alignment: start; spacing: 4px; padding: MobileTypography.small-gap;
                 for option[i] in root.options: MButton { width: popup.width - 16px; text: option; selected: option == root.value;
                     clicked => { root.selected(i, option); popup.close(); }
@@ -212,18 +227,13 @@ export component MTag inherits Rectangle {
     height: max(24px, 28px * MobileTypography.density, label.preferred-height + MobileTypography.small-gap); width: min(root.width-limit, label.preferred-width + MobileTypography.padding);
     horizontal-stretch: 0; vertical-stretch: 0; border-radius: 5px;
     background: root.tone == 4 ? Theme.inset : root.tone == 3 ? Theme.danger-wash : root.tone == 2 ? Theme.warning-wash : root.tone == 1 ? Theme.success-wash : Theme.accent-wash;
+    animate background { duration: Motion.control; enabled: Motion.active; }
     label := MSmall { width: parent.width; height: parent.height; text: root.text; horizontal-alignment: center;
         color: root.tone == 4 ? Theme.secondary : root.tone == 3 ? Theme.danger : root.tone == 2 ? Theme.warning : root.tone == 1 ? Theme.success : Theme.accent;
     }
 }
-export component MProgress inherits Rectangle {
-    in property <float> value;
-    in property <bool> indeterminate;
-    height: 3px; vertical-stretch: 0; clip: true; background: Theme.subtle-line;
-    Rectangle { height: parent.height; width: parent.width * (root.indeterminate ? 0.25 : clamp(root.value, 0, 1));
-        x: root.indeterminate ? (parent.width + self.width) * mod(animation-tick(), 1400ms) / 1400ms - self.width : 0px;
-        background: Theme.accent;
-    }
+export component MProgress inherits ProgressTrack {
+    track: Theme.subtle-line; fill: Theme.accent;
 }
 // Keep the message, action and lifetime indicator in one padded layout, just
 // like the desktop notice. Absolute offsets must not place controls below it.
@@ -242,7 +252,7 @@ export component MNotice inherits Rectangle {
                 clicked => { root.dismissed(); }
             }
         }
-        MProgress { height: 2px; value: root.progress; }
+        MProgress { height: 2px; value: root.progress; smooth: false; }
     }
 }
 export component MNav inherits Rectangle {
@@ -254,7 +264,10 @@ export component MNav inherits Rectangle {
     callback clicked();
     min-height: 48px; border-radius: root.stacked ? 12px : 6px;
     background: root.selected && root.pill ? Theme.accent-wash : area.pressed ? Theme.inset : transparent;
-    if root.selected && !root.stacked: Rectangle { x: 0px; width: 3px; height: 20px; y: (parent.height - self.height) / 2; background: Theme.accent; border-radius: 2px; }
+    animate background { duration: Motion.control; enabled: Motion.active; }
+    if !root.stacked: Rectangle { x: 0px; width: 3px; height: root.selected ? 20px : 12px; y: (parent.height - self.height) / 2; background: Theme.accent; border-radius: 2px; opacity: root.selected ? 1 : 0;
+        animate opacity, height { duration: Motion.control; easing: ease-out; enabled: Motion.active; }
+    }
     if root.stacked: VerticalLayout { padding-top: 4px; padding-bottom: 4px; spacing: 4px; alignment: center;
         Rectangle { height: 22px; Image { x: (parent.width - 22px) / 2; source: root.icon; width: 22px; height: 22px; colorize: root.selected ? Theme.accent : Theme.secondary; } }
         MSmall { text: root.text; font-size: MobileTypography.font-size(12); horizontal-alignment: center; color: root.selected ? Theme.accent : Theme.secondary; font-weight: root.selected ? 600 : 400; }
@@ -264,4 +277,12 @@ export component MNav inherits Rectangle {
         MText { text: root.text; color: root.selected ? Theme.accent : Theme.secondary; font-weight: root.selected ? 600 : 400; }
     }
     area := TouchArea { enabled: !MobileView.modal; mouse-cursor: pointer; clicked => { root.clicked(); } }
+}
+
+export component MCopyButton inherits MButton {
+    in property <string> value;
+    in property <string> label: "复制";
+    feedback := CopyFeedback { revision: MobileView.copy-revision; acknowledged: MobileView.copy-value; value: root.value; }
+    text: feedback.copied ? "已复制" : root.label; success: feedback.copied;
+    clicked => { feedback.requested(); MobileActions.request(MobileIntent.copy, root.value, ""); }
 }

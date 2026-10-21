@@ -1,3 +1,4 @@
+import { PageSurface } from "../components/motion.slint";
 import { UiData, UiActions, Intent } from "../state.slint";
 import { ScrollView } from "std-widgets.slint";
 import { Theme } from "../theme/palette.slint";
@@ -17,7 +18,7 @@ component TrafficMetric inherits Rectangle {
     }
 }
 
-export component HomePage inherits Rectangle {
+export component HomePage inherits PageSurface {
     ScrollView {
         x: 0px;
         width: parent.width + Theme.content-gap;

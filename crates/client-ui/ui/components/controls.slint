@@ -1,5 +1,6 @@
+import { Motion, Entrance, ProgressTrack, CopyFeedback } from "motion.slint";
 import { Theme } from "../theme/palette.slint";
-import { UiData } from "../state.slint";
+import { UiData, UiActions, Intent } from "../state.slint";
 import { ScrollView } from "std-widgets.slint";
 
 export component Label {
@@ -28,6 +29,7 @@ export component Label {
                 + (self.font-metrics.cap-height - self.font-metrics.ascent - self.font-metrics.descent) / 2;
         text: root.text;
         color: root.color;
+        animate color { duration: Motion.control; enabled: Motion.active; }
         font-size: root.font-size;
         font-weight: root.font-weight;
         horizontal-alignment: root.horizontal-alignment;
@@ -58,6 +60,7 @@ export component Panel inherits Rectangle {
     border-color: Theme.line;
     border-width: 1px;
     border-radius: 8px;
+    animate background, border-color { duration: Motion.appearance; enabled: Motion.active; }
     @children
 }
 
@@ -115,9 +118,11 @@ export component Chevron inherits Path {
     height: 12px;
     viewbox-width: 12;
     viewbox-height: 12;
-    MoveTo { x: 2; y: root.expanded ? 8 : 4; }
-    LineTo { x: 6; y: root.expanded ? 4 : 8; }
-    LineTo { x: 10; y: root.expanded ? 8 : 4; }
+    property <float> direction: root.expanded ? 1 : 0;
+    animate direction { duration: Motion.control; easing: ease-out; enabled: Motion.active; }
+    MoveTo { x: 2; y: 4 + root.direction * 4; }
+    LineTo { x: 6; y: 8 - root.direction * 4; }
+    LineTo { x: 10; y: 4 + root.direction * 4; }
     stroke: Theme.secondary;
     stroke-width: 1.5px;
 }
@@ -129,12 +134,16 @@ export component ActionButton inherits Rectangle {
     in property <bool> selected: false;
     in property <bool> danger: false;
     in property <bool> enabled: true;
+    in property <bool> busy;
+    in property <bool> success;
     in property <bool> dropdown: false;
     in property <bool> expanded: false;
-    property <bool> interactive: root.enabled && (UiData.modal == 0 || root.modal-control);
+    property <bool> interactive: root.enabled && !root.busy && (UiData.modal == 0 || root.modal-control);
     // Mouse activation must not leave a focus highlight that resembles selection.
     property <bool> keyboard-focus: false;
     property <bool> pressed: root.interactive && area.pressed;
+    property <length> press-offset: root.pressed ? 1px : 0px;
+    animate press-offset { duration: Motion.fast; easing: ease-out; enabled: Motion.active; }
     callback clicked();
     forward-focus: key-scope;
     height: Theme.control-height;
@@ -143,24 +152,30 @@ export component ActionButton inherits Rectangle {
     horizontal-stretch: 0;
     border-radius: 5px;
     background: root.primary ? (root.pressed ? Theme.primary.darker(0.15) : Theme.primary)
-        : root.selected || root.pressed ? Theme.accent-wash
+        : root.success ? Theme.success-wash : root.selected || root.pressed ? Theme.accent-wash
         : root.interactive && area.has-hover ? Theme.inset : Theme.surface;
     border-width: 1px;
     border-color: root.interactive && root.keyboard-focus && key-scope.has-focus ? Theme.ink
         : root.primary ? Theme.primary : root.selected || root.pressed ? Theme.accent : Theme.line;
-    opacity: root.enabled ? 1 : 0.5;
+    opacity: root.enabled || root.busy ? 1 : 0.5;
+    animate background, border-color, opacity { duration: Motion.fast; enabled: Motion.active; }
     button-label := Label {
+        y: root.press-offset;
         width: parent.width - (root.dropdown ? 24px : 0px);
         height: parent.height;
         text: root.text;
         horizontal-alignment: center;
-        color: root.primary ? #ffffff : root.danger ? Theme.danger : root.selected ? Theme.accent : Theme.ink;
+        color: root.primary ? #ffffff : root.danger ? Theme.danger : root.success ? Theme.success : root.selected ? Theme.accent : Theme.ink;
         font-size: Theme.body-size;
     }
     if root.dropdown: Chevron {
         x: parent.width - 24px;
-        y: (parent.height - self.height) / 2;
+        y: (parent.height - self.height) / 2 + root.press-offset;
         expanded: root.expanded;
+    }
+    if root.busy: ProgressTrack {
+        y: parent.height - 3px; width: parent.width; indeterminate: true; track: transparent;
+        fill: root.primary ? #ffffff : Theme.accent;
     }
     key-scope := FocusScope {
         enabled: root.interactive;
@@ -188,6 +203,7 @@ export component Badge inherits Rectangle {
     horizontal-stretch: 0;
     border-radius: 5px;
     background: tone == 1 ? Theme.success-wash : tone == 2 ? Theme.warning-wash : tone == 3 ? Theme.danger-wash : tone == 4 ? Theme.inset : Theme.accent-wash;
+    animate background { duration: Motion.control; enabled: Motion.active; }
     label := Caption {
         width: parent.width;
         height: parent.height;
@@ -234,6 +250,7 @@ export component Field inherits Rectangle {
     background: Theme.surface;
     border-radius: 6px;
     border-color: input.has-focus ? Theme.accent : Theme.line;
+    animate border-color, background { duration: Motion.fast; enabled: Motion.active; }
     border-width: 1px;
     input := TextInput {
         x: 12px;
@@ -283,6 +300,8 @@ export component Select inherits Rectangle {
         width: max(root.width, 180px);
         height: min(320px, root.options.length * (Theme.control-height + 4px) + 12px);
         Rectangle {
+            entrance := Entrance { }
+            opacity: entrance.progress;
             background: Theme.surface;
             border-color: Theme.line;
             border-width: 1px;
@@ -317,9 +336,11 @@ export component Toggle inherits Rectangle {
     vertical-stretch: 0;
     border-radius: 12px;
     background: root.checked ? Theme.primary : Theme.muted;
+    animate background, opacity { duration: Motion.control; enabled: Motion.active; }
     opacity: root.enabled ? 1 : 0.5;
     Rectangle {
         x: root.checked ? 19px : 3px;
+        animate x { duration: Motion.control; easing: ease-out; enabled: Motion.active; }
         y: 3px;
         width: 18px;
         height: 18px;
@@ -368,4 +389,16 @@ export component SettingRow inherits Rectangle {
 export component Divider inherits Rectangle {
     height: 1px;
     background: Theme.subtle-line;
+}
+
+export component CopyButton inherits ActionButton {
+    in property <string> value;
+    in property <string> label: "复制";
+    in property <Intent> intent: Intent.copy;
+    width: max(88px, measure.preferred-width + 28px);
+    measure := Label { visible: false; text: root.label; }
+    feedback := CopyFeedback { revision: UiData.copy-revision; acknowledged: UiData.copy-value; value: root.value; any-value: root.intent != Intent.copy; }
+    text: feedback.copied ? "已复制" : root.label;
+    success: feedback.copied;
+    clicked => { feedback.requested(); UiActions.dispatch(root.intent, root.value, ""); }
 }

@@ -1,3 +1,4 @@
+import { PageSurface, ProgressTrack } from "../components/motion.slint";
 import { ScrollView } from "std-widgets.slint";
 import { Theme } from "../theme/palette.slint";
 import { UiData, UiActions, Intent, CategoryItem } from "../state.slint";
@@ -16,7 +17,8 @@ component CategoryCard inherits ContentPanel {
     Caption { text: "查看分类详情 →"; color: Theme.accent; }
 }
 
-export component IpCheckPage inherits Rectangle {
+export component IpCheckPage inherits PageSurface {
+    motion-revision: UiData.sites-report ? 0 : 1;
     ScrollView {
         x: 0px; width: parent.width + Theme.content-gap;
         VerticalLayout {
@@ -27,9 +29,7 @@ export component IpCheckPage inherits Rectangle {
                 if UiData.sites-busy: ActionButton { text: "取消"; clicked => { UiActions.dispatch(Intent.site-cancel, "", ""); } }
                 if !UiData.sites-busy: ActionButton { text: UiData.sites-started ? "重新检测" : "一键检测"; primary: true; enabled: UiData.running && !UiData.working; clicked => { UiActions.dispatch(Intent.site-all, "", ""); } }
             }
-            Rectangle { height: 3px; background: Theme.subtle-line;
-                Rectangle { x: 0px; y: 0px; width: parent.width * UiData.site-fraction; height: parent.height; background: Theme.accent; }
-            }
+            ProgressTrack { value: UiData.site-fraction; track: Theme.subtle-line; fill: Theme.accent; }
             if UiData.site-summary != "": ContentPanel {
                 Paragraph { text: UiData.site-summary; }
                 if UiData.site-exit-country != "": HorizontalLayout {

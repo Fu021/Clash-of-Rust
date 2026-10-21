@@ -3,9 +3,13 @@ import { Theme } from "../../theme/palette.slint";
 import { MobileData, MobileView } from "state.slint";
 import { MobileFixture } from "fixtures.slint";
 import { MSmall } from "controls.slint";
+import { Motion } from "../../components/motion.slint";
 import "../../../../../resources/fonts/SourceHanSansCN-Regular.otf";
 
 export component MobilePreviewSurface inherits Rectangle {
+    in-out property <bool> preview-motion;
+    changed preview-motion => { Motion.enabled = root.preview-motion; }
+    init => { Motion.enabled = root.preview-motion; }
     background: Theme.canvas;
     in-out property <int> preview-page <=> MobileView.page;
     in-out property <int> preview-detail <=> MobileView.detail;

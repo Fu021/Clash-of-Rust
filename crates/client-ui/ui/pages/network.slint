@@ -1,9 +1,10 @@
+import { PageSurface } from "../components/motion.slint";
 import { UiData, UiActions, Intent } from "../state.slint";
 import { ScrollView } from "std-widgets.slint";
 import { Theme } from "../theme/palette.slint";
 import { Label, Caption, Heading, ContentPanel, ActionButton, Field, Badge, Paragraph } from "../components/controls.slint";
 
-export component NetworkPage inherits Rectangle {
+export component NetworkPage inherits PageSurface {
     ScrollView {
         x: 0px;
         width: parent.width + Theme.content-gap;
@@ -15,7 +16,7 @@ export component NetworkPage inherits Rectangle {
                 HorizontalLayout { cross-axis-alignment: center;
                     spacing: Theme.content-gap;
                     Field { text <=> UiData.test-url; edited(value) => { UiActions.dispatch(Intent.test-url, value, ""); } }
-                    ActionButton { text: UiData.probing ? "测试中…" : "开始测试"; primary: true; enabled: !UiData.probing; clicked => { UiActions.dispatch(Intent.probe, "false", ""); } }
+                    ActionButton { text: UiData.probing ? "测试中…" : "开始测试"; primary: true; busy: UiData.probing; enabled: !UiData.probing; clicked => { UiActions.dispatch(Intent.probe, "false", ""); } }
                 }
             }
             ContentPanel {

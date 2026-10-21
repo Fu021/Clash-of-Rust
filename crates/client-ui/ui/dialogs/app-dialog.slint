@@ -1,139 +1,164 @@
+import { Motion, Presence } from "../components/motion.slint";
 import { ScrollView } from "std-widgets.slint";
 import { Theme, AccentPalette } from "../theme/palette.slint";
 import { UiData, UiActions, Intent } from "../state.slint";
-import { Label, Caption, Paragraph, Heading, Panel, ContentPanel, ActionButton, Field, Select, SettingRow } from "../components/controls.slint";
+import { Label, Caption, Paragraph, Heading, Panel, ContentPanel, ActionButton, Field, Select, SettingRow, CopyButton } from "../components/controls.slint";
 export component AppDialog inherits Rectangle {
     in-out property <int> selected-accent: UiData.accent;
-    background: #00000065;
-    TouchArea { }
-    init => { modal-focus.focus(); }
-    modal-focus := FocusScope { }
-    dialog := Panel {
-        x: (parent.width - self.width) / 2;
-        y: (parent.height - self.height) / 2;
-        width: min(parent.width - 48px, UiData.modal == 10 || UiData.modal == 11 || UiData.modal == 13 ? 700px : 600px);
-        height: min(parent.height - 48px, content.preferred-height);
-        content := VerticalLayout {
-            padding: Theme.dialog-padding; spacing: Theme.dialog-gap;
-            Heading { text: UiData.modal-title; font-size: 20px * Theme.text-scale; }
-            ScrollView {
-                min-height: 0px;
-                preferred-height: body.preferred-height;
-                body := VerticalLayout {
-                    alignment: start; padding-right: Theme.content-gap; spacing: Theme.page-gap;
-                    if UiData.modal-country != "": HorizontalLayout {
-                        cross-axis-alignment: center; spacing: Theme.content-gap;
-                        if UiData.modal-flagged: Image { source: UiData.modal-flag; width: 24px; height: 24px; image-fit: contain; }
-                        Label { text: UiData.modal-country; }
-                    }
-                    if UiData.modal-description != "": Paragraph { text: UiData.modal-description; }
-                    if UiData.modal == 2: VerticalLayout {
-                        spacing: Theme.page-gap;
-                        Caption { text: "名称"; }
-                        Field { modal-control: true; accepted => { if UiData.modal-can-accept && !UiData.working && !UiData.exiting { UiActions.dispatch(Intent.confirm, "", ""); } } focus-id: "profile-edit-name"; text <=> UiData.edit-name; edited(value) => { UiActions.dispatch(Intent.edit-name, value, ""); } }
-                        Caption { text: "订阅地址或本地文件"; }
-                        Field { modal-control: true; accepted => { if UiData.modal-can-accept && !UiData.working && !UiData.exiting { UiActions.dispatch(Intent.confirm, "", ""); } } text <=> UiData.edit-source; edited(value) => { UiActions.dispatch(Intent.edit-source, value, ""); } }
-                        ActionButton { modal-control: true; text: "选择文件"; clicked => { UiActions.dispatch(Intent.pick-file, "true", ""); } }
-                    }
-                    if UiData.modal == 3: VerticalLayout {
-                        spacing: Theme.page-gap;
-                        Caption { text: "名称"; }
-                        Field { modal-control: true; accepted => { if UiData.modal-can-accept && !UiData.working && !UiData.exiting { UiActions.dispatch(Intent.confirm, "", ""); } } focus-id: "profile-edit-name"; text <=> UiData.profile-name; edited(value) => { UiActions.dispatch(Intent.profile-name, value, ""); } }
-                        Caption { text: "订阅地址或本地文件"; }
-                        Field { modal-control: true; accepted => { if UiData.modal-can-accept && !UiData.working && !UiData.exiting { UiActions.dispatch(Intent.confirm, "", ""); } } text <=> UiData.profile-source; edited(value) => { UiActions.dispatch(Intent.profile-source, value, ""); } }
-                        ActionButton { modal-control: true; text: "选择文件"; clicked => { UiActions.dispatch(Intent.pick-file, "false", ""); } }
-                    }
-                    if UiData.modal == 4: VerticalLayout {
-                        spacing: Theme.page-gap;
-                        HorizontalLayout { cross-axis-alignment: center; spacing: Theme.content-gap;
-                            ActionButton { modal-control: true; text: "表单"; selected: !UiData.rule-text-mode; clicked => { UiActions.dispatch(Intent.rule-text-mode, "false", ""); } }
-                            ActionButton { modal-control: true; text: "规则文本"; selected: UiData.rule-text-mode; clicked => { UiActions.dispatch(Intent.rule-text-mode, "true", ""); } }
-                            Rectangle { horizontal-stretch: 1; }
+    presence := Presence { open: UiData.modal != 0; }
+    out property <bool> mounted: presence.mounted;
+    property <int> source-kind: UiData.modal;
+    property <int> kind;
+    changed source-kind => {
+        if self.source-kind != 0 { self.kind = self.source-kind; self.selected-accent = UiData.accent; }
+    }
+    // Keep the last heading during exit; business state may already be cleared.
+    property <string> source-title: UiData.modal-title;
+    property <string> source-description: UiData.modal-description;
+    property <string> source-accept: UiData.modal-accept;
+    property <string> last-title;
+    property <string> last-description;
+    property <string> last-accept;
+    changed source-title => { if UiData.modal != 0 { self.last-title = self.source-title; } }
+    changed source-description => { if UiData.modal != 0 { self.last-description = self.source-description; } }
+    changed source-accept => { if UiData.modal != 0 { self.last-accept = self.source-accept; } }
+    init => { self.kind = UiData.modal; self.last-title = self.source-title; self.last-description = self.source-description; self.last-accept = self.source-accept; }
+    visible: presence.mounted;
+    if presence.mounted: Rectangle {
+        opacity: presence.progress;
+        property <bool> opened: UiData.modal != 0;
+        changed opened => { if self.opened { modal-focus.focus(); } }
+        background: #00000065;
+        TouchArea { }
+        init => { modal-focus.focus(); }
+        modal-focus := FocusScope { enabled: UiData.modal != 0; }
+        dialog := Panel {
+            x: (parent.width - self.width) / 2;
+            y: (parent.height - self.height) / 2 + (1 - presence.progress) * 8px;
+            width: min(parent.width - 48px, root.kind == 10 || root.kind == 11 || root.kind == 13 ? 700px : 600px);
+            height: min(parent.height - 48px, content.preferred-height);
+            content := VerticalLayout {
+                padding: Theme.dialog-padding; spacing: Theme.dialog-gap;
+                Heading { text: UiData.modal != 0 ? UiData.modal-title : root.last-title; font-size: 20px * Theme.text-scale; }
+                ScrollView {
+                    min-height: 0px;
+                    preferred-height: body.preferred-height;
+                    body := VerticalLayout {
+                        alignment: start; padding-right: Theme.content-gap; spacing: Theme.page-gap;
+                        if UiData.modal-country != "": HorizontalLayout {
+                            cross-axis-alignment: center; spacing: Theme.content-gap;
+                            if UiData.modal-flagged: Image { source: UiData.modal-flag; width: 24px; height: 24px; image-fit: contain; }
+                            Label { text: UiData.modal-country; }
                         }
-                        if UiData.rule-text-mode: Field { modal-control: true; accepted => { if UiData.modal-can-accept && !UiData.working && !UiData.exiting { UiActions.dispatch(Intent.confirm, "", ""); } } focus-id: "rule-raw"; text <=> UiData.rule-raw; edited(value) => { UiActions.dispatch(Intent.rule-raw, value, ""); } }
-                        if !UiData.rule-text-mode: VerticalLayout {
+                        if (UiData.modal != 0 ? UiData.modal-description : root.last-description) != "": Paragraph { text: UiData.modal != 0 ? UiData.modal-description : root.last-description; }
+                        if root.kind == 2: VerticalLayout {
+                            spacing: Theme.page-gap;
+                            Caption { text: "名称"; }
+                            Field { modal-control: true; accepted => { if UiData.modal-can-accept && !UiData.working && !UiData.exiting { UiActions.dispatch(Intent.confirm, "", ""); } } focus-id: "profile-edit-name"; text <=> UiData.edit-name; edited(value) => { UiActions.dispatch(Intent.edit-name, value, ""); } }
+                            Caption { text: "订阅地址或本地文件"; }
+                            Field { modal-control: true; accepted => { if UiData.modal-can-accept && !UiData.working && !UiData.exiting { UiActions.dispatch(Intent.confirm, "", ""); } } text <=> UiData.edit-source; edited(value) => { UiActions.dispatch(Intent.edit-source, value, ""); } }
+                            ActionButton { modal-control: true; text: "选择文件"; clicked => { UiActions.dispatch(Intent.pick-file, "true", ""); } }
+                        }
+                        if root.kind == 3: VerticalLayout {
+                            spacing: Theme.page-gap;
+                            Caption { text: "名称"; }
+                            Field { modal-control: true; accepted => { if UiData.modal-can-accept && !UiData.working && !UiData.exiting { UiActions.dispatch(Intent.confirm, "", ""); } } focus-id: "profile-edit-name"; text <=> UiData.profile-name; edited(value) => { UiActions.dispatch(Intent.profile-name, value, ""); } }
+                            Caption { text: "订阅地址或本地文件"; }
+                            Field { modal-control: true; accepted => { if UiData.modal-can-accept && !UiData.working && !UiData.exiting { UiActions.dispatch(Intent.confirm, "", ""); } } text <=> UiData.profile-source; edited(value) => { UiActions.dispatch(Intent.profile-source, value, ""); } }
+                            ActionButton { modal-control: true; text: "选择文件"; clicked => { UiActions.dispatch(Intent.pick-file, "false", ""); } }
+                        }
+                        if root.kind == 4: VerticalLayout {
                             spacing: Theme.page-gap;
                             HorizontalLayout { cross-axis-alignment: center; spacing: Theme.content-gap;
-                                Caption { text: "类型"; width: 80px; }
-                                Select { modal-control: true; value: UiData.rule-kind; options: UiData.rule-types; selected(index, value) => { UiActions.dispatch(Intent.rule-kind, value, ""); } }
+                                ActionButton { modal-control: true; text: "表单"; selected: !UiData.rule-text-mode; clicked => { UiActions.dispatch(Intent.rule-text-mode, "false", ""); } }
+                                ActionButton { modal-control: true; text: "规则文本"; selected: UiData.rule-text-mode; clicked => { UiActions.dispatch(Intent.rule-text-mode, "true", ""); } }
+                                Rectangle { horizontal-stretch: 1; }
+                            }
+                            if UiData.rule-text-mode: Field { modal-control: true; accepted => { if UiData.modal-can-accept && !UiData.working && !UiData.exiting { UiActions.dispatch(Intent.confirm, "", ""); } } focus-id: "rule-raw"; text <=> UiData.rule-raw; edited(value) => { UiActions.dispatch(Intent.rule-raw, value, ""); } }
+                            if !UiData.rule-text-mode: VerticalLayout {
+                                spacing: Theme.page-gap;
+                                HorizontalLayout { cross-axis-alignment: center; spacing: Theme.content-gap;
+                                    Caption { text: "类型"; width: 80px; }
+                                    Select { modal-control: true; value: UiData.rule-kind; options: UiData.rule-types; selected(index, value) => { UiActions.dispatch(Intent.rule-kind, value, ""); } }
+                                }
+                                HorizontalLayout { cross-axis-alignment: center; spacing: Theme.content-gap;
+                                    Caption { text: "匹配内容"; width: 80px; }
+                                    Field { modal-control: true; accepted => { if UiData.modal-can-accept && !UiData.working && !UiData.exiting { UiActions.dispatch(Intent.confirm, "", ""); } } focus-id: "rule-payload"; text <=> UiData.rule-payload; edited(value) => { UiActions.dispatch(Intent.rule-payload, value, ""); } }
+                                }
+                                HorizontalLayout { cross-axis-alignment: center; spacing: Theme.content-gap;
+                                    Caption { text: "策略"; width: 80px; }
+                                    Select { modal-control: true; value: UiData.rule-policy; options: UiData.rule-policies; selected(index, value) => { UiActions.dispatch(Intent.rule-policy, value, ""); } }
+                                }
+                                if (UiData.rule-kind == "GEOIP" || UiData.rule-kind == "IP-CIDR" || UiData.rule-kind == "IP-CIDR6" || UiData.rule-kind == "IP-ASN" || UiData.rule-kind == "RULE-SET"): SettingRow { modal-control: true; title: "no-resolve"; checked: UiData.rule-no-resolve; toggled(value) => { UiActions.dispatch(Intent.rule-no-resolve, value ? "true" : "false", ""); } }
                             }
                             HorizontalLayout { cross-axis-alignment: center; spacing: Theme.content-gap;
-                                Caption { text: "匹配内容"; width: 80px; }
-                                Field { modal-control: true; accepted => { if UiData.modal-can-accept && !UiData.working && !UiData.exiting { UiActions.dispatch(Intent.confirm, "", ""); } } focus-id: "rule-payload"; text <=> UiData.rule-payload; edited(value) => { UiActions.dispatch(Intent.rule-payload, value, ""); } }
+                                Caption { text: "插入位置"; width: 80px; }
+                                Field { modal-control: true; accepted => { if UiData.modal-can-accept && !UiData.working && !UiData.exiting { UiActions.dispatch(Intent.confirm, "", ""); } } text <=> UiData.rule-position; edited(value) => { UiActions.dispatch(Intent.rule-position, value, ""); } }
                             }
+                            SettingRow { modal-control: true; title: "启用规则"; checked: UiData.rule-enabled; toggled(value) => { UiActions.dispatch(Intent.rule-enabled, value ? "true" : "false", ""); } }
+                        }
+                        if root.kind == 5: Field { modal-control: true; accepted => { if UiData.modal-can-accept && !UiData.working && !UiData.exiting { UiActions.dispatch(Intent.confirm, "", ""); } } text <=> UiData.rule-move-position; edited(value) => { UiActions.dispatch(Intent.rule-move-input, value, ""); } }
+                        if root.kind == 8: HorizontalLayout { cross-axis-alignment: center; spacing: Theme.content-gap;
+                            CopyButton { modal-control: true; label: "复制采样脚本"; intent: Intent.claude-copy-script; }
+                            ActionButton { modal-control: true; text: "导入剪贴板"; clicked => { UiActions.dispatch(Intent.claude-import, "", ""); } }
+                            if UiData.browser-session: ActionButton { modal-control: true; text: "关闭回传"; clicked => { UiActions.dispatch(Intent.claude-close-session, "", ""); } }
+                            ActionButton { modal-control: true; text: "打开采样页"; clicked => { UiActions.dispatch(Intent.claude-browser, "", ""); } }
+                        }
+                        if root.kind == 9: VerticalLayout {
+                            spacing: Theme.page-gap;
+                            Field { modal-control: true; accepted => { if UiData.modal-can-accept && !UiData.working && !UiData.exiting { UiActions.dispatch(Intent.confirm, "", ""); } } secret: true; placeholder: "可选：ipapi.is API 密钥"; text <=> UiData.reputation-key; edited(value) => { UiActions.dispatch(Intent.claude-key, value, ""); } }
+                            ActionButton { modal-control: true; text: "保存密钥"; enabled: !UiData.working; clicked => { UiActions.dispatch(Intent.claude-save-key, "", ""); } }
                             HorizontalLayout { cross-axis-alignment: center; spacing: Theme.content-gap;
-                                Caption { text: "策略"; width: 80px; }
-                                Select { modal-control: true; value: UiData.rule-policy; options: UiData.rule-policies; selected(index, value) => { UiActions.dispatch(Intent.rule-policy, value, ""); } }
-                            }
-                            if (UiData.rule-kind == "GEOIP" || UiData.rule-kind == "IP-CIDR" || UiData.rule-kind == "IP-CIDR6" || UiData.rule-kind == "IP-ASN" || UiData.rule-kind == "RULE-SET"): SettingRow { modal-control: true; title: "no-resolve"; checked: UiData.rule-no-resolve; toggled(value) => { UiActions.dispatch(Intent.rule-no-resolve, value ? "true" : "false", ""); } }
-                        }
-                        HorizontalLayout { cross-axis-alignment: center; spacing: Theme.content-gap;
-                            Caption { text: "插入位置"; width: 80px; }
-                            Field { modal-control: true; accepted => { if UiData.modal-can-accept && !UiData.working && !UiData.exiting { UiActions.dispatch(Intent.confirm, "", ""); } } text <=> UiData.rule-position; edited(value) => { UiActions.dispatch(Intent.rule-position, value, ""); } }
-                        }
-                        SettingRow { modal-control: true; title: "启用规则"; checked: UiData.rule-enabled; toggled(value) => { UiActions.dispatch(Intent.rule-enabled, value ? "true" : "false", ""); } }
-                    }
-                    if UiData.modal == 5: Field { modal-control: true; accepted => { if UiData.modal-can-accept && !UiData.working && !UiData.exiting { UiActions.dispatch(Intent.confirm, "", ""); } } text <=> UiData.rule-move-position; edited(value) => { UiActions.dispatch(Intent.rule-move-input, value, ""); } }
-                    if UiData.modal == 8: HorizontalLayout { cross-axis-alignment: center; spacing: Theme.content-gap;
-                        ActionButton { modal-control: true; text: "复制采样脚本"; clicked => { UiActions.dispatch(Intent.claude-copy-script, "", ""); } }
-                        ActionButton { modal-control: true; text: "导入剪贴板"; clicked => { UiActions.dispatch(Intent.claude-import, "", ""); } }
-                        if UiData.browser-session: ActionButton { modal-control: true; text: "关闭回传"; clicked => { UiActions.dispatch(Intent.claude-close-session, "", ""); } }
-                        ActionButton { modal-control: true; text: "打开采样页"; clicked => { UiActions.dispatch(Intent.claude-browser, "", ""); } }
-                    }
-                    if UiData.modal == 9: VerticalLayout {
-                        spacing: Theme.page-gap;
-                        Field { modal-control: true; accepted => { if UiData.modal-can-accept && !UiData.working && !UiData.exiting { UiActions.dispatch(Intent.confirm, "", ""); } } secret: true; placeholder: "可选：ipapi.is API 密钥"; text <=> UiData.reputation-key; edited(value) => { UiActions.dispatch(Intent.claude-key, value, ""); } }
-                        ActionButton { modal-control: true; text: "保存密钥"; enabled: !UiData.working; clicked => { UiActions.dispatch(Intent.claude-save-key, "", ""); } }
-                        HorizontalLayout { cross-axis-alignment: center; spacing: Theme.content-gap;
-                            ActionButton { modal-control: true; text: "注册信息"; enabled: UiData.running && !UiData.claude-busy; clicked => { UiActions.dispatch(Intent.claude-additional, "registration", ""); } }
-                            ActionButton { modal-control: true; text: "全球探针"; enabled: UiData.running && !UiData.claude-busy; clicked => { UiActions.dispatch(Intent.claude-additional, "global-ping", ""); } }
-                            ActionButton { modal-control: true; text: "小流量测速"; enabled: UiData.running && !UiData.claude-busy; clicked => { UiActions.dispatch(Intent.claude-additional, "speed", ""); } }
-                        }
-                    }
-                    if UiData.modal == 10: VerticalLayout {
-                        spacing: 0px;
-                        for item[i] in UiData.connection-details: Rectangle {
-                            height: max(44px, detail-row.preferred-height);
-                            background: mod(i, 2) == 0 ? Theme.inset : transparent;
-                            detail-row := HorizontalLayout {
-                                padding-left: 12px; padding-right: 12px; padding-top: 10px; padding-bottom: 10px;
-                                spacing: Theme.page-gap; cross-axis-alignment: start;
-                                Caption { text: item.label; width: 100px * Theme.text-scale; horizontal-stretch: 0; }
-                                Paragraph { text: item.value; }
+                                ActionButton { modal-control: true; text: "注册信息"; enabled: UiData.running && !UiData.claude-busy; clicked => { UiActions.dispatch(Intent.claude-additional, "registration", ""); } }
+                                ActionButton { modal-control: true; text: "全球探针"; enabled: UiData.running && !UiData.claude-busy; clicked => { UiActions.dispatch(Intent.claude-additional, "global-ping", ""); } }
+                                ActionButton { modal-control: true; text: "小流量测速"; enabled: UiData.running && !UiData.claude-busy; clicked => { UiActions.dispatch(Intent.claude-additional, "speed", ""); } }
                             }
                         }
-                    }
-                    if UiData.modal == 12: VerticalLayout {
-                        spacing: Theme.page-gap;
-                        for row in [0, 1]: HorizontalLayout { cross-axis-alignment: center; spacing: Theme.page-gap;
-                            for column in [0, 1, 2]: Rectangle {
-                                width: (dialog.width - Theme.dialog-padding * 2 - Theme.content-gap - Theme.page-gap * 2) / 3; height: 76px;
-                                border-radius: 8px; border-width: 1px;
-                                border-color: root.selected-accent == row * 3 + column ? Theme.accent : Theme.line;
-                                background: root.selected-accent == row * 3 + column ? Theme.accent-wash : Theme.surface;
-                                Rectangle { x: 12px; y: (parent.height - self.height) / 2; width: 24px; height: 24px; border-radius: 12px; background: AccentPalette.accent-colors[row * 3 + column]; }
-                                Label { x: 44px; height: parent.height; width: parent.width - 48px; text: AccentPalette.accent-names[row * 3 + column]; }
-                                TouchArea { mouse-cursor: pointer; clicked => { root.selected-accent = row * 3 + column; } }
+                        if root.kind == 10: VerticalLayout {
+                            spacing: 0px;
+                            for item[i] in UiData.connection-details: Rectangle {
+                                height: max(44px, detail-row.preferred-height);
+                                background: mod(i, 2) == 0 ? Theme.inset : transparent;
+                                detail-row := HorizontalLayout {
+                                    padding-left: 12px; padding-right: 12px; padding-top: 10px; padding-bottom: 10px;
+                                    spacing: Theme.page-gap; cross-axis-alignment: start;
+                                    Caption { text: item.label; width: 100px * Theme.text-scale; horizontal-stretch: 0; }
+                                    Paragraph { text: item.value; }
+                                }
                             }
                         }
+                        if root.kind == 12: VerticalLayout {
+                            spacing: Theme.page-gap;
+                            for row in [0, 1]: HorizontalLayout { cross-axis-alignment: center; spacing: Theme.page-gap;
+                                for column in [0, 1, 2]: Rectangle {
+                                    width: (dialog.width - Theme.dialog-padding * 2 - Theme.content-gap - Theme.page-gap * 2) / 3; height: 76px;
+                                    border-radius: 8px; border-width: 1px;
+                                    border-color: root.selected-accent == row * 3 + column ? Theme.accent : Theme.line;
+                                    background: root.selected-accent == row * 3 + column ? Theme.accent-wash : Theme.surface;
+                                    Rectangle { x: 12px; y: (parent.height - self.height) / 2; width: 24px; height: 24px; border-radius: 12px; background: AccentPalette.accent-colors[row * 3 + column]; }
+                                    Label { x: 44px; height: parent.height; width: parent.width - 48px; text: AccentPalette.accent-names[row * 3 + column]; }
+                                    TouchArea { mouse-cursor: pointer; clicked => { root.selected-accent = row * 3 + column; } }
+                                }
+                            }
+                        }
+                        if UiData.modal-error != "": Paragraph { text: UiData.modal-error; color: Theme.danger; }
                     }
-                    if UiData.modal-error != "": Paragraph { text: UiData.modal-error; color: Theme.danger; }
                 }
-            }
-            HorizontalLayout { cross-axis-alignment: center; spacing: Theme.content-gap;
-                if UiData.modal == 10 || UiData.modal == 11 || UiData.modal == 13: ActionButton {
-                    modal-control: true; text: UiData.modal == 13 ? "复制全文" : "复制详情";
-                    enabled: UiData.modal != 10 || UiData.connection-details.length > 0;
-                    clicked => { UiActions.dispatch(Intent.copy, UiData.modal-copy, ""); }
-                }
-                Rectangle { horizontal-stretch: 1; }
-                ActionButton { modal-control: true; text: UiData.modal-accept == "" ? "关闭" : "取消"; clicked => { UiActions.dispatch(Intent.cancel-confirm, "", ""); } }
-                if UiData.modal-accept != "": ActionButton { modal-control: true;
-                    text: UiData.modal-accept; primary: !UiData.modal-danger; danger: UiData.modal-danger;
-                    enabled: UiData.modal-can-accept && (UiData.modal == 12 || !UiData.working) && !UiData.exiting;
-                    clicked => { if UiData.modal == 12 { UiActions.dispatch(Intent.accent-color, "" + root.selected-accent, ""); } else { UiActions.dispatch(Intent.confirm, "", ""); } }
+                HorizontalLayout { cross-axis-alignment: center; spacing: Theme.content-gap;
+                    if root.kind == 10 || root.kind == 11 || root.kind == 13: CopyButton {
+                        modal-control: true; label: root.kind == 13 ? "复制全文" : "复制详情"; value: UiData.modal-copy;
+                        enabled: root.kind != 10 || UiData.connection-details.length > 0;
+                    }
+                    Rectangle { horizontal-stretch: 1; }
+                    ActionButton { modal-control: true; text: (UiData.modal != 0 ? UiData.modal-accept : root.last-accept) == "" ? "关闭" : "取消"; clicked => { UiActions.dispatch(Intent.cancel-confirm, "", ""); } }
+                    if (UiData.modal != 0 ? UiData.modal-accept : root.last-accept) != "": ActionButton { modal-control: true;
+                        text: UiData.modal != 0 ? UiData.modal-accept : root.last-accept; primary: !UiData.modal-danger; danger: UiData.modal-danger;
+                        enabled: UiData.modal-can-accept && (root.kind == 12 || !UiData.working) && !UiData.exiting;
+                        clicked => { if root.kind == 12 { UiActions.dispatch(Intent.accent-color, "" + root.selected-accent, ""); } else { UiActions.dispatch(Intent.confirm, "", ""); } }
+                    }
                 }
             }
         }
+        if UiData.modal == 0: TouchArea { }
     }
 }

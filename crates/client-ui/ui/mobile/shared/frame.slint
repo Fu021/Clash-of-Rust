@@ -1,3 +1,4 @@
+import { Motion, MotionScope, Presence } from "../../components/motion.slint";
 import { MobileTypography } from "typography.slint";
 // Responsive chrome only. Each platform supplies its own routes and pages.
 import { Theme } from "../../theme/palette.slint";
@@ -14,6 +15,11 @@ component HeaderStatus inherits VerticalLayout {
 }
 
 export component MobileFrame inherits Rectangle {
+    MotionScope { }
+    notice-presence := Presence { open: MobileView.notice != ""; }
+    property <string> notice-source: MobileView.notice;
+    property <string> notice-text;
+    changed notice-source => { if self.notice-source != "" { self.notice-text = self.notice-source; } }
     in property <[int]> primary-pages;
     in property <[int]> sidebar-pages;
     in property <bool> tab-pill;
@@ -47,8 +53,9 @@ export component MobileFrame inherits Rectangle {
     property <float> notice-elapsed: MobileView.notice-elapsed;
     changed notice-revision => { root.notice-start = animation-tick() - MobileView.notice-elapsed * 1s; }
     changed notice-elapsed => { root.notice-start = animation-tick() - MobileView.notice-elapsed * 1s; }
-    init => { root.notice-start = animation-tick() - MobileView.notice-elapsed * 1s; }
+    init => { root.notice-start = animation-tick() - MobileView.notice-elapsed * 1s; root.notice-text = MobileView.notice; }
     background: Theme.canvas;
+    animate background { duration: Motion.appearance; enabled: Motion.active; }
     Timer { running: MobileView.notice != ""; interval: 100ms;
         triggered => { if animation-tick() - root.notice-start >= 8s { MobileView.notice = ""; } }
     }
@@ -67,6 +74,7 @@ export component MobileFrame inherits Rectangle {
             x: 0px; y: 0px; width: MobileView.safe-left + root.nav-width;
             height: root.height - MobileView.keyboard-inset;
             background: Theme.sidebar;
+            animate background { duration: Motion.appearance; enabled: Motion.active; }
             Rectangle { x: parent.width - 1px; width: 1px; height: parent.height; background: Theme.line; }
             VerticalLayout { x: MobileView.safe-left; y: MobileView.safe-top;
                 width: root.nav-width; height: root.usable-height;
@@ -131,6 +139,7 @@ export component MobileFrame inherits Rectangle {
         if root.bottom: Rectangle {
             x: 0px; y: root.height - root.bottom-height;
             width: root.width; height: root.bottom-height; background: Theme.sidebar;
+            animate background { duration: Motion.appearance; enabled: Motion.active; }
             Rectangle { x: 0px; y: 0px; height: 1px; width: parent.width; background: Theme.line; }
             HorizontalLayout { x: MobileView.safe-left + 8px; y: 4px; width: root.usable-width - 16px; height: root.nav-content-height; spacing: 4px;
                 for route-id in root.primary-pages: MNav { stacked: true; pill: root.tab-pill;
@@ -139,12 +148,12 @@ export component MobileFrame inherits Rectangle {
                 }
             }
         }
-        if MobileView.modal: MobileModal { centered: root.centered-modal || root.expanded; }
+        MobileModal { centered: root.centered-modal || root.expanded; }
         // Last sibling: notifications overlay both page content and modal sheets.
-        if MobileView.notice != "": MNotice {
+        if notice-presence.mounted: MNotice {
             x: MobileView.safe-left + (root.usable-width - self.width) / 2;
-            y: MobileView.safe-top + 8px; width: min(600px, root.usable-width - 24px);
-            text: MobileView.notice;
+            y: MobileView.safe-top + 8px - (1 - notice-presence.progress) * 8px; opacity: notice-presence.progress; width: min(600px, root.usable-width - 24px);
+            text: root.notice-text;
             progress: clamp((animation-tick() - root.notice-start) / 8s, 0, 1);
             dismissed => { MobileView.notice = ""; }
         }

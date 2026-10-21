@@ -140,6 +140,7 @@ struct State {
     query: String,
     selected: String,
     notice: String,
+    copied: (i32, Arc<str>),
     logs: VecDeque<(String, String)>,
     log_level: String,
     connection_sort: String,
@@ -318,6 +319,7 @@ async fn run_loop(
         query: String::new(),
         selected: String::new(),
         notice: String::new(),
+        copied: Default::default(),
         logs: VecDeque::new(),
         log_level: "全部等级".into(),
         connection_sort: "下载速度 ↓".into(),
@@ -1294,6 +1296,7 @@ async fn handle(state: &mut State, request: Request) -> Result<()> {
         MobileIntent::ConnectionSort => state.connection_sort = a,
         MobileIntent::ConnectionDetail => state.selected = a,
         MobileIntent::Copy => {
+            let key = a.clone();
             let text = if let Some(id) = a.strip_prefix("connection:") {
                 let c = session
                     .connections
@@ -1317,6 +1320,7 @@ async fn handle(state: &mut State, request: Request) -> Result<()> {
                 a
             };
             session.native.request(json!({"op":"copy","text":text}))?;
+            state.copied = (state.copied.0.wrapping_add(1), key.into());
             state.notice = "已复制".into();
         }
         MobileIntent::LogLevel => state.log_level = a,
@@ -1603,6 +1607,7 @@ struct GroupView {
     testing: bool,
 }
 struct Projection {
+    copied: (i32, Arc<str>),
     page: i32,
     settings: config::Settings,
     running: bool,
@@ -1915,6 +1920,7 @@ fn project(state: &State) -> Projection {
         });
     }
     Projection {
+        copied: state.copied.clone(),
         page: state.page,
         settings: s.settings.clone(),
         running: s.running,
@@ -1993,6 +1999,11 @@ fn apply(ui: &AndroidWindow, p: Projection) {
         return;
     }
     let data = ui.global::<MobileData>();
+    let view = ui.global::<MobileView>();
+    if view.get_copy_revision() != p.copied.0 {
+        view.set_copy_value(p.copied.1.as_ref().into());
+        view.set_copy_revision(p.copied.0);
+    }
     data.set_working(false);
     data.set_geo_updating(p.geo_updating);
     data.set_delay_busy(p.delay_busy);

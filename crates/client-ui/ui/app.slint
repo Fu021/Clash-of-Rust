@@ -1,7 +1,10 @@
+import { Motion, MotionScope, ProgressTrack } from "components/motion.slint";
+import { DesktopNotice } from "components/notice.slint";
 import { ScrollView } from "std-widgets.slint";
 import { UiData, UiActions, Intent } from "state.slint";
 import { Theme } from "theme/palette.slint";
 export { Theme } from "theme/palette.slint";
+export { Motion } from "components/motion.slint";
 export { UiData, UiActions, Intent, Choice, DetailItem, NodeItem, NodePair, GroupItem, ProfileItem, ConnectionItem, RuleItem, LogItem, ReportItem, CategoryItem, CategoryPair } from "state.slint";
 import { Label, Caption, ContentPanel, Panel, ActionButton, Badge, Paragraph } from "components/controls.slint";
 import { NavigationItem } from "components/navigation.slint";
@@ -18,10 +21,14 @@ import { SettingsPage } from "pages/settings.slint";
 import { AppDialog } from "dialogs/app-dialog.slint";
 import "../../../resources/fonts/SourceHanSansCN-Regular.otf";
 export component AppWindow inherits Window {
+    MotionScope { }
+    out property <bool> modal-mounted: dialog-host.mounted;
+    out property <bool> notice-mounted: notice-host.mounted;
     title: "Clash of Rust · 原生代理客户端";
     preferred-width: 950px;
     preferred-height: 700px;
     background: Theme.canvas;
+    animate background { duration: Motion.appearance; enabled: Motion.active; }
     in-out property <bool> dark <=> UiData.dark;
     in-out property <int> page <=> UiData.page;
     in-out property <length> window-min-width: 800px;
@@ -53,9 +60,12 @@ export component AppWindow inherits Window {
         }
     Rectangle {
         x: 0px; y: 0px; width: 176px; height: parent.height; background: Theme.sidebar;
+        animate background { duration: Motion.appearance; enabled: Motion.active; }
         Rectangle { x: parent.width - 1px; width: 1px; height: parent.height; background: Theme.line; }
         Rectangle {
-            x: 8px; y: 16px; width: 40px; height: 40px;
+            x: 8px; y: 16px; width: 40px; height: 40px; border-radius: 8px;
+            background: icon-area.pressed ? Theme.accent-wash : icon-area.has-hover ? Theme.inset : transparent;
+            animate background { duration: Motion.fast; enabled: Motion.active; }
             accessible-role: button;
             accessible-label: "系统通知";
             accessible-action-default => { if !UiData.notification-busy && UiData.modal == 0 { UiActions.dispatch(Intent.system-notification, "", ""); } }
@@ -67,7 +77,7 @@ export component AppWindow inherits Window {
                     return reject;
                 }
             }
-            TouchArea {
+            icon-area := TouchArea {
                 enabled: !UiData.notification-busy && UiData.modal == 0;
                 mouse-cursor: pointer;
                 clicked => { UiActions.dispatch(Intent.system-notification, "", ""); }
@@ -113,12 +123,10 @@ export component AppWindow inherits Window {
                     if UiData.update-downloading: ActionButton { text: "取消"; clicked => { UiActions.dispatch(Intent.cancel-update, "", ""); } }
                     if UiData.update-available && !UiData.update-busy: ActionButton { text: "下载安装"; primary: true; clicked => { UiActions.dispatch(Intent.install-update, "", ""); } }
                 }
-                if UiData.update-downloading: Rectangle { height: 3px; background: Theme.subtle-line;
-                    Rectangle { x: 0px; y: 0px; width: parent.width * UiData.update-fraction; height: parent.height; background: Theme.accent; }
-                }
+                if UiData.update-downloading: ProgressTrack { value: UiData.update-fraction; track: Theme.subtle-line; fill: Theme.accent; }
             }
             Rectangle {
-                vertical-stretch: 1; min-height: 0px;
+                vertical-stretch: 1; min-height: 0px; clip: true;
                 if UiData.page == 0: HomePage { }
                 if UiData.page == 1: ProxiesPage { }
                 if UiData.page == 2: SubscriptionsPage { }
@@ -132,26 +140,9 @@ export component AppWindow inherits Window {
             }
         }
     }
-    if UiData.modal != 0: AppDialog { }
-    // Draw after AppDialog so notices never resize a page and remain dismissible.
-    if UiData.notice != "": notice-panel := ContentPanel {
-        x: (parent.width - self.width) / 2; y: 16px;
-        width: min(640px, parent.width - 48px);
-        drop-shadow-blur: 20px; drop-shadow-offset-y: 4px; drop-shadow-color: #00000030;
-        interactive: true;
-        property <int> revision: UiData.notice-revision;
-        property <duration> started;
-        init => { self.started = animation-tick() - UiData.notice-elapsed * 1s; }
-        changed revision => { self.started = animation-tick() - UiData.notice-elapsed * 1s; }
-        property <float> progress: clamp((animation-tick() - self.started) / 8s, 0, 1);
-        HorizontalLayout { cross-axis-alignment: center; spacing: Theme.content-gap;
-            Paragraph { text: UiData.notice; color: UiData.notice-error ? Theme.danger : Theme.secondary; }
-            if UiData.retry-core: ActionButton { modal-control: true; text: "重启内核"; primary: true; enabled: !UiData.working; clicked => { UiActions.dispatch(Intent.restart-core, "", ""); } }
-            ActionButton { modal-control: true; text: "关闭"; clicked => { UiActions.dispatch(Intent.dismiss-notice, "", ""); } }
-        }
-        Rectangle { height: 2px; background: Theme.subtle-line;
-            Rectangle { x: 0px; y: 0px; width: parent.width * notice-panel.progress; height: parent.height; background: UiData.notice-error ? Theme.danger : Theme.accent; }
-        }
-    }
+    // Only active/closing overlays mount their content; the page remains live.
+    dialog-host := AppDialog { }
+    // Last sibling: notices overlay dialogs without changing page geometry.
+    notice-host := DesktopNotice { x: (parent.width - self.width) / 2; width: min(640px, parent.width - 48px); }
     }
 }

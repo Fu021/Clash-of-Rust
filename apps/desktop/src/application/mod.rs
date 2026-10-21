@@ -346,6 +346,7 @@ struct App {
     dns_host: String,
     test_results: Vec<String>,
     geo_status: String,
+    geo_updating: bool,
     updates: update::State,
 }
 
@@ -470,6 +471,7 @@ impl App {
             settings,
             profiles,
             geo_status,
+            geo_updating: false,
             notice,
             error,
             core_failure,
@@ -650,6 +652,7 @@ impl App {
         }
         self.busy = true;
         self.working = !matches!(action, Action::Refresh);
+        self.geo_updating = matches!(action, Action::UpdateGeo);
         if let Action::ClaudeProtection(enabled) = &action {
             self.claude.protection_pending = Some(*enabled);
         }
@@ -784,6 +787,7 @@ impl App {
             Message::CoreReady(result) => {
                 self.busy = false;
                 self.working = false;
+                self.geo_updating = false;
                 if self.exiting {
                     return Task::none();
                 }
@@ -1572,6 +1576,7 @@ impl App {
                 }
             }
             Message::Finished(reply) => {
+                self.geo_updating = false;
                 self.claude.protection_pending = None;
                 let reply = *reply;
                 let protection_changed = reply.protection_changed;

@@ -1,3 +1,4 @@
+import { PageSurface } from "../../components/motion.slint";
 import { MobileData } from "../shared/state.slint";
 import { IosData, IosActions, IosIntent } from "state.slint";
 import { MSmall, MHeading, MCard, MButton, MRow, MDivider, MSwitch, MScroll } from "../shared/controls.slint";
@@ -26,7 +27,7 @@ component IosAbout inherits MCard {
     MSmall { text: "版本与分发信息"; }
     MButton { text: "查看版本更新"; clicked => { IosActions.request(IosIntent.version-info, ""); } }
 }
-export component IosSettings inherits Rectangle {
+export component IosSettings inherits PageSurface {
     MScroll {
         if root.width < 760px: VerticalLayout { alignment: start; spacing: 20px; padding-bottom: 20px;
             AppearanceSettings { } IosNetwork { } IosConnection { } MaintenanceSettings { } IosAbout { }

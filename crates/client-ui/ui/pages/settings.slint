@@ -1,8 +1,9 @@
+import { PageSurface } from "../components/motion.slint";
 import { ScrollView } from "std-widgets.slint";
 import { Theme, AccentPalette } from "../theme/palette.slint";
 import { UiData, UiActions, Intent } from "../state.slint";
 import { Label, Caption, ContentPanel, RowPanel, SettingsSection, ActionButton, AccentChoice, SettingRow, Divider, Field, Select, Paragraph } from "../components/controls.slint";
-export component SettingsPage inherits Rectangle {
+export component SettingsPage inherits PageSurface {
     ScrollView {
         x: 0px; width: parent.width + Theme.content-gap;
         VerticalLayout {
@@ -74,7 +75,7 @@ export component SettingsPage inherits Rectangle {
                 title: "Geo 数据";
                 RowPanel {
                     Caption { text: UiData.geo-status; }
-                    ActionButton { text: "更新所有 Geo 数据"; enabled: UiData.ready && !UiData.working; clicked => { UiActions.dispatch(Intent.update-geo, "", ""); } }
+                    ActionButton { text: UiData.geo-updating ? "正在更新 Geo 数据…" : "更新所有 Geo 数据"; busy: UiData.geo-updating; enabled: UiData.ready && !UiData.working; clicked => { UiActions.dispatch(Intent.update-geo, "", ""); } }
                 }
             }
             SettingsSection {
@@ -83,7 +84,7 @@ export component SettingsPage inherits Rectangle {
                     Label { text: "当前版本 " + UiData.version; }
                     Paragraph { text: UiData.update-status; font-size: Theme.detail-size; color: Theme.secondary; }
                     HorizontalLayout { cross-axis-alignment: center; spacing: Theme.content-gap;
-                        ActionButton { text: "检查更新"; enabled: !UiData.update-checking && !UiData.update-busy; clicked => { UiActions.dispatch(Intent.check-update, "", ""); } }
+                        ActionButton { text: "检查更新"; busy: UiData.update-checking; enabled: !UiData.update-checking && !UiData.update-busy; clicked => { UiActions.dispatch(Intent.check-update, "", ""); } }
                         ActionButton { text: "查看 Release"; clicked => { UiActions.dispatch(Intent.open-release, "", ""); } }
                         if UiData.update-available: ActionButton { text: "下载安装"; primary: true; enabled: !UiData.update-busy; clicked => { UiActions.dispatch(Intent.install-update, "", ""); } }
                     }

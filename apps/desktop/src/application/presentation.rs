@@ -274,6 +274,7 @@ impl App {
         set!(get_ready, set_ready, self.engine.is_some());
         set!(get_running, set_running, self.snapshot.running);
         set!(get_working, set_working, self.working);
+        set!(get_geo_updating, set_geo_updating, self.geo_updating);
         set!(get_exiting, set_exiting, self.exiting);
         set!(get_dark, set_dark, self.dark);
         set!(get_accent, set_accent, self.settings.accent_color as i32);
