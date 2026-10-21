@@ -212,6 +212,15 @@ pub struct Protection {
     pub previous: Previous,
 }
 impl Protection {
+    /// Preserve global routing; a direct-mode start still needs the rule overlay.
+    pub fn run_mode(&self) -> &'static str {
+        if self.previous.mode == "global" {
+            "global"
+        } else {
+            "rule"
+        }
+    }
+
     pub fn new(profile_id: String, node: String, previous: Previous) -> Self {
         Self {
             profile_id,
@@ -422,7 +431,17 @@ pub fn apply(map: &mut Mapping, settings: &Settings) -> Result<()> {
             .any(|g| g.get("name").and_then(Value::as_str) == Some(&protection.route)),
         "订阅包含同名的保护线路"
     );
-    groups.push(serde_yaml::to_value(group)?);
+    groups.push(serde_yaml::to_value(&group)?);
+    if protection.run_mode() == "global" {
+        // A one-member GLOBAL survives reloads/cold starts without trusting the
+        // core's selection cache. The original group remains in the source YAML
+        // and its previous selection is restored when protection is disabled.
+        groups.retain(|group| group.get("name").and_then(Value::as_str) != Some("GLOBAL"));
+        let mut global = group;
+        global["name"] = "GLOBAL".into();
+        global["hidden"] = false.into();
+        groups.push(serde_yaml::to_value(global)?);
+    }
 
     let original = map
         .remove(Value::from("rules"))
@@ -467,7 +486,7 @@ pub fn apply(map: &mut Mapping, settings: &Settings) -> Result<()> {
         }
     }
     map.insert(Value::from("rules"), Value::Sequence(rules));
-    map.insert(Value::from("mode"), Value::from("rule"));
+    map.insert(Value::from("mode"), Value::from(protection.run_mode()));
     map.insert(Value::from("ipv6"), Value::from(true));
 
     // Keep a known DNS/proxy hostname authoritative. Subscription force-sniff
@@ -610,6 +629,59 @@ fn route_or_reject(
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn protected_mode_and_global_pin_survive_restart_without_rewriting_the_source() {
+        let raw = "proxies: [{name: Node, type: socks5, server: 127.0.0.1, port: 1080}]\nproxy-groups: [{name: GLOBAL, type: select, proxies: [DIRECT, Node]}]\nrules: ['MATCH,DIRECT']\n";
+        for mode in ["rule", "global", "direct"] {
+            let id = uuid::Uuid::new_v4().to_string();
+            let mut settings = Settings {
+                active_profile: Some(id.clone()),
+                run_mode: mode.into(),
+                ..Default::default()
+            };
+            let original = crate::config::runtime_config(raw, &settings).unwrap();
+            settings.claude_protection = Some(std::sync::Arc::new(Protection::new(
+                id,
+                "Node".into(),
+                Previous {
+                    mode: mode.into(),
+                    proxy_mode: ProxyMode::Off,
+                    selectors: vec![("GLOBAL".into(), "Node".into())],
+                },
+            )));
+            let protected = crate::config::runtime_config(raw, &settings).unwrap();
+            let map: Value = serde_yaml::from_str(&protected).unwrap();
+            assert_eq!(
+                map["mode"],
+                if mode == "global" { "global" } else { "rule" }
+            );
+            let globals: Vec<_> = map["proxy-groups"]
+                .as_sequence()
+                .unwrap()
+                .iter()
+                .filter(|group| group["name"] == "GLOBAL")
+                .collect();
+            assert_eq!(globals.len(), 1);
+            let members = globals[0]["proxies"].as_sequence().unwrap();
+            assert_eq!(members.len(), if mode == "global" { 1 } else { 2 });
+            if mode == "global" {
+                assert_eq!(members[0], "Node");
+                assert_eq!(globals[0]["empty-fallback"], "REJECT");
+            }
+            let mut reopened: Settings =
+                serde_json::from_slice(&serde_json::to_vec(&settings).unwrap()).unwrap();
+            assert_eq!(
+                crate::config::runtime_config(raw, &reopened).unwrap(),
+                protected
+            );
+            reopened.claude_protection = None;
+            assert_eq!(
+                crate::config::runtime_config(raw, &reopened).unwrap(),
+                original
+            );
+        }
+    }
+
     #[test]
     fn automatic_groups_stay_pinned_after_restart_and_restore_on_disable() {
         let id = uuid::Uuid::new_v4().to_string();
@@ -783,6 +855,25 @@ mod tests {
         let filter = regex::Regex::new(group["filter"].as_str().unwrap()).unwrap();
         assert!(filter.is_match("Node (A)+"));
         assert!(!filter.is_match("Node AAA") && !filter.is_match("Other Node (A)+"));
+        std::sync::Arc::make_mut(settings.claude_protection.as_mut().unwrap())
+            .previous
+            .mode = "global".into();
+        let value: Value =
+            serde_yaml::from_str(&crate::config::runtime_config(raw, &settings).unwrap()).unwrap();
+        let global = value["proxy-groups"]
+            .as_sequence()
+            .unwrap()
+            .iter()
+            .find(|group| group["name"] == "GLOBAL")
+            .unwrap();
+        assert_eq!(value["mode"], "global");
+        assert_eq!(global["use"][0], "Feed");
+        assert_eq!(global["empty-fallback"], "REJECT");
+        assert!(
+            regex::Regex::new(global["filter"].as_str().unwrap())
+                .unwrap()
+                .is_match("Node (A)+")
+        );
         let mut restarted: Settings =
             serde_json::from_slice(&serde_json::to_vec(&settings).unwrap()).unwrap();
         assert_eq!(restarted.claude_protection, settings.claude_protection);
@@ -817,7 +908,7 @@ mod tests {
         let saved = serde_json::to_vec(&settings).unwrap();
         let protected = crate::config::runtime_config(raw, &settings).unwrap();
         let map: Value = serde_yaml::from_str(&protected).unwrap();
-        assert_eq!(map["mode"], "rule");
+        assert_eq!(map["mode"], "global");
         assert_eq!(map["ipv6"], true);
         assert_eq!(map["sniffer"]["enable"], true);
         assert_eq!(map["sniffer"]["parse-pure-ip"], true);

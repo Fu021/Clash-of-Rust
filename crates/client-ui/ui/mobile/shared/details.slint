@@ -138,7 +138,7 @@ export component MobileModal inherits Rectangle {
                     MHeading { text: root.kind == 4 ? "删除此订阅？" : root.kind == 8 ? "开启 Claude 保护？" : root.kind == 12 ? "放弃未保存的修改？" : "强调色"; }
                     if root.kind != 11: MParagraph {
                         text: root.kind == 4 ? "将删除“" + MobileView.profile-name + "”及其配置文件。此操作无法撤销。"
-                            : root.kind == 8 ? "将固定当前节点，启用 VPN、广泛规则、代理 DNS 与实时拦截。可能影响其他应用与国内网站；关闭后恢复原状态。"
+                            : root.kind == 8 ? "将锁定当前节点和运行模式（规则或全局），启用 VPN、广泛规则、代理 DNS 与实时拦截。全局出口为 DIRECT 时无法开启；直连模式下将使用规则模式。可能影响其他应用与国内网站；关闭后恢复原状态。"
                             : "尚有未保存的内容，离开后将丢弃本次编辑。";
                     }
                     if root.kind == 11: VerticalLayout { spacing: MobileTypography.small-gap;

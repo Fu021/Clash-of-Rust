@@ -317,7 +317,7 @@ pub async fn configuration(
     for (title, pointer, expected) in [
         ("TUN 实际状态", "/tun/enable", Value::Bool(true)),
         ("严格路由实际状态", "/tun/strict-route", Value::Bool(true)),
-        ("运行模式", "/mode", Value::from("rule")),
+        ("运行模式", "/mode", Value::from(protection.run_mode())),
         ("IPv6 实际状态", "/ipv6", Value::Bool(true)),
     ] {
         let value = result.as_ref().ok().and_then(|v| v.pointer(pointer));

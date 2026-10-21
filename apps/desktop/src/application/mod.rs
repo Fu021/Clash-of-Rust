@@ -577,6 +577,16 @@ impl App {
     }
 
     fn dispatch_scope(&mut self, action: Action, scope: Scope) -> Task<Message> {
+        if matches!(action, Action::Mode(_))
+            && (self.settings.claude_protection.is_some()
+                || self.claude.protection_pending.is_some())
+        {
+            self.show_notice(
+                "Claude 保护已锁定当前运行模式，请先关闭保护再切换模式".into(),
+                false,
+            );
+            return Task::none();
+        }
         if matches!(action, Action::Select(..))
             && (self.settings.claude_protection.is_some()
                 || self.claude.protection_pending.is_some())

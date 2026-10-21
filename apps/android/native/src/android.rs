@@ -2177,11 +2177,13 @@ fn apply(ui: &AndroidWindow, p: Projection) {
         ui.global::<MobileView>().set_interval_dirty(false);
     }
     data.set_mode(
-        match if p.settings.claude_protection.is_some() {
-            "rule"
-        } else {
-            p.settings.run_mode.as_str()
-        } {
+        match p
+            .settings
+            .claude_protection
+            .as_ref()
+            .map_or(p.settings.run_mode.as_str(), |protection| {
+                protection.run_mode()
+            }) {
             "global" => 1,
             "direct" => 2,
             _ => 0,

@@ -44,6 +44,7 @@ component ModeCard inherits MCard {
     MSmall { text: "运行模式"; }
     GridLayout { spacing: MobileTypography.small-gap;
         for label[i] in ["规则", "全局", "直连"]: MButton { text: label; selected: MobileData.mode == i;
+            enabled: !MobileData.protected && !MobileData.protection-pending;
             col: Theme.text-scale > 1.25 ? 0 : i; row: Theme.text-scale > 1.25 ? i : 0;
             clicked => { MobileActions.request(MobileIntent.mode, "" + i, ""); }
         }
