@@ -9,22 +9,32 @@ import java.io.File;
 import java.nio.file.Files;
 import org.json.JSONObject;
 
-/** The same saved mode drives the starting window, system bars and first Slint frame. */
+/** Saved appearance drives the starting window, system bars and first Slint frame. */
 final class Appearance {
     private static int appliedMode = -1;
-    static int mode(Context context) {
+    private static JSONObject settings(Context context) {
         File file = new File(context.getFilesDir(), "client/settings.json");
         if (file.isFile() && file.length() <= 1024 * 1024) {
             try {
-                String value = new JSONObject(new String(Files.readAllBytes(file.toPath()),
-                    java.nio.charset.StandardCharsets.UTF_8)).optString("theme_mode");
-                if (value.equals("dark")) return 0;
-                if (value.equals("light")) return 1;
+                return new JSONObject(new String(Files.readAllBytes(file.toPath()),
+                    java.nio.charset.StandardCharsets.UTF_8));
             } catch (Exception error) {
                 android.util.Log.w("ClashOfRust", "Could not read startup appearance", error);
             }
         }
-        return 2;
+        return new JSONObject();
+    }
+    private static int mode(JSONObject saved) {
+        String value = saved.optString("theme_mode");
+        return value.equals("dark") ? 0 : value.equals("light") ? 1 : 2;
+    }
+    static int mode(Context context) { return mode(settings(context)); }
+    static JSONObject startup(Context context) throws org.json.JSONException {
+        JSONObject saved = settings(context);
+        return new JSONObject().put("mode", mode(saved))
+            .put("dark", systemDark(context))
+            // Rust decodes its own enum; no second palette/order in Java.
+            .put("accent_color", saved.optString("accent_color", "teal"));
     }
     static boolean systemDark(Context context) {
         // The Activity's resources can reflect our per-app override on API 31+.
