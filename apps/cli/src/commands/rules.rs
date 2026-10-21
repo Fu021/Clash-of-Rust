@@ -44,7 +44,7 @@ pub(super) async fn execute(args: &Args) -> Result<()> {
             raw: args.positional[1].clone(),
         },
         "rule remove" => {
-            output::confirm(args, "删除这条自定义规则？")?;
+            output::confirm(args, "删除这条自定义规则？").await?;
             RuleChange::Remove {
                 rule: first.clone(),
             }

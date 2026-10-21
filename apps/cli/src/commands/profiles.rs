@@ -105,7 +105,7 @@ pub(super) async fn execute(args: &Args) -> Result<()> {
         }
         "profile remove" => {
             let p = super::profile(&meta, Some(&args.positional[0]))?;
-            output::confirm(args, &format!("删除订阅“{}”？", p.name))?;
+            output::confirm(args, &format!("删除订阅“{}”？", p.name)).await?;
             let _: Value =
                 backend::request(args, Command::DeleteProfile { id: p.id.clone() }).await?;
             output::emit(args, json!({"removed":p.id}))

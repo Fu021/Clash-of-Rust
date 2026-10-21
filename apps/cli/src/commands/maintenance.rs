@@ -73,7 +73,8 @@ pub(super) async fn execute(args: &Args) -> Result<()> {
                     } else {
                         "移除 CLI 后台登录自启？"
                     },
-                )?;
+                )
+                .await?;
             }
             crate::service::execute(args)
         }
@@ -159,7 +160,7 @@ pub(super) async fn authorize_tun(args: &Args) -> Result<()> {
 
 async fn update(args: &Args) -> Result<()> {
     if args.path == "update install" {
-        output::confirm(args, "下载并安装最新正式版，停止当前内核和后台？")?;
+        output::confirm(args, "下载并安装最新正式版，停止当前内核和后台？").await?;
         return output::emit(args, backend::request(args, Command::UpdateInstall).await?);
     }
     let port = if let Some(remote) = backend::connect(args, false).await? {

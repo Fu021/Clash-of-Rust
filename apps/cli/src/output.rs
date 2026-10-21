@@ -122,7 +122,7 @@ pub fn redact(mut value: Value) -> Value {
     value
 }
 
-pub fn confirm(args: &Args, message: &str) -> Result<()> {
+pub async fn confirm(args: &Args, message: &str) -> Result<()> {
     if args.flag("yes") {
         return Ok(());
     }
@@ -132,8 +132,17 @@ pub fn confirm(args: &Args, message: &str) -> Result<()> {
     );
     eprint!("{message} [y/N] ");
     std::io::stderr().flush()?;
-    let mut answer = String::new();
-    std::io::stdin().read_line(&mut answer)?;
+    // Tokio stdin uses a blocking-pool read that cannot be cancelled. A plain
+    // reader thread keeps Ctrl+C responsive and never delays runtime shutdown.
+    let (sender, receiver) = tokio::sync::oneshot::channel();
+    std::thread::Builder::new()
+        .name("cor-confirm".into())
+        .spawn(move || {
+            let mut answer = String::new();
+            let result = std::io::stdin().read_line(&mut answer).map(|_| answer);
+            let _ = sender.send(result);
+        })?;
+    let answer = receiver.await??;
     ensure!(matches!(answer.trim(), "y" | "Y" | "yes"), "操作已取消");
     Ok(())
 }

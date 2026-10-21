@@ -133,7 +133,7 @@ async fn connections(args: &Args) -> Result<()> {
             "请选择 ID 或 --all"
         );
         if args.flag("all") {
-            output::confirm(args, "关闭全部现有连接？")?;
+            output::confirm(args, "关闭全部现有连接？").await?;
         }
         let _: Value = backend::request(
             args,
@@ -258,7 +258,7 @@ fn log_level(line: &str) -> &'static str {
 }
 async fn logs(args: &Args) -> Result<()> {
     if args.path == "logs clear" {
-        output::confirm(args, "清空客户端日志？")?;
+        output::confirm(args, "清空客户端日志？").await?;
         let _: Value = backend::request(args, Command::Logs { clear: true }).await?;
         return output::emit(args, json!({"cleared":true}));
     }
@@ -478,7 +478,7 @@ async fn claude(args: &Args) -> Result<()> {
                 output::confirm(
                     args,
                     "Claude 保护会启用 TUN、覆盖 DNS 和广泛规则，锁定节点并拦截偏离线路的连接，可能影响其他服务。继续？",
-                )?;
+                ).await?;
                 super::maintenance::authorize_tun(args).await?;
             }
             let _: Value = backend::request(args, Command::Protect { enabled }).await?;
