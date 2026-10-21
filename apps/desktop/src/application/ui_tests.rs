@@ -987,6 +987,11 @@ fn motion_overlays_reverse_on_reopen_release_content_and_leave_no_idle_clock() {
     let canvas = (690 * 950 + 940) * 4;
     assert_eq!(&initial[canvas..canvas + 3], &[0x11, 0x19, 0x23]);
     motion_frame(&window, 250);
+    assert!(
+        motion.get_initialized(),
+        "startup must enable the motion scope"
+    );
+    assert!(motion.get_enabled());
     assert!(!window.window().has_active_animations());
 
     for _ in 0..3 {

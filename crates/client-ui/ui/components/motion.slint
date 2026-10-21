@@ -33,36 +33,14 @@ export component Entrance {
     reveal := Timer { interval: 1ms; triggered => { self.stop(); root.revealed = true; } }
 }
 
-// Retain only the closing overlay/disclosure, then destroy its children.
-// Reopening cancels disposal, including during rapid repeated clicks.
+// Keep closing content only while it still has visible pixels. Deriving the
+// lifetime from the animated value also reverses rapid reopen operations,
+// without an extra timer or a callback racing conditional destruction.
 export component Presence {
     in property <bool> open;
-    property <bool> retained;
-    property <bool> revealed;
-    out property <bool> mounted: self.open || (Motion.active && self.retained);
-    out property <float> progress: Motion.active ? (self.revealed ? 1 : 0) : (self.open ? 1 : 0);
+    out property <float> progress: self.open ? 1 : 0;
+    out property <bool> mounted: self.open || self.progress > 0;
     animate progress { duration: Motion.reveal; easing: ease-out; enabled: Motion.active; }
-    init => {
-        if self.open {
-            self.retained = true;
-            if Motion.active { reveal.restart(); } else { self.revealed = true; }
-        }
-    }
-    changed open => {
-        if self.open {
-            release.stop(); self.retained = true;
-            if Motion.active { reveal.restart(); } else { self.revealed = true; }
-        } else {
-            reveal.stop(); self.revealed = false;
-            if Motion.active && self.retained { release.restart(); }
-            else { self.retained = false; release.stop(); }
-        }
-    }
-    reveal := Timer { interval: 1ms; triggered => { self.stop(); root.revealed = root.open; } }
-    release := Timer {
-        interval: Motion.active ? Motion.reveal + 16ms : 1ms;
-        triggered => { self.stop(); if !root.open { root.retained = false; } }
-    }
 }
 
 // Pages remain conditional: only the newly selected page enters, no page cache.
