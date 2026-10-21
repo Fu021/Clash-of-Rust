@@ -208,7 +208,11 @@ fn authorize(core: &Path, terminal: bool) -> Result<()> {
             std::process::Stdio::null()
         })
         .stdout(std::process::Stdio::null())
-        .stderr(std::process::Stdio::piped())
+        .stderr(if terminal {
+            std::process::Stdio::inherit()
+        } else {
+            std::process::Stdio::piped()
+        })
         .output()
         .context("无法启动 TUN 授权助手")?;
     match status.status.code() {

@@ -510,7 +510,136 @@ impl Args {
 }
 
 pub fn parse(input: impl IntoIterator<Item = String>) -> Result<Args> {
-    parse_inner(input).map_err(|error| Usage(error.to_string()).into())
+    parse_inner(input)
+        .and_then(|args| {
+            if !args.help {
+                validate(&args)?;
+            }
+            Ok(args)
+        })
+        .map_err(|error| Usage(error.to_string()).into())
+}
+fn validate(args: &Args) -> Result<()> {
+    ensure!(
+        !(args.flag("json") && args.flag("jsonl")),
+        "--json 与 --jsonl 不能同时指定"
+    );
+    for (key, max) in [
+        ("limit", 10_000),
+        ("offset", usize::MAX),
+        ("position", usize::MAX),
+        ("timeout", 3600),
+    ] {
+        if args.get(key).is_some() {
+            let value = args.number(key, 0, max)?;
+            ensure!(
+                !matches!(key, "timeout" | "position") || value > 0,
+                "--{key} 必须大于 0"
+            );
+        }
+    }
+    if args.get("interval").is_some() {
+        args.interval()?;
+    }
+    if matches!(args.path.as_str(), "logs export" | "update download") {
+        ensure!(args.get("output").is_some(), "请提供 --output FILE");
+    }
+    let enum_value = |value: &str, choices: &[&str]| -> Result<()> {
+        ensure!(
+            choices.contains(&value),
+            "{} 的参数应为 {}",
+            args.path,
+            choices.join(" / ")
+        );
+        Ok(())
+    };
+    match args.path.as_str() {
+        "mode" => {
+            if let Some(value) = args.positional.first() {
+                enum_value(value, &["rule", "global", "direct"])?;
+            }
+        }
+        "proxy" => {
+            if let Some(value) = args.positional.first() {
+                enum_value(value, &["system", "tun", "off"])?;
+            }
+        }
+        "claude protect" | "autostart" => {
+            if let Some(value) = args.positional.first() {
+                enum_value(value, &["on", "off"])?;
+            }
+        }
+        "rule enable" => enum_value(&args.positional[1], &["on", "off"])?,
+        "rule shortcut" => {
+            if let Some(name) = args.positional.first() {
+                enum_value(
+                    name,
+                    &["ads", "private-domain", "private-ip", "cn-domain", "cn-ip"],
+                )?;
+            }
+            if let Some(value) = args.positional.get(1) {
+                enum_value(value, &["on", "off"])?;
+            }
+        }
+        "profile import" => ensure!(args.get("name").is_some(), "请提供 --name NAME"),
+        "profile edit" => ensure!(
+            args.get("name").is_some() || args.get("source").is_some(),
+            "请提供 --name 或 --source"
+        ),
+        "profile update" => ensure!(
+            !(args.flag("all") && !args.positional.is_empty()),
+            "PROFILE 与 --all 不能同时指定"
+        ),
+        "node test" => ensure!(
+            usize::from(!args.positional.is_empty())
+                + usize::from(args.get("group").is_some())
+                + usize::from(args.flag("all"))
+                == 1,
+            "请选择 NODE、--group GROUP 或 --all 中的一项"
+        ),
+        "connection close" => ensure!(
+            args.flag("all") != !args.positional.is_empty(),
+            "请选择 ID 或 --all"
+        ),
+        "rule add" => {
+            clash_client_core::rule_manager::parts(&args.positional[0])?;
+        }
+        "rule edit" => {
+            clash_client_core::rule_manager::parts(&args.positional[1])?;
+        }
+        "rule move" => {
+            ensure!(args.positional[1].parse::<usize>()? > 0, "位置必须大于 0");
+        }
+        "completion" => enum_value(&args.positional[0], &["bash", "zsh", "fish", "powershell"])?,
+        _ => {}
+    }
+    if let Some(sort) = args.get("sort") {
+        enum_value(
+            sort,
+            if args.path == "node list" {
+                &["name", "latency"]
+            } else {
+                &[
+                    "name",
+                    "rule",
+                    "chain",
+                    "upload",
+                    "download",
+                    "upload-rate",
+                    "download-rate",
+                    "start",
+                    "none",
+                ]
+            },
+        )?;
+    }
+    if let Some(level) = args.get("level") {
+        enum_value(level, &["debug", "info", "warning", "error", "silent"])?;
+    }
+    if let Some(shell) = args.get("shell") {
+        enum_value(shell, &["bash", "zsh", "fish", "powershell", "cmd"])?;
+    }
+    Ok(())
 }
 fn parse_inner(input: impl IntoIterator<Item = String>) -> Result<Args> {
     let mut words = Vec::new();
@@ -641,6 +770,25 @@ pub fn help(prefix: &str) -> String {
     {
         out += &format!("  {:<25} {}\n", spec.path, spec.description);
     }
+    let example = match prefix {
+        "profile add" => Some("cor profile add 我的订阅 'https://example.com/subscription'"),
+        "profile import" => Some("cat profile.yaml | cor profile import - --name 本地订阅"),
+        "node list" => Some("cor node list Proxy --sort latency --limit 50"),
+        "node select" => Some("cor node select Proxy '节点 1'"),
+        "rule add" => Some("cor rule add 'DOMAIN-SUFFIX,example.com,DIRECT' --position 1"),
+        "rule shortcut" => Some("cor rule shortcut ads on"),
+        "connection list" => Some("cor connection list --watch --sort download-rate --jsonl"),
+        "logs" => Some("cor logs --follow --level warning --filter DNS --jsonl"),
+        "config set" => Some("cor config set dns_override true"),
+        "ip-check" => Some("cor ip-check --category AI --output ai-report.json"),
+        "claude audit" => Some("cor claude audit --offline --output claude-audit.json"),
+        "env" => Some("eval \"$(cor env --shell bash)\""),
+        "" => Some("cor start\n  cor proxy system\n  cor status --watch --jsonl"),
+        _ => None,
+    };
+    if let Some(example) = example {
+        out += &format!("\n示例：\n  {example}\n");
+    }
     out += "\n通用选项：\n";
     for key in GLOBAL.split_whitespace() {
         out += &option_help(key);
@@ -708,6 +856,16 @@ pub fn completion(shell: &str) -> Result<String> {
         .flat_map(|s| s.path.split_whitespace())
         .chain(["help"])
         .collect();
+    let mut words = words
+        .into_iter()
+        .map(str::to_owned)
+        .collect::<BTreeSet<_>>();
+    words.extend(
+        GLOBAL
+            .split_whitespace()
+            .chain(COMMANDS.iter().flat_map(|s| s.options.split_whitespace()))
+            .map(|s| format!("--{s}")),
+    );
     let words = words.into_iter().collect::<Vec<_>>().join(" ");
     Ok(match shell {
         "bash" => format!(

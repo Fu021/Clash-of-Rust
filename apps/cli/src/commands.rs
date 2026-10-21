@@ -22,6 +22,7 @@ pub async fn execute(args: &Args) -> Result<()> {
             Ok(())
         }
         "start" | "restart" => {
+            backend::prepare_start(args).await?;
             let command = if args.path == "start" {
                 Command::Start
             } else {

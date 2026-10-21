@@ -1,6 +1,8 @@
 //! User login services. No root daemon reads user-editable YAML.
 use crate::{args::Args, backend, output};
-use anyhow::{Context, Result, ensure};
+use anyhow::Result;
+#[cfg(unix)]
+use anyhow::{Context, ensure};
 use serde_json::json;
 #[cfg(unix)]
 use std::path::PathBuf;

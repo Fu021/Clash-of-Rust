@@ -32,11 +32,19 @@ impl Endpoint {
     }
     pub fn read(store: &Store) -> Result<Option<Self>> {
         let path = Self::path(store);
-        let metadata = match std::fs::symlink_metadata(&path) {
+        let mut options = std::fs::OpenOptions::new();
+        options.read(true);
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::OpenOptionsExt;
+            options.custom_flags(libc::O_NOFOLLOW);
+        }
+        let file = match options.open(&path) {
             Ok(value) => value,
             Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(None),
             Err(e) => return Err(e.into()),
         };
+        let metadata = file.metadata()?;
         ensure!(
             metadata.is_file() && metadata.len() <= 4096,
             "本机控制端点文件无效"
@@ -49,7 +57,10 @@ impl Endpoint {
                 "本机控制端点必须归当前用户所有且仅当前用户可读写"
             );
         }
-        let endpoint: Self = serde_json::from_slice(&std::fs::read(path)?)?;
+        let mut bytes = Vec::new();
+        file.take(4097).read_to_end(&mut bytes)?;
+        ensure!(bytes.len() <= 4096, "本机控制端点文件过大");
+        let endpoint: Self = serde_json::from_slice(&bytes)?;
         ensure!(
             endpoint.protocol == PROTOCOL
                 && endpoint.port != 0
@@ -128,7 +139,7 @@ impl Remote {
             if let Some(error) = reply.error {
                 bail!("{error}");
             }
-            Ok(serde_json::from_value(reply.result)?)
+            Ok::<T, anyhow::Error>(serde_json::from_value(reply.result)?)
         };
         tokio::time::timeout(self.timeout, exchange).await?
     }

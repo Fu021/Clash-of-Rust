@@ -491,6 +491,7 @@ impl Engine {
         {
             self.tun(false).await.context("停止内核前关闭 TUN 失败")?;
         }
+        self.external_logs_until = None;
         self.set_logs(false);
         if let Some(mut child) = self.child.take() {
             if child.try_wait()?.is_none() {
@@ -1989,6 +1990,12 @@ impl Engine {
         Ok(())
     }
     pub fn record_failure(&self, error: &str) {
+        if let Some(remote) = &self.remote {
+            let _: Result<Value> = remote.call(ControlCommand::RecordFailure {
+                message: error.into(),
+            });
+            return;
+        }
         append(
             &self.logs,
             format!(

@@ -105,11 +105,26 @@ pub(super) async fn execute(
             }
         }
         Command::Proxy { mode } => {
-            start(&mut engine).await?;
-            engine.select_proxy_mode(mode).await?;
+            if mode == crate::engine::ProxyMode::Off && !engine.running() {
+                anyhow::ensure!(
+                    engine.settings.claude_protection.is_none(),
+                    "请先关闭 Claude 保护"
+                );
+                engine.proxy_mode(mode).await?;
+                let settings = Settings {
+                    proxy_mode: mode,
+                    ..engine.settings.clone()
+                };
+                engine.save_settings(settings).await?;
+            } else {
+                start(&mut engine).await?;
+                engine.select_proxy_mode(mode).await?;
+            }
         }
         Command::Protect { enabled } => {
-            start(&mut engine).await?;
+            if enabled {
+                start(&mut engine).await?;
+            }
             engine.claude_protection(enabled).await?;
         }
         Command::TrayNodes => return Ok(serde_json::to_value(engine.tray_nodes().await?)?),

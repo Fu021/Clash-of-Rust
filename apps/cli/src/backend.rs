@@ -45,10 +45,14 @@ pub fn timeout(args: &Args) -> Result<Duration> {
 
 pub async fn connect(args: &Args, spawn: bool) -> Result<Option<Remote>> {
     let store = store(args)?;
-    if let Some(remote) = Remote::discover(&store, timeout(args)?)?
-        && remote.request::<Meta>(Command::Meta).await.is_ok()
-    {
-        return Ok(Some(remote));
+    if let Some(remote) = Remote::discover(&store, timeout(args)?)? {
+        match remote.request::<Meta>(Command::Meta).await {
+            Ok(_) => return Ok(Some(remote)),
+            Err(error) if store.instance_lock().is_err() => {
+                return Err(error.context(Unavailable("存活的后台暂时不可达，请稍后重试".into())));
+            }
+            Err(_) => {}
+        }
     }
     if !spawn {
         return Ok(None);
@@ -123,8 +127,36 @@ pub async fn meta(args: &Args) -> Result<Meta> {
     request(args, Command::Meta).await
 }
 pub async fn live(args: &Args) -> Result<Meta> {
+    prepare_start(args).await?;
     let _: serde_json::Value = request(args, Command::Start).await?;
     meta(args).await
+}
+pub async fn prepare_start(args: &Args) -> Result<()> {
+    let state = meta(args).await?;
+    if !state.running
+        && (state.settings.proxy_mode == clash_client_runtime::engine::ProxyMode::Tun
+            || state.settings.claude_protection.is_some())
+    {
+        authorize_tun(args).await?;
+    }
+    Ok(())
+}
+pub async fn authorize_tun(args: &Args) -> Result<()> {
+    #[cfg(target_os = "linux")]
+    {
+        let resources = match args.get("resources") {
+            Some(path) => absolute(path)?,
+            None => clash_client_runtime::assets::discover()?,
+        };
+        let core = clash_client_runtime::assets::core_path(&resources)?;
+        tokio::task::spawn_blocking(move || {
+            clash_client_runtime::platform::authorize_tun_terminal(&core)
+        })
+        .await??;
+    }
+    #[cfg(not(target_os = "linux"))]
+    let _ = args;
+    Ok(())
 }
 
 /// One owner per data directory; the GUI can attach to this owner later.
@@ -151,6 +183,12 @@ pub async fn run(args: &Args) -> Result<()> {
         .shutdown_signal()
         .context("后台未创建控制端点")?;
     if !args.flag("no-core") {
+        let state = engine.lock().await.settings.clone();
+        if state.proxy_mode == clash_client_runtime::engine::ProxyMode::Tun
+            || state.claude_protection.is_some()
+        {
+            authorize_tun(args).await?;
+        }
         let mut owner = engine.lock().await;
         owner.start().await?;
         if let Err(error) = owner.restore_proxy_mode().await {

@@ -56,7 +56,12 @@ fn print_value(out: &mut impl Write, value: &Value) -> Result<()> {
         }
         Value::Object(fields) => {
             for (key, value) in fields {
-                writeln!(out, "{key}: {}", scalar(value))?;
+                if value.is_array() || value.is_object() {
+                    writeln!(out, "{key}:")?;
+                    print_value(out, value)?;
+                } else {
+                    writeln!(out, "{key}: {}", scalar(value))?;
+                }
             }
         }
         _ => writeln!(out, "{value}")?,
@@ -85,6 +90,8 @@ pub fn redact(mut value: Value) -> Value {
                     "authorization",
                     "auth",
                     "psk",
+                    "preshared_key",
+                    "api_key",
                 ]
                 .iter()
                 .any(|s| normalized == *s || normalized.ends_with(&format!("_{s}")))
@@ -92,7 +99,7 @@ pub fn redact(mut value: Value) -> Value {
                     if !field.is_null() {
                         *field = Value::String("[已隐藏]".into());
                     }
-                } else if normalized == "source"
+                } else if matches!(normalized.as_str(), "source" | "url")
                     && field
                         .as_str()
                         .is_some_and(|s| s.starts_with("http://") || s.starts_with("https://"))

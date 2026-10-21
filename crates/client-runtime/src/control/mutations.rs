@@ -147,8 +147,10 @@ mod tests {
     use super::*;
     #[test]
     fn patches_keep_unrelated_and_protected_settings() {
-        let mut settings = Settings::default();
-        settings.udp = false;
+        let settings = Settings {
+            udp: false,
+            ..Default::default()
+        };
         let next = setting(&settings, "ipv6", Value::Bool(false)).unwrap();
         assert!(!next.udp && !next.ipv6);
         assert_eq!(next.secret, settings.secret);

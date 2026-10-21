@@ -234,17 +234,23 @@ fn slim(connections: &mut [Connection]) {
 
 fn log_level(line: &str) -> &'static str {
     let lower = line.to_lowercase();
-    if lower.contains("level=error")
+    if lower.starts_with("[error]")
+        || lower.contains("level=error")
         || lower.contains("\"type\":\"error\"")
         || lower.contains("失败")
     {
         "error"
-    } else if lower.contains("level=warning")
+    } else if lower.starts_with("[warning]")
+        || lower.starts_with("[warn]")
+        || lower.contains("level=warning")
         || lower.contains("level=warn")
         || lower.contains("\"type\":\"warning\"")
     {
         "warning"
-    } else if lower.contains("level=debug") || lower.contains("\"type\":\"debug\"") {
+    } else if lower.starts_with("[debug]")
+        || lower.contains("level=debug")
+        || lower.contains("\"type\":\"debug\"")
+    {
         "debug"
     } else {
         "info"

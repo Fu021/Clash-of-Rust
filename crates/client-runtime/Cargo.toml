@@ -41,7 +41,6 @@ zbus = { version = "5", default-features = false, features = ["tokio"] }
 [target.'cfg(target_os = "macos")'.dependencies]
 block2 = "0.6"
 objc2 = "0.6"
-objc2-app-kit = { version = "0.3.2", default-features = false, features = ["std", "NSApplication", "NSResponder", "NSStatusItem", "NSStatusBarButton", "NSImage", "NSWindow", "NSView", "NSScreen", "NSOpenPanel", "NSPanel", "NSSavePanel", "block2"] }
 objc2-foundation = { version = "0.3.2", default-features = false, features = ["std", "NSObject", "NSThread", "NSString", "NSURL", "NSArray", "NSBundle"] }
 
 objc2-user-notifications = { version = "0.3.2", default-features = false, features = ["std", "UNUserNotificationCenter", "UNNotification", "UNNotificationContent", "UNNotificationRequest", "UNNotificationTrigger", "block2"] }

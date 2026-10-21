@@ -154,25 +154,7 @@ async fn environment(args: &Args) -> Result<()> {
 }
 
 pub(super) async fn authorize_tun(args: &Args) -> Result<()> {
-    #[cfg(target_os = "linux")]
-    {
-        let meta = backend::meta(args).await?;
-        if meta.settings.proxy_mode != ProxyMode::Tun {
-            let resources = args
-                .get("resources")
-                .map(backend::absolute)
-                .transpose()?
-                .unwrap_or(clash_client_runtime::assets::discover()?);
-            let core = clash_client_runtime::assets::core_path(&resources)?;
-            tokio::task::spawn_blocking(move || {
-                clash_client_runtime::platform::authorize_tun_terminal(&core)
-            })
-            .await??;
-        }
-    }
-    #[cfg(not(target_os = "linux"))]
-    let _ = args;
-    Ok(())
+    backend::authorize_tun(args).await
 }
 
 async fn update(args: &Args) -> Result<()> {
