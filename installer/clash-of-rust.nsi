@@ -170,8 +170,10 @@ Function ShutdownExisting
   ${EndIf}
   ; Request normal exit. The GUI restores its proxy and stops its own core.
   ; Never extract/run a second GUI executable or force-kill other processes.
-  IfFileExists "$ExistingDir\cor.exe" 0 +2
-    ExecWait '"$ExistingDir\cor.exe" --quiet stop' $0
+  IfFileExists "$ExistingDir\cor.exe" 0 no_cli_shutdown
+    nsExec::ExecToLog '"$ExistingDir\cor.exe" --quiet --timeout 15 stop'
+    Pop $0
+  no_cli_shutdown:
   System::Call 'kernel32::OpenMutexW(i 0x100000, i 0, w "${APP_MUTEX}") p.r0 ?e'
   Pop $1
   ${If} $0 == 0
@@ -420,6 +422,22 @@ Section "Uninstall"
   ; Always check again: the app could have started while the wizard was open.
   !insertmacro CheckRunning unsection_
   ; Delete only files owned by this package. Data deletion requires opt-in.
+  IfFileExists "$INSTDIR\cor.exe" 0 cli_removed
+    nsExec::ExecToLog '"$INSTDIR\cor.exe" --quiet --timeout 30 stop'
+    Pop $0
+    ${If} $0 != 0
+      MessageBox MB_OK|MB_ICONSTOP "无法停止命令行后台，请先执行 cor stop 后重试卸载。"
+      SetErrorLevel 6
+      Abort
+    ${EndIf}
+    nsExec::ExecToLog '"$INSTDIR\cor.exe" --quiet --yes service remove'
+    Pop $0
+    ${If} $0 != 0
+      MessageBox MB_OK|MB_ICONSTOP "无法清理命令行登录启动任务，请先执行 cor service remove --yes。"
+      SetErrorLevel 6
+      Abort
+    ${EndIf}
+  cli_removed:
   IfFileExists "$INSTDIR\clash-tun-launcher.exe" 0 service_removed
     ExecWait '"$INSTDIR\clash-tun-launcher.exe" --windows-service-uninstall' $0
     ${If} $0 != 0

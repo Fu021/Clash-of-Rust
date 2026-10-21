@@ -84,6 +84,21 @@ impl Remote {
     pub fn owner(&self) -> Owner {
         self.endpoint.owner
     }
+    /// A shutdown acknowledgement precedes owner cleanup. Do not let the next
+    /// CLI invocation attach to an owner that is already on its way out.
+    pub async fn wait_closed(&self, store: &Store) -> Result<()> {
+        tokio::time::timeout(self.timeout, async {
+            loop {
+                if Endpoint::read(store)?.is_none_or(|current| current.token != self.endpoint.token)
+                {
+                    return Ok::<(), anyhow::Error>(());
+                }
+                tokio::time::sleep(Duration::from_millis(25)).await;
+            }
+        })
+        .await
+        .context("等待后台退出超时")?
+    }
     pub fn discover(store: &Store, timeout: Duration) -> Result<Option<Self>> {
         Ok(Endpoint::read(store)?.map(|endpoint| Self::new(endpoint, timeout)))
     }

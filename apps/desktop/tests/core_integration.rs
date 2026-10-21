@@ -451,15 +451,9 @@ async fn basic_system_proxy_and_tun() {
     assert_eq!(console(&cli, &store, &["status"]).await["running"], false);
     drop(gui);
     console(&cli, &store, &["stop"]).await;
-    for _ in 0..100 {
-        if !store.root.join("control.json").exists() {
-            break;
-        }
-        tokio::time::sleep(Duration::from_millis(50)).await;
-    }
     assert!(
         !store.root.join("control.json").exists(),
-        "CLI owner did not exit"
+        "cor stop returned before its independent owner finished cleanup"
     );
     println!("PASS: native system proxy, HTTP forwarding, TUN capture and cleanup");
 }

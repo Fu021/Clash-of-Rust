@@ -230,8 +230,19 @@ impl Backend {
     fn remove_legacy(&self) -> Result<()> {
         if let Ok(key) = RegKey::predef(HKEY_CURRENT_USER)
             .open_subkey_with_flags(RUN_KEY, winreg::enums::KEY_READ | winreg::enums::KEY_WRITE)
-            && key.get_value::<String, _>(&self.run_name).ok().as_deref()
-                == Some(self.command().as_str())
+            && key
+                .get_value::<String, _>(&self.run_name)
+                .ok()
+                .is_some_and(|command| {
+                    if self.run_name == "ClashOfRustCLI" {
+                        command.starts_with(&format!(
+                            "\"{}\" --cli-background ",
+                            self.executable.display()
+                        ))
+                    } else {
+                        command == self.command()
+                    }
+                })
         {
             key.delete_value(&self.run_name)?;
         }

@@ -36,7 +36,10 @@ pub async fn execute(args: &Args) -> Result<()> {
         }
         "stop" => {
             if let Some(remote) = backend::connect(args, false).await? {
-                let _: Value = remote.request(Command::Shutdown).await?;
+                let result: Value = remote.request(Command::Shutdown).await?;
+                if result["shutdown"] == true {
+                    remote.wait_closed(&backend::store(args)?).await?;
+                }
             }
             output::emit(args, json!({"running":false}))
         }
