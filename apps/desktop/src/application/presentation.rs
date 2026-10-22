@@ -521,12 +521,15 @@ impl App {
                         source: profile.source.as_str().into(),
                         active: self.settings.active_profile.as_deref() == Some(&profile.id),
                         local: profile.is_default(),
-                        detail: format!(
-                            "{} · 更新于 {}",
-                            format::subscription_usage(profile.usage.as_deref()),
-                            format::timestamp(profile.updated)
-                        )
-                        .into(),
+                        detail: if profile.is_default() {
+                            "本地配置".into()
+                        } else {
+                            clash_client_core::subscription::summary(
+                                profile.usage.as_deref(),
+                                profile.updated,
+                            )
+                            .into()
+                        },
                     })
                     .collect(),
             );

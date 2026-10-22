@@ -150,7 +150,9 @@ jobs:
           SAMPLE_SECONDS: ${{ inputs.sample_seconds }}
         run: |
           import os, subprocess, sys
-          command = ['dbus-run-session', '--', 'xvfb-run', '-a', '--server-args=-screen 0 1280x900x24', sys.executable, 'scripts/run-memory-benchmark.py', '--source', 'source', '--profile', os.environ['BUILD_PROFILE'], '--workload', os.environ['BENCH_WORKLOAD'], '--repetitions', os.environ['BENCH_REPETITIONS'], '--seconds', os.environ['SAMPLE_SECONDS'], '--output', 'dist/memory']
+          # The disposable renderer can be the only X client. Keep Xvfb alive
+          # across its exit rather than resetting the server during reopening.
+          command = ['dbus-run-session', '--', 'xvfb-run', '-a', '--server-args=-screen 0 1280x900x24 -noreset', sys.executable, 'scripts/run-memory-benchmark.py', '--source', 'source', '--profile', os.environ['BUILD_PROFILE'], '--workload', os.environ['BENCH_WORKLOAD'], '--repetitions', os.environ['BENCH_REPETITIONS'], '--seconds', os.environ['SAMPLE_SECONDS'], '--output', 'dist/memory']
           if os.environ['BENCH_ROWS'].strip():
               command += ['--rows', os.environ['BENCH_ROWS']]
           subprocess.run(command, check=True)

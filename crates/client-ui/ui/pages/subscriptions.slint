@@ -28,7 +28,7 @@ export component SubscriptionsPage inherits PageSurface {
                 }
                 Caption { text: profile.source; }
                 HorizontalLayout { cross-axis-alignment: center; spacing: Theme.content-gap;
-                    Caption { text: profile.detail; }
+                    Caption { text: profile.detail; wrap: word-wrap; }
                     if !profile.local: ActionButton { text: "更新"; enabled: !UiData.working; clicked => { UiActions.dispatch(Intent.update-profile, profile.id, ""); } }
                     if !profile.local: ActionButton { text: "编辑"; enabled: !UiData.working; clicked => { UiActions.dispatch(Intent.edit-profile, profile.id, ""); } }
                     if !profile.local: ActionButton { text: "删除"; danger: true; enabled: !UiData.working; clicked => { UiActions.dispatch(Intent.delete-profile, profile.id, ""); } }

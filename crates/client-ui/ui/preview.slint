@@ -54,8 +54,8 @@ export component Preview inherits AppWindow {
                 {left: {group: "Proxy", name: "美国 01", kind: "VLESS", delay: "868 ms", tone: 3, selected: false, valid: true}, right: {group: "Proxy", name: "DIRECT", kind: "Direct", delay: "未测速", tone: 4, selected: false, valid: true}}
             ]}];
         UiData.profiles = [
-            {id: "main", name: "我的订阅", source: "https://example.com/subscription", detail: "已用 2.4 GiB / 100 GiB · 更新于 2026-10-15 10:30", active: true, local: false},
-            {id: "backup", name: "备用订阅", source: "https://example.org/sub", detail: "更新于 2026-10-14 18:20", active: false, local: false},
+            {id: "main", name: "我的订阅", source: "https://example.com/subscription", detail: "已用 2.4/100 GiB · 到期 2026-12-31 · 更新 10-15 10:30", active: true, local: false},
+            {id: "backup", name: "备用订阅", source: "https://example.org/sub", detail: "已用 1/50 GiB · 不限期 · 更新 10-14 18:20", active: false, local: false},
             {id: "default", name: "默认直连", source: "default.yaml", detail: "本地配置", active: false, local: true}];
         UiData.connections = [
             {id: "1", host: "api.github.com:443", detail: "tcp · 10:31:20", rule: "DOMAIN-SUFFIX github.com", route: "Proxy → 德国 01", up: "2.4 KiB/s", down: "128 KiB/s", upload: "24 KiB", download: "1.8 MiB"},

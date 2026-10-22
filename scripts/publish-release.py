@@ -83,6 +83,13 @@ class GitHub:
         parsed = urllib.parse.urlparse(url)
         if parsed.scheme != 'https' or parsed.netloc not in ('api.github.com', 'uploads.github.com'):
             raise ValueError('Refusing authenticated request outside GitHub')
+        if method == 'GET' and not raw and parsed.netloc == 'api.github.com':
+            # Publication checks need the current job/branch state. An API
+            # edge can retain an in-progress jobs snapshot after the run has
+            # completed; never reuse that snapshot for a later validation.
+            query = urllib.parse.parse_qsl(parsed.query, keep_blank_values=True)
+            query.append(('_cor_fresh', str(time.time_ns())))
+            url = urllib.parse.urlunparse(parsed._replace(query=urllib.parse.urlencode(query)))
         binary = isinstance(data, bytes)
         if isinstance(data, dict):
             data = json.dumps(data, ensure_ascii=False).encode('utf-8')

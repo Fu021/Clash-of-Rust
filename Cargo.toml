@@ -36,15 +36,15 @@ tray-icon = { version = "0.26", default-features = false, features = ["ksni"] }
 debug = 1
 
 [profile.release]
-# Favor repeatable desktop builds over expensive cross-crate LTO.
-opt-level = 3
+# Keep resident code compact, including shared runtime and rendering dependencies.
+opt-level = "s"
 lto = false
 codegen-units = 16
 incremental = true
 strip = true
 
 # Desktop state adapters and generated UI code are dominated by instruction
-# pages. Optimize these for size while keeping network/core dependencies at O3.
+# pages. Use one codegen unit to avoid duplicating these adapters across units.
 [profile.release.package.clash-of-rust]
 opt-level = "s"
 codegen-units = 1

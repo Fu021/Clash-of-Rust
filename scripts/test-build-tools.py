@@ -1289,6 +1289,43 @@ class ReleaseTests(unittest.TestCase):
         self.assertEqual(transport.open.call_count,3)
         self.assertEqual([call.args[0] for call in sleep.call_args_list],[1,2])
 
+    def test_release_metadata_does_not_reuse_a_stale_jobs_snapshot(self):
+        current = {'jobs':[{'status':'in_progress','conclusion':None}]}
+        cached = {}
+        queries = []
+        def response(request, **kwargs):
+            queries.append(urllib.parse.parse_qs(urllib.parse.urlparse(request.full_url).query))
+            body = cached.setdefault(request.full_url,json.dumps(current).encode())
+            return nullcontext(io.BytesIO(body))
+        transport = MagicMock()
+        transport.open.side_effect = response
+        with patch.object(release,'opener',return_value=transport), patch.object(release.time,'time_ns',side_effect=[1,2]):
+            client = release.GitHub('example/project','test-only-token')
+            path = '/actions/runs/77/jobs?filter=latest&per_page=100'
+            self.assertEqual(client(path)['jobs'][0]['status'],'in_progress')
+            current['jobs'][0].update(status='completed',conclusion='success')
+            self.assertEqual(client(path)['jobs'][0]['conclusion'],'success')
+        self.assertEqual(len(cached),2)
+        for query in queries:
+            self.assertEqual(query['filter'],['latest'])
+            self.assertEqual(query['per_page'],['100'])
+
+    def test_release_refresh_preserves_artifact_and_mutation_urls(self):
+        for path,method,data,raw in [
+            ('/actions/artifacts/1/zip?archive=verified','GET',None,True),
+            ('https://uploads.github.com/repos/example/project/releases/1/assets?name=package','POST',b'package',False),
+            ('/releases/1','PATCH',{'draft':False},False),
+        ]:
+            with self.subTest(path=path):
+                transport = MagicMock()
+                transport.open.return_value = nullcontext(io.BytesIO(b'archive' if raw else b'{}'))
+                with patch.object(release,'opener',return_value=transport):
+                    release.GitHub('example/project','test-only-token')(path,method,data,raw=raw)
+                request = transport.open.call_args.args[0]
+                expected = 'https://api.github.com/repos/example/project'+path if path.startswith('/') else path
+                self.assertEqual(request.full_url,expected)
+                self.assertEqual(request.get_method(),method)
+
     def test_release_get_retries_only_temporary_http_errors(self):
         for status in (403,404,429,503):
             with self.subTest(status=status):

@@ -76,7 +76,7 @@ export component SettingsPage inherits PageSurface {
                 title: "Geo 数据";
                 RowPanel {
                     Caption { text: UiData.geo-status; }
-                    ActionButton { text: UiData.geo-updating ? "正在更新 Geo 数据…" : "更新所有 Geo 数据"; busy: UiData.geo-updating; enabled: UiData.ready && !UiData.working; clicked => { UiActions.dispatch(Intent.update-geo, "", ""); } }
+                    ActionButton { text: "更新所有 Geo 数据"; busy: UiData.geo-updating; enabled: UiData.ready && !UiData.working; clicked => { UiActions.dispatch(Intent.update-geo, "", ""); } }
                 }
             }
             SettingsSection {

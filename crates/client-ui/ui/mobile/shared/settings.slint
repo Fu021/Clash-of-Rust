@@ -53,6 +53,6 @@ export component MaintenanceSettings inherits VerticalLayout {
         }
         MDivider { }
         MRow { title: "Geo 数据"; value: MobileData.geo-status; arrow: false; interactive: false; }
-        MButton { text: MobileData.geo-updating ? "正在更新 Geo 数据…" : "更新所有 Geo 数据"; busy: MobileData.geo-updating; enabled: !MobileData.working && !MobileData.geo-updating; clicked => { MobileActions.request(MobileIntent.update-geo, "", ""); } }
+        MButton { text: "更新所有 Geo 数据"; busy: MobileData.geo-updating; enabled: !MobileData.working && !MobileData.geo-updating; clicked => { MobileActions.request(MobileIntent.update-geo, "", ""); } }
     }
 }

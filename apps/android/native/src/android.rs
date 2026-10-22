@@ -2257,10 +2257,12 @@ fn apply(ui: &AndroidWindow, p: Projection) {
                     id: profile.id.clone().into(),
                     name: profile.name.into(),
                     source: profile.source.clone().into(),
-                    detail: profile
-                        .usage
-                        .unwrap_or_else(|| format!("更新：{}", profile.updated))
-                        .into(),
+                    detail: if profile.source.is_empty() {
+                        "本地配置".into()
+                    } else {
+                        core::subscription::summary(profile.usage.as_deref(), profile.updated)
+                            .into()
+                    },
                     active: p.settings.active_profile.as_deref() == Some(&profile.id),
                     local: profile.source.is_empty(),
                 })
