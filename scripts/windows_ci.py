@@ -263,6 +263,40 @@ def _installer_exit(executable,args,code,timeout=60):
         raise RuntimeError(f'{executable.name}: expected exit {code}, got {actual}')
 
 
+def _verify_failed_update(package, installed):
+    """Fail after extraction and require the original owner/renderer pair back."""
+    import ctypes as c
+    from ctypes import wintypes as w
+    kernel = c.WinDLL('kernel32', use_last_error=True)
+    kernel.CreateFileW.argtypes = [w.LPCWSTR,w.DWORD,w.DWORD,w.LPVOID,w.DWORD,w.DWORD,w.HANDLE]
+    kernel.CreateFileW.restype = w.HANDLE
+    kernel.CloseHandle.argtypes = [w.HANDLE]
+    renderer = installed/'clash-desktop-ui.exe'
+    original = renderer.read_bytes()
+    owner_hash = sha256(installed/'clash-of-rust.exe')
+    for legacy in (False, True):
+        # A harmless PE overlay distinguishes the old renderer from the
+        # identical-version installer. Neither probe renderer is executed.
+        if legacy: renderer.unlink()
+        else: renderer.write_bytes(original+b'installer-rollback-probe')
+        expected = None if legacy else sha256(renderer)
+        handle = kernel.CreateFileW(str(installed/'uninstall.exe'),0x80000000,1,None,3,0,None)
+        if handle == c.c_void_p(-1).value:
+            renderer.write_bytes(original)
+            raise c.WinError(c.get_last_error())
+        try:
+            # Read sharing permits verification, but denies WriteUninstaller.
+            # Extraction has already replaced both executables at this point.
+            _installer_exit(package,['/S','/UPDATE',f'/D={installed}'],6)
+            assert sha256(installed/'clash-of-rust.exe') == owner_hash
+            if legacy: assert not renderer.exists()
+            else: assert sha256(renderer) == expected
+            assert not list(installed.glob('*.update-backup.exe'))
+        finally:
+            kernel.CloseHandle(handle)
+            renderer.write_bytes(original)
+
+
 def _verify_installed_package(package, binary, root, smoke):
     import winreg
     if os.environ.get('GITHUB_ACTIONS') != 'true':
@@ -285,6 +319,7 @@ def _verify_installed_package(package, binary, root, smoke):
         with winreg.OpenKey(winreg.HKEY_LOCAL_MACHINE, key, 0, winreg.KEY_READ | winreg.KEY_WOW64_64KEY) as registration:
             assert winreg.QueryValueEx(registration, 'DisplayVersion')[0] == file_version(binary)
         assert sha256(installed/'clash-of-rust.exe') == sha256(binary)
+        assert sha256(installed/'clash-desktop-ui.exe') == sha256(binary.with_name('clash-desktop-ui.exe'))
         validate_resources(installed/'resources', 'windows')
         assert (installed/'clash-tun-launcher.exe').is_file()
         run(['sc.exe', 'query', 'ClashOfRust.Network'])
@@ -292,9 +327,12 @@ def _verify_installed_package(package, binary, root, smoke):
              '--test-binary', smoke, '--bundle', installed])
         user_file = installed/'unrelated-user-file.txt'
         user_file.write_text('Preserve this unrelated file', encoding='utf-8')
+        _verify_failed_update(package, installed)
         # Exercise the same explicit update mode used by the client. Service
         # replacement must finish before installation reports success.
         _installer_exit(package, ['/S', '/UPDATE', f'/D={installed}'], 0)
+        assert sha256(installed/'clash-desktop-ui.exe') == sha256(binary.with_name('clash-desktop-ui.exe'))
+        assert not list(installed.glob('*.update-backup.exe'))
         assert user_file.read_text(encoding='utf-8') == 'Preserve this unrelated file'
         run([sys.executable, ROOT/'scripts/test-proxy-modes.py',
              '--test-binary', smoke, '--bundle', installed])
@@ -303,6 +341,7 @@ def _verify_installed_package(package, binary, root, smoke):
         if uninstaller.is_file():
             _installer_exit(uninstaller, ['/S', f'_?={installed}'], 0)
     assert not (installed/'clash-of-rust.exe').exists()
+    assert not (installed/'clash-desktop-ui.exe').exists()
     assert not (installed/'clash-tun-launcher.exe').exists()
     assert subprocess.run(['sc.exe', 'query', 'ClashOfRust.Network'], capture_output=True).returncode == 1060
     assert user_file.is_file()
