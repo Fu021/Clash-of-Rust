@@ -12,8 +12,9 @@ use std::{
     time::Duration,
 };
 
+type SharedOutbound = Arc<Mutex<Option<Arc<str>>>>;
 pub struct Observer {
-    outbound: Arc<Mutex<Option<Arc<str>>>>,
+    outbound: SharedOutbound,
     task: Option<tokio::task::JoinHandle<()>>,
 }
 impl Observer {
@@ -193,7 +194,14 @@ impl<'de> Visitor<'de> for Rows<'_> {
                 if result.is_some() {
                     ambiguous = true;
                 } else {
-                    result = Some(Arc::from(row.chains.unwrap().join(" → ")));
+                    let mut chain = row.chains.unwrap();
+                    result = Some(if chain.first().is_some_and(|name| name == "DIRECT") {
+                        Arc::from("DIRECT")
+                    } else {
+                        // Match the connection page: group → ... → actual node.
+                        chain.reverse();
+                        Arc::from(chain.join(" → "))
+                    });
                 }
             }
         }
@@ -273,7 +281,7 @@ mod tests {
         })
         .await
         .unwrap();
-        assert_eq!(observer.outbound().as_deref(), Some("真实节点 → Auto"));
+        assert_eq!(observer.outbound().as_deref(), Some("Auto → 真实节点"));
         done.send(()).unwrap();
         origin_task.await.unwrap();
         controller_task.await.unwrap();
@@ -297,7 +305,7 @@ mod tests {
         );
         let other_host = row("32100", "example.com", "其他请求");
         let result = matched(serde_json::json!({"connections":[browser,other_host,own.clone()]}));
-        assert_eq!(result.as_deref(), Some("真实节点 → Auto"));
+        assert_eq!(result.as_deref(), Some("Auto → 真实节点"));
         let mut direct = own.clone();
         direct["chains"] = serde_json::json!(["DIRECT"]);
         assert_eq!(
