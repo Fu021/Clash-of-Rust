@@ -196,8 +196,13 @@ impl DesktopHost {
         if let Some((_, window)) = &self.window {
             self.app
                 .present(&window.global::<UiData>(), &mut self.models);
+            let view_ready = !self.app.busy
+                || !matches!(
+                    self.app.page,
+                    Page::Proxies | Page::Connections | Page::Rules | Page::Logs
+                );
             if self.app.visible
-                && !self.app.busy
+                && view_ready
                 && let Some(state) = self.saved_view.take()
             {
                 state.restore(window);

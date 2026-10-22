@@ -27,7 +27,7 @@ fn record_recovery(store: &crate::config::Store, identity: &[u8], offer: bool) -
 }
 
 /// Inspect the current OS state on every launch, including post-update launches.
-/// Returns true when the desktop should offer a direct link to notification settings.
+/// Reports authorization and whether this installation needs a settings guide.
 pub async fn prepare_startup(store: &crate::config::Store) -> Result<Preparation> {
     #[cfg(target_os = "macos")]
     {
@@ -66,10 +66,10 @@ pub async fn prepare_startup(store: &crate::config::Store) -> Result<Preparation
         }))?;
         let offer_settings =
             record_recovery(store, &identity, permission == macos::Permission::Settings)?;
-        return Ok(Preparation {
+        Ok(Preparation {
             allowed: false,
             offer_settings,
-        });
+        })
     }
     #[cfg(not(target_os = "macos"))]
     {
