@@ -29,7 +29,7 @@ cor stop
 
 节点和策略组名称以实际订阅为准；带空格的名称应使用引号。订阅可用完整 ID 或唯一名称定位，重名时须使用 ID。CLI 首次启动沿用内置“默认直连”。
 
-GUI 已运行时，CLI 通过带随机密钥的本机接口操作同一内核。GUI 未运行时，需要后台的命令会自动启动 `cor run --no-core`；查询、修改配置不会自行开启系统代理。需要网络的命令会启动内核并恢复已保存的代理模式。`status`、`stop`、`help`、`version`、补全生成不会启动后台。
+GUI 已运行时，CLI 通过带随机密钥的本机接口操作同一内核。GUI 未运行时，需要后台的命令会自动创建无界面后台，无需手动运行 `cor run`；查询、修改配置不会自行开启系统代理。需要网络的命令会启动内核并恢复已保存的代理模式。`status`、`stop`、`help`、`version`、补全生成不会启动后台。
 
 每个数据目录只有一个运行层所有者；随后打开的 GUI 会接入该后台。退出 GUI 会停止内核及其独立后台。`cor stop` 会停止内核、恢复网络；没有关联窗口时独立后台同时退出；有关联窗口时保留后台，窗口可直接重新启动内核。
 
@@ -66,10 +66,13 @@ JSON 每行使用 `{"schema":1,"command":"命令","data":...}` 外层。`--json`
 
 ### 运行与代理
 
+**日常使用请用 `cor start` 在后台运行。** `cor run` 仅用于前台调试，依赖当前终端；关闭终端或断开 SSH 会结束前台运行，不应用它代替后台启动。
+
 | 命令 | 作用 |
 | --- | --- |
-| `run [--no-core]` | 前台运行；默认启动内核，`--no-core` 仅创建控制后台 |
-| `start` / `stop` / `restart` | 启动、停止、重启当前内核 |
+| `start` | **推荐：后台启动内核，关闭终端后继续运行** |
+| `stop` / `restart` | 停止、重启当前内核 |
+| `run [--no-core]` | **仅用于前台调试，关闭终端即停止；日常请用 `start`**。默认启动内核，`--no-core` 仅运行控制服务 |
 | `status [--watch --interval 1]` | 当前版本、订阅、节点、模式、连接数及总速率 |
 | `version` | CLI 版本、操作系统和 CPU 架构 |
 | `mode [rule\|global\|direct]` | 查询或切换内核运行模式 |
@@ -80,14 +83,14 @@ JSON 每行使用 `{"schema":1,"command":"命令","data":...}` 外层。`--json`
 eval "$(cor env --shell bash)"
 eval "$(cor env --shell bash --unset)"
 cor status --watch --jsonl
-cor run --data-dir /path/to/server-data
+cor start --data-dir /path/to/server-data
 ```
 
 Linux 普通用户通过 DEB 安装的固定授权助手开启 TUN；第一次执行 `cor proxy tun` 或开启 Claude 保护时，会在前台调用 pkexec，可使用桌面授权代理或终端认证。授权后再由后台重启内核继承网络权限，客户端本身保持普通用户身份。手动以 root 运行 `cor` 时，直接启动内核并使用已有网络权限，无需 pkexec。系统须提供 `/dev/net/tun`，容器/WSL 仍受设备和宿主网络能力限制。
 
 Windows 使用安装包的网络服务，macOS 使用现有网络助手；首次安装或助手升级可能触发 UAC/系统授权。无人值守前应先在交互会话完成首次授权。系统代理作用于当前用户的桌面会话；没有桌面的服务器通常使用 `env` 或已授权 TUN。
 
-Linux 服务器可直接安装现有 DEB 并在 SSH 中使用 `cor`，无需启动桌面窗口或显示服务器。安装包仍含桌面组件及其依赖；只运行 `cor` 不会启动这些组件。前台运行用 `cor run`，独立后台用 `cor start`；当前用户的登录自启见下方 `service` 命令。
+Linux 服务器可直接安装现有 DEB 并在 SSH 中使用 `cor`，无需启动桌面窗口或显示服务器。安装包仍含桌面组件及其依赖；只运行 `cor` 不会启动这些组件。日常使用 `cor start` 在后台运行，关闭 SSH 终端后仍可使用；仅需前台调试时才用 `cor run`。当前用户的登录自启见下方 `service` 命令。
 
 ### 订阅
 
