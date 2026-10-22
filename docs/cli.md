@@ -14,17 +14,41 @@
 
 ```sh
 cor help
+# 查看全部命令。
+
 cor help profile add
+# 查看添加订阅的参数与示例。
+
 cor profile add 我的订阅 'https://example.com/subscription'
+# 下载并添加订阅；将链接替换为自己的订阅地址。
+
 cor profile list
+# 查看订阅列表，确认订阅名称和当前使用项。
+
 cor profile use 我的订阅
+# 切换到刚添加的订阅。
+
 cor start
+# 在后台启动内核；关闭终端后继续运行，不会打开 GUI。
+
 cor node list
+# 按策略组、节点和内置出站查看列表，以及当前选择和延迟。
+
 cor node list Proxy --sort latency
+# 按延迟从低到高查看 Proxy 策略组的成员；替换为订阅中的实际组名。
+
 cor node select Proxy 节点名称
-cor proxy system
+# 将 Proxy 策略组切换到指定节点或其下的子策略组。
+
+cor proxy tun
+# 开启 TUN 接管网络；首次使用可能需要系统授权。
+# 建议 Server 等纯 CLI 用户使用 TUN，无需逐个配置程序代理，使用更方便。
+
 cor status
+# 查看运行状态、订阅、当前节点、模式和实时流量。
+
 cor stop
+# 停止内核并恢复网络设置；无关联窗口时同时退出后台。
 ```
 
 节点和策略组名称以实际订阅为准；带空格的名称应使用引号。订阅可用完整 ID 或唯一名称定位，重名时须使用 ID。CLI 首次启动沿用内置“默认直连”。
@@ -36,6 +60,8 @@ GUI 已运行时，CLI 通过带随机密钥的本机接口操作同一内核。
 ## 帮助、脚本与输出
 
 所有命令都支持 `--help`；`cor help profile` 列出该组命令。帮助与解析、补全来自同一份命令表。
+
+默认使用中文状态说明和表格；节点列表区分策略组、节点与内置出站，空延迟显示“未测速”，测速失败显示“超时”。速度和流量按 B、KiB、MiB 等单位显示，时间使用运行机器的本地时区。较窄终端会改用分条显示，保留完整名称和 ID；可通过 `COLUMNS` 指定显示宽度。脚本请使用 `--json` / `--jsonl`，字段与原有结构保持一致。
 
 | 通用选项 | 作用 |
 | --- | --- |
@@ -81,14 +107,24 @@ JSON 每行使用 `{"schema":1,"command":"命令","data":...}` 外层。`--json`
 
 ```sh
 eval "$(cor env --shell bash)"
+# 未使用 TUN 时，为当前 Bash 终端设置 HTTP/SOCKS 代理环境变量。
+
 eval "$(cor env --shell bash --unset)"
+# 删除上一步设置的代理环境变量。
+
 cor status --watch --jsonl
+# 持续输出 JSONL 状态，适合脚本采集；按 Ctrl+C 结束查询。
+
 cor start --data-dir /path/to/server-data
+# 使用独立数据目录启动后台，替换为自己的目录。
+
+cor proxy tun --data-dir /path/to/server-data
+# 为同一数据目录的后台开启 TUN；建议纯 CLI 的服务器使用此模式。
 ```
 
 Linux 普通用户通过 DEB 安装的固定授权助手开启 TUN；第一次执行 `cor proxy tun` 或开启 Claude 保护时，会在前台调用 pkexec，可使用桌面授权代理或终端认证。授权后再由后台重启内核继承网络权限，客户端本身保持普通用户身份。手动以 root 运行 `cor` 时，直接启动内核并使用已有网络权限，无需 pkexec。系统须提供 `/dev/net/tun`，容器/WSL 仍受设备和宿主网络能力限制。
 
-Windows 使用安装包的网络服务，macOS 使用现有网络助手；首次安装或助手升级可能触发 UAC/系统授权。无人值守前应先在交互会话完成首次授权。系统代理作用于当前用户的桌面会话；没有桌面的服务器通常使用 `env` 或已授权 TUN。
+Windows 使用安装包的网络服务，macOS 使用现有网络助手；首次安装或助手升级可能触发 UAC/系统授权。无人值守前应先在交互会话完成首次授权。系统代理作用于当前用户的桌面会话；建议 Server 等纯 CLI 环境使用已授权 TUN，无法使用 TUN 时再通过 `env` 配置需要代理的程序。
 
 Linux 服务器可直接安装现有 DEB 并在 SSH 中使用 `cor`，无需启动桌面窗口或显示服务器。安装包仍含桌面组件及其依赖；只运行 `cor` 不会启动这些组件。日常使用 `cor start` 在后台运行，关闭 SSH 终端后仍可使用；仅需前台调试时才用 `cor run`。当前用户的登录自启见下方 `service` 命令。
 
@@ -108,7 +144,10 @@ Linux 服务器可直接安装现有 DEB 并在 SSH 中使用 `cor`，无需启�
 
 ```sh
 cat subscription.yaml | cor profile import - --name 本地订阅
+# 从标准输入导入 YAML，并命名为“本地订阅”。
+
 cor profile export 本地订阅 --show-secrets -o backup.yaml
+# 导出完整订阅到 backup.yaml，包含节点凭据，请妥善保存。
 ```
 
 stdin 导入保存在数据目录 `imports/`，作为可再次导入的本机来源；删除订阅不会删除用户原文件。端口、密钥和运行目录仍由客户端覆盖，不直接信任 YAML 的控制接口设置。
@@ -122,7 +161,7 @@ stdin 导入保存在数据目录 `imports/`，作为可再次导入的本机来
 | `node test NODE` | 测试单个节点/策略组 |
 | `node test --group GROUP` | 单策略组测速 |
 | `node test --all` | 全量测速，自动策略组按共享逻辑重新选优 |
-| `rule list [--profile PROFILE --filter TEXT]` | 规则文本、来源、启用状态、稳定 ID 和序号 |
+| `rule list [--profile PROFILE --filter TEXT]` | 规则文本、来源、启用状态和序号；JSON 包含稳定 ID |
 | `rule add RAW [--position N --disabled]` | 添加自定义规则，默认第一条 |
 | `rule edit RULE RAW` | 修改自定义规则 |
 | `rule remove RULE --yes` | 删除自定义规则 |
@@ -136,9 +175,16 @@ stdin 导入保存在数据目录 `imports/`，作为可再次导入的本机来
 
 ```sh
 cor rule add 'DOMAIN-SUFFIX,example.com,DIRECT' --position 1
+# 在当前订阅的第 1 条添加规则，让 example.com 及其子域名直连。
+
 cor rule shortcut ads on
+# 开启广告拦截快捷规则，仅补充订阅中缺少的规则。
+
 cor rule list --json
+# 以 JSON 查看完整规则和稳定 ID，适合脚本或精确定位规则。
+
 cor rule move c:完整UUID 1
+# 将指定自定义规则移动到第 1 条；用上一命令返回的实际 ID 替换占位内容。
 ```
 
 节点、连接和规则列表支持 `--limit`（默认 100，最大 10000）、`--offset`，先筛选和排序再分页。
@@ -155,7 +201,7 @@ cor rule move c:完整UUID 1
 | `logs clear --yes` | 清空有界缓冲区 |
 | `logs export -o FILE` | 导出当前缓冲区，控制接口密钥会替换 |
 
-连接排序：`--sort name|rule|chain|upload|download|upload-rate|download-rate|start|none`，文本默认升序，流量/速度/时间默认降序，`--reverse` 反转。速度由两次真实计数采样计算，首次查询会等待一个采样周期；新建、计数重置或开始时间变化的连接速度为 null。
+连接排序：`--sort name|rule|chain|upload|download|upload-rate|download-rate|start|none`，文本默认升序，流量/速度/时间默认降序，`--reverse` 反转。速度由两次真实计数采样计算，首次查询会等待一个采样周期；新建、计数重置或开始时间变化的连接速度显示“尚未采样”（JSON 为 null）。
 
 日志 `--level` 为精确等级筛选：debug/info/warning/error/silent。缓冲区延用客户端的 500 条上限，不是磁盘历史日志库；长时间未跟随后已淘汰的日志无法补回。`logs --follow` 通过短期租约保持内核日志采集，退出后自动释放。
 
@@ -201,15 +247,28 @@ CLI 后台使用 Linux systemd user unit、macOS LaunchAgent、Windows 当前用
 
 完整安装更新需要正式安装目录：Linux DEB、Windows 安装程序或 macOS `.app`。便携目录可下载后手动安装。更新前退出其他长时间运行的 CLI 查询进程，避免 Windows 可执行文件被占用。首次系统授权仍可能需要图形会话；无人值守环境可使用 `update download`。
 
+检查更新遇到网络错误或正式版附件暂未完整时，会重新获取发布信息，最多尝试 4 次，总等待不超过约 75 秒；仍缺少当前平台安装包或校验文件时会明确报错。
+
 更新下载显示速度、已下载大小及匹配本次连接的实际节点链，回退直连会明确标注；控制接口无法确认出站时显示未确认，不用首页所选节点代替实际线路。`update download` 的进度写入 stderr，`--quiet` 可关闭。
 
 ```sh
 cor completion bash > ~/.cor-completion.bash
+# 生成 Bash 命令补全脚本并保存到当前用户目录。
+
 source ~/.cor-completion.bash
+# 在当前 Bash 终端启用补全；后续可加入 ~/.bashrc。
+
 cor --json config get dns_override
+# 以 JSON 读取 DNS 覆盖开关，便于脚本处理。
+
 cor --jsonl connection list --watch --sort download-rate
+# 持续按下载速度从高到低输出连接采样，每行一份 JSON。
+
 cor ip-check --category AI -o ai-report.json
+# 检测 AI 分类，完成后将完整报告保存到 ai-report.json。
+
 cor claude audit --offline -o claude-projects.json
+# 离线检查终端和已记录项目的 Claude 配置，保存报告，不启动内核或访问检测网站。
 ```
 
 ## 数据与接口

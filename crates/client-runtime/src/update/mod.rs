@@ -574,6 +574,7 @@ async fn fetch(client: &Client, endpoint: &str, current: &str) -> Result<Option<
     let response = client
         .get(endpoint)
         .header("Accept", "application/vnd.github+json")
+        .header(reqwest::header::CACHE_CONTROL, "no-cache")
         .send()
         .await
         .map_err(|error| crate::network::request_error(error, "GitHub API"))?;

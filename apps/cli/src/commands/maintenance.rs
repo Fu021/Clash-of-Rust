@@ -194,13 +194,7 @@ async fn update(args: &Args) -> Result<()> {
                 || last_report
                     .is_none_or(|last| last.elapsed() >= std::time::Duration::from_secs(1)))
         {
-            eprintln!(
-                "下载 {}/{} B · {} B/s · {}",
-                value.received,
-                value.total,
-                value.bytes_per_second,
-                value.routing()
-            );
+            eprintln!("{}", output::download_progress(&value));
             last_report = Some(std::time::Instant::now());
         }
     })

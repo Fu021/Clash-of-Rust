@@ -6,7 +6,9 @@ use serde::Deserialize;
 use sha2::{Digest, Sha256};
 use std::{path::Path, time::Duration};
 use tokio::io::AsyncWriteExt;
+mod retry;
 mod route;
+pub use retry::check as retry_check;
 pub use route::Observer as RouteObserver;
 
 const API: &str = "https://api.github.com/repos/Fu021/Clash-of-Rust/releases?per_page=100";
@@ -110,16 +112,15 @@ fn select(releases: Vec<Release>, current: &str, suffix: &str) -> Result<Option<
             .all(|c| c.is_ascii_alphanumeric() || b".-".contains(&c)),
         "安装包平台无效"
     );
-    let mut releases = releases
+    let release = releases
         .into_iter()
         .filter_map(|r| {
             let v = Version::parse(r.tag_name.trim_start_matches('v')).ok()?;
             (!r.draft && !r.prerelease && v.pre.is_empty() && v.cmp_precedence(&current).is_gt())
                 .then_some((v, r))
         })
-        .collect::<Vec<_>>();
-    releases.sort_by(|(a, _), (b, _)| b.cmp_precedence(a));
-    for (version, release) in releases {
+        .max_by(|(a, _), (b, _)| a.cmp_precedence(b));
+    if let Some((version, release)) = release {
         let name = format!("Clash-of-Rust-{version}-{suffix}");
         let matches = release
             .assets
@@ -127,20 +128,18 @@ fn select(releases: Vec<Release>, current: &str, suffix: &str) -> Result<Option<
             .filter(|a| a.name == name)
             .collect::<Vec<_>>();
         let sidecar = format!("{name}.sha256");
-        if matches.len() != 1
-            || release
-                .assets
-                .iter()
-                .filter(|a| a.name == sidecar && a.size > 0 && a.size <= 1024)
-                .count()
-                != 1
-        {
-            continue;
-        }
+        ensure!(
+            matches.len() == 1
+                && release
+                    .assets
+                    .iter()
+                    .filter(|a| a.name == sidecar && a.size > 0 && a.size <= 1024)
+                    .count()
+                    == 1,
+            "正式版 {version} 缺少本平台安装包或校验文件（{suffix}）"
+        );
         let asset = matches[0];
-        if asset.size == 0 || asset.size > LIMIT {
-            continue;
-        }
+        ensure!(asset.size > 0 && asset.size <= LIMIT, "安装包大小无效");
         let mut url = reqwest::Url::parse(RELEASES)?;
         url.path_segments_mut()
             .map_err(|_| anyhow::anyhow!("更新地址无效"))?
@@ -159,12 +158,32 @@ fn select(releases: Vec<Release>, current: &str, suffix: &str) -> Result<Option<
     Ok(None)
 }
 pub async fn check(current: &str, suffix: &str, port: Option<u16>) -> Result<Option<Package>> {
+    // Validate local arguments once; retry only the remote discovery operation.
+    Version::parse(current).context("当前客户端版本号无效")?;
+    ensure!(
+        !suffix.is_empty()
+            && suffix
+                .bytes()
+                .all(|c| c.is_ascii_alphanumeric() || b".-".contains(&c)),
+        "安装包平台无效"
+    );
+    let routes = crate::network::routes(port, None);
+    retry_check(|| check_once(current, suffix, &routes, API)).await
+}
+
+async fn check_once(
+    current: &str,
+    suffix: &str,
+    routes: &[crate::network::Route],
+    endpoint: &str,
+) -> Result<Option<Package>> {
     let mut errors = Vec::new();
-    for route in crate::network::routes(port, None) {
+    for route in routes {
         let result = async {
             let bytes = bounded(
-                client(&route, Duration::from_secs(20))?
-                    .get(API)
+                client(route, Duration::from_secs(20))?
+                    .get(endpoint)
+                    .header(reqwest::header::CACHE_CONTROL, "no-cache")
                     .send()
                     .await?,
                 2 * 1024 * 1024,
@@ -378,11 +397,9 @@ mod tests {
                 .version,
             "0.5.13"
         );
-        assert!(
-            select(parse(), "0.5.12", "android-x64.apk")
-                .unwrap()
-                .is_none()
-        );
+        // A newer stable release with incomplete assets is retryable, not
+        // evidence that the installed client is already up to date.
+        assert!(select(parse(), "0.5.12", "android-x64.apk").is_err());
         assert!(
             select(parse(), "0.5.13", "android-arm64.apk")
                 .unwrap()
@@ -397,5 +414,95 @@ mod tests {
         }
         assert!(checksum(format!("{digest}  other.apk").as_bytes(), "update.apk").is_err());
         assert!(checksum(b"not a digest", "update.apk").is_err());
+    }
+
+    #[tokio::test]
+    async fn check_refetches_after_http_errors_and_incomplete_newest_assets() {
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let endpoint = format!("http://{}/releases", listener.local_addr().unwrap());
+        let name = "Clash-of-Rust-0.6.3-android-arm64.apk";
+        let package = serde_json::json!({"name":name,"size":42});
+        let sidecar = serde_json::json!({"name":format!("{name}.sha256"),"size":64});
+        let older = serde_json::json!({
+            "tag_name":"v0.6.2","draft":false,"prerelease":false,"assets":[
+                {"name":"Clash-of-Rust-0.6.2-android-arm64.apk","size":42},
+                {"name":"Clash-of-Rust-0.6.2-android-arm64.apk.sha256","size":64}
+            ]
+        });
+        let bodies = [vec![], vec![package.clone()], vec![package, sidecar]].map(|assets| {
+            serde_json::json!([
+                {"tag_name":"v0.6.3","draft":false,"prerelease":false,"assets":assets},
+                older.clone()
+            ])
+            .to_string()
+        });
+        let server = tokio::spawn(async move {
+            for (status, body) in [
+                ("503 Service Unavailable", String::new()),
+                ("200 OK", bodies[0].clone()),
+                ("200 OK", bodies[1].clone()),
+                ("200 OK", bodies[2].clone()),
+            ] {
+                let (mut socket, _) = listener.accept().await.unwrap();
+                let mut bytes = [0; 8192];
+                let mut count = 0;
+                while !bytes[..count].ends_with(b"\r\n\r\n") {
+                    let n = socket.read(&mut bytes[count..]).await.unwrap();
+                    assert!(n > 0);
+                    count += n;
+                }
+                let request = String::from_utf8_lossy(&bytes[..count]).to_ascii_lowercase();
+                assert!(request.starts_with("get /releases http/1.1"));
+                assert!(request.contains("cache-control: no-cache"));
+                socket
+                    .write_all(
+                        format!(
+                            "HTTP/1.1 {status}\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+                            body.len()
+                        )
+                        .as_bytes(),
+                    )
+                    .await
+                    .unwrap();
+            }
+        });
+        let routes = crate::network::routes(None, None);
+        let package = retry_check(|| check_once("0.6.1", "android-arm64.apk", &routes, &endpoint))
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(package.version, "0.6.3");
+        assert_eq!(package.name, name);
+        assert_eq!(package.checksum_url, format!("{}.sha256", package.url));
+        server.await.unwrap();
+    }
+
+    #[test]
+    fn incomplete_newest_release_does_not_fall_back_to_an_older_installer() {
+        let name = "Clash-of-Rust-0.6.3-android-arm64.apk";
+        for assets in [
+            serde_json::json!([]),
+            serde_json::json!([{"name":name,"size":42}]),
+            serde_json::json!([
+                {"name":name,"size":42},
+                {"name":name,"size":42},
+                {"name":format!("{name}.sha256"),"size":64}
+            ]),
+        ] {
+            let releases = serde_json::json!([
+                {"tag_name":"v0.6.3","draft":false,"prerelease":false,"assets":assets},
+                {"tag_name":"v0.6.2","draft":false,"prerelease":false,"assets":[
+                    {"name":"Clash-of-Rust-0.6.2-android-arm64.apk","size":42},
+                    {"name":"Clash-of-Rust-0.6.2-android-arm64.apk.sha256","size":64}
+                ]}
+            ]);
+            let result = select(
+                serde_json::from_value(releases).unwrap(),
+                "0.6.1",
+                "android-arm64.apk",
+            );
+            assert!(result.unwrap_err().to_string().contains("0.6.3"));
+        }
     }
 }

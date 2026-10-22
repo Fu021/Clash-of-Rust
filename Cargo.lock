@@ -653,6 +653,7 @@ name = "clash-cli"
 version = "0.6.2-dev.1"
 dependencies = [
  "anyhow",
+ "chrono",
  "clash-client-core",
  "clash-client-runtime",
  "serde",
@@ -660,6 +661,7 @@ dependencies = [
  "serde_yaml",
  "tempfile",
  "tokio",
+ "unicode-width",
  "uuid",
 ]
 
