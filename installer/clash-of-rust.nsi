@@ -220,7 +220,7 @@ Function RemoveExisting
       IfFileExists "$ExistingDir\uninstall.exe" 0 uninstall_failed
       ClearErrors
       ExecWait '"$ExistingDir\uninstall.exe" /S _?=$ExistingDir' $ResultCode
-      IfErrors uninstall_locked
+      IfErrors uninstall_failed
       ${If} $ResultCode != 0
         Goto uninstall_failed
       ${EndIf}

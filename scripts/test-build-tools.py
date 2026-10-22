@@ -1242,6 +1242,48 @@ class ReleaseTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             release.GitHub('example/project','test-only-token')('https://example.test/upload','POST',b'installer')
 
+    def test_release_artifact_get_recovers_from_dns_and_interrupted_download(self):
+        reply = MagicMock()
+        reply.read.side_effect = release.http.client.IncompleteRead(b'partial')
+        transport = MagicMock()
+        transport.open.side_effect = [
+            urllib.error.URLError('temporary DNS failure'),
+            nullcontext(reply),
+            nullcontext(io.BytesIO(b'complete verified archive')),
+        ]
+        with patch.object(release, 'opener', return_value=transport), patch.object(release.time, 'sleep') as sleep:
+            data = release.GitHub('example/project','test-only-token')('/actions/artifacts/1/zip',raw=True)
+        self.assertEqual(data,b'complete verified archive')
+        self.assertEqual(transport.open.call_count,3)
+        self.assertEqual([call.args[0] for call in sleep.call_args_list],[1,2])
+
+    def test_release_get_retries_only_temporary_http_errors(self):
+        for status in (403,404,429,503):
+            with self.subTest(status=status):
+                error = urllib.error.HTTPError('https://api.github.com/test',status,'HTTP failure',{},None)
+                transport = MagicMock()
+                transport.open.side_effect = [error,nullcontext(io.BytesIO(b'{"ok":true}'))]
+                with patch.object(release, 'opener', return_value=transport), patch.object(release.time, 'sleep') as sleep:
+                    client = release.GitHub('example/project','test-only-token')
+                    if status in (403,404):
+                        with self.assertRaises(urllib.error.HTTPError): client('/test')
+                        self.assertEqual(transport.open.call_count,1)
+                        sleep.assert_not_called()
+                    else:
+                        self.assertEqual(client('/test'),{'ok':True})
+                        self.assertEqual(transport.open.call_count,2)
+                        sleep.assert_called_once_with(1)
+
+    def test_release_network_retries_are_bounded_and_never_replay_mutations(self):
+        for method, attempts in [('GET',3),('POST',1),('PATCH',1),('DELETE',1)]:
+            with self.subTest(method=method):
+                transport = MagicMock()
+                transport.open.side_effect = urllib.error.URLError('offline')
+                with patch.object(release, 'opener', return_value=transport), patch.object(release.time, 'sleep'):
+                    with self.assertRaises(urllib.error.URLError):
+                        release.GitHub('example/project','test-only-token')('/test',method=method)
+                self.assertEqual(transport.open.call_count,attempts)
+
     def test_release_check_mode_never_calls_publisher(self):
         with patch.object(release.sys,'argv',['publish-release.py','--check','--run-id','77','--package-run-id','88']), \
              patch.object(release,'repository',return_value='example/project'), \

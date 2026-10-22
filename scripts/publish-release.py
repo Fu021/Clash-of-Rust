@@ -5,6 +5,7 @@ Credentials stay in memory; Python 3.11+ and the standard library only.
 """
 import argparse
 import hashlib
+import http.client
 import io
 import json
 import os
@@ -12,6 +13,7 @@ from pathlib import Path
 import re
 import subprocess
 import sys
+import time
 import urllib.error
 import urllib.parse
 import urllib.request
@@ -91,9 +93,20 @@ class GitHub:
             'User-Agent': 'Clash-of-Rust-release',
             'Content-Type': 'application/octet-stream' if binary else 'application/json',
         })
-        with self.opener.open(request, timeout=180) as response:
-            body = response.read()
-            return body if raw else json.loads(body) if body else None
+        # GET requests may fail during DNS resolution or an artifact redirect.
+        # Do not replay release creation/uploads when the outcome is unknown.
+        attempts = 3 if method == 'GET' else 1
+        for attempt in range(attempts):
+            try:
+                with self.opener.open(request, timeout=180) as response:
+                    body = response.read()
+                    return body if raw else json.loads(body) if body else None
+            except (OSError, http.client.IncompleteRead) as error:
+                retryable = not isinstance(error, urllib.error.HTTPError) or error.code in (408, 429, 500, 502, 503, 504)
+                if not retryable or attempt + 1 == attempts:
+                    raise
+                print(f'GitHub GET temporarily unavailable; retrying ({attempt+2}/{attempts}).', flush=True)
+                time.sleep(attempt + 1)
 
 
 def require(condition, message):
