@@ -49,16 +49,16 @@ macOS 打开 DMG，将 **Clash of Rust.app** 拖入 **Applications（应用程�
 
 ## 内存占用
 
-实测版本 **0.6.1**（`fa3ceef`）；Ubuntu 22.04 x64、Rust 1.99.1、Release 构建、Slint 软件渲染，mihomo v1.19.32；低强度固定输入为 **100 节点、5 个策略组、1,000 条规则**。DNS 覆盖、IPv6 与 UDP 开启，Claude 保护、快捷规则、系统代理和 TUN 关闭，无业务流量：
+实测版本 **0.6.2**（`f79fd7b`）；Ubuntu 22.04 x64、Rust 1.99.1、Release 构建、Slint 软件渲染，mihomo v1.19.33；低强度固定输入为 **100 节点、5 个策略组、1,000 条规则**。DNS 覆盖、IPv6 与 UDP 开启，Claude 保护、快捷规则、系统代理和 TUN 关闭，无业务流量：
 
 | 场景 | GUI RSS | GUI 与内核合计 PSS |
 | --- | ---: | ---: |
-| 首页 | 44.63 MiB | 82.99 MiB |
-| 代理组折叠 | 45.43 MiB | 87.77 MiB |
-| 节点搜索 | 54.71 MiB | 99.47 MiB |
-| 返回首页 | 54.77 MiB | 99.53 MiB |
+| 首页 | 44.69 MiB | 82.97 MiB |
+| 代理组折叠 | 45.57 MiB | 88.29 MiB |
+| 节点搜索 | 54.80 MiB | 100.33 MiB |
+| 返回首页 | 54.87 MiB | 99.87 MiB |
 
-五项快捷规则全开时，首页 GUI RSS 为 43.58 MiB，合计 PSS 为 98.95 MiB。以上为每场景采样 10 秒、间隔 250 ms 的观测峰值，实际占用随系统、配置和使用情况变化；RSS 含共享页，PSS 按比例分摊共享页。[测试记录](https://github.com/Fu021/Clash-of-Rust/actions/runs/39566842514)。
+五项快捷规则全开时，首页 GUI RSS 为 44.85 MiB，合计 PSS 为 100.16 MiB。以上为每场景采样 10 秒、间隔 250 ms 的观测峰值，实际占用随系统、配置和使用情况变化；RSS 含共享页，PSS 按比例分摊共享页。[测试记录](https://github.com/Fu021/Clash-of-Rust/actions/runs/39734736490)。
 
 ## 编译与打包
 
