@@ -3,7 +3,7 @@ mod maintenance;
 mod profiles;
 mod rules;
 use crate::{args::Args, backend, output};
-use anyhow::{Result, bail, ensure};
+use anyhow::{Context, Result, bail, ensure};
 use clash_client_runtime::{
     control::{Command, Meta, Poll},
     engine::{ProxyMode, Scope},
@@ -35,10 +35,19 @@ pub async fn execute(args: &Args) -> Result<()> {
             output::emit(args, serde_json::to_value(backend::meta(args).await?)?)
         }
         "stop" => {
-            if let Some(remote) = backend::connect(args, false).await? {
-                let result: Value = remote.request(Command::Shutdown).await?;
+            if let Some(remote) = backend::connect(args, false)
+                .await
+                .context("连接待停止的后台失败")?
+            {
+                let result: Value = remote
+                    .request(Command::Shutdown)
+                    .await
+                    .context("停止内核失败")?;
                 if result["shutdown"] == true {
-                    remote.wait_closed(&backend::store(args)?).await?;
+                    remote
+                        .wait_closed(&backend::store(args)?)
+                        .await
+                        .context("等待后台清理失败")?;
                 }
             }
             output::emit(args, json!({"running":false}))

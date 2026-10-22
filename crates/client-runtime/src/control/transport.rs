@@ -89,9 +89,24 @@ impl Remote {
     pub async fn wait_closed(&self, store: &Store) -> Result<()> {
         tokio::time::timeout(self.timeout, async {
             loop {
-                if Endpoint::read(store)?.is_none_or(|current| current.token != self.endpoint.token)
-                {
-                    return Ok::<(), anyhow::Error>(());
+                match Endpoint::read(store) {
+                    Ok(current)
+                        if current
+                            .as_ref()
+                            .is_none_or(|current| current.token != self.endpoint.token) =>
+                    {
+                        return Ok::<(), anyhow::Error>(());
+                    }
+                    Ok(_) => {}
+                    // Windows rejects opening a file marked for deletion until
+                    // its last reader closes it. Only an acknowledged shutdown
+                    // uses this bounded wait; discovery keeps strict checks.
+                    #[cfg(windows)]
+                    Err(error)
+                        if error
+                            .downcast_ref::<std::io::Error>()
+                            .is_some_and(|e| e.kind() == std::io::ErrorKind::PermissionDenied) => {}
+                    Err(error) => return Err(error).context("等待后台退出时读取控制端点失败"),
                 }
                 tokio::time::sleep(Duration::from_millis(25)).await;
             }
@@ -294,6 +309,38 @@ pub async fn serve(engine: &Arc<Mutex<Engine>>, owner: Owner) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[cfg(windows)]
+    #[tokio::test]
+    async fn shutdown_waits_for_a_delete_pending_endpoint_reader() {
+        use std::os::windows::ffi::OsStrExt;
+        let root = tempfile::tempdir().unwrap();
+        let store = Store::at(root.path().to_owned()).unwrap();
+        let endpoint = Endpoint {
+            protocol: PROTOCOL,
+            port: 1,
+            pid: std::process::id(),
+            owner: Owner::Daemon,
+            token: "a".repeat(64),
+        };
+        let path = Endpoint::path(&store);
+        atomic_write(&path, &serde_json::to_vec(&endpoint).unwrap()).unwrap();
+        let reader = std::fs::File::open(&path).unwrap();
+        let wide: Vec<_> = path.as_os_str().encode_wide().chain([0]).collect();
+        assert_ne!(
+            unsafe { windows_sys::Win32::Storage::FileSystem::DeleteFileW(wide.as_ptr()) },
+            0
+        );
+        let release = tokio::spawn(async move {
+            tokio::time::sleep(Duration::from_millis(100)).await;
+            drop(reader);
+        });
+        Remote::new(endpoint, Duration::from_secs(5))
+            .wait_closed(&store)
+            .await
+            .unwrap();
+        release.await.unwrap();
+        assert!(!path.exists());
+    }
     #[test]
     fn protocol_and_secret_are_required_even_on_loopback() {
         let endpoint = Endpoint {
