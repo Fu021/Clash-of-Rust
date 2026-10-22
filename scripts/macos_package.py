@@ -41,7 +41,7 @@ def build_app(payload, destination, version, arch):
     binaries, resources = contents/'MacOS', contents/'Resources'
     binaries.mkdir(parents=True)
     resources.mkdir()
-    for name in ('clash-of-rust', 'clash-tun-launcher', 'cor'):
+    for name in ('clash-of-rust', 'clash-desktop-ui', 'clash-tun-launcher', 'cor'):
         validate_binary_arch(payload/name, 'macos', arch)
         shutil.copy2(payload/name, binaries/name)
         (binaries/name).chmod(0o755)
@@ -63,7 +63,7 @@ def build_app(payload, destination, version, arch):
     run(['/usr/bin/iconutil', '-c', 'icns', iconset, '-o', resources/'AppIcon.icns'])
     shutil.rmtree(iconset)
     identity = os.environ.get('MACOS_SIGNING_IDENTITY', '-')
-    for binary in (resources/'resources/mihomo', binaries/'clash-tun-launcher', binaries/'cor', binaries/'clash-of-rust'):
+    for binary in (resources/'resources/mihomo', binaries/'clash-desktop-ui', binaries/'clash-tun-launcher', binaries/'cor', binaries/'clash-of-rust'):
         command = ['/usr/bin/codesign', '--force', '--sign', identity]
         if identity != '-': command += ['--options', 'runtime', '--timestamp']
         run([*command, binary])

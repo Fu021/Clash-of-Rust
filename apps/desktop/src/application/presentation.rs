@@ -1,24 +1,20 @@
 //! Bounded projections from application state to the declarative UI contract.
 use super::*;
-use clash_client_ui::{
+use clash_desktop_protocol::List as ModelRc;
+use clash_desktop_protocol::Text as SharedString;
+use clash_desktop_protocol::{
     models::{ViewModels, reconcile},
     *,
 };
-use slint::{Model, ModelRc, SharedString, VecModel};
-use std::rc::Rc;
 
-fn model<T: Clone + PartialEq + 'static>(old: ModelRc<T>, values: Vec<T>) -> ModelRc<T> {
-    if old.row_count() == values.len()
-        && values
-            .iter()
-            .enumerate()
-            .all(|(index, value)| old.row_data(index).as_ref() == Some(value))
-    {
+fn model<T: Clone + PartialEq>(old: ModelRc<T>, values: Vec<T>) -> ModelRc<T> {
+    if old.rows() == values {
         old
     } else {
-        Rc::new(VecModel::from(values)).into()
+        values.into()
     }
 }
+
 fn strings(
     old: ModelRc<SharedString>,
     values: impl IntoIterator<Item = impl AsRef<str>>,
@@ -238,7 +234,7 @@ impl App {
         (indices.len(), rows)
     }
 
-    fn pager(&self, data: &UiData<'_>, total: usize, step: usize) {
+    fn pager(&self, data: &UiData, total: usize, step: usize) {
         let offset = self.list_offset.min(total.saturating_sub(1) / step * step);
         data.set_page_offset(offset as i32);
         data.set_previous(offset > 0);
@@ -253,7 +249,7 @@ impl App {
         );
     }
 
-    pub(super) fn present(&self, data: &UiData<'_>, models: &mut ViewModels) {
+    pub(super) fn present(&self, data: &UiData, models: &mut ViewModels) {
         macro_rules! set {
             ($get:ident, $put:ident, $value:expr) => {{
                 let value = $value;
@@ -594,7 +590,7 @@ impl App {
         self.present_dialog(data);
     }
 
-    fn present_rules(&self, data: &UiData<'_>, models: &ViewModels, query: &str) {
+    fn present_rules(&self, data: &UiData, models: &ViewModels, query: &str) {
         let state = &self.rule_state;
         data.set_shortcuts_open(state.expanded);
         data.set_rule_dirty(state.dirty());
@@ -701,7 +697,7 @@ impl App {
         );
     }
 
-    fn present_sites(&self, data: &UiData<'_>, models: &ViewModels, query: &str) {
+    fn present_sites(&self, data: &UiData, models: &ViewModels, query: &str) {
         let report = ip_report::Report::from_results(&self.site_results);
         let total = report.totals.total();
         let completed = report.totals.completed();
@@ -854,7 +850,7 @@ impl App {
         );
     }
 
-    fn present_claude(&self, data: &UiData<'_>, models: &ViewModels) {
+    fn present_claude(&self, data: &UiData, models: &ViewModels) {
         let entries = self.claude.entries();
         let counts = self.claude.counts(&entries);
         data.set_claude_normal(counts[0].to_string().into());
@@ -977,7 +973,7 @@ impl App {
                         ),
                     };
                     ReportItem {
-                        flag: slint::Image::default(),
+                        flag: String::new(),
                         flagged: false,
                         id: "".into(),
                         title: title.into(),
@@ -991,12 +987,12 @@ impl App {
         );
     }
 
-    fn present_dialog(&self, data: &UiData<'_>) {
+    fn present_dialog(&self, data: &UiData) {
         data.set_modal_error("".into());
         data.set_modal_copy("".into());
         data.set_modal_country("".into());
         data.set_modal_flagged(false);
-        data.set_modal_flag(slint::Image::default());
+        data.set_modal_flag(String::new());
         data.set_modal_description("".into());
         data.set_modal_accept("".into());
         data.set_modal_danger(false);

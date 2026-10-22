@@ -1,4 +1,4 @@
-//! Remember ordinary window dimensions in logical pixels, independently of core settings.
+//! Remember ordinary logical dimensions and native screen position independently of core settings.
 use super::runtime::Size;
 use super::{DEFAULT_WINDOW_SIZE, MIN_WINDOW_SIZE};
 use anyhow::{Context, Result};
@@ -6,10 +6,7 @@ use clash_of_rust::config::{Store, atomic_write};
 use serde::{Deserialize, Serialize};
 use std::{
     path::PathBuf,
-    sync::{
-        Arc,
-        atomic::{AtomicU32, Ordering},
-    },
+    sync::{Arc, Mutex as SyncMutex},
 };
 use tokio::sync::Mutex;
 
@@ -53,25 +50,29 @@ impl Dimensions {
         })
     }
 
-    fn packed(self) -> u32 {
-        u32::from(self.width) | (u32::from(self.height) << 16)
-    }
-
-    fn unpack(value: u32) -> Self {
-        Self {
-            width: value as u16,
-            height: (value >> 16) as u16,
-        }
-    }
-
     fn size(self) -> Size {
         Size::new(f32::from(self.width), f32::from(self.height))
     }
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+struct Geometry {
+    #[serde(flatten)]
+    dimensions: Dimensions,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    position: Option<(i32, i32)>,
+}
+
+fn valid_position(position: (i32, i32)) -> bool {
+    position.0.unsigned_abs() <= 1_000_000 && position.1.unsigned_abs() <= 1_000_000
+}
+
+struct GeometryState {
+    normal: Geometry,
+    saved: Geometry,
+}
 struct Inner {
-    normal: AtomicU32,
-    saved: AtomicU32,
+    geometry: SyncMutex<GeometryState>,
     path: Option<PathBuf>,
     writer: Mutex<()>,
 }
@@ -81,16 +82,21 @@ pub(super) struct State(Arc<Inner>);
 
 impl Default for State {
     fn default() -> Self {
-        Self::new(DEFAULT_WINDOW_SIZE, None)
+        Self::new(DEFAULT_WINDOW_SIZE, None, None)
     }
 }
 
 impl State {
-    fn new(size: Size, path: Option<PathBuf>) -> Self {
-        let dimensions = Dimensions::from_size(size).expect("valid initial window size");
+    fn new(size: Size, position: Option<(i32, i32)>, path: Option<PathBuf>) -> Self {
+        let geometry = Geometry {
+            dimensions: Dimensions::from_size(size).expect("valid initial window size"),
+            position: position.filter(|p| valid_position(*p)),
+        };
         Self(Arc::new(Inner {
-            normal: AtomicU32::new(dimensions.packed()),
-            saved: AtomicU32::new(dimensions.packed()),
+            geometry: SyncMutex::new(GeometryState {
+                normal: geometry,
+                saved: geometry,
+            }),
             path,
             writer: Mutex::new(()),
         }))
@@ -102,16 +108,26 @@ impl State {
             .ok()
             .filter(|metadata| metadata.len() <= 1024)
             .and_then(|_| std::fs::read(&path).ok())
-            .and_then(|bytes| serde_json::from_slice::<Dimensions>(&bytes).ok())
-            .and_then(|dimensions| Dimensions::from_size(dimensions.size()));
+            .and_then(|bytes| serde_json::from_slice::<Geometry>(&bytes).ok())
+            .filter(|geometry| Dimensions::from_size(geometry.dimensions.size()).is_some());
         Self::new(
-            stored.map_or(DEFAULT_WINDOW_SIZE, Dimensions::size),
+            stored.map_or(DEFAULT_WINDOW_SIZE, |g| g.dimensions.size()),
+            stored.and_then(|g| g.position),
             Some(path),
         )
     }
 
     pub(super) fn size(&self) -> Size {
-        Dimensions::unpack(self.0.normal.load(Ordering::Acquire)).size()
+        self.0.geometry.lock().unwrap().normal.dimensions.size()
+    }
+
+    pub(super) fn position(&self) -> Option<(i32, i32)> {
+        self.0.geometry.lock().unwrap().normal.position
+    }
+
+    pub(super) fn dirty(&self) -> bool {
+        let geometry = self.0.geometry.lock().unwrap();
+        geometry.normal != geometry.saved
     }
 
     pub(super) fn capture(&self, size: Size, maximized: bool, minimized: Option<bool>) -> bool {
@@ -121,7 +137,32 @@ impl State {
         let Some(dimensions) = Dimensions::from_size(size) else {
             return false;
         };
-        self.0.normal.swap(dimensions.packed(), Ordering::AcqRel) != dimensions.packed()
+        let mut geometry = self.0.geometry.lock().unwrap();
+        let changed = geometry.normal.dimensions != dimensions;
+        geometry.normal.dimensions = dimensions;
+        changed
+    }
+
+    pub(super) fn capture_position(
+        &self,
+        position: Option<(i32, i32)>,
+        maximized: bool,
+        minimized: bool,
+        fullscreen: bool,
+    ) -> bool {
+        // Wayland may not expose or permit positioning; do not replace a useful
+        // saved position with a fabricated origin. Maximized coordinates also
+        // must not replace the last ordinary window position.
+        if maximized || minimized || fullscreen {
+            return false;
+        }
+        let Some(position) = position.filter(|p| valid_position(*p)) else {
+            return false;
+        };
+        let mut geometry = self.0.geometry.lock().unwrap();
+        let changed = geometry.normal.position != Some(position);
+        geometry.normal.position = Some(position);
+        changed
     }
 
     pub(super) async fn save(&self) -> Result<()> {
@@ -130,19 +171,20 @@ impl State {
         };
         let _writer = self.0.writer.lock().await;
         loop {
-            // Always read the newest dimensions after acquiring the writer.
-            // Delayed saves and exit flushing must never restore stale data.
-            let value = self.0.normal.load(Ordering::Acquire);
-            if value == self.0.saved.load(Ordering::Acquire) {
-                return Ok(());
-            }
+            // Read both fields after acquiring the writer. A delayed save must
+            // never overwrite a newer move or resize with an older snapshot.
+            let value = {
+                let geometry = self.0.geometry.lock().unwrap();
+                if geometry.normal == geometry.saved {
+                    return Ok(());
+                }
+                geometry.normal
+            };
             let path = path.clone();
-            tokio::task::spawn_blocking(move || {
-                atomic_write(&path, &serde_json::to_vec(&Dimensions::unpack(value))?)
-            })
-            .await
-            .context("保存窗口尺寸任务失败")??;
-            self.0.saved.store(value, Ordering::Release);
+            tokio::task::spawn_blocking(move || atomic_write(&path, &serde_json::to_vec(&value)?))
+                .await
+                .context("保存窗口状态任务失败")??;
+            self.0.geometry.lock().unwrap().saved = value;
         }
     }
 }
@@ -234,6 +276,39 @@ mod tests {
         state.save().await.unwrap();
         writer.await.unwrap().unwrap();
         assert_eq!(State::load(&store).size(), DEFAULT_WINDOW_SIZE);
+    }
+
+    #[tokio::test]
+    async fn ordinary_position_survives_relaunch_and_special_states_do_not_replace_it() {
+        let directory = tempfile::tempdir().unwrap();
+        let store = Store::at(directory.path().to_owned()).unwrap();
+        let path = store.root.join("window-state.json");
+        // Existing installations only stored dimensions.
+        std::fs::write(&path, br#"{"width":900,"height":500}"#).unwrap();
+        let state = State::load(&store);
+        assert_eq!(state.size(), Size::new(900.0, 500.0));
+        assert_eq!(state.position(), None);
+        assert!(state.capture_position(Some((-1800, 120)), false, false, false));
+        assert!(!state.capture_position(Some((0, 0)), true, false, false));
+        assert!(!state.capture_position(Some((0, 0)), false, true, false));
+        assert!(!state.capture_position(Some((0, 0)), false, false, true));
+        assert!(!state.capture_position(None, false, false, false));
+        assert!(!state.capture_position(Some((i32::MIN, 0)), false, false, false));
+        state.save().await.unwrap();
+        let restored = State::load(&store);
+        assert_eq!(restored.position(), Some((-1800, 120)));
+        assert_eq!(restored.size(), Size::new(900.0, 500.0));
+        assert!(!restored.dirty());
+        state.capture_position(Some((220, 180)), false, false, false);
+        let delayed = state.clone();
+        let writer = tokio::spawn(async move { delayed.save().await });
+        state.capture(Size::new(1100.0, 700.0), false, None);
+        state.capture_position(Some((340, 200)), false, false, false);
+        state.save().await.unwrap();
+        writer.await.unwrap().unwrap();
+        let latest = State::load(&store);
+        assert_eq!(latest.position(), Some((340, 200)));
+        assert_eq!(latest.size(), Size::new(1100.0, 700.0));
     }
 
     #[test]

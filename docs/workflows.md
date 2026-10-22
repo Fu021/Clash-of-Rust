@@ -20,7 +20,7 @@
 
 ```sh
 python3 scripts/build_inputs.py resolve
-cargo build -p clash-of-rust -p clash-cli --release --locked --bins
+cargo build -p clash-of-rust -p clash-desktop-ui -p clash-cli --release --locked --bins
 python3 scripts/prepare-resources.py
 ```
 

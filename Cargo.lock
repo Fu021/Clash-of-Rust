@@ -734,6 +734,58 @@ dependencies = [
 ]
 
 [[package]]
+name = "clash-desktop-protocol"
+version = "0.6.3-dev.1"
+dependencies = [
+ "serde",
+ "serde_json",
+]
+
+[[package]]
+name = "clash-desktop-shell"
+version = "0.6.3-dev.1"
+dependencies = [
+ "anyhow",
+ "block2 0.6.2",
+ "clash-client-runtime",
+ "futures-util",
+ "libc",
+ "objc2 0.6.4",
+ "objc2-app-kit 0.3.2",
+ "objc2-foundation 0.3.2",
+ "objc2-user-notifications 0.3.2",
+ "reqwest",
+ "serde_json",
+ "tokio",
+ "tray-icon 0.24.2",
+ "tray-icon 0.26.0",
+ "uuid",
+ "windows",
+ "windows-sys 0.61.2",
+ "winreg",
+ "zbus",
+]
+
+[[package]]
+name = "clash-desktop-ui"
+version = "0.6.3-dev.1"
+dependencies = [
+ "anyhow",
+ "clash-client-core",
+ "clash-client-ui",
+ "clash-desktop-protocol",
+ "clash-desktop-shell",
+ "objc2 0.6.4",
+ "objc2-app-kit 0.3.2",
+ "serde",
+ "serde_json",
+ "slint",
+ "windows",
+ "windows-sys 0.61.2",
+ "winreg",
+]
+
+[[package]]
 name = "clash-mobile-runtime"
 version = "0.6.3-dev.1"
 dependencies = [
@@ -760,6 +812,9 @@ dependencies = [
  "clash-client-core",
  "clash-client-runtime",
  "clash-client-ui",
+ "clash-desktop-protocol",
+ "clash-desktop-shell",
+ "clash-desktop-ui",
  "directories",
  "futures-util",
  "hmac",
@@ -786,6 +841,7 @@ dependencies = [
  "windows",
  "windows-sys 0.61.2",
  "winreg",
+ "winit",
  "zbus",
 ]
 

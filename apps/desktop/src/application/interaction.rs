@@ -327,14 +327,13 @@ impl App {
                 };
                 let edit = *edit;
                 #[cfg(target_os = "macos")]
-                let task =
-                    runtime::native::call(move |_| match clash_of_rust::file_dialog::begin() {
-                        Ok(receiver) => Message::FilePickStarted(
-                            edit,
-                            Arc::new(std::sync::Mutex::new(Some(receiver))),
-                        ),
-                        Err(error) => Message::FilePicked(edit, Err(error)),
-                    });
+                let task = runtime::native::call(move |host| match host.pick_file() {
+                    Ok(receiver) => Message::FilePickStarted(
+                        edit,
+                        Arc::new(std::sync::Mutex::new(Some(receiver))),
+                    ),
+                    Err(error) => Message::FilePicked(edit, Err(error)),
+                });
                 #[cfg(not(target_os = "macos"))]
                 let task = Task::perform(clash_of_rust::file_dialog::choose(), move |r| {
                     Message::FilePicked(edit, r)

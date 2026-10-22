@@ -115,10 +115,10 @@ def gui_smoke(app, label):
                 swift = REPORT/'windows.swift'
                 swift.write_text('''import Foundation
 import CoreGraphics
-let pid = Int(CommandLine.arguments[1])!
+let pids = Set(CommandLine.arguments.dropFirst().compactMap(Int.init))
 let windows = CGWindowListCopyWindowInfo(.optionAll, kCGNullWindowID) as? [[String: Any]] ?? []
 let matching = windows.filter {
-    guard ($0[kCGWindowOwnerPID as String] as? Int) == pid,
+    guard let pid = $0[kCGWindowOwnerPID as String] as? Int, pids.contains(pid),
           ($0[kCGWindowLayer as String] as? Int) == 0,
           ($0[kCGWindowIsOnscreen as String] as? Bool) == true,
           let bounds = $0[kCGWindowBounds as String] as? [String: Any],
@@ -129,7 +129,14 @@ let matching = windows.filter {
 let data = try JSONSerialization.data(withJSONObject: matching, options: [.prettyPrinted, .sortedKeys])
 FileHandle.standardOutput.write(data)
 ''')
-                output = subprocess.check_output(['/usr/bin/swift', swift, str(process.pid)], timeout=90)
+                parents = {}
+                for row in subprocess.check_output(['/bin/ps','-axo','pid=,ppid='],text=True).splitlines():
+                    parts = row.split()
+                    if len(parts) == 2: parents[int(parts[0])] = int(parts[1])
+                owned = {process.pid}
+                while extra := {pid for pid,parent in parents.items() if parent in owned} - owned:
+                    owned |= extra
+                output = subprocess.check_output(['/usr/bin/swift', swift, *map(str,sorted(owned))], timeout=90)
                 windows = json.loads(output)
                 write_json(REPORT/(label+'-windows.json'), windows)
                 if not windows: raise RuntimeError('Core is healthy but macOS reports no application window')
@@ -202,7 +209,7 @@ def installed_package_tests(package, manifest, build):
         info = plistlib.loads((app/'Contents/Info.plist').read_bytes())
         if (info['CFBundleIdentifier'], info['ClashOfRustVersion'], info['LSMinimumSystemVersion']) != (BUNDLE_ID, manifest['version'], '14.0'):
             raise ValueError('Installed app metadata differs from CI')
-        for name in ('clash-of-rust', 'clash-tun-launcher', 'cor'):
+        for name in ('clash-of-rust', 'clash-desktop-ui', 'clash-tun-launcher', 'cor'):
             validate_binary_arch(app/'Contents/MacOS'/name, 'macos', manifest['arch'])
         validate_binary_arch(app/'Contents/Resources/resources/mihomo', 'macos', manifest['arch'])
         validate_resources(app/'Contents/Resources/resources', 'macos')

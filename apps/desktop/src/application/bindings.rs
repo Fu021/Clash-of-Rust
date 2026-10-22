@@ -1,137 +1,133 @@
-//! The only desktop adapter that knows about Slint or winit.
+//! Native application owner. Slint runs only in a disposable child process.
 use super::*;
-use clash_client_ui::{AppWindow, Intent, Motion, Theme, UiActions, UiData, models::ViewModels};
+use clash_desktop_protocol::{self as wire, HostPacket, UiData, UiEvent, models::ViewModels};
 use futures_util::StreamExt;
+use runtime::native::Host as _;
 use runtime::{Size, native, window};
-use slint::{
-    ComponentHandle, Timer, TimerMode,
-    winit_030::{EventResult, WinitWindowAccessor, winit},
+use std::{process::Stdio, time::Instant};
+use tokio::io::{AsyncReadExt, AsyncWriteExt};
+use winit::{
+    application::ApplicationHandler,
+    event::WindowEvent,
+    event_loop::{ActiveEventLoop, EventLoop, EventLoopProxy},
+    window::WindowId,
 };
-use std::time::Instant;
-#[path = "repaint.rs"]
-mod repaint;
 
-thread_local! { static HOST: RefCell<Option<DesktopHost>> = const { RefCell::new(None) }; }
-fn enqueue(message: Message) {
-    let _ = slint::invoke_from_event_loop(move || {
-        HOST.with(|slot| {
-            if let Some(host) = slot.borrow_mut().as_mut() {
-                host.message(message);
-            }
-        })
-    });
+enum HostEvent {
+    Message(Message),
+    Native(native::Call),
+    Ui(window::Id, UiEvent),
 }
-fn enqueue_window(id: window::Id, message: Message) {
-    let _ = slint::invoke_from_event_loop(move || {
-        HOST.with(|slot| {
-            if let Some(host) = slot.borrow_mut().as_mut()
-                && host.current_window_id() == Some(id)
-            {
-                host.message(message);
-            }
-        })
-    });
+struct Renderer {
+    id: window::Id,
+    child: tokio::process::Child,
+    commands: tokio::sync::mpsc::UnboundedSender<Vec<u8>>,
+    frames: tokio::sync::watch::Sender<Option<Vec<u8>>>,
+    metrics: wire::Metrics,
+    closing: Option<Instant>,
+    retiring: bool,
+    revision: u64,
+}
+impl Renderer {
+    fn send(&self, packet: HostPacket) {
+        if let Ok(bytes) = wire::encode(&packet) {
+            let _ = self.commands.send(bytes);
+        }
+    }
 }
 struct DesktopHost {
     app: App,
     worker: Arc<tokio::runtime::Runtime>,
-    window: Option<(window::Id, AppWindow)>,
+    proxy: EventLoopProxy<HostEvent>,
+    window: Option<Renderer>,
+    retired: Vec<Renderer>,
+    data: UiData,
     models: ViewModels,
+    last_frame: Vec<u8>,
     clipboard: Option<arboard::Clipboard>,
     tray_listening: bool,
     next_update: Instant,
     last_delay: Instant,
-    fatal: Option<String>,
-    event_loop_started: bool,
-    retiring: Option<window::Id>,
-    saved_view: Option<view_state::State>,
+    saved_view: Option<wire::ViewState>,
+    position_save_at: Option<Instant>,
+    quit: bool,
+    started: bool,
+    #[cfg(target_os = "macos")]
+    pickers:
+        BTreeMap<u64, tokio::sync::oneshot::Sender<Result<Option<std::path::PathBuf>, String>>>,
+    #[cfg(target_os = "macos")]
+    next_picker: u64,
 }
 pub(super) fn run(
     startup: Option<tray::Startup>,
     state: window_state::State,
 ) -> anyhow::Result<()> {
+    let events = EventLoop::<HostEvent>::with_user_event().build()?;
+    let proxy = events.create_proxy();
     let worker = Arc::new(
         tokio::runtime::Builder::new_multi_thread()
             .enable_all()
             .build()?,
     );
-    let _runtime_context = worker.enter();
+    let _context = worker.enter();
+    let saved_view = state.position().map(|position| wire::ViewState {
+        position: Some(position),
+        ..Default::default()
+    });
     let (app, initial) = App::new(startup, state);
     let mut host = DesktopHost {
         app,
         worker: worker.clone(),
+        proxy: proxy.clone(),
         window: None,
+        retired: Vec::new(),
+        data: UiData::default(),
         models: ViewModels::default(),
+        last_frame: Vec::new(),
         clipboard: None,
         tray_listening: false,
         next_update: Instant::now() + update::CHECK_INTERVAL,
         last_delay: Instant::now(),
-        fatal: None,
-        event_loop_started: false,
-        retiring: None,
-        saved_view: None,
+        saved_view,
+        position_save_at: None,
+        quit: false,
+        started: false,
+        #[cfg(target_os = "macos")]
+        pickers: BTreeMap::new(),
+        #[cfg(target_os = "macos")]
+        next_picker: 0,
     };
-    if host.app.visible {
-        let settings = window::Settings {
-            size: host.app.window_state.size(),
-            visible: true,
-        };
-        native::Host::open_window(&mut host, window::Id::unique(), settings);
+    let native_proxy = proxy.clone();
+    native::install(move |call| {
+        let _ = native_proxy.send_event(HostEvent::Native(call));
+    });
+    host.spawn(initial);
+    host.spawn(interaction::theme_updates());
+    let ticker = worker.spawn(async move {
+        let mut interval = tokio::time::interval(Duration::from_secs(1));
+        loop {
+            interval.tick().await;
+            if proxy.send_event(HostEvent::Message(Message::Tick)).is_err() {
+                break;
+            }
+        }
+    });
+    let result = events.run_app(&mut host);
+    ticker.abort();
+    let mut renderers = host.retired;
+    if let Some(window) = host.window.take() {
+        renderers.push(window);
     }
-    if let Some(error) = host.fatal.take() {
-        anyhow::bail!(error);
-    }
-    host.event_loop_started = true;
-    HOST.with(|slot| *slot.borrow_mut() = Some(host));
-    native::install(|operation| {
-        let _ = slint::invoke_from_event_loop(move || {
-            HOST.with(|slot| {
-                if let Some(host) = slot.borrow_mut().as_mut() {
-                    operation(host);
-                }
-            })
-        });
+    worker.block_on(async move {
+        for mut renderer in renderers {
+            let _ = renderer.child.start_kill();
+            let _ = tokio::time::timeout(Duration::from_secs(5), renderer.child.wait()).await;
+        }
     });
-    HOST.with(|slot| {
-        let mut slot = slot.borrow_mut();
-        let host = slot.as_mut().unwrap();
-        host.spawn(initial);
-        host.spawn(interaction::theme_updates());
-    });
-    let tick = Timer::default();
-    tick.start(TimerMode::Repeated, Duration::from_secs(1), || {
-        HOST.with(|slot| {
-            let mut slot = slot.borrow_mut();
-            let Some(host) = slot.as_mut() else {
-                return;
-            };
-            host.message(Message::Tick);
-            if host.app.claude.session.is_some() {
-                host.message(Message::Claude(claude_view::Event::Tick));
-            }
-            let now = Instant::now();
-            if now >= host.next_update {
-                host.next_update = now + update::CHECK_INTERVAL;
-                host.message(Message::CheckUpdate);
-            }
-            let interval = host.app.settings.delay_interval_minutes;
-            if interval > 0
-                && now.duration_since(host.last_delay)
-                    >= Duration::from_secs(u64::from(interval) * 60)
-            {
-                host.last_delay = now;
-                host.message(Message::PeriodicDelay);
-            }
-        })
-    });
-    let result = slint::run_event_loop_until_quit();
-    tick.stop();
-    let host = HOST.with(|slot| slot.borrow_mut().take()).unwrap();
-    // A backend failure must also restore the proxy/core, just like an ordinary exit.
     if !host.app.exiting
         && let Some(engine) = host.app.engine.clone()
     {
-        let _ = worker.block_on(async {
+        let _ = worker.block_on(async move {
             let mut engine = engine.lock().await;
             if !engine.is_remote() {
                 engine.stop().await?;
@@ -139,24 +135,37 @@ pub(super) fn run(
             Ok::<_, anyhow::Error>(())
         });
     }
-    if let Some(error) = host.fatal {
-        anyhow::bail!(error);
-    }
     result?;
     Ok(())
 }
+fn size(value: wire::Size) -> Size {
+    Size::new(value.width, value.height)
+}
+fn wire_size(value: Size) -> wire::Size {
+    wire::Size {
+        width: value.width,
+        height: value.height,
+    }
+}
 impl DesktopHost {
     fn spawn(&self, task: Task<Message>) {
+        let proxy = self.proxy.clone();
         self.worker.spawn(async move {
-            let mut events = task.0;
-            while let Some(message) = events.next().await {
-                enqueue(message);
+            let mut stream = task.0;
+            while let Some(message) = stream.next().await {
+                if proxy.send_event(HostEvent::Message(message)).is_err() {
+                    break;
+                }
             }
         });
     }
+    fn current_window_id(&self) -> Option<window::Id> {
+        self.window
+            .as_ref()
+            .filter(|w| w.closing.is_none())
+            .map(|w| w.id)
+    }
     fn message(&mut self, mut message: Message) {
-        // Native callbacks and queued show requests may belong to a retired
-        // window. Business task results are independent of window lifetime.
         if let Message::Window((id, _)) = &message
             && self.current_window_id() != Some(*id)
         {
@@ -170,106 +179,275 @@ impl DesktopHost {
         }
         if matches!(message, Message::ShowWindow(_)) {
             message = Message::ShowWindow(self.current_window_id());
-            self.retiring = None;
+            if let Some(window) = self.window.as_mut() {
+                window.retiring = false;
+            }
         }
-        if matches!(message, Message::Window((_, window::Event::CloseRequested)))
-            && let Some((_, window)) = &self.window
-        {
-            // Capture before the hidden-state projection empties the models
-            // and changes ScrollView's layout bounds.
-            self.saved_view = Some(view_state::State::capture(window));
-        }
+        let tick = matches!(message, Message::Tick);
         let task = self.app.update(message);
-        self.sync();
         self.spawn(task);
         self.finish_retirement();
+        self.sync();
         if self.app.tray.is_some() && !self.tray_listening {
             self.tray_listening = true;
-            self.worker.spawn(async {
+            let proxy = self.proxy.clone();
+            self.worker.spawn(async move {
                 while let Some(command) = tray::next().await {
-                    enqueue(Message::Tray(command));
+                    if proxy
+                        .send_event(HostEvent::Message(Message::Tray(command)))
+                        .is_err()
+                    {
+                        break;
+                    }
                 }
             });
         }
+        if tick {
+            if self.position_save_at.is_some_and(|at| Instant::now() >= at) {
+                self.save_geometry();
+            }
+            self.reap();
+            if self.app.claude.session.is_some() {
+                self.message(Message::Claude(claude_view::Event::Tick));
+            }
+            let now = Instant::now();
+            if now >= self.next_update {
+                self.next_update = now + update::CHECK_INTERVAL;
+                self.message(Message::CheckUpdate);
+            }
+            let interval = self.app.settings.delay_interval_minutes;
+            if interval > 0
+                && now.duration_since(self.last_delay)
+                    >= Duration::from_secs(u64::from(interval) * 60)
+            {
+                self.last_delay = now;
+                self.message(Message::PeriodicDelay);
+            }
+        }
+    }
+    fn remember_view(&mut self, view: wire::ViewState) {
+        let minimized = self.window.as_ref().is_some_and(|w| w.metrics.minimized);
+        if self.app.window_state.capture_position(
+            view.position,
+            view.maximized,
+            minimized,
+            view.fullscreen,
+        ) {
+            self.position_save_at = Some(Instant::now() + Duration::from_millis(750));
+        }
+        self.saved_view = Some(view);
+    }
+    fn save_geometry(&mut self) {
+        self.position_save_at = None;
+        if !self.app.window_state.dirty() {
+            return;
+        }
+        let state = self.app.window_state.clone();
+        let proxy = self.proxy.clone();
+        self.worker.spawn(async move {
+            let result = state.save().await.map_err(|error| format!("{error:#}"));
+            let _ = proxy.send_event(HostEvent::Message(Message::WindowStateSaved(result)));
+        });
     }
     fn sync(&mut self) {
-        if let Some((_, window)) = &self.window {
-            self.app
-                .present(&window.global::<UiData>(), &mut self.models);
-            let view_ready = !self.app.busy
-                || !matches!(
-                    self.app.page,
-                    Page::Proxies | Page::Connections | Page::Rules | Page::Logs
-                );
-            if self.app.visible
-                && view_ready
-                && !self.app.window_opening
+        if !self.app.visible || self.current_window_id().is_none() {
+            return;
+        }
+        self.app.present(&self.data, &mut self.models);
+        if let Ok(bytes) = wire::encode(&HostPacket::Frame {
+            data: self.data.snapshot(),
+            accepted: self.window.as_ref().map_or(0, |w| w.revision),
+            view_ready: !self.app.window_opening
                 && !self.app.size_pending
-                && let Some(state) = self.saved_view.take()
-            {
-                state.restore(window);
+                && (!self.app.busy
+                    || !matches!(
+                        self.app.page,
+                        Page::Proxies | Page::Connections | Page::Rules | Page::Logs
+                    )),
+        }) && self.last_frame != bytes
+        {
+            self.last_frame = bytes.clone();
+            if let Some(window) = &self.window {
+                let _ = window.frames.send(Some(bytes));
             }
         }
-    }
-    fn current_window_id(&self) -> Option<window::Id> {
-        self.window.as_ref().map(|(id, _)| *id)
-    }
-    fn retire_window(&mut self, id: window::Id) {
-        if self.app.visible {
-            return;
-        }
-        let Some((current, window)) = &self.window else {
-            return;
-        };
-        if *current != id {
-            return;
-        }
-        let size = window
-            .window()
-            .size()
-            .to_logical(window.window().scale_factor());
-        if self.app.window_state.capture(
-            Size::new(size.width, size.height),
-            window.window().is_maximized(),
-            Some(window.window().is_minimized()),
-        ) {
-            let state = self.app.window_state.clone();
-            self.spawn(Task::perform(
-                async move { state.save().await.map_err(|error| format!("{error:#}")) },
-                Message::WindowStateSaved,
-            ));
-        }
-        self.retiring = Some(id);
-        let _ = window.hide();
-        self.models.clear();
-        self.finish_retirement();
     }
     fn finish_retirement(&mut self) {
-        if self.retiring.is_none() || self.app.visible || self.app.picking_file {
+        if self.app.visible || self.app.picking_file {
             return;
         }
-        if self.retiring != self.current_window_id() {
-            self.retiring = None;
+        let Some(window) = self
+            .window
+            .as_mut()
+            .filter(|w| w.retiring && w.closing.is_none())
+        else {
             return;
-        }
-        // Dropping the last application handle releases the component tree and
-        // its native adapter. The event loop, tray and Engine remain alive.
-        self.retiring = None;
-        self.window = None;
-        self.models = ViewModels::default();
-        clash_of_rust::flags::release_cache();
-        // Give native adapter destruction a turn to finish. Do not trim during
-        // an immediate reopen, and never retain the retired component here.
-        Timer::single_shot(Duration::ZERO, || {
-            let background = HOST.with(|slot| {
-                slot.borrow().as_ref().is_some_and(|host| {
-                    host.window.is_none() && !host.app.visible && !host.app.window_opening
-                })
+        };
+        if self.app.window_state.capture(
+            size(window.metrics.size),
+            window.metrics.maximized,
+            Some(window.metrics.minimized),
+        ) || self.app.window_state.dirty()
+        {
+            self.position_save_at = None;
+            let state = self.app.window_state.clone();
+            let proxy = self.proxy.clone();
+            self.worker.spawn(async move {
+                let result = state.save().await.map_err(|error| format!("{error:#}"));
+                let _ = proxy.send_event(HostEvent::Message(Message::WindowStateSaved(result)));
             });
-            if background {
-                platform::memory::release_unused_heap();
+        }
+        window.send(HostPacket::Command(wire::WindowCommand::Destroy));
+        window.closing = Some(Instant::now());
+        let _ = window.frames.send(None);
+        self.models = ViewModels::default();
+        self.data = UiData::default();
+        self.last_frame = Vec::new();
+        platform::memory::release_unused_heap();
+    }
+    fn reap(&mut self) {
+        if let Some(window) = &mut self.window {
+            if window
+                .closing
+                .is_some_and(|at| at.elapsed() > Duration::from_secs(3))
+            {
+                let _ = window.child.start_kill();
             }
+            if let Ok(Some(status)) = window.child.try_wait() {
+                let expected = window.closing.is_some();
+                self.window = None;
+                if !expected && !self.app.exiting {
+                    #[cfg(target_os = "macos")]
+                    for (_, sender) in std::mem::take(&mut self.pickers) {
+                        let _ = sender.send(Err("界面进程已退出".into()));
+                    }
+                    self.app.visible = false;
+                    self.app.window_opening = false;
+                    self.app.size_pending = false;
+                    self.models = ViewModels::default();
+                    self.data = UiData::default();
+                    self.last_frame = Vec::new();
+                    self.app.show_notice(format!("界面进程已退出（{status}），可从托盘或 Dock 重新打开；后台代理仍在运行。"),true);
+                }
+            }
+        }
+        self.retired.retain_mut(|window| {
+            if window
+                .closing
+                .is_some_and(|at| at.elapsed() > Duration::from_secs(3))
+            {
+                let _ = window.child.start_kill();
+            }
+            !matches!(window.child.try_wait(), Ok(Some(_)))
         });
+    }
+    fn ui_event(&mut self, id: window::Id, event: UiEvent) {
+        if self.current_window_id() != Some(id) {
+            return;
+        }
+        match event {
+            UiEvent::Opened {
+                protocol,
+                version,
+                metrics,
+                preserve_native_state,
+            } => {
+                if protocol != wire::PROTOCOL || version != clash_of_rust::VERSION {
+                    self.app.visible = false;
+                    self.app
+                        .show_notice("界面与后台版本不一致，请重新安装完整客户端。".into(), true);
+                    if let Some(w) = self.window.as_mut() {
+                        w.retiring = true;
+                    }
+                    self.finish_retirement();
+                    return;
+                }
+                self.window.as_mut().unwrap().metrics = metrics;
+                self.message(Message::Window((
+                    id,
+                    window::Event::Opened {
+                        preserve_native_state,
+                    },
+                )));
+            }
+            UiEvent::Intent {
+                revision,
+                intent,
+                a,
+                b,
+                view,
+            } => {
+                self.remember_view(view);
+                self.window.as_mut().unwrap().revision = revision;
+                let task = self.app.intent(intent, &a, &b);
+                self.spawn(task);
+                self.finish_retirement();
+                self.sync();
+            }
+            UiEvent::Geometry { metrics, view } => {
+                let dimensions = size(metrics.size);
+                let dark = metrics.system_dark;
+                self.window.as_mut().unwrap().metrics = metrics;
+                self.remember_view(view);
+                if self.app.system_dark != dark {
+                    self.message(Message::SystemTheme(if dark {
+                        runtime::theme::Mode::Dark
+                    } else {
+                        runtime::theme::Mode::Light
+                    }));
+                }
+                self.message(Message::Window((id, window::Event::Resized(dimensions))));
+            }
+            UiEvent::Close(view) => {
+                self.remember_view(view);
+                self.message(Message::Window((id, window::Event::CloseRequested)));
+            }
+            UiEvent::Focused => self.message(Message::Window((id, window::Event::Focused))),
+            UiEvent::Rescaled => self.message(Message::Window((id, window::Event::Rescaled))),
+            UiEvent::FilePicked { id: picker, result } => {
+                #[cfg(target_os = "macos")]
+                if let Some(sender) = self.pickers.remove(&picker) {
+                    let _ = sender.send(result);
+                }
+                #[cfg(not(target_os = "macos"))]
+                let _ = (picker, result);
+            }
+            UiEvent::Error(error) => {
+                self.app.show_notice(format!("界面错误：{error}"), true);
+                self.sync();
+            }
+        }
+    }
+}
+impl ApplicationHandler<HostEvent> for DesktopHost {
+    fn resumed(&mut self, _events: &ActiveEventLoop) {
+        if self.started {
+            return;
+        }
+        self.started = true;
+        if self.app.visible {
+            self.open_window(
+                window::Id::unique(),
+                window::Settings {
+                    size: self.app.window_state.size(),
+                    visible: true,
+                },
+            );
+        }
+    }
+    fn window_event(&mut self, _: &ActiveEventLoop, _: WindowId, _: WindowEvent) {}
+    fn user_event(&mut self, events: &ActiveEventLoop, event: HostEvent) {
+        match event {
+            HostEvent::Message(message) => self.message(message),
+            HostEvent::Native(call) => {
+                call(self);
+                self.sync();
+            }
+            HostEvent::Ui(id, event) => self.ui_event(id, event),
+        }
+        if self.quit {
+            events.exit();
+        }
     }
 }
 impl native::Host for DesktopHost {
@@ -277,752 +455,217 @@ impl native::Host for DesktopHost {
         self.current_window_id()
     }
     fn open_window(&mut self, id: window::Id, settings: window::Settings) {
-        if let Some((_, window)) = &self.window {
-            self.retiring = None;
-            let _ = window.show();
-            repaint::invalidate(window.window());
+        if let Some(window) = self.window.as_ref().filter(|w| w.closing.is_none()) {
+            window.send(HostPacket::Command(wire::WindowCommand::Show));
             return;
         }
-        let window = match AppWindow::new() {
-            Ok(window) => window,
-            Err(error) => {
-                if self.event_loop_started {
-                    self.app.window_opening = false;
-                    self.app.visible = false;
-                    let message = format!("窗口打开失败，可从托盘重试：{error}");
-                    self.app.show_notice(message.clone(), true);
-                    self.worker.spawn(async move {
-                        let _ = platform::notification::show("Clash of Rust", &message).await;
-                    });
-                } else {
-                    self.fatal = Some(error.to_string());
-                    let _ = slint::quit_event_loop();
-                }
-                return;
-            }
-        };
-        self.models.attach(&window.global::<UiData>());
-        window
-            .global::<UiActions>()
-            .on_dispatch(move |intent, a, b| {
-                // Queue even UI-originated commands to avoid reentrant state/model updates.
-                let _ = slint::invoke_from_event_loop(move || {
-                    HOST.with(|slot| {
-                        if let Some(host) = slot.borrow_mut().as_mut() {
-                            if host.current_window_id() != Some(id) {
-                                return;
-                            }
-                            let task = host.app.intent(intent, a.as_str(), b.as_str());
-                            host.sync();
-                            if intent == Intent::ConnectionSort
-                                && let Some((_, window)) = &host.window
-                            {
-                                // Sorting can reorder every row. Invalidate the software
-                                // surface too, so the header is painted in the same frame.
-                                repaint::invalidate(window.window());
-                            }
-                            host.spawn(task);
-                        }
-                    })
-                });
+        if let Some(window) = self.window.take() {
+            self.retired.push(window);
+        }
+        self.models = ViewModels::default();
+        self.data = UiData::default();
+        self.models.attach(&self.data);
+        self.last_frame = Vec::new();
+        self.app.present(&self.data, &mut self.models);
+        let result = (|| -> anyhow::Result<Renderer> {
+            let executable = std::env::current_exe()?.with_file_name(if cfg!(windows) {
+                "clash-desktop-ui.exe"
+            } else {
+                "clash-desktop-ui"
             });
-        window.window().on_close_requested(move || {
-            enqueue_window(id, Message::Window((id, window::Event::CloseRequested)));
-            slint::CloseRequestResponse::KeepWindowShown
-        });
-        let mut modifiers = winit::keyboard::ModifiersState::empty();
-        let mut first_frame = true;
-        let first_frame_ui = window.as_weak();
-        window.window().on_winit_window_event(move |window, event| {
-            use winit::event::{ElementState, WindowEvent};
-            match event {
-                WindowEvent::RedrawRequested => {
-                    if first_frame {
-                        first_frame = false;
-                        let restore_motion = first_frame_ui.upgrade().map(|ui| {
-                            let motion = ui.global::<Motion>();
-                            let enabled = motion.get_enabled();
-                            motion.set_enabled(false);
-                            (ui.as_weak(), enabled)
-                        });
-                        // The native window only exists once the event loop is
-                        // active. Resolve System before its very first paint.
-                        if let Some(Some(theme)) = window.with_winit_window(|native| native.theme())
-                        {
-                            HOST.with(|slot| {
-                                if let Some(host) = slot.borrow_mut().as_mut() {
-                                    host.app.system_dark = theme == winit::window::Theme::Dark;
-                                    host.app.sync_appearance();
-                                    host.sync();
-                                    if let Some((_, ui)) = &host.window {
-                                        ui.global::<Theme>().set_system_dark(host.app.system_dark);
-                                    }
-                                }
-                            });
-                        }
-                        if let Some((weak, enabled)) = restore_motion {
-                            // The first frame uses the resolved appearance in
-                            // full. Only later user changes should transition.
-                            Timer::single_shot(Duration::from_millis(16), move || {
-                                if let Some(ui) = weak.upgrade() {
-                                    ui.global::<Motion>().set_enabled(enabled);
-                                }
-                            });
-                        }
-                    }
-                    repaint::before_draw(window);
-                }
-                WindowEvent::Occluded(false) => {
-                    repaint::invalidate(window);
-                }
-                WindowEvent::Resized(size) => {
-                    let logical = size.to_logical::<f32>(f64::from(window.scale_factor()));
-                    repaint::invalidate_size(window, logical.width, logical.height);
-                    enqueue_window(
-                        id,
-                        Message::Window((
-                            id,
-                            window::Event::Resized(Size::new(logical.width, logical.height)),
+            let mut command = tokio::process::Command::new(executable);
+            command
+                .arg("--desktop-renderer")
+                .stdin(Stdio::piped())
+                .stdout(Stdio::piped())
+                .stderr(Stdio::inherit())
+                .kill_on_drop(true);
+            #[cfg(windows)]
+            command.creation_flags(0x08000000);
+            let mut child = command.spawn()?;
+            let mut stdin = child.stdin.take().unwrap();
+            let mut stdout = child.stdout.take().unwrap();
+            let (commands, mut input) = tokio::sync::mpsc::unbounded_channel::<Vec<u8>>();
+            let (frames, mut changes) = tokio::sync::watch::channel::<Option<Vec<u8>>>(None);
+            let open = HostPacket::Open {
+                protocol: wire::PROTOCOL,
+                version: clash_of_rust::VERSION.into(),
+                id: id.0,
+                size: wire_size(settings.size),
+                visible: settings.visible,
+                view: self.saved_view.clone(),
+                frame: self.data.snapshot(),
+                view_ready: !self.app.window_opening
+                    && !self.app.size_pending
+                    && (!self.app.busy
+                        || !matches!(
+                            self.app.page,
+                            Page::Proxies | Page::Connections | Page::Rules | Page::Logs
                         )),
-                    );
-                }
-                WindowEvent::ScaleFactorChanged { .. } => {
-                    enqueue_window(id, Message::Window((id, window::Event::Rescaled)))
-                }
-                WindowEvent::Focused(true) => {
-                    repaint::invalidate(window);
-                    enqueue_window(id, Message::Window((id, window::Event::Focused)))
-                }
-                WindowEvent::ThemeChanged(theme) => enqueue_window(
-                    id,
-                    Message::SystemTheme(if *theme == winit::window::Theme::Dark {
-                        runtime::theme::Mode::Dark
-                    } else {
-                        runtime::theme::Mode::Light
-                    }),
-                ),
-                WindowEvent::ModifiersChanged(value) => modifiers = value.state(),
-                WindowEvent::DroppedFile(path) => {
-                    enqueue_window(id, Message::ImportDialog(true));
-                    enqueue_window(
-                        id,
-                        Message::ProfileSource(path.to_string_lossy().into_owned()),
-                    );
-                }
-                WindowEvent::KeyboardInput { event, .. }
-                    if event.state == ElementState::Pressed =>
-                {
-                    use winit::keyboard::Key;
-                    let command = if cfg!(target_os = "macos") {
-                        modifiers.super_key()
-                    } else {
-                        modifiers.control_key()
+            };
+            commands.send(wire::encode(&open)?)?;
+            self.worker.spawn(async move {
+                loop {
+                    let bytes=tokio::select!{
+                        biased;
+                        command=input.recv()=>match command{Some(bytes)=>bytes,None=>break},
+                        changed=changes.changed()=>{if changed.is_err(){break;}let Some(bytes)=changes.borrow_and_update().clone()else{continue;};bytes}
                     };
-                    if let Key::Character(text) = &event.logical_key
-                        && command
-                        && (text.eq_ignore_ascii_case("f")
-                            || (cfg!(target_os = "macos") && text.eq_ignore_ascii_case("q")))
-                    {
-                        enqueue_window(
-                            id,
-                            Message::Key(runtime::keyboard::Event::KeyPressed {
-                                key: runtime::keyboard::Key::Character(text.to_string()),
-                                modifiers: runtime::keyboard::Modifiers { command: true },
-                            }),
-                        );
-                        return EventResult::PreventDefault;
+                    let destroy=matches!(serde_json::from_slice::<HostPacket>(&bytes),Ok(HostPacket::Command(wire::WindowCommand::Destroy)));
+                    if stdin.write_all(&(bytes.len() as u32).to_le_bytes()).await.is_err()||stdin.write_all(&bytes).await.is_err()||stdin.flush().await.is_err(){break;}
+                    if destroy{break;}
+                }
+            });
+            let proxy = self.proxy.clone();
+            self.worker.spawn(async move {
+                loop {
+                    let mut length = [0; 4];
+                    if stdout.read_exact(&mut length).await.is_err() {
+                        break;
+                    }
+                    let length = u32::from_le_bytes(length) as usize;
+                    if length > wire::LIMIT {
+                        break;
+                    }
+                    let mut bytes = vec![0; length];
+                    if stdout.read_exact(&mut bytes).await.is_err() {
+                        break;
+                    }
+                    match serde_json::from_slice::<UiEvent>(&bytes) {
+                        Ok(event) => {
+                            if proxy.send_event(HostEvent::Ui(id, event)).is_err() {
+                                break;
+                            }
+                        }
+                        Err(_) => break,
                     }
                 }
-                _ => {}
-            }
-            EventResult::Propagate
-        });
-        window.window().set_size(slint::LogicalSize::new(
-            settings.size.width,
-            settings.size.height,
-        ));
-        let preserve_native_state = self
-            .saved_view
-            .as_ref()
-            .is_some_and(|state| state.prepare(&window));
-        self.window = Some((id, window));
-        if let Some((_, window)) = &self.window {
-            // Slint changed callbacks run later; initialize the first frame now.
-            let theme = window.global::<Theme>();
-            theme.set_appearance(match self.app.appearance_mode() {
-                ThemeMode::Dark => 0,
-                ThemeMode::Light => 1,
-                ThemeMode::System => 2,
             });
-            theme.set_system_dark(self.app.system_dark);
-            theme.set_accent_index(self.app.settings.accent_color as i32);
-            theme.set_text_scale(f32::from(self.app.settings.text_scale) / 100.);
-        }
-        self.sync();
-        if settings.visible
-            && let Some((_, window)) = &self.window
-        {
-            let _ = window.show();
-            view_state::State::ensure_reachable(window);
-        }
-        enqueue_window(
-            id,
-            Message::Window((
+            Ok(Renderer {
                 id,
-                window::Event::Opened {
-                    preserve_native_state,
+                child,
+                commands,
+                frames,
+                metrics: wire::Metrics {
+                    size: wire_size(settings.size),
+                    ..Default::default()
                 },
-            )),
-        );
+                closing: None,
+                retiring: false,
+                revision: 0,
+            })
+        })();
+        match result {
+            Ok(window) => self.window = Some(window),
+            Err(error) => {
+                self.app.visible = false;
+                self.app.window_opening = false;
+                self.app.size_pending = false;
+                self.app
+                    .show_notice(format!("界面启动失败，可从托盘重试：{error:#}"), true);
+            }
+        }
     }
     fn window_size(&self, id: window::Id) -> Size {
         self.window
             .as_ref()
-            .filter(|(current, _)| *current == id)
-            .map_or(Size::ZERO, |(_, window)| {
-                let size = window
-                    .window()
-                    .size()
-                    .to_logical(window.window().scale_factor());
-                Size::new(size.width, size.height)
-            })
+            .filter(|w| w.id == id)
+            .map_or(Size::ZERO, |w| size(w.metrics.size))
     }
     fn maximized(&self, id: window::Id) -> bool {
         self.window
             .as_ref()
-            .is_some_and(|(current, window)| *current == id && window.window().is_maximized())
-    }
-    fn fit_window_size(&self, _id: window::Id, desired: Size) -> Size {
-        #[cfg(target_os = "macos")]
-        if let Some((current, window)) = &self.window
-            && *current == _id
-            && let Some(Some(size)) = window.window().with_winit_window(|native| {
-                use winit::raw_window_handle::{HasWindowHandle, RawWindowHandle};
-                let handle = native.window_handle().ok()?;
-                let RawWindowHandle::AppKit(handle) = handle.as_raw() else {
-                    return None;
-                };
-                mac_desktop::available_content_size(handle.ns_view)
-            })
-        {
-            return window_state::fit_size(desired, size);
-        }
-        desired
+            .is_some_and(|w| w.id == id && w.metrics.maximized)
     }
     fn minimized(&self, id: window::Id) -> Option<bool> {
         self.window
             .as_ref()
-            .filter(|(current, _)| *current == id)
-            .map(|(_, window)| window.window().is_minimized())
+            .filter(|w| w.id == id)
+            .map(|w| w.metrics.minimized)
+    }
+    fn fit_window_size(&self, id: window::Id, desired: Size) -> Size {
+        #[cfg(target_os = "macos")]
+        if let Some(available) = self
+            .window
+            .as_ref()
+            .filter(|w| w.id == id)
+            .and_then(|w| w.metrics.available)
+        {
+            return window_state::fit_size(desired, size(available));
+        }
+        let _ = id;
+        desired
     }
     fn window_command(&mut self, id: window::Id, command: window::Command) {
-        if matches!(command, window::Command::Destroy) {
-            self.retire_window(id);
-            return;
-        }
-        let Some((current, window)) = &self.window else {
+        let Some(window) = self
+            .window
+            .as_mut()
+            .filter(|w| w.id == id && w.closing.is_none())
+        else {
             return;
         };
-        if *current != id {
-            return;
-        }
-        match command {
-            window::Command::Destroy => unreachable!(),
-            window::Command::Show => {
-                self.retiring = None;
-                let _ = window.show();
-                repaint::invalidate(window.window());
+        let command = match command {
+            window::Command::Destroy => {
+                if !self.app.visible {
+                    window.retiring = true;
+                    self.finish_retirement();
+                }
+                return;
             }
-            window::Command::Minimize(value) => window.window().set_minimized(value),
-            window::Command::Maximize(value) => window.window().set_maximized(value),
-            window::Command::Resize(size) => window
-                .window()
-                .set_size(slint::LogicalSize::new(size.width, size.height)),
-            window::Command::MinSize(size) => {
-                let size = size.unwrap_or(Size::ZERO);
-                window.set_window_min_width(size.width);
-                window.set_window_min_height(size.height);
-            }
-            window::Command::Focus => {
-                window
-                    .window()
-                    .with_winit_window(|native| native.focus_window());
-            }
-        }
+            window::Command::Show => wire::WindowCommand::Show,
+            window::Command::Focus => wire::WindowCommand::Focus,
+            window::Command::Minimize(v) => wire::WindowCommand::Minimize(v),
+            window::Command::Maximize(v) => wire::WindowCommand::Maximize(v),
+            window::Command::Resize(v) => wire::WindowCommand::Resize(wire_size(v)),
+            window::Command::MinSize(v) => wire::WindowCommand::MinSize(v.map(wire_size)),
+        };
+        window.send(HostPacket::Command(command));
     }
     fn read_clipboard(&mut self) -> Option<String> {
         if self.clipboard.is_none() {
             self.clipboard = arboard::Clipboard::new().ok();
         }
-        self.clipboard.as_mut()?.get_text().ok()
+        self.clipboard.as_mut().and_then(|c| c.get_text().ok())
     }
     fn write_clipboard(&mut self, text: String) {
         if self.clipboard.is_none() {
             self.clipboard = arboard::Clipboard::new().ok();
         }
-        if let Some(clipboard) = &mut self.clipboard {
-            match clipboard.set_text(text.as_str()) {
-                Ok(()) => {
-                    if let Some((_, window)) = &self.window {
-                        let data = window.global::<UiData>();
-                        data.set_copy_value(text.into());
-                        data.set_copy_revision(data.get_copy_revision().wrapping_add(1));
-                    }
-                }
-                Err(error) => self.app.show_notice(format!("复制失败：{error}"), true),
-            }
+        if let Some(c) = &mut self.clipboard {
+            let _ = c.set_text(text);
         }
     }
     fn focus(&mut self, target: &str) {
-        if let Some((_, window)) = &self.window {
-            let data = window.global::<UiData>();
-            data.set_focus_target(target.into());
-            data.set_focus_revision(data.get_focus_revision().wrapping_add(1));
+        if let Some(window) = &self.window {
+            window.send(HostPacket::Command(wire::WindowCommand::FocusInput(
+                target.into(),
+            )));
         }
     }
     fn system_theme(&self) -> runtime::theme::Mode {
-        self.window
-            .as_ref()
-            .and_then(|(_, window)| {
-                window
-                    .window()
-                    .with_winit_window(|native| native.theme())
-                    .flatten()
-            })
-            .map_or(
-                if self.app.system_dark {
-                    runtime::theme::Mode::Dark
-                } else {
-                    runtime::theme::Mode::Light
-                },
-                |theme| {
-                    if theme == winit::window::Theme::Dark {
-                        runtime::theme::Mode::Dark
-                    } else {
-                        runtime::theme::Mode::Light
-                    }
-                },
-            )
+        if self.app.system_dark {
+            runtime::theme::Mode::Dark
+        } else {
+            runtime::theme::Mode::Light
+        }
+    }
+    #[cfg(target_os = "macos")]
+    fn pick_file(&mut self) -> Result<clash_of_rust::file_dialog::Session, String> {
+        let Some(window) = self.window.as_ref().filter(|w| w.closing.is_none()) else {
+            return Err("没有可用的界面窗口".into());
+        };
+        self.next_picker = self.next_picker.wrapping_add(1);
+        let id = self.next_picker;
+        let (sender, receiver) = tokio::sync::oneshot::channel();
+        self.pickers.insert(id, sender);
+        window.send(HostPacket::Command(wire::WindowCommand::PickFile(id)));
+        Ok(receiver)
     }
     fn quit(&mut self) {
-        let _ = slint::quit_event_loop();
+        self.quit = true;
     }
 }
-
-impl App {
-    fn category(&self, text: &str) -> CategoryFilter {
-        ip_report::Report::from_results(&self.site_results)
-            .categories
-            .into_iter()
-            .find(|category| category.name == text)
-            .map_or(CategoryFilter::All, |category| {
-                CategoryFilter::Group(category.name)
-            })
-    }
-    fn region(&self, text: &str) -> RegionFilter {
-        if text == "未识别地区" {
-            return RegionFilter::Unidentified;
-        }
-        self.site_results
-            .iter()
-            .filter_map(|result| ip_report::region(result.as_ref()))
-            .find(|code| RegionFilter::Country(code).to_string() == text)
-            .map_or(RegionFilter::All, RegionFilter::Country)
-    }
-    pub(super) fn intent(&mut self, intent: Intent, a: &str, b: &str) -> Task<Message> {
-        use claude_view::Event as C;
-        use rules_view::Event as R;
-        let boolean = |value: &str| value == "true";
-        let message = match intent {
-            Intent::PickFile => {
-                if !boolean(a) {
-                    self.import_open = true;
-                }
-                Message::PickFile(boolean(a))
-            }
-            Intent::RuleToggle => match a.parse::<usize>() {
-                Ok(index) if index < 5 => Message::Rules(R::Toggle(index, boolean(b))),
-                _ => Message::Noop,
-            },
-            Intent::RuleProfile => self.profiles.iter().find(|profile| profile.id == a).map_or(
-                Message::Noop,
-                |profile| {
-                    Message::Rules(R::Profile(rules_view::ProfileChoice {
-                        id: profile.id.clone(),
-                        name: profile.name.clone(),
-                    }))
-                },
-            ),
-            Intent::ConnectionSort => Message::ConnectionSort(match a {
-                "rule" => ConnectionField::Rule,
-                "chain" => ConnectionField::Chain,
-                "upload-rate" => ConnectionField::UploadRate,
-                "download-rate" => ConnectionField::DownloadRate,
-                "upload-total" => ConnectionField::UploadTotal,
-                "download-total" => ConnectionField::DownloadTotal,
-                "start" => ConnectionField::Start,
-                _ => ConnectionField::Name,
-            }),
-            Intent::Confirm => return self.accept_dialog(),
-            Intent::CancelConfirm | Intent::CloseDetail => return self.cancel_dialog(),
-            Intent::Navigate => Message::Navigate(
-                Page::ALL
-                    .get(a.parse::<usize>().unwrap_or(0))
-                    .copied()
-                    .unwrap_or(Page::Home),
-            ),
-            Intent::Query => Message::Query(a.into()),
-            Intent::DismissNotice => Message::DismissNotice,
-            Intent::SystemNotification => Message::SystemNotification,
-            Intent::RestartCore => Message::RestartCore,
-            Intent::Mode => Message::Action(Action::Mode(
-                ["rule", "global", "direct"]
-                    .get(a.parse::<usize>().unwrap_or(0))
-                    .unwrap_or(&"rule")
-                    .to_string(),
-            )),
-            Intent::ProxyMode => Message::Action(Action::ProxyMode(match a {
-                "0" => ProxyMode::System,
-                "1" => ProxyMode::Tun,
-                _ => ProxyMode::Off,
-            })),
-            Intent::NodeSort => Message::NodeSort(
-                NodeSort::ALL
-                    .get(a.parse::<usize>().unwrap_or(0))
-                    .copied()
-                    .unwrap_or_default(),
-            ),
-            Intent::ToggleGroup => Message::ToggleGroup(a.into()),
-            Intent::GroupDelay => Message::GroupDelay(a.into()),
-            Intent::GroupPage => Message::GroupPage(a.into(), boolean(b)),
-            Intent::SelectNode => Message::Action(Action::Select(a.into(), b.into())),
-            Intent::NodeDelay => Message::Action(Action::Delay(a.into())),
-            Intent::ListPage => Message::ListPage(a.parse().unwrap_or(0)),
-            Intent::ConnectionDetail => Message::ConnectionDetail(a.into()),
-            Intent::CloseConnection => Message::Action(Action::Close(a.into())),
-            Intent::CloseAll => Message::Action(Action::CloseAll),
-            Intent::ProfileName => Message::ProfileName(a.into()),
-            Intent::ProfileSource => Message::ProfileSource(a.into()),
-            Intent::ImportProfile => Message::ImportProfile,
-            Intent::OpenProfiles => Message::Action(Action::OpenProfiles),
-            Intent::ActivateProfile => Message::Action(Action::Activate(a.into())),
-            Intent::UpdateProfile => Message::Action(Action::UpdateProfile(a.into())),
-            Intent::DeleteProfile => return self.confirm_delete(a.into()),
-            Intent::EditProfile => Message::EditProfile(a.into()),
-            Intent::AddProfile => Message::ImportDialog(true),
-            Intent::EditName => Message::EditName(a.into()),
-            Intent::EditSource => Message::EditSource(a.into()),
-            Intent::SaveProfile => Message::SaveProfileEdit,
-            Intent::CloseProfile => Message::CloseProfileEdit,
-            Intent::RuleConfirmProfile => Message::Rules(R::ConfirmProfile),
-            Intent::RuleCancelProfile => Message::Rules(R::CancelProfile),
-            Intent::RuleCollapse => Message::Rules(R::Collapse),
-            Intent::RuleFilter => Message::Rules(R::Filter(match a {
-                "1" => rules_view::SourceFilter::Custom,
-                "2" => rules_view::SourceFilter::Shortcut,
-                "3" => rules_view::SourceFilter::Subscription,
-                _ => rules_view::SourceFilter::All,
-            })),
-            Intent::RuleSelect => Message::Rules(R::Select(a.into())),
-            Intent::RuleAdd => Message::Rules(R::Add),
-            Intent::RuleEdit => Message::Rules(R::Edit),
-            Intent::RuleDelete => Message::Rules(R::Delete),
-            Intent::RuleEnable => Message::Rules(R::Enable),
-            Intent::RuleMove => Message::Rules(R::Move(a.parse().unwrap_or(0))),
-            Intent::RuleMoveOpen => Message::Rules(R::MoveOpen),
-            Intent::RuleMoveInput => Message::Rules(R::MoveInput(a.into())),
-            Intent::RuleMoveTo => Message::Rules(R::MoveTo),
-            Intent::RuleMoveEdge => Message::Rules(R::MoveEdge(boolean(a))),
-            Intent::RuleRestore => Message::Rules(R::Restore),
-            Intent::RuleDiscard => Message::Rules(R::Discard),
-            Intent::RuleApply => Message::Rules(R::Apply),
-            Intent::RuleCloseEditor => Message::Rules(R::CloseEditor),
-            Intent::RuleTextMode => Message::Rules(R::TextMode(boolean(a))),
-            Intent::RuleRaw => Message::Rules(R::Raw(a.into())),
-            Intent::RuleKind => Message::Rules(R::Kind(a.into())),
-            Intent::RulePayload => Message::Rules(R::Payload(a.into())),
-            Intent::RulePolicy => Message::Rules(R::Policy(a.into())),
-            Intent::RuleNoResolve => Message::Rules(R::NoResolve(boolean(a))),
-            Intent::RuleEnabled => Message::Rules(R::Enabled(boolean(a))),
-            Intent::RulePosition => Message::Rules(R::Position(a.into())),
-            Intent::RuleSave => Message::Rules(R::SaveEditor),
-            Intent::LogLevel => Message::LogLevel(logs::Level::parse(a)),
-            Intent::LogDetail => Message::LogDetail(a.into()),
-            Intent::ClearLogs => Message::Action(Action::ClearLogs),
-            Intent::ExportLogs => Message::Action(Action::ExportLogs),
-            Intent::TestUrl => Message::TestUrl(a.into()),
-            Intent::DnsHost => Message::DnsHost(a.into()),
-            Intent::Probe => Message::Probe(boolean(a)),
-            Intent::Dns => Message::Dns,
-            Intent::SiteAll => Message::SiteAll,
-            Intent::SiteCancel => Message::SiteCancel,
-            Intent::SiteCategory => Message::SiteCategory(self.category(a)),
-            Intent::SiteOpenCategory => {
-                Message::SiteSummaryFilter(self.category(a), StatusFilter::All)
-            }
-            Intent::SiteStatus => {
-                let status = Status::ALL
-                    .into_iter()
-                    .find(|status| status.to_string() == a)
-                    .map_or(StatusFilter::All, StatusFilter::Status);
-                if b == "all" {
-                    Message::SiteSummaryFilter(CategoryFilter::All, status)
-                } else {
-                    Message::SiteStatus(status)
-                }
-            }
-            Intent::SiteRegion => Message::SiteRegion(self.region(a)),
-            Intent::SiteDetail => ip_check::services()
-                .iter()
-                .position(|service| service.id == a)
-                .map_or(Message::Noop, Message::SiteDetail),
-            Intent::SiteReset => Message::SiteResetFilters,
-            Intent::SiteReport => Message::SiteReport,
-            Intent::SiteRetest => Message::SiteRetest,
-            Intent::SiteProbe => Message::SiteProbe(a.into()),
-            Intent::ClaudeStart => Message::Claude(C::Start),
-            Intent::ClaudeCloseSession => Message::Claude(C::CloseSession),
-            Intent::ClaudeCancel => Message::Claude(C::Cancel),
-            Intent::ClaudeProtection => Message::Claude(C::Protection(boolean(a))),
-            Intent::ClaudeConfirmProtection => Message::Claude(C::ConfirmProtection),
-            Intent::ClaudeFilter => Message::Claude(C::ResultsFilter(match a {
-                "0" => Some(claude_view::ResultKind::Normal),
-                "1" => Some(claude_view::ResultKind::Risk),
-                "2" => Some(claude_view::ResultKind::Unknown),
-                _ => None,
-            })),
-            Intent::ClaudePage => Message::Claude(C::ResultsPage(a.parse().unwrap_or(0))),
-            Intent::ClaudeGuide => Message::Claude(C::Guide(match a {
-                "diagnostics" => Some(claude_view::Guide::Diagnostics),
-                "supplement" => Some(claude_view::Guide::Supplement),
-                _ => None,
-            })),
-            Intent::ClaudeBrowser => Message::Claude(C::Browser),
-            Intent::ClaudeCopyScript => Message::Claude(C::CopySiteScript),
-            Intent::ClaudeImport => Message::Claude(C::Import),
-            Intent::ClaudeExport => Message::Claude(C::Export),
-            Intent::ClaudeKey => Message::Claude(C::ReputationKey(a.into())),
-            Intent::ClaudeSaveKey => Message::Claude(C::SaveReputationKey),
-            Intent::ClaudeAdditional => Message::Claude(C::Additional(match a {
-                "registration" => clash_of_rust::claude_check::additional::Kind::Registration,
-                "global-ping" => clash_of_rust::claude_check::additional::Kind::GlobalPing,
-                _ => clash_of_rust::claude_check::additional::Kind::Speed,
-            })),
-            Intent::Appearance => Message::Appearance(match a {
-                "0" => ThemeMode::Dark,
-                "1" => ThemeMode::Light,
-                _ => ThemeMode::System,
-            }),
-            Intent::TextScale => Message::TextScale(a.trim_end_matches('%').parse().unwrap_or(100)),
-            Intent::AccentPicker => Message::AccentDialog(true),
-            Intent::AccentColor => {
-                let Some(color) = a
-                    .parse::<usize>()
-                    .ok()
-                    .and_then(|i| AccentColor::ALL.get(i).copied())
-                else {
-                    return Task::none();
-                };
-                self.accent_open = false;
-                Message::Action(Action::Accent(color))
-            }
-            Intent::TraySpeed => Message::TraySpeed(boolean(a)),
-            Intent::DnsOverride => Message::Action(Action::DnsOverride(boolean(a))),
-            Intent::Ipv6 => Message::Action(Action::Ipv6(boolean(a))),
-            Intent::Udp => Message::Action(Action::Udp(boolean(a))),
-            Intent::Autostart => Message::Action(Action::Autostart(boolean(a))),
-            Intent::ControllerPort => Message::ControllerPort(a.into()),
-            Intent::MixedPort => Message::MixedPort(a.into()),
-            Intent::SavePorts => Message::SavePorts,
-            Intent::WindowWidth => Message::WindowWidth(a.into()),
-            Intent::WindowHeight => Message::WindowHeight(a.into()),
-            Intent::ResetWindow => Message::ResetWindowSize,
-            Intent::IntervalInput => Message::IntervalInput(a.into()),
-            Intent::SaveInterval => Message::SaveInterval,
-            Intent::UpdateGeo => Message::Action(Action::UpdateGeo),
-            Intent::CheckUpdate => Message::CheckUpdate,
-            Intent::InstallUpdate => Message::InstallUpdate,
-            Intent::CancelUpdate => Message::CancelUpdateDownload,
-            Intent::OpenRelease => Message::OpenRelease,
-            Intent::Copy => Message::Copy(a.into()),
-            Intent::Quit => return self.request_exit(),
-            Intent::FocusSearch => return runtime::widget::operation::focus("page-search"),
-            Intent::Escape => Message::Key(runtime::keyboard::Event::KeyPressed {
-                key: runtime::keyboard::Key::Named(runtime::keyboard::key::Named::Escape),
-                modifiers: runtime::keyboard::Modifiers::default(),
-            }),
-        };
-        self.update(message)
-    }
-    fn accept_dialog(&mut self) -> Task<Message> {
-        if self.confirmation.is_some() {
-            return self.update(Message::Confirm);
-        }
-        if self.profile_editor.is_some() {
-            return self.update(Message::SaveProfileEdit);
-        }
-        if self.import_open {
-            return self.update(Message::ImportProfile);
-        }
-        if self.rule_state.pending_profile.is_some() {
-            return self.update(Message::Rules(rules_view::Event::ConfirmProfile));
-        }
-        if self.rule_state.editor.is_some() {
-            return self.update(Message::Rules(rules_view::Event::SaveEditor));
-        }
-        if self.rule_state.move_open {
-            return self.update(Message::Rules(rules_view::Event::MoveTo));
-        }
-        if self.claude.guide == Some(claude_view::Guide::Protection) {
-            return self.update(Message::Claude(claude_view::Event::ConfirmProtection));
-        }
-        self.accent_open = false;
-        Task::none()
-    }
-    fn cancel_dialog(&mut self) -> Task<Message> {
-        if self.confirmation.is_some() {
-            return self.update(Message::CancelConfirm);
-        }
-        if self.profile_editor.is_some() {
-            return self.update(Message::CloseProfileEdit);
-        }
-        if self.import_open {
-            return self.update(Message::ImportDialog(false));
-        }
-        if self.rule_state.pending_profile.is_some() {
-            return self.update(Message::Rules(rules_view::Event::CancelProfile));
-        }
-        if self.rule_state.modal_open() {
-            return self.update(Message::Rules(rules_view::Event::CloseEditor));
-        }
-        if self.claude.guide.is_some() {
-            return self.update(Message::Claude(claude_view::Event::Guide(None)));
-        }
-        if self.connection_detail.is_some() {
-            return self.update(Message::CloseConnectionDetail);
-        }
-        if self.log_detail.is_some() {
-            return self.update(Message::CloseLogDetail);
-        }
-        self.site_detail = None;
-        self.accent_open = false;
-        Task::none()
-    }
-}
-
 #[cfg(test)]
 pub(super) fn invalidate_window_for_test(window: &slint::Window) {
-    repaint::invalidate(window);
-}
-
-#[cfg(test)]
-mod lifecycle_tests {
-    use super::*;
-    use slint::Model;
-
-    fn host() -> DesktopHost {
-        ui_testing::initialize(950, 700);
-        let mut host = DesktopHost {
-            app: ui_tests::fixture(Page::Rules),
-            worker: Arc::new(
-                tokio::runtime::Builder::new_current_thread()
-                    .enable_all()
-                    .build()
-                    .unwrap(),
-            ),
-            window: None,
-            models: ViewModels::default(),
-            clipboard: None,
-            tray_listening: false,
-            next_update: Instant::now(),
-            last_delay: Instant::now(),
-            fatal: None,
-            event_loop_started: true,
-            retiring: None,
-            saved_view: None,
-        };
-        attach(&mut host);
-        host
-    }
-    fn attach(host: &mut DesktopHost) -> window::Id {
-        let id = window::Id::unique();
-        let window = AppWindow::new().unwrap();
-        host.models.attach(&window.global::<UiData>());
-        host.window = Some((id, window));
-        host.app.visible = true;
-        host.sync();
-        id
-    }
-
-    #[test]
-    fn retiring_releases_the_component_and_models_but_keeps_the_rule_draft() {
-        let mut host = host();
-        let _ = host.app.intent(Intent::RuleAdd, "", "");
-        let _ = host.app.intent(Intent::RulePayload, "example.test", "");
-        host.sync();
-        for _ in 0..20 {
-            let (id, window) = host.window.as_ref().unwrap();
-            let id = *id;
-            let weak = window.as_weak();
-            let old_rules = host.models.rules.clone();
-            host.saved_view = Some(view_state::State::capture(window));
-            host.app.visible = false;
-            host.retire_window(id);
-            assert!(
-                weak.upgrade().is_none(),
-                "a strong handle retained the retired component"
-            );
-            assert!(host.window.is_none());
-            assert_eq!(old_rules.row_count(), 0);
-            assert_eq!(
-                host.app.rule_state.editor.as_ref().unwrap().payload,
-                "example.test"
-            );
-            attach(&mut host);
-            let data = host.window.as_ref().unwrap().1.global::<UiData>();
-            assert_eq!(data.get_rule_payload(), "example.test");
-            assert_eq!(data.get_modal(), 4);
-        }
-    }
-
-    #[test]
-    fn a_file_picker_defers_retirement_and_reopening_cancels_it() {
-        let mut host = host();
-        let id = host.current_window_id().unwrap();
-        host.app.visible = false;
-        host.app.picking_file = true;
-        host.retire_window(id);
-        assert!(host.window.is_some());
-        host.message(Message::ShowWindow(Some(id)));
-        host.app.picking_file = false;
-        host.finish_retirement();
-        assert!(host.window.is_some());
-        host.app.visible = false;
-        host.retire_window(id);
-        assert!(host.window.is_none());
-    }
-
-    #[test]
-    fn stale_window_events_cannot_change_the_new_window_or_prevent_a_reopen() {
-        let mut host = host();
-        let old = host.current_window_id().unwrap();
-        host.app.visible = false;
-        host.retire_window(old);
-        host.message(Message::Window((old, window::Event::Focused)));
-        assert!(!host.app.visible);
-        host.message(Message::ShowWindow(Some(old)));
-        assert!(host.app.window_opening);
-        let current = attach(&mut host);
-        assert_ne!(old, current);
-        host.app.visible = false;
-        host.message(Message::Window((old, window::Event::CloseRequested)));
-        assert!(host.window.is_some());
-        assert_eq!(host.current_window_id(), Some(current));
-        host.app.visible = true;
-        host.retire_window(current);
-        assert!(
-            host.window.is_some(),
-            "a late close command hid a newly reopened window"
-        );
-    }
+    clash_desktop_ui::invalidate_window(window);
 }

@@ -220,7 +220,7 @@ Function RemoveExisting
       IfFileExists "$ExistingDir\uninstall.exe" 0 uninstall_failed
       ClearErrors
       ExecWait '"$ExistingDir\uninstall.exe" /S _?=$ExistingDir' $ResultCode
-      IfErrors uninstall_failed
+      IfErrors uninstall_locked
       ${If} $ResultCode != 0
         Goto uninstall_failed
       ${EndIf}
@@ -264,6 +264,7 @@ Section "Clash of Rust" MainSection
   ClearErrors
   SetOutPath "$INSTDIR"
   File "${PAYLOAD}\clash-of-rust.exe"
+  File "${PAYLOAD}\clash-desktop-ui.exe"
   File "${PAYLOAD}\cor.exe"
   File "${PAYLOAD}\clash-tun-launcher.exe"
   File "${PAYLOAD}\LICENSE"
@@ -457,6 +458,8 @@ Section "Uninstall"
     ${EndIf}
   ClearErrors
   Delete "$INSTDIR\clash-of-rust.exe"
+  IfErrors uninstall_locked
+  Delete "$INSTDIR\clash-desktop-ui.exe"
   IfErrors uninstall_locked
   Delete "$INSTDIR\cor.exe"
   IfErrors uninstall_locked

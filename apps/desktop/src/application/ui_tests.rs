@@ -6,20 +6,20 @@ use slint::{ComponentHandle, Model};
 #[test]
 fn rule_editor_round_trip_and_cancel_preserve_the_draft_through_ui_intents() {
     let mut app = fixture(Page::Rules);
-    let _ = app.intent(Intent::RuleAdd, "", "");
-    let _ = app.intent(Intent::RuleTextMode, "true", "");
-    let _ = app.intent(Intent::RuleTextMode, "false", "");
+    let _ = app.ui_intent(Intent::RuleAdd, "", "");
+    let _ = app.ui_intent(Intent::RuleTextMode, "true", "");
+    let _ = app.ui_intent(Intent::RuleTextMode, "false", "");
     assert!(!app.rule_state.editor.as_ref().unwrap().text_mode);
     assert!(app.rule_state.editor.as_ref().unwrap().error.is_empty());
-    let _ = app.intent(Intent::RulePayload, "example.test", "");
-    let _ = app.intent(Intent::CancelConfirm, "", "");
+    let _ = app.ui_intent(Intent::RulePayload, "example.test", "");
+    let _ = app.ui_intent(Intent::CancelConfirm, "", "");
     assert!(app.confirmation.is_some());
-    let _ = app.intent(Intent::CancelConfirm, "", "");
+    let _ = app.ui_intent(Intent::CancelConfirm, "", "");
     assert_eq!(
         app.rule_state.editor.as_ref().unwrap().payload,
         "example.test"
     );
-    let _ = app.intent(Intent::Confirm, "", "");
+    let _ = app.ui_intent(Intent::Confirm, "", "");
     assert!(app.rule_state.editor.is_none());
     assert!(app.rule_state.dirty());
 }
@@ -32,23 +32,23 @@ fn projection_reuses_models_and_releases_hidden_and_inactive_lists() {
     let data = window.global::<UiData>();
     let mut models = ViewModels::default();
     models.attach(&data);
-    app.present(&data, &mut models);
+    app.present_slint(&data, &mut models);
     let first = data.get_connections();
     assert_eq!(first.row_count(), 3);
-    app.present(&data, &mut models);
+    app.present_slint(&data, &mut models);
     assert_eq!(
         first,
         data.get_connections(),
         "polling must preserve model identity"
     );
-    let _ = app.intent(Intent::ConnectionSort, "download-rate", "");
-    app.present(&data, &mut models);
+    let _ = app.ui_intent(Intent::ConnectionSort, "download-rate", "");
+    app.present_slint(&data, &mut models);
     assert_eq!(data.get_connections().row_data(0).unwrap().id, "2");
-    let _ = app.intent(Intent::ConnectionSort, "download-rate", "");
-    app.present(&data, &mut models);
+    let _ = app.ui_intent(Intent::ConnectionSort, "download-rate", "");
+    app.present_slint(&data, &mut models);
     assert_eq!(data.get_connections().row_data(0).unwrap().id, "3");
     app.visible = false;
-    app.present(&data, &mut models);
+    app.present_slint(&data, &mut models);
     assert_eq!(
         first.row_count(),
         0,
@@ -56,7 +56,7 @@ fn projection_reuses_models_and_releases_hidden_and_inactive_lists() {
     );
     app.visible = true;
     app.page = Page::Settings;
-    app.present(&data, &mut models);
+    app.present_slint(&data, &mut models);
     assert_eq!(first.row_count(), 0);
 }
 
@@ -69,7 +69,7 @@ fn connection_sort_clicks_redraw_the_header_immediately_and_third_click_restores
     let data = window.global::<UiData>();
     let mut models = ViewModels::default();
     models.attach(&data);
-    app.present(&data, &mut models);
+    app.present_slint(&data, &mut models);
     let events = pointer_events(&window);
     window.show().unwrap();
     let mut pixels = vec![slint::Rgb8Pixel::default(); 950 * 700];
@@ -124,8 +124,8 @@ fn connection_sort_clicks_redraw_the_header_immediately_and_third_click_restores
                 .expect("heading must dispatch one sort intent");
             assert_eq!(event.0, Intent::ConnectionSort);
             assert_eq!(event.1, field);
-            let _ = app.intent(event.0, &event.1, &event.2);
-            app.present(&data, &mut models);
+            let _ = app.ui_intent(event.0, &event.1, &event.2);
+            app.present_slint(&data, &mut models);
             assert_eq!(data.get_page(), Page::Connections as i32);
             assert_eq!(
                 data.get_connection_sort(),
@@ -161,13 +161,13 @@ fn connection_sort_clicks_redraw_the_header_immediately_and_third_click_restores
     }
     // Record the normal down-arrow frame, then return to unsorted before a
     // burst of real pointer events with no rendered frame between callbacks.
-    let _ = app.intent(Intent::ConnectionSort, "download-rate", "");
-    app.present(&data, &mut models);
+    let _ = app.ui_intent(Intent::ConnectionSort, "download-rate", "");
+    app.present_slint(&data, &mut models);
     let expected = header();
     for _ in 0..2 {
-        let _ = app.intent(Intent::ConnectionSort, "download-rate", "");
+        let _ = app.ui_intent(Intent::ConnectionSort, "download-rate", "");
     }
-    app.present(&data, &mut models);
+    app.present_slint(&data, &mut models);
     assert_eq!(header(), before);
     for _ in 0..4 {
         for (x, y) in [(670., 174.), (480., 197.), (260., 174.), (780., 174.)] {
@@ -177,7 +177,7 @@ fn connection_sort_clicks_redraw_the_header_immediately_and_third_click_restores
     let pending = std::mem::take(&mut *events.borrow_mut());
     assert_eq!(pending.len(), 16, "rapid clicks must each dispatch once");
     for (index, (intent, a, b)) in pending.into_iter().enumerate() {
-        let _ = app.intent(intent, &a, &b);
+        let _ = app.ui_intent(intent, &a, &b);
         if index % 3 == 0 {
             // A completed background connection refresh must not overwrite
             // newer sort intent while the queued UI commands are being drained.
@@ -201,7 +201,7 @@ fn connection_sort_clicks_redraw_the_header_immediately_and_third_click_restores
                 tray_nodes: None,
             })));
         }
-        app.present(&data, &mut models);
+        app.present_slint(&data, &mut models);
     }
     assert_eq!(data.get_connection_sort(), "download-rate");
     assert!(data.get_descending());
@@ -221,8 +221,8 @@ fn connection_detail_exposes_all_fields_and_copies_the_same_values() {
     let data = window.global::<UiData>();
     let mut models = ViewModels::default();
     models.attach(&data);
-    let _ = app.intent(Intent::ConnectionDetail, "1", "");
-    app.present(&data, &mut models);
+    let _ = app.ui_intent(Intent::ConnectionDetail, "1", "");
+    app.present_slint(&data, &mut models);
     let details = data.get_connection_details();
     assert_eq!(details.row_count(), 14);
     for row in details.iter() {
@@ -255,7 +255,7 @@ fn connection_detail_exposes_all_fields_and_copies_the_same_values() {
         protection_changed: false,
         tray_nodes: None,
     })));
-    app.present(&data, &mut models);
+    app.present_slint(&data, &mut models);
     assert_eq!(data.get_connection_details().row_count(), 0);
     assert!(data.get_modal_copy().is_empty());
     assert!(data.get_modal_description().contains("已结束"));
@@ -266,11 +266,11 @@ fn imported_file_reaches_dialog_and_cancel_or_exit_requires_confirmation() {
     let mut app = fixture(Page::Profiles);
     app.profile_name.clear();
     app.profile_source.clear();
-    let _ = app.intent(Intent::AddProfile, "", "");
-    let _ = app.intent(Intent::ProfileSource, "/home/user/subscription.yaml", "");
-    let _ = app.intent(Intent::CancelConfirm, "", "");
+    let _ = app.ui_intent(Intent::AddProfile, "", "");
+    let _ = app.ui_intent(Intent::ProfileSource, "/home/user/subscription.yaml", "");
+    let _ = app.ui_intent(Intent::CancelConfirm, "", "");
     assert!(app.confirmation.is_some());
-    let _ = app.intent(Intent::CancelConfirm, "", "");
+    let _ = app.ui_intent(Intent::CancelConfirm, "", "");
     assert!(app.import_open);
     let _ = app.request_exit();
     assert!(app.confirmation.is_some());
@@ -286,7 +286,7 @@ fn clicking_a_node_selects_it_but_its_latency_button_only_tests_it() {
     let data = window.global::<UiData>();
     let mut models = ViewModels::default();
     models.attach(&data);
-    app.present(&data, &mut models);
+    app.present_slint(&data, &mut models);
     models.set_groups(vec![(
         GroupItem {
             id: "Proxy".into(),
@@ -361,7 +361,7 @@ fn pointer_keyboard_escape_and_modal_input_use_the_production_callbacks() {
     let mut models = ViewModels::default();
     let data = window.global::<UiData>();
     models.attach(&data);
-    app.present(&data, &mut models);
+    app.present_slint(&data, &mut models);
     let events = std::rc::Rc::new(RefCell::new(Vec::new()));
     let recorded = events.clone();
     window
@@ -489,7 +489,7 @@ fn node_sort_popup_dispatches_each_clicked_option_and_reorders_real_models() {
     let data = window.global::<UiData>();
     let mut models = ViewModels::default();
     models.attach(&data);
-    app.present(&data, &mut models);
+    app.present_slint(&data, &mut models);
     assert_eq!(
         data.get_node_sort(),
         2,
@@ -516,8 +516,8 @@ fn node_sort_popup_dispatches_each_clicked_option_and_reorders_real_models() {
             events[0],
             (Intent::NodeSort, index.to_string().into(), "".into())
         );
-        let _ = app.intent(events[0].0, &events[0].1, &events[0].2);
-        app.present(&data, &mut models);
+        let _ = app.ui_intent(events[0].0, &events[0].1, &events[0].2);
+        app.present_slint(&data, &mut models);
         let group = data.get_groups().row_data(0).unwrap();
         let first = group.nodes.row_data(0).unwrap();
         let second = group.nodes.row_data(1).unwrap();
@@ -545,7 +545,7 @@ fn a_discarded_software_surface_is_fully_repainted_after_restore() {
     let data = window.global::<UiData>();
     let mut models = ViewModels::default();
     models.attach(&data);
-    app.present(&data, &mut models);
+    app.present_slint(&data, &mut models);
     window.show().unwrap();
     let mut before = vec![slint::Rgb8Pixel::default(); 950 * 700];
     assert!(adapter.draw_if_needed(|renderer| {
@@ -578,14 +578,14 @@ fn appearance_remains_interactive_while_geo_owns_the_engine_and_late_reply_canno
     let data = window.global::<UiData>();
     let mut models = ViewModels::default();
     models.attach(&data);
-    app.present(&data, &mut models);
+    app.present_slint(&data, &mut models);
     let events = pointer_events(&window);
     window.show().unwrap();
     let _ = window.window().take_snapshot().unwrap();
     ui_testing::click(window.window(), 840., 233.);
     assert_eq!(events.borrow_mut().pop().unwrap().0, Intent::AccentPicker);
-    let _ = app.intent(Intent::AccentPicker, "", "");
-    app.present(&data, &mut models);
+    let _ = app.ui_intent(Intent::AccentPicker, "", "");
+    app.present_slint(&data, &mut models);
     assert_eq!(data.get_modal(), 12);
     assert!(data.get_modal_can_accept());
     let _ = window.window().take_snapshot().unwrap();
@@ -598,11 +598,11 @@ fn appearance_remains_interactive_while_geo_owns_the_engine_and_late_reply_canno
         .expect("busy Geo must not disable appearance confirmation");
     assert_eq!(chosen.0, Intent::AccentColor);
     assert_eq!(chosen.1, "1");
-    let _ = app.intent(chosen.0, &chosen.1, &chosen.2);
-    app.present(&data, &mut models);
+    let _ = app.ui_intent(chosen.0, &chosen.1, &chosen.2);
+    app.present_slint(&data, &mut models);
     assert_eq!(data.get_accent(), 1);
     for color in [2, 3, 5] {
-        let _ = app.intent(Intent::AccentColor, &color.to_string(), "");
+        let _ = app.ui_intent(Intent::AccentColor, &color.to_string(), "");
     }
     assert_eq!(app.queued_actions.len(), 1, "rapid changes must coalesce");
     let _ = app.update(Message::Finished(Box::new(Reply {
@@ -622,7 +622,7 @@ fn appearance_remains_interactive_while_geo_owns_the_engine_and_late_reply_canno
         protection_changed: false,
         tray_nodes: None,
     })));
-    app.present(&data, &mut models);
+    app.present_slint(&data, &mut models);
     assert_eq!(
         data.get_accent(),
         5,
@@ -641,7 +641,7 @@ fn font_popup_changes_the_saved_request_and_rendered_font_at_fractional_scale() 
     let data = window.global::<UiData>();
     let mut models = ViewModels::default();
     models.attach(&data);
-    app.present(&data, &mut models);
+    app.present_slint(&data, &mut models);
     let events = pointer_events(&window);
     window.show().unwrap();
     let _ = window.window().take_snapshot().unwrap();
@@ -653,19 +653,19 @@ fn font_popup_changes_the_saved_request_and_rendered_font_at_fractional_scale() 
         events.borrow().as_slice(),
         &[(Intent::TextScale, "125%".into(), "".into())]
     );
-    let _ = app.intent(Intent::TextScale, "125%", "");
+    let _ = app.ui_intent(Intent::TextScale, "125%", "");
     assert!(matches!(
         app.queued_actions.pop_back(),
         Some(Action::TextScale(125))
     ));
     app.settings.text_scale = 125;
-    app.present(&data, &mut models);
+    app.present_slint(&data, &mut models);
     slint::platform::update_timers_and_animations();
     let _ = window.window().take_snapshot().unwrap();
     assert!((window.global::<Theme>().get_body_size() - before * 1.25).abs() < 0.01);
     // Restoring 100% must shrink the same rendered controls again.
     app.settings.text_scale = 100;
-    app.present(&data, &mut models);
+    app.present_slint(&data, &mut models);
     slint::platform::update_timers_and_animations();
     let _ = window.window().take_snapshot().unwrap();
     assert!((window.global::<Theme>().get_body_size() - before).abs() < 0.01);
@@ -676,12 +676,12 @@ fn font_popup_changes_the_saved_request_and_rendered_font_at_fractional_scale() 
 fn rule_editor_popups_deliver_type_and_policy_inside_a_modal() {
     ui_testing::initialize(950, 700);
     let mut app = fixture(Page::Rules);
-    let _ = app.intent(Intent::RuleAdd, "", "");
+    let _ = app.ui_intent(Intent::RuleAdd, "", "");
     let window = AppWindow::new().unwrap();
     let data = window.global::<UiData>();
     let mut models = ViewModels::default();
     models.attach(&data);
-    app.present(&data, &mut models);
+    app.present_slint(&data, &mut models);
     let events = pointer_events(&window);
     window.show().unwrap();
     let _ = window.window().take_snapshot().unwrap();
@@ -693,8 +693,8 @@ fn rule_editor_popups_deliver_type_and_policy_inside_a_modal() {
         &[(Intent::RuleKind, "DOMAIN-KEYWORD".into(), "".into())]
     );
     let event = events.borrow_mut().pop().unwrap();
-    let _ = app.intent(event.0, &event.1, &event.2);
-    app.present(&data, &mut models);
+    let _ = app.ui_intent(event.0, &event.1, &event.2);
+    app.present_slint(&data, &mut models);
     let _ = window.window().take_snapshot().unwrap();
     assert_eq!(data.get_rule_kind(), "DOMAIN-KEYWORD");
     let policy = data.get_rule_policies().row_data(1).unwrap();
@@ -706,8 +706,8 @@ fn rule_editor_popups_deliver_type_and_policy_inside_a_modal() {
         &[(Intent::RulePolicy, policy.clone(), "".into())]
     );
     let event = events.borrow_mut().pop().unwrap();
-    let _ = app.intent(event.0, &event.1, &event.2);
-    app.present(&data, &mut models);
+    let _ = app.ui_intent(event.0, &event.1, &event.2);
+    app.present_slint(&data, &mut models);
     assert_eq!(data.get_rule_policy(), policy);
     window.hide().unwrap();
 }
@@ -771,7 +771,7 @@ fn setting_and_toolbar_intents_preserve_their_values_in_the_command_queue() {
     for (intent, a, b, expected) in cases {
         let mut app = fixture(Page::Settings);
         app.busy = true;
-        let _ = app.intent(intent, a, b);
+        let _ = app.ui_intent(intent, a, b);
         assert_eq!(
             format!("{:?}", app.queued_actions.pop_back().unwrap()),
             format!("{expected:?}")
@@ -779,18 +779,18 @@ fn setting_and_toolbar_intents_preserve_their_values_in_the_command_queue() {
     }
     let mut app = fixture(Page::Settings);
     app.busy = true;
-    let _ = app.intent(Intent::ControllerPort, "9092", "");
-    let _ = app.intent(Intent::MixedPort, "7899", "");
-    let _ = app.intent(Intent::SavePorts, "", "");
+    let _ = app.ui_intent(Intent::ControllerPort, "9092", "");
+    let _ = app.ui_intent(Intent::MixedPort, "7899", "");
+    let _ = app.ui_intent(Intent::SavePorts, "", "");
     assert!(matches!(
         app.queued_actions.pop_back(),
         Some(Action::SavePorts(9092, 7899))
     ));
-    let _ = app.intent(Intent::MixedPort, "invalid", "");
-    let _ = app.intent(Intent::SavePorts, "", "");
+    let _ = app.ui_intent(Intent::MixedPort, "invalid", "");
+    let _ = app.ui_intent(Intent::SavePorts, "", "");
     assert!(app.queued_actions.is_empty());
-    let _ = app.intent(Intent::IntervalInput, "15", "");
-    let _ = app.intent(Intent::SaveInterval, "", "");
+    let _ = app.ui_intent(Intent::IntervalInput, "15", "");
+    let _ = app.ui_intent(Intent::SaveInterval, "", "");
     assert!(matches!(
         app.queued_actions.pop_back(),
         Some(Action::DelayInterval(15))
@@ -812,13 +812,13 @@ fn ip_report_uses_bitmaps_in_summary_rows_and_details() {
     let data = window.global::<UiData>();
     let mut models = ViewModels::default();
     models.attach(&data);
-    app.present(&data, &mut models);
+    app.present_slint(&data, &mut models);
     assert!(data.get_site_exit_flagged());
     assert_eq!(data.get_site_exit_country(), "德国");
     assert_eq!(data.get_site_exit_flag().size().width, 72);
     assert!(!data.get_site_summary().contains('🇩'));
-    let _ = app.intent(Intent::SiteDetail, "exit-ip", "");
-    app.present(&data, &mut models);
+    let _ = app.ui_intent(Intent::SiteDetail, "exit-ip", "");
+    app.present_slint(&data, &mut models);
     assert!(data.get_modal_flagged());
     assert_eq!(data.get_modal_country(), "德国");
     assert!(!data.get_modal_description().contains('🇩'));
@@ -840,7 +840,7 @@ fn profile_and_rule_source_popups_preserve_ids_and_filters() {
     let data = window.global::<UiData>();
     let mut models = ViewModels::default();
     models.attach(&data);
-    app.present(&data, &mut models);
+    app.present_slint(&data, &mut models);
     let events = pointer_events(&window);
     window.show().unwrap();
     let _ = window.window().take_snapshot().unwrap();
@@ -852,7 +852,7 @@ fn profile_and_rule_source_popups_preserve_ids_and_filters() {
         &[(Intent::RuleProfile, "second".into(), "".into())]
     );
     let event = events.borrow_mut().pop().unwrap();
-    let _ = app.intent(event.0, &event.1, &event.2);
+    let _ = app.ui_intent(event.0, &event.1, &event.2);
     assert!(matches!(app.queued_actions.pop_back(), Some(Action::LoadRules(id)) if id == "second"));
     ui_testing::click(window.window(), 750., 260.);
     let _ = window.window().take_snapshot().unwrap();
@@ -862,8 +862,8 @@ fn profile_and_rule_source_popups_preserve_ids_and_filters() {
         &[(Intent::RuleFilter, "1".into(), "".into())]
     );
     let event = events.borrow_mut().pop().unwrap();
-    let _ = app.intent(event.0, &event.1, &event.2);
-    app.present(&data, &mut models);
+    let _ = app.ui_intent(event.0, &event.1, &event.2);
+    app.present_slint(&data, &mut models);
     assert_eq!(data.get_rule_source(), "自定义");
     window.hide().unwrap();
 }
@@ -877,7 +877,7 @@ fn ip_category_status_and_region_popups_drive_report_filters() {
     let data = window.global::<UiData>();
     let mut models = ViewModels::default();
     models.attach(&data);
-    app.present(&data, &mut models);
+    app.present_slint(&data, &mut models);
     let events = pointer_events(&window);
     window.show().unwrap();
     let _ = window.window().take_snapshot().unwrap();
@@ -896,8 +896,8 @@ fn ip_category_status_and_region_popups_drive_report_filters() {
             &[(intent, value.clone(), "".into())]
         );
         let event = events.borrow_mut().pop().unwrap();
-        let _ = app.intent(event.0, &event.1, &event.2);
-        app.present(&data, &mut models);
+        let _ = app.ui_intent(event.0, &event.1, &event.2);
+        app.present_slint(&data, &mut models);
         let _ = window.window().take_snapshot().unwrap();
         let selected = match intent {
             Intent::SiteCategory => data.get_site_category(),
@@ -923,7 +923,7 @@ fn log_rows_open_full_text_copy_without_opening_and_filter_by_source_level() {
     let data = window.global::<UiData>();
     let mut models = ViewModels::default();
     models.attach(&data);
-    app.present(&data, &mut models);
+    app.present_slint(&data, &mut models);
     assert_eq!(data.get_logs().row_data(2).unwrap().level, "INFO");
     let events = pointer_events(&window);
     window.show().unwrap();
@@ -939,13 +939,13 @@ fn log_rows_open_full_text_copy_without_opening_and_filter_by_source_level() {
         events.borrow().as_slice(),
         &[(Intent::LogDetail, long.clone().into(), "".into())]
     );
-    let _ = app.intent(Intent::LogDetail, &long, "");
-    app.present(&data, &mut models);
+    let _ = app.ui_intent(Intent::LogDetail, &long, "");
+    app.present_slint(&data, &mut models);
     assert_eq!(data.get_modal(), 13);
     assert_eq!(data.get_modal_description(), long.as_str());
     assert_eq!(data.get_modal_copy(), long.as_str());
-    let _ = app.intent(Intent::CancelConfirm, "", "");
-    app.present(&data, &mut models);
+    let _ = app.ui_intent(Intent::CancelConfirm, "", "");
+    app.present_slint(&data, &mut models);
     assert_eq!(data.get_modal(), 0);
     events.borrow_mut().clear();
     let _ = window.window().take_snapshot().unwrap();
@@ -956,10 +956,10 @@ fn log_rows_open_full_text_copy_without_opening_and_filter_by_source_level() {
         events.borrow().as_slice(),
         &[(Intent::LogLevel, "WARN".into(), "".into())]
     );
-    let _ = app.intent(Intent::Query, "timeout", "");
+    let _ = app.ui_intent(Intent::Query, "timeout", "");
     app.list_offset = 120;
-    let _ = app.intent(Intent::LogLevel, "WARN", "");
-    app.present(&data, &mut models);
+    let _ = app.ui_intent(Intent::LogLevel, "WARN", "");
+    app.present_slint(&data, &mut models);
     assert_eq!(app.list_offset, 0);
     assert_eq!(data.get_logs().row_count(), 1);
     assert_eq!(data.get_logs().row_data(0).unwrap().message, long.as_str());
@@ -1054,7 +1054,7 @@ fn motion_does_not_delay_connection_sort_arrow_or_third_click_reset() {
     let data = window.global::<UiData>();
     let mut models = ViewModels::default();
     models.attach(&data);
-    app.present(&data, &mut models);
+    app.present_slint(&data, &mut models);
     let events = pointer_events(&window);
     window.global::<clash_client_ui::Motion>().set_enabled(true);
     window.show().unwrap();
@@ -1064,8 +1064,8 @@ fn motion_does_not_delay_connection_sort_arrow_or_third_click_reset() {
         ui_testing::rapid_click(window.window(), 780., 174.);
         let (intent, a, b) = events.borrow_mut().pop().unwrap();
         assert_eq!(intent, Intent::ConnectionSort);
-        let _ = app.intent(intent, &a, &b);
-        app.present(&data, &mut models);
+        let _ = app.ui_intent(intent, &a, &b);
+        app.present_slint(&data, &mut models);
         let immediately = motion_frame(&window, 0);
         let header = |pixels: &[u8]| {
             pixels
@@ -1103,7 +1103,7 @@ fn copy_feedback_waits_for_matching_native_ack_and_resets_without_resizing() {
     let data = window.global::<UiData>();
     let mut models = ViewModels::default();
     models.attach(&data);
-    app.present(&data, &mut models);
+    app.present_slint(&data, &mut models);
     let events = pointer_events(&window);
     window.global::<clash_client_ui::Motion>().set_enabled(true);
     window.show().unwrap();
@@ -1148,7 +1148,7 @@ fn motion_group_collapse_is_persisted_before_exit_and_navigation_drops_nodes() {
     let data = window.global::<UiData>();
     let mut models = ViewModels::default();
     models.attach(&data);
-    app.present(&data, &mut models);
+    app.present_slint(&data, &mut models);
     let events = pointer_events(&window);
     window.global::<clash_client_ui::Motion>().set_enabled(true);
     window.show().unwrap();
@@ -1161,8 +1161,8 @@ fn motion_group_collapse_is_persisted_before_exit_and_navigation_drops_nodes() {
             .expect("expansion changes immediately");
         assert_eq!(intent, Intent::ToggleGroup);
         assert!(events.borrow().is_empty());
-        let _ = app.intent(intent, &a, &b);
-        app.present(&data, &mut models);
+        let _ = app.ui_intent(intent, &a, &b);
+        app.present_slint(&data, &mut models);
         assert_eq!(app.expanded.contains("Proxy"), expanded);
         assert_eq!(
             data.get_groups().row_data(0).unwrap().nodes.row_count(),
@@ -1171,8 +1171,8 @@ fn motion_group_collapse_is_persisted_before_exit_and_navigation_drops_nodes() {
         motion_frame(&window, 30);
     }
     // Leave before the final collapse finishes: its state must not be lost.
-    let _ = app.intent(Intent::Navigate, "0", "");
-    app.present(&data, &mut models);
+    let _ = app.ui_intent(Intent::Navigate, "0", "");
+    app.present_slint(&data, &mut models);
     motion_frame(&window, 250);
     assert_eq!(models.groups.row_count(), 0);
     assert!(!app.expanded.contains("Proxy"));
@@ -1230,4 +1230,59 @@ fn reopening_a_maximized_window_does_not_force_a_normal_size_request() {
     assert!(!app.window_opening);
     assert!(!app.size_pending);
     assert_eq!(app.window_state.size(), normal);
+}
+
+impl App {
+    fn present_slint(
+        &self,
+        data: &clash_client_ui::UiData<'_>,
+        models: &mut clash_client_ui::models::ViewModels,
+    ) {
+        let projection = clash_desktop_protocol::UiData::default();
+        let mut projected = clash_desktop_protocol::models::ViewModels::default();
+        projected.attach(&projection);
+        self.present(&projection, &mut projected);
+        clash_desktop_ui::apply(&projection.snapshot(), data, models);
+    }
+    fn ui_intent(&mut self, intent: clash_client_ui::Intent, a: &str, b: &str) -> Task<Message> {
+        self.intent(clash_desktop_ui::intent(intent), a, b)
+    }
+}
+
+#[test]
+fn renderer_rejects_stale_frames_without_losing_newer_input_or_dropdown_state() {
+    ui_testing::initialize(950, 700);
+    let window = AppWindow::new().unwrap();
+    let data = window.global::<UiData>();
+    let mut models = ViewModels::default();
+    models.attach(&data);
+    data.set_edit_name("newer draft".into());
+    data.set_rule_kind("DOMAIN-SUFFIX".into());
+    let frame = clash_desktop_protocol::Frame {
+        edit_name: "old draft".into(),
+        rule_kind: "DOMAIN".into(),
+        ..Default::default()
+    };
+    assert!(!clash_desktop_ui::apply_if_current(
+        &frame,
+        &data,
+        &mut models,
+        2,
+        3
+    ));
+    assert_eq!(data.get_edit_name(), "newer draft");
+    assert_eq!(data.get_rule_kind(), "DOMAIN-SUFFIX");
+    let frame = clash_desktop_protocol::Frame {
+        edit_name: "newer draft".into(),
+        rule_kind: "DOMAIN-SUFFIX".into(),
+        ..frame
+    };
+    assert!(clash_desktop_ui::apply_if_current(
+        &frame,
+        &data,
+        &mut models,
+        3,
+        3
+    ));
+    assert_eq!(data.get_edit_name(), "newer draft");
 }

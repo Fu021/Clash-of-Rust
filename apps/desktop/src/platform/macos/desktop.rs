@@ -11,24 +11,6 @@ use std::sync::{
     atomic::{AtomicBool, Ordering},
 };
 
-/// AppKit's visible frame excludes the menu bar and Dock; requested sizes are content sizes.
-pub(crate) fn available_content_size(
-    view: std::ptr::NonNull<std::ffi::c_void>,
-) -> Option<super::runtime::Size> {
-    MainThreadMarker::new()?;
-    // SAFETY: the desktop adapter supplies its live winit NSView on the main thread.
-    let view = unsafe { view.cast::<objc2_app_kit::NSView>().as_ref() };
-    let window = view.window()?;
-    let screen = window.screen()?;
-    let visible = screen.visibleFrame().size;
-    let frame = window.frame();
-    let content = window.contentRectForFrameRect(frame);
-    Some(super::runtime::Size::new(
-        (visible.width - (frame.size.width - content.size.width)) as f32,
-        (visible.height - (frame.size.height - content.size.height)) as f32,
-    ))
-}
-
 static REOPEN: AtomicBool = AtomicBool::new(false);
 static QUIT: AtomicBool = AtomicBool::new(false);
 static INSTALLED: OnceLock<Result<(), String>> = OnceLock::new();

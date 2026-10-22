@@ -7,6 +7,7 @@ mod bindings;
 mod bootstrap;
 mod claude;
 mod format;
+mod intents;
 mod interaction;
 mod logs;
 #[cfg(target_os = "macos")]
@@ -19,7 +20,6 @@ mod rules;
 mod ui_testing;
 #[cfg(test)]
 mod ui_tests;
-mod view_state;
 mod window_state;
 use clash_of_rust::{
     config::{AccentColor, Profile, Settings, Store, ThemeMode},

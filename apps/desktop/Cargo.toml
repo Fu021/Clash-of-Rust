@@ -13,8 +13,9 @@ path = "src/tun_launcher.rs"
 [dependencies]
 clash-client-runtime = { path = "../../crates/client-runtime" }
 clash-client-core = { path = "../../crates/client-core" }
-clash-client-ui = { path = "../../crates/client-ui" }
-slint = { workspace = true }
+clash-desktop-protocol = { path = "../../crates/desktop-protocol" }
+clash-desktop-shell = { path = "../../crates/desktop-shell" }
+winit = { version = "0.30", default-features = false, features = ["rwh_06", "x11", "wayland", "wayland-dlopen"] }
 arboard = { version = "3.7", default-features = false }
 anyhow = { workspace = true }
 chrono = { workspace = true }
@@ -64,3 +65,8 @@ objc2-user-notifications = { version = "0.3.2", default-features = false, featur
 
 [build-dependencies]
 semver = "1"
+
+[dev-dependencies]
+slint.workspace = true
+clash-client-ui = { path = "../../crates/client-ui" }
+clash-desktop-ui = { path = "../desktop-ui" }

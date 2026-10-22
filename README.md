@@ -78,7 +78,7 @@ macOS 打开 DMG，将 **Clash of Rust.app** 拖入 **Applications（应用程�
 
 ```sh
 python3 scripts/prepare-resources.py
-cargo build -p clash-of-rust -p clash-cli --bins --locked
+cargo build -p clash-of-rust -p clash-desktop-ui -p clash-cli --bins --locked
 ```
 
 桌面程序、`cor` 命令行和网络助手生成在 `target/debug/`，内核与 Geo 资源生成在 `bundle/`。Windows 可用 `python` 替代 `python3`。需要 Windows EXE、Linux DEB 或 macOS DMG 时，按 [本地打包步骤](docs/workflows.md#本地打包)生成；Android 本地工具链与 APK 构建见 [Android 开发说明](apps/android/README.md#本地构建)。
@@ -91,7 +91,7 @@ cargo build -p clash-of-rust -p clash-cli --bins --locked
 
 ## 开发与发布
 
-Cargo workspace 分为共享业务（`crates/client-core`）、共享原生运行层（`crates/client-runtime`）、Slint 界面（`crates/client-ui`）、桌面宿主（`apps/desktop`）与命令行（`apps/cli`）。Android 使用独立 Slint 原生宿主与系统 VPN，并通过移动桥接（`crates/mobile-ffi`）复用共享业务，见 [Android 开发说明](apps/android/README.md)；iOS 保留独立界面与宿主占位。
+Cargo workspace 分为共享业务（`crates/client-core`）、共享原生运行层（`crates/client-runtime`）、Slint 界面（`crates/client-ui`）、桌面后台宿主（`apps/desktop`）、可独立退出的界面进程（`apps/desktop-ui`）与命令行（`apps/cli`）。Android 使用独立 Slint 原生宿主与系统 VPN，并通过移动桥接（`crates/mobile-ffi`）复用共享业务，见 [Android 开发说明](apps/android/README.md)；iOS 保留独立界面与宿主占位。
 
 安装 Slint Viewer 后可独立预览界面：
 

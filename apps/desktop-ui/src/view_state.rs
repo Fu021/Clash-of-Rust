@@ -3,59 +3,34 @@ use clash_client_ui::{AppWindow, UiData};
 use slint::{ComponentHandle, Timer, winit_030::WinitWindowAccessor};
 use std::time::Duration;
 
+use clash_desktop_protocol::ViewState;
 macro_rules! view_state {
-    ($(($get:ident, $set:ident)),+ $(,)?) => {
-        #[derive(Clone)]
-        pub(super) struct State {
-            page: i32,
-            scroll: [f32; 13],
-            accent: Option<i32>,
-            position: slint::PhysicalPosition,
-            maximized: bool,
-            fullscreen: bool,
+    ($(($get:ident,$set:ident)),+ $(,)?) => {
+        pub fn capture(window:&AppWindow)->ViewState{
+            let data=window.global::<UiData>();let position=native_position(window);
+            ViewState{page:data.get_page(),scroll:[$(data.$get()),+],accent:(data.get_modal()==12).then(||window.get_accent_draft()),position,maximized:window.window().is_maximized(),fullscreen:window.window().is_fullscreen()}
         }
-        impl State {
-            pub(super) fn capture(window: &AppWindow) -> Self {
-                let data = window.global::<UiData>();
-                Self {
-                    page: data.get_page(),
-                    scroll: [$(data.$get()),+],
-                    accent: (data.get_modal() == 12).then(|| window.get_accent_draft()),
-                    position: window.window().position(),
-                    maximized: window.window().is_maximized(),
-                    fullscreen: window.window().is_fullscreen(),
-                }
-            }
-            pub(super) fn prepare(&self, window: &AppWindow) -> bool {
-                window.window().set_position(fit_window_position(window, self.position));
-                window.window().set_maximized(self.maximized);
-                window.window().set_fullscreen(self.fullscreen);
-                self.maximized || self.fullscreen
-            }
-            pub(super) fn ensure_reachable(window: &AppWindow) {
-                let current = window.window().position();
-                let fitted = fit_window_position(window, current);
-                if fitted != current { window.window().set_position(fitted); }
-            }
-            pub(super) fn restore(&self, window: &AppWindow) {
-                // Populate models first, then let layout establish the scroll
-                // ranges. Never retain the component through a delayed callback.
-                let weak = window.as_weak();
-                let state = self.clone();
-                Timer::single_shot(Duration::from_millis(16), move || {
-                    let Some(window) = weak.upgrade() else { return; };
-                    let data = window.global::<UiData>();
-                    if data.get_page() != state.page { return; }
-                    let mut offsets = state.scroll.into_iter();
-                    $(data.$set(offsets.next().unwrap_or_default().min(0.));)+
-                    if let Some(accent) = state.accent.filter(|_| data.get_modal() == 12) {
-                        window.set_accent_draft(accent);
-                    }
-
-                });
-            }
+        pub fn prepare(state:&ViewState,window:&AppWindow)->bool{
+            if let Some((x,y))=state.position{window.window().set_position(fit_window_position(window,slint::PhysicalPosition::new(x,y)));}
+            window.window().set_maximized(state.maximized);window.window().set_fullscreen(state.fullscreen);state.maximized||state.fullscreen
+        }
+        pub fn ensure_reachable(window:&AppWindow){if let Some((x,y))=native_position(window){let position=slint::PhysicalPosition::new(x,y);let fit=fit_window_position(window,position);if fit!=position{window.window().set_position(fit);}}}
+        pub fn restore(state:&ViewState,window:&AppWindow){
+            let weak=window.as_weak();let state=state.clone();
+            Timer::single_shot(Duration::from_millis(16),move||{
+                let Some(window)=weak.upgrade()else{return;};let data=window.global::<UiData>();if data.get_page()!=state.page{return;}
+                let mut offsets=state.scroll.into_iter();$(data.$set(offsets.next().unwrap_or_default().min(0.));)+
+                if let Some(accent)=state.accent.filter(|_|data.get_modal()==12){window.set_accent_draft(accent);}
+            });
         }
     };
+}
+
+fn native_position(window: &AppWindow) -> Option<(i32, i32)> {
+    window
+        .window()
+        .with_winit_window(|native| native.outer_position().ok().map(|p| (p.x, p.y)))
+        .flatten()
 }
 
 fn fit_window_position(

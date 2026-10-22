@@ -184,6 +184,20 @@ def measure_process(benchmark, pid, name, output, seconds, env, mode='app'):
     return rows
 
 
+def owned_window(window, root_pid, env):
+    try:
+        pid = int(subprocess.check_output(['xdotool','getwindowpid',window],env=env,text=True).strip())
+        seen = set()
+        while pid > 1 and pid not in seen:
+            if pid == root_pid: return True
+            seen.add(pid)
+            text = Path(f'/proc/{pid}/stat').read_text()
+            pid = int(text[text.rindex(')')+2:].split()[1])
+    except (OSError,ValueError,subprocess.CalledProcessError):
+        return False
+    return False
+
+
 def gui_scenes(executable, benchmark, output, seconds, modern_layout=False, slint_layout=False, rule_overrides=None, prefix='', workload='light', tray=None, expect_destroy=False):
     with tempfile.TemporaryDirectory(prefix='memory-gui-') as directory, (output/(prefix+'gui.log')).open('x') as log:
         data = Path(directory)
@@ -191,10 +205,11 @@ def gui_scenes(executable, benchmark, output, seconds, modern_layout=False, slin
         app = subprocess.Popen([str(executable)], env=env, stdout=log, stderr=log, start_new_session=True)
         try:
             for _ in range(90):
-                found = subprocess.run(['xdotool', 'search', '--pid', str(app.pid), '--name', '^Clash of Rust'],
+                found = subprocess.run(['xdotool', 'search', '--name', '^Clash of Rust'],
                                        env=env, capture_output=True, text=True)
-                if found.returncode == 0 and found.stdout.split():
-                    window = found.stdout.split()[0]
+                windows = [w for w in found.stdout.split() if owned_window(w, app.pid, env)] if found.returncode == 0 else []
+                if windows:
+                    window = windows[0]
                     break
                 if app.poll() is not None:
                     raise RuntimeError('GUI exited; see gui.log')
@@ -226,11 +241,11 @@ def gui_scenes(executable, benchmark, output, seconds, modern_layout=False, slin
                 def visible_windows():
                     if app.poll() is not None:
                         raise RuntimeError('Close exited the GUI instead of retaining the tray')
-                    result = subprocess.run(['xdotool', 'search', '--onlyvisible', '--pid', str(app.pid),
+                    result = subprocess.run(['xdotool', 'search', '--onlyvisible',
                                              '--name', '^Clash of Rust'], env=env, capture_output=True, text=True)
                     if result.returncode not in (0, 1):
                         raise RuntimeError('Could not inspect window visibility')
-                    return result.stdout.split() if result.returncode == 0 else []
+                    return [item for item in result.stdout.split() if owned_window(item, app.pid, env)] if result.returncode == 0 else []
 
                 def hidden():
                     return not visible_windows() and core_running(controller_port)
@@ -259,6 +274,8 @@ def gui_scenes(executable, benchmark, output, seconds, modern_layout=False, slin
 
                 close()
                 after = measure('tray-hidden')
+                if any(p['role'] == 'renderer' for row in after for p in row['processes']):
+                    raise RuntimeError('Renderer is still alive after closing the window')
                 if not hidden():
                     raise RuntimeError('Client/core did not remain in the background during sampling')
                 reopen()
@@ -285,6 +302,7 @@ def gui_scenes(executable, benchmark, output, seconds, modern_layout=False, slin
                     'tray_registered': True, 'close_request': 'WM_DELETE_WINDOW',
                     'hidden_during_measurement': True, 'reopened': True,
                     'repeat_cycles': 20, 'native_window_destroyed': destroyed,
+                    'renderer_exit_verified': not any(p['role'] == 'renderer' for row in after for p in row['processes']),
                     'relaunch_to_visible_ms': reopen_times,
                 })
                 return
@@ -403,7 +421,7 @@ def summarize(output, metadata):
             values = [f"{max(row[key][field] for row in samples)/1048576:.2f}"
                       for key, field in ((role, 'rss_bytes'), ('core', 'rss_bytes'), ('total', 'pss_bytes'))]
             lines.append(f'| {scene} | {"cor" if role == "daemon" else "GUI"} | '+ ' | '.join(values)+' |')
-    lines += ['', 'GUI peaks are observed at 250 ms intervals, not exact allocator peaks. RSS can count shared pages twice. Compare separate runs only with the same toolchain, build profile, inputs and environment. Core memory also varies independently of the Rust GUI.', '']
+    lines += ['', 'Client GUI values include both the native host and all renderer processes when present. GUI peaks are observed at 250 ms intervals, not exact allocator peaks. RSS can count shared pages twice. Compare separate runs only with the same toolchain, build profile, inputs and environment. Core memory also varies independently of the Rust GUI.', '']
     report = '\n'.join(lines)
     (output/'README.md').write_text(report, encoding='utf-8')
     if os.environ.get('GITHUB_STEP_SUMMARY'):
@@ -469,7 +487,7 @@ def main():
     write_json(output/'metadata.json', metadata)
     target = source/'target'/('release' if args.profile == 'release' else 'debug')
     bundle = source/'bundle/linux-x64'
-    for name in ('clash-of-rust', 'clash-tun-launcher'):
+    for name in ('clash-of-rust', 'clash-tun-launcher', *(['clash-desktop-ui'] if (source/'apps/desktop-ui/Cargo.toml').is_file() else [])):
         shutil.copy2(target/name, bundle/name)
     benchmark = target/'examples/memory_benchmark'
     with (output/'api.txt').open('x') as text:
@@ -502,7 +520,7 @@ def main():
                 gui_scenes(bundle/'clash-of-rust', benchmark, output, args.seconds,
                            modern_layout, slint_layout=True, rule_overrides=overrides,
                            prefix=prefix, workload=args.workload, tray=tray,
-                           expect_destroy='fn retire_window(' in (desktop/'src/application/bindings.rs').read_text())
+                           expect_destroy=any(marker in (desktop/'src/application/bindings.rs').read_text() for marker in ('fn retire_window(', 'struct Renderer')))
                 metadata['background_scenes'] += [prefix+name for name in ('tray-open', 'tray-hidden',
                     'tray-reopened', 'tray-search', 'tray-search-hidden', 'tray-search-reopened', 'tray-after-cycles')]
                 if has_cli:
