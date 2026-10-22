@@ -4,6 +4,7 @@ use anyhow::{Context, Result, bail};
 use serde::{Deserialize, Serialize};
 use std::path::Path;
 
+pub mod memory;
 pub mod notification;
 mod proxy_state;
 pub use proxy_state::{ProxyState, ProxyValue};

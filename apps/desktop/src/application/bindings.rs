@@ -258,6 +258,18 @@ impl DesktopHost {
         self.window = None;
         self.models = ViewModels::default();
         clash_of_rust::flags::release_cache();
+        // Give native adapter destruction a turn to finish. Do not trim during
+        // an immediate reopen, and never retain the retired component here.
+        Timer::single_shot(Duration::ZERO, || {
+            let background = HOST.with(|slot| {
+                slot.borrow().as_ref().is_some_and(|host| {
+                    host.window.is_none() && !host.app.visible && !host.app.window_opening
+                })
+            });
+            if background {
+                platform::memory::release_unused_heap();
+            }
+        });
     }
 }
 impl native::Host for DesktopHost {
