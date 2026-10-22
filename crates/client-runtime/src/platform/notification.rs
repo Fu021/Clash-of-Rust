@@ -31,6 +31,7 @@ fn record_recovery(store: &crate::config::Store, identity: &[u8], offer: bool) -
 pub async fn prepare_startup(store: &crate::config::Store) -> Result<Preparation> {
     #[cfg(target_os = "macos")]
     {
+        use std::os::unix::fs::MetadataExt;
         let permission =
             tokio::time::timeout(std::time::Duration::from_secs(120), macos::permission())
                 .await
@@ -63,6 +64,7 @@ pub async fn prepare_startup(store: &crate::config::Store) -> Result<Preparation
         let identity = serde_json::to_vec(&serde_json::json!({
             "version": env!("CARGO_PKG_VERSION"), "bundle": bundle,
             "created": time(bundle_meta.created()), "modified": time(executable_meta.modified()),
+            "bundle_inode": bundle_meta.ino(), "executable_inode": executable_meta.ino(),
         }))?;
         let offer_settings =
             record_recovery(store, &identity, permission == macos::Permission::Settings)?;
