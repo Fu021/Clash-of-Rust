@@ -224,6 +224,12 @@ pub fn run() -> anyhow::Result<()> {
                             });
                         }
                         geometry(&native, &window);
+                        // Initialization and the first paint allocate temporary
+                        // font/layout buffers. Reclaim only freed heap pages,
+                        // once; keep the live renderer and its caches intact.
+                        Timer::single_shot(Duration::from_millis(200), || {
+                            clash_desktop_shell::platform::memory::release_unused_heap();
+                        });
                     }
                     repaint::before_draw(native_window);
                 }

@@ -1,4 +1,4 @@
-//! Return unused allocator pages after a desktop window has been destroyed.
+//! Return unused allocator pages after desktop initialization or window destruction.
 //!
 //! This is a best-effort hint, not a working-set limit. Live allocations remain
 //! valid, and normal allocation continues when the window is opened again.

@@ -41,6 +41,7 @@ struct Renderer {
     closing: Option<Instant>,
     retiring: bool,
     revision: u64,
+    reclaim_pending: bool,
 }
 #[derive(Debug)]
 struct Outbound {
@@ -269,6 +270,21 @@ impl DesktopHost {
                 self.save_geometry();
             }
             self.reap();
+            if self.app.visible
+                && self.app.engine.is_some()
+                && !self.app.window_opening
+                && !self.app.busy
+                && !self.app.working
+                && let Some(window) = self
+                    .window
+                    .as_mut()
+                    .filter(|window| window.reclaim_pending && window.closing.is_none())
+            {
+                // Return startup parser/model allocation caches once per
+                // renderer lifetime, after initialization has become idle.
+                window.reclaim_pending = false;
+                platform::memory::release_unused_heap();
+            }
             if self.app.claude.session.is_some() {
                 self.message(Message::Claude(claude_view::Event::Tick));
             }
@@ -654,6 +670,7 @@ impl native::Host for DesktopHost {
                 closing: None,
                 retiring: false,
                 revision: 0,
+                reclaim_pending: true,
             })
         })();
         match result {
