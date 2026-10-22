@@ -203,6 +203,8 @@ impl DesktopHost {
                 );
             if self.app.visible
                 && view_ready
+                && !self.app.window_opening
+                && !self.app.size_pending
                 && let Some(state) = self.saved_view.take()
             {
                 state.restore(window);
@@ -244,6 +246,10 @@ impl DesktopHost {
     }
     fn finish_retirement(&mut self) {
         if self.retiring.is_none() || self.app.visible || self.app.picking_file {
+            return;
+        }
+        if self.retiring != self.current_window_id() {
+            self.retiring = None;
             return;
         }
         // Dropping the last application handle releases the component tree and
@@ -423,6 +429,10 @@ impl native::Host for DesktopHost {
             settings.size.width,
             settings.size.height,
         ));
+        let preserve_native_state = self
+            .saved_view
+            .as_ref()
+            .is_some_and(|state| state.prepare(&window));
         self.window = Some((id, window));
         if let Some((_, window)) = &self.window {
             // Slint changed callbacks run later; initialize the first frame now.
@@ -442,7 +452,15 @@ impl native::Host for DesktopHost {
         {
             let _ = window.show();
         }
-        enqueue(Message::Window((id, window::Event::Opened {})));
+        enqueue_window(
+            id,
+            Message::Window((
+                id,
+                window::Event::Opened {
+                    preserve_native_state,
+                },
+            )),
+        );
     }
     fn window_size(&self, id: window::Id) -> Size {
         self.window

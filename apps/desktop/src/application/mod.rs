@@ -1241,8 +1241,17 @@ impl App {
                     self.show_notice(format!("无法保存窗口尺寸：{error}"), true);
                 }
             }
-            Message::Window((id, desktop_runtime::window::Event::Opened { .. })) => {
+            Message::Window((
+                id,
+                desktop_runtime::window::Event::Opened {
+                    preserve_native_state,
+                },
+            )) => {
                 self.window_opening = false;
+                if preserve_native_state {
+                    self.size_pending = false;
+                    return Task::none();
+                }
                 self.size_revision = self.size_revision.wrapping_add(1);
                 return self.update(Message::ResizeWindow(
                     self.size_revision,

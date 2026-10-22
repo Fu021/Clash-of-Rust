@@ -1215,3 +1215,19 @@ fn notification_recovery_waits_for_drafts_and_clears_when_permission_is_granted(
     assert!(!app.notification_busy);
     assert!(app.confirmation.is_some());
 }
+
+#[test]
+fn reopening_a_maximized_window_does_not_force_a_normal_size_request() {
+    let mut app = fixture(Page::Home);
+    let normal = app.window_state.size();
+    app.window_opening = true;
+    let _ = app.update(Message::Window((
+        runtime::window::Id::unique(),
+        runtime::window::Event::Opened {
+            preserve_native_state: true,
+        },
+    )));
+    assert!(!app.window_opening);
+    assert!(!app.size_pending);
+    assert_eq!(app.window_state.size(), normal);
+}

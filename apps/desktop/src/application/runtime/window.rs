@@ -15,7 +15,7 @@ pub struct Settings {
 }
 #[derive(Debug, Clone, Copy)]
 pub enum Event {
-    Opened {},
+    Opened { preserve_native_state: bool },
     Rescaled,
     Resized(Size),
     Focused,
