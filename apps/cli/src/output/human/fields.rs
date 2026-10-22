@@ -260,6 +260,7 @@ pub(super) fn label(key: &str) -> &str {
         "results" => "检测结果",
         "normal" => "实测项目",
         "risk" => "风险",
+        "challenged" => "需要浏览器验证",
         "clues" => "其他线索",
         "report" => "检测报告",
         "terminal" => "终端环境",

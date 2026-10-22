@@ -259,18 +259,23 @@ pub async fn extend(client: &Client, report: &mut Report, reputation_key: Option
 }
 
 async fn connectivity(client: &Client, host: &str) -> Signal {
+    connectivity_at(client, host, &format!("https://{host}/")).await
+}
+
+async fn connectivity_at(client: &Client, host: &str, url: &str) -> Signal {
     let mut timings = Vec::new();
     let mut status = None;
     let mut challenge = false;
     for _ in 0..3 {
         let started = std::time::Instant::now();
-        if let Ok(response) = client.head(format!("https://{host}/")).send().await {
+        if let Ok(response) = client.head(url).send().await {
             timings.push(started.elapsed().as_millis());
             status = Some(response.status().as_u16());
             challenge |= response
                 .headers()
                 .get("cf-mitigated")
-                .is_some_and(|v| v == "challenge");
+                .and_then(|value| value.to_str().ok())
+                .is_some_and(|value| value.eq_ignore_ascii_case("challenge"));
         }
     }
     timings.sort_unstable();
@@ -297,10 +302,10 @@ async fn connectivity(client: &Client, host: &str) -> Signal {
         )
     };
     if challenge {
-        signal
-            .detail
-            .push_str(" 服务器返回 Cloudflare 挑战标志；未自动完成验证码，也没有提交账号信息。");
-        signal.risk = true;
+        signal.challenged = true;
+        signal.value.push_str(" · 需要浏览器验证");
+        signal.detail.push_str(" 服务器要求 Cloudflare 人机验证；此响应不能证明地区或线路存在风险。检测未自动完成验证码，也没有提交账号信息。");
+        signal.advice = "可用浏览器打开 Claude，确认是否需要验证及能否正常使用。".into();
     }
     signal
 }
@@ -391,5 +396,71 @@ mod tests {
             .evidence,
             Evidence::Unknown
         );
+    }
+    #[tokio::test]
+    async fn challenge_responses_remain_measured_context_without_becoming_regional_risks() {
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+        for (header, status, challenged) in [
+            ("cf-mitigated: challenge\r\n", 403, true),
+            ("CF-Mitigated: ChAlLeNgE\r\n", 403, true),
+            ("", 403, false),
+            ("", 200, false),
+        ] {
+            let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+            let url = format!("http://{}/", listener.local_addr().unwrap());
+            let response = format!(
+                "HTTP/1.1 {status} Test\r\n{header}Content-Length: 0\r\nConnection: close\r\n\r\n"
+            );
+            let server = tokio::spawn(async move {
+                let mut requests = Vec::new();
+                for _ in 0..3 {
+                    let (mut stream, _) = listener.accept().await.unwrap();
+                    let mut request = Vec::new();
+                    while !request.ends_with(b"\r\n\r\n") {
+                        let mut byte = [0];
+                        stream.read_exact(&mut byte).await.unwrap();
+                        request.push(byte[0]);
+                        assert!(request.len() < 8192);
+                    }
+                    requests.push(String::from_utf8(request).unwrap());
+                    stream.write_all(response.as_bytes()).await.unwrap();
+                }
+                requests
+            });
+            let signal =
+                connectivity_at(&super::super::client(None).unwrap(), "claude.ai", &url).await;
+            let requests = tokio::time::timeout(std::time::Duration::from_secs(2), server)
+                .await
+                .unwrap()
+                .unwrap();
+            assert!(
+                requests
+                    .iter()
+                    .all(|r| r.starts_with("HEAD / HTTP/1.1\r\n"))
+            );
+            assert!(
+                requests
+                    .iter()
+                    .all(|r| !r.to_ascii_lowercase().contains("cookie:")
+                        && !r.to_ascii_lowercase().contains("authorization:"))
+            );
+            assert_eq!(signal.evidence, Evidence::Measured);
+            assert!(!signal.risk);
+            assert_eq!(signal.challenged, challenged);
+            assert_eq!(signal.context_only(), challenged);
+            assert!(signal.value.contains("响应 3/3"));
+            assert!(signal.value.contains(&format!("HTTP {status}")));
+            let mut report = Report::new(super::super::Environment::Core, "test");
+            report.signals.push(signal.clone());
+            report.validate().unwrap();
+            assert!(!report.differs(&signal));
+            let json = serde_json::to_value(&signal).unwrap();
+            let restored: Signal = serde_json::from_value(json.clone()).unwrap();
+            assert_eq!(restored.challenged, challenged);
+            // Existing reports have no challenge field and stay importable.
+            let mut legacy = json;
+            legacy.as_object_mut().unwrap().remove("challenged");
+            assert!(!serde_json::from_value::<Signal>(legacy).unwrap().challenged);
+        }
     }
 }

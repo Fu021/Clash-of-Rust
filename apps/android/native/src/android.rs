@@ -1902,7 +1902,7 @@ fn project(state: &State) -> Projection {
             let tone = if report.differs(signal) {
                 claude_counts.1 += 1;
                 3
-            } else if signal.evidence == core::claude_check::Evidence::Measured {
+            } else if !signal.context_only() {
                 claude_counts.0 += 1;
                 1
             } else {
