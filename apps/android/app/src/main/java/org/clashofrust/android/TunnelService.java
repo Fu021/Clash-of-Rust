@@ -72,14 +72,20 @@ public final class TunnelService extends VpnService {
             String request = intent == null ? null : intent.getStringExtra(REQUEST);
             if (request != null && !current(this, request)) {
                 // A previously queued foreground start must not undo a later stop.
+                // Android's foreground deadline belongs to the service, even
+                // when this request is stale and a newer start prevents stopSelf.
+                startForeground(1, notification(connected ? "VPN 已连接" : "VPN 连接已取消"));
                 if (current(this, acceptedRequest)) return START_STICKY;
+                stopForeground(STOP_FOREGROUND_REMOVE);
                 stopSelfResult(startId);
                 return START_NOT_STICKY;
             }
             boolean restore = intent == null;
             boolean alwaysOn = Build.VERSION.SDK_INT >= 29 && isAlwaysOn();
             if (restore && !alwaysOn && !getSharedPreferences("vpn", MODE_PRIVATE).getBoolean("desired", false)) {
-                stopSelf(); return START_NOT_STICKY;
+                startForeground(1, notification("VPN 连接已取消"));
+                stopForeground(STOP_FOREGROUND_REMOVE);
+                stopSelfResult(startId); return START_NOT_STICKY;
             }
             if (request == null) request = prepareStart(this);
             acceptedRequest = request;
