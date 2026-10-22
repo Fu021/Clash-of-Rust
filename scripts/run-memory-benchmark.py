@@ -149,7 +149,7 @@ def read_scene(path, seconds=None, role=None):
     return samples
 
 
-def memory_maps(text):
+def memory_maps(text, executable=None):
     """Aggregate Linux mappings without keeping addresses or user file paths."""
     totals, category = {}, None
     for line in text.splitlines():
@@ -159,7 +159,11 @@ def memory_maps(text):
             category = ('heap' if name == '[heap]' else 'stack' if name.startswith('[stack')
                         else 'anonymous' if not name or name.startswith('[anon')
                         else 'shared-memory' if '/memfd:' in name or '/dev/shm/' in name
-                        else 'other-special' if name.startswith('[') else 'file-backed')
+                        else 'other-special' if name.startswith('[')
+                        else 'executable' if executable and name.removesuffix(' (deleted)') == executable
+                        else 'font-files' if executable and name.lower().endswith(('.ttf','.otf','.ttc'))
+                        else 'shared-libraries' if executable and re.search(r'\.so(?:\.|$)',name)
+                        else 'file-backed')
             totals.setdefault(category, {'rss_bytes': 0, 'pss_bytes': 0, 'private_bytes': 0})
         elif category and ':' in line:
             field, value = line.split(':', 1)
@@ -179,7 +183,8 @@ def measure_process(benchmark, pid, name, output, seconds, env, mode='app'):
     for process in rows[-1]['processes']:
         path = Path(f"/proc/{process['pid']}/smaps")
         if path.exists():
-            maps.append({'role': process['role'], 'categories': memory_maps(path.read_text())})
+            executable = os.readlink(path.parent/'exe')
+            maps.append({'role': process['role'], 'categories': memory_maps(path.read_text(), executable)})
     write_json(output/(name+'-mappings.json'), maps)
     return rows
 

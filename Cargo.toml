@@ -42,3 +42,25 @@ lto = false
 codegen-units = 16
 incremental = true
 strip = true
+
+# Desktop state adapters and generated UI code are dominated by instruction
+# pages. Optimize these for size while keeping network/core dependencies at O3.
+[profile.release.package.clash-of-rust]
+opt-level = "s"
+codegen-units = 1
+
+[profile.release.package.clash-desktop-ui]
+opt-level = "s"
+codegen-units = 1
+
+[profile.release.package.clash-client-ui]
+opt-level = "s"
+codegen-units = 1
+
+[profile.release.package.clash-desktop-protocol]
+opt-level = "s"
+codegen-units = 1
+
+[profile.release.package.clash-desktop-shell]
+opt-level = "s"
+codegen-units = 1

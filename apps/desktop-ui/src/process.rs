@@ -105,7 +105,7 @@ pub fn run() -> anyhow::Result<()> {
         view,
         frame,
         view_ready,
-    } = serde_json::from_slice(&first)?
+    } = wire::decode(&first)?
     else {
         anyhow::bail!("界面初始化消息无效")
     };
@@ -371,7 +371,7 @@ fn packet(bytes: &[u8]) {
         let Some(front) = slot.as_mut() else {
             return;
         };
-        let packet = match serde_json::from_slice::<HostPacket>(bytes) {
+        let packet = match wire::decode::<HostPacket>(bytes) {
             Ok(packet) => packet,
             Err(error) => {
                 send(&front.output, UiEvent::Error(error.to_string()));

@@ -11,6 +11,8 @@ from build_support import ROOT, run, sha256, validate_binary_arch, write_json
 
 APP_NAME = 'Clash of Rust.app'
 BUNDLE_ID = 'org.clashofrust.desktop'
+UI_APP = Path('Contents/Helpers/Clash of Rust UI.app')
+UI_BUNDLE_ID = BUNDLE_ID+'.renderer'
 
 
 def disk_image(arguments, timeout=120):
@@ -41,7 +43,7 @@ def build_app(payload, destination, version, arch):
     binaries, resources = contents/'MacOS', contents/'Resources'
     binaries.mkdir(parents=True)
     resources.mkdir()
-    for name in ('clash-of-rust', 'clash-desktop-ui', 'clash-tun-launcher', 'cor'):
+    for name in ('clash-of-rust', 'clash-tun-launcher', 'cor'):
         validate_binary_arch(payload/name, 'macos', arch)
         shutil.copy2(payload/name, binaries/name)
         (binaries/name).chmod(0o755)
@@ -54,6 +56,18 @@ def build_app(payload, destination, version, arch):
             'CFBundleIconFile': 'AppIcon', 'LSMinimumSystemVersion': '14.0',
             'NSHighResolutionCapable': True, 'NSSupportsAutomaticGraphicsSwitching': True}
     (contents/'Info.plist').write_bytes(plistlib.dumps(info))
+    # Launch Services must know this is an agent before the renderer executes.
+    # Sharing the owner's bundle identity and changing activation policy later
+    # can leave an additional Dock/recent-app entry after each relaunch.
+    helper = destination/UI_APP
+    helper_binary = helper/'Contents/MacOS/clash-desktop-ui'
+    helper_binary.parent.mkdir(parents=True)
+    validate_binary_arch(payload/'clash-desktop-ui','macos',arch)
+    shutil.copy2(payload/'clash-desktop-ui',helper_binary)
+    helper_binary.chmod(0o755)
+    helper_info = {key:value for key,value in info.items() if key != 'CFBundleIconFile'}
+    helper_info.update(CFBundleIdentifier=UI_BUNDLE_ID,CFBundleExecutable='clash-desktop-ui',LSUIElement=True)
+    (helper/'Contents/Info.plist').write_bytes(plistlib.dumps(helper_info))
     iconset = destination.parent/'AppIcon.iconset'
     iconset.mkdir()
     for size in (16, 32, 128, 256, 512):
@@ -63,7 +77,7 @@ def build_app(payload, destination, version, arch):
     run(['/usr/bin/iconutil', '-c', 'icns', iconset, '-o', resources/'AppIcon.icns'])
     shutil.rmtree(iconset)
     identity = os.environ.get('MACOS_SIGNING_IDENTITY', '-')
-    for binary in (resources/'resources/mihomo', binaries/'clash-desktop-ui', binaries/'clash-tun-launcher', binaries/'cor', binaries/'clash-of-rust'):
+    for binary in (resources/'resources/mihomo', helper_binary, helper, binaries/'clash-tun-launcher', binaries/'cor', binaries/'clash-of-rust'):
         command = ['/usr/bin/codesign', '--force', '--sign', identity]
         if identity != '-': command += ['--options', 'runtime', '--timestamp']
         run([*command, binary])

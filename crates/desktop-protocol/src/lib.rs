@@ -76,13 +76,16 @@ impl<T: Clone> List<T> {
     pub fn rows(&self) -> Vec<T> {
         self.0.borrow().clone()
     }
+    pub fn with_rows<R>(&self, operation: impl FnOnce(&[T]) -> R) -> R {
+        operation(&self.0.borrow())
+    }
     pub fn set_vec(&self, rows: Vec<T>) {
         *self.0.borrow_mut() = rows;
     }
 }
 include!(concat!(env!("OUT_DIR"), "/contract.rs"));
 
-pub const PROTOCOL: u32 = 1;
+pub const PROTOCOL: u32 = 2;
 pub const LIMIT: usize = 8 * 1024 * 1024;
 #[derive(Debug, Clone, Copy, Default, PartialEq, Serialize, Deserialize)]
 pub struct Size {
@@ -166,11 +169,24 @@ pub enum UiEvent {
     Error(String),
 }
 pub fn encode<T: Serialize>(value: &T) -> io::Result<Vec<u8>> {
-    let bytes = serde_json::to_vec(value).map_err(io::Error::other)?;
+    let bytes = bincode::serde::encode_to_vec(value, bincode::config::standard())
+        .map_err(io::Error::other)?;
     if bytes.len() > LIMIT {
         return Err(io::Error::other("Desktop pipe frame exceeds limit"));
     }
     Ok(bytes)
+}
+pub fn decode<T: serde::de::DeserializeOwned>(bytes: &[u8]) -> io::Result<T> {
+    if bytes.len() > LIMIT {
+        return Err(io::Error::other("Desktop pipe frame exceeds limit"));
+    }
+    let (value, consumed) =
+        bincode::serde::decode_from_slice(bytes, bincode::config::standard().with_limit::<LIMIT>())
+            .map_err(io::Error::other)?;
+    if consumed != bytes.len() {
+        return Err(io::Error::other("Unexpected trailing desktop pipe data"));
+    }
+    Ok(value)
 }
 pub fn write_frame(writer: &mut impl Write, bytes: &[u8]) -> io::Result<()> {
     if bytes.len() > LIMIT {
@@ -219,7 +235,7 @@ mod tests {
         write_frame(&mut stream, b"{}").unwrap();
         let mut input = stream.as_slice();
         let UiEvent::Intent { revision, a, .. } =
-            serde_json::from_slice(&read_frame(&mut input).unwrap().unwrap()).unwrap()
+            decode(&read_frame(&mut input).unwrap().unwrap()).unwrap()
         else {
             panic!("wrong packet")
         };
@@ -258,7 +274,7 @@ mod tests {
             data: decoded,
             accepted,
             ..
-        } = serde_json::from_slice(&encode(&packet).unwrap()).unwrap()
+        } = decode(&encode(&packet).unwrap()).unwrap()
         else {
             panic!("wrong packet")
         };
@@ -267,5 +283,21 @@ mod tests {
         assert_eq!(decoded.rule_payload, "google.com");
         assert_eq!(decoded.site_exit_flag, "DE");
         assert_eq!(decoded.logs.row_data(0).unwrap().message, "完整日志");
+    }
+    #[test]
+    fn binary_codec_rejects_truncation_trailing_data_and_forged_allocations() {
+        let packet = encode(&UiEvent::Focused).unwrap();
+        let mut trailing = packet.clone();
+        trailing.push(0);
+        assert!(decode::<UiEvent>(&trailing).is_err());
+        for length in 0..packet.len() {
+            assert!(decode::<UiEvent>(&packet[..length]).is_err());
+        }
+        // A declared list length cannot request unbounded allocations even
+        // when the framed input itself fits in the pipe's byte limit.
+        let huge = bincode::serde::encode_to_vec(u64::MAX, bincode::config::standard()).unwrap();
+        assert!(decode::<Vec<u64>>(&huge).is_err());
+        assert!(decode::<Vec<u8>>(&vec![0; LIMIT + 1]).is_err());
+        assert!(encode(&"x".repeat(LIMIT + 1)).is_err());
     }
 }

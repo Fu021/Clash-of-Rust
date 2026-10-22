@@ -35,12 +35,17 @@ impl HostProxy {
 struct Renderer {
     id: window::Id,
     child: tokio::process::Child,
-    commands: tokio::sync::mpsc::UnboundedSender<Vec<u8>>,
-    frames: tokio::sync::watch::Sender<Option<Vec<u8>>>,
+    commands: tokio::sync::mpsc::UnboundedSender<Outbound>,
+    frames: tokio::sync::watch::Sender<Option<Arc<[u8]>>>,
     metrics: wire::Metrics,
     closing: Option<Instant>,
     retiring: bool,
     revision: u64,
+}
+#[derive(Debug)]
+struct Outbound {
+    bytes: Arc<[u8]>,
+    destroy: bool,
 }
 fn allow_renderer_focus(child: &tokio::process::Child) {
     #[cfg(windows)]
@@ -62,8 +67,12 @@ impl Renderer {
         ) {
             allow_renderer_focus(&self.child);
         }
+        let destroy = matches!(&packet, HostPacket::Command(wire::WindowCommand::Destroy));
         if let Ok(bytes) = wire::encode(&packet) {
-            let _ = self.commands.send(bytes);
+            let _ = self.commands.send(Outbound {
+                bytes: bytes.into(),
+                destroy,
+            });
         }
     }
 }
@@ -75,7 +84,7 @@ struct DesktopHost {
     retired: Vec<Renderer>,
     data: UiData,
     models: ViewModels,
-    last_frame: Vec<u8>,
+    last_frame: Option<Arc<[u8]>>,
     clipboard: Option<arboard::Clipboard>,
     tray_listening: bool,
     next_update: Instant,
@@ -122,7 +131,7 @@ pub(super) fn run(
         retired: Vec::new(),
         data: UiData::default(),
         models: ViewModels::default(),
-        last_frame: Vec::new(),
+        last_frame: None,
         clipboard: None,
         tray_listening: false,
         next_update: Instant::now() + update::CHECK_INTERVAL,
@@ -320,9 +329,10 @@ impl DesktopHost {
                         self.app.page,
                         Page::Proxies | Page::Connections | Page::Rules | Page::Logs
                     )),
-        }) && self.last_frame != bytes
+        }) && self.last_frame.as_deref() != Some(bytes.as_slice())
         {
-            self.last_frame = bytes.clone();
+            let bytes: Arc<[u8]> = bytes.into();
+            self.last_frame = Some(bytes.clone());
             if let Some(window) = &self.window {
                 let _ = window.frames.send(Some(bytes));
             }
@@ -358,7 +368,7 @@ impl DesktopHost {
         let _ = window.frames.send(None);
         self.models = ViewModels::default();
         self.data = UiData::default();
-        self.last_frame = Vec::new();
+        self.last_frame = None;
         platform::memory::release_unused_heap();
     }
     fn reap(&mut self) {
@@ -384,7 +394,7 @@ impl DesktopHost {
                     self.app.size_pending = false;
                     self.models = ViewModels::default();
                     self.data = UiData::default();
-                    self.last_frame = Vec::new();
+                    self.last_frame = None;
                     self.app.show_notice(format!("界面进程已退出（{status}），可从托盘或 Dock 重新打开；后台代理仍在运行。"),true);
                 }
             }
@@ -538,10 +548,24 @@ impl native::Host for DesktopHost {
         self.models = ViewModels::default();
         self.data = UiData::default();
         self.models.attach(&self.data);
-        self.last_frame = Vec::new();
+        self.last_frame = None;
         self.app.present(&self.data, &mut self.models);
         let result = (|| -> anyhow::Result<Renderer> {
-            let executable = std::env::current_exe()?.with_file_name(if cfg!(windows) {
+            let owner = std::env::current_exe()?;
+            #[cfg(target_os = "macos")]
+            let executable = if owner
+                .ancestors()
+                .any(|path| path.extension().is_some_and(|s| s == "app"))
+            {
+                owner
+                    .parent()
+                    .unwrap()
+                    .join("../Helpers/Clash of Rust UI.app/Contents/MacOS/clash-desktop-ui")
+            } else {
+                owner.with_file_name("clash-desktop-ui")
+            };
+            #[cfg(not(target_os = "macos"))]
+            let executable = owner.with_file_name(if cfg!(windows) {
                 "clash-desktop-ui.exe"
             } else {
                 "clash-desktop-ui"
@@ -559,8 +583,8 @@ impl native::Host for DesktopHost {
             allow_renderer_focus(&child);
             let mut stdin = child.stdin.take().unwrap();
             let mut stdout = child.stdout.take().unwrap();
-            let (commands, mut input) = tokio::sync::mpsc::unbounded_channel::<Vec<u8>>();
-            let (frames, mut changes) = tokio::sync::watch::channel::<Option<Vec<u8>>>(None);
+            let (commands, mut input) = tokio::sync::mpsc::unbounded_channel::<Outbound>();
+            let (frames, mut changes) = tokio::sync::watch::channel::<Option<Arc<[u8]>>>(None);
             let open = HostPacket::Open {
                 protocol: wire::PROTOCOL,
                 version: clash_of_rust::VERSION.into(),
@@ -577,17 +601,20 @@ impl native::Host for DesktopHost {
                             Page::Proxies | Page::Connections | Page::Rules | Page::Logs
                         )),
             };
-            commands.send(wire::encode(&open)?)?;
+            commands.send(Outbound {
+                bytes: wire::encode(&open)?.into(),
+                destroy: false,
+            })?;
             self.worker.spawn(async move {
                 loop {
-                    let bytes=tokio::select!{
+                    let message=tokio::select!{
                         biased;
                         command=input.recv()=>match command{Some(bytes)=>bytes,None=>break},
-                        changed=changes.changed()=>{if changed.is_err(){break;}let Some(bytes)=changes.borrow_and_update().clone()else{continue;};bytes}
+                        changed=changes.changed()=>{if changed.is_err(){break;}let Some(bytes)=changes.borrow_and_update().clone()else{continue;};Outbound{bytes,destroy:false}}
                     };
-                    let destroy=matches!(serde_json::from_slice::<HostPacket>(&bytes),Ok(HostPacket::Command(wire::WindowCommand::Destroy)));
-                    if stdin.write_all(&(bytes.len() as u32).to_le_bytes()).await.is_err()||stdin.write_all(&bytes).await.is_err()||stdin.flush().await.is_err(){break;}
-                    if destroy{break;}
+                    let bytes=&message.bytes;
+                    if stdin.write_all(&(bytes.len() as u32).to_le_bytes()).await.is_err()||stdin.write_all(bytes).await.is_err()||stdin.flush().await.is_err(){break;}
+                    if message.destroy{break;}
                 }
             });
             let proxy = self.proxy.clone();
@@ -605,7 +632,7 @@ impl native::Host for DesktopHost {
                     if stdout.read_exact(&mut bytes).await.is_err() {
                         break;
                     }
-                    match serde_json::from_slice::<UiEvent>(&bytes) {
+                    match wire::decode::<UiEvent>(&bytes) {
                         Ok(event) => {
                             if proxy.send_event(HostEvent::Ui(id, event)).is_err() {
                                 break;

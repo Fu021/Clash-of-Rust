@@ -6,4 +6,4 @@ license.workspace = true
 
 [dependencies]
 serde.workspace = true
-serde_json.workspace = true
+bincode = { version = "2.0.1", default-features = false, features = ["std", "serde"] }

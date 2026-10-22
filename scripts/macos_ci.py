@@ -131,10 +131,23 @@ let policies = Dictionary(uniqueKeysWithValues: pids.compactMap { pid -> (String
     guard let app = NSRunningApplication(processIdentifier: pid_t(pid)) else { return nil }
     return (String(pid), app.activationPolicy.rawValue)
 })
-let result: [String: Any] = ["windows": matching, "activation": policies]
+let apps = NSWorkspace.shared.runningApplications.filter {
+    !$0.isTerminated && ($0.bundleIdentifier == "org.clashofrust.desktop" || $0.bundleIdentifier == "org.clashofrust.desktop.renderer")
+}.map { ["pid": Int($0.processIdentifier), "bundle": $0.bundleIdentifier ?? "", "policy": $0.activationPolicy.rawValue] as [String: Any] }
+let domain = UserDefaults.standard.persistentDomain(forName: "com.apple.dock") ?? [:]
+let tiles = ["persistent-apps", "recent-apps"].flatMap { domain[$0] as? [[String: Any]] ?? [] }
+let helperTiles = tiles.filter {
+    let tile = $0["tile-data"] as? [String: Any] ?? [:]
+    let file = tile["file-data"] as? [String: Any] ?? [:]
+    let path = (file["_CFURLString"] as? String ?? "").removingPercentEncoding ?? ""
+    return tile["bundle-identifier"] as? String == "org.clashofrust.desktop.renderer" || path.contains("Clash of Rust UI.app")
+}.count
+let result: [String: Any] = ["windows": matching, "activation": policies, "applications": apps, "helper_dock_entries": helperTiles]
 let data = try JSONSerialization.data(withJSONObject: result, options: [.prettyPrinted, .sortedKeys])
 FileHandle.standardOutput.write(data)
 ''')
+                query = REPORT/'inspect-windows'
+                subprocess.run(['/usr/bin/swiftc',swift,'-o',query],check=True,timeout=120)
                 def descendants():
                     parents, commands = {}, {}
                     for row in subprocess.check_output(['/bin/ps','-axww','-o','pid=,ppid=,comm='],text=True).splitlines():
@@ -148,7 +161,7 @@ FileHandle.standardOutput.write(data)
                     return {pid:commands.get(pid,'') for pid in owned}
                 def inspect_window(label):
                     owned = descendants()
-                    output = subprocess.check_output(['/usr/bin/swift', swift, *map(str,sorted(owned))], timeout=90)
+                    output = subprocess.check_output([query, *map(str,sorted(owned))], timeout=15)
                     result = json.loads(output)
                     write_json(REPORT/(label+'-windows.json'), result)
                     return result, owned
@@ -158,40 +171,53 @@ FileHandle.standardOutput.write(data)
                 cores = {pid for pid,command in owned.items() if Path(command).name == 'mihomo'}
                 if len(renderers) != 1: raise RuntimeError('Installed GUI must have exactly one renderer process')
                 if not cores: raise RuntimeError('Installed GUI has no owned core process')
-                if result['activation'].get(str(process.pid)) != 0:
-                    raise RuntimeError('Resident owner must retain the regular Dock application identity')
-                if any(result['activation'].get(str(pid)) != 1 for pid in renderers):
-                    raise RuntimeError('Renderer must use accessory activation without a second Dock icon')
+                def verify_identity(result, renderers):
+                    if result['activation'].get(str(process.pid)) != 0:
+                        raise RuntimeError('Resident owner must retain the regular Dock application identity')
+                    owners = {a['pid'] for a in result['applications'] if a['bundle']=='org.clashofrust.desktop'}
+                    helpers = {a['pid'] for a in result['applications'] if a['bundle']=='org.clashofrust.desktop.renderer'}
+                    if owners != {process.pid} or helpers != renderers:
+                        raise RuntimeError('Renderer reused the owner identity or a stale application registration survived')
+                    if any(result['activation'].get(str(pid)) != 1 for pid in renderers):
+                        raise RuntimeError('Renderer must use accessory activation without a second Dock icon')
+                    if result['helper_dock_entries']:
+                        raise RuntimeError('Renderer appeared in Dock or recent-application preferences')
+                verify_identity(result,renderers)
                 # Exercise the process boundary without AppleScript/Accessibility
                 # permission: terminate only our renderer, then use LaunchServices
                 # to reopen the app. The native owner and core must survive.
-                for pid in renderers: os.kill(pid, signal.SIGTERM)
-                deadline = time.monotonic()+10
-                while renderers & descendants().keys() and time.monotonic() < deadline:
-                    time.sleep(.1)
-                if renderers & descendants().keys(): raise RuntimeError('Renderer did not exit')
-                time.sleep(1.2)  # Let the owner's one-second reaper acknowledge EOF.
-                if process.poll() is not None: raise RuntimeError('Renderer exit also terminated the resident owner')
-                subprocess.run(['/usr/bin/open','-a',str(app)],check=True,timeout=15)
-                deadline = time.monotonic()+30
-                while time.monotonic() < deadline:
-                    current = descendants()
-                    if any(Path(command).name == 'clash-desktop-ui' for command in current.values()): break
-                    if process.poll() is not None: raise RuntimeError('Owner exited while reopening GUI')
-                    time.sleep(.2)
-                else: raise RuntimeError('LaunchServices did not restore the renderer')
-                restored, current = inspect_window(label+'-reopened')
-                while not restored['windows'] and time.monotonic() < deadline:
-                    time.sleep(.2)
-                    restored, current = inspect_window(label+'-reopened')
-                if not restored['windows']: raise RuntimeError('Restored renderer has no visible application window')
-                if cores != {pid for pid,command in current.items() if Path(command).name == 'mihomo'}:
-                    raise RuntimeError('Core restarted after the renderer exited')
-                if renderers & current.keys(): raise RuntimeError('Old renderer survived its termination request')
+                for cycle in range(5):
+                    previous = renderers
+                    for pid in previous: os.kill(pid, signal.SIGTERM)
+                    deadline = time.monotonic()+10
+                    while previous & descendants().keys() and time.monotonic() < deadline:
+                        time.sleep(.1)
+                    if previous & descendants().keys(): raise RuntimeError('Renderer did not exit')
+                    time.sleep(1.2)  # Let the owner's reaper acknowledge EOF.
+                    if process.poll() is not None: raise RuntimeError('Renderer exit also terminated the resident owner')
+                    subprocess.run(['/usr/bin/open','-a',str(app)],check=True,timeout=15)
+                    deadline = time.monotonic()+30
+                    while time.monotonic() < deadline:
+                        current = descendants()
+                        renderers = {pid for pid,command in current.items() if Path(command).name == 'clash-desktop-ui'}
+                        if renderers: break
+                        if process.poll() is not None: raise RuntimeError('Owner exited while reopening GUI')
+                        time.sleep(.2)
+                    else: raise RuntimeError('LaunchServices did not restore the renderer')
+                    restored, current = inspect_window(f'{label}-reopened-{cycle}')
+                    while not restored['windows'] and time.monotonic() < deadline:
+                        time.sleep(.2)
+                        restored, current = inspect_window(f'{label}-reopened-{cycle}')
+                    if not restored['windows']: raise RuntimeError('Restored renderer has no visible application window')
+                    verify_identity(restored,renderers)
+                    if cores != {pid for pid,command in current.items() if Path(command).name == 'mihomo'}:
+                        raise RuntimeError('Core restarted after the renderer exited')
+                    if previous & current.keys(): raise RuntimeError('Old renderer survived its termination request')
                 with proxy.open(request,timeout=2) as response:
                     if json.load(response) != version: raise RuntimeError('Core API changed after GUI recovery')
                 return {'core': version, 'window_count': len(result['windows']),
-                        'renderer_accessory': True, 'reopened_after_renderer_exit': True, 'core_pid_preserved': True}
+                        'renderer_accessory': True, 'renderer_agent_bundle': True, 'reopen_cycles': 5,
+                        'helper_dock_entries': 0, 'reopened_after_renderer_exit': True, 'core_pid_preserved': True}
             except BaseException:
                 # A native crash can precede the core readiness response. Reap
                 # this isolated launch before collecting a fresh debugger trace.
@@ -254,14 +280,18 @@ def package_tests(package, manifest, build):
 
 
 def installed_package_tests(package, manifest, build):
-    from macos_package import APP_NAME, BUNDLE_ID
+    from macos_package import APP_NAME, BUNDLE_ID, UI_APP, UI_BUNDLE_ID
     with mounted(package) as volume:
         app = volume/APP_NAME
         info = plistlib.loads((app/'Contents/Info.plist').read_bytes())
         if (info['CFBundleIdentifier'], info['ClashOfRustVersion'], info['LSMinimumSystemVersion']) != (BUNDLE_ID, manifest['version'], '14.0'):
             raise ValueError('Installed app metadata differs from CI')
-        for name in ('clash-of-rust', 'clash-desktop-ui', 'clash-tun-launcher', 'cor'):
+        for name in ('clash-of-rust', 'clash-tun-launcher', 'cor'):
             validate_binary_arch(app/'Contents/MacOS'/name, 'macos', manifest['arch'])
+        helper_info = plistlib.loads((app/UI_APP/'Contents/Info.plist').read_bytes())
+        if helper_info['CFBundleIdentifier'] != UI_BUNDLE_ID or helper_info.get('LSUIElement') is not True:
+            raise ValueError('Renderer must have a unique agent application identity before launch')
+        validate_binary_arch(app/UI_APP/'Contents/MacOS/clash-desktop-ui','macos',manifest['arch'])
         validate_binary_arch(app/'Contents/Resources/resources/mihomo', 'macos', manifest['arch'])
         validate_resources(app/'Contents/Resources/resources', 'macos')
         suite('Sealed app signature', lambda: logged('codesign', ['/usr/bin/codesign', '--verify', '--deep', '--strict', app]))

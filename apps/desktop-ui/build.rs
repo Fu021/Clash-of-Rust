@@ -2,6 +2,20 @@
 mod schema;
 use schema::{rust_name, variant};
 use std::{env, fs, path::PathBuf};
+fn mapped_rows(kind: &str) -> String {
+    match kind {
+        "int" | "bool" | "float" | "length" => "rows.to_vec()".into(),
+        "string" => "rows.iter().map(|v|v.as_str().into()).collect::<Vec<_>>()".into(),
+        "image" => {
+            "rows.iter().map(|v|crate::flags::label(v).1.unwrap_or_default()).collect::<Vec<_>>()"
+                .into()
+        }
+        kind => format!(
+            "rows.iter().map(convert_{}).collect::<Vec<_>>()",
+            rust_name(kind)
+        ),
+    }
+}
 fn convert(kind: &str, value: &str) -> String {
     match kind {
         "string" => format!("{value}.as_str().into()"),
@@ -9,15 +23,8 @@ fn convert(kind: &str, value: &str) -> String {
         "int" | "bool" | "float" | "length" => value.into(),
         kind if kind.starts_with('[') => {
             let inner = &kind[1..kind.len() - 1];
-            let rows = if matches!(inner, "int" | "bool" | "float" | "length") {
-                format!("{value}.rows()")
-            } else {
-                format!(
-                    "{value}.rows().into_iter().map(|v|{}).collect::<Vec<_>>()",
-                    convert(inner, "v")
-                )
-            };
-            format!("slint::ModelRc::new(slint::VecModel::from({rows}))")
+            let rows = mapped_rows(inner);
+            format!("{value}.with_rows(|rows|slint::ModelRc::new(slint::VecModel::from({rows})))")
         }
         kind => format!("convert_{}(&{value})", rust_name(kind)),
     }
@@ -68,23 +75,20 @@ fn main() {
         let field = rust_name(name);
         if roots.contains(&name.as_str()) {
             if name == "groups" {
-                code += "models.set_groups(frame.groups.rows().iter().map(|g|{let row=convert_GroupItem(g);(row,g.nodes.rows().iter().map(convert_NodePair).collect())}).collect());";
+                code += "frame.groups.with_rows(|rows|models.set_groups(rows.iter().map(|g|{let row=convert_GroupItem(g);(row,g.nodes.with_rows(|rows|rows.iter().map(convert_NodePair).collect()))}).collect()));";
             } else {
                 let row_type = &kind[1..kind.len() - 1];
                 code += &format!(
-                    "ui::models::reconcile(&models.{field},frame.{field}.rows().iter().map(convert_{}).collect());",
+                    "frame.{field}.with_rows(|rows|ui::models::reconcile(&models.{field},rows.iter().map(convert_{}).collect()));",
                     rust_name(row_type)
                 );
             }
         } else if kind.starts_with('[') {
             let inner = &kind[1..kind.len() - 1];
-            let rows = if matches!(inner, "int" | "bool" | "float" | "length") {
-                format!("frame.{field}.rows()")
-            } else {
-                let expression = convert(inner, "v");
-                format!("frame.{field}.rows().into_iter().map(|v|{expression}).collect()")
-            };
-            code += &format!("data.set_{field}(list(data.get_{field}(),{rows}));");
+            let rows = mapped_rows(inner);
+            code += &format!(
+                "frame.{field}.with_rows(|rows|data.set_{field}(list(data.get_{field}(),{rows})));\n"
+            );
         } else if kind == "string" {
             code += &format!(
                 "if data.get_{field}().as_str()!=frame.{field}.as_str(){{data.set_{field}(frame.{field}.as_str().into());}}"

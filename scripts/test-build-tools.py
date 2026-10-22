@@ -57,6 +57,38 @@ Private_Clean: 2 kB
         self.assertEqual(maps['heap']['private_bytes'], 4096)
         self.assertEqual(maps['file-backed']['rss_bytes'], 12288)
         self.assertNotIn('/private/path', json.dumps(maps))
+        classified = memory_benchmark.memory_maps(text, '/private/path/program')
+        self.assertEqual(classified['executable']['rss_bytes'],12288)
+        self.assertNotIn('/private/path',json.dumps(classified))
+
+    def test_renderer_bundle_is_an_agent_before_launch_and_signed_inside_out(self):
+        import macos_package as mac
+        import plistlib
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            payload = root/'payload'
+            (payload/'resources').mkdir(parents=True)
+            (payload/'resources/core.json').write_text('{}')
+            for name in ('clash-of-rust','clash-desktop-ui','clash-tun-launcher','cor','LICENSE','resources/mihomo'):
+                (payload/name).write_bytes(name.encode())
+            commands=[]
+            def tool(command, **kwargs):
+                commands.append([str(v) for v in command])
+                if command[0] == '/usr/bin/iconutil':
+                    Path(command[-1]).write_bytes(b'icon')
+            with patch.object(mac,'validate_binary_arch'),patch.object(mac,'run',side_effect=tool),patch.dict(os.environ,{'MACOS_SIGNING_IDENTITY':'-'}):
+                app = mac.build_app(payload,root/mac.APP_NAME,'0.6.3-dev.1','arm64')
+            helper=app/mac.UI_APP
+            info=plistlib.loads((helper/'Contents/Info.plist').read_bytes())
+            owner=plistlib.loads((app/'Contents/Info.plist').read_bytes())
+            self.assertIs(info['LSUIElement'],True)
+            self.assertNotIn('LSUIElement',owner)
+            self.assertNotEqual(info['CFBundleIdentifier'],owner['CFBundleIdentifier'])
+            self.assertEqual((helper/'Contents/MacOS'/info['CFBundleExecutable']).read_bytes(),b'clash-desktop-ui')
+            self.assertFalse((app/'Contents/MacOS/clash-desktop-ui').exists())
+            signed=[command[-1] for command in commands if command[:2]==['/usr/bin/codesign','--force']]
+            self.assertLess(signed.index(str(helper/'Contents/MacOS/clash-desktop-ui')),signed.index(str(helper)))
+            self.assertLess(signed.index(str(helper)),signed.index(str(app)))
 
     def test_memory_scene_rejects_an_early_exit_missing_core_or_gui_in_headless_sample(self):
         with tempfile.TemporaryDirectory() as temporary:

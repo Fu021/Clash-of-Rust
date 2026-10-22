@@ -81,7 +81,7 @@ macOS 失败日志、系统与网络状态、崩溃报告保存在 `macos-ci-rep
 1. 六个平台获取并校验已有程序，再生成 Windows EXE、Linux DEB、macOS DMG。
 2. Windows 验证安装、服务注册、普通用户代理/TUN、更新安装路径、卸载与用户文件保留，并扫描 Defender；PE 图标在打包阶段核验。
 3. Linux 安装 DEB 后验证普通用户系统代理、HTTP 转发、TUN 接管与清理；最新版 Ubuntu 使用同一份 Ubuntu 22.04 DEB 再验证一次。
-4. macOS 核验 App/DMG 版本、架构、资源及签名，启动安装后的 GUI/内核并验证代理/TUN；另核对界面子进程不创建额外 Dock 图标，终止子进程后可重新唤起且内核 PID 不变。当前使用 ad-hoc 签名，没有 Developer ID 与 Apple 公证。
+4. macOS 核验 App/DMG 版本、架构、资源及签名，启动安装后的 GUI/内核并验证代理/TUN；界面辅助包使用独立身份与 `LSUIElement`，连续重建界面 5 次，核对应用注册、Dock 最近应用条目及内核 PID。当前使用 ad-hoc 签名，没有 Developer ID 与 Apple 公证。
 5. Android 复用三种 ABI 的已编译 APK，检查签名、架构与 16 KiB 对齐；x86_64 最终包再运行代理/TUN 测试。`check_only` 保留固定开发签名，正式发布要求单独配置长期签名。
 6. 核对安装包、校验值、成功记录及来源后，正式模式才公开 Release；`check_only` 仅保留 Actions 附件。开发版本标记为 prerelease，不覆盖稳定版 latest。
 

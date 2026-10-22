@@ -1,6 +1,6 @@
 use crate::*;
 pub fn reconcile<T: Clone + PartialEq>(model: &List<T>, rows: Vec<T>) {
-    if model.rows() != rows {
+    if !model.with_rows(|old| old == rows.as_slice()) {
         model.set_vec(rows);
     }
 }

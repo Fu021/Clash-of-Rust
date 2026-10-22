@@ -737,8 +737,8 @@ dependencies = [
 name = "clash-desktop-protocol"
 version = "0.6.3-dev.1"
 dependencies = [
+ "bincode",
  "serde",
- "serde_json",
 ]
 
 [[package]]
