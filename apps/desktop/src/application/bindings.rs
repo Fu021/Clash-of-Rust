@@ -451,6 +451,7 @@ impl native::Host for DesktopHost {
             && let Some((_, window)) = &self.window
         {
             let _ = window.show();
+            view_state::State::ensure_reachable(window);
         }
         enqueue_window(
             id,

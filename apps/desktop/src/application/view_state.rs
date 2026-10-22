@@ -27,21 +27,15 @@ macro_rules! view_state {
                 }
             }
             pub(super) fn prepare(&self, window: &AppWindow) -> bool {
-                    // Keep the old monitor when possible; a disconnected screen
-                    // must not leave the recreated title bar unreachable.
-                    let monitors = window.window().with_winit_window(|native| {
-                        native.available_monitors().map(|monitor| {
-                            let p = monitor.position(); let s = monitor.size();
-                            (p.x, p.y, s.width, s.height)
-                        }).collect::<Vec<_>>()
-                    }).unwrap_or_default();
-                    let size = window.window().size();
-                    let (x, y) = fit_position((self.position.x, self.position.y),
-                        (size.width, size.height), &monitors);
-                    window.window().set_position(slint::PhysicalPosition::new(x, y));
-                    window.window().set_maximized(self.maximized);
-                    window.window().set_fullscreen(self.fullscreen);
+                window.window().set_position(fit_window_position(window, self.position));
+                window.window().set_maximized(self.maximized);
+                window.window().set_fullscreen(self.fullscreen);
                 self.maximized || self.fullscreen
+            }
+            pub(super) fn ensure_reachable(window: &AppWindow) {
+                let current = window.window().position();
+                let fitted = fit_window_position(window, current);
+                if fitted != current { window.window().set_position(fitted); }
             }
             pub(super) fn restore(&self, window: &AppWindow) {
                 // Populate models first, then let layout establish the scroll
@@ -62,6 +56,34 @@ macro_rules! view_state {
             }
         }
     };
+}
+
+fn fit_window_position(
+    window: &AppWindow,
+    position: slint::PhysicalPosition,
+) -> slint::PhysicalPosition {
+    // Native handles may only become available at show(). Repeat this check
+    // then, before the first frame, to handle a disconnected display safely.
+    let monitors = window
+        .window()
+        .with_winit_window(|native| {
+            native
+                .available_monitors()
+                .map(|monitor| {
+                    let p = monitor.position();
+                    let s = monitor.size();
+                    (p.x, p.y, s.width, s.height)
+                })
+                .collect::<Vec<_>>()
+        })
+        .unwrap_or_default();
+    let size = window.window().size();
+    let (x, y) = fit_position(
+        (position.x, position.y),
+        (size.width, size.height),
+        &monitors,
+    );
+    slint::PhysicalPosition::new(x, y)
 }
 
 fn fit_position(
