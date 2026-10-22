@@ -673,6 +673,7 @@ dependencies = [
  "directories",
  "futures-util",
  "hmac",
+ "hyper-util",
  "regex",
  "reqwest",
  "roxmltree 0.20.0",

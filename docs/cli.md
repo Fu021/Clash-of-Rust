@@ -198,6 +198,8 @@ CLI 后台使用 Linux systemd user unit、macOS LaunchAgent、Windows 当前用
 
 完整安装更新需要正式安装目录：Linux DEB、Windows 安装程序或 macOS `.app`。便携目录可下载后手动安装。更新前退出其他长时间运行的 CLI 查询进程，避免 Windows 可执行文件被占用。首次系统授权仍可能需要图形会话；无人值守环境可使用 `update download`。
 
+更新下载显示速度、已下载大小及匹配本次连接的实际节点链，回退直连会明确标注；控制接口无法确认出站时显示未确认，不用首页所选节点代替实际线路。`update download` 的进度写入 stderr，`--quiet` 可关闭。
+
 ```sh
 cor completion bash > ~/.cor-completion.bash
 source ~/.cor-completion.bash

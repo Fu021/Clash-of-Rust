@@ -190,7 +190,9 @@ pub(super) async fn execute(
             let available = crate::update::check(port)
                 .await?
                 .ok_or_else(|| anyhow::anyhow!("已经是最新正式版"))?;
-            let download = Arc::new(crate::update::download(available, port, |_| {}).await?);
+            let download = Arc::new(
+                crate::update::download(available, port, Some(engine.api.clone()), |_| {}).await?,
+            );
             let gui = super::gui_pid(&engine.store)?;
             let parent = gui.unwrap_or_else(std::process::id);
             let session = tokio::task::spawn_blocking(move || {

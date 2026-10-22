@@ -852,11 +852,12 @@ impl App {
                         .map_or(1, |package| package.asset.size),
                 );
                 let port = self.snapshot.running.then_some(self.settings.mixed_port);
+                let download_api = clash_of_rust::api::Api::new(&self.settings).ok();
                 return Task::run(
                     desktop_runtime::stream::channel(8, async move |output| {
                         let (sender, mut progress) = tokio::sync::mpsc::channel(4);
                         let download = futures_util::future::Abortable::new(
-                            update::download(available, port, move |value| {
+                            update::download(available, port, download_api, move |value| {
                                 let _ = sender.try_send(value);
                             }),
                             registration,

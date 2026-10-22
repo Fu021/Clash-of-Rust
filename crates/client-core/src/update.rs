@@ -6,17 +6,31 @@ use serde::Deserialize;
 use sha2::{Digest, Sha256};
 use std::{path::Path, time::Duration};
 use tokio::io::AsyncWriteExt;
+mod route;
+pub use route::Observer as RouteObserver;
 
 const API: &str = "https://api.github.com/repos/Fu021/Clash-of-Rust/releases?per_page=100";
 const RELEASES: &str = "https://github.com/Fu021/Clash-of-Rust/releases";
 const LIMIT: u64 = 512 * 1024 * 1024;
 
-#[derive(Debug, Clone, Copy, Default)]
+#[derive(Debug, Clone, Default)]
 pub struct Progress {
     pub received: u64,
     pub total: u64,
     pub bytes_per_second: u64,
     pub route: &'static str,
+    pub outbound: Option<std::sync::Arc<str>>,
+}
+impl Progress {
+    pub fn routing(&self) -> String {
+        match self.outbound.as_deref() {
+            Some(node) if node == "DIRECT" || node.starts_with("DIRECT → ") => {
+                format!("{} · 直连 ({node})", self.route)
+            }
+            Some(node) => format!("{} · {node}", self.route),
+            None => format!("{} · 正在确认出站", self.route),
+        }
+    }
 }
 
 #[derive(Clone, Debug)]
@@ -183,8 +197,10 @@ pub async fn download(
     package: &Package,
     port: Option<u16>,
     path: &Path,
+    api: Option<&crate::api::Api>,
     mut progress: impl FnMut(Progress),
 ) -> Result<()> {
+    ensure!(package.size > 0 && package.size <= LIMIT, "安装包大小无效");
     let parent = path.parent().context("更新缓存路径无效")?;
     tokio::fs::create_dir_all(parent).await?;
     let partial = path.with_extension("partial");
@@ -213,6 +229,13 @@ pub async fn download(
                 "安装包下载返回 HTTP {}",
                 response.status()
             );
+            ensure!(
+                response
+                    .content_length()
+                    .is_none_or(|size| size == package.size),
+                "安装包大小与发布信息不一致"
+            );
+            let observer = RouteObserver::new(&response, api.cloned(), route.proxy.is_none());
             let file = tokio::fs::File::create(&partial).await?;
             let mut file = tokio::io::BufWriter::with_capacity(256 * 1024, file);
             let mut count = 0u64;
@@ -236,6 +259,7 @@ pub async fn download(
                         bytes_per_second: ((count - rate_received) as f64 / elapsed.max(0.001))
                             as u64,
                         route: route.label,
+                        outbound: observer.outbound(),
                     });
                     if elapsed >= 1.0 {
                         rate_started = std::time::Instant::now();
@@ -258,6 +282,7 @@ pub async fn download(
                     / rate_started.elapsed().as_secs_f64().max(0.001))
                     as u64,
                 route: route.label,
+                outbound: observer.outbound(),
             });
             Ok::<(), anyhow::Error>(())
         }
@@ -325,7 +350,7 @@ mod tests {
         let root = tempfile::tempdir().unwrap();
         let path = root.path().join("update.apk");
         let mut progress = Vec::new();
-        download(&package, None, &path, |value| progress.push(value))
+        download(&package, None, &path, None, |value| progress.push(value))
             .await
             .unwrap();
         assert_eq!(std::fs::read(&path).unwrap(), body);

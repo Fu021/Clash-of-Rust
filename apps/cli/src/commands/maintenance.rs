@@ -163,11 +163,14 @@ async fn update(args: &Args) -> Result<()> {
         output::confirm(args, "下载并安装最新正式版，停止当前内核和后台？").await?;
         return output::emit(args, backend::request(args, Command::UpdateInstall).await?);
     }
-    let port = if let Some(remote) = backend::connect(args, false).await? {
+    let (port, api) = if let Some(remote) = backend::connect(args, false).await? {
         let meta: Meta = remote.request(Command::Meta).await?;
-        meta.running.then_some(meta.settings.mixed_port)
+        (
+            meta.running.then_some(meta.settings.mixed_port),
+            Some(clash_client_core::api::Api::new(&meta.settings)?),
+        )
     } else {
-        None
+        (None, None)
     };
     let available = clash_client_runtime::update::check(port).await?;
     if args.path == "update check" {
@@ -183,7 +186,25 @@ async fn update(args: &Args) -> Result<()> {
     }
     let output_path = backend::absolute(args.get("output").context("请提供 --output FILE")?)?;
     let available = available.context("已经是最新正式版")?;
-    let downloaded = clash_client_runtime::update::download(available, port, |_| {}).await?;
+    let mut last_report: Option<std::time::Instant> = None;
+    let downloaded = clash_client_runtime::update::download(available, port, api, |value| {
+        if !args.flag("quiet")
+            && value.received > 0
+            && (value.received == value.total
+                || last_report
+                    .is_none_or(|last| last.elapsed() >= std::time::Duration::from_secs(1)))
+        {
+            eprintln!(
+                "下载 {}/{} B · {} B/s · {}",
+                value.received,
+                value.total,
+                value.bytes_per_second,
+                value.routing()
+            );
+            last_report = Some(std::time::Instant::now());
+        }
+    })
+    .await?;
     let parent = output_path.parent().context("导出路径无效")?;
     std::fs::create_dir_all(parent)?;
     clash_client_runtime::assets::atomic_copy(downloaded.package_path(), &output_path)?;

@@ -382,6 +382,7 @@ fn checksum(bytes: &[u8]) -> Result<String> {
 pub async fn download(
     available: Available,
     proxy_port: Option<u16>,
+    api: Option<crate::api::Api>,
     report: impl FnMut(Progress),
 ) -> Result<Downloaded> {
     if cfg!(windows)
@@ -393,12 +394,13 @@ pub async fn download(
         bail!("该版本不支持自动安装，请从 Release 手动升级");
     }
     let routes = crate::network::available_routes(proxy_port, "https");
-    download_routes(available, &routes, report).await
+    download_routes(available, &routes, api.as_ref(), report).await
 }
 
 async fn download_routes(
     available: Available,
     routes: &[crate::network::Route],
+    api: Option<&crate::api::Api>,
     mut report: impl FnMut(Progress),
 ) -> Result<Downloaded> {
     let size = available
@@ -415,10 +417,15 @@ async fn download_routes(
             route: route.label,
             ..Progress::default()
         });
-        match download_package(available.clone(), route.proxy.as_deref(), |mut value| {
-            value.route = route.label;
-            report(value);
-        })
+        match download_package(
+            available.clone(),
+            route.proxy.as_deref(),
+            api,
+            |mut value| {
+                value.route = route.label;
+                report(value);
+            },
+        )
         .await
         {
             Ok(downloaded) => return Ok(downloaded),
@@ -431,6 +438,7 @@ async fn download_routes(
 async fn download_package(
     available: Available,
     proxy: Option<&str>,
+    api: Option<&crate::api::Api>,
     report: impl FnMut(Progress),
 ) -> Result<Downloaded> {
     let package = available
@@ -469,6 +477,7 @@ async fn download_package(
         package.asset.size,
         &expected,
         &path,
+        (api.cloned(), proxy.is_none()),
         report,
     )
     .await?;
@@ -486,6 +495,7 @@ async fn transfer(
     size: u64,
     expected: &str,
     path: &std::path::Path,
+    observe: (Option<crate::api::Api>, bool),
     mut report: impl FnMut(Progress),
 ) -> Result<()> {
     let mut response = client
@@ -504,6 +514,8 @@ async fn transfer(
     {
         bail!("安装包大小与 Release 不一致");
     }
+    let (api, direct) = observe;
+    let observer = clash_client_core::update::RouteObserver::new(&response, api, direct);
     let file = tokio::fs::File::create(path)
         .await
         .context("无法写入安装包，请检查磁盘空间与权限")?;
@@ -533,6 +545,7 @@ async fn transfer(
                 received,
                 total: size,
                 bytes_per_second: ((received - rate_received) as f64 / elapsed.max(0.001)) as u64,
+                outbound: observer.outbound(),
                 ..Progress::default()
             });
             if elapsed >= 1.0 {
@@ -833,6 +846,7 @@ mod tests {
                     256 * 1024,
                     &expected,
                     &path,
+                    (None, true),
                     |value| {
                         let _ = progress.send(value.received);
                     },
@@ -894,6 +908,7 @@ mod tests {
             body.len() as u64,
             &expected,
             &path,
+            (None, true),
             |value| progress.push(value),
         )
         .await
@@ -944,6 +959,7 @@ mod tests {
                     size,
                     &expected,
                     &path,
+                    (None, true),
                     |_| {}
                 )
                 .await
@@ -991,6 +1007,7 @@ mod tests {
             3,
             &format!("{:x}", Sha256::digest(b"abc")),
             &directory.path().join("package"),
+            (None, false),
             |_| {},
         )
         .await
@@ -1062,7 +1079,7 @@ mod tests {
             },
         ];
         let mut progress = Vec::new();
-        let downloaded = download_routes(available, &routes, |value| progress.push(value))
+        let downloaded = download_routes(available, &routes, None, |value| progress.push(value))
             .await
             .unwrap();
         assert_eq!(std::fs::read(&downloaded.package).unwrap(), body);

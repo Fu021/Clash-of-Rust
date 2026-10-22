@@ -485,9 +485,10 @@ async fn run_loop(
                             state.update_busy=true;state.update_downloading=true;state.update_status="正在下载更新…".into();state.update_progress=0.0;
                             let path=state.update_path.clone();
                             let port=state.session.settings.mixed_port;let send=updates.clone();
+                            let download_api=state.session.api.clone();
                             update_job=Some(tokio::spawn(async move {
                                 let report=send.clone();
-                                let result=core::update::download(&package,Some(port),&path,move|value|{let _=report.try_send(Update::DownloadProgress(value));}).await;
+                                let result=core::update::download(&package,Some(port),&path,Some(&download_api),move|value|{let _=report.try_send(Update::DownloadProgress(value));}).await;
                                 let _=send.send(Update::Downloaded(result.map_err(|e|format!("{e:#}")))).await;
                             }));
                         }
@@ -701,9 +702,9 @@ async fn run_loop(
                     Some(Update::DownloadProgress(value))=>{
                         state.update_progress=value.received as f32/value.total.max(1) as f32;
                         state.update_status=if value.received==0 {
-                            format!("正在连接下载 · {}",value.route)
+                            format!("正在连接下载 · {}",value.routing())
                         } else {
-                            format!("下载 {}/{} · {}/s · {}",bytes(value.received),bytes(value.total),bytes(value.bytes_per_second),value.route)
+                            format!("下载 {}/{} · {}/s · {}",bytes(value.received),bytes(value.total),bytes(value.bytes_per_second),value.routing())
                         };
                     }
                     Some(Update::Downloaded(result))=>{
