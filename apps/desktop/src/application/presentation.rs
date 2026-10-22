@@ -468,6 +468,21 @@ impl App {
                     (progress.received as f64 / progress.total as f64).min(1.0) as f32
                 })
         );
+        let download_status = self.updates.progress.map(|progress| {
+            if progress.route.is_empty() {
+                "正在准备下载…".to_owned()
+            } else if progress.received == 0 {
+                format!("正在连接下载 · {}", progress.route)
+            } else {
+                format!(
+                    "下载 {}/{} · {}/s · {}",
+                    bytes(progress.received),
+                    bytes(progress.total),
+                    bytes(progress.bytes_per_second),
+                    progress.route,
+                )
+            }
+        });
         text!(
             get_update_status,
             set_update_status,
@@ -476,6 +491,7 @@ impl App {
                 .as_deref()
                 .or(self.updates.outcome.as_deref())
                 .or(self.updates.install_stage.as_deref())
+                .or(download_status.as_deref())
                 .unwrap_or(&self.updates.status)
         );
         data.set_network_results(strings(data.get_network_results(), &self.test_results));

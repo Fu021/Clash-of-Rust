@@ -44,6 +44,8 @@ pub struct Package {
 pub struct Progress {
     pub received: u64,
     pub total: u64,
+    pub bytes_per_second: u64,
+    pub route: &'static str,
 }
 
 #[derive(Debug)]
@@ -156,7 +158,10 @@ impl State {
         self.download_id = self.download_id.wrapping_add(1);
         let (handle, registration) = AbortHandle::new_pair();
         self.download_abort = Some(handle);
-        self.progress = Some(Progress { received: 0, total });
+        self.progress = Some(Progress {
+            total,
+            ..Progress::default()
+        });
         self.failure = None;
         self.outcome = None;
         (self.download_id, registration)
@@ -413,10 +418,16 @@ async fn download_routes(
     for route in routes {
         // Each attempt owns a fresh temporary directory and starts at zero.
         report(Progress {
-            received: 0,
             total: size,
+            route: route.label,
+            ..Progress::default()
         });
-        match download_package(available.clone(), route.proxy.as_deref(), &mut report).await {
+        match download_package(available.clone(), route.proxy.as_deref(), |mut value| {
+            value.route = route.label;
+            report(value);
+        })
+        .await
+        {
             Ok(downloaded) => return Ok(downloaded),
             Err(error) => errors.push(format!("{}：{error}", route.label)),
         }
@@ -500,12 +511,17 @@ async fn transfer(
     {
         bail!("安装包大小与 Release 不一致");
     }
-    let mut file = tokio::fs::File::create(path)
+    let file = tokio::fs::File::create(path)
         .await
         .context("无法写入安装包，请检查磁盘空间与权限")?;
+    // TLS/network chunks can be tiny. Batch them before tokio::fs offloads a
+    // write, rather than serially scheduling a disk operation for every chunk.
+    let mut file = tokio::io::BufWriter::with_capacity(256 * 1024, file);
     let mut received = 0;
     let mut digest = Sha256::new();
     let mut last_report = std::time::Instant::now();
+    let mut rate_started = last_report;
+    let mut rate_received = 0;
     while let Some(chunk) = response.chunk().await.context("下载中断或超时，请重试")? {
         received += chunk.len() as u64;
         if received > size {
@@ -516,10 +532,17 @@ async fn transfer(
             .context("写入失败，请检查磁盘空间与权限")?;
         digest.update(&chunk);
         if last_report.elapsed() >= Duration::from_millis(100) || received == size {
+            let elapsed = rate_started.elapsed().as_secs_f64();
             report(Progress {
                 received,
                 total: size,
+                bytes_per_second: ((received - rate_received) as f64 / elapsed.max(0.001)) as u64,
+                ..Progress::default()
             });
+            if elapsed >= 1.0 {
+                rate_started = std::time::Instant::now();
+                rate_received = received;
+            }
             last_report = std::time::Instant::now();
         }
     }
@@ -714,6 +737,7 @@ mod tests {
                 progress: Some(Progress {
                     received: 2048,
                     total: 4096,
+                    ..Progress::default()
                 }),
                 install_pending: true,
                 installing: None,
@@ -878,6 +902,7 @@ mod tests {
         .unwrap();
         assert_eq!(std::fs::read(path).unwrap(), body);
         assert_eq!(progress.last().unwrap().received, body.len() as u64);
+        assert!(progress.last().unwrap().bytes_per_second > 0);
         assert!(
             progress
                 .windows(2)
@@ -1050,6 +1075,10 @@ mod tests {
                 .map(|value| value.received)
                 .collect::<Vec<_>>(),
             [0, body.len() as u64, 0, body.len() as u64]
+        );
+        assert_eq!(
+            progress.iter().map(|value| value.route).collect::<Vec<_>>(),
+            ["内核代理", "内核代理", "系统代理", "系统代理"]
         );
         let directory = downloaded.directory().to_owned();
         drop(downloaded);
