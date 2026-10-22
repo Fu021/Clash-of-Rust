@@ -18,6 +18,7 @@ import urllib.request
 import uuid
 
 from build_support import ROOT, write_json, core_directory, desktop_directory, package_version
+from memory_desktop import TrayHost, close_window, wait_until
 
 
 WORKLOADS = {
@@ -99,27 +100,66 @@ def search_center(window, env):
     return 380, sum(runs[0])//2
 
 
-def gui_scenes(executable, benchmark, output, seconds, modern_layout=False, slint_layout=False, rule_overrides=None, prefix='', workload='light'):
+def client_fixture(data, workload, rule_overrides=None):
     env = dict(os.environ, GSETTINGS_BACKEND='memory', WINIT_UNIX_BACKEND='x11', WINIT_X11_SCALE_FACTOR='1')
     env.pop('WAYLAND_DISPLAY', None)
+    (data/'profiles').mkdir()
+    profile_id = str(uuid.uuid4())
+    with socket.socket() as controller, socket.socket() as mixed:
+        controller.bind(('127.0.0.1', 0))
+        mixed.bind(('127.0.0.1', 0))
+        controller_port, mixed_port = controller.getsockname()[1], mixed.getsockname()[1]
+    settings = {'controller_port': controller_port, 'mixed_port': mixed_port,
+                'secret': 'memory-benchmark', 'dark': True, 'delay_interval_minutes': 0,
+                'active_profile': profile_id, 'run_mode': 'rule', 'proxy_mode': 'off'}
+    if rule_overrides is not None:
+        settings['rule_overrides'] = rule_overrides
+    write_json(data/'settings.json', settings)
+    (data/'profiles'/f'{profile_id}.yaml').write_text(fixture(workload), encoding='utf-8')
+    write_json(data/'profiles.json', [{'id': profile_id, 'name': 'Memory workload', 'updated': 0,
+               'source': str(data/'profiles'/f'{profile_id}.yaml')}])
+    env['CLASH_OF_RUST_DATA_DIR'] = str(data)
+    return env, controller_port
+
+
+def core_running(port):
+    opener = urllib.request.build_opener(urllib.request.ProxyHandler({}))
+    request = urllib.request.Request(f'http://127.0.0.1:{port}/version',
+                                    headers={'Authorization': 'Bearer memory-benchmark'})
+    try:
+        with opener.open(request, timeout=1) as response:
+            return bool(json.load(response).get('version'))
+    except (OSError, ValueError):
+        return False
+
+
+def read_scene(path, seconds=None, role=None):
+    samples = [row for line in path.read_text().splitlines()
+               if 'elapsed_ms' in (row := json.loads(line))]
+    if not samples:
+        raise ValueError('No process memory samples: '+path.name)
+    if seconds is not None and samples[-1]['elapsed_ms'] < max(0, seconds*1000-1000):
+        raise ValueError('Measured client exited before the scene completed: '+path.name)
+    if role:
+        for row in samples:
+            roles = {process['role'] for process in row['processes']}
+            if role not in roles or 'core' not in roles or (role == 'daemon' and 'gui' in roles):
+                raise ValueError('Client/core identity is incomplete: '+path.name)
+    return samples
+
+
+def measure_process(benchmark, pid, name, output, seconds, env, mode='app'):
+    time.sleep(3)
+    with (output/(name+'.txt')).open('x') as text:
+        subprocess.run([str(benchmark), mode, str(pid), str(seconds), '250',
+                        str(output/(name+'.jsonl'))], stdout=text, check=True, env=env)
+    return read_scene(output/(name+'.jsonl'), seconds, 'daemon' if mode == 'daemon' else 'gui')
+
+
+def gui_scenes(executable, benchmark, output, seconds, modern_layout=False, slint_layout=False, rule_overrides=None, prefix='', workload='light', tray=None):
     with tempfile.TemporaryDirectory(prefix='memory-gui-') as directory, (output/(prefix+'gui.log')).open('x') as log:
         data = Path(directory)
-        (data/'profiles').mkdir()
-        profile_id = str(uuid.uuid4())
-        with socket.socket() as controller, socket.socket() as mixed:
-            controller.bind(('127.0.0.1', 0))
-            mixed.bind(('127.0.0.1', 0))
-            controller_port, mixed_port = controller.getsockname()[1], mixed.getsockname()[1]
-        benchmark_settings = {'controller_port': controller_port, 'mixed_port': mixed_port,
-                   'secret': 'memory-benchmark', 'dark': True, 'delay_interval_minutes': 0,
-                   'active_profile': profile_id, 'run_mode': 'rule', 'proxy_mode': 'off'}
-        if rule_overrides is not None:
-            benchmark_settings['rule_overrides'] = rule_overrides
-        write_json(data/'settings.json', benchmark_settings)
-        (data/'profiles'/f'{profile_id}.yaml').write_text(fixture(workload), encoding='utf-8')
-        write_json(data/'profiles.json', [{'id': profile_id, 'name': 'Memory workload', 'updated': 0,
-                   'source': str(data/'profiles'/f'{profile_id}.yaml')}])
-        env['CLASH_OF_RUST_DATA_DIR'] = str(data)
+        env, controller_port = client_fixture(data, workload, rule_overrides)
         app = subprocess.Popen([str(executable)], env=env, stdout=log, stderr=log, start_new_session=True)
         try:
             for _ in range(90):
@@ -151,11 +191,43 @@ def gui_scenes(executable, benchmark, output, seconds, modern_layout=False, slin
                 subprocess.run(['xdotool', 'mousemove', '--window', window, str(x), str(y), 'click', '1'],
                                env=env, check=True)
             def measure(name):
-                name = prefix+name
-                time.sleep(3)
-                with (output/(name+'.txt')).open('x') as text:
-                    subprocess.run([str(benchmark), 'app', str(app.pid), str(seconds), '250',
-                                    str(output/(name+'.jsonl'))], stdout=text, check=True, env=env)
+                return measure_process(benchmark, app.pid, prefix+name, output, seconds, env)
+            if tray:
+                wait_until(lambda: tray.registered(app.pid), 'measured application tray registration')
+                before = measure('tray-open')
+                close_window(window, env)
+
+                def visible():
+                    if app.poll() is not None:
+                        raise RuntimeError('Close exited the GUI instead of retaining the tray')
+                    result = subprocess.run(['xdotool', 'search', '--onlyvisible', '--pid', str(app.pid),
+                                             '--name', '^Clash of Rust'], env=env, capture_output=True)
+                    if result.returncode not in (0, 1):
+                        raise RuntimeError('Could not inspect window visibility')
+                    return result.returncode == 0
+
+                def hidden():
+                    return not visible() and core_running(controller_port)
+
+                wait_until(hidden, 'window hidden with the same GUI and core still alive')
+                after = measure('tray-hidden')
+                if not hidden():
+                    raise RuntimeError('GUI/core did not remain in the background during sampling')
+                # A second launch uses the same real show-existing-window path
+                # as opening the installed application again.
+                subprocess.run([str(executable)], env=env, stdout=log, stderr=log,
+                               check=True, timeout=20)
+                wait_until(lambda: visible() and core_running(controller_port), 'restored window')
+                core_pids = lambda rows: {p['pid'] for row in rows for p in row['processes']
+                                          if p['role'] == 'core'}
+                if core_pids(before) != core_pids(after):
+                    raise RuntimeError('Core restarted while closing the window')
+                write_json(output/(prefix+'proof.json'), {
+                    'gui_pid': app.pid, 'core_pids': sorted(core_pids(after)),
+                    'tray_registered': True, 'close_request': 'WM_DELETE_WINDOW',
+                    'hidden_during_measurement': True, 'reopened': True,
+                })
+                return
             measure('home')
             click(70, 156 if slint_layout else 126 if modern_layout else 108)
             measure('proxies-collapsed')
@@ -184,6 +256,45 @@ def gui_scenes(executable, benchmark, output, seconds, modern_layout=False, slin
             except subprocess.TimeoutExpired:
                 os.killpg(app.pid, signal.SIGKILL)
                 app.wait()
+
+
+def headless_scene(console, resources, benchmark, output, seconds, workload, rule_overrides=None, prefix='background-'):
+    with tempfile.TemporaryDirectory(prefix='memory-cli-') as directory, (output/(prefix+'cor.log')).open('x') as log:
+        data = Path(directory)
+        env, port = client_fixture(data, workload, rule_overrides)
+        for key in ('DISPLAY', 'WAYLAND_DISPLAY', 'DBUS_SESSION_BUS_ADDRESS'):
+            env.pop(key, None)
+        command = [str(console), '--json', '--yes', '--timeout', '30',
+                   '--data-dir', str(data), '--resources', str(resources)]
+        pid = identity = None
+        try:
+            subprocess.run([*command, 'start'], env=env, stdout=log, stderr=log, check=True, timeout=90)
+            endpoint = json.loads((data/'control.json').read_text())
+            if endpoint['owner'] != 'daemon':
+                raise RuntimeError('CLI did not create a headless runtime')
+            pid = endpoint['pid']
+            identity = Path(f'/proc/{pid}/stat').read_text().rsplit(')', 1)[1].split()[19]
+            wait_until(lambda: core_running(port), 'headless core readiness')
+            measure_process(benchmark, pid, prefix+'headless', output, seconds, env, mode='daemon')
+            if not core_running(port) or (data/'gui-session.json').exists():
+                raise RuntimeError('Headless measurement unexpectedly stopped or created a GUI')
+            write_json(output/(prefix+'headless-proof.json'), {
+                'daemon_pid': pid, 'owner': endpoint['owner'], 'display': False,
+                'gui_session': False, 'core_running': True,
+            })
+        finally:
+            try:
+                subprocess.run([*command, 'stop'], env=env, stdout=log, stderr=log, check=True, timeout=45)
+            finally:
+                # A failed stop must not leak this measurement's detached group.
+                # Verify PID birth time and group ownership before fallback cleanup.
+                if pid is not None:
+                    try:
+                        current = Path(f'/proc/{pid}/stat').read_text().rsplit(')', 1)[1].split()[19]
+                        if current == identity and os.getpgid(pid) == pid:
+                            os.killpg(pid, signal.SIGTERM)
+                    except (FileNotFoundError, ProcessLookupError):
+                        pass
 
 
 def summarize(output, metadata):
@@ -215,6 +326,20 @@ def summarize(output, metadata):
             measured = [row[role][field] for row in samples if row[role][field] is not None]
             values.append(f'{max(measured)/1048576:.2f}' if measured else 'unknown')
         lines.append(f'| {scene} | '+ ' | '.join(values) + ' |')
+    if metadata.get('background_scenes'):
+        lines += ['', 'Background measurements use separate fresh clients and the same subscription. '
+                  'The tray pair has an isolated StatusNotifier host; close sends WM_DELETE_WINDOW, '
+                  'then checks that the window is hidden, the original core remains alive, and the app can reopen. '
+                  'Headless uses cor start without DISPLAY, Wayland or a session bus. '
+                  'Fixture hosts and the observer are outside the measured process trees.', '',
+                  '| Scene | Client | Client RSS peak MiB | Core RSS peak MiB | Total PSS peak MiB |',
+                  '| --- | --- | ---: | ---: | ---: |']
+        for scene in metadata['background_scenes']:
+            role = 'daemon' if scene.endswith('headless') else 'gui'
+            samples = read_scene(output/(scene+'.jsonl'), metadata['gui_sample_seconds'], role)
+            values = [f"{max(row[key][field] for row in samples)/1048576:.2f}"
+                      for key, field in ((role, 'rss_bytes'), ('core', 'rss_bytes'), ('total', 'pss_bytes'))]
+            lines.append(f'| {scene} | {"cor" if role == "daemon" else "GUI"} | '+ ' | '.join(values)+' |')
     lines += ['', 'GUI peaks are observed at 250 ms intervals, not exact allocator peaks. RSS can count shared pages twice. Compare separate runs only with the same toolchain, build profile, inputs and environment. Core memory also varies independently of the Rust GUI.', '']
     report = '\n'.join(lines)
     (output/'README.md').write_text(report, encoding='utf-8')
@@ -294,6 +419,31 @@ def main():
         gui_scenes(bundle/'clash-of-rust', benchmark, output, args.seconds, modern_layout, slint_layout=slint_layout,
                    rule_overrides=overrides, prefix='rules-', workload=args.workload)
         metadata['additional_gui_rules'] = overrides
+        write_json(output/'metadata.json', metadata)
+    if slint_layout:
+        # Preserve the original visible-window scenarios without a tray host,
+        # so old baselines remain comparable. Measure normal tray use separately.
+        metadata['background_scenes'] = []
+        console = target/'cor'
+        has_cli = (source/'apps/cli/Cargo.toml').is_file()
+        if has_cli:
+            version = subprocess.check_output([str(console), '--json', 'version'], text=True)
+            if json.loads(version)['data']['version'] != metadata['version']:
+                raise ValueError('Headless executable differs from the selected source version')
+            shutil.copy2(console, bundle/'cor')
+        with TrayHost(output) as tray:
+            variants = [('background-', None)]
+            if metadata.get('additional_gui_rules'):
+                variants.append(('rules-background-', metadata['additional_gui_rules']))
+            for prefix, overrides in variants:
+                gui_scenes(bundle/'clash-of-rust', benchmark, output, args.seconds,
+                           modern_layout, slint_layout=True, rule_overrides=overrides,
+                           prefix=prefix, workload=args.workload, tray=tray)
+                metadata['background_scenes'] += [prefix+'tray-open', prefix+'tray-hidden']
+                if has_cli:
+                    headless_scene(bundle/'cor', resources, benchmark, output, args.seconds,
+                                   args.workload, overrides, prefix)
+                    metadata['background_scenes'].append(prefix+'headless')
         write_json(output/'metadata.json', metadata)
     summarize(output, metadata)
 

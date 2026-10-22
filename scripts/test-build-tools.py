@@ -30,9 +30,34 @@ _spec = importlib.util.spec_from_file_location('publish_release', build.ROOT/'sc
 release = importlib.util.module_from_spec(_spec)
 _spec.loader.exec_module(release)
 
+_memory_spec = importlib.util.spec_from_file_location('memory_benchmark', build.ROOT/'scripts/run-memory-benchmark.py')
+memory_benchmark = importlib.util.module_from_spec(_memory_spec)
+_memory_spec.loader.exec_module(memory_benchmark)
+
 
 
 class BuildTests(unittest.TestCase):
+    def test_memory_scene_rejects_an_early_exit_missing_core_or_gui_in_headless_sample(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            path = Path(temporary)/'headless.jsonl'
+
+            def sample(roles, elapsed=9750):
+                path.write_text(json.dumps({'elapsed_ms': elapsed,
+                    'processes': [{'role': role} for role in roles]})+'\n')
+
+            for roles in [('daemon',), ('gui', 'core'), ('daemon', 'gui', 'core')]:
+                sample(roles)
+                with self.assertRaisesRegex(ValueError, 'identity'):
+                    memory_benchmark.read_scene(path, seconds=10, role='daemon')
+            sample(('daemon', 'core'), elapsed=100)
+            with self.assertRaisesRegex(ValueError, 'exited'):
+                memory_benchmark.read_scene(path, seconds=10, role='daemon')
+            path.write_text('{"type":"metadata"}\n')
+            with self.assertRaisesRegex(ValueError, 'No process'):
+                memory_benchmark.read_scene(path, seconds=10, role='daemon')
+            sample(('daemon', 'core'))
+            self.assertEqual(len(memory_benchmark.read_scene(path, seconds=10, role='daemon')), 1)
+
     def setUp(self):
         # Fixtures must not inherit the workflow's real dependency snapshot.
         directory = tempfile.TemporaryDirectory()

@@ -239,6 +239,9 @@ async fn main() -> anyhow::Result<()> {
     if arguments.get(1).is_some_and(|arg| arg == "app") {
         return process_memory::run(&arguments[2..]);
     }
+    if arguments.get(1).is_some_and(|arg| arg == "daemon") {
+        return process_memory::run_daemon(&arguments[2..]);
+    }
     if arguments
         .get(1)
         .is_some_and(|arg| matches!(arg.as_str(), "--help" | "-h"))
@@ -249,6 +252,7 @@ async fn main() -> anyhow::Result<()> {
             "memory_benchmark <rules|connections|proxies> [streamed|buffered] [rows=50000] [refreshes=1]"
         );
         println!("memory_benchmark app <GUI_PID> [seconds=30] [interval_ms=250] [output.jsonl]");
+        println!("memory_benchmark daemon <COR_PID> [seconds=30] [interval_ms=250] [output.jsonl]");
         println!(
             "suite measures single parses and five replacements; app samples GUI/core RSS and Linux PSS/USS while you operate the client."
         );
@@ -412,6 +416,7 @@ mod process_memory {
     struct Sample {
         elapsed_ms: u64,
         gui: Memory,
+        daemon: Memory,
         core: Memory,
         other: Memory,
         total: Memory,
@@ -494,7 +499,11 @@ mod process_memory {
             .map(|(pid, process)| {
                 let name = process.name().to_string_lossy().into_owned();
                 let role = if pid.as_u32() == root {
-                    "gui"
+                    if matches!(name.to_ascii_lowercase().as_str(), "cor" | "cor.exe") {
+                        "daemon"
+                    } else {
+                        "gui"
+                    }
                 } else if matches!(name.to_ascii_lowercase().as_str(), "mihomo" | "mihomo.exe") {
                     "core"
                 } else {
@@ -522,6 +531,7 @@ mod process_memory {
         Sample {
             elapsed_ms,
             gui: group("gui"),
+            daemon: group("daemon"),
             core: group("core"),
             other: group("other"),
             total: Memory::sum(processes.iter().map(|process| &process.memory)),
@@ -566,14 +576,22 @@ mod process_memory {
     }
 
     pub fn run(arguments: &[String]) -> Result<()> {
+        run_kind(arguments, false)
+    }
+
+    pub fn run_daemon(arguments: &[String]) -> Result<()> {
+        run_kind(arguments, true)
+    }
+
+    fn run_kind(arguments: &[String], daemon: bool) -> Result<()> {
         ensure!(
             (1..=4).contains(&arguments.len()),
-            "用法: memory_benchmark app <GUI_PID> [seconds=30] [interval_ms=250] [output.jsonl]"
+            "用法: memory_benchmark <app|daemon> <CLIENT_PID> [seconds=30] [interval_ms=250] [output.jsonl]"
         );
-        let root: u32 = arguments[0].parse().context("GUI_PID 必须是进程号")?;
+        let root: u32 = arguments[0].parse().context("CLIENT_PID 必须是进程号")?;
         ensure!(
             root != std::process::id() && root != 0,
-            "请传入客户端 GUI 进程号"
+            "请传入客户端 GUI 或 cor 后台的进程号"
         );
         let seconds: u64 = arguments
             .get(1)
@@ -590,17 +608,15 @@ mod process_memory {
         refresh(&mut system);
         let process = system
             .process(Pid::from_u32(root))
-            .context("找不到 GUI 进程，请先打开客户端")?;
+            .context("找不到客户端进程，请先启动 GUI 或 cor 后台")?;
+        let name = process.name().to_string_lossy().to_ascii_lowercase();
         ensure!(
-            matches!(
-                process
-                    .name()
-                    .to_string_lossy()
-                    .to_ascii_lowercase()
-                    .as_str(),
-                "clash-of-rust" | "clash-of-rust.exe"
-            ),
-            "指定进程不是 Clash of Rust GUI，请检查进程号"
+            if daemon {
+                matches!(name.as_str(), "cor" | "cor.exe")
+            } else {
+                matches!(name.as_str(), "clash-of-rust" | "clash-of-rust.exe")
+            },
+            "指定进程不是所选的 Clash of Rust 客户端，请检查进程号与 app/daemon 模式"
         );
         let identity = process.start_time();
         // Never overwrite an earlier measurement by mistake.
@@ -614,18 +630,22 @@ mod process_memory {
                 &serde_json::json!({
                     "type": "metadata", "tool_version": env!("CARGO_PKG_VERSION"),
                     "os": std::env::consts::OS, "arch": std::env::consts::ARCH,
-                    "gui_pid": root, "gui_start_time": identity,
+                    "client_pid": root, "client_start_time": identity,
+                    "gui_pid": (!daemon).then_some(root),
+                    "gui_start_time": (!daemon).then_some(identity),
+                    "client_kind": if daemon { "daemon" } else { "gui" },
                     "requested_seconds": seconds, "interval_ms": interval_ms,
                     "started_at": chrono::Utc::now().to_rfc3339(),
-                    "scope": "GUI and its current descendants; observer excluded",
+                    "scope": "Selected GUI or cor process and its current descendants; observer excluded",
                     "rss_note": "sum may double-count shared pages; PSS/USS are Linux-only"
                 }),
             )?;
             writeln!(output)?;
         }
-        println!("整程序内存：GUI PID={root}，采样 {seconds}s / {interval_ms}ms；单位 MiB");
+        let label = if daemon { "cor" } else { "GUI" };
+        println!("整程序内存：{label} PID={root}，采样 {seconds}s / {interval_ms}ms；单位 MiB");
         println!(
-            "时间(s)      GUI RSS    内核 RSS    其他 RSS    合计 RSS    合计 PSS    合计 USS    内核数"
+            "时间(s)   客户端 RSS    内核 RSS    其他 RSS    合计 RSS    合计 PSS    合计 USS    内核数"
         );
         let start = Instant::now();
         let duration = Duration::from_secs(seconds);
@@ -639,10 +659,15 @@ mod process_memory {
             if !system.process(Pid::from_u32(root)).is_some_and(|process| {
                 process.start_time() == identity && process.status() != ProcessStatus::Zombie
             }) {
-                println!("GUI 已退出或 PID 已变化，结束采样。");
+                println!("客户端已退出或 PID 已变化，结束采样。");
                 break;
             }
             let measured = sample(&system, root, start.elapsed().as_millis() as u64);
+            let client = if daemon {
+                &measured.daemon
+            } else {
+                &measured.gui
+            };
             let cores = measured
                 .processes
                 .iter()
@@ -652,7 +677,7 @@ mod process_memory {
             println!(
                 "{:>7.2}  {:>11} {:>11} {:>11} {:>11} {:>11} {:>11} {:>9}",
                 measured.elapsed_ms as f64 / 1000.0,
-                mib(measured.gui.rss_bytes),
+                mib(client.rss_bytes),
                 mib(measured.core.rss_bytes),
                 mib(measured.other.rss_bytes),
                 mib(measured.total.rss_bytes),
@@ -661,7 +686,7 @@ mod process_memory {
                 cores
             );
             for (stat, value) in stats.iter_mut().zip([
-                measured.gui.rss_bytes,
+                client.rss_bytes,
                 measured.core.rss_bytes,
                 measured.other.rss_bytes,
                 measured.total.rss_bytes,
@@ -689,13 +714,13 @@ mod process_memory {
                 break;
             }
         }
-        ensure!(samples > 0, "GUI 在首次采样前退出，没有生成内存数据");
+        ensure!(samples > 0, "客户端在首次采样前退出，没有生成内存数据");
         println!(
             "\n观测汇总（{samples} 次采样，实际 {:.2}s）：",
             start.elapsed().as_secs_f64()
         );
         for (stat, label) in stats.iter().zip([
-            "GUI RSS",
+            if daemon { "cor RSS" } else { "GUI RSS" },
             "内核 RSS",
             "其他 RSS",
             "合计 RSS",
