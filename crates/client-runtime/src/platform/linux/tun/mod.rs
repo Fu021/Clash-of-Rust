@@ -27,8 +27,26 @@ fn status_number(status: &str, key: &str, radix: u32) -> Result<u64> {
 pub fn core_has_tun_permissions(pid: u32) -> Result<bool> {
     let status = std::fs::read_to_string(format!("/proc/{pid}/status"))
         .context("无法读取 mihomo 进程权限")?;
+    // A core explicitly started by root retains its effective capabilities and
+    // can call the system resolver directly. It does not use the ordinary-user
+    // launcher's ambient capabilities or its setuid DNS bridge.
+    if root_has_tun_permissions(&status)? {
+        return Ok(true);
+    }
     Ok(status_has_tun_permissions(&status)?
         && trusted::installed_dns_helper()?.metadata()?.mode() & 0o7777 == 0o4755)
+}
+
+fn root_has_tun_permissions(status: &str) -> Result<bool> {
+    let effective_uid = status
+        .lines()
+        .find_map(|line| line.strip_prefix("Uid:"))
+        .and_then(|uids| uids.split_whitespace().nth(1))
+        .context("无法读取进程用户身份")?
+        .parse::<u32>()
+        .context("进程用户身份无效")?;
+    Ok(effective_uid == 0
+        && status_number(status, "CapEff:", 16)? & NETWORK_CAPABILITIES == NETWORK_CAPABILITIES)
 }
 
 fn status_has_tun_permissions(status: &str) -> Result<bool> {
@@ -143,7 +161,9 @@ fn grant_installed_core() -> Result<()> {
 }
 
 pub fn core_launcher(core: &Path) -> &Path {
-    if core == Path::new(CORE) {
+    // The capability launcher intentionally rejects root. A root CLI already
+    // has its caller's privileges and must execute mihomo directly.
+    if core == Path::new(CORE) && unsafe { libc::geteuid() } != 0 {
         Path::new(LAUNCHER)
     } else {
         core
@@ -179,6 +199,14 @@ fn installed_authorized() -> Result<bool> {
 }
 
 fn authorize(core: &Path, terminal: bool) -> Result<()> {
+    if unsafe { libc::geteuid() } == 0 {
+        check_tun_environment()?;
+        ensure!(
+            root_has_tun_permissions(&std::fs::read_to_string("/proc/self/status")?)?,
+            "当前 root 进程缺少 TUN 网络权限，请检查容器或服务的 capability 限制"
+        );
+        return Ok(());
+    }
     ensure!(
         core == Path::new(CORE),
         "自动 TUN 授权仅支持 DEB 安装的内核，请先安装客户端"
@@ -290,6 +318,22 @@ mod tests {
             assert_eq!(status_has_tun_permissions(&status).unwrap(), ready);
         }
         assert!(status_has_tun_permissions("CapEff: 3000\n").is_err());
+    }
+
+    #[test]
+    fn root_tun_requires_effective_root_and_both_network_capabilities() {
+        for (uids, effective, ready) in [
+            ("0 0 0 0", 0x3000, true),
+            ("0 0 0 0", 0x1000, false),
+            ("0 0 0 0", 0, false),
+            ("1000 1000 1000 1000", 0x3000, false),
+            ("0 1000 0 1000", 0x3000, false),
+        ] {
+            let status = format!("Uid:\t{uids}\nCapEff:\t{effective:x}\nCapAmb:\t0\n");
+            assert_eq!(root_has_tun_permissions(&status).unwrap(), ready);
+        }
+        assert!(root_has_tun_permissions("Uid: 0\nCapEff: 3000\n").is_err());
+        assert!(root_has_tun_permissions("CapEff: 3000\n").is_err());
     }
 
     #[test]

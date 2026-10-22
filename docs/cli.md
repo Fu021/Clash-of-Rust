@@ -83,7 +83,7 @@ cor status --watch --jsonl
 cor run --data-dir /path/to/server-data
 ```
 
-Linux TUN 使用 DEB 安装的固定授权助手；第一次执行 `cor proxy tun` 或开启 Claude 保护时，会在前台调用 pkexec，可使用桌面授权代理或终端认证。授权后再由后台重启内核继承网络权限，GUI/CLI 不作为 root 长期运行。系统须提供 `/dev/net/tun`，容器/WSL 仍受设备和宿主网络能力限制。
+Linux 普通用户通过 DEB 安装的固定授权助手开启 TUN；第一次执行 `cor proxy tun` 或开启 Claude 保护时，会在前台调用 pkexec，可使用桌面授权代理或终端认证。授权后再由后台重启内核继承网络权限，客户端本身保持普通用户身份。手动以 root 运行 `cor` 时，直接启动内核并使用已有网络权限，无需 pkexec。系统须提供 `/dev/net/tun`，容器/WSL 仍受设备和宿主网络能力限制。
 
 Windows 使用安装包的网络服务，macOS 使用现有网络助手；首次安装或助手升级可能触发 UAC/系统授权。无人值守前应先在交互会话完成首次授权。系统代理作用于当前用户的桌面会话；没有桌面的服务器通常使用 `env` 或已授权 TUN。
 

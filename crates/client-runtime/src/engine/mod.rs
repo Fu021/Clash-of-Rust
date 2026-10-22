@@ -312,16 +312,13 @@ impl Engine {
         Ok(command)
     }
     fn validation_command(&self) -> Result<Command> {
-        #[cfg(any(windows, target_os = "macos"))]
-        {
-            let mut command = Command::new(self.core()?);
-            command.kill_on_drop(true);
-            #[cfg(windows)]
-            command.creation_flags(0x08000000);
-            Ok(command)
-        }
-        #[cfg(not(any(windows, target_os = "macos")))]
-        self.command()
+        // Configuration checks do not create TUN interfaces. Keep them away
+        // from privilege launchers on every platform, including root CLI use.
+        let mut command = Command::new(self.core()?);
+        command.kill_on_drop(true);
+        #[cfg(windows)]
+        command.creation_flags(0x08000000);
+        Ok(command)
     }
     async fn validate(&self, payload: &str) -> Result<()> {
         self.validate_in(payload, &self.store.runtime()).await
@@ -349,16 +346,20 @@ impl Engine {
         .await
         .context("内核配置校验超时")??;
         if !status.success() {
-            let error =
-                String::from_utf8_lossy(&stdout).to_string() + &String::from_utf8_lossy(&stderr);
-            append(
-                &self.logs,
-                format!(
-                    "[配置校验] {}",
-                    error.replace(&self.settings.secret, "[密钥]")
-                ),
-            );
-            bail!("mihomo 配置校验失败，详情见日志页");
+            let error = format!(
+                "{}\n{}",
+                String::from_utf8_lossy(&stdout),
+                String::from_utf8_lossy(&stderr)
+            )
+            .replace(&self.settings.secret, "[密钥]");
+            // Keep separate records so a fatal line after startup information
+            // is not lost to the per-record log limit. Return a bounded tail
+            // directly to callers, including a CLI with no log page.
+            for line in error.lines().filter(|line| !line.trim().is_empty()) {
+                append(&self.logs, format!("[配置校验] {line}"));
+            }
+            let detail = validation_error_detail(&error);
+            bail!("mihomo 配置校验失败（{status}）：\n{detail}");
         }
         Ok(())
     }
@@ -2240,6 +2241,15 @@ impl Drop for Engine {
     }
 }
 
+fn validation_error_detail(error: &str) -> &str {
+    let error = error.trim();
+    if error.is_empty() {
+        return "内核未返回错误详情";
+    }
+    let start = error.char_indices().rev().nth(2047).map_or(0, |(i, _)| i);
+    &error[start..]
+}
+
 #[cfg(test)]
 mod memory_tests {
     use super::*;
@@ -2317,5 +2327,14 @@ mod memory_tests {
         let captured = capture_output(reader).await.unwrap();
         producer.await.unwrap();
         assert_eq!(captured.len(), LOG_FRAME_LIMIT);
+    }
+
+    #[test]
+    fn validation_error_keeps_the_fatal_tail_on_a_utf8_boundary() {
+        let message = "启动信息".repeat(2000) + "\n根因：无效代理类型";
+        let detail = validation_error_detail(&message);
+        assert_eq!(detail.chars().count(), 2048);
+        assert!(detail.ends_with("根因：无效代理类型"));
+        assert_eq!(validation_error_detail(" \n\r\t"), "内核未返回错误详情");
     }
 }
