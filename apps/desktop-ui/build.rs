@@ -99,6 +99,7 @@ fn main() {
                 "if data.get_{field}()!=frame.{field}{{data.set_{field}(frame.{field});}}"
             );
         }
+        code.push('\n');
     }
     code += "}\n";
     fs::write(

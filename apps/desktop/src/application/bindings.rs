@@ -6,6 +6,7 @@ use runtime::native::Host as _;
 use runtime::{Size, native, window};
 use std::{process::Stdio, time::Instant};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
+#[cfg(target_os = "macos")]
 use winit::{
     application::ApplicationHandler,
     event::WindowEvent,
@@ -18,6 +19,19 @@ enum HostEvent {
     Native(native::Call),
     Ui(window::Id, UiEvent),
 }
+#[cfg(target_os = "macos")]
+type HostProxy = EventLoopProxy<HostEvent>;
+#[cfg(not(target_os = "macos"))]
+#[derive(Clone)]
+struct HostProxy(std::sync::mpsc::Sender<HostEvent>);
+#[cfg(not(target_os = "macos"))]
+impl HostProxy {
+    fn send_event(&self, event: HostEvent) -> std::io::Result<()> {
+        self.0
+            .send(event)
+            .map_err(|_| std::io::Error::from(std::io::ErrorKind::BrokenPipe))
+    }
+}
 struct Renderer {
     id: window::Id,
     child: tokio::process::Child,
@@ -28,8 +42,26 @@ struct Renderer {
     retiring: bool,
     revision: u64,
 }
+fn allow_renderer_focus(child: &tokio::process::Child) {
+    #[cfg(windows)]
+    if let Some(pid) = child.id() {
+        // The tray receives the user's click in the host process. Grant only
+        // our renderer permission to raise its window in response.
+        unsafe {
+            windows_sys::Win32::UI::WindowsAndMessaging::AllowSetForegroundWindow(pid);
+        }
+    }
+    #[cfg(not(windows))]
+    let _ = child;
+}
 impl Renderer {
     fn send(&self, packet: HostPacket) {
+        if matches!(
+            &packet,
+            HostPacket::Command(wire::WindowCommand::Show | wire::WindowCommand::Focus)
+        ) {
+            allow_renderer_focus(&self.child);
+        }
         if let Ok(bytes) = wire::encode(&packet) {
             let _ = self.commands.send(bytes);
         }
@@ -38,7 +70,7 @@ impl Renderer {
 struct DesktopHost {
     app: App,
     worker: Arc<tokio::runtime::Runtime>,
-    proxy: EventLoopProxy<HostEvent>,
+    proxy: HostProxy,
     window: Option<Renderer>,
     retired: Vec<Renderer>,
     data: UiData,
@@ -62,8 +94,15 @@ pub(super) fn run(
     startup: Option<tray::Startup>,
     state: window_state::State,
 ) -> anyhow::Result<()> {
+    #[cfg(target_os = "macos")]
     let events = EventLoop::<HostEvent>::with_user_event().build()?;
+    #[cfg(target_os = "macos")]
     let proxy = events.create_proxy();
+    #[cfg(not(target_os = "macos"))]
+    let (proxy, events) = {
+        let (sender, receiver) = std::sync::mpsc::channel();
+        (HostProxy(sender), receiver)
+    };
     let worker = Arc::new(
         tokio::runtime::Builder::new_multi_thread()
             .enable_all()
@@ -112,7 +151,21 @@ pub(super) fn run(
             }
         }
     });
-    let result = events.run_app(&mut host);
+    #[cfg(target_os = "macos")]
+    let result = events.run_app(&mut host).map_err(anyhow::Error::from);
+    #[cfg(not(target_os = "macos"))]
+    let result: anyhow::Result<()> = {
+        // Linux/Windows tray and notification integrations own their native
+        // event threads. The resident owner needs no display connection.
+        host.start();
+        for event in events {
+            host.event(event);
+            if host.quit {
+                break;
+            }
+        }
+        Ok(())
+    };
     ticker.abort();
     let mut renderers = host.retired;
     if let Some(window) = host.window.take() {
@@ -430,8 +483,8 @@ impl DesktopHost {
         }
     }
 }
-impl ApplicationHandler<HostEvent> for DesktopHost {
-    fn resumed(&mut self, _events: &ActiveEventLoop) {
+impl DesktopHost {
+    fn start(&mut self) {
         if self.started {
             return;
         }
@@ -446,8 +499,7 @@ impl ApplicationHandler<HostEvent> for DesktopHost {
             );
         }
     }
-    fn window_event(&mut self, _: &ActiveEventLoop, _: WindowId, _: WindowEvent) {}
-    fn user_event(&mut self, events: &ActiveEventLoop, event: HostEvent) {
+    fn event(&mut self, event: HostEvent) {
         match event {
             HostEvent::Message(message) => self.message(message),
             HostEvent::Native(call) => {
@@ -456,6 +508,16 @@ impl ApplicationHandler<HostEvent> for DesktopHost {
             }
             HostEvent::Ui(id, event) => self.ui_event(id, event),
         }
+    }
+}
+#[cfg(target_os = "macos")]
+impl ApplicationHandler<HostEvent> for DesktopHost {
+    fn resumed(&mut self, _: &ActiveEventLoop) {
+        self.start();
+    }
+    fn window_event(&mut self, _: &ActiveEventLoop, _: WindowId, _: WindowEvent) {}
+    fn user_event(&mut self, events: &ActiveEventLoop, event: HostEvent) {
+        self.event(event);
         if self.quit {
             events.exit();
         }
@@ -494,6 +556,7 @@ impl native::Host for DesktopHost {
             #[cfg(windows)]
             command.creation_flags(0x08000000);
             let mut child = command.spawn()?;
+            allow_renderer_focus(&child);
             let mut stdin = child.stdin.take().unwrap();
             let mut stdout = child.stdout.take().unwrap();
             let (commands, mut input) = tokio::sync::mpsc::unbounded_channel::<Vec<u8>>();
@@ -647,7 +710,16 @@ impl native::Host for DesktopHost {
         }
     }
     fn focus(&mut self, target: &str) {
+        // The target can have just been mounted by a navigation intent. Put
+        // that frame in the ordered queue before focusing, rather than letting
+        // the command overtake the latest-value presentation slot.
+        self.app.present(&self.data, &mut self.models);
         if let Some(window) = &self.window {
+            window.send(HostPacket::Frame {
+                data: self.data.snapshot(),
+                accepted: window.revision,
+                view_ready: false,
+            });
             window.send(HostPacket::Command(wire::WindowCommand::FocusInput(
                 target.into(),
             )));

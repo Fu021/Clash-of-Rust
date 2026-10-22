@@ -115,6 +115,7 @@ def gui_smoke(app, label):
                 swift = REPORT/'windows.swift'
                 swift.write_text('''import Foundation
 import CoreGraphics
+import AppKit
 let pids = Set(CommandLine.arguments.dropFirst().compactMap(Int.init))
 let windows = CGWindowListCopyWindowInfo(.optionAll, kCGNullWindowID) as? [[String: Any]] ?? []
 let matching = windows.filter {
@@ -126,21 +127,71 @@ let matching = windows.filter {
           let height = bounds["Height"] as? NSNumber else { return false }
     return width.doubleValue >= 800 && height.doubleValue >= 450
 }
-let data = try JSONSerialization.data(withJSONObject: matching, options: [.prettyPrinted, .sortedKeys])
+let policies = Dictionary(uniqueKeysWithValues: pids.compactMap { pid -> (String, Int)? in
+    guard let app = NSRunningApplication(processIdentifier: pid_t(pid)) else { return nil }
+    return (String(pid), app.activationPolicy.rawValue)
+})
+let result: [String: Any] = ["windows": matching, "activation": policies]
+let data = try JSONSerialization.data(withJSONObject: result, options: [.prettyPrinted, .sortedKeys])
 FileHandle.standardOutput.write(data)
 ''')
-                parents = {}
-                for row in subprocess.check_output(['/bin/ps','-axo','pid=,ppid='],text=True).splitlines():
-                    parts = row.split()
-                    if len(parts) == 2: parents[int(parts[0])] = int(parts[1])
-                owned = {process.pid}
-                while extra := {pid for pid,parent in parents.items() if parent in owned} - owned:
-                    owned |= extra
-                output = subprocess.check_output(['/usr/bin/swift', swift, *map(str,sorted(owned))], timeout=90)
-                windows = json.loads(output)
-                write_json(REPORT/(label+'-windows.json'), windows)
-                if not windows: raise RuntimeError('Core is healthy but macOS reports no application window')
-                return {'core': version, 'window_count': len(windows)}
+                def descendants():
+                    parents, commands = {}, {}
+                    for row in subprocess.check_output(['/bin/ps','-axww','-o','pid=,ppid=,comm='],text=True).splitlines():
+                        parts = row.split(None, 2)
+                        if len(parts) == 3:
+                            pid, parent = map(int,parts[:2])
+                            parents[pid], commands[pid] = parent, parts[2]
+                    owned = {process.pid}
+                    while extra := {pid for pid,parent in parents.items() if parent in owned} - owned:
+                        owned |= extra
+                    return {pid:commands.get(pid,'') for pid in owned}
+                def inspect_window(label):
+                    owned = descendants()
+                    output = subprocess.check_output(['/usr/bin/swift', swift, *map(str,sorted(owned))], timeout=90)
+                    result = json.loads(output)
+                    write_json(REPORT/(label+'-windows.json'), result)
+                    return result, owned
+                result, owned = inspect_window(label)
+                if not result['windows']: raise RuntimeError('Core is healthy but macOS reports no application window')
+                renderers = {pid for pid,command in owned.items() if Path(command).name == 'clash-desktop-ui'}
+                cores = {pid for pid,command in owned.items() if Path(command).name == 'mihomo'}
+                if len(renderers) != 1: raise RuntimeError('Installed GUI must have exactly one renderer process')
+                if not cores: raise RuntimeError('Installed GUI has no owned core process')
+                if result['activation'].get(str(process.pid)) != 0:
+                    raise RuntimeError('Resident owner must retain the regular Dock application identity')
+                if any(result['activation'].get(str(pid)) != 1 for pid in renderers):
+                    raise RuntimeError('Renderer must use accessory activation without a second Dock icon')
+                # Exercise the process boundary without AppleScript/Accessibility
+                # permission: terminate only our renderer, then use LaunchServices
+                # to reopen the app. The native owner and core must survive.
+                for pid in renderers: os.kill(pid, signal.SIGTERM)
+                deadline = time.monotonic()+10
+                while renderers & descendants().keys() and time.monotonic() < deadline:
+                    time.sleep(.1)
+                if renderers & descendants().keys(): raise RuntimeError('Renderer did not exit')
+                time.sleep(1.2)  # Let the owner's one-second reaper acknowledge EOF.
+                if process.poll() is not None: raise RuntimeError('Renderer exit also terminated the resident owner')
+                subprocess.run(['/usr/bin/open','-a',str(app)],check=True,timeout=15)
+                deadline = time.monotonic()+30
+                while time.monotonic() < deadline:
+                    current = descendants()
+                    if any(Path(command).name == 'clash-desktop-ui' for command in current.values()): break
+                    if process.poll() is not None: raise RuntimeError('Owner exited while reopening GUI')
+                    time.sleep(.2)
+                else: raise RuntimeError('LaunchServices did not restore the renderer')
+                restored, current = inspect_window(label+'-reopened')
+                while not restored['windows'] and time.monotonic() < deadline:
+                    time.sleep(.2)
+                    restored, current = inspect_window(label+'-reopened')
+                if not restored['windows']: raise RuntimeError('Restored renderer has no visible application window')
+                if cores != {pid for pid,command in current.items() if Path(command).name == 'mihomo'}:
+                    raise RuntimeError('Core restarted after the renderer exited')
+                if renderers & current.keys(): raise RuntimeError('Old renderer survived its termination request')
+                with proxy.open(request,timeout=2) as response:
+                    if json.load(response) != version: raise RuntimeError('Core API changed after GUI recovery')
+                return {'core': version, 'window_count': len(result['windows']),
+                        'renderer_accessory': True, 'reopened_after_renderer_exit': True, 'core_pid_preserved': True}
             except BaseException:
                 # A native crash can precede the core readiness response. Reap
                 # this isolated launch before collecting a fresh debugger trace.
