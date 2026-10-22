@@ -13,16 +13,16 @@ component StatusCard inherits MCard {
             MText { width: parent.width; height: parent.height; text: MobileData.vpn-connected ? "✓" : "○"; color: Theme.accent; horizontal-alignment: center; font-size: 23px; }
         }
         VerticalLayout { spacing: 5px;
-            MHeading { text: MobileData.vpn-connected ? "VPN 已连接" : "VPN 未连接"; wrap: word-wrap; }
+            MHeading { text: MobileData.vpn-connected ? "VPN 已连接" : MobileData.vpn-pending ? "VPN 连接中…" : "VPN 未连接"; wrap: word-wrap; }
             MSmall { text: MobileData.core-running ? "内核运行中" : "内核尚未运行"; }
         }
-        if Theme.text-scale <= 1.25: MTag { text: MobileData.vpn-connected ? "已连接" : "未连接"; tone: MobileData.vpn-connected ? 0 : 4; }
+        if Theme.text-scale <= 1.25: MTag { text: MobileData.vpn-connected ? "已连接" : MobileData.vpn-pending ? "连接中" : "未连接"; tone: MobileData.vpn-connected ? 0 : MobileData.vpn-pending ? 2 : 4; }
     }
     MText { text: MobileData.node; color: Theme.accent; font-size: MobileTypography.font-size(20); font-weight: 600; }
     MSmall { text: MobileData.profile; }
     HorizontalLayout { spacing: MobileTypography.small-gap;
-        MButton { text: MobileData.vpn-connected ? "断开连接" : "连接 VPN"; primary: true; busy: MobileData.working; enabled: !MobileData.working;
-            clicked => { MobileActions.request(MobileData.vpn-connected ? MobileIntent.disconnect : MobileIntent.connect, "", ""); }
+        MButton { text: MobileData.vpn-connected ? "断开连接" : MobileData.vpn-pending ? "取消连接" : "连接 VPN"; primary: true; busy: MobileData.working; enabled: !MobileData.working;
+            clicked => { MobileActions.request(MobileData.vpn-connected || MobileData.vpn-pending ? MobileIntent.disconnect : MobileIntent.connect, "", ""); }
         }
         MButton { text: MobileData.core-running ? "选择节点" : "重启内核";
             clicked => { if MobileData.core-running { MobileView.navigate(1); } else { MobileActions.request(MobileIntent.restart-core, "", ""); } }

@@ -16,8 +16,9 @@ import org.json.JSONObject;
 public final class MainActivity extends NativeActivity {
     static { System.loadLibrary("clash_mobile"); }
     private static final int VPN = 10, OPEN = 11, SAVE = 12, NOTIFICATIONS = 13;
-    private boolean vpnPrompt;
+    private volatile boolean vpnPrompt;
     private boolean vpnReconfigure;
+    private String vpnStartRequest;
     private boolean vpnAuthorizationOnly;
     private long vpnAuthorizationRequest;
     private static volatile String vpnAuthorizationState = "{}";
@@ -85,8 +86,15 @@ public final class MainActivity extends NativeActivity {
                     .put("dark", Appearance.systemDark(this))
                     .put("notification_speeds",getSharedPreferences("appearance",MODE_PRIVATE).getBoolean("notification-speeds",true))
                     .put("excluded_apps",getSharedPreferences("vpn",MODE_PRIVATE).getStringSet("excluded",Collections.emptySet()).size()).toString();
-                case "connect": TunnelService.clearError(); runOnUiThread(this::prepareVpn); break;
-                case "reconnect": TunnelService.clearError(); runOnUiThread(() -> prepareVpn(true)); break;
+                case "connect":
+                case "reconnect": {
+                    if (vpnPrompt) break;
+                    String request = TunnelService.prepareStart(this);
+                    boolean reconfigure = op.equals("reconnect");
+                    TunnelService.clearError();
+                    runOnUiThread(() -> prepareVpn(reconfigure, request));
+                    break;
+                }
                 case "authorize-vpn": {
                     long request = data.getLong("request");
                     runOnUiThread(() -> authorizeVpn(request));
@@ -205,7 +213,8 @@ public final class MainActivity extends NativeActivity {
         if (Build.VERSION.SDK_INT>=29) window.setNavigationBarContrastEnforced(false);
     }
     private void prepareVpn() {
-        prepareVpn(false);
+        if (vpnPrompt) return;
+        prepareVpn(false, TunnelService.prepareStart(this));
     }
     private void authorizationResult(long request, boolean granted, String error) {
         try {
@@ -240,21 +249,24 @@ public final class MainActivity extends NativeActivity {
             authorizationResult(request, false, error.toString());
         }
     }
-    private void prepareVpn(boolean reconfigure) {
+    private void prepareVpn(boolean reconfigure, String request) {
+        if (!TunnelService.current(this, request)) return;
         if (vpnPrompt || (TunnelService.connected() && !reconfigure)) return;
         if (!CoreBridge.ready()) { emit("error", "请先启动内核"); return; }
         Intent permission = VpnService.prepare(this);
         vpnReconfigure = reconfigure;
+        vpnStartRequest = request;
         if (permission == null) startVpn(); else {
             vpnPrompt = true;
             startActivityForResult(permission, VPN);
         }
     }
     private void startVpn() {
-        Intent start = new Intent(this, TunnelService.class);
-        if (vpnReconfigure) start.setAction(TunnelService.RECONFIGURE);
+        String request = vpnStartRequest;
+        vpnStartRequest = null;
+        if (!TunnelService.current(this, request)) { vpnReconfigure = false; return; }
+        TunnelService.start(this, vpnReconfigure, request);
         vpnReconfigure = false;
-        startForegroundService(start);
         if (Build.VERSION.SDK_INT >= 33 && checkSelfPermission(android.Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED)
             requestPermissions(new String[]{android.Manifest.permission.POST_NOTIFICATIONS}, 14);
     }
@@ -274,6 +286,7 @@ public final class MainActivity extends NativeActivity {
             }
             if (result == RESULT_OK) startVpn(); else {
                 vpnReconfigure = false;
+                vpnStartRequest = null;
                 emit("vpn-cancelled", true);
                 emit("error", "VPN 授权已取消");
             }

@@ -73,6 +73,7 @@ public final class CoreBridge {
     public static synchronized void setIpv6(boolean enabled) { ipv6Enabled = enabled; }
     public static JSONObject state() throws Exception {
         return new JSONObject().put("running", ready()).put("vpn", TunnelService.connected())
+            .put("vpn_pending", TunnelService.pending())
             .put("vpn_generation", TunnelService.generation())
             .put("protection", ProtectionRuntime.state())
             .put("vpn_error", TunnelService.error());

@@ -33,9 +33,9 @@ public final class VpnTileService extends TileService {
     private void update() {
         Tile tile=getQsTile();
         if (tile!=null) {
-            tile.setState(TunnelService.connected()?Tile.STATE_ACTIVE:Tile.STATE_INACTIVE);
+            tile.setState(TunnelService.connected() || TunnelService.pending()?Tile.STATE_ACTIVE:Tile.STATE_INACTIVE);
             tile.setLabel("Clash of Rust");
-            if (Build.VERSION.SDK_INT>=29) tile.setSubtitle(TunnelService.connected()?"VPN 已连接":"VPN 未连接");
+            if (Build.VERSION.SDK_INT>=29) tile.setSubtitle(TunnelService.connected()?"VPN 已连接":TunnelService.pending()?"正在连接…":"VPN 未连接");
             tile.updateTile();
         }
     }
@@ -45,7 +45,7 @@ public final class VpnTileService extends TileService {
     }
     @SuppressWarnings("deprecation")
     private void toggle() {
-        if (TunnelService.connected()) {
+        if (TunnelService.connected() || TunnelService.pending()) {
             try {
                 if (CoreBridge.protectedMode(this)) {
                     SystemNotifications.show(this,"Claude 保护","请先在 A÷检测中关闭 Claude 保护，再断开 VPN。");
@@ -60,7 +60,7 @@ public final class VpnTileService extends TileService {
         if (VpnService.prepare(this)==null && (CoreBridge.ready() || CoreBridge.restorable(this))) {
             // TunnelService restores the persisted core itself. A cold process
             // is not a reason to bring the Activity in front of the user's app.
-            startForegroundService(new Intent(this,TunnelService.class));
+            TunnelService.start(this,false);
         } else {
             Intent open=new Intent(this,MainActivity.class).setAction(CONNECT)
                 .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK|Intent.FLAG_ACTIVITY_SINGLE_TOP);
