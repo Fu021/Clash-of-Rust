@@ -110,7 +110,7 @@ pub fn run() -> anyhow::Result<()> {
         anyhow::bail!("界面初始化消息无效")
     };
     anyhow::ensure!(
-        protocol == wire::PROTOCOL && version == env!("CARGO_PKG_VERSION"),
+        protocol == wire::PROTOCOL && version == clash_client_core::VERSION,
         "界面与后台版本不一致"
     );
     #[cfg(windows)]
@@ -317,7 +317,7 @@ pub fn run() -> anyhow::Result<()> {
     }
     let opened = UiEvent::Opened {
         protocol: wire::PROTOCOL,
-        version: env!("CARGO_PKG_VERSION").into(),
+        version: clash_client_core::VERSION.into(),
         metrics: metrics(&window),
         preserve_native_state,
     };

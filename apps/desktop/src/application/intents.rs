@@ -238,7 +238,10 @@ impl App {
             Intent::OpenRelease => Message::OpenRelease,
             Intent::Copy => Message::Copy(a.into()),
             Intent::Quit => return self.request_exit(),
-            Intent::FocusSearch => return runtime::widget::operation::focus("page-search"),
+            Intent::FocusSearch => Message::Key(runtime::keyboard::Event::KeyPressed {
+                key: runtime::keyboard::Key::Character("f".into()),
+                modifiers: runtime::keyboard::Modifiers { command: true },
+            }),
             Intent::Escape => Message::Key(runtime::keyboard::Event::KeyPressed {
                 key: runtime::keyboard::Key::Named(runtime::keyboard::key::Named::Escape),
                 modifiers: runtime::keyboard::Modifiers::default(),

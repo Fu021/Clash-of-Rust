@@ -225,7 +225,7 @@ impl DesktopHost {
             }
         }
     }
-    fn remember_view(&mut self, view: wire::ViewState) {
+    fn remember_view(&mut self, mut view: wire::ViewState) {
         let minimized = self.window.as_ref().is_some_and(|w| w.metrics.minimized);
         if self.app.window_state.capture_position(
             view.position,
@@ -234,6 +234,9 @@ impl DesktopHost {
             view.fullscreen,
         ) {
             self.position_save_at = Some(Instant::now() + Duration::from_millis(750));
+        }
+        if view.maximized || view.fullscreen || minimized {
+            view.position = self.app.window_state.position();
         }
         self.saved_view = Some(view);
     }
@@ -306,6 +309,7 @@ impl DesktopHost {
         platform::memory::release_unused_heap();
     }
     fn reap(&mut self) {
+        let mut reaped = false;
         if let Some(window) = &mut self.window {
             if window
                 .closing
@@ -314,6 +318,7 @@ impl DesktopHost {
                 let _ = window.child.start_kill();
             }
             if let Ok(Some(status)) = window.child.try_wait() {
+                reaped = true;
                 let expected = window.closing.is_some();
                 self.window = None;
                 if !expected && !self.app.exiting {
@@ -338,8 +343,14 @@ impl DesktopHost {
             {
                 let _ = window.child.start_kill();
             }
-            !matches!(window.child.try_wait(), Ok(Some(_)))
+            let alive = !matches!(window.child.try_wait(), Ok(Some(_)));
+            reaped |= !alive;
+            alive
         });
+        if reaped && !self.app.visible {
+            // The pipe writer has also dropped its final encoded frame now.
+            platform::memory::release_unused_heap();
+        }
     }
     fn ui_event(&mut self, id: window::Id, event: UiEvent) {
         if self.current_window_id() != Some(id) {

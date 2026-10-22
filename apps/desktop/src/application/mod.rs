@@ -1238,7 +1238,7 @@ impl App {
             }
             Message::WindowStateSaved(result) => {
                 if let Err(error) = result {
-                    self.show_notice(format!("无法保存窗口尺寸：{error}"), true);
+                    self.show_notice(format!("无法保存窗口状态：{error}"), true);
                 }
             }
             Message::Window((
@@ -1963,7 +1963,7 @@ impl App {
                 return Task::perform(
                     async move {
                         if let Err(error) = state.save().await {
-                            eprintln!("无法保存窗口尺寸：{error:#}");
+                            eprintln!("无法保存窗口状态：{error:#}");
                         }
                         if let Some(engine) = engine {
                             engine
