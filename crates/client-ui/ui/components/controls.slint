@@ -67,6 +67,7 @@ export component Panel inherits Rectangle {
 // Keep the padding intact when text, controls or conditional rows change size.
 export component ContentPanel inherits Panel {
     in property <length> gap: Theme.content-gap;
+    in property <length> vertical-padding: Theme.card-padding;
     in property <bool> interactive: false;
     callback clicked();
     vertical-stretch: 0;
@@ -77,7 +78,8 @@ export component ContentPanel inherits Panel {
     }
     content := VerticalLayout {
         alignment: start;
-        padding: Theme.card-padding;
+        padding-left: Theme.card-padding; padding-right: Theme.card-padding;
+        padding-top: root.vertical-padding; padding-bottom: root.vertical-padding;
         spacing: root.gap;
         @children
     }

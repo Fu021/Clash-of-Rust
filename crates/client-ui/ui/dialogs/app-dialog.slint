@@ -2,7 +2,7 @@ import { Motion, Presence } from "../components/motion.slint";
 import { ScrollView } from "std-widgets.slint";
 import { Theme, AccentPalette } from "../theme/palette.slint";
 import { UiData, UiActions, Intent } from "../state.slint";
-import { Label, Caption, Paragraph, Heading, Panel, ContentPanel, ActionButton, Field, Select, SettingRow, CopyButton } from "../components/controls.slint";
+import { Label, Caption, Paragraph, Heading, Panel, ContentPanel, ActionButton, Field, Select, SettingRow, CopyButton, Divider } from "../components/controls.slint";
 export component AppDialog inherits Rectangle {
     in-out property <int> selected-accent: UiData.accent;
     presence := Presence { open: UiData.modal != 0; }
@@ -116,16 +116,20 @@ export component AppDialog inherits Rectangle {
                             }
                         }
                         if root.kind == 10: VerticalLayout {
-                            spacing: 0px;
-                            for item[i] in UiData.connection-details: Rectangle {
-                                height: max(44px, detail-row.preferred-height);
-                                background: mod(i, 2) == 0 ? Theme.inset : transparent;
-                                detail-row := HorizontalLayout {
-                                    padding-left: 12px; padding-right: 12px; padding-top: 10px; padding-bottom: 10px;
-                                    spacing: Theme.page-gap; cross-axis-alignment: start;
-                                    Caption { text: item.label; width: 100px * Theme.text-scale; horizontal-stretch: 0; }
+                            alignment: start; spacing: 0px;
+                            for item[i] in UiData.connection-details: VerticalLayout {
+                                alignment: start; spacing: 0px;
+                                HorizontalLayout {
+                                    padding-top: Theme.content-gap; padding-bottom: Theme.content-gap;
+                                    spacing: Theme.dialog-gap; cross-axis-alignment: start;
+                                    Caption {
+                                        text: item.label;
+                                        width: min(112px * Theme.text-scale, dialog.width * 0.25);
+                                        horizontal-stretch: 0; vertical-alignment: top; wrap: word-wrap;
+                                    }
                                     Paragraph { text: item.value; }
                                 }
+                                if i + 1 < UiData.connection-details.length: Divider { }
                             }
                         }
                         if root.kind == 12: VerticalLayout {
