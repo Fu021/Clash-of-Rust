@@ -11,6 +11,14 @@ const API: &str = "https://api.github.com/repos/Fu021/Clash-of-Rust/releases?per
 const RELEASES: &str = "https://github.com/Fu021/Clash-of-Rust/releases";
 const LIMIT: u64 = 512 * 1024 * 1024;
 
+#[derive(Debug, Clone, Copy, Default)]
+pub struct Progress {
+    pub received: u64,
+    pub total: u64,
+    pub bytes_per_second: u64,
+    pub route: &'static str,
+}
+
 #[derive(Clone, Debug)]
 pub struct Package {
     pub version: String,
@@ -175,14 +183,18 @@ pub async fn download(
     package: &Package,
     port: Option<u16>,
     path: &Path,
-    mut progress: impl FnMut(u64, u64),
+    mut progress: impl FnMut(Progress),
 ) -> Result<()> {
     let parent = path.parent().context("更新缓存路径无效")?;
     tokio::fs::create_dir_all(parent).await?;
     let partial = path.with_extension("partial");
     let mut errors = Vec::new();
     for route in crate::network::routes(port, None) {
-        progress(0, package.size);
+        progress(Progress {
+            total: package.size,
+            route: route.label,
+            ..Progress::default()
+        });
         let result = async {
             let client = client(&route, Duration::from_secs(30 * 60))?;
             let expected = checksum(
@@ -201,10 +213,13 @@ pub async fn download(
                 "安装包下载返回 HTTP {}",
                 response.status()
             );
-            let mut file = tokio::fs::File::create(&partial).await?;
+            let file = tokio::fs::File::create(&partial).await?;
+            let mut file = tokio::io::BufWriter::with_capacity(256 * 1024, file);
             let mut count = 0u64;
             let mut hash = Sha256::new();
             let mut last = std::time::Instant::now();
+            let mut rate_started = last;
+            let mut rate_received = 0;
             while let Some(chunk) = response.chunk().await? {
                 count += chunk.len() as u64;
                 ensure!(
@@ -213,8 +228,19 @@ pub async fn download(
                 );
                 file.write_all(&chunk).await?;
                 hash.update(&chunk);
-                if last.elapsed() >= Duration::from_millis(250) {
-                    progress(count, package.size);
+                if count == chunk.len() as u64 || last.elapsed() >= Duration::from_millis(250) {
+                    let elapsed = rate_started.elapsed().as_secs_f64();
+                    progress(Progress {
+                        received: count,
+                        total: package.size,
+                        bytes_per_second: ((count - rate_received) as f64 / elapsed.max(0.001))
+                            as u64,
+                        route: route.label,
+                    });
+                    if elapsed >= 1.0 {
+                        rate_started = std::time::Instant::now();
+                        rate_received = count;
+                    }
                     last = std::time::Instant::now();
                 }
             }
@@ -222,10 +248,17 @@ pub async fn download(
                 count == package.size && format!("{:x}", hash.finalize()) == expected,
                 "安装包大小或 SHA256 校验失败"
             );
-            file.sync_all().await?;
-            drop(file);
+            file.flush().await?;
+            file.into_inner().sync_all().await?;
             tokio::fs::rename(&partial, path).await?;
-            progress(count, package.size);
+            progress(Progress {
+                received: count,
+                total: package.size,
+                bytes_per_second: ((count - rate_received) as f64
+                    / rate_started.elapsed().as_secs_f64().max(0.001))
+                    as u64,
+                route: route.label,
+            });
             Ok::<(), anyhow::Error>(())
         }
         .await;
@@ -243,6 +276,67 @@ pub async fn download(
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[tokio::test]
+    async fn buffered_download_flushes_verified_bytes_and_reports_the_route() {
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+        let body = vec![42; 128 * 1024 + 3];
+        let expected = format!("{:x}", Sha256::digest(&body));
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let base = format!("http://{}", listener.local_addr().unwrap());
+        let sent = body.clone();
+        let sidecar = expected.clone();
+        let server = tokio::spawn(async move {
+            for (suffix, bytes) in [(".sha256", sidecar.into_bytes()), ("", sent)] {
+                let (mut socket, _) = listener.accept().await.unwrap();
+                let mut request = [0; 8192];
+                let mut count = 0;
+                while !request[..count].ends_with(b"\r\n\r\n") {
+                    let n = socket.read(&mut request[count..]).await.unwrap();
+                    assert!(n > 0);
+                    count += n;
+                }
+                assert!(
+                    String::from_utf8_lossy(&request[..count])
+                        .starts_with(&format!("GET /update.apk{suffix} HTTP/1.1"))
+                );
+                socket
+                    .write_all(
+                        format!(
+                            "HTTP/1.1 200 OK\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+                            bytes.len()
+                        )
+                        .as_bytes(),
+                    )
+                    .await
+                    .unwrap();
+                for part in bytes.chunks(1024) {
+                    socket.write_all(part).await.unwrap();
+                }
+            }
+        });
+        let package = Package {
+            version: "0.6.2".into(),
+            name: "update.apk".into(),
+            size: body.len() as u64,
+            url: format!("{base}/update.apk"),
+            checksum_url: format!("{base}/update.apk.sha256"),
+            digest: Some(format!("sha256:{expected}")),
+        };
+        let root = tempfile::tempdir().unwrap();
+        let path = root.path().join("update.apk");
+        let mut progress = Vec::new();
+        download(&package, None, &path, |value| progress.push(value))
+            .await
+            .unwrap();
+        assert_eq!(std::fs::read(&path).unwrap(), body);
+        assert!(!path.with_extension("partial").exists());
+        assert_eq!(progress.first().unwrap().received, 0);
+        let last = progress.last().unwrap();
+        assert_eq!(last.received, package.size);
+        assert_eq!(last.route, "直连");
+        assert!(last.bytes_per_second > 0);
+        server.await.unwrap();
+    }
     #[test]
     fn stable_updates_match_platform_and_require_a_checksum() {
         let data = serde_json::json!([

@@ -2,6 +2,7 @@
 mod discovery;
 mod install;
 use anyhow::{Context, Result, bail};
+pub use clash_client_core::update::Progress;
 use futures_util::future::{AbortHandle, AbortRegistration};
 pub use install::{
     InstallSession, cleanup, ensure_installable, handoff, handoff_owner, helper_main,
@@ -38,14 +39,6 @@ pub struct Package {
     pub asset: Asset,
     pub url: String,
     pub checksum_url: String,
-}
-
-#[derive(Debug, Clone, Copy, Default)]
-pub struct Progress {
-    pub received: u64,
-    pub total: u64,
-    pub bytes_per_second: u64,
-    pub route: &'static str,
 }
 
 #[derive(Debug)]
@@ -531,7 +524,10 @@ async fn transfer(
             .await
             .context("写入失败，请检查磁盘空间与权限")?;
         digest.update(&chunk);
-        if last_report.elapsed() >= Duration::from_millis(100) || received == size {
+        if received == chunk.len() as u64
+            || last_report.elapsed() >= Duration::from_millis(100)
+            || received == size
+        {
             let elapsed = rate_started.elapsed().as_secs_f64();
             report(Progress {
                 received,
@@ -825,7 +821,7 @@ mod tests {
         let directory = tempfile::tempdir().unwrap();
         let root = directory.path().to_owned();
         let path = root.join("package");
-        let partial = path.clone();
+        let (progress, mut observed) = tokio::sync::watch::channel(0);
         let mut state = State::default();
         let (_, registration) = state.begin_download(256 * 1024);
         let task = tokio::spawn(Abortable::new(
@@ -837,15 +833,17 @@ mod tests {
                     256 * 1024,
                     &expected,
                     &path,
-                    |_| {},
+                    |value| {
+                        let _ = progress.send(value.received);
+                    },
                 )
                 .await
             },
             registration,
         ));
         tokio::time::timeout(Duration::from_secs(3), async {
-            while !std::fs::metadata(&partial).is_ok_and(|metadata| metadata.len() > 0) {
-                tokio::time::sleep(Duration::from_millis(5)).await;
+            while *observed.borrow_and_update() == 0 {
+                observed.changed().await.unwrap();
             }
         })
         .await
