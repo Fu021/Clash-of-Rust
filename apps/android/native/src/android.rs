@@ -175,6 +175,7 @@ struct State {
     update_package: Option<core::update::Package>,
     update_status: String,
     update_busy: bool,
+    update_downloading: bool,
     update_progress: f32,
     update_downloaded: bool,
     update_path: PathBuf,
@@ -315,7 +316,7 @@ enum Update {
     Log(String, String),
     Geo(std::result::Result<core::geodata::GeoManifest, String>),
     Checked(std::result::Result<Option<core::update::Package>, String>),
-    DownloadProgress(u64, u64),
+    DownloadProgress(core::update::Progress),
     Downloaded(std::result::Result<(), String>),
 }
 async fn run_loop(
@@ -364,6 +365,7 @@ async fn run_loop(
         update_package: None,
         update_status: "尚未检查更新".into(),
         update_busy: false,
+        update_downloading: false,
         update_progress: 0.0,
         update_downloaded: false,
         update_path,
@@ -471,7 +473,7 @@ async fn run_loop(
                     refresh_requested = true;
                 } else if intent==MobileIntent::CheckUpdate {
                     if !state.update_busy {
-                        state.update_busy=true;state.update_status="正在检查更新…".into();state.update_progress=0.0;
+                        state.update_busy=true;state.update_downloading=false;state.update_status="正在检查更新…".into();state.update_progress=0.0;
                         last_update_check=std::time::Instant::now();
                         update_job=Some(start_update_check(state.session.settings.mixed_port,updates.clone()));
                     }
@@ -480,12 +482,13 @@ async fn run_loop(
                         if state.update_downloaded && state.update_path.is_file() {
                             if let Err(error)=state.session.native.request(json!({"op":"install-update"})) {state.notice=format!("{error:#}");}
                         } else {
-                            state.update_busy=true;state.update_status="正在下载更新…".into();state.update_progress=0.0;
+                            state.update_busy=true;state.update_downloading=true;state.update_status="正在下载更新…".into();state.update_progress=0.0;
                             let path=state.update_path.clone();
                             let port=state.session.settings.mixed_port;let send=updates.clone();
+                            let download_api=state.session.api.clone();
                             update_job=Some(tokio::spawn(async move {
                                 let report=send.clone();
-                                let result=core::update::download(&package,Some(port),&path,move|n,total|{let _=report.try_send(Update::DownloadProgress(n,total));}).await;
+                                let result=core::update::download(&package,Some(port),&path,Some(&download_api),move|value|{let _=report.try_send(Update::DownloadProgress(value));}).await;
                                 let _=send.send(Update::Downloaded(result.map_err(|e|format!("{e:#}")))).await;
                             }));
                         }
@@ -685,7 +688,7 @@ async fn run_loop(
                         }
                     }
                     Some(Update::Checked(result))=>{
-                        state.update_busy=false;
+                        state.update_busy=false;state.update_downloading=false;
                         match result {
                             Ok(package)=>{
                                 state.update_status=package.as_ref().map(|p|format!("发现新版本 {} · {:.1} MiB",p.version,p.size as f64/1024.0/1024.0))
@@ -696,12 +699,16 @@ async fn run_loop(
                             Err(error)=>state.update_status=error,
                         }
                     }
-                    Some(Update::DownloadProgress(n,total))=>{
-                        state.update_progress=n as f32/total.max(1) as f32;
-                        state.update_status=format!("正在下载更新… {:.0}%",state.update_progress*100.0);
+                    Some(Update::DownloadProgress(value))=>{
+                        state.update_progress=value.received as f32/value.total.max(1) as f32;
+                        state.update_status=if value.received==0 {
+                            format!("正在连接下载 · {}",value.routing())
+                        } else {
+                            format!("下载 {}/{} · {}/s · {}",bytes(value.received),bytes(value.total),bytes(value.bytes_per_second),value.routing())
+                        };
                     }
                     Some(Update::Downloaded(result))=>{
-                        state.update_busy=false;
+                        state.update_busy=false;state.update_downloading=false;
                         match result {
                             Ok(())=>{
                                 state.update_downloaded=true;state.update_status="下载完成，请在系统界面确认安装".into();
@@ -715,7 +722,7 @@ async fn run_loop(
             }
             _ = poll.tick() => {
                 if state.session.running && !state.update_busy && last_update_check.elapsed()>=Duration::from_secs(6*60*60) {
-                    last_update_check=std::time::Instant::now();state.update_busy=true;state.update_status="正在检查更新…".into();
+                    last_update_check=std::time::Instant::now();state.update_busy=true;state.update_downloading=false;state.update_status="正在检查更新…".into();
                     update_job=Some(start_update_check(state.session.settings.mixed_port,updates.clone()));
                 }
                 let minutes=state.session.settings.delay_interval_minutes;
@@ -1614,6 +1621,7 @@ fn start_delay(
 struct GroupView {
     name: String,
     group: api::Proxy,
+    expanded: bool,
     nodes: Vec<(String, api::Proxy)>,
     count: usize,
     page: usize,
@@ -1659,6 +1667,7 @@ struct Projection {
     rule_editor: Option<RuleEditor>,
     update_status: String,
     update_busy: bool,
+    update_downloading: bool,
     update_progress: f32,
     update_available: bool,
     geo_updating: bool,
@@ -1734,12 +1743,18 @@ fn project(state: &State) -> Projection {
         groups.push(GroupView {
             name: name.to_string(),
             group: group.clone(),
+            expanded: s.active_group() == Some(name.as_str()),
             nodes,
             count,
             page,
             testing: matches!(&state.delay_scope,Some(DelayScope::All))
                 || matches!(&state.delay_scope,Some(DelayScope::Group(group)) if group==name.as_str()),
         });
+    }
+    // Show the home page's actual outbound group first, keeping every other
+    // group's relative order. Direct mode has no active proxy group to expand.
+    if let Some(index) = groups.iter().position(|group| group.expanded) {
+        groups[..=index].rotate_right(1);
     }
     let node = s.node.clone();
     let document = if state.page == 4 {
@@ -1975,6 +1990,7 @@ fn project(state: &State) -> Projection {
         rule_editor: state.rule_editor.clone(),
         update_status: state.update_status.clone(),
         update_busy: state.update_busy,
+        update_downloading: state.update_downloading,
         update_progress: state.update_progress,
         update_available: state.update_package.is_some(),
         geo_updating: state.geo_updating,
@@ -2018,6 +2034,7 @@ fn apply(ui: &AndroidWindow, p: Projection) {
         view.set_copy_revision(p.copied.0);
     }
     data.set_working(false);
+    data.set_vpn_pending(p.platform["vpn_pending"].as_bool().unwrap_or(false));
     data.set_geo_updating(p.geo_updating);
     data.set_delay_busy(p.delay_busy);
     data.set_probe_status(p.probe.0.into());
@@ -2078,6 +2095,7 @@ fn apply(ui: &AndroidWindow, p: Projection) {
     let android = ui.global::<AndroidData>();
     android.set_update_status(p.update_status.into());
     android.set_update_busy(p.update_busy);
+    android.set_update_downloading(p.update_downloading);
     android.set_update_progress(p.update_progress);
     android.set_update_available(p.update_available);
     android.set_authorization_status(if p.vpn {
@@ -2255,11 +2273,11 @@ fn apply(ui: &AndroidWindow, p: Projection) {
         rows(
             p.groups
                 .into_iter()
-                .enumerate()
-                .map(|(group_index, view)| {
+                .map(|view| {
                     let GroupView {
                         name,
                         group,
+                        expanded,
                         nodes,
                         count,
                         page,
@@ -2283,7 +2301,7 @@ fn apply(ui: &AndroidWindow, p: Projection) {
                         title: name.into(),
                         detail: format!("{} · {count} 个节点", group.kind).into(),
                         current: group.now.to_string().into(),
-                        expanded: group_index == 0,
+                        expanded,
                         testing,
                         nodes: stable(
                             previous_groups
@@ -2433,6 +2451,7 @@ fn apply(ui: &AndroidWindow, p: Projection) {
         *snapshot = json!({"core_running":data.get_core_running(),"vpn":data.get_vpn_connected(),
             "page":ui.get_current_page(),"detail":ui.get_current_detail(),
             "groups":data.get_groups().row_count(),"profiles":data.get_profiles().row_count(),
+            "vpn_pending":data.get_vpn_pending(),
             "logs":data.get_logs().row_count(),"dark":dark,"accent":theme.get_accent_index(),"text_scale":theme.get_text_scale(),
             "body_size":typography.invoke_font_size(16),
             "width":size.width as f32/scale,"height":size.height as f32/scale,"scale":scale,

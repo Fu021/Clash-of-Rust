@@ -24,21 +24,41 @@ pub(super) async fn check(port: Option<u16>) -> Result<Option<Available>> {
     // Reading settings does not change the desktop proxy, and an unavailable
     // desktop settings service must not prevent the other routes from working.
     let routes = available_routes(port, "https");
+    clash_client_core::update::retry_check(|| {
+        check_once(&routes, API_URL, LATEST_URL, crate::VERSION)
+    })
+    .await
+}
+
+async fn check_once(
+    routes: &[Route],
+    api: &str,
+    latest: &str,
+    current: &str,
+) -> Result<Option<Available>> {
     let (mut available, latest_route) = tokio::time::timeout(
         Duration::from_secs(60),
-        discover(&routes, API_URL, LATEST_URL, crate::VERSION),
+        discover(routes, api, latest, current),
     )
     .await
     .context("更新检查超时，请检查代理或稍后重试")??;
     if let (Some(available), Some(route)) = (&mut available, latest_route) {
-        // Asset discovery has its own deadline: a detected release must remain
-        // visible even if its assets are absent or temporarily unreachable.
+        // A redirect only identifies the version. Probe both required assets
+        // before publishing a downloadable update to the UI.
         available.package =
             tokio::time::timeout(REQUEST_TIMEOUT, latest_package(available, &route))
                 .await
-                .ok()
-                .and_then(Result::ok)
-                .flatten();
+                .context("安装包信息查询超时")??;
+    }
+    if let Some(available) = &available
+        && package_name(&available.version).is_some()
+        && available.package.is_none()
+    {
+        bail!(
+            "正式版 {} 缺少本平台安装包或校验文件，请稍后重试或访问 {}",
+            available.version,
+            available.url
+        );
     }
     Ok(available)
 }
@@ -69,6 +89,7 @@ async fn discover(
         let result = async {
             let response = client(route)?
                 .get(latest)
+                .header(reqwest::header::CACHE_CONTROL, "no-cache")
                 .send()
                 .await
                 .map_err(|error| request_error(error, "Release 订阅"))?;
@@ -158,6 +179,7 @@ async fn asset_size(client: &Client, url: &str, limit: u64) -> Result<u64> {
     // installer body. Redirects retain the download client's host restrictions.
     let response = client
         .get(url)
+        .header(reqwest::header::CACHE_CONTROL, "no-cache")
         .header(reqwest::header::RANGE, "bytes=0-0")
         .send()
         .await
@@ -183,6 +205,56 @@ async fn asset_size(client: &Client, url: &str, limit: u64) -> Result<u64> {
 mod tests {
     use super::*;
     use tokio::io::{AsyncReadExt, AsyncWriteExt};
+
+    #[tokio::test]
+    async fn check_refetches_missing_package_and_checksum_instead_of_publishing_broken_update() {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let endpoint = format!("http://{}/releases", listener.local_addr().unwrap());
+        let name = package_name("0.6.3").expect("CI desktop platform");
+        let package = serde_json::json!({"name":name,"size":42});
+        let sidecar = serde_json::json!({"name":format!("{name}.sha256"),"size":64});
+        let bodies = [vec![], vec![package.clone()], vec![package, sidecar]].map(|assets| {
+            serde_json::json!([
+                {"tag_name":"v0.6.3","draft":false,"prerelease":false,"assets":assets}
+            ])
+            .to_string()
+        });
+        let server = tokio::spawn(async move {
+            for body in bodies {
+                let (mut socket, _) = listener.accept().await.unwrap();
+                let mut bytes = [0; 8192];
+                let mut count = 0;
+                while !bytes[..count].ends_with(b"\r\n\r\n") {
+                    let n = socket.read(&mut bytes[count..]).await.unwrap();
+                    assert!(n > 0);
+                    count += n;
+                }
+                let request = String::from_utf8_lossy(&bytes[..count]).to_ascii_lowercase();
+                assert!(request.starts_with("get /releases http/1.1"));
+                assert!(request.contains("cache-control: no-cache"));
+                socket
+                    .write_all(
+                        format!(
+                            "HTTP/1.1 200 OK\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+                            body.len()
+                        )
+                        .as_bytes(),
+                    )
+                    .await
+                    .unwrap();
+            }
+        });
+        let routes = routes(None, None);
+        let result = clash_client_core::update::retry_check(|| {
+            check_once(&routes, &endpoint, &endpoint, "0.6.1")
+        })
+        .await
+        .unwrap()
+        .unwrap();
+        assert_eq!(result.version, "0.6.3");
+        assert_eq!(result.package.unwrap().asset.name, name);
+        server.await.unwrap();
+    }
 
     async fn server(
         status: &str,

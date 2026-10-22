@@ -125,14 +125,7 @@ pub struct Guard {
     thread_id: u32,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct Nodes {
-    pub group: String,
-    pub selected: String,
-    pub names: Vec<String>,
-    pub total: usize,
-    pub locked: bool,
-}
+pub use clash_client_runtime::tray_model::Nodes;
 
 #[derive(Clone, Default, PartialEq, Eq)]
 struct State {

@@ -10,6 +10,7 @@ anyhow = { workspace = true }
 chrono = { workspace = true }
 directories = { workspace = true }
 reqwest = { workspace = true }
+hyper-util = { version = "0.1", features = ["client-legacy", "tokio"] }
 serde = { workspace = true }
 serde_json = { workspace = true }
 serde_yaml = { workspace = true }

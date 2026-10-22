@@ -33,12 +33,18 @@ mod linux_tun;
 mod windows_autostart;
 #[cfg(target_os = "linux")]
 pub use linux_tun::{
-    authorize_tun, check_tun_environment, core_has_tun_permissions, core_launcher, tun_helper_main,
+    authorize_tun, authorize_tun_terminal, check_tun_environment, core_has_tun_permissions,
+    core_launcher, tun_helper_main,
 };
 #[cfg(target_os = "macos")]
 pub mod macos;
 #[cfg(windows)]
 mod windows;
+#[cfg(windows)]
+#[path = "windows/process.rs"]
+mod windows_process;
+#[cfg(windows)]
+pub use windows_process::{BackgroundChild, spawn as spawn_background_console};
 #[cfg(windows)]
 #[path = "windows/service/mod.rs"]
 pub mod windows_service;
@@ -164,6 +170,34 @@ mod application_guard_tests {
 
 pub fn autostart_enabled() -> Result<bool> {
     native::autostart_enabled()
+}
+#[cfg(windows)]
+pub fn headless_startup(
+    data: &Path,
+    resources: Option<&Path>,
+    enabled: Option<bool>,
+) -> Result<bool> {
+    let backend = windows_autostart::Backend::headless(data, resources)?;
+    if let Some(enabled) = enabled {
+        backend.set(enabled)?;
+    }
+    backend.enabled()
+}
+/// The ordinary autostart/update target remains the desktop executable even
+/// when requested from its sibling console program. Headless startup is separate.
+pub fn autostart_executable() -> Result<std::path::PathBuf> {
+    let executable = std::env::current_exe()?;
+    if executable.file_stem().is_some_and(|name| name == "cor") {
+        let gui = executable.with_file_name(if cfg!(windows) {
+            "clash-of-rust.exe"
+        } else {
+            "clash-of-rust"
+        });
+        if gui.is_file() {
+            return Ok(gui);
+        }
+    }
+    Ok(executable)
 }
 pub fn set_autostart(enabled: bool) -> Result<()> {
     native::set_autostart(enabled)

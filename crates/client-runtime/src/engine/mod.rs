@@ -1,3 +1,5 @@
+mod control;
+use crate::control::Command as ControlCommand;
 use crate::{
     api::{Api, ConfigStatus, ConnectionStats, Proxies},
     assets::{self, GeoManifest},
@@ -119,7 +121,11 @@ pub struct Engine {
     node_root: Mutex<Option<String>>,
     protection_guard: Option<crate::claude_check::guard::Guard>,
     // Held for the entire application lifetime; prevents two clients racing on recovery.
-    _instance_lock: File,
+    _instance_lock: Option<File>,
+    remote: Option<crate::control::Remote>,
+    remote_running: bool,
+    pub(crate) control_server: Option<crate::control::Server>,
+    external_logs_until: Option<Instant>,
 }
 
 #[derive(Clone, serde::Serialize, serde::Deserialize)]
@@ -136,7 +142,29 @@ impl Engine {
     }
 
     pub fn with_resources(store: Store, resources: PathBuf) -> Result<Self> {
-        let instance = store.instance_lock()?;
+        if let Some(engine) = Self::attach(&store, &resources)? {
+            return Ok(engine);
+        }
+        let instance = match store.instance_lock() {
+            Ok(instance) => instance,
+            Err(error) => {
+                // The other owner may still be seeding resources before its
+                // endpoint is published. Attach without recovering its journals.
+                let deadline = Instant::now() + Duration::from_secs(10);
+                loop {
+                    if let Some(engine) = Self::attach(&store, &resources)? {
+                        return Ok(engine);
+                    }
+                    if let Ok(instance) = store.instance_lock() {
+                        break instance;
+                    }
+                    if Instant::now() >= deadline {
+                        return Err(error);
+                    }
+                    std::thread::sleep(Duration::from_millis(100));
+                }
+            }
+        };
         crate::profile_transaction::recover(&store.root)?;
         let geo_manifest = assets::seed(&resources, &store.runtime())?;
         let logs = Arc::new(Mutex::new(VecDeque::new()));
@@ -217,12 +245,20 @@ impl Engine {
             version: String::new(),
             node_root: Mutex::new(None),
             protection_guard: None,
-            _instance_lock: instance,
+            _instance_lock: Some(instance),
+            remote: None,
+            remote_running: false,
+            control_server: None,
+            external_logs_until: None,
         })
     }
 
     pub fn running(&self) -> bool {
-        self.child.is_some()
+        if self.is_remote() {
+            self.remote_running
+        } else {
+            self.child.is_some()
+        }
     }
     fn journal(&self) -> PathBuf {
         self.store.root.join("system-proxy.json")
@@ -276,16 +312,13 @@ impl Engine {
         Ok(command)
     }
     fn validation_command(&self) -> Result<Command> {
-        #[cfg(any(windows, target_os = "macos"))]
-        {
-            let mut command = Command::new(self.core()?);
-            command.kill_on_drop(true);
-            #[cfg(windows)]
-            command.creation_flags(0x08000000);
-            Ok(command)
-        }
-        #[cfg(not(any(windows, target_os = "macos")))]
-        self.command()
+        // Configuration checks do not create TUN interfaces. Keep them away
+        // from privilege launchers on every platform, including root CLI use.
+        let mut command = Command::new(self.core()?);
+        command.kill_on_drop(true);
+        #[cfg(windows)]
+        command.creation_flags(0x08000000);
+        Ok(command)
     }
     async fn validate(&self, payload: &str) -> Result<()> {
         self.validate_in(payload, &self.store.runtime()).await
@@ -313,16 +346,20 @@ impl Engine {
         .await
         .context("内核配置校验超时")??;
         if !status.success() {
-            let error =
-                String::from_utf8_lossy(&stdout).to_string() + &String::from_utf8_lossy(&stderr);
-            append(
-                &self.logs,
-                format!(
-                    "[配置校验] {}",
-                    error.replace(&self.settings.secret, "[密钥]")
-                ),
-            );
-            bail!("mihomo 配置校验失败，详情见日志页");
+            let error = format!(
+                "{}\n{}",
+                String::from_utf8_lossy(&stdout),
+                String::from_utf8_lossy(&stderr)
+            )
+            .replace(&self.settings.secret, "[密钥]");
+            // Keep separate records so a fatal line after startup information
+            // is not lost to the per-record log limit. Return a bounded tail
+            // directly to callers, including a CLI with no log page.
+            for line in error.lines().filter(|line| !line.trim().is_empty()) {
+                append(&self.logs, format!("[配置校验] {line}"));
+            }
+            let detail = validation_error_detail(&error);
+            bail!("mihomo 配置校验失败（{status}）：\n{detail}");
         }
         Ok(())
     }
@@ -331,6 +368,10 @@ impl Engine {
         Ok(version["version"].as_str().unwrap_or("未知").to_owned())
     }
     pub async fn start(&mut self) -> Result<()> {
+        if self.remote.is_some() {
+            self.remote_mutate(ControlCommand::Start).await?;
+            return Ok(());
+        }
         #[cfg(windows)]
         if !self.running()
             && (self.settings.proxy_mode == ProxyMode::Tun
@@ -452,6 +493,10 @@ impl Engine {
     }
 
     pub async fn stop(&mut self) -> Result<()> {
+        if self.remote.is_some() {
+            self.remote_mutate(ControlCommand::Stop).await?;
+            return Ok(());
+        }
         platform::restore(&self.journal()).context("恢复系统代理失败，暂不停止内核以避免断网")?;
         self.stop_process().await
     }
@@ -466,6 +511,7 @@ impl Engine {
         {
             self.tun(false).await.context("停止内核前关闭 TUN 失败")?;
         }
+        self.external_logs_until = None;
         self.set_logs(false);
         if let Some(mut child) = self.child.take() {
             if child.try_wait()?.is_none() {
@@ -517,6 +563,14 @@ impl Engine {
     }
 
     pub async fn save_ports(&mut self, controller_port: u16, mixed_port: u16) -> Result<()> {
+        if self.remote.is_some() {
+            self.remote_mutate(ControlCommand::Ports {
+                controller: controller_port,
+                mixed: mixed_port,
+            })
+            .await?;
+            return Ok(());
+        }
         self.save_settings(Settings {
             controller_port,
             mixed_port,
@@ -536,6 +590,9 @@ impl Engine {
     }
 
     pub fn rule_document(&self, id: &str) -> Result<crate::rule_manager::Document> {
+        if let Some(remote) = &self.remote {
+            return remote.call(ControlCommand::RuleDocument { id: id.into() });
+        }
         let profile = self
             .profiles
             .iter()
@@ -550,7 +607,34 @@ impl Engine {
         id: &str,
         rules: crate::rule_manager::ProfileRules,
     ) -> Result<()> {
+        self.save_profile_rules_checked(id, rules, None).await
+    }
+
+    pub async fn save_profile_rules_checked(
+        &mut self,
+        id: &str,
+        rules: crate::rule_manager::ProfileRules,
+        expected: Option<String>,
+    ) -> Result<()> {
+        if self.remote.is_some() {
+            self.remote_mutate(ControlCommand::SaveRules {
+                id: id.into(),
+                rules: rules.clone(),
+                expected,
+            })
+            .await?;
+            return Ok(());
+        }
         self.require_unprotected_profile(id)?;
+        if let Some(expected) = expected {
+            let builtin = self.profiles.iter().any(|p| p.id == id && p.is_default());
+            let current =
+                crate::rule_manager::ProfileRules::for_profile(&self.settings, id, builtin);
+            ensure!(
+                crate::rule_manager::revision(&current)? == expected,
+                "规则已被另一客户端修改，草稿已保留；请刷新并检查修改后重新应用"
+            );
+        }
         self.profiles
             .iter()
             .find(|p| p.id == id)
@@ -577,6 +661,13 @@ impl Engine {
     }
 
     pub async fn save_rule_overrides(&mut self, rule_overrides: RuleOverrides) -> Result<()> {
+        if self.remote.is_some() {
+            self.remote_mutate(ControlCommand::RuleOverrides {
+                overrides: rule_overrides,
+            })
+            .await?;
+            return Ok(());
+        }
         if self.settings.claude_protection.is_some() {
             bail!("请先关闭 Claude 保护，再修改快捷规则");
         }
@@ -604,6 +695,14 @@ impl Engine {
     }
 
     pub async fn save_settings(&mut self, settings: Settings) -> Result<()> {
+        if self.remote.is_some() {
+            self.remote_mutate(ControlCommand::Settings {
+                settings: settings.clone(),
+                expected: Some(serde_json::to_value(&self.settings)?),
+            })
+            .await?;
+            return Ok(());
+        }
         settings.validate()?;
         if self.settings.claude_protection.is_some()
             && (settings.dns_override != self.settings.dns_override
@@ -617,6 +716,7 @@ impl Engine {
         }
         if settings.controller_port == self.settings.controller_port
             && settings.mixed_port == self.settings.mixed_port
+            && settings.secret == self.settings.secret
         {
             if (settings.dns_override != self.settings.dns_override
                 || settings.ipv6 != self.settings.ipv6
@@ -704,6 +804,14 @@ impl Engine {
     /// Editing source metadata does not replace the cached YAML. The explicit
     /// Update action downloads and validates the new source transactionally.
     pub fn edit_profile(&mut self, id: &str, name: &str, source: &str) -> Result<()> {
+        if self.remote.is_some() {
+            self.remote_mutate_sync(ControlCommand::EditProfile {
+                id: id.into(),
+                name: name.into(),
+                source: source.into(),
+            })?;
+            return Ok(());
+        }
         let name = name.trim();
         let source = source.trim();
         if name.is_empty() || source.is_empty() {
@@ -741,7 +849,10 @@ impl Engine {
 
     /// Retain only one selectable decision group for the native menu. Fetching
     /// the full proxies response every second would waste memory while hidden.
-    pub async fn tray_nodes(&self) -> Result<Option<crate::tray::Nodes>> {
+    pub async fn tray_nodes(&self) -> Result<Option<crate::tray_model::Nodes>> {
+        if let Some(remote) = &self.remote {
+            return remote.request(ControlCommand::TrayNodes).await;
+        }
         if !self.running() {
             return Ok(None);
         }
@@ -756,7 +867,7 @@ impl Engine {
             let proxy = self.api.proxy_nodes(&name).await?;
             if proxy.kind == "Selector" && !proxy.all.is_empty() {
                 let total = proxy.all.len();
-                return Ok(Some(crate::tray::Nodes {
+                return Ok(Some(crate::tray_model::Nodes {
                     group: name,
                     selected: proxy.now.to_string(),
                     names: proxy
@@ -783,6 +894,15 @@ impl Engine {
         source: String,
         existing: Option<String>,
     ) -> Result<()> {
+        if self.remote.is_some() {
+            self.remote_mutate(ControlCommand::Import {
+                name: name.clone(),
+                source: source.clone(),
+                id: existing.clone(),
+            })
+            .await?;
+            return Ok(());
+        }
         if let Some(id) = existing.as_deref() {
             self.require_unprotected_profile(id)?;
         }
@@ -905,6 +1025,11 @@ impl Engine {
     }
 
     pub async fn activate(&mut self, id: String) -> Result<()> {
+        if self.remote.is_some() {
+            self.remote_mutate(ControlCommand::Activate { id: id.clone() })
+                .await?;
+            return Ok(());
+        }
         if self.settings.claude_protection.is_some() {
             bail!("请先关闭 A÷检测中的 Claude 保护，再切换订阅");
         }
@@ -928,6 +1053,10 @@ impl Engine {
     }
 
     pub async fn update_geo(&mut self) -> Result<()> {
+        if self.remote.is_some() {
+            self.remote_mutate(ControlCommand::GeoUpdate).await?;
+            return Ok(());
+        }
         let runtime = self.store.runtime();
         let staged = tempfile::Builder::new()
             .prefix(".geo-download-")
@@ -1004,6 +1133,11 @@ impl Engine {
     /// The GUI, restart and disposable native tests all use this operation.
     /// A successful Windows UAC handoff returns true so the old GUI can exit.
     pub async fn claude_protection(&mut self, enabled: bool) -> Result<()> {
+        if self.remote.is_some() {
+            self.remote_mutate(ControlCommand::Protect { enabled })
+                .await?;
+            return Ok(());
+        }
         use crate::claude_check::protection::{Previous, Protection};
         if enabled == self.settings.claude_protection.is_some() {
             return Ok(());
@@ -1304,6 +1438,11 @@ impl Engine {
     }
 
     pub async fn delete_profile(&mut self, id: &str) -> Result<()> {
+        if self.remote.is_some() {
+            self.remote_mutate(ControlCommand::DeleteProfile { id: id.into() })
+                .await?;
+            return Ok(());
+        }
         self.require_unprotected_profile(id)?;
         let profile = self
             .profiles
@@ -1361,6 +1500,13 @@ impl Engine {
     }
 
     pub async fn install_geo(&mut self, staged: &std::path::Path) -> Result<()> {
+        if self.remote.is_some() {
+            self.remote_mutate(ControlCommand::GeoInstall {
+                path: staged.to_owned(),
+            })
+            .await?;
+            return Ok(());
+        }
         let runtime = self.store.runtime();
         let manifest = assets::verify_geo(staged)?;
         let geo_settings = Settings {
@@ -1442,6 +1588,14 @@ impl Engine {
     }
 
     pub async fn select_node(&self, group: &str, node: &str) -> Result<()> {
+        if let Some(remote) = &self.remote {
+            return remote
+                .request(ControlCommand::Select {
+                    group: group.into(),
+                    node: node.into(),
+                })
+                .await;
+        }
         ensure!(
             self.settings.claude_protection.is_none(),
             "Claude 保护已锁定当前节点，请先关闭保护再切换节点"
@@ -1450,6 +1604,11 @@ impl Engine {
     }
 
     pub async fn select_mode(&mut self, mode: &str) -> Result<()> {
+        if self.remote.is_some() {
+            self.remote_mutate(ControlCommand::Mode { mode: mode.into() })
+                .await?;
+            return Ok(());
+        }
         if self.settings.claude_protection.is_some() {
             bail!("Claude 保护已锁定当前运行模式，请先关闭保护再切换模式");
         }
@@ -1479,6 +1638,10 @@ impl Engine {
     }
 
     pub async fn select_proxy_mode(&mut self, mode: ProxyMode) -> Result<()> {
+        if self.remote.is_some() {
+            self.remote_mutate(ControlCommand::Proxy { mode }).await?;
+            return Ok(());
+        }
         if self.settings.claude_protection.is_some() {
             bail!("Claude 保护正在接管 TUN，请先在 A÷检测中关闭保护");
         }
@@ -1524,6 +1687,9 @@ impl Engine {
     }
 
     pub async fn restore_proxy_mode(&mut self) -> Result<()> {
+        if self.is_remote() {
+            return Ok(());
+        }
         if let Some(protection) = self.settings.claude_protection.clone() {
             let interactive = !std::env::args_os().any(|arg| arg == "--background");
             self.prepare_protection_tun(interactive).await?;
@@ -1699,6 +1865,11 @@ impl Engine {
     }
 
     pub async fn mode(&self, mode: &str) -> Result<()> {
+        if let Some(remote) = &self.remote {
+            return remote
+                .request(ControlCommand::Mode { mode: mode.into() })
+                .await;
+        }
         if !matches!(mode, "rule" | "global" | "direct") {
             bail!("模式无效");
         }
@@ -1707,6 +1878,17 @@ impl Engine {
     }
 
     pub async fn system_proxy(&self, enabled: bool) -> Result<()> {
+        if let Some(remote) = &self.remote {
+            return remote
+                .request(ControlCommand::Proxy {
+                    mode: if enabled {
+                        ProxyMode::System
+                    } else {
+                        ProxyMode::Off
+                    },
+                })
+                .await;
+        }
         if enabled {
             self.proxy_mode(ProxyMode::System).await
         } else {
@@ -1716,6 +1898,17 @@ impl Engine {
     }
 
     pub async fn tun(&self, enabled: bool) -> Result<()> {
+        if let Some(remote) = &self.remote {
+            return remote
+                .request(ControlCommand::Proxy {
+                    mode: if enabled {
+                        ProxyMode::Tun
+                    } else {
+                        ProxyMode::Off
+                    },
+                })
+                .await;
+        }
         if enabled {
             return self.proxy_mode(ProxyMode::Tun).await;
         }
@@ -1724,6 +1917,9 @@ impl Engine {
     }
 
     pub async fn proxy_mode(&self, mode: ProxyMode) -> Result<()> {
+        if let Some(remote) = &self.remote {
+            return remote.request(ControlCommand::Proxy { mode }).await;
+        }
         if mode == ProxyMode::Off && !self.running() {
             platform::restore(&self.journal())?;
             return Ok(());
@@ -1768,6 +1964,13 @@ impl Engine {
     }
 
     pub fn set_logs(&mut self, enabled: bool) {
+        if self.is_remote() {
+            return;
+        }
+        let enabled = enabled
+            || self
+                .external_logs_until
+                .is_some_and(|deadline| deadline > Instant::now());
         if !enabled {
             if let Some(handle) = self.log_pump.take() {
                 handle.abort();
@@ -1815,12 +2018,23 @@ impl Engine {
         }));
     }
 
-    pub fn clear_logs(&self) {
+    pub fn clear_logs(&self) -> Result<()> {
+        if let Some(remote) = &self.remote {
+            let _: Value = remote.call(ControlCommand::Logs { clear: true })?;
+            return Ok(());
+        }
         if let Ok(mut logs) = self.logs.lock() {
             logs.clear();
         }
+        Ok(())
     }
     pub fn record_failure(&self, error: &str) {
+        if let Some(remote) = &self.remote {
+            let _: Result<Value> = remote.call(ControlCommand::RecordFailure {
+                message: error.into(),
+            });
+            return;
+        }
         append(
             &self.logs,
             format!(
@@ -1830,6 +2044,9 @@ impl Engine {
         );
     }
     pub fn export_logs(&self) -> Result<PathBuf> {
+        if let Some(remote) = &self.remote {
+            return remote.call(ControlCommand::ExportLogs);
+        }
         let path = self.store.root.join("logs-export.txt");
         let logs = self
             .logs
@@ -1883,6 +2100,9 @@ impl Engine {
     }
 
     pub async fn poll_with_header(&mut self, scope: Scope, header: bool) -> Result<Snapshot> {
+        if self.is_remote() {
+            return self.remote_poll(scope, header).await;
+        }
         let mut snapshot = Snapshot::default();
         if let Some(child) = &mut self.child
             && let Some(status) = child.try_wait()?
@@ -1994,6 +2214,9 @@ impl crate::proxy::Backend for Engine {
 
 impl Drop for Engine {
     fn drop(&mut self) {
+        if self.is_remote() {
+            return;
+        }
         // Best-effort recovery also covers initialization/runtime errors. A failed
         // restore leaves its journal for the next launch.
         let _ = platform::restore(&self.journal());
@@ -2016,6 +2239,15 @@ impl Drop for Engine {
             let _ = child.start_kill();
         }
     }
+}
+
+fn validation_error_detail(error: &str) -> &str {
+    let error = error.trim();
+    if error.is_empty() {
+        return "内核未返回错误详情";
+    }
+    let start = error.char_indices().rev().nth(2047).map_or(0, |(i, _)| i);
+    &error[start..]
 }
 
 #[cfg(test)]
@@ -2095,5 +2327,14 @@ mod memory_tests {
         let captured = capture_output(reader).await.unwrap();
         producer.await.unwrap();
         assert_eq!(captured.len(), LOG_FRAME_LIMIT);
+    }
+
+    #[test]
+    fn validation_error_keeps_the_fatal_tail_on_a_utf8_boundary() {
+        let message = "启动信息".repeat(2000) + "\n根因：无效代理类型";
+        let detail = validation_error_detail(&message);
+        assert_eq!(detail.chars().count(), 2048);
+        assert!(detail.ends_with("根因：无效代理类型"));
+        assert_eq!(validation_error_detail(" \n\r\t"), "内核未返回错误详情");
     }
 }

@@ -50,7 +50,7 @@ pub fn set_autostart(enabled: bool) -> Result<()> {
     let path = startup_path()?;
     if enabled {
         std::fs::create_dir_all(path.parent().context("自启路径无效")?)?;
-        let executable = std::env::current_exe()?
+        let executable = crate::platform::autostart_executable()?
             .to_string_lossy()
             .replace('\\', "\\\\")
             .replace('"', "\\\"")

@@ -11,6 +11,7 @@ name = "clash-tun-launcher"
 path = "src/tun_launcher.rs"
 
 [dependencies]
+clash-client-runtime = { path = "../../crates/client-runtime" }
 clash-client-core = { path = "../../crates/client-core" }
 clash-client-ui = { path = "../../crates/client-ui" }
 slint = { workspace = true }

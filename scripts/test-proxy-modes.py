@@ -42,6 +42,9 @@ def check(binary, bundle, test_case='basic_system_proxy_and_tun'):
         resources = bundle/'Contents/Resources/resources'
         helper = bundle/'Contents/MacOS/clash-tun-launcher'
     env = dict(os.environ, CLASH_PROXY_SMOKE='1', MIHOMO_TEST_RESOURCES=str(resources.resolve()))
+    cli = (bundle/'Contents/MacOS/cor' if system == 'macos' and bundle.suffix == '.app'
+           else bundle/('cor.exe' if system == 'windows' else 'cor'))
+    env['MIHOMO_TEST_CLI'] = str(cli.resolve(strict=True))
     command = [binary, test_case, '--exact', '--ignored', '--nocapture']
     if system == 'linux':
         sudo = ['sudo']

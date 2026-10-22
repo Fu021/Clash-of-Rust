@@ -6,7 +6,7 @@ pub(super) enum Action {
     Refresh,
     Start,
     SavePorts(u16, u16),
-    SaveRules(String, ProfileRules),
+    SaveRules(String, ProfileRules, Arc<ProfileRules>),
     LoadRules(String),
     Appearance(ThemeMode),
     Accent(AccentColor),
@@ -92,7 +92,7 @@ pub(super) async fn execute(
     let start_requested = matches!(action, Action::Start);
     let include_profiles = !matches!(action, Action::Refresh | Action::LoadRules(_));
     let rule_id = match &action {
-        Action::LoadRules(id) | Action::SaveRules(id, _) => Some(id.clone()),
+        Action::LoadRules(id) | Action::SaveRules(id, _, _) => Some(id.clone()),
         _ => None,
     };
     let saving_rules = matches!(action, Action::SaveRules(..));
@@ -112,8 +112,10 @@ pub(super) async fn execute(
                 Ok("端口已保存，运行中的内核已自动重启".into())
             }
             Action::LoadRules(_) => Ok(String::new()),
-            Action::SaveRules(id, rules) => {
-                engine.save_profile_rules(&id, rules).await?;
+            Action::SaveRules(id, rules, saved) => {
+                engine
+                    .save_profile_rules_checked(&id, rules, Some(rule_manager::revision(&saved)?))
+                    .await?;
                 Ok(if engine.settings.active_profile.as_deref() == Some(&id) {
                     "规则已保存并应用；新连接按新规则匹配"
                 } else {
@@ -281,7 +283,7 @@ pub(super) async fn execute(
                 Ok("连接已全部关闭".into())
             }
             Action::ClearLogs => {
-                engine.clear_logs();
+                engine.clear_logs()?;
                 Ok("日志已清空".into())
             }
             Action::ExportLogs => {

@@ -243,6 +243,61 @@ public class ProxyTunTest {
         activity.request("{\"op\":\"authorize-vpn\",\"request\":104}");
         authorization(104,"granted");
         assertFalse(TunnelService.connected());
+
+        // Ordinary VPN consent has a separate path from protection consent.
+        // Disconnect must cancel it even before a TunnelService exists.
+        shell("appops set org.clashofrust.android ACTIVATE_VPN default");
+        assertNotNull(VpnService.prepare(context));
+        activity.request("{\"op\":\"connect\"}");
+        await("Ordinary VPN consent did not open",()-> {
+            android.view.accessibility.AccessibilityNodeInfo root=InstrumentationRegistry.getInstrumentation()
+                .getUiAutomation().getRootInActiveWindow();
+            return root!=null && "com.android.vpndialogs".contentEquals(root.getPackageName());
+        });
+        activity.request("{\"op\":\"disconnect\"}");
+        consent(true);
+        await("Cancelled ordinary consent did not return",()->VpnService.prepare(context)==null
+            && inStage(androidx.test.runner.lifecycle.Stage.RESUMED,true));
+        assertStaysDisconnected(context,"Late ordinary consent reopened the VPN");
+        assertEquals(original,CoreBridge.config());
+
+        // Model a service start that was queued before the user disconnected.
+        String stale=TunnelService.prepareStart(context);
+        TunnelService.stop(context);
+        context.startForegroundService(new Intent(context,TunnelService.class).putExtra(TunnelService.REQUEST,stale));
+        assertStaysDisconnected(context,"A stale service start reopened the VPN");
+
+        // Hold the lifecycle queue so Disconnect definitely arrives before a
+        // previously accepted connect begins. Releasing it must not create TUN.
+        java.lang.reflect.Field field=TunnelService.class.getDeclaredField("serial");
+        field.setAccessible(true);
+        java.util.concurrent.ExecutorService serial=(java.util.concurrent.ExecutorService)field.get(null);
+        java.util.concurrent.CountDownLatch entered=new java.util.concurrent.CountDownLatch(1);
+        java.util.concurrent.CountDownLatch release=new java.util.concurrent.CountDownLatch(1);
+        long generation=TunnelService.generation();
+        serial.execute(()-> {
+            entered.countDown();
+            try {release.await(10,java.util.concurrent.TimeUnit.SECONDS);}
+            catch (InterruptedException error) {Thread.currentThread().interrupt();}
+        });
+        try {
+            assertTrue(entered.await(5,java.util.concurrent.TimeUnit.SECONDS));
+            TunnelService.start(context,false);
+            await("Queued VPN start was not accepted",TunnelService::pending);
+            await("Slint did not expose cancellation for the pending VPN",()->MainActivity.diagnostics().optBoolean("vpn_pending"));
+            TunnelService.stop(context);
+        } finally {release.countDown();}
+        assertStaysDisconnected(context,"A cancelled lifecycle job reopened the VPN");
+        assertEquals("A cancelled lifecycle job established a TUN",generation,TunnelService.generation());
+    }
+    private static void assertStaysDisconnected(Context context,String message) throws Exception {
+        long deadline=System.nanoTime()+java.util.concurrent.TimeUnit.SECONDS.toNanos(2);
+        do {
+            assertFalse(message,TunnelService.connected());
+            assertFalse(message,context.getSharedPreferences("vpn",Context.MODE_PRIVATE).getBoolean("desired",false));
+            assertFalse(message,vpnActive(context.getSystemService(ConnectivityManager.class)));
+            SystemClock.sleep(50);
+        } while (System.nanoTime()<deadline);
     }
     private static void tunCarriesSocket(String controller,String secret) throws Exception {
         // NetworkCallbacks describe the control plane. A just-replaced VPN can
@@ -354,7 +409,7 @@ public class ProxyTunTest {
             +"rules:\n  - IP-CIDR,198.51.100.1/32,CI-TUN-origin,no-resolve\n  - MATCH,DIRECT\n");
         shell("cmd statusbar add-tile org.clashofrust.android/.VpnTileService");
         for (int cycle=0; cycle<2; cycle++) {
-            if (cycle==0) context.startForegroundService(new Intent(context,TunnelService.class));
+            if (cycle==0) TunnelService.start(context,false);
             else shell("cmd statusbar click-tile org.clashofrust.android/.VpnTileService");
             await("VPN did not connect; inspect logcat", () -> {
                 if (!TunnelService.error().isEmpty()) throw new IOException(TunnelService.error());
@@ -391,7 +446,7 @@ public class ProxyTunTest {
                 },"vpn-route-check");
                 routes.setDaemon(true); routes.start();
                 try {
-                    context.startForegroundService(new Intent(context,TunnelService.class).setAction(TunnelService.RECONFIGURE));
+                    TunnelService.start(context,true);
                     await("VPN did not reconfigure",()->TunnelService.connected() && TunnelService.generation()>previousGeneration);
                     await("Android did not restore VPN routing after reconfigure",()->vpnActive(connectivity));
                     tunCarriesSocket(controller,secret);

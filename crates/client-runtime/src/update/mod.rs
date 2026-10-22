@@ -2,9 +2,11 @@
 mod discovery;
 mod install;
 use anyhow::{Context, Result, bail};
+pub use clash_client_core::update::Progress;
 use futures_util::future::{AbortHandle, AbortRegistration};
 pub use install::{
-    InstallSession, cleanup, ensure_installable, handoff, helper_main, startup_outcome,
+    InstallSession, cleanup, ensure_installable, handoff, handoff_owner, helper_main,
+    startup_outcome,
 };
 use reqwest::{Client, StatusCode, Url};
 use semver::Version;
@@ -39,12 +41,6 @@ pub struct Package {
     pub checksum_url: String,
 }
 
-#[derive(Debug, Clone, Copy, Default)]
-pub struct Progress {
-    pub received: u64,
-    pub total: u64,
-}
-
 #[derive(Debug)]
 pub struct Downloaded {
     directory: Mutex<Option<tempfile::TempDir>>,
@@ -54,6 +50,12 @@ pub struct Downloaded {
 }
 
 impl Downloaded {
+    pub fn package_path(&self) -> &Path {
+        &self.package
+    }
+    pub fn sha256(&self) -> &str {
+        &self.sha256
+    }
     pub fn directory(&self) -> &Path {
         self.package
             .parent()
@@ -149,7 +151,10 @@ impl State {
         self.download_id = self.download_id.wrapping_add(1);
         let (handle, registration) = AbortHandle::new_pair();
         self.download_abort = Some(handle);
-        self.progress = Some(Progress { received: 0, total });
+        self.progress = Some(Progress {
+            total,
+            ..Progress::default()
+        });
         self.failure = None;
         self.outcome = None;
         (self.download_id, registration)
@@ -377,6 +382,7 @@ fn checksum(bytes: &[u8]) -> Result<String> {
 pub async fn download(
     available: Available,
     proxy_port: Option<u16>,
+    api: Option<crate::api::Api>,
     report: impl FnMut(Progress),
 ) -> Result<Downloaded> {
     if cfg!(windows)
@@ -388,12 +394,13 @@ pub async fn download(
         bail!("该版本不支持自动安装，请从 Release 手动升级");
     }
     let routes = crate::network::available_routes(proxy_port, "https");
-    download_routes(available, &routes, report).await
+    download_routes(available, &routes, api.as_ref(), report).await
 }
 
 async fn download_routes(
     available: Available,
     routes: &[crate::network::Route],
+    api: Option<&crate::api::Api>,
     mut report: impl FnMut(Progress),
 ) -> Result<Downloaded> {
     let size = available
@@ -406,10 +413,21 @@ async fn download_routes(
     for route in routes {
         // Each attempt owns a fresh temporary directory and starts at zero.
         report(Progress {
-            received: 0,
             total: size,
+            route: route.label,
+            ..Progress::default()
         });
-        match download_package(available.clone(), route.proxy.as_deref(), &mut report).await {
+        match download_package(
+            available.clone(),
+            route.proxy.as_deref(),
+            api,
+            |mut value| {
+                value.route = route.label;
+                report(value);
+            },
+        )
+        .await
+        {
             Ok(downloaded) => return Ok(downloaded),
             Err(error) => errors.push(format!("{}：{error}", route.label)),
         }
@@ -420,6 +438,7 @@ async fn download_routes(
 async fn download_package(
     available: Available,
     proxy: Option<&str>,
+    api: Option<&crate::api::Api>,
     report: impl FnMut(Progress),
 ) -> Result<Downloaded> {
     let package = available
@@ -458,6 +477,7 @@ async fn download_package(
         package.asset.size,
         &expected,
         &path,
+        (api.cloned(), proxy.is_none()),
         report,
     )
     .await?;
@@ -475,6 +495,7 @@ async fn transfer(
     size: u64,
     expected: &str,
     path: &std::path::Path,
+    observe: (Option<crate::api::Api>, bool),
     mut report: impl FnMut(Progress),
 ) -> Result<()> {
     let mut response = client
@@ -493,12 +514,19 @@ async fn transfer(
     {
         bail!("安装包大小与 Release 不一致");
     }
-    let mut file = tokio::fs::File::create(path)
+    let (api, direct) = observe;
+    let observer = clash_client_core::update::RouteObserver::new(&response, api, direct);
+    let file = tokio::fs::File::create(path)
         .await
         .context("无法写入安装包，请检查磁盘空间与权限")?;
+    // TLS/network chunks can be tiny. Batch them before tokio::fs offloads a
+    // write, rather than serially scheduling a disk operation for every chunk.
+    let mut file = tokio::io::BufWriter::with_capacity(256 * 1024, file);
     let mut received = 0;
     let mut digest = Sha256::new();
     let mut last_report = std::time::Instant::now();
+    let mut rate_started = last_report;
+    let mut rate_received = 0;
     while let Some(chunk) = response.chunk().await.context("下载中断或超时，请重试")? {
         received += chunk.len() as u64;
         if received > size {
@@ -508,11 +536,22 @@ async fn transfer(
             .await
             .context("写入失败，请检查磁盘空间与权限")?;
         digest.update(&chunk);
-        if last_report.elapsed() >= Duration::from_millis(100) || received == size {
+        if received == chunk.len() as u64
+            || last_report.elapsed() >= Duration::from_millis(100)
+            || received == size
+        {
+            let elapsed = rate_started.elapsed().as_secs_f64();
             report(Progress {
                 received,
                 total: size,
+                bytes_per_second: ((received - rate_received) as f64 / elapsed.max(0.001)) as u64,
+                outbound: observer.outbound(),
+                ..Progress::default()
             });
+            if elapsed >= 1.0 {
+                rate_started = std::time::Instant::now();
+                rate_received = received;
+            }
             last_report = std::time::Instant::now();
         }
     }
@@ -535,6 +574,7 @@ async fn fetch(client: &Client, endpoint: &str, current: &str) -> Result<Option<
     let response = client
         .get(endpoint)
         .header("Accept", "application/vnd.github+json")
+        .header(reqwest::header::CACHE_CONTROL, "no-cache")
         .send()
         .await
         .map_err(|error| crate::network::request_error(error, "GitHub API"))?;
@@ -707,6 +747,7 @@ mod tests {
                 progress: Some(Progress {
                     received: 2048,
                     total: 4096,
+                    ..Progress::default()
                 }),
                 install_pending: true,
                 installing: None,
@@ -794,7 +835,7 @@ mod tests {
         let directory = tempfile::tempdir().unwrap();
         let root = directory.path().to_owned();
         let path = root.join("package");
-        let partial = path.clone();
+        let (progress, mut observed) = tokio::sync::watch::channel(0);
         let mut state = State::default();
         let (_, registration) = state.begin_download(256 * 1024);
         let task = tokio::spawn(Abortable::new(
@@ -806,15 +847,18 @@ mod tests {
                     256 * 1024,
                     &expected,
                     &path,
-                    |_| {},
+                    (None, true),
+                    |value| {
+                        let _ = progress.send(value.received);
+                    },
                 )
                 .await
             },
             registration,
         ));
         tokio::time::timeout(Duration::from_secs(3), async {
-            while !std::fs::metadata(&partial).is_ok_and(|metadata| metadata.len() > 0) {
-                tokio::time::sleep(Duration::from_millis(5)).await;
+            while *observed.borrow_and_update() == 0 {
+                observed.changed().await.unwrap();
             }
         })
         .await
@@ -865,12 +909,14 @@ mod tests {
             body.len() as u64,
             &expected,
             &path,
+            (None, true),
             |value| progress.push(value),
         )
         .await
         .unwrap();
         assert_eq!(std::fs::read(path).unwrap(), body);
         assert_eq!(progress.last().unwrap().received, body.len() as u64);
+        assert!(progress.last().unwrap().bytes_per_second > 0);
         assert!(
             progress
                 .windows(2)
@@ -914,6 +960,7 @@ mod tests {
                     size,
                     &expected,
                     &path,
+                    (None, true),
                     |_| {}
                 )
                 .await
@@ -961,6 +1008,7 @@ mod tests {
             3,
             &format!("{:x}", Sha256::digest(b"abc")),
             &directory.path().join("package"),
+            (None, false),
             |_| {},
         )
         .await
@@ -1032,7 +1080,7 @@ mod tests {
             },
         ];
         let mut progress = Vec::new();
-        let downloaded = download_routes(available, &routes, |value| progress.push(value))
+        let downloaded = download_routes(available, &routes, None, |value| progress.push(value))
             .await
             .unwrap();
         assert_eq!(std::fs::read(&downloaded.package).unwrap(), body);
@@ -1043,6 +1091,10 @@ mod tests {
                 .map(|value| value.received)
                 .collect::<Vec<_>>(),
             [0, body.len() as u64, 0, body.len() as u64]
+        );
+        assert_eq!(
+            progress.iter().map(|value| value.route).collect::<Vec<_>>(),
+            ["内核代理", "内核代理", "系统代理", "系统代理"]
         );
         let directory = downloaded.directory().to_owned();
         drop(downloaded);

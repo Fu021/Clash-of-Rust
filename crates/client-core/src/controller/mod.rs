@@ -301,7 +301,7 @@ pub struct Delay {
 fn automatic(proxy: &Proxy) -> bool {
     matches!(proxy.kind.as_str(), "URLTest" | "Fallback") && !proxy.all.is_empty()
 }
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone, Default, Serialize)]
 pub struct Proxies {
     pub proxies: BTreeMap<Text, Proxy>,
 }
@@ -318,7 +318,7 @@ impl<'de> Deserialize<'de> for Proxies {
         })
     }
 }
-#[derive(Debug, Clone, Default, Deserialize)]
+#[derive(Debug, Clone, Default, Deserialize, Serialize)]
 pub struct Rule {
     #[serde(rename = "type", default)]
     pub kind: Text,
@@ -327,7 +327,7 @@ pub struct Rule {
     #[serde(default)]
     pub proxy: Text,
 }
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone, Default, Serialize)]
 pub struct Rules {
     pub rules: Vec<Rule>,
 }
@@ -369,6 +369,11 @@ impl std::fmt::Display for Network {
         self.as_str().fmt(f)
     }
 }
+impl Serialize for Network {
+    fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        serializer.serialize_str(self.as_str())
+    }
+}
 impl<'de> Deserialize<'de> for Network {
     fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
         struct Visitor;
@@ -388,7 +393,7 @@ impl<'de> Deserialize<'de> for Network {
         deserializer.deserialize_str(Visitor)
     }
 }
-#[derive(Debug, Clone, Default, Deserialize)]
+#[derive(Debug, Clone, Default, Deserialize, Serialize)]
 pub struct Metadata {
     #[serde(default)]
     pub host: Box<str>,
@@ -406,7 +411,7 @@ pub struct ConnectionRates {
     pub upload: u64,
     pub download: u64,
 }
-#[derive(Debug, Clone, Default, Deserialize)]
+#[derive(Debug, Clone, Default, Deserialize, Serialize)]
 pub struct Connection {
     pub id: Box<str>,
     #[serde(default)]
@@ -426,9 +431,11 @@ pub struct Connection {
     #[serde(default)]
     pub start: Box<str>,
 }
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone, Default, Serialize)]
 pub struct Connections {
+    #[serde(rename = "uploadTotal")]
     pub upload_total: u64,
+    #[serde(rename = "downloadTotal")]
     pub download_total: u64,
     pub connections: Vec<Connection>,
 }

@@ -13,6 +13,8 @@ import org.json.JSONObject;
 /** The foreground service owns the TUN; closing the window leaves it connected. */
 public final class TunnelService extends VpnService {
     static final String RECONFIGURE = "org.clashofrust.android.RECONFIGURE";
+    static final String REQUEST = "vpn_request";
+    private static final Object requests = new Object();
     private static volatile TunnelService instance;
     private static volatile boolean connected;
     private static volatile String lastError = "";
@@ -21,15 +23,43 @@ public final class TunnelService extends VpnService {
     private static final ExecutorService serial = Executors.newSingleThreadExecutor();
     private ParcelFileDescriptor descriptor;
     private String interfaceName;
-    private boolean stopping;
+    private volatile boolean stopping;
+    private volatile int latestStartId;
+    private volatile String acceptedRequest;
+    static String prepareStart(Context context) {
+        synchronized (requests) {
+            String request = java.util.UUID.randomUUID().toString();
+            context.getSharedPreferences("vpn", MODE_PRIVATE).edit().putString(REQUEST, request).apply();
+            return request;
+        }
+    }
+    static boolean current(Context context, String request) {
+        return request != null && request.equals(context.getSharedPreferences("vpn", MODE_PRIVATE).getString(REQUEST, ""));
+    }
+    static void start(Context context, boolean reconfigure) { start(context, reconfigure, prepareStart(context)); }
+    static void start(Context context, boolean reconfigure, String request) {
+        synchronized (requests) {
+            if (!current(context, request)) return;
+            Intent intent = new Intent(context, TunnelService.class).putExtra(REQUEST, request);
+            if (reconfigure) intent.setAction(RECONFIGURE);
+            context.startForegroundService(intent);
+        }
+    }
     static boolean connected() { return connected; }
+    static boolean pending() {
+        TunnelService active = instance;
+        return active != null && !connected && !active.stopping && current(active, active.acceptedRequest);
+    }
     static String error() { return lastError; }
     static void clearError() { lastError = ""; }
     static long generation() { return generation; }
     static void stop(Context context) {
-        context.getSharedPreferences("vpn", MODE_PRIVATE).edit().putBoolean("desired", false).apply();
-        TunnelService active = instance;
-        if (active != null) active.serial.execute(active::disconnect);
+        synchronized (requests) {
+            String request = prepareStart(context);
+            context.getSharedPreferences("vpn", MODE_PRIVATE).edit().putBoolean("desired", false).apply();
+            TunnelService active = instance;
+            if (active != null) serial.execute(() -> active.disconnect(request));
+        }
     }
     @Override public void onCreate() {
         super.onCreate(); instance = this;
@@ -37,25 +67,47 @@ public final class TunnelService extends VpnService {
         manager.createNotificationChannel(new NotificationChannel("vpn", "VPN 连接", NotificationManager.IMPORTANCE_LOW));
     }
     @Override public int onStartCommand(Intent intent, int flags, int startId) {
-        boolean restore = intent == null;
-        boolean alwaysOn = Build.VERSION.SDK_INT >= 29 && isAlwaysOn();
-        if (restore && !alwaysOn && !getSharedPreferences("vpn", MODE_PRIVATE).getBoolean("desired", false)) {
-            stopSelf(); return START_NOT_STICKY;
+        synchronized (requests) {
+            latestStartId = startId;
+            String request = intent == null ? null : intent.getStringExtra(REQUEST);
+            if (request != null && !current(this, request)) {
+                // A previously queued foreground start must not undo a later stop.
+                // Android's foreground deadline belongs to the service, even
+                // when this request is stale and a newer start prevents stopSelf.
+                startForeground(1, notification(connected ? "VPN 已连接" : "VPN 连接已取消"));
+                if (current(this, acceptedRequest)) return START_STICKY;
+                stopForeground(STOP_FOREGROUND_REMOVE);
+                stopSelfResult(startId);
+                return START_NOT_STICKY;
+            }
+            boolean restore = intent == null;
+            boolean alwaysOn = Build.VERSION.SDK_INT >= 29 && isAlwaysOn();
+            if (restore && !alwaysOn && !getSharedPreferences("vpn", MODE_PRIVATE).getBoolean("desired", false)) {
+                startForeground(1, notification("VPN 连接已取消"));
+                stopForeground(STOP_FOREGROUND_REMOVE);
+                stopSelfResult(startId); return START_NOT_STICKY;
+            }
+            if (request == null) request = prepareStart(this);
+            acceptedRequest = request;
+            stopping = false;
+            getSharedPreferences("vpn", MODE_PRIVATE).edit().putBoolean("desired", true).apply();
+            clearError();
+            startForeground(1, notification("正在连接…"));
+            boolean reconfigure = intent != null && RECONFIGURE.equals(intent.getAction());
+            String accepted = request;
+            serial.execute(() -> connect(reconfigure, accepted));
+            VpnTileService.refresh(this);
+            return START_STICKY;
         }
-        getSharedPreferences("vpn", MODE_PRIVATE).edit().putBoolean("desired", true).apply();
-        clearError();
-        startForeground(1, notification("正在连接…"));
-        boolean reconfigure = intent != null && RECONFIGURE.equals(intent.getAction());
-        serial.execute(() -> connect(reconfigure));
-        return START_STICKY;
     }
-    private void connect(boolean reconfigure) {
-        if (stopping || (descriptor != null && !reconfigure)) return;
+    private void connect(boolean reconfigure, String request) {
+        if (stopping || !current(this, request) || (descriptor != null && !reconfigure)) return;
         ParcelFileDescriptor previous = descriptor;
         ParcelFileDescriptor replacement = null;
         boolean established = false;
         try {
             CoreBridge.restore(this);
+            if (stopping || !current(this, request)) return;
             if (VpnService.prepare(this) != null) throw new IllegalStateException("VPN 授权已失效，请打开应用重新连接");
             boolean ipv6 = CoreBridge.ipv6();
             Builder builder = new Builder().setSession("Clash of Rust").setMtu(1500)
@@ -81,6 +133,7 @@ public final class TunnelService extends VpnService {
             // the old VPN atomically when the replacement succeeds; closing it
             // first exposes the underlying network during every reconfigure.
             try (VpnRouting routes=new VpnRouting(this,previous==null ? null : interfaceName,ipv6)) {
+                if (stopping || !current(this, request)) return;
                 ProtectionRuntime.pause(this);
                 if (previous == null) Mobile.setProtector(fd -> protect(fd));
                 replacement = builder.establish();
@@ -95,11 +148,12 @@ public final class TunnelService extends VpnService {
                 // The VPN Network object can remain unchanged while netd is
                 // still moving its routes. Publish readiness only after the
                 // new interface arrives through the ordered network callback.
-                interfaceName=routes.await();
+                interfaceName=routes.await(() -> stopping || !current(this, request));
                 closeDescriptor(previous);
                 previous = null;
                 android.util.Log.i("ClashOfRust", "VPN routing ready on "+interfaceName);
             }
+            if (stopping || !current(this, request)) { cleanup(); return; }
             connected = true; lastError = "";
             generation++;
             ProtectionRuntime.sync(this);
@@ -109,6 +163,10 @@ public final class TunnelService extends VpnService {
             MainActivity.emit("vpn", true);
         } catch (Exception error) {
             closeDescriptor(replacement);
+            if (stopping || !current(this, request)) {
+                if (previous != descriptor) closeDescriptor(previous);
+                cleanup(); return;
+            }
             lastError = error.toString();
             android.util.Log.e("ClashOfRust", "VPN startup failed", error);
             boolean keepPrevious = false;
@@ -137,7 +195,7 @@ public final class TunnelService extends VpnService {
                 if (descriptor == previous) descriptor = null;
             }
             MainActivity.emit("error", "VPN 启动失败：" + lastError);
-            disconnect();
+            disconnect(request);
         }
     }
     private static void closeDescriptor(ParcelFileDescriptor value) {
@@ -157,19 +215,27 @@ public final class TunnelService extends VpnService {
         catch (Exception error) { android.util.Log.e("ClashOfRust", "Stop protection", error); }
         MainActivity.emit("vpn", false);
     }
-    private void disconnect() {
-        stopping = true;
-        getSharedPreferences("vpn", MODE_PRIVATE).edit().putBoolean("desired", false).apply();
+    private void disconnect(String request) {
+        synchronized (requests) {
+            if (!current(this, request)) return;
+            stopping = true;
+            getSharedPreferences("vpn", MODE_PRIVATE).edit().putBoolean("desired", false).apply();
+        }
         cleanup();
-        stopForeground(STOP_FOREGROUND_REMOVE);
-        stopSelf();
+        synchronized (requests) {
+            // A new explicit connect can arrive while cleanup is in progress.
+            if (!current(this, request)) { stopping = false; return; }
+            stopForeground(STOP_FOREGROUND_REMOVE);
+            if (!stopSelfResult(latestStartId)) stopping = false;
+        }
     }
     @Override public void onRevoke() {
         lastError = "VPN 授权已被系统撤回";
-        serial.execute(this::disconnect);
+        stop(this);
     }
     @Override public void onDestroy() {
-        instance = null;
+        stopping = true;
+        if (instance == this) instance = null;
         serial.execute(this::cleanup);
         super.onDestroy();
     }

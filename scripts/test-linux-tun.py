@@ -1,11 +1,13 @@
 """Test installed TUN authorization in a disposable network namespace (root).
 
-The Rust integration test runs as the specified ordinary user. No host routes,
-desktop proxy settings, or existing capability attributes are left changed.
+The installed CLI is checked as root without a display or a polkit authority;
+the Rust integration test then runs as the specified ordinary user. No host
+routes, desktop proxy settings, or existing capability attributes are left changed.
 """
 import argparse
 import contextlib
 import errno
+from http.client import HTTPConnection
 import json
 import os
 from pathlib import Path
@@ -165,6 +167,90 @@ def isolated_uplink():
             run(['umount', '/etc/ssl/certs/ca-certificates.crt'])
 
 
+def root_cli_smoke():
+    """Exercise the installed headless root path before granting user TUN access."""
+    cli = '/opt/clash-of-rust/cor'
+    launcher = '/opt/clash-of-rust/clash-tun-launcher'
+    rejected = subprocess.run([launcher, '-v'], capture_output=True, text=True, timeout=10)
+    assert rejected.returncode != 0 and '不能以 root 运行' in rejected.stderr
+    env = dict(os.environ)
+    for key in ('DISPLAY', 'WAYLAND_DISPLAY', 'WAYLAND_SOCKET', 'DBUS_SESSION_BUS_ADDRESS'):
+        env.pop(key, None)
+    with tempfile.TemporaryDirectory(prefix='cor-root-cli-') as temporary:
+        directory = Path(temporary)
+        command = [cli, '--data-dir', str(directory/'data'), '--json', '--timeout', '30']
+
+        def invoke(*arguments, success=True):
+            output = subprocess.run([*command, *map(str, arguments)], env=env,
+                                    capture_output=True, text=True, timeout=45)
+            if success:
+                assert output.returncode == 0, f'root cor {arguments}: {output.stderr}'
+                return json.loads(output.stdout)['data']
+            assert output.returncode != 0, f'Invalid configuration was accepted: {arguments}'
+            return output.stderr
+
+        def http(host, port, path, secret=None):
+            connection = HTTPConnection(host, port, timeout=10)
+            try:
+                headers = {'Authorization': 'Bearer '+secret} if secret else {}
+                connection.request('GET', path, headers=headers)
+                response = connection.getresponse()
+                assert response.status == 200, f'HTTP {host}:{port}: {response.status}'
+                return response.read()
+            finally:
+                connection.close()
+
+        try:
+            invoke('config', 'check')
+            assert invoke('start')['running']
+            settings = json.loads((directory/'data/settings.json').read_text())
+            mixed, controller = settings['mixed_port'], settings['controller_port']
+            secret = settings['secret']
+
+            def api(path):
+                return json.loads(http('127.0.0.1', controller, '/'+path, secret))
+
+            assert http('127.0.0.1', mixed, 'http://203.0.113.20/auto-check') == b'protected-ok'
+            invalid = directory/'invalid.yaml'
+            invalid.write_text('proxies: [{name: InvalidRootNode, type: COR_INVALID_PROXY_TYPE}]\n'
+                               'rules: ["MATCH,DIRECT"]\n')
+            error = invoke('profile', 'import', invalid, '--name', 'invalid', success=False)
+            assert 'mihomo 配置校验失败' in error and 'COR_INVALID_PROXY_TYPE'.lower() in error.lower(), error
+            assert secret not in error, 'Validation errors exposed the controller secret'
+
+            # Use only the isolated upstream; this test never needs public DNS.
+            profile = directory/'root.yaml'
+            profile.write_text('proxies: []\nrules: ["MATCH,DIRECT"]\n'
+                               'dns: {enable: true, enhanced-mode: fake-ip, '
+                               'nameserver: ["https://192.0.2.254/dns-query#DIRECT"]}\n'
+                               'tun: {device: CorRootTest, route-address: [203.0.113.0/24], dns-hijack: []}\n')
+            invoke('config', 'set', 'dns_override', 'false')
+            invoke('profile', 'import', profile, '--name', 'root-network')
+            invoke('profile', 'use', 'root-network')
+            invoke('proxy', 'tun')
+            assert api('configs')['tun']['enable']
+            before = api('connections')['downloadTotal']
+            assert http('203.0.113.20', 80, '/auto-check') == b'protected-ok'
+            assert api('connections')['downloadTotal'] > before, 'Root traffic bypassed the TUN'
+            invoke('stop')
+            # A fresh root daemon must also restore a persisted TUN mode.
+            assert invoke('start')['running'] and api('configs')['tun']['enable']
+            assert http('203.0.113.20', 80, '/auto-check') == b'protected-ok'
+            invoke('proxy', 'off')
+            assert not api('configs')['tun']['enable']
+        except Exception:
+            diagnostics = subprocess.run([*command, 'logs', '--limit', '40'], env=env,
+                                         capture_output=True, text=True, timeout=45)
+            print(diagnostics.stdout+diagnostics.stderr, flush=True)
+            raise
+        finally:
+            invoke('stop')
+        assert not (directory/'data/control.json').exists(), 'Root daemon survived cor stop'
+        links = json.loads(subprocess.check_output(['ip', '-json', 'link', 'show'], text=True))
+        assert not any(link['ifname'] == 'CorRootTest' for link in links), 'Root TUN was not removed'
+    print('PASS: installed root CLI validation, startup, proxy traffic, TUN, restart and cleanup', flush=True)
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--test-binary', type=Path, required=True)
@@ -183,14 +269,15 @@ def main():
 
     if args.inside_namespace:
         with isolated_resolved(), isolated_uplink():
+            root_cli_smoke()
+            run(['/opt/clash-of-rust/clash-of-rust', '--authorize-tun'])
             run([binary, args.test_case, '--exact',
                  '--ignored', '--test-threads=1', '--nocapture'],
                 env=dict(os.environ, CLASH_TUN_TEST_NAMESPACE='1', CLASH_PROXY_SMOKE='1',
-                         MIHOMO_TEST_RESOURCES='/opt/clash-of-rust/resources', GSETTINGS_BACKEND='memory'),
+                         MIHOMO_TEST_RESOURCES='/opt/clash-of-rust/resources', MIHOMO_TEST_CLI='/opt/clash-of-rust/cor', GSETTINGS_BACKEND='memory'),
                 preexec_fn=ordinary_user, timeout=240)
         return
 
-    executable = '/opt/clash-of-rust/clash-of-rust'
     core = '/opt/clash-of-rust/resources/mihomo'
     launcher = '/opt/clash-of-rust/clash-tun-launcher'
     dns_helper = '/opt/clash-of-rust/libexec/resolvectl'
@@ -204,10 +291,9 @@ def main():
     original = {path: attribute(path) for path in (core, launcher)}
     original_dns_mode = os.stat(dns_helper).st_mode & 0o7777
     try:
-        run([executable, '--authorize-tun'])
         run(['unshare', '--net', '--mount', sys.executable, Path(__file__).resolve(),
              '--inside-namespace', '--test-binary', binary, '--uid', args.uid, '--test-case', args.test_case], timeout=260)
-        print(json.dumps({'basic': True, 'native_authorization': True, 'ordinary_user': args.uid,
+        print(json.dumps({'basic': True, 'native_authorization': True, 'root_cli': True, 'ordinary_user': args.uid,
                           'tun_traffic_cleanup': True, 'network_namespace': True,
                           'resolved_without_polkit': True}))
     finally:

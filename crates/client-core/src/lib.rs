@@ -1,4 +1,4 @@
-//! Shared client logic. Desktop windows, privileges and native services live in apps/desktop.
+//! Shared client logic. Desktop windows live in apps/desktop; native services live in client-runtime.
 #[path = "rules/active_route.rs"]
 pub mod active_route;
 #[path = "controller/mod.rs"]

@@ -119,7 +119,7 @@ export component AppWindow inherits Window {
             }
             if UiData.update-busy || UiData.update-available: ContentPanel {
                 HorizontalLayout { cross-axis-alignment: center; spacing: Theme.content-gap;
-                    Label { text: UiData.update-status; }
+                    Label { text: UiData.update-status; wrap: word-wrap; }
                     if UiData.update-downloading: ActionButton { text: "取消"; clicked => { UiActions.dispatch(Intent.cancel-update, "", ""); } }
                     if UiData.update-available && !UiData.update-busy: ActionButton { text: "下载安装"; primary: true; clicked => { UiActions.dispatch(Intent.install-update, "", ""); } }
                 }

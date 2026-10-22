@@ -101,7 +101,7 @@ fn agent_path() -> Result<PathBuf> {
         .join(format!("Library/LaunchAgents/{LABEL}.plist")))
 }
 fn agent_text() -> Result<String> {
-    let executable = std::env::current_exe()?;
+    let executable = crate::platform::autostart_executable()?;
     Ok(format!(
         "<?xml version=\"1.0\" encoding=\"UTF-8\"?><!DOCTYPE plist PUBLIC \"-//Apple//DTD PLIST 1.0//EN\" \"http://www.apple.com/DTDs/PropertyList-1.0.dtd\"><plist version=\"1.0\"><dict><key>Label</key><string>{LABEL}</string><key>ProgramArguments</key><array><string>{}</string><string>--background</string></array><key>RunAtLoad</key><true/><key>LimitLoadToSessionType</key><string>Aqua</string><key>ProcessType</key><string>Interactive</string></dict></plist>\n",
         cf::escape(&executable.to_string_lossy())

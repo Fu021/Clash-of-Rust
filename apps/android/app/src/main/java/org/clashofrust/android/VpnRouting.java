@@ -59,9 +59,14 @@ final class VpnRouting extends ConnectivityManager.NetworkCallback implements Au
             ready.countDown();
         }
     }
-    String await() throws IOException,InterruptedException {
+    String await(java.util.function.BooleanSupplier cancelled) throws IOException,InterruptedException {
         try {
-            if (!ready.await(10,TimeUnit.SECONDS)) throw new IOException("系统尚未完成 VPN 路由切换");
+            long deadline=System.nanoTime()+TimeUnit.SECONDS.toNanos(10);
+            while (!ready.await(100,TimeUnit.MILLISECONDS)) {
+                if (cancelled.getAsBoolean()) throw new java.util.concurrent.CancellationException("VPN 连接已取消");
+                if (System.nanoTime()>=deadline) throw new IOException("系统尚未完成 VPN 路由切换");
+            }
+            if (cancelled.getAsBoolean()) throw new java.util.concurrent.CancellationException("VPN 连接已取消");
         } catch (InterruptedException error) {Thread.currentThread().interrupt();throw error;}
         return interfaceName;
     }

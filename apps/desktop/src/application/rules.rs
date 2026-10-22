@@ -483,7 +483,11 @@ impl App {
                     && state.editor.is_none()
                     && let Some(doc) = &state.document
                 {
-                    let action = Action::SaveRules(doc.profile_id.clone(), state.draft.clone());
+                    let action = Action::SaveRules(
+                        doc.profile_id.clone(),
+                        state.draft.clone(),
+                        state.saved.clone(),
+                    );
                     return self.dispatch_scope(action, Scope::Rules);
                 }
             }

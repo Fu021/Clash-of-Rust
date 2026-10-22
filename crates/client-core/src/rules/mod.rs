@@ -61,7 +61,23 @@ pub struct CustomRule {
     pub rule: String,
     pub enabled: bool,
 }
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+/// Stream a draft revision without allocating another copy of all rule text.
+pub fn revision(rules: &ProfileRules) -> Result<String> {
+    struct HashWriter(Sha256);
+    impl std::io::Write for HashWriter {
+        fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
+            self.0.update(bytes);
+            Ok(bytes.len())
+        }
+        fn flush(&mut self) -> std::io::Result<()> {
+            Ok(())
+        }
+    }
+    let mut writer = HashWriter(Sha256::new());
+    serde_json::to_writer(&mut writer, rules)?;
+    Ok(format!("{:x}", writer.0.finalize()))
+}
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum Source {
     Custom,
     Shortcut,
@@ -76,7 +92,7 @@ impl std::fmt::Display for Source {
         })
     }
 }
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Row {
     pub id: String,
     pub raw: Arc<str>,
@@ -84,7 +100,7 @@ pub struct Row {
     pub enabled: bool,
     pub duplicate: bool,
 }
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Document {
     pub profile_id: String,
     pub builtin: bool,
