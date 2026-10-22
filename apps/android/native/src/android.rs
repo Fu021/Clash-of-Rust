@@ -1614,6 +1614,7 @@ fn start_delay(
 struct GroupView {
     name: String,
     group: api::Proxy,
+    expanded: bool,
     nodes: Vec<(String, api::Proxy)>,
     count: usize,
     page: usize,
@@ -1734,12 +1735,18 @@ fn project(state: &State) -> Projection {
         groups.push(GroupView {
             name: name.to_string(),
             group: group.clone(),
+            expanded: s.active_group() == Some(name.as_str()),
             nodes,
             count,
             page,
             testing: matches!(&state.delay_scope,Some(DelayScope::All))
                 || matches!(&state.delay_scope,Some(DelayScope::Group(group)) if group==name.as_str()),
         });
+    }
+    // Show the home page's actual outbound group first, keeping every other
+    // group's relative order. Direct mode has no active proxy group to expand.
+    if let Some(index) = groups.iter().position(|group| group.expanded) {
+        groups[..=index].rotate_right(1);
     }
     let node = s.node.clone();
     let document = if state.page == 4 {
@@ -2255,11 +2262,11 @@ fn apply(ui: &AndroidWindow, p: Projection) {
         rows(
             p.groups
                 .into_iter()
-                .enumerate()
-                .map(|(group_index, view)| {
+                .map(|view| {
                     let GroupView {
                         name,
                         group,
+                        expanded,
                         nodes,
                         count,
                         page,
@@ -2283,7 +2290,7 @@ fn apply(ui: &AndroidWindow, p: Projection) {
                         title: name.into(),
                         detail: format!("{} · {count} 个节点", group.kind).into(),
                         current: group.now.to_string().into(),
-                        expanded: group_index == 0,
+                        expanded,
                         testing,
                         nodes: stable(
                             previous_groups
