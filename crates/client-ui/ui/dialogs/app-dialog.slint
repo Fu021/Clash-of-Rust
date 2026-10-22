@@ -41,6 +41,7 @@ export component AppDialog inherits Rectangle {
                 padding: Theme.dialog-padding; spacing: Theme.dialog-gap;
                 Heading { text: UiData.modal != 0 ? UiData.modal-title : root.last-title; font-size: 20px * Theme.text-scale; }
                 ScrollView {
+                    viewport-y <=> UiData.scroll-dialog;
                     min-height: 0px;
                     preferred-height: body.preferred-height;
                     body := VerticalLayout {

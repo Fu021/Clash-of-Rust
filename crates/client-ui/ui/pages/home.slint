@@ -20,6 +20,7 @@ component TrafficMetric inherits Rectangle {
 
 export component HomePage inherits PageSurface {
     ScrollView {
+        viewport-y <=> UiData.scroll-home;
         x: 0px;
         width: parent.width + Theme.content-gap;
         VerticalLayout {

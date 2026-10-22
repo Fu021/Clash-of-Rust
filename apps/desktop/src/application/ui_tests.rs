@@ -416,9 +416,10 @@ fn pointer_keyboard_escape_and_modal_input_use_the_production_callbacks() {
 
 // Small fixtures used only by the interaction tests above. Visual previews
 // inject their own data into ui/preview.slint without compiling the desktop.
-fn fixture(page: Page) -> App {
+pub(super) fn fixture(page: Page) -> App {
     let mut app = App::initial_state(Err(anyhow::anyhow!("isolated UI test")), None);
     app.page = page;
+    app.notification_prepared = true;
     app.snapshot.running = true;
     app.core_failure = None;
     app.notice_visible = false;
@@ -1180,4 +1181,37 @@ fn motion_group_collapse_is_persisted_before_exit_and_navigation_drops_nodes() {
         "no delayed group command after leaving"
     );
     window.hide().unwrap();
+}
+
+#[test]
+fn notification_recovery_waits_for_drafts_and_clears_when_permission_is_granted() {
+    let mut app = fixture(Page::Home);
+    app.import_open = true;
+    app.profile_name = "unfinished subscription".into();
+    let denied = platform::notification::Preparation {
+        allowed: false,
+        offer_settings: true,
+    };
+    let _ = app.update(Message::NotificationPrepared(Ok(denied)));
+    assert!(app.confirmation.is_none());
+    assert!(app.notification_guide_pending);
+    app.import_open = false;
+    app.offer_notification_settings();
+    assert!(matches!(
+        &app.confirmation.as_ref().unwrap().pending,
+        desktop_view::Pending::NotificationSettings
+    ));
+    assert_eq!(app.profile_name, "unfinished subscription");
+    let allowed = platform::notification::Preparation {
+        allowed: true,
+        offer_settings: false,
+    };
+    let _ = app.update(Message::NotificationPrepared(Ok(allowed)));
+    assert!(app.confirmation.is_none());
+    assert!(!app.notification_guide_pending);
+    assert!(!app.notification_checking);
+    app.notification_busy = true;
+    let _ = app.update(Message::NotificationPermissionDenied);
+    assert!(!app.notification_busy);
+    assert!(app.confirmation.is_some());
 }

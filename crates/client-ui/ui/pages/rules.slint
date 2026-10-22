@@ -5,6 +5,7 @@ import { UiData, UiActions, Intent } from "../state.slint";
 import { Label, Caption, Heading, ContentPanel, ActionButton, Badge, Field, Toggle, Select, Paragraph } from "../components/controls.slint";
 export component RulesPage inherits PageSurface {
     ScrollView {
+        viewport-y <=> UiData.scroll-rules;
         x: 0px; width: parent.width + Theme.content-gap;
         VerticalLayout {
             alignment: start; padding-right: Theme.content-gap; spacing: Theme.page-gap;

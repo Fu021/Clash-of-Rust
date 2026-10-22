@@ -37,6 +37,27 @@ _memory_spec.loader.exec_module(memory_benchmark)
 
 
 class BuildTests(unittest.TestCase):
+    def test_memory_mapping_categories_do_not_keep_addresses_or_paths(self):
+        text = """1000-2000 rw-p 0 00:00 0
+Rss: 8 kB
+Pss: 6 kB
+Private_Clean: 1 kB
+Private_Dirty: 3 kB
+2000-3000 rw-p 0 00:00 0 [heap]
+Rss: 4 kB
+Pss: 4 kB
+Private_Dirty: 4 kB
+3000-4000 r-xp 0 08:01 1 /private/path/program
+Rss: 12 kB
+Pss: 9 kB
+Private_Clean: 2 kB
+"""
+        maps = memory_benchmark.memory_maps(text)
+        self.assertEqual(maps['anonymous'], {'rss_bytes':8192, 'pss_bytes':6144, 'private_bytes':4096})
+        self.assertEqual(maps['heap']['private_bytes'], 4096)
+        self.assertEqual(maps['file-backed']['rss_bytes'], 12288)
+        self.assertNotIn('/private/path', json.dumps(maps))
+
     def test_memory_scene_rejects_an_early_exit_missing_core_or_gui_in_headless_sample(self):
         with tempfile.TemporaryDirectory() as temporary:
             path = Path(temporary)/'headless.jsonl'

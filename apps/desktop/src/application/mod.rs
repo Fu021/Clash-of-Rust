@@ -19,6 +19,7 @@ mod rules;
 mod ui_testing;
 #[cfg(test)]
 mod ui_tests;
+mod view_state;
 mod window_state;
 use clash_of_rust::{
     config::{AccentColor, Profile, Settings, Store, ThemeMode},
@@ -177,6 +178,9 @@ enum Message {
     NoticeExpired(u64),
     SystemNotification,
     NotificationFinished(Result<(), String>),
+    NotificationPrepared(Result<platform::notification::Preparation, String>),
+    NotificationPermissionDenied,
+    NotificationSettingsOpened(Result<(), String>),
     Navigate(Page),
     Query(String),
     NodeSort(NodeSort),
@@ -326,6 +330,9 @@ struct App {
     notice_revision: u64,
     notice_timer: Option<desktop_runtime::task::Handle>,
     notification_busy: bool,
+    notification_checking: bool,
+    notification_prepared: bool,
+    notification_guide_pending: bool,
     query: String,
     list_offset: usize,
     profile_name: String,
@@ -392,14 +399,6 @@ impl App {
                 task,
                 desktop_runtime::window::latest().map(Message::ReadWindowSize),
                 desktop_runtime::system::theme().map(Message::SystemTheme),
-                Task::perform(
-                    async {
-                        if let Err(error) = platform::notification::initialize().await {
-                            eprintln!("系统通知授权未开启：{error:#}");
-                        }
-                    },
-                    |_| Message::Tick,
-                ),
             ]),
         )
     }
@@ -485,6 +484,9 @@ impl App {
             notice_revision: 0,
             notice_timer: None,
             notification_busy: false,
+            notification_checking: false,
+            notification_prepared: false,
+            notification_guide_pending: false,
             page: Page::Home,
             snapshot: Snapshot::default(),
             busy: false,
@@ -683,7 +685,19 @@ impl App {
             &message,
             Message::Tick | Message::Window((_, desktop_runtime::window::Event::Opened { .. }))
         );
+        // UNUserNotificationCenter needs the app event loop to be active.
+        // An opened-window event or the first background tick proves it is.
+        let prepare_notifications = !self.notification_prepared
+            && matches!(
+                &message,
+                Message::Tick | Message::Window((_, desktop_runtime::window::Event::Opened { .. }))
+            );
         let task = self.update_message(message);
+        let task = if prepare_notifications {
+            Task::batch([task, self.prepare_notifications()])
+        } else {
+            task
+        };
         let task = self.schedule_notice(notice_revision, task);
         #[cfg(target_os = "macos")]
         if pump {
@@ -759,19 +773,56 @@ impl App {
                 }
             }
             Message::SystemNotification => {
-                if self.notification_busy || self.exiting {
+                if self.notification_busy || self.notification_checking || self.exiting {
                     return Task::none();
                 }
                 self.notification_busy = true;
                 return Task::perform(
                     async {
-                        platform::notification::show("Clash of Rust", "喵!")
-                            .await
-                            .map_err(|error| format!("系统通知失败：{error:#}"))
+                        match platform::notification::show("Clash of Rust", "喵!").await {
+                            Err(error)
+                                if error.is::<platform::notification::PermissionDenied>() =>
+                            {
+                                Message::NotificationPermissionDenied
+                            }
+                            result => Message::NotificationFinished(
+                                result.map_err(|error| format!("系统通知失败：{error:#}")),
+                            ),
+                        }
                     },
-                    Message::NotificationFinished,
+                    |message| message,
                 );
             }
+            Message::NotificationPrepared(result) => {
+                self.notification_checking = false;
+                match result {
+                    Ok(state) => {
+                        self.notification_guide_pending = !state.allowed
+                            && (state.offer_settings || self.notification_guide_pending);
+                        if state.allowed
+                            && self.confirmation.as_ref().is_some_and(|c| {
+                                matches!(&c.pending, desktop_view::Pending::NotificationSettings)
+                            })
+                        {
+                            self.confirmation = None;
+                        }
+                    }
+                    Err(error) => self.show_notice(format!("通知权限检查失败：{error}"), true),
+                }
+                self.offer_notification_settings();
+            }
+            Message::NotificationPermissionDenied => {
+                self.notification_busy = false;
+                self.notification_guide_pending = true;
+                self.offer_notification_settings();
+            }
+            Message::NotificationSettingsOpened(result) => match result {
+                Ok(()) => self.show_notice(
+                    "已打开系统通知设置，请允许 Clash of Rust 发送通知。".into(),
+                    false,
+                ),
+                Err(error) => self.show_notice(format!("通知设置打开失败：{error}"), true),
+            },
             Message::NotificationFinished(result) => {
                 self.notification_busy = false;
                 if let Err(error) = result {
@@ -1512,7 +1563,7 @@ impl App {
                 self.visible = true;
                 let refresh = self.dispatch(Action::Refresh);
                 return Task::batch([
-                    desktop_runtime::window::set_mode(id, desktop_runtime::window::Mode::Windowed)
+                    desktop_runtime::window::show(id)
                         .chain(desktop_runtime::window::minimize(id, false))
                         .chain(desktop_runtime::window::gain_focus(id)),
                     refresh,
@@ -1526,6 +1577,7 @@ impl App {
                 self.window_opening = false;
             }
             Message::Tick => {
+                self.offer_notification_settings();
                 if let Some(startup) = &self.tray_startup {
                     if let Some(result) = startup.poll() {
                         self.tray_startup = None;
@@ -1856,6 +1908,9 @@ impl App {
             }
             Message::Window((_, desktop_runtime::window::Event::Focused)) => {
                 self.visible = true;
+                #[cfg(target_os = "macos")]
+                return Task::batch([self.dispatch(Action::Refresh), self.prepare_notifications()]);
+                #[cfg(not(target_os = "macos"))]
                 return self.dispatch(Action::Refresh);
             }
             Message::Window((id, desktop_runtime::window::Event::CloseRequested)) => {
@@ -1864,19 +1919,21 @@ impl App {
                 let can_reopen = can_reopen || self.mac_reopen_ready;
                 if can_reopen {
                     self.visible = false;
+                    self.window_opening = false;
+                    self.size_pending = false;
+                    self.size_revision = self.size_revision.wrapping_add(1);
+                    self.window_state_revision = self.window_state_revision.wrapping_add(1);
+                    if let Some(handle) = self.window_state_debounce.take() {
+                        handle.abort();
+                    }
                     self.snapshot.retain_scope(Scope::Other);
                     if !self.rule_state.dirty() && !self.rule_state.has_editor() {
                         self.rule_state.release_document();
                     }
                     *self.connection_order.get_mut() = None;
+                    self.proxy_order.get_mut().clear();
                     let stop_stream = self.dispatch_scope(Action::Refresh, Scope::Other);
-                    return Task::batch([
-                        desktop_runtime::window::set_mode(
-                            id,
-                            desktop_runtime::window::Mode::Hidden,
-                        ),
-                        stop_stream,
-                    ]);
+                    return Task::batch([desktop_runtime::window::destroy(id), stop_stream]);
                 }
                 if background_start() && self.tray_startup.is_some() && !self.tray_close_requested {
                     self.tray_close_requested = true;

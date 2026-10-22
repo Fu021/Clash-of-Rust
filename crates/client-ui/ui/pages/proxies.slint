@@ -23,6 +23,7 @@ component NodeCard inherits ContentPanel {
 }
 export component ProxiesPage inherits PageSurface {
     ScrollView {
+        viewport-y <=> UiData.scroll-proxies;
         x: 0px; width: parent.width + Theme.content-gap;
         VerticalLayout {
             alignment: start;

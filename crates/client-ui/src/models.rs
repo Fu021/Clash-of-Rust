@@ -5,6 +5,14 @@ use std::{collections::BTreeMap, rc::Rc};
 
 pub fn reconcile<T: Clone + PartialEq + 'static>(model: &VecModel<T>, rows: Vec<T>) {
     let length = rows.len();
+    if length == 0 {
+        if model.row_count() != 0 {
+            // Removing rows retains Vec's backing allocation. An inactive page
+            // has no rows to reuse; replace the Vec while keeping model identity.
+            model.set_vec(Vec::new());
+        }
+        return;
+    }
     for (index, row) in rows.into_iter().enumerate() {
         if index >= model.row_count() {
             model.push(row);

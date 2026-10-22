@@ -5,6 +5,7 @@ import { UiData, UiActions, Intent } from "../state.slint";
 import { Label, Caption, ContentPanel, RowPanel, SettingsSection, ActionButton, AccentChoice, SettingRow, Divider, Field, Select, Paragraph } from "../components/controls.slint";
 export component SettingsPage inherits PageSurface {
     ScrollView {
+        viewport-y <=> UiData.scroll-settings;
         x: 0px; width: parent.width + Theme.content-gap;
         VerticalLayout {
             alignment: start; padding-right: Theme.content-gap; padding-bottom: Theme.card-padding; spacing: Theme.section-gap;

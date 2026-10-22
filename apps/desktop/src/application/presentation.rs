@@ -266,7 +266,9 @@ impl App {
             ($get:ident, $put:ident, $value:expr) => {{
                 let source = $value;
                 let value: &str = source.as_ref();
-                set!($get, $put, SharedString::from(value));
+                if data.$get().as_str() != value {
+                    data.$put(SharedString::from(value));
+                }
             }};
         }
         text!(get_version, set_version, clash_of_rust::VERSION);
@@ -317,7 +319,7 @@ impl App {
         set!(
             get_notification_busy,
             set_notification_busy,
-            self.notification_busy
+            self.notification_busy || self.notification_checking || !self.notification_prepared
         );
         set!(
             get_notice_elapsed,
@@ -1008,7 +1010,10 @@ impl App {
             data.set_modal_title(confirmation.title.as_str().into());
             data.set_modal_description(confirmation.description.as_str().into());
             data.set_modal_accept(confirmation.accept.into());
-            data.set_modal_danger(true);
+            data.set_modal_danger(!matches!(
+                &confirmation.pending,
+                desktop_view::Pending::NotificationSettings
+            ));
         } else if let Some(editor) = &self.profile_editor {
             kind = 2;
             data.set_modal_title("编辑订阅".into());

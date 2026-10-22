@@ -20,6 +20,7 @@ component CategoryCard inherits ContentPanel {
 export component IpCheckPage inherits PageSurface {
     motion-revision: UiData.sites-report ? 0 : 1;
     ScrollView {
+        viewport-y <=> UiData.scroll-sites;
         x: 0px; width: parent.width + Theme.content-gap;
         VerticalLayout {
             alignment: start; padding-right: Theme.content-gap; spacing: Theme.page-gap;
@@ -40,6 +41,7 @@ export component IpCheckPage inherits PageSurface {
                 }
             }
             if UiData.sites-report: ScrollView {
+                viewport-y <=> UiData.scroll-site-categories;
                 height: Theme.control-height + Theme.content-gap;
                 HorizontalLayout { alignment: start; spacing: Theme.content-gap;
                     for count in UiData.site-counts: ActionButton { text: count.label; clicked => { UiActions.dispatch(Intent.site-status, count.id, "all"); } }

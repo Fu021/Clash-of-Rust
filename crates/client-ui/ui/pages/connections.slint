@@ -63,6 +63,7 @@ export component ConnectionsPage inherits PageSurface {
                     }
                 }
                 ScrollView {
+        viewport-y <=> UiData.scroll-connections;
                     for connection[i] in UiData.connections: Rectangle {
                         y: i * root.row-height;
                         height: root.row-height;

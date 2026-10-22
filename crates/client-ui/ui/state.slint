@@ -40,6 +40,19 @@ export struct CategoryPair { left: CategoryItem, right: CategoryItem }
 
 export global UiActions { callback dispatch(Intent, string, string); }
 export global UiData {
+    in-out property <length> scroll-home;
+    in-out property <length> scroll-proxies;
+    in-out property <length> scroll-profiles;
+    in-out property <length> scroll-connections;
+    in-out property <length> scroll-rules;
+    in-out property <length> scroll-logs;
+    in-out property <length> scroll-network;
+    in-out property <length> scroll-sites;
+    in-out property <length> scroll-site-categories;
+    in-out property <length> scroll-claude;
+    in-out property <length> scroll-settings;
+    in-out property <length> scroll-dialog;
+    in-out property <length> scroll-navigation;
     in-out property <int> accent;
     in-out property <[DetailItem]> connection-details;
     in-out property <string> modal-copy;

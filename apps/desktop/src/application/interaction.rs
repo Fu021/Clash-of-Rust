@@ -6,6 +6,7 @@ pub(crate) enum Pending {
     CloseImport,
     Rules(rules_view::Event),
     Exit,
+    NotificationSettings,
 }
 
 pub(crate) struct Confirmation {
@@ -28,6 +29,45 @@ impl ProfileEditor {
 }
 
 impl App {
+    pub(super) fn prepare_notifications(&mut self) -> Task<Message> {
+        if self.notification_checking || self.exiting {
+            return Task::none();
+        }
+        self.notification_prepared = true;
+        self.notification_checking = true;
+        Task::perform(
+            async {
+                let store = startup_store().map_err(|error| format!("{error:#}"))?;
+                platform::notification::prepare_startup(&store)
+                    .await
+                    .map_err(|error| format!("{error:#}"))
+            },
+            Message::NotificationPrepared,
+        )
+    }
+    pub(super) fn offer_notification_settings(&mut self) {
+        if self.notification_guide_pending
+            && self.visible
+            && !self.working
+            && !self.exiting
+            && self.confirmation.is_none()
+            && self.profile_editor.is_none()
+            && !self.import_open
+            && !self.accent_open
+            && self.connection_detail.is_none()
+            && self.log_detail.is_none()
+            && self.claude.guide.is_none()
+            && !(self.page == Page::Rules && self.rule_state.modal_open())
+            && self.site_detail.is_none()
+        {
+            self.notification_guide_pending = false;
+            let _ = self.ask(
+                "允许系统通知",
+                "Claude 保护的异常连接提醒需要系统通知权限。请在系统设置中允许 Clash of Rust 发送通知。".into(),
+                "打开通知设置", Pending::NotificationSettings,
+            );
+        }
+    }
     fn profile_busy(&self) -> bool {
         self.working
             || self
@@ -183,6 +223,15 @@ impl App {
                     }
                     Some(Pending::Rules(event)) => self.update_rules(event),
                     Some(Pending::Exit) => self.exit(),
+                    Some(Pending::NotificationSettings) => Task::perform(
+                        async {
+                            tokio::task::spawn_blocking(platform::notification::open_settings)
+                                .await
+                                .map_err(|error| error.to_string())?
+                                .map_err(|error| format!("{error:#}"))
+                        },
+                        Message::NotificationSettingsOpened,
+                    ),
                     None => none(),
                 }
             }

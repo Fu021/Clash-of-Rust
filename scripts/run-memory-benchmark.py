@@ -6,6 +6,7 @@ import json
 import os
 from pathlib import Path
 import platform
+import re
 import shutil
 import signal
 import socket
@@ -148,15 +149,42 @@ def read_scene(path, seconds=None, role=None):
     return samples
 
 
+def memory_maps(text):
+    """Aggregate Linux mappings without keeping addresses or user file paths."""
+    totals, category = {}, None
+    for line in text.splitlines():
+        if re.match(r'^[0-9a-f]+-[0-9a-f]+ ', line):
+            parts = line.split(maxsplit=5)
+            name = parts[5] if len(parts) == 6 else ''
+            category = ('heap' if name == '[heap]' else 'stack' if name.startswith('[stack')
+                        else 'anonymous' if not name or name.startswith('[anon')
+                        else 'shared-memory' if '/memfd:' in name or '/dev/shm/' in name
+                        else 'other-special' if name.startswith('[') else 'file-backed')
+            totals.setdefault(category, {'rss_bytes': 0, 'pss_bytes': 0, 'private_bytes': 0})
+        elif category and ':' in line:
+            field, value = line.split(':', 1)
+            if field in ('Rss', 'Pss', 'Private_Clean', 'Private_Dirty'):
+                key = 'private_bytes' if field.startswith('Private_') else field.lower()+'_bytes'
+                totals[category][key] += int(value.split()[0])*1024
+    return totals
+
+
 def measure_process(benchmark, pid, name, output, seconds, env, mode='app'):
     time.sleep(3)
     with (output/(name+'.txt')).open('x') as text:
         subprocess.run([str(benchmark), mode, str(pid), str(seconds), '250',
                         str(output/(name+'.jsonl'))], stdout=text, check=True, env=env)
-    return read_scene(output/(name+'.jsonl'), seconds, 'daemon' if mode == 'daemon' else 'gui')
+    rows = read_scene(output/(name+'.jsonl'), seconds, 'daemon' if mode == 'daemon' else 'gui')
+    maps = []
+    for process in rows[-1]['processes']:
+        path = Path(f"/proc/{process['pid']}/smaps")
+        if path.exists():
+            maps.append({'role': process['role'], 'categories': memory_maps(path.read_text())})
+    write_json(output/(name+'-mappings.json'), maps)
+    return rows
 
 
-def gui_scenes(executable, benchmark, output, seconds, modern_layout=False, slint_layout=False, rule_overrides=None, prefix='', workload='light', tray=None):
+def gui_scenes(executable, benchmark, output, seconds, modern_layout=False, slint_layout=False, rule_overrides=None, prefix='', workload='light', tray=None, expect_destroy=False):
     with tempfile.TemporaryDirectory(prefix='memory-gui-') as directory, (output/(prefix+'gui.log')).open('x') as log:
         data = Path(directory)
         env, controller_port = client_fixture(data, workload, rule_overrides)
@@ -195,37 +223,69 @@ def gui_scenes(executable, benchmark, output, seconds, modern_layout=False, slin
             if tray:
                 wait_until(lambda: tray.registered(app.pid), 'measured application tray registration')
                 before = measure('tray-open')
-                close_window(window, env)
-
-                def visible():
+                def visible_windows():
                     if app.poll() is not None:
                         raise RuntimeError('Close exited the GUI instead of retaining the tray')
                     result = subprocess.run(['xdotool', 'search', '--onlyvisible', '--pid', str(app.pid),
-                                             '--name', '^Clash of Rust'], env=env, capture_output=True)
+                                             '--name', '^Clash of Rust'], env=env, capture_output=True, text=True)
                     if result.returncode not in (0, 1):
                         raise RuntimeError('Could not inspect window visibility')
-                    return result.returncode == 0
+                    return result.stdout.split() if result.returncode == 0 else []
 
                 def hidden():
-                    return not visible() and core_running(controller_port)
+                    return not visible_windows() and core_running(controller_port)
 
-                wait_until(hidden, 'window hidden with the same GUI and core still alive')
+                destroyed = []
+                def close():
+                    current = visible_windows()[0]
+                    close_window(current, env)
+                    wait_until(hidden, 'window closed with the same client and core still alive')
+                    def gone():
+                        return subprocess.run(['xdotool', 'getwindowname', current], env=env,
+                                              capture_output=True).returncode != 0
+                    if expect_destroy:
+                        wait_until(gone, 'native window destruction')
+                    destroyed.append(gone())
+
+                reopen_times = []
+                def reopen():
+                    nonlocal window
+                    started = time.monotonic()
+                    subprocess.run([str(executable)], env=env, stdout=log, stderr=log,
+                                   check=True, timeout=20)
+                    wait_until(lambda: visible_windows() and core_running(controller_port), 'restored window')
+                    window = visible_windows()[0]
+                    reopen_times.append(round((time.monotonic()-started)*1000, 1))
+
+                close()
                 after = measure('tray-hidden')
                 if not hidden():
-                    raise RuntimeError('GUI/core did not remain in the background during sampling')
-                # A second launch uses the same real show-existing-window path
-                # as opening the installed application again.
-                subprocess.run([str(executable)], env=env, stdout=log, stderr=log,
-                               check=True, timeout=20)
-                wait_until(lambda: visible() and core_running(controller_port), 'restored window')
+                    raise RuntimeError('Client/core did not remain in the background during sampling')
+                reopen()
+                measure('tray-reopened')
+                click(70, 156)
+                subprocess.run(['xdotool', 'windowfocus', '--sync', window, 'key', '--clearmodifiers', 'ctrl+f'], env=env, check=True)
+                time.sleep(.5)
+                subprocess.run(['xdotool', 'type', '--delay', '100', '--clearmodifiers', 'node-'], env=env, check=True)
+                measure('tray-search')
+                close()
+                measure('tray-search-hidden')
+                reopen()
+                measure('tray-search-reopened')
+                for _ in range(20):
+                    close()
+                    reopen()
+                final = measure('tray-after-cycles')
                 core_pids = lambda rows: {p['pid'] for row in rows for p in row['processes']
                                           if p['role'] == 'core'}
-                if core_pids(before) != core_pids(after):
-                    raise RuntimeError('Core restarted while closing the window')
+                if not (core_pids(before) == core_pids(after) == core_pids(final)):
+                    raise RuntimeError('Core restarted while closing/reopening the window')
                 write_json(output/(prefix+'proof.json'), {
-                    'gui_pid': app.pid, 'core_pids': sorted(core_pids(after)),
+                    'gui_pid': app.pid, 'core_pids': sorted(core_pids(final)),
                     'tray_registered': True, 'close_request': 'WM_DELETE_WINDOW',
                     'hidden_during_measurement': True, 'reopened': True,
+                    'repeat_cycles': 20, 'native_window_destroyed': destroyed,
+                    'relaunch_to_visible_ms': reopen_times,
                 })
                 return
             measure('home')
@@ -331,6 +391,9 @@ def summarize(output, metadata):
                   'The tray pair has an isolated StatusNotifier host; close sends WM_DELETE_WINDOW, '
                   'then checks that the window is hidden, the original core remains alive, and the app can reopen. '
                   'Headless uses cor start without DISPLAY, Wayland or a session bus. '
+                  'Each tray variant also searches nodes and completes 20 close/reopen cycles. '
+                  'Proof files record native window destruction and relaunch-to-visible times (not first-paint latency). '
+                  'Mapping files separate anonymous, heap and file-backed pages without exposing paths. '
                   'Fixture hosts and the observer are outside the measured process trees.', '',
                   '| Scene | Client | Client RSS peak MiB | Core RSS peak MiB | Total PSS peak MiB |',
                   '| --- | --- | ---: | ---: | ---: |']
@@ -438,8 +501,10 @@ def main():
             for prefix, overrides in variants:
                 gui_scenes(bundle/'clash-of-rust', benchmark, output, args.seconds,
                            modern_layout, slint_layout=True, rule_overrides=overrides,
-                           prefix=prefix, workload=args.workload, tray=tray)
-                metadata['background_scenes'] += [prefix+'tray-open', prefix+'tray-hidden']
+                           prefix=prefix, workload=args.workload, tray=tray,
+                           expect_destroy='fn retire_window(' in (desktop/'src/application/bindings.rs').read_text())
+                metadata['background_scenes'] += [prefix+name for name in ('tray-open', 'tray-hidden',
+                    'tray-reopened', 'tray-search', 'tray-search-hidden', 'tray-search-reopened', 'tray-after-cycles')]
                 if has_cli:
                     headless_scene(bundle/'cor', resources, benchmark, output, args.seconds,
                                    args.workload, overrides, prefix)

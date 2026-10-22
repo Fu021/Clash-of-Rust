@@ -21,6 +21,17 @@ fn enqueue(message: Message) {
         })
     });
 }
+fn enqueue_window(id: window::Id, message: Message) {
+    let _ = slint::invoke_from_event_loop(move || {
+        HOST.with(|slot| {
+            if let Some(host) = slot.borrow_mut().as_mut()
+                && host.current_window_id() == Some(id)
+            {
+                host.message(message);
+            }
+        })
+    });
+}
 struct DesktopHost {
     app: App,
     worker: Arc<tokio::runtime::Runtime>,
@@ -31,6 +42,9 @@ struct DesktopHost {
     next_update: Instant,
     last_delay: Instant,
     fatal: Option<String>,
+    event_loop_started: bool,
+    retiring: Option<window::Id>,
+    saved_view: Option<view_state::State>,
 }
 pub(super) fn run(
     startup: Option<tray::Startup>,
@@ -53,6 +67,9 @@ pub(super) fn run(
         next_update: Instant::now() + update::CHECK_INTERVAL,
         last_delay: Instant::now(),
         fatal: None,
+        event_loop_started: false,
+        retiring: None,
+        saved_view: None,
     };
     if host.app.visible {
         let settings = window::Settings {
@@ -64,6 +81,7 @@ pub(super) fn run(
     if let Some(error) = host.fatal.take() {
         anyhow::bail!(error);
     }
+    host.event_loop_started = true;
     HOST.with(|slot| *slot.borrow_mut() = Some(host));
     native::install(|operation| {
         let _ = slint::invoke_from_event_loop(move || {
@@ -136,10 +154,35 @@ impl DesktopHost {
             }
         });
     }
-    fn message(&mut self, message: Message) {
+    fn message(&mut self, mut message: Message) {
+        // Native callbacks and queued show requests may belong to a retired
+        // window. Business task results are independent of window lifetime.
+        if let Message::Window((id, _)) = &message
+            && self.current_window_id() != Some(*id)
+        {
+            return;
+        }
+        #[cfg(target_os = "linux")]
+        if let Message::WindowCreated(id) = &message
+            && self.current_window_id() != Some(*id)
+        {
+            return;
+        }
+        if matches!(message, Message::ShowWindow(_)) {
+            message = Message::ShowWindow(self.current_window_id());
+            self.retiring = None;
+        }
+        if matches!(message, Message::Window((_, window::Event::CloseRequested)))
+            && let Some((_, window)) = &self.window
+        {
+            // Capture before the hidden-state projection empties the models
+            // and changes ScrollView's layout bounds.
+            self.saved_view = Some(view_state::State::capture(window));
+        }
         let task = self.app.update(message);
         self.sync();
         self.spawn(task);
+        self.finish_retirement();
         if self.app.tray.is_some() && !self.tray_listening {
             self.tray_listening = true;
             self.worker.spawn(async {
@@ -153,15 +196,66 @@ impl DesktopHost {
         if let Some((_, window)) = &self.window {
             self.app
                 .present(&window.global::<UiData>(), &mut self.models);
+            if self.app.visible
+                && !self.app.busy
+                && let Some(state) = self.saved_view.take()
+            {
+                state.restore(window);
+            }
         }
+    }
+    fn current_window_id(&self) -> Option<window::Id> {
+        self.window.as_ref().map(|(id, _)| *id)
+    }
+    fn retire_window(&mut self, id: window::Id) {
+        if self.app.visible {
+            return;
+        }
+        let Some((current, window)) = &self.window else {
+            return;
+        };
+        if *current != id {
+            return;
+        }
+        let size = window
+            .window()
+            .size()
+            .to_logical(window.window().scale_factor());
+        if self.app.window_state.capture(
+            Size::new(size.width, size.height),
+            window.window().is_maximized(),
+            Some(window.window().is_minimized()),
+        ) {
+            let state = self.app.window_state.clone();
+            self.spawn(Task::perform(
+                async move { state.save().await.map_err(|error| format!("{error:#}")) },
+                Message::WindowStateSaved,
+            ));
+        }
+        self.retiring = Some(id);
+        let _ = window.hide();
+        self.models.clear();
+        self.finish_retirement();
+    }
+    fn finish_retirement(&mut self) {
+        if self.retiring.is_none() || self.app.visible || self.app.picking_file {
+            return;
+        }
+        // Dropping the last application handle releases the component tree and
+        // its native adapter. The event loop, tray and Engine remain alive.
+        self.retiring = None;
+        self.window = None;
+        self.models = ViewModels::default();
+        clash_of_rust::flags::release_cache();
     }
 }
 impl native::Host for DesktopHost {
     fn current_window(&self) -> Option<window::Id> {
-        self.window.as_ref().map(|(id, _)| *id)
+        self.current_window_id()
     }
     fn open_window(&mut self, id: window::Id, settings: window::Settings) {
         if let Some((_, window)) = &self.window {
+            self.retiring = None;
             let _ = window.show();
             repaint::invalidate(window.window());
             return;
@@ -169,33 +263,48 @@ impl native::Host for DesktopHost {
         let window = match AppWindow::new() {
             Ok(window) => window,
             Err(error) => {
-                self.fatal = Some(error.to_string());
-                let _ = slint::quit_event_loop();
+                if self.event_loop_started {
+                    self.app.window_opening = false;
+                    self.app.visible = false;
+                    let message = format!("窗口打开失败，可从托盘重试：{error}");
+                    self.app.show_notice(message.clone(), true);
+                    self.worker.spawn(async move {
+                        let _ = platform::notification::show("Clash of Rust", &message).await;
+                    });
+                } else {
+                    self.fatal = Some(error.to_string());
+                    let _ = slint::quit_event_loop();
+                }
                 return;
             }
         };
         self.models.attach(&window.global::<UiData>());
-        window.global::<UiActions>().on_dispatch(|intent, a, b| {
-            // Queue even UI-originated commands to avoid reentrant state/model updates.
-            let _ = slint::invoke_from_event_loop(move || {
-                HOST.with(|slot| {
-                    if let Some(host) = slot.borrow_mut().as_mut() {
-                        let task = host.app.intent(intent, a.as_str(), b.as_str());
-                        host.sync();
-                        if intent == Intent::ConnectionSort
-                            && let Some((_, window)) = &host.window
-                        {
-                            // Sorting can reorder every row. Invalidate the software
-                            // surface too, so the header is painted in the same frame.
-                            repaint::invalidate(window.window());
+        window
+            .global::<UiActions>()
+            .on_dispatch(move |intent, a, b| {
+                // Queue even UI-originated commands to avoid reentrant state/model updates.
+                let _ = slint::invoke_from_event_loop(move || {
+                    HOST.with(|slot| {
+                        if let Some(host) = slot.borrow_mut().as_mut() {
+                            if host.current_window_id() != Some(id) {
+                                return;
+                            }
+                            let task = host.app.intent(intent, a.as_str(), b.as_str());
+                            host.sync();
+                            if intent == Intent::ConnectionSort
+                                && let Some((_, window)) = &host.window
+                            {
+                                // Sorting can reorder every row. Invalidate the software
+                                // surface too, so the header is painted in the same frame.
+                                repaint::invalidate(window.window());
+                            }
+                            host.spawn(task);
                         }
-                        host.spawn(task);
-                    }
-                })
+                    })
+                });
             });
-        });
         window.window().on_close_requested(move || {
-            enqueue(Message::Window((id, window::Event::CloseRequested)));
+            enqueue_window(id, Message::Window((id, window::Event::CloseRequested)));
             slint::CloseRequestResponse::KeepWindowShown
         });
         let mut modifiers = winit::keyboard::ModifiersState::empty();
@@ -246,29 +355,36 @@ impl native::Host for DesktopHost {
                 WindowEvent::Resized(size) => {
                     let logical = size.to_logical::<f32>(f64::from(window.scale_factor()));
                     repaint::invalidate_size(window, logical.width, logical.height);
-                    enqueue(Message::Window((
+                    enqueue_window(
                         id,
-                        window::Event::Resized(Size::new(logical.width, logical.height)),
-                    )));
+                        Message::Window((
+                            id,
+                            window::Event::Resized(Size::new(logical.width, logical.height)),
+                        )),
+                    );
                 }
                 WindowEvent::ScaleFactorChanged { .. } => {
-                    enqueue(Message::Window((id, window::Event::Rescaled)))
+                    enqueue_window(id, Message::Window((id, window::Event::Rescaled)))
                 }
                 WindowEvent::Focused(true) => {
                     repaint::invalidate(window);
-                    enqueue(Message::Window((id, window::Event::Focused)))
+                    enqueue_window(id, Message::Window((id, window::Event::Focused)))
                 }
-                WindowEvent::ThemeChanged(theme) => enqueue(Message::SystemTheme(
-                    if *theme == winit::window::Theme::Dark {
+                WindowEvent::ThemeChanged(theme) => enqueue_window(
+                    id,
+                    Message::SystemTheme(if *theme == winit::window::Theme::Dark {
                         runtime::theme::Mode::Dark
                     } else {
                         runtime::theme::Mode::Light
-                    },
-                )),
+                    }),
+                ),
                 WindowEvent::ModifiersChanged(value) => modifiers = value.state(),
                 WindowEvent::DroppedFile(path) => {
-                    enqueue(Message::ImportDialog(true));
-                    enqueue(Message::ProfileSource(path.to_string_lossy().into_owned()));
+                    enqueue_window(id, Message::ImportDialog(true));
+                    enqueue_window(
+                        id,
+                        Message::ProfileSource(path.to_string_lossy().into_owned()),
+                    );
                 }
                 WindowEvent::KeyboardInput { event, .. }
                     if event.state == ElementState::Pressed =>
@@ -284,10 +400,13 @@ impl native::Host for DesktopHost {
                         && (text.eq_ignore_ascii_case("f")
                             || (cfg!(target_os = "macos") && text.eq_ignore_ascii_case("q")))
                     {
-                        enqueue(Message::Key(runtime::keyboard::Event::KeyPressed {
-                            key: runtime::keyboard::Key::Character(text.to_string()),
-                            modifiers: runtime::keyboard::Modifiers { command: true },
-                        }));
+                        enqueue_window(
+                            id,
+                            Message::Key(runtime::keyboard::Event::KeyPressed {
+                                key: runtime::keyboard::Key::Character(text.to_string()),
+                                modifiers: runtime::keyboard::Modifiers { command: true },
+                            }),
+                        );
                         return EventResult::PreventDefault;
                     }
                 }
@@ -361,6 +480,10 @@ impl native::Host for DesktopHost {
             .map(|(_, window)| window.window().is_minimized())
     }
     fn window_command(&mut self, id: window::Id, command: window::Command) {
+        if matches!(command, window::Command::Destroy) {
+            self.retire_window(id);
+            return;
+        }
         let Some((current, window)) = &self.window else {
             return;
         };
@@ -368,11 +491,9 @@ impl native::Host for DesktopHost {
             return;
         }
         match command {
-            window::Command::Mode(window::Mode::Hidden) => {
-                let _ = window.hide();
-                self.models.clear();
-            }
-            window::Command::Mode(window::Mode::Windowed) => {
+            window::Command::Destroy => unreachable!(),
+            window::Command::Show => {
+                self.retiring = None;
                 let _ = window.show();
                 repaint::invalidate(window.window());
             }
@@ -756,4 +877,116 @@ impl App {
 #[cfg(test)]
 pub(super) fn invalidate_window_for_test(window: &slint::Window) {
     repaint::invalidate(window);
+}
+
+#[cfg(test)]
+mod lifecycle_tests {
+    use super::*;
+    use slint::Model;
+
+    fn host() -> DesktopHost {
+        ui_testing::initialize(950, 700);
+        let mut host = DesktopHost {
+            app: ui_tests::fixture(Page::Rules),
+            worker: Arc::new(
+                tokio::runtime::Builder::new_current_thread()
+                    .enable_all()
+                    .build()
+                    .unwrap(),
+            ),
+            window: None,
+            models: ViewModels::default(),
+            clipboard: None,
+            tray_listening: false,
+            next_update: Instant::now(),
+            last_delay: Instant::now(),
+            fatal: None,
+            event_loop_started: true,
+            retiring: None,
+            saved_view: None,
+        };
+        attach(&mut host);
+        host
+    }
+    fn attach(host: &mut DesktopHost) -> window::Id {
+        let id = window::Id::unique();
+        let window = AppWindow::new().unwrap();
+        host.models.attach(&window.global::<UiData>());
+        host.window = Some((id, window));
+        host.app.visible = true;
+        host.sync();
+        id
+    }
+
+    #[test]
+    fn retiring_releases_the_component_and_models_but_keeps_the_rule_draft() {
+        let mut host = host();
+        let _ = host.app.intent(Intent::RuleAdd, "", "");
+        let _ = host.app.intent(Intent::RulePayload, "example.test", "");
+        host.sync();
+        for _ in 0..20 {
+            let (id, window) = host.window.as_ref().unwrap();
+            let id = *id;
+            let weak = window.as_weak();
+            let old_rules = host.models.rules.clone();
+            host.saved_view = Some(view_state::State::capture(window));
+            host.app.visible = false;
+            host.retire_window(id);
+            assert!(
+                weak.upgrade().is_none(),
+                "a strong handle retained the retired component"
+            );
+            assert!(host.window.is_none());
+            assert_eq!(old_rules.row_count(), 0);
+            assert_eq!(
+                host.app.rule_state.editor.as_ref().unwrap().payload,
+                "example.test"
+            );
+            attach(&mut host);
+            let data = host.window.as_ref().unwrap().1.global::<UiData>();
+            assert_eq!(data.get_rule_payload(), "example.test");
+            assert_eq!(data.get_modal(), 4);
+        }
+    }
+
+    #[test]
+    fn a_file_picker_defers_retirement_and_reopening_cancels_it() {
+        let mut host = host();
+        let id = host.current_window_id().unwrap();
+        host.app.visible = false;
+        host.app.picking_file = true;
+        host.retire_window(id);
+        assert!(host.window.is_some());
+        host.message(Message::ShowWindow(Some(id)));
+        host.app.picking_file = false;
+        host.finish_retirement();
+        assert!(host.window.is_some());
+        host.app.visible = false;
+        host.retire_window(id);
+        assert!(host.window.is_none());
+    }
+
+    #[test]
+    fn stale_window_events_cannot_change_the_new_window_or_prevent_a_reopen() {
+        let mut host = host();
+        let old = host.current_window_id().unwrap();
+        host.app.visible = false;
+        host.retire_window(old);
+        host.message(Message::Window((old, window::Event::Focused)));
+        assert!(!host.app.visible);
+        host.message(Message::ShowWindow(Some(old)));
+        assert!(host.app.window_opening);
+        let current = attach(&mut host);
+        assert_ne!(old, current);
+        host.app.visible = false;
+        host.message(Message::Window((old, window::Event::CloseRequested)));
+        assert!(host.window.is_some());
+        assert_eq!(host.current_window_id(), Some(current));
+        host.app.visible = true;
+        host.retire_window(current);
+        assert!(
+            host.window.is_some(),
+            "a late close command hid a newly reopened window"
+        );
+    }
 }

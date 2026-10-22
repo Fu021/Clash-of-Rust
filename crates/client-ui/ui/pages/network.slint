@@ -6,6 +6,7 @@ import { Label, Caption, Heading, ContentPanel, ActionButton, Field, Badge, Para
 
 export component NetworkPage inherits PageSurface {
     ScrollView {
+        viewport-y <=> UiData.scroll-network;
         x: 0px;
         width: parent.width + Theme.content-gap;
         VerticalLayout {
