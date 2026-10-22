@@ -3,12 +3,12 @@
 </p>
 <h1 align="center">Clash of Rust</h1>
 
-基于 mihomo 的原生 Rust 代理客户端。支持 **Windows（x64 / ARM64）**、**Debian/Ubuntu（amd64 / ARM64，Ubuntu 仅支持 22.04 及以上）**、**macOS 14 及以上（Intel / Apple Silicon）** 和 **Android 8.0 及以上（ARM64 / ARMv7 / x86_64）**。版本 **0.6.1**，更新内容见 [发布说明](docs/releases/0.6.1.md)。
+基于 mihomo 的原生 Rust 代理客户端。支持 **Windows（x64 / ARM64）**、**Debian/Ubuntu（amd64 / ARM64，Ubuntu 仅支持 22.04 及以上）**、**macOS 14 及以上（Intel / Apple Silicon）** 和 **Android 8.0 及以上（ARM64 / ARMv7 / x86_64）**。版本 **0.6.2**，更新内容见 [发布说明](docs/releases/0.6.2.md)。
 
 ## Features
 
 - **轻量**：Rust + Slint 原生界面，无需 WebView，页面数据按需加载。
-- **CLI（0.6.2 开发版）**：Windows、Linux、macOS 均支持无界面运行，适用于服务器与 SSH，覆盖 GUI 中的大部分配置与维护操作，详见 [CLI 使用文档](docs/cli.md)。
+- **CLI**：Windows、Linux、macOS 均支持无界面运行，适用于服务器与 SSH，覆盖 GUI 中的大部分配置与维护操作，详见 [CLI 使用文档](docs/cli.md)。
 - **离线就绪**：内置 mihomo 内核和 Geo 数据，支持一键更新 Geo 数据。
 - **IP 检测**：183 个检测项，覆盖出口 IP、GitHub、AI 服务与流媒体地区访问；一键检测显示分类报告，点击分类或状态查看详情，支持筛选与分类重测。
 - **A÷检测**：采集 Claude 地区、DNS、WebRTC 与浏览器线索，扫描已记录项目配置并分类展示；可选一键保护，锁定节点及规则/全局模式并启用 TUN、加密 DNS 与异常连接拦截，关闭后恢复原设置，详见 [检测说明](docs/claude-region-detection.md)。
@@ -25,15 +25,15 @@
 
 | 平台 | 安装包 |
 | --- | --- |
-| Windows x64 | [Clash-of-Rust-0.6.1-windows-x64-setup.exe](https://github.com/Fu021/Clash-of-Rust/releases/download/v0.6.1/Clash-of-Rust-0.6.1-windows-x64-setup.exe) |
-| Windows ARM64 | [Clash-of-Rust-0.6.1-windows-arm64-setup.exe](https://github.com/Fu021/Clash-of-Rust/releases/download/v0.6.1/Clash-of-Rust-0.6.1-windows-arm64-setup.exe) |
-| Debian / Ubuntu 22.04+ amd64 | [Clash-of-Rust-0.6.1-linux-amd64.deb](https://github.com/Fu021/Clash-of-Rust/releases/download/v0.6.1/Clash-of-Rust-0.6.1-linux-amd64.deb) |
-| Debian / Ubuntu 22.04+ ARM64 | [Clash-of-Rust-0.6.1-linux-arm64.deb](https://github.com/Fu021/Clash-of-Rust/releases/download/v0.6.1/Clash-of-Rust-0.6.1-linux-arm64.deb) |
-| macOS Intel | [Clash-of-Rust-0.6.1-macos-x64.dmg](https://github.com/Fu021/Clash-of-Rust/releases/download/v0.6.1/Clash-of-Rust-0.6.1-macos-x64.dmg) |
-| macOS Apple Silicon | [Clash-of-Rust-0.6.1-macos-arm64.dmg](https://github.com/Fu021/Clash-of-Rust/releases/download/v0.6.1/Clash-of-Rust-0.6.1-macos-arm64.dmg) |
-| Android ARM64（多数手机与平板） | [Clash-of-Rust-0.6.1-android-arm64.apk](https://github.com/Fu021/Clash-of-Rust/releases/download/v0.6.1/Clash-of-Rust-0.6.1-android-arm64.apk) |
-| Android ARMv7 | [Clash-of-Rust-0.6.1-android-armv7.apk](https://github.com/Fu021/Clash-of-Rust/releases/download/v0.6.1/Clash-of-Rust-0.6.1-android-armv7.apk) |
-| Android x86_64 | [Clash-of-Rust-0.6.1-android-x64.apk](https://github.com/Fu021/Clash-of-Rust/releases/download/v0.6.1/Clash-of-Rust-0.6.1-android-x64.apk) |
+| Windows x64 | [Clash-of-Rust-0.6.2-windows-x64-setup.exe](https://github.com/Fu021/Clash-of-Rust/releases/download/v0.6.2/Clash-of-Rust-0.6.2-windows-x64-setup.exe) |
+| Windows ARM64 | [Clash-of-Rust-0.6.2-windows-arm64-setup.exe](https://github.com/Fu021/Clash-of-Rust/releases/download/v0.6.2/Clash-of-Rust-0.6.2-windows-arm64-setup.exe) |
+| Debian / Ubuntu 22.04+ amd64 | [Clash-of-Rust-0.6.2-linux-amd64.deb](https://github.com/Fu021/Clash-of-Rust/releases/download/v0.6.2/Clash-of-Rust-0.6.2-linux-amd64.deb) |
+| Debian / Ubuntu 22.04+ ARM64 | [Clash-of-Rust-0.6.2-linux-arm64.deb](https://github.com/Fu021/Clash-of-Rust/releases/download/v0.6.2/Clash-of-Rust-0.6.2-linux-arm64.deb) |
+| macOS Intel | [Clash-of-Rust-0.6.2-macos-x64.dmg](https://github.com/Fu021/Clash-of-Rust/releases/download/v0.6.2/Clash-of-Rust-0.6.2-macos-x64.dmg) |
+| macOS Apple Silicon | [Clash-of-Rust-0.6.2-macos-arm64.dmg](https://github.com/Fu021/Clash-of-Rust/releases/download/v0.6.2/Clash-of-Rust-0.6.2-macos-arm64.dmg) |
+| Android ARM64（多数手机与平板） | [Clash-of-Rust-0.6.2-android-arm64.apk](https://github.com/Fu021/Clash-of-Rust/releases/download/v0.6.2/Clash-of-Rust-0.6.2-android-arm64.apk) |
+| Android ARMv7 | [Clash-of-Rust-0.6.2-android-armv7.apk](https://github.com/Fu021/Clash-of-Rust/releases/download/v0.6.2/Clash-of-Rust-0.6.2-android-armv7.apk) |
+| Android x86_64 | [Clash-of-Rust-0.6.2-android-x64.apk](https://github.com/Fu021/Clash-of-Rust/releases/download/v0.6.2/Clash-of-Rust-0.6.2-android-x64.apk) |
 
 Windows 运行安装程序；Debian/Ubuntu（Ubuntu 仅支持 22.04 及以上）使用 `sudo apt install ./安装包文件名.deb`。升级保留订阅和个人设置；Windows 卸载可选删除全部配置和数据，默认不勾选。
 
@@ -43,7 +43,7 @@ macOS 打开 DMG，将 **Clash of Rust.app** 拖入 **Applications（应用程�
 
 ## 命令行
 
-从 0.6.2 开发版起，Windows、Linux、macOS 安装包附带无界面的 `cor`，可用于各系统的终端和 Server 环境，无需启动 GUI。支持订阅、节点、规则、DNS、IPv6、TUN、连接、日志、检测、更新与后台自启，覆盖 GUI 中的大部分配置和维护操作，并与窗口共用内核。
+从 0.6.2 起，Windows、Linux、macOS 安装包附带无界面的 `cor`，可用于各系统的终端和 Server 环境，无需启动 GUI。支持订阅、节点、规则、DNS、IPv6、TUN、连接、日志、检测、更新与后台自启，覆盖 GUI 中的大部分配置和维护操作，并与窗口共用内核。
 
 日常使用 `cor start` 在后台运行；建议服务器等纯 CLI 环境启用 TUN，减少逐个设置程序代理的麻烦。运行 `cor help` 查看命令，安装、示例与参数见 [CLI 使用文档](docs/cli.md)。
 
