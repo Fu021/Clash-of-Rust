@@ -53,15 +53,7 @@ def download(config, record, destination):
         if reply.status != 200:
             raise RuntimeError(f'Cache download HTTP {reply.status}')
         with destination.open('wb') as output:
-            remaining = record['size']
-            while remaining:
-                data = reply.read(min(cache.CHUNK, remaining))
-                if not data:
-                    raise ValueError('Incomplete Rust cache shard')
-                output.write(data)
-                remaining -= len(data)
-            if reply.read(1):
-                raise ValueError('Oversized Rust cache shard')
+            cache.download_body(config, reply, output, record['size'], record['group'])
     if cache.digest(destination) != record['sha256']:
         raise ValueError('Rust cache shard checksum mismatch')
 
@@ -112,31 +104,50 @@ def restore(config, github):
             cache.cache_report(config, 'restore', 'GitHub restored; incremental mirror checked')
             return True
         missing = []
-        def extract(item):
-            i, shard = item
+        size = 0
+        print(f'Private cache {config["group"]}: sequential shard restore; '
+              f'{sum(s["size"] for s in value["shards"] if s)/1024**2:.1f} MiB total', flush=True)
+        for i, shard in enumerate(value['shards']):
             if shard is None:
-                return 0
+                continue
             archive = Path(temporary) / f'{i}.tar.gz'
             try:
-                download(config, shard, archive)
+                cache.restore_remaining(config)
+                started = time.monotonic()
+                with cache.phase(config, 'download'):
+                    download(config, shard, archive)
+                print(f'Private cache {config["group"]}: downloaded shard {i+1}/{COUNT}, '
+                      f'{shard["size"]/1024**2:.1f} MiB in {time.monotonic()-started:.1f}s', flush=True)
+                cache.restore_remaining(config)
+            except TimeoutError:
+                missing.append(i)
+                archive.unlink(missing_ok=True)
+                print(f'Private cache {config["group"]}: shard {i+1}/{COUNT} timed out or exceeded restore budget', flush=True)
+                continue
             except RuntimeError as error:
                 if str(error) != 'Cache download HTTP 404':
                     raise
                 # A concurrent successful build or LRU eviction can replace
                 # one shard. Keep the remaining verified dependencies useful.
                 missing.append(i)
-                return 0
+                archive.unlink(missing_ok=True)
+                continue
+            started = time.monotonic()
             config['restore_started'] = True
-            cache.unpack(archive, paths)
+            # Complete one verified archive before downloading the next. The
+            # outer watchdog still bounds an extractor blocked beyond its budget.
+            with cache.phase(config, 'extract'):
+                cache.unpack(archive, paths)
             archive.unlink()
-            return shard['size']
-        # Limit load on the 1-core cache host; only byte serving is done there.
-        with cache.phase(config, 'download'), ThreadPoolExecutor(max_workers=2) as workers:
-            size = sum(workers.map(extract, enumerate(value['shards'])))
+            size += shard['size']
+            print(f'Private cache {config["group"]}: extracted shard {i+1}/{COUNT} '
+                  f'in {time.monotonic()-started:.1f}s', flush=True)
     config.update(restored=bool(size), hit=not missing and record['key'] == config['key'])
     if missing:
         config['mirror_required'] = True
         invalidate_build_scripts(paths)
+        print(f'Private cache {config["group"]}: retained {sum(s is not None for s in value["shards"])-len(missing)} verified shards; '
+              f'{len(missing)} missing or skipped; Cargo will rebuild missing dependencies.', flush=True)
     cache.cache_report(config, 'restore', 'partial mirror; Cargo fills missing shards' if missing
                        else 'verified incremental mirror', size)
     return True
