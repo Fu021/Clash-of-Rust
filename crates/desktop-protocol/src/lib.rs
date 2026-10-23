@@ -85,7 +85,7 @@ impl<T: Clone> List<T> {
 }
 include!(concat!(env!("OUT_DIR"), "/contract.rs"));
 
-pub const PROTOCOL: u32 = 2;
+pub const PROTOCOL: u32 = 3;
 pub const LIMIT: usize = 8 * 1024 * 1024;
 #[derive(Debug, Clone, Copy, Default, PartialEq, Serialize, Deserialize)]
 pub struct Size {

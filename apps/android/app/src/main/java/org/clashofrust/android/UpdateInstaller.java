@@ -36,7 +36,9 @@ final class UpdateInstaller {
         if (archive==null || !activity.getPackageName().equals(archive.packageName)) throw new IOException("安装包不是 Clash of Rust");
         long incoming=Build.VERSION.SDK_INT>=28?archive.getLongVersionCode():archive.versionCode;
         long current=Build.VERSION.SDK_INT>=28?installed.getLongVersionCode():installed.versionCode;
-        if (incoming<=current) throw new IOException("安装包版本不高于当前版本，请重新检查更新");
+        if (incoming<current) throw new IOException("Android 不允许覆盖安装较低版本的安装包。如需返回较旧正式版，请先备份配置，再手动卸载并安装正式版；卸载会删除应用数据。");
+        if (incoming==current && java.util.Objects.equals(archive.versionName,installed.versionName))
+            throw new IOException("已经安装此版本，请重新检查更新");
         Signature[] target=Build.VERSION.SDK_INT>=28?(archive.signingInfo==null?null:archive.signingInfo.getApkContentsSigners()):archive.signatures;
         Signature[] existing=Build.VERSION.SDK_INT>=28?(installed.signingInfo==null?null:installed.signingInfo.getApkContentsSigners()):installed.signatures;
         if (target==null || existing==null || target.length!=existing.length || !Arrays.asList(target).containsAll(Arrays.asList(existing)))

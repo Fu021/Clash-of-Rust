@@ -13,6 +13,7 @@ export component Preview inherits AppWindow {
     in-out property <string> preview-notice <=> UiData.notice;
     in-out property <float> preview-notice-elapsed <=> UiData.notice-elapsed;
     in-out property <bool> preview-protection-pending <=> UiData.protection-pending;
+    in-out property <bool> preview-update-prereleases <=> UiData.update-prereleases;
     in-out property <int> dialog;
     in-out property <bool> shortcuts-open <=> UiData.shortcuts-open;
     in-out property <bool> raw-rule <=> UiData.rule-text-mode;
@@ -23,6 +24,15 @@ export component Preview inherits AppWindow {
         UiData.modal-description = root.dialog == 1 ? "将删除“备用订阅”及其配置文件。此操作无法撤销。" : root.dialog == 2 ? "尚有未应用的修改。放弃后将恢复已保存的规则。" : root.dialog == 3 ? "将固定当前节点，启用 TUN、代理 DNS、广泛规则与实时拦截。共享服务可能影响其他应用，关闭后恢复原设置。" : root.dialog == 6 ? "检测结果：确认可用\n识别地区：德国\n响应时间：128 ms\n\n以下为固定演示数据，不代表真实网络检测。" : "";
         UiData.modal-accept = root.dialog == 1 ? "删除订阅" : root.dialog == 2 ? "放弃修改" : root.dialog == 3 ? "开启保护" : root.dialog == 10 ? "完成" : root.dialog == 6 || root.dialog == 11 ? "" : "保存";
         UiData.modal-danger = root.dialog == 1 || root.dialog == 2;
+        if root.dialog == 12 {
+            UiData.modal = 1;
+            UiData.modal-title = "安装预发布版 0.6.4-dev.1？";
+            UiData.modal-description = "预发布版本可能存在尚未发现的风险与 Bug，可能导致程序崩溃、网络异常或配置兼容问题。建议先备份配置，确认后再下载安装。";
+            UiData.modal-accept = "继续安装（3 秒）";
+            UiData.modal-can-accept = false;
+            UiData.update-prereleases = true;
+            UiData.update-status = "发现预发布版 0.6.4-dev.1";
+        }
         if root.dialog >= 7 && root.dialog <= 9 {
             UiData.modal = 0;
             UiData.claude-filter = root.dialog == 7 ? 1 : root.dialog == 8 ? 0 : 2;

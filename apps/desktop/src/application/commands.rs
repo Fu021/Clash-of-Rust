@@ -12,6 +12,7 @@ pub(super) enum Action {
     Accent(AccentColor),
     TextScale(u16),
     TraySpeed(bool),
+    UpdatePrereleases(bool),
     DnsOverride(bool),
     Ipv6(bool),
     Udp(bool),
@@ -192,6 +193,14 @@ pub(super) async fn execute(
                 };
                 engine.save_settings(settings).await?;
                 Ok("托盘显示已保存".into())
+            }
+            Action::UpdatePrereleases(update_prereleases) => {
+                let settings = Settings {
+                    update_prereleases,
+                    ..engine.settings.clone()
+                };
+                engine.save_settings(settings).await?;
+                Ok("更新通道已保存".into())
             }
             Action::DnsOverride(dns_override) => {
                 let settings = Settings {

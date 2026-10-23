@@ -222,9 +222,10 @@ pub(super) async fn execute(
         Command::UpdateInstall => {
             crate::update::ensure_installable()?;
             let port = engine.running().then_some(engine.settings.mixed_port);
-            let available = crate::update::check(port)
-                .await?
-                .ok_or_else(|| anyhow::anyhow!("已经是最新正式版"))?;
+            let available =
+                crate::update::check_with_prereleases(port, engine.settings.update_prereleases)
+                    .await?
+                    .ok_or_else(|| anyhow::anyhow!("当前更新通道没有可安装的版本"))?;
             let download = Arc::new(
                 crate::update::download(available, port, Some(engine.api.clone()), |_| {}).await?,
             );

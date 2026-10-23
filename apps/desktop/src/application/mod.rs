@@ -231,7 +231,8 @@ enum Message {
     Action(Action),
     Finished(Box<Reply>),
     CheckUpdate,
-    UpdateChecked(Result<Option<update::Available>, String>),
+    UpdateChecked(u64, Result<Option<update::Available>, String>),
+    InstallUpdateConfirmed(String),
     InstallUpdate,
     CancelUpdateDownload,
     UpdateProgress(u64, update::Progress),
@@ -557,13 +558,15 @@ impl App {
             return Task::none();
         }
         let proxy_port = self.snapshot.running.then_some(self.settings.mixed_port);
+        let include_prereleases = self.settings.update_prereleases;
+        let id = self.updates.check_id;
         Task::perform(
             async move {
-                update::check(proxy_port)
+                update::check_with_prereleases(proxy_port, include_prereleases)
                     .await
                     .map_err(|error| error.to_string())
             },
-            Message::UpdateChecked,
+            move |result| Message::UpdateChecked(id, result),
         )
     }
 
@@ -882,6 +885,11 @@ impl App {
                         if let Ok(engine) = engine.try_lock() {
                             self.backend_remote = engine.is_remote();
                             self.view_revision = engine.view_revision();
+                            if self.settings.update_prereleases
+                                != engine.settings.update_prereleases
+                            {
+                                self.updates.reset_channel();
+                            }
                             self.settings = engine.settings.clone();
                             if !self.rule_state.dirty() && !self.rule_state.has_editor() {
                                 self.rule_state = rules_view::State::default();
@@ -903,7 +911,11 @@ impl App {
                 }
             }
             Message::CheckUpdate => return self.check_update(),
-            Message::UpdateChecked(result) => self.updates.finish(result),
+            Message::UpdateChecked(id, result) => {
+                if id == self.updates.check_id && self.updates.checking {
+                    self.updates.finish(result);
+                }
+            }
             Message::InstallUpdate => {
                 if self.exiting || self.updates.busy() || self.updates.checking {
                     return Task::none();
@@ -911,6 +923,34 @@ impl App {
                 let Some(available) = self.updates.available.clone() else {
                     return Task::none();
                 };
+                if available.preview {
+                    if !self.settings.update_prereleases {
+                        return Task::none();
+                    }
+                    let task = self.ask(
+                        &format!("安装预发布版 {}？", available.version),
+                        update::channel::PRERELEASE_WARNING.into(),
+                        "继续安装",
+                        desktop_view::Pending::InstallUpdate(available.version),
+                    );
+                    self.confirmation.as_mut().unwrap().ready_at =
+                        Some(std::time::Instant::now() + update::channel::PRERELEASE_WAIT);
+                    return task;
+                }
+                return self.update(Message::InstallUpdateConfirmed(available.version));
+            }
+            Message::InstallUpdateConfirmed(version) => {
+                if self.exiting || self.updates.busy() || self.updates.checking {
+                    return Task::none();
+                }
+                let Some(available) = self.updates.available.clone() else {
+                    return Task::none();
+                };
+                if available.version != version
+                    || (available.preview && !self.settings.update_prereleases)
+                {
+                    return Task::none();
+                }
                 if let Err(error) = update::ensure_installable() {
                     self.updates.fail(error.to_string());
                     return Task::none();
@@ -1729,7 +1769,20 @@ impl App {
                 {
                     self.interval_input = reply.settings.delay_interval_minutes.to_string();
                 }
+                let update_channel_changed =
+                    self.settings.update_prereleases != reply.settings.update_prereleases;
                 self.settings = reply.settings;
+                if update_channel_changed {
+                    self.updates.reset_channel();
+                    if self.confirmation.as_ref().is_some_and(|confirmation| {
+                        matches!(
+                            confirmation.pending,
+                            desktop_view::Pending::InstallUpdate(_)
+                        )
+                    }) {
+                        self.confirmation = None;
+                    }
+                }
                 // A completed Geo/network operation predates the queued appearance choices.
                 for queued in &self.queued_actions {
                     queued.preview_appearance(&mut self.settings);

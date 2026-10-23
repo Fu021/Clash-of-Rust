@@ -2,7 +2,7 @@ import { MobilePreviewSurface } from "../shared/preview.slint";
 import { AndroidSurface } from "app.slint";
 import "../../../../../resources/fonts/SourceHanSansCN-Regular.otf";
 import { AndroidData } from "state.slint";
-import { MobileData } from "../shared/state.slint";
+import { MobileData, MobileView } from "../shared/state.slint";
 export component AndroidPreview inherits Window {
     preferred-width: 393px; preferred-height: 852px;
     default-font-family: "Source Han Sans CN";
@@ -22,6 +22,12 @@ export component AndroidPreview inherits Window {
     in-out property <string> preview-notice <=> scene.preview-notice;
     in-out property <float> preview-notice-elapsed <=> scene.preview-notice-elapsed;
     in-out property <bool> preview-sparse <=> scene.preview-sparse;
+    in-out property <bool> preview-update-prereleases <=> MobileData.update-prereleases;
+    in-out property <bool> preview-update-preview <=> MobileData.update-preview;
+    in-out property <string> preview-update-version <=> MobileData.update-version;
+    in-out property <bool> preview-update-available <=> AndroidData.update-available;
+    in-out property <string> preview-update-status <=> AndroidData.update-status;
+    in-out property <length> preview-settings-scroll <=> MobileView.settings-scroll-y;
     scene := MobilePreviewSurface {
         inset-top: 28px; inset-bottom: 24px; preview-connected: true;
         AndroidSurface { }

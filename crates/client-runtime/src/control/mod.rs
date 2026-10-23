@@ -19,7 +19,7 @@ use serde_json::Value;
 use std::path::PathBuf;
 pub use transport::{Endpoint, Remote, Server, serve};
 
-pub const PROTOCOL: u32 = 2;
+pub const PROTOCOL: u32 = 3;
 pub const REQUEST_LIMIT: usize = 8 * 1024 * 1024;
 pub const RESPONSE_LIMIT: usize = 32 * 1024 * 1024;
 

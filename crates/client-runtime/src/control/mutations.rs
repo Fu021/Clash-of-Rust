@@ -47,6 +47,7 @@ pub(super) fn setting(settings: &Settings, key: &str, value: Value) -> Result<Se
                 | "accent_color"
                 | "text_scale"
                 | "tray_speed"
+                | "update_prereleases"
                 | "dns_override"
                 | "ipv6"
                 | "udp"

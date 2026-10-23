@@ -1,4 +1,4 @@
-//! Stable-release discovery and bounded, verified downloads for native hosts.
+//! Release discovery and bounded, verified downloads for native hosts.
 use anyhow::{Context, Result, bail, ensure};
 use reqwest::Client;
 use semver::Version;
@@ -6,6 +6,7 @@ use serde::Deserialize;
 use sha2::{Digest, Sha256};
 use std::{path::Path, time::Duration};
 use tokio::io::AsyncWriteExt;
+pub mod channel;
 mod retry;
 mod route;
 pub use retry::check as retry_check;
@@ -38,6 +39,7 @@ impl Progress {
 #[derive(Clone, Debug)]
 pub struct Package {
     pub version: String,
+    pub preview: bool,
     pub name: String,
     pub size: u64,
     pub url: String,
@@ -104,8 +106,23 @@ async fn bounded(mut response: reqwest::Response, limit: usize) -> Result<Vec<u8
     }
     Ok(bytes)
 }
+#[cfg(test)]
 fn select(releases: Vec<Release>, current: &str, suffix: &str) -> Result<Option<Package>> {
+    select_channel(releases, current, suffix, false)
+}
+fn select_channel(
+    releases: Vec<Release>,
+    current: &str,
+    suffix: &str,
+    include_prereleases: bool,
+) -> Result<Option<Package>> {
     let current = Version::parse(current)?;
+    let current_is_preview = channel::installed_preview(
+        &current,
+        releases
+            .iter()
+            .map(|release| (release.tag_name.as_str(), release.draft, release.prerelease)),
+    );
     ensure!(
         suffix
             .bytes()
@@ -115,9 +132,15 @@ fn select(releases: Vec<Release>, current: &str, suffix: &str) -> Result<Option<
     let release = releases
         .into_iter()
         .filter_map(|r| {
-            let v = Version::parse(r.tag_name.trim_start_matches('v')).ok()?;
-            (!r.draft && !r.prerelease && v.pre.is_empty() && v.cmp_precedence(&current).is_gt())
-                .then_some((v, r))
+            let v = channel::candidate(
+                &r.tag_name,
+                r.draft,
+                r.prerelease,
+                &current,
+                include_prereleases,
+                current_is_preview,
+            )?;
+            Some((v, r))
         })
         .max_by(|(a, _), (b, _)| a.cmp_precedence(b));
     if let Some((version, release)) = release {
@@ -136,7 +159,7 @@ fn select(releases: Vec<Release>, current: &str, suffix: &str) -> Result<Option<
                     .filter(|a| a.name == sidecar && a.size > 0 && a.size <= 1024)
                     .count()
                     == 1,
-            "正式版 {version} 缺少本平台安装包或校验文件（{suffix}）"
+            "版本 {version} 缺少本平台安装包或校验文件（{suffix}）"
         );
         let asset = matches[0];
         ensure!(asset.size > 0 && asset.size <= LIMIT, "安装包大小无效");
@@ -147,6 +170,7 @@ fn select(releases: Vec<Release>, current: &str, suffix: &str) -> Result<Option<
             .push(&release.tag_name)
             .push(&name);
         return Ok(Some(Package {
+            preview: release.prerelease || !version.pre.is_empty(),
             version: version.to_string(),
             name,
             size: asset.size,
@@ -158,6 +182,14 @@ fn select(releases: Vec<Release>, current: &str, suffix: &str) -> Result<Option<
     Ok(None)
 }
 pub async fn check(current: &str, suffix: &str, port: Option<u16>) -> Result<Option<Package>> {
+    check_with_prereleases(current, suffix, port, false).await
+}
+pub async fn check_with_prereleases(
+    current: &str,
+    suffix: &str,
+    port: Option<u16>,
+    include_prereleases: bool,
+) -> Result<Option<Package>> {
     // Validate local arguments once; retry only the remote discovery operation.
     Version::parse(current).context("当前客户端版本号无效")?;
     ensure!(
@@ -168,14 +200,24 @@ pub async fn check(current: &str, suffix: &str, port: Option<u16>) -> Result<Opt
         "安装包平台无效"
     );
     let routes = crate::network::routes(port, None);
-    retry_check(|| check_once(current, suffix, &routes, API)).await
+    retry_check(|| check_once_channel(current, suffix, &routes, API, include_prereleases)).await
 }
 
+#[cfg(test)]
 async fn check_once(
     current: &str,
     suffix: &str,
     routes: &[crate::network::Route],
     endpoint: &str,
+) -> Result<Option<Package>> {
+    check_once_channel(current, suffix, routes, endpoint, false).await
+}
+async fn check_once_channel(
+    current: &str,
+    suffix: &str,
+    routes: &[crate::network::Route],
+    endpoint: &str,
+    include_prereleases: bool,
 ) -> Result<Option<Package>> {
     let mut errors = Vec::new();
     for route in routes {
@@ -189,7 +231,12 @@ async fn check_once(
                 2 * 1024 * 1024,
             )
             .await?;
-            select(serde_json::from_slice(&bytes)?, current, suffix)
+            select_channel(
+                serde_json::from_slice(&bytes)?,
+                current,
+                suffix,
+                include_prereleases,
+            )
         }
         .await;
         match result {
@@ -360,6 +407,7 @@ mod tests {
         });
         let package = Package {
             version: "0.6.2".into(),
+            preview: false,
             name: "update.apk".into(),
             size: body.len() as u64,
             url: format!("{base}/update.apk"),
@@ -402,6 +450,34 @@ mod tests {
         assert!(select(parse(), "0.5.12", "android-x64.apk").is_err());
         assert!(
             select(parse(), "0.5.13", "android-arm64.apk")
+                .unwrap()
+                .is_none()
+        );
+    }
+    #[test]
+    fn android_channels_offer_previews_and_return_to_the_newest_complete_stable_package() {
+        let releases = serde_json::json!([
+            {"tag_name":"v0.6.4-dev.2","draft":false,"prerelease":true,"assets":[
+                {"name":"Clash-of-Rust-0.6.4-dev.2-android-arm64.apk","size":42},
+                {"name":"Clash-of-Rust-0.6.4-dev.2-android-arm64.apk.sha256","size":64}]},
+            {"tag_name":"v0.6.3","draft":false,"prerelease":false,"assets":[
+                {"name":"Clash-of-Rust-0.6.3-android-arm64.apk","size":42},
+                {"name":"Clash-of-Rust-0.6.3-android-arm64.apk.sha256","size":64}]}
+        ]);
+        let parse = || serde_json::from_value::<Vec<Release>>(releases.clone()).unwrap();
+        let preview = select_channel(parse(), "0.6.3", "android-arm64.apk", true)
+            .unwrap()
+            .unwrap();
+        assert_eq!(preview.version, "0.6.4-dev.2");
+        assert!(preview.preview);
+        let stable = select_channel(parse(), "0.6.4-dev.1", "android-arm64.apk", false)
+            .unwrap()
+            .unwrap();
+        assert_eq!(stable.version, "0.6.3");
+        assert!(!stable.preview);
+        assert!(select_channel(parse(), "0.6.4-dev.1", "android-x64.apk", false).is_err());
+        assert!(
+            select_channel(parse(), "0.6.3", "android-arm64.apk", false)
                 .unwrap()
                 .is_none()
         );

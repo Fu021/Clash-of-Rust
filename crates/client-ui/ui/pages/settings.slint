@@ -81,6 +81,9 @@ export component SettingsPage inherits PageSurface {
                 title: "更新";
                 ContentPanel {
                     Label { text: "当前版本 " + UiData.version; }
+                    SettingRow { title: "包含预发布版本"; checked: UiData.update-prereleases; enabled: !UiData.working && !UiData.update-busy && !UiData.update-checking;
+                        toggled(value) => { UiActions.dispatch(Intent.update-prereleases, value ? "true" : "false", ""); }
+                    }
                     Paragraph { text: UiData.update-status; font-size: Theme.detail-size; color: Theme.secondary; }
                     HorizontalLayout { cross-axis-alignment: center; spacing: Theme.content-gap;
                         ActionButton { text: "检查更新"; busy: UiData.update-checking; enabled: !UiData.update-checking && !UiData.update-busy; clicked => { UiActions.dispatch(Intent.check-update, "", ""); } }

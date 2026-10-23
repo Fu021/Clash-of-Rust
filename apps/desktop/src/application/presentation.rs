@@ -293,6 +293,11 @@ impl App {
         set!(get_autostart, set_autostart, self.autostart);
         set!(get_tray_speed, set_tray_speed, self.settings.tray_speed);
         set!(
+            get_update_prereleases,
+            set_update_prereleases,
+            self.settings.update_prereleases
+        );
+        set!(
             get_dns_override,
             set_dns_override,
             self.settings.dns_override
@@ -1003,10 +1008,17 @@ impl App {
             kind = 1;
             data.set_modal_title(confirmation.title.as_str().into());
             data.set_modal_description(confirmation.description.as_str().into());
-            data.set_modal_accept(confirmation.accept.into());
+            let wait = confirmation.wait();
+            data.set_modal_accept(if wait == 0 {
+                confirmation.accept.into()
+            } else {
+                format!("{}（{wait} 秒）", confirmation.accept).into()
+            });
+            data.set_modal_can_accept(wait == 0 && !self.working && !self.exiting);
             data.set_modal_danger(!matches!(
                 &confirmation.pending,
                 desktop_view::Pending::NotificationSettings
+                    | desktop_view::Pending::InstallUpdate(_)
             ));
         } else if let Some(editor) = &self.profile_editor {
             kind = 2;

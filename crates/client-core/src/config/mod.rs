@@ -77,6 +77,7 @@ pub struct Settings {
     pub accent_color: AccentColor,
     pub text_scale: u16,
     pub tray_speed: bool,
+    pub update_prereleases: bool,
     pub dns_override: bool,
     pub ipv6: bool,
     pub udp: bool,
@@ -114,6 +115,7 @@ impl Default for Settings {
             accent_color: AccentColor::default(),
             text_scale: 100,
             tray_speed: false,
+            update_prereleases: false,
             dns_override: true,
             ipv6: true,
             udp: true,
@@ -601,6 +603,21 @@ fn apply_rules(map: &mut Mapping, overrides: &RuleOverrides) -> Result<()> {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn existing_settings_keep_stable_updates_and_channel_choice_survives_reload() {
+        let settings: Settings = serde_json::from_str("{}").unwrap();
+        assert!(!settings.update_prereleases);
+        let root = tempfile::tempdir().unwrap();
+        let store = Store {
+            root: root.path().to_owned(),
+        };
+        let selected = Settings {
+            update_prereleases: true,
+            ..settings
+        };
+        store.save_settings(&selected).unwrap();
+        assert!(store.load_settings().unwrap().update_prereleases);
+    }
     #[test]
     fn data_directory_is_exclusive() {
         let tmp = tempfile::tempdir().unwrap();

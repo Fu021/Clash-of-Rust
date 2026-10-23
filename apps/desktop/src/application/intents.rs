@@ -232,6 +232,7 @@ impl App {
             Intent::SaveInterval => Message::SaveInterval,
             Intent::UpdateGeo => Message::Action(Action::UpdateGeo),
             Intent::CheckUpdate => Message::CheckUpdate,
+            Intent::UpdatePrereleases => Message::Action(Action::UpdatePrereleases(boolean(a))),
             Intent::InstallUpdate => Message::InstallUpdate,
             Intent::CancelUpdate => Message::CancelUpdateDownload,
             Intent::OpenRelease => Message::OpenRelease,
