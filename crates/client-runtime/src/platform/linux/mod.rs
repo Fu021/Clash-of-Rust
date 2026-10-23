@@ -143,6 +143,26 @@ pub(super) fn owns_legacy(current: &ProxyState, owned: &ProxyState) -> bool {
             .all(|key| owned.contains_key(key) && current.get(key) == owned.get(key))
 }
 
+pub fn write(state: &ProxyState) -> Result<()> {
+    if state.keys().any(|k| k.starts_with("kde|")) {
+        return super::kde::write(state);
+    }
+    // Apply the mode last, after host/port are configured.
+    for (entry, value) in state
+        .iter()
+        .filter(|(key, _)| !key.ends_with("|mode"))
+        .chain(state.iter().filter(|(key, _)| key.ends_with("|mode")))
+    {
+        let (schema, key) = entry.split_once('|').context("无效代理恢复记录")?;
+        let Some(ProxyValue::Text(value)) = value else {
+            bail!("无效 GNOME 代理值");
+        };
+        super::gio::setting(&["set", schema, key, value])?;
+    }
+    super::gio::sync();
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -171,24 +191,4 @@ mod tests {
         assert!(!owns_legacy(&current, &legacy));
         assert!(!owns_legacy(&current, &ProxyState::new()));
     }
-}
-
-pub fn write(state: &ProxyState) -> Result<()> {
-    if state.keys().any(|k| k.starts_with("kde|")) {
-        return super::kde::write(state);
-    }
-    // Apply the mode last, after host/port are configured.
-    for (entry, value) in state
-        .iter()
-        .filter(|(key, _)| !key.ends_with("|mode"))
-        .chain(state.iter().filter(|(key, _)| key.ends_with("|mode")))
-    {
-        let (schema, key) = entry.split_once('|').context("无效代理恢复记录")?;
-        let Some(ProxyValue::Text(value)) = value else {
-            bail!("无效 GNOME 代理值");
-        };
-        super::gio::setting(&["set", schema, key, value])?;
-    }
-    super::gio::sync();
-    Ok(())
 }

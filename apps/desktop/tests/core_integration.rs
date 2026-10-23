@@ -111,7 +111,9 @@ fn assert_system_proxy_ports(store: &Store, port: u16) {
 #[tokio::test]
 #[ignore = "Requires the disposable native proxy/TUN CI wrapper"]
 async fn basic_system_proxy_and_tun() {
-    use clash_of_rust::{engine::ProxyMode, platform};
+    use clash_of_rust::engine::ProxyMode;
+    #[cfg(windows)]
+    use clash_of_rust::platform;
     use std::time::Duration;
     use tokio::io::{AsyncReadExt, AsyncWriteExt};
     assert_eq!(std::env::var("CLASH_PROXY_SMOKE").as_deref(), Ok("1"));

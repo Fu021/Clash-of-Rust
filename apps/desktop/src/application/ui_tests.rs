@@ -1017,7 +1017,7 @@ fn a_new_log_detail_resets_the_previous_dialog_scroll_and_shows_what_it_copies()
 fn list_navigation_resets_scroll_but_background_refresh_preserves_reading_position() {
     use clash_client_ui::LogItem;
     ui_testing::initialize(950, 700);
-    let mut app = fixture(Page::Logs);
+    let app = fixture(Page::Logs);
     let window = AppWindow::new().unwrap();
     window
         .global::<clash_client_ui::Motion>()
@@ -1076,7 +1076,7 @@ fn list_navigation_resets_scroll_but_background_refresh_preserves_reading_positi
 fn claude_risk_pages_and_categories_start_at_the_top() {
     use clash_client_ui::ReportItem;
     ui_testing::initialize(950, 700);
-    let mut app = fixture(Page::Claude);
+    let app = fixture(Page::Claude);
     let window = AppWindow::new().unwrap();
     window
         .global::<clash_client_ui::Motion>()
