@@ -1,11 +1,12 @@
 //! Offline bitmap flags avoid Windows font-dependent regional indicator rendering.
 pub use clash_client_core::countries::{country_code, country_text};
 use slint::{Image, SharedPixelBuffer};
-use std::cell::OnceCell;
 use std::sync::OnceLock;
+use std::{cell::RefCell, collections::VecDeque};
 
 const SIZE: u32 = 72;
 const BYTES: usize = (SIZE * SIZE * 4) as usize;
+const CACHE_LIMIT: usize = 32;
 const PIXELS: &[u8] = include_bytes!(concat!(
     env!("CARGO_MANIFEST_DIR"),
     "/../../resources/flags/flags.rgba"
@@ -20,6 +21,15 @@ fn codes() -> &'static Vec<String> {
         )))
         .unwrap()
     })
+}
+
+thread_local! {
+    static HANDLES: RefCell<VecDeque<(usize, Image)>> = const { RefCell::new(VecDeque::new()) };
+}
+
+#[doc(hidden)]
+pub fn release_cache() {
+    HANDLES.with(|handles| *handles.borrow_mut() = VecDeque::new());
 }
 
 pub fn label(country: &str) -> (&str, Option<Image>) {
@@ -46,20 +56,21 @@ pub fn label(country: &str) -> (&str, Option<Image>) {
     if matches!(code.as_str(), "HK" | "MO" | "TW") {
         return (text, None);
     }
-    thread_local! {
-        static HANDLES: Vec<OnceCell<Image>> = codes().iter().map(|_| OnceCell::new()).collect();
-    }
     let handle = codes().iter().position(|item| item == &code).map(|index| {
         HANDLES.with(|handles| {
-            handles[index]
-                .get_or_init(|| {
-                    Image::from_rgba8(SharedPixelBuffer::clone_from_slice(
-                        &PIXELS[index * BYTES..(index + 1) * BYTES],
-                        SIZE,
-                        SIZE,
-                    ))
-                })
-                .clone()
+            let mut handles = handles.borrow_mut();
+            let image = if let Some(position) = handles.iter().position(|(key, _)| *key == index) {
+                handles.remove(position).unwrap().1
+            } else {
+                Image::from_rgba8(SharedPixelBuffer::clone_from_slice(
+                    &PIXELS[index * BYTES..(index + 1) * BYTES],
+                    SIZE,
+                    SIZE,
+                ))
+            };
+            handles.push_front((index, image.clone()));
+            handles.truncate(CACHE_LIMIT);
+            image
         })
     });
     (text, handle)
@@ -83,5 +94,21 @@ mod tests {
         {
             assert!(label(country).1.is_none());
         }
+    }
+
+    #[test]
+    fn bitmap_cache_is_bounded_and_can_release_all_its_handles() {
+        release_cache();
+        for code in codes() {
+            let _ = label(code);
+        }
+        HANDLES.with(|handles| assert_eq!(handles.borrow().len(), CACHE_LIMIT));
+        let retained = label("DE").1.unwrap();
+        release_cache();
+        HANDLES.with(|handles| assert!(handles.borrow().is_empty()));
+        assert_eq!(retained.size().width, SIZE);
+        assert_eq!(retained.size().height, SIZE);
+        assert!(label("DE").1.is_some());
+        release_cache();
     }
 }

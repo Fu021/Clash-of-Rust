@@ -1,10 +1,11 @@
 import { PageSurface } from "../components/motion.slint";
-import { ScrollView } from "std-widgets.slint";
 import { Theme } from "../theme/palette.slint";
 import { UiData, UiActions, Intent } from "../state.slint";
-import { Label, Caption, Heading, ContentPanel, ActionButton, Badge } from "../components/controls.slint";
+import { PageScroll, Label, Caption, Heading, ContentPanel, ActionButton, Badge } from "../components/controls.slint";
 export component SubscriptionsPage inherits PageSurface {
-    ScrollView {
+    PageScroll {
+        content-key: "" + UiData.page-offset;
+        viewport-y <=> UiData.scroll-profiles;
         x: 0px; width: parent.width + Theme.content-gap;
         VerticalLayout {
             alignment: start; padding-right: Theme.content-gap; spacing: Theme.page-gap;
@@ -25,12 +26,13 @@ export component SubscriptionsPage inherits PageSurface {
                     if profile.active: Badge { text: "当前使用中"; tone: 1; }
                     if !profile.active: ActionButton { text: "使用"; enabled: !UiData.working; clicked => { UiActions.dispatch(Intent.activate-profile, profile.id, ""); } }
                 }
+                Caption { text: profile.detail; wrap: word-wrap; }
                 Caption { text: profile.source; }
-                HorizontalLayout { cross-axis-alignment: center; spacing: Theme.content-gap;
-                    Caption { text: profile.detail; }
-                    if !profile.local: ActionButton { text: "更新"; enabled: !UiData.working; clicked => { UiActions.dispatch(Intent.update-profile, profile.id, ""); } }
-                    if !profile.local: ActionButton { text: "编辑"; enabled: !UiData.working; clicked => { UiActions.dispatch(Intent.edit-profile, profile.id, ""); } }
-                    if !profile.local: ActionButton { text: "删除"; danger: true; enabled: !UiData.working; clicked => { UiActions.dispatch(Intent.delete-profile, profile.id, ""); } }
+                if !profile.local: HorizontalLayout { cross-axis-alignment: center; spacing: Theme.content-gap;
+                    Rectangle { horizontal-stretch: 1; }
+                    ActionButton { text: "更新"; enabled: !UiData.working; clicked => { UiActions.dispatch(Intent.update-profile, profile.id, ""); } }
+                    ActionButton { text: "编辑"; enabled: !UiData.working; clicked => { UiActions.dispatch(Intent.edit-profile, profile.id, ""); } }
+                    ActionButton { text: "删除"; danger: true; enabled: !UiData.working; clicked => { UiActions.dispatch(Intent.delete-profile, profile.id, ""); } }
                 }
             }
             HorizontalLayout { cross-axis-alignment: center; spacing: Theme.content-gap;

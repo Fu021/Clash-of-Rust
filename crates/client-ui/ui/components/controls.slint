@@ -3,6 +3,20 @@ import { Theme } from "../theme/palette.slint";
 import { UiData, UiActions, Intent } from "../state.slint";
 import { ScrollView } from "std-widgets.slint";
 
+// Reset on navigation, not on each model refresh. Clamp after content shrinks
+// (including a shorter detail) so a previous offset cannot hide the new body.
+export component PageScroll inherits ScrollView {
+    in property <string> content-key;
+    property <length> bottom: min(0px, self.visible-height - self.viewport-height);
+    changed content-key => { self.viewport-y = 0px; }
+    changed bottom => { self.viewport-y = clamp(self.viewport-y, self.bottom, 0px); }
+    changed viewport-y => {
+        if self.viewport-y < self.bottom || self.viewport-y > 0px {
+            self.viewport-y = clamp(self.viewport-y, self.bottom, 0px);
+        }
+    }
+}
+
 export component Label {
     in property <string> text;
     in property <brush> color: Theme.ink;
@@ -67,6 +81,7 @@ export component Panel inherits Rectangle {
 // Keep the padding intact when text, controls or conditional rows change size.
 export component ContentPanel inherits Panel {
     in property <length> gap: Theme.content-gap;
+    in property <length> vertical-padding: Theme.card-padding;
     in property <bool> interactive: false;
     callback clicked();
     vertical-stretch: 0;
@@ -77,7 +92,8 @@ export component ContentPanel inherits Panel {
     }
     content := VerticalLayout {
         alignment: start;
-        padding: Theme.card-padding;
+        padding-left: Theme.card-padding; padding-right: Theme.card-padding;
+        padding-top: root.vertical-padding; padding-bottom: root.vertical-padding;
         spacing: root.gap;
         @children
     }

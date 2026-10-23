@@ -206,6 +206,7 @@ pub async fn run(args: &Args) -> Result<()> {
     }
     let mut tick = tokio::time::interval(Duration::from_secs(1));
     let mut delay_at = tokio::time::Instant::now();
+    let mut delay_job: Option<tokio::task::JoinHandle<()>> = None;
     loop {
         tokio::select! {
             result = interrupted() => { result?; break; },
@@ -214,14 +215,33 @@ pub async fn run(args: &Args) -> Result<()> {
                 let mut owner = engine.lock().await;
                 if let Err(error) = owner.poll(Scope::Other).await { owner.record_failure(&format!("{error:#}")); }
                 let minutes = owner.settings.delay_interval_minutes;
+                if (!owner.running() || minutes == 0 || owner.settings.claude_protection.is_some())
+                    && let Some(job) = delay_job.take() {
+                    job.abort();
+                }
+                if delay_job.as_ref().is_some_and(|job| job.is_finished()) {
+                    delay_job = None;
+                }
                 if owner.running() && minutes > 0 && owner.settings.claude_protection.is_none()
+                    && delay_job.is_none()
                     && delay_at.elapsed() >= Duration::from_secs(u64::from(minutes)*60) {
-                    // Reuse the core's bounded group probing and automatic selection.
-                    if let Err(error) = owner.api.delay_all_nodes().await { owner.record_failure(&format!("定时测速失败：{error:#}")); }
+                    // The owning process schedules this once. Network probes must
+                    // not hold the engine lock and block an attached GUI or stop.
+                    let api = owner.api.clone();
+                    let shared = engine.clone();
+                    delay_job = Some(tokio::spawn(async move {
+                        match api.delay_all_nodes().await {
+                            Ok(_) => shared.lock().await.invalidate_views(),
+                            Err(error) => shared.lock().await.record_failure(&format!("定时测速失败：{error:#}")),
+                        }
+                    }));
                     delay_at = tokio::time::Instant::now();
                 }
             }
         }
+    }
+    if let Some(job) = delay_job {
+        job.abort();
     }
     let mut owner = engine.lock().await;
     let closing = control::request_gui_exit(&owner.store);

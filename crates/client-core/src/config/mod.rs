@@ -7,6 +7,11 @@ use std::{
     path::{Path, PathBuf},
 };
 
+mod dns;
+pub use dns::DEFAULT_DNS_NAMESERVERS;
+mod ports;
+pub use ports::reserve_controller;
+
 pub const SUBSCRIPTION_RULES: [&str; 5] = [
     "GEOSITE,category-ads-all,REJECT",
     "GEOSITE,private,DIRECT",
@@ -72,6 +77,7 @@ pub struct Settings {
     pub accent_color: AccentColor,
     pub text_scale: u16,
     pub tray_speed: bool,
+    pub update_prereleases: bool,
     pub dns_override: bool,
     pub ipv6: bool,
     pub udp: bool,
@@ -109,6 +115,7 @@ impl Default for Settings {
             accent_color: AccentColor::default(),
             text_scale: 100,
             tray_speed: false,
+            update_prereleases: false,
             dns_override: true,
             ipv6: true,
             udp: true,
@@ -428,8 +435,23 @@ pub fn runtime_config_with_rules(
         .or_insert(serde_yaml::to_value(["any:53"])?);
     map.insert(Value::from("tun"), Value::Mapping(tun));
     apply_sniffer(&mut map)?;
-    apply_dns(&mut map, settings)?;
+    let managed_dns = dns::apply(&mut map, settings)?;
     crate::claude_check::protection::apply(&mut map, settings)?;
+    if managed_dns || settings.claude_protection.is_some() {
+        // Run after protection as well: its macOS DNS overlay must not erase
+        // compatibility exceptions or reinterpret a subscription whitelist.
+        let extra: &[&str] = if cfg!(target_os = "macos")
+            && settings
+                .claude_protection
+                .as_ref()
+                .is_some_and(|protection| !protection.system_dns.is_empty())
+        {
+            &["+.bash.ws"]
+        } else {
+            &[]
+        };
+        dns::fake_ip_exceptions(&mut map, extra)?;
+    }
     apply_udp(
         &mut map,
         settings.udp || settings.claude_protection.is_some(),
@@ -541,35 +563,6 @@ fn apply_udp(map: &mut Mapping, enabled: bool) -> Result<()> {
     Ok(())
 }
 
-/// Shared fallback used when a host needs DNS but the subscription provides none.
-pub const DEFAULT_DNS_NAMESERVERS: [&str; 2] = [
-    "https://doh.pub/dns-query",
-    "https://dns.alidns.com/dns-query",
-];
-
-fn apply_dns(map: &mut Mapping, settings: &Settings) -> Result<()> {
-    let mut dns = match map.remove(Value::from("dns")) {
-        None | Some(Value::Null) => Mapping::new(),
-        Some(Value::Mapping(dns)) => dns,
-        _ => bail!("订阅 dns 必须是配置对象"),
-    };
-    // FlClash's baseline owns these three fields, leaving provider-specific
-    // resolution policies, filters, hosts and listener settings intact.
-    if settings.dns_override || dns.is_empty() {
-        dns.insert(Value::from("enable"), Value::from(true));
-        dns.insert(Value::from("enhanced-mode"), Value::from("fake-ip"));
-        dns.insert(
-            Value::from("nameserver"),
-            serde_yaml::to_value(DEFAULT_DNS_NAMESERVERS)?,
-        );
-    }
-    // The IPv6 preference is independent of DNS override and authoritative
-    // for both the core's outbound support and its DNS AAAA responses.
-    dns.insert(Value::from("ipv6"), Value::from(settings.ipv6));
-    map.insert(Value::from("dns"), Value::Mapping(dns));
-    Ok(())
-}
-
 fn apply_rules(map: &mut Mapping, overrides: &RuleOverrides) -> Result<()> {
     if !overrides.enabled.iter().any(|enabled| *enabled) {
         return Ok(());
@@ -610,6 +603,21 @@ fn apply_rules(map: &mut Mapping, overrides: &RuleOverrides) -> Result<()> {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn existing_settings_keep_stable_updates_and_channel_choice_survives_reload() {
+        let settings: Settings = serde_json::from_str("{}").unwrap();
+        assert!(!settings.update_prereleases);
+        let root = tempfile::tempdir().unwrap();
+        let store = Store {
+            root: root.path().to_owned(),
+        };
+        let selected = Settings {
+            update_prereleases: true,
+            ..settings
+        };
+        store.save_settings(&selected).unwrap();
+        assert!(store.load_settings().unwrap().update_prereleases);
+    }
     #[test]
     fn data_directory_is_exclusive() {
         let tmp = tempfile::tempdir().unwrap();
@@ -868,6 +876,12 @@ mod tests {
                         "https://dns.alidns.com/dns-query",
                     ])
                     .unwrap();
+                    let filters = expected["fake-ip-filter"].as_sequence_mut().unwrap();
+                    for domain in dns::REAL_IP_DOMAINS {
+                        if !filters.contains(&Value::from(*domain)) {
+                            filters.push(Value::from(*domain));
+                        }
+                    }
                 }
                 assert_eq!(result["dns"], expected);
                 // Applying the same settings again must not grow or erase DNS fields.
@@ -878,6 +892,23 @@ mod tests {
                 assert_eq!(reapplied, result);
             }
         }
+    }
+
+    #[test]
+    fn disabled_dns_override_preserves_even_a_fake_ip_whitelist() {
+        let raw = "proxies: []\ndns: {enable: true, enhanced-mode: fake-ip, nameserver: [9.9.9.9], fake-ip-filter-mode: whitelist, fake-ip-filter: ['*']}\n";
+        let settings = Settings {
+            dns_override: false,
+            ..Settings::default()
+        };
+        let result: Value = serde_yaml::from_str(&runtime_config(raw, &settings).unwrap()).unwrap();
+        assert_eq!(result["dns"]["fake-ip-filter-mode"], "whitelist");
+        assert_eq!(
+            result["dns"]["fake-ip-filter"],
+            serde_yaml::to_value(["*"]).unwrap()
+        );
+        assert_eq!(result["dns"]["nameserver"][0], "9.9.9.9");
+        assert!(result["rule-providers"].is_null());
     }
 
     #[test]

@@ -1,11 +1,11 @@
 import { PageSurface } from "../components/motion.slint";
 import { UiData, UiActions, Intent } from "../state.slint";
-import { ScrollView } from "std-widgets.slint";
 import { Theme } from "../theme/palette.slint";
-import { Label, Caption, Heading, ContentPanel, ActionButton, Field, Badge, Paragraph } from "../components/controls.slint";
+import { PageScroll, Label, Caption, Heading, ContentPanel, ActionButton, Field, Badge, Paragraph } from "../components/controls.slint";
 
 export component NetworkPage inherits PageSurface {
-    ScrollView {
+    PageScroll {
+        viewport-y <=> UiData.scroll-network;
         x: 0px;
         width: parent.width + Theme.content-gap;
         VerticalLayout {

@@ -1,8 +1,7 @@
 import { PageSurface, ProgressTrack } from "../components/motion.slint";
-import { ScrollView } from "std-widgets.slint";
 import { Theme } from "../theme/palette.slint";
 import { UiData, UiActions, Intent } from "../state.slint";
-import { Label, Caption, Heading, ContentPanel, RowPanel, ActionButton, Toggle, Badge, Paragraph } from "../components/controls.slint";
+import { PageScroll, Label, Caption, Heading, ContentPanel, RowPanel, ActionButton, Toggle, Badge, Paragraph } from "../components/controls.slint";
 component ResultEntry inherits ContentPanel {
     in property <string> title;
     in property <string> count;
@@ -20,7 +19,9 @@ component ResultEntry inherits ContentPanel {
 }
 export component AiCheckPage inherits PageSurface {
     motion-revision: UiData.claude-filter + 1;
-    ScrollView {
+    PageScroll {
+        content-key: UiData.claude-filter + "/" + UiData.claude-result-page;
+        viewport-y <=> UiData.scroll-claude;
         x: 0px; width: parent.width + Theme.content-gap;
         VerticalLayout {
             alignment: start; padding-right: Theme.content-gap; spacing: Theme.page-gap;

@@ -96,13 +96,14 @@ pub(crate) fn run() -> anyhow::Result<()> {
     if let Err(error) = platform::notification::prepare_process() {
         eprintln!("通知窗口身份初始化失败：{error:#}");
     }
-    slint::BackendSelector::new()
-        .backend_name("winit".into())
-        .renderer_name("software".into())
-        .select()?;
-    // The application ID requires a platform, and must precede window creation.
-    #[cfg(target_os = "linux")]
-    slint::set_xdg_app_id("clash-of-rust")?;
+    #[cfg(windows)]
+    // There is no winit event loop in the host anymore. Keep its native tray
+    // menus aware of per-monitor DPI before the tray thread creates a window.
+    unsafe {
+        windows_sys::Win32::UI::HiDpi::SetProcessDpiAwarenessContext(
+            windows_sys::Win32::UI::HiDpi::DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2,
+        );
+    }
     // Publish the native icon before cold font loading and Geo integrity checks.
     let tray_startup = std::sync::Mutex::new(Some(tray::Startup::new(Duration::from_secs(
         if background_start() { 120 } else { 5 },

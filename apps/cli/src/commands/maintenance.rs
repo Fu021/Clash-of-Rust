@@ -5,8 +5,13 @@ use clash_client_core::config::atomic_write;
 pub(super) async fn execute(args: &Args) -> Result<()> {
     match args.path.as_str() {
         "config get" => {
-            let value = serde_json::to_value(backend::meta(args).await?.settings)?;
+            let mut value = serde_json::to_value(backend::meta(args).await?.settings)?;
+            value
+                .as_object_mut()
+                .expect("settings object")
+                .remove("controller_port");
             let value = if let Some(key) = args.positional.first() {
+                ensure!(key != "controller_port", "控制端口由后台自动管理");
                 ensure!(value.get(key).is_some(), "未知设置项：{key}");
                 json!({(key):value[key].clone()})
             } else {
@@ -159,33 +164,48 @@ pub(super) async fn authorize_tun(args: &Args) -> Result<()> {
 }
 
 async fn update(args: &Args) -> Result<()> {
+    let (port, api, include_prereleases) =
+        if let Some(remote) = backend::connect(args, false).await? {
+            let meta: Meta = remote.request(Command::Meta).await?;
+            (
+                meta.running.then_some(meta.settings.mixed_port),
+                Some(clash_client_core::api::Api::new(&meta.settings)?),
+                meta.settings.update_prereleases,
+            )
+        } else {
+            (
+                None,
+                None,
+                backend::store(args)?.load_settings()?.update_prereleases,
+            )
+        };
     if args.path == "update install" {
-        output::confirm(args, "下载并安装最新正式版，停止当前内核和后台？").await?;
+        let prompt = if include_prereleases {
+            format!(
+                "{}\n按当前通道下载安装，停止当前内核和后台？",
+                clash_client_core::update::channel::PRERELEASE_WARNING
+            )
+        } else {
+            "下载并安装最新正式版（预发布版可返回正式版），停止当前内核和后台？".into()
+        };
+        output::confirm(args, &prompt).await?;
         return output::emit(args, backend::request(args, Command::UpdateInstall).await?);
     }
-    let (port, api) = if let Some(remote) = backend::connect(args, false).await? {
-        let meta: Meta = remote.request(Command::Meta).await?;
-        (
-            meta.running.then_some(meta.settings.mixed_port),
-            Some(clash_client_core::api::Api::new(&meta.settings)?),
-        )
-    } else {
-        (None, None)
-    };
-    let available = clash_client_runtime::update::check(port).await?;
+    let available =
+        clash_client_runtime::update::check_with_prereleases(port, include_prereleases).await?;
     if args.path == "update check" {
         return output::emit(
             args,
             match available {
                 Some(a) => {
-                    json!({"available":true,"version":a.version,"url":a.url,"package":a.package.map(|p|p.asset.name)})
+                    json!({"available":true,"version":a.version,"preview":a.preview,"url":a.url,"package":a.package.map(|p|p.asset.name)})
                 }
                 None => json!({"available":false}),
             },
         );
     }
     let output_path = backend::absolute(args.get("output").context("请提供 --output FILE")?)?;
-    let available = available.context("已经是最新正式版")?;
+    let available = available.context("当前更新通道没有可安装的版本")?;
     let mut last_report: Option<std::time::Instant> = None;
     let downloaded = clash_client_runtime::update::download(available, port, api, |value| {
         if !args.flag("quiet")

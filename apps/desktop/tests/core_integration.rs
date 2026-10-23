@@ -69,10 +69,51 @@ fn free_port() -> u16 {
     panic!("could not allocate a port available for both TCP and UDP: {last_error:?}")
 }
 
+fn assert_system_proxy_ports(store: &Store, port: u16) {
+    use clash_of_rust::platform::{self, ProxyState, ProxyValue};
+    let path = store.root.join("system-proxy.json");
+    assert!(
+        platform::is_owned(&path).unwrap(),
+        "native settings must match the lease"
+    );
+    let journal: serde_json::Value = serde_json::from_slice(&std::fs::read(path).unwrap()).unwrap();
+    let owned: ProxyState = serde_json::from_value(journal["owned"].clone()).unwrap();
+    #[cfg(target_os = "linux")]
+    for protocol in ["http", "https", "socks"] {
+        assert_eq!(
+            owned[&format!("org.gnome.system.proxy.{protocol}|host")],
+            Some(ProxyValue::Text("'127.0.0.1'".into()))
+        );
+        assert_eq!(
+            owned[&format!("org.gnome.system.proxy.{protocol}|port")],
+            Some(ProxyValue::Text(port.to_string()))
+        );
+    }
+    #[cfg(windows)]
+    assert_eq!(
+        owned["ProxyServer"],
+        Some(ProxyValue::Text(format!("127.0.0.1:{port}")))
+    );
+    #[cfg(target_os = "macos")]
+    for service in owned.values() {
+        let Some(ProxyValue::Text(text)) = service else {
+            panic!("invalid service proxy")
+        };
+        let value: serde_json::Value = serde_json::from_str(text).unwrap();
+        for protocol in ["HTTP", "HTTPS", "SOCKS"] {
+            assert_eq!(value[format!("{protocol}Enable")], 1);
+            assert_eq!(value[format!("{protocol}Proxy")], "127.0.0.1");
+            assert_eq!(value[format!("{protocol}Port")], port);
+        }
+    }
+}
+
 #[tokio::test]
 #[ignore = "Requires the disposable native proxy/TUN CI wrapper"]
 async fn basic_system_proxy_and_tun() {
-    use clash_of_rust::{engine::ProxyMode, platform};
+    use clash_of_rust::engine::ProxyMode;
+    #[cfg(windows)]
+    use clash_of_rust::platform;
     use std::time::Duration;
     use tokio::io::{AsyncReadExt, AsyncWriteExt};
     assert_eq!(std::env::var("CLASH_PROXY_SMOKE").as_deref(), Ok("1"));
@@ -174,7 +215,16 @@ async fn basic_system_proxy_and_tun() {
         .activate(engine.profiles.last().unwrap().id.clone())
         .await
         .unwrap();
+    let conflicting_controller =
+        std::net::TcpListener::bind(("127.0.0.1", controller_port)).unwrap();
     engine.start().await.unwrap();
+    assert_ne!(engine.settings.controller_port, controller_port);
+    assert_eq!(
+        store.load_settings().unwrap().controller_port,
+        engine.settings.controller_port
+    );
+    assert!(std::net::TcpListener::bind(("127.0.0.1", controller_port)).is_err());
+    drop(conflicting_controller);
     let addresses = engine
         .api
         .resolve_domain("connection.example.test")
@@ -185,7 +235,7 @@ async fn basic_system_proxy_and_tun() {
     dns_server.await.unwrap();
     println!("PASS: real mihomo DNS API returns IPv4 and IPv6 for connection details");
     engine.select_proxy_mode(ProxyMode::System).await.unwrap();
-    assert!(platform::is_owned(&store.root.join("system-proxy.json")).unwrap());
+    assert_system_proxy_ports(&store, mixed_port);
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let target = listener.local_addr().unwrap();
     let server = tokio::spawn(async move {
@@ -216,6 +266,42 @@ async fn basic_system_proxy_and_tun() {
     );
     server.await.unwrap();
     println!("PASS: native system proxy and HTTP forwarding");
+    mixed_port = free_port();
+    while mixed_port == engine.settings.controller_port {
+        mixed_port = free_port();
+    }
+    engine.save_ports(mixed_port).await.unwrap();
+    assert_system_proxy_ports(&store, mixed_port);
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let target = listener.local_addr().unwrap();
+    let server = tokio::spawn(async move {
+        let (mut socket, _) = listener.accept().await.unwrap();
+        let mut request = [0; 4096];
+        assert!(socket.read(&mut request).await.unwrap() > 0);
+        socket
+            .write_all(b"HTTP/1.1 200 OK\r\nContent-Length: 8\r\nConnection: close\r\n\r\nsocks-ok")
+            .await
+            .unwrap();
+    });
+    let socks = reqwest::Client::builder()
+        .no_proxy()
+        .proxy(reqwest::Proxy::all(format!("socks5h://127.0.0.1:{mixed_port}")).unwrap())
+        .timeout(Duration::from_secs(5))
+        .build()
+        .unwrap();
+    assert_eq!(
+        socks
+            .get(format!("http://{target}/"))
+            .send()
+            .await
+            .unwrap()
+            .text()
+            .await
+            .unwrap(),
+        "socks-ok"
+    );
+    server.await.unwrap();
+    println!("PASS: changing mixed port updates native proxy endpoints and SOCKS forwards traffic");
     engine.select_proxy_mode(ProxyMode::Tun).await.unwrap();
     let state = engine.poll(Scope::Home).await.unwrap();
     assert!(state.running && state.tun && !state.system_proxy);
@@ -266,7 +352,7 @@ async fn basic_system_proxy_and_tun() {
             clash_of_rust::config::atomic_write(
                 std::path::Path::new(&path),
                 &serde_json::to_vec(&serde_json::json!({
-                    "pid":std::process::id(), "controller":controller_port, "mixed":mixed_port,
+                    "pid":std::process::id(), "controller":engine.settings.controller_port, "mixed":mixed_port,
                     "temporary":temporary.path()
                 }))
                 .unwrap(),
@@ -310,14 +396,13 @@ async fn basic_system_proxy_and_tun() {
     let _: serde_json::Value = remote.request(Control::Start).await.unwrap();
     println!("CLI smoke: shared owner started; attaching GUI facade");
     let attach_store = store.clone();
-    let facade =
+    let mut facade =
         tokio::task::spawn_blocking(move || Engine::with_resources(attach_store, test_resources()))
             .await
             .unwrap()
             .unwrap();
     assert!(facade.is_remote() && facade.running());
-    drop(facade); // Must not stop the owner or restore its network state.
-    println!("CLI smoke: GUI facade attached and released without stopping the owner");
+    let original_revision = facade.view_revision();
     let cli =
         std::env::var_os("MIHOMO_TEST_CLI").expect("native wrapper must provide the bundled CLI");
     async fn console(
@@ -349,6 +434,9 @@ async fn basic_system_proxy_and_tun() {
     let status = console(&cli, &store, &["status"]).await;
     assert_eq!(status["running"], true);
     console(&cli, &store, &["config", "set", "dark", "true"]).await;
+    facade.poll(Scope::Other).await.unwrap();
+    assert!(facade.settings.dark);
+    assert_ne!(facade.view_revision(), original_revision);
     assert_eq!(
         console(&cli, &store, &["config", "get", "dark"]).await["dark"],
         true
@@ -357,6 +445,19 @@ async fn basic_system_proxy_and_tun() {
     assert_eq!(secret["secret"], "[已隐藏]");
     let meta: Meta = remote.request(Control::Meta).await.unwrap();
     let active = meta.settings.active_profile.clone().unwrap();
+    console(
+        &cli,
+        &store,
+        &["profile", "edit", &active, "--name", "CLI renamed"],
+    )
+    .await;
+    facade.poll(Scope::Other).await.unwrap();
+    assert!(
+        facade
+            .profiles
+            .iter()
+            .any(|profile| profile.id == active && profile.name == "CLI renamed")
+    );
     let builtin = meta
         .profiles
         .iter()
@@ -367,6 +468,13 @@ async fn basic_system_proxy_and_tun() {
         clash_of_rust::rule_manager::ProfileRules::for_profile(&meta.settings, &active, builtin);
     let revision = clash_of_rust::rule_manager::revision(&previous).unwrap();
     console(&cli, &store, &["rule", "add", "DOMAIN,cli.test,REJECT"]).await;
+    facade.poll(Scope::Other).await.unwrap();
+    assert!(
+        clash_of_rust::rule_manager::ProfileRules::for_profile(&facade.settings, &active, builtin)
+            .custom
+            .iter()
+            .any(|rule| rule.rule == "DOMAIN,cli.test,REJECT")
+    );
     let conflict = engine
         .lock()
         .await
@@ -395,10 +503,27 @@ async fn basic_system_proxy_and_tun() {
         assert!(meta.running);
         assert_eq!(meta.settings.proxy_mode, mode);
     }
+    drop(facade); // Releasing an attached GUI must not stop its owner.
+    assert!(engine.lock().await.running());
+    println!(
+        "CLI smoke: GUI settings, profiles and rules synchronized; facade released without stopping the owner"
+    );
     let _: serde_json::Value = remote.request(Control::Shutdown).await.unwrap();
     assert!(!engine.lock().await.running());
     assert!(!store.root.join("system-proxy.json").exists());
+    let attach_store = store.clone();
+    let mut orphaned =
+        tokio::task::spawn_blocking(move || Engine::with_resources(attach_store, test_resources()))
+            .await
+            .unwrap()
+            .unwrap();
     drop(engine);
+    assert!(orphaned.poll(Scope::Other).await.is_err());
+    assert!(
+        !orphaned.running(),
+        "a dead owner must not leave an attached GUI marked running"
+    );
+    drop(orphaned);
     // With the GUI owner gone, the same binary must create and clean up its own
     // headless owner rather than relying on the test process's runtime.
     let resources = test_resources();

@@ -3,6 +3,7 @@ import { Chevron } from "../../components/controls.slint";
 import { MobileTypography } from "typography.slint";
 import { Theme } from "../../theme/palette.slint";
 import { MobileView, MobileActions, MobileIntent } from "state.slint";
+import { ListView } from "std-widgets.slint";
 
 export component MAppIcon inherits Rectangle {
     width: 48px; height: 48px; border-radius: 8px;
@@ -53,6 +54,10 @@ export component MParagraph inherits MText { wrap: word-wrap; height: self.prefe
 // ScrollView whose generated wrapper can constrain conditional layouts to the
 // visible height, leaving Android with no scrollable overflow.
 export component MScroll inherits Flickable {
+    in property <string> content-key;
+    property <length> bottom: min(0px, self.height - self.content-height);
+    changed content-key => { self.content-y = 0px; }
+    changed bottom => { self.content-y = clamp(self.content-y, self.bottom, 0px); }
     min-width: 0px; min-height: 0px;
     horizontal-stretch: 1; vertical-stretch: 1;
     interactive: true; mouse-drag-pan-enabled: true;
@@ -64,9 +69,18 @@ export component MScroll inherits Flickable {
         alignment: start; spacing: 0px; @children
     }
 }
+
+export component MList inherits ListView {
+    in property <string> content-key;
+    property <length> bottom: min(0px, self.visible-height - self.viewport-height);
+    changed content-key => { self.viewport-y = 0px; }
+    changed bottom => { self.viewport-y = clamp(self.viewport-y, self.bottom, 0px); }
+}
 export component MCard inherits Rectangle {
     in property <bool> selected;
     in property <bool> interactive;
+    in property <length> vertical-padding: MobileTypography.padding;
+    in property <length> gap: MobileTypography.gap;
     callback clicked();
     preferred-width: 0px; min-width: 0px; horizontal-stretch: 1; vertical-stretch: 0;
     height: content.preferred-height;
@@ -74,7 +88,12 @@ export component MCard inherits Rectangle {
     border-width: 1px; border-color: root.selected ? Theme.accent : Theme.line; border-radius: 10px;
     animate background, border-color { duration: Motion.control; enabled: Motion.active; }
     if root.interactive: TouchArea { enabled: !MobileView.modal; mouse-cursor: pointer; clicked => { root.clicked(); } }
-    content := VerticalLayout { alignment: start; padding: MobileTypography.padding; spacing: MobileTypography.gap; @children }
+    content := VerticalLayout {
+        alignment: start;
+        padding-left: MobileTypography.padding; padding-right: MobileTypography.padding;
+        padding-top: root.vertical-padding; padding-bottom: root.vertical-padding;
+        spacing: root.gap; @children
+    }
 }
 export component MButton inherits Rectangle {
     in property <bool> modal-control;

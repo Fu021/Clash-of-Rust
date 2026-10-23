@@ -174,7 +174,7 @@ impl State {
             Entry::Signal(r, s) => {
                 if s.risk {
                     ResultKind::Risk
-                } else if s.evidence != Evidence::Measured
+                } else if s.context_only()
                     || matches!(
                         s.title.as_str(),
                         "实时保护与异常拦截" | "Claude 请求实时检测"
@@ -750,6 +750,8 @@ mod tests {
         app.claude.reports[0] = Some(Report::new(Environment::Core, "preserved"));
         let generation = app.claude.generation;
         let _ = app.update(Message::Finished(Box::new(Reply {
+            view_revision: 0,
+            remote: false,
             profile_import: false,
             profile_edit: false,
             scope: Scope::Claude,
@@ -954,5 +956,30 @@ mod tests {
             assert!(app.notice.contains("锁定当前运行模式"));
             assert_eq!(app.settings.claude_protection.as_ref(), Some(&saved));
         }
+    }
+    #[test]
+    fn measured_challenges_are_other_clues_while_explicit_risks_are_preserved() {
+        let mut state = State::default();
+        let mut report = Report::new(Environment::Core, "test");
+        let mut challenged = Signal::new(
+            Group::Connectivity,
+            "claude.ai 连通性",
+            "HTTP 403",
+            "test",
+            Evidence::Measured,
+            "需要浏览器验证",
+        );
+        challenged.challenged = true;
+        report.signals.push(challenged.clone());
+        report
+            .signals
+            .push(check::enhanced::supported_region("CN", "1.1.1.1"));
+        state.store(report);
+        assert_eq!(state.counts(&state.entries()), [0, 1, 1]);
+        challenged.risk = true;
+        let mut report = Report::new(Environment::Core, "test");
+        report.signals.push(challenged);
+        state.store(report);
+        assert_eq!(state.counts(&state.entries()), [0, 1, 0]);
     }
 }

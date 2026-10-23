@@ -20,25 +20,44 @@ fn client(route: &Route) -> Result<Client> {
         .context("无法创建更新检查连接")
 }
 
-pub(super) async fn check(port: Option<u16>) -> Result<Option<Available>> {
+pub(super) async fn check(
+    port: Option<u16>,
+    include_prereleases: bool,
+) -> Result<Option<Available>> {
     // Reading settings does not change the desktop proxy, and an unavailable
     // desktop settings service must not prevent the other routes from working.
     let routes = available_routes(port, "https");
     clash_client_core::update::retry_check(|| {
-        check_once(&routes, API_URL, LATEST_URL, crate::VERSION)
+        check_once_channel(
+            &routes,
+            API_URL,
+            LATEST_URL,
+            crate::VERSION,
+            include_prereleases,
+        )
     })
     .await
 }
 
+#[cfg(test)]
 async fn check_once(
     routes: &[Route],
     api: &str,
     latest: &str,
     current: &str,
 ) -> Result<Option<Available>> {
+    check_once_channel(routes, api, latest, current, false).await
+}
+async fn check_once_channel(
+    routes: &[Route],
+    api: &str,
+    latest: &str,
+    current: &str,
+    include_prereleases: bool,
+) -> Result<Option<Available>> {
     let (mut available, latest_route) = tokio::time::timeout(
         Duration::from_secs(60),
-        discover(routes, api, latest, current),
+        discover_channel(routes, api, latest, current, include_prereleases),
     )
     .await
     .context("更新检查超时，请检查代理或稍后重试")??;
@@ -55,7 +74,7 @@ async fn check_once(
         && available.package.is_none()
     {
         bail!(
-            "正式版 {} 缺少本平台安装包或校验文件，请稍后重试或访问 {}",
+            "版本 {} 缺少本平台安装包或校验文件，请稍后重试或访问 {}",
             available.version,
             available.url
         );
@@ -63,16 +82,26 @@ async fn check_once(
     Ok(available)
 }
 
+#[cfg(test)]
 async fn discover(
     routes: &[Route],
     api: &str,
     latest: &str,
     current: &str,
 ) -> Result<(Option<Available>, Option<Route>)> {
+    discover_channel(routes, api, latest, current, false).await
+}
+async fn discover_channel(
+    routes: &[Route],
+    api: &str,
+    latest: &str,
+    current: &str,
+    include_prereleases: bool,
+) -> Result<(Option<Available>, Option<Route>)> {
     let mut api_error = None;
     for route in routes {
         let result = match client(route) {
-            Ok(client) => fetch(&client, api, current).await,
+            Ok(client) => fetch_channel(&client, api, current, include_prereleases).await,
             Err(error) => Err(error),
         };
         match result {
@@ -83,6 +112,12 @@ async fn discover(
                 }
             }
         }
+    }
+    if include_prereleases {
+        bail!(
+            "暂时无法获取预发布版本列表：{}（已尝试可用代理和直连）",
+            api_error.unwrap_or_default()
+        );
     }
     let mut latest_error = None;
     for route in routes {
@@ -139,7 +174,7 @@ fn latest_release(location: &str, current: &str) -> Result<Option<Available>> {
         .as_str()
         .strip_prefix(&prefix)
         .context("Release 订阅格式无效")?;
-    newest(
+    newest_channel(
         vec![Release {
             tag_name: tag.to_owned(),
             draft: false,
@@ -147,6 +182,7 @@ fn latest_release(location: &str, current: &str) -> Result<Option<Available>> {
             assets: Vec::new(),
         }],
         current,
+        false,
     )
 }
 

@@ -2,6 +2,14 @@ use super::*;
 use crate::control::{Command as ControlCommand, Meta, Poll, Remote};
 
 impl Engine {
+    pub fn view_revision(&self) -> u64 {
+        self.view_revision
+    }
+
+    pub fn invalidate_views(&mut self) {
+        self.view_revision = self.view_revision.wrapping_add(1);
+    }
+
     pub fn is_remote(&self) -> bool {
         self.remote.is_some()
     }
@@ -48,6 +56,7 @@ impl Engine {
             remote_running: meta.running,
             control_server: None,
             external_logs_until: None,
+            view_revision: meta.view_revision,
         }))
     }
 
@@ -57,6 +66,7 @@ impl Engine {
         self.profiles = meta.profiles;
         self.geo_manifest = meta.geo;
         self.remote_running = meta.running;
+        self.view_revision = meta.view_revision;
         Ok(())
     }
 
@@ -80,9 +90,20 @@ impl Engine {
 
     pub(super) async fn remote_poll(&mut self, scope: Scope, header: bool) -> Result<Snapshot> {
         let remote = self.remote.clone().context("后台连接不可用")?;
-        let mut result: Poll = remote
+        let mut result: Poll = match remote
             .request(ControlCommand::Snapshot { scope, header })
-            .await?;
+            .await
+        {
+            Ok(result) => result,
+            Err(error) => {
+                // An attached GUI must offer a usable restart after its
+                // independent owner exits, rather than retaining "running".
+                if self.store.instance_lock().is_ok() {
+                    self.remote_running = false;
+                }
+                return Err(error);
+            }
+        };
         self.apply_meta(result.meta)?;
         if scope == Scope::Connections {
             result.snapshot.connections_sampled_at = Some(Instant::now());

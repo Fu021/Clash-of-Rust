@@ -157,6 +157,8 @@ mod tests {
             entries(&applied).get("httpProxy").unwrap(),
             "http://127.0.0.1 7897"
         );
+        assert_eq!(entries(&applied)["httpsProxy"], "http://127.0.0.1 7897");
+        assert_eq!(entries(&applied)["socksProxy"], "socks://127.0.0.1 7897");
         let restore = KEYS
             .into_iter()
             .map(|key| {

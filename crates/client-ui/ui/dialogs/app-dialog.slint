@@ -1,8 +1,7 @@
 import { Motion, Presence } from "../components/motion.slint";
-import { ScrollView } from "std-widgets.slint";
 import { Theme, AccentPalette } from "../theme/palette.slint";
 import { UiData, UiActions, Intent } from "../state.slint";
-import { Label, Caption, Paragraph, Heading, Panel, ContentPanel, ActionButton, Field, Select, SettingRow, CopyButton } from "../components/controls.slint";
+import { PageScroll, Label, Caption, Paragraph, Heading, Panel, ContentPanel, ActionButton, Field, Select, SettingRow, CopyButton, Divider } from "../components/controls.slint";
 export component AppDialog inherits Rectangle {
     in-out property <int> selected-accent: UiData.accent;
     presence := Presence { open: UiData.modal != 0; }
@@ -10,7 +9,10 @@ export component AppDialog inherits Rectangle {
     property <int> source-kind: UiData.modal;
     property <int> kind;
     changed source-kind => {
-        if self.source-kind != 0 { self.kind = self.source-kind; self.selected-accent = UiData.accent; }
+        if self.source-kind != 0 {
+            self.kind = self.source-kind; self.selected-accent = UiData.accent;
+            UiData.scroll-dialog = 0px;
+        }
     }
     // Keep the last heading during exit; business state may already be cleared.
     property <string> source-title: UiData.modal-title;
@@ -20,7 +22,11 @@ export component AppDialog inherits Rectangle {
     property <string> last-description;
     property <string> last-accept;
     changed source-title => { if UiData.modal != 0 { self.last-title = self.source-title; } }
-    changed source-description => { if UiData.modal != 0 { self.last-description = self.source-description; } }
+    changed source-description => {
+        if UiData.modal != 0 {
+            self.last-description = self.source-description;
+        }
+    }
     changed source-accept => { if UiData.modal != 0 { self.last-accept = self.source-accept; } }
     init => { self.kind = UiData.modal; self.last-title = self.source-title; self.last-description = self.source-description; self.last-accept = self.source-accept; }
     visible: presence.mounted;
@@ -40,7 +46,9 @@ export component AppDialog inherits Rectangle {
             content := VerticalLayout {
                 padding: Theme.dialog-padding; spacing: Theme.dialog-gap;
                 Heading { text: UiData.modal != 0 ? UiData.modal-title : root.last-title; font-size: 20px * Theme.text-scale; }
-                ScrollView {
+                PageScroll {
+                    content-key: root.kind + "/" + root.last-title + "/" + root.last-description;
+                    viewport-y <=> UiData.scroll-dialog;
                     min-height: 0px;
                     preferred-height: body.preferred-height;
                     body := VerticalLayout {
@@ -115,16 +123,20 @@ export component AppDialog inherits Rectangle {
                             }
                         }
                         if root.kind == 10: VerticalLayout {
-                            spacing: 0px;
-                            for item[i] in UiData.connection-details: Rectangle {
-                                height: max(44px, detail-row.preferred-height);
-                                background: mod(i, 2) == 0 ? Theme.inset : transparent;
-                                detail-row := HorizontalLayout {
-                                    padding-left: 12px; padding-right: 12px; padding-top: 10px; padding-bottom: 10px;
-                                    spacing: Theme.page-gap; cross-axis-alignment: start;
-                                    Caption { text: item.label; width: 100px * Theme.text-scale; horizontal-stretch: 0; }
+                            alignment: start; spacing: 0px;
+                            for item[i] in UiData.connection-details: VerticalLayout {
+                                alignment: start; spacing: 0px;
+                                HorizontalLayout {
+                                    padding-top: Theme.content-gap; padding-bottom: Theme.content-gap;
+                                    spacing: Theme.dialog-gap; cross-axis-alignment: start;
+                                    Caption {
+                                        text: item.label;
+                                        width: min(112px * Theme.text-scale, dialog.width * 0.25);
+                                        horizontal-stretch: 0; vertical-alignment: top; wrap: word-wrap;
+                                    }
                                     Paragraph { text: item.value; }
                                 }
+                                if i + 1 < UiData.connection-details.length: Divider { }
                             }
                         }
                         if root.kind == 12: VerticalLayout {

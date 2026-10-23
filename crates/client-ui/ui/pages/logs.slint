@@ -1,8 +1,7 @@
 import { PageSurface } from "../components/motion.slint";
-import { ScrollView } from "std-widgets.slint";
 import { Theme } from "../theme/palette.slint";
 import { UiData, UiActions, Intent } from "../state.slint";
-import { Label, Caption, Panel, ActionButton, Field, Badge, Select, CopyButton } from "../components/controls.slint";
+import { PageScroll, Label, Caption, Panel, ActionButton, Field, Badge, Select, CopyButton } from "../components/controls.slint";
 export component LogsPage inherits PageSurface {
     VerticalLayout {
         spacing: Theme.page-gap;
@@ -14,7 +13,9 @@ export component LogsPage inherits PageSurface {
         }
         Panel {
             vertical-stretch: 1;
-            ScrollView {
+            PageScroll {
+                content-key: UiData.page-offset + "/" + UiData.query + "/" + UiData.log-level;
+                viewport-y <=> UiData.scroll-logs;
                 VerticalLayout {
                     alignment: start; padding: Theme.card-padding; spacing: Theme.content-gap;
                     for entry in UiData.logs: Rectangle {

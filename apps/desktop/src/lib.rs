@@ -1,10 +1,4 @@
-//! Desktop presentation adapter. Runtime and native networking are shared with the CLI.
+//! Shared runtime and native shell; the desktop host does not depend on Slint.
 pub use clash_client_runtime::*;
-#[path = "platform/file_dialog.rs"]
-pub mod file_dialog;
-#[path = "artwork/flags.rs"]
+pub use clash_desktop_shell::{file_dialog, icons, tray};
 pub mod flags;
-#[path = "artwork/icons.rs"]
-pub mod icons;
-#[path = "platform/tray.rs"]
-pub mod tray;

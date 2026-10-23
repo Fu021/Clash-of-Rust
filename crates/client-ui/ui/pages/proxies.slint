@@ -1,8 +1,7 @@
 import { PageSurface, Disclosure } from "../components/motion.slint";
-import { ScrollView } from "std-widgets.slint";
 import { Theme } from "../theme/palette.slint";
 import { UiData, UiActions, Intent, NodeItem, NodePair } from "../state.slint";
-import { Label, Caption, Heading, Chevron, ContentPanel, RowPanel, ActionButton, Badge, Field, Select } from "../components/controls.slint";
+import { PageScroll, Label, Caption, Heading, Chevron, ContentPanel, RowPanel, ActionButton, Badge, Field, Select } from "../components/controls.slint";
 
 component NodeCard inherits ContentPanel {
     in property <NodeItem> node;
@@ -22,7 +21,9 @@ component NodeCard inherits ContentPanel {
     }
 }
 export component ProxiesPage inherits PageSurface {
-    ScrollView {
+    PageScroll {
+        content-key: UiData.page-offset + "/" + UiData.query + "/" + UiData.node-sort;
+        viewport-y <=> UiData.scroll-proxies;
         x: 0px; width: parent.width + Theme.content-gap;
         VerticalLayout {
             alignment: start;

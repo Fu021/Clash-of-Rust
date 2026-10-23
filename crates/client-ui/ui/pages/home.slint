@@ -1,8 +1,7 @@
 import { PageSurface } from "../components/motion.slint";
 import { UiData, UiActions, Intent } from "../state.slint";
-import { ScrollView } from "std-widgets.slint";
 import { Theme } from "../theme/palette.slint";
-import { Label, Caption, ContentPanel, RowPanel, ActionButton, Divider } from "../components/controls.slint";
+import { PageScroll, Label, Caption, ContentPanel, RowPanel, ActionButton, Divider } from "../components/controls.slint";
 
 component TrafficMetric inherits Rectangle {
     in property <string> title;
@@ -19,7 +18,8 @@ component TrafficMetric inherits Rectangle {
 }
 
 export component HomePage inherits PageSurface {
-    ScrollView {
+    PageScroll {
+        viewport-y <=> UiData.scroll-home;
         x: 0px;
         width: parent.width + Theme.content-gap;
         VerticalLayout {

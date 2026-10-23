@@ -7,8 +7,8 @@ use objc2::{
 use objc2_foundation::{NSBundle, NSError, NSObject, NSObjectProtocol, NSString};
 use objc2_user_notifications::{
     UNAuthorizationOptions, UNMutableNotificationContent, UNNotification,
-    UNNotificationPresentationOptions, UNNotificationRequest, UNUserNotificationCenter,
-    UNUserNotificationCenterDelegate,
+    UNNotificationPresentationOptions, UNNotificationRequest, UNNotificationSettings,
+    UNUserNotificationCenter, UNUserNotificationCenterDelegate,
 };
 use std::sync::{Mutex, OnceLock};
 
@@ -43,7 +43,32 @@ fn error_text(error: *mut NSError) -> Option<String> {
     // Only inspect NSError during Apple's callback, while it is borrowed and alive.
     unsafe { error.as_ref() }.map(|e| e.localizedDescription().to_string())
 }
-fn authorize() -> Result<Completion> {
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) enum Permission {
+    Allowed,
+    RequestedDenied,
+    Settings,
+}
+#[derive(Debug, Clone, Copy)]
+struct Settings {
+    authorization: isize,
+    alert: bool,
+    center: bool,
+}
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Action {
+    Ready,
+    Request,
+    Settings,
+}
+fn action(settings: Settings) -> Action {
+    match settings.authorization {
+        0 => Action::Request,
+        2..=4 if settings.alert || settings.center => Action::Ready,
+        _ => Action::Settings,
+    }
+}
+fn center() -> Result<Retained<UNUserNotificationCenter>> {
     ensure!(
         NSBundle::mainBundle().bundleIdentifier().is_some(),
         "macOS 系统通知需要从 Clash of Rust.app 启动"
@@ -52,16 +77,34 @@ fn authorize() -> Result<Completion> {
     let delegate =
         DELEGATE.get_or_init(|| unsafe { msg_send![NotificationDelegate::alloc(), init] });
     center.setDelegate(Some(ProtocolObject::from_ref(&**delegate)));
+    Ok(center)
+}
+fn query() -> Result<tokio::sync::oneshot::Receiver<Settings>> {
+    let center = center()?;
+    let (sender, receiver) = tokio::sync::oneshot::channel();
+    let sender = Mutex::new(Some(sender));
+    let callback =
+        block2::RcBlock::new(move |settings: std::ptr::NonNull<UNNotificationSettings>| {
+            // Apple lends the object for the duration of this completion only.
+            let settings = unsafe { settings.as_ref() };
+            let state = Settings {
+                authorization: settings.authorizationStatus().0,
+                alert: settings.alertSetting().0 == 2,
+                center: settings.notificationCenterSetting().0 == 2,
+            };
+            if let Some(sender) = sender.lock().ok().and_then(|mut s| s.take()) {
+                let _ = sender.send(state);
+            }
+        });
+    center.getNotificationSettingsWithCompletionHandler(&callback);
+    Ok(receiver)
+}
+fn request() -> Result<tokio::sync::oneshot::Receiver<Result<bool, String>>> {
+    let center = center()?;
     let (sender, receiver) = tokio::sync::oneshot::channel();
     let sender = Mutex::new(Some(sender));
     let callback = block2::RcBlock::new(move |granted: Bool, error: *mut NSError| {
-        let result = if let Some(error) = error_text(error) {
-            Err(error)
-        } else if granted.as_bool() {
-            Ok(())
-        } else {
-            Err("请在系统设置的通知中允许 Clash of Rust 发送通知".into())
-        };
+        let result = error_text(error).map_or(Ok(granted.as_bool()), Err);
         if let Some(sender) = sender.lock().ok().and_then(|mut s| s.take()) {
             let _ = sender.send(result);
         }
@@ -71,6 +114,27 @@ fn authorize() -> Result<Completion> {
         &callback,
     );
     Ok(receiver)
+}
+pub(super) async fn permission() -> Result<Permission> {
+    let _request = AUTHORIZATION.lock().await;
+    let settings = objc2::rc::autoreleasepool(|_| query())?;
+    let settings = settings.await.context("macOS 通知设置查询未完成")?;
+    match action(settings) {
+        Action::Ready => Ok(Permission::Allowed),
+        Action::Settings => Ok(Permission::Settings),
+        Action::Request => {
+            let request = objc2::rc::autoreleasepool(|_| request())?;
+            let granted = request
+                .await
+                .context("macOS 通知授权未完成")?
+                .map_err(anyhow::Error::msg)?;
+            Ok(if granted {
+                Permission::Allowed
+            } else {
+                Permission::RequestedDenied
+            })
+        }
+    }
 }
 fn deliver(title: &str, message: &str) -> Completion {
     let content = UNMutableNotificationContent::new();
@@ -94,12 +158,10 @@ fn deliver(title: &str, message: &str) -> Completion {
     receiver
 }
 pub(super) async fn initialize() -> Result<()> {
-    let _request = AUTHORIZATION.lock().await;
-    let permission = objc2::rc::autoreleasepool(|_| authorize())?;
-    permission
-        .await
-        .context("macOS 通知授权未完成")?
-        .map_err(anyhow::Error::msg)
+    if permission().await? != Permission::Allowed {
+        return Err(super::PermissionDenied.into());
+    }
+    Ok(())
 }
 pub(super) async fn show(title: &str, message: &str) -> Result<()> {
     initialize().await?;
@@ -108,4 +170,25 @@ pub(super) async fn show(title: &str, message: &str) -> Result<()> {
         .await
         .context("macOS 通知提交未完成")?
         .map_err(anyhow::Error::msg)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    #[test]
+    fn permission_policy_requests_only_undetermined_authorization() {
+        let settings = |authorization, alert, center| Settings {
+            authorization,
+            alert,
+            center,
+        };
+        assert_eq!(action(settings(0, false, false)), Action::Request);
+        assert_eq!(action(settings(1, false, false)), Action::Settings);
+        assert_eq!(action(settings(2, true, true)), Action::Ready);
+        assert_eq!(action(settings(2, false, true)), Action::Ready);
+        assert_eq!(action(settings(2, false, false)), Action::Settings);
+        assert_eq!(action(settings(3, false, true)), Action::Ready);
+        assert_eq!(action(settings(4, true, true)), Action::Ready);
+        assert_eq!(action(settings(999, true, true)), Action::Settings);
+    }
 }

@@ -1,8 +1,7 @@
 import { PageSurface, ProgressTrack } from "../components/motion.slint";
-import { ScrollView } from "std-widgets.slint";
 import { Theme } from "../theme/palette.slint";
 import { UiData, UiActions, Intent, CategoryItem } from "../state.slint";
-import { Label, Caption, Heading, ContentPanel, ActionButton, Field, Select, Badge, Paragraph } from "../components/controls.slint";
+import { PageScroll, Label, Caption, Heading, ContentPanel, ActionButton, Field, Select, Badge, Paragraph } from "../components/controls.slint";
 
 component CategoryCard inherits ContentPanel {
     in property <CategoryItem> item;
@@ -19,7 +18,9 @@ component CategoryCard inherits ContentPanel {
 
 export component IpCheckPage inherits PageSurface {
     motion-revision: UiData.sites-report ? 0 : 1;
-    ScrollView {
+    PageScroll {
+        content-key: (UiData.sites-report ? "report" : "details") + "/" + UiData.page-offset + "/" + UiData.query + "/" + UiData.site-category + "/" + UiData.site-status + "/" + UiData.site-region;
+        viewport-y <=> UiData.scroll-sites;
         x: 0px; width: parent.width + Theme.content-gap;
         VerticalLayout {
             alignment: start; padding-right: Theme.content-gap; spacing: Theme.page-gap;
@@ -39,7 +40,8 @@ export component IpCheckPage inherits PageSurface {
                     Label { text: UiData.site-exit-country; }
                 }
             }
-            if UiData.sites-report: ScrollView {
+            if UiData.sites-report: PageScroll {
+                viewport-y <=> UiData.scroll-site-categories;
                 height: Theme.control-height + Theme.content-gap;
                 HorizontalLayout { alignment: start; spacing: Theme.content-gap;
                     for count in UiData.site-counts: ActionButton { text: count.label; clicked => { UiActions.dispatch(Intent.site-status, count.id, "all"); } }

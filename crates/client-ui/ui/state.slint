@@ -19,9 +19,9 @@ export enum Intent {
     claude-filter, claude-page, claude-guide, claude-browser, claude-copy-script,
     claude-import, claude-export, claude-key, claude-save-key, claude-additional,
     appearance, text-scale, accent-picker, accent-color, tray-speed, dns-override, ipv6, udp,
-    autostart, controller-port, mixed-port, save-ports, window-width, window-height,
+    autostart, mixed-port, save-ports, window-width, window-height,
     reset-window, interval-input, save-interval, update-geo,
-    check-update, install-update, cancel-update, open-release,
+    check-update, install-update, cancel-update, open-release, update-prereleases,
     confirm, cancel-confirm, close-detail, copy, escape, focus-search, quit,
 }
 export struct Choice { id: string, label: string }
@@ -40,6 +40,19 @@ export struct CategoryPair { left: CategoryItem, right: CategoryItem }
 
 export global UiActions { callback dispatch(Intent, string, string); }
 export global UiData {
+    in-out property <length> scroll-home;
+    in-out property <length> scroll-proxies;
+    in-out property <length> scroll-profiles;
+    in-out property <length> scroll-connections;
+    in-out property <length> scroll-rules;
+    in-out property <length> scroll-logs;
+    in-out property <length> scroll-network;
+    in-out property <length> scroll-sites;
+    in-out property <length> scroll-site-categories;
+    in-out property <length> scroll-claude;
+    in-out property <length> scroll-settings;
+    in-out property <length> scroll-dialog;
+    in-out property <length> scroll-navigation;
     in-out property <int> accent;
     in-out property <[DetailItem]> connection-details;
     in-out property <string> modal-copy;
@@ -146,11 +159,11 @@ export global UiData {
     in-out property <bool> dark;
     in-out property <bool> autostart;
     in-out property <bool> tray-speed;
+    in-out property <bool> update-prereleases;
     in-out property <bool> dns-override;
     in-out property <bool> ipv6;
     in-out property <bool> udp;
     in-out property <string> mixed-port;
-    in-out property <string> controller-port;
     in-out property <bool> ports-dirty;
     in-out property <string> window-width;
     in-out property <string> window-height;

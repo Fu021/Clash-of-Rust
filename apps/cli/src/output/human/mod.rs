@@ -40,7 +40,7 @@ pub(super) fn write(out: &mut dyn Write, args: &Args, value: &Value) -> Result<(
             }) {
                 field(out, "当前订阅", &text(profile, "name"))?;
             }
-            for key in ["run_mode", "proxy_mode", "mixed_port", "controller_port"] {
+            for key in ["run_mode", "proxy_mode", "mixed_port"] {
                 field(out, label(key), &text(settings, key))?;
             }
             Ok(())
@@ -197,13 +197,21 @@ pub(super) fn write(out: &mut dyn Write, args: &Args, value: &Value) -> Result<(
         "notify" => message(out, "系统通知已发送"),
         "update check" => {
             if value["available"] == true {
-                field(out, "发现新正式版", &text(value, "version"))?;
+                field(
+                    out,
+                    if value["preview"] == true {
+                        "可安装预发布版"
+                    } else {
+                        "可安装正式版"
+                    },
+                    &text(value, "version"),
+                )?;
                 if !value["package"].is_null() {
                     field(out, "安装包", &text(value, "package"))?;
                 }
                 field(out, "发布页面", &text(value, "url"))
             } else {
-                message(out, "当前已是最新正式版")
+                message(out, "当前更新通道没有可安装的版本")
             }
         }
         "update install" => message(

@@ -44,6 +44,13 @@ cor proxy tun
 # 开启 TUN 接管网络；首次使用可能需要系统授权。
 # 建议 Server 等纯 CLI 用户使用 TUN，无需逐个配置程序代理，使用更方便。
 
+cor service install --yes
+# 为当前用户配置 CLI 后台登录自启，下次登录生效；当前会话仍用 cor start 启动。
+# 仅使用 CLI 时建议配置；已启用 GUI 自启动的桌面用户无需重复配置。
+
+cor service status
+# 确认 CLI 后台登录自启是否已配置。
+
 cor status
 # 查看运行状态、订阅、当前节点、模式和实时流量。
 
@@ -223,7 +230,7 @@ cor rule move c:完整UUID 1
 | `claude protect [on\|off] [--yes]` | 可逆保护、锁定节点、TUN/DNS/规则覆盖及实时异常流量拦截 |
 | `claude watch [--interval 1]` | 只读观察 Claude 相关请求的真实线路；保护开启时同时查看拦截状态 |
 
-`config set` 支持 `controller_port`、`mixed_port`、`secret`、`dark`、`theme_mode`、`accent_color`、`text_scale`、`tray_speed`、`dns_override`、`ipv6`、`udp`、`ip_reputation_key`、`delay_interval_minutes`、`node_sort`。值先按 JSON 解析，否则视为字符串，例如 `cor config set ipv6 false`、`cor config set theme_mode dark`。枚举取值见 `config get`；模式、订阅、规则、保护必须使用各自命令，不能绕过保护锁定。
+`config set` 支持 `mixed_port`、`secret`、`dark`、`theme_mode`、`accent_color`、`text_scale`、`tray_speed`、`update_prereleases`、`dns_override`、`ipv6`、`udp`、`ip_reputation_key`、`delay_interval_minutes`、`node_sort`。值先按 JSON 解析，否则视为字符串，例如 `cor config set ipv6 false`、`cor config set theme_mode dark`。控制端口由后台自动选择并处理冲突，不提供手动设置；混合端口仍可修改。枚举取值见 `config get`；模式、订阅、规则、保护必须使用各自命令，不能绕过保护锁定。
 
 检测完成的退出码为 0，可用性与风险应读取报告字段，不能只看退出码。检测报告表示真实观察结果；单项检测失败记为 Failed，不将网络失败当作“可用”。浏览器采样需要用户打开本机入口，在没有真实浏览器的 SSH 会话中不会伪造 WebRTC/指纹结果。报告不读取 Claude 账户 Cookie、令牌或登录内容。项目审计使用 CLI 所在的当前工作目录和终端环境，不套用 GUI/后台启动时的环境。
 
@@ -234,7 +241,7 @@ cor rule move c:完整UUID 1
 | 命令 | 作用 |
 | --- | --- |
 | `geo status` / `geo update` | 查看或校验更新 Geo 数据 |
-| `update check` | 仅检查正式版，忽略 prerelease |
+| `update check` | 按已保存的更新通道检查；默认仅正式版 |
 | `update download -o FILE` | 下载并校验当前平台安装包，不安装 |
 | `update install --yes` | 由运行层下载、校验并交给系统安装，成功交接后退出所有者；有窗口时关闭并在安装后重新打开窗口，无窗口时安装后用 `cor start` 恢复后台 |
 | `autostart [on\|off]` | 普通桌面程序登录自启 |
@@ -247,7 +254,9 @@ CLI 后台使用 Linux systemd user unit、macOS LaunchAgent、Windows 当前用
 
 完整安装更新需要正式安装目录：Linux DEB、Windows 安装程序或 macOS `.app`。便携目录可下载后手动安装。更新前退出其他长时间运行的 CLI 查询进程，避免 Windows 可执行文件被占用。首次系统授权仍可能需要图形会话；无人值守环境可使用 `update download`。
 
-检查更新遇到网络错误或正式版附件暂未完整时，会重新获取发布信息，最多尝试 4 次，总等待不超过约 75 秒；仍缺少当前平台安装包或校验文件时会明确报错。
+使用 `cor config set update_prereleases true` 将预发布版纳入检查，默认 `false`。预发布版用户设为 `false` 后，可以检查、下载和安装最新正式版，即使正式版版本号较低；正式版用户不会因此自动降级。GUI 与 CLI 共用此设置。
+
+检查更新遇到网络错误或附件暂未完整时，会重新获取发布信息，最多尝试 4 次，总等待不超过约 75 秒；仍缺少当前平台安装包或校验文件时会明确报错。
 
 更新下载显示速度、已下载大小及匹配本次连接的实际节点链，回退直连会明确标注；控制接口无法确认出站时显示未确认，不用首页所选节点代替实际线路。`update download` 的进度写入 stderr，`--quiet` 可关闭。
 

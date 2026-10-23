@@ -200,7 +200,27 @@ impl Session {
         )?)
     }
     pub fn initialize(&mut self) -> Result<()> {
+        let native_running = self.native.request(json!({"op":"state"}))?["running"] == true;
+        let controller = if native_running {
+            None
+        } else {
+            Some(core::config::reserve_controller(
+                self.settings.controller_port,
+                self.settings.mixed_port,
+            )?)
+        };
+        if let Some(listener) = &controller {
+            let port = listener.local_addr()?.port();
+            if port != self.settings.controller_port {
+                let mut settings = self.settings.clone();
+                settings.controller_port = port;
+                self.store.save_settings(&settings)?;
+                self.api = Api::new(&settings)?;
+                self.settings = settings;
+            }
+        }
         let raw = self.runtime(&self.settings)?;
+        drop(controller);
         self.native.request(
             json!({"op":"initialize","config":raw,"ipv6":effective_ipv6(&self.settings)}),
         )?;
@@ -212,7 +232,12 @@ impl Session {
         }
         Ok(())
     }
-    pub fn commit_settings(&mut self, settings: Settings) -> Result<()> {
+    pub fn commit_settings(&mut self, mut settings: Settings) -> Result<()> {
+        if settings.mixed_port == settings.controller_port {
+            settings.controller_port = core::config::reserve_controller(0, settings.mixed_port)?
+                .local_addr()?
+                .port();
+        }
         settings.validate()?;
         let raw = self.runtime(&settings)?;
         let old_raw = self.runtime(&self.settings)?;

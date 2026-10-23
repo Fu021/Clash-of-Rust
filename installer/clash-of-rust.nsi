@@ -68,6 +68,7 @@ Var LegacyInstall
 Var KeepAutostart
 Var UpdateMode
 Var UpdateBackup
+Var UpdateUiBackup
 Var DeleteUserData
 Var UserDataDir
 Var DataOptionsDialog
@@ -108,6 +109,7 @@ Function .onInit
   StrCpy $KeepAutostart 0
   StrCpy $UpdateMode 0
   StrCpy $UpdateBackup 0
+  StrCpy $UpdateUiBackup 0
   ${GetParameters} $0
   ClearErrors
   ${GetOptions} $0 "/UPDATE" $1
@@ -256,6 +258,20 @@ Section "Clash of Rust" MainSection
       Abort
     ${EndIf}
     StrCpy $UpdateBackup 1
+    ; A failed update must restore the matching owner and renderer together.
+    ; Older releases have no separate renderer; remove the new helper on rollback.
+    StrCpy $UpdateUiBackup 2
+    IfFileExists "$INSTDIR\clash-desktop-ui.exe" 0 ui_backup_ready
+      ClearErrors
+      Rename "$INSTDIR\clash-desktop-ui.exe" "$INSTDIR\clash-desktop-ui.update-backup.exe"
+      ${If} ${Errors}
+        StrCpy $UpdateUiBackup 0
+        Call RestoreUpdate
+        SetErrorLevel 6
+        Abort
+      ${EndIf}
+      StrCpy $UpdateUiBackup 1
+    ui_backup_ready:
   ${EndIf}
   ; Extraction failures must not look like a successful update to the helper.
   SetErrorLevel 6
@@ -264,6 +280,7 @@ Section "Clash of Rust" MainSection
   ClearErrors
   SetOutPath "$INSTDIR"
   File "${PAYLOAD}\clash-of-rust.exe"
+  File "${PAYLOAD}\clash-desktop-ui.exe"
   File "${PAYLOAD}\cor.exe"
   File "${PAYLOAD}\clash-tun-launcher.exe"
   File "${PAYLOAD}\LICENSE"
@@ -325,13 +342,24 @@ Section "Clash of Rust" MainSection
     ${EndIf}
   ${If} $UpdateBackup == 1
     Delete "$INSTDIR\clash-of-rust.update-backup.exe"
+    ${If} $UpdateUiBackup == 1
+      Delete "$INSTDIR\clash-desktop-ui.update-backup.exe"
+    ${EndIf}
     StrCpy $UpdateBackup 0
+    StrCpy $UpdateUiBackup 0
   ${EndIf}
   SetErrorLevel 0
 SectionEnd
 
 Function RestoreUpdate
   ${If} $UpdateBackup == 1
+    ${If} $UpdateUiBackup != 0
+      Delete "$INSTDIR\clash-desktop-ui.exe"
+      ${If} $UpdateUiBackup == 1
+        Rename "$INSTDIR\clash-desktop-ui.update-backup.exe" "$INSTDIR\clash-desktop-ui.exe"
+      ${EndIf}
+      StrCpy $UpdateUiBackup 0
+    ${EndIf}
     Delete "$INSTDIR\clash-of-rust.exe"
     Rename "$INSTDIR\clash-of-rust.update-backup.exe" "$INSTDIR\clash-of-rust.exe"
     StrCpy $UpdateBackup 0
@@ -457,6 +485,8 @@ Section "Uninstall"
     ${EndIf}
   ClearErrors
   Delete "$INSTDIR\clash-of-rust.exe"
+  IfErrors uninstall_locked
+  Delete "$INSTDIR\clash-desktop-ui.exe"
   IfErrors uninstall_locked
   Delete "$INSTDIR\cor.exe"
   IfErrors uninstall_locked

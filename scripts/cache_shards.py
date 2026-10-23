@@ -3,8 +3,8 @@
 An immutable, checksummed index names 32 independently verified archives. Only
 changed shards travel back to the private host; the index is published last.
 Completed shards can be reused on the next run. Missing/evicted shards fall back
-to Cargo, which still validates every object against the current sources. No
-server upgrade or broader filesystem access is needed.
+to Cargo after invalidating build-script success markers, so generated sources
+are recreated too. No server upgrade or broader filesystem access is needed.
 """
 from concurrent.futures import ThreadPoolExecutor
 import hashlib
@@ -12,6 +12,7 @@ import io
 import json
 import os
 from pathlib import Path
+import shutil
 import tarfile
 import tempfile
 import time
@@ -65,6 +66,29 @@ def download(config, record, destination):
         raise ValueError('Rust cache shard checksum mismatch')
 
 
+def invalidate_build_scripts(paths):
+    """Cargo cannot detect missing arbitrary files in a cached OUT_DIR.
+
+    Independently evicted shards may remove generated sources while retaining
+    the build-script success fingerprint. Re-run those scripts before trusting
+    partial mirrors; keep compiled libraries and build-script executables.
+    """
+    stale = set()
+    for root in paths:
+        for profile in (root/'release', *root.glob('*/release')):
+            fingerprints = profile/'.fingerprint'
+            if fingerprints.is_symlink() or not fingerprints.is_dir():
+                continue
+            for pattern in ('*/run-build-script-*', '*/*/run-build-script-*'):
+                for marker in fingerprints.glob(pattern):
+                    if marker.is_file() and not marker.is_symlink() and not marker.parent.is_symlink():
+                        stale.add(marker.parent)
+    for directory in sorted(stale):
+        shutil.rmtree(directory)
+    print(f'Partial Rust cache: invalidated {len(stale)} build-script fingerprints; '
+          'compiled dependency objects retained.', flush=True)
+
+
 def restore(config, github):
     with cache.phase(config, 'lookup'):
         record = lookup(config, config['group'] + '/index', config['key'], config['prefix'])
@@ -112,6 +136,7 @@ def restore(config, github):
     config.update(restored=bool(size), hit=not missing and record['key'] == config['key'])
     if missing:
         config['mirror_required'] = True
+        invalidate_build_scripts(paths)
     cache.cache_report(config, 'restore', 'partial mirror; Cargo fills missing shards' if missing
                        else 'verified incremental mirror', size)
     return True

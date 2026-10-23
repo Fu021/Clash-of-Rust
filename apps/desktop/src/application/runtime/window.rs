@@ -14,20 +14,16 @@ pub struct Settings {
     pub visible: bool,
 }
 #[derive(Debug, Clone, Copy)]
-pub enum Mode {
-    Windowed,
-    Hidden,
-}
-#[derive(Debug, Clone, Copy)]
 pub enum Event {
-    Opened {},
+    Opened { preserve_native_state: bool },
     Rescaled,
     Resized(Size),
     Focused,
     CloseRequested,
 }
 pub enum Command {
-    Mode(Mode),
+    Destroy,
+    Show,
     Minimize(bool),
     Maximize(bool),
     Focus,
@@ -62,8 +58,11 @@ pub fn open(settings: Settings) -> (Id, Task<Id>) {
 fn command<T: Send + 'static>(id: Id, command: Command) -> Task<T> {
     native::call(move |host| host.window_command(id, command)).discard()
 }
-pub fn set_mode<T: Send + 'static>(id: Id, mode: Mode) -> Task<T> {
-    command(id, Command::Mode(mode))
+pub fn show<T: Send + 'static>(id: Id) -> Task<T> {
+    command(id, Command::Show)
+}
+pub fn destroy<T: Send + 'static>(id: Id) -> Task<T> {
+    command(id, Command::Destroy)
 }
 pub fn minimize<T: Send + 'static>(id: Id, value: bool) -> Task<T> {
     command(id, Command::Minimize(value))

@@ -34,7 +34,7 @@ def main():
     module.prepare(args.system, args.arch)
     bundle = bundle_directory(args.system, args.arch)
     extension = '.exe' if args.system == 'windows' else ''
-    for name in ('clash-of-rust', 'clash-tun-launcher', 'cor'):
+    for name in ('clash-of-rust', 'clash-desktop-ui', 'clash-tun-launcher', 'cor'):
         shutil.copy2(ROOT/'target/release'/(name+extension), bundle/(name+extension))
     # Headless console smoke checks need neither a display nor a running kernel.
     run([bundle/('cor'+extension), '--json', 'version'])

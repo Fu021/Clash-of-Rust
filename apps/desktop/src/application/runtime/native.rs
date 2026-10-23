@@ -15,6 +15,10 @@ pub trait Host {
     fn write_clipboard(&mut self, text: String);
     fn focus(&mut self, target: &str);
     fn system_theme(&self) -> theme::Mode;
+    #[cfg(target_os = "macos")]
+    fn pick_file(&mut self) -> Result<clash_of_rust::file_dialog::Session, String> {
+        Err("没有可用的界面窗口".into())
+    }
     fn quit(&mut self);
 }
 pub type Call = Box<dyn FnOnce(&mut dyn Host) + Send>;

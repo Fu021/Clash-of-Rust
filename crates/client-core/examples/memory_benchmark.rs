@@ -415,6 +415,8 @@ mod process_memory {
     #[derive(Debug, Serialize)]
     struct Sample {
         elapsed_ms: u64,
+        host: Memory,
+        renderer: Memory,
         gui: Memory,
         daemon: Memory,
         core: Memory,
@@ -504,6 +506,11 @@ mod process_memory {
                     } else {
                         "gui"
                     }
+                } else if matches!(
+                    name.to_ascii_lowercase().as_str(),
+                    "clash-desktop-ui" | "clash-desktop-u" | "clash-desktop-ui.exe"
+                ) {
+                    "renderer"
                 } else if matches!(name.to_ascii_lowercase().as_str(), "mihomo" | "mihomo.exe") {
                     "core"
                 } else {
@@ -530,7 +537,14 @@ mod process_memory {
         };
         Sample {
             elapsed_ms,
-            gui: group("gui"),
+            host: group("gui"),
+            renderer: group("renderer"),
+            gui: Memory::sum(
+                processes
+                    .iter()
+                    .filter(|p| matches!(p.role, "gui" | "renderer"))
+                    .map(|p| &p.memory),
+            ),
             daemon: group("daemon"),
             core: group("core"),
             other: group("other"),

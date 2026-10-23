@@ -1,81 +1,87 @@
 import { PageSurface, Disclosure } from "../components/motion.slint";
-import { ScrollView } from "std-widgets.slint";
 import { Theme } from "../theme/palette.slint";
 import { UiData, UiActions, Intent } from "../state.slint";
-import { Label, Caption, Heading, ContentPanel, ActionButton, Badge, Field, Toggle, Select, Paragraph } from "../components/controls.slint";
+import { PageScroll, Label, Caption, Heading, ContentPanel, ActionButton, Badge, Field, Toggle, Select, Paragraph } from "../components/controls.slint";
 export component RulesPage inherits PageSurface {
-    ScrollView {
-        x: 0px; width: parent.width + Theme.content-gap;
-        VerticalLayout {
-            alignment: start; padding-right: Theme.content-gap; spacing: Theme.page-gap;
-            HorizontalLayout { cross-axis-alignment: center; spacing: Theme.content-gap;
-                Select { options: UiData.rule-profile-options; value: UiData.rule-profile; selected(index, value) => { UiActions.dispatch(Intent.rule-profile, UiData.rule-profiles[index].id, ""); } }
-                Badge { text: UiData.rule-dirty ? "尚未应用" : "已载入"; tone: UiData.rule-dirty ? 2 : 1; }
-                ActionButton { text: "放弃修改"; enabled: UiData.rule-dirty && !UiData.working; clicked => { UiActions.dispatch(Intent.rule-discard, "", ""); } }
-                ActionButton { text: "应用修改"; primary: true; enabled: UiData.rule-dirty && !UiData.working; clicked => { UiActions.dispatch(Intent.rule-apply, "", ""); } }
-            }
-            ContentPanel {
+    VerticalLayout {
+        spacing: Theme.page-gap;
+        PageScroll {
+        content-key: UiData.page-offset + "/" + UiData.query + "/" + UiData.rule-profile;
+            min-height: 0px; vertical-stretch: 1;
+            viewport-y <=> UiData.scroll-rules;
+            x: 0px; width: parent.width + Theme.content-gap;
+            VerticalLayout {
+                alignment: start; padding-right: Theme.content-gap; spacing: Theme.page-gap;
                 HorizontalLayout { cross-axis-alignment: center; spacing: Theme.content-gap;
-                    Label { text: "快捷规则"; }
-                    Caption { text: "仅补充订阅缺少的规则，补充的规则优先匹配"; }
-                    ActionButton { text: UiData.shortcuts-open ? "收起" : "展开"; dropdown: true; expanded: UiData.shortcuts-open; clicked => { UiActions.dispatch(Intent.rule-collapse, "", ""); } }
+                    Select { options: UiData.rule-profile-options; value: UiData.rule-profile; selected(index, value) => { UiActions.dispatch(Intent.rule-profile, UiData.rule-profiles[index].id, ""); } }
+                    Badge { text: UiData.rule-dirty ? "尚未应用" : "已载入"; tone: UiData.rule-dirty ? 2 : 1; }
+                    ActionButton { text: "放弃修改"; enabled: UiData.rule-dirty && !UiData.working; clicked => { UiActions.dispatch(Intent.rule-discard, "", ""); } }
+                    ActionButton { text: "应用修改"; primary: true; enabled: UiData.rule-dirty && !UiData.working; clicked => { UiActions.dispatch(Intent.rule-apply, "", ""); } }
                 }
-                shortcuts := Disclosure { expanded: UiData.shortcuts-open;
-                    if shortcuts.mounted: VerticalLayout {
-                        spacing: Theme.content-gap;
-                        for title[i] in UiData.shortcuts: Rectangle {
-                            height: Theme.control-height;
-                            HorizontalLayout { cross-axis-alignment: center;
-                                Label { text: title; }
-                                Toggle { enabled: UiData.shortcut-available[i] && !UiData.working; checked: UiData.shortcut-values[i]; toggled(value) => { UiActions.dispatch(Intent.rule-toggle, "" + i, value ? "true" : "false"); } }
+                ContentPanel {
+                    vertical-padding: Theme.content-gap;
+                    gap: Theme.content-gap * shortcuts.opacity;
+                    HorizontalLayout { cross-axis-alignment: center; spacing: Theme.content-gap;
+                        Label { text: "快捷规则"; }
+                        ActionButton { text: UiData.shortcuts-open ? "收起" : "展开"; dropdown: true; expanded: UiData.shortcuts-open; clicked => { UiActions.dispatch(Intent.rule-collapse, "", ""); } }
+                    }
+                    shortcuts := Disclosure { expanded: UiData.shortcuts-open;
+                        if shortcuts.mounted: VerticalLayout {
+                            spacing: Theme.content-gap;
+                            for title[i] in UiData.shortcuts: Rectangle {
+                                height: Theme.control-height;
+                                HorizontalLayout { cross-axis-alignment: center;
+                                    Label { text: title; }
+                                    Toggle { enabled: UiData.shortcut-available[i] && !UiData.working; checked: UiData.shortcut-values[i]; toggled(value) => { UiActions.dispatch(Intent.rule-toggle, "" + i, value ? "true" : "false"); } }
+                                }
                             }
                         }
                     }
                 }
-            }
-            HorizontalLayout { cross-axis-alignment: center; spacing: Theme.content-gap;
-                Field { placeholder: "搜索规则类型、内容或策略"; focus-id: "page-search"; text <=> UiData.query; edited(value) => { UiActions.dispatch(Intent.query, value, ""); } }
-                Select { width: 120px; horizontal-stretch: 0; options: ["全部来源", "自定义", "快捷规则", "订阅"]; value: UiData.rule-source; selected(index, value) => { UiActions.dispatch(Intent.rule-filter, "" + index, ""); } }
-                ActionButton { text: "+ 新建规则"; primary: true; enabled: UiData.rule-types.length > 0 && !UiData.working; clicked => { UiActions.dispatch(Intent.rule-add, "", ""); } }
-            }
-            if UiData.rule-selected: ContentPanel {
-                Paragraph { text: UiData.rule-detail; }
                 HorizontalLayout { cross-axis-alignment: center; spacing: Theme.content-gap;
-                    ActionButton { text: "上移"; enabled: !UiData.working; clicked => { UiActions.dispatch(Intent.rule-move, "-1", ""); } }
-                    ActionButton { text: "下移"; enabled: !UiData.working; clicked => { UiActions.dispatch(Intent.rule-move, "1", ""); } }
-                    ActionButton { text: "移到…"; enabled: !UiData.working; clicked => { UiActions.dispatch(Intent.rule-move-open, "", ""); } }
-                    ActionButton { text: "置顶"; enabled: !UiData.working; clicked => { UiActions.dispatch(Intent.rule-move-edge, "false", ""); } }
-                    ActionButton { text: "置底"; enabled: !UiData.working; clicked => { UiActions.dispatch(Intent.rule-move-edge, "true", ""); } }
+                    Field { placeholder: "搜索规则类型、内容或策略"; focus-id: "page-search"; text <=> UiData.query; edited(value) => { UiActions.dispatch(Intent.query, value, ""); } }
+                    Select { width: 120px; horizontal-stretch: 0; options: ["全部来源", "自定义", "快捷规则", "订阅"]; value: UiData.rule-source; selected(index, value) => { UiActions.dispatch(Intent.rule-filter, "" + index, ""); } }
+                    ActionButton { text: "+ 新建规则"; primary: true; enabled: UiData.rule-types.length > 0 && !UiData.working; clicked => { UiActions.dispatch(Intent.rule-add, "", ""); } }
                 }
-                HorizontalLayout { cross-axis-alignment: center; spacing: Theme.content-gap;
-                    ActionButton { text: "编辑"; enabled: UiData.rule-custom && !UiData.working; clicked => { UiActions.dispatch(Intent.rule-edit, "", ""); } }
-                    ActionButton { text: "启用 / 停用"; enabled: UiData.rule-custom && !UiData.working; clicked => { UiActions.dispatch(Intent.rule-enable, "", ""); } }
-                    ActionButton { text: "删除"; danger: true; enabled: UiData.rule-custom && !UiData.working; clicked => { UiActions.dispatch(Intent.rule-delete, "", ""); } }
-                    ActionButton { text: "恢复订阅顺序"; enabled: !UiData.working; clicked => { UiActions.dispatch(Intent.rule-restore, "", ""); } }
-                }
-            }
-            ContentPanel {
-                for rule in UiData.rules: Rectangle {
-                    height: max(60px, Theme.body-size * 3 + 12px);
-                    background: rule.selected ? Theme.accent-wash : Theme.surface;
-                    HorizontalLayout { cross-axis-alignment: center; padding: Theme.content-gap; spacing: Theme.content-gap;
-                        Caption { text: rule.position; width: 32px; }
-                        VerticalLayout { spacing: 4px; horizontal-stretch: 1;
-                            Label { text: rule.kind + " · " + rule.value; }
-                            Caption { text: rule.source + (rule.enabled ? "" : " · 已停用"); }
-                        }
-                        Badge { text: rule.policy; width-limit: root.width * 0.2; }
-                        ActionButton { text: rule.selected ? "已选择" : "选择"; selected: rule.selected; clicked => { UiActions.dispatch(Intent.rule-select, rule.id, ""); } }
+                if UiData.rule-selected: ContentPanel {
+                    Paragraph { text: UiData.rule-detail; }
+                    HorizontalLayout { cross-axis-alignment: center; spacing: Theme.content-gap;
+                        ActionButton { text: "上移"; enabled: !UiData.working; clicked => { UiActions.dispatch(Intent.rule-move, "-1", ""); } }
+                        ActionButton { text: "下移"; enabled: !UiData.working; clicked => { UiActions.dispatch(Intent.rule-move, "1", ""); } }
+                        ActionButton { text: "移到…"; enabled: !UiData.working; clicked => { UiActions.dispatch(Intent.rule-move-open, "", ""); } }
+                        ActionButton { text: "置顶"; enabled: !UiData.working; clicked => { UiActions.dispatch(Intent.rule-move-edge, "false", ""); } }
+                        ActionButton { text: "置底"; enabled: !UiData.working; clicked => { UiActions.dispatch(Intent.rule-move-edge, "true", ""); } }
+                    }
+                    HorizontalLayout { cross-axis-alignment: center; spacing: Theme.content-gap;
+                        ActionButton { text: "编辑"; enabled: UiData.rule-custom && !UiData.working; clicked => { UiActions.dispatch(Intent.rule-edit, "", ""); } }
+                        ActionButton { text: "启用 / 停用"; enabled: UiData.rule-custom && !UiData.working; clicked => { UiActions.dispatch(Intent.rule-enable, "", ""); } }
+                        ActionButton { text: "删除"; danger: true; enabled: UiData.rule-custom && !UiData.working; clicked => { UiActions.dispatch(Intent.rule-delete, "", ""); } }
+                        ActionButton { text: "恢复订阅顺序"; enabled: !UiData.working; clicked => { UiActions.dispatch(Intent.rule-restore, "", ""); } }
                     }
                 }
-                if UiData.rules.length == 0: Caption { text: "没有匹配的规则"; height: Theme.control-height; }
+                ContentPanel {
+                    for rule in UiData.rules: Rectangle {
+                        height: max(60px, Theme.body-size * 3 + 12px);
+                        background: rule.selected ? Theme.accent-wash : Theme.surface;
+                        HorizontalLayout { cross-axis-alignment: center; padding: Theme.content-gap; spacing: Theme.content-gap;
+                            Caption { text: rule.position; width: 32px; }
+                            VerticalLayout { spacing: 4px; horizontal-stretch: 1;
+                                Label { text: rule.kind + " · " + rule.value; }
+                                Caption { text: rule.source + (rule.enabled ? "" : " · 已停用"); }
+                            }
+                            Badge { text: rule.policy; width-limit: root.width * 0.2; }
+                            ActionButton { text: rule.selected ? "已选择" : "选择"; selected: rule.selected; clicked => { UiActions.dispatch(Intent.rule-select, rule.id, ""); } }
+                        }
+                    }
+                    if UiData.rules.length == 0: Caption { text: "没有匹配的规则"; height: Theme.control-height; }
+                }
+                if UiData.rule-warning != "": ContentPanel { Paragraph { text: UiData.rule-warning; color: Theme.warning; } }
             }
-            if UiData.rule-warning != "": ContentPanel { Paragraph { text: UiData.rule-warning; color: Theme.warning; } }
-            HorizontalLayout { cross-axis-alignment: center; spacing: Theme.content-gap;
-                Caption { text: UiData.page-status; }
-                ActionButton { text: "上一页"; enabled: UiData.previous; clicked => { UiActions.dispatch(Intent.list-page, "" + max(0, UiData.page-offset - 60), ""); } }
-                ActionButton { text: "下一页"; enabled: UiData.next; clicked => { UiActions.dispatch(Intent.list-page, "" + (UiData.page-offset + 60), ""); } }
-            }
+        }
+        HorizontalLayout { cross-axis-alignment: center; spacing: Theme.content-gap;
+            Caption { text: UiData.page-status; }
+            ActionButton { text: "上一页"; enabled: UiData.previous; clicked => { UiActions.dispatch(Intent.list-page, "" + max(0, UiData.page-offset - 60), ""); } }
+            ActionButton { text: "下一页"; enabled: UiData.next; clicked => { UiActions.dispatch(Intent.list-page, "" + (UiData.page-offset + 60), ""); } }
         }
     }
 }

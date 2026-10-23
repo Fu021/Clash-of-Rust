@@ -396,7 +396,7 @@ pub static COMMANDS: &[Spec] = &[
     ),
     command!(
         "update check",
-        "仅检查正式客户端更新",
+        "按已保存的更新通道检查客户端更新",
         "update check",
         0,
         0,
@@ -404,7 +404,7 @@ pub static COMMANDS: &[Spec] = &[
     ),
     command!(
         "update download",
-        "下载并校验正式更新安装包",
+        "下载并校验当前通道的更新安装包",
         "update download --output FILE",
         0,
         0,

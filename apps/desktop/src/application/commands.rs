@@ -5,13 +5,14 @@ use super::*;
 pub(super) enum Action {
     Refresh,
     Start,
-    SavePorts(u16, u16),
+    SavePorts(u16),
     SaveRules(String, ProfileRules, Arc<ProfileRules>),
     LoadRules(String),
     Appearance(ThemeMode),
     Accent(AccentColor),
     TextScale(u16),
     TraySpeed(bool),
+    UpdatePrereleases(bool),
     DnsOverride(bool),
     Ipv6(bool),
     Udp(bool),
@@ -53,6 +54,8 @@ impl Action {
 
 #[derive(Debug, Clone)]
 pub(super) struct Reply {
+    pub(super) view_revision: u64,
+    pub(super) remote: bool,
     pub(super) profile_edit: bool,
     pub(super) profile_import: bool,
     pub(super) scope: Scope,
@@ -70,11 +73,45 @@ pub(super) struct Reply {
     pub(super) tray_nodes: Option<Option<tray::Nodes>>,
 }
 
+pub(super) struct ViewContext {
+    pub(super) revision: u64,
+    pub(super) rule_profile: Option<String>,
+    pub(super) active_profile: Option<String>,
+    pub(super) protected: bool,
+    pub(super) editing_rules: bool,
+}
+
+impl ViewContext {
+    fn refresh_rule(
+        &self,
+        changed: bool,
+        scope: Scope,
+        active: Option<&str>,
+        exists: impl Fn(&str) -> bool,
+    ) -> Option<String> {
+        if !changed || scope != Scope::Rules {
+            return None;
+        }
+        let selected = self.rule_profile.as_deref();
+        if self.editing_rules && selected.is_some_and(|id| !exists(id)) {
+            return None;
+        }
+        if (!self.editing_rules && selected == self.active_profile.as_deref())
+            || selected.is_none_or(|id| !exists(id))
+        {
+            active.map(str::to_owned)
+        } else {
+            self.rule_profile.clone()
+        }
+    }
+}
+
 pub(super) async fn execute(
     engine: Arc<Mutex<Engine>>,
     action: Action,
     scope: Scope,
     header: bool,
+    context: ViewContext,
 ) -> Reply {
     let profile_edit = matches!(&action, Action::EditProfile(..));
     let profile_import = matches!(&action, Action::Import(..));
@@ -103,12 +140,14 @@ pub(super) async fn execute(
             Action::Refresh => Ok(String::new()),
             Action::RefreshTray => Ok(String::new()),
             Action::Start => {
-                engine.start().await?;
-                engine.restore_proxy_mode().await?;
+                if !engine.running() {
+                    engine.start().await?;
+                    engine.restore_proxy_mode().await?;
+                }
                 Ok("内核已启动".into())
             }
-            Action::SavePorts(controller, mixed) => {
-                engine.save_ports(controller, mixed).await?;
+            Action::SavePorts(mixed) => {
+                engine.save_ports(mixed).await?;
                 Ok("端口已保存，运行中的内核已自动重启".into())
             }
             Action::LoadRules(_) => Ok(String::new()),
@@ -154,6 +193,14 @@ pub(super) async fn execute(
                 };
                 engine.save_settings(settings).await?;
                 Ok("托盘显示已保存".into())
+            }
+            Action::UpdatePrereleases(update_prereleases) => {
+                let settings = Settings {
+                    update_prereleases,
+                    ..engine.settings.clone()
+                };
+                engine.save_settings(settings).await?;
+                Ok("更新通道已保存".into())
             }
             Action::DnsOverride(dns_override) => {
                 let settings = Settings {
@@ -300,13 +347,6 @@ pub(super) async fn execute(
     let rules_applied = saving_rules && result.is_ok();
     let protection_changed = protection_requested && result.is_ok();
     let mut notice = result.map_err(|e| format!("{e:#}"));
-    let rule_document = rule_id.and_then(|id| match engine.rule_document(&id) {
-        Ok(doc) => Some(Arc::new(doc)),
-        Err(e) => {
-            notice = Err(format!("{e:#}"));
-            None
-        }
-    });
     // The editor uses the original YAML, not the lossy core rule API. Avoid
     // retaining a second complete rule list on this page.
     let poll_scope = if scope == Scope::Rules {
@@ -323,22 +363,44 @@ pub(super) async fn execute(
             None
         }
     };
+    // A remote poll refreshes metadata as well. Compare revisions afterwards,
+    // so console edits do not need an unrelated GUI action to become visible.
+    let external_change = context.revision != engine.view_revision();
+    let protection_changed =
+        protection_changed || context.protected != engine.settings.claude_protection.is_some();
+    let rule_id = rule_id.or_else(|| {
+        context.refresh_rule(
+            external_change,
+            scope,
+            engine.settings.active_profile.as_deref(),
+            |id| engine.profiles.iter().any(|profile| profile.id == id),
+        )
+    });
+    let rule_document = rule_id.and_then(|id| match engine.rule_document(&id) {
+        Ok(doc) => Some(Arc::new(doc)),
+        Err(e) => {
+            notice = Err(format!("{e:#}"));
+            None
+        }
+    });
     if let Err(error) = &notice {
         engine.record_failure(error);
     }
-    let tray_nodes = if refresh_tray {
+    let tray_nodes = if refresh_tray || external_change {
         Some(engine.tray_nodes().await.unwrap_or(None))
     } else {
         None
     };
     Reply {
+        view_revision: engine.view_revision(),
+        remote: engine.is_remote(),
         profile_edit,
         profile_import,
         tray_nodes,
         scope,
         start_requested,
         settings: engine.settings.clone(),
-        profiles: include_profiles.then(|| engine.profiles.clone()),
+        profiles: (include_profiles || external_change).then(|| engine.profiles.clone()),
         snapshot,
         rule_document,
         rules_applied,
@@ -347,5 +409,44 @@ pub(super) async fn execute(
         geo_status: engine.geo_manifest.version.clone(),
         autostart: platform::autostart_enabled().unwrap_or(false),
         protection_changed,
+    }
+}
+
+#[cfg(test)]
+mod synchronization_tests {
+    use super::*;
+
+    #[test]
+    fn console_profile_changes_follow_the_active_profile_without_discarding_drafts() {
+        let mut context = ViewContext {
+            revision: 1,
+            rule_profile: Some("old".into()),
+            active_profile: Some("old".into()),
+            protected: false,
+            editing_rules: false,
+        };
+        assert_eq!(
+            context
+                .refresh_rule(true, Scope::Rules, Some("new"), |_| true)
+                .as_deref(),
+            Some("new")
+        );
+        assert!(
+            context
+                .refresh_rule(false, Scope::Rules, Some("new"), |_| true)
+                .is_none()
+        );
+        context.editing_rules = true;
+        assert_eq!(
+            context
+                .refresh_rule(true, Scope::Rules, Some("new"), |_| true)
+                .as_deref(),
+            Some("old")
+        );
+        assert!(
+            context
+                .refresh_rule(true, Scope::Rules, Some("new"), |id| id != "old")
+                .is_none()
+        );
     }
 }

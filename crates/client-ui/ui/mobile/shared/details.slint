@@ -7,7 +7,7 @@ import { MText, MSmall, MHeading, MParagraph, MCard, MButton, MRow, MDivider, MF
 export component MobileDetails inherits PageSurface {
     motion-revision: MobileView.detail;
     VerticalLayout { spacing: MobileTypography.gap;
-        MScroll { VerticalLayout { width: root.width; alignment: start; spacing: MobileTypography.gap; padding-bottom: MobileTypography.padding;
+        MScroll { content-key: MobileView.detail + "/" + MobileView.selected-id + "/" + MobileView.category + "/" + MobileView.site-status + "/" + MobileView.log-message; VerticalLayout { width: root.width; alignment: start; spacing: MobileTypography.gap; padding-bottom: MobileTypography.padding;
             if MobileView.detail == 5: MCard {
                 for row[i] in MobileData.connection-details: VerticalLayout { spacing: MobileTypography.small-gap;
                     MSmall { text: row.label; }
@@ -135,10 +135,11 @@ export component MobileModal inherits Rectangle {
                 y: root.centered ? (parent.height - self.height) / 2 : max(MobileView.safe-top, parent.height - self.height - MobileView.safe-bottom - 12px) + (1 - presence.progress) * (root.centered ? 8px : 20px);
                 background: Theme.surface; border-radius: 12px; border-width: 1px; border-color: Theme.line;
                 content := VerticalLayout { alignment: start; spacing: MobileTypography.padding; padding: 24px;
-                    MHeading { text: root.kind == 4 ? "删除此订阅？" : root.kind == 8 ? "开启 Claude 保护？" : root.kind == 12 ? "放弃未保存的修改？" : "强调色"; }
+                    MHeading { text: root.kind == 4 ? "删除此订阅？" : root.kind == 8 ? "开启 Claude 保护？" : root.kind == 12 ? "放弃未保存的修改？" : root.kind == 13 ? "安装预发布版 " + MobileData.update-version + "？" : "强调色"; }
                     if root.kind != 11: MParagraph {
                         text: root.kind == 4 ? "将删除“" + MobileView.profile-name + "”及其配置文件。此操作无法撤销。"
                             : root.kind == 8 ? "将锁定当前节点和运行模式（规则或全局），启用 VPN、广泛规则、代理 DNS 与实时拦截。全局出口为 DIRECT 时无法开启；直连模式下将使用规则模式。可能影响其他应用与国内网站；关闭后恢复原状态。"
+                            : root.kind == 13 ? "预发布版本可能存在尚未发现的风险与 Bug，可能导致程序崩溃、网络异常或配置兼容问题。建议先备份配置，确认后再下载安装。"
                             : "尚有未保存的内容，离开后将丢弃本次编辑。";
                     }
                     if root.kind == 11: VerticalLayout { spacing: MobileTypography.small-gap;
@@ -150,9 +151,10 @@ export component MobileModal inherits Rectangle {
                         }
                     }
                     if root.kind != 11: MButton {
-                        modal-control: true; primary: root.kind == 8; danger: root.kind == 4 || root.kind == 12;
-                        enabled: root.kind != 8 || root.seconds == 0;
+                        modal-control: true; primary: root.kind == 8 || root.kind == 13; danger: root.kind == 4 || root.kind == 12;
+                        enabled: (root.kind != 8 || root.seconds == 0) && (root.kind != 13 || MobileData.update-confirm-wait == 0);
                         text: root.kind == 4 ? "删除订阅" : root.kind == 12 ? "放弃修改"
+                            : root.kind == 13 ? (MobileData.update-confirm-wait > 0 ? "继续安装（" + MobileData.update-confirm-wait + " 秒）" : "继续安装")
                             : root.seconds > 0 ? "开启保护（" + root.seconds + " 秒）" : "开启保护";
                         clicked => {
                             if root.kind == 4 { MobileActions.request(MobileIntent.delete-profile, MobileView.selected-id, ""); }
@@ -160,7 +162,10 @@ export component MobileModal inherits Rectangle {
                                 MobileActions.request(MobileIntent.claude-protection, "true", "");
                                 MobileView.detail = 0;
                             }
-                            else {
+                            else if root.kind == 13 {
+                                MobileActions.request(MobileIntent.install-update, "", "confirmed");
+                                MobileView.detail = 0;
+                            } else {
                                 MobileView.draft-dirty = false;
                                 if MobileView.pending-detail == 0 { MobileActions.request(MobileIntent.rule-discard, "", ""); }
                                 if MobileView.pending-page >= 0 { MobileView.navigate(MobileView.pending-page); }
@@ -169,7 +174,10 @@ export component MobileModal inherits Rectangle {
                         }
                     }
                     MButton { modal-control: true; text: root.kind == 11 ? "完成" : root.kind == 12 ? "继续编辑" : "取消";
-                        clicked => { MobileView.detail = root.kind == 12 ? MobileView.pending-detail : 0; }
+                        clicked => {
+                            if root.kind == 13 { MobileActions.request(MobileIntent.install-update, "", "cancel"); }
+                            MobileView.detail = root.kind == 12 ? MobileView.pending-detail : 0;
+                        }
                     }
                 }
             }

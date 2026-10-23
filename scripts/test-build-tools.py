@@ -37,6 +37,59 @@ _memory_spec.loader.exec_module(memory_benchmark)
 
 
 class BuildTests(unittest.TestCase):
+    def test_memory_mapping_categories_do_not_keep_addresses_or_paths(self):
+        text = """1000-2000 rw-p 0 00:00 0
+Rss: 8 kB
+Pss: 6 kB
+Private_Clean: 1 kB
+Private_Dirty: 3 kB
+2000-3000 rw-p 0 00:00 0 [heap]
+Rss: 4 kB
+Pss: 4 kB
+Private_Dirty: 4 kB
+3000-4000 r-xp 0 08:01 1 /private/path/program
+Rss: 12 kB
+Pss: 9 kB
+Private_Clean: 2 kB
+"""
+        maps = memory_benchmark.memory_maps(text)
+        self.assertEqual(maps['anonymous'], {'rss_bytes':8192, 'pss_bytes':6144, 'private_bytes':4096})
+        self.assertEqual(maps['heap']['private_bytes'], 4096)
+        self.assertEqual(maps['file-backed']['rss_bytes'], 12288)
+        self.assertNotIn('/private/path', json.dumps(maps))
+        classified = memory_benchmark.memory_maps(text, '/private/path/program')
+        self.assertEqual(classified['executable']['rss_bytes'],12288)
+        self.assertNotIn('/private/path',json.dumps(classified))
+
+    def test_renderer_bundle_is_an_agent_before_launch_and_signed_inside_out(self):
+        import macos_package as mac
+        import plistlib
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            payload = root/'payload'
+            (payload/'resources').mkdir(parents=True)
+            (payload/'resources/core.json').write_text('{}')
+            for name in ('clash-of-rust','clash-desktop-ui','clash-tun-launcher','cor','LICENSE','resources/mihomo'):
+                (payload/name).write_bytes(name.encode())
+            commands=[]
+            def tool(command, **kwargs):
+                commands.append([str(v) for v in command])
+                if command[0] == '/usr/bin/iconutil':
+                    Path(command[-1]).write_bytes(b'icon')
+            with patch.object(mac,'validate_binary_arch'),patch.object(mac,'run',side_effect=tool),patch.dict(os.environ,{'MACOS_SIGNING_IDENTITY':'-'}):
+                app = mac.build_app(payload,root/mac.APP_NAME,'0.6.3-dev.1','arm64')
+            helper=app/mac.UI_APP
+            info=plistlib.loads((helper/'Contents/Info.plist').read_bytes())
+            owner=plistlib.loads((app/'Contents/Info.plist').read_bytes())
+            self.assertIs(info['LSUIElement'],True)
+            self.assertNotIn('LSUIElement',owner)
+            self.assertNotEqual(info['CFBundleIdentifier'],owner['CFBundleIdentifier'])
+            self.assertEqual((helper/'Contents/MacOS'/info['CFBundleExecutable']).read_bytes(),b'clash-desktop-ui')
+            self.assertFalse((app/'Contents/MacOS/clash-desktop-ui').exists())
+            signed=[command[-1] for command in commands if command[:2]==['/usr/bin/codesign','--force']]
+            self.assertLess(signed.index(str(helper/'Contents/MacOS/clash-desktop-ui')),signed.index(str(helper)))
+            self.assertLess(signed.index(str(helper)),signed.index(str(app)))
+
     def test_memory_scene_rejects_an_early_exit_missing_core_or_gui_in_headless_sample(self):
         with tempfile.TemporaryDirectory() as temporary:
             path = Path(temporary)/'headless.jsonl'
@@ -225,10 +278,50 @@ class BuildTests(unittest.TestCase):
                 restored.update(key=config['key'])
                 self.assertTrue(cache_shards.restore(restored,False))
                 self.assertEqual((target/'release/deps/dep5.rlib').read_bytes(),b'updated-dependency')
+                # LRU eviction can remove any shard while the index and a
+                # build-script success marker still exist. Cargo does not
+                # validate arbitrary generated OUT_DIR files on its own.
+                marker=target/'release/.fingerprint/serde_core-hash/run-build-script-build-script-build'
+                marker.parent.mkdir(parents=True)
+                marker.write_bytes(b'cached success')
+                shard=next(s for s in restored['shard_index']['shards'] if s)
+                blob=store.path(shard['group'],shard['id'])
+                valid=blob.read_bytes()
+                blob.unlink()
+                self.assertTrue(cache_shards.restore(restored,False))
+                self.assertFalse(restored['hit'])
+                self.assertTrue(restored['mirror_required'])
+                self.assertFalse(marker.parent.exists())
+                blob.write_bytes(valid)
                 shard=next(s for s in restored['shard_index']['shards'] if s)
                 store.path(shard['group'],shard['id']).write_bytes(b'corrupt')
                 with self.assertRaisesRegex(ValueError,'Incomplete|checksum'):
                     cache_shards.restore(restored,False)
+
+    def test_partial_rust_cache_invalidates_only_native_and_cross_build_script_runs(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root=Path(temporary)
+            profiles=[root/'target/release',root/'target/aarch64-linux-android/release']
+            markers=[]
+            for profile in profiles:
+                for layout in ['serde_core-hash', 'serde_core/another-hash']:
+                    marker=profile/'.fingerprint'/layout/'run-build-script-build-script-build.json'
+                    marker.parent.mkdir(parents=True)
+                    marker.write_text('{"cached":"success"}')
+                    markers.append(marker)
+                for name in ['.fingerprint/library-hash/lib-library',
+                             'build/serde_core-hash/build-script-build',
+                             'deps/library.rlib']:
+                    path=profile/name;path.parent.mkdir(parents=True,exist_ok=True)
+                    path.write_bytes(b'reusable compilation')
+            cache_shards.invalidate_build_scripts([root/'target'])
+            for marker in markers:
+                self.assertFalse(marker.parent.exists())
+            for profile in profiles:
+                for name in ['.fingerprint/library-hash/lib-library',
+                             'build/serde_core-hash/build-script-build',
+                             'deps/library.rlib']:
+                    self.assertEqual((profile/name).read_bytes(),b'reusable compilation')
 
     def test_rust_shards_reject_indexes_pointing_outside_their_cache_group(self):
         record={'schema':local_cache.SCHEMA,'group':'rust/linux-x64/p00','key':'compiler-object',
@@ -1220,6 +1313,85 @@ class ReleaseTests(unittest.TestCase):
                 git.assert_not_called()
         with self.assertRaises(ValueError):
             release.GitHub('example/project','test-only-token')('https://example.test/upload','POST',b'installer')
+
+    def test_release_artifact_get_recovers_from_dns_and_interrupted_download(self):
+        reply = MagicMock()
+        reply.read.side_effect = release.http.client.IncompleteRead(b'partial')
+        transport = MagicMock()
+        transport.open.side_effect = [
+            urllib.error.URLError('temporary DNS failure'),
+            nullcontext(reply),
+            nullcontext(io.BytesIO(b'complete verified archive')),
+        ]
+        with patch.object(release, 'opener', return_value=transport), patch.object(release.time, 'sleep') as sleep:
+            data = release.GitHub('example/project','test-only-token')('/actions/artifacts/1/zip',raw=True)
+        self.assertEqual(data,b'complete verified archive')
+        self.assertEqual(transport.open.call_count,3)
+        self.assertEqual([call.args[0] for call in sleep.call_args_list],[1,2])
+
+    def test_release_metadata_does_not_reuse_a_stale_jobs_snapshot(self):
+        current = {'jobs':[{'status':'in_progress','conclusion':None}]}
+        cached = {}
+        queries = []
+        def response(request, **kwargs):
+            queries.append(urllib.parse.parse_qs(urllib.parse.urlparse(request.full_url).query))
+            body = cached.setdefault(request.full_url,json.dumps(current).encode())
+            return nullcontext(io.BytesIO(body))
+        transport = MagicMock()
+        transport.open.side_effect = response
+        with patch.object(release,'opener',return_value=transport), patch.object(release.time,'time_ns',side_effect=[1,2]):
+            client = release.GitHub('example/project','test-only-token')
+            path = '/actions/runs/77/jobs?filter=latest&per_page=100'
+            self.assertEqual(client(path)['jobs'][0]['status'],'in_progress')
+            current['jobs'][0].update(status='completed',conclusion='success')
+            self.assertEqual(client(path)['jobs'][0]['conclusion'],'success')
+        self.assertEqual(len(cached),2)
+        for query in queries:
+            self.assertEqual(query['filter'],['latest'])
+            self.assertEqual(query['per_page'],['100'])
+
+    def test_release_refresh_preserves_artifact_and_mutation_urls(self):
+        for path,method,data,raw in [
+            ('/actions/artifacts/1/zip?archive=verified','GET',None,True),
+            ('https://uploads.github.com/repos/example/project/releases/1/assets?name=package','POST',b'package',False),
+            ('/releases/1','PATCH',{'draft':False},False),
+        ]:
+            with self.subTest(path=path):
+                transport = MagicMock()
+                transport.open.return_value = nullcontext(io.BytesIO(b'archive' if raw else b'{}'))
+                with patch.object(release,'opener',return_value=transport):
+                    release.GitHub('example/project','test-only-token')(path,method,data,raw=raw)
+                request = transport.open.call_args.args[0]
+                expected = 'https://api.github.com/repos/example/project'+path if path.startswith('/') else path
+                self.assertEqual(request.full_url,expected)
+                self.assertEqual(request.get_method(),method)
+
+    def test_release_get_retries_only_temporary_http_errors(self):
+        for status in (403,404,429,503):
+            with self.subTest(status=status):
+                error = urllib.error.HTTPError('https://api.github.com/test',status,'HTTP failure',{},None)
+                transport = MagicMock()
+                transport.open.side_effect = [error,nullcontext(io.BytesIO(b'{"ok":true}'))]
+                with patch.object(release, 'opener', return_value=transport), patch.object(release.time, 'sleep') as sleep:
+                    client = release.GitHub('example/project','test-only-token')
+                    if status in (403,404):
+                        with self.assertRaises(urllib.error.HTTPError): client('/test')
+                        self.assertEqual(transport.open.call_count,1)
+                        sleep.assert_not_called()
+                    else:
+                        self.assertEqual(client('/test'),{'ok':True})
+                        self.assertEqual(transport.open.call_count,2)
+                        sleep.assert_called_once_with(1)
+
+    def test_release_network_retries_are_bounded_and_never_replay_mutations(self):
+        for method, attempts in [('GET',3),('POST',1),('PATCH',1),('DELETE',1)]:
+            with self.subTest(method=method):
+                transport = MagicMock()
+                transport.open.side_effect = urllib.error.URLError('offline')
+                with patch.object(release, 'opener', return_value=transport), patch.object(release.time, 'sleep'):
+                    with self.assertRaises(urllib.error.URLError):
+                        release.GitHub('example/project','test-only-token')('/test',method=method)
+                self.assertEqual(transport.open.call_count,attempts)
 
     def test_release_check_mode_never_calls_publisher(self):
         with patch.object(release.sys,'argv',['publish-release.py','--check','--run-id','77','--package-run-id','88']), \

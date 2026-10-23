@@ -110,6 +110,10 @@ pub struct Signal {
     pub ip: String,
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub risk: bool,
+    /// The measured response was an interactive challenge, not evidence of a
+    /// regional or routing failure. Keep its observation separate from risk.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub challenged: bool,
 }
 impl Signal {
     pub fn new(
@@ -131,7 +135,13 @@ impl Signal {
             country: String::new(),
             ip: String::new(),
             risk: false,
+            challenged: false,
         }
+    }
+    /// A real challenge response still cannot establish service usability.
+    /// Present it with other contextual observations instead of a safe verdict.
+    pub fn context_only(&self) -> bool {
+        self.challenged || self.evidence != Evidence::Measured
     }
     pub fn unknown(group: Group, title: &str, source: &str, detail: impl Into<String>) -> Self {
         Self::new(

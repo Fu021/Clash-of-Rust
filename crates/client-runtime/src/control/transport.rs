@@ -66,7 +66,7 @@ impl Endpoint {
                 && endpoint.port != 0
                 && endpoint.token.len() == 64
                 && endpoint.token.bytes().all(|c| c.is_ascii_hexdigit()),
-            "本机控制协议不兼容，请升级客户端"
+            "本机控制协议不兼容，请升级客户端或退出旧版 GUI／cor 后台后重试"
         );
         Ok(Some(endpoint))
     }

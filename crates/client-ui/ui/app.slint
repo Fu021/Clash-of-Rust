@@ -23,6 +23,7 @@ import "../../../resources/fonts/SourceHanSansCN-Regular.otf";
 export component AppWindow inherits Window {
     MotionScope { }
     out property <bool> modal-mounted: dialog-host.mounted;
+    in-out property <int> accent-draft <=> dialog-host.selected-accent;
     out property <bool> notice-mounted: notice-host.mounted;
     title: "Clash of Rust · 原生代理客户端";
     preferred-width: 950px;
@@ -86,6 +87,7 @@ export component AppWindow inherits Window {
         Label { x: 48px; y: 18px; height: 32px; width: 122px; text: "Clash of Rust"; font-size: 16px * Theme.text-scale; }
         Caption { x: 48px; y: 46px; height: 22px; width: 122px; text: "原生代理客户端"; font-size: 12px * Theme.text-scale; }
         nav := ScrollView {
+            viewport-y <=> UiData.scroll-navigation;
             x: 0px; y: 92px; width: parent.width; height: parent.height - 144px;
             VerticalLayout { alignment: start; padding-left: 12px; padding-right: 12px; spacing: 4px;
                 for title[i] in root.titles: VerticalLayout {

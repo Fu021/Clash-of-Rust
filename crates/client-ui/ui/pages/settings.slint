@@ -1,10 +1,10 @@
 import { PageSurface } from "../components/motion.slint";
-import { ScrollView } from "std-widgets.slint";
 import { Theme, AccentPalette } from "../theme/palette.slint";
 import { UiData, UiActions, Intent } from "../state.slint";
-import { Label, Caption, ContentPanel, RowPanel, SettingsSection, ActionButton, AccentChoice, SettingRow, Divider, Field, Select, Paragraph } from "../components/controls.slint";
+import { PageScroll, Label, Caption, ContentPanel, RowPanel, SettingsSection, ActionButton, AccentChoice, SettingRow, Divider, Field, Select, Paragraph } from "../components/controls.slint";
 export component SettingsPage inherits PageSurface {
-    ScrollView {
+    PageScroll {
+        viewport-y <=> UiData.scroll-settings;
         x: 0px; width: parent.width + Theme.content-gap;
         VerticalLayout {
             alignment: start; padding-right: Theme.content-gap; padding-bottom: Theme.card-padding; spacing: Theme.section-gap;
@@ -51,8 +51,6 @@ export component SettingsPage inherits PageSurface {
                     HorizontalLayout { cross-axis-alignment: center; spacing: Theme.content-gap;
                         Label { text: "混合端口"; }
                         Field { text <=> UiData.mixed-port; width: 100px; horizontal-stretch: 0; edited(value) => { UiActions.dispatch(Intent.mixed-port, value, ""); } }
-                        Label { text: "控制端口"; }
-                        Field { text <=> UiData.controller-port; width: 100px; horizontal-stretch: 0; edited(value) => { UiActions.dispatch(Intent.controller-port, value, ""); } }
                     }
                     if UiData.ports-dirty: ActionButton { text: "保存并重启内核"; primary: true; enabled: !UiData.working; clicked => { UiActions.dispatch(Intent.save-ports, "", ""); } }
                     Divider { }
@@ -75,13 +73,16 @@ export component SettingsPage inherits PageSurface {
                 title: "Geo 数据";
                 RowPanel {
                     Caption { text: UiData.geo-status; }
-                    ActionButton { text: UiData.geo-updating ? "正在更新 Geo 数据…" : "更新所有 Geo 数据"; busy: UiData.geo-updating; enabled: UiData.ready && !UiData.working; clicked => { UiActions.dispatch(Intent.update-geo, "", ""); } }
+                    ActionButton { text: "更新所有 Geo 数据"; busy: UiData.geo-updating; enabled: UiData.ready && !UiData.working; clicked => { UiActions.dispatch(Intent.update-geo, "", ""); } }
                 }
             }
             SettingsSection {
                 title: "更新";
                 ContentPanel {
                     Label { text: "当前版本 " + UiData.version; }
+                    SettingRow { title: "包含预发布版本"; checked: UiData.update-prereleases; enabled: !UiData.working && !UiData.update-busy && !UiData.update-checking;
+                        toggled(value) => { UiActions.dispatch(Intent.update-prereleases, value ? "true" : "false", ""); }
+                    }
                     Paragraph { text: UiData.update-status; font-size: Theme.detail-size; color: Theme.secondary; }
                     HorizontalLayout { cross-axis-alignment: center; spacing: Theme.content-gap;
                         ActionButton { text: "检查更新"; busy: UiData.update-checking; enabled: !UiData.update-checking && !UiData.update-busy; clicked => { UiActions.dispatch(Intent.check-update, "", ""); } }

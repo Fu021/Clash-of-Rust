@@ -20,7 +20,7 @@
 
 ```sh
 python3 scripts/build_inputs.py resolve
-cargo build -p clash-of-rust -p clash-cli --release --locked --bins
+cargo build -p clash-of-rust -p clash-desktop-ui -p clash-cli --release --locked --bins
 python3 scripts/prepare-resources.py
 ```
 
@@ -63,7 +63,7 @@ Go 按声明的模块路径查询更新，避免探测无关父模块；不降�
 - Linux TUN 测试在独立双栈上游中使用正式保护覆盖，验证域名节点的引导解析、经节点的 DoH A/AAAA、TCP/UDP DNS 接管、HTTP 转发、冷启动及原设置恢复；额外阻断固定公网引导 DNS，验证订阅解析器仍可用。上游记录公网明文 DNS 与绕过节点的公网 DNS，发生泄漏即失败。保护 DNS 全部不可达时必须拒绝开启并恢复原网络。隔离环境使用专用测试 CA，保留 TLS 证书校验，不访问外网。
 - Python 构建辅助与产物校验单元测试在前置依赖解析任务中执行一次，失败时不启动各平台下载与编译。内存基准 example 不作为 CI 测试程序额外构建或运行。
 - main push、PR 更新触发 CI；过时运行自动取消。本地生成的编译、打包产物和缓存已在 `.gitignore` 中排除，不应提交。
-- 桌面 CI 不生成安装包；桌面程序、`cor` 和网络助手一起导出，现有代理/TUN 集成场景同时验证真实控制台命令及后台生命周期。Android CI 生成供安装测试与发布复用的 APK。产物记录提交、版本、架构、Cargo.lock、工具链及逐文件校验值；仅附带发布后复用的 `core_integration` 代理/TUN 测试程序，不上传源码单元测试程序。清理后的产物采用 schema 2，只与同一提交的打包流程配套使用。
+- 桌面 CI 不生成安装包；桌面后台、界面程序、`cor` 和网络助手一起导出，现有代理/TUN 集成场景同时验证真实控制台命令及后台生命周期。Android CI 生成供安装测试与发布复用的 APK。产物记录提交、版本、架构、Cargo.lock、工具链及逐文件校验值；仅附带发布后复用的 `core_integration` 代理/TUN 测试程序，不上传源码单元测试程序。清理后的产物采用 schema 2，只与同一提交的打包流程配套使用。
 
 Android x86_64 使用 API 35 模拟器运行真实代理/TUN 流量测试，验证正式界面的内核状态、默认策略组、订阅导航和设置触摸滚动，以及系统 VPN 授权、DNS、套接字保护、快捷磁贴连接/断开和路由恢复。取消后到达的普通授权、过期服务启动与排队连接不得重新开启 VPN，连接中必须提供取消入口；ARM64/ARMv7 完成实际编译、Gradle lint 与架构校验，仍需真机验收。Android 测试结果、体积报告和 logcat 保存在 `android-report-{arch}`，固定开发签名与构建说明见 [Android 宿主](../apps/android/README.md)。
 
@@ -81,7 +81,7 @@ macOS 失败日志、系统与网络状态、崩溃报告保存在 `macos-ci-rep
 1. 六个平台获取并校验已有程序，再生成 Windows EXE、Linux DEB、macOS DMG。
 2. Windows 验证安装、服务注册、普通用户代理/TUN、更新安装路径、卸载与用户文件保留，并扫描 Defender；PE 图标在打包阶段核验。
 3. Linux 安装 DEB 后验证普通用户系统代理、HTTP 转发、TUN 接管与清理；最新版 Ubuntu 使用同一份 Ubuntu 22.04 DEB 再验证一次。
-4. macOS 核验 App/DMG 版本、架构、资源及签名，启动安装后的 GUI/内核并验证代理/TUN。当前使用 ad-hoc 签名，没有 Developer ID 与 Apple 公证。
+4. macOS 核验 App/DMG 版本、架构、资源及签名，启动安装后的 GUI/内核并验证代理/TUN；界面辅助包使用独立身份与 `LSUIElement`，连续重建界面 5 次，核对应用注册、Dock 最近应用条目及内核 PID。当前使用 ad-hoc 签名，没有 Developer ID 与 Apple 公证。
 5. Android 复用三种 ABI 的已编译 APK，检查签名、架构与 16 KiB 对齐；x86_64 最终包再运行代理/TUN 测试。`check_only` 保留固定开发签名，正式发布要求单独配置长期签名。
 6. 核对安装包、校验值、成功记录及来源后，正式模式才公开 Release；`check_only` 仅保留 Actions 附件。开发版本标记为 prerelease，不覆盖稳定版 latest。
 
@@ -131,6 +131,6 @@ python3 scripts/preview-slint.py --dialogs --pairs
 
 API 基准覆盖规则、连接、代理三类数据的流式/缓冲解析和 1/5 次刷新。GUI 在隔离数据目录、Xvfb 中采样首页、代理组折叠、节点搜索、返回首页；关闭系统代理与定时测速，不生成业务流量。light 为 100 节点、5 个代理组、1,000 条规则；stress 为 2,000 节点、40 个代理组、20,000 条规则。支持的版本另测五项快捷规则全开的同样场景。
 
-Slint 版本另在独立进程中测量可用托盘下的首页、关闭窗口后驻留托盘；通过真实关闭事件隐藏窗口，核对内核未重启，并验证窗口可再次打开。包含 `cor` 的版本再测纯 CLI 后台：使用 `cor start`，移除显示与桌面会话变量，单独统计 cor、内核及合计内存。附加场景不改变原有四个可见窗口场景的环境；托盘宿主和观察器不计入客户端进程树。
+Slint 版本另在独立进程中测量可用托盘下的首页、关闭窗口后驻留托盘；通过真实关闭事件隐藏窗口，核对内核未重启，并验证窗口可再次打开。另测搜索后关闭、重新打开及连续开关 20 次；支持销毁窗口的版本须确认原生窗口确实被销毁；采用独立界面进程的版本还需确认该进程已退出，客户端内存合计宿主与界面进程。证明文件记录每次重新启动应用至窗口可见的耗时（不代表首帧耗时），映射报告区分匿名、堆与文件页，不记录地址和文件路径。包含 `cor` 的版本再测纯 CLI 后台：使用 `cor start`，移除显示与桌面会话变量，单独统计 cor、内核及合计内存。附加场景不改变原有四个可见窗口场景的环境；托盘宿主和观察器不计入客户端进程树。
 
 工作流只替换所选版本的 example 基准程序，兼容旧版目录布局，不改应用源码。产物包含版本与环境、提交身份、资源清单、输入订阅、API 数据、GUI/内核内存采样和报告，不生成截图。API 为 Rust 堆分配量；GUI/内核分别统计 RSS、PSS、USS，需区分口径；采样峰值为观测峰值。

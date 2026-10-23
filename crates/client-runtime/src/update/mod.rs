@@ -3,6 +3,7 @@ mod discovery;
 mod install;
 use anyhow::{Context, Result, bail};
 pub use clash_client_core::update::Progress;
+pub use clash_client_core::update::channel;
 use futures_util::future::{AbortHandle, AbortRegistration};
 pub use install::{
     InstallSession, cleanup, ensure_installable, handoff, handoff_owner, helper_main,
@@ -85,6 +86,7 @@ pub struct Available {
 pub struct State {
     pub checking: bool,
     pub started: bool,
+    pub check_id: u64,
     pub available: Option<Available>,
     pub status: String,
     pub progress: Option<Progress>,
@@ -107,7 +109,19 @@ impl State {
         }
         self.checking = true;
         self.started = true;
+        self.check_id = self.check_id.wrapping_add(1);
         true
+    }
+
+    pub fn reset_channel(&mut self) {
+        self.cancel_download();
+        self.check_id = self.check_id.wrapping_add(1);
+        self.checking = false;
+        self.available = None;
+        self.cached_download = None;
+        self.failure = None;
+        self.outcome = None;
+        self.status = "更新通道已更改，请检查更新".into();
     }
 
     pub fn busy(&self) -> bool {
@@ -211,7 +225,9 @@ impl State {
             Ok(available) => {
                 self.available = available;
                 match &self.available {
-                    Some(update) => format!("发现新版本 {}", update.version),
+                    Some(update) => {
+                        channel::description(&update.version, update.preview, crate::VERSION)
+                    }
                     None => "未发现新版本".into(),
                 }
             }
@@ -290,26 +306,34 @@ fn package(release: &Release, version: &str) -> Option<Package> {
     })
 }
 
+#[cfg(test)]
 fn newest(releases: Vec<Release>, current: &str) -> Result<Option<Available>> {
+    newest_channel(releases, current, false)
+}
+fn newest_channel(
+    releases: Vec<Release>,
+    current: &str,
+    include_prereleases: bool,
+) -> Result<Option<Available>> {
     let current = Version::parse(current).context("当前客户端版本号无效")?;
+    let current_is_preview = channel::installed_preview(
+        &current,
+        releases
+            .iter()
+            .map(|release| (release.tag_name.as_str(), release.draft, release.prerelease)),
+    );
     let selected = releases
         .into_iter()
-        .filter(|release| !release.draft && !release.prerelease)
         .filter_map(|release| {
-            let version = Version::parse(
-                release
-                    .tag_name
-                    .strip_prefix('v')
-                    .unwrap_or(&release.tag_name),
-            )
-            .ok()?;
-            if !version.pre.is_empty() {
-                return None;
-            }
-            version
-                .cmp_precedence(&current)
-                .is_gt()
-                .then_some((version, release))
+            let version = channel::candidate(
+                &release.tag_name,
+                release.draft,
+                release.prerelease,
+                &current,
+                include_prereleases,
+                current_is_preview,
+            )?;
+            Some((version, release))
         })
         .max_by(|(left, _), (right, _)| left.cmp_precedence(right));
     Ok(selected.map(|(version, release)| {
@@ -567,10 +591,25 @@ async fn transfer(
 }
 
 pub async fn check(proxy_port: Option<u16>) -> Result<Option<Available>> {
-    discovery::check(proxy_port).await
+    check_with_prereleases(proxy_port, false).await
+}
+pub async fn check_with_prereleases(
+    proxy_port: Option<u16>,
+    include_prereleases: bool,
+) -> Result<Option<Available>> {
+    discovery::check(proxy_port, include_prereleases).await
 }
 
+#[cfg(test)]
 async fn fetch(client: &Client, endpoint: &str, current: &str) -> Result<Option<Available>> {
+    fetch_channel(client, endpoint, current, false).await
+}
+async fn fetch_channel(
+    client: &Client,
+    endpoint: &str,
+    current: &str,
+    include_prereleases: bool,
+) -> Result<Option<Available>> {
     let response = client
         .get(endpoint)
         .header("Accept", "application/vnd.github+json")
@@ -578,13 +617,17 @@ async fn fetch(client: &Client, endpoint: &str, current: &str) -> Result<Option<
         .send()
         .await
         .map_err(|error| crate::network::request_error(error, "GitHub API"))?;
-    decode(response, current).await
+    decode_channel(response, current, include_prereleases).await
 }
 
-async fn decode(response: reqwest::Response, current: &str) -> Result<Option<Available>> {
+async fn decode_channel(
+    response: reqwest::Response,
+    current: &str,
+    include_prereleases: bool,
+) -> Result<Option<Available>> {
     let bytes = release_bytes(response).await?;
     let releases = serde_json::from_slice(&bytes).context("Release 信息格式无效")?;
-    newest(releases, current)
+    newest_channel(releases, current, include_prereleases)
 }
 
 async fn release_bytes(mut response: reqwest::Response) -> Result<Vec<u8>> {
@@ -1153,6 +1196,51 @@ mod tests {
                 .unwrap()
                 .is_none()
         );
+    }
+
+    #[test]
+    fn preview_opt_in_and_stable_return_share_the_desktop_and_cli_policy() {
+        let releases = || {
+            vec![
+                release("v0.6.4-dev.2", true),
+                release("v0.6.2", false),
+                release("v0.6.3", false),
+            ]
+        };
+        let preview = newest_channel(releases(), "0.6.3", true).unwrap().unwrap();
+        assert_eq!(preview.version, "0.6.4-dev.2");
+        assert!(preview.preview);
+        let stable = newest_channel(releases(), "0.6.4-dev.1", false)
+            .unwrap()
+            .unwrap();
+        assert_eq!(stable.version, "0.6.3");
+        assert!(!stable.preview);
+        assert!(
+            newest_channel(releases(), "0.6.3", false)
+                .unwrap()
+                .is_none()
+        );
+    }
+
+    #[test]
+    fn changing_channel_invalidates_checks_and_downloads_and_drops_the_old_offer() {
+        let mut state = State::default();
+        assert!(state.begin());
+        let check = state.check_id;
+        state.finish(Ok(newest_channel(
+            vec![release("v0.6.4-dev.2", true)],
+            "0.6.3",
+            true,
+        )
+        .unwrap()));
+        let (download, _) = state.begin_download(42);
+        state.reset_channel();
+        assert_ne!(state.check_id, check);
+        assert!(!state.checking);
+        assert!(state.available.is_none());
+        assert!(!state.accepts_download(download));
+        assert!(!state.busy());
+        assert!(state.begin());
     }
 
     #[test]

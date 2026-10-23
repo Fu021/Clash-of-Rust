@@ -1,8 +1,6 @@
 //! A reversible runtime overlay. Preferences and subscription sources stay intact.
 use crate::config::Settings;
 use crate::model::ProxyMode;
-#[cfg(target_os = "macos")]
-use anyhow::Context;
 use anyhow::{Result, ensure};
 use serde::{Deserialize, Serialize};
 use serde_yaml::{Mapping, Value};
@@ -548,36 +546,8 @@ pub fn apply(map: &mut Mapping, settings: &Settings) -> Result<()> {
         for value in policy.values_mut() {
             *value = serde_yaml::to_value(&local)?;
         }
-        // Recursive-DNS probes must reach the authoritative server, rather than
-        // stopping at a synthetic fake IP. Retain blacklist exceptions; other
-        // modes use a protection-only baseline without altering the subscription.
-        if dns
-            .get(Value::from("fake-ip-filter-mode"))
-            .and_then(Value::as_str)
-            .is_some_and(|mode| mode != "blacklist")
-        {
-            dns.insert(
-                Value::from("fake-ip-filter"),
-                serde_yaml::to_value([
-                    "+.lan",
-                    "+.local",
-                    "localhost",
-                    "+.home.arpa",
-                    "+.in-addr.arpa",
-                    "+.ip6.arpa",
-                ])?,
-            );
-        }
-        dns.insert(Value::from("fake-ip-filter-mode"), Value::from("blacklist"));
-        let filters = dns
-            .entry(Value::from("fake-ip-filter"))
-            .or_insert(Value::Sequence(vec![]))
-            .as_sequence_mut()
-            .context("fake-ip-filter 格式无效")?;
-        let probe = Value::from("+.bash.ws");
-        if !filters.contains(&probe) {
-            filters.push(probe);
-        }
+        // config::dns adds local/probe real-IP exceptions after this overlay,
+        // preserving blacklist, whitelist and ordered rule semantics.
     }
     let tun = map
         .get_mut(Value::from("tun"))
@@ -811,11 +781,16 @@ mod tests {
                 serde_yaml::to_value(["udp://192.168.1.1:53#DIRECT", "udp://[fd00::1]:53#DIRECT"])
                     .unwrap()
             );
+            let probe = if value["dns"]["fake-ip-filter-mode"] == "rule" {
+                "DOMAIN-SUFFIX,bash.ws,real-ip"
+            } else {
+                "+.bash.ws"
+            };
             assert!(
                 value["dns"]["fake-ip-filter"]
                     .as_sequence()
                     .unwrap()
-                    .contains(&Value::from("+.bash.ws"))
+                    .contains(&Value::from(probe))
             );
             let mut restarted: Settings =
                 serde_json::from_slice(&serde_json::to_vec(&settings).unwrap()).unwrap();

@@ -1,8 +1,7 @@
 import { PageSurface } from "../components/motion.slint";
-import { ScrollView } from "std-widgets.slint";
 import { Theme } from "../theme/palette.slint";
 import { UiData, UiActions, Intent } from "../state.slint";
-import { Label, Caption, Panel, ActionButton, Field, Badge } from "../components/controls.slint";
+import { PageScroll, Label, Caption, Panel, ActionButton, Field, Badge } from "../components/controls.slint";
 component SortHeading inherits Rectangle {
     in property <string> label;
     in property <string> field;
@@ -62,7 +61,9 @@ export component ConnectionsPage inherits PageSurface {
                         Caption { width: 72px; text: "操作"; }
                     }
                 }
-                ScrollView {
+                PageScroll {
+                    content-key: UiData.page-offset + "/" + UiData.query + "/" + UiData.connection-sort + "/" + (UiData.descending ? "desc" : "asc");
+                    viewport-y <=> UiData.scroll-connections;
                     for connection[i] in UiData.connections: Rectangle {
                         y: i * root.row-height;
                         height: root.row-height;

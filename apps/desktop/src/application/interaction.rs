@@ -6,6 +6,8 @@ pub(crate) enum Pending {
     CloseImport,
     Rules(rules_view::Event),
     Exit,
+    NotificationSettings,
+    InstallUpdate(String),
 }
 
 pub(crate) struct Confirmation {
@@ -13,6 +15,15 @@ pub(crate) struct Confirmation {
     pub description: String,
     pub accept: &'static str,
     pub pending: Pending,
+    pub ready_at: Option<std::time::Instant>,
+}
+impl Confirmation {
+    pub fn wait(&self) -> u64 {
+        self.ready_at.map_or(0, |ready| {
+            let remaining = ready.saturating_duration_since(std::time::Instant::now());
+            remaining.as_secs() + u64::from(remaining.subsec_nanos() > 0)
+        })
+    }
 }
 pub(crate) struct ProfileEditor {
     pub id: String,
@@ -28,6 +39,45 @@ impl ProfileEditor {
 }
 
 impl App {
+    pub(super) fn prepare_notifications(&mut self) -> Task<Message> {
+        if self.notification_checking || self.exiting {
+            return Task::none();
+        }
+        self.notification_prepared = true;
+        self.notification_checking = true;
+        Task::perform(
+            async {
+                let store = startup_store().map_err(|error| format!("{error:#}"))?;
+                platform::notification::prepare_startup(&store)
+                    .await
+                    .map_err(|error| format!("{error:#}"))
+            },
+            Message::NotificationPrepared,
+        )
+    }
+    pub(super) fn offer_notification_settings(&mut self) {
+        if self.notification_guide_pending
+            && self.visible
+            && !self.working
+            && !self.exiting
+            && self.confirmation.is_none()
+            && self.profile_editor.is_none()
+            && !self.import_open
+            && !self.accent_open
+            && self.connection_detail.is_none()
+            && self.log_detail.is_none()
+            && self.claude.guide.is_none()
+            && !(self.page == Page::Rules && self.rule_state.modal_open())
+            && self.site_detail.is_none()
+        {
+            self.notification_guide_pending = false;
+            let _ = self.ask(
+                "允许系统通知",
+                "Claude 保护的异常连接提醒需要系统通知权限。请在系统设置中允许 Clash of Rust 发送通知。".into(),
+                "打开通知设置", Pending::NotificationSettings,
+            );
+        }
+    }
     fn profile_busy(&self) -> bool {
         self.working
             || self
@@ -61,6 +111,7 @@ impl App {
             description,
             accept,
             pending,
+            ready_at: None,
         });
         Task::none()
     }
@@ -166,10 +217,19 @@ impl App {
                 none()
             }
             Message::Confirm => {
-                if self.working || self.exiting {
+                if self.working
+                    || self.exiting
+                    || self
+                        .confirmation
+                        .as_ref()
+                        .is_some_and(|confirmation| confirmation.wait() > 0)
+                {
                     return Some(none());
                 }
                 match self.confirmation.take().map(|c| c.pending) {
+                    Some(Pending::InstallUpdate(version)) => {
+                        self.update(Message::InstallUpdateConfirmed(version))
+                    }
                     Some(Pending::Delete(id)) => self.dispatch(Action::DeleteProfile(id)),
                     Some(Pending::CloseImport) => {
                         self.import_open = false;
@@ -183,6 +243,15 @@ impl App {
                     }
                     Some(Pending::Rules(event)) => self.update_rules(event),
                     Some(Pending::Exit) => self.exit(),
+                    Some(Pending::NotificationSettings) => Task::perform(
+                        async {
+                            tokio::task::spawn_blocking(platform::notification::open_settings)
+                                .await
+                                .map_err(|error| error.to_string())?
+                                .map_err(|error| format!("{error:#}"))
+                        },
+                        Message::NotificationSettingsOpened,
+                    ),
                     None => none(),
                 }
             }
@@ -278,14 +347,13 @@ impl App {
                 };
                 let edit = *edit;
                 #[cfg(target_os = "macos")]
-                let task =
-                    runtime::native::call(move |_| match clash_of_rust::file_dialog::begin() {
-                        Ok(receiver) => Message::FilePickStarted(
-                            edit,
-                            Arc::new(std::sync::Mutex::new(Some(receiver))),
-                        ),
-                        Err(error) => Message::FilePicked(edit, Err(error)),
-                    });
+                let task = runtime::native::call(move |host| match host.pick_file() {
+                    Ok(receiver) => Message::FilePickStarted(
+                        edit,
+                        Arc::new(std::sync::Mutex::new(Some(receiver))),
+                    ),
+                    Err(error) => Message::FilePicked(edit, Err(error)),
+                });
                 #[cfg(not(target_os = "macos"))]
                 let task = Task::perform(clash_of_rust::file_dialog::choose(), move |r| {
                     Message::FilePicked(edit, r)
@@ -474,6 +542,57 @@ mod tests {
     use super::*;
     fn app() -> App {
         App::initial_state(Err(anyhow::anyhow!("isolated desktop test")), None)
+    }
+    #[test]
+    fn preview_install_requires_three_seconds_and_cancelling_or_reopening_resets_consent() {
+        let mut app = app();
+        app.settings.update_prereleases = true;
+        app.updates.available = Some(update::Available {
+            version: "0.6.4-dev.1".into(),
+            url: update::RELEASES_URL.into(),
+            preview: true,
+            package: None,
+        });
+        let _ = app.update(Message::InstallUpdate);
+        assert_eq!(app.confirmation.as_ref().unwrap().wait(), 3);
+        let _ = app.update(Message::Confirm);
+        assert!(app.confirmation.is_some());
+        assert!(!app.updates.busy());
+        let _ = app.update(Message::CancelConfirm);
+        assert!(app.confirmation.is_none());
+        let _ = app.update(Message::Confirm);
+        assert!(!app.updates.busy());
+        let _ = app.update(Message::InstallUpdate);
+        app.confirmation.as_mut().unwrap().ready_at =
+            Some(std::time::Instant::now() - std::time::Duration::from_secs(1));
+        assert_eq!(app.confirmation.as_ref().unwrap().wait(), 0);
+        let _ = app.update(Message::CancelConfirm);
+        let _ = app.update(Message::InstallUpdate);
+        assert_eq!(app.confirmation.as_ref().unwrap().wait(), 3);
+    }
+
+    #[test]
+    fn a_late_update_check_from_the_previous_channel_cannot_replace_the_current_check() {
+        let mut app = app();
+        assert!(app.updates.begin());
+        let previous = app.updates.check_id;
+        app.updates.reset_channel();
+        assert!(app.updates.begin());
+        let current = app.updates.check_id;
+        let offer = || {
+            Some(update::Available {
+                version: "0.6.4-dev.1".into(),
+                url: update::RELEASES_URL.into(),
+                preview: true,
+                package: None,
+            })
+        };
+        let _ = app.update(Message::UpdateChecked(previous, Ok(offer())));
+        assert!(app.updates.checking);
+        assert!(app.updates.available.is_none());
+        let _ = app.update(Message::UpdateChecked(current, Ok(offer())));
+        assert!(!app.updates.checking);
+        assert!(app.updates.available.is_some());
     }
     fn rules(app: &mut App) {
         let doc = rule_manager::Document::from_raw(

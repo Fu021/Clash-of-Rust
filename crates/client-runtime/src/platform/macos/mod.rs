@@ -163,7 +163,11 @@ mod tests {
             panic!()
         };
         let value: Value = serde_json::from_str(text).unwrap();
-        assert_eq!(value["HTTPPort"], 7890);
+        for prefix in ["HTTP", "HTTPS", "SOCKS"] {
+            assert_eq!(value[format!("{prefix}Enable")], 1);
+            assert_eq!(value[format!("{prefix}Proxy")], "127.0.0.1");
+            assert_eq!(value[format!("{prefix}Port")], 7890);
+        }
         assert_eq!(value["ProxyAutoConfigEnable"], 0);
         assert_eq!(value["ExceptionsList"], json!(["*.local"]));
         let native = cf::plist(&value).unwrap();

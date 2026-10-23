@@ -9,7 +9,7 @@ export enum MobileIntent {
     rule-select, rule-edit, rule-add, rule-save, rule-move, rule-delete, rule-apply, rule-discard,
     rule-shortcut, log-level, clear-logs, export-logs, probe, dns,
     site-start, site-cancel, site-category, site-retest, claude-start, claude-protection, export-report,
-    appearance, accent, text-scale, dns-override, ipv6, udp, save-ports, interval, update-geo, check-update, install-update,
+    appearance, accent, text-scale, dns-override, ipv6, udp, save-ports, interval, update-geo, check-update, install-update, update-prereleases,
 }
 export global MobileActions { callback request(MobileIntent, string, string); }
 
@@ -34,9 +34,11 @@ export global MobileData {
     in-out property <[ProfileItem]> profiles;
     in-out property <[ConnectionItem]> connections;
     in-out property <string> connection-page;
+    in-out property <int> connection-page-index;
     in-out property <bool> connection-previous;
     in-out property <bool> connection-next;
     in-out property <string> rule-page;
+    in-out property <int> rule-page-index;
     in-out property <bool> rule-previous;
     in-out property <bool> rule-next;
     in-out property <[DetailItem]> connection-details;
@@ -61,6 +63,10 @@ export global MobileData {
     in-out property <bool> dns-override: true;
     in-out property <bool> ipv6: true;
     in-out property <bool> udp: true;
+    in-out property <bool> update-prereleases;
+    in-out property <bool> update-preview;
+    in-out property <string> update-version;
+    in-out property <int> update-confirm-wait: 3;
     in-out property <bool> protected;
     in-out property <bool> protection-pending;
     in-out property <string> protection-status;
@@ -74,7 +80,6 @@ export global MobileData {
     in-out property <string> probe-time;
     in-out property <string> dns-result: "尚未查询";
     in-out property <string> mixed-port: "7897";
-    in-out property <string> controller-port: "9090";
     in-out property <string> interval: "0";
 }
 
@@ -82,9 +87,9 @@ export global MobileData {
 export global MobileView {
     in-out property <int> page;
     // 1 risks, 2 rule editor, 3 profile editor, 4 delete, 5 connection,
-    // 6 IP category, 7 normal, 8 protection, 9 clues, 10 log, 11 accent, 12 draft.
+    // 6 IP category, 7 normal, 8 protection, 9 clues, 10 log, 11 accent, 12 draft, 13 preview update.
     in-out property <int> detail;
-    out property <bool> modal: self.detail == 4 || self.detail == 8 || self.detail == 11 || self.detail == 12;
+    out property <bool> modal: self.detail == 4 || self.detail == 8 || self.detail == 11 || self.detail == 12 || self.detail == 13;
     in-out property <string> selected-id;
     in-out property <string> query;
     in-out property <int> node-sort: 2;

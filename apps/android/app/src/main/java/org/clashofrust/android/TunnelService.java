@@ -5,7 +5,9 @@ import android.content.*;
 import android.net.VpnService;
 import android.os.*;
 import java.util.Collections;
-import java.util.concurrent.ExecutorService;
+import java.util.concurrent.ScheduledExecutorService;
+import java.util.concurrent.ScheduledFuture;
+import java.util.concurrent.TimeUnit;
 import java.util.concurrent.Executors;
 import org.clashofrust.nativecore.mobile.Mobile;
 import org.json.JSONObject;
@@ -20,10 +22,12 @@ public final class TunnelService extends VpnService {
     private static volatile String lastError = "";
     private static volatile long generation;
     // One process-wide queue also orders cleanup against a newly created service.
-    private static final ExecutorService serial = Executors.newSingleThreadExecutor();
+    private static final ScheduledExecutorService serial = Executors.newSingleThreadScheduledExecutor();
+    private ScheduledFuture<?> notificationTask;
     private ParcelFileDescriptor descriptor;
     private String interfaceName;
     private volatile boolean stopping;
+    private volatile String lastStatus = "";
     private volatile int latestStartId;
     private volatile String acceptedRequest;
     static String prepareStart(Context context) {
@@ -65,6 +69,7 @@ public final class TunnelService extends VpnService {
         super.onCreate(); instance = this;
         NotificationManager manager = getSystemService(NotificationManager.class);
         manager.createNotificationChannel(new NotificationChannel("vpn", "VPN 连接", NotificationManager.IMPORTANCE_LOW));
+        notificationTask = serial.scheduleWithFixedDelay(this::updateStatus, 1, 1, TimeUnit.SECONDS);
     }
     @Override public int onStartCommand(Intent intent, int flags, int startId) {
         synchronized (requests) {
@@ -140,15 +145,18 @@ public final class TunnelService extends VpnService {
                 if (replacement == null) throw new IllegalStateException("系统拒绝建立 VPN");
                 established = true;
                 connected = false;
+                // establish() returns before ConnectivityService/netd finishes
+                // moving the existing VPN Network to the new interface. Do
+                // not start its packet reader against that transitional device.
+                // gVisor stops its reader after a device read failure; publishing
+                // routes afterwards does not restart that reader.
+                String readyInterface=routes.await(() -> stopping || !current(this, request));
                 if (previous != null) Mobile.stopTun();
                 android.util.Log.i("ClashOfRust", "VPN established; starting embedded TUN");
                 Mobile.startTun(replacement.getFd(), ipv6);
                 descriptor = replacement;
                 replacement = null;
-                // The VPN Network object can remain unchanged while netd is
-                // still moving its routes. Publish readiness only after the
-                // new interface arrives through the ordered network callback.
-                interfaceName=routes.await(() -> stopping || !current(this, request));
+                interfaceName=readyInterface;
                 closeDescriptor(previous);
                 previous = null;
                 android.util.Log.i("ClashOfRust", "VPN routing ready on "+interfaceName);
@@ -235,22 +243,60 @@ public final class TunnelService extends VpnService {
     }
     @Override public void onDestroy() {
         stopping = true;
+        if (notificationTask != null) notificationTask.cancel(false);
         if (instance == this) instance = null;
         serial.execute(this::cleanup);
         super.onDestroy();
     }
     private Notification notification(String text) {
+        lastStatus = text;
+        String[] lines = text.split("\n", 2);
+        String title = lines.length > 1 ? lines[0] : "Clash of Rust";
+        String content = lines.length > 1 ? lines[1] : text;
         PendingIntent open = PendingIntent.getActivity(this, 0, new Intent(this, MainActivity.class),
             PendingIntent.FLAG_IMMUTABLE | PendingIntent.FLAG_UPDATE_CURRENT);
-        return new Notification.Builder(this, "vpn").setContentTitle("Clash of Rust")
-            .setContentText(text).setSmallIcon(R.drawable.ic_app).setOngoing(true).setContentIntent(open).build();
+        return new Notification.Builder(this, "vpn").setContentTitle(title)
+            .setContentText(content).setStyle(new Notification.BigTextStyle().bigText(content))
+            .setOnlyAlertOnce(true).setShowWhen(false)
+            .setSmallIcon(R.drawable.ic_app).setOngoing(true).setContentIntent(open).build();
     }
-    static void updateTraffic(Context context, String down, String up) {
-        TunnelService active = instance;
-        if (active != null && connected && context.getSharedPreferences("appearance", MODE_PRIVATE)
-            .getBoolean("notification-speeds", true)
-            && (Build.VERSION.SDK_INT < 33 || context.checkSelfPermission(android.Manifest.permission.POST_NOTIFICATIONS)
-                == android.content.pm.PackageManager.PERMISSION_GRANTED))
-            active.getSystemService(NotificationManager.class).notify(1, active.notification("↓ " + down + "  ↑ " + up));
+    static String statusText(String down, String up, String node, String mode, boolean speeds) {
+        String label;
+        switch (mode) {
+            case "global": label = "全局"; break;
+            case "rule": label = "规则"; break;
+            case "direct": label = "直连"; break;
+            default: label = "未知模式"; break;
+        }
+        String text = label + " · " + (node == null || node.isEmpty() ? "节点待确认" : node);
+        return speeds ? text + "\n↓ " + down + "  ↑ " + up : text;
+    }
+    private static String speed(long bytes) {
+        if (bytes < 1024) return bytes + " B/s";
+        double value = bytes;
+        String[] units = {"KiB/s", "MiB/s", "GiB/s", "TiB/s"};
+        int unit = 0;
+        value /= 1024;
+        while (value >= 1024 && unit < units.length - 1) { value /= 1024; unit++; }
+        return String.format(java.util.Locale.ROOT, "%.1f %s", value, units[unit]);
+    }
+    private void updateStatus() {
+        if (instance != this || !connected || stopping) return;
+        if (Build.VERSION.SDK_INT >= 33 && checkSelfPermission(android.Manifest.permission.POST_NOTIFICATIONS)
+            != android.content.pm.PackageManager.PERMISSION_GRANTED) return;
+        try {
+            String raw = Mobile.notificationStatus();
+            if (raw.isEmpty()) return;
+            JSONObject state = new JSONObject(raw);
+            String text = statusText(speed(state.optLong("down")), speed(state.optLong("up")),
+                state.optString("node"), state.optString("mode"),
+                getSharedPreferences("appearance", MODE_PRIVATE).getBoolean("notification-speeds", true));
+            synchronized (requests) {
+                if (instance == this && connected && !stopping && !text.equals(lastStatus))
+                    getSystemService(NotificationManager.class).notify(1, notification(text));
+            }
+        } catch (Exception error) {
+            android.util.Log.w("ClashOfRust", "VPN notification status unavailable", error);
+        }
     }
 }
