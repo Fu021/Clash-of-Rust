@@ -560,6 +560,24 @@ jobs:
         run: |
           import subprocess, sys
           subprocess.run([sys.executable, 'scripts/action_cache.py', 'network-restore'], check=True)
+      - name: Diagnose macOS private cache connectivity
+        if: runner.os == 'macOS' && steps.tailnet.outcome == 'success'
+        timeout-minutes: 1
+        continue-on-error: true
+        shell: python
+        env:
+          CACHE_URL: ${{ vars.LOCAL_CACHE_URL }}
+        run: |
+          import os, shutil, subprocess, urllib.parse
+          host = urllib.parse.urlsplit(os.environ.get('CACHE_URL', '')).hostname
+          if host:
+              client = shutil.which('tailscale') or 'tailscale'
+              for args in (['netcheck', '--format=json'], ['ping', '--c', '3', '--timeout=3s', host]):
+                  print('Private cache connectivity:', ' '.join(args), flush=True)
+                  try:
+                      subprocess.run(['sudo', '-n', client, *args], timeout=20, check=False)
+                  except subprocess.TimeoutExpired:
+                      print('Connectivity probe timed out; optional cache restore remains bounded.', flush=True)
       - name: Preserve host routing after private cache login
         if: steps.tailnet.outcome == 'success'
         shell: python

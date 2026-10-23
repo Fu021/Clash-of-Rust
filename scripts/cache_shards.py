@@ -6,7 +6,7 @@ Completed shards can be reused on the next run. Missing/evicted shards fall back
 to Cargo after invalidating build-script success markers, so generated sources
 are recreated too. No server upgrade or broader filesystem access is needed.
 """
-from concurrent.futures import ThreadPoolExecutor, as_completed
+from concurrent.futures import ThreadPoolExecutor
 import hashlib
 import io
 import json
@@ -15,15 +15,12 @@ from pathlib import Path
 import shutil
 import tarfile
 import tempfile
-import threading
 import time
 import urllib.parse
 
 import action_cache as cache
 
 COUNT = 32
-DOWNLOAD_WORKERS = 8
-EXTRACT_WORKERS = 2
 
 
 def lookup(config, group, key, prefixes=()):
@@ -107,94 +104,44 @@ def restore(config, github):
             cache.cache_report(config, 'restore', 'GitHub restored; incremental mirror checked')
             return True
         missing = []
-        # Bound downloaded archives waiting behind the two extractors too.
-        slots = threading.BoundedSemaphore(DOWNLOAD_WORKERS + EXTRACT_WORKERS)
-        def fetch(item):
-            i, shard = item
+        size = 0
+        print(f'Private cache {config["group"]}: sequential shard restore; '
+              f'{sum(s["size"] for s in value["shards"] if s)/1024**2:.1f} MiB total', flush=True)
+        for i, shard in enumerate(value['shards']):
             if shard is None:
-                return None
+                continue
             archive = Path(temporary) / f'{i}.tar.gz'
-            started = time.monotonic()
-            reserved = False
             try:
-                while not reserved:
-                    cache.restore_remaining(config)
-                    reserved = slots.acquire(timeout=0.1)
                 cache.restore_remaining(config)
-                download(config, shard, archive)
+                started = time.monotonic()
+                with cache.phase(config, 'download'):
+                    download(config, shard, archive)
+                print(f'Private cache {config["group"]}: downloaded shard {i+1}/{COUNT}, '
+                      f'{shard["size"]/1024**2:.1f} MiB in {time.monotonic()-started:.1f}s', flush=True)
+                cache.restore_remaining(config)
             except TimeoutError:
-                if reserved:
-                    slots.release()
+                missing.append(i)
+                archive.unlink(missing_ok=True)
                 print(f'Private cache {config["group"]}: shard {i+1}/{COUNT} timed out or exceeded restore budget', flush=True)
-                return i, None, 0
+                continue
             except RuntimeError as error:
-                if reserved:
-                    slots.release()
                 if str(error) != 'Cache download HTTP 404':
                     raise
                 # A concurrent successful build or LRU eviction can replace
                 # one shard. Keep the remaining verified dependencies useful.
-                return i, None, 0
-            except BaseException:
-                if reserved:
-                    slots.release()
-                raise
-            print(f'Private cache {config["group"]}: downloaded shard {i+1}/{COUNT}, '
-                  f'{shard["size"]/1024**2:.1f} MiB in {time.monotonic()-started:.1f}s', flush=True)
-            return i, archive, shard['size']
-
-        def extract(item):
-            i, archive, size = item
-            try:
-                try:
-                    cache.restore_remaining(config)
-                except cache.RestoreBudgetExceeded:
-                    archive.unlink(missing_ok=True)
-                    return i, 0
-                started = time.monotonic()
-                config['restore_started'] = True
-                # Finish this verified archive atomically per file. Do not interrupt
-                # it halfway merely because the next download exceeded its budget.
+                missing.append(i)
+                archive.unlink(missing_ok=True)
+                continue
+            started = time.monotonic()
+            config['restore_started'] = True
+            # Complete one verified archive before downloading the next. The
+            # outer watchdog still bounds an extractor blocked beyond its budget.
+            with cache.phase(config, 'extract'):
                 cache.unpack(archive, paths)
-                archive.unlink()
-                print(f'Private cache {config["group"]}: extracted shard {i+1}/{COUNT} '
-                      f'in {time.monotonic()-started:.1f}s', flush=True)
-                return i, size
-            finally:
-                slots.release()
-
-        print(f'Private cache {config["group"]}: {DOWNLOAD_WORKERS} download connections, '
-              f'{EXTRACT_WORKERS} extraction workers; '
-              f'{sum(s["size"] for s in value["shards"] if s)/1024**2:.1f} MiB total', flush=True)
-        size = 0
-        with ThreadPoolExecutor(max_workers=DOWNLOAD_WORKERS) as downloads, \
-                ThreadPoolExecutor(max_workers=EXTRACT_WORKERS) as extracts:
-            pending = [downloads.submit(fetch, item) for item in enumerate(value['shards'])]
-            unpacking = []
-            try:
-                with cache.phase(config, 'download'):
-                    for future in as_completed(pending):
-                        item = future.result()
-                        if item is None:
-                            continue
-                        if item[1] is None:
-                            missing.append(item[0])
-                        else:
-                            unpacking.append(extracts.submit(extract, item))
-                with cache.phase(config, 'extract'):
-                    for future in as_completed(unpacking):
-                        i, restored = future.result()
-                        if restored:
-                            size += restored
-                        else:
-                            missing.append(i)
-            except BaseException:
-                # Stop queued work and bound active network reads before the
-                # outer handler discards a genuinely failed partial restore.
-                config['restore_deadline'] = time.monotonic()
-                for future in pending + unpacking:
-                    future.cancel()
-                raise
+            archive.unlink()
+            size += shard['size']
+            print(f'Private cache {config["group"]}: extracted shard {i+1}/{COUNT} '
+                  f'in {time.monotonic()-started:.1f}s', flush=True)
     config.update(restored=bool(size), hit=not missing and record['key'] == config['key'])
     if missing:
         config['mirror_required'] = True

@@ -24,7 +24,6 @@ import urllib.error
 import urllib.parse
 import zipfile
 import tarfile
-import threading
 from contextlib import nullcontext
 
 _spec = importlib.util.spec_from_file_location('publish_release', build.ROOT/'scripts/publish-release.py')
@@ -299,51 +298,6 @@ Private_Clean: 2 kB
                 with self.assertRaisesRegex(ValueError,'Incomplete|checksum'):
                     cache_shards.restore(restored,False)
 
-    def test_rust_restore_downloads_concurrently_without_waiting_for_extraction(self):
-        with tempfile.TemporaryDirectory() as temporary:
-            root=Path(temporary);group='rust/macos-x64'
-            shards=[{'schema':local_cache.SCHEMA,'group':f'{group}/p{i:02d}',
-                     'key':'generation','id':f'{i+1:064x}','sha256':'b'*64,'size':1}
-                    if i<12 else None for i in range(cache_shards.COUNT)]
-            index={'format':'rust-shards-v1','shards':shards}
-            record={'key':'generation','size':1000}
-            config={'group':group,'key':'generation','prefix':[],
-                    'resolved_paths':[str(root/'target')],'kind':'rust'}
-            gate=threading.Barrier(8);ninth=threading.Event();lock=threading.Lock()
-            active=peak=extracting=extract_peak=0
-            restored=[]
-            def download(_config, item, destination):
-                nonlocal active,peak
-                if item is record:
-                    destination.write_text(json.dumps(index));return
-                i=int(item['group'].rsplit('p',1)[1])
-                with lock:
-                    active+=1;peak=max(peak,active)
-                try:
-                    if i<8:gate.wait(timeout=3)
-                    else:ninth.set()
-                    destination.write_bytes(b'x')
-                finally:
-                    with lock:active-=1
-            def unpack(archive, _paths):
-                nonlocal extracting,extract_peak
-                with lock:
-                    extracting+=1;extract_peak=max(extract_peak,extracting)
-                try:
-                    self.assertTrue(ninth.wait(timeout=3), 'extractors must not occupy download workers')
-                    restored.append(archive.name)
-                finally:
-                    with lock:extracting-=1
-            with patch.object(cache_shards,'lookup',return_value=record), \
-                    patch.object(cache_shards,'download',side_effect=download), \
-                    patch.object(local_cache,'unpack',side_effect=unpack), \
-                    patch.object(local_cache,'cache_report'):
-                self.assertTrue(cache_shards.restore(config,False))
-            self.assertEqual(peak,8)
-            self.assertLessEqual(extract_peak,2)
-            self.assertEqual(len(restored),12)
-            self.assertTrue(config['hit'])
-
     def test_restore_budget_keeps_verified_shards_and_invalidates_partial_build_scripts(self):
         with tempfile.TemporaryDirectory() as temporary:
             root=Path(temporary);source=root/'source';target=root/'target'
@@ -357,23 +311,18 @@ Private_Clean: 2 kB
                      'key':'generation','id':f'{i+1:064x}','sha256':'b'*64,'size':archive.stat().st_size}
                     if i<2 else None for i in range(cache_shards.COUNT)]
             record={'key':'generation','size':1000}
-            config={'group':group,'key':'generation','prefix':[],
+            config={'group':group,'key':'generation','prefix':['generation'],
                     'resolved_paths':[str(target)],'kind':'rust'}
-            first_extracted=threading.Event();unpack=local_cache.unpack
             def download(_config,item,destination):
                 if item is record:
                     destination.write_text(json.dumps({'format':'rust-shards-v1','shards':shards}));return
                 if item['group'].endswith('p00'):
                     shutil.copyfile(archive,destination);return
-                self.assertTrue(first_extracted.wait(timeout=3))
+                self.assertEqual((target/'release/deps/verified.rlib').read_bytes(),b'complete dependency')
                 config['restore_deadline']=local_cache.time.monotonic()-1
                 raise local_cache.RestoreBudgetExceeded('test deadline')
-            def extract(*args):
-                unpack(*args);first_extracted.set()
-            with patch.object(cache_shards,'DOWNLOAD_WORKERS',1),patch.object(cache_shards,'EXTRACT_WORKERS',1), \
-                    patch.object(cache_shards,'lookup',return_value=record), \
+            with patch.object(cache_shards,'lookup',return_value=record), \
                     patch.object(cache_shards,'download',side_effect=download), \
-                    patch.object(local_cache,'unpack',side_effect=extract), \
                     patch.object(local_cache,'cache_report'):
                 self.assertTrue(cache_shards.restore(config,False))
             self.assertEqual((target/'release/deps/verified.rlib').read_bytes(),b'complete dependency')
