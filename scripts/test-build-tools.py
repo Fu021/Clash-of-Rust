@@ -24,6 +24,7 @@ import urllib.error
 import urllib.parse
 import zipfile
 import tarfile
+import threading
 from contextlib import nullcontext
 
 _spec = importlib.util.spec_from_file_location('publish_release', build.ROOT/'scripts/publish-release.py')
@@ -297,6 +298,144 @@ Private_Clean: 2 kB
                 store.path(shard['group'],shard['id']).write_bytes(b'corrupt')
                 with self.assertRaisesRegex(ValueError,'Incomplete|checksum'):
                     cache_shards.restore(restored,False)
+
+    def test_rust_restore_downloads_concurrently_without_waiting_for_extraction(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root=Path(temporary);group='rust/macos-x64'
+            shards=[{'schema':local_cache.SCHEMA,'group':f'{group}/p{i:02d}',
+                     'key':'generation','id':f'{i+1:064x}','sha256':'b'*64,'size':1}
+                    if i<12 else None for i in range(cache_shards.COUNT)]
+            index={'format':'rust-shards-v1','shards':shards}
+            record={'key':'generation','size':1000}
+            config={'group':group,'key':'generation','prefix':[],
+                    'resolved_paths':[str(root/'target')],'kind':'rust'}
+            gate=threading.Barrier(8);ninth=threading.Event();lock=threading.Lock()
+            active=peak=extracting=extract_peak=0
+            restored=[]
+            def download(_config, item, destination):
+                nonlocal active,peak
+                if item is record:
+                    destination.write_text(json.dumps(index));return
+                i=int(item['group'].rsplit('p',1)[1])
+                with lock:
+                    active+=1;peak=max(peak,active)
+                try:
+                    if i<8:gate.wait(timeout=3)
+                    else:ninth.set()
+                    destination.write_bytes(b'x')
+                finally:
+                    with lock:active-=1
+            def unpack(archive, _paths):
+                nonlocal extracting,extract_peak
+                with lock:
+                    extracting+=1;extract_peak=max(extract_peak,extracting)
+                try:
+                    self.assertTrue(ninth.wait(timeout=3), 'extractors must not occupy download workers')
+                    restored.append(archive.name)
+                finally:
+                    with lock:extracting-=1
+            with patch.object(cache_shards,'lookup',return_value=record), \
+                    patch.object(cache_shards,'download',side_effect=download), \
+                    patch.object(local_cache,'unpack',side_effect=unpack), \
+                    patch.object(local_cache,'cache_report'):
+                self.assertTrue(cache_shards.restore(config,False))
+            self.assertEqual(peak,8)
+            self.assertLessEqual(extract_peak,2)
+            self.assertEqual(len(restored),12)
+            self.assertTrue(config['hit'])
+
+    def test_restore_budget_keeps_verified_shards_and_invalidates_partial_build_scripts(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root=Path(temporary);source=root/'source';target=root/'target'
+            library=source/'release/deps/verified.rlib'
+            library.parent.mkdir(parents=True);library.write_bytes(b'complete dependency')
+            archive=root/'fixture.tar.gz';local_cache.pack([source],archive)
+            marker=target/'release/.fingerprint/generated-hash/run-build-script-cached'
+            marker.parent.mkdir(parents=True);marker.write_bytes(b'old success')
+            group='rust/macos-x64'
+            shards=[{'schema':local_cache.SCHEMA,'group':f'{group}/p{i:02d}',
+                     'key':'generation','id':f'{i+1:064x}','sha256':'b'*64,'size':archive.stat().st_size}
+                    if i<2 else None for i in range(cache_shards.COUNT)]
+            record={'key':'generation','size':1000}
+            config={'group':group,'key':'generation','prefix':[],
+                    'resolved_paths':[str(target)],'kind':'rust'}
+            first_extracted=threading.Event();unpack=local_cache.unpack
+            def download(_config,item,destination):
+                if item is record:
+                    destination.write_text(json.dumps({'format':'rust-shards-v1','shards':shards}));return
+                if item['group'].endswith('p00'):
+                    shutil.copyfile(archive,destination);return
+                self.assertTrue(first_extracted.wait(timeout=3))
+                config['restore_deadline']=local_cache.time.monotonic()-1
+                raise local_cache.RestoreBudgetExceeded('test deadline')
+            def extract(*args):
+                unpack(*args);first_extracted.set()
+            with patch.object(cache_shards,'DOWNLOAD_WORKERS',1),patch.object(cache_shards,'EXTRACT_WORKERS',1), \
+                    patch.object(cache_shards,'lookup',return_value=record), \
+                    patch.object(cache_shards,'download',side_effect=download), \
+                    patch.object(local_cache,'unpack',side_effect=extract), \
+                    patch.object(local_cache,'cache_report'):
+                self.assertTrue(cache_shards.restore(config,False))
+            self.assertEqual((target/'release/deps/verified.rlib').read_bytes(),b'complete dependency')
+            self.assertFalse(marker.parent.exists())
+            self.assertTrue(config['restored'])
+            self.assertTrue(config['mirror_required'])
+            self.assertFalse(config['hit'])
+
+    def test_continuously_trickling_cache_data_cannot_extend_restore_budget(self):
+        clock=[0.0]
+        def tick():
+            clock[0]+=0.25;return clock[0]
+        reply=io.BytesIO(b'x'*100)
+        # read1 returns immediately available data; a blocking read(size) would
+        # permit a peer to extend the restore indefinitely by trickling bytes.
+        class Trickle:
+            def read1(self,_size):return reply.read(1)
+        output=io.BytesIO()
+        with patch.object(local_cache.time,'monotonic',side_effect=tick):
+            with self.assertRaises(local_cache.RestoreBudgetExceeded):
+                local_cache.download_body({'restore_deadline':2},Trickle(),output,100)
+        self.assertGreater(len(output.getvalue()),0)
+        self.assertLess(len(output.getvalue()),100)
+        config={'restore_seconds':300}
+        with patch.object(local_cache,'restore_snapshot',side_effect=local_cache.RestoreBudgetExceeded):
+            with self.assertRaises(local_cache.RestoreBudgetExceeded):local_cache.restore(config)
+        self.assertNotIn('restore_deadline',config,'post-job saves must have an independent deadline')
+
+    def test_cache_action_watchdog_cleans_interrupted_restores_before_continuing(self):
+        node=shutil.which('node')
+        if not node:self.skipTest('Node is required for the Actions wrapper test')
+        script=build.ROOT/'.github/actions/local-cache/index.cjs'
+        harness=r'''
+const assert=require('node:assert/strict'),vm=require('node:vm'),realfs=require('node:fs');
+const script=process.argv[1],mode=process.argv[2],calls=[],outputs=[];let saved;
+const fs={writeFileSync(_path,value){saved=JSON.parse(value)},
+  readFileSync(){return JSON.stringify(saved)},
+  appendFileSync(path,value){if(path==='output')outputs.push(value)}};
+const child={spawnSync(command,args,options){
+  calls.push({command,args,options});
+  if(calls.length===1)return mode==='exit'?{status:1}:{status:null,error:{code:'ETIMEDOUT'}};
+  if(mode==='cleanup-failure')return {status:1};
+  saved={...saved,hit:false,restored:false,available:false};return {status:0};
+}};
+const context={__dirname:require('node:path').dirname(script),console:{log(){}},
+  process:{env:{RUNNER_TEMP:'/runner/temp',GITHUB_STATE:'state',GITHUB_OUTPUT:'output'},platform:'linux'},
+  require(name){if(name==='node:fs')return fs;if(name==='node:child_process')return child;return require(name)}};
+const run=()=>vm.runInNewContext(realfs.readFileSync(script,'utf8'),context,{filename:script});
+if(mode==='cleanup-failure'){
+  assert.throws(run,/Cannot safely clean/);assert.equal(outputs.length,0);
+}else{
+  run();assert.equal(calls[1].args[1],'discard-restore');
+  assert.ok(calls[0].options.timeout>0 && calls[0].options.timeout<=420000);
+  assert.ok(calls[1].options.timeout<=120000);
+  assert.equal(outputs.join(''),'cache-hit=false\nrestored=false\navailable=false\n');
+}
+assert.equal(calls.length,2);
+'''
+        for mode in ('timeout','exit','cleanup-failure'):
+            with self.subTest(mode=mode):
+                result=subprocess.run([node,'-e',harness,str(script),mode],capture_output=True,text=True)
+                self.assertEqual(result.returncode,0,result.stdout+result.stderr)
 
     def test_partial_rust_cache_invalidates_only_native_and_cross_build_script_runs(self):
         with tempfile.TemporaryDirectory() as temporary:

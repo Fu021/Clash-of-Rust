@@ -29,6 +29,41 @@ import urllib.request
 SCHEMA = 1
 CHUNK = 1024 * 1024
 DEFAULT_ROOT = Path('/home/coder/github_action_cache')
+RESTORE_SECONDS = 300
+
+
+class RestoreBudgetExceeded(TimeoutError):
+    pass
+
+
+def restore_remaining(config):
+    deadline = config.get('restore_deadline')
+    if deadline is None:
+        return None
+    remaining = deadline - time.monotonic()
+    if remaining <= 0:
+        raise RestoreBudgetExceeded('Private cache restore budget exhausted')
+    return remaining
+
+
+def download_body(config, reply, output, length, label=None):
+    """Read available bytes so trickling traffic cannot defeat the wall clock."""
+    remaining = length
+    started = last_progress = time.monotonic()
+    while remaining:
+        restore_remaining(config)
+        block = reply.read1(min(CHUNK, remaining))
+        if not block:
+            raise ValueError('Incomplete cache download')
+        output.write(block)
+        remaining -= len(block)
+        now = time.monotonic()
+        if label and now - last_progress >= 10:
+            print(f'Private cache {label}: {(length-remaining)/1024**2:.1f}/{length/1024**2:.1f} MiB, '
+                  f'{(length-remaining)/1024/max(now-started, 0.001):.0f} KiB/s', flush=True)
+            last_progress = now
+    if reply.read1(1):
+        raise ValueError('Oversized cache download')
 
 
 @contextmanager
@@ -441,6 +476,9 @@ def request(config, path, method='GET', file=None, headers=None):
     # Large archives share the small cache host's uplink. Allow temporary
     # backpressure without slowing metadata lookups or upstream version checks.
     timeout = 120 if urllib.parse.urlsplit(path).path == '/v1/blob' else 30
+    remaining = restore_remaining(config)
+    if remaining is not None:
+        timeout = min(timeout, remaining, 30)
     if proxy.hostname:
         if proxy.scheme != 'http' or proxy.hostname not in ('127.0.0.1', 'localhost') or url.scheme != 'http':
             raise ValueError('Cache proxy must be the local Tailscale userspace proxy')
@@ -464,6 +502,18 @@ def response(config, path, **kwargs):
 
 
 def restore(config):
+    seconds = int(config.get('restore_seconds', RESTORE_SECONDS))
+    if not 30 <= seconds <= 900:
+        raise ValueError('Invalid cache restore budget')
+    config['restore_deadline'] = time.monotonic() + seconds
+    try:
+        return restore_snapshot(config)
+    finally:
+        # A later post-job upload has its own budget, after compilation/tests.
+        config.pop('restore_deadline', None)
+
+
+def restore_snapshot(config):
     config.update(hit=False, restored=False, available=False)
     config.update(timings={}, started=time.monotonic())
     if config['kind'] == 'rust':
@@ -528,7 +578,7 @@ def restore(config):
             if reply.status != 200:
                 raise RuntimeError(f'Cache download HTTP {reply.status}')
             with archive.open('wb') as output:
-                shutil.copyfileobj(reply, output, CHUNK)
+                download_body(config, reply, output, record['size'], config['group'])
         with phase(config, 'verify'):
             if archive.stat().st_size != record['size'] or digest(archive) != record['sha256']:
                 raise ValueError('Cache archive checksum mismatch')
@@ -872,7 +922,7 @@ def preserve_network(restore=False):
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument('operation', choices=('restore', 'save', 'serve', 'status', 'inventory', 'network-save', 'network-restore'))
+    parser.add_argument('operation', choices=('restore', 'discard-restore', 'save', 'serve', 'status', 'inventory', 'network-save', 'network-restore'))
     parser.add_argument('--state', type=Path)
     parser.add_argument('--root', type=Path, default=DEFAULT_ROOT)
     args = parser.parse_args()
@@ -888,8 +938,14 @@ def main():
     else:
         config = json.loads(args.state.read_text())
         try:
-            (restore if args.operation == 'restore' else save)(config)
+            if args.operation == 'discard-restore':
+                discard_restore(config)
+                config['available'] = False
+            else:
+                (restore if args.operation == 'restore' else save)(config)
         except (OSError, ValueError, RuntimeError, tarfile.TarError, http.client.HTTPException) as error:
+            if args.operation == 'discard-restore':
+                raise  # The action must stop if safe cleanup cannot be completed.
             # A cache outage must never prevent normal builds/tests. Do not log
             # exceptions containing request headers, URLs or credential values.
             status = re.search(r'HTTP [0-9]{3}', str(error))
