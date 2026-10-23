@@ -75,6 +75,27 @@ async fn protected_traffic(engine: &mut Engine) {
     assert!(addresses.contains(&"2001:db8:2::20".parse().unwrap()));
     // Exercise both actual OS DNS transports, not just the controller API.
     for tcp in [false, true] {
+        // Overlay clients may mark/bind sockets to bypass this TUN. Their
+        // system DNS answers must be usable on that path, never synthetic.
+        for host in [
+            "controlplane.tailscale.com",
+            "log.tailscale.com",
+            "signal.netbird.io",
+            "api.devices.cloudflare.com",
+            "rs-ny.rustdesk.com",
+            "discovery.syncthing.net",
+            "stun.l.google.com",
+            "turn.region.example.net",
+        ] {
+            let ip = tokio::time::timeout(Duration::from_secs(8), hijacked_dns(host, tcp))
+                .await
+                .expect("Compatibility DNS query timed out");
+            assert_eq!(
+                ip,
+                "203.0.113.20".parse::<IpAddr>().unwrap(),
+                "{host} must receive the fixture's real address (TCP={tcp})"
+            );
+        }
         let ip = tokio::time::timeout(Duration::from_secs(8), hijacked_dns("claude.ai", tcp))
             .await
             .expect("TUN DNS hijack timed out");
@@ -138,12 +159,12 @@ pub async fn run(engine: &mut Engine, profile: &std::path::Path) {
         })
         .await
         .unwrap();
-    for (node, fixed_blocked, explicit, resolver_hostname) in [
-        ("node.fixture.test", false, false, false),
-        ("node6.fixture.test", false, false, false),
-        ("node.fixture.test", true, true, false),
-        ("node6.fixture.test", true, false, false),
-        ("node6.fixture.test", true, true, true),
+    for (node, fixed_blocked, explicit, resolver_hostname, filter_mode) in [
+        ("node.fixture.test", false, false, false, "blacklist"),
+        ("node6.fixture.test", false, false, false, "whitelist"),
+        ("node.fixture.test", true, true, false, "rule"),
+        ("node6.fixture.test", true, false, false, "blacklist"),
+        ("node6.fixture.test", true, true, true, "whitelist"),
     ] {
         let bootstrap = if resolver_hostname {
             "resolver.fixture.test"
@@ -175,7 +196,16 @@ pub async fn run(engine: &mut Engine, profile: &std::path::Path) {
             .unwrap()
             .error_for_status()
             .unwrap();
-        std::fs::write(profile, format!("proxies: [{{name: fixture, type: socks5, server: {node}, port: 1080, udp: true}}, {{name: Other, type: socks5, server: {node}, port: 1081, udp: true}}]\nproxy-groups: [{{name: Main, type: select, proxies: [Auto]}}, {{name: Auto, type: url-test, proxies: [fixture, Other], url: 'http://claude.ai/auto-check', interval: 3600, lazy: true}}]\nrules: ['MATCH,Main']\ndns:\n  enable: true\n  enhanced-mode: fake-ip\n  nameserver: ['https://{bootstrap}/dns-query#DIRECT']\n{node_dns}{default_dns}  fake-ip-filter: ['+.fixture.test']\ntun: {{device: ClashRustTest, route-address: [203.0.113.0/24], dns-hijack: []}}\n")).unwrap();
+        let filters = match filter_mode {
+            // Include the compatibility domains in the original fake-IP
+            // whitelist, proving that the real-IP prefix wins over it.
+            "whitelist" => {
+                "['+.ai', '+.tailscale.com', '+.netbird.io', '+.devices.cloudflare.com', '+.rustdesk.com', '+.syncthing.net', '+.stun.*.*.*', '+.turn.*.*.*']"
+            }
+            "rule" => "['DOMAIN-SUFFIX,fixture.test,real-ip', 'MATCH,fake-ip']",
+            _ => "['+.fixture.test']",
+        };
+        std::fs::write(profile, format!("proxies: [{{name: fixture, type: socks5, server: {node}, port: 1080, udp: true}}, {{name: Other, type: socks5, server: {node}, port: 1081, udp: true}}]\nproxy-groups: [{{name: Main, type: select, proxies: [Auto]}}, {{name: Auto, type: url-test, proxies: [fixture, Other], url: 'http://claude.ai/auto-check', interval: 3600, lazy: true}}]\nrules: ['MATCH,Main']\ndns:\n  enable: true\n  enhanced-mode: fake-ip\n  nameserver: ['https://{bootstrap}/dns-query#DIRECT']\n{node_dns}{default_dns}  fake-ip-filter-mode: {filter_mode}\n  fake-ip-filter: {filters}\ntun: {{device: ClashRustTest, route-address: [203.0.113.0/24], dns-hijack: []}}\n")).unwrap();
         engine
             .import(
                 format!("DNS uplink {node}"),
@@ -349,7 +379,7 @@ pub async fn run(engine: &mut Engine, profile: &std::path::Path) {
             );
         }
         println!(
-            "PASS: {node}, fixed DNS blocked={fixed_blocked}, explicit node DNS={explicit}, resolver hostname={resolver_hostname}: bootstrap DoH, pinned DoH A/AAAA, UDP/TCP TUN DNS, HTTP, cold restart and exact restore; {after}"
+            "PASS: {node}, fixed DNS blocked={fixed_blocked}, explicit node DNS={explicit}, resolver hostname={resolver_hostname}, fake-IP mode={filter_mode}: bootstrap DoH, pinned DoH A/AAAA, UDP/TCP real-IP compatibility and fake-IP isolation, HTTP, cold restart and exact restore; {after}"
         );
         engine.select_proxy_mode(ProxyMode::Off).await.unwrap();
     }
