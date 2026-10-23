@@ -9,6 +9,8 @@ use std::{
 
 mod dns;
 pub use dns::DEFAULT_DNS_NAMESERVERS;
+mod ports;
+pub use ports::reserve_controller;
 
 pub const SUBSCRIPTION_RULES: [&str; 5] = [
     "GEOSITE,category-ads-all,REJECT",

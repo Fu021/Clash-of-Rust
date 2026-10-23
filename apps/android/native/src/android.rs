@@ -784,12 +784,13 @@ async fn run_loop(
                 let api = state.session.api.clone();
                 let page = if state.visible { state.page } else { -1 };
                 let refresh_route = state.visible && state.session.proxies.proxies.is_empty();
+                let route = state.session.notification_route();
                 let generation = refresh_generation;
                 let send = updates.clone();
                 refresh_job = Some(tokio::spawn(async move {
                     let result = tokio::time::timeout(
                         Duration::from_secs(3),
-                        Snapshot::fetch(&api, page, refresh_route),
+                        Snapshot::fetch_for_route(&api, page, refresh_route, &route),
                     )
                     .await
                     .context("控制接口刷新超时")
@@ -799,7 +800,7 @@ async fn run_loop(
                 }));
             }
             if state.session.vpn {
-                let _ = state.session.native.request(json!({"op":"traffic", "down":format!("{}/s",bytes(state.session.rates.1)), "up":format!("{}/s",bytes(state.session.rates.0))}));
+                let _ = state.session.native.request(json!({"op":"traffic", "down":format!("{}/s",bytes(state.session.rates.1)), "up":format!("{}/s",bytes(state.session.rates.0)), "node":state.session.node, "mode":state.session.settings.run_mode}));
             }
         }
         if log_port != state.session.settings.controller_port {
@@ -1231,10 +1232,8 @@ async fn handle(state: &mut State, request: Request) -> Result<()> {
         }
         MobileIntent::SavePorts => {
             ensure!(!session.vpn, "请先断开 VPN，再修改端口");
-            let (mixed, controller) = a.split_once(',').context("端口格式无效")?;
             let mut next = session.settings.clone();
-            next.mixed_port = mixed.parse()?;
-            next.controller_port = controller.parse()?;
+            next.mixed_port = a.parse()?;
             session.commit_settings(next)?;
             state.notice = "端口已保存".into();
         }
@@ -2186,7 +2185,6 @@ fn apply(ui: &AndroidWindow, p: Projection) {
     data.set_udp(p.settings.udp);
     if !android.get_ports_dirty() {
         data.set_mixed_port(p.settings.mixed_port.to_string().into());
-        data.set_controller_port(p.settings.controller_port.to_string().into());
     }
     if !ui.global::<MobileView>().get_interval_dirty() {
         data.set_interval(p.settings.delay_interval_minutes.to_string().into());

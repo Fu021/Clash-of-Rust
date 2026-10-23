@@ -52,8 +52,6 @@ export component SettingsPage inherits PageSurface {
                     HorizontalLayout { cross-axis-alignment: center; spacing: Theme.content-gap;
                         Label { text: "混合端口"; }
                         Field { text <=> UiData.mixed-port; width: 100px; horizontal-stretch: 0; edited(value) => { UiActions.dispatch(Intent.mixed-port, value, ""); } }
-                        Label { text: "控制端口"; }
-                        Field { text <=> UiData.controller-port; width: 100px; horizontal-stretch: 0; edited(value) => { UiActions.dispatch(Intent.controller-port, value, ""); } }
                     }
                     if UiData.ports-dirty: ActionButton { text: "保存并重启内核"; primary: true; enabled: !UiData.working; clicked => { UiActions.dispatch(Intent.save-ports, "", ""); } }
                     Divider { }

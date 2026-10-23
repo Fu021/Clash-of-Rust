@@ -223,7 +223,6 @@ impl App {
             Intent::Ipv6 => Message::Action(Action::Ipv6(boolean(a))),
             Intent::Udp => Message::Action(Action::Udp(boolean(a))),
             Intent::Autostart => Message::Action(Action::Autostart(boolean(a))),
-            Intent::ControllerPort => Message::ControllerPort(a.into()),
             Intent::MixedPort => Message::MixedPort(a.into()),
             Intent::SavePorts => Message::SavePorts,
             Intent::WindowWidth => Message::WindowWidth(a.into()),

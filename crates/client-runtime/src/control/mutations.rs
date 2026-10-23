@@ -40,8 +40,7 @@ pub(super) fn setting(settings: &Settings, key: &str, value: Value) -> Result<Se
     ensure!(
         matches!(
             key,
-            "controller_port"
-                | "mixed_port"
+            "mixed_port"
                 | "secret"
                 | "dark"
                 | "theme_mode"
@@ -156,6 +155,7 @@ mod tests {
         assert_eq!(next.secret, settings.secret);
         assert!(setting(&next, "claude_protection", Value::Null).is_err());
         assert!(setting(&next, "mixed_port", Value::from(0)).is_err());
+        assert!(setting(&next, "controller_port", Value::from(9091)).is_err());
     }
     #[test]
     fn original_rules_are_read_only_and_new_rules_keep_order() {

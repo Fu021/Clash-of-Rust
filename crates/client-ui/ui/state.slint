@@ -19,7 +19,7 @@ export enum Intent {
     claude-filter, claude-page, claude-guide, claude-browser, claude-copy-script,
     claude-import, claude-export, claude-key, claude-save-key, claude-additional,
     appearance, text-scale, accent-picker, accent-color, tray-speed, dns-override, ipv6, udp,
-    autostart, controller-port, mixed-port, save-ports, window-width, window-height,
+    autostart, mixed-port, save-ports, window-width, window-height,
     reset-window, interval-input, save-interval, update-geo,
     check-update, install-update, cancel-update, open-release,
     confirm, cancel-confirm, close-detail, copy, escape, focus-search, quit,
@@ -163,7 +163,6 @@ export global UiData {
     in-out property <bool> ipv6;
     in-out property <bool> udp;
     in-out property <string> mixed-port;
-    in-out property <string> controller-port;
     in-out property <bool> ports-dirty;
     in-out property <string> window-width;
     in-out property <string> window-height;

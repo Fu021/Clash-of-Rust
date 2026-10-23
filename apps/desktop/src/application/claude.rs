@@ -750,6 +750,8 @@ mod tests {
         app.claude.reports[0] = Some(Report::new(Environment::Core, "preserved"));
         let generation = app.claude.generation;
         let _ = app.update(Message::Finished(Box::new(Reply {
+            view_revision: 0,
+            remote: false,
             profile_import: false,
             profile_edit: false,
             scope: Scope::Claude,

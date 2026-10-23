@@ -18,6 +18,14 @@ import static org.junit.Assert.*;
 /** Uses the packaged Slint Activity, embedded core and the real Android VPN. */
 @RunWith(AndroidJUnit4.class)
 public class ProxyTunTest {
+    @Test public void notificationShowsModeAndNodeWithOptionalSpeeds() {
+        String text = TunnelService.statusText("1 MiB/s", "2 KiB/s", "Current node", "global", true);
+        assertTrue(text.contains("全局 · Current node"));
+        assertTrue(text.contains("↓ 1 MiB/s"));
+        text = TunnelService.statusText("1 MiB/s", "2 KiB/s", "Other node", "rule", false);
+        assertEquals("规则 · Other node", text);
+        assertEquals("直连 · DIRECT", TunnelService.statusText("", "", "DIRECT", "direct", false));
+    }
     private static void pointer(int action,float x,float y,long down,long now) {
         MotionEvent event=MotionEvent.obtain(down,now,action,x,y,0);
         event.setSource(android.view.InputDevice.SOURCE_TOUCHSCREEN);
@@ -56,6 +64,7 @@ public class ProxyTunTest {
         });
     }
     private static void verifyPresentation() throws Exception {
+        new ProxyTunTest().notificationShowsModeAndNodeWithOptionalSpeeds();
         await("Core is running but Slint still reports it as stopped",()->MainActivity.diagnostics().optBoolean("core_running"));
         JSONObject initial=MainActivity.diagnostics();
         Context context=InstrumentationRegistry.getInstrumentation().getTargetContext();

@@ -40,7 +40,7 @@ pub(super) fn write(out: &mut dyn Write, args: &Args, value: &Value) -> Result<(
             }) {
                 field(out, "当前订阅", &text(profile, "name"))?;
             }
-            for key in ["run_mode", "proxy_mode", "mixed_port", "controller_port"] {
+            for key in ["run_mode", "proxy_mode", "mixed_port"] {
                 field(out, label(key), &text(settings, key))?;
             }
             Ok(())

@@ -13,11 +13,7 @@ component AndroidNetwork inherits VerticalLayout {
             MText { text: "混合端口"; }
             MField { width: 96px; horizontal-stretch: 0; text <=> MobileData.mixed-port; edited(value) => { AndroidData.ports-dirty = true; } }
         }
-        HorizontalLayout { spacing: MobileTypography.gap; cross-axis-alignment: center;
-            MText { text: "控制端口"; }
-            MField { width: 96px; horizontal-stretch: 0; text <=> MobileData.controller-port; edited(value) => { AndroidData.ports-dirty = true; } }
-        }
-        if AndroidData.ports-dirty: MButton { text: "保存端口"; primary: true; clicked => { MobileActions.request(MobileIntent.save-ports, MobileData.mixed-port + "," + MobileData.controller-port, ""); } }
+        if AndroidData.ports-dirty: MButton { text: "保存端口"; primary: true; clicked => { MobileActions.request(MobileIntent.save-ports, MobileData.mixed-port, ""); } }
         MDivider { }
         NetworkToggles { }
     }

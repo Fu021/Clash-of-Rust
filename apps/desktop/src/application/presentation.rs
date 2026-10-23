@@ -396,11 +396,6 @@ impl App {
         text!(get_test_url, set_test_url, &self.test_url);
         text!(get_dns_host, set_dns_host, &self.dns_host);
         set!(get_probing, set_probing, self.probing);
-        text!(
-            get_controller_port,
-            set_controller_port,
-            &self.controller_port
-        );
         text!(get_mixed_port, set_mixed_port, &self.mixed_port);
         text!(get_window_width, set_window_width, &self.window_width);
         text!(get_window_height, set_window_height, &self.window_height);

@@ -7,6 +7,7 @@ use tokio::sync::Mutex;
 
 pub(crate) fn meta(engine: &Engine, owner: Owner) -> Result<Meta> {
     Ok(Meta {
+        view_revision: engine.view_revision(),
         settings: engine.settings.clone(),
         profiles: engine.profiles.clone(),
         geo: engine.geo_manifest.clone(),
@@ -33,7 +34,35 @@ pub(super) async fn execute(
     operation: Command,
     owner: Owner,
 ) -> Result<Value> {
+    // GUI actions already return their fresh models. Console mutations also
+    // invalidate attached views, without copying full lists on every tick.
+    let changes_view = matches!(
+        operation,
+        Command::Start
+            | Command::Stop
+            | Command::Restart
+            | Command::Shutdown
+            | Command::Quit
+            | Command::Settings { .. }
+            | Command::ConfigSet { .. }
+            | Command::Ports { .. }
+            | Command::RuleOverrides { .. }
+            | Command::RuleChange { .. }
+            | Command::SaveRules { .. }
+            | Command::Import { .. }
+            | Command::EditProfile { .. }
+            | Command::Activate { .. }
+            | Command::DeleteProfile { .. }
+            | Command::Select { .. }
+            | Command::Mode { .. }
+            | Command::Proxy { .. }
+            | Command::Protect { .. }
+            | Command::Delay { .. }
+    );
     let mut engine = shared.lock().await;
+    if changes_view {
+        engine.view_revision = engine.view_revision.wrapping_add(1);
+    }
     match operation {
         Command::Meta => return Ok(serde_json::to_value(meta(&engine, owner)?)?),
         Command::Snapshot { scope, header } => {
@@ -72,8 +101,14 @@ pub(super) async fn execute(
         }
         Command::RuleOverrides { overrides } => engine.save_rule_overrides(overrides).await?,
         Command::ConfigSet { key, value } => {
-            let settings = super::mutations::setting(&engine.settings, &key, value)?;
-            engine.save_settings(settings).await?;
+            if key == "mixed_port" {
+                let port: u16 = serde_json::from_value(value)?;
+                anyhow::ensure!(port != 0, "代理端口必须非零");
+                engine.save_ports(port).await?;
+            } else {
+                let settings = super::mutations::setting(&engine.settings, &key, value)?;
+                engine.save_settings(settings).await?;
+            }
         }
         Command::RuleChange { id, change } => {
             let document = engine.rule_document(&id)?;
@@ -86,7 +121,7 @@ pub(super) async fn execute(
             super::mutations::rule(&document, &mut draft, change)?;
             engine.save_profile_rules(&id, draft).await?;
         }
-        Command::Ports { controller, mixed } => engine.save_ports(controller, mixed).await?,
+        Command::Ports { mixed } => engine.save_ports(mixed).await?,
         Command::Import { name, source, id } => engine.import(name, source, id).await?,
         Command::EditProfile { id, name, source } => engine.edit_profile(&id, &name, &source)?,
         Command::Activate { id } => engine.activate(id).await?,

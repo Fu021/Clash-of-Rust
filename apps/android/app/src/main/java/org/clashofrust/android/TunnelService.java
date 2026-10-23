@@ -24,6 +24,7 @@ public final class TunnelService extends VpnService {
     private ParcelFileDescriptor descriptor;
     private String interfaceName;
     private volatile boolean stopping;
+    private volatile String lastStatus = "";
     private volatile int latestStartId;
     private volatile String acceptedRequest;
     static String prepareStart(Context context) {
@@ -240,17 +241,36 @@ public final class TunnelService extends VpnService {
         super.onDestroy();
     }
     private Notification notification(String text) {
+        lastStatus = text;
         PendingIntent open = PendingIntent.getActivity(this, 0, new Intent(this, MainActivity.class),
             PendingIntent.FLAG_IMMUTABLE | PendingIntent.FLAG_UPDATE_CURRENT);
         return new Notification.Builder(this, "vpn").setContentTitle("Clash of Rust")
-            .setContentText(text).setSmallIcon(R.drawable.ic_app).setOngoing(true).setContentIntent(open).build();
+            .setContentText(text).setStyle(new Notification.BigTextStyle().bigText(text))
+            .setOnlyAlertOnce(true).setShowWhen(false)
+            .setSmallIcon(R.drawable.ic_app).setOngoing(true).setContentIntent(open).build();
     }
-    static void updateTraffic(Context context, String down, String up) {
+    static String statusText(String down, String up, String node, String mode, boolean speeds) {
+        String label;
+        switch (mode) {
+            case "global": label = "全局"; break;
+            case "rule": label = "规则"; break;
+            case "direct": label = "直连"; break;
+            default: label = "未知模式"; break;
+        }
+        String text = label + " · " + (node == null || node.isEmpty() ? "节点待确认" : node);
+        return speeds ? text + "\n↓ " + down + "  ↑ " + up : text;
+    }
+    static void updateTraffic(Context context, String down, String up, String node, String mode) {
         TunnelService active = instance;
-        if (active != null && connected && context.getSharedPreferences("appearance", MODE_PRIVATE)
-            .getBoolean("notification-speeds", true)
+        if (active != null && connected
             && (Build.VERSION.SDK_INT < 33 || context.checkSelfPermission(android.Manifest.permission.POST_NOTIFICATIONS)
-                == android.content.pm.PackageManager.PERMISSION_GRANTED))
-            active.getSystemService(NotificationManager.class).notify(1, active.notification("↓ " + down + "  ↑ " + up));
+                == android.content.pm.PackageManager.PERMISSION_GRANTED)) {
+            String text = statusText(down, up, node, mode,
+                context.getSharedPreferences("appearance", MODE_PRIVATE).getBoolean("notification-speeds", true));
+            if (!text.equals(active.lastStatus)) {
+                active.lastStatus = text;
+                active.getSystemService(NotificationManager.class).notify(1, active.notification(text));
+            }
+        }
     }
 }

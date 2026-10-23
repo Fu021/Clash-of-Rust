@@ -117,7 +117,7 @@ public final class MainActivity extends NativeActivity {
                 case "vpn-plan":
                     getSharedPreferences("vpn", MODE_PRIVATE).edit().putBoolean("desired", data.getBoolean("enabled")).commit();
                     break;
-                case "traffic": TunnelService.updateTraffic(this, data.optString("down"), data.optString("up")); break;
+                case "traffic": TunnelService.updateTraffic(this, data.optString("down"), data.optString("up"), data.optString("node"), data.optString("mode")); break;
                 case "appearance": return Appearance.startup(this).put("font_sizes",systemFontSizes()).toString();
                 case "system-bars": runOnUiThread(() -> {
                     Appearance.persistSystemMode(this,data.optInt("mode",2));

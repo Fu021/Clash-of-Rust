@@ -126,6 +126,7 @@ pub struct Engine {
     remote_running: bool,
     pub(crate) control_server: Option<crate::control::Server>,
     external_logs_until: Option<Instant>,
+    pub(crate) view_revision: u64,
 }
 
 #[derive(Clone, serde::Serialize, serde::Deserialize)]
@@ -250,6 +251,7 @@ impl Engine {
             remote_running: false,
             control_server: None,
             external_logs_until: None,
+            view_revision: 0,
         })
     }
 
@@ -410,7 +412,23 @@ impl Engine {
         {
             self.mac_tun = None;
         }
-        for port in [self.settings.controller_port, self.settings.mixed_port] {
+        let controller = crate::config::reserve_controller(
+            self.settings.controller_port,
+            self.settings.mixed_port,
+        )?;
+        let port = controller.local_addr()?.port();
+        if port != self.settings.controller_port {
+            let mut settings = self.settings.clone();
+            settings.controller_port = port;
+            let api = Api::new(&settings)?;
+            self.store.save_settings(&settings)?;
+            self.settings = settings;
+            self.api = api;
+            self.view_revision = self.view_revision.wrapping_add(1);
+            append(&self.logs, "[客户端] 已自动分配可用的内核控制端口");
+        }
+        {
+            let port = self.settings.mixed_port;
             #[cfg(target_os = "macos")]
             if self.mac_tun.is_none() {
                 // Old updater versions can relaunch before their parent-watch
@@ -442,6 +460,7 @@ impl Engine {
         atomic_write(&path, payload.as_bytes())?;
         self.node_root.lock().expect("header route lock").take();
         drop(payload);
+        drop(controller);
         let mut child = self
             .command()?
             .arg("-d")
@@ -562,15 +581,22 @@ impl Engine {
         Ok(())
     }
 
-    pub async fn save_ports(&mut self, controller_port: u16, mixed_port: u16) -> Result<()> {
+    pub async fn save_ports(&mut self, mixed_port: u16) -> Result<()> {
         if self.remote.is_some() {
-            self.remote_mutate(ControlCommand::Ports {
-                controller: controller_port,
-                mixed: mixed_port,
-            })
-            .await?;
+            self.remote_mutate(ControlCommand::Ports { mixed: mixed_port })
+                .await?;
             return Ok(());
         }
+        let controller = if mixed_port == self.settings.controller_port {
+            Some(crate::config::reserve_controller(0, mixed_port)?)
+        } else {
+            None
+        };
+        let controller_port = match &controller {
+            Some(listener) => listener.local_addr()?.port(),
+            None => self.settings.controller_port,
+        };
+        drop(controller);
         self.save_settings(Settings {
             controller_port,
             mixed_port,

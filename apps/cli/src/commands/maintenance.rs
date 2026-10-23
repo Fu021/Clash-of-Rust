@@ -5,8 +5,13 @@ use clash_client_core::config::atomic_write;
 pub(super) async fn execute(args: &Args) -> Result<()> {
     match args.path.as_str() {
         "config get" => {
-            let value = serde_json::to_value(backend::meta(args).await?.settings)?;
+            let mut value = serde_json::to_value(backend::meta(args).await?.settings)?;
+            value
+                .as_object_mut()
+                .expect("settings object")
+                .remove("controller_port");
             let value = if let Some(key) = args.positional.first() {
+                ensure!(key != "controller_port", "控制端口由后台自动管理");
                 ensure!(value.get(key).is_some(), "未知设置项：{key}");
                 json!({(key):value[key].clone()})
             } else {

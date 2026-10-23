@@ -174,7 +174,16 @@ async fn basic_system_proxy_and_tun() {
         .activate(engine.profiles.last().unwrap().id.clone())
         .await
         .unwrap();
+    let conflicting_controller =
+        std::net::TcpListener::bind(("127.0.0.1", controller_port)).unwrap();
     engine.start().await.unwrap();
+    assert_ne!(engine.settings.controller_port, controller_port);
+    assert_eq!(
+        store.load_settings().unwrap().controller_port,
+        engine.settings.controller_port
+    );
+    assert!(std::net::TcpListener::bind(("127.0.0.1", controller_port)).is_err());
+    drop(conflicting_controller);
     let addresses = engine
         .api
         .resolve_domain("connection.example.test")
@@ -266,7 +275,7 @@ async fn basic_system_proxy_and_tun() {
             clash_of_rust::config::atomic_write(
                 std::path::Path::new(&path),
                 &serde_json::to_vec(&serde_json::json!({
-                    "pid":std::process::id(), "controller":controller_port, "mixed":mixed_port,
+                    "pid":std::process::id(), "controller":engine.settings.controller_port, "mixed":mixed_port,
                     "temporary":temporary.path()
                 }))
                 .unwrap(),
@@ -310,14 +319,13 @@ async fn basic_system_proxy_and_tun() {
     let _: serde_json::Value = remote.request(Control::Start).await.unwrap();
     println!("CLI smoke: shared owner started; attaching GUI facade");
     let attach_store = store.clone();
-    let facade =
+    let mut facade =
         tokio::task::spawn_blocking(move || Engine::with_resources(attach_store, test_resources()))
             .await
             .unwrap()
             .unwrap();
     assert!(facade.is_remote() && facade.running());
-    drop(facade); // Must not stop the owner or restore its network state.
-    println!("CLI smoke: GUI facade attached and released without stopping the owner");
+    let original_revision = facade.view_revision();
     let cli =
         std::env::var_os("MIHOMO_TEST_CLI").expect("native wrapper must provide the bundled CLI");
     async fn console(
@@ -349,6 +357,9 @@ async fn basic_system_proxy_and_tun() {
     let status = console(&cli, &store, &["status"]).await;
     assert_eq!(status["running"], true);
     console(&cli, &store, &["config", "set", "dark", "true"]).await;
+    facade.poll(Scope::Other).await.unwrap();
+    assert!(facade.settings.dark);
+    assert_ne!(facade.view_revision(), original_revision);
     assert_eq!(
         console(&cli, &store, &["config", "get", "dark"]).await["dark"],
         true
@@ -357,6 +368,19 @@ async fn basic_system_proxy_and_tun() {
     assert_eq!(secret["secret"], "[已隐藏]");
     let meta: Meta = remote.request(Control::Meta).await.unwrap();
     let active = meta.settings.active_profile.clone().unwrap();
+    console(
+        &cli,
+        &store,
+        &["profile", "edit", &active, "--name", "CLI renamed"],
+    )
+    .await;
+    facade.poll(Scope::Other).await.unwrap();
+    assert!(
+        facade
+            .profiles
+            .iter()
+            .any(|profile| profile.id == active && profile.name == "CLI renamed")
+    );
     let builtin = meta
         .profiles
         .iter()
@@ -367,6 +391,13 @@ async fn basic_system_proxy_and_tun() {
         clash_of_rust::rule_manager::ProfileRules::for_profile(&meta.settings, &active, builtin);
     let revision = clash_of_rust::rule_manager::revision(&previous).unwrap();
     console(&cli, &store, &["rule", "add", "DOMAIN,cli.test,REJECT"]).await;
+    facade.poll(Scope::Other).await.unwrap();
+    assert!(
+        clash_of_rust::rule_manager::ProfileRules::for_profile(&facade.settings, &active, builtin)
+            .custom
+            .iter()
+            .any(|rule| rule.rule == "DOMAIN,cli.test,REJECT")
+    );
     let conflict = engine
         .lock()
         .await
@@ -395,10 +426,27 @@ async fn basic_system_proxy_and_tun() {
         assert!(meta.running);
         assert_eq!(meta.settings.proxy_mode, mode);
     }
+    drop(facade); // Releasing an attached GUI must not stop its owner.
+    assert!(engine.lock().await.running());
+    println!(
+        "CLI smoke: GUI settings, profiles and rules synchronized; facade released without stopping the owner"
+    );
     let _: serde_json::Value = remote.request(Control::Shutdown).await.unwrap();
     assert!(!engine.lock().await.running());
     assert!(!store.root.join("system-proxy.json").exists());
+    let attach_store = store.clone();
+    let mut orphaned =
+        tokio::task::spawn_blocking(move || Engine::with_resources(attach_store, test_resources()))
+            .await
+            .unwrap()
+            .unwrap();
     drop(engine);
+    assert!(orphaned.poll(Scope::Other).await.is_err());
+    assert!(
+        !orphaned.running(),
+        "a dead owner must not leave an attached GUI marked running"
+    );
+    drop(orphaned);
     // With the GUI owner gone, the same binary must create and clean up its own
     // headless owner rather than relying on the test process's runtime.
     let resources = test_resources();

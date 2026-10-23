@@ -184,6 +184,8 @@ fn connection_sort_clicks_redraw_the_header_immediately_and_third_click_restores
             let mut snapshot = app.snapshot.clone();
             snapshot.connections.connections[0].download += 4096;
             let _ = app.update(Message::Finished(Box::new(Reply {
+                view_revision: 0,
+                remote: false,
                 profile_edit: false,
                 profile_import: false,
                 scope: Scope::Connections,
@@ -236,6 +238,8 @@ fn connection_detail_exposes_all_fields_and_copies_the_same_values() {
     assert!(data.get_modal_copy().contains("嗅探域名：one.test"));
     assert!(data.get_modal_copy().contains("目标 IP：—"));
     let _ = app.update(Message::Finished(Box::new(Reply {
+        view_revision: 0,
+        remote: false,
         profile_edit: false,
         profile_import: false,
         scope: Scope::Connections,
@@ -606,6 +610,8 @@ fn appearance_remains_interactive_while_geo_owns_the_engine_and_late_reply_canno
     }
     assert_eq!(app.queued_actions.len(), 1, "rapid changes must coalesce");
     let _ = app.update(Message::Finished(Box::new(Reply {
+        view_revision: 0,
+        remote: false,
         profile_edit: false,
         profile_import: false,
         scope: Scope::Other,
@@ -779,12 +785,11 @@ fn setting_and_toolbar_intents_preserve_their_values_in_the_command_queue() {
     }
     let mut app = fixture(Page::Settings);
     app.busy = true;
-    let _ = app.ui_intent(Intent::ControllerPort, "9092", "");
     let _ = app.ui_intent(Intent::MixedPort, "7899", "");
     let _ = app.ui_intent(Intent::SavePorts, "", "");
     assert!(matches!(
         app.queued_actions.pop_back(),
-        Some(Action::SavePorts(9092, 7899))
+        Some(Action::SavePorts(7899))
     ));
     let _ = app.ui_intent(Intent::MixedPort, "invalid", "");
     let _ = app.ui_intent(Intent::SavePorts, "", "");
@@ -1285,4 +1290,89 @@ fn renderer_rejects_stale_frames_without_losing_newer_input_or_dropdown_state() 
         3
     ));
     assert_eq!(data.get_edit_name(), "newer draft");
+}
+
+fn synchronized_reply(app: &App) -> Reply {
+    Reply {
+        view_revision: app.view_revision.wrapping_add(1),
+        remote: true,
+        profile_edit: false,
+        profile_import: false,
+        scope: app.page.scope(),
+        start_requested: false,
+        settings: app.settings.clone(),
+        profiles: Some(app.profiles.clone()),
+        snapshot: Some(app.snapshot.clone()),
+        rule_document: None,
+        rules_applied: false,
+        notice: Ok(String::new()),
+        running: app.snapshot.running,
+        geo_status: app.geo_status.clone(),
+        autostart: false,
+        protection_changed: false,
+        tray_nodes: None,
+    }
+}
+
+#[test]
+fn console_changes_refresh_profiles_and_clean_inputs_but_preserve_typed_drafts() {
+    let mut app = fixture(Page::Settings);
+    let mut reply = synchronized_reply(&app);
+    reply.settings.mixed_port = 12345;
+    reply.settings.delay_interval_minutes = 17;
+    reply.profiles.as_mut().unwrap()[0].name = "Renamed by CLI".into();
+    let _ = app.update(Message::Finished(Box::new(reply)));
+    assert_eq!(app.mixed_port, "12345");
+    assert_eq!(app.interval_input, "17");
+    assert_eq!(app.profiles[0].name, "Renamed by CLI");
+    assert!(app.backend_remote);
+
+    app.mixed_port = "12346".into();
+    app.interval_input = "25".into();
+    let mut reply = synchronized_reply(&app);
+    reply.settings.mixed_port = 12347;
+    reply.settings.delay_interval_minutes = 30;
+    let _ = app.update(Message::Finished(Box::new(reply)));
+    assert_eq!(app.mixed_port, "12346");
+    assert_eq!(app.interval_input, "25");
+    assert_eq!(app.settings.mixed_port, 12347);
+}
+
+#[test]
+fn console_rule_changes_update_clean_views_without_discarding_an_open_editor() {
+    let mut app = fixture(Page::Rules);
+    let mut reply = synchronized_reply(&app);
+    let mut rules = ProfileRules::default();
+    rules.custom.push(rule_manager::CustomRule {
+        id: uuid::Uuid::new_v4().to_string(),
+        rule: "DOMAIN,from-cli.test,DIRECT".into(),
+        enabled: true,
+    });
+    reply
+        .settings
+        .rule_profiles
+        .insert("fixture".into(), Arc::new(rules));
+    reply.rule_document = app.rule_state.document.clone();
+    let _ = app.update(Message::Finished(Box::new(reply)));
+    assert!(
+        app.rule_state
+            .draft
+            .custom
+            .iter()
+            .any(|rule| rule.rule.contains("from-cli.test"))
+    );
+    let _ = app.ui_intent(Intent::RuleAdd, "", "");
+    let _ = app.ui_intent(Intent::RulePayload, "unsaved.test", "");
+    let mut reply = synchronized_reply(&app);
+    reply.profiles.as_mut().unwrap().clear();
+    let _ = app.update(Message::Finished(Box::new(reply)));
+    assert_eq!(
+        app.rule_state.editor.as_ref().unwrap().payload,
+        "unsaved.test"
+    );
+    assert_eq!(
+        app.rule_state.document.as_ref().unwrap().profile_id,
+        "fixture"
+    );
+    assert!(app.notice.contains("草稿"));
 }

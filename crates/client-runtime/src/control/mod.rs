@@ -19,7 +19,7 @@ use serde_json::Value;
 use std::path::PathBuf;
 pub use transport::{Endpoint, Remote, Server, serve};
 
-pub const PROTOCOL: u32 = 1;
+pub const PROTOCOL: u32 = 2;
 pub const REQUEST_LIMIT: usize = 8 * 1024 * 1024;
 pub const RESPONSE_LIMIT: usize = 32 * 1024 * 1024;
 
@@ -32,6 +32,8 @@ pub enum Owner {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Meta {
+    #[serde(default)]
+    pub view_revision: u64,
     pub settings: Settings,
     pub profiles: Vec<Profile>,
     pub geo: GeoManifest,
@@ -76,7 +78,6 @@ pub enum Command {
         change: RuleChange,
     },
     Ports {
-        controller: u16,
         mixed: u16,
     },
     Import {

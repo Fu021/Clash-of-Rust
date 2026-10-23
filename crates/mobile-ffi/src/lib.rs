@@ -41,6 +41,7 @@ pub fn native_response(value: Value) -> Result<Value> {
 /// Controller I/O runs outside the presentation loop. A host can cancel an old
 /// snapshot when navigating or replacing the controller without losing UI events.
 pub struct Snapshot {
+    node: Option<String>,
     proxies: Option<Proxies>,
     connections: Option<Connections>,
     stats: core::api::ConnectionStats,
@@ -70,11 +71,52 @@ impl Snapshot {
         };
         let (proxies, (connections, stats)) = tokio::try_join!(proxies, connections)?;
         Ok(Self {
+            node: None,
             proxies,
             connections,
             stats,
             at: Instant::now(),
         })
+    }
+
+    pub async fn fetch_for_route(
+        api: &Api,
+        page: i32,
+        refresh_route: bool,
+        root: &str,
+    ) -> Result<Self> {
+        let mut snapshot = Self::fetch(api, page, refresh_route).await?;
+        let node = if let Some(proxies) = &snapshot.proxies {
+            core::active_route::from_snapshot(root, proxies)
+        } else {
+            // Inspect only the selected chain off the proxy page, keeping
+            // notifications current without retaining every proxy node.
+            tokio::time::timeout(std::time::Duration::from_millis(900), async {
+                let mut name = root.to_owned();
+                let mut visited = Vec::new();
+                for _ in 0..core::active_route::MAX_DEPTH {
+                    if core::active_route::terminal(&name) {
+                        return Ok::<_, anyhow::Error>(Some(name));
+                    }
+                    if visited.contains(&name) {
+                        return Ok(None);
+                    }
+                    visited.push(name.clone());
+                    match api.proxy_selection(&name).await? {
+                        Some(proxy) if !proxy.now.is_empty() => name = proxy.now.to_string(),
+                        Some(_) => return Ok(Some(name)),
+                        None => return Ok((visited.len() > 1).then_some(name)),
+                    }
+                }
+                Ok(None)
+            })
+            .await
+            .ok()
+            .and_then(Result::ok)
+            .flatten()
+        };
+        snapshot.node = Some(node.unwrap_or_default());
+        Ok(snapshot)
     }
 }
 
@@ -200,7 +242,27 @@ impl Session {
         )?)
     }
     pub fn initialize(&mut self) -> Result<()> {
+        let native_running = self.native.request(json!({"op":"state"}))?["running"] == true;
+        let controller = if native_running {
+            None
+        } else {
+            Some(core::config::reserve_controller(
+                self.settings.controller_port,
+                self.settings.mixed_port,
+            )?)
+        };
+        if let Some(listener) = &controller {
+            let port = listener.local_addr()?.port();
+            if port != self.settings.controller_port {
+                let mut settings = self.settings.clone();
+                settings.controller_port = port;
+                self.store.save_settings(&settings)?;
+                self.api = Api::new(&settings)?;
+                self.settings = settings;
+            }
+        }
         let raw = self.runtime(&self.settings)?;
+        drop(controller);
         self.native.request(
             json!({"op":"initialize","config":raw,"ipv6":effective_ipv6(&self.settings)}),
         )?;
@@ -212,7 +274,12 @@ impl Session {
         }
         Ok(())
     }
-    pub fn commit_settings(&mut self, settings: Settings) -> Result<()> {
+    pub fn commit_settings(&mut self, mut settings: Settings) -> Result<()> {
+        if settings.mixed_port == settings.controller_port {
+            settings.controller_port = core::config::reserve_controller(0, settings.mixed_port)?
+                .local_addr()?
+                .port();
+        }
         settings.validate()?;
         let raw = self.runtime(&settings)?;
         let old_raw = self.runtime(&self.settings)?;
@@ -295,6 +362,15 @@ impl Session {
             .filter(|group| !group.all.is_empty())
             .map(|_| name)
     }
+    pub fn notification_route(&self) -> String {
+        self.settings
+            .claude_protection
+            .as_ref()
+            .map(|p| p.route.clone())
+            .unwrap_or_else(|| {
+                core::active_route::start(&self.settings.run_mode, &self.route).to_owned()
+            })
+    }
     pub fn apply_snapshot(&mut self, snapshot: Snapshot) {
         if let Some(proxies) = snapshot.proxies {
             self.proxies = proxies;
@@ -310,6 +386,13 @@ impl Session {
             }
         } else {
             self.proxies = Proxies::default();
+        }
+        if let Some(node) = snapshot.node {
+            self.node = self
+                .settings
+                .claude_protection
+                .as_ref()
+                .map_or(node, |protection| protection.node.clone());
         }
         if let Some(previous) = self.sampled {
             let elapsed = snapshot.at.duration_since(previous).as_secs_f64();
@@ -1008,6 +1091,7 @@ mod tests {
             ..Default::default()
         };
         session.apply_snapshot(Snapshot {
+            node: None,
             proxies: None,
             connections: Some(connections(10)),
             stats: core::api::ConnectionStats {
@@ -1018,6 +1102,7 @@ mod tests {
             at,
         });
         session.apply_snapshot(Snapshot {
+            node: None,
             proxies: None,
             connections: None,
             stats: core::api::ConnectionStats {
@@ -1031,6 +1116,7 @@ mod tests {
         assert_eq!(session.connections.connections.len(), 50);
         assert_eq!(session.rates.0, 100);
         session.apply_snapshot(Snapshot {
+            node: None,
             proxies: None,
             connections: Some(connections(210)),
             stats: core::api::ConnectionStats {

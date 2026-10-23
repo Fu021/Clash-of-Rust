@@ -196,7 +196,6 @@ enum Message {
     ListPage(usize),
     ProfileName(String),
     ProfileSource(String),
-    ControllerPort(String),
     MixedPort(String),
     SavePorts,
     Rules(rules_view::Event),
@@ -279,6 +278,8 @@ struct App {
     picking_profile: Option<String>,
     system_dark: bool,
     engine: Option<Arc<Mutex<Engine>>>,
+    view_revision: u64,
+    backend_remote: bool,
     page: Page,
     settings: Settings,
     rule_state: rules_view::State,
@@ -337,7 +338,6 @@ struct App {
     list_offset: usize,
     profile_name: String,
     profile_source: String,
-    controller_port: String,
     mixed_port: String,
     window_width: String,
     window_height: String,
@@ -457,7 +457,6 @@ impl App {
             rule_state: rules_view::State::default(),
             claude: claude_view::State::default(),
             node_sort: settings.node_sort,
-            controller_port: settings.controller_port.to_string(),
             interval_input: settings.delay_interval_minutes.to_string(),
             periodic_testing: false,
             mixed_port: settings.mixed_port.to_string(),
@@ -471,6 +470,8 @@ impl App {
             window_state_debounce: None,
             dark: settings.dark,
             autostart: platform::autostart_enabled().unwrap_or(false),
+            view_revision: 0,
+            backend_remote: false,
             engine,
             settings,
             profiles,
@@ -673,9 +674,25 @@ impl App {
         if let Action::ClaudeProtection(enabled) = &action {
             self.claude.protection_pending = Some(*enabled);
         }
-        Task::perform(execute(engine, action, scope, self.visible), |reply| {
-            Message::Finished(Box::new(reply))
-        })
+        let context = commands::ViewContext {
+            revision: self.view_revision,
+            rule_profile: if self.page == Page::Rules {
+                self.rule_state
+                    .document
+                    .as_ref()
+                    .map(|doc| doc.profile_id.clone())
+                    .or_else(|| self.settings.active_profile.clone())
+            } else {
+                None
+            },
+            active_profile: self.settings.active_profile.clone(),
+            protected: self.settings.claude_protection.is_some(),
+            editing_rules: self.rule_state.dirty() || self.rule_state.has_editor(),
+        };
+        Task::perform(
+            execute(engine, action, scope, self.visible, context),
+            |reply| Message::Finished(Box::new(reply)),
+        )
     }
 
     fn update(&mut self, message: Message) -> Task<Message> {
@@ -834,9 +851,11 @@ impl App {
                     return Task::none();
                 }
                 self.dismiss_notice();
-                if self.engine.is_some() {
+                if self.engine.is_some() && !self.backend_remote {
                     return self.dispatch(Action::Start);
                 }
+                self.cancel_delay_checks();
+                self.cancel_site_checks();
                 self.busy = true;
                 self.working = true;
                 return Task::perform(
@@ -861,11 +880,14 @@ impl App {
                         // Initialization completed outside the GUI thread. A newly
                         // initialized engine has no running process yet.
                         if let Ok(engine) = engine.try_lock() {
+                            self.backend_remote = engine.is_remote();
+                            self.view_revision = engine.view_revision();
                             self.settings = engine.settings.clone();
-                            self.rule_state = rules_view::State::default();
+                            if !self.rule_state.dirty() && !self.rule_state.has_editor() {
+                                self.rule_state = rules_view::State::default();
+                            }
                             self.profiles = engine.profiles.clone();
                             self.geo_status = engine.geo_manifest.version.clone();
-                            self.controller_port = self.settings.controller_port.to_string();
                             self.mixed_port = self.settings.mixed_port.to_string();
                             self.interval_input = self.settings.delay_interval_minutes.to_string();
                             self.node_sort = self.settings.node_sort;
@@ -1086,7 +1108,6 @@ impl App {
             Message::ListPage(offset) => self.list_offset = offset,
             Message::ProfileName(value) => self.profile_name = value,
             Message::ProfileSource(value) => self.profile_source = value,
-            Message::ControllerPort(value) => self.controller_port = value,
             Message::MixedPort(value) => self.mixed_port = value,
             Message::Rules(event) => return self.update_rules(event),
             Message::WindowWidth(value) => {
@@ -1286,21 +1307,14 @@ impl App {
             Message::Action(Action::DeleteProfile(id)) => {
                 return self.confirm_delete(id);
             }
-            Message::SavePorts => {
-                let ports = self.controller_port.parse::<u16>().and_then(|controller| {
-                    self.mixed_port
-                        .parse::<u16>()
-                        .map(|mixed| (controller, mixed))
-                });
-                match ports {
-                    Ok((controller_port, mixed_port)) => {
-                        return self.dispatch(Action::SavePorts(controller_port, mixed_port));
-                    }
-                    Err(_) => {
-                        self.show_notice("端口必须为 1–65535 的整数".into(), true);
-                    }
+            Message::SavePorts => match self.mixed_port.trim().parse::<u16>() {
+                Ok(mixed_port) if mixed_port != 0 => {
+                    return self.dispatch(Action::SavePorts(mixed_port));
                 }
-            }
+                _ => {
+                    self.show_notice("端口必须为 1–65535 的整数".into(), true);
+                }
+            },
             Message::Action(action) => {
                 if let Action::Delay(node) = &action
                     && self
@@ -1404,6 +1418,8 @@ impl App {
                 if !self.snapshot.running
                     || self.working
                     || self.periodic_testing
+                    || self.backend_remote
+                    || self.settings.claude_protection.is_some()
                     || !self.testing_groups.is_empty()
                     || self.exiting
                 {
@@ -1651,7 +1667,7 @@ impl App {
                 // The console can start a stopped core or change preferences.
                 // A stopped owner returns metadata without querying mihomo.
                 if self.engine.is_some() && !self.busy {
-                    let scope = if !self.visible || self.page == Page::Rules {
+                    let scope = if !self.visible {
                         Scope::Other
                     } else {
                         self.page.scope()
@@ -1664,6 +1680,16 @@ impl App {
                 self.claude.protection_pending = None;
                 let reply = *reply;
                 let protection_changed = reply.protection_changed;
+                let external_change = self.view_revision != reply.view_revision;
+                self.view_revision = reply.view_revision;
+                self.backend_remote = reply.remote;
+                if external_change {
+                    self.node_delays.clear();
+                    self.proxy_order.get_mut().clear();
+                }
+                if protection_changed || external_change {
+                    self.cancel_delay_checks();
+                }
                 if reply.profile_edit
                     && let Err(error) = &reply.notice
                     && let Some(editor) = &mut self.profile_editor
@@ -1694,6 +1720,15 @@ impl App {
                         self.rule_state.refresh_document(doc);
                     }
                 }
+                // Refresh clean fields, retaining text the user is still editing.
+                if self.mixed_port.trim().parse::<u16>() == Ok(self.settings.mixed_port) {
+                    self.mixed_port = reply.settings.mixed_port.to_string();
+                }
+                if self.interval_input.trim().parse::<u32>()
+                    == Ok(self.settings.delay_interval_minutes)
+                {
+                    self.interval_input = reply.settings.delay_interval_minutes.to_string();
+                }
                 self.settings = reply.settings;
                 // A completed Geo/network operation predates the queued appearance choices.
                 for queued in &self.queued_actions {
@@ -1723,7 +1758,15 @@ impl App {
                         .as_ref()
                         .is_some_and(|doc| !self.profiles.iter().any(|p| p.id == doc.profile_id))
                     {
-                        self.rule_state = rules_view::State::default();
+                        if self.rule_state.dirty() || self.rule_state.has_editor() {
+                            self.show_notice(
+                                "该订阅已被另一客户端删除，未保存的规则草稿仍保留在当前页面。"
+                                    .into(),
+                                true,
+                            );
+                        } else {
+                            self.rule_state = rules_view::State::default();
+                        }
                     }
                 }
                 self.geo_status = reply.geo_status;
@@ -2216,8 +2259,7 @@ impl App {
     }
 
     fn ports_dirty(&self) -> bool {
-        self.controller_port.trim().parse::<u16>() != Ok(self.settings.controller_port)
-            || self.mixed_port.trim().parse::<u16>() != Ok(self.settings.mixed_port)
+        self.mixed_port.trim().parse::<u16>() != Ok(self.settings.mixed_port)
     }
 }
 fn bytes(value: u64) -> String {
@@ -2625,6 +2667,8 @@ mod async_state_tests {
         assert!(!app.busy);
         app.exiting = false;
         let _ = app.update(Message::Finished(Box::new(Reply {
+            view_revision: 0,
+            remote: false,
             profile_edit: false,
             profile_import: false,
             scope: Scope::Home,
@@ -2653,6 +2697,8 @@ mod async_state_tests {
         let mut app = app();
         app.core_failure = Some("内核程序被系统阻止".into());
         let _ = app.update(Message::Finished(Box::new(Reply {
+            view_revision: 0,
+            remote: false,
             profile_edit: false,
             profile_import: false,
             scope: Scope::Other,
@@ -2673,6 +2719,8 @@ mod async_state_tests {
         assert!(app.notice.contains("开机启动"));
         assert!(app.error && app.notice_visible);
         let _ = app.update(Message::Finished(Box::new(Reply {
+            view_revision: 0,
+            remote: false,
             profile_edit: false,
             profile_import: false,
             scope: Scope::Home,
@@ -2746,14 +2794,13 @@ mod async_state_tests {
     fn queued_port_save_contains_only_ports() {
         let mut app = app();
         app.busy = true;
-        app.controller_port = "9999".into();
         app.mixed_port = "8888".into();
         let _ = app.update(Message::SavePorts);
         app.settings.run_mode = "global".into();
         app.settings.delay_interval_minutes = 10;
         assert!(matches!(
             app.queued_actions.pop_front(),
-            Some(Action::SavePorts(9999, 8888))
+            Some(Action::SavePorts(8888))
         ));
         assert_eq!(app.settings.run_mode, "global");
         assert_eq!(app.settings.delay_interval_minutes, 10);
