@@ -3,7 +3,7 @@
 </p>
 <h1 align="center">Clash of Rust</h1>
 
-基于 mihomo 的原生 Rust 代理客户端。支持 **Windows（x64 / ARM64）**、**Debian/Ubuntu（amd64 / ARM64，Ubuntu 仅支持 22.04 及以上）**、**macOS 14 及以上（Intel / Apple Silicon）** 和 **Android 8.0 及以上（ARM64 / ARMv7 / x86_64）**。版本 **0.6.2**，更新内容见 [发布说明](docs/releases/0.6.2.md)。
+基于 mihomo 的原生 Rust 代理客户端。支持 **Windows（x64 / ARM64）**、**Debian/Ubuntu（amd64 / ARM64，Ubuntu 仅支持 22.04 及以上）**、**macOS 14 及以上（Intel / Apple Silicon）** 和 **Android 8.0 及以上（ARM64 / ARMv7 / x86_64）**。版本 **0.6.3**，更新内容见 [发布说明](docs/releases/0.6.3.md)。
 
 ## Features
 
@@ -12,7 +12,7 @@
 - **离线就绪**：内置 mihomo 内核和 Geo 数据，支持一键更新 Geo 数据。
 - **IP 检测**：183 个检测项，覆盖出口 IP、GitHub、AI 服务与流媒体地区访问；一键检测显示分类报告，点击分类或状态查看详情，支持筛选与分类重测。
 - **A÷检测**：采集 Claude 地区、DNS、WebRTC 与浏览器线索，扫描已记录项目配置并分类展示；可选一键保护，锁定节点及规则/全局模式并启用 TUN、加密 DNS 与异常连接拦截，关闭后恢复原设置，详见 [检测说明](docs/claude-region-detection.md)。
-- **便捷使用**：托盘快捷切换节点，可选显示上传与下载速度；支持后台开机自启、单实例与网络诊断，记住普通窗口尺寸；内核启动失败时可直接重试。
+- **便捷使用**：托盘快捷切换节点，可选显示上传与下载速度；支持后台开机自启、单实例与网络诊断，记住普通窗口尺寸与位置，关闭窗口后释放界面进程；内核启动失败时可直接重试。
 - **客户端更新**：默认检查正式版，可选预发布版，桌面预发布版可切回正式版；支持下载进度与取消；校验完成后桌面自动安装与重启，Android 由系统确认安装，失败时显示原因。
 
 | 浅色首页 | 深色首页 |
@@ -25,15 +25,15 @@
 
 | 平台 | 安装包 |
 | --- | --- |
-| Windows x64 | [Clash-of-Rust-0.6.2-windows-x64-setup.exe](https://github.com/Fu021/Clash-of-Rust/releases/download/v0.6.2/Clash-of-Rust-0.6.2-windows-x64-setup.exe) |
-| Windows ARM64 | [Clash-of-Rust-0.6.2-windows-arm64-setup.exe](https://github.com/Fu021/Clash-of-Rust/releases/download/v0.6.2/Clash-of-Rust-0.6.2-windows-arm64-setup.exe) |
-| Debian / Ubuntu 22.04+ amd64 | [Clash-of-Rust-0.6.2-linux-amd64.deb](https://github.com/Fu021/Clash-of-Rust/releases/download/v0.6.2/Clash-of-Rust-0.6.2-linux-amd64.deb) |
-| Debian / Ubuntu 22.04+ ARM64 | [Clash-of-Rust-0.6.2-linux-arm64.deb](https://github.com/Fu021/Clash-of-Rust/releases/download/v0.6.2/Clash-of-Rust-0.6.2-linux-arm64.deb) |
-| macOS Intel | [Clash-of-Rust-0.6.2-macos-x64.dmg](https://github.com/Fu021/Clash-of-Rust/releases/download/v0.6.2/Clash-of-Rust-0.6.2-macos-x64.dmg) |
-| macOS Apple Silicon | [Clash-of-Rust-0.6.2-macos-arm64.dmg](https://github.com/Fu021/Clash-of-Rust/releases/download/v0.6.2/Clash-of-Rust-0.6.2-macos-arm64.dmg) |
-| Android ARM64（多数手机与平板） | [Clash-of-Rust-0.6.2-android-arm64.apk](https://github.com/Fu021/Clash-of-Rust/releases/download/v0.6.2/Clash-of-Rust-0.6.2-android-arm64.apk) |
-| Android ARMv7 | [Clash-of-Rust-0.6.2-android-armv7.apk](https://github.com/Fu021/Clash-of-Rust/releases/download/v0.6.2/Clash-of-Rust-0.6.2-android-armv7.apk) |
-| Android x86_64 | [Clash-of-Rust-0.6.2-android-x64.apk](https://github.com/Fu021/Clash-of-Rust/releases/download/v0.6.2/Clash-of-Rust-0.6.2-android-x64.apk) |
+| Windows x64 | [Clash-of-Rust-0.6.3-windows-x64-setup.exe](https://github.com/Fu021/Clash-of-Rust/releases/download/v0.6.3/Clash-of-Rust-0.6.3-windows-x64-setup.exe) |
+| Windows ARM64 | [Clash-of-Rust-0.6.3-windows-arm64-setup.exe](https://github.com/Fu021/Clash-of-Rust/releases/download/v0.6.3/Clash-of-Rust-0.6.3-windows-arm64-setup.exe) |
+| Debian / Ubuntu 22.04+ amd64 | [Clash-of-Rust-0.6.3-linux-amd64.deb](https://github.com/Fu021/Clash-of-Rust/releases/download/v0.6.3/Clash-of-Rust-0.6.3-linux-amd64.deb) |
+| Debian / Ubuntu 22.04+ ARM64 | [Clash-of-Rust-0.6.3-linux-arm64.deb](https://github.com/Fu021/Clash-of-Rust/releases/download/v0.6.3/Clash-of-Rust-0.6.3-linux-arm64.deb) |
+| macOS Intel | [Clash-of-Rust-0.6.3-macos-x64.dmg](https://github.com/Fu021/Clash-of-Rust/releases/download/v0.6.3/Clash-of-Rust-0.6.3-macos-x64.dmg) |
+| macOS Apple Silicon | [Clash-of-Rust-0.6.3-macos-arm64.dmg](https://github.com/Fu021/Clash-of-Rust/releases/download/v0.6.3/Clash-of-Rust-0.6.3-macos-arm64.dmg) |
+| Android ARM64（多数手机与平板） | [Clash-of-Rust-0.6.3-android-arm64.apk](https://github.com/Fu021/Clash-of-Rust/releases/download/v0.6.3/Clash-of-Rust-0.6.3-android-arm64.apk) |
+| Android ARMv7 | [Clash-of-Rust-0.6.3-android-armv7.apk](https://github.com/Fu021/Clash-of-Rust/releases/download/v0.6.3/Clash-of-Rust-0.6.3-android-armv7.apk) |
+| Android x86_64 | [Clash-of-Rust-0.6.3-android-x64.apk](https://github.com/Fu021/Clash-of-Rust/releases/download/v0.6.3/Clash-of-Rust-0.6.3-android-x64.apk) |
 
 Windows 运行安装程序；Debian/Ubuntu（Ubuntu 仅支持 22.04 及以上）使用 `sudo apt install ./安装包文件名.deb`。升级保留订阅和个人设置；Windows 卸载可选删除全部配置和数据，默认不勾选。
 
@@ -49,24 +49,24 @@ macOS 打开 DMG，将 **Clash of Rust.app** 拖入 **Applications（应用程�
 
 ## 内存占用
 
-实测版本 **0.6.2**（`34490ff`）；Ubuntu 22.04 x64、Rust 1.99.1、Release 构建、Slint 软件渲染，mihomo v1.19.33；低强度固定输入为 **100 节点、5 个策略组、1,000 条规则**。DNS 覆盖、IPv6 与 UDP 开启，Claude 保护、快捷规则、系统代理和 TUN 关闭，无业务流量：
+实测版本 **0.6.3**（`a46ecbb`）；Ubuntu 22.04 x64、Rust 1.99.1、Release 构建、Slint 软件渲染，mihomo v1.19.33；低强度固定输入为 **100 节点、5 个策略组、1,000 条规则**。DNS 覆盖、IPv6 与 UDP 开启，Claude 保护、快捷规则、系统代理和 TUN 关闭，无业务流量。客户端统计包含桌面宿主与独立界面进程：
 
-| 场景 | GUI RSS | GUI 与内核合计 PSS |
-| --- | ---: | ---: |
-| 首页 | 45.91 MiB | 83.49 MiB |
-| 代理组折叠 | 46.71 MiB | 87.91 MiB |
-| 节点搜索 | 55.96 MiB | 100.39 MiB |
-| 返回首页 | 56.02 MiB | 100.45 MiB |
+| 场景 | 客户端 RSS | 客户端 PSS | 客户端与内核合计 PSS |
+| --- | ---: | ---: | ---: |
+| 首页 | 47.38 MiB | 37.75 MiB | 83.25 MiB |
+| 代理组折叠 | 47.90 MiB | 38.27 MiB | 87.02 MiB |
+| 节点搜索 | 57.43 MiB | 47.79 MiB | 99.41 MiB |
+| 返回首页 | 57.44 MiB | 47.80 MiB | 99.43 MiB |
 
-后台场景使用独立启动的客户端；托盘两项为同一进程关闭窗口前后，已验证内核持续运行、窗口可重新打开。纯 CLI 使用 `cor start`，不启动 GUI：
+后台场景使用独立启动的客户端；托盘两项为同一客户端关闭窗口前后，已验证界面进程退出、内核持续运行且窗口可重新打开。纯 CLI 使用 `cor start`：
 
-| 场景 | 客户端 RSS | 客户端与内核合计 PSS |
-| --- | ---: | ---: |
-| 首页打开、托盘可用 | 46.80 MiB | 85.01 MiB |
-| 关闭窗口、驻留托盘 | 46.80 MiB | 84.79 MiB |
-| 纯 CLI 后台运行 | 14.01 MiB | 53.29 MiB |
+| 场景 | 客户端 RSS | 客户端 PSS | 客户端与内核合计 PSS |
+| --- | ---: | ---: | ---: |
+| 首页打开、托盘可用 | 48.08 MiB | 38.36 MiB | 84.06 MiB |
+| 关闭窗口、驻留托盘 | 19.06 MiB | 13.92 MiB | 59.64 MiB |
+| 纯 CLI 后台运行 | 14.07 MiB | 10.21 MiB | 53.01 MiB |
 
-五项快捷规则全开时，首页 GUI RSS 为 44.82 MiB，合计 PSS 为 101.49 MiB。以上为每场景采样 10 秒、间隔 250 ms 的观测峰值，实际占用随系统、配置和使用情况变化；RSS 含共享页，PSS 按比例分摊共享页。[测试记录](https://github.com/Fu021/Clash-of-Rust/actions/runs/39739609814)。
+搜索后关闭窗口，客户端 RSS 为 19.44 MiB、PSS 为 14.29 MiB；连续开关窗口 20 次通过。五项快捷规则全开时，首页客户端 RSS 为 47.38 MiB，合计 PSS 为 101.23 MiB。以上为每场景采样 10 秒、间隔 250 ms 的观测峰值；RSS 含共享页，PSS 按比例分摊共享页，实际占用随系统、配置和使用情况变化。[测试记录](https://github.com/Fu021/Clash-of-Rust/actions/runs/39980441937)。
 
 ## 编译与打包
 
