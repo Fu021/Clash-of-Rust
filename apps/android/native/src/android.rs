@@ -784,13 +784,12 @@ async fn run_loop(
                 let api = state.session.api.clone();
                 let page = if state.visible { state.page } else { -1 };
                 let refresh_route = state.visible && state.session.proxies.proxies.is_empty();
-                let route = state.session.notification_route();
                 let generation = refresh_generation;
                 let send = updates.clone();
                 refresh_job = Some(tokio::spawn(async move {
                     let result = tokio::time::timeout(
                         Duration::from_secs(3),
-                        Snapshot::fetch_for_route(&api, page, refresh_route, &route),
+                        Snapshot::fetch(&api, page, refresh_route),
                     )
                     .await
                     .context("控制接口刷新超时")
@@ -798,9 +797,6 @@ async fn run_loop(
                     .map_err(|error| format!("{error:#}"));
                     let _ = send.send(Update::Snapshot(generation, result)).await;
                 }));
-            }
-            if state.session.vpn {
-                let _ = state.session.native.request(json!({"op":"traffic", "down":format!("{}/s",bytes(state.session.rates.1)), "up":format!("{}/s",bytes(state.session.rates.0)), "node":state.session.node, "mode":state.session.settings.run_mode}));
             }
         }
         if log_port != state.session.settings.controller_port {

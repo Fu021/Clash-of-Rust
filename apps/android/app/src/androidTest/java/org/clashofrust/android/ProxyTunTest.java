@@ -506,6 +506,17 @@ public class ProxyTunTest {
                 return TunnelService.connected();
             });
             assertTrue(CoreBridge.ready());
+            if (Build.VERSION.SDK_INT >= 33)
+                shell("pm grant org.clashofrust.android android.permission.POST_NOTIFICATIONS");
+            await("Cold VPN notification did not show its actual mode and node", () ->
+                vpnNotification(context).contains("规则 · DIRECT"));
+            context.getSharedPreferences("appearance", Context.MODE_PRIVATE).edit().putBoolean("notification-speeds", false).commit();
+            await("Hiding speeds also hid the VPN node or mode", () -> {
+                String text = vpnNotification(context);
+                return text.contains("规则 · DIRECT") && !text.contains("↓");
+            });
+            context.getSharedPreferences("appearance", Context.MODE_PRIVATE).edit().putBoolean("notification-speeds", true).commit();
+            await("Cold VPN notification did not restore speed display", () -> vpnNotification(context).contains("↓"));
             shell("cmd statusbar expand-settings");
             await("Quick tile did not display its connected state",()->tileState()==android.service.quicksettings.Tile.STATE_ACTIVE);
             assertFalse("Quick tile opened the Activity",inStage(androidx.test.runner.lifecycle.Stage.RESUMED,false));
@@ -515,6 +526,7 @@ public class ProxyTunTest {
             tunCarriesSocket(value(raw,"external-controller"),value(raw,"secret"));
             shell("cmd statusbar click-tile org.clashofrust.android/.VpnTileService");
             await("Cold tile did not disconnect",()->!TunnelService.connected());
+            await("VPN notification remained after disconnect", () -> vpnNotification(context).isEmpty());
             await("Quick tile remained visually enabled after disconnect",()->tileState()==android.service.quicksettings.Tile.STATE_INACTIVE);
             noTunRoute();
             assertFalse(inStage(androidx.test.runner.lifecycle.Stage.RESUMED,false));
@@ -525,6 +537,17 @@ public class ProxyTunTest {
                 finally { TunnelService.stop(context); }
             }
         }
+    }
+    private static String vpnNotification(Context context) {
+        android.app.NotificationManager manager = context.getSystemService(android.app.NotificationManager.class);
+        for (android.service.notification.StatusBarNotification entry : manager.getActiveNotifications()) {
+            if (entry.getId() == 1) {
+                CharSequence text = entry.getNotification().extras.getCharSequence(android.app.Notification.EXTRA_TEXT);
+                CharSequence title = entry.getNotification().extras.getCharSequence(android.app.Notification.EXTRA_TITLE);
+                return (title == null ? "" : title.toString()) + "\n" + (text == null ? "" : text.toString());
+            }
+        }
+        return "";
     }
     private static void quickTiles(Context context,String value) {
         if (Build.VERSION.SDK_INT<29) throw new AssertionError("Tile UI regression requires Android 10+");
