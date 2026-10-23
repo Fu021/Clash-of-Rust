@@ -1,12 +1,12 @@
 import { PageSurface, Disclosure } from "../components/motion.slint";
-import { ScrollView } from "std-widgets.slint";
 import { Theme } from "../theme/palette.slint";
 import { UiData, UiActions, Intent } from "../state.slint";
-import { Label, Caption, Heading, ContentPanel, ActionButton, Badge, Field, Toggle, Select, Paragraph } from "../components/controls.slint";
+import { PageScroll, Label, Caption, Heading, ContentPanel, ActionButton, Badge, Field, Toggle, Select, Paragraph } from "../components/controls.slint";
 export component RulesPage inherits PageSurface {
     VerticalLayout {
         spacing: Theme.page-gap;
-        ScrollView {
+        PageScroll {
+        content-key: UiData.page-offset + "/" + UiData.query + "/" + UiData.rule-profile;
             min-height: 0px; vertical-stretch: 1;
             viewport-y <=> UiData.scroll-rules;
             x: 0px; width: parent.width + Theme.content-gap;
@@ -80,8 +80,8 @@ export component RulesPage inherits PageSurface {
         }
         HorizontalLayout { cross-axis-alignment: center; spacing: Theme.content-gap;
             Caption { text: UiData.page-status; }
-            ActionButton { text: "上一页"; enabled: UiData.previous; clicked => { UiData.scroll-rules = 0px; UiActions.dispatch(Intent.list-page, "" + max(0, UiData.page-offset - 60), ""); } }
-            ActionButton { text: "下一页"; enabled: UiData.next; clicked => { UiData.scroll-rules = 0px; UiActions.dispatch(Intent.list-page, "" + (UiData.page-offset + 60), ""); } }
+            ActionButton { text: "上一页"; enabled: UiData.previous; clicked => { UiActions.dispatch(Intent.list-page, "" + max(0, UiData.page-offset - 60), ""); } }
+            ActionButton { text: "下一页"; enabled: UiData.next; clicked => { UiActions.dispatch(Intent.list-page, "" + (UiData.page-offset + 60), ""); } }
         }
     }
 }

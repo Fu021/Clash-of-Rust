@@ -1,10 +1,9 @@
 import { PageSurface } from "../components/motion.slint";
-import { ScrollView } from "std-widgets.slint";
 import { Theme, AccentPalette } from "../theme/palette.slint";
 import { UiData, UiActions, Intent } from "../state.slint";
-import { Label, Caption, ContentPanel, RowPanel, SettingsSection, ActionButton, AccentChoice, SettingRow, Divider, Field, Select, Paragraph } from "../components/controls.slint";
+import { PageScroll, Label, Caption, ContentPanel, RowPanel, SettingsSection, ActionButton, AccentChoice, SettingRow, Divider, Field, Select, Paragraph } from "../components/controls.slint";
 export component SettingsPage inherits PageSurface {
-    ScrollView {
+    PageScroll {
         viewport-y <=> UiData.scroll-settings;
         x: 0px; width: parent.width + Theme.content-gap;
         VerticalLayout {

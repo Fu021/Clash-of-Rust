@@ -24,6 +24,12 @@ export component Preview inherits AppWindow {
         UiData.modal-description = root.dialog == 1 ? "将删除“备用订阅”及其配置文件。此操作无法撤销。" : root.dialog == 2 ? "尚有未应用的修改。放弃后将恢复已保存的规则。" : root.dialog == 3 ? "将固定当前节点，启用 TUN、代理 DNS、广泛规则与实时拦截。共享服务可能影响其他应用，关闭后恢复原设置。" : root.dialog == 6 ? "检测结果：确认可用\n识别地区：德国\n响应时间：128 ms\n\n以下为固定演示数据，不代表真实网络检测。" : "";
         UiData.modal-accept = root.dialog == 1 ? "删除订阅" : root.dialog == 2 ? "放弃修改" : root.dialog == 3 ? "开启保护" : root.dialog == 10 ? "完成" : root.dialog == 6 || root.dialog == 11 ? "" : "保存";
         UiData.modal-danger = root.dialog == 1 || root.dialog == 2;
+        if root.dialog == 13 {
+            UiData.modal-title = "日志详情";
+            UiData.modal-description = "[内核] time=\"2026-10-23T16:30:34Z\" level=warning\n[TCP] dial DIRECT example.test:443\n连接失败：connection timed out\n\n可在此查看完整日志，并使用下方按钮复制全文。";
+            UiData.modal-copy = UiData.modal-description;
+            UiData.modal-accept = "";
+        }
         if root.dialog == 12 {
             UiData.modal = 1;
             UiData.modal-title = "安装预发布版 0.6.4-dev.1？";
@@ -40,7 +46,7 @@ export component Preview inherits AppWindow {
     }
     init => {
         Motion.enabled = root.preview-motion;
-        UiData.version = "0.6.3-dev.1";
+        UiData.version = "0.6.3";
         UiData.ready = true; UiData.running = true;
         UiData.profile = "我的订阅"; UiData.node = "德国 01 · IPv6";
         UiData.download-rate = "1.24 MiB/s"; UiData.upload-rate = "28.6 KiB/s";

@@ -289,7 +289,21 @@ pub fn enable(journal_path: &Path, port: u16) -> Result<()> {
     Ok(())
 }
 
-/// Restore only if the current configuration is still exactly the one we wrote.
+fn owns(current: &ProxyState, owned: &ProxyState) -> bool {
+    if current == owned {
+        return true;
+    }
+    #[cfg(target_os = "linux")]
+    {
+        linux::owns_legacy(current, owned)
+    }
+    #[cfg(not(target_os = "linux"))]
+    {
+        false
+    }
+}
+
+/// Restore only if the managed settings are still exactly the ones we wrote.
 /// A different client's later changes must not be overwritten.
 pub fn restore(journal_path: &Path) -> Result<bool> {
     if !journal_path.exists() {
@@ -298,7 +312,7 @@ pub fn restore(journal_path: &Path) -> Result<bool> {
     let journal: Journal =
         serde_json::from_slice(&std::fs::read(journal_path)?).context("代理恢复记录损坏")?;
     let current = native::read()?;
-    let restored = current == journal.owned;
+    let restored = owns(&current, &journal.owned);
     if restored {
         #[cfg(target_os = "macos")]
         native::restore_write(&journal.original)?;
@@ -314,7 +328,7 @@ pub fn is_owned(journal_path: &Path) -> Result<bool> {
         return Ok(false);
     }
     let journal: Journal = serde_json::from_slice(&std::fs::read(journal_path)?)?;
-    Ok(native::read()? == journal.owned)
+    Ok(owns(&native::read()?, &journal.owned))
 }
 
 #[cfg(target_os = "macos")]

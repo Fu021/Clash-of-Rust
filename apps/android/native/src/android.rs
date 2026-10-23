@@ -2125,10 +2125,12 @@ fn apply(ui: &AndroidWindow, p: Projection) {
         );
         if rules {
             data.set_rule_page(label.into());
+            data.set_rule_page_index(page as i32);
             data.set_rule_previous(page > 0);
             data.set_rule_next((page + 1) * size < count);
         } else {
             data.set_connection_page(label.into());
+            data.set_connection_page_index(page as i32);
             data.set_connection_previous(page > 0);
             data.set_connection_next((page + 1) * size < count);
         }

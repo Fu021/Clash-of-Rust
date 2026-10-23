@@ -39,6 +39,7 @@ DIALOGS = {
     "accent-picker": ("强调色选择", "settings", 10),
     "connection-details": ("连接详情", "connections", 11),
     "preview-update": ("预发布安装确认", "settings", 12),
+    "log-detail": ("日志全文", "logs", 13),
 }
 
 

@@ -7,7 +7,7 @@ import { MText, MSmall, MHeading, MParagraph, MCard, MButton, MRow, MDivider, MF
 export component MobileDetails inherits PageSurface {
     motion-revision: MobileView.detail;
     VerticalLayout { spacing: MobileTypography.gap;
-        MScroll { VerticalLayout { width: root.width; alignment: start; spacing: MobileTypography.gap; padding-bottom: MobileTypography.padding;
+        MScroll { content-key: MobileView.detail + "/" + MobileView.selected-id + "/" + MobileView.category + "/" + MobileView.site-status + "/" + MobileView.log-message; VerticalLayout { width: root.width; alignment: start; spacing: MobileTypography.gap; padding-bottom: MobileTypography.padding;
             if MobileView.detail == 5: MCard {
                 for row[i] in MobileData.connection-details: VerticalLayout { spacing: MobileTypography.small-gap;
                     MSmall { text: row.label; }

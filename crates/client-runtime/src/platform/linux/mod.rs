@@ -74,13 +74,15 @@ pub fn description() -> &'static str {
     "Linux GNOME / KDE 原生系统代理"
 }
 
-fn keys() -> [&'static str; 7] {
+fn keys() -> [&'static str; 9] {
     [
         "org.gnome.system.proxy|mode",
         "org.gnome.system.proxy.http|host",
         "org.gnome.system.proxy.http|port",
         "org.gnome.system.proxy.https|host",
         "org.gnome.system.proxy.https|port",
+        "org.gnome.system.proxy.socks|host",
+        "org.gnome.system.proxy.socks|port",
         "org.gnome.system.proxy|ignore-hosts",
         "org.gnome.system.proxy|use-same-proxy",
     ]
@@ -116,6 +118,8 @@ pub fn desired(port: u16) -> ProxyState {
         port.to_string(),
         "'127.0.0.1'".into(),
         port.to_string(),
+        "'127.0.0.1'".into(),
+        port.to_string(),
         "['localhost', '127.0.0.0/8', '::1']".into(),
         "false".into(),
     ];
@@ -124,6 +128,49 @@ pub fn desired(port: u16) -> ProxyState {
         .zip(values)
         .map(|(key, value)| (key.into(), Some(ProxyValue::Text(value))))
         .collect()
+}
+
+// Older GNOME journals did not own SOCKS. Restore exactly their seven keys,
+// leaving the previously unmanaged SOCKS settings alone. A changed managed key
+// still means ownership was lost to the user or another client.
+pub(super) fn owns_legacy(current: &ProxyState, owned: &ProxyState) -> bool {
+    current.len() == keys().len()
+        && owned.len() == keys().len() - 2
+        && keys().iter().all(|key| current.contains_key(*key))
+        && keys()
+            .into_iter()
+            .filter(|key| !key.starts_with("org.gnome.system.proxy.socks|"))
+            .all(|key| owned.contains_key(key) && current.get(key) == owned.get(key))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn legacy_gnome_ownership_ignores_only_previously_unmanaged_socks() {
+        let current: ProxyState = keys()
+            .into_iter()
+            .map(|key| (key.into(), Some(ProxyValue::Text("original".into()))))
+            .collect();
+        let mut legacy = current.clone();
+        legacy.retain(|key, _| !key.starts_with("org.gnome.system.proxy.socks|"));
+        assert!(owns_legacy(&current, &legacy));
+        let mut changed_socks = current.clone();
+        changed_socks.insert(
+            "org.gnome.system.proxy.socks|port".into(),
+            Some(ProxyValue::Text("7896".into())),
+        );
+        assert!(owns_legacy(&changed_socks, &legacy));
+        legacy.insert(
+            "org.gnome.system.proxy.http|port".into(),
+            Some(ProxyValue::Text("external-change".into())),
+        );
+        assert!(!owns_legacy(&current, &legacy));
+        legacy.remove("org.gnome.system.proxy|mode");
+        assert!(!owns_legacy(&current, &legacy));
+        assert!(!owns_legacy(&current, &ProxyState::new()));
+    }
 }
 
 pub fn write(state: &ProxyState) -> Result<()> {

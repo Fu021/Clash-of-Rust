@@ -1,10 +1,9 @@
 import { PageSurface, Disclosure, Entrance } from "../../components/motion.slint";
 import { MobileTypography } from "typography.slint";
-import { ListView } from "std-widgets.slint";
 import { Theme } from "../../theme/palette.slint";
 import { NodeItem, CategoryItem, ConnectionItem, RuleItem } from "../../state.slint";
 import { MobileData, MobileView, MobileActions, MobileIntent } from "state.slint";
-import { MText, MSmall, MHeading, MParagraph, MCard, MButton, MRow, MDivider, MSwitch, MField, MSelect, MTag, MNav, MScroll, MProgress, MCopyButton } from "controls.slint";
+import { MText, MSmall, MHeading, MParagraph, MCard, MButton, MRow, MDivider, MSwitch, MField, MSelect, MTag, MNav, MScroll, MList, MProgress, MCopyButton } from "controls.slint";
 
 component StatusCard inherits MCard {
     selected: MobileData.vpn-connected;
@@ -90,7 +89,7 @@ component NodeCard inherits MCard {
     }
 }
 export component MobileProxies inherits PageSurface {
-    MScroll { VerticalLayout { alignment: start; spacing: MobileTypography.gap; padding-bottom: MobileTypography.padding;
+    MScroll { content-key: MobileView.query + "/" + MobileView.node-sort; VerticalLayout { alignment: start; spacing: MobileTypography.gap; padding-bottom: MobileTypography.padding;
         MField { placeholder: "搜索节点或策略组"; text <=> MobileView.query; edited(value) => { MobileActions.request(MobileIntent.query, "proxies", value); } }
         HorizontalLayout { spacing: MobileTypography.small-gap;
             MSelect { options: ["延迟从低到高", "延迟从高到低", "名称排序"]; value: self.options[MobileView.node-sort];
@@ -193,7 +192,7 @@ export component MobileConnections inherits PageSurface {
     property <bool> compact: root.height < 420px;
     if !root.compact: VerticalLayout { spacing: MobileTypography.gap;
         ConnectionsToolbar {  }
-        ListView { min-height: 0px; vertical-stretch: 1;
+        MList { content-key: MobileData.connection-page-index + "/" + MobileView.query + "/" + MobileView.connection-sort; min-height: 0px; vertical-stretch: 1;
             for entry in MobileData.connections: Rectangle { height: card.height + 12px;
                 card := ConnectionsRow { x: 0px; y: 0px; width: parent.width; item: entry; }
             }
@@ -202,7 +201,7 @@ export component MobileConnections inherits PageSurface {
     }
     // A short landscape window scrolls the toolbar and footer with the rows.
     // A single virtual list keeps every control reachable without nested lists.
-    if root.compact: ListView {
+    if root.compact: MList { content-key: MobileData.connection-page-index + "/" + MobileView.query + "/" + MobileView.connection-sort;
         for index in MobileData.connections.length + 2: Rectangle {
             height: content.preferred-height + 12px;
             content := VerticalLayout { alignment: start; spacing: 0px;
@@ -284,7 +283,7 @@ export component MobileRules inherits PageSurface {
     property <bool> compact: root.height < 520px || Theme.text-scale > 1.25 || (MobileView.rule-selected && MobileView.shortcuts-open);
     if !root.compact: VerticalLayout { spacing: MobileTypography.gap;
         RulesToolbar { available-height: root.height; }
-        ListView { min-height: 0px; vertical-stretch: 1;
+        MList { content-key: MobileData.rule-page-index + "/" + MobileView.query + "/" + MobileData.rule-profile; min-height: 0px; vertical-stretch: 1;
             for entry in MobileData.rules: Rectangle { height: card.height + 12px;
                 card := RulesRow { x: 0px; y: 0px; width: parent.width; item: entry; }
             }
@@ -293,7 +292,7 @@ export component MobileRules inherits PageSurface {
     }
     // A short landscape window scrolls the toolbar and footer with the rows.
     // A single virtual list keeps every control reachable without nested lists.
-    if root.compact: ListView {
+    if root.compact: MList { content-key: MobileData.rule-page-index + "/" + MobileView.query + "/" + MobileData.rule-profile;
         for index in MobileData.rules.length + 2: Rectangle {
             height: content.preferred-height + 12px;
             content := VerticalLayout { alignment: start; spacing: 0px;
@@ -315,7 +314,7 @@ export component MobileLogs inherits PageSurface {
             MButton { text: "导出"; width: max(68px, MobileTypography.font-size(15) * 2 + 16px); horizontal-stretch: 0; clicked => { MobileActions.request(MobileIntent.export-logs, "", ""); } }
             MButton { text: "清空"; width: max(68px, MobileTypography.font-size(15) * 2 + 16px); horizontal-stretch: 0; clicked => { MobileActions.request(MobileIntent.clear-logs, "", ""); } }
         }
-        ListView { min-height: 0px; vertical-stretch: 1;
+        MList { content-key: MobileView.query + "/" + MobileView.log-level; min-height: 0px; vertical-stretch: 1;
         for entry in MobileData.logs: Rectangle { height: card.height + 12px;
         card := MCard { x: 0px; y: 0px; width: parent.width;
             interactive: true; clicked => { MobileView.log-message = entry.message; MobileView.detail = 10; }

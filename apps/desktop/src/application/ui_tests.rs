@@ -971,6 +971,150 @@ fn log_rows_open_full_text_copy_without_opening_and_filter_by_source_level() {
     window.hide().unwrap();
 }
 
+#[test]
+fn a_new_log_detail_resets_the_previous_dialog_scroll_and_shows_what_it_copies() {
+    ui_testing::initialize(950, 700);
+    let mut app = fixture(Page::Logs);
+    let window = AppWindow::new().unwrap();
+    window
+        .global::<clash_client_ui::Motion>()
+        .set_enabled(false);
+    let data = window.global::<UiData>();
+    let mut models = ViewModels::default();
+    models.attach(&data);
+    let short = "[info] short diagnostic fixture";
+    let _ = app.ui_intent(Intent::LogDetail, short, "");
+    app.present_slint(&data, &mut models);
+    let events = pointer_events(&window);
+    window.show().unwrap();
+    let reference = motion_frame(&window, 0);
+    let long = format!("[warning] {}", "long.example.test ".repeat(600));
+    let _ = app.ui_intent(Intent::LogDetail, &long, "");
+    app.present_slint(&data, &mut models);
+    motion_frame(&window, 0);
+    data.set_scroll_dialog(-1000.);
+    motion_frame(&window, 0);
+    let _ = app.ui_intent(Intent::CancelConfirm, "", "");
+    app.present_slint(&data, &mut models);
+    motion_frame(&window, 0);
+    let _ = app.ui_intent(Intent::LogDetail, short, "");
+    app.present_slint(&data, &mut models);
+    let reopened = motion_frame(&window, 0);
+    assert_eq!(data.get_scroll_dialog(), 0.);
+    assert_eq!(
+        reference, reopened,
+        "the short log must remain visibly identical to a fresh detail"
+    );
+    ui_testing::click(window.window(), 194., 392.);
+    assert_eq!(
+        events.borrow().last(),
+        Some(&(Intent::Copy, short.into(), "".into()))
+    );
+    window.hide().unwrap();
+}
+
+#[test]
+fn list_navigation_resets_scroll_but_background_refresh_preserves_reading_position() {
+    use clash_client_ui::LogItem;
+    ui_testing::initialize(950, 700);
+    let mut app = fixture(Page::Logs);
+    let window = AppWindow::new().unwrap();
+    window
+        .global::<clash_client_ui::Motion>()
+        .set_enabled(false);
+    let data = window.global::<UiData>();
+    let mut models = ViewModels::default();
+    models.attach(&data);
+    app.present_slint(&data, &mut models);
+    let row = LogItem {
+        level: "INFO".into(),
+        message: "fixture log".into(),
+        ..Default::default()
+    };
+    let rows = std::rc::Rc::new(slint::VecModel::from(vec![row.clone(); 60]));
+    data.set_logs(rows.clone().into());
+    window.show().unwrap();
+    motion_frame(&window, 0);
+    for change in 0..3 {
+        data.set_scroll_logs(-200.);
+        motion_frame(&window, 0);
+        assert_eq!(data.get_scroll_logs(), -200.);
+        rows.set_row_data(
+            0,
+            LogItem {
+                message: "refreshed log".into(),
+                ..row.clone()
+            },
+        );
+        motion_frame(&window, 0);
+        assert_eq!(
+            data.get_scroll_logs(),
+            -200.,
+            "polling must not jump to the top"
+        );
+        match change {
+            0 => data.set_page_offset(60),
+            1 => data.set_query("fixture".into()),
+            _ => data.set_log_level("WARN".into()),
+        }
+        motion_frame(&window, 0);
+        assert_eq!(data.get_scroll_logs(), 0.);
+    }
+    data.set_scroll_logs(-1000.);
+    motion_frame(&window, 0);
+    rows.set_vec(vec![row]);
+    motion_frame(&window, 0);
+    assert_eq!(
+        data.get_scroll_logs(),
+        0.,
+        "a shorter list must remain visible"
+    );
+    window.hide().unwrap();
+}
+
+#[test]
+fn claude_risk_pages_and_categories_start_at_the_top() {
+    use clash_client_ui::ReportItem;
+    ui_testing::initialize(950, 700);
+    let mut app = fixture(Page::Claude);
+    let window = AppWindow::new().unwrap();
+    window
+        .global::<clash_client_ui::Motion>()
+        .set_enabled(false);
+    let data = window.global::<UiData>();
+    let mut models = ViewModels::default();
+    models.attach(&data);
+    app.present_slint(&data, &mut models);
+    data.set_claude_filter(1);
+    data.set_claude_results(
+        std::rc::Rc::new(slint::VecModel::from(vec![
+            ReportItem {
+                title: "Fixture risk".into(),
+                value: "Risk details".into(),
+                detail: "Detailed diagnostic evidence".into(),
+                tone: 3,
+                ..Default::default()
+            };
+            30
+        ]))
+        .into(),
+    );
+    window.show().unwrap();
+    motion_frame(&window, 0);
+    data.set_scroll_claude(-300.);
+    motion_frame(&window, 0);
+    assert_eq!(data.get_scroll_claude(), -300.);
+    data.set_claude_result_page(1);
+    motion_frame(&window, 0);
+    assert_eq!(data.get_scroll_claude(), 0.);
+    data.set_scroll_claude(-300.);
+    motion_frame(&window, 0);
+    data.set_claude_filter(2);
+    motion_frame(&window, 0);
+    assert_eq!(data.get_scroll_claude(), 0.);
+    window.hide().unwrap();
+}
+
 fn motion_frame(window: &AppWindow, milliseconds: u64) -> Vec<u8> {
     // Evaluate newly retargeted properties before moving the test clock.
     slint::platform::update_timers_and_animations();

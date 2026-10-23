@@ -69,6 +69,45 @@ fn free_port() -> u16 {
     panic!("could not allocate a port available for both TCP and UDP: {last_error:?}")
 }
 
+fn assert_system_proxy_ports(store: &Store, port: u16) {
+    use clash_of_rust::platform::{self, ProxyState, ProxyValue};
+    let path = store.root.join("system-proxy.json");
+    assert!(
+        platform::is_owned(&path).unwrap(),
+        "native settings must match the lease"
+    );
+    let journal: serde_json::Value = serde_json::from_slice(&std::fs::read(path).unwrap()).unwrap();
+    let owned: ProxyState = serde_json::from_value(journal["owned"].clone()).unwrap();
+    #[cfg(target_os = "linux")]
+    for protocol in ["http", "https", "socks"] {
+        assert_eq!(
+            owned[&format!("org.gnome.system.proxy.{protocol}|host")],
+            Some(ProxyValue::Text("'127.0.0.1'".into()))
+        );
+        assert_eq!(
+            owned[&format!("org.gnome.system.proxy.{protocol}|port")],
+            Some(ProxyValue::Text(port.to_string()))
+        );
+    }
+    #[cfg(windows)]
+    assert_eq!(
+        owned["ProxyServer"],
+        Some(ProxyValue::Text(format!("127.0.0.1:{port}")))
+    );
+    #[cfg(target_os = "macos")]
+    for service in owned.values() {
+        let Some(ProxyValue::Text(text)) = service else {
+            panic!("invalid service proxy")
+        };
+        let value: serde_json::Value = serde_json::from_str(text).unwrap();
+        for protocol in ["HTTP", "HTTPS", "SOCKS"] {
+            assert_eq!(value[format!("{protocol}Enable")], 1);
+            assert_eq!(value[format!("{protocol}Proxy")], "127.0.0.1");
+            assert_eq!(value[format!("{protocol}Port")], port);
+        }
+    }
+}
+
 #[tokio::test]
 #[ignore = "Requires the disposable native proxy/TUN CI wrapper"]
 async fn basic_system_proxy_and_tun() {
@@ -194,7 +233,7 @@ async fn basic_system_proxy_and_tun() {
     dns_server.await.unwrap();
     println!("PASS: real mihomo DNS API returns IPv4 and IPv6 for connection details");
     engine.select_proxy_mode(ProxyMode::System).await.unwrap();
-    assert!(platform::is_owned(&store.root.join("system-proxy.json")).unwrap());
+    assert_system_proxy_ports(&store, mixed_port);
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let target = listener.local_addr().unwrap();
     let server = tokio::spawn(async move {
@@ -225,6 +264,42 @@ async fn basic_system_proxy_and_tun() {
     );
     server.await.unwrap();
     println!("PASS: native system proxy and HTTP forwarding");
+    mixed_port = free_port();
+    while mixed_port == engine.settings.controller_port {
+        mixed_port = free_port();
+    }
+    engine.save_ports(mixed_port).await.unwrap();
+    assert_system_proxy_ports(&store, mixed_port);
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let target = listener.local_addr().unwrap();
+    let server = tokio::spawn(async move {
+        let (mut socket, _) = listener.accept().await.unwrap();
+        let mut request = [0; 4096];
+        assert!(socket.read(&mut request).await.unwrap() > 0);
+        socket
+            .write_all(b"HTTP/1.1 200 OK\r\nContent-Length: 8\r\nConnection: close\r\n\r\nsocks-ok")
+            .await
+            .unwrap();
+    });
+    let socks = reqwest::Client::builder()
+        .no_proxy()
+        .proxy(reqwest::Proxy::all(format!("socks5h://127.0.0.1:{mixed_port}")).unwrap())
+        .timeout(Duration::from_secs(5))
+        .build()
+        .unwrap();
+    assert_eq!(
+        socks
+            .get(format!("http://{target}/"))
+            .send()
+            .await
+            .unwrap()
+            .text()
+            .await
+            .unwrap(),
+        "socks-ok"
+    );
+    server.await.unwrap();
+    println!("PASS: changing mixed port updates native proxy endpoints and SOCKS forwards traffic");
     engine.select_proxy_mode(ProxyMode::Tun).await.unwrap();
     let state = engine.poll(Scope::Home).await.unwrap();
     assert!(state.running && state.tun && !state.system_proxy);
