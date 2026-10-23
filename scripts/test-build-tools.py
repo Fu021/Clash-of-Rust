@@ -278,10 +278,50 @@ Private_Clean: 2 kB
                 restored.update(key=config['key'])
                 self.assertTrue(cache_shards.restore(restored,False))
                 self.assertEqual((target/'release/deps/dep5.rlib').read_bytes(),b'updated-dependency')
+                # LRU eviction can remove any shard while the index and a
+                # build-script success marker still exist. Cargo does not
+                # validate arbitrary generated OUT_DIR files on its own.
+                marker=target/'release/.fingerprint/serde_core-hash/run-build-script-build-script-build'
+                marker.parent.mkdir(parents=True)
+                marker.write_bytes(b'cached success')
+                shard=next(s for s in restored['shard_index']['shards'] if s)
+                blob=store.path(shard['group'],shard['id'])
+                valid=blob.read_bytes()
+                blob.unlink()
+                self.assertTrue(cache_shards.restore(restored,False))
+                self.assertFalse(restored['hit'])
+                self.assertTrue(restored['mirror_required'])
+                self.assertFalse(marker.parent.exists())
+                blob.write_bytes(valid)
                 shard=next(s for s in restored['shard_index']['shards'] if s)
                 store.path(shard['group'],shard['id']).write_bytes(b'corrupt')
                 with self.assertRaisesRegex(ValueError,'Incomplete|checksum'):
                     cache_shards.restore(restored,False)
+
+    def test_partial_rust_cache_invalidates_only_native_and_cross_build_script_runs(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root=Path(temporary)
+            profiles=[root/'target/release',root/'target/aarch64-linux-android/release']
+            markers=[]
+            for profile in profiles:
+                for layout in ['serde_core-hash', 'serde_core/another-hash']:
+                    marker=profile/'.fingerprint'/layout/'run-build-script-build-script-build.json'
+                    marker.parent.mkdir(parents=True)
+                    marker.write_text('{"cached":"success"}')
+                    markers.append(marker)
+                for name in ['.fingerprint/library-hash/lib-library',
+                             'build/serde_core-hash/build-script-build',
+                             'deps/library.rlib']:
+                    path=profile/name;path.parent.mkdir(parents=True,exist_ok=True)
+                    path.write_bytes(b'reusable compilation')
+            cache_shards.invalidate_build_scripts([root/'target'])
+            for marker in markers:
+                self.assertFalse(marker.parent.exists())
+            for profile in profiles:
+                for name in ['.fingerprint/library-hash/lib-library',
+                             'build/serde_core-hash/build-script-build',
+                             'deps/library.rlib']:
+                    self.assertEqual((profile/name).read_bytes(),b'reusable compilation')
 
     def test_rust_shards_reject_indexes_pointing_outside_their_cache_group(self):
         record={'schema':local_cache.SCHEMA,'group':'rust/linux-x64/p00','key':'compiler-object',
