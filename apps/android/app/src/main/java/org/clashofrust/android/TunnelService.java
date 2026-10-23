@@ -145,15 +145,18 @@ public final class TunnelService extends VpnService {
                 if (replacement == null) throw new IllegalStateException("系统拒绝建立 VPN");
                 established = true;
                 connected = false;
+                // establish() returns before ConnectivityService/netd finishes
+                // moving the existing VPN Network to the new interface. Do
+                // not start its packet reader against that transitional device.
+                // gVisor stops its reader after a device read failure; publishing
+                // routes afterwards does not restart that reader.
+                String readyInterface=routes.await(() -> stopping || !current(this, request));
                 if (previous != null) Mobile.stopTun();
                 android.util.Log.i("ClashOfRust", "VPN established; starting embedded TUN");
                 Mobile.startTun(replacement.getFd(), ipv6);
                 descriptor = replacement;
                 replacement = null;
-                // The VPN Network object can remain unchanged while netd is
-                // still moving its routes. Publish readiness only after the
-                // new interface arrives through the ordered network callback.
-                interfaceName=routes.await(() -> stopping || !current(this, request));
+                interfaceName=readyInterface;
                 closeDescriptor(previous);
                 previous = null;
                 android.util.Log.i("ClashOfRust", "VPN routing ready on "+interfaceName);

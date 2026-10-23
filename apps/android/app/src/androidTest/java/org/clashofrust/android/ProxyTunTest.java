@@ -325,9 +325,25 @@ public class ProxyTunTest {
         ConnectivityManager manager=InstrumentationRegistry.getInstrumentation().getTargetContext()
             .getSystemService(ConnectivityManager.class);
         Network current=manager.getActiveNetwork();
-        return "active="+current+"; capabilities="+manager.getNetworkCapabilities(current)
+        StringBuilder details=new StringBuilder("active="+current+"; capabilities="+manager.getNetworkCapabilities(current)
             +"; links="+manager.getLinkProperties(current)+"; VPN="+TunnelService.connected()
-            +"; generation="+TunnelService.generation()+"; error="+TunnelService.error();
+            +"; generation="+TunnelService.generation()+"; error="+TunnelService.error());
+        // Capture the data plane too: a VPN capability alone cannot establish
+        // whether packets reached the device or its native reader still owns it.
+        for (String command:new String[]{"ip -s link show","ip rule show","ip route show table all"}) {
+            try {details.append('\n').append(command).append('\n').append(shell(command));}
+            catch (Exception error) {details.append(" diagnostics unavailable: ").append(error);}
+        }
+        try (java.nio.file.DirectoryStream<java.nio.file.Path> files=java.nio.file.Files.newDirectoryStream(
+                java.nio.file.Paths.get("/proc/self/fdinfo"))) {
+            for (java.nio.file.Path file:files) {
+                try {
+                    String info=new String(java.nio.file.Files.readAllBytes(file),StandardCharsets.UTF_8);
+                    if (info.contains("iff:")) details.append("\nTUN fd ").append(file.getFileName()).append('\n').append(info);
+                } catch (IOException closed) { /* Descriptors can retire during enumeration. */ }
+            }
+        } catch (IOException error) {details.append(" fd diagnostics unavailable: ").append(error);}
+        return details.toString();
     }
     private static void awaitDirectRecovery(ConnectivityManager manager) throws Exception {
         long deadline=SystemClock.elapsedRealtime()+15000;
@@ -438,7 +454,6 @@ public class ProxyTunTest {
                 assertEquals("cor-android-network-ok", read(new URL("http://android-tun.test:18081/probe"),java.net.Proxy.NO_PROXY,null));
                 shell("am start -W -n org.clashofrust.android/.MainActivity");
                 await("VPN Activity did not resume",()->inStage(androidx.test.runner.lifecycle.Stage.RESUMED,true));
-                long previousGeneration = TunnelService.generation();
                 java.util.concurrent.atomic.AtomicBoolean monitoring=new java.util.concurrent.atomic.AtomicBoolean(true);
                 java.util.concurrent.atomic.AtomicBoolean bypassed=new java.util.concurrent.atomic.AtomicBoolean();
                 java.util.concurrent.atomic.AtomicReference<Throwable> samplingError=new java.util.concurrent.atomic.AtomicReference<>();
@@ -455,10 +470,13 @@ public class ProxyTunTest {
                 },"vpn-route-check");
                 routes.setDaemon(true); routes.start();
                 try {
-                    TunnelService.start(context,true);
-                    await("VPN did not reconfigure",()->TunnelService.connected() && TunnelService.generation()>previousGeneration);
-                    await("Android did not restore VPN routing after reconfigure",()->vpnActive(connectivity));
-                    tunCarriesSocket(controller,secret);
+                    for (int handover=0;handover<5;handover++) {
+                        long previousGeneration = TunnelService.generation();
+                        TunnelService.start(context,true);
+                        await("VPN did not reconfigure",()->TunnelService.connected() && TunnelService.generation()>previousGeneration);
+                        await("Android did not restore VPN routing after reconfigure",()->vpnActive(connectivity));
+                        tunCarriesSocket(controller,secret);
+                    }
                 } finally { monitoring.set(false); routes.join(1000); }
                 assertFalse("VPN route monitor did not finish",routes.isAlive());
                 assertNull("Could not monitor VPN handover: "+samplingError.get(),samplingError.get());
