@@ -96,6 +96,8 @@ Cargo workspace 分为共享业务（`crates/client-core`）、共享原生运�
 
 历史提交与 GitHub Actions 常见失败模式、排查顺序和任务收尾要求统一记录在 [Agent 失败复盘与防回归清单](docs/agent-failure-playbook.md)。开始修复或提交 PR 前先核对相关章节，任务结束时更新“最近复盘”。
 
+构建、验证、缓存和打包脚本的入口与合并规则见 [脚本维护说明](scripts/README.md)；不要为单次操作复制新的包装脚本。
+
 安装 Slint Viewer 后可独立预览界面。资源受限时只做静态检查或最小单页预览，并把输出放到工作区外：
 
 ```sh
