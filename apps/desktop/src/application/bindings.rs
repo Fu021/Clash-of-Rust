@@ -477,6 +477,10 @@ impl DesktopHost {
             UiEvent::Geometry { metrics, view } => {
                 let dimensions = size(metrics.size);
                 let dark = metrics.system_dark;
+                let previous = &self.window.as_ref().unwrap().metrics;
+                let resized = previous.size != metrics.size
+                    || previous.maximized != metrics.maximized
+                    || previous.minimized != metrics.minimized;
                 self.window.as_mut().unwrap().metrics = metrics;
                 self.remember_view(view);
                 if self.app.system_dark != dark {
@@ -486,7 +490,11 @@ impl DesktopHost {
                         runtime::theme::Mode::Light
                     }));
                 }
-                self.message(Message::Window((id, window::Event::Resized(dimensions))));
+                // Moves and theme changes also report geometry. Do not turn
+                // them into another resize/minimum-size/presentation round trip.
+                if resized {
+                    self.message(Message::Window((id, window::Event::Resized(dimensions))));
+                }
             }
             UiEvent::Close(view) => {
                 self.remember_view(view);
@@ -731,8 +739,6 @@ impl native::Host for DesktopHost {
                 return;
             }
             window::Command::Show => wire::WindowCommand::Show,
-            window::Command::Focus => wire::WindowCommand::Focus,
-            window::Command::Minimize(v) => wire::WindowCommand::Minimize(v),
             window::Command::Maximize(v) => wire::WindowCommand::Maximize(v),
             window::Command::Resize(v) => wire::WindowCommand::Resize(wire_size(v)),
             window::Command::MinSize(v) => wire::WindowCommand::MinSize(v.map(wire_size)),

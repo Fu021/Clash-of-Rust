@@ -24,9 +24,7 @@ pub enum Event {
 pub enum Command {
     Destroy,
     Show,
-    Minimize(bool),
     Maximize(bool),
-    Focus,
     Resize(Size),
     MinSize(Option<Size>),
 }
@@ -64,14 +62,8 @@ pub fn show<T: Send + 'static>(id: Id) -> Task<T> {
 pub fn destroy<T: Send + 'static>(id: Id) -> Task<T> {
     command(id, Command::Destroy)
 }
-pub fn minimize<T: Send + 'static>(id: Id, value: bool) -> Task<T> {
-    command(id, Command::Minimize(value))
-}
 pub fn maximize<T: Send + 'static>(id: Id, value: bool) -> Task<T> {
     command(id, Command::Maximize(value))
-}
-pub fn gain_focus<T: Send + 'static>(id: Id) -> Task<T> {
-    command(id, Command::Focus)
 }
 pub fn resize<T: Send + 'static>(id: Id, value: Size) -> Task<T> {
     command(id, Command::Resize(value))

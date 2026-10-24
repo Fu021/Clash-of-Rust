@@ -13,6 +13,8 @@
 
 正式应用使用 winit 与软件渲染器，无需 WebView、Qt 或 GPU 渲染器。系统代理、TUN、托盘、Dock、自动更新与文件选择仍由桌面平台模块负责；共享业务库不依赖 Slint，Android 使用独立原生宿主，iOS 保留占位。
 
+桌面窗口进程在原生窗口建立后才报告就绪，统一处理显示、取消最小化、位置校正与激活；移动或主题变化不重复触发尺寸调整。Windows 的 `apps/desktop-ui/tests/window_reopen.rs` 使用真实界面进程检查关闭重开、屏幕外位置恢复、最小化/隐藏恢复与窗口消息响应，不启动内核或修改网络。
+
 ## 无需 Rust 编译的外观预览
 
 安装官方 **Slint Viewer 1.18.1** 到持久目录。当前环境为 `/home/coder/.local/bin/slint-viewer`，也可通过 `--viewer PATH` 指定。

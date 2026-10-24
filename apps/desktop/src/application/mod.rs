@@ -1627,12 +1627,7 @@ impl App {
             Message::ShowWindow(Some(id)) => {
                 self.visible = true;
                 let refresh = self.dispatch(Action::Refresh);
-                return Task::batch([
-                    desktop_runtime::window::show(id)
-                        .chain(desktop_runtime::window::minimize(id, false))
-                        .chain(desktop_runtime::window::gain_focus(id)),
-                    refresh,
-                ]);
+                return Task::batch([desktop_runtime::window::show(id), refresh]);
             }
             Message::ShowWindow(None) => {
                 return self.open_window();

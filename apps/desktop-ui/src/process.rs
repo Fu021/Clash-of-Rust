@@ -1,5 +1,5 @@
 //! The renderer owns no Engine, settings writer, notification sender or tray.
-use crate::{apply, apply_if_current, intent, repaint, view_state};
+use crate::{activation, apply, apply_if_current, intent, repaint, view_state};
 use clash_client_ui::{AppWindow, Motion, Theme, UiActions, UiData, models::ViewModels};
 use clash_desktop_protocol::{self as wire, HostPacket, UiEvent, WindowCommand};
 use slint::{
@@ -25,6 +25,27 @@ fn send(output: &mpsc::Sender<UiEvent>, event: UiEvent) {
     let _ = output.send(event);
 }
 fn metrics(window: &AppWindow) -> wire::Metrics {
+    // Event filters run before Slint updates its cached geometry. Read the
+    // native state to avoid echoing a stale size/DPI/minimized state to the host.
+    if let Some(metrics) = window.window().with_winit_window(|native| {
+        let size = native.inner_size().to_logical::<f32>(native.scale_factor());
+        wire::Metrics {
+            size: wire::Size {
+                width: size.width,
+                height: size.height,
+            },
+            available: available(window),
+            maximized: native.is_maximized() || native.fullscreen().is_some(),
+            minimized: native.is_minimized().unwrap_or(false),
+            system_dark: native
+                .theme()
+                .map_or(window.global::<UiData>().get_dark(), |theme| {
+                    theme == winit::window::Theme::Dark
+                }),
+        }
+    }) {
+        return metrics;
+    }
     let size = window
         .window()
         .size()
@@ -314,19 +335,8 @@ pub fn run() -> anyhow::Result<()> {
             }
             EventResult::Propagate
         });
-    if visible {
-        window.show()?;
-        view_state::ensure_reachable(&window);
-    }
-    if view_ready && let Some(state) = &view {
-        view_state::restore(state, &window);
-    }
-    let opened = UiEvent::Opened {
-        protocol: wire::PROTOCOL,
-        version: clash_client_core::VERSION.into(),
-        metrics: metrics(&window),
-        preserve_native_state,
-    };
+    let initial_view = if view_ready { view.clone() } else { None };
+    let weak = window.as_weak();
     FRONTEND.with(|slot| {
         *slot.borrow_mut() = Some(Frontend {
             window,
@@ -336,7 +346,31 @@ pub fn run() -> anyhow::Result<()> {
             revision,
         })
     });
-    send(&output, opened);
+    let opened = output.clone();
+    slint::spawn_local(async move {
+        let Some(window) = weak.upgrade() else {
+            return;
+        };
+        if visible && let Err(error) = activation::show(&window).await {
+            send(&opened, UiEvent::Error(format!("无法显示窗口：{error}")));
+            let _ = slint::quit_event_loop();
+            return;
+        }
+        if let Some(state) = &initial_view {
+            view_state::restore(state, &window);
+        }
+        // The host must not resize/focus a window using provisional metrics
+        // from before its native handle and DPI have been initialized.
+        send(
+            &opened,
+            UiEvent::Opened {
+                protocol: wire::PROTOCOL,
+                version: clash_client_core::VERSION.into(),
+                metrics: metrics(&window),
+                preserve_native_state,
+            },
+        );
+    })?;
     std::thread::spawn(move || {
         let mut stdin = io::stdin();
         loop {
@@ -410,15 +444,22 @@ fn packet(bytes: &[u8]) {
                     let _ = front.window.hide();
                     let _ = slint::quit_event_loop();
                 }
-                WindowCommand::Show => {
-                    let _ = front.window.show();
-                    repaint::invalidate(front.window.window());
-                }
-                WindowCommand::Focus => {
-                    front
-                        .window
-                        .window()
-                        .with_winit_window(|w| w.focus_window());
+                WindowCommand::Show | WindowCommand::Focus => {
+                    let weak = front.window.as_weak();
+                    let output = front.output.clone();
+                    if let Err(error) = slint::spawn_local(async move {
+                        let Some(window) = weak.upgrade() else {
+                            return;
+                        };
+                        if let Err(error) = activation::show(&window).await {
+                            send(&output, UiEvent::Error(format!("无法显示窗口：{error}")));
+                        }
+                    }) {
+                        send(
+                            &front.output,
+                            UiEvent::Error(format!("无法唤醒窗口：{error}")),
+                        );
+                    }
                 }
                 WindowCommand::Minimize(value) => front.window.window().set_minimized(value),
                 WindowCommand::Maximize(value) => front.window.window().set_maximized(value),
