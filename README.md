@@ -92,9 +92,9 @@ cargo build -p clash-of-rust -p clash-desktop-ui -p clash-cli --bins --locked
 
 ## 开发与发布
 
-Cargo workspace 分为共享业务（`crates/client-core`）、共享原生运行层（`crates/client-runtime`）、Slint 界面（`crates/client-ui`）、桌面后台宿主（`apps/desktop`）、可独立退出的界面进程（`apps/desktop-ui`）与命令行（`apps/cli`）。Android 使用独立 Slint 原生宿主与系统 VPN，并通过移动桥接（`crates/mobile-ffi`）复用共享业务，见 [Android 开发说明](apps/android/README.md)；iOS 保留独立界面与宿主占位。
+共享业务、桌面宿主、独立窗口、CLI 与移动桥接的模块职责和验证要求见 [开发与验证](docs/development.md)；Android 工具链与原生宿主见 [Android 开发说明](apps/android/README.md)，iOS 保留独立界面与宿主占位。
 
-历史提交与 GitHub Actions 常见失败模式、排查顺序和任务收尾要求统一记录在 [Agent 失败复盘与防回归清单](docs/agent-failure-playbook.md)。开始修复或提交 PR 前先核对相关章节，任务结束时更新“最近复盘”。
+历史提交与 GitHub Actions 常见失败模式按主题整理在 [Agent 失败复盘目录](docs/agent-failures/README.md)。按任务查相关主题，结束时更新[最近复盘](docs/agent-failures/reviews.md)。
 
 构建、验证、缓存和打包脚本的入口与合并规则见 [脚本维护说明](scripts/README.md)；不要为单次操作复制新的包装脚本。
 

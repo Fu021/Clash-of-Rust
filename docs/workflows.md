@@ -8,7 +8,7 @@
 
 六个平台为 Windows x64 / ARM64、Linux x64 / ARM64、macOS Intel / Apple Silicon。Linux 安装包支持 Debian/Ubuntu，Ubuntu 仅支持 22.04 及以上；Ubuntu 最新版兼容验证在发布工作流中执行。
 
-贡献者可使用本地工具链编译、Clippy、源码单元测试与打包，也可使用 Actions；无需为了本地验证而推送代码。正式发布继续复用成功 CI 的产物，真实系统代理/TUN 自动化测试在可丢弃的 Actions 环境中执行。界面可使用 `scripts/preview-slint.py` 直接预览正式 Slint 组件，不依赖桌面程序编译；弃用工作流删除文件后，也需在 GitHub 上禁用。资源不足（例如 1 核 CPU、约 1 GiB 内存）的 AI 执行环境不得编译、测试或打包，只按[失败复盘文档](agent-failure-playbook.md)与[资源受限规则](../AGENTS.md#资源受限环境)做最小预览和收尾检查。
+贡献者可使用本地工具链编译、Clippy、源码单元测试与打包，也可使用 Actions；无需为了本地验证而推送代码。正式发布继续复用成功 CI 的产物，真实系统代理/TUN 自动化测试在可丢弃的 Actions 环境中执行。界面可使用 `scripts/preview-slint.py` 直接预览正式 Slint 组件，不依赖桌面程序编译；弃用工作流删除文件后，也需在 GitHub 上禁用。资源不足（例如 1 核 CPU、约 1 GiB 内存）的 AI 执行环境不得本地编译、测试或打包，只按[失败复盘索引](agent-failures/README.md)与[资源受限规则](../AGENTS.md#资源受限环境)做最小预览和收尾检查。
 
 各维护脚本的职责、必须保持独立进程的辅助程序以及合并/删除规则见[脚本维护说明](../scripts/README.md)。新增工作流入口前先确认能否扩展现有脚本，不重复实现缓存、产物校验或平台验证逻辑。
 
@@ -79,6 +79,8 @@ macOS 失败日志、系统与网络状态、崩溃报告保存在 `macos-ci-rep
 - `check_only`：勾选后完成打包与安装后验证，不创建或修改 Release；开发分支必须勾选。安装包在本次运行的 `package-{system}-{arch}` 附件中，无需下载到本地。
 
 流程固定到所选 CI 的提交与依赖快照，核对六种桌面平台及三种 Android ABI 的成功记录和产物身份，不重新编译，也不重新下载应用资源。过期或旧格式产物需要重新运行当前代码的 CI。
+
+从启动到最终核验完成，来源分支必须仍指向该 CI 的提交；`publish-release.py` 在前置解析和最终核验时都会检查分支头。即使只是文档改动，也应等本轮打包结束后再推送，避免 `Source branch has changed`。测试包以本次工作流固定的提交为准，后续提交需另做验证。
 
 1. 六个平台获取并校验已有程序，再生成 Windows EXE、Linux DEB、macOS DMG。
 2. Windows 验证安装、服务注册、普通用户代理/TUN、更新安装路径、卸载与用户文件保留，并扫描 Defender；PE 图标在打包阶段核验。
