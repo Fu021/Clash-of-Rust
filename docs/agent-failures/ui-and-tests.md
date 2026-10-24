@@ -34,6 +34,7 @@
 - **症状**：Android 连接、规则、日志页的计数正常，却只看到最后一条，且记录出现在正文中间；Pad 的分页和规则操作横向铺满并占两行。
 - **根因与修复**：Slint 1.18 按重复项直接父组件名 `ListView` 启用虚拟布局，封装名 `MList` 不被识别，重复项按普通元素重叠。保留原名并明确紧凑布局的内容原点；宽屏复用紧凑分页，规则提交与分页同排，侧栏按桌面分出“工具”。
 - **证据与防回归**：[正式列表](../../crates/client-ui/ui/mobile/shared/controls.slint)、[页面](../../crates/client-ui/ui/mobile/shared/pages.slint)与[软件窗口回归](../../crates/client-ui/tests/mobile_lists.rs)。回归验证多行滚动范围、不同颜色行的实际位置、删至一条仍顶部对齐，以及横向变宽后的不同行高。固定数据预览曾复现“4 条规则仅显示第 4 条”，修复后按序显示；外观检查不代表设备网络已验证。
+- 软件窗口的尺寸回归用 `preferred-width` / `preferred-height`，不要用固定宽高后再请求变宽；窗口约束会使宽区域的像素断言落到背景。先核对实际窗口尺寸，再验证重排，见 [CI 40108770502](https://github.com/Fu021/Clash-of-Rust/actions/runs/40108770502) 的 Linux ARM64 列表测试。
 
 ## 11. 测试稳定性与外部环境假设
 

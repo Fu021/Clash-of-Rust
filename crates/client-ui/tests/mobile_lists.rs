@@ -12,7 +12,7 @@ slint::slint! {
     import { ListView } from "../ui/mobile/shared/controls.slint";
 
     export component MobileListProbe inherits Window {
-        width: 300px; height: 240px;
+        preferred-width: 300px; preferred-height: 240px;
         in property <[float]> rows;
         out property <length> extent <=> list.content-height;
         list := ListView {
@@ -70,6 +70,7 @@ fn mobile_list_stacks_rows_and_keeps_sparse_content_at_the_top() {
     );
 
     adapter.set_size(slint::PhysicalSize::new(900, 240));
+    assert_eq!(probe.window().size(), slint::PhysicalSize::new(900, 240));
     rows.set_vec(vec![40., 64., 80.]);
     let pixels = frame(&adapter, 900, 240);
     assert_eq!(pixels[5 * 900 + 700], slint::Rgb8Pixel::new(255, 0, 0));

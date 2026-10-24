@@ -87,4 +87,5 @@
 - 逐一检查所有 workspace、target、构建和测试声明，避免只改一处而保留同一直接依赖的旧版本。锁文件含上游可选包不代表生产功能启用了它，也不能据此宣称依赖已从整个图中消失。
 - `reqwest` 0.13 的 TLS feature、查询参数和证书来源与旧版不同；Android 需继续用共享构建器的内置根证书。JNI 0.22 要迁移 `EnvUnowned`/`Env`、带类型全局引用、线程回调与 JNI 字符串/签名，不能仅改版本号。
 - SHA-2 0.11 的摘要数组不再实现 `LowerHex`，原 `format!("{:x}", digest)` 会令所有平台失败，见 [CI 40107022637](https://github.com/Fu021/Clash-of-Rust/actions/runs/40107022637)。使用[共享十六进制编码](../../crates/client-core/src/storage/hash.rs)，同步 Geo、规则修订、下载校验与特权安装器，保留前导零和已知 SHA256 向量的回归。
+- 目标专用声明和测试也须迁移：`winreg` 0.56 的 `RegValue.bytes` 改为 `Cow<[u8]>`，旧测试夹具的 `Vec` 需显式转换；移动保护校验迁出 Android 后清理残余导入。后续 [CI 40108770502](https://github.com/Fu021/Clash-of-Rust/actions/runs/40108770502) 分别暴露了 Windows 类型错误和 Android 未使用导入，不能只凭共享 crate 编译通过判定升级完成。
 - 替换 YAML 与二进制协议库时保留行为回归；协议编码改变须递增协议号。AGP 与 Gradle 成对升级，并对最低版本、预发布、损坏版本及未来不兼容主版本保留解析边界检查。具体版本及仍受上游约束的链路见[依赖核对表](../dependency-audit.csv)。
