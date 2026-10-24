@@ -730,6 +730,7 @@ fn setting_and_toolbar_intents_preserve_their_values_in_the_command_queue() {
         (Intent::TextScale, "125%", "", Action::TextScale(125)),
         (Intent::TraySpeed, "true", "", Action::TraySpeed(true)),
         (Intent::DnsOverride, "false", "", Action::DnsOverride(false)),
+        (Intent::FakeIp, "false", "", Action::FakeIp(false)),
         (Intent::Ipv6, "true", "", Action::Ipv6(true)),
         (Intent::Udp, "false", "", Action::Udp(false)),
         (Intent::Autostart, "true", "", Action::Autostart(true)),
@@ -794,6 +795,37 @@ fn setting_and_toolbar_intents_preserve_their_values_in_the_command_queue() {
     let _ = app.ui_intent(Intent::MixedPort, "invalid", "");
     let _ = app.ui_intent(Intent::SavePorts, "", "");
     assert!(app.queued_actions.is_empty());
+    let mut app = fixture(Page::Settings);
+    app.busy = true;
+    app.settings.fake_ip = true;
+    app.settings.fake_ip_exclusions = vec!["existing.test".into()];
+    app.fake_ip_input = "+.example.test, ds.example.test".into();
+    let _ = app.ui_intent(Intent::FakeIpAdd, "", "");
+    assert!(matches!(
+        app.queued_actions.pop_back(),
+        Some(Action::FakeIpExclusions(values))
+            if values == vec![
+                "existing.test".to_owned(),
+                "+.example.test".to_owned(),
+                "ds.example.test".to_owned()
+            ]
+    ));
+    let mut app = fixture(Page::Settings);
+    app.busy = true;
+    app.settings.fake_ip_exclusions = vec!["existing.test".into(), "another.test".into()];
+    let _ = app.ui_intent(Intent::FakeIpRemove, "0", "");
+    assert!(matches!(
+        app.queued_actions.pop_back(),
+        Some(Action::FakeIpExclusions(values))
+            if values == vec!["another.test".to_owned()]
+    ));
+    let mut app = fixture(Page::Settings);
+    let _ = app.ui_intent(Intent::FakeIpEditor, "true", "");
+    assert!(app.fake_ip_editor);
+    let _ = app.ui_intent(Intent::FakeIpEditor, "false", "");
+    assert!(!app.fake_ip_editor);
+    let mut app = fixture(Page::Settings);
+    app.busy = true;
     let _ = app.ui_intent(Intent::IntervalInput, "15", "");
     let _ = app.ui_intent(Intent::SaveInterval, "", "");
     assert!(matches!(
@@ -1519,4 +1551,61 @@ fn console_rule_changes_update_clean_views_without_discarding_an_open_editor() {
         "fixture"
     );
     assert!(app.notice.contains("草稿"));
+}
+
+#[test]
+fn fake_ip_projection_follows_dns_override_and_exposes_the_exclusion_page() {
+    ui_testing::initialize(950, 700);
+    let mut app = fixture(Page::Settings);
+    app.settings.dns_override = false;
+    app.settings.fake_ip = true;
+    app.settings.fake_ip_exclusions = vec!["+.example.test".into(), "ds.example.test".into()];
+    app.fake_ip_editor = true;
+    app.fake_ip_input = "next.example.test".into();
+    let window = AppWindow::new().unwrap();
+    let data = window.global::<UiData>();
+    let mut models = ViewModels::default();
+    models.attach(&data);
+    app.present_slint(&data, &mut models);
+    assert!(!data.get_fake_ip());
+    assert!(data.get_fake_ip_editor());
+    assert_eq!(data.get_fake_ip_input().to_string(), "next.example.test");
+    let rows = data.get_fake_ip_exclusions();
+    assert_eq!(rows.row_count(), 2);
+    assert_eq!(rows.row_data(0).unwrap().to_string(), "+.example.test");
+    assert_eq!(rows.row_data(1).unwrap().to_string(), "ds.example.test");
+
+    app.settings.dns_override = true;
+    app.present_slint(&data, &mut models);
+    assert!(data.get_fake_ip());
+    app.busy = true;
+    let _ = app.ui_intent(Intent::DnsOverride, "false", "");
+    assert!(matches!(
+        app.queued_actions.pop_back(),
+        Some(Action::DnsOverride(false))
+    ));
+}
+
+#[test]
+fn fake_ip_add_validates_the_input_before_queueing_a_save() {
+    let mut app = fixture(Page::Settings);
+    app.busy = true;
+    app.fake_ip_input = "bad name".into();
+    let _ = app.ui_intent(Intent::FakeIpAdd, "", "");
+    assert!(app.fake_ip_error.contains("只能包含"));
+    assert!(app.queued_actions.is_empty());
+
+    let _ = app.ui_intent(Intent::FakeIpInput, "+.ok.test", "");
+    assert!(app.fake_ip_error.is_empty());
+    let _ = app.ui_intent(Intent::FakeIpAdd, "", "");
+    assert!(app.fake_ip_error.is_empty());
+    assert!(matches!(
+        app.queued_actions.pop_back(),
+        Some(Action::FakeIpExclusions(values))
+            if values == vec!["+.ok.test".to_owned()]
+    ));
+
+    app.fake_ip_input.clear();
+    let _ = app.ui_intent(Intent::FakeIpAdd, "", "");
+    assert!(app.fake_ip_error.contains("请输入"));
 }

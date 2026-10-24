@@ -18,7 +18,8 @@ export enum Intent {
     claude-start, claude-cancel, claude-close-session, claude-protection, claude-confirm-protection,
     claude-filter, claude-page, claude-guide, claude-browser, claude-copy-script,
     claude-import, claude-export, claude-key, claude-save-key, claude-additional,
-    appearance, text-scale, accent-picker, accent-color, tray-speed, dns-override, ipv6, udp,
+    appearance, text-scale, accent-picker, accent-color, tray-speed, dns-override, fake-ip,
+    fake-ip-editor, fake-ip-input, fake-ip-add, fake-ip-remove, ipv6, udp,
     autostart, mixed-port, save-ports, window-width, window-height,
     reset-window, interval-input, save-interval, update-geo,
     check-update, install-update, cancel-update, open-release, update-prereleases,
@@ -161,6 +162,11 @@ export global UiData {
     in-out property <bool> tray-speed;
     in-out property <bool> update-prereleases;
     in-out property <bool> dns-override;
+    in-out property <bool> fake-ip;
+    in-out property <bool> fake-ip-editor;
+    in-out property <string> fake-ip-input;
+    in-out property <string> fake-ip-error;
+    in-out property <[string]> fake-ip-exclusions;
     in-out property <bool> ipv6;
     in-out property <bool> udp;
     in-out property <string> mixed-port;

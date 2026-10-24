@@ -75,13 +75,24 @@ pub(super) fn apply(map: &mut Mapping, settings: &Settings) -> Result<bool> {
         _ => bail!("订阅 dns 必须是配置对象"),
     };
     let managed = settings.dns_override || dns.is_empty();
+    let fake_ip = settings.fake_ip_enabled();
     if managed {
         dns.insert(Value::from("enable"), Value::from(true));
-        dns.insert(Value::from("enhanced-mode"), Value::from("fake-ip"));
+        // DNS override owns the Fake-IP switch. With the override off, even a
+        // missing subscription DNS block must not enable app-managed Fake-IP.
+        dns.insert(
+            Value::from("enhanced-mode"),
+            Value::from(if fake_ip { "fake-ip" } else { "redir-host" }),
+        );
         dns.insert(
             Value::from("nameserver"),
             serde_yaml::to_value(DEFAULT_DNS_NAMESERVERS)?,
         );
+    }
+    if !fake_ip {
+        // DNS override off still preserves subscription nameservers, policies
+        // and filters, but must not leave a subscription Fake-IP mode active.
+        dns.insert(Value::from("enhanced-mode"), Value::from("redir-host"));
     }
     dns.insert(Value::from("ipv6"), Value::from(settings.ipv6));
     map.insert(Value::from("dns"), Value::Mapping(dns));

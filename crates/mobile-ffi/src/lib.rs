@@ -233,6 +233,7 @@ impl Session {
         Ok(())
     }
     pub fn commit_settings(&mut self, mut settings: Settings) -> Result<()> {
+        settings.normalize();
         if settings.mixed_port == settings.controller_port {
             settings.controller_port = core::config::reserve_controller(0, settings.mixed_port)?
                 .local_addr()?

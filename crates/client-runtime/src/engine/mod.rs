@@ -720,7 +720,8 @@ impl Engine {
         Ok(())
     }
 
-    pub async fn save_settings(&mut self, settings: Settings) -> Result<()> {
+    pub async fn save_settings(&mut self, mut settings: Settings) -> Result<()> {
+        settings.normalize();
         if self.remote.is_some() {
             self.remote_mutate(ControlCommand::Settings {
                 settings: settings.clone(),
@@ -732,6 +733,8 @@ impl Engine {
         settings.validate()?;
         if self.settings.claude_protection.is_some()
             && (settings.dns_override != self.settings.dns_override
+                || settings.fake_ip != self.settings.fake_ip
+                || settings.fake_ip_exclusions != self.settings.fake_ip_exclusions
                 || settings.ipv6 != self.settings.ipv6
                 || settings.udp != self.settings.udp
                 || settings.active_profile != self.settings.active_profile
@@ -745,6 +748,8 @@ impl Engine {
             && settings.secret == self.settings.secret
         {
             if (settings.dns_override != self.settings.dns_override
+                || settings.fake_ip != self.settings.fake_ip
+                || settings.fake_ip_exclusions != self.settings.fake_ip_exclusions
                 || settings.ipv6 != self.settings.ipv6
                 || settings.udp != self.settings.udp)
                 && let Some(id) = settings.active_profile.as_deref()
