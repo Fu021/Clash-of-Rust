@@ -725,6 +725,19 @@ assert.equal(calls.length,2);
                 self.assertTrue(warnings)
                 self.assertEqual(lock.read_bytes(), b'cached')
 
+    def test_gradle_refresh_stays_in_the_supported_agp_line(self):
+        versions = [{'version': version, 'downloadUrl': version, 'checksumUrl': version + '.sha256'}
+                    for version in ('8.14.6', '9.5.0', '9.6.0', '9.8.2', '9.9.0-rc-1', '10.0.0')]
+        versions.extend([
+            {'version': '9.9.0', 'broken': True},
+            {'version': '9.10.0', 'snapshot': True},
+        ])
+        with patch.object(build_inputs, 'read_json', return_value=versions):
+            self.assertEqual(build_inputs.gradle_release()['version'], '9.8.2')
+        with patch.object(build_inputs, 'read_json', return_value=versions[:2]):
+            with self.assertRaises(ValueError):
+                build_inputs.gradle_release()
+
     def test_go_refresh_checks_exact_modules_without_downgrades_and_retains_unreachable_versions(self):
         modules=[{'Path':'go4.org/netipx','Version':'v0.0.0-20260823151212-3075585bcbeb'},
                  {'Path':'example.org/Module','Version':'v1.2.0'},
@@ -1265,18 +1278,23 @@ assert.equal(calls.length,2);
 
     def test_version_validation(self):
         self.assertEqual(build.validate_version('0.4.4'),'0.4.4')
-        for invalid in ('1.2','1.2.3.4','1.2.x','1.2.65536','../0.4.4','01.2.3','0.4.12-dev.01','0.4.12-','0.4.12-dev/1'):
+        for invalid in ('1.2','1.2.3.4','1.2.x','1.2.65536','../0.4.4','01.2.3','0.4.12-dev.01','0.4.12-','0.4.12-dev/1',
+                        '0.6.5-dev:fake-ip-sources','0.6.5-fix:android-protection'):
             with self.assertRaises(ValueError):
                 build.validate_version(invalid)
 
     def test_prerelease_installer_versions_preserve_semver_and_upgrade_order(self):
-        self.assertEqual(build.validate_version('0.4.12-dev.1'),'0.4.12-dev.1')
-        self.assertEqual(build.numeric_version('0.4.12-dev.1'),'0.4.12.0')
-        self.assertEqual(build.deb_version('0.4.12-dev.1'),'0.4.12~dev.1')
         self.assertEqual(build.deb_version('0.4.12'),'0.4.12')
-        if shutil.which('dpkg'):
-            subprocess.run(['dpkg','--compare-versions',build.deb_version('0.4.12-dev.1'),'lt','0.4.12'],check=True)
-            subprocess.run(['dpkg','--compare-versions',build.deb_version('0.4.12-dev.1'),'gt','0.4.11'],check=True)
+        for version, stable, previous in [('0.4.12-dev.1','0.4.12','0.4.11'),
+                                          ('0.6.5-dev.1.fake-ip-sources','0.6.5','0.6.4'),
+                                          ('0.6.5-fix.1.android-protection','0.6.5','0.6.4')]:
+            with self.subTest(version=version):
+                self.assertEqual(build.validate_version(version),version)
+                self.assertEqual(build.numeric_version(version),stable+'.0')
+                self.assertEqual(build.deb_version(version),version.replace('-','~',1))
+                if shutil.which('dpkg'):
+                    subprocess.run(['dpkg','--compare-versions',build.deb_version(version),'lt',stable],check=True)
+                    subprocess.run(['dpkg','--compare-versions',build.deb_version(version),'gt',previous],check=True)
 
     def test_build_token_is_sent_only_to_secure_github_api_and_removed_on_redirect(self):
         import io

@@ -2,6 +2,15 @@
 use anyhow::Result;
 use reqwest::ClientBuilder;
 
+/// Preserve the bundled public roots on every host, including Android without a Java verifier.
+pub fn client_builder() -> ClientBuilder {
+    reqwest::Client::builder().tls_certs_only(webpki_root_certs::TLS_SERVER_ROOT_CERTS.iter().map(
+        |cert| {
+            reqwest::Certificate::from_der(cert.as_ref()).expect("bundled root certificate is DER")
+        },
+    ))
+}
+
 #[derive(Clone)]
 pub struct Route {
     pub label: &'static str,

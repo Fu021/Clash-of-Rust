@@ -89,13 +89,13 @@ pub(super) async fn execute(args: &Args) -> Result<()> {
 }
 
 pub(super) fn yaml(args: &Args, raw: &str) -> Result<()> {
-    let value: Value = serde_yaml::from_str(raw)?;
+    let value: Value = yaml_serde::from_str(raw)?;
     let value = if args.flag("show-secrets") {
         value
     } else {
         output::redact(value)
     };
-    let yaml = serde_yaml::to_string(&value)?;
+    let yaml = yaml_serde::to_string(&value)?;
     if let Some(path) = args.get("output") {
         atomic_write(&backend::absolute(path)?, yaml.as_bytes())?;
         if !args.flag("quiet") {

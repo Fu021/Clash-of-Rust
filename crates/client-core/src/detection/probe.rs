@@ -1,5 +1,5 @@
 use anyhow::{Result, bail};
-use reqwest::{Client, Url};
+use reqwest::Url;
 use std::time::{Duration, Instant};
 
 #[derive(Debug, Clone)]
@@ -23,7 +23,7 @@ pub fn validate_url(input: &str) -> Result<Url> {
 
 pub async fn website(input: String, port: u16, exit_ip: bool) -> Result<ProbeResult> {
     let url = validate_url(&input)?;
-    let client = Client::builder()
+    let client = crate::network::client_builder()
         .no_proxy()
         .proxy(reqwest::Proxy::all(format!("http://127.0.0.1:{port}"))?)
         .connect_timeout(Duration::from_secs(5))

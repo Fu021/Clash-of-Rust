@@ -24,6 +24,8 @@ FILES = ('Cargo.lock', 'apps/android/core/go.mod', 'apps/android/core/go.sum',
 SNAPSHOT = ROOT / 'target/dependency-snapshot'
 GEO = {'geoip.dat': 'GeoIP.dat', 'geosite.dat': 'GeoSite.dat',
        'country.mmdb': 'Country.mmdb', 'GeoLite2-ASN.mmdb': 'ASN.mmdb'}
+# AGP 9.4 requires Gradle 9.6 or newer; stay within its supported major.
+GRADLE_MIN = '9.6.0'
 
 
 def original(path):
@@ -131,9 +133,12 @@ def nsis_release():
 
 def gradle_release():
     versions = read_json('https://services.gradle.org/versions/all')
-    # The Android plugin declares a Gradle major; refresh its compatible line.
-    release = max((entry for entry in versions if re.fullmatch(r'8\.\d+(?:\.\d+)?', entry['version'])
-                   and not entry.get('snapshot') and not entry.get('broken')), key=lambda e: version_tuple(e['version']))
+    major = GRADLE_MIN.split('.')[0]
+    release = max((entry for entry in versions
+                   if re.fullmatch(re.escape(major) + r'\.\d+(?:\.\d+)?', entry['version'])
+                   and version_tuple(entry['version']) >= version_tuple(GRADLE_MIN)
+                   and not entry.get('snapshot') and not entry.get('broken')),
+                  key=lambda e: version_tuple(e['version']))
     return {'version': release['version'], 'url': release['downloadUrl'],
             'checksum_url': release['checksumUrl']}
 
@@ -313,7 +318,7 @@ def resolve(directory):
     if output := os.environ.get('GITHUB_OUTPUT'):
         with open(output, 'a') as stream:
             stream.write('resources=' + resource_key(upstream) + '\n')
-            for name, fallback in (('tailscale', '1.94.2'), ('gradle', '8.13')):
+            for name, fallback in (('tailscale', '1.94.2'), ('gradle', GRADLE_MIN)):
                 version = upstream.get(name, {}).get('version', fallback)
                 if not re.fullmatch(r'v?[0-9.]+', version):
                     raise ValueError('Invalid resolved tool version')

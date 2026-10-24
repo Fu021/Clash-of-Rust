@@ -22,6 +22,7 @@ export component MobileFrame inherits Rectangle {
     changed notice-source => { if self.notice-source != "" { self.notice-text = self.notice-source; } }
     in property <[int]> primary-pages;
     in property <[int]> sidebar-pages;
+    in property <[int]> sidebar-footer-pages;
     in property <bool> tab-pill;
     in property <length> title-size: 24px;
     in property <length> sidebar-width: 192px;
@@ -85,8 +86,11 @@ export component MobileFrame inherits Rectangle {
                 }
                 MScroll { vertical-stretch: 1; min-height: 0px;
                     if root.expanded: VerticalLayout { alignment: start; spacing: 4px;
-                        for route-id in root.sidebar-pages: MNav { height: 48px; text: root.titles[route-id]; icon: root.icons[route-id]; selected: MobileView.page == route-id;
-                            clicked => { MobileView.navigate(route-id); }
+                        for route-id in root.sidebar-pages: VerticalLayout { alignment: start; spacing: 4px;
+                            if route-id == 6: MSmall { text: "工具"; height: max(28px, MobileTypography.font-size(12) + 12px); font-size: MobileTypography.font-size(12); }
+                            MNav { height: 48px; text: root.titles[route-id]; icon: root.icons[route-id]; selected: MobileView.page == route-id;
+                                clicked => { MobileView.navigate(route-id); }
+                            }
                         }
                     }
                     if !root.expanded: VerticalLayout { alignment: start; spacing: root.short ? 0px : 8px;
@@ -96,7 +100,12 @@ export component MobileFrame inherits Rectangle {
                         }
                     }
                 }
-                if root.expanded: MSmall { height: 28px; text: MobileData.version; }
+                if root.expanded: VerticalLayout { vertical-stretch: 0; spacing: 10px;
+                    for route-id in root.sidebar-footer-pages: MNav { height: 48px; text: root.titles[route-id]; icon: root.icons[route-id]; selected: MobileView.page == route-id;
+                        clicked => { MobileView.navigate(route-id); }
+                    }
+                    MSmall { height: 28px; text: MobileData.version; }
+                }
             }
         }
         header := Rectangle {

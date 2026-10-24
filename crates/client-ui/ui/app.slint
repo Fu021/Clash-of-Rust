@@ -47,6 +47,7 @@ export component AppWindow inherits Window {
     property <int> accent: UiData.accent;
     changed accent => { Theme.accent-index = root.accent; }
     property <[string]> titles: ["首页", "代理", "订阅", "连接", "规则", "日志", "网络诊断", "IP 检测", "A÷检测", "设置"];
+    property <[int]> sidebar-pages: [0, 1, 2, 3, 4, 5, 6, 7, 8];
     property <[string]> subtitles: ["运行状态与流量概览", "查看代理组与选择节点", "管理订阅与本地配置", "查看连接、实时速度与匹配线路", "快捷规则、自定义规则与匹配顺序", "内核与客户端运行记录", "网站响应、出口信息与 DNS 检查", "按分类查看平台可用情况", "Claude 地区线索、配置风险与实时保护", "客户端、网络与外观设置"];
     property <[image]> icons: [@image-url("icons/home.svg"), @image-url("icons/proxies.svg"), @image-url("icons/subscriptions.svg"), @image-url("icons/connections.svg"), @image-url("icons/rules.svg"), @image-url("icons/logs.svg"), @image-url("icons/network.svg"), @image-url("icons/ip.svg"), @image-url("icons/ai.svg"), @image-url("icons/settings.svg")];
     forward-focus: keys;
@@ -88,16 +89,21 @@ export component AppWindow inherits Window {
         Caption { x: 48px; y: 46px; height: 22px; width: 122px; text: "原生代理客户端"; font-size: 12px * Theme.text-scale; }
         nav := ScrollView {
             viewport-y <=> UiData.scroll-navigation;
-            x: 0px; y: 92px; width: parent.width; height: parent.height - 144px;
+            x: 0px; y: 92px; width: parent.width; height: max(0px, footer.y - self.y - 12px);
             VerticalLayout { alignment: start; padding-left: 12px; padding-right: 12px; spacing: 4px;
-                for title[i] in root.titles: VerticalLayout {
+                for route-id in root.sidebar-pages: VerticalLayout {
                     spacing: 4px;
-                    if i == 6: Caption { text: "工具"; height: 24px; font-size: 12px * Theme.text-scale; }
-                    NavigationItem { text: title; icon: root.icons[i]; selected: UiData.page == i; clicked => { UiActions.dispatch(Intent.navigate, "" + i, ""); } }
+                    if route-id == 6: Caption { text: "工具"; height: 24px; font-size: 12px * Theme.text-scale; }
+                    NavigationItem { text: root.titles[route-id]; icon: root.icons[route-id]; selected: UiData.page == route-id; clicked => { UiActions.dispatch(Intent.navigate, "" + route-id, ""); } }
                 }
             }
         }
-        Caption { x: 16px; y: parent.height - 36px; height: 22px; width: parent.width - 32px; text: UiData.version; font-size: 13px * Theme.text-scale; }
+        footer := VerticalLayout {
+            x: 12px; y: parent.height - self.height - 14px; width: parent.width - 24px;
+            height: self.preferred-height; spacing: 8px;
+            NavigationItem { text: root.titles[9]; icon: root.icons[9]; selected: UiData.page == 9; clicked => { UiActions.dispatch(Intent.navigate, "9", ""); } }
+            Caption { height: 22px; text: UiData.version; font-size: 13px * Theme.text-scale; }
+        }
     }
     Rectangle {
         x: 200px; y: 20px; width: parent.width - 224px; height: parent.height - 36px;

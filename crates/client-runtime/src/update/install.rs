@@ -66,7 +66,7 @@ fn verify(plan: &Plan, directory: &Path) -> Result<()> {
         }
         hash.update(&buffer[..count]);
     }
-    if format!("{:x}", hash.finalize()) != plan.sha256 {
+    if clash_client_core::file_hash::hex(hash.finalize()) != plan.sha256 {
         bail!("安装包校验失败，已停止安装");
     }
     Ok(())
@@ -387,7 +387,7 @@ mod tests {
         let plan = Plan {
             package: path.clone(),
             executable: std::env::current_exe().unwrap(),
-            sha256: format!("{:x}", Sha256::digest(b"verified bytes")),
+            sha256: clash_client_core::file_hash::hex(Sha256::digest(b"verified bytes")),
             version: "0.4.6".into(),
             parent: std::process::id(),
             restart: true,

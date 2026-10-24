@@ -3,7 +3,7 @@ import { Chevron } from "../../components/controls.slint";
 import { MobileTypography } from "typography.slint";
 import { Theme } from "../../theme/palette.slint";
 import { MobileView, MobileActions, MobileIntent } from "state.slint";
-import { ListView } from "std-widgets.slint";
+import { ListView as SlintListView } from "std-widgets.slint";
 
 export component MAppIcon inherits Rectangle {
     width: 48px; height: 48px; border-radius: 8px;
@@ -70,11 +70,12 @@ export component MScroll inherits Flickable {
     }
 }
 
-export component MList inherits ListView {
+// Slint recognizes virtual row layout by the immediate component name "ListView".
+export component ListView inherits SlintListView {
     in property <string> content-key;
-    property <length> bottom: min(0px, self.visible-height - self.viewport-height);
-    changed content-key => { self.viewport-y = 0px; }
-    changed bottom => { self.viewport-y = clamp(self.viewport-y, self.bottom, 0px); }
+    property <length> bottom: min(0px, self.visible-height - self.content-height);
+    changed content-key => { self.content-y = 0px; }
+    changed bottom => { self.content-y = clamp(self.content-y, self.bottom, 0px); }
 }
 export component MCard inherits Rectangle {
     in property <bool> selected;
@@ -147,6 +148,29 @@ export component MButton inherits Rectangle {
     }
     area := TouchArea { enabled: root.interactive; mouse-cursor: pointer;
         clicked => { root.keyboard-focus = false; keys.focus(); root.clicked(); }
+    }
+}
+export component MPagination inherits HorizontalLayout {
+    in property <string> status;
+    in property <bool> previous-enabled;
+    in property <bool> next-enabled;
+    in property <bool> compact;
+    callback turn(int);
+    alignment: start; spacing: MobileTypography.small-gap; vertical-stretch: 0;
+    MButton {
+        text: root.compact || Theme.text-scale > 1.25 ? "‹" : "上一页";
+        accessible-role: button; accessible-label: "上一页";
+        width: root.compact || Theme.text-scale > 1.25 ? 48px : max(80px, MobileTypography.font-size(15) * 3 + 20px);
+        horizontal-stretch: 0; enabled: root.previous-enabled;
+        clicked => { root.turn(-1); }
+    }
+    MSmall { text: root.status; horizontal-alignment: center; wrap: word-wrap; }
+    MButton {
+        text: root.compact || Theme.text-scale > 1.25 ? "›" : "下一页";
+        accessible-role: button; accessible-label: "下一页";
+        width: root.compact || Theme.text-scale > 1.25 ? 48px : max(80px, MobileTypography.font-size(15) * 3 + 20px);
+        horizontal-stretch: 0; enabled: root.next-enabled;
+        clicked => { root.turn(1); }
     }
 }
 export component MRow inherits Rectangle {

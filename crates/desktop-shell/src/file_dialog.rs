@@ -106,10 +106,7 @@ fn windows_choose() -> Result<Option<PathBuf>, String> {
 pub async fn choose() -> Result<Option<PathBuf>, String> {
     async fn open() -> anyhow::Result<Option<PathBuf>> {
         use futures_util::StreamExt;
-        use zbus::{
-            Proxy,
-            zvariant::{OwnedObjectPath, OwnedValue, Value},
-        };
+        use zbus::{OwnedObjectPath, OwnedVariant, Proxy, Variant};
         let connection = zbus::Connection::session().await?;
         let token = format!("clash{}", uuid::Uuid::new_v4().simple());
         let sender = connection
@@ -136,9 +133,9 @@ pub async fn choose() -> Result<Option<PathBuf>, String> {
         )
         .await?;
         let options = std::collections::HashMap::from([
-            ("handle_token", Value::from(token.as_str())),
-            ("multiple", Value::from(false)),
-            ("directory", Value::from(false)),
+            ("handle_token", Variant::from(token.as_str())),
+            ("multiple", Variant::from(false)),
+            ("directory", Variant::from(false)),
         ]);
         let handle: OwnedObjectPath = chooser
             .call("OpenFile", &("", "选择订阅 YAML 文件", options))
@@ -156,7 +153,7 @@ pub async fn choose() -> Result<Option<PathBuf>, String> {
                 anyhow::bail!("文件选择超时或桌面会话已结束");
             }
         };
-        let (code, mut values): (u32, std::collections::HashMap<String, OwnedValue>) =
+        let (code, mut values): (u32, std::collections::HashMap<String, OwnedVariant>) =
             response.body().deserialize()?;
         if code == 1 {
             return Ok(None);

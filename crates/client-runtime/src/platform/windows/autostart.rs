@@ -398,7 +398,7 @@ mod tests {
                 &backend.run_name,
                 &winreg::RegValue {
                     vtype: winreg::enums::REG_BINARY,
-                    bytes: vec![3, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0],
+                    bytes: vec![3, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0].into(),
                 },
             )
             .unwrap();

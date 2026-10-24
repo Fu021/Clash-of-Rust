@@ -533,7 +533,7 @@ impl Api {
     }
     pub fn new(settings: &Settings) -> Result<Self> {
         Ok(Self {
-            client: Client::builder()
+            client: crate::network::client_builder()
                 .no_proxy()
                 .connect_timeout(Duration::from_secs(2))
                 .timeout(Duration::from_secs(8))
@@ -986,7 +986,7 @@ impl Api {
     pub async fn logs(&self) -> Result<reqwest::Response> {
         let mut url = self.url(&["logs"])?;
         url.query_pairs_mut().append_pair("level", "info");
-        let client = Client::builder()
+        let client = crate::network::client_builder()
             .no_proxy()
             .connect_timeout(Duration::from_secs(2))
             .build()?;
@@ -1138,7 +1138,7 @@ mod tests {
                 }
             }
         });
-        let response = Client::builder()
+        let response = crate::network::client_builder()
             .no_proxy()
             .build()
             .unwrap()
@@ -1206,7 +1206,7 @@ mod tests {
                 }
             }
         });
-        let response = Client::builder()
+        let response = crate::network::client_builder()
             .no_proxy()
             .build()
             .unwrap()

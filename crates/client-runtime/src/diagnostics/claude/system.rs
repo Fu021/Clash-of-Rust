@@ -280,7 +280,7 @@ fn apply_settings(env: &mut BTreeMap<String, String>, report: &mut Report, files
 }
 
 fn code_client(env: &BTreeMap<String, String>) -> Result<Client> {
-    let mut builder = Client::builder()
+    let mut builder = clash_client_core::network::client_builder()
         .no_proxy()
         .connect_timeout(Duration::from_secs(4))
         .timeout(Duration::from_secs(8))
@@ -410,7 +410,7 @@ pub fn helper_main() -> Option<Result<()>> {
             let bytes = serde_json::to_vec_pretty(&report)?;
             if let Some(url) = submit {
                 browser::validate_submit_url(&url)?;
-                let response = Client::builder()
+                let response = clash_client_core::network::client_builder()
                     .no_proxy()
                     .timeout(Duration::from_secs(8))
                     .redirect(reqwest::redirect::Policy::none())

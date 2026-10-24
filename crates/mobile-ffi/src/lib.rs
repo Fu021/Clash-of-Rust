@@ -293,6 +293,16 @@ impl Session {
         }
         Ok(())
     }
+    pub fn set_fake_ip(&mut self, enabled: bool) -> Result<()> {
+        ensure!(
+            self.settings.claude_protection.is_none(),
+            "请先关闭 Claude 保护，再修改 Fake-IP"
+        );
+        ensure!(!enabled || self.settings.dns_override, "请先开启 DNS 覆盖");
+        let mut next = self.settings.clone();
+        next.fake_ip = enabled;
+        self.commit_settings(next)
+    }
     pub fn observe_native(&mut self) -> Result<()> {
         let state = self.native.request(json!({"op":"state"}))?;
         self.running = state["running"].as_bool().unwrap_or(false);
@@ -383,6 +393,9 @@ impl Session {
         source: &str,
         content: Option<&str>,
     ) -> Result<()> {
+        if let Some(id) = id {
+            self.require_unprotected_profile(id)?;
+        }
         ensure!(!name.trim().is_empty(), "订阅名称不能为空");
         ensure!(
             !self
@@ -487,7 +500,18 @@ impl Session {
         }
         Ok(())
     }
+    fn require_unprotected_profile(&self, id: &str) -> Result<()> {
+        ensure!(
+            self.settings
+                .claude_protection
+                .as_ref()
+                .is_none_or(|protection| protection.profile_id != id),
+            "请先关闭 Claude 保护，再修改正在使用的订阅"
+        );
+        Ok(())
+    }
     pub async fn update_profile(&mut self, id: &str) -> Result<()> {
+        self.require_unprotected_profile(id)?;
         let profile = self
             .profiles
             .iter()
@@ -740,7 +764,7 @@ pub async fn prepare_protection(
 
 /// OS routing belongs to VpnService, never to subscription YAML or Linux ioctls.
 pub fn android_safe_config(raw: &str) -> Result<String> {
-    let mut value: serde_yaml::Value = serde_yaml::from_str(raw)?;
+    let mut value: yaml_serde::Value = yaml_serde::from_str(raw)?;
     let tun = value["tun"].as_mapping_mut().context("TUN 配置无效")?;
     tun.clear();
     tun.insert("enable".into(), false.into());
@@ -756,12 +780,12 @@ pub fn android_safe_config(raw: &str) -> Result<String> {
     {
         dns.insert(
             "nameserver".into(),
-            serde_yaml::to_value(core::config::DEFAULT_DNS_NAMESERVERS)?,
+            yaml_serde::to_value(core::config::DEFAULT_DNS_NAMESERVERS)?,
         );
     }
     value["profile"]["store-selected"] = true.into();
     value["profile"]["store-fake-ip"] = true.into();
-    Ok(serde_yaml::to_string(&value)?)
+    Ok(yaml_serde::to_string(&value)?)
 }
 
 #[cfg(test)]
@@ -937,8 +961,8 @@ mod tests {
         session.commit_settings(next).unwrap();
         assert!(effective_ipv6(&session.settings));
         assert!(!session.settings.ipv6 && !session.settings.udp && !session.settings.dns_override);
-        let active: serde_yaml::Value =
-            serde_yaml::from_str(&session.runtime(&session.settings).unwrap()).unwrap();
+        let active: yaml_serde::Value =
+            yaml_serde::from_str(&session.runtime(&session.settings).unwrap()).unwrap();
         assert_eq!(active["ipv6"], true);
         assert_eq!(active["tun"]["enable"], false);
         let mut reopened = Session::open(root.path().into(), native).unwrap();
@@ -948,6 +972,119 @@ mod tests {
         assert_eq!(reopened.runtime(&reopened.settings).unwrap(), raw);
         assert!(!core::profile_transaction::recover(&reopened.store.root).unwrap());
     }
+    #[tokio::test]
+    async fn protected_profile_rejects_edits_and_updates_but_allows_other_profiles() {
+        use crate::core::claude_check::protection::{Previous, Protection};
+        const ORIGINAL: &str = "proxies: [{name: Test, type: socks5, server: 127.0.0.1, port: 1080}]\nrules: ['MATCH,Test']\n";
+        const REPLACEMENT: &str = "proxies: [{name: Test, type: socks5, server: 127.0.0.2, port: 1080}]\nrules: ['MATCH,Test']\n";
+        let root = tempfile::tempdir().unwrap();
+        let mut session = Session::open(root.path().into(), Arc::new(Fake)).unwrap();
+        session
+            .save_profile(
+                None,
+                "Protected",
+                "invalid-subscription-url",
+                Some(ORIGINAL),
+            )
+            .await
+            .unwrap();
+        let id = session.profiles.last().unwrap().id.clone();
+        session.activate(&id).unwrap();
+        let backup = session.profiles[0].id.clone();
+        session.initialize().unwrap();
+        let mut next = session.settings.clone();
+        next.claude_protection = Some(Arc::new(Protection::new(
+            id.clone(),
+            "Test".into(),
+            Previous {
+                mode: next.run_mode.clone(),
+                proxy_mode: core::model::ProxyMode::Tun,
+                selectors: Default::default(),
+            },
+        )));
+        session.commit_settings(next).unwrap();
+        let before_settings = session.settings.clone();
+        let before_profiles = serde_json::to_value(&session.profiles).unwrap();
+        let files = [
+            session.store.profile_path(&id).unwrap(),
+            session.store.root.join("profiles.json"),
+            session.store.root.join("settings.json"),
+            session.store.runtime().join("config.yaml"),
+        ];
+        let before_files: Vec<_> = files
+            .iter()
+            .map(|path| std::fs::read(path).unwrap())
+            .collect();
+        let error = session
+            .save_profile(Some(&id), "Changed", "", Some(REPLACEMENT))
+            .await
+            .unwrap_err();
+        assert!(error.to_string().contains("请先关闭 Claude 保护"));
+        let error = session.update_profile(&id).await.unwrap_err();
+        assert!(error.to_string().contains("请先关闭 Claude 保护"));
+        assert!(session.set_fake_ip(false).is_err());
+        assert_eq!(
+            serde_json::to_value(&session.settings).unwrap(),
+            serde_json::to_value(&before_settings).unwrap()
+        );
+        assert_eq!(
+            serde_json::to_value(&session.profiles).unwrap(),
+            before_profiles
+        );
+        for (path, before) in files.iter().zip(&before_files) {
+            assert_eq!(&std::fs::read(path).unwrap(), before);
+        }
+        assert!(!core::profile_transaction::recover(&session.store.root).unwrap());
+
+        session
+            .save_profile(Some(&backup), "Backup", "", Some(REPLACEMENT))
+            .await
+            .unwrap();
+        assert_eq!(
+            std::fs::read(&files[3]).unwrap(),
+            before_files[3],
+            "Editing an inactive profile must not reload the protected configuration"
+        );
+        let mut next = session.settings.clone();
+        next.claude_protection = None;
+        session.commit_settings(next).unwrap();
+        session
+            .save_profile(Some(&id), "Changed", "", Some(REPLACEMENT))
+            .await
+            .unwrap();
+        assert_eq!(session.raw().unwrap(), REPLACEMENT);
+    }
+    #[test]
+    fn fake_ip_can_be_reenabled_after_dns_override_and_survives_reopen() {
+        let root = tempfile::tempdir().unwrap();
+        let mut session = Session::open(root.path().into(), Arc::new(Fake)).unwrap();
+        let mode = |session: &Session| {
+            let value: yaml_serde::Value =
+                yaml_serde::from_str(&session.runtime(&session.settings).unwrap()).unwrap();
+            value["dns"]["enhanced-mode"].as_str().unwrap().to_owned()
+        };
+        session.initialize().unwrap();
+        assert_eq!(mode(&session), "fake-ip");
+        let mut next = session.settings.clone();
+        next.dns_override = false;
+        session.commit_settings(next).unwrap();
+        assert!(!session.settings.fake_ip);
+        assert!(session.set_fake_ip(true).is_err());
+        assert_eq!(mode(&session), "redir-host");
+        let mut next = session.settings.clone();
+        next.dns_override = true;
+        session.commit_settings(next).unwrap();
+        assert!(!session.settings.fake_ip);
+        session.set_fake_ip(true).unwrap();
+        assert_eq!(mode(&session), "fake-ip");
+
+        let mut reopened = Session::open(root.path().into(), Arc::new(Fake)).unwrap();
+        assert!(reopened.settings.fake_ip_enabled());
+        assert_eq!(mode(&reopened), "fake-ip");
+        reopened.set_fake_ip(false).unwrap();
+        assert_eq!(mode(&reopened), "redir-host");
+        assert!(!reopened.store.load_settings().unwrap().fake_ip);
+    }
     #[test]
     fn mobile_never_inherits_subscription_owned_routes_or_controller() {
         let settings = Settings {
@@ -956,8 +1093,8 @@ mod tests {
         };
         let raw = "proxies: []\nrules: ['MATCH,DIRECT']\ntun:\n  enable: true\n  auto-route: true\n  file-descriptor: 42\nexternal-controller: 0.0.0.0:1\n";
         let raw = core::config::runtime_config(raw, &settings).unwrap();
-        let value: serde_yaml::Value =
-            serde_yaml::from_str(&android_safe_config(&raw).unwrap()).unwrap();
+        let value: yaml_serde::Value =
+            yaml_serde::from_str(&android_safe_config(&raw).unwrap()).unwrap();
         assert_eq!(value["tun"].as_mapping().unwrap().len(), 1);
         assert_eq!(value["tun"]["enable"], false);
         assert_eq!(value["ipv6"], false);
@@ -1086,14 +1223,14 @@ mod tests {
                 "proxies: []\nrules: ['MATCH,DIRECT']\ndns:\n  enable: false\n  nameserver-policy: {{example.test: 1.1.1.1}}\n{upstreams}"
             );
             let raw = core::config::runtime_config(&raw, &settings).unwrap();
-            let value: serde_yaml::Value =
-                serde_yaml::from_str(&android_safe_config(&raw).unwrap()).unwrap();
+            let value: yaml_serde::Value =
+                yaml_serde::from_str(&android_safe_config(&raw).unwrap()).unwrap();
             assert_eq!(value["dns"]["enable"], true);
             assert_eq!(value["dns"]["nameserver-policy"]["example.test"], "1.1.1.1");
             let expected = if upstreams.contains("9.9.9.9") {
-                serde_yaml::to_value(["9.9.9.9"]).unwrap()
+                yaml_serde::to_value(["9.9.9.9"]).unwrap()
             } else {
-                serde_yaml::to_value(core::config::DEFAULT_DNS_NAMESERVERS).unwrap()
+                yaml_serde::to_value(core::config::DEFAULT_DNS_NAMESERVERS).unwrap()
             };
             assert_eq!(value["dns"]["nameserver"], expected);
             assert!(!settings.dns_override);

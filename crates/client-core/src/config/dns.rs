@@ -86,7 +86,7 @@ pub(super) fn apply(map: &mut Mapping, settings: &Settings) -> Result<bool> {
         );
         dns.insert(
             Value::from("nameserver"),
-            serde_yaml::to_value(DEFAULT_DNS_NAMESERVERS)?,
+            yaml_serde::to_value(DEFAULT_DNS_NAMESERVERS)?,
         );
     }
     if !fake_ip {
@@ -260,7 +260,7 @@ mod tests {
     use super::*;
 
     fn config(dns: &str) -> Mapping {
-        serde_yaml::from_str(&format!("dns:\n{dns}")).unwrap()
+        yaml_serde::from_str(&format!("dns:\n{dns}")).unwrap()
     }
 
     fn filters(map: &Mapping) -> Vec<&str> {
@@ -302,7 +302,7 @@ mod tests {
         let mut map = config(
             "  enhanced-mode: fake-ip\n  fake-ip-filter-mode: whitelist\n  fake-ip-filter: ['*', '+.corp.example', 'GEOSITE:cn,private', 'rule-set:existing']\n",
         );
-        let existing: Value = serde_yaml::from_str(
+        let existing: Value = yaml_serde::from_str(
             "existing: {type: inline, behavior: domain, payload: ['+.vendor.example']}\nCOR-FakeIP-Whitelist: {type: inline, behavior: domain, payload: ['user.example']}\n",
         )
         .unwrap();
@@ -325,7 +325,7 @@ mod tests {
         assert_eq!(entries.last(), Some(&"MATCH,real-ip"));
         assert_eq!(
             map["rule-providers"]["COR-FakeIP-Whitelist-1"]["payload"],
-            serde_yaml::to_value(["*", "+.corp.example"]).unwrap()
+            yaml_serde::to_value(["*", "+.corp.example"]).unwrap()
         );
         for name in ["existing", "COR-FakeIP-Whitelist"] {
             assert_eq!(map["rule-providers"][name], existing[name]);

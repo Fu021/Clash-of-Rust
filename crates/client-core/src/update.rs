@@ -63,7 +63,7 @@ struct Release {
 fn client(route: &crate::network::Route, timeout: Duration) -> Result<Client> {
     route
         .apply(
-            Client::builder()
+            crate::network::client_builder()
                 .no_proxy()
                 .user_agent(format!("Clash-of-Rust/{}", crate::VERSION))
                 .connect_timeout(Duration::from_secs(5))
@@ -117,32 +117,15 @@ fn select_channel(
     include_prereleases: bool,
 ) -> Result<Option<Package>> {
     let current = Version::parse(current)?;
-    let current_is_preview = channel::installed_preview(
-        &current,
-        releases
-            .iter()
-            .map(|release| (release.tag_name.as_str(), release.draft, release.prerelease)),
-    );
     ensure!(
         suffix
             .bytes()
             .all(|c| c.is_ascii_alphanumeric() || b".-".contains(&c)),
         "安装包平台无效"
     );
-    let release = releases
-        .into_iter()
-        .filter_map(|r| {
-            let v = channel::candidate(
-                &r.tag_name,
-                r.draft,
-                r.prerelease,
-                &current,
-                include_prereleases,
-                current_is_preview,
-            )?;
-            Some((v, r))
-        })
-        .max_by(|(a, _), (b, _)| a.cmp_precedence(b));
+    let release = channel::select(releases, &current, include_prereleases, |release| {
+        (&release.tag_name, release.draft, release.prerelease)
+    });
     if let Some((version, release)) = release {
         let name = format!("Clash-of-Rust-{version}-{suffix}");
         let matches = release
@@ -335,7 +318,7 @@ pub async fn download(
                 }
             }
             ensure!(
-                count == package.size && format!("{:x}", hash.finalize()) == expected,
+                count == package.size && crate::file_hash::hex(hash.finalize()) == expected,
                 "安装包大小或 SHA256 校验失败"
             );
             file.flush().await?;
@@ -371,7 +354,7 @@ mod tests {
     async fn buffered_download_flushes_verified_bytes_and_reports_the_route() {
         use tokio::io::{AsyncReadExt, AsyncWriteExt};
         let body = vec![42; 128 * 1024 + 3];
-        let expected = format!("{:x}", Sha256::digest(&body));
+        let expected = crate::file_hash::hex(Sha256::digest(&body));
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
         let base = format!("http://{}", listener.local_addr().unwrap());
         let sent = body.clone();
@@ -462,7 +445,10 @@ mod tests {
                 {"name":"Clash-of-Rust-0.6.4-dev.2-android-arm64.apk.sha256","size":64}]},
             {"tag_name":"v0.6.3","draft":false,"prerelease":false,"assets":[
                 {"name":"Clash-of-Rust-0.6.3-android-arm64.apk","size":42},
-                {"name":"Clash-of-Rust-0.6.3-android-arm64.apk.sha256","size":64}]}
+                {"name":"Clash-of-Rust-0.6.3-android-arm64.apk.sha256","size":64}]},
+            {"tag_name":"v0.6.2","draft":false,"prerelease":false,"assets":[
+                {"name":"Clash-of-Rust-0.6.2-android-arm64.apk","size":42},
+                {"name":"Clash-of-Rust-0.6.2-android-arm64.apk.sha256","size":64}]}
         ]);
         let parse = || serde_json::from_value::<Vec<Release>>(releases.clone()).unwrap();
         let preview = select_channel(parse(), "0.6.3", "android-arm64.apk", true)
@@ -470,11 +456,20 @@ mod tests {
             .unwrap();
         assert_eq!(preview.version, "0.6.4-dev.2");
         assert!(preview.preview);
-        let stable = select_channel(parse(), "0.6.4-dev.1", "android-arm64.apk", false)
-            .unwrap()
-            .unwrap();
-        assert_eq!(stable.version, "0.6.3");
-        assert!(!stable.preview);
+        for current in ["0.6.4-dev.1", "0.999.0", "0.999.0-fix.1.local"] {
+            let stable = select_channel(parse(), current, "android-arm64.apk", false)
+                .unwrap()
+                .unwrap();
+            assert_eq!(stable.version, "0.6.3");
+            assert!(!stable.preview);
+        }
+        for current in ["0.999.0", "0.999.0-fix.1.local"] {
+            assert!(
+                select_channel(parse(), current, "android-arm64.apk", true)
+                    .unwrap()
+                    .is_none()
+            );
+        }
         assert!(select_channel(parse(), "0.6.4-dev.1", "android-x64.apk", false).is_err());
         assert!(
             select_channel(parse(), "0.6.3", "android-arm64.apk", false)

@@ -2,8 +2,10 @@
 use anyhow::{Context, Result};
 use clash_mobile_runtime::{core, native_response};
 use jni::{
-    JNIEnv, JavaVM,
-    objects::{GlobalRef, JClass, JString, JValue},
+    Env, EnvUnowned, JValue, jni_sig, jni_str,
+    objects::{JClass, JString},
+    refs::Global,
+    vm::JavaVM,
 };
 use serde::Deserialize;
 use serde_json::json;
@@ -42,60 +44,55 @@ static STATE: Mutex<(bool, core::claude_check::guard::Snapshot)> = Mutex::new((
 
 #[unsafe(no_mangle)]
 pub extern "system" fn Java_org_clashofrust_android_ProtectionRuntime_nativeRecover(
-    mut env: JNIEnv<'_>,
+    mut unowned_env: EnvUnowned<'_>,
     _: JClass<'_>,
     root: JString<'_>,
 ) -> jni::sys::jstring {
-    let result = (|| -> Result<()> {
-        let root: String = env.get_string(&root)?.into();
-        core::profile_transaction::recover(std::path::Path::new(&root))?;
-        Ok(())
-    })();
-    let response = match result {
-        Ok(()) => json!({"ok":true}),
-        Err(error) => json!({"error":format!("恢复配置事务失败：{error:#}")}),
-    };
-    env.new_string(response.to_string())
-        .map(JString::into_raw)
-        .unwrap_or(std::ptr::null_mut())
+    unowned_env
+        .with_env(|env| {
+            let result = (|| -> Result<()> {
+                let root = root.try_to_string(env)?;
+                core::profile_transaction::recover(std::path::Path::new(&root))?;
+                Ok(())
+            })();
+            let response = match result {
+                Ok(()) => json!({"ok":true}),
+                Err(error) => json!({"error":format!("恢复配置事务失败：{error:#}")}),
+            };
+            env.new_string(response.to_string()).map(JString::into_raw)
+        })
+        .resolve::<jni::errors::LogErrorAndDefault>()
 }
 
 struct Notifications {
     vm: JavaVM,
-    class: GlobalRef,
+    class: Global<JClass<'static>>,
 }
 impl Notifications {
     fn show(&self, title: &str, message: &str) -> Result<()> {
-        let mut env = self.vm.attach_current_thread()?;
-        let result = env.with_local_frame(16, |env| -> Result<()> {
+        self.vm.attach_current_thread(|env| -> Result<()> {
             let title = env.new_string(title)?;
             let body = env.new_string(message)?;
-            let class: &JClass<'_> = self.class.as_obj().into();
             let result = env
                 .call_static_method(
-                    class,
-                    "notify",
-                    "(Ljava/lang/String;Ljava/lang/String;)Ljava/lang/String;",
+                    &self.class,
+                    jni_str!("notify"),
+                    jni_sig!("(Ljava/lang/String;Ljava/lang/String;)Ljava/lang/String;"),
                     &[
                         JValue::Object(title.as_ref()),
                         JValue::Object(body.as_ref()),
                     ],
                 )?
                 .l()?;
-            let result: String = env.get_string(&JString::from(result))?.into();
+            let result = env.cast_local::<JString>(result)?.try_to_string(env)?;
             native_response(serde_json::from_str(&result)?)?;
             Ok(())
-        });
-        if env.exception_check()? {
-            env.exception_clear()?;
-            anyhow::bail!("Android 系统通知调用失败");
-        }
-        result
+        })
     }
 }
 
-fn configure(env: &mut JNIEnv<'_>, class: JClass<'_>, value: JString<'_>) -> Result<()> {
-    let value: String = env.get_string(&value)?.into();
+fn configure(env: &mut Env<'_>, class: JClass<'_>, value: JString<'_>) -> Result<()> {
+    let value = value.try_to_string(env)?;
     let configuration: Configuration = serde_json::from_str(&value)?;
     if configuration.enabled {
         anyhow::ensure!(
@@ -201,29 +198,33 @@ fn configure(env: &mut JNIEnv<'_>, class: JClass<'_>, value: JString<'_>) -> Res
 
 #[unsafe(no_mangle)]
 pub extern "system" fn Java_org_clashofrust_android_ProtectionRuntime_nativeConfigure(
-    mut env: JNIEnv<'_>,
+    mut unowned_env: EnvUnowned<'_>,
     class: JClass<'_>,
     value: JString<'_>,
 ) -> jni::sys::jstring {
-    let result = match configure(&mut env, class, value) {
-        Ok(()) => json!({"ok":true}),
-        Err(error) => json!({"error":format!("{error:#}")}),
-    };
-    env.new_string(result.to_string())
-        .map(JString::into_raw)
-        .unwrap_or(std::ptr::null_mut())
+    unowned_env
+        .with_env(|env| {
+            let result = match configure(env, class, value) {
+                Ok(()) => json!({"ok":true}),
+                Err(error) => json!({"error":format!("{error:#}")}),
+            };
+            env.new_string(result.to_string()).map(JString::into_raw)
+        })
+        .resolve::<jni::errors::LogErrorAndDefault>()
 }
 
 #[unsafe(no_mangle)]
 pub extern "system" fn Java_org_clashofrust_android_ProtectionRuntime_nativeState(
-    env: JNIEnv<'_>,
+    mut unowned_env: EnvUnowned<'_>,
     _: JClass<'_>,
 ) -> jni::sys::jstring {
-    let result = STATE
-        .lock()
-        .map(|state| json!({"enabled":state.0,"snapshot":state.1}))
-        .unwrap_or_else(|_| json!({"enabled":false,"snapshot":{"error":"保护状态不可用"}}));
-    env.new_string(result.to_string())
-        .map(JString::into_raw)
-        .unwrap_or(std::ptr::null_mut())
+    unowned_env
+        .with_env(|env| {
+            let result = STATE
+                .lock()
+                .map(|state| json!({"enabled":state.0,"snapshot":state.1}))
+                .unwrap_or_else(|_| json!({"enabled":false,"snapshot":{"error":"保护状态不可用"}}));
+            env.new_string(result.to_string()).map(JString::into_raw)
+        })
+        .resolve::<jni::errors::LogErrorAndDefault>()
 }

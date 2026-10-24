@@ -98,7 +98,7 @@ struct ReleaseAsset {
 }
 
 pub async fn download_geo(destination: &Path, proxy_port: Option<u16>) -> Result<GeoManifest> {
-    let mut builder = reqwest::Client::builder()
+    let mut builder = crate::network::client_builder()
         .no_proxy()
         .user_agent(format!("clash-of-rust/{}", crate::VERSION))
         .connect_timeout(Duration::from_secs(10))
@@ -166,7 +166,7 @@ pub async fn download_geo(destination: &Path, proxy_port: Option<u16>) -> Result
             file.write_all(&chunk)?;
         }
         file.sync_all()?;
-        let actual = format!("{:x}", hash.finalize());
+        let actual = crate::file_hash::hex(hash.finalize());
         if actual != digest.to_ascii_lowercase() || size != asset.size {
             bail!("{local} SHA256/大小校验失败，已有数据保持不变");
         }
