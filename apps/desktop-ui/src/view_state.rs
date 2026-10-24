@@ -7,14 +7,13 @@ use clash_desktop_protocol::ViewState;
 macro_rules! view_state {
     ($(($get:ident,$set:ident)),+ $(,)?) => {
         pub fn capture(window:&AppWindow)->ViewState{
-            let data=window.global::<UiData>();let position=native_position(window);
-            ViewState{page:data.get_page(),scroll:[$(data.$get()),+],accent:(data.get_modal()==12).then(||window.get_accent_draft()),position,maximized:window.window().is_maximized(),fullscreen:window.window().is_fullscreen()}
+            let data=window.global::<UiData>();let position=native_position(window);let(maximized,fullscreen)=native_state(window);
+            ViewState{page:data.get_page(),scroll:[$(data.$get()),+],accent:(data.get_modal()==12).then(||window.get_accent_draft()),position,maximized,fullscreen}
         }
         pub fn prepare(state:&ViewState,window:&AppWindow)->bool{
             if let Some((x,y))=state.position{window.window().set_position(fit_window_position(window,slint::PhysicalPosition::new(x,y)));}
             window.window().set_maximized(state.maximized);window.window().set_fullscreen(state.fullscreen);state.maximized||state.fullscreen
         }
-        pub fn ensure_reachable(window:&AppWindow){if let Some((x,y))=native_position(window){let position=slint::PhysicalPosition::new(x,y);let fit=fit_window_position(window,position);if fit!=position{window.window().set_position(fit);}}}
         pub fn restore(state:&ViewState,window:&AppWindow){
             let weak=window.as_weak();let state=state.clone();
             Timer::single_shot(Duration::from_millis(16),move||{
@@ -24,6 +23,41 @@ macro_rules! view_state {
             });
         }
     };
+}
+
+fn native_state(window: &AppWindow) -> (bool, bool) {
+    window
+        .window()
+        .with_winit_window(|native| {
+            (
+                native.is_maximized()
+                    || (native.is_minimized().unwrap_or(false) && window.window().is_maximized()),
+                native.fullscreen().is_some(),
+            )
+        })
+        .unwrap_or_else(|| {
+            (
+                window.window().is_maximized(),
+                window.window().is_fullscreen(),
+            )
+        })
+}
+
+pub fn ensure_reachable(window: &AppWindow) {
+    let (maximized, fullscreen) = native_state(window);
+    // Maximized Windows frames normally extend beyond the monitor (-8, -8).
+    // Moving them would cancel maximization. The OS owns their placement.
+    if maximized || fullscreen || window.window().is_maximized() || window.window().is_fullscreen()
+    {
+        return;
+    }
+    if let Some((x, y)) = native_position(window) {
+        let position = slint::PhysicalPosition::new(x, y);
+        let fit = fit_window_position(window, position);
+        if fit != position {
+            window.window().set_position(fit);
+        }
+    }
 }
 
 fn native_position(window: &AppWindow) -> Option<(i32, i32)> {

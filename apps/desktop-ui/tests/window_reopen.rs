@@ -115,6 +115,7 @@ impl Drop for Renderer {
         let _ = self.child.wait();
     }
 }
+#[track_caller]
 fn wait_until(mut ready: impl FnMut() -> bool) {
     let deadline = Instant::now() + Duration::from_secs(10);
     while !ready() {
@@ -151,6 +152,7 @@ fn find_window(pid: u32) -> HWND {
     unsafe { EnumWindows(Some(visit), (&mut search as *mut Search) as LPARAM) };
     search.hwnd
 }
+#[track_caller]
 fn assert_visible_and_responsive(hwnd: HWND, maximized: bool) {
     wait_until(|| unsafe {
         IsWindowVisible(hwnd) != 0 && IsIconic(hwnd) == 0 && (IsZoomed(hwnd) != 0) == maximized
@@ -203,6 +205,7 @@ fn recreated_renderer_is_reachable_and_show_restores_native_visibility_without_l
         else {
             unreachable!()
         };
+        eprintln!("renderer cycle {cycle}: initialized {metrics:?}");
         assert!(metrics.size.width >= 800. && metrics.size.height >= 450.);
         let hwnd = renderer.window();
         assert_visible_and_responsive(hwnd, maximized);
@@ -210,10 +213,12 @@ fn recreated_renderer_is_reachable_and_show_restores_native_visibility_without_l
         // considers the window visible. This is also the fresh-window path.
         unsafe { ShowWindowAsync(hwnd, SW_SHOWMINNOACTIVE) };
         wait_until(|| unsafe { IsIconic(hwnd) != 0 });
+        eprintln!("renderer cycle {cycle}: restore minimized window");
         renderer.command(WindowCommand::Show);
         assert_visible_and_responsive(hwnd, maximized);
         unsafe { ShowWindowAsync(hwnd, SW_HIDE) };
         wait_until(|| unsafe { IsWindowVisible(hwnd) == 0 });
+        eprintln!("renderer cycle {cycle}: restore hidden window");
         renderer.command(WindowCommand::Show);
         assert_visible_and_responsive(hwnd, maximized);
         assert_ne!(unsafe { PostMessageW(hwnd, WM_CLOSE, 0, 0) }, 0);
