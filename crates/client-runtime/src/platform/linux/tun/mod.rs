@@ -121,7 +121,7 @@ fn grant_installed_core() -> Result<()> {
         hash.update(&buffer[..count]);
     }
     ensure!(
-        format!("{:x}", hash.finalize()) == expected,
+        clash_client_core::file_hash::hex(hash.finalize()) == expected,
         "内核文件校验失败，请重新安装"
     );
     let launcher = File::options()

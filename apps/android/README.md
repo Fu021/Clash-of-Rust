@@ -13,6 +13,8 @@
 
 实际接入订阅添加、文件导入、编辑、更新与切换；策略组、节点选择、排序、单组与全部测速；VPN 连接与断开、快捷设置磁贴、应用排除；连接速率、排序、详情与关闭；规则草稿、快捷规则与应用；日志筛选、复制与导出；网络诊断、IP 分类检测和浏览器 A÷检测；主题、强调色、DNS/Fake-IP/IPv6/UDP 与端口设置。字号跟随 Android 系统设置，使用系统 SP 换算（含 Android 14 的非线性缩放），不使用桌面端保存的字号；卡片间距与内容高度适应字号，触摸目标保留最小尺寸。
 
+连接、规则与日志使用从顶部排列的虚拟列表。Pad 完整侧栏按桌面布局增加“工具”分组，宽屏分页与规则保存操作采用紧凑单行；手机及大字号保留适合触摸的换行布局，详见[移动界面说明](../../crates/client-ui/README.md#android--ios-界面)。
+
 下拉系统快捷设置并编辑磁贴，可添加 Clash of Rust 开关；首次需要 VPN 授权时会进入应用，后续直接连接/断开，包括应用进程已退出的情况；磁贴实时更新连接状态。
 
 手动测速使用自动策略组自己的测试地址，完成后让内核按该组配置重新选优；测速结果直接更新列表。Claude 保护开启时禁止切换节点、编辑或更新当前订阅，并在运行配置中冻结自动组，关闭后恢复原订阅的自动策略。订阅校验由共享会话执行，其他订阅仍可编辑。
@@ -49,3 +51,7 @@ CI 使用 AGP 9.4、Gradle 9.6+（同主版本稳定更新）、SDK 36、NDK r28
 开发 CI 使用固定签名：`ANDROID_DEV_KEYSTORE`（base64 PKCS12）与 `ANDROID_DEV_KEYSTORE_PASSWORD`，别名 `cor-android-dev`。这些值只存 Actions Secrets；私钥不进入仓库或附件。无密钥的外部 PR 使用临时测试签名。正式发布另需 `ANDROID_KEYSTORE`、`ANDROID_KEYSTORE_PASSWORD`、`ANDROID_KEY_ALIAS` 与 `ANDROID_KEY_PASSWORD`，签名不同时不能直接覆盖已有 APK。
 
 Slint 界面可用 `python3 scripts/preview-slint.py --mobile --platform android --check` 静态检查；预览固定数据不代替真实 VPN 测试。
+
+## 连接超时排查
+
+`[TCP] dial <节点或 DIRECT> ... i/o timeout` 表示该次出站连接未在期限内建立；`DIRECT` 是路由结果，不能仅凭超时认定 VPN 回环或真实 IP 泄漏。应保留完整脱敏行，区分业务目标与错误末尾实际拨号的节点地址、端口及 IPv4/IPv6。代理节点和 DIRECT 都超时时，分别检查目标可达性、底层网络、节点端口、DNS 结果与 VPN 套接字绕过路径，不能只据一条日志关闭 IPv6 或改成直连。当前 Go 出站钩子同时覆盖代理和 DIRECT，VPN 宿主在建立接口前注册 `protect(fd)`；真实网络结论仍需设备日志或隔离环境验证。

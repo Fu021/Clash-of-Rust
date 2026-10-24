@@ -335,7 +335,7 @@ pub async fn download(
                 }
             }
             ensure!(
-                count == package.size && format!("{:x}", hash.finalize()) == expected,
+                count == package.size && crate::file_hash::hex(hash.finalize()) == expected,
                 "安装包大小或 SHA256 校验失败"
             );
             file.flush().await?;
@@ -371,7 +371,7 @@ mod tests {
     async fn buffered_download_flushes_verified_bytes_and_reports_the_route() {
         use tokio::io::{AsyncReadExt, AsyncWriteExt};
         let body = vec![42; 128 * 1024 + 3];
-        let expected = format!("{:x}", Sha256::digest(&body));
+        let expected = crate::file_hash::hex(Sha256::digest(&body));
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
         let base = format!("http://{}", listener.local_addr().unwrap());
         let sent = body.clone();

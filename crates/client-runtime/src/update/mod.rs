@@ -584,7 +584,7 @@ async fn transfer(
     if received != size {
         bail!("安装包下载不完整");
     }
-    if format!("{:x}", digest.finalize()) != expected {
+    if clash_client_core::file_hash::hex(digest.finalize()) != expected {
         bail!("安装包 SHA256 校验失败，请重试");
     }
     Ok(())
@@ -681,7 +681,7 @@ mod tests {
         let download = Arc::new(Downloaded {
             directory: Mutex::new(Some(directory)),
             package,
-            sha256: format!("{:x}", Sha256::digest(b"verified installer")),
+            sha256: clash_client_core::file_hash::hex(Sha256::digest(b"verified installer")),
             version: "0.5.7".into(),
         });
         let mut state = State::default();
@@ -839,7 +839,7 @@ mod tests {
     async fn canceling_a_partial_download_closes_the_connection_and_removes_its_files() {
         use futures_util::future::Abortable;
         let body = vec![42; 256 * 1024];
-        let expected = format!("{:x}", Sha256::digest(&body));
+        let expected = clash_client_core::file_hash::hex(Sha256::digest(&body));
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
         let url = format!("http://{}/package", listener.local_addr().unwrap());
         let server = tokio::spawn(async move {
@@ -936,7 +936,7 @@ mod tests {
     #[tokio::test]
     async fn streams_progress_and_verifies_the_exact_downloaded_bytes() {
         let body = vec![42; 256 * 1024];
-        let expected = format!("{:x}", Sha256::digest(&body));
+        let expected = clash_client_core::file_hash::hex(Sha256::digest(&body));
         let wire = [
             format!("HTTP/1.1 200 OK\r\nContent-Length: {}\r\n\r\n", body.len()).into_bytes(),
             body.clone(),
@@ -1049,7 +1049,7 @@ mod tests {
             &download_client(Some(port)).unwrap(),
             "http://download.invalid/package",
             3,
-            &format!("{:x}", Sha256::digest(b"abc")),
+            &clash_client_core::file_hash::hex(Sha256::digest(b"abc")),
             &directory.path().join("package"),
             (None, false),
             |_| {},
@@ -1095,7 +1095,7 @@ mod tests {
     async fn corrupt_proxy_download_restarts_and_verifies_using_the_next_route() {
         use crate::network::Route;
         let body = b"valid installer bytes";
-        let expected = format!("{:x}", Sha256::digest(body));
+        let expected = clash_client_core::file_hash::hex(Sha256::digest(body));
         let (bad_proxy, bad_task) = package_proxy(vec![0; body.len()], expected.clone()).await;
         let (good_proxy, good_task) = package_proxy(body.to_vec(), expected.clone()).await;
         let available = Available {

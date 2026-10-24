@@ -75,7 +75,7 @@ pub fn revision(rules: &ProfileRules) -> Result<String> {
     }
     let mut writer = HashWriter(Sha256::new());
     serde_json::to_writer(&mut writer, rules)?;
-    Ok(format!("{:x}", writer.0.finalize()))
+    Ok(crate::file_hash::hex(writer.0.finalize()))
 }
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum Source {
