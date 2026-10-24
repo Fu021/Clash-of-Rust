@@ -250,6 +250,7 @@ export component AccentChoice inherits Rectangle {
 
 export component Field inherits Rectangle {
     in property <bool> modal-control: false;
+    in property <bool> enabled: true;
     in property <string> placeholder;
     in-out property <string> text;
     in property <bool> secret: false;
@@ -264,6 +265,7 @@ export component Field inherits Rectangle {
     height: Theme.control-height;
     min-width: 100px;
     background: Theme.surface;
+    opacity: root.enabled ? 1 : 0.55;
     border-radius: 6px;
     border-color: input.has-focus ? Theme.accent : Theme.line;
     animate border-color, background { duration: Motion.fast; enabled: Motion.active; }
@@ -274,7 +276,7 @@ export component Field inherits Rectangle {
         width: parent.width - 24px;
         height: self.preferred-height;
         text <=> root.text;
-        enabled: UiData.modal == 0 || root.modal-control;
+        enabled: root.enabled && (UiData.modal == 0 || root.modal-control);
         single-line: true;
         input-type: root.secret ? InputType.password : InputType.text;
         font-size: Theme.body-size;

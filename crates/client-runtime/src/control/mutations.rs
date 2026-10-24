@@ -49,6 +49,8 @@ pub(super) fn setting(settings: &Settings, key: &str, value: Value) -> Result<Se
                 | "tray_speed"
                 | "update_prereleases"
                 | "dns_override"
+                | "fake_ip"
+                | "fake_ip_exclusions"
                 | "ipv6"
                 | "udp"
                 | "ip_reputation_key"
@@ -59,7 +61,14 @@ pub(super) fn setting(settings: &Settings, key: &str, value: Value) -> Result<Se
     );
     let mut next = serde_json::to_value(settings)?;
     next[key] = value;
-    let next: Settings = serde_json::from_value(next)?;
+    let mut next: Settings = serde_json::from_value(next)?;
+    if key == "fake_ip" && next.fake_ip && !next.dns_override {
+        anyhow::bail!("请先开启 DNS 覆盖，再启用 Fake-IP");
+    }
+    if key == "dns_override" && !next.dns_override {
+        next.fake_ip = false;
+    }
+    next.normalize();
     next.validate()?;
     Ok(next)
 }
@@ -157,6 +166,24 @@ mod tests {
         assert!(setting(&next, "claude_protection", Value::Null).is_err());
         assert!(setting(&next, "mixed_port", Value::from(0)).is_err());
         assert!(setting(&next, "controller_port", Value::from(9091)).is_err());
+    }
+
+    #[test]
+    fn fake_ip_patches_respect_dns_override_and_normalize_exclusions() {
+        let settings = Settings::default();
+        let next = setting(
+            &settings,
+            "fake_ip_exclusions",
+            serde_json::json!([" +.example.test ", "DS.example.test", "+.example.test"]),
+        )
+        .unwrap();
+        assert_eq!(
+            next.fake_ip_exclusions,
+            vec!["+.example.test".to_owned(), "DS.example.test".to_owned()]
+        );
+        let off = setting(&settings, "dns_override", Value::Bool(false)).unwrap();
+        assert!(!off.dns_override && !off.fake_ip);
+        assert!(setting(&off, "fake_ip", Value::Bool(true)).is_err());
     }
     #[test]
     fn original_rules_are_read_only_and_new_rules_keep_order() {

@@ -22,7 +22,10 @@ mod ui_testing;
 mod ui_tests;
 mod window_state;
 use clash_of_rust::{
-    config::{AccentColor, Profile, Settings, Store, ThemeMode},
+    config::{
+        AccentColor, FAKE_IP_EXCLUSION_LIMIT, Profile, Settings, Store, ThemeMode,
+        parse_fake_ip_exclusions,
+    },
     connection::{self, Field as ConnectionField, Sort as ConnectionSort},
     engine::{Engine, ProxyMode, Scope, Snapshot},
     ip_check,
@@ -253,6 +256,10 @@ enum Message {
     SiteCancel,
     IntervalInput(String),
     SaveInterval,
+    FakeIpEditor(bool),
+    FakeIpInput(String),
+    FakeIpAdd,
+    FakeIpRemove(usize),
     PeriodicDelay,
     PeriodicDone(u64, Result<BTreeMap<String, u32>, String>),
     SiteProbe(String),
@@ -312,6 +319,9 @@ struct App {
     mac_reopen_ready: bool,
     site_queue: VecDeque<String>,
     interval_input: String,
+    fake_ip_editor: bool,
+    fake_ip_input: String,
+    fake_ip_error: String,
     periodic_testing: bool,
     site_results: Vec<ResultSlot>,
     site_category: CategoryFilter,
@@ -459,6 +469,9 @@ impl App {
             claude: claude_view::State::default(),
             node_sort: settings.node_sort,
             interval_input: settings.delay_interval_minutes.to_string(),
+            fake_ip_editor: false,
+            fake_ip_input: String::new(),
+            fake_ip_error: String::new(),
             periodic_testing: false,
             mixed_port: settings.mixed_port.to_string(),
             window_width: format!("{:.0}", DEFAULT_WINDOW_SIZE.width),
@@ -649,6 +662,8 @@ impl App {
             Action::Start
                 | Action::SavePorts(..)
                 | Action::DnsOverride(_)
+                | Action::FakeIp(_)
+                | Action::FakeIpExclusions(_)
                 | Action::Ipv6(_)
                 | Action::Udp(_)
                 | Action::ClaudeProtection(_)
@@ -1059,6 +1074,9 @@ impl App {
                 {
                     self.rule_state.release_document();
                 }
+                self.fake_ip_editor = false;
+                self.fake_ip_input.clear();
+                self.fake_ip_error.clear();
                 self.page = page;
                 self.log_detail = None;
                 self.clear_connection_detail();
@@ -1454,6 +1472,62 @@ impl App {
                     self.show_notice("请输入 0–1440 分钟，0 表示关闭定时测速".into(), true);
                 }
             },
+            Message::FakeIpEditor(open) => {
+                self.fake_ip_editor = open;
+                self.fake_ip_error.clear();
+                if !open {
+                    self.fake_ip_input.clear();
+                }
+            }
+            Message::FakeIpInput(value) => {
+                self.fake_ip_input = value;
+                self.fake_ip_error.clear();
+            }
+            Message::FakeIpAdd => {
+                if !self.settings.dns_override {
+                    self.fake_ip_error = "请先开启 DNS 覆盖".into();
+                } else {
+                    match parse_fake_ip_exclusions(&self.fake_ip_input) {
+                        Ok(values) if values.is_empty() => {
+                            self.fake_ip_error = "请输入要排除的域名".into();
+                        }
+                        Ok(values) => {
+                            let mut merged = self.settings.fake_ip_exclusions.clone();
+                            let mut added = 0;
+                            for value in values {
+                                if !merged
+                                    .iter()
+                                    .any(|item| item.eq_ignore_ascii_case(value.as_str()))
+                                {
+                                    merged.push(value);
+                                    added += 1;
+                                }
+                            }
+                            if added == 0 {
+                                self.fake_ip_error = "这些排除项已存在".into();
+                            } else if merged.len() > FAKE_IP_EXCLUSION_LIMIT {
+                                self.fake_ip_error =
+                                    format!("排除项最多 {FAKE_IP_EXCLUSION_LIMIT} 个");
+                            } else {
+                                self.fake_ip_input.clear();
+                                self.fake_ip_error.clear();
+                                return self.dispatch(Action::FakeIpExclusions(merged));
+                            }
+                        }
+                        Err(error) => self.fake_ip_error = format!("{error:#}"),
+                    }
+                }
+            }
+            Message::FakeIpRemove(index) => {
+                if !self.settings.dns_override {
+                    self.fake_ip_error = "请先开启 DNS 覆盖".into();
+                } else if index < self.settings.fake_ip_exclusions.len() {
+                    self.fake_ip_error.clear();
+                    let mut values = self.settings.fake_ip_exclusions.clone();
+                    values.remove(index);
+                    return self.dispatch(Action::FakeIpExclusions(values));
+                }
+            }
             Message::PeriodicDelay => {
                 if !self.snapshot.running
                     || self.working

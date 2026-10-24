@@ -230,7 +230,7 @@ cor rule move c:完整UUID 1
 | `claude protect [on\|off] [--yes]` | 可逆保护、锁定节点、TUN/DNS/规则覆盖及实时异常流量拦截 |
 | `claude watch [--interval 1]` | 只读观察 Claude 相关请求的真实线路；保护开启时同时查看拦截状态 |
 
-`config set` 支持 `mixed_port`、`secret`、`dark`、`theme_mode`、`accent_color`、`text_scale`、`tray_speed`、`update_prereleases`、`dns_override`、`ipv6`、`udp`、`ip_reputation_key`、`delay_interval_minutes`、`node_sort`。值先按 JSON 解析，否则视为字符串，例如 `cor config set ipv6 false`、`cor config set theme_mode dark`。控制端口由后台自动选择并处理冲突，不提供手动设置；混合端口仍可修改。枚举取值见 `config get`；模式、订阅、规则、保护必须使用各自命令，不能绕过保护锁定。
+`config set` 支持 `mixed_port`、`secret`、`dark`、`theme_mode`、`accent_color`、`text_scale`、`tray_speed`、`update_prereleases`、`dns_override`、`fake_ip`、`fake_ip_exclusions`、`ipv6`、`udp`、`ip_reputation_key`、`delay_interval_minutes`、`node_sort`。值先按 JSON 解析，否则视为字符串，例如 `cor config set ipv6 false`、`cor config set theme_mode dark`。关闭 `dns_override` 会同时关闭 `fake_ip`，运行配置改用 `redir-host`，其他订阅 DNS 字段保留；`fake_ip_exclusions` 使用 JSON 字符串数组，例如 `cor config set fake_ip_exclusions '["+.example.com"]'`。控制端口由后台自动选择并处理冲突，不提供手动设置；混合端口仍可修改。枚举取值见 `config get`；模式、订阅、规则、保护必须使用各自命令，不能绕过保护锁定。
 
 检测完成的退出码为 0，可用性与风险应读取报告字段，不能只看退出码。检测报告表示真实观察结果；单项检测失败记为 Failed，不将网络失败当作“可用”。浏览器采样需要用户打开本机入口，在没有真实浏览器的 SSH 会话中不会伪造 WebRTC/指纹结果。报告不读取 Claude 账户 Cookie、令牌或登录内容。项目审计使用 CLI 所在的当前工作目录和终端环境，不套用 GUI/后台启动时的环境。
 

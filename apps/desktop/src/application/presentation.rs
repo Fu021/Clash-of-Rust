@@ -302,6 +302,16 @@ impl App {
             set_dns_override,
             self.settings.dns_override
         );
+        set!(get_fake_ip, set_fake_ip, self.settings.fake_ip_enabled());
+        set!(get_fake_ip_editor, set_fake_ip_editor, self.fake_ip_editor);
+        set!(
+            get_fake_ip_exclusions,
+            set_fake_ip_exclusions,
+            strings(
+                data.get_fake_ip_exclusions(),
+                self.settings.fake_ip_exclusions.iter()
+            )
+        );
         set!(get_ipv6, set_ipv6, self.settings.ipv6);
         set!(get_udp, set_udp, self.settings.udp);
         set!(
@@ -405,6 +415,8 @@ impl App {
         text!(get_window_width, set_window_width, &self.window_width);
         text!(get_window_height, set_window_height, &self.window_height);
         text!(get_interval, set_interval, &self.interval_input);
+        text!(get_fake_ip_input, set_fake_ip_input, &self.fake_ip_input);
+        text!(get_fake_ip_error, set_fake_ip_error, &self.fake_ip_error);
         text!(
             get_geo_status,
             set_geo_status,

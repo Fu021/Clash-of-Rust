@@ -220,6 +220,11 @@ impl App {
             }
             Intent::TraySpeed => Message::TraySpeed(boolean(a)),
             Intent::DnsOverride => Message::Action(Action::DnsOverride(boolean(a))),
+            Intent::FakeIp => Message::Action(Action::FakeIp(boolean(a))),
+            Intent::FakeIpEditor => Message::FakeIpEditor(boolean(a)),
+            Intent::FakeIpInput => Message::FakeIpInput(a.into()),
+            Intent::FakeIpAdd => Message::FakeIpAdd,
+            Intent::FakeIpRemove => Message::FakeIpRemove(a.parse().unwrap_or(usize::MAX)),
             Intent::Ipv6 => Message::Action(Action::Ipv6(boolean(a))),
             Intent::Udp => Message::Action(Action::Udp(boolean(a))),
             Intent::Autostart => Message::Action(Action::Autostart(boolean(a))),

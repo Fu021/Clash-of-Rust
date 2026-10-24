@@ -1,4 +1,4 @@
-use anyhow::{Context, Result, bail};
+use anyhow::{Context, Result, bail, ensure};
 use directories::ProjectDirs;
 use serde::{Deserialize, Serialize};
 use serde_yaml::{Mapping, Value};
@@ -65,6 +65,45 @@ impl std::fmt::Display for ThemeMode {
     }
 }
 
+/// User-provided names that must receive real DNS answers while Fake-IP is on.
+pub const FAKE_IP_EXCLUSION_LIMIT: usize = 64;
+
+/// Parse the settings field. Commas and line breaks separate entries; empty
+/// entries are ignored so the field can be formatted freely.
+pub fn parse_fake_ip_exclusions(text: &str) -> Result<Vec<String>> {
+    let mut values: Vec<String> = Vec::new();
+    for part in text.split([',', '\n']) {
+        let part = part.trim();
+        if part.is_empty() {
+            continue;
+        }
+        validate_fake_ip_exclusion(part)?;
+        if !values.iter().any(|value| value.eq_ignore_ascii_case(part)) {
+            values.push(part.to_owned());
+        }
+    }
+    ensure!(
+        values.len() <= FAKE_IP_EXCLUSION_LIMIT,
+        "Fake-IP 排除项最多 {FAKE_IP_EXCLUSION_LIMIT} 个"
+    );
+    Ok(values)
+}
+
+fn validate_fake_ip_exclusion(value: &str) -> Result<()> {
+    ensure!(value.chars().count() <= 253, "Fake-IP 排除项过长");
+    ensure!(
+        value
+            .chars()
+            .all(|c| c.is_alphanumeric() || matches!(c, '.' | '-' | '_' | '+' | '*')),
+        "Fake-IP 排除项只能包含域名、通配符和 . - _ + *"
+    );
+    ensure!(
+        !matches!(value, "*" | "+" | "+.") && !value.starts_with('.') && !value.ends_with('.'),
+        "Fake-IP 排除项格式无效"
+    );
+    Ok(())
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(default)]
 pub struct Settings {
@@ -79,6 +118,8 @@ pub struct Settings {
     pub tray_speed: bool,
     pub update_prereleases: bool,
     pub dns_override: bool,
+    pub fake_ip: bool,
+    pub fake_ip_exclusions: Vec<String>,
     pub ipv6: bool,
     pub udp: bool,
     pub claude_protection: Option<std::sync::Arc<crate::claude_check::protection::Protection>>,
@@ -117,6 +158,8 @@ impl Default for Settings {
             tray_speed: false,
             update_prereleases: false,
             dns_override: true,
+            fake_ip: true,
+            fake_ip_exclusions: Vec::new(),
             ipv6: true,
             udp: true,
             claude_protection: None,
@@ -133,7 +176,42 @@ impl Default for Settings {
 }
 
 impl Settings {
+    /// DNS overrides own the Fake-IP switch. Turning the override off also
+    /// turns Fake-IP off so a later override cannot silently restore it.
+    pub fn fake_ip_enabled(&self) -> bool {
+        self.dns_override && self.fake_ip
+    }
+
+    /// Normalize dependent preferences loaded from older settings files.
+    pub fn normalize(&mut self) {
+        if !self.dns_override {
+            self.fake_ip = false;
+        }
+        let mut seen = Vec::new();
+        self.fake_ip_exclusions.retain(|value| {
+            let value = value.trim();
+            if value.is_empty() {
+                return false;
+            }
+            let key = value.to_lowercase();
+            if seen.contains(&key) {
+                return false;
+            }
+            seen.push(key);
+            true
+        });
+        for value in &mut self.fake_ip_exclusions {
+            *value = value.trim().to_owned();
+        }
+    }
+
     pub fn validate(&self) -> Result<()> {
+        if self.fake_ip_exclusions.len() > FAKE_IP_EXCLUSION_LIMIT {
+            bail!("Fake-IP 排除项最多 {FAKE_IP_EXCLUSION_LIMIT} 个");
+        }
+        for value in &self.fake_ip_exclusions {
+            validate_fake_ip_exclusion(value)?;
+        }
         if !(80..=150).contains(&self.text_scale) {
             bail!("字号比例应为 80–150%");
         }
@@ -223,7 +301,8 @@ impl Store {
             self.save_settings(&settings)?;
             return Ok(settings);
         }
-        let settings: Settings = serde_json::from_slice(&std::fs::read(path)?)?;
+        let mut settings: Settings = serde_json::from_slice(&std::fs::read(path)?)?;
+        settings.normalize();
         settings.validate()?;
         Ok(settings)
     }
@@ -239,10 +318,12 @@ impl Store {
         Ok(file)
     }
     pub fn save_settings(&self, settings: &Settings) -> Result<()> {
+        let mut settings = settings.clone();
+        settings.normalize();
         settings.validate()?;
         atomic_write(
             &self.root.join("settings.json"),
-            &serde_json::to_vec_pretty(settings)?,
+            &serde_json::to_vec_pretty(&settings)?,
         )
     }
     pub fn profiles(&self) -> Result<Vec<Profile>> {
@@ -440,17 +521,19 @@ pub fn runtime_config_with_rules(
     if managed_dns || settings.claude_protection.is_some() {
         // Run after protection as well: its macOS DNS overlay must not erase
         // compatibility exceptions or reinterpret a subscription whitelist.
-        let extra: &[&str] = if cfg!(target_os = "macos")
+        let mut extra: Vec<&str> = Vec::new();
+        if settings.dns_override {
+            extra.extend(settings.fake_ip_exclusions.iter().map(String::as_str));
+        }
+        if cfg!(target_os = "macos")
             && settings
                 .claude_protection
                 .as_ref()
                 .is_some_and(|protection| !protection.system_dns.is_empty())
         {
-            &["+.bash.ws"]
-        } else {
-            &[]
-        };
-        dns::fake_ip_exceptions(&mut map, extra)?;
+            extra.push("+.bash.ws");
+        }
+        dns::fake_ip_exceptions(&mut map, &extra)?;
     }
     apply_udp(
         &mut map,
@@ -734,6 +817,8 @@ mod tests {
         assert_eq!(settings.run_mode, "rule");
         assert_eq!(settings.proxy_mode, crate::model::ProxyMode::Off);
         assert!(settings.dns_override);
+        assert!(settings.fake_ip);
+        assert!(settings.fake_ip_exclusions.is_empty());
         assert!(settings.ipv6);
         assert!(settings.udp);
         assert_eq!(settings.rule_overrides, RuleOverrides::default());
@@ -895,13 +980,130 @@ mod tests {
     }
 
     #[test]
-    fn disabled_dns_override_preserves_even_a_fake_ip_whitelist() {
+    fn fake_ip_switch_depends_on_dns_override_and_exclusions_are_validated_and_deduplicated() {
+        let mut settings = Settings {
+            dns_override: false,
+            fake_ip: true,
+            fake_ip_exclusions: vec![
+                " +.fu021.shop ".into(),
+                "DS.fu021.shop".into(),
+                "+.fu021.shop".into(),
+                String::new(),
+            ],
+            ..Settings::default()
+        };
+        settings.normalize();
+        assert!(!settings.fake_ip);
+        assert!(!settings.fake_ip_enabled());
+        assert_eq!(
+            settings.fake_ip_exclusions,
+            vec!["+.fu021.shop".to_owned(), "DS.fu021.shop".to_owned()]
+        );
+
+        let parsed =
+            parse_fake_ip_exclusions(" +.fu021.shop, ds.fu021.shop\n+.FU021.SHOP ").unwrap();
+        assert_eq!(
+            parsed,
+            vec!["+.fu021.shop".to_owned(), "ds.fu021.shop".to_owned()]
+        );
+        for invalid in ["example.com:443", "*.", "*", "bad domain", ".example.com"] {
+            assert!(parse_fake_ip_exclusions(invalid).is_err(), "{invalid}");
+        }
+        let too_many = (0..=FAKE_IP_EXCLUSION_LIMIT)
+            .map(|index| format!("host{index}.example"))
+            .collect::<Vec<_>>()
+            .join(",");
+        assert!(parse_fake_ip_exclusions(&too_many).is_err());
+
+        let settings = Settings {
+            fake_ip_exclusions: parsed,
+            ..Settings::default()
+        };
+        let runtime: Value = serde_yaml::from_str(
+            &runtime_config(
+                "proxies: []\ndns: {enable: true, enhanced-mode: fake-ip, nameserver: [9.9.9.9]}",
+                &settings,
+            )
+            .unwrap(),
+        )
+        .unwrap();
+        let filters = runtime["dns"]["fake-ip-filter"].as_sequence().unwrap();
+        for domain in ["+.fu021.shop", "ds.fu021.shop"] {
+            assert!(filters.contains(&Value::from(domain)));
+        }
+
+        let settings = Settings {
+            dns_override: false,
+            fake_ip: false,
+            ..Settings::default()
+        };
+        let runtime: Value =
+            serde_yaml::from_str(&runtime_config("proxies: []\ndns: null", &settings).unwrap())
+                .unwrap();
+        assert_eq!(runtime["dns"]["enhanced-mode"], "redir-host");
+
+        // A stale settings file may still carry fake_ip=true with the override
+        // off. Runtime generation must not honor it.
+        let settings = Settings {
+            dns_override: false,
+            fake_ip: true,
+            ..Settings::default()
+        };
+        let runtime: Value = serde_yaml::from_str(
+            &runtime_config(
+                "proxies: []\ndns: {enable: true, enhanced-mode: fake-ip, nameserver: [9.9.9.9]}",
+                &settings,
+            )
+            .unwrap(),
+        )
+        .unwrap();
+        assert_eq!(runtime["dns"]["enhanced-mode"], "redir-host");
+
+        let settings = Settings {
+            fake_ip: false,
+            ..Settings::default()
+        };
+        let runtime: Value = serde_yaml::from_str(
+            &runtime_config(
+                "proxies: []\ndns: {enable: true, enhanced-mode: fake-ip, nameserver: [9.9.9.9], fake-ip-filter: ['custom.test']}",
+                &settings,
+            )
+            .unwrap(),
+        )
+        .unwrap();
+        assert_eq!(runtime["dns"]["enhanced-mode"], "redir-host");
+        assert_eq!(runtime["dns"]["nameserver"][0], "https://doh.pub/dns-query");
+        assert_eq!(
+            runtime["dns"]["fake-ip-filter"],
+            serde_yaml::to_value(["custom.test"]).unwrap(),
+            "disabling Fake-IP must not append real-IP exceptions"
+        );
+    }
+
+    #[test]
+    fn old_settings_with_dns_override_off_load_with_fake_ip_disabled() {
+        let directory = tempfile::tempdir().unwrap();
+        let store = Store::at(directory.path().to_owned()).unwrap();
+        std::fs::write(
+            directory.path().join("settings.json"),
+            r#"{"dns_override":false,"fake_ip":true}"#,
+        )
+        .unwrap();
+        let loaded = store.load_settings().unwrap();
+        assert!(!loaded.dns_override);
+        assert!(!loaded.fake_ip);
+        assert!(!loaded.fake_ip_enabled());
+    }
+
+    #[test]
+    fn disabled_dns_override_disables_subscription_fake_ip_but_preserves_other_dns_fields() {
         let raw = "proxies: []\ndns: {enable: true, enhanced-mode: fake-ip, nameserver: [9.9.9.9], fake-ip-filter-mode: whitelist, fake-ip-filter: ['*']}\n";
         let settings = Settings {
             dns_override: false,
             ..Settings::default()
         };
         let result: Value = serde_yaml::from_str(&runtime_config(raw, &settings).unwrap()).unwrap();
+        assert_eq!(result["dns"]["enhanced-mode"], "redir-host");
         assert_eq!(result["dns"]["fake-ip-filter-mode"], "whitelist");
         assert_eq!(
             result["dns"]["fake-ip-filter"],
@@ -934,6 +1136,7 @@ mod tests {
             let result: Value =
                 serde_yaml::from_str(&runtime_config(raw, &loaded).unwrap()).unwrap();
             assert_eq!(result["dns"]["enable"].as_bool(), Some(true));
+            assert_eq!(result["dns"]["enhanced-mode"].as_str(), Some("redir-host"));
             assert_eq!(result["dns"]["ipv6"].as_bool(), Some(false));
             assert_eq!(result["ipv6"].as_bool(), Some(false));
             assert_eq!(result["dns"]["nameserver"].as_sequence().unwrap().len(), 2);

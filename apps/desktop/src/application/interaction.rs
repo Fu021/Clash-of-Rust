@@ -454,6 +454,11 @@ impl App {
                         } else if self.claude.guide.is_some() {
                             self.claude.guide = None;
                             none()
+                        } else if self.fake_ip_editor {
+                            self.fake_ip_editor = false;
+                            self.fake_ip_input.clear();
+                            self.fake_ip_error.clear();
+                            none()
                         } else if self.page == Page::Rules {
                             self.update_rules(rules_view::Event::CloseEditor)
                         } else if self.page == Page::Websites {

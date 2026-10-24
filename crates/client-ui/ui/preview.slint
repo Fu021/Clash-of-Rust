@@ -7,6 +7,8 @@ export component Preview inherits AppWindow {
     in-out property <bool> preview-motion;
     changed preview-motion => { Motion.enabled = root.preview-motion; }
     in-out property <int> preview-page <=> UiData.page;
+    in-out property <bool> preview-fake-ip-editor;
+    changed preview-fake-ip-editor => { UiData.fake-ip-editor = root.preview-fake-ip-editor; }
     in-out property <bool> preview-dark <=> UiData.dark;
     in-out property <int> preview-text-scale <=> UiData.text-scale;
     in-out property <int> preview-accent <=> UiData.accent;
@@ -46,6 +48,7 @@ export component Preview inherits AppWindow {
     }
     init => {
         Motion.enabled = root.preview-motion;
+        UiData.fake-ip-editor = root.preview-fake-ip-editor;
         UiData.version = "0.6.4";
         UiData.ready = true; UiData.running = true;
         UiData.profile = "我的订阅"; UiData.node = "德国 01 · IPv6";
@@ -111,7 +114,10 @@ export component Preview inherits AppWindow {
         UiData.claude-status = "检测完成 · 浏览器自动采样已回传";
         UiData.claude-results = [{flag: @image-url("icons/ip.svg"), flagged: false, id: "1", title: "DNS 地区线索", value: "发现与代理出口不同的地区", detail: "请核对浏览器安全 DNS 与系统 DNS 配置。此处为固定演示结果。", source: "浏览器采样", tone: 3}];
         UiData.claude-result-status = "1 条 · 1–1";
-        UiData.dns-override = true; UiData.ipv6 = true; UiData.udp = true;
+        UiData.dns-override = true; UiData.fake-ip = true;
+        UiData.fake-ip-exclusions = ["+.example.com", "ds.example.test", "localhost"];
+        UiData.fake-ip-input = "new.example.test";
+        UiData.ipv6 = true; UiData.udp = true;
         UiData.mixed-port = "7897";
         UiData.window-width = "950"; UiData.window-height = "700"; UiData.interval = "0";
         UiData.geo-status = "2026-10-15"; UiData.update-status = "已是最新版本";

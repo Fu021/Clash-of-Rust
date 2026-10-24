@@ -14,6 +14,8 @@ pub(super) enum Action {
     TraySpeed(bool),
     UpdatePrereleases(bool),
     DnsOverride(bool),
+    FakeIp(bool),
+    FakeIpExclusions(Vec<String>),
     Ipv6(bool),
     Udp(bool),
     ClaudeProtection(bool),
@@ -203,12 +205,46 @@ pub(super) async fn execute(
                 Ok("更新通道已保存".into())
             }
             Action::DnsOverride(dns_override) => {
+                // DNS override owns Fake-IP: turning it off also turns off the
+                // dependent preference instead of leaving a stale on state.
+                let fake_ip =
+                    dns_override && engine.settings.dns_override && engine.settings.fake_ip;
                 let settings = Settings {
                     dns_override,
+                    fake_ip,
                     ..engine.settings.clone()
                 };
                 engine.save_settings(settings).await?;
-                Ok("DNS 覆盖设置已保存并应用".into())
+                Ok(match (dns_override, fake_ip) {
+                    (true, true) => "DNS 覆盖已保存并应用；Fake-IP 保持开启",
+                    (true, false) => "DNS 覆盖已保存并应用；Fake-IP 保持关闭，可在网络设置中开启",
+                    (false, _) => "DNS 覆盖与 Fake-IP 已关闭，其他 DNS 字段沿用订阅",
+                }
+                .into())
+            }
+            Action::FakeIp(fake_ip) => {
+                if fake_ip && !engine.settings.dns_override {
+                    anyhow::bail!("请先开启 DNS 覆盖，再启用 Fake-IP");
+                }
+                let settings = Settings {
+                    fake_ip,
+                    ..engine.settings.clone()
+                };
+                engine.save_settings(settings).await?;
+                Ok(if fake_ip {
+                    "Fake-IP 已开启并应用"
+                } else {
+                    "Fake-IP 已关闭，DNS 改用真实 IP"
+                }
+                .into())
+            }
+            Action::FakeIpExclusions(fake_ip_exclusions) => {
+                let settings = Settings {
+                    fake_ip_exclusions,
+                    ..engine.settings.clone()
+                };
+                engine.save_settings(settings).await?;
+                Ok("Fake-IP 排除项已保存并应用".into())
             }
             Action::Ipv6(ipv6) => {
                 let settings = Settings {
