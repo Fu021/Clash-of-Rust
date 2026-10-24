@@ -1,7 +1,7 @@
 plugins { id("com.android.application") }
 
-val appVersion = providers.gradleProperty("appVersion").orElse("0.6.3-dev.1").get()
-val appVersionCode = providers.gradleProperty("appVersionCode").orElse("603001").get().toInt()
+val appVersion = providers.gradleProperty("appVersion").orElse("0.6.4").get()
+val appVersionCode = providers.gradleProperty("appVersionCode").orElse("604000").get().toInt()
 val selectedAbi = providers.gradleProperty("appAbi").orNull
 
 android {
