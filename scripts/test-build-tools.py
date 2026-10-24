@@ -1278,18 +1278,23 @@ assert.equal(calls.length,2);
 
     def test_version_validation(self):
         self.assertEqual(build.validate_version('0.4.4'),'0.4.4')
-        for invalid in ('1.2','1.2.3.4','1.2.x','1.2.65536','../0.4.4','01.2.3','0.4.12-dev.01','0.4.12-','0.4.12-dev/1'):
+        for invalid in ('1.2','1.2.3.4','1.2.x','1.2.65536','../0.4.4','01.2.3','0.4.12-dev.01','0.4.12-','0.4.12-dev/1',
+                        '0.6.5-dev:fake-ip-sources','0.6.5-fix:android-protection'):
             with self.assertRaises(ValueError):
                 build.validate_version(invalid)
 
     def test_prerelease_installer_versions_preserve_semver_and_upgrade_order(self):
-        self.assertEqual(build.validate_version('0.4.12-dev.1'),'0.4.12-dev.1')
-        self.assertEqual(build.numeric_version('0.4.12-dev.1'),'0.4.12.0')
-        self.assertEqual(build.deb_version('0.4.12-dev.1'),'0.4.12~dev.1')
         self.assertEqual(build.deb_version('0.4.12'),'0.4.12')
-        if shutil.which('dpkg'):
-            subprocess.run(['dpkg','--compare-versions',build.deb_version('0.4.12-dev.1'),'lt','0.4.12'],check=True)
-            subprocess.run(['dpkg','--compare-versions',build.deb_version('0.4.12-dev.1'),'gt','0.4.11'],check=True)
+        for version, stable, previous in [('0.4.12-dev.1','0.4.12','0.4.11'),
+                                          ('0.6.5-dev.1.fake-ip-sources','0.6.5','0.6.4'),
+                                          ('0.6.5-fix.1.android-protection','0.6.5','0.6.4')]:
+            with self.subTest(version=version):
+                self.assertEqual(build.validate_version(version),version)
+                self.assertEqual(build.numeric_version(version),stable+'.0')
+                self.assertEqual(build.deb_version(version),version.replace('-','~',1))
+                if shutil.which('dpkg'):
+                    subprocess.run(['dpkg','--compare-versions',build.deb_version(version),'lt',stable],check=True)
+                    subprocess.run(['dpkg','--compare-versions',build.deb_version(version),'gt',previous],check=True)
 
     def test_build_token_is_sent_only_to_secure_github_api_and_removed_on_redirect(self):
         import io

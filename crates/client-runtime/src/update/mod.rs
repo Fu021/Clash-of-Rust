@@ -316,26 +316,9 @@ fn newest_channel(
     include_prereleases: bool,
 ) -> Result<Option<Available>> {
     let current = Version::parse(current).context("当前客户端版本号无效")?;
-    let current_is_preview = channel::installed_preview(
-        &current,
-        releases
-            .iter()
-            .map(|release| (release.tag_name.as_str(), release.draft, release.prerelease)),
-    );
-    let selected = releases
-        .into_iter()
-        .filter_map(|release| {
-            let version = channel::candidate(
-                &release.tag_name,
-                release.draft,
-                release.prerelease,
-                &current,
-                include_prereleases,
-                current_is_preview,
-            )?;
-            Some((version, release))
-        })
-        .max_by(|(left, _), (right, _)| left.cmp_precedence(right));
+    let selected = channel::select(releases, &current, include_prereleases, |release| {
+        (&release.tag_name, release.draft, release.prerelease)
+    });
     Ok(selected.map(|(version, release)| {
         // Build the link from our repository, never an arbitrary URL in metadata.
         let mut url = Url::parse(RELEASES_URL).expect("constant release URL");
@@ -1176,12 +1159,15 @@ mod tests {
             draft,
             release("nightly", false),
             release("v0.4.1+other", false),
+            release("v0.4.0", false),
         ];
         assert!(newest(releases, "0.4.1+local").unwrap().is_none());
-        assert!(
+        assert_eq!(
             newest(vec![release("v0.4.0", false)], "0.4.1")
                 .unwrap()
-                .is_none()
+                .unwrap()
+                .version,
+            "0.4.0"
         );
     }
 
@@ -1210,11 +1196,14 @@ mod tests {
         let preview = newest_channel(releases(), "0.6.3", true).unwrap().unwrap();
         assert_eq!(preview.version, "0.6.4-dev.2");
         assert!(preview.preview);
-        let stable = newest_channel(releases(), "0.6.4-dev.1", false)
-            .unwrap()
-            .unwrap();
-        assert_eq!(stable.version, "0.6.3");
-        assert!(!stable.preview);
+        for current in ["0.6.4-dev.1", "0.999.0", "0.999.0-fix.1.local"] {
+            let stable = newest_channel(releases(), current, false).unwrap().unwrap();
+            assert_eq!(stable.version, "0.6.3");
+            assert!(!stable.preview);
+        }
+        for current in ["0.999.0", "0.999.0-fix.1.local"] {
+            assert!(newest_channel(releases(), current, true).unwrap().is_none());
+        }
         assert!(
             newest_channel(releases(), "0.6.3", false)
                 .unwrap()

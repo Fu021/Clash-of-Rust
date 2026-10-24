@@ -19,6 +19,21 @@
 
 界面细节见 [Slint 说明](../crates/client-ui/README.md)，Android 生命周期与构建见 [Android 说明](../apps/android/README.md)。尽量在现有层次解决问题，不把平台权限、文件访问或网络请求写进 `.slint`。
 
+## 分支版本
+
+每次创建开发或修复分支，先核对 GitHub 当前最新的非草稿、非预发布正式版，将其 patch 加一，附分支类型、递增序号和简短内容。正式版为 `0.6.4` 时：
+
+| 分支用途 | 版本示例 |
+| --- | --- |
+| 功能开发 | `0.6.5-dev.1.fake-ip-sources` |
+| 问题修复 | `0.6.5-fix.1.android-protection` |
+
+序号在相同基础版本和类型中递增，首次为 `1`；再次提供该类型的预发布安装包时递增序号，内容描述不承担排序。描述只用 ASCII 字母、数字和连字符，多个标识用点分隔；`0.6.5-dev:描述` 不符合 Cargo/打包器的 SemVer 格式。`0.6.4 < 0.6.5-dev.1.fake-ip-sources < 0.6.5`；`dev` 与 `fix` 仍按 SemVer 字典序比较，不代表跨分支的开发先后顺序。
+
+版本的权威来源为根 `Cargo.toml` 的 `[workspace.package].version`。同步 `Cargo.lock` 中所有 workspace 包、Android Gradle 的版本默认值和离线预览 fixture；不改第三方包版本或历史 Release 文档。正式发布去除后缀、跳版本及其他例外仍需维护者明确授权。版本变化后必须重新取得同提交 CI，不能复用旧版本的构建产物。
+
+安装包版本核验及高版本本地包的更新行为见[版本与更新通道](workflows.md#版本与更新通道)。
+
 ## 修改前后都要检查
 
 - 读实际调用链、相关测试与 diff，保留用户未提交的内容，不修改无关文件或撤销他人改动。

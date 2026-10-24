@@ -24,40 +24,38 @@ impl Consent {
     }
 }
 
-pub fn installed_preview<'a>(
-    current: &Version,
-    releases: impl IntoIterator<Item = (&'a str, bool, bool)>,
-) -> bool {
-    !current.pre.is_empty()
-        || releases.into_iter().any(|(tag, draft, preview)| {
-            !draft
-                && preview
-                && Version::parse(tag.strip_prefix('v').unwrap_or(tag))
-                    .is_ok_and(|version| version.cmp_precedence(current).is_eq())
-        })
-}
-
-/// Stable users only move forward. A prerelease user who opts out may return
-/// to the newest stable release, even when its version is numerically lower.
-pub fn candidate(
-    tag: &str,
-    draft: bool,
-    prerelease: bool,
+/// Stable mode follows the newest stable release, including a lower version.
+/// Preview mode only offers versions newer than the installed version.
+pub fn select<T>(
+    releases: impl IntoIterator<Item = T>,
     current: &Version,
     include_prereleases: bool,
-    current_is_preview: bool,
-) -> Option<Version> {
-    if draft {
-        return None;
-    }
-    let version = Version::parse(tag.strip_prefix('v').unwrap_or(tag)).ok()?;
-    let preview = prerelease || !version.pre.is_empty();
-    if preview && !include_prereleases {
-        return None;
-    }
-    (version.cmp_precedence(current).is_gt()
-        || (!include_prereleases && current_is_preview && !preview))
-        .then_some(version)
+    metadata: impl Fn(&T) -> (&str, bool, bool),
+) -> Option<(Version, T)> {
+    releases
+        .into_iter()
+        .filter_map(|release| {
+            let (tag, draft, prerelease) = metadata(&release);
+            if draft {
+                return None;
+            }
+            let version = Version::parse(tag.strip_prefix('v').unwrap_or(tag)).ok()?;
+            if !include_prereleases && (prerelease || !version.pre.is_empty()) {
+                return None;
+            }
+            Some((version, release))
+        })
+        .max_by(|(left, _), (right, _)| left.cmp_precedence(right))
+        // Compare only the channel maximum, or an equal installed version
+        // could be filtered out and expose an older release as an update.
+        .filter(|(target, _)| {
+            let order = target.cmp_precedence(current);
+            if include_prereleases {
+                order.is_gt()
+            } else {
+                !order.is_eq()
+            }
+        })
 }
 
 pub fn description(version: &str, preview: bool, current: &str) -> String {
@@ -90,39 +88,34 @@ mod tests {
         assert!(!Consent::new("0.6.4-dev.1".into()).accepts("0.6.4-dev.1"));
     }
 
-    fn eligible(
-        tag: &str,
-        draft: bool,
-        preview: bool,
-        current: &Version,
-        include: bool,
-    ) -> Option<Version> {
-        candidate(
-            tag,
-            draft,
-            preview,
-            current,
+    fn selected(releases: &[(&str, bool, bool)], current: &str, include: bool) -> Option<String> {
+        select(
+            releases,
+            &Version::parse(current).unwrap(),
             include,
-            !current.pre.is_empty(),
+            |release| **release,
         )
+        .map(|(version, _)| version.to_string())
     }
 
     #[test]
-    fn channels_filter_metadata_and_tags_and_allow_only_prereleases_to_return_to_stable() {
-        let stable = Version::parse("0.6.2").unwrap();
-        let preview = Version::parse("0.6.3-dev.2").unwrap();
-        assert!(eligible("v0.6.3-dev.3", false, true, &stable, false).is_none());
-        assert!(eligible("v0.6.3-dev.3", false, false, &stable, false).is_none());
-        assert!(eligible("v0.6.3", false, true, &stable, false).is_none());
-        assert!(eligible("v0.6.3-dev.3", true, true, &stable, true).is_none());
-        assert!(eligible("not-a-version", false, false, &stable, true).is_none());
-        assert!(eligible("v0.6.3-dev.3", false, true, &stable, true).is_some());
-        assert!(eligible("v0.6.3-dev.1", false, true, &preview, true).is_none());
-        assert!(eligible("v0.6.2", false, false, &preview, true).is_none());
-        assert!(eligible("v0.6.2", false, false, &preview, false).is_some());
-        assert!(eligible("v0.6.3", false, false, &preview, false).is_some());
-        assert!(eligible("v0.6.1", false, false, &stable, false).is_none());
-        assert!(eligible("v0.6.2+other-build", false, false, &stable, true).is_none());
+    fn channels_filter_drafts_invalid_tags_and_both_kinds_of_preview() {
+        let releases = [
+            ("v0.6.5", false, true),
+            ("v0.6.6-dev.1", false, false),
+            ("v0.6.4", false, false),
+            ("v1.0.0", true, false),
+            ("not-a-version", false, false),
+        ];
+        assert_eq!(
+            selected(&releases, "0.6.3", false).as_deref(),
+            Some("0.6.4")
+        );
+        assert_eq!(
+            selected(&releases, "0.6.3", true).as_deref(),
+            Some("0.6.6-dev.1")
+        );
+        assert!(selected(&[], "0.6.3", false).is_none());
         assert_eq!(
             description("0.6.2", false, "0.6.3-dev.2"),
             "可返回正式版 0.6.2"
@@ -134,12 +127,33 @@ mod tests {
     }
 
     #[test]
-    fn github_can_mark_a_plain_numeric_tag_as_a_prerelease() {
-        let current = Version::parse("0.6.3").unwrap();
-        let preview = installed_preview(&current, [("v0.6.3", false, true)]);
-        assert!(preview);
-        assert!(candidate("v0.6.2", false, false, &current, false, preview).is_some());
-        assert!(candidate("v0.6.3", false, true, &current, true, preview).is_none());
-        assert!(!installed_preview(&current, [("v0.6.3", true, true)]));
+    fn stable_channel_returns_high_local_versions_without_needing_release_metadata() {
+        let releases = [
+            ("v0.6.3", false, false),
+            ("v0.6.5-dev.1.example", false, true),
+            ("v0.6.4", false, false),
+        ];
+        for current in ["0.999.0", "0.999.0-fix.1.example", "0.6.5-dev.1.example"] {
+            assert_eq!(
+                selected(&releases, current, false).as_deref(),
+                Some("0.6.4")
+            );
+            assert!(selected(&releases, current, true).is_none());
+        }
+        assert_eq!(description("0.6.4", false, "0.999.0"), "可返回正式版 0.6.4");
+    }
+
+    #[test]
+    fn current_channel_maximum_never_exposes_an_older_release_or_metadata_only_change() {
+        let mut releases = [
+            ("v0.6.4+published", false, false),
+            ("v0.6.3", false, false),
+            ("v0.6.5-dev.1", false, true),
+        ];
+        for _ in 0..2 {
+            assert!(selected(&releases, "0.6.4+local", false).is_none());
+            assert!(selected(&releases, "0.6.5-dev.1", true).is_none());
+            releases.reverse();
+        }
     }
 }
