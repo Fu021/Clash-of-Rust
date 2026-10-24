@@ -51,6 +51,7 @@ pub(super) fn setting(settings: &Settings, key: &str, value: Value) -> Result<Se
                 | "dns_override"
                 | "fake_ip"
                 | "fake_ip_exclusions"
+                | "fake_ip_disabled_defaults"
                 | "ipv6"
                 | "udp"
                 | "ip_reputation_key"
@@ -181,8 +182,33 @@ mod tests {
             next.fake_ip_exclusions,
             vec!["+.example.test".to_owned(), "DS.example.test".to_owned()]
         );
-        let off = setting(&settings, "dns_override", Value::Bool(false)).unwrap();
+        let removed = setting(
+            &next,
+            "fake_ip_disabled_defaults",
+            serde_json::json!([" +.TAILSCALE.COM ", "+.tailscale.com", ""]),
+        )
+        .unwrap();
+        assert_eq!(removed.fake_ip_disabled_defaults, ["+.tailscale.com"]);
+        assert_eq!(removed.fake_ip_exclusions, next.fake_ip_exclusions);
+        assert!(
+            setting(
+                &next,
+                "fake_ip_disabled_defaults",
+                serde_json::json!(["custom.example"]),
+            )
+            .is_err()
+        );
+        let restored =
+            setting(&removed, "fake_ip_disabled_defaults", serde_json::json!([])).unwrap();
+        assert!(restored.fake_ip_disabled_defaults.is_empty());
+        assert_eq!(restored.fake_ip_exclusions, next.fake_ip_exclusions);
+        let off = setting(&removed, "dns_override", Value::Bool(false)).unwrap();
         assert!(!off.dns_override && !off.fake_ip);
+        assert_eq!(
+            off.fake_ip_disabled_defaults,
+            removed.fake_ip_disabled_defaults
+        );
+        assert_eq!(off.fake_ip_exclusions, removed.fake_ip_exclusions);
         assert!(setting(&off, "fake_ip", Value::Bool(true)).is_err());
     }
     #[test]

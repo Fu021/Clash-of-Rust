@@ -803,9 +803,8 @@ fn setting_and_toolbar_intents_preserve_their_values_in_the_command_queue() {
     let _ = app.ui_intent(Intent::FakeIpAdd, "", "");
     assert!(matches!(
         app.queued_actions.pop_back(),
-        Some(Action::FakeIpExclusions(values))
+        Some(Action::FakeIpAdd(values))
             if values == vec![
-                "existing.test".to_owned(),
                 "+.example.test".to_owned(),
                 "ds.example.test".to_owned()
             ]
@@ -813,11 +812,10 @@ fn setting_and_toolbar_intents_preserve_their_values_in_the_command_queue() {
     let mut app = fixture(Page::Settings);
     app.busy = true;
     app.settings.fake_ip_exclusions = vec!["existing.test".into(), "another.test".into()];
-    let _ = app.ui_intent(Intent::FakeIpRemove, "0", "");
+    let _ = app.ui_intent(Intent::FakeIpRemove, "existing.test", "");
     assert!(matches!(
         app.queued_actions.pop_back(),
-        Some(Action::FakeIpExclusions(values))
-            if values == vec!["another.test".to_owned()]
+        Some(Action::FakeIpRemove(domain)) if domain == "existing.test"
     ));
     let mut app = fixture(Page::Settings);
     let _ = app.ui_intent(Intent::FakeIpEditor, "true", "");
@@ -1559,7 +1557,12 @@ fn fake_ip_projection_follows_dns_override_and_exposes_the_exclusion_page() {
     let mut app = fixture(Page::Settings);
     app.settings.dns_override = false;
     app.settings.fake_ip = true;
-    app.settings.fake_ip_exclusions = vec!["+.example.test".into(), "ds.example.test".into()];
+    app.settings.fake_ip_exclusions = vec![
+        "+.example.test".into(),
+        "ds.example.test".into(),
+        "localhost".into(),
+    ];
+    app.settings.fake_ip_disabled_defaults = vec!["+.tailscale.com".into()];
     app.fake_ip_editor = true;
     app.fake_ip_input = "next.example.test".into();
     let window = AppWindow::new().unwrap();
@@ -1571,9 +1574,23 @@ fn fake_ip_projection_follows_dns_override_and_exposes_the_exclusion_page() {
     assert!(data.get_fake_ip_editor());
     assert_eq!(data.get_fake_ip_input().to_string(), "next.example.test");
     let rows = data.get_fake_ip_exclusions();
-    assert_eq!(rows.row_count(), 2);
-    assert_eq!(rows.row_data(0).unwrap().to_string(), "+.example.test");
-    assert_eq!(rows.row_data(1).unwrap().to_string(), "ds.example.test");
+    assert_eq!(
+        rows.row_count(),
+        clash_of_rust::config::DEFAULT_FAKE_IP_EXCLUSIONS.len() + 1
+    );
+    assert_eq!(rows.row_data(0).unwrap().domain, "+.example.test");
+    assert_eq!(rows.row_data(0).unwrap().source, "用户自定义");
+    assert_eq!(rows.row_data(1).unwrap().domain, "ds.example.test");
+    assert_eq!(rows.row_data(2).unwrap().source, "用户自定义、DNS 覆盖");
+    assert_eq!(
+        rows.iter()
+            .find(|row| row.domain == "+.lan")
+            .unwrap()
+            .source,
+        "DNS 覆盖"
+    );
+    assert!(rows.iter().all(|row| row.domain != "+.tailscale.com"));
+    assert_eq!(data.get_fake_ip_removed_defaults(), 1);
 
     app.settings.dns_override = true;
     app.present_slint(&data, &mut models);
@@ -1584,6 +1601,13 @@ fn fake_ip_projection_follows_dns_override_and_exposes_the_exclusion_page() {
         app.queued_actions.pop_back(),
         Some(Action::DnsOverride(false))
     ));
+    app.fake_ip_editor = false;
+    app.present_slint(&data, &mut models);
+    assert_eq!(data.get_fake_ip_exclusions().row_count(), 0);
+    app.fake_ip_editor = true;
+    app.visible = false;
+    app.present_slint(&data, &mut models);
+    assert_eq!(data.get_fake_ip_exclusions().row_count(), 0);
 }
 
 #[test]
@@ -1601,11 +1625,47 @@ fn fake_ip_add_validates_the_input_before_queueing_a_save() {
     assert!(app.fake_ip_error.is_empty());
     assert!(matches!(
         app.queued_actions.pop_back(),
-        Some(Action::FakeIpExclusions(values))
+        Some(Action::FakeIpAdd(values))
             if values == vec!["+.ok.test".to_owned()]
     ));
 
     app.fake_ip_input.clear();
     let _ = app.ui_intent(Intent::FakeIpAdd, "", "");
     assert!(app.fake_ip_error.contains("请输入"));
+
+    app.fake_ip_input = "+.TAILSCALE.COM".into();
+    let _ = app.ui_intent(Intent::FakeIpAdd, "", "");
+    assert!(app.fake_ip_error.contains("已存在"));
+    assert!(app.queued_actions.is_empty());
+}
+
+#[test]
+fn fake_ip_remove_and_restore_use_stable_domains_and_keep_dns_override_required() {
+    let mut app = fixture(Page::Settings);
+    app.busy = true;
+    let _ = app.ui_intent(Intent::FakeIpRemove, "+.tailscale.com", "");
+    assert!(matches!(
+        app.queued_actions.pop_back(),
+        Some(Action::FakeIpRemove(domain)) if domain == "+.tailscale.com"
+    ));
+    let _ = app.ui_intent(Intent::FakeIpRemove, "0", "");
+    assert!(app.queued_actions.is_empty());
+    assert!(app.fake_ip_error.contains("未找到"));
+
+    app.settings.fake_ip_disabled_defaults = vec!["+.tailscale.com".into()];
+    let _ = app.ui_intent(Intent::FakeIpRestoreDefaults, "", "");
+    assert!(app.fake_ip_error.is_empty());
+    assert!(matches!(
+        app.queued_actions.pop_back(),
+        Some(Action::FakeIpRestoreDefaults)
+    ));
+    app.settings.dns_override = false;
+    for (intent, domain) in [
+        (Intent::FakeIpRemove, "localhost"),
+        (Intent::FakeIpRestoreDefaults, ""),
+    ] {
+        let _ = app.ui_intent(intent, domain, "");
+        assert!(app.fake_ip_error.contains("请先开启"));
+        assert!(app.queued_actions.is_empty());
+    }
 }

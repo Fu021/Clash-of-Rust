@@ -307,10 +307,31 @@ impl App {
         set!(
             get_fake_ip_exclusions,
             set_fake_ip_exclusions,
-            strings(
+            model(
                 data.get_fake_ip_exclusions(),
-                self.settings.fake_ip_exclusions.iter()
+                if self.visible && self.page == Page::Settings && self.fake_ip_editor {
+                    self.settings
+                        .fake_ip_exclusion_entries()
+                        .into_iter()
+                        .map(|entry| FakeIpExclusionItem {
+                            domain: entry.domain.into(),
+                            source: match (entry.custom, entry.dns_override) {
+                                (true, true) => "用户自定义、DNS 覆盖",
+                                (true, false) => "用户自定义",
+                                _ => "DNS 覆盖",
+                            }
+                            .into(),
+                        })
+                        .collect()
+                } else {
+                    Vec::new()
+                }
             )
+        );
+        set!(
+            get_fake_ip_removed_defaults,
+            set_fake_ip_removed_defaults,
+            self.settings.fake_ip_disabled_defaults.len() as i32
         );
         set!(get_ipv6, set_ipv6, self.settings.ipv6);
         set!(get_udp, set_udp, self.settings.udp);

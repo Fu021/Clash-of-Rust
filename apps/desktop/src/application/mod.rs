@@ -22,10 +22,7 @@ mod ui_testing;
 mod ui_tests;
 mod window_state;
 use clash_of_rust::{
-    config::{
-        AccentColor, FAKE_IP_EXCLUSION_LIMIT, Profile, Settings, Store, ThemeMode,
-        parse_fake_ip_exclusions,
-    },
+    config::{AccentColor, Profile, Settings, Store, ThemeMode, parse_fake_ip_exclusions},
     connection::{self, Field as ConnectionField, Sort as ConnectionSort},
     engine::{Engine, ProxyMode, Scope, Snapshot},
     ip_check,
@@ -259,7 +256,8 @@ enum Message {
     FakeIpEditor(bool),
     FakeIpInput(String),
     FakeIpAdd,
-    FakeIpRemove(usize),
+    FakeIpRemove(String),
+    FakeIpRestoreDefaults,
     PeriodicDelay,
     PeriodicDone(u64, Result<BTreeMap<String, u32>, String>),
     SiteProbe(String),
@@ -663,7 +661,9 @@ impl App {
                 | Action::SavePorts(..)
                 | Action::DnsOverride(_)
                 | Action::FakeIp(_)
-                | Action::FakeIpExclusions(_)
+                | Action::FakeIpAdd(_)
+                | Action::FakeIpRemove(_)
+                | Action::FakeIpRestoreDefaults
                 | Action::Ipv6(_)
                 | Action::Udp(_)
                 | Action::ClaudeProtection(_)
@@ -1492,40 +1492,36 @@ impl App {
                             self.fake_ip_error = "请输入要排除的域名".into();
                         }
                         Ok(values) => {
-                            let mut merged = self.settings.fake_ip_exclusions.clone();
-                            let mut added = 0;
-                            for value in values {
-                                if !merged
-                                    .iter()
-                                    .any(|item| item.eq_ignore_ascii_case(value.as_str()))
-                                {
-                                    merged.push(value);
-                                    added += 1;
+                            let mut settings = self.settings.clone();
+                            match settings.add_fake_ip_exclusions(&values) {
+                                Ok(()) => {
+                                    self.fake_ip_input.clear();
+                                    self.fake_ip_error.clear();
+                                    return self.dispatch(Action::FakeIpAdd(values));
                                 }
-                            }
-                            if added == 0 {
-                                self.fake_ip_error = "这些排除项已存在".into();
-                            } else if merged.len() > FAKE_IP_EXCLUSION_LIMIT {
-                                self.fake_ip_error =
-                                    format!("排除项最多 {FAKE_IP_EXCLUSION_LIMIT} 个");
-                            } else {
-                                self.fake_ip_input.clear();
-                                self.fake_ip_error.clear();
-                                return self.dispatch(Action::FakeIpExclusions(merged));
+                                Err(error) => self.fake_ip_error = format!("{error:#}"),
                             }
                         }
                         Err(error) => self.fake_ip_error = format!("{error:#}"),
                     }
                 }
             }
-            Message::FakeIpRemove(index) => {
+            Message::FakeIpRemove(domain) => {
+                let mut settings = self.settings.clone();
+                match settings.remove_fake_ip_exclusion(&domain) {
+                    Ok(()) => {
+                        self.fake_ip_error.clear();
+                        return self.dispatch(Action::FakeIpRemove(domain));
+                    }
+                    Err(error) => self.fake_ip_error = format!("{error:#}"),
+                }
+            }
+            Message::FakeIpRestoreDefaults => {
                 if !self.settings.dns_override {
                     self.fake_ip_error = "请先开启 DNS 覆盖".into();
-                } else if index < self.settings.fake_ip_exclusions.len() {
+                } else {
                     self.fake_ip_error.clear();
-                    let mut values = self.settings.fake_ip_exclusions.clone();
-                    values.remove(index);
-                    return self.dispatch(Action::FakeIpExclusions(values));
+                    return self.dispatch(Action::FakeIpRestoreDefaults);
                 }
             }
             Message::PeriodicDelay => {

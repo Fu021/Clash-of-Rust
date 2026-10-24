@@ -16,7 +16,7 @@ pub const DEFAULT_DNS_NAMESERVERS: [&str; 2] = [
 // developers.cloudflare.com/cloudflare-one/team-and-resources/devices/cloudflare-one-client/deployment/firewall;
 // docs.syncthing.net/users/firewall;
 // github.com/rustdesk/hbb_common/blob/master/src/config.rs.
-pub(super) const REAL_IP_DOMAINS: &[&str] = &[
+pub const DEFAULT_FAKE_IP_EXCLUSIONS: &[&str] = &[
     // Local and reverse lookup namespaces.
     "localhost",
     "+.localhost",
@@ -99,7 +99,7 @@ pub(super) fn apply(map: &mut Mapping, settings: &Settings) -> Result<bool> {
     Ok(managed)
 }
 
-pub(super) fn fake_ip_exceptions(map: &mut Mapping, extra: &[&str]) -> Result<()> {
+pub(super) fn fake_ip_exceptions(map: &mut Mapping, exclusions: &[&str]) -> Result<()> {
     let dns = map
         .get_mut(Value::from("dns"))
         .and_then(Value::as_mapping_mut)
@@ -129,7 +129,7 @@ pub(super) fn fake_ip_exceptions(map: &mut Mapping, extra: &[&str]) -> Result<()
     let mut providers = None;
     match mode.as_str() {
         "blacklist" => {
-            for domain in REAL_IP_DOMAINS.iter().chain(extra) {
+            for domain in exclusions {
                 if !filters
                     .iter()
                     .any(|filter| filter.as_str().unwrap().eq_ignore_ascii_case(domain))
@@ -142,7 +142,7 @@ pub(super) fn fake_ip_exceptions(map: &mut Mapping, extra: &[&str]) -> Result<()
             // A whitelist match means fake-IP. Appending the exceptions there
             // would do the opposite of what we need. An ordered real-IP prefix
             // takes precedence; native domain-set matching preserves old globs.
-            let mut rules = exception_rules(extra);
+            let mut rules = exception_rules(exclusions);
             if mode == "whitelist" {
                 let mut domain_patterns = vec![];
                 for filter in &filters {
@@ -224,10 +224,9 @@ fn whitelist_provider(map: &mut Mapping, patterns: Vec<Value>) -> Result<String>
     Ok(name)
 }
 
-fn exception_rules(extra: &[&str]) -> Vec<Value> {
-    REAL_IP_DOMAINS
+fn exception_rules(exclusions: &[&str]) -> Vec<Value> {
+    exclusions
         .iter()
-        .chain(extra)
         .map(|domain| {
             let rule = if domain.contains('*') {
                 // Generated compatibility patterns only. Subscription patterns
@@ -279,7 +278,7 @@ mod tests {
             "  enhanced-mode: fake-ip\n  nameserver-policy: {corp.example: system}\n  fake-ip-filter: [CUSTOM.example, '+.TAILSCALE.COM']\n",
         );
         let before = map["dns"]["nameserver-policy"].clone();
-        fake_ip_exceptions(&mut map, &[]).unwrap();
+        fake_ip_exceptions(&mut map, DEFAULT_FAKE_IP_EXCLUSIONS).unwrap();
         let entries = filters(&map);
         assert_eq!(&entries[..2], &["CUSTOM.example", "+.TAILSCALE.COM"]);
         assert_eq!(
@@ -294,7 +293,7 @@ mod tests {
         assert!(entries.contains(&"time.cloudflare.com"));
         assert_eq!(map["dns"]["nameserver-policy"], before);
         let once = map.clone();
-        fake_ip_exceptions(&mut map, &[]).unwrap();
+        fake_ip_exceptions(&mut map, DEFAULT_FAKE_IP_EXCLUSIONS).unwrap();
         assert_eq!(map, once);
     }
 
@@ -308,7 +307,7 @@ mod tests {
         )
         .unwrap();
         map.insert(Value::from("rule-providers"), existing.clone());
-        fake_ip_exceptions(&mut map, &[]).unwrap();
+        fake_ip_exceptions(&mut map, DEFAULT_FAKE_IP_EXCLUSIONS).unwrap();
         assert_eq!(map["dns"]["fake-ip-filter-mode"], "rule");
         let entries = filters(&map);
         let exception = entries
@@ -332,7 +331,7 @@ mod tests {
             assert_eq!(map["rule-providers"][name], existing[name]);
         }
         let once = map.clone();
-        fake_ip_exceptions(&mut map, &[]).unwrap();
+        fake_ip_exceptions(&mut map, DEFAULT_FAKE_IP_EXCLUSIONS).unwrap();
         assert_eq!(map, once);
     }
 
@@ -341,7 +340,7 @@ mod tests {
         let mut map = config(
             "  enhanced-mode: fake-ip\n  fake-ip-filter-mode: whitelist\n  fake-ip-filter: []\n",
         );
-        fake_ip_exceptions(&mut map, &[]).unwrap();
+        fake_ip_exceptions(&mut map, DEFAULT_FAKE_IP_EXCLUSIONS).unwrap();
         assert_eq!(filters(&map).last(), Some(&"MATCH,real-ip"));
         assert!(map.get("rule-providers").is_none());
     }
@@ -351,7 +350,9 @@ mod tests {
         let mut map = config(
             "  enhanced-mode: fake-ip\n  fake-ip-filter-mode: rule\n  fake-ip-filter: ['DOMAIN,own.example,real-ip', 'MATCH,fake-ip', 'DOMAIN-SUFFIX,tailscale.com,real-ip']\n",
         );
-        fake_ip_exceptions(&mut map, &["+.bash.ws"]).unwrap();
+        let mut exclusions = DEFAULT_FAKE_IP_EXCLUSIONS.to_vec();
+        exclusions.push("+.bash.ws");
+        fake_ip_exceptions(&mut map, &exclusions).unwrap();
         let entries = filters(&map);
         assert_eq!(
             &entries[entries.len() - 2..],
@@ -366,13 +367,13 @@ mod tests {
             1
         );
         let once = map.clone();
-        fake_ip_exceptions(&mut map, &["+.bash.ws"]).unwrap();
+        fake_ip_exceptions(&mut map, &exclusions).unwrap();
         assert_eq!(map, once);
     }
 
     #[test]
     fn generated_stun_and_turn_patterns_do_not_match_normal_websites() {
-        let rules = exception_rules(&[]);
+        let rules = exception_rules(DEFAULT_FAKE_IP_EXCLUSIONS);
         let patterns: Vec<_> = rules
             .iter()
             .filter_map(Value::as_str)

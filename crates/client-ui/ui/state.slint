@@ -19,7 +19,7 @@ export enum Intent {
     claude-filter, claude-page, claude-guide, claude-browser, claude-copy-script,
     claude-import, claude-export, claude-key, claude-save-key, claude-additional,
     appearance, text-scale, accent-picker, accent-color, tray-speed, dns-override, fake-ip,
-    fake-ip-editor, fake-ip-input, fake-ip-add, fake-ip-remove, ipv6, udp,
+    fake-ip-editor, fake-ip-input, fake-ip-add, fake-ip-remove, fake-ip-restore-defaults, ipv6, udp,
     autostart, mixed-port, save-ports, window-width, window-height,
     reset-window, interval-input, save-interval, update-geo,
     check-update, install-update, cancel-update, open-release, update-prereleases,
@@ -27,6 +27,7 @@ export enum Intent {
 }
 export struct Choice { id: string, label: string }
 export struct DetailItem { label: string, value: string }
+export struct FakeIpExclusionItem { domain: string, source: string }
 export struct NodeItem { group: string, name: string, kind: string, delay: string, tone: int, selected: bool, valid: bool }
 export struct NodePair { left: NodeItem, right: NodeItem }
 export struct GroupItem { id: string, title: string, detail: string, current: string, expanded: bool, testing: bool, page: string, previous: bool, next: bool, nodes: [NodePair] }
@@ -166,7 +167,8 @@ export global UiData {
     in-out property <bool> fake-ip-editor;
     in-out property <string> fake-ip-input;
     in-out property <string> fake-ip-error;
-    in-out property <[string]> fake-ip-exclusions;
+    in-out property <[FakeIpExclusionItem]> fake-ip-exclusions;
+    in-out property <int> fake-ip-removed-defaults;
     in-out property <bool> ipv6;
     in-out property <bool> udp;
     in-out property <string> mixed-port;

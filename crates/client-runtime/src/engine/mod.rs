@@ -735,6 +735,7 @@ impl Engine {
             && (settings.dns_override != self.settings.dns_override
                 || settings.fake_ip != self.settings.fake_ip
                 || settings.fake_ip_exclusions != self.settings.fake_ip_exclusions
+                || settings.fake_ip_disabled_defaults != self.settings.fake_ip_disabled_defaults
                 || settings.ipv6 != self.settings.ipv6
                 || settings.udp != self.settings.udp
                 || settings.active_profile != self.settings.active_profile
@@ -750,6 +751,7 @@ impl Engine {
             if (settings.dns_override != self.settings.dns_override
                 || settings.fake_ip != self.settings.fake_ip
                 || settings.fake_ip_exclusions != self.settings.fake_ip_exclusions
+                || settings.fake_ip_disabled_defaults != self.settings.fake_ip_disabled_defaults
                 || settings.ipv6 != self.settings.ipv6
                 || settings.udp != self.settings.udp)
                 && let Some(id) = settings.active_profile.as_deref()

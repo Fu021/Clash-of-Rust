@@ -1,9 +1,7 @@
 import { Theme } from "../theme/palette.slint";
 import { UiData, UiActions, Intent } from "../state.slint";
-import { PageScroll, Label, Caption, Heading, ActionButton, Field } from "../components/controls.slint";
+import { PageScroll, Label, Caption, Heading, ActionButton, Field, ContentPanel } from "../components/controls.slint";
 
-// A focused settings subpage: the list is the only content under the header,
-// and each row keeps just the domain and its remove action.
 export component FakeIpPage inherits Rectangle {
     VerticalLayout {
         width: parent.width;
@@ -17,6 +15,16 @@ export component FakeIpPage inherits Rectangle {
             ActionButton { text: "← 返回设置"; clicked => { UiActions.dispatch(Intent.fake-ip-editor, "false", ""); } }
             Heading { text: "Fake-IP 排除项"; }
             Rectangle { horizontal-stretch: 1; }
+        }
+        if UiData.fake-ip-removed-defaults > 0: HorizontalLayout {
+            cross-axis-alignment: center;
+            spacing: Theme.content-gap;
+            Caption { text: "已移除 " + UiData.fake-ip-removed-defaults + " 项 DNS 覆盖排除项"; wrap: word-wrap; }
+            ActionButton {
+                text: "一键还原 DNS 覆盖项";
+                enabled: UiData.dns-override && !UiData.working;
+                clicked => { UiActions.dispatch(Intent.fake-ip-restore-defaults, "", ""); }
+            }
         }
         HorizontalLayout {
             cross-axis-alignment: center;
@@ -37,6 +45,7 @@ export component FakeIpPage inherits Rectangle {
         VerticalLayout {
             spacing: 4px;
             Caption { text: "格式：example.com、+.example.com 或 *.example.com；多个用逗号分隔。"; wrap: word-wrap; }
+            Caption { text: "DNS 覆盖项删除后可一键还原，保留自定义项；订阅原有过滤规则仍会生效。"; wrap: word-wrap; }
             if UiData.fake-ip-error != "": Caption { text: UiData.fake-ip-error; color: Theme.warning; wrap: word-wrap; }
         }
         PageScroll {
@@ -48,22 +57,21 @@ export component FakeIpPage inherits Rectangle {
                 alignment: start;
                 padding-right: Theme.content-gap;
                 spacing: Theme.content-gap;
-                for domain[i] in UiData.fake-ip-exclusions: Rectangle {
-                    height: Theme.control-height + 16px;
-                    background: Theme.surface;
-                    border-radius: 8px;
-                    border-width: 1px;
-                    border-color: Theme.line;
+                for entry in UiData.fake-ip-exclusions: ContentPanel {
+                    vertical-padding: Theme.content-gap;
                     HorizontalLayout {
-                        padding: Theme.content-gap;
                         spacing: Theme.content-gap;
                         cross-axis-alignment: center;
-                        Label { text: domain; }
+                        VerticalLayout {
+                            spacing: 4px;
+                            Label { text: entry.domain; }
+                            Caption { text: "来源：" + entry.source; }
+                        }
                         ActionButton {
                             text: "删除";
                             danger: true;
                             enabled: UiData.dns-override && !UiData.working;
-                            clicked => { UiActions.dispatch(Intent.fake-ip-remove, "" + i, ""); }
+                            clicked => { UiActions.dispatch(Intent.fake-ip-remove, entry.domain, ""); }
                         }
                     }
                 }

@@ -8,7 +8,7 @@ use std::{
 };
 
 mod dns;
-pub use dns::DEFAULT_DNS_NAMESERVERS;
+pub use dns::{DEFAULT_DNS_NAMESERVERS, DEFAULT_FAKE_IP_EXCLUSIONS};
 mod ports;
 pub use ports::reserve_controller;
 
@@ -68,6 +68,14 @@ impl std::fmt::Display for ThemeMode {
 /// User-provided names that must receive real DNS answers while Fake-IP is on.
 pub const FAKE_IP_EXCLUSION_LIMIT: usize = 64;
 
+/// One app-owned exclusion may be supplied by both the user and DNS overrides.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct FakeIpExclusion<'a> {
+    pub domain: &'a str,
+    pub custom: bool,
+    pub dns_override: bool,
+}
+
 /// Parse the settings field. Commas and line breaks separate entries; empty
 /// entries are ignored so the field can be formatted freely.
 pub fn parse_fake_ip_exclusions(text: &str) -> Result<Vec<String>> {
@@ -120,6 +128,7 @@ pub struct Settings {
     pub dns_override: bool,
     pub fake_ip: bool,
     pub fake_ip_exclusions: Vec<String>,
+    pub fake_ip_disabled_defaults: Vec<String>,
     pub ipv6: bool,
     pub udp: bool,
     pub claude_protection: Option<std::sync::Arc<crate::claude_check::protection::Protection>>,
@@ -160,6 +169,7 @@ impl Default for Settings {
             dns_override: true,
             fake_ip: true,
             fake_ip_exclusions: Vec::new(),
+            fake_ip_disabled_defaults: Vec::new(),
             ipv6: true,
             udp: true,
             claude_protection: None,
@@ -182,26 +192,130 @@ impl Settings {
         self.dns_override && self.fake_ip
     }
 
+    /// The UI and runtime use the same effective app-owned list. Subscription
+    /// filters remain in the original profile and are merged separately.
+    pub fn fake_ip_exclusion_entries(&self) -> Vec<FakeIpExclusion<'_>> {
+        let mut entries: Vec<_> = self
+            .fake_ip_exclusions
+            .iter()
+            .map(|domain| FakeIpExclusion {
+                domain: domain.as_str(),
+                custom: true,
+                dns_override: false,
+            })
+            .collect();
+        for domain in DEFAULT_FAKE_IP_EXCLUSIONS {
+            if self
+                .fake_ip_disabled_defaults
+                .iter()
+                .any(|value| value.eq_ignore_ascii_case(domain))
+            {
+                continue;
+            }
+            if let Some(entry) = entries
+                .iter_mut()
+                .find(|entry| entry.domain.eq_ignore_ascii_case(domain))
+            {
+                entry.dns_override = true;
+            } else {
+                entries.push(FakeIpExclusion {
+                    domain,
+                    custom: false,
+                    dns_override: true,
+                });
+            }
+        }
+        entries
+    }
+
+    pub fn add_fake_ip_exclusions(&mut self, values: &[String]) -> Result<()> {
+        ensure!(self.dns_override, "请先开启 DNS 覆盖");
+        let entries = self.fake_ip_exclusion_entries();
+        let mut merged = self.fake_ip_exclusions.clone();
+        for value in values {
+            validate_fake_ip_exclusion(value)?;
+            if !entries
+                .iter()
+                .any(|entry| entry.domain.eq_ignore_ascii_case(value))
+                && !merged.iter().any(|item| item.eq_ignore_ascii_case(value))
+            {
+                merged.push(value.clone());
+            }
+        }
+        ensure!(
+            merged.len() > self.fake_ip_exclusions.len(),
+            "这些排除项已存在"
+        );
+        ensure!(
+            merged.len() <= FAKE_IP_EXCLUSION_LIMIT,
+            "Fake-IP 自定义排除项最多 {FAKE_IP_EXCLUSION_LIMIT} 个"
+        );
+        self.fake_ip_exclusions = merged;
+        Ok(())
+    }
+
+    pub fn remove_fake_ip_exclusion(&mut self, domain: &str) -> Result<()> {
+        ensure!(self.dns_override, "请先开启 DNS 覆盖");
+        ensure!(
+            self.fake_ip_exclusion_entries()
+                .iter()
+                .any(|entry| entry.domain.eq_ignore_ascii_case(domain)),
+            "未找到排除项，请刷新后重试"
+        );
+        self.fake_ip_exclusions
+            .retain(|value| !value.eq_ignore_ascii_case(domain));
+        if let Some(default) = DEFAULT_FAKE_IP_EXCLUSIONS
+            .iter()
+            .find(|value| value.eq_ignore_ascii_case(domain))
+            && !self
+                .fake_ip_disabled_defaults
+                .iter()
+                .any(|value| value.eq_ignore_ascii_case(domain))
+        {
+            self.fake_ip_disabled_defaults.push((*default).to_owned());
+        }
+        Ok(())
+    }
+
+    pub fn restore_fake_ip_defaults(&mut self) -> Result<()> {
+        ensure!(self.dns_override, "请先开启 DNS 覆盖");
+        self.fake_ip_disabled_defaults.clear();
+        Ok(())
+    }
+
     /// Normalize dependent preferences loaded from older settings files.
     pub fn normalize(&mut self) {
         if !self.dns_override {
             self.fake_ip = false;
         }
-        let mut seen = Vec::new();
-        self.fake_ip_exclusions.retain(|value| {
-            let value = value.trim();
-            if value.is_empty() {
-                return false;
+        for values in [
+            &mut self.fake_ip_exclusions,
+            &mut self.fake_ip_disabled_defaults,
+        ] {
+            let mut seen = Vec::new();
+            values.retain(|value| {
+                let value = value.trim();
+                if value.is_empty() {
+                    return false;
+                }
+                let key = value.to_lowercase();
+                if seen.contains(&key) {
+                    return false;
+                }
+                seen.push(key);
+                true
+            });
+            for value in values {
+                *value = value.trim().to_owned();
             }
-            let key = value.to_lowercase();
-            if seen.contains(&key) {
-                return false;
+        }
+        for value in &mut self.fake_ip_disabled_defaults {
+            if let Some(default) = DEFAULT_FAKE_IP_EXCLUSIONS
+                .iter()
+                .find(|default| default.eq_ignore_ascii_case(value))
+            {
+                *value = (*default).to_owned();
             }
-            seen.push(key);
-            true
-        });
-        for value in &mut self.fake_ip_exclusions {
-            *value = value.trim().to_owned();
         }
     }
 
@@ -212,6 +326,15 @@ impl Settings {
         for value in &self.fake_ip_exclusions {
             validate_fake_ip_exclusion(value)?;
         }
+        ensure!(
+            self.fake_ip_disabled_defaults.len() <= DEFAULT_FAKE_IP_EXCLUSIONS.len()
+                && self.fake_ip_disabled_defaults.iter().all(|value| {
+                    DEFAULT_FAKE_IP_EXCLUSIONS
+                        .iter()
+                        .any(|default| default.eq_ignore_ascii_case(value))
+                }),
+            "只能移除 DNS 覆盖内置的 Fake-IP 排除项"
+        );
         if !(80..=150).contains(&self.text_scale) {
             bail!("字号比例应为 80–150%");
         }
@@ -521,19 +644,21 @@ pub fn runtime_config_with_rules(
     if managed_dns || settings.claude_protection.is_some() {
         // Run after protection as well: its macOS DNS overlay must not erase
         // compatibility exceptions or reinterpret a subscription whitelist.
-        let mut extra: Vec<&str> = Vec::new();
-        if settings.dns_override {
-            extra.extend(settings.fake_ip_exclusions.iter().map(String::as_str));
-        }
+        let mut exclusions: Vec<&str> = settings
+            .fake_ip_exclusion_entries()
+            .into_iter()
+            .filter(|entry| settings.dns_override || entry.dns_override)
+            .map(|entry| entry.domain)
+            .collect();
         if cfg!(target_os = "macos")
             && settings
                 .claude_protection
                 .as_ref()
                 .is_some_and(|protection| !protection.system_dns.is_empty())
         {
-            extra.push("+.bash.ws");
+            exclusions.push("+.bash.ws");
         }
-        dns::fake_ip_exceptions(&mut map, &extra)?;
+        dns::fake_ip_exceptions(&mut map, &exclusions)?;
     }
     apply_udp(
         &mut map,
@@ -819,6 +944,7 @@ mod tests {
         assert!(settings.dns_override);
         assert!(settings.fake_ip);
         assert!(settings.fake_ip_exclusions.is_empty());
+        assert!(settings.fake_ip_disabled_defaults.is_empty());
         assert!(settings.ipv6);
         assert!(settings.udp);
         assert_eq!(settings.rule_overrides, RuleOverrides::default());
@@ -962,7 +1088,7 @@ mod tests {
                     ])
                     .unwrap();
                     let filters = expected["fake-ip-filter"].as_sequence_mut().unwrap();
-                    for domain in dns::REAL_IP_DOMAINS {
+                    for domain in DEFAULT_FAKE_IP_EXCLUSIONS {
                         if !filters.contains(&Value::from(*domain)) {
                             filters.push(Value::from(*domain));
                         }
@@ -1093,6 +1219,129 @@ mod tests {
         assert!(!loaded.dns_override);
         assert!(!loaded.fake_ip);
         assert!(!loaded.fake_ip_enabled());
+    }
+
+    #[test]
+    fn fake_ip_sources_merge_and_defaults_do_not_consume_the_custom_limit() {
+        let mut settings = Settings {
+            fake_ip_exclusions: vec!["LOCALHOST".into()],
+            ..Settings::default()
+        };
+        let entries = settings.fake_ip_exclusion_entries();
+        assert_eq!(entries.len(), DEFAULT_FAKE_IP_EXCLUSIONS.len());
+        assert!(entries[0].custom && entries[0].dns_override);
+        assert_eq!(entries[0].domain, "LOCALHOST");
+        assert!(settings.add_fake_ip_exclusions(&["+.LAN".into()]).is_err());
+        let values: Vec<_> = (1..FAKE_IP_EXCLUSION_LIMIT)
+            .map(|index| format!("host{index}.example"))
+            .collect();
+        settings.add_fake_ip_exclusions(&values).unwrap();
+        assert_eq!(settings.fake_ip_exclusions.len(), FAKE_IP_EXCLUSION_LIMIT);
+        let before = settings.fake_ip_exclusions.clone();
+        assert!(
+            settings
+                .add_fake_ip_exclusions(&["overflow.example".into()])
+                .is_err()
+        );
+        assert_eq!(settings.fake_ip_exclusions, before);
+        assert!(
+            settings
+                .remove_fake_ip_exclusion("missing.example")
+                .is_err()
+        );
+        assert_eq!(settings.fake_ip_exclusions, before);
+    }
+
+    #[test]
+    fn fake_ip_default_removal_survives_reload_and_restore_keeps_custom_and_subscription_filters() {
+        for (mode, original_filter) in [
+            ("blacklist", "subscription.example"),
+            ("whitelist", "+.subscription.example"),
+            ("rule", "DOMAIN,subscription.example,real-ip"),
+        ] {
+            let directory = tempfile::tempdir().unwrap();
+            let store = Store::at(directory.path().to_owned()).unwrap();
+            let raw = format!(
+                "proxies: []\ndns:\n  enhanced-mode: fake-ip\n  fake-ip-filter-mode: {mode}\n  fake-ip-filter: ['{original_filter}']\n"
+            );
+            let path = directory.path().join("subscription.yaml");
+            std::fs::write(&path, &raw).unwrap();
+            let mut settings = Settings {
+                fake_ip_exclusions: vec!["+.user.example".into(), "+.TAILSCALE.COM".into()],
+                ..Settings::default()
+            };
+            settings
+                .remove_fake_ip_exclusion("+.TAILSCALE.COM")
+                .unwrap();
+            assert_eq!(settings.fake_ip_disabled_defaults, ["+.tailscale.com"]);
+            assert_eq!(settings.fake_ip_exclusions, ["+.user.example"]);
+            store.save_settings(&settings).unwrap();
+            let mut loaded = store.load_settings().unwrap();
+            assert_eq!(
+                loaded.fake_ip_disabled_defaults,
+                settings.fake_ip_disabled_defaults
+            );
+            let config: Value =
+                serde_yaml::from_str(&runtime_config(&raw, &loaded).unwrap()).unwrap();
+            let filters = config["dns"]["fake-ip-filter"].as_sequence().unwrap();
+            let expected_custom = if mode == "blacklist" {
+                "+.user.example"
+            } else {
+                "DOMAIN-SUFFIX,user.example,real-ip"
+            };
+            assert!(filters.contains(&Value::from(expected_custom)));
+            assert!(
+                !filters
+                    .iter()
+                    .any(|value| value.as_str().unwrap().contains("tailscale.com"))
+            );
+            if mode != "whitelist" {
+                assert!(filters.contains(&Value::from(original_filter)));
+            } else {
+                assert!(
+                    serde_yaml::to_string(&config["rule-providers"])
+                        .unwrap()
+                        .contains(original_filter)
+                );
+            }
+
+            loaded.restore_fake_ip_defaults().unwrap();
+            loaded.restore_fake_ip_defaults().unwrap();
+            assert_eq!(loaded.fake_ip_exclusions, ["+.user.example"]);
+            store.save_settings(&loaded).unwrap();
+            let restored: Value = serde_yaml::from_str(
+                &runtime_config(&raw, &store.load_settings().unwrap()).unwrap(),
+            )
+            .unwrap();
+            let expected_default = if mode == "blacklist" {
+                "+.tailscale.com"
+            } else {
+                "DOMAIN-SUFFIX,tailscale.com,real-ip"
+            };
+            assert!(
+                restored["dns"]["fake-ip-filter"]
+                    .as_sequence()
+                    .unwrap()
+                    .contains(&Value::from(expected_default))
+            );
+            assert_eq!(std::fs::read_to_string(path).unwrap(), raw);
+        }
+    }
+
+    #[test]
+    fn removing_a_default_does_not_remove_the_subscriptions_own_copy() {
+        let raw = "proxies: []\ndns: {fake-ip-filter: ['+.tailscale.com']}\n";
+        let mut settings = Settings::default();
+        settings
+            .remove_fake_ip_exclusion("+.tailscale.com")
+            .unwrap();
+        let result: Value = serde_yaml::from_str(&runtime_config(raw, &settings).unwrap()).unwrap();
+        assert!(
+            result["dns"]["fake-ip-filter"]
+                .as_sequence()
+                .unwrap()
+                .contains(&Value::from("+.tailscale.com"))
+        );
     }
 
     #[test]

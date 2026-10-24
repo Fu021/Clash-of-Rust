@@ -15,7 +15,9 @@ pub(super) enum Action {
     UpdatePrereleases(bool),
     DnsOverride(bool),
     FakeIp(bool),
-    FakeIpExclusions(Vec<String>),
+    FakeIpAdd(Vec<String>),
+    FakeIpRemove(String),
+    FakeIpRestoreDefaults,
     Ipv6(bool),
     Udp(bool),
     ClaudeProtection(bool),
@@ -238,13 +240,23 @@ pub(super) async fn execute(
                 }
                 .into())
             }
-            Action::FakeIpExclusions(fake_ip_exclusions) => {
-                let settings = Settings {
-                    fake_ip_exclusions,
-                    ..engine.settings.clone()
-                };
+            Action::FakeIpAdd(values) => {
+                let mut settings = engine.settings.clone();
+                settings.add_fake_ip_exclusions(&values)?;
                 engine.save_settings(settings).await?;
                 Ok("Fake-IP 排除项已保存并应用".into())
+            }
+            Action::FakeIpRemove(domain) => {
+                let mut settings = engine.settings.clone();
+                settings.remove_fake_ip_exclusion(&domain)?;
+                engine.save_settings(settings).await?;
+                Ok("Fake-IP 排除项已保存并应用".into())
+            }
+            Action::FakeIpRestoreDefaults => {
+                let mut settings = engine.settings.clone();
+                settings.restore_fake_ip_defaults()?;
+                engine.save_settings(settings).await?;
+                Ok("DNS 覆盖排除项已还原，自定义排除项已保留".into())
             }
             Action::Ipv6(ipv6) => {
                 let settings = Settings {

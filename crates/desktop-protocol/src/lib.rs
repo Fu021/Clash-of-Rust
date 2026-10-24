@@ -85,7 +85,7 @@ impl<T: Clone> List<T> {
 }
 include!(concat!(env!("OUT_DIR"), "/contract.rs"));
 
-pub const PROTOCOL: u32 = 4;
+pub const PROTOCOL: u32 = 5;
 pub const LIMIT: usize = 8 * 1024 * 1024;
 #[derive(Debug, Clone, Copy, Default, PartialEq, Serialize, Deserialize)]
 pub struct Size {
@@ -260,6 +260,14 @@ mod tests {
         models.attach(&data);
         data.set_edit_name("未保存订阅".into());
         data.set_rule_payload("google.com".into());
+        data.set_fake_ip_exclusions(
+            vec![FakeIpExclusionItem {
+                domain: "localhost".into(),
+                source: "用户自定义、DNS 覆盖".into(),
+            }]
+            .into(),
+        );
+        data.set_fake_ip_removed_defaults(2);
         models.logs.set_vec(vec![LogItem {
             message: "完整日志".into(),
             ..Default::default()
@@ -283,6 +291,10 @@ mod tests {
         assert_eq!(decoded.rule_payload, "google.com");
         assert_eq!(decoded.site_exit_flag, "DE");
         assert_eq!(decoded.logs.row_data(0).unwrap().message, "完整日志");
+        let exclusion = decoded.fake_ip_exclusions.row_data(0).unwrap();
+        assert_eq!(exclusion.domain, "localhost");
+        assert_eq!(exclusion.source, "用户自定义、DNS 覆盖");
+        assert_eq!(decoded.fake_ip_removed_defaults, 2);
     }
     #[test]
     fn binary_codec_rejects_truncation_trailing_data_and_forged_allocations() {
