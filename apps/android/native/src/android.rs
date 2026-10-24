@@ -3,8 +3,11 @@ use clash_mobile_runtime::{NativeHost, Session, Snapshot, core};
 use core::{api, config, proxy_order, rule_manager};
 use futures_util::{StreamExt, stream};
 use jni::{
-    JNIEnv, JavaVM,
-    objects::{GlobalRef, JClass, JObject, JString, JValue},
+    EnvUnowned, JValue, jni_sig, jni_str,
+    objects::{JClass, JObject, JString},
+    refs::Global,
+    strings::JNIStr,
+    vm::JavaVM,
 };
 use serde_json::{Value, json};
 use slint::{ComponentHandle, Model, ModelRc, VecModel};
@@ -26,86 +29,97 @@ static FIRST_APPEARANCE: Mutex<Option<(bool, i32)>> = Mutex::new(None);
 
 struct AndroidHost {
     vm: JavaVM,
-    activity: GlobalRef,
+    activity: Global<JObject<'static>>,
 }
 impl AndroidHost {
     fn new(app: &slint::android::AndroidApp) -> Result<Self> {
         // android-activity owns the VM and Activity for this process.
-        let vm = unsafe { JavaVM::from_raw(app.vm_as_ptr().cast()) }?;
-        let activity = {
-            let env = vm.attach_current_thread()?;
-            let object = unsafe { JObject::from_raw(app.activity_as_ptr().cast()) };
-            env.new_global_ref(object)?
-        };
+        let vm = unsafe { JavaVM::from_raw(app.vm_as_ptr().cast()) };
+        let activity = vm.attach_current_thread(|env| {
+            let object = unsafe { JObject::from_raw(env, app.activity_as_ptr().cast()) };
+            env.new_global_ref(object)
+        })?;
         Ok(Self { vm, activity })
     }
-    fn directory(&self, method: &str) -> Result<PathBuf> {
-        let mut env = self.vm.attach_current_thread()?;
-        let directory = env
-            .call_method(self.activity.as_obj(), method, "()Ljava/io/File;", &[])?
-            .l()?;
-        let path = env
-            .call_method(directory, "getAbsolutePath", "()Ljava/lang/String;", &[])?
-            .l()?;
-        let text: String = env.get_string(&JString::from(path))?.into();
-        Ok(PathBuf::from(text))
+    fn directory(&self, method: &JNIStr) -> Result<PathBuf> {
+        self.vm.attach_current_thread(|env| -> Result<_> {
+            let directory = env
+                .call_method(
+                    self.activity.as_obj(),
+                    method,
+                    jni_sig!("()Ljava/io/File;"),
+                    &[],
+                )?
+                .l()?;
+            let path = env
+                .call_method(
+                    directory,
+                    jni_str!("getAbsolutePath"),
+                    jni_sig!("()Ljava/lang/String;"),
+                    &[],
+                )?
+                .l()?;
+            let path = env.cast_local::<JString>(path)?;
+            Ok(PathBuf::from(path.try_to_string(env)?))
+        })
     }
 }
 impl NativeHost for AndroidHost {
     fn request(&self, value: Value) -> Result<Value> {
-        let mut env = self.vm.attach_current_thread()?;
-        let result: Result<Value> = env.with_local_frame(16, |env| {
+        let result: Value = self.vm.attach_current_thread(|env| -> Result<_> {
             let input = env.new_string(value.to_string())?;
             let response = env
                 .call_method(
                     self.activity.as_obj(),
-                    "request",
-                    "(Ljava/lang/String;)Ljava/lang/String;",
+                    jni_str!("request"),
+                    jni_sig!("(Ljava/lang/String;)Ljava/lang/String;"),
                     &[JValue::Object(input.as_ref())],
                 )?
                 .l()?;
-            let response: String = env.get_string(&JString::from(response))?.into();
+            let response = env.cast_local::<JString>(response)?.try_to_string(env)?;
             Ok(serde_json::from_str(&response)?)
-        });
-        if env.exception_check()? {
-            env.exception_clear()?;
-            bail!("Android 原生操作失败");
-        }
-        clash_mobile_runtime::native_response(result?)
+        })?;
+        clash_mobile_runtime::native_response(result)
     }
 }
 
 #[unsafe(no_mangle)]
 pub extern "system" fn Java_org_clashofrust_android_MainActivity_nativeEvent(
-    mut env: JNIEnv<'_>,
+    mut unowned_env: EnvUnowned<'_>,
     _: JClass<'_>,
     text: JString<'_>,
 ) {
-    let value = env.get_string(&text).map(String::from);
-    if let Ok(value) = value
-        && let Ok(sender) = EVENTS.lock()
-        && let Some(sender) = sender.as_ref()
-    {
-        let _ = sender.try_send(value);
-    }
+    unowned_env
+        .with_env(|env| -> jni::errors::Result<()> {
+            let value = text.try_to_string(env)?;
+            if let Ok(sender) = EVENTS.lock()
+                && let Some(sender) = sender.as_ref()
+            {
+                let _ = sender.try_send(value);
+            }
+            Ok(())
+        })
+        .resolve::<jni::errors::LogErrorAndDefault>();
 }
 
 #[unsafe(no_mangle)]
 pub extern "system" fn Java_org_clashofrust_android_MainActivity_nativeDiagnostics(
-    env: JNIEnv<'_>,
+    mut unowned_env: EnvUnowned<'_>,
     _: JClass<'_>,
 ) -> jni::sys::jstring {
-    let snapshot = PRESENTATION.lock().map(|s| s.clone()).unwrap_or_default();
-    let mut snapshot: Value = serde_json::from_str(&snapshot).unwrap_or_else(|_| json!({}));
-    if let Ok(first) = FIRST_APPEARANCE.lock()
-        && let Some((dark, accent)) = *first
-    {
-        snapshot["startup_dark"] = json!(dark);
-        snapshot["startup_accent"] = json!(accent);
-    }
-    env.new_string(snapshot.to_string())
-        .map(JString::into_raw)
-        .unwrap_or(std::ptr::null_mut())
+    unowned_env
+        .with_env(|env| {
+            let snapshot = PRESENTATION.lock().map(|s| s.clone()).unwrap_or_default();
+            let mut snapshot: Value = serde_json::from_str(&snapshot).unwrap_or_else(|_| json!({}));
+            if let Ok(first) = FIRST_APPEARANCE.lock()
+                && let Some((dark, accent)) = *first
+            {
+                snapshot["startup_dark"] = json!(dark);
+                snapshot["startup_accent"] = json!(accent);
+            }
+            env.new_string(snapshot.to_string()).map(JString::into_raw)
+        })
+        .resolve::<jni::errors::LogErrorAndDefault>()
 }
 
 #[derive(Clone)]
@@ -203,8 +217,10 @@ fn accent_index(color: config::AccentColor) -> i32 {
 
 fn run(app: slint::android::AndroidApp) -> Result<()> {
     let native = Arc::new(AndroidHost::new(&app)?);
-    let root = native.directory("getFilesDir")?.join("client");
-    let update_path = native.directory("getCacheDir")?.join("updates/update.apk");
+    let root = native.directory(jni_str!("getFilesDir"))?.join("client");
+    let update_path = native
+        .directory(jni_str!("getCacheDir"))?
+        .join("updates/update.apk");
     slint::android::init(app)?;
     let window = AndroidWindow::new()?;
     // No engine/Geo/network work precedes the first correctly themed frame.
@@ -592,7 +608,7 @@ async fn run_loop(
                             state.completed = Some(intent);
                             if matches!(intent,MobileIntent::SelectNode|MobileIntent::ActivateProfile|MobileIntent::UpdateProfile
                                 |MobileIntent::SaveProfile|MobileIntent::DeleteProfile|MobileIntent::RestartCore|MobileIntent::Mode
-                                |MobileIntent::DnsOverride|MobileIntent::Ipv6|MobileIntent::Udp|MobileIntent::SavePorts
+                                |MobileIntent::DnsOverride|MobileIntent::FakeIp|MobileIntent::Ipv6|MobileIntent::Udp|MobileIntent::SavePorts
                                 |MobileIntent::ClaudeProtection) {cancel_delay(&mut state,&mut delay_job);}
                             if !matches!(intent, MobileIntent::Query | MobileIntent::Copy | MobileIntent::ConnectionSort
                                 | MobileIntent::ConnectionDetail | MobileIntent::ConnectionPage | MobileIntent::RulePage
@@ -1233,6 +1249,7 @@ async fn handle(state: &mut State, request: Request) -> Result<()> {
                     | MobileIntent::RuleApply
                     | MobileIntent::Ipv6
                     | MobileIntent::DnsOverride
+                    | MobileIntent::FakeIp
                     | MobileIntent::Udp
                     | MobileIntent::ClaudeProtection
             ),
@@ -1476,6 +1493,7 @@ async fn handle(state: &mut State, request: Request) -> Result<()> {
                 .clone();
             session.select_rules(&id)?;
         }
+        MobileIntent::FakeIp => session.set_fake_ip(a == "true")?,
         MobileIntent::DnsOverride | MobileIntent::Ipv6 | MobileIntent::Udp => {
             ensure!(
                 !session.vpn || intent != MobileIntent::Ipv6,
@@ -2259,6 +2277,7 @@ fn apply(ui: &AndroidWindow, p: Projection) {
     data.set_upload_total(p.upload.into());
     data.set_download_total(p.download.into());
     data.set_dns_override(p.settings.dns_override);
+    data.set_fake_ip(p.settings.fake_ip_enabled());
     data.set_ipv6(p.settings.ipv6);
     data.set_udp(p.settings.udp);
     if !android.get_ports_dirty() {

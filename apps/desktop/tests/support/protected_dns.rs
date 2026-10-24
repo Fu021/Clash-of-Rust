@@ -306,8 +306,8 @@ pub async fn run(engine: &mut Engine, profile: &std::path::Path) {
         engine.claude_protection(true).await.unwrap();
         // No test-only DNS URL, hosts entry, restricted TUN route or API reload:
         // the exact production overlay and native engine transition are tested.
-        let payload: serde_yaml::Value =
-            serde_yaml::from_slice(&std::fs::read(store.runtime().join("config.yaml")).unwrap())
+        let payload: yaml_serde::Value =
+            yaml_serde::from_slice(&std::fs::read(store.runtime().join("config.yaml")).unwrap())
                 .unwrap();
         assert!(payload["tun"]["route-address"].is_null());
         let result = tokio::time::timeout(Duration::from_secs(30), protected_traffic(engine)).await;

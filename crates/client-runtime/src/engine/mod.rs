@@ -1003,10 +1003,10 @@ impl Engine {
             let path = self.store.runtime().join("config.yaml");
             let current: ConfigStatus = self.api.get("configs").await?;
             let preserved = |raw: &str| -> Result<String> {
-                let mut value: serde_yaml::Value = serde_yaml::from_str(raw)?;
-                value["mode"] = serde_yaml::Value::from(current.mode.clone());
-                value["tun"]["enable"] = serde_yaml::Value::from(current.tun.enable);
-                Ok(serde_yaml::to_string(&value)?)
+                let mut value: yaml_serde::Value = yaml_serde::from_str(raw)?;
+                value["mode"] = yaml_serde::Value::from(current.mode.clone());
+                value["tun"]["enable"] = yaml_serde::Value::from(current.tun.enable);
+                Ok(yaml_serde::to_string(&value)?)
             };
             let previous = preserved(&read_runtime_config(&path)?)?;
             let next = preserved(payload)?;
@@ -1301,8 +1301,8 @@ impl Engine {
             .as_deref()
             .context("请先选择订阅")?;
         let raw = read_profile(&self.store.profile_path(id)?)?;
-        let mut next: serde_yaml::Value =
-            serde_yaml::from_str(&self.profile_payload(&raw, &candidate, id)?)?;
+        let mut next: yaml_serde::Value =
+            yaml_serde::from_str(&self.profile_payload(&raw, &candidate, id)?)?;
         drop(raw);
         let desired = if let Some(protection) = &protection {
             let mut selectors = previous
@@ -1332,8 +1332,8 @@ impl Engine {
             }
         };
         next["mode"] = desired.mode.clone().into();
-        next["tun"]["enable"] = serde_yaml::Value::from(self.running() && desired.tun);
-        let next = serde_yaml::to_string(&next)?;
+        next["tun"]["enable"] = yaml_serde::Value::from(self.running() && desired.tun);
+        let next = yaml_serde::to_string(&next)?;
         self.validate(&next).await?;
         // Authorization is requested before the durable transaction is opened.
         // Cancellation therefore cannot leave an enabled preference behind.
@@ -1356,12 +1356,12 @@ impl Engine {
             }
         }
         let path = self.store.runtime().join("config.yaml");
-        let mut original: serde_yaml::Value = serde_yaml::from_str(&read_runtime_config(&path)?)?;
+        let mut original: yaml_serde::Value = yaml_serde::from_str(&read_runtime_config(&path)?)?;
         if let Some(previous) = &previous {
             original["mode"] = previous.mode.clone().into();
             original["tun"]["enable"] = previous.tun.into();
         }
-        let original = serde_yaml::to_string(&original)?;
+        let original = yaml_serde::to_string(&original)?;
         let mut transaction = crate::profile_transaction::Transaction::new(&self.store.root)?;
         transaction.stage(
             &self.store.root.join("settings.json"),

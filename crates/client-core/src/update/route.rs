@@ -265,7 +265,7 @@ mod tests {
                 .await
                 .unwrap();
         });
-        let response = reqwest::Client::builder()
+        let response = crate::network::client_builder()
             .no_proxy()
             .build()
             .unwrap()

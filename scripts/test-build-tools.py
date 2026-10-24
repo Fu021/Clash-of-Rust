@@ -725,6 +725,19 @@ assert.equal(calls.length,2);
                 self.assertTrue(warnings)
                 self.assertEqual(lock.read_bytes(), b'cached')
 
+    def test_gradle_refresh_stays_in_the_supported_agp_line(self):
+        versions = [{'version': version, 'downloadUrl': version, 'checksumUrl': version + '.sha256'}
+                    for version in ('8.14.6', '9.5.0', '9.6.0', '9.8.2', '9.9.0-rc-1', '10.0.0')]
+        versions.extend([
+            {'version': '9.9.0', 'broken': True},
+            {'version': '9.10.0', 'snapshot': True},
+        ])
+        with patch.object(build_inputs, 'read_json', return_value=versions):
+            self.assertEqual(build_inputs.gradle_release()['version'], '9.8.2')
+        with patch.object(build_inputs, 'read_json', return_value=versions[:2]):
+            with self.assertRaises(ValueError):
+                build_inputs.gradle_release()
+
     def test_go_refresh_checks_exact_modules_without_downgrades_and_retains_unreachable_versions(self):
         modules=[{'Path':'go4.org/netipx','Version':'v0.0.0-20260823151212-3075585bcbeb'},
                  {'Path':'example.org/Module','Version':'v1.2.0'},

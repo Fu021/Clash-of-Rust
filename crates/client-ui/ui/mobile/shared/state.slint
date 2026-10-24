@@ -9,7 +9,7 @@ export enum MobileIntent {
     rule-select, rule-edit, rule-add, rule-save, rule-move, rule-delete, rule-apply, rule-discard,
     rule-shortcut, log-level, clear-logs, export-logs, probe, dns,
     site-start, site-cancel, site-category, site-retest, claude-start, claude-protection, export-report,
-    appearance, accent, text-scale, dns-override, ipv6, udp, save-ports, interval, update-geo, check-update, install-update, update-prereleases,
+    appearance, accent, text-scale, dns-override, ipv6, udp, save-ports, interval, update-geo, check-update, install-update, update-prereleases, fake-ip,
 }
 export global MobileActions { callback request(MobileIntent, string, string); }
 
@@ -61,6 +61,7 @@ export global MobileData {
     in-out property <[bool]> shortcut-values;
     in-out property <bool> rule-dirty;
     in-out property <bool> dns-override: true;
+    in-out property <bool> fake-ip: true;
     in-out property <bool> ipv6: true;
     in-out property <bool> udp: true;
     in-out property <bool> update-prereleases;

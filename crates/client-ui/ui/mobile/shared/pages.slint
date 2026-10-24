@@ -144,11 +144,12 @@ export component MobileSubscriptions inherits PageSurface {
             }
             MSmall { text: profile.detail; wrap: word-wrap; }
             MSmall { text: profile.source; }
+            if profile.active && MobileData.protected: MSmall { text: "Claude 保护已锁定此订阅，请先关闭保护再编辑或更新。"; wrap: word-wrap; }
             HorizontalLayout { spacing: MobileTypography.small-gap;
-                MButton { text: profile.active ? (profile.local ? "使用中" : "更新") : "启用"; selected: profile.active; enabled: !profile.active || !profile.local;
+                MButton { text: profile.active ? (profile.local ? "使用中" : "更新") : "启用"; selected: profile.active; enabled: !MobileData.protected && !MobileData.protection-pending && (!profile.active || !profile.local);
                     clicked => { MobileActions.request(profile.active ? MobileIntent.update-profile : MobileIntent.activate-profile, profile.id, ""); }
                 }
-                MButton { text: "编辑"; clicked => { MobileView.selected-id = profile.id; MobileView.profile-name = profile.name; MobileView.profile-source = profile.source; MobileView.detail = 3; } }
+                MButton { text: "编辑"; enabled: !MobileData.protection-pending && !(MobileData.protected && profile.active); clicked => { MobileView.selected-id = profile.id; MobileView.profile-name = profile.name; MobileView.profile-source = profile.source; MobileView.detail = 3; } }
                 MButton { text: "删除"; danger: true; clicked => { MobileView.selected-id = profile.id; MobileView.profile-name = profile.name; MobileView.detail = 4; } }
             }
         }

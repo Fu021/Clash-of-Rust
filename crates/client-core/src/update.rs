@@ -63,7 +63,7 @@ struct Release {
 fn client(route: &crate::network::Route, timeout: Duration) -> Result<Client> {
     route
         .apply(
-            Client::builder()
+            crate::network::client_builder()
                 .no_proxy()
                 .user_agent(format!("Clash-of-Rust/{}", crate::VERSION))
                 .connect_timeout(Duration::from_secs(5))

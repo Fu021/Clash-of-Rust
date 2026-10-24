@@ -3,7 +3,7 @@ use crate::config::Settings;
 use crate::model::ProxyMode;
 use anyhow::{Result, ensure};
 use serde::{Deserialize, Serialize};
-use serde_yaml::{Mapping, Value};
+use yaml_serde::{Mapping, Value};
 
 pub const OWNED_DOMAINS: &[&str] = &[
     "anthropic.com",
@@ -99,7 +99,7 @@ fn bootstrap(dns: &mut Mapping, system_dns: &[String]) -> Result<()> {
                 .filter(|value| nonempty(value))
         })
         .cloned()
-        .unwrap_or(serde_yaml::to_value(BOOTSTRAP)?);
+        .unwrap_or(yaml_serde::to_value(BOOTSTRAP)?);
     // A bootstrap lookup must never depend on the node it is trying to find.
     // Keep resolver transports and options, but remove proxy-group selection.
     fn direct(value: Value, system_dns: &[String]) -> Result<Value> {
@@ -121,7 +121,7 @@ fn bootstrap(dns: &mut Mapping, system_dns: &[String]) -> Result<()> {
                     if (address == "system" || address.starts_with("system://"))
                         && !system_dns.is_empty()
                     {
-                        return serde_yaml::to_value(
+                        return yaml_serde::to_value(
                             system_dns
                                 .iter()
                                 .map(|ip| {
@@ -429,7 +429,7 @@ pub fn apply(map: &mut Mapping, settings: &Settings) -> Result<()> {
             .any(|g| g.get("name").and_then(Value::as_str) == Some(&protection.route)),
         "订阅包含同名的保护线路"
     );
-    groups.push(serde_yaml::to_value(&group)?);
+    groups.push(yaml_serde::to_value(&group)?);
     if protection.run_mode() == "global" {
         // A one-member GLOBAL survives reloads/cold starts without trusting the
         // core's selection cache. The original group remains in the source YAML
@@ -438,7 +438,7 @@ pub fn apply(map: &mut Mapping, settings: &Settings) -> Result<()> {
         let mut global = group;
         global["name"] = "GLOBAL".into();
         global["hidden"] = false.into();
-        groups.push(serde_yaml::to_value(global)?);
+        groups.push(yaml_serde::to_value(global)?);
     }
 
     let original = map
@@ -493,7 +493,7 @@ pub fn apply(map: &mut Mapping, settings: &Settings) -> Result<()> {
     // discovery, e.g. when reusing a browser's pre-protection DNS cache.
     map.insert(
         Value::from("sniffer"),
-        serde_yaml::from_str::<Value>(
+        yaml_serde::from_str::<Value>(
             "enable: true\nforce-dns-mapping: false\nparse-pure-ip: true\noverride-destination: false\nsniff:\n  HTTP: {ports: [80, 8080-8880], override-destination: false}\n  TLS: {ports: [443, 8443], override-destination: false}\n  QUIC: {ports: [443, 8443], override-destination: false}\nforce-domain: []\nskip-domain: ['+.lan', '+.local', localhost, '+.home.arpa']\n",
         )?,
     );
@@ -519,7 +519,7 @@ pub fn apply(map: &mut Mapping, settings: &Settings) -> Result<()> {
     dns.insert(Value::from("respect-rules"), Value::from(false));
     dns.insert(
         Value::from("nameserver"),
-        serde_yaml::to_value(
+        yaml_serde::to_value(
             DOH.iter()
                 .map(|s| format!("{s}#{}", protection.route))
                 .collect::<Vec<_>>(),
@@ -527,7 +527,7 @@ pub fn apply(map: &mut Mapping, settings: &Settings) -> Result<()> {
     );
     // Private names retain local resolution. These explicit exceptions are
     // shown to the user; no public failure falls back to the system resolver.
-    dns.insert(Value::from("nameserver-policy"), serde_yaml::from_str::<Mapping>("'+.lan': system\n'+.local': system\nlocalhost: system\n'+.home.arpa': system\n'+.in-addr.arpa': system\n'+.ip6.arpa': system\n")?.into());
+    dns.insert(Value::from("nameserver-policy"), yaml_serde::from_str::<Mapping>("'+.lan': system\n'+.local': system\nlocalhost: system\n'+.home.arpa': system\n'+.in-addr.arpa': system\n'+.ip6.arpa': system\n")?.into());
     #[cfg(target_os = "macos")]
     if !protection.system_dns.is_empty() {
         let local: Vec<_> = protection
@@ -544,7 +544,7 @@ pub fn apply(map: &mut Mapping, settings: &Settings) -> Result<()> {
             .as_mapping_mut()
             .unwrap();
         for value in policy.values_mut() {
-            *value = serde_yaml::to_value(&local)?;
+            *value = yaml_serde::to_value(&local)?;
         }
         // config::dns adds local/probe real-IP exceptions after this overlay,
         // preserving blacklist, whitelist and ordered rule semantics.
@@ -556,7 +556,7 @@ pub fn apply(map: &mut Mapping, settings: &Settings) -> Result<()> {
     tun.insert(Value::from("strict-route"), Value::from(true));
     tun.insert(
         Value::from("dns-hijack"),
-        serde_yaml::to_value(["any:53", "tcp://any:53"])?,
+        yaml_serde::to_value(["any:53", "tcp://any:53"])?,
     );
     for key in [
         "route-address",
@@ -620,7 +620,7 @@ mod tests {
                 },
             )));
             let protected = crate::config::runtime_config(raw, &settings).unwrap();
-            let map: Value = serde_yaml::from_str(&protected).unwrap();
+            let map: Value = yaml_serde::from_str(&protected).unwrap();
             assert_eq!(
                 map["mode"],
                 if mode == "global" { "global" } else { "rule" }
@@ -684,7 +684,7 @@ mod tests {
             "Other"
         );
         let protected: Value =
-            serde_yaml::from_str(&crate::config::runtime_config(raw, &restored).unwrap()).unwrap();
+            yaml_serde::from_str(&crate::config::runtime_config(raw, &restored).unwrap()).unwrap();
         let group = &protected["proxy-groups"][0];
         assert_eq!(group["type"], "select");
         assert_eq!(group["empty-fallback"], "REJECT");
@@ -700,11 +700,11 @@ mod tests {
     }
     #[test]
     fn bootstrap_preserves_working_node_resolvers_without_a_proxy_dependency() {
-        let mut dns: Mapping = serde_yaml::from_str("nameserver: ['https://192.0.2.2/dns-query#Main']\ndefault-nameserver: ['192.0.2.53']\nproxy-server-nameserver: ['tls://192.0.2.54#Main&ecs=192.0.2.1', 'system']\nproxy-server-nameserver-policy: {'+.node.test': 'udp://192.0.2.55#Main'}\n").unwrap();
+        let mut dns: Mapping = yaml_serde::from_str("nameserver: ['https://192.0.2.2/dns-query#Main']\ndefault-nameserver: ['192.0.2.53']\nproxy-server-nameserver: ['tls://192.0.2.54#Main&ecs=192.0.2.1', 'system']\nproxy-server-nameserver-policy: {'+.node.test': 'udp://192.0.2.55#Main'}\n").unwrap();
         bootstrap(&mut dns, &[]).unwrap();
         assert_eq!(
             dns["proxy-server-nameserver"],
-            serde_yaml::to_value(["tls://192.0.2.54#DIRECT&ecs=192.0.2.1", "system"]).unwrap()
+            yaml_serde::to_value(["tls://192.0.2.54#DIRECT&ecs=192.0.2.1", "system"]).unwrap()
         );
         assert_eq!(
             dns["proxy-server-nameserver-policy"]["+.node.test"],
@@ -723,26 +723,26 @@ mod tests {
         // unreachable fixed HTTPS IPs that caused this regression.
         assert!(!dns.contains_key(Value::from("default-nameserver")));
         let mut dns: Mapping =
-            serde_yaml::from_str("default-nameserver: ['2001:db8::53']\n").unwrap();
+            yaml_serde::from_str("default-nameserver: ['2001:db8::53']\n").unwrap();
         bootstrap(&mut dns, &[]).unwrap();
         assert_eq!(
             dns["proxy-server-nameserver"][0],
             "udp://[2001:db8::53]#DIRECT"
         );
         assert_eq!(dns["default-nameserver"][0], "udp://[2001:db8::53]#DIRECT");
-        let mut dns: Mapping = serde_yaml::from_str(
+        let mut dns: Mapping = yaml_serde::from_str(
             "proxy-server-nameserver: [system]\ndefault-nameserver: [system]\n",
         )
         .unwrap();
         bootstrap(&mut dns, &["192.0.2.53".into(), "2001:db8::53".into()]).unwrap();
-        let captured = serde_yaml::to_value([
+        let captured = yaml_serde::to_value([
             "udp://192.0.2.53:53#DIRECT",
             "udp://[2001:db8::53]:53#DIRECT",
         ])
         .unwrap();
         assert_eq!(dns["proxy-server-nameserver"], captured);
         assert_eq!(dns["default-nameserver"], captured);
-        let mut dns: Mapping = serde_yaml::from_str("nameserver: ['https://192.0.2.2/dns-query']\nnameserver-policy: {'+.node.test': '192.0.2.53'}\n").unwrap();
+        let mut dns: Mapping = yaml_serde::from_str("nameserver: ['https://192.0.2.2/dns-query']\nnameserver-policy: {'+.node.test': '192.0.2.53'}\n").unwrap();
         bootstrap(&mut dns, &[]).unwrap();
         assert_eq!(
             dns["proxy-server-nameserver-policy"]["+.node.test"],
@@ -774,11 +774,11 @@ mod tests {
             protection.system_dns = vec!["192.168.1.1".into(), "fd00::1".into()];
             settings.claude_protection = Some(std::sync::Arc::new(protection));
             let value: Value =
-                serde_yaml::from_str(&crate::config::runtime_config(&raw, &settings).unwrap())
+                yaml_serde::from_str(&crate::config::runtime_config(&raw, &settings).unwrap())
                     .unwrap();
             assert_eq!(
                 value["dns"]["nameserver-policy"]["+.lan"],
-                serde_yaml::to_value(["udp://192.168.1.1:53#DIRECT", "udp://[fd00::1]:53#DIRECT"])
+                yaml_serde::to_value(["udp://192.168.1.1:53#DIRECT", "udp://[fd00::1]:53#DIRECT"])
                     .unwrap()
             );
             let probe = if value["dns"]["fake-ip-filter-mode"] == "rule" {
@@ -822,7 +822,7 @@ mod tests {
         protection.provider = Some("Feed".into());
         settings.claude_protection = Some(std::sync::Arc::new(protection));
         let value: Value =
-            serde_yaml::from_str(&crate::config::runtime_config(raw, &settings).unwrap()).unwrap();
+            yaml_serde::from_str(&crate::config::runtime_config(raw, &settings).unwrap()).unwrap();
         let group = value["proxy-groups"].as_sequence().unwrap().last().unwrap();
         assert_eq!(group["use"][0], "Feed");
         assert_eq!(group["hidden"], true);
@@ -834,7 +834,7 @@ mod tests {
             .previous
             .mode = "global".into();
         let value: Value =
-            serde_yaml::from_str(&crate::config::runtime_config(raw, &settings).unwrap()).unwrap();
+            yaml_serde::from_str(&crate::config::runtime_config(raw, &settings).unwrap()).unwrap();
         let global = value["proxy-groups"]
             .as_sequence()
             .unwrap()
@@ -882,7 +882,7 @@ mod tests {
         )));
         let saved = serde_json::to_vec(&settings).unwrap();
         let protected = crate::config::runtime_config(raw, &settings).unwrap();
-        let map: Value = serde_yaml::from_str(&protected).unwrap();
+        let map: Value = yaml_serde::from_str(&protected).unwrap();
         assert_eq!(map["mode"], "global");
         assert_eq!(map["ipv6"], true);
         assert_eq!(map["sniffer"]["enable"], true);

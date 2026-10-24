@@ -372,7 +372,7 @@ fn connection_route(connection: api::Connection) -> Option<Route> {
 }
 
 pub fn client(port: Option<u16>) -> Result<Client> {
-    let mut builder = Client::builder()
+    let mut builder = crate::network::client_builder()
         .no_proxy()
         .user_agent("Clash-of-Rust/region-diagnostics")
         .connect_timeout(Duration::from_secs(4))

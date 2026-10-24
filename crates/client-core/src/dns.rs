@@ -57,7 +57,7 @@ pub(crate) fn combine(v4: Result<Vec<IpAddr>>, v6: Result<Vec<IpAddr>>) -> Resul
 /// Public encrypted resolver, transported through the running local proxy.
 /// HTTPS URLs use literal IPs, so this cannot leak a bootstrap lookup to the OS.
 pub async fn through_proxy(host: &str, port: u16) -> Result<Vec<IpAddr>> {
-    let client = reqwest::Client::builder()
+    let client = crate::network::client_builder()
         .no_proxy()
         .proxy(reqwest::Proxy::all(format!("http://127.0.0.1:{port}"))?)
         .timeout(Duration::from_secs(6))

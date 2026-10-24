@@ -98,7 +98,7 @@ struct ReleaseAsset {
 }
 
 pub async fn download_geo(destination: &Path, proxy_port: Option<u16>) -> Result<GeoManifest> {
-    let mut builder = reqwest::Client::builder()
+    let mut builder = crate::network::client_builder()
         .no_proxy()
         .user_agent(format!("clash-of-rust/{}", crate::VERSION))
         .connect_timeout(Duration::from_secs(10))

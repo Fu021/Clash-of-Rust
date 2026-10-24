@@ -8,7 +8,7 @@ const LATEST_URL: &str = "https://github.com/Fu021/Clash-of-Rust/releases/latest
 const REQUEST_TIMEOUT: Duration = Duration::from_secs(12);
 
 fn client(route: &Route) -> Result<Client> {
-    let builder = Client::builder()
+    let builder = clash_client_core::network::client_builder()
         .no_proxy()
         .user_agent(format!("Clash-of-Rust/{}", crate::VERSION))
         .connect_timeout(Duration::from_secs(5))

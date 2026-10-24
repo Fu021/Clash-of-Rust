@@ -1,7 +1,7 @@
 //! Bounded subscription downloads using the same routes as client updates.
 use crate::network::{Route, request_error};
 use anyhow::{Context, Result, bail};
-use reqwest::{Client, Url};
+use reqwest::Url;
 use std::time::Duration;
 mod info;
 pub use info::summary;
@@ -22,7 +22,7 @@ pub async fn download_routes(url: &Url, routes: &[Route]) -> Result<(String, Opt
 async fn download_route(url: &Url, route: &Route) -> Result<(String, Option<String>)> {
     let client = route
         .apply(
-            Client::builder()
+            crate::network::client_builder()
                 .connect_timeout(Duration::from_secs(5))
                 .read_timeout(Duration::from_secs(15))
                 .timeout(Duration::from_secs(30))

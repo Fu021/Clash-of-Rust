@@ -359,7 +359,7 @@ fn download_client(proxy_port: Option<u16>) -> Result<Client> {
 }
 
 fn download_client_via(proxy: Option<&str>, timeout: Duration) -> Result<Client> {
-    let mut builder = Client::builder()
+    let mut builder = clash_client_core::network::client_builder()
         .no_proxy()
         .user_agent(format!("Clash-of-Rust/{}", crate::VERSION))
         .connect_timeout(Duration::from_secs(10))
@@ -1274,7 +1274,7 @@ mod tests {
     }
 
     fn client(timeout: Duration) -> Client {
-        Client::builder()
+        clash_client_core::network::client_builder()
             .no_proxy()
             .user_agent(format!("Clash-of-Rust/{}", crate::VERSION))
             .timeout(timeout)

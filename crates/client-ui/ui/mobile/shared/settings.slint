@@ -33,6 +33,10 @@ export component NetworkToggles inherits VerticalLayout {
         toggled(value) => { MobileActions.request(MobileIntent.dns-override, value ? "true" : "false", ""); }
     }
     MDivider { }
+    MSwitch { title: "Fake-IP"; subtitle: "关闭 DNS 覆盖会同时关闭 Fake-IP，重开后可在此启用。"; checked: MobileData.fake-ip || MobileData.protected; enabled: MobileData.dns-override && !MobileData.protected && !MobileData.protection-pending;
+        toggled(value) => { MobileActions.request(MobileIntent.fake-ip, value ? "true" : "false", ""); }
+    }
+    MDivider { }
     MSwitch { title: "启用 IPv6"; checked: MobileData.ipv6 || MobileData.protected; enabled: !MobileData.protected && !MobileData.protection-pending;
         toggled(value) => { MobileActions.request(MobileIntent.ipv6, value ? "true" : "false", ""); }
     }

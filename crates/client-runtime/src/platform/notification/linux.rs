@@ -1,7 +1,7 @@
 use anyhow::{Context, Result};
 use std::collections::HashMap;
 use tokio::sync::Mutex;
-use zbus::zvariant::Value;
+use zbus::Variant;
 
 // GNOME tracks the sender's unique bus name. Disconnecting immediately after
 // Notify can destroy its notification source before the banner is presented.
@@ -25,9 +25,9 @@ pub(super) async fn show(title: &str, message: &str) -> Result<()> {
     )
     .await?;
     let hints = HashMap::from([
-        ("desktop-entry", Value::from("clash-of-rust")),
-        ("urgency", Value::from(1u8)),
-        ("resident", Value::from(false)),
+        ("desktop-entry", Variant::from("clash-of-rust")),
+        ("urgency", Variant::from(1u8)),
+        ("resident", Variant::from(false)),
     ]);
     // The body supports markup; encode external host/node text as literal text.
     let body = escape(message);
