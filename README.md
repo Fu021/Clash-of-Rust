@@ -93,17 +93,20 @@ cargo build -p clash-of-rust -p clash-desktop-ui -p clash-cli --bins --locked
 
 Cargo workspace 分为共享业务（`crates/client-core`）、共享原生运行层（`crates/client-runtime`）、Slint 界面（`crates/client-ui`）、桌面后台宿主（`apps/desktop`）、可独立退出的界面进程（`apps/desktop-ui`）与命令行（`apps/cli`）。Android 使用独立 Slint 原生宿主与系统 VPN，并通过移动桥接（`crates/mobile-ffi`）复用共享业务，见 [Android 开发说明](apps/android/README.md)；iOS 保留独立界面与宿主占位。
 
-安装 Slint Viewer 后可独立预览界面：
+历史提交与 GitHub Actions 常见失败模式、排查顺序和任务收尾要求统一记录在 [Agent 失败复盘与防回归清单](docs/agent-failure-playbook.md)。开始修复或提交 PR 前先核对相关章节，任务结束时更新“最近复盘”。
 
-```text
-python3 scripts/preview-slint.py --dialogs --pairs
+安装 Slint Viewer 后可独立预览界面。资源受限时只做静态检查或最小单页预览，并把输出放到工作区外：
+
+```sh
+python3 scripts/preview-slint.py --check
+python3 scripts/preview-slint.py --page settings --theme light --output /tmp/clash-slint-preview
 ```
 
 测试、内存基准、发布流程及手动验收说明见 [工作流文档](docs/workflows.md)。
 
 ## 参与贡献
 
-欢迎 AI 辅助的 PR；请尽量先在本地完成相关验证，并阅读[贡献者须知](.github/CONTRIBUTING.md)，了解 CI、缓存服务器与工作流变更约定。
+欢迎 AI 辅助的 PR；请尽量先在本地完成相关验证，并阅读[贡献者须知](.github/CONTRIBUTING.md)，了解资源受限环境、CI、缓存服务器与工作流变更约定。
 
 ## License
 

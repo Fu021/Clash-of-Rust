@@ -17,7 +17,7 @@
 
 ## 无需 Rust 编译的外观预览
 
-安装官方 **Slint Viewer 1.18.1** 到持久目录。当前环境为 `/home/coder/.local/bin/slint-viewer`，也可通过 `--viewer PATH` 指定。
+安装官方 **Slint Viewer 1.18.1** 到持久目录并加入 `PATH`，例如 `~/.local/bin/slint-viewer`；也可通过 `--viewer PATH` 指定实际位置。不要把个人路径写入仓库配置。
 
 ```sh
 python3 scripts/preview-slint.py --check
@@ -26,7 +26,14 @@ python3 scripts/preview-slint.py --page settings --theme both --full-settings
 python3 scripts/preview-slint.py --page connections --size 800x450
 ```
 
-输出在 `dist/slint-preview/`。`ui/preview.slint` 只向正式组件填入固定演示值，不接入真实操作；此工具用于外观检查。它无需 Cargo、Xvfb 或桌面会话。
+输出默认在 `dist/slint-preview/`。`ui/preview.slint` 只向正式组件填入固定演示值，不接入真实操作；此工具用于外观检查。它无需 Cargo、Xvfb 或桌面会话。
+
+资源受限（例如 1 核 CPU、约 1 GiB 内存）时只运行 `--check`，或只预览必要的一页和一种主题；使用 `--output /tmp/...` 把产物放到工作区外，并在结束前删除，不能在仓库留下 `dist/`、缓存或截图：
+
+```sh
+python3 scripts/preview-slint.py --check
+python3 scripts/preview-slint.py --page settings --theme light --output /tmp/clash-slint-preview
+```
 
 ## 应用与交互验证
 
@@ -73,7 +80,7 @@ python3 scripts/preview-slint.py --mobile --platform android --page proxies --si
 python3 scripts/preview-slint.py --mobile --platform ios --page settings --size 1194x834
 ```
 
-输出分别位于 `dist/mobile-preview/android/` 与 `dist/mobile-preview/ios/`。涵盖全部页面、深浅色、手机横屏、Pad 双方向和分屏、小屏、125% 字号、未连接、通知进度及详情/编辑/确认场景。宽度均为逻辑尺寸，布局按扣除安全区后的可用宽高决定：
+资源充足时输出分别位于 `dist/mobile-preview/android/` 与 `dist/mobile-preview/ios/`；资源受限时使用 `--output /tmp/...` 并清理。全量预览涵盖全部页面、深浅色、手机横屏、Pad 双方向和分屏、小屏、125% 字号、未连接、通知进度及详情/编辑/确认场景。宽度均为逻辑尺寸，布局按扣除安全区后的可用宽高决定：
 
 - 宽度不足 640 且非短窗口：底部五个入口，详情进入独立页面；工具页收纳连接、规则、日志和检测入口。
 - 中等宽度或高度不足 480：紧凑侧栏，减少横屏头部占用；节点按内容空间改为双列。

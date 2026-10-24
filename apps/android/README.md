@@ -27,7 +27,7 @@ A÷检测目前支持网络、DNS 和自动浏览器采样；开启 Claude 保�
 
 ## 本地构建
 
-本地构建与 GitHub Actions 均可使用，不要求先提交代码。当前 `scripts/android.py` 的 NDK 路径按 Linux x64 主机配置；准备 Rust、Go（版本满足 `core/go.mod`）、Java 17、兼容当前 Android Gradle Plugin 的 Gradle，以及 Android SDK 36、Build Tools 36.0.0、NDK 28.2.13676358。设置 `ANDROID_HOME`、`ANDROID_NDK_ROOT`，将 Go 的 bin 目录加入 PATH，并为目标 ABI 安装 Rust target：
+本地构建与 GitHub Actions 均可使用，不要求先提交代码。AI agent 在 1 核 CPU、约 1 GiB 内存等资源受限环境中不得执行以下构建，应遵循[资源受限规则](../../AGENTS.md#资源受限环境)，只做静态检查或最小 Slint 预览并清理工作区。资源充足时，当前 `scripts/android.py` 的 NDK 路径按 Linux x64 主机配置；准备 Rust、Go（版本满足 `core/go.mod`）、Java 17、兼容当前 Android Gradle Plugin 的 Gradle，以及 Android SDK 36、Build Tools 36.0.0、NDK 28.2.13676358。设置 `ANDROID_HOME`、`ANDROID_NDK_ROOT`，将 Go 的 bin 目录加入 PATH，并为目标 ABI 安装 Rust target：
 
 ```sh
 rustup target add aarch64-linux-android

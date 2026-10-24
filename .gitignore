@@ -33,7 +33,6 @@ __pycache__/
 /apps/android/*.keystore
 
 # Local environment and credentials
-/AGENTS.local.md
 .env
 .env.*
 !.env.example

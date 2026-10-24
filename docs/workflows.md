@@ -8,7 +8,7 @@
 
 六个平台为 Windows x64 / ARM64、Linux x64 / ARM64、macOS Intel / Apple Silicon。Linux 安装包支持 Debian/Ubuntu，Ubuntu 仅支持 22.04 及以上；Ubuntu 最新版兼容验证在发布工作流中执行。
 
-贡献者可使用本地工具链编译、Clippy、源码单元测试与打包，也可使用 Actions；无需为了本地验证而推送代码。正式发布继续复用成功 CI 的产物，真实系统代理/TUN 自动化测试在可丢弃的 Actions 环境中执行。界面可使用 `scripts/preview-slint.py` 直接预览正式 Slint 组件，不依赖桌面程序编译；弃用工作流删除文件后，也需在 GitHub 上禁用。
+贡献者可使用本地工具链编译、Clippy、源码单元测试与打包，也可使用 Actions；无需为了本地验证而推送代码。正式发布继续复用成功 CI 的产物，真实系统代理/TUN 自动化测试在可丢弃的 Actions 环境中执行。界面可使用 `scripts/preview-slint.py` 直接预览正式 Slint 组件，不依赖桌面程序编译；弃用工作流删除文件后，也需在 GitHub 上禁用。资源不足（例如 1 核 CPU、约 1 GiB 内存）的 AI 执行环境不得编译、测试或打包，只按[失败复盘文档](agent-failure-playbook.md)与[资源受限规则](../AGENTS.md#资源受限环境)做最小预览和收尾检查。
 
 新增工作流须事先获得维护者同意，具体要求见[贡献者须知](../.github/CONTRIBUTING.md)。`.github/` 的变更合并前须经 @Fu021 审核；所有外部贡献者的 fork PR 工作流每次触发均需批准，既往贡献不豁免。
 
@@ -113,7 +113,14 @@ sudo rm -rf "/Library/PrivilegedHelperTools/$service_label" "/Library/LaunchDaem
 python3 scripts/preview-slint.py --dialogs --pairs
 ```
 
-脚本直接加载正式 `.slint` 组件和演示数据，不运行 Cargo 或真实内核。需要时生成 `dist/slint-preview`；历史截图与字体缓存可随 `dist` 删除。
+脚本直接加载正式 `.slint` 组件和演示数据，不运行 Cargo 或真实内核。资源充足时默认生成 `dist/slint-preview`；资源受限时只检查语法或预览必要的一页和一种主题，并显式把输出放到工作区外：
+
+```sh
+python3 scripts/preview-slint.py --check
+python3 scripts/preview-slint.py --page settings --theme light --output /tmp/clash-slint-preview
+```
+
+结束前删除本次生成的 `/tmp/clash-slint-preview`，并确认仓库没有遗留 `target/`、`dist/`、`bundle/`、构建缓存、日志或历史截图。静态检查与预览不等于编译、测试或真实交互验证。
 
 图标、国旗及许可证属于必要资源；日常构建使用仓库成品。仅在维护资源时使用 `scripts/prepare-assets.py icons` / `flags`。图标源图保留于 `resources/icon-concepts`，第三方来源见各资源目录的说明。平台检测直接维护 Rust，必要的公开检测数据与 AGPL 来源说明统一位于 `resources/ip-check`，不再保留 `vendor` 或 Shell 生成工具。
 
