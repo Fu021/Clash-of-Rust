@@ -61,6 +61,17 @@ fn frame(adapter: &MinimalSoftwareWindow, width: usize, height: usize) -> Vec<sl
     pixels
 }
 
+fn advance(clock: &Cell<Duration>, duration: Duration) {
+    let deadline = clock.get() + duration;
+    // Scroll gestures defer pointer forwarding; process each virtual event-loop
+    // tick so forwarded presses and timer bindings precede their deadlines.
+    slint::platform::update_timers_and_animations();
+    while clock.get() < deadline {
+        clock.set((clock.get() + Duration::from_millis(10)).min(deadline));
+        slint::platform::update_timers_and_animations();
+    }
+}
+
 #[test]
 fn mobile_list_stacks_rows_and_keeps_sparse_content_at_the_top() {
     let adapter = MinimalSoftwareWindow::new(RepaintBufferType::NewBuffer);
@@ -117,20 +128,26 @@ fn mobile_list_stacks_rows_and_keeps_sparse_content_at_the_top() {
             })
     };
     press();
+    slint::platform::update_timers_and_animations();
     drag_probe
         .window()
         .dispatch_event(WindowEvent::PointerReleased {
             position: LogicalPosition::new(24., 24.),
             button: PointerEventButton::Left,
         });
+    advance(&clock, Duration::from_millis(700));
     assert!(
         !drag_probe.get_started(),
         "a normal tap must not start reordering"
     );
     assert_eq!(drag_probe.get_delta(), 99);
     press();
-    clock.set(Duration::from_millis(700));
-    slint::platform::update_timers_and_animations();
+    advance(&clock, Duration::from_millis(500));
+    assert!(
+        !drag_probe.get_started(),
+        "reordering must wait for the long-press threshold"
+    );
+    advance(&clock, Duration::from_millis(300));
     assert!(drag_probe.get_started());
     drag_probe
         .window()
