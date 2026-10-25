@@ -20,6 +20,7 @@ export global MobileData {
     in-out property <bool> vpn-connected;
     in-out property <bool> vpn-pending;
     in-out property <bool> working;
+    in-out property <bool> profile-busy;
     in-out property <bool> geo-updating;
     in-out property <bool> delay-busy;
     in-out property <string> profile;
@@ -129,6 +130,7 @@ export global MobileView {
     in-out property <string> rule-position: "1";
     in-out property <string> profile-name;
     in-out property <string> profile-source;
+    in-out property <bool> profile-active;
     in-out property <string> log-message;
     in-out property <int> copy-revision;
     in-out property <string> copy-value;
@@ -149,6 +151,7 @@ export global MobileView {
     in-out property <length> settings-viewport-height;
     callback navigate(int);
     navigate(destination) => {
+        if MobileData.profile-busy { return; }
         if self.draft-dirty {
             self.pending-page = destination; self.pending-detail = self.detail; self.detail = 12;
         } else {
@@ -157,6 +160,7 @@ export global MobileView {
     }
     callback back();
     back => {
+        if MobileData.profile-busy { return; }
         if self.draft-dirty {
             self.pending-page = -1; self.pending-detail = self.detail; self.detail = 12;
         } else { self.detail = self.detail == 16 ? 6 : 0; }

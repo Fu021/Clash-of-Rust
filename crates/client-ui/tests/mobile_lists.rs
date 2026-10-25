@@ -10,6 +10,7 @@ use std::{cell::Cell, rc::Rc, time::Duration};
 
 slint::slint! {
     import { ListView, MDragHandle } from "../ui/mobile/shared/controls.slint";
+    import { RuleDragHandle } from "../ui/components/rule-drag.slint";
 
     export component MobileListProbe inherits Window {
         preferred-width: 300px; preferred-height: 240px;
@@ -39,6 +40,19 @@ slint::slint! {
                     dropped(delta) => { root.delta = delta; }
                 }
             }
+        }
+    }
+    export component DesktopDragProbe inherits Window {
+        preferred-width: 300px; preferred-height: 240px;
+        in property <bool> handle-enabled: true;
+        out property <bool> started;
+        out property <bool> cancelled;
+        out property <int> delta: 99;
+        RuleDragHandle {
+            x: 0px; y: 0px; row-height: 80px; enabled: root.handle-enabled;
+            started => { root.started = true; }
+            dropped(delta) => { root.delta = delta; }
+            cancelled => { root.cancelled = true; }
         }
     }
 }
@@ -168,4 +182,53 @@ fn mobile_list_stacks_rows_and_keeps_sparse_content_at_the_top() {
         });
     assert_eq!(drag_probe.get_delta(), 2);
     drag_probe.hide().unwrap();
+    drop(drag_probe);
+
+    let desktop = DesktopDragProbe::new().unwrap();
+    desktop.show().unwrap();
+    frame(&adapter, 300, 240);
+    let press = || {
+        desktop
+            .window()
+            .dispatch_event(WindowEvent::PointerPressed {
+                position: LogicalPosition::new(12., 24.),
+                button: PointerEventButton::Left,
+            })
+    };
+    let release = || {
+        desktop
+            .window()
+            .dispatch_event(WindowEvent::PointerReleased {
+                position: LogicalPosition::new(12., 184.),
+                button: PointerEventButton::Left,
+            })
+    };
+    press();
+    assert!(
+        desktop.get_started(),
+        "desktop dragging must not require a long press"
+    );
+    desktop.window().dispatch_event(WindowEvent::PointerMoved {
+        position: LogicalPosition::new(12., 184.),
+    });
+    release();
+    assert_eq!(desktop.get_delta(), 2);
+    desktop.set_delta(99);
+    press();
+    desktop.window().dispatch_event(WindowEvent::KeyPressed {
+        text: slint::platform::Key::Escape.into(),
+    });
+    release();
+    assert!(desktop.get_cancelled());
+    assert_eq!(
+        desktop.get_delta(),
+        99,
+        "Escape must cancel rather than drop"
+    );
+    desktop.set_handle_enabled(false);
+    frame(&adapter, 300, 240);
+    press();
+    release();
+    assert_eq!(desktop.get_delta(), 99, "a busy handle must not reorder");
+    desktop.hide().unwrap();
 }

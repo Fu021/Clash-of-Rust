@@ -4,6 +4,45 @@ use clash_client_ui::{AppWindow, Intent, UiActions, UiData, models::ViewModels};
 use slint::{ComponentHandle, Model};
 
 #[test]
+fn dropping_rules_uses_identities_in_the_full_draft_and_ignores_stale_rows() {
+    let mut app = fixture(Page::Rules);
+    let document = rule_manager::Document::from_raw(
+        "fixture",
+        false,
+        "proxies: []\nrules: ['DOMAIN,github.one,DIRECT', 'DOMAIN,hidden.test,DIRECT', 'DOMAIN,github.two,DIRECT', 'MATCH,DIRECT']\n",
+    ).unwrap();
+    app.rule_state
+        .load(Arc::new(document), Arc::new(ProfileRules::default()));
+    let before: Vec<_> = app
+        .rule_state
+        .rows
+        .iter()
+        .map(|row| row.id.clone())
+        .collect();
+    assert!(before.len() >= 3);
+    let _ = app.ui_intent(Intent::RuleFilter, "3", "");
+    let _ = app.ui_intent(Intent::Query, "github", "");
+    let _ = app.ui_intent(Intent::RuleDrop, &before[0], &before[2]);
+    let after: Vec<_> = app
+        .rule_state
+        .rows
+        .iter()
+        .map(|row| row.id.clone())
+        .collect();
+    assert_eq!(after[2], before[0]);
+    assert_eq!(app.rule_state.selected.as_deref(), Some(before[0].as_str()));
+    assert_eq!(app.rule_state.saved.order, Vec::<String>::new());
+    assert!(app.rule_state.dirty());
+    let draft = app.rule_state.draft.clone();
+    let _ = app.ui_intent(Intent::RuleDrop, &before[0], "removed-target");
+    let _ = app.ui_intent(Intent::RuleDrop, "removed-source", &before[1]);
+    assert_eq!(app.rule_state.draft, draft);
+    app.working = true;
+    let _ = app.ui_intent(Intent::RuleDrop, &before[0], &before[1]);
+    assert_eq!(app.rule_state.draft, draft);
+}
+
+#[test]
 fn rule_editor_round_trip_and_cancel_preserve_the_draft_through_ui_intents() {
     let mut app = fixture(Page::Rules);
     let _ = app.ui_intent(Intent::RuleAdd, "", "");

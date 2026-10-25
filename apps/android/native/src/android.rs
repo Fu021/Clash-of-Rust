@@ -1,3 +1,4 @@
+use crate::request_gate::RequestGate;
 use anyhow::{Context, Result, ensure};
 use clash_mobile_runtime::{NativeHost, Session, Snapshot, core};
 use core::{api, config, proxy_order, rule_manager};
@@ -142,6 +143,7 @@ struct Request {
     a: String,
     b: String,
     selected: String,
+    profile_ticket: Option<u64>,
 }
 struct ProtectionChange {
     before: config::Settings,
@@ -251,29 +253,54 @@ fn run(app: slint::android::AndroidApp) -> Result<()> {
         .set_version(core::VERSION.into());
     window.global::<MobileData>().set_protection_supported(true);
     let (commands, receive) = mpsc::channel::<Request>(32);
+    let profile_gate = Arc::new(RequestGate::default());
     let (events, native_events) = mpsc::channel::<String>(16);
     if let Ok(mut sender) = EVENTS.lock() {
         *sender = Some(events);
     }
     let weak = window.as_weak();
+    let gate = profile_gate.clone();
     window
         .global::<MobileActions>()
         .on_request(move |intent, a, b| {
             let Some(ui) = weak.upgrade() else { return };
-            ui.global::<MobileData>().set_working(!matches!(
+            let profile_ticket = if matches!(
                 intent,
-                MobileIntent::Navigate | MobileIntent::Query | MobileIntent::RuleTextMode
-            ));
+                MobileIntent::SaveProfile
+                    | MobileIntent::UpdateProfile
+                    | MobileIntent::ActivateProfile
+                    | MobileIntent::DeleteProfile
+            ) {
+                let Some(ticket) = gate.begin() else {
+                    return;
+                };
+                Some(ticket)
+            } else {
+                None
+            };
+            ui.global::<MobileData>().set_profile_busy(gate.busy());
+            ui.global::<MobileData>().set_working(
+                gate.busy()
+                    || !matches!(
+                        intent,
+                        MobileIntent::Navigate | MobileIntent::Query | MobileIntent::RuleTextMode
+                    ),
+            );
             if commands
                 .try_send(Request {
                     intent,
                     a: a.into(),
                     b: b.into(),
                     selected: ui.get_selected_id().into(),
+                    profile_ticket,
                 })
                 .is_err()
             {
-                ui.global::<MobileData>().set_working(false);
+                if let Some(ticket) = profile_ticket {
+                    gate.finish(ticket);
+                }
+                ui.global::<MobileData>().set_profile_busy(gate.busy());
+                ui.global::<MobileData>().set_working(gate.busy());
                 ui.invoke_notify("操作过于频繁，请稍后再试".into());
             }
         });
@@ -315,6 +342,7 @@ fn run(app: slint::android::AndroidApp) -> Result<()> {
                     receive,
                     native_events,
                     weak,
+                    profile_gate,
                 ))
             })();
             if let Err(error) = result {
@@ -356,6 +384,7 @@ async fn run_loop(
     mut receive: mpsc::Receiver<Request>,
     mut native_events: mpsc::Receiver<String>,
     weak: slint::Weak<AndroidWindow>,
+    profile_gate: Arc<RequestGate>,
 ) -> Result<()> {
     let mut state = State {
         session: Session::open(root, native)?,
@@ -466,9 +495,11 @@ async fn run_loop(
     loop {
         let mut immediate = false;
         let mut refresh_requested = false;
+        let mut profile_completed = None;
         tokio::select! {
             value = receive.recv() => {
                 let Some(request) = value else { break; };
+                profile_completed = request.profile_ticket;
                 state.selected = request.selected.clone();
                 immediate = true;
                 let intent = request.intent;
@@ -928,7 +959,9 @@ async fn run_loop(
         while state.logs.len() > 300 {
             state.logs.pop_front();
         }
-        if !state.visible || (!immediate && last_frame.elapsed() < Duration::from_millis(100)) {
+        if (!state.visible && profile_completed.is_none())
+            || (!immediate && last_frame.elapsed() < Duration::from_millis(100))
+        {
             continue;
         }
         last_frame = std::time::Instant::now();
@@ -964,8 +997,13 @@ async fn run_loop(
         state.rule_editor = None;
         let notice = std::mem::take(&mut state.notice);
         let weak = weak.clone();
+        let gate = profile_gate.clone();
         slint::invoke_from_event_loop(move || {
             if let Some(ui) = weak.upgrade() {
+                if let Some(ticket) = profile_completed {
+                    gate.finish(ticket);
+                }
+                ui.global::<MobileData>().set_profile_busy(gate.busy());
                 apply(&ui, view);
                 if !notice.is_empty() {
                     ui.invoke_notify(notice.into());
@@ -1285,6 +1323,7 @@ async fn handle(state: &mut State, request: Request) -> Result<()> {
         a,
         b,
         selected,
+        profile_ticket: _,
     } = request;
     ensure!(
         state.protection_change.is_none()
@@ -1298,6 +1337,7 @@ async fn handle(state: &mut State, request: Request) -> Result<()> {
                     | MobileIntent::ActivateProfile
                     | MobileIntent::UpdateProfile
                     | MobileIntent::SaveProfile
+                    | MobileIntent::DeleteProfile
                     | MobileIntent::SavePorts
                     | MobileIntent::RuleApply
                     | MobileIntent::Ipv6
@@ -1403,8 +1443,14 @@ async fn handle(state: &mut State, request: Request) -> Result<()> {
             session.activate(&a)?;
         }
         MobileIntent::DeleteProfile => {
+            let active = session.settings.active_profile.as_deref() == Some(&a);
             session.delete(&a)?;
-            state.notice = "订阅已删除".into();
+            state.notice = if active {
+                "订阅已删除，已切换到默认直连"
+            } else {
+                "订阅已删除"
+            }
+            .into();
         }
         MobileIntent::UpdateProfile => {
             session.update_profile(&a).await?;
@@ -2242,7 +2288,7 @@ fn apply(ui: &AndroidWindow, p: Projection) {
         view.set_copy_value(p.copied.1.as_ref().into());
         view.set_copy_revision(p.copied.0);
     }
-    data.set_working(false);
+    data.set_working(data.get_profile_busy());
     data.set_vpn_pending(p.platform["vpn_pending"].as_bool().unwrap_or(false));
     data.set_geo_updating(p.geo_updating);
     data.set_delay_busy(p.delay_busy);
@@ -2540,18 +2586,21 @@ fn apply(ui: &AndroidWindow, p: Projection) {
         rows(
             p.profiles
                 .into_iter()
-                .map(|profile| ProfileItem {
-                    id: profile.id.clone().into(),
-                    name: profile.name.into(),
-                    source: profile.source.clone().into(),
-                    detail: if profile.source.is_empty() {
-                        "本地配置".into()
-                    } else {
-                        core::subscription::summary(profile.usage.as_deref(), profile.updated)
-                            .into()
-                    },
-                    active: p.settings.active_profile.as_deref() == Some(&profile.id),
-                    local: profile.source.is_empty(),
+                .map(|profile| {
+                    let builtin = profile.is_default();
+                    ProfileItem {
+                        id: profile.id.clone().into(),
+                        name: profile.name.into(),
+                        source: profile.source.clone().into(),
+                        detail: if builtin || profile.source.is_empty() {
+                            "本地配置".into()
+                        } else {
+                            core::subscription::summary(profile.usage.as_deref(), profile.updated)
+                                .into()
+                        },
+                        active: p.settings.active_profile.as_deref() == Some(&profile.id),
+                        local: builtin || profile.source.is_empty(),
+                    }
                 })
                 .collect(),
         ),

@@ -121,6 +121,7 @@ impl App {
             Intent::RuleDelete => Message::Rules(R::Delete),
             Intent::RuleEnable => Message::Rules(R::Enable),
             Intent::RuleMove => Message::Rules(R::Move(a.parse().unwrap_or(0))),
+            Intent::RuleDrop => Message::Rules(R::Drop(a.into(), b.into())),
             Intent::RuleMoveOpen => Message::Rules(R::MoveOpen),
             Intent::RuleMoveInput => Message::Rules(R::MoveInput(a.into())),
             Intent::RuleMoveTo => Message::Rules(R::MoveTo),

@@ -136,7 +136,7 @@ export component MobileProxies inherits PageSurface {
 export component MobileSubscriptions inherits PageSurface {
     MScroll { VerticalLayout { alignment: start; spacing: MobileTypography.gap; padding-bottom: MobileTypography.padding;
         HorizontalLayout { spacing: MobileTypography.small-gap;
-            MButton { text: "+ 添加订阅"; primary: true; clicked => { MobileView.selected-id = ""; MobileView.profile-name = ""; MobileView.profile-source = ""; MobileView.detail = 3; } }
+            MButton { text: "+ 添加订阅"; primary: true; enabled: !MobileData.profile-busy; clicked => { MobileView.selected-id = ""; MobileView.profile-name = ""; MobileView.profile-source = ""; MobileView.detail = 3; } }
         }
         for profile in MobileData.profiles: MCard {
             selected: profile.active;
@@ -148,11 +148,12 @@ export component MobileSubscriptions inherits PageSurface {
             MSmall { text: profile.source; }
             if profile.active && MobileData.protected: MSmall { text: "Claude 保护已锁定此订阅，请先关闭保护再编辑或更新。"; wrap: word-wrap; }
             HorizontalLayout { spacing: MobileTypography.small-gap;
-                MButton { text: profile.active ? (profile.local ? "使用中" : "更新") : "启用"; selected: profile.active; enabled: !MobileData.protected && !MobileData.protection-pending && (!profile.active || !profile.local);
+                MButton { text: profile.active ? (profile.local ? "使用中" : "更新") : "启用"; selected: profile.active; enabled: !MobileData.profile-busy && !MobileData.protected && !MobileData.protection-pending && (!profile.active || !profile.local);
                     clicked => { MobileActions.request(profile.active ? MobileIntent.update-profile : MobileIntent.activate-profile, profile.id, ""); }
                 }
-                MButton { text: "编辑"; enabled: !MobileData.protection-pending && !(MobileData.protected && profile.active); clicked => { MobileView.selected-id = profile.id; MobileView.profile-name = profile.name; MobileView.profile-source = profile.source; MobileView.detail = 3; } }
-                MButton { text: "删除"; danger: true; clicked => { MobileView.selected-id = profile.id; MobileView.profile-name = profile.name; MobileView.detail = 4; } }
+                if profile.name != "默认直连" || profile.source != "default.yaml": MButton { text: "编辑"; enabled: !MobileData.profile-busy && !MobileData.protection-pending && !(MobileData.protected && profile.active); clicked => { MobileView.selected-id = profile.id; MobileView.profile-name = profile.name; MobileView.profile-source = profile.source; MobileView.detail = 3; } }
+                if profile.name != "默认直连" || profile.source != "default.yaml": MButton { text: "删除"; danger: true; enabled: !MobileData.profile-busy && !MobileData.protection-pending && !(MobileData.protected && profile.active);
+                    clicked => { MobileView.selected-id = profile.id; MobileView.profile-name = profile.name; MobileView.profile-active = profile.active; MobileView.detail = 4; } }
             }
         }
     } }

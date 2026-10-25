@@ -1,5 +1,6 @@
 import { Motion, Entrance, ProgressTrack, CopyFeedback } from "../../components/motion.slint";
 import { Chevron } from "../../components/controls.slint";
+import { RuleDragHandle } from "../../components/rule-drag.slint";
 import { MobileTypography } from "typography.slint";
 import { Theme } from "../../theme/palette.slint";
 import { MobileView, MobileActions, MobileIntent } from "state.slint";
@@ -173,48 +174,14 @@ export component MPagination inherits HorizontalLayout {
         clicked => { root.turn(1); }
     }
 }
-export component MDragHandle inherits Rectangle {
-    in property <length> row-height: 80px;
-    in property <bool> enabled: true;
-    property <bool> tracking;
-    Timer {
-        interval: 550ms; running: area.pressed && root.enabled && !root.tracking;
-        triggered => { root.tracking = true; root.started(); }
-    }
-    callback started();
-    callback dragged(int);
-    callback dropped(int);
-    callback cancelled();
+export component MDragHandle inherits RuleDragHandle {
+    hold-duration: 550ms;
+    blocked: MobileView.modal;
     width: max(24px, 48px - MobileTypography.padding - MobileTypography.small-gap);
     height: 48px; horizontal-stretch: 0;
-    background: root.tracking ? Theme.accent-wash : transparent; border-radius: 6px;
-    accessible-role: button; accessible-label: "拖动调整规则顺序，方向键上下移动";
-    Image { source: @image-url("../../icons/grip-vertical.svg"); colorize: Theme.secondary;
-        width: 12px; height: 18px; x: (parent.width - self.width) / 2; y: (parent.height - self.height) / 2;
-    }
     // Share the card padding with the touch target while keeping the icon narrow.
-    keys := FocusScope { x: -MobileTypography.padding; width: 48px; height: parent.height; enabled: root.enabled;
-        key-pressed(event) => {
-            if event.text == Key.UpArrow || event.text == Key.DownArrow {
-                root.started(); root.dropped(event.text == Key.UpArrow ? -1 : 1); return accept;
-            }
-            return reject;
-        }
-        area := TouchArea {
-            enabled: root.enabled && !MobileView.modal; mouse-cursor: pointer;
-            pointer-event(event) => {
-                if event.kind == PointerEventKind.down {
-                    keys.focus();
-                } else if event.kind == PointerEventKind.up && root.tracking {
-                    root.tracking = false;
-                    root.dropped(round((self.mouse-y - self.pressed-y) / max(1px, root.row-height)));
-                } else if event.kind == PointerEventKind.cancel {
-                    root.tracking = false; root.cancelled();
-                }
-            }
-            moved => { if root.tracking { root.dragged(round((self.mouse-y - self.pressed-y) / max(1px, root.row-height))); } }
-        }
-    }
+    hit-padding: MobileTypography.padding;
+    hit-width: 48px;
 }
 export component MRow inherits Rectangle {
     in property <string> title;
@@ -271,6 +238,7 @@ export component MSwitch inherits Rectangle {
     TouchArea { enabled: root.enabled && !MobileView.modal; mouse-cursor: pointer; clicked => { root.toggled(!root.checked); } }
 }
 export component MField inherits Rectangle {
+    in property <bool> enabled: true;
     in property <bool> secret;
     in-out property <string> text;
     in property <string> placeholder;
@@ -281,7 +249,7 @@ export component MField inherits Rectangle {
     border-color: input.has-focus ? Theme.accent : Theme.line;
     animate border-color, background { duration: Motion.fast; enabled: Motion.active; }
     input := TextInput { x: 12px; width: parent.width - 24px; height: parent.height;
-        enabled: !MobileView.modal;
+        enabled: root.enabled && !MobileView.modal;
         text <=> root.text; input-type: root.secret ? InputType.password : InputType.text; font-size: MobileTypography.font-size(16); color: Theme.ink; single-line: true; vertical-alignment: center;
         selection-background-color: Theme.primary; selection-foreground-color: #ffffff;
         edited => { root.edited(self.text); }
