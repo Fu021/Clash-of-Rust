@@ -473,7 +473,9 @@ async fn basic_system_proxy_and_tun() {
         loop {
             let (mut socket, _) = subscription_server.accept().await.unwrap();
             let mut request = [0; 4096];
-            socket.read(&mut request).await.unwrap();
+            if socket.read(&mut request).await.unwrap() == 0 {
+                continue;
+            }
             let _ = socket
                 .write_all(b"HTTP/1.1 503 Unavailable\r\nContent-Length: 0\r\n\r\n")
                 .await;

@@ -971,7 +971,9 @@ mod tests {
                 loop {
                     let (mut socket, _) = listener.accept().await.unwrap();
                     let mut request = [0; 4096];
-                    socket.read(&mut request).await.unwrap();
+                    if socket.read(&mut request).await.unwrap() == 0 {
+                        continue;
+                    }
                     let _ = socket.write_all(&wire).await;
                 }
             });
