@@ -88,12 +88,12 @@ export component Preview inherits AppWindow {
         UiData.shortcuts = ["拦截广告", "私有域名直连", "私有 IP 直连", "国内域名直连", "国内 IP 直连"];
         UiData.shortcut-values = [false, false, false, false, false]; UiData.shortcut-available = [true, true, true, true, true];
         UiData.rules = [
-            {id: "1", position: "1", kind: "DOMAIN-SUFFIX", value: "github.com", policy: "Proxy", source: "订阅", selected: false, enabled: true},
-            {id: "2", position: "2", kind: "DOMAIN-SUFFIX", value: "google.com", policy: "Proxy", source: "订阅", selected: false, enabled: true},
-            {id: "3", position: "3", kind: "DOMAIN", value: "localhost", policy: "DIRECT", source: "订阅", selected: false, enabled: true},
-            {id: "4", position: "4", kind: "IP-CIDR", value: "192.168.0.0/16", policy: "DIRECT", source: "订阅", selected: false, enabled: true},
-            {id: "5", position: "5", kind: "GEOIP", value: "CN", policy: "DIRECT", source: "订阅", selected: false, enabled: true},
-            {id: "6", position: "6", kind: "MATCH", value: "", policy: "Proxy", source: "订阅", selected: false, enabled: true}];
+            {id: "1", position: "1", kind: "DOMAIN-SUFFIX", value: "github.com", policy: "Proxy", source: "订阅", selected: false, enabled: true, raw: "DOMAIN-SUFFIX,github.com,Proxy"},
+            {id: "2", position: "2", kind: "DOMAIN-SUFFIX", value: "google.com", policy: "Proxy", source: "订阅", selected: false, enabled: true, raw: "DOMAIN-SUFFIX,google.com,Proxy"},
+            {id: "3", position: "3", kind: "DOMAIN", value: "localhost", policy: "DIRECT", source: "订阅", selected: false, enabled: true, raw: "DOMAIN,localhost,DIRECT"},
+            {id: "4", position: "4", kind: "IP-CIDR", value: "192.168.0.0/16", policy: "DIRECT", source: "订阅", selected: false, enabled: true, raw: "IP-CIDR,192.168.0.0/16,DIRECT,no-resolve"},
+            {id: "5", position: "5", kind: "GEOIP", value: "CN", policy: "DIRECT", source: "订阅", selected: false, enabled: true, raw: "GEOIP,CN,DIRECT,no-resolve"},
+            {id: "6", position: "6", kind: "MATCH", value: "", policy: "Proxy", source: "订阅", selected: false, enabled: true, raw: "MATCH,Proxy"}];
         UiData.logs = [
             {time: "", level: "INFO", message: "mihomo 已启动，控制接口可用", tone: 4},
             {time: "", level: "INFO", message: "配置已更新并生效", tone: 4},

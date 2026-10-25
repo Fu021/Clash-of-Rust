@@ -48,7 +48,7 @@ export component RulesPage inherits PageSurface {
                     Select { width: 120px; horizontal-stretch: 0; options: ["全部来源", "自定义", "快捷规则", "订阅"]; value: UiData.rule-source; selected(index, value) => { UiActions.dispatch(Intent.rule-filter, "" + index, ""); } }
                     ActionButton { text: "+ 新建规则"; primary: true; enabled: UiData.rule-types.length > 0 && !UiData.working; clicked => { UiActions.dispatch(Intent.rule-add, "", ""); } }
                 }
-                Caption { text: root.drag-id == "" ? "拖动左侧手柄调整顺序 · 更多操作点 ⋯" : "松开以调整顺序 · Esc 取消"; }
+                Caption { text: root.drag-id == "" ? "拖动左侧手柄调整顺序 · 点右箭头查看操作" : "松开以调整顺序 · Esc 取消"; }
                 ContentPanel {
                     for rule[index] in UiData.rules: entry := Rectangle {
                         height: max(60px, Theme.body-size * 3 + 12px);
@@ -79,30 +79,37 @@ export component RulesPage inherits PageSurface {
                             }
                             Badge { text: rule.policy; width-limit: root.width * 0.2; }
                             ActionButton {
-                                text: "⋯"; width: 40px; selected: rule.selected;
-                                accessible-role: button; accessible-label: "规则更多操作"; enabled: !UiData.working;
+                                text: ""; width: 40px; selected: rule.selected;
+                                accessible-role: button; accessible-label: "规则详情与操作"; enabled: !UiData.working;
+                                Image { source: @image-url("../icons/chevron-right.svg"); colorize: Theme.secondary; width: 18px; height: 18px;
+                                    x: (parent.width - self.width) / 2; y: (parent.height - self.height) / 2;
+                                }
                                 clicked => { UiActions.dispatch(Intent.rule-select, rule.id, ""); menu.show(); }
                             }
                         }
                         menu := PopupWindow {
                             close-policy: close-on-click-outside;
                             x: max(0px, entry.width - self.width); y: entry.height;
-                            width: min(280px, root.width); height: actions.preferred-height;
+                            width: min(320px, root.width); height: min(actions.preferred-height, max(160px, root.height - 48px));
                             Rectangle {
                                 background: Theme.surface; border-color: Theme.line; border-width: 1px; border-radius: 6px;
-                                actions := VerticalLayout {
-                                    padding: 8px; spacing: 4px;
-                                    Paragraph { text: rule.kind + (rule.value == "" ? "" : " · " + rule.value) + " → " + rule.policy; }
-                                    ActionButton { text: "编辑"; enabled: rule.source == "自定义" && !UiData.working;
-                                        clicked => { menu.close(); UiActions.dispatch(Intent.rule-edit, "", ""); } }
-                                    ActionButton { text: rule.enabled ? "停用" : "启用"; enabled: rule.source == "自定义" && !UiData.working;
-                                        clicked => { menu.close(); UiActions.dispatch(Intent.rule-enable, "", ""); } }
-                                    ActionButton { text: "删除"; danger: true; enabled: rule.source == "自定义" && !UiData.working;
-                                        clicked => { menu.close(); UiActions.dispatch(Intent.rule-delete, "", ""); } }
-                                    ActionButton { text: "跨页移动到位置…"; enabled: !UiData.working;
-                                        clicked => { menu.close(); UiActions.dispatch(Intent.rule-move-open, "", ""); } }
-                                    ActionButton { text: "恢复订阅顺序"; enabled: !UiData.working;
-                                        clicked => { menu.close(); UiActions.dispatch(Intent.rule-restore, "", ""); } }
+                                PageScroll {
+                                    actions := VerticalLayout {
+                                        padding: 8px; spacing: 4px;
+                                        Paragraph { text: rule.kind + (rule.value == "" ? "" : " · " + rule.value) + " → " + rule.policy; }
+                                        Caption { text: "来源：" + rule.source + (rule.enabled ? " · 已启用" : " · 已停用"); }
+                                        Paragraph { text: rule.raw; }
+                                        ActionButton { text: "编辑"; enabled: rule.source == "自定义" && !UiData.working;
+                                            clicked => { menu.close(); UiActions.dispatch(Intent.rule-edit, "", ""); } }
+                                        ActionButton { text: rule.enabled ? "停用" : "启用"; enabled: rule.source == "自定义" && !UiData.working;
+                                            clicked => { menu.close(); UiActions.dispatch(Intent.rule-enable, "", ""); } }
+                                        ActionButton { text: "删除"; danger: true; enabled: rule.source == "自定义" && !UiData.working;
+                                            clicked => { menu.close(); UiActions.dispatch(Intent.rule-delete, "", ""); } }
+                                        ActionButton { text: "跨页移动到位置…"; enabled: !UiData.working;
+                                            clicked => { menu.close(); UiActions.dispatch(Intent.rule-move-open, "", ""); } }
+                                        ActionButton { text: "恢复订阅顺序"; enabled: !UiData.working;
+                                            clicked => { menu.close(); UiActions.dispatch(Intent.rule-restore, "", ""); } }
+                                    }
                                 }
                             }
                         }

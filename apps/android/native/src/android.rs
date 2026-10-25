@@ -2702,18 +2702,22 @@ fn apply(ui: &AndroidWindow, p: Projection) {
         rows(
             p.rules
                 .into_iter()
-                .filter_map(|(index, row)| {
-                    let parts = rule_manager::parts(&row.raw).ok()?;
-                    Some(RuleItem {
+                .map(|(index, row)| {
+                    let parts = rule_manager::parts(&row.raw).ok();
+                    RuleItem {
                         id: row.id.into(),
                         position: (index + 1).to_string().into(),
-                        kind: parts.kind.into(),
-                        value: parts.payload.into(),
-                        policy: parts.policy.into(),
+                        kind: parts.as_ref().map_or("复杂规则", |parts| parts.kind).into(),
+                        value: parts
+                            .as_ref()
+                            .map_or(row.raw.as_ref(), |parts| parts.payload)
+                            .into(),
+                        policy: parts.as_ref().map_or("—", |parts| parts.policy).into(),
                         source: row.source.to_string().into(),
                         selected: false,
                         enabled: row.enabled,
-                    })
+                        raw: row.raw.as_ref().into(),
+                    }
                 })
                 .collect(),
         ),

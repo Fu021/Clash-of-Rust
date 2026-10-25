@@ -1,0 +1,104 @@
+// Keep the gesture outside recycled rows so scrolling can pass the source row.
+export component ListReorderGesture inherits Rectangle {
+    in property <bool> enabled: true;
+    in property <bool> cancel-requested;
+    in property <string> context;
+    in property <int> row-count;
+    in property <length> row-height: 80px;
+    in property <length> header-height;
+    in property <length> scroll-content-height;
+    in-out property <length> scroll-y;
+    out property <bool> reordering;
+    property <bool> armed;
+    property <int> source-index: -1;
+    property <int> target-index: -1;
+    property <length> pointer-y;
+    property <length> press-y;
+    property <length> press-scroll-y;
+    property <length> edge: min(64px, root.height / 4);
+    property <length> bottom: min(0px, root.height - root.scroll-content-height);
+    property <float> direction: root.pointer-y < root.edge ? -clamp((root.edge - root.pointer-y) / max(1px, root.edge), 0, 1)
+        : root.pointer-y > root.height - root.edge ? clamp((root.pointer-y - root.height + root.edge) / max(1px, root.edge), 0, 1) : 0;
+    callback started(int);
+    callback targeted(int);
+    callback dropped(int, int);
+    callback cancelled();
+    width: 48px;
+    changed enabled => { if !root.enabled { root.abort(); } }
+    changed cancel-requested => { if root.cancel-requested { root.abort(); } }
+    changed context => { root.abort(); }
+    changed row-count => { root.abort(); }
+    changed row-height => { root.abort(); }
+    changed header-height => { root.abort(); }
+    changed height => { root.abort(); }
+    changed scroll-y => { if root.reordering { root.update-target(); } }
+
+    function abort() {
+        root.armed = false;
+        if root.reordering { root.reordering = false; root.cancelled(); }
+    }
+    function update-target() {
+        root.target-index = clamp(floor((root.pointer-y - root.scroll-y - root.header-height) / max(1px, root.row-height)), 0, root.row-count - 1);
+        root.targeted(root.target-index);
+    }
+    Timer {
+        interval: 550ms;
+        running: root.armed && area.pressed && root.enabled;
+        triggered => {
+            root.armed = false;
+            root.reordering = true;
+            keys.focus();
+            root.started(root.source-index);
+            root.update-target();
+        }
+    }
+    Timer {
+        interval: 32ms;
+        running: root.reordering && root.enabled && root.direction != 0
+            && (root.direction < 0 ? root.scroll-y < 0px : root.scroll-y > root.bottom);
+        triggered => {
+            root.scroll-y = clamp(root.scroll-y - root.direction * 24px, root.bottom, 0px);
+            root.update-target();
+        }
+    }
+    keys := FocusScope {
+        x: 0px; y: 0px; width: parent.width; height: parent.height; enabled: root.enabled;
+        key-pressed(event) => {
+            if event.text == Key.Escape && root.reordering { root.abort(); return accept; }
+            return reject;
+        }
+        area := TouchArea {
+            y: max(0px, root.header-height + root.scroll-y);
+            width: parent.width;
+            height: max(0px, min(root.height, root.header-height + root.row-count * root.row-height + root.scroll-y) - self.y);
+            enabled: root.enabled; mouse-cursor: pointer;
+            pointer-event(event) => {
+                if event.kind == PointerEventKind.down && event.button == PointerEventButton.left {
+                    root.pointer-y = self.mouse-y + self.y;
+                    root.press-y = root.pointer-y;
+                    root.press-scroll-y = root.scroll-y;
+                    root.source-index = floor((root.pointer-y - root.scroll-y - root.header-height) / max(1px, root.row-height));
+                    root.armed = root.source-index >= 0 && root.source-index < root.row-count;
+                } else if event.kind == PointerEventKind.up {
+                    root.armed = false;
+                    if root.reordering {
+                        root.pointer-y = self.mouse-y + self.y;
+                        root.update-target();
+                        root.reordering = false;
+                        root.dropped(root.source-index, root.target-index);
+                    }
+                } else if event.kind == PointerEventKind.cancel {
+                    root.abort();
+                }
+            }
+            moved => {
+                root.pointer-y = self.mouse-y + self.y;
+                if !root.reordering && self.pressed && abs(root.pointer-y - root.press-y) > 8px {
+                    root.armed = false;
+                    root.scroll-y = clamp(root.press-scroll-y + root.pointer-y - root.press-y, root.bottom, 0px);
+                }
+                if root.reordering { root.update-target(); }
+            }
+        }
+    }
+}

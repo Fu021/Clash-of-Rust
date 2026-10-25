@@ -727,6 +727,7 @@ impl App {
                         source: row.source.to_string().into(),
                         selected: state.selected.as_deref() == Some(&row.id),
                         enabled: row.enabled,
+                        raw: row.raw.as_ref().into(),
                     }
                 })
                 .collect(),

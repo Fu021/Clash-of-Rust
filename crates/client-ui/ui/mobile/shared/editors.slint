@@ -43,7 +43,13 @@ export component MobileRuleActions inherits MScroll {
     VerticalLayout { spacing: MobileTypography.gap;
         MCard {
             MHeading { text: MobileView.selected-rule.value == "" ? MobileView.selected-rule.kind : MobileView.selected-rule.value; wrap: word-wrap; }
-            MSmall { text: MobileView.selected-rule.kind + " · " + MobileView.selected-rule.source + " · " + MobileView.selected-rule.policy; wrap: word-wrap; }
+            MSmall { text: "第 " + MobileView.selected-rule.position + " 条 · 来源：" + MobileView.selected-rule.source + (MobileView.selected-rule.enabled ? " · 已启用" : " · 已停用"); wrap: word-wrap; }
+            MSmall { text: "类型：" + MobileView.selected-rule.kind + " · 策略：" + MobileView.selected-rule.policy; wrap: word-wrap; }
+            MDivider { }
+            MSmall { text: "完整规则"; }
+            MParagraph { text: MobileView.selected-rule.raw; }
+            MRow { title: "复制规则原文"; clicked => { MobileActions.request(MobileIntent.copy, MobileView.selected-rule.raw, ""); } }
+            MDivider { }
             MRow { title: MobileView.selected-rule.source == "自定义" ? "编辑规则" : "复制为自定义规则";
                 clicked => { MobileActions.request(MobileIntent.rule-edit, MobileView.selected-id, ""); }
             }
@@ -59,7 +65,7 @@ export component MobileRuleActions inherits MScroll {
             }
         }
         MCard {
-            MSmall { text: "同页长按左侧手柄拖动排序；跨页可指定位置。"; wrap: word-wrap; }
+            MSmall { text: "长按左侧手柄拖动，靠近列表上下边缘可连续滚动；跨页可指定位置。"; wrap: word-wrap; }
             HorizontalLayout { spacing: MobileTypography.small-gap;
                 MField { text <=> MobileView.rule-position; placeholder: "目标位置"; }
                 MButton { text: "移动"; width: 72px; horizontal-stretch: 0;

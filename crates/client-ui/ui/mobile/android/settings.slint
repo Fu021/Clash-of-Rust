@@ -15,9 +15,7 @@ component AndroidNetwork inherits VerticalLayout {
         }
         if AndroidData.ports-dirty: MButton { text: "保存端口"; primary: true; clicked => { MobileActions.request(MobileIntent.save-ports, MobileData.mixed-port, ""); } }
         MDivider { }
-        NetworkToggles { }
-        MDivider { }
-        MRow { title: "Fake-IP 排除项"; value: MobileData.fake-ip-exclusions.length + " 项"; clicked => { MobileView.detail = 14; } }
+        NetworkToggles { show-fake-ip-exclusions: true; }
     }
 }
 component AndroidConnection inherits VerticalLayout {

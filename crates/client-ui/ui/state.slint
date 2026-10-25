@@ -33,7 +33,7 @@ export struct NodePair { left: NodeItem, right: NodeItem }
 export struct GroupItem { id: string, title: string, detail: string, current: string, expanded: bool, testing: bool, page: string, previous: bool, next: bool, nodes: [NodePair] }
 export struct ProfileItem { id: string, name: string, source: string, detail: string, active: bool, local: bool }
 export struct ConnectionItem { id: string, host: string, detail: string, rule: string, route: string, up: string, down: string, upload: string, download: string }
-export struct RuleItem { id: string, position: string, kind: string, value: string, policy: string, source: string, selected: bool, enabled: bool }
+export struct RuleItem { id: string, position: string, kind: string, value: string, policy: string, source: string, selected: bool, enabled: bool, raw: string }
 export struct LogItem { time: string, level: string, message: string, tone: int }
 export struct ReportItem { id: string, title: string, value: string, detail: string, source: string, tone: int, flag: image, flagged: bool }
 export struct CategoryItem { id: string, title: string, count: string, detail: string, tone: int }

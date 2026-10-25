@@ -63,6 +63,6 @@
 ## 依赖维护
 
 - [依赖核对表](dependency-audit.csv)记录 2026-10-24 的升级前后版本、官方元数据与兼容性限制；后续升级同步声明、锁文件和对应行，不把核对日期当成持续安全保证。
-- YAML 使用维护中的 `yaml_serde` / `libyaml-rs`，替换已停止维护的 `serde_yaml` / `unsafe-libyaml`；保留原订阅、别名、标签和引号标量语义。桌面私有管道使用 `postcard`，协议号为 7，收发端须一起更新，保留帧长度、截断和尾随数据检查。
+- YAML 使用维护中的 `yaml_serde` / `libyaml-rs`，替换已停止维护的 `serde_yaml` / `unsafe-libyaml`；保留原订阅、别名、标签和引号标量语义。桌面私有管道使用 `postcard`，协议号为 8，收发端须一起更新，保留帧长度、截断和尾随数据检查。
 - HTTP 客户端统一使用 `clash_client_core::network::client_builder`，保留内置公共根证书；`reqwest` 0.13 的平台证书校验默认值不能直接用于未接入 Java verifier 的 Android 宿主。JNI 0.22 原生入口先经 `EnvUnowned::with_env`，工作线程经 VM 回调获取 `Env`，全局引用和异常处理遵循其生命周期。
 - macOS `tray-icon` 仍固定在与 Slint 共用原生菜单类的版本。Slint/ksni 的 zbus 5、字体栈的 `ttf-parser` 及 `typed-index-collections` 的可选 bincode 尚受上游约束；不以强制替换不兼容主版本掩盖这些链路。

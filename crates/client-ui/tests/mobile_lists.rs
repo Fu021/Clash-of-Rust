@@ -1,4 +1,4 @@
-//! Exercise the production mobile virtual-list wrapper with a software window.
+//! Exercise production virtual lists and rule gestures with a software window.
 use slint::{
     ComponentHandle,
     platform::{
@@ -11,11 +11,14 @@ use std::{cell::Cell, rc::Rc, time::Duration};
 slint::slint! {
     import { ListView, MDragHandle } from "../ui/mobile/shared/controls.slint";
     import { RuleDragHandle } from "../ui/components/rule-drag.slint";
+    import { ListReorderGesture } from "../ui/components/list-reorder.slint";
 
     export component MobileListProbe inherits Window {
         preferred-width: 300px; preferred-height: 240px;
         in property <[float]> rows;
         out property <length> extent <=> list.content-height;
+        out property <length> horizontal-extent <=> list.content-width;
+        out property <length> visible-width <=> list.visible-width;
         list := ListView {
             width: parent.width; height: parent.height;
             for row[index] in root.rows: Rectangle {
@@ -47,12 +50,39 @@ slint::slint! {
         in property <bool> handle-enabled: true;
         out property <bool> started;
         out property <bool> cancelled;
-        out property <int> delta: 99;
+        in-out property <int> delta: 99;
         RuleDragHandle {
             x: 0px; y: 0px; row-height: 80px; enabled: root.handle-enabled;
             started => { root.started = true; }
             dropped(delta) => { root.delta = delta; }
             cancelled => { root.cancelled = true; }
+        }
+    }
+    export component ReorderScrollProbe inherits Window {
+        preferred-width: 300px; preferred-height: 240px;
+        in property <string> context: "initial";
+        in property <length> header-height;
+        out property <length> scroll-y <=> list.content-y;
+        out property <bool> dragging <=> gesture.reordering;
+        out property <int> source: -1;
+        out property <int> target: -1;
+        out property <int> drop-count;
+        // The actual list uses recycled rows; the gesture lives beside it.
+        list := ListView {
+            width: root.width; height: root.height;
+            for index in 41: Rectangle {
+                height: index == 0 ? root.header-height : 80px;
+                background: index == 1 ? #ff0000 : #e8edf4;
+            }
+        }
+        gesture := ListReorderGesture {
+            x: 0px; y: 0px; height: list.visible-height;
+            context: root.context; row-count: 40; row-height: 80px;
+            header-height: root.header-height;
+            scroll-content-height: list.content-height; scroll-y <=> list.content-y;
+            started(index) => { root.source = index; }
+            targeted(index) => { root.target = index; }
+            dropped(source, target) => { root.source = source; root.target = target; root.drop-count += 1; }
         }
     }
 }
@@ -100,6 +130,7 @@ fn mobile_list_stacks_rows_and_keeps_sparse_content_at_the_top() {
     probe.show().unwrap();
 
     let pixels = frame(&adapter, 300, 240);
+    assert_eq!(probe.get_horizontal_extent(), probe.get_visible_width());
     assert!(
         probe.get_extent() >= 20. * 48.,
         "all rows must contribute to the scrollable content extent"
@@ -120,6 +151,7 @@ fn mobile_list_stacks_rows_and_keeps_sparse_content_at_the_top() {
     assert_eq!(probe.window().size(), slint::PhysicalSize::new(900, 240));
     rows.set_vec(vec![40., 64., 80.]);
     let pixels = frame(&adapter, 900, 240);
+    assert_eq!(probe.get_horizontal_extent(), probe.get_visible_width());
     assert_eq!(pixels[5 * 900 + 700], slint::Rgb8Pixel::new(255, 0, 0));
     assert_eq!(pixels[50 * 900 + 700], slint::Rgb8Pixel::new(0, 255, 0));
     assert_eq!(pixels[110 * 900 + 700], slint::Rgb8Pixel::new(0, 0, 255));
@@ -231,4 +263,132 @@ fn mobile_list_stacks_rows_and_keeps_sparse_content_at_the_top() {
     release();
     assert_eq!(desktop.get_delta(), 99, "a busy handle must not reorder");
     desktop.hide().unwrap();
+    drop(desktop);
+
+    let scrolling = ReorderScrollProbe::new().unwrap();
+    scrolling.show().unwrap();
+    frame(&adapter, 300, 240);
+    let pointer = |pressed: bool, y: f32| {
+        let position = LogicalPosition::new(12., y);
+        let event = if pressed {
+            WindowEvent::PointerPressed {
+                position,
+                button: PointerEventButton::Left,
+            }
+        } else {
+            WindowEvent::PointerReleased {
+                position,
+                button: PointerEventButton::Left,
+            }
+        };
+        scrolling.window().dispatch_event(event);
+    };
+    pointer(true, 24.);
+    advance(&clock, Duration::from_millis(700));
+    assert!(scrolling.get_dragging());
+    assert_eq!(scrolling.get_source(), 0);
+    scrolling
+        .window()
+        .dispatch_event(WindowEvent::PointerMoved {
+            position: LogicalPosition::new(12., 232.),
+        });
+    advance(&clock, Duration::from_secs(3));
+    frame(&adapter, 300, 240);
+    assert!(scrolling.get_scroll_y() < -800.);
+    assert!(scrolling.get_target() > 10);
+    assert!(
+        scrolling.get_dragging(),
+        "recycling the source row must retain the gesture"
+    );
+    let near_bottom = scrolling.get_scroll_y();
+    let lower_target = scrolling.get_target();
+    scrolling
+        .window()
+        .dispatch_event(WindowEvent::PointerMoved {
+            position: LogicalPosition::new(12., 8.),
+        });
+    advance(&clock, Duration::from_secs(1));
+    assert!(scrolling.get_scroll_y() > near_bottom);
+    assert!(scrolling.get_target() < lower_target);
+    scrolling
+        .window()
+        .dispatch_event(WindowEvent::PointerMoved {
+            position: LogicalPosition::new(12., 120.),
+        });
+    let centered = scrolling.get_scroll_y();
+    advance(&clock, Duration::from_millis(500));
+    assert_eq!(
+        scrolling.get_scroll_y(),
+        centered,
+        "the center must not auto-scroll"
+    );
+    pointer(false, 120.);
+    assert_eq!(scrolling.get_source(), 0);
+    assert_eq!(scrolling.get_drop_count(), 1);
+    assert!(!scrolling.get_dragging());
+    advance(&clock, Duration::from_millis(700));
+    assert_eq!(scrolling.get_scroll_y(), centered);
+
+    pointer(true, 120.);
+    advance(&clock, Duration::from_millis(700));
+    assert!(scrolling.get_dragging());
+    scrolling.set_context("filtered".into());
+    assert!(!scrolling.get_dragging());
+    pointer(false, 120.);
+    assert_eq!(
+        scrolling.get_drop_count(),
+        1,
+        "a context change must cancel the pending drop"
+    );
+    pointer(true, 120.);
+    scrolling
+        .window()
+        .dispatch_event(WindowEvent::PointerMoved {
+            position: LogicalPosition::new(12., 200.),
+        });
+    advance(&clock, Duration::from_millis(700));
+    assert!(
+        !scrolling.get_dragging(),
+        "an ordinary swipe must not start reordering"
+    );
+    assert!(scrolling.get_scroll_y() > centered);
+    pointer(false, 200.);
+    assert_eq!(scrolling.get_drop_count(), 1);
+    scrolling.hide().unwrap();
+    drop(scrolling);
+
+    let header = ReorderScrollProbe::new().unwrap();
+    header.set_header_height(120.);
+    header.show().unwrap();
+    frame(&adapter, 300, 240);
+    header.window().dispatch_event(WindowEvent::PointerPressed {
+        position: LogicalPosition::new(12., 24.),
+        button: PointerEventButton::Left,
+    });
+    advance(&clock, Duration::from_millis(700));
+    assert!(
+        !header.get_dragging(),
+        "inline toolbars must not start a rule drag"
+    );
+    header
+        .window()
+        .dispatch_event(WindowEvent::PointerReleased {
+            position: LogicalPosition::new(12., 24.),
+            button: PointerEventButton::Left,
+        });
+    header.window().dispatch_event(WindowEvent::PointerPressed {
+        position: LogicalPosition::new(12., 144.),
+        button: PointerEventButton::Left,
+    });
+    advance(&clock, Duration::from_millis(700));
+    assert!(header.get_dragging());
+    assert_eq!(header.get_source(), 0);
+    header
+        .window()
+        .dispatch_event(WindowEvent::PointerReleased {
+            position: LogicalPosition::new(12., 144.),
+            button: PointerEventButton::Left,
+        });
+    assert_eq!(header.get_drop_count(), 1);
+    header.hide().unwrap();
 }

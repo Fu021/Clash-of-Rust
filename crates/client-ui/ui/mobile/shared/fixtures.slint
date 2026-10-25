@@ -74,10 +74,10 @@ export component MobileFixture inherits Rectangle {
         ];
         MobileView.site-selected = "chatgpt";
         MobileData.rules = [
-            {id: "1", position: "1", kind: "DOMAIN-SUFFIX", value: "google.com", policy: "DIRECT", source: "自定义", enabled: true},
-            {id: "2", position: "2", kind: "DOMAIN-SUFFIX", value: "github.com", policy: "Proxy", source: "订阅", enabled: true},
-            {id: "3", position: "3", kind: "GEOIP", value: "CN", policy: "DIRECT", source: "订阅", enabled: true},
-            {id: "4", position: "4", kind: "MATCH", value: "", policy: "Proxy", source: "订阅", enabled: true}
+            {id: "1", position: "1", kind: "DOMAIN-SUFFIX", value: "google.com", policy: "DIRECT", source: "自定义", enabled: true, raw: "DOMAIN-SUFFIX,google.com,DIRECT"},
+            {id: "2", position: "2", kind: "DOMAIN-SUFFIX", value: "github.com", policy: "Proxy", source: "订阅", enabled: true, raw: "DOMAIN-SUFFIX,github.com,Proxy"},
+            {id: "3", position: "3", kind: "GEOIP", value: "CN", policy: "DIRECT", source: "订阅", enabled: true, raw: "GEOIP,CN,DIRECT,no-resolve"},
+            {id: "4", position: "4", kind: "MATCH", value: "", policy: "Proxy", source: "订阅", enabled: true, raw: "MATCH,Proxy"}
         ];
         MobileData.logs = [
             {time: "10:30:00", level: "INFO", message: "mihomo 已启动，控制接口可用，VPN 会话已建立。", tone: 4},

@@ -1,4 +1,5 @@
 import { PageSurface, Disclosure, Entrance } from "../../components/motion.slint";
+import { ListReorderGesture } from "../../components/list-reorder.slint";
 import { MobileTypography } from "typography.slint";
 import { Theme } from "../../theme/palette.slint";
 import { NodeItem, CategoryItem, ConnectionItem, RuleItem } from "../../state.slint";
@@ -161,8 +162,8 @@ export component MobileSubscriptions inherits PageSurface {
 component ConnectionsToolbar inherits VerticalLayout {
     alignment: start; spacing: MobileTypography.gap; vertical-stretch: 0;
     MField { placeholder: "搜索域名、IP、规则或线路"; text <=> MobileView.query; edited(value) => { MobileActions.request(MobileIntent.query, "connections", value); } }
-    HorizontalLayout { alignment: start; spacing: MobileTypography.small-gap;
-        MSelect { preferred-width: max(280px, root.width * 0.45); max-width: self.preferred-width; value: MobileView.connection-sort; options: ["下载速度 ↓", "下载速度 ↑", "上传速度 ↓", "上传速度 ↑", "下载量 ↓", "下载量 ↑", "名称 A–Z", "名称 Z–A"];
+    HorizontalLayout { spacing: MobileTypography.small-gap;
+        MSelect { value: MobileView.connection-sort; options: ["下载速度 ↓", "下载速度 ↑", "上传速度 ↓", "上传速度 ↑", "下载量 ↓", "下载量 ↑", "名称 A–Z", "名称 Z–A"];
             selected(index, value) => { MobileView.connection-sort = value; MobileActions.request(MobileIntent.connection-sort, value, ""); }
         }
         MButton { text: "关闭全部"; width: max(100px, MobileTypography.font-size(15) * 4 + 16px); horizontal-stretch: 0; danger: true; clicked => { MobileActions.request(MobileIntent.close-all, "", ""); } }
@@ -221,8 +222,8 @@ export component MobileConnections inherits PageSurface {
 component RulesToolbar inherits VerticalLayout {
     in property <length> available-height: 600px;
     alignment: start; spacing: MobileTypography.gap; vertical-stretch: 0;
-    HorizontalLayout { alignment: start; spacing: MobileTypography.small-gap;
-        MSelect { preferred-width: max(280px, root.width * 0.45); max-width: self.preferred-width; options: MobileData.rule-profiles; value: MobileData.rule-profile; selected(index, value) => { MobileActions.request(MobileIntent.rule-select, value, "profile"); } }
+    HorizontalLayout { spacing: MobileTypography.small-gap;
+        MSelect { options: MobileData.rule-profiles; value: MobileData.rule-profile; selected(index, value) => { MobileActions.request(MobileIntent.rule-select, value, "profile"); } }
         MTag { text: MobileData.rule-dirty ? "尚未应用" : "已载入"; tone: MobileData.rule-dirty ? 2 : 4; }
     }
     MCard {
@@ -251,7 +252,7 @@ component RulesToolbar inherits VerticalLayout {
                 MobileView.rule-payload = ""; MobileView.rule-raw = ""; MobileView.rule-text-mode = false; MobileView.rule-no-resolve = false; MobileView.rule-enabled = true; MobileView.draft-dirty = false; MobileView.detail = 2; }
         }
     }
-    MSmall { text: MobileView.rule-drag-id == "" ? "长按手柄拖动排序 · 更多操作点 ⋯" : "松开以调整顺序"; wrap: word-wrap; }
+    MSmall { text: MobileView.rule-drag-id == "" ? "长按手柄拖动排序 · 点右箭头查看详情" : "靠近上下边缘可连续滚动 · 松开调整顺序"; wrap: word-wrap; }
 }
 component RulesRow inherits MCard {
     in property <RuleItem> item;
@@ -274,7 +275,10 @@ component RulesRow inherits MCard {
             MSmall { text: root.item.kind + " · " + root.item.policy + (root.item.enabled ? "" : " · 已停用"); }
             MSmall { text: "来源：" + root.item.source; }
         }
-        MButton { text: "⋯"; accessible-role: button; accessible-label: "规则更多操作"; width: 48px; horizontal-stretch: 0;
+        MButton { text: ""; accessible-role: button; accessible-label: "规则详情与操作"; width: 48px; horizontal-stretch: 0;
+            Image { source: @image-url("../../icons/chevron-right.svg"); colorize: Theme.secondary; width: 18px; height: 18px;
+                x: (parent.width - self.width) / 2; y: (parent.height - self.height) / 2;
+            }
             clicked => { root.select(); MobileView.detail = 15; }
         }
     }
@@ -299,34 +303,61 @@ component RulesFooter inherits GridLayout {
 }
 export component MobileRules inherits PageSurface {
     property <bool> compact: root.height < 520px || Theme.text-scale > 1.25 || (MobileView.shortcuts-open);
-    if !root.compact: VerticalLayout { spacing: MobileTypography.gap;
-        RulesToolbar { available-height: root.height; }
-        ListView { content-key: MobileData.rule-page-index + "/" + MobileView.query + "/" + MobileData.rule-profile + "/" + MobileView.rule-source; min-height: 0px; vertical-stretch: 1;
-            for entry[i] in MobileData.rules: Rectangle { height: card.height + 12px;
-                card := RulesRow { x: 0px; y: 0px; width: parent.width; item: entry; row-index: i; }
+    property <length> row-extent: 120px;
+    property <length> toolbar-extent;
+    property <int> row-offset: root.compact ? 1 : 0;
+    VerticalLayout { spacing: MobileTypography.gap;
+        if !root.compact: RulesToolbar { available-height: root.height; }
+        Rectangle {
+            list := ListView {
+                width: parent.width; height: parent.height;
+                content-key: MobileData.rule-page-index + "/" + MobileView.query + "/" + MobileData.rule-profile + "/" + MobileView.rule-source + "/" + (root.compact ? "compact" : "full");
+                min-height: 0px; vertical-stretch: 1;
+                mouse-drag-pan-enabled: !gesture.reordering;
+                for index in MobileData.rules.length + (root.compact ? 2 : 0): Rectangle {
+                    height: content.preferred-height + 12px;
+                    changed height => { if root.compact && index == 0 { root.toolbar-extent = self.height; } }
+                    content := VerticalLayout { x: 0px; y: 0px; width: parent.width; height: self.preferred-height; alignment: start; spacing: 0px;
+                        if root.compact && index == 0: RulesToolbar { available-height: root.height; }
+                        if index >= root.row-offset && index < MobileData.rules.length + root.row-offset: RulesRow {
+                            item: MobileData.rules[index - root.row-offset]; row-index: index - root.row-offset;
+                            changed height => { root.row-extent = self.height + 12px; }
+                        }
+                        if root.compact && index == MobileData.rules.length + 1: RulesFooter { }
+                    }
+                }
+            }
+            gesture := ListReorderGesture {
+                x: 0px; y: 0px; height: list.visible-height;
+                enabled: !MobileData.working && !MobileData.protected && !MobileData.protection-pending && !MobileView.modal;
+                cancel-requested: MobileView.rule-drag-id == "";
+                context: list.content-key + "/" + MobileView.detail; row-count: MobileData.rules.length; row-height: root.row-extent;
+                header-height: root.compact ? root.toolbar-extent : 0px;
+                scroll-content-height: list.content-height; scroll-y <=> list.content-y;
+                started(index) => {
+                    MobileView.rule-selected = true; MobileView.selected-rule = MobileData.rules[index];
+                    MobileView.selected-id = MobileData.rules[index].id; MobileView.rule-position = MobileData.rules[index].position;
+                    MobileView.rule-drag-id = MobileData.rules[index].id;
+                }
+                targeted(index) => { MobileView.rule-drag-target = MobileData.rules[index].id; }
+                dropped(source, target) => {
+                    if source != target && MobileView.rule-drag-id != "" {
+                        MobileActions.request(MobileIntent.rule-drop, MobileView.rule-drag-id, MobileData.rules[target].id);
+                    }
+                    MobileView.rule-drag-id = ""; MobileView.rule-drag-target = "";
+                }
+                cancelled => { MobileView.rule-drag-id = ""; MobileView.rule-drag-target = ""; }
             }
         }
-        RulesFooter { }
-    }
-    // A short landscape window scrolls the toolbar and footer with the rows.
-    // A single virtual list keeps every control reachable without nested lists.
-    if root.compact: ListView { content-key: MobileData.rule-page-index + "/" + MobileView.query + "/" + MobileData.rule-profile + "/" + MobileView.rule-source;
-        for index in MobileData.rules.length + 2: Rectangle {
-            height: content.preferred-height + 12px;
-            content := VerticalLayout { x: 0px; y: 0px; width: parent.width; height: self.preferred-height; alignment: start; spacing: 0px;
-                if index == 0: RulesToolbar { available-height: root.height; }
-                if index > 0 && index <= MobileData.rules.length: RulesRow { item: MobileData.rules[index - 1]; row-index: index - 1; }
-                if index == MobileData.rules.length + 1: RulesFooter { }
-            }
-        }
+        if !root.compact: RulesFooter { }
     }
 }
 
 export component MobileLogs inherits PageSurface {
     VerticalLayout { spacing: MobileTypography.gap;
         MField { placeholder: "搜索日志内容"; text <=> MobileView.query; edited(value) => { MobileActions.request(MobileIntent.query, "logs", value); } }
-        HorizontalLayout { alignment: start; spacing: MobileTypography.small-gap;
-            MSelect { preferred-width: max(240px, root.width * 0.4); max-width: self.preferred-width; options: ["全部等级", "TRACE", "DEBUG", "INFO", "WARN", "ERROR"]; value: MobileView.log-level;
+        HorizontalLayout { spacing: MobileTypography.small-gap;
+            MSelect { options: ["全部等级", "TRACE", "DEBUG", "INFO", "WARN", "ERROR"]; value: MobileView.log-level;
                 selected(index, value) => { MobileView.log-level = value; MobileActions.request(MobileIntent.log-level, value, ""); }
             }
             MButton { text: "导出"; width: max(68px, MobileTypography.font-size(15) * 2 + 16px); horizontal-stretch: 0; clicked => { MobileActions.request(MobileIntent.export-logs, "", ""); } }
