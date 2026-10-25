@@ -32,6 +32,8 @@ slint::slint! {
             for index in 10: Rectangle {
                 height: 80px;
                 MDragHandle {
+                    // Outside a layout Slint centers fixed-size items by default.
+                    x: 0px; y: 0px;
                     row-height: 80px;
                     started => { root.started = true; }
                     dropped(delta) => { root.delta = delta; }
@@ -107,6 +109,7 @@ fn mobile_list_stacks_rows_and_keeps_sparse_content_at_the_top() {
     assert_eq!(pixels[5 * 900 + 700], slint::Rgb8Pixel::new(255, 0, 0));
     assert_eq!(pixels[50 * 900 + 700], slint::Rgb8Pixel::new(0, 255, 0));
     assert_eq!(pixels[110 * 900 + 700], slint::Rgb8Pixel::new(0, 0, 255));
+    probe.hide().unwrap();
     drop(probe);
 
     // Slint installs one platform per test process, so exercise the drag probe
@@ -148,7 +151,10 @@ fn mobile_list_stacks_rows_and_keeps_sparse_content_at_the_top() {
         "reordering must wait for the long-press threshold"
     );
     advance(&clock, Duration::from_millis(300));
-    assert!(drag_probe.get_started());
+    assert!(
+        drag_probe.get_started(),
+        "holding the handle must start reordering after the long-press threshold"
+    );
     drag_probe
         .window()
         .dispatch_event(WindowEvent::PointerMoved {
@@ -161,4 +167,5 @@ fn mobile_list_stacks_rows_and_keeps_sparse_content_at_the_top() {
             button: PointerEventButton::Left,
         });
     assert_eq!(drag_probe.get_delta(), 2);
+    drag_probe.hide().unwrap();
 }
