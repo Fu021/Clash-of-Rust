@@ -738,9 +738,24 @@ impl Session {
         position: usize,
         enabled: bool,
     ) -> Result<()> {
+        let raw = raw.trim();
         core::rule_manager::parts(raw)?;
-        let selected = selected.strip_prefix("c:").unwrap_or(selected);
-        let id = if self.draft.custom.iter().any(|r| r.id == selected) {
+        let custom_id = selected.strip_prefix("c:");
+        let selected = custom_id.unwrap_or(selected);
+        let existing = self.draft.custom.iter().any(|r| r.id == selected);
+        ensure!(custom_id.is_none() || existing, "规则已变化，请重新选择");
+        let (rows, _) = self.document().rows(&self.draft);
+        let max = (rows.len() + usize::from(!existing)).max(1);
+        let selected_key = format!("c:{selected}");
+        ensure!((1..=max).contains(&position), "插入位置应为 1-{max}");
+        ensure!(
+            !enabled
+                || !rows
+                    .iter()
+                    .any(|row| { row.enabled && row.raw.trim() == raw && row.id != selected_key }),
+            "已有相同的启用规则，请修改原规则或调整顺序"
+        );
+        let id = if existing {
             selected.to_owned()
         } else {
             uuid::Uuid::new_v4().to_string()
@@ -750,13 +765,14 @@ impl Session {
             rule: raw.into(),
             enabled,
         };
-        if let Some(old) = self.draft.custom.iter_mut().find(|r| r.id == id) {
+        let mut draft = self.draft.clone();
+        if let Some(old) = draft.custom.iter_mut().find(|r| r.id == id) {
             *old = rule;
         } else {
-            self.draft.custom.push(rule);
+            draft.custom.push(rule);
         }
         let key = format!("c:{id}");
-        let (rows, _) = self.document().rows(&self.draft);
+        let (rows, _) = self.document().rows(&draft);
         let mut order: Vec<_> = rows
             .into_iter()
             .map(|r| r.id)
@@ -764,8 +780,10 @@ impl Session {
             .collect();
         let index = position.saturating_sub(1).min(order.len());
         order.insert(index, key);
-        self.draft.order = order;
-        self.draft.validate()
+        draft.order = order;
+        draft.validate()?;
+        self.draft = draft;
+        Ok(())
     }
     pub fn move_rule(&mut self, source: &str, target: &str) -> Result<()> {
         let (rows, _) = self.document().rows(&self.draft);
@@ -778,6 +796,11 @@ impl Session {
     pub fn move_rule_to(&mut self, source: &str, position: usize) -> Result<()> {
         let (rows, _) = self.document().rows(&self.draft);
         let mut order: Vec<_> = rows.into_iter().map(|row| row.id).collect();
+        ensure!(
+            (1..=order.len()).contains(&position),
+            "移动位置应为 1-{}",
+            order.len()
+        );
         let index = order
             .iter()
             .position(|id| id == source)
@@ -1233,7 +1256,7 @@ mod tests {
             session.vpn = true;
             session.node = "saved node".into();
             session
-                .save_rule("", "DOMAIN,draft.example,REJECT", 0)
+                .save_rule("", "DOMAIN,draft.example,REJECT", 1)
                 .unwrap();
             let files = [
                 session.store.profile_path(&id).unwrap(),
@@ -1630,6 +1653,68 @@ mod tests {
         assert_eq!(format!("c:{}", reopened.draft.custom[0].id), id);
         assert!(reopened.draft.custom[0].rule.ends_with(",no-resolve"));
         assert_eq!(reopened.document().rows(&reopened.draft).0[0].id, id);
+    }
+    #[test]
+    fn rejected_mobile_rule_edits_leave_the_draft_unchanged() {
+        let root = tempfile::tempdir().unwrap();
+        let mut session = Session::open(root.path().into(), Arc::new(Fake)).unwrap();
+        let initial = session.draft.clone();
+        let original = session.document().rows(&initial).0[0].raw.to_string();
+        for (raw, position) in [
+            ("DOMAIN,unique.example,DIRECT", 0),
+            ("DOMAIN,unique.example,DIRECT", usize::MAX),
+            (original.as_str(), 1),
+        ] {
+            assert!(session.save_rule_state("", raw, position, true).is_err());
+            assert_eq!(session.draft, initial);
+        }
+        session
+            .save_rule_state("", " DOMAIN,unique.example,DIRECT ", 1, true)
+            .unwrap();
+        let id = format!("c:{}", session.draft.custom[0].id);
+        let saved = session.draft.clone();
+        assert!(
+            session
+                .save_rule_state("", "DOMAIN,unique.example,DIRECT", 1, true)
+                .is_err()
+        );
+        assert!(
+            session
+                .save_rule_state("c:missing", "DOMAIN,another.example,DIRECT", 1, true)
+                .is_err()
+        );
+        for position in [0, usize::MAX] {
+            assert!(session.move_rule_to(&id, position).is_err());
+        }
+        assert_eq!(session.draft, saved);
+        session
+            .save_rule_state(&id, "DOMAIN,unique.example,DIRECT", 1, true)
+            .unwrap();
+        assert_eq!(session.draft, saved);
+        session
+            .save_rule_state("", "DOMAIN,unique.example,DIRECT", 2, false)
+            .unwrap();
+        assert!(!session.draft.custom[1].enabled);
+    }
+    #[test]
+    fn mobile_rule_limit_failure_does_not_poison_the_draft() {
+        let root = tempfile::tempdir().unwrap();
+        let mut session = Session::open(root.path().into(), Arc::new(Fake)).unwrap();
+        session.draft.custom = (0..1000)
+            .map(|index| CustomRule {
+                id: uuid::Uuid::new_v4().to_string(),
+                rule: format!("DOMAIN,rule-{index}.example,DIRECT"),
+                enabled: true,
+            })
+            .collect();
+        let before = session.draft.clone();
+        assert!(
+            session
+                .save_rule_state("", "DOMAIN,overflow.example,DIRECT", 1, true)
+                .is_err()
+        );
+        assert_eq!(session.draft, before);
+        session.draft.validate().unwrap();
     }
     #[test]
     fn mobile_never_inherits_subscription_owned_routes_or_controller() {

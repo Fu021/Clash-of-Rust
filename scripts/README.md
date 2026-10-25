@@ -19,7 +19,7 @@
 | `macos_package.py` | 模块 | macOS App / DMG 组装；被打包器和 macOS 验证延迟导入。 |
 | `publish-release.py` | CLI / 模块 | 校验成功 CI，复用已验证产物创建测试包或公开正式/预发布 Release。 |
 | `run-ci.py` | CLI | 单个原生平台的编译、Clippy、源码测试与代理/TUN 集成入口。 |
-| `windows_ci.py` | 模块 | Windows 普通用户、服务、安装器、更新和 Defender 验证。 |
+| `windows_ci.py` | 模块 | Windows 普通用户、服务、安装器、更新及安装包/未压缩 EXE/DLL 的 Defender 验证，扫描证据进入打包收据。 |
 | `macos_ci.py` | CLI / 模块 | macOS 原生验证、安装检查和诊断报告。 |
 | `test-proxy-modes.py` | CLI | Windows、Linux、macOS 共用的系统代理、HTTP 和 TUN 流量检查。 |
 | `test-linux-tun.py` | root CLI | Linux 隔离网络命名空间内的 TUN 授权、DNS 和恢复测试。 |

@@ -8,8 +8,16 @@ export component ListReorderGesture inherits Rectangle {
     in property <length> header-height;
     in property <length> scroll-content-height;
     in-out property <length> scroll-y;
-    out property <bool> reordering;
+    out property <bool> reordering: root.tracking && root.enabled && root.same-layout;
+    property <bool> tracking;
     property <bool> armed;
+    property <string> press-context;
+    property <int> press-row-count;
+    property <length> press-row-height;
+    property <length> press-header-height;
+    property <length> press-height;
+    property <bool> same-layout: root.context == root.press-context && root.row-count == root.press-row-count
+        && root.row-height == root.press-row-height && root.header-height == root.press-header-height && root.height == root.press-height;
     property <int> source-index: -1;
     property <int> target-index: -1;
     property <length> pointer-y;
@@ -35,7 +43,7 @@ export component ListReorderGesture inherits Rectangle {
 
     function abort() {
         root.armed = false;
-        if root.reordering { root.reordering = false; root.cancelled(); }
+        if root.tracking { root.tracking = false; root.cancelled(); }
     }
     function update-target() {
         root.target-index = clamp(floor((root.pointer-y - root.scroll-y - root.header-height) / max(1px, root.row-height)), 0, root.row-count - 1);
@@ -43,10 +51,10 @@ export component ListReorderGesture inherits Rectangle {
     }
     Timer {
         interval: 550ms;
-        running: root.armed && area.pressed && root.enabled;
+        running: root.armed && area.pressed && root.enabled && root.same-layout;
         triggered => {
             root.armed = false;
-            root.reordering = true;
+            root.tracking = true;
             keys.focus();
             root.started(root.source-index);
             root.update-target();
@@ -74,9 +82,15 @@ export component ListReorderGesture inherits Rectangle {
             enabled: root.enabled; mouse-cursor: pointer;
             pointer-event(event) => {
                 if event.kind == PointerEventKind.down && event.button == PointerEventButton.left {
+                    root.abort();
                     root.pointer-y = self.mouse-y + self.y;
                     root.press-y = root.pointer-y;
                     root.press-scroll-y = root.scroll-y;
+                    root.press-context = root.context;
+                    root.press-row-count = root.row-count;
+                    root.press-row-height = root.row-height;
+                    root.press-header-height = root.header-height;
+                    root.press-height = root.height;
                     root.source-index = floor((root.pointer-y - root.scroll-y - root.header-height) / max(1px, root.row-height));
                     root.armed = root.source-index >= 0 && root.source-index < root.row-count;
                 } else if event.kind == PointerEventKind.up {
@@ -84,9 +98,9 @@ export component ListReorderGesture inherits Rectangle {
                     if root.reordering {
                         root.pointer-y = self.mouse-y + self.y;
                         root.update-target();
-                        root.reordering = false;
+                        root.tracking = false;
                         root.dropped(root.source-index, root.target-index);
-                    }
+                    } else { root.abort(); }
                 } else if event.kind == PointerEventKind.cancel {
                     root.abort();
                 }

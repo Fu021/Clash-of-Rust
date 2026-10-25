@@ -48,11 +48,13 @@ slint::slint! {
     export component DesktopDragProbe inherits Window {
         preferred-width: 300px; preferred-height: 240px;
         in property <bool> handle-enabled: true;
+        in property <string> context;
         out property <bool> started;
         out property <bool> cancelled;
         in-out property <int> delta: 99;
         RuleDragHandle {
             x: 0px; y: 0px; row-height: 80px; enabled: root.handle-enabled;
+            context: root.context;
             started => { root.started = true; }
             dropped(delta) => { root.delta = delta; }
             cancelled => { root.cancelled = true; }
@@ -61,6 +63,7 @@ slint::slint! {
     export component ReorderScrollProbe inherits Window {
         preferred-width: 300px; preferred-height: 240px;
         in property <string> context: "initial";
+        in property <bool> reorder-enabled: true;
         in property <length> header-height;
         out property <length> scroll-y <=> list.content-y;
         out property <bool> dragging <=> gesture.reordering;
@@ -77,6 +80,7 @@ slint::slint! {
         }
         gesture := ListReorderGesture {
             x: 0px; y: 0px; height: list.visible-height;
+            enabled: root.reorder-enabled;
             context: root.context; row-count: 40; row-height: 80px;
             header-height: root.header-height;
             scroll-content-height: list.content-height; scroll-y <=> list.content-y;
@@ -257,6 +261,14 @@ fn mobile_list_stacks_rows_and_keeps_sparse_content_at_the_top() {
         99,
         "Escape must cancel rather than drop"
     );
+    press();
+    desktop.set_context("filtered".into());
+    release();
+    assert_eq!(
+        desktop.get_delta(),
+        99,
+        "filtering during a desktop drag must not reorder a replacement row"
+    );
     desktop.set_handle_enabled(false);
     frame(&adapter, 300, 240);
     press();
@@ -340,6 +352,18 @@ fn mobile_list_stacks_rows_and_keeps_sparse_content_at_the_top() {
         1,
         "a context change must cancel the pending drop"
     );
+    pointer(true, 120.);
+    advance(&clock, Duration::from_millis(700));
+    assert!(scrolling.get_dragging());
+    scrolling.set_reorder_enabled(false);
+    assert!(!scrolling.get_dragging());
+    pointer(false, 120.);
+    assert_eq!(
+        scrolling.get_drop_count(),
+        1,
+        "disabling a gesture must cancel the pending drop"
+    );
+    scrolling.set_reorder_enabled(true);
     pointer(true, 120.);
     scrolling
         .window()

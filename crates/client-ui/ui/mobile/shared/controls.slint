@@ -3,7 +3,7 @@ import { Chevron } from "../../components/controls.slint";
 import { RuleDragHandle } from "../../components/rule-drag.slint";
 import { MobileTypography } from "typography.slint";
 import { Theme } from "../../theme/palette.slint";
-import { MobileView, MobileActions, MobileIntent } from "state.slint";
+import { MobileData, MobileView, MobileActions, MobileIntent } from "state.slint";
 import { ListView as SlintListView } from "std-widgets.slint";
 
 export component MAppIcon inherits Rectangle {
@@ -179,6 +179,7 @@ export component MPagination inherits HorizontalLayout {
 }
 export component MDragHandle inherits RuleDragHandle {
     hold-duration: 550ms;
+    context: MobileData.rule-page-index + "/" + MobileView.query + "/" + MobileData.rule-profile + "/" + MobileView.rule-source;
     blocked: MobileView.modal;
     width: max(24px, 48px - MobileTypography.padding - MobileTypography.small-gap);
     height: 48px; horizontal-stretch: 0;

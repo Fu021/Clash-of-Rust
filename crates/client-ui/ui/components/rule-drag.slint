@@ -5,10 +5,12 @@ export component RuleDragHandle inherits Rectangle {
     in property <duration> hold-duration: 0ms;
     in property <bool> enabled: true;
     in property <bool> blocked;
+    in property <string> context;
     in property <length> hit-padding;
     in property <length> hit-width: root.width;
     property <bool> interactive: root.enabled && !root.blocked;
     property <bool> tracking;
+    property <string> press-context;
     callback started();
     callback dragged(int);
     callback dropped(int);
@@ -19,9 +21,12 @@ export component RuleDragHandle inherits Rectangle {
     changed interactive => {
         if !root.interactive && root.tracking { root.tracking = false; root.cancelled(); }
     }
+    changed context => {
+        if root.tracking { root.tracking = false; root.cancelled(); }
+    }
     Timer {
         interval: root.hold-duration;
-        running: root.hold-duration > 0ms && area.pressed && root.interactive && !root.tracking;
+        running: root.hold-duration > 0ms && area.pressed && root.interactive && !root.tracking && root.context == root.press-context;
         triggered => { root.tracking = true; root.started(); }
     }
     Image {
@@ -44,15 +49,18 @@ export component RuleDragHandle inherits Rectangle {
             pointer-event(event) => {
                 if event.kind == PointerEventKind.down {
                     keys.focus();
+                    root.press-context = root.context;
                     if root.hold-duration == 0ms { root.tracking = true; root.started(); }
                 } else if event.kind == PointerEventKind.up && root.tracking {
                     root.tracking = false;
-                    root.dropped(round((self.mouse-y - self.pressed-y) / max(1px, root.row-height)));
+                    if root.interactive && root.context == root.press-context {
+                        root.dropped(round((self.mouse-y - self.pressed-y) / max(1px, root.row-height)));
+                    } else { root.cancelled(); }
                 } else if event.kind == PointerEventKind.cancel {
                     root.tracking = false; root.cancelled();
                 }
             }
-            moved => { if root.tracking { root.dragged(round((self.mouse-y - self.pressed-y) / max(1px, root.row-height))); } }
+            moved => { if root.tracking && root.context == root.press-context { root.dragged(round((self.mouse-y - self.pressed-y) / max(1px, root.row-height))); } }
         }
     }
 }

@@ -1519,7 +1519,12 @@ async fn handle(state: &mut State, request: Request) -> Result<()> {
         }
         MobileIntent::RuleSave => {
             let (position, enabled) = b.split_once('|').context("规则保存参数无效")?;
-            session.save_rule_state(&selected, &a, position.parse()?, enabled.parse()?)?;
+            session.save_rule_state(
+                &selected,
+                &a,
+                position.trim().parse().context("插入位置应为正整数")?,
+                enabled.parse()?,
+            )?;
             state.notice = "已保存到草稿，请应用修改".into();
         }
         MobileIntent::RuleShortcut => {
@@ -1541,7 +1546,9 @@ async fn handle(state: &mut State, request: Request) -> Result<()> {
                 .retain(|r| r.id != a.trim_start_matches("c:"));
             session.draft.order.retain(|id| id != &a);
         }
-        MobileIntent::RuleMove => session.move_rule_to(&a, b.parse()?)?,
+        MobileIntent::RuleMove => {
+            session.move_rule_to(&a, b.trim().parse().context("移动位置应为正整数")?)?
+        }
         MobileIntent::RuleDrop => session.move_rule(&a, &b)?,
         MobileIntent::RuleEnable => session.toggle_rule(&a)?,
         MobileIntent::RuleRestore => session.draft.order.clear(),

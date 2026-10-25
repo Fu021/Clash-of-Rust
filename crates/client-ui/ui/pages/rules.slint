@@ -2,11 +2,12 @@ import { PageSurface, Disclosure } from "../components/motion.slint";
 import { Theme } from "../theme/palette.slint";
 import { UiData, UiActions, Intent } from "../state.slint";
 import { RuleDragHandle } from "../components/rule-drag.slint";
-import { PageScroll, Label, Caption, Heading, ContentPanel, ActionButton, Badge, Field, Toggle, Select, Paragraph } from "../components/controls.slint";
+import { PageScroll, Label, Caption, Heading, ContentPanel, ActionButton, Badge, Field, Toggle, Select, Paragraph, CopyButton } from "../components/controls.slint";
 export component RulesPage inherits PageSurface {
     property <string> drag-id;
     property <string> drag-target;
-    property <string> drag-context: UiData.page-offset + "/" + UiData.query + "/" + UiData.rule-profile + "/" + UiData.rule-source;
+    property <string> drag-context: UiData.page-offset + "/" + UiData.query + "/" + UiData.rule-profile + "/" + UiData.rule-source
+        + "/" + (root.width / 1px) + "/" + (root.height / 1px) + "/" + Theme.text-scale;
     changed drag-context => { root.drag-id = ""; root.drag-target = ""; }
     VerticalLayout {
         spacing: Theme.page-gap;
@@ -60,14 +61,16 @@ export component RulesPage inherits PageSurface {
                         HorizontalLayout { cross-axis-alignment: center; padding: Theme.content-gap; spacing: Theme.content-gap;
                             RuleDragHandle {
                                 row-height: entry.height + Theme.content-gap;
+                                context: root.drag-context;
                                 enabled: !UiData.working && !UiData.exiting && !UiData.protected && UiData.rule-types.length > 0;
                                 blocked: UiData.modal != 0;
                                 started => { root.drag-id = rule.id; root.drag-target = rule.id; }
                                 dragged(delta) => { root.drag-target = UiData.rules[clamp(index + delta, 0, UiData.rules.length - 1)].id; }
                                 dropped(delta) => {
+                                    let source = root.drag-id;
                                     root.drag-id = ""; root.drag-target = "";
-                                    if delta != 0 {
-                                        UiActions.dispatch(Intent.rule-drop, rule.id, UiData.rules[clamp(index + delta, 0, UiData.rules.length - 1)].id);
+                                    if delta != 0 && source != "" {
+                                        UiActions.dispatch(Intent.rule-drop, source, UiData.rules[clamp(index + delta, 0, UiData.rules.length - 1)].id);
                                     }
                                 }
                                 cancelled => { root.drag-id = ""; root.drag-target = ""; }
@@ -98,6 +101,7 @@ export component RulesPage inherits PageSurface {
                                         padding: 8px; spacing: 4px;
                                         Paragraph { text: rule.kind + (rule.value == "" ? "" : " · " + rule.value) + " → " + rule.policy; }
                                         Caption { text: "来源：" + rule.source + (rule.enabled ? " · 已启用" : " · 已停用"); }
+                                        CopyButton { label: "复制规则原文"; value: rule.raw; }
                                         Paragraph { text: rule.raw; }
                                         ActionButton { text: "编辑"; enabled: rule.source == "自定义" && !UiData.working;
                                             clicked => { menu.close(); UiActions.dispatch(Intent.rule-edit, "", ""); } }

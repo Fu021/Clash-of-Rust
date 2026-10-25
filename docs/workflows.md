@@ -94,7 +94,7 @@ macOS 失败日志、系统与网络状态、崩溃报告保存在 `macos-ci-rep
 从启动到最终核验完成，来源分支必须仍指向该 CI 的提交；`publish-release.py` 在前置解析和最终核验时都会检查分支头。即使只是文档改动，也应等本轮打包结束后再推送，避免 `Source branch has changed`。测试包以本次工作流固定的提交为准，后续提交需另做验证。
 
 1. 六个平台获取并校验已有程序，再生成 Windows EXE、Linux DEB、macOS DMG。
-2. Windows 验证安装、服务注册、普通用户代理/TUN、更新安装路径、卸载与用户文件保留，并扫描 Defender；PE 图标在打包阶段核验。
+2. Windows 更新 Defender 检测库，逐个扫描安装包及未压缩的全部 EXE/DLL，再验证安装、服务注册、普通用户代理/TUN、更新安装路径、卸载与用户文件保留；PE 图标在打包阶段核验。扫描版本和逐文件 SHA256 写入 `package-receipt.json`。
 3. Linux 安装 DEB 后验证普通用户系统代理、HTTP 转发、TUN 接管与清理；最新版 Ubuntu 使用同一份 Ubuntu 22.04 DEB 再验证一次。
 4. macOS 核验 App/DMG 版本、架构、资源及签名，启动安装后的 GUI/内核并验证代理/TUN；界面辅助包使用独立身份与 `LSUIElement`，连续重建界面 5 次，核对应用注册、Dock 最近应用条目及内核 PID。当前使用 ad-hoc 签名，没有 Developer ID 与 Apple 公证。
 5. Android 复用三种 ABI 的已编译 APK，检查签名、架构与 16 KiB 对齐；x86_64 最终包再运行代理/TUN 测试。`check_only` 保留固定开发签名，正式发布要求单独配置长期签名。
@@ -103,6 +103,12 @@ macOS 失败日志、系统与网络状态、崩溃报告保存在 `macos-ci-rep
 只有最终发布 job 有 `contents: write`。发布工作流向 `scripts/build-installer.py --prebuilt` 传入已验证的 CI 产物；本地打包可传入按上述步骤生成的本地产物。打包器只校验与组装，不隐式调用 Cargo。
 
 平台检查分别集中在 `scripts/windows_ci.py`、`scripts/macos_ci.py` 和 Linux 的隔离网络夹具中；`scripts/test-release-package.py` 统一调度。Windows 安装、更新、卸载与 Defender 扫描复用同一模块，不再保留独立的命令行包装脚本。
+
+### Windows Defender 告警
+
+历史扫描通过不代表后续检测库或云端检测仍给出相同结果。出现告警时先记录版本、下载来源、检测名及被拦截文件的 SHA256，核对安装包的公开 SHA256；安装包和安装后主程序是不同文件，不能直接比较两者哈希。Windows 打包收据中的 `defender.files` 同时记录安装包和未压缩程序，可按文件名核对主程序。
+
+确认来源后，可通过 [Microsoft Security Intelligence 官方提交入口](https://www.microsoft.com/en-us/wdsi/filesubmission)选择软件开发者和误报类别，提交具体报毒文件，并附检测名、版本、哈希及公开来源。截图或 `!ml` 后缀本身不足以证明误报；提交前也不以修改二进制、关闭防护或设置排除项代替核验。主程序已有图标和版本资源，保留符号、Authenticode 签名与检测结果之间没有本项目已验证的因果结论。
 
 ## 版本与更新通道
 

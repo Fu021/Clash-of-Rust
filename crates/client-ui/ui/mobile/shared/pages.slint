@@ -286,19 +286,21 @@ component RulesRow inherits MCard {
 component RulesFooter inherits GridLayout {
     property <bool> wide: root.width >= 640px && Theme.text-scale <= 1.25;
     spacing: MobileTypography.gap; vertical-stretch: 0;
+    padding-top: MobileTypography.small-gap; padding-bottom: MobileTypography.small-gap;
     MPagination {
-        col: 0; row: 0; compact: root.wide; horizontal-stretch: root.wide ? 0 : 1;
+        col: 0; row: 0; compact: true; horizontal-stretch: root.wide ? 0 : 1;
+        alignment: root.wide ? start : center;
         status: MobileData.rule-page;
         previous-enabled: MobileData.rule-previous; next-enabled: MobileData.rule-next;
         turn(direction) => { MobileActions.request(MobileIntent.rule-page, "" + direction, ""); }
     }
     HorizontalLayout {
         col: root.wide ? 1 : 0; row: root.wide ? 0 : 1;
-        alignment: end; spacing: MobileTypography.small-gap;
+        alignment: root.wide ? end : stretch; spacing: MobileTypography.small-gap;
         MButton { text: "放弃修改"; min-width: max(100px, MobileTypography.font-size(15) * 4 + 20px); horizontal-stretch: root.wide ? 0 : 1;
-            enabled: MobileData.rule-dirty; clicked => { MobileView.pending-page = -1; MobileView.pending-detail = 0; MobileView.detail = 12; } }
+            enabled: MobileData.rule-dirty && !MobileData.working; clicked => { MobileView.pending-page = -1; MobileView.pending-detail = 0; MobileView.detail = 12; } }
         MButton { text: "应用修改"; min-width: max(100px, MobileTypography.font-size(15) * 4 + 20px); horizontal-stretch: root.wide ? 0 : 1;
-            primary: true; enabled: MobileData.rule-dirty; clicked => { MobileActions.request(MobileIntent.rule-apply, "", ""); } }
+            primary: true; enabled: MobileData.rule-dirty && !MobileData.working; clicked => { MobileActions.request(MobileIntent.rule-apply, "", ""); } }
     }
 }
 export component MobileRules inherits PageSurface {
@@ -312,7 +314,6 @@ export component MobileRules inherits PageSurface {
             list := ListView {
                 width: parent.width; height: parent.height;
                 content-key: MobileData.rule-page-index + "/" + MobileView.query + "/" + MobileData.rule-profile + "/" + MobileView.rule-source + "/" + (root.compact ? "compact" : "full");
-                min-height: 0px; vertical-stretch: 1;
                 mouse-drag-pan-enabled: !gesture.reordering;
                 for index in MobileData.rules.length + (root.compact ? 2 : 0): Rectangle {
                     height: content.preferred-height + 12px;
@@ -386,13 +387,17 @@ export component MobileNetwork inherits PageSurface {
             MHeading { text: "网站响应"; }
             MField { text <=> MobileView.test-url; }
             MButton { text: "开始测试"; primary: true; clicked => { MobileActions.request(MobileIntent.probe, MobileView.test-url, ""); } }
-            MRow { title: MobileData.probe-status; value: MobileData.probe-time; value-color: Theme.accent; arrow: false; interactive: false; }
+            HorizontalLayout { spacing: MobileTypography.small-gap; cross-axis-alignment: center;
+                MParagraph { text: MobileData.probe-status; }
+                if MobileData.probe-time != "": MTag { text: MobileData.probe-time; tone: 0; }
+            }
         }
         MCard {
             MHeading { text: "DNS 查询"; }
             MField { text <=> MobileView.dns-host; }
             MButton { text: "查询"; clicked => { MobileActions.request(MobileIntent.dns, MobileView.dns-host, ""); } }
-            MRow { title: MobileData.dns-result; subtitle: "当前内核解析结果"; arrow: false; interactive: false; }
+            MParagraph { text: MobileData.dns-result; }
+            MSmall { text: "当前内核解析结果"; }
         }
         MCard { MHeading { text: "出口信息"; } MRow { title: MobileData.exit-ip; value: MobileData.exit-country; arrow: false; interactive: false; } }
     } }

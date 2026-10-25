@@ -1198,28 +1198,98 @@ assert.equal(calls.length,2);
             with patch.object(windows, 'update_signatures', side_effect=subprocess.CalledProcessError(2, ['update'])), \
                  patch.object(windows.subprocess, 'run') as execute:
                 with self.assertRaises(subprocess.CalledProcessError):
-                    windows.scan_installers([installer])
+                    windows.scan_windows_files([installer])
                 execute.assert_not_called()
 
-    def test_defender_scan_blocks_threats_and_changed_installer(self):
+    def test_defender_scan_blocks_threats_and_changed_files(self):
         with tempfile.TemporaryDirectory() as directory:
             installer = Path(directory)/'installer.exe'
             original = b'installer fixture'
             installer.write_bytes(original)
+            versions = {'AMEngineVersion': '1.1.1', 'AMProductVersion': '4.18.1',
+                        'AntivirusSignatureVersion': '1.2.3'}
+            status = subprocess.CompletedProcess([], 0, json.dumps(versions))
             with patch.object(windows, 'update_signatures', return_value=Path('new/MpCmdRun.exe')), \
                  patch('sys.stdout', io.StringIO()):
-                with patch.object(windows.subprocess, 'run', side_effect=subprocess.CalledProcessError(2, ['scan'])) as execute:
+                with patch.object(windows.subprocess, 'run', side_effect=[
+                    status, subprocess.CalledProcessError(2, ['scan']),
+                ]) as execute:
                     with self.assertRaises(subprocess.CalledProcessError):
-                        windows.scan_installers([installer])
+                        windows.scan_windows_files([installer])
                     self.assertEqual(execute.call_args.args[0][0], str(Path('new/MpCmdRun.exe')))
                     self.assertIn('-DisableRemediation', execute.call_args.args[0])
                     self.assertTrue(execute.call_args.kwargs['check'])
                 def changed(*args, **kwargs):
+                    if args[0][0] == 'powershell.exe':
+                        return status
                     installer.write_bytes(b'changed fixture')
                     return subprocess.CompletedProcess(args[0], 0)
                 with patch.object(windows.subprocess, 'run', side_effect=changed):
-                    with self.assertRaisesRegex(RuntimeError, 'Installer changed'):
-                        windows.scan_installers([installer])
+                    with self.assertRaisesRegex(RuntimeError, 'File changed'):
+                        windows.scan_windows_files([installer])
+
+    def test_defender_scan_records_unpacked_executables_and_libraries(self):
+        with tempfile.TemporaryDirectory() as directory:
+            files = [Path(directory)/name for name in ('setup.exe', 'clash-of-rust.exe', 'wintun.dll')]
+            for path in files:
+                path.write_bytes(path.name.encode('ascii'))
+            versions = {'AMEngineVersion': '1.1.1', 'AMProductVersion': '4.18.1',
+                        'AntivirusSignatureVersion': '1.2.3'}
+            with patch.object(windows, 'update_signatures', return_value=Path('MpCmdRun.exe')), \
+                 patch('sys.stdout', io.StringIO()), \
+                 patch.object(windows.subprocess, 'run', side_effect=[
+                     subprocess.CompletedProcess([], 0, json.dumps(versions)),
+                     *[subprocess.CompletedProcess([], 0) for _ in files],
+                 ]) as execute:
+                report = windows.scan_windows_files(files)
+            self.assertEqual(report['versions'], versions)
+            self.assertEqual(report['files'], [
+                {'file': path.name, 'sha256': build.sha256(path)} for path in files
+            ])
+            self.assertEqual(execute.call_count, 4)
+            scanned = [Path(call.args[0][call.args[0].index('-File')+1])
+                       for call in execute.call_args_list[1:]]
+            self.assertEqual(scanned, [path.resolve() for path in files])
+
+    def test_defender_scan_requires_version_evidence_before_scanning(self):
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory)/'program.exe'
+            path.write_bytes(b'fixture')
+            with patch.object(windows, 'update_signatures', return_value=Path('MpCmdRun.exe')), \
+                 patch('sys.stdout', io.StringIO()), \
+                 patch.object(windows.subprocess, 'run', return_value=subprocess.CompletedProcess([], 0, '{}')) as execute:
+                with self.assertRaisesRegex(RuntimeError, 'version information'):
+                    windows.scan_windows_files([path])
+                self.assertEqual(execute.call_count, 1)
+
+    def test_windows_package_scans_payload_before_installing(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            payload = root/'build/payload'
+            (payload/'resources').mkdir(parents=True)
+            names = ['clash-of-rust.exe', 'clash-desktop-ui.exe', 'cor.exe',
+                     'clash-tun-launcher.exe', 'resources/mihomo.exe', 'resources/wintun.dll']
+            for name in [*names, 'resources/manifest.json']:
+                (payload/name).write_bytes(b'fixture')
+            package, smoke = root/'setup.exe', root/'build/tests/core_integration.exe'
+            evidence = {'versions': {}, 'files': []}
+            with patch.object(windows, 'os') as platform, \
+                 patch.object(windows, 'ROOT', root), \
+                 patch.object(windows, 'scan_windows_files', return_value=evidence) as scan, \
+                 patch.object(windows, '_verify_installed_package') as verify:
+                platform.name = 'nt'
+                manifest = {'tests': {'core_integration': 'tests/core_integration.exe'}}
+                package.write_bytes(b'installer')
+                smoke.parent.mkdir(parents=True)
+                smoke.write_bytes(b'test fixture')
+                self.assertEqual(windows.package_tests(package, manifest, root/'build'), evidence)
+                self.assertEqual(scan.call_args.args[0], [package, *sorted(payload/name for name in names)])
+                verify.assert_called_once()
+                verify.reset_mock()
+                scan.side_effect = subprocess.CalledProcessError(2, ['scan'])
+                with self.assertRaises(subprocess.CalledProcessError):
+                    windows.package_tests(package, manifest, root/'build')
+                verify.assert_not_called()
 
     def test_linux_helpers_are_distinct_inactive_native_copies(self):
         spec = importlib.util.spec_from_file_location('build_installer',build.ROOT/'scripts/build-installer.py')
