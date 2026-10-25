@@ -303,6 +303,22 @@ impl Session {
         next.fake_ip = enabled;
         self.commit_settings(next)
     }
+    pub fn edit_fake_ip_exclusions(&mut self, input: &str, action: &str) -> Result<()> {
+        ensure!(
+            self.settings.claude_protection.is_none(),
+            "请先关闭 Claude 保护，再编辑排除项"
+        );
+        let mut next = self.settings.clone();
+        match action {
+            "add" => {
+                next.add_fake_ip_exclusions(&core::config::parse_fake_ip_exclusions(input)?)?
+            }
+            "remove" => next.remove_fake_ip_exclusion(input)?,
+            "restore" => next.restore_fake_ip_defaults()?,
+            _ => anyhow::bail!("排除项操作无效"),
+        }
+        self.commit_settings(next)
+    }
     pub fn observe_native(&mut self) -> Result<()> {
         let state = self.native.request(json!({"op":"state"}))?;
         self.running = state["running"].as_bool().unwrap_or(false);
@@ -612,6 +628,22 @@ impl Session {
         Ok(())
     }
     pub fn save_rule(&mut self, selected: &str, raw: &str, position: usize) -> Result<()> {
+        let id = selected.strip_prefix("c:").unwrap_or(selected);
+        let enabled = self
+            .draft
+            .custom
+            .iter()
+            .find(|rule| rule.id == id)
+            .is_none_or(|rule| rule.enabled);
+        self.save_rule_state(selected, raw, position, enabled)
+    }
+    pub fn save_rule_state(
+        &mut self,
+        selected: &str,
+        raw: &str,
+        position: usize,
+        enabled: bool,
+    ) -> Result<()> {
         core::rule_manager::parts(raw)?;
         let selected = selected.strip_prefix("c:").unwrap_or(selected);
         let id = if self.draft.custom.iter().any(|r| r.id == selected) {
@@ -622,7 +654,7 @@ impl Session {
         let rule = CustomRule {
             id: id.clone(),
             rule: raw.into(),
-            enabled: true,
+            enabled,
         };
         if let Some(old) = self.draft.custom.iter_mut().find(|r| r.id == id) {
             *old = rule;
@@ -640,6 +672,39 @@ impl Session {
         order.insert(index, key);
         self.draft.order = order;
         self.draft.validate()
+    }
+    pub fn move_rule(&mut self, source: &str, target: &str) -> Result<()> {
+        let (rows, _) = self.document().rows(&self.draft);
+        let position = rows
+            .iter()
+            .position(|row| row.id == target)
+            .context("目标规则已变化，请重新拖动")?;
+        self.move_rule_to(source, position + 1)
+    }
+    pub fn move_rule_to(&mut self, source: &str, position: usize) -> Result<()> {
+        let (rows, _) = self.document().rows(&self.draft);
+        let mut order: Vec<_> = rows.into_iter().map(|row| row.id).collect();
+        let index = order
+            .iter()
+            .position(|id| id == source)
+            .context("规则已变化，请重新选择")?;
+        let id = order.remove(index);
+        order.insert(position.saturating_sub(1).min(order.len()), id);
+        self.draft.order = order;
+        Ok(())
+    }
+    pub fn toggle_rule(&mut self, selected: &str) -> Result<()> {
+        let id = selected
+            .strip_prefix("c:")
+            .context("只有自定义规则可以停用")?;
+        let rule = self
+            .draft
+            .custom
+            .iter_mut()
+            .find(|rule| rule.id == id)
+            .context("规则已变化，请重新选择")?;
+        rule.enabled = !rule.enabled;
+        Ok(())
     }
     pub fn apply_rules(&mut self) -> Result<()> {
         let mut next = self.settings.clone();
@@ -1084,6 +1149,94 @@ mod tests {
         reopened.set_fake_ip(false).unwrap();
         assert_eq!(mode(&reopened), "redir-host");
         assert!(!reopened.store.load_settings().unwrap().fake_ip);
+    }
+    #[test]
+    fn mobile_fake_ip_sources_and_restoration_survive_reopen() {
+        let root = tempfile::tempdir().unwrap();
+        let mut session = Session::open(root.path().into(), Arc::new(Fake)).unwrap();
+        session.initialize().unwrap();
+        session
+            .edit_fake_ip_exclusions("+.user.example", "add")
+            .unwrap();
+        let default = core::config::DEFAULT_FAKE_IP_EXCLUSIONS[0];
+        session.edit_fake_ip_exclusions(default, "remove").unwrap();
+        let before = session.store.load_settings().unwrap();
+        assert!(
+            session
+                .edit_fake_ip_exclusions("https://invalid.example/path", "add")
+                .is_err()
+        );
+        assert_eq!(
+            serde_json::to_value(session.store.load_settings().unwrap()).unwrap(),
+            serde_json::to_value(before).unwrap()
+        );
+        drop(session);
+        let mut reopened = Session::open(root.path().into(), Arc::new(Fake)).unwrap();
+        assert_eq!(reopened.settings.fake_ip_exclusions, ["+.user.example"]);
+        assert!(
+            !reopened
+                .settings
+                .fake_ip_exclusion_entries()
+                .iter()
+                .any(|e| e.domain == default)
+        );
+        reopened.edit_fake_ip_exclusions("", "restore").unwrap();
+        assert_eq!(reopened.settings.fake_ip_exclusions, ["+.user.example"]);
+        assert!(reopened.settings.fake_ip_disabled_defaults.is_empty());
+        assert!(
+            reopened
+                .settings
+                .fake_ip_exclusion_entries()
+                .iter()
+                .any(|e| e.domain == default && e.dns_override)
+        );
+        assert!(
+            reopened
+                .store
+                .load_settings()
+                .unwrap()
+                .fake_ip_disabled_defaults
+                .is_empty()
+        );
+    }
+    #[test]
+    fn mobile_rule_moves_and_disabled_edits_preserve_identity_and_draft() {
+        let root = tempfile::tempdir().unwrap();
+        let mut session = Session::open(root.path().into(), Arc::new(Fake)).unwrap();
+        session.initialize().unwrap();
+        session
+            .save_rule_state("", "GEOIP,CN,DIRECT,no-resolve", 1, false)
+            .unwrap();
+        let id = format!("c:{}", session.draft.custom[0].id);
+        session
+            .save_rule(&id, "IP-CIDR,192.0.2.0/24,DIRECT,no-resolve", 1)
+            .unwrap();
+        assert!(
+            !session.draft.custom[0].enabled,
+            "editing must preserve the disabled state"
+        );
+        let (rows, _) = session.document().rows(&session.draft);
+        let last = rows.last().unwrap().id.clone();
+        session.move_rule(&id, &last).unwrap();
+        assert_eq!(
+            session.document().rows(&session.draft).0.last().unwrap().id,
+            id
+        );
+        session.move_rule_to(&id, 1).unwrap();
+        assert_eq!(session.document().rows(&session.draft).0[0].id, id);
+        let before = session.draft.clone();
+        assert!(session.move_rule(&id, "missing").is_err());
+        assert!(session.move_rule_to("missing", 1).is_err());
+        assert!(session.toggle_rule(&last).is_err());
+        assert_eq!(session.draft, before);
+        session.toggle_rule(&id).unwrap();
+        session.apply_rules().unwrap();
+        drop(session);
+        let reopened = Session::open(root.path().into(), Arc::new(Fake)).unwrap();
+        assert!(reopened.draft.custom[0].enabled);
+        assert_eq!(format!("c:{}", reopened.draft.custom[0].id), id);
+        assert!(reopened.draft.custom[0].rule.ends_with(",no-resolve"));
+        assert_eq!(reopened.document().rows(&reopened.draft).0[0].id, id);
     }
     #[test]
     fn mobile_never_inherits_subscription_owned_routes_or_controller() {

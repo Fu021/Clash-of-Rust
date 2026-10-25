@@ -14,6 +14,8 @@ GUI 导出 JSON 到应用数据目录的 `diagnostics`，包括已采集线索�
 
 ## 配置扫描
 
+本节的 Desktop、CLI 和项目扫描仅适用于桌面端。Android 使用 VPN 下的网络、DNS、WebRTC 与系统浏览器自动采样，支持取消检测及导出报告；“检测选项”仅保存/清除可选 ipapi.is 密钥，不提供桌面项目、终端或应用注册信息扫描。离开检测页会取消当前任务并忽略迟到结果，VPN 与实时保护继续由原生服务运行。
+
 自动读取 `~/.claude.json` 的项目目录记录及 `.claude/projects/*/sessions-index.json` 的项目路径元数据，同时支持本应用启动环境中的 `CLAUDE_CONFIG_DIR`。检查全局 `settings.json`、已记录项目的 `.claude/settings.json` 与 `.claude/settings.local.json`、本机的 `managed-settings.json` 和 `managed-settings.d/*.json`；当前工作目录中可识别的项目也会加入；已记录的子目录项目会同时检查仓库根目录的本地配置。路径去重，已删除项目另行计数。
 
 检查可能绕过 Claude 代理的 `NO_PROXY`、空代理覆盖、不支持的代理协议、与本应用端口不同的代理、API 地址和云平台提供方/区域覆盖、关闭 TLS 验证等。风险项给出文件路径、字段、脱敏值、原因与建议。配置文件正常不代表请求已经走代理，候选覆盖是否生效还受项目信任、启动参数及其他托管来源影响。

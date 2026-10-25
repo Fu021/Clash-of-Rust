@@ -127,6 +127,7 @@ struct RuleForm {
     kind: String,
     payload: String,
     policy: String,
+    no_resolve: bool,
 }
 #[derive(Clone)]
 struct RuleEditor {
@@ -134,6 +135,7 @@ struct RuleEditor {
     raw: String,
     position: usize,
     text_mode: bool,
+    enabled: bool,
 }
 struct Request {
     intent: MobileIntent,
@@ -169,6 +171,13 @@ struct State {
     protection_status: String,
     guard_snapshot: core::claude_check::guard::Snapshot,
     category: String,
+    site_query: String,
+    site_region: String,
+    site_status: String,
+    site_selected: String,
+    rule_source: String,
+    claude_busy: bool,
+    claude_generation: u64,
     detecting: bool,
     generation: u64,
     visible: bool,
@@ -327,7 +336,7 @@ enum Update {
     Snapshot(u64, std::result::Result<Snapshot, String>),
     Ip(u64, usize, core::ip_report::ResultSlot),
     IpDone(u64),
-    Claude(std::result::Result<core::claude_check::Report, String>),
+    Claude(u64, std::result::Result<core::claude_check::Report, String>),
     Protection(std::result::Result<core::claude_check::protection::Protection, String>),
     ProtectionDns(std::time::Instant, std::result::Result<(), String>),
     Address(u64, String, String),
@@ -366,6 +375,13 @@ async fn run_loop(
         protection_status: String::new(),
         guard_snapshot: Default::default(),
         category: "AI".into(),
+        site_query: String::new(),
+        site_region: "全部地区".into(),
+        site_status: "全部结果".into(),
+        site_selected: String::new(),
+        rule_source: "全部来源".into(),
+        claude_busy: false,
+        claude_generation: 0,
         detecting: false,
         generation: 0,
         visible: true,
@@ -480,13 +496,18 @@ async fn run_loop(
                     }
                 }
                 if matches!(intent, MobileIntent::RuleSelect | MobileIntent::RuleSave | MobileIntent::RuleMove
-                    | MobileIntent::RuleDelete | MobileIntent::RuleApply | MobileIntent::RuleDiscard
+                    | MobileIntent::RuleDelete | MobileIntent::RuleDrop | MobileIntent::RuleEnable | MobileIntent::RuleRestore | MobileIntent::RuleApply | MobileIntent::RuleDiscard
                     | MobileIntent::RuleShortcut | MobileIntent::ActivateProfile | MobileIntent::UpdateProfile
                     | MobileIntent::SaveProfile | MobileIntent::DeleteProfile) {
                     state.rule_rows = None;
                 }
                 if intent == MobileIntent::Navigate {
                     let page: i32 = request.a.parse()?;
+                    if state.page == 8 && page != 8 {
+                        if let Some(job) = claude_job.take() { job.abort(); }
+                        state.claude_generation = state.claude_generation.wrapping_add(1);
+                        state.claude_busy = false;
+                    }
                     state.page = page;
                     state.query.clear();
                     state.connection_page = 0;
@@ -494,6 +515,25 @@ async fn run_loop(
                     if let Some(job) = refresh_job.take() { job.abort(); }
                     refresh_generation += 1;
                     refresh_requested = true;
+                } else if intent == MobileIntent::CancelUpdate {
+                    if state.update_downloading {
+                        state.update_generation = state.update_generation.wrapping_add(1);
+                        if let Some(job) = update_job.take() { job.abort(); let _ = job.await; }
+                        state.update_busy = false; state.update_downloading = false;
+                        state.update_downloaded = false; state.update_progress = 0.0;
+                        state.update_status = "下载已取消，可重新下载".into();
+                        for path in [&state.update_path, &state.update_path.with_extension("partial")] {
+                            if let Err(error) = tokio::fs::remove_file(path).await
+                                && error.kind() != std::io::ErrorKind::NotFound {
+                                state.notice = format!("下载已取消，缓存清理失败：{error}");
+                            }
+                        }
+                    }
+                } else if intent == MobileIntent::ClaudeCancel {
+                    if let Some(job) = claude_job.take() { job.abort(); }
+                    state.claude_generation = state.claude_generation.wrapping_add(1);
+                    state.claude_busy = false;
+                    state.claude_status = "已停止检测，保留上次完成的报告".into();
                 } else if intent==MobileIntent::CheckUpdate {
                     if !state.update_busy {
                         state.update_busy=true;state.update_downloading=false;state.update_status="正在检查更新…".into();state.update_progress=0.0;
@@ -547,7 +587,7 @@ async fn run_loop(
                             let _=send.send(Update::Geo(result)).await;
                         }));
                     }
-                } else if matches!(intent, MobileIntent::SiteStart | MobileIntent::SiteRetest) {
+                } else if matches!(intent, MobileIntent::SiteStart | MobileIntent::SiteRetest | MobileIntent::SiteProbe) {
                     if let Some(job) = checks.take() { job.abort(); }
                     state.generation += 1; state.detecting = true;
                     if intent == MobileIntent::SiteStart { state.ip_results.fill(None); }
@@ -555,7 +595,9 @@ async fn run_loop(
                     let port = state.session.settings.mixed_port;
                     let send = updates.clone();
                     let targets=core::ip_check::services().iter().enumerate()
-                        .filter(|(_,service)| intent == MobileIntent::SiteStart || service.group == request.a)
+                        .filter(|(_,service)| intent == MobileIntent::SiteStart
+                            || (intent == MobileIntent::SiteProbe && service.id == request.a)
+                            || (intent == MobileIntent::SiteRetest && (request.a == "all" || service.group == request.a)))
                         .map(|(index,service)|(index,service.id.clone())).collect::<Vec<_>>();
                     checks = Some(tokio::spawn(async move {
                         let mut jobs = stream::iter(targets)
@@ -608,7 +650,7 @@ async fn run_loop(
                             state.completed = Some(intent);
                             if matches!(intent,MobileIntent::SelectNode|MobileIntent::ActivateProfile|MobileIntent::UpdateProfile
                                 |MobileIntent::SaveProfile|MobileIntent::DeleteProfile|MobileIntent::RestartCore|MobileIntent::Mode
-                                |MobileIntent::DnsOverride|MobileIntent::FakeIp|MobileIntent::Ipv6|MobileIntent::Udp|MobileIntent::SavePorts
+                                |MobileIntent::DnsOverride|MobileIntent::FakeIp|MobileIntent::FakeIpAdd|MobileIntent::FakeIpRemove|MobileIntent::FakeIpRestoreDefaults|MobileIntent::Ipv6|MobileIntent::Udp|MobileIntent::SavePorts
                                 |MobileIntent::ClaudeProtection) {cancel_delay(&mut state,&mut delay_job);}
                             if !matches!(intent, MobileIntent::Query | MobileIntent::Copy | MobileIntent::ConnectionSort
                                 | MobileIntent::ConnectionDetail | MobileIntent::ConnectionPage | MobileIntent::RulePage
@@ -696,8 +738,13 @@ async fn run_loop(
                     }
                     Some(Update::Ip(generation,index,result)) if generation == state.generation => state.ip_results[index]=result,
                     Some(Update::IpDone(generation)) if generation == state.generation => { state.detecting=false; checks=None; }
-                    Some(Update::Claude(Ok(report))) => { state.claude=Some(report); state.claude_status="检测完成 · 浏览器及网络采样已结束".into(); state.notice="检测完成".into(); },
-                    Some(Update::Claude(Err(error))) => {state.claude_status=format!("检测失败：{error}");state.notice=error;},
+                    Some(Update::Claude(generation,result)) if generation == state.claude_generation => {
+                        claude_job = None; state.claude_busy = false; immediate = true;
+                        match result {
+                            Ok(report) => {state.claude=Some(report); state.claude_status="检测完成 · 浏览器及网络采样已结束".into(); state.notice="检测完成".into();}
+                            Err(error) => {state.claude_status=format!("检测失败：{error}"); state.notice=error;}
+                        }
+                    }
                     Some(Update::Protection(result)) => {
                         protection_job=None;
                         immediate=true;
@@ -1090,7 +1137,10 @@ fn start_claude_check(
     if let Some(previous) = job.take() {
         previous.abort();
     }
-    state.claude = None;
+    state.claude_generation = state.claude_generation.wrapping_add(1);
+    state.claude_busy = true;
+    let generation = state.claude_generation;
+    let key = state.session.settings.ip_reputation_key.clone();
     state.claude_status = "正在检测，浏览器将自动采样…".into();
     let port = state.session.settings.mixed_port;
     let host = state.session.native.clone();
@@ -1104,7 +1154,7 @@ fn start_claude_check(
                 "Android 网络环境",
             );
             core::claude_check::network(&client, &mut report, "内核代理").await;
-            core::claude_check::enhanced::extend(&client, &mut report, None).await;
+            core::claude_check::enhanced::extend(&client, &mut report, key.as_deref()).await;
             report
                 .signals
                 .extend(core::claude_check::system_dns(&client, "Android 系统").await);
@@ -1123,7 +1173,10 @@ fn start_claude_check(
         }
         .await;
         let _ = send
-            .send(Update::Claude(result.map_err(|error| error.to_string())))
+            .send(Update::Claude(
+                generation,
+                result.map_err(|error| error.to_string()),
+            ))
             .await;
     }));
 }
@@ -1323,23 +1376,14 @@ async fn handle(state: &mut State, request: Request) -> Result<()> {
             } else {
                 let parts = rule_manager::draft_parts(&a)?;
                 ensure!(
-                    !parts.no_resolve
-                        && [
-                            "DOMAIN-SUFFIX",
-                            "DOMAIN",
-                            "IP-CIDR",
-                            "IP-CIDR6",
-                            "GEOIP",
-                            "GEOSITE",
-                            "RULE-SET"
-                        ]
-                        .contains(&parts.kind),
+                    rule_manager::FORM_TYPES.contains(&parts.kind),
                     "此规则请继续使用文本编辑，以保留所有参数"
                 );
                 Some(RuleForm {
                     kind: parts.kind.into(),
                     payload: parts.payload.into(),
                     policy: parts.policy.into(),
+                    no_resolve: parts.no_resolve,
                 })
             };
         }
@@ -1413,30 +1457,23 @@ async fn handle(state: &mut State, request: Request) -> Result<()> {
                 .find(|(_, row)| row.id == a)
                 .context("规则已不存在，请重新选择")?;
             let parts = rule_manager::parts(&row.raw)?;
-            let text_mode = parts.no_resolve
-                || ![
-                    "DOMAIN-SUFFIX",
-                    "DOMAIN",
-                    "IP-CIDR",
-                    "IP-CIDR6",
-                    "GEOIP",
-                    "GEOSITE",
-                    "RULE-SET",
-                ]
-                .contains(&parts.kind);
+            let text_mode = !rule_manager::FORM_TYPES.contains(&parts.kind);
             state.rule_editor = Some(RuleEditor {
                 form: RuleForm {
                     kind: parts.kind.into(),
                     payload: parts.payload.into(),
                     policy: parts.policy.into(),
+                    no_resolve: parts.no_resolve,
                 },
                 raw: row.raw.to_string(),
                 position: index + 1,
                 text_mode,
+                enabled: row.enabled,
             });
         }
         MobileIntent::RuleSave => {
-            session.save_rule(&selected, &a, b.parse()?)?;
+            let (position, enabled) = b.split_once('|').context("规则保存参数无效")?;
+            session.save_rule_state(&selected, &a, position.parse()?, enabled.parse()?)?;
             state.notice = "已保存到草稿，请应用修改".into();
         }
         MobileIntent::RuleShortcut => {
@@ -1458,17 +1495,13 @@ async fn handle(state: &mut State, request: Request) -> Result<()> {
                 .retain(|r| r.id != a.trim_start_matches("c:"));
             session.draft.order.retain(|id| id != &a);
         }
-        MobileIntent::RuleMove => {
-            let (rows, _) = session.document().rows(&session.draft);
-            let mut ids: Vec<_> = rows.into_iter().map(|r| r.id).collect();
-            let index = ids
-                .iter()
-                .position(|id| id == &selected)
-                .context("请先选择规则")?;
-            let next = (index as i32 + a.parse::<i32>()?)
-                .clamp(0, ids.len().saturating_sub(1) as i32) as usize;
-            ids.swap(index, next);
-            session.draft.order = ids;
+        MobileIntent::RuleMove => session.move_rule_to(&a, b.parse()?)?,
+        MobileIntent::RuleDrop => session.move_rule(&a, &b)?,
+        MobileIntent::RuleEnable => session.toggle_rule(&a)?,
+        MobileIntent::RuleRestore => session.draft.order.clear(),
+        MobileIntent::RuleFilter => {
+            state.rule_source = a;
+            state.rule_page = 0;
         }
         MobileIntent::RuleApply => {
             session.apply_rules()?;
@@ -1494,6 +1527,37 @@ async fn handle(state: &mut State, request: Request) -> Result<()> {
             session.select_rules(&id)?;
         }
         MobileIntent::FakeIp => session.set_fake_ip(a == "true")?,
+        MobileIntent::FakeIpAdd
+        | MobileIntent::FakeIpRemove
+        | MobileIntent::FakeIpRestoreDefaults => {
+            ensure!(
+                session.settings.claude_protection.is_none() && state.protection_change.is_none(),
+                "请先关闭 Claude 保护，再编辑排除项"
+            );
+            session.edit_fake_ip_exclusions(
+                &a,
+                match intent {
+                    MobileIntent::FakeIpAdd => "add",
+                    MobileIntent::FakeIpRemove => "remove",
+                    _ => "restore",
+                },
+            )?;
+            state.notice = "Fake-IP 排除项已保存".into();
+        }
+        MobileIntent::OpenRelease => {
+            session.native.request(
+                json!({"op":"open-url","url":"https://github.com/Fu021/Clash-of-Rust/releases"}),
+            )?;
+        }
+        MobileIntent::ClaudeKey => {
+            ensure!(!state.claude_busy, "请先停止检测，再修改密钥");
+            let mut next = session.settings.clone();
+            next.ip_reputation_key = (!a.trim().is_empty()).then(|| a.trim().to_owned());
+            next.validate()?;
+            session.store.save_settings(&next)?;
+            session.settings = next;
+            state.notice = "检测选项已保存".into();
+        }
         MobileIntent::DnsOverride | MobileIntent::Ipv6 | MobileIntent::Udp => {
             ensure!(
                 !session.vpn || intent != MobileIntent::Ipv6,
@@ -1568,7 +1632,23 @@ async fn handle(state: &mut State, request: Request) -> Result<()> {
         MobileIntent::SystemNotification => {
             session.native.notify("Clash of Rust", "喵!", true)?;
         }
-        MobileIntent::SiteCategory => state.category = a,
+        MobileIntent::SiteCategory => {
+            state.category = a;
+            state.site_query.clear();
+            state.site_region = "全部地区".into();
+            state.site_status = "全部结果".into();
+        }
+        MobileIntent::SiteFilter => match b.as_str() {
+            "query" => state.site_query = a,
+            "region" => state.site_region = a,
+            "status" => state.site_status = a,
+            _ => {
+                state.site_query.clear();
+                state.site_region = "全部地区".into();
+                state.site_status = "全部结果".into();
+            }
+        },
+        MobileIntent::SiteDetail => state.site_selected = a,
         MobileIntent::ExportReport => {
             session
                 .native
@@ -1727,6 +1807,9 @@ struct Projection {
     completed: Option<MobileIntent>,
     categories: Vec<(String, String, String, i32)>,
     sites: Vec<ReportRow>,
+    site_regions: Vec<String>,
+    site_details: Vec<(String, String)>,
+    claude_busy: bool,
     claude: Vec<ReportRow>,
     claude_counts: (usize, usize, usize),
     progress: (usize, usize),
@@ -1886,7 +1969,10 @@ fn project(state: &State) -> Projection {
     let rules = rules
         .iter()
         .enumerate()
-        .filter(|(_, r)| query.is_empty() || r.raw.to_lowercase().contains(&query))
+        .filter(|(_, r)| {
+            (query.is_empty() || r.raw.to_lowercase().contains(&query))
+                && (state.rule_source == "全部来源" || r.source.to_string() == state.rule_source)
+        })
         .collect::<Vec<_>>();
     let rule_count = rules.len();
     let rule_page = state.rule_page.min(rule_count.saturating_sub(1) / 100);
@@ -1935,6 +2021,8 @@ fn project(state: &State) -> Projection {
         })
         .collect();
     let mut sites = vec![];
+    let mut site_regions = std::collections::BTreeSet::new();
+    let mut site_details = vec![];
     let mut exit = ("—".to_string(), "未检测".to_string());
     for (index, service) in core::ip_check::services().iter().enumerate() {
         let slot = state.ip_results.get(index).and_then(Option::as_ref);
@@ -1942,9 +2030,6 @@ fn project(state: &State) -> Projection {
             && let Some(Ok(value)) = slot
         {
             exit = (value.summary.clone(), value.country.clone());
-        }
-        if state.category != "all" && service.group != state.category {
-            continue;
         }
         let (value, detail, country, tone) = match slot {
             Some(Ok(value)) => (
@@ -1962,6 +2047,36 @@ fn project(state: &State) -> Projection {
             Some(Err(error)) => ("检测失败".into(), error.clone(), String::new(), 3),
             None => ("尚未检测".into(), String::new(), String::new(), 4),
         };
+        if !country.is_empty() {
+            site_regions.insert(country.clone());
+        }
+        if service.id == state.site_selected {
+            site_details = vec![
+                ("平台".into(), service.name.clone()),
+                ("结果".into(), value.clone()),
+                ("详情".into(), detail.clone()),
+                ("分类".into(), service.group.clone()),
+                ("地区".into(), country.clone()),
+            ];
+        }
+        if state.category != "all" && service.group != state.category {
+            continue;
+        }
+        let status_matches = match state.site_status.as_str() {
+            "确认可用" => tone == 1,
+            "仅网页可达" => tone == 2,
+            "不可用或受限" => tone == 3,
+            _ => true,
+        };
+        if !status_matches
+            || (state.site_region != "全部地区" && country != state.site_region)
+            || (!state.site_query.trim().is_empty()
+                && !format!("{} {} {} {}", service.name, value, detail, country)
+                    .to_lowercase()
+                    .contains(&state.site_query.trim().to_lowercase()))
+        {
+            continue;
+        }
         sites.push(ReportRow {
             id: service.id.clone(),
             title: service.name.clone(),
@@ -2052,6 +2167,11 @@ fn project(state: &State) -> Projection {
         completed: state.completed,
         categories,
         sites,
+        site_regions: std::iter::once("全部地区".to_owned())
+            .chain(site_regions)
+            .collect(),
+        site_details,
+        claude_busy: state.claude_busy,
         claude,
         claude_counts,
         progress: (report.totals.completed(), report.totals.total()),
@@ -2132,6 +2252,75 @@ fn apply(ui: &AndroidWindow, p: Projection) {
     data.set_geo_status(p.geo.into());
     data.set_site_summary(p.site_summary.into());
     data.set_claude_status(p.claude_status.into());
+    data.set_claude_busy(p.claude_busy);
+    data.set_reputation_key_saved(p.settings.ip_reputation_key.is_some());
+    data.set_site_regions(stable(
+        data.get_site_regions(),
+        rows(p.site_regions.into_iter().map(Into::into).collect()),
+    ));
+    data.set_site_details(stable(
+        data.get_site_details(),
+        rows(
+            p.site_details
+                .into_iter()
+                .map(|(label, value)| DetailItem {
+                    label: label.into(),
+                    value: value.into(),
+                })
+                .collect(),
+        ),
+    ));
+    data.set_rule_types(stable(
+        data.get_rule_types(),
+        rows(
+            rule_manager::FORM_TYPES
+                .iter()
+                .map(|s| (*s).into())
+                .collect(),
+        ),
+    ));
+    data.set_fake_ip_removed_defaults(p.settings.fake_ip_disabled_defaults.len() as i32);
+    data.set_fake_ip_exclusions(stable(
+        data.get_fake_ip_exclusions(),
+        rows(
+            p.settings
+                .fake_ip_exclusion_entries()
+                .into_iter()
+                .map(|entry| FakeIpExclusionItem {
+                    domain: entry.domain.into(),
+                    source: match (entry.custom, entry.dns_override) {
+                        (true, true) => "自定义、DNS 覆盖",
+                        (true, false) => "自定义",
+                        _ => "DNS 覆盖",
+                    }
+                    .into(),
+                })
+                .collect(),
+        ),
+    ));
+    if p.completed == Some(MobileIntent::SiteCategory) {
+        view.set_site_query("".into());
+        view.set_site_region("全部地区".into());
+        view.set_site_status("全部结果".into());
+    }
+    if p.completed == Some(MobileIntent::ClaudeKey) {
+        view.set_reputation_key("".into());
+    }
+    if p.completed == Some(MobileIntent::FakeIpAdd) {
+        view.set_fake_ip_input("".into());
+    }
+    if matches!(
+        p.completed,
+        Some(
+            MobileIntent::RuleEnable
+                | MobileIntent::RuleDelete
+                | MobileIntent::RuleMove
+                | MobileIntent::RuleRestore
+        )
+    ) && ui.get_current_detail() == 15
+    {
+        ui.set_current_detail(0);
+    }
     for (page, count, size, rules) in [
         (p.connection_page.0, p.connection_page.1, 50, false),
         (p.rule_page.0, p.rule_page.1, 100, true),
@@ -2159,6 +2348,7 @@ fn apply(ui: &AndroidWindow, p: Projection) {
             view.set_rule_kind(parts.kind.into());
             view.set_rule_payload(parts.payload.into());
             view.set_rule_policy(parts.policy.into());
+            view.set_rule_no_resolve(parts.no_resolve);
         }
         view.set_rule_text_mode(false);
     }
@@ -2170,6 +2360,8 @@ fn apply(ui: &AndroidWindow, p: Projection) {
         view.set_rule_raw(editor.raw.into());
         view.set_rule_position(editor.position.to_string().into());
         view.set_rule_text_mode(editor.text_mode);
+        view.set_rule_no_resolve(editor.form.no_resolve);
+        view.set_rule_enabled(editor.enabled);
         view.set_draft_dirty(false);
         ui.set_current_detail(2);
     }

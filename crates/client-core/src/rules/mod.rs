@@ -10,6 +10,27 @@ use std::{
 };
 use yaml_serde::{Mapping, Value};
 
+pub const FORM_TYPES: [&str; 18] = [
+    "DOMAIN",
+    "DOMAIN-SUFFIX",
+    "DOMAIN-KEYWORD",
+    "DOMAIN-REGEX",
+    "GEOSITE",
+    "GEOIP",
+    "IP-CIDR",
+    "IP-CIDR6",
+    "IP-ASN",
+    "SRC-IP-CIDR",
+    "SRC-PORT",
+    "DST-PORT",
+    "NETWORK",
+    "IN-PORT",
+    "IN-TYPE",
+    "RULE-SET",
+    "DSCP",
+    "MATCH",
+];
+
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct ProfileRules {

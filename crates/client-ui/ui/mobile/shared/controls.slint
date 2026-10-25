@@ -173,6 +173,45 @@ export component MPagination inherits HorizontalLayout {
         clicked => { root.turn(1); }
     }
 }
+export component MDragHandle inherits Rectangle {
+    in property <length> row-height: 80px;
+    in property <bool> enabled: true;
+    property <bool> tracking;
+    Timer {
+        interval: 550ms; running: area.pressed && root.enabled && !root.tracking;
+        triggered => { root.tracking = true; root.started(); }
+    }
+    callback started();
+    callback dragged(int);
+    callback dropped(int);
+    callback cancelled();
+    width: 48px; height: 48px; horizontal-stretch: 0;
+    background: root.tracking ? Theme.accent-wash : transparent; border-radius: 6px;
+    accessible-role: button; accessible-label: "拖动调整规则顺序，方向键上下移动";
+    MText { text: "≡"; width: parent.width; height: parent.height; horizontal-alignment: center; color: Theme.secondary; }
+    keys := FocusScope { width: parent.width; height: parent.height; enabled: root.enabled;
+        key-pressed(event) => {
+            if event.text == Key.UpArrow || event.text == Key.DownArrow {
+                root.started(); root.dropped(event.text == Key.UpArrow ? -1 : 1); return accept;
+            }
+            return reject;
+        }
+        area := TouchArea {
+            enabled: root.enabled && !MobileView.modal; mouse-cursor: pointer;
+            pointer-event(event) => {
+                if event.kind == PointerEventKind.down {
+                    keys.focus();
+                } else if event.kind == PointerEventKind.up && root.tracking {
+                    root.tracking = false;
+                    root.dropped(round((self.mouse-y - self.pressed-y) / max(1px, root.row-height)));
+                } else if event.kind == PointerEventKind.cancel {
+                    root.tracking = false; root.cancelled();
+                }
+            }
+            moved => { if root.tracking { root.dragged(round((self.mouse-y - self.pressed-y) / max(1px, root.row-height))); } }
+        }
+    }
+}
 export component MRow inherits Rectangle {
     in property <string> title;
     in property <string> subtitle;
@@ -228,6 +267,7 @@ export component MSwitch inherits Rectangle {
     TouchArea { enabled: root.enabled && !MobileView.modal; mouse-cursor: pointer; clicked => { root.toggled(!root.checked); } }
 }
 export component MField inherits Rectangle {
+    in property <bool> secret;
     in-out property <string> text;
     in property <string> placeholder;
     callback edited(string);
@@ -238,7 +278,7 @@ export component MField inherits Rectangle {
     animate border-color, background { duration: Motion.fast; enabled: Motion.active; }
     input := TextInput { x: 12px; width: parent.width - 24px; height: parent.height;
         enabled: !MobileView.modal;
-        text <=> root.text; font-size: MobileTypography.font-size(16); color: Theme.ink; single-line: true; vertical-alignment: center;
+        text <=> root.text; input-type: root.secret ? InputType.password : InputType.text; font-size: MobileTypography.font-size(16); color: Theme.ink; single-line: true; vertical-alignment: center;
         selection-background-color: Theme.primary; selection-foreground-color: #ffffff;
         edited => { root.edited(self.text); }
     }

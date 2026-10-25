@@ -17,7 +17,7 @@
 | `android.py` | CLI | Android 编译、模拟器测试、产物导出与已测试 APK 打包。 |
 | `build-installer.py` | CLI | 只组装已验证产物为 Windows、Linux 或 macOS 安装包。 |
 | `macos_package.py` | 模块 | macOS App / DMG 组装；被打包器和 macOS 验证延迟导入。 |
-| `publish-release.py` | CLI / 模块 | 校验成功 CI，复用已验证产物创建测试包或公开 Release。 |
+| `publish-release.py` | CLI / 模块 | 校验成功 CI，复用已验证产物创建测试包或公开正式/预发布 Release。 |
 | `run-ci.py` | CLI | 单个原生平台的编译、Clippy、源码测试与代理/TUN 集成入口。 |
 | `windows_ci.py` | 模块 | Windows 普通用户、服务、安装器、更新和 Defender 验证。 |
 | `macos_ci.py` | CLI / 模块 | macOS 原生验证、安装检查和诊断报告。 |

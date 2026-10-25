@@ -48,7 +48,7 @@ export component MobileFrame inherits Rectangle {
     property <bool> detail-page: MobileView.detail > 0 && !MobileView.modal;
     property <bool> has-back: (root.detail-page && !root.pane) || (!root.expanded && MobileView.page >= 3 && MobileView.page <= 8);
     property <bool> pane: body.width >= 880px && root.detail-page && MobileView.detail != 2 && MobileView.detail != 3;
-    property <string> detail-title: MobileView.detail == 1 ? "风险项目" : MobileView.detail == 2 ? "编辑规则" : MobileView.detail == 3 ? (MobileView.selected-id == "" ? "添加订阅" : "编辑订阅") : MobileView.detail == 5 ? "连接详情" : MobileView.detail == 6 ? MobileView.category : MobileView.detail == 7 ? "正常项目" : MobileView.detail == 9 ? "其他线索" : "日志详情";
+    property <string> detail-title: MobileView.detail == 14 ? "Fake-IP" : MobileView.detail == 15 ? "规则操作" : MobileView.detail == 16 ? "检测详情" : MobileView.detail == 17 ? "检测选项" : MobileView.detail == 1 ? "风险项目" : MobileView.detail == 2 ? "编辑规则" : MobileView.detail == 3 ? (MobileView.selected-id == "" ? "添加订阅" : "编辑订阅") : MobileView.detail == 5 ? "连接详情" : MobileView.detail == 6 ? (MobileView.category == "all" ? "全部检测结果" : MobileView.category) : MobileView.detail == 7 ? "正常项目" : MobileView.detail == 9 ? "其他线索" : "日志详情";
     property <duration> notice-start;
     property <int> notice-revision: MobileView.notice-revision;
     property <float> notice-elapsed: MobileView.notice-elapsed;

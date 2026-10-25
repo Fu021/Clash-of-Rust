@@ -3,7 +3,7 @@ import { MobileTypography } from "typography.slint";
 import { Theme } from "../../theme/palette.slint";
 import { NodeItem, CategoryItem, ConnectionItem, RuleItem } from "../../state.slint";
 import { MobileData, MobileView, MobileActions, MobileIntent } from "state.slint";
-import { MText, MSmall, MHeading, MParagraph, MCard, MButton, MPagination, MRow, MDivider, MSwitch, MField, MSelect, MTag, MNav, MScroll, ListView, MProgress, MCopyButton } from "controls.slint";
+import { MText, MSmall, MHeading, MParagraph, MCard, MButton, MPagination, MRow, MDivider, MSwitch, MField, MSelect, MTag, MNav, MScroll, ListView, MProgress, MCopyButton, MDragHandle } from "controls.slint";
 
 component StatusCard inherits MCard {
     selected: MobileData.vpn-connected;
@@ -242,33 +242,40 @@ component RulesToolbar inherits VerticalLayout {
     }
     HorizontalLayout { spacing: MobileTypography.small-gap;
         MField { placeholder: "搜索规则"; text <=> MobileView.query; edited(value) => { MobileActions.request(MobileIntent.query, "rules", value); } }
+        MSelect { width: 100px; horizontal-stretch: 0; options: ["全部来源", "自定义", "快捷规则", "订阅"]; value: MobileView.rule-source;
+            selected(index, value) => { MobileView.rule-source = value; MobileActions.request(MobileIntent.rule-filter, value, ""); }
+        }
         MButton { text: "+ 新建"; primary: true; width: 88px; horizontal-stretch: 0;
             clicked => { MobileView.selected-id = ""; MobileView.rule-kind = "DOMAIN-SUFFIX"; MobileView.rule-policy = "DIRECT"; MobileView.rule-position = "1";
-                MobileView.rule-payload = ""; MobileView.rule-raw = ""; MobileView.rule-text-mode = false; MobileView.draft-dirty = false; MobileView.detail = 2; }
+                MobileView.rule-payload = ""; MobileView.rule-raw = ""; MobileView.rule-text-mode = false; MobileView.rule-no-resolve = false; MobileView.rule-enabled = true; MobileView.draft-dirty = false; MobileView.detail = 2; }
         }
     }
-    if MobileView.rule-selected: MCard {
-        MHeading { text: "已选择 · " + MobileView.selected-rule.value; font-size: MobileTypography.font-size(17); }
-        MSmall { text: MobileView.selected-rule.kind + " · " + MobileView.selected-rule.policy; }
-        HorizontalLayout { spacing: MobileTypography.small-gap;
-            MButton { text: "上移"; clicked => { MobileActions.request(MobileIntent.rule-move, "-1", ""); } }
-            MButton { text: "下移"; clicked => { MobileActions.request(MobileIntent.rule-move, "1", ""); } }
-            MButton { text: MobileView.selected-rule.source == "自定义" ? "编辑" : "复制编辑"; clicked => { MobileActions.request(MobileIntent.rule-edit, MobileView.selected-id, ""); } }
-            MButton { text: "删除"; danger: true; clicked => { MobileActions.request(MobileIntent.rule-delete, MobileView.selected-id, ""); } }
-        }
-    }
+    MSmall { text: MobileView.rule-drag-id == "" ? "长按手柄拖动排序 · 更多操作点 ⋯" : "松开以调整顺序"; wrap: word-wrap; }
 }
 component RulesRow inherits MCard {
     in property <RuleItem> item;
-    selected: MobileView.rule-selected && MobileView.selected-id == root.item.id;
-    interactive: true; clicked => { MobileView.rule-selected = true; MobileView.selected-rule = root.item; MobileView.selected-id = root.item.id; }
+    in property <int> row-index;
+    selected: MobileView.rule-drag-target == root.item.id || (MobileView.rule-selected && MobileView.selected-id == root.item.id);
+    callback select();
+    select => { MobileView.rule-selected = true; MobileView.selected-rule = root.item; MobileView.selected-id = root.item.id; MobileView.rule-position = root.item.position; }
     HorizontalLayout { spacing: MobileTypography.small-gap; cross-axis-alignment: center;
-        MSmall { text: root.item.position; width: 24px; horizontal-stretch: 0; }
-        VerticalLayout { spacing: 7px;
-            MText { text: root.item.value == "" ? root.item.kind : root.item.value; font-weight: 600; }
-            MSmall { text: root.item.kind + " · " + root.item.source; }
+        MDragHandle { row-height: root.height + 12px; enabled: !MobileData.working && !MobileData.protected && !MobileData.protection-pending;
+            started => { root.select(); MobileView.rule-drag-id = root.item.id; MobileView.rule-drag-target = root.item.id; }
+            dragged(delta) => { MobileView.rule-drag-target = MobileData.rules[clamp(root.row-index + delta, 0, MobileData.rules.length - 1)].id; }
+            dropped(delta) => {
+                if delta != 0 { MobileActions.request(MobileIntent.rule-drop, root.item.id, MobileData.rules[clamp(root.row-index + delta, 0, MobileData.rules.length - 1)].id); }
+                MobileView.rule-drag-id = ""; MobileView.rule-drag-target = "";
+            }
+            cancelled => { MobileView.rule-drag-id = ""; MobileView.rule-drag-target = ""; }
         }
-        MTag { text: root.item.policy; width-limit: 84px; }
+        VerticalLayout { spacing: 6px;
+            MText { text: root.item.position + " · " + (root.item.value == "" ? root.item.kind : root.item.value); font-weight: 600; }
+            MSmall { text: root.item.kind + " · " + root.item.policy + (root.item.enabled ? "" : " · 已停用"); }
+            MSmall { text: "来源：" + root.item.source; }
+        }
+        MButton { text: "⋯"; accessible-role: button; accessible-label: "规则更多操作"; width: 48px; horizontal-stretch: 0;
+            clicked => { root.select(); MobileView.detail = 15; }
+        }
     }
 }
 component RulesFooter inherits GridLayout {
@@ -290,24 +297,24 @@ component RulesFooter inherits GridLayout {
     }
 }
 export component MobileRules inherits PageSurface {
-    property <bool> compact: root.height < 520px || Theme.text-scale > 1.25 || (MobileView.rule-selected && MobileView.shortcuts-open);
+    property <bool> compact: root.height < 520px || Theme.text-scale > 1.25 || (MobileView.shortcuts-open);
     if !root.compact: VerticalLayout { spacing: MobileTypography.gap;
         RulesToolbar { available-height: root.height; }
-        ListView { content-key: MobileData.rule-page-index + "/" + MobileView.query + "/" + MobileData.rule-profile; min-height: 0px; vertical-stretch: 1;
-            for entry in MobileData.rules: Rectangle { height: card.height + 12px;
-                card := RulesRow { x: 0px; y: 0px; width: parent.width; item: entry; }
+        ListView { content-key: MobileData.rule-page-index + "/" + MobileView.query + "/" + MobileData.rule-profile + "/" + MobileView.rule-source; min-height: 0px; vertical-stretch: 1;
+            for entry[i] in MobileData.rules: Rectangle { height: card.height + 12px;
+                card := RulesRow { x: 0px; y: 0px; width: parent.width; item: entry; row-index: i; }
             }
         }
         RulesFooter { }
     }
     // A short landscape window scrolls the toolbar and footer with the rows.
     // A single virtual list keeps every control reachable without nested lists.
-    if root.compact: ListView { content-key: MobileData.rule-page-index + "/" + MobileView.query + "/" + MobileData.rule-profile;
+    if root.compact: ListView { content-key: MobileData.rule-page-index + "/" + MobileView.query + "/" + MobileData.rule-profile + "/" + MobileView.rule-source;
         for index in MobileData.rules.length + 2: Rectangle {
             height: content.preferred-height + 12px;
             content := VerticalLayout { x: 0px; y: 0px; width: parent.width; height: self.preferred-height; alignment: start; spacing: 0px;
                 if index == 0: RulesToolbar { available-height: root.height; }
-                if index > 0 && index <= MobileData.rules.length: RulesRow { item: MobileData.rules[index - 1]; }
+                if index > 0 && index <= MobileData.rules.length: RulesRow { item: MobileData.rules[index - 1]; row-index: index - 1; }
                 if index == MobileData.rules.length + 1: RulesFooter { }
             }
         }
@@ -360,7 +367,7 @@ export component MobileNetwork inherits PageSurface {
 }
 component CategoryCard inherits MCard {
     in property <CategoryItem> item;
-    interactive: true; clicked => { MobileView.category = root.item.title; MobileView.site-status = "全部结果"; MobileActions.request(MobileIntent.site-category, root.item.id, ""); MobileView.detail = 6; }
+    interactive: true; clicked => { MobileView.category = root.item.id; MobileActions.request(MobileIntent.site-category, root.item.id, ""); MobileView.detail = 6; }
     HorizontalLayout { spacing: MobileTypography.small-gap; cross-axis-alignment: center;
         MHeading { text: root.item.title; }
         MText { text: root.item.count; color: root.item.tone == 2 ? Theme.warning : Theme.accent; font-size: MobileTypography.font-size(24); horizontal-alignment: right; }
@@ -395,7 +402,7 @@ export component MobileIpCheck inherits PageSurface {
                 if pair.right.id != "": CategoryCard { item: pair.right; }
             }
         }
-        MButton { text: "IP 信息与全部结果"; clicked => { MobileView.category = "全部结果"; MobileActions.request(MobileIntent.site-category, "all", ""); MobileView.detail = 6; } }
+        MButton { text: "IP 信息与全部结果"; clicked => { MobileView.category = "all"; MobileActions.request(MobileIntent.site-category, "all", ""); MobileView.detail = 6; } }
     } }
 }
 component ClaudeCount inherits MCard {
@@ -420,9 +427,12 @@ export component MobileAiCheck inherits PageSurface {
             MSmall { text: "可能影响其他应用与国内网站；关闭后恢复原状态。"; color: Theme.warning; wrap: word-wrap; }
         }
         HorizontalLayout { spacing: MobileTypography.small-gap;
-            MButton { text: "开始检测"; primary: true; clicked => { MobileActions.request(MobileIntent.claude-start, "", ""); } }
-            MButton { text: "导出报告"; clicked => { MobileActions.request(MobileIntent.export-report, "claude", ""); } }
+            MButton { text: MobileData.claude-busy ? "取消检测" : "开始检测"; primary: true;
+                clicked => { MobileActions.request(MobileData.claude-busy ? MobileIntent.claude-cancel : MobileIntent.claude-start, "", ""); }
+            }
+            MButton { text: "检测选项"; clicked => { MobileView.detail = 17; } }
         }
+        MRow { title: "导出报告"; clicked => { MobileActions.request(MobileIntent.export-report, "claude", ""); } }
         MSmall { text: MobileData.claude-status; wrap: word-wrap; }
         HorizontalLayout { spacing: MobileTypography.gap;
             ClaudeCount { title: "正常项目"; count: MobileData.claude-normal; opened => { MobileView.detail = 7; } }

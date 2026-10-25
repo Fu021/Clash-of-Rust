@@ -1504,7 +1504,7 @@ class ReleaseTests(unittest.TestCase):
              patch.object(release,'repository',return_value='example/project'), \
              patch.object(release,'credential',return_value='test-only-token'), \
              patch.object(release,'GitHub'), patch.object(release,'git',return_value=self.commit), \
-             patch.object(release,'verified_run',return_value={'id':77,'html_url':'https://example.test/ci'}), \
+             patch.object(release,'verified_run',return_value={'id':77,'head_branch':'main','html_url':'https://example.test/ci'}), \
              patch.object(release,'release_metadata',return_value=(self.version,self.tag,self.notes)), \
              patch.object(release,'verified_package_run'), patch.object(release,'download_package_files',return_value={}), patch.object(release,'publish') as publishing:
             release.main()
@@ -1544,6 +1544,26 @@ class ReleaseTests(unittest.TestCase):
             with tempfile.TemporaryDirectory() as folder:
                 path=Path(folder)/'notes.md';path.write_text('Uncommitted notes')
                 with self.assertRaises(ValueError):release.release_metadata(self.commit,notes_path=path)
+
+    def test_prerelease_requires_explicit_current_same_repository_ci(self):
+        changes = {'event':'pull_request', 'head_branch':'codex/fix-android'}
+        self.assertEqual(release.verified_run(self.client(changes), self.commit, 77, prerelease=True)['id'], 77)
+        for invalid in ({'head_repository':{'full_name':'fork/project'}},
+                        {'event':'push'}, {'head_sha':'b'*40}, {'conclusion':'failure'}):
+            with self.subTest(invalid=invalid), self.assertRaises(ValueError):
+                release.verified_run(self.client(changes | invalid), self.commit, 77, prerelease=True)
+        with self.assertRaises(ValueError):
+            release.verified_run(self.client(changes), self.commit, prerelease=True)
+        with self.assertRaises(ValueError):
+            release.verified_run(self.client(changes), self.commit, 77, check_only=True, prerelease=True)
+        with self.assertRaises(ValueError):
+            release.verified_run(self.client(changes, main='b'*40), self.commit, 77, prerelease=True)
+        with patch.object(release, 'git', return_value='[package]\nversion=\"0.6.5\"'):
+            with self.assertRaises(ValueError):
+                release.release_metadata(self.commit, prerelease=True)
+        with patch.object(release, 'git', return_value='[package]\nversion=\"0.6.5-fix.2.android-parity\"'), \
+             patch.object(release.subprocess, 'check_output', return_value=self.notes):
+            self.assertEqual(release.release_metadata(self.commit, prerelease=True)[1], 'v0.6.5-fix.2.android-parity')
 
     def test_preview_packaging_requires_no_release_notes_and_still_checks_version(self):
         with patch.object(release,'git',return_value='[package]\nversion="0.5.2-dev.1"'), \
@@ -1628,6 +1648,11 @@ class ReleaseTests(unittest.TestCase):
             with self.assertRaises(ValueError):release.verified_package_run(client(jobs=jobs),88,self.commit)
             self.assertEqual(release.verified_package_run(client({'head_branch':'codex/dev-0.5.2'}),
                                                          88,self.commit,check_only=True)['id'],88)
+            self.assertEqual(release.verified_package_run(client({'head_branch':'codex/fix-android'}),
+                             88,self.commit,prerelease=True,source_branch='codex/fix-android')['id'],88)
+            with self.assertRaises(ValueError):
+                release.verified_package_run(client({'head_branch':'other'}),
+                    88,self.commit,prerelease=True,source_branch='codex/fix-android')
             with self.assertRaises(ValueError):
                 release.verified_package_run(client({'head_branch':'codex/dev-0.5.2'},jobs=jobs),
                                              88,self.commit,check_only=True)
@@ -1651,8 +1676,9 @@ class ReleaseTests(unittest.TestCase):
             self.assertIn('ci_run_id=77',output.read_text())
 
     class PublisherClient:
-        def __init__(self, owner, published=False, bad_upload=False, main_changed=False, wrong_tag=False, starter=False):
+        def __init__(self, owner, published=False, bad_upload=False, main_changed=False, wrong_tag=False, starter=False, branch='main'):
             self.owner=owner;self.bad_upload=bad_upload;self.main_changed=main_changed;self.writes=[]
+            self.branch=branch
             self.tag_commit='b'*40 if wrong_tag else owner.commit if published else None
             self.release=None
             if published or starter:
@@ -1669,7 +1695,7 @@ class ReleaseTests(unittest.TestCase):
             if path=='/git/ref/tags/'+owner.tag:
                 if self.tag_commit is None:raise urllib.error.HTTPError(path,404,'Not Found',{},None)
                 return {'object':{'type':'commit','sha':self.tag_commit}}
-            if path=='/branches/main':return {'commit':{'sha':'b'*40 if self.main_changed else owner.commit}}
+            if path=='/branches/'+urllib.parse.quote(self.branch,safe=''):return {'commit':{'sha':'b'*40 if self.main_changed else owner.commit}}
             if path=='/releases' and method=='POST':
                 self.release={**data,'id':1,'assets':[],
                     'upload_url':'https://uploads.github.com/repos/example/project/releases/1{?name}',
@@ -1713,6 +1739,27 @@ class ReleaseTests(unittest.TestCase):
                 client=self.PublisherClient(self,**kwargs)
                 with self.assertRaises(ValueError):release.publish(client,self.commit,self.tag,self.notes,files)
                 self.assertFalse(client.writes)
+
+    def test_fix_branch_prerelease_does_not_change_latest_and_checks_source_after_upload(self):
+        self.version='0.6.5-fix.2.android-parity';self.tag='v'+self.version
+        with tempfile.TemporaryDirectory() as folder:
+            files=self.files(Path(folder))
+            branch='codex/fix-android'
+            refused=self.PublisherClient(self,branch=branch)
+            with self.assertRaises(ValueError):
+                release.publish(refused,self.commit,self.tag,self.notes,files,source_branch=branch)
+            self.assertFalse(refused.writes)
+            for changed in (False, True):
+                client=self.PublisherClient(self,branch=branch,main_changed=changed)
+                if changed:
+                    with self.assertRaises(ValueError):
+                        release.publish(client,self.commit,self.tag,self.notes,files,source_branch=branch,prerelease=True)
+                    self.assertTrue(client.release['draft'])
+                else:
+                    release.publish(client,self.commit,self.tag,self.notes,files,source_branch=branch,prerelease=True)
+                    self.assertFalse(client.release['draft'])
+                    self.assertTrue(client.release['prerelease'])
+                    self.assertEqual(client.release['make_latest'],'false')
 
     def test_release_leaves_draft_unpublished_after_bad_upload_or_main_change(self):
         with tempfile.TemporaryDirectory() as folder:

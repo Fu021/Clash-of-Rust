@@ -6,10 +6,10 @@ use slint::{
         software_renderer::{MinimalSoftwareWindow, RepaintBufferType},
     },
 };
-use std::rc::Rc;
+use std::{cell::Cell, rc::Rc, time::Duration};
 
 slint::slint! {
-    import { ListView } from "../ui/mobile/shared/controls.slint";
+    import { ListView, MDragHandle } from "../ui/mobile/shared/controls.slint";
 
     export component MobileListProbe inherits Window {
         preferred-width: 300px; preferred-height: 240px;
@@ -23,13 +23,32 @@ slint::slint! {
             }
         }
     }
+    export component MobileDragProbe inherits Window {
+        preferred-width: 300px; preferred-height: 240px;
+        out property <bool> started;
+        out property <int> delta: 99;
+        ListView {
+            width: parent.width; height: parent.height;
+            for index in 10: Rectangle {
+                height: 80px;
+                MDragHandle {
+                    row-height: 80px;
+                    started => { root.started = true; }
+                    dropped(delta) => { root.delta = delta; }
+                }
+            }
+        }
+    }
 }
 
-struct Headless(Rc<MinimalSoftwareWindow>);
+struct Headless(Rc<MinimalSoftwareWindow>, Rc<Cell<Duration>>);
 
 impl Platform for Headless {
     fn create_window_adapter(&self) -> Result<Rc<dyn WindowAdapter>, PlatformError> {
         Ok(self.0.clone())
+    }
+    fn duration_since_start(&self) -> Duration {
+        self.1.get()
     }
 }
 
@@ -45,7 +64,8 @@ fn frame(adapter: &MinimalSoftwareWindow, width: usize, height: usize) -> Vec<sl
 #[test]
 fn mobile_list_stacks_rows_and_keeps_sparse_content_at_the_top() {
     let adapter = MinimalSoftwareWindow::new(RepaintBufferType::NewBuffer);
-    slint::platform::set_platform(Box::new(Headless(adapter.clone()))).unwrap();
+    let clock = Rc::new(Cell::new(Duration::ZERO));
+    slint::platform::set_platform(Box::new(Headless(adapter.clone(), clock.clone()))).unwrap();
     adapter.set_size(slint::PhysicalSize::new(300, 240));
     let probe = MobileListProbe::new().unwrap();
     let rows = Rc::new(slint::VecModel::from(vec![48.; 20]));
@@ -76,4 +96,52 @@ fn mobile_list_stacks_rows_and_keeps_sparse_content_at_the_top() {
     assert_eq!(pixels[5 * 900 + 700], slint::Rgb8Pixel::new(255, 0, 0));
     assert_eq!(pixels[50 * 900 + 700], slint::Rgb8Pixel::new(0, 255, 0));
     assert_eq!(pixels[110 * 900 + 700], slint::Rgb8Pixel::new(0, 0, 255));
+    drop(probe);
+
+    // Slint installs one platform per test process, so exercise the drag probe
+    // after releasing the first window instead of installing a second platform.
+    use slint::{
+        LogicalPosition,
+        platform::{PointerEventButton, WindowEvent},
+    };
+    adapter.set_size(slint::PhysicalSize::new(300, 240));
+    let drag_probe = MobileDragProbe::new().unwrap();
+    drag_probe.show().unwrap();
+    frame(&adapter, 300, 240);
+    let press = || {
+        drag_probe
+            .window()
+            .dispatch_event(WindowEvent::PointerPressed {
+                position: LogicalPosition::new(24., 24.),
+                button: PointerEventButton::Left,
+            })
+    };
+    press();
+    drag_probe
+        .window()
+        .dispatch_event(WindowEvent::PointerReleased {
+            position: LogicalPosition::new(24., 24.),
+            button: PointerEventButton::Left,
+        });
+    assert!(
+        !drag_probe.get_started(),
+        "a normal tap must not start reordering"
+    );
+    assert_eq!(drag_probe.get_delta(), 99);
+    press();
+    clock.set(Duration::from_millis(700));
+    slint::platform::update_timers_and_animations();
+    assert!(drag_probe.get_started());
+    drag_probe
+        .window()
+        .dispatch_event(WindowEvent::PointerMoved {
+            position: LogicalPosition::new(24., 184.),
+        });
+    drag_probe
+        .window()
+        .dispatch_event(WindowEvent::PointerReleased {
+            position: LogicalPosition::new(24., 184.),
+            button: PointerEventButton::Left,
+        });
+    assert_eq!(drag_probe.get_delta(), 2);
 }

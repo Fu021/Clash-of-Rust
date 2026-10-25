@@ -2,11 +2,18 @@ import { PageSurface, Presence } from "../../components/motion.slint";
 import { MobileTypography } from "typography.slint";
 import { Theme, AccentPalette } from "../../theme/palette.slint";
 import { MobileData, MobileView, MobileActions, MobileIntent } from "state.slint";
-import { MText, MSmall, MHeading, MParagraph, MCard, MButton, MRow, MDivider, MField, MSelect, MTag, MScroll, MCopyButton } from "controls.slint";
+import { MText, MSmall, MHeading, MParagraph, MCard, MButton, MRow, MDivider, MField, MSelect, MTag, MScroll, MCopyButton, MSwitch } from "controls.slint";
+import { MobileFakeIp, MobileRuleActions, MobileSiteResults, MobileDetectionOptions } from "editors.slint";
 
 export component MobileDetails inherits PageSurface {
     motion-revision: MobileView.detail;
-    VerticalLayout { spacing: MobileTypography.gap;
+    property <bool> supports-no-resolve: MobileView.rule-kind == "GEOIP" || MobileView.rule-kind == "IP-CIDR" || MobileView.rule-kind == "IP-CIDR6" || MobileView.rule-kind == "IP-ASN" || MobileView.rule-kind == "RULE-SET";
+    property <string> rule-line: (MobileView.rule-kind == "MATCH" ? "MATCH," + MobileView.rule-policy : MobileView.rule-kind + "," + MobileView.rule-payload + "," + MobileView.rule-policy) + (root.supports-no-resolve && MobileView.rule-no-resolve ? ",no-resolve" : "");
+    if MobileView.detail == 14: MobileFakeIp { }
+    if MobileView.detail == 15: MobileRuleActions { }
+    if MobileView.detail == 6: MobileSiteResults { }
+    if MobileView.detail == 17: MobileDetectionOptions { }
+    if MobileView.detail != 14 && MobileView.detail != 15 && MobileView.detail != 6 && MobileView.detail != 17: VerticalLayout { spacing: MobileTypography.gap;
         MScroll { content-key: MobileView.detail + "/" + MobileView.selected-id + "/" + MobileView.category + "/" + MobileView.site-status + "/" + MobileView.log-message; VerticalLayout { width: root.width; alignment: start; spacing: MobileTypography.gap; padding-bottom: MobileTypography.padding;
             if MobileView.detail == 5: MCard {
                 for row[i] in MobileData.connection-details: VerticalLayout { spacing: MobileTypography.small-gap;
@@ -22,18 +29,21 @@ export component MobileDetails inherits PageSurface {
             if MobileView.detail == 2: MCard {
                 HorizontalLayout { spacing: MobileTypography.small-gap;
                     MButton { text: "表单"; selected: !MobileView.rule-text-mode; clicked => { MobileActions.request(MobileIntent.rule-text-mode, MobileView.rule-raw, "form"); } }
-                    MButton { text: "规则文本"; selected: MobileView.rule-text-mode; clicked => { MobileView.rule-raw = MobileView.rule-payload == "" ? "" : MobileView.rule-kind + "," + MobileView.rule-payload + "," + MobileView.rule-policy; MobileView.rule-text-mode = true; } }
+                    MButton { text: "规则文本"; selected: MobileView.rule-text-mode; clicked => { if !MobileView.rule-text-mode { MobileView.rule-raw = root.rule-line; } MobileView.rule-text-mode = true; } }
                 }
                 if !MobileView.rule-text-mode: VerticalLayout { spacing: MobileTypography.gap;
                     MSmall { text: "规则类型"; }
-                    MSelect { options: ["DOMAIN-SUFFIX", "DOMAIN", "IP-CIDR", "IP-CIDR6", "GEOIP", "GEOSITE", "RULE-SET"]; value: MobileView.rule-kind;
+                    MSelect { options: MobileData.rule-types; value: MobileView.rule-kind;
                         selected(index, value) => { MobileView.rule-kind = value; MobileView.draft-dirty = true; }
                     }
-                    MSmall { text: "匹配内容"; }
-                    MField { placeholder: "例如 google.com"; text <=> MobileView.rule-payload; edited(value) => { MobileView.draft-dirty = true; } }
+                    if MobileView.rule-kind != "MATCH": MSmall { text: "匹配内容"; }
+                    if MobileView.rule-kind != "MATCH": MField { placeholder: "例如 google.com"; text <=> MobileView.rule-payload; edited(value) => { MobileView.draft-dirty = true; } }
                     MSmall { text: "匹配策略"; }
                     MSelect { options: MobileData.rule-policies; value: MobileView.rule-policy;
                         selected(index, value) => { MobileView.rule-policy = value; MobileView.draft-dirty = true; }
+                    }
+                    if root.supports-no-resolve: MSwitch { title: "no-resolve"; subtitle: "匹配此规则时不额外解析域名"; checked: MobileView.rule-no-resolve;
+                        toggled(value) => { MobileView.rule-no-resolve = value; MobileView.draft-dirty = true; }
                     }
                 }
                 if MobileView.rule-text-mode: VerticalLayout { spacing: MobileTypography.gap;
@@ -42,6 +52,9 @@ export component MobileDetails inherits PageSurface {
                 }
                 MSmall { text: "插入位置"; }
                 MField { text <=> MobileView.rule-position; edited(value) => { MobileView.draft-dirty = true; } }
+                MSwitch { title: "启用规则"; checked: MobileView.rule-enabled;
+                    toggled(value) => { MobileView.rule-enabled = value; MobileView.draft-dirty = true; }
+                }
             }
             if MobileView.detail == 3: MCard {
                 MSmall { text: "订阅名称"; }
@@ -50,23 +63,10 @@ export component MobileDetails inherits PageSurface {
                 MSmall { text: "订阅地址（本地配置可留空）"; }
                 MField { placeholder: "https://example.com/subscription"; text <=> MobileView.profile-source; edited(value) => { MobileView.draft-dirty = true; } }
             }
-            if MobileView.detail == 6: VerticalLayout { spacing: MobileTypography.gap;
-                HorizontalLayout { spacing: MobileTypography.small-gap;
-                    MSelect { options: ["全部结果", "确认可用", "仅网页可达", "不可用或受限"]; value: MobileView.site-status;
-                        selected(index, value) => { MobileView.site-status = value; }
-                    }
-                    MButton { text: "重测分类"; clicked => { MobileActions.request(MobileIntent.site-retest, MobileView.category, ""); } }
-                }
-                for result in MobileData.site-results: VerticalLayout {
-                  if MobileView.site-status == "全部结果" || (MobileView.site-status == "确认可用" && result.tone == 1) || (MobileView.site-status == "仅网页可达" && result.tone == 2) || (MobileView.site-status == "不可用或受限" && result.tone == 3): MCard {
-                    HorizontalLayout { spacing: MobileTypography.small-gap; cross-axis-alignment: center;
-                        MHeading { text: result.title; }
-                        if result.flagged: Image { source: result.flag; width: 24px; height: 24px; image-fit: contain; }
-                        MTag { text: result.tone == 3 ? "受限" : result.tone == 2 ? "网页可达" : "确认可用"; tone: result.tone; }
-                    }
-                    MParagraph { text: result.value; font-size: MobileTypography.font-size(14); }
-                    MSmall { text: result.source; }
-                  }
+            if MobileView.detail == 16: VerticalLayout { spacing: MobileTypography.gap;
+                for row in MobileData.site-details: MCard {
+                    MSmall { text: row.label; }
+                    MParagraph { text: row.value; }
                 }
             }
             if MobileView.detail == 1 || MobileView.detail == 7 || MobileView.detail == 9: VerticalLayout { spacing: MobileTypography.gap;
@@ -94,9 +94,15 @@ export component MobileDetails inherits PageSurface {
             MButton { text: MobileView.detail == 2 ? "保存规则" : "保存订阅"; primary: true;
                 clicked => {
                     if MobileView.detail == 2 {
-                        MobileActions.request(MobileIntent.rule-save, MobileView.rule-text-mode ? MobileView.rule-raw : MobileView.rule-kind + "," + MobileView.rule-payload + "," + MobileView.rule-policy, MobileView.rule-position);
+                        MobileActions.request(MobileIntent.rule-save, MobileView.rule-text-mode ? MobileView.rule-raw : root.rule-line, MobileView.rule-position + "|" + (MobileView.rule-enabled ? "true" : "false"));
                     } else { MobileActions.request(MobileIntent.save-profile, MobileView.profile-name, MobileView.profile-source); }
                 }
+            }
+        }
+        if MobileView.detail == 16: HorizontalLayout { spacing: MobileTypography.small-gap;
+            MButton { text: "返回结果"; clicked => { MobileView.detail = 6; } }
+            MButton { text: "重测此项"; primary: true; enabled: !MobileData.detecting;
+                clicked => { MobileActions.request(MobileIntent.site-probe, MobileView.site-selected, ""); }
             }
         }
     }

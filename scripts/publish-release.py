@@ -121,7 +121,9 @@ def require(condition, message):
         raise ValueError(message)
 
 
-def verified_run(client, commit, run_id=None, check_only=False):
+def verified_run(client, commit, run_id=None, check_only=False, prerelease=False):
+    require(not (check_only and prerelease), 'Choose either test-only packaging or prerelease publishing')
+    require(not prerelease or run_id is not None, 'Prerelease publishing requires an explicit successful CI run ID')
     if run_id is None:
         query = urllib.parse.urlencode({'head_sha': commit, 'event': 'push', 'branch': 'main', 'per_page': 20})
         runs = client('/actions/workflows/ci.yml/runs?' + query)['workflow_runs']
@@ -130,8 +132,8 @@ def verified_run(client, commit, run_id=None, check_only=False):
     run = client(f'/actions/runs/{run_id}')
     require(run['path'].split('@', 1)[0] == '.github/workflows/ci.yml', 'Selected run is not the build CI')
     main_ci = run['event'] == 'push' and run['head_branch'] == 'main'
-    require(main_ci or (check_only and run['event'] == 'pull_request'),
-            'Release requires main-branch push CI; test-only packaging also accepts same-repository PR CI')
+    require(main_ci or ((check_only or prerelease) and run['event'] == 'pull_request'),
+            'Release requires main-branch push CI; branch PR CI requires test-only or explicit prerelease mode')
     require(run['head_repository']['full_name'].lower() == client.repo.lower(), 'CI repository mismatch')
     require(run['head_sha'] == commit, 'CI commit differs from the checked-out commit')
     require(run['status'] == 'completed' and run['conclusion'] == 'success', 'CI has not completed successfully')
@@ -145,9 +147,11 @@ def verified_run(client, commit, run_id=None, check_only=False):
     return run
 
 
-def release_metadata(commit, tag=None, notes_path=None, check_only=False):
+def release_metadata(commit, tag=None, notes_path=None, check_only=False, prerelease=False):
     require(bool(re.fullmatch(r'[0-9a-f]{40}', commit)), 'Invalid release commit')
     version = validate_version(manifest_version(git('show', commit + ':Cargo.toml')))
+    require(not prerelease or '-' in version.split('+', 1)[0],
+            'Prerelease publishing requires a SemVer prerelease version in Cargo.toml')
     expected_tag = 'v' + version
     require(tag is None or tag == expected_tag, 'Release tag differs from the tested Cargo version')
     if check_only:
@@ -189,11 +193,13 @@ def build_artifacts(client, run_id):
     return {a['name']: {key: a[key] for key in ('id', 'name', 'digest')} for a in builds}
 
 
-def verified_package_run(client, run_id, commit, check_only=False):
+def verified_package_run(client, run_id, commit, check_only=False, prerelease=False, source_branch=None):
     run = client(f'/actions/runs/{run_id}')
     require(run['path'].split('@', 1)[0] == '.github/workflows/release.yml'
-            and run['event'] == 'workflow_dispatch' and (run['head_branch'] == 'main' or check_only),
-            'Packages must come from the manual release workflow; branch packages require test-only mode')
+            and run['event'] == 'workflow_dispatch' and (run['head_branch'] == 'main' or check_only or prerelease),
+            'Packages must come from the manual release workflow; branch packages require test-only or prerelease mode')
+    require(source_branch is None or run['head_branch'] == source_branch,
+            'Package workflow branch differs from the selected CI')
     require(run['head_sha'] == commit and run['head_repository']['full_name'].lower() == client.repo.lower(),
             'Package workflow source differs from the selected CI')
     jobs = client(f'/actions/runs/{run_id}/jobs?filter=latest&per_page=100')['jobs']
@@ -282,8 +288,11 @@ def verify_release(release, tag, notes, files):
                 and asset.get('digest') == 'sha256:' + sha256(path), 'Uploaded asset mismatch: ' + asset['name'])
 
 
-def publish(client, commit, tag, notes, files):
+def publish(client, commit, tag, notes, files, source_branch='main', prerelease=False):
     preview = '-' in tag.removeprefix('v')
+    require(not prerelease or preview, 'Prerelease publishing requires a prerelease tag')
+    require(source_branch == 'main' or (prerelease and preview),
+            'Publishing from a branch requires explicit prerelease mode')
     release = find_release(client, tag)
     require(release is None or release['draft'], 'Release is already published; refusing to replace it')
     verify_tag(client, tag, commit, allow_missing=True)
@@ -310,7 +319,8 @@ def publish(client, commit, tag, notes, files):
     draft = client(f"/releases/{release['id']}")
     require(draft['draft'], 'Release changed while uploading')
     verify_release(draft, tag, notes, files)
-    require(client('/branches/main')['commit']['sha'] == commit, 'Main changed while uploading; leaving draft unpublished')
+    require(client('/branches/' + urllib.parse.quote(source_branch, safe=''))['commit']['sha'] == commit,
+            'Source branch changed while uploading; leaving draft unpublished')
     verify_tag(client, tag, commit, allow_missing=True)
     client(f"/releases/{release['id']}", 'PATCH', {'draft': False, 'prerelease': preview, 'make_latest': 'false' if preview else 'true'})
     published = client('/releases/tags/' + tag)
@@ -323,8 +333,9 @@ def publish(client, commit, tag, notes, files):
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument('--run-id', type=int, help='Successful CI run; PR CI requires --check and an explicit run ID')
+    parser.add_argument('--run-id', type=int, help='Successful CI run; PR CI requires --check or --prerelease and an explicit run ID')
     parser.add_argument('--check', action='store_true', help='Verify the complete packaging/tests run without publishing')
+    parser.add_argument('--prerelease', action='store_true', help='Explicitly publish a prerelease, including from same-repository PR branches')
     parser.add_argument('--resolve', action='store_true', help='Verify CI and emit immutable source/run metadata for packaging')
     parser.add_argument('--package-run-id', type=int, help='Successful packaging run; defaults to the current Actions run')
     parser.add_argument('--proxy', default='')
@@ -333,11 +344,12 @@ def main():
     parser.add_argument('--asset', action='append', type=Path, default=[], help='Optional local files; must match CI assets')
     parser.add_argument('--output-dir', type=Path, help='Directory for downloaded CI installers')
     args = parser.parse_args()
+    require(not (args.check and args.prerelease), 'Choose either test-only packaging or prerelease publishing')
     repo = repository()
     client = GitHub(repo, credential(repo), args.proxy)
     commit = git('rev-parse', 'HEAD')
-    run = verified_run(client, commit, args.run_id, check_only=args.check)
-    version, tag, notes = release_metadata(commit, args.tag, args.notes, check_only=args.check)
+    run = verified_run(client, commit, args.run_id, check_only=args.check, prerelease=args.prerelease)
+    version, tag, notes = release_metadata(commit, args.tag, args.notes, check_only=args.check, prerelease=args.prerelease)
     if args.resolve:
         build_artifacts(client, run['id'])
         if os.environ.get('GITHUB_OUTPUT'):
@@ -347,7 +359,8 @@ def main():
         return
     package_run_id = args.package_run_id or int(os.environ.get('GITHUB_RUN_ID', '0'))
     require(package_run_id > 0, 'Specify --package-run-id for the verified package workflow')
-    verified_package_run(client, package_run_id, commit, check_only=args.check)
+    verified_package_run(client, package_run_id, commit, check_only=args.check,
+                         prerelease=args.prerelease, source_branch=run['head_branch'])
     directory = args.output_dir or ROOT / f"dist/release-{version}-run-{package_run_id}"
     files = download_package_files(client, package_run_id, run['id'], commit, version, directory)
     if args.asset:
@@ -358,7 +371,7 @@ def main():
     if args.check:
         print('Check complete; no release changes made')
         return
-    url = publish(client, commit, tag, notes, files)
+    url = publish(client, commit, tag, notes, files, source_branch=run['head_branch'], prerelease=args.prerelease)
     if os.environ.get('GITHUB_STEP_SUMMARY'):
         with Path(os.environ['GITHUB_STEP_SUMMARY']).open('a', encoding='utf-8') as summary:
             summary.write(f'[Published {tag}]({url}) — {len(PACKAGES)} packages and their SHA256 files verified.\n')

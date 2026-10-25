@@ -3,26 +3,7 @@
 use super::*;
 use rule_manager::{CustomRule, Document, Row, Source};
 
-pub(super) const TYPES: [&str; 18] = [
-    "DOMAIN",
-    "DOMAIN-SUFFIX",
-    "DOMAIN-KEYWORD",
-    "DOMAIN-REGEX",
-    "GEOSITE",
-    "GEOIP",
-    "IP-CIDR",
-    "IP-CIDR6",
-    "IP-ASN",
-    "SRC-IP-CIDR",
-    "SRC-PORT",
-    "DST-PORT",
-    "NETWORK",
-    "IN-PORT",
-    "IN-TYPE",
-    "RULE-SET",
-    "DSCP",
-    "MATCH",
-];
+pub(super) use rule_manager::FORM_TYPES as TYPES;
 pub(super) const SHORTCUT_LABELS: [&str; 5] = [
     "拦截广告",
     "本地域名直连",

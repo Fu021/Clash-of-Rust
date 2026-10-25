@@ -14,6 +14,10 @@
 
 新增工作流须事先获得维护者同意，具体要求见[贡献者须知](../.github/CONTRIBUTING.md)。`.github/` 的变更合并前须经 @Fu021 审核；所有外部贡献者的 fork PR 工作流每次触发均需批准，既往贡献不豁免。
 
+## Actions 跟进节奏
+
+启动后只确认一次运行编号、来源提交与排队/运行状态，后续按同工作流近期耗时安排查询。CI 通常约 15～34 分钟，例如 [40110166410](https://github.com/Fu021/Clash-of-Rust/actions/runs/40110166410) 约 15 分钟、[40114860127](https://github.com/Fu021/Clash-of-Rust/actions/runs/40114860127) 约 34 分钟；建议 10 分钟首查，此后约 5 分钟。Publish Release 的 [40117541970](https://github.com/Fu021/Clash-of-Rust/actions/runs/40117541970) 约 10.5 分钟，建议 7 分钟首查，接近完成再每 2～3 分钟。其他工作流同样先参考近期运行；排队和长步骤延长间隔，出现失败后再读取失败步骤与必要日志，不做秒级轮询或反复下载整份日志。
+
 ## 本地打包
 
 桌面打包须在与目标系统、架构一致的机器上进行。除 README 中的原生编译依赖外，还需 Go（版本满足 `apps/android/core/go.mod`，供共享依赖快照脚本使用）；Linux 打包需 `dpkg-dev`，macOS 需系统 `hdiutil`、`codesign`，Windows 的 NSIS 由脚本下载并校验。
@@ -76,7 +80,10 @@ macOS 失败日志、系统与网络状态、崩溃报告保存在 `macos-ci-rep
 在 Actions 中选择 **Publish Release → Run workflow**：
 
 - `ci_run_id`：成功的当前提交 CI 编号；留空选择当前提交的 main CI。开发分支测试包必须填写当前分支、当前提交成功的 PR CI 编号。
-- `check_only`：勾选后完成打包与安装后验证，不创建或修改 Release；开发分支必须勾选。安装包在本次运行的 `package-{system}-{arch}` 附件中，无需下载到本地。
+- `check_only`：勾选后完成打包与安装后验证，不创建或修改 Release；默认验收使用此模式。安装包在本次运行的 `package-{system}-{arch}` 附件中，无需下载到本地。
+- `prerelease`：经维护者确认后显式发布预发布版，须关闭 `check_only`。可在开发/修复分支上运行，必须指定同仓库、同分支头成功的 PR CI，源码使用合法预发布版本，并提交 `docs/releases/<完整版本>.md`。不能用此开关发布无后缀的正式版本；两种模式同时勾选会在前置校验失败。
+
+从修复分支发布时，选择该分支，填写其成功 CI 编号，设置 `check_only=false`、`prerelease=true`。流程照常验证九平台安装包与来源，最终以预发布标签公开，不更新稳定版 latest、不合并或删除来源分支。上传结束还会重新核对该来源分支头；期间分支前移则保留未公开草稿并失败。未显式选择预发布时，公开发布仍只接受 main 的 push CI。预发布与正式发布使用相同的发行签名要求，Android 不能用临时 CI 测试签名冒充发行签名。
 
 维护者委派给 Agent 的任务按[收尾规则](../AGENTS.md#actions提交与发布)持续跟进：最终推送后等待该提交的全部必需 CI job 成功，再以其 `ci_run_id` 和 `check_only=true` 启动本流程。失败先定位最早失败步骤，修复后跟进对应提交的后续运行，不把已触发、排队或运行中视为完成。打包结束后核对各平台安装后验证、Ubuntu 兼容性、最终核验和九组安装包及 SHA256 附件，并确认没有创建或修改 Release；外部阻塞须明确说明。
 
