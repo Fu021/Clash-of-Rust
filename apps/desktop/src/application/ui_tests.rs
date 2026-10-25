@@ -188,6 +188,7 @@ fn connection_sort_clicks_redraw_the_header_immediately_and_third_click_restores
                 remote: false,
                 profile_edit: false,
                 profile_import: false,
+                profile_updated: false,
                 scope: Scope::Connections,
                 start_requested: false,
                 settings: app.settings.clone(),
@@ -242,6 +243,7 @@ fn connection_detail_exposes_all_fields_and_copies_the_same_values() {
         remote: false,
         profile_edit: false,
         profile_import: false,
+        profile_updated: false,
         scope: Scope::Connections,
         start_requested: false,
         settings: app.settings.clone(),
@@ -614,6 +616,7 @@ fn appearance_remains_interactive_while_geo_owns_the_engine_and_late_reply_canno
         remote: false,
         profile_edit: false,
         profile_import: false,
+        profile_updated: false,
         scope: Scope::Other,
         start_requested: false,
         settings: old_settings,
@@ -1472,6 +1475,7 @@ fn synchronized_reply(app: &App) -> Reply {
         remote: true,
         profile_edit: false,
         profile_import: false,
+        profile_updated: false,
         scope: app.page.scope(),
         start_requested: false,
         settings: app.settings.clone(),
@@ -1486,6 +1490,49 @@ fn synchronized_reply(app: &App) -> Reply {
         protection_changed: false,
         tray_nodes: None,
     }
+}
+
+#[test]
+fn failed_subscription_update_keeps_measurements_and_reports_until_a_successful_retry() {
+    use clash_of_rust::claude_check::{Environment, Report};
+    let mut app = fixture(Page::Profiles);
+    app.updates.started = true;
+    app.node_delays.insert("Test".into(), 42);
+    app.site_results.push(Some(Ok(ip_check::CheckResult {
+        state: ip_check::State::Identified,
+        summary: "203.0.113.2".into(),
+        country: String::new(),
+        millis: 4,
+        detail: String::new(),
+    })));
+    app.claude.reports[0] = Some(Report::new(Environment::Core, "saved report"));
+    let before = serde_json::to_value(&app.profiles).unwrap();
+    let generation = app.delay_generation;
+    let _ = app.ui_intent(Intent::UpdateProfile, "fixture", "");
+    assert_eq!(app.node_delays.get("Test"), Some(&42));
+    assert_eq!(app.site_results.len(), 1);
+    assert!(app.claude.reports[0].is_some());
+
+    let mut failed = synchronized_reply(&app);
+    failed.view_revision = app.view_revision;
+    failed.notice = Err("订阅更新失败，已保留原配置与运行状态".into());
+    let _ = app.update(Message::Finished(Box::new(failed)));
+    assert!(!app.busy && !app.working);
+    assert!(app.error && app.notice.contains("保留原配置"));
+    assert!(app.snapshot.running && app.core_failure.is_none());
+    assert_eq!(serde_json::to_value(&app.profiles).unwrap(), before);
+    assert_eq!(app.node_delays.get("Test"), Some(&42));
+    assert_eq!(app.delay_generation, generation);
+    assert_eq!(app.site_results.len(), 1);
+    assert!(app.claude.reports[0].is_some());
+
+    let mut success = synchronized_reply(&app);
+    success.profile_updated = true;
+    success.notice = Ok("订阅已更新".into());
+    let _ = app.update(Message::Finished(Box::new(success)));
+    assert!(app.node_delays.is_empty() && app.site_results.is_empty());
+    assert!(app.claude.reports.iter().all(Option::is_none));
+    assert!(!app.error && app.snapshot.running);
 }
 
 #[test]

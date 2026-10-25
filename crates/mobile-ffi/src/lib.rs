@@ -434,7 +434,12 @@ impl Session {
                 &url,
                 &core::network::routes(self.running.then_some(self.settings.mixed_port), None),
             )
-            .await?
+            .await
+            .context(if id.is_some() {
+                "订阅更新失败，已保留原配置与运行状态"
+            } else {
+                "订阅下载失败"
+            })?
         };
         core::config::parse_profile(&raw)?;
         let id = id
@@ -942,6 +947,161 @@ mod tests {
             Ok(json!({"ok":true}))
         }
     }
+
+    #[tokio::test]
+    async fn failed_subscription_updates_keep_files_session_drafts_and_the_running_vpn() {
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+        struct Recorder(std::sync::Mutex<Vec<Value>>);
+        impl NativeHost for Recorder {
+            fn request(&self, value: Value) -> Result<Value> {
+                self.0.lock().unwrap().push(value);
+                Ok(json!({"ok":true}))
+            }
+        }
+        for wire in [
+            b"HTTP/1.1 503 Unavailable\r\nContent-Length: 0\r\n\r\n".to_vec(),
+            b"HTTP/1.1 200 OK\r\nContent-Length: 0\r\n\r\n".to_vec(),
+            b"HTTP/1.1 200 OK\r\nContent-Length: 12\r\n\r\npartial".to_vec(),
+            b"HTTP/1.1 200 OK\r\nContent-Length: 7\r\n\r\n<html/>".to_vec(),
+            Vec::new(),
+        ] {
+            let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+            let address = listener.local_addr().unwrap();
+            let server = tokio::spawn(async move {
+                loop {
+                    let (mut socket, _) = listener.accept().await.unwrap();
+                    let mut request = [0; 4096];
+                    socket.read(&mut request).await.unwrap();
+                    let _ = socket.write_all(&wire).await;
+                }
+            });
+            let root = tempfile::tempdir().unwrap();
+            let native = Arc::new(Recorder(Default::default()));
+            let mut session = Session::open(root.path().into(), native.clone()).unwrap();
+            session
+                .save_profile(
+                    None,
+                    "Remote",
+                    &format!("http://{address}/subscription?token=secret"),
+                    Some("proxies: []\nrules: ['MATCH,DIRECT']\n"),
+                )
+                .await
+                .unwrap();
+            let id = session.profiles.last().unwrap().id.clone();
+            session
+                .save_profile(
+                    None,
+                    "Inactive",
+                    &format!("http://{address}/subscription?token=secret"),
+                    Some("proxies: []\nrules: ['MATCH,REJECT']\n"),
+                )
+                .await
+                .unwrap();
+            let inactive = session.profiles.last().unwrap().id.clone();
+            session.activate(&id).unwrap();
+            session.settings.mixed_port = address.port();
+            session.initialize().unwrap();
+            session.vpn = true;
+            session.node = "saved node".into();
+            session
+                .save_rule("", "DOMAIN,draft.example,REJECT", 0)
+                .unwrap();
+            let files = [
+                session.store.profile_path(&id).unwrap(),
+                session.store.profile_path(&inactive).unwrap(),
+                session.store.root.join("profiles.json"),
+                session.store.root.join("settings.json"),
+                session.store.runtime().join("config.yaml"),
+            ];
+            let before_files: Vec<_> = files
+                .iter()
+                .map(|path| std::fs::read(path).unwrap())
+                .collect();
+            let snapshot = |session: &Session| {
+                json!({
+                    "settings": session.settings, "profiles": session.profiles,
+                    "draft": session.draft, "document": session.rule_document,
+                    "route": session.route, "node": session.node,
+                    "proxies": session.proxies, "connections": session.connections,
+                    "running": session.running, "vpn": session.vpn,
+                })
+            };
+            let before = snapshot(&session);
+            let requests = native.0.lock().unwrap().len();
+            for update_id in [&id, &inactive] {
+                let error = session.update_profile(update_id).await.unwrap_err();
+                let message = format!("{error:#}");
+                assert!(message.contains("已保留原配置与运行状态"));
+                assert!(!message.contains("token=secret"));
+                assert_eq!(snapshot(&session), before);
+                assert_eq!(native.0.lock().unwrap().len(), requests);
+                for (path, bytes) in files.iter().zip(&before_files) {
+                    assert_eq!(&std::fs::read(path).unwrap(), bytes);
+                }
+                assert!(!core::profile_transaction::recover(&session.store.root).unwrap());
+            }
+            server.abort();
+            let _ = server.await;
+            let reopened = Session::open(root.path().into(), native).unwrap();
+            assert_eq!(
+                reopened.raw().unwrap(),
+                "proxies: []\nrules: ['MATCH,DIRECT']\n"
+            );
+            assert_eq!(
+                serde_json::to_value(reopened.profiles).unwrap(),
+                before["profiles"]
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn cancelling_a_stalled_subscription_download_keeps_the_cached_configuration() {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap();
+        let (accepted, ready) = tokio::sync::oneshot::channel();
+        let server = tokio::spawn(async move {
+            let (socket, _) = listener.accept().await.unwrap();
+            let _ = accepted.send(());
+            std::future::pending::<()>().await;
+            drop(socket);
+        });
+        let root = tempfile::tempdir().unwrap();
+        let mut session = Session::open(root.path().into(), Arc::new(Fake)).unwrap();
+        session
+            .save_profile(
+                None,
+                "Remote",
+                &format!("http://{address}/subscription"),
+                Some("proxies: []\nrules: ['MATCH,DIRECT']\n"),
+            )
+            .await
+            .unwrap();
+        let id = session.profiles.last().unwrap().id.clone();
+        session.activate(&id).unwrap();
+        let before = serde_json::to_value(&session.profiles).unwrap();
+        let runtime = std::fs::read(session.store.runtime().join("config.yaml")).unwrap();
+        {
+            let update = session.update_profile(&id);
+            tokio::pin!(update);
+            tokio::select! {
+                result = &mut update => panic!("the server has not sent a response: {result:?}"),
+                result = ready => result.unwrap(),
+            }
+        }
+        assert_eq!(serde_json::to_value(&session.profiles).unwrap(), before);
+        assert_eq!(
+            session.raw().unwrap(),
+            "proxies: []\nrules: ['MATCH,DIRECT']\n"
+        );
+        assert_eq!(
+            std::fs::read(session.store.runtime().join("config.yaml")).unwrap(),
+            runtime
+        );
+        assert!(!core::profile_transaction::recover(&session.store.root).unwrap());
+        server.abort();
+        let _ = server.await;
+    }
+
     #[test]
     fn active_group_follows_the_route_and_mode_not_the_first_group_or_shared_leaf() {
         let root = tempfile::tempdir().unwrap();

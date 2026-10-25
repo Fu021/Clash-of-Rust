@@ -753,6 +753,7 @@ mod tests {
             view_revision: 0,
             remote: false,
             profile_import: false,
+            profile_updated: false,
             profile_edit: false,
             scope: Scope::Claude,
             start_requested: false,

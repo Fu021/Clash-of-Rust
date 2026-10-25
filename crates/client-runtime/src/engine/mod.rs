@@ -945,7 +945,12 @@ impl Engine {
         let (raw, usage) = if source.starts_with("https://") || source.starts_with("http://") {
             let url = reqwest::Url::parse(&source).context("订阅 URL 无效")?;
             crate::subscription::download(&url, self.running().then_some(self.settings.mixed_port))
-                .await?
+                .await
+                .context(if existing.is_some() {
+                    "订阅更新失败，已保留原配置与运行状态"
+                } else {
+                    "订阅下载失败"
+                })?
         } else {
             (read_profile(std::path::Path::new(&source))?, None)
         };
@@ -988,6 +993,7 @@ impl Engine {
         self.commit_profile(transaction, &payload, active).await?;
         self.profiles = profiles;
         self.settings = settings;
+        self.invalidate_views();
         append(&self.logs, "[客户端] 配置已导入/更新");
         Ok(())
     }

@@ -159,6 +159,8 @@ cor profile export 本地订阅 --show-secrets -o backup.yaml
 
 stdin 导入保存在数据目录 `imports/`，作为可再次导入的本机来源；删除订阅不会删除用户原文件。端口、密钥和运行目录仍由客户端覆盖，不直接信任 YAML 的控制接口设置。
 
+订阅更新的下载或校验失败时[保留原订阅和运行状态](development.md#修改前后都要检查)。`profile update --all` 继续更新其余订阅，逐项输出结果；有失败项则返回非零退出码，成功项正常保存。
+
 ### 节点与规则
 
 | 命令 | 作用 |

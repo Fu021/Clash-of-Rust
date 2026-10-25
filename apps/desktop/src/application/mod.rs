@@ -669,22 +669,13 @@ impl App {
                 | Action::ClaudeProtection(_)
                 | Action::SaveRules(..)
                 | Action::Activate(_)
-                | Action::UpdateProfile(_)
                 | Action::DeleteProfile(_)
                 | Action::UpdateGeo
                 | Action::Mode(_)
                 | Action::ProxyMode(_)
                 | Action::Select(_, _)
         ) {
-            self.cancel_delay_checks();
-            self.node_delays.clear();
-            self.proxy_order.get_mut().clear();
-            self.cancel_site_checks();
-            self.site_results.clear();
-            self.reset_site_filters();
-            self.claude.close();
-            self.claude.reports = Default::default();
-            self.claude.status = "网络配置已改变，请重新检测地区线索。".into();
+            self.reset_network_results();
         }
         self.busy = true;
         self.working = !matches!(action, Action::Refresh);
@@ -711,6 +702,18 @@ impl App {
             execute(engine, action, scope, self.visible, context),
             |reply| Message::Finished(Box::new(reply)),
         )
+    }
+
+    fn reset_network_results(&mut self) {
+        self.cancel_delay_checks();
+        self.node_delays.clear();
+        self.proxy_order.get_mut().clear();
+        self.cancel_site_checks();
+        self.site_results.clear();
+        self.reset_site_filters();
+        self.claude.close();
+        self.claude.reports = Default::default();
+        self.claude.status = "网络配置已改变，请重新检测地区线索。".into();
     }
 
     fn update(&mut self, message: Message) -> Task<Message> {
@@ -1384,11 +1387,13 @@ impl App {
                 {
                     return self.update(Message::GroupDelay(node.clone()));
                 }
-                self.proxy_order.get_mut().clear();
+                if !matches!(action, Action::UpdateProfile(_)) {
+                    self.proxy_order.get_mut().clear();
+                }
                 if let Action::Delay(node) = &action {
                     self.node_delays.remove(node);
                 }
-                if matches!(action, Action::Activate(_) | Action::UpdateProfile(_)) {
+                if matches!(action, Action::Activate(_)) {
                     self.node_delays.clear();
                 }
                 return self.dispatch(action);
@@ -1784,6 +1789,9 @@ impl App {
                 self.geo_updating = false;
                 self.claude.protection_pending = None;
                 let reply = *reply;
+                if reply.profile_updated {
+                    self.reset_network_results();
+                }
                 let protection_changed = reply.protection_changed;
                 let external_change = self.view_revision != reply.view_revision;
                 self.view_revision = reply.view_revision;
@@ -2789,6 +2797,7 @@ mod async_state_tests {
             remote: false,
             profile_edit: false,
             profile_import: false,
+            profile_updated: false,
             scope: Scope::Home,
             start_requested: true,
             settings: app.settings.clone(),
@@ -2819,6 +2828,7 @@ mod async_state_tests {
             remote: false,
             profile_edit: false,
             profile_import: false,
+            profile_updated: false,
             scope: Scope::Other,
             start_requested: false,
             settings: app.settings.clone(),
@@ -2841,6 +2851,7 @@ mod async_state_tests {
             remote: false,
             profile_edit: false,
             profile_import: false,
+            profile_updated: false,
             scope: Scope::Home,
             start_requested: true,
             settings: app.settings.clone(),

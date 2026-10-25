@@ -60,10 +60,11 @@ async fn download_route(url: &Url, route: &Route) -> Result<(String, Option<Stri
         }
         bytes.extend_from_slice(&chunk);
     }
-    Ok((
-        String::from_utf8(bytes).context("订阅不是 UTF-8 YAML 文本")?,
-        usage,
-    ))
+    let raw = String::from_utf8(bytes).context("订阅不是 UTF-8 YAML 文本")?;
+    // Captive portals and error pages can return HTTP 200. Try the next route
+    // before allowing any caller to replace its cached subscription.
+    crate::config::parse_profile(&raw).context("订阅响应不是有效的 mihomo 配置")?;
+    Ok((raw, usage))
 }
 
 #[cfg(test)]
@@ -149,5 +150,44 @@ mod tests {
             assert!(error.to_string().contains("直连"));
             task.await.unwrap();
         }
+    }
+
+    #[tokio::test]
+    async fn invalid_success_response_falls_back_to_a_valid_route() {
+        for raw in ["", "<html>Sign in</html>", "proxies: ["] {
+            let wire = format!(
+                "HTTP/1.1 200 OK\r\nContent-Length: {}\r\n\r\n{raw}",
+                raw.len()
+            );
+            let (proxy, proxy_task) = server(wire.into_bytes()).await;
+            let (origin, origin_task) = server(response()).await;
+            let (raw, usage) =
+                download_routes(&Url::parse(&origin).unwrap(), &routes(None, Some(proxy)))
+                    .await
+                    .unwrap();
+            assert_eq!(raw, "proxies: []\n");
+            assert_eq!(usage.as_deref(), Some("upload=1; download=2; total=3"));
+            proxy_task.await.unwrap();
+            origin_task.await.unwrap();
+        }
+    }
+
+    #[tokio::test]
+    async fn all_failed_routes_return_an_error_without_including_the_subscription_url() {
+        let (proxy, proxy_task) =
+            server(b"HTTP/1.1 503 Unavailable\r\nContent-Length: 0\r\n\r\n".to_vec()).await;
+        let (origin, origin_task) =
+            server(b"HTTP/1.1 200 OK\r\nContent-Length: 0\r\n\r\n".to_vec()).await;
+        let url = Url::parse(&format!("{origin}/private-subscription?token=secret")).unwrap();
+        let error = download_routes(&url, &routes(None, Some(proxy)))
+            .await
+            .unwrap_err();
+        let message = format!("{error:#}");
+        assert!(message.contains("HTTP 503"));
+        assert!(message.contains("订阅响应不是有效"));
+        assert!(message.contains("已尝试可用代理和直连"));
+        assert!(!message.contains("private-subscription") && !message.contains("secret"));
+        proxy_task.await.unwrap();
+        origin_task.await.unwrap();
     }
 }

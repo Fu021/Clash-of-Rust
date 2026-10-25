@@ -458,6 +458,76 @@ async fn basic_system_proxy_and_tun() {
             .iter()
             .any(|profile| profile.id == active && profile.name == "CLI renamed")
     );
+    let original = facade
+        .profiles
+        .iter()
+        .find(|profile| profile.id == active)
+        .unwrap()
+        .clone();
+    let subscription_server = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let update_url = format!(
+        "http://{}/unavailable-subscription?token=secret",
+        subscription_server.local_addr().unwrap()
+    );
+    let failing_source = tokio::spawn(async move {
+        loop {
+            let (mut socket, _) = subscription_server.accept().await.unwrap();
+            let mut request = [0; 4096];
+            socket.read(&mut request).await.unwrap();
+            let _ = socket
+                .write_all(b"HTTP/1.1 503 Unavailable\r\nContent-Length: 0\r\n\r\n")
+                .await;
+        }
+    });
+    let files = [
+        store.profile_path(&active).unwrap(),
+        store.root.join("profiles.json"),
+        store.root.join("settings.json"),
+        store.runtime().join("config.yaml"),
+    ];
+    let before_files: Vec<_> = files
+        .iter()
+        .map(|path| std::fs::read(path).unwrap())
+        .collect();
+    let before: Meta = remote.request(Control::Meta).await.unwrap();
+    let error = remote
+        .request::<serde_json::Value>(Control::Import {
+            name: original.name.clone(),
+            source: update_url,
+            id: Some(active.clone()),
+        })
+        .await
+        .unwrap_err();
+    assert!(format!("{error:#}").contains("已保留原配置与运行状态"));
+    assert!(!format!("{error:#}").contains("token=secret"));
+    let after: Meta = remote.request(Control::Meta).await.unwrap();
+    assert!(after.running);
+    assert_eq!(after.view_revision, before.view_revision);
+    assert_eq!(
+        serde_json::to_value((&after.settings, &after.profiles)).unwrap(),
+        serde_json::to_value((&before.settings, &before.profiles)).unwrap()
+    );
+    for (path, bytes) in files.iter().zip(&before_files) {
+        assert_eq!(&std::fs::read(path).unwrap(), bytes);
+    }
+    facade.poll(Scope::Other).await.unwrap();
+    assert_eq!(facade.view_revision(), before.view_revision);
+    failing_source.abort();
+    let _ = failing_source.await;
+    let _: serde_json::Value = remote
+        .request(Control::Import {
+            name: original.name,
+            source: original.source,
+            id: Some(active.clone()),
+        })
+        .await
+        .unwrap();
+    facade.poll(Scope::Other).await.unwrap();
+    assert_eq!(facade.view_revision(), before.view_revision.wrapping_add(1));
+    assert!(facade.running());
+    println!(
+        "PASS: failed subscription updates preserve files and live GUI/CLI state; retry works"
+    );
     let builtin = meta
         .profiles
         .iter()

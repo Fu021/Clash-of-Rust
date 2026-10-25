@@ -49,7 +49,6 @@ pub(super) async fn execute(
             | Command::RuleOverrides { .. }
             | Command::RuleChange { .. }
             | Command::SaveRules { .. }
-            | Command::Import { .. }
             | Command::EditProfile { .. }
             | Command::Activate { .. }
             | Command::DeleteProfile { .. }
