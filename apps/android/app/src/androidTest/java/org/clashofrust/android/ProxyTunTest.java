@@ -193,16 +193,23 @@ public class ProxyTunTest {
         }
     }
     private static void consent(boolean allow) throws Exception {
-        await("Android VPN consent dialog was not actionable",()-> {
+        java.util.concurrent.atomic.AtomicBoolean clicked=new java.util.concurrent.atomic.AtomicBoolean();
+        await("Android VPN consent did not return to the app",()-> {
             android.view.accessibility.AccessibilityNodeInfo root=InstrumentationRegistry.getInstrumentation()
                 .getUiAutomation().getRootInActiveWindow();
-            if (root==null || !"com.android.vpndialogs".contentEquals(root.getPackageName())) return false;
+            if (root==null) return false;
+            if ("org.clashofrust.android".contentEquals(root.getPackageName()))
+                return clicked.get() && inStage(androidx.test.runner.lifecycle.Stage.RESUMED,true);
+            if (!"com.android.vpndialogs".contentEquals(root.getPackageName())) return false;
             for (android.view.accessibility.AccessibilityNodeInfo check:root.findAccessibilityNodeInfosByViewId("android:id/checkbox"))
                 if (check.isCheckable() && !check.isChecked())
                     check.performAction(android.view.accessibility.AccessibilityNodeInfo.ACTION_CLICK);
+            // Accessibility can accept an action against a closing window.
+            // Wait for the actual return so the next consent uses its own dialog.
             for (android.view.accessibility.AccessibilityNodeInfo button:root.findAccessibilityNodeInfosByViewId(
                 allow ? "android:id/button1" : "android:id/button2"))
-                if (button.isEnabled()) return button.performAction(android.view.accessibility.AccessibilityNodeInfo.ACTION_CLICK);
+                if (button.isEnabled() && button.performAction(android.view.accessibility.AccessibilityNodeInfo.ACTION_CLICK))
+                    clicked.set(true);
             return false;
         });
     }

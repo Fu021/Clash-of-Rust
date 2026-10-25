@@ -123,7 +123,7 @@ fn mobile_list_stacks_rows_and_keeps_sparse_content_at_the_top() {
         drag_probe
             .window()
             .dispatch_event(WindowEvent::PointerPressed {
-                position: LogicalPosition::new(24., 24.),
+                position: LogicalPosition::new(12., 24.),
                 button: PointerEventButton::Left,
             })
     };
@@ -132,7 +132,7 @@ fn mobile_list_stacks_rows_and_keeps_sparse_content_at_the_top() {
     drag_probe
         .window()
         .dispatch_event(WindowEvent::PointerReleased {
-            position: LogicalPosition::new(24., 24.),
+            position: LogicalPosition::new(12., 24.),
             button: PointerEventButton::Left,
         });
     advance(&clock, Duration::from_millis(700));
@@ -152,12 +152,12 @@ fn mobile_list_stacks_rows_and_keeps_sparse_content_at_the_top() {
     drag_probe
         .window()
         .dispatch_event(WindowEvent::PointerMoved {
-            position: LogicalPosition::new(24., 184.),
+            position: LogicalPosition::new(12., 184.),
         });
     drag_probe
         .window()
         .dispatch_event(WindowEvent::PointerReleased {
-            position: LogicalPosition::new(24., 184.),
+            position: LogicalPosition::new(12., 184.),
             button: PointerEventButton::Left,
         });
     assert_eq!(drag_probe.get_delta(), 2);

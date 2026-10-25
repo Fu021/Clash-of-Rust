@@ -185,11 +185,15 @@ export component MDragHandle inherits Rectangle {
     callback dragged(int);
     callback dropped(int);
     callback cancelled();
-    width: 48px; height: 48px; horizontal-stretch: 0;
+    width: max(24px, 48px - MobileTypography.padding - MobileTypography.small-gap);
+    height: 48px; horizontal-stretch: 0;
     background: root.tracking ? Theme.accent-wash : transparent; border-radius: 6px;
     accessible-role: button; accessible-label: "拖动调整规则顺序，方向键上下移动";
-    MText { text: "≡"; width: parent.width; height: parent.height; horizontal-alignment: center; color: Theme.secondary; }
-    keys := FocusScope { width: parent.width; height: parent.height; enabled: root.enabled;
+    Image { source: @image-url("../../icons/grip-vertical.svg"); colorize: Theme.secondary;
+        width: 12px; height: 18px; x: (parent.width - self.width) / 2; y: (parent.height - self.height) / 2;
+    }
+    // Share the card padding with the touch target while keeping the icon narrow.
+    keys := FocusScope { x: -MobileTypography.padding; width: 48px; height: parent.height; enabled: root.enabled;
         key-pressed(event) => {
             if event.text == Key.UpArrow || event.text == Key.DownArrow {
                 root.started(); root.dropped(event.text == Key.UpArrow ? -1 : 1); return accept;
