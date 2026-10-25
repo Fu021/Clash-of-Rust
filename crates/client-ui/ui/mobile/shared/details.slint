@@ -148,6 +148,10 @@ export component MobileModal inherits Rectangle {
                             : root.kind == 13 ? "预发布版本可能存在尚未发现的风险与 Bug，可能导致程序崩溃、网络异常或配置兼容问题。建议先备份配置，确认后再下载安装。"
                             : "尚有未保存的内容，离开后将丢弃本次编辑。";
                     }
+                    if root.kind == 13: MParagraph {
+                        text: "安装预发布版后，无法保证在保留数据的情况下恢复正式版；回退可能需要先备份配置，再卸载重装。";
+                        color: Theme.danger; font-weight: 600;
+                    }
                     if root.kind == 11: VerticalLayout { spacing: MobileTypography.small-gap;
                         for row in [0, 1, 2]: HorizontalLayout { spacing: MobileTypography.small-gap;
                             for column in [0, 1]: MButton { modal-control: true; text: AccentPalette.accent-names[row * 2 + column]; selected: Theme.accent-index == row * 2 + column;
