@@ -5,10 +5,10 @@ use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use std::{
     fs::File,
-    io::Write,
     path::{Path, PathBuf},
     time::{Duration, SystemTime, UNIX_EPOCH},
 };
+use tokio::io::AsyncWriteExt;
 
 pub const GEO_FILES: [&str; 4] = ["GeoIP.dat", "GeoSite.dat", "Country.mmdb", "ASN.mmdb"];
 pub const MANIFEST: &str = "geodata.json";
@@ -98,23 +98,20 @@ struct ReleaseAsset {
 }
 
 pub async fn download_geo(destination: &Path, proxy_port: Option<u16>) -> Result<GeoManifest> {
-    let mut builder = crate::network::client_builder()
-        .no_proxy()
-        .user_agent(format!("clash-of-rust/{}", crate::VERSION))
-        .connect_timeout(Duration::from_secs(10))
-        .timeout(Duration::from_secs(180));
-    if let Some(port) = proxy_port {
-        builder = builder.proxy(reqwest::Proxy::all(format!("http://127.0.0.1:{port}"))?);
+    let routes = crate::network::routes(proxy_port, None);
+    let mut release = None;
+    let mut errors = Vec::new();
+    for route in &routes {
+        match fetch_release(route).await {
+            Ok(value) => {
+                release = Some(value);
+                break;
+            }
+            Err(error) => errors.push(format!("{}：{error:#}", route.label)),
+        }
     }
-    let client = builder.build()?;
-    let release: Release = client
-        .get(RELEASE)
-        .send()
-        .await
-        .context("Geo 发布信息获取失败")?
-        .error_for_status()?
-        .json()
-        .await?;
+    let release =
+        release.with_context(|| format!("Geo 发布信息获取失败：{}", errors.join("；")))?;
     let mapping = [
         ("geoip.dat", "GeoIP.dat"),
         ("geosite.dat", "GeoSite.dat"),
@@ -148,33 +145,12 @@ pub async fn download_geo(destination: &Path, proxy_port: Option<u16>) -> Result
         if url.scheme() != "https" || url.host_str() != Some("github.com") {
             bail!("Geo 下载源不是官方 HTTPS 发布");
         }
-        let mut response = client
-            .get(url)
-            .send()
-            .await
-            .with_context(|| format!("{local} 下载失败"))?
-            .error_for_status()?;
-        let mut file = File::create(destination.join(local))?;
-        let mut hash = Sha256::new();
-        let mut size = 0;
-        while let Some(chunk) = response.chunk().await? {
-            size += chunk.len() as u64;
-            if size > LIMIT {
-                bail!("Geo 数据超过大小限制");
-            }
-            hash.update(&chunk);
-            file.write_all(&chunk)?;
-        }
-        file.sync_all()?;
-        let actual = crate::file_hash::hex(hash.finalize());
-        if actual != digest.to_ascii_lowercase() || size != asset.size {
-            bail!("{local} SHA256/大小校验失败，已有数据保持不变");
-        }
+        download_asset(asset, &destination.join(local), &routes).await?;
         manifest.files.push(GeoFile {
             name: local.into(),
             source: asset.browser_download_url.clone(),
-            sha256: actual,
-            size,
+            sha256: digest.to_ascii_lowercase(),
+            size: asset.size,
         });
     }
     atomic_write(
@@ -182,6 +158,94 @@ pub async fn download_geo(destination: &Path, proxy_port: Option<u16>) -> Result
         &serde_json::to_vec_pretty(&manifest)?,
     )?;
     verify_geo(destination)
+}
+
+fn download_client(route: &crate::network::Route) -> Result<reqwest::Client> {
+    Ok(route
+        .apply(
+            crate::network::client_builder()
+                .user_agent(format!("clash-of-rust/{}", crate::VERSION))
+                .connect_timeout(Duration::from_secs(10))
+                .read_timeout(Duration::from_secs(30))
+                .timeout(Duration::from_secs(30 * 60)),
+        )?
+        .build()?)
+}
+
+async fn fetch_release(route: &crate::network::Route) -> Result<Release> {
+    let mut response = download_client(route)?
+        .get(RELEASE)
+        .timeout(Duration::from_secs(30))
+        .send()
+        .await?
+        .error_for_status()?;
+    let mut bytes = Vec::new();
+    while let Some(chunk) = response.chunk().await? {
+        if chunk.len() > (1024 * 1024usize).saturating_sub(bytes.len()) {
+            bail!("Geo 发布信息超过大小限制");
+        }
+        bytes.extend_from_slice(&chunk);
+    }
+    Ok(serde_json::from_slice(&bytes)?)
+}
+
+async fn download_asset(
+    asset: &ReleaseAsset,
+    destination: &Path,
+    routes: &[crate::network::Route],
+) -> Result<()> {
+    let mut errors = Vec::new();
+    for (index, route) in routes.iter().enumerate() {
+        let attempt = async {
+            let mut response = download_client(route)?
+                .get(&asset.browser_download_url)
+                .send()
+                .await?
+                .error_for_status()?;
+            if response
+                .content_length()
+                .is_some_and(|size| size != asset.size)
+            {
+                bail!("Geo 数据大小与发布信息不一致");
+            }
+            let temporary =
+                tempfile::NamedTempFile::new_in(destination.parent().context("Geo 下载路径无效")?)?;
+            let file = tokio::fs::File::from_std(temporary.reopen()?);
+            let mut file =
+                tokio::io::BufWriter::with_capacity(crate::download::BUFFER_CAPACITY, file);
+            let mut watchdog = crate::download::Watchdog::new(index + 1 < routes.len());
+            let mut hash = Sha256::new();
+            let mut size = 0;
+            while let Some(chunk) = watchdog.chunk(&mut response).await? {
+                let chunk = chunk.as_ref();
+                size += chunk.len() as u64;
+                if size > asset.size || size > LIMIT {
+                    bail!("Geo 数据超过预期大小");
+                }
+                hash.update(chunk);
+                file.write_all(chunk).await?;
+            }
+            let actual = format!("sha256:{}", crate::file_hash::hex(hash.finalize()));
+            if size != asset.size
+                || !asset
+                    .digest
+                    .as_ref()
+                    .is_some_and(|digest| digest.eq_ignore_ascii_case(&actual))
+            {
+                bail!("Geo 数据 SHA256/大小校验失败，已有数据保持不变");
+            }
+            file.flush().await?;
+            file.into_inner().sync_all().await?;
+            persist_file(temporary, destination)?;
+            Ok::<_, anyhow::Error>(())
+        }
+        .await;
+        match attempt {
+            Ok(()) => return Ok(()),
+            Err(error) => errors.push(format!("{}：{error:#}", route.label)),
+        }
+    }
+    bail!("Geo 下载失败：{}", errors.join("；"))
 }
 
 #[derive(Serialize, Deserialize)]
@@ -254,6 +318,85 @@ pub fn recover(runtime: &Path) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    async fn asset_server(bytes: Vec<u8>) -> (String, tokio::task::JoinHandle<()>) {
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let url = format!("http://{}/asset", listener.local_addr().unwrap());
+        let task = tokio::spawn(async move {
+            let (mut socket, _) = listener.accept().await.unwrap();
+            let mut request = [0; 8192];
+            let mut count = 0;
+            while !request[..count].ends_with(b"\r\n\r\n") {
+                let n = socket.read(&mut request[count..]).await.unwrap();
+                assert!(n > 0);
+                count += n;
+            }
+            socket
+                .write_all(
+                    format!(
+                        "HTTP/1.1 200 OK\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+                        bytes.len()
+                    )
+                    .as_bytes(),
+                )
+                .await
+                .unwrap();
+            for chunk in bytes.chunks(1024) {
+                socket.write_all(chunk).await.unwrap();
+            }
+        });
+        (url, task)
+    }
+
+    #[tokio::test]
+    async fn corrupt_route_preserves_old_file_and_buffered_fallback_installs_verified_bytes() {
+        let root = tempfile::tempdir().unwrap();
+        let destination = root.path().join("GeoIP.dat");
+        std::fs::write(&destination, b"old-data").unwrap();
+        let body = vec![42; 128 * 1024 + 3];
+        let (bad_url, bad) = asset_server(vec![43; body.len()]).await;
+        let (url, good) = asset_server(body.clone()).await;
+        let asset = ReleaseAsset {
+            name: "geoip.dat".into(),
+            size: body.len() as u64,
+            digest: Some(format!(
+                "sha256:{}",
+                crate::file_hash::hex(Sha256::digest(&body))
+            )),
+            browser_download_url: url,
+        };
+        let proxy = crate::network::Route {
+            label: "测试代理",
+            proxy: Some(bad_url),
+        };
+        assert!(
+            download_asset(&asset, &destination, std::slice::from_ref(&proxy))
+                .await
+                .is_err()
+        );
+        bad.await.unwrap();
+        assert_eq!(std::fs::read(&destination).unwrap(), b"old-data");
+        assert_eq!(std::fs::read_dir(root.path()).unwrap().count(), 1);
+
+        let (bad_url, bad) = asset_server(vec![43; body.len()]).await;
+        let routes = [
+            crate::network::Route {
+                proxy: Some(bad_url),
+                ..proxy
+            },
+            crate::network::Route {
+                label: "直连",
+                proxy: None,
+            },
+        ];
+        download_asset(&asset, &destination, &routes).await.unwrap();
+        bad.await.unwrap();
+        good.await.unwrap();
+        assert_eq!(std::fs::read(&destination).unwrap(), body);
+        assert_eq!(std::fs::read_dir(root.path()).unwrap().count(), 1);
+    }
+
     fn fixture(path: &Path, contents: &[u8]) {
         std::fs::create_dir_all(path).unwrap();
         let mut manifest = GeoManifest {

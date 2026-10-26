@@ -7,11 +7,12 @@ import { MText, MSmall, MHeading, MButton, MBackButton, MTag, MNav, MScroll, MNo
 import { MobileDetails, MobileModal } from "details.slint";
 
 component HeaderStatus inherits VerticalLayout {
+    in property <bool> compact;
     spacing: 6px; alignment: center; min-width: 0px;
     HorizontalLayout { alignment: end;
         MTag { text: MobileData.core-running ? "● 内核运行中" : "○ 内核未运行"; tone: MobileData.core-running ? 1 : 4; }
     }
-    MSmall { text: MobileData.profile + (MobileData.node != "" ? "  |  " + MobileData.node : ""); horizontal-alignment: right; }
+    if !root.compact: MSmall { text: MobileData.profile + (MobileData.node != "" ? "  |  " + MobileData.node : ""); horizontal-alignment: right; }
 }
 
 export component MobileFrame inherits Rectangle {
@@ -125,9 +126,9 @@ export component MobileFrame inherits Rectangle {
                     font-size: root.short ? MobileTypography.font-size(21) : MobileTypography.font-size(round(root.title-size / 1px));
                     horizontal-stretch: 0;
                 }
-                if !root.stacked-header: HeaderStatus { }
+                if !root.stacked-header: HeaderStatus { compact: root.usable-height < 600px; }
               }
-              if root.stacked-header: HeaderStatus { }
+              if root.stacked-header: HeaderStatus { compact: root.usable-height < 600px; }
             }
         }
         body := Rectangle {

@@ -29,6 +29,7 @@ export component AndroidPreview inherits Window {
     in-out property <bool> preview-update-available <=> AndroidData.update-available;
     in-out property <string> preview-update-status <=> AndroidData.update-status;
     in-out property <length> preview-settings-scroll <=> MobileView.settings-scroll-y;
+    in-out property <length> preview-rules-scroll <=> MobileView.rules-scroll-y;
     scene := MobilePreviewSurface {
         inset-top: 28px; inset-bottom: 24px; preview-connected: true;
         AndroidSurface { }

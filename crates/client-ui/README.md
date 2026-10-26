@@ -28,11 +28,12 @@ python3 scripts/preview-slint.py --check
 python3 scripts/preview-slint.py --dialogs --pairs
 python3 scripts/preview-slint.py --page settings --theme both --full-settings
 python3 scripts/preview-slint.py --page connections --size 800x450
+python3 scripts/preview-slint.py --mobile --platform android --page rules --theme light --size 360x800 --scroll-y -360 --output /tmp/clash-rules-preview
 ```
 
 输出默认在 `dist/slint-preview/`。`ui/preview.slint` 只向正式组件填入固定演示值，不接入真实操作；此工具用于外观检查。它无需 Cargo、Xvfb 或桌面会话。
 
-资源受限（例如 1 核 CPU、约 1 GiB 内存）时只运行 `--check`，或只预览必要的一页和一种主题；使用 `--output /tmp/...` 把产物放到工作区外，并在结束前删除，不能在仓库留下 `dist/`、缓存或截图：
+资源受限（例如 1 核 CPU、约 1 GiB 内存）时只运行 `--check`，或按[多尺寸检查](../../docs/loop-workflow.md#多尺寸-ui-检查)串行预览必要页面的一种主题；`--scroll-y` 可检查规则页滚动后的内容。使用 `--output /tmp/...` 把产物放到工作区外，并在结束前删除，不能在仓库留下 `dist/`、缓存或截图：
 
 ```sh
 python3 scripts/preview-slint.py --check

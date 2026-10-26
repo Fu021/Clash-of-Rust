@@ -18,11 +18,12 @@
 ## 资源受限环境
 
 - 当前环境若仅有 1 核、约 1 GiB 内存，或构建资源明显不足，不做任何本地编译与打包：禁用 Cargo/Gradle/Go 构建、Clippy、测试、打包及会下载依赖或生成安装包的脚本。经用户授权可使用现有 Actions 流程。
-- 本地只做静态检查和最基本 UI 预览。优先 `python3 scripts/preview-slint.py --check`；必要时只预览一页、一种主题，不生成全量页面、对话框、主题配对或移动端矩阵。
+- 本地只做静态检查和最基本 UI 预览。优先 `python3 scripts/preview-slint.py --check`；布局适配按[代表性尺寸](docs/loop-workflow.md#多尺寸-ui-检查)串行检查相关页面的一种主题，不生成全量页面、对话框、主题配对或移动端矩阵。
 - 预览用 `--output` 写到 `/tmp` 等工作区外目录，结束前清理本次产物。仓库不得遗留 `target/`、`dist/`、`bundle/`、`ci-build/`、Android/Gradle 构建目录或缓存；不删除用户已有文件。
 
 ## 任务收尾与失败复盘
 
+- 每次新增功能、完成 Bug 修复及公开 Release/Pre-release 前，执行[循环审查工作流](docs/loop-workflow.md)：逐轮检查功能、UI、`cor`、各端及 GUI/CLI 一致性，发现问题后修复、验证并再查，直到完整一轮无新增可落实问题；未验证项与阻塞如实记录。
 - 每次收尾复查实际 diff、命令结果、未验证项与工作区，对照[复盘相关主题](docs/agent-failures/README.md)检查同类风险。
 - 每次更新[最近复盘](docs/agent-failures/reviews.md)：日期、任务、结果、证据与验证范围；新模式写入对应主题，已有模式链接引用。
 - 精简重复或过时文档后执行 `git diff --check`、`git status --short`，确认只保留预期改动，无生成物或临时文件。

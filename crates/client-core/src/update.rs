@@ -252,18 +252,26 @@ pub async fn download(
     ensure!(package.size > 0 && package.size <= LIMIT, "安装包大小无效");
     let parent = path.parent().context("更新缓存路径无效")?;
     tokio::fs::create_dir_all(parent).await?;
-    let partial = path.with_extension("partial");
     let mut errors = Vec::new();
-    for route in crate::network::routes(port, None) {
+    let routes = crate::network::routes(port, None);
+    for (index, route) in routes.iter().enumerate() {
         progress(Progress {
             total: package.size,
             route: route.label,
             ..Progress::default()
         });
         let result = async {
-            let client = client(&route, Duration::from_secs(30 * 60))?;
+            let client = client(route, Duration::from_secs(30 * 60))?;
             let expected = checksum(
-                &bounded(client.get(&package.checksum_url).send().await?, 1024).await?,
+                &bounded(
+                    client
+                        .get(&package.checksum_url)
+                        .timeout(Duration::from_secs(30))
+                        .send()
+                        .await?,
+                    1024,
+                )
+                .await?,
                 &package.name,
             )?;
             if let Some(digest) = &package.digest {
@@ -285,21 +293,25 @@ pub async fn download(
                 "安装包大小与发布信息不一致"
             );
             let observer = RouteObserver::new(&response, api.cloned(), route.proxy.is_none());
-            let file = tokio::fs::File::create(&partial).await?;
-            let mut file = tokio::io::BufWriter::with_capacity(256 * 1024, file);
+            let temporary = tempfile::NamedTempFile::new_in(parent)?;
+            let file = tokio::fs::File::from_std(temporary.reopen()?);
+            let mut file =
+                tokio::io::BufWriter::with_capacity(crate::download::BUFFER_CAPACITY, file);
+            let mut watchdog = crate::download::Watchdog::new(index + 1 < routes.len());
             let mut count = 0u64;
             let mut hash = Sha256::new();
             let mut last = std::time::Instant::now();
             let mut rate_started = last;
             let mut rate_received = 0;
-            while let Some(chunk) = response.chunk().await? {
+            while let Some(chunk) = watchdog.chunk(&mut response).await? {
+                let chunk = chunk.as_ref();
                 count += chunk.len() as u64;
                 ensure!(
                     count <= package.size && count <= LIMIT,
                     "安装包超过预期大小"
                 );
-                file.write_all(&chunk).await?;
-                hash.update(&chunk);
+                file.write_all(chunk).await?;
+                hash.update(chunk);
                 if count == chunk.len() as u64 || last.elapsed() >= Duration::from_millis(250) {
                     let elapsed = rate_started.elapsed().as_secs_f64();
                     progress(Progress {
@@ -323,7 +335,7 @@ pub async fn download(
             );
             file.flush().await?;
             file.into_inner().sync_all().await?;
-            tokio::fs::rename(&partial, path).await?;
+            crate::config::persist_file(temporary, path)?;
             progress(Progress {
                 received: count,
                 total: package.size,
@@ -339,7 +351,6 @@ pub async fn download(
         match result {
             Ok(()) => return Ok(()),
             Err(e) => {
-                let _ = tokio::fs::remove_file(&partial).await;
                 errors.push(format!("{}：{e}", route.label));
             }
         }

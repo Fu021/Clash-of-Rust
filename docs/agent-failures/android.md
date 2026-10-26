@@ -58,3 +58,8 @@
 - VPN 授权测试不能把无障碍 `ACTION_CLICK` 返回成功当作对话框已关闭；要等应用窗口实际恢复前台与焦点，再发起下一次授权，避免连续拒绝/允许误点正在退出的旧窗口。证据见 [CI 40161810492](https://github.com/Fu021/Clash-of-Rust/actions/runs/40161810492) 的 Android x64 logcat。
 - 订阅保护校验放在共享会话，在下载、保存或重载前拒绝编辑和更新受保护订阅，同时允许修改其他订阅；界面禁用按钮只提供反馈，不能代替业务校验。
 - 网络开关同步移动协议、宿主投影、持久化与预览；依赖项被规范化关闭后要有重新开启入口。回归覆盖 DNS 覆盖关闭、重开、Fake-IP 手动恢复和重启保留，见[移动会话测试](../../crates/mobile-ffi/src/lib.rs)。
+
+### Geo 与安装包下载
+
+- 逐块同步写盘和直接覆盖活动 Geo 文件会让慢网、UI 卡顿与安装中断互相放大；活动文件破损还会影响内核重启。下载应复用[共享缓冲与慢速/断流约束](../../crates/client-core/src/download.rs)，Geo 按整组暂存、校验、事务安装，重载失败恢复旧文件。
+- Android Geo 更新不能调用会重建 VPN 的启动路径；只重载内核配置，保留 VPN、订阅、设置及规则草稿。回归见[移动会话](../../crates/mobile-ffi/src/lib.rs)和[Android 宿主](../../apps/android/native/src/android.rs)。

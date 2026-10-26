@@ -417,7 +417,7 @@ async fn download_routes(
         .asset
         .size;
     let mut errors = Vec::new();
-    for route in routes {
+    for (index, route) in routes.iter().enumerate() {
         // Each attempt owns a fresh temporary directory and starts at zero.
         report(Progress {
             total: size,
@@ -428,6 +428,7 @@ async fn download_routes(
             available.clone(),
             route.proxy.as_deref(),
             api,
+            index + 1 < routes.len(),
             |mut value| {
                 value.route = route.label;
                 report(value);
@@ -446,6 +447,7 @@ async fn download_package(
     available: Available,
     proxy: Option<&str>,
     api: Option<&crate::api::Api>,
+    retry_slow: bool,
     report: impl FnMut(Progress),
 ) -> Result<Downloaded> {
     let package = available
@@ -454,6 +456,7 @@ async fn download_package(
     let client = download_client_via(proxy, Duration::from_secs(30 * 60))?;
     let mut response = client
         .get(&package.checksum_url)
+        .timeout(Duration::from_secs(30))
         .send()
         .await
         .map_err(|error| crate::network::request_error(error, "校验文件下载"))?;
@@ -484,7 +487,7 @@ async fn download_package(
         package.asset.size,
         &expected,
         &path,
-        (api.cloned(), proxy.is_none()),
+        (api.cloned(), proxy.is_none(), retry_slow),
         report,
     )
     .await?;
@@ -502,7 +505,7 @@ async fn transfer(
     size: u64,
     expected: &str,
     path: &std::path::Path,
-    observe: (Option<crate::api::Api>, bool),
+    observe: (Option<crate::api::Api>, bool, bool),
     mut report: impl FnMut(Progress),
 ) -> Result<()> {
     let mut response = client
@@ -521,28 +524,31 @@ async fn transfer(
     {
         bail!("安装包大小与 Release 不一致");
     }
-    let (api, direct) = observe;
+    let (api, direct, retry_slow) = observe;
     let observer = clash_client_core::update::RouteObserver::new(&response, api, direct);
     let file = tokio::fs::File::create(path)
         .await
         .context("无法写入安装包，请检查磁盘空间与权限")?;
     // TLS/network chunks can be tiny. Batch them before tokio::fs offloads a
     // write, rather than serially scheduling a disk operation for every chunk.
-    let mut file = tokio::io::BufWriter::with_capacity(256 * 1024, file);
+    let mut file =
+        tokio::io::BufWriter::with_capacity(clash_client_core::download::BUFFER_CAPACITY, file);
+    let mut watchdog = clash_client_core::download::Watchdog::new(retry_slow);
     let mut received = 0;
     let mut digest = Sha256::new();
     let mut last_report = std::time::Instant::now();
     let mut rate_started = last_report;
     let mut rate_received = 0;
-    while let Some(chunk) = response.chunk().await.context("下载中断或超时，请重试")? {
+    while let Some(chunk) = watchdog.chunk(&mut response).await? {
+        let chunk = chunk.as_ref();
         received += chunk.len() as u64;
         if received > size {
             bail!("安装包大小与 Release 不一致");
         }
-        file.write_all(&chunk)
+        file.write_all(chunk)
             .await
             .context("写入失败，请检查磁盘空间与权限")?;
-        digest.update(&chunk);
+        digest.update(chunk);
         if received == chunk.len() as u64
             || last_report.elapsed() >= Duration::from_millis(100)
             || received == size
@@ -563,7 +569,10 @@ async fn transfer(
         }
     }
     file.flush().await.context("无法保存安装包")?;
-    drop(file);
+    file.into_inner()
+        .sync_all()
+        .await
+        .context("无法保存安装包")?;
     if received != size {
         bail!("安装包下载不完整");
     }
@@ -873,7 +882,7 @@ mod tests {
                     256 * 1024,
                     &expected,
                     &path,
-                    (None, true),
+                    (None, true, false),
                     |value| {
                         let _ = progress.send(value.received);
                     },
@@ -935,7 +944,7 @@ mod tests {
             body.len() as u64,
             &expected,
             &path,
-            (None, true),
+            (None, true, false),
             |value| progress.push(value),
         )
         .await
@@ -986,7 +995,7 @@ mod tests {
                     size,
                     &expected,
                     &path,
-                    (None, true),
+                    (None, true, false),
                     |_| {}
                 )
                 .await
@@ -1034,7 +1043,7 @@ mod tests {
             3,
             &clash_client_core::file_hash::hex(Sha256::digest(b"abc")),
             &directory.path().join("package"),
-            (None, false),
+            (None, false, false),
             |_| {},
         )
         .await

@@ -2,6 +2,7 @@
 export component ListReorderGesture inherits Rectangle {
     in property <bool> enabled: true;
     in property <bool> cancel-requested;
+    in property <duration> hold-duration: 550ms;
     in property <string> context;
     in property <int> row-count;
     in property <length> row-height: 80px;
@@ -50,8 +51,8 @@ export component ListReorderGesture inherits Rectangle {
         root.targeted(root.target-index);
     }
     Timer {
-        interval: 550ms;
-        running: root.armed && area.pressed && root.enabled && root.same-layout;
+        interval: root.hold-duration;
+        running: root.hold-duration > 0ms && root.armed && area.pressed && root.enabled && root.same-layout;
         triggered => {
             root.armed = false;
             root.tracking = true;
@@ -93,6 +94,13 @@ export component ListReorderGesture inherits Rectangle {
                     root.press-height = root.height;
                     root.source-index = floor((root.pointer-y - root.scroll-y - root.header-height) / max(1px, root.row-height));
                     root.armed = root.source-index >= 0 && root.source-index < root.row-count;
+                    if root.armed && root.hold-duration == 0ms {
+                        root.armed = false;
+                        root.tracking = true;
+                        keys.focus();
+                        root.started(root.source-index);
+                        root.update-target();
+                    }
                 } else if event.kind == PointerEventKind.up {
                     root.armed = false;
                     if root.reordering {

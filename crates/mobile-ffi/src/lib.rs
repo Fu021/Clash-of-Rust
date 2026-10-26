@@ -104,6 +104,7 @@ impl Session {
     pub fn open(root: PathBuf, native: Arc<dyn NativeHost>) -> Result<Self> {
         let store = Store::at(root)?;
         core::profile_transaction::recover(&store.root)?;
+        core::geodata::recover(&store.runtime())?;
         let mut settings = store.load_settings()?;
         let mut profiles = store.profiles()?;
         let first_profile = profiles.is_empty();
@@ -250,6 +251,25 @@ impl Session {
             self.native.request(json!({"op":"protection-sync"}))?;
         }
         Ok(())
+    }
+    pub fn install_geo(&mut self, staged: &std::path::Path) -> Result<core::geodata::GeoManifest> {
+        let manifest = core::geodata::verify_geo(staged)?;
+        let raw = self.runtime(&self.settings)?;
+        let runtime = self.store.runtime();
+        core::geodata::begin_install(staged, &runtime)?;
+        if self.running
+            && let Err(error) = self
+                .native
+                .request(json!({"op":"reload","config":raw,"ipv6":effective_ipv6(&self.settings)}))
+        {
+            core::geodata::recover(&runtime).context("Geo 重载失败，恢复旧文件也失败")?;
+            self.native
+                .request(json!({"op":"reload","config":raw,"ipv6":effective_ipv6(&self.settings)}))
+                .context("Geo 文件已恢复，但旧内核配置重载失败")?;
+            return Err(error.context("Geo 更新失败，已恢复旧数据"));
+        }
+        core::geodata::commit(&runtime)?;
+        Ok(manifest)
     }
     pub fn commit_settings(&mut self, mut settings: Settings) -> Result<()> {
         settings.normalize();
@@ -1058,6 +1078,120 @@ mod tests {
         fn request(&self, _: Value) -> Result<Value> {
             Ok(json!({"ok":true}))
         }
+    }
+
+    fn geo_fixture(path: &std::path::Path, contents: &[u8]) {
+        use core::geodata::{GEO_FILES, GeoFile, GeoManifest, MANIFEST, hash_file};
+        std::fs::create_dir_all(path).unwrap();
+        let mut manifest = GeoManifest {
+            version: String::from_utf8(contents.to_vec()).unwrap(),
+            updated: 1,
+            files: Vec::new(),
+        };
+        for name in GEO_FILES {
+            std::fs::write(path.join(name), contents).unwrap();
+            let (sha256, size) = hash_file(&path.join(name)).unwrap();
+            manifest.files.push(GeoFile {
+                name: name.into(),
+                source: "test".into(),
+                sha256,
+                size,
+            });
+        }
+        atomic_write(
+            &path.join(MANIFEST),
+            &serde_json::to_vec(&manifest).unwrap(),
+        )
+        .unwrap();
+    }
+
+    #[test]
+    fn geo_install_rolls_back_a_rejected_reload_and_never_reconnects_the_vpn() {
+        use std::sync::{
+            Mutex,
+            atomic::{AtomicBool, Ordering},
+        };
+        #[derive(Default)]
+        struct Host {
+            reject: AtomicBool,
+            calls: Mutex<Vec<String>>,
+        }
+        impl NativeHost for Host {
+            fn request(&self, value: Value) -> Result<Value> {
+                let op = value["op"].as_str().unwrap().to_owned();
+                self.calls.lock().unwrap().push(op.clone());
+                if op == "reload" && self.reject.swap(false, Ordering::AcqRel) {
+                    anyhow::bail!("simulated Geo reload failure");
+                }
+                Ok(json!({"ok":true}))
+            }
+        }
+        for reject in [false, true] {
+            let root = tempfile::tempdir().unwrap();
+            let native = Arc::new(Host::default());
+            let mut session = Session::open(root.path().into(), native.clone()).unwrap();
+            session.initialize().unwrap();
+            session.vpn = true;
+            session
+                .save_rule("", "DOMAIN,draft.example,DIRECT", 1)
+                .unwrap();
+            let draft = session.draft.clone();
+            let config = std::fs::read(session.store.runtime().join("config.yaml")).unwrap();
+            let settings = std::fs::read(session.store.root.join("settings.json")).unwrap();
+            let staged = tempfile::tempdir().unwrap();
+            geo_fixture(&session.store.runtime(), b"old");
+            geo_fixture(staged.path(), b"new");
+            native.calls.lock().unwrap().clear();
+            native.reject.store(reject, Ordering::Release);
+            let result = session.install_geo(staged.path());
+            assert_eq!(result.is_err(), reject);
+            let current = core::geodata::verify_geo(&session.store.runtime()).unwrap();
+            assert_eq!(current.version, if reject { "old" } else { "new" });
+            let calls = native.calls.lock().unwrap();
+            assert_eq!(
+                calls.as_slice(),
+                if reject {
+                    &["reload", "reload"][..]
+                } else {
+                    &["reload"][..]
+                }
+            );
+            assert!(session.running && session.vpn);
+            assert_eq!(session.draft, draft);
+            assert_eq!(
+                std::fs::read(session.store.runtime().join("config.yaml")).unwrap(),
+                config
+            );
+            assert_eq!(
+                std::fs::read(session.store.root.join("settings.json")).unwrap(),
+                settings
+            );
+            assert!(
+                !session
+                    .store
+                    .runtime()
+                    .join("geo-transaction.json")
+                    .exists()
+            );
+        }
+    }
+
+    #[test]
+    fn reopening_a_mobile_session_recovers_an_interrupted_geo_install() {
+        let root = tempfile::tempdir().unwrap();
+        let session = Session::open(root.path().into(), Arc::new(Fake)).unwrap();
+        let staged = tempfile::tempdir().unwrap();
+        geo_fixture(&session.store.runtime(), b"old");
+        geo_fixture(staged.path(), b"new");
+        core::geodata::begin_install(staged.path(), &session.store.runtime()).unwrap();
+        drop(session);
+        let reopened = Session::open(root.path().into(), Arc::new(Fake)).unwrap();
+        assert_eq!(
+            core::geodata::verify_geo(&reopened.store.runtime())
+                .unwrap()
+                .version,
+            "old"
+        );
     }
 
     #[test]

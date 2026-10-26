@@ -53,6 +53,7 @@ pub extern "system" fn Java_org_clashofrust_android_ProtectionRuntime_nativeReco
             let result = (|| -> Result<()> {
                 let root = root.try_to_string(env)?;
                 core::profile_transaction::recover(std::path::Path::new(&root))?;
+                core::geodata::recover(&std::path::Path::new(&root).join("runtime"))?;
                 Ok(())
             })();
             let response = match result {

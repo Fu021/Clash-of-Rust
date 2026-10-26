@@ -4,7 +4,7 @@ default-members = ["apps/desktop", "apps/desktop-ui"]
 resolver = "3"
 
 [workspace.package]
-version = "0.6.5-fix.3.rules-subscriptions"
+version = "0.6.5-fix.4.download-ui"
 edition = "2024"
 license = "GPL-3.0-only"
 

@@ -369,7 +369,7 @@ enum Update {
     ProtectionDns(std::time::Instant, std::result::Result<(), String>),
     Address(u64, String, String),
     Log(String, String),
-    Geo(std::result::Result<core::geodata::GeoManifest, String>),
+    Geo(std::result::Result<tempfile::TempDir, String>),
     Checked(
         u64,
         std::result::Result<Option<core::update::Package>, String>,
@@ -614,7 +614,11 @@ async fn run_loop(
                         let port=state.session.running.then_some(state.session.settings.mixed_port);
                         let send=updates.clone();
                         geo_job=Some(tokio::spawn(async move {
-                            let result=core::geodata::download_geo(&runtime,port).await.map_err(|e|format!("{e:#}"));
+                            let result=async {
+                                let staged=tempfile::Builder::new().prefix(".geo-download-").tempdir_in(&runtime)?;
+                                core::geodata::download_geo(staged.path(),port).await?;
+                                Ok::<_,anyhow::Error>(staged)
+                            }.await.map_err(|e|format!("{e:#}"));
                             let _=send.send(Update::Geo(result)).await;
                         }));
                     }
@@ -803,7 +807,7 @@ async fn run_loop(
                         refresh_generation += 1;
                         refresh_requested = true;
                         state.geo_updating=false;geo_job=None;
-                        match result.and_then(|manifest|state.session.initialize().map(|()|manifest).map_err(|e|format!("{e:#}"))) {
+                        match result.and_then(|staged|state.session.install_geo(staged.path()).map_err(|e|format!("{e:#}"))) {
                             Ok(manifest)=> {state.geo=manifest.version;state.notice="Geo 数据已更新".into();},
                             Err(error)=>state.notice=format!("Geo 更新失败：{error}"),
                         }

@@ -18,6 +18,7 @@ export component Preview inherits AppWindow {
     in-out property <bool> preview-update-prereleases <=> UiData.update-prereleases;
     in-out property <int> dialog;
     in-out property <bool> shortcuts-open <=> UiData.shortcuts-open;
+    in-out property <length> preview-rules-scroll <=> UiData.scroll-rules;
     in-out property <bool> raw-rule <=> UiData.rule-text-mode;
     changed dialog => {
         UiData.modal = root.dialog == 1 || root.dialog == 2 ? 1 : root.dialog == 3 ? 7 : root.dialog == 5 ? 2 : root.dialog == 6 ? 11 : root.dialog == 10 ? 12 : root.dialog == 11 ? 10 : root.dialog;
@@ -34,12 +35,12 @@ export component Preview inherits AppWindow {
         }
         if root.dialog == 12 {
             UiData.modal = 1;
-            UiData.modal-title = "安装预发布版 0.6.5-fix.3.rules-subscriptions？";
+            UiData.modal-title = "安装预发布版 0.6.5-fix.4.download-ui？";
             UiData.modal-description = "预发布版本可能存在尚未发现的风险与 Bug，可能导致程序崩溃、网络异常或配置兼容问题。建议先备份配置，确认后再下载安装。";
             UiData.modal-accept = "继续安装（3 秒）";
             UiData.modal-can-accept = false;
             UiData.update-prereleases = true;
-            UiData.update-status = "发现预发布版 0.6.5-fix.3.rules-subscriptions";
+            UiData.update-status = "发现预发布版 0.6.5-fix.4.download-ui";
         }
         if root.dialog >= 7 && root.dialog <= 9 {
             UiData.modal = 0;
@@ -49,7 +50,7 @@ export component Preview inherits AppWindow {
     init => {
         Motion.enabled = root.preview-motion;
         UiData.fake-ip-editor = root.preview-fake-ip-editor;
-        UiData.version = "0.6.5-fix.3.rules-subscriptions";
+        UiData.version = "0.6.5-fix.4.download-ui";
         UiData.ready = true; UiData.running = true;
         UiData.profile = "我的订阅"; UiData.node = "德国 01 · IPv6";
         UiData.download-rate = "1.24 MiB/s"; UiData.upload-rate = "28.6 KiB/s";

@@ -10,8 +10,8 @@ const LIMIT: usize = 10 * 1024 * 1024;
 
 pub async fn download_routes(url: &Url, routes: &[Route]) -> Result<(String, Option<String>)> {
     let mut errors = Vec::new();
-    for route in routes {
-        match download_route(url, route).await {
+    for (index, route) in routes.iter().enumerate() {
+        match download_route(url, route, index + 1 < routes.len()).await {
             Ok(subscription) => return Ok(subscription),
             Err(error) => errors.push(format!("{}：{error}", route.label)),
         }
@@ -19,7 +19,11 @@ pub async fn download_routes(url: &Url, routes: &[Route]) -> Result<(String, Opt
     bail!("{}（已尝试可用代理和直连）", errors.join("；"));
 }
 
-async fn download_route(url: &Url, route: &Route) -> Result<(String, Option<String>)> {
+async fn download_route(
+    url: &Url,
+    route: &Route,
+    retry_slow: bool,
+) -> Result<(String, Option<String>)> {
     let client = route
         .apply(
             crate::network::client_builder()
@@ -50,15 +54,17 @@ async fn download_route(url: &Url, route: &Route) -> Result<(String, Option<Stri
         .and_then(|value| value.to_str().ok())
         .map(str::to_owned);
     let mut bytes = Vec::new();
-    while let Some(chunk) = response
-        .chunk()
+    let mut watchdog = crate::download::Watchdog::new(retry_slow);
+    while let Some(chunk) = watchdog
+        .chunk(&mut response)
         .await
-        .map_err(|error| request_error(error, "订阅下载"))?
+        .context("订阅下载失败")?
     {
+        let chunk = chunk.as_ref();
         if chunk.len() > LIMIT.saturating_sub(bytes.len()) {
             bail!("订阅超过 10 MiB 限制");
         }
-        bytes.extend_from_slice(&chunk);
+        bytes.extend_from_slice(chunk);
     }
     let raw = String::from_utf8(bytes).context("订阅不是 UTF-8 YAML 文本")?;
     // Captive portals and error pages can return HTTP 200. Try the next route

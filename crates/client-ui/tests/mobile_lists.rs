@@ -65,6 +65,7 @@ slint::slint! {
         in property <string> context: "initial";
         in property <bool> reorder-enabled: true;
         in property <length> header-height;
+        in property <duration> hold-duration: 550ms;
         out property <length> scroll-y <=> list.content-y;
         out property <bool> dragging <=> gesture.reordering;
         out property <int> source: -1;
@@ -81,6 +82,7 @@ slint::slint! {
         gesture := ListReorderGesture {
             x: 0px; y: 0px; height: list.visible-height;
             enabled: root.reorder-enabled;
+            hold-duration: root.hold-duration;
             context: root.context; row-count: 40; row-height: 80px;
             header-height: root.header-height;
             scroll-content-height: list.content-height; scroll-y <=> list.content-y;
@@ -277,109 +279,114 @@ fn mobile_list_stacks_rows_and_keeps_sparse_content_at_the_top() {
     desktop.hide().unwrap();
     drop(desktop);
 
-    let scrolling = ReorderScrollProbe::new().unwrap();
-    scrolling.show().unwrap();
-    frame(&adapter, 300, 240);
-    let pointer = |pressed: bool, y: f32| {
-        let position = LogicalPosition::new(12., y);
-        let event = if pressed {
-            WindowEvent::PointerPressed {
-                position,
-                button: PointerEventButton::Left,
-            }
-        } else {
-            WindowEvent::PointerReleased {
-                position,
-                button: PointerEventButton::Left,
-            }
+    for hold_millis in [550, 0] {
+        let scrolling = ReorderScrollProbe::new().unwrap();
+        scrolling.set_hold_duration(Duration::from_millis(hold_millis));
+        scrolling.show().unwrap();
+        frame(&adapter, 300, 240);
+        let pointer = |pressed: bool, y: f32| {
+            let position = LogicalPosition::new(12., y);
+            let event = if pressed {
+                WindowEvent::PointerPressed {
+                    position,
+                    button: PointerEventButton::Left,
+                }
+            } else {
+                WindowEvent::PointerReleased {
+                    position,
+                    button: PointerEventButton::Left,
+                }
+            };
+            scrolling.window().dispatch_event(event);
         };
-        scrolling.window().dispatch_event(event);
-    };
-    pointer(true, 24.);
-    advance(&clock, Duration::from_millis(700));
-    assert!(scrolling.get_dragging());
-    assert_eq!(scrolling.get_source(), 0);
-    scrolling
-        .window()
-        .dispatch_event(WindowEvent::PointerMoved {
-            position: LogicalPosition::new(12., 232.),
-        });
-    advance(&clock, Duration::from_secs(3));
-    frame(&adapter, 300, 240);
-    assert!(scrolling.get_scroll_y() < -800.);
-    assert!(scrolling.get_target() > 10);
-    assert!(
-        scrolling.get_dragging(),
-        "recycling the source row must retain the gesture"
-    );
-    let near_bottom = scrolling.get_scroll_y();
-    let lower_target = scrolling.get_target();
-    scrolling
-        .window()
-        .dispatch_event(WindowEvent::PointerMoved {
-            position: LogicalPosition::new(12., 8.),
-        });
-    advance(&clock, Duration::from_secs(1));
-    assert!(scrolling.get_scroll_y() > near_bottom);
-    assert!(scrolling.get_target() < lower_target);
-    scrolling
-        .window()
-        .dispatch_event(WindowEvent::PointerMoved {
-            position: LogicalPosition::new(12., 120.),
-        });
-    let centered = scrolling.get_scroll_y();
-    advance(&clock, Duration::from_millis(500));
-    assert_eq!(
-        scrolling.get_scroll_y(),
-        centered,
-        "the center must not auto-scroll"
-    );
-    pointer(false, 120.);
-    assert_eq!(scrolling.get_source(), 0);
-    assert_eq!(scrolling.get_drop_count(), 1);
-    assert!(!scrolling.get_dragging());
-    advance(&clock, Duration::from_millis(700));
-    assert_eq!(scrolling.get_scroll_y(), centered);
+        pointer(true, 24.);
+        advance(&clock, Duration::from_millis(700));
+        assert!(scrolling.get_dragging());
+        assert_eq!(scrolling.get_source(), 0);
+        scrolling
+            .window()
+            .dispatch_event(WindowEvent::PointerMoved {
+                position: LogicalPosition::new(12., 232.),
+            });
+        advance(&clock, Duration::from_secs(3));
+        frame(&adapter, 300, 240);
+        assert!(scrolling.get_scroll_y() < -800.);
+        assert!(scrolling.get_target() > 10);
+        assert!(
+            scrolling.get_dragging(),
+            "recycling the source row must retain the gesture"
+        );
+        let near_bottom = scrolling.get_scroll_y();
+        let lower_target = scrolling.get_target();
+        scrolling
+            .window()
+            .dispatch_event(WindowEvent::PointerMoved {
+                position: LogicalPosition::new(12., 8.),
+            });
+        advance(&clock, Duration::from_secs(1));
+        assert!(scrolling.get_scroll_y() > near_bottom);
+        assert!(scrolling.get_target() < lower_target);
+        scrolling
+            .window()
+            .dispatch_event(WindowEvent::PointerMoved {
+                position: LogicalPosition::new(12., 120.),
+            });
+        let centered = scrolling.get_scroll_y();
+        advance(&clock, Duration::from_millis(500));
+        assert_eq!(
+            scrolling.get_scroll_y(),
+            centered,
+            "the center must not auto-scroll"
+        );
+        pointer(false, 120.);
+        assert_eq!(scrolling.get_source(), 0);
+        assert_eq!(scrolling.get_drop_count(), 1);
+        assert!(!scrolling.get_dragging());
+        advance(&clock, Duration::from_millis(700));
+        assert_eq!(scrolling.get_scroll_y(), centered);
 
-    pointer(true, 120.);
-    advance(&clock, Duration::from_millis(700));
-    assert!(scrolling.get_dragging());
-    scrolling.set_context("filtered".into());
-    assert!(!scrolling.get_dragging());
-    pointer(false, 120.);
-    assert_eq!(
-        scrolling.get_drop_count(),
-        1,
-        "a context change must cancel the pending drop"
-    );
-    pointer(true, 120.);
-    advance(&clock, Duration::from_millis(700));
-    assert!(scrolling.get_dragging());
-    scrolling.set_reorder_enabled(false);
-    assert!(!scrolling.get_dragging());
-    pointer(false, 120.);
-    assert_eq!(
-        scrolling.get_drop_count(),
-        1,
-        "disabling a gesture must cancel the pending drop"
-    );
-    scrolling.set_reorder_enabled(true);
-    pointer(true, 120.);
-    scrolling
-        .window()
-        .dispatch_event(WindowEvent::PointerMoved {
-            position: LogicalPosition::new(12., 200.),
-        });
-    advance(&clock, Duration::from_millis(700));
-    assert!(
-        !scrolling.get_dragging(),
-        "an ordinary swipe must not start reordering"
-    );
-    assert!(scrolling.get_scroll_y() > centered);
-    pointer(false, 200.);
-    assert_eq!(scrolling.get_drop_count(), 1);
-    scrolling.hide().unwrap();
-    drop(scrolling);
+        pointer(true, 120.);
+        advance(&clock, Duration::from_millis(700));
+        assert!(scrolling.get_dragging());
+        scrolling.set_context("filtered".into());
+        assert!(!scrolling.get_dragging());
+        pointer(false, 120.);
+        assert_eq!(
+            scrolling.get_drop_count(),
+            1,
+            "a context change must cancel the pending drop"
+        );
+        pointer(true, 120.);
+        advance(&clock, Duration::from_millis(700));
+        assert!(scrolling.get_dragging());
+        scrolling.set_reorder_enabled(false);
+        assert!(!scrolling.get_dragging());
+        pointer(false, 120.);
+        assert_eq!(
+            scrolling.get_drop_count(),
+            1,
+            "disabling a gesture must cancel the pending drop"
+        );
+        scrolling.set_reorder_enabled(true);
+        if hold_millis > 0 {
+            pointer(true, 120.);
+            scrolling
+                .window()
+                .dispatch_event(WindowEvent::PointerMoved {
+                    position: LogicalPosition::new(12., 200.),
+                });
+            advance(&clock, Duration::from_millis(700));
+            assert!(
+                !scrolling.get_dragging(),
+                "an ordinary swipe must not start reordering"
+            );
+            assert!(scrolling.get_scroll_y() > centered);
+            pointer(false, 200.);
+            assert_eq!(scrolling.get_drop_count(), 1);
+        }
+        scrolling.hide().unwrap();
+        drop(scrolling);
+    }
 
     let header = ReorderScrollProbe::new().unwrap();
     header.set_header_height(120.);

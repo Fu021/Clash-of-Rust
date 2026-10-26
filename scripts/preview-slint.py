@@ -81,6 +81,7 @@ def mobile_preview(args) -> None:
                       'inset-right': 44 if short and platform == 'ios' else 0,
                       'text-scale': scale, 'preview-connected': connected, 'preview-keyboard': keyboard,
                       'preview-notice': args.notice, 'preview-notice-elapsed': args.notice_elapsed,
+                      'preview-rules-scroll': args.scroll_y,
                       **extra}
             fixture = fixtures / (name + '.json')
             fixture.write_text(json.dumps(values), encoding='utf-8')
@@ -102,8 +103,8 @@ def mobile_preview(args) -> None:
                 render(f'preview-update-{"dark" if dark else "light"}', '预发布安装确认',
                        args.size or '393x852', page=9, dark=dark, detail=13,
                        **{'preview-update-prereleases': True, 'preview-update-preview': True,
-                          'preview-update-version': '0.6.5-fix.3.rules-subscriptions', 'preview-update-available': True,
-                          'preview-update-status': '发现预发布版 0.6.5-fix.3.rules-subscriptions', 'preview-settings-scroll': -1200})
+                          'preview-update-version': '0.6.5-fix.4.download-ui', 'preview-update-available': True,
+                          'preview-update-status': '发现预发布版 0.6.5-fix.4.download-ui', 'preview-settings-scroll': -1200})
         if args.page == 'all':
             for name, label, size, page, dark, detail, scale in [
                 ('phone-landscape', '手机横屏 · 首页', '852x393', 0, False, 0, 1),
@@ -317,6 +318,7 @@ def main() -> None:
     parser.add_argument("--size")
     parser.add_argument("--detail", type=int, default=0, help="preview one mobile detail view without rendering the full matrix")
     parser.add_argument("--text-scale", type=float, default=1, help="mobile font preview factor (native Android uses system SP conversions)")
+    parser.add_argument("--scroll-y", type=float, default=0, help="initial rule-page scroll offset for checking content visibility")
     parser.add_argument("--output", type=Path)
     args = parser.parse_args()
     if not args.viewer:
@@ -373,6 +375,7 @@ def main() -> None:
         for name, label, page, dialog in scenes:
             fixture = fixtures / f"{name}-{theme}.json"
             fixture.write_text(json.dumps({"preview-page": list(PAGES).index(page), "preview-dark": theme == "dark", "dialog": dialog,
+                                           "preview-rules-scroll": args.scroll_y,
                                            "preview-notice": args.notice, "preview-notice-elapsed": args.notice_elapsed}))
             image = output / f"{name}-{theme}.png"
             scene_size = f"{width}x{max(height, 1120)}" if args.full_settings and page == "settings" and not dialog else args.size
