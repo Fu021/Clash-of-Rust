@@ -195,7 +195,7 @@ component ConnectionsFooter inherits HorizontalLayout {
     }
 }
 export component MobileConnections inherits PageSurface {
-    property <bool> scrolling-footer: root.height < 420px || Theme.text-scale > 1.25;
+    property <bool> scrolling-footer: root.height < 420px || Theme.text-scale > 1.25 || MobileView.keyboard-inset > 0px;
     VerticalLayout { spacing: MobileTypography.gap;
         Rectangle {
             clip: true;
@@ -221,7 +221,7 @@ export component MobileConnections inherits PageSurface {
 
 component RulesToolbar inherits VerticalLayout {
     in property <length> available-height: 600px;
-    property <bool> short: root.available-height < 420px;
+    property <bool> short: root.available-height < 420px || MobileView.keyboard-inset > 0px;
     alignment: start; spacing: MobileTypography.gap; vertical-stretch: 0;
     HorizontalLayout { spacing: MobileTypography.small-gap;
         MSelect { options: MobileData.rule-profiles; value: MobileData.rule-profile; selected(index, value) => { MobileActions.request(MobileIntent.rule-select, value, "profile"); } }
@@ -311,7 +311,7 @@ export component MobileRules inherits PageSurface {
     property <length> row-extent: 120px;
     property <length> toolbar-extent: header.header-height;
     property <int> displayed-rows: max(1, MobileData.rules.length);
-    property <bool> scrolling-footer: root.height < 420px || Theme.text-scale > 1.25;
+    property <bool> scrolling-footer: root.height < 420px || Theme.text-scale > 1.25 || MobileView.keyboard-inset > 0px;
     VerticalLayout { spacing: MobileTypography.gap;
         Rectangle {
             clip: true;
