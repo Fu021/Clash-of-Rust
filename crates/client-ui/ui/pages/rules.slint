@@ -1,12 +1,85 @@
 import { PageSurface, Disclosure } from "../components/motion.slint";
 import { Theme } from "../theme/palette.slint";
-import { UiData, UiActions, Intent } from "../state.slint";
+import { UiData, UiActions, Intent, RuleItem } from "../state.slint";
 import { RuleDragHandle } from "../components/rule-drag.slint";
-import { ListReorderGesture } from "../components/list-reorder.slint";
+import { ListReorderGesture, ListReorderPreview } from "../components/list-reorder.slint";
 import { PageScroll, Label, Caption, Heading, ContentPanel, ActionButton, Badge, Field, Toggle, Select, Paragraph, CopyButton } from "../components/controls.slint";
+component RulesRow inherits Rectangle {
+    in property <RuleItem> item;
+    in property <string> drag-context;
+    in property <bool> highlighted;
+    in property <bool> floating;
+    in property <length> available-height;
+    in property <length> policy-width-limit;
+    callback started();
+    callback dragged(int);
+    callback dropped(int);
+    callback cancelled();
+    background: root.floating || root.highlighted || root.item.selected ? Theme.accent-wash : Theme.surface;
+    border-radius: root.floating ? 6px : 0px;
+    border-width: root.floating ? 1px : 0px; border-color: Theme.accent;
+    if !root.floating: TouchArea {
+        enabled: !UiData.working && UiData.modal == 0;
+        clicked => { UiActions.dispatch(Intent.rule-select, root.item.id, ""); }
+    }
+    HorizontalLayout { cross-axis-alignment: center; padding: Theme.content-gap; spacing: Theme.content-gap;
+        RuleDragHandle {
+            row-height: root.height + Theme.content-gap;
+            context: root.drag-context;
+            enabled: !root.floating && !UiData.working && !UiData.exiting && !UiData.protected && UiData.rule-types.length > 0;
+            blocked: UiData.modal != 0;
+            started => { root.started(); }
+            dragged(delta) => { root.dragged(delta); }
+            dropped(delta) => { root.dropped(delta); }
+            cancelled => { root.cancelled(); }
+        }
+        Caption { text: root.item.position; width: 32px; }
+        VerticalLayout { spacing: 4px; horizontal-stretch: 1;
+            Label { text: root.item.kind + " · " + root.item.value; }
+            Caption { text: root.item.source + (root.item.enabled ? "" : " · 已停用"); }
+        }
+        Badge { text: root.item.policy; width-limit: root.policy-width-limit; }
+        ActionButton {
+            text: ""; width: 40px; selected: root.item.selected;
+            accessible-role: button; accessible-label: "规则详情与操作"; enabled: !root.floating && !UiData.working;
+            Image { source: @image-url("../icons/chevron-right.svg"); colorize: Theme.secondary; width: 18px; height: 18px;
+                x: (parent.width - self.width) / 2; y: (parent.height - self.height) / 2;
+            }
+            clicked => { UiActions.dispatch(Intent.rule-select, root.item.id, ""); menu.show(); }
+        }
+    }
+    menu := PopupWindow {
+        close-policy: close-on-click-outside;
+        x: max(0px, root.width - self.width); y: root.height;
+        width: min(320px, root.width); height: min(actions.preferred-height, max(160px, root.available-height - 48px));
+        Rectangle {
+            background: Theme.surface; border-color: Theme.line; border-width: 1px; border-radius: 6px;
+            PageScroll {
+                actions := VerticalLayout {
+                    padding: 8px; spacing: 4px;
+                    Paragraph { text: root.item.kind + (root.item.value == "" ? "" : " · " + root.item.value) + " → " + root.item.policy; }
+                    Caption { text: "来源：" + root.item.source + (root.item.enabled ? " · 已启用" : " · 已停用"); }
+                    CopyButton { label: "复制规则原文"; value: root.item.raw; }
+                    Paragraph { text: root.item.raw; }
+                    ActionButton { text: "编辑"; enabled: root.item.source == "自定义" && !UiData.working;
+                        clicked => { menu.close(); UiActions.dispatch(Intent.rule-edit, "", ""); } }
+                    ActionButton { text: root.item.enabled ? "停用" : "启用"; enabled: root.item.source == "自定义" && !UiData.working;
+                        clicked => { menu.close(); UiActions.dispatch(Intent.rule-enable, "", ""); } }
+                    ActionButton { text: "删除"; danger: true; enabled: root.item.source == "自定义" && !UiData.working;
+                        clicked => { menu.close(); UiActions.dispatch(Intent.rule-delete, "", ""); } }
+                    ActionButton { text: "跨页移动到位置…"; enabled: !UiData.working;
+                        clicked => { menu.close(); UiActions.dispatch(Intent.rule-move-open, "", ""); } }
+                    ActionButton { text: "恢复订阅顺序"; enabled: !UiData.working;
+                        clicked => { menu.close(); UiActions.dispatch(Intent.rule-restore, "", ""); } }
+                }
+            }
+        }
+    }
+}
 export component RulesPage inherits PageSurface {
     property <string> drag-id;
     property <string> drag-target;
+    property <RuleItem> drag-item;
     property <length> row-extent: max(60px, Theme.body-size * 3 + 12px) + Theme.content-gap;
     property <string> drag-context: UiData.page-offset + "/" + UiData.query + "/" + UiData.rule-profile + "/" + UiData.rule-source
         + "/" + (root.width / 1px) + "/" + (root.height / 1px) + "/" + Theme.text-scale;
@@ -54,76 +127,36 @@ export component RulesPage inherits PageSurface {
                     }
                     Caption { text: "拖动手柄排序 · 靠近边缘自动滚动 · Esc 取消 · 右箭头详情"; wrap: word-wrap; }
                     rules := ContentPanel {
-                        for rule[index] in UiData.rules: entry := Rectangle {
+                        for rule[index] in UiData.rules: RulesRow {
                             height: root.row-extent - Theme.content-gap;
-                            background: root.drag-target == rule.id || rule.selected ? Theme.accent-wash : Theme.surface;
-                            TouchArea {
-                                enabled: !UiData.working && UiData.modal == 0;
-                                clicked => { UiActions.dispatch(Intent.rule-select, rule.id, ""); }
-                            }
-                            HorizontalLayout { cross-axis-alignment: center; padding: Theme.content-gap; spacing: Theme.content-gap;
-                                RuleDragHandle {
-                                    row-height: entry.height + Theme.content-gap;
-                                    context: root.drag-context;
-                                    enabled: !UiData.working && !UiData.exiting && !UiData.protected && UiData.rule-types.length > 0;
-                                    blocked: UiData.modal != 0;
-                                    started => { root.drag-id = rule.id; root.drag-target = rule.id; }
-                                    dragged(delta) => { root.drag-target = UiData.rules[clamp(index + delta, 0, UiData.rules.length - 1)].id; }
-                                    dropped(delta) => {
-                                        let source = root.drag-id;
-                                        root.drag-id = ""; root.drag-target = "";
-                                        if delta != 0 && source != "" {
-                                            UiActions.dispatch(Intent.rule-drop, source, UiData.rules[clamp(index + delta, 0, UiData.rules.length - 1)].id);
-                                        }
-                                    }
-                                    cancelled => { root.drag-id = ""; root.drag-target = ""; }
-                                }
-                                Caption { text: rule.position; width: 32px; }
-                                VerticalLayout { spacing: 4px; horizontal-stretch: 1;
-                                    Label { text: rule.kind + " · " + rule.value; }
-                                    Caption { text: rule.source + (rule.enabled ? "" : " · 已停用"); }
-                                }
-                                Badge { text: rule.policy; width-limit: root.width * 0.2; }
-                                ActionButton {
-                                    text: ""; width: 40px; selected: rule.selected;
-                                    accessible-role: button; accessible-label: "规则详情与操作"; enabled: !UiData.working;
-                                    Image { source: @image-url("../icons/chevron-right.svg"); colorize: Theme.secondary; width: 18px; height: 18px;
-                                        x: (parent.width - self.width) / 2; y: (parent.height - self.height) / 2;
-                                    }
-                                    clicked => { UiActions.dispatch(Intent.rule-select, rule.id, ""); menu.show(); }
+                            item: rule; drag-context: root.drag-context; available-height: root.height;
+                            policy-width-limit: root.width * 0.2;
+                            highlighted: root.drag-target == rule.id;
+                            opacity: gesture.reordering && gesture.drag-index == index ? 0.25 : 1;
+                            started => { root.drag-item = rule; root.drag-id = rule.id; root.drag-target = rule.id; }
+                            dragged(delta) => { root.drag-target = UiData.rules[clamp(index + delta, 0, UiData.rules.length - 1)].id; }
+                            dropped(delta) => {
+                                let source = root.drag-id;
+                                root.drag-id = ""; root.drag-target = "";
+                                if delta != 0 && source != "" {
+                                    UiActions.dispatch(Intent.rule-drop, source, UiData.rules[clamp(index + delta, 0, UiData.rules.length - 1)].id);
                                 }
                             }
-                            menu := PopupWindow {
-                                close-policy: close-on-click-outside;
-                                x: max(0px, entry.width - self.width); y: entry.height;
-                                width: min(320px, root.width); height: min(actions.preferred-height, max(160px, root.height - 48px));
-                                Rectangle {
-                                    background: Theme.surface; border-color: Theme.line; border-width: 1px; border-radius: 6px;
-                                    PageScroll {
-                                        actions := VerticalLayout {
-                                            padding: 8px; spacing: 4px;
-                                            Paragraph { text: rule.kind + (rule.value == "" ? "" : " · " + rule.value) + " → " + rule.policy; }
-                                            Caption { text: "来源：" + rule.source + (rule.enabled ? " · 已启用" : " · 已停用"); }
-                                            CopyButton { label: "复制规则原文"; value: rule.raw; }
-                                            Paragraph { text: rule.raw; }
-                                            ActionButton { text: "编辑"; enabled: rule.source == "自定义" && !UiData.working;
-                                                clicked => { menu.close(); UiActions.dispatch(Intent.rule-edit, "", ""); } }
-                                            ActionButton { text: rule.enabled ? "停用" : "启用"; enabled: rule.source == "自定义" && !UiData.working;
-                                                clicked => { menu.close(); UiActions.dispatch(Intent.rule-enable, "", ""); } }
-                                            ActionButton { text: "删除"; danger: true; enabled: rule.source == "自定义" && !UiData.working;
-                                                clicked => { menu.close(); UiActions.dispatch(Intent.rule-delete, "", ""); } }
-                                            ActionButton { text: "跨页移动到位置…"; enabled: !UiData.working;
-                                                clicked => { menu.close(); UiActions.dispatch(Intent.rule-move-open, "", ""); } }
-                                            ActionButton { text: "恢复订阅顺序"; enabled: !UiData.working;
-                                                clicked => { menu.close(); UiActions.dispatch(Intent.rule-restore, "", ""); } }
-                                        }
-                                    }
-                                }
-                            }
+                            cancelled => { root.drag-id = ""; root.drag-target = ""; }
                         }
                         if UiData.rules.length == 0: Caption { text: "没有匹配的规则"; height: Theme.control-height; }
                     }
                     if UiData.rule-warning != "": ContentPanel { Paragraph { text: UiData.rule-warning; color: Theme.warning; } }
+                }
+            }
+            ListReorderPreview {
+                x: scroll.x + rules.x + Theme.card-padding; y: scroll.y;
+                width: rules.width - Theme.card-padding * 2; height: scroll.visible-height;
+                active: gesture.reordering; row-y: gesture.drag-y;
+                row-height: root.row-extent - Theme.content-gap;
+                if gesture.reordering: RulesRow {
+                    x: 0px; y: 0px; width: parent.width; height: parent.height;
+                    item: root.drag-item; floating: true; policy-width-limit: root.width * 0.2;
                 }
             }
             gesture := ListReorderGesture {
@@ -135,7 +168,7 @@ export component RulesPage inherits PageSurface {
                 row-count: UiData.rules.length; row-height: root.row-extent;
                 header-height: rules.y + Theme.card-padding;
                 scroll-content-height: scroll.viewport-height; scroll-y <=> scroll.viewport-y;
-                started(index) => { root.drag-id = UiData.rules[index].id; root.drag-target = root.drag-id; }
+                started(index) => { root.drag-item = UiData.rules[index]; root.drag-id = root.drag-item.id; root.drag-target = root.drag-id; }
                 targeted(index) => { root.drag-target = UiData.rules[index].id; }
                 dropped(source, target) => {
                     let id = root.drag-id;

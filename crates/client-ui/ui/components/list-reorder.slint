@@ -1,4 +1,18 @@
-// Keep the gesture outside recycled rows so scrolling can pass the source row.
+// Keep the gesture and its preview outside recycled rows.
+export component ListReorderPreview inherits Rectangle {
+    in property <bool> active;
+    in property <length> row-y;
+    in property <length> row-height;
+    out property <length> preview-y: clamp(root.row-y, 0px, max(0px, root.height - root.row-height));
+    visible: root.active;
+    clip: true;
+    Rectangle {
+        x: 0px; y: root.preview-y; width: parent.width; height: root.row-height;
+        drop-shadow-blur: 12px; drop-shadow-offset-y: 3px; drop-shadow-color: #00000030;
+        @children
+    }
+}
+
 export component ListReorderGesture inherits Rectangle {
     in property <bool> enabled: true;
     in property <bool> cancel-requested;
@@ -10,6 +24,9 @@ export component ListReorderGesture inherits Rectangle {
     in property <length> scroll-content-height;
     in-out property <length> scroll-y;
     out property <bool> reordering: root.tracking && root.enabled && root.same-layout;
+    out property <int> drag-index: root.reordering ? root.source-index : -1;
+    // Pointer movement is direct; scrolling must not move the lifted row.
+    out property <length> drag-y: root.pointer-y - root.grab-offset;
     property <bool> tracking;
     property <bool> armed;
     property <string> press-context;
@@ -24,6 +41,7 @@ export component ListReorderGesture inherits Rectangle {
     property <length> pointer-y;
     property <length> press-y;
     property <length> press-scroll-y;
+    property <length> grab-offset;
     property <length> edge: min(64px, root.height / 4);
     property <length> bottom: min(0px, root.height - root.scroll-content-height);
     property <float> direction: root.pointer-y < root.edge ? -clamp((root.edge - root.pointer-y) / max(1px, root.edge), 0, 1)
@@ -40,7 +58,10 @@ export component ListReorderGesture inherits Rectangle {
     changed row-height => { root.abort(); }
     changed header-height => { root.abort(); }
     changed height => { root.abort(); }
-    changed scroll-y => { if root.reordering { root.update-target(); } }
+    changed scroll-y => {
+        if root.reordering { root.update-target(); }
+        else if root.armed && abs(root.scroll-y - root.press-scroll-y) > 1px { root.abort(); }
+    }
 
     function abort() {
         root.armed = false;
@@ -93,6 +114,7 @@ export component ListReorderGesture inherits Rectangle {
                     root.press-header-height = root.header-height;
                     root.press-height = root.height;
                     root.source-index = floor((root.pointer-y - root.scroll-y - root.header-height) / max(1px, root.row-height));
+                    root.grab-offset = root.pointer-y - root.scroll-y - root.header-height - root.source-index * root.row-height;
                     root.armed = root.source-index >= 0 && root.source-index < root.row-count;
                     if root.armed && root.hold-duration == 0ms {
                         root.armed = false;

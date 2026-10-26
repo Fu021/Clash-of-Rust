@@ -1,5 +1,5 @@
 import { PageSurface, Disclosure, Entrance } from "../../components/motion.slint";
-import { ListReorderGesture } from "../../components/list-reorder.slint";
+import { ListReorderGesture, ListReorderPreview } from "../../components/list-reorder.slint";
 import { MobileTypography } from "typography.slint";
 import { Theme } from "../../theme/palette.slint";
 import { NodeItem, CategoryItem, ConnectionItem, RuleItem, LogItem } from "../../state.slint";
@@ -261,11 +261,12 @@ component RulesToolbar inherits VerticalLayout {
 component RulesRow inherits MCard {
     in property <RuleItem> item;
     in property <int> row-index;
-    selected: MobileView.rule-drag-target == root.item.id || (MobileView.rule-selected && MobileView.selected-id == root.item.id);
+    in property <bool> floating;
+    selected: root.floating || MobileView.rule-drag-target == root.item.id || (MobileView.rule-selected && MobileView.selected-id == root.item.id);
     callback select();
     select => { MobileView.rule-selected = true; MobileView.selected-rule = root.item; MobileView.selected-id = root.item.id; MobileView.rule-position = root.item.position; }
     HorizontalLayout { spacing: MobileTypography.small-gap; cross-axis-alignment: center;
-        MDragHandle { row-height: root.height + 12px; enabled: !MobileData.working && !MobileData.protected && !MobileData.protection-pending;
+        MDragHandle { row-height: root.height + 12px; enabled: !root.floating && !MobileData.working && !MobileData.protected && !MobileData.protection-pending;
             started => { root.select(); MobileView.rule-drag-id = root.item.id; MobileView.rule-drag-target = root.item.id; }
             dragged(delta) => { MobileView.rule-drag-target = MobileData.rules[clamp(root.row-index + delta, 0, MobileData.rules.length - 1)].id; }
             dropped(delta) => {
@@ -279,7 +280,7 @@ component RulesRow inherits MCard {
             MSmall { text: root.item.kind + " · " + root.item.policy + (root.item.enabled ? "" : " · 已停用"); }
             MSmall { text: "来源：" + root.item.source; }
         }
-        MButton { text: ""; accessible-role: button; accessible-label: "规则详情与操作"; width: 48px; horizontal-stretch: 0;
+        MButton { text: ""; accessible-role: button; accessible-label: "规则详情与操作"; width: 48px; horizontal-stretch: 0; enabled: !root.floating;
             Image { source: @image-url("../../icons/chevron-right.svg"); colorize: Theme.secondary; width: 18px; height: 18px;
                 x: (parent.width - self.width) / 2; y: (parent.height - self.height) / 2;
             }
@@ -308,6 +309,7 @@ component RulesFooter inherits GridLayout {
     }
 }
 export component MobileRules inherits PageSurface {
+    property <RuleItem> drag-item;
     property <length> row-extent: 120px;
     property <length> toolbar-extent: header.header-height;
     property <int> displayed-rows: max(1, MobileData.rules.length);
@@ -325,6 +327,7 @@ export component MobileRules inherits PageSurface {
                     content := VerticalLayout { x: 0px; y: 0px; width: parent.width; height: self.preferred-height; alignment: start; spacing: 0px;
                         if index > 0 && index <= MobileData.rules.length: RulesRow {
                             item: MobileData.rules[index - 1]; row-index: index - 1;
+                            opacity: gesture.reordering && gesture.drag-index == index - 1 ? 0.25 : 1;
                             changed height => { root.row-extent = self.height + 12px; }
                         }
                         if index == 1 && MobileData.rules.length == 0: MSmall { text: "没有匹配的规则"; }
@@ -337,6 +340,14 @@ export component MobileRules inherits PageSurface {
                 list-height: list.visible-height; list-content-height: list.content-height; content-y <=> list.content-y;
                 RulesToolbar { available-height: root.height; }
             }
+            ListReorderPreview {
+                x: 0px; y: 0px; width: list.visible-width; height: list.visible-height;
+                active: gesture.reordering; row-y: gesture.drag-y; row-height: root.row-extent - 12px;
+                if gesture.reordering: RulesRow {
+                    x: 0px; y: 0px; width: parent.width; height: parent.height;
+                    item: root.drag-item; floating: true;
+                }
+            }
             gesture := ListReorderGesture {
                 x: 0px; y: 0px; height: list.visible-height;
                 enabled: !MobileData.working && !MobileData.protected && !MobileData.protection-pending && !MobileView.modal;
@@ -346,6 +357,7 @@ export component MobileRules inherits PageSurface {
                 header-height: root.toolbar-extent;
                 scroll-content-height: list.content-height; scroll-y <=> list.content-y;
                 started(index) => {
+                    root.drag-item = MobileData.rules[index];
                     MobileView.rule-selected = true; MobileView.selected-rule = MobileData.rules[index];
                     MobileView.selected-id = MobileData.rules[index].id; MobileView.rule-position = MobileData.rules[index].position;
                     MobileView.rule-drag-id = MobileData.rules[index].id;

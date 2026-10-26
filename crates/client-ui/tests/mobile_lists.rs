@@ -11,7 +11,7 @@ use std::{cell::Cell, rc::Rc, time::Duration};
 slint::slint! {
     import { ListView, ListHeader, MField, MDragHandle } from "../ui/mobile/shared/controls.slint";
     import { RuleDragHandle } from "../ui/components/rule-drag.slint";
-    import { ListReorderGesture } from "../ui/components/list-reorder.slint";
+    import { ListReorderGesture, ListReorderPreview } from "../ui/components/list-reorder.slint";
 
     export component MobileListProbe inherits Window {
         preferred-width: 300px; preferred-height: 240px;
@@ -66,8 +66,10 @@ slint::slint! {
         in property <bool> reorder-enabled: true;
         in property <length> header-height;
         in property <duration> hold-duration: 550ms;
-        out property <length> scroll-y <=> list.content-y;
+        in-out property <length> scroll-y <=> list.content-y;
         out property <bool> dragging <=> gesture.reordering;
+        out property <int> preview-index <=> gesture.drag-index;
+        out property <length> preview-y <=> preview.preview-y;
         out property <int> source: -1;
         out property <int> target: -1;
         out property <int> drop-count;
@@ -77,7 +79,13 @@ slint::slint! {
             for index in 41: Rectangle {
                 height: index == 0 ? root.header-height : 80px;
                 background: index == 1 ? #ff0000 : #e8edf4;
+                opacity: gesture.reordering && index == gesture.drag-index + 1 ? 0.25 : 1;
             }
+        }
+        preview := ListReorderPreview {
+            x: 0px; y: 0px; width: root.width; height: list.visible-height;
+            active: gesture.reordering; row-y: gesture.drag-y; row-height: 80px;
+            Rectangle { x: 0px; y: 0px; width: parent.width; height: parent.height; background: #ff0000; }
         }
         gesture := ListReorderGesture {
             x: 0px; y: 0px; height: list.visible-height;
@@ -323,14 +331,45 @@ fn mobile_list_stacks_rows_and_keeps_sparse_content_at_the_top() {
             scrolling.window().dispatch_event(event);
         };
         pointer(true, 24.);
+        if hold_millis > 0 {
+            assert_eq!(
+                scrolling.get_preview_index(),
+                -1,
+                "the row must stay in place before the long press"
+            );
+        }
         advance(&clock, Duration::from_millis(700));
         assert!(scrolling.get_dragging());
         assert_eq!(scrolling.get_source(), 0);
+        assert_eq!(scrolling.get_preview_index(), 0);
+        assert_eq!(scrolling.get_preview_y(), 0.);
+        scrolling
+            .window()
+            .dispatch_event(WindowEvent::PointerMoved {
+                position: LogicalPosition::new(12., 120.),
+            });
+        assert_eq!(
+            scrolling.get_preview_y(),
+            96.,
+            "the lifted row must preserve the original pointer offset"
+        );
+        let pixels = frame(&adapter, 300, 240);
+        assert_eq!(
+            pixels[120 * 300 + 100],
+            slint::Rgb8Pixel::new(255, 0, 0),
+            "the actual lifted row must render at the pointer"
+        );
+        assert_ne!(
+            pixels[24 * 300 + 100],
+            slint::Rgb8Pixel::new(255, 0, 0),
+            "the source row must remain as a dim placeholder"
+        );
         scrolling
             .window()
             .dispatch_event(WindowEvent::PointerMoved {
                 position: LogicalPosition::new(12., 232.),
             });
+        let lifted_y = scrolling.get_preview_y();
         advance(&clock, Duration::from_secs(10));
         frame(&adapter, 300, 240);
         assert!(scrolling.get_scroll_y() < -800.);
@@ -342,6 +381,18 @@ fn mobile_list_stacks_rows_and_keeps_sparse_content_at_the_top() {
         assert!(
             scrolling.get_dragging(),
             "recycling the source row must retain the gesture"
+        );
+        assert_eq!(scrolling.get_preview_index(), 0);
+        assert_eq!(
+            scrolling.get_preview_y(),
+            lifted_y,
+            "auto-scroll must not pull the lifted row away from the pointer"
+        );
+        let pixels = frame(&adapter, 300, 240);
+        assert_eq!(
+            pixels[200 * 300 + 100],
+            slint::Rgb8Pixel::new(255, 0, 0),
+            "the preview must survive recycling the source row"
         );
         let near_bottom = scrolling.get_scroll_y();
         let lower_target = scrolling.get_target();
@@ -369,6 +420,13 @@ fn mobile_list_stacks_rows_and_keeps_sparse_content_at_the_top() {
         assert_eq!(scrolling.get_source(), 0);
         assert_eq!(scrolling.get_drop_count(), 1);
         assert!(!scrolling.get_dragging());
+        assert_eq!(scrolling.get_preview_index(), -1);
+        let pixels = frame(&adapter, 300, 240);
+        assert_ne!(
+            pixels[120 * 300 + 100],
+            slint::Rgb8Pixel::new(255, 0, 0),
+            "dropping must remove the lifted row"
+        );
         advance(&clock, Duration::from_millis(700));
         assert_eq!(scrolling.get_scroll_y(), centered);
 
@@ -377,6 +435,7 @@ fn mobile_list_stacks_rows_and_keeps_sparse_content_at_the_top() {
         assert!(scrolling.get_dragging());
         scrolling.set_context("filtered".into());
         assert!(!scrolling.get_dragging());
+        assert_eq!(scrolling.get_preview_index(), -1);
         pointer(false, 120.);
         assert_eq!(
             scrolling.get_drop_count(),
@@ -388,6 +447,7 @@ fn mobile_list_stacks_rows_and_keeps_sparse_content_at_the_top() {
         assert!(scrolling.get_dragging());
         scrolling.set_reorder_enabled(false);
         assert!(!scrolling.get_dragging());
+        assert_eq!(scrolling.get_preview_index(), -1);
         pointer(false, 120.);
         assert_eq!(
             scrolling.get_drop_count(),
@@ -395,6 +455,16 @@ fn mobile_list_stacks_rows_and_keeps_sparse_content_at_the_top() {
             "disabling a gesture must cancel the pending drop"
         );
         scrolling.set_reorder_enabled(true);
+        pointer(true, 120.);
+        advance(&clock, Duration::from_millis(700));
+        assert!(scrolling.get_dragging());
+        scrolling.window().dispatch_event(WindowEvent::KeyPressed {
+            text: slint::platform::Key::Escape.into(),
+        });
+        assert!(!scrolling.get_dragging());
+        assert_eq!(scrolling.get_preview_index(), -1);
+        pointer(false, 120.);
+        assert_eq!(scrolling.get_drop_count(), 1, "Escape must cancel the drop");
         if hold_millis > 0 {
             pointer(true, 120.);
             scrolling
@@ -409,6 +479,16 @@ fn mobile_list_stacks_rows_and_keeps_sparse_content_at_the_top() {
             );
             assert!(scrolling.get_scroll_y() > centered);
             pointer(false, 200.);
+            assert_eq!(scrolling.get_drop_count(), 1);
+            pointer(true, 120.);
+            scrolling.set_scroll_y(scrolling.get_scroll_y() - 16.);
+            advance(&clock, Duration::from_millis(700));
+            assert!(
+                !scrolling.get_dragging(),
+                "scrolling before the long press must cancel the pending lift"
+            );
+            assert_eq!(scrolling.get_preview_index(), -1);
+            pointer(false, 120.);
             assert_eq!(scrolling.get_drop_count(), 1);
         }
         scrolling.hide().unwrap();
@@ -441,6 +521,11 @@ fn mobile_list_stacks_rows_and_keeps_sparse_content_at_the_top() {
     advance(&clock, Duration::from_millis(700));
     assert!(header.get_dragging());
     assert_eq!(header.get_source(), 0);
+    assert_eq!(
+        header.get_preview_y(),
+        120.,
+        "the toolbar height must be included in the lifted row origin"
+    );
     header
         .window()
         .dispatch_event(WindowEvent::PointerReleased {
