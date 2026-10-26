@@ -9,7 +9,7 @@ use slint::{
 use std::{cell::Cell, rc::Rc, time::Duration};
 
 slint::slint! {
-    import { ListView, MDragHandle } from "../ui/mobile/shared/controls.slint";
+    import { ListView, ListHeader, MField, MDragHandle } from "../ui/mobile/shared/controls.slint";
     import { RuleDragHandle } from "../ui/components/rule-drag.slint";
     import { ListReorderGesture } from "../ui/components/list-reorder.slint";
 
@@ -89,6 +89,29 @@ slint::slint! {
             started(index) => { root.source = index; }
             targeted(index) => { root.target = index; }
             dropped(source, target) => { root.source = source; root.target = target; root.drop-count += 1; }
+        }
+    }
+    export component HeaderSearchProbe inherits Window {
+        preferred-width: 300px; preferred-height: 600px;
+        in property <[float]> rows;
+        in property <length> available-height: 600px;
+        in-out property <string> query;
+        in-out property <length> scroll-y <=> list.content-y;
+        out property <length> header-visible-height <=> header.height;
+        Rectangle {
+            x: 0px; y: 0px; width: parent.width; height: root.available-height; clip: true;
+            list := ListView {
+                width: parent.width; height: parent.height;
+                for index in root.rows.length + 1: Rectangle {
+                    height: index == 0 ? header.header-height : root.rows[index - 1] * 1px;
+                    background: index == 0 ? transparent : #e8edf4;
+                }
+            }
+            header := ListHeader {
+                x: 0px; y: 0px; width: list.visible-width;
+                list-height: list.visible-height; list-content-height: list.content-height; content-y <=> list.content-y;
+                MField { text <=> root.query; }
+            }
         }
     }
 }
@@ -426,4 +449,79 @@ fn mobile_list_stacks_rows_and_keeps_sparse_content_at_the_top() {
         });
     assert_eq!(header.get_drop_count(), 1);
     header.hide().unwrap();
+
+    adapter.set_size(slint::PhysicalSize::new(300, 600));
+    let search = HeaderSearchProbe::new().unwrap();
+    let search_rows = Rc::new(slint::VecModel::from(vec![80.; 8]));
+    search.set_rows(search_rows.clone().into());
+    search.show().unwrap();
+    frame(&adapter, 300, 600);
+    for event in [
+        WindowEvent::PointerPressed {
+            position: LogicalPosition::new(24., 24.),
+            button: PointerEventButton::Left,
+        },
+        WindowEvent::PointerReleased {
+            position: LogicalPosition::new(24., 24.),
+            button: PointerEventButton::Left,
+        },
+    ] {
+        search.window().dispatch_event(event);
+    }
+    advance(&clock, Duration::from_millis(100));
+    let type_text = |text: &str| {
+        search
+            .window()
+            .dispatch_event(WindowEvent::KeyPressed { text: text.into() });
+        search
+            .window()
+            .dispatch_event(WindowEvent::KeyReleased { text: text.into() });
+    };
+    type_text("a");
+    assert_eq!(search.get_query().as_str(), "a");
+    search
+        .window()
+        .dispatch_event(WindowEvent::PointerScrolled {
+            position: LogicalPosition::new(24., 24.),
+            delta_x: 0.,
+            delta_y: -120.,
+        });
+    frame(&adapter, 300, 600);
+    assert!(
+        search.get_scroll_y() < 0.,
+        "scrolling over the search header must scroll the shared list"
+    );
+    assert_eq!(search.get_header_visible_height(), 0.);
+    search
+        .window()
+        .dispatch_event(WindowEvent::PointerScrolled {
+            position: LogicalPosition::new(24., 24.),
+            delta_x: 0.,
+            delta_y: 120.,
+        });
+    frame(&adapter, 300, 600);
+    assert_eq!(search.get_scroll_y(), 0.);
+    search.set_available_height(240.);
+    search_rows.set_vec(vec![80.; 4]);
+    frame(&adapter, 300, 600);
+    type_text("b");
+    assert_eq!(
+        search.get_query().as_str(),
+        "ab",
+        "keyboard resizing and replacing virtual rows must retain search focus"
+    );
+    search.set_scroll_y(-80.);
+    frame(&adapter, 300, 600);
+    assert_eq!(search.get_header_visible_height(), 0.);
+    search_rows.set_vec(vec![]);
+    frame(&adapter, 300, 600);
+    advance(&clock, Duration::from_millis(50));
+    type_text("c");
+    assert_eq!(
+        search.get_query().as_str(),
+        "abc",
+        "empty search results must retain the editable header"
+    );
+    assert!(search.get_header_visible_height() >= 48.);
+    search.hide().unwrap();
 }

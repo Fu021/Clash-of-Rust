@@ -56,6 +56,7 @@ export component MParagraph inherits MText { wrap: word-wrap; height: self.prefe
 // visible height, leaving Android with no scrollable overflow.
 export component MScroll inherits Flickable {
     in property <string> content-key;
+    out property <length> content-preferred-height: content.preferred-height;
     property <length> bottom: min(0px, self.height - self.content-height);
     changed content-key => { self.content-y = 0px; }
     changed bottom => { self.content-y = clamp(self.content-y, self.bottom, 0px); }
@@ -69,6 +70,16 @@ export component MScroll inherits Flickable {
         vertical-stretch: 0;
         alignment: start; spacing: 0px; @children
     }
+}
+
+// Keep editable headers alive while virtual rows are replaced or recycled.
+export component ListHeader inherits MScroll {
+    in property <length> list-height;
+    in property <length> list-content-height;
+    out property <length> header-height: root.content-preferred-height + 12px;
+    vertical-stretch: 0;
+    height: clamp(root.header-height + root.content-y, 0px, root.list-height);
+    content-height: root.height + max(0px, root.list-content-height - root.list-height);
 }
 
 // Slint recognizes virtual row layout by the immediate component name "ListView".
