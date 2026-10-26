@@ -1081,7 +1081,7 @@ mod tests {
     }
 
     fn geo_fixture(path: &std::path::Path, contents: &[u8]) {
-        use core::geodata::{GEO_FILES, GeoFile, GeoManifest, MANIFEST, hash_file};
+        use crate::core::geodata::{GEO_FILES, GeoFile, GeoManifest, MANIFEST, hash_file};
         std::fs::create_dir_all(path).unwrap();
         let mut manifest = GeoManifest {
             version: String::from_utf8(contents.to_vec()).unwrap(),

@@ -308,10 +308,14 @@ fn mobile_list_stacks_rows_and_keeps_sparse_content_at_the_top() {
             .dispatch_event(WindowEvent::PointerMoved {
                 position: LogicalPosition::new(12., 232.),
             });
-        advance(&clock, Duration::from_secs(3));
+        advance(&clock, Duration::from_secs(10));
         frame(&adapter, 300, 240);
         assert!(scrolling.get_scroll_y() < -800.);
-        assert!(scrolling.get_target() > 10);
+        assert_eq!(
+            scrolling.get_target(),
+            39,
+            "edge scrolling must reach the final rule"
+        );
         assert!(
             scrolling.get_dragging(),
             "recycling the source row must retain the gesture"
