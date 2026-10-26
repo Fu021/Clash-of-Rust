@@ -479,6 +479,31 @@ fn mobile_list_stacks_rows_and_keeps_sparse_content_at_the_top() {
     };
     type_text("a");
     assert_eq!(search.get_query().as_str(), "a");
+    search.set_available_height(240.);
+    search_rows.set_vec(vec![80.; 4]);
+    frame(&adapter, 300, 600);
+    type_text("b");
+    assert_eq!(
+        search.get_query().as_str(),
+        "ab",
+        "keyboard resizing and replacing virtual rows must retain search focus"
+    );
+    search_rows.set_vec(vec![]);
+    frame(&adapter, 300, 600);
+    advance(&clock, Duration::from_millis(50));
+    type_text("c");
+    assert_eq!(
+        search.get_query().as_str(),
+        "abc",
+        "empty search results must retain the editable header"
+    );
+    assert!(search.get_header_visible_height() >= 48.);
+
+    // Slint releases focus when a field scrolls out of view. Exercise scrolling
+    // separately from keyboard/model changes that must retain an editable field.
+    search.set_available_height(600.);
+    search_rows.set_vec(vec![80.; 8]);
+    frame(&adapter, 300, 600);
     search
         .window()
         .dispatch_event(WindowEvent::PointerScrolled {
@@ -501,27 +526,11 @@ fn mobile_list_stacks_rows_and_keeps_sparse_content_at_the_top() {
         });
     frame(&adapter, 300, 600);
     assert_eq!(search.get_scroll_y(), 0.);
-    search.set_available_height(240.);
-    search_rows.set_vec(vec![80.; 4]);
-    frame(&adapter, 300, 600);
-    type_text("b");
-    assert_eq!(
-        search.get_query().as_str(),
-        "ab",
-        "keyboard resizing and replacing virtual rows must retain search focus"
-    );
     search.set_scroll_y(-80.);
     frame(&adapter, 300, 600);
     assert_eq!(search.get_header_visible_height(), 0.);
     search_rows.set_vec(vec![]);
     frame(&adapter, 300, 600);
-    advance(&clock, Duration::from_millis(50));
-    type_text("c");
-    assert_eq!(
-        search.get_query().as_str(),
-        "abc",
-        "empty search results must retain the editable header"
-    );
     assert!(search.get_header_visible_height() >= 48.);
     search.hide().unwrap();
 }
