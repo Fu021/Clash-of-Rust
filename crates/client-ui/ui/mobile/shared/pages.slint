@@ -2,7 +2,7 @@ import { PageSurface, Disclosure, Entrance } from "../../components/motion.slint
 import { ListReorderGesture } from "../../components/list-reorder.slint";
 import { MobileTypography } from "typography.slint";
 import { Theme } from "../../theme/palette.slint";
-import { NodeItem, CategoryItem, ConnectionItem, RuleItem } from "../../state.slint";
+import { NodeItem, CategoryItem, ConnectionItem, RuleItem, LogItem } from "../../state.slint";
 import { MobileData, MobileView, MobileActions, MobileIntent } from "state.slint";
 import { MText, MSmall, MHeading, MParagraph, MCard, MButton, MPagination, MRow, MDivider, MSwitch, MField, MSelect, MTag, MNav, MScroll, ListView, MProgress, MCopyButton, MDragHandle } from "controls.slint";
 
@@ -360,31 +360,48 @@ export component MobileRules inherits PageSurface {
     }
 }
 
+component LogsToolbar inherits VerticalLayout {
+    alignment: start; spacing: MobileTypography.gap; vertical-stretch: 0;
+    MField { placeholder: "搜索日志内容"; text <=> MobileView.query; edited(value) => { MobileActions.request(MobileIntent.query, "logs", value); } }
+    HorizontalLayout { spacing: MobileTypography.small-gap;
+        MSelect { options: ["全部等级", "TRACE", "DEBUG", "INFO", "WARN", "ERROR"]; value: MobileView.log-level;
+            selected(index, value) => { MobileView.log-level = value; MobileActions.request(MobileIntent.log-level, value, ""); }
+        }
+        MButton { text: "导出"; width: max(68px, MobileTypography.font-size(15) * 2 + 16px); horizontal-stretch: 0; clicked => { MobileActions.request(MobileIntent.export-logs, "", ""); } }
+        MButton { text: "清空"; width: max(68px, MobileTypography.font-size(15) * 2 + 16px); horizontal-stretch: 0; clicked => { MobileActions.request(MobileIntent.clear-logs, "", ""); } }
+    }
+}
+component LogsRow inherits MCard {
+    in property <LogItem> item;
+    interactive: true; clicked => { MobileView.log-message = root.item.message; MobileView.detail = 10; }
+    HorizontalLayout { spacing: MobileTypography.small-gap; cross-axis-alignment: center;
+        MTag { text: root.item.level; tone: root.item.tone; }
+        MSmall { text: root.item.time; horizontal-alignment: right; }
+    }
+    Text { text: root.item.message; color: Theme.ink; wrap: word-wrap; overflow: elide; vertical-alignment: top; min-width: 0px; height: MobileTypography.font-size(14) * 3.2; font-size: MobileTypography.font-size(14); }
+    HorizontalLayout { spacing: MobileTypography.small-gap;
+        MButton { text: "查看全文"; clicked => { MobileView.log-message = root.item.message; MobileView.detail = 10; } }
+        MCopyButton { value: root.item.message; }
+    }
+}
 export component MobileLogs inherits PageSurface {
-    VerticalLayout { spacing: MobileTypography.gap;
-        MField { placeholder: "搜索日志内容"; text <=> MobileView.query; edited(value) => { MobileActions.request(MobileIntent.query, "logs", value); } }
-        HorizontalLayout { spacing: MobileTypography.small-gap;
-            MSelect { options: ["全部等级", "TRACE", "DEBUG", "INFO", "WARN", "ERROR"]; value: MobileView.log-level;
-                selected(index, value) => { MobileView.log-level = value; MobileActions.request(MobileIntent.log-level, value, ""); }
-            }
-            MButton { text: "导出"; width: max(68px, MobileTypography.font-size(15) * 2 + 16px); horizontal-stretch: 0; clicked => { MobileActions.request(MobileIntent.export-logs, "", ""); } }
-            MButton { text: "清空"; width: max(68px, MobileTypography.font-size(15) * 2 + 16px); horizontal-stretch: 0; clicked => { MobileActions.request(MobileIntent.clear-logs, "", ""); } }
-        }
+    property <bool> compact: root.height < 420px || Theme.text-scale > 1.25;
+    if !root.compact: VerticalLayout { spacing: MobileTypography.gap;
+        LogsToolbar { }
         ListView { content-key: MobileView.query + "/" + MobileView.log-level; min-height: 0px; vertical-stretch: 1;
-        for entry in MobileData.logs: Rectangle { height: card.height + 12px;
-        card := MCard { x: 0px; y: 0px; width: parent.width;
-            interactive: true; clicked => { MobileView.log-message = entry.message; MobileView.detail = 10; }
-            HorizontalLayout { spacing: MobileTypography.small-gap; cross-axis-alignment: center;
-                MTag { text: entry.level; tone: entry.tone; }
-                MSmall { text: entry.time; horizontal-alignment: right; }
-            }
-            Text { text: entry.message; color: Theme.ink; wrap: word-wrap; overflow: elide; vertical-alignment: top; min-width: 0px; height: MobileTypography.font-size(14) * 3.2; font-size: MobileTypography.font-size(14); }
-            HorizontalLayout { spacing: MobileTypography.small-gap;
-                MButton { text: "查看全文"; clicked => { MobileView.log-message = entry.message; MobileView.detail = 10; } }
-                MCopyButton { value: entry.message; }
+            for entry in MobileData.logs: Rectangle { height: card.height + 12px;
+                card := LogsRow { x: 0px; y: 0px; width: parent.width; item: entry; }
             }
         }
-        } }
+    }
+    if root.compact: ListView { content-key: MobileView.query + "/" + MobileView.log-level;
+        for index in MobileData.logs.length + 1: Rectangle {
+            height: content.preferred-height + 12px;
+            content := VerticalLayout { x: 0px; y: 0px; width: parent.width; height: self.preferred-height; alignment: start; spacing: 0px;
+                if index == 0: LogsToolbar { }
+                if index > 0: LogsRow { item: MobileData.logs[index - 1]; }
+            }
+        }
     }
 }
 export component MobileNetwork inherits PageSurface {
