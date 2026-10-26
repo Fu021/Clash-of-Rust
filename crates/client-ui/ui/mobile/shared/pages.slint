@@ -344,7 +344,7 @@ export component MobileRules inherits PageSurface {
                 x: 0px; y: 0px; width: list.visible-width; height: list.visible-height;
                 active: gesture.reordering; row-y: gesture.drag-y; row-height: root.row-extent - 12px;
                 if gesture.reordering: RulesRow {
-                    x: 0px; y: 0px; width: parent.width; height: parent.height;
+                    x: 0px; y: 0px; width: parent.width; height: root.row-extent - 12px;
                     item: root.drag-item; floating: true;
                 }
             }

@@ -85,7 +85,7 @@ slint::slint! {
         preview := ListReorderPreview {
             x: 0px; y: 0px; width: root.width; height: list.visible-height;
             active: gesture.reordering; row-y: gesture.drag-y; row-height: 80px;
-            Rectangle { x: 0px; y: 0px; width: parent.width; height: parent.height; background: #ff0000; }
+            Rectangle { x: 0px; y: 0px; width: parent.width; height: 80px; background: #ff0000; }
         }
         gesture := ListReorderGesture {
             x: 0px; y: 0px; height: list.visible-height;
@@ -363,6 +363,11 @@ fn mobile_list_stacks_rows_and_keeps_sparse_content_at_the_top() {
             pixels[24 * 300 + 100],
             slint::Rgb8Pixel::new(255, 0, 0),
             "the source row must remain as a dim placeholder"
+        );
+        assert_ne!(
+            pixels[200 * 300 + 100],
+            slint::Rgb8Pixel::new(255, 0, 0),
+            "the preview must use the row height and leave later rows visible"
         );
         scrolling
             .window()

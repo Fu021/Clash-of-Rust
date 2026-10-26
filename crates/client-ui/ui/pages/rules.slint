@@ -155,7 +155,7 @@ export component RulesPage inherits PageSurface {
                 active: gesture.reordering; row-y: gesture.drag-y;
                 row-height: root.row-extent - Theme.content-gap;
                 if gesture.reordering: RulesRow {
-                    x: 0px; y: 0px; width: parent.width; height: parent.height;
+                    x: 0px; y: 0px; width: parent.width; height: root.row-extent - Theme.content-gap;
                     item: root.drag-item; floating: true; policy-width-limit: root.width * 0.2;
                 }
             }
