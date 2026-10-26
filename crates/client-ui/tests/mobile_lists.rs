@@ -281,7 +281,7 @@ fn mobile_list_stacks_rows_and_keeps_sparse_content_at_the_top() {
 
     for hold_millis in [550, 0] {
         let scrolling = ReorderScrollProbe::new().unwrap();
-        scrolling.set_hold_duration(Duration::from_millis(hold_millis));
+        scrolling.set_hold_duration(hold_millis);
         scrolling.show().unwrap();
         frame(&adapter, 300, 240);
         let pointer = |pressed: bool, y: f32| {
