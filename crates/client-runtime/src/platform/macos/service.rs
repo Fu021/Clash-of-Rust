@@ -510,6 +510,7 @@ pub fn serve(uid: u32) -> Result<()> {
     }
     let mut children: Vec<Child> = Vec::new();
     let mut dns_error: Option<String> = None;
+    let mut dns_native_ready = false;
     let mut dns_relay = match dns_lease.as_ref().filter(|lease| lease.port() >= 1024) {
         Some(lease) => match super::dns::Relay::start(lease.port()) {
             Ok(relay) => Some(relay),
@@ -531,6 +532,7 @@ pub fn serve(uid: u32) -> Result<()> {
             }
             if dns_lease.is_none() {
                 dns_relay = None;
+                dns_native_ready = false;
             }
             let relay_failed = dns_lease.as_ref().is_some_and(|lease| {
                 lease.port() >= 1024
@@ -544,6 +546,7 @@ pub fn serve(uid: u32) -> Result<()> {
                         && dns_refresh.elapsed() >= Duration::from_secs(5)))
             {
                 dns_refresh = Instant::now();
+                dns_native_ready = false;
                 // The same helper thread serializes changes, journal writes
                 // and user requests. No competing DNS recovery worker exists.
                 let refreshed = (|| -> Result<()> {
@@ -553,7 +556,18 @@ pub fn serve(uid: u32) -> Result<()> {
                         dns_relay = None;
                         dns_relay = Some(super::dns::Relay::start(port)?);
                     }
-                    super::dns::refresh(&dns_journal, &mut dns_lease)
+                    let refreshed = super::dns::refresh(&dns_journal, &mut dns_lease);
+                    // Dynamic-store publication can precede mDNSResponder's
+                    // actual switch. Also confirm quarantine before reporting
+                    // its conflict, so callers cannot mistake it for readiness.
+                    dns_relay
+                        .as_ref()
+                        .context("保护 DNS 本机转发不可用")?
+                        .verify_native()?;
+                    refreshed?;
+                    super::dns::verify(&dns_lease, port)?;
+                    dns_native_ready = true;
+                    Ok(())
                 })();
                 match refreshed {
                     Ok(()) => dns_error = None,
@@ -609,12 +623,20 @@ pub fn serve(uid: u32) -> Result<()> {
                                 );
                                 dns_relay = Some(super::dns::Relay::start(port)?);
                             }
-                            let enabled =
-                                super::dns::enable(&dns_journal, &mut dns_lease, caller, uid, port);
+                            dns_native_ready = false;
+                            let enabled = super::dns::enable(
+                                &dns_journal,
+                                &mut dns_lease,
+                                caller,
+                                uid,
+                                port,
+                                dns_relay.as_ref().unwrap(),
+                            );
                             if dns_lease.is_none() {
                                 dns_relay = None;
                             }
                             enabled?;
+                            dns_native_ready = true;
                         } else {
                             ensure!(
                                 dns_lease
@@ -624,6 +646,7 @@ pub fn serve(uid: u32) -> Result<()> {
                             );
                             super::dns::restore(&dns_journal, &mut dns_lease)?;
                             dns_relay = None;
+                            dns_native_ready = false;
                         }
                         dns_error = None;
                     }
@@ -635,6 +658,7 @@ pub fn serve(uid: u32) -> Result<()> {
                         if let Some(error) = &dns_error {
                             bail!("{error}");
                         }
+                        ensure!(dns_native_ready, "系统原生 DNS 尚未进入保护入口");
                         super::dns::verify(&dns_lease, port)?;
                     }
                     Request::Adopt { original, owned } => {

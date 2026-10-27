@@ -32,6 +32,8 @@ unsafe extern "C" {
     ) -> u8;
 }
 
+#[path = "dns/native.rs"]
+mod native;
 #[path = "dns/overlay.rs"]
 mod overlay;
 #[path = "dns/relay.rs"]
@@ -319,6 +321,22 @@ pub(super) fn verify(lease: &Option<Lease>, port: u16) -> Result<()> {
         }),
         "系统 DNS 尚未进入保护入口"
     );
+    let lease = lease.as_ref().unwrap();
+    let prefix = format!(
+        "State:/Network/Service/org.clashofrust.protection.{}",
+        lease.uid
+    );
+    let current = services()?;
+    let sources = overlay::originals(&current, &lease.resolvers, &prefix);
+    let plan = overlay::plan(&sources, &prefix, PORT)
+        .map_err(|_| anyhow::anyhow!("系统 DNS 变化尚未完成保护接管"))?;
+    ensure!(
+        plan == lease.resolvers
+            && plan
+                .iter()
+                .all(|entry| current.get(&entry.key) == Some(&entry.owned)),
+        "系统 DNS 变化尚未完成保护接管"
+    );
     Ok(())
 }
 
@@ -394,6 +412,7 @@ pub(super) fn enable(
     owner: u32,
     uid: u32,
     port: u16,
+    relay: &Relay,
 ) -> Result<()> {
     ensure!(port >= 1024, "保护 DNS 本机端口无效");
     std::net::TcpStream::connect_timeout(
@@ -436,7 +455,9 @@ pub(super) fn enable(
             let current = dynamic_value("State:/Network/Global/DNS")?;
             if current.as_ref().is_some_and(|value| {
                 value["ServerAddresses"] == json!(["127.0.0.1"]) && value["ServerPort"] == PORT
-            }) {
+            }) && relay.verify_native().is_ok()
+            {
+                verify(lease, port)?;
                 return Ok(());
             }
             if std::time::Instant::now() >= deadline {

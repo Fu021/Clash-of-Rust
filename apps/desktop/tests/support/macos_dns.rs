@@ -480,6 +480,7 @@ pub async fn run(engine: &mut Engine, profile: &Path) {
                 );
                 tokio::time::sleep(Duration::from_millis(100)).await;
             }
+            wait_protection_ready(listen_port).await;
             lookup(&format!("reconnected.{tail}"), "100.100.12.34").await;
             lookup(&format!("reconnected.{new_search}"), "100.100.12.34").await;
             lookup_name(&format!("new-short-{suffix}"), "100.100.12.34").await;
@@ -493,7 +494,7 @@ pub async fn run(engine: &mut Engine, profile: &Path) {
             // Reconnection can also introduce an unsafe split. The helper must
             // quarantine it and report failure, then recover without a toggle.
             let _ = install(&new_search, true);
-            let deadline = tokio::time::Instant::now() + Duration::from_secs(5);
+            let deadline = tokio::time::Instant::now() + Duration::from_secs(12);
             loop {
                 let state =
                     tokio::task::spawn_blocking(move || service::check_protection_dns(listen_port))
@@ -517,22 +518,9 @@ pub async fn run(engine: &mut Engine, profile: &Path) {
             wait_resolver("claude.ai", "100.100.100.100", false).await;
             lookup(&format!("quarantined-{suffix}.claude.ai"), "203.0.113.20").await;
             (expected_vpn, expected_search) = install(&new_search, false);
-            let deadline = tokio::time::Instant::now() + Duration::from_secs(5);
-            loop {
-                if tokio::task::spawn_blocking(move || service::check_protection_dns(listen_port))
-                    .await
-                    .unwrap()
-                    .is_ok()
-                {
-                    break;
-                }
-                assert!(
-                    tokio::time::Instant::now() < deadline,
-                    "Safe reconnect was not recovered"
-                );
-                tokio::time::sleep(Duration::from_millis(100)).await;
-            }
+            wait_protection_ready(listen_port).await;
             lookup(&format!("recovered.{new_search}"), "100.100.12.34").await;
+            lookup(&format!("public-recovered-{suffix}.test"), "203.0.113.20").await;
         }
         // System daemons may query while protection is off between cycles.
         // Attribute only this test's unique names to the path under test.
@@ -556,6 +544,14 @@ pub async fn run(engine: &mut Engine, profile: &Path) {
                 .iter()
                 .any(|host| host.contains(&suffix)),
             "Public DNS reached physical fallback"
+        );
+        assert!(
+            !core_queries
+                .lock()
+                .unwrap()
+                .iter()
+                .any(|host| host.starts_with("probe.cor-dns-")),
+            "Native DNS readiness probes must terminate at the local relay"
         );
         tokio::task::spawn_blocking(|| service::protection_dns(false))
             .await
@@ -584,6 +580,23 @@ pub async fn run(engine: &mut Engine, profile: &Path) {
     println!(
         "PASS: macOS public/protected DNS uses a local core listener without VPN/physical fallback; native split DNS, short names, reconnect and restoration survive"
     );
+}
+
+async fn wait_protection_ready(port: u16) {
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(12);
+    loop {
+        let state = tokio::task::spawn_blocking(move || service::check_protection_dns(port))
+            .await
+            .unwrap();
+        if state.is_ok() {
+            return;
+        }
+        assert!(
+            tokio::time::Instant::now() < deadline,
+            "Native protection DNS was not ready after reconnect: {state:?}"
+        );
+        tokio::time::sleep(Duration::from_millis(100)).await;
+    }
 }
 
 async fn wait_resolver(domain: &str, server: &str, present: bool) {
