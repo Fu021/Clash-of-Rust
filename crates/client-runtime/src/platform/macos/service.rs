@@ -510,6 +510,16 @@ pub fn serve(uid: u32) -> Result<()> {
     }
     let mut children: Vec<Child> = Vec::new();
     let mut dns_error: Option<String> = None;
+    let mut dns_relay = match dns_lease.as_ref().filter(|lease| lease.port() >= 1024) {
+        Some(lease) => match super::dns::Relay::start(lease.port()) {
+            Ok(relay) => Some(relay),
+            Err(error) => {
+                dns_error = Some(format!("保护 DNS 转发恢复失败：{error:#}"));
+                None
+            }
+        },
+        None => None,
+    };
     let mut dns_refresh = Instant::now();
     let result = (|| -> Result<()> {
         while !STOP.load(Ordering::Relaxed) {
@@ -519,14 +529,33 @@ pub fn serve(uid: u32) -> Result<()> {
             {
                 let _ = super::dns::restore(&dns_journal, &mut dns_lease);
             }
+            if dns_lease.is_none() {
+                dns_relay = None;
+            }
+            let relay_failed = dns_lease.as_ref().is_some_and(|lease| {
+                lease.port() >= 1024
+                    && !dns_relay
+                        .as_ref()
+                        .is_some_and(|relay| relay.serving(lease.port()))
+            });
             if dns_lease.is_some()
                 && (dns_changes.changed()
-                    || (dns_error.is_some() && dns_refresh.elapsed() >= Duration::from_secs(5)))
+                    || ((dns_error.is_some() || relay_failed)
+                        && dns_refresh.elapsed() >= Duration::from_secs(5)))
             {
                 dns_refresh = Instant::now();
                 // The same helper thread serializes changes, journal writes
                 // and user requests. No competing DNS recovery worker exists.
-                match super::dns::refresh(&dns_journal, &mut dns_lease) {
+                let refreshed = (|| -> Result<()> {
+                    let port = dns_lease.as_ref().unwrap().port();
+                    if port >= 1024 && !dns_relay.as_ref().is_some_and(|relay| relay.serving(port))
+                    {
+                        dns_relay = None;
+                        dns_relay = Some(super::dns::Relay::start(port)?);
+                    }
+                    super::dns::refresh(&dns_journal, &mut dns_lease)
+                })();
+                match refreshed {
                     Ok(()) => dns_error = None,
                     Err(error) => {
                         let message = format!("保护 DNS 自动更新失败：{error:#}");
@@ -573,7 +602,19 @@ pub fn serve(uid: u32) -> Result<()> {
                         if enabled {
                             let port = port.context("保护 DNS 本机端口缺失")?;
                             ensure!(port >= 1024, "保护 DNS 本机端口无效");
-                            super::dns::enable(&dns_journal, &mut dns_lease, caller, uid, port)?;
+                            if !dns_relay.as_ref().is_some_and(|relay| relay.serving(port)) {
+                                ensure!(
+                                    dns_relay.is_none(),
+                                    "保护 DNS 转发异常，请先关闭保护后重试"
+                                );
+                                dns_relay = Some(super::dns::Relay::start(port)?);
+                            }
+                            let enabled =
+                                super::dns::enable(&dns_journal, &mut dns_lease, caller, uid, port);
+                            if dns_lease.is_none() {
+                                dns_relay = None;
+                            }
+                            enabled?;
                         } else {
                             ensure!(
                                 dns_lease
@@ -582,10 +623,15 @@ pub fn serve(uid: u32) -> Result<()> {
                                 "DNS 正由其他客户端持有"
                             );
                             super::dns::restore(&dns_journal, &mut dns_lease)?;
+                            dns_relay = None;
                         }
                         dns_error = None;
                     }
                     Request::DnsCheck { port } => {
+                        ensure!(
+                            dns_relay.as_ref().is_some_and(|relay| relay.serving(port)),
+                            "保护 DNS 本机转发不可用"
+                        );
                         if let Some(error) = &dns_error {
                             bail!("{error}");
                         }

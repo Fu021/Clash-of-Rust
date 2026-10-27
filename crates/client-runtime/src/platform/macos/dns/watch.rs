@@ -40,7 +40,7 @@ impl Changes {
         let store = cf::Owned::new(unsafe {
             SCDynamicStoreCreate(ptr::null(), name.0, Some(changed), ptr::null_mut())
         })?;
-        let patterns = cf::plist(&serde_json::json!(["State:/Network/Service/.*/DNS"]))?;
+        let patterns = cf::plist(&serde_json::json!(super::DNS_PATTERNS))?;
         ensure!(
             unsafe { SCDynamicStoreSetNotificationKeys(store.0, ptr::null(), patterns.0) } != 0,
             "无法监测系统 DNS 变化"

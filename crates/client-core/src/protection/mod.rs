@@ -821,6 +821,10 @@ mod tests {
                 selectors: vec![],
             },
         );
+        for port in [0, 52, 54, 1023] {
+            protection.mac_dns_port = Some(port);
+            assert!(protection.validate().is_err());
+        }
         protection.mac_dns_port = Some(53);
         assert!(protection.validate().is_err());
         protection.mac_dns_port = Some(25353);

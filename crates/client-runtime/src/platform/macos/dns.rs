@@ -34,12 +34,23 @@ unsafe extern "C" {
 
 #[path = "dns/overlay.rs"]
 mod overlay;
+#[path = "dns/relay.rs"]
+mod relay;
 #[path = "dns/tailscale.rs"]
 mod tailscale;
 #[path = "dns/watch.rs"]
 mod watch;
+pub(super) use relay::Relay;
 pub(crate) use tailscale::snapshot as split_servers;
 pub(super) use watch::Changes;
+
+// resolv.conf clients do not understand ServerPort. The root helper owns this
+// listener and relays exclusively to the core's unprivileged loopback port.
+pub const PORT: u16 = 53;
+const DNS_PATTERNS: &[&str] = &[
+    "State:/Network/Service/.*/DNS",
+    "Setup:/Network/Service/.*/DNS",
+];
 
 pub fn available_port() -> Result<u16> {
     for _ in 0..32 {
@@ -70,7 +81,7 @@ fn dynamic_value(key: &str) -> Result<Option<Value>> {
 
 fn services() -> Result<overlay::Services> {
     let store = dynamic_store()?;
-    let patterns = cf::plist(&json!(["State:/Network/Service/.*/DNS"]))?;
+    let patterns = cf::plist(&json!(DNS_PATTERNS))?;
     let values =
         cf::Owned::new(unsafe { SCDynamicStoreCopyMultiple(store.0, ptr::null(), patterns.0) })?;
     let values = cf::json(values.0)?;
@@ -158,6 +169,9 @@ fn process_start(pid: u32) -> Option<[u64; 2]> {
     Some([info.pbi_start_tvsec, info.pbi_start_tvusec])
 }
 impl Lease {
+    pub(super) fn port(&self) -> u16 {
+        self.port
+    }
     pub fn owner_exited(&self) -> bool {
         process_start(self.owner) != Some(self.started)
     }
@@ -234,12 +248,9 @@ pub(super) fn refresh(path: &Path, lease: &mut Option<Lease>) -> Result<()> {
         previous.uid,
     );
     let sources = overlay::originals(&current, &previous.resolvers, &prefix);
-    let (plan, fault) = match overlay::plan(&sources, &prefix, previous.port) {
+    let (plan, fault) = match overlay::plan(&sources, &prefix, PORT) {
         Ok(plan) => (plan, None),
-        Err(error) => (
-            overlay::quarantine(&sources, &prefix, previous.port),
-            Some(error),
-        ),
+        Err(error) => (overlay::quarantine(&sources, &prefix, PORT), Some(error)),
     };
     let mut values = overlay::Services::new();
     let mut remove = Vec::new();
@@ -304,7 +315,7 @@ pub(super) fn verify(lease: &Option<Lease>, port: u16) -> Result<()> {
     let current = dynamic_value("State:/Network/Global/DNS")?;
     ensure!(
         current.as_ref().is_some_and(|value| {
-            value["ServerAddresses"] == json!(["127.0.0.1"]) && value["ServerPort"] == port
+            value["ServerAddresses"] == json!(["127.0.0.1"]) && value["ServerPort"] == PORT
         }),
         "系统 DNS 尚未进入保护入口"
     );
@@ -350,8 +361,7 @@ pub(super) fn restore(path: &Path, lease: &mut Option<Lease>) -> Result<()> {
         while dynamic_value("State:/Network/Global/DNS")?
             .as_ref()
             .is_some_and(|value| {
-                value["ServerAddresses"] == json!(["127.0.0.1"])
-                    && value["ServerPort"] == owned.port
+                value["ServerAddresses"] == json!(["127.0.0.1"]) && value["ServerPort"] == PORT
             })
         {
             ensure!(
@@ -425,7 +435,7 @@ pub(super) fn enable(
         loop {
             let current = dynamic_value("State:/Network/Global/DNS")?;
             if current.as_ref().is_some_and(|value| {
-                value["ServerAddresses"] == json!(["127.0.0.1"]) && value["ServerPort"] == port
+                value["ServerAddresses"] == json!(["127.0.0.1"]) && value["ServerPort"] == PORT
             }) {
                 return Ok(());
             }
