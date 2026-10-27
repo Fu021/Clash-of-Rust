@@ -112,7 +112,7 @@ pub async fn run(engine: &mut Engine, profile: &Path) {
     let install = |search: &str| {
         scutil(&format!(
             "d.init\nd.add ServerAddresses * 127.0.0.1\nd.add ServerPort # {vpn_port}\n\
-             d.add SearchOrder # 100600\nd.add SupplementalMatchDomains * \"\" {tail} {corp} claude.ai\n\
+             d.add SearchOrder # 100600\nd.add SupplementalMatchDomains * \"\" {tail} {corp} claude.ai bash.ws\n\
              d.add SupplementalMatchDomainsNoSearch # 1\nd.add SearchDomains * {search}\nset {key}\nquit\n"
         ));
     };
@@ -159,6 +159,11 @@ pub async fn run(engine: &mut Engine, profile: &Path) {
         lookup(&format!("public-{attempt}.{suffix}.test"), "203.0.113.20").await;
         lookup(
             &format!("protected-{attempt}-{suffix}.claude.ai"),
+            "203.0.113.20",
+        )
+        .await;
+        lookup(
+            &format!("diagnostic-{attempt}-{suffix}.bash.ws"),
             "203.0.113.20",
         )
         .await;

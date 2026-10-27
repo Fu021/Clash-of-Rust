@@ -155,7 +155,8 @@ fn desired(original: &ProxyState) -> Result<ProxyState> {
 
 fn resolver_config(split: &[crate::claude_check::protection::SplitDns]) -> Value {
     use crate::claude_check::protection::{
-        ASSOCIATED_DOMAINS, DIAGNOSTIC_HOSTS, OWNED_DOMAINS, protected_dns_host,
+        ASSOCIATED_DOMAINS, DIAGNOSTIC_DNS_SUFFIXES, DIAGNOSTIC_HOSTS, OWNED_DOMAINS,
+        protected_dns_host,
     };
     // A separate supplemental default outranks a VPN's catch-all DNS without
     // changing its private suffixes or network preferences. "*" also covers
@@ -164,6 +165,7 @@ fn resolver_config(split: &[crate::claude_check::protection::SplitDns]) -> Value
     domains.extend(OWNED_DOMAINS);
     domains.extend(ASSOCIATED_DOMAINS);
     domains.extend(DIAGNOSTIC_HOSTS);
+    domains.extend(DIAGNOSTIC_DNS_SUFFIXES);
     for resolver in split {
         if protected_dns_host(&resolver.domain) && !domains.contains(&resolver.domain.as_str()) {
             domains.push(&resolver.domain);
@@ -416,6 +418,7 @@ mod tests {
         let domains = value["SupplementalMatchDomains"].as_array().unwrap();
         assert_eq!(domains[0], "");
         assert!(domains.contains(&json!("claude.ai")));
+        assert!(domains.contains(&json!("bash.ws")));
         assert!(domains.contains(&json!("stun.l.google.com")));
         assert!(!domains.contains(&json!("ts.net")));
         assert!(value["SearchDomains"].is_null());
@@ -428,7 +431,7 @@ mod tests {
     #[test]
     fn resolver_plan_keeps_private_domains_and_protects_conflicting_domains() {
         use crate::claude_check::protection::SplitDns;
-        let split = ["tail-fixture.ts.net", "claude.ai"]
+        let split = ["tail-fixture.ts.net", "claude.ai", "bash.ws"]
             .into_iter()
             .map(|domain| SplitDns {
                 domain: domain.into(),
@@ -447,6 +450,12 @@ mod tests {
                 .as_array()
                 .unwrap()
                 .contains(&json!("claude.ai"))
+        );
+        assert!(
+            plan[0].owned["SupplementalMatchDomains"]
+                .as_array()
+                .unwrap()
+                .contains(&json!("bash.ws"))
         );
         assert_eq!(
             plan[1].owned["SupplementalMatchDomains"],

@@ -51,6 +51,9 @@ pub const DIAGNOSTIC_HOSTS: &[&str] = &[
     "stun.cloudflare.com",
     "stun.l.google.com",
 ];
+// The recursive DNS test uses random subdomains; pin their DNS as a suffix
+// without changing how the separate diagnostic HTTPS request is routed.
+pub const DIAGNOSTIC_DNS_SUFFIXES: &[&str] = &["bash.ws"];
 pub const DOH: &[&str] = &[
     "https://1.1.1.1/dns-query",
     "https://8.8.8.8/dns-query",
@@ -235,6 +238,9 @@ impl SplitDns {
 pub fn protected_dns_host(host: &str) -> bool {
     owned_host(host)
         || associated_host(host)
+        || DIAGNOSTIC_DNS_SUFFIXES
+            .iter()
+            .any(|suffix| domain_matches(host, suffix))
         || DIAGNOSTIC_HOSTS.iter().any(|domain| {
             host.eq_ignore_ascii_case(domain) || host.ends_with(&format!(".{domain}"))
         })
@@ -726,6 +732,7 @@ fn apply_split_dns(dns: &mut Mapping, protection: &Protection) -> Result<()> {
         .iter()
         .chain(ASSOCIATED_DOMAINS)
         .chain(DIAGNOSTIC_HOSTS)
+        .chain(DIAGNOSTIC_DNS_SUFFIXES)
     {
         policy.insert(Value::from(format!("+.{domain}")), public.clone());
     }
@@ -763,7 +770,7 @@ mod tests {
                 selectors: vec![],
             },
         );
-        for domain in ["tail-fixture.ts.net", "claude.ai"] {
+        for domain in ["tail-fixture.ts.net", "claude.ai", "bash.ws"] {
             protection.split_dns.push(SplitDns {
                 domain: domain.into(),
                 servers: vec![
@@ -790,13 +797,15 @@ mod tests {
             ])
             .unwrap()
         );
-        let protected = policy[Value::from("+.claude.ai")].as_sequence().unwrap();
-        assert_eq!(protected.len(), DOH.len());
-        assert!(protected.iter().all(|value| {
-            value
-                .as_str()
-                .is_some_and(|value| value.ends_with(&format!("#{}", protection.route)))
-        }));
+        for domain in ["+.claude.ai", "+.bash.ws"] {
+            let protected = policy[Value::from(domain)].as_sequence().unwrap();
+            assert_eq!(protected.len(), DOH.len());
+            assert!(protected.iter().all(|value| {
+                value
+                    .as_str()
+                    .is_some_and(|value| value.ends_with(&format!("#{}", protection.route)))
+            }));
+        }
         assert_eq!(
             dns[Value::from("default-nameserver")][0],
             "udp://100.100.100.100:53#utun4"
