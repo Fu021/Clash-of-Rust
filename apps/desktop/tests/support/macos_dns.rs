@@ -8,7 +8,10 @@ use std::{
     net::IpAddr,
     path::Path,
     process::{Command, Stdio},
-    sync::{Arc, Mutex},
+    sync::{
+        Arc, Mutex,
+        atomic::{AtomicBool, Ordering},
+    },
     time::Duration,
 };
 
@@ -42,7 +45,10 @@ impl Drop for Cleanup {
     }
 }
 
-async fn stub(address: [u8; 4]) -> (u16, Arc<Mutex<Vec<String>>>, tokio::task::JoinHandle<()>) {
+async fn stub(
+    address: [u8; 4],
+    drop_responses: Arc<AtomicBool>,
+) -> (u16, Arc<Mutex<Vec<String>>>, tokio::task::JoinHandle<()>) {
     let socket = tokio::net::UdpSocket::bind("127.0.0.1:0").await.unwrap();
     let port = socket.local_addr().unwrap().port();
     let queries = Arc::new(Mutex::new(vec![]));
@@ -69,6 +75,9 @@ async fn stub(address: [u8; 4]) -> (u16, Arc<Mutex<Vec<String>>>, tokio::task::J
                 continue;
             }
             captured.lock().unwrap().push(labels.join("."));
+            if drop_responses.load(Ordering::Relaxed) {
+                continue;
+            }
             let answer = buffer[end + 1..end + 3] == [0, 1];
             let mut reply = buffer[..end + 5].to_vec();
             reply[2..4].copy_from_slice(&[0x81, 0x80]);
@@ -102,8 +111,10 @@ async fn lookup(host: &str, expected: &str) {
 pub async fn run(engine: &mut Engine, profile: &Path) {
     engine.select_proxy_mode(ProxyMode::Off).await.unwrap();
     let configured = dns::configured().unwrap();
-    let (vpn_port, vpn_queries, vpn_job) = stub([100, 100, 12, 34]).await;
-    let (core_port, core_queries, core_job) = stub([203, 0, 113, 20]).await;
+    let (vpn_port, vpn_queries, vpn_job) =
+        stub([100, 100, 12, 34], Arc::new(AtomicBool::new(false))).await;
+    let drop_core_dns = Arc::new(AtomicBool::new(false));
+    let (core_port, core_queries, core_job) = stub([203, 0, 113, 20], drop_core_dns.clone()).await;
     let suffix = uuid::Uuid::new_v4().simple().to_string();
     let tail = format!("tail-{suffix}.ts.net");
     let corp = format!("{suffix}.corp.test");
@@ -170,6 +181,24 @@ pub async fn run(engine: &mut Engine, profile: &Path) {
         lookup(&format!("peer-{attempt}.{tail}"), "100.100.12.34").await;
         lookup(&format!("peer-{attempt}.{corp}"), "100.100.12.34").await;
         if attempt == 0 {
+            // An unreachable protected upstream must never make macOS retry a
+            // protected query on the VPN resolver with the same match suffix.
+            let failed_host = format!("failed-{suffix}.claude.ai");
+            drop_core_dns.store(true, Ordering::Relaxed);
+            let _result = tokio::time::timeout(
+                Duration::from_secs(25),
+                tokio::net::lookup_host((format!("{failed_host}."), 80)),
+            )
+            .await;
+            drop_core_dns.store(false, Ordering::Relaxed);
+            assert!(
+                !vpn_queries
+                    .lock()
+                    .unwrap()
+                    .iter()
+                    .any(|host| host == &failed_host),
+                "Protected DNS fell back to the VPN resolver: {failed_host}"
+            );
             // Simulate a VPN changing its own configuration while the
             // protection resolver is installed. Its settings remain its own.
             install(&format!("{suffix}.new-search.test"));
