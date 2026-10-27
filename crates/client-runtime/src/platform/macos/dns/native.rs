@@ -25,7 +25,7 @@ type QueryCallback = unsafe extern "C" fn(
     *mut c_void,
 );
 
-#[link(name = "dns_sd")]
+// macOS exports DNS-SD through the implicitly linked libSystem.
 unsafe extern "C" {
     fn DNSServiceQueryRecord(
         service: *mut Service,
