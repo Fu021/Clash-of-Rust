@@ -121,12 +121,16 @@ pub async fn run(engine: &mut Engine, profile: &Path) {
     let tail = format!("tail-{suffix}.ts.net");
     let corp = format!("{suffix}.corp.test");
     let key = format!("State:/Network/Service/cor-dns-fixture-{suffix}/DNS");
+    let search_key = format!("State:/Network/Service/cor-dns-search-{suffix}/DNS");
     let _cleanup = Cleanup(key.clone());
+    let _cleanup_search = Cleanup(search_key.clone());
     let install = |search: &str| {
         scutil(&format!(
             "d.init\nd.add ServerAddresses * 127.0.0.1\nd.add ServerPort # {vpn_port}\n\
              d.add SearchOrder # 100600\nd.add SupplementalMatchDomains * \"\" {tail} {corp} claude.ai bash.ws\n\
-             d.add SupplementalMatchDomainsNoSearch # 1\nd.add SearchDomains * {search}\nset {key}\nquit\n"
+             d.add SupplementalMatchDomainsNoSearch # 1\nd.add SearchDomains * {search}\nset {key}\n\
+             d.init\nd.add ServerAddresses * 127.0.0.1\nd.add ServerPort # {vpn_port}\n\
+             d.add SearchOrder # 100599\nd.add SupplementalMatchDomains * {search}\nset {search_key}\nquit\n"
         ));
     };
     install(&tail);
@@ -137,6 +141,24 @@ pub async fn run(engine: &mut Engine, profile: &Path) {
             "VPN resolver not selected"
         );
         tokio::time::sleep(Duration::from_millis(50)).await;
+    }
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(5);
+    loop {
+        let shown = Command::new("/usr/sbin/scutil")
+            .arg("--dns")
+            .output()
+            .unwrap();
+        assert!(shown.status.success(), "Unable to read macOS DNS");
+        if String::from_utf8_lossy(&shown.stdout).lines().any(|line| {
+            line.trim().starts_with("search domain[") && line.trim_end().ends_with(tail.as_str())
+        }) {
+            break;
+        }
+        assert!(
+            tokio::time::Instant::now() < deadline,
+            "VPN search suffix was not selected by macOS"
+        );
+        tokio::time::sleep(Duration::from_millis(100)).await;
     }
     std::fs::write(
         profile,
@@ -160,6 +182,66 @@ pub async fn run(engine: &mut Engine, profile: &Path) {
         .await
         .unwrap();
     engine.select_proxy_mode(ProxyMode::Tun).await.unwrap();
+    // Record actual macOS selection and failover before changing takeover logic.
+    // This resolver and both upstreams exist only on the disposable CI runner.
+    let probe_key = format!("State:/Network/Service/cor-dns-probe-{suffix}/DNS");
+    let _cleanup_probe = Cleanup(probe_key.clone());
+    scutil(&format!(
+        "d.init\nd.add ServerAddresses * 1.1.1.1 8.8.8.8\nd.add SearchOrder # 1\n\
+         d.add SupplementalMatchDomains * \"\" claude.ai bash.ws\n\
+         d.add SupplementalMatchDomainsNoSearch # 1\nset {probe_key}\nquit\n"
+    ));
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(5);
+    loop {
+        let shown = Command::new("/usr/sbin/scutil")
+            .arg("--dns")
+            .output()
+            .unwrap();
+        assert!(shown.status.success(), "Unable to read macOS DNS");
+        if String::from_utf8_lossy(&shown.stdout).contains("1.1.1.1") {
+            break;
+        }
+        assert!(
+            tokio::time::Instant::now() < deadline,
+            "Test protection resolver was not published by macOS"
+        );
+        tokio::time::sleep(Duration::from_millis(100)).await;
+    }
+    let public_probe = format!("selection-{suffix}.test");
+    let _ = tokio::time::timeout(
+        Duration::from_secs(15),
+        tokio::net::lookup_host((format!("{public_probe}."), 80)),
+    )
+    .await;
+    let failed_probe = format!("failover-{suffix}.claude.ai");
+    drop_core_dns.store(true, Ordering::Relaxed);
+    let _ = tokio::time::timeout(
+        Duration::from_secs(25),
+        tokio::net::lookup_host((format!("{failed_probe}."), 80)),
+    )
+    .await;
+    drop_core_dns.store(false, Ordering::Relaxed);
+    let (public_core, protected_core) = {
+        let queries = core_queries.lock().unwrap();
+        (
+            queries.contains(&public_probe),
+            queries.contains(&failed_probe),
+        )
+    };
+    let (public_vpn, protected_vpn) = {
+        let queries = vpn_queries.lock().unwrap();
+        (
+            queries.contains(&public_probe),
+            queries.contains(&failed_probe),
+        )
+    };
+    eprintln!(
+        "macOS resolver experiment: public_core={public_core}, public_vpn={public_vpn}, \
+         protected_core={protected_core}, protected_vpn={protected_vpn}"
+    );
+    scutil(&format!("remove {probe_key}\nquit\n"));
+    core_queries.lock().unwrap().clear();
+    vpn_queries.lock().unwrap().clear();
     for attempt in 0..2 {
         let mut expected_vpn = scutil(&format!("show {key}\nquit\n")).stdout;
         tokio::task::spawn_blocking(|| service::protection_dns(true))
