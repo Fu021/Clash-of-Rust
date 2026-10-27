@@ -14,6 +14,7 @@
 
 - Publish Release [39784808500](https://github.com/Fu021/Clash-of-Rust/actions/runs/39784808500)：macOS 获取 artifact 时 DNS 失败。
 - Android 打包 [38989293563](https://github.com/Fu021/Clash-of-Rust/actions/runs/38989293563)：依赖快照与已验证 CI 不一致。
+- Publish Release [40523828709](https://github.com/Fu021/Clash-of-Rust/actions/runs/40523828709)：CI 步骤和产物已结束，但 GitHub 仍返回必需 job 为 `in_progress`，前置校验按预期拒绝；等待 job 状态同步为成功后再启动，不能仅凭产物存在跳过门禁。
 - 修复提交 `8b7ff41`、`9d705d5`、`1aaa1da`、`465fec6`。
 
 **首先检查**

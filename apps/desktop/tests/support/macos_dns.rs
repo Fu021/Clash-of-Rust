@@ -545,13 +545,16 @@ pub async fn run(engine: &mut Engine, profile: &Path) {
                 .any(|host| host.contains(&suffix)),
             "Public DNS reached physical fallback"
         );
+        let leaked_probes = core_queries
+            .lock()
+            .unwrap()
+            .iter()
+            .filter(|host| host.starts_with("probe.cor-dns-"))
+            .cloned()
+            .collect::<Vec<_>>();
         assert!(
-            !core_queries
-                .lock()
-                .unwrap()
-                .iter()
-                .any(|host| host.starts_with("probe.cor-dns-")),
-            "Native DNS readiness probes must terminate at the local relay"
+            leaked_probes.is_empty(),
+            "Native DNS readiness probes must terminate at the local relay: {leaked_probes:?}"
         );
         tokio::task::spawn_blocking(|| service::protection_dns(false))
             .await

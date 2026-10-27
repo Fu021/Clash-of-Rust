@@ -97,30 +97,37 @@ impl Probe {
             received: AtomicBool::new(false),
         }
     }
-
-    fn response(&self, packet: &[u8]) -> Option<Vec<u8>> {
-        let end = 12 + self.question.len();
-        if packet.len() < end + 4
-            || packet[2] & 0xf8 != 0
-            || packet[4..6] != [0, 1]
-            || !packet[12..end].eq_ignore_ascii_case(&self.question)
-            || !matches!(&packet[end..end + 2], [0, 1] | [0, 28])
-            || packet[end + 2..end + 4] != [0, 1]
-        {
-            return None;
-        }
-        // Terminate the active probe here instead of forwarding it to mihomo.
-        // Negative replies leave no positive synthetic address in the cache.
-        let mut reply = packet[..end + 4].to_vec();
-        reply[2..4].copy_from_slice(&[0x81, 0x83]);
-        reply[6..12].fill(0);
-        self.received.store(true, Ordering::Release);
-        Some(reply)
-    }
 }
 
 pub(super) fn response(packet: &[u8], probes: &Probes) -> Option<Vec<u8>> {
-    probes.lock().ok()?.as_ref()?.response(packet)
+    const PREFIX: &[u8] = b"\x05probe\x28cor-dns-";
+    let nonce_start = 12 + PREFIX.len();
+    let end = nonce_start + 32 + 1;
+    if packet.len() < end + 4
+        || packet[2] & 0xf8 != 0
+        || packet[4..6] != [0, 1]
+        || !packet[12..nonce_start].eq_ignore_ascii_case(PREFIX)
+        || !packet[nonce_start..end - 1]
+            .iter()
+            .all(u8::is_ascii_hexdigit)
+        || packet[end - 1] != 0
+        || !matches!(&packet[end..end + 2], [0, 1] | [0, 28])
+        || packet[end + 2..end + 4] != [0, 1]
+    {
+        return None;
+    }
+    if let Ok(current) = probes.lock()
+        && let Some(probe) = current.as_ref()
+        && packet[12..end].eq_ignore_ascii_case(&probe.question)
+    {
+        probe.received.store(true, Ordering::Release);
+    }
+    // mDNSResponder can retry after query cancellation. Keep every internal
+    // nonce local, but only the currently registered nonce confirms readiness.
+    let mut reply = packet[..end + 4].to_vec();
+    reply[2..4].copy_from_slice(&[0x81, 0x83]);
+    reply[6..12].fill(0);
+    Some(reply)
 }
 
 pub(super) fn check(probes: &Probes, timeout: Duration) -> Result<()> {
@@ -194,6 +201,9 @@ pub(super) fn check(probes: &Probes, timeout: Duration) -> Result<()> {
 mod tests {
     use super::*;
 
+    const FIRST: &str = "probe.cor-dns-0123456789abcdef0123456789abcdef.";
+    const SECOND: &str = "probe.cor-dns-fedcba9876543210fedcba9876543210.";
+
     fn packet(probe: &Probe, kind: u16) -> Vec<u8> {
         let mut packet = vec![0x12, 0x34, 1, 0, 0, 1, 0, 0, 0, 0, 0, 0];
         packet.extend_from_slice(&probe.question);
@@ -204,10 +214,10 @@ mod tests {
 
     #[test]
     fn only_the_active_native_nonce_confirms_the_resolver_path() {
-        let probe = Arc::new(Probe::new("cor-dns-first.test."));
+        let probe = Arc::new(Probe::new(FIRST));
         let probes = Arc::new(Mutex::new(Some(probe.clone())));
-        let other = Probe::new("cor-dns-other.test.");
-        assert!(response(&packet(&other, 1), &probes).is_none());
+        let other = Probe::new(SECOND);
+        assert!(response(&packet(&other, 1), &probes).is_some());
         assert!(response(&packet(&probe, 16), &probes).is_none());
         assert!(!probe.received.load(Ordering::Acquire));
         let mut request = packet(&probe, 1);
@@ -221,6 +231,50 @@ mod tests {
             probe,
         };
         drop(registration);
-        assert!(response(&request, &probes).is_none());
+        assert!(probes.lock().unwrap().is_none());
+        assert!(response(&request, &probes).is_some());
+    }
+
+    #[test]
+    fn delayed_native_retries_stay_local_without_confirming_a_new_probe() {
+        let first = Arc::new(Probe::new(FIRST));
+        let probes = Arc::new(Mutex::new(Some(first.clone())));
+        let registration = Registration {
+            probes: probes.clone(),
+            probe: first.clone(),
+        };
+        let request = packet(&first, 1);
+        drop(registration);
+        assert!(response(&request, &probes).is_some());
+        assert!(!first.received.load(Ordering::Acquire));
+        let second = Arc::new(Probe::new(SECOND));
+        *probes.lock().unwrap() = Some(second.clone());
+        assert!(response(&request, &probes).is_some());
+        assert!(!second.received.load(Ordering::Acquire));
+        assert!(response(&packet(&second, 28), &probes).is_some());
+        assert!(second.received.load(Ordering::Acquire));
+    }
+
+    #[test]
+    fn ordinary_or_malformed_questions_are_not_internal_probes() {
+        let probes = Arc::new(Mutex::new(None));
+        for name in [
+            "example.com.",
+            "probe.cor-dns-0123456789abcdef0123456789abcdeg.",
+            "probe.cor-dns-0123456789abcdef0123456789abcdef.test.",
+            "probe.cor-dns-0123456789abcdef.",
+        ] {
+            assert!(response(&packet(&Probe::new(name), 1), &probes).is_none());
+        }
+        let request = packet(&Probe::new(FIRST), 1);
+        for length in 0..request.len() {
+            assert!(response(&request[..length], &probes).is_none());
+        }
+        let mut reply = request.clone();
+        reply[2] |= 0x80;
+        assert!(response(&reply, &probes).is_none());
+        let mut multiple = request;
+        multiple[5] = 2;
+        assert!(response(&multiple, &probes).is_none());
     }
 }
