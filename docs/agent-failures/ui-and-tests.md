@@ -19,6 +19,7 @@
 **首先检查**
 
 - Slint 状态/回调、协议、宿主投影、正式窗口入口和预览 fixture 是否同步。
+- Slint 的 `string` 在桌面协议中映射为 `Text`，`image` 才映射为图像代码 `String`；新增文本字段按生成契约使用 `.into()`，同时核对全部构造点。[CI 40561035810](https://github.com/Fu021/Clash-of-Rust/actions/runs/40561035810) 的国家字段曾遗漏转换，Slint 静态检查不能代替 Rust 宿主类型检查。
 - `scripts/preview-slint.py --check` 是否能加载正式入口；预览数据是否含已删除属性。
 - UI 测试是否通过正式消息路径，而不是复制状态或依赖临时截图脚本。
 

@@ -858,7 +858,7 @@ impl App {
                             clash_of_rust::flags::label(&result.country)
                         });
                     ReportItem {
-                        country: String::new(),
+                        country: String::new().into(),
                         flag: flag.clone().unwrap_or_default(),
                         flagged: flag.is_some(),
                         id: service.id.as_str().into(),
@@ -1023,7 +1023,7 @@ impl App {
                         ),
                     };
                     ReportItem {
-                        country,
+                        country: country.into(),
                         flagged: flag.is_some(),
                         flag: flag.unwrap_or_default(),
                         id: "".into(),
