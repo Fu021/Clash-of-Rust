@@ -198,25 +198,12 @@ fn resolver_plan_for(
     if let Some(search) = search {
         public["SearchDomains"] = search;
     }
-    let mut result = vec![ResolverLease {
+    // Keep the VPN's original split resolvers instead of copying their server
+    // addresses: its native resolver owns the interface binding and updates.
+    vec![ResolverLease {
         key: format!("{prefix}/DNS"),
         owned: public,
-    }];
-    for (index, resolver) in split.iter().enumerate() {
-        if crate::claude_check::protection::protected_dns_host(&resolver.domain) {
-            continue;
-        }
-        result.push(ResolverLease {
-            key: format!("{prefix}.split.{index}/DNS"),
-            owned: json!({
-                "ServerAddresses": resolver.servers,
-                "SearchOrder": 2,
-                "SupplementalMatchDomains": [resolver.domain],
-                "SupplementalMatchDomainsNoSearch": 1,
-            }),
-        });
-    }
-    result
+    }]
 }
 
 fn resolver_id(key: &str) -> &str {
@@ -441,7 +428,7 @@ mod tests {
             })
             .collect::<Vec<_>>();
         let plan = resolver_plan_for(501, &split, Some(json!(["tail-fixture.ts.net"])));
-        assert_eq!(plan.len(), 2);
+        assert_eq!(plan.len(), 1);
         assert_eq!(
             plan[0].owned["SearchDomains"],
             json!(["tail-fixture.ts.net"])
@@ -458,11 +445,11 @@ mod tests {
                 .unwrap()
                 .contains(&json!("bash.ws"))
         );
-        assert_eq!(
-            plan[1].owned["SupplementalMatchDomains"],
-            json!(["tail-fixture.ts.net"])
+        assert!(
+            !plan[0].owned["SupplementalMatchDomains"]
+                .as_array()
+                .unwrap()
+                .contains(&json!("tail-fixture.ts.net"))
         );
-        assert_eq!(plan[1].owned["ServerAddresses"], json!(["100.100.100.100"]));
-        assert_ne!(plan[0].key, plan[1].key);
     }
 }
