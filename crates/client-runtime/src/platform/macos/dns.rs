@@ -309,16 +309,28 @@ pub(super) fn enable(path: &Path, lease: &mut Option<Lease>, owner: u32, uid: u3
         }
         let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
         loop {
-            if dynamic_value("State:/Network/Global/DNS")?
+            let current = dynamic_value("State:/Network/Global/DNS")?;
+            if current
                 .as_ref()
                 .is_some_and(|value| is_primary(value, &resolvers[0]))
             {
                 return Ok(());
             }
-            ensure!(
-                std::time::Instant::now() < deadline,
-                "macOS 系统 DNS 未切换到保护模式"
-            );
+            if std::time::Instant::now() >= deadline {
+                let servers_match = current.as_ref().is_some_and(|value| {
+                    value["ServerAddresses"] == resolvers[0].owned["ServerAddresses"]
+                });
+                let source_matches = current.as_ref().is_some_and(|value| {
+                    value["__CONFIGURATION_ID__"]
+                        .as_str()
+                        .is_some_and(|id| id.contains(resolver_id(&resolvers[0].key)))
+                });
+                let installed =
+                    dynamic_value(&resolvers[0].key)?.as_ref() == Some(&resolvers[0].owned);
+                anyhow::bail!(
+                    "macOS 系统 DNS 未切换到保护模式（临时配置存在：{installed}，服务器匹配：{servers_match}，来源匹配：{source_matches}）"
+                );
+            }
             std::thread::sleep(std::time::Duration::from_millis(50));
         }
     })();
