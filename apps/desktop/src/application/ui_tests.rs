@@ -1438,6 +1438,28 @@ fn notification_recovery_waits_for_drafts_and_clears_when_permission_is_granted(
 }
 
 #[test]
+fn recreated_window_models_project_live_proxy_state_instead_of_saved_preferences() {
+    let mut app = fixture(Page::Home);
+    app.snapshot.running = true;
+    app.settings.proxy_mode = ProxyMode::Off;
+    for (system, tun, expected) in [(true, false, 0), (false, true, 1), (false, false, 2)] {
+        app.snapshot.system_proxy = system;
+        app.snapshot.tun = tun;
+        app.snapshot.retain_scope(Scope::Other);
+        for _ in 0..3 {
+            let data = clash_desktop_protocol::UiData::default();
+            let mut models = clash_desktop_protocol::models::ViewModels::default();
+            models.attach(&data);
+            app.present(&data, &mut models);
+            assert_eq!(data.get_proxy_mode(), expected);
+            assert_eq!(app.snapshot.system_proxy, system);
+            assert_eq!(app.snapshot.tun, tun);
+            assert_eq!(app.settings.proxy_mode, ProxyMode::Off);
+        }
+    }
+}
+
+#[test]
 fn reopening_a_maximized_window_does_not_force_a_normal_size_request() {
     let mut app = fixture(Page::Home);
     let normal = app.window_state.size();

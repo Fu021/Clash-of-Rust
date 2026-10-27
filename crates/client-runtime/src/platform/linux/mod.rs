@@ -131,8 +131,7 @@ pub fn desired(port: u16) -> ProxyState {
 }
 
 // Older GNOME journals did not own SOCKS. Restore exactly their seven keys,
-// leaving the previously unmanaged SOCKS settings alone. A changed managed key
-// still means ownership was lost to the user or another client.
+// leaving the previously unmanaged SOCKS settings alone.
 pub(super) fn owns_legacy(current: &ProxyState, owned: &ProxyState) -> bool {
     current.len() == keys().len()
         && owned.len() == keys().len() - 2
@@ -140,7 +139,10 @@ pub(super) fn owns_legacy(current: &ProxyState, owned: &ProxyState) -> bool {
         && keys()
             .into_iter()
             .filter(|key| !key.starts_with("org.gnome.system.proxy.socks|"))
-            .all(|key| owned.contains_key(key) && current.get(key) == owned.get(key))
+            .all(|key| {
+                owned.contains_key(key)
+                    && (super::auxiliary_key(key) || current.get(key) == owned.get(key))
+            })
 }
 
 pub fn write(state: &ProxyState) -> Result<()> {
@@ -180,6 +182,11 @@ mod tests {
         changed_socks.insert(
             "org.gnome.system.proxy.socks|port".into(),
             Some(ProxyValue::Text("7896".into())),
+        );
+        assert!(owns_legacy(&changed_socks, &legacy));
+        changed_socks.insert(
+            "org.gnome.system.proxy|ignore-hosts".into(),
+            Some(ProxyValue::Text("['later.example']".into())),
         );
         assert!(owns_legacy(&changed_socks, &legacy));
         legacy.insert(

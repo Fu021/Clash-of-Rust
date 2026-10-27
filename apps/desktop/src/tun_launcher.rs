@@ -163,6 +163,10 @@ mod dns;
 mod native_proxy;
 #[cfg(all(target_os = "macos", not(test)))]
 #[allow(dead_code)]
+#[path = "../../../crates/client-runtime/src/platform/macos/proxy_preferences.rs"]
+mod proxy_preferences;
+#[cfg(all(target_os = "macos", not(test)))]
+#[allow(dead_code)]
 #[path = "../../../crates/client-runtime/src/platform/macos/service.rs"]
 mod service;
 #[cfg(all(target_os = "macos", not(test)))]

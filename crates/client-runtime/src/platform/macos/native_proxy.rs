@@ -38,17 +38,20 @@ pub(super) fn read_dns() -> Result<ProxyState> {
 }
 fn read_entity(entity: &str) -> Result<ProxyState> {
     let prefs = preferences()?;
+    read_entity_from(prefs.0, entity)
+}
+fn read_entity_from(prefs: Ref, entity: &str) -> Result<ProxyState> {
     let key = cf::string("/NetworkServices")?;
-    let value = unsafe { SCPreferencesPathGetValue(prefs.0, key.0) };
+    let value = unsafe { SCPreferencesPathGetValue(prefs, key.0) };
     ensure!(!value.is_null(), "没有可配置的 macOS 网络服务");
     let mut state = ProxyState::new();
     for id in cf::dictionary_keys(value)? {
         let interface = cf::string(&format!("/NetworkServices/{id}/Interface"))?;
-        if unsafe { SCPreferencesPathGetValue(prefs.0, interface.0) }.is_null() {
+        if unsafe { SCPreferencesPathGetValue(prefs, interface.0) }.is_null() {
             continue;
         }
         let path = cf::string(&format!("/NetworkServices/{id}/{entity}"))?;
-        let value = unsafe { SCPreferencesPathGetValue(prefs.0, path.0) };
+        let value = unsafe { SCPreferencesPathGetValue(prefs, path.0) };
         let proxy = if value.is_null() {
             None
         } else {
@@ -66,6 +69,17 @@ pub(super) fn write_dns(state: &ProxyState) -> Result<()> {
     write_entity("DNS", state)
 }
 fn write_entity(entity: &str, state: &ProxyState) -> Result<()> {
+    edit_entity(entity, |_| Ok(state.clone())).map(|_| ())
+}
+pub fn restore(original: &ProxyState, owned: &ProxyState) -> Result<bool> {
+    edit_entity("Proxies", |current| {
+        super::proxy_preferences::restoration(current, original, owned)
+    })
+}
+fn edit_entity(
+    entity: &str,
+    patch: impl FnOnce(&ProxyState) -> Result<ProxyState>,
+) -> Result<bool> {
     ensure!(
         unsafe { libc::geteuid() } == 0,
         "网络设置必须通过已授权的网络助手修改"
@@ -76,7 +90,12 @@ fn write_entity(entity: &str, state: &ProxyState) -> Result<()> {
         "锁定网络设置（其他程序占用时请重试）",
     )?;
     let result = (|| {
-        for (id, value) in state {
+        let current = read_entity_from(prefs.0, entity)?;
+        let state = patch(&current)?;
+        if state.is_empty() {
+            return Ok(false);
+        }
+        for (id, value) in &state {
             ensure!(
                 !id.is_empty() && id.chars().all(|c| c.is_ascii_alphanumeric() || c == '-'),
                 "网络服务标识无效"
@@ -113,7 +132,8 @@ fn write_entity(entity: &str, state: &ProxyState) -> Result<()> {
         sc_check(
             unsafe { SCPreferencesApplyChanges(prefs.0) },
             "应用网络设置",
-        )
+        )?;
+        Ok(true)
     })();
     unsafe { SCPreferencesUnlock(prefs.0) };
     result

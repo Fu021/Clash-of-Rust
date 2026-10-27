@@ -112,6 +112,8 @@ JSON 每行使用 `{"schema":1,"command":"命令","data":...}` 外层。`--json`
 | `proxy [system\|tun\|off]` | 查询或切换代理方式 |
 | `env [--shell bash\|zsh\|fish\|powershell\|cmd] [--unset]` | 输出代理环境变量语句，不修改父终端 |
 
+`proxy` 与 `status` 的代理方式来自后台实时快照，与桌面窗口一致；保存的启动偏好不代表当前系统代理/TUN 已经生效。单纯查询不改写该偏好，恢复网络或重新启动时仍沿用用户保存的选择。
+
 ```sh
 eval "$(cor env --shell bash)"
 # 未使用 TUN 时，为当前 Bash 终端设置 HTTP/SOCKS 代理环境变量。

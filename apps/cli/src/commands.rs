@@ -79,10 +79,15 @@ pub async fn execute(args: &Args) -> Result<()> {
                 }
                 let _: Value = backend::request(args, Command::Proxy { mode }).await?;
             }
-            output::emit(
+            let poll: Poll = backend::request(
                 args,
-                json!({"proxy":backend::meta(args).await?.settings.proxy_mode}),
+                Command::Snapshot {
+                    scope: Scope::Other,
+                    header: false,
+                },
             )
+            .await?;
+            output::emit(args, json!({"proxy":poll.snapshot.proxy_mode()}))
         }
         path if path.starts_with("profile ") => profiles::execute(args).await,
         path if path.starts_with("rule ") => rules::execute(args).await,
@@ -117,7 +122,7 @@ async fn status(args: &Args) -> Result<()> {
                 .find(|p| Some(&p.id) == poll.meta.settings.active_profile.as_ref());
             json!({"running":poll.snapshot.running,"owner":poll.meta.owner,"version":poll.meta.version,
                 "profile":profile.map(|p|&p.name),"node":poll.snapshot.active_node,"mode":poll.snapshot.mode,
-                "proxy":poll.meta.settings.proxy_mode,"protected":poll.meta.settings.claude_protection.is_some(),
+                "proxy":poll.snapshot.proxy_mode(),"protected":poll.meta.settings.claude_protection.is_some(),
                 "connections":poll.snapshot.connection_count,"upload_rate":poll.snapshot.upload_rate,
                 "download_rate":poll.snapshot.download_rate})
         } else {

@@ -394,12 +394,10 @@ impl App {
         set!(
             get_proxy_mode,
             set_proxy_mode,
-            if self.snapshot.tun {
-                1
-            } else if self.snapshot.system_proxy {
-                0
-            } else {
-                2
+            match self.snapshot.proxy_mode() {
+                ProxyMode::System => 0,
+                ProxyMode::Tun => 1,
+                ProxyMode::Off => 2,
             }
         );
         text!(

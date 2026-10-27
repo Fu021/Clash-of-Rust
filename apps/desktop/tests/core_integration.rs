@@ -108,6 +108,56 @@ fn assert_system_proxy_ports(store: &Store, port: u16) {
     }
 }
 
+#[cfg(target_os = "macos")]
+async fn check_macos_proxy_bypass_edits(engine: &mut Engine, store: &Store) {
+    use clash_of_rust::{
+        engine::ProxyMode,
+        platform::{ProxyState, ProxyValue, macos},
+    };
+    let journal: serde_json::Value =
+        serde_json::from_slice(&std::fs::read(store.root.join("system-proxy.json")).unwrap())
+            .unwrap();
+    let original: ProxyState = serde_json::from_value(journal["original"].clone()).unwrap();
+    let mut changed = macos::read().unwrap();
+    for value in changed.values_mut() {
+        let Some(ProxyValue::Text(text)) = value else {
+            panic!("enabled network service must have proxy properties")
+        };
+        let mut properties: serde_json::Value = serde_json::from_str(text).unwrap();
+        properties["ExceptionsList"] = serde_json::json!(["later-edit.example"]);
+        *text = properties.to_string();
+    }
+    macos::write(&changed).unwrap();
+    assert!(engine.poll(Scope::Home).await.unwrap().system_proxy);
+    assert_system_proxy_ports(store, engine.settings.mixed_port);
+    engine.select_proxy_mode(ProxyMode::Off).await.unwrap();
+    assert!(!engine.poll(Scope::Home).await.unwrap().system_proxy);
+    let restored = macos::read().unwrap();
+    for id in changed.keys() {
+        let Some(ProxyValue::Text(text)) = &restored[id] else {
+            panic!("later bypass edit must survive proxy restoration")
+        };
+        let mut properties: serde_json::Value = serde_json::from_str(text).unwrap();
+        assert_eq!(
+            properties["ExceptionsList"],
+            serde_json::json!(["later-edit.example"])
+        );
+        properties.as_object_mut().unwrap().remove("ExceptionsList");
+        let mut previous: serde_json::Value = match &original[id] {
+            Some(ProxyValue::Text(text)) => serde_json::from_str(text).unwrap(),
+            None => serde_json::json!({}),
+            _ => panic!("invalid original proxy properties"),
+        };
+        previous.as_object_mut().unwrap().remove("ExceptionsList");
+        assert_eq!(properties, previous);
+    }
+    assert!(!store.root.join("system-proxy.json").exists());
+    // The lease is closed; put the disposable runner's bypass values back.
+    macos::service::restore_proxy(&original).unwrap();
+    engine.select_proxy_mode(ProxyMode::System).await.unwrap();
+    println!("PASS: macOS proxy status and helper restoration preserve later bypass edits");
+}
+
 #[tokio::test]
 #[ignore = "Requires the disposable native proxy/TUN CI wrapper"]
 async fn basic_system_proxy_and_tun() {
@@ -266,6 +316,8 @@ async fn basic_system_proxy_and_tun() {
     );
     server.await.unwrap();
     println!("PASS: native system proxy and HTTP forwarding");
+    #[cfg(target_os = "macos")]
+    check_macos_proxy_bypass_edits(&mut engine, &store).await;
     mixed_port = free_port();
     while mixed_port == engine.settings.controller_port {
         mixed_port = free_port();
@@ -574,6 +626,20 @@ async fn basic_system_proxy_and_tun() {
         let meta: Meta = remote.request(Control::Meta).await.unwrap();
         assert!(meta.running);
         assert_eq!(meta.settings.proxy_mode, mode);
+        if mode == ProxyMode::System {
+            engine.lock().await.system_proxy(false).await.unwrap();
+            let meta: Meta = remote.request(Control::Meta).await.unwrap();
+            assert_eq!(meta.settings.proxy_mode, ProxyMode::System);
+            assert_eq!(console(&cli, &store, &["proxy"]).await["proxy"], "off");
+            assert_eq!(console(&cli, &store, &["status"]).await["proxy"], "off");
+            assert!(!facade.poll(Scope::Other).await.unwrap().system_proxy);
+            assert_eq!(
+                console(&cli, &store, &["proxy", "system"]).await["proxy"],
+                "system"
+            );
+            assert!(facade.poll(Scope::Other).await.unwrap().system_proxy);
+            println!("PASS: GUI and CLI show live proxy state without changing saved preferences");
+        }
     }
     drop(facade); // Releasing an attached GUI must not stop its owner.
     assert!(engine.lock().await.running());

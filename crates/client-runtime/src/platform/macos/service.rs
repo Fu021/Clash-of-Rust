@@ -16,7 +16,7 @@ use std::{
     time::{Duration, Instant},
 };
 
-const PROTOCOL: u32 = 2;
+const PROTOCOL: u32 = 3;
 const PREFIX: &str = "org.clashofrust.network";
 const LIMIT: u64 = 256 * 1024;
 static STOP: AtomicBool = AtomicBool::new(false);
@@ -105,13 +105,20 @@ fn save_lease(path: &Path, lease: &ProxyLease) -> Result<()> {
 
 fn restore_lease(path: &Path, lease: &mut Option<ProxyLease>) -> Result<()> {
     if let Some(owned) = lease {
-        if super::native_proxy::read()? == owned.owned {
-            super::native_proxy::write(&owned.original)?;
-        }
+        super::native_proxy::restore(&owned.original, &owned.owned)?;
         fs::remove_file(path)?;
         *lease = None;
     }
     Ok(())
+}
+
+fn accepts_protocol(request: &Request, protocol: u32) -> bool {
+    protocol == PROTOCOL
+        || (protocol == 2
+            && matches!(
+                request,
+                Request::Proxy { restore: true, .. } | Request::Dns { enabled: false }
+            ))
 }
 
 fn paths(uid: u32) -> (String, PathBuf, PathBuf) {
@@ -153,7 +160,7 @@ fn exchange(request: &Request) -> Result<Response> {
         bail!("{error}");
     }
     ensure!(
-        response.protocol == PROTOCOL,
+        accepts_protocol(request, response.protocol),
         "网络助手版本不兼容，请重新授权安装"
     );
     Ok(response)
@@ -536,27 +543,38 @@ pub fn serve(uid: u32) -> Result<()> {
                     }
                     Request::Adopt { original, owned } => {
                         ensure!(
-                            super::native_proxy::read()? == owned,
+                            super::proxy_preferences::matches_managed(
+                                &super::native_proxy::read()?,
+                                &owned
+                            )?,
                             "系统代理已被其他程序修改，请重新选择代理模式"
                         );
                         adopt_lease(&mut lease, original, owned, peer_pid(&stream)?);
                         save_lease(&journal, lease.as_ref().unwrap())?;
                     }
                     Request::Proxy { state, restore } => {
-                        if !restore && lease.is_none() {
+                        if restore {
+                            if lease.is_some() {
+                                restore_lease(&journal, &mut lease)?;
+                            } else if !state.is_empty() {
+                                super::native_proxy::write(&state)?;
+                            }
+                            return Ok(());
+                        }
+                        if lease.is_none() {
                             lease = Some(ProxyLease {
                                 original: super::native_proxy::read()?,
                                 owned: state.clone(),
                                 owner: peer_pid(&stream)?,
                             });
                         }
-                        if !restore && let Some(owned) = &mut lease {
+                        if let Some(owned) = &mut lease {
                             owned.owned = state.clone();
                             owned.owner = peer_pid(&stream)?;
                             save_lease(&journal, owned)?;
                         }
                         super::native_proxy::write(&state)?;
-                        if restore || lease.as_ref().is_some_and(|owned| owned.original == state) {
+                        if lease.as_ref().is_some_and(|owned| owned.original == state) {
                             fs::remove_file(&journal).or_else(|error| {
                                 if error.kind() == std::io::ErrorKind::NotFound {
                                     Ok(())
@@ -618,6 +636,28 @@ pub fn serve(uid: u32) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn older_helpers_can_clean_up_but_must_be_updated_before_new_operations() {
+        assert!(accepts_protocol(&Request::Status {}, PROTOCOL));
+        assert!(!accepts_protocol(&Request::Status {}, 2));
+        assert!(!accepts_protocol(&Request::Dns { enabled: true }, 2));
+        assert!(accepts_protocol(&Request::Dns { enabled: false }, 2));
+        assert!(accepts_protocol(
+            &Request::Proxy {
+                state: ProxyState::new(),
+                restore: true,
+            },
+            2
+        ));
+        assert!(!accepts_protocol(
+            &Request::Proxy {
+                state: ProxyState::new(),
+                restore: false,
+            },
+            2
+        ));
+        assert!(!accepts_protocol(&Request::Dns { enabled: false }, 1));
+    }
     #[test]
     fn copying_helper_contents_creates_a_private_inode_without_source_metadata() {
         let directory = tempfile::tempdir().unwrap();
