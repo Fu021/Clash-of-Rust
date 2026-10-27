@@ -513,6 +513,19 @@ impl Engine {
         bail!("内核未通过启动健康检查，请查看日志");
     }
 
+    /// Restore the saved network mode as part of starting the shared owner.
+    pub async fn start_with_proxy_mode(&mut self) -> Result<()> {
+        self.start().await?;
+        if let Err(error) = self.restore_proxy_mode().await {
+            let stopped = self.stop().await;
+            return Err(error.context(format!(
+                "启动后恢复网络模式失败；停止内核：{}",
+                stopped.err().map_or("成功".into(), |e| e.to_string())
+            )));
+        }
+        Ok(())
+    }
+
     pub async fn stop(&mut self) -> Result<()> {
         if self.remote.is_some() {
             self.remote_mutate(ControlCommand::Stop).await?;

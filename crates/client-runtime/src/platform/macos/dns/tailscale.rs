@@ -20,7 +20,7 @@ fn parse(text: &str) -> Result<Snapshot> {
         resolver: Resolver,
         result: &mut BTreeMap<String, SplitDns>,
         fallback_interface: &mut Option<String>,
-    ) {
+    ) -> Result<()> {
         let mut servers = Vec::new();
         for ip in resolver.servers {
             if matches!(
@@ -34,23 +34,30 @@ fn parse(text: &str) -> Result<Snapshot> {
         if !servers.is_empty() && resolver.interface.is_some() {
             *fallback_interface = resolver.interface.clone();
         }
+        if servers.is_empty() {
+            return Ok(());
+        }
         for domain in resolver.domains {
+            if domain.is_empty() || domain == "." {
+                continue;
+            }
+            let domain = domain.trim_end_matches('.').to_ascii_lowercase();
             let split = SplitDns {
-                domain: domain.trim_end_matches('.').to_ascii_lowercase(),
+                domain,
                 servers: servers.clone(),
                 interface: resolver.interface.clone(),
             };
-            if split.valid() {
-                result
-                    .entry(split.domain.clone())
-                    .and_modify(|old| {
-                        if old.interface.is_none() && split.interface.is_some() {
-                            *old = split.clone();
-                        }
-                    })
-                    .or_insert(split);
-            }
+            ensure!(split.valid(), "Tailscale 分域 DNS 格式无效，无法安全接管");
+            result
+                .entry(split.domain.clone())
+                .and_modify(|old| {
+                    if old.interface.is_none() && split.interface.is_some() {
+                        *old = split.clone();
+                    }
+                })
+                .or_insert(split);
         }
+        Ok(())
     }
     let mut result = BTreeMap::new();
     let mut resolver = Resolver::default();
@@ -62,7 +69,7 @@ fn parse(text: &str) -> Result<Snapshot> {
                 std::mem::take(&mut resolver),
                 &mut result,
                 &mut fallback_interface,
-            );
+            )?;
         } else if let Some((key, value)) = line.split_once(" : ") {
             let value = value.trim();
             match key.trim() {
@@ -82,7 +89,7 @@ fn parse(text: &str) -> Result<Snapshot> {
             }
         }
     }
-    append(resolver, &mut result, &mut fallback_interface);
+    append(resolver, &mut result, &mut fallback_interface)?;
     for resolver in result.values_mut() {
         if resolver.interface.is_none() {
             resolver.interface = fallback_interface.clone();
@@ -141,5 +148,14 @@ resolver #1\n nameserver[0] : 192.0.2.53\n if_index : 14 (en0)\n";
             })
             .collect::<String>();
         assert!(parse(&text).is_err());
+    }
+
+    #[test]
+    fn keeps_single_label_private_domains_and_rejects_unrepresentable_ones() {
+        let text = "resolver #1\n domain : internal\n nameserver[0] : 100.100.100.100\n if_index : 22 (utun4)\n";
+        let snapshot = parse(text).unwrap();
+        assert_eq!(snapshot.split_dns[0].domain, "internal");
+        let invalid = "resolver #1\n domain : invalid domain\n nameserver[0] : 100.100.100.100\n";
+        assert!(parse(invalid).is_err());
     }
 }

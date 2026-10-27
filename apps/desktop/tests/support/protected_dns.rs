@@ -319,8 +319,7 @@ pub async fn run(engine: &mut Engine, profile: &std::path::Path) {
         }
         result.expect("Protected DNS/HTTP must remain reachable");
         engine.stop().await.unwrap();
-        engine.start().await.unwrap();
-        engine.restore_proxy_mode().await.unwrap();
+        engine.start_with_proxy_mode().await.unwrap();
         tokio::time::timeout(Duration::from_secs(30), protected_traffic(engine))
             .await
             .expect("Cold-start protected DNS/HTTP must work");

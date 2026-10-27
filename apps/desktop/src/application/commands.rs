@@ -147,8 +147,7 @@ pub(super) async fn execute(
             Action::RefreshTray => Ok(String::new()),
             Action::Start => {
                 if !engine.running() {
-                    engine.start().await?;
-                    engine.restore_proxy_mode().await?;
+                    engine.start_with_proxy_mode().await?;
                 }
                 Ok("内核已启动".into())
             }

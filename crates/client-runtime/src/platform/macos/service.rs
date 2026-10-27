@@ -16,7 +16,7 @@ use std::{
     time::{Duration, Instant},
 };
 
-const PROTOCOL: u32 = 4;
+const PROTOCOL: u32 = 5;
 const PREFIX: &str = "org.clashofrust.network";
 const LIMIT: u64 = 256 * 1024;
 static STOP: AtomicBool = AtomicBool::new(false);
@@ -114,7 +114,7 @@ fn restore_lease(path: &Path, lease: &mut Option<ProxyLease>) -> Result<()> {
 
 fn accepts_protocol(request: &Request, protocol: u32) -> bool {
     protocol == PROTOCOL
-        || (matches!(protocol, 2 | 3)
+        || (matches!(protocol, 2..=4)
             && matches!(
                 request,
                 Request::Proxy { restore: true, .. } | Request::Dns { enabled: false }
@@ -639,7 +639,7 @@ mod tests {
     #[test]
     fn older_helpers_can_clean_up_but_must_be_updated_before_new_operations() {
         assert!(accepts_protocol(&Request::Status {}, PROTOCOL));
-        for protocol in [2, 3] {
+        for protocol in [2, 3, 4] {
             assert!(!accepts_protocol(&Request::Status {}, protocol));
             assert!(!accepts_protocol(&Request::Dns { enabled: true }, protocol));
             assert!(accepts_protocol(&Request::Dns { enabled: false }, protocol));

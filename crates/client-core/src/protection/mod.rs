@@ -208,8 +208,8 @@ fn is_tailscale_dns(ip: std::net::IpAddr) -> bool {
 }
 impl SplitDns {
     pub fn valid(&self) -> bool {
-        self.domain.len() <= 253
-            && self.domain.contains('.')
+        !self.domain.is_empty()
+            && self.domain.len() <= 253
             && self.domain.split('.').all(|label| {
                 !label.is_empty()
                     && label.len() <= 63
@@ -246,6 +246,17 @@ pub fn protected_dns_host(host: &str) -> bool {
         || DIAGNOSTIC_HOSTS.iter().any(|domain| {
             host.eq_ignore_ascii_case(domain) || host.ends_with(&format!(".{domain}"))
         })
+}
+
+/// A split can overlap a protected name as either a parent or a child.
+pub fn protected_dns_split(domain: &str) -> bool {
+    protected_dns_host(domain)
+        || OWNED_DOMAINS
+            .iter()
+            .chain(ASSOCIATED_DOMAINS)
+            .chain(DIAGNOSTIC_HOSTS)
+            .chain(DIAGNOSTIC_DNS_SUFFIXES)
+            .any(|protected| domain_matches(protected, domain))
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]

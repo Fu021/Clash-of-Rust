@@ -139,17 +139,18 @@ pub async fn run(engine: &mut Engine, profile: &Path) {
     let search_key = format!("State:/Network/Service/cor-dns-search-{suffix}/DNS");
     let _cleanup = Cleanup(key.clone());
     let _cleanup_search = Cleanup(search_key.clone());
-    let install = |search: &str, conflicts: bool| {
+    let install = |search: &str, conflicts: bool, catch_all: bool| {
         let protected = if conflicts { " claude.ai bash.ws" } else { "" };
+        let default = if catch_all { "\"\"" } else { "" };
         scutil(&format!(
             "d.init\nd.add ServerAddresses * 127.0.0.1\nd.add ServerPort # {vpn_port}\n\
-             d.add SearchOrder # 100600\nd.add SupplementalMatchDomains * \"\" {tail} {corp}{protected}\n\
+             d.add SearchOrder # 100600\nd.add SupplementalMatchDomains * {default} {tail} {corp}{protected}\n\
              d.add SupplementalMatchDomainsNoSearch # 1\nd.add SearchDomains * {search}\nset {key}\n\
              d.init\nd.add ServerAddresses * 127.0.0.1\nd.add ServerPort # {vpn_port}\n\
              d.add SearchOrder # 100599\nd.add SupplementalMatchDomains * {search}\nset {search_key}\nquit\n"
         ));
     };
-    install(&tail, true);
+    install(&tail, true, true);
     let deadline = tokio::time::Instant::now() + Duration::from_secs(5);
     while dns::system_servers().unwrap() != ["127.0.0.1"] {
         assert!(
@@ -252,7 +253,7 @@ pub async fn run(engine: &mut Engine, profile: &Path) {
     )
     .await;
     drop_core_dns.store(false, Ordering::Relaxed);
-    install(&tail, false);
+    install(&tail, false, true);
     let deadline = tokio::time::Instant::now() + Duration::from_secs(5);
     loop {
         let shown = Command::new("/usr/sbin/scutil")
@@ -280,7 +281,30 @@ pub async fn run(engine: &mut Engine, profile: &Path) {
         tokio::net::lookup_host((format!("{private_only_probe}."), 80)),
     )
     .await;
-    install(&tail, true);
+    install(&tail, false, false);
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(5);
+    let default_after_vpn_root = loop {
+        if let Ok(servers) = dns::system_servers()
+            && servers != ["127.0.0.1"]
+        {
+            break servers;
+        }
+        assert!(
+            tokio::time::Instant::now() < deadline,
+            "VPN catch-all resolver was not removed"
+        );
+        tokio::time::sleep(Duration::from_millis(100)).await;
+    };
+    tokio::time::sleep(Duration::from_secs(1)).await;
+    let no_vpn_root_probe = format!("without-vpn-root-{suffix}.test");
+    let _ = tokio::time::timeout(
+        Duration::from_secs(15),
+        tokio::net::lookup_host((format!("{no_vpn_root_probe}."), 80)),
+    )
+    .await;
+    let no_vpn_root_private = format!("private-without-vpn-root-{suffix}.{tail}");
+    lookup(&no_vpn_root_private, "100.100.12.34").await;
+    install(&tail, true, true);
     let deadline = tokio::time::Instant::now() + Duration::from_secs(5);
     loop {
         let shown = Command::new("/usr/sbin/scutil")
@@ -301,29 +325,34 @@ pub async fn run(engine: &mut Engine, profile: &Path) {
         );
         tokio::time::sleep(Duration::from_millis(100)).await;
     }
-    let (public_core, selected_core, protected_core, private_only_core) = {
+    let (public_core, selected_core, protected_core, private_only_core, no_vpn_root_core) = {
         let queries = core_queries.lock().unwrap();
         (
             queries.contains(&public_probe),
             queries.contains(&protected_probe),
             queries.contains(&failed_probe),
             queries.contains(&private_only_probe),
+            queries.contains(&no_vpn_root_probe),
         )
     };
-    let (public_vpn, selected_vpn, protected_vpn, private_only_vpn) = {
+    let (public_vpn, selected_vpn, protected_vpn, private_only_vpn, no_vpn_root_private_ok) = {
         let queries = vpn_queries.lock().unwrap();
         (
             queries.contains(&public_probe),
             queries.contains(&protected_probe),
             queries.contains(&failed_probe),
             queries.contains(&private_only_probe),
+            queries.contains(&no_vpn_root_private),
         )
     };
+    let no_vpn_root_default_core = default_after_vpn_root == ["1.1.1.1", "8.8.8.8"];
     eprintln!(
         "macOS resolver experiment: public_core={public_core}, public_vpn={public_vpn}, \
          selected_core={selected_core}, selected_vpn={selected_vpn}, \
          protected_core={protected_core}, protected_vpn={protected_vpn}, \
-         private_only_core={private_only_core}, private_only_vpn={private_only_vpn}"
+         private_only_core={private_only_core}, private_only_vpn={private_only_vpn}, \
+         no_vpn_root_default_core={no_vpn_root_default_core}, no_vpn_root_core={no_vpn_root_core}, \
+         no_vpn_root_private_ok={no_vpn_root_private_ok}"
     );
     scutil(&format!("remove {probe_key}\nquit\n"));
     core_queries.lock().unwrap().clear();
@@ -406,7 +435,7 @@ pub async fn run(engine: &mut Engine, profile: &Path) {
             );
             // Simulate a VPN changing its own configuration while the
             // protection resolver is installed. Its settings remain its own.
-            install(&format!("{suffix}.new-search.test"), true);
+            install(&format!("{suffix}.new-search.test"), true, true);
             expected_vpn = scutil(&format!("show {key}\nquit\n")).stdout;
             lookup(&format!("reconnected-{attempt}.{tail}"), "100.100.12.34").await;
         }

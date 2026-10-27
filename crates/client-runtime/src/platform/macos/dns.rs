@@ -193,7 +193,7 @@ fn resolver_plan(uid: u32) -> Result<Vec<ResolverLease>> {
 fn ensure_nonconflicting_split(split: &[crate::claude_check::protection::SplitDns]) -> Result<()> {
     ensure!(
         split.iter().all(|resolver| {
-            !crate::claude_check::protection::protected_dns_host(&resolver.domain)
+            !crate::claude_check::protection::protected_dns_split(&resolver.domain)
         }),
         "Tailscale 分域与保护范围重叠，无法可靠阻止 DNS 回退，未启用保护"
     );
@@ -491,7 +491,15 @@ mod tests {
             interface: Some("utun4".into()),
         };
         assert!(ensure_nonconflicting_split(&[resolver("tail-fixture.ts.net")]).is_ok());
-        for domain in ["claude.ai", "api.claude.ai", "bash.ws"] {
+        for domain in [
+            "claude.ai",
+            "api.claude.ai",
+            "ai",
+            "auth0.com",
+            "com",
+            "bash.ws",
+            "ws",
+        ] {
             assert!(ensure_nonconflicting_split(&[resolver(domain)]).is_err());
         }
     }
