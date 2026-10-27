@@ -1906,6 +1906,7 @@ struct ReportRow {
     source: String,
     tone: i32,
     country: String,
+    country_label: String,
 }
 fn project(state: &State) -> Projection {
     let s = &state.session;
@@ -2146,12 +2147,19 @@ fn project(state: &State) -> Projection {
             source: service.group.clone(),
             tone,
             country,
+            country_label: String::new(),
         });
     }
     let mut claude = vec![];
     let mut claude_counts = (0, 0, 0);
     if let Some(report) = &state.claude {
         for (index, signal) in report.signals.iter().enumerate() {
+            let country_label =
+                if signal.group == core::claude_check::Group::Dns && !signal.ip.is_empty() {
+                    core::probe::country_name(&signal.country).unwrap_or_default()
+                } else {
+                    String::new()
+                };
             let tone = if report.differs(signal) {
                 claude_counts.1 += 1;
                 3
@@ -2165,11 +2173,16 @@ fn project(state: &State) -> Projection {
             claude.push(ReportRow {
                 id: index.to_string(),
                 title: signal.title.clone(),
-                value: signal.value.clone(),
+                value: if country_label.is_empty() {
+                    signal.value.clone()
+                } else {
+                    signal.ip.clone()
+                },
                 detail: signal.detail.clone(),
                 source: signal.source.clone(),
                 tone,
                 country: signal.country.clone(),
+                country_label,
             });
         }
     }
@@ -2186,6 +2199,7 @@ fn project(state: &State) -> Projection {
             source: "实时拦截 · 内核连接记录".into(),
             tone: 3,
             country: String::new(),
+            country_label: String::new(),
         });
     }
     if !state.guard_snapshot.error.is_empty() {
@@ -2198,6 +2212,7 @@ fn project(state: &State) -> Projection {
             source: "Android 后台保护服务".into(),
             tone: 2,
             country: String::new(),
+            country_label: String::new(),
         });
     }
     Projection {
@@ -2503,6 +2518,7 @@ fn apply(ui: &AndroidWindow, p: Projection) {
             id: r.id.into(),
             title: r.title.into(),
             value: r.value.into(),
+            country: r.country_label.into(),
             detail: r.detail.into(),
             source: r.source.into(),
             tone: r.tone,

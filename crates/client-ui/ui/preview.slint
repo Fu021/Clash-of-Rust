@@ -118,8 +118,8 @@ export component Preview inherits AppWindow {
         UiData.claude-normal = "19"; UiData.claude-risk = "2"; UiData.claude-clues = "5";
         UiData.claude-status = "检测完成 · 浏览器自动采样已回传";
         UiData.claude-results = [
-            {flag: @image-url("icons/ip.svg"), flagged: false, id: "1", title: "实际递归 DNS", value: "172.217.33.153 · 德国", detail: "Google 官方 geofeed 标为德国，bash.ws 原标签为美国。修正后与德国出口一致；不代表已排除其他泄漏。固定演示结果。", source: "浏览器采样 · bash.ws 权威 DNS 观测", tone: 1},
-            {flag: @image-url("icons/ip.svg"), flagged: false, id: "2", title: "实际递归 DNS", value: "8.8.8.8 · 美国", detail: "此演示国家与德国出口不同，仍按风险显示。请核对浏览器独立 DoH、系统 DNS 与实际线路。固定演示结果。", source: "系统 DNS · 固定演示结果", tone: 3},
+            {flag: @image-url("mobile/preview-data/de.svg"), flagged: true, id: "1", title: "实际递归 DNS", value: "172.217.33.153", country: "德国", detail: "Google 官方 geofeed 标为德国，bash.ws 原标签为美国。修正后与德国出口一致；不代表已排除其他泄漏。固定演示结果。", source: "浏览器采样 · bash.ws 权威 DNS 观测", tone: 1},
+            {flagged: false, id: "2", title: "实际递归 DNS", value: "2001:db8:1234:5678:abcd:ef01:2345:6789", country: "香港", detail: "此演示国家与德国出口不同，仍按风险显示。请核对浏览器独立 DoH、系统 DNS 与实际线路。固定演示结果。", source: "系统 DNS · 固定演示结果", tone: 3},
         ];
         UiData.claude-result-status = "2 条 · 1–2";
         UiData.dns-override = true; UiData.fake-ip = true;

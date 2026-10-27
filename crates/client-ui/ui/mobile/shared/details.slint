@@ -77,7 +77,14 @@ export component MobileDetails inherits PageSurface {
                         MHeading { text: result.title; }
                         MTag { text: result.tone == 3 ? "风险" : result.tone == 1 ? "正常" : "线索"; tone: result.tone; }
                     }
-                    MParagraph { text: result.value; }
+                    HorizontalLayout { spacing: MobileTypography.small-gap; cross-axis-alignment: center;
+                        MParagraph { text: result.value; min-width: 0px; horizontal-stretch: result.country == "" ? 1 : 0; }
+                        if result.country != "": HorizontalLayout { spacing: 6px; cross-axis-alignment: center; horizontal-stretch: 0;
+                            if result.flagged: Image { source: result.flag; width: 24px; height: 24px; image-fit: contain; }
+                            MParagraph { text: result.country; wrap: no-wrap; min-width: self.preferred-width; horizontal-stretch: 0; }
+                        }
+                        if result.country != "": Rectangle { horizontal-stretch: 1; }
+                    }
                     MSmall { text: result.detail; wrap: word-wrap; }
                     MSmall { text: result.source; wrap: word-wrap; }
                   }

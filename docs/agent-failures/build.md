@@ -87,6 +87,7 @@
 
 - 工具链充足时执行与 CI 一致的 workspace Release Clippy 和测试；资源受限时明确标注未执行。
 - 测试与生产代码共享 helper 时检查 `cfg(test)` 和平台边界，避免测试专用分支进入生产编译。
+- Rust 导入按 `lib.rs` 的实际模块声明核对，不能把源码目录直接当模块路径；`#[path]` 映射到根模块的文件同样适用。[CI 40557511991](https://github.com/Fu021/Clash-of-Rust/actions/runs/40557511991) 的 DNS 测试曾误用 `crate::detection::claude`，实际入口为 `crate::claude_check`，导致桌面测试目标全部编译失败。
 - 检查返回值的 `must_use`：保留临时目录时显式处理返回路径，不能假定方法返回空值。
 - 网络测试夹具同样处理 `read()` 的返回长度与 EOF；只发送预定错误响应时也要跳过空连接，不能忽略读取量或用 lint 豁免隐藏问题。订阅更新回归的 [CI 40175249665](https://github.com/Fu021/Clash-of-Rust/actions/runs/40175249665) 曾因此在桌面 Clippy 阶段失败。
 - 不以放宽 lint 掩盖未使用代码；无用代码应删除，确需保留时说明原因并限制作用域。

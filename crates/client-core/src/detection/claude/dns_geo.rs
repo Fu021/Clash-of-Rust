@@ -107,7 +107,7 @@ fn matching_prefix(ip: IpAddr, prefix: &str) -> Option<u8> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::detection::claude::{Environment, Group, Report};
+    use crate::claude_check::{Environment, Group, Report};
     use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
     const FEED: &str = "# Offline fixture based on the provider's published format\n\
@@ -216,7 +216,7 @@ mod tests {
             unknown.country.clear();
             unknown.evidence = Evidence::Unknown;
             let mut signals = [signal, unrelated, unknown];
-            let client = crate::detection::claude::client(None).unwrap();
+            let client = crate::claude_check::client(None).unwrap();
             enrich_at(&client, &mut signals, &format!("http://{address}/feed")).await;
             server.await.unwrap();
             assert_eq!(signals[0].country, expected);

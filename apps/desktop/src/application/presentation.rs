@@ -858,6 +858,7 @@ impl App {
                             clash_of_rust::flags::label(&result.country)
                         });
                     ReportItem {
+                        country: String::new(),
                         flag: flag.clone().unwrap_or_default(),
                         flagged: flag.is_some(),
                         id: service.id.as_str().into(),
@@ -981,6 +982,16 @@ impl App {
                         claude_view::ResultKind::Risk => 3,
                         claude_view::ResultKind::Unknown => 2,
                     };
+                    let country = match &entry {
+                        claude_view::Entry::Signal(_, signal)
+                            if signal.group == clash_of_rust::claude_check::Group::Dns
+                                && !signal.ip.is_empty() =>
+                        {
+                            clash_of_rust::probe::country_name(&signal.country).unwrap_or_default()
+                        }
+                        _ => String::new(),
+                    };
+                    let (_, flag) = clash_of_rust::flags::label(&country);
                     let (title, value, detail, source) = match entry {
                         claude_view::Entry::Config(finding) => (
                             finding.field.clone(),
@@ -996,7 +1007,11 @@ impl App {
                         ),
                         claude_view::Entry::Signal(_, signal) => (
                             signal.title.clone(),
-                            signal.value.clone(),
+                            if country.is_empty() {
+                                signal.value.clone()
+                            } else {
+                                signal.ip.clone()
+                            },
                             format!("{}\n{}", signal.detail, signal.advice),
                             signal.source.clone(),
                         ),
@@ -1008,8 +1023,9 @@ impl App {
                         ),
                     };
                     ReportItem {
-                        flag: String::new(),
-                        flagged: false,
+                        country,
+                        flagged: flag.is_some(),
+                        flag: flag.unwrap_or_default(),
                         id: "".into(),
                         title: title.into(),
                         value: value.into(),

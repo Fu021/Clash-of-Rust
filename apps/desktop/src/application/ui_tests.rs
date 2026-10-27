@@ -982,6 +982,73 @@ fn ip_report_uses_bitmaps_in_summary_rows_and_details() {
 }
 
 #[test]
+fn recursive_dns_flags_follow_the_country_without_changing_risk_or_other_signals() {
+    use clash_of_rust::claude_check::{Environment, Evidence, Group, Report, Signal};
+
+    ui_testing::initialize(950, 700);
+    let mut app = fixture(Page::Claude);
+    let window = AppWindow::new().unwrap();
+    let data = window.global::<UiData>();
+    let mut models = ViewModels::default();
+    models.attach(&data);
+    for (code, label, flagged) in [
+        ("DE", "德国", true),
+        ("US", "美国", true),
+        ("HK", "香港", false),
+        ("MO", "澳门", false),
+        ("TW", "台湾", false),
+        ("", "", false),
+        ("ZZ", "", false),
+    ] {
+        let mut report = Report::new(Environment::Core, "fixture");
+        let mut dns = Signal::new(
+            Group::Dns,
+            "实际递归 DNS",
+            "original observation",
+            "fixture",
+            Evidence::Measured,
+            "country evidence",
+        );
+        dns.country = code.into();
+        dns.ip = "2001:db8:1234:5678:abcd:ef01:2345:6789".into();
+        dns.risk = true;
+        report.signals.push(dns);
+        let mut other = Signal::new(
+            Group::Exit,
+            "出口",
+            "unchanged exit",
+            "fixture",
+            Evidence::Measured,
+            "",
+        );
+        other.country = "DE".into();
+        other.ip = "203.0.113.2".into();
+        report.signals.push(other);
+        app.claude.reports[0] = Some(report);
+        app.present_slint(&data, &mut models);
+        let rows = data.get_claude_results();
+        let dns = rows.row_data(0).unwrap();
+        assert_eq!(dns.country, label, "{code}");
+        assert_eq!(dns.flagged, flagged, "{code}");
+        assert_eq!(dns.flag.size().width > 0, flagged, "{code}");
+        assert_eq!(dns.tone, 3, "{code}");
+        assert_eq!(
+            dns.value,
+            if label.is_empty() {
+                "original observation"
+            } else {
+                "2001:db8:1234:5678:abcd:ef01:2345:6789"
+            },
+            "{code}"
+        );
+        let exit = rows.row_data(1).unwrap();
+        assert!(exit.country.is_empty());
+        assert!(!exit.flagged);
+        assert_eq!(exit.value, "unchanged exit");
+    }
+}
+
+#[test]
 fn profile_and_rule_source_popups_preserve_ids_and_filters() {
     ui_testing::initialize(950, 700);
     let mut app = fixture(Page::Rules);
