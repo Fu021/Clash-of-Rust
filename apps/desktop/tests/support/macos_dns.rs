@@ -92,20 +92,22 @@ async fn stub(
     (port, queries, job)
 }
 
-async fn lookup(host: &str, expected: &str) {
-    let addresses = tokio::time::timeout(
-        Duration::from_secs(12),
-        tokio::net::lookup_host((format!("{host}."), 80)),
-    )
-    .await
-    .expect("native DNS timed out")
-    .unwrap()
-    .map(|address| address.ip())
-    .collect::<Vec<_>>();
+async fn lookup_name(host: &str, expected: &str) {
+    let addresses =
+        tokio::time::timeout(Duration::from_secs(12), tokio::net::lookup_host((host, 80)))
+            .await
+            .expect("native DNS timed out")
+            .unwrap()
+            .map(|address| address.ip())
+            .collect::<Vec<_>>();
     assert!(
         addresses.contains(&expected.parse::<IpAddr>().unwrap()),
         "Unexpected native DNS answer for {host}: {addresses:?}"
     );
+}
+
+async fn lookup(host: &str, expected: &str) {
+    lookup_name(&format!("{host}."), expected).await;
 }
 
 pub async fn run(engine: &mut Engine, profile: &Path) {
@@ -179,6 +181,9 @@ pub async fn run(engine: &mut Engine, profile: &Path) {
         )
         .await;
         lookup(&format!("peer-{attempt}.{tail}"), "100.100.12.34").await;
+        if attempt == 0 {
+            lookup_name(&format!("short-{suffix}"), "100.100.12.34").await;
+        }
         lookup(&format!("peer-{attempt}.{corp}"), "100.100.12.34").await;
         if attempt == 0 {
             // An unreachable protected upstream must never make macOS retry a
@@ -191,6 +196,14 @@ pub async fn run(engine: &mut Engine, profile: &Path) {
             )
             .await;
             drop_core_dns.store(false, Ordering::Relaxed);
+            assert!(
+                core_queries
+                    .lock()
+                    .unwrap()
+                    .iter()
+                    .any(|host| host == &failed_host),
+                "Protected failure fixture did not reach the core DNS: {failed_host}"
+            );
             assert!(
                 !vpn_queries
                     .lock()

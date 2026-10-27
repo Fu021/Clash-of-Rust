@@ -24,7 +24,7 @@ unsafe extern "C" {
 const SERVERS: [&str; 2] = ["1.1.1.1", "8.8.8.8"];
 #[path = "dns/tailscale.rs"]
 mod tailscale;
-pub use tailscale::{Snapshot as TailscaleDnsSnapshot, snapshot as split_servers};
+pub(crate) use tailscale::snapshot as split_servers;
 
 fn dynamic_store() -> Result<cf::Owned> {
     let name = cf::string("Clash of Rust protection")?;

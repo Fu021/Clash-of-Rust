@@ -10,7 +10,7 @@ struct Resolver {
     interface: Option<String>,
 }
 
-pub struct Snapshot {
+pub(crate) struct Snapshot {
     pub split_dns: Vec<SplitDns>,
     pub interface: Option<String>,
 }
@@ -94,7 +94,7 @@ fn parse(text: &str) -> Snapshot {
     }
 }
 
-pub fn snapshot() -> Result<Snapshot> {
+pub(crate) fn snapshot() -> Result<Snapshot> {
     let output = Command::new("/usr/sbin/scutil").arg("--dns").output()?;
     ensure!(output.status.success(), "无法读取 macOS 分域 DNS 配置");
     ensure!(output.stdout.len() <= 1024 * 1024, "macOS DNS 配置过大");
