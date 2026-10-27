@@ -103,8 +103,8 @@ def mobile_preview(args) -> None:
                 render(f'preview-update-{"dark" if dark else "light"}', '预发布安装确认',
                        args.size or '393x852', page=9, dark=dark, detail=13,
                        **{'preview-update-prereleases': True, 'preview-update-preview': True,
-                          'preview-update-version': '0.6.5-fix.5.stable-toolbars', 'preview-update-available': True,
-                          'preview-update-status': '发现预发布版 0.6.5-fix.5.stable-toolbars', 'preview-settings-scroll': -1200})
+                          'preview-update-version': '0.6.5-fix.6.tailscale-dns', 'preview-update-available': True,
+                          'preview-update-status': '发现预发布版 0.6.5-fix.6.tailscale-dns', 'preview-settings-scroll': -1200})
         if args.page == 'all':
             for name, label, size, page, dark, detail, scale in [
                 ('phone-landscape', '手机横屏 · 首页', '852x393', 0, False, 0, 1),
