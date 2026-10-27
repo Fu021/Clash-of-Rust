@@ -17,6 +17,13 @@ pub(crate) struct Snapshot {
     pub protected_conflict: bool,
 }
 
+fn quad100(ip: &IpAddr) -> bool {
+    matches!(
+        ip.to_string().as_str(),
+        "100.100.100.100" | "fd7a:115c:a1e0::53"
+    )
+}
+
 fn parse(text: &str) -> Result<Snapshot> {
     fn append(
         resolver: Resolver,
@@ -32,15 +39,11 @@ fn parse(text: &str) -> Result<Snapshot> {
         }
         let mut servers = Vec::new();
         for ip in resolver.servers {
-            if matches!(
-                ip.to_string().as_str(),
-                "100.100.100.100" | "fd7a:115c:a1e0::53"
-            ) && !servers.contains(&ip)
-            {
+            if !servers.contains(&ip) {
                 servers.push(ip);
             }
         }
-        if !servers.is_empty() && resolver.interface.is_some() {
+        if servers.iter().any(quad100) && resolver.interface.is_some() {
             *fallback_interface = resolver.interface.clone();
         }
         if servers.is_empty() {
@@ -56,7 +59,7 @@ fn parse(text: &str) -> Result<Snapshot> {
                 servers: servers.clone(),
                 interface: resolver.interface.clone(),
             };
-            ensure!(split.valid(), "Tailscale 分域 DNS 格式无效，无法安全接管");
+            ensure!(split.valid(), "系统分域 DNS 格式无效，无法安全接管");
             result
                 .entry(split.domain.clone())
                 .and_modify(|old| {
@@ -110,11 +113,11 @@ fn parse(text: &str) -> Result<Snapshot> {
         &mut protected_conflict,
     )?;
     for resolver in result.values_mut() {
-        if resolver.interface.is_none() {
+        if resolver.interface.is_none() && resolver.servers.iter().any(quad100) {
             resolver.interface = fallback_interface.clone();
         }
     }
-    ensure!(result.len() <= 128, "Tailscale 分域 DNS 超过安全上限");
+    ensure!(result.len() <= 128, "系统分域 DNS 超过安全上限");
     Ok(Snapshot {
         split_dns: result.into_values().collect(),
         interface: fallback_interface,
@@ -178,6 +181,39 @@ resolver #1\n nameserver[0] : 192.0.2.53\n if_index : 14 (en0)\n";
         assert_eq!(snapshot.split_dns[0].domain, "internal");
         let invalid = "resolver #1\n domain : invalid domain\n nameserver[0] : 100.100.100.100\n";
         assert!(parse(invalid).is_err());
+    }
+
+    #[test]
+    fn preserves_private_upstreams_without_assigning_quad100_interface_to_other_dns() {
+        let text = "resolver #1\n nameserver[0] : 100.100.100.100\n if_index : 22 (utun4)\n\
+resolver #2\n domain : corp.fixture.test\n nameserver[0] : 10.0.0.53\n if_index : 24 (utun5)\n\
+resolver #3\n domain : lan\n nameserver[0] : 192.168.1.1\n\
+resolver #4\n domain : tail.fixture.ts.net\n nameserver[0] : fd7a:115c:a1e0::53\n\
+resolver #5\n nameserver[0] : 192.0.2.53\n if_index : 14 (en0)\n";
+        let snapshot = parse(text).unwrap();
+        assert_eq!(snapshot.interface.as_deref(), Some("utun4"));
+        let private = snapshot
+            .split_dns
+            .iter()
+            .find(|split| split.domain == "corp.fixture.test")
+            .unwrap();
+        assert_eq!(private.interface.as_deref(), Some("utun5"));
+        assert_eq!(private.servers, ["10.0.0.53".parse::<IpAddr>().unwrap()]);
+        let lan = snapshot
+            .split_dns
+            .iter()
+            .find(|split| split.domain == "lan")
+            .unwrap();
+        assert!(lan.interface.is_none());
+        assert_eq!(lan.servers, ["192.168.1.1".parse::<IpAddr>().unwrap()]);
+        let tail = snapshot
+            .split_dns
+            .iter()
+            .find(|split| split.domain == "tail.fixture.ts.net")
+            .unwrap();
+        assert_eq!(tail.interface.as_deref(), Some("utun4"));
+        assert_eq!(snapshot.split_dns.len(), 3);
+        assert!(!snapshot.protected_conflict);
     }
 
     #[test]

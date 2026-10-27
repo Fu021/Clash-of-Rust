@@ -221,7 +221,7 @@ fn ensure_nonconflicting_split(split: &[crate::claude_check::protection::SplitDn
         split.iter().all(|resolver| {
             !crate::claude_check::protection::protected_dns_split(&resolver.domain)
         }),
-        "Tailscale 分域与保护范围重叠，无法可靠阻止 DNS 回退，未启用保护"
+        "系统分域 DNS 与保护范围重叠，无法可靠阻止 DNS 回退，未启用保护"
     );
     Ok(())
 }

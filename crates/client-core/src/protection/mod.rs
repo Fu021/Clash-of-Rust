@@ -218,8 +218,11 @@ impl SplitDns {
                         .all(|byte| byte.is_ascii_alphanumeric() || byte == b'-' || byte == b'_')
             })
             && !self.servers.is_empty()
-            && self.servers.len() <= 2
-            && self.servers.iter().copied().all(is_tailscale_dns)
+            && self.servers.len() <= 16
+            && self
+                .servers
+                .iter()
+                .all(|ip| !ip.is_unspecified() && !ip.is_multicast())
             && self.interface.as_deref().is_none_or(valid_dns_interface)
     }
 
@@ -688,7 +691,7 @@ pub fn apply(map: &mut Mapping, settings: &Settings) -> Result<()> {
 }
 
 fn apply_split_dns(dns: &mut Mapping, protection: &Protection) -> Result<()> {
-    // Explicit interface selection keeps Quad100 off the physical interface
+    // Explicit interface selection keeps private DNS off the physical interface
     // selected for ordinary DIRECT sockets. It never becomes a public fallback.
     fn bind_bootstrap(value: &mut Value, protection: &Protection) {
         match value {
@@ -710,7 +713,7 @@ fn apply_split_dns(dns: &mut Mapping, protection: &Protection) -> Result<()> {
                         .filter(|address| address.port() == 53)
                         .map(|address| address.ip())
                 });
-                let Some(ip) = ip.filter(|ip| is_tailscale_dns(*ip)) else {
+                let Some(ip) = ip else {
                     return;
                 };
                 let interface = protection
@@ -718,7 +721,10 @@ fn apply_split_dns(dns: &mut Mapping, protection: &Protection) -> Result<()> {
                     .iter()
                     .find(|resolver| resolver.servers.contains(&ip) && resolver.interface.is_some())
                     .and_then(|resolver| resolver.interface.as_deref())
-                    .or(protection.tailscale_dns_interface.as_deref());
+                    .or(protection
+                        .tailscale_dns_interface
+                        .as_deref()
+                        .filter(|_| is_tailscale_dns(ip)));
                 if let Some(interface) = interface {
                     *text = format!(
                         "{address}#{interface}{}",
@@ -869,10 +875,20 @@ mod tests {
                 interface: Some("utun4".into()),
             });
         }
+        protection.split_dns.push(SplitDns {
+            domain: "corp.fixture.test".into(),
+            servers: vec!["10.0.0.53".parse().unwrap()],
+            interface: Some("utun5".into()),
+        });
+        protection.split_dns.push(SplitDns {
+            domain: "lan".into(),
+            servers: vec!["192.168.1.1".parse().unwrap()],
+            interface: None,
+        });
         protection.validate().unwrap();
         let mut dns: Mapping = yaml_serde::from_str(
             "nameserver: ['https://1.1.1.1/dns-query#protected']\n\
-             default-nameserver: ['udp://100.100.100.100:53#DIRECT']\n\
+             default-nameserver: ['udp://100.100.100.100:53#DIRECT', 'udp://10.0.0.53:53#DIRECT']\n\
              nameserver-policy: {}\n",
         )
         .unwrap();
@@ -885,6 +901,14 @@ mod tests {
                 "udp://[fd7a:115c:a1e0::53]:53#utun4"
             ])
             .unwrap()
+        );
+        assert_eq!(
+            policy[Value::from("+.corp.fixture.test")],
+            yaml_serde::to_value(["udp://10.0.0.53:53#utun5"]).unwrap()
+        );
+        assert_eq!(
+            policy[Value::from("+.lan")],
+            yaml_serde::to_value(["udp://192.168.1.1:53#DIRECT"]).unwrap()
         );
         for domain in ["+.claude.ai", "+.bash.ws"] {
             let protected = policy[Value::from(domain)].as_sequence().unwrap();
@@ -900,10 +924,30 @@ mod tests {
             "udp://100.100.100.100:53#utun4"
         );
         assert_eq!(
+            dns[Value::from("default-nameserver")][1],
+            "udp://10.0.0.53:53#utun5"
+        );
+        assert_eq!(
             dns[Value::from("nameserver")][0],
             "https://1.1.1.1/dns-query#protected"
         );
         assert!(!policy.contains_key(Value::from("+.example.com")));
+    }
+
+    #[test]
+    fn split_dns_rejects_invalid_upstreams_and_oversized_lists() {
+        let mut split = SplitDns {
+            domain: "corp.fixture.test".into(),
+            servers: vec!["10.0.0.53".parse().unwrap()],
+            interface: Some("utun5".into()),
+        };
+        assert!(split.valid());
+        for server in ["0.0.0.0", "::", "224.0.0.1", "ff02::1"] {
+            split.servers = vec![server.parse().unwrap()];
+            assert!(!split.valid(), "{server}");
+        }
+        split.servers = vec!["10.0.0.53".parse().unwrap(); 17];
+        assert!(!split.valid());
     }
 
     #[test]
@@ -957,6 +1001,11 @@ mod tests {
             servers: vec!["100.100.100.100".parse().unwrap()],
             interface: Some("utun4".into()),
         });
+        protection.split_dns.push(SplitDns {
+            domain: "corp.fixture.test".into(),
+            servers: vec!["10.0.0.53".parse().unwrap()],
+            interface: Some("utun5".into()),
+        });
         let settings = Settings {
             active_profile: Some(id),
             claude_protection: Some(std::sync::Arc::new(protection)),
@@ -970,12 +1019,14 @@ mod tests {
             .unwrap(),
         )
         .unwrap();
-        assert!(
-            runtime["dns"]["fake-ip-filter"]
-                .as_sequence()
-                .unwrap()
-                .contains(&Value::from("+.tail-fixture.ts.net"))
-        );
+        for domain in ["+.tail-fixture.ts.net", "+.corp.fixture.test"] {
+            assert!(
+                runtime["dns"]["fake-ip-filter"]
+                    .as_sequence()
+                    .unwrap()
+                    .contains(&Value::from(domain))
+            );
+        }
     }
 
     #[test]
