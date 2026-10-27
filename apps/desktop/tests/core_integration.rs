@@ -670,7 +670,11 @@ async fn basic_system_proxy_and_tun() {
     // With the GUI owner gone, the same binary must create and clean up its own
     // headless owner rather than relying on the test process's runtime.
     let resources = test_resources();
-    println!("CLI smoke: starting a standalone owner");
+    let settings = store.load_settings().unwrap();
+    println!(
+        "CLI smoke: starting a standalone owner (controller {}, mixed {})",
+        settings.controller_port, settings.mixed_port
+    );
     #[cfg(not(windows))]
     let output = tokio::process::Command::new(&cli)
         .arg("--data-dir")

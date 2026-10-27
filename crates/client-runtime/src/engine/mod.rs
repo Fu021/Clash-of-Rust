@@ -45,33 +45,87 @@ async fn wait_for_mac_port(
     logs: &LogBuffer,
     shutdown_grace: Duration,
 ) -> std::io::Result<()> {
+    wait_for_mac_port_state(
+        port,
+        logs,
+        shutdown_grace,
+        Duration::from_secs(60),
+        || mac_port_probe(port).map(drop),
+        || async move {
+            tokio::net::TcpStream::connect(("127.0.0.1", port))
+                .await
+                .map(drop)
+        },
+    )
+    .await
+}
+
+#[cfg(target_os = "macos")]
+async fn wait_for_mac_port_state<B, C, F>(
+    port: u16,
+    logs: &LogBuffer,
+    shutdown_grace: Duration,
+    release_timeout: Duration,
+    mut bind: B,
+    mut connect: C,
+) -> std::io::Result<()>
+where
+    B: FnMut() -> std::io::Result<()>,
+    C: FnMut() -> F,
+    F: std::future::Future<Output = std::io::Result<()>>,
+{
     // A prior TUN core can leave root-owned TIME_WAIT sockets after it exits.
     // Darwin denies reuse by the new ordinary-user core until those expire.
     // Ordinary starts reject listeners immediately. Update handoffs allow only
     // the short explicit shutdown grace; never stop the listener's owner.
-    let deadline = tokio::time::Instant::now() + Duration::from_secs(60);
-    let shutdown_deadline = tokio::time::Instant::now() + shutdown_grace;
+    let started = tokio::time::Instant::now();
+    let deadline = started + release_timeout;
+    let shutdown_deadline = started + shutdown_grace;
     let mut reported = false;
+    let mut observed_listener = false;
     loop {
-        let error = match mac_port_probe(port) {
-            Ok(_) => return Ok(()),
+        let error = match bind() {
+            Ok(()) => return Ok(()),
             Err(error) => error,
         };
         if error.kind() != std::io::ErrorKind::AddrInUse {
             return Err(error);
         }
-        match tokio::time::timeout(
-            Duration::from_millis(200),
-            tokio::net::TcpStream::connect(("127.0.0.1", port)),
-        )
-        .await
-        {
-            Ok(Err(ref refused)) if refused.kind() == std::io::ErrorKind::ConnectionRefused => {}
-            Ok(Ok(_)) if tokio::time::Instant::now() < shutdown_deadline => {}
-            _ => return Err(error),
+        let busy = |detail: &str| {
+            std::io::Error::new(
+                error.kind(),
+                format!(
+                    "{error}（TCP 探测：{detail}；已等待 {:.1} 秒）",
+                    started.elapsed().as_secs_f32()
+                ),
+            )
+        };
+        let connection = tokio::time::timeout(Duration::from_millis(200), connect()).await;
+        match &connection {
+            Ok(Ok(())) => {
+                observed_listener = true;
+                if tokio::time::Instant::now() >= shutdown_deadline {
+                    return Err(busy("仍可建立连接"));
+                }
+            }
+            Ok(Err(refused)) if refused.kind() == std::io::ErrorKind::ConnectionRefused => {
+                observed_listener = false;
+            }
+            // An unsuccessful connect does not establish a live listener.
+            // Keep the bind check authoritative and the shutdown grace bounded
+            // even if a previously observed listener's backlog becomes full.
+            _ if observed_listener && tokio::time::Instant::now() >= shutdown_deadline => {
+                return Err(busy("监听曾可连接，退出交接期限已到"));
+            }
+            _ => {}
         }
         if tokio::time::Instant::now() >= deadline {
-            return Err(error);
+            let detail = match connection {
+                Ok(Err(error)) => error.to_string(),
+                Err(_) => "连接超时".into(),
+                Ok(Ok(())) => "仍可建立连接".into(),
+            };
+            return Err(busy(&detail));
         }
         if !reported {
             append(
@@ -2429,6 +2483,155 @@ mod memory_tests {
         .await
         .unwrap();
         assert_eq!(result.unwrap_err().kind(), std::io::ErrorKind::AddrInUse);
+    }
+
+    #[cfg(target_os = "macos")]
+    #[tokio::test]
+    async fn mac_port_wait_retries_inconclusive_connections_until_bind_succeeds() {
+        use std::io::{Error, ErrorKind};
+        for kind in [
+            ErrorKind::ConnectionReset,
+            ErrorKind::TimedOut,
+            ErrorKind::AddrNotAvailable,
+        ] {
+            let mut probes = 0;
+            let logs = Arc::new(Mutex::new(VecDeque::new()));
+            wait_for_mac_port_state(
+                12345,
+                &logs,
+                Duration::ZERO,
+                Duration::from_secs(3),
+                || {
+                    probes += 1;
+                    if probes < 3 {
+                        Err(Error::from(ErrorKind::AddrInUse))
+                    } else {
+                        Ok(())
+                    }
+                },
+                || std::future::ready(Err(Error::from(kind))),
+            )
+            .await
+            .unwrap();
+            assert_eq!(probes, 3);
+            assert_eq!(logs.lock().unwrap().len(), 1);
+        }
+    }
+
+    #[cfg(target_os = "macos")]
+    #[tokio::test]
+    async fn mac_port_wait_retries_a_connection_timeout_until_bind_succeeds() {
+        let mut probes = 0;
+        let logs = Arc::new(Mutex::new(VecDeque::new()));
+        tokio::time::timeout(
+            Duration::from_secs(3),
+            wait_for_mac_port_state(
+                12345,
+                &logs,
+                Duration::ZERO,
+                Duration::from_secs(3),
+                || {
+                    probes += 1;
+                    if probes < 3 {
+                        Err(std::io::ErrorKind::AddrInUse.into())
+                    } else {
+                        Ok(())
+                    }
+                },
+                std::future::pending::<std::io::Result<()>>,
+            ),
+        )
+        .await
+        .unwrap()
+        .unwrap();
+        assert_eq!(probes, 3);
+    }
+
+    #[cfg(target_os = "macos")]
+    #[tokio::test]
+    async fn mac_port_wait_allows_closed_listener_states_after_shutdown_grace() {
+        let mut probes = 0;
+        let mut connections = 0;
+        let logs = Arc::new(Mutex::new(VecDeque::new()));
+        wait_for_mac_port_state(
+            12345,
+            &logs,
+            Duration::from_millis(100),
+            Duration::from_secs(3),
+            || {
+                probes += 1;
+                if probes < 3 {
+                    Err(std::io::ErrorKind::AddrInUse.into())
+                } else {
+                    Ok(())
+                }
+            },
+            || {
+                connections += 1;
+                std::future::ready(if connections == 1 {
+                    Ok(())
+                } else {
+                    Err(std::io::ErrorKind::ConnectionRefused.into())
+                })
+            },
+        )
+        .await
+        .unwrap();
+        assert_eq!(probes, 3);
+    }
+
+    #[cfg(target_os = "macos")]
+    #[tokio::test]
+    async fn mac_update_port_grace_stays_bounded_when_a_listener_stops_responding() {
+        let mut connections = 0;
+        let logs = Arc::new(Mutex::new(VecDeque::new()));
+        let result = tokio::time::timeout(
+            Duration::from_secs(1),
+            wait_for_mac_port_state(
+                12345,
+                &logs,
+                Duration::from_millis(100),
+                Duration::from_secs(3),
+                || Err(std::io::ErrorKind::AddrInUse.into()),
+                || {
+                    connections += 1;
+                    let first = connections == 1;
+                    async move {
+                        if first {
+                            Ok(())
+                        } else {
+                            std::future::pending::<std::io::Result<()>>().await
+                        }
+                    }
+                },
+            ),
+        )
+        .await
+        .unwrap();
+        assert_eq!(result.unwrap_err().kind(), std::io::ErrorKind::AddrInUse);
+    }
+
+    #[cfg(target_os = "macos")]
+    #[tokio::test]
+    async fn mac_port_wait_stays_bounded_when_connections_remain_inconclusive() {
+        let logs = Arc::new(Mutex::new(VecDeque::new()));
+        let error = tokio::time::timeout(
+            Duration::from_secs(2),
+            wait_for_mac_port_state(
+                12345,
+                &logs,
+                Duration::ZERO,
+                Duration::from_millis(100),
+                || Err(std::io::ErrorKind::AddrInUse.into()),
+                std::future::pending::<std::io::Result<()>>,
+            ),
+        )
+        .await
+        .unwrap()
+        .unwrap_err();
+        assert_eq!(error.kind(), std::io::ErrorKind::AddrInUse);
+        assert!(error.to_string().contains("连接超时"));
+        assert!(logs.lock().unwrap().is_empty());
     }
 
     #[tokio::test]

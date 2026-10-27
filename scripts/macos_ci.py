@@ -310,7 +310,9 @@ def diagnostics(arch):
     commands = {'system': ['/usr/bin/sw_vers'], 'kernel': ['/usr/bin/uname', '-a'],
                 'hardware': ['/usr/sbin/sysctl', 'hw.ncpu', 'hw.memsize', 'hw.model'],
                 'proxy': ['/usr/sbin/scutil', '--proxy'], 'dns': ['/usr/sbin/scutil', '--dns'],
-                'routes': ['/usr/sbin/netstat', '-rn'], 'interfaces': ['/sbin/ifconfig'],
+                'routes': ['/usr/sbin/netstat', '-rn'],
+                'tcp': ['/usr/sbin/netstat', '-anv', '-p', 'tcp'],
+                'interfaces': ['/sbin/ifconfig'],
                 'session': ['/bin/launchctl', 'print', f'gui/{os.getuid()}'],
                 'processes': ['/bin/ps', '-axo', 'pid,ppid,uid,stat,comm'],
                 'unified-log': ['/usr/bin/log', 'show', '--last', '15m', '--style', 'compact', '--predicate', 'process == "clash-of-rust" OR process == "clash-tun-launcher" OR process == "mihomo"']}
