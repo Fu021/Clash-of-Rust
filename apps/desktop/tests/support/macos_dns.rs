@@ -60,11 +60,50 @@ impl Drop for Cleanup {
     }
 }
 
+struct LoopbackAlias;
+impl LoopbackAlias {
+    fn install() -> Self {
+        let current = Command::new("/sbin/ifconfig").arg("lo0").output().unwrap();
+        assert!(current.status.success());
+        assert!(
+            !String::from_utf8_lossy(&current.stdout).contains("100.100.100.100"),
+            "The test must not replace an existing Tailscale DNS address"
+        );
+        let output = Command::new("/usr/bin/sudo")
+            .args([
+                "-n",
+                "/sbin/ifconfig",
+                "lo0",
+                "alias",
+                "100.100.100.100",
+                "255.255.255.255",
+            ])
+            .output()
+            .unwrap();
+        assert!(output.status.success(), "ifconfig alias: {output:?}");
+        Self
+    }
+}
+impl Drop for LoopbackAlias {
+    fn drop(&mut self) {
+        match Command::new("/usr/bin/sudo")
+            .args(["-n", "/sbin/ifconfig", "lo0", "-alias", "100.100.100.100"])
+            .output()
+        {
+            Ok(output) if output.status.success() => {}
+            result => eprintln!("Could not remove test DNS alias: {result:?}"),
+        }
+    }
+}
+
 async fn stub(
+    bind_address: &str,
     address: [u8; 4],
     drop_responses: Arc<AtomicBool>,
 ) -> (u16, Arc<Mutex<Vec<String>>>, tokio::task::JoinHandle<()>) {
-    let socket = tokio::net::UdpSocket::bind("127.0.0.1:0").await.unwrap();
+    let socket = tokio::net::UdpSocket::bind((bind_address, 0))
+        .await
+        .unwrap();
     let port = socket.local_addr().unwrap().port();
     let queries = Arc::new(Mutex::new(vec![]));
     let captured = queries.clone();
@@ -128,13 +167,26 @@ async fn lookup(host: &str, expected: &str) {
 pub async fn run(engine: &mut Engine, profile: &Path) {
     engine.select_proxy_mode(ProxyMode::Off).await.unwrap();
     let configured = dns::configured().unwrap();
-    let (vpn_port, vpn_queries, vpn_job) =
-        stub([100, 100, 12, 34], Arc::new(AtomicBool::new(false))).await;
+    let _loopback_alias = LoopbackAlias::install();
+    let (vpn_port, vpn_queries, vpn_job) = stub(
+        "100.100.100.100",
+        [100, 100, 12, 34],
+        Arc::new(AtomicBool::new(false)),
+    )
+    .await;
     let drop_core_dns = Arc::new(AtomicBool::new(false));
-    let (core_port, core_queries, core_job) = stub([203, 0, 113, 20], drop_core_dns.clone()).await;
+    let (core_port, core_queries, core_job) =
+        stub("127.0.0.1", [203, 0, 113, 20], drop_core_dns.clone()).await;
+    let (fallback_port, fallback_queries, fallback_job) = stub(
+        "127.0.0.1",
+        [198, 51, 100, 30],
+        Arc::new(AtomicBool::new(false)),
+    )
+    .await;
     let suffix = uuid::Uuid::new_v4().simple().to_string();
     let tail = format!("tail-{suffix}.ts.net");
     let corp = format!("{suffix}.corp.test");
+    let new_search = format!("{suffix}.new-search.test");
     let key = format!("State:/Network/Service/cor-dns-fixture-{suffix}/DNS");
     let search_key = format!("State:/Network/Service/cor-dns-search-{suffix}/DNS");
     let _cleanup = Cleanup(key.clone());
@@ -143,16 +195,18 @@ pub async fn run(engine: &mut Engine, profile: &Path) {
         let protected = if conflicts { " claude.ai bash.ws" } else { "" };
         let default = if catch_all { "\"\"" } else { "" };
         scutil(&format!(
-            "d.init\nd.add ServerAddresses * 127.0.0.1\nd.add ServerPort # {vpn_port}\n\
+            "d.init\nd.add ServerAddresses * 100.100.100.100\nd.add ServerPort # {vpn_port}\n\
+             d.add InterfaceName lo0\n\
              d.add SearchOrder # 100600\nd.add SupplementalMatchDomains * {default} {tail} {corp}{protected}\n\
              d.add SupplementalMatchDomainsNoSearch # 1\nd.add SearchDomains * {search}\nset {key}\n\
-             d.init\nd.add ServerAddresses * 127.0.0.1\nd.add ServerPort # {vpn_port}\n\
+             d.init\nd.add ServerAddresses * 100.100.100.100\nd.add ServerPort # {vpn_port}\n\
+             d.add InterfaceName lo0\n\
              d.add SearchOrder # 100599\nd.add SupplementalMatchDomains * {search}\nset {search_key}\nquit\n"
         ));
     };
     install(&tail, true, true);
     let deadline = tokio::time::Instant::now() + Duration::from_secs(5);
-    while dns::system_servers().unwrap() != ["127.0.0.1"] {
+    while dns::system_servers().unwrap() != ["100.100.100.100"] {
         assert!(
             tokio::time::Instant::now() < deadline,
             "VPN resolver not selected"
@@ -264,7 +318,7 @@ pub async fn run(engine: &mut Engine, profile: &Path) {
         if !has_resolver(
             &String::from_utf8_lossy(&shown.stdout),
             "claude.ai",
-            "127.0.0.1",
+            "100.100.100.100",
         ) {
             break;
         }
@@ -285,7 +339,7 @@ pub async fn run(engine: &mut Engine, profile: &Path) {
     let deadline = tokio::time::Instant::now() + Duration::from_secs(5);
     let default_after_vpn_root = loop {
         if let Ok(servers) = dns::system_servers()
-            && servers != ["127.0.0.1"]
+            && servers != ["100.100.100.100"]
         {
             break servers;
         }
@@ -315,7 +369,7 @@ pub async fn run(engine: &mut Engine, profile: &Path) {
         if has_resolver(
             &String::from_utf8_lossy(&shown.stdout),
             "claude.ai",
-            "127.0.0.1",
+            "100.100.100.100",
         ) {
             break;
         }
@@ -354,11 +408,120 @@ pub async fn run(engine: &mut Engine, profile: &Path) {
          no_vpn_root_default_core={no_vpn_root_default_core}, no_vpn_root_core={no_vpn_root_core}, \
          no_vpn_root_private_ok={no_vpn_root_private_ok}"
     );
+    // "." is another spelling of the DNS root; check whether macOS treats it
+    // differently from an empty supplemental default when the VPN also owns
+    // a default. Neither setting is trusted without observing real queries.
+    scutil(&format!(
+        "d.init\nd.add ServerAddresses * 1.1.1.1 8.8.8.8\nd.add SearchOrder # 1\n\
+         d.add SupplementalMatchDomains * . claude.ai bash.ws\n\
+         d.add SupplementalMatchDomainsNoSearch # 1\nset {probe_key}\nquit\n"
+    ));
+    tokio::time::sleep(Duration::from_secs(1)).await;
+    let dot_root_probe = format!("dot-root-{suffix}.test");
+    let _ = tokio::time::timeout(
+        Duration::from_secs(15),
+        tokio::net::lookup_host((format!("{dot_root_probe}."), 80)),
+    )
+    .await;
+    let dot_root_failure = format!("dot-root-failure-{suffix}.test");
+    drop_core_dns.store(true, Ordering::Relaxed);
+    let _ = tokio::time::timeout(
+        Duration::from_secs(25),
+        tokio::net::lookup_host((format!("{dot_root_failure}."), 80)),
+    )
+    .await;
+    drop_core_dns.store(false, Ordering::Relaxed);
+    {
+        let core = core_queries.lock().unwrap();
+        let vpn = vpn_queries.lock().unwrap();
+        eprintln!(
+            "macOS dotted root experiment: public_core={}, public_vpn={}, \
+             failed_core={}, failed_vpn={}",
+            core.contains(&dot_root_probe),
+            vpn.contains(&dot_root_probe),
+            core.contains(&dot_root_failure),
+            vpn.contains(&dot_root_failure),
+        );
+    }
+    // A physical-network default may also compete with the protected root,
+    // even after the VPN's own default has been removed.
+    let fallback_key = format!("State:/Network/Service/cor-dns-fallback-{suffix}/DNS");
+    let _cleanup_fallback = Cleanup(fallback_key.clone());
+    install(&tail, false, false);
+    scutil(&format!(
+        "d.init\nd.add ServerAddresses * 1.1.1.1 8.8.8.8\nd.add SearchOrder # 1\n\
+         d.add SupplementalMatchDomains * \"\" claude.ai bash.ws\n\
+         d.add SupplementalMatchDomainsNoSearch # 1\nset {probe_key}\n\
+         d.init\nd.add ServerAddresses * 127.0.0.1\nd.add ServerPort # {fallback_port}\n\
+         d.add SearchOrder # 200000\nd.add SupplementalMatchDomains * \"\"\n\
+         set {fallback_key}\nquit\n"
+    ));
+    tokio::time::sleep(Duration::from_secs(1)).await;
+    let fallback_failure = format!("fallback-failure-{suffix}.test");
+    drop_core_dns.store(true, Ordering::Relaxed);
+    let _ = tokio::time::timeout(
+        Duration::from_secs(25),
+        tokio::net::lookup_host((format!("{fallback_failure}."), 80)),
+    )
+    .await;
+    drop_core_dns.store(false, Ordering::Relaxed);
+    eprintln!(
+        "macOS physical default experiment: failed_core={}, failed_vpn={}, failed_other={}",
+        core_queries.lock().unwrap().contains(&fallback_failure),
+        vpn_queries.lock().unwrap().contains(&fallback_failure),
+        fallback_queries.lock().unwrap().contains(&fallback_failure),
+    );
+    scutil(&format!("remove {fallback_key}\nquit\n"));
+    install(&tail, true, true);
     scutil(&format!("remove {probe_key}\nquit\n"));
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(5);
+    while dns::system_servers().unwrap() != ["100.100.100.100"] {
+        assert!(
+            tokio::time::Instant::now() < deadline,
+            "VPN resolver was not restored after the fallback experiment"
+        );
+        tokio::time::sleep(Duration::from_millis(50)).await;
+    }
     core_queries.lock().unwrap().clear();
     vpn_queries.lock().unwrap().clear();
+    let expected_conflicting = scutil(&format!("show {key}\nquit\n")).stdout;
+    let error = tokio::task::spawn_blocking(|| service::protection_dns(true))
+        .await
+        .unwrap()
+        .expect_err("Overlapping Tailscale domains must be rejected");
+    assert!(
+        format!("{error:#}").contains("Tailscale 分域与保护范围重叠"),
+        "Unexpected error when testing a conflicting private domain: {error:#}"
+    );
+    assert_eq!(
+        scutil(&format!("show {key}\nquit\n")).stdout,
+        expected_conflicting
+    );
+    assert_eq!(dns::system_servers().unwrap(), ["100.100.100.100"]);
+    install(&tail, false, true);
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(5);
+    loop {
+        let shown = Command::new("/usr/sbin/scutil")
+            .arg("--dns")
+            .output()
+            .unwrap();
+        assert!(shown.status.success(), "Unable to read macOS DNS");
+        if !has_resolver(
+            &String::from_utf8_lossy(&shown.stdout),
+            "claude.ai",
+            "100.100.100.100",
+        ) {
+            break;
+        }
+        assert!(
+            tokio::time::Instant::now() < deadline,
+            "VPN conflict resolver was not removed"
+        );
+        tokio::time::sleep(Duration::from_millis(100)).await;
+    }
     for attempt in 0..2 {
         let mut expected_vpn = scutil(&format!("show {key}\nquit\n")).stdout;
+        let mut expected_search = scutil(&format!("show {search_key}\nquit\n")).stdout;
         tokio::task::spawn_blocking(|| service::protection_dns(true))
             .await
             .unwrap()
@@ -366,6 +529,10 @@ pub async fn run(engine: &mut Engine, profile: &Path) {
         assert_eq!(dns::system_servers().unwrap(), ["1.1.1.1", "8.8.8.8"]);
         assert_eq!(dns::configured().unwrap(), configured);
         assert_eq!(scutil(&format!("show {key}\nquit\n")).stdout, expected_vpn);
+        assert_eq!(
+            scutil(&format!("show {search_key}\nquit\n")).stdout,
+            expected_search
+        );
         lookup(&format!("public-{attempt}.{suffix}.test"), "203.0.113.20").await;
         lookup(
             &format!("protected-{attempt}-{suffix}.claude.ai"),
@@ -435,15 +602,32 @@ pub async fn run(engine: &mut Engine, profile: &Path) {
             );
             // Simulate a VPN changing its own configuration while the
             // protection resolver is installed. Its settings remain its own.
-            install(&format!("{suffix}.new-search.test"), true, true);
+            install(&new_search, false, true);
             expected_vpn = scutil(&format!("show {key}\nquit\n")).stdout;
+            expected_search = scutil(&format!("show {search_key}\nquit\n")).stdout;
             lookup(&format!("reconnected-{attempt}.{tail}"), "100.100.12.34").await;
+            lookup(
+                &format!("reconnected-{attempt}.{new_search}"),
+                "100.100.12.34",
+            )
+            .await;
+            lookup(&format!("public-reconnected-{suffix}.test"), "203.0.113.20").await;
+            lookup(
+                &format!("protected-reconnected-{suffix}.claude.ai"),
+                "203.0.113.20",
+            )
+            .await;
+            assert_eq!(
+                dns::system_servers().unwrap(),
+                ["1.1.1.1", "8.8.8.8"],
+                "VPN reconfiguration took over the protected default resolver"
+            );
         }
         let captured = vpn_queries.lock().unwrap().clone();
         assert!(
-            captured
-                .iter()
-                .all(|host| host.ends_with(&tail) || host.ends_with(&corp)),
+            captured.iter().all(|host| host.ends_with(&tail)
+                || host.ends_with(&corp)
+                || host.ends_with(&new_search)),
             "Public DNS reached the VPN resolver: {captured:?}"
         );
         assert!(!core_queries.lock().unwrap().is_empty());
@@ -451,14 +635,19 @@ pub async fn run(engine: &mut Engine, profile: &Path) {
             .await
             .unwrap()
             .unwrap();
-        assert_eq!(dns::system_servers().unwrap(), ["127.0.0.1"]);
+        assert_eq!(dns::system_servers().unwrap(), ["100.100.100.100"]);
         assert_eq!(dns::configured().unwrap(), configured);
         assert_eq!(scutil(&format!("show {key}\nquit\n")).stdout, expected_vpn);
+        assert_eq!(
+            scutil(&format!("show {search_key}\nquit\n")).stdout,
+            expected_search
+        );
         lookup(&format!("restored-{attempt}.{tail}"), "100.100.12.34").await;
     }
     engine.select_proxy_mode(ProxyMode::Off).await.unwrap();
     vpn_job.abort();
     core_job.abort();
+    fallback_job.abort();
     println!(
         "PASS: macOS supplemental default and protected suffixes use TUN DNS; VPN private DNS, search settings and persistent preferences survive enable/disable and reconnect"
     );

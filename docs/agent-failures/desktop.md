@@ -68,7 +68,9 @@
 
 Tailscale 的独立补充分域解析器可以继续成为 macOS 全局 DNS，即使本应用已修改各网络服务的 DNS；因此不能把网络服务写入成功当成保护生效，也不应要求用户关闭 Tailscale DNS。可撤销的独立临时解析器保留了其他程序的配置，但 [CI 40470411381](https://github.com/Fu021/Clash-of-Rust/actions/runs/40470411381) 已证实写入成功不代表系统选中：不能仅依靠默认解析器的优先级断言接管。相同匹配范围的解析器还需实测故障回退，不能只验证首选路径。
 
-保留 Tailscale 原生私有分域及其接口绑定和原持久设置，不复制缺少接口范围的私有解析器；关闭或失败按租约移除自身记录。没有分域时也要保留 Quad100 接口，避免节点引导查询误走物理网卡。私有分域超过支持上限或格式无法处理时应拒绝接管，不能静默丢弃；单标签分域与重复服务器地址不应使有效分域失效。检测到 Tailscale 分域与保护域名或其上级域名重叠时先拒绝开启，直至找到并验证无回退的共存方案。公网保护线路与私有 DNS 不得互为失败回退。Tailscale 官方 DNS 状态还包含网络侧配置的私有分流，不能假定 `scutil --dns` 一定列出了全部分域。模拟解析与真实 Tailscale、接口变化及出口节点应分开验证。
+保留 Tailscale 原生私有分域及其接口绑定和原持久设置，不复制缺少接口范围的私有解析器；关闭或失败按租约移除自身记录。没有分域时也要保留 Quad100 接口，避免节点引导查询误走物理网卡。私有分域超过支持上限或格式无法处理时应拒绝接管，不能静默丢弃；单标签分域与重复服务器地址不应使有效分域失效。检测到 Tailscale 分域与保护域名或其上级域名重叠时先拒绝开启，直至找到并验证无回退的共存方案。公网保护线路与私有 DNS 不得互为失败回退。[Tailscale DNS 状态](https://github.com/tailscale/tailscale/blob/f3ec43d7dd/cmd/tailscale/tsdnsjsonv0/status.go)还包含网络侧配置的私有分流，其[系统 DNS 配置](https://github.com/tailscale/tailscale/blob/f3ec43d7dd/net/dns/manager.go)也可能直接使用私有上游地址；不能假定 `scutil --dns` 一定列出了全部分域或都使用 Quad100。自动发现时须处理旧版接口及 macOS 应用发行渠道差异。模拟解析与真实 Tailscale、接口变化及出口节点应分开验证。
+
+不能简单自动关闭 Tailscale DNS 后继续假定 Quad100 保留全部私有转发：[Tailscale 配置生成](https://github.com/tailscale/tailscale/blob/f3ec43d7dd/ipn/ipnlocal/node_backend.go)在 `CorpDNS` 关闭时不会继续加载网络下发的分域路由。替代方案必须保留这些路由及其变化，并验证故障和退出后的恢复。
 
 ## 9. Windows 普通用户、服务与安装器
 
