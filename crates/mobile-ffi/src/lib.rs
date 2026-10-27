@@ -253,7 +253,7 @@ impl Session {
         Ok(())
     }
     pub fn install_geo(&mut self, staged: &std::path::Path) -> Result<core::geodata::GeoManifest> {
-        let manifest = core::geodata::verify_geo(staged)?;
+        let manifest = core::geodata::verify_geo(staged).context("新下载的 Geo 数据无效")?;
         let raw = self.runtime(&self.settings)?;
         let runtime = self.store.runtime();
         core::geodata::begin_install(staged, &runtime)?;
@@ -1126,7 +1126,7 @@ mod tests {
                 Ok(json!({"ok":true}))
             }
         }
-        for reject in [false, true] {
+        for (reject, inconsistent) in [(false, false), (true, false), (false, true), (true, true)] {
             let root = tempfile::tempdir().unwrap();
             let native = Arc::new(Host::default());
             let mut session = Session::open(root.path().into(), native.clone()).unwrap();
@@ -1141,12 +1141,28 @@ mod tests {
             let staged = tempfile::tempdir().unwrap();
             geo_fixture(&session.store.runtime(), b"old");
             geo_fixture(staged.path(), b"new");
+            if inconsistent {
+                std::fs::write(session.store.runtime().join("GeoIP.dat"), b"changed").unwrap();
+            }
+            let old_manifest =
+                std::fs::read(session.store.runtime().join(core::geodata::MANIFEST)).unwrap();
             native.calls.lock().unwrap().clear();
             native.reject.store(reject, Ordering::Release);
             let result = session.install_geo(staged.path());
             assert_eq!(result.is_err(), reject);
-            let current = core::geodata::verify_geo(&session.store.runtime()).unwrap();
-            assert_eq!(current.version, if reject { "old" } else { "new" });
+            if reject && inconsistent {
+                assert_eq!(
+                    std::fs::read(session.store.runtime().join("GeoIP.dat")).unwrap(),
+                    b"changed"
+                );
+                assert_eq!(
+                    std::fs::read(session.store.runtime().join(core::geodata::MANIFEST)).unwrap(),
+                    old_manifest
+                );
+            } else {
+                let current = core::geodata::verify_geo(&session.store.runtime()).unwrap();
+                assert_eq!(current.version, if reject { "old" } else { "new" });
+            }
             let calls = native.calls.lock().unwrap();
             assert_eq!(
                 calls.as_slice(),

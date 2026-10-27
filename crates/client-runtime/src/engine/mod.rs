@@ -1547,7 +1547,7 @@ impl Engine {
             return Ok(());
         }
         let runtime = self.store.runtime();
-        let manifest = assets::verify_geo(staged)?;
+        let manifest = assets::verify_geo(staged).context("新下载的 Geo 数据无效")?;
         let geo_settings = Settings {
             rule_overrides: RuleOverrides::default(),
             claude_protection: None,

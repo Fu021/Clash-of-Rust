@@ -157,7 +157,7 @@ pub async fn download_geo(destination: &Path, proxy_port: Option<u16>) -> Result
         &destination.join(MANIFEST),
         &serde_json::to_vec_pretty(&manifest)?,
     )?;
-    verify_geo(destination)
+    verify_geo(destination).context("新下载的 Geo 数据无效")
 }
 
 fn download_client(route: &crate::network::Route) -> Result<reqwest::Client> {
@@ -251,6 +251,18 @@ async fn download_asset(
 #[derive(Serialize, Deserialize)]
 struct Transaction {
     backup: String,
+    #[serde(default)]
+    files: Option<Vec<BackupFile>>,
+}
+#[derive(Serialize, Deserialize)]
+struct BackupFile {
+    name: String,
+    contents: Option<BackupContents>,
+}
+#[derive(Serialize, Deserialize)]
+struct BackupContents {
+    sha256: String,
+    size: u64,
 }
 fn backup_path(runtime: &Path, journal: &Transaction) -> Result<PathBuf> {
     if !journal.backup.starts_with(".geo-backup-") || journal.backup.contains(['/', '\\', ':']) {
@@ -260,26 +272,39 @@ fn backup_path(runtime: &Path, journal: &Transaction) -> Result<PathBuf> {
 }
 
 pub fn begin_install(staged: &Path, runtime: &Path) -> Result<()> {
-    verify_geo(staged)?;
-    verify_geo(runtime)?;
+    verify_geo(staged).context("新下载的 Geo 数据无效")?;
     if runtime.join(JOURNAL).exists() {
         bail!("存在尚未恢复的 Geo 更新事务");
     }
     let backup = tempfile::Builder::new()
         .prefix(".geo-backup-")
         .tempdir_in(runtime)?;
+    let mut files = Vec::new();
     for name in GEO_FILES.into_iter().chain([MANIFEST]) {
-        atomic_copy(&runtime.join(name), &backup.path().join(name))?;
+        let source = runtime.join(name);
+        let contents = if source.try_exists()? {
+            atomic_copy(&source, &backup.path().join(name))?;
+            let (sha256, size) = hash_file(&backup.path().join(name))?;
+            Some(BackupContents { sha256, size })
+        } else {
+            None
+        };
+        files.push(BackupFile {
+            name: name.into(),
+            contents,
+        });
     }
-    let path = backup.keep();
     let journal = Transaction {
-        backup: path
+        backup: backup
+            .path()
             .file_name()
             .context("备份路径无效")?
             .to_string_lossy()
             .into_owned(),
+        files: Some(files),
     };
     atomic_write(&runtime.join(JOURNAL), &serde_json::to_vec(&journal)?)?;
+    backup.keep();
     let result = (|| {
         for name in GEO_FILES.into_iter().chain([MANIFEST]) {
             atomic_copy(&staged.join(name), &runtime.join(name))?;
@@ -308,9 +333,41 @@ pub fn recover(runtime: &Path) -> Result<()> {
     }
     let journal: Transaction = serde_json::from_slice(&std::fs::read(&path)?)?;
     let backup = backup_path(runtime, &journal)?;
-    verify_geo(&backup).context("Geo 更新备份不完整，无法自动恢复")?;
-    for name in GEO_FILES.into_iter().chain([MANIFEST]) {
-        atomic_copy(&backup.join(name), &runtime.join(name))?;
+    if let Some(files) = &journal.files {
+        let expected = GEO_FILES.into_iter().chain([MANIFEST]);
+        if files.len() != GEO_FILES.len() + 1
+            || !files
+                .iter()
+                .zip(expected)
+                .all(|(file, name)| file.name == name)
+        {
+            bail!("Geo 更新备份记录无效，无法自动恢复");
+        }
+        for file in files {
+            if let Some(contents) = &file.contents {
+                let (sha256, size) = hash_file(&backup.join(&file.name))
+                    .context("Geo 更新备份不完整，无法自动恢复")?;
+                if sha256 != contents.sha256 || size != contents.size {
+                    bail!("Geo 更新备份校验失败，无法自动恢复");
+                }
+            }
+        }
+        for file in files {
+            let destination = runtime.join(&file.name);
+            if file.contents.is_some() {
+                atomic_copy(&backup.join(&file.name), &destination)?;
+            } else if let Err(error) = std::fs::remove_file(destination)
+                && error.kind() != std::io::ErrorKind::NotFound
+            {
+                return Err(error.into());
+            }
+        }
+    } else {
+        // Journals from earlier versions used the original manifest for verification.
+        verify_geo(&backup).context("Geo 更新备份不完整，无法自动恢复")?;
+        for name in GEO_FILES.into_iter().chain([MANIFEST]) {
+            atomic_copy(&backup.join(name), &runtime.join(name))?;
+        }
     }
     commit(runtime)
 }
@@ -445,5 +502,61 @@ mod tests {
         std::fs::write(staged.join("GeoIP.dat"), b"corrupt").unwrap();
         assert!(begin_install(&staged, &old).is_err());
         assert_eq!(std::fs::read(old.join("GeoSite.dat")).unwrap(), b"old-data");
+    }
+
+    #[test]
+    fn inconsistent_or_missing_old_data_can_be_replaced_and_restored_exactly() {
+        let tmp = tempfile::tempdir().unwrap();
+        let old = tmp.path().join("old");
+        let staged = tmp.path().join("new");
+        fixture(&old, b"old-data");
+        fixture(&staged, b"new-data");
+        std::fs::write(old.join("GeoIP.dat"), b"old-modified").unwrap();
+        std::fs::remove_file(old.join("ASN.mmdb")).unwrap();
+        let original_manifest = std::fs::read(old.join(MANIFEST)).unwrap();
+        assert!(verify_geo(&old).is_err());
+
+        begin_install(&staged, &old).unwrap();
+        assert_eq!(verify_geo(&old).unwrap().version, "test");
+        recover(&old).unwrap();
+        assert_eq!(
+            std::fs::read(old.join("GeoIP.dat")).unwrap(),
+            b"old-modified"
+        );
+        assert_eq!(std::fs::read(old.join("GeoSite.dat")).unwrap(), b"old-data");
+        assert!(!old.join("ASN.mmdb").exists());
+        assert_eq!(
+            std::fs::read(old.join(MANIFEST)).unwrap(),
+            original_manifest
+        );
+
+        begin_install(&staged, &old).unwrap();
+        commit(&old).unwrap();
+        assert_eq!(std::fs::read(old.join("GeoIP.dat")).unwrap(), b"new-data");
+        assert!(verify_geo(&old).is_ok());
+    }
+
+    #[test]
+    fn corrupted_backup_does_not_partially_restore_and_legacy_journal_still_works() {
+        let tmp = tempfile::tempdir().unwrap();
+        let old = tmp.path().join("old");
+        let staged = tmp.path().join("new");
+        fixture(&old, b"old-data");
+        fixture(&staged, b"new-data");
+        begin_install(&staged, &old).unwrap();
+        let journal: Transaction =
+            serde_json::from_slice(&std::fs::read(old.join(JOURNAL)).unwrap()).unwrap();
+        let backup = backup_path(&old, &journal).unwrap();
+        std::fs::write(backup.join("GeoIP.dat"), b"damaged").unwrap();
+        assert!(recover(&old).is_err());
+        assert_eq!(std::fs::read(old.join("GeoSite.dat")).unwrap(), b"new-data");
+        assert!(old.join(JOURNAL).exists());
+
+        std::fs::write(backup.join("GeoIP.dat"), b"old-data").unwrap();
+        let legacy = serde_json::json!({ "backup": journal.backup });
+        atomic_write(&old.join(JOURNAL), &serde_json::to_vec(&legacy).unwrap()).unwrap();
+        recover(&old).unwrap();
+        assert_eq!(std::fs::read(old.join("GeoIP.dat")).unwrap(), b"old-data");
+        assert!(verify_geo(&old).is_ok());
     }
 }
