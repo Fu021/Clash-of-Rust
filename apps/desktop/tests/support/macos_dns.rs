@@ -239,8 +239,19 @@ async fn lookup_name(host: &str, expected: &str) {
             .unwrap()
             .map(|address| address.ip())
             .collect::<Vec<_>>();
+    let expected = expected.parse::<IpAddr>().unwrap();
+    if !addresses.contains(&expected) {
+        let shown = Command::new("/usr/sbin/scutil")
+            .arg("--dns")
+            .output()
+            .unwrap();
+        eprintln!(
+            "Native DNS before fixture cleanup:\n{}",
+            String::from_utf8_lossy(&shown.stdout)
+        );
+    }
     assert!(
-        addresses.contains(&expected.parse::<IpAddr>().unwrap()),
+        addresses.contains(&expected),
         "Unexpected native DNS answer for {host}: {addresses:?}"
     );
 }
@@ -484,16 +495,22 @@ pub async fn run(engine: &mut Engine, profile: &Path) {
             let _ = install(&new_search, true);
             let deadline = tokio::time::Instant::now() + Duration::from_secs(5);
             loop {
-                if tokio::task::spawn_blocking(move || service::check_protection_dns(listen_port))
-                    .await
-                    .unwrap()
-                    .is_err()
+                let state =
+                    tokio::task::spawn_blocking(move || service::check_protection_dns(listen_port))
+                        .await
+                        .unwrap();
+                // A transient global-DNS mismatch can precede the helper's
+                // refresh. Wait for its completed conflict quarantine.
+                if state
+                    .as_ref()
+                    .err()
+                    .is_some_and(|error| format!("{error:#}").contains("分域 DNS 与保护范围重叠"))
                 {
                     break;
                 }
                 assert!(
                     tokio::time::Instant::now() < deadline,
-                    "Conflicting reconnect was not reported"
+                    "Conflicting reconnect was not quarantined: {state:?}"
                 );
                 tokio::time::sleep(Duration::from_millis(100)).await;
             }
