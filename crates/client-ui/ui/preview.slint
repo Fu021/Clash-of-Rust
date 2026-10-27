@@ -28,7 +28,7 @@ export component Preview inherits AppWindow {
         UiData.modal = root.dialog == 1 || root.dialog == 2 ? 1 : root.dialog == 3 ? 7 : root.dialog == 5 ? 2 : root.dialog == 6 ? 11 : root.dialog == 10 ? 12 : root.dialog == 11 ? 10 : root.dialog;
         UiData.modal-can-accept = true;
         UiData.modal-title = root.dialog == 1 ? "删除订阅？" : root.dialog == 2 ? "放弃未保存的修改？" : root.dialog == 3 ? "开启 Claude 保护？" : root.dialog == 4 ? "新建规则" : root.dialog == 5 ? "编辑订阅" : root.dialog == 6 ? "Netflix · 检测详情" : root.dialog == 11 ? "连接详情" : "强调色";
-        UiData.modal-description = root.dialog == 1 ? "将删除“备用订阅”及其配置文件。此操作无法撤销。" : root.dialog == 2 ? "尚有未应用的修改。放弃后将恢复已保存的规则。" : root.dialog == 3 ? "将固定当前节点，启用 TUN、代理 DNS、广泛规则与实时拦截。共享服务可能影响其他应用，关闭后恢复原设置。" : root.dialog == 6 ? "检测结果：确认可用\n识别地区：德国\n响应时间：128 ms\n\n以下为固定演示数据，不代表真实网络检测。" : "";
+        UiData.modal-description = root.dialog == 1 ? "将删除“备用订阅”及其配置文件。此操作无法撤销。" : root.dialog == 2 ? "尚有未应用的修改。放弃后将恢复已保存的规则。" : root.dialog == 3 ? "将固定当前节点，启用 TUN、代理 DNS、广泛规则与实时拦截，并关闭当前内核连接。共享服务可能影响其他应用，关闭后恢复原设置。" : root.dialog == 6 ? "检测结果：确认可用\n识别地区：德国\n响应时间：128 ms\n\n以下为固定演示数据，不代表真实网络检测。" : "";
         UiData.modal-accept = root.dialog == 1 ? "删除订阅" : root.dialog == 2 ? "放弃修改" : root.dialog == 3 ? "开启保护" : root.dialog == 10 ? "完成" : root.dialog == 6 || root.dialog == 11 ? "" : "保存";
         UiData.modal-danger = root.dialog == 1 || root.dialog == 2;
         if root.dialog == 13 {

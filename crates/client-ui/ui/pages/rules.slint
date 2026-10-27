@@ -160,7 +160,7 @@ export component RulesPage inherits PageSurface {
                 }
             }
             gesture := ListReorderGesture {
-                x: scroll.x + Theme.card-padding + Theme.content-gap; y: scroll.y;
+                x: scroll.x + rules.x + Theme.card-padding + Theme.content-gap; y: scroll.y;
                 width: 24px; height: scroll.visible-height; hold-duration: 0ms;
                 enabled: !UiData.working && !UiData.exiting && !UiData.protected && UiData.rule-types.length > 0 && UiData.modal == 0;
                 cancel-requested: root.drag-id == "";

@@ -667,6 +667,17 @@ impl Api {
             .context("保护节点与加密 DNS 在等待期限内未就绪")
     }
 
+    /// Finish a protection transition before reporting it as enabled.
+    pub async fn finish_protection_enable(&self) -> Result<()> {
+        self.close_connections()
+            .await
+            .context("无法关闭原有内核连接")?;
+        self.wait_for_dns("www.cloudflare.com", Duration::from_secs(30))
+            .await
+            .map(|_| ())
+            .context("保护节点或加密 DNS 无法连通，请检查节点和节点 DNS 配置")
+    }
+
     pub async fn select(&self, group: &str, name: &str) -> Result<()> {
         Self::checked(
             self.request(Method::PUT, self.url(&["proxies", group])?)
@@ -997,6 +1008,56 @@ impl Api {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[tokio::test]
+    async fn protection_enable_closes_connections_before_dns_verification() {
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+        for close_status in ["204 No Content", "503 Service Unavailable"] {
+            let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+            let api = Api::new(&Settings {
+                controller_port: listener.local_addr().unwrap().port(),
+                ..Default::default()
+            })
+            .unwrap();
+            let server = tokio::spawn(async move {
+                let requests = if close_status.starts_with("204") {
+                    3
+                } else {
+                    1
+                };
+                for index in 0..requests {
+                    let (mut socket, _) = listener.accept().await.unwrap();
+                    let mut request = [0; 8192];
+                    let count = socket.read(&mut request).await.unwrap();
+                    let text = String::from_utf8_lossy(&request[..count]);
+                    let (status, body) = if index == 0 {
+                        assert!(text.starts_with("DELETE /connections "));
+                        (close_status, "")
+                    } else {
+                        assert!(text.starts_with("GET /dns/query?name=www.cloudflare.com&type="));
+                        (
+                            "200 OK",
+                            r#"{"Status":0,"Answer":[{"type":1,"data":"203.0.113.2"}]}"#,
+                        )
+                    };
+                    let reply = format!(
+                        "HTTP/1.1 {status}\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+                        body.len()
+                    );
+                    socket.write_all(reply.as_bytes()).await.unwrap();
+                }
+            });
+            let result =
+                tokio::time::timeout(Duration::from_secs(5), api.finish_protection_enable())
+                    .await
+                    .expect("protection verification should finish");
+            assert_eq!(result.is_ok(), close_status.starts_with("204"));
+            tokio::time::timeout(Duration::from_secs(5), server)
+                .await
+                .expect("mock controller should receive the expected requests")
+                .unwrap();
+        }
+    }
+
     #[tokio::test]
     async fn protection_dns_waits_through_cold_start_without_changing_resolvers() {
         use tokio::io::{AsyncReadExt, AsyncWriteExt};

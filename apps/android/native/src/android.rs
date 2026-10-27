@@ -366,7 +366,7 @@ enum Update {
     IpDone(u64),
     Claude(u64, std::result::Result<core::claude_check::Report, String>),
     Protection(std::result::Result<core::claude_check::protection::Protection, String>),
-    ProtectionDns(std::time::Instant, std::result::Result<(), String>),
+    ProtectionVerified(std::time::Instant, std::result::Result<(), String>),
     Address(u64, String, String),
     Log(String, String),
     Geo(std::result::Result<tempfile::TempDir, String>),
@@ -718,15 +718,15 @@ async fn run_loop(
             }
             value = update_rx.recv() => {
                 match value {
-                    Some(Update::ProtectionDns(token, result)) => {
+                    Some(Update::ProtectionVerified(token, result)) => {
                         if let Some(change) = state.protection_change.as_mut()
                             && change.deadline == token {
                             protection_dns_job = None;
                             match result {
                                 Ok(()) => change.verified = true,
                                 Err(error) => {
-                                    if let Err(restore) = rollback_protection(&mut state, &format!("保护 DNS 验证失败：{error}")) {
-                                        state.notice = format!("保护 DNS 验证失败：{error}；恢复失败：{restore:#}");
+                                    if let Err(restore) = rollback_protection(&mut state, &format!("保护验证失败：{error}")) {
+                                        state.notice = format!("保护验证失败：{error}；恢复失败：{restore:#}");
                                     }
                                 }
                             }
@@ -875,6 +875,11 @@ async fn run_loop(
                     state.logs.push_back(("ERROR".into(), state.notice.clone()));
                 }
             }
+            if state.protection_change.is_none()
+                && let Some(job) = protection_dns_job.take()
+            {
+                job.abort();
+            }
             if let Some(change) = &state.protection_change
                 && change.enabled
                 && !change.verified
@@ -891,14 +896,13 @@ async fn run_loop(
                 let api = state.session.api.clone();
                 let token = change.deadline;
                 let send = updates.clone();
-                state.protection_status = "正在验证保护节点与加密 DNS…".into();
+                state.protection_status = "正在关闭旧连接并验证保护节点与加密 DNS…".into();
                 protection_dns_job = Some(tokio::spawn(async move {
                     let result = api
-                        .wait_for_dns("www.cloudflare.com", Duration::from_secs(30))
+                        .finish_protection_enable()
                         .await
-                        .map(|_| ())
                         .map_err(|error| format!("{error:#}"));
-                    let _ = send.send(Update::ProtectionDns(token, result)).await;
+                    let _ = send.send(Update::ProtectionVerified(token, result)).await;
                 }));
             }
             if !state.session.running || (!state.visible && !state.session.vpn) {

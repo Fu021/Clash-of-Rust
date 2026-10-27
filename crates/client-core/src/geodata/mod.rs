@@ -304,7 +304,7 @@ pub fn begin_install(staged: &Path, runtime: &Path) -> Result<()> {
         files: Some(files),
     };
     atomic_write(&runtime.join(JOURNAL), &serde_json::to_vec(&journal)?)?;
-    backup.keep();
+    let _ = backup.keep();
     let result = (|| {
         for name in GEO_FILES.into_iter().chain([MANIFEST]) {
             atomic_copy(&staged.join(name), &runtime.join(name))?;

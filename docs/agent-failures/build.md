@@ -73,6 +73,7 @@
 - CI [39805637475](https://github.com/Fu021/Clash-of-Rust/actions/runs/39805637475)：六个桌面平台均因 `timestamp`、`traffic` 未被使用被 Clippy 拒绝。
 - CI [39771203085](https://github.com/Fu021/Clash-of-Rust/actions/runs/39771203085)：枚举变体未构造导致 Clippy 失败。
 - CI [39752822767](https://github.com/Fu021/Clash-of-Rust/actions/runs/39752822767)：多余 `return`。
+- CI [40454555654](https://github.com/Fu021/Clash-of-Rust/actions/runs/40454555654)：Geo 事务恢复遗漏 `TempDir::keep()` 的返回值，所有平台严格 lint 失败。
 - CI [39017685938](https://github.com/Fu021/Clash-of-Rust/actions/runs/39017685938)：`ManuallyDrop` 联合字段与 `chunks_exact` 的严格 lint。
 - CI [39004271043](https://github.com/Fu021/Clash-of-Rust/actions/runs/39004271043)、[39002539543](https://github.com/Fu021/Clash-of-Rust/actions/runs/39002539543)：缺少 `log`/`url` 导入、Android 类型或稳定通道不支持的 API。
 
@@ -86,6 +87,7 @@
 
 - 工具链充足时执行与 CI 一致的 workspace Release Clippy 和测试；资源受限时明确标注未执行。
 - 测试与生产代码共享 helper 时检查 `cfg(test)` 和平台边界，避免测试专用分支进入生产编译。
+- 检查返回值的 `must_use`：保留临时目录时显式处理返回路径，不能假定方法返回空值。
 - 网络测试夹具同样处理 `read()` 的返回长度与 EOF；只发送预定错误响应时也要跳过空连接，不能忽略读取量或用 lint 豁免隐藏问题。订阅更新回归的 [CI 40175249665](https://github.com/Fu021/Clash-of-Rust/actions/runs/40175249665) 曾因此在桌面 Clippy 阶段失败。
 - 不以放宽 lint 掩盖未使用代码；无用代码应删除，确需保留时说明原因并限制作用域。
 

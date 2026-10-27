@@ -1386,10 +1386,7 @@ impl Engine {
                     // /version and tun.enable do not prove network availability.
                     // Use the core's actual upstream DNS path (not fake-IP or the
                     // host resolver) before committing a full-route takeover.
-                    self.api
-                        .wait_for_dns("www.cloudflare.com", Duration::from_secs(30))
-                        .await
-                        .context("保护节点或加密 DNS 无法连通，请检查节点和节点 DNS 配置")?;
+                    self.api.finish_protection_enable().await?;
                 } else if let Some(saved) = &old.claude_protection {
                     self.api
                         .restore_automatic_groups(&saved.locked_groups, &saved.fixed_groups)

@@ -231,7 +231,7 @@ cor rule move c:完整UUID 1
 | `claude check [-o FILE]` | Claude 网络/地区线索及风险 |
 | `claude audit [--offline -o FILE]` | 检查当前终端和已记录的项目配置；离线模式不启动内核或请求检测网站 |
 | `claude browser [--open -o FILE]` | 创建本机真实浏览器采样入口并等待报告 |
-| `claude protect [on\|off] [--yes]` | 可逆保护、锁定节点、TUN/DNS/规则覆盖及实时异常流量拦截 |
+| `claude protect [on\|off] [--yes]` | 可逆保护、锁定节点、TUN/DNS/规则覆盖及实时异常流量拦截；开启时关闭已有内核连接 |
 | `claude watch [--interval 1]` | 只读观察 Claude 相关请求的真实线路；保护开启时同时查看拦截状态 |
 
 `config set` 支持 `mixed_port`、`secret`、`dark`、`theme_mode`、`accent_color`、`text_scale`、`tray_speed`、`update_prereleases`、`dns_override`、`fake_ip`、`fake_ip_exclusions`、`fake_ip_disabled_defaults`、`ipv6`、`udp`、`ip_reputation_key`、`delay_interval_minutes`、`node_sort`。值先按 JSON 解析，否则视为字符串，例如 `cor config set ipv6 false`、`cor config set theme_mode dark`。控制端口由后台自动选择并处理冲突，不提供手动设置；混合端口仍可修改。枚举取值见 `config get`；模式、订阅、规则、保护必须使用各自命令，不能绕过保护锁定。

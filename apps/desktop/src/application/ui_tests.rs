@@ -43,6 +43,86 @@ fn dropping_rules_uses_identities_in_the_full_draft_and_ignores_stale_rows() {
 }
 
 #[test]
+fn desktop_rule_handle_edges_lift_the_real_row_and_follow_the_pointer() {
+    use slint::platform::{PointerEventButton, WindowEvent, software_renderer::RepaintBufferType};
+    let adapter = ui_testing::initialize(950, 700);
+    let mut app = fixture(Page::Rules);
+    let document = rule_manager::Document::from_raw(
+        "fixture",
+        false,
+        "proxies: []\nrules: ['DOMAIN,first.test,DIRECT', 'DOMAIN,second.test,DIRECT', 'DOMAIN,third.test,DIRECT', 'MATCH,DIRECT']\n",
+    )
+    .unwrap();
+    app.rule_state
+        .load(Arc::new(document), Arc::new(ProfileRules::default()));
+    let window = AppWindow::new().unwrap();
+    let data = window.global::<UiData>();
+    let mut models = ViewModels::default();
+    models.attach(&data);
+    app.present_slint(&data, &mut models);
+    data.set_appearance(1);
+    data.set_accent(0);
+    let events = pointer_events(&window);
+    window.show().unwrap();
+    let mut pixels = vec![slint::Rgb8Pixel::default(); 950 * 700];
+    window.window().request_redraw();
+    assert!(adapter.draw_if_needed(|renderer| {
+        renderer.set_repaint_buffer_type(RepaintBufferType::NewBuffer);
+        renderer.render(&mut pixels, 950);
+        renderer.set_repaint_buffer_type(RepaintBufferType::ReusedBuffer);
+        renderer.render(&mut pixels, 950);
+    }));
+    let mut border_y = || {
+        window.window().request_redraw();
+        assert!(adapter.draw_if_needed(|renderer| {
+            renderer.render(&mut pixels, 950);
+            let mut full = vec![slint::Rgb8Pixel::default(); 950 * 700];
+            renderer.set_repaint_buffer_type(RepaintBufferType::NewBuffer);
+            renderer.render(&mut full, 950);
+            assert!(pixels == full, "the drag preview must repaint correctly");
+            renderer.set_repaint_buffer_type(RepaintBufferType::ReusedBuffer);
+            renderer.render(&mut pixels, 950);
+        }));
+        (300..600)
+            .find(|&y| {
+                (350..600).all(|x| pixels[y * 950 + x] == slint::Rgb8Pixel::new(15, 118, 110))
+            })
+            .expect("the lifted row must render a full-width accent border")
+    };
+    for x in [225., 247.] {
+        let start = slint::LogicalPosition::new(x, 355.);
+        window
+            .window()
+            .dispatch_event(WindowEvent::PointerMoved { position: start });
+        window.window().dispatch_event(WindowEvent::PointerPressed {
+            position: start,
+            button: PointerEventButton::Left,
+        });
+        let top = border_y();
+        let end = slint::LogicalPosition::new(x, 435.);
+        window
+            .window()
+            .dispatch_event(WindowEvent::PointerMoved { position: end });
+        assert_eq!(border_y(), top + 80, "the preview must follow the pointer");
+        window
+            .window()
+            .dispatch_event(WindowEvent::PointerReleased {
+                position: end,
+                button: PointerEventButton::Left,
+            });
+        assert!(
+            events
+                .borrow_mut()
+                .iter()
+                .any(|event| event.0 == Intent::RuleDrop),
+            "the full rules page must dispatch the reorder"
+        );
+        events.borrow_mut().clear();
+    }
+    window.hide().unwrap();
+}
+
+#[test]
 fn rule_editor_round_trip_and_cancel_preserve_the_draft_through_ui_intents() {
     let mut app = fixture(Page::Rules);
     let _ = app.ui_intent(Intent::RuleAdd, "", "");
