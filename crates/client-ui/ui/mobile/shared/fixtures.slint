@@ -103,10 +103,11 @@ export component MobileFixture inherits Rectangle {
             {id: "copilot", title: "Copilot", value: "可用 · 识别地区：德国 · 218 ms", source: "服务响应", tone: 1},
             {id: "other", title: "其他 AI 服务", value: "当前地区不可用", source: "服务响应", tone: 3}
         ];
-        MobileData.claude-normal = "18"; MobileData.claude-risk = "2"; MobileData.claude-clues = "5";
+        MobileData.claude-normal = "19"; MobileData.claude-risk = "2"; MobileData.claude-clues = "5";
         MobileData.claude-status = "检测完成 · 浏览器采样已回传";
         MobileData.claude-results = [
-            {id: "dns", title: "递归 DNS 地区", value: "DNS 地区与代理出口不同", detail: "检查系统与浏览器 DNS 设置。", source: "浏览器采样 · 固定演示结果", tone: 3},
+            {id: "dns", title: "实际递归 DNS", value: "172.217.33.153 · 德国", detail: "Google 官方 geofeed 标为德国，bash.ws 原标签为美国。修正后与德国出口一致；不代表已排除其他泄漏。", source: "浏览器采样 · 固定演示结果", tone: 1},
+            {id: "dns-risk", title: "实际递归 DNS", value: "8.8.8.8 · 美国", detail: "此演示国家与德国出口不同，仍按风险显示。请核对浏览器独立 DoH、系统 DNS 与实际线路。", source: "系统 DNS · 固定演示结果", tone: 3},
             {id: "route", title: "关联服务直连", value: "assets-proxy.anthropic.com", detail: "发现 DIRECT 连接，尚未启用保护。", source: "内核连接记录 · 固定演示结果", tone: 3},
             {id: "exit", title: "出口地区", value: "德国 · 与当前节点一致", detail: "未发现地区冲突。", source: "服务响应", tone: 1},
             {id: "site", title: "Claude 网页", value: "网页可达", detail: "未携带账户 Cookie。", source: "匿名服务响应", tone: 1},

@@ -115,10 +115,13 @@ export component Preview inherits AppWindow {
             {left: {id: "AI", title: "AI", count: "4 / 5", detail: "确认可用 3 · 网页可达 1 · 受限 1", tone: 2}, right: {id: "全球", title: "全球", count: "16 / 19", detail: "确认可用 14 · 网页可达 2 · 受限 3", tone: 2}},
             {left: {id: "日本", title: "日本", count: "8 / 12", detail: "确认可用 6 · 网页可达 2 · 受限 4", tone: 2}, right: {id: "香港", title: "香港", count: "9 / 13", detail: "确认可用 8 · 网页可达 1 · 受限 4", tone: 2}},
             {left: {id: "欧洲", title: "欧洲", count: "12 / 12", detail: "确认可用 12 · 网页可达 0 · 受限 0", tone: 1}, right: {id: "台湾", title: "台湾", count: "8 / 13", detail: "确认可用 8 · 网页可达 0 · 受限 5", tone: 2}}];
-        UiData.claude-normal = "18"; UiData.claude-risk = "2"; UiData.claude-clues = "5";
+        UiData.claude-normal = "19"; UiData.claude-risk = "2"; UiData.claude-clues = "5";
         UiData.claude-status = "检测完成 · 浏览器自动采样已回传";
-        UiData.claude-results = [{flag: @image-url("icons/ip.svg"), flagged: false, id: "1", title: "DNS 地区线索", value: "发现与代理出口不同的地区", detail: "请核对浏览器安全 DNS 与系统 DNS 配置。此处为固定演示结果。", source: "浏览器采样", tone: 3}];
-        UiData.claude-result-status = "1 条 · 1–1";
+        UiData.claude-results = [
+            {flag: @image-url("icons/ip.svg"), flagged: false, id: "1", title: "实际递归 DNS", value: "172.217.33.153 · 德国", detail: "Google 官方 geofeed 标为德国，bash.ws 原标签为美国。修正后与德国出口一致；不代表已排除其他泄漏。固定演示结果。", source: "浏览器采样 · bash.ws 权威 DNS 观测", tone: 1},
+            {flag: @image-url("icons/ip.svg"), flagged: false, id: "2", title: "实际递归 DNS", value: "8.8.8.8 · 美国", detail: "此演示国家与德国出口不同，仍按风险显示。请核对浏览器独立 DoH、系统 DNS 与实际线路。固定演示结果。", source: "系统 DNS · 固定演示结果", tone: 3},
+        ];
+        UiData.claude-result-status = "2 条 · 1–2";
         UiData.dns-override = true; UiData.fake-ip = true;
         UiData.fake-ip-exclusions = [
             {domain: "+.example.com", source: "用户自定义"},

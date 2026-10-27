@@ -36,6 +36,7 @@ pub const DIAGNOSTIC_HOSTS: &[&str] = &[
     "api6.ipify.org",
     "api.ip.sb",
     "api.ipapi.is",
+    "www.gstatic.com",
     "www.cloudflare.com",
     "speed.cloudflare.com",
     "api.globalping.io",
