@@ -15,22 +15,22 @@ pub(crate) struct Snapshot {
     pub interface: Option<String>,
 }
 
-fn parse(text: &str) -> Snapshot {
+fn parse(text: &str) -> Result<Snapshot> {
     fn append(
         resolver: Resolver,
         result: &mut BTreeMap<String, SplitDns>,
         fallback_interface: &mut Option<String>,
     ) {
-        let servers: Vec<_> = resolver
-            .servers
-            .into_iter()
-            .filter(|ip| {
-                matches!(
-                    ip.to_string().as_str(),
-                    "100.100.100.100" | "fd7a:115c:a1e0::53"
-                )
-            })
-            .collect();
+        let mut servers = Vec::new();
+        for ip in resolver.servers {
+            if matches!(
+                ip.to_string().as_str(),
+                "100.100.100.100" | "fd7a:115c:a1e0::53"
+            ) && !servers.contains(&ip)
+            {
+                servers.push(ip);
+            }
+        }
         if !servers.is_empty() && resolver.interface.is_some() {
             *fallback_interface = resolver.interface.clone();
         }
@@ -88,17 +88,18 @@ fn parse(text: &str) -> Snapshot {
             resolver.interface = fallback_interface.clone();
         }
     }
-    Snapshot {
-        split_dns: result.into_values().take(128).collect(),
+    ensure!(result.len() <= 128, "Tailscale 分域 DNS 超过安全上限");
+    Ok(Snapshot {
+        split_dns: result.into_values().collect(),
         interface: fallback_interface,
-    }
+    })
 }
 
 pub(crate) fn snapshot() -> Result<Snapshot> {
     let output = Command::new("/usr/sbin/scutil").arg("--dns").output()?;
     ensure!(output.status.success(), "无法读取 macOS 分域 DNS 配置");
     ensure!(output.stdout.len() <= 1024 * 1024, "macOS DNS 配置过大");
-    Ok(parse(std::str::from_utf8(&output.stdout)?))
+    parse(std::str::from_utf8(&output.stdout)?)
 }
 
 #[cfg(test)]
@@ -107,14 +108,14 @@ mod tests {
     #[test]
     fn captures_magic_and_split_dns_without_promoting_the_vpn_default() {
         let text = "DNS configuration\n\
-resolver #1\n search domain[0] : tail-fixture.ts.net\n nameserver[0] : 100.100.100.100\n nameserver[1] : fd7a:115c:a1e0::53\n if_index : 22 (utun4)\n\
+resolver #1\n search domain[0] : tail-fixture.ts.net\n nameserver[0] : 100.100.100.100\n nameserver[1] : 100.100.100.100\n nameserver[2] : fd7a:115c:a1e0::53\n if_index : 22 (utun4)\n\
 resolver #2\n nameserver[0] : 192.0.2.53\n if_index : 14 (en0)\n\
 resolver #3\n domain : tail-fixture.ts.net.\n nameserver[0] : 100.100.100.100\n if_index : 22 (utun4)\n\
 resolver #4\n domain : corp.fixture.test\n nameserver[0] : 100.100.100.100\n\
 resolver #5\n domain : local\n options : mdns\n\
 DNS configuration (for scoped queries)\n\
 resolver #1\n nameserver[0] : 192.0.2.53\n if_index : 14 (en0)\n";
-        let snapshot = parse(text);
+        let snapshot = parse(text).unwrap();
         assert_eq!(snapshot.interface.as_deref(), Some("utun4"));
         let parsed = snapshot.split_dns;
         assert_eq!(parsed.len(), 2);
@@ -124,8 +125,21 @@ resolver #1\n nameserver[0] : 192.0.2.53\n if_index : 14 (en0)\n";
         assert_eq!(parsed[1].servers.len(), 2);
         assert_eq!(parsed[1].interface.as_deref(), Some("utun4"));
         let global =
-            parse("resolver #1\n nameserver[0] : 100.100.100.100\n if_index : 22 (utun4)\n");
+            parse("resolver #1\n nameserver[0] : 100.100.100.100\n if_index : 22 (utun4)\n")
+                .unwrap();
         assert!(global.split_dns.is_empty());
         assert_eq!(global.interface.as_deref(), Some("utun4"));
+    }
+
+    #[test]
+    fn rejects_too_many_private_domains_instead_of_silently_dropping_them() {
+        let text = (0..129)
+            .map(|index| {
+                format!(
+                    "resolver #{index}\n domain : host{index}.fixture.test\n nameserver[0] : 100.100.100.100\n if_index : 22 (utun4)\n"
+                )
+            })
+            .collect::<String>();
+        assert!(parse(&text).is_err());
     }
 }

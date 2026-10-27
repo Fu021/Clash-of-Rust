@@ -159,9 +159,10 @@ fn resolver_config(split: &[crate::claude_check::protection::SplitDns]) -> Value
         ASSOCIATED_DOMAINS, DIAGNOSTIC_DNS_SUFFIXES, DIAGNOSTIC_HOSTS, OWNED_DOMAINS,
         protected_dns_host,
     };
-    // A separate supplemental default outranks a VPN's catch-all DNS without
-    // changing its private suffixes or network preferences. "*" also covers
-    // interface-scoped queries. Specific protected suffixes must win split DNS.
+    // Install a separate supplemental default without changing the VPN's
+    // private suffixes or network preferences. macOS can retain another
+    // default even with a lower SearchOrder; enable verifies and rolls back.
+    // "*" also covers interface-scoped queries.
     let mut domains = vec![""];
     domains.extend(OWNED_DOMAINS);
     domains.extend(ASSOCIATED_DOMAINS);
@@ -183,9 +184,20 @@ fn resolver_config(split: &[crate::claude_check::protection::SplitDns]) -> Value
 
 fn resolver_plan(uid: u32) -> Result<Vec<ResolverLease>> {
     let split = split_servers()?.split_dns;
+    ensure_nonconflicting_split(&split)?;
     let search = dynamic_value("State:/Network/Global/DNS")?
         .and_then(|value| value.get("SearchDomains").cloned());
     Ok(resolver_plan_for(uid, &split, search))
+}
+
+fn ensure_nonconflicting_split(split: &[crate::claude_check::protection::SplitDns]) -> Result<()> {
+    ensure!(
+        split.iter().all(|resolver| {
+            !crate::claude_check::protection::protected_dns_host(&resolver.domain)
+        }),
+        "Tailscale 分域与保护范围重叠，无法可靠阻止 DNS 回退，未启用保护"
+    );
+    Ok(())
 }
 
 fn resolver_plan_for(
@@ -429,9 +441,9 @@ mod tests {
         assert!(legacy.resolvers.is_empty());
     }
     #[test]
-    fn resolver_plan_keeps_private_domains_and_protects_conflicting_domains() {
+    fn resolver_plan_keeps_private_domains_and_covers_protected_domains() {
         use crate::claude_check::protection::SplitDns;
-        let split = ["tail-fixture.ts.net", "claude.ai", "bash.ws"]
+        let split = ["tail-fixture.ts.net", "private.example"]
             .into_iter()
             .map(|domain| SplitDns {
                 domain: domain.into(),
@@ -463,5 +475,24 @@ mod tests {
                 .unwrap()
                 .contains(&json!("tail-fixture.ts.net"))
         );
+        assert!(
+            !plan[0].owned["SupplementalMatchDomains"]
+                .as_array()
+                .unwrap()
+                .contains(&json!("private.example"))
+        );
+    }
+    #[test]
+    fn refuses_tailscale_splits_that_can_retry_protected_dns() {
+        use crate::claude_check::protection::SplitDns;
+        let resolver = |domain: &str| SplitDns {
+            domain: domain.into(),
+            servers: vec!["100.100.100.100".parse().unwrap()],
+            interface: Some("utun4".into()),
+        };
+        assert!(ensure_nonconflicting_split(&[resolver("tail-fixture.ts.net")]).is_ok());
+        for domain in ["claude.ai", "api.claude.ai", "bash.ws"] {
+            assert!(ensure_nonconflicting_split(&[resolver(domain)]).is_err());
+        }
     }
 }
