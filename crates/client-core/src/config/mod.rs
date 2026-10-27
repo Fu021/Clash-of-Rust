@@ -658,6 +658,16 @@ pub fn runtime_config_with_rules(
         {
             exclusions.push("+.bash.ws");
         }
+        let split_exclusions: Vec<_> = settings
+            .claude_protection
+            .iter()
+            .flat_map(|protection| &protection.split_dns)
+            .filter(|resolver| {
+                !crate::claude_check::protection::protected_dns_host(&resolver.domain)
+            })
+            .map(|resolver| format!("+.{}", resolver.domain))
+            .collect();
+        exclusions.extend(split_exclusions.iter().map(String::as_str));
         dns::fake_ip_exceptions(&mut map, &exclusions)?;
     }
     apply_udp(

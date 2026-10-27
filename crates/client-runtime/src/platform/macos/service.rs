@@ -16,7 +16,7 @@ use std::{
     time::{Duration, Instant},
 };
 
-const PROTOCOL: u32 = 3;
+const PROTOCOL: u32 = 4;
 const PREFIX: &str = "org.clashofrust.network";
 const LIMIT: u64 = 256 * 1024;
 static STOP: AtomicBool = AtomicBool::new(false);
@@ -114,7 +114,7 @@ fn restore_lease(path: &Path, lease: &mut Option<ProxyLease>) -> Result<()> {
 
 fn accepts_protocol(request: &Request, protocol: u32) -> bool {
     protocol == PROTOCOL
-        || (protocol == 2
+        || (matches!(protocol, 2 | 3)
             && matches!(
                 request,
                 Request::Proxy { restore: true, .. } | Request::Dns { enabled: false }
@@ -530,7 +530,7 @@ pub fn serve(uid: u32) -> Result<()> {
                     Request::Dns { enabled } => {
                         let caller = peer_pid(&stream)?;
                         if enabled {
-                            super::dns::enable(&dns_journal, &mut dns_lease, caller)?;
+                            super::dns::enable(&dns_journal, &mut dns_lease, caller, uid)?;
                         } else {
                             ensure!(
                                 dns_lease
@@ -639,23 +639,25 @@ mod tests {
     #[test]
     fn older_helpers_can_clean_up_but_must_be_updated_before_new_operations() {
         assert!(accepts_protocol(&Request::Status {}, PROTOCOL));
-        assert!(!accepts_protocol(&Request::Status {}, 2));
-        assert!(!accepts_protocol(&Request::Dns { enabled: true }, 2));
-        assert!(accepts_protocol(&Request::Dns { enabled: false }, 2));
-        assert!(accepts_protocol(
-            &Request::Proxy {
-                state: ProxyState::new(),
-                restore: true,
-            },
-            2
-        ));
-        assert!(!accepts_protocol(
-            &Request::Proxy {
-                state: ProxyState::new(),
-                restore: false,
-            },
-            2
-        ));
+        for protocol in [2, 3] {
+            assert!(!accepts_protocol(&Request::Status {}, protocol));
+            assert!(!accepts_protocol(&Request::Dns { enabled: true }, protocol));
+            assert!(accepts_protocol(&Request::Dns { enabled: false }, protocol));
+            assert!(accepts_protocol(
+                &Request::Proxy {
+                    state: ProxyState::new(),
+                    restore: true,
+                },
+                protocol
+            ));
+            assert!(!accepts_protocol(
+                &Request::Proxy {
+                    state: ProxyState::new(),
+                    restore: false,
+                },
+                protocol
+            ));
+        }
         assert!(!accepts_protocol(&Request::Dns { enabled: false }, 1));
     }
     #[test]

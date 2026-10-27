@@ -199,10 +199,10 @@ impl Engine {
         {
             platform::macos::service::protection_dns(false)
                 .context("恢复上次运行的系统 DNS 失败")?;
-            if let Some(protection) = &mut settings.claude_protection
-                && protection.system_dns.is_empty()
-            {
-                Arc::make_mut(protection).system_dns = platform::macos::dns::system_servers()?;
+            if let Some(protection) = &mut settings.claude_protection {
+                let protection = Arc::make_mut(protection);
+                protection.system_dns = platform::macos::dns::system_servers()?;
+                protection.split_dns = platform::macos::dns::split_servers()?;
                 store.save_settings(&settings)?;
             }
         }
@@ -1283,6 +1283,7 @@ impl Engine {
         #[cfg(target_os = "macos")]
         {
             protection.system_dns = platform::macos::dns::system_servers()?;
+            protection.split_dns = platform::macos::dns::split_servers()?;
         }
         protection.validate()?;
         self.apply_claude_protection(Some(Arc::new(protection)), None)

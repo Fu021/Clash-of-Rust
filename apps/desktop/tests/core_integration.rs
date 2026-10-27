@@ -5,6 +5,9 @@ use clash_of_rust::{
     engine::{Engine, Scope},
 };
 
+#[cfg(target_os = "macos")]
+#[path = "support/macos_dns.rs"]
+mod macos_dns;
 #[cfg(target_os = "linux")]
 #[path = "support/protected_dns.rs"]
 mod protected_dns;
@@ -428,6 +431,8 @@ async fn basic_system_proxy_and_tun() {
             std::panic::resume_unwind(panic);
         }
     }
+    #[cfg(target_os = "macos")]
+    macos_dns::run(&mut engine, &profile).await;
     engine.select_proxy_mode(ProxyMode::Off).await.unwrap();
     let state = engine.poll(Scope::Home).await.unwrap();
     assert!(!state.tun && !state.system_proxy);

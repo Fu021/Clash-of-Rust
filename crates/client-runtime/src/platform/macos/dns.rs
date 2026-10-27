@@ -1,7 +1,8 @@
-//! Reversible system DNS ownership for Claude protection. DHCP remains DHCP
-//! after restoration: the configured dictionary, not DHCP's addresses, is saved.
+//! Reversible supplemental DNS for protection, preserving VPN split resolvers.
 use super::{cf, native_proxy};
-use crate::platform::{ProxyState, ProxyValue};
+use crate::platform::ProxyState;
+#[cfg(test)]
+use crate::platform::ProxyValue;
 use anyhow::{Context, Result, ensure};
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
@@ -9,13 +10,57 @@ use std::{fs, io::Read, net::IpAddr, path::Path, ptr};
 
 #[link(name = "SystemConfiguration", kind = "framework")]
 unsafe extern "C" {
+    fn SCDynamicStoreCreate(
+        allocator: cf::Ref,
+        name: cf::Ref,
+        callback: Option<unsafe extern "C" fn(cf::Ref, cf::Ref, *mut std::ffi::c_void)>,
+        context: *mut std::ffi::c_void,
+    ) -> cf::Ref;
     fn SCDynamicStoreCopyValue(store: cf::Ref, key: cf::Ref) -> cf::Ref;
+    fn SCDynamicStoreSetValue(store: cf::Ref, key: cf::Ref, value: cf::Ref) -> u8;
+    fn SCDynamicStoreRemoveValue(store: cf::Ref, key: cf::Ref) -> u8;
+}
+
+const SERVERS: [&str; 2] = ["1.1.1.1", "8.8.8.8"];
+mod tailscale;
+pub use tailscale::snapshot as split_servers;
+
+fn dynamic_store() -> Result<cf::Owned> {
+    let name = cf::string("Clash of Rust protection")?;
+    cf::Owned::new(unsafe { SCDynamicStoreCreate(ptr::null(), name.0, None, ptr::null_mut()) })
+}
+
+fn dynamic_value(key: &str) -> Result<Option<Value>> {
+    let store = dynamic_store()?;
+    let key = cf::string(key)?;
+    let value = unsafe { SCDynamicStoreCopyValue(store.0, key.0) };
+    if value.is_null() {
+        return Ok(None);
+    }
+    let value = cf::Owned::new(value)?;
+    Ok(Some(cf::json(value.0)?))
+}
+
+fn write_resolver(key: &str, value: Option<&Value>) -> Result<()> {
+    ensure!(
+        unsafe { libc::geteuid() } == 0,
+        "DNS 必须通过已授权的网络助手修改"
+    );
+    let store = dynamic_store()?;
+    let key = cf::string(key)?;
+    let ok = if let Some(value) = value {
+        let value = cf::plist(value)?;
+        unsafe { SCDynamicStoreSetValue(store.0, key.0, value.0) }
+    } else {
+        unsafe { SCDynamicStoreRemoveValue(store.0, key.0) }
+    };
+    ensure!(ok != 0, "无法更新 macOS 保护 DNS 解析器");
+    Ok(())
 }
 
 pub fn system_servers() -> Result<Vec<String>> {
-    let key = cf::string("State:/Network/Global/DNS")?;
-    let value = cf::Owned::new(unsafe { SCDynamicStoreCopyValue(ptr::null(), key.0) })?;
-    let value = cf::json(value.0)?;
+    let value =
+        dynamic_value("State:/Network/Global/DNS")?.context("无法读取 macOS 当前 DNS 配置")?;
     let servers: Vec<String> = value["ServerAddresses"]
         .as_array()
         .context("无法读取 macOS 当前 DNS 服务器")?
@@ -38,6 +83,13 @@ pub(super) struct Lease {
     owned: ProxyState,
     owner: u32,
     started: [u64; 2],
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    resolvers: Vec<ResolverLease>,
+}
+#[derive(Clone, Serialize, Deserialize)]
+struct ResolverLease {
+    key: String,
+    owned: Value,
 }
 fn process_start(pid: u32) -> Option<[u64; 2]> {
     let mut info = std::mem::MaybeUninit::<libc::proc_bsdinfo>::uninit();
@@ -81,6 +133,7 @@ pub(super) fn load(path: &Path) -> Result<Option<Lease>> {
     Ok(Some(serde_json::from_slice(&bytes)?))
 }
 
+#[cfg(test)]
 fn desired(original: &ProxyState) -> Result<ProxyState> {
     original
         .iter()
@@ -100,6 +153,81 @@ fn desired(original: &ProxyState) -> Result<ProxyState> {
         .collect()
 }
 
+fn resolver_config(split: &[crate::claude_check::protection::SplitDns]) -> Value {
+    use crate::claude_check::protection::{
+        ASSOCIATED_DOMAINS, DIAGNOSTIC_HOSTS, OWNED_DOMAINS, protected_dns_host,
+    };
+    // A separate supplemental default outranks a VPN's catch-all DNS without
+    // changing its private suffixes or network preferences. "*" also covers
+    // interface-scoped queries. Specific protected suffixes must win split DNS.
+    let mut domains = vec![""];
+    domains.extend(OWNED_DOMAINS);
+    domains.extend(ASSOCIATED_DOMAINS);
+    domains.extend(DIAGNOSTIC_HOSTS);
+    for resolver in split {
+        if protected_dns_host(&resolver.domain) && !domains.contains(&resolver.domain.as_str()) {
+            domains.push(&resolver.domain);
+        }
+    }
+    json!({
+        "ServerAddresses": SERVERS,
+        "SearchOrder": 1,
+        "SupplementalMatchDomains": domains,
+        "SupplementalMatchDomainsNoSearch": 1,
+        "InterfaceName": "*",
+    })
+}
+
+fn resolver_plan(uid: u32) -> Result<Vec<ResolverLease>> {
+    let split = split_servers()?;
+    let search = dynamic_value("State:/Network/Global/DNS")?
+        .and_then(|value| value.get("SearchDomains").cloned());
+    Ok(resolver_plan_for(uid, &split, search))
+}
+
+fn resolver_plan_for(
+    uid: u32,
+    split: &[crate::claude_check::protection::SplitDns],
+    search: Option<Value>,
+) -> Vec<ResolverLease> {
+    let prefix = format!("State:/Network/Service/org.clashofrust.protection.{uid}");
+    let mut public = resolver_config(split);
+    if let Some(search) = search {
+        public["SearchDomains"] = search;
+    }
+    let mut result = vec![ResolverLease {
+        key: format!("{prefix}/DNS"),
+        owned: public,
+    }];
+    for (index, resolver) in split.iter().enumerate() {
+        if crate::claude_check::protection::protected_dns_host(&resolver.domain) {
+            continue;
+        }
+        result.push(ResolverLease {
+            key: format!("{prefix}.split.{index}/DNS"),
+            owned: json!({
+                "ServerAddresses": resolver.servers,
+                "SearchOrder": 2,
+                "SupplementalMatchDomains": [resolver.domain],
+                "SupplementalMatchDomainsNoSearch": 1,
+            }),
+        });
+    }
+    result
+}
+
+fn resolver_id(key: &str) -> &str {
+    key.trim_start_matches("State:/Network/Service/")
+        .trim_end_matches("/DNS")
+}
+
+fn is_primary(value: &Value, resolver: &ResolverLease) -> bool {
+    value["ServerAddresses"] == resolver.owned["ServerAddresses"]
+        && value["__CONFIGURATION_ID__"]
+            .as_str()
+            .is_some_and(|id| id.contains(resolver_id(&resolver.key)))
+}
+
 fn restoration(current: &ProxyState, lease: &Lease) -> ProxyState {
     lease
         .original
@@ -111,9 +239,34 @@ fn restoration(current: &ProxyState, lease: &Lease) -> ProxyState {
 
 pub(super) fn restore(path: &Path, lease: &mut Option<Lease>) -> Result<()> {
     if let Some(owned) = lease {
-        let restore = restoration(&native_proxy::read_dns()?, owned);
-        if !restore.is_empty() {
-            native_proxy::write_dns(&restore)?;
+        for resolver in owned.resolvers.iter().rev() {
+            if dynamic_value(&resolver.key)?.as_ref() == Some(&resolver.owned) {
+                write_resolver(&resolver.key, None)?;
+            }
+        }
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+        while dynamic_value("State:/Network/Global/DNS")?
+            .as_ref()
+            .is_some_and(|value| {
+                owned
+                    .resolvers
+                    .iter()
+                    .any(|resolver| is_primary(value, resolver))
+            })
+        {
+            ensure!(
+                std::time::Instant::now() < deadline,
+                "macOS 正在恢复原 DNS，请稍后重试"
+            );
+            std::thread::sleep(std::time::Duration::from_millis(50));
+        }
+        // Older helpers modified persistent service DNS. Keep their journals
+        // readable so an upgrade restores DHCP/static settings before takeover.
+        if !owned.original.is_empty() {
+            let restore = restoration(&native_proxy::read_dns()?, owned);
+            if !restore.is_empty() {
+                native_proxy::write_dns(&restore)?;
+            }
         }
         fs::remove_file(path)?;
         *lease = None;
@@ -121,49 +274,55 @@ pub(super) fn restore(path: &Path, lease: &mut Option<Lease>) -> Result<()> {
     Ok(())
 }
 
-pub(super) fn enable(path: &Path, lease: &mut Option<Lease>, owner: u32) -> Result<()> {
-    let current = native_proxy::read_dns()?;
-    let mut next = lease.clone();
-    if let Some(previous) = &mut next {
+pub(super) fn enable(path: &Path, lease: &mut Option<Lease>, owner: u32, uid: u32) -> Result<()> {
+    let resolvers = if let Some(previous) = lease.as_ref() {
         ensure!(
             previous.owner == owner,
             "DNS 正由其他客户端持有，请先退出该客户端"
         );
-        ensure!(
-            previous
-                .owned
-                .iter()
-                .all(|(id, value)| current.get(id).is_none_or(|v| v == value)),
-            "系统 DNS 已被其他程序修改，请关闭保护后重试"
-        );
-        for (id, value) in &current {
-            previous
-                .original
-                .entry(id.clone())
-                .or_insert_with(|| value.clone());
+        ensure!(!previous.resolvers.is_empty(), "请先关闭旧版保护后重试");
+        for resolver in &previous.resolvers {
+            ensure!(
+                dynamic_value(&resolver.key)?.is_none_or(|value| value == resolver.owned),
+                "保护 DNS 已被其他程序修改，请关闭保护后重试"
+            );
         }
-        previous.owned = desired(&current)?;
+        previous.resolvers.clone()
     } else {
-        next = Some(Lease {
-            original: current.clone(),
-            owned: desired(&current)?,
-            owner,
-            started: process_start(owner).context("无法识别 DNS 所属客户端")?,
-        });
-    }
+        let resolvers = resolver_plan(uid)?;
+        for resolver in &resolvers {
+            ensure!(
+                dynamic_value(&resolver.key)?.is_none(),
+                "保护 DNS 解析器已存在，请先退出其他客户端"
+            );
+        }
+        resolvers
+    };
+    let next = Lease {
+        original: ProxyState::new(),
+        owned: ProxyState::new(),
+        owner,
+        started: process_start(owner).context("无法识别 DNS 所属客户端")?,
+        resolvers,
+    };
     // The root-owned journal precedes the system change, including partial
     // apply failures and helper crashes. Preserve the original recovery data.
-    let saved = next.as_ref().unwrap();
     let mut file = tempfile::NamedTempFile::new_in(path.parent().context("DNS 恢复路径无效")?)?;
-    serde_json::to_writer(&mut file, saved)?;
+    serde_json::to_writer(&mut file, &next)?;
     file.as_file().sync_all()?;
     file.persist(path).map_err(|error| error.error)?;
-    *lease = next;
+    *lease = Some(next);
     let applied = (|| -> Result<()> {
-        native_proxy::write_dns(&lease.as_ref().unwrap().owned)?;
+        let resolvers = &lease.as_ref().unwrap().resolvers;
+        for resolver in resolvers.iter().rev() {
+            write_resolver(&resolver.key, Some(&resolver.owned))?;
+        }
         let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
         loop {
-            if system_servers().is_ok_and(|s| s == ["1.1.1.1", "8.8.8.8"]) {
+            if dynamic_value("State:/Network/Global/DNS")?
+                .as_ref()
+                .is_some_and(|value| is_primary(value, &resolvers[0]))
+            {
                 return Ok(());
             }
             ensure!(
@@ -215,6 +374,7 @@ mod tests {
                 owned: owned.clone(),
                 owner: 123,
                 started: [0, 0],
+                resolvers: vec![],
             },
         );
         assert_eq!(
@@ -240,9 +400,59 @@ mod tests {
             owned: ProxyState::new(),
             owner,
             started,
+            resolvers: vec![],
         };
         assert!(!lease.owner_exited());
         lease.started[0] = lease.started[0].saturating_sub(1);
         assert!(lease.owner_exited());
+    }
+    #[test]
+    fn supplemental_default_preserves_private_dns_and_covers_protected_suffixes() {
+        let value = resolver_config(&[]);
+        assert_eq!(value["ServerAddresses"], json!(SERVERS));
+        assert_eq!(value["SearchOrder"], 1);
+        assert_eq!(value["InterfaceName"], "*");
+        assert_eq!(value["SupplementalMatchDomainsNoSearch"], 1);
+        let domains = value["SupplementalMatchDomains"].as_array().unwrap();
+        assert_eq!(domains[0], "");
+        assert!(domains.contains(&json!("claude.ai")));
+        assert!(domains.contains(&json!("stun.l.google.com")));
+        assert!(!domains.contains(&json!("ts.net")));
+        assert!(value["SearchDomains"].is_null());
+        let legacy: Lease = serde_json::from_value(json!({
+            "original": {}, "owned": {}, "owner": 123, "started": [0, 0]
+        }))
+        .unwrap();
+        assert!(legacy.resolvers.is_empty());
+    }
+    #[test]
+    fn resolver_plan_keeps_private_domains_and_protects_conflicting_domains() {
+        use crate::claude_check::protection::SplitDns;
+        let split = ["tail-fixture.ts.net", "claude.ai"]
+            .into_iter()
+            .map(|domain| SplitDns {
+                domain: domain.into(),
+                servers: vec!["100.100.100.100".parse().unwrap()],
+                interface: Some("utun4".into()),
+            })
+            .collect::<Vec<_>>();
+        let plan = resolver_plan_for(501, &split, Some(json!(["tail-fixture.ts.net"])));
+        assert_eq!(plan.len(), 2);
+        assert_eq!(
+            plan[0].owned["SearchDomains"],
+            json!(["tail-fixture.ts.net"])
+        );
+        assert!(
+            plan[0].owned["SupplementalMatchDomains"]
+                .as_array()
+                .unwrap()
+                .contains(&json!("claude.ai"))
+        );
+        assert_eq!(
+            plan[1].owned["SupplementalMatchDomains"],
+            json!(["tail-fixture.ts.net"])
+        );
+        assert_eq!(plan[1].owned["ServerAddresses"], json!(["100.100.100.100"]));
+        assert_ne!(plan[0].key, plan[1].key);
     }
 }
