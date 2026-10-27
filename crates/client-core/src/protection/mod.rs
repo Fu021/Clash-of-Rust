@@ -195,6 +195,17 @@ pub struct SplitDns {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub interface: Option<String>,
 }
+fn valid_dns_interface(interface: &str) -> bool {
+    interface.len() <= 32
+        && !interface.is_empty()
+        && interface.bytes().all(|byte| byte.is_ascii_alphanumeric())
+}
+fn is_tailscale_dns(ip: std::net::IpAddr) -> bool {
+    matches!(
+        ip.to_string().as_str(),
+        "100.100.100.100" | "fd7a:115c:a1e0::53"
+    )
+}
 impl SplitDns {
     pub fn valid(&self) -> bool {
         self.domain.len() <= 253
@@ -208,17 +219,8 @@ impl SplitDns {
             })
             && !self.servers.is_empty()
             && self.servers.len() <= 2
-            && self.servers.iter().all(|ip| {
-                matches!(
-                    ip.to_string().as_str(),
-                    "100.100.100.100" | "fd7a:115c:a1e0::53"
-                )
-            })
-            && self.interface.as_ref().is_none_or(|interface| {
-                interface.len() <= 32
-                    && !interface.is_empty()
-                    && interface.bytes().all(|byte| byte.is_ascii_alphanumeric())
-            })
+            && self.servers.iter().copied().all(is_tailscale_dns)
+            && self.interface.as_deref().is_none_or(valid_dns_interface)
     }
 
     fn upstreams(&self) -> Vec<String> {
@@ -265,6 +267,9 @@ pub struct Protection {
     pub system_dns: Vec<String>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub split_dns: Vec<SplitDns>,
+    // Quad100 can be the global resolver even when no split domains exist.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tailscale_dns_interface: Option<String>,
     #[serde(default, skip_serializing_if = "std::collections::BTreeMap::is_empty")]
     pub locked_groups: std::collections::BTreeMap<String, String>,
     #[serde(default, skip_serializing_if = "std::collections::BTreeMap::is_empty")]
@@ -289,6 +294,7 @@ impl Protection {
             provider: None,
             system_dns: vec![],
             split_dns: vec![],
+            tailscale_dns_interface: None,
             locked_groups: Default::default(),
             fixed_groups: Default::default(),
             route: format!("COR-Claude-{}", uuid::Uuid::new_v4().simple()),
@@ -330,6 +336,12 @@ impl Protection {
         ensure!(
             self.split_dns.len() <= 128 && self.split_dns.iter().all(SplitDns::valid),
             "Claude 保护分域 DNS 记录无效"
+        );
+        ensure!(
+            self.tailscale_dns_interface
+                .as_deref()
+                .is_none_or(valid_dns_interface),
+            "Claude 保护 Tailscale DNS 接口无效"
         );
         ensure!(
             !self.node.is_empty()
@@ -617,7 +629,7 @@ pub fn apply(map: &mut Mapping, settings: &Settings) -> Result<()> {
         // config::dns adds local/probe real-IP exceptions after this overlay,
         // preserving blacklist, whitelist and ordered rule semantics.
     }
-    if !protection.split_dns.is_empty() {
+    if !protection.split_dns.is_empty() || protection.tailscale_dns_interface.is_some() {
         apply_split_dns(dns, protection)?;
     }
     let tun = map
@@ -653,7 +665,7 @@ pub fn apply(map: &mut Mapping, settings: &Settings) -> Result<()> {
 fn apply_split_dns(dns: &mut Mapping, protection: &Protection) -> Result<()> {
     // Explicit interface selection keeps Quad100 off the physical interface
     // selected for ordinary DIRECT sockets. It never becomes a public fallback.
-    fn bind_bootstrap(value: &mut Value, resolvers: &[SplitDns]) {
+    fn bind_bootstrap(value: &mut Value, protection: &Protection) {
         match value {
             Value::String(text) => {
                 let Some((address, options)) = text.split_once('#') else {
@@ -663,37 +675,44 @@ fn apply_split_dns(dns: &mut Mapping, protection: &Protection) -> Result<()> {
                 if route != "DIRECT" {
                     return;
                 }
-                for resolver in resolvers {
-                    for ip in &resolver.servers {
-                        let host = address
-                            .strip_prefix("udp://")
-                            .or_else(|| address.strip_prefix("tcp://"))
-                            .unwrap_or(address);
-                        let matches = host.parse::<std::net::IpAddr>().ok() == Some(*ip)
-                            || host.parse::<std::net::SocketAddr>().ok()
-                                == Some(std::net::SocketAddr::new(*ip, 53));
-                        if matches && let Some(interface) = &resolver.interface {
-                            *text = format!(
-                                "{address}#{interface}{}",
-                                if options.is_empty() {
-                                    String::new()
-                                } else {
-                                    format!("&{options}")
-                                }
-                            );
-                            return;
+                let host = address
+                    .strip_prefix("udp://")
+                    .or_else(|| address.strip_prefix("tcp://"))
+                    .unwrap_or(address);
+                let ip = host.parse::<std::net::IpAddr>().ok().or_else(|| {
+                    host.parse::<std::net::SocketAddr>()
+                        .ok()
+                        .filter(|address| address.port() == 53)
+                        .map(|address| address.ip())
+                });
+                let Some(ip) = ip.filter(|ip| is_tailscale_dns(*ip)) else {
+                    return;
+                };
+                let interface = protection
+                    .split_dns
+                    .iter()
+                    .find(|resolver| resolver.servers.contains(&ip) && resolver.interface.is_some())
+                    .and_then(|resolver| resolver.interface.as_deref())
+                    .or(protection.tailscale_dns_interface.as_deref());
+                if let Some(interface) = interface {
+                    *text = format!(
+                        "{address}#{interface}{}",
+                        if options.is_empty() {
+                            String::new()
+                        } else {
+                            format!("&{options}")
                         }
-                    }
+                    );
                 }
             }
             Value::Sequence(values) => {
                 for value in values {
-                    bind_bootstrap(value, resolvers);
+                    bind_bootstrap(value, protection);
                 }
             }
             Value::Mapping(values) => {
                 for value in values.values_mut() {
-                    bind_bootstrap(value, resolvers);
+                    bind_bootstrap(value, protection);
                 }
             }
             _ => {}
@@ -706,7 +725,7 @@ fn apply_split_dns(dns: &mut Mapping, protection: &Protection) -> Result<()> {
         "nameserver-policy",
     ] {
         if let Some(value) = dns.get_mut(Value::from(key)) {
-            bind_bootstrap(value, &protection.split_dns);
+            bind_bootstrap(value, protection);
         }
     }
     let policy = dns
@@ -815,6 +834,40 @@ mod tests {
             "https://1.1.1.1/dns-query#protected"
         );
         assert!(!policy.contains_key(Value::from("+.example.com")));
+    }
+
+    #[test]
+    fn tailscale_global_dns_keeps_its_interface_without_split_domains() {
+        let mut protection = Protection::new(
+            uuid::Uuid::new_v4().to_string(),
+            "Node".into(),
+            Previous {
+                mode: "rule".into(),
+                proxy_mode: ProxyMode::Off,
+                selectors: vec![],
+            },
+        );
+        protection.tailscale_dns_interface = Some("utun4".into());
+        protection.validate().unwrap();
+        let mut dns: Mapping = yaml_serde::from_str(
+            "default-nameserver: ['udp://100.100.100.100:53#DIRECT', 'udp://192.0.2.53:53#DIRECT']\n\
+             proxy-server-nameserver: ['udp://[fd7a:115c:a1e0::53]:53#DIRECT&disable-ipv4=true']\n\
+             nameserver-policy: {}\n",
+        )
+        .unwrap();
+        apply_split_dns(&mut dns, &protection).unwrap();
+        assert_eq!(
+            dns[Value::from("default-nameserver")][0],
+            "udp://100.100.100.100:53#utun4"
+        );
+        assert_eq!(
+            dns[Value::from("default-nameserver")][1],
+            "udp://192.0.2.53:53#DIRECT"
+        );
+        assert_eq!(
+            dns[Value::from("proxy-server-nameserver")][0],
+            "udp://[fd7a:115c:a1e0::53]:53#utun4&disable-ipv4=true"
+        );
     }
 
     #[test]

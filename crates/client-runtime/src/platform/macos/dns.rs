@@ -22,8 +22,9 @@ unsafe extern "C" {
 }
 
 const SERVERS: [&str; 2] = ["1.1.1.1", "8.8.8.8"];
+#[path = "dns/tailscale.rs"]
 mod tailscale;
-pub use tailscale::snapshot as split_servers;
+pub use tailscale::{Snapshot as TailscaleDnsSnapshot, snapshot as split_servers};
 
 fn dynamic_store() -> Result<cf::Owned> {
     let name = cf::string("Clash of Rust protection")?;
@@ -181,7 +182,7 @@ fn resolver_config(split: &[crate::claude_check::protection::SplitDns]) -> Value
 }
 
 fn resolver_plan(uid: u32) -> Result<Vec<ResolverLease>> {
-    let split = split_servers()?;
+    let split = split_servers()?.split_dns;
     let search = dynamic_value("State:/Network/Global/DNS")?
         .and_then(|value| value.get("SearchDomains").cloned());
     Ok(resolver_plan_for(uid, &split, search))

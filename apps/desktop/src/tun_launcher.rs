@@ -128,8 +128,10 @@ fn main() {
     }
 }
 
-// Compile only the driver and streaming hash into the Mac helper. In particular,
-// do not link the desktop library, AppKit, fonts or the Slint renderer as root.
+// Do not link the desktop library, AppKit, fonts or the Slint renderer as root.
+// The helper shares the core's protection-domain policy with the runtime.
+#[cfg(all(target_os = "macos", not(test)))]
+use clash_client_core::claude_check;
 #[cfg(all(target_os = "macos", not(test)))]
 #[path = "../../../crates/client-core/src/storage/hash.rs"]
 mod assets;

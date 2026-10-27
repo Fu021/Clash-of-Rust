@@ -202,7 +202,9 @@ impl Engine {
             if let Some(protection) = &mut settings.claude_protection {
                 let protection = Arc::make_mut(protection);
                 protection.system_dns = platform::macos::dns::system_servers()?;
-                protection.split_dns = platform::macos::dns::split_servers()?;
+                let tailscale = platform::macos::dns::split_servers()?;
+                protection.split_dns = tailscale.split_dns;
+                protection.tailscale_dns_interface = tailscale.interface;
                 store.save_settings(&settings)?;
             }
         }
@@ -1283,7 +1285,9 @@ impl Engine {
         #[cfg(target_os = "macos")]
         {
             protection.system_dns = platform::macos::dns::system_servers()?;
-            protection.split_dns = platform::macos::dns::split_servers()?;
+            let tailscale = platform::macos::dns::split_servers()?;
+            protection.split_dns = tailscale.split_dns;
+            protection.tailscale_dns_interface = tailscale.interface;
         }
         protection.validate()?;
         self.apply_claude_protection(Some(Arc::new(protection)), None)

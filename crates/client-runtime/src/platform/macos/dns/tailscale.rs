@@ -10,7 +10,12 @@ struct Resolver {
     interface: Option<String>,
 }
 
-fn parse(text: &str) -> Vec<SplitDns> {
+pub struct Snapshot {
+    pub split_dns: Vec<SplitDns>,
+    pub interface: Option<String>,
+}
+
+fn parse(text: &str) -> Snapshot {
     fn append(
         resolver: Resolver,
         result: &mut BTreeMap<String, SplitDns>,
@@ -83,10 +88,13 @@ fn parse(text: &str) -> Vec<SplitDns> {
             resolver.interface = fallback_interface.clone();
         }
     }
-    result.into_values().take(128).collect()
+    Snapshot {
+        split_dns: result.into_values().take(128).collect(),
+        interface: fallback_interface,
+    }
 }
 
-pub fn snapshot() -> Result<Vec<SplitDns>> {
+pub fn snapshot() -> Result<Snapshot> {
     let output = Command::new("/usr/sbin/scutil").arg("--dns").output()?;
     ensure!(output.status.success(), "无法读取 macOS 分域 DNS 配置");
     ensure!(output.stdout.len() <= 1024 * 1024, "macOS DNS 配置过大");
@@ -106,13 +114,18 @@ resolver #4\n domain : corp.fixture.test\n nameserver[0] : 100.100.100.100\n\
 resolver #5\n domain : local\n options : mdns\n\
 DNS configuration (for scoped queries)\n\
 resolver #1\n nameserver[0] : 192.0.2.53\n if_index : 14 (en0)\n";
-        let parsed = parse(text);
+        let snapshot = parse(text);
+        assert_eq!(snapshot.interface.as_deref(), Some("utun4"));
+        let parsed = snapshot.split_dns;
         assert_eq!(parsed.len(), 2);
         assert_eq!(parsed[0].domain, "corp.fixture.test");
         assert_eq!(parsed[0].interface.as_deref(), Some("utun4"));
         assert_eq!(parsed[1].domain, "tail-fixture.ts.net");
         assert_eq!(parsed[1].servers.len(), 2);
         assert_eq!(parsed[1].interface.as_deref(), Some("utun4"));
-        assert!(parse("resolver #1\n nameserver[0] : 100.100.100.100\n").is_empty());
+        let global =
+            parse("resolver #1\n nameserver[0] : 100.100.100.100\n if_index : 22 (utun4)\n");
+        assert!(global.split_dns.is_empty());
+        assert_eq!(global.interface.as_deref(), Some("utun4"));
     }
 }
