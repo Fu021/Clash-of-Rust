@@ -183,67 +183,47 @@ pub async fn run(engine: &mut Engine, profile: &Path) {
         Arc::new(AtomicBool::new(false)),
     )
     .await;
+    let listen_port = dns::available_port().unwrap();
     let suffix = uuid::Uuid::new_v4().simple().to_string();
     let tail = format!("tail-{suffix}.ts.net");
     let corp = format!("{suffix}.corp.test");
     let new_search = format!("{suffix}.new-search.test");
     let key = format!("State:/Network/Service/cor-dns-fixture-{suffix}/DNS");
     let search_key = format!("State:/Network/Service/cor-dns-search-{suffix}/DNS");
+    let fallback_key = format!("State:/Network/Service/cor-dns-fallback-{suffix}/DNS");
     let _cleanup = Cleanup(key.clone());
     let _cleanup_search = Cleanup(search_key.clone());
-    let install = |search: &str, conflicts: bool, catch_all: bool| {
+    let _cleanup_fallback = Cleanup(fallback_key.clone());
+    let install = |search: &str, conflicts: bool| {
         let protected = if conflicts { " claude.ai bash.ws" } else { "" };
-        let default = if catch_all { "\"\"" } else { "" };
-        scutil(&format!(
+        // Render the original dictionaries before publishing them. Reading the
+        // store afterwards can already observe the helper's refreshed overlay.
+        let rendered = scutil(&format!(
             "d.init\nd.add ServerAddresses * 100.100.100.100\nd.add ServerPort # {vpn_port}\n\
-             d.add InterfaceName lo0\n\
-             d.add SearchOrder # 100600\nd.add SupplementalMatchDomains * {default} {tail} {corp}{protected}\n\
-             d.add SupplementalMatchDomainsNoSearch # 1\nd.add SearchDomains * {search}\nset {key}\n\
+             d.add InterfaceName lo0\nd.add SearchOrder # 100600\n\
+             d.add SupplementalMatchDomains * \"\" {tail} {corp}{protected}\n\
+             d.add SupplementalMatchDomainsNoSearch # 1\nd.add SearchDomains * {search}\nd.show\nset {key}\n\
              d.init\nd.add ServerAddresses * 100.100.100.100\nd.add ServerPort # {vpn_port}\n\
-             d.add InterfaceName lo0\n\
-             d.add SearchOrder # 100599\nd.add SupplementalMatchDomains * {search}\nset {search_key}\nquit\n"
-        ));
+             d.add InterfaceName lo0\nd.add SearchOrder # 100599\n\
+             d.add SupplementalMatchDomains * {search}\nd.show\nset {search_key}\nquit\n"
+        )).stdout;
+        let marker = b"<dictionary>";
+        let second = rendered
+            .windows(marker.len())
+            .enumerate()
+            .filter(|(_, bytes)| *bytes == marker)
+            .nth(1)
+            .unwrap()
+            .0;
+        (rendered[..second].to_vec(), rendered[second..].to_vec())
     };
-    install(&tail, true, true);
-    let deadline = tokio::time::Instant::now() + Duration::from_secs(5);
-    while dns::system_servers().unwrap() != ["100.100.100.100"] {
-        assert!(
-            tokio::time::Instant::now() < deadline,
-            "VPN resolver not selected"
-        );
-        tokio::time::sleep(Duration::from_millis(50)).await;
-    }
-    let deadline = tokio::time::Instant::now() + Duration::from_secs(5);
-    loop {
-        let shown = Command::new("/usr/sbin/scutil")
-            .arg("--dns")
-            .output()
-            .unwrap();
-        assert!(shown.status.success(), "Unable to read macOS DNS");
-        if String::from_utf8_lossy(&shown.stdout).lines().any(|line| {
-            line.trim().starts_with("search domain[")
-                && line
-                    .trim_end()
-                    .trim_end_matches('.')
-                    .ends_with(tail.as_str())
-        }) {
-            break;
-        }
-        assert!(
-            tokio::time::Instant::now() < deadline,
-            "VPN search suffix was not selected by macOS"
-        );
-        tokio::time::sleep(Duration::from_millis(100)).await;
-    }
-    std::fs::write(
-        profile,
-        format!(
-            "proxies: []\nrules: ['MATCH,DIRECT']\n\
-             dns: {{enable: true, enhanced-mode: redir-host, nameserver: ['127.0.0.1:{core_port}']}}\n\
-             tun: {{device: utun233, route-address: ['1.1.1.1/32', '8.8.8.8/32'], dns-hijack: ['any:53', 'tcp://any:53']}}\n"
-        ),
-    )
-    .unwrap();
+    let original_conflict = install(&tail, true);
+    wait_resolver("claude.ai", "100.100.100.100", true).await;
+    std::fs::write(profile, format!(
+        "proxies: []\nrules: ['MATCH,DIRECT']\n\
+         dns: {{enable: true, listen: '127.0.0.1:{listen_port}', enhanced-mode: redir-host, nameserver: ['127.0.0.1:{core_port}']}}\n\
+         tun: {{device: utun233, route-address: ['1.1.1.1/32', '8.8.8.8/32'], dns-hijack: ['any:53', 'tcp://any:53']}}\n"
+    )).unwrap();
     engine
         .import(
             "macOS split DNS fixture".into(),
@@ -257,282 +237,55 @@ pub async fn run(engine: &mut Engine, profile: &Path) {
         .await
         .unwrap();
     engine.select_proxy_mode(ProxyMode::Tun).await.unwrap();
-    // Record actual macOS selection and failover before changing takeover logic.
-    // This resolver and both upstreams exist only on the disposable CI runner.
-    let probe_key = format!("State:/Network/Service/cor-dns-probe-{suffix}/DNS");
-    let _cleanup_probe = Cleanup(probe_key.clone());
-    scutil(&format!(
-        "d.init\nd.add ServerAddresses * 1.1.1.1 8.8.8.8\nd.add SearchOrder # 1\n\
-         d.add SupplementalMatchDomains * \"\" claude.ai bash.ws\n\
-         d.add SupplementalMatchDomainsNoSearch # 1\nset {probe_key}\nquit\n"
-    ));
-    let deadline = tokio::time::Instant::now() + Duration::from_secs(5);
-    loop {
-        let shown = Command::new("/usr/sbin/scutil")
-            .arg("--dns")
-            .output()
-            .unwrap();
-        assert!(shown.status.success(), "Unable to read macOS DNS");
-        if has_resolver(
-            &String::from_utf8_lossy(&shown.stdout),
-            "claude.ai",
-            "1.1.1.1",
-        ) {
-            break;
-        }
-        assert!(
-            tokio::time::Instant::now() < deadline,
-            "Test protection resolver was not published by macOS"
-        );
-        tokio::time::sleep(Duration::from_millis(100)).await;
-    }
-    tokio::time::sleep(Duration::from_secs(1)).await;
-    let public_probe = format!("selection-{suffix}.test");
-    let _ = tokio::time::timeout(
-        Duration::from_secs(15),
-        tokio::net::lookup_host((format!("{public_probe}."), 80)),
-    )
-    .await;
-    let protected_probe = format!("selection-{suffix}.claude.ai");
-    let _ = tokio::time::timeout(
-        Duration::from_secs(15),
-        tokio::net::lookup_host((format!("{protected_probe}."), 80)),
-    )
-    .await;
-    let failed_probe = format!("failover-{suffix}.claude.ai");
-    drop_core_dns.store(true, Ordering::Relaxed);
-    let _ = tokio::time::timeout(
-        Duration::from_secs(25),
-        tokio::net::lookup_host((format!("{failed_probe}."), 80)),
-    )
-    .await;
-    drop_core_dns.store(false, Ordering::Relaxed);
-    install(&tail, false, true);
-    let deadline = tokio::time::Instant::now() + Duration::from_secs(5);
-    loop {
-        let shown = Command::new("/usr/sbin/scutil")
-            .arg("--dns")
-            .output()
-            .unwrap();
-        assert!(shown.status.success(), "Unable to read macOS DNS");
-        if !has_resolver(
-            &String::from_utf8_lossy(&shown.stdout),
-            "claude.ai",
-            "100.100.100.100",
-        ) {
-            break;
-        }
-        assert!(
-            tokio::time::Instant::now() < deadline,
-            "VPN conflict resolver was not removed"
-        );
-        tokio::time::sleep(Duration::from_millis(100)).await;
-    }
-    tokio::time::sleep(Duration::from_secs(1)).await;
-    let private_only_probe = format!("without-conflict-{suffix}.claude.ai");
-    let _ = tokio::time::timeout(
-        Duration::from_secs(15),
-        tokio::net::lookup_host((format!("{private_only_probe}."), 80)),
-    )
-    .await;
-    install(&tail, false, false);
-    let deadline = tokio::time::Instant::now() + Duration::from_secs(5);
-    let default_after_vpn_root = loop {
-        if let Ok(servers) = dns::system_servers()
-            && servers != ["100.100.100.100"]
-        {
-            break servers;
-        }
-        assert!(
-            tokio::time::Instant::now() < deadline,
-            "VPN catch-all resolver was not removed"
-        );
-        tokio::time::sleep(Duration::from_millis(100)).await;
-    };
-    tokio::time::sleep(Duration::from_secs(1)).await;
-    let no_vpn_root_probe = format!("without-vpn-root-{suffix}.test");
-    let _ = tokio::time::timeout(
-        Duration::from_secs(15),
-        tokio::net::lookup_host((format!("{no_vpn_root_probe}."), 80)),
-    )
-    .await;
-    let no_vpn_root_private = format!("private-without-vpn-root-{suffix}.{tail}");
-    lookup(&no_vpn_root_private, "100.100.12.34").await;
-    install(&tail, true, true);
-    let deadline = tokio::time::Instant::now() + Duration::from_secs(5);
-    loop {
-        let shown = Command::new("/usr/sbin/scutil")
-            .arg("--dns")
-            .output()
-            .unwrap();
-        assert!(shown.status.success(), "Unable to read macOS DNS");
-        if has_resolver(
-            &String::from_utf8_lossy(&shown.stdout),
-            "claude.ai",
-            "100.100.100.100",
-        ) {
-            break;
-        }
-        assert!(
-            tokio::time::Instant::now() < deadline,
-            "VPN conflict resolver was not restored"
-        );
-        tokio::time::sleep(Duration::from_millis(100)).await;
-    }
-    let (public_core, selected_core, protected_core, private_only_core, no_vpn_root_core) = {
-        let queries = core_queries.lock().unwrap();
-        (
-            queries.contains(&public_probe),
-            queries.contains(&protected_probe),
-            queries.contains(&failed_probe),
-            queries.contains(&private_only_probe),
-            queries.contains(&no_vpn_root_probe),
-        )
-    };
-    let (public_vpn, selected_vpn, protected_vpn, private_only_vpn, no_vpn_root_private_ok) = {
-        let queries = vpn_queries.lock().unwrap();
-        (
-            queries.contains(&public_probe),
-            queries.contains(&protected_probe),
-            queries.contains(&failed_probe),
-            queries.contains(&private_only_probe),
-            queries.contains(&no_vpn_root_private),
-        )
-    };
-    let no_vpn_root_default_core = default_after_vpn_root == ["1.1.1.1", "8.8.8.8"];
-    eprintln!(
-        "macOS resolver experiment: public_core={public_core}, public_vpn={public_vpn}, \
-         selected_core={selected_core}, selected_vpn={selected_vpn}, \
-         protected_core={protected_core}, protected_vpn={protected_vpn}, \
-         private_only_core={private_only_core}, private_only_vpn={private_only_vpn}, \
-         no_vpn_root_default_core={no_vpn_root_default_core}, no_vpn_root_core={no_vpn_root_core}, \
-         no_vpn_root_private_ok={no_vpn_root_private_ok}"
-    );
-    // "." is another spelling of the DNS root; check whether macOS treats it
-    // differently from an empty supplemental default when the VPN also owns
-    // a default. Neither setting is trusted without observing real queries.
-    scutil(&format!(
-        "d.init\nd.add ServerAddresses * 1.1.1.1 8.8.8.8\nd.add SearchOrder # 1\n\
-         d.add SupplementalMatchDomains * . claude.ai bash.ws\n\
-         d.add SupplementalMatchDomainsNoSearch # 1\nset {probe_key}\nquit\n"
-    ));
-    tokio::time::sleep(Duration::from_secs(1)).await;
-    let dot_root_probe = format!("dot-root-{suffix}.test");
-    let _ = tokio::time::timeout(
-        Duration::from_secs(15),
-        tokio::net::lookup_host((format!("{dot_root_probe}."), 80)),
-    )
-    .await;
-    let dot_root_failure = format!("dot-root-failure-{suffix}.test");
-    drop_core_dns.store(true, Ordering::Relaxed);
-    let _ = tokio::time::timeout(
-        Duration::from_secs(25),
-        tokio::net::lookup_host((format!("{dot_root_failure}."), 80)),
-    )
-    .await;
-    drop_core_dns.store(false, Ordering::Relaxed);
-    {
-        let core = core_queries.lock().unwrap();
-        let vpn = vpn_queries.lock().unwrap();
-        eprintln!(
-            "macOS dotted root experiment: public_core={}, public_vpn={}, \
-             failed_core={}, failed_vpn={}",
-            core.contains(&dot_root_probe),
-            vpn.contains(&dot_root_probe),
-            core.contains(&dot_root_failure),
-            vpn.contains(&dot_root_failure),
-        );
-    }
-    // A physical-network default may also compete with the protected root,
-    // even after the VPN's own default has been removed.
-    let fallback_key = format!("State:/Network/Service/cor-dns-fallback-{suffix}/DNS");
-    let _cleanup_fallback = Cleanup(fallback_key.clone());
-    install(&tail, false, false);
-    scutil(&format!(
-        "d.init\nd.add ServerAddresses * 1.1.1.1 8.8.8.8\nd.add SearchOrder # 1\n\
-         d.add SupplementalMatchDomains * \"\" claude.ai bash.ws\n\
-         d.add SupplementalMatchDomainsNoSearch # 1\nset {probe_key}\n\
-         d.init\nd.add ServerAddresses * 127.0.0.1\nd.add ServerPort # {fallback_port}\n\
-         d.add SearchOrder # 200000\nd.add SupplementalMatchDomains * \"\"\n\
-         set {fallback_key}\nquit\n"
-    ));
-    tokio::time::sleep(Duration::from_secs(1)).await;
-    let fallback_failure = format!("fallback-failure-{suffix}.test");
-    drop_core_dns.store(true, Ordering::Relaxed);
-    let _ = tokio::time::timeout(
-        Duration::from_secs(25),
-        tokio::net::lookup_host((format!("{fallback_failure}."), 80)),
-    )
-    .await;
-    drop_core_dns.store(false, Ordering::Relaxed);
-    eprintln!(
-        "macOS physical default experiment: failed_core={}, failed_vpn={}, failed_other={}",
-        core_queries.lock().unwrap().contains(&fallback_failure),
-        vpn_queries.lock().unwrap().contains(&fallback_failure),
-        fallback_queries.lock().unwrap().contains(&fallback_failure),
-    );
-    scutil(&format!("remove {fallback_key}\nquit\n"));
-    install(&tail, true, true);
-    scutil(&format!("remove {probe_key}\nquit\n"));
-    let deadline = tokio::time::Instant::now() + Duration::from_secs(5);
-    while dns::system_servers().unwrap() != ["100.100.100.100"] {
-        assert!(
-            tokio::time::Instant::now() < deadline,
-            "VPN resolver was not restored after the fallback experiment"
-        );
-        tokio::time::sleep(Duration::from_millis(50)).await;
-    }
-    core_queries.lock().unwrap().clear();
-    vpn_queries.lock().unwrap().clear();
-    let expected_conflicting = scutil(&format!("show {key}\nquit\n")).stdout;
-    let error = tokio::task::spawn_blocking(|| service::protection_dns(true))
+    let enable = move || service::protection_dns_at(Some(listen_port));
+    let error = tokio::task::spawn_blocking(enable)
         .await
         .unwrap()
         .expect_err("Overlapping Tailscale domains must be rejected");
     assert!(
-        format!("{error:#}").contains("Tailscale 分域与保护范围重叠"),
-        "Unexpected error when testing a conflicting private domain: {error:#}"
+        format!("{error:#}").contains("分域 DNS 与保护范围重叠"),
+        "{error:#}"
     );
     assert_eq!(
         scutil(&format!("show {key}\nquit\n")).stdout,
-        expected_conflicting
+        original_conflict.0
     );
-    assert_eq!(dns::system_servers().unwrap(), ["100.100.100.100"]);
-    install(&tail, false, true);
-    let deadline = tokio::time::Instant::now() + Duration::from_secs(5);
-    loop {
-        let shown = Command::new("/usr/sbin/scutil")
-            .arg("--dns")
-            .output()
-            .unwrap();
-        assert!(shown.status.success(), "Unable to read macOS DNS");
-        if !has_resolver(
-            &String::from_utf8_lossy(&shown.stdout),
-            "claude.ai",
-            "100.100.100.100",
-        ) {
-            break;
-        }
-        assert!(
-            tokio::time::Instant::now() < deadline,
-            "VPN conflict resolver was not removed"
-        );
-        tokio::time::sleep(Duration::from_millis(100)).await;
-    }
+    assert_eq!(
+        scutil(&format!("show {search_key}\nquit\n")).stdout,
+        original_conflict.1
+    );
+    let (mut expected_vpn, mut expected_search) = install(&tail, false);
+    wait_resolver("claude.ai", "100.100.100.100", false).await;
+    // Non-Quad100 split resolvers are subject to the same safety check.
+    let non_quad_key = format!("State:/Network/Service/cor-dns-nonquad-{suffix}/DNS");
+    let _cleanup_non_quad = Cleanup(non_quad_key.clone());
+    scutil(&format!(
+        "d.init\nd.add ServerAddresses * 127.0.0.1\nd.add ServerPort # {fallback_port}\n\
+         d.add SupplementalMatchDomains * claude.ai\nset {non_quad_key}\nquit\n"
+    ));
+    wait_resolver("claude.ai", "127.0.0.1", true).await;
+    let error = tokio::task::spawn_blocking(enable)
+        .await
+        .unwrap()
+        .expect_err("Overlapping non-Quad100 split DNS must be rejected");
+    assert!(
+        format!("{error:#}").contains("分域 DNS 与保护范围重叠"),
+        "{error:#}"
+    );
+    scutil(&format!("remove {non_quad_key}\nquit\n"));
+    wait_resolver("claude.ai", "127.0.0.1", false).await;
+    scutil(&format!(
+        "d.init\nd.add ServerAddresses * 127.0.0.1\nd.add ServerPort # {fallback_port}\n\
+         d.add SearchOrder # 200000\nd.add SupplementalMatchDomains * \"\"\nset {fallback_key}\nquit\n"
+    ));
+    let expected_fallback = scutil(&format!("show {fallback_key}\nquit\n")).stdout;
+    vpn_queries.lock().unwrap().clear();
+    core_queries.lock().unwrap().clear();
+    fallback_queries.lock().unwrap().clear();
     for attempt in 0..2 {
-        let mut expected_vpn = scutil(&format!("show {key}\nquit\n")).stdout;
-        let mut expected_search = scutil(&format!("show {search_key}\nquit\n")).stdout;
-        tokio::task::spawn_blocking(|| service::protection_dns(true))
-            .await
-            .unwrap()
-            .unwrap();
-        assert_eq!(dns::system_servers().unwrap(), ["1.1.1.1", "8.8.8.8"]);
+        tokio::task::spawn_blocking(enable).await.unwrap().unwrap();
+        assert_eq!(dns::system_servers().unwrap(), ["127.0.0.1"]);
         assert_eq!(dns::configured().unwrap(), configured);
-        assert_eq!(scutil(&format!("show {key}\nquit\n")).stdout, expected_vpn);
-        assert_eq!(
-            scutil(&format!("show {search_key}\nquit\n")).stdout,
-            expected_search
-        );
         lookup(&format!("public-{attempt}.{suffix}.test"), "203.0.113.20").await;
         lookup(
             &format!("protected-{attempt}-{suffix}.claude.ai"),
@@ -545,102 +298,121 @@ pub async fn run(engine: &mut Engine, profile: &Path) {
         )
         .await;
         lookup(&format!("peer-{attempt}.{tail}"), "100.100.12.34").await;
-        if attempt == 0 {
-            lookup_name(&format!("short-{suffix}"), "100.100.12.34").await;
-        }
         lookup(&format!("peer-{attempt}.{corp}"), "100.100.12.34").await;
         if attempt == 0 {
-            // An unreachable protected upstream must never make macOS retry a
-            // protected query on the VPN resolver with the same match suffix.
-            let failed_host = format!("failed-{suffix}.claude.ai");
+            lookup_name(&format!("short-{suffix}"), "100.100.12.34").await;
             drop_core_dns.store(true, Ordering::Relaxed);
-            let _result = tokio::time::timeout(
-                Duration::from_secs(25),
-                tokio::net::lookup_host((format!("{failed_host}."), 80)),
-            )
-            .await;
+            for host in [
+                format!("failed-{suffix}.claude.ai"),
+                format!("failed-public-{suffix}.test"),
+            ] {
+                let _ = tokio::time::timeout(
+                    Duration::from_secs(25),
+                    tokio::net::lookup_host((format!("{host}."), 80)),
+                )
+                .await;
+                assert!(
+                    core_queries.lock().unwrap().contains(&host),
+                    "Failure fixture did not reach protected DNS: {host}"
+                );
+                assert!(
+                    !vpn_queries.lock().unwrap().contains(&host),
+                    "Public DNS fell back to VPN: {host}"
+                );
+                assert!(
+                    !fallback_queries.lock().unwrap().contains(&host),
+                    "Public DNS fell back to physical DNS: {host}"
+                );
+            }
             drop_core_dns.store(false, Ordering::Relaxed);
-            assert!(
-                core_queries
-                    .lock()
-                    .unwrap()
-                    .iter()
-                    .any(|host| host == &failed_host),
-                "Protected failure fixture did not reach the core DNS: {failed_host}"
-            );
-            assert!(
-                !vpn_queries
-                    .lock()
-                    .unwrap()
-                    .iter()
-                    .any(|host| host == &failed_host),
-                "Protected DNS fell back to the VPN resolver: {failed_host}"
-            );
-            let failed_public = format!("failed-public-{suffix}.test");
-            drop_core_dns.store(true, Ordering::Relaxed);
-            let _result = tokio::time::timeout(
-                Duration::from_secs(25),
-                tokio::net::lookup_host((format!("{failed_public}."), 80)),
-            )
-            .await;
-            drop_core_dns.store(false, Ordering::Relaxed);
-            assert!(
-                core_queries
-                    .lock()
-                    .unwrap()
-                    .iter()
-                    .any(|host| host == &failed_public),
-                "Public failure fixture did not reach the core DNS: {failed_public}"
-            );
-            assert!(
-                !vpn_queries
-                    .lock()
-                    .unwrap()
-                    .iter()
-                    .any(|host| host == &failed_public),
-                "Public DNS fell back to the VPN resolver: {failed_public}"
-            );
-            // Simulate a VPN changing its own configuration while the
-            // protection resolver is installed. Its settings remain its own.
-            install(&new_search, false, true);
-            expected_vpn = scutil(&format!("show {key}\nquit\n")).stdout;
-            expected_search = scutil(&format!("show {search_key}\nquit\n")).stdout;
-            lookup(&format!("reconnected-{attempt}.{tail}"), "100.100.12.34").await;
-            lookup(
-                &format!("reconnected-{attempt}.{new_search}"),
-                "100.100.12.34",
-            )
-            .await;
+            (expected_vpn, expected_search) = install(&new_search, false);
+            // Wait for native change notifications, without requesting enable
+            // again: reconnect recovery belongs to the background helper.
+            wait_resolver("claude.ai", "127.0.0.1", true).await;
+            let deadline = tokio::time::Instant::now() + Duration::from_secs(5);
+            loop {
+                let shown = scutil(&format!("show {key}\nquit\n"));
+                if String::from_utf8_lossy(&shown.stdout).contains("127.0.0.1") {
+                    break;
+                }
+                assert!(
+                    tokio::time::Instant::now() < deadline,
+                    "VPN reconnect was not recaptured"
+                );
+                tokio::time::sleep(Duration::from_millis(100)).await;
+            }
+            lookup(&format!("reconnected.{tail}"), "100.100.12.34").await;
+            lookup(&format!("reconnected.{new_search}"), "100.100.12.34").await;
+            lookup_name(&format!("new-short-{suffix}"), "100.100.12.34").await;
             lookup(&format!("public-reconnected-{suffix}.test"), "203.0.113.20").await;
             lookup(
                 &format!("protected-reconnected-{suffix}.claude.ai"),
                 "203.0.113.20",
             )
             .await;
-            assert_eq!(
-                dns::system_servers().unwrap(),
-                ["1.1.1.1", "8.8.8.8"],
-                "VPN reconfiguration took over the protected default resolver"
-            );
+            assert_eq!(dns::system_servers().unwrap(), ["127.0.0.1"]);
+            // Reconnection can also introduce an unsafe split. The helper must
+            // quarantine it and report failure, then recover without a toggle.
+            let _ = install(&new_search, true);
+            let deadline = tokio::time::Instant::now() + Duration::from_secs(5);
+            loop {
+                if tokio::task::spawn_blocking(move || service::check_protection_dns(listen_port))
+                    .await
+                    .unwrap()
+                    .is_err()
+                {
+                    break;
+                }
+                assert!(
+                    tokio::time::Instant::now() < deadline,
+                    "Conflicting reconnect was not reported"
+                );
+                tokio::time::sleep(Duration::from_millis(100)).await;
+            }
+            wait_resolver("claude.ai", "100.100.100.100", false).await;
+            lookup(&format!("quarantined-{suffix}.claude.ai"), "203.0.113.20").await;
+            (expected_vpn, expected_search) = install(&new_search, false);
+            let deadline = tokio::time::Instant::now() + Duration::from_secs(5);
+            loop {
+                if tokio::task::spawn_blocking(move || service::check_protection_dns(listen_port))
+                    .await
+                    .unwrap()
+                    .is_ok()
+                {
+                    break;
+                }
+                assert!(
+                    tokio::time::Instant::now() < deadline,
+                    "Safe reconnect was not recovered"
+                );
+                tokio::time::sleep(Duration::from_millis(100)).await;
+            }
+            lookup(&format!("recovered.{new_search}"), "100.100.12.34").await;
         }
         let captured = vpn_queries.lock().unwrap().clone();
         assert!(
             captured.iter().all(|host| host.ends_with(&tail)
                 || host.ends_with(&corp)
                 || host.ends_with(&new_search)),
-            "Public DNS reached the VPN resolver: {captured:?}"
+            "Public DNS reached VPN: {captured:?}"
         );
-        assert!(!core_queries.lock().unwrap().is_empty());
+        assert!(
+            fallback_queries.lock().unwrap().is_empty(),
+            "Public DNS reached physical fallback"
+        );
         tokio::task::spawn_blocking(|| service::protection_dns(false))
             .await
             .unwrap()
             .unwrap();
-        assert_eq!(dns::system_servers().unwrap(), ["100.100.100.100"]);
         assert_eq!(dns::configured().unwrap(), configured);
         assert_eq!(scutil(&format!("show {key}\nquit\n")).stdout, expected_vpn);
         assert_eq!(
             scutil(&format!("show {search_key}\nquit\n")).stdout,
             expected_search
+        );
+        assert_eq!(
+            scutil(&format!("show {fallback_key}\nquit\n")).stdout,
+            expected_fallback
         );
         lookup(&format!("restored-{attempt}.{tail}"), "100.100.12.34").await;
     }
@@ -649,6 +421,25 @@ pub async fn run(engine: &mut Engine, profile: &Path) {
     core_job.abort();
     fallback_job.abort();
     println!(
-        "PASS: macOS supplemental default and protected suffixes use TUN DNS; VPN private DNS, search settings and persistent preferences survive enable/disable and reconnect"
+        "PASS: macOS public/protected DNS uses a local core listener without VPN/physical fallback; native split DNS, short names, reconnect and restoration survive"
     );
+}
+
+async fn wait_resolver(domain: &str, server: &str, present: bool) {
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(5);
+    loop {
+        let shown = Command::new("/usr/sbin/scutil")
+            .arg("--dns")
+            .output()
+            .unwrap();
+        assert!(shown.status.success());
+        if has_resolver(&String::from_utf8_lossy(&shown.stdout), domain, server) == present {
+            return;
+        }
+        assert!(
+            tokio::time::Instant::now() < deadline,
+            "Native DNS did not publish expected resolver for {domain} -> {server} (present={present})"
+        );
+        tokio::time::sleep(Duration::from_millis(100)).await;
+    }
 }

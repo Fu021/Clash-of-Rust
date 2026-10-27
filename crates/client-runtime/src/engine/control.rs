@@ -44,6 +44,8 @@ impl Engine {
             mac_tun: None,
             #[cfg(target_os = "macos")]
             retained_startup_proxy: false,
+            #[cfg(target_os = "macos")]
+            mac_dns_error: None,
             logs: Arc::new(Mutex::new(VecDeque::new())),
             readers: vec![],
             log_pump: None,

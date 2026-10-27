@@ -16,7 +16,7 @@ use std::{
     time::{Duration, Instant},
 };
 
-const PROTOCOL: u32 = 5;
+const PROTOCOL: u32 = 6;
 const PREFIX: &str = "org.clashofrust.network";
 const LIMIT: u64 = 256 * 1024;
 static STOP: AtomicBool = AtomicBool::new(false);
@@ -27,6 +27,11 @@ enum Request {
     Status {},
     Dns {
         enabled: bool,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        port: Option<u16>,
+    },
+    DnsCheck {
+        port: u16,
     },
     Adopt {
         original: ProxyState,
@@ -114,10 +119,10 @@ fn restore_lease(path: &Path, lease: &mut Option<ProxyLease>) -> Result<()> {
 
 fn accepts_protocol(request: &Request, protocol: u32) -> bool {
     protocol == PROTOCOL
-        || (matches!(protocol, 2..=4)
+        || (matches!(protocol, 2..=5)
             && matches!(
                 request,
-                Request::Proxy { restore: true, .. } | Request::Dns { enabled: false }
+                Request::Proxy { restore: true, .. } | Request::Dns { enabled: false, .. }
             ))
 }
 
@@ -258,9 +263,14 @@ pub fn open_tun(socket: &Path, token: &str) -> Result<()> {
 }
 
 pub fn protection_dns(enabled: bool) -> Result<()> {
+    ensure!(!enabled, "开启保护 DNS 必须指定本机监听端口");
+    protection_dns_at(None)
+}
+
+pub fn protection_dns_at(port: Option<u16>) -> Result<()> {
     // No prompting or helper installation while cleaning up (including old
     // protocol clients which never took ownership of DNS in the first place).
-    if !enabled
+    if port.is_none()
         && !paths(unsafe { libc::getuid() })
             .1
             .join("dns-lease.json")
@@ -268,7 +278,15 @@ pub fn protection_dns(enabled: bool) -> Result<()> {
     {
         return Ok(());
     }
-    exchange(&Request::Dns { enabled })?;
+    exchange(&Request::Dns {
+        enabled: port.is_some(),
+        port,
+    })?;
+    Ok(())
+}
+
+pub fn check_protection_dns(port: u16) -> Result<()> {
+    exchange(&Request::DnsCheck { port })?;
     Ok(())
 }
 
@@ -450,6 +468,7 @@ pub fn serve(uid: u32) -> Result<()> {
         root_owned(&dns_journal, false)?;
     }
     let mut dns_lease = super::dns::load(&dns_journal)?;
+    let mut dns_changes = super::dns::Changes::new()?;
     if dns_lease
         .as_ref()
         .is_some_and(super::dns::Lease::owner_exited)
@@ -490,6 +509,8 @@ pub fn serve(uid: u32) -> Result<()> {
         libc::signal(libc::SIGTERM, stop as *const () as usize);
     }
     let mut children: Vec<Child> = Vec::new();
+    let mut dns_error: Option<String> = None;
+    let mut dns_refresh = Instant::now();
     let result = (|| -> Result<()> {
         while !STOP.load(Ordering::Relaxed) {
             if dns_lease
@@ -497,6 +518,26 @@ pub fn serve(uid: u32) -> Result<()> {
                 .is_some_and(super::dns::Lease::owner_exited)
             {
                 let _ = super::dns::restore(&dns_journal, &mut dns_lease);
+            }
+            if dns_lease.is_some()
+                && (dns_changes.changed()
+                    || (dns_error.is_some() && dns_refresh.elapsed() >= Duration::from_secs(5)))
+            {
+                dns_refresh = Instant::now();
+                // The same helper thread serializes changes, journal writes
+                // and user requests. No competing DNS recovery worker exists.
+                match super::dns::refresh(&dns_journal, &mut dns_lease) {
+                    Ok(()) => dns_error = None,
+                    Err(error) => {
+                        let message = format!("保护 DNS 自动更新失败：{error:#}");
+                        if dns_error.as_ref() != Some(&message) {
+                            eprintln!("{message}");
+                        }
+                        // Retain the local DNS overlay on failure. Restoring the
+                        // VPN default here would silently disable protection.
+                        dns_error = Some(message);
+                    }
+                }
             }
             if lease
                 .as_ref()
@@ -527,10 +568,12 @@ pub fn serve(uid: u32) -> Result<()> {
                 ensure!(bytes.last() == Some(&b'\n'), "网络助手请求过大或未完成");
                 match serde_json::from_slice::<Request>(&bytes)? {
                     Request::Status {} => {}
-                    Request::Dns { enabled } => {
+                    Request::Dns { enabled, port } => {
                         let caller = peer_pid(&stream)?;
                         if enabled {
-                            super::dns::enable(&dns_journal, &mut dns_lease, caller, uid)?;
+                            let port = port.context("保护 DNS 本机端口缺失")?;
+                            ensure!(port >= 1024, "保护 DNS 本机端口无效");
+                            super::dns::enable(&dns_journal, &mut dns_lease, caller, uid, port)?;
                         } else {
                             ensure!(
                                 dns_lease
@@ -540,6 +583,13 @@ pub fn serve(uid: u32) -> Result<()> {
                             );
                             super::dns::restore(&dns_journal, &mut dns_lease)?;
                         }
+                        dns_error = None;
+                    }
+                    Request::DnsCheck { port } => {
+                        if let Some(error) = &dns_error {
+                            bail!("{error}");
+                        }
+                        super::dns::verify(&dns_lease, port)?;
                     }
                     Request::Adopt { original, owned } => {
                         ensure!(
@@ -638,11 +688,32 @@ mod tests {
     use super::*;
     #[test]
     fn older_helpers_can_clean_up_but_must_be_updated_before_new_operations() {
+        assert_eq!(
+            serde_json::to_value(Request::Dns {
+                enabled: false,
+                port: None
+            })
+            .unwrap(),
+            serde_json::json!({"operation":"dns","enabled":false}),
+            "Old helpers reject unknown fields even during cleanup",
+        );
         assert!(accepts_protocol(&Request::Status {}, PROTOCOL));
-        for protocol in [2, 3, 4] {
+        for protocol in [2, 3, 4, 5] {
             assert!(!accepts_protocol(&Request::Status {}, protocol));
-            assert!(!accepts_protocol(&Request::Dns { enabled: true }, protocol));
-            assert!(accepts_protocol(&Request::Dns { enabled: false }, protocol));
+            assert!(!accepts_protocol(
+                &Request::Dns {
+                    enabled: true,
+                    port: Some(25353)
+                },
+                protocol
+            ));
+            assert!(accepts_protocol(
+                &Request::Dns {
+                    enabled: false,
+                    port: None
+                },
+                protocol
+            ));
             assert!(accepts_protocol(
                 &Request::Proxy {
                     state: ProxyState::new(),
@@ -658,7 +729,13 @@ mod tests {
                 protocol
             ));
         }
-        assert!(!accepts_protocol(&Request::Dns { enabled: false }, 1));
+        assert!(!accepts_protocol(
+            &Request::Dns {
+                enabled: false,
+                port: None
+            },
+            1
+        ));
     }
     #[test]
     fn copying_helper_contents_creates_a_private_inode_without_source_metadata() {

@@ -6,6 +6,7 @@ use std::{collections::BTreeMap, net::IpAddr, process::Command};
 #[derive(Default)]
 struct Resolver {
     domains: Vec<String>,
+    match_domains: Vec<String>,
     servers: Vec<IpAddr>,
     interface: Option<String>,
 }
@@ -13,6 +14,7 @@ struct Resolver {
 pub(crate) struct Snapshot {
     pub split_dns: Vec<SplitDns>,
     pub interface: Option<String>,
+    pub protected_conflict: bool,
 }
 
 fn parse(text: &str) -> Result<Snapshot> {
@@ -20,7 +22,14 @@ fn parse(text: &str) -> Result<Snapshot> {
         resolver: Resolver,
         result: &mut BTreeMap<String, SplitDns>,
         fallback_interface: &mut Option<String>,
+        protected_conflict: &mut bool,
     ) -> Result<()> {
+        if !resolver.servers.is_empty() {
+            *protected_conflict |= resolver.match_domains.iter().any(|domain| {
+                let domain = domain.trim_end_matches('.').to_ascii_lowercase();
+                !domain.is_empty() && crate::claude_check::protection::protected_dns_split(&domain)
+            });
+        }
         let mut servers = Vec::new();
         for ip in resolver.servers {
             if matches!(
@@ -62,6 +71,7 @@ fn parse(text: &str) -> Result<Snapshot> {
     let mut result = BTreeMap::new();
     let mut resolver = Resolver::default();
     let mut fallback_interface = None;
+    let mut protected_conflict = false;
     for line in text.lines() {
         let line = line.trim();
         if line.starts_with("resolver #") || line.starts_with("DNS configuration") {
@@ -69,11 +79,15 @@ fn parse(text: &str) -> Result<Snapshot> {
                 std::mem::take(&mut resolver),
                 &mut result,
                 &mut fallback_interface,
+                &mut protected_conflict,
             )?;
         } else if let Some((key, value)) = line.split_once(" : ") {
             let value = value.trim();
             match key.trim() {
-                "domain" => resolver.domains.push(value.into()),
+                "domain" => {
+                    resolver.domains.push(value.into());
+                    resolver.match_domains.push(value.into());
+                }
                 key if key.starts_with("search domain[") => resolver.domains.push(value.into()),
                 key if key.starts_with("nameserver[") => {
                     if let Ok(ip) = value.parse() {
@@ -89,7 +103,12 @@ fn parse(text: &str) -> Result<Snapshot> {
             }
         }
     }
-    append(resolver, &mut result, &mut fallback_interface)?;
+    append(
+        resolver,
+        &mut result,
+        &mut fallback_interface,
+        &mut protected_conflict,
+    )?;
     for resolver in result.values_mut() {
         if resolver.interface.is_none() {
             resolver.interface = fallback_interface.clone();
@@ -99,6 +118,7 @@ fn parse(text: &str) -> Result<Snapshot> {
     Ok(Snapshot {
         split_dns: result.into_values().collect(),
         interface: fallback_interface,
+        protected_conflict,
     })
 }
 
@@ -124,6 +144,7 @@ DNS configuration (for scoped queries)\n\
 resolver #1\n nameserver[0] : 192.0.2.53\n if_index : 14 (en0)\n";
         let snapshot = parse(text).unwrap();
         assert_eq!(snapshot.interface.as_deref(), Some("utun4"));
+        assert!(!snapshot.protected_conflict);
         let parsed = snapshot.split_dns;
         assert_eq!(parsed.len(), 2);
         assert_eq!(parsed[0].domain, "corp.fixture.test");
@@ -157,5 +178,20 @@ resolver #1\n nameserver[0] : 192.0.2.53\n if_index : 14 (en0)\n";
         assert_eq!(snapshot.split_dns[0].domain, "internal");
         let invalid = "resolver #1\n domain : invalid domain\n nameserver[0] : 100.100.100.100\n";
         assert!(parse(invalid).is_err());
+    }
+
+    #[test]
+    fn detects_protected_matches_for_all_dns_servers_not_only_quad100() {
+        let other_vpn = "resolver #1\n domain : CLAUDE.AI.\n nameserver[0] : 192.0.2.53\n if_index : 22 (utun4)\n";
+        assert!(parse(other_vpn).unwrap().protected_conflict);
+        let parent = "resolver #1\n domain : COM.\n nameserver[0] : 2001:db8::53\n";
+        assert!(parse(parent).unwrap().protected_conflict);
+        let search_only =
+            "resolver #1\n search domain[0] : claude.ai\n nameserver[0] : 192.0.2.53\n";
+        assert!(!parse(search_only).unwrap().protected_conflict);
+        let no_servers = "resolver #1\n domain : claude.ai\n options : mdns\n";
+        assert!(!parse(no_servers).unwrap().protected_conflict);
+        let private = "resolver #1\n domain : corp.example\n nameserver[0] : 192.0.2.53\n";
+        assert!(!parse(private).unwrap().protected_conflict);
     }
 }

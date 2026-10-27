@@ -281,6 +281,8 @@ pub struct Protection {
     // Quad100 can be the global resolver even when no split domains exist.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub tailscale_dns_interface: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub mac_dns_port: Option<u16>,
     #[serde(default, skip_serializing_if = "std::collections::BTreeMap::is_empty")]
     pub locked_groups: std::collections::BTreeMap<String, String>,
     #[serde(default, skip_serializing_if = "std::collections::BTreeMap::is_empty")]
@@ -306,6 +308,7 @@ impl Protection {
             system_dns: vec![],
             split_dns: vec![],
             tailscale_dns_interface: None,
+            mac_dns_port: None,
             locked_groups: Default::default(),
             fixed_groups: Default::default(),
             route: format!("COR-Claude-{}", uuid::Uuid::new_v4().simple()),
@@ -353,6 +356,10 @@ impl Protection {
                 .as_deref()
                 .is_none_or(valid_dns_interface),
             "Claude 保护 Tailscale DNS 接口无效"
+        );
+        ensure!(
+            self.mac_dns_port.is_none_or(|port| port >= 1024),
+            "Claude 保护本机 DNS 端口无效"
         );
         ensure!(
             !self.node.is_empty()
@@ -608,6 +615,13 @@ pub fn apply(map: &mut Mapping, settings: &Settings) -> Result<()> {
     dns.insert(Value::from("ipv6"), Value::from(true));
     dns.insert(Value::from("enhanced-mode"), Value::from("fake-ip"));
     dns.insert(Value::from("respect-rules"), Value::from(false));
+    #[cfg(target_os = "macos")]
+    if let Some(port) = protection.mac_dns_port {
+        dns.insert(
+            Value::from("listen"),
+            Value::from(format!("127.0.0.1:{port}")),
+        );
+    }
     dns.insert(
         Value::from("nameserver"),
         yaml_serde::to_value(
@@ -789,6 +803,47 @@ fn route_or_reject(
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn local_protection_dns_listener_is_reversible_and_rejects_privileged_ports() {
+        let id = uuid::Uuid::new_v4().to_string();
+        let raw = "proxies: [{name: Node, type: socks5, server: 127.0.0.1, port: 1080}]\ndns: {listen: '127.0.0.1:1053'}\nrules: ['MATCH,DIRECT']\n";
+        let mut settings = Settings {
+            active_profile: Some(id.clone()),
+            ..Default::default()
+        };
+        let before = crate::config::runtime_config(raw, &settings).unwrap();
+        let mut protection = Protection::new(
+            id,
+            "Node".into(),
+            Previous {
+                mode: "rule".into(),
+                proxy_mode: ProxyMode::Off,
+                selectors: vec![],
+            },
+        );
+        protection.mac_dns_port = Some(53);
+        assert!(protection.validate().is_err());
+        protection.mac_dns_port = Some(25353);
+        settings.claude_protection = Some(std::sync::Arc::new(protection));
+        let reopened: Settings =
+            serde_json::from_slice(&serde_json::to_vec(&settings).unwrap()).unwrap();
+        let runtime: Value =
+            yaml_serde::from_str(&crate::config::runtime_config(raw, &reopened).unwrap()).unwrap();
+        assert_eq!(
+            runtime["dns"]["listen"],
+            if cfg!(target_os = "macos") {
+                "127.0.0.1:25353"
+            } else {
+                "127.0.0.1:1053"
+            }
+        );
+        settings.claude_protection = None;
+        assert_eq!(
+            crate::config::runtime_config(raw, &settings).unwrap(),
+            before
+        );
+    }
+
     #[test]
     fn tailscale_private_dns_does_not_receive_protected_public_names() {
         let mut protection = Protection::new(

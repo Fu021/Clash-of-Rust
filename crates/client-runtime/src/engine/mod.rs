@@ -113,6 +113,8 @@ pub struct Engine {
     mac_tun: Option<platform::macos::tun::Session>,
     #[cfg(target_os = "macos")]
     retained_startup_proxy: bool,
+    #[cfg(target_os = "macos")]
+    mac_dns_error: Option<String>,
     logs: LogBuffer,
     readers: Vec<JoinHandle<()>>,
     log_pump: Option<JoinHandle<()>>,
@@ -205,6 +207,7 @@ impl Engine {
                 let tailscale = platform::macos::dns::split_servers()?;
                 protection.split_dns = tailscale.split_dns;
                 protection.tailscale_dns_interface = tailscale.interface;
+                protection.mac_dns_port = Some(platform::macos::dns::available_port()?);
                 store.save_settings(&settings)?;
             }
         }
@@ -241,6 +244,8 @@ impl Engine {
             mac_tun: None,
             #[cfg(target_os = "macos")]
             retained_startup_proxy: keep_proxy,
+            #[cfg(target_os = "macos")]
+            mac_dns_error: None,
             logs,
             readers: vec![],
             log_pump: None,
@@ -1301,6 +1306,7 @@ impl Engine {
             let tailscale = platform::macos::dns::split_servers()?;
             protection.split_dns = tailscale.split_dns;
             protection.tailscale_dns_interface = tailscale.interface;
+            protection.mac_dns_port = Some(platform::macos::dns::available_port()?);
         }
         protection.validate()?;
         self.apply_claude_protection(Some(Arc::new(protection)), None)
@@ -1487,7 +1493,24 @@ impl Engine {
         })
         .await?;
         #[cfg(target_os = "macos")]
-        self.mac_protection_dns(protected && state.tun).await?;
+        {
+            let port = if protected && state.tun {
+                let config: yaml_serde::Value = yaml_serde::from_str(payload)?;
+                let address: std::net::SocketAddr = config["dns"]["listen"]
+                    .as_str()
+                    .context("保护 DNS 本机监听地址缺失")?
+                    .parse()?;
+                ensure!(
+                    address.ip() == std::net::Ipv4Addr::LOCALHOST && address.port() >= 1024,
+                    "保护 DNS 本机监听地址无效"
+                );
+                Some(address.port())
+            } else {
+                None
+            };
+            tokio::task::spawn_blocking(move || platform::macos::service::protection_dns_at(port))
+                .await??;
+        }
         Ok(())
     }
 
@@ -2012,7 +2035,18 @@ impl Engine {
 
     #[cfg(target_os = "macos")]
     async fn mac_protection_dns(&self, enabled: bool) -> Result<()> {
-        tokio::task::spawn_blocking(move || platform::macos::service::protection_dns(enabled))
+        let port = if enabled {
+            Some(
+                self.settings
+                    .claude_protection
+                    .as_ref()
+                    .and_then(|protection| protection.mac_dns_port)
+                    .context("保护 DNS 本机端口缺失，请重新开启保护")?,
+            )
+        } else {
+            None
+        };
+        tokio::task::spawn_blocking(move || platform::macos::service::protection_dns_at(port))
             .await??;
         Ok(())
     }
@@ -2169,6 +2203,8 @@ impl Engine {
             self.last_totals = None;
             self.version.clear();
             self.set_logs(false);
+            #[cfg(target_os = "macos")]
+            self.mac_protection_dns(false).await?;
             platform::restore(&self.journal())?;
             append(
                 &self.logs,
@@ -2178,6 +2214,33 @@ impl Engine {
         snapshot.running = self.running();
         if scope == Scope::Claude {
             snapshot.claude_guard = self.protection_guard.as_ref().map(|guard| guard.snapshot());
+        }
+        #[cfg(target_os = "macos")]
+        if (header || scope == Scope::Claude) && self.running() {
+            let error = if let Some(port) = self
+                .settings
+                .claude_protection
+                .as_ref()
+                .and_then(|protection| protection.mac_dns_port)
+            {
+                tokio::task::spawn_blocking(move || {
+                    platform::macos::service::check_protection_dns(port)
+                })
+                .await?
+                .err()
+                .map(|error| format!("{error:#}"))
+            } else {
+                None
+            };
+            if let Some(error) = &error {
+                if self.mac_dns_error.as_ref() != Some(error) {
+                    self.record_failure(error);
+                }
+                let guard = snapshot.claude_guard.get_or_insert_with(Default::default);
+                guard.connected = false;
+                guard.error = error.clone();
+            }
+            self.mac_dns_error = error;
         }
         snapshot.system_proxy = platform::is_owned(&self.journal())?;
         self.set_logs(scope == Scope::Logs);
