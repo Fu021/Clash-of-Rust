@@ -389,7 +389,15 @@ pub async fn run(engine: &mut Engine, profile: &Path) {
             }
             lookup(&format!("recovered.{new_search}"), "100.100.12.34").await;
         }
-        let captured = vpn_queries.lock().unwrap().clone();
+        // System daemons may query while protection is off between cycles.
+        // Attribute only this test's unique names to the path under test.
+        let captured = vpn_queries
+            .lock()
+            .unwrap()
+            .iter()
+            .filter(|host| host.contains(&suffix))
+            .cloned()
+            .collect::<Vec<_>>();
         assert!(
             captured.iter().all(|host| host.ends_with(&tail)
                 || host.ends_with(&corp)
@@ -397,7 +405,11 @@ pub async fn run(engine: &mut Engine, profile: &Path) {
             "Public DNS reached VPN: {captured:?}"
         );
         assert!(
-            fallback_queries.lock().unwrap().is_empty(),
+            !fallback_queries
+                .lock()
+                .unwrap()
+                .iter()
+                .any(|host| host.contains(&suffix)),
             "Public DNS reached physical fallback"
         );
         tokio::task::spawn_blocking(|| service::protection_dns(false))
