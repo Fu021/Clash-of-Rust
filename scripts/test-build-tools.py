@@ -138,6 +138,18 @@ Private_Clean: 2 kB
             before = local_cache.rust_keys(root, b'compiler one', {})[0]
             workflow.write_text('ndk: 29')
             self.assertNotEqual(before, local_cache.rust_keys(root, b'compiler one', {})[0])
+            vendor = root/'vendor/backend'
+            (vendor/'java').mkdir(parents=True)
+            (vendor/'Cargo.toml').write_text('[package]\nname="backend"\nversion="1.0.0"\n')
+            java = vendor/'java/Helper.java'
+            java.write_text('old helper')
+            before, generation = local_cache.rust_keys(root, b'compiler one', {})
+            java.write_text('new helper')
+            after, compatible = local_cache.rust_keys(root, b'compiler one', {})
+            self.assertNotEqual(before, after)
+            self.assertEqual(generation, compatible)
+            (vendor/'Cargo.toml').write_text('[package]\nname="backend"\nversion="1.0.0"\n[features]\nnew=[]\n')
+            self.assertNotEqual(generation, local_cache.rust_keys(root, b'compiler one', {})[1])
             (root/'Cargo.lock').write_text('slint = 1.19.0')
             new_prefix = local_cache.rust_keys(root, b'compiler one', {})[1]
             self.assertNotEqual(prefix, new_prefix)
@@ -190,6 +202,9 @@ Private_Clean: 2 kB
                 (folder/'lib.rs').write_bytes(b'original source')
             java=root/'apps/android/app/MainActivity.java';java.parent.mkdir(parents=True)
             java.write_bytes(b'original Java host')
+            vendor=root/'vendor/slint-android';vendor.mkdir(parents=True)
+            (vendor/'Cargo.toml').write_text('[package]\nname="slint-android"\nversion="1.0.0"\n')
+            backend=vendor/'lib.rs';backend.write_bytes(b'original backend')
             paths=sorted(p.relative_to(root).as_posix() for p in root.rglob('*') if p.is_file())
             tracked='\0'.join(paths).encode()
             ui=root/'crates/ui/lib.rs';core=root/'crates/core/lib.rs'
@@ -200,6 +215,8 @@ Private_Clean: 2 kB
                 for name in ('ui','core'):
                     target=root/'target/release/.fingerprint'/('clash-'+name+'-hash')
                     target.mkdir(parents=True);(target/'lib-info').write_bytes(b'fingerprint')
+                backend_fingerprint=root/'target/release/.fingerprint/slint-android-hash'
+                backend_fingerprint.mkdir(parents=True)
                 v2=root/'target/release/.fingerprint/clash-ui/another-hash'
                 v2.mkdir(parents=True);(v2/'lib-info').write_bytes(b'fingerprint')
                 # Checkout made unchanged sources newer. Conversely, changed
@@ -207,11 +224,13 @@ Private_Clean: 2 kB
                 os.utime(core,ns=(previous+1_000_000,previous+1_000_000))
                 ui.write_bytes(b'changed source');os.utime(ui,ns=(1,1))
                 java.write_bytes(b'changed Android host; unrelated to desktop Rust libraries')
+                backend.write_bytes(b'changed backend');os.utime(backend,ns=(1,1))
                 local_cache.workspace_sources(root)
             self.assertEqual(core.stat().st_mtime_ns,previous)
             self.assertEqual(ui.read_bytes(),b'changed source')
             self.assertFalse((root/'target/release/.fingerprint/clash-ui-hash').exists())
             self.assertFalse(v2.exists())
+            self.assertFalse(backend_fingerprint.exists())
             self.assertTrue((root/'target/release/.fingerprint/clash-core-hash/lib-info').exists())
 
     def test_workspace_cache_invalidates_shared_slint_consumers_outside_the_ui_crate(self):

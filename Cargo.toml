@@ -1,7 +1,11 @@
 [workspace]
 members = ["crates/client-core", "crates/client-runtime", "apps/cli", "crates/client-ui", "crates/mobile-ffi", "apps/desktop", "apps/desktop-ui", "crates/desktop-shell", "crates/desktop-protocol", "apps/android/native"]
+exclude = ["vendor/slint-android-activity"]
 default-members = ["apps/desktop", "apps/desktop-ui"]
 resolver = "3"
+
+[patch.crates-io]
+i-slint-backend-android-activity = { path = "vendor/slint-android-activity" }
 
 [workspace.package]
 version = "0.6.6-dev.1.ubuntu20-gui"

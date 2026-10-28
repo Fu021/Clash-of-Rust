@@ -54,6 +54,7 @@
 
 - 覆盖首次授权、拒绝、取消后的迟到授权、已授权、VPN 重建和关闭清理。
 - 关闭界面不得停止 VPN；套接字必须绕过自身 TUN。
+- Activity 重建须在旧窗口终止时释放 EGL surface，再初始化新界面并附加现有内核，避免重复重载；验证新界面实际渲染及 VPN 配置未变。[CI 40745218037](https://github.com/Fu021/Clash-of-Rust/actions/runs/40745218037) 出现 `EGL_BAD_ALLOC`；当前 Slint 1.18.1 Android 后端回移了[上游生命周期修复](../../vendor/slint-android-activity/PATCHES.md)，修复须由后续模拟器与设备复验。
 - 测试辅助状态必须有稳定来源，等待状态变化而不是固定 sleep。
 - VPN 授权测试不能把无障碍 `ACTION_CLICK` 返回成功当作对话框已关闭；要等应用窗口实际恢复前台与焦点，再发起下一次授权，避免连续拒绝/允许误点正在退出的旧窗口。证据见 [CI 40161810492](https://github.com/Fu021/Clash-of-Rust/actions/runs/40161810492) 的 Android x64 logcat。
 - 焦点等待失败时同时检查宿主生命周期与模拟器系统窗口。[不发布打包 40524184066](https://github.com/Fu021/Clash-of-Rust/actions/runs/40524184066) 中应用已恢复 `RESUMED`，但 Google Messages 的系统 ANR 对话框挡住焦点；不能据此改写应用生命周期或删除焦点断言。确认外部干扰后使用新的可丢弃 runner 验证，实际代理/TUN 和授权检查仍须通过。

@@ -38,7 +38,7 @@ def current_commit():
 
 def constraints():
     paths = subprocess.check_output(['git', 'ls-files', 'Cargo.toml', 'apps/**/Cargo.toml',
-                                     'crates/**/Cargo.toml', '.cargo/*', 'apps/android/gradle.properties',
+                                     'crates/**/Cargo.toml', 'vendor/**/Cargo.toml', '.cargo/*', 'apps/android/gradle.properties',
                                      'resources/linux/ubuntu20.Dockerfile', 'scripts/linux_ci.py'],
                                     cwd=ROOT, text=True).splitlines()
     return {path: hashlib.sha256(original(path)).hexdigest() for path in paths}
