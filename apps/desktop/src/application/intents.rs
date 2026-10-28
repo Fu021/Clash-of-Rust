@@ -24,9 +24,14 @@ impl App {
     pub(super) fn intent(&mut self, intent: Intent, a: &str, b: &str) -> Task<Message> {
         use claude_view::Event as C;
         use rules_view::Event as R;
+        let global_confirmation = intent == Intent::Confirm
+            && self.confirmation.as_ref().is_some_and(|confirmation| {
+                !matches!(confirmation.pending, desktop_view::Pending::Rules(_))
+            });
         if (self.settings.claude_protection.is_some() || self.claude.protection_pending.is_some())
             && (matches!(intent, Intent::ProxyMode)
                 || (self.page == Page::Rules
+                    && !global_confirmation
                     && !matches!(
                         intent,
                         Intent::Navigate

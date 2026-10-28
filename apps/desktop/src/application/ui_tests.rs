@@ -1831,6 +1831,24 @@ fn protection_locks_rule_controls_and_proxy_mode_without_a_warning_or_draft_chan
 }
 
 #[test]
+fn a_locked_rules_page_still_accepts_the_global_exit_confirmation() {
+    let mut app = fixture(Page::Rules);
+    let _ = app.ui_intent(Intent::RuleAdd, "", "");
+    let _ = app.ui_intent(Intent::RulePayload, "unsaved.test", "");
+    app.claude.protection_pending = Some(true);
+    let _ = app.ui_intent(Intent::Quit, "", "");
+    assert!(matches!(
+        app.confirmation
+            .as_ref()
+            .map(|confirmation| &confirmation.pending),
+        Some(desktop_view::Pending::Exit)
+    ));
+    assert!(!app.exiting);
+    let _ = app.ui_intent(Intent::Confirm, "", "");
+    assert!(app.exiting);
+}
+
+#[test]
 fn entering_proxies_pins_and_expands_the_actual_group_without_reopening_a_manual_collapse() {
     let mut app = fixture(Page::Proxies);
     app.focus_active_group = true;
