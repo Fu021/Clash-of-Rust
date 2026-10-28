@@ -1867,8 +1867,10 @@ fn a_locked_rules_page_still_accepts_the_global_exit_confirmation() {
 
 #[test]
 fn entering_proxies_pins_and_expands_the_actual_group_without_reopening_a_manual_collapse() {
-    let mut app = fixture(Page::Proxies);
-    app.focus_active_group = true;
+    let mut app = fixture(Page::Home);
+    let _ = app.ui_intent(Intent::Navigate, "1", "");
+    assert_eq!(app.page, Page::Proxies);
+    assert!(app.focus_active_group);
     let mut reply = synchronized_reply(&app);
     reply.scope = Scope::Proxies;
     reply.snapshot = Some(Snapshot {
