@@ -405,7 +405,9 @@ def account_cli_matrix():
                 assert json.loads((data(alice)/'control.json').read_text())['pid'] == first_pid
                 assert invoke(alice, mode, 'profile', 'directory') == str(data(alice)/'profiles')
                 invoke(alice, mode, 'config', 'get')
-                invoke(alice, mode, 'config', 'set', 'text_scale', '1')
+                invoke(alice, mode, 'config', 'set', 'text_scale', '100')
+                invoke(alice, mode, 'config', 'set', 'text_scale', '1', success=False)
+                assert invoke(alice, mode, 'config', 'get', 'text_scale')['text_scale'] == 100
                 invoke(alice, mode, 'config', 'check')
                 invoke(alice, mode, 'config', 'effective', json_output=False)
                 invoke(alice, mode, 'env', '--shell', 'bash')
@@ -475,12 +477,20 @@ def account_cli_matrix():
                                        text=True, start_new_session=True)
             try:
                 deadline = time.monotonic()+15
-                while not (data(alice)/'control.json').exists():
+                while True:
                     assert process.poll() is None, process.stderr.read()
                     assert time.monotonic() < deadline, 'Selected foreground owner did not start'
+                    control = data(alice)/'control.json'
+                    if control.exists():
+                        pid = json.loads(control.read_text())['pid']
+                        status = Path(f'/proc/{pid}/status').read_text()
+                        caught = next(line for line in status.splitlines() if line.startswith('SigCgt:'))
+                        if int(caught.split()[1], 16) & (1 << (signal.SIGTERM - 1)):
+                            break
                     time.sleep(0.05)
             finally:
-                os.killpg(process.pid, signal.SIGTERM)
+                if process.poll() is None:
+                    os.killpg(process.pid, signal.SIGTERM)
                 process.communicate(timeout=15)
             assert not (data(alice)/'control.json').exists()
             print(json.dumps({'account_matrix': True, 'help_commands': len(catalogue),
