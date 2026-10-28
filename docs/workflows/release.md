@@ -45,7 +45,7 @@ Ubuntu 18.04 未纳入此基线或兼容矩阵，不能从 20.04 的验证结果
 
 Actions 验证基础安装、系统代理和 TUN；首次授权与取消、真实注销登录和重启、休眠、多显示器、系统通知仍需实机检查。更新验收应从旧版本开始，确认下载可取消和重试、校验失败不安装、安装失败可恢复旧版，升级后保留订阅与个人设置。
 
-Windows 更新需要完成 UAC，Linux 需要 `pkexec` 与桌面授权服务。macOS 数据保存在用户 Application Support，系统代理与 TUN 共用 launchd 网络助手，GUI 以普通用户运行；已有助手可供后台自启复用，退出恢复不应重新索取授权。首次下载后的 Gatekeeper 提示按 [Apple 说明](https://support.apple.com/zh-cn/102445)处理。
+Windows 更新需要完成 UAC，Linux 需要 `pkexec` 与桌面授权服务；DEB 推荐安装 `pkexec` 或旧系统中的 `policykit-1`。macOS 数据保存在用户 Application Support，系统代理与 TUN 共用 launchd 网络助手，GUI 以普通用户运行；已有助手可供后台自启复用，退出恢复不应重新索取授权。首次下载后的 Gatekeeper 提示按 [Apple 说明](https://support.apple.com/zh-cn/102445)处理。
 
 macOS 卸载前关闭代理并退出客户端，再按需移除当前用户的网络助手：
 

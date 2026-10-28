@@ -91,7 +91,7 @@ def _build_deb(payload, version, arch, work):
         f'Package: clash-of-rust\nVersion: {deb_version(version)}\nArchitecture: {deb_arch}\n'
         'Section: net\nPriority: optional\nMaintainer: F021 <flmqs@outlook.com>\n'
         f'Installed-Size: {(installed_size+1023)//1024}\nDepends: {dependencies}\n'
-        'Recommends: pkexec\n'
+        'Recommends: pkexec | policykit-1\n'
         'Homepage: https://github.com/Fu021/Clash-of-Rust\n'
         'Description: Native Rust desktop client for mihomo\n'
         ' Includes the mihomo core, offline Geo databases and native platform checks.\n', encoding='utf-8')

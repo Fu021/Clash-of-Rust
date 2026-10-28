@@ -519,7 +519,7 @@ pub async fn run(engine: &mut Engine, profile: &Path) {
             lookup(&format!("quarantined-{suffix}.claude.ai"), "203.0.113.20").await;
             (expected_vpn, expected_search) = install(&new_search, false);
             wait_protection_ready(listen_port).await;
-            lookup(&format!("recovered.{new_search}"), "100.100.12.34").await;
+            wait_split_recovery(&new_search, &vpn_queries).await;
             lookup(&format!("public-recovered-{suffix}.test"), "203.0.113.20").await;
         }
         // System daemons may query while protection is off between cycles.
@@ -583,6 +583,40 @@ pub async fn run(engine: &mut Engine, profile: &Path) {
     println!(
         "PASS: macOS public/protected DNS uses a local core listener without VPN/physical fallback; native split DNS, short names, reconnect and restoration survive"
     );
+}
+
+async fn wait_split_recovery(domain: &str, captured: &Mutex<Vec<String>>) {
+    // The dynamic store can be ready before mDNSResponder switches its
+    // supplemental resolver. Use fresh names to avoid caching a stale answer.
+    wait_resolver(domain, "100.100.100.100", true).await;
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(12);
+    let expected = "100.100.12.34".parse::<IpAddr>().unwrap();
+    let mut attempt = 0;
+    loop {
+        let host = format!("recovered-{attempt}.{domain}");
+        let result = tokio::time::timeout(
+            Duration::from_secs(2),
+            tokio::net::lookup_host((format!("{host}."), 80)),
+        )
+        .await;
+        let observation = match result {
+            Ok(Ok(addresses)) => {
+                let addresses = addresses.map(|address| address.ip()).collect::<Vec<_>>();
+                if addresses.contains(&expected) && captured.lock().unwrap().contains(&host) {
+                    return;
+                }
+                format!("{addresses:?}")
+            }
+            Ok(Err(error)) => error.to_string(),
+            Err(_) => "lookup timed out".into(),
+        };
+        assert!(
+            tokio::time::Instant::now() < deadline,
+            "Native split DNS did not recover for {domain}: {observation}"
+        );
+        attempt += 1;
+        tokio::time::sleep(Duration::from_millis(100)).await;
+    }
 }
 
 async fn wait_protection_ready(port: u16) {

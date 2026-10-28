@@ -96,7 +96,14 @@ def linux_package_tests(package, tun_test, structure=True):
     # The privileged launcher requires an entirely root-owned installed path.
     run(['sudo', 'chown', 'root:root', '/opt'])
     run(['sudo', 'chmod', '0755', '/opt'])
+    if os.environ.get('COR_LINUX_BASELINE'):
+        # The build image removes package indexes after installing build tools.
+        run(['sudo', 'apt-get', '-o', 'Acquire::http::Timeout=30', '-o',
+             'Acquire::https::Timeout=30', '-o', 'Acquire::Retries=2', 'update'],
+            timeout=300)
     run(['sudo', 'apt-get', 'install', '-y', './'+str(package.relative_to(ROOT))])
+    if os.environ.get('COR_LINUX_BASELINE') and not shutil.which('pkexec'):
+        raise RuntimeError('The installed package did not provide the polkit authorization helper')
     if not any(Path(path).is_file() for path in (
             '/usr/lib/systemd/systemd-resolved', '/lib/systemd/systemd-resolved')):
         release = Path('/etc/os-release').read_text()
