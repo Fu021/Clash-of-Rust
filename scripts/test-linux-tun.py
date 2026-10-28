@@ -21,6 +21,7 @@ import subprocess
 import sys
 import tempfile
 import time
+import urllib.error
 import urllib.request
 
 
@@ -125,6 +126,13 @@ def isolated_uplink():
         trust = directory/'trust.pem'
         trust.write_bytes(Path('/etc/ssl/certs/ca-certificates.crt').read_bytes()+b'\n'+ca.read_bytes())
         run(['mount', '--bind', trust, '/etc/ssl/certs/ca-certificates.crt'])
+        # The core uses the system bundle, while the readiness probe must trust
+        # only the CA generated for this isolated peer.
+        bundle = ssl.create_default_context(cafile='/etc/ssl/certs/ca-certificates.crt')
+        assert ssl.PEM_cert_to_DER_cert(ca.read_text()) in bundle.get_ca_certs(binary_form=True), (
+            'The isolated system CA bundle does not contain the fixture CA')
+        run(['openssl', 'verify', '-CAfile', '/etc/ssl/certs/ca-certificates.crt',
+             '-purpose', 'sslserver', '-verify_ip', BOOTSTRAP[0], directory/'server.crt'])
         run(['ip', 'netns', 'add', namespace])
         process = None
         try:
@@ -160,12 +168,26 @@ def isolated_uplink():
                     query = (b'\x49\x52\x01\x00\x00\x01\x00\x00\x00\x00\x00\x00'
                              b'\x04node\x07fixture\x04test\x00\x00\x01\x00\x01')
                     encoded = base64.urlsafe_b64encode(query).rstrip(b'=').decode('ascii')
-                    context = ssl.create_default_context(cafile='/etc/ssl/certs/ca-certificates.crt')
+                    context = ssl.create_default_context(cafile=str(ca))
                     opener = urllib.request.build_opener(
                         urllib.request.ProxyHandler({}), urllib.request.HTTPSHandler(context=context))
-                    with opener.open(f'https://{BOOTSTRAP[0]}/dns-query?dns={encoded}', timeout=5) as response:
-                        answer = response.read()
-                        assert response.status == 200 and len(answer) >= len(query)+16, 'Encrypted DNS fixture failed'
+                    try:
+                        with opener.open(f'https://{BOOTSTRAP[0]}/dns-query?dns={encoded}', timeout=5) as response:
+                            answer = response.read()
+                            assert response.status == 200 and len(answer) >= len(query)+16, 'Encrypted DNS fixture failed'
+                    except urllib.error.URLError:
+                        # Keep verification enabled when reporting which peer
+                        # and certificate the isolated connection actually saw.
+                        try:
+                            diagnostic = subprocess.run(
+                                ['openssl', 's_client', '-connect', f'{BOOTSTRAP[0]}:443',
+                                 '-CAfile', ca, '-verify_ip', BOOTSTRAP[0],
+                                 '-verify_return_error', '-brief'],
+                                input=b'', stdout=subprocess.PIPE, stderr=subprocess.STDOUT, timeout=8)
+                            print('Fixture TLS diagnostic:', diagnostic.stdout.decode(errors='replace'), flush=True)
+                        except (OSError, subprocess.TimeoutExpired) as error:
+                            print('Fixture TLS diagnostic failed:', error, flush=True)
+                        raise
                     yield
                 finally:
                     process.terminate()
