@@ -123,15 +123,22 @@ def isolated_uplink():
         run(['openssl', 'x509', '-req', '-in', directory/'server.csr', '-CA', ca, '-CAkey', key,
              '-CAcreateserial', '-days', '1', '-extfile', extensions, '-out', directory/'server.crt'],
             stdout=subprocess.DEVNULL, stderr=subprocess.PIPE)
+        certificate = ca.read_bytes()
+        context = ssl.create_default_context(cafile=str(ca))
+        root_der = ssl.PEM_cert_to_DER_cert(certificate.decode('ascii'))
+        assert root_der in context.get_ca_certs(binary_form=True), 'The fixture root is not a valid CA'
+        system_bundle = Path('/etc/ssl/certs/ca-certificates.crt')
         trust = directory/'trust.pem'
-        trust.write_bytes(Path('/etc/ssl/certs/ca-certificates.crt').read_bytes()+b'\n'+ca.read_bytes())
-        run(['mount', '--bind', trust, '/etc/ssl/certs/ca-certificates.crt'])
+        # Keep the isolated root before the distribution's certificate entries.
+        trust.write_bytes(certificate+b'\n'+system_bundle.read_bytes())
+        run(['mount', '--bind', trust, system_bundle])
         # The core uses the system bundle, while the readiness probe must trust
         # only the CA generated for this isolated peer.
-        bundle = ssl.create_default_context(cafile='/etc/ssl/certs/ca-certificates.crt')
-        assert ssl.PEM_cert_to_DER_cert(ca.read_text()) in bundle.get_ca_certs(binary_form=True), (
+        assert system_bundle.read_bytes() == trust.read_bytes(), 'The isolated CA bundle was not mounted'
+        bundle = ssl.create_default_context(cafile=str(system_bundle))
+        assert root_der in bundle.get_ca_certs(binary_form=True), (
             'The isolated system CA bundle does not contain the fixture CA')
-        run(['openssl', 'verify', '-CAfile', '/etc/ssl/certs/ca-certificates.crt',
+        run(['openssl', 'verify', '-CAfile', system_bundle,
              '-purpose', 'sslserver', '-verify_ip', BOOTSTRAP[0], directory/'server.crt'])
         run(['ip', 'netns', 'add', namespace])
         process = None
@@ -168,7 +175,6 @@ def isolated_uplink():
                     query = (b'\x49\x52\x01\x00\x00\x01\x00\x00\x00\x00\x00\x00'
                              b'\x04node\x07fixture\x04test\x00\x00\x01\x00\x01')
                     encoded = base64.urlsafe_b64encode(query).rstrip(b'=').decode('ascii')
-                    context = ssl.create_default_context(cafile=str(ca))
                     opener = urllib.request.build_opener(
                         urllib.request.ProxyHandler({}), urllib.request.HTTPSHandler(context=context))
                     try:
