@@ -163,9 +163,17 @@ pub(super) fn write(out: &mut dyn Write, args: &Args, value: &Value) -> Result<(
             if args.path == "geo update" {
                 message(out, "Geo 数据已更新并通过校验")?;
             }
-            for key in ["version", "updated"] {
-                field(out, label(key), &text(value, key))?;
-            }
+            field(out, "数据版本", &text(value, "version"))?;
+            field(out, "数据准备时间", &text(value, "updated"))?;
+            field(
+                out,
+                "本机上次更新",
+                if value["installed_at"].is_null() {
+                    "暂无记录"
+                } else {
+                    &text(value, "installed_at")
+                },
+            )?;
             table::records(
                 out,
                 rows(&value["files"]),

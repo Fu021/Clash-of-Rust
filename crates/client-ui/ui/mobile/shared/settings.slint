@@ -1,17 +1,18 @@
 import { MobileTypography } from "typography.slint";
 import { Theme, AccentPalette } from "../../theme/palette.slint";
 import { MobileData, MobileView, MobileActions, MobileIntent } from "state.slint";
-import { MText, MSmall, MHeading, MCard, MButton, MRow, MDivider, MSwitch, MField, MSelect } from "controls.slint";
+import { MText, MSmall, MParagraph, MHeading, MCard, MButton, MRow, MDivider, MSwitch, MField, MSelect } from "controls.slint";
 
 export component AppearanceSettings inherits VerticalLayout {
     in property <bool> custom-font-size: true;
+    property <bool> stack-themes: Theme.text-scale >= 1.25;
     alignment: start; spacing: 10px;
     MHeading { text: "外观"; }
     MCard {
         MSmall { text: "主题"; }
         GridLayout { spacing: MobileTypography.small-gap;
             for label[i] in ["深色", "浅色", "跟随系统"]: MButton { text: label; selected: Theme.appearance == i;
-                col: Theme.text-scale > 1.25 ? 0 : i; row: Theme.text-scale > 1.25 ? i : 0;
+                col: root.stack-themes ? 0 : i; row: root.stack-themes ? i : 0;
                 clicked => { Theme.appearance = i; MobileActions.request(MobileIntent.appearance, "" + i, ""); }
             }
         }
@@ -48,35 +49,34 @@ export component NetworkToggles inherits VerticalLayout {
         toggled(value) => { MobileActions.request(MobileIntent.udp, value ? "true" : "false", ""); }
     }
 }
-export component SubscriptionUpdateSettings inherits VerticalLayout {
+export component ScheduleSettings inherits VerticalLayout {
     alignment: start; spacing: 10px;
-    MHeading { text: "订阅自动更新"; }
+    MHeading { text: "计划任务"; }
     MCard {
+        MText { text: "订阅自动更新"; }
         MSmall { text: "分钟 · 0 关闭 · 默认 360"; wrap: word-wrap; }
         HorizontalLayout { cross-axis-alignment: center; spacing: MobileTypography.gap;
             MField { text <=> MobileData.subscription-interval; enabled: !MobileData.working; edited(value) => { MobileView.subscription-interval-dirty = true; } }
             MButton { text: "保存"; enabled: !MobileData.working; clicked => { MobileActions.request(MobileIntent.subscription-interval, MobileData.subscription-interval, ""); } }
         }
         MSmall { text: "仅更新远程订阅；失败保留原配置，保护期间跳过已锁定订阅。"; wrap: word-wrap; }
-    }
-}
-export component GeoMaintenanceSettings inherits VerticalLayout {
-    alignment: start; spacing: 10px;
-    MHeading { text: "测速与 Geo"; }
-    MCard {
-        MText { text: "定时测速"; }
-        HorizontalLayout { cross-axis-alignment: center; spacing: 10px;
-            MField { width: 72px; horizontal-stretch: 0; text <=> MobileData.interval; edited(value) => { MobileView.interval-dirty = true; } }
-            MSmall { text: "分钟 · 0 关闭"; }
-            MButton { text: "保存"; width: max(68px, MobileTypography.font-size(15) * 2 + 16px); horizontal-stretch: 0; clicked => { MobileActions.request(MobileIntent.interval, MobileData.interval, ""); } }
-        }
         MDivider { }
-        MRow { title: "Geo 数据"; value: MobileData.geo-status; arrow: false; interactive: false; }
-        MButton { text: "更新所有 Geo 数据"; busy: MobileData.geo-updating; enabled: !MobileData.working && !MobileData.geo-updating; clicked => { MobileActions.request(MobileIntent.update-geo, "", ""); } }
+        MText { text: "定时测速"; }
+        MSmall { text: "分钟 · 0 关闭"; wrap: word-wrap; }
+        HorizontalLayout { cross-axis-alignment: center; spacing: MobileTypography.gap;
+            MField { text <=> MobileData.interval; edited(value) => { MobileView.interval-dirty = true; } }
+            MButton { text: "保存"; clicked => { MobileActions.request(MobileIntent.interval, MobileData.interval, ""); } }
+        }
     }
 }
-export component MaintenanceSettings inherits VerticalLayout {
-    alignment: start; spacing: 10px;
-    SubscriptionUpdateSettings { }
-    GeoMaintenanceSettings { }
+export component CurrentVersion inherits VerticalLayout {
+    alignment: start; spacing: MobileTypography.small-gap;
+    MText { text: "当前版本"; }
+    MSmall { text: MobileData.version; wrap: word-wrap; }
+}
+export component GeoSettingsContents inherits VerticalLayout {
+    alignment: start; spacing: MobileTypography.gap;
+    MText { text: "Geo 数据"; }
+    MParagraph { text: MobileData.geo-status; color: Theme.secondary; font-size: MobileTypography.font-size(14); }
+    MButton { text: "更新所有 Geo 数据"; busy: MobileData.geo-updating; enabled: !MobileData.working && !MobileData.geo-updating; clicked => { MobileActions.request(MobileIntent.update-geo, "", ""); } }
 }

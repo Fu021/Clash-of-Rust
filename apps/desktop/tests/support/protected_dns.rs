@@ -269,7 +269,24 @@ pub async fn run(engine: &mut Engine, profile: &std::path::Path) {
             .unwrap();
         assert_eq!(auto["fixed"], "");
         assert_eq!(auto["testUrl"], "http://claude.ai/auto-check");
-        assert!(measured["fixture"] > 0 && measured["Other"] > 0);
+        if measured["fixture"] == 0 || measured["Other"] == 0 {
+            let diagnostic = controller
+                .get(format!(
+                    "http://127.0.0.1:{}/proxies/fixture/delay",
+                    engine.settings.controller_port
+                ))
+                .bearer_auth(&engine.settings.secret)
+                .query(&[("url", "http://claude.ai/auto-check"), ("timeout", "5000")])
+                .send()
+                .await
+                .unwrap();
+            let status = diagnostic.status();
+            let body = diagnostic.text().await.unwrap();
+            panic!(
+                "Node probes failed: {measured:?}; upstream metrics: {}; diagnostic {status}: {body}",
+                metrics().await
+            );
+        }
         assert!(
             measured["fixture"] < measured["Other"],
             "Fixture must have a slower alternative"

@@ -466,7 +466,7 @@ pub(super) async fn execute(
         rules_applied,
         notice,
         running: engine.running(),
-        geo_status: engine.geo_manifest.version.clone(),
+        geo_status: engine.geo_manifest.display_status(),
         autostart: platform::autostart_enabled().unwrap_or(false),
         protection_changed,
     }

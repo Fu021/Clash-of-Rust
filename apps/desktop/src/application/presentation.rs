@@ -447,11 +447,7 @@ impl App {
         );
         text!(get_fake_ip_input, set_fake_ip_input, &self.fake_ip_input);
         text!(get_fake_ip_error, set_fake_ip_error, &self.fake_ip_error);
-        text!(
-            get_geo_status,
-            set_geo_status,
-            format::geo_version(&self.geo_status)
-        );
+        text!(get_geo_status, set_geo_status, &self.geo_status);
         set!(
             get_node_sort,
             set_node_sort,

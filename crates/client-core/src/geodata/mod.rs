@@ -27,15 +27,57 @@ pub struct GeoFile {
 pub struct GeoManifest {
     pub version: String,
     pub updated: u64,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub installed_at: Option<u64>,
     pub files: Vec<GeoFile>,
 }
 
 pub use crate::file_hash::hash_file;
 
-pub fn verify_geo(directory: &Path) -> Result<GeoManifest> {
-    let manifest: GeoManifest = serde_json::from_slice(
+pub fn read_manifest(directory: &Path) -> Result<GeoManifest> {
+    Ok(serde_json::from_slice(
         &std::fs::read(directory.join(MANIFEST)).context("Geo 数据清单缺失")?,
-    )?;
+    )?)
+}
+
+impl GeoManifest {
+    pub fn display_status(&self) -> String {
+        use chrono::{DateTime, Local, Utc};
+        let version = if let Some(date) = self.version.split_whitespace().last()
+            && let Ok(parsed) = DateTime::parse_from_rfc3339(date)
+        {
+            let tag = self
+                .version
+                .strip_suffix(date)
+                .unwrap_or("")
+                .trim_end_matches(|ch: char| {
+                    ch.is_whitespace() || matches!(ch, '·' | '路' | '|' | 'Â')
+                });
+            let date = parsed.with_timezone(&Local).format("%Y-%m-%d %H:%M:%S");
+            if tag.is_empty() {
+                date.to_string()
+            } else {
+                format!("{tag} · {date}")
+            }
+        } else {
+            self.version.clone()
+        };
+        let updated = self
+            .installed_at
+            .and_then(|value| i64::try_from(value).ok())
+            .and_then(|value| DateTime::<Utc>::from_timestamp(value, 0))
+            .map(|date| {
+                date.with_timezone(&Local)
+                    .format("%Y-%m-%d %H:%M:%S")
+                    .to_string()
+            })
+            .unwrap_or_else(|| "暂无记录".into());
+        format!("数据版本：{version}\n本机上次更新：{updated}")
+    }
+}
+
+pub fn verify_geo(directory: &Path) -> Result<GeoManifest> {
+    let manifest = read_manifest(directory)?;
     if manifest.files.len() != GEO_FILES.len() {
         bail!("Geo 数据清单不完整");
     }
@@ -121,6 +163,7 @@ pub async fn download_geo(destination: &Path, proxy_port: Option<u16>) -> Result
     let mut manifest = GeoManifest {
         version: format!("{} · {}", release.tag_name, release.published_at),
         updated: SystemTime::now().duration_since(UNIX_EPOCH)?.as_secs(),
+        installed_at: None,
         files: vec![],
     };
     for (remote, local) in mapping {
@@ -326,6 +369,24 @@ pub fn commit(runtime: &Path) -> Result<()> {
     Ok(())
 }
 
+// Called only after the new data has been loaded successfully. The journal
+// still covers the manifest so a failed or interrupted update restores its time.
+pub fn record_install(runtime: &Path) -> Result<GeoManifest> {
+    if !runtime.join(JOURNAL).exists() {
+        bail!("没有进行中的 Geo 更新事务");
+    }
+    let path = runtime.join(MANIFEST);
+    let mut value: serde_json::Value = serde_json::from_slice(&std::fs::read(&path)?)?;
+    let installed_at = SystemTime::now().duration_since(UNIX_EPOCH)?.as_secs();
+    value
+        .as_object_mut()
+        .context("Geo 数据清单格式无效")?
+        .insert("installed_at".into(), installed_at.into());
+    let manifest = serde_json::from_value(value.clone())?;
+    atomic_write(&path, &serde_json::to_vec_pretty(&value)?)?;
+    Ok(manifest)
+}
+
 pub fn recover(runtime: &Path) -> Result<()> {
     let path = runtime.join(JOURNAL);
     if !path.exists() {
@@ -459,6 +520,7 @@ mod tests {
         let mut manifest = GeoManifest {
             version: "test".into(),
             updated: 1,
+            installed_at: None,
             files: vec![],
         };
         for name in GEO_FILES {
@@ -484,13 +546,37 @@ mod tests {
         let staged = tmp.path().join("new");
         fixture(&old, b"old-data");
         fixture(&staged, b"new-data");
+        let original_manifest = std::fs::read(old.join(MANIFEST)).unwrap();
+        assert!(
+            read_manifest(&old)
+                .unwrap()
+                .display_status()
+                .contains("暂无记录")
+        );
         begin_install(&staged, &old).unwrap();
         assert_eq!(std::fs::read(old.join("GeoSite.dat")).unwrap(), b"new-data");
+        let recorded = record_install(&old).unwrap();
+        assert!(recorded.installed_at.is_some());
+        assert!(!recorded.display_status().contains("暂无记录"));
         recover(&old).unwrap();
         for name in GEO_FILES {
             assert_eq!(std::fs::read(old.join(name)).unwrap(), b"old-data");
         }
+        assert_eq!(
+            std::fs::read(old.join(MANIFEST)).unwrap(),
+            original_manifest
+        );
         assert!(!old.join(JOURNAL).exists());
+
+        begin_install(&staged, &old).unwrap();
+        let recorded = record_install(&old).unwrap();
+        commit(&old).unwrap();
+        assert_eq!(
+            read_manifest(&old).unwrap().installed_at,
+            recorded.installed_at
+        );
+        assert!(verify_geo(&old).is_ok());
+        assert!(record_install(&old).is_err());
     }
     #[test]
     fn corrupted_download_cannot_replace_existing_data() {

@@ -5,6 +5,7 @@ the Rust integration test then runs as the specified ordinary user. No host
 routes, desktop proxy settings, or existing capability attributes are left changed.
 """
 import argparse
+import base64
 import contextlib
 import errno
 from http.client import HTTPConnection
@@ -15,10 +16,12 @@ import pwd
 import re
 import shutil
 import signal
+import ssl
 import subprocess
 import sys
 import tempfile
 import time
+import urllib.request
 
 
 def run(command, **kwargs):
@@ -152,6 +155,17 @@ def isolated_uplink():
                         time.sleep(0.05)
                     else:
                         raise RuntimeError('Upstream fixture did not become ready')
+                    # Fail with a useful TLS/DNS error before starting the
+                    # core; the peer is reachable only inside this namespace.
+                    query = (b'\x49\x52\x01\x00\x00\x01\x00\x00\x00\x00\x00\x00'
+                             b'\x04node\x07fixture\x04test\x00\x00\x01\x00\x01')
+                    encoded = base64.urlsafe_b64encode(query).rstrip(b'=').decode('ascii')
+                    context = ssl.create_default_context(cafile='/etc/ssl/certs/ca-certificates.crt')
+                    opener = urllib.request.build_opener(
+                        urllib.request.ProxyHandler({}), urllib.request.HTTPSHandler(context=context))
+                    with opener.open(f'https://{BOOTSTRAP[0]}/dns-query?dns={encoded}', timeout=5) as response:
+                        answer = response.read()
+                        assert response.status == 200 and len(answer) >= len(query)+16, 'Encrypted DNS fixture failed'
                     yield
                 finally:
                     process.terminate()
@@ -541,7 +555,9 @@ def main():
             run([binary, args.test_case, '--exact',
                  '--ignored', '--test-threads=1', '--nocapture'],
                 env=dict(os.environ, CLASH_TUN_TEST_NAMESPACE='1', CLASH_PROXY_SMOKE='1',
-                         MIHOMO_TEST_RESOURCES='/opt/clash-of-rust/resources', MIHOMO_TEST_CLI='/opt/clash-of-rust/cor', GSETTINGS_BACKEND='memory'),
+                         MIHOMO_TEST_RESOURCES='/opt/clash-of-rust/resources', MIHOMO_TEST_CLI='/opt/clash-of-rust/cor',
+                         GSETTINGS_BACKEND='memory', SSL_CERT_FILE='/etc/ssl/certs/ca-certificates.crt',
+                         SSL_CERT_DIR='/etc/ssl/certs'),
                 preexec_fn=ordinary_user, timeout=240)
         return
 

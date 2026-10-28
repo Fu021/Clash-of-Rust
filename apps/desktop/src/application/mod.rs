@@ -424,7 +424,7 @@ impl App {
             Ok(engine) => {
                 let settings = engine.settings.clone();
                 let profiles = engine.profiles.clone();
-                let geo_status = engine.geo_manifest.version.clone();
+                let geo_status = engine.geo_manifest.display_status();
                 (
                     Some(Arc::new(Mutex::new(engine))),
                     settings,
@@ -919,7 +919,7 @@ impl App {
                                 self.rule_state = rules_view::State::default();
                             }
                             self.profiles = engine.profiles.clone();
-                            self.geo_status = engine.geo_manifest.version.clone();
+                            self.geo_status = engine.geo_manifest.display_status();
                             self.mixed_port = self.settings.mixed_port.to_string();
                             self.interval_input = self.settings.delay_interval_minutes.to_string();
                             self.subscription_interval_input = self

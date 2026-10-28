@@ -1681,7 +1681,7 @@ impl Engine {
             return Ok(());
         }
         let runtime = self.store.runtime();
-        let manifest = assets::verify_geo(staged).context("新下载的 Geo 数据无效")?;
+        assets::verify_geo(staged).context("新下载的 Geo 数据无效")?;
         let geo_settings = Settings {
             rule_overrides: RuleOverrides::default(),
             claude_protection: None,
@@ -1722,22 +1722,25 @@ impl Engine {
             if let Some(state) = &state {
                 self.resume(state).await?;
             }
-            Ok::<_, anyhow::Error>(())
+            assets::record_install(&runtime)
         }
         .await;
-        if let Err(error) = result {
-            if self.running() {
-                self.stop_process().await?;
+        let manifest = match result {
+            Ok(manifest) => manifest,
+            Err(error) => {
+                if self.running() {
+                    self.stop_process().await?;
+                }
+                assets::recover(&runtime)?;
+                if let Some(state) = &state
+                    && let Err(restart) = self.resume(state).await
+                {
+                    platform::restore(&self.journal())?;
+                    bail!("Geo 文件已恢复，但内核重新启动失败：{restart}");
+                }
+                return Err(error.context("Geo 更新失败，已恢复旧数据"));
             }
-            assets::recover(&runtime)?;
-            if let Some(state) = &state
-                && let Err(restart) = self.resume(state).await
-            {
-                platform::restore(&self.journal())?;
-                bail!("Geo 文件已恢复，但内核重新启动失败：{restart}");
-            }
-            return Err(error.context("Geo 更新失败，已恢复旧数据"));
-        }
+        };
         assets::commit(&runtime)?;
         self.geo_manifest = manifest;
         append(&self.logs, "[客户端] 全部 Geo 数据更新完成并通过校验");

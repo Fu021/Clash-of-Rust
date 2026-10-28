@@ -2,7 +2,7 @@
 use anyhow::{Context, Result, bail};
 pub use clash_client_core::geodata::{
     GEO_FILES, GeoFile, GeoManifest, MANIFEST, atomic_copy, begin_install, commit, download_geo,
-    hash_file, recover, verify_geo,
+    hash_file, record_install, recover, verify_geo,
 };
 use std::path::{Path, PathBuf};
 

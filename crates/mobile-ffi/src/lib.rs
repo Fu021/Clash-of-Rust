@@ -252,22 +252,42 @@ impl Session {
         }
         Ok(())
     }
+    pub fn attach_or_initialize(&mut self) -> Result<()> {
+        if self.native.request(json!({"op":"state"}))?["running"] != true {
+            return self.initialize();
+        }
+        // A recreated Activity must not reload a core owned by the VPN service.
+        self.route = core::active_route::root(&self.runtime(&self.settings)?)?;
+        self.running = true;
+        if self.settings.claude_protection.is_some() {
+            self.native.request(json!({"op":"protection-sync"}))?;
+        }
+        Ok(())
+    }
     pub fn install_geo(&mut self, staged: &std::path::Path) -> Result<core::geodata::GeoManifest> {
-        let manifest = core::geodata::verify_geo(staged).context("新下载的 Geo 数据无效")?;
         let raw = self.runtime(&self.settings)?;
         let runtime = self.store.runtime();
         core::geodata::begin_install(staged, &runtime)?;
-        if self.running
-            && let Err(error) = self
-                .native
-                .request(json!({"op":"reload","config":raw,"ipv6":effective_ipv6(&self.settings)}))
-        {
-            core::geodata::recover(&runtime).context("Geo 重载失败，恢复旧文件也失败")?;
-            self.native
-                .request(json!({"op":"reload","config":raw,"ipv6":effective_ipv6(&self.settings)}))
-                .context("Geo 文件已恢复，但旧内核配置重载失败")?;
-            return Err(error.context("Geo 更新失败，已恢复旧数据"));
-        }
+        let result = (|| {
+            if self.running {
+                self.native.request(
+                    json!({"op":"reload","config":raw,"ipv6":effective_ipv6(&self.settings)}),
+                )?;
+            }
+            core::geodata::record_install(&runtime)
+        })();
+        let manifest = match result {
+            Ok(manifest) => manifest,
+            Err(error) => {
+                core::geodata::recover(&runtime).context("Geo 更新失败，恢复旧文件也失败")?;
+                if self.running {
+                    self.native
+                        .request(json!({"op":"reload","config":raw,"ipv6":effective_ipv6(&self.settings)}))
+                        .context("Geo 文件已恢复，但旧内核配置重载失败")?;
+                }
+                return Err(error.context("Geo 更新失败，已恢复旧数据"));
+            }
+        };
         core::geodata::commit(&runtime)?;
         Ok(manifest)
     }
@@ -1122,12 +1142,43 @@ mod tests {
         }
     }
 
+    #[test]
+    fn attaching_a_recreated_ui_preserves_the_running_core_and_runtime_file() {
+        #[derive(Default)]
+        struct RunningHost(std::sync::Mutex<Vec<String>>);
+        impl NativeHost for RunningHost {
+            fn request(&self, value: Value) -> Result<Value> {
+                let op = value["op"].as_str().unwrap().to_owned();
+                self.0.lock().unwrap().push(op.clone());
+                Ok(if op == "state" {
+                    json!({"running":true,"vpn":true})
+                } else {
+                    json!({"ok":true})
+                })
+            }
+        }
+        let root = tempfile::tempdir().unwrap();
+        let host = Arc::new(RunningHost::default());
+        let mut session = Session::open(root.path().into(), host.clone()).unwrap();
+        let runtime = session.store.runtime().join("config.yaml");
+        std::fs::create_dir_all(runtime.parent().unwrap()).unwrap();
+        std::fs::write(&runtime, "existing live config").unwrap();
+        session.attach_or_initialize().unwrap();
+        assert!(session.running);
+        assert_eq!(
+            std::fs::read_to_string(runtime).unwrap(),
+            "existing live config"
+        );
+        assert_eq!(*host.0.lock().unwrap(), ["state"]);
+    }
+
     fn geo_fixture(path: &std::path::Path, contents: &[u8]) {
         use crate::core::geodata::{GEO_FILES, GeoFile, GeoManifest, MANIFEST, hash_file};
         std::fs::create_dir_all(path).unwrap();
         let mut manifest = GeoManifest {
             version: String::from_utf8(contents.to_vec()).unwrap(),
             updated: 1,
+            installed_at: None,
             files: Vec::new(),
         };
         for name in GEO_FILES {
@@ -1204,7 +1255,12 @@ mod tests {
             } else {
                 let current = core::geodata::verify_geo(&session.store.runtime()).unwrap();
                 assert_eq!(current.version, if reject { "old" } else { "new" });
+                assert_eq!(current.installed_at.is_some(), !reject);
             }
+            let reopened = Session::open(root.path().into(), native.clone()).unwrap();
+            let current = core::geodata::read_manifest(&reopened.store.runtime()).unwrap();
+            assert_eq!(current.installed_at.is_some(), !reject);
+            assert_eq!(current.display_status().contains("暂无记录"), reject);
             let calls = native.calls.lock().unwrap();
             assert_eq!(
                 calls.as_slice(),
