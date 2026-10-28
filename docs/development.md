@@ -14,7 +14,7 @@
 | `apps/cli` | `cor` 与后台入口，见 [CLI 文档](cli.md)。 |
 | `crates/mobile-ffi` | 共享移动会话，以 `NativeHost` 接入原生能力；不依赖 JNI、Slint 或 Android SDK。 |
 | `apps/android` | `native` Rust/Slint/JNI 宿主、`app` 生命周期/VPN/通知、`core` Go/mihomo 桥接。 |
-| `apps/ios` | 独立宿主占位与 UI 原型，尚非可用 VPN 客户端。 |
+| `apps/ios` | 仅 `.gitkeep` 宿主占位；可预览原型位于 `crates/client-ui/ui/mobile/ios`，尚非可用 VPN 客户端。 |
 | `resources`、`scripts`、`docs` | 必需资源、[维护脚本](../scripts/README.md)与文档。 |
 
 界面细节见 [Slint 说明](../crates/client-ui/README.md)，Android 生命周期与构建见 [Android 说明](../apps/android/README.md)。尽量在现有层次解决问题，不把平台权限、文件访问或网络请求写进 `.slint`。
@@ -32,7 +32,7 @@
 
 版本的权威来源为根 `Cargo.toml` 的 `[workspace.package].version`。同步 `Cargo.lock` 中所有 workspace 包、Android Gradle 的版本默认值和离线预览 fixture；不改第三方包版本或历史 Release 文档。正式发布去除后缀、跳版本及其他例外仍需维护者明确授权。版本变化后必须重新取得同提交 CI，不能复用旧版本的构建产物。
 
-安装包版本核验及高版本本地包的更新行为见[版本与更新通道](workflows.md#版本与更新通道)。
+安装包版本核验及高版本本地包的更新行为见[版本与更新通道](workflows/versions.md#版本与更新通道)。
 
 ## 修改前后都要检查
 
@@ -45,8 +45,8 @@
 - Geo、订阅与 Release 安装包沿用[共享下载约束](../crates/client-core/src/download.rs)，检测断流及可回退路线的持续慢速；Geo 与安装包采用缓冲异步写盘。每条路线重新下载并校验，最后路线允许慢网继续，不能跳过 SHA256/大小校验或自动改用户节点。Geo 先下载到独立暂存目录，四文件全量校验后才安装；旧数据不匹配或缺失不能阻止已验证的新数据修复，备份记录旧文件实际内容及缺失状态，重载失败按原样恢复。Android 重载沿用现有 VPN，不重新申请或连接。
 - 控制器只监听本机，使用随机密钥并处理内部端口冲突；密钥不得进入日志、示例或界面。
 - 系统代理、TUN、DNS、提权、自启动、通知与更新沿用平台入口，检查授权、拒绝、重复操作和失败清理。
-- macOS 保护通过网络助手可恢复地覆盖系统动态 DNS，将所有默认解析器指向助手独占的 `127.0.0.1:53`，仅转发到内核的随机本机高端口，保留 Tailscale 私有分域、搜索域与接口；同时覆盖 configd 的 State/Setup 缓存，不写 SCPreferences 持久偏好或要求用户调整 DNS。标准端口兼容读取 `resolv.conf` 的程序，原生 TCP/UDP DNS 与文件式解析都要验证；端口占用须在写 DNS 前拒绝，转发须限制并发、超时并随租约释放。助手监测重连并重新接管，冲突时隔离并报错，不能恢复到 VPN/物理 DNS 作为公共查询的失败回退。退出只恢复仍匹配的托管字段，保留外部修改且不重建已删除服务，详见[保护说明](claude-region-detection.md#claude-保护与扩展检测)。涉及动态解析器、旧助手迁移、重启和故障恢复时，在可丢弃 macOS 环境验证实际解析与恢复，不以配置写入成功代替网络验证。
-- 系统代理显示使用后台读取的实际托管开关与地址，不把绕过列表等辅助字段变化视为关闭；窗口重建重新投影快照，不写回默认代理模式。macOS 按托管字段比较仍存在的网络服务，退出恢复在偏好锁内合并，保留后来新增的服务、例外及非托管属性；Windows/GNOME/KDE 仅恢复仍与托管值相同的键。其他客户端修改的代理地址或开关不得覆盖，相关风险见[代理状态与恢复](agent-failures/desktop.md#系统代理状态与安全恢复)。
+- macOS 保护的动态 DNS、Tailscale 分域、原生就绪与失败隔离按[保护说明](claude-protection.md#dns-与-tailscale)执行；实现前查[DNS 共存复盘](agent-failures/macos-dns.md)。在可丢弃原生环境验证接管、重连、故障及恢复，不以配置写入成功代替实际解析，不要求用户调整 DNS。
+- 系统代理使用后台实际托管状态，窗口重建只投影快照；辅助字段变化不判为关闭。恢复只合并仍托管的字段，保留外部修改与网络服务增删，详见[代理状态与安全恢复](agent-failures/desktop.md#系统代理状态与安全恢复)。
 - Android VPN/通知独立于 Activity，关闭窗口不停止 VPN；保留套接字绕过自身 TUN。macOS 原生 UI/Dock/主线程、Windows 消息循环与窗口重建遵循各自宿主生命周期。
 - 维护脚本优先扩展现有共享模块；独立权限、进程、离线测试或用户入口的保留依据见[脚本说明](../scripts/README.md)。
 
@@ -58,8 +58,8 @@
 
 ## 本地验证与 UI 预览
 
-- 资源充足时优先做相关本地验证，再按风险扩大范围；沿用同一 Release profile 与 `--locked`。文档改动只做内容、链接等静态检查；新增测试覆盖行为、边界或恢复，不镜像实现。构建与 CI 范围见 [README](../README.md#编译与打包)及[工作流说明](workflows.md#ci)。
-- UI 使用持久安装、版本匹配的官方 Slint Viewer 直接预览正式组件，可用 `--viewer PATH` 指定；参数见 [UI 预览](workflows.md#ui-预览与静态资源)及[Slint 说明](../crates/client-ui/README.md)。
+- 资源充足时优先做相关本地验证，再按风险扩大范围；沿用同一 Release profile 与 `--locked`。文档改动只做内容、链接等静态检查；新增测试覆盖行为、边界或恢复，不镜像实现。构建与 CI 范围见 [README](../README.md#编译与打包)及[工作流说明](workflows/ci.md#ci)。
+- UI 使用持久安装、版本匹配的官方 Slint Viewer 直接预览正式组件，可用 `--viewer PATH` 指定；参数见 [UI 预览](workflows/local-development.md#ui-预览与静态资源)及[Slint 说明](../crates/client-ui/README.md)。
 - 桌面默认 950×700、最小 800×450，移动端按[代表性尺寸与可用性检查](loop-workflow.md#多尺寸-ui-检查)覆盖手机横竖屏、平板与系统字号；检查主题、强调色、滚动、弹窗。复用主题控件与间距，语义颜色不被强调色覆盖；安全区/键盘只扣一次，内容合理顶部对齐。
 - 固定演示数据只能验证外观，外观改动附实际截图；交互、后端与系统功能另验。真实代理/TUN 测试只在可丢弃环境执行，不擅自改用户路由、防火墙、代理或重启网络。
 - 汇报区分“通过 / 失败 / 未执行 / 仅静态检查”，说明资源、设备、授权或工具链缺口；其他提交的 CI 不算本次验证。

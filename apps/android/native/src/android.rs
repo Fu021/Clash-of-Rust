@@ -1115,8 +1115,8 @@ fn rollback_protection(state: &mut State, reason: &str) -> Result<()> {
 fn observe_protection(state: &mut State) -> Result<bool> {
     let native = &state.session.platform["protection"];
     let active = native["enabled"].as_bool().unwrap_or(false);
-    if active {
-        state.guard_snapshot = serde_json::from_value(native["snapshot"].clone())?;
+    if let Some(snapshot) = state.session.protection_snapshot()? {
+        state.guard_snapshot = snapshot;
     }
     if let Some(change) = &state.protection_change {
         if std::time::Instant::now() >= change.deadline {
@@ -2203,14 +2203,14 @@ fn project(state: &State) -> Projection {
         });
     }
     if !state.guard_snapshot.error.is_empty() {
-        claude_counts.2 += 1;
+        claude_counts.1 += 1;
         claude.push(ReportRow {
             id: "guard-status".into(),
             title: "实时保护状态".into(),
             value: state.guard_snapshot.error.clone(),
             detail: state.guard_snapshot.error.clone(),
             source: "Android 后台保护服务".into(),
-            tone: 2,
+            tone: 3,
             country: String::new(),
             country_label: String::new(),
         });

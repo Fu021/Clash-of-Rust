@@ -1,186 +1,47 @@
 # GitHub Actions 工作流
 
-| 工作流 | 触发 | 职责 | 产物 |
-| --- | --- | --- | --- |
-| CI | main push、PR | 六种桌面平台与三种 Android ABI 编译、检查、源码单元测试、代理与 TUN 集成测试 | `build-{system}-{arch}`，保留 3 天 |
-| Publish Release | 手动 | 复用成功 CI 的程序，打包、安装后验证；可仅打包 | 六个桌面安装包、三个 APK 及 SHA256，测试产物保留 3 天 |
-| Memory Benchmark | 手动 | 对指定代码运行低强度或压力内存测试 | 原始数据、报告与构建日志，保留 3 天 |
+| 工作流 | 触发与职责 | 产物 |
+| --- | --- | --- |
+| [CI](workflows/ci.md) | main push、PR；六种桌面平台、三种 Android ABI 的检查、编译、源码测试及代理/TUN 集成 | `build-{system}-{arch}`，保留 3 天 |
+| [Publish Release](workflows/release.md) | 手动；复用同提交成功 CI，打包及安装后验证，可仅打包或显式发布预发布 | 九组安装包及 SHA256，Actions 附件保留 3 天 |
+| [Memory Benchmark](workflows/memory.md) | 手动；指定提交的轻负载或压力内存采样 | 原始数据、报告和日志，保留 3 天 |
 
-六个平台为 Windows x64 / ARM64、Linux x64 / ARM64、macOS Intel / Apple Silicon。Linux 安装包支持 Debian/Ubuntu，Ubuntu 仅支持 22.04 及以上；Ubuntu 最新版兼容验证在发布工作流中执行。
+桌面平台为 Windows x64/ARM64、Linux x64/ARM64、macOS Intel/Apple Silicon。Linux 包支持 Debian/Ubuntu，Ubuntu 最低为 22.04；最新版兼容验证在发布流程执行。iOS 仅有宿主占位与 UI 原型，不参与构建。
 
-贡献者可使用本地工具链编译、Clippy、源码单元测试与打包，也可使用 Actions；无需为了本地验证而推送代码。正式发布继续复用成功 CI 的产物，真实系统代理/TUN 自动化测试在可丢弃的 Actions 环境中执行。界面可使用 `scripts/preview-slint.py` 直接预览正式 Slint 组件，不依赖桌面程序编译；弃用工作流删除文件后，也需在 GitHub 上禁用。资源不足（例如 1 核 CPU、约 1 GiB 内存）的 AI 执行环境不得本地编译、测试或打包，只按[失败复盘索引](agent-failures/README.md)与[资源受限规则](../AGENTS.md#资源受限环境)做最小预览和收尾检查。
-
-各维护脚本的职责、必须保持独立进程的辅助程序以及合并/删除规则见[脚本维护说明](../scripts/README.md)。新增工作流入口前先确认能否扩展现有脚本，不重复实现缓存、产物校验或平台验证逻辑。
-
-新增工作流须事先获得维护者同意，具体要求见[贡献者须知](../.github/CONTRIBUTING.md)。`.github/` 的变更合并前须经 @Fu021 审核；所有外部贡献者的 fork PR 工作流每次触发均需批准，既往贡献不豁免。
+新工作流和 `.github/` 变更按[贡献要求](../.github/CONTRIBUTING.md)审核；弃用工作流删除文件后还需在 GitHub 禁用。脚本职责与合并/删除依据见[脚本维护](../scripts/README.md)。受限执行环境遵守 [AGENTS](../AGENTS.md#资源受限环境)，本地不编译、测试或打包。
 
 ## Actions 跟进节奏
 
-启动后只确认一次运行编号、来源提交与排队/运行状态，后续按同工作流近期耗时安排查询。CI 通常约 15～34 分钟，例如 [40110166410](https://github.com/Fu021/Clash-of-Rust/actions/runs/40110166410) 约 15 分钟、[40114860127](https://github.com/Fu021/Clash-of-Rust/actions/runs/40114860127) 约 34 分钟；建议 10 分钟首查，此后约 5 分钟。Publish Release 的 [40117541970](https://github.com/Fu021/Clash-of-Rust/actions/runs/40117541970) 约 10.5 分钟，建议 7 分钟首查，接近完成再每 2～3 分钟。其他工作流同样先参考近期运行；排队和长步骤延长间隔，出现失败后再读取失败步骤与必要日志，不做秒级轮询或反复下载整份日志。
+先确认一次运行编号、来源提交和启动状态，再参考同工作流近期耗时低频查询。近期 [CI 40562836032](https://github.com/Fu021/Clash-of-Rust/actions/runs/40562836032) 用时约 29 分钟，[Publish Release 40567590202](https://github.com/Fu021/Clash-of-Rust/actions/runs/40567590202) 约 12 分钟：CI 建议 10 分钟首查、此后约 5 分钟；打包 7 分钟首查、临近完成每 2～3 分钟。排队和长步骤延长间隔，其他 Actions 同样先参考历史；失败后才读取必要日志，不反复下载整份日志。
 
 ## 本地打包
 
-桌面打包须在与目标系统、架构一致的机器上进行。除 README 中的原生编译依赖外，还需 Go（版本满足 `apps/android/core/go.mod`，供共享依赖快照脚本使用）；Linux 打包需 `dpkg-dev`，macOS 需系统 `hdiutil`、`codesign`，Windows 的 NSIS 由脚本下载并校验。
-
-在仓库根目录执行以下命令。依赖快照脚本会查询兼容更新，可能修改 `Cargo.lock`、Android Go 锁文件及 Gradle 依赖声明，提交前应检查这些差异。
-
-```sh
-python3 scripts/build_inputs.py resolve
-cargo build -p clash-of-rust -p clash-desktop-ui -p clash-cli --release --locked --bins
-python3 scripts/prepare-resources.py
-```
-
-再导出带校验清单的本地程序与测试程序，并打包。以下命令可用于 Bash 或 PowerShell；Windows 可用 `python` 替代 `python3`：
-
-```sh
-python3 -X utf8 -c "
-import sys
-from pathlib import Path
-sys.path.insert(0, 'scripts')
-from build_support import host_system, host_arch, cargo_messages
-from workflow_artifacts import test_binaries, export_build, extract_build
-messages = cargo_messages(['cargo', 'test', '-p', 'clash-of-rust', '--test', 'core_integration', '--release', '--locked', '--no-run', '--message-format=json'])
-tests = test_binaries(messages)
-archive = export_build(host_system(), host_arch(), tests, Path('dist/local-export'))
-extract_build(archive, Path('dist/local-build'))
-"
-python3 scripts/build-installer.py --prebuilt dist/local-build
-```
-
-安装包与 SHA256 输出到 `dist/`。重复打包前清理自己生成的 `dist/local-export`、`dist/local-build`，或在命令中换用新目录。`--no-run` 仅编译集成测试程序，不执行代理/TUN 系统测试；本地产物清单不代表已经通过 CI，也不会创建 Release。`build-installer.py --prebuilt` 需要上述完整产物目录，不能直接传入 `target/release/`。`run-ci.py` 包含专用系统集成测试，不作为普通本地构建入口。
+原生依赖、源码构建与产物导出命令见[本地打包](workflows/local-development.md#本地打包)。仅适用于资源充足的环境；本地产物不代表已通过 CI。
 
 ## CI
 
-先生成一次 `dependency-snapshot`：每次查询源码依赖、内核、Geo 数据与独立工具更新，在声明的兼容约束内选取新版本。上游超时、503 等网络错误使用兼容的已验证缓存；缓存缺失或校验失败时明确报告。所有平台应用同一份快照，Publish Release 继续复用这些已测试版本。
-
-缓存先从 GitHub 恢复，未命中或服务故障时再访问 Tailscale 私网中的 `/home/coder/github_action_cache`，两边都没有才从上游获取。每轮依然查询上游更新；工具链、锁文件和资源版本参与缓存身份，兼容的旧编译对象仍由 Cargo 校验和重编。Publish Release 复用本轮成功 CI 的依赖快照，不重新选版本。
-
-私有 Rust 镜像分为 32 个校验分片，逐片串行下载并解压；恢复默认使用 5 分钟预算，超时保留已校验分片并使构建脚本重新验证，缺失内容由 Cargo 补齐。日志按分片显示进度与速度。阻塞超过硬上限时先清除部分编译缓存再正常构建，不允许混用未完成的恢复结果。只回传变更部分，索引最后提交；中断后复用已完成的分片，缺片由正常下载或重编补齐，旧运行不能覆盖较新的内容。GitHub 缓存预算 9 GiB，优先保留公共下载、必要工具及较慢的 macOS/Windows 编译结果；命中后不重复下载私有副本。工作区源码逐文件核对内容，相同内容才恢复旧时间戳，变化的 crate 及使用共享输入的构建脚本会失效重编。测试报告和安装包不进入编译缓存。
-
-Go 按声明的模块路径查询更新，避免探测无关父模块；不降级，网络错误保留兼容版本。Android 公共任务一次准备已校验的模块下载包和绑定工具，经本轮附件分发给三个 ABI；只缓存下载包，解压内容由 Go 重建，编译结果按 ABI 缓存。大型私有依赖镜像在 x64 测试通过后回写，不阻塞其他平台启动。
-
-私网服务使用独立访问令牌，只可写自己的数据、索引和日志目录。各任务总结记录缓存来源、版本、大小与分阶段耗时，最终 `private-cache-inventory` 列出本地快照的校验值和占用。
-
-单次可选缓存保存最多等待 5 分钟，未完成上传不会替换有效分片。恢复受上述总预算与连接超时共同约束；解包使用原子写入，失败时清除不完整编译对象和解压源码，再正常下载与编译，保留依赖快照和测试报告。
-
-- 六种桌面平台使用相同的 Release profile 完成整个 workspace 的格式检查、Clippy、编译和源码单元测试，包括共享移动会话；Android 另用三种 ABI 构建实际 Slint/Java/Go 宿主，iOS 不参与构建。
-- 单元测试保留配置与规则、网络响应解析、认证信息脱敏、状态恢复、任务取消、列表复用与边界、实际指针交互等验证。`cor` 的命令解析、帮助和无显示环境入口也在源码测试内验证；历史截图和长期忽略的联网/平台手工回归入口已移除。
-- 真实系统集成测试只运行系统代理与 TUN：验证代理设置写入、HTTP 转发、TUN 接管无显式代理的流量、模式恢复及关闭清理。Linux 使用隔离网络命名空间和 GSettings 内存后端；macOS 使用真实 launchd 网络助手；Windows 先注册服务，再以普通用户令牌运行代理/TUN、恢复和服务清理检查。
-- Linux TUN 测试在独立双栈上游中使用正式保护覆盖，验证域名节点的引导解析、经节点的 DoH A/AAAA、TCP/UDP DNS 接管、HTTP 转发、冷启动及原设置恢复；额外阻断固定公网引导 DNS，验证订阅解析器仍可用。上游记录公网明文 DNS 与绕过节点的公网 DNS，发生泄漏即失败。保护 DNS 全部不可达时必须拒绝开启并恢复原网络。隔离环境使用专用测试 CA，保留 TLS 证书校验，不访问外网。
-- macOS 代理/TUN 集成还在可丢弃 runner 中建立合成 VPN 补充解析器，检查本机系统域名请求、私有分域、搜索设置与 DNS 租约的启用和恢复，以及保护 DNS 上游超时时不向冲突的 VPN 解析器回退；夹具不登录 Tailscale，不替代真实 tailnet、出口节点、网络变化或端到端保护线路验证。
-- Python 构建辅助与产物校验单元测试在前置依赖解析任务中执行一次，失败时不启动各平台下载与编译。内存基准 example 不作为 CI 测试程序额外构建或运行。
-- main push、PR 更新触发 CI；过时运行自动取消。本地生成的编译、打包产物和缓存已在 `.gitignore` 中排除，不应提交。
-- 桌面 CI 不生成安装包；桌面后台、界面程序、`cor` 和网络助手一起导出，现有代理/TUN 集成场景同时验证真实控制台命令及后台生命周期。Android CI 生成供安装测试与发布复用的 APK。产物记录提交、版本、架构、Cargo.lock、工具链及逐文件校验值；仅附带发布后复用的 `core_integration` 代理/TUN 测试程序，不上传源码单元测试程序。清理后的产物采用 schema 2，只与同一提交的打包流程配套使用。
-
-Android x86_64 使用 API 35 模拟器运行真实代理/TUN 流量测试，验证正式界面的内核状态、默认策略组、订阅导航和设置触摸滚动，以及系统 VPN 授权、DNS、套接字保护、快捷磁贴连接/断开和路由恢复。取消后到达的普通授权、过期服务启动与排队连接不得重新开启 VPN，连接中必须提供取消入口；ARM64/ARMv7 完成实际编译、Gradle lint 与架构校验，仍需真机验收。Android 测试结果、体积报告和 logcat 保存在 `android-report-{arch}`，固定开发签名与构建说明见 [Android 宿主](../apps/android/README.md)。
-
-macOS 失败日志、系统与网络状态、崩溃报告保存在 `macos-ci-report-{arch}`，Windows 集成检查结果保存在 `windows-ci-report-{arch}`。人工授权窗口、真实重启登录和物理显示器行为仍需人工验收。
+依赖快照、缓存预算、各平台测试与日志位置见 [CI 与依赖缓存](workflows/ci.md)。真实网络验证仅在可丢弃环境执行。
 
 ## Publish Release
 
-公开 Release 或 Pre-release 前须完成[循环审查工作流](loop-workflow.md)，核对待发布提交的检查范围、遗留项及验证结果。
-
-在 Actions 中选择 **Publish Release → Run workflow**：
-
-- `ci_run_id`：成功的当前提交 CI 编号；留空选择当前提交的 main CI。开发分支测试包必须填写当前分支、当前提交成功的 PR CI 编号。
-- `check_only`：勾选后完成打包与安装后验证，不创建或修改 Release；默认验收使用此模式。安装包在本次运行的 `package-{system}-{arch}` 附件中，无需下载到本地。
-- `prerelease`：经维护者确认后显式发布预发布版，须关闭 `check_only`。可在开发/修复分支上运行，必须指定同仓库、同分支头成功的 PR CI，源码使用合法预发布版本，并提交 `docs/releases/<完整版本>.md`。不能用此开关发布无后缀的正式版本；两种模式同时勾选会在前置校验失败。
-
-从修复分支发布时，选择该分支，填写其成功 CI 编号，设置 `check_only=false`、`prerelease=true`。流程照常验证九平台安装包与来源，最终以预发布标签公开，不更新稳定版 latest、不合并或删除来源分支。上传结束还会重新核对该来源分支头；期间分支前移则保留未公开草稿并失败。未显式选择预发布时，公开发布仍只接受 main 的 push CI。预发布与正式发布使用相同的发行签名要求，Android 不能用临时 CI 测试签名冒充发行签名。
-
-维护者委派给 Agent 的任务按[收尾规则](../AGENTS.md#actions提交与发布)持续跟进：最终推送后等待该提交的全部必需 CI job 成功，再以其 `ci_run_id` 和 `check_only=true` 启动本流程。失败先定位最早失败步骤，修复后跟进对应提交的后续运行，不把已触发、排队或运行中视为完成。打包结束后核对各平台安装后验证、Ubuntu 兼容性、最终核验和九组安装包及 SHA256 附件，并确认没有创建或修改 Release；外部阻塞须明确说明。
-
-复盘和其他文档随功能改动纳入最终提交，再启动验证；完成后的运行编号、来源提交和附件结果写入最终汇报，不为补写成功记录再次推送。后续纯文档补充按[收尾规则](../AGENTS.md#actions提交与发布)保留本地；确需修复代码时，以新提交重新完成 CI 与不发布打包。
-
-流程固定到所选 CI 的提交与依赖快照，核对六种桌面平台及三种 Android ABI 的成功记录和产物身份，不重新编译，也不重新下载应用资源。过期或旧格式产物需要重新运行当前代码的 CI。
-
-从启动到最终核验完成，来源分支必须仍指向该 CI 的提交；`publish-release.py` 在前置解析和最终核验时都会检查分支头。即使只是文档改动，也应等本轮打包结束后再推送，避免 `Source branch has changed`。测试包以本次工作流固定的提交为准，后续提交需另做验证。
-
-1. 六个平台获取并校验已有程序，再生成 Windows EXE、Linux DEB、macOS DMG。
-2. Windows 更新 Defender 检测库，逐个扫描安装包及未压缩的全部 EXE/DLL，再验证安装、服务注册、普通用户代理/TUN、更新安装路径、卸载与用户文件保留；PE 图标在打包阶段核验。扫描版本和逐文件 SHA256 写入 `package-receipt.json`。
-3. Linux 安装 DEB 后验证普通用户系统代理、HTTP 转发、TUN 接管与清理；最新版 Ubuntu 使用同一份 Ubuntu 22.04 DEB 再验证一次。
-4. macOS 核验 App/DMG 版本、架构、资源及签名，启动安装后的 GUI/内核并验证代理/TUN；界面辅助包使用独立身份与 `LSUIElement`，连续重建界面 5 次，核对应用注册、Dock 最近应用条目及内核 PID。当前使用 ad-hoc 签名，没有 Developer ID 与 Apple 公证。
-5. Android 复用三种 ABI 的已编译 APK，检查签名、架构与 16 KiB 对齐；x86_64 最终包再运行代理/TUN 测试。`check_only` 保留固定开发签名，正式发布要求单独配置长期签名。
-6. 核对安装包、校验值、成功记录及来源后，正式模式才公开 Release；`check_only` 仅保留 Actions 附件。开发版本标记为 prerelease，不覆盖稳定版 latest。
-
-只有最终发布 job 有 `contents: write`。发布工作流向 `scripts/build-installer.py --prebuilt` 传入已验证的 CI 产物；本地打包可传入按上述步骤生成的本地产物。打包器只校验与组装，不隐式调用 Cargo。
-
-平台检查分别集中在 `scripts/windows_ci.py`、`scripts/macos_ci.py` 和 Linux 的隔离网络夹具中；`scripts/test-release-package.py` 统一调度。Windows 安装、更新、卸载与 Defender 扫描复用同一模块，不再保留独立的命令行包装脚本。
+参数、来源提交固定、签名、九平台验收及仅打包/预发布操作见[打包与发布](workflows/release.md)。默认 Agent 验收使用 `check_only=true`，公开发布须有明确授权。
 
 ### Windows Defender 告警
 
-历史扫描通过不代表后续检测库或云端检测仍给出相同结果。出现告警时先记录版本、下载来源、检测名及被拦截文件的 SHA256，核对安装包的公开 SHA256；安装包和安装后主程序是不同文件，不能直接比较两者哈希。Windows 打包收据中的 `defender.files` 同时记录安装包和未压缩程序，可按文件名核对主程序。
-
-确认来源后，可通过 [Microsoft Security Intelligence 官方提交入口](https://www.microsoft.com/en-us/wdsi/filesubmission)选择软件开发者和误报类别，提交具体报毒文件，并附检测名、版本、哈希及公开来源。截图或 `!ml` 后缀本身不足以证明误报；提交前也不以修改二进制、关闭防护或设置排除项代替核验。主程序已有图标和版本资源，保留符号、Authenticode 签名与检测结果之间没有本项目已验证的因果结论。
+文件哈希核对、扫描收据及微软误报提交入口见[Defender 告警处理](workflows/release.md#windows-defender-告警)。
 
 ## 版本与更新通道
 
-分支命名与递增规则见[分支版本](development.md#分支版本)。打包器从所选 CI 提交的根 `Cargo.toml` 读取版本，核对构建 manifest、包名、收据和平台版本信息：Windows 的 PE 字符串 `FileVersion`、Android 的 `versionName` 必须一致。Windows 数字版本使用基础版本加 `.0`；macOS 的系统版本字段使用基础版本，自定义 `ClashOfRustVersion` 保留完整后缀。仅改文件名或系统元数据不会改变程序内部用于检查更新的编译版本；不一致的产物不能通过正常打包校验。
-
-桌面、CLI 与 Android 共用[更新通道策略](../crates/client-core/src/update/channel.rs)。关闭“包含预发布版本”时，一律以线上最新正式版为目标，即使本地版本号更高；开启后纳入预发布版，并只提供比本地更高的版本。先按 SemVer 选出通道内最高版本，再与本地比较；版本相同（仅构建元数据不同也视为相同）时不重复提示，更旧的其他 Release 不会因此被选中。假设线上正式版为 `0.6.4`、预发布版为 `0.6.5-dev.1.example`：
-
-| 当前程序版本 | 包含预发布版本 | 检查结果 |
-| --- | --- | --- |
-| `0.999.0` 或 `0.999.0-fix.1.example` | 关闭 | 可返回最新正式版 `0.6.4`，需用户确认安装。 |
-| `0.999.0` 或 `0.999.0-fix.1.example` | 开启 | 两种线上版本都更低，没有可用更新。 |
-| `0.6.4` | 关闭 | 已是最新正式版，不提示其他旧正式版。 |
-| `0.6.4` | 开启 | 提供 `0.6.5-dev.1.example`，需确认预发布风险后安装。 |
-
-通道只由用户设置决定，不依赖本地版本是否带后缀，也不要求线上保留对应本地版本的 prerelease 标记。草稿与非法标签始终忽略；未开启预发布时，同时排除 GitHub 标记的 prerelease 和含 SemVer 预发布后缀的版本。桌面 API 不可用时的正式版回退入口采用同一策略；网络错误或附件缺失明确报错，不当作已是最新。版本不按发布日期、文件名或分支名比较，也没有 `0.6.x` 的硬编码上限；格式校验本身允许合法的 `0.999.0`，分支规则要求避免无意跳号。
-
-Geo、订阅与安装包下载沿用[共享下载策略](development.md#修改前后都要检查)：无数据等待最多 30 秒，前一路线的 20 秒窗口持续低于 32 KiB/s 时转向下一条可用路线；订阅保留原有更短的读超时。最后一条路线允许慢网继续，不自动改节点或跳过校验。Geo 和更新包使用 256 KiB 异步缓冲写入。该策略不能绕过源站或线路限速，实际速度按设备与下载任务验证。
-
-Android 安装还独立校验签名、包名、架构和 `versionCode`；较低 `versionName` 不等于较低 `versionCode`，CI 的 code 来自运行序号。目标 code 更低时拒绝覆盖安装，返回旧正式版需先备份配置，再由用户手动卸载重装；应用不自动卸载。仅打包的开发签名也不能覆盖签名不同的正式包。
+平台版本字段、正式/预发布选择、Android 安装限制见[版本与更新通道](workflows/versions.md)。
 
 ## 手动验收与助手清理
 
-Actions 验证基础安装、系统代理和 TUN；首次授权与取消、真实注销登录和重启、休眠、多显示器、系统通知仍需实机检查。更新验收应从旧版本开始，确认下载可取消和重试、校验失败不安装、安装失败可恢复旧版，升级后保留订阅与个人设置。
-
-Windows 更新需要完成 UAC，Linux 需要 `pkexec` 与桌面授权服务。macOS 数据保存在用户 Application Support，系统代理与 TUN 共用 launchd 网络助手，GUI 以普通用户运行；已有助手可供后台自启复用，退出恢复不应重新索取授权。首次下载后的 Gatekeeper 提示按 [Apple 说明](https://support.apple.com/zh-cn/102445)处理。
-
-macOS 卸载前关闭代理并退出客户端，再按需移除当前用户的网络助手：
-
-```sh
-service_label="org.clashofrust.network.$(id -u)"
-sudo launchctl bootout "system/$service_label"
-sudo rm -rf "/Library/PrivilegedHelperTools/$service_label" "/Library/LaunchDaemons/$service_label.plist"
-```
-
-助手停止前会尝试恢复自己仍持有的代理设置并终止内核会话。测试夹具仅移除本次创建的助手，拒绝覆盖已有安装。
+首次授权、重启/休眠、升级与 macOS 助手卸载见[手动验收](workflows/release.md#手动验收与助手清理)。
 
 ## UI 预览与静态资源
 
-持久安装官方 Slint Viewer 后运行：
-
-```text
-python3 scripts/preview-slint.py --dialogs --pairs
-```
-
-脚本直接加载正式 `.slint` 组件和演示数据，不运行 Cargo 或真实内核。资源充足时默认生成 `dist/slint-preview`；资源受限时只检查语法或预览必要的一页和一种主题，并显式把输出放到工作区外：
-
-```sh
-python3 scripts/preview-slint.py --check
-python3 scripts/preview-slint.py --page settings --theme light --output /tmp/clash-slint-preview
-```
-
-结束前删除本次生成的 `/tmp/clash-slint-preview`，并确认仓库没有遗留 `target/`、`dist/`、`bundle/`、构建缓存、日志或历史截图。静态检查与预览不等于编译、测试或真实交互验证。
-
-图标、国旗及许可证属于必要资源；日常构建使用仓库成品。仅在维护资源时使用 `scripts/prepare-assets.py icons` / `flags`。图标源图保留于 `resources/icon-concepts`，第三方来源见各资源目录的说明。平台检测直接维护 Rust，必要的公开检测数据与 AGPL 来源说明统一位于 `resources/ip-check`，不再保留 `vendor` 或 Shell 生成工具。
+最小预览命令、输出清理与资源维护见[UI 预览](workflows/local-development.md#ui-预览与静态资源)。布局检查尺寸见[循环审查](loop-workflow.md#多尺寸-ui-检查)。
 
 ## Memory Benchmark
 
-手动选择 `ref`（分支、标签或提交），默认测当前所选分支：
-
-- `profile`：release 或 dev，默认 release。
-- `workload`：默认 light；stress 保留较大的压力输入。
-- `rows`：可选 API 行数，1–50,000；默认 light 为 1,000，stress 为 50,000。
-- `repetitions`：每项 API 测试的独立进程次数，1–10，默认 3。
-- `sample_seconds`：每个 GUI 场景采样 1–120 秒，默认 10 秒。
-
-一次只测一个版本。比较时分别运行，保持工具链、profile、输入和环境一致；常规 CI 和打包不自动运行内存基准。
-
-API 基准覆盖规则、连接、代理三类数据的流式/缓冲解析和 1/5 次刷新。GUI 在隔离数据目录、Xvfb 中采样首页、代理组折叠、节点搜索、返回首页；关闭系统代理与定时测速，不生成业务流量。light 为 100 节点、5 个代理组、1,000 条规则；stress 为 2,000 节点、40 个代理组、20,000 条规则。支持的版本另测五项快捷规则全开的同样场景。
-
-Slint 版本另在独立进程中测量可用托盘下的首页、关闭窗口后驻留托盘；通过真实关闭事件隐藏窗口，核对内核未重启，并验证窗口可再次打开。另测搜索后关闭、重新打开及连续开关 20 次；支持销毁窗口的版本须确认原生窗口确实被销毁；采用独立界面进程的版本还需确认该进程已退出，客户端内存合计宿主与界面进程。证明文件记录每次重新启动应用至窗口可见的耗时（不代表首帧耗时），映射报告区分匿名、堆与文件页，不记录地址和文件路径。包含 `cor` 的版本再测纯 CLI 后台：使用 `cor start`，移除显示与桌面会话变量，单独统计 cor、内核及合计内存。附加场景不改变原有四个可见窗口场景的环境；托盘宿主和观察器不计入客户端进程树。
-
-工作流只替换所选版本的 example 基准程序，兼容旧版目录布局，不改应用源码。产物包含版本与环境、提交身份、资源清单、输入订阅、API 数据、GUI/内核内存采样和报告，不生成截图。API 为 Rust 堆分配量；GUI/内核分别统计 RSS、PSS、USS，需区分口径；采样峰值为观测峰值。
+参数、采样场景与 RSS/PSS/堆分配口径见[内存基准](workflows/memory.md)。常规 CI 和打包不自动运行。

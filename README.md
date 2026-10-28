@@ -82,7 +82,7 @@ python3 scripts/prepare-resources.py
 cargo build -p clash-of-rust -p clash-desktop-ui -p clash-cli --bins --locked
 ```
 
-桌面宿主、界面程序、`cor` 命令行和网络助手生成在 `target/debug/`，内核与 Geo 资源生成在 `bundle/`；桌面宿主与界面程序需放在同一目录。Windows 可用 `python` 替代 `python3`。需要 Windows EXE、Linux DEB 或 macOS DMG 时，按 [本地打包步骤](docs/workflows.md#本地打包)生成；Android 本地工具链与 APK 构建见 [Android 开发说明](apps/android/README.md#本地构建)。
+桌面宿主、界面程序、`cor` 命令行和网络助手生成在 `target/debug/`，内核与 Geo 资源生成在 `bundle/`；桌面宿主与界面程序需放在同一目录。Windows 可用 `python` 替代 `python3`。需要 Windows EXE、Linux DEB 或 macOS DMG 时，按 [本地打包步骤](docs/workflows/local-development.md#本地打包)生成；Android 本地工具链与 APK 构建见 [Android 开发说明](apps/android/README.md#本地构建)。
 
 ### 选项二：GitHub Actions
 

@@ -368,6 +368,20 @@ impl Session {
         }
         Ok(())
     }
+    /// Keep enforcement failures visible even when the native worker has stopped.
+    /// An ordinary disabled snapshot leaves the host's previous ledger intact.
+    pub fn protection_snapshot(&self) -> Result<Option<core::claude_check::guard::Snapshot>> {
+        let native = &self.platform["protection"];
+        let enabled = native["enabled"].as_bool().unwrap_or(false);
+        let failed = native["snapshot"]["error"]
+            .as_str()
+            .is_some_and(|error| !error.is_empty());
+        if enabled || failed {
+            Ok(Some(serde_json::from_value(native["snapshot"].clone())?))
+        } else {
+            Ok(None)
+        }
+    }
     pub fn clear_snapshot(&mut self) {
         self.proxies = Proxies::default();
         self.connections = Connections::default();
@@ -1551,6 +1565,33 @@ mod tests {
         assert!(requests.iter().all(|request| request["op"] == "notify"));
         assert_eq!(requests[0]["request_permission"], true);
         assert_eq!(requests[1]["request_permission"], false);
+    }
+    #[test]
+    fn mobile_protection_keeps_stopped_worker_failures_and_preserves_disabled_history() {
+        let root = tempfile::tempdir().unwrap();
+        let mut session = Session::open(root.path().into(), Arc::new(Fake)).unwrap();
+        assert!(session.protection_snapshot().unwrap().is_none());
+        let mut snapshot = core::claude_check::guard::Snapshot {
+            connected: true,
+            blocked: 3,
+            ..Default::default()
+        };
+        session.platform = json!({"protection":{"enabled":true,"snapshot":snapshot}});
+        assert_eq!(session.protection_snapshot().unwrap().unwrap().blocked, 3);
+        snapshot.connected = false;
+        snapshot.error = "实时拦截停止：控制接口不可用".into();
+        session.platform = json!({"protection":{"enabled":false,"snapshot":snapshot}});
+        let observed = session.protection_snapshot().unwrap().unwrap();
+        assert!(!observed.connected);
+        assert_eq!(observed.error, snapshot.error);
+        assert_eq!(observed.blocked, 3);
+        session.platform = json!({"protection":{"enabled":false,"snapshot":core::claude_check::guard::Snapshot::default()}});
+        assert!(
+            session.protection_snapshot().unwrap().is_none(),
+            "a normal disable must not replace the host's previous ledger"
+        );
+        session.platform = json!({"protection":{"enabled":true,"snapshot":{}}});
+        assert!(session.protection_snapshot().is_err());
     }
     #[tokio::test]
     async fn mobile_protection_survives_reopen_and_restores_network_preferences() {

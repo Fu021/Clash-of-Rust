@@ -9,7 +9,7 @@
 
 默认窗口 **950×700**，最小 **800×450**；正文与按钮 15px，辅助信息 14px，控件至少 40px。间距集中在 `Theme`：卡片内边距 16px、卡片间距 12px、内容间距 8px、设置分组间距 20px，弹窗内边距 24px、分区间距 16px。字体放大时控件随内容增高，超出窗口的内容滚动显示。
 
-设置页“网络”分区提供 DNS 覆盖、Fake-IP 总开关和独立排除项页面。列表同时展示用户自定义项与 DNS 覆盖内置的兼容项，逐项标明来源；相同域名合并为一行并列出两种来源。自定义项最多 64 个，内置项不占额度。删除内置项后显示已移除数量及“一键还原 DNS 覆盖项”按钮；还原只恢复内置项，保留现有自定义项。移除记录重启后仍有效，关闭 DNS 覆盖会同时关闭 Fake-IP，保存的列表与移除记录保留。订阅自身的过滤规则继续生效，删除客户端排除项不会移除订阅里的同名规则；CLI 设置格式见[配置说明](../../docs/cli.md#配置诊断与检测)。
+设置页“网络”分区提供 DNS 覆盖、Fake-IP 总开关和独立排除项页面。列表同时展示用户自定义项与 DNS 覆盖内置的兼容项，逐项标明来源；相同域名合并为一行并列出两种来源。自定义项最多 64 个，内置项不占额度。删除内置项后显示已移除数量及“一键还原 DNS 覆盖项”按钮；还原只恢复内置项，保留现有自定义项。移除记录重启后仍有效，关闭 DNS 覆盖会同时关闭 Fake-IP，保存的列表与移除记录保留。订阅自身的过滤规则继续生效，删除客户端排除项不会移除订阅里的同名规则；CLI 设置格式见[配置说明](../../docs/cli/maintenance.md#配置诊断与检测)。
 
 滚动容器按分页、筛选或详情身份变化回到顶部；同一内容的后台刷新保留阅读位置，内容缩短时限制偏移，避免空白正文。桌面使用 `PageScroll`，移动端使用 `MScroll` / `ListView`，不要用变化中的条目总数或检测进度作为内容身份。移动虚拟列表的封装必须保留 `ListView` 名称，Slint 1.18 按重复项直接父组件的名称启用行布局与虚拟化；改名会使多条记录重叠。
 
@@ -50,29 +50,11 @@ python3 scripts/preview-slint.py --page settings --theme light --output /tmp/cla
 
 移动端沿用当前桌面的配色、图标、卡片与操作层次，正文 16px、辅助信息 14px、触控区至少 48px。Android 与 iOS 分别维护页面组合、导航入口、设置与系统操作协议，未来可独立增减功能：
 
-```text
-ui/mobile/
-├── shared/
-│   ├── state.slint       # 移动数据、操作协议与导航/草稿状态
-│   ├── controls.slint    # 触控控件与滚动
-│   ├── frame.slint       # 底栏、侧栏、安全区、键盘与通知
-│   ├── pages.slint       # 共用业务页面
-│   ├── details.slint     # 详情、编辑与确认
-│   ├── settings.slint    # 共用外观、网络开关、Geo 分组
-│   ├── fixtures.slint    # 仅预览使用的演示数据
-│   └── preview.slint     # 仅预览使用的状态栏与键盘示意
-├── android/
-│   ├── app.slint         # Android 页面与导航组合
-│   ├── settings.slint    # VPN、应用分流、通知速度、电池与端口
-│   ├── state.slint       # Android 数据与原生操作协议
-│   └── preview.slint
-├── ios/
-│   ├── app.slint         # iPhone / iPad 页面与导航组合
-│   ├── settings.slint    # 按需连接、系统 VPN 与版本信息
-│   ├── state.slint       # iOS 数据与原生操作协议
-│   └── preview.slint
-└── preview-data/         # 固定预览资源
-```
+| 目录 | 职责 |
+| --- | --- |
+| `ui/mobile/shared` | `state.slint` 定义协议与草稿；`controls.slint` / `frame.slint` 管理触控、导航、安全区与键盘；`pages.slint`、`details.slint`、`settings.slint` 为共用业务界面。 |
+| `ui/mobile/android` / `ui/mobile/ios` | 各自的 `app.slint`、`settings.slint`、`state.slint` 组合平台页面、设置及原生操作协议。 |
+| 各平台 `preview.slint`、`shared/fixtures.slint` 和 `preview-data` | 固定演示数据、状态栏、键盘示意及预览资源；正式窗口不导入。 |
 
 `MobileData` 不依赖桌面 `UiData`，只复用不含平台行为的列表行类型；界面请求交由各平台宿主执行，VPN 会话与内核进程状态分别传入。移动端不显示桌面安装器、托盘或窗口尺寸。两端都保留订阅、节点、连接、规则、日志、网络诊断、IP 检测和 A÷检测。
 
