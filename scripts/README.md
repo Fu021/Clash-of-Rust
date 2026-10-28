@@ -22,7 +22,7 @@
 | `windows_ci.py` | 模块 | Windows 普通用户、服务、安装器、更新及安装包/未压缩 EXE/DLL 的 Defender 验证，扫描证据进入打包收据。 |
 | `macos_ci.py` | CLI / 模块 | macOS 原生验证、安装检查和诊断报告。 |
 | `test-proxy-modes.py` | CLI | Windows、Linux、macOS 共用的系统代理、HTTP 和 TUN 流量检查。 |
-| `test-linux-tun.py` | root CLI | Linux 隔离网络命名空间内的 TUN 授权、DNS 和恢复测试。 |
+| `test-linux-tun.py` | root CLI | Linux 隔离网络/挂载命名空间内的用户身份、订阅隔离、TUN 授权、DNS 和恢复测试。 |
 | `tun_dns_fixture.py` | 子进程夹具 | Linux TUN 测试的隔离上游；必须作为独立进程启动。 |
 | `test-release-package.py` | CLI | 统一调度安装包结构、安装后验证和 Linux 兼容性检查。 |
 | `run-memory-benchmark.py` | CLI | 隔离运行 API、GUI、托盘和 CLI 内存基准。 |

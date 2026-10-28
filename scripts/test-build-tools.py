@@ -1312,6 +1312,19 @@ assert.equal(calls.length,2);
                     self.assertEqual(path.stat().st_mode & 0o7777,0o755)
             self.assertFalse((stage/'clash-tun-launcher').samefile(stage/'libexec/resolvectl'))
 
+    def test_linux_tun_authorization_requires_an_admin_in_every_session(self):
+        import xml.etree.ElementTree as xml
+        policy = xml.parse(build.ROOT/'resources/linux/org.clashofrust.tun.policy')
+        actions = policy.findall('action')
+        self.assertEqual(len(actions), 1)
+        action = actions[0]
+        for session in ('allow_any', 'allow_inactive', 'allow_active'):
+            self.assertEqual(action.findtext('defaults/'+session), 'auth_admin')
+        annotations = {item.attrib['key']: item.text for item in action.findall('annotate')}
+        self.assertEqual(annotations['org.freedesktop.policykit.exec.path'], '/opt/clash-of-rust/clash-of-rust')
+        self.assertEqual(annotations['org.freedesktop.policykit.exec.argv1'], '--authorize-tun')
+        self.assertNotIn('org.freedesktop.policykit.exec.allow_gui', annotations)
+
     def test_arm64_bundles_are_separate_and_native_architecture_is_detected(self):
         self.assertEqual(build.bundle_directory('windows','x64'),build.ROOT/'bundle')
         self.assertEqual(build.bundle_directory('windows','arm64'),build.ROOT/'bundle/windows-arm64')

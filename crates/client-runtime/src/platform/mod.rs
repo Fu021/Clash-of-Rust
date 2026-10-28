@@ -38,8 +38,8 @@ mod linux_tun;
 mod windows_autostart;
 #[cfg(target_os = "linux")]
 pub use linux_tun::{
-    authorize_tun, authorize_tun_terminal, check_tun_environment, core_has_tun_permissions,
-    core_launcher, tun_helper_main,
+    authorize_tun, authorize_tun_for_user, authorize_tun_terminal, check_tun_environment,
+    core_has_tun_permissions, core_launcher, tun_helper_main,
 };
 #[cfg(target_os = "macos")]
 pub mod macos;

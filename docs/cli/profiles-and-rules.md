@@ -6,7 +6,7 @@
 
 | 命令 | 作用 |
 | --- | --- |
-| `profile list [--filter TEXT]` | 列表、当前订阅、更新时间和用量 |
+| `profile list [--filter TEXT --all-users]` | 当前用户列表；Linux root 可只读查看[跨用户总览](linux-users.md#root-只读总览) |
 | `profile add NAME URL_OR_FILE` | 下载或导入 YAML 并校验 |
 | `profile import FILE --name NAME` | 文件导入；`FILE` 可为 `-`，从 stdin 读取 |
 | `profile update [PROFILE] [--all]` | 更新当前/指定/全部非内置订阅 |

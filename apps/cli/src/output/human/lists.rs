@@ -170,6 +170,15 @@ pub(super) fn profiles(out: &mut dyn Write, value: &Value) -> Result<()> {
             },
             text(row, "name")
         )?;
+        if let Some(owner) = row["owner"].as_str() {
+            writeln!(
+                out,
+                "  所属用户：{}（UID {}）",
+                clean(owner),
+                text(row, "uid")
+            )?;
+            writeln!(out, "  数据目录：{}", text(row, "data_dir"))?;
+        }
         for (label, key) in [("ID", "id"), ("来源", "source"), ("更新", "updated")] {
             writeln!(out, "  {label}：{}", text(row, key))?;
         }

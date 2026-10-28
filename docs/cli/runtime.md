@@ -36,7 +36,7 @@ cor proxy tun --data-dir /path/to/server-data
 # 为同一数据目录的后台开启 TUN；建议纯 CLI 的服务器使用此模式。
 ```
 
-Linux 普通用户通过 DEB 安装的固定授权助手开启 TUN；第一次执行 `cor proxy tun` 或开启 Claude 保护时，会在前台调用 pkexec，可使用桌面授权代理或终端认证。授权后再由后台重启内核继承网络权限，客户端本身保持普通用户身份。手动以 root 运行 `cor` 时，直接启动内核并使用已有网络权限，无需 pkexec。系统须提供 `/dev/net/tun`，容器/WSL 仍受设备和宿主网络能力限制。
+Linux 普通用户通过 DEB 的固定助手开启 TUN，首次在前台使用 pkexec 完成管理员认证，SSH/非活动会话也可请求认证。授权后由原用户后台重启内核继承网络权限。`sudo cor` 先授权固定助手再回到调用者；直接 root 自有实例无需 pkexec。具体命令、目录和宿主限制见[用户与授权](linux-users.md)。
 
 Windows 使用安装包的网络服务，macOS 使用现有网络助手；首次安装或助手升级可能触发 UAC/系统授权。无人值守前应先在交互会话完成首次授权。系统代理作用于当前用户的桌面会话；建议 Server 等纯 CLI 环境使用已授权 TUN，无法使用 TUN 时再通过 `env` 配置需要代理的程序。
 

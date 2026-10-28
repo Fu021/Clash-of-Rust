@@ -60,10 +60,10 @@ pub static COMMANDS: &[Spec] = &[
     command!(
         "profile list",
         "列出订阅；来源中的凭据默认脱敏",
-        "profile list [--filter TEXT]",
+        "profile list [--filter TEXT --all-users]",
         0,
         0,
-        "filter"
+        "filter all-users"
     ),
     command!(
         "profile add",
@@ -469,8 +469,8 @@ pub static COMMANDS: &[Spec] = &[
 ];
 
 const GLOBAL: &str =
-    "help version json jsonl timeout data-dir resources yes show-secrets quiet no-color";
-const VALUES: &str = "timeout data-dir resources filter name source output sort limit offset group profile position interval level shell url host category";
+    "help version json jsonl timeout data-dir resources user yes show-secrets quiet no-color";
+pub(crate) const VALUES: &str = "timeout data-dir resources user filter name source output sort limit offset group profile position interval level shell url host category";
 
 #[derive(Debug)]
 pub struct Usage(pub String);
@@ -520,6 +520,10 @@ pub fn parse(input: impl IntoIterator<Item = String>) -> Result<Args> {
         .map_err(|error| Usage(error.to_string()).into())
 }
 fn validate(args: &Args) -> Result<()> {
+    ensure!(
+        !args.flag("all-users") || (args.get("user").is_none() && args.get("data-dir").is_none()),
+        "--all-users 不能与 --user 或 --data-dir 同时使用"
+    );
     ensure!(
         !(args.flag("json") && args.flag("jsonl")),
         "--json 与 --jsonl 不能同时指定"
@@ -805,6 +809,8 @@ fn option_help(key: &str) -> String {
         "timeout" => "单次后台请求超时秒数，默认 300",
         "data-dir" => "指定独立数据目录",
         "resources" => "指定内核与 Geo 资源目录",
+        "user" => "Linux 管理员以指定用户身份操作其配置与后台",
+        "all-users" => "Linux 管理员只读列出各本机用户默认目录中的订阅",
         "yes" => "明确确认删除、保护或安装等操作（-y）",
         "show-secrets" => "显式允许输出订阅/配置中的完整凭据",
         "quiet" => "不显示进度提示（-q）",
@@ -908,5 +914,16 @@ mod tests {
         }
         assert!(args(&["help", "does-not-exist"]).is_err());
         assert_eq!(args(&["profile"]).unwrap().path, "profile");
+    }
+    #[test]
+    fn cross_user_inventory_cannot_be_confused_with_a_selected_data_directory() {
+        assert!(args(&["profile", "list", "--all-users"]).is_ok());
+        assert!(args(&["profile", "list", "--all-users", "--user", "alice"]).is_err());
+        assert!(args(&["profile", "list", "--all-users", "--data-dir", "/tmp/data"]).is_err());
+        assert!(args(&["profile", "use", "same-name", "--all-users"]).is_err());
+        assert_eq!(
+            args(&["--user=alice", "status"]).unwrap().get("user"),
+            Some("alice")
+        );
     }
 }

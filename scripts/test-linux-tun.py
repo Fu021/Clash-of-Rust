@@ -12,6 +12,9 @@ import json
 import os
 from pathlib import Path
 import pwd
+import re
+import shutil
+import signal
 import subprocess
 import sys
 import tempfile
@@ -251,6 +254,247 @@ def root_cli_smoke():
     print('PASS: installed root CLI validation, startup, proxy traffic, TUN, restart and cleanup', flush=True)
 
 
+@contextlib.contextmanager
+def isolated_accounts():
+    """Account/sudo policy changes exist only in this private mount namespace."""
+    with tempfile.TemporaryDirectory(prefix='cor-account-matrix-') as temporary:
+        root = Path(temporary)
+        root.chmod(0o755)
+        identities = []
+        used = {entry.pw_uid for entry in pwd.getpwall()}
+        for uid in range(60001, 60101):
+            if uid in used:
+                continue
+            name = 'cor-matrix-'+str(len(identities))
+            home = root/name
+            home.mkdir(mode=0o700)
+            os.chown(home, uid, uid)
+            identities.append({'name': name, 'uid': uid, 'home': home})
+            if len(identities) == 2:
+                break
+        assert len(identities) == 2
+        for name in ('passwd', 'group', 'shadow', 'gshadow'):
+            source = Path('/etc')/name
+            copy = root/name
+            shutil.copy2(source, copy)
+            with copy.open('a') as stream:
+                for user in identities:
+                    username, uid, home = user['name'], user['uid'], user['home']
+                    stream.write({
+                        'passwd': f'{username}:x:{uid}:{uid}::{home}:/bin/sh\n',
+                        'group': f'{username}:x:{uid}:\n',
+                        'shadow': f'{username}:!:20000:0:99999:7:::\n',
+                        'gshadow': f'{username}:!::\n',
+                    }[name])
+            run(['mount', '--bind', copy, source])
+        sudoers = root/'sudoers.d'
+        shutil.copytree('/etc/sudoers.d', sudoers)
+        rule = sudoers/'cor-matrix'
+        rule.write_text(''.join(f'{user["name"]} ALL=(root) NOPASSWD: /opt/clash-of-rust/cor\n'
+                                for user in identities))
+        rule.chmod(0o440)
+        run(['visudo', '-cf', rule], stdout=subprocess.DEVNULL)
+        run(['mount', '--bind', sudoers, '/etc/sudoers.d'])
+        try:
+            yield root, identities
+        finally:
+            # The enclosing namespace will disappear too; unmount now so getent
+            # and sudo never retain paths in the removed temporary directory.
+            for path in ('/etc/sudoers.d', '/etc/gshadow', '/etc/shadow', '/etc/group', '/etc/passwd'):
+                run(['umount', path])
+
+
+def account_cli_matrix():
+    """Exercise installed commands as a user, sudo caller, selected user and root."""
+    cli = '/opt/clash-of-rust/cor'
+    catalogue = set(re.findall(r'command!\(\s*"([^"]+)"',
+                              (Path(__file__).resolve().parents[1]/'apps/cli/src/args.rs').read_text()))
+    with isolated_accounts() as (temporary, users):
+        root_home = temporary/'root'
+        root_home.mkdir(mode=0o700)
+        base_env = dict(os.environ, HOME=str(root_home), USER='root', LOGNAME='root')
+        for key in ('DISPLAY', 'WAYLAND_DISPLAY', 'WAYLAND_SOCKET', 'DBUS_SESSION_BUS_ADDRESS',
+                    'CLASH_OF_RUST_DATA_DIR', 'XDG_DATA_HOME', 'XDG_CONFIG_HOME',
+                    'XDG_CACHE_HOME', 'XDG_STATE_HOME', 'XDG_RUNTIME_DIR',
+                    'SUDO_UID', 'SUDO_GID', 'SUDO_USER', 'SUDO_COMMAND'):
+            base_env.pop(key, None)
+
+        def invoke(user, mode, *arguments, success=True, json_output=True, text=None):
+            env = dict(base_env)
+            kwargs = {}
+            prefix = []
+            if user is not None:
+                env.update(HOME=str(user['home']), USER=user['name'], LOGNAME=user['name'])
+            if mode in ('user', 'sudo'):
+                def drop():
+                    os.setgroups([])
+                    os.setgid(user['uid'])
+                    os.setuid(user['uid'])
+                kwargs['preexec_fn'] = drop
+            if mode == 'sudo':
+                prefix = ['/usr/bin/sudo', '-n', '--']
+            command = [*prefix, cli, '--timeout', '15']
+            if json_output:
+                command += ['--json']
+            if mode == 'selected':
+                command += ['--user', user['name']]
+            output = subprocess.run([*command, *map(str, arguments)], env=env, input=text,
+                                    capture_output=True, text=True, timeout=35, **kwargs)
+            assert (output.returncode == 0) == success, (
+                mode, user and user['name'], arguments, output.returncode, output.stdout, output.stderr)
+            if success and json_output:
+                return json.loads(output.stdout)['data']
+            return output
+
+        def data(user):
+            return user['home']/'.local/share/clashofrust'
+
+        def snapshot(user):
+            directory = data(user)
+            return {str(p.relative_to(directory)): (p.read_bytes(), p.stat().st_uid)
+                    for p in directory.rglob('*') if p.is_file() and p.name not in ('daemon.log', 'control.json')}
+
+        try:
+            for user in users:
+                # Every catalogue entry has a usable help entry in both contexts;
+                # help must not create a data directory or require a display.
+                for path in sorted(catalogue):
+                    for mode in ('root', 'user'):
+                        output = invoke(user, mode, 'help', *path.split(), json_output=False)
+                        assert '用法：cor ' in output.stdout
+                assert not data(user).exists()
+                invoke(user, 'user', 'profile', 'list', '--all-users', success=False)
+                invoke(user, 'user', '--user', users[1]['name'], 'status', success=False)
+                raw = ('proxies: []\nproxy-groups: [{name: Route, type: select, proxies: [DIRECT, REJECT]}]\n'
+                       'rules: ["MATCH,Route"]\n'
+                       'dns: {enable: true, enhanced-mode: fake-ip, '
+                       'nameserver: ["https://192.0.2.254/dns-query#DIRECT"]}\n'
+                       f'tun: {{device: CorMatrix{user["uid"]}, route-address: [203.0.113.0/24], dns-hijack: []}}\n')
+                source = user['home']/'source.yaml'
+                source.write_text(raw)
+                source.chmod(0o600)
+                os.chown(source, user['uid'], user['uid'])
+                invoke(user, 'user', 'profile', 'import', source, '--name', 'Same name')
+                invoke(user, 'user', 'profile', 'use', 'Same name')
+                # Avoid contention between independent users' mixed listeners.
+                import socket
+                with socket.socket() as listener:
+                    listener.bind(('127.0.0.1', 0))
+                    port = listener.getsockname()[1]
+                invoke(user, 'user', 'config', 'set', 'mixed_port', port)
+                invoke(user, 'user', 'config', 'set', 'dns_override', 'false')
+                invoke(user, 'user', 'config', 'set', 'subscription_update_interval_minutes', '0')
+
+            alice, bob = users
+            alice_before, bob_before = snapshot(alice), snapshot(bob)
+            invoke(alice, 'user', '--data-dir', data(bob), 'profile', 'list', success=False)
+            assert snapshot(bob) == bob_before
+            invoke(None, 'root', 'profile', 'list', '--all-users', json_output=False)
+            overview = invoke(None, 'root', 'profile', 'list', '--all-users')
+            same_name = [p for p in overview if p['name'] == 'Same name']
+            assert {p['owner'] for p in same_name} == {alice['name'], bob['name']}
+            assert snapshot(alice) == alice_before and snapshot(bob) == bob_before
+            assert not (root_home/'.local/share/clashofrust').exists(), 'Read-only inventory created a root backend'
+            filtered = invoke(None, 'root', 'profile', 'list', '--all-users', '--filter', bob['name'])
+            assert filtered and all(p['owner'] == bob['name'] for p in filtered)
+
+            first_pid = json.loads((data(alice)/'control.json').read_text())['pid']
+            for mode in ('user', 'sudo', 'selected'):
+                entries = invoke(alice, mode, 'profile', 'list')
+                assert any(p['name'] == 'Same name' and p['active'] for p in entries)
+                assert json.loads((data(alice)/'control.json').read_text())['pid'] == first_pid
+                assert invoke(alice, mode, 'profile', 'directory') == str(data(alice)/'profiles')
+                invoke(alice, mode, 'config', 'get')
+                invoke(alice, mode, 'config', 'set', 'text_scale', '1')
+                invoke(alice, mode, 'config', 'check')
+                invoke(alice, mode, 'config', 'effective', json_output=False)
+                invoke(alice, mode, 'env', '--shell', 'bash')
+                invoke(alice, mode, 'geo', 'status')
+                invoke(alice, mode, 'ip-check', 'list')
+                invoke(alice, mode, 'claude', 'audit', '--offline')
+                invoke(alice, mode, 'claude', 'protect')
+                invoke(alice, mode, 'service', 'status')
+                invoke(alice, mode, 'rule', 'add', 'DOMAIN,matrix.test,REJECT')
+                rules = invoke(alice, mode, 'rule', 'list')['items']
+                identifier = next(p['id'] for p in rules if p['rule'] == 'DOMAIN,matrix.test,REJECT')
+                invoke(alice, mode, 'rule', 'edit', identifier, 'DOMAIN,matrix-edited.test,REJECT')
+                invoke(alice, mode, 'rule', 'move', identifier, '2')
+                invoke(alice, mode, 'rule', 'enable', identifier, 'off')
+                invoke(alice, mode, 'rule', 'shortcut')
+                invoke(alice, mode, 'rule', 'remove', identifier, '--yes')
+                exported = alice['home']/f'{mode}-profile.yaml'
+                invoke(alice, mode, 'profile', 'export', 'Same name', '--output', exported,
+                       json_output=False)
+                assert exported.stat().st_uid == alice['uid'] and exported.stat().st_mode & 0o777 == 0o600
+                invoke(alice, mode, 'profile', 'update', 'Same name')
+                invoke(alice, mode, 'profile', 'edit', 'Same name', '--name', 'Renamed')
+                invoke(alice, mode, 'profile', 'edit', 'Renamed', '--name', 'Same name')
+                invoke(alice, mode, 'version')
+                invoke(alice, mode, 'completion', 'bash', json_output=False)
+                # Admin network commands grant only the fixed helper. The core
+                # and all persistent files must still belong to Alice.
+                if mode != 'user':
+                    invoke(alice, mode, 'start')
+                    invoke(alice, mode, 'proxy', 'tun')
+                    assert invoke(alice, mode, 'status')['proxy'] == 'tun'
+                    pid = json.loads((data(alice)/'control.json').read_text())['pid']
+                    uids = next(line for line in Path(f'/proc/{pid}/status').read_text().splitlines()
+                                if line.startswith('Uid:')).split()[1:]
+                    assert set(uids) == {str(alice['uid'])}, 'A user backend retained root'
+                    invoke(alice, mode, 'node', 'list')
+                    invoke(alice, mode, 'node', 'select', 'Route', 'DIRECT')
+                    invoke(alice, mode, 'mode', 'global')
+                    invoke(alice, mode, 'mode', 'rule')
+                    invoke(alice, mode, 'connection', 'list')
+                    invoke(alice, mode, 'connection', 'show', 'missing', success=False)
+                    invoke(alice, mode, 'connection', 'close', '--all', '--yes')
+                    invoke(alice, mode, 'logs')
+                    invoke(alice, mode, 'logs', 'export', '--output', alice['home']/f'{mode}-logs.txt',
+                           json_output=False)
+                    invoke(alice, mode, 'logs', 'clear', '--yes')
+                    invoke(alice, mode, 'restart')
+                    assert invoke(alice, mode, 'proxy')['proxy'] == 'tun'
+                    invoke(alice, mode, 'proxy', 'off')
+                for path in data(alice).rglob('*'):
+                    assert path.stat().st_uid == alice['uid'], f'User data became root-owned: {path}'
+            assert snapshot(bob) == bob_before, 'Other users were modified'
+            bob_entries = invoke(bob, 'sudo', 'profile', 'list')
+            assert any(p['name'] == 'Same name' and p['active'] for p in bob_entries)
+            assert snapshot(bob) == bob_before, 'Sudo selected or modified the wrong user data'
+            # stdin and option-like names survive privilege delegation unchanged.
+            invoke(alice, 'sudo', 'profile', 'import', '-', '--name', '--user=literal',
+                   text='proxies: []\nrules: ["MATCH,DIRECT"]\n')
+            invoke(alice, 'sudo', 'profile', 'remove', '--yes', '--', '--user=literal')
+            for user in users:
+                invoke(user, 'user', 'stop')
+                assert not (data(user)/'control.json').exists()
+            # Foreground mode also retains the selected account and cleans up
+            # after SIGTERM; no extra graphical session is involved.
+            process = subprocess.Popen([cli, '--user', alice['name'], 'run', '--no-core', '--quiet'],
+                                       env=base_env, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE,
+                                       text=True, start_new_session=True)
+            try:
+                deadline = time.monotonic()+15
+                while not (data(alice)/'control.json').exists():
+                    assert process.poll() is None, process.stderr.read()
+                    assert time.monotonic() < deadline, 'Selected foreground owner did not start'
+                    time.sleep(0.05)
+            finally:
+                os.killpg(process.pid, signal.SIGTERM)
+                process.communicate(timeout=15)
+            assert not (data(alice)/'control.json').exists()
+            print(json.dumps({'account_matrix': True, 'help_commands': len(catalogue),
+                              'contexts': ['user', 'sudo', 'selected-user', 'direct-root'],
+                              'read_only_inventory': True, 'cross_user_denied': True,
+                              'owner_and_backend_reuse': True,
+                              'not_exercised': ['public downloads/install', 'interactive polkit agent',
+                                                'real login/autostart', 'public DNS/IP/Claude probes']}),
+                  flush=True)
+        finally:
+            for user in users:
+                invoke(user, 'user', 'stop')
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--test-binary', type=Path, required=True)
@@ -270,6 +514,7 @@ def main():
     if args.inside_namespace:
         with isolated_resolved(), isolated_uplink():
             root_cli_smoke()
+            account_cli_matrix()
             run(['/opt/clash-of-rust/clash-of-rust', '--authorize-tun'])
             run([binary, args.test_case, '--exact',
                  '--ignored', '--test-threads=1', '--nocapture'],
@@ -292,7 +537,7 @@ def main():
     original_dns_mode = os.stat(dns_helper).st_mode & 0o7777
     try:
         run(['unshare', '--net', '--mount', sys.executable, Path(__file__).resolve(),
-             '--inside-namespace', '--test-binary', binary, '--uid', args.uid, '--test-case', args.test_case], timeout=260)
+             '--inside-namespace', '--test-binary', binary, '--uid', args.uid, '--test-case', args.test_case], timeout=520)
         print(json.dumps({'basic': True, 'native_authorization': True, 'root_cli': True, 'ordinary_user': args.uid,
                           'tun_traffic_cleanup': True, 'network_namespace': True,
                           'resolved_without_polkit': True}))

@@ -14,7 +14,7 @@ GUI_DEPENDENCIES = (
     'libxkbcommon0', 'libxkbcommon-x11-0', 'libx11-6', 'libx11-xcb1',
     'libxcb1', 'libxcb-render0', 'libxcb-shm0', 'libxrandr2', 'libxi6',
     'libxcursor1', 'libxinerama1', 'libwayland-client0', 'libwayland-cursor0',
-    'libfontconfig1', 'libfreetype6', 'gsettings-desktop-schemas', 'iproute2',
+    'libfontconfig1', 'libfreetype6', 'gsettings-desktop-schemas', 'iproute2', 'util-linux',
     'fonts-wqy-microhei | fonts-noto-cjk',
 )
 

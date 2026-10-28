@@ -178,6 +178,20 @@ pub fn authorize_tun_terminal(core: &Path) -> Result<()> {
     authorize(core, true)
 }
 
+/// Grant only the installed, fixed-target helper before a sudo CLI drops root.
+pub fn authorize_tun_for_user() -> Result<()> {
+    ensure!(unsafe { libc::geteuid() } == 0, "授权需要管理员身份");
+    let _resources = installed_resources()?;
+    if !installed_authorized()? {
+        let status = Command::new(EXECUTABLE)
+            .arg(HELPER_ARGUMENT)
+            .status()
+            .context("无法运行固定 TUN 授权助手")?;
+        ensure!(status.success(), "固定 TUN 授权助手执行失败");
+    }
+    Ok(())
+}
+
 fn installed_authorized() -> Result<bool> {
     let launcher = File::options()
         .read(true)
@@ -246,7 +260,10 @@ fn authorize(core: &Path, terminal: bool) -> Result<()> {
     match status.status.code() {
         Some(0) => Ok(()),
         Some(126) => bail!("TUN 授权已取消，当前代理模式保持不变"),
-        Some(127) => bail!("无法获得 TUN 授权，请检查桌面授权服务"),
+        Some(127) if terminal => bail!(
+            "无法获得 TUN 管理员授权，请检查 polkit 服务及终端认证；也可先执行 sudo /opt/clash-of-rust/clash-of-rust --authorize-tun，再以普通用户运行 cor proxy tun"
+        ),
+        Some(127) => bail!("无法获得 TUN 授权，请检查 polkit 与桌面认证代理"),
         _ => {
             // This fixed helper emits only local installation diagnostics.
             let detail = String::from_utf8_lossy(&status.stderr);

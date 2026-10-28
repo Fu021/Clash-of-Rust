@@ -11,6 +11,9 @@ use clash_client_runtime::{
 use serde_json::{Value, json};
 
 pub async fn execute(args: &Args) -> Result<()> {
+    if args.flag("all-users") {
+        return output::emit(args, crate::users::profiles(args)?);
+    }
     match args.path.as_str() {
         "run" => backend::run(args).await,
         "version" => output::emit(
