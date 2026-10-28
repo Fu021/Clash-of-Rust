@@ -319,7 +319,7 @@ def account_cli_matrix():
                     'SUDO_UID', 'SUDO_GID', 'SUDO_USER', 'SUDO_COMMAND'):
             base_env.pop(key, None)
 
-        def invoke(user, mode, *arguments, success=True, json_output=True, text=None):
+        def invoke(user, mode, *arguments, success=True, json_output=True, json_lines=False, text=None):
             env = dict(base_env)
             kwargs = {}
             prefix = []
@@ -335,7 +335,7 @@ def account_cli_matrix():
                 prefix = ['/usr/bin/sudo', '-n', '--']
             command = [*prefix, cli, '--timeout', '15']
             if json_output:
-                command += ['--json']
+                command += ['--jsonl' if json_lines else '--json']
             if mode == 'selected':
                 command += ['--user', user['name']]
             output = subprocess.run([*command, *map(str, arguments)], env=env, input=text,
@@ -343,7 +343,12 @@ def account_cli_matrix():
             assert (output.returncode == 0) == success, (
                 mode, user and user['name'], arguments, output.returncode, output.stdout, output.stderr)
             if success and json_output:
-                return json.loads(output.stdout)['data']
+                try:
+                    if json_lines:
+                        return [json.loads(line)['data'] for line in output.stdout.splitlines()]
+                    return json.loads(output.stdout)['data']
+                except (ValueError, KeyError) as error:
+                    raise AssertionError((mode, arguments, output.stdout, output.stderr)) from error
             return output
 
         def data(user):
@@ -450,7 +455,7 @@ def account_cli_matrix():
                     invoke(alice, mode, 'connection', 'list')
                     invoke(alice, mode, 'connection', 'show', 'missing', success=False)
                     invoke(alice, mode, 'connection', 'close', '--all', '--yes')
-                    invoke(alice, mode, 'logs')
+                    invoke(alice, mode, 'logs', json_lines=True)
                     invoke(alice, mode, 'logs', 'export', '--output', alice['home']/f'{mode}-logs.txt',
                            json_output=False)
                     invoke(alice, mode, 'logs', 'clear', '--yes')
