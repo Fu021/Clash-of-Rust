@@ -52,16 +52,16 @@ export component SettingsPage inherits PageSurface {
                 ContentPanel {
                     HorizontalLayout { cross-axis-alignment: center; spacing: Theme.content-gap;
                         Label { text: "混合端口"; }
-                        Field { text <=> UiData.mixed-port; width: 100px; horizontal-stretch: 0; edited(value) => { UiActions.dispatch(Intent.mixed-port, value, ""); } }
+                        Field { text <=> UiData.mixed-port; width: 100px; horizontal-stretch: 0; enabled: !UiData.protected && !UiData.protection-pending; edited(value) => { UiActions.dispatch(Intent.mixed-port, value, ""); } }
                     }
-                    if UiData.ports-dirty: ActionButton { text: "保存并重启内核"; primary: true; enabled: !UiData.working; clicked => { UiActions.dispatch(Intent.save-ports, "", ""); } }
+                    if UiData.ports-dirty: ActionButton { text: "保存并重启内核"; primary: true; enabled: !UiData.working && !UiData.protected && !UiData.protection-pending; clicked => { UiActions.dispatch(Intent.save-ports, "", ""); } }
                     Divider { }
-                    SettingRow { title: "DNS 覆盖"; checked: UiData.dns-override; enabled: !UiData.working && !UiData.update-busy; toggled(value) => { UiActions.dispatch(Intent.dns-override, value ? "true" : "false", ""); } }
+                    SettingRow { title: "DNS 覆盖"; checked: UiData.dns-override; enabled: !UiData.working && !UiData.update-busy && !UiData.protected && !UiData.protection-pending; toggled(value) => { UiActions.dispatch(Intent.dns-override, value ? "true" : "false", ""); } }
                     Divider { }
                     SettingRow {
                         title: "Fake-IP";
                         checked: UiData.fake-ip;
-                        enabled: UiData.dns-override && !UiData.working && !UiData.update-busy;
+                        enabled: UiData.dns-override && !UiData.working && !UiData.update-busy && !UiData.protected && !UiData.protection-pending;
                         toggled(value) => { UiActions.dispatch(Intent.fake-ip, value ? "true" : "false", ""); }
                     }
                     Divider { }
@@ -72,14 +72,14 @@ export component SettingsPage inherits PageSurface {
                         Rectangle { horizontal-stretch: 1; }
                         ActionButton {
                             text: "管理";
-                            enabled: UiData.dns-override && !UiData.working && !UiData.update-busy;
+                            enabled: UiData.dns-override && !UiData.working && !UiData.update-busy && !UiData.protected && !UiData.protection-pending;
                             clicked => { UiActions.dispatch(Intent.fake-ip-editor, "true", ""); }
                         }
                     }
                     Divider { }
-                    SettingRow { title: "启用 IPv6"; checked: UiData.ipv6; enabled: !UiData.working && !UiData.update-busy; toggled(value) => { UiActions.dispatch(Intent.ipv6, value ? "true" : "false", ""); } }
+                    SettingRow { title: "启用 IPv6"; checked: UiData.ipv6; enabled: !UiData.working && !UiData.update-busy && !UiData.protected && !UiData.protection-pending; toggled(value) => { UiActions.dispatch(Intent.ipv6, value ? "true" : "false", ""); } }
                     Divider { }
-                    SettingRow { title: "启用 UDP"; checked: UiData.udp || UiData.protected; enabled: !UiData.working && !UiData.protected && !UiData.update-busy; toggled(value) => { UiActions.dispatch(Intent.udp, value ? "true" : "false", ""); } }
+                    SettingRow { title: "启用 UDP"; checked: UiData.udp || UiData.protected; enabled: !UiData.working && !UiData.protected && !UiData.protection-pending && !UiData.update-busy; toggled(value) => { UiActions.dispatch(Intent.udp, value ? "true" : "false", ""); } }
                 }
             }
             SettingsSection {

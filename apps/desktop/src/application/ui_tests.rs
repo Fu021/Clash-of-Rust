@@ -1822,8 +1822,25 @@ fn protection_locks_rule_controls_and_proxy_mode_without_a_warning_or_draft_chan
     for mode in ["0", "1", "2"] {
         let _ = app.ui_intent(Intent::ProxyMode, mode, "");
     }
+    app.page = Page::Settings;
+    let settings = serde_json::to_value(&app.settings).unwrap();
+    for intent in [
+        Intent::DnsOverride,
+        Intent::FakeIp,
+        Intent::FakeIpAdd,
+        Intent::FakeIpRemove,
+        Intent::FakeIpRestoreDefaults,
+        Intent::Ipv6,
+        Intent::Udp,
+        Intent::MixedPort,
+        Intent::SavePorts,
+        Intent::Mode,
+    ] {
+        let _ = app.ui_intent(intent, "false", "blocked.test");
+    }
     assert!(!app.notice_visible);
     assert!(app.confirmation.is_none());
+    assert_eq!(serde_json::to_value(&app.settings).unwrap(), settings);
     app.claude.protection_pending = None;
     app.page = Page::Rules;
     let _ = app.ui_intent(Intent::Query, "available", "");

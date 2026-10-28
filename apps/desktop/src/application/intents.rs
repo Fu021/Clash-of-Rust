@@ -26,24 +26,36 @@ impl App {
         use rules_view::Event as R;
         let global_confirmation = intent == Intent::Confirm
             && self.confirmation.as_ref().is_some_and(|confirmation| {
-                !matches!(confirmation.pending, desktop_view::Pending::Rules(_))
+                !matches!(&confirmation.pending, desktop_view::Pending::Rules(_))
             });
         if (self.settings.claude_protection.is_some() || self.claude.protection_pending.is_some())
-            && (matches!(intent, Intent::ProxyMode)
-                || (self.page == Page::Rules
-                    && !global_confirmation
-                    && !matches!(
-                        intent,
-                        Intent::Navigate
-                            | Intent::Quit
-                            | Intent::DismissNotice
-                            | Intent::SystemNotification
-                            | Intent::Escape
-                            | Intent::RuleCloseEditor
-                            | Intent::RuleCancelProfile
-                            | Intent::CancelConfirm
-                            | Intent::CloseDetail
-                    )))
+            && (matches!(
+                intent,
+                Intent::Mode
+                    | Intent::ProxyMode
+                    | Intent::MixedPort
+                    | Intent::SavePorts
+                    | Intent::DnsOverride
+                    | Intent::FakeIp
+                    | Intent::FakeIpAdd
+                    | Intent::FakeIpRemove
+                    | Intent::FakeIpRestoreDefaults
+                    | Intent::Ipv6
+                    | Intent::Udp
+            ) || (self.page == Page::Rules
+                && !global_confirmation
+                && !matches!(
+                    intent,
+                    Intent::Navigate
+                        | Intent::Quit
+                        | Intent::DismissNotice
+                        | Intent::SystemNotification
+                        | Intent::Escape
+                        | Intent::RuleCloseEditor
+                        | Intent::RuleCancelProfile
+                        | Intent::CancelConfirm
+                        | Intent::CloseDetail
+                )))
         {
             return Task::none();
         }

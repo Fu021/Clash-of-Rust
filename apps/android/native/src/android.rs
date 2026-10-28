@@ -510,6 +510,14 @@ async fn run_loop(
                 state.selected = request.selected.clone();
                 immediate = true;
                 let intent = request.intent;
+                let edited_profile = match intent {
+                    MobileIntent::UpdateProfile => Some(request.a.as_str()),
+                    MobileIntent::SaveProfile => Some(request.selected.as_str()),
+                    _ => None,
+                };
+                let subscription_affects_active = edited_profile.is_some_and(|id| {
+                    state.session.settings.active_profile.as_deref() == Some(id)
+                });
                 if matches!(intent, MobileIntent::Navigate | MobileIntent::ConnectionDetail) {
                     if let Some(job) = address_job.take() { job.abort(); }
                     address_generation = address_generation.wrapping_add(1);
@@ -690,7 +698,7 @@ async fn run_loop(
                     match handle(&mut state, request).await {
                         Ok(()) => {
                             state.completed = Some(intent);
-                            if matches!(intent, MobileIntent::UpdateProfile | MobileIntent::SaveProfile) {
+                            if subscription_affects_active {
                                 reset_subscription_results(&mut state, &mut checks, &mut claude_job);
                             }
                             if matches!(intent,MobileIntent::SelectNode|MobileIntent::ActivateProfile|MobileIntent::UpdateProfile
