@@ -93,6 +93,18 @@ JSON 每行使用 `{"schema":1,"command":"命令","data":...}` 外层。`--json`
 
 见[配置与检测命令](cli/maintenance.md#配置诊断与检测)。
 
+### 客户端更新
+
+默认只检查正式版。要包含预发布版本，先开启对应通道，再检查并安装：
+
+```sh
+cor config set update_prereleases true
+cor update check
+cor update install --yes
+```
+
+关闭预发布通道可执行 `cor config set update_prereleases false`。设置按用户保存，GUI 与 CLI 共用；版本选择、返回正式版及安装条件见[更新与后台自启](cli/maintenance.md#维护与后台自启)。
+
 ### 维护与后台自启
 
 见[更新、补全与自启命令](cli/maintenance.md#维护与后台自启)。

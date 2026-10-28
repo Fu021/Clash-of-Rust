@@ -111,6 +111,41 @@ fn assert_system_proxy_ports(store: &Store, port: u16) {
     }
 }
 
+async fn check_network_refresh(engine: &mut Engine, store: &Store) {
+    let path = store.runtime().join("config.yaml");
+    let raw = std::fs::read_to_string(&path).unwrap();
+    let settings = std::fs::read(store.root.join("settings.json")).unwrap();
+    let journal = std::fs::read(store.root.join("system-proxy.json")).ok();
+    let before = engine.poll(Scope::Home).await.unwrap();
+    let config: serde_json::Value = engine.api.get("configs").await.unwrap();
+    let proxies: clash_of_rust::api::Proxies = engine.api.get("proxies").await.unwrap();
+    engine.api.refresh_network(&raw).await.unwrap();
+    let after = engine.poll(Scope::Home).await.unwrap();
+    assert!(after.running);
+    assert_eq!(after.tun, before.tun);
+    assert_eq!(after.system_proxy, before.system_proxy);
+    let current: serde_json::Value = engine.api.get("configs").await.unwrap();
+    assert_eq!(current["mode"], config["mode"]);
+    let current: clash_of_rust::api::Proxies = engine.api.get("proxies").await.unwrap();
+    for (name, proxy) in proxies.proxies {
+        if proxy.kind == "Selector" && !proxy.now.is_empty() {
+            assert_eq!(current.proxies[&name].now, proxy.now);
+        }
+    }
+    assert_eq!(std::fs::read_to_string(path).unwrap(), raw);
+    assert_eq!(
+        std::fs::read(store.root.join("settings.json")).unwrap(),
+        settings
+    );
+    assert_eq!(
+        std::fs::read(store.root.join("system-proxy.json")).ok(),
+        journal
+    );
+    println!(
+        "PASS: network refresh preserves live mode, selectors, TUN, proxy ownership and disk settings"
+    );
+}
+
 #[cfg(target_os = "macos")]
 async fn check_macos_proxy_bypass_edits(engine: &mut Engine, store: &Store) {
     use clash_of_rust::{
@@ -357,6 +392,7 @@ async fn basic_system_proxy_and_tun() {
     );
     server.await.unwrap();
     println!("PASS: changing mixed port updates native proxy endpoints and SOCKS forwards traffic");
+    check_network_refresh(&mut engine, &store).await;
     engine.select_proxy_mode(ProxyMode::Tun).await.unwrap();
     let state = engine.poll(Scope::Home).await.unwrap();
     assert!(state.running && state.tun && !state.system_proxy);
@@ -391,6 +427,7 @@ async fn basic_system_proxy_and_tun() {
         "Unproxied traffic was not captured and routed by TUN"
     );
     println!("PASS: unproxied traffic captured by TUN");
+    check_network_refresh(&mut engine, &store).await;
     #[cfg(windows)]
     {
         // Preserve TUN preference, but discard every in-memory Engine/session

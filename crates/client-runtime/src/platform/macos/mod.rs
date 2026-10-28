@@ -7,7 +7,7 @@ use std::{
     ptr,
 };
 mod authorization;
-mod cf;
+pub(super) mod cf;
 pub use authorization::{administrator, run as run_command, shell_quote};
 use cf::{Owned, Ref};
 pub mod tun;

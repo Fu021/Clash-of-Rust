@@ -318,6 +318,13 @@ pub async fn run(engine: &mut Engine, profile: &std::path::Path) {
             );
         }
         result.expect("Protected DNS/HTTP must remain reachable");
+        if node == "node.fixture.test" && !fixed_blocked {
+            super::check_network_refresh(engine, &store).await;
+            assert!(engine.settings.claude_protection.is_some());
+            tokio::time::timeout(Duration::from_secs(30), protected_traffic(engine))
+                .await
+                .expect("Protected DNS/HTTP must work after network refresh");
+        }
         engine.stop().await.unwrap();
         engine.start_with_proxy_mode().await.unwrap();
         tokio::time::timeout(Duration::from_secs(30), protected_traffic(engine))

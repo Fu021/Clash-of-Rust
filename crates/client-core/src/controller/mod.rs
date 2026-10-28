@@ -609,12 +609,16 @@ impl Api {
         Ok(())
     }
     pub async fn reload(&self, payload: &str) -> Result<()> {
+        self.reload_config(payload, true).await
+    }
+    async fn reload_config(&self, payload: &str, force: bool) -> Result<()> {
         #[derive(Serialize)]
         struct Payload<'a> {
             payload: &'a str,
         }
         let mut url = self.url(&["configs"])?;
-        url.query_pairs_mut().append_pair("force", "true");
+        url.query_pairs_mut()
+            .append_pair("force", if force { "true" } else { "false" });
         Self::checked(
             self.request(Method::PUT, url)
                 .json(&Payload { payload })
@@ -623,6 +627,57 @@ impl Api {
         )
         .await?;
         Ok(())
+    }
+    /// Reapply only the current runtime configuration after the host reconnects.
+    /// The core flushes its interface cache and resets resolver connections on
+    /// reload. Keep inbound listeners, fake-IP mappings and live user choices.
+    pub async fn refresh_network(&self, payload: &str) -> Result<()> {
+        let config: Value = self.get("configs").await?;
+        let mode = config["mode"].as_str().unwrap_or_default();
+        ensure!(
+            matches!(mode, "rule" | "global" | "direct"),
+            "网络恢复时读取到无效运行模式"
+        );
+        let tun = config["tun"]["enable"]
+            .as_bool()
+            .context("网络恢复时未取得实际 TUN 状态")?;
+        let proxies: Proxies = self.get("proxies").await?;
+        let selectors: BTreeMap<_, _> = proxies
+            .proxies
+            .into_iter()
+            .filter(|(_, proxy)| proxy.kind == "Selector" && !proxy.now.is_empty())
+            .map(|(name, proxy)| (name, proxy.now))
+            .collect();
+        let mut payload: yaml_serde::Value = yaml_serde::from_str(payload)?;
+        ensure!(payload.is_mapping(), "运行配置必须是 YAML 对象");
+        payload["mode"] = yaml_serde::Value::from(mode);
+        if payload["tun"].is_null() {
+            payload["tun"] = yaml_serde::Value::Mapping(Default::default());
+        }
+        ensure!(payload["tun"].is_mapping(), "运行配置 TUN 格式无效");
+        payload["tun"]["enable"] = yaml_serde::Value::from(tun);
+        if let Some(groups) = payload["proxy-groups"].as_sequence_mut() {
+            for group in groups {
+                if group["type"].as_str() == Some("select")
+                    && let Some(selected) =
+                        group["name"].as_str().and_then(|name| selectors.get(name))
+                {
+                    group["default-selected"] = yaml_serde::Value::from(selected.to_string());
+                }
+            }
+        }
+        self.reload_config(&yaml_serde::to_string(&payload)?, false)
+            .await?;
+        for (group, node) in selectors {
+            self.select(&group, &node).await?;
+        }
+        Self::checked(
+            self.request(Method::POST, self.url(&["cache", "dns", "flush"])?)
+                .send()
+                .await?,
+        )
+        .await?;
+        self.close_connections().await
     }
     /// Query real upstream addresses; the controller endpoint bypasses fake-IP.
     /// Never fall back to the host's plaintext system resolver here.
@@ -1008,6 +1063,128 @@ impl Api {
 #[cfg(test)]
 mod tests {
     use super::*;
+    async fn recovery_controller(
+        responses: Vec<(&'static str, &'static str)>,
+    ) -> (Api, tokio::task::JoinHandle<Vec<String>>) {
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let api = Api::new(&Settings {
+            controller_port: listener.local_addr().unwrap().port(),
+            secret: "recovery-test-secret".into(),
+            ..Default::default()
+        })
+        .unwrap();
+        let server = tokio::spawn(async move {
+            let mut requests = Vec::new();
+            for (status, body) in responses {
+                let (mut socket, _) = listener.accept().await.unwrap();
+                let mut bytes = Vec::new();
+                loop {
+                    let mut buffer = [0; 4096];
+                    let count = socket.read(&mut buffer).await.unwrap();
+                    assert_ne!(count, 0);
+                    bytes.extend_from_slice(&buffer[..count]);
+                    if let Some(end) = bytes.windows(4).position(|part| part == b"\r\n\r\n") {
+                        let header = String::from_utf8_lossy(&bytes[..end]);
+                        let size = header
+                            .lines()
+                            .filter_map(|line| line.split_once(':'))
+                            .find(|(name, _)| name.eq_ignore_ascii_case("content-length"))
+                            .map_or(0, |(_, size)| size.trim().parse::<usize>().unwrap());
+                        if bytes.len() >= end + 4 + size {
+                            break;
+                        }
+                    }
+                }
+                let request = String::from_utf8(bytes).unwrap();
+                assert!(
+                    request
+                        .to_ascii_lowercase()
+                        .contains("authorization: bearer recovery-test-secret")
+                );
+                requests.push(request);
+                socket
+                    .write_all(
+                        format!(
+                            "HTTP/1.1 {status}\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+                            body.len()
+                        )
+                        .as_bytes(),
+                    )
+                    .await
+                    .unwrap();
+            }
+            requests
+        });
+        (api, server)
+    }
+
+    #[tokio::test]
+    async fn network_refresh_preserves_live_choices_tun_dns_and_inbound_listeners() {
+        let (api, server) = recovery_controller(vec![
+            ("200 OK", r#"{"mode":"global","tun":{"enable":true}}"#),
+            (
+                "200 OK",
+                r#"{"proxies":{"group":{"type":"Selector","now":"node-b"},"auto":{"type":"URLTest","now":"node-a"}}}"#,
+            ),
+            ("204 No Content", ""),
+            ("204 No Content", ""),
+            ("204 No Content", ""),
+            ("204 No Content", ""),
+        ])
+        .await;
+        let raw = "mode: rule\ntun: {enable: false, auto-route: true}\n\
+dns: {enable: true, nameserver: ['https://example.test/dns-query#group']}\n\
+proxy-groups:\n  - {name: group, type: select, proxies: [node-a, node-b]}\n\
+rules: ['MATCH,group']\n";
+        tokio::time::timeout(Duration::from_secs(5), api.refresh_network(raw))
+            .await
+            .unwrap()
+            .unwrap();
+        let requests = server.await.unwrap();
+        assert!(requests[0].starts_with("GET /configs "));
+        assert!(requests[1].starts_with("GET /proxies "));
+        assert!(requests[2].starts_with("PUT /configs?force=false "));
+        let (_, body) = requests[2].split_once("\r\n\r\n").unwrap();
+        let body: Value = serde_json::from_str(body).unwrap();
+        let next: yaml_serde::Value =
+            yaml_serde::from_str(body["payload"].as_str().unwrap()).unwrap();
+        let original: yaml_serde::Value = yaml_serde::from_str(raw).unwrap();
+        assert_eq!(next["mode"].as_str(), Some("global"));
+        assert_eq!(next["tun"]["enable"].as_bool(), Some(true));
+        assert_eq!(next["tun"]["auto-route"], original["tun"]["auto-route"]);
+        assert_eq!(next["dns"], original["dns"]);
+        assert_eq!(next["rules"], original["rules"]);
+        assert_eq!(
+            next["proxy-groups"][0]["default-selected"].as_str(),
+            Some("node-b")
+        );
+        assert!(requests[3].starts_with("PUT /proxies/group "));
+        assert!(requests[3].ends_with(r#"{"name":"node-b"}"#));
+        assert!(requests[4].starts_with("POST /cache/dns/flush "));
+        assert!(requests[5].starts_with("DELETE /connections "));
+        assert!(!requests.iter().any(|request| request.contains("fakeip")));
+    }
+
+    #[tokio::test]
+    async fn failed_network_reload_stops_before_selection_and_connection_changes() {
+        let (api, server) = recovery_controller(vec![
+            ("200 OK", r#"{"mode":"rule","tun":{"enable":false}}"#),
+            ("200 OK", r#"{"proxies":{}}"#),
+            ("400 Bad Request", r#"{"message":"reload rejected"}"#),
+        ])
+        .await;
+        assert!(
+            tokio::time::timeout(Duration::from_secs(5), api.refresh_network("mode: rule"))
+                .await
+                .unwrap()
+                .is_err()
+        );
+        let requests = server.await.unwrap();
+        assert_eq!(requests.len(), 3);
+        assert!(requests[2].starts_with("PUT /configs?force=false "));
+    }
+
     #[tokio::test]
     async fn protection_enable_closes_connections_before_dns_verification() {
         use tokio::io::{AsyncReadExt, AsyncWriteExt};

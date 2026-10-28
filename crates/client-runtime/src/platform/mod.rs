@@ -5,6 +5,7 @@ use serde::{Deserialize, Serialize};
 use std::path::Path;
 
 pub mod memory;
+pub(crate) mod network;
 pub mod notification;
 mod proxy_state;
 pub use proxy_state::{ProxyState, ProxyValue};

@@ -59,6 +59,7 @@ impl Engine {
             control_server: None,
             external_logs_until: None,
             view_revision: meta.view_revision,
+            network_monitor: Default::default(),
         }))
     }
 

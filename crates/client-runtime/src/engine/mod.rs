@@ -1,4 +1,5 @@
 mod control;
+mod recovery;
 use crate::control::Command as ControlCommand;
 use crate::{
     api::{Api, ConfigStatus, ConnectionStats, Proxies},
@@ -183,6 +184,7 @@ pub struct Engine {
     pub(crate) control_server: Option<crate::control::Server>,
     external_logs_until: Option<Instant>,
     pub(crate) view_revision: u64,
+    network_monitor: crate::control::network::Monitor,
 }
 
 #[derive(Clone, serde::Serialize, serde::Deserialize)]
@@ -313,6 +315,7 @@ impl Engine {
             control_server: None,
             external_logs_until: None,
             view_revision: 0,
+            network_monitor: Default::default(),
         })
     }
 
@@ -465,6 +468,10 @@ impl Engine {
         if self.running() {
             bail!("内核已启动");
         }
+        let routes = tokio::task::spawn_blocking(platform::network::snapshot)
+            .await?
+            .ok();
+        self.network_monitor.seed(routes);
         #[cfg(target_os = "macos")]
         if self
             .mac_tun
