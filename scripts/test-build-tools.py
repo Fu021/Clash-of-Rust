@@ -1048,7 +1048,12 @@ assert.equal(calls.length,2);
     def test_release_job_protocol_matches_workflow_display_names(self):
         workflow = (build.ROOT/'.github/workflows/release.yml').read_text()
         for name in release.PACKAGE_JOBS - set(release.PACKAGES):
-            self.assertIn('    name: '+name+'\n', workflow)
+            if name.startswith('Ubuntu 20.04-'):
+                self.assertIn('    name: Ubuntu 20.04-${{ matrix.arch }} installed GUI and TUN\n', workflow)
+                arch = name.removeprefix('Ubuntu 20.04-').split(' ', 1)[0]
+                self.assertIn('            arch: '+arch+'\n', workflow)
+            else:
+                self.assertIn('    name: '+name+'\n', workflow)
 
     def test_failed_cargo_json_preserves_human_diagnostics(self):
         message = json.dumps({'reason': 'compiler-message', 'message': {'rendered': 'error[E0308]: expected borrowed window'}})+'\n'

@@ -154,6 +154,15 @@ public class ProxyTunTest {
         });
         return matched.get();
     }
+    private static MainActivity resumedActivity() {
+        java.util.concurrent.atomic.AtomicReference<MainActivity> result=new java.util.concurrent.atomic.AtomicReference<>();
+        InstrumentationRegistry.getInstrumentation().runOnMainSync(()-> {
+            for (android.app.Activity activity:androidx.test.runner.lifecycle.ActivityLifecycleMonitorRegistry.getInstance()
+                    .getActivitiesInStage(androidx.test.runner.lifecycle.Stage.RESUMED))
+                if (activity instanceof MainActivity && activity.hasWindowFocus()) result.set((MainActivity)activity);
+        });
+        return result.get();
+    }
     private interface Condition { boolean ready() throws Exception; }
     private static boolean vpnActive(ConnectivityManager connectivity) {
         NetworkCapabilities capabilities=connectivity.getNetworkCapabilities(connectivity.getActiveNetwork());
@@ -477,6 +486,23 @@ public class ProxyTunTest {
                 },"vpn-route-check");
                 routes.setDaemon(true); routes.start();
                 try {
+                    MainActivity original=resumedActivity();
+                    assertNotNull("VPN Activity was not resumed before recreation",original);
+                    long generation=TunnelService.generation();
+                    String fixture=CoreBridge.config();
+                    InstrumentationRegistry.getInstrumentation().runOnMainSync(original::recreate);
+                    await("VPN Activity was not recreated",()-> {
+                        MainActivity replacement=resumedActivity();
+                        return replacement!=null && replacement!=original;
+                    });
+                    waitForAppWindow();
+                    assertTrue("Recreating the UI disconnected the VPN",TunnelService.connected());
+                    assertEquals("Recreating the UI restarted the VPN",generation,TunnelService.generation());
+                    assertTrue("Recreating the UI changed the active VPN route",vpnActive(connectivity));
+                    assertTrue("Recreating the UI stopped the process-owned core",CoreBridge.ready());
+                    // The test-only in-memory config is not persisted by the UI.
+                    CoreBridge.reload(fixture);
+                    tunCarriesSocket(controller,secret);
                     for (int handover=0;handover<5;handover++) {
                         long previousGeneration = TunnelService.generation();
                         TunnelService.start(context,true);

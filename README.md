@@ -5,6 +5,8 @@
 
 基于 mihomo 的原生 Rust 代理客户端。支持 **Windows（x64 / ARM64）**、**Debian/Ubuntu（amd64 / ARM64，Ubuntu 仅支持 22.04 及以上）**、**macOS 14 及以上（Intel / Apple Silicon）** 和 **Android 8.0 及以上（ARM64 / ARMv7 / x86_64）**。版本 **0.6.5**，更新内容见 [发布说明](docs/releases/0.6.5.md)。
 
+当前开发分支将 Linux 构建基线迁移至 Ubuntu 20.04，并增加旧系统安装验证；上面的 0.6.5 正式安装包仍以 Ubuntu 22.04 为最低基线。验证范围见[工作流](docs/workflows/release.md)。
+
 ## Features
 
 - **轻量**：Rust + Slint 原生界面，无需 WebView，页面数据按需加载。

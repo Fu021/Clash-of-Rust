@@ -14,7 +14,7 @@
 
 从修复分支发布时，选择该分支，填写其成功 CI 编号，设置 `check_only=false`、`prerelease=true`。流程照常验证九平台安装包与来源，最终以预发布标签公开，不更新稳定版 latest、不合并或删除来源分支。上传结束还会重新核对该来源分支头；期间分支前移则保留未公开草稿并失败。未显式选择预发布时，公开发布仍只接受 main 的 push CI。预发布与正式发布使用相同的发行签名要求，Android 不能用临时 CI 测试签名冒充发行签名。
 
-维护者委派给 Agent 的任务按[收尾规则](../../AGENTS.md#actions提交与发布)持续跟进：最终推送后等待该提交的全部必需 CI job 成功，再以其 `ci_run_id` 和 `check_only=true` 启动本流程。失败先定位最早失败步骤，修复后跟进对应提交的后续运行，不把已触发、排队或运行中视为完成。打包结束后核对各平台安装后验证、Ubuntu 兼容性、最终核验和九组安装包及 SHA256 附件，并确认没有创建或修改 Release；外部阻塞须明确说明。
+维护者委派给 Agent 的任务按[收尾规则](../../AGENTS.md#actions提交与发布)持续跟进：最终推送后等待该提交的全部必需 CI job 成功，日常验收以其 `ci_run_id` 和 `check_only=true` 启动本流程。经授权的正式版发布流程完成同提交的打包与安装验证后，不再在发布后追加不发布打包。失败先定位最早失败步骤，修复后跟进对应提交的后续运行，不把已触发、排队或运行中视为完成。打包结束后核对各平台安装后验证、Ubuntu 兼容性、最终核验和九组安装包及 SHA256 附件；不发布验收须确认没有创建或修改 Release，外部阻塞须明确说明。
 
 复盘和其他文档随功能改动纳入最终提交，再启动验证；完成后的运行编号、来源提交和附件结果写入最终汇报，不为补写成功记录再次推送。后续纯文档补充按[收尾规则](../../AGENTS.md#actions提交与发布)保留本地；确需修复代码时，以新提交重新完成 CI 与不发布打包。
 
@@ -23,15 +23,17 @@
 从启动到最终核验完成，来源分支必须仍指向该 CI 的提交；`publish-release.py` 在前置解析和最终核验时都会检查分支头。即使只是文档改动，也应等本轮打包结束后再推送，避免 `Source branch has changed`。测试包以本次工作流固定的提交为准，后续提交需另做验证。
 
 1. 六个平台获取并校验已有程序，再生成 Windows EXE、Linux DEB、macOS DMG。
-2. Windows 更新 Defender 检测库，逐个扫描安装包及未压缩的全部 EXE/DLL，再验证安装、服务注册、普通用户代理/TUN、更新安装路径、卸载与用户文件保留；PE 图标在打包阶段核验。扫描版本和逐文件 SHA256 写入 `package-receipt.json`。
-3. Linux 安装 DEB 后验证普通用户系统代理、HTTP 转发、TUN 接管与清理；最新版 Ubuntu 使用同一份 Ubuntu 22.04 DEB 再验证一次。
+2. Windows 更新 Defender 检测库，逐个扫描安装包及未压缩的全部 EXE/DLL，再验证安装、服务注册、普通用户代理/TUN、更新安装路径、卸载与用户文件保留；安装后以普通用户启动窗口，检查尺寸、GUI/CLI 共享状态和最小化/恢复。PE 图标在打包阶段核验。扫描版本和逐文件 SHA256 写入 `package-receipt.json`。
+3. Linux 使用 Ubuntu 20.04 构建的同一份 DEB：基线容器先做安装及 X11 窗口快速检查；Ubuntu 22.04 x64/ARM64、最新版 x64 与 Ubuntu 20.04 x64/ARM64 虚拟机分别验证安装后的 X11/Wayland 窗口、托盘、窗口重建、GUI/CLI 共用内核、图形授权取消/接受和代理/TUN。20.04 虚拟机要求 5.4 GA 内核，实际硬件仍需单独验收。结构、代理/TUN 不在同一环境重复运行。
 4. macOS 核验 App/DMG 版本、架构、资源及签名，启动安装后的 GUI/内核并验证代理/TUN；界面辅助包使用独立身份与 `LSUIElement`，连续重建界面 5 次，核对应用注册、Dock 最近应用条目及内核 PID。当前使用 ad-hoc 签名，没有 Developer ID 与 Apple 公证。
 5. Android 复用三种 ABI 的已编译 APK，检查签名、架构与 16 KiB 对齐；x86_64 最终包再运行代理/TUN 测试。`check_only` 保留固定开发签名，正式发布要求单独配置长期签名。
 6. 核对安装包、校验值、成功记录及来源后，正式模式才公开 Release；`check_only` 仅保留 Actions 附件。开发版本标记为 prerelease，不覆盖稳定版 latest。
 
+Ubuntu 18.04 未纳入此基线或兼容矩阵，不能从 20.04 的验证结果推断其受支持。
+
 只有最终发布 job 有 `contents: write`。发布工作流向 `scripts/build-installer.py --prebuilt` 传入已验证的 CI 产物；本地打包可传入按上述步骤生成的本地产物。打包器只校验与组装，不隐式调用 Cargo。
 
-平台检查分别集中在 `scripts/windows_ci.py`、`scripts/macos_ci.py` 和 Linux 的隔离网络夹具中；`scripts/test-release-package.py` 统一调度。Windows 安装、更新、卸载与 Defender 扫描复用同一模块，不再保留独立的命令行包装脚本。
+平台检查集中在 `scripts/windows_ci.py`、`scripts/macos_ci.py`、`scripts/linux_gui.py` 和 Linux 隔离网络夹具中；`scripts/test-release-package.py` 统一调度，`scripts/linux_ci.py` 负责基线容器和虚拟机。各 GUI 结果与失败日志保存在对应 `*-package-report-*` 附件中。
 
 ### Windows Defender 告警
 

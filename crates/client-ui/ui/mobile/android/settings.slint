@@ -3,7 +3,7 @@ import { MobileTypography } from "../shared/typography.slint";
 import { MobileData, MobileView, MobileActions, MobileIntent } from "../shared/state.slint";
 import { AndroidData, AndroidActions, AndroidIntent } from "state.slint";
 import { MText, MSmall, MHeading, MCard, MButton, MRow, MDivider, MSwitch, MField, MScroll, MProgress } from "../shared/controls.slint";
-import { AppearanceSettings, NetworkToggles, MaintenanceSettings } from "../shared/settings.slint";
+import { AppearanceSettings, NetworkToggles, MaintenanceSettings, SubscriptionUpdateSettings, GeoMaintenanceSettings } from "../shared/settings.slint";
 
 component AndroidNetwork inherits VerticalLayout {
     alignment: start; spacing: 10px;
@@ -64,8 +64,8 @@ export component AndroidSettings inherits PageSurface {
             AppearanceSettings { custom-font-size: false; } AndroidNetwork { } AndroidConnection { } MaintenanceSettings { } AndroidAbout { }
         }
         if root.width >= 760px: HorizontalLayout { spacing: 20px; width: root.width;
-            VerticalLayout { alignment: start; spacing: 20px; AppearanceSettings { custom-font-size: false; } AndroidConnection { } }
-            VerticalLayout { alignment: start; spacing: 20px; AndroidNetwork { } MaintenanceSettings { } AndroidAbout { } }
+            VerticalLayout { alignment: start; spacing: 20px; AppearanceSettings { custom-font-size: false; } AndroidConnection { } GeoMaintenanceSettings { } }
+            VerticalLayout { alignment: start; spacing: 20px; AndroidNetwork { } SubscriptionUpdateSettings { } AndroidAbout { } }
         }
     }
 }

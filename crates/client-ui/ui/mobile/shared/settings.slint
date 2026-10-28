@@ -48,7 +48,7 @@ export component NetworkToggles inherits VerticalLayout {
         toggled(value) => { MobileActions.request(MobileIntent.udp, value ? "true" : "false", ""); }
     }
 }
-export component MaintenanceSettings inherits VerticalLayout {
+export component SubscriptionUpdateSettings inherits VerticalLayout {
     alignment: start; spacing: 10px;
     MHeading { text: "订阅自动更新"; }
     MCard {
@@ -59,6 +59,9 @@ export component MaintenanceSettings inherits VerticalLayout {
         }
         MSmall { text: "仅更新远程订阅；失败保留原配置，保护期间跳过已锁定订阅。"; wrap: word-wrap; }
     }
+}
+export component GeoMaintenanceSettings inherits VerticalLayout {
+    alignment: start; spacing: 10px;
     MHeading { text: "测速与 Geo"; }
     MCard {
         MText { text: "定时测速"; }
@@ -71,4 +74,9 @@ export component MaintenanceSettings inherits VerticalLayout {
         MRow { title: "Geo 数据"; value: MobileData.geo-status; arrow: false; interactive: false; }
         MButton { text: "更新所有 Geo 数据"; busy: MobileData.geo-updating; enabled: !MobileData.working && !MobileData.geo-updating; clicked => { MobileActions.request(MobileIntent.update-geo, "", ""); } }
     }
+}
+export component MaintenanceSettings inherits VerticalLayout {
+    alignment: start; spacing: 10px;
+    SubscriptionUpdateSettings { }
+    GeoMaintenanceSettings { }
 }

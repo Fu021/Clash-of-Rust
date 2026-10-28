@@ -38,7 +38,8 @@ def current_commit():
 
 def constraints():
     paths = subprocess.check_output(['git', 'ls-files', 'Cargo.toml', 'apps/**/Cargo.toml',
-                                     'crates/**/Cargo.toml', '.cargo/*', 'apps/android/gradle.properties'],
+                                     'crates/**/Cargo.toml', '.cargo/*', 'apps/android/gradle.properties',
+                                     'resources/linux/ubuntu20.Dockerfile', 'scripts/linux_ci.py'],
                                     cwd=ROOT, text=True).splitlines()
     return {path: hashlib.sha256(original(path)).hexdigest() for path in paths}
 
@@ -242,6 +243,7 @@ def go_version(value):
 
 
 def resolve(directory):
+    from linux_ci import resolve_inputs as linux_inputs
     directory.mkdir(parents=True, exist_ok=True)
     previous = manifest(directory) or {}
     baseline = {path: hashlib.sha256(original(path)).hexdigest() for path in FILES}
@@ -254,7 +256,8 @@ def resolve(directory):
     queries = {'mihomo': lambda: stable_release('MetaCubeX/mihomo'),
                'geo': lambda: stable_release('MetaCubeX/meta-rules-dat'),
                'nsis': nsis_release, 'gradle': gradle_release,
-               'tailscale': lambda: {'version': read_json('https://pkgs.tailscale.com/stable/?mode=json')['Version']}}
+               'tailscale': lambda: {'version': read_json('https://pkgs.tailscale.com/stable/?mode=json')['Version']},
+               'linux': linux_inputs}
     with ThreadPoolExecutor(max_workers=len(queries) + 2) as workers:
         rust_warnings = []
         rust = workers.submit(refresh_command, ['cargo', 'update'], ('Cargo.lock',), rust_warnings)
