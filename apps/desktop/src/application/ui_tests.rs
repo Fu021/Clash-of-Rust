@@ -1744,27 +1744,126 @@ fn failed_subscription_update_keeps_measurements_and_reports_until_a_successful_
 }
 
 #[test]
+fn background_subscription_update_invalidates_network_results_without_overwriting_rule_drafts() {
+    use clash_of_rust::claude_check::{Environment, Report};
+    let mut app = fixture(Page::Rules);
+    let _ = app.ui_intent(Intent::RuleAdd, "", "");
+    let _ = app.ui_intent(Intent::RulePayload, "unsaved.test", "");
+    let draft = app.rule_state.draft.clone();
+    let payload = app.rule_state.editor.as_ref().unwrap().payload.clone();
+    app.node_delays.insert("Test".into(), 42);
+    app.claude.reports[0] = Some(Report::new(Environment::Core, "old report"));
+    let generation = app.delay_generation;
+    let mut reply = synchronized_reply(&app);
+    reply.profiles.as_mut().unwrap()[0].updated += 60;
+    assert!(
+        !reply.profile_updated,
+        "background refresh has no GUI action"
+    );
+    let _ = app.update(Message::Finished(Box::new(reply)));
+    assert!(app.node_delays.is_empty());
+    assert!(app.claude.reports.iter().all(Option::is_none));
+    assert_ne!(app.delay_generation, generation);
+    assert_eq!(app.rule_state.draft, draft);
+    assert_eq!(app.rule_state.editor.as_ref().unwrap().payload, payload);
+}
+
+#[test]
 fn console_changes_refresh_profiles_and_clean_inputs_but_preserve_typed_drafts() {
     let mut app = fixture(Page::Settings);
     let mut reply = synchronized_reply(&app);
     reply.settings.mixed_port = 12345;
     reply.settings.delay_interval_minutes = 17;
+    reply.settings.subscription_update_interval_minutes = 720;
     reply.profiles.as_mut().unwrap()[0].name = "Renamed by CLI".into();
     let _ = app.update(Message::Finished(Box::new(reply)));
     assert_eq!(app.mixed_port, "12345");
     assert_eq!(app.interval_input, "17");
+    assert_eq!(app.subscription_interval_input, "720");
     assert_eq!(app.profiles[0].name, "Renamed by CLI");
     assert!(app.backend_remote);
 
     app.mixed_port = "12346".into();
     app.interval_input = "25".into();
+    app.subscription_interval_input = "90".into();
     let mut reply = synchronized_reply(&app);
     reply.settings.mixed_port = 12347;
     reply.settings.delay_interval_minutes = 30;
+    reply.settings.subscription_update_interval_minutes = 180;
     let _ = app.update(Message::Finished(Box::new(reply)));
     assert_eq!(app.mixed_port, "12346");
     assert_eq!(app.interval_input, "25");
+    assert_eq!(app.subscription_interval_input, "90");
     assert_eq!(app.settings.mixed_port, 12347);
+}
+
+#[test]
+fn protection_locks_rule_controls_and_proxy_mode_without_a_warning_or_draft_change() {
+    let mut app = fixture(Page::Rules);
+    app.claude.protection_pending = Some(true);
+    let draft = app.rule_state.draft.clone();
+    for intent in [
+        Intent::RuleAdd,
+        Intent::RuleApply,
+        Intent::RuleDiscard,
+        Intent::RuleSelect,
+        Intent::RuleProfile,
+        Intent::RuleCollapse,
+        Intent::Query,
+        Intent::ListPage,
+    ] {
+        let _ = app.ui_intent(intent, "blocked", "");
+    }
+    assert_eq!(app.rule_state.draft, draft);
+    assert!(app.query.is_empty());
+    assert!(!app.rule_state.has_editor());
+    assert!(!app.notice_visible);
+    app.page = Page::Home;
+    for mode in ["0", "1", "2"] {
+        let _ = app.ui_intent(Intent::ProxyMode, mode, "");
+    }
+    assert!(!app.notice_visible);
+    assert!(app.confirmation.is_none());
+    app.claude.protection_pending = None;
+    app.page = Page::Rules;
+    let _ = app.ui_intent(Intent::Query, "available", "");
+    assert_eq!(app.query, "available");
+}
+
+#[test]
+fn entering_proxies_pins_and_expands_the_actual_group_without_reopening_a_manual_collapse() {
+    let mut app = fixture(Page::Proxies);
+    app.focus_active_group = true;
+    let mut reply = synchronized_reply(&app);
+    reply.scope = Scope::Proxies;
+    reply.snapshot = Some(Snapshot {
+        running: true,
+        mode: "rule".into(),
+        active_group: Some("ZZ Active".into()),
+        proxies: serde_json::from_value(serde_json::json!({"proxies": {
+            "AA Unused": {"type":"Selector", "now":"Leaf", "all":["Leaf"]},
+            "ZZ Active": {"type":"Selector", "now":"Leaf", "all":["Leaf"]},
+            "Leaf": {"type":"Trojan"}
+        }}))
+        .unwrap(),
+        ..Default::default()
+    });
+    let _ = app.update(Message::Finished(Box::new(reply)));
+    let (_, groups) = app.proxy_rows();
+    assert_eq!(groups[0].0.id.as_str(), "ZZ Active");
+    assert!(groups[0].0.expanded);
+    assert_eq!(groups[1].0.id.as_str(), "AA Unused");
+    app.expanded.remove("ZZ Active");
+    let mut reply = synchronized_reply(&app);
+    reply.scope = Scope::Proxies;
+    reply.snapshot = Some(app.snapshot.clone());
+    let _ = app.update(Message::Finished(Box::new(reply)));
+    assert!(!app.proxy_rows().1[0].0.expanded);
+    app.query = "Unused".into();
+    assert_eq!(app.proxy_rows().1[0].0.id.as_str(), "AA Unused");
+    app.snapshot.active_group = None;
+    app.query.clear();
+    assert_eq!(app.proxy_rows().1[0].0.id.as_str(), "AA Unused");
 }
 
 #[test]

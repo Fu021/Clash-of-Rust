@@ -37,6 +37,14 @@ pub fn start<'a>(mode: &str, default: &'a str) -> &'a str {
 pub fn terminal(name: &str) -> bool {
     matches!(name, "DIRECT" | "REJECT" | "REJECT-DROP" | "PASS")
 }
+pub fn group<'a>(mode: &str, default: &'a str, proxies: &Proxies) -> Option<&'a str> {
+    let name = start(mode, default);
+    proxies
+        .proxies
+        .get(name)
+        .filter(|group| !group.all.is_empty())
+        .map(|_| name)
+}
 /// Use the already loaded proxy page without fetching it a second time.
 pub fn from_snapshot(root: &str, proxies: &Proxies) -> Option<String> {
     let mut name = root;

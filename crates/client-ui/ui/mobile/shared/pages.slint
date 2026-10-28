@@ -21,7 +21,7 @@ component StatusCard inherits MCard {
     MText { text: MobileData.node; color: Theme.accent; font-size: MobileTypography.font-size(20); font-weight: 600; }
     MSmall { text: MobileData.profile; }
     HorizontalLayout { spacing: MobileTypography.small-gap;
-        MButton { text: MobileData.vpn-connected ? "断开连接" : MobileData.vpn-pending ? "取消连接" : "连接 VPN"; primary: true; busy: MobileData.working; enabled: !MobileData.working;
+        MButton { text: MobileData.vpn-connected ? "断开连接" : MobileData.vpn-pending ? "取消连接" : "连接 VPN"; primary: true; busy: MobileData.working; enabled: !MobileData.working && !MobileData.protected && !MobileData.protection-pending;
             clicked => { MobileActions.request(MobileData.vpn-connected || MobileData.vpn-pending ? MobileIntent.disconnect : MobileIntent.connect, "", ""); }
         }
         MButton { text: MobileData.core-running ? "选择节点" : "重启内核";
@@ -224,18 +224,18 @@ component RulesToolbar inherits VerticalLayout {
     property <bool> short: root.available-height < 420px || MobileView.keyboard-inset > 0px;
     alignment: start; spacing: MobileTypography.gap; vertical-stretch: 0;
     HorizontalLayout { spacing: MobileTypography.small-gap;
-        MSelect { options: MobileData.rule-profiles; value: MobileData.rule-profile; selected(index, value) => { MobileActions.request(MobileIntent.rule-select, value, "profile"); } }
+        MSelect { enabled: !MobileData.protected && !MobileData.protection-pending; options: MobileData.rule-profiles; value: MobileData.rule-profile; selected(index, value) => { MobileActions.request(MobileIntent.rule-select, value, "profile"); } }
         MTag { text: MobileData.rule-dirty ? "尚未应用" : "已载入"; tone: MobileData.rule-dirty ? 2 : 4; }
     }
     MCard {
         vertical-padding: root.short ? 0px : MobileTypography.small-gap;
         gap: MobileTypography.small-gap * shortcuts.opacity;
-        MRow { title: "快捷规则"; value: MobileView.shortcuts-open ? "收起" : "展开"; expandable: true; expanded: MobileView.shortcuts-open;
+        MRow { interactive: !MobileData.protected && !MobileData.protection-pending; title: "快捷规则"; value: MobileView.shortcuts-open ? "收起" : "展开"; expandable: true; expanded: MobileView.shortcuts-open;
             clicked => { MobileView.shortcuts-open = !MobileView.shortcuts-open; }
         }
         shortcuts := Disclosure { expanded: MobileView.shortcuts-open;
             if shortcuts.mounted: VerticalLayout { alignment: start; spacing: MobileTypography.small-gap;
-                for title[i] in MobileData.shortcuts: MSwitch { title: title; checked: MobileData.shortcut-values[i];
+                for title[i] in MobileData.shortcuts: MSwitch { enabled: !MobileData.protected && !MobileData.protection-pending; title: title; checked: MobileData.shortcut-values[i];
                     toggled(value) => { MobileActions.request(MobileIntent.rule-shortcut, "" + i, value ? "true" : "false"); }
                 }
             }
@@ -243,14 +243,14 @@ component RulesToolbar inherits VerticalLayout {
     }
     GridLayout { spacing: MobileTypography.small-gap;
         property <bool> narrow: root.width < 420px || Theme.text-scale > 1.25;
-        MField { col: 0; row: 0; colspan: parent.narrow ? 2 : 1;
+        MField { enabled: !MobileData.protected && !MobileData.protection-pending; col: 0; row: 0; colspan: parent.narrow ? 2 : 1;
             placeholder: "搜索规则"; text <=> MobileView.query; edited(value) => { MobileActions.request(MobileIntent.query, "rules", value); } }
-        MSelect { col: parent.narrow ? 0 : 1; row: parent.narrow ? 1 : 0;
+        MSelect { enabled: !MobileData.protected && !MobileData.protection-pending; col: parent.narrow ? 0 : 1; row: parent.narrow ? 1 : 0;
             width: parent.narrow ? max(100px, (parent.width - MobileTypography.small-gap) / 2) : 100px; horizontal-stretch: 0;
             options: ["全部来源", "自定义", "快捷规则", "订阅"]; value: MobileView.rule-source;
             selected(index, value) => { MobileView.rule-source = value; MobileActions.request(MobileIntent.rule-filter, value, ""); }
         }
-        MButton { col: parent.narrow ? 1 : 2; row: parent.narrow ? 1 : 0;
+        MButton { enabled: !MobileData.protected && !MobileData.protection-pending; col: parent.narrow ? 1 : 2; row: parent.narrow ? 1 : 0;
             text: "+ 新建"; primary: true; width: parent.narrow ? max(88px, (parent.width - MobileTypography.small-gap) / 2) : 88px; horizontal-stretch: 0;
             clicked => { MobileView.selected-id = ""; MobileView.rule-kind = "DOMAIN-SUFFIX"; MobileView.rule-policy = "DIRECT"; MobileView.rule-position = "1";
                 MobileView.rule-payload = ""; MobileView.rule-raw = ""; MobileView.rule-text-mode = false; MobileView.rule-no-resolve = false; MobileView.rule-enabled = true; MobileView.draft-dirty = false; MobileView.detail = 2; }
@@ -266,7 +266,7 @@ component RulesRow inherits MCard {
     callback select();
     select => { MobileView.rule-selected = true; MobileView.selected-rule = root.item; MobileView.selected-id = root.item.id; MobileView.rule-position = root.item.position; }
     HorizontalLayout { spacing: MobileTypography.small-gap; cross-axis-alignment: center;
-        MDragHandle { row-height: root.height + 12px; enabled: !root.floating && !MobileData.working && !MobileData.protected && !MobileData.protection-pending;
+        MDragHandle { row-height: root.height + 12px; enabled: !MobileData.protected && !MobileData.protection-pending && !root.floating && !MobileData.working;
             started => { root.select(); MobileView.rule-drag-id = root.item.id; MobileView.rule-drag-target = root.item.id; }
             dragged(delta) => { MobileView.rule-drag-target = MobileData.rules[clamp(root.row-index + delta, 0, MobileData.rules.length - 1)].id; }
             dropped(delta) => {
@@ -280,7 +280,7 @@ component RulesRow inherits MCard {
             MSmall { text: root.item.kind + " · " + root.item.policy + (root.item.enabled ? "" : " · 已停用"); }
             MSmall { text: "来源：" + root.item.source; }
         }
-        MButton { text: ""; accessible-role: button; accessible-label: "规则详情与操作"; width: 48px; horizontal-stretch: 0; enabled: !root.floating;
+        MButton { text: ""; accessible-role: button; accessible-label: "规则详情与操作"; width: 48px; horizontal-stretch: 0; enabled: !MobileData.protected && !MobileData.protection-pending && !root.floating;
             Image { source: @image-url("../../icons/chevron-right.svg"); colorize: Theme.secondary; width: 18px; height: 18px;
                 x: (parent.width - self.width) / 2; y: (parent.height - self.height) / 2;
             }
@@ -296,19 +296,20 @@ component RulesFooter inherits GridLayout {
         col: 0; row: 0; compact: true; horizontal-stretch: root.wide ? 0 : 1;
         alignment: root.wide ? start : center;
         status: MobileData.rule-page;
-        previous-enabled: MobileData.rule-previous; next-enabled: MobileData.rule-next;
+        previous-enabled: !MobileData.protected && !MobileData.protection-pending && MobileData.rule-previous; next-enabled: !MobileData.protected && !MobileData.protection-pending && MobileData.rule-next;
         turn(direction) => { MobileActions.request(MobileIntent.rule-page, "" + direction, ""); }
     }
     HorizontalLayout {
         col: root.wide ? 1 : 0; row: root.wide ? 0 : 1;
         alignment: root.wide ? end : stretch; spacing: MobileTypography.small-gap;
         MButton { text: "放弃修改"; min-width: max(100px, MobileTypography.font-size(15) * 4 + 20px); horizontal-stretch: root.wide ? 0 : 1;
-            enabled: MobileData.rule-dirty && !MobileData.working; clicked => { MobileView.pending-page = -1; MobileView.pending-detail = 0; MobileView.detail = 12; } }
+            enabled: !MobileData.protected && !MobileData.protection-pending && MobileData.rule-dirty && !MobileData.working; clicked => { MobileView.pending-page = -1; MobileView.pending-detail = 0; MobileView.detail = 12; } }
         MButton { text: "应用修改"; min-width: max(100px, MobileTypography.font-size(15) * 4 + 20px); horizontal-stretch: root.wide ? 0 : 1;
-            primary: true; enabled: MobileData.rule-dirty && !MobileData.working; clicked => { MobileActions.request(MobileIntent.rule-apply, "", ""); } }
+            primary: true; enabled: !MobileData.protected && !MobileData.protection-pending && MobileData.rule-dirty && !MobileData.working; clicked => { MobileActions.request(MobileIntent.rule-apply, "", ""); } }
     }
 }
 export component MobileRules inherits PageSurface {
+    locked: MobileData.protected || MobileData.protection-pending;
     property <RuleItem> drag-item;
     property <length> row-extent: 120px;
     property <length> toolbar-extent: header.header-height;
@@ -350,7 +351,7 @@ export component MobileRules inherits PageSurface {
             }
             gesture := ListReorderGesture {
                 x: 0px; y: 0px; height: list.visible-height;
-                enabled: !MobileData.working && !MobileData.protected && !MobileData.protection-pending && !MobileView.modal;
+                enabled: !MobileData.protected && !MobileData.protection-pending && !MobileData.working && !MobileView.modal;
                 cancel-requested: MobileView.rule-drag-id == "";
                 context: list.content-key + "/" + MobileView.detail + "/" + (root.width / 1px) + "/" + Theme.text-scale;
                 row-count: MobileData.rules.length; row-height: root.row-extent;

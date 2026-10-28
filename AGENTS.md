@@ -23,7 +23,7 @@
 
 ## 任务收尾与失败复盘
 
-- 新增功能、完成 Bug 修复及公开 Release/Pre-release 前执行[循环审查](docs/loop-workflow.md)：检查功能、UI、`cor`、各端及 GUI/CLI 一致性，修复并验证后再查，直到完整一轮无新增可落实问题；如实记录未验证项与阻塞。
+- 新增功能、完成 Bug 修复及公开 Release/Pre-release 前执行[循环审查](docs/loop-workflow.md)：检查功能、UI、`cor`、各端及 GUI/CLI 一致性，修复并验证后再查，直到完整一轮无新增可落实问题。用户说“loop 工作流”即包含该文的统一收尾：脚本审查、文档精简与更新、复盘、仓库清洁及适用的提交验证；如实记录未验证项与阻塞。
 - 收尾复查 diff、命令结果、未验证项与[同类风险](docs/agent-failures/README.md)，更新[最近复盘](docs/agent-failures/reviews.md)；新模式归主题，已有模式不重复。
 - 精简文档后执行 `git diff --check`、`git status --short`，仅保留预期改动，无生成物或临时文件。
 

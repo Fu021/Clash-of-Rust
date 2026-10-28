@@ -83,6 +83,18 @@ export component SettingsPage inherits PageSurface {
                 }
             }
             SettingsSection {
+                title: "订阅自动更新";
+                ContentPanel {
+                    HorizontalLayout {
+                        cross-axis-alignment: center; spacing: Theme.content-gap;
+                        Field { text <=> UiData.subscription-interval; width: 100px; horizontal-stretch: 0; edited(value) => { UiActions.dispatch(Intent.subscription-interval-input, value, ""); } }
+                        Caption { text: "分钟 · 0 关闭 · 默认 360"; }
+                        ActionButton { text: "保存间隔"; enabled: !UiData.working; clicked => { UiActions.dispatch(Intent.save-subscription-interval, "", ""); } }
+                    }
+                    Paragraph { text: "仅更新远程订阅；失败保留原配置，保护期间跳过已锁定订阅。"; font-size: Theme.detail-size; color: Theme.secondary; }
+                }
+            }
+            SettingsSection {
                 title: "定时测速";
                 RowPanel {
                     Field { text <=> UiData.interval; width: 100px; horizontal-stretch: 0; edited(value) => { UiActions.dispatch(Intent.interval-input, value, ""); } }

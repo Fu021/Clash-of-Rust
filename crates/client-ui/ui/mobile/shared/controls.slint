@@ -272,11 +272,13 @@ export component MField inherits Rectangle {
     if input.text == "": MSmall { x: 12px; width: parent.width - 24px; height: parent.height; text: root.placeholder; }
 }
 export component MSelect inherits Rectangle {
+    in property <bool> enabled: true;
+    changed enabled => { if !root.enabled { popup.close(); } }
     in property <[string]> options;
     in property <string> value;
     callback selected(int, string);
     height: button.height; vertical-stretch: 0; min-width: 0px; preferred-width: 0px; horizontal-stretch: 1;
-    button := MButton { width: parent.width; text: root.value; dropdown: true; clicked => { popup.show(); } }
+    button := MButton { width: parent.width; text: root.value; dropdown: true; enabled: root.enabled; clicked => { popup.show(); } }
     popup := PopupWindow {
         y: root.height + 4px; width: max(root.width, 200px);
         height: min(300px, root.options.length * 52px + 16px);
@@ -284,6 +286,7 @@ export component MSelect inherits Rectangle {
         Rectangle { entrance := Entrance { } opacity: entrance.progress; background: Theme.surface; border-radius: 8px; border-width: 1px; border-color: Theme.line;
             MScroll { VerticalLayout { alignment: start; spacing: 4px; padding: MobileTypography.small-gap;
                 for option[i] in root.options: MButton { width: popup.width - 16px; text: option; selected: option == root.value;
+                    enabled: root.enabled;
                     clicked => { root.selected(i, option); popup.close(); }
                 }
             } }

@@ -50,6 +50,15 @@ export component NetworkToggles inherits VerticalLayout {
 }
 export component MaintenanceSettings inherits VerticalLayout {
     alignment: start; spacing: 10px;
+    MHeading { text: "订阅自动更新"; }
+    MCard {
+        MSmall { text: "分钟 · 0 关闭 · 默认 360"; wrap: word-wrap; }
+        HorizontalLayout { cross-axis-alignment: center; spacing: MobileTypography.gap;
+            MField { text <=> MobileData.subscription-interval; enabled: !MobileData.working; edited(value) => { MobileView.subscription-interval-dirty = true; } }
+            MButton { text: "保存"; enabled: !MobileData.working; clicked => { MobileActions.request(MobileIntent.subscription-interval, MobileData.subscription-interval, ""); } }
+        }
+        MSmall { text: "仅更新远程订阅；失败保留原配置，保护期间跳过已锁定订阅。"; wrap: word-wrap; }
+    }
     MHeading { text: "测速与 Geo"; }
     MCard {
         MText { text: "定时测速"; }

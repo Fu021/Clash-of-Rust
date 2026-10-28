@@ -12,6 +12,24 @@ slint::slint! {
     import { ListView, ListHeader, MField, MDragHandle } from "../ui/mobile/shared/controls.slint";
     import { RuleDragHandle } from "../ui/components/rule-drag.slint";
     import { ListReorderGesture, ListReorderPreview } from "../ui/components/list-reorder.slint";
+    import { PageSurface } from "../ui/components/motion.slint";
+
+    export component LockedPageProbe inherits Window {
+        preferred-width: 300px; preferred-height: 240px;
+        in property <bool> locked;
+        out property <int> clicks;
+        out property <length> scroll-y <=> list.content-y;
+        PageSurface {
+            locked: root.locked;
+            list := ListView {
+                width: parent.width; height: parent.height;
+                for index in 10: Rectangle {
+                    height: 80px;
+                    TouchArea { clicked => { root.clicks += 1; } }
+                }
+            }
+        }
+    }
 
     export component MobileListProbe inherits Window {
         preferred-width: 300px; preferred-height: 240px;
@@ -623,4 +641,46 @@ fn mobile_list_stacks_rows_and_keeps_sparse_content_at_the_top() {
     frame(&adapter, 300, 600);
     assert!(search.get_header_visible_height() >= 48.);
     search.hide().unwrap();
+    let locked = LockedPageProbe::new().unwrap();
+    adapter.set_size(slint::PhysicalSize::new(300, 240));
+    locked.show().unwrap();
+    frame(&adapter, 300, 240);
+    let click = || {
+        for event in [
+            WindowEvent::PointerPressed {
+                position: LogicalPosition::new(20., 20.),
+                button: PointerEventButton::Left,
+            },
+            WindowEvent::PointerReleased {
+                position: LogicalPosition::new(20., 20.),
+                button: PointerEventButton::Left,
+            },
+        ] {
+            locked.window().dispatch_event(event);
+        }
+    };
+    click();
+    assert_eq!(locked.get_clicks(), 1);
+    locked.set_locked(true);
+    frame(&adapter, 300, 240);
+    click();
+    locked
+        .window()
+        .dispatch_event(WindowEvent::PointerScrolled {
+            position: LogicalPosition::new(20., 20.),
+            delta_x: 0.,
+            delta_y: -80.,
+        });
+    frame(&adapter, 300, 240);
+    assert_eq!(
+        locked.get_clicks(),
+        1,
+        "locked desktop/mobile pages must swallow pointer input"
+    );
+    assert_eq!(locked.get_scroll_y(), 0., "locked pages must not scroll");
+    locked.set_locked(false);
+    frame(&adapter, 300, 240);
+    click();
+    assert_eq!(locked.get_clicks(), 2);
+    locked.hide().unwrap();
 }

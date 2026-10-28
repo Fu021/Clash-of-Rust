@@ -24,6 +24,7 @@ pub(super) enum Action {
     ReputationKey(Option<String>),
     Autostart(bool),
     DelayInterval(u32),
+    SubscriptionInterval(u32),
     NodeSort(NodeSort),
     Import(String, String),
     EditProfile(String, String, String),
@@ -308,6 +309,14 @@ pub(super) async fn execute(
                 };
                 engine.save_settings(settings).await?;
                 Ok("定时测速间隔已保存".into())
+            }
+            Action::SubscriptionInterval(minutes) => {
+                let settings = Settings {
+                    subscription_update_interval_minutes: minutes,
+                    ..engine.settings.clone()
+                };
+                engine.save_settings(settings).await?;
+                Ok("订阅自动更新间隔已保存".into())
             }
             Action::NodeSort(node_sort) => {
                 let settings = Settings {

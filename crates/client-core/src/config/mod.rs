@@ -134,6 +134,7 @@ pub struct Settings {
     pub claude_protection: Option<std::sync::Arc<crate::claude_check::protection::Protection>>,
     pub ip_reputation_key: Option<String>,
     pub delay_interval_minutes: u32,
+    pub subscription_update_interval_minutes: u32,
     pub active_profile: Option<String>,
     pub run_mode: String,
     pub proxy_mode: crate::model::ProxyMode,
@@ -175,6 +176,7 @@ impl Default for Settings {
             claude_protection: None,
             ip_reputation_key: None,
             delay_interval_minutes: 5,
+            subscription_update_interval_minutes: 360,
             active_profile: None,
             run_mode: "rule".into(),
             proxy_mode: crate::model::ProxyMode::Off,
@@ -344,6 +346,10 @@ impl Settings {
         if self.delay_interval_minutes > 1440 {
             bail!("定时测速间隔应为 0–1440 分钟，0 表示关闭");
         }
+        ensure!(
+            self.subscription_update_interval_minutes <= 10080,
+            "订阅更新间隔应为 0–10080 分钟，0 表示关闭"
+        );
         if self.controller_port == 0
             || self.mixed_port == 0
             || self.controller_port == self.mixed_port
@@ -374,7 +380,7 @@ impl Settings {
     }
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Profile {
     pub id: String,
     pub name: String,

@@ -20,6 +20,7 @@ pub struct Snapshot {
     pub version: String,
     pub mode: String,
     pub active_node: Option<String>,
+    pub active_group: Option<String>,
     pub tun: bool,
     pub system_proxy: bool,
     pub proxies: Proxies,

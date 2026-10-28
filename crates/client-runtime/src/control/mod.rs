@@ -6,6 +6,7 @@ mod dispatch;
 pub use background::helper_main as background_helper_main;
 mod gui;
 mod mutations;
+mod subscriptions;
 mod transport;
 use crate::{
     assets::GeoManifest,

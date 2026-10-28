@@ -59,9 +59,9 @@ export component HomePage inherits PageSurface {
                 HorizontalLayout { cross-axis-alignment: center;
                     spacing: Theme.content-gap;
                     Caption { text: "代理模式"; horizontal-stretch: 1; }
-                    ActionButton { text: "系统代理"; enabled: UiData.running && !UiData.working; selected: UiData.proxy-mode == 0; clicked => { UiActions.dispatch(Intent.proxy-mode, "0", ""); } }
-                    ActionButton { text: "TUN"; enabled: UiData.running && !UiData.working; selected: UiData.proxy-mode == 1; clicked => { UiActions.dispatch(Intent.proxy-mode, "1", ""); } }
-                    ActionButton { text: "关闭"; enabled: UiData.running && !UiData.working; selected: UiData.proxy-mode == 2; clicked => { UiActions.dispatch(Intent.proxy-mode, "2", ""); } }
+                    ActionButton { text: "系统代理"; enabled: UiData.running && !UiData.working && !UiData.protected && !UiData.protection-pending; selected: UiData.proxy-mode == 0; clicked => { UiActions.dispatch(Intent.proxy-mode, "0", ""); } }
+                    ActionButton { text: "TUN"; enabled: UiData.running && !UiData.working && !UiData.protected && !UiData.protection-pending; selected: UiData.proxy-mode == 1; clicked => { UiActions.dispatch(Intent.proxy-mode, "1", ""); } }
+                    ActionButton { text: "关闭"; enabled: UiData.running && !UiData.working && !UiData.protected && !UiData.protection-pending; selected: UiData.proxy-mode == 2; clicked => { UiActions.dispatch(Intent.proxy-mode, "2", ""); } }
                 }
             }
             ContentPanel {

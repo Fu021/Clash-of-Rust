@@ -9,7 +9,7 @@ export enum MobileIntent {
     rule-select, rule-edit, rule-add, rule-save, rule-move, rule-drop, rule-enable, rule-restore, rule-filter, rule-delete, rule-apply, rule-discard,
     rule-shortcut, log-level, clear-logs, export-logs, probe, dns,
     site-start, site-cancel, site-category, site-filter, site-retest, site-probe, site-detail, claude-start, claude-cancel, claude-key, claude-protection, export-report,
-    appearance, accent, text-scale, dns-override, ipv6, udp, save-ports, interval, update-geo, check-update, install-update, cancel-update, open-release, update-prereleases, fake-ip, fake-ip-add, fake-ip-remove, fake-ip-restore-defaults,
+    appearance, accent, text-scale, dns-override, ipv6, udp, save-ports, interval, subscription-interval, update-geo, check-update, install-update, cancel-update, open-release, update-prereleases, fake-ip, fake-ip-add, fake-ip-remove, fake-ip-restore-defaults,
 }
 export global MobileActions { callback request(MobileIntent, string, string); }
 
@@ -90,6 +90,7 @@ export global MobileData {
     in-out property <string> dns-result: "尚未查询";
     in-out property <string> mixed-port: "7897";
     in-out property <string> interval: "0";
+    in-out property <string> subscription-interval: "360";
 }
 
 // Navigation and editing state is separate from both domain and platform state.
@@ -105,6 +106,7 @@ export global MobileView {
     in-out property <string> connection-sort: "下载速度 ↓";
     in-out property <string> log-level: "全部等级";
     in-out property <bool> interval-dirty;
+    in-out property <bool> subscription-interval-dirty;
     in-out property <bool> shortcuts-open;
     in-out property <bool> rule-selected;
     in-out property <RuleItem> selected-rule;

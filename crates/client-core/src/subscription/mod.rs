@@ -4,6 +4,7 @@ use anyhow::{Context, Result, bail};
 use reqwest::Url;
 use std::time::Duration;
 mod info;
+pub mod schedule;
 pub use info::summary;
 
 const LIMIT: usize = 10 * 1024 * 1024;

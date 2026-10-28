@@ -21,7 +21,7 @@ export enum Intent {
     appearance, text-scale, accent-picker, accent-color, tray-speed, dns-override, fake-ip,
     fake-ip-editor, fake-ip-input, fake-ip-add, fake-ip-remove, fake-ip-restore-defaults, ipv6, udp,
     autostart, mixed-port, save-ports, window-width, window-height,
-    reset-window, interval-input, save-interval, update-geo,
+    reset-window, interval-input, save-interval, subscription-interval-input, save-subscription-interval, update-geo,
     check-update, install-update, cancel-update, open-release, update-prereleases,
     confirm, cancel-confirm, close-detail, copy, escape, focus-search, quit, rule-drop,
 }
@@ -176,6 +176,7 @@ export global UiData {
     in-out property <string> window-width;
     in-out property <string> window-height;
     in-out property <string> interval;
+    in-out property <string> subscription-interval;
     in-out property <string> geo-status;
     in-out property <string> update-status;
     in-out property <bool> update-checking;

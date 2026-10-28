@@ -1028,6 +1028,41 @@ impl Engine {
         } else {
             (read_profile(std::path::Path::new(&source))?, None)
         };
+        self.import_content(name, source, existing, raw, usage)
+            .await
+    }
+
+    pub(crate) async fn update_subscription(
+        &mut self,
+        pending: &clash_client_core::subscription::schedule::PendingUpdate,
+        raw: String,
+        usage: Option<String>,
+    ) -> Result<bool> {
+        if !pending.is_current(&self.settings, &self.profiles, &self.store)? {
+            return Ok(false);
+        }
+        self.import_content(
+            pending.profile.name.clone(),
+            pending.profile.source.clone(),
+            Some(pending.profile.id.clone()),
+            raw,
+            usage,
+        )
+        .await?;
+        Ok(true)
+    }
+
+    async fn import_content(
+        &mut self,
+        name: String,
+        source: String,
+        existing: Option<String>,
+        raw: String,
+        usage: Option<String>,
+    ) -> Result<()> {
+        if let Some(id) = existing.as_deref() {
+            self.require_unprotected_profile(id)?;
+        }
         let id = existing.unwrap_or_else(|| uuid::Uuid::new_v4().to_string());
         let path = self.store.profile_path(&id)?;
         let payload = self.profile_payload(&raw, &self.settings, &id)?;
@@ -2341,6 +2376,10 @@ impl Engine {
         }
         if scope == Scope::Proxies {
             snapshot.proxies = self.api.get("proxies").await?;
+            snapshot.active_group = self.default_route().ok().and_then(|route| {
+                crate::active_route::group(&snapshot.mode, &route, &snapshot.proxies)
+                    .map(str::to_owned)
+            });
         }
         if scope == Scope::Rules {
             snapshot.rules = self.api.get("rules").await?;

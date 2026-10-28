@@ -393,12 +393,7 @@ impl Session {
     /// The home page represents the default outbound route. Do not infer its
     /// group from alphabetical order or from a leaf shared by several groups.
     pub fn active_group(&self) -> Option<&str> {
-        let name = core::active_route::start(&self.settings.run_mode, &self.route);
-        self.proxies
-            .proxies
-            .get(name)
-            .filter(|group| !group.all.is_empty())
-            .map(|_| name)
+        core::active_route::group(&self.settings.run_mode, &self.route, &self.proxies)
     }
     pub fn apply_snapshot(&mut self, snapshot: Snapshot) {
         if let Some(proxies) = snapshot.proxies {
@@ -500,6 +495,39 @@ impl Session {
                 "订阅下载失败"
             })?
         };
+        self.save_profile_content(id, name, source, raw, usage)
+    }
+
+    pub fn update_subscription(
+        &mut self,
+        pending: &core::subscription::schedule::PendingUpdate,
+        raw: String,
+        usage: Option<String>,
+    ) -> Result<bool> {
+        if !pending.is_current(&self.settings, &self.profiles, &self.store)? {
+            return Ok(false);
+        }
+        self.save_profile_content(
+            Some(&pending.profile.id),
+            &pending.profile.name,
+            &pending.profile.source,
+            raw,
+            usage,
+        )?;
+        Ok(true)
+    }
+
+    fn save_profile_content(
+        &mut self,
+        id: Option<&str>,
+        name: &str,
+        source: &str,
+        raw: String,
+        usage: Option<String>,
+    ) -> Result<()> {
+        if let Some(id) = id {
+            self.require_unprotected_profile(id)?;
+        }
         core::config::parse_profile(&raw)?;
         let id = id
             .map(str::to_owned)
@@ -1640,6 +1668,56 @@ mod tests {
         assert_eq!(reopened.runtime(&reopened.settings).unwrap(), raw);
         assert!(!core::profile_transaction::recover(&reopened.store.root).unwrap());
     }
+    #[tokio::test]
+    async fn scheduled_subscription_commit_preserves_drafts_and_discards_stale_results() {
+        let root = tempfile::tempdir().unwrap();
+        let mut session = Session::open(root.path().into(), Arc::new(Fake)).unwrap();
+        let original = "proxies: []\nrules: ['MATCH,DIRECT']\n";
+        session
+            .save_profile(
+                None,
+                "Scheduled",
+                "https://example.test/sub",
+                Some(original),
+            )
+            .await
+            .unwrap();
+        let id = session.profiles.last().unwrap().id.clone();
+        session.activate(&id).unwrap();
+        session
+            .save_rule("", "DOMAIN,draft.test,DIRECT", 1)
+            .unwrap();
+        let draft = session.draft.clone();
+        let pending = core::subscription::schedule::PendingUpdate::capture(
+            session.profile().clone(),
+            &session.store,
+        )
+        .unwrap();
+        let profiles = session.profiles.clone();
+        assert!(
+            session
+                .update_subscription(&pending, "<html>failure</html>".into(), None)
+                .is_err()
+        );
+        assert_eq!(session.profiles, profiles);
+        assert_eq!(session.raw().unwrap(), original);
+        assert_eq!(session.draft, draft);
+        let replacement = "proxies: []\nrules: ['DOMAIN,new.test,DIRECT', 'MATCH,DIRECT']\n";
+        assert!(
+            session
+                .update_subscription(&pending, replacement.into(), Some("fixture usage".into()))
+                .unwrap()
+        );
+        assert_eq!(session.raw().unwrap(), replacement);
+        assert_eq!(session.draft, draft);
+        assert!(
+            !session
+                .update_subscription(&pending, original.into(), None)
+                .unwrap()
+        );
+        assert_eq!(session.raw().unwrap(), replacement);
+    }
+
     #[tokio::test]
     async fn protected_profile_rejects_edits_and_updates_but_allows_other_profiles() {
         use crate::core::claude_check::protection::{Previous, Protection};

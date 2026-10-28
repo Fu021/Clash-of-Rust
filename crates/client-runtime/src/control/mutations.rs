@@ -56,6 +56,7 @@ pub(super) fn setting(settings: &Settings, key: &str, value: Value) -> Result<Se
                 | "udp"
                 | "ip_reputation_key"
                 | "delay_interval_minutes"
+                | "subscription_update_interval_minutes"
                 | "node_sort"
         ),
         "该设置不能直接修改；订阅、规则、模式和保护请使用对应命令"
@@ -155,6 +156,30 @@ pub(super) fn rule(
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn subscription_interval_preserves_preferences_and_rejects_invalid_values() {
+        let settings = Settings::default();
+        assert_eq!(settings.subscription_update_interval_minutes, 360);
+        for minutes in [0, 1, 360, 10080] {
+            let next = setting(
+                &settings,
+                "subscription_update_interval_minutes",
+                serde_json::json!(minutes),
+            )
+            .unwrap();
+            assert_eq!(next.subscription_update_interval_minutes, minutes);
+            assert_eq!(next.delay_interval_minutes, settings.delay_interval_minutes);
+        }
+        for value in [
+            serde_json::json!(-1),
+            serde_json::json!(10081),
+            serde_json::json!("abc"),
+        ] {
+            assert!(setting(&settings, "subscription_update_interval_minutes", value).is_err());
+        }
+        let legacy: Settings = serde_json::from_value(serde_json::json!({})).unwrap();
+        assert_eq!(legacy.subscription_update_interval_minutes, 360);
+    }
     #[test]
     fn patches_keep_unrelated_and_protected_settings() {
         let settings = Settings {

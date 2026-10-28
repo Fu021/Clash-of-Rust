@@ -24,6 +24,24 @@ impl App {
     pub(super) fn intent(&mut self, intent: Intent, a: &str, b: &str) -> Task<Message> {
         use claude_view::Event as C;
         use rules_view::Event as R;
+        if (self.settings.claude_protection.is_some() || self.claude.protection_pending.is_some())
+            && (matches!(intent, Intent::ProxyMode)
+                || (self.page == Page::Rules
+                    && !matches!(
+                        intent,
+                        Intent::Navigate
+                            | Intent::Quit
+                            | Intent::DismissNotice
+                            | Intent::SystemNotification
+                            | Intent::Escape
+                            | Intent::RuleCloseEditor
+                            | Intent::RuleCancelProfile
+                            | Intent::CancelConfirm
+                            | Intent::CloseDetail
+                    )))
+        {
+            return Task::none();
+        }
         let boolean = |value: &str| value == "true";
         let message = match intent {
             Intent::PickFile => {
@@ -237,6 +255,8 @@ impl App {
             Intent::ResetWindow => Message::ResetWindowSize,
             Intent::IntervalInput => Message::IntervalInput(a.into()),
             Intent::SaveInterval => Message::SaveInterval,
+            Intent::SubscriptionIntervalInput => Message::SubscriptionIntervalInput(a.into()),
+            Intent::SaveSubscriptionInterval => Message::SaveSubscriptionInterval,
             Intent::UpdateGeo => Message::Action(Action::UpdateGeo),
             Intent::CheckUpdate => Message::CheckUpdate,
             Intent::UpdatePrereleases => Message::Action(Action::UpdatePrereleases(boolean(a))),

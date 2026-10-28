@@ -298,6 +298,8 @@ export component Field inherits Rectangle {
 }
 
 export component Select inherits Rectangle {
+    in property <bool> enabled: true;
+    changed enabled => { if !root.enabled { popup.close(); } }
     in property <bool> modal-control: false;
     in property <[string]> options;
     in property <string> value;
@@ -309,7 +311,7 @@ export component Select inherits Rectangle {
         text: root.value;
         dropdown: true;
         modal-control: root.modal-control;
-        enabled: root.options.length > 0;
+        enabled: root.enabled && root.options.length > 0;
         clicked => { popup.show(); }
     }
     popup := PopupWindow {
@@ -330,6 +332,7 @@ export component Select inherits Rectangle {
                     padding: 8px;
                     spacing: 4px;
                     for option[i] in root.options: ActionButton {
+                        enabled: root.enabled;
                         width: popup.width - 16px;
                         modal-control: root.modal-control;
                         text: option;

@@ -360,6 +360,10 @@ enum DelayScope {
     Node(String),
 }
 enum Update {
+    Subscription(
+        core::subscription::schedule::PendingUpdate,
+        std::result::Result<(String, Option<String>), String>,
+    ),
     Delays(u64, std::result::Result<BTreeMap<String, u32>, String>),
     Snapshot(u64, std::result::Result<Snapshot, String>),
     Ip(u64, usize, core::ip_report::ResultSlot),
@@ -483,6 +487,9 @@ async fn run_loop(
     let mut geo_job: Option<tokio::task::JoinHandle<()>> = None;
     let mut log_port = 0;
     let mut last_delay = std::time::Instant::now();
+    let mut subscription_schedule = core::subscription::schedule::Schedule::default();
+    let mut subscription_job: Option<tokio::task::JoinHandle<()>> = None;
+    let mut last_subscription_check = std::time::Instant::now() - Duration::from_secs(30);
     let mut delay_job: Option<tokio::task::JoinHandle<()>> = None;
     let mut poll = tokio::time::interval(Duration::from_secs(1));
     poll.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
@@ -683,6 +690,9 @@ async fn run_loop(
                     match handle(&mut state, request).await {
                         Ok(()) => {
                             state.completed = Some(intent);
+                            if matches!(intent, MobileIntent::UpdateProfile | MobileIntent::SaveProfile) {
+                                reset_subscription_results(&mut state, &mut checks, &mut claude_job);
+                            }
                             if matches!(intent,MobileIntent::SelectNode|MobileIntent::ActivateProfile|MobileIntent::UpdateProfile
                                 |MobileIntent::SaveProfile|MobileIntent::DeleteProfile|MobileIntent::RestartCore|MobileIntent::Mode
                                 |MobileIntent::DnsOverride|MobileIntent::FakeIp|MobileIntent::FakeIpAdd|MobileIntent::FakeIpRemove|MobileIntent::FakeIpRestoreDefaults|MobileIntent::Ipv6|MobileIntent::Udp|MobileIntent::SavePorts
@@ -812,6 +822,27 @@ async fn run_loop(
                             Err(error)=>state.notice=format!("Geo 更新失败：{error}"),
                         }
                     }
+                    Some(Update::Subscription(pending, result)) => {
+                        subscription_job = None;
+                        if state.protection_change.is_none() {
+                            match result {
+                                Ok((raw, usage)) => match state.session.update_subscription(&pending, raw, usage) {
+                                    Ok(true) => {
+                                        cancel_delay(&mut state, &mut delay_job);
+                                        reset_subscription_results(&mut state, &mut checks, &mut claude_job);
+                                        state.rule_rows = None;
+                                        if let Some(job) = refresh_job.take() { job.abort(); }
+                                        refresh_generation = refresh_generation.wrapping_add(1);
+                                        refresh_requested = true;
+                                        immediate = true;
+                                    }
+                                    Ok(false) => {}
+                                    Err(_) => state.logs.push_back(("WARN".into(), "订阅定时更新失败，已保留原配置与运行状态".into())),
+                                },
+                                Err(_) => state.logs.push_back(("WARN".into(), "订阅定时下载失败，已保留原配置与运行状态".into())),
+                            }
+                        }
+                    }
                     Some(Update::Checked(generation,result)) if generation == state.update_generation =>{
                         state.update_busy=false;state.update_downloading=false;
                         match result {
@@ -846,6 +877,31 @@ async fn run_loop(
                 }
             }
             _ = poll.tick() => {
+                if state.session.settings.subscription_update_interval_minutes == 0
+                    && let Some(job) = subscription_job.take() {
+                    job.abort();
+                }
+                if subscription_job.is_none() && !profile_gate.busy() && state.protection_change.is_none()
+                    && last_subscription_check.elapsed() >= Duration::from_secs(30) {
+                    last_subscription_check = std::time::Instant::now();
+                    let now = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap_or_default().as_secs();
+                    if let Some(profile) = subscription_schedule.next(&state.session.settings, &state.session.profiles, now) {
+                        match core::subscription::schedule::PendingUpdate::capture(profile, &state.session.store) {
+                            Ok(pending) => {
+                                let port = state.session.running.then_some(state.session.settings.mixed_port);
+                                let sender = updates.clone();
+                                subscription_job = Some(tokio::spawn(async move {
+                                    let result = async {
+                                        let url = core::probe::validate_url(&pending.profile.source)?;
+                                        core::subscription::download_routes(&url, &core::network::routes(port, None)).await
+                                    }.await.map_err(|error: anyhow::Error| format!("{error:#}"));
+                                    let _ = sender.send(Update::Subscription(pending, result)).await;
+                                }));
+                            }
+                            Err(_) => state.logs.push_back(("WARN".into(), "订阅定时更新失败，已保留原配置".into())),
+                        }
+                    }
+                }
                 if state.session.running && !state.update_busy && last_update_check.elapsed()>=Duration::from_secs(6*60*60) {
                     last_update_check=std::time::Instant::now();state.update_busy=true;state.update_downloading=false;state.update_status="正在检查更新…".into();
                     state.update_generation = state.update_generation.wrapping_add(1);
@@ -1047,6 +1103,9 @@ async fn run_loop(
         job.abort();
     }
     if let Some(job) = update_job {
+        job.abort();
+    }
+    if let Some(job) = subscription_job {
         job.abort();
     }
     Ok(())
@@ -1333,6 +1392,28 @@ async fn handle(state: &mut State, request: Request) -> Result<()> {
         selected,
         profile_ticket: _,
     } = request;
+    if (state.session.settings.claude_protection.is_some() || state.protection_change.is_some())
+        && (matches!(
+            intent,
+            MobileIntent::RulePage
+                | MobileIntent::RuleTextMode
+                | MobileIntent::RuleSelect
+                | MobileIntent::RuleEdit
+                | MobileIntent::RuleAdd
+                | MobileIntent::RuleSave
+                | MobileIntent::RuleMove
+                | MobileIntent::RuleDrop
+                | MobileIntent::RuleEnable
+                | MobileIntent::RuleRestore
+                | MobileIntent::RuleFilter
+                | MobileIntent::RuleDelete
+                | MobileIntent::RuleApply
+                | MobileIntent::RuleDiscard
+                | MobileIntent::RuleShortcut
+        ) || (intent == MobileIntent::Query && a == "rules"))
+    {
+        return Ok(());
+    }
     ensure!(
         state.protection_change.is_none()
             || !matches!(
@@ -1678,6 +1759,13 @@ async fn handle(state: &mut State, request: Request) -> Result<()> {
             session.store.save_settings(&next)?;
             session.settings = next;
         }
+        MobileIntent::SubscriptionInterval => {
+            let mut next = session.settings.clone();
+            next.subscription_update_interval_minutes = a.trim().parse()?;
+            session.store.save_settings(&next)?;
+            session.settings = next;
+            state.notice = "订阅自动更新间隔已保存".into();
+        }
         MobileIntent::Probe => {
             let result = core::probe::website(a, session.settings.mixed_port, false).await?;
             state.probe = (result.detail, format!("{} ms", result.millis));
@@ -1813,6 +1901,27 @@ fn cancel_delay(state: &mut State, job: &mut Option<tokio::task::JoinHandle<()>>
     state.delay_generation = state.delay_generation.wrapping_add(1);
     state.delay_scope = None;
     state.node_delays.clear();
+}
+fn reset_subscription_results(
+    state: &mut State,
+    checks: &mut Option<tokio::task::JoinHandle<()>>,
+    claude_job: &mut Option<tokio::task::JoinHandle<()>>,
+) {
+    if let Some(job) = checks.take() {
+        job.abort();
+    }
+    if let Some(job) = claude_job.take() {
+        job.abort();
+    }
+    state.generation = state.generation.wrapping_add(1);
+    state.claude_generation = state.claude_generation.wrapping_add(1);
+    state.detecting = false;
+    state.claude_busy = false;
+    state.ip_results.fill(None);
+    state.claude = None;
+    state.claude_status = "订阅已更新，请重新检测地区线索。".into();
+    state.probe = Default::default();
+    state.dns.clear();
 }
 fn start_delay(
     state: &mut State,
@@ -2447,6 +2556,11 @@ fn apply(ui: &AndroidWindow, p: Projection) {
     data.set_protection_supported(true);
     data.set_protected(p.settings.claude_protection.is_some());
     data.set_protection_pending(p.protection_pending);
+    if (data.get_protected() || p.protection_pending)
+        && matches!(ui.global::<MobileView>().get_detail(), 2 | 15)
+    {
+        ui.global::<MobileView>().set_detail(0);
+    }
     data.set_protection_status(p.protection_status.into());
     data.set_upload_rate(p.rates.0.into());
     data.set_download_rate(p.rates.1.into());
@@ -2557,6 +2671,20 @@ fn apply(ui: &AndroidWindow, p: Projection) {
     }
     if p.completed == Some(MobileIntent::Interval) {
         ui.global::<MobileView>().set_interval_dirty(false);
+    }
+    if !ui.global::<MobileView>().get_subscription_interval_dirty()
+        || p.completed == Some(MobileIntent::SubscriptionInterval)
+    {
+        data.set_subscription_interval(
+            p.settings
+                .subscription_update_interval_minutes
+                .to_string()
+                .into(),
+        );
+    }
+    if p.completed == Some(MobileIntent::SubscriptionInterval) {
+        ui.global::<MobileView>()
+            .set_subscription_interval_dirty(false);
     }
     data.set_mode(
         match p

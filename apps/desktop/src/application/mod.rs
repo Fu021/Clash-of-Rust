@@ -253,6 +253,8 @@ enum Message {
     SiteCancel,
     IntervalInput(String),
     SaveInterval,
+    SubscriptionIntervalInput(String),
+    SaveSubscriptionInterval,
     FakeIpEditor(bool),
     FakeIpInput(String),
     FakeIpAdd,
@@ -300,6 +302,7 @@ struct App {
     visible: bool,
     hidden_ticks: u8,
     expanded: BTreeSet<String>,
+    focus_active_group: bool,
     group_offsets: BTreeMap<String, usize>,
     testing_groups: BTreeSet<String>,
     node_delays: BTreeMap<String, u32>,
@@ -317,6 +320,7 @@ struct App {
     mac_reopen_ready: bool,
     site_queue: VecDeque<String>,
     interval_input: String,
+    subscription_interval_input: String,
     fake_ip_editor: bool,
     fake_ip_input: String,
     fake_ip_error: String,
@@ -467,6 +471,7 @@ impl App {
             claude: claude_view::State::default(),
             node_sort: settings.node_sort,
             interval_input: settings.delay_interval_minutes.to_string(),
+            subscription_interval_input: settings.subscription_update_interval_minutes.to_string(),
             fake_ip_editor: false,
             fake_ip_input: String::new(),
             fake_ip_error: String::new(),
@@ -510,6 +515,7 @@ impl App {
             visible: !background_start() || (tray.is_none() && tray_startup.is_none()),
             hidden_ticks: 0,
             expanded: BTreeSet::new(),
+            focus_active_group: false,
             group_offsets: BTreeMap::new(),
             testing_groups: BTreeSet::new(),
             node_delays: BTreeMap::new(),
@@ -916,6 +922,10 @@ impl App {
                             self.geo_status = engine.geo_manifest.version.clone();
                             self.mixed_port = self.settings.mixed_port.to_string();
                             self.interval_input = self.settings.delay_interval_minutes.to_string();
+                            self.subscription_interval_input = self
+                                .settings
+                                .subscription_update_interval_minutes
+                                .to_string();
                             self.node_sort = self.settings.node_sort;
                         }
                         self.engine = Some(engine);
@@ -1081,6 +1091,7 @@ impl App {
                 self.fake_ip_input.clear();
                 self.fake_ip_error.clear();
                 self.page = page;
+                self.focus_active_group = page == Page::Proxies;
                 self.log_detail = None;
                 self.clear_connection_detail();
                 self.query.clear();
@@ -1469,6 +1480,17 @@ impl App {
                 };
             }
             Message::IntervalInput(value) => self.interval_input = value,
+            Message::SubscriptionIntervalInput(value) => self.subscription_interval_input = value,
+            Message::SaveSubscriptionInterval => {
+                match self.subscription_interval_input.trim().parse::<u32>() {
+                    Ok(minutes) if minutes <= 10080 => {
+                        return self.dispatch(Action::SubscriptionInterval(minutes));
+                    }
+                    _ => {
+                        self.show_notice("请输入 0–10080 分钟，0 表示关闭订阅自动更新".into(), true)
+                    }
+                }
+            }
             Message::SaveInterval => match self.interval_input.trim().parse::<u32>() {
                 Ok(minutes) if minutes <= 1440 => {
                     return self.dispatch(Action::DelayInterval(minutes));
@@ -1789,7 +1811,12 @@ impl App {
                 self.geo_updating = false;
                 self.claude.protection_pending = None;
                 let reply = *reply;
-                if reply.profile_updated {
+                if reply.profile_updated
+                    || reply
+                        .profiles
+                        .as_ref()
+                        .is_some_and(|profiles| profiles != &self.profiles)
+                {
                     self.reset_network_results();
                 }
                 let protection_changed = reply.protection_changed;
@@ -1841,6 +1868,14 @@ impl App {
                     == Ok(self.settings.delay_interval_minutes)
                 {
                     self.interval_input = reply.settings.delay_interval_minutes.to_string();
+                }
+                if self.subscription_interval_input.trim().parse::<u32>()
+                    == Ok(self.settings.subscription_update_interval_minutes)
+                {
+                    self.subscription_interval_input = reply
+                        .settings
+                        .subscription_update_interval_minutes
+                        .to_string();
                 }
                 let update_channel_changed =
                     self.settings.update_prereleases != reply.settings.update_prereleases;
@@ -1944,6 +1979,13 @@ impl App {
                         );
                     }
                     if reply.scope == Scope::Proxies && snapshot.running {
+                        if self.focus_active_group {
+                            if let Some(group) = &snapshot.active_group {
+                                self.expanded.insert(group.clone());
+                                self.group_offsets.remove(group);
+                            }
+                            self.focus_active_group = false;
+                        }
                         self.proxy_order.get_mut().clear();
                         let proxies = &snapshot.proxies.proxies;
                         self.expanded
@@ -1966,6 +2008,7 @@ impl App {
                         && reply.scope != Scope::Proxies
                     {
                         snapshot.proxies = std::mem::take(&mut self.snapshot.proxies);
+                        snapshot.active_group = self.snapshot.active_group.clone();
                     }
                     if snapshot.running
                         && self.visible

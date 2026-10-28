@@ -177,6 +177,7 @@ impl Remote {
 
 pub struct Server {
     task: JoinHandle<()>,
+    subscriptions: JoinHandle<()>,
     endpoint: Endpoint,
     path: PathBuf,
     shutdown: watch::Receiver<bool>,
@@ -189,6 +190,7 @@ impl Server {
 impl Drop for Server {
     fn drop(&mut self) {
         self.task.abort();
+        self.subscriptions.abort();
         if std::fs::read(&self.path)
             .ok()
             .and_then(|b| serde_json::from_slice::<Endpoint>(&b).ok())
@@ -299,6 +301,7 @@ pub async fn serve(engine: &Arc<Mutex<Engine>>, owner: Owner) -> Result<()> {
     });
     locked.control_server = Some(Server {
         task,
+        subscriptions: super::subscriptions::start(Arc::downgrade(engine), shutdown.clone()),
         endpoint,
         path,
         shutdown,

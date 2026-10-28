@@ -6,6 +6,7 @@ import { MobileData, MobileView } from "../shared/state.slint";
 export component AndroidPreview inherits Window {
     preferred-width: 393px; preferred-height: 852px;
     default-font-family: "Source Han Sans CN";
+    in-out property <bool> preview-motion <=> scene.preview-motion;
     in-out property <int> preview-page <=> scene.preview-page;
     in-out property <int> preview-detail <=> scene.preview-detail;
     in-out property <bool> preview-dark <=> scene.preview-dark;
@@ -19,6 +20,7 @@ export component AndroidPreview inherits Window {
     in-out property <bool> preview-selected-rule <=> scene.preview-selected-rule;
     in-out property <bool> preview-shortcuts <=> scene.preview-shortcuts;
     in-out property <bool> preview-protection-pending <=> scene.preview-protection-pending;
+    in-out property <bool> preview-protected <=> scene.preview-protected;
     in-out property <string> preview-notice <=> scene.preview-notice;
     in-out property <float> preview-notice-elapsed <=> scene.preview-notice-elapsed;
     in-out property <bool> preview-sparse <=> scene.preview-sparse;

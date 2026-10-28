@@ -56,7 +56,7 @@ fn connection_details(
 impl App {
     pub(super) fn proxy_rows(&self) -> (usize, Vec<(GroupItem, Vec<NodePair>)>) {
         let query = self.query.to_lowercase();
-        let groups: Vec<_> = self
+        let mut groups: Vec<_> = self
             .snapshot
             .proxies
             .proxies
@@ -67,6 +67,12 @@ impl App {
                         || proxy.all.iter().any(|node| contains_query(node, &query)))
             })
             .collect();
+        if let Some(index) = groups
+            .iter()
+            .position(|(name, _)| self.snapshot.active_group.as_deref() == Some(name.as_str()))
+        {
+            groups[..=index].rotate_right(1);
+        }
         let total = groups.len();
         let offset = self
             .list_offset
@@ -434,6 +440,11 @@ impl App {
         text!(get_window_width, set_window_width, &self.window_width);
         text!(get_window_height, set_window_height, &self.window_height);
         text!(get_interval, set_interval, &self.interval_input);
+        text!(
+            get_subscription_interval,
+            set_subscription_interval,
+            &self.subscription_interval_input
+        );
         text!(get_fake_ip_input, set_fake_ip_input, &self.fake_ip_input);
         text!(get_fake_ip_error, set_fake_ip_error, &self.fake_ip_error);
         text!(
@@ -1039,6 +1050,9 @@ impl App {
     }
 
     fn present_dialog(&self, data: &UiData) {
+        let rules_locked = self.page != Page::Rules
+            || self.settings.claude_protection.is_some()
+            || self.claude.protection_pending.is_some();
         data.set_modal_error("".into());
         data.set_modal_copy("".into());
         data.set_modal_country("".into());
@@ -1080,14 +1094,19 @@ impl App {
             data.set_modal_title("添加订阅".into());
             data.set_modal_accept("导入".into());
             data.set_modal_can_accept(!self.working && !self.profile_source.trim().is_empty());
-        } else if let Some(profile) = &self.rule_state.pending_profile {
+        } else if let Some(profile) = self
+            .rule_state
+            .pending_profile
+            .as_ref()
+            .filter(|_| !rules_locked)
+        {
             kind = 6;
             data.set_modal_title("切换规则配置？".into());
             data.set_modal_description(
                 format!("当前未应用的草稿将丢弃，切换到“{}”。", profile.name).into(),
             );
             data.set_modal_accept("放弃并切换".into());
-        } else if let Some(editor) = &self.rule_state.editor {
+        } else if let Some(editor) = self.rule_state.editor.as_ref().filter(|_| !rules_locked) {
             kind = 4;
             data.set_modal_title("编辑规则".into());
             data.set_modal_accept("保存到草稿".into());
@@ -1100,7 +1119,7 @@ impl App {
             data.set_rule_enabled(editor.enabled);
             data.set_rule_no_resolve(editor.no_resolve);
             data.set_modal_error(editor.error.as_str().into());
-        } else if self.rule_state.move_open {
+        } else if self.rule_state.move_open && !rules_locked {
             kind = 5;
             data.set_modal_title("移动到指定位置".into());
             data.set_modal_accept("移动".into());
