@@ -5,9 +5,14 @@ use serde::{Deserialize, Serialize};
 use std::path::Path;
 
 pub mod memory;
+pub(crate) mod network;
 pub mod notification;
 mod proxy_state;
 pub use proxy_state::{ProxyState, ProxyValue};
+// Exercise the Mac preference semantics on all desktop CI hosts as pure logic.
+#[cfg(all(test, not(target_os = "macos")))]
+#[path = "macos/proxy_preferences.rs"]
+mod macos_proxy_preferences;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 struct Journal {
@@ -34,8 +39,8 @@ mod linux_tun;
 mod windows_autostart;
 #[cfg(target_os = "linux")]
 pub use linux_tun::{
-    authorize_tun, authorize_tun_terminal, check_tun_environment, core_has_tun_permissions,
-    core_launcher, tun_helper_main,
+    authorize_tun, authorize_tun_for_user, authorize_tun_terminal, check_tun_environment,
+    core_has_tun_permissions, core_launcher, tun_helper_main,
 };
 #[cfg(target_os = "macos")]
 pub mod macos;
@@ -283,42 +288,101 @@ pub fn enable(journal_path: &Path, port: u16) -> Result<()> {
         }
         return Err(error.context("系统代理启用失败，已尝试恢复原设置"));
     }
-    if native::read()? != journal.owned {
+    if !owns(&native::read()?, &journal.owned)? {
         bail!("系统代理设置未生效，恢复记录已保留");
     }
     Ok(())
 }
 
-fn owns(current: &ProxyState, owned: &ProxyState) -> bool {
-    if current == owned {
-        return true;
+#[cfg(not(target_os = "macos"))]
+fn auxiliary_key(key: &str) -> bool {
+    matches!(
+        key,
+        "ProxyOverride"
+            | "org.gnome.system.proxy|ignore-hosts"
+            | "kde|NoProxyFor"
+            | "kde|ReversedException"
+    )
+}
+
+#[cfg(not(target_os = "macos"))]
+fn same_route_value(
+    key: &str,
+    current: Option<&Option<ProxyValue>>,
+    owned: Option<&Option<ProxyValue>>,
+) -> bool {
+    if key == "AutoConfigURL" {
+        let disabled = |value: Option<&Option<ProxyValue>>| {
+            matches!(value, Some(None))
+                || matches!(value, Some(Some(ProxyValue::Text(text))) if text.is_empty())
+        };
+        if disabled(current) && disabled(owned) {
+            return true;
+        }
     }
-    #[cfg(target_os = "linux")]
+    current == owned
+}
+
+fn owns(current: &ProxyState, owned: &ProxyState) -> Result<bool> {
+    #[cfg(target_os = "macos")]
     {
-        linux::owns_legacy(current, owned)
+        native::matches_managed(current, owned)
     }
-    #[cfg(not(target_os = "linux"))]
+    #[cfg(not(target_os = "macos"))]
     {
-        false
+        if !owned.is_empty()
+            && owned.keys().any(|key| !auxiliary_key(key))
+            && current.len() == owned.len()
+            && owned.iter().all(|(key, value)| {
+                current.contains_key(key)
+                    && (auxiliary_key(key) || same_route_value(key, current.get(key), Some(value)))
+            })
+        {
+            return Ok(true);
+        }
+        #[cfg(target_os = "linux")]
+        {
+            Ok(linux::owns_legacy(current, owned))
+        }
+        #[cfg(not(target_os = "linux"))]
+        {
+            Ok(false)
+        }
     }
 }
 
-/// Restore only if the managed settings are still exactly the ones we wrote.
-/// A different client's later changes must not be overwritten.
+#[cfg(not(target_os = "macos"))]
+fn restoration(current: &ProxyState, journal: &Journal) -> Result<ProxyState> {
+    if !owns(current, &journal.owned)? {
+        return Ok(ProxyState::new());
+    }
+    Ok(journal
+        .original
+        .iter()
+        .filter(|(key, _)| {
+            journal.owned.contains_key(*key) && current.get(*key) == journal.owned.get(*key)
+        })
+        .map(|(key, value)| (key.clone(), value.clone()))
+        .collect())
+}
+
+/// Restore our routing settings while preserving later user changes.
 pub fn restore(journal_path: &Path) -> Result<bool> {
     if !journal_path.exists() {
         return Ok(false);
     }
     let journal: Journal =
         serde_json::from_slice(&std::fs::read(journal_path)?).context("代理恢复记录损坏")?;
-    let current = native::read()?;
-    let restored = owns(&current, &journal.owned);
-    if restored {
-        #[cfg(target_os = "macos")]
-        native::restore_write(&journal.original)?;
-        #[cfg(not(target_os = "macos"))]
-        native::write(&journal.original)?;
-    }
+    #[cfg(target_os = "macos")]
+    let restored = native::restore_write(&journal.original, &journal.owned)?;
+    #[cfg(not(target_os = "macos"))]
+    let restored = {
+        let patch = restoration(&native::read()?, &journal)?;
+        if !patch.is_empty() {
+            native::write(&patch)?;
+        }
+        !patch.is_empty()
+    };
     std::fs::remove_file(journal_path)?;
     Ok(restored)
 }
@@ -328,7 +392,7 @@ pub fn is_owned(journal_path: &Path) -> Result<bool> {
         return Ok(false);
     }
     let journal: Journal = serde_json::from_slice(&std::fs::read(journal_path)?)?;
-    Ok(owns(&native::read()?, &journal.owned))
+    owns(&native::read()?, &journal.owned)
 }
 
 #[cfg(target_os = "macos")]
@@ -337,11 +401,13 @@ pub fn adopt_owned_proxy(journal_path: &Path) -> Result<()> {
         return Ok(());
     }
     let journal: Journal = serde_json::from_slice(&std::fs::read(journal_path)?)?;
-    if native::read()? == journal.owned {
+    let current = native::read()?;
+    if owns(&current, &journal.owned)? {
         native::service::adopt_proxy(&journal.original, &journal.owned)?;
     } else {
         // A restarted helper may already have recovered a stale GUI journal.
-        std::fs::remove_file(journal_path)?;
+        // Still restore surviving owned services before discarding the journal.
+        restore(journal_path)?;
     }
     Ok(())
 }
@@ -352,8 +418,10 @@ pub fn is_owned_at_port(journal_path: &Path, port: u16) -> Result<bool> {
         return Ok(false);
     }
     let journal: Journal = serde_json::from_slice(&std::fs::read(journal_path)?)?;
-    Ok(native::desired(&journal.original, port)? == journal.owned
-        && native::read()? == journal.owned)
+    Ok(
+        owns(&journal.owned, &native::desired(&journal.original, port)?)?
+            && owns(&native::read()?, &journal.owned)?,
+    )
 }
 
 #[cfg(test)]
@@ -363,5 +431,81 @@ mod tests {
     fn empty_journal_never_changes_os_settings() {
         let tmp = tempfile::tempdir().unwrap();
         assert!(!restore(&tmp.path().join("absent.json")).unwrap());
+    }
+
+    #[cfg(not(target_os = "macos"))]
+    #[test]
+    fn windows_empty_pac_url_is_disabled_but_an_external_url_loses_ownership() {
+        let owned = ProxyState::from([
+            ("ProxyEnable".into(), Some(ProxyValue::Number(1))),
+            (
+                "ProxyServer".into(),
+                Some(ProxyValue::Text("127.0.0.1:7890".into())),
+            ),
+            ("AutoConfigURL".into(), None),
+        ]);
+        let mut current = owned.clone();
+        current.insert(
+            "AutoConfigURL".into(),
+            Some(ProxyValue::Text(String::new())),
+        );
+        assert!(owns(&current, &owned).unwrap());
+        current.insert(
+            "AutoConfigURL".into(),
+            Some(ProxyValue::Text(
+                "https://external.example/proxy.pac".into(),
+            )),
+        );
+        assert!(!owns(&current, &owned).unwrap());
+    }
+
+    #[cfg(not(target_os = "macos"))]
+    #[test]
+    fn bypass_edits_do_not_hide_proxy_or_get_overwritten_during_restore() {
+        for (mode, endpoint, bypass) in [
+            ("ProxyEnable", "ProxyServer", "ProxyOverride"),
+            (
+                "org.gnome.system.proxy|mode",
+                "org.gnome.system.proxy.http|port",
+                "org.gnome.system.proxy|ignore-hosts",
+            ),
+            ("kde|ProxyType", "kde|httpProxy", "kde|NoProxyFor"),
+            ("kde|ProxyType", "kde|httpProxy", "kde|ReversedException"),
+        ] {
+            let original = ProxyState::from([
+                (mode.into(), Some(ProxyValue::Text("off".into()))),
+                (endpoint.into(), Some(ProxyValue::Text("old".into()))),
+                (bypass.into(), Some(ProxyValue::Text("previous".into()))),
+            ]);
+            let owned = ProxyState::from([
+                (mode.into(), Some(ProxyValue::Text("on".into()))),
+                (endpoint.into(), Some(ProxyValue::Text("local".into()))),
+                (bypass.into(), Some(ProxyValue::Text("default".into()))),
+            ]);
+            let journal = Journal {
+                original: original.clone(),
+                owned: owned.clone(),
+            };
+            assert!(owns(&owned, &owned).unwrap());
+            assert_eq!(restoration(&owned, &journal).unwrap(), original);
+            let mut current = owned.clone();
+            current.insert(bypass.into(), Some(ProxyValue::Text("later edit".into())));
+            assert!(owns(&current, &owned).unwrap(), "{bypass}");
+            let patch = restoration(&current, &journal).unwrap();
+            assert!(!patch.contains_key(bypass));
+            current.extend(patch);
+            assert_eq!(current[mode], original[mode]);
+            assert_eq!(current[endpoint], original[endpoint]);
+            assert_eq!(current[bypass], Some(ProxyValue::Text("later edit".into())));
+            assert!(!owns(&current, &owned).unwrap());
+            let mut external = owned.clone();
+            external.insert(endpoint.into(), Some(ProxyValue::Text("external".into())));
+            assert!(!owns(&external, &owned).unwrap());
+            assert!(restoration(&external, &journal).unwrap().is_empty());
+            external = owned.clone();
+            external.insert(mode.into(), Some(ProxyValue::Text("off".into())));
+            assert!(!owns(&external, &owned).unwrap());
+        }
+        assert!(!owns(&ProxyState::new(), &ProxyState::new()).unwrap());
     }
 }

@@ -3,6 +3,7 @@ mod backend;
 mod commands;
 mod output;
 mod service;
+mod users;
 
 fn main() {
     if clash_client_runtime::update::helper_main() {
@@ -27,6 +28,7 @@ fn main() {
                 .write_all(args::help(&args.path).as_bytes())?;
             return Ok(());
         }
+        users::prepare(&args)?;
         #[cfg(windows)]
         if let Err(error) = clash_client_runtime::platform::notification::prepare_process() {
             eprintln!("通知初始化失败：{error:#}");

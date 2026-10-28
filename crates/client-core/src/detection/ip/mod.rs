@@ -64,7 +64,7 @@ pub struct CheckResult {
 }
 
 fn client(port: u16) -> Result<Client> {
-    Ok(Client::builder().no_proxy()
+    Ok(crate::network::client_builder().no_proxy()
         .proxy(reqwest::Proxy::all(format!("http://127.0.0.1:{port}"))?)
         .user_agent("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/131.0.0.0 Safari/537.36")
         .connect_timeout(Duration::from_secs(5)).timeout(Duration::from_secs(12))

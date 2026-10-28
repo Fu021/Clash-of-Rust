@@ -8,6 +8,8 @@ use std::{
     time::{Duration, Instant},
 };
 
+const CONTROLLER_UNAVAILABLE: &str = "控制接口暂不可用，实时拦截未确认；保护规则仍保留。";
+
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct Snapshot {
     pub total: u64,
@@ -110,12 +112,17 @@ impl Guard {
                 else {
                     if let Ok(mut state) = captured.lock() {
                         state.connected = false;
-                        state.error = "控制接口暂不可用，实时拦截未确认；保护规则仍保留。".into();
+                        if state.error.is_empty() {
+                            state.error = CONTROLLER_UNAVAILABLE.into();
+                        }
                     }
                     continue;
                 };
                 if let Ok(mut state) = captured.lock() {
                     state.connected = true;
+                    if state.error == CONTROLLER_UNAVAILABLE {
+                        state.error.clear();
+                    }
                 }
                 let mut alert_hosts = BTreeSet::new();
                 for connection in connections {
@@ -394,6 +401,15 @@ mod tests {
     use super::*;
     #[tokio::test]
     async fn enforcement_closes_only_unsafe_routes_and_uses_the_host_notification() {
+        enforcement_and_controller_recovery(false).await;
+    }
+
+    #[tokio::test]
+    async fn controller_recovery_keeps_notification_failure_and_blocked_routes() {
+        enforcement_and_controller_recovery(true).await;
+    }
+
+    async fn enforcement_and_controller_recovery(notification_fails: bool) {
         use std::sync::atomic::{AtomicBool, Ordering};
         use tokio::{
             io::{AsyncReadExt, AsyncWriteExt},
@@ -402,6 +418,10 @@ mod tests {
         let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
         let closed = Arc::new(AtomicBool::new(false));
         let captured = closed.clone();
+        let unavailable = Arc::new(AtomicBool::new(false));
+        let controller_unavailable = unavailable.clone();
+        let outage_seen = Arc::new(AtomicBool::new(false));
+        let server_outage_seen = outage_seen.clone();
         let settings = crate::config::Settings {
             controller_port: listener.local_addr().unwrap().port(),
             secret: "fixture-shared-guard".into(),
@@ -423,6 +443,14 @@ mod tests {
                         .to_ascii_lowercase()
                         .contains("authorization: bearer fixture-shared-guard")
                 );
+                let status = if request.starts_with("GET /connections ")
+                    && controller_unavailable.load(Ordering::SeqCst)
+                {
+                    server_outage_seen.store(true, Ordering::SeqCst);
+                    "503 Service Unavailable"
+                } else {
+                    "200 OK"
+                };
                 let body = if request.starts_with("GET /connections ") {
                     let connections = if captured.load(Ordering::SeqCst) {
                         serde_json::json!([])
@@ -444,7 +472,7 @@ mod tests {
                 socket
                     .write_all(
                         format!(
-                            "HTTP/1.1 200 OK\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+                            "HTTP/1.1 {status}\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
                             body.len()
                         )
                         .as_bytes(),
@@ -462,6 +490,7 @@ mod tests {
                 let sender = sender.clone();
                 async move {
                     sender.send((title, message)).unwrap();
+                    anyhow::ensure!(!notification_fails, "fixture notification unavailable");
                     Ok(())
                 }
             },
@@ -476,7 +505,55 @@ mod tests {
         assert!(!message.contains("example.org"));
         assert_eq!(guard.snapshot().blocked, 1);
         tokio::time::timeout(Duration::from_secs(3), async {
-            while guard.snapshot().notifications_completed != 1 {
+            while if notification_fails {
+                !guard
+                    .snapshot()
+                    .error
+                    .contains("fixture notification unavailable")
+            } else {
+                guard.snapshot().notifications_completed != 1
+            } {
+                tokio::time::sleep(Duration::from_millis(20)).await;
+            }
+        })
+        .await
+        .unwrap();
+        unavailable.store(true, Ordering::SeqCst);
+        tokio::time::timeout(Duration::from_secs(5), async {
+            loop {
+                let snapshot = guard.snapshot();
+                if outage_seen.load(Ordering::SeqCst)
+                    && !snapshot.connected
+                    && (notification_fails || snapshot.error == CONTROLLER_UNAVAILABLE)
+                {
+                    break;
+                }
+                tokio::time::sleep(Duration::from_millis(20)).await;
+            }
+        })
+        .await
+        .unwrap();
+        let error = guard.snapshot().error;
+        if notification_fails {
+            assert!(error.contains("fixture notification unavailable"));
+        } else {
+            assert_eq!(error, CONTROLLER_UNAVAILABLE);
+        }
+        unavailable.store(false, Ordering::SeqCst);
+        tokio::time::timeout(Duration::from_secs(5), async {
+            loop {
+                let snapshot = guard.snapshot();
+                if snapshot.connected
+                    && if notification_fails {
+                        snapshot.error.contains("fixture notification unavailable")
+                    } else {
+                        snapshot.error.is_empty()
+                    }
+                {
+                    assert_eq!(snapshot.blocked, 1);
+                    assert_eq!(snapshot.routes.len(), 1);
+                    break;
+                }
                 tokio::time::sleep(Duration::from_millis(20)).await;
             }
         })

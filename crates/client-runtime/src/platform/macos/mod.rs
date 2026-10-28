@@ -1,14 +1,13 @@
 //! Native macOS proxy preferences and per-user login agent. The GUI never runs as root.
-use super::{ProxyState, ProxyValue};
-use anyhow::{Context, Result, bail, ensure};
-use serde_json::{Value, json};
+use super::ProxyState;
+use anyhow::{Context, Result, ensure};
 use std::{
     path::{Path, PathBuf},
     process::Command,
     ptr,
 };
 mod authorization;
-mod cf;
+pub(super) mod cf;
 pub use authorization::{administrator, run as run_command, shell_quote};
 use cf::{Owned, Ref};
 pub mod tun;
@@ -19,32 +18,12 @@ unsafe extern "C" {
 }
 pub mod dns;
 mod native_proxy;
+mod proxy_preferences;
 pub mod service;
 pub use native_proxy::read;
+pub(super) use proxy_preferences::{desired, matches_managed};
 pub fn description() -> &'static str {
     "macOS 网络服务代理（HTTP / HTTPS / SOCKS）"
-}
-pub fn desired(original: &ProxyState, port: u16) -> Result<ProxyState> {
-    original
-        .iter()
-        .map(|(id, value)| {
-            let mut value: Value = match value {
-                Some(ProxyValue::Text(text)) => serde_json::from_str(text)?,
-                None => json!({}),
-                _ => bail!("网络服务代理属性无效"),
-            };
-            ensure!(value.is_object(), "网络服务代理属性无效");
-            for prefix in ["HTTP", "HTTPS", "SOCKS"] {
-                value[format!("{prefix}Enable")] = 1.into();
-                value[format!("{prefix}Proxy")] = "127.0.0.1".into();
-                value[format!("{prefix}Port")] = port.into();
-            }
-            for key in ["ProxyAutoConfigEnable", "ProxyAutoDiscoveryEnable"] {
-                value[key] = 0.into();
-            }
-            Ok((id.clone(), Some(ProxyValue::Text(value.to_string()))))
-        })
-        .collect()
 }
 pub fn write(state: &ProxyState) -> Result<()> {
     let current = read()?;
@@ -59,11 +38,13 @@ pub fn write(state: &ProxyState) -> Result<()> {
     }
     service::write_proxy(state)
 }
-pub fn restore_write(state: &ProxyState) -> Result<()> {
+pub fn restore_write(original: &ProxyState, owned: &ProxyState) -> Result<bool> {
     if unsafe { libc::geteuid() } == 0 {
-        return native_proxy::write(state);
+        return native_proxy::restore(original, owned);
     }
-    service::restore_proxy(state)
+    let patch = proxy_preferences::restoration(&read()?, original, owned)?;
+    service::restore_proxy(&patch)?;
+    Ok(!patch.is_empty())
 }
 pub fn configured_proxy(scheme: &str) -> Result<Option<String>> {
     let proxies = Owned::new(unsafe { SCDynamicStoreCopyProxies(ptr::null()) })?;
@@ -155,6 +136,8 @@ pub fn show_requested() -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::platform::ProxyValue;
+    use serde_json::{Value, json};
     #[test]
     fn proxy_round_trip_preserves_pac_and_exceptions() {
         let original = ProxyState::from([("service".into(), Some(ProxyValue::Text(json!({"ExceptionsList":["*.local"],"ProxyAutoConfigEnable":1,"ProxyAutoConfigURLString":"https://example.com/proxy.pac","HTTPPort":80}).to_string())))]);

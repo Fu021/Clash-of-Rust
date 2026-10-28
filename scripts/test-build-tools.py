@@ -725,6 +725,19 @@ assert.equal(calls.length,2);
                 self.assertTrue(warnings)
                 self.assertEqual(lock.read_bytes(), b'cached')
 
+    def test_gradle_refresh_stays_in_the_supported_agp_line(self):
+        versions = [{'version': version, 'downloadUrl': version, 'checksumUrl': version + '.sha256'}
+                    for version in ('8.14.6', '9.5.0', '9.6.0', '9.8.2', '9.9.0-rc-1', '10.0.0')]
+        versions.extend([
+            {'version': '9.9.0', 'broken': True},
+            {'version': '9.10.0', 'snapshot': True},
+        ])
+        with patch.object(build_inputs, 'read_json', return_value=versions):
+            self.assertEqual(build_inputs.gradle_release()['version'], '9.8.2')
+        with patch.object(build_inputs, 'read_json', return_value=versions[:2]):
+            with self.assertRaises(ValueError):
+                build_inputs.gradle_release()
+
     def test_go_refresh_checks_exact_modules_without_downgrades_and_retains_unreachable_versions(self):
         modules=[{'Path':'go4.org/netipx','Version':'v0.0.0-20260823151212-3075585bcbeb'},
                  {'Path':'example.org/Module','Version':'v1.2.0'},
@@ -1185,28 +1198,98 @@ assert.equal(calls.length,2);
             with patch.object(windows, 'update_signatures', side_effect=subprocess.CalledProcessError(2, ['update'])), \
                  patch.object(windows.subprocess, 'run') as execute:
                 with self.assertRaises(subprocess.CalledProcessError):
-                    windows.scan_installers([installer])
+                    windows.scan_windows_files([installer])
                 execute.assert_not_called()
 
-    def test_defender_scan_blocks_threats_and_changed_installer(self):
+    def test_defender_scan_blocks_threats_and_changed_files(self):
         with tempfile.TemporaryDirectory() as directory:
             installer = Path(directory)/'installer.exe'
             original = b'installer fixture'
             installer.write_bytes(original)
+            versions = {'AMEngineVersion': '1.1.1', 'AMProductVersion': '4.18.1',
+                        'AntivirusSignatureVersion': '1.2.3'}
+            status = subprocess.CompletedProcess([], 0, json.dumps(versions))
             with patch.object(windows, 'update_signatures', return_value=Path('new/MpCmdRun.exe')), \
                  patch('sys.stdout', io.StringIO()):
-                with patch.object(windows.subprocess, 'run', side_effect=subprocess.CalledProcessError(2, ['scan'])) as execute:
+                with patch.object(windows.subprocess, 'run', side_effect=[
+                    status, subprocess.CalledProcessError(2, ['scan']),
+                ]) as execute:
                     with self.assertRaises(subprocess.CalledProcessError):
-                        windows.scan_installers([installer])
+                        windows.scan_windows_files([installer])
                     self.assertEqual(execute.call_args.args[0][0], str(Path('new/MpCmdRun.exe')))
                     self.assertIn('-DisableRemediation', execute.call_args.args[0])
                     self.assertTrue(execute.call_args.kwargs['check'])
                 def changed(*args, **kwargs):
+                    if args[0][0] == 'powershell.exe':
+                        return status
                     installer.write_bytes(b'changed fixture')
                     return subprocess.CompletedProcess(args[0], 0)
                 with patch.object(windows.subprocess, 'run', side_effect=changed):
-                    with self.assertRaisesRegex(RuntimeError, 'Installer changed'):
-                        windows.scan_installers([installer])
+                    with self.assertRaisesRegex(RuntimeError, 'File changed'):
+                        windows.scan_windows_files([installer])
+
+    def test_defender_scan_records_unpacked_executables_and_libraries(self):
+        with tempfile.TemporaryDirectory() as directory:
+            files = [Path(directory)/name for name in ('setup.exe', 'clash-of-rust.exe', 'wintun.dll')]
+            for path in files:
+                path.write_bytes(path.name.encode('ascii'))
+            versions = {'AMEngineVersion': '1.1.1', 'AMProductVersion': '4.18.1',
+                        'AntivirusSignatureVersion': '1.2.3'}
+            with patch.object(windows, 'update_signatures', return_value=Path('MpCmdRun.exe')), \
+                 patch('sys.stdout', io.StringIO()), \
+                 patch.object(windows.subprocess, 'run', side_effect=[
+                     subprocess.CompletedProcess([], 0, json.dumps(versions)),
+                     *[subprocess.CompletedProcess([], 0) for _ in files],
+                 ]) as execute:
+                report = windows.scan_windows_files(files)
+            self.assertEqual(report['versions'], versions)
+            self.assertEqual(report['files'], [
+                {'file': path.name, 'sha256': build.sha256(path)} for path in files
+            ])
+            self.assertEqual(execute.call_count, 4)
+            scanned = [Path(call.args[0][call.args[0].index('-File')+1])
+                       for call in execute.call_args_list[1:]]
+            self.assertEqual(scanned, [path.resolve() for path in files])
+
+    def test_defender_scan_requires_version_evidence_before_scanning(self):
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory)/'program.exe'
+            path.write_bytes(b'fixture')
+            with patch.object(windows, 'update_signatures', return_value=Path('MpCmdRun.exe')), \
+                 patch('sys.stdout', io.StringIO()), \
+                 patch.object(windows.subprocess, 'run', return_value=subprocess.CompletedProcess([], 0, '{}')) as execute:
+                with self.assertRaisesRegex(RuntimeError, 'version information'):
+                    windows.scan_windows_files([path])
+                self.assertEqual(execute.call_count, 1)
+
+    def test_windows_package_scans_payload_before_installing(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            payload = root/'build/payload'
+            (payload/'resources').mkdir(parents=True)
+            names = ['clash-of-rust.exe', 'clash-desktop-ui.exe', 'cor.exe',
+                     'clash-tun-launcher.exe', 'resources/mihomo.exe', 'resources/wintun.dll']
+            for name in [*names, 'resources/manifest.json']:
+                (payload/name).write_bytes(b'fixture')
+            package, smoke = root/'setup.exe', root/'build/tests/core_integration.exe'
+            evidence = {'versions': {}, 'files': []}
+            with patch.object(windows, 'os') as platform, \
+                 patch.object(windows, 'ROOT', root), \
+                 patch.object(windows, 'scan_windows_files', return_value=evidence) as scan, \
+                 patch.object(windows, '_verify_installed_package') as verify:
+                platform.name = 'nt'
+                manifest = {'tests': {'core_integration': 'tests/core_integration.exe'}}
+                package.write_bytes(b'installer')
+                smoke.parent.mkdir(parents=True)
+                smoke.write_bytes(b'test fixture')
+                self.assertEqual(windows.package_tests(package, manifest, root/'build'), evidence)
+                self.assertEqual(scan.call_args.args[0], [package, *sorted(payload/name for name in names)])
+                verify.assert_called_once()
+                verify.reset_mock()
+                scan.side_effect = subprocess.CalledProcessError(2, ['scan'])
+                with self.assertRaises(subprocess.CalledProcessError):
+                    windows.package_tests(package, manifest, root/'build')
+                verify.assert_not_called()
 
     def test_linux_helpers_are_distinct_inactive_native_copies(self):
         spec = importlib.util.spec_from_file_location('build_installer',build.ROOT/'scripts/build-installer.py')
@@ -1228,6 +1311,19 @@ assert.equal(calls.length,2);
                 if __import__('os').name != 'nt':
                     self.assertEqual(path.stat().st_mode & 0o7777,0o755)
             self.assertFalse((stage/'clash-tun-launcher').samefile(stage/'libexec/resolvectl'))
+
+    def test_linux_tun_authorization_requires_an_admin_in_every_session(self):
+        import xml.etree.ElementTree as xml
+        policy = xml.parse(build.ROOT/'resources/linux/org.clashofrust.tun.policy')
+        actions = policy.findall('action')
+        self.assertEqual(len(actions), 1)
+        action = actions[0]
+        for session in ('allow_any', 'allow_inactive', 'allow_active'):
+            self.assertEqual(action.findtext('defaults/'+session), 'auth_admin')
+        annotations = {item.attrib['key']: item.text for item in action.findall('annotate')}
+        self.assertEqual(annotations['org.freedesktop.policykit.exec.path'], '/opt/clash-of-rust/clash-of-rust')
+        self.assertEqual(annotations['org.freedesktop.policykit.exec.argv1'], '--authorize-tun')
+        self.assertNotIn('org.freedesktop.policykit.exec.allow_gui', annotations)
 
     def test_arm64_bundles_are_separate_and_native_architecture_is_detected(self):
         self.assertEqual(build.bundle_directory('windows','x64'),build.ROOT/'bundle')
@@ -1265,18 +1361,23 @@ assert.equal(calls.length,2);
 
     def test_version_validation(self):
         self.assertEqual(build.validate_version('0.4.4'),'0.4.4')
-        for invalid in ('1.2','1.2.3.4','1.2.x','1.2.65536','../0.4.4','01.2.3','0.4.12-dev.01','0.4.12-','0.4.12-dev/1'):
+        for invalid in ('1.2','1.2.3.4','1.2.x','1.2.65536','../0.4.4','01.2.3','0.4.12-dev.01','0.4.12-','0.4.12-dev/1',
+                        '0.6.5-dev:fake-ip-sources','0.6.5-fix:android-protection'):
             with self.assertRaises(ValueError):
                 build.validate_version(invalid)
 
     def test_prerelease_installer_versions_preserve_semver_and_upgrade_order(self):
-        self.assertEqual(build.validate_version('0.4.12-dev.1'),'0.4.12-dev.1')
-        self.assertEqual(build.numeric_version('0.4.12-dev.1'),'0.4.12.0')
-        self.assertEqual(build.deb_version('0.4.12-dev.1'),'0.4.12~dev.1')
         self.assertEqual(build.deb_version('0.4.12'),'0.4.12')
-        if shutil.which('dpkg'):
-            subprocess.run(['dpkg','--compare-versions',build.deb_version('0.4.12-dev.1'),'lt','0.4.12'],check=True)
-            subprocess.run(['dpkg','--compare-versions',build.deb_version('0.4.12-dev.1'),'gt','0.4.11'],check=True)
+        for version, stable, previous in [('0.4.12-dev.1','0.4.12','0.4.11'),
+                                          ('0.6.5-dev.1.fake-ip-sources','0.6.5','0.6.4'),
+                                          ('0.6.5-fix.1.android-protection','0.6.5','0.6.4')]:
+            with self.subTest(version=version):
+                self.assertEqual(build.validate_version(version),version)
+                self.assertEqual(build.numeric_version(version),stable+'.0')
+                self.assertEqual(build.deb_version(version),version.replace('-','~',1))
+                if shutil.which('dpkg'):
+                    subprocess.run(['dpkg','--compare-versions',build.deb_version(version),'lt',stable],check=True)
+                    subprocess.run(['dpkg','--compare-versions',build.deb_version(version),'gt',previous],check=True)
 
     def test_build_token_is_sent_only_to_secure_github_api_and_removed_on_redirect(self):
         import io
@@ -1486,7 +1587,7 @@ class ReleaseTests(unittest.TestCase):
              patch.object(release,'repository',return_value='example/project'), \
              patch.object(release,'credential',return_value='test-only-token'), \
              patch.object(release,'GitHub'), patch.object(release,'git',return_value=self.commit), \
-             patch.object(release,'verified_run',return_value={'id':77,'html_url':'https://example.test/ci'}), \
+             patch.object(release,'verified_run',return_value={'id':77,'head_branch':'main','html_url':'https://example.test/ci'}), \
              patch.object(release,'release_metadata',return_value=(self.version,self.tag,self.notes)), \
              patch.object(release,'verified_package_run'), patch.object(release,'download_package_files',return_value={}), patch.object(release,'publish') as publishing:
             release.main()
@@ -1526,6 +1627,26 @@ class ReleaseTests(unittest.TestCase):
             with tempfile.TemporaryDirectory() as folder:
                 path=Path(folder)/'notes.md';path.write_text('Uncommitted notes')
                 with self.assertRaises(ValueError):release.release_metadata(self.commit,notes_path=path)
+
+    def test_prerelease_requires_explicit_current_same_repository_ci(self):
+        changes = {'event':'pull_request', 'head_branch':'codex/fix-android'}
+        self.assertEqual(release.verified_run(self.client(changes), self.commit, 77, prerelease=True)['id'], 77)
+        for invalid in ({'head_repository':{'full_name':'fork/project'}},
+                        {'event':'push'}, {'head_sha':'b'*40}, {'conclusion':'failure'}):
+            with self.subTest(invalid=invalid), self.assertRaises(ValueError):
+                release.verified_run(self.client(changes | invalid), self.commit, 77, prerelease=True)
+        with self.assertRaises(ValueError):
+            release.verified_run(self.client(changes), self.commit, prerelease=True)
+        with self.assertRaises(ValueError):
+            release.verified_run(self.client(changes), self.commit, 77, check_only=True, prerelease=True)
+        with self.assertRaises(ValueError):
+            release.verified_run(self.client(changes, main='b'*40), self.commit, 77, prerelease=True)
+        with patch.object(release, 'git', return_value='[package]\nversion=\"0.6.5\"'):
+            with self.assertRaises(ValueError):
+                release.release_metadata(self.commit, prerelease=True)
+        with patch.object(release, 'git', return_value='[package]\nversion=\"0.6.5-fix.2.android-parity\"'), \
+             patch.object(release.subprocess, 'check_output', return_value=self.notes):
+            self.assertEqual(release.release_metadata(self.commit, prerelease=True)[1], 'v0.6.5-fix.2.android-parity')
 
     def test_preview_packaging_requires_no_release_notes_and_still_checks_version(self):
         with patch.object(release,'git',return_value='[package]\nversion="0.5.2-dev.1"'), \
@@ -1610,6 +1731,11 @@ class ReleaseTests(unittest.TestCase):
             with self.assertRaises(ValueError):release.verified_package_run(client(jobs=jobs),88,self.commit)
             self.assertEqual(release.verified_package_run(client({'head_branch':'codex/dev-0.5.2'}),
                                                          88,self.commit,check_only=True)['id'],88)
+            self.assertEqual(release.verified_package_run(client({'head_branch':'codex/fix-android'}),
+                             88,self.commit,prerelease=True,source_branch='codex/fix-android')['id'],88)
+            with self.assertRaises(ValueError):
+                release.verified_package_run(client({'head_branch':'other'}),
+                    88,self.commit,prerelease=True,source_branch='codex/fix-android')
             with self.assertRaises(ValueError):
                 release.verified_package_run(client({'head_branch':'codex/dev-0.5.2'},jobs=jobs),
                                              88,self.commit,check_only=True)
@@ -1633,8 +1759,9 @@ class ReleaseTests(unittest.TestCase):
             self.assertIn('ci_run_id=77',output.read_text())
 
     class PublisherClient:
-        def __init__(self, owner, published=False, bad_upload=False, main_changed=False, wrong_tag=False, starter=False):
+        def __init__(self, owner, published=False, bad_upload=False, main_changed=False, wrong_tag=False, starter=False, branch='main'):
             self.owner=owner;self.bad_upload=bad_upload;self.main_changed=main_changed;self.writes=[]
+            self.branch=branch
             self.tag_commit='b'*40 if wrong_tag else owner.commit if published else None
             self.release=None
             if published or starter:
@@ -1651,7 +1778,7 @@ class ReleaseTests(unittest.TestCase):
             if path=='/git/ref/tags/'+owner.tag:
                 if self.tag_commit is None:raise urllib.error.HTTPError(path,404,'Not Found',{},None)
                 return {'object':{'type':'commit','sha':self.tag_commit}}
-            if path=='/branches/main':return {'commit':{'sha':'b'*40 if self.main_changed else owner.commit}}
+            if path=='/branches/'+urllib.parse.quote(self.branch,safe=''):return {'commit':{'sha':'b'*40 if self.main_changed else owner.commit}}
             if path=='/releases' and method=='POST':
                 self.release={**data,'id':1,'assets':[],
                     'upload_url':'https://uploads.github.com/repos/example/project/releases/1{?name}',
@@ -1695,6 +1822,27 @@ class ReleaseTests(unittest.TestCase):
                 client=self.PublisherClient(self,**kwargs)
                 with self.assertRaises(ValueError):release.publish(client,self.commit,self.tag,self.notes,files)
                 self.assertFalse(client.writes)
+
+    def test_fix_branch_prerelease_does_not_change_latest_and_checks_source_after_upload(self):
+        self.version='0.6.5-fix.2.android-parity';self.tag='v'+self.version
+        with tempfile.TemporaryDirectory() as folder:
+            files=self.files(Path(folder))
+            branch='codex/fix-android'
+            refused=self.PublisherClient(self,branch=branch)
+            with self.assertRaises(ValueError):
+                release.publish(refused,self.commit,self.tag,self.notes,files,source_branch=branch)
+            self.assertFalse(refused.writes)
+            for changed in (False, True):
+                client=self.PublisherClient(self,branch=branch,main_changed=changed)
+                if changed:
+                    with self.assertRaises(ValueError):
+                        release.publish(client,self.commit,self.tag,self.notes,files,source_branch=branch,prerelease=True)
+                    self.assertTrue(client.release['draft'])
+                else:
+                    release.publish(client,self.commit,self.tag,self.notes,files,source_branch=branch,prerelease=True)
+                    self.assertFalse(client.release['draft'])
+                    self.assertTrue(client.release['prerelease'])
+                    self.assertEqual(client.release['make_latest'],'false')
 
     def test_release_leaves_draft_unpublished_after_bad_upload_or_main_change(self):
         with tempfile.TemporaryDirectory() as folder:

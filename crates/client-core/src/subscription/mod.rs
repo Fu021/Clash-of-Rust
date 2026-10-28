@@ -1,17 +1,18 @@
 //! Bounded subscription downloads using the same routes as client updates.
 use crate::network::{Route, request_error};
 use anyhow::{Context, Result, bail};
-use reqwest::{Client, Url};
+use reqwest::Url;
 use std::time::Duration;
 mod info;
+pub mod schedule;
 pub use info::summary;
 
 const LIMIT: usize = 10 * 1024 * 1024;
 
 pub async fn download_routes(url: &Url, routes: &[Route]) -> Result<(String, Option<String>)> {
     let mut errors = Vec::new();
-    for route in routes {
-        match download_route(url, route).await {
+    for (index, route) in routes.iter().enumerate() {
+        match download_route(url, route, index + 1 < routes.len()).await {
             Ok(subscription) => return Ok(subscription),
             Err(error) => errors.push(format!("{}：{error}", route.label)),
         }
@@ -19,10 +20,14 @@ pub async fn download_routes(url: &Url, routes: &[Route]) -> Result<(String, Opt
     bail!("{}（已尝试可用代理和直连）", errors.join("；"));
 }
 
-async fn download_route(url: &Url, route: &Route) -> Result<(String, Option<String>)> {
+async fn download_route(
+    url: &Url,
+    route: &Route,
+    retry_slow: bool,
+) -> Result<(String, Option<String>)> {
     let client = route
         .apply(
-            Client::builder()
+            crate::network::client_builder()
                 .connect_timeout(Duration::from_secs(5))
                 .read_timeout(Duration::from_secs(15))
                 .timeout(Duration::from_secs(30))
@@ -50,20 +55,23 @@ async fn download_route(url: &Url, route: &Route) -> Result<(String, Option<Stri
         .and_then(|value| value.to_str().ok())
         .map(str::to_owned);
     let mut bytes = Vec::new();
-    while let Some(chunk) = response
-        .chunk()
+    let mut watchdog = crate::download::Watchdog::new(retry_slow);
+    while let Some(chunk) = watchdog
+        .chunk(&mut response)
         .await
-        .map_err(|error| request_error(error, "订阅下载"))?
+        .context("订阅下载失败")?
     {
+        let chunk = chunk.as_ref();
         if chunk.len() > LIMIT.saturating_sub(bytes.len()) {
             bail!("订阅超过 10 MiB 限制");
         }
-        bytes.extend_from_slice(&chunk);
+        bytes.extend_from_slice(chunk);
     }
-    Ok((
-        String::from_utf8(bytes).context("订阅不是 UTF-8 YAML 文本")?,
-        usage,
-    ))
+    let raw = String::from_utf8(bytes).context("订阅不是 UTF-8 YAML 文本")?;
+    // Captive portals and error pages can return HTTP 200. Try the next route
+    // before allowing any caller to replace its cached subscription.
+    crate::config::parse_profile(&raw).context("订阅响应不是有效的 mihomo 配置")?;
+    Ok((raw, usage))
 }
 
 #[cfg(test)]
@@ -149,5 +157,44 @@ mod tests {
             assert!(error.to_string().contains("直连"));
             task.await.unwrap();
         }
+    }
+
+    #[tokio::test]
+    async fn invalid_success_response_falls_back_to_a_valid_route() {
+        for raw in ["", "<html>Sign in</html>", "proxies: ["] {
+            let wire = format!(
+                "HTTP/1.1 200 OK\r\nContent-Length: {}\r\n\r\n{raw}",
+                raw.len()
+            );
+            let (proxy, proxy_task) = server(wire.into_bytes()).await;
+            let (origin, origin_task) = server(response()).await;
+            let (raw, usage) =
+                download_routes(&Url::parse(&origin).unwrap(), &routes(None, Some(proxy)))
+                    .await
+                    .unwrap();
+            assert_eq!(raw, "proxies: []\n");
+            assert_eq!(usage.as_deref(), Some("upload=1; download=2; total=3"));
+            proxy_task.await.unwrap();
+            origin_task.await.unwrap();
+        }
+    }
+
+    #[tokio::test]
+    async fn all_failed_routes_return_an_error_without_including_the_subscription_url() {
+        let (proxy, proxy_task) =
+            server(b"HTTP/1.1 503 Unavailable\r\nContent-Length: 0\r\n\r\n".to_vec()).await;
+        let (origin, origin_task) =
+            server(b"HTTP/1.1 200 OK\r\nContent-Length: 0\r\n\r\n".to_vec()).await;
+        let url = Url::parse(&format!("{origin}/private-subscription?token=secret")).unwrap();
+        let error = download_routes(&url, &routes(None, Some(proxy)))
+            .await
+            .unwrap_err();
+        let message = format!("{error:#}");
+        assert!(message.contains("HTTP 503"));
+        assert!(message.contains("订阅响应不是有效"));
+        assert!(message.contains("已尝试可用代理和直连"));
+        assert!(!message.contains("private-subscription") && !message.contains("secret"));
+        proxy_task.await.unwrap();
+        origin_task.await.unwrap();
     }
 }

@@ -56,7 +56,7 @@ fn connection_details(
 impl App {
     pub(super) fn proxy_rows(&self) -> (usize, Vec<(GroupItem, Vec<NodePair>)>) {
         let query = self.query.to_lowercase();
-        let groups: Vec<_> = self
+        let mut groups: Vec<_> = self
             .snapshot
             .proxies
             .proxies
@@ -67,6 +67,12 @@ impl App {
                         || proxy.all.iter().any(|node| contains_query(node, &query)))
             })
             .collect();
+        if let Some(index) = groups
+            .iter()
+            .position(|(name, _)| self.snapshot.active_group.as_deref() == Some(name.as_str()))
+        {
+            groups[..=index].rotate_right(1);
+        }
         let total = groups.len();
         let offset = self
             .list_offset
@@ -394,12 +400,10 @@ impl App {
         set!(
             get_proxy_mode,
             set_proxy_mode,
-            if self.snapshot.tun {
-                1
-            } else if self.snapshot.system_proxy {
-                0
-            } else {
-                2
+            match self.snapshot.proxy_mode() {
+                ProxyMode::System => 0,
+                ProxyMode::Tun => 1,
+                ProxyMode::Off => 2,
             }
         );
         text!(
@@ -436,6 +440,11 @@ impl App {
         text!(get_window_width, set_window_width, &self.window_width);
         text!(get_window_height, set_window_height, &self.window_height);
         text!(get_interval, set_interval, &self.interval_input);
+        text!(
+            get_subscription_interval,
+            set_subscription_interval,
+            &self.subscription_interval_input
+        );
         text!(get_fake_ip_input, set_fake_ip_input, &self.fake_ip_input);
         text!(get_fake_ip_error, set_fake_ip_error, &self.fake_ip_error);
         text!(
@@ -727,6 +736,7 @@ impl App {
                         source: row.source.to_string().into(),
                         selected: state.selected.as_deref() == Some(&row.id),
                         enabled: row.enabled,
+                        raw: row.raw.as_ref().into(),
                     }
                 })
                 .collect(),
@@ -859,6 +869,7 @@ impl App {
                             clash_of_rust::flags::label(&result.country)
                         });
                     ReportItem {
+                        country: String::new().into(),
                         flag: flag.clone().unwrap_or_default(),
                         flagged: flag.is_some(),
                         id: service.id.as_str().into(),
@@ -982,6 +993,16 @@ impl App {
                         claude_view::ResultKind::Risk => 3,
                         claude_view::ResultKind::Unknown => 2,
                     };
+                    let country = match &entry {
+                        claude_view::Entry::Signal(_, signal)
+                            if signal.group == clash_of_rust::claude_check::Group::Dns
+                                && !signal.ip.is_empty() =>
+                        {
+                            clash_of_rust::probe::country_name(&signal.country).unwrap_or_default()
+                        }
+                        _ => String::new(),
+                    };
+                    let (_, flag) = clash_of_rust::flags::label(&country);
                     let (title, value, detail, source) = match entry {
                         claude_view::Entry::Config(finding) => (
                             finding.field.clone(),
@@ -997,7 +1018,11 @@ impl App {
                         ),
                         claude_view::Entry::Signal(_, signal) => (
                             signal.title.clone(),
-                            signal.value.clone(),
+                            if country.is_empty() {
+                                signal.value.clone()
+                            } else {
+                                signal.ip.clone()
+                            },
                             format!("{}\n{}", signal.detail, signal.advice),
                             signal.source.clone(),
                         ),
@@ -1009,8 +1034,9 @@ impl App {
                         ),
                     };
                     ReportItem {
-                        flag: String::new(),
-                        flagged: false,
+                        country: country.into(),
+                        flagged: flag.is_some(),
+                        flag: flag.unwrap_or_default(),
                         id: "".into(),
                         title: title.into(),
                         value: value.into(),
@@ -1024,6 +1050,9 @@ impl App {
     }
 
     fn present_dialog(&self, data: &UiData) {
+        let rules_locked = self.page != Page::Rules
+            || self.settings.claude_protection.is_some()
+            || self.claude.protection_pending.is_some();
         data.set_modal_error("".into());
         data.set_modal_copy("".into());
         data.set_modal_country("".into());
@@ -1065,14 +1094,19 @@ impl App {
             data.set_modal_title("添加订阅".into());
             data.set_modal_accept("导入".into());
             data.set_modal_can_accept(!self.working && !self.profile_source.trim().is_empty());
-        } else if let Some(profile) = &self.rule_state.pending_profile {
+        } else if let Some(profile) = self
+            .rule_state
+            .pending_profile
+            .as_ref()
+            .filter(|_| !rules_locked)
+        {
             kind = 6;
             data.set_modal_title("切换规则配置？".into());
             data.set_modal_description(
                 format!("当前未应用的草稿将丢弃，切换到“{}”。", profile.name).into(),
             );
             data.set_modal_accept("放弃并切换".into());
-        } else if let Some(editor) = &self.rule_state.editor {
+        } else if let Some(editor) = self.rule_state.editor.as_ref().filter(|_| !rules_locked) {
             kind = 4;
             data.set_modal_title("编辑规则".into());
             data.set_modal_accept("保存到草稿".into());
@@ -1085,7 +1119,7 @@ impl App {
             data.set_rule_enabled(editor.enabled);
             data.set_rule_no_resolve(editor.no_resolve);
             data.set_modal_error(editor.error.as_str().into());
-        } else if self.rule_state.move_open {
+        } else if self.rule_state.move_open && !rules_locked {
             kind = 5;
             data.set_modal_title("移动到指定位置".into());
             data.set_modal_accept("移动".into());
@@ -1096,7 +1130,7 @@ impl App {
                     kind = 7;
                     let wait = self.claude.protection_wait();
                     data.set_modal_title("开启 Claude 保护？".into());
-                    data.set_modal_description("将锁定当前具体节点和运行模式（规则或全局），启用 TUN、严格路由、IPv6 接管、UDP、广泛规则、加密 DNS 与实时异常连接拦截。全局出口为 DIRECT 时无法开启；直连模式下将使用规则模式。\n\n这些设置可能影响其他应用、国内网站与内网服务；节点故障时相关解析也可能失败。节点域名沿用原节点 DNS 在本地解析；公网域名通过保护节点使用加密 DNS，局域网名称保留本地解析。\n\n原代理模式、DNS、UDP、规则和节点选择会保存；重启后仍保留，关闭保护后恢复。\n\n不能保证消除所有地区线索或满足服务的账号资格要求。".into());
+                    data.set_modal_description("将锁定当前具体节点和运行模式（规则或全局），启用 TUN、严格路由、IPv6 接管、UDP、广泛规则、加密 DNS 与实时异常连接拦截，并关闭当前内核连接，让应用重新建立连接。全局出口为 DIRECT 时无法开启；直连模式下将使用规则模式。\n\n这些设置可能影响其他应用、国内网站与内网服务；节点故障时相关解析也可能失败。节点域名沿用原节点 DNS 在本地解析；公网域名通过保护节点使用加密 DNS，局域网名称保留本地解析。\n\n原代理模式、DNS、UDP、规则和节点选择会保存；重启后仍保留，关闭保护后恢复。\n\n不能保证消除所有地区线索或满足服务的账号资格要求。".into());
                     data.set_modal_accept(if wait == 0 {
                         "开启并重新检测".into()
                     } else {

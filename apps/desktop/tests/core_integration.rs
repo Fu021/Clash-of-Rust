@@ -5,6 +5,9 @@ use clash_of_rust::{
     engine::{Engine, Scope},
 };
 
+#[cfg(target_os = "macos")]
+#[path = "support/macos_dns.rs"]
+mod macos_dns;
 #[cfg(target_os = "linux")]
 #[path = "support/protected_dns.rs"]
 mod protected_dns;
@@ -106,6 +109,91 @@ fn assert_system_proxy_ports(store: &Store, port: u16) {
             assert_eq!(value[format!("{protocol}Port")], port);
         }
     }
+}
+
+async fn check_network_refresh(engine: &mut Engine, store: &Store) {
+    let path = store.runtime().join("config.yaml");
+    let raw = std::fs::read_to_string(&path).unwrap();
+    let settings = std::fs::read(store.root.join("settings.json")).unwrap();
+    let journal = std::fs::read(store.root.join("system-proxy.json")).ok();
+    let before = engine.poll(Scope::Home).await.unwrap();
+    let config: serde_json::Value = engine.api.get("configs").await.unwrap();
+    let proxies: clash_of_rust::api::Proxies = engine.api.get("proxies").await.unwrap();
+    engine.api.refresh_network(&raw).await.unwrap();
+    let after = engine.poll(Scope::Home).await.unwrap();
+    assert!(after.running);
+    assert_eq!(after.tun, before.tun);
+    assert_eq!(after.system_proxy, before.system_proxy);
+    let current: serde_json::Value = engine.api.get("configs").await.unwrap();
+    assert_eq!(current["mode"], config["mode"]);
+    let current: clash_of_rust::api::Proxies = engine.api.get("proxies").await.unwrap();
+    for (name, proxy) in proxies.proxies {
+        if proxy.kind == "Selector" && !proxy.now.is_empty() {
+            assert_eq!(current.proxies[&name].now, proxy.now);
+        }
+    }
+    assert_eq!(std::fs::read_to_string(path).unwrap(), raw);
+    assert_eq!(
+        std::fs::read(store.root.join("settings.json")).unwrap(),
+        settings
+    );
+    assert_eq!(
+        std::fs::read(store.root.join("system-proxy.json")).ok(),
+        journal
+    );
+    println!(
+        "PASS: network refresh preserves live mode, selectors, TUN, proxy ownership and disk settings"
+    );
+}
+
+#[cfg(target_os = "macos")]
+async fn check_macos_proxy_bypass_edits(engine: &mut Engine, store: &Store) {
+    use clash_of_rust::{
+        engine::ProxyMode,
+        platform::{ProxyState, ProxyValue, macos},
+    };
+    let journal: serde_json::Value =
+        serde_json::from_slice(&std::fs::read(store.root.join("system-proxy.json")).unwrap())
+            .unwrap();
+    let original: ProxyState = serde_json::from_value(journal["original"].clone()).unwrap();
+    let mut changed = macos::read().unwrap();
+    for value in changed.values_mut() {
+        let Some(ProxyValue::Text(text)) = value else {
+            panic!("enabled network service must have proxy properties")
+        };
+        let mut properties: serde_json::Value = serde_json::from_str(text).unwrap();
+        properties["ExceptionsList"] = serde_json::json!(["later-edit.example"]);
+        *text = properties.to_string();
+    }
+    macos::write(&changed).unwrap();
+    assert!(engine.poll(Scope::Home).await.unwrap().system_proxy);
+    assert_system_proxy_ports(store, engine.settings.mixed_port);
+    engine.select_proxy_mode(ProxyMode::Off).await.unwrap();
+    assert!(!engine.poll(Scope::Home).await.unwrap().system_proxy);
+    let restored = macos::read().unwrap();
+    for id in changed.keys() {
+        let Some(ProxyValue::Text(text)) = &restored[id] else {
+            panic!("later bypass edit must survive proxy restoration")
+        };
+        let mut properties: serde_json::Value = serde_json::from_str(text).unwrap();
+        assert_eq!(
+            properties["ExceptionsList"],
+            serde_json::json!(["later-edit.example"])
+        );
+        properties.as_object_mut().unwrap().remove("ExceptionsList");
+        let mut previous: serde_json::Value = match &original[id] {
+            Some(ProxyValue::Text(text)) => serde_json::from_str(text).unwrap(),
+            None => serde_json::json!({}),
+            _ => panic!("invalid original proxy properties"),
+        };
+        previous.as_object_mut().unwrap().remove("ExceptionsList");
+        assert_eq!(properties, previous);
+    }
+    assert!(!store.root.join("system-proxy.json").exists());
+    // The lease is closed; put the disposable runner's bypass values back.
+    macos::service::restore_proxy(&original).unwrap();
+    engine.select_proxy_mode(ProxyMode::System).await.unwrap();
+    println!("PASS: macOS proxy status and helper restoration preserve later bypass edits");
 }
 
 #[tokio::test]
@@ -266,6 +354,8 @@ async fn basic_system_proxy_and_tun() {
     );
     server.await.unwrap();
     println!("PASS: native system proxy and HTTP forwarding");
+    #[cfg(target_os = "macos")]
+    check_macos_proxy_bypass_edits(&mut engine, &store).await;
     mixed_port = free_port();
     while mixed_port == engine.settings.controller_port {
         mixed_port = free_port();
@@ -302,6 +392,7 @@ async fn basic_system_proxy_and_tun() {
     );
     server.await.unwrap();
     println!("PASS: changing mixed port updates native proxy endpoints and SOCKS forwards traffic");
+    check_network_refresh(&mut engine, &store).await;
     engine.select_proxy_mode(ProxyMode::Tun).await.unwrap();
     let state = engine.poll(Scope::Home).await.unwrap();
     assert!(state.running && state.tun && !state.system_proxy);
@@ -336,6 +427,7 @@ async fn basic_system_proxy_and_tun() {
         "Unproxied traffic was not captured and routed by TUN"
     );
     println!("PASS: unproxied traffic captured by TUN");
+    check_network_refresh(&mut engine, &store).await;
     #[cfg(windows)]
     {
         // Preserve TUN preference, but discard every in-memory Engine/session
@@ -376,6 +468,8 @@ async fn basic_system_proxy_and_tun() {
             std::panic::resume_unwind(panic);
         }
     }
+    #[cfg(target_os = "macos")]
+    macos_dns::run(&mut engine, &profile).await;
     engine.select_proxy_mode(ProxyMode::Off).await.unwrap();
     let state = engine.poll(Scope::Home).await.unwrap();
     assert!(!state.tun && !state.system_proxy);
@@ -458,6 +552,78 @@ async fn basic_system_proxy_and_tun() {
             .iter()
             .any(|profile| profile.id == active && profile.name == "CLI renamed")
     );
+    let original = facade
+        .profiles
+        .iter()
+        .find(|profile| profile.id == active)
+        .unwrap()
+        .clone();
+    let subscription_server = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let update_url = format!(
+        "http://{}/unavailable-subscription?token=secret",
+        subscription_server.local_addr().unwrap()
+    );
+    let failing_source = tokio::spawn(async move {
+        loop {
+            let (mut socket, _) = subscription_server.accept().await.unwrap();
+            let mut request = [0; 4096];
+            if socket.read(&mut request).await.unwrap() == 0 {
+                continue;
+            }
+            let _ = socket
+                .write_all(b"HTTP/1.1 503 Unavailable\r\nContent-Length: 0\r\n\r\n")
+                .await;
+        }
+    });
+    let files = [
+        store.profile_path(&active).unwrap(),
+        store.root.join("profiles.json"),
+        store.root.join("settings.json"),
+        store.runtime().join("config.yaml"),
+    ];
+    let before_files: Vec<_> = files
+        .iter()
+        .map(|path| std::fs::read(path).unwrap())
+        .collect();
+    let before: Meta = remote.request(Control::Meta).await.unwrap();
+    let error = remote
+        .request::<serde_json::Value>(Control::Import {
+            name: original.name.clone(),
+            source: update_url,
+            id: Some(active.clone()),
+        })
+        .await
+        .unwrap_err();
+    assert!(format!("{error:#}").contains("已保留原配置与运行状态"));
+    assert!(!format!("{error:#}").contains("token=secret"));
+    let after: Meta = remote.request(Control::Meta).await.unwrap();
+    assert!(after.running);
+    assert_eq!(after.view_revision, before.view_revision);
+    assert_eq!(
+        serde_json::to_value((&after.settings, &after.profiles)).unwrap(),
+        serde_json::to_value((&before.settings, &before.profiles)).unwrap()
+    );
+    for (path, bytes) in files.iter().zip(&before_files) {
+        assert_eq!(&std::fs::read(path).unwrap(), bytes);
+    }
+    facade.poll(Scope::Other).await.unwrap();
+    assert_eq!(facade.view_revision(), before.view_revision);
+    failing_source.abort();
+    let _ = failing_source.await;
+    let _: serde_json::Value = remote
+        .request(Control::Import {
+            name: original.name,
+            source: original.source,
+            id: Some(active.clone()),
+        })
+        .await
+        .unwrap();
+    facade.poll(Scope::Other).await.unwrap();
+    assert_eq!(facade.view_revision(), before.view_revision.wrapping_add(1));
+    assert!(facade.running());
+    println!(
+        "PASS: failed subscription updates preserve files and live GUI/CLI state; retry works"
+    );
     let builtin = meta
         .profiles
         .iter()
@@ -502,6 +668,20 @@ async fn basic_system_proxy_and_tun() {
         let meta: Meta = remote.request(Control::Meta).await.unwrap();
         assert!(meta.running);
         assert_eq!(meta.settings.proxy_mode, mode);
+        if mode == ProxyMode::System {
+            engine.lock().await.system_proxy(false).await.unwrap();
+            let meta: Meta = remote.request(Control::Meta).await.unwrap();
+            assert_eq!(meta.settings.proxy_mode, ProxyMode::System);
+            assert_eq!(console(&cli, &store, &["proxy"]).await["proxy"], "off");
+            assert_eq!(console(&cli, &store, &["status"]).await["proxy"], "off");
+            assert!(!facade.poll(Scope::Other).await.unwrap().system_proxy);
+            assert_eq!(
+                console(&cli, &store, &["proxy", "system"]).await["proxy"],
+                "system"
+            );
+            assert!(facade.poll(Scope::Other).await.unwrap().system_proxy);
+            println!("PASS: GUI and CLI show live proxy state without changing saved preferences");
+        }
     }
     drop(facade); // Releasing an attached GUI must not stop its owner.
     assert!(engine.lock().await.running());
@@ -527,7 +707,11 @@ async fn basic_system_proxy_and_tun() {
     // With the GUI owner gone, the same binary must create and clean up its own
     // headless owner rather than relying on the test process's runtime.
     let resources = test_resources();
-    println!("CLI smoke: starting a standalone owner");
+    let settings = store.load_settings().unwrap();
+    println!(
+        "CLI smoke: starting a standalone owner (controller {}, mixed {})",
+        settings.controller_port, settings.mixed_port
+    );
     #[cfg(not(windows))]
     let output = tokio::process::Command::new(&cli)
         .arg("--data-dir")

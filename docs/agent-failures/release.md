@@ -14,6 +14,7 @@
 
 - Publish Release [39784808500](https://github.com/Fu021/Clash-of-Rust/actions/runs/39784808500)：macOS 获取 artifact 时 DNS 失败。
 - Android 打包 [38989293563](https://github.com/Fu021/Clash-of-Rust/actions/runs/38989293563)：依赖快照与已验证 CI 不一致。
+- Publish Release [40523828709](https://github.com/Fu021/Clash-of-Rust/actions/runs/40523828709)：CI 步骤和产物已结束，但 GitHub 仍返回必需 job 为 `in_progress`，前置校验按预期拒绝；等待 job 状态同步为成功后再启动，不能仅凭产物存在跳过门禁。
 - 修复提交 `8b7ff41`、`9d705d5`、`1aaa1da`、`465fec6`。
 
 **首先检查**
@@ -27,7 +28,8 @@
 
 - 开发分支测试包保持 `check_only`；未获授权不创建正式 Release。
 - 瞬时下载失败只做有界重试，不能绕过校验或改用手工未验证文件。
-- 版本号和发布记录只在发布任务中修改，并同步 README、安装包名和更新测试。
+- 新开发/修复分支按[分支版本规则](../development.md#分支版本)同步版本；正式发布、去除后缀或跳版本需明确授权，历史发布记录不随开发版本改写。
+- 更新通道只依用户设置：关闭预发布时允许任意本地高版本返回最新正式版，开启时只提供更高版本。必须先选通道最高版本再与本地比较，避免同版本被过滤后误选更旧版本；同步桌面 API 回退、CLI 和 Android。核对[平台安装限制](../workflows/versions.md#版本与更新通道)，避免把检查到旧正式版误写为一定能覆盖安装。
 
 ## 12. 手动运行参数与工作流生命周期
 

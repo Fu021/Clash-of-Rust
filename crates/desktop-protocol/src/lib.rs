@@ -85,7 +85,7 @@ impl<T: Clone> List<T> {
 }
 include!(concat!(env!("OUT_DIR"), "/contract.rs"));
 
-pub const PROTOCOL: u32 = 5;
+pub const PROTOCOL: u32 = 9;
 pub const LIMIT: usize = 8 * 1024 * 1024;
 #[derive(Debug, Clone, Copy, Default, PartialEq, Serialize, Deserialize)]
 pub struct Size {
@@ -169,8 +169,7 @@ pub enum UiEvent {
     Error(String),
 }
 pub fn encode<T: Serialize>(value: &T) -> io::Result<Vec<u8>> {
-    let bytes = bincode::serde::encode_to_vec(value, bincode::config::standard())
-        .map_err(io::Error::other)?;
+    let bytes = postcard::to_allocvec(value).map_err(io::Error::other)?;
     if bytes.len() > LIMIT {
         return Err(io::Error::other("Desktop pipe frame exceeds limit"));
     }
@@ -180,10 +179,8 @@ pub fn decode<T: serde::de::DeserializeOwned>(bytes: &[u8]) -> io::Result<T> {
     if bytes.len() > LIMIT {
         return Err(io::Error::other("Desktop pipe frame exceeds limit"));
     }
-    let (value, consumed) =
-        bincode::serde::decode_from_slice(bytes, bincode::config::standard().with_limit::<LIMIT>())
-            .map_err(io::Error::other)?;
-    if consumed != bytes.len() {
+    let (value, remaining) = postcard::take_from_bytes(bytes).map_err(io::Error::other)?;
+    if !remaining.is_empty() {
         return Err(io::Error::other("Unexpected trailing desktop pipe data"));
     }
     Ok(value)
@@ -307,7 +304,7 @@ mod tests {
         }
         // A declared list length cannot request unbounded allocations even
         // when the framed input itself fits in the pipe's byte limit.
-        let huge = bincode::serde::encode_to_vec(u64::MAX, bincode::config::standard()).unwrap();
+        let huge = postcard::to_allocvec(&u64::MAX).unwrap();
         assert!(decode::<Vec<u64>>(&huge).is_err());
         assert!(decode::<Vec<u8>>(&vec![0; LIMIT + 1]).is_err());
         assert!(encode(&"x".repeat(LIMIT + 1)).is_err());

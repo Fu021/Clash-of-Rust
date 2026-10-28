@@ -2,13 +2,13 @@
 //! connections through different groups. Resolve groups to their selected leaf.
 use crate::{api::Proxies, rule_manager::parts};
 use anyhow::Result;
-use serde_yaml::Value;
+use yaml_serde::Value;
 
 pub const MAX_DEPTH: usize = 16;
 pub fn root(raw: &str) -> Result<String> {
     // This is the validated runtime configuration, whose size limit is higher
     // than the original subscription's after serialization and rule additions.
-    let map: serde_yaml::Mapping = serde_yaml::from_str(raw)?;
+    let map: yaml_serde::Mapping = yaml_serde::from_str(raw)?;
     if let Some(Value::Sequence(rules)) = map.get(Value::from("rules")) {
         for rule in rules.iter().filter_map(Value::as_str) {
             if let Ok(rule) = parts(rule)
@@ -36,6 +36,14 @@ pub fn start<'a>(mode: &str, default: &'a str) -> &'a str {
 }
 pub fn terminal(name: &str) -> bool {
     matches!(name, "DIRECT" | "REJECT" | "REJECT-DROP" | "PASS")
+}
+pub fn group<'a>(mode: &str, default: &'a str, proxies: &Proxies) -> Option<&'a str> {
+    let name = start(mode, default);
+    proxies
+        .proxies
+        .get(name)
+        .filter(|group| !group.all.is_empty())
+        .map(|_| name)
 }
 /// Use the already loaded proxy page without fetching it a second time.
 pub fn from_snapshot(root: &str, proxies: &Proxies) -> Option<String> {

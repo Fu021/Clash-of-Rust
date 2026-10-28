@@ -1,11 +1,11 @@
 use anyhow::{Context, Result, bail, ensure};
 use directories::ProjectDirs;
 use serde::{Deserialize, Serialize};
-use serde_yaml::{Mapping, Value};
 use std::{
     io::Write,
     path::{Path, PathBuf},
 };
+use yaml_serde::{Mapping, Value};
 
 mod dns;
 pub use dns::{DEFAULT_DNS_NAMESERVERS, DEFAULT_FAKE_IP_EXCLUSIONS};
@@ -134,6 +134,7 @@ pub struct Settings {
     pub claude_protection: Option<std::sync::Arc<crate::claude_check::protection::Protection>>,
     pub ip_reputation_key: Option<String>,
     pub delay_interval_minutes: u32,
+    pub subscription_update_interval_minutes: u32,
     pub active_profile: Option<String>,
     pub run_mode: String,
     pub proxy_mode: crate::model::ProxyMode,
@@ -175,6 +176,7 @@ impl Default for Settings {
             claude_protection: None,
             ip_reputation_key: None,
             delay_interval_minutes: 5,
+            subscription_update_interval_minutes: 360,
             active_profile: None,
             run_mode: "rule".into(),
             proxy_mode: crate::model::ProxyMode::Off,
@@ -344,6 +346,10 @@ impl Settings {
         if self.delay_interval_minutes > 1440 {
             bail!("定时测速间隔应为 0–1440 分钟，0 表示关闭");
         }
+        ensure!(
+            self.subscription_update_interval_minutes <= 10080,
+            "订阅更新间隔应为 0–10080 分钟，0 表示关闭"
+        );
         if self.controller_port == 0
             || self.mixed_port == 0
             || self.controller_port == self.mixed_port
@@ -374,7 +380,7 @@ impl Settings {
     }
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Profile {
     pub id: String,
     pub name: String,
@@ -557,7 +563,7 @@ pub fn parse_profile(raw: &str) -> Result<Mapping> {
     if raw.len() > PROFILE_LIMIT {
         bail!("配置超过 10 MiB 限制");
     }
-    let value: Value = serde_yaml::from_str(raw).context("YAML 配置格式错误")?;
+    let value: Value = yaml_serde::from_str(raw).context("YAML 配置格式错误")?;
     let Value::Mapping(map) = value else {
         bail!("订阅必须是 mihomo YAML 配置，而非节点链接或 Base64 文本");
     };
@@ -626,7 +632,7 @@ pub fn runtime_config_with_rules(
     // Geo downloads are explicitly managed by the application. Even the core's
     // missing-file fallback must not attempt Internet downloads during startup.
     map.insert(Value::from("geo-auto-update"), Value::from(false));
-    map.insert(Value::from("geox-url"), serde_yaml::from_str("geoip: http://127.0.0.1:1/offline\ngeosite: http://127.0.0.1:1/offline\nmmdb: http://127.0.0.1:1/offline\nasn: http://127.0.0.1:1/offline\n")?);
+    map.insert(Value::from("geox-url"), yaml_serde::from_str("geoip: http://127.0.0.1:1/offline\ngeosite: http://127.0.0.1:1/offline\nmmdb: http://127.0.0.1:1/offline\nasn: http://127.0.0.1:1/offline\n")?);
     let mut tun = match map.remove(Value::from("tun")) {
         Some(Value::Mapping(tun)) => tun,
         _ => Mapping::new(),
@@ -636,7 +642,7 @@ pub fn runtime_config_with_rules(
     tun.insert(Value::from("auto-route"), Value::from(true));
     tun.insert(Value::from("auto-detect-interface"), Value::from(true));
     tun.entry(Value::from("dns-hijack"))
-        .or_insert(serde_yaml::to_value(["any:53"])?);
+        .or_insert(yaml_serde::to_value(["any:53"])?);
     map.insert(Value::from("tun"), Value::Mapping(tun));
     apply_sniffer(&mut map)?;
     let managed_dns = dns::apply(&mut map, settings)?;
@@ -658,13 +664,23 @@ pub fn runtime_config_with_rules(
         {
             exclusions.push("+.bash.ws");
         }
+        let split_exclusions: Vec<_> = settings
+            .claude_protection
+            .iter()
+            .flat_map(|protection| &protection.split_dns)
+            .filter(|resolver| {
+                !crate::claude_check::protection::protected_dns_host(&resolver.domain)
+            })
+            .map(|resolver| format!("+.{}", resolver.domain))
+            .collect();
+        exclusions.extend(split_exclusions.iter().map(String::as_str));
         dns::fake_ip_exceptions(&mut map, &exclusions)?;
     }
     apply_udp(
         &mut map,
         settings.udp || settings.claude_protection.is_some(),
     )?;
-    Ok(serde_yaml::to_string(&map)?)
+    Ok(yaml_serde::to_string(&map)?)
 }
 
 /// Learn unknown HTTP/SNI/QUIC hostnames without rewriting established destinations.
@@ -714,7 +730,7 @@ fn apply_sniffer(map: &mut Mapping) -> Result<()> {
             .context("订阅嗅探协议必须是配置对象")?;
         options
             .entry(Value::from("ports"))
-            .or_insert(serde_yaml::from_str(ports)?);
+            .or_insert(yaml_serde::from_str(ports)?);
         options.insert(Value::from("override-destination"), Value::from(false));
     }
     Ok(())
@@ -870,6 +886,21 @@ mod tests {
         }
     }
     use super::*;
+    #[test]
+    fn yaml_runtime_preserves_aliases_tags_and_quoted_scalars() {
+        let raw = "proxies: []\nx-base: &base {server: example.test, port: '443'}\nx-copy: *base\nx-merged: {<<: *base, enabled: true}\nx-tagged: !custom 'on'\nx-text: ['yes', '001', 'null']\n";
+        let original: Value = yaml_serde::from_str(raw).unwrap();
+        let runtime: Value =
+            yaml_serde::from_str(&runtime_config(raw, &Settings::default()).unwrap()).unwrap();
+        for key in ["x-base", "x-copy", "x-merged", "x-tagged", "x-text"] {
+            assert_eq!(runtime[key], original[key], "{key}");
+        }
+        assert_eq!(runtime["x-copy"]["port"].as_str(), Some("443"));
+        assert!(matches!(runtime["x-tagged"], Value::Tagged(_)));
+        assert!(parse_profile("proxies: []\nproxies: []\n").is_err());
+        assert!(parse_profile("proxies: &cycle [*cycle]\n").is_err());
+    }
+
     #[cfg(windows)]
     #[test]
     fn atomic_save_recovers_from_a_temporary_windows_file_lock() {
@@ -923,7 +954,7 @@ mod tests {
         for mode in ["always", "strict", "off"] {
             let raw = format!("proxies: []\nfind-process-mode: {mode}\n");
             let config: Value =
-                serde_yaml::from_str(&runtime_config(&raw, &Settings::default()).unwrap()).unwrap();
+                yaml_serde::from_str(&runtime_config(&raw, &Settings::default()).unwrap()).unwrap();
             assert_eq!(config["find-process-mode"].as_str(), Some("off"));
             assert_eq!(
                 parse_profile(&raw).unwrap()[Value::from("find-process-mode")].as_str(),
@@ -956,7 +987,7 @@ mod tests {
     fn client_overrides_subscription_transport_defaults_without_modifying_the_source() {
         let raw = "proxies: []\ntcp-concurrent: false\nunified-delay: false\nkeep-alive-interval: 5\nipv6: false\nlog-level: debug\ngeodata-loader: standard\ntun: {stack: gvisor, auto-detect-interface: false, mtu: 1400}\n";
         let result: Value =
-            serde_yaml::from_str(&runtime_config(raw, &Settings::default()).unwrap()).unwrap();
+            yaml_serde::from_str(&runtime_config(raw, &Settings::default()).unwrap()).unwrap();
         assert_eq!(result["tcp-concurrent"].as_bool(), Some(true));
         assert_eq!(result["unified-delay"].as_bool(), Some(true));
         assert_eq!(result["keep-alive-interval"].as_u64(), Some(30));
@@ -975,7 +1006,7 @@ mod tests {
     fn sniffer_observes_unknown_hosts_without_rewriting_destinations_or_source() {
         let raw = "proxies: []\nsniffer: {enable: false, parse-pure-ip: false, force-dns-mapping: true, force-domain: ['+.*'], override-destination: true, skip-domain: ['+.example.test'], sniff: {TLS: {ports: [9443], override-destination: true}}}\n";
         let runtime: Value =
-            serde_yaml::from_str(&runtime_config(raw, &Settings::default()).unwrap()).unwrap();
+            yaml_serde::from_str(&runtime_config(raw, &Settings::default()).unwrap()).unwrap();
         assert_eq!(runtime["sniffer"]["enable"], true);
         assert_eq!(runtime["sniffer"]["parse-pure-ip"], true);
         assert_eq!(runtime["sniffer"]["force-dns-mapping"], false);
@@ -1029,7 +1060,7 @@ mod tests {
                     ));
                 }
                 let runtime: Value =
-                    serde_yaml::from_str(&runtime_config(raw, &settings).unwrap()).unwrap();
+                    yaml_serde::from_str(&runtime_config(raw, &settings).unwrap()).unwrap();
                 let effective = enabled || protected;
                 assert_eq!(runtime["proxies"][0]["udp"], effective);
                 assert_eq!(runtime["proxies"][0]["tfo"], true);
@@ -1075,14 +1106,14 @@ mod tests {
                     ..Settings::default()
                 };
                 let result: Value =
-                    serde_yaml::from_str(&runtime_config(raw, &settings).unwrap()).unwrap();
+                    yaml_serde::from_str(&runtime_config(raw, &settings).unwrap()).unwrap();
                 assert_eq!(result["ipv6"].as_bool(), Some(ipv6));
                 let mut expected = original["dns"].clone();
                 expected["ipv6"] = Value::from(ipv6);
                 if dns_override {
                     expected["enable"] = Value::from(true);
                     expected["enhanced-mode"] = Value::from("fake-ip");
-                    expected["nameserver"] = serde_yaml::to_value([
+                    expected["nameserver"] = yaml_serde::to_value([
                         "https://doh.pub/dns-query",
                         "https://dns.alidns.com/dns-query",
                     ])
@@ -1096,8 +1127,8 @@ mod tests {
                 }
                 assert_eq!(result["dns"], expected);
                 // Applying the same settings again must not grow or erase DNS fields.
-                let reapplied: Value = serde_yaml::from_str(
-                    &runtime_config(&serde_yaml::to_string(&result).unwrap(), &settings).unwrap(),
+                let reapplied: Value = yaml_serde::from_str(
+                    &runtime_config(&yaml_serde::to_string(&result).unwrap(), &settings).unwrap(),
                 )
                 .unwrap();
                 assert_eq!(reapplied, result);
@@ -1145,7 +1176,7 @@ mod tests {
             fake_ip_exclusions: parsed,
             ..Settings::default()
         };
-        let runtime: Value = serde_yaml::from_str(
+        let runtime: Value = yaml_serde::from_str(
             &runtime_config(
                 "proxies: []\ndns: {enable: true, enhanced-mode: fake-ip, nameserver: [9.9.9.9]}",
                 &settings,
@@ -1164,7 +1195,7 @@ mod tests {
             ..Settings::default()
         };
         let runtime: Value =
-            serde_yaml::from_str(&runtime_config("proxies: []\ndns: null", &settings).unwrap())
+            yaml_serde::from_str(&runtime_config("proxies: []\ndns: null", &settings).unwrap())
                 .unwrap();
         assert_eq!(runtime["dns"]["enhanced-mode"], "redir-host");
 
@@ -1175,7 +1206,7 @@ mod tests {
             fake_ip: true,
             ..Settings::default()
         };
-        let runtime: Value = serde_yaml::from_str(
+        let runtime: Value = yaml_serde::from_str(
             &runtime_config(
                 "proxies: []\ndns: {enable: true, enhanced-mode: fake-ip, nameserver: [9.9.9.9]}",
                 &settings,
@@ -1189,7 +1220,7 @@ mod tests {
             fake_ip: false,
             ..Settings::default()
         };
-        let runtime: Value = serde_yaml::from_str(
+        let runtime: Value = yaml_serde::from_str(
             &runtime_config(
                 "proxies: []\ndns: {enable: true, enhanced-mode: fake-ip, nameserver: [9.9.9.9], fake-ip-filter: ['custom.test']}",
                 &settings,
@@ -1201,7 +1232,7 @@ mod tests {
         assert_eq!(runtime["dns"]["nameserver"][0], "https://doh.pub/dns-query");
         assert_eq!(
             runtime["dns"]["fake-ip-filter"],
-            serde_yaml::to_value(["custom.test"]).unwrap(),
+            yaml_serde::to_value(["custom.test"]).unwrap(),
             "disabling Fake-IP must not append real-IP exceptions"
         );
     }
@@ -1282,7 +1313,7 @@ mod tests {
                 settings.fake_ip_disabled_defaults
             );
             let config: Value =
-                serde_yaml::from_str(&runtime_config(&raw, &loaded).unwrap()).unwrap();
+                yaml_serde::from_str(&runtime_config(&raw, &loaded).unwrap()).unwrap();
             let filters = config["dns"]["fake-ip-filter"].as_sequence().unwrap();
             let expected_custom = if mode == "blacklist" {
                 "+.user.example"
@@ -1299,7 +1330,7 @@ mod tests {
                 assert!(filters.contains(&Value::from(original_filter)));
             } else {
                 assert!(
-                    serde_yaml::to_string(&config["rule-providers"])
+                    yaml_serde::to_string(&config["rule-providers"])
                         .unwrap()
                         .contains(original_filter)
                 );
@@ -1309,7 +1340,7 @@ mod tests {
             loaded.restore_fake_ip_defaults().unwrap();
             assert_eq!(loaded.fake_ip_exclusions, ["+.user.example"]);
             store.save_settings(&loaded).unwrap();
-            let restored: Value = serde_yaml::from_str(
+            let restored: Value = yaml_serde::from_str(
                 &runtime_config(&raw, &store.load_settings().unwrap()).unwrap(),
             )
             .unwrap();
@@ -1335,7 +1366,7 @@ mod tests {
         settings
             .remove_fake_ip_exclusion("+.tailscale.com")
             .unwrap();
-        let result: Value = serde_yaml::from_str(&runtime_config(raw, &settings).unwrap()).unwrap();
+        let result: Value = yaml_serde::from_str(&runtime_config(raw, &settings).unwrap()).unwrap();
         assert!(
             result["dns"]["fake-ip-filter"]
                 .as_sequence()
@@ -1351,12 +1382,12 @@ mod tests {
             dns_override: false,
             ..Settings::default()
         };
-        let result: Value = serde_yaml::from_str(&runtime_config(raw, &settings).unwrap()).unwrap();
+        let result: Value = yaml_serde::from_str(&runtime_config(raw, &settings).unwrap()).unwrap();
         assert_eq!(result["dns"]["enhanced-mode"], "redir-host");
         assert_eq!(result["dns"]["fake-ip-filter-mode"], "whitelist");
         assert_eq!(
             result["dns"]["fake-ip-filter"],
-            serde_yaml::to_value(["*"]).unwrap()
+            yaml_serde::to_value(["*"]).unwrap()
         );
         assert_eq!(result["dns"]["nameserver"][0], "9.9.9.9");
         assert!(result["rule-providers"].is_null());
@@ -1383,7 +1414,7 @@ mod tests {
             "proxies: []\ndns: {}",
         ] {
             let result: Value =
-                serde_yaml::from_str(&runtime_config(raw, &loaded).unwrap()).unwrap();
+                yaml_serde::from_str(&runtime_config(raw, &loaded).unwrap()).unwrap();
             assert_eq!(result["dns"]["enable"].as_bool(), Some(true));
             assert_eq!(result["dns"]["enhanced-mode"].as_str(), Some("redir-host"));
             assert_eq!(result["dns"]["ipv6"].as_bool(), Some(false));
@@ -1402,7 +1433,7 @@ mod tests {
             rule_overrides: RuleOverrides { enabled: [true; 5] },
             ..Settings::default()
         };
-        let config: Value = serde_yaml::from_str(&runtime_config(raw, &settings).unwrap()).unwrap();
+        let config: Value = yaml_serde::from_str(&runtime_config(raw, &settings).unwrap()).unwrap();
         let rules = config["rules"].as_sequence().unwrap();
         let expected: Vec<_> = SUBSCRIPTION_RULES
             .into_iter()
@@ -1416,14 +1447,14 @@ mod tests {
             .map(Value::from)
             .collect();
         assert_eq!(*rules, expected);
-        let again = runtime_config(&serde_yaml::to_string(&config).unwrap(), &settings).unwrap();
+        let again = runtime_config(&yaml_serde::to_string(&config).unwrap(), &settings).unwrap();
         assert_eq!(
-            serde_yaml::from_str::<Value>(&again).unwrap()["rules"],
+            yaml_serde::from_str::<Value>(&again).unwrap()["rules"],
             config["rules"]
         );
-        let original: Value = serde_yaml::from_str(raw).unwrap();
+        let original: Value = yaml_serde::from_str(raw).unwrap();
         let disabled: Value =
-            serde_yaml::from_str(&runtime_config(raw, &Settings::default()).unwrap()).unwrap();
+            yaml_serde::from_str(&runtime_config(raw, &Settings::default()).unwrap()).unwrap();
         assert_eq!(disabled["rules"], original["rules"]);
     }
 
@@ -1434,12 +1465,12 @@ mod tests {
             let raw = format!(
                 "proxies: []\nrules:\n  - DOMAIN,example.test,DIRECT\n  - {existing}\n  - MATCH,DIRECT\n"
             );
-            let original: Value = serde_yaml::from_str(&raw).unwrap();
+            let original: Value = yaml_serde::from_str(&raw).unwrap();
             for enabled in [true, false] {
                 let mut settings = Settings::default();
                 settings.rule_overrides.enabled[index] = enabled;
                 let config: Value =
-                    serde_yaml::from_str(&runtime_config(&raw, &settings).unwrap()).unwrap();
+                    yaml_serde::from_str(&runtime_config(&raw, &settings).unwrap()).unwrap();
                 assert_eq!(config["rules"], original["rules"]);
             }
         }
@@ -1447,19 +1478,19 @@ mod tests {
             "proxies: []\nrules:\n  - {}\n  - MATCH,DIRECT\n",
             SUBSCRIPTION_RULES.join("\n  - ")
         );
-        let original: Value = serde_yaml::from_str(&raw).unwrap();
+        let original: Value = yaml_serde::from_str(&raw).unwrap();
         let settings = Settings {
             rule_overrides: RuleOverrides { enabled: [true; 5] },
             ..Settings::default()
         };
         let config: Value =
-            serde_yaml::from_str(&runtime_config(&raw, &settings).unwrap()).unwrap();
+            yaml_serde::from_str(&runtime_config(&raw, &settings).unwrap()).unwrap();
         assert_eq!(config["rules"], original["rules"]);
         // LAN has a different address range and must not suppress Private.
         let raw = "proxies: []\nrules: [\"GEOIP,LAN,DIRECT,no-resolve\", \"MATCH,DIRECT\"]";
         let mut settings = Settings::default();
         settings.rule_overrides.enabled[2] = true;
-        let config: Value = serde_yaml::from_str(&runtime_config(raw, &settings).unwrap()).unwrap();
+        let config: Value = yaml_serde::from_str(&runtime_config(raw, &settings).unwrap()).unwrap();
         assert_eq!(
             config["rules"][0].as_str(),
             Some("GEOIP,Private,DIRECT,no-resolve")
@@ -1478,7 +1509,7 @@ mod tests {
             let mut settings = Settings::default();
             settings.rule_overrides.enabled[index] = true;
             let value: Value =
-                serde_yaml::from_str(&runtime_config(raw, &settings).unwrap()).unwrap();
+                yaml_serde::from_str(&runtime_config(raw, &settings).unwrap()).unwrap();
             assert_eq!(value["rules"][0].as_str(), Some(*rule));
             assert_eq!(value["rules"][2].as_str(), Some("MATCH,DIRECT"));
         }
@@ -1489,7 +1520,7 @@ mod tests {
         assert!(runtime_config("proxies: []\nrules: invalid", &settings).is_err());
         assert!(runtime_config("proxies: []\nrules: [123]", &settings).is_err());
         let empty: Value =
-            serde_yaml::from_str(&runtime_config("proxies: []", &settings).unwrap()).unwrap();
+            yaml_serde::from_str(&runtime_config("proxies: []", &settings).unwrap()).unwrap();
         assert_eq!(empty["rules"].as_sequence().unwrap().len(), 5);
     }
 
@@ -1510,7 +1541,7 @@ mod tests {
                 assert_eq!(loaded.run_mode, run_mode);
                 assert_eq!(loaded.proxy_mode, proxy_mode);
                 let config: Value =
-                    serde_yaml::from_str(&runtime_config("proxies: []", &loaded).unwrap()).unwrap();
+                    yaml_serde::from_str(&runtime_config("proxies: []", &loaded).unwrap()).unwrap();
                 assert_eq!(config["mode"].as_str(), Some(run_mode));
                 // TUN is only restored after startup health checks and permission handling.
                 assert_eq!(config["tun"]["enable"].as_bool(), Some(false));
@@ -1528,7 +1559,7 @@ mod tests {
     fn subscription_cannot_expose_controller_or_enable_tun() {
         let raw = "proxies: []\nexternal-controller: 0.0.0.0:9090\nexternal-ui: ui\nlisteners: [{name: evil}]\nallow-lan: true\ntun: {enable: true}\n";
         let settings = Settings::default();
-        let result: Value = serde_yaml::from_str(&runtime_config(raw, &settings).unwrap()).unwrap();
+        let result: Value = yaml_serde::from_str(&runtime_config(raw, &settings).unwrap()).unwrap();
         assert_eq!(
             result["external-controller"].as_str(),
             Some("127.0.0.1:9090")

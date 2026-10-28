@@ -159,7 +159,7 @@ pub fn snapshot(pipe: HANDLE, request: &Request) -> Result<Snapshot> {
     );
     let bytes = std::fs::read(config_file)?;
     ensure!(bytes.len() <= 32 * 1024 * 1024, "内核配置过大");
-    let mut config: serde_yaml::Mapping = serde_yaml::from_slice(&bytes)?;
+    let mut config: yaml_serde::Mapping = yaml_serde::from_slice(&bytes)?;
     // Safe paths remain enabled. The service only exposes the app's loopback
     // controller; a supplied configuration cannot create a privileged pipe.
     for key in [
@@ -170,11 +170,11 @@ pub fn snapshot(pipe: HANDLE, request: &Request) -> Result<Snapshot> {
         "external-controller-tls",
         "listeners",
     ] {
-        config.remove(serde_yaml::Value::from(key));
+        config.remove(yaml_serde::Value::from(key));
     }
     let controller = config
-        .get(serde_yaml::Value::from("external-controller"))
-        .and_then(serde_yaml::Value::as_str)
+        .get(yaml_serde::Value::from("external-controller"))
+        .and_then(yaml_serde::Value::as_str)
         .context("控制接口缺失")?;
     ensure!(
         controller.starts_with("127.0.0.1:")
@@ -183,14 +183,14 @@ pub fn snapshot(pipe: HANDLE, request: &Request) -> Result<Snapshot> {
     );
     ensure!(
         config
-            .get(serde_yaml::Value::from("secret"))
-            .and_then(serde_yaml::Value::as_str)
+            .get(yaml_serde::Value::from("secret"))
+            .and_then(yaml_serde::Value::as_str)
             .is_some_and(|s| !s.is_empty()),
         "控制接口必须设置密钥"
     );
     std::fs::write(
         directory.path().join("config.yaml"),
-        serde_yaml::to_string(&config)?,
+        yaml_serde::to_string(&config)?,
     )?;
     std::fs::create_dir(directory.path().join("temp"))?;
     Ok(Snapshot {

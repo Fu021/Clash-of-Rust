@@ -4,9 +4,10 @@ import { MobileData, MobileView } from "state.slint";
 export component MobileFixture inherits Rectangle {
     width: 0px; height: 0px;
     init => {
-        MobileData.version = "0.6.4";
+        MobileData.version = "0.6.5";
         MobileData.site-summary = "确认可用 74 · 网页可达 20 · 受限 36";
         MobileData.core-running = true;
+        MobileData.dns-override = true; MobileData.fake-ip = true;
         MobileData.profile = "我的订阅"; MobileData.node = "德国 01 · IPv6";
         MobileData.download-rate = "1.24 MiB/s"; MobileData.upload-rate = "28.6 KiB/s";
         MobileData.connection-count = "24"; MobileData.download-total = "386 MiB"; MobileData.upload-total = "21.7 MiB";
@@ -55,11 +56,28 @@ export component MobileFixture inherits Rectangle {
         MobileData.rule-profile = "我的订阅";
         MobileData.rule-profiles = ["我的订阅", "备用订阅"];
         MobileData.rule-policies = ["DIRECT", "REJECT", "Proxy", "自动选择"];
+        MobileData.rule-types = ["DOMAIN", "DOMAIN-SUFFIX", "DOMAIN-KEYWORD", "DOMAIN-REGEX", "GEOSITE", "GEOIP", "IP-CIDR", "IP-CIDR6", "IP-ASN", "SRC-IP-CIDR", "SRC-PORT", "DST-PORT", "NETWORK", "IN-PORT", "IN-TYPE", "RULE-SET", "DSCP", "MATCH"];
+        MobileData.fake-ip-exclusions = [
+            {domain: "+.example.com", source: "自定义"},
+            {domain: "localhost", source: "DNS 覆盖"},
+            {domain: "+.lan", source: "DNS 覆盖"},
+            {domain: "+.tailscale.com", source: "自定义、DNS 覆盖"}
+        ];
+        MobileData.fake-ip-removed-defaults = 2;
+        MobileData.site-regions = ["全部地区", "DE", "US", "JP"];
+        MobileData.site-details = [
+            {label: "平台", value: "ChatGPT"},
+            {label: "结果", value: "可用 · 识别地区：德国 · 246 ms"},
+            {label: "详情", value: "服务返回支持的地区；检测未携带账户凭据。"},
+            {label: "分类", value: "AI"},
+            {label: "地区", value: "DE"}
+        ];
+        MobileView.site-selected = "chatgpt";
         MobileData.rules = [
-            {id: "1", position: "1", kind: "DOMAIN-SUFFIX", value: "google.com", policy: "DIRECT", source: "自定义", enabled: true},
-            {id: "2", position: "2", kind: "DOMAIN-SUFFIX", value: "github.com", policy: "Proxy", source: "订阅", enabled: true},
-            {id: "3", position: "3", kind: "GEOIP", value: "CN", policy: "DIRECT", source: "订阅", enabled: true},
-            {id: "4", position: "4", kind: "MATCH", value: "", policy: "Proxy", source: "订阅", enabled: true}
+            {id: "1", position: "1", kind: "DOMAIN-SUFFIX", value: "google.com", policy: "DIRECT", source: "自定义", enabled: true, raw: "DOMAIN-SUFFIX,google.com,DIRECT"},
+            {id: "2", position: "2", kind: "DOMAIN-SUFFIX", value: "github.com", policy: "Proxy", source: "订阅", enabled: true, raw: "DOMAIN-SUFFIX,github.com,Proxy"},
+            {id: "3", position: "3", kind: "GEOIP", value: "CN", policy: "DIRECT", source: "订阅", enabled: true, raw: "GEOIP,CN,DIRECT,no-resolve"},
+            {id: "4", position: "4", kind: "MATCH", value: "", policy: "Proxy", source: "订阅", enabled: true, raw: "MATCH,Proxy"}
         ];
         MobileData.logs = [
             {time: "10:30:00", level: "INFO", message: "mihomo 已启动，控制接口可用，VPN 会话已建立。", tone: 4},
@@ -85,10 +103,11 @@ export component MobileFixture inherits Rectangle {
             {id: "copilot", title: "Copilot", value: "可用 · 识别地区：德国 · 218 ms", source: "服务响应", tone: 1},
             {id: "other", title: "其他 AI 服务", value: "当前地区不可用", source: "服务响应", tone: 3}
         ];
-        MobileData.claude-normal = "18"; MobileData.claude-risk = "2"; MobileData.claude-clues = "5";
+        MobileData.claude-normal = "19"; MobileData.claude-risk = "2"; MobileData.claude-clues = "5";
         MobileData.claude-status = "检测完成 · 浏览器采样已回传";
         MobileData.claude-results = [
-            {id: "dns", title: "递归 DNS 地区", value: "DNS 地区与代理出口不同", detail: "检查系统与浏览器 DNS 设置。", source: "浏览器采样 · 固定演示结果", tone: 3},
+            {id: "dns", title: "实际递归 DNS", value: "172.217.33.153", country: "德国", flag: @image-url("../preview-data/de.svg"), flagged: true, detail: "Google 官方 geofeed 标为德国，bash.ws 原标签为美国。修正后与德国出口一致；不代表已排除其他泄漏。", source: "浏览器采样 · 固定演示结果", tone: 1},
+            {id: "dns-risk", title: "实际递归 DNS", value: "2001:db8:1234:5678:abcd:ef01:2345:6789", country: "香港", detail: "此演示国家与德国出口不同，仍按风险显示。请核对浏览器独立 DoH、系统 DNS 与实际线路。", source: "系统 DNS · 固定演示结果", tone: 3},
             {id: "route", title: "关联服务直连", value: "assets-proxy.anthropic.com", detail: "发现 DIRECT 连接，尚未启用保护。", source: "内核连接记录 · 固定演示结果", tone: 3},
             {id: "exit", title: "出口地区", value: "德国 · 与当前节点一致", detail: "未发现地区冲突。", source: "服务响应", tone: 1},
             {id: "site", title: "Claude 网页", value: "网页可达", detail: "未携带账户 Cookie。", source: "匿名服务响应", tone: 1},

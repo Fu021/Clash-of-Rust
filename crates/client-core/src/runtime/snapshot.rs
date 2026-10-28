@@ -1,5 +1,6 @@
 //! Page data shared by clients, with bounded lifetime and explicit release of inactive data.
 use crate::api::{Connections, Proxies, Rules};
+use crate::model::ProxyMode;
 use serde::{Deserialize, Serialize};
 use std::{sync::Arc, time::Instant};
 
@@ -19,6 +20,7 @@ pub struct Snapshot {
     pub version: String,
     pub mode: String,
     pub active_node: Option<String>,
+    pub active_group: Option<String>,
     pub tun: bool,
     pub system_proxy: bool,
     pub proxies: Proxies,
@@ -35,6 +37,16 @@ pub struct Snapshot {
 }
 
 impl Snapshot {
+    pub fn proxy_mode(&self) -> ProxyMode {
+        if self.tun {
+            ProxyMode::Tun
+        } else if self.system_proxy {
+            ProxyMode::System
+        } else {
+            ProxyMode::Off
+        }
+    }
+
     /// Release heap-backed page data, including spare vector capacity.
     pub fn retain_scope(&mut self, scope: Scope) {
         if scope != Scope::Claude {
@@ -59,6 +71,24 @@ impl Snapshot {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn proxy_mode_uses_observed_flags_and_survives_page_cleanup() {
+        for (tun, system, expected) in [
+            (false, false, ProxyMode::Off),
+            (false, true, ProxyMode::System),
+            (true, false, ProxyMode::Tun),
+            (true, true, ProxyMode::Tun),
+        ] {
+            let mut snapshot = Snapshot {
+                tun,
+                system_proxy: system,
+                ..Default::default()
+            };
+            snapshot.retain_scope(Scope::Other);
+            assert_eq!(snapshot.proxy_mode(), expected);
+        }
+    }
+
     #[test]
     fn leaving_a_page_releases_data_and_vector_capacity() {
         let mut snapshot = Snapshot::default();

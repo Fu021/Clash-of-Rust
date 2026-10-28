@@ -24,6 +24,7 @@ pub(super) enum Action {
     ReputationKey(Option<String>),
     Autostart(bool),
     DelayInterval(u32),
+    SubscriptionInterval(u32),
     NodeSort(NodeSort),
     Import(String, String),
     EditProfile(String, String, String),
@@ -62,6 +63,7 @@ pub(super) struct Reply {
     pub(super) remote: bool,
     pub(super) profile_edit: bool,
     pub(super) profile_import: bool,
+    pub(super) profile_updated: bool,
     pub(super) scope: Scope,
     pub(super) start_requested: bool,
     pub(super) settings: Settings,
@@ -119,6 +121,7 @@ pub(super) async fn execute(
 ) -> Reply {
     let profile_edit = matches!(&action, Action::EditProfile(..));
     let profile_import = matches!(&action, Action::Import(..));
+    let updating_profile = matches!(&action, Action::UpdateProfile(_));
     let refresh_tray = matches!(
         action,
         Action::RefreshTray
@@ -145,8 +148,7 @@ pub(super) async fn execute(
             Action::RefreshTray => Ok(String::new()),
             Action::Start => {
                 if !engine.running() {
-                    engine.start().await?;
-                    engine.restore_proxy_mode().await?;
+                    engine.start_with_proxy_mode().await?;
                 }
                 Ok("内核已启动".into())
             }
@@ -308,6 +310,14 @@ pub(super) async fn execute(
                 engine.save_settings(settings).await?;
                 Ok("定时测速间隔已保存".into())
             }
+            Action::SubscriptionInterval(minutes) => {
+                let settings = Settings {
+                    subscription_update_interval_minutes: minutes,
+                    ..engine.settings.clone()
+                };
+                engine.save_settings(settings).await?;
+                Ok("订阅自动更新间隔已保存".into())
+            }
             Action::NodeSort(node_sort) => {
                 let settings = Settings {
                     node_sort,
@@ -393,6 +403,7 @@ pub(super) async fn execute(
     }
     .await;
     let rules_applied = saving_rules && result.is_ok();
+    let profile_updated = updating_profile && result.is_ok();
     let protection_changed = protection_requested && result.is_ok();
     let mut notice = result.map_err(|e| format!("{e:#}"));
     // The editor uses the original YAML, not the lossy core rule API. Avoid
@@ -434,7 +445,7 @@ pub(super) async fn execute(
     if let Err(error) = &notice {
         engine.record_failure(error);
     }
-    let tray_nodes = if refresh_tray || external_change {
+    let tray_nodes = if refresh_tray || external_change || profile_updated {
         Some(engine.tray_nodes().await.unwrap_or(None))
     } else {
         None
@@ -444,6 +455,7 @@ pub(super) async fn execute(
         remote: engine.is_remote(),
         profile_edit,
         profile_import,
+        profile_updated,
         tray_nodes,
         scope,
         start_requested,

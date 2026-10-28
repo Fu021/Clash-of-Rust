@@ -7,6 +7,10 @@ export component Preview inherits AppWindow {
     in-out property <bool> preview-motion;
     changed preview-motion => { Motion.enabled = root.preview-motion; }
     in-out property <int> preview-page <=> UiData.page;
+    changed preview-page => {
+        let count = root.preview-page == 4 ? UiData.rules.length : UiData.connections.length;
+        UiData.page-status = count == 0 ? "0 条" : count + " 条 · 1–" + count;
+    }
     in-out property <bool> preview-fake-ip-editor;
     changed preview-fake-ip-editor => { UiData.fake-ip-editor = root.preview-fake-ip-editor; }
     in-out property <bool> preview-dark <=> UiData.dark;
@@ -15,15 +19,17 @@ export component Preview inherits AppWindow {
     in-out property <string> preview-notice <=> UiData.notice;
     in-out property <float> preview-notice-elapsed <=> UiData.notice-elapsed;
     in-out property <bool> preview-protection-pending <=> UiData.protection-pending;
+    in-out property <bool> preview-protected <=> UiData.protected;
     in-out property <bool> preview-update-prereleases <=> UiData.update-prereleases;
     in-out property <int> dialog;
     in-out property <bool> shortcuts-open <=> UiData.shortcuts-open;
+    in-out property <length> preview-rules-scroll <=> UiData.scroll-rules;
     in-out property <bool> raw-rule <=> UiData.rule-text-mode;
     changed dialog => {
         UiData.modal = root.dialog == 1 || root.dialog == 2 ? 1 : root.dialog == 3 ? 7 : root.dialog == 5 ? 2 : root.dialog == 6 ? 11 : root.dialog == 10 ? 12 : root.dialog == 11 ? 10 : root.dialog;
         UiData.modal-can-accept = true;
         UiData.modal-title = root.dialog == 1 ? "删除订阅？" : root.dialog == 2 ? "放弃未保存的修改？" : root.dialog == 3 ? "开启 Claude 保护？" : root.dialog == 4 ? "新建规则" : root.dialog == 5 ? "编辑订阅" : root.dialog == 6 ? "Netflix · 检测详情" : root.dialog == 11 ? "连接详情" : "强调色";
-        UiData.modal-description = root.dialog == 1 ? "将删除“备用订阅”及其配置文件。此操作无法撤销。" : root.dialog == 2 ? "尚有未应用的修改。放弃后将恢复已保存的规则。" : root.dialog == 3 ? "将固定当前节点，启用 TUN、代理 DNS、广泛规则与实时拦截。共享服务可能影响其他应用，关闭后恢复原设置。" : root.dialog == 6 ? "检测结果：确认可用\n识别地区：德国\n响应时间：128 ms\n\n以下为固定演示数据，不代表真实网络检测。" : "";
+        UiData.modal-description = root.dialog == 1 ? "将删除“备用订阅”及其配置文件。此操作无法撤销。" : root.dialog == 2 ? "尚有未应用的修改。放弃后将恢复已保存的规则。" : root.dialog == 3 ? "将固定当前节点，启用 TUN、代理 DNS、广泛规则与实时拦截，并关闭当前内核连接。共享服务可能影响其他应用，关闭后恢复原设置。" : root.dialog == 6 ? "检测结果：确认可用\n识别地区：德国\n响应时间：128 ms\n\n以下为固定演示数据，不代表真实网络检测。" : "";
         UiData.modal-accept = root.dialog == 1 ? "删除订阅" : root.dialog == 2 ? "放弃修改" : root.dialog == 3 ? "开启保护" : root.dialog == 10 ? "完成" : root.dialog == 6 || root.dialog == 11 ? "" : "保存";
         UiData.modal-danger = root.dialog == 1 || root.dialog == 2;
         if root.dialog == 13 {
@@ -34,12 +40,12 @@ export component Preview inherits AppWindow {
         }
         if root.dialog == 12 {
             UiData.modal = 1;
-            UiData.modal-title = "安装预发布版 0.6.4-dev.1？";
+            UiData.modal-title = "安装预发布版 0.6.6-dev.1.example？";
             UiData.modal-description = "预发布版本可能存在尚未发现的风险与 Bug，可能导致程序崩溃、网络异常或配置兼容问题。建议先备份配置，确认后再下载安装。";
             UiData.modal-accept = "继续安装（3 秒）";
             UiData.modal-can-accept = false;
             UiData.update-prereleases = true;
-            UiData.update-status = "发现预发布版 0.6.4-dev.1";
+            UiData.update-status = "发现预发布版 0.6.6-dev.1.example";
         }
         if root.dialog >= 7 && root.dialog <= 9 {
             UiData.modal = 0;
@@ -49,7 +55,7 @@ export component Preview inherits AppWindow {
     init => {
         Motion.enabled = root.preview-motion;
         UiData.fake-ip-editor = root.preview-fake-ip-editor;
-        UiData.version = "0.6.4";
+        UiData.version = "0.6.5";
         UiData.ready = true; UiData.running = true;
         UiData.profile = "我的订阅"; UiData.node = "德国 01 · IPv6";
         UiData.download-rate = "1.24 MiB/s"; UiData.upload-rate = "28.6 KiB/s";
@@ -88,12 +94,12 @@ export component Preview inherits AppWindow {
         UiData.shortcuts = ["拦截广告", "私有域名直连", "私有 IP 直连", "国内域名直连", "国内 IP 直连"];
         UiData.shortcut-values = [false, false, false, false, false]; UiData.shortcut-available = [true, true, true, true, true];
         UiData.rules = [
-            {id: "1", position: "1", kind: "DOMAIN-SUFFIX", value: "github.com", policy: "Proxy", source: "订阅", selected: false, enabled: true},
-            {id: "2", position: "2", kind: "DOMAIN-SUFFIX", value: "google.com", policy: "Proxy", source: "订阅", selected: false, enabled: true},
-            {id: "3", position: "3", kind: "DOMAIN", value: "localhost", policy: "DIRECT", source: "订阅", selected: false, enabled: true},
-            {id: "4", position: "4", kind: "IP-CIDR", value: "192.168.0.0/16", policy: "DIRECT", source: "订阅", selected: false, enabled: true},
-            {id: "5", position: "5", kind: "GEOIP", value: "CN", policy: "DIRECT", source: "订阅", selected: false, enabled: true},
-            {id: "6", position: "6", kind: "MATCH", value: "", policy: "Proxy", source: "订阅", selected: false, enabled: true}];
+            {id: "1", position: "1", kind: "DOMAIN-SUFFIX", value: "github.com", policy: "Proxy", source: "订阅", selected: false, enabled: true, raw: "DOMAIN-SUFFIX,github.com,Proxy"},
+            {id: "2", position: "2", kind: "DOMAIN-SUFFIX", value: "google.com", policy: "Proxy", source: "订阅", selected: false, enabled: true, raw: "DOMAIN-SUFFIX,google.com,Proxy"},
+            {id: "3", position: "3", kind: "DOMAIN", value: "localhost", policy: "DIRECT", source: "订阅", selected: false, enabled: true, raw: "DOMAIN,localhost,DIRECT"},
+            {id: "4", position: "4", kind: "IP-CIDR", value: "192.168.0.0/16", policy: "DIRECT", source: "订阅", selected: false, enabled: true, raw: "IP-CIDR,192.168.0.0/16,DIRECT,no-resolve"},
+            {id: "5", position: "5", kind: "GEOIP", value: "CN", policy: "DIRECT", source: "订阅", selected: false, enabled: true, raw: "GEOIP,CN,DIRECT,no-resolve"},
+            {id: "6", position: "6", kind: "MATCH", value: "", policy: "Proxy", source: "订阅", selected: false, enabled: true, raw: "MATCH,Proxy"}];
         UiData.logs = [
             {time: "", level: "INFO", message: "mihomo 已启动，控制接口可用", tone: 4},
             {time: "", level: "INFO", message: "配置已更新并生效", tone: 4},
@@ -110,10 +116,13 @@ export component Preview inherits AppWindow {
             {left: {id: "AI", title: "AI", count: "4 / 5", detail: "确认可用 3 · 网页可达 1 · 受限 1", tone: 2}, right: {id: "全球", title: "全球", count: "16 / 19", detail: "确认可用 14 · 网页可达 2 · 受限 3", tone: 2}},
             {left: {id: "日本", title: "日本", count: "8 / 12", detail: "确认可用 6 · 网页可达 2 · 受限 4", tone: 2}, right: {id: "香港", title: "香港", count: "9 / 13", detail: "确认可用 8 · 网页可达 1 · 受限 4", tone: 2}},
             {left: {id: "欧洲", title: "欧洲", count: "12 / 12", detail: "确认可用 12 · 网页可达 0 · 受限 0", tone: 1}, right: {id: "台湾", title: "台湾", count: "8 / 13", detail: "确认可用 8 · 网页可达 0 · 受限 5", tone: 2}}];
-        UiData.claude-normal = "18"; UiData.claude-risk = "2"; UiData.claude-clues = "5";
+        UiData.claude-normal = "19"; UiData.claude-risk = "2"; UiData.claude-clues = "5";
         UiData.claude-status = "检测完成 · 浏览器自动采样已回传";
-        UiData.claude-results = [{flag: @image-url("icons/ip.svg"), flagged: false, id: "1", title: "DNS 地区线索", value: "发现与代理出口不同的地区", detail: "请核对浏览器安全 DNS 与系统 DNS 配置。此处为固定演示结果。", source: "浏览器采样", tone: 3}];
-        UiData.claude-result-status = "1 条 · 1–1";
+        UiData.claude-results = [
+            {flag: @image-url("mobile/preview-data/de.svg"), flagged: true, id: "1", title: "实际递归 DNS", value: "172.217.33.153", country: "德国", detail: "Google 官方 geofeed 标为德国，bash.ws 原标签为美国。修正后与德国出口一致；不代表已排除其他泄漏。固定演示结果。", source: "浏览器采样 · bash.ws 权威 DNS 观测", tone: 1},
+            {flagged: false, id: "2", title: "实际递归 DNS", value: "2001:db8:1234:5678:abcd:ef01:2345:6789", country: "香港", detail: "此演示国家与德国出口不同，仍按风险显示。请核对浏览器独立 DoH、系统 DNS 与实际线路。固定演示结果。", source: "系统 DNS · 固定演示结果", tone: 3},
+        ];
+        UiData.claude-result-status = "2 条 · 1–2";
         UiData.dns-override = true; UiData.fake-ip = true;
         UiData.fake-ip-exclusions = [
             {domain: "+.example.com", source: "用户自定义"},
@@ -125,7 +134,7 @@ export component Preview inherits AppWindow {
         UiData.fake-ip-input = "new.example.test";
         UiData.ipv6 = true; UiData.udp = true;
         UiData.mixed-port = "7897";
-        UiData.window-width = "950"; UiData.window-height = "700"; UiData.interval = "0";
+        UiData.window-width = "950"; UiData.window-height = "700"; UiData.interval = "0"; UiData.subscription-interval = "360";
         UiData.geo-status = "2026-10-15"; UiData.update-status = "已是最新版本";
         UiData.edit-name = "我的订阅"; UiData.edit-source = "https://example.com/subscription";
     }

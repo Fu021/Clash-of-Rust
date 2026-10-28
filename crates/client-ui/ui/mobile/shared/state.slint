@@ -1,15 +1,15 @@
 // Mobile presentation contract. Native hosts supply data and execute requests.
 // Only domain row types are reused; mobile views never read desktop UiData.
-import { GroupItem, ProfileItem, ConnectionItem, RuleItem, LogItem, CategoryPair, ReportItem, DetailItem } from "../../state.slint";
+import { GroupItem, ProfileItem, ConnectionItem, RuleItem, LogItem, CategoryPair, ReportItem, DetailItem, FakeIpExclusionItem } from "../../state.slint";
 
 export enum MobileIntent {
     navigate, connect, disconnect, restart-core, mode, query, node-sort, node-page, connection-page, rule-page, rule-text-mode, select-node, node-delay, group-delay, delay-all, system-notification,
     import-profile, pick-file, activate-profile, update-profile, save-profile, delete-profile,
     connection-sort, connection-detail, close-connection, close-all, copy,
-    rule-select, rule-edit, rule-add, rule-save, rule-move, rule-delete, rule-apply, rule-discard,
+    rule-select, rule-edit, rule-add, rule-save, rule-move, rule-drop, rule-enable, rule-restore, rule-filter, rule-delete, rule-apply, rule-discard,
     rule-shortcut, log-level, clear-logs, export-logs, probe, dns,
-    site-start, site-cancel, site-category, site-retest, claude-start, claude-protection, export-report,
-    appearance, accent, text-scale, dns-override, ipv6, udp, save-ports, interval, update-geo, check-update, install-update, update-prereleases,
+    site-start, site-cancel, site-category, site-filter, site-retest, site-probe, site-detail, claude-start, claude-cancel, claude-key, claude-protection, export-report,
+    appearance, accent, text-scale, dns-override, ipv6, udp, save-ports, interval, subscription-interval, update-geo, check-update, install-update, cancel-update, open-release, update-prereleases, fake-ip, fake-ip-add, fake-ip-remove, fake-ip-restore-defaults,
 }
 export global MobileActions { callback request(MobileIntent, string, string); }
 
@@ -20,6 +20,7 @@ export global MobileData {
     in-out property <bool> vpn-connected;
     in-out property <bool> vpn-pending;
     in-out property <bool> working;
+    in-out property <bool> profile-busy;
     in-out property <bool> geo-updating;
     in-out property <bool> delay-busy;
     in-out property <string> profile;
@@ -47,6 +48,13 @@ export global MobileData {
     in-out property <string> rule-profile;
     in-out property <bool> protection-supported: true;
     in-out property <[string]> rule-policies;
+    in-out property <[string]> rule-types;
+    in-out property <[string]> site-regions;
+    in-out property <[DetailItem]> site-details;
+    in-out property <[FakeIpExclusionItem]> fake-ip-exclusions;
+    in-out property <int> fake-ip-removed-defaults;
+    in-out property <bool> reputation-key-saved;
+    in-out property <bool> claude-busy;
     in-out property <[LogItem]> logs;
     in-out property <[CategoryPair]> categories;
     in-out property <[ReportItem]> site-results;
@@ -61,6 +69,7 @@ export global MobileData {
     in-out property <[bool]> shortcut-values;
     in-out property <bool> rule-dirty;
     in-out property <bool> dns-override: true;
+    in-out property <bool> fake-ip: true;
     in-out property <bool> ipv6: true;
     in-out property <bool> udp: true;
     in-out property <bool> update-prereleases;
@@ -81,13 +90,14 @@ export global MobileData {
     in-out property <string> dns-result: "尚未查询";
     in-out property <string> mixed-port: "7897";
     in-out property <string> interval: "0";
+    in-out property <string> subscription-interval: "360";
 }
 
 // Navigation and editing state is separate from both domain and platform state.
 export global MobileView {
     in-out property <int> page;
     // 1 risks, 2 rule editor, 3 profile editor, 4 delete, 5 connection,
-    // 6 IP category, 7 normal, 8 protection, 9 clues, 10 log, 11 accent, 12 draft, 13 preview update.
+    // 14 Fake-IP, 15 rule actions, 16 IP result, 17 Android detection options.
     in-out property <int> detail;
     out property <bool> modal: self.detail == 4 || self.detail == 8 || self.detail == 11 || self.detail == 12 || self.detail == 13;
     in-out property <string> selected-id;
@@ -96,10 +106,23 @@ export global MobileView {
     in-out property <string> connection-sort: "下载速度 ↓";
     in-out property <string> log-level: "全部等级";
     in-out property <bool> interval-dirty;
+    in-out property <bool> subscription-interval-dirty;
     in-out property <bool> shortcuts-open;
     in-out property <bool> rule-selected;
     in-out property <RuleItem> selected-rule;
     in-out property <bool> rule-text-mode;
+    in-out property <bool> rule-no-resolve;
+    in-out property <bool> rule-enabled: true;
+    in-out property <string> rule-source: "全部来源";
+    in-out property <string> rule-drag-id;
+    in-out property <string> rule-drag-target;
+    in-out property <length> rules-scroll-y;
+    in-out property <string> fake-ip-input;
+    in-out property <string> reputation-key;
+    in-out property <bool> site-filters;
+    in-out property <string> site-query;
+    in-out property <string> site-region: "全部地区";
+    in-out property <string> site-selected;
     in-out property <bool> draft-dirty;
     in-out property <int> pending-page: -1;
     in-out property <int> pending-detail;
@@ -110,6 +133,7 @@ export global MobileView {
     in-out property <string> rule-position: "1";
     in-out property <string> profile-name;
     in-out property <string> profile-source;
+    in-out property <bool> profile-active;
     in-out property <string> log-message;
     in-out property <int> copy-revision;
     in-out property <string> copy-value;
@@ -130,17 +154,19 @@ export global MobileView {
     in-out property <length> settings-viewport-height;
     callback navigate(int);
     navigate(destination) => {
+        if MobileData.profile-busy { return; }
         if self.draft-dirty {
             self.pending-page = destination; self.pending-detail = self.detail; self.detail = 12;
         } else {
-            self.page = destination; self.detail = 0; self.query = ""; self.rule-selected = false;
+            self.page = destination; self.detail = 0; self.query = ""; self.rule-selected = false; self.rule-drag-id = ""; self.rule-drag-target = "";
         }
     }
     callback back();
     back => {
+        if MobileData.profile-busy { return; }
         if self.draft-dirty {
             self.pending-page = -1; self.pending-detail = self.detail; self.detail = 12;
-        } else { self.detail = 0; }
+        } else { self.detail = self.detail == 16 ? 6 : 0; }
     }
     callback notify(string);
     notify(message) => { self.notice = message; self.notice-elapsed = 0; self.notice-revision += 1; }

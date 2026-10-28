@@ -1,9 +1,10 @@
 import { Motion, Entrance, ProgressTrack, CopyFeedback } from "../../components/motion.slint";
 import { Chevron } from "../../components/controls.slint";
+import { RuleDragHandle } from "../../components/rule-drag.slint";
 import { MobileTypography } from "typography.slint";
 import { Theme } from "../../theme/palette.slint";
-import { MobileView, MobileActions, MobileIntent } from "state.slint";
-import { ListView } from "std-widgets.slint";
+import { MobileData, MobileView, MobileActions, MobileIntent } from "state.slint";
+import { ListView as SlintListView } from "std-widgets.slint";
 
 export component MAppIcon inherits Rectangle {
     width: 48px; height: 48px; border-radius: 8px;
@@ -55,6 +56,7 @@ export component MParagraph inherits MText { wrap: word-wrap; height: self.prefe
 // visible height, leaving Android with no scrollable overflow.
 export component MScroll inherits Flickable {
     in property <string> content-key;
+    out property <length> content-preferred-height: content.preferred-height;
     property <length> bottom: min(0px, self.height - self.content-height);
     changed content-key => { self.content-y = 0px; }
     changed bottom => { self.content-y = clamp(self.content-y, self.bottom, 0px); }
@@ -70,11 +72,25 @@ export component MScroll inherits Flickable {
     }
 }
 
-export component MList inherits ListView {
+// Keep editable headers alive while virtual rows are replaced or recycled.
+export component ListHeader inherits MScroll {
+    in property <length> list-height;
+    in property <length> list-content-height;
+    out property <length> header-height: root.content-preferred-height + 12px;
+    vertical-stretch: 0;
+    height: clamp(root.header-height + root.content-y, 0px, root.list-height);
+    content-height: root.height + max(0px, root.list-content-height - root.list-height);
+}
+
+// Slint recognizes virtual row layout by the immediate component name "ListView".
+export component ListView inherits SlintListView {
     in property <string> content-key;
-    property <length> bottom: min(0px, self.visible-height - self.viewport-height);
-    changed content-key => { self.viewport-y = 0px; }
-    changed bottom => { self.viewport-y = clamp(self.viewport-y, self.bottom, 0px); }
+    min-width: 0px; preferred-width: 0px; horizontal-stretch: 1;
+    content-width: self.visible-width;
+    horizontal-scrollbar-policy: always-off;
+    property <length> bottom: min(0px, self.visible-height - self.content-height);
+    changed content-key => { self.content-y = 0px; }
+    changed bottom => { self.content-y = clamp(self.content-y, self.bottom, 0px); }
 }
 export component MCard inherits Rectangle {
     in property <bool> selected;
@@ -149,6 +165,39 @@ export component MButton inherits Rectangle {
         clicked => { root.keyboard-focus = false; keys.focus(); root.clicked(); }
     }
 }
+export component MPagination inherits HorizontalLayout {
+    in property <string> status;
+    in property <bool> previous-enabled;
+    in property <bool> next-enabled;
+    in property <bool> compact;
+    callback turn(int);
+    alignment: start; spacing: MobileTypography.small-gap; vertical-stretch: 0;
+    MButton {
+        text: root.compact || Theme.text-scale > 1.25 ? "‹" : "上一页";
+        accessible-role: button; accessible-label: "上一页";
+        width: root.compact || Theme.text-scale > 1.25 ? 48px : max(80px, MobileTypography.font-size(15) * 3 + 20px);
+        horizontal-stretch: 0; enabled: root.previous-enabled;
+        clicked => { root.turn(-1); }
+    }
+    MSmall { text: root.status; horizontal-alignment: center; wrap: word-wrap; }
+    MButton {
+        text: root.compact || Theme.text-scale > 1.25 ? "›" : "下一页";
+        accessible-role: button; accessible-label: "下一页";
+        width: root.compact || Theme.text-scale > 1.25 ? 48px : max(80px, MobileTypography.font-size(15) * 3 + 20px);
+        horizontal-stretch: 0; enabled: root.next-enabled;
+        clicked => { root.turn(1); }
+    }
+}
+export component MDragHandle inherits RuleDragHandle {
+    hold-duration: 550ms;
+    context: MobileData.rule-page-index + "/" + MobileView.query + "/" + MobileData.rule-profile + "/" + MobileView.rule-source;
+    blocked: MobileView.modal;
+    width: max(24px, 48px - MobileTypography.padding - MobileTypography.small-gap);
+    height: 48px; horizontal-stretch: 0;
+    // Share the card padding with the touch target while keeping the icon narrow.
+    hit-padding: MobileTypography.padding;
+    hit-width: 48px;
+}
 export component MRow inherits Rectangle {
     in property <string> title;
     in property <string> subtitle;
@@ -204,28 +253,32 @@ export component MSwitch inherits Rectangle {
     TouchArea { enabled: root.enabled && !MobileView.modal; mouse-cursor: pointer; clicked => { root.toggled(!root.checked); } }
 }
 export component MField inherits Rectangle {
+    in property <bool> enabled: true;
+    in property <bool> secret;
     in-out property <string> text;
     in property <string> placeholder;
     callback edited(string);
     forward-focus: input;
-    height: max(48px, input.preferred-height + 20px); min-width: 0px; vertical-stretch: 0;
+    height: max(48px, input.preferred-height + 20px); min-width: 0px; preferred-width: 0px; horizontal-stretch: 1; vertical-stretch: 0;
     background: Theme.surface; border-radius: 6px; border-width: 1px;
     border-color: input.has-focus ? Theme.accent : Theme.line;
     animate border-color, background { duration: Motion.fast; enabled: Motion.active; }
     input := TextInput { x: 12px; width: parent.width - 24px; height: parent.height;
-        enabled: !MobileView.modal;
-        text <=> root.text; font-size: MobileTypography.font-size(16); color: Theme.ink; single-line: true; vertical-alignment: center;
+        enabled: root.enabled && !MobileView.modal;
+        text <=> root.text; input-type: root.secret ? InputType.password : InputType.text; font-size: MobileTypography.font-size(16); color: Theme.ink; single-line: true; vertical-alignment: center;
         selection-background-color: Theme.primary; selection-foreground-color: #ffffff;
         edited => { root.edited(self.text); }
     }
     if input.text == "": MSmall { x: 12px; width: parent.width - 24px; height: parent.height; text: root.placeholder; }
 }
 export component MSelect inherits Rectangle {
+    in property <bool> enabled: true;
+    changed enabled => { if !root.enabled { popup.close(); } }
     in property <[string]> options;
     in property <string> value;
     callback selected(int, string);
-    height: button.height; vertical-stretch: 0; min-width: 0px;
-    button := MButton { width: parent.width; text: root.value; dropdown: true; clicked => { popup.show(); } }
+    height: button.height; vertical-stretch: 0; min-width: 0px; preferred-width: 0px; horizontal-stretch: 1;
+    button := MButton { width: parent.width; text: root.value; dropdown: true; enabled: root.enabled; clicked => { popup.show(); } }
     popup := PopupWindow {
         y: root.height + 4px; width: max(root.width, 200px);
         height: min(300px, root.options.length * 52px + 16px);
@@ -233,6 +286,7 @@ export component MSelect inherits Rectangle {
         Rectangle { entrance := Entrance { } opacity: entrance.progress; background: Theme.surface; border-radius: 8px; border-width: 1px; border-color: Theme.line;
             MScroll { VerticalLayout { alignment: start; spacing: 4px; padding: MobileTypography.small-gap;
                 for option[i] in root.options: MButton { width: popup.width - 16px; text: option; selected: option == root.value;
+                    enabled: root.enabled;
                     clicked => { root.selected(i, option); popup.close(); }
                 }
             } }

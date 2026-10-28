@@ -63,7 +63,7 @@ struct Release {
 fn client(route: &crate::network::Route, timeout: Duration) -> Result<Client> {
     route
         .apply(
-            Client::builder()
+            crate::network::client_builder()
                 .no_proxy()
                 .user_agent(format!("Clash-of-Rust/{}", crate::VERSION))
                 .connect_timeout(Duration::from_secs(5))
@@ -117,32 +117,15 @@ fn select_channel(
     include_prereleases: bool,
 ) -> Result<Option<Package>> {
     let current = Version::parse(current)?;
-    let current_is_preview = channel::installed_preview(
-        &current,
-        releases
-            .iter()
-            .map(|release| (release.tag_name.as_str(), release.draft, release.prerelease)),
-    );
     ensure!(
         suffix
             .bytes()
             .all(|c| c.is_ascii_alphanumeric() || b".-".contains(&c)),
         "安装包平台无效"
     );
-    let release = releases
-        .into_iter()
-        .filter_map(|r| {
-            let v = channel::candidate(
-                &r.tag_name,
-                r.draft,
-                r.prerelease,
-                &current,
-                include_prereleases,
-                current_is_preview,
-            )?;
-            Some((v, r))
-        })
-        .max_by(|(a, _), (b, _)| a.cmp_precedence(b));
+    let release = channel::select(releases, &current, include_prereleases, |release| {
+        (&release.tag_name, release.draft, release.prerelease)
+    });
     if let Some((version, release)) = release {
         let name = format!("Clash-of-Rust-{version}-{suffix}");
         let matches = release
@@ -269,18 +252,26 @@ pub async fn download(
     ensure!(package.size > 0 && package.size <= LIMIT, "安装包大小无效");
     let parent = path.parent().context("更新缓存路径无效")?;
     tokio::fs::create_dir_all(parent).await?;
-    let partial = path.with_extension("partial");
     let mut errors = Vec::new();
-    for route in crate::network::routes(port, None) {
+    let routes = crate::network::routes(port, None);
+    for (index, route) in routes.iter().enumerate() {
         progress(Progress {
             total: package.size,
             route: route.label,
             ..Progress::default()
         });
         let result = async {
-            let client = client(&route, Duration::from_secs(30 * 60))?;
+            let client = client(route, Duration::from_secs(30 * 60))?;
             let expected = checksum(
-                &bounded(client.get(&package.checksum_url).send().await?, 1024).await?,
+                &bounded(
+                    client
+                        .get(&package.checksum_url)
+                        .timeout(Duration::from_secs(30))
+                        .send()
+                        .await?,
+                    1024,
+                )
+                .await?,
                 &package.name,
             )?;
             if let Some(digest) = &package.digest {
@@ -302,21 +293,25 @@ pub async fn download(
                 "安装包大小与发布信息不一致"
             );
             let observer = RouteObserver::new(&response, api.cloned(), route.proxy.is_none());
-            let file = tokio::fs::File::create(&partial).await?;
-            let mut file = tokio::io::BufWriter::with_capacity(256 * 1024, file);
+            let temporary = tempfile::NamedTempFile::new_in(parent)?;
+            let file = tokio::fs::File::from_std(temporary.reopen()?);
+            let mut file =
+                tokio::io::BufWriter::with_capacity(crate::download::BUFFER_CAPACITY, file);
+            let mut watchdog = crate::download::Watchdog::new(index + 1 < routes.len());
             let mut count = 0u64;
             let mut hash = Sha256::new();
             let mut last = std::time::Instant::now();
             let mut rate_started = last;
             let mut rate_received = 0;
-            while let Some(chunk) = response.chunk().await? {
+            while let Some(chunk) = watchdog.chunk(&mut response).await? {
+                let chunk = chunk.as_ref();
                 count += chunk.len() as u64;
                 ensure!(
                     count <= package.size && count <= LIMIT,
                     "安装包超过预期大小"
                 );
-                file.write_all(&chunk).await?;
-                hash.update(&chunk);
+                file.write_all(chunk).await?;
+                hash.update(chunk);
                 if count == chunk.len() as u64 || last.elapsed() >= Duration::from_millis(250) {
                     let elapsed = rate_started.elapsed().as_secs_f64();
                     progress(Progress {
@@ -335,12 +330,12 @@ pub async fn download(
                 }
             }
             ensure!(
-                count == package.size && format!("{:x}", hash.finalize()) == expected,
+                count == package.size && crate::file_hash::hex(hash.finalize()) == expected,
                 "安装包大小或 SHA256 校验失败"
             );
             file.flush().await?;
             file.into_inner().sync_all().await?;
-            tokio::fs::rename(&partial, path).await?;
+            crate::config::persist_file(temporary, path)?;
             progress(Progress {
                 received: count,
                 total: package.size,
@@ -356,7 +351,6 @@ pub async fn download(
         match result {
             Ok(()) => return Ok(()),
             Err(e) => {
-                let _ = tokio::fs::remove_file(&partial).await;
                 errors.push(format!("{}：{e}", route.label));
             }
         }
@@ -371,7 +365,7 @@ mod tests {
     async fn buffered_download_flushes_verified_bytes_and_reports_the_route() {
         use tokio::io::{AsyncReadExt, AsyncWriteExt};
         let body = vec![42; 128 * 1024 + 3];
-        let expected = format!("{:x}", Sha256::digest(&body));
+        let expected = crate::file_hash::hex(Sha256::digest(&body));
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
         let base = format!("http://{}", listener.local_addr().unwrap());
         let sent = body.clone();
@@ -462,7 +456,10 @@ mod tests {
                 {"name":"Clash-of-Rust-0.6.4-dev.2-android-arm64.apk.sha256","size":64}]},
             {"tag_name":"v0.6.3","draft":false,"prerelease":false,"assets":[
                 {"name":"Clash-of-Rust-0.6.3-android-arm64.apk","size":42},
-                {"name":"Clash-of-Rust-0.6.3-android-arm64.apk.sha256","size":64}]}
+                {"name":"Clash-of-Rust-0.6.3-android-arm64.apk.sha256","size":64}]},
+            {"tag_name":"v0.6.2","draft":false,"prerelease":false,"assets":[
+                {"name":"Clash-of-Rust-0.6.2-android-arm64.apk","size":42},
+                {"name":"Clash-of-Rust-0.6.2-android-arm64.apk.sha256","size":64}]}
         ]);
         let parse = || serde_json::from_value::<Vec<Release>>(releases.clone()).unwrap();
         let preview = select_channel(parse(), "0.6.3", "android-arm64.apk", true)
@@ -470,11 +467,20 @@ mod tests {
             .unwrap();
         assert_eq!(preview.version, "0.6.4-dev.2");
         assert!(preview.preview);
-        let stable = select_channel(parse(), "0.6.4-dev.1", "android-arm64.apk", false)
-            .unwrap()
-            .unwrap();
-        assert_eq!(stable.version, "0.6.3");
-        assert!(!stable.preview);
+        for current in ["0.6.4-dev.1", "0.999.0", "0.999.0-fix.1.local"] {
+            let stable = select_channel(parse(), current, "android-arm64.apk", false)
+                .unwrap()
+                .unwrap();
+            assert_eq!(stable.version, "0.6.3");
+            assert!(!stable.preview);
+        }
+        for current in ["0.999.0", "0.999.0-fix.1.local"] {
+            assert!(
+                select_channel(parse(), current, "android-arm64.apk", true)
+                    .unwrap()
+                    .is_none()
+            );
+        }
         assert!(select_channel(parse(), "0.6.4-dev.1", "android-x64.apk", false).is_err());
         assert!(
             select_channel(parse(), "0.6.3", "android-arm64.apk", false)

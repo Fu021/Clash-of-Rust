@@ -20,11 +20,7 @@ pub(crate) fn meta(engine: &Engine, owner: Owner) -> Result<Meta> {
 
 async fn start(engine: &mut Engine) -> Result<()> {
     if !engine.running() {
-        engine.start().await?;
-        if let Err(error) = engine.restore_proxy_mode().await {
-            let _ = engine.stop().await;
-            return Err(error);
-        }
+        engine.start_with_proxy_mode().await?;
     }
     Ok(())
 }
@@ -49,7 +45,6 @@ pub(super) async fn execute(
             | Command::RuleOverrides { .. }
             | Command::RuleChange { .. }
             | Command::SaveRules { .. }
-            | Command::Import { .. }
             | Command::EditProfile { .. }
             | Command::Activate { .. }
             | Command::DeleteProfile { .. }

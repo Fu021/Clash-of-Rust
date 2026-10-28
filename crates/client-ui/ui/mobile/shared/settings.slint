@@ -28,10 +28,17 @@ export component AppearanceSettings inherits VerticalLayout {
     }
 }
 export component NetworkToggles inherits VerticalLayout {
+    in property <bool> show-fake-ip-exclusions;
     alignment: start; spacing: MobileTypography.small-gap;
     MSwitch { title: "DNS 覆盖"; checked: MobileData.dns-override || MobileData.protected; enabled: !MobileData.protected && !MobileData.protection-pending;
         toggled(value) => { MobileActions.request(MobileIntent.dns-override, value ? "true" : "false", ""); }
     }
+    MDivider { }
+    MSwitch { title: "Fake-IP"; subtitle: "关闭 DNS 覆盖会同时关闭 Fake-IP，重开后可在此启用。"; checked: MobileData.fake-ip || MobileData.protected; enabled: MobileData.dns-override && !MobileData.protected && !MobileData.protection-pending;
+        toggled(value) => { MobileActions.request(MobileIntent.fake-ip, value ? "true" : "false", ""); }
+    }
+    if root.show-fake-ip-exclusions: MDivider { }
+    if root.show-fake-ip-exclusions: MRow { title: "Fake-IP 排除项"; value: MobileData.fake-ip-exclusions.length + " 项"; clicked => { MobileView.detail = 14; } }
     MDivider { }
     MSwitch { title: "启用 IPv6"; checked: MobileData.ipv6 || MobileData.protected; enabled: !MobileData.protected && !MobileData.protection-pending;
         toggled(value) => { MobileActions.request(MobileIntent.ipv6, value ? "true" : "false", ""); }
@@ -43,6 +50,15 @@ export component NetworkToggles inherits VerticalLayout {
 }
 export component MaintenanceSettings inherits VerticalLayout {
     alignment: start; spacing: 10px;
+    MHeading { text: "订阅自动更新"; }
+    MCard {
+        MSmall { text: "分钟 · 0 关闭 · 默认 360"; wrap: word-wrap; }
+        HorizontalLayout { cross-axis-alignment: center; spacing: MobileTypography.gap;
+            MField { text <=> MobileData.subscription-interval; enabled: !MobileData.working; edited(value) => { MobileView.subscription-interval-dirty = true; } }
+            MButton { text: "保存"; enabled: !MobileData.working; clicked => { MobileActions.request(MobileIntent.subscription-interval, MobileData.subscription-interval, ""); } }
+        }
+        MSmall { text: "仅更新远程订阅；失败保留原配置，保护期间跳过已锁定订阅。"; wrap: word-wrap; }
+    }
     MHeading { text: "测速与 Geo"; }
     MCard {
         MText { text: "定时测速"; }

@@ -3,12 +3,33 @@
 use crate::config::{SUBSCRIPTION_RULES, Settings, parse_profile};
 use anyhow::{Context, Result, bail};
 use serde::{Deserialize, Serialize};
-use serde_yaml::{Mapping, Value};
 use sha2::{Digest, Sha256};
 use std::{
     collections::{BTreeMap, BTreeSet},
     sync::Arc,
 };
+use yaml_serde::{Mapping, Value};
+
+pub const FORM_TYPES: [&str; 18] = [
+    "DOMAIN",
+    "DOMAIN-SUFFIX",
+    "DOMAIN-KEYWORD",
+    "DOMAIN-REGEX",
+    "GEOSITE",
+    "GEOIP",
+    "IP-CIDR",
+    "IP-CIDR6",
+    "IP-ASN",
+    "SRC-IP-CIDR",
+    "SRC-PORT",
+    "DST-PORT",
+    "NETWORK",
+    "IN-PORT",
+    "IN-TYPE",
+    "RULE-SET",
+    "DSCP",
+    "MATCH",
+];
 
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(default)]
@@ -75,7 +96,7 @@ pub fn revision(rules: &ProfileRules) -> Result<String> {
     }
     let mut writer = HashWriter(Sha256::new());
     serde_json::to_writer(&mut writer, rules)?;
-    Ok(format!("{:x}", writer.0.finalize()))
+    Ok(crate::file_hash::hex(writer.0.finalize()))
 }
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum Source {
@@ -422,7 +443,7 @@ mod tests {
     use super::*;
     fn document(rules: &[&str]) -> Document {
         let raw =
-            serde_yaml::to_string(&serde_json::json!({"proxies": [], "rules": rules})).unwrap();
+            yaml_serde::to_string(&serde_json::json!({"proxies": [], "rules": rules})).unwrap();
         Document::from_raw("test", false, &raw).unwrap()
     }
     fn custom(raw: &str, enabled: bool) -> CustomRule {

@@ -119,7 +119,7 @@ struct Clients {
 }
 impl Clients {
     fn build(port: u16, tls13: bool) -> Result<Client> {
-        let mut builder = Client::builder()
+        let mut builder = crate::network::client_builder()
             .no_proxy()
             .proxy(reqwest::Proxy::all(format!("http://127.0.0.1:{port}"))?)
             .redirect(reqwest::redirect::Policy::none())
@@ -128,7 +128,7 @@ impl Clients {
             .pool_max_idle_per_host(1)
             .pool_idle_timeout(Duration::from_secs(15));
         if tls13 {
-            builder = builder.min_tls_version(reqwest::tls::Version::TLS_1_3);
+            builder = builder.tls_version_min(reqwest::tls::Version::TLS_1_3);
         }
         Ok(builder.build()?)
     }
@@ -862,7 +862,7 @@ fn replace_text(text: &str, args: &[String]) -> Result<String> {
 }
 
 fn sign_sha1(text: &str, key: &str) -> Result<String> {
-    use hmac::{Hmac, Mac};
+    use hmac::{Hmac, KeyInit, Mac};
     let mut mac = Hmac::<sha1::Sha1>::new_from_slice(key.as_bytes())?;
     mac.update(text.as_bytes());
     Ok(base64::engine::general_purpose::STANDARD.encode(mac.finalize().into_bytes()))
@@ -955,7 +955,7 @@ mod tests {
         });
         let mut ctx = Context::new(1).unwrap();
         ctx.set_test_client(
-            Client::builder()
+            crate::network::client_builder()
                 .no_proxy()
                 .redirect(reqwest::redirect::Policy::none())
                 .build()
@@ -1096,7 +1096,7 @@ mod tests {
         });
         let mut ctx = Context::new(1).unwrap();
         ctx.set_test_client(
-            Client::builder()
+            crate::network::client_builder()
                 .no_proxy()
                 .redirect(reqwest::redirect::Policy::none())
                 .build()
@@ -1155,7 +1155,7 @@ mod tests {
         });
         let mut ctx = Context::new(1).unwrap();
         ctx.set_test_client(
-            Client::builder()
+            crate::network::client_builder()
                 .no_proxy()
                 .redirect(reqwest::redirect::Policy::none())
                 .build()
@@ -1209,7 +1209,7 @@ mod tests {
     async fn cancellation_drops_native_http_without_descendant_processes() {
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
         let mut ctx = Context::new(1).unwrap();
-        ctx.set_test_client(Client::builder().no_proxy().build().unwrap());
+        ctx.set_test_client(crate::network::client_builder().no_proxy().build().unwrap());
         let address = listener.local_addr().unwrap();
         let request = Request::get(&format!("http://{address}/hang"));
         let pending = tokio::spawn(async move { ctx.request(request).await });

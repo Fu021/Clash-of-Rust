@@ -477,7 +477,7 @@ async fn claude(args: &Args) -> Result<()> {
             if enabled {
                 output::confirm(
                     args,
-                    "Claude 保护会启用 TUN、覆盖 DNS 和广泛规则，锁定节点并拦截偏离线路的连接，可能影响其他服务。继续？",
+                    "Claude 保护会启用 TUN、覆盖 DNS 和广泛规则，锁定节点并关闭已有内核连接，可能影响其他服务。继续？",
                 ).await?;
                 super::maintenance::authorize_tun(args).await?;
             }

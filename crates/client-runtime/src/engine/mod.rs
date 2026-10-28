@@ -1,4 +1,5 @@
 mod control;
+mod recovery;
 use crate::control::Command as ControlCommand;
 use crate::{
     api::{Api, ConfigStatus, ConnectionStats, Proxies},
@@ -45,33 +46,87 @@ async fn wait_for_mac_port(
     logs: &LogBuffer,
     shutdown_grace: Duration,
 ) -> std::io::Result<()> {
+    wait_for_mac_port_state(
+        port,
+        logs,
+        shutdown_grace,
+        Duration::from_secs(60),
+        || mac_port_probe(port).map(drop),
+        || async move {
+            tokio::net::TcpStream::connect(("127.0.0.1", port))
+                .await
+                .map(drop)
+        },
+    )
+    .await
+}
+
+#[cfg(target_os = "macos")]
+async fn wait_for_mac_port_state<B, C, F>(
+    port: u16,
+    logs: &LogBuffer,
+    shutdown_grace: Duration,
+    release_timeout: Duration,
+    mut bind: B,
+    mut connect: C,
+) -> std::io::Result<()>
+where
+    B: FnMut() -> std::io::Result<()>,
+    C: FnMut() -> F,
+    F: std::future::Future<Output = std::io::Result<()>>,
+{
     // A prior TUN core can leave root-owned TIME_WAIT sockets after it exits.
     // Darwin denies reuse by the new ordinary-user core until those expire.
     // Ordinary starts reject listeners immediately. Update handoffs allow only
     // the short explicit shutdown grace; never stop the listener's owner.
-    let deadline = tokio::time::Instant::now() + Duration::from_secs(60);
-    let shutdown_deadline = tokio::time::Instant::now() + shutdown_grace;
+    let started = tokio::time::Instant::now();
+    let deadline = started + release_timeout;
+    let shutdown_deadline = started + shutdown_grace;
     let mut reported = false;
+    let mut observed_listener = false;
     loop {
-        let error = match mac_port_probe(port) {
-            Ok(_) => return Ok(()),
+        let error = match bind() {
+            Ok(()) => return Ok(()),
             Err(error) => error,
         };
         if error.kind() != std::io::ErrorKind::AddrInUse {
             return Err(error);
         }
-        match tokio::time::timeout(
-            Duration::from_millis(200),
-            tokio::net::TcpStream::connect(("127.0.0.1", port)),
-        )
-        .await
-        {
-            Ok(Err(ref refused)) if refused.kind() == std::io::ErrorKind::ConnectionRefused => {}
-            Ok(Ok(_)) if tokio::time::Instant::now() < shutdown_deadline => {}
-            _ => return Err(error),
+        let busy = |detail: &str| {
+            std::io::Error::new(
+                error.kind(),
+                format!(
+                    "{error}（TCP 探测：{detail}；已等待 {:.1} 秒）",
+                    started.elapsed().as_secs_f32()
+                ),
+            )
+        };
+        let connection = tokio::time::timeout(Duration::from_millis(200), connect()).await;
+        match &connection {
+            Ok(Ok(())) => {
+                observed_listener = true;
+                if tokio::time::Instant::now() >= shutdown_deadline {
+                    return Err(busy("仍可建立连接"));
+                }
+            }
+            Ok(Err(refused)) if refused.kind() == std::io::ErrorKind::ConnectionRefused => {
+                observed_listener = false;
+            }
+            // An unsuccessful connect does not establish a live listener.
+            // Keep the bind check authoritative and the shutdown grace bounded
+            // even if a previously observed listener's backlog becomes full.
+            _ if observed_listener && tokio::time::Instant::now() >= shutdown_deadline => {
+                return Err(busy("监听曾可连接，退出交接期限已到"));
+            }
+            _ => {}
         }
         if tokio::time::Instant::now() >= deadline {
-            return Err(error);
+            let detail = match connection {
+                Ok(Err(error)) => error.to_string(),
+                Err(_) => "连接超时".into(),
+                Ok(Ok(())) => "仍可建立连接".into(),
+            };
+            return Err(busy(&detail));
         }
         if !reported {
             append(
@@ -113,6 +168,8 @@ pub struct Engine {
     mac_tun: Option<platform::macos::tun::Session>,
     #[cfg(target_os = "macos")]
     retained_startup_proxy: bool,
+    #[cfg(target_os = "macos")]
+    mac_dns_error: Option<String>,
     logs: LogBuffer,
     readers: Vec<JoinHandle<()>>,
     log_pump: Option<JoinHandle<()>>,
@@ -127,6 +184,7 @@ pub struct Engine {
     pub(crate) control_server: Option<crate::control::Server>,
     external_logs_until: Option<Instant>,
     pub(crate) view_revision: u64,
+    network_monitor: crate::control::network::Monitor,
 }
 
 #[derive(Clone, serde::Serialize, serde::Deserialize)]
@@ -199,10 +257,13 @@ impl Engine {
         {
             platform::macos::service::protection_dns(false)
                 .context("恢复上次运行的系统 DNS 失败")?;
-            if let Some(protection) = &mut settings.claude_protection
-                && protection.system_dns.is_empty()
-            {
-                Arc::make_mut(protection).system_dns = platform::macos::dns::system_servers()?;
+            if let Some(protection) = &mut settings.claude_protection {
+                let protection = Arc::make_mut(protection);
+                protection.system_dns = platform::macos::dns::system_servers()?;
+                let tailscale = platform::macos::dns::split_servers()?;
+                protection.split_dns = tailscale.split_dns;
+                protection.tailscale_dns_interface = tailscale.interface;
+                protection.mac_dns_port = Some(platform::macos::dns::available_port()?);
                 store.save_settings(&settings)?;
             }
         }
@@ -239,6 +300,8 @@ impl Engine {
             mac_tun: None,
             #[cfg(target_os = "macos")]
             retained_startup_proxy: keep_proxy,
+            #[cfg(target_os = "macos")]
+            mac_dns_error: None,
             logs,
             readers: vec![],
             log_pump: None,
@@ -252,6 +315,7 @@ impl Engine {
             control_server: None,
             external_logs_until: None,
             view_revision: 0,
+            network_monitor: Default::default(),
         })
     }
 
@@ -404,6 +468,10 @@ impl Engine {
         if self.running() {
             bail!("内核已启动");
         }
+        let routes = tokio::task::spawn_blocking(platform::network::snapshot)
+            .await?
+            .ok();
+        self.network_monitor.seed(routes);
         #[cfg(target_os = "macos")]
         if self
             .mac_tun
@@ -509,6 +577,19 @@ impl Engine {
         }
         self.stop().await?;
         bail!("内核未通过启动健康检查，请查看日志");
+    }
+
+    /// Restore the saved network mode as part of starting the shared owner.
+    pub async fn start_with_proxy_mode(&mut self) -> Result<()> {
+        self.start().await?;
+        if let Err(error) = self.restore_proxy_mode().await {
+            let stopped = self.stop().await;
+            return Err(error.context(format!(
+                "启动后恢复网络模式失败；停止内核：{}",
+                stopped.err().map_or("成功".into(), |e| e.to_string())
+            )));
+        }
+        Ok(())
     }
 
     pub async fn stop(&mut self) -> Result<()> {
@@ -945,10 +1026,50 @@ impl Engine {
         let (raw, usage) = if source.starts_with("https://") || source.starts_with("http://") {
             let url = reqwest::Url::parse(&source).context("订阅 URL 无效")?;
             crate::subscription::download(&url, self.running().then_some(self.settings.mixed_port))
-                .await?
+                .await
+                .context(if existing.is_some() {
+                    "订阅更新失败，已保留原配置与运行状态"
+                } else {
+                    "订阅下载失败"
+                })?
         } else {
             (read_profile(std::path::Path::new(&source))?, None)
         };
+        self.import_content(name, source, existing, raw, usage)
+            .await
+    }
+
+    pub(crate) async fn update_subscription(
+        &mut self,
+        pending: &clash_client_core::subscription::schedule::PendingUpdate,
+        raw: String,
+        usage: Option<String>,
+    ) -> Result<bool> {
+        if !pending.is_current(&self.settings, &self.profiles, &self.store)? {
+            return Ok(false);
+        }
+        self.import_content(
+            pending.profile.name.clone(),
+            pending.profile.source.clone(),
+            Some(pending.profile.id.clone()),
+            raw,
+            usage,
+        )
+        .await?;
+        Ok(true)
+    }
+
+    async fn import_content(
+        &mut self,
+        name: String,
+        source: String,
+        existing: Option<String>,
+        raw: String,
+        usage: Option<String>,
+    ) -> Result<()> {
+        if let Some(id) = existing.as_deref() {
+            self.require_unprotected_profile(id)?;
+        }
         let id = existing.unwrap_or_else(|| uuid::Uuid::new_v4().to_string());
         let path = self.store.profile_path(&id)?;
         let payload = self.profile_payload(&raw, &self.settings, &id)?;
@@ -988,6 +1109,7 @@ impl Engine {
         self.commit_profile(transaction, &payload, active).await?;
         self.profiles = profiles;
         self.settings = settings;
+        self.invalidate_views();
         append(&self.logs, "[客户端] 配置已导入/更新");
         Ok(())
     }
@@ -1003,10 +1125,10 @@ impl Engine {
             let path = self.store.runtime().join("config.yaml");
             let current: ConfigStatus = self.api.get("configs").await?;
             let preserved = |raw: &str| -> Result<String> {
-                let mut value: serde_yaml::Value = serde_yaml::from_str(raw)?;
-                value["mode"] = serde_yaml::Value::from(current.mode.clone());
-                value["tun"]["enable"] = serde_yaml::Value::from(current.tun.enable);
-                Ok(serde_yaml::to_string(&value)?)
+                let mut value: yaml_serde::Value = yaml_serde::from_str(raw)?;
+                value["mode"] = yaml_serde::Value::from(current.mode.clone());
+                value["tun"]["enable"] = yaml_serde::Value::from(current.tun.enable);
+                Ok(yaml_serde::to_string(&value)?)
             };
             let previous = preserved(&read_runtime_config(&path)?)?;
             let next = preserved(payload)?;
@@ -1277,6 +1399,10 @@ impl Engine {
         #[cfg(target_os = "macos")]
         {
             protection.system_dns = platform::macos::dns::system_servers()?;
+            let tailscale = platform::macos::dns::split_servers()?;
+            protection.split_dns = tailscale.split_dns;
+            protection.tailscale_dns_interface = tailscale.interface;
+            protection.mac_dns_port = Some(platform::macos::dns::available_port()?);
         }
         protection.validate()?;
         self.apply_claude_protection(Some(Arc::new(protection)), None)
@@ -1301,8 +1427,8 @@ impl Engine {
             .as_deref()
             .context("请先选择订阅")?;
         let raw = read_profile(&self.store.profile_path(id)?)?;
-        let mut next: serde_yaml::Value =
-            serde_yaml::from_str(&self.profile_payload(&raw, &candidate, id)?)?;
+        let mut next: yaml_serde::Value =
+            yaml_serde::from_str(&self.profile_payload(&raw, &candidate, id)?)?;
         drop(raw);
         let desired = if let Some(protection) = &protection {
             let mut selectors = previous
@@ -1332,8 +1458,8 @@ impl Engine {
             }
         };
         next["mode"] = desired.mode.clone().into();
-        next["tun"]["enable"] = serde_yaml::Value::from(self.running() && desired.tun);
-        let next = serde_yaml::to_string(&next)?;
+        next["tun"]["enable"] = yaml_serde::Value::from(self.running() && desired.tun);
+        let next = yaml_serde::to_string(&next)?;
         self.validate(&next).await?;
         // Authorization is requested before the durable transaction is opened.
         // Cancellation therefore cannot leave an enabled preference behind.
@@ -1356,12 +1482,12 @@ impl Engine {
             }
         }
         let path = self.store.runtime().join("config.yaml");
-        let mut original: serde_yaml::Value = serde_yaml::from_str(&read_runtime_config(&path)?)?;
+        let mut original: yaml_serde::Value = yaml_serde::from_str(&read_runtime_config(&path)?)?;
         if let Some(previous) = &previous {
             original["mode"] = previous.mode.clone().into();
             original["tun"]["enable"] = previous.tun.into();
         }
-        let original = serde_yaml::to_string(&original)?;
+        let original = yaml_serde::to_string(&original)?;
         let mut transaction = crate::profile_transaction::Transaction::new(&self.store.root)?;
         transaction.stage(
             &self.store.root.join("settings.json"),
@@ -1380,10 +1506,7 @@ impl Engine {
                     // /version and tun.enable do not prove network availability.
                     // Use the core's actual upstream DNS path (not fake-IP or the
                     // host resolver) before committing a full-route takeover.
-                    self.api
-                        .wait_for_dns("www.cloudflare.com", Duration::from_secs(30))
-                        .await
-                        .context("保护节点或加密 DNS 无法连通，请检查节点和节点 DNS 配置")?;
+                    self.api.finish_protection_enable().await?;
                 } else if let Some(saved) = &old.claude_protection {
                     self.api
                         .restore_automatic_groups(&saved.locked_groups, &saved.fixed_groups)
@@ -1466,7 +1589,24 @@ impl Engine {
         })
         .await?;
         #[cfg(target_os = "macos")]
-        self.mac_protection_dns(protected && state.tun).await?;
+        {
+            let port = if protected && state.tun {
+                let config: yaml_serde::Value = yaml_serde::from_str(payload)?;
+                let address: std::net::SocketAddr = config["dns"]["listen"]
+                    .as_str()
+                    .context("保护 DNS 本机监听地址缺失")?
+                    .parse()?;
+                ensure!(
+                    address.ip() == std::net::Ipv4Addr::LOCALHOST && address.port() >= 1024,
+                    "保护 DNS 本机监听地址无效"
+                );
+                Some(address.port())
+            } else {
+                None
+            };
+            tokio::task::spawn_blocking(move || platform::macos::service::protection_dns_at(port))
+                .await??;
+        }
         Ok(())
     }
 
@@ -1541,7 +1681,7 @@ impl Engine {
             return Ok(());
         }
         let runtime = self.store.runtime();
-        let manifest = assets::verify_geo(staged)?;
+        let manifest = assets::verify_geo(staged).context("新下载的 Geo 数据无效")?;
         let geo_settings = Settings {
             rule_overrides: RuleOverrides::default(),
             claude_protection: None,
@@ -1991,7 +2131,18 @@ impl Engine {
 
     #[cfg(target_os = "macos")]
     async fn mac_protection_dns(&self, enabled: bool) -> Result<()> {
-        tokio::task::spawn_blocking(move || platform::macos::service::protection_dns(enabled))
+        let port = if enabled {
+            Some(
+                self.settings
+                    .claude_protection
+                    .as_ref()
+                    .and_then(|protection| protection.mac_dns_port)
+                    .context("保护 DNS 本机端口缺失，请重新开启保护")?,
+            )
+        } else {
+            None
+        };
+        tokio::task::spawn_blocking(move || platform::macos::service::protection_dns_at(port))
             .await??;
         Ok(())
     }
@@ -2148,6 +2299,8 @@ impl Engine {
             self.last_totals = None;
             self.version.clear();
             self.set_logs(false);
+            #[cfg(target_os = "macos")]
+            self.mac_protection_dns(false).await?;
             platform::restore(&self.journal())?;
             append(
                 &self.logs,
@@ -2157,6 +2310,33 @@ impl Engine {
         snapshot.running = self.running();
         if scope == Scope::Claude {
             snapshot.claude_guard = self.protection_guard.as_ref().map(|guard| guard.snapshot());
+        }
+        #[cfg(target_os = "macos")]
+        if (header || scope == Scope::Claude) && self.running() {
+            let error = if let Some(port) = self
+                .settings
+                .claude_protection
+                .as_ref()
+                .and_then(|protection| protection.mac_dns_port)
+            {
+                tokio::task::spawn_blocking(move || {
+                    platform::macos::service::check_protection_dns(port)
+                })
+                .await?
+                .err()
+                .map(|error| format!("{error:#}"))
+            } else {
+                None
+            };
+            if let Some(error) = &error {
+                if self.mac_dns_error.as_ref() != Some(error) {
+                    self.record_failure(error);
+                }
+                let guard = snapshot.claude_guard.get_or_insert_with(Default::default);
+                guard.connected = false;
+                guard.error = error.clone();
+            }
+            self.mac_dns_error = error;
         }
         snapshot.system_proxy = platform::is_owned(&self.journal())?;
         self.set_logs(scope == Scope::Logs);
@@ -2203,6 +2383,10 @@ impl Engine {
         }
         if scope == Scope::Proxies {
             snapshot.proxies = self.api.get("proxies").await?;
+            snapshot.active_group = self.default_route().ok().and_then(|route| {
+                crate::active_route::group(&snapshot.mode, &route, &snapshot.proxies)
+                    .map(str::to_owned)
+            });
         }
         if scope == Scope::Rules {
             snapshot.rules = self.api.get("rules").await?;
@@ -2345,6 +2529,155 @@ mod memory_tests {
         .await
         .unwrap();
         assert_eq!(result.unwrap_err().kind(), std::io::ErrorKind::AddrInUse);
+    }
+
+    #[cfg(target_os = "macos")]
+    #[tokio::test]
+    async fn mac_port_wait_retries_inconclusive_connections_until_bind_succeeds() {
+        use std::io::{Error, ErrorKind};
+        for kind in [
+            ErrorKind::ConnectionReset,
+            ErrorKind::TimedOut,
+            ErrorKind::AddrNotAvailable,
+        ] {
+            let mut probes = 0;
+            let logs = Arc::new(Mutex::new(VecDeque::new()));
+            wait_for_mac_port_state(
+                12345,
+                &logs,
+                Duration::ZERO,
+                Duration::from_secs(3),
+                || {
+                    probes += 1;
+                    if probes < 3 {
+                        Err(Error::from(ErrorKind::AddrInUse))
+                    } else {
+                        Ok(())
+                    }
+                },
+                || std::future::ready(Err(Error::from(kind))),
+            )
+            .await
+            .unwrap();
+            assert_eq!(probes, 3);
+            assert_eq!(logs.lock().unwrap().len(), 1);
+        }
+    }
+
+    #[cfg(target_os = "macos")]
+    #[tokio::test]
+    async fn mac_port_wait_retries_a_connection_timeout_until_bind_succeeds() {
+        let mut probes = 0;
+        let logs = Arc::new(Mutex::new(VecDeque::new()));
+        tokio::time::timeout(
+            Duration::from_secs(3),
+            wait_for_mac_port_state(
+                12345,
+                &logs,
+                Duration::ZERO,
+                Duration::from_secs(3),
+                || {
+                    probes += 1;
+                    if probes < 3 {
+                        Err(std::io::ErrorKind::AddrInUse.into())
+                    } else {
+                        Ok(())
+                    }
+                },
+                std::future::pending::<std::io::Result<()>>,
+            ),
+        )
+        .await
+        .unwrap()
+        .unwrap();
+        assert_eq!(probes, 3);
+    }
+
+    #[cfg(target_os = "macos")]
+    #[tokio::test]
+    async fn mac_port_wait_allows_closed_listener_states_after_shutdown_grace() {
+        let mut probes = 0;
+        let mut connections = 0;
+        let logs = Arc::new(Mutex::new(VecDeque::new()));
+        wait_for_mac_port_state(
+            12345,
+            &logs,
+            Duration::from_millis(100),
+            Duration::from_secs(3),
+            || {
+                probes += 1;
+                if probes < 3 {
+                    Err(std::io::ErrorKind::AddrInUse.into())
+                } else {
+                    Ok(())
+                }
+            },
+            || {
+                connections += 1;
+                std::future::ready(if connections == 1 {
+                    Ok(())
+                } else {
+                    Err(std::io::ErrorKind::ConnectionRefused.into())
+                })
+            },
+        )
+        .await
+        .unwrap();
+        assert_eq!(probes, 3);
+    }
+
+    #[cfg(target_os = "macos")]
+    #[tokio::test]
+    async fn mac_update_port_grace_stays_bounded_when_a_listener_stops_responding() {
+        let mut connections = 0;
+        let logs = Arc::new(Mutex::new(VecDeque::new()));
+        let result = tokio::time::timeout(
+            Duration::from_secs(1),
+            wait_for_mac_port_state(
+                12345,
+                &logs,
+                Duration::from_millis(100),
+                Duration::from_secs(3),
+                || Err(std::io::ErrorKind::AddrInUse.into()),
+                || {
+                    connections += 1;
+                    let first = connections == 1;
+                    async move {
+                        if first {
+                            Ok(())
+                        } else {
+                            std::future::pending::<std::io::Result<()>>().await
+                        }
+                    }
+                },
+            ),
+        )
+        .await
+        .unwrap();
+        assert_eq!(result.unwrap_err().kind(), std::io::ErrorKind::AddrInUse);
+    }
+
+    #[cfg(target_os = "macos")]
+    #[tokio::test]
+    async fn mac_port_wait_stays_bounded_when_connections_remain_inconclusive() {
+        let logs = Arc::new(Mutex::new(VecDeque::new()));
+        let error = tokio::time::timeout(
+            Duration::from_secs(2),
+            wait_for_mac_port_state(
+                12345,
+                &logs,
+                Duration::ZERO,
+                Duration::from_millis(100),
+                || Err(std::io::ErrorKind::AddrInUse.into()),
+                std::future::pending::<std::io::Result<()>>,
+            ),
+        )
+        .await
+        .unwrap()
+        .unwrap_err();
+        assert_eq!(error.kind(), std::io::ErrorKind::AddrInUse);
+        assert!(error.to_string().contains("连接超时"));
+        assert!(logs.lock().unwrap().is_empty());
     }
 
     #[tokio::test]

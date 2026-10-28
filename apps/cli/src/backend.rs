@@ -195,11 +195,7 @@ pub async fn run(args: &Args) -> Result<()> {
             authorize_tun(args).await?;
         }
         let mut owner = engine.lock().await;
-        owner.start().await?;
-        if let Err(error) = owner.restore_proxy_mode().await {
-            let _ = owner.stop().await;
-            return Err(error);
-        }
+        owner.start_with_proxy_mode().await?;
     }
     if !args.flag("quiet") {
         eprintln!("Clash of Rust 后台已运行；Ctrl+C 恢复网络后退出");

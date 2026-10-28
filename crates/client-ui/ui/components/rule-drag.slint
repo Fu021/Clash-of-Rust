@@ -1,0 +1,66 @@
+import { Theme } from "../theme/palette.slint";
+
+export component RuleDragHandle inherits Rectangle {
+    in property <length> row-height: 80px;
+    in property <duration> hold-duration: 0ms;
+    in property <bool> enabled: true;
+    in property <bool> blocked;
+    in property <string> context;
+    in property <length> hit-padding;
+    in property <length> hit-width: root.width;
+    property <bool> interactive: root.enabled && !root.blocked;
+    property <bool> tracking;
+    property <string> press-context;
+    callback started();
+    callback dragged(int);
+    callback dropped(int);
+    callback cancelled();
+    width: 24px; height: 40px; horizontal-stretch: 0;
+    background: root.tracking ? Theme.accent-wash : transparent; border-radius: 6px;
+    accessible-role: button; accessible-label: "拖动调整规则顺序，方向键上下移动";
+    changed interactive => {
+        if !root.interactive && root.tracking { root.tracking = false; root.cancelled(); }
+    }
+    changed context => {
+        if root.tracking { root.tracking = false; root.cancelled(); }
+    }
+    Timer {
+        interval: root.hold-duration;
+        running: root.hold-duration > 0ms && area.pressed && root.interactive && !root.tracking && root.context == root.press-context;
+        triggered => { root.tracking = true; root.started(); }
+    }
+    Image {
+        source: @image-url("../icons/grip-vertical.svg"); colorize: Theme.secondary;
+        width: 12px; height: 18px; x: (parent.width - self.width) / 2; y: (parent.height - self.height) / 2;
+    }
+    keys := FocusScope {
+        x: -root.hit-padding; width: root.hit-width; height: parent.height; enabled: root.interactive;
+        key-pressed(event) => {
+            if event.text == Key.Escape && root.tracking {
+                root.tracking = false; root.cancelled(); return accept;
+            }
+            if event.text == Key.UpArrow || event.text == Key.DownArrow {
+                root.started(); root.dropped(event.text == Key.UpArrow ? -1 : 1); return accept;
+            }
+            return reject;
+        }
+        area := TouchArea {
+            width: parent.width; height: parent.height; enabled: root.interactive; mouse-cursor: pointer;
+            pointer-event(event) => {
+                if event.kind == PointerEventKind.down {
+                    keys.focus();
+                    root.press-context = root.context;
+                    if root.hold-duration == 0ms { root.tracking = true; root.started(); }
+                } else if event.kind == PointerEventKind.up && root.tracking {
+                    root.tracking = false;
+                    if root.interactive && root.context == root.press-context {
+                        root.dropped(round((self.mouse-y - self.pressed-y) / max(1px, root.row-height)));
+                    } else { root.cancelled(); }
+                } else if event.kind == PointerEventKind.cancel {
+                    root.tracking = false; root.cancelled();
+                }
+            }
+            moved => { if root.tracking && root.context == root.press-context { root.dragged(round((self.mouse-y - self.pressed-y) / max(1px, root.row-height))); } }
+        }
+    }
+}

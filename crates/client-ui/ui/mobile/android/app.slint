@@ -6,7 +6,9 @@ import { AndroidSettings } from "settings.slint";
 // Android owns this composition and may replace/add pages without iOS changes.
 export component AndroidSurface inherits MobileFrame {
     primary-pages: [0, 1, 2, 10, 9];
-    sidebar-pages: [0, 1, 2, 3, 4, 5, 6, 7, 8, 9];
+    sidebar-pages: [0, 1, 2, 10];
+    sidebar-footer-pages: [9];
+    grouped-tools: true;
     tab-pill: true; title-size: 24px; sidebar-width: 192px; tab-height: 56px;
     compact-system-insets: true;
     centered-modal: false;

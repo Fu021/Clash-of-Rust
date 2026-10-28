@@ -7,11 +7,12 @@ import { MText, MSmall, MHeading, MButton, MBackButton, MTag, MNav, MScroll, MNo
 import { MobileDetails, MobileModal } from "details.slint";
 
 component HeaderStatus inherits VerticalLayout {
+    in property <bool> compact;
     spacing: 6px; alignment: center; min-width: 0px;
     HorizontalLayout { alignment: end;
         MTag { text: MobileData.core-running ? "● 内核运行中" : "○ 内核未运行"; tone: MobileData.core-running ? 1 : 4; }
     }
-    MSmall { text: MobileData.profile + (MobileData.node != "" ? "  |  " + MobileData.node : ""); horizontal-alignment: right; }
+    if !root.compact: MSmall { text: MobileData.profile + (MobileData.node != "" ? "  |  " + MobileData.node : ""); horizontal-alignment: right; }
 }
 
 export component MobileFrame inherits Rectangle {
@@ -22,6 +23,8 @@ export component MobileFrame inherits Rectangle {
     changed notice-source => { if self.notice-source != "" { self.notice-text = self.notice-source; } }
     in property <[int]> primary-pages;
     in property <[int]> sidebar-pages;
+    in property <[int]> sidebar-footer-pages;
+    in property <bool> grouped-tools;
     in property <bool> tab-pill;
     in property <length> title-size: 24px;
     in property <length> sidebar-width: 192px;
@@ -45,9 +48,9 @@ export component MobileFrame inherits Rectangle {
     property <length> nav-content-height: max(root.tab-height, MobileTypography.font-size(12) * 1.5 + 38px);
     property <length> bottom-height: root.nav-content-height + (root.compact-system-insets ? max(8px, MobileView.safe-bottom) : MobileView.safe-bottom);
     property <bool> detail-page: MobileView.detail > 0 && !MobileView.modal;
-    property <bool> has-back: (root.detail-page && !root.pane) || (!root.expanded && MobileView.page >= 3 && MobileView.page <= 8);
+    property <bool> has-back: (root.detail-page && !root.pane) || ((!root.expanded || root.grouped-tools) && MobileView.page >= 3 && MobileView.page <= 8);
     property <bool> pane: body.width >= 880px && root.detail-page && MobileView.detail != 2 && MobileView.detail != 3;
-    property <string> detail-title: MobileView.detail == 1 ? "风险项目" : MobileView.detail == 2 ? "编辑规则" : MobileView.detail == 3 ? (MobileView.selected-id == "" ? "添加订阅" : "编辑订阅") : MobileView.detail == 5 ? "连接详情" : MobileView.detail == 6 ? MobileView.category : MobileView.detail == 7 ? "正常项目" : MobileView.detail == 9 ? "其他线索" : "日志详情";
+    property <string> detail-title: MobileView.detail == 14 ? "Fake-IP" : MobileView.detail == 15 ? "规则操作" : MobileView.detail == 16 ? "检测详情" : MobileView.detail == 17 ? "检测选项" : MobileView.detail == 1 ? "风险项目" : MobileView.detail == 2 ? "编辑规则" : MobileView.detail == 3 ? (MobileView.selected-id == "" ? "添加订阅" : "编辑订阅") : MobileView.detail == 5 ? "连接详情" : MobileView.detail == 6 ? (MobileView.category == "all" ? "全部检测结果" : MobileView.category) : MobileView.detail == 7 ? "正常项目" : MobileView.detail == 9 ? "其他线索" : "日志详情";
     property <duration> notice-start;
     property <int> notice-revision: MobileView.notice-revision;
     property <float> notice-elapsed: MobileView.notice-elapsed;
@@ -62,6 +65,9 @@ export component MobileFrame inherits Rectangle {
     keys := FocusScope {
         width: parent.width; height: parent.height;
         capture-key-pressed(event) => {
+            if event.text == Key.Escape && MobileView.rule-drag-id != "" {
+                MobileView.rule-drag-id = ""; MobileView.rule-drag-target = ""; return accept;
+            }
             if event.text == Key.Escape && !MobileView.modal {
                 if root.detail-page { MobileView.back(); }
                 else if MobileView.page >= 3 && MobileView.page <= 8 { MobileView.navigate(10); }
@@ -85,8 +91,11 @@ export component MobileFrame inherits Rectangle {
                 }
                 MScroll { vertical-stretch: 1; min-height: 0px;
                     if root.expanded: VerticalLayout { alignment: start; spacing: 4px;
-                        for route-id in root.sidebar-pages: MNav { height: 48px; text: root.titles[route-id]; icon: root.icons[route-id]; selected: MobileView.page == route-id;
-                            clicked => { MobileView.navigate(route-id); }
+                        for route-id in root.sidebar-pages: VerticalLayout { alignment: start; spacing: 4px;
+                            if route-id == 6: MSmall { text: "工具"; height: max(28px, MobileTypography.font-size(12) + 12px); font-size: MobileTypography.font-size(12); }
+                            MNav { height: 48px; text: root.titles[route-id]; icon: root.icons[route-id]; selected: MobileView.page == route-id || (route-id == 10 && MobileView.page >= 3 && MobileView.page <= 8);
+                                clicked => { MobileView.navigate(route-id); }
+                            }
                         }
                     }
                     if !root.expanded: VerticalLayout { alignment: start; spacing: root.short ? 0px : 8px;
@@ -96,7 +105,12 @@ export component MobileFrame inherits Rectangle {
                         }
                     }
                 }
-                if root.expanded: MSmall { height: 28px; text: MobileData.version; }
+                if root.expanded: VerticalLayout { vertical-stretch: 0; spacing: 10px;
+                    for route-id in root.sidebar-footer-pages: MNav { height: 48px; text: root.titles[route-id]; icon: root.icons[route-id]; selected: MobileView.page == route-id;
+                        clicked => { MobileView.navigate(route-id); }
+                    }
+                    MSmall { height: 28px; text: MobileData.version; }
+                }
             }
         }
         header := Rectangle {
@@ -112,9 +126,9 @@ export component MobileFrame inherits Rectangle {
                     font-size: root.short ? MobileTypography.font-size(21) : MobileTypography.font-size(round(root.title-size / 1px));
                     horizontal-stretch: 0;
                 }
-                if !root.stacked-header: HeaderStatus { }
+                if !root.stacked-header: HeaderStatus { compact: root.usable-height < 600px; }
               }
-              if root.stacked-header: HeaderStatus { }
+              if root.stacked-header: HeaderStatus { compact: root.usable-height < 600px; }
             }
         }
         body := Rectangle {

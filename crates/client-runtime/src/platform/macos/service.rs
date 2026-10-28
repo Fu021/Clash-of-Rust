@@ -16,7 +16,7 @@ use std::{
     time::{Duration, Instant},
 };
 
-const PROTOCOL: u32 = 2;
+const PROTOCOL: u32 = 7;
 const PREFIX: &str = "org.clashofrust.network";
 const LIMIT: u64 = 256 * 1024;
 static STOP: AtomicBool = AtomicBool::new(false);
@@ -27,6 +27,11 @@ enum Request {
     Status {},
     Dns {
         enabled: bool,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        port: Option<u16>,
+    },
+    DnsCheck {
+        port: u16,
     },
     Adopt {
         original: ProxyState,
@@ -105,13 +110,20 @@ fn save_lease(path: &Path, lease: &ProxyLease) -> Result<()> {
 
 fn restore_lease(path: &Path, lease: &mut Option<ProxyLease>) -> Result<()> {
     if let Some(owned) = lease {
-        if super::native_proxy::read()? == owned.owned {
-            super::native_proxy::write(&owned.original)?;
-        }
+        super::native_proxy::restore(&owned.original, &owned.owned)?;
         fs::remove_file(path)?;
         *lease = None;
     }
     Ok(())
+}
+
+fn accepts_protocol(request: &Request, protocol: u32) -> bool {
+    protocol == PROTOCOL
+        || (matches!(protocol, 2..=6)
+            && matches!(
+                request,
+                Request::Proxy { restore: true, .. } | Request::Dns { enabled: false, .. }
+            ))
 }
 
 fn paths(uid: u32) -> (String, PathBuf, PathBuf) {
@@ -153,7 +165,7 @@ fn exchange(request: &Request) -> Result<Response> {
         bail!("{error}");
     }
     ensure!(
-        response.protocol == PROTOCOL,
+        accepts_protocol(request, response.protocol),
         "网络助手版本不兼容，请重新授权安装"
     );
     Ok(response)
@@ -251,9 +263,14 @@ pub fn open_tun(socket: &Path, token: &str) -> Result<()> {
 }
 
 pub fn protection_dns(enabled: bool) -> Result<()> {
+    ensure!(!enabled, "开启保护 DNS 必须指定本机监听端口");
+    protection_dns_at(None)
+}
+
+pub fn protection_dns_at(port: Option<u16>) -> Result<()> {
     // No prompting or helper installation while cleaning up (including old
     // protocol clients which never took ownership of DNS in the first place).
-    if !enabled
+    if port.is_none()
         && !paths(unsafe { libc::getuid() })
             .1
             .join("dns-lease.json")
@@ -261,7 +278,15 @@ pub fn protection_dns(enabled: bool) -> Result<()> {
     {
         return Ok(());
     }
-    exchange(&Request::Dns { enabled })?;
+    exchange(&Request::Dns {
+        enabled: port.is_some(),
+        port,
+    })?;
+    Ok(())
+}
+
+pub fn check_protection_dns(port: u16) -> Result<()> {
+    exchange(&Request::DnsCheck { port })?;
     Ok(())
 }
 
@@ -443,6 +468,7 @@ pub fn serve(uid: u32) -> Result<()> {
         root_owned(&dns_journal, false)?;
     }
     let mut dns_lease = super::dns::load(&dns_journal)?;
+    let mut dns_changes = super::dns::Changes::new()?;
     if dns_lease
         .as_ref()
         .is_some_and(super::dns::Lease::owner_exited)
@@ -483,6 +509,19 @@ pub fn serve(uid: u32) -> Result<()> {
         libc::signal(libc::SIGTERM, stop as *const () as usize);
     }
     let mut children: Vec<Child> = Vec::new();
+    let mut dns_error: Option<String> = None;
+    let mut dns_native_ready = false;
+    let mut dns_relay = match dns_lease.as_ref().filter(|lease| lease.port() >= 1024) {
+        Some(lease) => match super::dns::Relay::start(lease.port()) {
+            Ok(relay) => Some(relay),
+            Err(error) => {
+                dns_error = Some(format!("保护 DNS 转发恢复失败：{error:#}"));
+                None
+            }
+        },
+        None => None,
+    };
+    let mut dns_refresh = Instant::now();
     let result = (|| -> Result<()> {
         while !STOP.load(Ordering::Relaxed) {
             if dns_lease
@@ -490,6 +529,58 @@ pub fn serve(uid: u32) -> Result<()> {
                 .is_some_and(super::dns::Lease::owner_exited)
             {
                 let _ = super::dns::restore(&dns_journal, &mut dns_lease);
+            }
+            if dns_lease.is_none() {
+                dns_relay = None;
+                dns_native_ready = false;
+            }
+            let relay_failed = dns_lease.as_ref().is_some_and(|lease| {
+                lease.port() >= 1024
+                    && !dns_relay
+                        .as_ref()
+                        .is_some_and(|relay| relay.serving(lease.port()))
+            });
+            if dns_lease.is_some()
+                && (dns_changes.changed()
+                    || ((dns_error.is_some() || relay_failed)
+                        && dns_refresh.elapsed() >= Duration::from_secs(5)))
+            {
+                dns_refresh = Instant::now();
+                dns_native_ready = false;
+                // The same helper thread serializes changes, journal writes
+                // and user requests. No competing DNS recovery worker exists.
+                let refreshed = (|| -> Result<()> {
+                    let port = dns_lease.as_ref().unwrap().port();
+                    if port >= 1024 && !dns_relay.as_ref().is_some_and(|relay| relay.serving(port))
+                    {
+                        dns_relay = None;
+                        dns_relay = Some(super::dns::Relay::start(port)?);
+                    }
+                    let refreshed = super::dns::refresh(&dns_journal, &mut dns_lease);
+                    // Dynamic-store publication can precede mDNSResponder's
+                    // actual switch. Also confirm quarantine before reporting
+                    // its conflict, so callers cannot mistake it for readiness.
+                    dns_relay
+                        .as_ref()
+                        .context("保护 DNS 本机转发不可用")?
+                        .verify_native()?;
+                    refreshed?;
+                    super::dns::verify(&dns_lease, port)?;
+                    dns_native_ready = true;
+                    Ok(())
+                })();
+                match refreshed {
+                    Ok(()) => dns_error = None,
+                    Err(error) => {
+                        let message = format!("保护 DNS 自动更新失败：{error:#}");
+                        if dns_error.as_ref() != Some(&message) {
+                            eprintln!("{message}");
+                        }
+                        // Retain the local DNS overlay on failure. Restoring the
+                        // VPN default here would silently disable protection.
+                        dns_error = Some(message);
+                    }
+                }
             }
             if lease
                 .as_ref()
@@ -520,10 +611,32 @@ pub fn serve(uid: u32) -> Result<()> {
                 ensure!(bytes.last() == Some(&b'\n'), "网络助手请求过大或未完成");
                 match serde_json::from_slice::<Request>(&bytes)? {
                     Request::Status {} => {}
-                    Request::Dns { enabled } => {
+                    Request::Dns { enabled, port } => {
                         let caller = peer_pid(&stream)?;
                         if enabled {
-                            super::dns::enable(&dns_journal, &mut dns_lease, caller)?;
+                            let port = port.context("保护 DNS 本机端口缺失")?;
+                            ensure!(port >= 1024, "保护 DNS 本机端口无效");
+                            if !dns_relay.as_ref().is_some_and(|relay| relay.serving(port)) {
+                                ensure!(
+                                    dns_relay.is_none(),
+                                    "保护 DNS 转发异常，请先关闭保护后重试"
+                                );
+                                dns_relay = Some(super::dns::Relay::start(port)?);
+                            }
+                            dns_native_ready = false;
+                            let enabled = super::dns::enable(
+                                &dns_journal,
+                                &mut dns_lease,
+                                caller,
+                                uid,
+                                port,
+                                dns_relay.as_ref().unwrap(),
+                            );
+                            if dns_lease.is_none() {
+                                dns_relay = None;
+                            }
+                            enabled?;
+                            dns_native_ready = true;
                         } else {
                             ensure!(
                                 dns_lease
@@ -532,31 +645,56 @@ pub fn serve(uid: u32) -> Result<()> {
                                 "DNS 正由其他客户端持有"
                             );
                             super::dns::restore(&dns_journal, &mut dns_lease)?;
+                            dns_relay = None;
+                            dns_native_ready = false;
                         }
+                        dns_error = None;
+                    }
+                    Request::DnsCheck { port } => {
+                        ensure!(
+                            dns_relay.as_ref().is_some_and(|relay| relay.serving(port)),
+                            "保护 DNS 本机转发不可用"
+                        );
+                        if let Some(error) = &dns_error {
+                            bail!("{error}");
+                        }
+                        ensure!(dns_native_ready, "系统原生 DNS 尚未进入保护入口");
+                        super::dns::verify(&dns_lease, port)?;
                     }
                     Request::Adopt { original, owned } => {
                         ensure!(
-                            super::native_proxy::read()? == owned,
+                            super::proxy_preferences::matches_managed(
+                                &super::native_proxy::read()?,
+                                &owned
+                            )?,
                             "系统代理已被其他程序修改，请重新选择代理模式"
                         );
                         adopt_lease(&mut lease, original, owned, peer_pid(&stream)?);
                         save_lease(&journal, lease.as_ref().unwrap())?;
                     }
                     Request::Proxy { state, restore } => {
-                        if !restore && lease.is_none() {
+                        if restore {
+                            if lease.is_some() {
+                                restore_lease(&journal, &mut lease)?;
+                            } else if !state.is_empty() {
+                                super::native_proxy::write(&state)?;
+                            }
+                            return Ok(());
+                        }
+                        if lease.is_none() {
                             lease = Some(ProxyLease {
                                 original: super::native_proxy::read()?,
                                 owned: state.clone(),
                                 owner: peer_pid(&stream)?,
                             });
                         }
-                        if !restore && let Some(owned) = &mut lease {
+                        if let Some(owned) = &mut lease {
                             owned.owned = state.clone();
                             owned.owner = peer_pid(&stream)?;
                             save_lease(&journal, owned)?;
                         }
                         super::native_proxy::write(&state)?;
-                        if restore || lease.as_ref().is_some_and(|owned| owned.original == state) {
+                        if lease.as_ref().is_some_and(|owned| owned.original == state) {
                             fs::remove_file(&journal).or_else(|error| {
                                 if error.kind() == std::io::ErrorKind::NotFound {
                                     Ok(())
@@ -618,6 +756,57 @@ pub fn serve(uid: u32) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn older_helpers_can_clean_up_but_must_be_updated_before_new_operations() {
+        assert_eq!(
+            serde_json::to_value(Request::Dns {
+                enabled: false,
+                port: None
+            })
+            .unwrap(),
+            serde_json::json!({"operation":"dns","enabled":false}),
+            "Old helpers reject unknown fields even during cleanup",
+        );
+        assert!(accepts_protocol(&Request::Status {}, PROTOCOL));
+        for protocol in [2, 3, 4, 5, 6] {
+            assert!(!accepts_protocol(&Request::Status {}, protocol));
+            assert!(!accepts_protocol(
+                &Request::Dns {
+                    enabled: true,
+                    port: Some(25353)
+                },
+                protocol
+            ));
+            assert!(accepts_protocol(
+                &Request::Dns {
+                    enabled: false,
+                    port: None
+                },
+                protocol
+            ));
+            assert!(accepts_protocol(
+                &Request::Proxy {
+                    state: ProxyState::new(),
+                    restore: true,
+                },
+                protocol
+            ));
+            assert!(!accepts_protocol(
+                &Request::Proxy {
+                    state: ProxyState::new(),
+                    restore: false,
+                },
+                protocol
+            ));
+        }
+        assert!(!accepts_protocol(
+            &Request::Dns {
+                enabled: false,
+                port: None
+            },
+            1
+        ));
+    }
     #[test]
     fn copying_helper_contents_creates_a_private_inode_without_source_metadata() {
         let directory = tempfile::tempdir().unwrap();

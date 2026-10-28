@@ -17,7 +17,8 @@ serde.workspace = true
 serde_json.workspace = true
 tokio.workspace = true
 futures-util.workspace = true
-jni = "0.21"
+tempfile.workspace = true
+jni = "0.22"
 log = "0.4"
 android_logger = "0.15"
 

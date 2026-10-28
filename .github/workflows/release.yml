@@ -3,11 +3,16 @@ on:
   workflow_dispatch:
     inputs:
       ci_run_id:
-        description: '成功的 CI 编号；开发分支须启用 check_only 并指定同分支的 PR CI'
+        description: '成功的 CI 编号；开发分支须指定同分支的 PR CI'
         required: false
         type: string
       check_only:
         description: '完成打包和基础安装/代理测试，但不发布 Release'
+        required: false
+        default: false
+        type: boolean
+      prerelease:
+        description: '显式发布预发布版；可从开发/修复分支发布，须关闭 check_only'
         required: false
         default: false
         type: boolean
@@ -23,7 +28,7 @@ concurrency:
 jobs:
   resolve:
     name: Resolve verified CI
-    if: github.ref == 'refs/heads/main' || inputs.check_only
+    if: github.ref == 'refs/heads/main' || inputs.check_only || inputs.prerelease
     runs-on: ubuntu-latest
     timeout-minutes: 10
     outputs:
@@ -48,12 +53,15 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           CI_RUN_ID: ${{ inputs.ci_run_id }}
           CHECK_ONLY: ${{ inputs.check_only }}
+          PRERELEASE: ${{ inputs.prerelease }}
           PYTHONDONTWRITEBYTECODE: '1'
         run: |
           import os, subprocess, sys
           command = [sys.executable, 'scripts/publish-release.py', '--resolve']
           if os.environ['CHECK_ONLY'] == 'true':
               command.append('--check')
+          if os.environ['PRERELEASE'] == 'true':
+              command.append('--prerelease')
           if os.environ.get('CI_RUN_ID'):
               command += ['--run-id', str(int(os.environ['CI_RUN_ID']))]
           subprocess.run(command, check=True)
@@ -367,12 +375,15 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           CI_RUN_ID: ${{ needs.resolve.outputs.ci_run_id }}
           CHECK_ONLY: ${{ inputs.check_only }}
+          PRERELEASE: ${{ inputs.prerelease }}
           PYTHONDONTWRITEBYTECODE: '1'
         run: |
           import os, subprocess, sys
           command = [sys.executable, 'scripts/publish-release.py', '--run-id', os.environ['CI_RUN_ID'], '--package-run-id', os.environ['GITHUB_RUN_ID']]
           if os.environ['CHECK_ONLY'] == 'true':
               command.append('--check')
+          if os.environ['PRERELEASE'] == 'true':
+              command.append('--prerelease')
           subprocess.run(command, check=True)
   cache_budget:
     name: Actions cache budget

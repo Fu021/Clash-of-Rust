@@ -17,12 +17,12 @@
 | `android.py` | CLI | Android 编译、模拟器测试、产物导出与已测试 APK 打包。 |
 | `build-installer.py` | CLI | 只组装已验证产物为 Windows、Linux 或 macOS 安装包。 |
 | `macos_package.py` | 模块 | macOS App / DMG 组装；被打包器和 macOS 验证延迟导入。 |
-| `publish-release.py` | CLI / 模块 | 校验成功 CI，复用已验证产物创建测试包或公开 Release。 |
+| `publish-release.py` | CLI / 模块 | 校验成功 CI，复用已验证产物创建测试包或公开正式/预发布 Release。 |
 | `run-ci.py` | CLI | 单个原生平台的编译、Clippy、源码测试与代理/TUN 集成入口。 |
-| `windows_ci.py` | 模块 | Windows 普通用户、服务、安装器、更新和 Defender 验证。 |
+| `windows_ci.py` | 模块 | Windows 普通用户、服务、安装器、更新及安装包/未压缩 EXE/DLL 的 Defender 验证，扫描证据进入打包收据。 |
 | `macos_ci.py` | CLI / 模块 | macOS 原生验证、安装检查和诊断报告。 |
 | `test-proxy-modes.py` | CLI | Windows、Linux、macOS 共用的系统代理、HTTP 和 TUN 流量检查。 |
-| `test-linux-tun.py` | root CLI | Linux 隔离网络命名空间内的 TUN 授权、DNS 和恢复测试。 |
+| `test-linux-tun.py` | root CLI | Linux 隔离网络/挂载命名空间内的用户身份、订阅隔离、TUN 授权、DNS 和恢复测试。 |
 | `tun_dns_fixture.py` | 子进程夹具 | Linux TUN 测试的隔离上游；必须作为独立进程启动。 |
 | `test-release-package.py` | CLI | 统一调度安装包结构、安装后验证和 Linux 兼容性检查。 |
 | `run-memory-benchmark.py` | CLI | 隔离运行 API、GUI、托盘和 CLI 内存基准。 |
@@ -54,4 +54,4 @@
 - 共享路径、下载、版本、资源和暂存逻辑优先复用 `build_support.py`；排障逻辑进入现有平台模块或离线测试。
 - 每次最终合并并推送 `main` 前，审查上述脚本及工作流内嵌命令，按职责和调用关系决定合并、删除或保留，并更新相关文档与失败复盘。
 
-2026-10-24 审计结果：24 个 Python 脚本均通过静态语法解析，其中 23 个有工作流、生产脚本或测试调用者，`preview-slint.py` 是文档提供的独立用户入口；另核对了 5 个 Rust 构建脚本及上述 2 个 JavaScript 文件的职责。未发现可安全删除的孤立脚本，也没有需要合并的重复入口。未执行编译、打包或脚本功能测试。
+2026-10-28 审计：24 个 Python 脚本均通过静态语法解析；23 个有工作流、生产脚本或测试调用者，`preview-slint.py` 为独立用户入口。5 个 Rust 构建脚本及 2 个 JavaScript 文件均有明确职责；未发现可安全删除的孤立脚本或重复入口。未执行编译、脚本功能测试或打包，调用表按后续实际变更维护。

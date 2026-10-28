@@ -306,8 +306,8 @@ pub async fn run(engine: &mut Engine, profile: &std::path::Path) {
         engine.claude_protection(true).await.unwrap();
         // No test-only DNS URL, hosts entry, restricted TUN route or API reload:
         // the exact production overlay and native engine transition are tested.
-        let payload: serde_yaml::Value =
-            serde_yaml::from_slice(&std::fs::read(store.runtime().join("config.yaml")).unwrap())
+        let payload: yaml_serde::Value =
+            yaml_serde::from_slice(&std::fs::read(store.runtime().join("config.yaml")).unwrap())
                 .unwrap();
         assert!(payload["tun"]["route-address"].is_null());
         let result = tokio::time::timeout(Duration::from_secs(30), protected_traffic(engine)).await;
@@ -318,9 +318,15 @@ pub async fn run(engine: &mut Engine, profile: &std::path::Path) {
             );
         }
         result.expect("Protected DNS/HTTP must remain reachable");
+        if node == "node.fixture.test" && !fixed_blocked {
+            super::check_network_refresh(engine, &store).await;
+            assert!(engine.settings.claude_protection.is_some());
+            tokio::time::timeout(Duration::from_secs(30), protected_traffic(engine))
+                .await
+                .expect("Protected DNS/HTTP must work after network refresh");
+        }
         engine.stop().await.unwrap();
-        engine.start().await.unwrap();
-        engine.restore_proxy_mode().await.unwrap();
+        engine.start_with_proxy_mode().await.unwrap();
         tokio::time::timeout(Duration::from_secs(30), protected_traffic(engine))
             .await
             .expect("Cold-start protected DNS/HTTP must work");

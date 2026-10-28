@@ -3,26 +3,7 @@
 use super::*;
 use rule_manager::{CustomRule, Document, Row, Source};
 
-pub(super) const TYPES: [&str; 18] = [
-    "DOMAIN",
-    "DOMAIN-SUFFIX",
-    "DOMAIN-KEYWORD",
-    "DOMAIN-REGEX",
-    "GEOSITE",
-    "GEOIP",
-    "IP-CIDR",
-    "IP-CIDR6",
-    "IP-ASN",
-    "SRC-IP-CIDR",
-    "SRC-PORT",
-    "DST-PORT",
-    "NETWORK",
-    "IN-PORT",
-    "IN-TYPE",
-    "RULE-SET",
-    "DSCP",
-    "MATCH",
-];
+pub(super) use rule_manager::FORM_TYPES as TYPES;
 pub(super) const SHORTCUT_LABELS: [&str; 5] = [
     "拦截广告",
     "本地域名直连",
@@ -84,6 +65,7 @@ pub enum Event {
     Delete,
     Enable,
     Move(isize),
+    Drop(String, String),
     MoveOpen,
     MoveInput(String),
     MoveTo,
@@ -300,6 +282,15 @@ impl State {
             }
         }
     }
+    fn drop_rule(&mut self, source: &str, target: &str) {
+        let Some(position) = self.rows.iter().position(|row| row.id == target) else {
+            return;
+        };
+        if self.rows.iter().any(|row| row.id == source) {
+            self.selected = Some(source.into());
+            self.move_selected(position);
+        }
+    }
     fn save_editor(&mut self) -> anyhow::Result<()> {
         let editor = self.editor.as_ref().context("请先打开规则编辑器")?;
         let raw = if editor.text_mode {
@@ -436,6 +427,7 @@ impl App {
                     state.move_selected(at.saturating_add_signed(delta));
                 }
             }
+            Event::Drop(source, target) => state.drop_rule(&source, &target),
             Event::MoveOpen => {
                 state.move_open = true;
                 state.move_position = state.selected_index().map_or(1, |i| i + 1).to_string();

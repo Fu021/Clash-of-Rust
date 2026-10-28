@@ -493,7 +493,7 @@ pub(super) fn theme_updates() -> Task<Message> {
                     let mut changed = settings.receive_signal("SettingChanged").await?;
                     let values: std::collections::HashMap<
                         String,
-                        std::collections::HashMap<String, zbus::zvariant::OwnedValue>,
+                        std::collections::HashMap<String, zbus::OwnedVariant>,
                     > = settings
                         .call("ReadAll", &(["org.freedesktop.appearance"].as_slice(),))
                         .await?;
@@ -511,7 +511,7 @@ pub(super) fn theme_updates() -> Task<Message> {
                             .await?;
                     }
                     while let Some(signal) = changed.next().await {
-                        let (namespace, key, value): (String, String, zbus::zvariant::OwnedValue) =
+                        let (namespace, key, value): (String, String, zbus::OwnedVariant) =
                             signal.body().deserialize()?;
                         if namespace == "org.freedesktop.appearance"
                             && key == "color-scheme"

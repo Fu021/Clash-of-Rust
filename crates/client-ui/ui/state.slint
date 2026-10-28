@@ -21,9 +21,9 @@ export enum Intent {
     appearance, text-scale, accent-picker, accent-color, tray-speed, dns-override, fake-ip,
     fake-ip-editor, fake-ip-input, fake-ip-add, fake-ip-remove, fake-ip-restore-defaults, ipv6, udp,
     autostart, mixed-port, save-ports, window-width, window-height,
-    reset-window, interval-input, save-interval, update-geo,
+    reset-window, interval-input, save-interval, subscription-interval-input, save-subscription-interval, update-geo,
     check-update, install-update, cancel-update, open-release, update-prereleases,
-    confirm, cancel-confirm, close-detail, copy, escape, focus-search, quit,
+    confirm, cancel-confirm, close-detail, copy, escape, focus-search, quit, rule-drop,
 }
 export struct Choice { id: string, label: string }
 export struct DetailItem { label: string, value: string }
@@ -33,9 +33,9 @@ export struct NodePair { left: NodeItem, right: NodeItem }
 export struct GroupItem { id: string, title: string, detail: string, current: string, expanded: bool, testing: bool, page: string, previous: bool, next: bool, nodes: [NodePair] }
 export struct ProfileItem { id: string, name: string, source: string, detail: string, active: bool, local: bool }
 export struct ConnectionItem { id: string, host: string, detail: string, rule: string, route: string, up: string, down: string, upload: string, download: string }
-export struct RuleItem { id: string, position: string, kind: string, value: string, policy: string, source: string, selected: bool, enabled: bool }
+export struct RuleItem { id: string, position: string, kind: string, value: string, policy: string, source: string, selected: bool, enabled: bool, raw: string }
 export struct LogItem { time: string, level: string, message: string, tone: int }
-export struct ReportItem { id: string, title: string, value: string, detail: string, source: string, tone: int, flag: image, flagged: bool }
+export struct ReportItem { id: string, title: string, value: string, country: string, detail: string, source: string, tone: int, flag: image, flagged: bool }
 export struct CategoryItem { id: string, title: string, count: string, detail: string, tone: int }
 
 export struct CategoryPair { left: CategoryItem, right: CategoryItem }
@@ -176,6 +176,7 @@ export global UiData {
     in-out property <string> window-width;
     in-out property <string> window-height;
     in-out property <string> interval;
+    in-out property <string> subscription-interval;
     in-out property <string> geo-status;
     in-out property <string> update-status;
     in-out property <bool> update-checking;

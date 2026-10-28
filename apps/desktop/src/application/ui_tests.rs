@@ -4,6 +4,125 @@ use clash_client_ui::{AppWindow, Intent, UiActions, UiData, models::ViewModels};
 use slint::{ComponentHandle, Model};
 
 #[test]
+fn dropping_rules_uses_identities_in_the_full_draft_and_ignores_stale_rows() {
+    let mut app = fixture(Page::Rules);
+    let document = rule_manager::Document::from_raw(
+        "fixture",
+        false,
+        "proxies: []\nrules: ['DOMAIN,github.one,DIRECT', 'DOMAIN,hidden.test,DIRECT', 'DOMAIN,github.two,DIRECT', 'MATCH,DIRECT']\n",
+    ).unwrap();
+    app.rule_state
+        .load(Arc::new(document), Arc::new(ProfileRules::default()));
+    let before: Vec<_> = app
+        .rule_state
+        .rows
+        .iter()
+        .map(|row| row.id.clone())
+        .collect();
+    assert!(before.len() >= 3);
+    let _ = app.ui_intent(Intent::RuleFilter, "3", "");
+    let _ = app.ui_intent(Intent::Query, "github", "");
+    let _ = app.ui_intent(Intent::RuleDrop, &before[0], &before[2]);
+    let after: Vec<_> = app
+        .rule_state
+        .rows
+        .iter()
+        .map(|row| row.id.clone())
+        .collect();
+    assert_eq!(after[2], before[0]);
+    assert_eq!(app.rule_state.selected.as_deref(), Some(before[0].as_str()));
+    assert_eq!(app.rule_state.saved.order, Vec::<String>::new());
+    assert!(app.rule_state.dirty());
+    let draft = app.rule_state.draft.clone();
+    let _ = app.ui_intent(Intent::RuleDrop, &before[0], "removed-target");
+    let _ = app.ui_intent(Intent::RuleDrop, "removed-source", &before[1]);
+    assert_eq!(app.rule_state.draft, draft);
+    app.working = true;
+    let _ = app.ui_intent(Intent::RuleDrop, &before[0], &before[1]);
+    assert_eq!(app.rule_state.draft, draft);
+}
+
+#[test]
+fn desktop_rule_handle_edges_lift_the_real_row_and_follow_the_pointer() {
+    use slint::platform::{PointerEventButton, WindowEvent, software_renderer::RepaintBufferType};
+    let adapter = ui_testing::initialize(950, 700);
+    let mut app = fixture(Page::Rules);
+    let document = rule_manager::Document::from_raw(
+        "fixture",
+        false,
+        "proxies: []\nrules: ['DOMAIN,first.test,DIRECT', 'DOMAIN,second.test,DIRECT', 'DOMAIN,third.test,DIRECT', 'MATCH,DIRECT']\n",
+    )
+    .unwrap();
+    app.rule_state
+        .load(Arc::new(document), Arc::new(ProfileRules::default()));
+    let window = AppWindow::new().unwrap();
+    let data = window.global::<UiData>();
+    let mut models = ViewModels::default();
+    models.attach(&data);
+    app.present_slint(&data, &mut models);
+    data.set_appearance(1);
+    data.set_accent(0);
+    let events = pointer_events(&window);
+    window.show().unwrap();
+    let mut pixels = vec![slint::Rgb8Pixel::default(); 950 * 700];
+    window.window().request_redraw();
+    assert!(adapter.draw_if_needed(|renderer| {
+        renderer.set_repaint_buffer_type(RepaintBufferType::NewBuffer);
+        renderer.render(&mut pixels, 950);
+        renderer.set_repaint_buffer_type(RepaintBufferType::ReusedBuffer);
+        renderer.render(&mut pixels, 950);
+    }));
+    let mut border_y = || {
+        window.window().request_redraw();
+        assert!(adapter.draw_if_needed(|renderer| {
+            renderer.render(&mut pixels, 950);
+            let mut full = vec![slint::Rgb8Pixel::default(); 950 * 700];
+            renderer.set_repaint_buffer_type(RepaintBufferType::NewBuffer);
+            renderer.render(&mut full, 950);
+            assert!(pixels == full, "the drag preview must repaint correctly");
+            renderer.set_repaint_buffer_type(RepaintBufferType::ReusedBuffer);
+            renderer.render(&mut pixels, 950);
+        }));
+        (300..600)
+            .find(|&y| {
+                (350..600).all(|x| pixels[y * 950 + x] == slint::Rgb8Pixel::new(15, 118, 110))
+            })
+            .expect("the lifted row must render a full-width accent border")
+    };
+    for x in [225., 247.] {
+        let start = slint::LogicalPosition::new(x, 355.);
+        window
+            .window()
+            .dispatch_event(WindowEvent::PointerMoved { position: start });
+        window.window().dispatch_event(WindowEvent::PointerPressed {
+            position: start,
+            button: PointerEventButton::Left,
+        });
+        let top = border_y();
+        let end = slint::LogicalPosition::new(x, 435.);
+        window
+            .window()
+            .dispatch_event(WindowEvent::PointerMoved { position: end });
+        assert_eq!(border_y(), top + 80, "the preview must follow the pointer");
+        window
+            .window()
+            .dispatch_event(WindowEvent::PointerReleased {
+                position: end,
+                button: PointerEventButton::Left,
+            });
+        assert!(
+            events
+                .borrow_mut()
+                .iter()
+                .any(|event| event.0 == Intent::RuleDrop),
+            "the full rules page must dispatch the reorder"
+        );
+        events.borrow_mut().clear();
+    }
+    window.hide().unwrap();
+}
+
+#[test]
 fn rule_editor_round_trip_and_cancel_preserve_the_draft_through_ui_intents() {
     let mut app = fixture(Page::Rules);
     let _ = app.ui_intent(Intent::RuleAdd, "", "");
@@ -188,6 +307,7 @@ fn connection_sort_clicks_redraw_the_header_immediately_and_third_click_restores
                 remote: false,
                 profile_edit: false,
                 profile_import: false,
+                profile_updated: false,
                 scope: Scope::Connections,
                 start_requested: false,
                 settings: app.settings.clone(),
@@ -242,6 +362,7 @@ fn connection_detail_exposes_all_fields_and_copies_the_same_values() {
         remote: false,
         profile_edit: false,
         profile_import: false,
+        profile_updated: false,
         scope: Scope::Connections,
         start_requested: false,
         settings: app.settings.clone(),
@@ -614,6 +735,7 @@ fn appearance_remains_interactive_while_geo_owns_the_engine_and_late_reply_canno
         remote: false,
         profile_edit: false,
         profile_import: false,
+        profile_updated: false,
         scope: Scope::Other,
         start_requested: false,
         settings: old_settings,
@@ -857,6 +979,73 @@ fn ip_report_uses_bitmaps_in_summary_rows_and_details() {
     assert!(data.get_modal_flagged());
     assert_eq!(data.get_modal_country(), "德国");
     assert!(!data.get_modal_description().contains('🇩'));
+}
+
+#[test]
+fn recursive_dns_flags_follow_the_country_without_changing_risk_or_other_signals() {
+    use clash_of_rust::claude_check::{Environment, Evidence, Group, Report, Signal};
+
+    ui_testing::initialize(950, 700);
+    let mut app = fixture(Page::Claude);
+    let window = AppWindow::new().unwrap();
+    let data = window.global::<UiData>();
+    let mut models = ViewModels::default();
+    models.attach(&data);
+    for (code, label, flagged) in [
+        ("DE", "德国", true),
+        ("US", "美国", true),
+        ("HK", "香港", false),
+        ("MO", "澳门", false),
+        ("TW", "台湾", false),
+        ("", "", false),
+        ("ZZ", "", false),
+    ] {
+        let mut report = Report::new(Environment::Core, "fixture");
+        let mut dns = Signal::new(
+            Group::Dns,
+            "实际递归 DNS",
+            "original observation",
+            "fixture",
+            Evidence::Measured,
+            "country evidence",
+        );
+        dns.country = code.into();
+        dns.ip = "2001:db8:1234:5678:abcd:ef01:2345:6789".into();
+        dns.risk = true;
+        report.signals.push(dns);
+        let mut other = Signal::new(
+            Group::Exit,
+            "出口",
+            "unchanged exit",
+            "fixture",
+            Evidence::Measured,
+            "",
+        );
+        other.country = "DE".into();
+        other.ip = "203.0.113.2".into();
+        report.signals.push(other);
+        app.claude.reports[0] = Some(report);
+        app.present_slint(&data, &mut models);
+        let rows = data.get_claude_results();
+        let dns = rows.row_data(0).unwrap();
+        assert_eq!(dns.country, label, "{code}");
+        assert_eq!(dns.flagged, flagged, "{code}");
+        assert_eq!(dns.flag.size().width > 0, flagged, "{code}");
+        assert_eq!(dns.tone, 3, "{code}");
+        assert_eq!(
+            dns.value,
+            if label.is_empty() {
+                "original observation"
+            } else {
+                "2001:db8:1234:5678:abcd:ef01:2345:6789"
+            },
+            "{code}"
+        );
+        let exit = rows.row_data(1).unwrap();
+        assert!(exit.country.is_empty());
+        assert!(!exit.flagged);
+        assert_eq!(exit.value, "unchanged exit");
+    }
 }
 
 #[test]
@@ -1396,6 +1585,28 @@ fn notification_recovery_waits_for_drafts_and_clears_when_permission_is_granted(
 }
 
 #[test]
+fn recreated_window_models_project_live_proxy_state_instead_of_saved_preferences() {
+    let mut app = fixture(Page::Home);
+    app.snapshot.running = true;
+    app.settings.proxy_mode = ProxyMode::Off;
+    for (system, tun, expected) in [(true, false, 0), (false, true, 1), (false, false, 2)] {
+        app.snapshot.system_proxy = system;
+        app.snapshot.tun = tun;
+        app.snapshot.retain_scope(Scope::Other);
+        for _ in 0..3 {
+            let data = clash_desktop_protocol::UiData::default();
+            let mut models = clash_desktop_protocol::models::ViewModels::default();
+            models.attach(&data);
+            app.present(&data, &mut models);
+            assert_eq!(data.get_proxy_mode(), expected);
+            assert_eq!(app.snapshot.system_proxy, system);
+            assert_eq!(app.snapshot.tun, tun);
+            assert_eq!(app.settings.proxy_mode, ProxyMode::Off);
+        }
+    }
+}
+
+#[test]
 fn reopening_a_maximized_window_does_not_force_a_normal_size_request() {
     let mut app = fixture(Page::Home);
     let normal = app.window_state.size();
@@ -1472,6 +1683,7 @@ fn synchronized_reply(app: &App) -> Reply {
         remote: true,
         profile_edit: false,
         profile_import: false,
+        profile_updated: false,
         scope: app.page.scope(),
         start_requested: false,
         settings: app.settings.clone(),
@@ -1489,27 +1701,206 @@ fn synchronized_reply(app: &App) -> Reply {
 }
 
 #[test]
+fn failed_subscription_update_keeps_measurements_and_reports_until_a_successful_retry() {
+    use clash_of_rust::claude_check::{Environment, Report};
+    let mut app = fixture(Page::Profiles);
+    app.updates.started = true;
+    app.node_delays.insert("Test".into(), 42);
+    app.site_results.push(Some(Ok(ip_check::CheckResult {
+        state: ip_check::State::Identified,
+        summary: "203.0.113.2".into(),
+        country: String::new(),
+        millis: 4,
+        detail: String::new(),
+    })));
+    app.claude.reports[0] = Some(Report::new(Environment::Core, "saved report"));
+    let before = serde_json::to_value(&app.profiles).unwrap();
+    let generation = app.delay_generation;
+    let _ = app.ui_intent(Intent::UpdateProfile, "fixture", "");
+    assert_eq!(app.node_delays.get("Test"), Some(&42));
+    assert_eq!(app.site_results.len(), 1);
+    assert!(app.claude.reports[0].is_some());
+
+    let mut failed = synchronized_reply(&app);
+    failed.view_revision = app.view_revision;
+    failed.notice = Err("订阅更新失败，已保留原配置与运行状态".into());
+    let _ = app.update(Message::Finished(Box::new(failed)));
+    assert!(!app.busy && !app.working);
+    assert!(app.error && app.notice.contains("保留原配置"));
+    assert!(app.snapshot.running && app.core_failure.is_none());
+    assert_eq!(serde_json::to_value(&app.profiles).unwrap(), before);
+    assert_eq!(app.node_delays.get("Test"), Some(&42));
+    assert_eq!(app.delay_generation, generation);
+    assert_eq!(app.site_results.len(), 1);
+    assert!(app.claude.reports[0].is_some());
+
+    let mut success = synchronized_reply(&app);
+    success.profile_updated = true;
+    success.notice = Ok("订阅已更新".into());
+    let _ = app.update(Message::Finished(Box::new(success)));
+    assert!(app.node_delays.is_empty() && app.site_results.is_empty());
+    assert!(app.claude.reports.iter().all(Option::is_none));
+    assert!(!app.error && app.snapshot.running);
+}
+
+#[test]
+fn background_subscription_update_invalidates_network_results_without_overwriting_rule_drafts() {
+    use clash_of_rust::claude_check::{Environment, Report};
+    let mut app = fixture(Page::Rules);
+    let _ = app.ui_intent(Intent::RuleAdd, "", "");
+    let _ = app.ui_intent(Intent::RulePayload, "unsaved.test", "");
+    let draft = app.rule_state.draft.clone();
+    let payload = app.rule_state.editor.as_ref().unwrap().payload.clone();
+    app.node_delays.insert("Test".into(), 42);
+    app.claude.reports[0] = Some(Report::new(Environment::Core, "old report"));
+    let generation = app.delay_generation;
+    let mut reply = synchronized_reply(&app);
+    reply.profiles.as_mut().unwrap()[0].updated += 60;
+    assert!(
+        !reply.profile_updated,
+        "background refresh has no GUI action"
+    );
+    let _ = app.update(Message::Finished(Box::new(reply)));
+    assert!(app.node_delays.is_empty());
+    assert!(app.claude.reports.iter().all(Option::is_none));
+    assert_ne!(app.delay_generation, generation);
+    assert_eq!(app.rule_state.draft, draft);
+    assert_eq!(app.rule_state.editor.as_ref().unwrap().payload, payload);
+}
+
+#[test]
 fn console_changes_refresh_profiles_and_clean_inputs_but_preserve_typed_drafts() {
     let mut app = fixture(Page::Settings);
     let mut reply = synchronized_reply(&app);
     reply.settings.mixed_port = 12345;
     reply.settings.delay_interval_minutes = 17;
+    reply.settings.subscription_update_interval_minutes = 720;
     reply.profiles.as_mut().unwrap()[0].name = "Renamed by CLI".into();
     let _ = app.update(Message::Finished(Box::new(reply)));
     assert_eq!(app.mixed_port, "12345");
     assert_eq!(app.interval_input, "17");
+    assert_eq!(app.subscription_interval_input, "720");
     assert_eq!(app.profiles[0].name, "Renamed by CLI");
     assert!(app.backend_remote);
 
     app.mixed_port = "12346".into();
     app.interval_input = "25".into();
+    app.subscription_interval_input = "90".into();
     let mut reply = synchronized_reply(&app);
     reply.settings.mixed_port = 12347;
     reply.settings.delay_interval_minutes = 30;
+    reply.settings.subscription_update_interval_minutes = 180;
     let _ = app.update(Message::Finished(Box::new(reply)));
     assert_eq!(app.mixed_port, "12346");
     assert_eq!(app.interval_input, "25");
+    assert_eq!(app.subscription_interval_input, "90");
     assert_eq!(app.settings.mixed_port, 12347);
+}
+
+#[test]
+fn protection_locks_rule_controls_and_proxy_mode_without_a_warning_or_draft_change() {
+    let mut app = fixture(Page::Rules);
+    app.claude.protection_pending = Some(true);
+    let draft = app.rule_state.draft.clone();
+    for intent in [
+        Intent::RuleAdd,
+        Intent::RuleApply,
+        Intent::RuleDiscard,
+        Intent::RuleSelect,
+        Intent::RuleProfile,
+        Intent::RuleCollapse,
+        Intent::Query,
+        Intent::ListPage,
+    ] {
+        let _ = app.ui_intent(intent, "blocked", "");
+    }
+    assert_eq!(app.rule_state.draft, draft);
+    assert!(app.query.is_empty());
+    assert!(!app.rule_state.has_editor());
+    assert!(!app.notice_visible);
+    app.page = Page::Home;
+    for mode in ["0", "1", "2"] {
+        let _ = app.ui_intent(Intent::ProxyMode, mode, "");
+    }
+    app.page = Page::Settings;
+    let settings = serde_json::to_value(&app.settings).unwrap();
+    for intent in [
+        Intent::DnsOverride,
+        Intent::FakeIp,
+        Intent::FakeIpAdd,
+        Intent::FakeIpRemove,
+        Intent::FakeIpRestoreDefaults,
+        Intent::Ipv6,
+        Intent::Udp,
+        Intent::MixedPort,
+        Intent::SavePorts,
+        Intent::Mode,
+    ] {
+        let _ = app.ui_intent(intent, "false", "blocked.test");
+    }
+    assert!(!app.notice_visible);
+    assert!(app.confirmation.is_none());
+    assert_eq!(serde_json::to_value(&app.settings).unwrap(), settings);
+    app.claude.protection_pending = None;
+    app.page = Page::Rules;
+    let _ = app.ui_intent(Intent::Query, "available", "");
+    assert_eq!(app.query, "available");
+}
+
+#[test]
+fn a_locked_rules_page_still_accepts_the_global_exit_confirmation() {
+    let mut app = fixture(Page::Rules);
+    let _ = app.ui_intent(Intent::RuleAdd, "", "");
+    let _ = app.ui_intent(Intent::RulePayload, "unsaved.test", "");
+    app.claude.protection_pending = Some(true);
+    let _ = app.ui_intent(Intent::Quit, "", "");
+    assert!(matches!(
+        app.confirmation
+            .as_ref()
+            .map(|confirmation| &confirmation.pending),
+        Some(desktop_view::Pending::Exit)
+    ));
+    assert!(!app.exiting);
+    let _ = app.ui_intent(Intent::Confirm, "", "");
+    assert!(app.exiting);
+}
+
+#[test]
+fn entering_proxies_pins_and_expands_the_actual_group_without_reopening_a_manual_collapse() {
+    let mut app = fixture(Page::Home);
+    let _ = app.ui_intent(Intent::Navigate, "1", "");
+    assert_eq!(app.page, Page::Proxies);
+    assert!(app.focus_active_group);
+    let mut reply = synchronized_reply(&app);
+    reply.scope = Scope::Proxies;
+    reply.snapshot = Some(Snapshot {
+        running: true,
+        mode: "rule".into(),
+        active_group: Some("ZZ Active".into()),
+        proxies: serde_json::from_value(serde_json::json!({"proxies": {
+            "AA Unused": {"type":"Selector", "now":"Leaf", "all":["Leaf"]},
+            "ZZ Active": {"type":"Selector", "now":"Leaf", "all":["Leaf"]},
+            "Leaf": {"type":"Trojan"}
+        }}))
+        .unwrap(),
+        ..Default::default()
+    });
+    let _ = app.update(Message::Finished(Box::new(reply)));
+    let (_, groups) = app.proxy_rows();
+    assert_eq!(groups[0].0.id.as_str(), "ZZ Active");
+    assert!(groups[0].0.expanded);
+    assert_eq!(groups[1].0.id.as_str(), "AA Unused");
+    app.expanded.remove("ZZ Active");
+    let mut reply = synchronized_reply(&app);
+    reply.scope = Scope::Proxies;
+    reply.snapshot = Some(app.snapshot.clone());
+    let _ = app.update(Message::Finished(Box::new(reply)));
+    assert!(!app.proxy_rows().1[0].0.expanded);
+    app.query = "Unused".into();
+    assert_eq!(app.proxy_rows().1[0].0.id.as_str(), "AA Unused");
+    app.snapshot.active_group = None;
+    app.query.clear();
+    assert_eq!(app.proxy_rows().1[0].0.id.as_str(), "AA Unused");
 }
 
 #[test]

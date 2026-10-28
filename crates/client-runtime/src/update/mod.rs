@@ -316,26 +316,9 @@ fn newest_channel(
     include_prereleases: bool,
 ) -> Result<Option<Available>> {
     let current = Version::parse(current).context("当前客户端版本号无效")?;
-    let current_is_preview = channel::installed_preview(
-        &current,
-        releases
-            .iter()
-            .map(|release| (release.tag_name.as_str(), release.draft, release.prerelease)),
-    );
-    let selected = releases
-        .into_iter()
-        .filter_map(|release| {
-            let version = channel::candidate(
-                &release.tag_name,
-                release.draft,
-                release.prerelease,
-                &current,
-                include_prereleases,
-                current_is_preview,
-            )?;
-            Some((version, release))
-        })
-        .max_by(|(left, _), (right, _)| left.cmp_precedence(right));
+    let selected = channel::select(releases, &current, include_prereleases, |release| {
+        (&release.tag_name, release.draft, release.prerelease)
+    });
     Ok(selected.map(|(version, release)| {
         // Build the link from our repository, never an arbitrary URL in metadata.
         let mut url = Url::parse(RELEASES_URL).expect("constant release URL");
@@ -359,7 +342,7 @@ fn download_client(proxy_port: Option<u16>) -> Result<Client> {
 }
 
 fn download_client_via(proxy: Option<&str>, timeout: Duration) -> Result<Client> {
-    let mut builder = Client::builder()
+    let mut builder = clash_client_core::network::client_builder()
         .no_proxy()
         .user_agent(format!("Clash-of-Rust/{}", crate::VERSION))
         .connect_timeout(Duration::from_secs(10))
@@ -434,7 +417,7 @@ async fn download_routes(
         .asset
         .size;
     let mut errors = Vec::new();
-    for route in routes {
+    for (index, route) in routes.iter().enumerate() {
         // Each attempt owns a fresh temporary directory and starts at zero.
         report(Progress {
             total: size,
@@ -445,6 +428,7 @@ async fn download_routes(
             available.clone(),
             route.proxy.as_deref(),
             api,
+            index + 1 < routes.len(),
             |mut value| {
                 value.route = route.label;
                 report(value);
@@ -463,6 +447,7 @@ async fn download_package(
     available: Available,
     proxy: Option<&str>,
     api: Option<&crate::api::Api>,
+    retry_slow: bool,
     report: impl FnMut(Progress),
 ) -> Result<Downloaded> {
     let package = available
@@ -471,6 +456,7 @@ async fn download_package(
     let client = download_client_via(proxy, Duration::from_secs(30 * 60))?;
     let mut response = client
         .get(&package.checksum_url)
+        .timeout(Duration::from_secs(30))
         .send()
         .await
         .map_err(|error| crate::network::request_error(error, "校验文件下载"))?;
@@ -501,7 +487,7 @@ async fn download_package(
         package.asset.size,
         &expected,
         &path,
-        (api.cloned(), proxy.is_none()),
+        (api.cloned(), proxy.is_none(), retry_slow),
         report,
     )
     .await?;
@@ -519,7 +505,7 @@ async fn transfer(
     size: u64,
     expected: &str,
     path: &std::path::Path,
-    observe: (Option<crate::api::Api>, bool),
+    observe: (Option<crate::api::Api>, bool, bool),
     mut report: impl FnMut(Progress),
 ) -> Result<()> {
     let mut response = client
@@ -538,28 +524,31 @@ async fn transfer(
     {
         bail!("安装包大小与 Release 不一致");
     }
-    let (api, direct) = observe;
+    let (api, direct, retry_slow) = observe;
     let observer = clash_client_core::update::RouteObserver::new(&response, api, direct);
     let file = tokio::fs::File::create(path)
         .await
         .context("无法写入安装包，请检查磁盘空间与权限")?;
     // TLS/network chunks can be tiny. Batch them before tokio::fs offloads a
     // write, rather than serially scheduling a disk operation for every chunk.
-    let mut file = tokio::io::BufWriter::with_capacity(256 * 1024, file);
+    let mut file =
+        tokio::io::BufWriter::with_capacity(clash_client_core::download::BUFFER_CAPACITY, file);
+    let mut watchdog = clash_client_core::download::Watchdog::new(retry_slow);
     let mut received = 0;
     let mut digest = Sha256::new();
     let mut last_report = std::time::Instant::now();
     let mut rate_started = last_report;
     let mut rate_received = 0;
-    while let Some(chunk) = response.chunk().await.context("下载中断或超时，请重试")? {
+    while let Some(chunk) = watchdog.chunk(&mut response).await? {
+        let chunk = chunk.as_ref();
         received += chunk.len() as u64;
         if received > size {
             bail!("安装包大小与 Release 不一致");
         }
-        file.write_all(&chunk)
+        file.write_all(chunk)
             .await
             .context("写入失败，请检查磁盘空间与权限")?;
-        digest.update(&chunk);
+        digest.update(chunk);
         if received == chunk.len() as u64
             || last_report.elapsed() >= Duration::from_millis(100)
             || received == size
@@ -580,11 +569,14 @@ async fn transfer(
         }
     }
     file.flush().await.context("无法保存安装包")?;
-    drop(file);
+    file.into_inner()
+        .sync_all()
+        .await
+        .context("无法保存安装包")?;
     if received != size {
         bail!("安装包下载不完整");
     }
-    if format!("{:x}", digest.finalize()) != expected {
+    if clash_client_core::file_hash::hex(digest.finalize()) != expected {
         bail!("安装包 SHA256 校验失败，请重试");
     }
     Ok(())
@@ -681,7 +673,7 @@ mod tests {
         let download = Arc::new(Downloaded {
             directory: Mutex::new(Some(directory)),
             package,
-            sha256: format!("{:x}", Sha256::digest(b"verified installer")),
+            sha256: clash_client_core::file_hash::hex(Sha256::digest(b"verified installer")),
             version: "0.5.7".into(),
         });
         let mut state = State::default();
@@ -839,7 +831,7 @@ mod tests {
     async fn canceling_a_partial_download_closes_the_connection_and_removes_its_files() {
         use futures_util::future::Abortable;
         let body = vec![42; 256 * 1024];
-        let expected = format!("{:x}", Sha256::digest(&body));
+        let expected = clash_client_core::file_hash::hex(Sha256::digest(&body));
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
         let url = format!("http://{}/package", listener.local_addr().unwrap());
         let server = tokio::spawn(async move {
@@ -890,7 +882,7 @@ mod tests {
                     256 * 1024,
                     &expected,
                     &path,
-                    (None, true),
+                    (None, true, false),
                     |value| {
                         let _ = progress.send(value.received);
                     },
@@ -936,7 +928,7 @@ mod tests {
     #[tokio::test]
     async fn streams_progress_and_verifies_the_exact_downloaded_bytes() {
         let body = vec![42; 256 * 1024];
-        let expected = format!("{:x}", Sha256::digest(&body));
+        let expected = clash_client_core::file_hash::hex(Sha256::digest(&body));
         let wire = [
             format!("HTTP/1.1 200 OK\r\nContent-Length: {}\r\n\r\n", body.len()).into_bytes(),
             body.clone(),
@@ -952,7 +944,7 @@ mod tests {
             body.len() as u64,
             &expected,
             &path,
-            (None, true),
+            (None, true, false),
             |value| progress.push(value),
         )
         .await
@@ -1003,7 +995,7 @@ mod tests {
                     size,
                     &expected,
                     &path,
-                    (None, true),
+                    (None, true, false),
                     |_| {}
                 )
                 .await
@@ -1049,9 +1041,9 @@ mod tests {
             &download_client(Some(port)).unwrap(),
             "http://download.invalid/package",
             3,
-            &format!("{:x}", Sha256::digest(b"abc")),
+            &clash_client_core::file_hash::hex(Sha256::digest(b"abc")),
             &directory.path().join("package"),
-            (None, false),
+            (None, false, false),
             |_| {},
         )
         .await
@@ -1095,7 +1087,7 @@ mod tests {
     async fn corrupt_proxy_download_restarts_and_verifies_using_the_next_route() {
         use crate::network::Route;
         let body = b"valid installer bytes";
-        let expected = format!("{:x}", Sha256::digest(body));
+        let expected = clash_client_core::file_hash::hex(Sha256::digest(body));
         let (bad_proxy, bad_task) = package_proxy(vec![0; body.len()], expected.clone()).await;
         let (good_proxy, good_task) = package_proxy(body.to_vec(), expected.clone()).await;
         let available = Available {
@@ -1176,12 +1168,15 @@ mod tests {
             draft,
             release("nightly", false),
             release("v0.4.1+other", false),
+            release("v0.4.0", false),
         ];
         assert!(newest(releases, "0.4.1+local").unwrap().is_none());
-        assert!(
+        assert_eq!(
             newest(vec![release("v0.4.0", false)], "0.4.1")
                 .unwrap()
-                .is_none()
+                .unwrap()
+                .version,
+            "0.4.0"
         );
     }
 
@@ -1210,11 +1205,14 @@ mod tests {
         let preview = newest_channel(releases(), "0.6.3", true).unwrap().unwrap();
         assert_eq!(preview.version, "0.6.4-dev.2");
         assert!(preview.preview);
-        let stable = newest_channel(releases(), "0.6.4-dev.1", false)
-            .unwrap()
-            .unwrap();
-        assert_eq!(stable.version, "0.6.3");
-        assert!(!stable.preview);
+        for current in ["0.6.4-dev.1", "0.999.0", "0.999.0-fix.1.local"] {
+            let stable = newest_channel(releases(), current, false).unwrap().unwrap();
+            assert_eq!(stable.version, "0.6.3");
+            assert!(!stable.preview);
+        }
+        for current in ["0.999.0", "0.999.0-fix.1.local"] {
+            assert!(newest_channel(releases(), current, true).unwrap().is_none());
+        }
         assert!(
             newest_channel(releases(), "0.6.3", false)
                 .unwrap()
@@ -1274,7 +1272,7 @@ mod tests {
     }
 
     fn client(timeout: Duration) -> Client {
-        Client::builder()
+        clash_client_core::network::client_builder()
             .no_proxy()
             .user_agent(format!("Clash-of-Rust/{}", crate::VERSION))
             .timeout(timeout)

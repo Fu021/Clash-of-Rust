@@ -10,6 +10,7 @@ pub mod connection;
 #[path = "model/countries.rs"]
 pub mod countries;
 pub mod dns;
+pub mod download;
 #[path = "storage/hash.rs"]
 pub mod file_hash;
 pub mod geodata;

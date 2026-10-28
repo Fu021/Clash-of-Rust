@@ -1,4 +1,6 @@
 """Windows CI, installed-package checks and Defender verification on Actions."""
+from datetime import datetime, timezone
+import json
 import os
 from pathlib import Path
 import re
@@ -413,30 +415,58 @@ def update_signatures(timeout=300):
         time.sleep(delay)
 
 
-def scan_installers(installers):
-    installers = [path.resolve(strict=True) for path in installers]
-    if any(not path.is_file() or path.suffix.lower() != '.exe' for path in installers):
-        raise ValueError('Expected Windows .exe installer files')
+def scan_windows_files(files):
+    files = [path.resolve(strict=True) for path in files]
+    if not files or any(not path.is_file() or path.suffix.lower() not in ('.exe', '.dll') for path in files):
+        raise ValueError('Expected Windows .exe or .dll files')
     command = update_signatures()
     print('Windows Defender:', command, flush=True)
-    for installer in installers:
-        digest = sha256(installer)
-        print('Scanning:', installer.name, flush=True)
+    status = subprocess.run([
+        'powershell.exe', '-NoProfile', '-NonInteractive', '-Command',
+        "$ErrorActionPreference = 'Stop'; Get-MpComputerStatus | "
+        'Select-Object AMEngineVersion, AMProductVersion, AntivirusSignatureVersion | ConvertTo-Json -Compress',
+    ], check=True, capture_output=True, text=True, encoding='utf-8', timeout=60)
+    versions = json.loads(status.stdout)
+    if not isinstance(versions, dict) or any(
+        not versions.get(field)
+        for field in ('AMEngineVersion', 'AMProductVersion', 'AntivirusSignatureVersion')
+    ):
+        raise RuntimeError('Windows Defender version information is unavailable')
+    print('Windows Defender versions:', json.dumps(versions, sort_keys=True), flush=True)
+    records = []
+    for path in files:
+        digest = sha256(path)
+        print('Scanning:', path, flush=True)
         # A custom scan ignores exclusions and scans archives. Keeping detected
         # files unmodified makes a threat return nonzero and blocks CI upload.
         subprocess.run([
-            str(command), '-Scan', '-ScanType', '3', '-File', str(installer),
+            str(command), '-Scan', '-ScanType', '3', '-File', str(path),
             '-DisableRemediation',
         ], check=True, timeout=300)
-        if sha256(installer) != digest:
-            raise RuntimeError('Installer changed during Defender scan: '+installer.name)
-        print('PASS: Defender scan completed:', installer.name, digest, flush=True)
+        if sha256(path) != digest:
+            raise RuntimeError('File changed during Defender scan: '+path.name)
+        records.append({
+            'file': path.relative_to(ROOT).as_posix() if path.is_relative_to(ROOT) else path.name,
+            'sha256': digest,
+        })
+        print('PASS: Defender scan completed:', path.name, digest, flush=True)
+    return {
+        'scanned_at': datetime.now(timezone.utc).isoformat(),
+        'versions': versions, 'files': records,
+    }
 
 
 def package_tests(package, manifest, build):
-    """Check installation, proxy/TUN, update, uninstall and the final installer."""
+    """Scan unpacked programs and the installer, then verify installed behavior."""
     if os.name != 'nt':
         raise RuntimeError('Installer tests require Windows')
+    payload_files = sorted(
+        path for path in (build/'payload').rglob('*')
+        if path.is_file() and path.suffix.lower() in ('.exe', '.dll')
+    )
+    if not payload_files:
+        raise RuntimeError('Windows package payload contains no programs to scan')
+    defender = scan_windows_files([package, *payload_files])
     (ROOT/'dist').mkdir(exist_ok=True)
     temporary = tempfile.TemporaryDirectory(prefix='installer-test-', dir=ROOT/'dist')
     try:
@@ -445,4 +475,4 @@ def package_tests(package, manifest, build):
                            (build/manifest['tests']['core_integration']).resolve(strict=True))
     finally:
         _cleanup_installer(temporary)
-    scan_installers([package])
+    return defender

@@ -224,7 +224,8 @@ impl State {
     }
     pub(super) fn differs(&self, report: &Report, signal: &Signal) -> bool {
         report.differs(signal)
-            || (!signal.country.is_empty()
+            || (!signal.context_only()
+                && !signal.country.is_empty()
                 && self.reports[index(Environment::Core)]
                     .as_ref()
                     .and_then(Report::baseline_country)
@@ -753,6 +754,7 @@ mod tests {
             view_revision: 0,
             remote: false,
             profile_import: false,
+            profile_updated: false,
             profile_edit: false,
             scope: Scope::Claude,
             start_requested: false,
@@ -909,6 +911,39 @@ mod tests {
             state.store(report);
         }
         assert_eq!(state.counts(&state.entries()), [1, 4, 0]);
+    }
+    #[test]
+    fn recursive_dns_country_differences_are_risks_across_browser_and_core_reports() {
+        let mut state = State::default();
+        let mut core = Report::new(Environment::Core, "test");
+        let mut exit = Signal::new(Group::Exit, "出口", "德国", "test", Evidence::Measured, "");
+        exit.country = "DE".into();
+        core.signals.push(exit);
+        state.store(core);
+        let mut browser = Report::new(Environment::Web, "test");
+        let mut dns = Signal::new(
+            Group::Dns,
+            "实际递归 DNS",
+            "172.217.33.153 · 美国",
+            "browser",
+            Evidence::Measured,
+            "国家差异属于风险线索，不单独证明实际解析路径",
+        );
+        dns.country = "US".into();
+        dns.ip = "172.217.33.153".into();
+        browser.signals.push(dns);
+        assert!(state.differs(&browser, &browser.signals[0]));
+        state.store(browser.clone());
+        assert_eq!(state.counts(&state.entries()), [1, 1, 0]);
+        browser.signals[0].country = "DE".into();
+        browser.signals[0].value = "172.217.33.153 · 德国".into();
+        browser.signals[0].detail = "Google 官方 geofeed；bash.ws 原标签为美国".into();
+        assert!(!state.differs(&browser, &browser.signals[0]));
+        state.store(browser.clone());
+        assert_eq!(state.counts(&state.entries()), [2, 0, 0]);
+        browser.signals[0].risk = true;
+        state.store(browser);
+        assert_eq!(state.counts(&state.entries()), [1, 1, 0]);
     }
     #[test]
     fn filtered_detail_pages_reset_and_counts_include_omitted_config_rows() {

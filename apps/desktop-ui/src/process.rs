@@ -149,7 +149,11 @@ pub fn run() -> anyhow::Result<()> {
             .with_default_menu(false);
         selector.with_winit_event_loop_builder(builder)
     };
-    selector.select()?;
+    selector.select().map_err(|error| {
+        anyhow::anyhow!(
+            "无法初始化桌面图形服务：{error}；纯命令行或 SSH 会话请使用 cor start，不要启动桌面主程序"
+        )
+    })?;
     #[cfg(target_os = "linux")]
     slint::set_xdg_app_id("clash-of-rust")?;
     let (output, events) = mpsc::channel::<UiEvent>();

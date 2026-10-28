@@ -2,6 +2,7 @@
 pub mod additional;
 pub mod audit;
 pub mod browser;
+mod dns_geo;
 pub mod enhanced;
 pub mod guard;
 pub mod observe;
@@ -252,33 +253,34 @@ impl Report {
         // Preferences are not a physical-location assertion. Display the
         // difference and its evidence, never a regional-denial probability.
         signal.risk
-            || (!signal.country.is_empty()
-                && self
-                    .baseline_country()
-                    .is_some_and(|base| base != signal.country))
-            || (signal.group == Group::WebRtc
-                && !signal.ip.is_empty()
-                && self
-                    .signals
-                    .iter()
-                    .any(|s| s.group == Group::Exit && !s.ip.is_empty())
-                && !self
-                    .signals
-                    .iter()
-                    .any(|s| s.group == Group::Exit && s.ip == signal.ip))
+            || (!signal.context_only()
+                && ((!signal.country.is_empty()
+                    && self
+                        .baseline_country()
+                        .is_some_and(|base| base != signal.country))
+                    || (signal.group == Group::WebRtc
+                        && !signal.ip.is_empty()
+                        && self
+                            .signals
+                            .iter()
+                            .any(|s| s.group == Group::Exit && !s.ip.is_empty())
+                        && !self
+                            .signals
+                            .iter()
+                            .any(|s| s.group == Group::Exit && s.ip == signal.ip))))
     }
     pub fn counts(&self) -> (usize, usize, usize) {
-        (
-            self.signals
-                .iter()
-                .filter(|s| s.evidence == Evidence::Measured)
-                .count(),
-            self.signals.iter().filter(|s| self.differs(s)).count(),
-            self.signals
-                .iter()
-                .filter(|s| s.evidence == Evidence::Unknown)
-                .count(),
-        )
+        let mut counts = (0, 0, 0);
+        for signal in &self.signals {
+            if self.differs(signal) {
+                counts.1 += 1;
+            } else if signal.context_only() {
+                counts.2 += 1;
+            } else {
+                counts.0 += 1;
+            }
+        }
+        counts
     }
 }
 
@@ -372,7 +374,7 @@ fn connection_route(connection: api::Connection) -> Option<Route> {
 }
 
 pub fn client(port: Option<u16>) -> Result<Client> {
-    let mut builder = Client::builder()
+    let mut builder = crate::network::client_builder()
         .no_proxy()
         .user_agent("Clash-of-Rust/region-diagnostics")
         .connect_timeout(Duration::from_secs(4))
@@ -607,7 +609,9 @@ pub async fn dns_results(client: &Client, id: &str, source: &str) -> Result<Vec<
             .await?,
     )
     .await?;
-    parse_dns(&bytes, source)
+    let mut signals = parse_dns(&bytes, source)?;
+    dns_geo::enrich(client, &mut signals).await;
+    Ok(signals)
 }
 fn parse_dns(bytes: &[u8], source: &str) -> Result<Vec<Signal>> {
     let records: Vec<serde_json::Value> = serde_json::from_slice(bytes)?;
@@ -638,14 +642,19 @@ fn parse_dns(bytes: &[u8], source: &str) -> Result<Vec<Signal>> {
             ip.to_string(),
             source,
             Evidence::Measured,
-            "bash.ws 权威 DNS 记录到的递归服务器；地区不一致是线索，不等同于泄漏或 Claude 拒绝服务的证据。",
+            "递归服务器 IP 来自 bash.ws 权威 DNS 观测；国家来自 IP 位置数据，与出口国家不同属于风险线索，但不单独证明 DNS 泄漏或 Claude 拒绝服务。",
         );
         signal.ip = ip.to_string();
         if let Some(name) = country_name(&code) {
             signal.country = code;
             signal.value = format!("{ip} · {name}");
+        } else {
+            signal.evidence = Evidence::Unknown;
+            signal.detail.push_str(" bash.ws 未提供有效国家。");
         }
-        signal.advice = "检查浏览器独立 DoH、系统 DNS 与 TUN DNS 劫持设置。".into();
+        signal.advice =
+            "结合浏览器独立 DoH、系统 DNS、TUN 接管与实际连接线路核验；地区相同也不能证明没有泄漏。"
+                .into();
         signals.push(signal);
         if signals.len() == 12 {
             break;
@@ -725,6 +734,71 @@ mod tests {
         assert_eq!(result[0].country, "US");
         assert!(parse_dns(b"[]", "browser").is_err());
         assert!(!valid_dns_id("../../secret"));
+    }
+    #[test]
+    fn resolver_country_differences_remain_risks_and_counts_are_exclusive() {
+        let mut report = Report::new(Environment::Core, "test");
+        let mut exit = Signal::new(Group::Exit, "出口", "德国", "test", Evidence::Measured, "");
+        exit.country = "DE".into();
+        exit.ip = "1.1.1.1".into();
+        report.signals.push(exit);
+        let dns = parse_dns(
+            br#"[{"type":"dns","ip":"172.217.33.153","country":"us"},{"type":"dns","ip":"9.9.9.9","country":"us"},{"type":"dns","ip":"8.8.8.8","country":"invalid"}]"#,
+            "browser",
+        )
+        .unwrap();
+        report.signals.extend(dns);
+        let report: Report = serde_json::from_slice(&serde_json::to_vec(&report).unwrap()).unwrap();
+        assert!(report.differs(&report.signals[1]));
+        assert!(report.differs(&report.signals[2]));
+        assert!(!report.signals[1].context_only());
+        assert!(report.signals[3].context_only());
+        assert_eq!(report.counts(), (1, 2, 1));
+
+        let mut report = report;
+        let mut candidate = Signal::new(
+            Group::WebRtc,
+            "WebRTC",
+            "8.8.8.8",
+            "browser",
+            Evidence::Measured,
+            "",
+        );
+        candidate.country = "US".into();
+        candidate.ip = "8.8.8.8".into();
+        report.signals.push(candidate);
+        assert!(report.differs(&report.signals[4]));
+        assert_eq!(report.counts(), (1, 3, 1));
+        report.signals[3].risk = true;
+        assert!(report.differs(&report.signals[3]));
+        assert_eq!(report.counts(), (1, 4, 0));
+    }
+    #[test]
+    fn explicit_risks_override_auxiliary_evidence_but_preferences_stay_context() {
+        let mut report = Report::new(Environment::Web, "test");
+        let mut exit = Signal::new(Group::Exit, "出口", "德国", "test", Evidence::Measured, "");
+        exit.country = "DE".into();
+        report.signals.push(exit);
+        report.signals.push(preferences::preference(
+            Group::Browser,
+            "浏览器时区",
+            "Asia/Shanghai",
+            "test",
+            Some("CN"),
+        ));
+        let mut reputation = Signal::new(
+            Group::Quality,
+            "滥用记录",
+            "供应商标记为是",
+            "test",
+            Evidence::Inferred,
+            "",
+        );
+        reputation.risk = true;
+        report.signals.push(reputation);
+        assert_eq!(report.counts(), (1, 1, 1));
+        assert!(!report.differs(&report.signals[1]));
+        assert!(report.differs(&report.signals[2]));
     }
     #[test]
     fn routing_does_not_match_lookalike_hosts_or_keep_unrelated_connections() {

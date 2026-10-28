@@ -8,7 +8,7 @@ const LATEST_URL: &str = "https://github.com/Fu021/Clash-of-Rust/releases/latest
 const REQUEST_TIMEOUT: Duration = Duration::from_secs(12);
 
 fn client(route: &Route) -> Result<Client> {
-    let builder = Client::builder()
+    let builder = clash_client_core::network::client_builder()
         .no_proxy()
         .user_agent(format!("Clash-of-Rust/{}", crate::VERSION))
         .connect_timeout(Duration::from_secs(5))
@@ -328,7 +328,13 @@ mod tests {
             assert_eq!(available.version, "0.4.9");
             assert!(!available.preview);
             assert!(available.package.is_none());
-            assert!(latest_release(&location, "0.4.10").unwrap().is_none());
+            assert!(latest_release(&location, "0.4.9").unwrap().is_none());
+            for current in ["0.4.10", "0.999.0", "0.999.0-fix.1.local"] {
+                assert_eq!(
+                    latest_release(&location, current).unwrap().unwrap().version,
+                    "0.4.9"
+                );
+            }
         }
         assert!(latest_release(RELEASES_URL, "0.4.7").unwrap().is_none());
         assert!(

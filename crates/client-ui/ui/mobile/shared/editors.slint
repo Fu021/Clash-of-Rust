@@ -1,0 +1,147 @@
+import { Theme } from "../../theme/palette.slint";
+import { MobileTypography } from "typography.slint";
+import { MobileData, MobileView, MobileActions, MobileIntent } from "state.slint";
+import { MText, MSmall, MHeading, MParagraph, MCard, MButton, MRow, MDivider, MField, MSelect, MScroll, ListView, MTag } from "controls.slint";
+
+export component MobileFakeIp inherits VerticalLayout {
+    property <bool> editable: MobileData.dns-override && !MobileData.protected && !MobileData.protection-pending && !MobileData.working;
+    spacing: MobileTypography.gap;
+    MSmall { text: "来源分别标明自定义与 DNS 覆盖；订阅原有过滤规则仍会生效。"; wrap: word-wrap; }
+    if !MobileData.dns-override || MobileData.protected: MSmall {
+        text: MobileData.protected ? "关闭 Claude 保护后可编辑。" : "开启 DNS 覆盖后可编辑。"; color: Theme.warning;
+    }
+    HorizontalLayout { spacing: MobileTypography.small-gap;
+        MField { text <=> MobileView.fake-ip-input; placeholder: "example.com 或 +.example.com"; }
+        MButton { text: "添加"; width: 68px; horizontal-stretch: 0; enabled: root.editable;
+            clicked => { MobileActions.request(MobileIntent.fake-ip-add, MobileView.fake-ip-input, ""); }
+        }
+    }
+    if MobileData.fake-ip-removed-defaults > 0: MCard {
+        MSmall { text: "已移除 " + MobileData.fake-ip-removed-defaults + " 项 DNS 覆盖排除项"; wrap: word-wrap; }
+        MButton { text: "一键还原 DNS 覆盖项"; enabled: root.editable;
+            clicked => { MobileActions.request(MobileIntent.fake-ip-restore-defaults, "", ""); }
+        }
+    }
+    ListView { min-height: 0px; vertical-stretch: 1;
+        for entry in MobileData.fake-ip-exclusions: Rectangle { height: card.height + MobileTypography.small-gap;
+            card := MCard { width: parent.width;
+                HorizontalLayout { spacing: MobileTypography.small-gap; cross-axis-alignment: center;
+                    VerticalLayout { spacing: 4px;
+                        MText { text: entry.domain; }
+                        MSmall { text: "来源：" + entry.source; wrap: word-wrap; }
+                    }
+                    MButton { text: "删除"; width: 64px; horizontal-stretch: 0; danger: true; enabled: root.editable;
+                        clicked => { MobileActions.request(MobileIntent.fake-ip-remove, entry.domain, ""); }
+                    }
+                }
+            }
+        }
+    }
+}
+
+export component MobileRuleActions inherits MScroll {
+    VerticalLayout { spacing: MobileTypography.gap;
+        MCard {
+            MHeading { text: MobileView.selected-rule.value == "" ? MobileView.selected-rule.kind : MobileView.selected-rule.value; wrap: word-wrap; }
+            MSmall { text: "第 " + MobileView.selected-rule.position + " 条 · 来源：" + MobileView.selected-rule.source + (MobileView.selected-rule.enabled ? " · 已启用" : " · 已停用"); wrap: word-wrap; }
+            MSmall { text: "类型：" + MobileView.selected-rule.kind + " · 策略：" + MobileView.selected-rule.policy; wrap: word-wrap; }
+            MDivider { }
+            MSmall { text: "完整规则"; }
+            MParagraph { text: MobileView.selected-rule.raw; }
+            MRow { title: "复制规则原文"; clicked => { MobileActions.request(MobileIntent.copy, MobileView.selected-rule.raw, ""); } }
+            MDivider { }
+            MRow { title: MobileView.selected-rule.source == "自定义" ? "编辑规则" : "复制为自定义规则";
+                clicked => { MobileActions.request(MobileIntent.rule-edit, MobileView.selected-id, ""); }
+            }
+            if MobileView.selected-rule.source == "自定义": VerticalLayout {
+                MDivider { }
+                MRow { title: MobileView.selected-rule.enabled ? "停用规则" : "启用规则";
+                    clicked => { MobileActions.request(MobileIntent.rule-enable, MobileView.selected-id, ""); }
+                }
+                MDivider { }
+                MRow { title: "删除规则"; value-color: Theme.danger;
+                    clicked => { MobileActions.request(MobileIntent.rule-delete, MobileView.selected-id, ""); }
+                }
+            }
+        }
+        MCard {
+            MSmall { text: "长按左侧手柄拖动，靠近列表上下边缘可连续滚动；跨页可指定位置。"; wrap: word-wrap; }
+            HorizontalLayout { spacing: MobileTypography.small-gap;
+                MField { text <=> MobileView.rule-position; placeholder: "目标位置"; }
+                MButton { text: "移动"; width: 72px; horizontal-stretch: 0;
+                    clicked => { MobileActions.request(MobileIntent.rule-move, MobileView.selected-id, MobileView.rule-position); }
+                }
+            }
+            MRow { title: "恢复订阅顺序"; subtitle: "保留自定义规则和快捷规则";
+                clicked => { MobileActions.request(MobileIntent.rule-restore, "", ""); }
+            }
+        }
+        MSmall { text: "操作保存到草稿，返回规则页后统一应用。"; wrap: word-wrap; }
+    }
+}
+
+export component MobileSiteResults inherits VerticalLayout {
+    spacing: MobileTypography.small-gap;
+    HorizontalLayout { spacing: MobileTypography.small-gap;
+        MField { text <=> MobileView.site-query; placeholder: "搜索平台、地区或结果";
+            edited(value) => { MobileActions.request(MobileIntent.site-filter, value, "query"); }
+        }
+        MButton { text: "筛选"; selected: MobileView.site-filters; width: 68px; horizontal-stretch: 0;
+            clicked => { MobileView.site-filters = !MobileView.site-filters; }
+        }
+    }
+    if MobileView.site-filters: MCard {
+        MSelect { options: ["全部结果", "确认可用", "仅网页可达", "不可用或受限"]; value: MobileView.site-status;
+            selected(index, value) => { MobileView.site-status = value; MobileActions.request(MobileIntent.site-filter, value, "status"); }
+        }
+        MSelect { options: MobileData.site-regions; value: MobileView.site-region;
+            selected(index, value) => { MobileView.site-region = value; MobileActions.request(MobileIntent.site-filter, value, "region"); }
+        }
+        MRow { title: "清除筛选"; clicked => {
+            MobileView.site-query = ""; MobileView.site-status = "全部结果"; MobileView.site-region = "全部地区";
+            MobileActions.request(MobileIntent.site-filter, "", "reset");
+        } }
+    }
+    HorizontalLayout { spacing: MobileTypography.small-gap; cross-axis-alignment: center;
+        MSmall { text: MobileData.site-results.length + " 项 · 点按查看详情"; }
+        MButton { text: "重测分类"; width: 100px; horizontal-stretch: 0; enabled: !MobileData.detecting;
+            clicked => { MobileActions.request(MobileIntent.site-retest, MobileView.category, ""); }
+        }
+    }
+    ListView { content-key: MobileView.site-query + "/" + MobileView.site-status + "/" + MobileView.site-region; min-height: 0px; vertical-stretch: 1;
+        for result in MobileData.site-results: Rectangle { height: card.height + MobileTypography.small-gap;
+            card := MCard { width: parent.width; interactive: true;
+                clicked => {
+                    MobileView.site-selected = result.id; MobileData.site-details = [];
+                    MobileActions.request(MobileIntent.site-detail, result.id, ""); MobileView.detail = 16;
+                }
+                HorizontalLayout { spacing: MobileTypography.small-gap; cross-axis-alignment: center;
+                    MHeading { text: result.title; }
+                    if result.flagged: Image { source: result.flag; width: 24px; height: 24px; image-fit: contain; }
+                    MTag { text: result.tone == 3 ? "受限" : result.tone == 2 ? "网页可达" : result.tone == 1 ? "确认可用" : "待检测"; tone: result.tone; }
+                }
+                MParagraph { text: result.value; font-size: MobileTypography.font-size(14); }
+                MSmall { text: result.source; }
+            }
+        }
+    }
+    if MobileData.site-results.length == 0: MParagraph { text: "没有符合筛选条件的结果。"; color: Theme.secondary; }
+}
+
+export component MobileDetectionOptions inherits MScroll {
+    VerticalLayout { spacing: MobileTypography.gap;
+        MCard {
+            MHeading { text: "Android 网络与浏览器"; }
+            MParagraph { text: "检测当前 VPN 出口、DNS、WebRTC 与浏览器线索。开始检测会打开浏览器，返回应用查看报告。"; }
+            MSmall { text: "只采集网络与公开环境线索，不读取账户、Cookie 或聊天内容。"; wrap: word-wrap; }
+        }
+        MCard {
+            MHeading { text: "IP 信誉查询"; }
+            MSmall { text: MobileData.reputation-key-saved ? "已保存自定义密钥；留空保存可清除。" : "可选填写 ipapi.is 密钥；留空使用公共查询。"; wrap: word-wrap; }
+            MField { secret: true; text <=> MobileView.reputation-key; placeholder: "可选：ipapi.is API 密钥"; }
+            MButton { text: "保存"; enabled: !MobileData.claude-busy && !MobileData.working;
+                clicked => { MobileActions.request(MobileIntent.claude-key, MobileView.reputation-key, ""); }
+            }
+        }
+    }
+}

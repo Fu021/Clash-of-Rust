@@ -79,7 +79,14 @@ export component AiCheckPage inherits PageSurface {
                         Heading { text: result.title; }
                         Badge { text: result.tone == 1 ? "正常" : result.tone == 3 ? "风险" : "线索"; tone: result.tone; }
                     }
-                    Paragraph { text: result.value; }
+                    HorizontalLayout { cross-axis-alignment: center; spacing: Theme.content-gap;
+                        Paragraph { text: result.value; min-width: 0px; horizontal-stretch: result.country == "" ? 1 : 0; }
+                        if result.country != "": HorizontalLayout { spacing: 6px; cross-axis-alignment: center; horizontal-stretch: 0;
+                            if result.flagged: Image { source: result.flag; width: 24px; height: 24px; image-fit: contain; }
+                            Paragraph { text: result.country; wrap: no-wrap; min-width: self.preferred-width; horizontal-stretch: 0; }
+                        }
+                        if result.country != "": Rectangle { horizontal-stretch: 1; }
+                    }
                     if result.detail != "": Paragraph { text: result.detail; font-size: Theme.detail-size; color: Theme.secondary; }
                     if result.source != "": Paragraph { text: result.source; font-size: Theme.detail-size; color: Theme.muted; }
                 }

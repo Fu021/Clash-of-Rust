@@ -15,7 +15,7 @@ component AndroidNetwork inherits VerticalLayout {
         }
         if AndroidData.ports-dirty: MButton { text: "保存端口"; primary: true; clicked => { MobileActions.request(MobileIntent.save-ports, MobileData.mixed-port, ""); } }
         MDivider { }
-        NetworkToggles { }
+        NetworkToggles { show-fake-ip-exclusions: true; }
     }
 }
 component AndroidConnection inherits VerticalLayout {
@@ -51,6 +51,8 @@ component AndroidAbout inherits MCard {
             }
         }
     }
+    if AndroidData.update-downloading: MButton { text: "取消下载"; clicked => { MobileActions.request(MobileIntent.cancel-update, "", ""); } }
+    MRow { title: "查看 Release"; subtitle: "在浏览器查看版本与发布说明"; clicked => { MobileActions.request(MobileIntent.open-release, "", ""); } }
 }
 export component AndroidSettings inherits PageSurface {
     MScroll {

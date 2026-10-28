@@ -162,9 +162,10 @@ def main():
          '--arch', args.arch, '--prebuilt', args.build])
     extension = f'windows-{args.arch}-setup.exe' if args.system == 'windows' else f'macos-{args.arch}.dmg' if args.system == 'macos' else f"linux-{'amd64' if args.arch == 'x64' else 'arm64'}.deb"
     package = ROOT/'dist'/f"Clash-of-Rust-{manifest['version']}-{extension}"
+    defender = None
     if args.system == 'windows':
         from windows_ci import package_tests
-        package_tests(package, manifest, args.build)
+        defender = package_tests(package, manifest, args.build)
     elif args.system == 'macos':
         from macos_ci import package_tests
         package_tests(package, manifest, args.build)
@@ -182,6 +183,8 @@ def main():
     }
     if args.system == 'linux' and args.arch == 'x64':
         receipt['linux_tun_test_sha256'] = sha256(ROOT/'dist/linux-tun-test')
+    if defender is not None:
+        receipt['defender'] = defender
     from build_inputs import package_contents
     receipt['contents'] = package_contents(args.build)
     write_json(ROOT/'dist/package-receipt.json', receipt)
