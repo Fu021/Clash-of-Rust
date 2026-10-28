@@ -478,7 +478,9 @@ def account_cli_matrix():
             # Foreground mode also retains the selected account and cleans up
             # after SIGTERM; no extra graphical session is involved.
             process = subprocess.Popen([cli, '--user', alice['name'], 'run', '--no-core', '--quiet'],
-                                       env=base_env, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE,
+                                       env=dict(base_env, COR_MATRIX_ADMIN_TOKEN='synthetic-root-only',
+                                                CLASH_OF_RUST_DATA_DIR=str(root_home/'forbidden')),
+                                       stdout=subprocess.DEVNULL, stderr=subprocess.PIPE,
                                        text=True, start_new_session=True)
             try:
                 deadline = time.monotonic()+15
@@ -491,6 +493,9 @@ def account_cli_matrix():
                         status = Path(f'/proc/{pid}/status').read_text()
                         caught = next(line for line in status.splitlines() if line.startswith('SigCgt:'))
                         if int(caught.split()[1], 16) & (1 << (signal.SIGTERM - 1)):
+                            environment = Path(f'/proc/{pid}/environ').read_bytes().split(b'\0')
+                            assert not any(v.startswith(b'COR_MATRIX_ADMIN_TOKEN=') for v in environment)
+                            assert b'HOME='+os.fsencode(alice['home']) in environment
                             break
                     time.sleep(0.05)
             finally:
@@ -498,10 +503,12 @@ def account_cli_matrix():
                     os.killpg(process.pid, signal.SIGTERM)
                 process.communicate(timeout=15)
             assert not (data(alice)/'control.json').exists()
+            assert not (root_home/'forbidden').exists()
             print(json.dumps({'account_matrix': True, 'help_commands': len(catalogue),
                               'contexts': ['user', 'sudo', 'selected-user', 'direct-root'],
                               'read_only_inventory': True, 'cross_user_denied': True,
                               'owner_and_backend_reuse': True,
+                              'admin_environment_filtered': True,
                               'not_exercised': ['public downloads/install', 'interactive polkit agent',
                                                 'real login/autostart', 'public DNS/IP/Claude probes']}),
                   flush=True)

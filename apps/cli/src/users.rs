@@ -115,6 +115,44 @@ mod linux {
         result
     }
 
+    fn forward_environment(key: &str, explicit_user: bool) -> bool {
+        matches!(
+            key,
+            "LANG"
+                | "LANGUAGE"
+                | "LC_ALL"
+                | "LC_CTYPE"
+                | "LC_NUMERIC"
+                | "LC_TIME"
+                | "LC_COLLATE"
+                | "LC_MONETARY"
+                | "LC_MESSAGES"
+                | "TERM"
+                | "COLORTERM"
+                | "TZ"
+        ) || (!explicit_user
+            && matches!(
+                key,
+                "CLASH_OF_RUST_DATA_DIR"
+                    | "DISPLAY"
+                    | "WAYLAND_DISPLAY"
+                    | "XAUTHORITY"
+                    | "GSETTINGS_BACKEND"
+                    | "GSETTINGS_SCHEMA_DIR"
+                    | "http_proxy"
+                    | "https_proxy"
+                    | "all_proxy"
+                    | "no_proxy"
+                    | "HTTP_PROXY"
+                    | "HTTPS_PROXY"
+                    | "ALL_PROXY"
+                    | "NO_PROXY"
+                    | "SSL_CERT_FILE"
+                    | "SSL_CERT_DIR"
+                    | "CURL_CA_BUNDLE"
+            ))
+    }
+
     pub(super) fn prepare(args: &Args) -> Result<()> {
         let root = platform::is_elevated();
         ensure!(
@@ -152,16 +190,20 @@ mod linux {
         command
             .args(["--user", &target.name, "--"])
             .arg(executable)
-            .args(delegated_arguments(args));
-        for key in [
-            "SUDO_UID",
-            "SUDO_GID",
-            "SUDO_USER",
-            "SUDO_COMMAND",
-            "XDG_RUNTIME_DIR",
-            "DBUS_SESSION_BUS_ADDRESS",
-        ] {
-            command.env_remove(key);
+            .args(delegated_arguments(args))
+            .env_clear()
+            .env(
+                "PATH",
+                "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin",
+            );
+        let explicit_user = args.get("user").is_some();
+        for (key, value) in std::env::vars_os() {
+            if key
+                .to_str()
+                .is_some_and(|key| forward_environment(key, explicit_user))
+            {
+                command.env(key, value);
+            }
         }
         for key in [
             "XDG_DATA_HOME",
@@ -177,12 +219,9 @@ mod linux {
                         .find_map(|parent| parent.metadata().ok())
                         .is_some_and(|metadata| metadata.uid() == target.uid)
             });
-            if args.get("user").is_some() || !owned {
-                command.env_remove(key);
+            if !explicit_user && owned {
+                command.env(key, std::env::var_os(key).expect("owned environment path"));
             }
-        }
-        if args.get("user").is_some() {
-            command.env_remove("CLASH_OF_RUST_DATA_DIR");
         }
         command
             .env("HOME", &target.home)
@@ -264,6 +303,28 @@ mod linux {
     #[cfg(test)]
     mod tests {
         use super::*;
+        #[test]
+        fn delegation_only_forwards_known_environment_and_never_admin_credentials() {
+            for explicit in [false, true] {
+                for key in [
+                    "COR_MATRIX_ADMIN_TOKEN",
+                    "GH_TOKEN",
+                    "AWS_SECRET_ACCESS_KEY",
+                    "LD_PRELOAD",
+                    "SUDO_UID",
+                    "DBUS_SESSION_BUS_ADDRESS",
+                    "XDG_DATA_HOME",
+                ] {
+                    assert!(!forward_environment(key, explicit), "{key}");
+                }
+                assert!(forward_environment("LANG", explicit));
+                assert!(forward_environment("TERM", explicit));
+            }
+            for key in ["HTTPS_PROXY", "SSL_CERT_FILE", "CLASH_OF_RUST_DATA_DIR"] {
+                assert!(forward_environment(key, false));
+                assert!(!forward_environment(key, true));
+            }
+        }
         #[test]
         fn delegation_preserves_literal_arguments_and_removes_only_user_selection() {
             let args = crate::args::parse(
