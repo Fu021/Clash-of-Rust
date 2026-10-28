@@ -10,6 +10,7 @@
 | Android 工具链、VPN、DNS、系统 UI | [Android](android.md) | 5、6 |
 | macOS Tailscale、系统 DNS、分域与原生就绪 | [macOS DNS 共存](macos-dns.md) | 原 8 的 DNS 主题 |
 | Linux 代理/TUN、macOS 身份/助手、Windows 服务/安装器 | [桌面集成](desktop.md) | 7、8、9 |
+| 离线启动、联网/默认路由变化后代理持续不可达 | [桌面联网恢复](network-recovery.md) | 断网启动恢复 |
 | 产物、签名、依赖快照、发布与工作流参数 | [打包与发布](release.md) | 10、12 |
 | 历史扫描范围与失败统计 | [证据范围](evidence.md) | 历史快照 |
 | 每次任务的结果、证据和验证范围 | [最近复盘](reviews.md) | 每次更新，最多 20 条 |
