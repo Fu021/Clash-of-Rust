@@ -26,7 +26,7 @@ pub(super) fn start(
                 break;
             };
             let pending = {
-                let mut owner = shared.lock().await;
+                let owner = shared.lock().await;
                 let now = SystemTime::now()
                     .duration_since(UNIX_EPOCH)
                     .unwrap_or_default()
