@@ -109,8 +109,15 @@ def isolated_uplink():
         directory = Path(temporary)
         directory.chmod(0o755)
         ca, key = directory/'root.crt', directory/'root.key'
+        root_config = directory/'root.cnf'
+        root_config.write_text(
+            '[req]\ndistinguished_name=subject\nx509_extensions=ca\nprompt=no\n'
+            '[subject]\nCN=Disposable TUN test root\n'
+            '[ca]\nbasicConstraints=critical,CA:TRUE\n'
+            'keyUsage=critical,keyCertSign,cRLSign\nsubjectKeyIdentifier=hash\n'
+            'authorityKeyIdentifier=keyid:always\n')
         run(['openssl', 'req', '-x509', '-newkey', 'rsa:2048', '-nodes', '-days', '1',
-             '-subj', '/CN=Disposable TUN test root', '-addext', 'basicConstraints=critical,CA:TRUE',
+             '-config', root_config,
              '-keyout', key, '-out', ca], stdout=subprocess.DEVNULL, stderr=subprocess.PIPE)
         run(['openssl', 'req', '-new', '-newkey', 'rsa:2048', '-nodes', '-subj', '/CN=Disposable DNS',
              '-keyout', directory/'server.key', '-out', directory/'server.csr'],
