@@ -6,6 +6,50 @@ use std::sync::Arc;
 use tokio::sync::Mutex;
 use tokio::sync::watch;
 
+#[cfg(target_os = "macos")]
+pub(crate) async fn prepare_update_handoff<'a, S, F, Fut, C>(
+    shared: &'a Arc<Mutex<Engine>>,
+    job: &crate::engine::downloads::UpdateJob,
+    disconnected: &Option<watch::Receiver<bool>>,
+    prereleases: bool,
+    prepare: F,
+    cancel: C,
+) -> Result<(tokio::sync::MutexGuard<'a, Engine>, S)>
+where
+    F: FnOnce(u32, bool) -> Fut,
+    Fut: std::future::Future<Output = Result<S>>,
+    C: FnOnce(&S),
+{
+    let (gui, parent) = {
+        let engine = shared.lock().await;
+        job.ensure_current(disconnected)?;
+        anyhow::ensure!(
+            engine.settings.update_prereleases == prereleases,
+            "更新通道已改变，请重新检查更新"
+        );
+        let gui = super::gui_pid(&engine.store)?;
+        (gui, gui.unwrap_or_else(std::process::id))
+    };
+    let session = prepare(parent, gui.is_some()).await?;
+    let engine = shared.lock().await;
+    if let Err(error) = (|| -> Result<()> {
+        job.ensure_current(disconnected)?;
+        anyhow::ensure!(
+            engine.settings.update_prereleases == prereleases,
+            "更新通道已改变，请重新检查更新"
+        );
+        anyhow::ensure!(
+            super::gui_pid(&engine.store)? == gui,
+            "桌面客户端已变化，请重新执行更新"
+        );
+        Ok(())
+    })() {
+        cancel(&session);
+        return Err(error);
+    }
+    Ok((engine, session))
+}
+
 pub(crate) fn meta(engine: &Engine, owner: Owner) -> Result<Meta> {
     Ok(Meta {
         view_revision: engine.view_revision(),
@@ -262,25 +306,65 @@ async fn install_update(
         },
     )
     .await?;
-    let mut engine = shared.lock().await;
-    job.ensure_current(&disconnected)?;
-    anyhow::ensure!(
-        engine.settings.update_prereleases == prereleases,
-        "更新通道已改变，请重新检查更新"
-    );
-    let gui = super::gui_pid(&engine.store)?;
-    let parent = gui.unwrap_or_else(std::process::id);
-    let session = tokio::task::spawn_blocking(move || {
-        crate::update::handoff_owner(Arc::new(download), parent, gui.is_some())
-    })
-    .await??;
+    // macOS may wait for DMG verification or authorization. The helper is
+    // gated until the owner rechecks the GUI and explicitly commits the swap.
+    #[cfg(target_os = "macos")]
+    let (mut engine, session) = prepare_update_handoff(
+        shared,
+        &job,
+        &disconnected,
+        prereleases,
+        |parent, gui| async move {
+            tokio::task::spawn_blocking(move || {
+                crate::update::handoff_owner_deferred(Arc::new(download), parent, gui)
+            })
+            .await?
+        },
+        |session| session.cancel(),
+    )
+    .await?;
+    #[cfg(not(target_os = "macos"))]
+    let (mut engine, session) = {
+        let engine = shared.lock().await;
+        job.ensure_current(&disconnected)?;
+        anyhow::ensure!(
+            engine.settings.update_prereleases == prereleases,
+            "更新通道已改变，请重新检查更新"
+        );
+        let gui = super::gui_pid(&engine.store)?;
+        let parent = gui.unwrap_or_else(std::process::id);
+        let session = tokio::task::spawn_blocking(move || {
+            crate::update::handoff_owner(Arc::new(download), parent, gui.is_some())
+        })
+        .await??;
+        (engine, session)
+    };
+    #[cfg(target_os = "macos")]
+    let was_running = engine.running();
     if let Err(error) = engine.stop().await {
         session.cancel();
         return Err(error);
     }
+    #[cfg(not(target_os = "macos"))]
     if let Err(error) = super::request_gui_exit(&engine.store) {
         session.cancel();
         return Err(error);
+    }
+    #[cfg(target_os = "macos")]
+    if let Err(error) = session
+        .commit()
+        .and_then(|()| super::request_gui_exit(&engine.store))
+    {
+        session.cancel();
+        if was_running {
+            return match engine.start_with_proxy_mode().await {
+                Ok(()) => Err(error.context("更新交接失败，已重新启动内核")),
+                Err(restart) => {
+                    Err(error.context(format!("更新交接失败，重新启动内核也失败：{restart:#}")))
+                }
+            };
+        }
+        return Err(error.context("更新交接失败，已保留旧版本"));
     }
     Ok(json!({"shutdown":true,"installer":session.directory}))
 }

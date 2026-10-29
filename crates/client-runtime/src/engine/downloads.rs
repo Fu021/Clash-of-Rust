@@ -418,6 +418,81 @@ mod tests {
         assert!(shared.lock().await.app_updates.begin("busy").is_ok());
     }
 
+    #[cfg(target_os = "macos")]
+    #[tokio::test]
+    async fn update_preparation_releases_owner_and_rechecks_changes_before_commit() {
+        use std::sync::atomic::{AtomicBool, Ordering};
+
+        for scenario in 0..5 {
+            let root = tempfile::tempdir().unwrap();
+            let shared = Arc::new(tokio::sync::Mutex::new(fixture(
+                Store::at(root.path().to_owned()).unwrap(),
+            )));
+            let job = shared.lock().await.app_updates.begin("busy").unwrap();
+            let prereleases = shared.lock().await.settings.update_prereleases;
+            let (disconnected_tx, disconnected) = watch::channel(false);
+            let (started, ready) = oneshot::channel();
+            let (finish, resume) = oneshot::channel();
+            let cancelled = Arc::new(AtomicBool::new(false));
+            let observed = cancelled.clone();
+            let running = shared.clone();
+            let mut gui_lock = None;
+            let task = tokio::spawn(async move {
+                crate::control::prepare_update_handoff(
+                    &running,
+                    &job,
+                    &Some(disconnected),
+                    prereleases,
+                    move |_, _| async move {
+                        started.send(()).unwrap();
+                        resume.await.unwrap();
+                        Ok(())
+                    },
+                    move |_: &()| observed.store(true, Ordering::SeqCst),
+                )
+                .await
+                .map(|_| ())
+            });
+            ready.await.unwrap();
+            {
+                let mut owner = shared.try_lock().expect("preparation held the owner lock");
+                match scenario {
+                    1 => owner.app_updates.cancel(),
+                    2 => owner.settings.update_prereleases = !prereleases,
+                    3 => {
+                        disconnected_tx.send_replace(true);
+                    }
+                    4 => {
+                        let lock = std::fs::File::options()
+                            .read(true)
+                            .write(true)
+                            .create(true)
+                            .truncate(false)
+                            .open(owner.store.root.join("gui-session.lock"))
+                            .unwrap();
+                        lock.try_lock().unwrap();
+                        std::fs::write(
+                            owner.store.root.join("gui-session.json"),
+                            serde_json::to_vec(&serde_json::json!({
+                                "pid": std::process::id(),
+                                "nonce": "00000000-0000-0000-0000-000000000000"
+                            }))
+                            .unwrap(),
+                        )
+                        .unwrap();
+                        gui_lock = Some(lock);
+                    }
+                    _ => {}
+                }
+            }
+            finish.send(()).unwrap();
+            let result = task.await.unwrap();
+            assert_eq!(result.is_ok(), scenario == 0);
+            assert_eq!(cancelled.load(Ordering::SeqCst), scenario != 0);
+            drop(gui_lock);
+        }
+    }
+
     #[tokio::test]
     async fn explicit_import_can_change_source_but_stale_update_cannot() {
         use std::sync::atomic::{AtomicBool, Ordering};

@@ -14,6 +14,8 @@ use crate::{
     config::{Profile, Settings},
     engine::{ProxyMode, Scope},
 };
+#[cfg(all(test, target_os = "macos"))]
+pub(crate) use dispatch::prepare_update_handoff;
 pub use gui::{GuiSession, gui_exit_requested, gui_pid, request_gui_exit};
 pub use mutations::RuleChange;
 use serde::{Deserialize, Serialize};

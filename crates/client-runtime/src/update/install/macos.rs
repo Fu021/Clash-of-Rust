@@ -118,8 +118,17 @@ fn verify_app(app: &Path, version: &str) -> Result<()> {
 }
 
 fn wait_for_shutdown(plan: &Plan, directory: &Path) -> Result<()> {
+    wait_for_shutdown_with(directory, plan.require_commit, || parent_alive(plan.parent))
+}
+
+fn wait_for_shutdown_with(
+    directory: &Path,
+    require_commit: bool,
+    parent_running: impl Fn() -> bool,
+) -> Result<()> {
     let deadline = Instant::now() + Duration::from_secs(45);
-    while parent_alive(plan.parent) {
+    while parent_running() || (require_commit && !directory.join("commit").exists()) {
+        ensure!(directory.is_dir(), "更新交接目录已移除，已保留旧版本");
         ensure!(
             !directory.join("cancel").exists(),
             "客户端取消了更新交接，已保留旧版本"
@@ -130,6 +139,7 @@ fn wait_for_shutdown(plan: &Plan, directory: &Path) -> Result<()> {
         );
         std::thread::sleep(Duration::from_millis(100));
     }
+    ensure!(directory.is_dir(), "更新交接目录已移除，已保留旧版本");
     ensure!(
         !directory.join("cancel").exists(),
         "已取消更新，已保留旧版本"
@@ -144,19 +154,26 @@ fn privileged_transaction(
     backup: &Path,
     directory: &Path,
     parent: u32,
+    require_commit: bool,
 ) -> String {
     // One authorization covers staging, the atomic swap, rollback and cleanup.
     // The GUI remains open until the validated staged app is ready to replace it.
     format!(
-        "set -eu\napp={}\nstaged={}\nbackup={}\nready={}\ncancel={}\ndirectory={}\nsuccess=0\ncleanup() {{\n  if [ \"$success\" = 0 ] && [ -d \"$backup\" ] && [ ! -e \"$app\" ]; then /bin/mv \"$backup\" \"$app\"; fi\n  /bin/rm -rf \"$staged\"\n}}\ntrap cleanup EXIT\n/usr/bin/ditto {} \"$staged\"\n/usr/bin/codesign --verify --deep --strict \"$staged\"\n[ -d \"$directory\" ]\n[ ! -e \"$cancel\" ]\n/usr/bin/touch \"$ready\"\ni=0\nwhile /bin/kill -0 {parent} 2>/dev/null; do\n  [ -d \"$directory\" ] && [ ! -e \"$cancel\" ] || {{ echo '客户端取消了更新交接，已保留旧版本' >&2; exit 1; }}\n  [ \"$i\" -lt 450 ] || {{ echo '客户端未能正常退出，已保留旧版本' >&2; exit 1; }}\n  i=$((i+1))\n  /bin/sleep 0.1\ndone\n[ -d \"$directory\" ]\n[ ! -e \"$cancel\" ]\n/bin/mv \"$app\" \"$backup\"\n{}\n/bin/mv \"$staged\" \"$app\"\nsuccess=1\n/bin/rm -rf \"$backup\"\n",
+        "set -eu\napp={}\nstaged={}\nbackup={}\nready={}\ncancel={}\ncommit={}\ndirectory={}\nsuccess=0\ncleanup() {{\n  if [ \"$success\" = 0 ] && [ -d \"$backup\" ] && [ ! -e \"$app\" ]; then /bin/mv \"$backup\" \"$app\"; fi\n  /bin/rm -rf \"$staged\"\n}}\ntrap cleanup EXIT\n/usr/bin/ditto {} \"$staged\"\n/usr/bin/codesign --verify --deep --strict \"$staged\"\n[ -d \"$directory\" ]\n[ ! -e \"$cancel\" ]\n/usr/bin/touch \"$ready\"\ni=0\nwhile /bin/kill -0 {parent} 2>/dev/null{commit_wait}; do\n  [ -d \"$directory\" ] && [ ! -e \"$cancel\" ] || {{ echo '客户端取消了更新交接，已保留旧版本' >&2; exit 1; }}\n  [ \"$i\" -lt 450 ] || {{ echo '客户端未能正常退出，已保留旧版本' >&2; exit 1; }}\n  i=$((i+1))\n  /bin/sleep 0.1\ndone\n[ -d \"$directory\" ]\n[ ! -e \"$cancel\" ]\n/bin/mv \"$app\" \"$backup\"\n{}\n/bin/mv \"$staged\" \"$app\"\nsuccess=1\n/bin/rm -rf \"$backup\"\n",
         shell_quote(&app.to_string_lossy()),
         shell_quote(&staged.to_string_lossy()),
         shell_quote(&backup.to_string_lossy()),
         shell_quote(&directory.join("ready").to_string_lossy()),
         shell_quote(&directory.join("cancel").to_string_lossy()),
+        shell_quote(&directory.join("commit").to_string_lossy()),
         shell_quote(&directory.to_string_lossy()),
         shell_quote(&replacement.to_string_lossy()),
         ":",
+        commit_wait = if require_commit {
+            " || [ ! -e \"$commit\" ]"
+        } else {
+            ""
+        },
     )
 }
 
@@ -208,6 +225,7 @@ pub(super) fn install(plan: &Plan, directory: &Path) -> Result<()> {
                 &backup,
                 directory,
                 plan.parent,
+                plan.require_commit,
             ));
         }
         stage(directory, "正在准备更新文件…")?;
@@ -251,6 +269,75 @@ pub(super) fn install(plan: &Plan, directory: &Path) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::{
+        sync::{
+            Arc,
+            atomic::{AtomicBool, Ordering},
+            mpsc,
+        },
+        time::Duration,
+    };
+
+    #[test]
+    fn deferred_handoff_waits_for_both_commit_and_parent_exit() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().to_owned();
+        let alive = Arc::new(AtomicBool::new(true));
+        let observed = alive.clone();
+        let (finished, result) = mpsc::channel();
+        let worker = std::thread::spawn(move || {
+            finished
+                .send(wait_for_shutdown_with(&path, true, || {
+                    observed.load(Ordering::SeqCst)
+                }))
+                .unwrap();
+        });
+        fs::write(directory.path().join("commit"), b"").unwrap();
+        assert!(result.recv_timeout(Duration::from_millis(250)).is_err());
+        alive.store(false, Ordering::SeqCst);
+        assert!(result.recv_timeout(Duration::from_secs(2)).unwrap().is_ok());
+        worker.join().unwrap();
+
+        fs::remove_file(directory.path().join("commit")).unwrap();
+        let path = directory.path().to_owned();
+        let (finished, result) = mpsc::channel();
+        let worker = std::thread::spawn(move || {
+            finished
+                .send(wait_for_shutdown_with(&path, true, || false))
+                .unwrap();
+        });
+        assert!(result.recv_timeout(Duration::from_millis(250)).is_err());
+        fs::write(directory.path().join("commit"), b"").unwrap();
+        assert!(result.recv_timeout(Duration::from_secs(2)).unwrap().is_ok());
+        worker.join().unwrap();
+
+        fs::remove_file(directory.path().join("commit")).unwrap();
+        let path = directory.path().to_owned();
+        let (finished, result) = mpsc::channel();
+        let worker = std::thread::spawn(move || {
+            finished
+                .send(wait_for_shutdown_with(&path, true, || false))
+                .unwrap();
+        });
+        fs::write(directory.path().join("cancel"), b"").unwrap();
+        assert!(
+            result
+                .recv_timeout(Duration::from_secs(2))
+                .unwrap()
+                .is_err()
+        );
+        worker.join().unwrap();
+    }
+
+    #[test]
+    fn privileged_handoff_also_waits_for_commit_only_when_requested() {
+        let path = Path::new("/tmp/fixture");
+        let deferred = privileged_transaction(path, path, path, path, path, 123, true);
+        let immediate = privileged_transaction(path, path, path, path, path, 123, false);
+        assert!(deferred.contains("while /bin/kill -0 123 2>/dev/null || [ ! -e \"$commit\" ]"));
+        assert!(immediate.contains("while /bin/kill -0 123 2>/dev/null;"));
+    }
+
     #[test]
     fn update_rejects_executables_outside_a_real_app_layout() {
         assert!(
