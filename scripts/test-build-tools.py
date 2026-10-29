@@ -38,6 +38,27 @@ _memory_spec.loader.exec_module(memory_benchmark)
 
 
 class BuildTests(unittest.TestCase):
+    def test_linux_gui_finds_authorized_core_without_reading_exe_link(self):
+        import linux_gui
+
+        with tempfile.TemporaryDirectory() as temporary:
+            proc = Path(temporary)
+            for pid, name, uid, parent in (
+                    (101, 'mihomo', 1001, 42),
+                    (102, 'mihomo', 1001, 99),
+                    (103, 'mihomo', 1002, 42),
+                    (104, 'unrelated', 1001, 42)):
+                directory = proc/str(pid)
+                directory.mkdir()
+                (directory/'status').write_text(
+                    f'Name:\t{name}\nPPid:\t{parent}\nUid:\t{uid}\t{uid}\t{uid}\t{uid}\n')
+            (proc/'105').mkdir()
+            (proc/'105'/'status').write_text('Name:\tmihomo\n')
+
+            # The two matching processes have no readable exe link or useful
+            # directory ownership; both must be counted for duplicate checks.
+            self.assertEqual(linux_gui.core_processes(proc, 1001), {101: 42, 102: 99})
+
     def test_linux_gui_session_is_staged_outside_a_private_workspace(self):
         import linux_gui
 

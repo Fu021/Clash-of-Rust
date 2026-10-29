@@ -145,15 +145,23 @@ def cli(*arguments):
     return value['data']
 
 
-def core_pids():
-    result = []
-    for path in Path('/proc').glob('[0-9]*/exe'):
+def core_processes(proc=Path('/proc'), uid=None):
+    uid = os.getuid() if uid is None else uid
+    result = {}
+    # Capability-bearing processes can have root-owned /proc entries and an
+    # unreadable exe link even though their effective UID remains unprivileged.
+    for path in proc.glob('[0-9]*/status'):
         try:
-            if path.parent.stat().st_uid == os.getuid() and path.resolve().name == 'mihomo':
-                result.append(int(path.parent.name))
-        except (OSError, RuntimeError):
+            fields = dict(line.split(':', 1) for line in path.read_text().splitlines() if ':' in line)
+            identities = fields['Uid'].split()
+            if (fields['Name'].strip() == 'mihomo'
+                    and len(identities) >= 2
+                    and int(identities[0]) == uid
+                    and int(identities[1]) == uid):
+                result[int(path.parent.name)] = int(fields['PPid'])
+        except (OSError, ValueError, KeyError):
             pass
-    return sorted(result)
+    return result
 
 
 def gui(backend, report):
@@ -178,9 +186,10 @@ def gui(backend, report):
         cli('start')
         cli('mode', 'global')
         before = cli('status')
-        pids = wait_for('GUI did not own a core process', core_pids)
-        if len(pids) != 1:
-            raise RuntimeError('GUI and CLI created duplicate core processes')
+        processes = wait_for('GUI did not own a core process', core_processes)
+        if (len(processes) != 1 or next(iter(processes.values())) != owner.pid
+                or before.get('owner') != 'gui' or not before.get('running')):
+            raise RuntimeError('GUI and CLI did not share exactly one GUI-owned core')
         def owner_tray():
             for entry in notifier():
                 service, separator, suffix = entry.partition('/')
@@ -215,7 +224,8 @@ def gui(backend, report):
             dbus(item[0], item[1], 'org.kde.StatusNotifierItem.Activate', '0', '0')
             windows = wait_for('Tray activation did not reopen the GUI', visible)
             after = cli('status')
-            if core_pids() != pids or after.get('mode') != before.get('mode'):
+            if (core_processes() != processes or not after.get('running')
+                    or after.get('owner') != 'gui' or after.get('mode') != before.get('mode')):
                 raise RuntimeError('Window reconstruction changed the core or CLI mode')
         cli('stop')
         return {'windows': windows, 'tray': True, 'graceful_close': True, 'renderer_crash': True,
