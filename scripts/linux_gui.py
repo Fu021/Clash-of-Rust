@@ -88,8 +88,11 @@ def authentication():
                     window = wait_for('Production authorization did not show a graphical dialog', dialog)
                     run(['xdotool', 'windowactivate', '--sync', window])
                     if allow:
-                        run(['xdotool', 'type', '--clearmodifiers', '--delay', '10',
-                             os.environ['COR_GUI_AUTH_PASSWORD']])
+                        password = Path(os.environ['COR_GUI_AUTH_PASSWORD_FILE']).read_text()
+                        typed = subprocess.run(['xdotool', 'type', '--clearmodifiers', '--delay', '10',
+                                                '--', password], stdout=subprocess.DEVNULL, stderr=log)
+                        if typed.returncode:
+                            raise RuntimeError('Could not enter the disposable account password')
                         run(['xdotool', 'key', 'Return'])
                     else:
                         run(['xdotool', 'key', 'Escape'])
@@ -234,6 +237,14 @@ def session():
     report = Path(os.environ['COR_GUI_REPORT'])
     result = {'status': 'running', 'checks': {}}
     try:
+        session_id = os.environ.get('XDG_SESSION_ID')
+        manager = ['busctl', '--system', 'call', 'org.freedesktop.login1', '/org/freedesktop/login1',
+                   'org.freedesktop.login1.Manager']
+        if (not session_id or not os.environ.get('XDG_RUNTIME_DIR')
+                or output([*manager, 'GetSessionByPID', 'u', str(os.getpid())])
+                != output([*manager, 'GetSession', 's', session_id])):
+            raise RuntimeError('GUI user does not belong to the expected logind session')
+        result['checks']['login_session'] = True
         with (report/'desktop.log').open('w') as log, contextlib.ExitStack() as stack:
             display = stack.enter_context(process(['Xvfb', ':91', '-screen', '0', '1280x900x24',
                                                    '-nolisten', 'tcp'], log))
@@ -294,6 +305,21 @@ def preserve_report(source):
             shutil.copyfile(path, destination/name)
 
 
+def launch_session():
+    # Retain PAM's session identity and the explicit test settings only. The
+    # graphical processes must not inherit credentials from an Actions runner.
+    allowed = ('HOME', 'USER', 'LOGNAME', 'PATH', 'SHELL', 'LANG', 'XDG_SESSION_ID',
+               'XDG_RUNTIME_DIR', 'XDG_SEAT', 'XDG_VTNR', 'XDG_SESSION_TYPE',
+               'XDG_SESSION_CLASS', 'XDG_CONFIG_HOME', 'XDG_CURRENT_DESKTOP',
+               'GNOME_SHELL_SESSION_MODE', 'LIBGL_ALWAYS_SOFTWARE', 'GSETTINGS_BACKEND',
+               'COR_GUI_REPORT', 'COR_GUI_AUTH_PASSWORD_FILE', 'PYTHONDONTWRITEBYTECODE',
+               'GITHUB_ACTIONS', 'NO_AT_BRIDGE')
+    env = {key: os.environ[key] for key in allowed if key in os.environ}
+    command = ['/usr/bin/dbus-run-session', '--', sys.executable, '-E', '-s', '-B',
+               str(Path(__file__).resolve()), '--session']
+    os.execve(command[0], command, env)
+
+
 def installed_tests():
     from linux_ci import require_actions
     require_actions()
@@ -312,22 +338,28 @@ def installed_tests():
             created = True
             run(['sudo', 'chpasswd'], input=user+':'+password+'\n', text=True)
             run(['sudo', 'install', '-d', '-m', '0755', '-o', user, '-g', user, report])
-            runtime = home/'runtime'
-            run(['sudo', 'install', '-d', '-m', '0700', '-o', user, '-g', user, runtime])
-            env = {'HOME': str(home/'home'), 'PATH': os.environ['PATH'],
-                   'XDG_RUNTIME_DIR': str(runtime), 'XDG_CONFIG_HOME': str(home/'home/.config'),
+            password_file = home/'password'
+            descriptor = os.open(password_file, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+            with os.fdopen(descriptor, 'w') as stream:
+                stream.write(password)
+            run(['sudo', 'chown', f'{user}:{user}', password_file])
+            env = {'HOME': str(home/'home'), 'PATH': '/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin',
+                   'XDG_CONFIG_HOME': str(home/'home/.config'),
                    'XDG_CURRENT_DESKTOP': 'GNOME', 'GNOME_SHELL_SESSION_MODE': 'user',
                    'LIBGL_ALWAYS_SOFTWARE': '1', 'GSETTINGS_BACKEND': 'dconf',
-                   'COR_GUI_REPORT': str(report), 'COR_GUI_AUTH_PASSWORD': password,
+                   'COR_GUI_REPORT': str(report), 'COR_GUI_AUTH_PASSWORD_FILE': str(password_file),
                    'PYTHONDONTWRITEBYTECODE': '1', 'LANG': 'C.UTF-8',
                    'GITHUB_ACTIONS': 'true', 'NO_AT_BRIDGE': '1'}
-            # Clear the environment: neither the guest nor GUI sees Actions tokens.
-            subprocess.run(['sudo', '-u', user, 'env', '-i',
-                            *(key+'='+value for key, value in env.items()),
-                            'dbus-run-session', '--', sys.executable, script, '--session'],
+            # PAM registers a real logind session for the graphical polkit agent.
+            subprocess.run(['sudo', 'systemd-run', '--wait', '--pipe', '--collect', '--quiet',
+                            '--property=User='+user, '--property=PAMName=login',
+                            '--property=WorkingDirectory='+str(home),
+                            *('--setenv='+key+'='+value for key, value in env.items()),
+                            sys.executable, '-E', '-s', '-B', script, '--session-launch'],
                            check=True, cwd=home, timeout=360)
         finally:
             if created:
+                subprocess.run(['sudo', 'loginctl', 'terminate-user', user], check=False)
                 subprocess.run(['sudo', 'pkill', '-KILL', '-u', user], check=False)
                 subprocess.run(['sudo', 'userdel', '--remove', user], check=False)
             run(['sudo', 'chown', '-R', '-h', f'{os.getuid()}:{os.getgid()}', home])
@@ -338,7 +370,11 @@ def installed_tests():
 if __name__ == '__main__':
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--session', action='store_true')
-    if parser.parse_args().session:
+    parser.add_argument('--session-launch', action='store_true')
+    args = parser.parse_args()
+    if args.session_launch:
+        launch_session()
+    elif args.session:
         session()
     else:
         installed_tests()

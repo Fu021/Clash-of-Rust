@@ -21,6 +21,7 @@
 
 - `scripts/android.py`、Gradle 配置、NDK/SDK 版本、Go module、Rust target 和构建标签是否一致。
 - 下载缓存是否完整并校验；失败后是否清理不完整压缩包和 Git 源。
+- 模拟器 SDK 下载遇到损坏压缩包或暂时断网时，可用独立 SDK 用户缓存有限重试；其他错误立即失败，重试后仍须运行真实 VPN/TUN 测试。证据：[不发布打包 40801455733](https://github.com/Fu021/Clash-of-Rust/actions/runs/40801455733)。
 - Android target 是否遵守 stable Rust、`minSdk 26`、`compileSdk 36` 和 16 KiB ELF 对齐要求。
 
 **防回归**

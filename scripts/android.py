@@ -31,25 +31,51 @@ def run(command, **kwargs):
     return subprocess.run(list(map(str, command)), check=True, **kwargs)
 
 
+def streamed_command(command, **kwargs):
+    print('+ ' + ' '.join(map(str, command)), flush=True)
+    tail = deque(maxlen=160)
+    with subprocess.Popen(list(map(str, command)), stdout=subprocess.PIPE,
+                          stderr=subprocess.STDOUT, text=True, **kwargs) as process:
+        for line in process.stdout:
+            print(line, end='', flush=True)
+            tail.append(line)
+        status = process.wait()
+    return status, ''.join(tail)
+
+
 def cargo_build(command, **kwargs):
     """Retry transient dependency downloads, while preserving compiler failures."""
     transient = re.compile(r'(?:HTTP(?:/[0-9.]+)?\s+|returned error:\s*)(?:429|50[0234])\b'
                            r'|Could not resolve host|Failed to connect to|Connection timed out', re.I)
     for attempt in range(3):
-        print('+ ' + ' '.join(map(str, command)), flush=True)
-        tail = deque(maxlen=160)
-        with subprocess.Popen(list(map(str, command)), stdout=subprocess.PIPE,
-                              stderr=subprocess.STDOUT, text=True, **kwargs) as process:
-            for line in process.stdout:
-                print(line, end='', flush=True)
-                tail.append(line)
-            status = process.wait()
+        status, tail = streamed_command(command, **kwargs)
         if status == 0:
             return
-        if attempt == 2 or not transient.search(''.join(tail)):
+        if attempt == 2 or not transient.search(tail):
             raise subprocess.CalledProcessError(status, command)
         delay = 15 * (attempt + 1)
         print(f'Transient dependency download failure; retrying in {delay}s', flush=True)
+        time.sleep(delay)
+
+
+def sdkmanager_install(command, device_root):
+    """Retry damaged or unavailable emulator downloads with a fresh SDK user cache."""
+    transient = re.compile(r'Error reading Zip content from a SeekableByteChannel'
+                           r'|Error on ZipFile unknown archive|Connection timed out|Read timed out'
+                           r'|Could not resolve host|Failed to connect'
+                           r'|HTTP(?:/[0-9.]+)?\s+(?:429|50[0234])\b', re.I)
+    for attempt in range(3):
+        user_root = device_root/('sdkmanager-'+str(attempt))
+        user_home = user_root/'.android'
+        user_home.mkdir(parents=True, exist_ok=True)
+        env = dict(os.environ, ANDROID_SDK_HOME=str(user_root), ANDROID_USER_HOME=str(user_home))
+        status, tail = streamed_command(command, env=env)
+        if status == 0:
+            return
+        if attempt == 2 or not transient.search(tail):
+            raise subprocess.CalledProcessError(status, command)
+        delay = 15 * (attempt + 1)
+        print(f'Transient Android SDK download failure; retrying in {delay}s', flush=True)
         time.sleep(delay)
 
 
@@ -389,8 +415,9 @@ def main():
     if args.operation=='emulator':
         sdk=Path(os.environ['ANDROID_HOME'])
         manager=sdk/'cmdline-tools/latest/bin'
-        run([manager/'sdkmanager','platform-tools','system-images;android-35;google_apis;x86_64'])
         device_root=Path(os.environ['RUNNER_TEMP'])/'cor-emulator'
+        sdkmanager_install([manager/'sdkmanager','platform-tools','system-images;android-35;google_apis;x86_64'],
+                           device_root)
         user_home=device_root/'.android'; avds=user_home/'avd'
         avds.mkdir(parents=True,exist_ok=True)
         env=dict(os.environ,ANDROID_USER_HOME=str(user_home),ANDROID_AVD_HOME=str(avds),ANDROID_SDK_HOME=str(device_root))

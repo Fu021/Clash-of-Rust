@@ -17,6 +17,8 @@
 
 **用户目录与无显示环境：** `sudo cor` 应在解析用户配置前降权并复用原用户后台；直接 root 保留独立目录。跨用户总览只读索引，不启动后台。polkit 的 SSH/非活动会话仍需 `auth_admin`，只授权固定安装助手；不能让用户 YAML 在 root 后台运行。回归需覆盖两用户同名订阅、环境白名单与管理员凭据隔离、sudo/指定用户操作、stdin/原样参数、文件 UID、后台复用、前台信号及退出恢复，见[用户与授权](../cli/linux-users.md)。Wayland compositor 错误来自桌面入口，服务器使用 `cor`，不通过为 root 配置显示服务器规避。
 
+**安装后 GUI 验证：** `sudo -u` 不创建 logind 登录会话，图形 polkit 代理会因 `No session for pid` 注册失败。测试使用隔离的临时 PAM 登录会话，并验证进程确属该会话；继续检查真实授权的取消与接受，不注入批准规则。证据：[不发布打包 40801455733](https://github.com/Fu021/Clash-of-Rust/actions/runs/40801455733)。
+
 **典型症状**
 
 - 网络命名空间内无法连接测试上游，或 IPv6 TUN/路由不可达。

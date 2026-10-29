@@ -66,6 +66,24 @@ class BuildTests(unittest.TestCase):
             self.assertFalse((saved/'local.yaml').exists())
             self.assertFalse((saved/'x11.log').exists())
 
+    def test_linux_gui_session_keeps_pam_identity_but_not_runner_credentials(self):
+        import linux_gui
+
+        environment = {'XDG_SESSION_ID': 'c12', 'XDG_RUNTIME_DIR': '/run/user/1234',
+                       'COR_GUI_AUTH_PASSWORD_FILE': '/tmp/disposable/password',
+                       'GITHUB_ACTIONS': 'true', 'GITHUB_TOKEN': 'secret',
+                       'AWS_SECRET_ACCESS_KEY': 'secret'}
+        with patch.dict(os.environ, environment, clear=True), patch.object(os, 'execve') as launch:
+            linux_gui.launch_session()
+        executable, command, retained = launch.call_args.args
+        self.assertEqual(executable, '/usr/bin/dbus-run-session')
+        self.assertIn('--session', command)
+        self.assertEqual(retained['XDG_SESSION_ID'], 'c12')
+        self.assertEqual(retained['XDG_RUNTIME_DIR'], '/run/user/1234')
+        self.assertEqual(retained['COR_GUI_AUTH_PASSWORD_FILE'], '/tmp/disposable/password')
+        self.assertNotIn('GITHUB_TOKEN', retained)
+        self.assertNotIn('AWS_SECRET_ACCESS_KEY', retained)
+
     def test_memory_mapping_categories_do_not_keep_addresses_or_paths(self):
         text = """1000-2000 rw-p 0 00:00 0
 Rss: 8 kB
@@ -966,6 +984,40 @@ assert.equal(calls.length,2);
             with self.assertRaises(subprocess.CalledProcessError): android_build.cargo_build(command)
             spawn.assert_called_once()
             delay.assert_not_called()
+
+    def test_android_sdk_download_retry_is_bounded_and_uses_fresh_user_caches(self):
+        def process(status, output):
+            child = MagicMock()
+            child.__enter__.return_value = child
+            child.stdout = output.splitlines(keepends=True)
+            child.wait.return_value = status
+            return child
+
+        command = ['sdkmanager', 'system-images;android-35;google_apis;x86_64']
+        corrupt = 'Error reading Zip content from a SeekableByteChannel\n'
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            with patch.object(android_build.subprocess, 'Popen',
+                              side_effect=[process(1, corrupt), process(0, 'Installed\n')]) as spawn, \
+                 patch.object(android_build.time, 'sleep') as delay:
+                android_build.sdkmanager_install(command, root)
+                self.assertEqual(spawn.call_count, 2)
+                self.assertNotEqual(spawn.call_args_list[0].kwargs['env']['ANDROID_USER_HOME'],
+                                    spawn.call_args_list[1].kwargs['env']['ANDROID_USER_HOME'])
+                delay.assert_called_once_with(15)
+            with patch.object(android_build.subprocess, 'Popen',
+                              side_effect=[process(1, corrupt) for _ in range(3)]) as spawn, \
+                 patch.object(android_build.time, 'sleep'):
+                with self.assertRaises(subprocess.CalledProcessError):
+                    android_build.sdkmanager_install(command, root)
+                self.assertEqual(spawn.call_count, 3)
+            with patch.object(android_build.subprocess, 'Popen',
+                              return_value=process(1, 'Package does not exist\n')) as spawn, \
+                 patch.object(android_build.time, 'sleep') as delay:
+                with self.assertRaises(subprocess.CalledProcessError):
+                    android_build.sdkmanager_install(command, root)
+                spawn.assert_called_once()
+                delay.assert_not_called()
 
     def test_cache_budget_evicts_old_lockfiles_then_least_recently_used_entries(self):
         def entry(number, key, size, ref='refs/heads/main'):
