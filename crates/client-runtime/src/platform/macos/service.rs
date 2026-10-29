@@ -16,7 +16,7 @@ use std::{
     time::{Duration, Instant},
 };
 
-const PROTOCOL: u32 = 7;
+const PROTOCOL: u32 = 8;
 const PREFIX: &str = "org.clashofrust.network";
 const LIMIT: u64 = 256 * 1024;
 static STOP: AtomicBool = AtomicBool::new(false);
@@ -119,7 +119,7 @@ fn restore_lease(path: &Path, lease: &mut Option<ProxyLease>) -> Result<()> {
 
 fn accepts_protocol(request: &Request, protocol: u32) -> bool {
     protocol == PROTOCOL
-        || (matches!(protocol, 2..=6)
+        || (matches!(protocol, 2..=7)
             && matches!(
                 request,
                 Request::Proxy { restore: true, .. } | Request::Dns { enabled: false, .. }
@@ -556,14 +556,19 @@ pub fn serve(uid: u32) -> Result<()> {
                         dns_relay = None;
                         dns_relay = Some(super::dns::Relay::start(port)?);
                     }
+                    let previous_scopes = super::dns::protected_scopes(&dns_lease);
                     let refreshed = super::dns::refresh(&dns_journal, &mut dns_lease);
+                    let mut scopes = previous_scopes?;
+                    scopes.extend(super::dns::protected_scopes(&dns_lease)?);
+                    scopes.sort_unstable();
+                    scopes.dedup();
                     // Dynamic-store publication can precede mDNSResponder's
-                    // actual switch. Also confirm quarantine before reporting
-                    // its conflict, so callers cannot mistake it for readiness.
+                    // actual switch; a default-path probe alone says nothing
+                    // about a conflicting or recently removed split resolver.
                     dns_relay
                         .as_ref()
                         .context("保护 DNS 本机转发不可用")?
-                        .verify_native()?;
+                        .verify_native_scopes(&scopes)?;
                     refreshed?;
                     super::dns::verify(&dns_lease, port)?;
                     dns_native_ready = true;
@@ -768,7 +773,7 @@ mod tests {
             "Old helpers reject unknown fields even during cleanup",
         );
         assert!(accepts_protocol(&Request::Status {}, PROTOCOL));
-        for protocol in [2, 3, 4, 5, 6] {
+        for protocol in [2, 3, 4, 5, 6, 7] {
             assert!(!accepts_protocol(&Request::Status {}, protocol));
             assert!(!accepts_protocol(
                 &Request::Dns {

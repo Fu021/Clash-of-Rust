@@ -517,6 +517,7 @@ pub async fn run(engine: &mut Engine, profile: &Path) {
             }
             wait_resolver("claude.ai", "100.100.100.100", false).await;
             lookup(&format!("quarantined-{suffix}.claude.ai"), "203.0.113.20").await;
+            lookup(&format!("quarantined-{suffix}.bash.ws"), "203.0.113.20").await;
             (expected_vpn, expected_search) = install(&new_search, false);
             wait_protection_ready(listen_port).await;
             wait_split_recovery(&new_search, &vpn_queries).await;

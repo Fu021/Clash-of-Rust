@@ -102,17 +102,42 @@ impl Probe {
 pub(super) fn response(packet: &[u8], probes: &Probes) -> Option<Vec<u8>> {
     const PREFIX: &[u8] = b"\x05probe\x28cor-dns-";
     let nonce_start = 12 + PREFIX.len();
-    let end = nonce_start + 32 + 1;
-    if packet.len() < end + 4
+    let mut end = nonce_start + 32;
+    if packet.len() < end + 5
         || packet[2] & 0xf8 != 0
         || packet[4..6] != [0, 1]
         || !packet[12..nonce_start].eq_ignore_ascii_case(PREFIX)
-        || !packet[nonce_start..end - 1]
+        || !packet[nonce_start..end].iter().all(u8::is_ascii_hexdigit)
+    {
+        return None;
+    }
+    let mut suffix = Vec::new();
+    while packet.get(end).copied()? != 0 {
+        let length = usize::from(*packet.get(end)?);
+        if length > 63 || end + length + 1 >= packet.len() {
+            return None;
+        }
+        let label = &packet[end + 1..end + 1 + length];
+        if !label
             .iter()
-            .all(u8::is_ascii_hexdigit)
-        || packet[end - 1] != 0
+            .all(|byte| byte.is_ascii_alphanumeric() || *byte == b'-' || *byte == b'_')
+        {
+            return None;
+        }
+        suffix.push(std::str::from_utf8(label).ok()?);
+        end += length + 1;
+        if end - 12 >= 255 {
+            return None;
+        }
+    }
+    end += 1;
+    if packet.len() < end + 4
         || !matches!(&packet[end..end + 2], [0, 1] | [0, 28])
         || packet[end + 2..end + 4] != [0, 1]
+        || (!suffix.is_empty()
+            && !crate::claude_check::protection::protected_dns_split(
+                &suffix.join(".").to_ascii_lowercase(),
+            ))
     {
         return None;
     }
@@ -130,10 +155,24 @@ pub(super) fn response(packet: &[u8], probes: &Probes) -> Option<Vec<u8>> {
     Some(reply)
 }
 
-pub(super) fn check(probes: &Probes, timeout: Duration) -> Result<()> {
-    // A random final label cannot match a configured private suffix (including
-    // common testing suffixes). It contains no user's lookup or network data.
-    let name = format!("probe.cor-dns-{}.", uuid::Uuid::new_v4().simple());
+pub(super) fn check(probes: &Probes, timeout: Duration, scopes: &[String]) -> Result<()> {
+    let deadline = Instant::now() + timeout;
+    for scope in std::iter::once("").chain(scopes.iter().map(String::as_str)) {
+        check_scope(probes, deadline, scope)?;
+    }
+    Ok(())
+}
+
+fn check_scope(probes: &Probes, deadline: Instant, scope: &str) -> Result<()> {
+    ensure!(Instant::now() < deadline, "系统原生 DNS 尚未进入保护入口");
+    // Only a generated nonce and a configured conflict suffix are queried.
+    // The relay terminates them locally even if mDNSResponder retries later.
+    let name = if scope.is_empty() {
+        format!("probe.cor-dns-{}.", uuid::Uuid::new_v4().simple())
+    } else {
+        format!("probe.cor-dns-{}.{scope}.", uuid::Uuid::new_v4().simple())
+    };
+    ensure!(name.len() <= 254, "保护 DNS 分域过长，无法检查原生解析");
     let probe = Arc::new(Probe::new(&name));
     {
         let mut current = probes
@@ -167,7 +206,6 @@ pub(super) fn check(probes: &Probes, timeout: Duration) -> Result<()> {
     let query = Query(service);
     let fd = unsafe { DNSServiceRefSockFD(query.0) };
     ensure!(fd >= 0, "系统原生 DNS 检查连接无效");
-    let deadline = Instant::now() + timeout;
     while !probe.received.load(Ordering::Acquire) {
         ensure!(Instant::now() < deadline, "系统原生 DNS 尚未进入保护入口");
         let mut descriptor = libc::pollfd {
@@ -253,6 +291,22 @@ mod tests {
         assert!(!second.received.load(Ordering::Acquire));
         assert!(response(&packet(&second, 28), &probes).is_some());
         assert!(second.received.load(Ordering::Acquire));
+    }
+
+    #[test]
+    fn protected_scope_probe_is_local_and_requires_the_matching_nonce() {
+        let protected = Arc::new(Probe::new(
+            "probe.cor-dns-0123456789abcdef0123456789abcdef.claude.ai.",
+        ));
+        let probes = Arc::new(Mutex::new(Some(protected.clone())));
+        let old = Probe::new("probe.cor-dns-fedcba9876543210fedcba9876543210.claude.ai.");
+        assert!(response(&packet(&old, 1), &probes).is_some());
+        assert!(!protected.received.load(Ordering::Acquire));
+        let request = packet(&protected, 1);
+        assert!(response(&request, &probes).is_some());
+        assert!(protected.received.load(Ordering::Acquire));
+        *probes.lock().unwrap() = None;
+        assert!(response(&request, &probes).is_some());
     }
 
     #[test]
