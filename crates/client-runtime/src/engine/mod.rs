@@ -608,19 +608,17 @@ impl Engine {
         }
         .await;
         #[cfg(target_os = "macos")]
-        if started.is_err() {
+        let started = started.map_err(|error| {
             if opened_mac_session && !self.running() {
                 self.mac_tun = None;
             }
-            if std::mem::take(&mut self.retained_startup_proxy) {
-                return match platform::restore(&self.journal()) {
-                    Ok(_) => started,
-                    Err(restore) => Err(started
-                        .unwrap_err()
-                        .context(format!("启动失败后恢复系统代理也失败：{restore:#}"))),
-                };
+            if std::mem::take(&mut self.retained_startup_proxy)
+                && let Err(restore) = platform::restore(&self.journal())
+            {
+                return error.context(format!("启动失败后恢复系统代理也失败：{restore:#}"));
             }
-        }
+            error
+        });
         started?;
         if let Err(error) = self.restore_proxy_mode().await {
             let stopped = self.stop().await;
