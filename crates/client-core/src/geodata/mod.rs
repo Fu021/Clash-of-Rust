@@ -5,6 +5,7 @@ use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use std::{
     fs::File,
+    io::Read,
     path::{Path, PathBuf},
     time::{Duration, SystemTime, UNIX_EPOCH},
 };
@@ -13,6 +14,7 @@ use tokio::io::AsyncWriteExt;
 pub const GEO_FILES: [&str; 4] = ["GeoIP.dat", "GeoSite.dat", "Country.mmdb", "ASN.mmdb"];
 pub const MANIFEST: &str = "geodata.json";
 const JOURNAL: &str = "geo-transaction.json";
+const COMMITTED_SUFFIX: &str = ".committed";
 const LIMIT: u64 = 128 * 1024 * 1024;
 const RELEASE: &str = "https://api.github.com/repos/MetaCubeX/meta-rules-dat/releases/latest";
 
@@ -361,12 +363,76 @@ pub fn begin_install(staged: &Path, runtime: &Path) -> Result<()> {
     Ok(())
 }
 
-pub fn commit(runtime: &Path) -> Result<()> {
+fn cleanup_committed_backup(
+    marker: &Path,
+    backup: &Path,
+    remove_backup: impl FnOnce(&Path) -> std::io::Result<()>,
+) {
+    match remove_backup(backup) {
+        Ok(()) => {}
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+        Err(_) => return,
+    }
+    let _ = std::fs::remove_file(marker);
+}
+
+fn remove_backup(path: &Path) -> std::io::Result<()> {
+    std::fs::remove_dir_all(path)
+}
+
+fn cleanup_committed_backups(runtime: &Path) {
+    let Ok(entries) = std::fs::read_dir(runtime) else {
+        return;
+    };
+    for entry in entries.flatten() {
+        let name = entry.file_name();
+        let Some(name) = name.to_str() else {
+            continue;
+        };
+        if !name.starts_with(".geo-backup-")
+            || !name.ends_with(COMMITTED_SUFFIX)
+            || !entry.file_type().is_ok_and(|kind| kind.is_file())
+        {
+            continue;
+        }
+        let Ok(file) = File::open(entry.path()) else {
+            continue;
+        };
+        let mut contents = Vec::new();
+        if file.take(65_537).read_to_end(&mut contents).is_err() || contents.len() > 65_536 {
+            continue;
+        }
+        let Ok(journal) = serde_json::from_slice::<Transaction>(&contents) else {
+            continue;
+        };
+        if name != format!("{}{COMMITTED_SUFFIX}", journal.backup) {
+            continue;
+        }
+        let Ok(backup) = backup_path(runtime, &journal) else {
+            continue;
+        };
+        cleanup_committed_backup(&entry.path(), &backup, remove_backup);
+    }
+}
+
+fn commit_with_cleanup(
+    runtime: &Path,
+    remove_backup: impl FnOnce(&Path) -> std::io::Result<()>,
+) -> Result<()> {
     let journal: Transaction = serde_json::from_slice(&std::fs::read(runtime.join(JOURNAL))?)?;
     let backup = backup_path(runtime, &journal)?;
-    std::fs::remove_file(runtime.join(JOURNAL))?;
-    std::fs::remove_dir_all(backup)?;
+    let marker = runtime.join(format!("{}{COMMITTED_SUFFIX}", journal.backup));
+    if marker.try_exists()? {
+        bail!("Geo 更新清理记录已存在");
+    }
+    // Moving the journal is the commit point. Cleanup may be retried on startup.
+    std::fs::rename(runtime.join(JOURNAL), &marker)?;
+    cleanup_committed_backup(&marker, &backup, remove_backup);
     Ok(())
+}
+
+pub fn commit(runtime: &Path) -> Result<()> {
+    commit_with_cleanup(runtime, remove_backup)
 }
 
 // Called only after the new data has been loaded successfully. The journal
@@ -388,6 +454,7 @@ pub fn record_install(runtime: &Path) -> Result<GeoManifest> {
 }
 
 pub fn recover(runtime: &Path) -> Result<()> {
+    cleanup_committed_backups(runtime);
     let path = runtime.join(JOURNAL);
     if !path.exists() {
         return Ok(());
@@ -577,6 +644,76 @@ mod tests {
         );
         assert!(verify_geo(&old).is_ok());
         assert!(record_install(&old).is_err());
+    }
+
+    #[test]
+    fn committed_update_survives_failed_cleanup_and_retries_on_recovery() {
+        let tmp = tempfile::tempdir().unwrap();
+        let runtime = tmp.path().join("runtime");
+        let staged = tmp.path().join("new");
+        fixture(&runtime, b"old-data");
+        fixture(&staged, b"new-data");
+        begin_install(&staged, &runtime).unwrap();
+        let installed = record_install(&runtime).unwrap();
+        let journal: Transaction =
+            serde_json::from_slice(&std::fs::read(runtime.join(JOURNAL)).unwrap()).unwrap();
+        let backup = backup_path(&runtime, &journal).unwrap();
+        let marker = runtime.join(format!("{}{COMMITTED_SUFFIX}", journal.backup));
+
+        commit_with_cleanup(&runtime, |_| {
+            Err(std::io::Error::new(
+                std::io::ErrorKind::PermissionDenied,
+                "backup is temporarily locked",
+            ))
+        })
+        .unwrap();
+        assert!(!runtime.join(JOURNAL).exists());
+        assert!(marker.exists());
+        assert!(backup.exists());
+        assert_eq!(
+            verify_geo(&runtime).unwrap().installed_at,
+            installed.installed_at
+        );
+
+        recover(&runtime).unwrap();
+        assert!(!marker.exists());
+        assert!(!backup.exists());
+        assert_eq!(
+            std::fs::read(runtime.join("GeoSite.dat")).unwrap(),
+            b"new-data"
+        );
+        assert_eq!(
+            verify_geo(&runtime).unwrap().installed_at,
+            installed.installed_at
+        );
+    }
+
+    #[test]
+    fn failed_commit_retains_rollback_journal_and_ignores_unrelated_markers() {
+        let tmp = tempfile::tempdir().unwrap();
+        let runtime = tmp.path().join("runtime");
+        let staged = tmp.path().join("new");
+        fixture(&runtime, b"old-data");
+        fixture(&staged, b"new-data");
+        begin_install(&staged, &runtime).unwrap();
+        let journal: Transaction =
+            serde_json::from_slice(&std::fs::read(runtime.join(JOURNAL)).unwrap()).unwrap();
+        let marker = runtime.join(format!("{}{COMMITTED_SUFFIX}", journal.backup));
+        std::fs::write(&marker, b"unrelated").unwrap();
+
+        assert!(commit(&runtime).is_err());
+        assert!(runtime.join(JOURNAL).exists());
+        assert!(backup_path(&runtime, &journal).unwrap().exists());
+        cleanup_committed_backups(&runtime);
+        assert_eq!(std::fs::read(&marker).unwrap(), b"unrelated");
+        std::fs::remove_file(marker).unwrap();
+
+        recover(&runtime).unwrap();
+        assert_eq!(
+            std::fs::read(runtime.join("GeoSite.dat")).unwrap(),
+            b"old-data"
+        );
+        assert!(verify_geo(&runtime).is_ok());
     }
     #[test]
     fn corrupted_download_cannot_replace_existing_data() {

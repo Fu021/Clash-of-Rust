@@ -274,7 +274,9 @@ impl Session {
                     json!({"op":"reload","config":raw,"ipv6":effective_ipv6(&self.settings)}),
                 )?;
             }
-            core::geodata::record_install(&runtime)
+            let manifest = core::geodata::record_install(&runtime)?;
+            core::geodata::commit(&runtime)?;
+            Ok::<_, anyhow::Error>(manifest)
         })();
         let manifest = match result {
             Ok(manifest) => manifest,
@@ -288,7 +290,6 @@ impl Session {
                 return Err(error.context("Geo 更新失败，已恢复旧数据"));
             }
         };
-        core::geodata::commit(&runtime)?;
         Ok(manifest)
     }
     pub fn commit_settings(&mut self, mut settings: Settings) -> Result<()> {

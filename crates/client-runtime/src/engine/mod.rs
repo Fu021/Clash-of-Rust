@@ -1759,7 +1759,9 @@ impl Engine {
             if let Some(state) = &state {
                 self.resume(state).await?;
             }
-            assets::record_install(&runtime)
+            let manifest = assets::record_install(&runtime)?;
+            assets::commit(&runtime)?;
+            Ok::<_, anyhow::Error>(manifest)
         }
         .await;
         let manifest = match result {
@@ -1778,7 +1780,6 @@ impl Engine {
                 return Err(error.context("Geo 更新失败，已恢复旧数据"));
             }
         };
-        assets::commit(&runtime)?;
         self.geo_manifest = manifest;
         self.invalidate_views();
         append(&self.logs, "[客户端] 全部 Geo 数据更新完成并通过校验");
