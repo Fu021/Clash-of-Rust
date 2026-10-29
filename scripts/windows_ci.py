@@ -515,23 +515,38 @@ def update_signatures(timeout=300):
         time.sleep(delay)
 
 
-def scan_windows_files(files):
-    files = [path.resolve(strict=True) for path in files]
-    if not files or any(not path.is_file() or path.suffix.lower() not in ('.exe', '.dll') for path in files):
-        raise ValueError('Expected Windows .exe or .dll files')
-    command = update_signatures()
-    print('Windows Defender:', command, flush=True)
-    status = subprocess.run([
+def defender_versions():
+    command = [
         'powershell.exe', '-NoProfile', '-NonInteractive', '-Command',
         "$ErrorActionPreference = 'Stop'; Get-MpComputerStatus | "
         'Select-Object AMEngineVersion, AMProductVersion, AntivirusSignatureVersion | ConvertTo-Json -Compress',
-    ], check=True, capture_output=True, text=True, encoding='utf-8', timeout=60)
+    ]
+    for attempt in range(2):
+        try:
+            status = subprocess.run(command, check=True, capture_output=True,
+                                    text=True, encoding='utf-8', timeout=120)
+            break
+        except subprocess.TimeoutExpired:
+            if attempt:
+                raise
+            print('Defender status timed out; retrying once', flush=True)
+            time.sleep(5)
     versions = json.loads(status.stdout)
     if not isinstance(versions, dict) or any(
         not versions.get(field)
         for field in ('AMEngineVersion', 'AMProductVersion', 'AntivirusSignatureVersion')
     ):
         raise RuntimeError('Windows Defender version information is unavailable')
+    return versions
+
+
+def scan_windows_files(files):
+    files = [path.resolve(strict=True) for path in files]
+    if not files or any(not path.is_file() or path.suffix.lower() not in ('.exe', '.dll') for path in files):
+        raise ValueError('Expected Windows .exe or .dll files')
+    command = update_signatures()
+    print('Windows Defender:', command, flush=True)
+    versions = defender_versions()
     print('Windows Defender versions:', json.dumps(versions, sort_keys=True), flush=True)
     records = []
     for path in files:

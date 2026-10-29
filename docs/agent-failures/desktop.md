@@ -17,7 +17,7 @@
 
 **用户目录与无显示环境：** `sudo cor` 应在解析用户配置前降权并复用原用户后台；直接 root 保留独立目录。跨用户总览只读索引，不启动后台。polkit 的 SSH/非活动会话仍需 `auth_admin`，只授权固定安装助手；不能让用户 YAML 在 root 后台运行。回归需覆盖两用户同名订阅、环境白名单与管理员凭据隔离、sudo/指定用户操作、stdin/原样参数、文件 UID、后台复用、前台信号及退出恢复，见[用户与授权](../cli/linux-users.md)。Wayland compositor 错误来自桌面入口，服务器使用 `cor`，不通过为 root 配置显示服务器规避。
 
-**安装后 GUI 验证：** `sudo -u` 不创建 logind 登录会话，图形 polkit 代理会因 `No session for pid` 注册失败。测试使用隔离的临时 PAM 登录会话，并验证进程确属该会话；继续检查真实授权的取消与接受，不注入批准规则。证据：[不发布打包 40801455733](https://github.com/Fu021/Clash-of-Rust/actions/runs/40801455733)。
+**安装后 GUI 验证：** `sudo -u` 不创建 logind 登录会话，图形 polkit 代理会因 `No session for pid` 注册失败。测试使用隔离的临时 PAM 登录会话，验证进程归属、真实授权的取消与接受，并隔离用户和 D-Bus 配置；不注入批准规则。GNOME 42 的 `--unsafe-mode` 是隐藏选项，不能仅凭 `--help` 判断；旧版需启用 `development-tools`，窗口结果也只能编码一次。证据：[打包 40801455733](https://github.com/Fu021/Clash-of-Rust/actions/runs/40801455733)、[40805841630](https://github.com/Fu021/Clash-of-Rust/actions/runs/40805841630)。
 
 **典型症状**
 
@@ -107,5 +107,5 @@
 
 - 不使用管理员权限掩盖普通用户失败；需要提权时只通过正式服务/安装入口。
 - 对首次授权、拒绝、重复安装、升级、卸载、文件占用和 Defender 忙重试保留回归测试。
-- Defender 同时扫描最终安装包与已验证 CI payload 中的全部 EXE/DLL，记录引擎、平台、检测库版本及逐文件哈希；命中威胁、扫描失败或文件变化时拒绝上传。只扫描压缩安装器不足以核对用户报告的主程序告警，历史成功也不能证明当前文件为误报；排查与提交见 [Defender 告警](../workflows/release.md#windows-defender-告警)。
+- Defender 同时扫描最终安装包与已验证 CI payload 中的全部 EXE/DLL，记录引擎、平台、检测库版本及逐文件哈希；命中威胁、扫描失败或文件变化时拒绝上传。状态查询超时可有限重试，不能跳过版本证据或文件扫描；ARM64 曾在[打包 40805841630](https://github.com/Fu021/Clash-of-Rust/actions/runs/40805841630)超时。只扫描压缩安装器不足以核对用户报告的主程序告警，历史成功也不能证明当前文件为误报；排查与提交见 [Defender 告警](../workflows/release.md#windows-defender-告警)。
 - 清理只删除本次 fixture，不触碰用户已有安装或网络配置。

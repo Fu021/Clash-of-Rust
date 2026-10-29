@@ -70,6 +70,8 @@ class BuildTests(unittest.TestCase):
         import linux_gui
 
         environment = {'XDG_SESSION_ID': 'c12', 'XDG_RUNTIME_DIR': '/run/user/1234',
+                       'HOME': '/home/runner', 'XDG_CONFIG_HOME': '/home/runner/.config',
+                       'COR_GUI_REPORT': '/tmp/disposable/report',
                        'COR_GUI_AUTH_PASSWORD_FILE': '/tmp/disposable/password',
                        'GITHUB_ACTIONS': 'true', 'GITHUB_TOKEN': 'secret',
                        'AWS_SECRET_ACCESS_KEY': 'secret'}
@@ -80,6 +82,8 @@ class BuildTests(unittest.TestCase):
         self.assertIn('--session', command)
         self.assertEqual(retained['XDG_SESSION_ID'], 'c12')
         self.assertEqual(retained['XDG_RUNTIME_DIR'], '/run/user/1234')
+        self.assertEqual(retained['HOME'], str(Path('/tmp/disposable/home')))
+        self.assertEqual(retained['XDG_CONFIG_HOME'], str(Path('/tmp/disposable/home/.config')))
         self.assertEqual(retained['COR_GUI_AUTH_PASSWORD_FILE'], '/tmp/disposable/password')
         self.assertNotIn('GITHUB_TOKEN', retained)
         self.assertNotIn('AWS_SECRET_ACCESS_KEY', retained)
@@ -1366,6 +1370,31 @@ assert.equal(calls.length,2);
                 with self.assertRaisesRegex(RuntimeError, 'version information'):
                     windows.scan_windows_files([path])
                 self.assertEqual(execute.call_count, 1)
+
+    def test_defender_status_timeout_retries_but_never_skips_the_scan(self):
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory)/'program.exe'
+            path.write_bytes(b'fixture')
+            versions = {'AMEngineVersion': '1.1.1', 'AMProductVersion': '4.18.1',
+                        'AntivirusSignatureVersion': '1.2.3'}
+            timeout = subprocess.TimeoutExpired(['powershell.exe'], 120)
+            with patch.object(windows, 'update_signatures', return_value=Path('MpCmdRun.exe')), \
+                 patch.object(windows.time, 'sleep') as delay, \
+                 patch.object(windows.subprocess, 'run', side_effect=[
+                     timeout, subprocess.CompletedProcess([], 0, json.dumps(versions)),
+                     subprocess.CompletedProcess([], 0),
+                 ]) as execute:
+                report = windows.scan_windows_files([path])
+                self.assertEqual(report['versions'], versions)
+                self.assertEqual(execute.call_count, 3)
+                self.assertIn('-Scan', execute.call_args.args[0])
+                delay.assert_called_once_with(5)
+            with patch.object(windows, 'update_signatures', return_value=Path('MpCmdRun.exe')), \
+                 patch.object(windows.time, 'sleep'), \
+                 patch.object(windows.subprocess, 'run', side_effect=timeout) as execute:
+                with self.assertRaises(subprocess.TimeoutExpired):
+                    windows.scan_windows_files([path])
+                self.assertEqual(execute.call_count, 2)
 
     def test_windows_package_scans_payload_before_installing(self):
         with tempfile.TemporaryDirectory() as directory:

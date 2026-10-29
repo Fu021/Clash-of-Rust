@@ -119,10 +119,10 @@ def notifier():
 
 
 def window_script():
-    return ('JSON.stringify(global.get_window_actors().map(a=>a.meta_window)'
-            '.filter(w=>w.get_title().indexOf("Clash of Rust")>=0)'
+    return ('global.get_window_actors().map(a=>a.meta_window)'
+            '.filter(w=>w && (w.get_title()||"").indexOf("Clash of Rust")>=0)'
             '.map(w=>{let r=w.get_frame_rect(); return {pid:w.get_pid(),'
-            'title:w.get_title(),width:r.width,height:r.height};}))')
+            'title:w.get_title(),width:r.width,height:r.height};})')
 
 
 def inspect(backend):
@@ -205,7 +205,7 @@ def gui(backend, report):
                 os.kill(renderers[0], signal.SIGKILL)
             elif backend == 'wayland':
                 evaluate('global.get_window_actors().map(a=>a.meta_window)'
-                         '.filter(w=>w.get_title().indexOf("Clash of Rust")>=0)'
+                         '.filter(w=>w && (w.get_title()||"").indexOf("Clash of Rust")>=0)'
                          '.forEach(w=>w.delete(global.get_current_time())); ""')
             else:
                 run(['wmctrl', '-ic', windows[0]['id']])
@@ -252,17 +252,34 @@ def session():
             wait_for('X11 display did not start',
                      lambda: subprocess.run(['xdpyinfo'], stdout=subprocess.DEVNULL,
                                             stderr=subprocess.DEVNULL).returncode == 0)
+            run(['dbus-update-activation-environment', '--systemd', 'DBUS_SESSION_BUS_ADDRESS',
+                 'DISPLAY', 'HOME', 'XDG_CONFIG_HOME', 'XDG_DATA_HOME', 'XDG_CACHE_HOME',
+                 'XDG_CURRENT_DESKTOP'])
             stack.enter_context(process(['openbox'], log))
             result['checks']['authorization'] = authentication()
             run(['gsettings', 'set', 'org.gnome.shell', 'enabled-extensions',
                  "['ubuntu-appindicators@ubuntu.com']"])
+            if 'ubuntu-appindicators@ubuntu.com' not in output(
+                    ['gsettings', 'get', 'org.gnome.shell', 'enabled-extensions']):
+                raise RuntimeError('GNOME test extension setting did not persist')
+            import re
+            version = re.search(r'\b(\d+)\.\d+', output(['gnome-shell', '--version']))
+            if not version:
+                raise RuntimeError('Could not determine the GNOME Shell version')
+            major = int(version[1])
+            if major < 41:
+                run(['gsettings', 'set', 'org.gnome.shell', 'development-tools', 'true'])
+                if output(['gsettings', 'get', 'org.gnome.shell', 'development-tools']) != 'true':
+                    raise RuntimeError('GNOME development tools setting did not persist')
             help_text = output(['gnome-shell', '--help'])
             command = ['gnome-shell', '--wayland', '--wayland-display=cor-wayland']
             if '--headless' in help_text:
                 command.extend(['--headless', '--virtual-monitor=1280x900'])
             else:
                 command.append('--nested')
-            if '--unsafe-mode' in help_text:
+            # Mutter hides this supported option from --help; GNOME 3.x uses
+            # the development-tools setting for its equivalent test API.
+            if major >= 41:
                 command.append('--unsafe-mode')
             shell = stack.enter_context(process(command, log))
             os.environ['WAYLAND_DISPLAY'] = 'cor-wayland'
@@ -270,7 +287,7 @@ def session():
                 if shell.poll() is not None or display.poll() is not None:
                     raise RuntimeError('Desktop compositor exited')
                 try:
-                    return evaluate('JSON.stringify(true)')
+                    return evaluate('true')
                 except (subprocess.SubprocessError, ValueError, RuntimeError):
                     return False
             wait_for('GNOME Wayland compositor did not become ready', ready, timeout=60)
@@ -315,6 +332,9 @@ def launch_session():
                'COR_GUI_REPORT', 'COR_GUI_AUTH_PASSWORD_FILE', 'PYTHONDONTWRITEBYTECODE',
                'GITHUB_ACTIONS', 'NO_AT_BRIDGE')
     env = {key: os.environ[key] for key in allowed if key in os.environ}
+    home = Path(env['COR_GUI_REPORT']).parent/'home'
+    env.update(HOME=str(home), XDG_CONFIG_HOME=str(home/'.config'),
+               XDG_DATA_HOME=str(home/'.local/share'), XDG_CACHE_HOME=str(home/'.cache'))
     command = ['/usr/bin/dbus-run-session', '--', sys.executable, '-E', '-s', '-B',
                str(Path(__file__).resolve()), '--session']
     os.execve(command[0], command, env)
