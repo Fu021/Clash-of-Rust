@@ -581,6 +581,9 @@ impl Engine {
 
     /// Restore the saved network mode as part of starting the shared owner.
     pub async fn start_with_proxy_mode(&mut self) -> Result<()> {
+        if self.is_remote() {
+            return self.start().await;
+        }
         #[cfg(target_os = "macos")]
         let mut opened_mac_session = false;
         let started = async {

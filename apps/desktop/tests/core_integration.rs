@@ -762,6 +762,17 @@ async fn basic_system_proxy_and_tun() {
         let meta: Meta = remote.request(Control::Meta).await.unwrap();
         assert!(meta.running);
         assert_eq!(meta.settings.proxy_mode, mode);
+        if mode == ProxyMode::Tun {
+            facade.poll(Scope::Other).await.unwrap();
+            facade.stop().await.unwrap();
+            assert!(!facade.running());
+            assert_eq!(facade.settings.proxy_mode, ProxyMode::Tun);
+            facade.start_with_proxy_mode().await.unwrap();
+            assert!(facade.is_remote() && facade.running());
+            let state = facade.poll(Scope::Home).await.unwrap();
+            assert!(state.running && state.tun);
+            println!("PASS: an attached GUI delegates saved TUN recovery to its owner");
+        }
         if mode == ProxyMode::System {
             engine.lock().await.system_proxy(false).await.unwrap();
             let meta: Meta = remote.request(Control::Meta).await.unwrap();
