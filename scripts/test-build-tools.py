@@ -20,6 +20,7 @@ import os
 import copy
 import importlib.util
 import io
+import sys
 import urllib.error
 import urllib.parse
 import zipfile
@@ -37,6 +38,34 @@ _memory_spec.loader.exec_module(memory_benchmark)
 
 
 class BuildTests(unittest.TestCase):
+    def test_linux_gui_session_is_staged_outside_a_private_workspace(self):
+        import linux_gui
+
+        with tempfile.TemporaryDirectory() as temporary:
+            directory = Path(temporary)
+            directory.chmod(0o755)
+            staged = linux_gui.stage_session(directory)
+            self.assertEqual(staged.stat().st_mode & 0o777, 0o644)
+            self.assertEqual(staged.parent.stat().st_mode & 0o777, 0o755)
+            resolved_root = subprocess.check_output(
+                [sys.executable, '-B', '-c', 'import build_support; print(build_support.ROOT)'],
+                cwd=staged.parent, text=True).strip()
+            self.assertEqual(Path(resolved_root), directory)
+
+            report = directory/'report'
+            report.mkdir()
+            (report/'gui.json').write_text('{"status":"failed"}')
+            (report/'desktop.log').write_text('diagnostic')
+            (report/'local.yaml').write_text('private fixture')
+            (report/'x11.log').symlink_to(report/'local.yaml')
+            with patch.object(linux_gui, 'REPORT', directory/'saved'):
+                linux_gui.preserve_report(report)
+            saved = directory/'saved/desktop'
+            self.assertEqual((saved/'gui.json').read_text(), '{"status":"failed"}')
+            self.assertEqual((saved/'desktop.log').read_text(), 'diagnostic')
+            self.assertFalse((saved/'local.yaml').exists())
+            self.assertFalse((saved/'x11.log').exists())
+
     def test_memory_mapping_categories_do_not_keep_addresses_or_paths(self):
         text = """1000-2000 rw-p 0 00:00 0
 Rss: 8 kB

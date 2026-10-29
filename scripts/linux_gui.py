@@ -10,6 +10,7 @@ import json
 import os
 from pathlib import Path
 import secrets
+import shutil
 import signal
 import subprocess
 import sys
@@ -273,6 +274,26 @@ def session():
         write_json(report/'gui.json', result)
 
 
+def stage_session(directory):
+    scripts = directory/'scripts'
+    scripts.mkdir(mode=0o755)
+    scripts.chmod(0o755)
+    for name in ('linux_gui.py', 'build_support.py'):
+        target = scripts/name
+        shutil.copyfile(Path(__file__).resolve().parent/name, target)
+        target.chmod(0o644)
+    return scripts/'linux_gui.py'
+
+
+def preserve_report(source):
+    destination = REPORT/'desktop'
+    destination.mkdir(parents=True, exist_ok=True)
+    for name in ('gui.json', 'authentication.log', 'desktop.log', 'x11.log', 'wayland.log'):
+        path = source/name
+        if path.is_file() and not path.is_symlink():
+            shutil.copyfile(path, destination/name)
+
+
 def installed_tests():
     from linux_ci import require_actions
     require_actions()
@@ -282,13 +303,14 @@ def installed_tests():
     with tempfile.TemporaryDirectory(prefix='cor-desktop-') as temporary:
         home = Path(temporary)
         home.chmod(0o755)
+        script = stage_session(home)
+        report = home/'report'
         created = False
         try:
             run(['sudo', 'useradd', '--create-home', '--groups', 'sudo',
                  '--home-dir', home/'home', '--shell', '/bin/bash', user])
             created = True
             run(['sudo', 'chpasswd'], input=user+':'+password+'\n', text=True)
-            report = REPORT/'desktop'
             run(['sudo', 'install', '-d', '-m', '0755', '-o', user, '-g', user, report])
             runtime = home/'runtime'
             run(['sudo', 'install', '-d', '-m', '0700', '-o', user, '-g', user, runtime])
@@ -302,11 +324,14 @@ def installed_tests():
             # Clear the environment: neither the guest nor GUI sees Actions tokens.
             run(['sudo', '-u', user, 'env', '-i',
                  *(key+'='+value for key, value in env.items()),
-                 'dbus-run-session', '--', sys.executable, __file__, '--session'], timeout=360)
+                 'dbus-run-session', '--', sys.executable, script, '--session'], timeout=360)
         finally:
             if created:
                 subprocess.run(['sudo', 'pkill', '-KILL', '-u', user], check=False)
                 subprocess.run(['sudo', 'userdel', '--remove', user], check=False)
+            run(['sudo', 'chown', '-R', '-h', f'{os.getuid()}:{os.getgid()}', home])
+            if report.is_dir():
+                preserve_report(report)
 
 
 if __name__ == '__main__':
