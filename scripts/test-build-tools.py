@@ -82,6 +82,40 @@ class BuildTests(unittest.TestCase):
             with self.assertRaisesRegex(RuntimeError, r'wayland.*800x450.*640.*300'):
                 linux_gui.wait_for_usable_window('wayland', lambda: small, timeout=1)
 
+    def test_linux_gui_matches_native_wayland_windows_on_old_and_new_gnome(self):
+        import linux_gui
+
+        legacy = {'pid': -1, 'sequence': 1, 'wayland': True}
+        legacy_zero = {'pid': 0, 'sequence': 5, 'wayland': True}
+        modern = {'pid': 42, 'sequence': 2, 'wayland': True}
+        foreign = {'pid': 99, 'sequence': 3, 'wayland': True}
+        xwayland = {'pid': -1, 'sequence': 4, 'wayland': False}
+        self.assertEqual(linux_gui.select_wayland_windows([legacy], [42]), [legacy])
+        self.assertEqual(linux_gui.select_wayland_windows([legacy_zero], [42]), [legacy_zero])
+        self.assertEqual(linux_gui.select_wayland_windows([modern, foreign], [42]), [modern])
+        self.assertEqual(linux_gui.select_wayland_windows([foreign], [42]), [])
+        self.assertEqual(linux_gui.select_wayland_windows([xwayland], [42]), [])
+        self.assertEqual(linux_gui.select_wayland_windows([legacy], []), [])
+        self.assertEqual(linux_gui.select_wayland_windows([legacy], [42, 43]), [])
+        self.assertEqual(linux_gui.select_wayland_windows([legacy, xwayland], [42]), [])
+
+    def test_linux_gui_retries_only_missing_authorization_agent(self):
+        import linux_gui
+
+        request = MagicMock()
+        agent = MagicMock()
+        agent.poll.return_value = None
+        request.poll.return_value = 1
+        self.assertEqual(
+            linux_gui.authorization_dialog(request, agent, io.StringIO(
+                'Error executing command as another user: No authentication agent found.\n')),
+            ('retry', None))
+        with self.assertRaisesRegex(RuntimeError, 'denied'):
+            linux_gui.authorization_dialog(request, agent, io.StringIO('authorization denied'))
+        agent.poll.return_value = 1
+        with self.assertRaisesRegex(RuntimeError, 'agent exited'):
+            linux_gui.authorization_dialog(request, agent, io.StringIO(''))
+
     def test_linux_gui_finds_authorized_core_without_reading_exe_link(self):
         import linux_gui
 

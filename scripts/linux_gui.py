@@ -67,6 +67,25 @@ def process(command, log, env=None):
             child.wait(timeout=5)
 
 
+def authorization_dialog(request, agent, request_log):
+    if agent.poll() is not None:
+        raise RuntimeError('Graphical polkit agent exited before authorization')
+    code = request.poll()
+    if code is not None:
+        request_log.flush()
+        request_log.seek(0)
+        text = request_log.read()
+        if 'No authentication agent found' in text:
+            return 'retry', None
+        raise RuntimeError(f'Authorization request exited before the dialog: {code}: {text.strip()}')
+    found = subprocess.run(['xdotool', 'search', '--onlyvisible', '--name',
+                            'Authentication|Authenticate'],
+                           capture_output=True, text=True)
+    if found.returncode == 0 and found.stdout.strip():
+        return 'dialog', found.stdout.splitlines()[0]
+    return None
+
+
 def authentication():
     helper = APP/'clash-of-rust'
     launcher = APP/'clash-tun-launcher'
@@ -75,34 +94,45 @@ def authentication():
     agent = '/usr/lib/policykit-1-gnome/polkit-gnome-authentication-agent-1'
     with (Path(os.environ['COR_GUI_REPORT'])/'authentication.log').open('w') as log:
         with process([agent], log) as registered:
-            time.sleep(1)
-            if registered.poll() is not None:
-                raise RuntimeError('Graphical polkit agent did not register')
             for allow in (False, True):
-                with process(['pkexec', '--disable-internal-agent', helper, '--authorize-tun'], log) as request:
-                    def dialog():
-                        found = subprocess.run(['xdotool', 'search', '--onlyvisible', '--name',
-                                                'Authentication|Authenticate'],
-                                               capture_output=True, text=True)
-                        return found.stdout.splitlines()[0] if found.returncode == 0 and found.stdout.strip() else None
-                    window = wait_for('Production authorization did not show a graphical dialog', dialog)
-                    run(['xdotool', 'windowactivate', '--sync', window])
-                    if allow:
-                        password = Path(os.environ['COR_GUI_AUTH_PASSWORD_FILE']).read_text()
-                        typed = subprocess.run(['xdotool', 'type', '--clearmodifiers', '--delay', '10',
-                                                '--', password], stdout=subprocess.DEVNULL, stderr=log)
-                        if typed.returncode:
-                            raise RuntimeError('Could not enter the disposable account password')
-                        run(['xdotool', 'key', 'Return'])
-                    else:
-                        run(['xdotool', 'key', 'Escape'])
-                    code = request.wait(timeout=30)
-                    if allow:
-                        if (code or 'cap_net_admin,cap_net_raw' not in output(['getcap', launcher])
-                                or dns_helper.stat().st_mode & 0o7777 != 0o4755):
-                            raise RuntimeError('Accepted graphical authorization did not grant the installed helper')
-                    elif code == 0 or (output(['getcap', launcher]), dns_helper.stat().st_mode & 0o7777) != before:
-                        raise RuntimeError('Cancelled graphical authorization changed network permissions')
+                deadline = time.monotonic()+90
+                while True:
+                    remaining = deadline-time.monotonic()
+                    if remaining <= 0:
+                        raise TimeoutError('Production authorization did not show a graphical dialog')
+                    with tempfile.TemporaryFile(mode='w+t', encoding='utf-8') as request_log:
+                        try:
+                            with process(['pkexec', '--disable-internal-agent', helper, '--authorize-tun'],
+                                         request_log) as request:
+                                state, window = wait_for(
+                                    'Production authorization did not show a graphical dialog',
+                                    lambda: authorization_dialog(request, registered, request_log),
+                                    timeout=remaining)
+                                if state == 'retry':
+                                    time.sleep(1)
+                                    continue
+                                run(['xdotool', 'windowactivate', '--sync', window])
+                                if allow:
+                                    password = Path(os.environ['COR_GUI_AUTH_PASSWORD_FILE']).read_text()
+                                    typed = subprocess.run(['xdotool', 'type', '--clearmodifiers', '--delay', '10',
+                                                            '--', password], stdout=subprocess.DEVNULL, stderr=log)
+                                    if typed.returncode:
+                                        raise RuntimeError('Could not enter the disposable account password')
+                                    run(['xdotool', 'key', 'Return'])
+                                else:
+                                    run(['xdotool', 'key', 'Escape'])
+                                code = request.wait(timeout=30)
+                                if allow:
+                                    if (code or 'cap_net_admin,cap_net_raw' not in output(['getcap', launcher])
+                                            or dns_helper.stat().st_mode & 0o7777 != 0o4755):
+                                        raise RuntimeError('Accepted graphical authorization did not grant the installed helper')
+                                elif code == 0 or (output(['getcap', launcher]), dns_helper.stat().st_mode & 0o7777) != before:
+                                    raise RuntimeError('Cancelled graphical authorization changed network permissions')
+                                break
+                        finally:
+                            request_log.seek(0)
+                            log.write(request_log.read())
+                            log.flush()
     return {'cancel_preserved_permissions': True, 'accept_granted_helper': True,
             'production_action': ACTION, 'graphical_agent': True}
 
@@ -122,7 +152,22 @@ def window_script():
     return ('global.get_window_actors().map(a=>a.meta_window)'
             '.filter(w=>w && (w.get_title()||"").indexOf("Clash of Rust")>=0)'
             '.map(w=>{let r=w.get_frame_rect(); return {pid:w.get_pid(),'
+            'sequence:w.get_stable_sequence(),'
+            'wayland:w.get_client_type()===imports.gi.Meta.WindowClientType.WAYLAND,'
             'title:w.get_title(),width:r.width,height:r.height};})')
+
+
+def select_wayland_windows(windows, renderers):
+    native = [window for window in windows if window['wayland']]
+    owned = [window for window in native if window['pid'] in renderers]
+    if owned:
+        return owned
+    # GNOME 3.36 exposes get_pid(), but it does not return a Wayland client
+    # PID. This session is isolated: accept only one window and one renderer.
+    if (len(windows) == len(native) == len(renderers) == 1
+            and native[0]['pid'] <= 0):
+        return native
+    return []
 
 
 def inspect(backend):
@@ -216,15 +261,28 @@ def gui(backend, report):
     fixture = report/'local.yaml'
     fixture.write_text("proxies: []\nproxy-groups: []\nrules: ['MATCH,DIRECT']\n")
     with (report/(backend+'.log')).open('w') as log, process([APP/'clash-of-rust'], log, env) as owner:
+        observed = []
+        renderer_pids = []
+
         def visible():
+            nonlocal observed, renderer_pids
             if owner.poll() is not None:
                 raise RuntimeError(f'Installed {backend} GUI owner exited: {owner.returncode}')
             windows = inspect(backend)
             if backend == 'wayland':
-                windows = [window for window in windows
-                           if _renderer(Path('/proc')/str(window['pid']), owner.pid)]
+                observed = windows
+                renderer_pids = [int(path.name) for path in Path('/proc').glob('[0-9]*')
+                                 if _renderer(path, owner.pid)]
+                windows = select_wayland_windows(windows, renderer_pids)
             return windows
-        windows = wait_for_usable_window(backend, visible)
+        try:
+            windows = wait_for_usable_window(backend, visible)
+        except RuntimeError as error:
+            if backend == 'wayland':
+                raise RuntimeError(f'{error}; compositor windows: {observed}; '
+                                   f'renderer PIDs: {renderer_pids}; '
+                                   f'WAYLAND_DISPLAY={env.get("WAYLAND_DISPLAY")}') from error
+            raise
         if any(window['title'] != 'Clash of Rust' for window in windows):
             raise RuntimeError(f'Unexpected {backend} window title: {windows}')
         def gui_owner_ready():
@@ -268,7 +326,7 @@ def gui(backend, report):
                 os.kill(renderers[0], signal.SIGKILL)
             elif backend == 'wayland':
                 evaluate('global.get_window_actors().map(a=>a.meta_window)'
-                         f'.filter(w=>w && w.get_pid()==={renderers[0]}'
+                         f'.filter(w=>w && w.get_stable_sequence()==={windows[0]["sequence"]}'
                          ' && (w.get_title()||"").indexOf("Clash of Rust")>=0)'
                          '.forEach(w=>w.delete(global.get_current_time())); ""')
             else:
