@@ -4,6 +4,37 @@ use clash_client_ui::{AppWindow, Intent, UiActions, UiData, models::ViewModels};
 use slint::{ComponentHandle, Model};
 
 #[test]
+fn closing_a_foreground_window_while_the_tray_starts_waits_before_exiting() {
+    let mut app = fixture(Page::Home);
+    app.visible = true;
+    app.tray_startup = Some(tray::Startup::new(Duration::from_millis(1)));
+    let id = runtime::window::Id::unique();
+
+    let _ = app.update(Message::Window((
+        id,
+        runtime::window::Event::CloseRequested,
+    )));
+    assert!(app.visible);
+    assert!(!app.exiting);
+    assert_eq!(app.tray_close_requested, Some(id));
+    assert!(app.notice_visible);
+
+    let _ = app.update(Message::ShowWindow(Some(id)));
+    assert!(app.tray_close_requested.is_none());
+    let _ = app.update(Message::Window((
+        id,
+        runtime::window::Event::CloseRequested,
+    )));
+    assert_eq!(app.tray_close_requested, Some(id));
+    let _ = app.update(Message::Window((
+        id,
+        runtime::window::Event::CloseRequested,
+    )));
+    assert!(app.exiting);
+    assert!(app.tray_close_requested.is_none());
+}
+
+#[test]
 fn dropping_rules_uses_identities_in_the_full_draft_and_ignores_stale_rows() {
     let mut app = fixture(Page::Rules);
     let document = rule_manager::Document::from_raw(

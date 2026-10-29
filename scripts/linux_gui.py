@@ -177,11 +177,24 @@ def gui(backend, report):
     with (report/(backend+'.log')).open('w') as log, process([APP/'clash-of-rust'], log, env) as owner:
         def visible():
             if owner.poll() is not None:
-                raise RuntimeError('Installed GUI owner exited')
-            return inspect(backend)
+                raise RuntimeError(f'Installed {backend} GUI owner exited: {owner.returncode}')
+            windows = inspect(backend)
+            if backend == 'wayland':
+                windows = [window for window in windows
+                           if _renderer(Path('/proc')/str(window['pid']), owner.pid)]
+            return windows
         windows = wait_for('Installed '+backend+' GUI did not show a window', visible)
         if not any(window['width'] >= 800 and window['height'] >= 450 for window in windows):
             raise RuntimeError('Installed GUI window is smaller than the supported minimum')
+        def gui_owner_ready():
+            try:
+                endpoint = json.loads((data/'control.json').read_text())
+                return (isinstance(endpoint, dict)
+                        and endpoint.get('owner') == 'gui' and endpoint.get('pid') == owner.pid)
+            except (OSError, ValueError):
+                return False
+        # A visible window can precede asynchronous engine initialization.
+        wait_for('GUI control endpoint did not become ready', gui_owner_ready)
         cli('profile', 'add', 'GUI fixture', str(fixture))
         cli('start')
         cli('mode', 'global')
@@ -214,13 +227,15 @@ def gui(backend, report):
                 os.kill(renderers[0], signal.SIGKILL)
             elif backend == 'wayland':
                 evaluate('global.get_window_actors().map(a=>a.meta_window)'
-                         '.filter(w=>w && (w.get_title()||"").indexOf("Clash of Rust")>=0)'
+                         f'.filter(w=>w && w.get_pid()==={renderers[0]}'
+                         ' && (w.get_title()||"").indexOf("Clash of Rust")>=0)'
                          '.forEach(w=>w.delete(global.get_current_time())); ""')
             else:
                 run(['wmctrl', '-ic', windows[0]['id']])
             wait_for('Closed renderer survived', lambda: not Path('/proc/'+str(renderers[0])).exists())
             if owner.poll() is not None:
-                raise RuntimeError('Closing the window terminated its owner')
+                raise RuntimeError(f'{backend} {"crash" if crash else "close"} terminated '
+                                   f'the GUI owner: {owner.returncode}')
             dbus(item[0], item[1], 'org.kde.StatusNotifierItem.Activate', '0', '0')
             windows = wait_for('Tray activation did not reopen the GUI', visible)
             after = cli('status')

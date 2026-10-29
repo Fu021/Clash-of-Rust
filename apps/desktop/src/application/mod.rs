@@ -315,7 +315,7 @@ struct App {
     periodic_aborter: Option<AbortHandle>,
     tray: Option<tray::Guard>,
     tray_startup: Option<tray::Startup>,
-    tray_close_requested: bool,
+    tray_close_requested: Option<desktop_runtime::window::Id>,
     #[cfg(target_os = "macos")]
     mac_reopen_ready: bool,
     site_queue: VecDeque<String>,
@@ -527,7 +527,7 @@ impl App {
             periodic_aborter: None,
             tray,
             tray_startup,
-            tray_close_requested: false,
+            tray_close_requested: None,
             #[cfg(target_os = "macos")]
             mac_reopen_ready: false,
             site_queue: VecDeque::new(),
@@ -1722,11 +1722,13 @@ impl App {
                 }
             }
             Message::ShowWindow(Some(id)) => {
+                self.tray_close_requested = None;
                 self.visible = true;
                 let refresh = self.dispatch(Action::Refresh);
                 return Task::batch([desktop_runtime::window::show(id), refresh]);
             }
             Message::ShowWindow(None) => {
+                self.tray_close_requested = None;
                 return self.open_window();
             }
             #[cfg(target_os = "linux")]
@@ -1743,9 +1745,15 @@ impl App {
                                 tray.update(&self.snapshot);
                                 tray.speed(&self.snapshot, self.settings.tray_speed);
                                 self.tray = Some(tray);
-                                self.tray_close_requested = false;
+                                if let Some(id) = self.tray_close_requested.take() {
+                                    return self.update(Message::Window((
+                                        id,
+                                        desktop_runtime::window::Event::CloseRequested,
+                                    )));
+                                }
                             }
                             Err(error) => {
+                                self.tray_close_requested = None;
                                 self.show_notice(tray_unavailable(&error), true);
                                 if !self.visible {
                                     return desktop_runtime::window::latest()
@@ -2156,14 +2164,15 @@ impl App {
                     let stop_stream = self.dispatch_scope(Action::Refresh, Scope::Other);
                     return Task::batch([desktop_runtime::window::destroy(id), stop_stream]);
                 }
-                if background_start() && self.tray_startup.is_some() && !self.tray_close_requested {
-                    self.tray_close_requested = true;
+                if self.tray_startup.is_some() && self.tray_close_requested.is_none() {
+                    self.tray_close_requested = Some(id);
                     self.show_notice(
-                        "桌面托盘正在初始化，请稍候；再次关闭窗口可退出程序。".into(),
+                        "桌面托盘正在初始化，完成后会自动关闭窗口；再次关闭可退出程序。".into(),
                         false,
                     );
                     return Task::none();
                 }
+                self.tray_close_requested = None;
                 return self.request_exit();
             }
             Message::ExitWindowState(captured) => {
