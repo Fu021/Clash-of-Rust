@@ -355,6 +355,45 @@ pub async fn serve(engine: &Arc<Mutex<Engine>>, owner: Owner) -> Result<()> {
 mod tests {
     use super::*;
 
+    #[test]
+    fn older_import_requests_keep_their_original_semantics() {
+        let command: Command = serde_json::from_value(serde_json::json!({
+            "command": "import",
+            "name": "fixture",
+            "source": "https://example.test/sub",
+            "id": "existing"
+        }))
+        .unwrap();
+        assert!(matches!(
+            command,
+            Command::Import {
+                expect_current: false,
+                ..
+            }
+        ));
+
+        #[derive(serde::Deserialize)]
+        #[serde(tag = "command", rename_all = "kebab-case")]
+        enum OlderCommand {
+            Import {
+                name: String,
+                source: String,
+                id: Option<String>,
+            },
+        }
+        let updated = serde_json::to_value(Command::Import {
+            name: "fixture".into(),
+            source: "https://example.test/sub".into(),
+            id: Some("existing".into()),
+            expect_current: true,
+        })
+        .unwrap();
+        let OlderCommand::Import { name, source, id } = serde_json::from_value(updated).unwrap();
+        assert_eq!(name, "fixture");
+        assert_eq!(source, "https://example.test/sub");
+        assert_eq!(id.as_deref(), Some("existing"));
+    }
+
     #[tokio::test]
     async fn disconnected_download_is_signalled_and_allowed_to_finish_cleanup() {
         let listener = TcpListener::bind(("127.0.0.1", 0)).await.unwrap();

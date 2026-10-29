@@ -86,6 +86,9 @@ pub enum Command {
         name: String,
         source: String,
         id: Option<String>,
+        // Older clients omit this field and may intentionally replace the source.
+        #[serde(default)]
+        expect_current: bool,
     },
     EditProfile {
         id: String,

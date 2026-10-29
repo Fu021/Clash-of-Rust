@@ -683,13 +683,24 @@ async fn basic_system_proxy_and_tun() {
     let error = remote
         .request::<serde_json::Value>(Control::Import {
             name: original.name.clone(),
-            source: update_url,
+            source: update_url.clone(),
             id: Some(active.clone()),
+            expect_current: false,
         })
         .await
         .unwrap_err();
     assert!(format!("{error:#}").contains("已保留原配置与运行状态"));
     assert!(!format!("{error:#}").contains("token=secret"));
+    let stale = remote
+        .request::<serde_json::Value>(Control::Import {
+            name: original.name.clone(),
+            source: update_url,
+            id: Some(active.clone()),
+            expect_current: true,
+        })
+        .await
+        .unwrap_err();
+    assert!(format!("{stale:#}").contains("订阅已修改"));
     let after: Meta = remote.request(Control::Meta).await.unwrap();
     assert!(after.running);
     assert_eq!(after.view_revision, before.view_revision);
@@ -709,6 +720,7 @@ async fn basic_system_proxy_and_tun() {
             name: original.name,
             source: original.source,
             id: Some(active.clone()),
+            expect_current: true,
         })
         .await
         .unwrap();

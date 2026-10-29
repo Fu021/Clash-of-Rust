@@ -112,7 +112,8 @@ impl Engine {
         source: String,
         existing: Option<String>,
     ) -> Result<()> {
-        Self::import_cancellable(shared, name, source, existing, None).await
+        let expect_current = existing.is_some();
+        Self::import_cancellable(shared, name, source, existing, expect_current, None).await
     }
 
     pub(crate) async fn import_cancellable(
@@ -120,8 +121,10 @@ impl Engine {
         name: String,
         source: String,
         existing: Option<String>,
+        expect_current: bool,
         disconnected: Option<watch::Receiver<bool>>,
     ) -> Result<()> {
+        ensure!(!expect_current || existing.is_some(), "订阅不存在");
         let remote = shared.lock().await.remote.clone();
         if let Some(remote) = remote {
             let _: Value = remote
@@ -129,19 +132,26 @@ impl Engine {
                     name,
                     source,
                     id: existing,
+                    expect_current,
                 })
                 .await?;
             let mut engine = shared.lock().await;
             return engine.apply_meta(remote.request(ControlCommand::Meta).await?);
         }
         if !(source.starts_with("https://") || source.starts_with("http://")) {
-            return shared.lock().await.import(name, source, existing).await;
+            let mut engine = shared.lock().await;
+            if expect_current {
+                let id = existing.as_deref().context("订阅不存在")?;
+                engine.require_current_import(id, &name, &source)?;
+            }
+            return engine.import(name, source, existing).await;
         }
         Self::import_remote_with(
             shared,
             name,
             source,
             existing,
+            expect_current,
             disconnected,
             |url, port| async move { crate::subscription::download(&url, port).await },
         )
@@ -153,6 +163,7 @@ impl Engine {
         name: String,
         source: String,
         existing: Option<String>,
+        expect_current: bool,
         mut disconnected: Option<watch::Receiver<bool>>,
         download: F,
     ) -> Result<()>
@@ -171,10 +182,9 @@ impl Engine {
                     .iter()
                     .find(|profile| &profile.id == id)
                     .context("订阅不存在")?;
-                ensure!(
-                    profile.name == name && profile.source == source,
-                    "订阅已修改，请刷新后重试"
-                );
+                if expect_current {
+                    engine.require_current_import(id, &name, &source)?;
+                }
                 Some(
                     clash_client_core::subscription::schedule::PendingUpdate::capture(
                         profile.clone(),
@@ -209,6 +219,19 @@ impl Engine {
         engine
             .import_content(name, source, existing, raw, usage)
             .await
+    }
+
+    fn require_current_import(&self, id: &str, name: &str, source: &str) -> Result<()> {
+        let profile = self
+            .profiles
+            .iter()
+            .find(|profile| profile.id == id)
+            .context("订阅不存在")?;
+        ensure!(
+            profile.name == name && profile.source == source,
+            "订阅已修改，请刷新后重试"
+        );
+        Ok(())
     }
 
     /// The owner lock covers only preparation and installation, never downloads.
@@ -396,6 +419,54 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn explicit_import_can_change_source_but_stale_update_cannot() {
+        use std::sync::atomic::{AtomicBool, Ordering};
+
+        let root = tempfile::tempdir().unwrap();
+        let store = Store::at(root.path().to_owned()).unwrap();
+        let profile = Profile {
+            id: uuid::Uuid::new_v4().to_string(),
+            name: "Fixture".into(),
+            source: "https://example.test/current".into(),
+            updated: 1,
+            usage: None,
+        };
+        let path = store.profile_path(&profile.id).unwrap();
+        let original = "proxies: []\nrules: ['MATCH,DIRECT']\n";
+        atomic_write(&path, original.as_bytes()).unwrap();
+        let mut owner = fixture(store);
+        owner.profiles.push(profile.clone());
+        let shared = Arc::new(tokio::sync::Mutex::new(owner));
+        let called = Arc::new(AtomicBool::new(false));
+
+        for expect_current in [true, false] {
+            let attempt_called = called.clone();
+            let error = Engine::import_remote_with(
+                &shared,
+                profile.name.clone(),
+                "https://example.test/replacement".into(),
+                Some(profile.id.clone()),
+                expect_current,
+                None,
+                move |_, _| async move {
+                    attempt_called.store(true, Ordering::SeqCst);
+                    bail!("HTTP 503")
+                },
+            )
+            .await
+            .unwrap_err();
+            if expect_current {
+                assert!(error.to_string().contains("订阅已修改"));
+                assert!(!called.load(Ordering::SeqCst));
+            } else {
+                assert!(format!("{error:#}").contains("已保留原配置与运行状态"));
+                assert!(called.load(Ordering::SeqCst));
+            }
+            assert_eq!(std::fs::read_to_string(&path).unwrap(), original);
+        }
+    }
+
+    #[tokio::test]
     async fn manual_subscription_download_preserves_an_edited_profile() {
         let root = tempfile::tempdir().unwrap();
         let store = Store::at(root.path().to_owned()).unwrap();
@@ -422,6 +493,7 @@ mod tests {
                 profile.name,
                 profile.source,
                 Some(profile.id),
+                true,
                 None,
                 |_, _| async move {
                     started.send(()).unwrap();

@@ -1065,6 +1065,7 @@ impl Engine {
                 name: name.clone(),
                 source: source.clone(),
                 id: existing.clone(),
+                expect_current: false,
             })
             .await?;
             return Ok(());

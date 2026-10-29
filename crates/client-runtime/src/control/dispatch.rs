@@ -39,12 +39,19 @@ pub(super) async fn execute(
     if matches!(&operation, Command::UpdateInstall) {
         return install_update(shared, disconnected).await;
     }
-    if let Command::Import { name, source, id } = &operation {
+    if let Command::Import {
+        name,
+        source,
+        id,
+        expect_current,
+    } = &operation
+    {
         Engine::import_cancellable(
             shared,
             name.clone(),
             source.clone(),
             id.clone(),
+            *expect_current,
             disconnected,
         )
         .await?;
