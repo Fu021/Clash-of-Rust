@@ -1635,7 +1635,7 @@ assert.equal(calls.length,2);
     def resources(self,source):
         source.mkdir()
         (source/'mihomo.exe').write_bytes(b'core')
-        build.write_json(source/'core.json',{'exe_sha256':build.sha256(source/'mihomo.exe')})
+        build.write_json(source/'core.json',{'version':'v1.20.1','exe_sha256':build.sha256(source/'mihomo.exe')})
         records = []
         for name in build.GEO_NAMES:
             path = source/name
@@ -1654,9 +1654,26 @@ assert.equal(calls.length,2);
             stage = base/'stage'
             build.stage_resources(source,stage,'windows')
             self.assertEqual({p.name for p in (stage/'resources/ip-check').iterdir()},{'LICENSE','SOURCE.md'})
+            notice = (stage/'resources/THIRD-PARTY-NOTICES.txt').read_text()
+            self.assertIn('Version: v1.20.1. Distributed under GPL-3.0.', notice)
+            self.assertIn('https://github.com/MetaCubeX/mihomo/tree/v1.20.1', notice)
             (source/'GeoIP.dat').write_bytes(b'corruption')
             with self.assertRaises(ValueError):
                 build.validate_resources(source,'windows')
+
+    def test_android_notice_uses_resolved_go_version_and_pseudo_revision(self):
+        with tempfile.TemporaryDirectory() as folder:
+            module = Path(folder)/'go.mod'
+            notice = Path(folder)/'notice.txt'
+            module.write_text('module example.test\nrequire (\n github.com/metacubex/mihomo v1.2.4-0.20261029120000-123456789abc\n)\n')
+            build.write_mihomo_notice(notice, build.mihomo_go_version(module))
+            self.assertIn('Version: v1.2.4-0.20261029120000-123456789abc.', notice.read_text())
+            self.assertIn('/mihomo/tree/123456789abc', notice.read_text())
+            module.write_text('require github.com/metacubex/mihomo v1.2.3\nreplace github.com/metacubex/mihomo => ../local\n')
+            with self.assertRaisesRegex(ValueError, 'explicit source notice'):
+                build.mihomo_go_version(module)
+            with self.assertRaisesRegex(ValueError, 'Invalid mihomo version'):
+                build.write_mihomo_notice(notice, '../invalid')
 
     def test_manifest_rejects_unexpected_paths(self):
         with tempfile.TemporaryDirectory() as folder:

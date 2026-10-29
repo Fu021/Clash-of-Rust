@@ -14,7 +14,7 @@ import tarfile
 import time
 import zipfile
 
-from build_support import ROOT, package_version, sha256, write_json
+from build_support import ROOT, mihomo_go_version, package_version, sha256, write_json, write_mihomo_notice
 
 ANDROID = ROOT / 'apps/android'
 ADB = str(Path(os.environ.get('ANDROID_HOME', '/nonexistent')) / 'platform-tools/adb')
@@ -129,7 +129,7 @@ def seed_assets():
     write_json(target/'geodata.json', {'version':release['tag_name']+' | '+release['published_at'],
                                      'updated':int(time.time()), 'files':records, 'release': release})
     shutil.copy2(ROOT/'LICENSE', target/'LICENSE')
-    shutil.copy2(ROOT/'resources/THIRD-PARTY-NOTICES.txt', target/'THIRD-PARTY-NOTICES.txt')
+    write_mihomo_notice(target/'THIRD-PARTY-NOTICES.txt', mihomo_go_version(ANDROID/'core/go.mod'))
     for directory in ('fonts', 'flags', 'ip-check'):
         for path in (ROOT/'resources'/directory).iterdir():
             if path.name.startswith(('LICENSE', 'SOURCE')):

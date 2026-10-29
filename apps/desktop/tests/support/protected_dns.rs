@@ -344,6 +344,44 @@ pub async fn run(engine: &mut Engine, profile: &std::path::Path) {
         }
         engine.stop().await.unwrap();
         engine.start_with_proxy_mode().await.unwrap();
+        if node == "node6.fixture.test" && fixed_blocked && !explicit {
+            let fixture = reqwest::Client::builder()
+                .no_proxy()
+                .timeout(Duration::from_secs(3))
+                .build()
+                .unwrap();
+            fixture
+                .get("http://192.0.2.254:18080/delay-node6-aaaa/on")
+                .send()
+                .await
+                .unwrap()
+                .error_for_status()
+                .unwrap();
+            let before = metrics().await;
+            let payload = std::fs::read_to_string(store.runtime().join("config.yaml")).unwrap();
+            engine.api.refresh_network(&payload).await.unwrap();
+            let ip = tokio::time::timeout(
+                Duration::from_secs(8),
+                hijacked_dns("api.devices.cloudflare.com", false),
+            )
+            .await
+            .expect("Slow IPv6-only node bootstrap timed out");
+            assert_eq!(ip, "203.0.113.20".parse::<IpAddr>().unwrap());
+            let after = metrics().await;
+            for key in ["slow_node6_a", "slow_node6_aaaa"] {
+                assert!(
+                    after[key].as_u64().unwrap() > before[key].as_u64().unwrap(),
+                    "The controlled slow IPv6 node lookup was not exercised: {after}"
+                );
+            }
+            fixture
+                .get("http://192.0.2.254:18080/delay-node6-aaaa/off")
+                .send()
+                .await
+                .unwrap()
+                .error_for_status()
+                .unwrap();
+        }
         tokio::time::timeout(Duration::from_secs(30), protected_traffic(engine))
             .await
             .expect("Cold-start protected DNS/HTTP must work");

@@ -59,7 +59,7 @@ class ArtifactTests(unittest.TestCase):
         for path in (payload/'clash-of-rust', payload/'clash-desktop-ui', payload/'clash-tun-launcher', payload/'cor', resources/'mihomo'):
             path.write_bytes(header)
         (payload/'LICENSE').write_text('fixture license')
-        build.write_json(resources/'core.json', {'exe_sha256': build.sha256(resources/'mihomo')})
+        build.write_json(resources/'core.json', {'version': 'v1.20.1', 'exe_sha256': build.sha256(resources/'mihomo')})
         geo = []
         for name in build.GEO_NAMES:
             path = resources/name

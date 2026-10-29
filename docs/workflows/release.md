@@ -2,6 +2,8 @@
 
 [工作流索引](../workflows.md)。按需读取本页，不必加载全部工作流文档。
 
+第三方 mihomo 声明按实际依赖生成：桌面取已校验的 `core.json`，Android 取本轮 Go 模块快照；声明包含对应源码版本或伪版本的提交。来源无法确定时构建失败，避免随自动依赖更新保留过期版本。
+
 ## Publish Release
 
 公开 Release 或 Pre-release 前须完成[循环审查工作流](../loop-workflow.md)，核对待发布提交的检查范围、遗留项及验证结果。
