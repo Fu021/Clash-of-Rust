@@ -219,6 +219,17 @@ def isolated_uplink():
             run(['umount', '/etc/ssl/certs/ca-certificates.crt'])
 
 
+def tun_device_counters(device):
+    links = json.loads(subprocess.check_output(
+        ['ip', '-j', '-s', 'link', 'show', 'dev', device], text=True))
+    if len(links) != 1 or links[0].get('ifname') != device:
+        raise RuntimeError(f'Could not identify TUN interface {device}: {links}')
+    stats = links[0].get('stats64') or links[0].get('stats')
+    if not stats:
+        raise RuntimeError(f'TUN interface statistics unavailable: {links}')
+    return int(stats['rx']['bytes']), int(stats['tx']['bytes'])
+
+
 def root_cli_smoke():
     """Exercise the installed headless root path before granting user TUN access."""
     cli = '/opt/clash-of-rust/cor'
@@ -262,6 +273,28 @@ def root_cli_smoke():
             def api(path):
                 return json.loads(http('127.0.0.1', controller, '/'+path, secret))
 
+            def verify_tun_http():
+                device = 'CorRootTest'
+                route = json.loads(subprocess.check_output(
+                    ['ip', '-j', 'route', 'get', '203.0.113.20'], text=True))
+                assert len(route) == 1 and route[0].get('dev') == device, (
+                    f'Root traffic route does not use {device}: {route}')
+                before_rx, before_tx = tun_device_counters(device)
+                before_download = api('connections')['downloadTotal']
+                assert http('203.0.113.20', 80, '/auto-check') == b'protected-ok'
+                deadline = time.monotonic()+10
+                while True:
+                    rx, tx = tun_device_counters(device)
+                    download = api('connections')['downloadTotal']
+                    if rx > before_rx and tx > before_tx and download > before_download:
+                        break
+                    if time.monotonic() >= deadline:
+                        raise AssertionError(
+                            f'TUN traffic not accounted: route={route}, '
+                            f'rx={before_rx}->{rx}, tx={before_tx}->{tx}, '
+                            f'download={before_download}->{download}')
+                    time.sleep(0.2)
+
             assert http('127.0.0.1', mixed, 'http://203.0.113.20/auto-check') == b'protected-ok'
             invalid = directory/'invalid.yaml'
             invalid.write_text('proxies: [{name: InvalidRootNode, type: COR_INVALID_PROXY_TYPE}]\n'
@@ -281,13 +314,11 @@ def root_cli_smoke():
             invoke('profile', 'use', 'root-network')
             invoke('proxy', 'tun')
             assert api('configs')['tun']['enable']
-            before = api('connections')['downloadTotal']
-            assert http('203.0.113.20', 80, '/auto-check') == b'protected-ok'
-            assert api('connections')['downloadTotal'] > before, 'Root traffic bypassed the TUN'
+            verify_tun_http()
             invoke('stop')
             # A fresh root daemon must also restore a persisted TUN mode.
             assert invoke('start')['running'] and api('configs')['tun']['enable']
-            assert http('203.0.113.20', 80, '/auto-check') == b'protected-ok'
+            verify_tun_http()
             invoke('proxy', 'off')
             assert not api('configs')['tun']['enable']
         except Exception:

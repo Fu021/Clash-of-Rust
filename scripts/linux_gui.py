@@ -336,7 +336,7 @@ def gui(backend, report):
                 raise RuntimeError(f'{backend} {"crash" if crash else "close"} terminated '
                                    f'the GUI owner: {owner.returncode}')
             dbus(item[0], item[1], 'org.kde.StatusNotifierItem.Activate', '0', '0')
-            windows = wait_for('Tray activation did not reopen the GUI', visible)
+            windows = wait_for_usable_window(backend, visible)
             after = cli('status')
             if (core_processes() != processes or not after.get('running')
                     or after.get('owner') != 'gui' or after.get('mode') != before.get('mode')):

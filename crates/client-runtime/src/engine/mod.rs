@@ -581,9 +581,50 @@ impl Engine {
 
     /// Restore the saved network mode as part of starting the shared owner.
     pub async fn start_with_proxy_mode(&mut self) -> Result<()> {
-        self.start().await?;
+        #[cfg(target_os = "macos")]
+        let mut opened_mac_session = false;
+        let started = async {
+            #[cfg(target_os = "macos")]
+            if !self.running()
+                && (self.settings.proxy_mode == ProxyMode::Tun
+                    || self.settings.claude_protection.is_some())
+                && !self
+                    .mac_tun
+                    .as_ref()
+                    .is_some_and(|session| session.is_available())
+            {
+                // The previous TUN core ran as root. On Darwin its closed
+                // connections can keep an ordinary-user bind from succeeding.
+                // Start with the same authorized identity that will own TUN.
+                self.mac_tun = None;
+                let interactive = !std::env::args_os().any(|arg| arg == "--background");
+                self.mac_tun = Some(Self::open_mac_tun(interactive).await?);
+                opened_mac_session = true;
+            }
+            self.start().await
+        }
+        .await;
+        #[cfg(target_os = "macos")]
+        if started.is_err() {
+            if opened_mac_session && !self.running() {
+                self.mac_tun = None;
+            }
+            if std::mem::take(&mut self.retained_startup_proxy) {
+                return match platform::restore(&self.journal()) {
+                    Ok(_) => started,
+                    Err(restore) => Err(started
+                        .unwrap_err()
+                        .context(format!("启动失败后恢复系统代理也失败：{restore:#}"))),
+                };
+            }
+        }
+        started?;
         if let Err(error) = self.restore_proxy_mode().await {
             let stopped = self.stop().await;
+            #[cfg(target_os = "macos")]
+            if stopped.is_ok() && opened_mac_session {
+                self.mac_tun = None;
+            }
             return Err(error.context(format!(
                 "启动后恢复网络模式失败；停止内核：{}",
                 stopped.err().map_or("成功".into(), |e| e.to_string())
@@ -1920,6 +1961,15 @@ impl Engine {
     }
 
     #[cfg(target_os = "macos")]
+    async fn open_mac_tun(interactive: bool) -> Result<platform::macos::tun::Session> {
+        tokio::task::spawn_blocking(move || {
+            platform::macos::service::ensure_available(interactive)
+        })
+        .await??;
+        tokio::task::spawn_blocking(platform::macos::tun::Session::authorize).await?
+    }
+
+    #[cfg(target_os = "macos")]
     async fn prepare_mac_tun(&mut self, interactive: bool) -> Result<()> {
         if self
             .mac_tun
@@ -1929,13 +1979,8 @@ impl Engine {
             return Ok(());
         }
         self.mac_tun = None;
-        tokio::task::spawn_blocking(move || {
-            platform::macos::service::ensure_available(interactive)
-        })
-        .await??;
+        let session = Self::open_mac_tun(interactive).await?;
         let previous = self.restart_state().await?.context("请先启动内核")?;
-        let session =
-            tokio::task::spawn_blocking(platform::macos::tun::Session::authorize).await??;
         self.stop().await?;
         self.mac_tun = Some(session);
         if let Err(error) = self.resume(&previous).await {
