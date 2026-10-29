@@ -2,6 +2,7 @@
 import hashlib
 import json
 from pathlib import Path
+import socket
 import tempfile
 import tomllib
 import struct
@@ -38,6 +39,49 @@ _memory_spec.loader.exec_module(memory_benchmark)
 
 
 class BuildTests(unittest.TestCase):
+    def test_linux_gui_supports_gnome_336_and_newer_compositors(self):
+        import linux_gui
+
+        old = linux_gui.gnome_command('--wayland --nested', 3)
+        self.assertIn('--nested', old)
+        self.assertNotIn('--wayland-display=cor-wayland', old)
+        self.assertNotIn('--unsafe-mode', old)
+        modern = linux_gui.gnome_command('--wayland --wayland-display --headless', 46)
+        self.assertIn('--wayland-display=cor-wayland', modern)
+        self.assertIn('--virtual-monitor=1280x900', modern)
+        self.assertIn('--unsafe-mode', modern)
+
+    @unittest.skipUnless(hasattr(socket, 'AF_UNIX'), 'Unix sockets are unavailable')
+    def test_linux_gui_finds_only_wayland_sockets(self):
+        import linux_gui
+
+        with tempfile.TemporaryDirectory() as temporary:
+            runtime = Path(temporary)
+            (runtime/'wayland-0.lock').write_text('')
+            with socket.socket(socket.AF_UNIX) as default, socket.socket(socket.AF_UNIX) as named:
+                default.bind(str(runtime/'wayland-0'))
+                named.bind(str(runtime/'cor-wayland'))
+                self.assertEqual(linux_gui.wayland_sockets(runtime), {'wayland-0', 'cor-wayland'})
+
+    def test_linux_gui_waits_for_configured_window_size(self):
+        import linux_gui
+
+        small = [{'pid': 12, 'width': 0, 'height': 0}]
+        usable = [{'pid': 12, 'width': 950, 'height': 700}]
+        probe = MagicMock(side_effect=[[], small, usable])
+        with patch.object(linux_gui.time, 'sleep'):
+            self.assertEqual(linux_gui.wait_for_usable_window('wayland', probe), usable)
+        self.assertEqual(probe.call_count, 3)
+
+    def test_linux_gui_rejects_a_permanently_small_window_with_diagnostics(self):
+        import linux_gui
+
+        small = [{'pid': 12, 'width': 640, 'height': 300}]
+        with (patch.object(linux_gui.time, 'sleep'),
+              patch.object(linux_gui.time, 'monotonic', side_effect=[0, 0, 1])):
+            with self.assertRaisesRegex(RuntimeError, r'wayland.*800x450.*640.*300'):
+                linux_gui.wait_for_usable_window('wayland', lambda: small, timeout=1)
+
     def test_linux_gui_finds_authorized_core_without_reading_exe_link(self):
         import linux_gui
 

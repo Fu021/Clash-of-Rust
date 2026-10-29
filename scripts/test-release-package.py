@@ -154,8 +154,9 @@ def run_compatibility(expected=None):
            'Acquire::Languages=none']
     if not os.environ.get('COR_LINUX_GUEST'):
         run([*apt, '-o', 'APT::Update::Error-Mode=any', 'update'], timeout=300)
-    run([*apt, 'install', '-y', 'dbus-x11', 'iproute2', 'util-linux', 'libcap2-bin',
-         'xvfb', 'x11-utils', 'xdotool', 'wmctrl', 'openbox', 'gnome-shell',
+    run([*apt, 'install', '-y', '--no-install-recommends',
+         'dbus-x11', 'iproute2', 'util-linux', 'libcap2-bin',
+         'xvfb', 'xwayland', 'x11-utils', 'xdotool', 'wmctrl', 'openbox', 'gnome-shell',
          'gnome-shell-extension-appindicator', 'policykit-1-gnome',
          'libgl1-mesa-dri', 'libegl1', 'mesa-utils'], timeout=900)
     # Package structure was tested in the native packaging job. This job tests

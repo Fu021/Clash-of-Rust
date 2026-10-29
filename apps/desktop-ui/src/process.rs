@@ -172,6 +172,7 @@ pub fn run() -> anyhow::Result<()> {
         }
     });
     let window = AppWindow::new()?;
+    window.set_app_title(clash_client_core::WINDOW_TITLE.into());
     let mut models = ViewModels::default();
     models.attach(&window.global::<UiData>());
     apply(&frame, &window.global::<UiData>(), &mut models);

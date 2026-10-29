@@ -222,6 +222,8 @@ def vm_test():
             port = listener.getsockname()[1]
         kvm = os.access('/dev/kvm', os.R_OK | os.W_OK)
         architecture = 'x86_64' if host_arch() == 'x64' else 'aarch64'
+        print(f'Ubuntu {BASELINE} VM: {architecture}, acceleration={"kvm" if kvm else "tcg"}',
+              flush=True)
         machine = 'q35' if architecture == 'x86_64' else 'virt'
         cpu = 'host' if kvm else ('max' if architecture == 'x86_64' else 'cortex-a72')
         command = ['qemu-system-'+architecture, '-machine', machine+',accel='+('kvm' if kvm else 'tcg'),
@@ -273,7 +275,8 @@ def vm_test():
                 remote('cd ~/cor-source && GITHUB_ACTIONS=true COR_LINUX_GUEST=true '
                        'PATH=/opt/cor-test-python/bin:$PATH PYTHONDONTWRITEBYTECODE=1 '
                        '/opt/cor-test-python/bin/python3 scripts/test-release-package.py '
-                       '--linux-compat --expect-ubuntu 20.04', timeout=1200)
+                       '--linux-compat --expect-ubuntu 20.04',
+                       timeout=2400 if architecture == 'aarch64' or not kvm else 1200)
                 write_json(REPORT/'focal-vm.json', {'distribution': BASELINE, 'kernel': kernel,
                            'acceleration': 'kvm' if kvm else 'tcg', 'arch': host_arch(),
                            'cloud_sha256': value['cloud']['sha256'], 'success': True})

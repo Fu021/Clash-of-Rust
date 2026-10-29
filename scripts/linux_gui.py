@@ -130,14 +130,55 @@ def inspect(backend):
         return evaluate(window_script())
     tree = output(['xwininfo', '-root', '-tree'])
     import re
-    windows = re.findall(r'^\s*(0x[0-9a-fA-F]+)\s+"Clash of Rust', tree, re.M)
+    windows = re.findall(r'^\s*(0x[0-9a-fA-F]+)\s+"(Clash of Rust[^"]*)"', tree, re.M)
     result = []
-    for window in windows:
+    for window, title in windows:
         info = output(['xwininfo', '-id', window])
         if 'Map State: IsViewable' in info:
-            result.append({'id': window, 'width': int(re.search(r'Width:\s+(\d+)', info)[1]),
+            result.append({'id': window, 'title': title,
+                           'width': int(re.search(r'Width:\s+(\d+)', info)[1]),
                            'height': int(re.search(r'Height:\s+(\d+)', info)[1])})
     return result
+
+
+def wait_for_usable_window(backend, probe, timeout=45):
+    last_windows = []
+
+    def ready():
+        nonlocal last_windows
+        windows = probe()
+        if windows:
+            last_windows = windows
+        if any(window['width'] >= 800 and window['height'] >= 450 for window in windows):
+            return windows
+        return None
+
+    try:
+        return wait_for('Installed '+backend+' GUI did not reach its minimum size', ready, timeout)
+    except TimeoutError as error:
+        raise RuntimeError(
+            f'Installed {backend} GUI did not reach 800x450; last windows: {last_windows}'
+        ) from error
+
+
+def gnome_command(help_text, major):
+    command = ['gnome-shell', '--wayland']
+    if '--wayland-display' in help_text:
+        command.append('--wayland-display=cor-wayland')
+    if '--headless' in help_text:
+        command.extend(['--headless', '--virtual-monitor=1280x900'])
+    else:
+        command.append('--nested')
+    # Mutter hides this supported option from --help; GNOME 3.x uses
+    # the development-tools setting for its equivalent test API.
+    if major >= 41:
+        command.append('--unsafe-mode')
+    return command
+
+
+def wayland_sockets(runtime):
+    return {path.name for path in runtime.iterdir()
+            if (path.name.startswith('wayland-') or path.name == 'cor-wayland') and path.is_socket()}
 
 
 def cli(*arguments):
@@ -183,9 +224,9 @@ def gui(backend, report):
                 windows = [window for window in windows
                            if _renderer(Path('/proc')/str(window['pid']), owner.pid)]
             return windows
-        windows = wait_for('Installed '+backend+' GUI did not show a window', visible)
-        if not any(window['width'] >= 800 and window['height'] >= 450 for window in windows):
-            raise RuntimeError('Installed GUI window is smaller than the supported minimum')
+        windows = wait_for_usable_window(backend, visible)
+        if any(window['title'] != 'Clash of Rust' for window in windows):
+            raise RuntimeError(f'Unexpected {backend} window title: {windows}')
         def gui_owner_ready():
             try:
                 endpoint = json.loads((data/'control.json').read_text())
@@ -297,24 +338,27 @@ def session():
                 if output(['gsettings', 'get', 'org.gnome.shell', 'development-tools']) != 'true':
                     raise RuntimeError('GNOME development tools setting did not persist')
             help_text = output(['gnome-shell', '--help'])
-            command = ['gnome-shell', '--wayland', '--wayland-display=cor-wayland']
-            if '--headless' in help_text:
-                command.extend(['--headless', '--virtual-monitor=1280x900'])
-            else:
-                command.append('--nested')
-            # Mutter hides this supported option from --help; GNOME 3.x uses
-            # the development-tools setting for its equivalent test API.
-            if major >= 41:
-                command.append('--unsafe-mode')
+            command = gnome_command(help_text, major)
+            runtime = Path(os.environ['XDG_RUNTIME_DIR'])
+            existing_sockets = wayland_sockets(runtime)
             shell = stack.enter_context(process(command, log))
-            os.environ['WAYLAND_DISPLAY'] = 'cor-wayland'
             def ready():
                 if shell.poll() is not None or display.poll() is not None:
                     raise RuntimeError('Desktop compositor exited')
                 try:
-                    return evaluate('true')
+                    if not evaluate('true'):
+                        return False
                 except (subprocess.SubprocessError, ValueError, RuntimeError):
                     return False
+                sockets = wayland_sockets(runtime)-existing_sockets
+                if '--wayland-display=cor-wayland' in command:
+                    sockets &= {'cor-wayland'}
+                if len(sockets) > 1:
+                    raise RuntimeError(f'GNOME created multiple Wayland sockets: {sorted(sockets)}')
+                if sockets:
+                    os.environ['WAYLAND_DISPLAY'] = next(iter(sockets))
+                    return True
+                return False
             wait_for('GNOME Wayland compositor did not become ready', ready, timeout=60)
             for backend in ('x11', 'wayland'):
                 result['checks'][backend] = gui(backend, report)

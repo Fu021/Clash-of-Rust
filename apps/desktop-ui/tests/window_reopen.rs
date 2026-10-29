@@ -138,7 +138,9 @@ fn find_window(pid: u32) -> HWND {
         if pid == search.pid {
             let mut title = [0u16; 128];
             let length = unsafe { GetWindowTextW(hwnd, title.as_mut_ptr(), title.len() as i32) };
-            if String::from_utf16_lossy(&title[..length as usize]).starts_with("Clash of Rust") {
+            if String::from_utf16_lossy(&title[..length as usize])
+                == clash_client_core::WINDOW_TITLE
+            {
                 search.hwnd = hwnd;
                 return 0;
             }
