@@ -322,9 +322,10 @@ def installed_tests():
                    'PYTHONDONTWRITEBYTECODE': '1', 'LANG': 'C.UTF-8',
                    'GITHUB_ACTIONS': 'true', 'NO_AT_BRIDGE': '1'}
             # Clear the environment: neither the guest nor GUI sees Actions tokens.
-            run(['sudo', '-u', user, 'env', '-i',
-                 *(key+'='+value for key, value in env.items()),
-                 'dbus-run-session', '--', sys.executable, script, '--session'], timeout=360)
+            subprocess.run(['sudo', '-u', user, 'env', '-i',
+                            *(key+'='+value for key, value in env.items()),
+                            'dbus-run-session', '--', sys.executable, script, '--session'],
+                           check=True, cwd=home, timeout=360)
         finally:
             if created:
                 subprocess.run(['sudo', 'pkill', '-KILL', '-u', user], check=False)
