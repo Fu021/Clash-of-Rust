@@ -4,6 +4,7 @@ use anyhow::Result;
 use serde_json::json;
 use std::sync::Arc;
 use tokio::sync::Mutex;
+use tokio::sync::watch;
 
 pub(crate) fn meta(engine: &Engine, owner: Owner) -> Result<Meta> {
     Ok(Meta {
@@ -29,7 +30,26 @@ pub(super) async fn execute(
     shared: &Arc<Mutex<Engine>>,
     operation: Command,
     owner: Owner,
+    disconnected: Option<watch::Receiver<bool>>,
 ) -> Result<Value> {
+    if matches!(&operation, Command::GeoUpdate) {
+        Engine::update_geo_cancellable(shared, disconnected).await?;
+        return Ok(Value::Null);
+    }
+    if matches!(&operation, Command::UpdateInstall) {
+        return install_update(shared, disconnected).await;
+    }
+    if let Command::Import { name, source, id } = &operation {
+        Engine::import_cancellable(
+            shared,
+            name.clone(),
+            source.clone(),
+            id.clone(),
+            disconnected,
+        )
+        .await?;
+        return Ok(Value::Null);
+    }
     // GUI actions already return their fresh models. Console mutations also
     // invalidate attached views, without copying full lists on every tick.
     let changes_view = matches!(
@@ -117,7 +137,7 @@ pub(super) async fn execute(
             engine.save_profile_rules(&id, draft).await?;
         }
         Command::Ports { mixed } => engine.save_ports(mixed).await?,
-        Command::Import { name, source, id } => engine.import(name, source, id).await?,
+        Command::Import { .. } => unreachable!("handled before locking the owner"),
         Command::EditProfile { id, name, source } => engine.edit_profile(&id, &name, &source)?,
         Command::Activate { id } => engine.activate(id).await?,
         Command::DeleteProfile { id } => engine.delete_profile(&id).await?,
@@ -198,7 +218,7 @@ pub(super) async fn execute(
         }
         Command::ExportLogs => return Ok(serde_json::to_value(engine.export_logs()?)?),
         Command::RecordFailure { message } => engine.record_failure(&message),
-        Command::GeoUpdate => engine.update_geo().await?,
+        Command::GeoUpdate => unreachable!("handled before locking the owner"),
         Command::GeoInstall { path } => engine.install_geo(&path).await?,
         Command::CheckConfig => {
             engine.check_effective_config().await?;
@@ -214,34 +234,48 @@ pub(super) async fn execute(
             }
             return Ok(json!({"enabled":crate::platform::autostart_enabled()?}));
         }
-        Command::UpdateInstall => {
-            crate::update::ensure_installable()?;
-            let port = engine.running().then_some(engine.settings.mixed_port);
-            let available =
-                crate::update::check_with_prereleases(port, engine.settings.update_prereleases)
-                    .await?
-                    .ok_or_else(|| anyhow::anyhow!("当前更新通道没有可安装的版本"))?;
-            let download = Arc::new(
-                crate::update::download(available, port, Some(engine.api.clone()), |_| {}).await?,
-            );
-            let gui = super::gui_pid(&engine.store)?;
-            let parent = gui.unwrap_or_else(std::process::id);
-            let session = tokio::task::spawn_blocking(move || {
-                crate::update::handoff_owner(download, parent, gui.is_some())
-            })
-            .await??;
-            if let Err(error) = engine.stop().await {
-                session.cancel();
-                return Err(error);
-            }
-            if let Err(error) = super::request_gui_exit(&engine.store) {
-                session.cancel();
-                return Err(error);
-            }
-            return Ok(json!({"shutdown":true,"installer":session.directory}));
-        }
+        Command::UpdateInstall => unreachable!("handled before locking the owner"),
     }
     Ok(Value::Null)
+}
+
+async fn install_update(
+    shared: &Arc<Mutex<Engine>>,
+    mut disconnected: Option<watch::Receiver<bool>>,
+) -> Result<Value> {
+    crate::update::ensure_installable()?;
+    let (job, download, prereleases) = Engine::download_app_update_with(
+        shared,
+        &mut disconnected,
+        |port, prereleases, api| async move {
+            let available = crate::update::check_with_prereleases(port, prereleases)
+                .await?
+                .ok_or_else(|| anyhow::anyhow!("当前更新通道没有可安装的版本"))?;
+            crate::update::download(available, port, Some(api), |_| {}).await
+        },
+    )
+    .await?;
+    let mut engine = shared.lock().await;
+    job.ensure_current(&disconnected)?;
+    anyhow::ensure!(
+        engine.settings.update_prereleases == prereleases,
+        "更新通道已改变，请重新检查更新"
+    );
+    let gui = super::gui_pid(&engine.store)?;
+    let parent = gui.unwrap_or_else(std::process::id);
+    let session = tokio::task::spawn_blocking(move || {
+        crate::update::handoff_owner(Arc::new(download), parent, gui.is_some())
+    })
+    .await??;
+    if let Err(error) = engine.stop().await {
+        session.cancel();
+        return Err(error);
+    }
+    if let Err(error) = super::request_gui_exit(&engine.store) {
+        session.cancel();
+        return Err(error);
+    }
+    Ok(json!({"shutdown":true,"installer":session.directory}))
 }
 
 impl Engine {

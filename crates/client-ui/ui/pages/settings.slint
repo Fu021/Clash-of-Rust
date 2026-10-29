@@ -119,7 +119,7 @@ export component SettingsPage inherits PageSurface {
                     Label { text: "Geo 数据"; }
                     Paragraph { text: UiData.geo-status; font-size: Theme.detail-size; color: Theme.secondary; }
                     HorizontalLayout {
-                        ActionButton { text: "更新所有 Geo 数据"; busy: UiData.geo-updating; enabled: UiData.ready && !UiData.working; clicked => { UiActions.dispatch(Intent.update-geo, "", ""); } }
+                        ActionButton { text: "更新所有 Geo 数据"; busy: UiData.geo-updating; enabled: UiData.ready && !UiData.working && !UiData.geo-updating; clicked => { UiActions.dispatch(Intent.update-geo, "", ""); } }
                         Rectangle { horizontal-stretch: 1; }
                     }
                 }

@@ -1,4 +1,5 @@
 mod control;
+pub(crate) mod downloads;
 mod recovery;
 use crate::control::Command as ControlCommand;
 use crate::{
@@ -160,6 +161,9 @@ pub struct Engine {
     pub profiles: Vec<Profile>,
     pub api: Api,
     pub geo_manifest: GeoManifest,
+    geo_updates: downloads::UpdateGate,
+    app_updates: downloads::UpdateGate,
+    subscription_updates: downloads::UpdateGate,
     resources: PathBuf,
     child: Option<Child>,
     #[cfg(windows)]
@@ -293,6 +297,9 @@ impl Engine {
             api,
             resources,
             geo_manifest,
+            geo_updates: Default::default(),
+            app_updates: Default::default(),
+            subscription_updates: Default::default(),
             child: None,
             #[cfg(windows)]
             windows_tun: false,
@@ -639,6 +646,9 @@ impl Engine {
             self.remote_mutate(ControlCommand::Stop).await?;
             return Ok(());
         }
+        self.geo_updates.cancel();
+        self.app_updates.cancel();
+        self.subscription_updates.cancel();
         platform::restore(&self.journal()).context("恢复系统代理失败，暂不停止内核以避免断网")?;
         self.stop_process().await
     }
@@ -1249,27 +1259,6 @@ impl Engine {
         Ok(())
     }
 
-    pub async fn update_geo(&mut self) -> Result<()> {
-        if self.remote.is_some() {
-            self.remote_mutate(ControlCommand::GeoUpdate).await?;
-            return Ok(());
-        }
-        let runtime = self.store.runtime();
-        let staged = tempfile::Builder::new()
-            .prefix(".geo-download-")
-            .tempdir_in(&runtime)?;
-        append(
-            &self.logs,
-            "[客户端] 开始下载全部 Geo 数据，下载期间继续使用原数据",
-        );
-        assets::download_geo(
-            staged.path(),
-            self.running().then_some(self.settings.mixed_port),
-        )
-        .await?;
-        self.install_geo(staged.path()).await
-    }
-
     async fn resume(&mut self, state: &RestartState) -> Result<()> {
         self.start().await?;
         self.mode(&state.mode).await?;
@@ -1722,6 +1711,11 @@ impl Engine {
             .await?;
             return Ok(());
         }
+        let _job = self.geo_updates.begin("Geo 数据正在更新，请稍候")?;
+        self.install_geo_staged(staged).await
+    }
+
+    async fn install_geo_staged(&mut self, staged: &std::path::Path) -> Result<()> {
         let runtime = self.store.runtime();
         assets::verify_geo(staged).context("新下载的 Geo 数据无效")?;
         let geo_settings = Settings {
@@ -1785,6 +1779,7 @@ impl Engine {
         };
         assets::commit(&runtime)?;
         self.geo_manifest = manifest;
+        self.invalidate_views();
         append(&self.logs, "[客户端] 全部 Geo 数据更新完成并通过校验");
         Ok(())
     }
@@ -2480,7 +2475,7 @@ impl crate::proxy::Backend for Engine {
 
 impl Drop for Engine {
     fn drop(&mut self) {
-        if self.is_remote() {
+        if self.is_remote() || self._instance_lock.is_none() {
             return;
         }
         // Best-effort recovery also covers initialization/runtime errors. A failed

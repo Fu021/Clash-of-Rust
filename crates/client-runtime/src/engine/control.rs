@@ -36,6 +36,9 @@ impl Engine {
             profiles: meta.profiles,
             api,
             geo_manifest: meta.geo,
+            geo_updates: Default::default(),
+            app_updates: Default::default(),
+            subscription_updates: Default::default(),
             resources: resources.to_owned(),
             child: None,
             #[cfg(windows)]
@@ -63,7 +66,7 @@ impl Engine {
         }))
     }
 
-    fn apply_meta(&mut self, meta: Meta) -> Result<()> {
+    pub(super) fn apply_meta(&mut self, meta: Meta) -> Result<()> {
         self.api = Api::new(&meta.settings)?;
         self.settings = meta.settings;
         self.profiles = meta.profiles;

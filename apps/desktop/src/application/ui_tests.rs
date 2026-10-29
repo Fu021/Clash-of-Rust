@@ -1775,6 +1775,40 @@ fn failed_subscription_update_keeps_measurements_and_reports_until_a_successful_
 }
 
 #[test]
+fn geo_download_survives_unrelated_refresh_and_only_success_clears_results() {
+    let mut app = fixture(Page::Settings);
+    app.geo_updating = true;
+    app.node_delays.insert("Test".into(), 42);
+    let mut refresh = synchronized_reply(&app);
+    refresh.view_revision = app.view_revision;
+    let _ = app.update(Message::Finished(Box::new(refresh)));
+    assert!(app.geo_updating);
+
+    let _ = app.update(Message::GeoFinished(Err("下载失败".into())));
+    assert!(!app.geo_updating);
+    assert_eq!(app.node_delays.get("Test"), Some(&42));
+    assert!(app.error && app.notice.contains("下载失败"));
+
+    app.geo_updating = true;
+    let _ = app.update(Message::GeoFinished(Ok(())));
+    assert!(!app.geo_updating);
+    assert!(app.node_delays.is_empty());
+    assert!(!app.error && app.notice.contains("已全部更新"));
+}
+
+#[test]
+fn geo_update_from_another_client_clears_stale_results() {
+    let mut app = fixture(Page::Settings);
+    app.geo_status = "old Geo".into();
+    app.node_delays.insert("Test".into(), 42);
+    let mut reply = synchronized_reply(&app);
+    reply.geo_status = "new Geo".into();
+    let _ = app.update(Message::Finished(Box::new(reply)));
+    assert!(app.node_delays.is_empty());
+    assert_eq!(app.geo_status, "new Geo");
+}
+
+#[test]
 fn background_subscription_update_invalidates_network_results_without_overwriting_rule_drafts() {
     use clash_of_rust::claude_check::{Environment, Report};
     let mut app = fixture(Page::Rules);

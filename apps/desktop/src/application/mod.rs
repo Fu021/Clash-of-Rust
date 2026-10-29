@@ -230,6 +230,8 @@ enum Message {
     DnsHost(String),
     Action(Action),
     Finished(Box<Reply>),
+    UpdateGeo,
+    GeoFinished(Result<(), String>),
     CheckUpdate,
     UpdateChecked(u64, Result<Option<update::Available>, String>),
     InstallUpdateConfirmed(String),
@@ -676,7 +678,6 @@ impl App {
                 | Action::SaveRules(..)
                 | Action::Activate(_)
                 | Action::DeleteProfile(_)
-                | Action::UpdateGeo
                 | Action::Mode(_)
                 | Action::ProxyMode(_)
                 | Action::Select(_, _)
@@ -685,7 +686,6 @@ impl App {
         }
         self.busy = true;
         self.working = !matches!(action, Action::Refresh);
-        self.geo_updating = matches!(action, Action::UpdateGeo);
         if let Action::ClaudeProtection(enabled) = &action {
             self.claude.protection_pending = Some(*enabled);
         }
@@ -1387,6 +1387,49 @@ impl App {
                     self.show_notice("端口必须为 1–65535 的整数".into(), true);
                 }
             },
+            Message::UpdateGeo => {
+                if self.geo_updating
+                    || self.busy
+                    || self.exiting
+                    || self.updates.install_pending
+                    || self.updates.installing.is_some()
+                {
+                    return Task::none();
+                }
+                let Some(engine) = self.engine.clone() else {
+                    return Task::none();
+                };
+                self.geo_updating = true;
+                return Task::perform(
+                    async move {
+                        let result = Engine::update_geo_shared(&engine)
+                            .await
+                            .map_err(|error| format!("{error:#}"));
+                        if let Err(error) = &result {
+                            engine.lock().await.record_failure(error);
+                        }
+                        result
+                    },
+                    Message::GeoFinished,
+                );
+            }
+            Message::GeoFinished(result) => {
+                self.geo_updating = false;
+                if self.exiting {
+                    return Task::none();
+                }
+                match result {
+                    Ok(()) => {
+                        self.reset_network_results();
+                        self.show_notice(
+                            "GeoIP、GeoSite、Country、ASN 数据已全部更新".into(),
+                            false,
+                        );
+                    }
+                    Err(error) => self.show_notice(format!("Geo 更新失败：{error}"), true),
+                }
+                return self.dispatch(Action::Refresh);
+            }
             Message::Action(action) => {
                 if let Action::Delay(node) = &action
                     && self
@@ -1816,9 +1859,14 @@ impl App {
                 }
             }
             Message::Finished(reply) => {
-                self.geo_updating = false;
                 self.claude.protection_pending = None;
                 let reply = *reply;
+                if !self.geo_status.is_empty()
+                    && !reply.geo_status.is_empty()
+                    && self.geo_status != reply.geo_status
+                {
+                    self.reset_network_results();
+                }
                 if reply.profile_updated
                     || reply
                         .profiles

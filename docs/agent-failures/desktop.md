@@ -17,7 +17,7 @@
 
 **用户目录与无显示环境：** `sudo cor` 应在解析用户配置前降权并复用原用户后台；直接 root 保留独立目录。跨用户总览只读索引，不启动后台。polkit 的 SSH/非活动会话仍需 `auth_admin`，只授权固定安装助手；不能让用户 YAML 在 root 后台运行。回归需覆盖两用户同名订阅、环境白名单与管理员凭据隔离、sudo/指定用户操作、stdin/原样参数、文件 UID、后台复用、前台信号及退出恢复，见[用户与授权](../cli/linux-users.md)。Wayland compositor 错误来自桌面入口，服务器使用 `cor`，不通过为 root 配置显示服务器规避。
 
-**安装后 GUI 验证：** `sudo -u` 不创建 logind 登录会话，图形 polkit 代理会因 `No session for pid` 注册失败。测试使用隔离的临时 PAM 登录会话，验证进程归属、真实授权的取消与接受，并隔离用户和 D-Bus 配置；不注入批准规则。模拟环境中代理进程存活不等于已注册，仅对明确的 `No authentication agent found` 有限重试授权请求。GNOME 42 的 `--unsafe-mode` 是隐藏选项，不能仅凭 `--help` 判断；旧版需启用 `development-tools`，窗口结果也只能编码一次。GNOME 3.36 的 `get_pid()` 对 Wayland 不返回客户端 PID，隔离会话只能在恰好一个原生 Wayland 窗口和一个渲染进程时回退匹配，并以窗口稳定序号关闭；新版本仍核对客户端 PID。[打包 40827251291](https://github.com/Fu021/Clash-of-Rust/actions/runs/40827251291) 的 20.04 x64 窗口识别、ARM64 授权代理注册失败，修复效果仍需同提交验证。
+**安装后 GUI 验证：** `sudo -u` 不创建 logind 登录会话，图形 polkit 代理会因 `No session for pid` 注册失败。测试使用隔离的临时 PAM 登录会话，验证进程归属、真实授权的取消与接受，并隔离用户和 D-Bus 配置；不注入批准规则。模拟环境中代理进程存活不等于已注册，仅对明确的 `No authentication agent found` 有限重试授权请求。GNOME 42 的 `--unsafe-mode` 是隐藏选项，不能仅凭 `--help` 判断；旧版需启用 `development-tools`，窗口结果也只能编码一次。GNOME 3.36 的 `get_pid()` 对 Wayland 不返回客户端 PID，隔离会话只能在恰好一个原生 Wayland 窗口和一个渲染进程时回退匹配，并以窗口稳定序号关闭；新版本仍核对客户端 PID。[打包 40827251291](https://github.com/Fu021/Clash-of-Rust/actions/runs/40827251291) 的 20.04 x64 窗口识别、ARM64 授权代理注册失败；修复后 `9f92c5f` 的[打包 40845419892](https://github.com/Fu021/Clash-of-Rust/actions/runs/40845419892)通过两架构验证。
 
 **典型症状**
 
@@ -46,41 +46,7 @@
 
 ## 8. macOS 应用身份、launchd 与打包
 
-**典型症状**
-
-- 安装后的 GUI 崩溃（如 `GUI exited early: -11`）或内核启动退出 101。
-- launchd 网络助手授权过期、更新交接失败或残留旧服务。
-- Dock/托盘状态项重复或丢失，DMG 资源忙，安装包测试无法清理。
-
-**代表证据**
-
-- Publish Release [38791325938](https://github.com/Fu021/Clash-of-Rust/actions/runs/38791325938)：macOS 安装后 GUI 提前退出。
-- Publish Release [38118779683](https://github.com/Fu021/Clash-of-Rust/actions/runs/38118779683)：安装后 core 退出 101，多项真实内核测试失败。
-- 临时 macOS 验证 [38699305933](https://github.com/Fu021/Clash-of-Rust/actions/runs/38699305933)：`update-launchd` 失败。
-- 修复提交 `95e213b`、`12b53f2`、`1c442bb`、`0ecbce2`、`f11e558`、`703528d`、`7a74cb5`、`a921814`。
-
-**首先检查**
-
-- 主应用、无 Dock 图标界面助手和内核/网络助手的 bundle identity、签名和 `LSUIElement` 是否各自正确。
-- launchd label、用户 UID、helper 路径、租约和过期授权是否一致。
-- 安装后测试是否从 DMG/应用资源实际启动，而不是引用 source tree 中的路径。
-- AppKit 托盘、Dock 和窗口操作是否在主线程、事件循环正确轮次执行。
-
-**防回归**
-
-- 同时验证 Intel/Apple Silicon、安装/升级/重启/卸载、连续重建窗口和通知权限。
-- DMG 操作保留有限重试，但测试结束必须卸载卷并清理本次创建的服务。
-- 不把 ad-hoc 签名测试结果写成 Developer ID 或公证已经通过。
-
-**内核退出后的端口复用**
-
-[CI 40528992035](https://github.com/Fu021/Clash-of-Rust/actions/runs/40528992035) 第三次运行的 Apple Silicon 已通过代理/TUN、公共与私有 DNS、重连和恢复，随后由 CLI 独立启动内核时因混合端口占用失败；同提交 Intel 通过。另有用户更新后观察到混合端口绑定等待 60.2 秒，TCP 探测被拒绝，之后重试并恢复 TUN；这些现象不足以确定具体套接字状态。
-
-恢复已保存的 TUN 或 Claude 保护时先申请现有授权会话，直接以实际 TUN 内核身份启动，避免先由普通用户绑定可能由旧 root 连接保留的端口，再重启一次；授权或启动失败仍按原路径恢复系统代理。连接已有后台的窗口只向所有者发启动命令，不重复申请授权。助手以实际内核身份探测端口，不终止其他监听者或更改用户端口。原生回归覆盖持有连接时停止、重建所有者后直接启动、窗口委托后台恢复 TUN、TUN 流量、真正占用和释放后重试；实际用户现场仍需验收。
-
-其他启动的端口绑定探测仍是门槛：成功才可继续；连接成功确认存在监听者时，普通启动立即拒绝，更新交接只给明确的短暂期限。连接被拒绝、重置或超时均不能单独证明有监听者，绑定仍失败时在有限释放期限内重查。曾观察到的监听者不响应时仍受交接期限约束，连接被明确拒绝后才转入释放等待；失败提示记录连接分类和等待时长。回归覆盖异常连接后释放、连接超时、存活监听者、交接结束及等待上限。
-
-**Tailscale DNS 冲突：** 动态 State/Setup 覆盖、本机转发、私有分域、原生就绪探针与 DNS-SD 链接的证据和回归要求统一见[macOS DNS 共存](macos-dns.md)。不能仅用配置写入成功代替实际解析验证。
+助手、应用身份、端口复用和安装后验证见 [macOS 生命周期](macos-lifecycle.md)；DNS 与 Tailscale 共存见 [macOS DNS](macos-dns.md)。
 
 ## 9. Windows 普通用户、服务与安装器
 
