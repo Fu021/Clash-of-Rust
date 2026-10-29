@@ -370,7 +370,9 @@ fn cleanup_committed_backup(
 ) {
     match remove_backup(backup) {
         Ok(()) => {}
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+        Err(error)
+            if error.kind() == std::io::ErrorKind::NotFound
+                && matches!(backup.try_exists(), Ok(false)) => {}
         Err(_) => return,
     }
     let _ = std::fs::remove_file(marker);
@@ -674,6 +676,15 @@ mod tests {
             verify_geo(&runtime).unwrap().installed_at,
             installed.installed_at
         );
+
+        cleanup_committed_backup(&marker, &backup, |_| {
+            Err(std::io::Error::new(
+                std::io::ErrorKind::NotFound,
+                "a backup entry disappeared during cleanup",
+            ))
+        });
+        assert!(marker.exists());
+        assert!(backup.exists());
 
         recover(&runtime).unwrap();
         assert!(!marker.exists());
