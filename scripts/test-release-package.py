@@ -3,6 +3,7 @@ import argparse
 import json
 import os
 from pathlib import Path
+import platform
 import re
 import select
 import shutil
@@ -14,6 +15,35 @@ import time
 
 from build_support import host_system, ROOT, bundle_directory, host_arch, run, sha256, write_json
 from workflow_artifacts import commit, verify_build
+
+
+GUEST_PACKAGE_CONFIG = """\
+path-exclude=/usr/share/doc/*
+path-include=/usr/share/doc/*/copyright
+path-exclude=/usr/share/man/*
+path-exclude=/usr/share/info/*
+path-exclude=/usr/share/lintian/*
+"""
+GUEST_MAN_DB_MARKER = '/var/lib/man-db/auto-update'
+
+
+def prepare_guest_package_environment():
+    """Keep disposable old-kernel VMs from indexing unrelated documentation."""
+    if os.environ.get('COR_LINUX_GUEST') != 'true':
+        return
+    # man-db caches this debconf value in a marker file. Disable both so an
+    # upgraded package cannot re-enable the expensive full index trigger.
+    run(['sudo', 'debconf-set-selections'],
+        input='man-db man-db/auto-update boolean false\n', text=True)
+    run(['sudo', 'tee', '/etc/dpkg/dpkg.cfg.d/99-cor-ci-no-docs'],
+        input=GUEST_PACKAGE_CONFIG, text=True)
+    run(['sudo', 'rm', '-f', GUEST_MAN_DB_MARKER])
+
+
+def run_privileged_with_timeout(command, timeout):
+    """Let a root-owned timeout stop sudo rather than killing sudo as the runner."""
+    run(['sudo', 'env', 'DEBIAN_FRONTEND=noninteractive', 'timeout',
+         '--signal=TERM', '--kill-after=30s', f'{timeout}s', *command])
 
 
 def linux_gui_smoke():
@@ -149,16 +179,20 @@ def run_compatibility(expected=None):
         path = Path('/etc/apt')/name
         if path.is_file():
             run(['sudo', 'tee', path], input=mirror+'\n', text=True)
-    apt = ['sudo', 'apt-get', '-o', 'Acquire::http::Timeout=30', '-o',
+    prepare_guest_package_environment()
+    apt = ['apt-get', '-o', 'Acquire::http::Timeout=30', '-o',
            'Acquire::https::Timeout=30', '-o', 'Acquire::Retries=2', '-o',
-           'Acquire::Languages=none']
+           'Acquire::Languages=none', '-o', 'Dpkg::Use-Pty=0']
     if not os.environ.get('COR_LINUX_GUEST'):
-        run([*apt, '-o', 'APT::Update::Error-Mode=any', 'update'], timeout=300)
-    run([*apt, 'install', '-y', '--no-install-recommends',
+        run_privileged_with_timeout(
+            [*apt, '-o', 'APT::Update::Error-Mode=any', 'update'], 300)
+    package_timeout = 1800 if platform.machine().lower() in ('aarch64', 'arm64') else 900
+    run_privileged_with_timeout(
+        [*apt, 'install', '-y', '--no-install-recommends',
          'dbus-x11', 'iproute2', 'util-linux', 'libcap2-bin',
-         'xvfb', 'xwayland', 'x11-utils', 'xdotool', 'wmctrl', 'openbox', 'gnome-shell',
-         'gnome-shell-extension-appindicator', 'policykit-1-gnome',
-         'libgl1-mesa-dri', 'libegl1', 'mesa-utils'], timeout=900)
+         'xvfb', 'xwayland', 'x11-utils', 'xdotool', 'wmctrl', 'openbox',
+         'gnome-shell', 'gnome-shell-extension-appindicator', 'policykit-1-gnome',
+         'libgl1-mesa-dri', 'libegl1'], package_timeout)
     # Package structure was tested in the native packaging job. This job tests
     # its GUI, proxy and routing against this distribution, without repackaging.
     linux_package_tests(packages[0], binary, structure=False)

@@ -36,9 +36,43 @@ _memory_spec = importlib.util.spec_from_file_location('memory_benchmark', build.
 memory_benchmark = importlib.util.module_from_spec(_memory_spec)
 _memory_spec.loader.exec_module(memory_benchmark)
 
+_release_package_spec = importlib.util.spec_from_file_location(
+    'release_package', build.ROOT/'scripts/test-release-package.py')
+release_package = importlib.util.module_from_spec(_release_package_spec)
+_release_package_spec.loader.exec_module(release_package)
+
 
 
 class BuildTests(unittest.TestCase):
+    def test_linux_guest_package_preparation_skips_documentation_indexes(self):
+        with patch.dict(os.environ, {'COR_LINUX_GUEST': 'true'}), \
+             patch.object(release_package, 'run') as execute:
+            release_package.prepare_guest_package_environment()
+        calls = [call.args[0] for call in execute.call_args_list]
+        self.assertEqual(calls, [
+            ['sudo', 'debconf-set-selections'],
+            ['sudo', 'tee', '/etc/dpkg/dpkg.cfg.d/99-cor-ci-no-docs'],
+            ['sudo', 'rm', '-f', '/var/lib/man-db/auto-update'],
+        ])
+        self.assertIn('man-db man-db/auto-update boolean false\n',
+                      execute.call_args_list[0].kwargs['input'])
+        self.assertIn('path-exclude=/usr/share/man/*',
+                      execute.call_args_list[1].kwargs['input'])
+
+    def test_linux_guest_package_preparation_is_guest_only(self):
+        with patch.dict(os.environ, {}, clear=True), \
+             patch.object(release_package, 'run') as execute:
+            release_package.prepare_guest_package_environment()
+        execute.assert_not_called()
+
+    def test_linux_package_install_delegates_timeout_to_root(self):
+        with patch.object(release_package, 'run') as execute:
+            release_package.run_privileged_with_timeout(['apt-get', 'install'], 900)
+        execute.assert_called_once_with([
+            'sudo', 'env', 'DEBIAN_FRONTEND=noninteractive', 'timeout',
+            '--signal=TERM', '--kill-after=30s', '900s', 'apt-get', 'install',
+        ])
+
     def test_linux_gui_supports_gnome_336_and_newer_compositors(self):
         import linux_gui
 

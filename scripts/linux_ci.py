@@ -262,7 +262,8 @@ def vm_test():
                         raise TimeoutError('Ubuntu 20.04 VM did not become SSH-ready')
                     time.sleep(5)
                 remote = lambda script, **kwargs: subprocess.run([*ssh, script], check=True, **kwargs)
-                remote('sudo cloud-init status --wait', timeout=300)
+                remote('sudo timeout --signal=TERM --kill-after=30s 300s '
+                       'cloud-init status --wait', timeout=360)
                 kernel = subprocess.check_output([*ssh, 'uname -r'], text=True).strip()
                 if not kernel.startswith('5.4.'):
                     raise RuntimeError('Minimum-kernel test requires Ubuntu 20.04 GA 5.4; got '+kernel)
@@ -270,8 +271,11 @@ def vm_test():
                        stdin=archive.open('rb'), timeout=300)
                 remote('sudo mkdir -p /opt/cor-test-python && sudo tar xzf - -C /opt/cor-test-python --strip-components=1',
                        stdin=python.open('rb'), timeout=120)
-                remote('sudo apt-get update && sudo DEBIAN_FRONTEND=noninteractive '
-                       'apt-get install -y git', timeout=600)
+                remote('sudo timeout --signal=TERM --kill-after=30s 300s apt-get update',
+                       timeout=360)
+                remote('sudo env DEBIAN_FRONTEND=noninteractive timeout '
+                       '--signal=TERM --kill-after=30s 300s apt-get install -y git',
+                       timeout=360)
                 remote('cd ~/cor-source && GITHUB_ACTIONS=true COR_LINUX_GUEST=true '
                        'PATH=/opt/cor-test-python/bin:$PATH PYTHONDONTWRITEBYTECODE=1 '
                        '/opt/cor-test-python/bin/python3 scripts/test-release-package.py '

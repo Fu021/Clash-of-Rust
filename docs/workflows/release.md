@@ -26,7 +26,7 @@
 
 1. 六个平台获取并校验已有程序，再生成 Windows EXE、Linux DEB、macOS DMG。
 2. Windows 更新 Defender 检测库，逐个扫描安装包及未压缩的全部 EXE/DLL，再验证安装、服务注册、普通用户代理/TUN、更新安装路径、卸载与用户文件保留；安装后以普通用户启动窗口，检查尺寸、GUI/CLI 共享状态和最小化/恢复。PE 图标在打包阶段核验。扫描版本和逐文件 SHA256 写入 `package-receipt.json`。
-3. Linux 使用 Ubuntu 20.04 构建的同一份 DEB：基线容器先做安装及 X11 窗口快速检查；Ubuntu 22.04 x64/ARM64、最新版 x64 与 Ubuntu 20.04 x64/ARM64 虚拟机分别验证安装后的 X11/Wayland 窗口、托盘、窗口重建、GUI/CLI 共用内核、图形授权取消/接受和代理/TUN。GUI 测试用户使用独立临时目录，仅保留诊断报告；20.04 虚拟机要求 5.4 GA 内核，实际硬件仍需单独验收。结构、代理/TUN 不在同一环境重复运行。
+3. Linux 使用 Ubuntu 20.04 构建的同一份 DEB：基线容器先做安装及 X11 窗口快速检查；Ubuntu 22.04 x64/ARM64、最新版 x64 与 Ubuntu 20.04 x64/ARM64 虚拟机分别验证安装后的 X11/Wayland 窗口、托盘、窗口重建、GUI/CLI 共用内核、图形授权取消/接受和代理/TUN。GUI 测试用户使用独立临时目录，仅保留诊断报告；20.04 虚拟机要求 5.4 GA 内核，实际硬件仍需单独验收。结构、代理/TUN 不在同一环境重复运行。disposable guest 只跳过无关文档索引，GUI 依赖与全部功能检查仍执行，见[测试环境复盘](../agent-failures/test-environments.md#11-测试稳定性与外部环境假设)。
 4. macOS 核验 App/DMG 版本、架构、资源及签名，启动安装后的 GUI/内核并验证代理/TUN；界面辅助包使用独立身份与 `LSUIElement`，连续重建界面 5 次，核对应用注册、Dock 最近应用条目及内核 PID。当前使用 ad-hoc 签名，没有 Developer ID 与 Apple 公证。
 5. Android 复用三种 ABI 的已编译 APK，检查签名、架构与 16 KiB 对齐；x86_64 最终包再运行代理/TUN 测试。`check_only` 保留固定开发签名，正式发布要求单独配置长期签名。
 6. 核对安装包、校验值、成功记录及来源后，正式模式才公开 Release；`check_only` 仅保留 Actions 附件。开发版本标记为 prerelease，不覆盖稳定版 latest。

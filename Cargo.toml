@@ -8,7 +8,7 @@ resolver = "3"
 i-slint-backend-android-activity = { path = "vendor/slint-android-activity" }
 
 [workspace.package]
-version = "0.6.6-dev.1.ubuntu20-gui"
+version = "0.6.6-dev.2.vm-package-timeout"
 edition = "2024"
 license = "GPL-3.0-only"
 
