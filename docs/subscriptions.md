@@ -1,4 +1,16 @@
-# 订阅自动更新
+# 订阅与自动更新
+
+## 客户端兼容与格式
+
+桌面 GUI、`cor` 与 Android 共用订阅下载器。请求声明 Clash Meta/mihomo 能力，并携带 `clash-verge`、`ClashVerge`、`ClashMetaForAndroid`、`v2rayN`、`v2rayNG` 及本客户端标识，兼容按客户端名称下发配置的服务端；同时接受 YAML 响应。标识只参与格式协商，不转换节点协议。
+
+部分面板优先匹配 v2rayN/NG，会返回节点链接或 Base64。响应格式不符、收到 HTTP 400/403/406/415/422，或只有复制同一 SS 配置的“不支持本机场协议”提示节点时，同一路线最多再发一次仅含 Clash Meta/mihomo 与自身标识的请求；两次共用 30 秒上限。认证失败、限流、服务端故障或网络错误沿用路线回退，不额外重试 UA。提示旁仍有真实节点或非空 provider 时保留配置，避免误拒可用订阅。
+
+订阅 URL 和显式格式参数保持原样；若链接固定了旧客户端格式，应在机场取得 Mihomo/Clash Meta YAML 链接。最终仍只接受有效的 mihomo YAML，协商全部失败不会覆盖已有订阅或运行状态。
+
+实现参考 Clash Verge Rev 的[默认 UA 与自定义入口](https://github.com/clash-verge-rev/clash-verge-rev/blob/4337bd85758d54d7b9044b2da3c9ac1176eae1f3/src-tauri/src/utils/network.rs#L244)，问题来源见 [Issue #30](https://github.com/Fu021/Clash-of-Rust/issues/30)。服务端实际匹配规则及用户订阅仍需现场验证，不能仅凭截图认定故意封禁。
+
+## 自动更新
 
 桌面 GUI、`cor` 后台与 Android 共用 `subscription_update_interval_minutes`，默认 360 分钟，范围 0–10080；0 关闭。桌面和 Android 设置页可修改，CLI 使用 `cor config set subscription_update_interval_minutes 360`。该间隔与节点定时测速独立。
 

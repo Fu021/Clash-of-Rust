@@ -4,6 +4,7 @@
 
 | 日期 | 任务 | 结果与主题 | 证据与验证边界 |
 | --- | --- | --- | --- |
+| 2026-10-31 | 机场订阅格式 | 按 [Issue #30](downloads.md#订阅客户端识别)补齐兼容 UA，受限回退 Meta 格式并拒绝纯占位节点；桌面、cor、Android 共用，保留真实节点与旧数据。 | 本机仅静态检查；HTTP 分流、提示节点和脱敏回归交 CI，结果见 Actions。真实机场及设备待验收。 |
 | 2026-10-30 | IPv6 慢解析、来源声明与 Ubuntu 20.04 | [IPv6 慢 AAAA](network-recovery.md#ipv6-节点域名解析)默认等待提升；mihomo 声明按实际依赖生成。[旧系统测试](test-environments.md#11-测试稳定性与外部环境假设)在 guest 跳过文档索引并由 root 限时。 | `7e52897` 的 [CI 40979433612](https://github.com/Fu021/Clash-of-Rust/actions/runs/40979433612) 和[不发布打包 40982848593](https://github.com/Fu021/Clash-of-Rust/actions/runs/40982848593)通过；Ubuntu 20.04 x64/ARM64 安装后 GUI、代理及 TUN 均完成，九组包/18 附件及 33 个 Release/360 个附件核验未变。本机仅静态检查；真实旧系统硬件仍待验收。 |
 | 2026-10-29 | Ubuntu 20.04、GUI、Geo 与 macOS 重启 | 验证旧系统及各端生命周期；调整设置卡片、Geo 时间和 Ubuntu 标题。[Linux 时序](test-environments.md#11-测试稳定性与外部环境假设)及 [macOS 授权启动](macos-lifecycle.md#内核退出后的端口复用)见主题。 | `9f92c5f` 的 [CI 40842325516](https://github.com/Fu021/Clash-of-Rust/actions/runs/40842325516)和[不发布打包 40845419892](https://github.com/Fu021/Clash-of-Rust/actions/runs/40845419892)通过，包括 Ubuntu 20.04 两架构及 latest；macOS 用户现场与各平台实机待验收。 |
 | 2026-10-28 | 断网启动恢复与正式发布 | GUI/CLI 共用后台监控默认路由，稳定后恢复出站/DNS 并保留状态，见[联网恢复](network-recovery.md)；完成 loop。 | `848beed` 的 [CI](https://github.com/Fu021/Clash-of-Rust/actions/runs/40662840032) 和[测试打包](https://github.com/Fu021/Clash-of-Rust/actions/runs/40681164792)通过并获用户确认；正式版 `2040e87` 的 [CI](https://github.com/Fu021/Clash-of-Rust/actions/runs/40710958862) 与[发布](https://github.com/Fu021/Clash-of-Rust/actions/runs/40717923064)通过。[追加复验](https://github.com/Fu021/Clash-of-Rust/actions/runs/40720999626)重试未获 runner 的 macOS ARM64，13 项通过，九组包、18 附件及 33 个 Release 未变。本机仅静态检查与代表尺寸预览；真实 tailnet、休眠和触感待验收。 |
@@ -21,7 +22,6 @@
 | 2026-10-25 | 订阅删除、Pad 与 fix.3 预发布 | [当前订阅删除与重复提交](ui-and-tests.md#订阅删除与重复提交)按事务处理；手机/Pad 工具导航、规则来源及完整原文同步，拖动按稳定 ID 修改完整草稿。 | [预发布 40283018496][release-fix3] 的 13 项任务、18 附件核验通过；保留 fix.2，未改稳定 latest；物理 Pad 未验收。 |
 | 2026-10-25 | fix.2 预发布 | 按[来源与版本约束](release.md#10-发布产物版本与依赖快照)复用 `9623f45` 的成功 CI，使用 Android 长期发行签名。 | [CI 40176079496][ci-fix2] 与[预发布 40198947679][release-fix2]通过，九组包/18 附件核验通过，原 27 个 Release 未变。 |
 | 2026-10-25 | 订阅更新失败与 Android 功能对齐 | [下载失败保留旧状态](ui-and-tests.md#订阅更新失败与界面状态)，成功才刷新报告。Fake-IP 来源/还原、规则表单、IP 详情/筛选、取消下载补齐；预发布安装提示数据回退风险。 | 本机仅静态检查与必要预览，回环错误/取消/恢复及原生授权回归交 CI；ARM 真机与用户现场未验收。能力现状见[Android](../../apps/android/README.md#当前能力)。 |
-| 2026-10-24 | 分支版本、更新通道及移动布局 | 采用合法[分支 SemVer](../development.md#分支版本)；关闭预发布时高本地版本也以正式版为目标。列表重叠、Pad 操作栏与设置导航已修正。 | `279f653` 的 [CI 40110166410][ci-layout]成功；新版本须另取同提交验证。安装回退限制见[版本通道](../workflows/versions.md)，不能将其等同于 Android 可覆盖安装。 |
 
 [ci-loop]: https://github.com/Fu021/Clash-of-Rust/actions/runs/40610758771
 [package-loop]: https://github.com/Fu021/Clash-of-Rust/actions/runs/40613948109
@@ -36,4 +36,3 @@
 [release-fix3]: https://github.com/Fu021/Clash-of-Rust/actions/runs/40283018496
 [ci-fix2]: https://github.com/Fu021/Clash-of-Rust/actions/runs/40176079496
 [release-fix2]: https://github.com/Fu021/Clash-of-Rust/actions/runs/40198947679
-[ci-layout]: https://github.com/Fu021/Clash-of-Rust/actions/runs/40110166410
