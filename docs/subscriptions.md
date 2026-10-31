@@ -4,7 +4,7 @@
 
 桌面 GUI、`cor` 与 Android 共用订阅下载器。请求声明 Clash Meta/mihomo 能力，并携带 `clash-verge`、`ClashVerge`、`ClashMetaForAndroid`、`v2rayN`、`v2rayNG` 及本客户端标识，兼容按客户端名称下发配置的服务端；同时接受 YAML 响应。标识只参与格式协商，不转换节点协议。
 
-部分面板优先匹配 v2rayN/NG，会返回节点链接或 Base64。响应格式不符、收到 HTTP 400/403/406/415/422，或只有复制同一 SS 配置的“不支持本机场协议”提示节点时，同一路线最多再发一次仅含 Clash Meta/mihomo 与自身标识的请求；两次共用 30 秒上限。认证失败、限流、服务端故障或网络错误沿用路线回退，不额外重试 UA。提示旁仍有真实节点或非空 provider 时保留配置，避免误拒可用订阅。
+部分面板优先匹配 v2rayN/NG，会返回节点链接或 Base64。响应格式不符、收到 HTTP 400/403/406/415/422，或只有复制同一 SS 配置的“不支持本机场协议”提示节点时，同一路线最多再发一次请求：移除 v2rayN/NG，保留 Clash Meta/mihomo、Verge、Meta for Android 及自身标识。两次共用 30 秒上限。HTTP 401、限流、服务端故障或网络错误沿用路线回退，不额外重试 UA。提示旁仍有真实节点或非空 provider 时保留配置，避免误拒可用订阅。
 
 订阅 URL 和显式格式参数保持原样；若链接固定了旧客户端格式，应在机场取得 Mihomo/Clash Meta YAML 链接。最终仍只接受有效的 mihomo YAML，协商全部失败不会覆盖已有订阅或运行状态。
 

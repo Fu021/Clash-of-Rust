@@ -3,13 +3,14 @@ use anyhow::{Context, Result, bail};
 use std::fmt;
 use yaml_serde::Value;
 
-pub(super) fn user_agent(meta_only: bool) -> String {
-    let aliases = if meta_only {
-        "clash.meta mihomo ClashMeta"
+pub(super) fn user_agent(yaml_only: bool) -> String {
+    let aliases = "clash.meta mihomo ClashMeta clash-verge ClashVerge ClashMetaForAndroid";
+    let extra = if yaml_only {
+        ""
     } else {
-        "clash.meta mihomo ClashMeta clash-verge ClashVerge ClashMetaForAndroid v2rayN v2rayNG"
+        " v2rayN v2rayNG"
     };
-    format!("{aliases} clash-of-rust/{}", crate::VERSION)
+    format!("{aliases}{extra} clash-of-rust/{}", crate::VERSION)
 }
 
 #[derive(Debug)]

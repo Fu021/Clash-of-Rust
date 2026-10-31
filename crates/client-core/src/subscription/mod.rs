@@ -54,11 +54,11 @@ async fn download_agent(
     client: &Client,
     url: &Url,
     retry_slow: bool,
-    meta_only: bool,
+    yaml_only: bool,
 ) -> Result<(String, Option<String>)> {
     let mut response = client
         .get(url.clone())
-        .header(header::USER_AGENT, compatibility::user_agent(meta_only))
+        .header(header::USER_AGENT, compatibility::user_agent(yaml_only))
         .header(
             header::ACCEPT,
             "application/yaml, text/yaml, text/x-yaml, */*;q=0.1",
@@ -203,7 +203,8 @@ mod tests {
         let fallback = agent(&requests[1]);
         assert!(fallback.starts_with("clash.meta mihomo "));
         assert!(!fallback.to_ascii_lowercase().contains("v2ray"));
-        assert!(!fallback.contains("ClashVerge"));
+        assert!(fallback.contains("clash-verge") && fallback.contains("ClashVerge"));
+        assert!(fallback.contains("ClashMetaForAndroid"));
         assert!(requests[0].contains("application/yaml"));
     }
 
