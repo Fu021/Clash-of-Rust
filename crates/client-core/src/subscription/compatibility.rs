@@ -5,11 +5,7 @@ use yaml_serde::Value;
 
 pub(super) fn user_agent(yaml_only: bool) -> String {
     let aliases = "clash.meta mihomo ClashMeta clash-verge ClashVerge ClashMetaForAndroid";
-    let extra = if yaml_only {
-        ""
-    } else {
-        " v2rayN v2rayNG"
-    };
+    let extra = if yaml_only { "" } else { " v2rayN v2rayNG" };
     format!("{aliases}{extra} clash-of-rust/{}", crate::VERSION)
 }
 
