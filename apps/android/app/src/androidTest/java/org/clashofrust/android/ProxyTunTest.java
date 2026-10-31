@@ -154,6 +154,15 @@ public class ProxyTunTest {
         });
         return matched.get();
     }
+    private static MainActivity resumedActivity() {
+        java.util.concurrent.atomic.AtomicReference<MainActivity> result=new java.util.concurrent.atomic.AtomicReference<>();
+        InstrumentationRegistry.getInstrumentation().runOnMainSync(()-> {
+            for (android.app.Activity activity:androidx.test.runner.lifecycle.ActivityLifecycleMonitorRegistry.getInstance()
+                    .getActivitiesInStage(androidx.test.runner.lifecycle.Stage.RESUMED))
+                if (activity instanceof MainActivity && activity.hasWindowFocus()) result.set((MainActivity)activity);
+        });
+        return result.get();
+    }
     private interface Condition { boolean ready() throws Exception; }
     private static boolean vpnActive(ConnectivityManager connectivity) {
         NetworkCapabilities capabilities=connectivity.getNetworkCapabilities(connectivity.getActiveNetwork());
@@ -321,12 +330,32 @@ public class ProxyTunTest {
         // with a bounded deadline, rather than sleeping or rerunning the test.
         long deadline=SystemClock.elapsedRealtime()+15000;
         IOException last=null;
+        ConnectivityManager manager=InstrumentationRegistry.getInstrumentation().getTargetContext()
+            .getSystemService(ConnectivityManager.class);
+        String before=interfaceCounters(manager);
         do {
             try { assertTunSocket(controller,secret); return; }
             catch (IOException transition) { last=transition; }
             SystemClock.sleep(100);
         } while (SystemClock.elapsedRealtime()<deadline);
-        throw new IOException("VPN data path did not become ready; "+networkState(),last);
+        throw new IOException("VPN data path did not become ready; before="+before+"; "+networkState(),last);
+    }
+    private static String interfaceCounters(ConnectivityManager manager) {
+        LinkProperties properties=manager.getLinkProperties(manager.getActiveNetwork());
+        String device=properties==null ? null : properties.getInterfaceName();
+        StringBuilder details=new StringBuilder();
+        if (device!=null && device.matches("[A-Za-z0-9_.-]+")) {
+            for (String counter:new String[]{"rx_packets","tx_packets","rx_dropped","tx_dropped"}) {
+                try {
+                    java.nio.file.Path file=java.nio.file.Paths.get("/sys/class/net",device,"statistics",counter);
+                    details.append('\n').append(device).append(' ').append(counter).append('=')
+                        .append(new String(java.nio.file.Files.readAllBytes(file),StandardCharsets.US_ASCII).trim());
+                } catch (IOException | SecurityException unavailable) {
+                    details.append('\n').append(device).append(' ').append(counter).append(" unavailable");
+                }
+            }
+        }
+        return details.toString();
     }
     private static String networkState() {
         ConnectivityManager manager=InstrumentationRegistry.getInstrumentation().getTargetContext()
@@ -334,7 +363,8 @@ public class ProxyTunTest {
         Network current=manager.getActiveNetwork();
         StringBuilder details=new StringBuilder("active="+current+"; capabilities="+manager.getNetworkCapabilities(current)
             +"; links="+manager.getLinkProperties(current)+"; VPN="+TunnelService.connected()
-            +"; generation="+TunnelService.generation()+"; error="+TunnelService.error());
+            +"; generation="+TunnelService.generation()+"; error="+TunnelService.error())
+            .append(interfaceCounters(manager));
         // Capture the data plane too: a VPN capability alone cannot establish
         // whether packets reached the device or its native reader still owns it.
         for (String command:new String[]{"ip -s link show","ip rule show","ip route show table all"}) {
@@ -477,6 +507,27 @@ public class ProxyTunTest {
                 },"vpn-route-check");
                 routes.setDaemon(true); routes.start();
                 try {
+                    MainActivity original=resumedActivity();
+                    assertNotNull("VPN Activity was not resumed before recreation",original);
+                    long generation=TunnelService.generation();
+                    long uiGeneration=MainActivity.diagnostics().optLong("ui_generation");
+                    String fixture=CoreBridge.config();
+                    InstrumentationRegistry.getInstrumentation().runOnMainSync(original::recreate);
+                    await("VPN Activity was not recreated",()-> {
+                        MainActivity replacement=resumedActivity();
+                        return replacement!=null && replacement!=original;
+                    });
+                    waitForAppWindow();
+                    await("Recreated native UI did not render",()-> {
+                        JSONObject ui=MainActivity.diagnostics();
+                        return ui.optLong("ui_generation")>uiGeneration && ui.optDouble("width")>0;
+                    });
+                    assertTrue("Recreating the UI disconnected the VPN",TunnelService.connected());
+                    assertEquals("Recreating the UI restarted the VPN",generation,TunnelService.generation());
+                    assertTrue("Recreating the UI changed the active VPN route",vpnActive(connectivity));
+                    assertTrue("Recreating the UI stopped the process-owned core",CoreBridge.ready());
+                    assertEquals("Recreating the UI reloaded the running core",fixture,CoreBridge.config());
+                    tunCarriesSocket(controller,secret);
                     for (int handover=0;handover<5;handover++) {
                         long previousGeneration = TunnelService.generation();
                         TunnelService.start(context,true);

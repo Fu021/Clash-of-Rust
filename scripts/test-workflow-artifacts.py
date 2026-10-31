@@ -22,7 +22,7 @@ class ArtifactTests(unittest.TestCase):
     def setUp(self):
         directory = tempfile.TemporaryDirectory()
         self.addCleanup(directory.cleanup)
-        override = patch.dict(os.environ, {'BUILD_INPUTS_DIR': directory.name})
+        override = patch.dict(os.environ, {'BUILD_INPUTS_DIR': directory.name, 'GITHUB_ACTIONS': 'false'})
         override.start()
         self.addCleanup(override.stop)
 
@@ -59,7 +59,7 @@ class ArtifactTests(unittest.TestCase):
         for path in (payload/'clash-of-rust', payload/'clash-desktop-ui', payload/'clash-tun-launcher', payload/'cor', resources/'mihomo'):
             path.write_bytes(header)
         (payload/'LICENSE').write_text('fixture license')
-        build.write_json(resources/'core.json', {'exe_sha256': build.sha256(resources/'mihomo')})
+        build.write_json(resources/'core.json', {'version': 'v1.20.1', 'exe_sha256': build.sha256(resources/'mihomo')})
         geo = []
         for name in build.GEO_NAMES:
             path = resources/name
@@ -113,6 +113,48 @@ class ArtifactTests(unittest.TestCase):
                 build.write_json(root/'input/manifest.json', original)
                 (root/'input/payload/clash-of-rust').write_bytes(b'corrupt executable')
                 with self.assertRaises(ValueError):artifacts.verify_build(root/'input', 'linux', 'x64', self.commit)
+
+    def test_linux_artifact_requires_the_frozen_baseline_and_complete_elf_audit(self):
+        import build_inputs
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            manifest = self.fixture(root)
+            image = 'ubuntu@sha256:'+'a'*64
+            snapshot = {'commit': self.commit, 'baseline': {}, 'constraints': {}, 'files': {},
+                        'upstream': {'linux': {'image': image}}}
+            manifest['build_inputs'] = {key: snapshot[key] for key in ('commit', 'baseline', 'constraints', 'files')}
+            manifest['linux_baseline'] = {'distribution': '20.04', 'image': image}
+            names = ('payload/clash-of-rust', 'payload/clash-desktop-ui', 'payload/clash-tun-launcher',
+                     'payload/cor', 'payload/resources/mihomo', 'tests/core_integration')
+            manifest['linux_elf'] = {name: {'sha256': manifest['files'][name]['sha256'],
+                                            'glibc': ['GLIBC_2.31']} for name in names}
+            with patch.object(artifacts, 'ROOT', root), patch.object(artifacts, 'package_version', return_value=self.version), \
+                    patch.object(build_inputs, 'manifest', return_value=snapshot):
+                build.write_json(root/'input/manifest.json', manifest)
+                artifacts.verify_build(root/'input', 'linux', 'x64', self.commit)
+                for case in ('image', 'missing', 'hash', 'glibc'):
+                    altered = copy.deepcopy(manifest)
+                    if case == 'image':
+                        altered['linux_baseline']['image'] = 'ubuntu@sha256:'+'b'*64
+                    elif case == 'missing':
+                        del altered['linux_elf'][names[0]]
+                    elif case == 'hash':
+                        altered['linux_elf'][names[0]]['sha256'] = '0'*64
+                    else:
+                        altered['linux_elf'][names[0]]['glibc'] = ['GLIBC_2.32']
+                    build.write_json(root/'input/manifest.json', altered)
+                    with self.subTest(case=case), self.assertRaises(ValueError):
+                        artifacts.verify_build(root/'input', 'linux', 'x64', self.commit)
+                local = copy.deepcopy(manifest)
+                del local['linux_baseline'], local['linux_elf']
+                build.write_json(root/'input/manifest.json', local)
+                artifacts.verify_build(root/'input', 'linux', 'x64', self.commit)
+                with patch.dict(os.environ, {'GITHUB_ACTIONS': 'true'}), self.assertRaises(ValueError):
+                    artifacts.verify_build(root/'input', 'linux', 'x64', self.commit)
+            with patch.object(artifacts, 'ROOT', root), patch.object(artifacts, 'package_version', return_value=self.version), \
+                    patch.object(build_inputs, 'manifest', return_value=None), patch.dict(os.environ, {'GITHUB_ACTIONS': 'true'}):
+                with self.assertRaisesRegex(ValueError, 'requires the CI dependency snapshot'):
+                    artifacts.verify_build(root/'input', 'linux', 'x64', self.commit)
 
     def test_archive_rejects_traversal_links_duplicates_and_special_files(self):
         with tempfile.TemporaryDirectory() as directory:

@@ -1,7 +1,7 @@
 import { PageSurface } from "../components/motion.slint";
 import { Theme, AccentPalette } from "../theme/palette.slint";
 import { UiData, UiActions, Intent } from "../state.slint";
-import { PageScroll, Label, Caption, ContentPanel, RowPanel, SettingsSection, ActionButton, AccentChoice, SettingRow, Divider, Field, Select, Paragraph } from "../components/controls.slint";
+import { PageScroll, Label, Caption, ContentPanel, SettingsSection, ActionButton, AccentChoice, SettingRow, Divider, Field, Select, Paragraph } from "../components/controls.slint";
 import { FakeIpPage } from "fake-ip.slint";
 export component SettingsPage inherits PageSurface {
     if UiData.fake-ip-editor: FakeIpPage { }
@@ -83,8 +83,9 @@ export component SettingsPage inherits PageSurface {
                 }
             }
             SettingsSection {
-                title: "订阅自动更新";
+                title: "计划任务";
                 ContentPanel {
+                    Label { text: "订阅自动更新"; }
                     HorizontalLayout {
                         cross-axis-alignment: center; spacing: Theme.content-gap;
                         Field { text <=> UiData.subscription-interval; width: 100px; horizontal-stretch: 0; edited(value) => { UiActions.dispatch(Intent.subscription-interval-input, value, ""); } }
@@ -92,21 +93,13 @@ export component SettingsPage inherits PageSurface {
                         ActionButton { text: "保存间隔"; enabled: !UiData.working; clicked => { UiActions.dispatch(Intent.save-subscription-interval, "", ""); } }
                     }
                     Paragraph { text: "仅更新远程订阅；失败保留原配置，保护期间跳过已锁定订阅。"; font-size: Theme.detail-size; color: Theme.secondary; }
-                }
-            }
-            SettingsSection {
-                title: "定时测速";
-                RowPanel {
-                    Field { text <=> UiData.interval; width: 100px; horizontal-stretch: 0; edited(value) => { UiActions.dispatch(Intent.interval-input, value, ""); } }
-                    Caption { text: "分钟 · 0 表示关闭"; }
-                    ActionButton { text: "保存间隔"; enabled: !UiData.working; clicked => { UiActions.dispatch(Intent.save-interval, "", ""); } }
-                }
-            }
-            SettingsSection {
-                title: "Geo 数据";
-                RowPanel {
-                    Caption { text: UiData.geo-status; }
-                    ActionButton { text: "更新所有 Geo 数据"; busy: UiData.geo-updating; enabled: UiData.ready && !UiData.working; clicked => { UiActions.dispatch(Intent.update-geo, "", ""); } }
+                    Divider { }
+                    Label { text: "定时测速"; }
+                    HorizontalLayout { cross-axis-alignment: center; spacing: Theme.content-gap;
+                        Field { text <=> UiData.interval; width: 100px; horizontal-stretch: 0; edited(value) => { UiActions.dispatch(Intent.interval-input, value, ""); } }
+                        Caption { text: "分钟 · 0 表示关闭"; }
+                        ActionButton { text: "保存间隔"; enabled: !UiData.working; clicked => { UiActions.dispatch(Intent.save-interval, "", ""); } }
+                    }
                 }
             }
             SettingsSection {
@@ -121,6 +114,13 @@ export component SettingsPage inherits PageSurface {
                         ActionButton { text: "检查更新"; busy: UiData.update-checking; enabled: !UiData.update-checking && !UiData.update-busy; clicked => { UiActions.dispatch(Intent.check-update, "", ""); } }
                         ActionButton { text: "查看 Release"; clicked => { UiActions.dispatch(Intent.open-release, "", ""); } }
                         if UiData.update-available: ActionButton { text: "下载安装"; primary: true; enabled: !UiData.update-busy; clicked => { UiActions.dispatch(Intent.install-update, "", ""); } }
+                    }
+                    Divider { }
+                    Label { text: "Geo 数据"; }
+                    Paragraph { text: UiData.geo-status; font-size: Theme.detail-size; color: Theme.secondary; }
+                    HorizontalLayout {
+                        ActionButton { text: "更新所有 Geo 数据"; busy: UiData.geo-updating; enabled: UiData.ready && !UiData.working && !UiData.geo-updating; clicked => { UiActions.dispatch(Intent.update-geo, "", ""); } }
+                        Rectangle { horizontal-stretch: 1; }
                     }
                 }
             }

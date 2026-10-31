@@ -230,6 +230,8 @@ enum Message {
     DnsHost(String),
     Action(Action),
     Finished(Box<Reply>),
+    UpdateGeo,
+    GeoFinished(Result<(), String>),
     CheckUpdate,
     UpdateChecked(u64, Result<Option<update::Available>, String>),
     InstallUpdateConfirmed(String),
@@ -315,7 +317,7 @@ struct App {
     periodic_aborter: Option<AbortHandle>,
     tray: Option<tray::Guard>,
     tray_startup: Option<tray::Startup>,
-    tray_close_requested: bool,
+    tray_close_requested: Option<desktop_runtime::window::Id>,
     #[cfg(target_os = "macos")]
     mac_reopen_ready: bool,
     site_queue: VecDeque<String>,
@@ -424,7 +426,7 @@ impl App {
             Ok(engine) => {
                 let settings = engine.settings.clone();
                 let profiles = engine.profiles.clone();
-                let geo_status = engine.geo_manifest.version.clone();
+                let geo_status = engine.geo_manifest.display_status();
                 (
                     Some(Arc::new(Mutex::new(engine))),
                     settings,
@@ -527,7 +529,7 @@ impl App {
             periodic_aborter: None,
             tray,
             tray_startup,
-            tray_close_requested: false,
+            tray_close_requested: None,
             #[cfg(target_os = "macos")]
             mac_reopen_ready: false,
             site_queue: VecDeque::new(),
@@ -676,7 +678,6 @@ impl App {
                 | Action::SaveRules(..)
                 | Action::Activate(_)
                 | Action::DeleteProfile(_)
-                | Action::UpdateGeo
                 | Action::Mode(_)
                 | Action::ProxyMode(_)
                 | Action::Select(_, _)
@@ -685,7 +686,6 @@ impl App {
         }
         self.busy = true;
         self.working = !matches!(action, Action::Refresh);
-        self.geo_updating = matches!(action, Action::UpdateGeo);
         if let Action::ClaudeProtection(enabled) = &action {
             self.claude.protection_pending = Some(*enabled);
         }
@@ -919,7 +919,7 @@ impl App {
                                 self.rule_state = rules_view::State::default();
                             }
                             self.profiles = engine.profiles.clone();
-                            self.geo_status = engine.geo_manifest.version.clone();
+                            self.geo_status = engine.geo_manifest.display_status();
                             self.mixed_port = self.settings.mixed_port.to_string();
                             self.interval_input = self.settings.delay_interval_minutes.to_string();
                             self.subscription_interval_input = self
@@ -1387,6 +1387,49 @@ impl App {
                     self.show_notice("端口必须为 1–65535 的整数".into(), true);
                 }
             },
+            Message::UpdateGeo => {
+                if self.geo_updating
+                    || self.busy
+                    || self.exiting
+                    || self.updates.install_pending
+                    || self.updates.installing.is_some()
+                {
+                    return Task::none();
+                }
+                let Some(engine) = self.engine.clone() else {
+                    return Task::none();
+                };
+                self.geo_updating = true;
+                return Task::perform(
+                    async move {
+                        let result = Engine::update_geo_shared(&engine)
+                            .await
+                            .map_err(|error| format!("{error:#}"));
+                        if let Err(error) = &result {
+                            engine.lock().await.record_failure(error);
+                        }
+                        result
+                    },
+                    Message::GeoFinished,
+                );
+            }
+            Message::GeoFinished(result) => {
+                self.geo_updating = false;
+                if self.exiting {
+                    return Task::none();
+                }
+                match result {
+                    Ok(()) => {
+                        self.reset_network_results();
+                        self.show_notice(
+                            "GeoIP、GeoSite、Country、ASN 数据已全部更新".into(),
+                            false,
+                        );
+                    }
+                    Err(error) => self.show_notice(format!("Geo 更新失败：{error}"), true),
+                }
+                return self.dispatch(Action::Refresh);
+            }
             Message::Action(action) => {
                 if let Action::Delay(node) = &action
                     && self
@@ -1722,11 +1765,13 @@ impl App {
                 }
             }
             Message::ShowWindow(Some(id)) => {
+                self.tray_close_requested = None;
                 self.visible = true;
                 let refresh = self.dispatch(Action::Refresh);
                 return Task::batch([desktop_runtime::window::show(id), refresh]);
             }
             Message::ShowWindow(None) => {
+                self.tray_close_requested = None;
                 return self.open_window();
             }
             #[cfg(target_os = "linux")]
@@ -1743,9 +1788,15 @@ impl App {
                                 tray.update(&self.snapshot);
                                 tray.speed(&self.snapshot, self.settings.tray_speed);
                                 self.tray = Some(tray);
-                                self.tray_close_requested = false;
+                                if let Some(id) = self.tray_close_requested.take() {
+                                    return self.update(Message::Window((
+                                        id,
+                                        desktop_runtime::window::Event::CloseRequested,
+                                    )));
+                                }
                             }
                             Err(error) => {
+                                self.tray_close_requested = None;
                                 self.show_notice(tray_unavailable(&error), true);
                                 if !self.visible {
                                     return desktop_runtime::window::latest()
@@ -1808,9 +1859,14 @@ impl App {
                 }
             }
             Message::Finished(reply) => {
-                self.geo_updating = false;
                 self.claude.protection_pending = None;
                 let reply = *reply;
+                if !self.geo_status.is_empty()
+                    && !reply.geo_status.is_empty()
+                    && self.geo_status != reply.geo_status
+                {
+                    self.reset_network_results();
+                }
                 if reply.profile_updated
                     || reply
                         .profiles
@@ -2156,14 +2212,15 @@ impl App {
                     let stop_stream = self.dispatch_scope(Action::Refresh, Scope::Other);
                     return Task::batch([desktop_runtime::window::destroy(id), stop_stream]);
                 }
-                if background_start() && self.tray_startup.is_some() && !self.tray_close_requested {
-                    self.tray_close_requested = true;
+                if self.tray_startup.is_some() && self.tray_close_requested.is_none() {
+                    self.tray_close_requested = Some(id);
                     self.show_notice(
-                        "桌面托盘正在初始化，请稍候；再次关闭窗口可退出程序。".into(),
+                        "桌面托盘正在初始化，完成后会自动关闭窗口；再次关闭可退出程序。".into(),
                         false,
                     );
                     return Task::none();
                 }
+                self.tray_close_requested = None;
                 return self.request_exit();
             }
             Message::ExitWindowState(captured) => {

@@ -26,6 +26,8 @@
 
 关闭 `dns_override` 会同时关闭 `fake_ip`，运行配置改用 `redir-host`，其他订阅 DNS 字段保留。`fake_ip_exclusions` 是自定义排除项的 JSON 字符串数组，最多 64 项，例如 `cor config set fake_ip_exclusions '["+.example.com"]'`；DNS 覆盖内置兼容项不占自定义额度。`fake_ip_disabled_defaults` 记录被移除的内置项，只接受内置域名，例如 `cor config set fake_ip_disabled_defaults '["+.tailscale.com"]'`；设置为 `[]` 可还原全部内置项，自定义列表保留。这两个数组均保存到设置，重启后继续生效；禁用客户端内置项不会删除订阅自身的同名过滤规则。桌面提供来源标注与一键还原，见[界面说明](../../crates/client-ui/README.md)。
 
+共享运行配置在订阅未指定 `dns.ipv6-timeout` 时，在 A 查询结束后额外等待慢 AAAA 最多 1000 毫秒；显式值不覆盖，原订阅不变。该等待不保证 IPv6 网络或节点可达，排查和验证边界见[IPv6 节点域名解析](../agent-failures/network-recovery.md#ipv6-节点域名解析)。
+
 检测完成的退出码为 0，可用性与风险应读取报告字段，不能只看退出码。检测报告表示真实观察结果；单项检测失败记为 Failed，不将网络失败当作“可用”。浏览器采样需要用户打开本机入口，在没有真实浏览器的 SSH 会话中不会伪造 WebRTC/指纹结果。报告不读取 Claude 账户 Cookie、令牌或登录内容。项目审计使用 CLI 所在的当前工作目录和终端环境，不套用 GUI/后台启动时的环境。
 
 保护开启会强制 TUN、UDP、加密 DNS 及广泛的 Claude 关联规则，可能影响共享服务；关闭按现有保护恢复机制还原此前配置。操作系统授权仍需用户同意。保护状态持久保存，重启后按原有机制恢复；节点、模式和网络覆盖设置在保护期间保持锁定。
@@ -43,6 +45,10 @@
 | `service remove --yes` / `service status` | 删除或查询 CLI 后台登录自启 |
 | `notify [MESSAGE]` | 与 Claude 拦截共用系统通知接口，默认“喵!” |
 | `completion bash\|zsh\|fish\|powershell` | 输出 shell 补全脚本 |
+
+Geo 状态区分数据版本、数据准备时间和本机上次成功更新时间；旧版清单没有本机记录时显示“暂无记录”。
+
+后台请求超时或中断会取消尚未提交的订阅、Geo 和客户端更新下载；安装交接一旦开始，系统安装程序可能已经启动。慢网可用 `--timeout N` 延长请求等待，详见[下载任务](../agent-failures/downloads.md)。
 
 CLI 后台使用 Linux systemd user unit、macOS LaunchAgent、Windows 当前用户登录任务（无窗口入口启动 `cor`，系统受限时沿用原有注册表回退）。`service install` 配置下次登录启动，当前会话用 `cor start`；`service remove` 只取消自启，停止当前后台用 `cor stop`。不是 Linux 系统级 root 服务，也不自动启用 linger。配置时记录可执行文件和数据目录，移动程序后应重新安装服务。建议桌面自启与 CLI 自启选择一种。卸载或更换安装目录前，对自定义 `--data-dir` 先执行 `cor stop` 和 `cor service remove --yes`；Windows 安装包也会清理默认目录的后台与当前安装的 CLI 自启项。
 

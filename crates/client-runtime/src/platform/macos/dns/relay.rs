@@ -120,7 +120,11 @@ impl Relay {
     }
 
     pub fn verify_native(&self) -> Result<()> {
-        super::native::check(&self.probes, Duration::from_secs(2))
+        self.verify_native_scopes(&[])
+    }
+
+    pub fn verify_native_scopes(&self, scopes: &[String]) -> Result<()> {
+        super::native::check(&self.probes, Duration::from_secs(2), scopes)
     }
 }
 impl Drop for Relay {

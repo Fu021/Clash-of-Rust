@@ -165,7 +165,7 @@ def workspace_sources(source, save=False):
     snapshot = source/'target/workspace-sources.json'
     external = Path(os.environ['WORKSPACE_SOURCE_CACHE']) if os.environ.get('WORKSPACE_SOURCE_CACHE') else None
     tracked = subprocess.check_output(['git', 'ls-files', '-z'], cwd=source).decode().split('\0')
-    names = [name for name in tracked if name and (name.startswith(('apps/', 'crates/', 'resources/', '.cargo/'))
+    names = [name for name in tracked if name and (name.startswith(('apps/', 'crates/', 'vendor/', 'resources/', '.cargo/'))
              or name in ('Cargo.toml', 'Cargo.lock', 'LICENSE'))]
     files, directories, packages = {}, {}, {}
     for name in names:
@@ -272,7 +272,7 @@ def rust_keys(source, compiler, environment):
     source = Path(source)
     dependencies = hashlib.sha256(compiler)
     files = {source/'Cargo.lock', source/'Cargo.toml'}
-    for directory in ('apps', 'crates', '.cargo'):
+    for directory in ('apps', 'crates', 'vendor', '.cargo'):
         base = source/directory
         files.update(base.rglob('Cargo.toml'))
         if directory == '.cargo':
@@ -304,14 +304,16 @@ def rust_keys(source, compiler, environment):
     sources = hashlib.sha256()
     if (source/'Cargo.toml').is_file():
         sources.update((source/'Cargo.toml').read_bytes())
-    for directory in ('apps', 'crates', 'resources', 'scripts', '.github'):
+    for directory in ('apps', 'crates', 'vendor', 'resources', 'scripts', '.github'):
         for path in sorted((source/directory).rglob('*')):
             relative = path.relative_to(source/directory).parts
             if not path.is_file() or any(part in ('target', '.gradle', '__pycache__', 'generated-res', 'native-libs', 'offline-assets') for part in relative):
                 continue
             if directory == 'apps' and relative[:3] == ('android', 'app', 'build'):
                 continue
-            if directory != 'resources' and path.suffix not in ('.rs', '.slint', '.toml', '.py', '.yml', '.yaml', '.cjs'):
+            if (directory != 'resources'
+                    and path.suffix not in ('.rs', '.slint', '.toml', '.py', '.yml', '.yaml', '.cjs')
+                    and not (directory == 'vendor' and path.suffix == '.java')):
                 continue
             sources.update(path.relative_to(source).as_posix().encode())
             sources.update(path.read_bytes())

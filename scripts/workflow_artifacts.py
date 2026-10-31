@@ -100,6 +100,11 @@ def export_build(system, arch, tests, output, binaries=None):
         from build_inputs import verified_manifest, toolchain_report
         manifest['build_inputs'] = verified_manifest()
         manifest['toolchain'] = toolchain_report()
+        if system == 'linux' and (os.environ.get('GITHUB_ACTIONS') == 'true'
+                                  or os.environ.get('COR_LINUX_BASELINE')):
+            from linux_ci import audit_elf, baseline_report
+            manifest['linux_baseline'] = baseline_report()
+            manifest['linux_elf'] = audit_elf(root)
         write_json(root/'manifest.json', manifest)
         with tarfile.open(archive, 'w:gz', compresslevel=1) as tar:
             for path in sorted(root.rglob('*')):
@@ -127,10 +132,21 @@ def verify_build(root, system, arch, expected_commit):
     if manifest.get('cargo_lock_sha256') != sha256(ROOT/'Cargo.lock'):
         raise ValueError('Build dependency lockfile differs from the selected source')
     from build_inputs import manifest as input_manifest
-    if snapshot := input_manifest():
+    snapshot = input_manifest()
+    enforce_linux_baseline = (system == 'linux' and
+                              (os.environ.get('GITHUB_ACTIONS') == 'true'
+                               or 'linux_baseline' in manifest))
+    if enforce_linux_baseline and not snapshot:
+        raise ValueError('Linux build verification requires the CI dependency snapshot')
+    if snapshot:
         frozen = manifest.get('build_inputs', {})
         if any(frozen.get(key) != snapshot.get(key) for key in ('commit', 'baseline', 'constraints', 'files')):
             raise ValueError('Build dependency snapshot differs from the verified CI')
+        if enforce_linux_baseline:
+            baseline = manifest.get('linux_baseline', {})
+            expected_image = snapshot.get('upstream', {}).get('linux', {}).get('image')
+            if baseline.get('distribution') != '20.04' or baseline.get('image') != expected_image or not expected_image:
+                raise ValueError('Linux build does not match the verified Ubuntu 20.04 baseline')
     records = manifest['files']
     extension = '.exe' if system == 'windows' else ''
     required = {'payload/LICENSE', 'payload/clash-of-rust'+extension,
@@ -140,6 +156,22 @@ def verify_build(root, system, arch, expected_commit):
                 *(f'payload/resources/{name}' for name in ('GeoIP.dat', 'GeoSite.dat', 'Country.mmdb', 'ASN.mmdb'))}
     if not required <= records.keys():
         raise ValueError('Build manifest omits a required native payload file')
+    if snapshot and enforce_linux_baseline:
+        from linux_ci import glibc_requirements
+        audits = manifest.get('linux_elf', {})
+        required_elf = {'payload/clash-of-rust', 'payload/clash-desktop-ui',
+                        'payload/clash-tun-launcher', 'payload/cor',
+                        'payload/resources/mihomo', 'tests/core_integration'}
+        if not isinstance(audits, dict) or not required_elf <= audits.keys():
+            raise ValueError('Linux ELF compatibility audit is incomplete')
+        for relative, audit in audits.items():
+            if (relative not in records or not isinstance(audit, dict)
+                    or audit.get('sha256') != records[relative].get('sha256')
+                    or not isinstance(audit.get('glibc'), list)
+                    or any(not isinstance(version, str) or not re.fullmatch(r'GLIBC_\d+(?:\.\d+)+', version)
+                           for version in audit['glibc'])):
+                raise ValueError('Linux ELF audit differs from the verified payload')
+            glibc_requirements('\n'.join('Name: '+str(version) for version in audit['glibc']))
     actual = {path.relative_to(root).as_posix() for path in root.rglob('*') if path.is_file()}
     if actual != set(records) | {'manifest.json', 'source-artifact.json'} and actual != set(records) | {'manifest.json'}:
         raise ValueError('Build payload contains missing or unexpected files')

@@ -2,6 +2,7 @@
 import hashlib
 import json
 from pathlib import Path
+import socket
 import tempfile
 import tomllib
 import struct
@@ -20,6 +21,7 @@ import os
 import copy
 import importlib.util
 import io
+import sys
 import urllib.error
 import urllib.parse
 import zipfile
@@ -34,9 +36,191 @@ _memory_spec = importlib.util.spec_from_file_location('memory_benchmark', build.
 memory_benchmark = importlib.util.module_from_spec(_memory_spec)
 _memory_spec.loader.exec_module(memory_benchmark)
 
+_release_package_spec = importlib.util.spec_from_file_location(
+    'release_package', build.ROOT/'scripts/test-release-package.py')
+release_package = importlib.util.module_from_spec(_release_package_spec)
+_release_package_spec.loader.exec_module(release_package)
+
 
 
 class BuildTests(unittest.TestCase):
+    def test_linux_guest_package_preparation_skips_documentation_indexes(self):
+        with patch.dict(os.environ, {'COR_LINUX_GUEST': 'true'}), \
+             patch.object(release_package, 'run') as execute:
+            release_package.prepare_guest_package_environment()
+        calls = [call.args[0] for call in execute.call_args_list]
+        self.assertEqual(calls, [
+            ['sudo', 'debconf-set-selections'],
+            ['sudo', 'tee', '/etc/dpkg/dpkg.cfg.d/99-cor-ci-no-docs'],
+            ['sudo', 'rm', '-f', '/var/lib/man-db/auto-update'],
+        ])
+        self.assertIn('man-db man-db/auto-update boolean false\n',
+                      execute.call_args_list[0].kwargs['input'])
+        self.assertIn('path-exclude=/usr/share/man/*',
+                      execute.call_args_list[1].kwargs['input'])
+
+    def test_linux_guest_package_preparation_is_guest_only(self):
+        with patch.dict(os.environ, {}, clear=True), \
+             patch.object(release_package, 'run') as execute:
+            release_package.prepare_guest_package_environment()
+        execute.assert_not_called()
+
+    def test_linux_package_install_delegates_timeout_to_root(self):
+        with patch.object(release_package, 'run') as execute:
+            release_package.run_privileged_with_timeout(['apt-get', 'install'], 900)
+        execute.assert_called_once_with([
+            'sudo', 'env', 'DEBIAN_FRONTEND=noninteractive', 'timeout',
+            '--signal=TERM', '--kill-after=30s', '900s', 'apt-get', 'install',
+        ])
+
+    def test_linux_gui_supports_gnome_336_and_newer_compositors(self):
+        import linux_gui
+
+        old = linux_gui.gnome_command('--wayland --nested', 3)
+        self.assertIn('--nested', old)
+        self.assertNotIn('--wayland-display=cor-wayland', old)
+        self.assertNotIn('--unsafe-mode', old)
+        modern = linux_gui.gnome_command('--wayland --wayland-display --headless', 46)
+        self.assertIn('--wayland-display=cor-wayland', modern)
+        self.assertIn('--virtual-monitor=1280x900', modern)
+        self.assertIn('--unsafe-mode', modern)
+
+    @unittest.skipUnless(hasattr(socket, 'AF_UNIX'), 'Unix sockets are unavailable')
+    def test_linux_gui_finds_only_wayland_sockets(self):
+        import linux_gui
+
+        with tempfile.TemporaryDirectory() as temporary:
+            runtime = Path(temporary)
+            (runtime/'wayland-0.lock').write_text('')
+            with socket.socket(socket.AF_UNIX) as default, socket.socket(socket.AF_UNIX) as named:
+                default.bind(str(runtime/'wayland-0'))
+                named.bind(str(runtime/'cor-wayland'))
+                self.assertEqual(linux_gui.wayland_sockets(runtime), {'wayland-0', 'cor-wayland'})
+
+    def test_linux_gui_waits_for_configured_window_size(self):
+        import linux_gui
+
+        small = [{'pid': 12, 'width': 0, 'height': 0}]
+        usable = [{'pid': 12, 'width': 950, 'height': 700}]
+        probe = MagicMock(side_effect=[[], small, usable])
+        with patch.object(linux_gui.time, 'sleep'):
+            self.assertEqual(linux_gui.wait_for_usable_window('wayland', probe), usable)
+        self.assertEqual(probe.call_count, 3)
+
+    def test_linux_gui_rejects_a_permanently_small_window_with_diagnostics(self):
+        import linux_gui
+
+        small = [{'pid': 12, 'width': 640, 'height': 300}]
+        with (patch.object(linux_gui.time, 'sleep'),
+              patch.object(linux_gui.time, 'monotonic', side_effect=[0, 0, 1])):
+            with self.assertRaisesRegex(RuntimeError, r'wayland.*800x450.*640.*300'):
+                linux_gui.wait_for_usable_window('wayland', lambda: small, timeout=1)
+
+    def test_linux_gui_matches_native_wayland_windows_on_old_and_new_gnome(self):
+        import linux_gui
+
+        legacy = {'pid': -1, 'sequence': 1, 'wayland': True}
+        legacy_zero = {'pid': 0, 'sequence': 5, 'wayland': True}
+        modern = {'pid': 42, 'sequence': 2, 'wayland': True}
+        foreign = {'pid': 99, 'sequence': 3, 'wayland': True}
+        xwayland = {'pid': -1, 'sequence': 4, 'wayland': False}
+        self.assertEqual(linux_gui.select_wayland_windows([legacy], [42]), [legacy])
+        self.assertEqual(linux_gui.select_wayland_windows([legacy_zero], [42]), [legacy_zero])
+        self.assertEqual(linux_gui.select_wayland_windows([modern, foreign], [42]), [modern])
+        self.assertEqual(linux_gui.select_wayland_windows([foreign], [42]), [])
+        self.assertEqual(linux_gui.select_wayland_windows([xwayland], [42]), [])
+        self.assertEqual(linux_gui.select_wayland_windows([legacy], []), [])
+        self.assertEqual(linux_gui.select_wayland_windows([legacy], [42, 43]), [])
+        self.assertEqual(linux_gui.select_wayland_windows([legacy, xwayland], [42]), [])
+
+    def test_linux_gui_retries_only_missing_authorization_agent(self):
+        import linux_gui
+
+        request = MagicMock()
+        agent = MagicMock()
+        agent.poll.return_value = None
+        request.poll.return_value = 1
+        self.assertEqual(
+            linux_gui.authorization_dialog(request, agent, io.StringIO(
+                'Error executing command as another user: No authentication agent found.\n')),
+            ('retry', None))
+        with self.assertRaisesRegex(RuntimeError, 'denied'):
+            linux_gui.authorization_dialog(request, agent, io.StringIO('authorization denied'))
+        agent.poll.return_value = 1
+        with self.assertRaisesRegex(RuntimeError, 'agent exited'):
+            linux_gui.authorization_dialog(request, agent, io.StringIO(''))
+
+    def test_linux_gui_finds_authorized_core_without_reading_exe_link(self):
+        import linux_gui
+
+        with tempfile.TemporaryDirectory() as temporary:
+            proc = Path(temporary)
+            for pid, name, uid, parent in (
+                    (101, 'mihomo', 1001, 42),
+                    (102, 'mihomo', 1001, 99),
+                    (103, 'mihomo', 1002, 42),
+                    (104, 'unrelated', 1001, 42)):
+                directory = proc/str(pid)
+                directory.mkdir()
+                (directory/'status').write_text(
+                    f'Name:\t{name}\nPPid:\t{parent}\nUid:\t{uid}\t{uid}\t{uid}\t{uid}\n')
+            (proc/'105').mkdir()
+            (proc/'105'/'status').write_text('Name:\tmihomo\n')
+
+            # The two matching processes have no readable exe link or useful
+            # directory ownership; both must be counted for duplicate checks.
+            self.assertEqual(linux_gui.core_processes(proc, 1001), {101: 42, 102: 99})
+
+    def test_linux_gui_session_is_staged_outside_a_private_workspace(self):
+        import linux_gui
+
+        with tempfile.TemporaryDirectory() as temporary:
+            directory = Path(temporary)
+            directory.chmod(0o755)
+            staged = linux_gui.stage_session(directory)
+            self.assertEqual(staged.stat().st_mode & 0o777, 0o644)
+            self.assertEqual(staged.parent.stat().st_mode & 0o777, 0o755)
+            resolved_root = subprocess.check_output(
+                [sys.executable, '-B', '-c', 'import build_support; print(build_support.ROOT)'],
+                cwd=staged.parent, text=True).strip()
+            self.assertEqual(Path(resolved_root), directory)
+
+            report = directory/'report'
+            report.mkdir()
+            (report/'gui.json').write_text('{"status":"failed"}')
+            (report/'desktop.log').write_text('diagnostic')
+            (report/'local.yaml').write_text('private fixture')
+            (report/'x11.log').symlink_to(report/'local.yaml')
+            with patch.object(linux_gui, 'REPORT', directory/'saved'):
+                linux_gui.preserve_report(report)
+            saved = directory/'saved/desktop'
+            self.assertEqual((saved/'gui.json').read_text(), '{"status":"failed"}')
+            self.assertEqual((saved/'desktop.log').read_text(), 'diagnostic')
+            self.assertFalse((saved/'local.yaml').exists())
+            self.assertFalse((saved/'x11.log').exists())
+
+    def test_linux_gui_session_keeps_pam_identity_but_not_runner_credentials(self):
+        import linux_gui
+
+        environment = {'XDG_SESSION_ID': 'c12', 'XDG_RUNTIME_DIR': '/run/user/1234',
+                       'HOME': '/home/runner', 'XDG_CONFIG_HOME': '/home/runner/.config',
+                       'COR_GUI_REPORT': '/tmp/disposable/report',
+                       'COR_GUI_AUTH_PASSWORD_FILE': '/tmp/disposable/password',
+                       'GITHUB_ACTIONS': 'true', 'GITHUB_TOKEN': 'secret',
+                       'AWS_SECRET_ACCESS_KEY': 'secret'}
+        with patch.dict(os.environ, environment, clear=True), patch.object(os, 'execve') as launch:
+            linux_gui.launch_session()
+        executable, command, retained = launch.call_args.args
+        self.assertEqual(executable, '/usr/bin/dbus-run-session')
+        self.assertIn('--session', command)
+        self.assertEqual(retained['XDG_SESSION_ID'], 'c12')
+        self.assertEqual(retained['XDG_RUNTIME_DIR'], '/run/user/1234')
+        self.assertEqual(retained['HOME'], str(Path('/tmp/disposable/home')))
+        self.assertEqual(retained['XDG_CONFIG_HOME'], str(Path('/tmp/disposable/home/.config')))
+        self.assertEqual(retained['COR_GUI_AUTH_PASSWORD_FILE'], '/tmp/disposable/password')
+        self.assertNotIn('GITHUB_TOKEN', retained)
+        self.assertNotIn('AWS_SECRET_ACCESS_KEY', retained)
+
     def test_memory_mapping_categories_do_not_keep_addresses_or_paths(self):
         text = """1000-2000 rw-p 0 00:00 0
 Rss: 8 kB
@@ -138,6 +322,18 @@ Private_Clean: 2 kB
             before = local_cache.rust_keys(root, b'compiler one', {})[0]
             workflow.write_text('ndk: 29')
             self.assertNotEqual(before, local_cache.rust_keys(root, b'compiler one', {})[0])
+            vendor = root/'vendor/backend'
+            (vendor/'java').mkdir(parents=True)
+            (vendor/'Cargo.toml').write_text('[package]\nname="backend"\nversion="1.0.0"\n')
+            java = vendor/'java/Helper.java'
+            java.write_text('old helper')
+            before, generation = local_cache.rust_keys(root, b'compiler one', {})
+            java.write_text('new helper')
+            after, compatible = local_cache.rust_keys(root, b'compiler one', {})
+            self.assertNotEqual(before, after)
+            self.assertEqual(generation, compatible)
+            (vendor/'Cargo.toml').write_text('[package]\nname="backend"\nversion="1.0.0"\n[features]\nnew=[]\n')
+            self.assertNotEqual(generation, local_cache.rust_keys(root, b'compiler one', {})[1])
             (root/'Cargo.lock').write_text('slint = 1.19.0')
             new_prefix = local_cache.rust_keys(root, b'compiler one', {})[1]
             self.assertNotEqual(prefix, new_prefix)
@@ -190,6 +386,9 @@ Private_Clean: 2 kB
                 (folder/'lib.rs').write_bytes(b'original source')
             java=root/'apps/android/app/MainActivity.java';java.parent.mkdir(parents=True)
             java.write_bytes(b'original Java host')
+            vendor=root/'vendor/slint-android';vendor.mkdir(parents=True)
+            (vendor/'Cargo.toml').write_text('[package]\nname="slint-android"\nversion="1.0.0"\n')
+            backend=vendor/'lib.rs';backend.write_bytes(b'original backend')
             paths=sorted(p.relative_to(root).as_posix() for p in root.rglob('*') if p.is_file())
             tracked='\0'.join(paths).encode()
             ui=root/'crates/ui/lib.rs';core=root/'crates/core/lib.rs'
@@ -200,6 +399,8 @@ Private_Clean: 2 kB
                 for name in ('ui','core'):
                     target=root/'target/release/.fingerprint'/('clash-'+name+'-hash')
                     target.mkdir(parents=True);(target/'lib-info').write_bytes(b'fingerprint')
+                backend_fingerprint=root/'target/release/.fingerprint/slint-android-hash'
+                backend_fingerprint.mkdir(parents=True)
                 v2=root/'target/release/.fingerprint/clash-ui/another-hash'
                 v2.mkdir(parents=True);(v2/'lib-info').write_bytes(b'fingerprint')
                 # Checkout made unchanged sources newer. Conversely, changed
@@ -207,11 +408,13 @@ Private_Clean: 2 kB
                 os.utime(core,ns=(previous+1_000_000,previous+1_000_000))
                 ui.write_bytes(b'changed source');os.utime(ui,ns=(1,1))
                 java.write_bytes(b'changed Android host; unrelated to desktop Rust libraries')
+                backend.write_bytes(b'changed backend');os.utime(backend,ns=(1,1))
                 local_cache.workspace_sources(root)
             self.assertEqual(core.stat().st_mtime_ns,previous)
             self.assertEqual(ui.read_bytes(),b'changed source')
             self.assertFalse((root/'target/release/.fingerprint/clash-ui-hash').exists())
             self.assertFalse(v2.exists())
+            self.assertFalse(backend_fingerprint.exists())
             self.assertTrue((root/'target/release/.fingerprint/clash-core-hash/lib-info').exists())
 
     def test_workspace_cache_invalidates_shared_slint_consumers_outside_the_ui_crate(self):
@@ -919,6 +1122,40 @@ assert.equal(calls.length,2);
             spawn.assert_called_once()
             delay.assert_not_called()
 
+    def test_android_sdk_download_retry_is_bounded_and_uses_fresh_user_caches(self):
+        def process(status, output):
+            child = MagicMock()
+            child.__enter__.return_value = child
+            child.stdout = output.splitlines(keepends=True)
+            child.wait.return_value = status
+            return child
+
+        command = ['sdkmanager', 'system-images;android-35;google_apis;x86_64']
+        corrupt = 'Error reading Zip content from a SeekableByteChannel\n'
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            with patch.object(android_build.subprocess, 'Popen',
+                              side_effect=[process(1, corrupt), process(0, 'Installed\n')]) as spawn, \
+                 patch.object(android_build.time, 'sleep') as delay:
+                android_build.sdkmanager_install(command, root)
+                self.assertEqual(spawn.call_count, 2)
+                self.assertNotEqual(spawn.call_args_list[0].kwargs['env']['ANDROID_USER_HOME'],
+                                    spawn.call_args_list[1].kwargs['env']['ANDROID_USER_HOME'])
+                delay.assert_called_once_with(15)
+            with patch.object(android_build.subprocess, 'Popen',
+                              side_effect=[process(1, corrupt) for _ in range(3)]) as spawn, \
+                 patch.object(android_build.time, 'sleep'):
+                with self.assertRaises(subprocess.CalledProcessError):
+                    android_build.sdkmanager_install(command, root)
+                self.assertEqual(spawn.call_count, 3)
+            with patch.object(android_build.subprocess, 'Popen',
+                              return_value=process(1, 'Package does not exist\n')) as spawn, \
+                 patch.object(android_build.time, 'sleep') as delay:
+                with self.assertRaises(subprocess.CalledProcessError):
+                    android_build.sdkmanager_install(command, root)
+                spawn.assert_called_once()
+                delay.assert_not_called()
+
     def test_cache_budget_evicts_old_lockfiles_then_least_recently_used_entries(self):
         def entry(number, key, size, ref='refs/heads/main'):
             return {'id': number, 'key': key, 'size_in_bytes': size, 'ref': ref,
@@ -1048,7 +1285,12 @@ assert.equal(calls.length,2);
     def test_release_job_protocol_matches_workflow_display_names(self):
         workflow = (build.ROOT/'.github/workflows/release.yml').read_text()
         for name in release.PACKAGE_JOBS - set(release.PACKAGES):
-            self.assertIn('    name: '+name+'\n', workflow)
+            if name.startswith('Ubuntu 20.04-'):
+                self.assertIn('    name: Ubuntu 20.04-${{ matrix.arch }} installed GUI and TUN\n', workflow)
+                arch = name.removeprefix('Ubuntu 20.04-').split(' ', 1)[0]
+                self.assertIn('            arch: '+arch+'\n', workflow)
+            else:
+                self.assertIn('    name: '+name+'\n', workflow)
 
     def test_failed_cargo_json_preserves_human_diagnostics(self):
         message = json.dumps({'reason': 'compiler-message', 'message': {'rendered': 'error[E0308]: expected borrowed window'}})+'\n'
@@ -1262,6 +1504,31 @@ assert.equal(calls.length,2);
                     windows.scan_windows_files([path])
                 self.assertEqual(execute.call_count, 1)
 
+    def test_defender_status_timeout_retries_but_never_skips_the_scan(self):
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory)/'program.exe'
+            path.write_bytes(b'fixture')
+            versions = {'AMEngineVersion': '1.1.1', 'AMProductVersion': '4.18.1',
+                        'AntivirusSignatureVersion': '1.2.3'}
+            timeout = subprocess.TimeoutExpired(['powershell.exe'], 120)
+            with patch.object(windows, 'update_signatures', return_value=Path('MpCmdRun.exe')), \
+                 patch.object(windows.time, 'sleep') as delay, \
+                 patch.object(windows.subprocess, 'run', side_effect=[
+                     timeout, subprocess.CompletedProcess([], 0, json.dumps(versions)),
+                     subprocess.CompletedProcess([], 0),
+                 ]) as execute:
+                report = windows.scan_windows_files([path])
+                self.assertEqual(report['versions'], versions)
+                self.assertEqual(execute.call_count, 3)
+                self.assertIn('-Scan', execute.call_args.args[0])
+                delay.assert_called_once_with(5)
+            with patch.object(windows, 'update_signatures', return_value=Path('MpCmdRun.exe')), \
+                 patch.object(windows.time, 'sleep'), \
+                 patch.object(windows.subprocess, 'run', side_effect=timeout) as execute:
+                with self.assertRaises(subprocess.TimeoutExpired):
+                    windows.scan_windows_files([path])
+                self.assertEqual(execute.call_count, 2)
+
     def test_windows_package_scans_payload_before_installing(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
@@ -1402,7 +1669,7 @@ assert.equal(calls.length,2);
     def resources(self,source):
         source.mkdir()
         (source/'mihomo.exe').write_bytes(b'core')
-        build.write_json(source/'core.json',{'exe_sha256':build.sha256(source/'mihomo.exe')})
+        build.write_json(source/'core.json',{'version':'v1.20.1','exe_sha256':build.sha256(source/'mihomo.exe')})
         records = []
         for name in build.GEO_NAMES:
             path = source/name
@@ -1421,9 +1688,26 @@ assert.equal(calls.length,2);
             stage = base/'stage'
             build.stage_resources(source,stage,'windows')
             self.assertEqual({p.name for p in (stage/'resources/ip-check').iterdir()},{'LICENSE','SOURCE.md'})
+            notice = (stage/'resources/THIRD-PARTY-NOTICES.txt').read_text()
+            self.assertIn('Version: v1.20.1. Distributed under GPL-3.0.', notice)
+            self.assertIn('https://github.com/MetaCubeX/mihomo/tree/v1.20.1', notice)
             (source/'GeoIP.dat').write_bytes(b'corruption')
             with self.assertRaises(ValueError):
                 build.validate_resources(source,'windows')
+
+    def test_android_notice_uses_resolved_go_version_and_pseudo_revision(self):
+        with tempfile.TemporaryDirectory() as folder:
+            module = Path(folder)/'go.mod'
+            notice = Path(folder)/'notice.txt'
+            module.write_text('module example.test\nrequire (\n github.com/metacubex/mihomo v1.2.4-0.20261029120000-123456789abc\n)\n')
+            build.write_mihomo_notice(notice, build.mihomo_go_version(module))
+            self.assertIn('Version: v1.2.4-0.20261029120000-123456789abc.', notice.read_text())
+            self.assertIn('/mihomo/tree/123456789abc', notice.read_text())
+            module.write_text('require github.com/metacubex/mihomo v1.2.3\nreplace github.com/metacubex/mihomo => ../local\n')
+            with self.assertRaisesRegex(ValueError, 'explicit source notice'):
+                build.mihomo_go_version(module)
+            with self.assertRaisesRegex(ValueError, 'Invalid mihomo version'):
+                build.write_mihomo_notice(notice, '../invalid')
 
     def test_manifest_rejects_unexpected_paths(self):
         with tempfile.TemporaryDirectory() as folder:

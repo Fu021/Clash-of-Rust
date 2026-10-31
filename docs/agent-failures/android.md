@@ -21,6 +21,7 @@
 
 - `scripts/android.py`、Gradle 配置、NDK/SDK 版本、Go module、Rust target 和构建标签是否一致。
 - 下载缓存是否完整并校验；失败后是否清理不完整压缩包和 Git 源。
+- 模拟器 SDK 下载遇到损坏压缩包或暂时断网时，可用独立 SDK 用户缓存有限重试；其他错误立即失败，重试后仍须运行真实 VPN/TUN 测试。证据：[不发布打包 40801455733](https://github.com/Fu021/Clash-of-Rust/actions/runs/40801455733)。
 - Android target 是否遵守 stable Rust、`minSdk 26`、`compileSdk 36` 和 16 KiB ELF 对齐要求。
 
 **防回归**
@@ -54,6 +55,8 @@
 
 - 覆盖首次授权、拒绝、取消后的迟到授权、已授权、VPN 重建和关闭清理。
 - 关闭界面不得停止 VPN；套接字必须绕过自身 TUN。
+- Activity 重建须在旧窗口终止时释放 EGL surface，再初始化新界面并附加现有内核，避免重复重载；验证新界面实际渲染及 VPN 配置未变。[CI 40745218037](https://github.com/Fu021/Clash-of-Rust/actions/runs/40745218037) 出现 `EGL_BAD_ALLOC`；当前 Slint 1.18.1 Android 后端回移了[上游生命周期修复](../../vendor/slint-android-activity/PATCHES.md)，修复须由后续模拟器与设备复验。
+- [打包 40813504181](https://github.com/Fu021/Clash-of-Rust/actions/runs/40813504181) 的 x64 模拟器第二次 VPN 重建后，系统仍报告路由与 TUN 描述符存在，但真实 TCP 连接超时；同任务单独复验通过，具体原因尚未确认。不能用控制面状态或延长等待替代流量验证，失败时保留接口计数及原始诊断。
 - 测试辅助状态必须有稳定来源，等待状态变化而不是固定 sleep。
 - VPN 授权测试不能把无障碍 `ACTION_CLICK` 返回成功当作对话框已关闭；要等应用窗口实际恢复前台与焦点，再发起下一次授权，避免连续拒绝/允许误点正在退出的旧窗口。证据见 [CI 40161810492](https://github.com/Fu021/Clash-of-Rust/actions/runs/40161810492) 的 Android x64 logcat。
 - 焦点等待失败时同时检查宿主生命周期与模拟器系统窗口。[不发布打包 40524184066](https://github.com/Fu021/Clash-of-Rust/actions/runs/40524184066) 中应用已恢复 `RESUMED`，但 Google Messages 的系统 ANR 对话框挡住焦点；不能据此改写应用生命周期或删除焦点断言。确认外部干扰后使用新的可丢弃 runner 验证，实际代理/TUN 和授权检查仍须通过。
@@ -65,6 +68,7 @@
 - 逐块同步写盘和直接覆盖活动 Geo 文件会让慢网、UI 卡顿与安装中断互相放大；活动文件破损还会影响内核重启。下载应复用[共享缓冲与慢速/断流约束](../../crates/client-core/src/download.rs)，Geo 按整组暂存、校验、事务安装，重载失败恢复旧文件。
 - Android Geo 更新不能调用会重建 VPN 的启动路径；只重载内核配置，保留 VPN、订阅、设置及规则草稿。回归见[移动会话](../../crates/mobile-ffi/src/lib.rs)和[Android 宿主](../../apps/android/native/src/android.rs)。
 - 旧 Geo 文件与清单不一致时，不能用旧清单校验作为安装新数据的前提；Android 曾逐个补齐缺失文件，可能形成混合版本。新文件仍须完整校验，事务备份独立记录旧文件实际哈希及缺失状态，失败按原样回滚；旧版事务日志仍须可恢复。设备现场成因需要日志或文件证据确认。
+- 桌面和 Android 共用提交边界：更新及重载成功后原子标记已提交；标记前失败恢复旧文件及更新时间，标记后备份清理失败不能误报更新失败或再次回滚，下次恢复时重试清理。旧清单没有更新时间时显示暂无记录。
 
 ## 保护状态与风险分类
 

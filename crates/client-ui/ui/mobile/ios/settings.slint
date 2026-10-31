@@ -2,7 +2,7 @@ import { PageSurface } from "../../components/motion.slint";
 import { MobileData } from "../shared/state.slint";
 import { IosData, IosActions, IosIntent } from "state.slint";
 import { MSmall, MHeading, MCard, MButton, MRow, MDivider, MSwitch, MScroll } from "../shared/controls.slint";
-import { AppearanceSettings, NetworkToggles, MaintenanceSettings } from "../shared/settings.slint";
+import { AppearanceSettings, NetworkToggles, ScheduleSettings, CurrentVersion, GeoSettingsContents } from "../shared/settings.slint";
 
 component IosNetwork inherits VerticalLayout {
     alignment: start; spacing: 10px;
@@ -22,19 +22,25 @@ component IosConnection inherits VerticalLayout {
         MRow { title: "打开系统设置"; clicked => { IosActions.request(IosIntent.system-settings, ""); } }
     }
 }
-component IosAbout inherits MCard {
-    MRow { title: "当前版本"; value: MobileData.version; arrow: false; interactive: false; }
-    MSmall { text: "版本与分发信息"; }
-    MButton { text: "查看版本更新"; clicked => { IosActions.request(IosIntent.version-info, ""); } }
+component IosUpdates inherits VerticalLayout {
+    alignment: start; spacing: 10px;
+    MHeading { text: "更新"; }
+    MCard {
+        CurrentVersion { }
+        MSmall { text: "版本与分发信息"; }
+        MButton { text: "查看版本更新"; clicked => { IosActions.request(IosIntent.version-info, ""); } }
+        MDivider { }
+        GeoSettingsContents { }
+    }
 }
 export component IosSettings inherits PageSurface {
     MScroll {
         if root.width < 760px: VerticalLayout { alignment: start; spacing: 20px; padding-bottom: 20px;
-            AppearanceSettings { } IosNetwork { } IosConnection { } MaintenanceSettings { } IosAbout { }
+            AppearanceSettings { } IosNetwork { } IosConnection { } ScheduleSettings { } IosUpdates { }
         }
         if root.width >= 760px: HorizontalLayout { spacing: 20px; width: root.width;
-            VerticalLayout { alignment: start; spacing: 20px; AppearanceSettings { } IosConnection { } }
-            VerticalLayout { alignment: start; spacing: 20px; IosNetwork { } MaintenanceSettings { } IosAbout { } }
+            VerticalLayout { alignment: start; spacing: 20px; AppearanceSettings { } IosConnection { } ScheduleSettings { } }
+            VerticalLayout { alignment: start; spacing: 20px; IosNetwork { } IosUpdates { } }
         }
     }
 }

@@ -6,6 +6,7 @@ use crate::{
 use anyhow::{Context, Result, bail, ensure};
 use serde::de::DeserializeOwned;
 use std::{
+    future::Future,
     io::{Read, Write},
     net::{SocketAddr, TcpStream},
     sync::Arc,
@@ -214,6 +215,22 @@ fn authorized(request: &Request, endpoint: &Endpoint) -> bool {
             == 0
 }
 
+async fn until_disconnect<T>(
+    stream: &mut tokio::net::TcpStream,
+    cancellation: watch::Sender<bool>,
+    operation: impl Future<Output = T>,
+) -> (T, bool) {
+    tokio::pin!(operation);
+    tokio::select! {
+        result = &mut operation => (result, false),
+        _ = stream.read_u8() => {
+            cancellation.send_replace(true);
+            // Let an already-started installation finish its transaction.
+            (operation.await, true)
+        }
+    }
+}
+
 pub async fn serve(engine: &Arc<Mutex<Engine>>, owner: Owner) -> Result<()> {
     let mut locked = engine.lock().await;
     if locked.is_remote() || locked.control_server.is_some() {
@@ -268,8 +285,30 @@ pub async fn serve(engine: &Arc<Mutex<Engine>>, owner: Owner) -> Result<()> {
                 let Some(engine) = weak.upgrade() else {
                     return;
                 };
-                let result = dispatch::execute(&engine, operation, owner).await;
+                let (result, disconnected) = if matches!(
+                    &operation,
+                    Command::GeoUpdate | Command::UpdateInstall | Command::Import { .. }
+                ) {
+                    let (cancellation, disconnected) = watch::channel(false);
+                    until_disconnect(
+                        &mut stream,
+                        cancellation,
+                        dispatch::execute(&engine, operation, owner, Some(disconnected)),
+                    )
+                    .await
+                } else {
+                    (
+                        dispatch::execute(&engine, operation, owner, None).await,
+                        false,
+                    )
+                };
                 let shutting_down = matches!(&result, Ok(value) if value.get("shutdown").and_then(Value::as_bool)==Some(true));
+                if disconnected {
+                    if shutting_down {
+                        let _ = shutdown.send(true);
+                    }
+                    return;
+                }
                 let reply = match result {
                     Ok(result) => Reply {
                         result,
@@ -315,6 +354,68 @@ pub async fn serve(engine: &Arc<Mutex<Engine>>, owner: Owner) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn older_import_requests_keep_their_original_semantics() {
+        let command: Command = serde_json::from_value(serde_json::json!({
+            "command": "import",
+            "name": "fixture",
+            "source": "https://example.test/sub",
+            "id": "existing"
+        }))
+        .unwrap();
+        assert!(matches!(
+            command,
+            Command::Import {
+                expect_current: false,
+                ..
+            }
+        ));
+
+        #[derive(serde::Deserialize)]
+        #[serde(tag = "command", rename_all = "kebab-case")]
+        enum OlderCommand {
+            Import {
+                name: String,
+                source: String,
+                id: Option<String>,
+            },
+        }
+        let updated = serde_json::to_value(Command::Import {
+            name: "fixture".into(),
+            source: "https://example.test/sub".into(),
+            id: Some("existing".into()),
+            expect_current: true,
+        })
+        .unwrap();
+        let OlderCommand::Import { name, source, id } = serde_json::from_value(updated).unwrap();
+        assert_eq!(name, "fixture");
+        assert_eq!(source, "https://example.test/sub");
+        assert_eq!(id.as_deref(), Some("existing"));
+    }
+
+    #[tokio::test]
+    async fn disconnected_download_is_signalled_and_allowed_to_finish_cleanup() {
+        let listener = TcpListener::bind(("127.0.0.1", 0)).await.unwrap();
+        let address = listener.local_addr().unwrap();
+        let client = tokio::net::TcpStream::connect(address).await.unwrap();
+        let (mut server, _) = listener.accept().await.unwrap();
+        let (cancellation, mut disconnected) = watch::channel(false);
+        let (started, ready) = tokio::sync::oneshot::channel();
+        let task = tokio::spawn(async move {
+            until_disconnect(&mut server, cancellation, async move {
+                started.send(()).unwrap();
+                disconnected.changed().await.unwrap();
+                assert!(*disconnected.borrow());
+                42
+            })
+            .await
+        });
+        ready.await.unwrap();
+        drop(client);
+        assert_eq!(task.await.unwrap(), (42, true));
+    }
+
     #[cfg(windows)]
     #[tokio::test]
     async fn shutdown_waits_for_a_delete_pending_endpoint_reader() {

@@ -428,6 +428,100 @@ async fn basic_system_proxy_and_tun() {
     );
     println!("PASS: unproxied traffic captured by TUN");
     check_network_refresh(&mut engine, &store).await;
+    #[cfg(target_os = "macos")]
+    {
+        // Keep a connection to the privileged core open through shutdown, as
+        // happens during an update, then reopen with only persisted settings.
+        let mut connection = tokio::net::TcpStream::connect(("127.0.0.1", mixed_port))
+            .await
+            .unwrap();
+        tokio::time::timeout(Duration::from_secs(5), async {
+            connection.write_all(&[5, 1, 0]).await.unwrap();
+            let mut greeting = [0; 2];
+            connection.read_exact(&mut greeting).await.unwrap();
+            assert_eq!(greeting, [5, 0]);
+        })
+        .await
+        .expect("TUN core did not accept the SOCKS connection");
+        engine.stop().await.unwrap();
+        let mut byte = [0; 1];
+        let _ = tokio::time::timeout(Duration::from_secs(5), connection.read(&mut byte)).await;
+        drop(connection);
+        drop(engine);
+        engine = Engine::with_resources(store.clone(), test_resources()).unwrap();
+        tokio::time::timeout(Duration::from_secs(25), engine.start_with_proxy_mode())
+            .await
+            .expect("saved macOS TUN startup waited for the old port state")
+            .unwrap();
+        let state = engine.poll(Scope::Home).await.unwrap();
+        assert!(state.running && state.tun && !state.system_proxy);
+        let initial_logs = engine.poll(Scope::Logs).await.unwrap().logs;
+        assert_eq!(
+            initial_logs
+                .iter()
+                .filter(|line| line.contains("mihomo 已启动"))
+                .count(),
+            1,
+            "saved TUN startup must not start and stop an ordinary-user core"
+        );
+        assert!(
+            !initial_logs.iter().any(|line| line.contains("等待端口")),
+            "saved TUN startup must not wait on the ordinary-user port probe"
+        );
+        assert!(
+            direct
+                .get("http://203.0.113.3/tun-restart")
+                .send()
+                .await
+                .is_err()
+        );
+        let mut captured = false;
+        for _ in 0..50 {
+            let logs = engine.poll(Scope::Logs).await.unwrap().logs;
+            if logs
+                .iter()
+                .any(|line| line.contains("203.0.113.3") && line.contains("REJECT"))
+            {
+                captured = true;
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(100)).await;
+        }
+        assert!(captured, "restarted TUN did not capture unproxied traffic");
+        engine.stop().await.unwrap();
+        drop(engine);
+        let mut settings = store.load_settings().unwrap();
+        mixed_port = free_port();
+        while mixed_port == settings.controller_port {
+            mixed_port = free_port();
+        }
+        settings.mixed_port = mixed_port;
+        store.save_settings(&settings).unwrap();
+        let occupied = tokio::net::TcpListener::bind(("127.0.0.1", mixed_port))
+            .await
+            .unwrap();
+        engine = Engine::with_resources(store.clone(), test_resources()).unwrap();
+        let blocked = tokio::time::timeout(Duration::from_secs(25), engine.start_with_proxy_mode())
+            .await
+            .expect("a live listener must fail within the startup deadline");
+        assert!(blocked.is_err() && !engine.running());
+        let persisted = store.load_settings().unwrap();
+        assert_eq!(persisted.mixed_port, mixed_port);
+        assert_eq!(persisted.proxy_mode, ProxyMode::Tun);
+        assert!(
+            tokio::net::TcpStream::connect(("127.0.0.1", mixed_port))
+                .await
+                .is_ok(),
+            "startup must not terminate or replace another listener"
+        );
+        drop(occupied);
+        tokio::time::timeout(Duration::from_secs(25), engine.start_with_proxy_mode())
+            .await
+            .expect("retry after releasing the listener timed out")
+            .unwrap();
+        assert!(engine.poll(Scope::Home).await.unwrap().tun);
+        println!("PASS: macOS saved TUN restarts directly through its authorized core");
+    }
     #[cfg(windows)]
     {
         // Preserve TUN preference, but discard every in-memory Engine/session
@@ -589,13 +683,24 @@ async fn basic_system_proxy_and_tun() {
     let error = remote
         .request::<serde_json::Value>(Control::Import {
             name: original.name.clone(),
-            source: update_url,
+            source: update_url.clone(),
             id: Some(active.clone()),
+            expect_current: false,
         })
         .await
         .unwrap_err();
     assert!(format!("{error:#}").contains("已保留原配置与运行状态"));
     assert!(!format!("{error:#}").contains("token=secret"));
+    let stale = remote
+        .request::<serde_json::Value>(Control::Import {
+            name: original.name.clone(),
+            source: update_url,
+            id: Some(active.clone()),
+            expect_current: true,
+        })
+        .await
+        .unwrap_err();
+    assert!(format!("{stale:#}").contains("订阅已修改"));
     let after: Meta = remote.request(Control::Meta).await.unwrap();
     assert!(after.running);
     assert_eq!(after.view_revision, before.view_revision);
@@ -615,6 +720,7 @@ async fn basic_system_proxy_and_tun() {
             name: original.name,
             source: original.source,
             id: Some(active.clone()),
+            expect_current: true,
         })
         .await
         .unwrap();
@@ -668,6 +774,17 @@ async fn basic_system_proxy_and_tun() {
         let meta: Meta = remote.request(Control::Meta).await.unwrap();
         assert!(meta.running);
         assert_eq!(meta.settings.proxy_mode, mode);
+        if mode == ProxyMode::Tun {
+            facade.poll(Scope::Other).await.unwrap();
+            facade.stop().await.unwrap();
+            assert!(!facade.running());
+            assert_eq!(facade.settings.proxy_mode, ProxyMode::Tun);
+            facade.start_with_proxy_mode().await.unwrap();
+            assert!(facade.is_remote() && facade.running());
+            let state = facade.poll(Scope::Home).await.unwrap();
+            assert!(state.running && state.tun);
+            println!("PASS: an attached GUI delegates saved TUN recovery to its owner");
+        }
         if mode == ProxyMode::System {
             engine.lock().await.system_proxy(false).await.unwrap();
             let meta: Meta = remote.request(Control::Meta).await.unwrap();

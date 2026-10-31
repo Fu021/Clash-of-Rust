@@ -8,7 +8,7 @@
 
 | 系统 | 命令位置 |
 | --- | --- |
-| Ubuntu 22.04+/Debian | 安装 DEB 后直接运行 `cor`（`/usr/bin/cor`） |
+| Ubuntu / Debian | 安装 DEB 后直接运行 `cor`（`/usr/bin/cor`）；0.6.5 正式包要求 Ubuntu 22.04+，开发分支目标为 20.04+ |
 | Windows | 安装目录中的 `cor.exe`，例如 PowerShell：`& 'C:\Program Files\Clash of Rust\cor.exe' help`；按实际安装目录调整，或自行加入 PATH |
 | macOS | `/Applications/Clash of Rust.app/Contents/MacOS/cor`；也可自行为此文件建立 PATH 中的符号链接 |
 

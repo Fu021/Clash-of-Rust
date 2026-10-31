@@ -16,7 +16,7 @@ use std::{
     collections::{BTreeMap, VecDeque},
     path::PathBuf,
     rc::Rc,
-    sync::{Arc, Mutex},
+    sync::{Arc, Condvar, Mutex},
     time::Duration,
 };
 use tokio::sync::mpsc;
@@ -27,6 +27,40 @@ static AUTHORIZATION_REQUEST: std::sync::atomic::AtomicU64 = std::sync::atomic::
 // Also included in exported diagnostics. Contains view counts/status, never URLs or secrets.
 static PRESENTATION: Mutex<String> = Mutex::new(String::new());
 static FIRST_APPEARANCE: Mutex<Option<(bool, i32)>> = Mutex::new(None);
+static UI_GENERATION: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+static UI_LIFETIME: (Mutex<bool>, Condvar) = (Mutex::new(false), Condvar::new());
+
+// NativeActivity can recreate an Activity before the previous native thread
+// has dropped Slint's thread-local renderer and released its EGL surface.
+struct UiLifetime;
+impl Drop for UiLifetime {
+    fn drop(&mut self) {
+        let mut active = UI_LIFETIME
+            .0
+            .lock()
+            .unwrap_or_else(|error| error.into_inner());
+        *active = false;
+        UI_LIFETIME.1.notify_one();
+    }
+}
+thread_local! {
+    static UI_THREAD_LIFETIME: UiLifetime = const { UiLifetime };
+}
+
+fn await_previous_ui() {
+    let active = UI_LIFETIME
+        .0
+        .lock()
+        .unwrap_or_else(|error| error.into_inner());
+    let mut active = UI_LIFETIME
+        .1
+        .wait_while(active, |active| *active)
+        .unwrap_or_else(|error| error.into_inner());
+    *active = true;
+    // Register before Slint initializes its thread-local context, so its
+    // renderer is dropped before the next Activity is allowed to initialize.
+    UI_THREAD_LIFETIME.with(|_| {});
+}
 
 struct AndroidHost {
     vm: JavaVM,
@@ -110,8 +144,17 @@ pub extern "system" fn Java_org_clashofrust_android_MainActivity_nativeDiagnosti
 ) -> jni::sys::jstring {
     unowned_env
         .with_env(|env| {
-            let snapshot = PRESENTATION.lock().map(|s| s.clone()).unwrap_or_default();
+            let (snapshot, generation) = PRESENTATION
+                .lock()
+                .map(|s| {
+                    (
+                        s.clone(),
+                        UI_GENERATION.load(std::sync::atomic::Ordering::Acquire),
+                    )
+                })
+                .unwrap_or_default();
             let mut snapshot: Value = serde_json::from_str(&snapshot).unwrap_or_else(|_| json!({}));
+            snapshot["ui_generation"] = json!(generation);
             if let Ok(first) = FIRST_APPEARANCE.lock()
                 && let Some((dark, accent)) = *first
             {
@@ -210,6 +253,11 @@ struct State {
 
 #[unsafe(no_mangle)]
 fn android_main(app: slint::android::AndroidApp) {
+    await_previous_ui();
+    if let Ok(mut snapshot) = PRESENTATION.lock() {
+        snapshot.clear();
+        UI_GENERATION.fetch_add(1, std::sync::atomic::Ordering::Release);
+    }
     android_logger::init_once(
         android_logger::Config::default()
             .with_max_level(log::LevelFilter::Info)
@@ -421,7 +469,7 @@ async fn run_loop(
         completed: None,
         probe: ("尚未测试".into(), String::new()),
         dns: "尚未查询".into(),
-        geo: "已内置离线数据".into(),
+        geo: "Geo 数据状态不可用".into(),
         geo_updating: false,
         node_pages: BTreeMap::new(),
         node_delays: BTreeMap::new(),
@@ -442,10 +490,13 @@ async fn run_loop(
         update_generation: 0,
         update_confirmation: None,
     };
-    if let Err(error) = state.session.initialize() {
+    if let Err(error) = state.session.attach_or_initialize() {
         state.notice = format!("内核启动失败：{error:#}");
         log::error!("{}", state.notice);
         state.logs.push_back(("ERROR".into(), state.notice.clone()));
+    }
+    if let Ok(manifest) = core::geodata::read_manifest(&state.session.store.runtime()) {
+        state.geo = manifest.display_status();
     }
     state.session.observe_native()?;
     if state.session.settings.claude_protection.is_some()
@@ -826,7 +877,7 @@ async fn run_loop(
                         refresh_requested = true;
                         state.geo_updating=false;geo_job=None;
                         match result.and_then(|staged|state.session.install_geo(staged.path()).map_err(|e|format!("{e:#}"))) {
-                            Ok(manifest)=> {state.geo=manifest.version;state.notice="Geo 数据已更新".into();},
+                            Ok(manifest)=> {state.geo=manifest.display_status();state.notice="Geo 数据已更新".into();},
                             Err(error)=>state.notice=format!("Geo 更新失败：{error}"),
                         }
                     }

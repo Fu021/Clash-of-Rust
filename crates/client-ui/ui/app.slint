@@ -25,7 +25,8 @@ export component AppWindow inherits Window {
     out property <bool> modal-mounted: dialog-host.mounted;
     in-out property <int> accent-draft <=> dialog-host.selected-accent;
     out property <bool> notice-mounted: notice-host.mounted;
-    title: "Clash of Rust · 原生代理客户端";
+    in-out property <string> app-title: "Clash of Rust";
+    title: root.app-title;
     preferred-width: 950px;
     preferred-height: 700px;
     background: Theme.canvas;

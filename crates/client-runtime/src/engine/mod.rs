@@ -1,4 +1,5 @@
 mod control;
+pub(crate) mod downloads;
 mod recovery;
 use crate::control::Command as ControlCommand;
 use crate::{
@@ -160,6 +161,9 @@ pub struct Engine {
     pub profiles: Vec<Profile>,
     pub api: Api,
     pub geo_manifest: GeoManifest,
+    geo_updates: downloads::UpdateGate,
+    app_updates: downloads::UpdateGate,
+    subscription_updates: downloads::UpdateGate,
     resources: PathBuf,
     child: Option<Child>,
     #[cfg(windows)]
@@ -293,6 +297,9 @@ impl Engine {
             api,
             resources,
             geo_manifest,
+            geo_updates: Default::default(),
+            app_updates: Default::default(),
+            subscription_updates: Default::default(),
             child: None,
             #[cfg(windows)]
             windows_tun: false,
@@ -581,9 +588,51 @@ impl Engine {
 
     /// Restore the saved network mode as part of starting the shared owner.
     pub async fn start_with_proxy_mode(&mut self) -> Result<()> {
-        self.start().await?;
+        if self.is_remote() {
+            return self.start().await;
+        }
+        #[cfg(target_os = "macos")]
+        let mut opened_mac_session = false;
+        let started = async {
+            #[cfg(target_os = "macos")]
+            if !self.running()
+                && (self.settings.proxy_mode == ProxyMode::Tun
+                    || self.settings.claude_protection.is_some())
+                && !self
+                    .mac_tun
+                    .as_ref()
+                    .is_some_and(|session| session.is_available())
+            {
+                // The previous TUN core ran as root. On Darwin its closed
+                // connections can keep an ordinary-user bind from succeeding.
+                // Start with the same authorized identity that will own TUN.
+                self.mac_tun = None;
+                let interactive = !std::env::args_os().any(|arg| arg == "--background");
+                self.mac_tun = Some(Self::open_mac_tun(interactive).await?);
+                opened_mac_session = true;
+            }
+            self.start().await
+        }
+        .await;
+        #[cfg(target_os = "macos")]
+        let started = started.map_err(|error| {
+            if opened_mac_session && !self.running() {
+                self.mac_tun = None;
+            }
+            if std::mem::take(&mut self.retained_startup_proxy)
+                && let Err(restore) = platform::restore(&self.journal())
+            {
+                return error.context(format!("启动失败后恢复系统代理也失败：{restore:#}"));
+            }
+            error
+        });
+        started?;
         if let Err(error) = self.restore_proxy_mode().await {
             let stopped = self.stop().await;
+            #[cfg(target_os = "macos")]
+            if stopped.is_ok() && opened_mac_session {
+                self.mac_tun = None;
+            }
             return Err(error.context(format!(
                 "启动后恢复网络模式失败；停止内核：{}",
                 stopped.err().map_or("成功".into(), |e| e.to_string())
@@ -597,6 +646,9 @@ impl Engine {
             self.remote_mutate(ControlCommand::Stop).await?;
             return Ok(());
         }
+        self.geo_updates.cancel();
+        self.app_updates.cancel();
+        self.subscription_updates.cancel();
         platform::restore(&self.journal()).context("恢复系统代理失败，暂不停止内核以避免断网")?;
         self.stop_process().await
     }
@@ -1013,6 +1065,7 @@ impl Engine {
                 name: name.clone(),
                 source: source.clone(),
                 id: existing.clone(),
+                expect_current: false,
             })
             .await?;
             return Ok(());
@@ -1205,27 +1258,6 @@ impl Engine {
         self.commit_profile(transaction, &payload, true).await?;
         self.settings = settings;
         Ok(())
-    }
-
-    pub async fn update_geo(&mut self) -> Result<()> {
-        if self.remote.is_some() {
-            self.remote_mutate(ControlCommand::GeoUpdate).await?;
-            return Ok(());
-        }
-        let runtime = self.store.runtime();
-        let staged = tempfile::Builder::new()
-            .prefix(".geo-download-")
-            .tempdir_in(&runtime)?;
-        append(
-            &self.logs,
-            "[客户端] 开始下载全部 Geo 数据，下载期间继续使用原数据",
-        );
-        assets::download_geo(
-            staged.path(),
-            self.running().then_some(self.settings.mixed_port),
-        )
-        .await?;
-        self.install_geo(staged.path()).await
     }
 
     async fn resume(&mut self, state: &RestartState) -> Result<()> {
@@ -1680,8 +1712,13 @@ impl Engine {
             .await?;
             return Ok(());
         }
+        let _job = self.geo_updates.begin("Geo 数据正在更新，请稍候")?;
+        self.install_geo_staged(staged).await
+    }
+
+    async fn install_geo_staged(&mut self, staged: &std::path::Path) -> Result<()> {
         let runtime = self.store.runtime();
-        let manifest = assets::verify_geo(staged).context("新下载的 Geo 数据无效")?;
+        assets::verify_geo(staged).context("新下载的 Geo 数据无效")?;
         let geo_settings = Settings {
             rule_overrides: RuleOverrides::default(),
             claude_protection: None,
@@ -1722,24 +1759,29 @@ impl Engine {
             if let Some(state) = &state {
                 self.resume(state).await?;
             }
-            Ok::<_, anyhow::Error>(())
+            let manifest = assets::record_install(&runtime)?;
+            assets::commit(&runtime)?;
+            Ok::<_, anyhow::Error>(manifest)
         }
         .await;
-        if let Err(error) = result {
-            if self.running() {
-                self.stop_process().await?;
+        let manifest = match result {
+            Ok(manifest) => manifest,
+            Err(error) => {
+                if self.running() {
+                    self.stop_process().await?;
+                }
+                assets::recover(&runtime)?;
+                if let Some(state) = &state
+                    && let Err(restart) = self.resume(state).await
+                {
+                    platform::restore(&self.journal())?;
+                    bail!("Geo 文件已恢复，但内核重新启动失败：{restart}");
+                }
+                return Err(error.context("Geo 更新失败，已恢复旧数据"));
             }
-            assets::recover(&runtime)?;
-            if let Some(state) = &state
-                && let Err(restart) = self.resume(state).await
-            {
-                platform::restore(&self.journal())?;
-                bail!("Geo 文件已恢复，但内核重新启动失败：{restart}");
-            }
-            return Err(error.context("Geo 更新失败，已恢复旧数据"));
-        }
-        assets::commit(&runtime)?;
+        };
         self.geo_manifest = manifest;
+        self.invalidate_views();
         append(&self.logs, "[客户端] 全部 Geo 数据更新完成并通过校验");
         Ok(())
     }
@@ -1917,6 +1959,15 @@ impl Engine {
     }
 
     #[cfg(target_os = "macos")]
+    async fn open_mac_tun(interactive: bool) -> Result<platform::macos::tun::Session> {
+        tokio::task::spawn_blocking(move || {
+            platform::macos::service::ensure_available(interactive)
+        })
+        .await??;
+        tokio::task::spawn_blocking(platform::macos::tun::Session::authorize).await?
+    }
+
+    #[cfg(target_os = "macos")]
     async fn prepare_mac_tun(&mut self, interactive: bool) -> Result<()> {
         if self
             .mac_tun
@@ -1926,13 +1977,8 @@ impl Engine {
             return Ok(());
         }
         self.mac_tun = None;
-        tokio::task::spawn_blocking(move || {
-            platform::macos::service::ensure_available(interactive)
-        })
-        .await??;
+        let session = Self::open_mac_tun(interactive).await?;
         let previous = self.restart_state().await?.context("请先启动内核")?;
-        let session =
-            tokio::task::spawn_blocking(platform::macos::tun::Session::authorize).await??;
         self.stop().await?;
         self.mac_tun = Some(session);
         if let Err(error) = self.resume(&previous).await {
@@ -2431,7 +2477,7 @@ impl crate::proxy::Backend for Engine {
 
 impl Drop for Engine {
     fn drop(&mut self) {
-        if self.is_remote() {
+        if self.is_remote() || self._instance_lock.is_none() {
             return;
         }
         // Best-effort recovery also covers initialization/runtime errors. A failed

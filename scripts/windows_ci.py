@@ -206,11 +206,15 @@ def run_unelevated(command, env, timeout=240, on_start=None, expected_code=0):
         with desktop_access(token) as desktop:
             startup.desktop = desktop
             require(advapi.CreateProcessAsUserW(token, str(command[0]), arguments, None, None, True, 0x08000400, environment, str(ROOT), c.byref(startup), c.byref(process)))
-            if on_start:
-                on_start(kernel, process.process)
-            if kernel.WaitForSingleObject(process.process, int(timeout*1000)) != 0:
+            try:
+                if on_start:
+                    on_start(kernel, process.process)
+                if kernel.WaitForSingleObject(process.process, int(timeout*1000)) != 0:
+                    raise TimeoutError('Non-admin Windows native checks timed out')
+            except BaseException:
                 kernel.TerminateProcess(process.process, 1)
-                raise TimeoutError('Non-admin Windows native checks timed out')
+                kernel.WaitForSingleObject(process.process, 10000)
+                raise
             code = w.DWORD()
             require(kernel.GetExitCodeProcess(process.process, c.byref(code)))
             if code.value != expected_code:
@@ -299,6 +303,101 @@ def _verify_failed_update(package, installed):
             renderer.write_bytes(original)
 
 
+def installed_gui_smoke(installed, root):
+    """Check the installed window and shared CLI with a non-admin token."""
+    import ctypes as c
+    from ctypes import wintypes as w
+    user32 = c.WinDLL('user32', use_last_error=True)
+    callback = c.WINFUNCTYPE(w.BOOL, w.HWND, w.LPARAM)
+    user32.EnumWindows.argtypes = [callback, w.LPARAM]
+    user32.EnumWindows.restype = w.BOOL
+    user32.IsWindowVisible.argtypes = [w.HWND]
+    user32.GetWindowTextW.argtypes = [w.HWND, w.LPWSTR, c.c_int]
+    user32.GetWindowThreadProcessId.argtypes = [w.HWND, c.POINTER(w.DWORD)]
+    user32.GetWindowRect.argtypes = [w.HWND, c.POINTER(w.RECT)]
+    user32.ShowWindow.argtypes = [w.HWND, c.c_int]
+    profile = root/'gui-profile'
+    profile.mkdir()
+    allow_ordinary_user_directory(profile)
+    env = dict(os.environ, CLASH_OF_RUST_DATA_DIR=str(profile), PYTHONUTF8='1')
+    command = [installed/'cor.exe', '--data-dir', profile, '--json']
+
+    def cli(*arguments):
+        result = subprocess.run([*map(str, command), *arguments], env=env,
+                                capture_output=True, text=True, encoding='utf-8', timeout=30, check=True)
+        return json.loads(result.stdout)['data']
+
+    def inspect(kernel, process):
+        kernel.GetProcessId.argtypes = [w.HANDLE]
+        kernel.GetProcessId.restype = w.DWORD
+        owner = kernel.GetProcessId(process)
+        try:
+            deadline = time.monotonic()+60
+            selected = None
+            while time.monotonic() < deadline:
+                if kernel.WaitForSingleObject(process, 0) == 0:
+                    raise RuntimeError('Installed Windows GUI exited before showing a window')
+                found = []
+                @callback
+                def visit(hwnd, _):
+                    title = c.create_unicode_buffer(512)
+                    if user32.IsWindowVisible(hwnd) and user32.GetWindowTextW(hwnd, title, len(title)):
+                        if title.value.startswith('Clash of Rust'):
+                            pid, rect = w.DWORD(), w.RECT()
+                            user32.GetWindowThreadProcessId(hwnd, c.byref(pid))
+                            if user32.GetWindowRect(hwnd, c.byref(rect)):
+                                found.append((hwnd, pid.value, rect.right-rect.left, rect.bottom-rect.top))
+                    return True
+                if not user32.EnumWindows(visit, 0):
+                    raise c.WinError(c.get_last_error())
+                if found:
+                    selected = found[0]
+                    break
+                time.sleep(.25)
+            if not selected:
+                raise TimeoutError('Installed Windows GUI did not show a window')
+            hwnd, renderer, width, height = selected
+            parent = subprocess.check_output(
+                ['powershell', '-NoProfile', '-NonInteractive', '-Command',
+                 f"(Get-CimInstance Win32_Process -Filter 'ProcessId = {renderer}').ParentProcessId"],
+                text=True, timeout=30).strip()
+            if parent != str(owner) or width < 800 or height < 450:
+                raise RuntimeError('Visible window is not the installed owner\'s usable renderer')
+            deadline = time.monotonic()+45
+            while True:
+                before = cli('status')
+                if before.get('owner') == 'gui' and before.get('running'):
+                    break
+                if time.monotonic() >= deadline:
+                    raise TimeoutError('Windows GUI did not start its shared core')
+                time.sleep(.5)
+            cli('mode', 'global')
+            user32.ShowWindow(hwnd, 6)  # Minimize, then restore the real window.
+            user32.ShowWindow(hwnd, 9)
+            deadline = time.monotonic()+15
+            while True:
+                after = cli('status')
+                if (user32.IsWindowVisible(hwnd) and after.get('running')
+                        and after.get('mode') == 'global' and after.get('owner') == 'gui'):
+                    break
+                if time.monotonic() >= deadline:
+                    raise RuntimeError('Window restore lost the GUI-owned CLI/core state')
+                time.sleep(.25)
+            write_json(ROOT/'target/windows-gui-report.json',
+                       {'status': 'passed', 'ordinary_user': True, 'visible_window': True,
+                        'window_restore': True, 'shared_cli_mode': True})
+        finally:
+            try:
+                cli('stop')
+            finally:
+                # Use the same GUI exit lease as the installer/update path.
+                session = profile/'gui-session.json'
+                if session.is_file():
+                    (profile/'gui-exit').write_text(json.loads(session.read_text())['nonce'])
+
+    run_unelevated([installed/'clash-of-rust.exe'], env, timeout=120, on_start=inspect)
+
+
 def _verify_installed_package(package, binary, root, smoke):
     import winreg
     if os.environ.get('GITHUB_ACTIONS') != 'true':
@@ -325,6 +424,7 @@ def _verify_installed_package(package, binary, root, smoke):
         validate_resources(installed/'resources', 'windows')
         assert (installed/'clash-tun-launcher.exe').is_file()
         run(['sc.exe', 'query', 'ClashOfRust.Network'])
+        installed_gui_smoke(installed, root)
         run([sys.executable, ROOT/'scripts/test-proxy-modes.py',
              '--test-binary', smoke, '--bundle', installed])
         user_file = installed/'unrelated-user-file.txt'
@@ -415,23 +515,38 @@ def update_signatures(timeout=300):
         time.sleep(delay)
 
 
-def scan_windows_files(files):
-    files = [path.resolve(strict=True) for path in files]
-    if not files or any(not path.is_file() or path.suffix.lower() not in ('.exe', '.dll') for path in files):
-        raise ValueError('Expected Windows .exe or .dll files')
-    command = update_signatures()
-    print('Windows Defender:', command, flush=True)
-    status = subprocess.run([
+def defender_versions():
+    command = [
         'powershell.exe', '-NoProfile', '-NonInteractive', '-Command',
         "$ErrorActionPreference = 'Stop'; Get-MpComputerStatus | "
         'Select-Object AMEngineVersion, AMProductVersion, AntivirusSignatureVersion | ConvertTo-Json -Compress',
-    ], check=True, capture_output=True, text=True, encoding='utf-8', timeout=60)
+    ]
+    for attempt in range(2):
+        try:
+            status = subprocess.run(command, check=True, capture_output=True,
+                                    text=True, encoding='utf-8', timeout=120)
+            break
+        except subprocess.TimeoutExpired:
+            if attempt:
+                raise
+            print('Defender status timed out; retrying once', flush=True)
+            time.sleep(5)
     versions = json.loads(status.stdout)
     if not isinstance(versions, dict) or any(
         not versions.get(field)
         for field in ('AMEngineVersion', 'AMProductVersion', 'AntivirusSignatureVersion')
     ):
         raise RuntimeError('Windows Defender version information is unavailable')
+    return versions
+
+
+def scan_windows_files(files):
+    files = [path.resolve(strict=True) for path in files]
+    if not files or any(not path.is_file() or path.suffix.lower() not in ('.exe', '.dll') for path in files):
+        raise ValueError('Expected Windows .exe or .dll files')
+    command = update_signatures()
+    print('Windows Defender:', command, flush=True)
+    versions = defender_versions()
     print('Windows Defender versions:', json.dumps(versions, sort_keys=True), flush=True)
     records = []
     for path in files:

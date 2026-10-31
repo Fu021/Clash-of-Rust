@@ -6,13 +6,15 @@
 | [Publish Release](workflows/release.md) | 手动；复用同提交成功 CI，打包及安装后验证，可仅打包或显式发布预发布 | 九组安装包及 SHA256，Actions 附件保留 3 天 |
 | [Memory Benchmark](workflows/memory.md) | 手动；指定提交的轻负载或压力内存采样 | 原始数据、报告和日志，保留 3 天 |
 
-桌面平台为 Windows x64/ARM64、Linux x64/ARM64、macOS Intel/Apple Silicon。Linux 包支持 Debian/Ubuntu，Ubuntu 最低为 22.04；最新版兼容验证在发布流程执行。iOS 仅有宿主占位与 UI 原型，不参与构建。
+桌面平台为 Windows x64/ARM64、Linux x64/ARM64、macOS Intel/Apple Silicon。开发分支将 Ubuntu 构建基线降至 20.04，安装验证覆盖 20.04、22.04 和最新版，架构与旧内核边界见[打包验证](workflows/release.md#publish-release)；现有 0.6.5 正式包仍以 22.04 为最低基线。iOS 仅有宿主占位与 UI 原型，不参与构建。
 
 新工作流和 `.github/` 变更按[贡献要求](../.github/CONTRIBUTING.md)审核；弃用工作流删除文件后还需在 GitHub 禁用。脚本职责与合并/删除依据见[脚本维护](../scripts/README.md)。受限执行环境遵守 [AGENTS](../AGENTS.md#资源受限环境)，本地不编译、测试或打包。
 
 ## Actions 跟进节奏
 
 先确认一次运行编号、来源提交和启动状态，再参考同工作流近期耗时低频查询。近期 [CI 40562836032](https://github.com/Fu021/Clash-of-Rust/actions/runs/40562836032) 用时约 29 分钟，[Publish Release 40567590202](https://github.com/Fu021/Clash-of-Rust/actions/runs/40567590202) 约 12 分钟：CI 建议 10 分钟首查、此后约 5 分钟；打包 7 分钟首查、临近完成每 2～3 分钟。排队和长步骤延长间隔，其他 Actions 同样先参考历史；失败后才读取必要日志，不反复下载整份日志。
+
+若运行已失败，且 job 注解或日志明确显示长时间未分配到 runner，Agent 自动重试对应失败 job，复用同提交的成功结果并继续低频跟进，无需用户提醒；先等待本轮结束，再用 `gh run rerun <run-id> --job <job-id>`。job ID 取 `gh run view <run-id> --json jobs` 中的 `databaseId`，不要与 run ID 混淆。仍在排队时不取消或重跑；无法确认原因、代码、测试及安装校验失败均先定位，不能当作 runner 故障重试。相同容量故障再次出现时延长等待，持续记录原因；适用于 CI、打包和其他已获授权的 Actions，不增加工作流或访问权限。
 
 ## 本地打包
 
