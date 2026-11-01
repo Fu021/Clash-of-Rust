@@ -40,10 +40,7 @@ pub async fn download_routes(url: &Url, routes: &[Route]) -> Result<(String, Opt
 }
 
 fn incompatible_format(error: &anyhow::Error) -> Option<compatibility::Incompatible> {
-    error
-        .downcast_ref::<compatibility::Incompatible>()
-        .copied()
-        .filter(|error| error.is_format())
+    error.downcast_ref::<compatibility::Incompatible>().copied()
 }
 
 async fn download_route(
@@ -60,25 +57,10 @@ async fn download_route(
         )?
         .build()
         .context("无法创建订阅下载连接")?;
-    // Both format attempts share the existing route deadline.
-    tokio::time::timeout(Duration::from_secs(30), async {
-        match download_agent(&client, url, retry_slow, false).await {
-            Err(error) if error.is::<compatibility::Incompatible>() => {
-                download_agent(&client, url, retry_slow, true)
-                    .await
-                    .map_err(|fallback| {
-                        if let Some(format_error) =
-                            incompatible_format(&fallback).or_else(|| incompatible_format(&error))
-                        {
-                            format_error.into()
-                        } else {
-                            anyhow::anyhow!("{error}；Mihomo 兼容请求：{fallback}")
-                        }
-                    })
-            }
-            result => result,
-        }
-    })
+    tokio::time::timeout(
+        Duration::from_secs(30),
+        download_agent(&client, url, retry_slow),
+    )
     .await
     .context("订阅下载超时")?
 }
@@ -87,11 +69,10 @@ async fn download_agent(
     client: &Client,
     url: &Url,
     retry_slow: bool,
-    yaml_only: bool,
 ) -> Result<(String, Option<String>)> {
     let mut response = client
         .get(url.clone())
-        .header(header::USER_AGENT, compatibility::user_agent(yaml_only))
+        .header(header::USER_AGENT, compatibility::USER_AGENT)
         .header(
             header::ACCEPT,
             "application/yaml, text/yaml, text/x-yaml, */*;q=0.1",
@@ -102,9 +83,6 @@ async fn download_agent(
     if !response.status().is_success() {
         let status = response.status().as_u16();
         let message = format!("订阅服务器返回 HTTP {status}");
-        if matches!(status, 400 | 403 | 406 | 415 | 422) {
-            bail!(compatibility::Incompatible::Http(status));
-        }
         bail!(message);
     }
     if response
@@ -149,10 +127,15 @@ mod tests {
         let url = format!("http://{}", listener.local_addr().unwrap());
         let task = tokio::spawn(async move {
             let (mut socket, _) = listener.accept().await.unwrap();
-            let mut request = [0; 4096];
-            let count = socket.read(&mut request).await.unwrap();
+            let mut request = Vec::new();
+            while !request.ends_with(b"\r\n\r\n") {
+                let mut chunk = [0; 1024];
+                let count = socket.read(&mut chunk).await.unwrap();
+                assert!(count > 0 && request.len() + count <= 8192);
+                request.extend_from_slice(&chunk[..count]);
+            }
             socket.write_all(&wire).await.unwrap();
-            String::from_utf8_lossy(&request[..count]).into_owned()
+            String::from_utf8(request).unwrap()
         });
         (url, task)
     }
@@ -161,39 +144,12 @@ mod tests {
         b"HTTP/1.1 200 OK\r\nContent-Length: 12\r\nsubscription-userinfo: upload=1; download=2; total=3\r\n\r\nproxies: []\n".to_vec()
     }
 
-    async fn negotiating_server(
-        first_status: u16,
-        first_body: &str,
-        second_body: &str,
-    ) -> (String, tokio::task::JoinHandle<Vec<String>>) {
-        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
-        let url = format!("http://{}", listener.local_addr().unwrap());
-        let replies = [
-            (first_status, first_body.to_owned()),
-            (200, second_body.to_owned()),
-        ];
-        let task = tokio::spawn(async move {
-            let mut requests = Vec::new();
-            for (index, (status, body)) in replies.into_iter().enumerate() {
-                let (mut socket, _) = listener.accept().await.unwrap();
-                let mut request = Vec::new();
-                while !request.ends_with(b"\r\n\r\n") {
-                    let mut chunk = [0; 1024];
-                    let count = socket.read(&mut chunk).await.unwrap();
-                    assert!(count > 0 && request.len() + count <= 8192);
-                    request.extend_from_slice(&chunk[..count]);
-                }
-                requests.push(String::from_utf8(request).unwrap());
-                let wire = format!(
-                    "HTTP/1.1 {status} Test\r\nConnection: close\r\nContent-Length: {}\r\nsubscription-userinfo: total={}\r\n\r\n{body}",
-                    body.len(),
-                    index + 1,
-                );
-                socket.write_all(wire.as_bytes()).await.unwrap();
-            }
-            requests
-        });
-        (url, task)
+    fn response_body(body: &str) -> Vec<u8> {
+        format!(
+            "HTTP/1.1 200 OK\r\nContent-Length: {}\r\n\r\n{body}",
+            body.len()
+        )
+        .into_bytes()
     }
 
     fn agent(request: &str) -> &str {
@@ -208,71 +164,40 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn subscription_aliases_fall_back_to_meta_yaml_without_converting_nodes() {
-        let yaml = "proxies: [{name: real, type: vless, server: example.test, port: 443, uuid: fixture}]\n";
-        // A panel can select its V2rayNG formatter before its Clash formatter.
-        let (url, task) = negotiating_server(200, "dmxlc3M6Ly9maXh0dXJl", yaml).await;
+    async fn subscription_request_uses_unversioned_mihomo_aliases() {
+        let (url, task) = server(response()).await;
         let url = Url::parse(&format!("{url}/private-subscription?token=secret")).unwrap();
         let (raw, usage) = download_routes(&url, &routes(None, None)).await.unwrap();
-        assert_eq!(raw, yaml);
-        assert_eq!(usage.as_deref(), Some("total=2"));
-        let requests = task.await.unwrap();
-        assert!(requests.iter().all(|request| {
-            request.starts_with("GET /private-subscription?token=secret HTTP/1.1")
-        }));
-        let primary = agent(&requests[0]);
-        for alias in [
-            "clash-verge",
-            "ClashVerge",
-            "ClashMetaForAndroid",
-            "clash.meta",
-            "mihomo",
-            "v2rayN",
-            "v2rayNG",
-        ] {
-            assert!(primary.contains(alias), "{primary}");
-        }
-        assert!(primary.contains(&format!("clash-of-rust/{}", crate::VERSION)));
-        let fallback = agent(&requests[1]);
-        assert!(fallback.starts_with("clash.meta mihomo "));
-        assert!(!fallback.to_ascii_lowercase().contains("v2ray"));
-        assert!(fallback.contains("clash-verge") && fallback.contains("ClashVerge"));
-        assert!(fallback.contains("ClashMetaForAndroid"));
-        assert!(requests[0].contains("application/yaml"));
+        assert_eq!(raw, "proxies: []\n");
+        assert_eq!(usage.as_deref(), Some("upload=1; download=2; total=3"));
+        let request = task.await.unwrap();
+        assert!(request.starts_with("GET /private-subscription?token=secret HTTP/1.1"));
+        assert_eq!(
+            agent(&request),
+            "clash.meta mihomo ClashMeta clash-verge ClashVerge ClashMetaForAndroid clash-of-rust"
+        );
+        assert!(request.contains("application/yaml"));
     }
 
     #[tokio::test]
-    async fn rejected_agents_and_dummy_help_nodes_negotiate_before_accepting_a_profile() {
+    async fn dummy_help_nodes_are_rejected_without_exposing_credentials() {
         let hints = "proxies: [{name: 当前Clash客户端不支持本机场协议, type: ss, server: 127.0.0.1, port: 1, cipher: aes-128-gcm, password: placeholder}]\n";
-        for (status, body) in [(403, ""), (406, ""), (200, hints)] {
-            let (url, task) = negotiating_server(status, body, "proxies: []\n").await;
-            let (raw, _) = download_routes(&Url::parse(&url).unwrap(), &routes(None, None))
-                .await
-                .unwrap();
-            assert_eq!(raw, "proxies: []\n");
-            assert_eq!(task.await.unwrap().len(), 2);
-        }
-    }
-
-    #[tokio::test]
-    async fn repeated_help_nodes_fail_without_exposing_tokens_or_placeholder_credentials() {
-        let hints = "proxies: [{name: 当前Clash客户端不支持本机场协议, type: ss, server: 127.0.0.1, port: 1, cipher: aes-128-gcm, password: private-placeholder}]\n";
-        let (url, task) = negotiating_server(200, hints, hints).await;
+        let (url, task) = server(response_body(hints)).await;
         let url = Url::parse(&format!("{url}/private-subscription?token=secret")).unwrap();
         let error = download_routes(&url, &routes(None, None))
             .await
             .unwrap_err()
             .to_string();
         assert!(error.contains("兼容提示节点"));
-        for secret in ["private-subscription", "secret", "private-placeholder"] {
+        for secret in ["private-subscription", "secret", "placeholder"] {
             assert!(!error.contains(secret));
         }
-        assert_eq!(task.await.unwrap().len(), 2);
+        task.await.unwrap();
     }
 
     #[tokio::test]
     async fn authentication_rate_limits_and_server_errors_do_not_retry_the_agent() {
-        for status in [401, 404, 429, 500, 503] {
+        for status in [400, 401, 403, 404, 406, 415, 422, 429, 500, 503] {
             let wire = format!("HTTP/1.1 {status} Test\r\nContent-Length: 0\r\n\r\n");
             let (url, task) = server(wire.into_bytes()).await;
             let error = download_routes(&Url::parse(&url).unwrap(), &routes(None, None))
@@ -286,7 +211,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn unsupported_formats_return_one_safe_actionable_notice_after_negotiation() {
+    async fn unsupported_formats_return_one_safe_actionable_notice() {
         for body in [
             "vless://private-uuid@example.test:443#private-node",
             "dmxlc3M6Ly9maXh0dXJl",
@@ -295,7 +220,7 @@ mod tests {
             "proxies: not-a-list",
             "proxy-providers: []",
         ] {
-            let (url, task) = negotiating_server(200, body, body).await;
+            let (url, task) = server(response_body(body)).await;
             let url = Url::parse(&format!("{url}/private-subscription?token=secret")).unwrap();
             let error = download_routes(&url, &routes(None, None))
                 .await
@@ -307,12 +232,12 @@ mod tests {
             for secret in ["private-", "token", "secret", "example.test"] {
                 assert!(!notice.contains(secret), "{notice}");
             }
-            assert_eq!(task.await.unwrap().len(), 2);
+            task.await.unwrap();
         }
     }
 
     #[tokio::test]
-    async fn http_negotiation_failure_is_not_reported_as_an_unsupported_format() {
+    async fn http_failure_is_not_reported_as_an_unsupported_format() {
         let (url, task) =
             server(b"HTTP/1.1 403 Forbidden\r\nContent-Length: 0\r\n\r\n".to_vec()).await;
         let error = download_routes(&Url::parse(&url).unwrap(), &routes(None, None))

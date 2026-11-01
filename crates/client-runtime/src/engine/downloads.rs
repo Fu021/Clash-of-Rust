@@ -298,16 +298,14 @@ mod tests {
         let url =
             reqwest::Url::parse(&format!("http://{}", listener.local_addr().unwrap())).unwrap();
         let server = tokio::spawn(async move {
-            for _ in 0..2 {
-                let (mut socket, _) = listener.accept().await.unwrap();
-                let mut request = [0; 4096];
-                let count = socket.read(&mut request).await.unwrap();
-                assert!(count > 0);
-                socket
-                    .write_all(b"HTTP/1.1 200 OK\r\nConnection: close\r\nContent-Length: 16\r\n\r\n{\"outbounds\":[]}")
-                    .await
-                    .unwrap();
-            }
+            let (mut socket, _) = listener.accept().await.unwrap();
+            let mut request = [0; 4096];
+            let count = socket.read(&mut request).await.unwrap();
+            assert!(count > 0);
+            socket
+                .write_all(b"HTTP/1.1 200 OK\r\nConnection: close\r\nContent-Length: 16\r\n\r\n{\"outbounds\":[]}")
+                .await
+                .unwrap();
         });
         let error = clash_client_core::subscription::download_routes(
             &url,

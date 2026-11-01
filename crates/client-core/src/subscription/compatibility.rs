@@ -3,23 +3,13 @@ use anyhow::{Result, bail};
 use std::fmt;
 use yaml_serde::Value;
 
-pub(super) fn user_agent(yaml_only: bool) -> String {
-    let aliases = "clash.meta mihomo ClashMeta clash-verge ClashVerge ClashMetaForAndroid";
-    let extra = if yaml_only { "" } else { " v2rayN v2rayNG" };
-    format!("{aliases}{extra} clash-of-rust/{}", crate::VERSION)
-}
+pub(super) const USER_AGENT: &str =
+    "clash.meta mihomo ClashMeta clash-verge ClashVerge ClashMetaForAndroid clash-of-rust";
 
 #[derive(Clone, Copy, Debug)]
 pub(super) enum Incompatible {
     Format,
     Hint,
-    Http(u16),
-}
-
-impl Incompatible {
-    pub(super) fn is_format(self) -> bool {
-        !matches!(self, Self::Http(_))
-    }
 }
 
 impl fmt::Display for Incompatible {
@@ -30,7 +20,6 @@ impl fmt::Display for Incompatible {
             }
             Self::Hint => formatter
                 .write_str("订阅服务器返回客户端兼容提示节点，请选择 Mihomo/Clash Meta YAML 订阅"),
-            Self::Http(status) => write!(formatter, "订阅服务器返回 HTTP {status}"),
         }
     }
 }
