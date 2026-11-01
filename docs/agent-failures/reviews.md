@@ -4,7 +4,7 @@
 
 | 日期 | 任务 | 结果与主题 | 证据与验证边界 |
 | --- | --- | --- | --- |
-| 2026-11-01 | 非 Mihomo 订阅提示 | [格式错误](../subscriptions.md#客户端兼容与格式)在 UA/路线回退后保留分类，桌面与 Android 手动、定时更新顶部提示，`cor` 返回同类原因；不转换、不泄露解析原文，保留原状态。 | 本机仅静态检查及窄屏通知预览；格式/HTTP 分流、通知去重与移动数据保留回归交本次 CI。真实机场与设备待验收。 |
+| 2026-11-01 | 订阅格式提示与打包门禁 | [格式错误](../subscriptions.md#客户端兼容与格式)由各端顶部通知或 `cor` 报错，保留原状态及合法 null 段；修复 [CI 任务索引漏项](release.md#10-发布产物版本与依赖快照)，按 attempt 检查完整最新结果。 | `56db231` 的 CI 41290864377 九平台及 attempt 列表 11 项通过；首次打包 41293222935 因普通列表漏项被拒。补充回归交最终提交 CI；本机仅静态与窄屏预览，真实机场、设备待验收。 |
 | 2026-10-31 | 机场订阅格式 | 按 [Issue #30](downloads.md#订阅客户端识别)补齐兼容 UA，受限回退 Meta 格式并拒绝纯占位节点；桌面、cor、Android 共用，保留真实节点与旧数据。 | 本机仅静态检查；HTTP 分流、提示节点和脱敏回归交 CI，结果见 Actions。真实机场及设备待验收。 |
 | 2026-10-30 | IPv6 慢解析、来源声明与 Ubuntu 20.04 | [IPv6 慢 AAAA](network-recovery.md#ipv6-节点域名解析)默认等待提升；mihomo 声明按实际依赖生成。[旧系统测试](test-environments.md#11-测试稳定性与外部环境假设)在 guest 跳过文档索引并由 root 限时。 | `7e52897` 的 [CI 40979433612](https://github.com/Fu021/Clash-of-Rust/actions/runs/40979433612) 和[不发布打包 40982848593](https://github.com/Fu021/Clash-of-Rust/actions/runs/40982848593)通过；Ubuntu 20.04 x64/ARM64 安装后 GUI、代理及 TUN 均完成，九组包/18 附件及 33 个 Release/360 个附件核验未变。本机仅静态检查；真实旧系统硬件仍待验收。 |
 | 2026-10-29 | Ubuntu 20.04、GUI、Geo 与 macOS 重启 | 验证旧系统及各端生命周期；调整设置卡片、Geo 时间和 Ubuntu 标题。[Linux 时序](test-environments.md#11-测试稳定性与外部环境假设)及 [macOS 授权启动](macos-lifecycle.md#内核退出后的端口复用)见主题。 | `9f92c5f` 的 [CI 40842325516](https://github.com/Fu021/Clash-of-Rust/actions/runs/40842325516)和[不发布打包 40845419892](https://github.com/Fu021/Clash-of-Rust/actions/runs/40845419892)通过，包括 Ubuntu 20.04 两架构及 latest；macOS 用户现场与各平台实机待验收。 |

@@ -1,6 +1,7 @@
 """Offline tests for resource validation and clean package staging."""
 import hashlib
 import json
+import re
 from pathlib import Path
 import socket
 import tempfile
@@ -1766,7 +1767,7 @@ class ReleaseTests(unittest.TestCase):
         def request(path, *args, **kwargs):
             if path.startswith('/actions/workflows/ci.yml/runs?'):return {'workflow_runs':[run]}
             if path == '/actions/runs/77':return run
-            if path.startswith('/actions/runs/77/jobs?'):return {'jobs':jobs}
+            if path.startswith('/actions/runs/77/attempts/') and '/jobs?' in path:return {'jobs':jobs,'total_count':len(jobs)}
             if path.startswith('/branches/'):return {'commit':{'sha':main or self.commit}}
             self.fail('Unexpected CI request: '+path)
         request.repo = 'example/project'
@@ -1822,6 +1823,49 @@ class ReleaseTests(unittest.TestCase):
         for query in queries:
             self.assertEqual(query['filter'],['latest'])
             self.assertEqual(query['per_page'],['100'])
+
+    def test_release_reads_attempt_jobs_and_keeps_the_newest_result_after_partial_reruns(self):
+        previous = [{'name':name,'status':'completed','conclusion':'success'} for name in release.CI_JOBS]
+        attempts = {1:previous, 2:[{'name':'macos-arm64','status':'completed','conclusion':'failure'}]}
+        def client(path):
+            match = re.fullmatch(r'/actions/runs/77/attempts/([12])/jobs\?per_page=100&page=1',path)
+            self.assertIsNotNone(match, 'Must not depend on the incomplete generic jobs index')
+            jobs = attempts[int(match.group(1))]
+            return {'jobs':jobs,'total_count':len(jobs)}
+        jobs = {j['name']:j for j in release.workflow_jobs(client,{'id':77,'run_attempt':2})}
+        self.assertEqual(set(jobs),release.CI_JOBS)
+        self.assertEqual(jobs['macos-arm64']['conclusion'],'failure')
+        self.assertEqual(jobs['linux-x64']['conclusion'],'success')
+        attempts[2][0]['conclusion']='success'
+        self.assertTrue(all(j['conclusion']=='success' for j in release.workflow_jobs(client,{'id':77,'run_attempt':2})))
+
+    def test_release_attempt_job_pages_must_be_complete_and_unique(self):
+        records = [{'name':f'job-{index}'} for index in range(101)]
+        def client(path):
+            page = int(urllib.parse.parse_qs(urllib.parse.urlparse(path).query)['page'][0])
+            return {'jobs':records[(page-1)*100:page*100],'total_count':len(records)}
+        self.assertEqual(len(release.workflow_jobs(client,{'id':77})),101)
+        records[-1]['name']=records[0]['name']
+        with self.assertRaisesRegex(ValueError,'Duplicate'):
+            release.workflow_jobs(client,{'id':77})
+        with self.assertRaisesRegex(ValueError,'incomplete'):
+            release.workflow_jobs(lambda _: {'jobs':[],'total_count':1},{'id':77})
+
+    def test_release_partial_rerun_stops_before_obsolete_skipped_matrix_placeholders(self):
+        records = {
+            2:[{'name':name,'status':'completed','conclusion':'success'} for name in release.CI_JOBS],
+            3:[{'name':'macos-arm64','status':'completed','conclusion':'success'}],
+        }
+        queried = []
+        def client(path):
+            number = int(path.split('/attempts/',1)[1].split('/',1)[0])
+            queried.append(number)
+            self.assertIn(number,records, 'Older failed-input attempts must not reintroduce matrix placeholders')
+            jobs = records[number]
+            return {'jobs':jobs,'total_count':len(jobs)}
+        jobs = release.workflow_jobs(client,{'id':77,'run_attempt':3},release.CI_JOBS)
+        self.assertEqual({job['name'] for job in jobs},release.CI_JOBS)
+        self.assertEqual(queried,[3,2])
 
     def test_release_refresh_preserves_artifact_and_mutation_urls(self):
         for path,method,data,raw in [
@@ -2000,7 +2044,7 @@ class ReleaseTests(unittest.TestCase):
             run.update(changes or {})
             records=jobs if jobs is not None else [{'name':name,'status':'completed','conclusion':'success'} for name in release.PACKAGE_JOBS]
             def request(path):
-                return {'jobs':records} if '/jobs?' in path else run
+                return {'jobs':records,'total_count':len(records)} if '/jobs?' in path else run
             request.repo='example/project'
             return request
         with patch.dict(build.os.environ,{},clear=True):
