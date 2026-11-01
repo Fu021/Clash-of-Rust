@@ -1,5 +1,5 @@
 //! Subscription format negotiation; these aliases do not change node protocols.
-use anyhow::{Context, Result, bail};
+use anyhow::{Result, bail};
 use std::fmt;
 use yaml_serde::Value;
 
@@ -9,20 +9,46 @@ pub(super) fn user_agent(yaml_only: bool) -> String {
     format!("{aliases}{extra} clash-of-rust/{}", crate::VERSION)
 }
 
-#[derive(Debug)]
-pub(super) struct Incompatible(pub(super) String);
+#[derive(Clone, Copy, Debug)]
+pub(super) enum Incompatible {
+    Format,
+    Hint,
+    Http(u16),
+}
+
+impl Incompatible {
+    pub(super) fn is_format(self) -> bool {
+        !matches!(self, Self::Http(_))
+    }
+}
 
 impl fmt::Display for Incompatible {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        formatter.write_str(&self.0)
+        match self {
+            Self::Format => {
+                formatter.write_str("订阅格式不兼容，请选择 Mihomo/Clash Meta YAML 订阅")
+            }
+            Self::Hint => formatter
+                .write_str("订阅服务器返回客户端兼容提示节点，请选择 Mihomo/Clash Meta YAML 订阅"),
+            Self::Http(status) => write!(formatter, "订阅服务器返回 HTTP {status}"),
+        }
     }
 }
 
 impl std::error::Error for Incompatible {}
 
 pub(super) fn validate(raw: &str) -> Result<()> {
-    let map = crate::config::parse_profile(raw)
-        .context(Incompatible("订阅响应不是有效的 mihomo 配置".into()))?;
+    // Parser diagnostics may contain subscription credentials or node links.
+    let map = crate::config::parse_profile(raw).map_err(|_| Incompatible::Format)?;
+    if map
+        .get(Value::from("proxies"))
+        .is_some_and(|value| !value.is_sequence())
+        || map
+            .get(Value::from("proxy-providers"))
+            .is_some_and(|value| !value.is_mapping())
+    {
+        bail!(Incompatible::Format);
+    }
     if map
         .get(Value::from("proxy-providers"))
         .and_then(Value::as_mapping)
@@ -59,9 +85,7 @@ pub(super) fn validate(raw: &str) -> Result<()> {
             })
         })
     {
-        bail!(Incompatible(
-            "订阅服务器返回客户端兼容提示节点，请使用 Mihomo/Clash Meta 格式的订阅链接".into(),
-        ));
+        bail!(Incompatible::Hint);
     }
     Ok(())
 }

@@ -34,6 +34,8 @@ pub struct Snapshot {
     pub logs: Vec<Arc<str>>,
     pub running: bool,
     pub claude_guard: Option<crate::claude_check::guard::Snapshot>,
+    #[serde(default)]
+    pub subscription_failure: Option<crate::subscription::UpdateFailure>,
 }
 
 impl Snapshot {

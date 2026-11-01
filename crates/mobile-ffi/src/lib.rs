@@ -1462,6 +1462,8 @@ mod tests {
             b"HTTP/1.1 200 OK\r\nContent-Length: 0\r\n\r\n".to_vec(),
             b"HTTP/1.1 200 OK\r\nContent-Length: 12\r\n\r\npartial".to_vec(),
             b"HTTP/1.1 200 OK\r\nContent-Length: 7\r\n\r\n<html/>".to_vec(),
+            b"HTTP/1.1 200 OK\r\nContent-Length: 20\r\n\r\ndmxlc3M6Ly9maXh0dXJl".to_vec(),
+            b"HTTP/1.1 200 OK\r\nContent-Length: 16\r\n\r\n{\"outbounds\":[]}".to_vec(),
             Vec::new(),
         ] {
             let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();

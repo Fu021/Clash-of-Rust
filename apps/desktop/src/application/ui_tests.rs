@@ -1754,10 +1754,14 @@ fn failed_subscription_update_keeps_measurements_and_reports_until_a_successful_
 
     let mut failed = synchronized_reply(&app);
     failed.view_revision = app.view_revision;
-    failed.notice = Err("订阅更新失败，已保留原配置与运行状态".into());
+    failed.notice = Err(
+        "订阅更新失败，已保留原配置与运行状态：订阅格式不兼容，请选择 Mihomo/Clash Meta YAML 订阅"
+            .into(),
+    );
     let _ = app.update(Message::Finished(Box::new(failed)));
     assert!(!app.busy && !app.working);
     assert!(app.error && app.notice.contains("保留原配置"));
+    assert!(app.notice_visible && app.notice.contains("Mihomo/Clash Meta YAML"));
     assert!(app.snapshot.running && app.core_failure.is_none());
     assert_eq!(serde_json::to_value(&app.profiles).unwrap(), before);
     assert_eq!(app.node_delays.get("Test"), Some(&42));
@@ -1772,6 +1776,44 @@ fn failed_subscription_update_keeps_measurements_and_reports_until_a_successful_
     assert!(app.node_delays.is_empty() && app.site_results.is_empty());
     assert!(app.claude.reports.iter().all(Option::is_none));
     assert!(!app.error && app.snapshot.running);
+}
+
+#[test]
+fn scheduled_subscription_format_failure_notifies_once_without_marking_the_core_unhealthy() {
+    use clash_client_core::subscription::UpdateFailure;
+
+    let mut app = fixture(Page::Profiles);
+    app.updates.started = true;
+    app.node_delays.insert("saved node".into(), 42);
+    let failure = UpdateFailure {
+        revision: 1,
+        message: "订阅格式不兼容，请选择 Mihomo/Clash Meta YAML 订阅".into(),
+    };
+    let mut reply = synchronized_reply(&app);
+    reply.view_revision = app.view_revision;
+    reply.snapshot.as_mut().unwrap().subscription_failure = Some(failure.clone());
+    let _ = app.update(Message::Finished(Box::new(reply)));
+    assert!(app.notice_visible && app.error);
+    assert_eq!(app.notice, failure.message);
+    assert!(app.snapshot.running && app.core_failure.is_none());
+    assert_eq!(app.node_delays.get("saved node"), Some(&42));
+    let revision = app.notice_revision;
+
+    app.dismiss_notice();
+    let mut reply = synchronized_reply(&app);
+    reply.view_revision = app.view_revision;
+    let _ = app.update(Message::Finished(Box::new(reply)));
+    assert!(!app.notice_visible);
+    assert_eq!(app.notice_revision, revision.wrapping_add(1));
+
+    let mut reply = synchronized_reply(&app);
+    reply.view_revision = app.view_revision;
+    reply.snapshot.as_mut().unwrap().subscription_failure = Some(UpdateFailure {
+        revision: 2,
+        ..failure
+    });
+    let _ = app.update(Message::Finished(Box::new(reply)));
+    assert!(app.notice_visible && app.error);
 }
 
 #[test]

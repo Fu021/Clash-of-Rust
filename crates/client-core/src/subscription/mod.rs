@@ -10,15 +10,40 @@ pub use info::summary;
 
 const LIMIT: usize = 10 * 1024 * 1024;
 
+#[derive(Clone, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub struct UpdateFailure {
+    pub revision: u64,
+    pub message: String,
+}
+
+/// A safe, actionable message without response contents or subscription URLs.
+pub fn format_notice(error: &anyhow::Error) -> Option<String> {
+    incompatible_format(error).map(|error| error.to_string())
+}
+
 pub async fn download_routes(url: &Url, routes: &[Route]) -> Result<(String, Option<String>)> {
     let mut errors = Vec::new();
+    let mut format_error = None;
     for (index, route) in routes.iter().enumerate() {
         match download_route(url, route, index + 1 < routes.len()).await {
             Ok(subscription) => return Ok(subscription),
-            Err(error) => errors.push(format!("{}：{error}", route.label)),
+            Err(error) => {
+                format_error = incompatible_format(&error).or(format_error);
+                errors.push(format!("{}：{error}", route.label));
+            }
         }
     }
+    if let Some(error) = format_error {
+        return Err(error.into());
+    }
     bail!("{}（已尝试可用代理和直连）", errors.join("；"));
+}
+
+fn incompatible_format(error: &anyhow::Error) -> Option<compatibility::Incompatible> {
+    error
+        .downcast_ref::<compatibility::Incompatible>()
+        .copied()
+        .filter(|error| error.is_format())
 }
 
 async fn download_route(
@@ -41,7 +66,15 @@ async fn download_route(
             Err(error) if error.is::<compatibility::Incompatible>() => {
                 download_agent(&client, url, retry_slow, true)
                     .await
-                    .map_err(|fallback| anyhow::anyhow!("{error}；Mihomo 兼容请求：{fallback}"))
+                    .map_err(|fallback| {
+                        if let Some(format_error) =
+                            incompatible_format(&fallback).or_else(|| incompatible_format(&error))
+                        {
+                            format_error.into()
+                        } else {
+                            anyhow::anyhow!("{error}；Mihomo 兼容请求：{fallback}")
+                        }
+                    })
             }
             result => result,
         }
@@ -70,7 +103,7 @@ async fn download_agent(
         let status = response.status().as_u16();
         let message = format!("订阅服务器返回 HTTP {status}");
         if matches!(status, 400 | 403 | 406 | 415 | 422) {
-            bail!(compatibility::Incompatible(message));
+            bail!(compatibility::Incompatible::Http(status));
         }
         bail!(message);
     }
@@ -98,7 +131,7 @@ async fn download_agent(
         }
         bytes.extend_from_slice(chunk);
     }
-    let raw = String::from_utf8(bytes).context("订阅不是 UTF-8 YAML 文本")?;
+    let raw = String::from_utf8(bytes).map_err(|_| compatibility::Incompatible::Format)?;
     // Captive portals and error pages can return HTTP 200. Try the next route
     // before allowing any caller to replace its cached subscription.
     compatibility::validate(&raw)?;
@@ -253,6 +286,44 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn unsupported_formats_return_one_safe_actionable_notice_after_negotiation() {
+        for body in [
+            "vless://private-uuid@example.test:443#private-node",
+            "dmxlc3M6Ly9maXh0dXJl",
+            r#"{"outbounds":[{"type":"vless","password":"private-password"}]}"#,
+            "proxies: [\npassword: private-password",
+            "proxies: not-a-list",
+            "proxy-providers: []",
+        ] {
+            let (url, task) = negotiating_server(200, body, body).await;
+            let url = Url::parse(&format!("{url}/private-subscription?token=secret")).unwrap();
+            let error = download_routes(&url, &routes(None, None))
+                .await
+                .unwrap_err();
+            let notice = format_notice(&error.context("订阅更新失败，已保留原配置与运行状态"))
+                .expect("format classification must survive the update context");
+            assert!(notice.contains("Mihomo/Clash Meta YAML"));
+            assert!(notice.contains("订阅格式不兼容"));
+            for secret in ["private-", "token", "secret", "example.test"] {
+                assert!(!notice.contains(secret), "{notice}");
+            }
+            assert_eq!(task.await.unwrap().len(), 2);
+        }
+    }
+
+    #[tokio::test]
+    async fn http_negotiation_failure_is_not_reported_as_an_unsupported_format() {
+        let (url, task) =
+            server(b"HTTP/1.1 403 Forbidden\r\nContent-Length: 0\r\n\r\n".to_vec()).await;
+        let error = download_routes(&Url::parse(&url).unwrap(), &routes(None, None))
+            .await
+            .unwrap_err();
+        assert!(error.to_string().contains("HTTP 403"));
+        assert!(format_notice(&error).is_none());
+        task.await.unwrap();
+    }
+
+    #[tokio::test]
     async fn unavailable_core_falls_back_to_system_proxy_with_usage_metadata() {
         let closed = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
         let port = closed.local_addr().unwrap().port();
@@ -300,16 +371,28 @@ mod tests {
 
     #[tokio::test]
     async fn incomplete_oversized_and_non_utf8_subscriptions_are_rejected() {
-        for wire in [
-            b"HTTP/1.1 200 OK\r\nContent-Length: 12\r\n\r\npartial".to_vec(),
-            format!("HTTP/1.1 200 OK\r\nContent-Length: {}\r\n\r\n", LIMIT + 1).into_bytes(),
-            b"HTTP/1.1 200 OK\r\nContent-Length: 1\r\n\r\n\xff".to_vec(),
+        for (wire, incompatible) in [
+            (
+                b"HTTP/1.1 200 OK\r\nContent-Length: 12\r\n\r\npartial".to_vec(),
+                false,
+            ),
+            (
+                format!("HTTP/1.1 200 OK\r\nContent-Length: {}\r\n\r\n", LIMIT + 1).into_bytes(),
+                false,
+            ),
+            (
+                b"HTTP/1.1 200 OK\r\nContent-Length: 1\r\n\r\n\xff".to_vec(),
+                true,
+            ),
         ] {
             let (url, task) = server(wire).await;
             let error = download_routes(&Url::parse(&url).unwrap(), &routes(None, None))
                 .await
                 .unwrap_err();
-            assert!(error.to_string().contains("直连"));
+            assert_eq!(format_notice(&error).is_some(), incompatible);
+            if !incompatible {
+                assert!(error.to_string().contains("直连"));
+            }
             task.await.unwrap();
         }
     }
@@ -345,9 +428,8 @@ mod tests {
             .await
             .unwrap_err();
         let message = format!("{error:#}");
-        assert!(message.contains("HTTP 503"));
-        assert!(message.contains("订阅响应不是有效"));
-        assert!(message.contains("已尝试可用代理和直连"));
+        assert!(message.contains("订阅格式不兼容"));
+        assert!(message.contains("Mihomo/Clash Meta YAML"));
         assert!(!message.contains("private-subscription") && !message.contains("secret"));
         proxy_task.await.unwrap();
         origin_task.await.unwrap();

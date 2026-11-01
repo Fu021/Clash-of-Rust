@@ -290,6 +290,53 @@ mod tests {
     use super::*;
     use tokio::sync::oneshot;
 
+    #[tokio::test]
+    async fn subscription_format_notices_survive_error_context_without_invalidating_views() {
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let url =
+            reqwest::Url::parse(&format!("http://{}", listener.local_addr().unwrap())).unwrap();
+        let server = tokio::spawn(async move {
+            for _ in 0..2 {
+                let (mut socket, _) = listener.accept().await.unwrap();
+                let mut request = [0; 4096];
+                let count = socket.read(&mut request).await.unwrap();
+                assert!(count > 0);
+                socket
+                    .write_all(b"HTTP/1.1 200 OK\r\nConnection: close\r\nContent-Length: 16\r\n\r\n{\"outbounds\":[]}")
+                    .await
+                    .unwrap();
+            }
+        });
+        let error = clash_client_core::subscription::download_routes(
+            &url,
+            &clash_client_core::network::routes(None, None),
+        )
+        .await
+        .unwrap_err()
+        .context("订阅定时下载失败");
+        server.await.unwrap();
+        let root = tempfile::tempdir().unwrap();
+        let mut owner = fixture(Store::at(root.path().into()).unwrap());
+        owner.record_subscription_format_failure(&error);
+        let first = owner.subscription_failure.clone().unwrap();
+        assert!(first.message.contains("Mihomo/Clash Meta YAML"));
+        assert!(first.message.contains("保留原配置与运行状态"));
+        assert_eq!(owner.view_revision(), 0);
+
+        owner.subscription_failure = None;
+        owner.record_subscription_format_failure(&error);
+        assert_ne!(
+            owner.subscription_failure.as_ref().unwrap().revision,
+            first.revision
+        );
+        let failure = owner.subscription_failure.clone();
+        owner.record_subscription_format_failure(&anyhow::anyhow!("连接超时"));
+        assert_eq!(owner.subscription_failure, failure);
+        assert_eq!(owner.view_revision(), 0);
+    }
+
     fn fixture(store: Store) -> Engine {
         let settings = Settings::default();
         Engine {
@@ -306,6 +353,8 @@ mod tests {
             geo_updates: Default::default(),
             app_updates: Default::default(),
             subscription_updates: Default::default(),
+            subscription_failure: None,
+            subscription_failure_revision: 0,
             resources: PathBuf::new(),
             child: None,
             #[cfg(windows)]

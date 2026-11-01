@@ -164,6 +164,8 @@ pub struct Engine {
     geo_updates: downloads::UpdateGate,
     app_updates: downloads::UpdateGate,
     subscription_updates: downloads::UpdateGate,
+    subscription_failure: Option<clash_client_core::subscription::UpdateFailure>,
+    subscription_failure_revision: u64,
     resources: PathBuf,
     child: Option<Child>,
     #[cfg(windows)]
@@ -300,6 +302,8 @@ impl Engine {
             geo_updates: Default::default(),
             app_updates: Default::default(),
             subscription_updates: Default::default(),
+            subscription_failure: None,
+            subscription_failure_revision: 0,
             child: None,
             #[cfg(windows)]
             windows_tun: false,
@@ -1162,6 +1166,7 @@ impl Engine {
         self.commit_profile(transaction, &payload, active).await?;
         self.profiles = profiles;
         self.settings = settings;
+        self.subscription_failure = None;
         self.invalidate_views();
         append(&self.logs, "[客户端] 配置已导入/更新");
         Ok(())
@@ -2273,6 +2278,15 @@ impl Engine {
             ),
         );
     }
+    pub(crate) fn record_subscription_format_failure(&mut self, error: &anyhow::Error) {
+        if let Some(message) = clash_client_core::subscription::format_notice(error) {
+            self.subscription_failure_revision = self.subscription_failure_revision.wrapping_add(1);
+            self.subscription_failure = Some(clash_client_core::subscription::UpdateFailure {
+                revision: self.subscription_failure_revision,
+                message: format!("订阅定时更新失败，已保留原配置与运行状态：{message}"),
+            });
+        }
+    }
     pub fn export_logs(&self) -> Result<PathBuf> {
         if let Some(remote) = &self.remote {
             return remote.call(ControlCommand::ExportLogs);
@@ -2333,7 +2347,10 @@ impl Engine {
         if self.is_remote() {
             return self.remote_poll(scope, header).await;
         }
-        let mut snapshot = Snapshot::default();
+        let mut snapshot = Snapshot {
+            subscription_failure: self.subscription_failure.clone(),
+            ..Snapshot::default()
+        };
         if let Some(child) = &mut self.child
             && let Some(status) = child.try_wait()?
         {

@@ -60,15 +60,22 @@ pub(super) fn start(
             let mut owner = shared.lock().await;
             match result {
                 Ok((raw, usage)) => {
-                    if owner
-                        .update_subscription(&pending, raw, usage)
-                        .await
-                        .is_err()
-                    {
+                    if let Err(error) = owner.update_subscription(&pending, raw, usage).await {
+                        owner.record_subscription_format_failure(&error);
                         owner.record_failure("订阅定时更新失败，已保留原配置与运行状态");
                     }
                 }
-                Err(_) => owner.record_failure("订阅定时下载失败，已保留原配置与运行状态"),
+                Err(error) => {
+                    if pending
+                        .is_current(&owner.settings, &owner.profiles, &owner.store)
+                        .unwrap_or(false)
+                    {
+                        owner.record_subscription_format_failure(&error);
+                    }
+                    owner.record_failure(&format!(
+                        "订阅定时下载失败，已保留原配置与运行状态：{error}"
+                    ));
+                }
             }
         }
     })

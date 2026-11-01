@@ -1,6 +1,6 @@
 plugins { id("com.android.application") }
 
-val appVersion = providers.gradleProperty("appVersion").orElse("0.6.6-dev.3.subscription-compat").get()
+val appVersion = providers.gradleProperty("appVersion").orElse("0.6.6-dev.4.subscription-format-notice").get()
 val appVersionCode = providers.gradleProperty("appVersionCode").orElse("605000").get().toInt()
 val selectedAbi = providers.gradleProperty("appAbi").orNull
 

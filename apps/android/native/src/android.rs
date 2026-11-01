@@ -410,7 +410,7 @@ enum DelayScope {
 enum Update {
     Subscription(
         core::subscription::schedule::PendingUpdate,
-        std::result::Result<(String, Option<String>), String>,
+        Result<(String, Option<String>)>,
     ),
     Delays(u64, std::result::Result<BTreeMap<String, u32>, String>),
     Snapshot(u64, std::result::Result<Snapshot, String>),
@@ -898,7 +898,13 @@ async fn run_loop(
                                     Ok(false) => {}
                                     Err(_) => state.logs.push_back(("WARN".into(), "订阅定时更新失败，已保留原配置与运行状态".into())),
                                 },
-                                Err(_) => state.logs.push_back(("WARN".into(), "订阅定时下载失败，已保留原配置与运行状态".into())),
+                                Err(error) => {
+                                    if pending.is_current(&state.session.settings, &state.session.profiles, &state.session.store).unwrap_or(false)
+                                        && let Some(message) = core::subscription::format_notice(&error) {
+                                        state.notice = format!("订阅定时更新失败，已保留原配置与运行状态：{message}");
+                                    }
+                                    state.logs.push_back(("WARN".into(), format!("订阅定时下载失败，已保留原配置与运行状态：{error}")));
+                                },
                             }
                         }
                     }
@@ -953,7 +959,7 @@ async fn run_loop(
                                     let result = async {
                                         let url = core::probe::validate_url(&pending.profile.source)?;
                                         core::subscription::download_routes(&url, &core::network::routes(port, None)).await
-                                    }.await.map_err(|error: anyhow::Error| format!("{error:#}"));
+                                    }.await;
                                     let _ = sender.send(Update::Subscription(pending, result)).await;
                                 }));
                             }

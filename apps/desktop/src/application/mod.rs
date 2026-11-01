@@ -1861,6 +1861,12 @@ impl App {
             Message::Finished(reply) => {
                 self.claude.protection_pending = None;
                 let reply = *reply;
+                let subscription_failure = reply
+                    .snapshot
+                    .as_ref()
+                    .and_then(|snapshot| snapshot.subscription_failure.as_ref())
+                    .filter(|failure| self.snapshot.subscription_failure.as_ref() != Some(failure))
+                    .map(|failure| failure.message.clone());
                 if !self.geo_status.is_empty()
                     && !reply.geo_status.is_empty()
                     && self.geo_status != reply.geo_status
@@ -2093,16 +2099,19 @@ impl App {
                     tray.speed(&self.snapshot, self.settings.tray_speed);
                 }
                 match reply.notice {
-                    Ok(notice) if !notice.is_empty() => {
+                    Ok(notice) => {
                         if notice.starts_with("订阅信息已保存") {
                             self.profile_editor = None;
                         }
-                        self.show_notice(notice, false);
+                        if let Some(error) = subscription_failure {
+                            self.show_notice(error, true);
+                        } else if !notice.is_empty() {
+                            self.show_notice(notice, false);
+                        }
                     }
                     Err(error) => {
                         self.show_notice(error, true);
                     }
-                    _ => {}
                 }
                 // Start checking after core startup, so its mixed-port proxy is ready.
                 let update_task = if !self.updates.started {

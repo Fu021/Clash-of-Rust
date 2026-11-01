@@ -39,6 +39,8 @@ impl Engine {
             geo_updates: Default::default(),
             app_updates: Default::default(),
             subscription_updates: Default::default(),
+            subscription_failure: None,
+            subscription_failure_revision: 0,
             resources: resources.to_owned(),
             child: None,
             #[cfg(windows)]
