@@ -42,10 +42,10 @@ pub(super) fn validate(raw: &str) -> Result<()> {
     let map = crate::config::parse_profile(raw).map_err(|_| Incompatible::Format)?;
     if map
         .get(Value::from("proxies"))
-        .is_some_and(|value| !value.is_sequence())
+        .is_some_and(|value| !value.is_null() && !value.is_sequence())
         || map
             .get(Value::from("proxy-providers"))
-            .is_some_and(|value| !value.is_mapping())
+            .is_some_and(|value| !value.is_null() && !value.is_mapping())
     {
         bail!(Incompatible::Format);
     }
@@ -98,6 +98,15 @@ mod tests {
         - {name: 当前Clash客户端不支持本机场协议, type: ss, server: 127.0.0.1, port: 1, cipher: aes-128-gcm, password: placeholder}\n\
         - {name: 'Win客户端：V2rayN,ClashVerge', type: ss, server: 127.0.0.1, port: 1, cipher: aes-128-gcm, password: placeholder}\n\
         - {name: 请更换以下支持协议的代理软件, type: ss, server: 127.0.0.1, port: 1, cipher: aes-128-gcm, password: placeholder}\n";
+
+    #[test]
+    fn unused_null_sections_do_not_reject_valid_mihomo_profiles() {
+        validate("proxies: []\nproxy-providers: null\n").unwrap();
+        validate(
+            "proxies: null\nproxy-providers:\n  remote: {type: http, url: 'https://example.test/proxies'}\n",
+        )
+        .unwrap();
+    }
 
     #[test]
     fn dummy_help_nodes_are_rejected_without_rejecting_real_nodes_or_providers() {
