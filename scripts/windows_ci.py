@@ -22,6 +22,20 @@ def allow_ordinary_user_directory(path, permissions='M'):
                    check=True, capture_output=True)
 
 
+def wait_unelevated_ready(kernel, process, ready, timeout=240):
+    """Allow the native suite its full budget, but fail when its owner exits."""
+    deadline = time.monotonic() + timeout
+    while not ready.is_file():
+        state = kernel.WaitForSingleObject(process, 0)
+        if state == 0:
+            raise RuntimeError('Ordinary TUN crash fixture exited before becoming ready')
+        if state != 258:  # WAIT_TIMEOUT means the ordinary process is still running.
+            raise RuntimeError(f'Cannot inspect ordinary TUN crash fixture: wait status {state}')
+        if time.monotonic() >= deadline:
+            raise TimeoutError('Ordinary TUN crash fixture did not become ready')
+        time.sleep(0.1)
+
+
 def run_unelevated(command, env, timeout=240, on_start=None, expected_code=0):
     """Run native checks with an actual medium-integrity, non-admin token."""
     import ctypes as c

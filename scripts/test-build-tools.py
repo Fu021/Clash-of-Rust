@@ -45,6 +45,39 @@ _release_package_spec.loader.exec_module(release_package)
 
 
 class BuildTests(unittest.TestCase):
+    def test_windows_crash_readiness_allows_native_suite_startup_budget(self):
+        ready = MagicMock()
+        ready.is_file.side_effect = [False, False, True]
+        kernel = MagicMock()
+        kernel.WaitForSingleObject.return_value = 258
+        with patch.object(windows.time, 'monotonic', side_effect=[0, 46, 120]), \
+             patch.object(windows.time, 'sleep') as pause:
+            windows.wait_unelevated_ready(kernel, 12, ready)
+        self.assertEqual(pause.call_count, 2)
+        self.assertEqual(kernel.WaitForSingleObject.call_count, 2)
+
+    def test_windows_crash_readiness_fails_when_owner_exits_or_cannot_be_inspected(self):
+        ready = MagicMock()
+        ready.is_file.return_value = False
+        for state, message in ((0, 'exited before'), (0xFFFFFFFF, 'wait status')):
+            kernel = MagicMock()
+            kernel.WaitForSingleObject.return_value = state
+            with self.subTest(state=state), patch.object(windows.time, 'sleep') as pause:
+                with self.assertRaisesRegex(RuntimeError, message):
+                    windows.wait_unelevated_ready(kernel, 12, ready)
+                pause.assert_not_called()
+
+    def test_windows_crash_readiness_retains_bounded_timeout(self):
+        ready = MagicMock()
+        ready.is_file.return_value = False
+        kernel = MagicMock()
+        kernel.WaitForSingleObject.return_value = 258
+        with patch.object(windows.time, 'monotonic', side_effect=[0, 240]), \
+             patch.object(windows.time, 'sleep') as pause:
+            with self.assertRaisesRegex(TimeoutError, 'did not become ready'):
+                windows.wait_unelevated_ready(kernel, 12, ready)
+            pause.assert_not_called()
+
     def test_linux_guest_package_preparation_skips_documentation_indexes(self):
         with patch.dict(os.environ, {'COR_LINUX_GUEST': 'true'}), \
              patch.object(release_package, 'run') as execute:
