@@ -277,6 +277,7 @@ impl App {
         set!(get_page, set_page, self.page as i32);
         set!(get_ready, set_ready, self.engine.is_some());
         set!(get_running, set_running, self.snapshot.running);
+        self.present_protection(data);
         set!(get_working, set_working, self.working);
         set!(get_geo_updating, set_geo_updating, self.geo_updating);
         set!(get_exiting, set_exiting, self.exiting);
@@ -893,17 +894,7 @@ impl App {
         );
     }
 
-    fn present_claude(&self, data: &UiData, models: &ViewModels) {
-        let entries = self.claude.entries();
-        let counts = self.claude.counts(&entries);
-        data.set_claude_normal(counts[0].to_string().into());
-        data.set_claude_risk(counts[1].to_string().into());
-        data.set_claude_clues(counts[2].to_string().into());
-        data.set_browser_session(self.claude.session.is_some());
-        data.set_claude_busy(self.claude.busy());
-        data.set_claude_status(self.claude.status.as_str().into());
-        data.set_claude_error(self.claude.error);
-        data.set_claude_guard(self.claude.guard_status.as_str().into());
+    fn present_protection(&self, data: &UiData) {
         data.set_protection_pending(self.claude.protection_pending.is_some());
         let health = if self.claude.protection_pending.is_some() {
             clash_client_core::protection::status::Status::observe(true, true, false, false, None)
@@ -922,6 +913,19 @@ impl App {
         };
         data.set_protection_health(health.state as i32);
         data.set_protection_message(health.message.into());
+    }
+
+    fn present_claude(&self, data: &UiData, models: &ViewModels) {
+        let entries = self.claude.entries();
+        let counts = self.claude.counts(&entries);
+        data.set_claude_normal(counts[0].to_string().into());
+        data.set_claude_risk(counts[1].to_string().into());
+        data.set_claude_clues(counts[2].to_string().into());
+        data.set_browser_session(self.claude.session.is_some());
+        data.set_claude_busy(self.claude.busy());
+        data.set_claude_status(self.claude.status.as_str().into());
+        data.set_claude_error(self.claude.error);
+        data.set_claude_guard(self.claude.guard_status.as_str().into());
         data.set_protection_status(
             match self.claude.protection_pending {
                 Some(true) => "正在开启保护，切换 TUN、规则与 DNS…",

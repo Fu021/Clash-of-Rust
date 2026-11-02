@@ -2015,6 +2015,23 @@ fn every_page_projects_protection_readiness_and_discards_unconfirmed_success() {
         &mut clash_desktop_protocol::models::ViewModels::default(),
     );
     assert_eq!(data.get_protection_health(), status::State::Off as i32);
+    app.page = Page::Home;
+    for changing in [true, false] {
+        app.claude.protection_pending = changing.then_some(true);
+        app.present(
+            &data,
+            &mut clash_desktop_protocol::models::ViewModels::default(),
+        );
+        assert_eq!(data.get_protection_pending(), changing);
+        assert_eq!(
+            data.get_protection_health(),
+            if changing {
+                status::State::Checking
+            } else {
+                status::State::Off
+            } as i32
+        );
+    }
 }
 
 #[test]
