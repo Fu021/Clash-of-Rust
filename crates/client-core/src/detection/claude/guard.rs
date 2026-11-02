@@ -9,6 +9,7 @@ use std::{
 };
 
 const CONTROLLER_UNAVAILABLE: &str = "控制接口暂不可用，实时拦截未确认；保护规则仍保留。";
+const GUARD_STOPPED: &str = "实时拦截已停止，请重新开启 Claude 保护。";
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct Snapshot {
@@ -40,8 +41,32 @@ impl Drop for Inner {
 }
 pub struct Guard(Arc<Inner>);
 impl Guard {
+    pub fn status(&self, running: bool, tun: bool) -> crate::protection::status::Status {
+        let state = self.0.state.lock().ok();
+        crate::protection::status::Status::observe(
+            true,
+            false,
+            running,
+            tun,
+            if self.0.task.is_finished() {
+                Some((false, GUARD_STOPPED))
+            } else {
+                state
+                    .as_ref()
+                    .map(|state| (state.connected, state.error.as_str()))
+            },
+        )
+    }
+
     pub fn snapshot(&self) -> Snapshot {
-        self.0.state.lock().map(|s| s.clone()).unwrap_or_default()
+        let mut snapshot = self.0.state.lock().map(|s| s.clone()).unwrap_or_default();
+        if self.0.task.is_finished() {
+            snapshot.connected = false;
+            if snapshot.error.is_empty() {
+                snapshot.error = GUARD_STOPPED.into();
+            }
+        }
+        snapshot
     }
     /// The host supplies notifications; enforcement never depends on a GUI or OS toolkit.
     pub fn start<N, F>(api: Api, node: String, notify: N) -> Self
@@ -399,6 +424,30 @@ pub(crate) fn decode(reader: impl std::io::Read, node: &str) -> serde_json::Resu
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[tokio::test]
+    async fn a_stopped_guard_cannot_keep_the_last_connected_state() {
+        let task = tokio::spawn(async {});
+        while !task.is_finished() {
+            tokio::task::yield_now().await;
+        }
+        let guard = Guard(Arc::new(Inner {
+            task,
+            state: Arc::new(Mutex::new(Snapshot {
+                connected: true,
+                blocked: 3,
+                ..Default::default()
+            })),
+        }));
+        assert_eq!(
+            guard.status(true, true).state,
+            crate::protection::status::State::Error
+        );
+        let snapshot = guard.snapshot();
+        assert!(!snapshot.connected);
+        assert_eq!(snapshot.error, GUARD_STOPPED);
+        assert_eq!(snapshot.blocked, 3);
+    }
+
     #[tokio::test]
     async fn enforcement_closes_only_unsafe_routes_and_uses_the_host_notification() {
         enforcement_and_controller_recovery(false).await;

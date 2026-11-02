@@ -35,6 +35,8 @@ pub struct Snapshot {
     pub running: bool,
     pub claude_guard: Option<crate::claude_check::guard::Snapshot>,
     #[serde(default)]
+    pub protection_status: crate::protection::status::Status,
+    #[serde(default)]
     pub subscription_failure: Option<crate::subscription::UpdateFailure>,
 }
 
@@ -108,5 +110,33 @@ mod tests {
         assert!(snapshot.rules.rules.capacity() >= 10_000);
         snapshot.retain_scope(Scope::Other);
         assert_eq!(snapshot.rules.rules.capacity(), 0);
+    }
+
+    #[test]
+    fn page_cleanup_keeps_protection_readiness_without_retaining_guard_routes() {
+        let status = crate::protection::status::Status::observe(
+            true,
+            false,
+            true,
+            true,
+            Some((false, "DNS 接管未就绪")),
+        );
+        let mut snapshot = Snapshot {
+            protection_status: status.clone(),
+            claude_guard: Some(Default::default()),
+            ..Default::default()
+        };
+        for scope in [Scope::Home, Scope::Rules, Scope::Logs, Scope::Other] {
+            snapshot.retain_scope(scope);
+            assert!(snapshot.claude_guard.is_none());
+            assert_eq!(snapshot.protection_status, status);
+            let decoded: Snapshot =
+                serde_json::from_value(serde_json::to_value(&snapshot).unwrap()).unwrap();
+            assert_eq!(decoded.protection_status, status);
+        }
+        let mut legacy = serde_json::to_value(snapshot).unwrap();
+        legacy.as_object_mut().unwrap().remove("protection_status");
+        let legacy: Snapshot = serde_json::from_value(legacy).unwrap();
+        assert_eq!(legacy.protection_status, Default::default());
     }
 }

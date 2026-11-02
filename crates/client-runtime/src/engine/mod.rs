@@ -2411,6 +2411,13 @@ impl Engine {
                 .unwrap_or_default();
         }
         if !snapshot.running {
+            snapshot.protection_status = clash_client_core::protection::status::Status::observe(
+                self.settings.claude_protection.is_some(),
+                false,
+                false,
+                false,
+                None,
+            );
             return Ok(snapshot);
         }
         snapshot.version = self.version.clone();
@@ -2421,6 +2428,27 @@ impl Engine {
             config.mode
         };
         snapshot.tun = config.tun.enable;
+        if self.settings.claude_protection.is_some() {
+            snapshot.protection_status = self.protection_guard.as_ref().map_or_else(
+                || {
+                    clash_client_core::protection::status::Status::observe(
+                        true,
+                        false,
+                        snapshot.running,
+                        snapshot.tun,
+                        None,
+                    )
+                },
+                |guard| guard.status(snapshot.running, snapshot.tun),
+            );
+            #[cfg(target_os = "macos")]
+            if let Some(error) = &self.mac_dns_error {
+                snapshot.protection_status = clash_client_core::protection::status::Status {
+                    state: clash_client_core::protection::status::State::Error,
+                    message: error.clone(),
+                };
+            }
+        }
         if matches!(scope, Scope::Home | Scope::Connections) || self.settings.tray_speed {
             if scope != Scope::Connections {
                 let stats: ConnectionStats = self.api.get("connections").await?;

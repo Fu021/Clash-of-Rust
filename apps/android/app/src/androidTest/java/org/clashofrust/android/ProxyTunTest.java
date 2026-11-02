@@ -19,12 +19,29 @@ import static org.junit.Assert.*;
 @RunWith(AndroidJUnit4.class)
 public class ProxyTunTest {
     @Test public void notificationShowsModeAndNodeWithOptionalSpeeds() {
-        String text = TunnelService.statusText("1 MiB/s", "2 KiB/s", "Current node", "global", true);
+        String text = TunnelService.statusText("1 MiB/s", "2 KiB/s", "Current node", "global", true, "");
         assertTrue(text.contains("全局 · Current node"));
         assertTrue(text.contains("↓ 1 MiB/s"));
-        text = TunnelService.statusText("1 MiB/s", "2 KiB/s", "Other node", "rule", false);
+        text = TunnelService.statusText("1 MiB/s", "2 KiB/s", "Other node", "rule", false, "");
         assertEquals("规则 · Other node", text);
-        assertEquals("直连 · DIRECT", TunnelService.statusText("", "", "DIRECT", "direct", false));
+        assertEquals("直连 · DIRECT", TunnelService.statusText("", "", "DIRECT", "direct", false, ""));
+        assertEquals("", ProtectionRuntime.notificationLabel(false, 3));
+        assertEquals("Claude 保护已启用", ProtectionRuntime.notificationLabel(true, 1));
+        assertEquals("Claude 保护异常", ProtectionRuntime.notificationLabel(true, 3));
+        assertEquals("Claude 保护待确认", ProtectionRuntime.notificationLabel(true, 2));
+        assertEquals("Claude 保护待确认", ProtectionRuntime.notificationLabel(true, 0));
+        assertEquals("Claude 保护待确认", ProtectionRuntime.notificationLabel(true, -1));
+        int health = ProtectionRuntime.notificationHealth();
+        assertTrue("Native protection status must use the shared readiness states", health >= 1 && health <= 3);
+        for (int value : new int[]{1, 2, 3}) {
+            String protection = ProtectionRuntime.notificationLabel(true, value);
+            for (boolean speeds : new boolean[]{true, false}) {
+                text = TunnelService.statusText("1 MiB/s", "2 KiB/s", "Current node", "global", speeds, protection);
+                assertTrue("Protection must remain visible in the notification title", text.startsWith(protection + "\n"));
+                assertTrue(text.contains("全局 · Current node"));
+                assertEquals(speeds, text.contains("↓ 1 MiB/s"));
+            }
+        }
     }
     private static void pointer(int action,float x,float y,long down,long now) {
         MotionEvent event=MotionEvent.obtain(down,now,action,x,y,0);

@@ -1,0 +1,109 @@
+import { Theme } from "../theme/palette.slint";
+import { Label } from "controls.slint";
+import { Motion } from "motion.slint";
+
+component ProtectionIcon inherits Rectangle {
+    in property <int> health;
+    in property <color> ink;
+    width: 18px; height: 18px;
+    Image { width: parent.width; height: parent.height;
+        source: @image-url("../icons/shield.svg"); colorize: root.ink;
+    }
+    if root.health == 1: Path {
+        width: parent.width; height: parent.height; viewbox-width: 24; viewbox-height: 24;
+        stroke: root.ink; stroke-width: 1.6px;
+        MoveTo { x: 8; y: 11.5; }
+        LineTo { x: 10.8; y: 14.3; }
+        LineTo { x: 16; y: 9; }
+    }
+    if root.health == 3: Path {
+        width: parent.width; height: parent.height; viewbox-width: 24; viewbox-height: 24;
+        stroke: root.ink; stroke-width: 1.6px;
+        MoveTo { x: 9; y: 9; }
+        LineTo { x: 15; y: 15; }
+        MoveTo { x: 15; y: 9; }
+        LineTo { x: 9; y: 15; }
+    }
+    if root.health == 2: Path {
+        width: parent.width; height: parent.height; viewbox-width: 24; viewbox-height: 24;
+        stroke: root.ink; stroke-width: 1.3px;
+        MoveTo { x: 9; y: 8; }
+        LineTo { x: 15; y: 8; }
+        LineTo { x: 9; y: 15; }
+        LineTo { x: 15; y: 15; }
+        LineTo { x: 9; y: 8; }
+    }
+}
+
+export component ProtectionBadge inherits Rectangle {
+    in property <int> health;
+    in property <bool> enabled: true;
+    in property <length> touch-size: 32px;
+    out property <string> status-label: root.health == 3 ? "Claude 保护异常" : root.health == 2 ? "Claude 保护正在验证" : "Claude 保护中";
+    out property <color> status-color: root.health == 3 ? Theme.danger : root.health == 2 ? Theme.warning : Theme.success;
+    callback clicked();
+    height: 32px; width: 32px;
+    horizontal-stretch: 0; vertical-stretch: 0;
+    accessible-role: button;
+    accessible-label: root.status-label + "，查看保护详情";
+    accessible-action-default => { if root.enabled { root.clicked(); } }
+    forward-focus: keys;
+    Rectangle {
+        x: (parent.width - self.width) / 2; y: (parent.height - self.height) / 2;
+        width: 32px; height: 32px;
+        border-radius: 6px; border-width: 1px;
+        border-color: root.status-color.with-alpha(keys.has-focus ? 1 : 0.5);
+        background: root.health == 3 ? Theme.danger-wash : root.health == 2 ? Theme.warning-wash : Theme.success-wash;
+        animate background, border-color { duration: Motion.control; enabled: Motion.active; }
+    }
+    ProtectionIcon {
+        x: (parent.width - self.width) / 2; y: (parent.height - self.height) / 2;
+        width: 24px; height: 24px;
+        health: root.health; ink: root.status-color;
+    }
+    keys := FocusScope { enabled: root.enabled;
+        key-pressed(event) => {
+            if event.text == Key.Return || event.text == " " { root.clicked(); return accept; }
+            return reject;
+        }
+    }
+    TouchArea {
+        width: max(root.width, root.touch-size); height: max(root.height, root.touch-size);
+        x: (parent.width - self.width) / 2; y: (parent.height - self.height) / 2;
+        enabled: root.enabled; mouse-cursor: pointer;
+        clicked => { keys.focus(); root.clicked(); }
+    }
+}
+
+export component ProtectionAlert inherits Rectangle {
+    in property <int> health;
+    in property <string> message;
+    in property <bool> enabled: true;
+    in property <length> font-size: 13px * Theme.text-scale;
+    callback clicked();
+    property <color> status-color: root.health == 3 ? Theme.danger : Theme.warning;
+    min-height: max(38px, reason.preferred-height + 16px);
+    preferred-height: self.min-height;
+    vertical-stretch: 0;
+    border-radius: 6px; border-width: 1px; border-color: root.status-color.with-alpha(0.4);
+    background: root.health == 3 ? Theme.danger-wash : Theme.warning-wash;
+    accessible-role: button;
+    accessible-label: root.message + "，查看保护详情";
+    accessible-action-default => { if root.enabled { root.clicked(); } }
+    forward-focus: keys;
+    ProtectionIcon { x: 10px; y: 10px;
+        health: root.health; ink: root.status-color;
+    }
+    reason := Label {
+        x: 36px; y: 8px; width: max(0px, parent.width - 66px); height: self.preferred-height;
+        text: root.message; font-size: root.font-size; color: root.status-color;
+    }
+    Label { x: parent.width - 24px; width: 16px; height: parent.height; text: "›"; color: root.status-color; }
+    keys := FocusScope { enabled: root.enabled;
+        key-pressed(event) => {
+            if event.text == Key.Return || event.text == " " { root.clicked(); return accept; }
+            return reject;
+        }
+    }
+    TouchArea { enabled: root.enabled; mouse-cursor: pointer; clicked => { keys.focus(); root.clicked(); } }
+}

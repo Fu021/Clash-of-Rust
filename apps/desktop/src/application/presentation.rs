@@ -905,6 +905,23 @@ impl App {
         data.set_claude_error(self.claude.error);
         data.set_claude_guard(self.claude.guard_status.as_str().into());
         data.set_protection_pending(self.claude.protection_pending.is_some());
+        let health = if self.claude.protection_pending.is_some() {
+            clash_client_core::protection::status::Status::observe(true, true, false, false, None)
+        } else if self.settings.claude_protection.is_none() {
+            Default::default()
+        } else if !self.snapshot.running {
+            clash_client_core::protection::status::Status::observe(true, false, false, false, None)
+        } else {
+            let mut status = self.snapshot.protection_status.clone();
+            if status.state == clash_client_core::protection::status::State::Off {
+                status = clash_client_core::protection::status::Status::observe(
+                    true, false, true, true, None,
+                );
+            }
+            status
+        };
+        data.set_protection_health(health.state as i32);
+        data.set_protection_message(health.message.into());
         data.set_protection_status(
             match self.claude.protection_pending {
                 Some(true) => "正在开启保护，切换 TUN、规则与 DNS…",

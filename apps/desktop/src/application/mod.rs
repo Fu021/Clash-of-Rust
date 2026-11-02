@@ -2017,6 +2017,13 @@ impl App {
                     );
                 }
                 self.snapshot.running = reply.running;
+                if reply.snapshot.is_none() && self.settings.claude_protection.is_some() {
+                    self.snapshot.protection_status =
+                        clash_client_core::protection::status::Status {
+                            state: clash_client_core::protection::status::State::Checking,
+                            message: "暂时无法确认保护状态，正在等待重新验证".into(),
+                        };
+                }
                 if let Some(mut snapshot) = reply.snapshot {
                     if let Some(protection) = &self.settings.claude_protection {
                         snapshot.proxies.proxies.remove(protection.route.as_str());

@@ -8,6 +8,7 @@ export { Motion } from "components/motion.slint";
 export { UiData, UiActions, Intent, Choice, DetailItem, FakeIpExclusionItem, NodeItem, NodePair, GroupItem, ProfileItem, ConnectionItem, RuleItem, LogItem, ReportItem, CategoryItem, CategoryPair } from "state.slint";
 import { Label, Caption, ContentPanel, Panel, ActionButton, Badge, Paragraph } from "components/controls.slint";
 import { NavigationItem } from "components/navigation.slint";
+import { ProtectionBadge, ProtectionAlert } from "components/protection-status.slint";
 import { HomePage } from "pages/home.slint";
 import { ProxiesPage } from "pages/proxies.slint";
 import { SubscriptionsPage } from "pages/subscriptions.slint";
@@ -118,13 +119,23 @@ export component AppWindow inherits Window {
                         Caption { text: root.subtitles[UiData.page]; }
                     }
                     VerticalLayout { width: 250px; spacing: 8px;
-                        HorizontalLayout { cross-axis-alignment: center;
+                        HorizontalLayout { cross-axis-alignment: center; spacing: 8px;
                             Rectangle { horizontal-stretch: 1; }
+                            if UiData.protection-health > 0: ProtectionBadge {
+                                health: UiData.protection-health;
+                                enabled: UiData.modal == 0;
+                                clicked => { UiActions.dispatch(Intent.navigate, "8", ""); }
+                            }
                             Badge { text: UiData.running ? "● 内核运行中" : UiData.ready ? "● 内核未启动" : "● 正在初始化"; tone: UiData.running ? 1 : 4; }
                         }
                         Caption { text: UiData.profile + (UiData.node != "" ? "  |  " + UiData.node : ""); horizontal-alignment: right; }
                     }
                 }
+            }
+            if UiData.protection-health == 3: ProtectionAlert {
+                health: UiData.protection-health; message: UiData.protection-message;
+                enabled: UiData.modal == 0;
+                clicked => { UiActions.dispatch(Intent.navigate, "8", ""); }
             }
             if UiData.update-busy || UiData.update-available: ContentPanel {
                 HorizontalLayout { cross-axis-alignment: center; spacing: Theme.content-gap;

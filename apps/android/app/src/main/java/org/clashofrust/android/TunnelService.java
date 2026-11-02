@@ -28,6 +28,7 @@ public final class TunnelService extends VpnService {
     private String interfaceName;
     private volatile boolean stopping;
     private volatile String lastStatus = "";
+    private JSONObject networkStatus = new JSONObject();
     private volatile int latestStartId;
     private volatile String acceptedRequest;
     static String prepareStart(Context context) {
@@ -167,7 +168,7 @@ public final class TunnelService extends VpnService {
             ProtectionRuntime.sync(this);
             VpnTileService.refresh(this);
             android.util.Log.i("ClashOfRust", "Embedded TUN started");
-            getSystemService(NotificationManager.class).notify(1, notification("VPN 已连接"));
+            updateStatus();
             MainActivity.emit("vpn", true);
         } catch (Exception error) {
             closeDescriptor(replacement);
@@ -213,6 +214,7 @@ public final class TunnelService extends VpnService {
     }
     private void cleanup() {
         connected = false;
+        networkStatus = new JSONObject();
         VpnTileService.refresh(this);
         try { Mobile.stopTun(); } catch (Exception error) { android.util.Log.e("ClashOfRust", "Stop TUN", error); }
         closeDescriptor(descriptor);
@@ -260,7 +262,7 @@ public final class TunnelService extends VpnService {
             .setOnlyAlertOnce(true).setShowWhen(false)
             .setSmallIcon(R.drawable.ic_app).setOngoing(true).setContentIntent(open).build();
     }
-    static String statusText(String down, String up, String node, String mode, boolean speeds) {
+    static String statusText(String down, String up, String node, String mode, boolean speeds, String protection) {
         String label;
         switch (mode) {
             case "global": label = "全局"; break;
@@ -269,7 +271,8 @@ public final class TunnelService extends VpnService {
             default: label = "未知模式"; break;
         }
         String text = label + " · " + (node == null || node.isEmpty() ? "节点待确认" : node);
-        return speeds ? text + "\n↓ " + down + "  ↑ " + up : text;
+        if (speeds) text += "\n↓ " + down + "  ↑ " + up;
+        return protection.isEmpty() ? text : protection + "\n" + text;
     }
     private static String speed(long bytes) {
         if (bytes < 1024) return bytes + " B/s";
@@ -286,11 +289,15 @@ public final class TunnelService extends VpnService {
             != android.content.pm.PackageManager.PERMISSION_GRANTED) return;
         try {
             String raw = Mobile.notificationStatus();
-            if (raw.isEmpty()) return;
-            JSONObject state = new JSONObject(raw);
-            String text = statusText(speed(state.optLong("down")), speed(state.optLong("up")),
-                state.optString("node"), state.optString("mode"),
-                getSharedPreferences("appearance", MODE_PRIVATE).getBoolean("notification-speeds", true));
+            if (!raw.isEmpty()) networkStatus = new JSONObject(raw);
+        } catch (Exception error) {
+            android.util.Log.w("ClashOfRust", "VPN notification counters unavailable", error);
+        }
+        try {
+            String text = statusText(speed(networkStatus.optLong("down")), speed(networkStatus.optLong("up")),
+                networkStatus.optString("node"), networkStatus.optString("mode"),
+                getSharedPreferences("appearance", MODE_PRIVATE).getBoolean("notification-speeds", true),
+                ProtectionRuntime.notificationStatus());
             synchronized (requests) {
                 if (instance == this && connected && !stopping && !text.equals(lastStatus))
                     getSystemService(NotificationManager.class).notify(1, notification(text));

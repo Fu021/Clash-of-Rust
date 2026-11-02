@@ -5,12 +5,21 @@ import { Theme } from "../../theme/palette.slint";
 import { MobileData, MobileView, MobileActions, MobileIntent } from "state.slint";
 import { MText, MSmall, MHeading, MButton, MBackButton, MTag, MNav, MScroll, MNotice, MAppIcon } from "controls.slint";
 import { MobileDetails, MobileModal } from "details.slint";
+import { ProtectionBadge, ProtectionAlert } from "../../components/protection-status.slint";
 
 component HeaderStatus inherits VerticalLayout {
     in property <bool> compact;
-    spacing: 6px; alignment: center; min-width: 0px;
-    HorizontalLayout { alignment: end;
-        MTag { text: MobileData.core-running ? "● 内核运行中" : "○ 内核未运行"; tone: MobileData.core-running ? 1 : 4; }
+    spacing: 6px; alignment: center; min-width: status-row.min-width;
+    status-row := HorizontalLayout { alignment: end; cross-axis-alignment: center; spacing: 8px;
+        if MobileData.protection-health > 0: ProtectionBadge {
+            health: MobileData.protection-health;
+            touch-size: 48px;
+            enabled: !MobileView.modal;
+            clicked => { MobileView.navigate(8); }
+        }
+        MTag {
+            text: MobileData.core-running ? "● 内核运行中" : "○ 内核未运行"; tone: MobileData.core-running ? 1 : 4;
+        }
     }
     if !root.compact: MSmall { text: MobileData.profile + (MobileData.node != "" ? "  |  " + MobileData.node : ""); horizontal-alignment: right; }
 }
@@ -116,23 +125,33 @@ export component MobileFrame inherits Rectangle {
         header := Rectangle {
             x: MobileView.safe-left + root.nav-width + root.content-padding; y: MobileView.safe-top;
             width: root.usable-width - root.nav-width - root.content-padding * 2; height: root.header-height;
-            header-content := VerticalLayout { spacing: MobileTypography.small-gap;
-              HorizontalLayout { spacing: 10px; cross-axis-alignment: center;
+            header-content := VerticalLayout {
+              y: 8px; width: parent.width; height: self.preferred-height; spacing: MobileTypography.small-gap;
+              HorizontalLayout { spacing: 8px; cross-axis-alignment: center;
                 if root.has-back: MBackButton {
                     clicked => { if root.detail-page { MobileView.back(); } else { MobileView.navigate(10); } }
                 }
                 if !root.has-back && root.narrow: MAppIcon { }
                 MHeading { text: root.detail-page && !root.pane ? root.detail-title : root.titles[MobileView.page];
-                    font-size: root.short ? MobileTypography.font-size(21) : MobileTypography.font-size(round(root.title-size / 1px));
-                    horizontal-stretch: 0;
+                    font-size: root.short ? MobileTypography.font-size(21) : root.usable-width < 360px ? MobileTypography.font-size(20) : MobileTypography.font-size(round(root.title-size / 1px));
+                    horizontal-stretch: 0; wrap: word-wrap;
                 }
+                if root.stacked-header: Rectangle { horizontal-stretch: 1; }
                 if !root.stacked-header: HeaderStatus { compact: root.usable-height < 600px; }
               }
               if root.stacked-header: HeaderStatus { compact: root.usable-height < 600px; }
             }
         }
-        body := Rectangle {
+        protection-alert := ProtectionAlert {
+            visible: MobileData.protection-health == 3;
             x: header.x; y: header.y + header.height + 4px; width: header.width;
+            height: self.visible ? self.preferred-height : 0px;
+            health: MobileData.protection-health; message: MobileData.protection-message;
+            font-size: MobileTypography.font-size(13); enabled: !MobileView.modal;
+            clicked => { MobileView.navigate(8); }
+        }
+        body := Rectangle {
+            x: header.x; y: protection-alert.y + protection-alert.height + (protection-alert.visible ? 8px : 0px); width: header.width;
             height: max(0px, root.usable-height - (self.y - MobileView.safe-top) - (root.bottom ? root.bottom-height - MobileView.safe-bottom : 0px));
             HorizontalLayout { spacing: MobileTypography.padding;
                 Rectangle {

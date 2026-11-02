@@ -215,6 +215,7 @@ struct State {
     protection_change: Option<ProtectionChange>,
     protection_status: String,
     guard_snapshot: core::claude_check::guard::Snapshot,
+    protection_observed: bool,
     category: String,
     site_query: String,
     site_region: String,
@@ -455,6 +456,7 @@ async fn run_loop(
         protection_change: None,
         protection_status: String::new(),
         guard_snapshot: Default::default(),
+        protection_observed: false,
         category: "AI".into(),
         site_query: String::new(),
         site_region: "全部地区".into(),
@@ -983,15 +985,20 @@ async fn run_loop(
             }
         }
         if refresh_requested {
-            if let Err(error) = state.session.observe_native() {
-                state
-                    .logs
-                    .push_back(("WARN".into(), format!("状态刷新失败：{error:#}")));
-            }
+            state.protection_observed = match state.session.observe_native() {
+                Ok(()) => true,
+                Err(error) => {
+                    state
+                        .logs
+                        .push_back(("WARN".into(), format!("状态刷新失败：{error:#}")));
+                    false
+                }
+            };
             match observe_protection(&mut state) {
                 Ok(true) => start_claude_check(&mut state, &mut claude_job, updates.clone()),
                 Ok(false) => {}
                 Err(error) => {
+                    state.protection_observed = false;
                     state.notice = format!("保护状态异常：{error:#}");
                     state.logs.push_back(("ERROR".into(), state.notice.clone()));
                 }
@@ -2071,6 +2078,7 @@ struct Projection {
     claude_status: String,
     protection_pending: bool,
     protection_status: String,
+    protection_health: core::protection::status::Status,
 }
 struct ReportRow {
     id: String,
@@ -2465,6 +2473,25 @@ fn project(state: &State) -> Projection {
         claude_status: state.claude_status.clone(),
         protection_pending: state.protection_change.is_some(),
         protection_status: state.protection_status.clone(),
+        protection_health: core::protection::status::Status::observe(
+            s.settings.claude_protection.is_some(),
+            state.protection_change.is_some(),
+            s.running,
+            s.vpn,
+            state.protection_observed.then_some((
+                state.guard_snapshot.connected,
+                if !state.guard_snapshot.error.is_empty() {
+                    &state.guard_snapshot.error
+                } else if !s.platform["protection"]["enabled"]
+                    .as_bool()
+                    .unwrap_or(false)
+                {
+                    "实时拦截未运行，请重新连接 VPN"
+                } else {
+                    ""
+                },
+            )),
+        ),
         policies: document.map(|d| d.policies.clone()).unwrap_or_default(),
         shortcuts: s.draft.enabled,
         dirty: s.draft != *saved,
@@ -2627,6 +2654,8 @@ fn apply(ui: &AndroidWindow, p: Projection) {
         ui.global::<MobileView>().set_detail(0);
     }
     data.set_protection_status(p.protection_status.into());
+    data.set_protection_health(p.protection_health.state as i32);
+    data.set_protection_message(p.protection_health.message.into());
     data.set_upload_rate(p.rates.0.into());
     data.set_download_rate(p.rates.1.into());
     data.set_rule_profile(p.rule_profile.into());

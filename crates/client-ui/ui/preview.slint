@@ -20,6 +20,9 @@ export component Preview inherits AppWindow {
     in-out property <float> preview-notice-elapsed <=> UiData.notice-elapsed;
     in-out property <bool> preview-protection-pending <=> UiData.protection-pending;
     in-out property <bool> preview-protected <=> UiData.protected;
+    changed preview-protected => { UiData.proxy-mode = root.preview-protected ? 1 : 0; }
+    in-out property <int> preview-protection-health <=> UiData.protection-health;
+    in-out property <string> preview-protection-message <=> UiData.protection-message;
     in-out property <bool> preview-update-prereleases <=> UiData.update-prereleases;
     in-out property <int> dialog;
     in-out property <bool> shortcuts-open <=> UiData.shortcuts-open;
@@ -55,7 +58,7 @@ export component Preview inherits AppWindow {
     init => {
         Motion.enabled = root.preview-motion;
         UiData.fake-ip-editor = root.preview-fake-ip-editor;
-        UiData.version = "0.6.6-dev.4.subscription-format-notice";
+        UiData.version = "0.6.6-dev.5.protection-status";
         UiData.ready = true; UiData.running = true;
         UiData.profile = "我的订阅"; UiData.node = "德国 01 · IPv6";
         UiData.download-rate = "1.24 MiB/s"; UiData.upload-rate = "28.6 KiB/s";

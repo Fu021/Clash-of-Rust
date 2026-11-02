@@ -11,9 +11,11 @@ import org.json.JSONObject;
 final class ProtectionRuntime {
     static { System.loadLibrary("clash_mobile"); }
     private static volatile Context context;
+    private static volatile boolean configured;
     private static native String nativeConfigure(String json);
     private static native String nativeState();
     private static native String nativeRecover(String root);
+    static native int notificationHealth();
     private ProtectionRuntime() {}
     static synchronized void recover(Context owner) throws Exception {
         JSONObject response = new JSONObject(nativeRecover(new File(owner.getFilesDir(),"client").getAbsolutePath()));
@@ -32,6 +34,7 @@ final class ProtectionRuntime {
         JSONObject settings = path.isFile() ? new JSONObject(new String(Files.readAllBytes(path.toPath()), StandardCharsets.UTF_8)) : new JSONObject();
         JSONObject protection = settings.optJSONObject("claude_protection");
         boolean enabled = protection != null && TunnelService.connected();
+        configured = protection != null;
         JSONObject config = new JSONObject().put("enabled", enabled);
         if (enabled) config.put("node", protection.getString("node"))
             .put("controller_port", settings.getInt("controller_port"))
@@ -40,6 +43,17 @@ final class ProtectionRuntime {
         if (response.has("error")) throw new IOException(response.getString("error"));
     }
     static JSONObject state() throws Exception { return new JSONObject(nativeState()); }
+    static String notificationLabel(boolean configured, int health) {
+        if (!configured) return "";
+        switch (health) {
+            case 1: return "Claude 保护已启用";
+            case 3: return "Claude 保护异常";
+            default: return "Claude 保护待确认";
+        }
+    }
+    static String notificationStatus() {
+        return configured ? notificationLabel(true, notificationHealth()) : "";
+    }
     // JNI calls this off the UI thread, including when the Activity is closed.
     static String notify(String title, String message) {
         try {

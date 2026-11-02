@@ -1,4 +1,5 @@
 //! A reversible runtime overlay. Preferences and subscription sources stay intact.
+pub mod status;
 use crate::config::Settings;
 use crate::model::ProxyMode;
 use anyhow::{Result, ensure};

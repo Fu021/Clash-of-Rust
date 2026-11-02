@@ -1973,6 +1973,51 @@ fn a_locked_rules_page_still_accepts_the_global_exit_confirmation() {
 }
 
 #[test]
+fn every_page_projects_protection_readiness_and_discards_unconfirmed_success() {
+    use clash_client_core::protection::{Previous, Protection, status};
+    let mut app = fixture(Page::Home);
+    app.settings.claude_protection = Some(Arc::new(Protection::new(
+        "fixture".into(),
+        "node".into(),
+        Previous {
+            mode: "rule".into(),
+            proxy_mode: ProxyMode::Off,
+            selectors: vec![],
+        },
+    )));
+    for page in Page::ALL {
+        app.page = page;
+        for (guard, expected) in [
+            (Some((true, "")), status::State::Active),
+            (None, status::State::Checking),
+            (Some((false, "DNS 接管未就绪")), status::State::Error),
+        ] {
+            app.snapshot.protection_status =
+                status::Status::observe(true, false, true, true, guard);
+            app.snapshot.retain_scope(page.scope());
+            let data = clash_desktop_protocol::UiData::default();
+            let mut models = clash_desktop_protocol::models::ViewModels::default();
+            app.present(&data, &mut models);
+            assert_eq!(data.get_protection_health(), expected as i32);
+        }
+    }
+    let mut reply = synchronized_reply(&app);
+    reply.snapshot = None;
+    let _ = app.update(Message::Finished(Box::new(reply)));
+    assert_eq!(
+        app.snapshot.protection_status.state,
+        status::State::Checking
+    );
+    app.settings.claude_protection = None;
+    let data = clash_desktop_protocol::UiData::default();
+    app.present(
+        &data,
+        &mut clash_desktop_protocol::models::ViewModels::default(),
+    );
+    assert_eq!(data.get_protection_health(), status::State::Off as i32);
+}
+
+#[test]
 fn entering_proxies_pins_and_expands_the_actual_group_without_reopening_a_manual_collapse() {
     let mut app = fixture(Page::Home);
     let _ = app.ui_intent(Intent::Navigate, "1", "");
