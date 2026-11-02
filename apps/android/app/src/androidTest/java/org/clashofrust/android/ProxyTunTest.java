@@ -82,6 +82,7 @@ public class ProxyTunTest {
     }
     private static void verifyPresentation() throws Exception {
         new ProxyTunTest().notificationShowsModeAndNodeWithOptionalSpeeds();
+        new ProxyTunTest().heldResponseClassifiesTruncationAsTransportFailure();
         await("Core is running but Slint still reports it as stopped",()->MainActivity.diagnostics().optBoolean("core_running"));
         JSONObject initial=MainActivity.diagnostics();
         Context context=InstrumentationRegistry.getInstrumentation().getTargetContext();
@@ -440,17 +441,7 @@ public class ProxyTunTest {
             connection.getOutputStream().write(("GET /hold HTTP/1.1\r\nHost: 198.51.100.1\r\nConnection: close\r\n\r\n")
                 .getBytes(StandardCharsets.US_ASCII));
             BufferedReader stream=new BufferedReader(new InputStreamReader(connection.getInputStream(),StandardCharsets.US_ASCII));
-            String status=stream.readLine();
-            assertNotNull("Held TUN request returned no HTTP response",status);
-            assertTrue("Held TUN request failed: "+status,status.contains(" 200 "));
-            boolean headersComplete=false;
-            for (int header=0;header<100;header++) {
-                String line=stream.readLine();
-                if (line==null) break;
-                if (line.isEmpty()) {headersComplete=true;break;}
-            }
-            assertTrue("Incomplete held HTTP response",headersComplete);
-            assertTrue(stream.read() >= 0);
+            assertHeldResponse(stream);
             JSONObject records=new JSONObject(read(new URL("http://"+controller+"/connections"),java.net.Proxy.NO_PROXY,secret));
             JSONArray connections=records.getJSONArray("connections");
             boolean observed=false;
@@ -465,6 +456,32 @@ public class ProxyTunTest {
             assertTrue("No matching TUN connection: "+connection.getLocalSocketAddress()+" -> "+connection.getRemoteSocketAddress()
                 +"; a direct-only test must fail; records="+records,observed);
         }
+    }
+    private static void assertHeldResponse(BufferedReader stream) throws IOException {
+        String status=stream.readLine();
+        if (status==null) throw new EOFException("Held TUN request returned no HTTP response");
+        assertTrue("Held TUN request failed: "+status,status.contains(" 200 "));
+        boolean headersComplete=false;
+        for (int header=0;header<100;header++) {
+            String line=stream.readLine();
+            if (line==null) throw new EOFException("Held HTTP headers were truncated");
+            if (line.isEmpty()) {headersComplete=true;break;}
+        }
+        assertTrue("Too many held HTTP headers",headersComplete);
+        if (stream.read()<0) throw new EOFException("Held HTTP response returned no body");
+    }
+    @Test public void heldResponseClassifiesTruncationAsTransportFailure() throws Exception {
+        for (String raw:new String[]{"", "HTTP/1.1 200 OK\r\nX-Test: 1\r\n", "HTTP/1.1 200 OK\r\n\r\n"}) {
+            try {
+                assertHeldResponse(new BufferedReader(new StringReader(raw)));
+                fail("Truncated HTTP response must fail");
+            } catch (EOFException expected) { /* The existing readiness loop may open a fresh connection. */ }
+        }
+        AssertionError rejected=null;
+        try {assertHeldResponse(new BufferedReader(new StringReader("HTTP/1.1 403 Forbidden\r\n\r\nx")));}
+        catch (AssertionError error) {rejected=error;}
+        assertNotNull("An HTTP error must fail without a readiness retry",rejected);
+        assertHeldResponse(new BufferedReader(new StringReader("HTTP/1.1 200 OK\r\nX-Test: 1\r\n\r\nx")));
     }
     @Test public void localProxyAndRealTunCarryTrafficAndDisconnectCleanly() throws Exception {
         Context context = InstrumentationRegistry.getInstrumentation().getTargetContext();
