@@ -1,7 +1,7 @@
 //! Confirm that mDNSResponder has consumed the overlay, using a local-only reply.
 use anyhow::{Context, Result, ensure};
 use std::{
-    ffi::{CString, c_char, c_void},
+    ffi::{CStr, CString, c_char, c_void},
     ptr,
     sync::{
         Arc, Mutex,
@@ -11,6 +11,8 @@ use std::{
 };
 
 type Service = *mut c_void;
+const MORE_COMING: u32 = 0x1;
+const ADD_RECORD: u32 = 0x2;
 type QueryCallback = unsafe extern "C" fn(
     Service,
     u32,
@@ -43,8 +45,12 @@ unsafe extern "C" {
 }
 
 pub(super) struct Probe {
+    name: String,
     question: Vec<u8>,
     received: AtomicBool,
+    answered: AtomicBool,
+    pending: AtomicBool,
+    rejected: AtomicBool,
 }
 pub(super) type Probes = Arc<Mutex<Option<Arc<Probe>>>>;
 
@@ -71,17 +77,44 @@ impl Drop for Query {
 }
 unsafe extern "C" fn answered(
     _: Service,
+    flags: u32,
     _: u32,
+    error: i32,
+    name: *const c_char,
+    kind: u16,
+    class: u16,
+    length: u16,
+    data: *const c_void,
     _: u32,
-    _: i32,
-    _: *const c_char,
-    _: u16,
-    _: u16,
-    _: u16,
-    _: *const c_void,
-    _: u32,
-    _: *mut c_void,
+    context: *mut c_void,
 ) {
+    let Some(probe) = (unsafe { context.cast::<Probe>().as_ref() }) else {
+        return;
+    };
+    if error != 0 {
+        probe.rejected.store(true, Ordering::Release);
+        return;
+    }
+    probe
+        .pending
+        .store(flags & MORE_COMING != 0, Ordering::Release);
+    if flags & ADD_RECORD == 0 {
+        return;
+    }
+    let valid = !name.is_null()
+        && !data.is_null()
+        && kind == 1
+        && class == 1
+        && length == 4
+        && unsafe { CStr::from_ptr(name) }
+            .to_bytes()
+            .eq_ignore_ascii_case(probe.name.as_bytes())
+        && unsafe { std::slice::from_raw_parts(data.cast::<u8>(), 4) } == [127, 0, 0, 1];
+    if valid {
+        probe.answered.store(true, Ordering::Release);
+    } else {
+        probe.rejected.store(true, Ordering::Release);
+    }
 }
 
 impl Probe {
@@ -93,9 +126,20 @@ impl Probe {
         }
         question.push(0);
         Self {
+            name: name.to_owned(),
             question,
             received: AtomicBool::new(false),
+            answered: AtomicBool::new(false),
+            pending: AtomicBool::new(false),
+            rejected: AtomicBool::new(false),
         }
+    }
+
+    fn ready(&self) -> bool {
+        self.received.load(Ordering::Acquire)
+            && self.answered.load(Ordering::Acquire)
+            && !self.pending.load(Ordering::Acquire)
+            && !self.rejected.load(Ordering::Acquire)
     }
 }
 
@@ -144,14 +188,24 @@ pub(super) fn response(packet: &[u8], probes: &Probes) -> Option<Vec<u8>> {
     if let Ok(current) = probes.lock()
         && let Some(probe) = current.as_ref()
         && packet[12..end].eq_ignore_ascii_case(&probe.question)
+        && packet[end..end + 2] == [0, 1]
     {
         probe.received.store(true, Ordering::Release);
     }
     // mDNSResponder can retry after query cancellation. Keep every internal
     // nonce local, but only the currently registered nonce confirms readiness.
     let mut reply = packet[..end + 4].to_vec();
-    reply[2..4].copy_from_slice(&[0x81, 0x83]);
-    reply[6..12].fill(0);
+    reply[2..4].copy_from_slice(&[0x81, 0x80]);
+    reply[6..12].copy_from_slice(&[0, 1, 0, 0, 0, 0]);
+    reply.extend_from_slice(&[0xc0, 12]);
+    reply.extend_from_slice(&packet[end..end + 4]);
+    reply.extend_from_slice(&[0, 0, 0, 1]);
+    if packet[end..end + 2] == [0, 1] {
+        reply.extend_from_slice(&[0, 4, 127, 0, 0, 1]);
+    } else {
+        reply.extend_from_slice(&[0, 16]);
+        reply.extend_from_slice(&std::net::Ipv6Addr::LOCALHOST.octets());
+    }
     Some(reply)
 }
 
@@ -196,7 +250,7 @@ fn check_scope(probes: &Probes, deadline: Instant, scope: &str) -> Result<()> {
             1,
             1,
             answered,
-            ptr::null_mut(),
+            Arc::as_ptr(&probe).cast_mut().cast(),
         )
     };
     ensure!(
@@ -206,7 +260,13 @@ fn check_scope(probes: &Probes, deadline: Instant, scope: &str) -> Result<()> {
     let query = Query(service);
     let fd = unsafe { DNSServiceRefSockFD(query.0) };
     ensure!(fd >= 0, "系统原生 DNS 检查连接无效");
-    while !probe.received.load(Ordering::Acquire) {
+    // Arrival at the relay alone does not confirm that mDNSResponder consumed
+    // the new resolver. Await its callback with our exact local-only answer.
+    while !probe.ready() {
+        ensure!(
+            !probe.rejected.load(Ordering::Acquire),
+            "系统原生 DNS 尚未确认本机响应"
+        );
         ensure!(Instant::now() < deadline, "系统原生 DNS 尚未进入保护入口");
         let mut descriptor = libc::pollfd {
             fd,
@@ -250,6 +310,60 @@ mod tests {
         packet
     }
 
+    fn acknowledge(probe: &Probe, name: &str, address: &[u8], error: i32, flags: u32) {
+        let name = CString::new(name).unwrap();
+        unsafe {
+            answered(
+                ptr::null_mut(),
+                flags,
+                0,
+                error,
+                name.as_ptr(),
+                1,
+                1,
+                address.len().try_into().unwrap(),
+                address.as_ptr().cast(),
+                1,
+                (probe as *const Probe).cast_mut().cast(),
+            );
+        }
+    }
+
+    #[test]
+    fn relay_arrival_requires_the_native_resolver_to_confirm_the_local_answer() {
+        let probe = Arc::new(Probe::new(FIRST));
+        let probes = Arc::new(Mutex::new(Some(probe.clone())));
+        let reply = response(&packet(&probe, 1), &probes).unwrap();
+        assert!(probe.received.load(Ordering::Acquire));
+        assert!(!probe.ready());
+        assert!(reply.ends_with(&[127, 0, 0, 1]));
+        acknowledge(&probe, &FIRST.to_ascii_uppercase(), &[127, 0, 0, 1], 0, 3);
+        assert!(!probe.ready(), "Pending DNS-SD results must be consumed");
+        acknowledge(&probe, FIRST, &[127, 0, 0, 1], 0, 2);
+        assert!(probe.ready());
+
+        let waiting = Probe::new(SECOND);
+        acknowledge(&waiting, SECOND, &[127, 0, 0, 1], 0, 2);
+        assert!(!waiting.ready(), "A callback cannot replace relay receipt");
+    }
+
+    #[test]
+    fn foreign_negative_or_mismatched_answers_cannot_confirm_readiness() {
+        for (name, address, error) in [
+            (FIRST, vec![100, 100, 12, 34], 0),
+            (SECOND, vec![127, 0, 0, 1], 0),
+            (FIRST, vec![127, 0, 0], 0),
+            (FIRST, vec![], -65554),
+        ] {
+            let probe = Arc::new(Probe::new(FIRST));
+            let probes = Arc::new(Mutex::new(Some(probe.clone())));
+            assert!(response(&packet(&probe, 1), &probes).is_some());
+            acknowledge(&probe, name, &address, error, 2);
+            assert!(probe.rejected.load(Ordering::Acquire));
+            assert!(!probe.ready());
+        }
+    }
+
     #[test]
     fn only_the_active_native_nonce_confirms_the_resolver_path() {
         let probe = Arc::new(Probe::new(FIRST));
@@ -263,7 +377,8 @@ mod tests {
         let reply = response(&request, &probes).unwrap();
         assert!(probe.received.load(Ordering::Acquire));
         assert_eq!(&reply[..2], &[0x12, 0x34]);
-        assert_eq!(&reply[2..12], &[0x81, 0x83, 0, 1, 0, 0, 0, 0, 0, 0]);
+        assert_eq!(&reply[2..12], &[0x81, 0x80, 0, 1, 0, 1, 0, 0, 0, 0]);
+        assert!(reply.ends_with(&[0, 4, 127, 0, 0, 1]));
         let registration = Registration {
             probes: probes.clone(),
             probe,
@@ -290,6 +405,8 @@ mod tests {
         assert!(response(&request, &probes).is_some());
         assert!(!second.received.load(Ordering::Acquire));
         assert!(response(&packet(&second, 28), &probes).is_some());
+        assert!(!second.received.load(Ordering::Acquire));
+        assert!(response(&packet(&second, 1), &probes).is_some());
         assert!(second.received.load(Ordering::Acquire));
     }
 

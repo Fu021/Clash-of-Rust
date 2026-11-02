@@ -218,6 +218,19 @@ public class ProxyTunTest {
             fail("Reserved test origin was reachable without VPN; negative control is invalid");
         }
     }
+    private static java.util.List<android.view.accessibility.AccessibilityNodeInfo> dialogViews(
+        android.view.accessibility.AccessibilityNodeInfo root, String id) {
+        try {
+            java.util.List<android.view.accessibility.AccessibilityNodeInfo> views =
+                root.findAccessibilityNodeInfosByViewId(id);
+            return views == null ? java.util.Collections.emptyList() : views;
+        } catch (NullPointerException staleWindow) {
+            // The framework can lose its node list while the system dialog is
+            // being replaced. The bounded consent loop reacquires its root.
+            android.util.Log.w("ClashOfRustTest", "VPN dialog accessibility window changed", staleWindow);
+            return java.util.Collections.emptyList();
+        }
+    }
     private static void consent(boolean allow) throws Exception {
         java.util.concurrent.atomic.AtomicBoolean clicked=new java.util.concurrent.atomic.AtomicBoolean();
         await("Android VPN consent did not return to the app",()-> {
@@ -227,12 +240,12 @@ public class ProxyTunTest {
             if ("org.clashofrust.android".contentEquals(root.getPackageName()))
                 return clicked.get() && inStage(androidx.test.runner.lifecycle.Stage.RESUMED,true);
             if (!"com.android.vpndialogs".contentEquals(root.getPackageName())) return false;
-            for (android.view.accessibility.AccessibilityNodeInfo check:root.findAccessibilityNodeInfosByViewId("android:id/checkbox"))
+            for (android.view.accessibility.AccessibilityNodeInfo check:dialogViews(root,"android:id/checkbox"))
                 if (check.isCheckable() && !check.isChecked())
                     check.performAction(android.view.accessibility.AccessibilityNodeInfo.ACTION_CLICK);
             // Accessibility can accept an action against a closing window.
             // Wait for the actual return so the next consent uses its own dialog.
-            for (android.view.accessibility.AccessibilityNodeInfo button:root.findAccessibilityNodeInfosByViewId(
+            for (android.view.accessibility.AccessibilityNodeInfo button:dialogViews(root,
                 allow ? "android:id/button1" : "android:id/button2"))
                 if (button.isEnabled() && button.performAction(android.view.accessibility.AccessibilityNodeInfo.ACTION_CLICK))
                     clicked.set(true);
