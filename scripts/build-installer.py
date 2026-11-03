@@ -46,7 +46,7 @@ def build_deb(payload, version, arch):
 
 def _build_deb(payload, version, arch, work):
     deb_arch = {'x64':'amd64', 'arm64':'arm64'}[arch]
-    root = work/'package'
+    root = work/'debian/clash-of-rust'
     application = root/'opt/clash-of-rust'
     shutil.copytree(payload, application)
     # Normalize permissions even when source files reside on a Windows mount.
@@ -73,7 +73,7 @@ def _build_deb(payload, version, arch, work):
             compressed.write(f'Clash of Rust {version}\n\nNative Rust desktop client and native platform checks.\n'.encode())
     # dpkg's symbol database computes minimum versions for this build's ELF ABI.
     source_control = work/'debian/control'
-    source_control.parent.mkdir()
+    source_control.parent.mkdir(exist_ok=True)
     source_control.write_text(f'Source: clash-of-rust\n\nPackage: clash-of-rust\nArchitecture: {deb_arch}\nDescription: Native desktop client for mihomo\n', encoding='utf-8')
     binaries = ('clash-of-rust', 'clash-desktop-ui', 'cor', 'clash-tun-launcher')
     output = subprocess.check_output(['dpkg-shlibdeps', '-O',

@@ -65,7 +65,7 @@ jobs:
           if os.environ.get('CI_RUN_ID'):
               command += ['--run-id', str(int(os.environ['CI_RUN_ID']))]
           subprocess.run(command, check=True)
-      - uses: actions/download-artifact@v7
+      - uses: actions/download-artifact@v8
         with:
           name: dependency-snapshot
           path: ${{ env.BUILD_INPUTS_DIR }}
@@ -138,7 +138,7 @@ jobs:
           python-version: ${{ matrix.python }}
           check-latest: true
           architecture: ${{ matrix.arch }}
-      - uses: actions/download-artifact@v7
+      - uses: actions/download-artifact@v8
         with:
           name: packaging-dependency-snapshot
           path: ${{ env.BUILD_INPUTS_DIR }}
@@ -267,19 +267,27 @@ jobs:
           retention-days: 3
   ubuntu_latest:
     name: Ubuntu latest-x64 proxy and TUN
-    needs: [resolve, package]
+    needs: resolve
     runs-on: ubuntu-latest
     timeout-minutes: 35
+    permissions:
+      actions: read
+      contents: read
     steps:
       - uses: actions/checkout@v6
         with:
           ref: ${{ needs.resolve.outputs.commit }}
           persist-credentials: false
-      - uses: actions/download-artifact@v7
+      - name: Wait for the verified Linux package from this run
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PYTHONDONTWRITEBYTECODE: '1'
+        run: python3 scripts/workflow_artifacts.py wait --system linux --arch x64 --run-id '${{ github.run_id }}'
+      - uses: actions/download-artifact@v8
         with:
           name: package-linux-x64
           path: dist
-      - uses: actions/download-artifact@v7
+      - uses: actions/download-artifact@v8
         with:
           name: linux-tun-test-x64
           path: target
@@ -299,7 +307,7 @@ jobs:
           retention-days: 3
   ubuntu_20:
     name: Ubuntu 20.04-${{ matrix.arch }} installed GUI and TUN
-    needs: [resolve, package]
+    needs: resolve
     runs-on: ${{ matrix.os }}
     timeout-minutes: 90
     permissions:
@@ -324,18 +332,10 @@ jobs:
       - uses: actions/setup-python@v6
         with:
           python-version: '3.11'
-      - uses: actions/download-artifact@v7
+      - uses: actions/download-artifact@v8
         with:
           name: packaging-dependency-snapshot
           path: ${{ env.BUILD_INPUTS_DIR }}
-      - uses: actions/download-artifact@v7
-        with:
-          name: package-linux-${{ matrix.arch }}
-          path: dist
-      - uses: actions/download-artifact@v7
-        with:
-          name: linux-tun-test-${{ matrix.arch }}
-          path: target
       - name: Connect to private Linux download cache
         id: tailnet
         if: vars.TS_OAUTH_CLIENT_ID != '' && vars.TS_AUDIENCE != ''
@@ -373,6 +373,19 @@ jobs:
           else
             echo "KVM is unavailable; keeping TCG software emulation."
           fi
+      - name: Wait for the verified Linux package from this run
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PYTHONDONTWRITEBYTECODE: '1'
+        run: python3 scripts/workflow_artifacts.py wait --system linux --arch '${{ matrix.arch }}' --run-id '${{ github.run_id }}'
+      - uses: actions/download-artifact@v8
+        with:
+          name: package-linux-${{ matrix.arch }}
+          path: dist
+      - uses: actions/download-artifact@v8
+        with:
+          name: linux-tun-test-${{ matrix.arch }}
+          path: target
       - name: Verify the same package with the Ubuntu 20.04 GA kernel
         env:
           PYTHONDONTWRITEBYTECODE: '1'
@@ -417,7 +430,7 @@ jobs:
         with:
           ref: ${{ needs.resolve.outputs.commit }}
           persist-credentials: false
-      - uses: actions/download-artifact@v7
+      - uses: actions/download-artifact@v8
         with:
           name: packaging-dependency-snapshot
           path: ${{ env.BUILD_INPUTS_DIR }}

@@ -8,7 +8,7 @@
 | --- | --- | --- |
 | `build_support.py` | 共享模块 | 平台识别、版本、资源、下载、架构和暂存目录等标准库辅助。 |
 | `build_inputs.py` | CLI / 模块 | 冻结并应用同一份 Rust、Go、Android、Linux 基线和资源依赖快照。 |
-| `workflow_artifacts.py` | CLI / 模块 | 导出、下载和校验不可变 CI 产物，不重新编译。 |
+| `workflow_artifacts.py` | CLI / 模块 | 导出、下载和校验不可变 CI 产物；同运行 Linux 包就绪后启动兼容验证，不重新编译。 |
 | `action_cache.py` | CLI / 模块 | 认证私网缓存协议、恢复预算、校验、清单及服务端协作请求传递。 |
 | `cache_shards.py` | 模块 | Rust 32 分片缓存的恢复、失效和增量上传。 |
 | `workflow_storage.py` | CLI | 限制 GitHub Actions 热缓存容量并保留需要的版本。 |
@@ -38,7 +38,7 @@
 
 工作流复合操作 `.github/actions/local-cache/index.cjs` 只负责调用 `action_cache.py`，不复制缓存实现。`resources/claude-check/browser.js` 是检测页面资源，随客户端提供，保留在资源目录。
 
-私网缓存的客户端写入能力和交接约定见[缓存服务说明](../docs/workflows/cache-server.md)；需要服务端配合时将具体请求写入 `.github/cache-server/README.txt`，工作流不维护服务器通用说明。
+私网缓存的客户端写入能力和交接约定见[缓存服务说明](../docs/workflows/cache-server.md)；需要服务端配合时将具体请求写入 `.github/cache-server/README.txt`。`action_cache.py feedback` 在发送前读取认证反馈并输出脱敏 summary/附件，跟踪文件保留待消费请求的正文摘要；agent 按[消费约定](../docs/workflows/cache-server.md#反馈通道与-agent-消费)处理，工作流不维护服务器通用说明。
 
 以下 Rust 构建脚本由各自的 Cargo 包调用，按包的构建生命周期保留；协议生成共用 `crates/desktop-protocol/schema.rs`，不另建包装入口：
 

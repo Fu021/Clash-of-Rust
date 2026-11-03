@@ -21,7 +21,7 @@ export component AiCheckPage inherits PageSurface {
     motion-revision: UiData.claude-filter + 1;
     PageScroll {
         content-key: UiData.claude-filter + "/" + UiData.claude-result-page;
-        viewport-y <=> UiData.scroll-claude;
+        content-y <=> UiData.scroll-claude;
         x: 0px; width: parent.width + Theme.content-gap;
         VerticalLayout {
             alignment: start; padding-right: Theme.content-gap; spacing: Theme.page-gap;

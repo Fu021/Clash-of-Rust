@@ -198,7 +198,7 @@ jobs:
         with:
           python-version: '3.11'
           check-latest: true
-      - uses: actions/download-artifact@v7
+      - uses: actions/download-artifact@v8
         with:
           name: dependency-snapshot
           path: ${{ env.BUILD_INPUTS_DIR }}
@@ -304,7 +304,7 @@ jobs:
           go-version: ${{ needs.inputs.outputs.go }}
           # Cache modules/tools below; the Go build directory is disposable.
           cache: false
-      - uses: actions/download-artifact@v7
+      - uses: actions/download-artifact@v8
         with:
           name: android-shared-dependencies
           path: target/shared-go
@@ -332,7 +332,7 @@ jobs:
         timeout-minutes: 5
         with:
           path: ${{ env.GOCACHE }}
-          key: android-go-build-${{ matrix.arch }}-${{ needs.inputs.outputs.go }}-${{ hashFiles('apps/android/core/**', 'scripts/android.py', '.github/workflows/ci.yml') }}
+          key: android-go-build-${{ matrix.arch }}-${{ needs.inputs.outputs.go }}-${{ hashFiles('apps/android/core/**', 'scripts/android.py') }}
           restore-keys: android-go-build-${{ matrix.arch }}-${{ needs.inputs.outputs.go }}-
       - name: Restore local fallback for Android Go compilation
         uses: ./.github/actions/local-cache
@@ -344,7 +344,7 @@ jobs:
           group: compiler/android-go-${{ matrix.arch }}
           paths: ${{ env.GOCACHE }}
           immutable: true
-          key: go-${{ needs.inputs.outputs.go }}-${{ hashFiles('apps/android/core/**', 'scripts/android.py', '.github/workflows/ci.yml') }}
+          key: go-${{ needs.inputs.outputs.go }}-${{ hashFiles('apps/android/core/**', 'scripts/android.py') }}
           restore-keys: go-${{ needs.inputs.outputs.go }}-
       - name: Restore GitHub Gradle dependencies and distribution
         id: gradle_github
@@ -523,7 +523,7 @@ jobs:
           python-version: ${{ matrix.python }}
           check-latest: true
           architecture: ${{ matrix.arch }}
-      - uses: actions/download-artifact@v7
+      - uses: actions/download-artifact@v8
         with:
           name: dependency-snapshot
           path: ${{ env.BUILD_INPUTS_DIR }}
@@ -572,7 +572,7 @@ jobs:
           host = urllib.parse.urlsplit(os.environ.get('CACHE_URL', '')).hostname
           if host:
               client = shutil.which('tailscale') or 'tailscale'
-              for args in (['netcheck', '--format=json'], ['ping', '--c', '3', '--timeout=3s', host]):
+              for args in (['netcheck'], ['ping', '--c', '3', '--timeout=3s', host]):
                   print('Private cache connectivity:', ' '.join(args), flush=True)
                   try:
                       subprocess.run(['sudo', '-n', client, *args], timeout=20, check=False)
@@ -786,6 +786,17 @@ jobs:
         run: |
           sudo -n tailscale set --accept-routes=false --accept-dns=false
           python3 scripts/action_cache.py inventory
+      - name: Read cache server feedback before delivering requests
+        if: always() && github.event_name == 'push' && github.ref == 'refs/heads/main'
+        continue-on-error: true
+        timeout-minutes: 1
+        env:
+          CACHE_URL: ${{ vars.LOCAL_CACHE_URL }}
+          CACHE_TOKEN: ${{ secrets.LOCAL_CACHE_TOKEN }}
+          CACHE_PROXY: http://127.0.0.1:19082
+          TAILNET_OUTCOME: ${{ steps.tailnet.outcome }}
+          PYTHONDONTWRITEBYTECODE: '1'
+        run: python3 scripts/action_cache.py feedback
       - name: Deliver pending cache server requests
         if: always() && github.event_name == 'push' && github.ref == 'refs/heads/main'
         continue-on-error: true
@@ -804,6 +815,14 @@ jobs:
             exit 0
           fi
           python3 scripts/action_cache.py sync-handoff
+      - name: Preserve reviewed cache server feedback
+        uses: actions/upload-artifact@v6
+        if: always() && github.event_name == 'push' && github.ref == 'refs/heads/main'
+        with:
+          name: private-cache-feedback
+          path: target/cache-feedback.json
+          retention-days: 3
+          if-no-files-found: error
       - uses: actions/upload-artifact@v6
         if: steps.tailnet.outcome == 'success'
         with:

@@ -29,6 +29,63 @@ class ArtifactTests(unittest.TestCase):
     commit = 'a'*40
     version = '0.4.12'
 
+    def test_package_wait_preserves_source_identity_and_waits_for_both_artifacts(self):
+        queries = []
+        polls = 0
+
+        def client(path):
+            nonlocal polls
+            queries.append(path)
+            if path.endswith('/artifacts?per_page=100'):
+                polls += 1
+                names = ['package-linux-arm64']
+                if polls > 1:
+                    names.append('linux-tun-test-arm64')
+                return {'artifacts': [{'name': name, 'expired': False} for name in names]}
+            if '/jobs?' in path:
+                return {'jobs': [{'name': 'package-linux-arm64', 'status': 'in_progress'}]}
+            return {'head_sha': self.commit, 'status': 'in_progress'}
+
+        with patch.object(artifacts.time, 'sleep') as pause:
+            artifacts.wait_package(client, 42, 'linux', 'arm64', self.commit)
+        pause.assert_called_once_with(15)
+        self.assertEqual(polls, 2)
+        self.assertTrue(all(path.startswith('/actions/runs/42') for path in queries))
+
+    def test_package_wait_rejects_a_different_commit(self):
+        with self.assertRaisesRegex(ValueError, 'source differs'):
+            artifacts.wait_package(lambda path: {'head_sha': 'b'*40},
+                                   42, 'linux', 'x64', self.commit)
+
+    def test_package_wait_stops_after_producer_failure_or_timeout(self):
+        for failed in (False, True):
+            def client(path):
+                if '/artifacts?' in path:
+                    return {'artifacts': []}
+                if '/jobs?' in path:
+                    return {'jobs': [{'name': 'package-linux-x64', 'status': 'completed',
+                                      'conclusion': 'failure'}] if failed else []}
+                return {'head_sha': self.commit, 'status': 'in_progress'}
+
+            with self.subTest(failed=failed), \
+                 patch.object(artifacts.time, 'monotonic', side_effect=[0, 1200]), \
+                 patch.object(artifacts.time, 'sleep') as pause:
+                with self.assertRaises(RuntimeError if failed else TimeoutError):
+                    artifacts.wait_package(client, 42, 'linux', 'x64', self.commit)
+                pause.assert_not_called()
+
+    def test_package_wait_rejects_duplicate_or_expired_artifacts(self):
+        for entries in (
+                [{'name': 'package-linux-x64', 'expired': True}],
+                [{'name': 'package-linux-x64', 'expired': False}]*2):
+            def client(path):
+                if '/artifacts?' in path:
+                    return {'artifacts': entries}
+                return {'head_sha': self.commit, 'status': 'in_progress'}
+
+            with self.subTest(entries=entries), self.assertRaisesRegex(ValueError, 'duplicated or expired'):
+                artifacts.wait_package(client, 42, 'linux', 'x64', self.commit)
+
     def test_only_proxy_tun_test_is_exported_after_units_run_in_ci(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)

@@ -59,6 +59,7 @@ public final class MainActivity extends NativeActivity {
     // NativeActivity cannot use ComponentActivity. API 33+ dispatches through
     // OnBackInvokedDispatcher above; this entry is solely for API 26–32.
     @android.annotation.SuppressLint("GestureBackNavigation")
+    @SuppressWarnings("deprecation")
     @Override public void onBackPressed() {
         if (Build.VERSION.SDK_INT < 33) emit("back",true);
         else super.onBackPressed();

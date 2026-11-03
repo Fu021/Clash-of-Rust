@@ -423,7 +423,7 @@ public class ProxyTunTest {
                 try {
                     // Never bind a Network explicitly: that could hide a broken
                     // default route. Open a new default-network connection.
-                    assertEquals("cor-android-network-ok",read(new URL("http://10.0.2.2:18081/probe"),java.net.Proxy.NO_PROXY,null));
+                    assertEquals("cor-android-network-ok",read(URI.create("http://10.0.2.2:18081/probe").toURL(),java.net.Proxy.NO_PROXY,null));
                     if (network.equals(manager.getActiveNetwork())) { noTunRoute(); return; }
                 } catch (IOException transition) { last=transition; }
             }
@@ -506,7 +506,7 @@ public class ProxyTunTest {
         String controller = value(raw,"external-controller");
         assertTrue(controller.startsWith("127.0.0.1:"));
         java.net.Proxy proxy = new java.net.Proxy(java.net.Proxy.Type.HTTP,new InetSocketAddress("127.0.0.1",mixed));
-        assertEquals("cor-android-network-ok", read(new URL("http://10.0.2.2:18081/probe"),proxy,null));
+        assertEquals("cor-android-network-ok", read(URI.create("http://10.0.2.2:18081/probe").toURL(),proxy,null));
         assertNotNull(new JSONObject(read(new URL("http://"+controller+"/version"),java.net.Proxy.NO_PROXY,secret)).getString("version"));
         assertNull("The real consent dialog must grant VPN permission", VpnService.prepare(context));
         noTunRoute();
@@ -535,7 +535,7 @@ public class ProxyTunTest {
                 assertTrue("Closing the UI disconnected the foreground VPN", TunnelService.connected());
                 assertTrue("Explicit disconnect must be remembered for sticky recovery",
                     context.getSharedPreferences("vpn",Context.MODE_PRIVATE).getBoolean("desired",false));
-                assertEquals("cor-android-network-ok", read(new URL("http://android-tun.test:18081/probe"),java.net.Proxy.NO_PROXY,null));
+                assertEquals("cor-android-network-ok", read(URI.create("http://android-tun.test:18081/probe").toURL(),java.net.Proxy.NO_PROXY,null));
                 shell("am start -W -n org.clashofrust.android/.MainActivity");
                 await("VPN Activity did not resume",()->inStage(androidx.test.runner.lifecycle.Stage.RESUMED,true));
                 java.util.concurrent.atomic.AtomicBoolean monitoring=new java.util.concurrent.atomic.AtomicBoolean(true);

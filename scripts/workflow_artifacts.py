@@ -11,6 +11,7 @@ import shutil
 import subprocess
 import tarfile
 import tempfile
+import time
 import zipfile
 
 from build_support import (ROOT, bundle_directory, package_version, sha256,
@@ -242,22 +243,61 @@ def fetch_build(client, run_id, system, arch, root, expected_commit):
     return root
 
 
+def wait_package(client, run_id, system, arch, expected_commit, timeout=1200):
+    if system != 'linux' or arch not in ('x64', 'arm64') or not 30 <= timeout <= 3600:
+        raise ValueError('Invalid package wait target or timeout')
+    names = {f'package-linux-{arch}', f'linux-tun-test-{arch}'}
+    producer = f'package-linux-{arch}'
+    deadline = time.monotonic() + timeout
+    print(f'Waiting for {producer} artifacts from run {run_id}, commit {expected_commit}',
+          flush=True)
+    while True:
+        run = client(f'/actions/runs/{run_id}')
+        if run.get('head_sha') != expected_commit:
+            raise ValueError('Package workflow source differs from the selected commit')
+        records = client(f'/actions/runs/{run_id}/artifacts?per_page=100')['artifacts']
+        for name in names:
+            matches = [record for record in records if record['name'] == name]
+            if len(matches) > 1 or any(record.get('expired') for record in matches):
+                raise ValueError('Package artifact duplicated or expired: ' + name)
+        if names <= {record['name'] for record in records}:
+            print(f'{producer} artifacts are ready; continuing without other platforms',
+                  flush=True)
+            return
+        jobs = client(f'/actions/runs/{run_id}/jobs?per_page=100&filter=latest')['jobs']
+        if run.get('status') == 'completed' or any(
+                job['name'] == producer and job.get('status') == 'completed'
+                and job.get('conclusion') != 'success' for job in jobs):
+            raise RuntimeError(producer + ' did not produce the required artifacts')
+        if time.monotonic() >= deadline:
+            raise TimeoutError('Timed out waiting for ' + producer)
+        time.sleep(15)
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument('operation', choices=('export', 'fetch'))
+    parser.add_argument('operation', choices=('export', 'fetch', 'wait'))
     parser.add_argument('--system', choices=('windows', 'linux', 'macos'), required=True)
     parser.add_argument('--arch', choices=('x64', 'arm64'), required=True)
     parser.add_argument('--tests', type=Path)
-    parser.add_argument('--output', type=Path, required=True)
+    parser.add_argument('--output', type=Path)
     parser.add_argument('--run-id', type=int)
+    parser.add_argument('--timeout', type=int, default=1200)
     args = parser.parse_args()
+    if args.operation != 'wait' and args.output is None:
+        parser.error('--output is required for export and fetch')
+    if args.operation in ('fetch', 'wait') and args.run_id is None:
+        parser.error('--run-id is required for fetch and wait')
     if args.operation == 'export':
         export_build(args.system, args.arch, json.loads(args.tests.read_text()), args.output)
     else:
         module = release_module()
         repo = module.repository()
         client = module.GitHub(repo, module.credential(repo))
-        fetch_build(client, args.run_id, args.system, args.arch, args.output, commit())
+        if args.operation == 'wait':
+            wait_package(client, args.run_id, args.system, args.arch, commit(), args.timeout)
+        else:
+            fetch_build(client, args.run_id, args.system, args.arch, args.output, commit())
 
 
 if __name__ == '__main__':

@@ -31,6 +31,7 @@ CHUNK = 1024 * 1024
 DEFAULT_ROOT = Path('/home/coder/github_action_cache')
 RESTORE_SECONDS = 300
 README_LIMIT = 64 * 1024
+FEEDBACK_LIMIT = 256 * 1024
 
 
 class RestoreBudgetExceeded(TimeoutError):
@@ -992,6 +993,171 @@ def inventory():
     print('Saved authenticated private cache inventory:', output)
 
 
+def feedback_requests(template, tracking):
+    requests = {}
+    if tracking.exists():
+        value = json.loads(tracking.read_bytes())
+        if not isinstance(value, dict) or type(value.get('schema')) is not int or value['schema'] != 1:
+            raise ValueError('Invalid cache feedback tracking')
+        records = value.get('requests')
+        if not isinstance(records, list) or len(records) > 8:
+            raise ValueError('Invalid cache feedback tracking')
+        for record in records:
+            if not isinstance(record, dict):
+                raise ValueError('Invalid cache feedback request')
+            request_id = record.get('request_id', '')
+            checksum = record.get('request_content_sha256', '')
+            if (not isinstance(request_id, str) or not re.fullmatch(r'[A-Za-z0-9][A-Za-z0-9._-]{0,127}', request_id)
+                    or not isinstance(checksum, str) or not re.fullmatch('[0-9a-f]{64}', checksum)
+                    or request_id in requests):
+                raise ValueError('Invalid cache feedback request')
+            requests[request_id] = checksum
+    content = template.read_bytes() if template.exists() else b''
+    if content.strip():
+        if len(content) > README_LIMIT or b'\0' in content:
+            raise ValueError('Invalid cache server handoff')
+        content.decode('utf-8')
+        identifiers = re.findall(rb'(?m)^Request-ID: ([A-Za-z0-9][A-Za-z0-9._-]{0,127})\r?$', content)
+        if len(identifiers) != 1:
+            raise ValueError('Expected one cache handoff Request-ID')
+        request_id = identifiers[0].decode('ascii')
+        checksum = hashlib.sha256(content).hexdigest()
+        if request_id in requests and requests[request_id] != checksum:
+            raise ValueError('Cache handoff Request-ID was reused with different content')
+        requests[request_id] = checksum
+    if len(requests) > 8:
+        raise ValueError('Too many outstanding cache feedback requests')
+    return requests
+
+
+def feedback_record(value, request_id, checksum):
+    if (not isinstance(value, dict) or type(value.get('schema')) is not int or value['schema'] != 1
+            or value.get('request_id') != request_id or value.get('request_content_sha256') != checksum):
+        raise ValueError('Cache feedback request identity mismatch')
+    record = {'request_id': request_id, 'request_content_sha256': checksum, 'result': 'matched'}
+    for name in ('source_commit', 'request_sha256'):
+        item = value.get(name)
+        if not isinstance(item, str) or not re.fullmatch('[0-9a-f]{'+str(40 if name == 'source_commit' else 64)+'}', item):
+            raise ValueError('Invalid cache feedback source')
+        record[name] = item
+    sequence = value.get('action_sequence')
+    if type(sequence) is not int or not 0 < sequence < 2**63:
+        raise ValueError('Invalid cache feedback sequence')
+    record['action_sequence'] = sequence
+    statuses = [('status', value.get('status'))]
+    for name in ('implementation', 'validation', 'deployment', 'actual_restore'):
+        section = value.get(name)
+        if not isinstance(section, dict):
+            raise ValueError('Invalid cache feedback section')
+        statuses.append((name, section.get('status')))
+    for name, status in statuses:
+        if not isinstance(status, str) or not re.fullmatch('[a-z][a-z0-9_]{0,79}', status):
+            raise ValueError('Invalid cache feedback status')
+        record[name] = status
+    count = value['validation'].get('test_count')
+    if count is not None:
+        if type(count) is not int or not 0 <= count <= 100000:
+            raise ValueError('Invalid cache feedback test count')
+        record['test_count'] = count
+    record['requires_agent_review'] = True
+    return record
+
+
+def feedback_tests(tracking):
+    identifiers = json.loads(tracking.read_bytes()).get('connectivity_tests', []) if tracking.exists() else []
+    if (not isinstance(identifiers, list) or len(identifiers) > 2
+            or any(not isinstance(identifier, str)
+                   or not re.fullmatch(r'[A-Za-z0-9][A-Za-z0-9._-]{0,127}', identifier)
+                   for identifier in identifiers)
+            or len(set(identifiers)) != len(identifiers)):
+        raise ValueError('Invalid cache feedback test identifiers')
+    return identifiers
+
+
+def feedback_test_record(value, request_id):
+    if (not isinstance(value, dict) or type(value.get('schema')) is not int or value['schema'] != 1
+            or value.get('request_id') != request_id or value.get('kind') != 'connectivity_test'
+            or value.get('does_not_close_request') is not True):
+        raise ValueError('Invalid cache feedback test identity')
+    message = value.get('message')
+    if not isinstance(message, str) or not message.strip() or len(message.encode('utf-8')) > 4096 or '\0' in message:
+        raise ValueError('Invalid cache feedback test message')
+    return {'request_id': request_id, 'kind': 'connectivity_test', 'result': 'received',
+            'status': 'connectivity_test_received', 'does_not_close_request': True,
+            'message_sha256': hashlib.sha256(message.encode('utf-8')).hexdigest(),
+            'requires_agent_review': True}
+
+
+def feedback(template=None, tracking=None, output=None):
+    if (os.environ.get('GITHUB_ACTIONS') != 'true'
+            or os.environ.get('GITHUB_EVENT_NAME') != 'push'
+            or os.environ.get('GITHUB_REF') != 'refs/heads/main'):
+        raise ValueError('Cache server feedback requires a main push on Actions')
+    directory = Path(__file__).resolve().parent.parent/'.github/cache-server'
+    tracking = Path(tracking) if tracking is not None else directory/'feedback-requests.json'
+    requests = feedback_requests(Path(template) if template is not None else directory/'README.txt',
+                                 tracking)
+    test_ids = feedback_tests(tracking)
+    if set(test_ids).intersection(requests) or len(requests) + len(test_ids) > 8:
+        raise ValueError('Conflicting or excessive cache feedback targets')
+    config = {'url': os.environ.get('CACHE_URL', ''), 'token': os.environ.get('CACHE_TOKEN', ''),
+              'proxy': os.environ.get('CACHE_PROXY', ''), 'restore_deadline': time.monotonic() + 40}
+    available = (os.environ.get('TAILNET_OUTCOME', 'success') == 'success'
+                 and config['url'] and config['token'])
+    report = {'schema': 1, 'commit': os.environ.get('GITHUB_SHA', ''),
+              'run_id': os.environ.get('GITHUB_RUN_ID', ''), 'requests': []}
+    targets = [(identifier, checksum, False) for identifier, checksum in requests.items()]
+    targets.extend((identifier, None, True) for identifier in test_ids)
+    for request_id, checksum, connectivity_test in targets:
+        record = {'request_id': request_id, 'kind': 'connectivity_test' if connectivity_test else 'request',
+                  'result': 'unavailable', 'requires_agent_review': True}
+        if checksum is not None:
+            record['request_content_sha256'] = checksum
+        if available:
+            try:
+                query = urllib.parse.urlencode({'request': request_id})
+                with response(config, '/v1/feedback?'+query) as reply:
+                    if reply.status == 404:
+                        record['result'] = 'not_found'
+                    elif reply.status != 200:
+                        record['http_status'] = reply.status
+                    else:
+                        body = bytearray()
+                        while len(body) <= FEEDBACK_LIMIT:
+                            restore_remaining(config)
+                            block = reply.read1(min(CHUNK, FEEDBACK_LIMIT + 1 - len(body)))
+                            if not block:
+                                break
+                            body.extend(block)
+                        if len(body) > FEEDBACK_LIMIT:
+                            raise ValueError('Oversized cache feedback')
+                        value = json.loads(body)
+                        record = (feedback_test_record(value, request_id) if connectivity_test
+                                  else feedback_record(value, request_id, checksum))
+            except (OSError, ValueError, RuntimeError, http.client.HTTPException) as error:
+                record['result'] = 'rejected' if isinstance(error, ValueError) else 'unavailable'
+        report['requests'].append(record)
+        print('Private cache feedback:', request_id, record['result'])
+    output = Path(output) if output is not None else Path('target/cache-feedback.json')
+    output.parent.mkdir(parents=True, exist_ok=True)
+    write_json(output, report)
+    if summary := os.environ.get('GITHUB_STEP_SUMMARY'):
+        with open(summary, 'a', encoding='utf-8') as stream:
+            stream.write('\n## Cache server feedback\n\n'
+                         '| Request | Identity | Status | Implementation | Validation | Deployment | Restore |\n'
+                         '| --- | --- | --- | --- | --- | --- | --- |\n')
+            for record in report['requests']:
+                fields = [record['request_id'], record['result'],
+                          *(record.get(name, 'unknown') for name in ('status', 'implementation', 'validation', 'deployment', 'actual_restore'))]
+                stream.write('| '+' | '.join(fields)+' |\n')
+            stream.write('\nMatched means request identity verified, not acceptance completed. '
+                         'The agent must review deployment and real restore evidence before retiring requests. '
+                         'Missing, rejected or unavailable feedback leaves requests unresolved. '
+                         'Connectivity tests only confirm transport and never close requests. '
+                         'Only reviewed status fields are exported; no raw server messages.\n')
+    return report
+
+
 def sync_handoff(template=None):
     if (os.environ.get('GITHUB_ACTIONS') != 'true'
             or os.environ.get('GITHUB_EVENT_NAME') != 'push'
@@ -1005,6 +1171,7 @@ def sync_handoff(template=None):
     if not content.strip():
         print('Private cache handoff skipped: no pending server requests.')
         return
+    feedback_requests(Path(template), Path(template).with_name('feedback-requests.json'))
     repository = os.environ.get('GITHUB_REPOSITORY', '')
     commit = os.environ.get('GITHUB_SHA', '')
     if (not re.fullmatch(r'[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+', repository)
@@ -1093,22 +1260,22 @@ def preserve_network(restore=False):
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument('operation', choices=('restore', 'discard-restore', 'save', 'serve', 'status', 'inventory', 'sync-handoff', 'network-save', 'network-restore'))
+    parser.add_argument('operation', choices=('restore', 'discard-restore', 'save', 'serve', 'status', 'inventory', 'feedback', 'sync-handoff', 'network-save', 'network-restore'))
     parser.add_argument('--state', type=Path)
     parser.add_argument('--root', type=Path, default=DEFAULT_ROOT)
     args = parser.parse_args()
     if args.operation in ('network-save', 'network-restore'):
         preserve_network(args.operation == 'network-restore')
-    elif args.operation == 'sync-handoff':
+    elif args.operation in ('sync-handoff', 'feedback'):
         try:
-            sync_handoff()
+            (sync_handoff if args.operation == 'sync-handoff' else feedback)()
         except (KeyError, OSError, ValueError, RuntimeError, http.client.HTTPException, subprocess.SubprocessError) as error:
             status = re.search(r'HTTP [0-9]{3}', str(error))
-            print('::error::Private cache server handoff failed ('
+            print('::error::Private cache server '+args.operation+' failed ('
                   + type(error).__name__ + (' '+status[0] if status else '') + ').')
             if summary := os.environ.get('GITHUB_STEP_SUMMARY'):
                 with open(summary, 'a') as stream:
-                    stream.write('\nPrivate cache server handoff failed; see the step log.\n')
+                    stream.write('\nPrivate cache server '+args.operation+' failed; see the step log.\n')
             raise SystemExit(1)
     elif args.operation == 'inventory':
         inventory()

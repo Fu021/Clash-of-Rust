@@ -15,7 +15,7 @@ export component LogsPage inherits PageSurface {
             vertical-stretch: 1;
             PageScroll {
                 content-key: UiData.page-offset + "/" + UiData.query + "/" + UiData.log-level;
-                viewport-y <=> UiData.scroll-logs;
+                content-y <=> UiData.scroll-logs;
                 VerticalLayout {
                     alignment: start; padding: Theme.card-padding; spacing: Theme.content-gap;
                     for entry in UiData.logs: Rectangle {

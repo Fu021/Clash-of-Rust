@@ -48,13 +48,16 @@ android {
         jniLibs.useLegacyPackaging = true
         resources.excludes += setOf("META-INF/DEPENDENCIES", "META-INF/INDEX.LIST")
     }
-    sourceSets["main"].jniLibs.srcDir(layout.projectDirectory.dir("native-libs"))
-    sourceSets["main"].assets.srcDir(layout.projectDirectory.dir("offline-assets"))
-    sourceSets["main"].res.srcDir(layout.projectDirectory.dir("generated-res"))
+    sourceSets["main"].jniLibs.directories.add(layout.projectDirectory.dir("native-libs").asFile.path)
+    sourceSets["main"].assets.directories.add(layout.projectDirectory.dir("offline-assets").asFile.path)
+    sourceSets["main"].res.directories.add(layout.projectDirectory.dir("generated-res").asFile.path)
     lint { abortOnError = true }
 }
 dependencies {
     implementation(files("libs/mihomo.aar"))
     androidTestImplementation("androidx.test:runner:1.7.0")
     androidTestImplementation("androidx.test.ext:junit:1.3.0")
+}
+tasks.withType<JavaCompile>().configureEach {
+    options.compilerArgs.add("-Xlint:deprecation")
 }

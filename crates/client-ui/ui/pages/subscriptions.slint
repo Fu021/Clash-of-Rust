@@ -5,7 +5,7 @@ import { PageScroll, Label, Caption, Heading, ContentPanel, ActionButton, Badge 
 export component SubscriptionsPage inherits PageSurface {
     PageScroll {
         content-key: "" + UiData.page-offset;
-        viewport-y <=> UiData.scroll-profiles;
+        content-y <=> UiData.scroll-profiles;
         x: 0px; width: parent.width + Theme.content-gap;
         VerticalLayout {
             alignment: start; padding-right: Theme.content-gap; spacing: Theme.page-gap;

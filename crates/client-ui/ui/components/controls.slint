@@ -7,12 +7,12 @@ import { ScrollView } from "std-widgets.slint";
 // (including a shorter detail) so a previous offset cannot hide the new body.
 export component PageScroll inherits ScrollView {
     in property <string> content-key;
-    property <length> bottom: min(0px, self.visible-height - self.viewport-height);
-    changed content-key => { self.viewport-y = 0px; }
-    changed bottom => { self.viewport-y = clamp(self.viewport-y, self.bottom, 0px); }
-    changed viewport-y => {
-        if self.viewport-y < self.bottom || self.viewport-y > 0px {
-            self.viewport-y = clamp(self.viewport-y, self.bottom, 0px);
+    property <length> bottom: min(0px, self.visible-height - self.content-height);
+    changed content-key => { self.content-y = 0px; }
+    changed bottom => { self.content-y = clamp(self.content-y, self.bottom, 0px); }
+    changed content-y => {
+        if self.content-y < self.bottom || self.content-y > 0px {
+            self.content-y = clamp(self.content-y, self.bottom, 0px);
         }
     }
 }

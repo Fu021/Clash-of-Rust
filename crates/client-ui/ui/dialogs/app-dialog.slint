@@ -48,7 +48,7 @@ export component AppDialog inherits Rectangle {
                 Heading { text: UiData.modal != 0 ? UiData.modal-title : root.last-title; font-size: 20px * Theme.text-scale; }
                 PageScroll {
                     content-key: root.kind + "/" + root.last-title + "/" + root.last-description;
-                    viewport-y <=> UiData.scroll-dialog;
+                    content-y <=> UiData.scroll-dialog;
                     min-height: 0px;
                     preferred-height: body.preferred-height;
                     body := VerticalLayout {

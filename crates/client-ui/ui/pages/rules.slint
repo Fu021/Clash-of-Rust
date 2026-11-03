@@ -94,7 +94,7 @@ export component RulesPage inherits PageSurface {
             scroll := PageScroll {
                 x: 0px; width: parent.width + Theme.content-gap; height: parent.height;
                 content-key: UiData.page-offset + "/" + UiData.query + "/" + UiData.rule-profile;
-                viewport-y <=> UiData.scroll-rules;
+                content-y <=> UiData.scroll-rules;
                 VerticalLayout {
                     alignment: start; padding-right: Theme.content-gap; spacing: Theme.page-gap;
                     HorizontalLayout { cross-axis-alignment: center; spacing: Theme.content-gap;
@@ -170,7 +170,7 @@ export component RulesPage inherits PageSurface {
                 context: root.drag-context;
                 row-count: UiData.rules.length; row-height: root.row-extent;
                 header-height: rules.y + Theme.card-padding;
-                scroll-content-height: scroll.viewport-height; scroll-y <=> scroll.viewport-y;
+                scroll-content-height: scroll.content-height; scroll-y <=> scroll.content-y;
                 started(index) => { root.drag-item = UiData.rules[index]; root.drag-id = root.drag-item.id; root.drag-target = root.drag-id; }
                 targeted(index) => { root.drag-target = UiData.rules[index].id; }
                 dropped(source, target) => {

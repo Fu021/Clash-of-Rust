@@ -23,6 +23,7 @@ GUEST_PACKAGE_CONFIG = """\
 path-exclude=/usr/share/doc/*
 path-include=/usr/share/doc/*/copyright
 path-exclude=/usr/share/man/*
+path-include=/usr/share/man/man1/*
 path-exclude=/usr/share/info/*
 path-exclude=/usr/share/lintian/*
 """

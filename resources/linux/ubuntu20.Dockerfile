@@ -1,9 +1,10 @@
-ARG BASE_IMAGE
+ARG BASE_IMAGE=ubuntu:20.04
 FROM ${BASE_IMAGE}
 ARG USER_ID=1001
 ARG GROUP_ID=1001
 ENV DEBIAN_FRONTEND=noninteractive
-RUN apt-get update && apt-get install -y --no-install-recommends \
+RUN printf 'path-include=/usr/share/man/man1/*\n' > /etc/dpkg/dpkg.cfg.d/zz-cor-ci-manuals \
+    && apt-get update && apt-get install -y --no-install-recommends \
     ca-certificates openssl build-essential binutils git pkg-config cmake ninja-build perl \
     libglib2.0-dev libfontconfig1-dev libfreetype6-dev libxkbcommon-dev \
     libwayland-dev libx11-dev libx11-xcb-dev gsettings-desktop-schemas \

@@ -6,7 +6,7 @@ import { FakeIpPage } from "fake-ip.slint";
 export component SettingsPage inherits PageSurface {
     if UiData.fake-ip-editor: FakeIpPage { }
     if !UiData.fake-ip-editor: PageScroll {
-        viewport-y <=> UiData.scroll-settings;
+        content-y <=> UiData.scroll-settings;
         x: 0px; width: parent.width + Theme.content-gap;
         VerticalLayout {
             alignment: start; padding-right: Theme.content-gap; padding-bottom: Theme.card-padding; spacing: Theme.section-gap;

@@ -28,11 +28,11 @@ def archive_records(output):
         if not line.startswith("'"):
             continue
         fields = shlex.split(line)
+        if fields and not fields[0].startswith(('http://', 'https://')):
+            continue
         if len(fields) != 4:
             raise ValueError('Unexpected APT download record')
         uri, name, size, checksum = fields
-        if not uri.startswith(('http://', 'https://')):
-            continue  # Local application packages are checked by their receipt.
         if (Path(name).name != name or not name.endswith('.deb')
                 or not re.fullmatch(r'[A-Za-z0-9.+_%~:-]+\.deb', name)
                 or not size.isdecimal()):

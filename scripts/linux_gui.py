@@ -376,7 +376,7 @@ def session():
             wait_for('X11 display did not start',
                      lambda: subprocess.run(['xdpyinfo'], stdout=subprocess.DEVNULL,
                                             stderr=subprocess.DEVNULL).returncode == 0)
-            run(['dbus-update-activation-environment', '--systemd', 'DBUS_SESSION_BUS_ADDRESS',
+            run(['dbus-update-activation-environment', 'DBUS_SESSION_BUS_ADDRESS',
                  'DISPLAY', 'HOME', 'XDG_CONFIG_HOME', 'XDG_DATA_HOME', 'XDG_CACHE_HOME',
                  'XDG_CURRENT_DESKTOP'])
             stack.enter_context(process(['openbox'], log))

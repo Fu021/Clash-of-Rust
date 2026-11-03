@@ -21,6 +21,7 @@ import time
 import urllib.request
 
 from build_support import ROOT, host_arch, opener, read_json, run, sha256, write_json
+from linux_apt import OPTIONS as APT_OPTIONS
 
 BASELINE = '20.04'
 CACHE_ID = 'ubuntu20-v1'
@@ -265,7 +266,8 @@ def vm_test():
         run(['ssh-keygen', '-q', '-t', 'ed25519', '-N', '', '-f', key])
         public = key.with_suffix('.pub').read_text().strip()
         # This password exists only in the disposable guest and its GUI agent test.
-        user_data = {'users': [{'name': 'ubuntu', 'groups': 'adm,sudo',
+        user_data = {'ssh_genkeytypes': ['ed25519'],
+                     'users': [{'name': 'ubuntu', 'groups': 'adm,sudo',
                                'sudo': 'ALL=(ALL) NOPASSWD:ALL', 'shell': '/bin/bash',
                                'lock_passwd': False, 'ssh_authorized_keys': [public]}],
                      'ssh_pwauth': False, 'chpasswd': {'list': 'ubuntu:cor-ci-only', 'expire': False}}
@@ -293,12 +295,13 @@ def vm_test():
                    '-device', 'virtio-net-pci,netdev=net0']
         if architecture == 'aarch64':
             command.extend(['-bios', '/usr/share/qemu-efi-aarch64/QEMU_EFI.fd'])
-        ssh = ['ssh', '-i', str(key), '-p', str(port), '-o', 'StrictHostKeyChecking=no',
-               '-o', 'UserKnownHostsFile='+str(directory/'known_hosts'),
-               '-o', 'ConnectTimeout=5', '-o', 'BatchMode=yes', 'ubuntu@127.0.0.1']
-        scp = ['scp', '-i', str(key), '-P', str(port), '-o', 'StrictHostKeyChecking=no',
-               '-o', 'UserKnownHostsFile='+str(directory/'known_hosts'),
-               '-o', 'ConnectTimeout=5', '-o', 'BatchMode=yes']
+        connection = ['-i', str(key), '-o', 'StrictHostKeyChecking=no',
+                      '-o', 'UserKnownHostsFile='+str(directory/'known_hosts'),
+                      '-o', 'ConnectTimeout=5', '-o', 'BatchMode=yes',
+                      '-o', 'ControlMaster=auto', '-o', 'ControlPersist=60',
+                      '-o', 'ControlPath='+str(directory/'ssh-control')]
+        ssh = ['ssh', *connection, '-p', str(port), 'ubuntu@127.0.0.1']
+        scp = ['scp', *connection, '-P', str(port)]
         archive = directory/'source.tar.gz'
         tracked = subprocess.check_output(['git', 'ls-files', '-z'], cwd=ROOT).decode().split('\0')
         with tarfile.open(archive, 'w:gz', compresslevel=1) as tar:
@@ -338,7 +341,8 @@ def vm_test():
                                'PATH=/opt/cor-test-python/bin:$PATH PYTHONDONTWRITEBYTECODE=1 ')
                 if os.environ.get('COR_LINUX_APT_CACHE'):
                     environment += 'COR_LINUX_APT_CACHE=/home/ubuntu/cor-apt '
-                remote('sudo timeout --signal=TERM --kill-after=30s 300s apt-get update',
+                remote('sudo timeout --signal=TERM --kill-after=30s 300s '
+                       + shlex.join([*APT_OPTIONS, 'update']),
                        timeout=360)
                 remote(environment+'/opt/cor-test-python/bin/python3 -c '+shlex.quote(
                     "import sys; sys.path.insert(0, 'scripts'); "
@@ -354,6 +358,9 @@ def vm_test():
                     subprocess.run([*ssh, 'cd ~/cor-source && tar czf - target/linux-report'],
                                    stdout=(REPORT/'focal-guest-report.tar.gz').open('wb'), timeout=60)
                 guest_cache(scp, 'ubuntu@127.0.0.1')
+                with contextlib.suppress(OSError, subprocess.SubprocessError):
+                    subprocess.run(['ssh', '-O', 'exit', *connection, '-p', str(port),
+                                    'ubuntu@127.0.0.1'], timeout=10)
                 guest.terminate()
                 try:
                     guest.wait(timeout=15)

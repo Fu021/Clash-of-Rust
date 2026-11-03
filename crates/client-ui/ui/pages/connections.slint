@@ -63,7 +63,7 @@ export component ConnectionsPage inherits PageSurface {
                 }
                 PageScroll {
                     content-key: UiData.page-offset + "/" + UiData.query + "/" + UiData.connection-sort + "/" + (UiData.descending ? "desc" : "asc");
-                    viewport-y <=> UiData.scroll-connections;
+                    content-y <=> UiData.scroll-connections;
                     for connection[i] in UiData.connections: Rectangle {
                         y: i * root.row-height;
                         height: root.row-height;

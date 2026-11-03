@@ -103,7 +103,7 @@ def ensure_binding_tool(name):
 
 def gradle(*args, arch=None):
     code = 1_000_000 + int(os.environ.get('GITHUB_RUN_NUMBER', '1'))
-    command = ['gradle', '--no-daemon', '-p', ANDROID, '-PappVersion=' + package_version(), '-PappVersionCode=' + str(code)]
+    command = ['gradle', '--no-daemon', '--warning-mode', 'all', '-p', ANDROID, '-PappVersion=' + package_version(), '-PappVersionCode=' + str(code)]
     if arch:
         command += ['-PappAbi=' + ABIS[arch][0]]
     return [*command, *args]
@@ -215,6 +215,8 @@ def build(arch):
         'CXX_'+target.replace('-', '_'):str(clang)+'++',
         'AR_'+target.replace('-', '_'):str(toolchain/'llvm-ar'),
         'ANDROID_NDK_HOME':str(ndk),
+        'ANDROID_PLATFORM':'android-36',
+        'ANDROID_BUILD_TOOLS_VERSION':'36.0.0',
         'CXXSTDLIB':'c++_static',
         'RUSTFLAGS':'-C link-arg=-Wl,-z,max-page-size=16384',
     })
