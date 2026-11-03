@@ -683,7 +683,8 @@ jobs:
       - name: Cache Ubuntu baseline downloads
         if: runner.os == 'Linux'
         uses: ./.github/actions/linux-download-cache
-        timeout-minutes: 12
+        timeout-minutes: 5
+        continue-on-error: true
       - name: Compile, test and export native binaries
         env:
           GH_TOKEN: ${{ github.token }}

@@ -4,6 +4,10 @@ inputs:
   vm:
     description: Also restore the cloud image and guest package downloads
     default: 'false'
+outputs:
+  apt-key:
+    description: Architecture-specific guest DEB download cache
+    value: ${{ steps.inputs.outputs.apt }}
 runs:
   using: composite
   steps:
@@ -58,7 +62,7 @@ runs:
         key: ${{ steps.inputs.outputs.cloud }}
     - name: Restore guest DEB downloads
       if: inputs.vm == 'true'
-      uses: actions/cache@v5
+      uses: actions/cache/restore@v5
       continue-on-error: true
       with:
         path: ${{ runner.temp }}/cor-linux-tools/apt

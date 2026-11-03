@@ -201,7 +201,8 @@ jobs:
       - name: Cache Ubuntu baseline downloads
         if: runner.os == 'Linux'
         uses: ./.github/actions/linux-download-cache
-        timeout-minutes: 12
+        timeout-minutes: 5
+        continue-on-error: true
       - name: Package and test installed programs
         run: |
           import subprocess, sys
@@ -325,8 +326,10 @@ jobs:
           name: linux-tun-test-${{ matrix.arch }}
           path: target
       - name: Cache Ubuntu VM dependency downloads
+        id: vm_cache
         uses: ./.github/actions/linux-download-cache
-        timeout-minutes: 15
+        timeout-minutes: 5
+        continue-on-error: true
         with:
           vm: 'true'
       - name: Install virtual machine tools
@@ -343,6 +346,14 @@ jobs:
         env:
           PYTHONDONTWRITEBYTECODE: '1'
         run: python3 scripts/linux_ci.py vm
+      - name: Save verified guest DEB downloads
+        if: always() && steps.vm_cache.outputs.apt-key != ''
+        uses: actions/cache/save@v5
+        timeout-minutes: 5
+        continue-on-error: true
+        with:
+          path: ${{ runner.temp }}/cor-linux-tools/apt
+          key: ${{ steps.vm_cache.outputs.apt-key }}-${{ github.run_id }}-${{ github.run_attempt }}
       - uses: actions/upload-artifact@v6
         if: always()
         with:
