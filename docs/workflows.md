@@ -6,7 +6,7 @@
 | [Publish Release](workflows/release.md) | 手动；复用同提交成功 CI，打包及安装后验证，可仅打包或显式发布预发布 | 九组安装包及 SHA256，Actions 附件保留 3 天 |
 | [Memory Benchmark](workflows/memory.md) | 手动；指定提交的轻负载或压力内存采样 | 原始数据、报告和日志，保留 3 天 |
 
-桌面平台为 Windows x64/ARM64、Linux x64/ARM64、macOS Intel/Apple Silicon。开发分支将 Ubuntu 构建基线降至 20.04，安装验证覆盖 20.04、22.04 和最新版，架构与旧内核边界见[打包验证](workflows/release.md#publish-release)；现有 0.6.5 正式包仍以 22.04 为最低基线。iOS 仅有宿主占位与 UI 原型，不参与构建。
+桌面平台为 Windows x64/ARM64、Linux x64/ARM64、macOS Intel/Apple Silicon。自 0.6.6 起 Ubuntu 构建基线为 20.04，安装验证覆盖 20.04、22.04 和最新版，架构与旧内核边界见[打包验证](workflows/release.md#publish-release)。iOS 仅有宿主占位与 UI 原型，不参与构建。
 
 新工作流和 `.github/` 变更按[贡献要求](../.github/CONTRIBUTING.md)审核；弃用工作流删除文件后还需在 GitHub 禁用。脚本职责与合并/删除依据见[脚本维护](../scripts/README.md)。受限执行环境遵守 [AGENTS](../AGENTS.md#资源受限环境)，本地不编译、测试或打包。
 

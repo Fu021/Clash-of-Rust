@@ -3,9 +3,7 @@
 </p>
 <h1 align="center">Clash of Rust</h1>
 
-基于 mihomo 的原生 Rust 代理客户端。支持 **Windows（x64 / ARM64）**、**Debian/Ubuntu（amd64 / ARM64，Ubuntu 仅支持 22.04 及以上）**、**macOS 14 及以上（Intel / Apple Silicon）** 和 **Android 8.0 及以上（ARM64 / ARMv7 / x86_64）**。版本 **0.6.5**，更新内容见 [发布说明](docs/releases/0.6.5.md)。
-
-当前开发分支将 Linux 构建基线迁移至 Ubuntu 20.04，并增加旧系统安装验证；上面的 0.6.5 正式安装包仍以 Ubuntu 22.04 为最低基线。验证范围见[工作流](docs/workflows/release.md)。
+基于 mihomo 的原生 Rust 代理客户端。支持 **Windows（x64 / ARM64）**、**Debian/Ubuntu（amd64 / ARM64，Ubuntu 仅支持 20.04 及以上）**、**macOS 14 及以上（Intel / Apple Silicon）** 和 **Android 8.0 及以上（ARM64 / ARMv7 / x86_64）**。版本 **0.6.6**，更新内容见 [发布说明](docs/releases/0.6.6.md)。
 
 ## Features
 
@@ -13,7 +11,7 @@
 - **CLI**：Windows、Linux、macOS 均支持无界面运行，适用于服务器与 SSH，覆盖 GUI 中的大部分配置与维护操作，详见 [CLI 使用文档](docs/cli.md)。
 - **离线就绪**：内置 mihomo 内核和 Geo 数据，支持一键更新 Geo 数据。
 - **IP 检测**：183 个检测项，覆盖出口 IP、GitHub、AI 服务与流媒体地区访问；一键检测显示分类报告，点击分类或状态查看详情，支持筛选与分类重测。
-- **A÷检测**：采集 Claude 地区、DNS、WebRTC 与浏览器线索，扫描已记录项目配置并分类展示；可选一键保护，锁定节点及规则/全局模式并启用 TUN、加密 DNS 与异常连接拦截，关闭后恢复原设置，详见 [检测说明](docs/claude-region-detection.md)。
+- **A÷检测**：采集 Claude 地区、DNS、WebRTC 与浏览器线索，扫描已记录项目配置并分类展示；可选一键保护，锁定节点及规则/全局模式并启用 TUN、加密 DNS 与异常连接拦截，关闭后恢复原设置。各页盾牌显示保护就绪、验证中或异常，Android 常驻通知同步标注，详见 [检测说明](docs/claude-region-detection.md)。
 - **便捷使用**：托盘快捷切换节点，可选显示上传与下载速度；支持后台开机自启、单实例与网络诊断，记住普通窗口尺寸与位置，关闭窗口后释放界面进程；内核启动失败时可直接重试。
 - **Fake-IP 控制**：DNS 覆盖下可独立开关 Fake-IP；排除项标明自定义或 DNS 覆盖来源，内置项删除后支持一键还原，详见[界面说明](crates/client-ui/README.md)。
 - **客户端更新**：默认检查正式版，可选预发布版，桌面预发布版可切回正式版；支持下载进度与取消；校验完成后桌面自动安装与重启，Android 由系统确认安装，失败时显示原因。
@@ -28,17 +26,17 @@
 
 | 平台 | 安装包 |
 | --- | --- |
-| Windows x64 | [Clash-of-Rust-0.6.5-windows-x64-setup.exe](https://github.com/Fu021/Clash-of-Rust/releases/download/v0.6.5/Clash-of-Rust-0.6.5-windows-x64-setup.exe) |
-| Windows ARM64 | [Clash-of-Rust-0.6.5-windows-arm64-setup.exe](https://github.com/Fu021/Clash-of-Rust/releases/download/v0.6.5/Clash-of-Rust-0.6.5-windows-arm64-setup.exe) |
-| Debian / Ubuntu 22.04+ amd64 | [Clash-of-Rust-0.6.5-linux-amd64.deb](https://github.com/Fu021/Clash-of-Rust/releases/download/v0.6.5/Clash-of-Rust-0.6.5-linux-amd64.deb) |
-| Debian / Ubuntu 22.04+ ARM64 | [Clash-of-Rust-0.6.5-linux-arm64.deb](https://github.com/Fu021/Clash-of-Rust/releases/download/v0.6.5/Clash-of-Rust-0.6.5-linux-arm64.deb) |
-| macOS Intel | [Clash-of-Rust-0.6.5-macos-x64.dmg](https://github.com/Fu021/Clash-of-Rust/releases/download/v0.6.5/Clash-of-Rust-0.6.5-macos-x64.dmg) |
-| macOS Apple Silicon | [Clash-of-Rust-0.6.5-macos-arm64.dmg](https://github.com/Fu021/Clash-of-Rust/releases/download/v0.6.5/Clash-of-Rust-0.6.5-macos-arm64.dmg) |
-| Android ARM64（多数手机与平板） | [Clash-of-Rust-0.6.5-android-arm64.apk](https://github.com/Fu021/Clash-of-Rust/releases/download/v0.6.5/Clash-of-Rust-0.6.5-android-arm64.apk) |
-| Android ARMv7 | [Clash-of-Rust-0.6.5-android-armv7.apk](https://github.com/Fu021/Clash-of-Rust/releases/download/v0.6.5/Clash-of-Rust-0.6.5-android-armv7.apk) |
-| Android x86_64 | [Clash-of-Rust-0.6.5-android-x64.apk](https://github.com/Fu021/Clash-of-Rust/releases/download/v0.6.5/Clash-of-Rust-0.6.5-android-x64.apk) |
+| Windows x64 | [Clash-of-Rust-0.6.6-windows-x64-setup.exe](https://github.com/Fu021/Clash-of-Rust/releases/download/v0.6.6/Clash-of-Rust-0.6.6-windows-x64-setup.exe) |
+| Windows ARM64 | [Clash-of-Rust-0.6.6-windows-arm64-setup.exe](https://github.com/Fu021/Clash-of-Rust/releases/download/v0.6.6/Clash-of-Rust-0.6.6-windows-arm64-setup.exe) |
+| Debian / Ubuntu 20.04+ amd64 | [Clash-of-Rust-0.6.6-linux-amd64.deb](https://github.com/Fu021/Clash-of-Rust/releases/download/v0.6.6/Clash-of-Rust-0.6.6-linux-amd64.deb) |
+| Debian / Ubuntu 20.04+ ARM64 | [Clash-of-Rust-0.6.6-linux-arm64.deb](https://github.com/Fu021/Clash-of-Rust/releases/download/v0.6.6/Clash-of-Rust-0.6.6-linux-arm64.deb) |
+| macOS Intel | [Clash-of-Rust-0.6.6-macos-x64.dmg](https://github.com/Fu021/Clash-of-Rust/releases/download/v0.6.6/Clash-of-Rust-0.6.6-macos-x64.dmg) |
+| macOS Apple Silicon | [Clash-of-Rust-0.6.6-macos-arm64.dmg](https://github.com/Fu021/Clash-of-Rust/releases/download/v0.6.6/Clash-of-Rust-0.6.6-macos-arm64.dmg) |
+| Android ARM64（多数手机与平板） | [Clash-of-Rust-0.6.6-android-arm64.apk](https://github.com/Fu021/Clash-of-Rust/releases/download/v0.6.6/Clash-of-Rust-0.6.6-android-arm64.apk) |
+| Android ARMv7 | [Clash-of-Rust-0.6.6-android-armv7.apk](https://github.com/Fu021/Clash-of-Rust/releases/download/v0.6.6/Clash-of-Rust-0.6.6-android-armv7.apk) |
+| Android x86_64 | [Clash-of-Rust-0.6.6-android-x64.apk](https://github.com/Fu021/Clash-of-Rust/releases/download/v0.6.6/Clash-of-Rust-0.6.6-android-x64.apk) |
 
-Windows 运行安装程序；Debian/Ubuntu（Ubuntu 仅支持 22.04 及以上）使用 `sudo apt install ./安装包文件名.deb`。升级保留订阅和个人设置；Windows 卸载可选删除全部配置和数据，默认不勾选。
+Windows 运行安装程序；Debian/Ubuntu（Ubuntu 仅支持 20.04 及以上）使用 `sudo apt install ./安装包文件名.deb`。升级保留订阅和个人设置；Windows 卸载可选删除全部配置和数据，默认不勾选。
 
 macOS 打开 DMG，将 **Clash of Rust.app** 拖入 **Applications（应用程序）** 后启动。Android 安装对应架构的 APK，首次连接允许 VPN 授权；可在系统快捷设置中添加开关磁贴。
 
