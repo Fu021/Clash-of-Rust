@@ -9,7 +9,7 @@
 | `build_support.py` | 共享模块 | 平台识别、版本、资源、下载、架构和暂存目录等标准库辅助。 |
 | `build_inputs.py` | CLI / 模块 | 冻结并应用同一份 Rust、Go、Android、Linux 基线和资源依赖快照。 |
 | `workflow_artifacts.py` | CLI / 模块 | 导出、下载和校验不可变 CI 产物，不重新编译。 |
-| `action_cache.py` | CLI / 模块 | 认证私网缓存协议、恢复预算、校验和清单。 |
+| `action_cache.py` | CLI / 模块 | 认证私网缓存协议、恢复预算、校验、清单及 Actions 驱动的 README 同步。 |
 | `cache_shards.py` | 模块 | Rust 32 分片缓存的恢复、失效和增量上传。 |
 | `workflow_storage.py` | CLI | 限制 GitHub Actions 热缓存容量并保留需要的版本。 |
 | `prepare-resources.py` | CLI | 校验并准备 mihomo、Geo 和桌面共享资源。 |
@@ -37,6 +37,8 @@
 ## 仓库内其他脚本
 
 工作流复合操作 `.github/actions/local-cache/index.cjs` 只负责调用 `action_cache.py`，不复制缓存实现。`resources/claude-check/browser.js` 是检测页面资源，随客户端提供，保留在资源目录。
+
+私网缓存的 README 模板、服务部署及交接见[缓存服务说明](../docs/workflows/cache-server.md)；变更目录、内容或协议时同步模板，不在 agent 主机上直接编辑服务端 README。
 
 以下 Rust 构建脚本由各自的 Cargo 包调用，按包的构建生命周期保留；协议生成共用 `crates/desktop-protocol/schema.rs`，不另建包装入口：
 

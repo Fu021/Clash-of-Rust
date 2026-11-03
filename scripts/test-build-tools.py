@@ -1,10 +1,12 @@
 """Offline tests for resource validation and clean package staging."""
 import hashlib
 import json
+import logging
 import re
 from pathlib import Path
 import socket
 import tempfile
+import threading
 import tomllib
 import struct
 import shutil
@@ -895,6 +897,110 @@ assert.equal(calls.length,2);
             self.assertEqual(store.path(record['group'], record['id']).read_bytes(), payload)
             self.assertEqual(store.lookup('rust/linux-x64', 'generation-two', ['generation-'])['key'], 'generation-one')
             with self.assertRaises(ValueError): store.path('../../escape', record['id'])
+
+    def test_cache_readme_rejects_bad_and_stale_uploads_without_replacing_content(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            store = local_cache.Store(root, budget=1000, min_free=0)
+            (root/'README.txt').symlink_to('state/README.txt')
+
+            def put(data, sequence, checksum=None, length=None):
+                return store.put_readme(length if length is not None else len(data),
+                                        checksum or hashlib.sha256(data).hexdigest(),
+                                        sequence, io.BytesIO(data))
+
+            current = b'Action-Sequence: 2001\nSource-Commit: current\n\nCurrent README\n'
+            self.assertEqual(put(current, 2001), 'updated')
+            self.assertEqual((root/'README.txt').read_bytes(), current)
+            self.assertEqual(put(current, 2001), 'unchanged')
+            older = b'Action-Sequence: 1001\n\nOld README\n'
+            self.assertEqual(put(older, 1001), 'superseded')
+            self.assertEqual(put(b'Action-Sequence: 2001\n\nDifferent\n', 2001), 'superseded')
+            with self.assertRaises(ValueError):
+                put(current, 2001, checksum='0'*64)
+            with self.assertRaises(ValueError):
+                put(current, 3001, length=len(current)+1)
+            with self.assertRaises(ValueError):
+                put(b'x'*(local_cache.README_LIMIT+1), 3001)
+            with self.assertRaises(ValueError):
+                put(b'Action-Sequence: 3001\n\xff', 3001)
+            self.assertEqual((root/'README.txt').read_bytes(), current)
+            self.assertEqual(list((root/'state').glob('.readme-*')), [])
+
+    def test_cache_readme_rejects_symlink_in_writable_state(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            store = local_cache.Store(root/'server', budget=1000, min_free=0)
+            protected = root/'protected.txt'
+            protected.write_text('keep', encoding='utf-8')
+            (root/'server/state/README.txt').symlink_to(protected)
+            body = b'Action-Sequence: 1001\n\nNew README\n'
+            with self.assertRaises(ValueError):
+                store.put_readme(len(body), hashlib.sha256(body).hexdigest(), 1001, io.BytesIO(body))
+            self.assertEqual(protected.read_text(encoding='utf-8'), 'keep')
+
+    def test_cache_readme_main_action_authenticates_and_verifies_round_trip(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            store = local_cache.Store(root/'server', budget=1000, min_free=0)
+            server = local_cache.ThreadingHTTPServer(('127.0.0.1', 0), local_cache.Handler)
+            server.store = store
+            server.config = {'token_sha256': hashlib.sha256(b'test-token').hexdigest()}
+            server.logger = logging.getLogger('test-private-cache-readme')
+            thread = threading.Thread(target=lambda: server.serve_forever(poll_interval=0.05), daemon=True)
+            thread.start()
+            try:
+                template = root/'README.txt'
+                template.write_text('Cache layout\n', encoding='utf-8')
+                address = f'http://127.0.0.1:{server.server_port}'
+                config = {'url': address, 'token': 'wrong-token'}
+                with local_cache.response(config, '/v1/readme') as reply:
+                    self.assertEqual(reply.status, 401)
+                with local_cache.response(config, '/v1/readme', method='PUT', file=b'not authorized',
+                                          headers={'Content-Length': '14'}) as reply:
+                    self.assertEqual(reply.status, 401)
+                self.assertFalse((root/'server/state/README.txt').exists())
+                commit = 'a'*40
+                environment = {'GITHUB_ACTIONS': 'true', 'GITHUB_EVENT_NAME': 'push',
+                               'GITHUB_REF': 'refs/heads/main', 'GITHUB_REPOSITORY': 'owner/repo',
+                               'GITHUB_SHA': commit, 'GITHUB_RUN_ID': '123', 'GITHUB_RUN_ATTEMPT': '1',
+                               'CACHE_URL': address, 'CACHE_TOKEN': 'test-token', 'CACHE_PROXY': ''}
+                with patch.dict(os.environ, environment, clear=True), \
+                        patch.object(local_cache.subprocess, 'check_output', return_value=commit+'\n'):
+                    local_cache.sync_readme(template)
+                    body, sequence = store.read_readme()
+                    self.assertEqual(sequence, 123001)
+                    self.assertIn(b'Source-Commit: '+commit.encode(), body)
+                    self.assertTrue(body.endswith(b'Cache layout\n'))
+                    local_cache.sync_readme(template)
+                    os.environ['GITHUB_RUN_ID'] = '122'
+                    template.write_text('Old layout\n', encoding='utf-8')
+                    local_cache.sync_readme(template)
+                    self.assertEqual(store.read_readme()[0], body)
+            finally:
+                server.shutdown()
+                server.server_close()
+                thread.join(timeout=2)
+
+    def test_cache_readme_never_writes_for_pull_requests_or_old_main_commits(self):
+        environment = {'GITHUB_ACTIONS': 'true', 'GITHUB_EVENT_NAME': 'pull_request',
+                       'GITHUB_REF': 'refs/heads/main', 'GITHUB_REPOSITORY': 'owner/repo',
+                       'GITHUB_SHA': 'a'*40}
+        with patch.dict(os.environ, environment, clear=True), \
+                patch.object(local_cache, 'response') as request:
+            with self.assertRaises(ValueError):
+                local_cache.sync_readme()
+            os.environ['GITHUB_EVENT_NAME'] = 'push'
+            with patch.object(local_cache.subprocess, 'check_output', return_value='b'*40+'\n'):
+                local_cache.sync_readme()
+            request.assert_not_called()
+
+    def test_cache_readme_template_fits_authenticated_transport(self):
+        body = (build.ROOT/'.github/cache-server/README.txt').read_bytes()
+        body.decode('utf-8')
+        self.assertNotIn(b'\0', body)
+        self.assertLessEqual(len(body) + 128, local_cache.README_LIMIT)
+        self.assertIn(b'state/README.txt', body)
 
     def test_local_cache_pruning_keeps_recent_generations_and_respects_budget(self):
         with tempfile.TemporaryDirectory() as temporary:

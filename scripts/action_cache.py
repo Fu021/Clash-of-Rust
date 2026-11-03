@@ -30,6 +30,7 @@ SCHEMA = 1
 CHUNK = 1024 * 1024
 DEFAULT_ROOT = Path('/home/coder/github_action_cache')
 RESTORE_SECONDS = 300
+README_LIMIT = 64 * 1024
 
 
 class RestoreBudgetExceeded(TimeoutError):
@@ -707,6 +708,51 @@ class Store:
                              (time.time(), group, identifier))
         return path
 
+    def read_readme(self):
+        path = self.root/'state/README.txt'
+        with self.lock:
+            if path.is_symlink():
+                raise ValueError('Invalid cache README')
+            with path.open('rb') as incoming:
+                body = incoming.read(README_LIMIT + 1)
+            match = re.match(rb'Action-Sequence: ([1-9][0-9]*)\n', body)
+            if len(body) > README_LIMIT or not match or int(match[1]) >= 2**63:
+                raise ValueError('Invalid cache README')
+            return body, int(match[1])
+
+    def put_readme(self, length, checksum, sequence, stream):
+        if (not 0 < length <= README_LIMIT or not re.fullmatch('[0-9a-f]{64}', checksum)
+                or not 0 < sequence < 2**63):
+            raise ValueError('Invalid cache README upload')
+        body = stream.read(length)
+        if (len(body) != length or hashlib.sha256(body).hexdigest() != checksum
+                or not body.startswith(f'Action-Sequence: {sequence}\n'.encode())
+                or b'\0' in body):
+            raise ValueError('Invalid cache README content')
+        body.decode('utf-8')
+        destination = self.root/'state/README.txt'
+        with self.lock:
+            try:
+                previous, old_sequence = self.read_readme()
+            except FileNotFoundError:
+                previous, old_sequence = None, 0
+            if sequence < old_sequence or (sequence == old_sequence and body != previous):
+                return 'superseded'
+            if sequence == old_sequence:
+                return 'unchanged'
+            temporary = None
+            try:
+                with tempfile.NamedTemporaryFile(dir=destination.parent, prefix='.readme-', delete=False) as output:
+                    temporary = Path(output.name)
+                    output.write(body)
+                    output.flush()
+                    os.fsync(output.fileno())
+                temporary.replace(destination)
+            finally:
+                if temporary:
+                    temporary.unlink(missing_ok=True)
+            return 'updated'
+
     def prune(self, incoming=0, protected_group=None):
         with self.lock, self.database() as database:
             for path in self.incoming.glob('*.part'):
@@ -824,6 +870,17 @@ class Handler(BaseHTTPRequestHandler):
             if url.path == '/v1/inventory':
                 self.json_reply(200, self.server.store.status())
                 return
+            if url.path == '/v1/readme':
+                body, sequence = self.server.store.read_readme()
+                self.send_response(200)
+                self.send_header('Content-Type', 'text/plain; charset=utf-8')
+                self.send_header('Content-Length', str(len(body)))
+                self.send_header('Cache-Control', 'no-store')
+                self.send_header('X-Content-SHA256', hashlib.sha256(body).hexdigest())
+                self.send_header('X-Cache-Sequence', str(sequence))
+                self.end_headers()
+                self.wfile.write(body)
+                return
             group = query['group'][0]
             if url.path == '/v1/lookup':
                 result = self.server.store.lookup(group, query['key'][0], query.get('prefix', [''])[0].splitlines())
@@ -844,10 +901,16 @@ class Handler(BaseHTTPRequestHandler):
         if not self.authenticated():
             return
         url = urllib.parse.urlsplit(self.path)
-        if url.path != '/v1/blob':
+        if url.path not in ('/v1/blob', '/v1/readme'):
             self.json_reply(404, {'error': 'Unknown endpoint'}); return
         query = urllib.parse.parse_qs(url.query)
         try:
+            if url.path == '/v1/readme':
+                result = self.server.store.put_readme(
+                    int(self.headers['Content-Length']), self.headers['X-Content-SHA256'],
+                    int(self.headers['X-Cache-Sequence']), self.rfile)
+                self.json_reply(409 if result == 'superseded' else 200, {'result': result})
+                return
             saved = self.server.store.put(query['group'][0], query['key'][0], int(self.headers['Content-Length']), self.headers['X-Content-SHA256'], self.rfile, int(self.headers.get('X-Cache-Sequence', '0')))
             self.json_reply(201 if saved else 409, {'saved': saved})
         except (KeyError, ValueError, TypeError):
@@ -899,6 +962,65 @@ def inventory():
     print('Saved authenticated private cache inventory:', output)
 
 
+def sync_readme(template=None):
+    if (os.environ.get('GITHUB_ACTIONS') != 'true'
+            or os.environ.get('GITHUB_EVENT_NAME') != 'push'
+            or os.environ.get('GITHUB_REF') != 'refs/heads/main'):
+        raise ValueError('Cache README synchronization requires a main push on Actions')
+    repository = os.environ.get('GITHUB_REPOSITORY', '')
+    commit = os.environ.get('GITHUB_SHA', '')
+    if (not re.fullmatch(r'[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+', repository)
+            or not re.fullmatch(r'[0-9a-f]{40}', commit)):
+        raise ValueError('Invalid Actions source')
+    current = subprocess.check_output(
+        ['gh', 'api', f'repos/{repository}/git/ref/heads/main?_cor_fresh={time.time_ns()}',
+         '--jq', '.object.sha'],
+        text=True, timeout=30).strip()
+    if current != commit:
+        print('Private cache README skipped: this main commit has been superseded.')
+        return
+    run_id = int(os.environ['GITHUB_RUN_ID'])
+    attempt = int(os.environ['GITHUB_RUN_ATTEMPT'])
+    if run_id <= 0 or not 1 <= attempt < 1000:
+        raise ValueError('Invalid Actions run sequence')
+    sequence = run_id * 1000 + attempt
+    if sequence >= 2**63:
+        raise ValueError('Invalid Actions run sequence')
+    template = template or Path(__file__).resolve().parent.parent/'.github/cache-server/README.txt'
+    body = (f'Action-Sequence: {sequence}\nSource-Commit: {commit}\n\n'.encode()
+            + Path(template).read_bytes())
+    if len(body) > README_LIMIT or b'\0' in body:
+        raise ValueError('Invalid cache README template')
+    body.decode('utf-8')
+    checksum = hashlib.sha256(body).hexdigest()
+    config = {'url': os.environ.get('CACHE_URL', ''), 'token': os.environ.get('CACHE_TOKEN', ''),
+              'proxy': os.environ.get('CACHE_PROXY', '')}
+    if not config['url'] or not config['token']:
+        raise ValueError('Private cache connection is not configured')
+    headers = {'Content-Length': str(len(body)), 'X-Content-SHA256': checksum,
+               'X-Cache-Sequence': str(sequence), 'Content-Type': 'text/plain; charset=utf-8'}
+    with response(config, '/v1/readme', method='PUT', file=body, headers=headers) as reply:
+        if reply.status == 409:
+            print('Private cache README skipped: a newer or conflicting run already synchronized it.')
+            return
+        if reply.status != 200:
+            raise RuntimeError(f'Cache README upload HTTP {reply.status}')
+        result = json.load(reply)
+        if not isinstance(result, dict) or result.get('result') not in ('updated', 'unchanged'):
+            raise ValueError('Invalid cache README upload response')
+    with response(config, '/v1/readme') as reply:
+        if reply.status != 200:
+            raise RuntimeError(f'Cache README verification HTTP {reply.status}')
+        actual = reply.read(README_LIMIT + 1)
+        if (actual != body or reply.getheader('X-Content-SHA256') != checksum
+                or reply.getheader('X-Cache-Sequence') != str(sequence)):
+            raise ValueError('Cache README verification failed')
+    print('Private cache README synchronized and verified:', commit)
+    if summary := os.environ.get('GITHUB_STEP_SUMMARY'):
+        with open(summary, 'a') as stream:
+            stream.write('\nPrivate cache README synchronized and verified for `'+commit+'`.\n')
+
+
 def preserve_network(restore=False):
     """The upstream macOS login action overwrites Ethernet DNS even with accept-dns=false."""
     if sys.platform != 'darwin':
@@ -924,12 +1046,23 @@ def preserve_network(restore=False):
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument('operation', choices=('restore', 'discard-restore', 'save', 'serve', 'status', 'inventory', 'network-save', 'network-restore'))
+    parser.add_argument('operation', choices=('restore', 'discard-restore', 'save', 'serve', 'status', 'inventory', 'sync-readme', 'network-save', 'network-restore'))
     parser.add_argument('--state', type=Path)
     parser.add_argument('--root', type=Path, default=DEFAULT_ROOT)
     args = parser.parse_args()
     if args.operation in ('network-save', 'network-restore'):
         preserve_network(args.operation == 'network-restore')
+    elif args.operation == 'sync-readme':
+        try:
+            sync_readme()
+        except (KeyError, OSError, ValueError, RuntimeError, http.client.HTTPException, subprocess.SubprocessError) as error:
+            status = re.search(r'HTTP [0-9]{3}', str(error))
+            print('::error::Private cache README synchronization failed ('
+                  + type(error).__name__ + (' '+status[0] if status else '') + ').')
+            if summary := os.environ.get('GITHUB_STEP_SUMMARY'):
+                with open(summary, 'a') as stream:
+                    stream.write('\nPrivate cache README synchronization failed; see the step log.\n')
+            raise SystemExit(1)
     elif args.operation == 'inventory':
         inventory()
     elif args.operation == 'serve':

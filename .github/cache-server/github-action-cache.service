@@ -1,0 +1,28 @@
+[Unit]
+Description=Private GitHub Actions cache
+
+[Service]
+Type=simple
+ExecStart=/usr/bin/python3 %h/github_action_cache/bin/action_cache.py serve --root %h/github_action_cache
+Environment=PYTHONDONTWRITEBYTECODE=1
+PrivateUsers=yes
+ProtectSystem=strict
+TemporaryFileSystem=/home:ro /root:ro /tmp:ro /var/tmp:ro
+BindReadOnlyPaths=%h/github_action_cache/bin/action_cache.py %h/github_action_cache/config/server.json
+BindPaths=%h/github_action_cache/data %h/github_action_cache/state %h/github_action_cache/logs
+ReadWritePaths=%h/github_action_cache/data %h/github_action_cache/state %h/github_action_cache/logs
+PrivateDevices=yes
+RestrictAddressFamilies=AF_INET AF_INET6
+RestrictNamespaces=yes
+CapabilityBoundingSet=
+NoNewPrivileges=yes
+UMask=0077
+WorkingDirectory=%h/github_action_cache
+InaccessiblePaths=/sys /run
+ProtectProc=invisible
+ProcSubset=pid
+Restart=on-failure
+RestartSec=10
+
+[Install]
+WantedBy=default.target
