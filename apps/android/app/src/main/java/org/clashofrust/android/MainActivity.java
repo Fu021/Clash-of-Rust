@@ -43,8 +43,6 @@ public final class MainActivity extends NativeActivity {
         tileConnect=VpnTileService.CONNECT.equals(getIntent().getAction());
         super.onCreate(state);
         UpdateInstaller.pruneInstalled(this);
-        // Let Slint handle native insets; do not install a second padded content view.
-        getWindow().setSoftInputMode(android.view.WindowManager.LayoutParams.SOFT_INPUT_ADJUST_RESIZE);
         configureSystemBars(dark);
         if (Build.VERSION.SDK_INT >= 33) getOnBackInvokedDispatcher().registerOnBackInvokedCallback(
             android.window.OnBackInvokedDispatcher.PRIORITY_DEFAULT, () -> emit("back",true));

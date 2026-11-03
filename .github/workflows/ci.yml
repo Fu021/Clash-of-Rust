@@ -348,7 +348,7 @@ jobs:
           restore-keys: go-${{ needs.inputs.outputs.go }}-
       - name: Restore GitHub Gradle dependencies and distribution
         id: gradle_github
-        uses: actions/cache@v5
+        uses: actions/cache/restore@v5
         continue-on-error: true
         timeout-minutes: 5
         with:
@@ -463,6 +463,17 @@ jobs:
             apps/android/core/go.sum
           if-no-files-found: warn
           retention-days: 3
+      - name: Save shared GitHub Gradle dependencies and distribution
+        if: matrix.arch == 'x64' && steps.gradle_github.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v5
+        continue-on-error: true
+        timeout-minutes: 5
+        with:
+          key: gradle-linux-${{ needs.inputs.outputs.gradle }}-java-17-${{ hashFiles('apps/android/**/*.gradle.kts', 'apps/android/gradle.properties') }}
+          path: |
+            ~/.gradle/caches/modules-2
+            ~/.gradle/permwrapper/dists
+            ~/.gradle/wrapper/dists
   check:
     name: ${{ matrix.system }}-${{ matrix.arch }}
     needs: inputs

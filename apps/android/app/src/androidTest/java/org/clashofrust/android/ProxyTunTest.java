@@ -232,6 +232,12 @@ public class ProxyTunTest {
             return java.util.Collections.emptyList();
         }
     }
+    @SuppressWarnings("deprecation")
+    private static boolean checked(android.view.accessibility.AccessibilityNodeInfo node) {
+        if (Build.VERSION.SDK_INT >= 36)
+            return node.getChecked() == android.view.accessibility.AccessibilityNodeInfo.CHECKED_STATE_TRUE;
+        return node.isChecked();
+    }
     private static void consent(boolean allow) throws Exception {
         java.util.concurrent.atomic.AtomicBoolean clicked=new java.util.concurrent.atomic.AtomicBoolean();
         await("Android VPN consent did not return to the app",()-> {
@@ -242,7 +248,7 @@ public class ProxyTunTest {
                 return clicked.get() && inStage(androidx.test.runner.lifecycle.Stage.RESUMED,true);
             if (!"com.android.vpndialogs".contentEquals(root.getPackageName())) return false;
             for (android.view.accessibility.AccessibilityNodeInfo check:dialogViews(root,"android:id/checkbox"))
-                if (check.isCheckable() && !check.isChecked())
+                if (check.isCheckable() && !checked(check))
                     check.performAction(android.view.accessibility.AccessibilityNodeInfo.ACTION_CLICK);
             // Accessibility can accept an action against a closing window.
             // Wait for the actual return so the next consent uses its own dialog.
@@ -690,7 +696,7 @@ public class ProxyTunTest {
         for (android.view.accessibility.AccessibilityNodeInfo label:root.findAccessibilityNodeInfosByText("Clash of Rust")) {
             for (android.view.accessibility.AccessibilityNodeInfo view=label;view!=null;view=view.getParent()) {
                 if (view.isCheckable()) return !view.isEnabled() || !view.isClickable()?android.service.quicksettings.Tile.STATE_UNAVAILABLE
-                    :view.isChecked()?android.service.quicksettings.Tile.STATE_ACTIVE:android.service.quicksettings.Tile.STATE_INACTIVE;
+                    :checked(view)?android.service.quicksettings.Tile.STATE_ACTIVE:android.service.quicksettings.Tile.STATE_INACTIVE;
             }
         }
         return -1;

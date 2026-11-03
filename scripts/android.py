@@ -103,7 +103,7 @@ def ensure_binding_tool(name):
 
 def gradle(*args, arch=None):
     code = 1_000_000 + int(os.environ.get('GITHUB_RUN_NUMBER', '1'))
-    command = ['gradle', '--no-daemon', '--warning-mode', 'all', '-p', ANDROID, '-PappVersion=' + package_version(), '-PappVersionCode=' + str(code)]
+    command = ['gradle', '--no-daemon', '--warning-mode', 'all', '-Dorg.gradle.deprecation.trace=true', '-p', ANDROID, '-PappVersion=' + package_version(), '-PappVersionCode=' + str(code)]
     if arch:
         command += ['-PappAbi=' + ABIS[arch][0]]
     return [*command, *args]
