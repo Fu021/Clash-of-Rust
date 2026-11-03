@@ -22,7 +22,7 @@
 
 ## CI
 
-依赖快照、缓存预算、各平台测试与日志位置见 [CI 与依赖缓存](workflows/ci.md)。真实网络验证仅在可丢弃环境执行。
+依赖快照、缓存预算、各平台测试与日志位置见 [CI 与依赖缓存](workflows/ci.md)；换机交接见[缓存服务](workflows/cache-server.md)，loop 盘点与清理见[缓存维护](workflows/cache-maintenance.md)。真实网络验证仅在可丢弃环境执行。
 
 ## Publish Release
 

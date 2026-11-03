@@ -38,7 +38,7 @@
 
 工作流复合操作 `.github/actions/local-cache/index.cjs` 只负责调用 `action_cache.py`，不复制缓存实现。`resources/claude-check/browser.js` 是检测页面资源，随客户端提供，保留在资源目录。
 
-私网缓存的 README 模板、服务部署及交接见[缓存服务说明](../docs/workflows/cache-server.md)；变更目录、内容或协议时同步模板，不在 agent 主机上直接编辑服务端 README。
+私网缓存的 README 模板、服务部署及交接见[缓存服务说明](../docs/workflows/cache-server.md)，两套缓存的盘点与清理见[缓存维护](../docs/workflows/cache-maintenance.md)；变更目录、内容或协议时同步模板，不在 agent 主机上直接编辑服务端 README。
 
 以下 Rust 构建脚本由各自的 Cargo 包调用，按包的构建生命周期保留；协议生成共用 `crates/desktop-protocol/schema.rs`，不另建包装入口：
 

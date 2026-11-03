@@ -4,7 +4,7 @@
 
 ## 文档与上下文
 
-- 本文件只保留跨任务约束。按需查 [README](README.md)、[贡献要求](.github/CONTRIBUTING.md)、[开发指南](docs/development.md)、[工作流索引](docs/workflows.md)与[复盘索引](docs/agent-failures/README.md)。
+- 按需查 [README](README.md)、[贡献要求](.github/CONTRIBUTING.md)、[开发指南](docs/development.md)、[工作流索引](docs/workflows.md)与[复盘索引](docs/agent-failures/README.md)。
 - 用 `rg` 定位关键词和调用者，按需读取；不重读未变化内容或重复输出大段日志。事实保留一处权威说明，其他文档链接引用。
 - 删除重复与过时说明，长文按任务拆分；本文件建议不超过 6 KiB，普通操作文档超过约 10 KiB 时复查拆分必要性。保留有效约束、证据、来源与许可证。
 - [最近复盘](docs/agent-failures/reviews.md)最多 20 条，每条只记结论、证据和验证范围；稳定经验归入主题页，已有模式只链接，不堆任务流水。
@@ -34,9 +34,9 @@
 - 推送前复查 diff、验证与工作区；禁止强推 `main`。分叉、冲突、凭据或权限异常时保留现场并说明阻塞。
 - 推送后跟进最终提交 CI，失败则修复并跟进新运行；通过后完成不发布打包及安装验证。正式版发布流程完成同提交验证后，不再重复不发布打包。不以运行中收尾，按[历史耗时](docs/workflows.md#actions-跟进节奏)低频查询：CI 约 10 分钟首查、之后 5 分钟；打包约 7 分钟首查、之后 2～3 分钟，排队或长步骤延长。runner 未分配导致失败时自动重试失败 job，无需再次确认。
 - 最终合并前按[脚本说明](scripts/README.md)核对全仓调用关系，合并重复入口、删除弃用脚本并同步调用者。推送后仅删除已全含于 `origin/main` 且无其他工作区使用的工作分支；保留默认分支与未合并分支。
-- [Publish Release](docs/workflows/release.md)默认用 `check_only=true`，复用同提交成功 CI 与依赖快照，核验附件及 Release 未变；流程结束前不推进来源分支。公开发布（含预发布）、签名、额外工作流/维护者缓存访问及分支规则外的版本调整须用户明确授权。
+- [Publish Release](docs/workflows/release.md)默认用 `check_only=true`，复用同提交成功 CI 与依赖快照，核验附件及 Release 未变；流程结束前不推进来源分支。公开发布、签名、额外工作流、超出[循环缓存维护](docs/workflows/cache-maintenance.md)范围的私网访问及分支规则外的版本调整须用户明确授权。
 - 仅保留 **CI、Publish Release、Memory Benchmark**，新增含临时工作流须维护者同意；源码测试归 CI，真实集成聚焦代理/TUN，安装与安装后验证归发布流程，不加截图工作流。
-- `.github/` 变更及外部 fork 每次运行须维护者审核；不绕过隔离、网络、Secrets 限制或索取私网凭据，不擅自取消他人运行、删除历史/附件/缓存。缓存与保留期按[CI 约束](docs/workflows/ci.md)，弃用工作流须删除文件并由维护者在 GitHub 禁用。
+- `.github/` 变更及外部 fork 每次运行须维护者审核；不绕过隔离、网络、Secrets 限制或索取私网凭据，不擅自取消他人运行、删除历史或附件。缓存按[循环收尾](docs/loop-workflow.md#统一收尾)盘点及清理，其他删除须授权；弃用工作流须删除文件并由维护者在 GitHub 禁用。
 - 私网缓存目录、内容或协议变化时同步 [README 模板](docs/workflows/cache-server.md)，由 `main` Actions 更新服务器说明，不直接编辑。
 
 ## 文档与仓库整洁

@@ -40,13 +40,11 @@ Windows 运行安装程序；Debian/Ubuntu（Ubuntu 仅支持 20.04 及以上）
 
 macOS 打开 DMG，将 **Clash of Rust.app** 拖入 **Applications（应用程序）** 后启动。Android 安装对应架构的 APK，首次连接允许 VPN 授权；可在系统快捷设置中添加开关磁贴。
 
-可能造成 Windows Defender 误判查杀，需自行规避。
+Windows Defender 若出现告警，请先核对下载文件及 SHA256；扫描记录和微软误报提交入口见 [Defender 告警处理](docs/workflows/release.md#windows-defender-告警)。未知告警不能直接认定为误报。
 
 ## 命令行
 
-从 0.6.2 起，Windows、Linux、macOS 安装包附带无界面的 `cor`，可用于各系统的终端和 Server 环境，无需启动 GUI。支持订阅、节点、规则、DNS、IPv6、TUN、连接、日志、检测、更新与后台自启，覆盖 GUI 中的大部分配置和维护操作，并与窗口共用内核。
-
-日常使用 `cor start` 在后台运行；建议服务器等纯 CLI 环境启用 TUN，减少逐个设置程序代理的麻烦。运行 `cor help` 查看命令，安装、示例与参数见 [CLI 使用文档](docs/cli.md)。
+Windows、Linux、macOS 安装包均附带无界面的 `cor`，与窗口共用后台和内核。运行 `cor start` 启动后台；服务器可启用 TUN 接管流量。运行 `cor help` 查看命令，安装、参数和示例见 [CLI 使用文档](docs/cli.md)。
 
 ## 内存占用
 

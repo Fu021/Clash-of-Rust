@@ -1,11 +1,11 @@
 # 最近复盘
 
-[主题索引](README.md)保存稳定经验；本页只记近期结论和验证范围，最多 20 条，不复制排障过程。新增时先合并同类任务和过时待办；运行记录不代表当前提交已通过。
+[主题索引](README.md)保存稳定经验；本页只记近期结论和验证范围，最多 20 条，不复制排障过程。较早任务见[历史复盘](reviews-archive.md)。新增时先合并同类任务和过时待办；运行记录不代表当前提交已通过。
 
 | 日期 | 任务 | 结果与主题 | 证据与验证边界 |
 | --- | --- | --- | --- |
-| 2026-11-03 | 私网缓存 README 交接 | [固定模板与 Actions 同步](../workflows/cache-server.md)由可信 `main` 写入、校验并拒绝旧运行；服务沿用受限的 `state/` 写权限，首次升级和根链接需在缓存主机处理。 | 增加认证、完整性、旧运行、符号链接及非 `main` 保护回归；本机只做静态检查，服务部署与同提交 Actions 结果以实际核验为准。 |
-| 2026-11-03 | Ubuntu 20.04 下载缓存 | [独立缓存](../workflows/ci.md#ubuntu-2004-环境下载缓存)复用 Python、原始云镜像与校验后的 DEB，保留干净系统盘及完整安装验证；KVM 可用时放行设备访问，否则记录 TCG。缓存故障正常下载，不能掩盖安装失败。 | `13f5e08` 的 [CI 41597206311](https://github.com/Fu021/Clash-of-Rust/actions/runs/41597206311)与[不发布打包 41599598923](https://github.com/Fu021/Clash-of-Rust/actions/runs/41599598923)通过；两架构 GUI/代理/TUN 均完成，Python 缓存命中，云镜像及 DEB 首次写入，九组包和 Release 未变。 |
+| 2026-11-03 | 跨服务器文档与缓存收尾 | 按[服务交接](../workflows/cache-server.md)区分仓库、Actions 与实际服务主机；[缓存维护](../workflows/cache-maintenance.md)写明两套缓存盘点、分片校验和权限边界，loop 最后一轮后执行清理。拆分 UI 尺寸与较早复盘，保留原链接和证据。 | 全仓文档路径、链接、锚点和 shell 示例做静态检查；本轮未构建、运行 CI、改动缓存或发布，也未在其他服务器实测迁移。 |
+| 2026-11-03 | Ubuntu 20.04 缓存与服务交接 | [下载缓存](../workflows/ci.md#ubuntu-2004-环境下载缓存)复用 Python、云镜像及已校验 DEB；[共享服务说明](../workflows/cache-server.md)由可信 `main` Actions 写入并回读。按用户授权无备份升级程序/unit，校验替代分片后清理九个旧整包；Windows ARM64 分片引用不完整，保留其旧整包。 | `f4b37f6` 的 [CI 41605060780](https://github.com/Fu021/Clash-of-Rust/actions/runs/41605060780) 11 项、[不发布打包 41608003818](https://github.com/Fu021/Clash-of-Rust/actions/runs/41608003818) 15 项通过；两架构 GUI/代理/TUN、九组包/18 附件核验完成。缓存任务重跑后 README 同步通过，349 归档对应索引，25.04→14.62 GiB；37 个 Release/432 附件未变。本机未编译。 |
 | 2026-11-03 | 保护状态与 0.6.6 正式版 | 共用盾牌、Android 通知和 `cor` 状态；失败不沿用旧绿勾。[跨页投影](ui-and-tests.md#4-slint-界面契约与预览漂移)、[DNS 响应确认](macos-dns.md)及[授权与 EOF 分类](test-environments.md#11-测试稳定性与外部环境假设)已补回归。同步 Ubuntu 20.04 支持、README 与正式版文案。 | `f2bb7f1` 的 [CI 41587402909](https://github.com/Fu021/Clash-of-Rust/actions/runs/41587402909) 和[发布 41591159760](https://github.com/Fu021/Clash-of-Rust/actions/runs/41591159760)全部通过，九组包/18 附件、SHA256、tag、文案及 latest 核验完成，旧 36 个 Release 未变。[内存基准 41584464922](https://github.com/Fu021/Clash-of-Rust/actions/runs/41584464922)含 20 次窗口重建及纯 CLI 检查；其后只有文档回填和合并。本机未编译；真实设备、网络待验收。 |
 | 2026-11-01 | 订阅 User-Agent 精简 | 移除 v2rayN/NG 和自身版本号；相同 UA 不再重复请求，保留路线回退及格式通知，见[订阅说明](../subscriptions.md#客户端兼容与格式)。 | `71cff5c` 的 [CI 41323201437](https://github.com/Fu021/Clash-of-Rust/actions/runs/41323201437) 11 项与[不发布打包 41325825088](https://github.com/Fu021/Clash-of-Rust/actions/runs/41325825088) 15 项通过；九组包及 18 附件核验完成，35 个 Release/396 个附件未变。本机仅静态检查，真实机场和设备待验收。 |
 | 2026-11-01 | 订阅格式提示与打包门禁 | [格式错误](../subscriptions.md#客户端兼容与格式)由各端顶部通知或 `cor` 报错，保留原状态及合法 null 段；修复 [CI 任务索引漏项](release.md#10-发布产物版本与依赖快照)，按 attempt 检查完整最新结果。 | `6f6953b` 的 [CI 41294344493](https://github.com/Fu021/Clash-of-Rust/actions/runs/41294344493) 11 项和[不发布打包 41296328237](https://github.com/Fu021/Clash-of-Rust/actions/runs/41296328237) 15 项通过，九组包/18 附件及 Ubuntu 20.04 双架构安装后验证完成，35 个 Release/396 个附件未变。本机仅静态与窄屏预览；真实机场、设备待验收。 |
@@ -17,10 +17,6 @@
 | 2026-10-28 | 完整 loop、保护状态与文档清理 | Android 保护错误改归风险，读取停止线程的失败快照；共享控制接口恢复后清除暂时错误；短暂失联不覆盖通知或拦截失败，保留异常记录。按[循环审查](../loop-workflow.md)核对各端、UI 与 cor，拆分长文和精简复盘。 | `9926a2f` 的 [CI][ci-loop] 11 项及[不发布打包][package-loop] 13 项通过，九组包/18 附件核验通过，31 个 Release/324 个附件未变。本机仅静态检查与三种尺寸预览；实机、真实 tailnet 与吞吐未验收。 |
 | 2026-10-27 | fix.6 预发布与 DNS 国家误报 | Google 官方数据修正错误标签；[真实国家差异仍属风险](../claude-protection.md#递归-dns-国家排查)。递归 DNS 与 IP 检测复用国旗，港澳台仅文字。 | `4696c81` 的 [CI 40562836032][ci-fix6] 11 项、[预发布 40567590202][release-fix6] 13 项通过，九组包及九份 SHA256 已独立核对；保留 fix.5，稳定 latest 为 v0.6.4。 |
 | 2026-10-27 | macOS Tailscale DNS 与 CLI 重启 | [动态 DNS 共存](macos-dns.md)保留私有分域、接口与恢复记录；原生随机探针确认接管，延迟重发不外流。[端口复用](macos-lifecycle.md#内核退出后的端口复用)区分监听者与暂未释放。 | `2a3e09b` 的 [CI 40542749551][ci-tailscale] 11 项、[不发布打包 40546066504][package-tailscale] 13 项通过；九组包/18 附件及来源核验通过，Release 未变。真实 tailnet、接口/出口变化未验收。 |
-| 2026-10-26 | 慢速回退与稳定工具栏 | 共享慢速/断流检测及缓冲下载；Geo 整组事务安装不重连 VPN。规则双向边缘滚动，移动键盘与空结果不重建搜索框，见[稳定列表](ui-and-tests.md#移动虚拟列表重叠与宽屏空间)。 | `457ec52` 的 [CI 40304558635][ci-toolbars] 11 项、[不发布打包 40308495398][package-toolbars] 13 项通过；九组包/18 附件核验通过，Release 未变。真实吞吐和系统字号仍需设备验收。 |
-| 2026-10-25 | Defender 告警与规则/订阅循环 | 补[未压缩 EXE/DLL 扫描](desktop.md#9-windows-普通用户服务与安装器)；修复移动规则校验与拖动取消，失败不污染草稿。告警样本未经核验不能断言误报。 | `1d3e13e` 的 [CI 40210562854][ci-rules] 与[不发布打包 40212996727][package-rules]通过；Windows 两架构包及各五个 EXE 无威胁，用户样本仍待微软鉴定。 |
-| 2026-10-25 | 订阅删除、Pad 与 fix.3 预发布 | [当前订阅删除与重复提交](ui-and-tests.md#订阅删除与重复提交)按事务处理；手机/Pad 工具导航、规则来源及完整原文同步，拖动按稳定 ID 修改完整草稿。 | [预发布 40283018496][release-fix3] 的 13 项任务、18 附件核验通过；保留 fix.2，未改稳定 latest；物理 Pad 未验收。 |
-| 2026-10-25 | fix.2 预发布 | 按[来源与版本约束](release.md#10-发布产物版本与依赖快照)复用 `9623f45` 的成功 CI，使用 Android 长期发行签名。 | [CI 40176079496][ci-fix2] 与[预发布 40198947679][release-fix2]通过，九组包/18 附件核验通过，原 27 个 Release 未变。 |
 
 [ci-loop]: https://github.com/Fu021/Clash-of-Rust/actions/runs/40610758771
 [package-loop]: https://github.com/Fu021/Clash-of-Rust/actions/runs/40613948109
@@ -28,10 +24,3 @@
 [release-fix6]: https://github.com/Fu021/Clash-of-Rust/actions/runs/40567590202
 [ci-tailscale]: https://github.com/Fu021/Clash-of-Rust/actions/runs/40542749551
 [package-tailscale]: https://github.com/Fu021/Clash-of-Rust/actions/runs/40546066504
-[ci-toolbars]: https://github.com/Fu021/Clash-of-Rust/actions/runs/40304558635
-[package-toolbars]: https://github.com/Fu021/Clash-of-Rust/actions/runs/40308495398
-[ci-rules]: https://github.com/Fu021/Clash-of-Rust/actions/runs/40210562854
-[package-rules]: https://github.com/Fu021/Clash-of-Rust/actions/runs/40212996727
-[release-fix3]: https://github.com/Fu021/Clash-of-Rust/actions/runs/40283018496
-[ci-fix2]: https://github.com/Fu021/Clash-of-Rust/actions/runs/40176079496
-[release-fix2]: https://github.com/Fu021/Clash-of-Rust/actions/runs/40198947679
