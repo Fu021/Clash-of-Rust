@@ -730,7 +730,7 @@ pub fn serve(uid: u32) -> Result<()> {
                             .env("PATH", "/usr/bin:/bin:/usr/sbin:/sbin")
                             .stdin(Stdio::null())
                             .stdout(Stdio::null())
-                            .stderr(Stdio::null());
+                            .stderr(Stdio::inherit());
                         ensure!(!short_idle, "TUN 会话参数无效");
                         children.push(command.spawn()?);
                     }

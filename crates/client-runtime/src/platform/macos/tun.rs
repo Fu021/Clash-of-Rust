@@ -45,12 +45,13 @@ impl Session {
         let session = Self { directory, token };
         let deadline = Instant::now() + Duration::from_secs(10);
         loop {
-            if session.request("ping").is_ok() {
-                return Ok(session);
-            }
+            let error = match session.request("ping") {
+                Ok(()) => return Ok(session),
+                Err(error) => error,
+            };
             ensure!(
                 Instant::now() < deadline,
-                "TUN 授权助手未就绪，请检查安装包与系统日志"
+                "TUN 授权助手未就绪：{error:#}；请检查安装包与系统日志"
             );
             std::thread::sleep(Duration::from_millis(100));
         }
@@ -454,6 +455,16 @@ fn serve(socket: &Path, uid: u32, token: &str, idle_limit: Duration) -> Result<(
         "无法设置 TUN 会话权限"
     );
     listener.set_nonblocking(true)?;
+    serve_requests(&listener, socket, uid, token, &core, idle_limit)
+}
+fn serve_requests(
+    listener: &UnixListener,
+    socket: &Path,
+    uid: u32,
+    token: &str,
+    core: &Path,
+    idle_limit: Duration,
+) -> Result<()> {
     let mut idle = Instant::now();
     while idle.elapsed() < idle_limit
         && socket.exists()
@@ -479,14 +490,14 @@ fn serve(socket: &Path, uid: u32, token: &str, idle_limit: Duration) -> Result<(
         };
         match request.operation.as_str() {
             "ping" => {
-                stream.write_all(b"ready\n")?;
+                let _ = stream.write_all(b"ready\n");
             }
             "stop" => {
-                stream.write_all(b"ready\n")?;
+                let _ = stream.write_all(b"ready\n");
                 break;
             }
             "start" => {
-                if let Err(error) = run_core(stream.try_clone()?, request, uid, &core) {
+                if let Err(error) = run_core(stream.try_clone()?, request, uid, core) {
                     let _ = serde_json::to_writer(
                         &mut stream,
                         &Event {
@@ -683,5 +694,80 @@ pub fn launcher_main() -> Result<i32> {
             bridge(Path::new(&args[1]), &args[2], &args[3..])
         }
         _ => bail!("TUN 助手参数无效"),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn queued_request(socket: &Path, token: &str, operation: &str) -> UnixStream {
+        let mut stream = UnixStream::connect(socket).unwrap();
+        stream
+            .set_read_timeout(Some(Duration::from_secs(2)))
+            .unwrap();
+        serde_json::to_writer(
+            &mut stream,
+            &Request {
+                token: token.into(),
+                operation: operation.into(),
+                directory: None,
+                config: None,
+                ports: Vec::new(),
+            },
+        )
+        .unwrap();
+        stream.write_all(b"\n").unwrap();
+        stream
+    }
+
+    #[test]
+    fn abandoned_probe_keeps_the_session_available() {
+        let directory = tempfile::tempdir().unwrap();
+        let socket = directory.path().join("core.sock");
+        let token = uuid::Uuid::new_v4().to_string();
+        let listener = UnixListener::bind(&socket).unwrap();
+        listener.set_nonblocking(true).unwrap();
+        drop(queued_request(&socket, &token, "ping"));
+        std::thread::scope(|scope| {
+            let server = scope.spawn(|| {
+                serve_requests(
+                    &listener,
+                    &socket,
+                    unsafe { libc::getuid() },
+                    &token,
+                    &directory.path().join("unused-core"),
+                    Duration::from_secs(3),
+                )
+            });
+            for operation in ["ping", "stop"] {
+                let stream = queued_request(&socket, &token, operation);
+                let mut response = String::new();
+                BufReader::new(stream).read_line(&mut response).unwrap();
+                assert_eq!(response, "ready\n");
+            }
+            server.join().unwrap().unwrap();
+        });
+        assert!(!socket.exists());
+    }
+
+    #[test]
+    fn abandoned_stop_still_cleans_up_the_session() {
+        let directory = tempfile::tempdir().unwrap();
+        let socket = directory.path().join("core.sock");
+        let token = uuid::Uuid::new_v4().to_string();
+        let listener = UnixListener::bind(&socket).unwrap();
+        listener.set_nonblocking(true).unwrap();
+        drop(queued_request(&socket, &token, "stop"));
+        serve_requests(
+            &listener,
+            &socket,
+            unsafe { libc::getuid() },
+            &token,
+            &directory.path().join("unused-core"),
+            Duration::from_secs(3),
+        )
+        .unwrap();
+        assert!(!socket.exists());
     }
 }
