@@ -680,6 +680,10 @@ jobs:
           paths: ${{ matrix.system == 'windows' && matrix.arch == 'x64' && 'bundle/resources' || format('bundle/{0}-{1}/resources', matrix.system, matrix.arch) }}
           key: resources-${{ needs.inputs.outputs.resources }}
           restore-keys: resources-
+      - name: Cache Ubuntu baseline downloads
+        if: runner.os == 'Linux'
+        uses: ./.github/actions/linux-download-cache
+        timeout-minutes: 12
       - name: Compile, test and export native binaries
         env:
           GH_TOKEN: ${{ github.token }}

@@ -15,6 +15,8 @@ import time
 
 from build_support import host_system, ROOT, bundle_directory, host_arch, run, sha256, write_json
 from workflow_artifacts import commit, verify_build
+from linux_apt import OPTIONS as APT_OPTIONS, install as install_packages
+from linux_apt import privileged as run_privileged_with_timeout
 
 
 GUEST_PACKAGE_CONFIG = """\
@@ -38,12 +40,6 @@ def prepare_guest_package_environment():
     run(['sudo', 'tee', '/etc/dpkg/dpkg.cfg.d/99-cor-ci-no-docs'],
         input=GUEST_PACKAGE_CONFIG, text=True)
     run(['sudo', 'rm', '-f', GUEST_MAN_DB_MARKER])
-
-
-def run_privileged_with_timeout(command, timeout):
-    """Let a root-owned timeout stop sudo rather than killing sudo as the runner."""
-    run(['sudo', 'env', 'DEBIAN_FRONTEND=noninteractive', 'timeout',
-         '--signal=TERM', '--kill-after=30s', f'{timeout}s', *command])
 
 
 def linux_gui_smoke():
@@ -131,7 +127,11 @@ def linux_package_tests(package, tun_test, structure=True):
         run(['sudo', 'apt-get', '-o', 'Acquire::http::Timeout=30', '-o',
              'Acquire::https::Timeout=30', '-o', 'Acquire::Retries=2', 'update'],
             timeout=300)
-    run(['sudo', 'apt-get', 'install', '-y', './'+str(package.relative_to(ROOT))])
+    package_argument = './'+str(package.relative_to(ROOT))
+    if os.environ.get('COR_LINUX_GUEST') == 'true':
+        install_packages([package_argument])
+    else:
+        run(['sudo', 'apt-get', 'install', '-y', package_argument])
     if os.environ.get('COR_LINUX_BASELINE') and not shutil.which('pkexec'):
         raise RuntimeError('The installed package did not provide the polkit authorization helper')
     if not any(Path(path).is_file() for path in (
@@ -180,19 +180,15 @@ def run_compatibility(expected=None):
         if path.is_file():
             run(['sudo', 'tee', path], input=mirror+'\n', text=True)
     prepare_guest_package_environment()
-    apt = ['apt-get', '-o', 'Acquire::http::Timeout=30', '-o',
-           'Acquire::https::Timeout=30', '-o', 'Acquire::Retries=2', '-o',
-           'Acquire::Languages=none', '-o', 'Dpkg::Use-Pty=0']
     if not os.environ.get('COR_LINUX_GUEST'):
         run_privileged_with_timeout(
-            [*apt, '-o', 'APT::Update::Error-Mode=any', 'update'], 300)
+            [*APT_OPTIONS, '-o', 'APT::Update::Error-Mode=any', 'update'], 300)
     package_timeout = 1800 if platform.machine().lower() in ('aarch64', 'arm64') else 900
-    run_privileged_with_timeout(
-        [*apt, 'install', '-y', '--no-install-recommends',
-         'dbus-x11', 'iproute2', 'util-linux', 'libcap2-bin',
+    install_packages(
+        ['dbus-x11', 'iproute2', 'util-linux', 'libcap2-bin',
          'xvfb', 'xwayland', 'x11-utils', 'xdotool', 'wmctrl', 'openbox',
          'gnome-shell', 'gnome-shell-extension-appindicator', 'policykit-1-gnome',
-         'libgl1-mesa-dri', 'libegl1'], package_timeout)
+         'libgl1-mesa-dri', 'libegl1'], package_timeout, no_recommends=True)
     # Package structure was tested in the native packaging job. This job tests
     # its GUI, proxy and routing against this distribution, without repackaging.
     linux_package_tests(packages[0], binary, structure=False)

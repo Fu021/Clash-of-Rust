@@ -89,10 +89,31 @@ def inputs():
     return value
 
 
+def tools_directory():
+    return Path(os.environ.get('COR_LINUX_TOOLS_DIR', ROOT/'target/linux-tools'))
+
+
+def cache_keys(value=None, arch=None):
+    value = value or inputs()
+    arch = arch or host_arch()
+    if arch not in ('x64', 'arm64'):
+        raise ValueError('Unsupported Linux cache architecture')
+    records = value['architectures'][arch]
+    result = {'apt': f'linux-apt-ubuntu20-v1-{arch}'}
+    for name in ('python', 'cloud'):
+        checksum = records[name]['sha256']
+        if not re.fullmatch('[0-9a-f]{64}', checksum):
+            raise ValueError('Linux cache identity requires an upstream SHA256')
+        result[name] = f'linux-{name}-ubuntu20-v1-{arch}-{checksum}'
+    return result
+
+
 def download(record, path):
     if not re.fullmatch('[0-9a-f]{64}', record.get('sha256', '')):
         raise ValueError('Download requires an upstream SHA256')
     if path.is_file() and sha256(path) == record['sha256']:
+        print(f'Linux download: verified cached {path.name} '
+              f'({path.stat().st_size / 1024**2:.1f} MiB)', flush=True)
         return path
     path.parent.mkdir(parents=True, exist_ok=True)
     partial = path.with_suffix(path.suffix+'.partial')
@@ -102,6 +123,8 @@ def download(record, path):
         if sha256(partial) != record['sha256']:
             raise ValueError('Upstream download checksum mismatch: '+path.name)
         partial.replace(path)
+        print(f'Linux download: fetched and verified {path.name} '
+              f'({path.stat().st_size / 1024**2:.1f} MiB)', flush=True)
     finally:
         partial.unlink(missing_ok=True)
     return path
@@ -112,11 +135,46 @@ def require_actions():
         raise RuntimeError('Linux integration requires a disposable Actions Linux runner')
 
 
+def cache_downloads(vm=False):
+    require_actions()
+    records = inputs()['architectures'][host_arch()]
+    files = [('python', 'python.tar.gz')]
+    if vm:
+        files.append(('cloud', 'focal.img'))
+    for name, filename in files:
+        download(records[name], tools_directory()/filename)
+
+
+def guest_cache(scp, remote, restore=False):
+    """Transfer only guest DEBs; fresh signed indexes establish their trust."""
+    configured = os.environ.get('COR_LINUX_APT_CACHE')
+    if not configured:
+        return
+    directory = Path(configured)
+    try:
+        directory.mkdir(parents=True, exist_ok=True)
+        if restore:
+            files = [path for path in directory.glob('*.deb')
+                     if path.is_file() and not path.is_symlink()]
+            if files:
+                run([*scp, *files, remote+':cor-apt/'], timeout=300)
+            print(f'Guest DEB cache: staged {len(files)} untrusted downloads', flush=True)
+        else:
+            run([*scp, remote+':cor-apt/*.deb', directory], timeout=300)
+            from linux_apt import trim
+            trim(directory)
+            print(f'Guest DEB cache: exported {len(list(directory.glob("*.deb")))} downloads',
+                  flush=True)
+    except (OSError, subprocess.SubprocessError) as error:
+        print('::warning::Optional guest DEB cache transfer unavailable: '
+              + type(error).__name__, flush=True)
+
+
 def build_image():
     require_actions()
     value = inputs()
     archive = download(value['architectures'][host_arch()]['python'],
-                       ROOT/'target/linux-tools/python.tar.gz')
+                       tools_directory()/'python.tar.gz')
     dockerfile = ROOT/'resources/linux/ubuntu20.Dockerfile'
     identity = hashlib.sha256((value['image']+sha256(archive)+sha256(dockerfile)).encode()).hexdigest()[:20]
     tag = 'cor-ubuntu20:'+identity
@@ -199,8 +257,8 @@ def vm_test():
     require_actions()
     REPORT.mkdir(parents=True, exist_ok=True)
     value = inputs()['architectures'][host_arch()]
-    base = download(value['cloud'], ROOT/'target/linux-tools/focal.img')
-    python = download(value['python'], ROOT/'target/linux-tools/python.tar.gz')
+    base = download(value['cloud'], tools_directory()/'focal.img')
+    python = download(value['python'], tools_directory()/'python.tar.gz')
     with tempfile.TemporaryDirectory(prefix='cor-focal-vm-') as temporary:
         directory = Path(temporary)
         key = directory/'id_ed25519'
@@ -238,6 +296,9 @@ def vm_test():
         ssh = ['ssh', '-i', str(key), '-p', str(port), '-o', 'StrictHostKeyChecking=no',
                '-o', 'UserKnownHostsFile='+str(directory/'known_hosts'),
                '-o', 'ConnectTimeout=5', '-o', 'BatchMode=yes', 'ubuntu@127.0.0.1']
+        scp = ['scp', '-i', str(key), '-P', str(port), '-o', 'StrictHostKeyChecking=no',
+               '-o', 'UserKnownHostsFile='+str(directory/'known_hosts'),
+               '-o', 'ConnectTimeout=5', '-o', 'BatchMode=yes']
         archive = directory/'source.tar.gz'
         tracked = subprocess.check_output(['git', 'ls-files', '-z'], cwd=ROOT).decode().split('\0')
         with tarfile.open(archive, 'w:gz', compresslevel=1) as tar:
@@ -271,14 +332,18 @@ def vm_test():
                        stdin=archive.open('rb'), timeout=300)
                 remote('sudo mkdir -p /opt/cor-test-python && sudo tar xzf - -C /opt/cor-test-python --strip-components=1',
                        stdin=python.open('rb'), timeout=120)
+                remote('mkdir -p ~/cor-apt')
+                guest_cache(scp, 'ubuntu@127.0.0.1', restore=True)
+                environment = ('cd ~/cor-source && GITHUB_ACTIONS=true COR_LINUX_GUEST=true '
+                               'PATH=/opt/cor-test-python/bin:$PATH PYTHONDONTWRITEBYTECODE=1 ')
+                if os.environ.get('COR_LINUX_APT_CACHE'):
+                    environment += 'COR_LINUX_APT_CACHE=/home/ubuntu/cor-apt '
                 remote('sudo timeout --signal=TERM --kill-after=30s 300s apt-get update',
                        timeout=360)
-                remote('sudo env DEBIAN_FRONTEND=noninteractive timeout '
-                       '--signal=TERM --kill-after=30s 300s apt-get install -y git',
-                       timeout=360)
-                remote('cd ~/cor-source && GITHUB_ACTIONS=true COR_LINUX_GUEST=true '
-                       'PATH=/opt/cor-test-python/bin:$PATH PYTHONDONTWRITEBYTECODE=1 '
-                       '/opt/cor-test-python/bin/python3 scripts/test-release-package.py '
+                remote(environment+'/opt/cor-test-python/bin/python3 -c '+shlex.quote(
+                    "import sys; sys.path.insert(0, 'scripts'); "
+                    "from linux_apt import install; install(['git'], 300)"), timeout=600)
+                remote(environment+'/opt/cor-test-python/bin/python3 scripts/test-release-package.py '
                        '--linux-compat --expect-ubuntu 20.04',
                        timeout=2400 if architecture == 'aarch64' or not kvm else 1200)
                 write_json(REPORT/'focal-vm.json', {'distribution': BASELINE, 'kernel': kernel,
@@ -288,6 +353,7 @@ def vm_test():
                 with contextlib.suppress(subprocess.SubprocessError):
                     subprocess.run([*ssh, 'cd ~/cor-source && tar czf - target/linux-report'],
                                    stdout=(REPORT/'focal-guest-report.tar.gz').open('wb'), timeout=60)
+                guest_cache(scp, 'ubuntu@127.0.0.1')
                 guest.terminate()
                 try:
                     guest.wait(timeout=15)
@@ -298,9 +364,22 @@ def vm_test():
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument('operation', choices=('ci', 'package', 'vm'))
+    parser.add_argument('operation', choices=('ci', 'package', 'vm', 'cache-keys', 'cache-downloads'))
+    parser.add_argument('--vm', action='store_true', help='Include cloud image downloads')
     args, extra = parser.parse_known_args()
-    if args.operation == 'vm':
+    if args.operation in ('cache-keys', 'cache-downloads'):
+        if extra or (args.vm and args.operation != 'cache-downloads'):
+            parser.error('Unexpected cache arguments')
+        require_actions()
+        if args.operation == 'cache-keys':
+            with Path(os.environ['GITHUB_OUTPUT']).open('a') as output:
+                for name, key in cache_keys().items():
+                    output.write(f'{name}={key}\n')
+        else:
+            cache_downloads(args.vm)
+    elif args.vm:
+        parser.error('--vm is only valid with cache-downloads')
+    elif args.operation == 'vm':
         if extra:
             parser.error('vm takes no additional arguments')
         vm_test()

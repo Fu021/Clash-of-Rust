@@ -1,0 +1,67 @@
+name: Ubuntu 20.04 dependency downloads
+description: Cache verified upstream archives and guest DEBs, never installed VM disks
+inputs:
+  vm:
+    description: Also restore the cloud image and guest package downloads
+    default: 'false'
+runs:
+  using: composite
+  steps:
+    - name: Identify frozen Linux downloads
+      id: inputs
+      shell: bash
+      env:
+        COR_LINUX_TOOLS_DIR: ${{ runner.temp }}/cor-linux-tools
+        CACHE_VM: ${{ inputs.vm }}
+      run: |
+        python3 scripts/linux_ci.py cache-keys
+        echo "COR_LINUX_TOOLS_DIR=$COR_LINUX_TOOLS_DIR" >> "$GITHUB_ENV"
+        if [ "$CACHE_VM" = true ]; then
+          echo "COR_LINUX_APT_CACHE=$COR_LINUX_TOOLS_DIR/apt" >> "$GITHUB_ENV"
+        fi
+    - name: Restore portable Python
+      id: python
+      uses: actions/cache/restore@v5
+      continue-on-error: true
+      with:
+        path: ${{ runner.temp }}/cor-linux-tools/python.tar.gz
+        key: ${{ steps.inputs.outputs.python }}
+    - name: Restore original Ubuntu cloud image
+      id: cloud
+      if: inputs.vm == 'true'
+      uses: actions/cache/restore@v5
+      continue-on-error: true
+      with:
+        path: ${{ runner.temp }}/cor-linux-tools/focal.img
+        key: ${{ steps.inputs.outputs.cloud }}
+    - name: Verify or download frozen archives
+      shell: bash
+      env:
+        CACHE_VM: ${{ inputs.vm }}
+      run: |
+        arguments=(cache-downloads)
+        if [ "$CACHE_VM" = true ]; then arguments+=(--vm); fi
+        python3 scripts/linux_ci.py "${arguments[@]}"
+    - name: Save verified Python before tests
+      if: steps.python.outputs.cache-hit != 'true'
+      uses: actions/cache/save@v5
+      continue-on-error: true
+      with:
+        path: ${{ runner.temp }}/cor-linux-tools/python.tar.gz
+        key: ${{ steps.inputs.outputs.python }}
+    - name: Save verified cloud image before tests
+      if: inputs.vm == 'true' && steps.cloud.outputs.cache-hit != 'true'
+      uses: actions/cache/save@v5
+      continue-on-error: true
+      with:
+        path: ${{ runner.temp }}/cor-linux-tools/focal.img
+        key: ${{ steps.inputs.outputs.cloud }}
+    - name: Restore guest DEB downloads
+      if: inputs.vm == 'true'
+      uses: actions/cache@v5
+      continue-on-error: true
+      with:
+        path: ${{ runner.temp }}/cor-linux-tools/apt
+        key: ${{ steps.inputs.outputs.apt }}-${{ github.run_id }}-${{ github.run_attempt }}
+        restore-keys: |
+          ${{ steps.inputs.outputs.apt }}-

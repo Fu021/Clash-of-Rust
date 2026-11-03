@@ -33,6 +33,8 @@
 
 Ubuntu 18.04 未纳入此基线或兼容矩阵，不能从 20.04 的验证结果推断其受支持。
 
+Ubuntu 20.04 的镜像、Python 和已验证 DEB 下载缓存见 [CI 缓存边界](ci.md#ubuntu-2004-环境下载缓存)；每轮重建虚拟机磁盘，安装后验证照常执行。
+
 只有最终发布 job 有 `contents: write`。发布工作流向 `scripts/build-installer.py --prebuilt` 传入已验证的 CI 产物；本地打包可传入按上述步骤生成的本地产物。打包器只校验与组装，不隐式调用 Cargo。
 
 平台检查集中在 `scripts/windows_ci.py`、`scripts/macos_ci.py`、`scripts/linux_gui.py` 和 Linux 隔离网络夹具中；`scripts/test-release-package.py` 统一调度，`scripts/linux_ci.py` 负责基线容器和虚拟机。各 GUI 结果与失败日志保存在对应 `*-package-report-*` 附件中。

@@ -198,6 +198,10 @@ jobs:
         run: |
           import subprocess, sys
           subprocess.run([sys.executable, 'scripts/workflow_artifacts.py', 'fetch', '--system', '${{ matrix.system }}', '--arch', '${{ matrix.arch }}', '--run-id', '${{ needs.resolve.outputs.ci_run_id }}', '--output', 'ci-build'], check=True)
+      - name: Cache Ubuntu baseline downloads
+        if: runner.os == 'Linux'
+        uses: ./.github/actions/linux-download-cache
+        timeout-minutes: 12
       - name: Package and test installed programs
         run: |
           import subprocess, sys
@@ -320,10 +324,21 @@ jobs:
         with:
           name: linux-tun-test-${{ matrix.arch }}
           path: target
+      - name: Cache Ubuntu VM dependency downloads
+        uses: ./.github/actions/linux-download-cache
+        timeout-minutes: 15
+        with:
+          vm: 'true'
       - name: Install virtual machine tools
         run: |
           sudo apt-get update
           sudo apt-get install -y ${{ matrix.qemu }} qemu-utils cloud-image-utils
+          if [ -c /dev/kvm ]; then
+            sudo chmod a+rw /dev/kvm
+            ls -l /dev/kvm
+          else
+            echo "KVM is unavailable; keeping TCG software emulation."
+          fi
       - name: Verify the same package with the Ubuntu 20.04 GA kernel
         env:
           PYTHONDONTWRITEBYTECODE: '1'

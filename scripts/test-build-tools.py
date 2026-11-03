@@ -17,6 +17,8 @@ import windows_ci as windows
 import workflow_storage as storage
 import action_cache as local_cache
 import cache_shards
+import linux_apt
+import linux_ci
 import build_inputs
 import os
 import copy
@@ -100,12 +102,47 @@ class BuildTests(unittest.TestCase):
         execute.assert_not_called()
 
     def test_linux_package_install_delegates_timeout_to_root(self):
-        with patch.object(release_package, 'run') as execute:
+        with patch.object(linux_apt, 'run') as execute:
             release_package.run_privileged_with_timeout(['apt-get', 'install'], 900)
         execute.assert_called_once_with([
             'sudo', 'env', 'DEBIAN_FRONTEND=noninteractive', 'timeout',
             '--signal=TERM', '--kill-after=30s', '900s', 'apt-get', 'install',
         ])
+
+    def test_linux_download_cache_identity_tracks_arch_and_upstream_content(self):
+        value = {'architectures': {
+            arch: {'python': {'sha256': 'a'*64}, 'cloud': {'sha256': 'b'*64}}
+            for arch in ('x64', 'arm64')}}
+        keys = linux_ci.cache_keys(value, 'x64')
+        self.assertIn('a'*64, keys['python'])
+        self.assertIn('b'*64, keys['cloud'])
+        self.assertNotEqual(keys, linux_ci.cache_keys(value, 'arm64'))
+        value['architectures']['x64']['python']['sha256'] = 'not-a-checksum\ninjected=key'
+        with self.assertRaises(ValueError):
+            linux_ci.cache_keys(value, 'x64')
+
+    def test_linux_download_revalidates_cached_bytes_and_uses_frozen_digest(self):
+        data = b'verified upstream archive'
+        record = {'url': 'https://example.invalid/archive',
+                  'sha256': hashlib.sha256(data).hexdigest()}
+        with tempfile.TemporaryDirectory() as temporary:
+            path = Path(temporary)/'archive'
+            path.write_bytes(data)
+            with patch.object(linux_ci, 'opener') as http:
+                self.assertEqual(linux_ci.download(record, path), path)
+                http.assert_not_called()
+            path.write_bytes(b'x'*len(data))
+            with patch.object(linux_ci, 'opener') as http:
+                http.return_value.open.return_value = io.BytesIO(data)
+                linux_ci.download(record, path)
+            self.assertEqual(path.read_bytes(), data)
+            path.unlink()
+            with patch.object(linux_ci, 'opener') as http:
+                http.return_value.open.return_value = io.BytesIO(b'bad')
+                with self.assertRaisesRegex(ValueError, 'checksum mismatch'):
+                    linux_ci.download(record, path)
+            self.assertFalse(path.exists())
+            self.assertFalse(path.with_suffix('.partial').exists())
 
     def test_linux_gui_supports_gnome_336_and_newer_compositors(self):
         import linux_gui
@@ -1218,6 +1255,9 @@ assert.equal(calls.length,2);
         source_new=entry(11,'source-cargo-'+'b'*64+'-2-1',10)
         self.assertEqual([c['id'] for c in storage.eviction_plan([source_old,source_new],100)],[10])
         for older,newer in (
+                ('linux-python-ubuntu20-v1-x64-'+'a'*64, 'linux-python-ubuntu20-v1-x64-'+'b'*64),
+                ('linux-cloud-ubuntu20-v1-arm64-'+'a'*64, 'linux-cloud-ubuntu20-v1-arm64-'+'b'*64),
+                ('linux-apt-ubuntu20-v1-x64-100-1', 'linux-apt-ubuntu20-v1-x64-101-1'),
                 ('android-go-Linux-X64-1.26.0-'+'a'*64,'android-go-Linux-X64-1.27.0-'+'b'*64),
                 ('skia-source-Linux-X64-0.153.3-'+'a'*64,'skia-source-Linux-X64-0.154.0-'+'b'*64),
                 ('resources-macos-x64-'+'a'*64+'-2026-10-16','resources-macos-x64-'+'b'*64+'-'+'c'*64),
@@ -2213,6 +2253,96 @@ class ReleaseTests(unittest.TestCase):
                 with self.assertRaises(ValueError):release.publish(client,self.commit,self.tag,self.notes,files)
                 self.assertTrue(client.release['draft'])
                 self.assertFalse(any(isinstance(data,dict) and data.get('draft') is False for _,_,data in client.writes))
+
+
+class AptCacheTests(unittest.TestCase):
+    def test_cache_trim_respects_bound_without_discarding_smaller_archives(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            for name, size, timestamp in [('large.deb', 8, 3), ('new.deb', 3, 2),
+                                          ('old.deb', 3, 1)]:
+                path = root/name
+                path.write_bytes(b'x'*size)
+                os.utime(path, (timestamp, timestamp))
+            with patch.object(linux_apt, 'MAX_CACHE_BYTES', 5):
+                linux_apt.trim(root)
+            self.assertEqual([path.name for path in root.iterdir()], ['new.deb'])
+
+    def test_records_require_strong_hashes_and_safe_names(self):
+        checksum = 'a'*64
+        valid = f"'https://example.invalid/pkg.deb' pkg_1_amd64.deb 3 SHA256:{checksum}\n"
+        self.assertEqual(linux_apt.archive_records(valid), {
+            'pkg_1_amd64.deb': {'size': 3, 'sha256': checksum}})
+        self.assertEqual(linux_apt.archive_records(valid.replace('SHA256:', 'MD5Sum:')), {})
+        self.assertEqual(linux_apt.archive_records(valid.replace('https:', 'file:')), {})
+        for name in ('../pkg.deb', '/pkg.deb', 'pkg.txt', 'pkg;cmd.deb'):
+            with self.subTest(name=name), self.assertRaises(ValueError):
+                linux_apt.archive_records(valid.replace('pkg_1_amd64.deb', name))
+        with self.assertRaises(ValueError):
+            linux_apt.archive_records(valid + valid.replace(checksum, 'b'*64))
+
+    def test_install_reuses_verified_bytes_and_replaces_same_size_corruption(self):
+        content = b'verified package'
+        name = 'pkg_1_amd64.deb'
+        query = f"'https://example.invalid/pkg.deb' {name} {len(content)} SHA256:{hashlib.sha256(content).hexdigest()}\n"
+        for initial in (None, content, b'x'*len(content)):
+            with self.subTest(initial=initial), tempfile.TemporaryDirectory() as temporary:
+                cache = Path(temporary)/'cache'
+                cache.mkdir()
+                if initial is not None:
+                    (cache/name).write_bytes(initial)
+                directories = []
+
+                def execute(command, timeout, **kwargs):
+                    if command[0] == 'rm':
+                        shutil.rmtree(command[-1])
+                        return
+                    directory = Path(next(item.split('=', 1)[1] for item in command
+                                          if item.startswith('Dir::Cache::archives=')))
+                    directories.append(directory)
+                    if '--print-uris' in command:
+                        self.assertFalse((directory/name).exists())
+                        return subprocess.CompletedProcess(command, 0, stdout=query)
+                    self.assertEqual((directory/name).exists(), initial == content)
+                    (directory/name).write_bytes(content)
+                    return subprocess.CompletedProcess(command, 0)
+
+                with patch.dict(os.environ, {'GITHUB_ACTIONS': 'true',
+                                            'COR_LINUX_APT_CACHE': str(cache)}), \
+                     patch.object(linux_apt, 'privileged', side_effect=execute):
+                    linux_apt.install(['pkg'])
+                self.assertEqual((cache/name).read_bytes(), content)
+                self.assertTrue(directories)
+                self.assertTrue(all(not item.exists() for item in directories))
+
+    def test_symlinks_are_never_trusted(self):
+        if not hasattr(os, 'symlink'):
+            self.skipTest('No symlink support')
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            (root/'real').write_bytes(b'valid')
+            try:
+                (root/'alias').symlink_to(root/'real')
+            except OSError:
+                self.skipTest('Symlinks unavailable')
+            record = {'size': 5, 'sha256': hashlib.sha256(b'valid').hexdigest()}
+            self.assertTrue(linux_apt.matches(root/'real', record))
+            self.assertFalse(linux_apt.matches(root/'alias', record))
+
+    def test_metadata_and_cleanup_failure_do_not_hide_install_failure(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            archives = Path(temporary)/'archives'
+            archives.mkdir()
+            with patch.dict(os.environ, {'GITHUB_ACTIONS': 'true',
+                                        'COR_LINUX_APT_CACHE': temporary}), \
+                 patch.object(linux_apt.tempfile, 'mkdtemp', return_value=str(archives)), \
+                 patch.object(linux_apt, 'privileged', side_effect=[
+                     subprocess.CalledProcessError(100, 'metadata'),
+                     subprocess.CalledProcessError(101, 'install'),
+                     subprocess.CalledProcessError(102, 'cleanup')]):
+                with self.assertRaises(subprocess.CalledProcessError) as failure:
+                    linux_apt.install(['pkg'])
+                self.assertEqual(failure.exception.returncode, 101)
 
 
 if __name__ == '__main__':

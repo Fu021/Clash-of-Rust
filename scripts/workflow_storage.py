@@ -24,6 +24,9 @@ def caches(client):
 
 def lineage(key):
     key = re.sub(r'-workspace-[0-9a-f]{64}', '', key)
+    if key.startswith(('linux-python-ubuntu20-', 'linux-cloud-ubuntu20-', 'linux-apt-ubuntu20-')):
+        return re.sub(r'^(linux-(?:python|cloud|apt)-ubuntu20-v\d+-(?:x64|arm64))-.+$',
+                      r'\1', key)
     if key.startswith(('android-go-', 'skia-source-')):
         return re.sub(r'-[^-]+-[0-9a-f]{64}$', '', key)
     if key.startswith('gradle-linux-'):
@@ -57,6 +60,10 @@ def priority(entry):
     # The fast Linux jobs can overlap a private fallback with those compilations.
     if key.startswith('android-go-build-'):
         return 1  # Rebuildable objects must not evict shared downloads/Mac caches.
+    if key.startswith('linux-python-ubuntu20-'):
+        return 4
+    if key.startswith(('linux-cloud-ubuntu20-', 'linux-apt-ubuntu20-')):
+        return 2
     if key.startswith(('resources-', 'source-', 'android-go-', 'gradle-linux-', 'skia-source-', 'tools-nsis-', 'action-setup-tailscale/')):
         return 4
     if key.startswith('native-release-') and ('macos' in key or 'windows' in key):
