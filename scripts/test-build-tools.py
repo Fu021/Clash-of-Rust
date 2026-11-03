@@ -49,6 +49,18 @@ _release_package_spec.loader.exec_module(release_package)
 
 
 class BuildTests(unittest.TestCase):
+    def test_composite_actions_only_use_supported_step_properties(self):
+        supported = {'name', 'id', 'if', 'run', 'env', 'shell', 'working-directory',
+                     'uses', 'with', 'continue-on-error'}
+        for path in (build.ROOT/'.github/actions').glob('*/action.yml'):
+            content = path.read_text()
+            if not re.search(r'^  using: composite$', content, re.MULTILINE):
+                continue
+            steps = content.split('\n  steps:\n', 1)[1]
+            for entry in re.finditer(r'^(?:    - |      )([a-z][a-z0-9-]*):', steps, re.MULTILINE):
+                with self.subTest(action=path.parent.name, property=entry[1]):
+                    self.assertIn(entry[1], supported)
+
     def test_windows_crash_readiness_allows_native_suite_startup_budget(self):
         ready = MagicMock()
         ready.is_file.side_effect = [False, False, True]
@@ -810,8 +822,12 @@ assert.equal(calls.length,2);
                     'url':'http://100.64.3.1:19081','started':10,
                     'timings':{'download':1.25,'token':'never-publish-this-token'}}
             with patch.dict(os.environ,{'GITHUB_WORKSPACE':str(root),'GITHUB_STEP_SUMMARY':str(root/'summary.txt')}), \
-                    patch.object(local_cache.time,'monotonic',return_value=12):
+                    patch.object(local_cache.time,'monotonic',return_value=12), \
+                    patch('sys.stdout',new_callable=io.StringIO) as logged:
                 local_cache.cache_report(config,'restore','exact',1024)
+            self.assertNotIn(config['token'],logged.getvalue())
+            self.assertNotIn(config['url'],logged.getvalue())
+            self.assertIn('restore: exact',logged.getvalue())
             report=next((root/'target/cache-report').glob('*.json'))
             self.assertEqual(json.loads(report.read_text())['timings_seconds'],{'download':1.25,'total':2})
             for path in (report,root/'summary.txt'):

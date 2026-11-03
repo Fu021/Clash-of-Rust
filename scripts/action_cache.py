@@ -106,6 +106,7 @@ def cache_report(config, operation, result, size=0):
     record = {'group': config['group'], 'key': config['key'], 'operation': operation,
               'result': result, 'bytes': size, 'run_id': os.environ.get('GITHUB_RUN_ID', ''),
               'commit': os.environ.get('GITHUB_SHA', '')}
+    print(f'Private cache {record["group"]}: {operation}: {result}', flush=True)
     phases = ('lookup', 'download', 'verify', 'extract', 'fingerprint', 'compress', 'upload')
     record['timings_seconds'] = {name: config['timings'][name] for name in phases if name in config.get('timings', {})}
     if config.get('started') is not None:

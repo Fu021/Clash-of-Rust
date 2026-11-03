@@ -21,6 +21,7 @@
 - `scripts/build_inputs.py`、`scripts/workflow_artifacts.py`、`scripts/cache_shards.py`、`scripts/action_cache.py` 与 `.github/actions/local-cache/` 的接口和清单格式是否同步。
 - 新字段是否允许旧缓存、旧 manifest 和空/缺失输入；失败时应安全回退，而不是越界。
 - `.github/workflows/*.yml` 中冻结输入、artifact schema、job 名称和脚本参数是否一致。
+- composite action 的步骤字段受独立元数据契约约束，不能直接复制工作流步骤的 `timeout-minutes`；脚本内设置硬超时，调用方保留总预算。缓存允许失败时仍需核对步骤和日志，绿色 job 可能掩盖整个缓存入口加载失败。
 
 **防回归**
 

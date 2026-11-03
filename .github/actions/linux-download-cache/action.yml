@@ -96,17 +96,18 @@ runs:
         key: ${{ steps.inputs.outputs.cloud }}
     - name: Mirror verified upstream archives before tests
       shell: bash
-      timeout-minutes: 5
       continue-on-error: true
       env:
         PYTHON_CACHE_STATE: ${{ steps.python_local.outputs.state }}
         CLOUD_CACHE_STATE: ${{ steps.cloud_local.outputs.state }}
       run: |
-        for cache_state in "$PYTHON_CACHE_STATE" "$CLOUD_CACHE_STATE"; do
-          if [ -n "$cache_state" ]; then
-            python3 scripts/action_cache.py save --state "$cache_state"
-          fi
-        done
+        timeout 300 bash -e -c '
+          for cache_state in "$PYTHON_CACHE_STATE" "$CLOUD_CACHE_STATE"; do
+            if [ -n "$cache_state" ]; then
+              python3 scripts/action_cache.py save --state "$cache_state"
+            fi
+          done
+        '
     - name: Restore guest DEB downloads
       id: apt_github
       if: inputs.vm == 'true'
