@@ -19,6 +19,23 @@
 
 界面细节见 [Slint 说明](../crates/client-ui/README.md)，Android 生命周期与构建见 [Android 说明](../apps/android/README.md)。尽量在现有层次解决问题，不把平台权限、文件访问或网络请求写进 `.slint`。
 
+## 仓库占用锁
+
+Linux 本地磁盘上的开发、预览和构建会话在整个使用期间持有共享 `flock`。锁文件固定为 `git rev-parse --path-format=absolute --git-common-dir` 返回目录中的 `repo-usage.lock`，关联 worktree 共用同一把锁；不提交到仓库。文件内容为空，是否占用只看内核锁，不能按文件存在、PID 或时间判断。
+
+在实际执行工作的同一 Bash 会话中获取锁，以下描述符须一直保留到会话结束；获取失败退出码为 `75`：
+
+```bash
+cor_git_common=$(git rev-parse --path-format=absolute --git-common-dir) || exit
+umask 077
+exec 9>>"$cor_git_common/repo-usage.lock" || exit
+flock --shared --nonblock --conflict-exit-code 75 9 || exit "$?"
+```
+
+专用维护 agent 必须在同一路径获取**排他锁**，使用 `flock --exclusive --nonblock --conflict-exit-code 75 9`；若占用则跳过该仓库。维护期间持续持锁，不能检查后解锁再操作。所有使用方须先遵守此协议；共享锁只防维护操作与使用会话重叠，不负责串行化开发者之间的 Git 写操作。
+
+会话正常退出、异常退出或关闭描述符时自动释放，完成后也可执行 `exec 9>&-`。不删除或替换锁文件，不删除包含它的 Git 公共目录，否则其他进程可能锁住不同 inode。不同主机的独立 clone 各自加锁；跨主机共享磁盘须先确认文件系统的 `flock` 语义。
+
 ## 分支版本
 
 每次创建开发或修复分支，先核对 GitHub 当前最新的非草稿、非预发布正式版，将其 patch 加一，附分支类型、递增序号和简短内容。正式版为 `0.6.4` 时：

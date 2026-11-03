@@ -31,7 +31,7 @@ extract_build(archive, Path('dist/local-build'))
 python3 scripts/build-installer.py --prebuilt dist/local-build
 ```
 
-安装包与 SHA256 输出到 `dist/`。重复打包前清理自己生成的 `dist/local-export`、`dist/local-build`，或在命令中换用新目录。`--no-run` 仅编译集成测试程序，不执行代理/TUN 系统测试；本地产物清单不代表已经通过 CI，也不会创建 Release。`build-installer.py --prebuilt` 需要上述完整产物目录，不能直接传入 `target/release/`。`run-ci.py` 包含专用系统集成测试，不作为普通本地构建入口。
+安装包与 SHA256 输出到 `dist/`，重复打包时为导出与暂存指定新目录。`--no-run` 仅编译集成测试程序，不执行代理/TUN 系统测试；本地产物清单不代表已经通过 CI，也不会创建 Release。`build-installer.py --prebuilt` 需要上述完整产物目录，不能直接传入 `target/release/`。`run-ci.py` 包含专用系统集成测试，不作为普通本地构建入口。
 
 ## UI 预览与静态资源
 
@@ -50,6 +50,6 @@ python3 scripts/preview-slint.py --page settings --theme light --output /tmp/cla
 
 `--protection-state off|active|checking|error` 可预览全局保护徽标与异常原因，桌面和 `--mobile --platform android` 共用；仅注入演示状态，不连接内核或改变网络。
 
-结束前删除本次生成的 `/tmp/clash-slint-preview`，并确认仓库没有遗留 `target/`、`dist/`、`bundle/`、构建缓存、日志或历史截图。静态检查与预览不等于编译、测试或真实交互验证。
+使用仓库期间遵循[占用锁协议](../development.md#仓库占用锁)。静态检查与预览不等于编译、测试或真实交互验证。
 
 图标、国旗及许可证属于必要资源；日常构建使用仓库成品。仅在维护资源时使用 `scripts/prepare-assets.py icons` / `flags`。图标源图保留于 `resources/icon-concepts`，第三方来源见各资源目录的说明。平台检测直接维护 Rust，必要的公开检测数据与 AGPL 来源说明统一位于 `resources/ip-check`，不再保留 `vendor` 或 Shell 生成工具。

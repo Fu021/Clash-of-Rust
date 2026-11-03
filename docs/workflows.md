@@ -22,7 +22,7 @@
 
 ## CI
 
-依赖快照、缓存预算、各平台测试与日志位置见 [CI 与依赖缓存](workflows/ci.md)；换机交接见[缓存服务](workflows/cache-server.md)，loop 盘点与清理见[缓存维护](workflows/cache-maintenance.md)。真实网络验证仅在可丢弃环境执行。
+依赖快照、缓存预算、各平台测试与日志位置见 [CI 与依赖缓存](workflows/ci.md)；换机交接与客户端协议见[缓存服务](workflows/cache-server.md)。真实网络验证仅在可丢弃环境执行。
 
 ## Publish Release
 
@@ -42,7 +42,7 @@
 
 ## UI 预览与静态资源
 
-最小预览命令、输出清理与资源维护见[UI 预览](workflows/local-development.md#ui-预览与静态资源)。布局检查尺寸见[循环审查](loop-workflow.md#多尺寸-ui-检查)。
+最小预览命令与资源维护见[UI 预览](workflows/local-development.md#ui-预览与静态资源)。布局检查尺寸见[循环审查](loop-workflow.md#多尺寸-ui-检查)。
 
 ## Memory Benchmark
 

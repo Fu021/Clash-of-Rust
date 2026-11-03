@@ -389,6 +389,13 @@ Private_Clean: 2 kB
             changed, compatible = local_cache.rust_keys(root, b'compiler one', {})
             self.assertNotEqual(key, changed)
             self.assertEqual(prefix, compatible)
+            icon = root/'crates/ui/icon.svg'
+            icon.write_text('<svg>old</svg>')
+            before, generation = local_cache.rust_keys(root, b'compiler one', {})
+            icon.write_text('<svg>new</svg>')
+            after, compatible = local_cache.rust_keys(root, b'compiler one', {})
+            self.assertNotEqual(before, after)
+            self.assertEqual(generation, compatible)
             (root/'.github/workflows').mkdir(parents=True)
             workflow = root/'.github/workflows/ci.yml'
             workflow.write_text('ndk: 28')
@@ -521,6 +528,13 @@ Private_Clean: 2 kB
             uploads=[]
             def request(_config,path,method='GET',file=None,headers=None):
                 url=urllib.parse.urlsplit(path);query=urllib.parse.parse_qs(url.query)
+                if url.path == '/health':
+                    reply = io.BytesIO(json.dumps({
+                        'schema': local_cache.SCHEMA, 'status': 'ready',
+                        'capabilities': ['validated-cache-commit-v1', 'rust-index-references-v1'],
+                    }).encode())
+                    reply.status = 200
+                    return nullcontext(reply)
                 group=query['group'][0]
                 if url.path=='/v1/lookup':
                     value=store.lookup(group,query['key'][0],query.get('prefix',[''])[0].splitlines())
@@ -562,13 +576,27 @@ Private_Clean: 2 kB
                 marker.write_bytes(b'cached success')
                 shard=next(s for s in restored['shard_index']['shards'] if s)
                 blob=store.path(shard['group'],shard['id'])
-                valid=blob.read_bytes()
                 blob.unlink()
                 self.assertTrue(cache_shards.restore(restored,False))
                 self.assertFalse(restored['hit'])
                 self.assertTrue(restored['mirror_required'])
                 self.assertFalse(marker.parent.exists())
-                blob.write_bytes(valid)
+                github_config = {**restored, 'hit': True, 'restored': True}
+                with patch.object(local_cache, 'unpack') as unpack:
+                    self.assertTrue(cache_shards.restore(github_config, True))
+                    unpack.assert_not_called()
+                self.assertTrue(github_config['mirror_required'])
+                self.assertTrue(github_config['hit'])
+                uploads.clear()
+                github_config.update(save=True, source=str(root), mirror_required=False)
+                with patch.object(local_cache, 'cache_paths', return_value=[root/'target']), \
+                        patch.dict(os.environ, {'GITHUB_RUN_ID': '3'}):
+                    local_cache.save(github_config)
+                self.assertCountEqual([group for group, _ in uploads],
+                                      [shard['group'], config['group'] + '/index'])
+                self.assertTrue(cache_shards.restore(github_config, True))
+                self.assertFalse(github_config['mirror_required'])
+                self.assertTrue(cache_shards.index_available(github_config, github_config['shard_index']))
                 shard=next(s for s in restored['shard_index']['shards'] if s)
                 store.path(shard['group'],shard['id']).write_bytes(b'corrupt')
                 with self.assertRaisesRegex(ValueError,'Incomplete|checksum'):
@@ -696,6 +724,55 @@ assert.equal(calls.length,2);
             with self.subTest(field=field),self.assertRaises(ValueError):
                 cache_shards.validate({**record,field:value},record['group'])
 
+    def test_rust_shard_index_requires_matching_remote_metadata(self):
+        shard = {'schema': local_cache.SCHEMA, 'group': 'rust/linux-x64/p00',
+                 'key': 'generation', 'id': 'a'*64, 'sha256': 'b'*64, 'size': 32}
+        index = {'shards': [shard, *([None] * (cache_shards.COUNT - 1))]}
+        for current in (None, {**shard, 'id': 'c'*64},
+                        {**shard, 'sha256': 'd'*64}, {**shard, 'size': 31}, shard):
+            with self.subTest(current=current), patch.object(cache_shards, 'lookup', return_value=current):
+                self.assertEqual(cache_shards.index_available({}, index), current == shard)
+
+    def test_cache_writes_require_explicit_safe_commit_capabilities(self):
+        for kind in ('archives', 'rust'):
+            for capabilities in (None, [], ['validated-cache-commit-v1'],
+                                 ['rust-index-references-v1'],
+                                 ['validated-cache-commit-v1', 'rust-index-references-v1'], [{}]):
+                with self.subTest(kind=kind, capabilities=capabilities):
+                    reply = io.BytesIO(json.dumps({
+                        'schema': local_cache.SCHEMA, 'status': 'ready',
+                        'capabilities': capabilities,
+                    }).encode())
+                    reply.status = 200
+                    expected = (isinstance(capabilities, list)
+                                and 'validated-cache-commit-v1' in capabilities
+                                and (kind != 'rust' or 'rust-index-references-v1' in capabilities))
+                    with patch.object(local_cache, 'response', return_value=nullcontext(reply)):
+                        self.assertEqual(local_cache.uploads_supported({'kind': kind}), expected)
+        reply = io.BytesIO()
+        reply.status = 404
+        with patch.object(local_cache, 'response', return_value=nullcontext(reply)):
+            self.assertFalse(local_cache.uploads_supported({'kind': 'rust'}))
+
+    def test_unsafe_cache_server_never_receives_archives_or_shards(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            for kind in ('archives', 'rust'):
+                config = {'kind': kind, 'group': 'dependencies/source' if kind == 'archives' else 'rust/linux-x64',
+                          'key': 'generation', 'save': True, 'available': True}
+                with self.subTest(kind=kind), \
+                        patch.object(local_cache, 'cache_paths', return_value=[root]), \
+                        patch.object(local_cache, 'uploads_supported', return_value=False), \
+                        patch.object(local_cache, 'cache_report') as report, \
+                        patch.object(local_cache, 'pack') as pack, \
+                        patch.object(cache_shards, 'partition') as partition, \
+                        patch.object(local_cache, 'response') as request:
+                    local_cache.save(config)
+                    pack.assert_not_called()
+                    partition.assert_not_called()
+                    request.assert_not_called()
+                    self.assertIn('server upgrade required', report.call_args.args[2])
+
     def test_shared_android_sources_require_the_current_lockfiles_and_archive_digest(self):
         with tempfile.TemporaryDirectory() as temporary:
             root=Path(temporary);home=root/'home';out=root/'shared'
@@ -803,7 +880,8 @@ assert.equal(calls.length,2);
                 uploaded.append(kwargs['file'].read())
                 result=io.BytesIO(); result.status=201
                 return nullcontext(result)
-            with patch.object(local_cache,'response',side_effect=upload),patch.object(local_cache,'cache_report'):
+            with patch.object(local_cache,'response',side_effect=upload),patch.object(local_cache,'cache_report'), \
+                    patch.object(local_cache, 'uploads_supported', return_value=True):
                 local_cache.save(config)
             self.assertEqual(len(uploaded),1)
             self.assertTrue(uploaded[0])
@@ -834,7 +912,8 @@ assert.equal(calls.length,2);
         with tempfile.TemporaryDirectory() as temporary:
             root=Path(temporary); (root/'target').mkdir()
             config={'kind':'rust','source':str(root),'group':'rust/linux-x64','key':'new-source',
-                    'available':True,'save':True,'hit':False,'mirror_required':False}
+                    'available':True,'save':True,'hit':False,'mirror_required':False,
+                    'shard_index': {'shards': [None] * cache_shards.COUNT}}
             with patch.object(local_cache,'pack') as pack,patch.object(local_cache,'cache_report'), \
                     patch.object(cache_shards,'save') as sharded:
                 local_cache.save(config)
@@ -939,7 +1018,7 @@ assert.equal(calls.length,2);
                 store.put_readme(len(body), hashlib.sha256(body).hexdigest(), 1001, io.BytesIO(body))
             self.assertEqual(protected.read_text(encoding='utf-8'), 'keep')
 
-    def test_cache_readme_main_action_authenticates_and_verifies_round_trip(self):
+    def test_cache_handoff_authenticates_verifies_and_does_not_rewrite_unchanged_requests(self):
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
             store = local_cache.Store(root/'server', budget=1000, min_free=0)
@@ -951,7 +1030,7 @@ assert.equal(calls.length,2);
             thread.start()
             try:
                 template = root/'README.txt'
-                template.write_text('Cache layout\n', encoding='utf-8')
+                template.write_text('Request-ID: cache-safety-v1\n', encoding='utf-8')
                 address = f'http://127.0.0.1:{server.server_port}'
                 config = {'url': address, 'token': 'wrong-token'}
                 with local_cache.response(config, '/v1/readme') as reply:
@@ -967,40 +1046,56 @@ assert.equal(calls.length,2);
                                'CACHE_URL': address, 'CACHE_TOKEN': 'test-token', 'CACHE_PROXY': ''}
                 with patch.dict(os.environ, environment, clear=True), \
                         patch.object(local_cache.subprocess, 'check_output', return_value=commit+'\n'):
-                    local_cache.sync_readme(template)
+                    local_cache.sync_handoff(template)
                     body, sequence = store.read_readme()
                     self.assertEqual(sequence, 123001)
                     self.assertIn(b'Source-Commit: '+commit.encode(), body)
-                    self.assertTrue(body.endswith(b'Cache layout\n'))
-                    local_cache.sync_readme(template)
+                    self.assertTrue(body.endswith(b'Request-ID: cache-safety-v1\n'))
+                    with patch.object(local_cache, 'response', wraps=local_cache.response) as requests:
+                        local_cache.sync_handoff(template)
+                        requests.assert_called_once()
+                        self.assertNotIn('method', requests.call_args.kwargs)
                     os.environ['GITHUB_RUN_ID'] = '122'
-                    template.write_text('Old layout\n', encoding='utf-8')
-                    local_cache.sync_readme(template)
+                    template.write_text('Request-ID: old-request\n', encoding='utf-8')
+                    local_cache.sync_handoff(template)
                     self.assertEqual(store.read_readme()[0], body)
             finally:
                 server.shutdown()
                 server.server_close()
                 thread.join(timeout=2)
 
-    def test_cache_readme_never_writes_for_pull_requests_or_old_main_commits(self):
+    def test_cache_handoff_never_writes_for_pull_requests_or_old_main_commits(self):
         environment = {'GITHUB_ACTIONS': 'true', 'GITHUB_EVENT_NAME': 'pull_request',
                        'GITHUB_REF': 'refs/heads/main', 'GITHUB_REPOSITORY': 'owner/repo',
                        'GITHUB_SHA': 'a'*40}
         with patch.dict(os.environ, environment, clear=True), \
                 patch.object(local_cache, 'response') as request:
             with self.assertRaises(ValueError):
-                local_cache.sync_readme()
+                local_cache.sync_handoff()
             os.environ['GITHUB_EVENT_NAME'] = 'push'
             with patch.object(local_cache.subprocess, 'check_output', return_value='b'*40+'\n'):
-                local_cache.sync_readme()
+                local_cache.sync_handoff()
             request.assert_not_called()
 
-    def test_cache_readme_template_fits_authenticated_transport(self):
+    def test_empty_cache_handoff_does_not_contact_github_or_the_server(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            template = Path(temporary)/'README.txt'
+            template.write_bytes(b'')
+            environment = {'GITHUB_ACTIONS': 'true', 'GITHUB_EVENT_NAME': 'push',
+                           'GITHUB_REF': 'refs/heads/main'}
+            with patch.dict(os.environ, environment, clear=True), \
+                    patch.object(local_cache, 'response') as request, \
+                    patch.object(local_cache.subprocess, 'check_output') as github:
+                local_cache.sync_handoff(template)
+                request.assert_not_called()
+                github.assert_not_called()
+
+    def test_cache_handoff_fits_authenticated_transport(self):
         body = (build.ROOT/'.github/cache-server/README.txt').read_bytes()
         body.decode('utf-8')
         self.assertNotIn(b'\0', body)
         self.assertLessEqual(len(body) + 128, local_cache.README_LIMIT)
-        self.assertIn(b'state/README.txt', body)
+        self.assertIn(b'Request-ID:', body)
 
     def test_local_cache_pruning_keeps_recent_generations_and_respects_budget(self):
         with tempfile.TemporaryDirectory() as temporary:

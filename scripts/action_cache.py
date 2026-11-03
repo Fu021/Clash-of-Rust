@@ -313,7 +313,7 @@ def rust_keys(source, compiler, environment):
             if directory == 'apps' and relative[:3] == ('android', 'app', 'build'):
                 continue
             if (directory != 'resources'
-                    and path.suffix not in ('.rs', '.slint', '.toml', '.py', '.yml', '.yaml', '.cjs')
+                    and path.suffix not in ('.rs', '.slint', '.svg', '.toml', '.py', '.yml', '.yaml', '.cjs')
                     and not (directory == 'vendor' and path.suffix == '.java')):
                 continue
             sources.update(path.relative_to(source).as_posix().encode())
@@ -599,6 +599,23 @@ def restore_snapshot(config):
     print('Restored local cache:', config['group'], f'{record["size"]/1024**2:.1f} MiB', 'exact' if config['hit'] else 'compatible generation')
 
 
+def uploads_supported(config):
+    required = {'validated-cache-commit-v1'}
+    if config['kind'] == 'rust':
+        required.add('rust-index-references-v1')
+    with response(config, '/health') as reply:
+        if reply.status == 404:
+            return False
+        if reply.status != 200:
+            raise RuntimeError(f'Cache capabilities HTTP {reply.status}')
+        value = json.load(reply)
+    return (isinstance(value, dict) and value.get('schema') == SCHEMA
+            and value.get('status') == 'ready'
+            and isinstance(value.get('capabilities'), list)
+            and all(isinstance(capability, str) for capability in value['capabilities'])
+            and required.issubset(value['capabilities']))
+
+
 def save(config):
     if not config.get('available') or not config['save']:
         return
@@ -607,14 +624,17 @@ def save(config):
     paths = cache_paths(config)
     if not any(p.exists() for p in paths):
         return
-    if config.get('immutable') and config.get('hit') and not config.get('mirror_required'):
+    if config['kind'] != 'rust' and config.get('immutable') and config.get('hit') and not config.get('mirror_required'):
         cache_report(config, 'save', 'verified immutable version reused')
         return
     # The sharded mirror can retain fresh workspace objects cheaply too. Only
     # skip an exact source/toolchain snapshot; a dependency-only GitHub hit must
     # not prevent updated workspace/NDK outputs reaching the private tier.
-    unchanged = config['kind'] == 'rust' and config.get('private_exact', False)
-    if config['kind'] != 'rust':
+    if config['kind'] == 'rust':
+        import cache_shards
+        unchanged = (config.get('private_exact', False) and bool(config.get('shard_index'))
+                     and cache_shards.index_available(config, config['shard_index']))
+    else:
         with phase(config, 'fingerprint'):
             unchanged = config.get('fingerprint') == fingerprint(paths)
     unchanged = unchanged and not config.get('mirror_required', False)
@@ -622,8 +642,10 @@ def save(config):
         cache_report(config, 'save', 'unchanged; reused existing cache')
         return
     if config['kind'] == 'rust':
-        import cache_shards
         cache_shards.save(config, paths)
+        return
+    if not uploads_supported(config):
+        cache_report(config, 'save', 'server upgrade required; existing mirror retained')
         return
     with tempfile.TemporaryDirectory(prefix='actions-cache-', dir=os.environ.get('RUNNER_TEMP')) as temporary:
         archive = Path(temporary)/'cache.tar.gz'
@@ -962,11 +984,16 @@ def inventory():
     print('Saved authenticated private cache inventory:', output)
 
 
-def sync_readme(template=None):
+def sync_handoff(template=None):
     if (os.environ.get('GITHUB_ACTIONS') != 'true'
             or os.environ.get('GITHUB_EVENT_NAME') != 'push'
             or os.environ.get('GITHUB_REF') != 'refs/heads/main'):
-        raise ValueError('Cache README synchronization requires a main push on Actions')
+        raise ValueError('Cache server handoff requires a main push on Actions')
+    template = template or Path(__file__).resolve().parent.parent/'.github/cache-server/README.txt'
+    content = Path(template).read_bytes()
+    if not content.strip():
+        print('Private cache handoff skipped: no pending server requests.')
+        return
     repository = os.environ.get('GITHUB_REPOSITORY', '')
     commit = os.environ.get('GITHUB_SHA', '')
     if (not re.fullmatch(r'[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+', repository)
@@ -977,7 +1004,7 @@ def sync_readme(template=None):
          '--jq', '.object.sha'],
         text=True, timeout=30).strip()
     if current != commit:
-        print('Private cache README skipped: this main commit has been superseded.')
+        print('Private cache handoff skipped: this main commit has been superseded.')
         return
     run_id = int(os.environ['GITHUB_RUN_ID'])
     attempt = int(os.environ['GITHUB_RUN_ATTEMPT'])
@@ -986,22 +1013,31 @@ def sync_readme(template=None):
     sequence = run_id * 1000 + attempt
     if sequence >= 2**63:
         raise ValueError('Invalid Actions run sequence')
-    template = template or Path(__file__).resolve().parent.parent/'.github/cache-server/README.txt'
     body = (f'Action-Sequence: {sequence}\nSource-Commit: {commit}\n\n'.encode()
-            + Path(template).read_bytes())
+            + content)
     if len(body) > README_LIMIT or b'\0' in body:
-        raise ValueError('Invalid cache README template')
+        raise ValueError('Invalid cache server handoff')
     body.decode('utf-8')
     checksum = hashlib.sha256(body).hexdigest()
     config = {'url': os.environ.get('CACHE_URL', ''), 'token': os.environ.get('CACHE_TOKEN', ''),
               'proxy': os.environ.get('CACHE_PROXY', '')}
     if not config['url'] or not config['token']:
         raise ValueError('Private cache connection is not configured')
+    with response(config, '/v1/readme') as reply:
+        if reply.status == 200:
+            existing = reply.read(README_LIMIT + 1)
+            if len(existing) > README_LIMIT or reply.getheader('X-Content-SHA256') != hashlib.sha256(existing).hexdigest():
+                raise ValueError('Cache handoff checksum mismatch')
+            if existing.partition(b'\n\n')[2] == content:
+                print('Private cache handoff unchanged; no write required.')
+                return
+        elif reply.status != 404:
+            raise RuntimeError(f'Cache handoff lookup HTTP {reply.status}')
     headers = {'Content-Length': str(len(body)), 'X-Content-SHA256': checksum,
                'X-Cache-Sequence': str(sequence), 'Content-Type': 'text/plain; charset=utf-8'}
     with response(config, '/v1/readme', method='PUT', file=body, headers=headers) as reply:
         if reply.status == 409:
-            print('Private cache README skipped: a newer or conflicting run already synchronized it.')
+            print('Private cache handoff skipped: a newer or conflicting request already exists.')
             return
         if reply.status != 200:
             raise RuntimeError(f'Cache README upload HTTP {reply.status}')
@@ -1015,10 +1051,10 @@ def sync_readme(template=None):
         if (actual != body or reply.getheader('X-Content-SHA256') != checksum
                 or reply.getheader('X-Cache-Sequence') != str(sequence)):
             raise ValueError('Cache README verification failed')
-    print('Private cache README synchronized and verified:', commit)
+    print('Private cache server handoff delivered and verified:', commit)
     if summary := os.environ.get('GITHUB_STEP_SUMMARY'):
         with open(summary, 'a') as stream:
-            stream.write('\nPrivate cache README synchronized and verified for `'+commit+'`.\n')
+            stream.write('\nPrivate cache server handoff delivered and verified for `'+commit+'`.\n')
 
 
 def preserve_network(restore=False):
@@ -1046,22 +1082,22 @@ def preserve_network(restore=False):
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument('operation', choices=('restore', 'discard-restore', 'save', 'serve', 'status', 'inventory', 'sync-readme', 'network-save', 'network-restore'))
+    parser.add_argument('operation', choices=('restore', 'discard-restore', 'save', 'serve', 'status', 'inventory', 'sync-handoff', 'network-save', 'network-restore'))
     parser.add_argument('--state', type=Path)
     parser.add_argument('--root', type=Path, default=DEFAULT_ROOT)
     args = parser.parse_args()
     if args.operation in ('network-save', 'network-restore'):
         preserve_network(args.operation == 'network-restore')
-    elif args.operation == 'sync-readme':
+    elif args.operation == 'sync-handoff':
         try:
-            sync_readme()
+            sync_handoff()
         except (KeyError, OSError, ValueError, RuntimeError, http.client.HTTPException, subprocess.SubprocessError) as error:
             status = re.search(r'HTTP [0-9]{3}', str(error))
-            print('::error::Private cache README synchronization failed ('
+            print('::error::Private cache server handoff failed ('
                   + type(error).__name__ + (' '+status[0] if status else '') + ').')
             if summary := os.environ.get('GITHUB_STEP_SUMMARY'):
                 with open(summary, 'a') as stream:
-                    stream.write('\nPrivate cache README synchronization failed; see the step log.\n')
+                    stream.write('\nPrivate cache server handoff failed; see the step log.\n')
             raise SystemExit(1)
     elif args.operation == 'inventory':
         inventory()

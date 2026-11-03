@@ -780,7 +780,7 @@ jobs:
         run: |
           sudo -n tailscale set --accept-routes=false --accept-dns=false
           python3 scripts/action_cache.py inventory
-      - name: Synchronize the private cache README from main
+      - name: Deliver pending cache server requests
         if: always() && github.event_name == 'push' && github.ref == 'refs/heads/main'
         continue-on-error: true
         timeout-minutes: 1
@@ -793,11 +793,11 @@ jobs:
           PYTHONDONTWRITEBYTECODE: '1'
         run: |
           if [ "$TAILNET_OUTCOME" != success ]; then
-            echo "::warning::Private cache README was not synchronized: cache connection unavailable."
-            echo "Private cache README was not synchronized: cache connection unavailable." >> "$GITHUB_STEP_SUMMARY"
+            echo "::warning::Cache server requests were not delivered: cache connection unavailable."
+            echo "Cache server requests were not delivered: cache connection unavailable." >> "$GITHUB_STEP_SUMMARY"
             exit 0
           fi
-          python3 scripts/action_cache.py sync-readme
+          python3 scripts/action_cache.py sync-handoff
       - uses: actions/upload-artifact@v6
         if: steps.tailnet.outcome == 'success'
         with:

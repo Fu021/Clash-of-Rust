@@ -4,7 +4,8 @@ An immutable, checksummed index names 32 independently verified archives. Only
 changed shards travel back to the private host; the index is published last.
 Completed shards can be reused on the next run. Missing/evicted shards fall back
 to Cargo after invalidating build-script success markers, so generated sources
-are recreated too. No server upgrade or broader filesystem access is needed.
+are recreated too. Writes require a server that protects published references
+and commits validated uploads without replacing live files before its index.
 """
 from concurrent.futures import ThreadPoolExecutor
 import hashlib
@@ -38,13 +39,26 @@ def lookup(config, group, key, prefixes=()):
 
 
 def validate(record, group):
-    if record.get('schema') != cache.SCHEMA or record.get('group') != group:
+    if not isinstance(record, dict) or record.get('schema') != cache.SCHEMA or record.get('group') != group:
         raise ValueError('Invalid Rust cache metadata')
+    if not isinstance(record.get('key'), str):
+        raise ValueError('Invalid Rust cache key')
+    cache.valid_key(record['key'])
     for field in ('id', 'sha256'):
         if not isinstance(record.get(field), str) or not cache.re.fullmatch('[0-9a-f]{64}', record[field]):
             raise ValueError('Invalid Rust cache checksum')
     if not isinstance(record.get('size'), int) or not 0 < record['size'] <= 8 * 1024**3:
         raise ValueError('Invalid Rust cache size')
+
+
+def index_available(config, value):
+    for shard in value['shards']:
+        if shard is None:
+            continue
+        current = lookup(config, shard['group'], shard['key'])
+        if current is None or any(current[field] != shard[field] for field in ('id', 'size', 'sha256')):
+            return False
+    return True
 
 
 def download(config, record, destination):
@@ -101,7 +115,10 @@ def restore(config, github):
         config.update(available=True, shard_index=value, mirror_required=not cache.private_current(config, record),
                       private_exact=record['key'] == config['key'])
         if github:
-            cache.cache_report(config, 'restore', 'GitHub restored; incremental mirror checked')
+            missing = not index_available(config, value)
+            config['mirror_required'] = config['mirror_required'] or missing
+            cache.cache_report(config, 'restore', 'GitHub restored; private shards missing' if missing
+                               else 'GitHub restored; incremental mirror checked')
             return True
         missing = []
         size = 0
@@ -192,11 +209,13 @@ def upload(config, group, key, path):
 
 
 def save(config, paths):
+    if not cache.uploads_supported(config):
+        cache.cache_report(config, 'save', 'server upgrade required; previous shard index retained')
+        return
     with cache.phase(config, 'fingerprint'):
         groups = partition(paths)
     deadline = time.monotonic() + 240
     records = [None] * COUNT
-    previous = config.get('shard_index', {}).get('shards', [None] * COUNT)
     def save_one(item):
         i, files = item
         if not files:
@@ -208,9 +227,7 @@ def save(config, paths):
         for _, info, checksum in files:
             fingerprint.update(json.dumps([info.name, info.mode, info.size, checksum]).encode())
         key = config['prefix'][-1] + fingerprint.hexdigest()
-        # Look up each exact shard, including successful pieces of an interrupted
-        # previous migration. Never discard a usable archive before replacement.
-        record = previous[i] if previous[i] and previous[i]['key'] == key else lookup(config, group, key)
+        record = lookup(config, group, key)
         if record:
             return i, record, 0, True
         with tempfile.TemporaryDirectory(dir=os.environ.get('RUNNER_TEMP')) as temporary:
