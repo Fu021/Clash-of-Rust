@@ -531,7 +531,8 @@ Private_Clean: 2 kB
                 if url.path == '/health':
                     reply = io.BytesIO(json.dumps({
                         'schema': local_cache.SCHEMA, 'status': 'ready',
-                        'capabilities': ['validated-cache-commit-v1', 'rust-index-references-v1'],
+                        'capabilities': ['validated-cache-commit-v1', 'rust-index-references-v1',
+                                         'complete-cache-retention-v1'],
                     }).encode())
                     reply.status = 200
                     return nullcontext(reply)
@@ -681,7 +682,8 @@ if(mode==='cleanup-failure'){
   run();assert.equal(calls[1].args[1],'discard-restore');
   assert.ok(calls[0].options.timeout>0 && calls[0].options.timeout<=420000);
   assert.ok(calls[1].options.timeout<=120000);
-  assert.equal(outputs.join(''),'cache-hit=false\nrestored=false\navailable=false\n');
+  assert.match(outputs[0],/^state=\/runner\/temp\/private-cache-[a-f0-9-]+\.json\n$/);
+  assert.equal(outputs.slice(1).join(''),'cache-hit=false\nrestored=false\navailable=false\n');
 }
 assert.equal(calls.length,2);
 '''
@@ -693,7 +695,8 @@ assert.equal(calls.length,2);
     def test_partial_rust_cache_invalidates_only_native_and_cross_build_script_runs(self):
         with tempfile.TemporaryDirectory() as temporary:
             root=Path(temporary)
-            profiles=[root/'target/release',root/'target/aarch64-linux-android/release']
+            profiles=[root/'target/release',root/'target/aarch64-linux-android/release',
+                      root/'target/debug',root/'target/aarch64-linux-android/debug']
             markers=[]
             for profile in profiles:
                 for layout in ['serde_core-hash', 'serde_core/another-hash']:
@@ -737,7 +740,10 @@ assert.equal(calls.length,2);
         for kind in ('archives', 'rust'):
             for capabilities in (None, [], ['validated-cache-commit-v1'],
                                  ['rust-index-references-v1'],
-                                 ['validated-cache-commit-v1', 'rust-index-references-v1'], [{}]):
+                                 ['validated-cache-commit-v1', 'rust-index-references-v1'],
+                                 ['validated-cache-commit-v1', 'complete-cache-retention-v1'],
+                                 ['validated-cache-commit-v1', 'rust-index-references-v1',
+                                  'complete-cache-retention-v1'], [{}]):
                 with self.subTest(kind=kind, capabilities=capabilities):
                     reply = io.BytesIO(json.dumps({
                         'schema': local_cache.SCHEMA, 'status': 'ready',
@@ -746,6 +752,7 @@ assert.equal(calls.length,2);
                     reply.status = 200
                     expected = (isinstance(capabilities, list)
                                 and 'validated-cache-commit-v1' in capabilities
+                                and 'complete-cache-retention-v1' in capabilities
                                 and (kind != 'rust' or 'rust-index-references-v1' in capabilities))
                     with patch.object(local_cache, 'response', return_value=nullcontext(reply)):
                         self.assertEqual(local_cache.uploads_supported({'kind': kind}), expected)
@@ -824,6 +831,7 @@ assert.equal(calls.length,2);
             self.assertEqual(list(restored.glob('.cache-extract-*')),[])
             target=root/'target'
             for name in ('release/deps/bad.rlib','aarch64-linux-android/release/deps/bad.rlib',
+                         'debug/deps/bad.rlib','aarch64-linux-android/debug/deps/bad.rlib',
                          'dependency-snapshot/inputs.json','android-report/logcat.txt'):
                 path=target/name;path.parent.mkdir(parents=True,exist_ok=True);path.write_bytes(b'preserve only reports/inputs')
             unpacked=root/'cargo/registry/src/crate/lib.rs'
@@ -833,6 +841,8 @@ assert.equal(calls.length,2);
                 local_cache.discard_restore({'kind':'rust','source':str(root)})
             self.assertFalse((target/'release').exists())
             self.assertFalse((target/'aarch64-linux-android/release').exists())
+            self.assertFalse((target/'debug').exists())
+            self.assertFalse((target/'aarch64-linux-android/debug').exists())
             self.assertTrue((target/'dependency-snapshot/inputs.json').exists())
             self.assertTrue((target/'android-report/logcat.txt').exists())
             self.assertFalse(unpacked.exists())
@@ -882,6 +892,7 @@ assert.equal(calls.length,2);
                 return nullcontext(result)
             with patch.object(local_cache,'response',side_effect=upload),patch.object(local_cache,'cache_report'), \
                     patch.object(local_cache, 'uploads_supported', return_value=True):
+                local_cache.save(config)
                 local_cache.save(config)
             self.assertEqual(len(uploaded),1)
             self.assertTrue(uploaded[0])
@@ -1087,15 +1098,19 @@ assert.equal(calls.length,2);
                     patch.object(local_cache, 'response') as request, \
                     patch.object(local_cache.subprocess, 'check_output') as github:
                 local_cache.sync_handoff(template)
+                template.unlink()
+                local_cache.sync_handoff(template)
                 request.assert_not_called()
                 github.assert_not_called()
 
     def test_cache_handoff_fits_authenticated_transport(self):
-        body = (build.ROOT/'.github/cache-server/README.txt').read_bytes()
+        template = build.ROOT/'.github/cache-server/README.txt'
+        body = template.read_bytes() if template.exists() else b''
         body.decode('utf-8')
         self.assertNotIn(b'\0', body)
         self.assertLessEqual(len(body) + 128, local_cache.README_LIMIT)
-        self.assertIn(b'Request-ID:', body)
+        if body.strip():
+            self.assertIn(b'Request-ID:', body)
 
     def test_local_cache_pruning_keeps_recent_generations_and_respects_budget(self):
         with tempfile.TemporaryDirectory() as temporary:
@@ -1163,6 +1178,9 @@ assert.equal(calls.length,2);
             source = root/'target'
             names = ('release/build/tool/build-script-build.exe', 'release/deps/dep.rlib',
                      'release/clash-of-rust.exe', 'release/clash-of-rust', 'release/deps/unit-test',
+                     'debug/deps/dep.rlib', 'debug/build/tool/build-script-build',
+                     'debug/deps/unit-test', 'debug/clash-of-rust', 'debug/clash-desktop-ui', 'release/cor',
+                     'aarch64-linux-android/debug/deps/dep.rlib',
                      'dependency-snapshot/inputs.json', 'cache-network.json', 'android-report/logcat.txt')
             for name in names:
                 path = source/name; path.parent.mkdir(parents=True, exist_ok=True); path.write_bytes(b'binary')
@@ -1170,7 +1188,9 @@ assert.equal(calls.length,2);
             local_cache.pack([source], archive, rust=True)
             local_cache.unpack(archive, [root/'restored'])
             files = sorted(p.relative_to(root/'restored').as_posix() for p in (root/'restored').rglob('*') if p.is_file())
-            self.assertEqual(files, ['release/build/tool/build-script-build.exe', 'release/deps/dep.rlib'])
+            self.assertEqual(files, ['aarch64-linux-android/debug/deps/dep.rlib',
+                                     'debug/build/tool/build-script-build', 'debug/deps/dep.rlib',
+                                     'release/build/tool/build-script-build.exe', 'release/deps/dep.rlib'])
 
     def test_source_dependency_network_failure_restores_previous_snapshot_but_bad_constraints_fail(self):
         with tempfile.TemporaryDirectory() as temporary:

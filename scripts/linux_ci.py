@@ -99,7 +99,7 @@ def cache_keys(value=None, arch=None):
     if arch not in ('x64', 'arm64'):
         raise ValueError('Unsupported Linux cache architecture')
     records = value['architectures'][arch]
-    result = {'apt': f'linux-apt-ubuntu20-v1-{arch}'}
+    result = {'arch': arch, 'apt': f'linux-apt-ubuntu20-v1-{arch}'}
     for name in ('python', 'cloud'):
         checksum = records[name]['sha256']
         if not re.fullmatch('[0-9a-f]{64}', checksum):

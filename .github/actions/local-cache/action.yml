@@ -50,6 +50,8 @@ outputs:
     description: An exact or compatible generation was restored
   available:
     description: The private service answered successfully
+  state:
+    description: Runner-local state for saving verified downloads before post-job cleanup
 runs:
   using: node24
   main: index.cjs

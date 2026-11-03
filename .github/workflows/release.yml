@@ -147,9 +147,9 @@ jobs:
         run: |
           import subprocess, sys
           subprocess.run([sys.executable, 'scripts/build_inputs.py', 'apply'], check=True)
-      - name: Connect to private installer cache
+      - name: Connect to private dependency cache
         id: tailnet
-        if: runner.os == 'Windows' && vars.TS_OAUTH_CLIENT_ID != '' && vars.TS_AUDIENCE != ''
+        if: runner.os != 'macOS' && vars.TS_OAUTH_CLIENT_ID != '' && vars.TS_AUDIENCE != ''
         uses: tailscale/github-action@v4
         timeout-minutes: 3
         continue-on-error: true
@@ -161,13 +161,17 @@ jobs:
           retry: '1'
           timeout: 45s
           args: --accept-dns=false
+          tailscaled-args: ${{ runner.os == 'Linux' && '--tun=userspace-networking --outbound-http-proxy-listen=127.0.0.1:19082' || '' }}
       - name: Preserve host routing after private cache login
         if: steps.tailnet.outcome == 'success'
         shell: python
         run: |
-          import shutil, subprocess
+          import os, shutil, subprocess
           # The official action already supplies --accept-routes during login.
-          subprocess.run([shutil.which('tailscale') or 'tailscale', 'set', '--accept-routes=false', '--accept-dns=false'], check=True)
+          command = [shutil.which('tailscale') or 'tailscale', 'set', '--accept-routes=false', '--accept-dns=false']
+          if os.name != 'nt':
+              command = ['sudo', '-n', *command]
+          subprocess.run(command, check=True)
       - name: Restore GitHub installer compiler
         if: runner.os == 'Windows'
         uses: actions/cache@v5
@@ -201,8 +205,11 @@ jobs:
       - name: Cache Ubuntu baseline downloads
         if: runner.os == 'Linux'
         uses: ./.github/actions/linux-download-cache
-        timeout-minutes: 5
+        timeout-minutes: 15
         continue-on-error: true
+        with:
+          url: ${{ steps.tailnet.outcome == 'success' && vars.LOCAL_CACHE_URL || '' }}
+          token: ${{ secrets.LOCAL_CACHE_TOKEN }}
       - name: Package and test installed programs
         run: |
           import subprocess, sys
@@ -295,6 +302,10 @@ jobs:
     needs: [resolve, package]
     runs-on: ${{ matrix.os }}
     timeout-minutes: 90
+    permissions:
+      actions: read
+      contents: read
+      id-token: write
     strategy:
       fail-fast: false
       matrix:
@@ -325,13 +336,33 @@ jobs:
         with:
           name: linux-tun-test-${{ matrix.arch }}
           path: target
+      - name: Connect to private Linux download cache
+        id: tailnet
+        if: vars.TS_OAUTH_CLIENT_ID != '' && vars.TS_AUDIENCE != ''
+        uses: tailscale/github-action@v4
+        timeout-minutes: 3
+        continue-on-error: true
+        with:
+          oauth-client-id: ${{ vars.TS_OAUTH_CLIENT_ID }}
+          audience: ${{ vars.TS_AUDIENCE }}
+          tags: tag:github-action-cache
+          version: ${{ needs.resolve.outputs.tailscale }}
+          retry: '1'
+          timeout: 45s
+          args: --accept-dns=false
+          tailscaled-args: --tun=userspace-networking --outbound-http-proxy-listen=127.0.0.1:19082
+      - name: Preserve host routing after private cache login
+        if: steps.tailnet.outcome == 'success'
+        run: sudo -n tailscale set --accept-routes=false --accept-dns=false
       - name: Cache Ubuntu VM dependency downloads
         id: vm_cache
         uses: ./.github/actions/linux-download-cache
-        timeout-minutes: 5
+        timeout-minutes: 15
         continue-on-error: true
         with:
           vm: 'true'
+          url: ${{ steps.tailnet.outcome == 'success' && vars.LOCAL_CACHE_URL || '' }}
+          token: ${{ secrets.LOCAL_CACHE_TOKEN }}
       - name: Install virtual machine tools
         run: |
           sudo apt-get update
@@ -354,6 +385,15 @@ jobs:
         with:
           path: ${{ runner.temp }}/cor-linux-tools/apt
           key: ${{ steps.vm_cache.outputs.apt-key }}-${{ github.run_id }}-${{ github.run_attempt }}
+      - name: Mirror verified guest DEB downloads
+        if: always() && steps.vm_cache.outputs.apt-state != ''
+        timeout-minutes: 5
+        continue-on-error: true
+        shell: bash
+        env:
+          PRIVATE_CACHE_STATE: ${{ steps.vm_cache.outputs.apt-state }}
+          PYTHONDONTWRITEBYTECODE: '1'
+        run: python3 scripts/action_cache.py save --state "$PRIVATE_CACHE_STATE"
       - uses: actions/upload-artifact@v6
         if: always()
         with:

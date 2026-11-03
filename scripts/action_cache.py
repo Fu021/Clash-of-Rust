@@ -359,9 +359,9 @@ def archive_filter(paths, rust=False):
             # Never let an old target/dependency-snapshot overwrite this run's
             # resolved inputs. Diagnostics, test staging and reports are not
             # compiler caches either.
-            native = parts[1] in ('release', '.rustc_info.json', 'CACHEDIR.TAG', 'workspace-sources.json')
+            native = parts[1] in ('release', 'debug', '.rustc_info.json', 'CACHEDIR.TAG', 'workspace-sources.json')
             cross = bool(re.fullmatch(r'(?:aarch64|armv7|x86_64)-[a-z0-9_-]+', parts[1]))
-            if not native and not (cross and (len(parts) == 2 or parts[2] == 'release')):
+            if not native and not (cross and (len(parts) == 2 or parts[2] in ('release', 'debug'))):
                 return None
         if any(p in ('incremental', '__pycache__') for p in parts) or (info.name.endswith('.lock') and parts[-1] != 'Cargo.lock'):
             return None
@@ -371,7 +371,8 @@ def archive_filter(paths, rust=False):
             build_script = 'build' in parts[1:-1]
             if ((info.name.endswith('.exe') and not build_script)
                     or (len(parts) > 2 and parts[-2] == 'deps' and '.' not in parts[-1])
-                    or parts[-1] in ('clash-of-rust', 'clash-tun-launcher', 'libclash_mobile.so')):
+                    or parts[-1] in ('clash-of-rust', 'clash-desktop-ui', 'clash-tun-launcher',
+                                     'cor', 'libclash_mobile.so')):
                 return None
         info.uid = info.gid = 0
         info.uname = info.gname = ''
@@ -445,10 +446,12 @@ def discard_restore(config):
         remove(paths[2].parent/'checkouts')
         target = paths[-1]
         if target.is_dir() and not target.is_symlink():
-            remove(target/'release')
+            for profile in ('release', 'debug'):
+                remove(target/profile)
             for child in target.iterdir():
                 if re.fullmatch(r'(?:aarch64|armv7|x86_64)-[a-z0-9_-]+', child.name) and not child.is_symlink():
-                    remove(child/'release')
+                    for profile in ('release', 'debug'):
+                        remove(child/profile)
             for name in ('workspace-sources.json', '.rustc_info.json'):
                 remove(target/name)
         if external := os.environ.get('WORKSPACE_SOURCE_CACHE'):
@@ -600,7 +603,7 @@ def restore_snapshot(config):
 
 
 def uploads_supported(config):
-    required = {'validated-cache-commit-v1'}
+    required = {'validated-cache-commit-v1', 'complete-cache-retention-v1'}
     if config['kind'] == 'rust':
         required.add('rust-index-references-v1')
     with response(config, '/health') as reply:
@@ -636,7 +639,8 @@ def save(config):
                      and cache_shards.index_available(config, config['shard_index']))
     else:
         with phase(config, 'fingerprint'):
-            unchanged = config.get('fingerprint') == fingerprint(paths)
+            current_fingerprint = fingerprint(paths)
+            unchanged = config.get('fingerprint') == current_fingerprint
     unchanged = unchanged and not config.get('mirror_required', False)
     if unchanged:
         cache_report(config, 'save', 'unchanged; reused existing cache')
@@ -662,7 +666,9 @@ def save(config):
                 raise RuntimeError(f'Cache upload HTTP {reply.status}')
             superseded = reply.status == 409
         cache_report(config, 'save', 'superseded; newer cache retained' if superseded
-                     else 'saved; older snapshot replaced', archive.stat().st_size)
+                     else 'saved; complete cache key retained', archive.stat().st_size)
+        if not superseded:
+            config.update(hit=True, private_exact=True, mirror_required=False, fingerprint=current_fingerprint)
         print('Saved local cache:', config['group'], f'{archive.stat().st_size/1024**2:.1f} MiB')
 
 
@@ -980,7 +986,8 @@ def inventory():
             stream.write('\n## Private cache inventory\n\n| Group | Size | Run | Key |\n| --- | --- | --- | --- |\n')
             for entry in value.get('entries', []):
                 stream.write(f'| {entry["category"]} | {entry["size"]/1024**2:.1f} MiB | {entry["sequence"]//1000} | {entry["key"]} |\n')
-            stream.write('\nEach group keeps its latest validated snapshot. Older concurrent jobs cannot overwrite a newer snapshot.\n')
+            stream.write('\nComplete private retention requires complete-cache-retention-v1, independently of the GitHub cache budget. '
+                         'Older concurrent jobs must not overwrite newer contents of the same key.\n')
     print('Saved authenticated private cache inventory:', output)
 
 
@@ -990,7 +997,10 @@ def sync_handoff(template=None):
             or os.environ.get('GITHUB_REF') != 'refs/heads/main'):
         raise ValueError('Cache server handoff requires a main push on Actions')
     template = template or Path(__file__).resolve().parent.parent/'.github/cache-server/README.txt'
-    content = Path(template).read_bytes()
+    try:
+        content = Path(template).read_bytes()
+    except FileNotFoundError:
+        content = b''
     if not content.strip():
         print('Private cache handoff skipped: no pending server requests.')
         return

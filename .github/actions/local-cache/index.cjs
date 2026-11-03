@@ -57,6 +57,7 @@ if (!post && (result.error || result.status !== 0)) {
 }
 if (!post) {
   const config = JSON.parse(fs.readFileSync(state, 'utf8'));
+  fs.appendFileSync(process.env.GITHUB_OUTPUT, `state=${state}\n`);
   for (const [name, field] of [['cache-hit', 'hit'], ['restored', 'restored'], ['available', 'available']]) {
     fs.appendFileSync(process.env.GITHUB_OUTPUT, `${name}=${config[field] === true}\n`);
   }

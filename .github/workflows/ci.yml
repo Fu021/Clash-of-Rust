@@ -677,14 +677,20 @@ jobs:
           token: ${{ secrets.LOCAL_CACHE_TOKEN }}
           group: resources/${{ matrix.system }}-${{ matrix.arch }}
           immutable: true
-          paths: ${{ matrix.system == 'windows' && matrix.arch == 'x64' && 'bundle/resources' || format('bundle/{0}-{1}/resources', matrix.system, matrix.arch) }}
+          paths: |
+            bin
+            bundle/resources
+            bundle/${{ matrix.system }}-${{ matrix.arch }}/resources
           key: resources-${{ needs.inputs.outputs.resources }}
           restore-keys: resources-
       - name: Cache Ubuntu baseline downloads
         if: runner.os == 'Linux'
         uses: ./.github/actions/linux-download-cache
-        timeout-minutes: 5
+        timeout-minutes: 15
         continue-on-error: true
+        with:
+          url: ${{ steps.tailnet.outcome == 'success' && vars.LOCAL_CACHE_URL || '' }}
+          token: ${{ secrets.LOCAL_CACHE_TOKEN }}
       - name: Compile, test and export native binaries
         env:
           GH_TOKEN: ${{ github.token }}

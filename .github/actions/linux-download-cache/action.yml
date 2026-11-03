@@ -4,10 +4,19 @@ inputs:
   vm:
     description: Also restore the cloud image and guest package downloads
     default: 'false'
+  url:
+    description: Private cache service URL after the job connects to its tailnet
+    required: false
+  token:
+    description: Private cache access token
+    required: false
 outputs:
   apt-key:
     description: Architecture-specific guest DEB download cache
     value: ${{ steps.inputs.outputs.apt }}
+  apt-state:
+    description: Private guest DEB state for saving verified downloads after the VM exits
+    value: ${{ steps.apt_local.outputs.state }}
 runs:
   using: composite
   steps:
@@ -30,6 +39,18 @@ runs:
       with:
         path: ${{ runner.temp }}/cor-linux-tools/python.tar.gz
         key: ${{ steps.inputs.outputs.python }}
+    - name: Restore private fallback for portable Python
+      id: python_local
+      uses: ./.github/actions/local-cache
+      with:
+        github-hit: ${{ steps.python.outcome == 'success' && steps.python.outputs.cache-hit || '' }}
+        github-failed: ${{ steps.python.outcome == 'failure' }}
+        url: ${{ inputs.url }}
+        token: ${{ inputs.token }}
+        group: tools/linux-python-${{ steps.inputs.outputs.arch }}
+        key: ${{ steps.inputs.outputs.python }}
+        paths: ${{ runner.temp }}/cor-linux-tools/python.tar.gz
+        immutable: true
     - name: Restore original Ubuntu cloud image
       id: cloud
       if: inputs.vm == 'true'
@@ -38,6 +59,19 @@ runs:
       with:
         path: ${{ runner.temp }}/cor-linux-tools/focal.img
         key: ${{ steps.inputs.outputs.cloud }}
+    - name: Restore private fallback for Ubuntu cloud image
+      id: cloud_local
+      if: inputs.vm == 'true'
+      uses: ./.github/actions/local-cache
+      with:
+        github-hit: ${{ steps.cloud.outcome == 'success' && steps.cloud.outputs.cache-hit || '' }}
+        github-failed: ${{ steps.cloud.outcome == 'failure' }}
+        url: ${{ inputs.url }}
+        token: ${{ inputs.token }}
+        group: tools/linux-cloud-${{ steps.inputs.outputs.arch }}
+        key: ${{ steps.inputs.outputs.cloud }}
+        paths: ${{ runner.temp }}/cor-linux-tools/focal.img
+        immutable: true
     - name: Verify or download frozen archives
       shell: bash
       env:
@@ -60,7 +94,21 @@ runs:
       with:
         path: ${{ runner.temp }}/cor-linux-tools/focal.img
         key: ${{ steps.inputs.outputs.cloud }}
+    - name: Mirror verified upstream archives before tests
+      shell: bash
+      timeout-minutes: 5
+      continue-on-error: true
+      env:
+        PYTHON_CACHE_STATE: ${{ steps.python_local.outputs.state }}
+        CLOUD_CACHE_STATE: ${{ steps.cloud_local.outputs.state }}
+      run: |
+        for cache_state in "$PYTHON_CACHE_STATE" "$CLOUD_CACHE_STATE"; do
+          if [ -n "$cache_state" ]; then
+            python3 scripts/action_cache.py save --state "$cache_state"
+          fi
+        done
     - name: Restore guest DEB downloads
+      id: apt_github
       if: inputs.vm == 'true'
       uses: actions/cache/restore@v5
       continue-on-error: true
@@ -69,3 +117,16 @@ runs:
         key: ${{ steps.inputs.outputs.apt }}-${{ github.run_id }}-${{ github.run_attempt }}
         restore-keys: |
           ${{ steps.inputs.outputs.apt }}-
+    - name: Restore private fallback for guest DEB downloads
+      id: apt_local
+      if: inputs.vm == 'true'
+      uses: ./.github/actions/local-cache
+      with:
+        github-hit: ${{ steps.apt_github.outcome == 'success' && steps.apt_github.outputs.cache-matched-key != '' && 'false' || '' }}
+        github-failed: ${{ steps.apt_github.outcome == 'failure' }}
+        url: ${{ inputs.url }}
+        token: ${{ inputs.token }}
+        group: dependencies/linux-apt-${{ steps.inputs.outputs.arch }}
+        key: ${{ steps.inputs.outputs.apt }}-${{ github.run_id }}-${{ github.run_attempt }}
+        restore-keys: ${{ steps.inputs.outputs.apt }}-
+        paths: ${{ runner.temp }}/cor-linux-tools/apt

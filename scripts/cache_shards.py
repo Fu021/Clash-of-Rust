@@ -81,7 +81,7 @@ def invalidate_build_scripts(paths):
     """
     stale = set()
     for root in paths:
-        for profile in (root/'release', *root.glob('*/release')):
+        for profile in (root/'release', root/'debug', *root.glob('*/release'), *root.glob('*/debug')):
             fingerprints = profile/'.fingerprint'
             if fingerprints.is_symlink() or not fingerprints.is_dir():
                 continue
