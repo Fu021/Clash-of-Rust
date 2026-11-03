@@ -64,9 +64,9 @@
 
 APT 可直接复用下载目录中同大小的 DEB，不能仅凭 GitHub 缓存命中就信任内容。恢复到暂存目录，每轮用签名软件源索引中的包名、大小和 SHA256 重新核验，再交给安装器；弱摘要、损坏或缓存失败正常重下。云镜像与 Python 按冻结的上游 SHA256 校验，旧系统仍用新建磁盘执行安装、GUI 和网络检查。具体范围及容量见 [Ubuntu 缓存](../workflows/ci.md#ubuntu-2004-环境下载缓存)。
 
-`apt-get --print-uris` 的本地应用 DEB 记录可能没有摘要；先区分本地输入，再要求远程依赖具备四字段及 SHA256，不能因此使整组依赖缓存失效。回归覆盖本地三字段与远程强校验混合记录，缺少摘要的远程记录仍拒绝。Linux 包按 `debian/<包名>` 暂存供 `dpkg-shlibdeps` 解析；独立 D-Bus 测试会话只更新自己的激活环境。旧内核 VM 复用本轮 SSH 控制连接，减少 TCG 下重复握手，不更改实际 GUI/代理/TUN 验证。
+`apt-get --print-uris` 的本地应用 DEB 记录可能没有摘要；先区分本地输入，再要求远程依赖具备四字段及 SHA256，不能因此使整组依赖缓存失效。回归覆盖本地三字段与远程强校验混合记录，缺少摘要的远程记录仍拒绝。Linux 包按 `debian/<包名>` 暂存，扫描 ELF 前创建 `DEBIAN/`，供 `dpkg-shlibdeps` 识别包根目录；仅调整暂存路径不足以消除警告。独立 D-Bus 测试会话只更新自己的激活环境。旧内核 VM 复用本轮 SSH 控制连接，减少 TCG 下重复握手，不更改实际 GUI/代理/TUN 验证。架构无关的 NSIS 与 Gradle 下载均由 x64 单点保存至 GitHub 和私网，其他架构只恢复，避免压缩重复及同 key 抢占。
 
-2026-11-04 审查的外部边界：JNI 0.22.4 的 `jni-macros/src/native_method.rs` 仍生成 `fetch_update`；`download-artifact` 已升级至当前 v8.0.2，仍在内部输出 `Buffer()` 弃用提示；Ubuntu 20.04 旧发行包也可能输出兼容提示。CI `41687501026` 的 Gradle 栈确认 `Configuration.setVisible` 来自 AGP 内置 Kotlin 插件；普通构建保留 `--warning-mode all`，`RUNNER_DEBUG=1` 时显示完整栈，避免每轮重复输出。共享 Gradle 下载由 x64 单点保存，其他 ABI 只恢复，私网同样单点保存。保留来源与后续验证，不通过修改告警级别或发行包脚本伪装为已修复；复查要求见[日志与耗时审查](../workflows.md#运行日志与耗时审查)。
+2026-11-04 审查的外部边界：JNI 0.22.4 的 `jni-macros/src/native_method.rs` 仍生成 `fetch_update`；`download-artifact` 已升级至当前 v8.0.2，仍在内部输出 `Buffer()` 弃用提示；Ubuntu 20.04 旧发行包也可能输出兼容提示。CI `41687501026` 的 Gradle 栈确认 `Configuration.setVisible` 来自 AGP 内置 Kotlin 插件；普通构建保留 `--warning-mode all`，`RUNNER_DEBUG=1` 时显示完整栈，避免每轮重复输出。保留来源与后续验证，不通过修改告警级别或发行包脚本伪装为已修复；复查要求见[日志与耗时审查](../workflows.md#运行日志与耗时审查)。
 
 ## 3. Rust 编译与 Clippy 跨 target 差异
 

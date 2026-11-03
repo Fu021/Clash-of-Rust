@@ -174,7 +174,7 @@ jobs:
           subprocess.run(command, check=True)
       - name: Restore GitHub installer compiler
         if: runner.os == 'Windows'
-        uses: actions/cache@v5
+        uses: actions/cache/restore@v5
         timeout-minutes: 5
         continue-on-error: true
         id: nsis_github
@@ -193,6 +193,7 @@ jobs:
           token: ${{ secrets.LOCAL_CACHE_TOKEN }}
           group: tools/nsis
           immutable: true
+          save: ${{ matrix.arch == 'x64' }}
           paths: tools/nsis
           key: nsis-${{ needs.resolve.outputs.nsis }}
           restore-keys: nsis-
@@ -218,6 +219,14 @@ jobs:
               subprocess.run([sys.executable, 'scripts/test-release-package.py', '--linux-compat', '--expect-ubuntu', '22.04'], check=True)
           else:
               subprocess.run([sys.executable, 'scripts/test-release-package.py', '--system', '${{ matrix.system }}', '--arch', '${{ matrix.arch }}', '--build', 'ci-build', '--ci-run-id', '${{ needs.resolve.outputs.ci_run_id }}'], check=True)
+      - name: Save shared GitHub installer compiler
+        if: runner.os == 'Windows' && matrix.arch == 'x64' && steps.nsis_github.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v5
+        timeout-minutes: 5
+        continue-on-error: true
+        with:
+          path: tools/nsis
+          key: tools-nsis-${{ needs.resolve.outputs.nsis }}
       - name: Preserve Linux GUI diagnostics
         uses: actions/upload-artifact@v6
         if: always() && runner.os == 'Linux'

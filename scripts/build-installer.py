@@ -75,6 +75,9 @@ def _build_deb(payload, version, arch, work):
     source_control = work/'debian/control'
     source_control.parent.mkdir(exist_ok=True)
     source_control.write_text(f'Source: clash-of-rust\n\nPackage: clash-of-rust\nArchitecture: {deb_arch}\nDescription: Native desktop client for mihomo\n', encoding='utf-8')
+    control = root/'DEBIAN'
+    control.mkdir()
+    control.chmod(0o755)
     binaries = ('clash-of-rust', 'clash-desktop-ui', 'cor', 'clash-tun-launcher')
     output = subprocess.check_output(['dpkg-shlibdeps', '-O',
                                       *(f'-e{application / name}' for name in binaries)],
@@ -83,9 +86,6 @@ def _build_deb(payload, version, arch, work):
     if not abi:
         raise RuntimeError('Could not determine native library dependencies')
     dependencies = ', '.join([abi, *GUI_DEPENDENCIES])
-    control = root/'DEBIAN'
-    control.mkdir()
-    control.chmod(0o755)
     installed_size = sum(p.stat().st_size for p in root.rglob('*') if p.is_file() and not p.is_symlink())
     (control/'control').write_text(
         f'Package: clash-of-rust\nVersion: {deb_version(version)}\nArchitecture: {deb_arch}\n'
