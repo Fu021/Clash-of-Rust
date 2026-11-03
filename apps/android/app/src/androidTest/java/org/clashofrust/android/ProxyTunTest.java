@@ -19,12 +19,29 @@ import static org.junit.Assert.*;
 @RunWith(AndroidJUnit4.class)
 public class ProxyTunTest {
     @Test public void notificationShowsModeAndNodeWithOptionalSpeeds() {
-        String text = TunnelService.statusText("1 MiB/s", "2 KiB/s", "Current node", "global", true);
+        String text = TunnelService.statusText("1 MiB/s", "2 KiB/s", "Current node", "global", true, "");
         assertTrue(text.contains("全局 · Current node"));
         assertTrue(text.contains("↓ 1 MiB/s"));
-        text = TunnelService.statusText("1 MiB/s", "2 KiB/s", "Other node", "rule", false);
+        text = TunnelService.statusText("1 MiB/s", "2 KiB/s", "Other node", "rule", false, "");
         assertEquals("规则 · Other node", text);
-        assertEquals("直连 · DIRECT", TunnelService.statusText("", "", "DIRECT", "direct", false));
+        assertEquals("直连 · DIRECT", TunnelService.statusText("", "", "DIRECT", "direct", false, ""));
+        assertEquals("", ProtectionRuntime.notificationLabel(false, 3));
+        assertEquals("Claude 保护已启用", ProtectionRuntime.notificationLabel(true, 1));
+        assertEquals("Claude 保护异常", ProtectionRuntime.notificationLabel(true, 3));
+        assertEquals("Claude 保护待确认", ProtectionRuntime.notificationLabel(true, 2));
+        assertEquals("Claude 保护待确认", ProtectionRuntime.notificationLabel(true, 0));
+        assertEquals("Claude 保护待确认", ProtectionRuntime.notificationLabel(true, -1));
+        int health = ProtectionRuntime.notificationHealth();
+        assertTrue("Native protection status must use the shared readiness states", health >= 1 && health <= 3);
+        for (int value : new int[]{1, 2, 3}) {
+            String protection = ProtectionRuntime.notificationLabel(true, value);
+            for (boolean speeds : new boolean[]{true, false}) {
+                text = TunnelService.statusText("1 MiB/s", "2 KiB/s", "Current node", "global", speeds, protection);
+                assertTrue("Protection must remain visible in the notification title", text.startsWith(protection + "\n"));
+                assertTrue(text.contains("全局 · Current node"));
+                assertEquals(speeds, text.contains("↓ 1 MiB/s"));
+            }
+        }
     }
     private static void pointer(int action,float x,float y,long down,long now) {
         MotionEvent event=MotionEvent.obtain(down,now,action,x,y,0);
@@ -65,6 +82,7 @@ public class ProxyTunTest {
     }
     private static void verifyPresentation() throws Exception {
         new ProxyTunTest().notificationShowsModeAndNodeWithOptionalSpeeds();
+        new ProxyTunTest().heldResponseClassifiesTruncationAsTransportFailure();
         await("Core is running but Slint still reports it as stopped",()->MainActivity.diagnostics().optBoolean("core_running"));
         JSONObject initial=MainActivity.diagnostics();
         Context context=InstrumentationRegistry.getInstrumentation().getTargetContext();
@@ -154,6 +172,15 @@ public class ProxyTunTest {
         });
         return matched.get();
     }
+    private static MainActivity resumedActivity() {
+        java.util.concurrent.atomic.AtomicReference<MainActivity> result=new java.util.concurrent.atomic.AtomicReference<>();
+        InstrumentationRegistry.getInstrumentation().runOnMainSync(()-> {
+            for (android.app.Activity activity:androidx.test.runner.lifecycle.ActivityLifecycleMonitorRegistry.getInstance()
+                    .getActivitiesInStage(androidx.test.runner.lifecycle.Stage.RESUMED))
+                if (activity instanceof MainActivity && activity.hasWindowFocus()) result.set((MainActivity)activity);
+        });
+        return result.get();
+    }
     private interface Condition { boolean ready() throws Exception; }
     private static boolean vpnActive(ConnectivityManager connectivity) {
         NetworkCapabilities capabilities=connectivity.getNetworkCapabilities(connectivity.getActiveNetwork());
@@ -192,6 +219,19 @@ public class ProxyTunTest {
             fail("Reserved test origin was reachable without VPN; negative control is invalid");
         }
     }
+    private static java.util.List<android.view.accessibility.AccessibilityNodeInfo> dialogViews(
+        android.view.accessibility.AccessibilityNodeInfo root, String id) {
+        try {
+            java.util.List<android.view.accessibility.AccessibilityNodeInfo> views =
+                root.findAccessibilityNodeInfosByViewId(id);
+            return views == null ? java.util.Collections.emptyList() : views;
+        } catch (NullPointerException staleWindow) {
+            // The framework can lose its node list while the system dialog is
+            // being replaced. The bounded consent loop reacquires its root.
+            android.util.Log.w("ClashOfRustTest", "VPN dialog accessibility window changed", staleWindow);
+            return java.util.Collections.emptyList();
+        }
+    }
     private static void consent(boolean allow) throws Exception {
         java.util.concurrent.atomic.AtomicBoolean clicked=new java.util.concurrent.atomic.AtomicBoolean();
         await("Android VPN consent did not return to the app",()-> {
@@ -201,12 +241,12 @@ public class ProxyTunTest {
             if ("org.clashofrust.android".contentEquals(root.getPackageName()))
                 return clicked.get() && inStage(androidx.test.runner.lifecycle.Stage.RESUMED,true);
             if (!"com.android.vpndialogs".contentEquals(root.getPackageName())) return false;
-            for (android.view.accessibility.AccessibilityNodeInfo check:root.findAccessibilityNodeInfosByViewId("android:id/checkbox"))
+            for (android.view.accessibility.AccessibilityNodeInfo check:dialogViews(root,"android:id/checkbox"))
                 if (check.isCheckable() && !check.isChecked())
                     check.performAction(android.view.accessibility.AccessibilityNodeInfo.ACTION_CLICK);
             // Accessibility can accept an action against a closing window.
             // Wait for the actual return so the next consent uses its own dialog.
-            for (android.view.accessibility.AccessibilityNodeInfo button:root.findAccessibilityNodeInfosByViewId(
+            for (android.view.accessibility.AccessibilityNodeInfo button:dialogViews(root,
                 allow ? "android:id/button1" : "android:id/button2"))
                 if (button.isEnabled() && button.performAction(android.view.accessibility.AccessibilityNodeInfo.ACTION_CLICK))
                     clicked.set(true);
@@ -321,12 +361,32 @@ public class ProxyTunTest {
         // with a bounded deadline, rather than sleeping or rerunning the test.
         long deadline=SystemClock.elapsedRealtime()+15000;
         IOException last=null;
+        ConnectivityManager manager=InstrumentationRegistry.getInstrumentation().getTargetContext()
+            .getSystemService(ConnectivityManager.class);
+        String before=interfaceCounters(manager);
         do {
             try { assertTunSocket(controller,secret); return; }
             catch (IOException transition) { last=transition; }
             SystemClock.sleep(100);
         } while (SystemClock.elapsedRealtime()<deadline);
-        throw new IOException("VPN data path did not become ready; "+networkState(),last);
+        throw new IOException("VPN data path did not become ready; before="+before+"; "+networkState(),last);
+    }
+    private static String interfaceCounters(ConnectivityManager manager) {
+        LinkProperties properties=manager.getLinkProperties(manager.getActiveNetwork());
+        String device=properties==null ? null : properties.getInterfaceName();
+        StringBuilder details=new StringBuilder();
+        if (device!=null && device.matches("[A-Za-z0-9_.-]+")) {
+            for (String counter:new String[]{"rx_packets","tx_packets","rx_dropped","tx_dropped"}) {
+                try {
+                    java.nio.file.Path file=java.nio.file.Paths.get("/sys/class/net",device,"statistics",counter);
+                    details.append('\n').append(device).append(' ').append(counter).append('=')
+                        .append(new String(java.nio.file.Files.readAllBytes(file),StandardCharsets.US_ASCII).trim());
+                } catch (IOException | SecurityException unavailable) {
+                    details.append('\n').append(device).append(' ').append(counter).append(" unavailable");
+                }
+            }
+        }
+        return details.toString();
     }
     private static String networkState() {
         ConnectivityManager manager=InstrumentationRegistry.getInstrumentation().getTargetContext()
@@ -334,7 +394,8 @@ public class ProxyTunTest {
         Network current=manager.getActiveNetwork();
         StringBuilder details=new StringBuilder("active="+current+"; capabilities="+manager.getNetworkCapabilities(current)
             +"; links="+manager.getLinkProperties(current)+"; VPN="+TunnelService.connected()
-            +"; generation="+TunnelService.generation()+"; error="+TunnelService.error());
+            +"; generation="+TunnelService.generation()+"; error="+TunnelService.error())
+            .append(interfaceCounters(manager));
         // Capture the data plane too: a VPN capability alone cannot establish
         // whether packets reached the device or its native reader still owns it.
         for (String command:new String[]{"ip -s link show","ip rule show","ip route show table all"}) {
@@ -380,17 +441,7 @@ public class ProxyTunTest {
             connection.getOutputStream().write(("GET /hold HTTP/1.1\r\nHost: 198.51.100.1\r\nConnection: close\r\n\r\n")
                 .getBytes(StandardCharsets.US_ASCII));
             BufferedReader stream=new BufferedReader(new InputStreamReader(connection.getInputStream(),StandardCharsets.US_ASCII));
-            String status=stream.readLine();
-            assertNotNull("Held TUN request returned no HTTP response",status);
-            assertTrue("Held TUN request failed: "+status,status.contains(" 200 "));
-            boolean headersComplete=false;
-            for (int header=0;header<100;header++) {
-                String line=stream.readLine();
-                if (line==null) break;
-                if (line.isEmpty()) {headersComplete=true;break;}
-            }
-            assertTrue("Incomplete held HTTP response",headersComplete);
-            assertTrue(stream.read() >= 0);
+            assertHeldResponse(stream);
             JSONObject records=new JSONObject(read(new URL("http://"+controller+"/connections"),java.net.Proxy.NO_PROXY,secret));
             JSONArray connections=records.getJSONArray("connections");
             boolean observed=false;
@@ -405,6 +456,32 @@ public class ProxyTunTest {
             assertTrue("No matching TUN connection: "+connection.getLocalSocketAddress()+" -> "+connection.getRemoteSocketAddress()
                 +"; a direct-only test must fail; records="+records,observed);
         }
+    }
+    private static void assertHeldResponse(BufferedReader stream) throws IOException {
+        String status=stream.readLine();
+        if (status==null) throw new EOFException("Held TUN request returned no HTTP response");
+        assertTrue("Held TUN request failed: "+status,status.contains(" 200 "));
+        boolean headersComplete=false;
+        for (int header=0;header<100;header++) {
+            String line=stream.readLine();
+            if (line==null) throw new EOFException("Held HTTP headers were truncated");
+            if (line.isEmpty()) {headersComplete=true;break;}
+        }
+        assertTrue("Too many held HTTP headers",headersComplete);
+        if (stream.read()<0) throw new EOFException("Held HTTP response returned no body");
+    }
+    @Test public void heldResponseClassifiesTruncationAsTransportFailure() throws Exception {
+        for (String raw:new String[]{"", "HTTP/1.1 200 OK\r\nX-Test: 1\r\n", "HTTP/1.1 200 OK\r\n\r\n"}) {
+            try {
+                assertHeldResponse(new BufferedReader(new StringReader(raw)));
+                fail("Truncated HTTP response must fail");
+            } catch (EOFException expected) { /* The existing readiness loop may open a fresh connection. */ }
+        }
+        AssertionError rejected=null;
+        try {assertHeldResponse(new BufferedReader(new StringReader("HTTP/1.1 403 Forbidden\r\n\r\nx")));}
+        catch (AssertionError error) {rejected=error;}
+        assertNotNull("An HTTP error must fail without a readiness retry",rejected);
+        assertHeldResponse(new BufferedReader(new StringReader("HTTP/1.1 200 OK\r\nX-Test: 1\r\n\r\nx")));
     }
     @Test public void localProxyAndRealTunCarryTrafficAndDisconnectCleanly() throws Exception {
         Context context = InstrumentationRegistry.getInstrumentation().getTargetContext();
@@ -477,6 +554,27 @@ public class ProxyTunTest {
                 },"vpn-route-check");
                 routes.setDaemon(true); routes.start();
                 try {
+                    MainActivity original=resumedActivity();
+                    assertNotNull("VPN Activity was not resumed before recreation",original);
+                    long generation=TunnelService.generation();
+                    long uiGeneration=MainActivity.diagnostics().optLong("ui_generation");
+                    String fixture=CoreBridge.config();
+                    InstrumentationRegistry.getInstrumentation().runOnMainSync(original::recreate);
+                    await("VPN Activity was not recreated",()-> {
+                        MainActivity replacement=resumedActivity();
+                        return replacement!=null && replacement!=original;
+                    });
+                    waitForAppWindow();
+                    await("Recreated native UI did not render",()-> {
+                        JSONObject ui=MainActivity.diagnostics();
+                        return ui.optLong("ui_generation")>uiGeneration && ui.optDouble("width")>0;
+                    });
+                    assertTrue("Recreating the UI disconnected the VPN",TunnelService.connected());
+                    assertEquals("Recreating the UI restarted the VPN",generation,TunnelService.generation());
+                    assertTrue("Recreating the UI changed the active VPN route",vpnActive(connectivity));
+                    assertTrue("Recreating the UI stopped the process-owned core",CoreBridge.ready());
+                    assertEquals("Recreating the UI reloaded the running core",fixture,CoreBridge.config());
+                    tunCarriesSocket(controller,secret);
                     for (int handover=0;handover<5;handover++) {
                         long previousGeneration = TunnelService.generation();
                         TunnelService.start(context,true);

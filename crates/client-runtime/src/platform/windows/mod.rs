@@ -415,7 +415,7 @@ pub fn signal_show() {
     let window = unsafe {
         FindWindowW(
             std::ptr::null(),
-            wide("Clash of Rust · 原生代理客户端").as_ptr(),
+            wide(clash_client_core::WINDOW_TITLE).as_ptr(),
         )
     };
     if !window.is_null() {

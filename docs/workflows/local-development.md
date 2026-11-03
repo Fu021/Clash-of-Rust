@@ -48,6 +48,8 @@ python3 scripts/preview-slint.py --check
 python3 scripts/preview-slint.py --page settings --theme light --output /tmp/clash-slint-preview
 ```
 
+`--protection-state off|active|checking|error` 可预览全局保护徽标与异常原因，桌面和 `--mobile --platform android` 共用；仅注入演示状态，不连接内核或改变网络。
+
 结束前删除本次生成的 `/tmp/clash-slint-preview`，并确认仓库没有遗留 `target/`、`dist/`、`bundle/`、构建缓存、日志或历史截图。静态检查与预览不等于编译、测试或真实交互验证。
 
 图标、国旗及许可证属于必要资源；日常构建使用仓库成品。仅在维护资源时使用 `scripts/prepare-assets.py icons` / `flags`。图标源图保留于 `resources/icon-concepts`，第三方来源见各资源目录的说明。平台检测直接维护 Rust，必要的公开检测数据与 AGPL 来源说明统一位于 `resources/ip-check`，不再保留 `vendor` 或 Shell 生成工具。

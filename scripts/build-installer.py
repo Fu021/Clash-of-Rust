@@ -75,7 +75,10 @@ def _build_deb(payload, version, arch, work):
     source_control = work/'debian/control'
     source_control.parent.mkdir()
     source_control.write_text(f'Source: clash-of-rust\n\nPackage: clash-of-rust\nArchitecture: {deb_arch}\nDescription: Native desktop client for mihomo\n', encoding='utf-8')
-    output = subprocess.check_output(['dpkg-shlibdeps','-O',f'-e{application / "clash-of-rust"}', f'-e{application / "clash-desktop-ui"}'], cwd=work, text=True)
+    binaries = ('clash-of-rust', 'clash-desktop-ui', 'cor', 'clash-tun-launcher')
+    output = subprocess.check_output(['dpkg-shlibdeps', '-O',
+                                      *(f'-e{application / name}' for name in binaries)],
+                                     cwd=work, text=True)
     abi = next((line.split('=',1)[1] for line in output.splitlines() if line.startswith('shlibs:Depends=')), None)
     if not abi:
         raise RuntimeError('Could not determine native library dependencies')
@@ -88,7 +91,7 @@ def _build_deb(payload, version, arch, work):
         f'Package: clash-of-rust\nVersion: {deb_version(version)}\nArchitecture: {deb_arch}\n'
         'Section: net\nPriority: optional\nMaintainer: F021 <flmqs@outlook.com>\n'
         f'Installed-Size: {(installed_size+1023)//1024}\nDepends: {dependencies}\n'
-        'Recommends: pkexec\n'
+        'Recommends: pkexec | policykit-1\n'
         'Homepage: https://github.com/Fu021/Clash-of-Rust\n'
         'Description: Native Rust desktop client for mihomo\n'
         ' Includes the mihomo core, offline Geo databases and native platform checks.\n', encoding='utf-8')

@@ -21,6 +21,8 @@ struct Plan {
     parent: u32,
     #[serde(default = "default_restart")]
     restart: bool,
+    #[serde(default)]
+    require_commit: bool,
 }
 fn default_restart() -> bool {
     true
@@ -43,6 +45,10 @@ impl InstallSession {
     }
     pub fn cancel(&self) {
         let _ = fs::write(self.directory.join("cancel"), b"");
+    }
+    #[cfg(target_os = "macos")]
+    pub(crate) fn commit(&self) -> Result<()> {
+        fs::write(self.directory.join("commit"), b"").context("无法确认更新交接")
     }
     pub fn outcome(&self) -> Option<(String, bool)> {
         read_outcome(&self.directory).or_else(|| {
@@ -102,8 +108,26 @@ pub fn handoff_owner(
     parent: u32,
     restart: bool,
 ) -> Result<InstallSession> {
+    handoff_with_commit(download, parent, restart, false)
+}
+
+#[cfg(target_os = "macos")]
+pub(crate) fn handoff_owner_deferred(
+    download: Arc<Downloaded>,
+    parent: u32,
+    restart: bool,
+) -> Result<InstallSession> {
+    handoff_with_commit(download, parent, restart, true)
+}
+
+fn handoff_with_commit(
+    download: Arc<Downloaded>,
+    parent: u32,
+    restart: bool,
+    require_commit: bool,
+) -> Result<InstallSession> {
     let directory = download.directory().to_owned();
-    for name in ["ready", "cancel", "outcome.json", "stage.json"] {
+    for name in ["ready", "cancel", "commit", "outcome.json", "stage.json"] {
         let path = directory.join(name);
         if path.exists() {
             fs::remove_file(path)?;
@@ -117,6 +141,7 @@ pub fn handoff_owner(
         version: download.version.clone(),
         parent,
         restart,
+        require_commit,
     };
     let helper = directory.join(if cfg!(windows) {
         "update-helper.exe"
@@ -216,6 +241,7 @@ pub fn helper_main() -> bool {
         && directory.join("ready").exists()
         && let Ok(data) = fs::read(directory.join("plan.json"))
         && let Ok(plan) = serde_json::from_slice::<Plan>(&data)
+        && (!plan.require_commit || directory.join("commit").exists())
     {
         // The existing GUI consumes failures if it is still alive.
         // Restart only once its normal shutdown releases the lock.
@@ -229,6 +255,16 @@ pub fn helper_main() -> bool {
                 .arg(&directory)
                 .spawn();
         }
+    }
+    #[cfg(target_os = "macos")]
+    if let Ok(data) = fs::read(directory.join("plan.json"))
+        && let Ok(plan) = serde_json::from_slice::<Plan>(&data)
+        && plan.require_commit
+        && (cancelled || (!parent_alive(plan.parent) && !directory.join("commit").exists()))
+        && let Some(resolved) = owned_update_directory(&directory)
+    {
+        // Deferred handoffs have no GUI session left to clean an abandoned helper.
+        let _ = fs::remove_dir_all(resolved);
     }
     true
 }
@@ -261,18 +297,18 @@ pub fn startup_outcome() -> Option<(String, bool)> {
     None
 }
 
-pub fn cleanup(directory: &Path) {
-    let Ok(resolved) = directory.canonicalize() else {
-        return;
-    };
-    let Ok(temporary) = std::env::temp_dir().canonicalize() else {
-        return;
-    };
-    if resolved.parent() == Some(temporary.as_path())
+fn owned_update_directory(directory: &Path) -> Option<PathBuf> {
+    let resolved = directory.canonicalize().ok()?;
+    let temporary = std::env::temp_dir().canonicalize().ok()?;
+    (resolved.parent() == Some(temporary.as_path())
         && resolved
             .file_name()
-            .is_some_and(|name| name.to_string_lossy().starts_with("clash-of-rust-update-"))
-    {
+            .is_some_and(|name| name.to_string_lossy().starts_with("clash-of-rust-update-")))
+    .then_some(resolved)
+}
+
+pub fn cleanup(directory: &Path) {
+    if let Some(resolved) = owned_update_directory(directory) {
         std::thread::spawn(move || {
             // On Windows the finishing helper briefly holds its own EXE open.
             for _ in 0..60 {
@@ -391,12 +427,32 @@ mod tests {
             version: "0.4.6".into(),
             parent: std::process::id(),
             restart: true,
+            require_commit: false,
         };
         let mut legacy = serde_json::to_value(&plan).unwrap();
         legacy.as_object_mut().unwrap().remove("restart");
-        assert!(serde_json::from_value::<Plan>(legacy).unwrap().restart);
+        legacy.as_object_mut().unwrap().remove("require_commit");
+        let legacy: Plan = serde_json::from_value(legacy).unwrap();
+        assert!(legacy.restart && !legacy.require_commit);
         verify(&plan, directory.path()).unwrap();
         fs::write(path, b"tampered").unwrap();
         assert!(verify(&plan, directory.path()).is_err());
+    }
+
+    #[test]
+    fn update_cleanup_accepts_only_owned_temporary_directories() {
+        let owned = tempfile::Builder::new()
+            .prefix("clash-of-rust-update-")
+            .tempdir()
+            .unwrap();
+        let other = tempfile::tempdir().unwrap();
+        assert_eq!(
+            owned_update_directory(owned.path()),
+            Some(owned.path().canonicalize().unwrap())
+        );
+        assert!(owned_update_directory(other.path()).is_none());
+        let nested = owned.path().join("clash-of-rust-update-nested");
+        fs::create_dir(&nested).unwrap();
+        assert!(owned_update_directory(&nested).is_none());
     }
 }

@@ -84,8 +84,8 @@ pub(super) fn scalar(key: &str, value: &Value) -> String {
                     "upload" | "download" | "size" | "upload_total" | "download_total" => bytes(n),
                     "upload_rate" | "download_rate" => format!("{}/s", bytes(n)),
                     "millis" => format!("{n} ms"),
-                    "updated" if n == 0 => "尚未更新".into(),
-                    "updated" => i64::try_from(n)
+                    "updated" | "installed_at" if n == 0 => "尚未更新".into(),
+                    "updated" | "installed_at" => i64::try_from(n)
                         .ok()
                         .and_then(|n| DateTime::<Utc>::from_timestamp(n, 0))
                         .map(|n| {
@@ -151,6 +151,10 @@ pub(super) fn scalar(key: &str, value: &Value) -> String {
                 ("state", "Restricted") => "不可用或受限",
                 ("state", "Unknown") => "结果未确认",
                 ("state", "Failed") => "检测失败",
+                ("state", "Off") => "保护未启用",
+                ("state", "Active") => "接管与拦截就绪",
+                ("state", "Checking") => "保护待确认",
+                ("state", "Error") => "保护异常",
                 ("level", "issue") => "配置问题",
                 ("level", "review") => "需核对",
                 ("level", "incomplete") => "未完成检查",
@@ -296,6 +300,7 @@ pub(super) fn label(key: &str) -> &str {
         "reviews" => "需核对项目数",
         "unreadable" => "无法读取的文件数",
         "guard" => "实时保护",
+        "protection_status" => "保护接管状态",
         "observed" => "请求监测",
         "connected" => "监测已连接",
         "failures" => "失败数",

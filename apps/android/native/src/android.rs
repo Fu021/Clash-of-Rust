@@ -16,7 +16,7 @@ use std::{
     collections::{BTreeMap, VecDeque},
     path::PathBuf,
     rc::Rc,
-    sync::{Arc, Mutex},
+    sync::{Arc, Condvar, Mutex},
     time::Duration,
 };
 use tokio::sync::mpsc;
@@ -27,6 +27,40 @@ static AUTHORIZATION_REQUEST: std::sync::atomic::AtomicU64 = std::sync::atomic::
 // Also included in exported diagnostics. Contains view counts/status, never URLs or secrets.
 static PRESENTATION: Mutex<String> = Mutex::new(String::new());
 static FIRST_APPEARANCE: Mutex<Option<(bool, i32)>> = Mutex::new(None);
+static UI_GENERATION: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+static UI_LIFETIME: (Mutex<bool>, Condvar) = (Mutex::new(false), Condvar::new());
+
+// NativeActivity can recreate an Activity before the previous native thread
+// has dropped Slint's thread-local renderer and released its EGL surface.
+struct UiLifetime;
+impl Drop for UiLifetime {
+    fn drop(&mut self) {
+        let mut active = UI_LIFETIME
+            .0
+            .lock()
+            .unwrap_or_else(|error| error.into_inner());
+        *active = false;
+        UI_LIFETIME.1.notify_one();
+    }
+}
+thread_local! {
+    static UI_THREAD_LIFETIME: UiLifetime = const { UiLifetime };
+}
+
+fn await_previous_ui() {
+    let active = UI_LIFETIME
+        .0
+        .lock()
+        .unwrap_or_else(|error| error.into_inner());
+    let mut active = UI_LIFETIME
+        .1
+        .wait_while(active, |active| *active)
+        .unwrap_or_else(|error| error.into_inner());
+    *active = true;
+    // Register before Slint initializes its thread-local context, so its
+    // renderer is dropped before the next Activity is allowed to initialize.
+    UI_THREAD_LIFETIME.with(|_| {});
+}
 
 struct AndroidHost {
     vm: JavaVM,
@@ -110,8 +144,17 @@ pub extern "system" fn Java_org_clashofrust_android_MainActivity_nativeDiagnosti
 ) -> jni::sys::jstring {
     unowned_env
         .with_env(|env| {
-            let snapshot = PRESENTATION.lock().map(|s| s.clone()).unwrap_or_default();
+            let (snapshot, generation) = PRESENTATION
+                .lock()
+                .map(|s| {
+                    (
+                        s.clone(),
+                        UI_GENERATION.load(std::sync::atomic::Ordering::Acquire),
+                    )
+                })
+                .unwrap_or_default();
             let mut snapshot: Value = serde_json::from_str(&snapshot).unwrap_or_else(|_| json!({}));
+            snapshot["ui_generation"] = json!(generation);
             if let Ok(first) = FIRST_APPEARANCE.lock()
                 && let Some((dark, accent)) = *first
             {
@@ -172,6 +215,7 @@ struct State {
     protection_change: Option<ProtectionChange>,
     protection_status: String,
     guard_snapshot: core::claude_check::guard::Snapshot,
+    protection_observed: bool,
     category: String,
     site_query: String,
     site_region: String,
@@ -210,6 +254,11 @@ struct State {
 
 #[unsafe(no_mangle)]
 fn android_main(app: slint::android::AndroidApp) {
+    await_previous_ui();
+    if let Ok(mut snapshot) = PRESENTATION.lock() {
+        snapshot.clear();
+        UI_GENERATION.fetch_add(1, std::sync::atomic::Ordering::Release);
+    }
     android_logger::init_once(
         android_logger::Config::default()
             .with_max_level(log::LevelFilter::Info)
@@ -362,7 +411,7 @@ enum DelayScope {
 enum Update {
     Subscription(
         core::subscription::schedule::PendingUpdate,
-        std::result::Result<(String, Option<String>), String>,
+        Result<(String, Option<String>)>,
     ),
     Delays(u64, std::result::Result<BTreeMap<String, u32>, String>),
     Snapshot(u64, std::result::Result<Snapshot, String>),
@@ -407,6 +456,7 @@ async fn run_loop(
         protection_change: None,
         protection_status: String::new(),
         guard_snapshot: Default::default(),
+        protection_observed: false,
         category: "AI".into(),
         site_query: String::new(),
         site_region: "全部地区".into(),
@@ -421,7 +471,7 @@ async fn run_loop(
         completed: None,
         probe: ("尚未测试".into(), String::new()),
         dns: "尚未查询".into(),
-        geo: "已内置离线数据".into(),
+        geo: "Geo 数据状态不可用".into(),
         geo_updating: false,
         node_pages: BTreeMap::new(),
         node_delays: BTreeMap::new(),
@@ -442,10 +492,13 @@ async fn run_loop(
         update_generation: 0,
         update_confirmation: None,
     };
-    if let Err(error) = state.session.initialize() {
+    if let Err(error) = state.session.attach_or_initialize() {
         state.notice = format!("内核启动失败：{error:#}");
         log::error!("{}", state.notice);
         state.logs.push_back(("ERROR".into(), state.notice.clone()));
+    }
+    if let Ok(manifest) = core::geodata::read_manifest(&state.session.store.runtime()) {
+        state.geo = manifest.display_status();
     }
     state.session.observe_native()?;
     if state.session.settings.claude_protection.is_some()
@@ -826,7 +879,7 @@ async fn run_loop(
                         refresh_requested = true;
                         state.geo_updating=false;geo_job=None;
                         match result.and_then(|staged|state.session.install_geo(staged.path()).map_err(|e|format!("{e:#}"))) {
-                            Ok(manifest)=> {state.geo=manifest.version;state.notice="Geo 数据已更新".into();},
+                            Ok(manifest)=> {state.geo=manifest.display_status();state.notice="Geo 数据已更新".into();},
                             Err(error)=>state.notice=format!("Geo 更新失败：{error}"),
                         }
                     }
@@ -847,7 +900,13 @@ async fn run_loop(
                                     Ok(false) => {}
                                     Err(_) => state.logs.push_back(("WARN".into(), "订阅定时更新失败，已保留原配置与运行状态".into())),
                                 },
-                                Err(_) => state.logs.push_back(("WARN".into(), "订阅定时下载失败，已保留原配置与运行状态".into())),
+                                Err(error) => {
+                                    if pending.is_current(&state.session.settings, &state.session.profiles, &state.session.store).unwrap_or(false)
+                                        && let Some(message) = core::subscription::format_notice(&error) {
+                                        state.notice = format!("订阅定时更新失败，已保留原配置与运行状态：{message}");
+                                    }
+                                    state.logs.push_back(("WARN".into(), format!("订阅定时下载失败，已保留原配置与运行状态：{error}")));
+                                },
                             }
                         }
                     }
@@ -902,7 +961,7 @@ async fn run_loop(
                                     let result = async {
                                         let url = core::probe::validate_url(&pending.profile.source)?;
                                         core::subscription::download_routes(&url, &core::network::routes(port, None)).await
-                                    }.await.map_err(|error: anyhow::Error| format!("{error:#}"));
+                                    }.await;
                                     let _ = sender.send(Update::Subscription(pending, result)).await;
                                 }));
                             }
@@ -926,15 +985,20 @@ async fn run_loop(
             }
         }
         if refresh_requested {
-            if let Err(error) = state.session.observe_native() {
-                state
-                    .logs
-                    .push_back(("WARN".into(), format!("状态刷新失败：{error:#}")));
-            }
+            state.protection_observed = match state.session.observe_native() {
+                Ok(()) => true,
+                Err(error) => {
+                    state
+                        .logs
+                        .push_back(("WARN".into(), format!("状态刷新失败：{error:#}")));
+                    false
+                }
+            };
             match observe_protection(&mut state) {
                 Ok(true) => start_claude_check(&mut state, &mut claude_job, updates.clone()),
                 Ok(false) => {}
                 Err(error) => {
+                    state.protection_observed = false;
                     state.notice = format!("保护状态异常：{error:#}");
                     state.logs.push_back(("ERROR".into(), state.notice.clone()));
                 }
@@ -2014,6 +2078,7 @@ struct Projection {
     claude_status: String,
     protection_pending: bool,
     protection_status: String,
+    protection_health: core::protection::status::Status,
 }
 struct ReportRow {
     id: String,
@@ -2408,6 +2473,25 @@ fn project(state: &State) -> Projection {
         claude_status: state.claude_status.clone(),
         protection_pending: state.protection_change.is_some(),
         protection_status: state.protection_status.clone(),
+        protection_health: core::protection::status::Status::observe(
+            s.settings.claude_protection.is_some(),
+            state.protection_change.is_some(),
+            s.running,
+            s.vpn,
+            state.protection_observed.then_some((
+                state.guard_snapshot.connected,
+                if !state.guard_snapshot.error.is_empty() {
+                    &state.guard_snapshot.error
+                } else if !s.platform["protection"]["enabled"]
+                    .as_bool()
+                    .unwrap_or(false)
+                {
+                    "实时拦截未运行，请重新连接 VPN"
+                } else {
+                    ""
+                },
+            )),
+        ),
         policies: document.map(|d| d.policies.clone()).unwrap_or_default(),
         shortcuts: s.draft.enabled,
         dirty: s.draft != *saved,
@@ -2570,6 +2654,8 @@ fn apply(ui: &AndroidWindow, p: Projection) {
         ui.global::<MobileView>().set_detail(0);
     }
     data.set_protection_status(p.protection_status.into());
+    data.set_protection_health(p.protection_health.state as i32);
+    data.set_protection_message(p.protection_health.message.into());
     data.set_upload_rate(p.rates.0.into());
     data.set_download_rate(p.rates.1.into());
     data.set_rule_profile(p.rule_profile.into());

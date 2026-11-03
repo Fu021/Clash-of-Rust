@@ -92,7 +92,7 @@ def check(binary, bundle, test_case='basic_system_proxy_and_tun'):
             run(['/usr/bin/sudo', '-n', stage/'clash-tun-launcher', '--macos-install-service', os.getuid()])
             run(command, env=env, timeout=240)
     elif system == 'windows':
-        from windows_ci import allow_ordinary_user_directory, run_unelevated
+        from windows_ci import allow_ordinary_user_directory, run_unelevated, wait_unelevated_ready
         # CI tests raw binaries; Publish Release has already installed the
         # package and its service. Only remove the registration we created.
         query = subprocess.run(['sc.exe', 'query', 'ClashOfRust.Network'], capture_output=True)
@@ -116,12 +116,7 @@ def check(binary, bundle, test_case='basic_system_proxy_and_tun'):
                 ready = Path(temporary)/'ready.json'
                 crashed = {}
                 def kill_owner(kernel, process):
-                    deadline = time.monotonic()+45
-                    while not ready.is_file():
-                        if time.monotonic() >= deadline:
-                            kernel.TerminateProcess(process, 0xCAFE)
-                            raise TimeoutError('Ordinary TUN crash fixture did not become ready')
-                        time.sleep(0.1)
+                    wait_unelevated_ready(kernel, process, ready)
                     crashed.update(json.loads(ready.read_text()))
                     if not kernel.TerminateProcess(process, 0xCAFE):
                         raise RuntimeError('Could not simulate ordinary GUI process loss')

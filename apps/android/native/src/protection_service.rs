@@ -215,6 +215,28 @@ pub extern "system" fn Java_org_clashofrust_android_ProtectionRuntime_nativeConf
 }
 
 #[unsafe(no_mangle)]
+pub extern "system" fn Java_org_clashofrust_android_ProtectionRuntime_notificationHealth(
+    _: EnvUnowned<'_>,
+    _: JClass<'_>,
+) -> jni::sys::jint {
+    use core::protection::status::{State, Status};
+    STATE
+        .lock()
+        .map(|state| {
+            let (enabled, snapshot) = &*state;
+            Status::observe(
+                true,
+                false,
+                true,
+                true,
+                Some((*enabled && snapshot.connected, snapshot.error.as_str())),
+            )
+            .state
+        })
+        .unwrap_or(State::Error) as jni::sys::jint
+}
+
+#[unsafe(no_mangle)]
 pub extern "system" fn Java_org_clashofrust_android_ProtectionRuntime_nativeState(
     mut unowned_env: EnvUnowned<'_>,
     _: JClass<'_>,

@@ -277,6 +277,7 @@ impl App {
         set!(get_page, set_page, self.page as i32);
         set!(get_ready, set_ready, self.engine.is_some());
         set!(get_running, set_running, self.snapshot.running);
+        self.present_protection(data);
         set!(get_working, set_working, self.working);
         set!(get_geo_updating, set_geo_updating, self.geo_updating);
         set!(get_exiting, set_exiting, self.exiting);
@@ -447,11 +448,7 @@ impl App {
         );
         text!(get_fake_ip_input, set_fake_ip_input, &self.fake_ip_input);
         text!(get_fake_ip_error, set_fake_ip_error, &self.fake_ip_error);
-        text!(
-            get_geo_status,
-            set_geo_status,
-            format::geo_version(&self.geo_status)
-        );
+        text!(get_geo_status, set_geo_status, &self.geo_status);
         set!(
             get_node_sort,
             set_node_sort,
@@ -897,6 +894,27 @@ impl App {
         );
     }
 
+    fn present_protection(&self, data: &UiData) {
+        data.set_protection_pending(self.claude.protection_pending.is_some());
+        let health = if self.claude.protection_pending.is_some() {
+            clash_client_core::protection::status::Status::observe(true, true, false, false, None)
+        } else if self.settings.claude_protection.is_none() {
+            Default::default()
+        } else if !self.snapshot.running {
+            clash_client_core::protection::status::Status::observe(true, false, false, false, None)
+        } else {
+            let mut status = self.snapshot.protection_status.clone();
+            if status.state == clash_client_core::protection::status::State::Off {
+                status = clash_client_core::protection::status::Status::observe(
+                    true, false, true, true, None,
+                );
+            }
+            status
+        };
+        data.set_protection_health(health.state as i32);
+        data.set_protection_message(health.message.into());
+    }
+
     fn present_claude(&self, data: &UiData, models: &ViewModels) {
         let entries = self.claude.entries();
         let counts = self.claude.counts(&entries);
@@ -908,7 +926,6 @@ impl App {
         data.set_claude_status(self.claude.status.as_str().into());
         data.set_claude_error(self.claude.error);
         data.set_claude_guard(self.claude.guard_status.as_str().into());
-        data.set_protection_pending(self.claude.protection_pending.is_some());
         data.set_protection_status(
             match self.claude.protection_pending {
                 Some(true) => "正在开启保护，切换 TUN、规则与 DNS…",

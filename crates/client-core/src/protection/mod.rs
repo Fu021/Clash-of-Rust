@@ -1,4 +1,5 @@
 //! A reversible runtime overlay. Preferences and subscription sources stay intact.
+pub mod status;
 use crate::config::Settings;
 use crate::model::ProxyMode;
 use anyhow::{Result, ensure};
@@ -1316,6 +1317,7 @@ mod tests {
         let map: Value = yaml_serde::from_str(&protected).unwrap();
         assert_eq!(map["mode"], "global");
         assert_eq!(map["ipv6"], true);
+        assert_eq!(map["dns"]["ipv6-timeout"], 1000);
         assert_eq!(map["sniffer"]["enable"], true);
         assert_eq!(map["sniffer"]["parse-pure-ip"], true);
         assert_eq!(map["sniffer"]["force-dns-mapping"], false);

@@ -5,6 +5,7 @@ the Rust integration test then runs as the specified ordinary user. No host
 routes, desktop proxy settings, or existing capability attributes are left changed.
 """
 import argparse
+import base64
 import contextlib
 import errno
 from http.client import HTTPConnection
@@ -15,10 +16,13 @@ import pwd
 import re
 import shutil
 import signal
+import ssl
 import subprocess
 import sys
 import tempfile
 import time
+import urllib.error
+import urllib.request
 
 
 def run(command, **kwargs):
@@ -105,8 +109,15 @@ def isolated_uplink():
         directory = Path(temporary)
         directory.chmod(0o755)
         ca, key = directory/'root.crt', directory/'root.key'
+        root_config = directory/'root.cnf'
+        root_config.write_text(
+            '[req]\ndistinguished_name=subject\nx509_extensions=ca\nprompt=no\n'
+            '[subject]\nCN=Disposable TUN test root\n'
+            '[ca]\nbasicConstraints=critical,CA:TRUE\n'
+            'keyUsage=critical,keyCertSign,cRLSign\nsubjectKeyIdentifier=hash\n'
+            'authorityKeyIdentifier=keyid:always\n')
         run(['openssl', 'req', '-x509', '-newkey', 'rsa:2048', '-nodes', '-days', '1',
-             '-subj', '/CN=Disposable TUN test root', '-addext', 'basicConstraints=critical,CA:TRUE',
+             '-config', root_config,
              '-keyout', key, '-out', ca], stdout=subprocess.DEVNULL, stderr=subprocess.PIPE)
         run(['openssl', 'req', '-new', '-newkey', 'rsa:2048', '-nodes', '-subj', '/CN=Disposable DNS',
              '-keyout', directory/'server.key', '-out', directory/'server.csr'],
@@ -119,9 +130,23 @@ def isolated_uplink():
         run(['openssl', 'x509', '-req', '-in', directory/'server.csr', '-CA', ca, '-CAkey', key,
              '-CAcreateserial', '-days', '1', '-extfile', extensions, '-out', directory/'server.crt'],
             stdout=subprocess.DEVNULL, stderr=subprocess.PIPE)
+        certificate = ca.read_bytes()
+        context = ssl.create_default_context(cafile=str(ca))
+        root_der = ssl.PEM_cert_to_DER_cert(certificate.decode('ascii'))
+        assert root_der in context.get_ca_certs(binary_form=True), 'The fixture root is not a valid CA'
+        system_bundle = Path('/etc/ssl/certs/ca-certificates.crt')
         trust = directory/'trust.pem'
-        trust.write_bytes(Path('/etc/ssl/certs/ca-certificates.crt').read_bytes()+b'\n'+ca.read_bytes())
-        run(['mount', '--bind', trust, '/etc/ssl/certs/ca-certificates.crt'])
+        # Keep the isolated root before the distribution's certificate entries.
+        trust.write_bytes(certificate+b'\n'+system_bundle.read_bytes())
+        run(['mount', '--bind', trust, system_bundle])
+        # The core uses the system bundle, while the readiness probe must trust
+        # only the CA generated for this isolated peer.
+        assert system_bundle.read_bytes() == trust.read_bytes(), 'The isolated CA bundle was not mounted'
+        bundle = ssl.create_default_context(cafile=str(system_bundle))
+        assert root_der in bundle.get_ca_certs(binary_form=True), (
+            'The isolated system CA bundle does not contain the fixture CA')
+        run(['openssl', 'verify', '-CAfile', system_bundle,
+             '-purpose', 'sslserver', '-verify_ip', BOOTSTRAP[0], directory/'server.crt'])
         run(['ip', 'netns', 'add', namespace])
         process = None
         try:
@@ -152,6 +177,30 @@ def isolated_uplink():
                         time.sleep(0.05)
                     else:
                         raise RuntimeError('Upstream fixture did not become ready')
+                    # Fail with a useful TLS/DNS error before starting the
+                    # core; the peer is reachable only inside this namespace.
+                    query = (b'\x49\x52\x01\x00\x00\x01\x00\x00\x00\x00\x00\x00'
+                             b'\x04node\x07fixture\x04test\x00\x00\x01\x00\x01')
+                    encoded = base64.urlsafe_b64encode(query).rstrip(b'=').decode('ascii')
+                    opener = urllib.request.build_opener(
+                        urllib.request.ProxyHandler({}), urllib.request.HTTPSHandler(context=context))
+                    try:
+                        with opener.open(f'https://{BOOTSTRAP[0]}/dns-query?dns={encoded}', timeout=5) as response:
+                            answer = response.read()
+                            assert response.status == 200 and len(answer) >= len(query)+16, 'Encrypted DNS fixture failed'
+                    except urllib.error.URLError:
+                        # Keep verification enabled when reporting which peer
+                        # and certificate the isolated connection actually saw.
+                        try:
+                            diagnostic = subprocess.run(
+                                ['openssl', 's_client', '-connect', f'{BOOTSTRAP[0]}:443',
+                                 '-CAfile', ca, '-verify_ip', BOOTSTRAP[0],
+                                 '-verify_return_error', '-brief'],
+                                input=b'', stdout=subprocess.PIPE, stderr=subprocess.STDOUT, timeout=8)
+                            print('Fixture TLS diagnostic:', diagnostic.stdout.decode(errors='replace'), flush=True)
+                        except (OSError, subprocess.TimeoutExpired) as error:
+                            print('Fixture TLS diagnostic failed:', error, flush=True)
+                        raise
                     yield
                 finally:
                     process.terminate()
@@ -168,6 +217,17 @@ def isolated_uplink():
                 process.wait()
             subprocess.run(['ip', 'netns', 'delete', namespace], check=False)
             run(['umount', '/etc/ssl/certs/ca-certificates.crt'])
+
+
+def tun_device_counters(device):
+    links = json.loads(subprocess.check_output(
+        ['ip', '-j', '-s', 'link', 'show', 'dev', device], text=True))
+    if len(links) != 1 or links[0].get('ifname') != device:
+        raise RuntimeError(f'Could not identify TUN interface {device}: {links}')
+    stats = links[0].get('stats64') or links[0].get('stats')
+    if not stats:
+        raise RuntimeError(f'TUN interface statistics unavailable: {links}')
+    return int(stats['rx']['bytes']), int(stats['tx']['bytes'])
 
 
 def root_cli_smoke():
@@ -213,6 +273,28 @@ def root_cli_smoke():
             def api(path):
                 return json.loads(http('127.0.0.1', controller, '/'+path, secret))
 
+            def verify_tun_http():
+                device = 'CorRootTest'
+                route = json.loads(subprocess.check_output(
+                    ['ip', '-j', 'route', 'get', '203.0.113.20'], text=True))
+                assert len(route) == 1 and route[0].get('dev') == device, (
+                    f'Root traffic route does not use {device}: {route}')
+                before_rx, before_tx = tun_device_counters(device)
+                before_download = api('connections')['downloadTotal']
+                assert http('203.0.113.20', 80, '/auto-check') == b'protected-ok'
+                deadline = time.monotonic()+10
+                while True:
+                    rx, tx = tun_device_counters(device)
+                    download = api('connections')['downloadTotal']
+                    if rx > before_rx and tx > before_tx and download > before_download:
+                        break
+                    if time.monotonic() >= deadline:
+                        raise AssertionError(
+                            f'TUN traffic not accounted: route={route}, '
+                            f'rx={before_rx}->{rx}, tx={before_tx}->{tx}, '
+                            f'download={before_download}->{download}')
+                    time.sleep(0.2)
+
             assert http('127.0.0.1', mixed, 'http://203.0.113.20/auto-check') == b'protected-ok'
             invalid = directory/'invalid.yaml'
             invalid.write_text('proxies: [{name: InvalidRootNode, type: COR_INVALID_PROXY_TYPE}]\n'
@@ -232,13 +314,11 @@ def root_cli_smoke():
             invoke('profile', 'use', 'root-network')
             invoke('proxy', 'tun')
             assert api('configs')['tun']['enable']
-            before = api('connections')['downloadTotal']
-            assert http('203.0.113.20', 80, '/auto-check') == b'protected-ok'
-            assert api('connections')['downloadTotal'] > before, 'Root traffic bypassed the TUN'
+            verify_tun_http()
             invoke('stop')
             # A fresh root daemon must also restore a persisted TUN mode.
             assert invoke('start')['running'] and api('configs')['tun']['enable']
-            assert http('203.0.113.20', 80, '/auto-check') == b'protected-ok'
+            verify_tun_http()
             invoke('proxy', 'off')
             assert not api('configs')['tun']['enable']
         except Exception:
@@ -541,7 +621,9 @@ def main():
             run([binary, args.test_case, '--exact',
                  '--ignored', '--test-threads=1', '--nocapture'],
                 env=dict(os.environ, CLASH_TUN_TEST_NAMESPACE='1', CLASH_PROXY_SMOKE='1',
-                         MIHOMO_TEST_RESOURCES='/opt/clash-of-rust/resources', MIHOMO_TEST_CLI='/opt/clash-of-rust/cor', GSETTINGS_BACKEND='memory'),
+                         MIHOMO_TEST_RESOURCES='/opt/clash-of-rust/resources', MIHOMO_TEST_CLI='/opt/clash-of-rust/cor',
+                         GSETTINGS_BACKEND='memory', SSL_CERT_FILE='/etc/ssl/certs/ca-certificates.crt',
+                         SSL_CERT_DIR='/etc/ssl/certs'),
                 preexec_fn=ordinary_user, timeout=240)
         return
 

@@ -41,7 +41,6 @@ pub(super) enum Action {
     CloseAll,
     ClearLogs,
     ExportLogs,
-    UpdateGeo,
 }
 
 impl Action {
@@ -141,6 +140,31 @@ pub(super) async fn execute(
     };
     let saving_rules = matches!(action, Action::SaveRules(..));
     let protection_requested = matches!(action, Action::ClaudeProtection(_));
+    let import_result = match &action {
+        Action::Import(name, source) => Some(
+            Engine::import_shared(&engine, name.clone(), source.clone(), None)
+                .await
+                .map(|()| "配置已导入".into()),
+        ),
+        Action::UpdateProfile(id) => {
+            let profile = engine
+                .lock()
+                .await
+                .profiles
+                .iter()
+                .find(|profile| &profile.id == id)
+                .cloned();
+            Some(match profile {
+                Some(profile) => {
+                    Engine::import_shared(&engine, profile.name, profile.source, Some(profile.id))
+                        .await
+                        .map(|()| "订阅已更新".into())
+                }
+                None => Err(anyhow::anyhow!("配置不存在")),
+            })
+        }
+        _ => None,
+    };
     let mut engine = engine.lock().await;
     let result: anyhow::Result<String> = async {
         match action {
@@ -334,9 +358,8 @@ pub(super) async fn execute(
                 platform::open_directory(&engine.store.root.join("profiles"))?;
                 Ok("已打开订阅配置目录".into())
             }
-            Action::Import(name, source) => {
-                engine.import(name, source, None).await?;
-                Ok("配置已导入".into())
+            Action::Import(..) | Action::UpdateProfile(_) => {
+                import_result.expect("import actions are handled before locking")
             }
             Action::EditProfile(id, name, source) => {
                 engine.edit_profile(&id, &name, &source)?;
@@ -345,18 +368,6 @@ pub(super) async fn execute(
             Action::Activate(id) => {
                 engine.activate(id).await?;
                 Ok("当前配置已切换".into())
-            }
-            Action::UpdateProfile(id) => {
-                let profile = engine
-                    .profiles
-                    .iter()
-                    .find(|p| p.id == id)
-                    .cloned()
-                    .ok_or_else(|| anyhow::anyhow!("配置不存在"))?;
-                engine
-                    .import(profile.name, profile.source, Some(profile.id))
-                    .await?;
-                Ok("订阅已更新".into())
             }
             Action::Mode(mode) => {
                 engine.select_mode(&mode).await?;
@@ -394,10 +405,6 @@ pub(super) async fn execute(
             Action::ExportLogs => {
                 let path = engine.export_logs()?;
                 Ok(format!("日志已导出到 {}", path.display()))
-            }
-            Action::UpdateGeo => {
-                engine.update_geo().await?;
-                Ok("GeoIP、GeoSite、Country、ASN 数据已全部更新".into())
             }
         }
     }
@@ -466,7 +473,7 @@ pub(super) async fn execute(
         rules_applied,
         notice,
         running: engine.running(),
-        geo_status: engine.geo_manifest.version.clone(),
+        geo_status: engine.geo_manifest.display_status(),
         autostart: platform::autostart_enabled().unwrap_or(false),
         protection_changed,
     }

@@ -519,7 +519,7 @@ async fn claude(args: &Args) -> Result<()> {
             }
             output::emit(
                 args,
-                json!({"running":poll.meta.running,"enabled":poll.meta.settings.claude_protection.is_some(),"guard":poll.snapshot.claude_guard,"observed":observed}),
+                json!({"running":poll.meta.running,"enabled":poll.meta.settings.claude_protection.is_some(),"protection_status":poll.snapshot.protection_status,"guard":poll.snapshot.claude_guard,"observed":observed}),
             )?;
             tokio::time::sleep(args.interval()?).await;
         }

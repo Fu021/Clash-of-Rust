@@ -36,7 +36,9 @@ PACKAGES = {
     'package-android-armv7': 'android-armv7.apk',
     'package-android-x64': 'android-x64.apk',
 }
-PACKAGE_JOBS = set(PACKAGES) | {'Ubuntu latest-x64 proxy and TUN'}
+PACKAGE_JOBS = set(PACKAGES) | {'Ubuntu latest-x64 proxy and TUN',
+                               'Ubuntu 20.04-x64 installed GUI and TUN',
+                               'Ubuntu 20.04-arm64 installed GUI and TUN'}
 
 
 def git(*args):
@@ -121,6 +123,37 @@ def require(condition, message):
         raise ValueError(message)
 
 
+def workflow_jobs(client, run, required=None):
+    attempt = run.get('run_attempt', 1)
+    require(type(attempt) is int and 1 <= attempt <= 100, 'Invalid workflow attempt number')
+    latest = {}
+    # The generic latest-jobs index can omit completed jobs. Read each
+    # attempt directly; a partial rerun replaces only the jobs it executed.
+    for number in range(attempt, 0, -1):
+        current = {}
+        total = None
+        for page in range(1, 101):
+            result = client(f"/actions/runs/{run['id']}/attempts/{number}/jobs?per_page=100&page={page}")
+            jobs = result['jobs']
+            count = result.get('total_count')
+            if count is not None:
+                require(total is None or total == count, 'Workflow job count changed during validation')
+                total = count
+            for job in jobs:
+                require(job['name'] not in current, 'Duplicate workflow job in one attempt')
+                current[job['name']] = job
+            if len(jobs) < 100:
+                break
+        else:
+            raise ValueError('Too many workflow job pages')
+        require(total is None or len(current) == total, 'Workflow attempt job list is incomplete')
+        for name, job in current.items():
+            latest.setdefault(name, job)
+        if required is not None and required <= latest.keys():
+            break
+    return list(latest.values())
+
+
 def verified_run(client, commit, run_id=None, check_only=False, prerelease=False):
     require(not (check_only and prerelease), 'Choose either test-only packaging or prerelease publishing')
     require(not prerelease or run_id is not None, 'Prerelease publishing requires an explicit successful CI run ID')
@@ -140,7 +173,7 @@ def verified_run(client, commit, run_id=None, check_only=False, prerelease=False
     branch = 'main' if main_ci else run['head_branch']
     require(client('/branches/' + urllib.parse.quote(branch, safe=''))['commit']['sha'] == commit,
             'Source branch has changed; select its current successful CI')
-    jobs = client(f'/actions/runs/{run_id}/jobs?filter=latest&per_page=100')['jobs']
+    jobs = workflow_jobs(client, run, CI_JOBS)
     require(len(jobs) == len(CI_JOBS) and {j['name'] for j in jobs} == CI_JOBS,
             'CI does not cover all required desktop platforms and Android ABIs')
     require(all(j['status'] == 'completed' and j['conclusion'] == 'success' for j in jobs), 'A required CI job did not pass')
@@ -202,7 +235,7 @@ def verified_package_run(client, run_id, commit, check_only=False, prerelease=Fa
             'Package workflow branch differs from the selected CI')
     require(run['head_sha'] == commit and run['head_repository']['full_name'].lower() == client.repo.lower(),
             'Package workflow source differs from the selected CI')
-    jobs = client(f'/actions/runs/{run_id}/jobs?filter=latest&per_page=100')['jobs']
+    jobs = workflow_jobs(client, run, PACKAGE_JOBS)
     required = [job for job in jobs if job['name'] in PACKAGE_JOBS]
     require(len(required) == len(PACKAGE_JOBS) and {j['name'] for j in required} == PACKAGE_JOBS,
             'Release workflow does not cover every package and Ubuntu compatibility test')

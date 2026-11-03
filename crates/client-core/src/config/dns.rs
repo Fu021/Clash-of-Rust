@@ -9,6 +9,10 @@ pub const DEFAULT_DNS_NAMESERVERS: [&str; 2] = [
     "https://dns.alidns.com/dns-query",
 ];
 
+// mihomo otherwise stops waiting 100 ms after the A response, which can miss
+// the only usable address of an IPv6-only node when AAAA is slower.
+pub(super) const DEFAULT_IPV6_TIMEOUT_MS: u32 = 1_000;
+
 // Keep this list limited to local names and protocols/clients that need real
 // addresses (bound/bypass sockets, peer discovery, STUN and connectivity probes).
 // References: tailscale.com/docs/reference/dns-in-tailscale;
@@ -95,6 +99,8 @@ pub(super) fn apply(map: &mut Mapping, settings: &Settings) -> Result<bool> {
         dns.insert(Value::from("enhanced-mode"), Value::from("redir-host"));
     }
     dns.insert(Value::from("ipv6"), Value::from(settings.ipv6));
+    dns.entry(Value::from("ipv6-timeout"))
+        .or_insert(Value::from(DEFAULT_IPV6_TIMEOUT_MS));
     map.insert(Value::from("dns"), Value::Mapping(dns));
     Ok(managed)
 }

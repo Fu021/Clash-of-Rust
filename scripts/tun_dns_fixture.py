@@ -17,12 +17,14 @@ NODE = ('203.0.113.10', '2001:db8:2::10')
 WEBSITE = ('203.0.113.20', '2001:db8:2::20')
 METRICS = {'bootstrap': 0, 'proxied_dns': 0, 'direct_public_dns': 0,
            'node_connections': 0, 'web': 0, 'plaintext_dns': 0,
-           'bootstrap_public_lookup': 0, 'resolver_bootstrap': 0}
+           'bootstrap_public_lookup': 0, 'resolver_bootstrap': 0,
+           'slow_node6_a': 0, 'slow_node6_aaaa': 0}
 BLOCK_FIXED_BOOTSTRAP = False
 BLOCK_PUBLIC_DNS = False
+DELAY_NODE6_AAAA = False
 
 
-def dns_response(query, bootstrap):
+def dns_question(query):
     end, labels = 12, []
     while query[end]:
         length = query[end]
@@ -31,7 +33,11 @@ def dns_response(query, bootstrap):
     end += 1
     kind, _ = struct.unpack('!HH', query[end:end + 4])
     end += 4
-    name = '.'.join(labels)
+    return '.'.join(labels), kind, end
+
+
+def dns_response(query, bootstrap):
+    name, kind, end = dns_question(query)
     if name == 'resolver.fixture.test':
         address = ('192.0.2.254', '2001:db8:1::fe')
     else:
@@ -52,7 +58,7 @@ def dns_response(query, bootstrap):
 
 
 async def http(reader, writer):
-    global BLOCK_FIXED_BOOTSTRAP, BLOCK_PUBLIC_DNS
+    global BLOCK_FIXED_BOOTSTRAP, BLOCK_PUBLIC_DNS, DELAY_NODE6_AAAA
     try:
         head = await asyncio.wait_for(reader.readuntil(b'\r\n\r\n'), 8)
         path = head.split(b' ', 2)[1].decode('ascii')
@@ -63,6 +69,9 @@ async def http(reader, writer):
             body, content_type = b'ok', 'text/plain'
         elif path.startswith('/block-public-dns/'):
             BLOCK_PUBLIC_DNS = path.endswith('/on')
+            body, content_type = b'ok', 'text/plain'
+        elif path.startswith('/delay-node6-aaaa/'):
+            DELAY_NODE6_AAAA = path.endswith('/on')
             body, content_type = b'ok', 'text/plain'
         elif path == '/metrics':
             body, content_type = json.dumps(METRICS).encode(), 'application/json'
@@ -86,6 +95,13 @@ async def http(reader, writer):
                 METRICS['direct_public_dns'] += 1
             encoded = path.split('dns=', 1)[1].split('&', 1)[0]
             query = base64.urlsafe_b64decode(encoded + '=' * (-len(encoded) % 4))
+            name, kind, _ = dns_question(query)
+            if DELAY_NODE6_AAAA and bootstrap and direct and name.startswith('node6.'):
+                if kind == 1:
+                    METRICS['slow_node6_a'] += 1
+                elif kind == 28:
+                    METRICS['slow_node6_aaaa'] += 1
+                    await asyncio.sleep(0.35)
             body, content_type = dns_response(query, bootstrap), 'application/dns-message'
         else:
             METRICS['web'] += 1

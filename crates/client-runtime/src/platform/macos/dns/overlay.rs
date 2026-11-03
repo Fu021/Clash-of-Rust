@@ -2,7 +2,7 @@
 use super::ResolverLease;
 use anyhow::{Result, ensure};
 use serde_json::{Value, json};
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 
 pub(super) type Services = BTreeMap<String, Value>;
 const ADDRESS_FIELDS: &[&str] = &["ServerAddresses", "ServerPort"];
@@ -179,6 +179,33 @@ pub(super) fn quarantine(sources: &Services, prefix: &str, port: u16) -> Vec<Res
     result
 }
 
+pub(super) fn protected_scopes(entries: &[ResolverLease]) -> Result<Vec<String>> {
+    let mut scopes = BTreeSet::new();
+    for original in entries.iter().filter_map(|entry| entry.original.as_ref()) {
+        for field in ["SupplementalMatchDomains", "SearchDomains"] {
+            for name in names(original, field) {
+                let domain = name.trim_end_matches('.').to_ascii_lowercase();
+                if crate::claude_check::protection::protected_dns_split(&domain) {
+                    ensure!(
+                        domain.len() <= 206
+                            && domain.split('.').all(|label| {
+                                !label.is_empty()
+                                    && label.len() <= 63
+                                    && label.bytes().all(|byte| {
+                                        byte.is_ascii_alphanumeric() || byte == b'-' || byte == b'_'
+                                    })
+                            }),
+                        "保护 DNS 分域无法进行原生就绪检查"
+                    );
+                    scopes.insert(domain);
+                    ensure!(scopes.len() <= 128, "保护 DNS 分域超过就绪检查上限");
+                }
+            }
+        }
+    }
+    Ok(scopes.into_iter().collect())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -288,6 +315,7 @@ mod tests {
             json!(["", "claude.ai"])
         );
         assert_eq!(restored(&entry.owned, entry), Some(sources["vpn"].clone()));
+        assert_eq!(protected_scopes(&quarantined).unwrap(), ["claude.ai"]);
         let split_only = Services::from([(
             "vpn".into(),
             json!({
@@ -298,5 +326,46 @@ mod tests {
         assert!(plan(&split_only, PREFIX, 25353).is_err());
         let quarantine = quarantine(&split_only, PREFIX, 25353);
         assert_eq!(quarantine[1].owned["ServerAddresses"], json!(["127.0.0.1"]));
+        assert_eq!(protected_scopes(&quarantine).unwrap(), ["com"]);
+    }
+
+    #[test]
+    fn native_scopes_include_parent_child_and_search_conflicts_once() {
+        let sources = Services::from([(
+            "vpn".into(),
+            json!({
+                "ServerAddresses":["100.100.100.100"],
+                "SupplementalMatchDomains":["", "CLAUDE.ai.", "nested.claude.ai", "corp.test"],
+                "SearchDomains":["claude.ai", "bash.ws", "tail.test"],
+            }),
+        )]);
+        let quarantine = quarantine(&sources, PREFIX, 25353);
+        assert_eq!(
+            protected_scopes(&quarantine).unwrap(),
+            ["bash.ws", "claude.ai", "nested.claude.ai"]
+        );
+    }
+
+    #[test]
+    fn excessive_or_unprobeable_conflicts_fail_closed() {
+        let too_long = format!(
+            "{}.{}.{}.longerlabel.claude.ai",
+            "a".repeat(63),
+            "b".repeat(63),
+            "c".repeat(63)
+        );
+        let domains = (0..129)
+            .map(|index| format!("scope-{index}.claude.ai"))
+            .collect::<Vec<_>>();
+        for conflicts in [vec![too_long], domains] {
+            let sources = Services::from([(
+                "vpn".into(),
+                json!({
+                    "ServerAddresses":["100.100.100.100"],
+                    "SupplementalMatchDomains": conflicts,
+                }),
+            )]);
+            assert!(protected_scopes(&quarantine(&sources, PREFIX, 25353)).is_err());
+        }
     }
 }

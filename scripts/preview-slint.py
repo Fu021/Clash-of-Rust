@@ -43,6 +43,16 @@ DIALOGS = {
 }
 
 
+def protection_fixture(state: str) -> dict:
+    health = {"off": 0, "active": 1, "checking": 2, "error": 3}[state]
+    return {
+        "preview-protected": health > 0,
+        "preview-protection-pending": state == "checking",
+        "preview-protection-health": health,
+        "preview-protection-message": "DNS 接管未就绪，正在等待重新验证" if state == "error" else "",
+    }
+
+
 def mobile_preview(args) -> None:
     """Preview the independent Android/iOS entries without building a native host."""
     platforms = ['android', 'ios'] if args.platform == 'both' else [args.platform]
@@ -82,7 +92,7 @@ def mobile_preview(args) -> None:
                       'text-scale': scale, 'preview-connected': connected, 'preview-keyboard': keyboard,
                       'preview-notice': args.notice, 'preview-notice-elapsed': args.notice_elapsed,
                       'preview-rules-scroll': args.scroll_y,
-                      **extra}
+                      **protection_fixture(args.protection_state), **extra}
             fixture = fixtures / (name + '.json')
             fixture.write_text(json.dumps(values), encoding='utf-8')
             path = output / (name + '.png')
@@ -134,7 +144,8 @@ def mobile_preview(args) -> None:
             render('rule-keyboard', '键盘避让', page=4, detail=2, keyboard=300)
             render('rule-selected', '规则操作置顶', page=4, **{'preview-selected-rule': True})
             render('rules-shortcuts', '快捷规则', page=4, **{'preview-shortcuts': True})
-            render('protection-pending', '切换期间进度', page=8, **{'preview-protection-pending': True})
+            render('protection-pending', '切换期间进度', page=8,
+                   **{'preview-protection-pending': True, 'preview-protection-health': 2})
             render('notice', '通知与消退进度', **{'preview-notice': '配置已更新，当前连接保持运行。', 'preview-notice-elapsed': 3})
             render('notice-over-modal', '通知位于弹窗上方', page=9, detail=11,
                    **{'preview-notice': '强调色已保存。', 'preview-notice-elapsed': 3})
@@ -314,6 +325,8 @@ def main() -> None:
     parser.add_argument("--pairs", action="store_true", help="also render light/dark pairs suitable for inline sharing")
     parser.add_argument("--full-settings", action="store_true", help="show all settings without scrolling in its page screenshot")
     parser.add_argument("--notice", default="", help="show a floating notification using the production component")
+    parser.add_argument("--protection-state", choices=["off", "active", "checking", "error"], default="off",
+                        help="preview the persistent protection indicator without network effects")
     parser.add_argument("--notice-elapsed", type=float, default=3, help="elapsed notification lifetime in seconds")
     parser.add_argument("--size")
     parser.add_argument("--detail", type=int, default=0, help="preview one mobile detail view without rendering the full matrix")
@@ -360,7 +373,8 @@ def main() -> None:
     themes = ["light", "dark"] if args.theme == "both" else [args.theme]
     if args.live:
         fixture = fixtures / "live.json"
-        values = {"preview-page": list(PAGES).index(pages[0]), "preview-motion": True}
+        values = {"preview-page": list(PAGES).index(pages[0]), "preview-motion": True,
+                  **protection_fixture(args.protection_state)}
         fixture.write_text(json.dumps({**values, "preview-dark": themes[0] == "dark"}))
         subprocess.run([args.viewer, "--auto-reload", "--load-data", str(fixture), str(entry)],
                        cwd=ROOT, env=env, check=True)
@@ -376,7 +390,8 @@ def main() -> None:
             fixture = fixtures / f"{name}-{theme}.json"
             fixture.write_text(json.dumps({"preview-page": list(PAGES).index(page), "preview-dark": theme == "dark", "dialog": dialog,
                                            "preview-rules-scroll": args.scroll_y,
-                                           "preview-notice": args.notice, "preview-notice-elapsed": args.notice_elapsed}))
+                                           "preview-notice": args.notice, "preview-notice-elapsed": args.notice_elapsed,
+                                           **protection_fixture(args.protection_state)}))
             image = output / f"{name}-{theme}.png"
             scene_size = f"{width}x{max(height, 1120)}" if args.full_settings and page == "settings" and not dialog else args.size
             run_viewer(args.viewer, ["--load-data", str(fixture), "--size", scene_size,

@@ -58,11 +58,20 @@ impl PendingUpdate {
         profiles: &[Profile],
         store: &Store,
     ) -> Result<bool> {
-        if settings.subscription_update_interval_minutes == 0
-            || settings
-                .claude_protection
-                .as_ref()
-                .is_some_and(|protection| protection.profile_id == self.profile.id)
+        Ok(settings.subscription_update_interval_minutes != 0
+            && self.is_unchanged(settings, profiles, store)?)
+    }
+
+    pub fn is_unchanged(
+        &self,
+        settings: &Settings,
+        profiles: &[Profile],
+        store: &Store,
+    ) -> Result<bool> {
+        if settings
+            .claude_protection
+            .as_ref()
+            .is_some_and(|protection| protection.profile_id == self.profile.id)
             || !profiles.iter().any(|profile| profile == &self.profile)
         {
             return Ok(false);
@@ -121,6 +130,10 @@ mod tests {
         let pending = PendingUpdate::capture(profiles[0].clone(), &store).unwrap();
         let mut settings = Settings::default();
         assert!(pending.is_current(&settings, &profiles, &store).unwrap());
+        settings.subscription_update_interval_minutes = 0;
+        assert!(!pending.is_current(&settings, &profiles, &store).unwrap());
+        assert!(pending.is_unchanged(&settings, &profiles, &store).unwrap());
+        settings.subscription_update_interval_minutes = 1;
         assert!(!pending.is_current(&settings, &[], &store).unwrap());
         let mut changed = profiles.clone();
         changed[0].source = "https://example.test/replaced".into();

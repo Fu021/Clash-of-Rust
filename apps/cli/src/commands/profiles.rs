@@ -30,6 +30,7 @@ pub(super) async fn execute(args: &Args) -> Result<()> {
                     name: name.into(),
                     source,
                     id: None,
+                    expect_current: false,
                 },
             )
             .await?;
@@ -63,6 +64,7 @@ pub(super) async fn execute(args: &Args) -> Result<()> {
                         name: p.name.clone(),
                         source: p.source.clone(),
                         id: Some(p.id.clone()),
+                        expect_current: true,
                     },
                 )
                 .await;

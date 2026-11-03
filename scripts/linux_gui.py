@@ -1,0 +1,527 @@
+"""Installed GUI checks using X11 and a real nested/headless GNOME Wayland shell.
+
+Runs once per installed distribution. Authorization uses a disposable identity,
+the production polkit action and a real graphical authentication agent.
+"""
+import argparse
+import ast
+import contextlib
+import json
+import os
+from pathlib import Path
+import secrets
+import shutil
+import signal
+import subprocess
+import sys
+import tempfile
+import time
+
+from build_support import ROOT, run, write_json
+
+APP = Path('/opt/clash-of-rust')
+REPORT = ROOT/'target/linux-report'
+ACTION = 'org.clashofrust.tun.authorize'
+
+
+def wait_for(description, probe, timeout=45):
+    deadline = time.monotonic()+timeout
+    while time.monotonic() < deadline:
+        result = probe()
+        if result:
+            return result
+        time.sleep(.2)
+    raise TimeoutError(description)
+
+
+def output(command, **kwargs):
+    return subprocess.check_output(list(map(str, command)), text=True, timeout=15, **kwargs).strip()
+
+
+def dbus(destination, path, method, *arguments):
+    return output(['gdbus', 'call', '--session', '--dest', destination,
+                   '--object-path', path, '--method', method, *arguments])
+
+
+def evaluate(script):
+    result = dbus('org.gnome.Shell', '/org/gnome/Shell', 'org.gnome.Shell.Eval', script)
+    ok, value = ast.literal_eval(result.replace('(true,', '(True,').replace('(false,', '(False,'))
+    if not ok:
+        raise RuntimeError('GNOME rejected window inspection: '+value)
+    return json.loads(value) if value else None
+
+
+@contextlib.contextmanager
+def process(command, log, env=None):
+    child = subprocess.Popen(list(map(str, command)), stdout=log, stderr=subprocess.STDOUT,
+                             env=env, start_new_session=True)
+    try:
+        yield child
+    finally:
+        with contextlib.suppress(ProcessLookupError):
+            os.killpg(child.pid, signal.SIGTERM)
+        try:
+            child.wait(timeout=10)
+        except subprocess.TimeoutExpired:
+            os.killpg(child.pid, signal.SIGKILL)
+            child.wait(timeout=5)
+
+
+def authorization_dialog(request, agent, request_log):
+    if agent.poll() is not None:
+        raise RuntimeError('Graphical polkit agent exited before authorization')
+    code = request.poll()
+    if code is not None:
+        request_log.flush()
+        request_log.seek(0)
+        text = request_log.read()
+        if 'No authentication agent found' in text:
+            return 'retry', None
+        raise RuntimeError(f'Authorization request exited before the dialog: {code}: {text.strip()}')
+    found = subprocess.run(['xdotool', 'search', '--onlyvisible', '--name',
+                            'Authentication|Authenticate'],
+                           capture_output=True, text=True)
+    if found.returncode == 0 and found.stdout.strip():
+        return 'dialog', found.stdout.splitlines()[0]
+    return None
+
+
+def authentication():
+    helper = APP/'clash-of-rust'
+    launcher = APP/'clash-tun-launcher'
+    dns_helper = APP/'libexec/resolvectl'
+    before = (output(['getcap', launcher]), dns_helper.stat().st_mode & 0o7777)
+    agent = '/usr/lib/policykit-1-gnome/polkit-gnome-authentication-agent-1'
+    with (Path(os.environ['COR_GUI_REPORT'])/'authentication.log').open('w') as log:
+        with process([agent], log) as registered:
+            for allow in (False, True):
+                deadline = time.monotonic()+90
+                while True:
+                    remaining = deadline-time.monotonic()
+                    if remaining <= 0:
+                        raise TimeoutError('Production authorization did not show a graphical dialog')
+                    with tempfile.TemporaryFile(mode='w+t', encoding='utf-8') as request_log:
+                        try:
+                            with process(['pkexec', '--disable-internal-agent', helper, '--authorize-tun'],
+                                         request_log) as request:
+                                state, window = wait_for(
+                                    'Production authorization did not show a graphical dialog',
+                                    lambda: authorization_dialog(request, registered, request_log),
+                                    timeout=remaining)
+                                if state == 'retry':
+                                    time.sleep(1)
+                                    continue
+                                run(['xdotool', 'windowactivate', '--sync', window])
+                                if allow:
+                                    password = Path(os.environ['COR_GUI_AUTH_PASSWORD_FILE']).read_text()
+                                    typed = subprocess.run(['xdotool', 'type', '--clearmodifiers', '--delay', '10',
+                                                            '--', password], stdout=subprocess.DEVNULL, stderr=log)
+                                    if typed.returncode:
+                                        raise RuntimeError('Could not enter the disposable account password')
+                                    run(['xdotool', 'key', 'Return'])
+                                else:
+                                    run(['xdotool', 'key', 'Escape'])
+                                code = request.wait(timeout=30)
+                                if allow:
+                                    if (code or 'cap_net_admin,cap_net_raw' not in output(['getcap', launcher])
+                                            or dns_helper.stat().st_mode & 0o7777 != 0o4755):
+                                        raise RuntimeError('Accepted graphical authorization did not grant the installed helper')
+                                elif code == 0 or (output(['getcap', launcher]), dns_helper.stat().st_mode & 0o7777) != before:
+                                    raise RuntimeError('Cancelled graphical authorization changed network permissions')
+                                break
+                        finally:
+                            request_log.seek(0)
+                            log.write(request_log.read())
+                            log.flush()
+    return {'cancel_preserved_permissions': True, 'accept_granted_helper': True,
+            'production_action': ACTION, 'graphical_agent': True}
+
+
+def notifier():
+    try:
+        value = json.loads(output(['busctl', '--user', '--json=short', 'get-property',
+                                  'org.kde.StatusNotifierWatcher', '/StatusNotifierWatcher',
+                                  'org.kde.StatusNotifierWatcher', 'RegisteredStatusNotifierItems']))
+        entries = value['data']
+        return entries[0] if len(entries) == 1 and isinstance(entries[0], list) else entries
+    except (subprocess.SubprocessError, ValueError, KeyError):
+        return []
+
+
+def window_script():
+    return ('global.get_window_actors().map(a=>a.meta_window)'
+            '.filter(w=>w && (w.get_title()||"").indexOf("Clash of Rust")>=0)'
+            '.map(w=>{let r=w.get_frame_rect(); return {pid:w.get_pid(),'
+            'sequence:w.get_stable_sequence(),'
+            'wayland:w.get_client_type()===imports.gi.Meta.WindowClientType.WAYLAND,'
+            'title:w.get_title(),width:r.width,height:r.height};})')
+
+
+def select_wayland_windows(windows, renderers):
+    native = [window for window in windows if window['wayland']]
+    owned = [window for window in native if window['pid'] in renderers]
+    if owned:
+        return owned
+    # GNOME 3.36 exposes get_pid(), but it does not return a Wayland client
+    # PID. This session is isolated: accept only one window and one renderer.
+    if (len(windows) == len(native) == len(renderers) == 1
+            and native[0]['pid'] <= 0):
+        return native
+    return []
+
+
+def inspect(backend):
+    if backend == 'wayland':
+        return evaluate(window_script())
+    tree = output(['xwininfo', '-root', '-tree'])
+    import re
+    windows = re.findall(r'^\s*(0x[0-9a-fA-F]+)\s+"(Clash of Rust[^"]*)"', tree, re.M)
+    result = []
+    for window, title in windows:
+        info = output(['xwininfo', '-id', window])
+        if 'Map State: IsViewable' in info:
+            result.append({'id': window, 'title': title,
+                           'width': int(re.search(r'Width:\s+(\d+)', info)[1]),
+                           'height': int(re.search(r'Height:\s+(\d+)', info)[1])})
+    return result
+
+
+def wait_for_usable_window(backend, probe, timeout=45):
+    last_windows = []
+
+    def ready():
+        nonlocal last_windows
+        windows = probe()
+        if windows:
+            last_windows = windows
+        if any(window['width'] >= 800 and window['height'] >= 450 for window in windows):
+            return windows
+        return None
+
+    try:
+        return wait_for('Installed '+backend+' GUI did not reach its minimum size', ready, timeout)
+    except TimeoutError as error:
+        raise RuntimeError(
+            f'Installed {backend} GUI did not reach 800x450; last windows: {last_windows}'
+        ) from error
+
+
+def gnome_command(help_text, major):
+    command = ['gnome-shell', '--wayland']
+    if '--wayland-display' in help_text:
+        command.append('--wayland-display=cor-wayland')
+    if '--headless' in help_text:
+        command.extend(['--headless', '--virtual-monitor=1280x900'])
+    else:
+        command.append('--nested')
+    # Mutter hides this supported option from --help; GNOME 3.x uses
+    # the development-tools setting for its equivalent test API.
+    if major >= 41:
+        command.append('--unsafe-mode')
+    return command
+
+
+def wayland_sockets(runtime):
+    return {path.name for path in runtime.iterdir()
+            if (path.name.startswith('wayland-') or path.name == 'cor-wayland') and path.is_socket()}
+
+
+def cli(*arguments):
+    value = json.loads(output([APP/'cor', '--json', *arguments]))
+    return value['data']
+
+
+def core_processes(proc=Path('/proc'), uid=None):
+    uid = os.getuid() if uid is None else uid
+    result = {}
+    # Capability-bearing processes can have root-owned /proc entries and an
+    # unreadable exe link even though their effective UID remains unprivileged.
+    for path in proc.glob('[0-9]*/status'):
+        try:
+            fields = dict(line.split(':', 1) for line in path.read_text().splitlines() if ':' in line)
+            identities = fields['Uid'].split()
+            if (fields['Name'].strip() == 'mihomo'
+                    and len(identities) >= 2
+                    and int(identities[0]) == uid
+                    and int(identities[1]) == uid):
+                result[int(path.parent.name)] = int(fields['PPid'])
+        except (OSError, ValueError, KeyError):
+            pass
+    return result
+
+
+def gui(backend, report):
+    data = report/('profile-'+backend)
+    data.mkdir()
+    env = dict(os.environ, CLASH_OF_RUST_DATA_DIR=str(data), SLINT_BACKEND='winit-software')
+    if backend == 'x11':
+        env.pop('WAYLAND_DISPLAY', None)
+        env.pop('WAYLAND_SOCKET', None)
+    os.environ['CLASH_OF_RUST_DATA_DIR'] = str(data)
+    fixture = report/'local.yaml'
+    fixture.write_text("proxies: []\nproxy-groups: []\nrules: ['MATCH,DIRECT']\n")
+    with (report/(backend+'.log')).open('w') as log, process([APP/'clash-of-rust'], log, env) as owner:
+        observed = []
+        renderer_pids = []
+
+        def visible():
+            nonlocal observed, renderer_pids
+            if owner.poll() is not None:
+                raise RuntimeError(f'Installed {backend} GUI owner exited: {owner.returncode}')
+            windows = inspect(backend)
+            if backend == 'wayland':
+                observed = windows
+                renderer_pids = [int(path.name) for path in Path('/proc').glob('[0-9]*')
+                                 if _renderer(path, owner.pid)]
+                windows = select_wayland_windows(windows, renderer_pids)
+            return windows
+        try:
+            windows = wait_for_usable_window(backend, visible)
+        except RuntimeError as error:
+            if backend == 'wayland':
+                raise RuntimeError(f'{error}; compositor windows: {observed}; '
+                                   f'renderer PIDs: {renderer_pids}; '
+                                   f'WAYLAND_DISPLAY={env.get("WAYLAND_DISPLAY")}') from error
+            raise
+        if any(window['title'] != 'Clash of Rust' for window in windows):
+            raise RuntimeError(f'Unexpected {backend} window title: {windows}')
+        def gui_owner_ready():
+            try:
+                endpoint = json.loads((data/'control.json').read_text())
+                return (isinstance(endpoint, dict)
+                        and endpoint.get('owner') == 'gui' and endpoint.get('pid') == owner.pid)
+            except (OSError, ValueError):
+                return False
+        # A visible window can precede asynchronous engine initialization.
+        wait_for('GUI control endpoint did not become ready', gui_owner_ready)
+        cli('profile', 'add', 'GUI fixture', str(fixture))
+        cli('start')
+        cli('mode', 'global')
+        before = cli('status')
+        processes = wait_for('GUI did not own a core process', core_processes)
+        if (len(processes) != 1 or next(iter(processes.values())) != owner.pid
+                or before.get('owner') != 'gui' or not before.get('running')):
+            raise RuntimeError('GUI and CLI did not share exactly one GUI-owned core')
+        def owner_tray():
+            for entry in notifier():
+                service, separator, suffix = entry.partition('/')
+                try:
+                    pid = ast.literal_eval(dbus('org.freedesktop.DBus', '/org/freedesktop/DBus',
+                                               'org.freedesktop.DBus.GetConnectionUnixProcessID', service)
+                                           .replace('uint32 ', ''))[0]
+                except subprocess.SubprocessError:
+                    continue
+                if pid == owner.pid:
+                    return service, '/'+suffix if separator else '/StatusNotifierItem'
+            return None
+        item = wait_for('GNOME did not register the GUI owner tray', owner_tray)
+        # One graceful close and one renderer loss exercise different lifecycle
+        # paths without repeating the proxy/TUN traffic suite.
+        for crash in (False, True):
+            renderers = [int(path.name) for path in Path('/proc').glob('[0-9]*')
+                         if _renderer(path, owner.pid)]
+            if len(renderers) != 1:
+                raise RuntimeError('Expected exactly one UI renderer')
+            if crash:
+                os.kill(renderers[0], signal.SIGKILL)
+            elif backend == 'wayland':
+                evaluate('global.get_window_actors().map(a=>a.meta_window)'
+                         f'.filter(w=>w && w.get_stable_sequence()==={windows[0]["sequence"]}'
+                         ' && (w.get_title()||"").indexOf("Clash of Rust")>=0)'
+                         '.forEach(w=>w.delete(global.get_current_time())); ""')
+            else:
+                run(['wmctrl', '-ic', windows[0]['id']])
+            wait_for('Closed renderer survived', lambda: not Path('/proc/'+str(renderers[0])).exists())
+            if owner.poll() is not None:
+                raise RuntimeError(f'{backend} {"crash" if crash else "close"} terminated '
+                                   f'the GUI owner: {owner.returncode}')
+            dbus(item[0], item[1], 'org.kde.StatusNotifierItem.Activate', '0', '0')
+            windows = wait_for_usable_window(backend, visible)
+            after = cli('status')
+            if (core_processes() != processes or not after.get('running')
+                    or after.get('owner') != 'gui' or after.get('mode') != before.get('mode')):
+                raise RuntimeError('Window reconstruction changed the core or CLI mode')
+        cli('stop')
+        return {'windows': windows, 'tray': True, 'graceful_close': True, 'renderer_crash': True,
+                'core_pid_preserved': True, 'cli_state_preserved': True}
+
+
+def _renderer(path, owner):
+    try:
+        return (path.stat().st_uid == os.getuid()
+                and (path/'exe').resolve().name == 'clash-desktop-ui'
+                and int((path/'stat').read_text().rsplit(')', 1)[1].split()[1]) == owner)
+    except (OSError, ValueError, RuntimeError):
+        return False
+
+
+def session():
+    if os.geteuid() == 0:
+        raise RuntimeError('GUI must run as an ordinary user')
+    report = Path(os.environ['COR_GUI_REPORT'])
+    result = {'status': 'running', 'checks': {}}
+    try:
+        session_id = os.environ.get('XDG_SESSION_ID')
+        manager = ['busctl', '--system', 'call', 'org.freedesktop.login1', '/org/freedesktop/login1',
+                   'org.freedesktop.login1.Manager']
+        if (not session_id or not os.environ.get('XDG_RUNTIME_DIR')
+                or output([*manager, 'GetSessionByPID', 'u', str(os.getpid())])
+                != output([*manager, 'GetSession', 's', session_id])):
+            raise RuntimeError('GUI user does not belong to the expected logind session')
+        result['checks']['login_session'] = True
+        with (report/'desktop.log').open('w') as log, contextlib.ExitStack() as stack:
+            display = stack.enter_context(process(['Xvfb', ':91', '-screen', '0', '1280x900x24',
+                                                   '-nolisten', 'tcp'], log))
+            os.environ['DISPLAY'] = ':91'
+            wait_for('X11 display did not start',
+                     lambda: subprocess.run(['xdpyinfo'], stdout=subprocess.DEVNULL,
+                                            stderr=subprocess.DEVNULL).returncode == 0)
+            run(['dbus-update-activation-environment', '--systemd', 'DBUS_SESSION_BUS_ADDRESS',
+                 'DISPLAY', 'HOME', 'XDG_CONFIG_HOME', 'XDG_DATA_HOME', 'XDG_CACHE_HOME',
+                 'XDG_CURRENT_DESKTOP'])
+            stack.enter_context(process(['openbox'], log))
+            result['checks']['authorization'] = authentication()
+            run(['gsettings', 'set', 'org.gnome.shell', 'enabled-extensions',
+                 "['ubuntu-appindicators@ubuntu.com']"])
+            if 'ubuntu-appindicators@ubuntu.com' not in output(
+                    ['gsettings', 'get', 'org.gnome.shell', 'enabled-extensions']):
+                raise RuntimeError('GNOME test extension setting did not persist')
+            import re
+            version = re.search(r'\b(\d+)\.\d+', output(['gnome-shell', '--version']))
+            if not version:
+                raise RuntimeError('Could not determine the GNOME Shell version')
+            major = int(version[1])
+            if major < 41:
+                run(['gsettings', 'set', 'org.gnome.shell', 'development-tools', 'true'])
+                if output(['gsettings', 'get', 'org.gnome.shell', 'development-tools']) != 'true':
+                    raise RuntimeError('GNOME development tools setting did not persist')
+            help_text = output(['gnome-shell', '--help'])
+            command = gnome_command(help_text, major)
+            runtime = Path(os.environ['XDG_RUNTIME_DIR'])
+            existing_sockets = wayland_sockets(runtime)
+            shell = stack.enter_context(process(command, log))
+            def ready():
+                if shell.poll() is not None or display.poll() is not None:
+                    raise RuntimeError('Desktop compositor exited')
+                try:
+                    if not evaluate('true'):
+                        return False
+                except (subprocess.SubprocessError, ValueError, RuntimeError):
+                    return False
+                sockets = wayland_sockets(runtime)-existing_sockets
+                if '--wayland-display=cor-wayland' in command:
+                    sockets &= {'cor-wayland'}
+                if len(sockets) > 1:
+                    raise RuntimeError(f'GNOME created multiple Wayland sockets: {sorted(sockets)}')
+                if sockets:
+                    os.environ['WAYLAND_DISPLAY'] = next(iter(sockets))
+                    return True
+                return False
+            wait_for('GNOME Wayland compositor did not become ready', ready, timeout=60)
+            for backend in ('x11', 'wayland'):
+                result['checks'][backend] = gui(backend, report)
+            result['status'] = 'passed'
+    except BaseException as error:
+        result['status'] = 'failed'
+        result['error'] = str(error)
+        raise
+    finally:
+        write_json(report/'gui.json', result)
+
+
+def stage_session(directory):
+    scripts = directory/'scripts'
+    scripts.mkdir(mode=0o755)
+    scripts.chmod(0o755)
+    for name in ('linux_gui.py', 'build_support.py'):
+        target = scripts/name
+        shutil.copyfile(Path(__file__).resolve().parent/name, target)
+        target.chmod(0o644)
+    return scripts/'linux_gui.py'
+
+
+def preserve_report(source):
+    destination = REPORT/'desktop'
+    destination.mkdir(parents=True, exist_ok=True)
+    for name in ('gui.json', 'authentication.log', 'desktop.log', 'x11.log', 'wayland.log'):
+        path = source/name
+        if path.is_file() and not path.is_symlink():
+            shutil.copyfile(path, destination/name)
+
+
+def launch_session():
+    # Retain PAM's session identity and the explicit test settings only. The
+    # graphical processes must not inherit credentials from an Actions runner.
+    allowed = ('HOME', 'USER', 'LOGNAME', 'PATH', 'SHELL', 'LANG', 'XDG_SESSION_ID',
+               'XDG_RUNTIME_DIR', 'XDG_SEAT', 'XDG_VTNR', 'XDG_SESSION_TYPE',
+               'XDG_SESSION_CLASS', 'XDG_CONFIG_HOME', 'XDG_CURRENT_DESKTOP',
+               'GNOME_SHELL_SESSION_MODE', 'LIBGL_ALWAYS_SOFTWARE', 'GSETTINGS_BACKEND',
+               'COR_GUI_REPORT', 'COR_GUI_AUTH_PASSWORD_FILE', 'PYTHONDONTWRITEBYTECODE',
+               'GITHUB_ACTIONS', 'NO_AT_BRIDGE')
+    env = {key: os.environ[key] for key in allowed if key in os.environ}
+    home = Path(env['COR_GUI_REPORT']).parent/'home'
+    env.update(HOME=str(home), XDG_CONFIG_HOME=str(home/'.config'),
+               XDG_DATA_HOME=str(home/'.local/share'), XDG_CACHE_HOME=str(home/'.cache'))
+    command = ['/usr/bin/dbus-run-session', '--', sys.executable, '-E', '-s', '-B',
+               str(Path(__file__).resolve()), '--session']
+    os.execve(command[0], command, env)
+
+
+def installed_tests():
+    from linux_ci import require_actions
+    require_actions()
+    REPORT.mkdir(parents=True, exist_ok=True)
+    user = 'corgui'+str(os.getpid())
+    password = secrets.token_hex(12)
+    with tempfile.TemporaryDirectory(prefix='cor-desktop-') as temporary:
+        home = Path(temporary)
+        home.chmod(0o755)
+        script = stage_session(home)
+        report = home/'report'
+        created = False
+        try:
+            run(['sudo', 'useradd', '--create-home', '--groups', 'sudo',
+                 '--home-dir', home/'home', '--shell', '/bin/bash', user])
+            created = True
+            run(['sudo', 'chpasswd'], input=user+':'+password+'\n', text=True)
+            run(['sudo', 'install', '-d', '-m', '0755', '-o', user, '-g', user, report])
+            password_file = home/'password'
+            descriptor = os.open(password_file, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+            with os.fdopen(descriptor, 'w') as stream:
+                stream.write(password)
+            run(['sudo', 'chown', f'{user}:{user}', password_file])
+            env = {'HOME': str(home/'home'), 'PATH': '/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin',
+                   'XDG_CONFIG_HOME': str(home/'home/.config'),
+                   'XDG_CURRENT_DESKTOP': 'GNOME', 'GNOME_SHELL_SESSION_MODE': 'user',
+                   'LIBGL_ALWAYS_SOFTWARE': '1', 'GSETTINGS_BACKEND': 'dconf',
+                   'COR_GUI_REPORT': str(report), 'COR_GUI_AUTH_PASSWORD_FILE': str(password_file),
+                   'PYTHONDONTWRITEBYTECODE': '1', 'LANG': 'C.UTF-8',
+                   'GITHUB_ACTIONS': 'true', 'NO_AT_BRIDGE': '1'}
+            # PAM registers a real logind session for the graphical polkit agent.
+            subprocess.run(['sudo', 'systemd-run', '--wait', '--pipe', '--collect', '--quiet',
+                            '--property=User='+user, '--property=PAMName=login',
+                            '--property=WorkingDirectory='+str(home),
+                            *('--setenv='+key+'='+value for key, value in env.items()),
+                            sys.executable, '-E', '-s', '-B', script, '--session-launch'],
+                           check=True, cwd=home, timeout=360)
+        finally:
+            if created:
+                subprocess.run(['sudo', 'loginctl', 'terminate-user', user], check=False)
+                subprocess.run(['sudo', 'pkill', '-KILL', '-u', user], check=False)
+                subprocess.run(['sudo', 'userdel', '--remove', user], check=False)
+            run(['sudo', 'chown', '-R', '-h', f'{os.getuid()}:{os.getgid()}', home])
+            if report.is_dir():
+                preserve_report(report)
+
+
+if __name__ == '__main__':
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument('--session', action='store_true')
+    parser.add_argument('--session-launch', action='store_true')
+    args = parser.parse_args()
+    if args.session_launch:
+        launch_session()
+    elif args.session:
+        session()
+    else:
+        installed_tests()

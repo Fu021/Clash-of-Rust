@@ -4,6 +4,37 @@ use clash_client_ui::{AppWindow, Intent, UiActions, UiData, models::ViewModels};
 use slint::{ComponentHandle, Model};
 
 #[test]
+fn closing_a_foreground_window_while_the_tray_starts_waits_before_exiting() {
+    let mut app = fixture(Page::Home);
+    app.visible = true;
+    app.tray_startup = Some(tray::Startup::new(Duration::from_millis(1)));
+    let id = runtime::window::Id::unique();
+
+    let _ = app.update(Message::Window((
+        id,
+        runtime::window::Event::CloseRequested,
+    )));
+    assert!(app.visible);
+    assert!(!app.exiting);
+    assert_eq!(app.tray_close_requested, Some(id));
+    assert!(app.notice_visible);
+
+    let _ = app.update(Message::ShowWindow(Some(id)));
+    assert!(app.tray_close_requested.is_none());
+    let _ = app.update(Message::Window((
+        id,
+        runtime::window::Event::CloseRequested,
+    )));
+    assert_eq!(app.tray_close_requested, Some(id));
+    let _ = app.update(Message::Window((
+        id,
+        runtime::window::Event::CloseRequested,
+    )));
+    assert!(app.exiting);
+    assert!(app.tray_close_requested.is_none());
+}
+
+#[test]
 fn dropping_rules_uses_identities_in_the_full_draft_and_ignores_stale_rows() {
     let mut app = fixture(Page::Rules);
     let document = rule_manager::Document::from_raw(
@@ -1723,10 +1754,14 @@ fn failed_subscription_update_keeps_measurements_and_reports_until_a_successful_
 
     let mut failed = synchronized_reply(&app);
     failed.view_revision = app.view_revision;
-    failed.notice = Err("订阅更新失败，已保留原配置与运行状态".into());
+    failed.notice = Err(
+        "订阅更新失败，已保留原配置与运行状态：订阅格式不兼容，请选择 Mihomo/Clash Meta YAML 订阅"
+            .into(),
+    );
     let _ = app.update(Message::Finished(Box::new(failed)));
     assert!(!app.busy && !app.working);
     assert!(app.error && app.notice.contains("保留原配置"));
+    assert!(app.notice_visible && app.notice.contains("Mihomo/Clash Meta YAML"));
     assert!(app.snapshot.running && app.core_failure.is_none());
     assert_eq!(serde_json::to_value(&app.profiles).unwrap(), before);
     assert_eq!(app.node_delays.get("Test"), Some(&42));
@@ -1741,6 +1776,78 @@ fn failed_subscription_update_keeps_measurements_and_reports_until_a_successful_
     assert!(app.node_delays.is_empty() && app.site_results.is_empty());
     assert!(app.claude.reports.iter().all(Option::is_none));
     assert!(!app.error && app.snapshot.running);
+}
+
+#[test]
+fn scheduled_subscription_format_failure_notifies_once_without_marking_the_core_unhealthy() {
+    use clash_client_core::subscription::UpdateFailure;
+
+    let mut app = fixture(Page::Profiles);
+    app.updates.started = true;
+    app.node_delays.insert("saved node".into(), 42);
+    let failure = UpdateFailure {
+        revision: 1,
+        message: "订阅格式不兼容，请选择 Mihomo/Clash Meta YAML 订阅".into(),
+    };
+    let mut reply = synchronized_reply(&app);
+    reply.view_revision = app.view_revision;
+    reply.snapshot.as_mut().unwrap().subscription_failure = Some(failure.clone());
+    let _ = app.update(Message::Finished(Box::new(reply)));
+    assert!(app.notice_visible && app.error);
+    assert_eq!(app.notice, failure.message);
+    assert!(app.snapshot.running && app.core_failure.is_none());
+    assert_eq!(app.node_delays.get("saved node"), Some(&42));
+    let revision = app.notice_revision;
+
+    app.dismiss_notice();
+    let mut reply = synchronized_reply(&app);
+    reply.view_revision = app.view_revision;
+    let _ = app.update(Message::Finished(Box::new(reply)));
+    assert!(!app.notice_visible);
+    assert_eq!(app.notice_revision, revision.wrapping_add(1));
+
+    let mut reply = synchronized_reply(&app);
+    reply.view_revision = app.view_revision;
+    reply.snapshot.as_mut().unwrap().subscription_failure = Some(UpdateFailure {
+        revision: 2,
+        ..failure
+    });
+    let _ = app.update(Message::Finished(Box::new(reply)));
+    assert!(app.notice_visible && app.error);
+}
+
+#[test]
+fn geo_download_survives_unrelated_refresh_and_only_success_clears_results() {
+    let mut app = fixture(Page::Settings);
+    app.geo_updating = true;
+    app.node_delays.insert("Test".into(), 42);
+    let mut refresh = synchronized_reply(&app);
+    refresh.view_revision = app.view_revision;
+    let _ = app.update(Message::Finished(Box::new(refresh)));
+    assert!(app.geo_updating);
+
+    let _ = app.update(Message::GeoFinished(Err("下载失败".into())));
+    assert!(!app.geo_updating);
+    assert_eq!(app.node_delays.get("Test"), Some(&42));
+    assert!(app.error && app.notice.contains("下载失败"));
+
+    app.geo_updating = true;
+    let _ = app.update(Message::GeoFinished(Ok(())));
+    assert!(!app.geo_updating);
+    assert!(app.node_delays.is_empty());
+    assert!(!app.error && app.notice.contains("已全部更新"));
+}
+
+#[test]
+fn geo_update_from_another_client_clears_stale_results() {
+    let mut app = fixture(Page::Settings);
+    app.geo_status = "old Geo".into();
+    app.node_delays.insert("Test".into(), 42);
+    let mut reply = synchronized_reply(&app);
+    reply.geo_status = "new Geo".into();
+    let _ = app.update(Message::Finished(Box::new(reply)));
+    assert!(app.node_delays.is_empty());
+    assert_eq!(app.geo_status, "new Geo");
 }
 
 #[test]
@@ -1863,6 +1970,68 @@ fn a_locked_rules_page_still_accepts_the_global_exit_confirmation() {
     assert!(!app.exiting);
     let _ = app.ui_intent(Intent::Confirm, "", "");
     assert!(app.exiting);
+}
+
+#[test]
+fn every_page_projects_protection_readiness_and_discards_unconfirmed_success() {
+    use clash_client_core::protection::{Previous, Protection, status};
+    let mut app = fixture(Page::Home);
+    app.settings.claude_protection = Some(Arc::new(Protection::new(
+        "fixture".into(),
+        "node".into(),
+        Previous {
+            mode: "rule".into(),
+            proxy_mode: ProxyMode::Off,
+            selectors: vec![],
+        },
+    )));
+    for page in Page::ALL {
+        app.page = page;
+        for (guard, expected) in [
+            (Some((true, "")), status::State::Active),
+            (None, status::State::Checking),
+            (Some((false, "DNS 接管未就绪")), status::State::Error),
+        ] {
+            app.snapshot.protection_status =
+                status::Status::observe(true, false, true, true, guard);
+            app.snapshot.retain_scope(page.scope());
+            let data = clash_desktop_protocol::UiData::default();
+            let mut models = clash_desktop_protocol::models::ViewModels::default();
+            app.present(&data, &mut models);
+            assert_eq!(data.get_protection_health(), expected as i32);
+        }
+    }
+    let mut reply = synchronized_reply(&app);
+    reply.snapshot = None;
+    let _ = app.update(Message::Finished(Box::new(reply)));
+    assert_eq!(
+        app.snapshot.protection_status.state,
+        status::State::Checking
+    );
+    app.settings.claude_protection = None;
+    let data = clash_desktop_protocol::UiData::default();
+    app.present(
+        &data,
+        &mut clash_desktop_protocol::models::ViewModels::default(),
+    );
+    assert_eq!(data.get_protection_health(), status::State::Off as i32);
+    app.page = Page::Home;
+    for changing in [true, false] {
+        app.claude.protection_pending = changing.then_some(true);
+        app.present(
+            &data,
+            &mut clash_desktop_protocol::models::ViewModels::default(),
+        );
+        assert_eq!(data.get_protection_pending(), changing);
+        assert_eq!(
+            data.get_protection_health(),
+            if changing {
+                status::State::Checking
+            } else {
+                status::State::Off
+            } as i32
+        );
+    }
 }
 
 #[test]

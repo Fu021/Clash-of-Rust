@@ -1110,6 +1110,7 @@ mod tests {
                 assert_eq!(result["ipv6"].as_bool(), Some(ipv6));
                 let mut expected = original["dns"].clone();
                 expected["ipv6"] = Value::from(ipv6);
+                expected["ipv6-timeout"] = Value::from(dns::DEFAULT_IPV6_TIMEOUT_MS);
                 if dns_override {
                     expected["enable"] = Value::from(true);
                     expected["enhanced-mode"] = Value::from("fake-ip");
@@ -1132,6 +1133,34 @@ mod tests {
                 )
                 .unwrap();
                 assert_eq!(reapplied, result);
+            }
+        }
+    }
+
+    #[test]
+    fn ipv6_dns_wait_defaults_and_explicit_subscription_values_are_preserved() {
+        for dns_override in [false, true] {
+            for ipv6 in [false, true] {
+                let settings = Settings {
+                    dns_override,
+                    ipv6,
+                    ..Settings::default()
+                };
+                for (dns, expected) in [
+                    ("{}", dns::DEFAULT_IPV6_TIMEOUT_MS),
+                    ("{ipv6-timeout: 250}", 250),
+                    ("{ipv6-timeout: 3000}", 3000),
+                    ("{ipv6-timeout: 0}", 0),
+                ] {
+                    let raw = format!("proxies: []\ndns: {dns}\n");
+                    let runtime: Value =
+                        yaml_serde::from_str(&runtime_config(&raw, &settings).unwrap()).unwrap();
+                    assert_eq!(
+                        runtime["dns"]["ipv6-timeout"].as_u64(),
+                        Some(u64::from(expected))
+                    );
+                    assert_eq!(runtime["dns"]["ipv6"], ipv6);
+                }
             }
         }
     }

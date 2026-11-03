@@ -1,9 +1,9 @@
 Clash of Rust includes the following third-party software and data:
 
 mihomo (MetaCubeX): https://github.com/MetaCubeX/mihomo
-Version: v1.19.32. Distributed under GPL-3.0.
+Version: v1.19.33. Distributed under GPL-3.0.
 The complete GPLv3 license text is installed as LICENSE.
-Corresponding source: https://github.com/MetaCubeX/mihomo/tree/v1.19.32
+Corresponding source: https://github.com/MetaCubeX/mihomo/tree/v1.19.33
 
 GeoIP.dat, GeoSite.dat, Country.mmdb, ASN.mmdb:
 https://github.com/MetaCubeX/meta-rules-dat
@@ -45,3 +45,6 @@ Slint 1.18.1 (SixtyFPS GmbH): https://github.com/slint-ui/slint/tree/v1.18.1
 Used under GPL-3.0-only; the GPLv3 license is installed as LICENSE.
 The desktop uses winit and the Slint software renderer. Dependency versions
 and corresponding upstream sources are recorded in Cargo.lock.
+The Android backend includes a window lifecycle fix backported from
+https://github.com/slint-ui/slint/commit/611357480eb7a7eb4f1957d912512fadf99a6666.
+Its modified source and original licenses are in vendor/slint-android-activity.

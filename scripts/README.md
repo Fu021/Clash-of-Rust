@@ -7,7 +7,7 @@
 | 脚本 | 类型 | 职责 |
 | --- | --- | --- |
 | `build_support.py` | 共享模块 | 平台识别、版本、资源、下载、架构和暂存目录等标准库辅助。 |
-| `build_inputs.py` | CLI / 模块 | 冻结并应用同一份 Rust、Go、Android 和资源依赖快照。 |
+| `build_inputs.py` | CLI / 模块 | 冻结并应用同一份 Rust、Go、Android、Linux 基线和资源依赖快照。 |
 | `workflow_artifacts.py` | CLI / 模块 | 导出、下载和校验不可变 CI 产物，不重新编译。 |
 | `action_cache.py` | CLI / 模块 | 认证私网缓存协议、恢复预算、校验和清单。 |
 | `cache_shards.py` | 模块 | Rust 32 分片缓存的恢复、失效和增量上传。 |
@@ -19,6 +19,8 @@
 | `macos_package.py` | 模块 | macOS App / DMG 组装；被打包器和 macOS 验证延迟导入。 |
 | `publish-release.py` | CLI / 模块 | 校验成功 CI，复用已验证产物创建测试包或公开正式/预发布 Release。 |
 | `run-ci.py` | CLI | 单个原生平台的编译、Clippy、源码测试与代理/TUN 集成入口。 |
+| `linux_ci.py` | CLI / 模块 | Linux 基线容器、ELF 审计和旧内核虚拟机；容器及 VM 必须运行在可丢弃 Actions 环境。 |
+| `linux_gui.py` | CLI / 模块 | Linux 安装后 X11/Wayland 窗口、托盘、共享后台与图形授权验证。 |
 | `windows_ci.py` | 模块 | Windows 普通用户、服务、安装器、更新及安装包/未压缩 EXE/DLL 的 Defender 验证，扫描证据进入打包收据。 |
 | `macos_ci.py` | CLI / 模块 | macOS 原生验证、安装检查和诊断报告。 |
 | `test-proxy-modes.py` | CLI | Windows、Linux、macOS 共用的系统代理、HTTP 和 TUN 流量检查。 |
@@ -54,4 +56,4 @@
 - 共享路径、下载、版本、资源和暂存逻辑优先复用 `build_support.py`；排障逻辑进入现有平台模块或离线测试。
 - 每次最终合并并推送 `main` 前，审查上述脚本及工作流内嵌命令，按职责和调用关系决定合并、删除或保留，并更新相关文档与失败复盘。
 
-2026-10-28 审计：24 个 Python 脚本均通过静态语法解析；23 个有工作流、生产脚本或测试调用者，`preview-slint.py` 为独立用户入口。5 个 Rust 构建脚本及 2 个 JavaScript 文件均有明确职责；未发现可安全删除的孤立脚本或重复入口。未执行编译、脚本功能测试或打包，调用表按后续实际变更维护。
+2026-10-29 审计：26 个 Python 脚本有工作流、其他脚本、测试或明确用户入口；Linux 旧内核/容器与独立桌面会话分别保留为平台模块。5 个 Rust 构建脚本及 2 个 JavaScript 文件均有明确职责；未发现可安全删除的孤立脚本或重复入口。调用表按后续实际变更维护。

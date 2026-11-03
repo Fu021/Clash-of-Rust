@@ -18,7 +18,7 @@ import zipfile
 import tomllib
 
 ROOT = Path(__file__).resolve().parent.parent
-RESOURCE_NAMES = ('default.yaml', 'settings-defaults.json', 'THIRD-PARTY-NOTICES.txt')
+RESOURCE_NAMES = ('default.yaml', 'settings-defaults.json')
 GEO_NAMES = ('GeoIP.dat', 'GeoSite.dat', 'Country.mmdb', 'ASN.mmdb')
 
 
@@ -221,11 +221,40 @@ def download_asset(asset, destination, proxy=''):
     download(asset['browser_download_url'], destination, proxy, digest[7:].lower())
 
 
+def mihomo_go_version(path):
+    text = Path(path).read_text(encoding='utf-8')
+    if re.search(r'(?m)^\s*(?:replace\s+)?github\.com/metacubex/mihomo(?:\s+v\S+)?\s+=>', text):
+        raise ValueError('Replaced mihomo module needs an explicit source notice')
+    versions = re.findall(r'(?m)^\s*(?:require\s+)?github\.com/metacubex/mihomo\s+(v\S+)', text)
+    if len(versions) != 1:
+        raise ValueError('Expected exactly one mihomo Go module version')
+    return versions[0]
+
+
+def write_mihomo_notice(destination, version):
+    if not isinstance(version, str) or not re.fullmatch(
+            r'v\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?(?:\+[0-9A-Za-z.-]+)?', version):
+        raise ValueError('Invalid mihomo version in build inputs')
+    pseudo = re.search(r'[.-]\d{14}-([0-9a-f]{12,40})(?:\+incompatible)?$', version)
+    revision = pseudo.group(1) if pseudo else version.removesuffix('+incompatible')
+    text = (ROOT/'resources/THIRD-PARTY-NOTICES.txt').read_text(encoding='utf-8')
+    text, versions = re.subn(r'(?m)^Version: v\S+\. Distributed under GPL-3\.0\.$',
+                             f'Version: {version}. Distributed under GPL-3.0.', text)
+    text, sources = re.subn(r'(?m)^Corresponding source: https://github\.com/MetaCubeX/mihomo/tree/\S+$',
+                            'Corresponding source: https://github.com/MetaCubeX/mihomo/tree/'
+                            + urllib.parse.quote(revision, safe=''), text)
+    if versions != 1 or sources != 1:
+        raise ValueError('Expected one mihomo version and corresponding source notice')
+    Path(destination).write_text(text, encoding='utf-8')
+
+
 def copy_static(bundle):
     resources = bundle/'resources'
     resources.mkdir(parents=True, exist_ok=True)
     for name in RESOURCE_NAMES:
         shutil.copy2(ROOT/'resources'/name, resources/name)
+    core = json.loads((resources/'core.json').read_text(encoding='utf-8'))
+    write_mihomo_notice(resources/'THIRD-PARTY-NOTICES.txt', core.get('version'))
     shutil.copy2(ROOT/'LICENSE', bundle/'LICENSE')
     licenses = {'SourceHanSans-LICENSE.txt':'fonts/LICENSE.txt', 'Twemoji-LICENSE.txt':'flags/LICENSE-Twemoji.txt', 'Unicode-LICENSE.txt':'flags/LICENSE-Unicode.txt'}
     for name, source in licenses.items():

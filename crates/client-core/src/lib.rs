@@ -36,6 +36,8 @@ pub mod runtime;
 pub mod subscription;
 pub mod update;
 
+pub const WINDOW_TITLE: &str = "Clash of Rust";
+
 pub const VERSION: &str = match option_env!("CLASH_OF_RUST_BUILD_VERSION") {
     Some(version) => version,
     None => env!("CARGO_PKG_VERSION"),

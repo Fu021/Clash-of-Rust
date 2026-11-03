@@ -309,6 +309,13 @@ pub(super) fn refresh(path: &Path, lease: &mut Option<Lease>) -> Result<()> {
     fault.map_or(Ok(()), Err)
 }
 
+pub(super) fn protected_scopes(lease: &Option<Lease>) -> Result<Vec<String>> {
+    match lease {
+        Some(lease) => overlay::protected_scopes(&lease.resolvers),
+        None => Ok(Vec::new()),
+    }
+}
+
 pub(super) fn verify(lease: &Option<Lease>, port: u16) -> Result<()> {
     ensure!(
         lease.as_ref().is_some_and(|lease| lease.port == port),

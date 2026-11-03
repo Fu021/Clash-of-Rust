@@ -5,6 +5,8 @@ use anyhow::{Context, Result, bail};
 pub use clash_client_core::update::Progress;
 pub use clash_client_core::update::channel;
 use futures_util::future::{AbortHandle, AbortRegistration};
+#[cfg(target_os = "macos")]
+pub(crate) use install::handoff_owner_deferred;
 pub use install::{
     InstallSession, cleanup, ensure_installable, handoff, handoff_owner, helper_main,
     startup_outcome,
