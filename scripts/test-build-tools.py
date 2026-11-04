@@ -1237,6 +1237,17 @@ runpy.run_path(str(script), run_name='__main__')
         self.assertGreater(build_inputs.go_version('v1.0.0'),build_inputs.go_version('v1.0.0-rc.1'))
         self.assertGreater(build_inputs.go_version('v1.0.0-rc.10'),build_inputs.go_version('v1.0.0-rc.2'))
 
+    def test_macos_python_mirror_uses_the_installed_framework_instead_of_its_external_aliases(self):
+        import runtime_cache
+
+        with patch.object(runtime_cache, 'host_system', return_value='macos'), \
+                patch.object(runtime_cache, 'host_arch', return_value='arm64'), \
+                patch.object(runtime_cache, 'tool_versions', return_value={'python': '3.11.9', 'tailscale': '1.104.5'}), \
+                patch.dict(os.environ, {'RUNNER_TOOL_CACHE': '/runner/toolcache'}):
+            self.assertEqual(runtime_cache.roots('bootstrap'), [
+                Path('/Library/Frameworks/Python.framework/Versions/3.11'),
+                Path('/runner/toolcache/tailscale/1.104.5')])
+
     def test_runtime_snapshot_preserves_internal_links_and_rejects_parent_escapes(self):
         import runtime_cache
 

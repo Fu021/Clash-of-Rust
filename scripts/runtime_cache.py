@@ -27,7 +27,10 @@ def roots(kind):
     toolcache = Path(os.environ['RUNNER_TOOL_CACHE'])
     if kind == 'bootstrap':
         python = versions['python']
-        return [toolcache / 'Python' / python, toolcache / 'tailscale' / versions['tailscale']]
+        python_root = toolcache / 'Python' / python
+        if system == 'macos':
+            python_root = Path('/Library/Frameworks/Python.framework/Versions') / '.'.join(python.split('.')[:2])
+        return [python_root, toolcache / 'tailscale' / versions['tailscale']]
     if kind == 'go':
         return [toolcache / 'go' / versions['go']]
     if kind == 'java':
@@ -124,7 +127,7 @@ def capture(kind, directory, selected):
             if info.issym():
                 target = path.resolve()
                 if not target.is_relative_to(root.resolve()):
-                    raise ValueError('Tool link escapes its allowed directory')
+                    raise ValueError('Tool link escapes its allowed directory: ' + kind + '/' + relative.as_posix())
                 info.linkname = os.path.relpath(target, path.parent)
             if not (info.isfile() or info.isdir() or info.issym() or info.islnk()):
                 return None
