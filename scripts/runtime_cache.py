@@ -8,18 +8,18 @@ import platform
 import tarfile
 import tempfile
 
-from build_inputs import approved
+from build_inputs import tool_versions
 from build_support import host_arch, host_system, sha256, write_json
 
 KINDS = ('bootstrap', 'rust', 'go', 'java', 'android', 'emulator', 'apt')
 
 
 def roots(kind):
-    versions = approved()['tools']
+    versions = tool_versions()
     system, arch = host_system(), host_arch()
     toolcache = Path(os.environ['RUNNER_TOOL_CACHE'])
     if kind == 'bootstrap':
-        python = versions['python_windows_arm64'] if system == 'windows' and arch == 'arm64' else versions['python']
+        python = versions['python']
         return [toolcache / 'Python' / python, toolcache / 'tailscale' / versions['tailscale']]
     if kind == 'go':
         return [toolcache / 'go' / versions['go']]
@@ -41,8 +41,11 @@ def roots(kind):
 def plan(kind):
     system, arch = host_system(), host_arch()
     selected = roots(kind)
+    versions = tool_versions()
+    requested = ('python', 'tailscale') if kind == 'bootstrap' else (kind,) if kind in ('rust', 'go', 'java') else ()
     identity = {'schema': 1, 'kind': kind, 'system': system, 'arch': arch,
-                'tools': approved()['tools'], 'image': os.environ.get('ImageOS', platform.release()),
+                'tools': {name: versions[name] for name in requested},
+                'image': os.environ.get('ImageOS', platform.release()),
                 'roots': [str(root) for root in selected]}
     if kind in ('android', 'emulator', 'bootstrap'):
         identity['image_version'] = os.environ.get('ImageVersion', '')
@@ -87,8 +90,9 @@ def capture(kind, directory, selected):
             for name in sorted([*directories, *files]):
                 path = Path(parent) / name
                 metadata = path.lstat()
-                tree.update(json.dumps([path.relative_to(root).as_posix(), metadata.st_size, metadata.st_mtime_ns,
-                                        os.readlink(path) if path.is_symlink() else '']).encode())
+                content = os.readlink(path) if path.is_symlink() else sha256(path) if path.is_file() else ''
+                tree.update(json.dumps([path.relative_to(root).as_posix(), metadata.st_mode & 0o777,
+                                        content]).encode())
         tree_checksum = tree.hexdigest()
         if (old and old.get('root') == str(root) and old.get('tree') == tree_checksum
                 and archive.is_file() and sha256(archive) == old['sha256']):

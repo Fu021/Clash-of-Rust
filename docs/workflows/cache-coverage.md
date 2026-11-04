@@ -6,7 +6,7 @@
 
 | 内容 | 使用工作流 | 私网类别 |
 | --- | --- | --- |
-| Cargo registry 下载、索引与 Git 数据库 | CI；Memory 的 Rust 缓存 | `dependencies/cargo-source`、`rust/*` |
+| Cargo registry 下载、索引与 Git 数据库 | CI、Memory 的 Rust 缓存 | `rust/*`；旧 `dependencies/cargo-source` 仅保留历史 |
 | 已确认依赖快照 | CI，打包复用同运行附件 | `dependencies/build-inputs` |
 | Rust 原生、Android、内存构建对象 | CI、Memory | `rust/<目标>`，32 分片及最终索引 |
 | Go 模块下载、gomobile/gobind、按 ABI 编译对象 | CI | `tools/android-go`、`compiler/android-go-<arch>` |
@@ -26,7 +26,11 @@
 
 `runtime-cache` 只选白名单工具目录，排除 home、密钥、签名材料、SDK 用户目录、AVD、Rustup 配置与凭据。每个目录单独保存为含内部链接的 tar，外层继续使用原有普通归档协议，避免丢失 JDK/NDK/工具链链接。恢复先校验清单与摘要，再用安全过滤器解到暂存目录；链接不得逃出 payload，完成后才发布。已有工具目录交官方 setup action 校验和补齐；快照不能覆盖正在使用的解释器。工具缺失、外部链接或权限问题在日志中记录，不能据此宣称镜像完整。
 
+Python 按各平台上一轮成功 CI 的实际二进制分别固定，不能将 Linux 的安全维护补丁号直接用于 Windows/macOS。版本引导只使用旧 runner Python 可用的标准库；加载 3.11+ 工具后才导入 `tomllib` 执行实际构建逻辑。升级审计同时核对目标 OS/架构的下载清单，避免提出无对应二进制的候选。
+
 工具快照在 post 阶段先捕获，再保存私网及 GitHub；同一目录未变化时复用已有 tar。容器按固定基础 digest、Python SHA256、Dockerfile、架构和 UID/GID 生成 key，加载时核对归档及镜像 ID；首次构建后导出一次供后续 Linux CI/打包复用。宿主补充 DEB 通过显式挂载进入容器，依然验证当轮签名索引。
+
+输入任务不再运行 Cargo 解析，因而不安装 Rust，也不下载单独的 Cargo registry 快照；实际编译任务仍完整镜像 Rust 下载与对象。此调整只移除重复入口，不删除私网历史类别。首次工具/容器冷缓存会增加捕获与传输成本，耗时收益须按相同环境、冷暖状态及验证范围对照后续运行。
 
 缓存不能接管 GitHub 托管 runner 镜像、其内置 Node/Git/系统工具，或在 checkout 前由 GitHub 下载的 Actions 运行包。Python/Tailscale 首次启动也必须先具备 runner 可用解释器及登录通道，之后才能镜像；私网不可达时无法用它启动自身。当前方案覆盖可复用的项目工具与下载，不构成完全脱离 GitHub/上游的离线 runner。若要求启动环境也能从私网恢复，需要维护者另行提供预置镜像/自托管 runner 或引导镜像服务，不能靠当前缓存 job 实现。
 

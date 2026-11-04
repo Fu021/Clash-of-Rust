@@ -67,14 +67,6 @@ jobs:
           token: ${{ secrets.LOCAL_CACHE_TOKEN }}
       - uses: ./.github/actions/runtime-cache
         with:
-          kind: rust
-          url: ${{ steps.tailnet.outcome == 'success' && vars.LOCAL_CACHE_URL || '' }}
-          token: ${{ secrets.LOCAL_CACHE_TOKEN }}
-      - uses: dtolnay/rust-toolchain@b725eda525362e7cf34af9a7243cac1e3f01a7ec
-        with:
-          toolchain: ${{ env.COR_RUST }}
-      - uses: ./.github/actions/runtime-cache
-        with:
           kind: go
           url: ${{ steps.tailnet.outcome == 'success' && vars.LOCAL_CACHE_URL || '' }}
           token: ${{ secrets.LOCAL_CACHE_TOKEN }}
@@ -83,32 +75,6 @@ jobs:
         with:
           go-version: ${{ env.COR_GO }}
           cache: false
-      - name: Restore GitHub source registry metadata
-        id: source_github
-        uses: actions/cache@caa296126883cff596d87d8935842f9db880ef25
-        continue-on-error: true
-        timeout-minutes: 5
-        with:
-          path: |
-            ~/.cargo/registry/index
-            ~/.cargo/registry/cache
-            ~/.cargo/git/db
-          key: source-cargo-${{ hashFiles('Cargo.lock') }}-${{ github.run_id }}-${{ github.run_attempt }}
-          restore-keys: source-cargo-
-      - name: Restore local fallback for source registry metadata
-        uses: ./.github/actions/local-cache
-        with:
-          github-hit: ${{ steps.source_github.outcome == 'success' && steps.source_github.outputs.cache-hit || '' }}
-          github-failed: ${{ steps.source_github.outcome == 'failure' }}
-          url: ${{ steps.tailnet.outcome == 'success' && vars.LOCAL_CACHE_URL || '' }}
-          token: ${{ secrets.LOCAL_CACHE_TOKEN }}
-          group: dependencies/cargo-source
-          paths: |
-            ~/.cargo/registry/index
-            ~/.cargo/registry/cache
-            ~/.cargo/git/db
-          key: source-${{ hashFiles('Cargo.lock') }}-${{ github.run_id }}-${{ github.run_attempt }}
-          restore-keys: source-
       - name: Restore GitHub source module downloads
         id: source_go_github
         uses: actions/cache@caa296126883cff596d87d8935842f9db880ef25

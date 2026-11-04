@@ -1154,6 +1154,48 @@ assert.equal(calls.length,2);
                 with self.assertRaisesRegex(ValueError, 'approved repository'):
                     build_inputs.resolve(snapshot)
 
+    def test_version_bootstrap_does_not_require_python_311_modules(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            output = Path(temporary) / 'versions'
+            script = build.ROOT / 'scripts/build_inputs.py'
+            program = '''
+import builtins, runpy, sys
+from pathlib import Path
+original_import = builtins.__import__
+def bootstrap_import(name, *args, **kwargs):
+    if name == 'tomllib':
+        raise ModuleNotFoundError('unavailable before Python setup')
+    return original_import(name, *args, **kwargs)
+builtins.__import__ = bootstrap_import
+script = Path(sys.argv[1])
+sys.path.insert(0, str(script.parent))
+sys.argv = [str(script), 'versions']
+runpy.run_path(str(script), run_name='__main__')
+'''
+            environment = {**os.environ, 'GITHUB_OUTPUT': str(output),
+                           'GITHUB_ENV': str(Path(temporary) / 'environment')}
+            subprocess.run([sys.executable, '-c', program, str(script)], env=environment,
+                           check=True, capture_output=True, text=True)
+            self.assertIn('python=', output.read_text())
+
+    def test_python_baseline_and_audit_are_specific_to_target_platforms(self):
+        import dependency_audit
+
+        for system, arch, expected in (('linux', 'arm64', '3.11.18'), ('windows', 'x64', '3.11.9'),
+                                       ('windows', 'arm64', '3.13.17'), ('macos', 'arm64', '3.11.9')):
+            with self.subTest(system=system, arch=arch), \
+                    patch.object(build_inputs, 'host_system', return_value=system), \
+                    patch.object(build_inputs, 'host_arch', return_value=arch):
+                self.assertEqual(build_inputs.tool_versions()['python'], expected)
+        releases = [
+            {'version': '3.11.9', 'stable': True, 'files': [{'platform': 'win32', 'arch': 'x64'}]},
+            {'version': '3.11.18', 'stable': True, 'files': [
+                {'platform': 'linux', 'arch': 'x64'}, {'platform': 'linux', 'arch': 'arm64'}]},
+        ]
+        with patch.object(dependency_audit, 'metadata', return_value=releases):
+            self.assertEqual(dependency_audit.tool_candidate('python_windows', '3.11.9')[0], '3.11.9')
+            self.assertEqual(dependency_audit.tool_candidate('python', '3.11.18')[0], '3.11.18')
+
     def test_packaging_reuses_ci_tool_metadata_without_querying_new_versions(self):
         with tempfile.TemporaryDirectory() as temporary:
             directory = Path(temporary)

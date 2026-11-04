@@ -19,6 +19,8 @@
     "go": "1.27.3",
     "java": "17.0.21+9",
     "python": "3.11.18",
+    "python_windows": "3.11.9",
+    "python_macos": "3.11.9",
     "python_windows_arm64": "3.13.17",
     "tailscale": "1.104.5",
     "gradle": "9.8.2"

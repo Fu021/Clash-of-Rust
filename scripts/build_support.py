@@ -15,7 +15,6 @@ import time
 import urllib.parse
 import urllib.request
 import zipfile
-import tomllib
 
 ROOT = Path(__file__).resolve().parent.parent
 RESOURCE_NAMES = ('default.yaml', 'settings-defaults.json')
@@ -52,6 +51,8 @@ def sha256(path):
 
 
 def manifest_version(text):
+    import tomllib
+
     manifest = tomllib.loads(text)
     return manifest.get('package', manifest.get('workspace', {}).get('package', {}))['version']
 

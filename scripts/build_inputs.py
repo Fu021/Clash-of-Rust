@@ -10,11 +10,10 @@ import re
 import shutil
 import subprocess
 import sys
-import tomllib
 import urllib.error
 import urllib.parse
 
-from build_support import ROOT, read_json, opener, sha256, write_json
+from build_support import ROOT, host_arch, host_system, read_json, sha256, write_json
 
 FILES = ('Cargo.lock', 'apps/android/core/go.mod', 'apps/android/core/go.sum',
          'apps/android/build.gradle.kts', 'apps/android/app/build.gradle.kts')
@@ -32,8 +31,18 @@ def approved():
     return value
 
 
+def tool_versions():
+    selected = approved()['tools'].copy()
+    system, arch = host_system(), host_arch()
+    if system == 'macos':
+        selected['python'] = selected['python_macos']
+    elif system == 'windows':
+        selected['python'] = selected['python_windows_arm64' if arch == 'arm64' else 'python_windows']
+    return selected
+
+
 def versions():
-    selected = approved()['tools']
+    selected = tool_versions()
     for target in ('GITHUB_ENV', 'GITHUB_OUTPUT'):
         if output := os.environ.get(target):
             with open(output, 'a') as stream:
@@ -128,6 +137,8 @@ def go_version(value):
 
 
 def resolve(directory):
+    import tomllib
+
     directory.mkdir(parents=True, exist_ok=True)
     baseline = {path: hashlib.sha256(original(path)).hexdigest() for path in FILES}
     upstream = {name: {**value, 'resolution': 'approved'}

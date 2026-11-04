@@ -172,8 +172,11 @@ def tool_candidate(name, current):
         return metadata(url)[0]['version'].removeprefix('go'), '', url
     if name.startswith('python'):
         url = 'https://raw.githubusercontent.com/actions/python-versions/main/versions-manifest.json'
+        system = 'win32' if name.startswith('python_windows') else 'darwin' if name == 'python_macos' else 'linux'
+        architectures = {'arm64'} if name.endswith('_arm64') else {'x64'} if system == 'win32' else {'x64', 'arm64'}
         versions = [entry['version'] for entry in metadata(url)
-                    if entry.get('stable') and entry['version'].startswith('.'.join(current.split('.')[:2]) + '.')]
+                    if entry.get('stable') and entry['version'].startswith('.'.join(current.split('.')[:2]) + '.')
+                    and architectures.issubset({item['arch'] for item in entry['files'] if item['platform'] == system})]
         return max(versions, key=lambda version: go_version('v' + version)), '', url
     if name == 'java':
         url = 'https://api.adoptium.net/v3/assets/latest/17/hotspot?architecture=x64&image_type=jdk&os=linux'
