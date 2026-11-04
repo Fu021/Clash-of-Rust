@@ -47,7 +47,7 @@ def android_versions():
     return approved()['upstream']['android']
 
 
-def check_tools():
+def check_tools(tools=('go', 'java')):
     selected = tool_versions()
     if sys.version.split()[0] != selected['python']:
         raise ValueError('Active Python differs from the approved version')
@@ -55,6 +55,8 @@ def check_tools():
         ('Go', ['go', 'env', 'GOVERSION'], 'go' + selected['go']),
         ('Java', ['java', '-XshowSettings:properties', '-version'], selected['java'].split('+')[0]),
     ):
+        if name.lower() not in tools:
+            continue
         result = subprocess.run(command, check=True, text=True, capture_output=True, timeout=30)
         output = result.stdout + result.stderr
         version = re.search(r'(?m)^\s*java\.version\s*=\s*(\S+)', output) if name == 'Java' else None
@@ -327,6 +329,7 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('operation', choices=('resolve', 'refresh', 'apply', 'packaging', 'share-go', 'restore-go', 'audit', 'versions', 'check-tools'))
     parser.add_argument('--directory', type=Path, default=Path(os.environ.get('BUILD_INPUTS_DIR', SNAPSHOT)))
+    parser.add_argument('--tools', nargs='+', choices=('go', 'java'), default=('go', 'java'))
     args = parser.parse_args()
     if args.operation == 'audit':
         from dependency_audit import audit
@@ -334,7 +337,7 @@ def main():
     elif args.operation == 'versions':
         versions()
     elif args.operation == 'check-tools':
-        check_tools()
+        check_tools(args.tools)
     elif args.operation in ('share-go', 'restore-go'):
         shared_go(args.directory, args.operation == 'restore-go')
     else:

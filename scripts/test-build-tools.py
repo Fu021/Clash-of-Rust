@@ -1249,6 +1249,21 @@ else{assert.throws(run,/Invalid private cache save budget/);assert.equal(calls.l
                 else:
                     build_inputs.check_tools()
 
+    def test_android_package_checks_python_and_java_without_requiring_unused_go(self):
+        selected = build_inputs.tool_versions()
+        for java_version, accepted in ((selected['java'].split('+')[0], True), ('17.0.21', False)):
+            with self.subTest(java=java_version), \
+                    patch.object(build_inputs.sys, 'version', selected['python']), \
+                    patch.object(build_inputs.subprocess, 'run', return_value=subprocess.CompletedProcess(
+                        [], 0, '', '    java.version = ' + java_version + '\n')) as execute:
+                if accepted:
+                    build_inputs.check_tools(('java',))
+                else:
+                    with self.assertRaisesRegex(ValueError, 'Active Java'):
+                        build_inputs.check_tools(('java',))
+                execute.assert_called_once()
+                self.assertEqual(execute.call_args.args[0][0], 'java')
+
     def test_dependency_refresh_does_not_export_partial_lockfiles_after_resolution_failure(self):
         with tempfile.TemporaryDirectory() as temporary, \
                 patch.dict(os.environ, {'GITHUB_ACTIONS': 'true', 'GITHUB_EVENT_NAME': 'workflow_dispatch'}), \
@@ -1397,22 +1412,46 @@ runpy.run_path(str(script), run_name='__main__')
                 output = root / 'environment'
                 with patch.dict(os.environ, {'ANDROID_HOME': str(sdk), 'RUNNER_TEMP': str(root),
                                              'GITHUB_ENV': str(output)}), \
-                        patch.object(android_build, 'sdkmanager_install') as install:
+                        patch.object(android_build, 'install_sdk_packages') as install:
                     android_build.prepare_sdk(package_only=package_only)
                 commands = [list(map(str, call.args[0])) for call in install.call_args_list]
                 self.assertEqual(commands[0], [str(sdk / 'cmdline-tools/latest/bin/sdkmanager'),
                                                'cmdline-tools;' + versions['cmdline_tools']])
-                self.assertEqual(commands[1][:3], [
-                    str(sdk / 'cmdline-tools' / versions['cmdline_tools'] / 'bin/sdkmanager'),
-                    'platform-tools', 'build-tools;' + versions['build_tools'],
+                self.assertEqual(commands[1][:7], [
+                    str(sdk / 'cmdline-tools' / versions['cmdline_tools'] / 'bin/android'),
+                    '--sdk='+str(sdk), 'sdk', 'install', '--force',
+                    'platform-tools@'+versions['platform_tools'], 'build-tools/' + versions['build_tools'],
                 ])
                 if package_only:
-                    self.assertEqual(len(commands[1]), 3)
+                    self.assertEqual(len(commands[1]), 7)
                     self.assertFalse(output.exists())
                 else:
-                    self.assertEqual(commands[1][3:], ['platforms;android-' + versions['platform'],
-                                                       'ndk;' + versions['ndk']])
+                    self.assertEqual(commands[1][7:], ['platforms/android-' + versions['platform'],
+                                                       'ndk/' + versions['ndk']])
                     self.assertEqual(output.read_text(), 'ANDROID_NDK_ROOT=' + str(sdk / 'ndk' / versions['ndk']) + '\n')
+
+    def test_android_sdk_bootstrap_prefers_the_native_cli_and_reuses_the_pinned_install(self):
+        versions = build_inputs.android_versions()
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            sdk = root/'sdk'
+            bootstrap = sdk/'cmdline-tools/latest/bin'
+            bootstrap.mkdir(parents=True)
+            (bootstrap/'android').touch()
+            with patch.dict(os.environ, {'ANDROID_HOME': str(sdk), 'RUNNER_TEMP': str(root)}), \
+                    patch.object(android_build, 'install_sdk_packages') as install:
+                android_build.prepare_sdk(package_only=True)
+                commands = [list(map(str, call.args[0])) for call in install.call_args_list]
+                self.assertEqual(commands[0], [
+                    str(bootstrap/'android'), '--sdk='+str(sdk), 'sdk', 'install', '--force',
+                    'cmdline-tools/'+versions['cmdline_tools']])
+                pinned = sdk/'cmdline-tools'/versions['cmdline_tools']/'bin'
+                pinned.mkdir(parents=True)
+                (pinned/'android').touch()
+                install.reset_mock()
+                android_build.prepare_sdk(package_only=True)
+                install.assert_called_once()
+                self.assertEqual(install.call_args.args[0][0], pinned/'android')
 
     def test_packaging_reuses_ci_tool_metadata_without_querying_new_versions(self):
         with tempfile.TemporaryDirectory() as temporary:
@@ -1767,14 +1806,14 @@ runpy.run_path(str(script), run_name='__main__')
             child.wait.return_value = status
             return child
 
-        command = ['sdkmanager', 'system-images;android-35;google_apis;x86_64']
+        command = ['android', '--sdk=/sdk', 'sdk', 'install', 'system-images/android-35/google_apis/x86_64@7']
         corrupt = 'Error reading Zip content from a SeekableByteChannel\n'
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
             with patch.object(android_build.subprocess, 'Popen',
                               side_effect=[process(1, corrupt), process(0, 'Installed\n')]) as spawn, \
                  patch.object(android_build.time, 'sleep') as delay:
-                android_build.sdkmanager_install(command, root)
+                android_build.install_sdk_packages(command, root)
                 self.assertEqual(spawn.call_count, 2)
                 self.assertNotEqual(spawn.call_args_list[0].kwargs['env']['ANDROID_USER_HOME'],
                                     spawn.call_args_list[1].kwargs['env']['ANDROID_USER_HOME'])
@@ -1783,13 +1822,13 @@ runpy.run_path(str(script), run_name='__main__')
                               side_effect=[process(1, corrupt) for _ in range(3)]) as spawn, \
                  patch.object(android_build.time, 'sleep'):
                 with self.assertRaises(subprocess.CalledProcessError):
-                    android_build.sdkmanager_install(command, root)
+                    android_build.install_sdk_packages(command, root)
                 self.assertEqual(spawn.call_count, 3)
             with patch.object(android_build.subprocess, 'Popen',
                               return_value=process(1, 'Package does not exist\n')) as spawn, \
                  patch.object(android_build.time, 'sleep') as delay:
                 with self.assertRaises(subprocess.CalledProcessError):
-                    android_build.sdkmanager_install(command, root)
+                    android_build.install_sdk_packages(command, root)
                 spawn.assert_called_once()
                 delay.assert_not_called()
 

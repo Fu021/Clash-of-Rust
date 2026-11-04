@@ -22,7 +22,7 @@
 - `scripts/android.py`、Gradle 配置、NDK/SDK 版本、Go module、Rust target 和构建标签是否一致。
 - 下载缓存是否完整并校验；失败后是否清理不完整压缩包和 Git 源。
 - 模拟器 SDK 下载遇到损坏压缩包或暂时断网时，可用独立 SDK 用户缓存有限重试；其他错误立即失败，重试后仍须运行真实 VPN/TUN 测试。证据：[不发布打包 40801455733](https://github.com/Fu021/Clash-of-Rust/actions/runs/40801455733)。
-- Android target 是否遵守 stable Rust、`minSdk 26`、`compileSdk 36` 和 16 KiB ELF 对齐要求。
+- Android target 是否遵守 stable Rust、[应用配置](../../apps/android/app/build.gradle.kts)的最低系统版本、[固定工具基线](../../.github/build-versions.json)和 16 KiB ELF 对齐要求。命令行工具 23 已弃用 `sdkmanager` 包装入口，使用包内原生 `android sdk install`；缺少原生工具的旧 runner 仅在引导时保留兼容入口。
 
 **防回归**
 
@@ -59,7 +59,7 @@
 - [打包 40813504181](https://github.com/Fu021/Clash-of-Rust/actions/runs/40813504181) 的 x64 模拟器第二次 VPN 重建后，系统仍报告路由与 TUN 描述符存在，但真实 TCP 连接超时；同任务单独复验通过，具体原因尚未确认。不能用控制面状态或延长等待替代流量验证，失败时保留接口计数及原始诊断。
 - 测试辅助状态必须有稳定来源，等待状态变化而不是固定 sleep。
 - VPN 授权测试不能把无障碍 `ACTION_CLICK` 返回成功当作对话框已关闭；要等应用窗口实际恢复前台与焦点，再发起下一次授权，避免连续拒绝/允许误点正在退出的旧窗口。证据见 [CI 40161810492](https://github.com/Fu021/Clash-of-Rust/actions/runs/40161810492) 的 Android x64 logcat。
-- 焦点等待失败时同时检查宿主生命周期与模拟器系统窗口。[不发布打包 40524184066](https://github.com/Fu021/Clash-of-Rust/actions/runs/40524184066) 中应用已恢复 `RESUMED`，但 Google Messages 的系统 ANR 对话框挡住焦点；不能据此改写应用生命周期或删除焦点断言。确认外部干扰后使用新的可丢弃 runner 验证，实际代理/TUN 和授权检查仍须通过。
+- 焦点等待失败时同时检查宿主生命周期与模拟器系统窗口。[打包 40524184066](https://github.com/Fu021/Clash-of-Rust/actions/runs/40524184066) 的 Google Messages、[打包 41812352411](https://github.com/Fu021/Clash-of-Rust/actions/runs/41812352411) 的 SystemUI/Google 服务均曾在应用外出现 ANR，挡住已 `RESUMED` 的应用焦点；不能改写应用生命周期或删除焦点断言。后者冷启动时 CPU 压力约 89%、负载约 17.5；可丢弃模拟器改为 4 GiB RAM、至多使用宿主的 4 个 CPU，并保存窗口、Activity、电源诊断；显式传入 `-no-metrics`，避免后续交互式遥测确认。资源调整仍须由新 runner 的实际代理/TUN 和授权检查验收，不能直接认定唯一根因。
 - 订阅保护校验放在共享会话，在下载、保存或重载前拒绝编辑和更新受保护订阅，同时允许修改其他订阅；界面禁用按钮只提供反馈，不能代替业务校验。
 - 网络开关同步移动协议、宿主投影、持久化与预览；依赖项被规范化关闭后要有重新开启入口。回归覆盖 DNS 覆盖关闭、重开、Fake-IP 手动恢复和重启保留，见[移动会话测试](../../crates/mobile-ffi/src/lib.rs)。
 

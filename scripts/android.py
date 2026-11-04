@@ -59,14 +59,14 @@ def cargo_build(command, **kwargs):
         time.sleep(delay)
 
 
-def sdkmanager_install(command, device_root):
+def install_sdk_packages(command, device_root):
     """Retry damaged or unavailable SDK downloads with a fresh user cache."""
     transient = re.compile(r'Error reading Zip content from a SeekableByteChannel'
                            r'|Error on ZipFile unknown archive|Connection timed out|Read timed out'
                            r'|Could not resolve host|Failed to connect'
                            r'|HTTP(?:/[0-9.]+)?\s+(?:429|50[0234])\b', re.I)
     for attempt in range(3):
-        user_root = device_root/('sdkmanager-'+str(attempt))
+        user_root = device_root/('sdk-download-'+str(attempt))
         user_home = user_root/'.android'
         user_home.mkdir(parents=True, exist_ok=True)
         env = dict(os.environ, ANDROID_SDK_HOME=str(user_root), ANDROID_USER_HOME=str(user_home))
@@ -88,22 +88,31 @@ def sdk_tools():
     return Path(os.environ['ANDROID_HOME']) / 'build-tools' / android_versions()['build_tools']
 
 
-def sdk_manager():
+def sdk_bin():
     return Path(os.environ['ANDROID_HOME']) / 'cmdline-tools' / android_versions()['cmdline_tools'] / 'bin'
+
+
+def sdk_install_command(directory, packages):
+    sdk = Path(os.environ['ANDROID_HOME'])
+    return [directory/'android', '--sdk='+str(sdk), 'sdk', 'install', '--force',
+            *(package.replace(';', '/') for package in packages)]
 
 
 def prepare_sdk(package_only=False):
     sdk = Path(os.environ['ANDROID_HOME'])
     versions = android_versions()
     device_root = Path(os.environ['RUNNER_TEMP']) / 'cor-sdk-install'
-    manager = sdk_manager() / 'sdkmanager'
-    if not manager.is_file():
-        sdkmanager_install([sdk / 'cmdline-tools/latest/bin/sdkmanager',
-                            'cmdline-tools;' + versions['cmdline_tools']], device_root)
-    packages = ['platform-tools', 'build-tools;' + versions['build_tools']]
+    manager = sdk_bin()
+    if not (manager/'android').is_file():
+        bootstrap = sdk/'cmdline-tools/latest/bin'
+        package = 'cmdline-tools;' + versions['cmdline_tools']
+        command = sdk_install_command(bootstrap, [package]) if (bootstrap/'android').is_file() else [
+            bootstrap/'sdkmanager', package]
+        install_sdk_packages(command, device_root)
+    packages = ['platform-tools@' + versions['platform_tools'], 'build-tools;' + versions['build_tools']]
     if not package_only:
         packages += ['platforms;android-' + versions['platform'], 'ndk;' + versions['ndk']]
-    sdkmanager_install([manager, *packages], device_root)
+    install_sdk_packages(sdk_install_command(manager, packages), device_root)
     if not package_only:
         with open(os.environ['GITHUB_ENV'], 'a') as stream:
             stream.write('ANDROID_NDK_ROOT=' + str(sdk / 'ndk' / versions['ndk']) + '\n')
@@ -403,7 +412,10 @@ def test(arch, apk=None, test_apk=None):
         (report/'logcat.txt').write_text(log.stdout)
         for name, command in {'connectivity':['dumpsys','connectivity'],
                               'routes':['ip','route','show','table','all'],
-                              'vpn':['dumpsys','vpn_management']}.items():
+                              'vpn':['dumpsys','vpn_management'],
+                              'windows':['dumpsys','window','windows'],
+                              'activities':['dumpsys','activity','activities'],
+                              'power':['dumpsys','power']}.items():
             details=subprocess.run([ADB,'shell',*command],capture_output=True,text=True,timeout=15)
             (report/(name+'.txt')).write_text(details.stdout+details.stderr)
     if 'Android startup:' in log.stdout or 'Mobile runtime stopped:' in log.stdout:
@@ -458,10 +470,12 @@ def main():
     args=parser.parse_args()
     if args.operation=='emulator':
         sdk=Path(os.environ['ANDROID_HOME'])
-        manager=sdk_manager()
+        manager=sdk_bin()
         device_root=Path(os.environ['RUNNER_TEMP'])/'cor-emulator'
-        sdkmanager_install([manager/'sdkmanager','platform-tools','emulator',android_versions()['system_image']],
-                           device_root)
+        versions=android_versions()
+        install_sdk_packages(sdk_install_command(manager, [
+            'platform-tools@'+versions['platform_tools'], 'emulator@'+versions['emulator'],
+            versions['system_image']+'@'+versions['system_image_revision']]), device_root)
         verify_emulator_versions(sdk)
         user_home=device_root/'.android'; avds=user_home/'avd'
         avds.mkdir(parents=True,exist_ok=True)
@@ -469,9 +483,12 @@ def main():
         run([manager/'avdmanager','create','avd','--force','--name','cor-ci','--path',avds/'cor-ci.avd',
              '--device','pixel_6','--package',android_versions()['system_image']],input='no\n',text=True,env=env)
         report=ROOT/'target/android-report/x64'; report.mkdir(parents=True,exist_ok=True)
+        cores=min(4,os.cpu_count() or 1)
+        print(f'Disposable Android emulator: 4096 MiB RAM, {cores} virtual CPUs',flush=True)
         with (report/'emulator.txt').open('w') as log:
-            process=subprocess.Popen([sdk/'emulator/emulator','-avd','cor-ci','-no-window','-no-audio','-no-boot-anim','-no-snapshot',
-                '-gpu','swiftshader_indirect','-memory','2048'],env=env,stdout=log,stderr=subprocess.STDOUT,start_new_session=True)
+            process=subprocess.Popen([sdk/'emulator/emulator','-avd','cor-ci','-no-window','-no-audio','-no-boot-anim','-no-snapshot','-no-metrics',
+                '-gpu','swiftshader_indirect','-memory','4096','-cores',str(cores)],
+                env=env,stdout=log,stderr=subprocess.STDOUT,start_new_session=True)
         run([ADB,'start-server'],env=env,timeout=30)
         deadline=time.monotonic()+180
         while time.monotonic()<deadline:

@@ -38,7 +38,7 @@ Python 3.15.2 已核对各 OS/架构的官方下载清单；固定版本须具�
 
 服务端提前拒绝上传时，客户端对断管、连接重置和 Windows 连接中止均先尝试读取已返回的 HTTP 状态：序号冲突保留较新副本，容量或其他拒绝如实记为未保存；不能把发送中断或绿色 job 当作私网已完整覆盖。连接无法取得应答时保留原网络错误并关闭连接。HTTP 502/507 或仍无应答的中断须按真实日志交由服务端排查，客户端覆盖这些异常类型不代表服务已恢复。
 
-Android 打包仅恢复命令行工具、platform-tools 和 build-tools，不传输打包不使用的 NDK/API。版本和系统镜像由工具基线的 `upstream.android` 统一声明并参与快照身份，CI 和打包共用 `prepare_sdk`。SDK/NDK 的初始安装和模拟器下载共用 `sdkmanager_install`，只对明确的损坏归档或网络错误最多尝试三次，每次换 SDK 用户缓存；配置、许可和编译错误直接失败。
+Android 打包仅恢复命令行工具、platform-tools 和 build-tools，不传输打包不使用的 NDK/API。版本和系统镜像由工具基线的 `upstream.android` 统一声明并参与快照身份，CI 和打包共用 `prepare_sdk`。固定命令行工具 23 中的原生 `android sdk install` 负责安装，platform-tools、模拟器和系统镜像用 `@revision` 精确选版；`--force` 仅在可丢弃 runner 内落实冻结版本，不运行自更新。缺少原生 CLI 的旧 runner 只在引导工具包时使用旧入口。SDK/NDK 及模拟器下载共用 `install_sdk_packages`，只对明确的损坏归档或网络错误最多尝试三次，每次换 SDK 用户缓存；配置、许可和编译错误直接失败。
 
 普通输入任务不运行 Cargo 解析，也不安装 Rust 或下载单独的 Cargo registry 快照；显式依赖刷新运行安装已确认 Rust 后解析更新并导出锁文件。实际编译任务仍完整镜像 Rust 下载与对象。此调整只移除重复入口，不删除私网历史类别。首次工具/容器冷缓存会增加捕获与传输成本，耗时收益须按相同环境、冷暖状态及验证范围对照后续运行。
 

@@ -519,6 +519,9 @@ jobs:
           persist-credentials: false
       - name: Load approved tool versions
         run: python3 scripts/build_inputs.py versions
+      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0
+        with:
+          python-version: ${{ env.COR_PYTHON }}
       - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333
         with:
           name: packaging-dependency-snapshot
@@ -576,7 +579,9 @@ jobs:
         run: |
           import sys
           sys.path.insert(0, 'scripts')
+          from build_inputs import check_tools
           from android import prepare_sdk
+          check_tools(('java',))
           prepare_sdk(package_only=True)
       - name: Start Android package test device
         if: matrix.arch == 'x64'
