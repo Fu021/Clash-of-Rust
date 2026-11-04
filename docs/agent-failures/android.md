@@ -23,6 +23,7 @@
 - 下载缓存是否完整并校验；失败后是否清理不完整压缩包和 Git 源。
 - 模拟器 SDK 下载遇到损坏压缩包或暂时断网时，可用独立 SDK 用户缓存有限重试；其他错误立即失败，重试后仍须运行真实 VPN/TUN 测试。证据：[不发布打包 40801455733](https://github.com/Fu021/Clash-of-Rust/actions/runs/40801455733)。
 - Android target 是否遵守 stable Rust、[应用配置](../../apps/android/app/build.gradle.kts)的最低系统版本、[固定工具基线](../../.github/build-versions.json)和 16 KiB ELF 对齐要求。命令行工具 23 已弃用 `sdkmanager` 包装入口，使用包内原生 `android sdk install`；缺少原生工具的旧 runner 仅在引导时保留兼容入口。
+- Java 25 下 APK 签名与验证所用的 Conscrypt 需要显式原生访问授权；`apksigner` 包装器会为 `-J` 后的参数再加一个 `-`，使用 `-J-enable-native-access=ALL-UNNAMED` 传入 Java 的双横线选项。不能用关闭 warning 代替授权与真实签名校验。
 
 **防回归**
 

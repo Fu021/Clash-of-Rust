@@ -440,11 +440,11 @@ def package(arch, run_id, check_only):
         tool=sdk_tools()
         # Instrumentation and its target must carry the same signature.
         for path in (apk,root/'tests/androidTest.apk'):
-            run([tool/'apksigner','sign','--ks',key,'--ks-key-alias',os.environ['ANDROID_KEY_ALIAS'],
+            run([tool/'apksigner','-J-enable-native-access=ALL-UNNAMED','sign','--ks',key,'--ks-key-alias',os.environ['ANDROID_KEY_ALIAS'],
                  '--ks-pass','env:ANDROID_KEYSTORE_PASSWORD','--key-pass','env:ANDROID_KEY_PASSWORD',path])
     sizes=validate_apk(apk,arch)
     tool=sdk_tools()
-    run([tool/'apksigner','verify','--verbose',apk])
+    run([tool/'apksigner','-J-enable-native-access=ALL-UNNAMED','verify','--verbose',apk])
     run([tool/'zipalign','-c','-P','16','4',apk])
     digest=sha256(apk)
     (output/(name+'.sha256')).write_text(digest+'  '+name+'\n')
