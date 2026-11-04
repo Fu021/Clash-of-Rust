@@ -16,6 +16,8 @@ jobs:
     name: Resolve build inputs
     runs-on: ubuntu-latest
     timeout-minutes: 20
+    env:
+      COR_USE_BOOTSTRAP_TAILNET: 'true'
     permissions:
       contents: read
       id-token: write
@@ -422,10 +424,13 @@ jobs:
       - name: Prepare Android toolchain
         shell: python
         run: |
-          import os, pathlib, subprocess
+          import os, pathlib, sys
+          sys.path.insert(0, 'scripts')
+          from android import sdkmanager_install
           sdk=pathlib.Path(os.environ['ANDROID_HOME'])
           manager=sdk/'cmdline-tools/latest/bin/sdkmanager'
-          subprocess.run([str(manager),'platforms;android-36','build-tools;36.0.0','ndk;28.2.13676358'],check=True)
+          sdkmanager_install([str(manager),'platforms;android-36','build-tools;36.0.0','ndk;28.2.13676358'],
+                             pathlib.Path(os.environ['RUNNER_TEMP'])/'cor-sdk-install')
           with open(os.environ['GITHUB_ENV'],'a') as out:
               out.write('ANDROID_NDK_ROOT='+str(sdk/'ndk/28.2.13676358')+'\n')
       - name: Restore GitHub Android Geo resources

@@ -38,6 +38,8 @@ def tool_versions():
         selected['python'] = selected['python_macos']
     elif system == 'windows':
         selected['python'] = selected['python_windows_arm64' if arch == 'arm64' else 'python_windows']
+    if os.environ.get('COR_USE_BOOTSTRAP_TAILNET') == 'true':
+        selected['tailscale'] = selected['tailscale_bootstrap']
     return selected
 
 

@@ -23,6 +23,7 @@
     "python_macos": "3.11.9",
     "python_windows_arm64": "3.13.17",
     "tailscale": "1.104.5",
+    "tailscale_bootstrap": "1.94.2",
     "gradle": "9.8.2"
   },
   "upstream": {

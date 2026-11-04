@@ -59,7 +59,7 @@ def cargo_build(command, **kwargs):
 
 
 def sdkmanager_install(command, device_root):
-    """Retry damaged or unavailable emulator downloads with a fresh SDK user cache."""
+    """Retry damaged or unavailable SDK downloads with a fresh user cache."""
     transient = re.compile(r'Error reading Zip content from a SeekableByteChannel'
                            r'|Error on ZipFile unknown archive|Connection timed out|Read timed out'
                            r'|Could not resolve host|Failed to connect'

@@ -1195,6 +1195,8 @@ runpy.run_path(str(script), run_name='__main__')
         with patch.object(dependency_audit, 'metadata', return_value=releases):
             self.assertEqual(dependency_audit.tool_candidate('python_windows', '3.11.9')[0], '3.11.9')
             self.assertEqual(dependency_audit.tool_candidate('python', '3.11.18')[0], '3.11.18')
+        with patch.dict(os.environ, {'COR_USE_BOOTSTRAP_TAILNET': 'true'}):
+            self.assertEqual(build_inputs.tool_versions()['tailscale'], build_inputs.approved()['tools']['tailscale_bootstrap'])
 
     def test_packaging_reuses_ci_tool_metadata_without_querying_new_versions(self):
         with tempfile.TemporaryDirectory() as temporary:

@@ -2,7 +2,7 @@ name: Runtime dependency cache
 description: GitHub first, private fallback for approved tools and signed host package downloads
 inputs:
   kind:
-    description: bootstrap, rust, go, java, android, emulator or apt
+    description: bootstrap, rust, go, java, android, android-package, emulator or apt
     required: true
   url:
     description: Private cache service URL after tailnet login

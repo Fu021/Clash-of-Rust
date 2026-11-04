@@ -35,7 +35,7 @@ const script = path.resolve(__dirname, '../../../scripts/action_cache.py');
 const config = JSON.parse(fs.readFileSync(state, 'utf8'));
 const runtime = (operation) => {
   if (!config.runtime || config.runtime === 'apt') return;
-  if (!['bootstrap', 'rust', 'go', 'java', 'android', 'emulator'].includes(config.runtime)) {
+  if (!['bootstrap', 'rust', 'go', 'java', 'android', 'android-package', 'emulator'].includes(config.runtime)) {
     throw new Error('Invalid runtime cache category');
   }
   if (path.resolve(config.paths) !== path.join(process.env.RUNNER_TEMP, `cor-runtime-${config.runtime}`)) {

@@ -11,7 +11,7 @@ import tempfile
 from build_inputs import tool_versions
 from build_support import host_arch, host_system, sha256, write_json
 
-KINDS = ('bootstrap', 'rust', 'go', 'java', 'android', 'emulator', 'apt')
+KINDS = ('bootstrap', 'rust', 'go', 'java', 'android', 'android-package', 'emulator', 'apt')
 
 
 def roots(kind):
@@ -29,11 +29,13 @@ def roots(kind):
         triple = ('x86_64' if arch == 'x64' else 'aarch64') + {
             'linux': '-unknown-linux-gnu', 'windows': '-pc-windows-msvc', 'macos': '-apple-darwin'}[system]
         return [Path(os.environ.get('RUSTUP_HOME', Path.home() / '.rustup')) / 'toolchains' / (versions['rust'] + '-' + triple)]
-    if kind in ('android', 'emulator'):
+    if kind in ('android', 'android-package', 'emulator'):
         sdk = Path(os.environ['ANDROID_HOME'])
         names = ('cmdline-tools', 'platform-tools', 'platforms/android-36', 'build-tools/36.0.0', 'ndk/28.2.13676358')
         if kind == 'emulator':
             names = ('emulator', 'system-images/android-35/google_apis/x86_64')
+        elif kind == 'android-package':
+            names = ('cmdline-tools', 'platform-tools', 'build-tools/36.0.0')
         return [sdk / name for name in names]
     return []
 
@@ -47,7 +49,7 @@ def plan(kind):
                 'tools': {name: versions[name] for name in requested},
                 'image': os.environ.get('ImageOS', platform.release()),
                 'roots': [str(root) for root in selected]}
-    if kind in ('android', 'emulator', 'bootstrap'):
+    if kind in ('android', 'android-package', 'emulator', 'bootstrap'):
         identity['image_version'] = os.environ.get('ImageVersion', '')
     if kind == 'rust':
         identity['target'] = os.environ.get('RUNTIME_RUST_TARGET', '')

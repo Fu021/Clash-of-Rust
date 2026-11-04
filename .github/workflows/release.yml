@@ -562,7 +562,7 @@ jobs:
           java-version: ${{ env.COR_JAVA }}
       - uses: ./.github/actions/runtime-cache
         with:
-          kind: android
+          kind: android-package
           url: ${{ steps.tailnet.outcome == 'success' && vars.LOCAL_CACHE_URL || '' }}
           token: ${{ secrets.LOCAL_CACHE_TOKEN }}
       - uses: ./.github/actions/runtime-cache
@@ -574,9 +574,12 @@ jobs:
       - name: Prepare Android package tools
         shell: python
         run: |
-          import os, pathlib, subprocess
+          import os, pathlib, sys
+          sys.path.insert(0, 'scripts')
+          from android import sdkmanager_install
           manager=pathlib.Path(os.environ['ANDROID_HOME'])/'cmdline-tools/latest/bin/sdkmanager'
-          subprocess.run([str(manager),'build-tools;36.0.0'],check=True)
+          sdkmanager_install([str(manager),'build-tools;36.0.0'],
+                             pathlib.Path(os.environ['RUNNER_TEMP'])/'cor-sdk-install')
       - name: Start Android package test device
         if: matrix.arch == 'x64'
         run: |

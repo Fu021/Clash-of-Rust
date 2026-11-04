@@ -181,7 +181,7 @@ def tool_candidate(name, current):
     if name == 'java':
         url = 'https://api.adoptium.net/v3/assets/latest/17/hotspot?architecture=x64&image_type=jdk&os=linux'
         return metadata(url)[0]['version']['semver'], '', url
-    if name == 'tailscale':
+    if name.startswith('tailscale'):
         url = 'https://pkgs.tailscale.com/stable/?mode=json'
         return metadata(url)['Version'], '', url
     if name == 'gradle':
