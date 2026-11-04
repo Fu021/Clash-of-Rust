@@ -1547,7 +1547,7 @@ runpy.run_path(str(script), run_name='__main__')
     def test_cache_upload_preserves_early_http_rejections(self):
         config = {'url': 'http://100.64.0.1:9080', 'token': ''}
         for status in (409, 413, 507):
-            for failure in (BrokenPipeError, ConnectionResetError):
+            for failure in (BrokenPipeError, ConnectionResetError, ConnectionAbortedError):
                 with self.subTest(status=status, failure=failure.__name__):
                     connection = MagicMock()
                     connection.request.side_effect = failure('body upload interrupted')
@@ -1559,16 +1559,18 @@ runpy.run_path(str(script), run_name='__main__')
                     connection.getresponse.return_value.close.assert_called_once()
 
     def test_cache_upload_closes_connection_when_no_rejection_can_be_read(self):
-        connection = MagicMock()
-        failure = BrokenPipeError('body upload interrupted')
-        connection.request.side_effect = failure
-        connection.getresponse.side_effect = local_cache.http.client.RemoteDisconnected('no response')
         config = {'url': 'http://100.64.0.1:9080', 'token': ''}
-        with patch.object(local_cache.http.client, 'HTTPConnection', return_value=connection):
-            with self.assertRaises(BrokenPipeError) as raised:
-                local_cache.request(config, '/v1/blob', method='PUT', file=io.BytesIO(b'archive'))
-        self.assertIs(raised.exception, failure)
-        connection.close.assert_called_once()
+        for failure_type in (BrokenPipeError, ConnectionResetError, ConnectionAbortedError):
+            with self.subTest(failure=failure_type.__name__):
+                connection = MagicMock()
+                failure = failure_type('body upload interrupted')
+                connection.request.side_effect = failure
+                connection.getresponse.side_effect = local_cache.http.client.RemoteDisconnected('no response')
+                with patch.object(local_cache.http.client, 'HTTPConnection', return_value=connection):
+                    with self.assertRaises(failure_type) as raised:
+                        local_cache.request(config, '/v1/blob', method='PUT', file=io.BytesIO(b'archive'))
+                self.assertIs(raised.exception, failure)
+                connection.close.assert_called_once()
 
     def test_upstream_import_sends_verified_urls_and_logical_destinations_only(self):
         with tempfile.TemporaryDirectory() as temporary, \

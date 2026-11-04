@@ -499,7 +499,7 @@ def request(config, path, method='GET', file=None, headers=None):
     try:
         try:
             connection.request(method, path, body=file, headers=auth)
-        except (BrokenPipeError, ConnectionResetError) as send_error:
+        except (BrokenPipeError, ConnectionResetError, ConnectionAbortedError) as send_error:
             try:
                 reply = connection.getresponse()
             except (OSError, http.client.HTTPException):
