@@ -18,6 +18,7 @@ import android as android_build
 import windows_ci as windows
 import workflow_storage as storage
 import action_cache as local_cache
+import upstream_cache
 import cache_shards
 import linux_apt
 import linux_ci
@@ -158,18 +159,20 @@ class BuildTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as temporary:
             path = Path(temporary)/'archive'
             path.write_bytes(data)
-            with patch.object(linux_ci, 'opener') as http:
+            with patch.object(build, 'opener') as http:
                 self.assertEqual(linux_ci.download(record, path), path)
                 http.assert_not_called()
             path.write_bytes(b'x'*len(data))
-            with patch.object(linux_ci, 'opener') as http:
+            with patch.object(build, 'opener') as http:
                 http.return_value.open.return_value = io.BytesIO(data)
                 linux_ci.download(record, path)
             self.assertEqual(path.read_bytes(), data)
             path.unlink()
-            with patch.object(linux_ci, 'opener') as http:
+            with patch.object(build, 'opener') as http, \
+                    patch.object(build.time, 'sleep'), patch.object(upstream_cache, 'restore', return_value=False):
                 http.return_value.open.return_value = io.BytesIO(b'bad')
-                with self.assertRaisesRegex(ValueError, 'checksum mismatch'):
+                http.return_value.open.side_effect = lambda *args, **kwargs: io.BytesIO(b'bad')
+                with self.assertRaisesRegex(ValueError, 'SHA256 mismatch'):
                     linux_ci.download(record, path)
             self.assertFalse(path.exists())
             self.assertFalse(path.with_suffix('.partial').exists())
@@ -713,41 +716,6 @@ Private_Clean: 2 kB
             with self.assertRaises(local_cache.RestoreBudgetExceeded):local_cache.restore(config)
         self.assertNotIn('restore_deadline',config,'post-job saves must have an independent deadline')
 
-    def test_cache_action_watchdog_cleans_interrupted_restores_before_continuing(self):
-        node=shutil.which('node')
-        if not node:self.skipTest('Node is required for the Actions wrapper test')
-        script=build.ROOT/'.github/actions/local-cache/index.cjs'
-        harness=r'''
-const assert=require('node:assert/strict'),vm=require('node:vm'),realfs=require('node:fs');
-const script=process.argv[1],mode=process.argv[2],calls=[],outputs=[];let saved;
-const fs={writeFileSync(_path,value){saved=JSON.parse(value)},
-  readFileSync(){return JSON.stringify(saved)},
-  appendFileSync(path,value){if(path==='output')outputs.push(value)}};
-const child={spawnSync(command,args,options){
-  calls.push({command,args,options});
-  if(calls.length===1)return mode==='exit'?{status:1}:{status:null,error:{code:'ETIMEDOUT'}};
-  if(mode==='cleanup-failure')return {status:1};
-  saved={...saved,hit:false,restored:false,available:false};return {status:0};
-}};
-const context={__dirname:require('node:path').dirname(script),console:{log(){}},
-  process:{env:{RUNNER_TEMP:'/runner/temp',GITHUB_STATE:'state',GITHUB_OUTPUT:'output'},platform:'linux'},
-  require(name){if(name==='node:fs')return fs;if(name==='node:child_process')return child;return require(name)}};
-const run=()=>vm.runInNewContext(realfs.readFileSync(script,'utf8'),context,{filename:script});
-if(mode==='cleanup-failure'){
-  assert.throws(run,/Cannot safely clean/);assert.equal(outputs.length,0);
-}else{
-  run();assert.equal(calls[1].args[1],'discard-restore');
-  assert.ok(calls[0].options.timeout>0 && calls[0].options.timeout<=420000);
-  assert.ok(calls[1].options.timeout<=120000);
-  assert.match(outputs[0],/^state=\/runner\/temp\/private-cache-[a-f0-9-]+\.json\n$/);
-  assert.equal(outputs.slice(1).join(''),'cache-hit=false\nrestored=false\navailable=false\n');
-}
-assert.equal(calls.length,2);
-'''
-        for mode in ('timeout','exit','cleanup-failure'):
-            with self.subTest(mode=mode):
-                result=subprocess.run([node,'-e',harness,str(script),mode],capture_output=True,text=True)
-                self.assertEqual(result.returncode,0,result.stdout+result.stderr)
 
     def test_blob_requests_use_remaining_restore_budget_without_short_metadata_limit(self):
         config = {'url': 'http://100.64.0.1:8080', 'token': 'test', 'restore_deadline': 1000}
@@ -760,32 +728,6 @@ assert.equal(calls.length,2);
                 local_cache.request(config, path)
                 self.assertEqual(connection.call_args.kwargs['timeout'], expected)
 
-    def test_cache_action_save_budget_is_validated_and_applied_to_the_watchdog(self):
-        node = shutil.which('node')
-        if not node:
-            self.skipTest('Node is required for the Actions wrapper test')
-        script = build.ROOT / '.github/actions/local-cache/index.cjs'
-        harness = r'''
-const assert=require('node:assert/strict'),vm=require('node:vm'),realfs=require('node:fs');
-const script=process.argv[1],budget=process.argv[2],post=process.argv[3]==='post',calls=[];
-let saved={save:true,save_seconds:Number(budget)};
-const fs={writeFileSync(_path,value){saved=JSON.parse(value)},
-  readFileSync(){return JSON.stringify(saved)},appendFileSync(){},rmSync(){}};
-const context={__dirname:require('node:path').dirname(script),console:{log(){}},
-  process:{env:{RUNNER_TEMP:'/runner/temp',GITHUB_STATE:'state',GITHUB_OUTPUT:'output',
-    'INPUT_SAVE-TIMEOUT':budget,...(post?{STATE_cache_state:'state'}:{})},platform:'linux'},
-  require(name){if(name==='node:fs')return fs;if(name==='node:child_process')
-    return {spawnSync(_command,_args,options){calls.push(options);return {status:0}}};return require(name)}};
-const run=()=>vm.runInNewContext(realfs.readFileSync(script,'utf8'),context,{filename:script});
-if(post){run();assert.equal(calls[0].timeout,Number(budget)*1000)}
-else{assert.throws(run,/Invalid private cache save budget/);assert.equal(calls.length,0)}
-'''
-        for budget, mode in (('900', 'post'), ('1200', 'post'), ('29', 'main'),
-                              ('1801', 'main'), ('invalid', 'main')):
-            with self.subTest(budget=budget, mode=mode):
-                result = subprocess.run([node, '-e', harness, str(script), budget, mode],
-                                        capture_output=True, text=True)
-                self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
 
     def test_partial_rust_cache_invalidates_only_native_and_cross_build_script_runs(self):
         with tempfile.TemporaryDirectory() as temporary:
@@ -1611,31 +1553,39 @@ runpy.run_path(str(script), run_name='__main__')
                 self.assertIs(raised.exception, failure)
                 connection.close.assert_called_once()
 
-    def test_upstream_import_sends_verified_urls_and_logical_destinations_only(self):
+    def test_upstream_manifest_survives_removal_of_the_original_file_and_sends_only_urls(self):
         with tempfile.TemporaryDirectory() as temporary, \
                 patch.dict(os.environ, {'RUNNER_TEMP': temporary, 'GITHUB_ACTIONS': 'true'}):
             source = Path(temporary) / 'python.tar.gz'
             source.write_bytes(b'verified upstream')
             build.record_download('https://github.com/example/tool/releases/download/v1/tool.tar.gz',
                                   source, build.sha256(source))
-            config = {'kind': 'archives', 'group': 'tools/linux-python-x64', 'key': 'approved',
-                      'server_capabilities': ['upstream-fetch-v1']}
+            checksum = build.sha256(source)
+            config = {'url': 'http://100.64.0.1:9080', 'token': 'never-publish-this'}
             sequence = int(os.environ.get('GITHUB_RUN_ID', '0')) * 1000 + min(int(os.environ.get('GITHUB_RUN_ATTEMPT', '0')), 999)
-            reply = io.BytesIO(json.dumps({'schema': 1, 'group': config['group'], 'key': config['key'],
+            reply = io.BytesIO(json.dumps({'schema': 1, 'group': upstream_cache.GROUP, 'key': 'sha256-' + checksum,
                                            'sequence': sequence, 'status': 'queued'}).encode())
             reply.status = 202
-            with patch.object(local_cache, 'response', return_value=nullcontext(reply)) as request, \
-                    patch.object(local_cache, 'cache_report'):
-                self.assertTrue(local_cache.upstream_import(config, [source]))
+            source.unlink()
+            with patch.object(upstream_cache, 'configuration', return_value=config), \
+                    patch.object(local_cache, 'server_capabilities', return_value={
+                        'validated-cache-commit-v1', 'complete-cache-retention-v1', 'upstream-fetch-v1'}), \
+                    patch.object(upstream_cache, 'lookup', return_value=None), \
+                    patch.object(local_cache, 'response', return_value=nullcontext(reply)) as request:
+                report = upstream_cache.submit(Path(temporary) / 'report.json')
             payload = json.loads(request.call_args.kwargs['file'])
             self.assertEqual(request.call_args.args[1], '/v1/import')
+            self.assertEqual(request.call_args.kwargs['method'], 'POST')
             self.assertEqual(payload['files'][0]['path'], '0')
-            self.assertEqual(payload['files'][0]['sha256'], build.sha256(source))
+            self.assertEqual(payload['files'][0]['sha256'], checksum)
             self.assertNotIn(temporary, json.dumps(payload))
-            self.assertTrue(config['import_queued'])
-            config['server_capabilities'] = []
-            with patch.object(local_cache, 'response') as request:
-                self.assertFalse(local_cache.upstream_import(config, [source]))
+            self.assertNotIn('never-publish-this', json.dumps(report))
+            self.assertEqual(report['files'][0]['status'], 'queued')
+            with patch.object(upstream_cache, 'configuration', return_value=config), \
+                    patch.object(local_cache, 'server_capabilities', return_value=set()), \
+                    patch.object(local_cache, 'response') as request:
+                report = upstream_cache.submit(Path(temporary) / 'report.json')
+                self.assertEqual(report['files'][0]['status'], 'not_submitted')
                 request.assert_not_called()
 
     def test_release_metadata_network_fallback_respects_explicit_version(self):
@@ -1841,10 +1791,8 @@ runpy.run_path(str(script), run_name='__main__')
         new = entry(2, 'native-release-linux-check-Linux-x64-aaaaaaaa-cccccccc', 30)
         go = entry(3, 'source-go-version-modules', 40)
         gradle = entry(4, 'gradle-content-unique-blob', 40)
-        # Stale revisions are removed even below budget; current dependencies
-        # are otherwise preserved. An 80-byte budget also evicts the oldest.
-        self.assertEqual([c['id'] for c in storage.eviction_plan([old, new, go, gradle], 200)], [1])
-        self.assertEqual([c['id'] for c in storage.eviction_plan([old, new, go, gradle], 80)], [1, 2])
+        self.assertEqual([c['id'] for c in storage.eviction_plan([old, new, go, gradle], 200)], [4, 3, 1])
+        self.assertEqual([c['id'] for c in storage.eviction_plan([old, new, go, gradle], 60)], [4, 3, 1])
         other_branch = entry(5, old['key'], 30, 'refs/pull/18/merge')
         self.assertEqual(storage.eviction_plan([new, other_branch], 100), [])
         compiler_old = entry(6, 'macos-compiler-arm64-' + 'a'*16 + '-' + 'b'*64, 20)
@@ -1858,7 +1806,7 @@ runpy.run_path(str(script), run_name='__main__')
         self.assertEqual([c['id'] for c in storage.eviction_plan([desktop,linux],60)],[9])
         source_old=entry(10,'source-cargo-'+'a'*64+'-1-1',10)
         source_new=entry(11,'source-cargo-'+'b'*64+'-2-1',10)
-        self.assertEqual([c['id'] for c in storage.eviction_plan([source_old,source_new],100)],[10])
+        self.assertEqual([c['id'] for c in storage.eviction_plan([source_old,source_new],100)],[11,10])
         for older,newer in (
                 ('linux-python-ubuntu20-v1-x64-'+'a'*64, 'linux-python-ubuntu20-v1-x64-'+'b'*64),
                 ('linux-cloud-ubuntu20-v1-arm64-'+'a'*64, 'linux-cloud-ubuntu20-v1-arm64-'+'b'*64),
@@ -2860,12 +2808,195 @@ class ReleaseTests(unittest.TestCase):
                 self.assertFalse(any(isinstance(data,dict) and data.get('draft') is False for _,_,data in client.writes))
 
 
+class OriginalDownloadTests(unittest.TestCase):
+    def test_action_configures_without_network_and_bounds_post_submission(self):
+        node = shutil.which('node')
+        if not node:
+            self.skipTest('Node is required for the Actions wrapper test')
+        script = build.ROOT / '.github/actions/upstream-cache/index.cjs'
+        harness = r'''
+const assert=require('node:assert/strict'),vm=require('node:vm'),realfs=require('node:fs');
+const script=process.argv[1],mode=process.argv[2],calls=[],writes=[];
+const fs={writeFileSync(path,value,options){writes.push({path,value,options})},
+  appendFileSync(path,value){writes.push({path,value})},existsSync(){return mode==='reported'},
+  rmSync(path){calls.push({remove:path})}};
+const env={RUNNER_TEMP:'/runner/temp',GITHUB_STATE:'state',GITHUB_ENV:'env',INPUT_TOKEN:'private-token'};
+if(mode!=='main')env.STATE_original_download_config='/runner/temp/config.json';
+if(mode==='reported')env.COR_UPSTREAM_REPORT_ATTEMPTED='true';
+const context={__dirname:require('node:path').dirname(script),console:{log(){}},
+  process:{env,platform:'linux'},require(name){
+    if(name==='node:fs')return fs;
+    if(name==='node:child_process')return {spawnSync(command,args,options){
+      calls.push({command,args,options});return {status:null,error:{code:'ETIMEDOUT'}}}};
+    return require(name)}};
+vm.runInNewContext(realfs.readFileSync(script,'utf8'),context,{filename:script});
+if(mode==='main'){
+  assert.equal(calls.length,0);assert.equal(writes[0].options.mode,0o600);
+  assert.equal(JSON.parse(writes[0].value).token,'private-token');
+  assert.ok(writes.slice(1).every(record=>!record.value.includes('private-token')));
+}else{
+  assert.equal(calls.at(-1).remove,'/runner/temp/config.json');
+  assert.equal(calls.length,mode==='reported'?1:2);
+  if(mode!=='reported'){assert.equal(calls[0].args[1],'submit');assert.equal(calls[0].options.timeout,90000);}
+}
+'''
+        for mode in ('main', 'post', 'reported'):
+            with self.subTest(mode=mode):
+                result = subprocess.run([node, '-e', harness, str(script), mode], capture_output=True, text=True)
+                self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+
+    def test_sources_require_public_https_and_strong_content_identity(self):
+        checksum = 'a' * 64
+        self.assertTrue(upstream_cache.valid_source('https://github.com/owner/tool/file.zip', checksum, 123))
+        for url in ('http://github.com/file', 'https://100.64.0.1/file',
+                    'https://user:password@github.com/file', 'https://github.com:444/file',
+                    'https://github.com/file?token=secret', 'https://github.com/file#fragment',
+                    'https://github.com/file\ninjection', 'https://example.com/file'):
+            self.assertFalse(upstream_cache.valid_source(url, checksum, 123), url)
+        for checksum, size in (('a' * 63, 123), ('g' * 64, 123), ('a' * 64, 0),
+                               ('a' * 64, True), ('a' * 64, 5 * 1024**3)):
+            self.assertFalse(upstream_cache.valid_source('https://github.com/file', checksum, size))
+
+    def test_official_success_never_looks_up_the_private_mirror(self):
+        payload = b'official original'
+        with tempfile.TemporaryDirectory() as temporary:
+            target = Path(temporary) / 'original'
+            with patch.object(build, 'opener') as http, \
+                    patch.object(upstream_cache, 'restore') as private:
+                http.return_value.open.return_value = io.BytesIO(payload)
+                build.download('https://github.com/owner/tool/file', target,
+                               digest=hashlib.sha256(payload).hexdigest())
+                private.assert_not_called()
+            self.assertEqual(target.read_bytes(), payload)
+
+    def test_official_retries_precede_the_private_fallback(self):
+        checksum = hashlib.sha256(b'original').hexdigest()
+        with tempfile.TemporaryDirectory() as temporary:
+            target = Path(temporary) / 'original'
+            with patch.object(build, 'opener') as http, \
+                    patch.object(build.time, 'sleep'), \
+                    patch.object(upstream_cache, 'restore', return_value=True) as private:
+                http.return_value.open.side_effect = OSError('offline')
+                build.download('https://github.com/tool/original', target, digest=checksum)
+                self.assertEqual(http.return_value.open.call_count, 3)
+                private.assert_called_once_with('https://github.com/tool/original', target, checksum)
+
+    def test_private_envelope_and_original_are_both_verified_before_replacement(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            original = root / 'source'
+            original.write_bytes(b'verified original')
+            archive = root / 'blob'
+            local_cache.pack([original], archive)
+            metadata = {'id': '1' * 64, 'size': archive.stat().st_size, 'sha256': build.sha256(archive)}
+            target = root / 'target'
+            target.write_bytes(b'existing good data')
+            for corrupt_envelope, checksum, expected in (
+                    (True, build.sha256(original), False),
+                    (False, '0' * 64, False),
+                    (False, build.sha256(original), True)):
+                with self.subTest(corrupt_envelope=corrupt_envelope, expected=expected):
+                    reply = io.BytesIO(archive.read_bytes())
+                    reply.status = 200
+                    value = {**metadata, 'sha256': '0' * 64} if corrupt_envelope else metadata
+                    with patch.object(upstream_cache, 'configuration', return_value={'token': 'test'}), \
+                            patch.object(upstream_cache, 'lookup', return_value=value), \
+                            patch.object(local_cache, 'response', return_value=nullcontext(reply)):
+                        self.assertEqual(upstream_cache.restore(
+                            'https://github.com/tool/original', target, checksum), expected)
+                    self.assertEqual(target.read_bytes(), original.read_bytes() if expected else b'existing good data')
+
+    def test_private_envelope_rejects_directories_links_and_extra_payloads(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            archive = root / 'blob'
+            for kind in ('directory', 'symlink', 'extra'):
+                with self.subTest(kind=kind):
+                    with tarfile.open(archive, 'w:gz') as output:
+                        entry = tarfile.TarInfo('0')
+                        entry.type = {'directory': tarfile.DIRTYPE, 'symlink': tarfile.SYMTYPE,
+                                      'extra': tarfile.REGTYPE}[kind]
+                        entry.linkname = '/etc/passwd'
+                        output.addfile(entry)
+                        if kind == 'extra':
+                            output.addfile(tarfile.TarInfo('1'))
+                    reply = io.BytesIO(archive.read_bytes())
+                    reply.status = 200
+                    metadata = {'id': '1' * 64, 'size': archive.stat().st_size, 'sha256': build.sha256(archive)}
+                    with patch.object(upstream_cache, 'configuration', return_value={'token': 'test'}), \
+                            patch.object(upstream_cache, 'lookup', return_value=metadata), \
+                            patch.object(local_cache, 'response', return_value=nullcontext(reply)):
+                        self.assertFalse(upstream_cache.restore(
+                            'https://github.com/tool/original', root / 'target', 'a' * 64))
+                    self.assertFalse((root / 'target').exists())
+
+    def test_import_failure_never_uploads_an_archive_or_deletes_cache_entries(self):
+        with tempfile.TemporaryDirectory() as temporary, \
+                patch.dict(os.environ, {'RUNNER_TEMP': temporary, 'GITHUB_ACTIONS': 'true'}):
+            source = Path(temporary) / 'original'
+            source.write_bytes(b'original')
+            build.record_download('https://github.com/tool/original', source, build.sha256(source))
+            source.unlink()
+            for reply_value in (None, {'schema': 1, 'group': 'wrong', 'status': 'ready'}):
+                with self.subTest(reply_value=reply_value):
+                    reply = io.BytesIO(json.dumps(reply_value).encode())
+                    reply.status = 502 if reply_value is None else 200
+                    with patch.object(upstream_cache, 'configuration', return_value={'token': 'secret'}), \
+                            patch.object(local_cache, 'server_capabilities', return_value={
+                                'validated-cache-commit-v1', 'complete-cache-retention-v1', 'upstream-fetch-v1'}), \
+                            patch.object(upstream_cache, 'lookup', return_value=None), \
+                            patch.object(local_cache, 'response', return_value=nullcontext(reply)) as request:
+                        result = upstream_cache.submit(Path(temporary) / 'report.json')
+                    self.assertEqual(result['files'][0]['status'], 'unavailable')
+                    self.assertEqual(request.call_count, 1)
+                    self.assertEqual(request.call_args.args[1], '/v1/import')
+                    self.assertEqual(request.call_args.kwargs['method'], 'POST')
+                    self.assertNotIn(temporary, json.dumps(result))
+
+    def test_receipts_deduplicate_content_and_do_not_export_runner_paths(self):
+        with tempfile.TemporaryDirectory() as temporary, \
+                patch.dict(os.environ, {'RUNNER_TEMP': temporary, 'GITHUB_ACTIONS': 'true'}):
+            source = Path(temporary) / 'original'
+            source.write_bytes(b'original')
+            for name in ('one', 'two'):
+                build.record_download('https://github.com/tool/' + name, source, build.sha256(source))
+            with patch.object(upstream_cache, 'configuration', return_value={}):
+                report = upstream_cache.submit(Path(temporary) / 'report.json')
+            self.assertEqual(len(report['files']), 1)
+            self.assertNotIn(temporary, json.dumps(report))
+            self.assertEqual(report['files'][0]['status'], 'not_submitted')
+
+    def test_lookup_rejects_a_compatible_or_unrelated_record(self):
+        for changed in ({'group': 'rust/linux-x64'}, {'key': 'sha256-' + 'b' * 64},
+                        {'id': '../escape'}, {'size': -1}):
+            reply = io.BytesIO(json.dumps({'schema': 1, 'group': upstream_cache.GROUP,
+                                           'key': 'sha256-' + 'a' * 64, 'id': 'c' * 64,
+                                           'sha256': 'd' * 64, 'size': 100, **changed}).encode())
+            reply.status = 200
+            with self.subTest(changed=changed), \
+                    patch.object(local_cache, 'response', return_value=nullcontext(reply)):
+                with self.assertRaises(ValueError):
+                    upstream_cache.lookup({}, 'a' * 64)
+
+    def test_slow_rust_platforms_survive_budget_pressure(self):
+        def entry(number, key):
+            return {'id': number, 'key': key, 'ref': 'refs/heads/main', 'size_in_bytes': 100,
+                    'last_accessed_at': str(number), 'created_at': str(number)}
+        slow = entry(1, 'native-release-v7-windows-11-arm-check-aabbccdd-11223344')
+        desktop = entry(2, 'native-release-v7-macos-15-intel-check-aabbccdd-11223344')
+        linux = entry(3, 'native-release-ubuntu20-v1-ubuntu-24.04-check-aabbccdd-11223344')
+        memory = entry(4, 'memory-ubuntu22-v2-release-aabbccdd-11223344')
+        tool = entry(5, 'runtime-v1-java-linux-x64')
+        removed = storage.eviction_plan([slow, desktop, linux, memory, tool], 200)
+        self.assertEqual({value['id'] for value in removed}, {3, 4, 5})
+
+
 class AptCacheTests(unittest.TestCase):
     def test_records_require_strong_hashes_and_safe_names(self):
         checksum = 'a'*64
         valid = f"'https://example.invalid/pkg.deb' pkg_1_amd64.deb 3 SHA256:{checksum}\n"
         self.assertEqual(linux_apt.archive_records(valid), {
-            'pkg_1_amd64.deb': {'size': 3, 'sha256': checksum}})
+            'pkg_1_amd64.deb': {'size': 3, 'sha256': checksum, 'url': 'https://example.invalid/pkg.deb'}})
         self.assertEqual(linux_apt.archive_records(valid.replace('SHA256:', 'MD5Sum:')), {})
         self.assertEqual(linux_apt.archive_records(valid.replace('https:', 'file:')), {})
         for name in ('../pkg.deb', '/pkg.deb', 'pkg.txt', 'pkg;cmd.deb'):
@@ -2880,7 +3011,7 @@ class AptCacheTests(unittest.TestCase):
             with self.subTest(uri=uri):
                 local = f"'{uri}' application.deb 100\n"
                 self.assertEqual(linux_apt.archive_records(local + remote), {
-                    'pkg_1_amd64.deb': {'size': 3, 'sha256': 'a'*64}})
+                    'pkg_1_amd64.deb': {'size': 3, 'sha256': 'a'*64, 'url': 'https://example.invalid/pkg.deb'}})
         with self.assertRaises(ValueError):
             linux_apt.archive_records("'https://example.invalid/pkg.deb' pkg_1_amd64.deb 3\n")
 

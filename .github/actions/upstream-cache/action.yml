@@ -1,0 +1,14 @@
+name: Original download mirror
+description: Official downloads first, verified private fallback, URL-only imports at job end
+inputs:
+  url:
+    description: Private cache service URL after tailnet login
+    required: false
+  token:
+    description: Private cache access token
+    required: false
+runs:
+  using: node24
+  main: index.cjs
+  post: index.cjs
+  post-if: '!cancelled()'

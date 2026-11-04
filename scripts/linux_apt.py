@@ -7,8 +7,9 @@ import shutil
 import stat
 import subprocess
 import tempfile
+import time
 
-from build_support import run, sha256
+from build_support import record_download, run, sha256
 
 OPTIONS = ['apt-get', '-o', 'Acquire::http::Timeout=30', '-o',
            'Acquire::https::Timeout=30', '-o', 'Acquire::Retries=2', '-o',
@@ -38,7 +39,7 @@ def archive_records(output):
             raise ValueError('Invalid APT archive name or size')
         if not re.fullmatch(r'SHA256:[0-9a-fA-F]{64}', checksum):
             continue  # No strong repository hash: let APT fetch it normally.
-        record = {'size': int(size), 'sha256': checksum.split(':', 1)[1].lower()}
+        record = {'size': int(size), 'sha256': checksum.split(':', 1)[1].lower(), 'url': uri}
         if name in records and records[name] != record:
             raise ValueError('Conflicting APT archive records')
         records[name] = record
@@ -103,7 +104,21 @@ def install(packages, timeout=900, no_recommends=False):
                       flush=True)
         print(f'APT download cache: {restored}/{len(records)} packages verified; '
               f'{reused_bytes / 1024**2:.1f} MiB reused', flush=True)
-        return privileged([*command, *arguments], timeout)
+        try:
+            return privileged([*command, *arguments], timeout)
+        except subprocess.CalledProcessError:
+            from upstream_cache import restore
+            restored = 0
+            deadline = time.monotonic() + 120
+            for name, record in records.items():
+                if time.monotonic() >= deadline:
+                    break
+                if not matches(directory/name, record) and restore(
+                        source_url(record['url']), directory/name, record['sha256'], deadline=deadline):
+                    restored += 1
+            if not restored:
+                raise
+            return privileged([*command, *arguments], timeout)
     finally:
         # Never cache the application DEB or anything lacking a repository hash.
         # Failures in optional cache export must not hide installation results.
@@ -111,6 +126,7 @@ def install(packages, timeout=900, no_recommends=False):
             for name, record in records.items():
                 source = directory/name
                 if matches(source, record):
+                    record_download(source_url(record['url']), source, record['sha256'])
                     temporary = cache/(name+'.partial')
                     shutil.copyfile(source, temporary)
                     temporary.replace(cache/name)
@@ -121,3 +137,14 @@ def install(packages, timeout=900, no_recommends=False):
             privileged(['rm', '-rf', '--', str(directory)], 60)
         except (OSError, subprocess.SubprocessError):
             print('::warning::Temporary APT archive cleanup failed.', flush=True)
+
+
+def source_url(url):
+    from urllib.parse import urlsplit, urlunsplit
+    parsed = urlsplit(url)
+    official = {'archive.ubuntu.com', 'security.ubuntu.com', 'ports.ubuntu.com',
+                'azure.archive.ubuntu.com'}
+    if parsed.scheme == 'http' and parsed.hostname in official:
+        host = 'archive.ubuntu.com' if parsed.hostname == 'azure.archive.ubuntu.com' else parsed.hostname
+        return urlunsplit(('https', host, parsed.path, parsed.query, parsed.fragment))
+    return url

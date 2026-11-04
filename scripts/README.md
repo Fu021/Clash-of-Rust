@@ -8,11 +8,12 @@
 | --- | --- | --- |
 | `build_support.py` | 共享模块 | 平台识别、版本、资源、下载、架构和暂存目录等标准库辅助。 |
 | `build_inputs.py` | CLI / 模块 | 冻结并应用同一份 Rust、Go、Android、Linux 基线和资源依赖快照。 |
+| `upstream_cache.py` | CLI / 模块 | 官方原始下载的私网回退、来源清单及 URL-only 代拉提交；不上传 runner 归档。 |
 | `dependency_audit.py` | 模块 | 只读探查升级、撤回和替换信号；由 `build_inputs.py audit` 调用，实际变更遵循维护者的 loop 更新授权并验证。 |
-| `runtime_cache.py` | CLI / 模块 | 规划白名单工具目录，安全捕获/恢复含内部链接的快照；不缓存凭据或机器状态。 |
+| `runtime_cache.py` | 历史协议辅助 | 旧工具快照的离线兼容回归；当前工作流不调用。 |
 | `workflow_artifacts.py` | CLI / 模块 | 导出、下载和校验不可变 CI 产物；同运行 Linux 包就绪后启动兼容验证，不重新编译。 |
 | `action_cache.py` | CLI / 模块 | 认证私网缓存协议、恢复预算、校验及清单。 |
-| `cache_shards.py` | 模块 | Rust 32 分片缓存的恢复、失效和增量上传。 |
+| `cache_shards.py` | 历史协议辅助 | 旧 Rust 分片的离线兼容回归；当前工作流不调用。 |
 | `workflow_storage.py` | CLI | 限制 GitHub Actions 热缓存容量并保留需要的版本。 |
 | `prepare-resources.py` | CLI | 校验并准备 mihomo、Geo 和桌面共享资源。 |
 | `prepare-assets.py` | 维护 CLI | 生成图标、国旗，或核验 Windows 嵌入图标；普通构建不运行。 |
@@ -38,7 +39,7 @@
 
 ## 仓库内其他脚本
 
-工作流复合操作 `.github/actions/local-cache/index.cjs` 只负责调用 `action_cache.py`，不复制缓存实现。`resources/claude-check/browser.js` 是检测页面资源，随客户端提供，保留在资源目录。
+`.github/actions/upstream-cache/index.cjs` 只准备私网配置和有界收尾；`upstream-report` 输出原包清单附件。旧 `local-cache`/`runtime-cache` action 已删除，历史协议辅助不作为服务端部署入口。`resources/claude-check/browser.js` 是检测页面资源，随客户端提供，保留在资源目录。
 
 私网缓存的客户端写入能力和服务端职责见[缓存服务说明](../docs/workflows/cache-server.md)。工作流不修改或上传 `.github/cache-server/README.txt`，不传递 agent 协作请求或读取 agent 反馈；需要服务端配合的事项由用户转达。
 

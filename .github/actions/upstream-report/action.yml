@@ -1,0 +1,23 @@
+name: Original download inventory
+description: Submit source URLs with bounded waiting and preserve a human-readable manifest
+inputs:
+  name:
+    description: Unique artifact name for this matrix job
+    required: true
+runs:
+  using: composite
+  steps:
+    - name: Submit verified original download URLs
+      shell: python
+      run: |
+        import os, subprocess, sys
+        with open(os.environ['GITHUB_ENV'], 'a') as environment:
+            environment.write('COR_UPSTREAM_REPORT_ATTEMPTED=true\n')
+        subprocess.run([sys.executable, 'scripts/upstream_cache.py', 'submit'], check=True, timeout=90)
+    - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
+      if: ${{ !cancelled() }}
+      with:
+        name: ${{ inputs.name }}
+        path: target/upstream-downloads.json
+        retention-days: 3
+        if-no-files-found: error

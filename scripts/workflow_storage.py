@@ -1,4 +1,4 @@
-"""Keep the hot Actions cache below 9 GiB; full archives remain on the private host."""
+"""Keep Rust compilation caches below 9 GiB, favoring slow native targets."""
 import argparse
 import os
 from pathlib import Path
@@ -58,27 +58,32 @@ def lineage(key):
 
 def priority(entry):
     key = entry['key']
-    # Retain small shared source/tools first, then slow desktop compilers.
-    # The fast Linux jobs can overlap a private fallback with those compilations.
-    if key.startswith('android-go-build-'):
-        return 1  # Rebuildable objects must not evict shared downloads/Mac caches.
-    if key.startswith(('runtime-v1-bootstrap-', 'runtime-v1-go-', 'runtime-v1-java-', 'runtime-v1-rust-')):
-        return 4
-    if key.startswith(('runtime-v1-android-', 'runtime-v1-emulator-', 'linux-image-ubuntu20-')):
+    if key.startswith('native-release-'):
+        if 'windows' in key and 'arm' in key:
+            return 6
+        if 'macos' in key and ('13' in key or 'intel' in key):
+            return 5
+        if 'windows' in key:
+            return 4
+        if 'macos' in key:
+            return 3
+        return 1
+    if key.startswith('android-v2-armv7-'):
         return 2
-    if key.startswith('linux-python-ubuntu20-'):
-        return 4
-    if key.startswith(('linux-cloud-ubuntu20-', 'linux-apt-ubuntu20-')):
-        return 2
-    if key.startswith(('resources-', 'source-', 'android-go-', 'gradle-linux-', 'skia-source-', 'tools-nsis-', 'action-setup-tailscale/')):
-        return 4
-    if key.startswith('native-release-') and ('macos' in key or 'windows' in key):
-        return 3
-    if key.startswith('android-'):
-        return 2
+    if key.startswith('android-v2-'):
+        return 1
     if key.startswith('memory-'):
         return 0
-    return 1
+    return -1
+
+
+def retired(key):
+    return key.startswith((
+        'macos-compiler-', 'android-go-', 'runtime-v1-', 'resources-', 'source-',
+        'gradle-', 'tools-nsis-', 'skia-source-', 'linux-python-ubuntu20-',
+        'linux-cloud-ubuntu20-', 'linux-apt-ubuntu20-', 'linux-image-ubuntu20-',
+        'action-setup-tailscale/',
+    ))
 
 
 def eviction_plan(entries, budget=BUDGET):
@@ -89,9 +94,8 @@ def eviction_plan(entries, budget=BUDGET):
     keep = []
     remove = []
     for entry in recent:
-        if (entry['key'].startswith('macos-compiler-')
-                or (entry['key'].startswith('android-go-') and not entry['key'].startswith('android-go-build-'))):
-            remove.append(entry)  # Retired duplicate compiler/source layers.
+        if retired(entry['key']):
+            remove.append(entry)
             continue
         family = (entry['ref'], lineage(entry['key']))
         if family in seen:

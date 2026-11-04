@@ -1,172 +1,27 @@
-name: Ubuntu 20.04 dependency downloads
-description: Cache verified upstream archives and guest DEBs, never installed VM disks
+name: Ubuntu 20.04 original downloads
+description: Verify official archives and use the private original-file fallback on download failure
 inputs:
   vm:
-    description: Also restore the cloud image and guest package downloads
+    description: Also download the original cloud image
     default: 'false'
-  url:
-    description: Private cache service URL after the job connects to its tailnet
-    required: false
-  token:
-    description: Private cache access token
-    required: false
-outputs:
-  apt-key:
-    description: Architecture-specific guest DEB download cache
-    value: ${{ steps.inputs.outputs.apt }}
-  apt-state:
-    description: Private guest DEB state for saving verified downloads after the VM exits
-    value: ${{ steps.apt_local.outputs.state }}
 runs:
   using: composite
   steps:
-    - name: Identify frozen Linux downloads
-      id: inputs
+    - name: Configure temporary Linux download paths
       shell: bash
       env:
         COR_LINUX_TOOLS_DIR: ${{ runner.temp }}/cor-linux-tools
         CACHE_VM: ${{ inputs.vm }}
       run: |
-        python3 scripts/linux_ci.py cache-keys
         echo "COR_LINUX_TOOLS_DIR=$COR_LINUX_TOOLS_DIR" >> "$GITHUB_ENV"
         if [ "$CACHE_VM" = true ]; then
           echo "COR_LINUX_APT_CACHE=$COR_LINUX_TOOLS_DIR/apt" >> "$GITHUB_ENV"
         fi
-    - name: Restore portable Python
-      id: python
-      uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9
-      continue-on-error: true
-      with:
-        path: ${{ runner.temp }}/cor-linux-tools/python.tar.gz
-        key: ${{ steps.inputs.outputs.python }}
-    - name: Restore private fallback for portable Python
-      id: python_local
-      uses: ./.github/actions/local-cache
-      with:
-        github-hit: ${{ steps.python.outcome == 'success' && steps.python.outputs.cache-hit || '' }}
-        github-failed: ${{ steps.python.outcome == 'failure' }}
-        url: ${{ inputs.url }}
-        token: ${{ inputs.token }}
-        group: tools/linux-python-${{ steps.inputs.outputs.arch }}
-        key: ${{ steps.inputs.outputs.python }}
-        paths: ${{ runner.temp }}/cor-linux-tools/python.tar.gz
-        immutable: true
-    - name: Restore original Ubuntu cloud image
-      id: cloud
-      if: inputs.vm == 'true'
-      uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9
-      continue-on-error: true
-      with:
-        path: ${{ runner.temp }}/cor-linux-tools/focal.img
-        key: ${{ steps.inputs.outputs.cloud }}
-    - name: Restore private fallback for Ubuntu cloud image
-      id: cloud_local
-      if: inputs.vm == 'true'
-      uses: ./.github/actions/local-cache
-      with:
-        github-hit: ${{ steps.cloud.outcome == 'success' && steps.cloud.outputs.cache-hit || '' }}
-        github-failed: ${{ steps.cloud.outcome == 'failure' }}
-        url: ${{ inputs.url }}
-        token: ${{ inputs.token }}
-        group: tools/linux-cloud-${{ steps.inputs.outputs.arch }}
-        key: ${{ steps.inputs.outputs.cloud }}
-        paths: ${{ runner.temp }}/cor-linux-tools/focal.img
-        immutable: true
-    - name: Verify or download frozen archives
+    - name: Verify or download frozen original archives
       shell: bash
       env:
         CACHE_VM: ${{ inputs.vm }}
       run: |
         arguments=(cache-downloads)
         if [ "$CACHE_VM" = true ]; then arguments+=(--vm); fi
-        python3 scripts/linux_ci.py "${arguments[@]}"
-    - name: Save verified Python before tests
-      if: steps.python.outputs.cache-hit != 'true'
-      uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9
-      continue-on-error: true
-      with:
-        path: ${{ runner.temp }}/cor-linux-tools/python.tar.gz
-        key: ${{ steps.inputs.outputs.python }}
-    - name: Save verified cloud image before tests
-      if: inputs.vm == 'true' && steps.cloud.outputs.cache-hit != 'true'
-      uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9
-      continue-on-error: true
-      with:
-        path: ${{ runner.temp }}/cor-linux-tools/focal.img
-        key: ${{ steps.inputs.outputs.cloud }}
-    - name: Mirror verified upstream archives before tests
-      shell: bash
-      continue-on-error: true
-      env:
-        PYTHON_CACHE_STATE: ${{ steps.python_local.outputs.state }}
-        CLOUD_CACHE_STATE: ${{ steps.cloud_local.outputs.state }}
-      run: |
-        timeout 300 bash -e -c '
-          for cache_state in "$PYTHON_CACHE_STATE" "$CLOUD_CACHE_STATE"; do
-            if [ -n "$cache_state" ]; then
-              python3 scripts/action_cache.py save --state "$cache_state"
-            fi
-          done
-        '
-    - name: Restore GitHub Ubuntu build image
-      id: image
-      if: inputs.vm != 'true'
-      uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9
-      continue-on-error: true
-      with:
-        path: ${{ runner.temp }}/cor-linux-tools/build-image
-        key: ${{ steps.inputs.outputs.image }}
-    - name: Restore private fallback for Ubuntu build image
-      id: image_local
-      if: inputs.vm != 'true'
-      uses: ./.github/actions/local-cache
-      with:
-        github-hit: ${{ steps.image.outcome == 'success' && steps.image.outputs.cache-hit || '' }}
-        github-failed: ${{ steps.image.outcome == 'failure' }}
-        url: ${{ inputs.url }}
-        token: ${{ inputs.token }}
-        group: dependencies/linux-image-${{ steps.inputs.outputs.arch }}
-        key: ${{ steps.inputs.outputs.image }}
-        paths: ${{ runner.temp }}/cor-linux-tools/build-image
-        immutable: true
-    - name: Prepare verified build image before tests
-      if: inputs.vm != 'true'
-      shell: bash
-      run: timeout 1200 python3 scripts/linux_ci.py cache-image
-    - name: Save verified GitHub build image
-      if: inputs.vm != 'true' && steps.image.outputs.cache-hit != 'true'
-      uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9
-      continue-on-error: true
-      with:
-        path: ${{ runner.temp }}/cor-linux-tools/build-image
-        key: ${{ steps.inputs.outputs.image }}
-    - name: Mirror verified build image before tests
-      if: inputs.vm != 'true'
-      continue-on-error: true
-      shell: bash
-      env:
-        PRIVATE_CACHE_STATE: ${{ steps.image_local.outputs.state }}
-      run: timeout 300 python3 scripts/action_cache.py save --state "$PRIVATE_CACHE_STATE"
-    - name: Restore guest DEB downloads
-      id: apt_github
-      if: inputs.vm == 'true'
-      uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9
-      continue-on-error: true
-      with:
-        path: ${{ runner.temp }}/cor-linux-tools/apt
-        key: ${{ steps.inputs.outputs.apt }}-${{ github.run_id }}-${{ github.run_attempt }}
-        restore-keys: |
-          ${{ steps.inputs.outputs.apt }}-
-    - name: Restore private fallback for guest DEB downloads
-      id: apt_local
-      if: inputs.vm == 'true'
-      uses: ./.github/actions/local-cache
-      with:
-        github-hit: ${{ steps.apt_github.outcome == 'success' && steps.apt_github.outputs.cache-matched-key != '' && 'false' || '' }}
-        github-failed: ${{ steps.apt_github.outcome == 'failure' }}
-        url: ${{ inputs.url }}
-        token: ${{ inputs.token }}
-        group: dependencies/linux-apt-${{ steps.inputs.outputs.arch }}
-        key: ${{ steps.inputs.outputs.apt }}-${{ github.run_id }}-${{ github.run_attempt }}
-        restore-keys: ${{ steps.inputs.outputs.apt }}-
-        paths: ${{ runner.temp }}/cor-linux-tools/apt
+        timeout 900 python3 scripts/linux_ci.py "${arguments[@]}"

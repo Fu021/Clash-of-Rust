@@ -20,7 +20,7 @@ import tempfile
 import time
 import urllib.request
 
-from build_support import ROOT, host_arch, opener, read_json, record_download, run, sha256, write_json
+from build_support import ROOT, download as download_original, host_arch, opener, read_json, run, sha256, write_json
 from linux_apt import OPTIONS as APT_OPTIONS
 
 BASELINE = '20.04'
@@ -121,24 +121,8 @@ def image_identity(value, arch):
 def download(record, path):
     if not re.fullmatch('[0-9a-f]{64}', record.get('sha256', '')):
         raise ValueError('Download requires an upstream SHA256')
-    if path.is_file() and sha256(path) == record['sha256']:
-        record_download(record['url'], path, record['sha256'])
-        print(f'Linux download: verified cached {path.name} '
-              f'({path.stat().st_size / 1024**2:.1f} MiB)', flush=True)
-        return path
-    path.parent.mkdir(parents=True, exist_ok=True)
-    partial = path.with_suffix(path.suffix+'.partial')
-    try:
-        with opener().open(record['url'], timeout=120) as response, partial.open('wb') as output:
-            shutil.copyfileobj(response, output, 1024*1024)
-        if sha256(partial) != record['sha256']:
-            raise ValueError('Upstream download checksum mismatch: '+path.name)
-        partial.replace(path)
-        record_download(record['url'], path, record['sha256'])
-        print(f'Linux download: fetched and verified {path.name} '
-              f'({path.stat().st_size / 1024**2:.1f} MiB)', flush=True)
-    finally:
-        partial.unlink(missing_ok=True)
+    download_original(record['url'], path, digest=record['sha256'])
+    print(f'Linux download: verified {path.name} ({path.stat().st_size / 1024**2:.1f} MiB)', flush=True)
     return path
 
 
@@ -192,21 +176,6 @@ def build_image():
     present = subprocess.run(inspect, capture_output=True, text=True)
     if present.returncode == 0:
         return tag
-    cache = tools_directory() / 'build-image'
-    saved = cache / 'image.tar'
-    receipt = cache / 'image.json'
-    if saved.is_file() and not saved.is_symlink() and receipt.is_file():
-        try:
-            record = json.loads(receipt.read_text())
-            if record.get('identity') == identity and sha256(saved) == record.get('sha256'):
-                run(['docker', 'load', '--input', saved], timeout=300)
-                loaded = subprocess.run(inspect, capture_output=True, text=True, check=True)
-                if loaded.stdout.strip() != record.get('image_id'):
-                    raise ValueError('Restored container identity mismatch')
-                print('Reused verified Ubuntu build image:', tag, flush=True)
-                return tag
-        except (OSError, ValueError, subprocess.SubprocessError) as error:
-            print('::warning::Container cache unavailable; rebuilding: ' + type(error).__name__, flush=True)
     with tempfile.TemporaryDirectory(prefix='cor-build-image-') as temporary:
         directory = Path(temporary)
         shutil.copy2(dockerfile, directory/'Dockerfile')
@@ -214,15 +183,6 @@ def build_image():
         run(['docker', 'build', '--build-arg', 'BASE_IMAGE='+value['image'],
              '--build-arg', 'USER_ID='+str(os.getuid()), '--build-arg', 'GROUP_ID='+str(os.getgid()),
              '--tag', tag, directory], timeout=900)
-    cache.mkdir(parents=True, exist_ok=True)
-    temporary = saved.with_suffix('.partial')
-    try:
-        run(['docker', 'save', '--output', temporary, tag], timeout=300)
-        temporary.replace(saved)
-        image_id = subprocess.check_output(inspect, text=True).strip()
-        write_json(receipt, {'identity': identity, 'sha256': sha256(saved), 'image_id': image_id})
-    finally:
-        temporary.unlink(missing_ok=True)
     return tag
 
 

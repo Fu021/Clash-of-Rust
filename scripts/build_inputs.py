@@ -319,6 +319,13 @@ def shared_go(directory, restore=False):
     ensure_binding_tool('gomobile')
     ensure_binding_tool('gobind')
     subprocess.run(['go', '-C', str(ROOT / 'apps/android/core'), 'mod', 'verify'], check=True)
+    from build_support import record_download
+    downloads = paths[0]
+    for pattern in ('**/*.zip', '**/*.mod'):
+        for path in downloads.glob(pattern):
+            if path.is_file() and not path.is_symlink():
+                record_download('https://proxy.golang.org/' + path.relative_to(downloads).as_posix(),
+                                path, sha256(path))
     action_cache.pack(paths, archive)
     write_json(receipt, {'schema': 1, 'commit': current_commit(), 'go_files': hashes,
                          'size': archive.stat().st_size, 'sha256': sha256(archive)})

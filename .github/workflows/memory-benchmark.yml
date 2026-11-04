@@ -92,6 +92,7 @@ jobs:
           audience: ${{ vars.TS_AUDIENCE }}
           tags: tag:github-action-cache
           version: ${{ env.COR_TAILSCALE }}
+          use-cache: 'false'
           retry: '1'
           timeout: 45s
           args: --accept-dns=false
@@ -112,14 +113,8 @@ jobs:
           command = [shutil.which('tailscale') or 'tailscale', 'set', '--accept-routes=false', '--accept-dns=false']
           if os.name != 'nt': command = ['sudo', '-n', *command]
           subprocess.run(command, check=True)
-      - uses: ./.github/actions/runtime-cache
+      - uses: ./.github/actions/upstream-cache
         with:
-          kind: bootstrap
-          url: ${{ steps.tailnet.outcome == 'success' && vars.LOCAL_CACHE_URL || '' }}
-          token: ${{ secrets.LOCAL_CACHE_TOKEN }}
-      - uses: ./.github/actions/runtime-cache
-        with:
-          kind: rust
           url: ${{ steps.tailnet.outcome == 'success' && vars.LOCAL_CACHE_URL || '' }}
           token: ${{ secrets.LOCAL_CACHE_TOKEN }}
       - uses: dtolnay/rust-toolchain@b725eda525362e7cf34af9a7243cac1e3f01a7ec
@@ -135,50 +130,15 @@ jobs:
           cache-on-failure: false
           cache-bin: false
           cache-workspace-crates: false
-          save-if: true
-      - name: Restore local fallback for benchmark compilation
-        id: rust_local
-        uses: ./.github/actions/local-cache
-        with:
-          github-hit: ${{ steps.rust_github.outcome == 'success' && steps.rust_github.outputs.cache-hit || '' }}
-          github-failed: ${{ steps.rust_github.outcome == 'failure' }}
-          url: ${{ steps.tailnet.outcome == 'success' && vars.LOCAL_CACHE_URL || '' }}
-          token: ${{ secrets.LOCAL_CACHE_TOKEN }}
-          group: rust/memory-linux-x64-${{ inputs.profile }}
-          kind: rust
-          source: source
-          key: memory-${{ inputs.profile }}
-      - uses: ./.github/actions/runtime-cache
-        with:
-          kind: apt
-          url: ${{ steps.tailnet.outcome == 'success' && vars.LOCAL_CACHE_URL || '' }}
-          token: ${{ secrets.LOCAL_CACHE_TOKEN }}
-      - name: Restore GitHub benchmark resources
-        id: resources
-        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9
-        continue-on-error: true
-        timeout-minutes: 5
-        with:
-          path: |
-            source/bin
-            source/bundle/resources
-            source/bundle/linux-x64/resources
-          key: resources-memory-linux-x64-${{ steps.source.outputs.commit }}-${{ hashFiles('.github/build-versions.json') }}
-          restore-keys: resources-memory-linux-x64-
-      - name: Restore private fallback for benchmark resources
-        uses: ./.github/actions/local-cache
-        with:
-          url: ${{ steps.tailnet.outcome == 'success' && vars.LOCAL_CACHE_URL || '' }}
-          token: ${{ secrets.LOCAL_CACHE_TOKEN }}
-          github-hit: ${{ steps.resources.outcome == 'success' && steps.resources.outputs.cache-hit || '' }}
-          github-failed: ${{ steps.resources.outcome == 'failure' }}
-          group: resources/memory-linux-x64
-          key: resources-${{ steps.source.outputs.commit }}-${{ hashFiles('.github/build-versions.json') }}
-          paths: |
-            source/bin
-            source/bundle/resources
-            source/bundle/linux-x64/resources
-          restore-keys: resources-
+          save-if: ${{ github.ref == 'refs/heads/main' }}
+      - name: Discard interrupted GitHub compiler restore
+        if: steps.rust_github.outcome == 'failure'
+        shell: python
+        run: |
+          import sys
+          sys.path.insert(0, 'scripts')
+          from action_cache import discard_restore
+          discard_restore({'kind': 'rust', 'source': 'source'})
       - name: Install benchmark dependencies
         shell: python
         run: |
@@ -211,10 +171,16 @@ jobs:
           path: dist/memory
           if-no-files-found: warn
           retention-days: 3
+      - name: Preserve original download inventory
+        if: ${{ !cancelled() }}
+        continue-on-error: true
+        uses: ./.github/actions/upstream-report
+        with:
+          name: upstream-downloads-${{ github.job }}-${{ strategy.job-index || '0' }}
   cache_budget:
     name: Actions cache budget
     needs: [benchmark]
-    if: always()
+    if: ${{ !cancelled() }}
     runs-on: ubuntu-latest
     timeout-minutes: 5
     permissions:
@@ -227,7 +193,7 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with:
           persist-credentials: false
-      - name: Trim obsolete dependencies and enforce 9 GiB cache budget
+      - name: Prioritize slow Rust compilation within the 9 GiB cache budget
         env:
           GH_TOKEN: ${{ github.token }}
           PYTHONDONTWRITEBYTECODE: '1'

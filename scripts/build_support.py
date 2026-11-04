@@ -219,18 +219,20 @@ def download(url, destination, proxy='', digest=None):
         except Exception:
             partial.unlink(missing_ok=True)
             if attempt == 2:
+                if digest:
+                    from upstream_cache import restore
+                    if restore(url, destination, digest):
+                        return
                 raise
             time.sleep(attempt+1)
 
 
 def record_download(url, destination, checksum):
-    if os.environ.get('GITHUB_ACTIONS') != 'true' or not os.environ.get('RUNNER_TEMP'):
-        return
-    directory = Path(os.environ['RUNNER_TEMP']) / 'cor-upstream-downloads'
-    directory.mkdir(parents=True, exist_ok=True)
-    path = str(Path(destination).absolute())
-    write_json(directory / (hashlib.sha256(path.encode()).hexdigest() + '.json'),
-               {'path': path, 'url': url, 'sha256': checksum, 'size': Path(destination).stat().st_size})
+    from upstream_cache import record
+    try:
+        record(url, destination, checksum)
+    except (OSError, ValueError):
+        print('Original download receipt unavailable; the verified file remains usable.', flush=True)
 
 
 def download_asset(asset, destination, proxy=''):

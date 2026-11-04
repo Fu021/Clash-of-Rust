@@ -168,6 +168,7 @@ jobs:
           audience: ${{ vars.TS_AUDIENCE }}
           tags: tag:github-action-cache
           version: ${{ needs.resolve.outputs.tailscale }}
+          use-cache: 'false'
           retry: '1'
           timeout: 45s
           args: --accept-dns=false
@@ -187,56 +188,21 @@ jobs:
           if os.name != 'nt':
               command = ['sudo', '-n', *command]
           subprocess.run(command, check=True)
-      - uses: ./.github/actions/runtime-cache
+      - uses: ./.github/actions/upstream-cache
         with:
-          kind: bootstrap
           url: ${{ steps.tailnet.outcome == 'success' && vars.LOCAL_CACHE_URL || '' }}
           token: ${{ secrets.LOCAL_CACHE_TOKEN }}
-      - name: Restore GitHub installer compiler
-        if: runner.os == 'Windows'
-        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9
-        timeout-minutes: 5
-        continue-on-error: true
-        id: nsis_github
-        with:
-          path: tools/nsis
-          key: tools-nsis-${{ needs.resolve.outputs.nsis }}
-          restore-keys: tools-nsis-
-      - name: Restore local fallback for Windows installer compiler
-        id: nsis_local
-        if: runner.os == 'Windows'
-        uses: ./.github/actions/local-cache
-        with:
-          github-hit: ${{ steps.nsis_github.outcome == 'success' && steps.nsis_github.outputs.cache-hit || '' }}
-          github-failed: ${{ steps.nsis_github.outcome == 'failure' }}
-          url: ${{ steps.tailnet.outcome == 'success' && vars.LOCAL_CACHE_URL || '' }}
-          token: ${{ secrets.LOCAL_CACHE_TOKEN }}
-          group: tools/nsis
-          immutable: true
-          save: ${{ matrix.arch == 'x64' }}
-          paths: tools/nsis
-          key: nsis-${{ needs.resolve.outputs.nsis }}
-          restore-keys: nsis-
       - name: Fetch verified native build
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
           import subprocess, sys
           subprocess.run([sys.executable, 'scripts/workflow_artifacts.py', 'fetch', '--system', '${{ matrix.system }}', '--arch', '${{ matrix.arch }}', '--run-id', '${{ needs.resolve.outputs.ci_run_id }}', '--output', 'ci-build'], check=True)
-      - uses: ./.github/actions/runtime-cache
-        if: runner.os == 'Linux'
-        with:
-          kind: apt
-          url: ${{ steps.tailnet.outcome == 'success' && vars.LOCAL_CACHE_URL || '' }}
-          token: ${{ secrets.LOCAL_CACHE_TOKEN }}
       - name: Cache Ubuntu baseline downloads
         if: runner.os == 'Linux'
         uses: ./.github/actions/linux-download-cache
         timeout-minutes: 30
         continue-on-error: true
-        with:
-          url: ${{ steps.tailnet.outcome == 'success' && vars.LOCAL_CACHE_URL || '' }}
-          token: ${{ secrets.LOCAL_CACHE_TOKEN }}
       - name: Package and test installed programs
         run: |
           import subprocess, sys
@@ -245,14 +211,6 @@ jobs:
               subprocess.run([sys.executable, 'scripts/test-release-package.py', '--linux-compat', '--expect-ubuntu', '22.04'], check=True)
           else:
               subprocess.run([sys.executable, 'scripts/test-release-package.py', '--system', '${{ matrix.system }}', '--arch', '${{ matrix.arch }}', '--build', 'ci-build', '--ci-run-id', '${{ needs.resolve.outputs.ci_run_id }}'], check=True)
-      - name: Save shared GitHub installer compiler
-        if: runner.os == 'Windows' && matrix.arch == 'x64' && steps.nsis_github.outputs.cache-hit != 'true'
-        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9
-        timeout-minutes: 5
-        continue-on-error: true
-        with:
-          path: tools/nsis
-          key: tools-nsis-${{ needs.resolve.outputs.nsis }}
       - name: Preserve Linux GUI diagnostics
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
         if: always() && runner.os == 'Linux'
@@ -300,6 +258,12 @@ jobs:
             dist/package-receipt.json
           if-no-files-found: error
           retention-days: 3
+      - name: Preserve original download inventory
+        if: ${{ !cancelled() }}
+        continue-on-error: true
+        uses: ./.github/actions/upstream-report
+        with:
+          name: upstream-downloads-${{ github.job }}-${{ strategy.job-index || '0' }}
   ubuntu_latest:
     name: Ubuntu latest-x64 proxy and TUN
     needs: resolve
@@ -327,6 +291,7 @@ jobs:
           audience: ${{ vars.TS_AUDIENCE }}
           tags: tag:github-action-cache
           version: ${{ env.COR_TAILSCALE }}
+          use-cache: 'false'
           retry: '1'
           timeout: 45s
           args: --accept-dns=false
@@ -334,14 +299,8 @@ jobs:
       - name: Preserve host routing
         if: steps.tailnet.outcome == 'success'
         run: sudo -n tailscale set --accept-routes=false --accept-dns=false
-      - uses: ./.github/actions/runtime-cache
+      - uses: ./.github/actions/upstream-cache
         with:
-          kind: bootstrap
-          url: ${{ steps.tailnet.outcome == 'success' && vars.LOCAL_CACHE_URL || '' }}
-          token: ${{ secrets.LOCAL_CACHE_TOKEN }}
-      - uses: ./.github/actions/runtime-cache
-        with:
-          kind: apt
           url: ${{ steps.tailnet.outcome == 'success' && vars.LOCAL_CACHE_URL || '' }}
           token: ${{ secrets.LOCAL_CACHE_TOKEN }}
       - name: Wait for the verified Linux package from this run
@@ -415,6 +374,7 @@ jobs:
           audience: ${{ vars.TS_AUDIENCE }}
           tags: tag:github-action-cache
           version: ${{ needs.resolve.outputs.tailscale }}
+          use-cache: 'false'
           retry: '1'
           timeout: 45s
           args: --accept-dns=false
@@ -422,25 +382,16 @@ jobs:
       - name: Preserve host routing after private cache login
         if: steps.tailnet.outcome == 'success'
         run: sudo -n tailscale set --accept-routes=false --accept-dns=false
-      - name: Cache Ubuntu VM dependency downloads
-        id: vm_cache
+      - uses: ./.github/actions/upstream-cache
+        with:
+          url: ${{ steps.tailnet.outcome == 'success' && vars.LOCAL_CACHE_URL || '' }}
+          token: ${{ secrets.LOCAL_CACHE_TOKEN }}
+      - name: Prepare Ubuntu VM original downloads
         uses: ./.github/actions/linux-download-cache
         timeout-minutes: 15
         continue-on-error: true
         with:
           vm: 'true'
-          url: ${{ steps.tailnet.outcome == 'success' && vars.LOCAL_CACHE_URL || '' }}
-          token: ${{ secrets.LOCAL_CACHE_TOKEN }}
-      - uses: ./.github/actions/runtime-cache
-        with:
-          kind: bootstrap
-          url: ${{ steps.tailnet.outcome == 'success' && vars.LOCAL_CACHE_URL || '' }}
-          token: ${{ secrets.LOCAL_CACHE_TOKEN }}
-      - uses: ./.github/actions/runtime-cache
-        with:
-          kind: apt
-          url: ${{ steps.tailnet.outcome == 'success' && vars.LOCAL_CACHE_URL || '' }}
-          token: ${{ secrets.LOCAL_CACHE_TOKEN }}
       - name: Install virtual machine tools
         shell: python
         env:
@@ -473,23 +424,6 @@ jobs:
         env:
           PYTHONDONTWRITEBYTECODE: '1'
         run: python3 scripts/linux_ci.py vm
-      - name: Save verified guest DEB downloads
-        if: always() && steps.vm_cache.outputs.apt-key != ''
-        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9
-        timeout-minutes: 5
-        continue-on-error: true
-        with:
-          path: ${{ runner.temp }}/cor-linux-tools/apt
-          key: ${{ steps.vm_cache.outputs.apt-key }}-${{ github.run_id }}-${{ github.run_attempt }}
-      - name: Mirror verified guest DEB downloads
-        if: always() && steps.vm_cache.outputs.apt-state != ''
-        timeout-minutes: 5
-        continue-on-error: true
-        shell: bash
-        env:
-          PRIVATE_CACHE_STATE: ${{ steps.vm_cache.outputs.apt-state }}
-          PYTHONDONTWRITEBYTECODE: '1'
-        run: python3 scripts/action_cache.py save --state "$PRIVATE_CACHE_STATE"
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
         if: always()
         with:
@@ -497,6 +431,12 @@ jobs:
           path: target/linux-report
           if-no-files-found: warn
           retention-days: 3
+      - name: Preserve original download inventory
+        if: ${{ !cancelled() }}
+        continue-on-error: true
+        uses: ./.github/actions/upstream-report
+        with:
+          name: upstream-downloads-${{ github.job }}-${{ strategy.job-index || '0' }}
   android:
     name: package-android-${{ matrix.arch }}
     needs: resolve
@@ -542,6 +482,7 @@ jobs:
           audience: ${{ vars.TS_AUDIENCE }}
           tags: tag:github-action-cache
           version: ${{ env.COR_TAILSCALE }}
+          use-cache: 'false'
           retry: '1'
           timeout: 45s
           args: --accept-dns=false
@@ -549,31 +490,14 @@ jobs:
       - name: Preserve host routing
         if: steps.tailnet.outcome == 'success'
         run: sudo -n tailscale set --accept-routes=false --accept-dns=false
-      - uses: ./.github/actions/runtime-cache
+      - uses: ./.github/actions/upstream-cache
         with:
-          kind: bootstrap
-          url: ${{ steps.tailnet.outcome == 'success' && vars.LOCAL_CACHE_URL || '' }}
-          token: ${{ secrets.LOCAL_CACHE_TOKEN }}
-      - uses: ./.github/actions/runtime-cache
-        with:
-          kind: java
           url: ${{ steps.tailnet.outcome == 'success' && vars.LOCAL_CACHE_URL || '' }}
           token: ${{ secrets.LOCAL_CACHE_TOKEN }}
       - uses: actions/setup-java@b843ebf9b913146b38da2eaa7aeddf76074ae1ad
         with:
           distribution: temurin
           java-version: ${{ env.COR_JAVA }}
-      - uses: ./.github/actions/runtime-cache
-        with:
-          kind: android-package
-          url: ${{ steps.tailnet.outcome == 'success' && vars.LOCAL_CACHE_URL || '' }}
-          token: ${{ secrets.LOCAL_CACHE_TOKEN }}
-      - uses: ./.github/actions/runtime-cache
-        if: matrix.arch == 'x64'
-        with:
-          kind: emulator
-          url: ${{ steps.tailnet.outcome == 'success' && vars.LOCAL_CACHE_URL || '' }}
-          token: ${{ secrets.LOCAL_CACHE_TOKEN }}
       - name: Prepare Android package tools
         shell: python
         run: |
@@ -635,6 +559,12 @@ jobs:
           path: target/android-report
           if-no-files-found: warn
           retention-days: 3
+      - name: Preserve original download inventory
+        if: ${{ !cancelled() }}
+        continue-on-error: true
+        uses: ./.github/actions/upstream-report
+        with:
+          name: upstream-downloads-${{ github.job }}-${{ strategy.job-index || '0' }}
   publish:
     name: Publish verified release
     needs: [resolve, package, ubuntu_latest, ubuntu_20, android]
@@ -673,7 +603,7 @@ jobs:
   cache_budget:
     name: Actions cache budget
     needs: [resolve, publish]
-    if: always()
+    if: ${{ !cancelled() }}
     runs-on: ubuntu-latest
     timeout-minutes: 5
     permissions:
@@ -687,7 +617,7 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with:
           persist-credentials: false
-      - name: Trim obsolete dependencies and enforce 9 GiB cache budget
+      - name: Prioritize slow Rust compilation within the 9 GiB cache budget
         env:
           GH_TOKEN: ${{ github.token }}
           PYTHONDONTWRITEBYTECODE: '1'
@@ -702,6 +632,7 @@ jobs:
           audience: ${{ vars.TS_AUDIENCE }}
           tags: tag:github-action-cache
           version: ${{ needs.resolve.outputs.tailscale || '1.104.5' }}
+          use-cache: 'false'
           retry: '1'
           timeout: 45s
           args: --accept-dns=false
