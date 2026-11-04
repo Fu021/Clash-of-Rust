@@ -327,21 +327,11 @@ jobs:
           kind: java
           url: ${{ steps.tailnet.outcome == 'success' && vars.LOCAL_CACHE_URL || '' }}
           token: ${{ secrets.LOCAL_CACHE_TOKEN }}
-      - uses: actions/setup-java@b843ebf9b913146b38da2eaa7aeddf76074ae1ad
-        with:
-          distribution: temurin
-          java-version: ${{ env.COR_JAVA }}
       - uses: ./.github/actions/runtime-cache
         with:
           kind: go
           url: ${{ steps.tailnet.outcome == 'success' && vars.LOCAL_CACHE_URL || '' }}
           token: ${{ secrets.LOCAL_CACHE_TOKEN }}
-      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e
-        id: go
-        with:
-          go-version: ${{ needs.inputs.outputs.go }}
-          # Cache modules/tools below; the Go build directory is disposable.
-          cache: false
       - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333
         with:
           name: android-shared-dependencies
@@ -417,6 +407,21 @@ jobs:
         with:
           gradle-version: ${{ needs.inputs.outputs.gradle }}
           cache-disabled: true
+      - name: Activate approved Python after Gradle setup
+        uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0
+        with:
+          python-version: ${{ env.COR_PYTHON }}
+      - uses: actions/setup-java@b843ebf9b913146b38da2eaa7aeddf76074ae1ad
+        with:
+          distribution: temurin
+          java-version: ${{ env.COR_JAVA }}
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e
+        id: go
+        with:
+          go-version: ${{ needs.inputs.outputs.go }}
+          cache: false
+      - name: Verify approved Android build tools before compiling
+        run: python3 scripts/build_inputs.py check-tools
       - name: Load stable development signature when configured
         shell: python
         env:

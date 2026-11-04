@@ -47,6 +47,24 @@ def android_versions():
     return approved()['upstream']['android']
 
 
+def check_tools():
+    selected = tool_versions()
+    if sys.version.split()[0] != selected['python']:
+        raise ValueError('Active Python differs from the approved version')
+    for name, command, expected in (
+        ('Go', ['go', 'env', 'GOVERSION'], 'go' + selected['go']),
+        ('Java', ['java', '-XshowSettings:properties', '-version'], selected['java'].split('+')[0]),
+    ):
+        result = subprocess.run(command, check=True, text=True, capture_output=True, timeout=30)
+        output = result.stdout + result.stderr
+        version = re.search(r'(?m)^\s*java\.version\s*=\s*(\S+)', output) if name == 'Java' else None
+        actual = version[1] if version else output.strip()
+        if actual != expected:
+            raise ValueError(f'Active {name} differs from the approved version: {actual}')
+        print(f'Approved {name}: {actual}', flush=True)
+    print('Approved Python:', sys.version.split()[0], flush=True)
+
+
 def versions():
     selected = tool_versions()
     for target in ('GITHUB_ENV', 'GITHUB_OUTPUT'):
@@ -306,7 +324,7 @@ def shared_go(directory, restore=False):
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument('operation', choices=('resolve', 'refresh', 'apply', 'packaging', 'share-go', 'restore-go', 'audit', 'versions'))
+    parser.add_argument('operation', choices=('resolve', 'refresh', 'apply', 'packaging', 'share-go', 'restore-go', 'audit', 'versions', 'check-tools'))
     parser.add_argument('--directory', type=Path, default=Path(os.environ.get('BUILD_INPUTS_DIR', SNAPSHOT)))
     args = parser.parse_args()
     if args.operation == 'audit':
@@ -314,6 +332,8 @@ def main():
         audit(args.directory)
     elif args.operation == 'versions':
         versions()
+    elif args.operation == 'check-tools':
+        check_tools()
     elif args.operation in ('share-go', 'restore-go'):
         shared_go(args.directory, args.operation == 'restore-go')
     else:

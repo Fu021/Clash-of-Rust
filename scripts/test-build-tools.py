@@ -1171,6 +1171,26 @@ else{assert.throws(run,/Invalid private cache save budget/);assert.equal(calls.l
                     build_inputs.refresh(Path('/unused'))
                 command.assert_not_called()
 
+    def test_approved_tool_check_rejects_search_path_drift_before_compiling(self):
+        selected = build_inputs.tool_versions()
+        for python_version, go_version, java_version, expected in (
+            (selected['python'], 'go' + selected['go'], selected['java'].split('+')[0], None),
+            ('3.14.0', 'go' + selected['go'], selected['java'].split('+')[0], 'Python'),
+            (selected['python'], 'go1.26.10', selected['java'].split('+')[0], 'Go'),
+            (selected['python'], 'go' + selected['go'], '17.0.21', 'Java'),
+        ):
+            with self.subTest(python=python_version, go=go_version, java=java_version), \
+                    patch.object(build_inputs.sys, 'version', python_version), \
+                    patch.object(build_inputs.subprocess, 'run', side_effect=[
+                        subprocess.CompletedProcess([], 0, go_version + '\n', ''),
+                        subprocess.CompletedProcess([], 0, '', '    java.version = ' + java_version + '\n'),
+                    ]):
+                if expected:
+                    with self.assertRaisesRegex(ValueError, 'Active ' + expected):
+                        build_inputs.check_tools()
+                else:
+                    build_inputs.check_tools()
+
     def test_dependency_refresh_does_not_export_partial_lockfiles_after_resolution_failure(self):
         with tempfile.TemporaryDirectory() as temporary, \
                 patch.dict(os.environ, {'GITHUB_ACTIONS': 'true', 'GITHUB_EVENT_NAME': 'workflow_dispatch'}), \

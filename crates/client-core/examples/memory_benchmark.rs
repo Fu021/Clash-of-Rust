@@ -618,7 +618,7 @@ mod process_memory {
             .transpose()?
             .unwrap_or(250);
         ensure!(seconds > 0 && interval_ms > 0, "采样时间与间隔必须大于零");
-        let mut system = System::new();
+        let mut system = System::new().context("无法初始化进程内存采样器")?;
         refresh(&mut system);
         let process = system
             .process(Pid::from_u32(root))
@@ -823,7 +823,7 @@ mod process_memory {
             let directory = tempfile::tempdir().unwrap();
             let core = directory.path().join("mihomo");
             std::fs::copy("/bin/sleep", &core).unwrap();
-            let mut system = System::new();
+            let mut system = System::new().expect("Initialize the process memory fixture");
             let root = std::process::id();
             let mut previous_pid = None;
             for _ in 0..2 {
