@@ -797,43 +797,6 @@ jobs:
         run: |
           sudo -n tailscale set --accept-routes=false --accept-dns=false
           python3 scripts/action_cache.py inventory
-      - name: Read cache server feedback before delivering requests
-        if: always() && github.event_name == 'push' && github.ref == 'refs/heads/main'
-        continue-on-error: true
-        timeout-minutes: 1
-        env:
-          CACHE_URL: ${{ vars.LOCAL_CACHE_URL }}
-          CACHE_TOKEN: ${{ secrets.LOCAL_CACHE_TOKEN }}
-          CACHE_PROXY: http://127.0.0.1:19082
-          TAILNET_OUTCOME: ${{ steps.tailnet.outcome }}
-          PYTHONDONTWRITEBYTECODE: '1'
-        run: python3 scripts/action_cache.py feedback
-      - name: Deliver pending cache server requests
-        if: always() && github.event_name == 'push' && github.ref == 'refs/heads/main'
-        continue-on-error: true
-        timeout-minutes: 1
-        env:
-          GH_TOKEN: ${{ github.token }}
-          CACHE_URL: ${{ vars.LOCAL_CACHE_URL }}
-          CACHE_TOKEN: ${{ secrets.LOCAL_CACHE_TOKEN }}
-          CACHE_PROXY: http://127.0.0.1:19082
-          TAILNET_OUTCOME: ${{ steps.tailnet.outcome }}
-          PYTHONDONTWRITEBYTECODE: '1'
-        run: |
-          if [ "$TAILNET_OUTCOME" != success ]; then
-            echo "::warning::Cache server requests were not delivered: cache connection unavailable."
-            echo "Cache server requests were not delivered: cache connection unavailable." >> "$GITHUB_STEP_SUMMARY"
-            exit 0
-          fi
-          python3 scripts/action_cache.py sync-handoff
-      - name: Preserve reviewed cache server feedback
-        uses: actions/upload-artifact@v6
-        if: always() && github.event_name == 'push' && github.ref == 'refs/heads/main'
-        with:
-          name: private-cache-feedback
-          path: target/cache-feedback.json
-          retention-days: 3
-          if-no-files-found: error
       - uses: actions/upload-artifact@v6
         if: steps.tailnet.outcome == 'success'
         with:
