@@ -494,8 +494,20 @@ def request(config, path, method='GET', file=None, headers=None):
     else:
         connection = (http.client.HTTPSConnection if url.scheme == 'https' else http.client.HTTPConnection)(url.hostname, url.port, timeout=timeout)
     auth = {'Authorization': 'Bearer '+config['token'], **(headers or {})}
-    connection.request(method, path, body=file, headers=auth)
-    return connection, connection.getresponse()
+    try:
+        try:
+            connection.request(method, path, body=file, headers=auth)
+        except (BrokenPipeError, ConnectionResetError) as send_error:
+            try:
+                reply = connection.getresponse()
+            except (OSError, http.client.HTTPException):
+                raise send_error
+        else:
+            reply = connection.getresponse()
+    except (OSError, http.client.HTTPException):
+        connection.close()
+        raise
+    return connection, reply
 
 
 @contextmanager
