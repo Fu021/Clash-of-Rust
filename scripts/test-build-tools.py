@@ -49,6 +49,22 @@ _release_package_spec.loader.exec_module(release_package)
 
 
 class BuildTests(unittest.TestCase):
+    def test_isolated_tls_fixture_passes_strict_certificate_validation(self):
+        if os.name != 'posix' or not shutil.which('openssl'):
+            self.skipTest('POSIX and OpenSSL are required for the isolated certificate fixture')
+        specification = importlib.util.spec_from_file_location('linux_tun_fixture', build.ROOT/'scripts/test-linux-tun.py')
+        fixture = importlib.util.module_from_spec(specification)
+        specification.loader.exec_module(fixture)
+        with tempfile.TemporaryDirectory() as temporary:
+            directory = Path(temporary)
+            root = fixture.create_uplink_certificates(directory, ('127.0.0.1', '::1'))
+            for hostname in ('127.0.0.1', '::1', 'resolver.fixture.test'):
+                identity = '-verify_hostname' if hostname.endswith('.test') else '-verify_ip'
+                result = subprocess.run(['openssl', 'verify', '-x509_strict', '-CAfile', str(root),
+                                         '-purpose', 'sslserver', identity, hostname, str(directory/'server.crt')],
+                                        capture_output=True, text=True)
+                self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+
     def test_composite_actions_only_use_supported_step_properties(self):
         supported = {'name', 'id', 'if', 'run', 'env', 'shell', 'working-directory',
                      'uses', 'with', 'continue-on-error'}
@@ -615,6 +631,35 @@ Private_Clean: 2 kB
                 with self.assertRaisesRegex(ValueError,'Incomplete|checksum'):
                     cache_shards.restore(restored,False)
 
+    def test_shard_save_uses_the_configured_budget_and_keeps_the_index_when_incomplete(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            source = Path(temporary)/'dependency.rlib'
+            source.write_bytes(b'dependency')
+            info = tarfile.TarInfo('0/release/deps/dependency.rlib')
+            info.size = source.stat().st_size
+            groups = [[(source, info, local_cache.digest(source))] for _ in range(3)]
+            groups.extend([[] for _ in range(cache_shards.COUNT - len(groups))])
+            for budget, committed in ((900, True), (120, False)):
+                clock = [100]
+                def lookup(config, group, key):
+                    clock[0] += 250
+                    return {'group': group, 'key': key}
+                with self.subTest(budget=budget), \
+                        patch.object(cache_shards.time, 'monotonic', side_effect=lambda: clock[0]), \
+                        patch.object(local_cache, 'phase', return_value=nullcontext()), \
+                        patch.object(local_cache, 'uploads_supported', return_value=True), \
+                        patch.object(cache_shards, 'partition', return_value=groups), \
+                        patch.object(cache_shards, 'lookup', side_effect=lookup), \
+                        patch.object(cache_shards, 'upload', return_value={'saved': True}) as upload, \
+                        patch.object(local_cache, 'cache_report') as report:
+                    cache_shards.save({'group': 'rust/linux-x64', 'key': 'current',
+                                       'prefix': ['compiler-'], 'save_seconds': budget}, [source.parent])
+                    self.assertEqual(upload.call_count, int(committed))
+                    if committed:
+                        self.assertEqual(upload.call_args.args[1], 'rust/linux-x64/index')
+                    self.assertIn('committed' if committed else 'previous index retained',
+                                  report.call_args.args[2])
+
     def test_restore_budget_keeps_verified_shards_and_invalidates_partial_build_scripts(self):
         with tempfile.TemporaryDirectory() as temporary:
             root=Path(temporary);source=root/'source';target=root/'target'
@@ -852,6 +897,19 @@ else{assert.throws(run,/Invalid private cache save budget/);assert.equal(calls.l
                 mod.write_bytes(b'module test')
                 archive=out/'go-source.tar.gz';archive.write_bytes(archive.read_bytes()+b'tampered')
                 with self.assertRaises(ValueError): build_inputs.shared_go(out,restore=True)
+
+    def test_shared_android_sources_reject_untidy_lockfiles_before_packing_or_building_tools(self):
+        with tempfile.TemporaryDirectory() as temporary, \
+                patch.object(build_inputs.subprocess, 'run', side_effect=subprocess.CalledProcessError(1, 'go')) as execute, \
+                patch.object(android_build, 'ensure_binding_tool') as binding, \
+                patch.object(local_cache, 'pack') as pack:
+            directory = Path(temporary)
+            with self.assertRaises(subprocess.CalledProcessError):
+                build_inputs.shared_go(directory)
+            self.assertEqual(execute.call_args.args[0][-3:], ['mod', 'tidy', '-diff'])
+            binding.assert_not_called()
+            pack.assert_not_called()
+            self.assertFalse((directory/'receipt.json').exists())
 
     def test_cache_timing_report_never_copies_credentials_or_private_action_state(self):
         with tempfile.TemporaryDirectory() as temporary:
@@ -1292,10 +1350,43 @@ runpy.run_path(str(script), run_name='__main__')
 
         with patch.object(dependency_audit, 'metadata', side_effect=[
                 {'available_lts_releases': [8, 11, 17, 21, 25]},
-                [{'version': {'semver': '25.0.5+8'}}],
+                [{'version': {'semver': '25.0.5+8.0.LTS', 'build': 8}}],
         ]) as fetch:
             self.assertEqual(dependency_audit.tool_candidate('java', '17.0.21+9')[0], '25.0.5+8')
         self.assertIn('/latest/25/', fetch.call_args.args[0])
+
+    def test_android_image_audit_checks_revisions_and_ignores_preview_and_other_variants(self):
+        import dependency_audit
+
+        content = b'''<sdk>
+<remotePackage path="system-images;android-35;google_apis;x86_64"><revision><major>99</major></revision></remotePackage>
+<remotePackage path="system-images;android-36;google_apis;x86_64"><revision><major>8</major></revision></remotePackage>
+<remotePackage path="system-images;android-37;google_apis;x86_64"><revision><major>1</major></revision><channelRef ref="channel-1"/></remotePackage>
+<remotePackage path="system-images;android-38;google_apis;arm64-v8a"><revision><major>1</major></revision></remotePackage>
+<remotePackage path="system-images;android-36-ext19;google_apis;x86_64"><revision><major>9</major></revision></remotePackage>
+</sdk>'''
+        with patch.object(dependency_audit, 'metadata', return_value=content):
+            self.assertEqual(dependency_audit.android_candidate('system-image', '36-r7')[0], '36-r8')
+        with patch.object(dependency_audit, 'metadata', return_value=content.replace(b'channel-1', b'channel-0')):
+            self.assertEqual(dependency_audit.android_candidate('system-image', '36-r7')[0], '37-r1')
+
+    def test_emulator_rejects_revisions_that_differ_from_the_cache_identity(self):
+        versions = build_inputs.android_versions()
+        with tempfile.TemporaryDirectory() as temporary:
+            sdk = Path(temporary)
+            roots = (sdk/'emulator', sdk/versions['system_image'].replace(';', '/'))
+            for root, revision in zip(roots, (versions['emulator'], versions['system_image_revision'])):
+                root.mkdir(parents=True)
+                (root/'source.properties').write_text('Pkg.Revision = ' + revision + '\n')
+            android_build.verify_emulator_versions(sdk)
+            for root in roots:
+                properties = root/'source.properties'
+                original = properties.read_text()
+                for revision in ('999', 'preview', original.split('=')[1].strip() + '0'):
+                    properties.write_text('Pkg.Revision = ' + revision + '\n')
+                    with self.assertRaisesRegex(ValueError, 'revision differs'):
+                        android_build.verify_emulator_versions(sdk)
+                properties.write_text(original)
 
     def test_android_preparation_uses_the_approved_sdk_and_skips_unused_package_tools(self):
         versions = build_inputs.android_versions()

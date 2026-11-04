@@ -209,12 +209,15 @@ def upload(config, group, key, path):
 
 
 def save(config, paths):
+    seconds = int(config.get('save_seconds', 900))
+    if not 30 <= seconds <= 1800:
+        raise ValueError('Invalid cache save budget')
+    deadline = time.monotonic() + seconds
     if not cache.uploads_supported(config):
         cache.cache_report(config, 'save', 'server upgrade required; previous shard index retained')
         return
     with cache.phase(config, 'fingerprint'):
         groups = partition(paths)
-    deadline = time.monotonic() + 240
     records = [None] * COUNT
     def save_one(item):
         i, files = item

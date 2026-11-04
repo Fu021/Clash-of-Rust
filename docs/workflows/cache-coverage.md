@@ -17,7 +17,7 @@
 | Rust 工具链与目标标准库 | CI、Memory | 同上，`rust` key 按版本、宿主和交叉目标区分 |
 | Go 工具链、Temurin JDK | CI，Android 打包使用 JDK | 同上，分别为 `go`、`java` key |
 | Android 命令行工具 23、platform-tools 37.0.1、API 37.2、build-tools 37、NDK 30 | CI、Android 打包 | 同上，`android` key |
-| 模拟器 37.2.13 及 API 36 Google APIs x86_64 系统镜像 | CI 与 Android 打包的 x64 | 同上，`emulator` key；AVD 和用户状态不入缓存 |
+| 模拟器 37.2.13 及 API 36 r7 Google APIs x86_64 系统镜像 | CI 与 Android 打包的 x64 | 同上，`emulator` key；审计检查 API 与 revision，启动前核对实际安装 revision，AVD 和用户状态不入缓存 |
 | NSIS 安装编译器 | Windows 打包 | `tools/nsis` |
 | Ubuntu 20.04 独立 Python、原始云镜像 | Linux CI、打包及旧内核验证 | `tools/linux-python-<arch>`、`tools/linux-cloud-<arch>` |
 | Ubuntu 基础层、构建工具及库组成的已构建镜像 | Linux CI 与打包 | `dependencies/linux-image-<arch>` |

@@ -90,6 +90,8 @@ def inventory():
                       ('emulator', 'emulator'), ('platform-tools', 'platform_tools'),
                       ('cmdline-tools', 'cmdline_tools')):
         entries.append(('sdk', name, android[key], android_candidate))
+    image_api = android['system_image'].split(';')[1].removeprefix('android-')
+    entries.append(('sdk', 'system-image', image_api + '-r' + android['system_image_revision'], android_candidate))
     for name in ('mihomo', 'geo', 'nsis', 'linux'):
         value = selected['upstream'][name]
         current = value.get('published_at') if name == 'geo' else value.get('image', value.get('version', value.get('tag_name')))
@@ -104,6 +106,28 @@ def android_metadata():
 
 
 def android_candidate(name, current):
+    if name == 'system-image':
+        image = android_versions()['system_image'].split(';')
+        url = 'https://dl.google.com/android/repository/sys-img/' + image[2] + '/sys-img2-3.xml'
+        root = ET.fromstring(metadata(url, raw=True))
+        candidates = []
+        for entry in root.iter('remotePackage'):
+            parts = entry.get('path', '').split(';')
+            if (len(parts) != 4 or parts[0] != image[0] or parts[2:] != image[2:]
+                    or not parts[1].removeprefix('android-').isdigit()
+                    or entry.find('obsolete') is not None):
+                continue
+            channel = entry.find('channelRef')
+            if channel is not None and channel.get('ref') != 'channel-0':
+                continue
+            revision = entry.find('revision')
+            number = tuple(int(revision.findtext(part, '0')) for part in ('major', 'minor', 'micro'))
+            candidates.append((int(parts[1].removeprefix('android-')), number))
+        api, revision = max(candidates)
+        version = list(revision)
+        while len(version) > 1 and version[-1] == 0:
+            version.pop()
+        return str(api) + '-r' + '.'.join(map(str, version)), '', url
     candidates = []
     for entry in android_metadata().iter():
         if entry.tag.rsplit('}', 1)[-1] != 'remotePackage':
@@ -177,7 +201,8 @@ def tool_candidate(name, current):
     if name == 'java':
         release = max(metadata('https://api.adoptium.net/v3/info/available_releases')['available_lts_releases'])
         url = f'https://api.adoptium.net/v3/assets/latest/{release}/hotspot?architecture=x64&image_type=jdk&os=linux'
-        return metadata(url)[0]['version']['semver'], '', url
+        version = metadata(url)[0]['version']
+        return version['semver'].split('+')[0] + '+' + str(version['build']), '', url
     if name.startswith('tailscale'):
         url = 'https://pkgs.tailscale.com/stable/?mode=json'
         return metadata(url)['Version'], '', url
@@ -229,7 +254,7 @@ def audit(directory):
         records = list(workers.map(check, entries))
     result = {'schema': 1, 'checked_at': datetime.datetime.now(datetime.timezone.utc).isoformat(),
               'inventory_sha256': hashlib.sha256(json.dumps([entry[:3] for entry in entries]).encode()).hexdigest(),
-              'policy': 'Report only; user approval required before upgrades or replacements.',
+              'policy': 'Report only; apply the maintainer loop update policy and validate committed changes.',
               'results': records}
     write_json(directory / 'dependency-audit.json', result)
     counts = {status: sum(record['status'] == status for record in records)

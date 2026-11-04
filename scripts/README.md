@@ -8,7 +8,7 @@
 | --- | --- | --- |
 | `build_support.py` | 共享模块 | 平台识别、版本、资源、下载、架构和暂存目录等标准库辅助。 |
 | `build_inputs.py` | CLI / 模块 | 冻结并应用同一份 Rust、Go、Android、Linux 基线和资源依赖快照。 |
-| `dependency_audit.py` | 模块 | 只读探查升级、撤回和替换信号；由 `build_inputs.py audit` 调用，实际变更须用户批准。 |
+| `dependency_audit.py` | 模块 | 只读探查升级、撤回和替换信号；由 `build_inputs.py audit` 调用，实际变更遵循维护者的 loop 更新授权并验证。 |
 | `runtime_cache.py` | CLI / 模块 | 规划白名单工具目录，安全捕获/恢复含内部链接的快照；不缓存凭据或机器状态。 |
 | `workflow_artifacts.py` | CLI / 模块 | 导出、下载和校验不可变 CI 产物；同运行 Linux 包就绪后启动兼容验证，不重新编译。 |
 | `action_cache.py` | CLI / 模块 | 认证私网缓存协议、恢复预算、校验及清单。 |

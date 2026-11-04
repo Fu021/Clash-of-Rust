@@ -96,6 +96,33 @@ def isolated_resolved():
             yield
 
 
+def create_uplink_certificates(directory, addresses):
+    ca, key = directory/'root.crt', directory/'root.key'
+    root_config = directory/'root.cnf'
+    root_config.write_text(
+        '[req]\ndistinguished_name=subject\nx509_extensions=ca\nprompt=no\n'
+        '[subject]\nCN=Disposable TUN test root\n'
+        '[ca]\nbasicConstraints=critical,CA:TRUE\n'
+        'keyUsage=critical,keyCertSign,cRLSign\nsubjectKeyIdentifier=hash\n'
+        'authorityKeyIdentifier=keyid:always\n')
+    run(['openssl', 'req', '-x509', '-newkey', 'rsa:2048', '-nodes', '-days', '1',
+         '-config', root_config,
+         '-keyout', key, '-out', ca], stdout=subprocess.DEVNULL, stderr=subprocess.PIPE)
+    run(['openssl', 'req', '-new', '-newkey', 'rsa:2048', '-nodes', '-subj', '/CN=Disposable DNS',
+         '-keyout', directory/'server.key', '-out', directory/'server.csr'],
+        stdout=subprocess.DEVNULL, stderr=subprocess.PIPE)
+    extensions = directory/'server.ext'
+    extensions.write_text(
+        'basicConstraints=critical,CA:FALSE\nextendedKeyUsage=serverAuth\n'
+        'keyUsage=critical,digitalSignature,keyEncipherment\n'
+        'subjectKeyIdentifier=hash\nauthorityKeyIdentifier=keyid:always\n'
+        'subjectAltName='+','.join('IP:'+ip for ip in addresses)+',DNS:resolver.fixture.test\n')
+    run(['openssl', 'x509', '-req', '-in', directory/'server.csr', '-CA', ca, '-CAkey', key,
+         '-CAcreateserial', '-days', '1', '-extfile', extensions, '-out', directory/'server.crt'],
+        stdout=subprocess.DEVNULL, stderr=subprocess.PIPE)
+    return ca
+
+
 @contextlib.contextmanager
 def isolated_uplink():
     """Real dual-stack peer, encrypted DNS and node, outside the client's TUN.
@@ -108,28 +135,8 @@ def isolated_uplink():
     with tempfile.TemporaryDirectory(prefix='cor-upstream-') as temporary:
         directory = Path(temporary)
         directory.chmod(0o755)
-        ca, key = directory/'root.crt', directory/'root.key'
-        root_config = directory/'root.cnf'
-        root_config.write_text(
-            '[req]\ndistinguished_name=subject\nx509_extensions=ca\nprompt=no\n'
-            '[subject]\nCN=Disposable TUN test root\n'
-            '[ca]\nbasicConstraints=critical,CA:TRUE\n'
-            'keyUsage=critical,keyCertSign,cRLSign\nsubjectKeyIdentifier=hash\n'
-            'authorityKeyIdentifier=keyid:always\n')
-        run(['openssl', 'req', '-x509', '-newkey', 'rsa:2048', '-nodes', '-days', '1',
-             '-config', root_config,
-             '-keyout', key, '-out', ca], stdout=subprocess.DEVNULL, stderr=subprocess.PIPE)
-        run(['openssl', 'req', '-new', '-newkey', 'rsa:2048', '-nodes', '-subj', '/CN=Disposable DNS',
-             '-keyout', directory/'server.key', '-out', directory/'server.csr'],
-            stdout=subprocess.DEVNULL, stderr=subprocess.PIPE)
         addresses = (*BOOTSTRAP, *PUBLIC)
-        certificate_addresses = (*addresses, '192.0.2.254')
-        extensions = directory/'server.ext'
-        extensions.write_text('basicConstraints=critical,CA:FALSE\nextendedKeyUsage=serverAuth\n'
-                              'subjectAltName='+','.join('IP:'+ip for ip in certificate_addresses)+',DNS:resolver.fixture.test\n')
-        run(['openssl', 'x509', '-req', '-in', directory/'server.csr', '-CA', ca, '-CAkey', key,
-             '-CAcreateserial', '-days', '1', '-extfile', extensions, '-out', directory/'server.crt'],
-            stdout=subprocess.DEVNULL, stderr=subprocess.PIPE)
+        ca = create_uplink_certificates(directory, (*addresses, '192.0.2.254'))
         certificate = ca.read_bytes()
         context = ssl.create_default_context(cafile=str(ca))
         root_der = ssl.PEM_cert_to_DER_cert(certificate.decode('ascii'))
@@ -145,7 +152,7 @@ def isolated_uplink():
         bundle = ssl.create_default_context(cafile=str(system_bundle))
         assert root_der in bundle.get_ca_certs(binary_form=True), (
             'The isolated system CA bundle does not contain the fixture CA')
-        run(['openssl', 'verify', '-CAfile', system_bundle,
+        run(['openssl', 'verify', '-x509_strict', '-CAfile', system_bundle,
              '-purpose', 'sslserver', '-verify_ip', BOOTSTRAP[0], directory/'server.crt'])
         run(['ip', 'netns', 'add', namespace])
         process = None

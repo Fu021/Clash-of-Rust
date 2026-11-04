@@ -109,6 +109,20 @@ def prepare_sdk(package_only=False):
             stream.write('ANDROID_NDK_ROOT=' + str(sdk / 'ndk' / versions['ndk']) + '\n')
 
 
+def verify_emulator_versions(sdk):
+    versions = android_versions()
+    def revision(value):
+        parts = value.split('.')
+        return tuple(int(part) for part in parts + ['0'] * (3 - len(parts)))
+    for relative, expected in (('emulator', versions['emulator']),
+                               (versions['system_image'].replace(';', '/'), versions['system_image_revision'])):
+        properties = (sdk / relative / 'source.properties').read_text()
+        match = re.search(r'(?m)^\s*Pkg\.Revision\s*=\s*([0-9.]+)\s*$', properties)
+        if not match or revision(match[1]) != revision(expected):
+            raise ValueError('Android runtime revision differs from the approved version: ' + relative)
+        print('Verified Android runtime:', relative, match[1], flush=True)
+
+
 def ensure_binding_tool(name):
     package = 'golang.org/x/mobile/cmd/' + name
     selected = re.search(r'(?m)^(?:require\s+)?\s*golang.org/x/mobile\s+(v\S+)',
@@ -448,6 +462,7 @@ def main():
         device_root=Path(os.environ['RUNNER_TEMP'])/'cor-emulator'
         sdkmanager_install([manager/'sdkmanager','platform-tools','emulator',android_versions()['system_image']],
                            device_root)
+        verify_emulator_versions(sdk)
         user_home=device_root/'.android'; avds=user_home/'avd'
         avds.mkdir(parents=True,exist_ok=True)
         env=dict(os.environ,ANDROID_USER_HOME=str(user_home),ANDROID_AVD_HOME=str(avds),ANDROID_SDK_HOME=str(device_root))

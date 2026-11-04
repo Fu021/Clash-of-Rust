@@ -2,9 +2,10 @@ module org.clashofrust/android-core
 
 go 1.27.3
 
-require github.com/metacubex/mihomo v1.19.33
-
-require golang.org/x/mobile v0.0.0-20261011034528-197770444867
+require (
+	github.com/metacubex/mihomo v1.19.33
+	golang.org/x/mobile v0.0.0-20261011034528-197770444867
+)
 
 require (
 	github.com/RyuaNerin/go-krypto v1.3.0 // indirect
@@ -37,7 +38,7 @@ require (
 	github.com/golang/snappy v1.0.0 // indirect
 	github.com/google/btree v1.1.3 // indirect
 	github.com/google/go-cmp v0.7.0 // indirect
-	github.com/google/pprof v0.0.0-20261103193413-97e8293de3c4 // indirect
+	github.com/google/pprof v0.0.0-20261104075808-393459d12e44 // indirect
 	github.com/hashicorp/golang-lru/v2 v2.0.7 // indirect
 	github.com/insomniacslk/dhcp v0.0.0-20261014062924-c6bb46ad3f3a // indirect
 	github.com/jsimonetti/rtnetlink v1.4.2 // indirect

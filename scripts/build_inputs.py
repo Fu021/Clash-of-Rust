@@ -312,6 +312,7 @@ def shared_go(directory, restore=False):
         print('Restored verified Android source downloads from this CI run.')
         return
     from android import ensure_binding_tool
+    subprocess.run(['go', '-C', str(ROOT / 'apps/android/core'), 'mod', 'tidy', '-diff'], check=True, timeout=180)
     subprocess.run(['go', '-C', str(ROOT / 'apps/android/core'), 'mod', 'download'], check=True, timeout=180)
     ensure_binding_tool('gomobile')
     ensure_binding_tool('gobind')
