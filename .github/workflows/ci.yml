@@ -3,6 +3,12 @@ on:
   push:
     branches: [main]
   pull_request:
+  workflow_dispatch:
+    inputs:
+      refresh_dependencies:
+        description: Resolve updated Cargo/Go lockfiles for a subsequent reviewed commit
+        type: boolean
+        default: false
 env:
   SEGMENT_DOWNLOAD_TIMEOUT_MINS: '2'
   BUILD_INPUTS_DIR: dependency-snapshot
@@ -15,7 +21,7 @@ jobs:
   inputs:
     name: Resolve build inputs
     runs-on: ubuntu-latest
-    timeout-minutes: 20
+    timeout-minutes: 35
     env:
       COR_USE_BOOTSTRAP_TAILNET: 'true'
     permissions:
@@ -130,15 +136,32 @@ jobs:
           restore-keys: |
             source-${{ hashFiles('Cargo.lock', 'Cargo.toml', 'apps/**/Cargo.toml', 'crates/**/Cargo.toml', '.cargo/**', 'apps/android/core/go.*', 'apps/android/**/*.gradle.kts', 'apps/android/gradle.properties') }}-
             source-
+      - uses: dtolnay/rust-toolchain@b725eda525362e7cf34af9a7243cac1e3f01a7ec
+        if: inputs.refresh_dependencies
+        with:
+          toolchain: ${{ env.COR_RUST }}
+      - name: Resolve updated source lockfiles
+        if: inputs.refresh_dependencies
+        run: python3 scripts/build_inputs.py refresh --directory target/dependency-updates
+      - uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f
+        if: inputs.refresh_dependencies
+        with:
+          name: dependency-updates
+          path: target/dependency-updates
+          retention-days: 3
+          if-no-files-found: error
       - name: Freeze approved source dependencies without updating versions
+        if: ${{ !inputs.refresh_dependencies }}
         id: resolve
         env:
           GH_TOKEN: ${{ github.token }}
           PYTHONDONTWRITEBYTECODE: '1'
         run: python3 scripts/build_inputs.py resolve
       - name: Prepare shared Android source downloads
+        if: ${{ !inputs.refresh_dependencies }}
         run: python3 scripts/build_inputs.py share-go --directory target/shared-go
       - uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f
+        if: ${{ !inputs.refresh_dependencies }}
         with:
           name: android-shared-dependencies
           path: target/shared-go
@@ -146,12 +169,14 @@ jobs:
           retention-days: 3
           if-no-files-found: error
       - uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f
+        if: ${{ !inputs.refresh_dependencies }}
         with:
           name: dependency-snapshot
           path: ${{ env.BUILD_INPUTS_DIR }}
           retention-days: 3
           if-no-files-found: error
   android:
+    if: ${{ !inputs.refresh_dependencies }}
     name: android-${{ matrix.arch }}
     needs: inputs
     runs-on: ubuntu-latest
@@ -500,6 +525,7 @@ jobs:
             ~/.gradle/permwrapper/dists
             ~/.gradle/wrapper/dists
   check:
+    if: ${{ !inputs.refresh_dependencies }}
     name: ${{ matrix.system }}-${{ matrix.arch }}
     needs: inputs
     timeout-minutes: 90
@@ -790,7 +816,7 @@ jobs:
   cache_budget:
     name: Actions cache budget
     needs: [inputs, android, check]
-    if: always()
+    if: always() && !inputs.refresh_dependencies
     runs-on: ubuntu-latest
     timeout-minutes: 10
     permissions:

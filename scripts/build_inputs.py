@@ -177,6 +177,26 @@ def resolve(directory):
             stream.write('nsis=' + upstream.get('nsis', {}).get('sha256', 'repository-default') + '\n')
 
 
+def refresh(directory):
+    if os.environ.get('GITHUB_ACTIONS') != 'true' or os.environ.get('GITHUB_EVENT_NAME') != 'workflow_dispatch':
+        raise ValueError('Dependency refresh requires an explicitly dispatched CI run')
+    subprocess.run(['cargo', 'update'], cwd=ROOT, check=True, timeout=600)
+    module = ROOT / 'apps/android/core'
+    subprocess.run(['go', 'get', '-u', './...'], cwd=module, check=True, timeout=600)
+    subprocess.run(['go', 'mod', 'tidy'], cwd=module, check=True, timeout=300)
+    directory.mkdir(parents=True, exist_ok=True)
+    files = {}
+    for relative in ('Cargo.lock', 'apps/android/core/go.mod', 'apps/android/core/go.sum'):
+        destination = directory / relative
+        destination.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copy2(ROOT / relative, destination)
+        files[relative] = sha256(destination)
+    write_json(directory / 'updates.json', {
+        'schema': 1, 'commit': current_commit(), 'constraints': constraints(), 'files': files,
+    })
+    print('Updated lockfiles exported for review and a subsequent committed CI run.')
+
+
 def resource_key(upstream):
     selected = {name: {key: value for key, value in upstream.get(name, {}).items() if key != 'resolution'}
                 for name in ('mihomo', 'geo')}
@@ -281,7 +301,7 @@ def shared_go(directory, restore=False):
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument('operation', choices=('resolve', 'apply', 'packaging', 'share-go', 'restore-go', 'audit', 'versions'))
+    parser.add_argument('operation', choices=('resolve', 'refresh', 'apply', 'packaging', 'share-go', 'restore-go', 'audit', 'versions'))
     parser.add_argument('--directory', type=Path, default=Path(os.environ.get('BUILD_INPUTS_DIR', SNAPSHOT)))
     args = parser.parse_args()
     if args.operation == 'audit':
@@ -292,7 +312,7 @@ def main():
     elif args.operation in ('share-go', 'restore-go'):
         shared_go(args.directory, args.operation == 'restore-go')
     else:
-        {'resolve': resolve, 'apply': apply, 'packaging': packaging}[args.operation](args.directory)
+        {'resolve': resolve, 'refresh': refresh, 'apply': apply, 'packaging': packaging}[args.operation](args.directory)
 
 
 if __name__ == '__main__':

@@ -1125,6 +1125,23 @@ assert.equal(calls.length,2);
                                      'debug/build/tool/build-script-build', 'debug/deps/dep.rlib',
                                      'release/build/tool/build-script-build.exe', 'release/deps/dep.rlib'])
 
+    def test_dependency_refresh_rejects_normal_ci_before_running_commands(self):
+        for variables in ({}, {'GITHUB_ACTIONS': 'true', 'GITHUB_EVENT_NAME': 'push'}):
+            with patch.dict(os.environ, variables, clear=True), \
+                    patch.object(build_inputs.subprocess, 'run') as command:
+                with self.assertRaisesRegex(ValueError, 'explicitly dispatched'):
+                    build_inputs.refresh(Path('/unused'))
+                command.assert_not_called()
+
+    def test_dependency_refresh_does_not_export_partial_lockfiles_after_resolution_failure(self):
+        with tempfile.TemporaryDirectory() as temporary, \
+                patch.dict(os.environ, {'GITHUB_ACTIONS': 'true', 'GITHUB_EVENT_NAME': 'workflow_dispatch'}), \
+                patch.object(build_inputs.subprocess, 'run', side_effect=subprocess.CalledProcessError(1, 'cargo')):
+            output = Path(temporary) / 'updates'
+            with self.assertRaises(subprocess.CalledProcessError):
+                build_inputs.refresh(output)
+            self.assertFalse(output.exists())
+
     def test_resolve_uses_repository_dependencies_and_approved_tools_without_updating(self):
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)

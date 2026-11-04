@@ -6,6 +6,8 @@
 
 先生成一次 `dependency-snapshot`，只复制仓库的 Rust/Go 锁文件与 Android 声明，结合 `.github/build-versions.json` 中已确认的工具、内核和资源身份；不执行 `cargo update`、`go get` 或 Maven 自动升级，也不应用旧缓存中曾自动解析出的新版源码依赖。所有平台和 Publish Release 复用同一份快照，打包不再刷新安装工具版本。
 
+依赖维护可手动运行现有 CI，设置 `refresh_dependencies=true`：只在 Actions 解析 Cargo/Go 更新并导出带来源提交和 SHA256 的 `dependency-updates`，不运行平台矩阵，也不作为打包依据。将已审阅的锁文件提交后，仍须取得新提交的普通 push CI 与不发布打包验证；受限本机不执行依赖下载或构建。
+
 CI、Publish Release 和 Memory Benchmark 统一 GitHub 优先、私网回退，均不可用时正常安装或编译。GitHub 命中只省略私网下载，仍检查并补齐镜像。完整类别、工具快照、容器和 GitHub 启动边界见[缓存覆盖清单](cache-coverage.md)，服务能力及可选的服务端代拉下载见[协议](cache-server.md)。工作流不删除私网条目，服务端自行维护；GitHub 的 9 GiB 热缓存预算独立执行。
 
 每轮 loop 执行只读依赖审计，CI 在最后的缓存 job 中输出 `dependency-audit` 附件及 summary，避免候选查询阻塞平台矩阵启动。报告覆盖 Cargo 锁定包、Go 模块、Android Maven 声明、Actions、已确认工具及 Linux/资源元数据，标出撤回、弃用和上游归档信号；查询失败与未检查项单列。升级或替换先由用户决定，再修改声明、锁文件、工具基线或 Actions SHA 并验证。第三方 Actions 固定为基线成功 CI 已实际使用的提交；版本标签保存在工具基线中供审计，不随上游标签移动自动更新。
