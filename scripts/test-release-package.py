@@ -129,17 +129,13 @@ def linux_package_tests(package, tun_test, structure=True):
              'Acquire::https::Timeout=30', '-o', 'Acquire::Retries=2', 'update'],
             timeout=300)
     package_argument = './'+str(package.relative_to(ROOT))
-    if os.environ.get('COR_LINUX_GUEST') == 'true':
-        install_packages([package_argument])
-    else:
-        run(['sudo', 'apt-get', 'install', '-y', package_argument])
+    install_packages([package_argument])
     if os.environ.get('COR_LINUX_BASELINE') and not shutil.which('pkexec'):
         raise RuntimeError('The installed package did not provide the polkit authorization helper')
     if not any(Path(path).is_file() for path in (
             '/usr/lib/systemd/systemd-resolved', '/lib/systemd/systemd-resolved')):
         release = Path('/etc/os-release').read_text()
-        run(['sudo', 'apt-get', 'install', '-y',
-             'systemd' if 'VERSION_ID="20.04"' in release else 'systemd-resolved'])
+        install_packages(['systemd' if 'VERSION_ID="20.04"' in release else 'systemd-resolved'])
     if not shutil.which('resolvectl'):
         raise RuntimeError('Installed distribution has no resolvectl')
     if os.environ.get('COR_LINUX_BASELINE'):

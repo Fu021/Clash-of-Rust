@@ -20,7 +20,7 @@ import tempfile
 import time
 import urllib.request
 
-from build_support import ROOT, host_arch, opener, read_json, run, sha256, write_json
+from build_support import ROOT, host_arch, opener, read_json, record_download, run, sha256, write_json
 from linux_apt import OPTIONS as APT_OPTIONS
 
 BASELINE = '20.04'
@@ -42,26 +42,26 @@ def checksum_entry(sums, name):
     return matches[0].lower()
 
 
-def resolve_inputs():
+def resolve_inputs(fetch=read_json, read=text):
     """Resolve metadata only; every Linux job consumes the frozen URLs/digests."""
-    token = read_json('https://auth.docker.io/token?service=registry.docker.io&scope=repository:library/ubuntu:pull')['token']
+    token = fetch('https://auth.docker.io/token?service=registry.docker.io&scope=repository:library/ubuntu:pull')['token']
     headers = {'Authorization': 'Bearer '+token,
                'Accept': 'application/vnd.oci.image.index.v1+json, application/vnd.docker.distribution.manifest.list.v2+json'}
     request = urllib.request.Request(
         'https://registry-1.docker.io/v2/library/ubuntu/manifests/20.04', headers=headers)
-    with opener().open(request, timeout=60) as response:
+    with opener().open(request, timeout=8) as response:
         document = response.read()
         digest = response.headers.get('Docker-Content-Digest', '')
     if (not re.fullmatch(r'sha256:[0-9a-f]{64}', digest)
             or hashlib.sha256(document).hexdigest() != digest.removeprefix('sha256:')):
         raise ValueError('Ubuntu registry manifest digest is missing or incorrect')
-    release = read_json('https://api.github.com/repos/'+PYTHON_REPO+'/releases/latest')
+    release = fetch('https://api.github.com/repos/'+PYTHON_REPO+'/releases/latest')
     assets = release['assets']
-    dates = re.findall(r'href="(\d{8}(?:\.\d+)?)/"', text(CLOUD_ROOT))
+    dates = re.findall(r'href="(\d{8}(?:\.\d+)?)/"', read(CLOUD_ROOT))
     if not dates:
         raise ValueError('No dated Ubuntu 20.04 cloud image found')
     cloud = CLOUD_ROOT+max(dates, key=lambda value: tuple(map(int, value.split('.'))))+'/'
-    sums = text(cloud+'SHA256SUMS')
+    sums = read(cloud+'SHA256SUMS')
     result = {'version': BASELINE, 'image': 'ubuntu@'+digest, 'architectures': {}}
     for arch, triple, deb in [('x64', 'x86_64', 'amd64'), ('arm64', 'aarch64', 'arm64')]:
         pattern = rf'cpython-3\.11\.[0-9]+\+[^/]+-{triple}-unknown-linux-gnu-install_only\.tar\.gz'
@@ -71,7 +71,7 @@ def resolve_inputs():
         asset = selected[0]
         checksum = (asset.get('digest') or '').removeprefix('sha256:')
         if not re.fullmatch('[0-9a-f]{64}', checksum):
-            checksum = text(asset['browser_download_url']+'.sha256').split()[0]
+            checksum = read(asset['browser_download_url']+'.sha256').split()[0]
         image = f'focal-server-cloudimg-{deb}.img'
         result['architectures'][arch] = {
             'python': {'url': asset['browser_download_url'], 'sha256': checksum},
@@ -106,13 +106,21 @@ def cache_keys(value=None, arch=None):
         if not re.fullmatch('[0-9a-f]{64}', checksum):
             raise ValueError('Linux cache identity requires an upstream SHA256')
         result[name] = f'linux-{name}-ubuntu20-v1-{arch}-{checksum}'
+    result['image'] = 'linux-image-ubuntu20-v1-' + arch + '-' + image_identity(value, arch)
     return result
+
+
+def image_identity(value, arch):
+    dockerfile = ROOT / 'resources/linux/ubuntu20.Dockerfile'
+    return hashlib.sha256((value['image'] + value['architectures'][arch]['python']['sha256']
+                           + sha256(dockerfile) + str(os.getuid()) + ':' + str(os.getgid())).encode()).hexdigest()
 
 
 def download(record, path):
     if not re.fullmatch('[0-9a-f]{64}', record.get('sha256', '')):
         raise ValueError('Download requires an upstream SHA256')
     if path.is_file() and sha256(path) == record['sha256']:
+        record_download(record['url'], path, record['sha256'])
         print(f'Linux download: verified cached {path.name} '
               f'({path.stat().st_size / 1024**2:.1f} MiB)', flush=True)
         return path
@@ -124,6 +132,7 @@ def download(record, path):
         if sha256(partial) != record['sha256']:
             raise ValueError('Upstream download checksum mismatch: '+path.name)
         partial.replace(path)
+        record_download(record['url'], path, record['sha256'])
         print(f'Linux download: fetched and verified {path.name} '
               f'({path.stat().st_size / 1024**2:.1f} MiB)', flush=True)
     finally:
@@ -162,8 +171,6 @@ def guest_cache(scp, remote, restore=False):
             print(f'Guest DEB cache: staged {len(files)} untrusted downloads', flush=True)
         else:
             run([*scp, remote+':cor-apt/*.deb', directory], timeout=300)
-            from linux_apt import trim
-            trim(directory)
             print(f'Guest DEB cache: exported {len(list(directory.glob("*.deb")))} downloads',
                   flush=True)
     except (OSError, subprocess.SubprocessError) as error:
@@ -177,8 +184,27 @@ def build_image():
     archive = download(value['architectures'][host_arch()]['python'],
                        tools_directory()/'python.tar.gz')
     dockerfile = ROOT/'resources/linux/ubuntu20.Dockerfile'
-    identity = hashlib.sha256((value['image']+sha256(archive)+sha256(dockerfile)).encode()).hexdigest()[:20]
-    tag = 'cor-ubuntu20:'+identity
+    identity = image_identity(value, host_arch())
+    tag = 'cor-ubuntu20:' + identity[:20]
+    inspect = ['docker', 'image', 'inspect', '--format={{.Id}}', tag]
+    present = subprocess.run(inspect, capture_output=True, text=True)
+    if present.returncode == 0:
+        return tag
+    cache = tools_directory() / 'build-image'
+    saved = cache / 'image.tar'
+    receipt = cache / 'image.json'
+    if saved.is_file() and not saved.is_symlink() and receipt.is_file():
+        try:
+            record = json.loads(receipt.read_text())
+            if record.get('identity') == identity and sha256(saved) == record.get('sha256'):
+                run(['docker', 'load', '--input', saved], timeout=300)
+                loaded = subprocess.run(inspect, capture_output=True, text=True, check=True)
+                if loaded.stdout.strip() != record.get('image_id'):
+                    raise ValueError('Restored container identity mismatch')
+                print('Reused verified Ubuntu build image:', tag, flush=True)
+                return tag
+        except (OSError, ValueError, subprocess.SubprocessError) as error:
+            print('::warning::Container cache unavailable; rebuilding: ' + type(error).__name__, flush=True)
     with tempfile.TemporaryDirectory(prefix='cor-build-image-') as temporary:
         directory = Path(temporary)
         shutil.copy2(dockerfile, directory/'Dockerfile')
@@ -186,6 +212,15 @@ def build_image():
         run(['docker', 'build', '--build-arg', 'BASE_IMAGE='+value['image'],
              '--build-arg', 'USER_ID='+str(os.getuid()), '--build-arg', 'GROUP_ID='+str(os.getgid()),
              '--tag', tag, directory], timeout=900)
+    cache.mkdir(parents=True, exist_ok=True)
+    temporary = saved.with_suffix('.partial')
+    try:
+        run(['docker', 'save', '--output', temporary, tag], timeout=300)
+        temporary.replace(saved)
+        image_id = subprocess.check_output(inspect, text=True).strip()
+        write_json(receipt, {'identity': identity, 'sha256': sha256(saved), 'image_id': image_id})
+    finally:
+        temporary.unlink(missing_ok=True)
     return tag
 
 
@@ -211,6 +246,9 @@ def container(command):
                 path = Path(os.environ[key])
                 arguments.extend(['--volume', f'{path.parent}:{path.parent}'])
             arguments.extend(['--env', key])
+    if cache := os.environ.get('COR_LINUX_APT_CACHE'):
+        Path(cache).mkdir(parents=True, exist_ok=True)
+        arguments.extend(['--volume', cache + ':' + cache, '--env', 'COR_LINUX_APT_CACHE=' + cache])
     run([*arguments, tag, *command], timeout=3300)
 
 
@@ -371,7 +409,7 @@ def vm_test():
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument('operation', choices=('ci', 'package', 'vm', 'cache-keys', 'cache-downloads'))
+    parser.add_argument('operation', choices=('ci', 'package', 'vm', 'cache-keys', 'cache-downloads', 'cache-image'))
     parser.add_argument('--vm', action='store_true', help='Include cloud image downloads')
     args, extra = parser.parse_known_args()
     if args.operation in ('cache-keys', 'cache-downloads'):
@@ -386,6 +424,10 @@ def main():
             cache_downloads(args.vm)
     elif args.vm:
         parser.error('--vm is only valid with cache-downloads')
+    elif args.operation == 'cache-image':
+        if extra:
+            parser.error('cache-image takes no additional arguments')
+        build_image()
     elif args.operation == 'vm':
         if extra:
             parser.error('vm takes no additional arguments')

@@ -603,21 +603,77 @@ def restore_snapshot(config):
     print('Restored local cache:', config['group'], f'{record["size"]/1024**2:.1f} MiB', 'exact' if config['hit'] else 'compatible generation')
 
 
+def server_capabilities(config):
+    with response(config, '/health') as reply:
+        if reply.status == 404:
+            return set()
+        if reply.status != 200:
+            raise RuntimeError(f'Cache capabilities HTTP {reply.status}')
+        value = json.load(reply)
+    if (not isinstance(value, dict) or value.get('schema') != SCHEMA or value.get('status') != 'ready'
+            or not isinstance(value.get('capabilities'), list)
+            or not all(isinstance(capability, str) for capability in value['capabilities'])):
+        return set()
+    return set(value['capabilities'])
+
+
 def uploads_supported(config):
     required = {'validated-cache-commit-v1', 'complete-cache-retention-v1'}
     if config['kind'] == 'rust':
         required.add('rust-index-references-v1')
-    with response(config, '/health') as reply:
-        if reply.status == 404:
+    capabilities = server_capabilities(config)
+    config['server_capabilities'] = sorted(capabilities)
+    return required.issubset(capabilities)
+
+
+def upstream_import(config, paths):
+    if 'upstream-fetch-v1' not in config.get('server_capabilities', []):
+        return False
+    allowed = {'github.com', 'api.github.com', 'cloud-images.ubuntu.com', 'services.gradle.org',
+               'downloads.gradle.org', 'sourceforge.net', 'pkgs.tailscale.com', 'dl.google.com',
+               'go.dev', 'dl.google.com', 'static.rust-lang.org'}
+    directory = Path(os.environ.get('RUNNER_TEMP', tempfile.gettempdir())) / 'cor-upstream-downloads'
+    sources = {}
+    for record in directory.glob('*.json'):
+        value = json.loads(record.read_text())
+        sources[value['path']] = value
+    files = []
+    for index, root in enumerate(paths):
+        if not root.is_file() or root.is_symlink():
             return False
-        if reply.status != 200:
-            raise RuntimeError(f'Cache capabilities HTTP {reply.status}')
-        value = json.load(reply)
-    return (isinstance(value, dict) and value.get('schema') == SCHEMA
-            and value.get('status') == 'ready'
-            and isinstance(value.get('capabilities'), list)
-            and all(isinstance(capability, str) for capability in value['capabilities'])
-            and required.issubset(value['capabilities']))
+        record = sources.get(str(root.absolute()))
+        if not record:
+            return False
+        url = urllib.parse.urlsplit(record['url'])
+        if (url.scheme != 'https' or url.hostname not in allowed or url.username or url.password
+                or url.query or url.fragment or url.port not in (None, 443)
+                or not re.fullmatch(r'[0-9a-f]{64}', record.get('sha256', ''))
+                or root.stat().st_size != record['size'] or digest(root) != record['sha256']):
+            return False
+        files.append({'path': str(index), **{name: record[name] for name in ('url', 'size', 'sha256')},
+                      'mode': root.stat().st_mode & 0o777})
+    if not files:
+        return False
+    sequence = int(os.environ.get('GITHUB_RUN_ID', '0')) * 1000 + min(int(os.environ.get('GITHUB_RUN_ATTEMPT', '0')), 999)
+    body = json.dumps({'schema': SCHEMA, 'group': config['group'], 'key': config['key'],
+                       'sequence': sequence, 'format': 'indexed-tar-gzip-v1', 'files': files}).encode()
+    headers = {'Content-Length': str(len(body)), 'Content-Type': 'application/json'}
+    try:
+        with phase(config, 'upload'), response(config, '/v1/import', method='POST', file=body, headers=headers) as reply:
+            if reply.status not in (200, 201, 202):
+                return False
+            result = json.load(reply)
+            if (result.get('schema') != SCHEMA or result.get('group') != config['group']
+                    or result.get('key') != config['key'] or result.get('sequence') != sequence
+                    or result.get('status') not in ('queued', 'ready')):
+                return False
+            cache_report(config, 'save', 'upstream import queued; not yet verified' if result['status'] == 'queued'
+                         else 'server fetched and verified upstream files', sum(entry['size'] for entry in files))
+            config['import_queued'] = True
+            return True
+    except (OSError, ValueError, http.client.HTTPException):
+        print('Private upstream import unavailable; uploading verified runner archive.', flush=True)
+        return False
 
 
 def save(config):
@@ -651,6 +707,8 @@ def save(config):
         return
     if not uploads_supported(config):
         cache_report(config, 'save', 'server upgrade required; existing mirror retained')
+        return
+    if config.get('import_queued') or upstream_import(config, paths):
         return
     with tempfile.TemporaryDirectory(prefix='actions-cache-', dir=os.environ.get('RUNNER_TEMP')) as temporary:
         archive = Path(temporary)/'cache.tar.gz'

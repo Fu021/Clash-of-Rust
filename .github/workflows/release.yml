@@ -38,14 +38,15 @@ jobs:
       nsis: ${{ steps.tools.outputs.nsis }}
       tailscale: ${{ steps.tools.outputs.tailscale }}
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803
         with:
           fetch-depth: 0
           persist-credentials: false
-      - uses: actions/setup-python@v6
+      - name: Load approved tool versions
+        run: python3 scripts/build_inputs.py versions
+      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1
         with:
-          python-version: '3.11'
-          check-latest: true
+          python-version: ${{ env.COR_PYTHON }}
       - name: Verify CI and freeze source
         id: source
         shell: python
@@ -65,13 +66,13 @@ jobs:
           if os.environ.get('CI_RUN_ID'):
               command += ['--run-id', str(int(os.environ['CI_RUN_ID']))]
           subprocess.run(command, check=True)
-      - uses: actions/download-artifact@v8
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333
         with:
           name: dependency-snapshot
           path: ${{ env.BUILD_INPUTS_DIR }}
           run-id: ${{ steps.source.outputs.ci_run_id }}
           github-token: ${{ github.token }}
-      - name: Apply CI dependencies and refresh packaging tools
+      - name: Reuse CI dependencies and approved packaging tools unchanged
         id: tools
         env:
           GH_TOKEN: ${{ github.token }}
@@ -79,7 +80,7 @@ jobs:
         run: |
           python3 scripts/build_inputs.py apply
           python3 scripts/build_inputs.py packaging
-      - uses: actions/upload-artifact@v6
+      - uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f
         with:
           name: packaging-dependency-snapshot
           path: ${{ env.BUILD_INPUTS_DIR }}
@@ -129,16 +130,19 @@ jobs:
       run:
         shell: python
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803
         with:
           ref: ${{ needs.resolve.outputs.commit }}
           persist-credentials: false
-      - uses: actions/setup-python@v6
+      - name: Load approved tool versions
+        run: |
+          import subprocess, sys
+          subprocess.run([sys.executable, 'scripts/build_inputs.py', 'versions'], check=True)
+      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1
         with:
-          python-version: ${{ matrix.python }}
-          check-latest: true
+          python-version: ${{ runner.os == 'Windows' && runner.arch == 'ARM64' && env.COR_PYTHON_WINDOWS_ARM64 || env.COR_PYTHON }}
           architecture: ${{ matrix.arch }}
-      - uses: actions/download-artifact@v8
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333
         with:
           name: packaging-dependency-snapshot
           path: ${{ env.BUILD_INPUTS_DIR }}
@@ -147,11 +151,17 @@ jobs:
         run: |
           import subprocess, sys
           subprocess.run([sys.executable, 'scripts/build_inputs.py', 'apply'], check=True)
+      - name: Remember original macOS DNS before cache login
+        if: runner.os == 'macOS'
+        id: original_dns
+        run: |
+          import subprocess, sys
+          subprocess.run([sys.executable, 'scripts/action_cache.py', 'network-save'], check=True)
       - name: Connect to private dependency cache
         id: tailnet
-        if: runner.os != 'macOS' && vars.TS_OAUTH_CLIENT_ID != '' && vars.TS_AUDIENCE != ''
-        uses: tailscale/github-action@v4
-        timeout-minutes: 3
+        if: vars.TS_OAUTH_CLIENT_ID != '' && vars.TS_AUDIENCE != ''
+        uses: tailscale/github-action@064b10558093f38325e838ddea35486bdc6b1d5c
+        timeout-minutes: ${{ runner.os == 'macOS' && 8 || 3 }}
         continue-on-error: true
         with:
           oauth-client-id: ${{ vars.TS_OAUTH_CLIENT_ID }}
@@ -161,7 +171,12 @@ jobs:
           retry: '1'
           timeout: 45s
           args: --accept-dns=false
-          tailscaled-args: ${{ runner.os == 'Linux' && '--tun=userspace-networking --outbound-http-proxy-listen=127.0.0.1:19082' || '' }}
+          tailscaled-args: ${{ runner.os != 'Windows' && '--tun=userspace-networking --outbound-http-proxy-listen=127.0.0.1:19082' || '' }}
+      - name: Restore macOS DNS after cache login
+        if: always() && runner.os == 'macOS' && steps.original_dns.outcome == 'success'
+        run: |
+          import subprocess, sys
+          subprocess.run([sys.executable, 'scripts/action_cache.py', 'network-restore'], check=True)
       - name: Preserve host routing after private cache login
         if: steps.tailnet.outcome == 'success'
         shell: python
@@ -172,9 +187,14 @@ jobs:
           if os.name != 'nt':
               command = ['sudo', '-n', *command]
           subprocess.run(command, check=True)
+      - uses: ./.github/actions/runtime-cache
+        with:
+          kind: bootstrap
+          url: ${{ steps.tailnet.outcome == 'success' && vars.LOCAL_CACHE_URL || '' }}
+          token: ${{ secrets.LOCAL_CACHE_TOKEN }}
       - name: Restore GitHub installer compiler
         if: runner.os == 'Windows'
-        uses: actions/cache/restore@v5
+        uses: actions/cache/restore@caa296126883cff596d87d8935842f9db880ef25
         timeout-minutes: 5
         continue-on-error: true
         id: nsis_github
@@ -203,10 +223,16 @@ jobs:
         run: |
           import subprocess, sys
           subprocess.run([sys.executable, 'scripts/workflow_artifacts.py', 'fetch', '--system', '${{ matrix.system }}', '--arch', '${{ matrix.arch }}', '--run-id', '${{ needs.resolve.outputs.ci_run_id }}', '--output', 'ci-build'], check=True)
+      - uses: ./.github/actions/runtime-cache
+        if: runner.os == 'Linux'
+        with:
+          kind: apt
+          url: ${{ steps.tailnet.outcome == 'success' && vars.LOCAL_CACHE_URL || '' }}
+          token: ${{ secrets.LOCAL_CACHE_TOKEN }}
       - name: Cache Ubuntu baseline downloads
         if: runner.os == 'Linux'
         uses: ./.github/actions/linux-download-cache
-        timeout-minutes: 15
+        timeout-minutes: 30
         continue-on-error: true
         with:
           url: ${{ steps.tailnet.outcome == 'success' && vars.LOCAL_CACHE_URL || '' }}
@@ -221,14 +247,14 @@ jobs:
               subprocess.run([sys.executable, 'scripts/test-release-package.py', '--system', '${{ matrix.system }}', '--arch', '${{ matrix.arch }}', '--build', 'ci-build', '--ci-run-id', '${{ needs.resolve.outputs.ci_run_id }}'], check=True)
       - name: Save shared GitHub installer compiler
         if: runner.os == 'Windows' && matrix.arch == 'x64' && steps.nsis_github.outputs.cache-hit != 'true'
-        uses: actions/cache/save@v5
+        uses: actions/cache/save@caa296126883cff596d87d8935842f9db880ef25
         timeout-minutes: 5
         continue-on-error: true
         with:
           path: tools/nsis
           key: tools-nsis-${{ needs.resolve.outputs.nsis }}
       - name: Preserve Linux GUI diagnostics
-        uses: actions/upload-artifact@v6
+        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f
         if: always() && runner.os == 'Linux'
         with:
           name: linux-package-report-${{ matrix.arch }}
@@ -236,7 +262,7 @@ jobs:
           if-no-files-found: warn
           retention-days: 3
       - name: Preserve Windows GUI diagnostics
-        uses: actions/upload-artifact@v6
+        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f
         if: always() && runner.os == 'Windows'
         with:
           name: windows-package-gui-report-${{ matrix.arch }}
@@ -249,21 +275,21 @@ jobs:
           import subprocess, sys
           subprocess.run([sys.executable, 'scripts/macos_ci.py', 'diagnostics', '--arch', '${{ matrix.arch }}'], check=True)
       - name: Preserve macOS diagnostics
-        uses: actions/upload-artifact@v6
+        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f
         if: always() && runner.os == 'macOS'
         with:
           name: macos-package-report-${{ matrix.arch }}
           path: target/macos-report
           if-no-files-found: error
           retention-days: 3
-      - uses: actions/upload-artifact@v6
+      - uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f
         if: runner.os == 'Linux'
         with:
           name: linux-tun-test-${{ matrix.arch }}
           path: dist/linux-tun-test
           if-no-files-found: error
           retention-days: 3
-      - uses: actions/upload-artifact@v6
+      - uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f
         with:
           name: package-${{ matrix.system }}-${{ matrix.arch }}
           path: |
@@ -282,21 +308,52 @@ jobs:
     permissions:
       actions: read
       contents: read
+      id-token: write
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803
         with:
           ref: ${{ needs.resolve.outputs.commit }}
           persist-credentials: false
+      - name: Load approved tool versions
+        run: python3 scripts/build_inputs.py versions
+      - name: Connect to private system package cache
+        id: tailnet
+        if: vars.TS_OAUTH_CLIENT_ID != '' && vars.TS_AUDIENCE != ''
+        uses: tailscale/github-action@064b10558093f38325e838ddea35486bdc6b1d5c
+        continue-on-error: true
+        timeout-minutes: 3
+        with:
+          oauth-client-id: ${{ vars.TS_OAUTH_CLIENT_ID }}
+          audience: ${{ vars.TS_AUDIENCE }}
+          tags: tag:github-action-cache
+          version: ${{ env.COR_TAILSCALE }}
+          retry: '1'
+          timeout: 45s
+          args: --accept-dns=false
+          tailscaled-args: --tun=userspace-networking --outbound-http-proxy-listen=127.0.0.1:19082
+      - name: Preserve host routing
+        if: steps.tailnet.outcome == 'success'
+        run: sudo -n tailscale set --accept-routes=false --accept-dns=false
+      - uses: ./.github/actions/runtime-cache
+        with:
+          kind: bootstrap
+          url: ${{ steps.tailnet.outcome == 'success' && vars.LOCAL_CACHE_URL || '' }}
+          token: ${{ secrets.LOCAL_CACHE_TOKEN }}
+      - uses: ./.github/actions/runtime-cache
+        with:
+          kind: apt
+          url: ${{ steps.tailnet.outcome == 'success' && vars.LOCAL_CACHE_URL || '' }}
+          token: ${{ secrets.LOCAL_CACHE_TOKEN }}
       - name: Wait for the verified Linux package from this run
         env:
           GH_TOKEN: ${{ github.token }}
           PYTHONDONTWRITEBYTECODE: '1'
         run: python3 scripts/workflow_artifacts.py wait --system linux --arch x64 --run-id '${{ github.run_id }}'
-      - uses: actions/download-artifact@v8
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333
         with:
           name: package-linux-x64
           path: dist
-      - uses: actions/download-artifact@v8
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333
         with:
           name: linux-tun-test-x64
           path: target
@@ -307,7 +364,7 @@ jobs:
         run: |
           import subprocess, sys
           subprocess.run([sys.executable, 'scripts/test-release-package.py', '--linux-compat'], check=True)
-      - uses: actions/upload-artifact@v6
+      - uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f
         if: always()
         with:
           name: linux-package-report-latest
@@ -334,21 +391,23 @@ jobs:
             arch: arm64
             qemu: qemu-system-arm qemu-efi-aarch64
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803
         with:
           ref: ${{ needs.resolve.outputs.commit }}
           persist-credentials: false
-      - uses: actions/setup-python@v6
+      - name: Load approved tool versions
+        run: python3 scripts/build_inputs.py versions
+      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1
         with:
-          python-version: '3.11'
-      - uses: actions/download-artifact@v8
+          python-version: ${{ env.COR_PYTHON }}
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333
         with:
           name: packaging-dependency-snapshot
           path: ${{ env.BUILD_INPUTS_DIR }}
       - name: Connect to private Linux download cache
         id: tailnet
         if: vars.TS_OAUTH_CLIENT_ID != '' && vars.TS_AUDIENCE != ''
-        uses: tailscale/github-action@v4
+        uses: tailscale/github-action@064b10558093f38325e838ddea35486bdc6b1d5c
         timeout-minutes: 3
         continue-on-error: true
         with:
@@ -372,26 +431,41 @@ jobs:
           vm: 'true'
           url: ${{ steps.tailnet.outcome == 'success' && vars.LOCAL_CACHE_URL || '' }}
           token: ${{ secrets.LOCAL_CACHE_TOKEN }}
+      - uses: ./.github/actions/runtime-cache
+        with:
+          kind: bootstrap
+          url: ${{ steps.tailnet.outcome == 'success' && vars.LOCAL_CACHE_URL || '' }}
+          token: ${{ secrets.LOCAL_CACHE_TOKEN }}
+      - uses: ./.github/actions/runtime-cache
+        with:
+          kind: apt
+          url: ${{ steps.tailnet.outcome == 'success' && vars.LOCAL_CACHE_URL || '' }}
+          token: ${{ secrets.LOCAL_CACHE_TOKEN }}
       - name: Install virtual machine tools
+        shell: python
+        env:
+          QEMU_PACKAGES: ${{ matrix.qemu }}
         run: |
-          sudo apt-get update
-          sudo apt-get install -y ${{ matrix.qemu }} qemu-utils cloud-image-utils
-          if [ -c /dev/kvm ]; then
-            sudo chmod a+rw /dev/kvm
-            ls -l /dev/kvm
-          else
-            echo "KVM is unavailable; keeping TCG software emulation."
-          fi
+          import os, pathlib, subprocess, sys
+          sys.path.insert(0, 'scripts')
+          from linux_apt import OPTIONS, privileged, install
+          os.environ['COR_LINUX_APT_CACHE'] = os.environ['COR_HOST_APT_CACHE']
+          privileged([*OPTIONS, 'update'], 300)
+          install([*os.environ['QEMU_PACKAGES'].split(), 'qemu-utils', 'cloud-image-utils'])
+          if pathlib.Path('/dev/kvm').exists():
+              subprocess.run(['sudo', 'chmod', 'a+rw', '/dev/kvm'], check=True)
+          else:
+              print('KVM is unavailable; keeping TCG software emulation.')
       - name: Wait for the verified Linux package from this run
         env:
           GH_TOKEN: ${{ github.token }}
           PYTHONDONTWRITEBYTECODE: '1'
         run: python3 scripts/workflow_artifacts.py wait --system linux --arch '${{ matrix.arch }}' --run-id '${{ github.run_id }}'
-      - uses: actions/download-artifact@v8
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333
         with:
           name: package-linux-${{ matrix.arch }}
           path: dist
-      - uses: actions/download-artifact@v8
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333
         with:
           name: linux-tun-test-${{ matrix.arch }}
           path: target
@@ -401,7 +475,7 @@ jobs:
         run: python3 scripts/linux_ci.py vm
       - name: Save verified guest DEB downloads
         if: always() && steps.vm_cache.outputs.apt-key != ''
-        uses: actions/cache/save@v5
+        uses: actions/cache/save@caa296126883cff596d87d8935842f9db880ef25
         timeout-minutes: 5
         continue-on-error: true
         with:
@@ -416,7 +490,7 @@ jobs:
           PRIVATE_CACHE_STATE: ${{ steps.vm_cache.outputs.apt-state }}
           PYTHONDONTWRITEBYTECODE: '1'
         run: python3 scripts/action_cache.py save --state "$PRIVATE_CACHE_STATE"
-      - uses: actions/upload-artifact@v6
+      - uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f
         if: always()
         with:
           name: linux-package-report-ubuntu20-${{ matrix.arch }}
@@ -428,6 +502,10 @@ jobs:
     needs: resolve
     runs-on: ubuntu-latest
     timeout-minutes: 20
+    permissions:
+      actions: read
+      contents: read
+      id-token: write
     strategy:
       fail-fast: false
       matrix:
@@ -435,11 +513,13 @@ jobs:
     env:
       PYTHONDONTWRITEBYTECODE: '1'
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803
         with:
           ref: ${{ needs.resolve.outputs.commit }}
           persist-credentials: false
-      - uses: actions/download-artifact@v8
+      - name: Load approved tool versions
+        run: python3 scripts/build_inputs.py versions
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333
         with:
           name: packaging-dependency-snapshot
           path: ${{ env.BUILD_INPUTS_DIR }}
@@ -448,10 +528,49 @@ jobs:
         run: |
           import subprocess, sys
           subprocess.run([sys.executable, 'scripts/build_inputs.py', 'apply'], check=True)
-      - uses: actions/setup-java@v5
+      - name: Connect to private Android tool cache
+        id: tailnet
+        if: vars.TS_OAUTH_CLIENT_ID != '' && vars.TS_AUDIENCE != ''
+        uses: tailscale/github-action@064b10558093f38325e838ddea35486bdc6b1d5c
+        continue-on-error: true
+        timeout-minutes: 3
+        with:
+          oauth-client-id: ${{ vars.TS_OAUTH_CLIENT_ID }}
+          audience: ${{ vars.TS_AUDIENCE }}
+          tags: tag:github-action-cache
+          version: ${{ env.COR_TAILSCALE }}
+          retry: '1'
+          timeout: 45s
+          args: --accept-dns=false
+          tailscaled-args: --tun=userspace-networking --outbound-http-proxy-listen=127.0.0.1:19082
+      - name: Preserve host routing
+        if: steps.tailnet.outcome == 'success'
+        run: sudo -n tailscale set --accept-routes=false --accept-dns=false
+      - uses: ./.github/actions/runtime-cache
+        with:
+          kind: bootstrap
+          url: ${{ steps.tailnet.outcome == 'success' && vars.LOCAL_CACHE_URL || '' }}
+          token: ${{ secrets.LOCAL_CACHE_TOKEN }}
+      - uses: ./.github/actions/runtime-cache
+        with:
+          kind: java
+          url: ${{ steps.tailnet.outcome == 'success' && vars.LOCAL_CACHE_URL || '' }}
+          token: ${{ secrets.LOCAL_CACHE_TOKEN }}
+      - uses: actions/setup-java@b6effb05e454b25005698d916606bdc6ffcbf961
         with:
           distribution: temurin
-          java-version: '17'
+          java-version: ${{ env.COR_JAVA }}
+      - uses: ./.github/actions/runtime-cache
+        with:
+          kind: android
+          url: ${{ steps.tailnet.outcome == 'success' && vars.LOCAL_CACHE_URL || '' }}
+          token: ${{ secrets.LOCAL_CACHE_TOKEN }}
+      - uses: ./.github/actions/runtime-cache
+        if: matrix.arch == 'x64'
+        with:
+          kind: emulator
+          url: ${{ steps.tailnet.outcome == 'success' && vars.LOCAL_CACHE_URL || '' }}
+          token: ${{ secrets.LOCAL_CACHE_TOKEN }}
       - name: Prepare Android package tools
         shell: python
         run: |
@@ -494,7 +613,7 @@ jobs:
               '--run-id','${{ needs.resolve.outputs.ci_run_id }}']
           if os.environ['CHECK_ONLY']=='true': command.append('--check')
           subprocess.run(command,check=True)
-      - uses: actions/upload-artifact@v6
+      - uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f
         with:
           name: package-android-${{ matrix.arch }}
           path: |
@@ -503,7 +622,7 @@ jobs:
             dist/package-receipt.json
           if-no-files-found: error
           retention-days: 3
-      - uses: actions/upload-artifact@v6
+      - uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f
         if: always() && matrix.arch == 'x64'
         with:
           name: android-package-test-report
@@ -519,15 +638,16 @@ jobs:
       actions: read
       contents: write
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803
         with:
           ref: ${{ needs.resolve.outputs.commit }}
           fetch-depth: 0
           persist-credentials: false
-      - uses: actions/setup-python@v6
+      - name: Load approved tool versions
+        run: python3 scripts/build_inputs.py versions
+      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1
         with:
-          python-version: '3.11'
-          check-latest: true
+          python-version: ${{ env.COR_PYTHON }}
       - name: Verify packages and publish or finish test-only run
         shell: python
         env:
@@ -558,7 +678,7 @@ jobs:
       group: actions-cache-budget
       cancel-in-progress: false
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803
         with:
           persist-credentials: false
       - name: Trim obsolete dependencies and enforce 9 GiB cache budget
@@ -569,7 +689,7 @@ jobs:
       - name: Connect for final private cache inventory
         id: tailnet
         if: vars.TS_OAUTH_CLIENT_ID != '' && vars.TS_AUDIENCE != ''
-        uses: tailscale/github-action@v4
+        uses: tailscale/github-action@064b10558093f38325e838ddea35486bdc6b1d5c
         continue-on-error: true
         with:
           oauth-client-id: ${{ vars.TS_OAUTH_CLIENT_ID }}
@@ -591,7 +711,7 @@ jobs:
         run: |
           sudo -n tailscale set --accept-routes=false --accept-dns=false
           python3 scripts/action_cache.py inventory
-      - uses: actions/upload-artifact@v6
+      - uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f
         if: steps.tailnet.outcome == 'success'
         with:
           name: packaging-private-cache-inventory

@@ -34,7 +34,7 @@ runs:
         fi
     - name: Restore portable Python
       id: python
-      uses: actions/cache/restore@v5
+      uses: actions/cache/restore@caa296126883cff596d87d8935842f9db880ef25
       continue-on-error: true
       with:
         path: ${{ runner.temp }}/cor-linux-tools/python.tar.gz
@@ -54,7 +54,7 @@ runs:
     - name: Restore original Ubuntu cloud image
       id: cloud
       if: inputs.vm == 'true'
-      uses: actions/cache/restore@v5
+      uses: actions/cache/restore@caa296126883cff596d87d8935842f9db880ef25
       continue-on-error: true
       with:
         path: ${{ runner.temp }}/cor-linux-tools/focal.img
@@ -82,14 +82,14 @@ runs:
         python3 scripts/linux_ci.py "${arguments[@]}"
     - name: Save verified Python before tests
       if: steps.python.outputs.cache-hit != 'true'
-      uses: actions/cache/save@v5
+      uses: actions/cache/save@caa296126883cff596d87d8935842f9db880ef25
       continue-on-error: true
       with:
         path: ${{ runner.temp }}/cor-linux-tools/python.tar.gz
         key: ${{ steps.inputs.outputs.python }}
     - name: Save verified cloud image before tests
       if: inputs.vm == 'true' && steps.cloud.outputs.cache-hit != 'true'
-      uses: actions/cache/save@v5
+      uses: actions/cache/save@caa296126883cff596d87d8935842f9db880ef25
       continue-on-error: true
       with:
         path: ${{ runner.temp }}/cor-linux-tools/focal.img
@@ -108,10 +108,49 @@ runs:
             fi
           done
         '
+    - name: Restore GitHub Ubuntu build image
+      id: image
+      if: inputs.vm != 'true'
+      uses: actions/cache/restore@caa296126883cff596d87d8935842f9db880ef25
+      continue-on-error: true
+      with:
+        path: ${{ runner.temp }}/cor-linux-tools/build-image
+        key: ${{ steps.inputs.outputs.image }}
+    - name: Restore private fallback for Ubuntu build image
+      id: image_local
+      if: inputs.vm != 'true'
+      uses: ./.github/actions/local-cache
+      with:
+        github-hit: ${{ steps.image.outcome == 'success' && steps.image.outputs.cache-hit || '' }}
+        github-failed: ${{ steps.image.outcome == 'failure' }}
+        url: ${{ inputs.url }}
+        token: ${{ inputs.token }}
+        group: dependencies/linux-image-${{ steps.inputs.outputs.arch }}
+        key: ${{ steps.inputs.outputs.image }}
+        paths: ${{ runner.temp }}/cor-linux-tools/build-image
+        immutable: true
+    - name: Prepare verified build image before tests
+      if: inputs.vm != 'true'
+      shell: bash
+      run: timeout 1200 python3 scripts/linux_ci.py cache-image
+    - name: Save verified GitHub build image
+      if: inputs.vm != 'true' && steps.image.outputs.cache-hit != 'true'
+      uses: actions/cache/save@caa296126883cff596d87d8935842f9db880ef25
+      continue-on-error: true
+      with:
+        path: ${{ runner.temp }}/cor-linux-tools/build-image
+        key: ${{ steps.inputs.outputs.image }}
+    - name: Mirror verified build image before tests
+      if: inputs.vm != 'true'
+      continue-on-error: true
+      shell: bash
+      env:
+        PRIVATE_CACHE_STATE: ${{ steps.image_local.outputs.state }}
+      run: timeout 300 python3 scripts/action_cache.py save --state "$PRIVATE_CACHE_STATE"
     - name: Restore guest DEB downloads
       id: apt_github
       if: inputs.vm == 'true'
-      uses: actions/cache/restore@v5
+      uses: actions/cache/restore@caa296126883cff596d87d8935842f9db880ef25
       continue-on-error: true
       with:
         path: ${{ runner.temp }}/cor-linux-tools/apt

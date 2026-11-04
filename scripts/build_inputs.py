@@ -1,7 +1,5 @@
 """Resolve one dependency snapshot per CI, then reuse it unchanged for packaging."""
 import argparse
-import base64
-from concurrent.futures import ThreadPoolExecutor
 import datetime
 import hashlib
 import http.client
@@ -15,7 +13,6 @@ import sys
 import tomllib
 import urllib.error
 import urllib.parse
-import xml.etree.ElementTree as ET
 
 from build_support import ROOT, read_json, opener, sha256, write_json
 
@@ -26,6 +23,25 @@ GEO = {'geoip.dat': 'GeoIP.dat', 'geosite.dat': 'GeoSite.dat',
        'country.mmdb': 'Country.mmdb', 'GeoLite2-ASN.mmdb': 'ASN.mmdb'}
 # AGP 9.4 requires Gradle 9.6 or newer; stay within its supported major.
 GRADLE_MIN = '9.6.0'
+
+
+def approved():
+    value = json.loads((ROOT / '.github/build-versions.json').read_text())
+    if value.get('schema') != 1 or not value.get('tools') or not value.get('upstream'):
+        raise ValueError('Approved build versions are incomplete')
+    return value
+
+
+def versions():
+    selected = approved()['tools']
+    for target in ('GITHUB_ENV', 'GITHUB_OUTPUT'):
+        if output := os.environ.get(target):
+            with open(output, 'a') as stream:
+                for name, version in selected.items():
+                    if not re.fullmatch(r'[0-9][0-9.+-]*', version):
+                        raise ValueError('Invalid approved tool version')
+                    stream.write(('COR_' + name.upper() if target == 'GITHUB_ENV' else name)
+                                 + '=' + version + '\n')
 
 
 def original(path):
@@ -39,7 +55,8 @@ def current_commit():
 def constraints():
     paths = subprocess.check_output(['git', 'ls-files', 'Cargo.toml', 'apps/**/Cargo.toml',
                                      'crates/**/Cargo.toml', 'vendor/**/Cargo.toml', '.cargo/*', 'apps/android/gradle.properties',
-                                     'resources/linux/ubuntu20.Dockerfile', 'scripts/linux_ci.py'],
+                                     'resources/linux/ubuntu20.Dockerfile', 'scripts/linux_ci.py',
+                                     '.github/build-versions.json'],
                                     cwd=ROOT, text=True).splitlines()
     return {path: hashlib.sha256(original(path)).hexdigest() for path in paths}
 
@@ -68,7 +85,7 @@ def component(name):
 
 
 def resource_release(name, cached, proxy='', version=None):
-    frozen = component(name)
+    frozen = component(name) or approved()['upstream'].get(name)
     if frozen and (version is None or frozen['tag_name'] == version):
         return frozen
     repo = 'MetaCubeX/' + ('mihomo' if name == 'mihomo' else 'meta-rules-dat')
@@ -101,138 +118,6 @@ def resource_release(name, cached, proxy='', version=None):
         raise RuntimeError(name + ' upstream is unavailable and no verified release metadata is cached') from error
 
 
-def version_tuple(value):
-    if not re.fullmatch(r'\d+(?:\.\d+){1,3}', value):
-        raise ValueError('Expected a stable numeric version')
-    return tuple(map(int, value.split('.')))
-
-
-def stable_release(repo):
-    release = read_json('https://api.github.com/repos/' + repo + '/releases/latest')
-    if release.get('draft') or release.get('prerelease') or not release.get('tag_name'):
-        raise ValueError('No stable release: ' + repo)
-    # Retain immutable asset IDs/digests and URLs; never cache access credentials.
-    return {'tag_name': release['tag_name'], 'published_at': release['published_at'],
-            'assets': [{key: asset[key] for key in ('id', 'name', 'size', 'digest', 'browser_download_url')}
-                       for asset in release['assets'] if asset.get('digest')]}
-
-
-def nsis_release():
-    base = 'https://api.github.com/repos/microsoft/winget-pkgs/contents/manifests/n/NSIS/NSIS'
-    entries = read_json(base)
-    version = max((entry['name'] for entry in entries if entry['type'] == 'dir'
-                   and re.fullmatch(r'3\.\d+(?:\.\d+)?', entry['name'])), key=version_tuple)
-    entry = read_json(base + '/' + version + '/NSIS.NSIS.installer.yaml')
-    text = base64.b64decode(entry['content'], validate=False).decode()
-    url = re.search(r'(?m)^\s*InstallerUrl:\s*(https://\S+)\s*$', text)
-    checksum = re.search(r'(?m)^\s*InstallerSha256:\s*([A-Fa-f0-9]{64})\s*$', text)
-    if not url or not checksum or not url[1].startswith('https://sourceforge.net/projects/nsis/files/'):
-        raise ValueError('NSIS official installer/verification metadata is missing')
-    return {'version': version, 'url': url[1], 'sha256': checksum[1].lower(),
-            'verification_source': entry['html_url']}
-
-
-def gradle_release():
-    versions = read_json('https://services.gradle.org/versions/all')
-    major = GRADLE_MIN.split('.')[0]
-    release = max((entry for entry in versions
-                   if re.fullmatch(re.escape(major) + r'\.\d+(?:\.\d+)?', entry['version'])
-                   and version_tuple(entry['version']) >= version_tuple(GRADLE_MIN)
-                   and not entry.get('snapshot') and not entry.get('broken')),
-                  key=lambda e: version_tuple(e['version']))
-    return {'version': release['version'], 'url': release['downloadUrl'],
-            'checksum_url': release['checksumUrl']}
-
-
-def maven_latest(group, artifact, current):
-    path = group.replace('.', '/') + '/' + artifact + '/maven-metadata.xml'
-    with opener().open('https://dl.google.com/dl/android/maven2/' + path, timeout=20) as response:
-        root = ET.fromstring(response.read(1024 * 1024))
-    major = current.split('.')[0]
-    versions = [entry.text for entry in root.findall('./versioning/versions/version')
-                if entry.text and re.fullmatch(re.escape(major) + r'\.\d+(?:\.\d+)?', entry.text)]
-    return max(versions, key=version_tuple)
-
-
-def refresh_command(command, paths, warnings):
-    before = {path: (ROOT / path).read_bytes() if (ROOT / path).exists() else None for path in paths}
-    print('Checking source dependencies:', ' '.join(command), flush=True)
-    try:
-        environment = dict(os.environ)
-        if command[0] == 'go':
-            # Avoid falling through from the public module proxy to unbounded
-            # git/vanity-host probes for every transitive dependency.
-            environment.setdefault('GOPROXY', 'https://proxy.golang.org')
-        result = subprocess.run(command, cwd=ROOT, text=True, stdout=subprocess.PIPE,
-                                stderr=subprocess.STDOUT, timeout=90, env=environment)
-    except subprocess.TimeoutExpired as error:
-        partial = error.stdout or ''
-        if isinstance(partial, bytes):
-            partial = partial.decode(errors='replace')
-        result = subprocess.CompletedProcess(command, 1, partial + '\nDependency metadata refresh timed out after 90s')
-    if not result.returncode:
-        print('Refreshed source dependencies:', ' '.join(command), flush=True)
-        return
-    for path, value in before.items():
-        if value is None:
-            (ROOT / path).unlink(missing_ok=True)
-        else:
-            (ROOT / path).write_bytes(value)
-    network = re.compile(r'timed? ?out|timeout|network|connection|resolve host|no such host|'
-                         r'name resolution|no route to host|download|'
-                         r'HTTP.*(?:40[3489]|429|50[0-9])|status code.*(?:40[3489]|429|50[0-9])|'
-                         r'failed to fetch|unable to access|TLS|SSL|unreachable|'
-                         r'\b429\b.*Too Many Requests|'
-                         r'\b50[0-9]\b.*(?:Unavailable|Gateway|Error)', re.I)
-    if not network.search(result.stdout):
-        print(result.stdout, flush=True)
-        raise RuntimeError('Dependency resolution failed; this was not a network fallback')
-    warning = 'Upstream unavailable; retained compatible cached/repository dependencies: ' + ' '.join(command)
-    warnings.append(warning)
-    print('::warning::' + warning, flush=True)
-    # Keep the upstream host/reason when falling back; a generic warning hid
-    # repeated Go timeouts in earlier runs. Never publish URL credentials.
-    detail = re.sub(r'(https?://)[^\s/@]+:[^\s/@]+@', r'\1[redacted]@', result.stdout)
-    print('\n'.join(detail.splitlines()[-12:])[-4096:], flush=True)
-
-
-def refresh_go():
-    warnings = []
-    go = ['go', '-C', str(ROOT / 'apps/android/core')]
-    files = ('apps/android/core/go.mod', 'apps/android/core/go.sum')
-    refresh_command([*go, 'get', '-tool', 'golang.org/x/mobile/cmd/gomobile@latest',
-                     'golang.org/x/mobile/cmd/gobind@latest'], files, warnings)
-    # Query the declared module paths directly. `go get -u ./...` also probes
-    # alternative parent modules for packages (e.g. go4.org/netipx -> go4.org),
-    # repeatedly hanging on unrelated archives despite a complete source cache.
-    modules = json.loads(subprocess.check_output([*go, 'mod', 'edit', '-json'], text=True, timeout=15))['Require']
-    def latest(module):
-        escaped = ''.join('!' + c.lower() if c.isupper() else c for c in module['Path'])
-        try:
-            with opener().open('https://proxy.golang.org/' + escaped + '/@latest', timeout=8) as reply:
-                version = json.load(reply)['Version']
-            if go_version(version) > go_version(module['Version']):
-                return module['Path'] + '@' + version, None
-            return None, None
-        except (OSError, ValueError, KeyError, http.client.HTTPException) as error:
-            return None, module['Path'] + ': latest metadata unavailable (' + type(error).__name__ + '); retained cached version'
-    with ThreadPoolExecutor(max_workers=8) as workers:
-        selected = list(workers.map(latest, modules))
-    updates = []
-    for update, warning in selected:
-        if update:
-            updates.append(update)
-        if warning:
-            warnings.append(warning)
-            print('::warning::' + warning, flush=True)
-    if updates:
-        refresh_command([*go, 'get', *updates], files, warnings)
-    else:
-        print('Checked all declared Go modules; no newer available versions.', flush=True)
-    refresh_command([*go, 'mod', 'tidy'], files, warnings)
-    return warnings
-
-
 def go_version(value):
     match = re.fullmatch(r'v(\d+)\.(\d+)\.(\d+)(?:-([0-9A-Za-z.-]+))?(?:\+[0-9A-Za-z.-]+)?', value)
     if not match:
@@ -243,64 +128,14 @@ def go_version(value):
 
 
 def resolve(directory):
-    from linux_ci import resolve_inputs as linux_inputs
     directory.mkdir(parents=True, exist_ok=True)
-    previous = manifest(directory) or {}
     baseline = {path: hashlib.sha256(original(path)).hexdigest() for path in FILES}
-    warnings = []
-    reusable = previous.get('baseline') == baseline and previous.get('constraints') == constraints()
-    if reusable:
-        apply(directory, require_commit=False)
-        print('Restored source dependency snapshot for the same source constraints.')
-    upstream = {}
-    queries = {'mihomo': lambda: stable_release('MetaCubeX/mihomo'),
-               'geo': lambda: stable_release('MetaCubeX/meta-rules-dat'),
-               'nsis': nsis_release, 'gradle': gradle_release,
-               'tailscale': lambda: {'version': read_json('https://pkgs.tailscale.com/stable/?mode=json')['Version']},
-               'linux': linux_inputs}
-    with ThreadPoolExecutor(max_workers=len(queries) + 2) as workers:
-        rust_warnings = []
-        rust = workers.submit(refresh_command, ['cargo', 'update'], ('Cargo.lock',), rust_warnings)
-        go = workers.submit(refresh_go)
-        pending = {name: workers.submit(query) for name, query in queries.items()}
-        print('Checking upstream metadata:', ', '.join(queries), flush=True)
-        for name, future in pending.items():
-            try:
-                value = future.result()
-                upstream[name] = {**value, 'resolution': 'upstream'}
-                print(name + ': ' + value.get('version', value.get('tag_name', 'resolved')), flush=True)
-            except (OSError, ValueError, KeyError, TypeError, http.client.HTTPException) as error:
-                cached = previous.get('upstream', {}).get(name)
-                if cached:
-                    upstream[name] = {**cached, 'resolution': 'cache'}
-                    warning = name + ': upstream unavailable (' + type(error).__name__ + '); using cached version'
-                else:
-                    warning = name + ': no upstream metadata or previous snapshot; repository/tool default is required'
-                warnings.append(warning)
-                print('::warning::' + warning, flush=True)
-        rust.result()
-        warnings.extend(rust_warnings)
-        warnings.extend(go.result())
-    for path, group, artifact, pattern in [
-        ('apps/android/build.gradle.kts', 'com.android.tools.build', 'gradle',
-         r'(id\("com.android.application"\) version ")([0-9.]+)(")'),
-        ('apps/android/app/build.gradle.kts', 'androidx.test', 'runner',
-         r'("androidx.test:runner:)([0-9.]+)(")'),
-        ('apps/android/app/build.gradle.kts', 'androidx.test.ext', 'junit',
-         r'("androidx.test.ext:junit:)([0-9.]+)(")'),
-    ]:
-        target = ROOT / path
-        text = target.read_text()
-        match = re.search(pattern, text)
-        if not match:
-            raise ValueError('Android dependency declaration missing: ' + artifact)
-        try:
-            updated = maven_latest(group, artifact, match[2])
-            target.write_text(re.sub(pattern, lambda m: m[1] + updated + m[3], text))
-        except (OSError, ValueError, ET.ParseError, http.client.HTTPException) as error:
-            warnings.append(artifact + ': upstream unavailable (' + type(error).__name__ + '); retained source snapshot')
+    upstream = {name: {**value, 'resolution': 'approved'}
+                for name, value in approved()['upstream'].items()}
     files = {}
     for relative in FILES:
+        if sha256(ROOT / relative) != baseline[relative]:
+            raise ValueError('Source dependency differs from approved repository version: ' + relative)
         destination = directory / relative
         destination.parent.mkdir(parents=True, exist_ok=True)
         shutil.copy2(ROOT / relative, destination)
@@ -311,11 +146,11 @@ def resolve(directory):
         (ROOT / 'apps/android/core/go.mod').read_text())]
     value = {'schema': 1, 'commit': current_commit(), 'baseline': baseline, 'constraints': constraints(), 'files': files,
              'resolved_at': datetime.datetime.now(datetime.timezone.utc).isoformat(),
-             'upstream': upstream, 'warnings': warnings,
+             'upstream': upstream, 'warnings': [],
              'rust_packages': [{key: package[key] for key in ('name', 'version', 'source', 'checksum') if key in package}
                                for package in packages],
              'go_modules': go_modules,
-             'policy': 'Latest versions within declared source constraints; network errors use a compatible previous snapshot.'}
+             'policy': 'Repository lockfiles and approved build versions only; upgrades and replacements require user approval.'}
     write_json(directory / 'inputs.json', value)
     report(value)
     if output := os.environ.get('GITHUB_OUTPUT'):
@@ -339,13 +174,6 @@ def packaging(directory):
     value = manifest(directory)
     if not value or value.get('commit') != current_commit():
         raise ValueError('Packaging requires the verified CI dependency snapshot')
-    try:
-        value['upstream']['nsis'] = {**nsis_release(), 'resolution': 'upstream'}
-    except (OSError, ValueError, KeyError, http.client.HTTPException) as error:
-        if value['upstream'].get('nsis'):
-            value['upstream']['nsis']['resolution'] = 'cache'
-        value['warnings'].append('Installer upstream unavailable; using verified CI tool metadata.')
-    write_json(directory / 'inputs.json', value)
     report(value)
     if output := os.environ.get('GITHUB_OUTPUT'):
         with open(output, 'a') as stream:
@@ -440,10 +268,15 @@ def shared_go(directory, restore=False):
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument('operation', choices=('resolve', 'apply', 'packaging', 'share-go', 'restore-go'))
+    parser.add_argument('operation', choices=('resolve', 'apply', 'packaging', 'share-go', 'restore-go', 'audit', 'versions'))
     parser.add_argument('--directory', type=Path, default=Path(os.environ.get('BUILD_INPUTS_DIR', SNAPSHOT)))
     args = parser.parse_args()
-    if args.operation in ('share-go', 'restore-go'):
+    if args.operation == 'audit':
+        from dependency_audit import audit
+        audit(args.directory)
+    elif args.operation == 'versions':
+        versions()
+    elif args.operation in ('share-go', 'restore-go'):
         shared_go(args.directory, args.operation == 'restore-go')
     else:
         {'resolve': resolve, 'apply': apply, 'packaging': packaging}[args.operation](args.directory)

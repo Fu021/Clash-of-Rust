@@ -43,6 +43,9 @@ inputs:
   github-failed:
     description: Discard an interrupted GitHub restore before using the private fallback
     default: 'false'
+  runtime:
+    description: Capture and hydrate an allowlisted runtime tool snapshot, or leave empty
+    required: false
 outputs:
   cache-hit:
     description: The exact current cache key was restored

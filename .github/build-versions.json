@@ -1,0 +1,90 @@
+{
+  "schema": 1,
+  "baseline_ci": 41761794441,
+  "actions": {
+    "actions/checkout": "v6",
+    "actions/setup-python": "v6",
+    "actions/setup-go": "v6",
+    "actions/cache": "v5",
+    "actions/upload-artifact": "v6",
+    "actions/download-artifact": "v8",
+    "actions/setup-java": "v5",
+    "dtolnay/rust-toolchain": "stable",
+    "Swatinem/rust-cache": "v2",
+    "tailscale/github-action": "v4",
+    "gradle/actions": "v5"
+  },
+  "tools": {
+    "rust": "1.99.1",
+    "go": "1.27.3",
+    "java": "17.0.21+9",
+    "python": "3.11.18",
+    "python_windows_arm64": "3.13.17",
+    "tailscale": "1.104.5",
+    "gradle": "9.8.2"
+  },
+  "upstream": {
+    "mihomo": {
+      "tag_name": "v1.19.33",
+      "published_at": "2026-10-21T16:56:13Z",
+      "assets": [
+        {"name": "mihomo-darwin-amd64-compatible-v1.19.33.gz", "size": 22333953, "digest": "sha256:eefe967b74312f70b64efa0dfa54929d00c7af8e94416e1b12df09863a40f35b", "browser_download_url": "https://github.com/MetaCubeX/mihomo/releases/download/v1.19.33/mihomo-darwin-amd64-compatible-v1.19.33.gz"},
+        {"name": "mihomo-darwin-arm64-v1.19.33.gz", "size": 20784157, "digest": "sha256:060b64b0f2c9a310831db0fe4adb2878de67bfa606c311813c1f13966aa504b6", "browser_download_url": "https://github.com/MetaCubeX/mihomo/releases/download/v1.19.33/mihomo-darwin-arm64-v1.19.33.gz"},
+        {"name": "mihomo-linux-amd64-compatible-v1.19.33.gz", "size": 22893972, "digest": "sha256:386508bfb1c72c43b6a0eda73708ecdce82546581b0ebcb16366c53757c622b6", "browser_download_url": "https://github.com/MetaCubeX/mihomo/releases/download/v1.19.33/mihomo-linux-amd64-compatible-v1.19.33.gz"},
+        {"name": "mihomo-linux-arm64-v1.19.33.gz", "size": 20824326, "digest": "sha256:ba408b317080ee265c46cb923a50018c1b82cbd708551cdd46a1e3e307396187", "browser_download_url": "https://github.com/MetaCubeX/mihomo/releases/download/v1.19.33/mihomo-linux-arm64-v1.19.33.gz"},
+        {"name": "mihomo-windows-amd64-compatible-v1.19.33.zip", "size": 22543546, "digest": "sha256:7aaf636a4f2172dcd8ec34ac4f52797b059195e5afd6409508c963e545f8864d", "browser_download_url": "https://github.com/MetaCubeX/mihomo/releases/download/v1.19.33/mihomo-windows-amd64-compatible-v1.19.33.zip"},
+        {"name": "mihomo-windows-arm64-v1.19.33.zip", "size": 20212418, "digest": "sha256:a2a26869a14634c49f3fbcecc593b498ed8591fbdd7616b24475b3d60b148da3", "browser_download_url": "https://github.com/MetaCubeX/mihomo/releases/download/v1.19.33/mihomo-windows-arm64-v1.19.33.zip"}
+      ]
+    },
+    "geo": {
+      "tag_name": "latest",
+      "published_at": "2026-11-04T02:32:16Z",
+      "assets": [
+        {"id": 707946858, "name": "country.mmdb", "size": 7650367, "digest": "sha256:f604d54eb3d5a6fdab9747c0c62f0b489134b6d94df9e9eb20f1c5e2a537dbfa", "browser_download_url": "https://api.github.com/repos/MetaCubeX/meta-rules-dat/releases/assets/707946858"},
+        {"id": 707946903, "name": "geoip.dat", "size": 16546071, "digest": "sha256:06c1d50d0013af57ffe78c5af93f0dc6aa998890f3ee231393816f9117810c4a", "browser_download_url": "https://api.github.com/repos/MetaCubeX/meta-rules-dat/releases/assets/707946903"},
+        {"id": 707946833, "name": "GeoLite2-ASN.mmdb", "size": 9000080, "digest": "sha256:3169b9ea7dad762f6837b95408dadc1173f47be33be2d83b6c90e67a57a7eb2e", "browser_download_url": "https://api.github.com/repos/MetaCubeX/meta-rules-dat/releases/assets/707946833"},
+        {"id": 707946980, "name": "geosite.dat", "size": 4355984, "digest": "sha256:da89d85fa3b6fc28f3878432f28e78c1e5bb9f603449fa2f0ec2deaddbb0b733", "browser_download_url": "https://api.github.com/repos/MetaCubeX/meta-rules-dat/releases/assets/707946980"}
+      ]
+    },
+    "nsis": {
+      "version": "3.13",
+      "url": "https://sourceforge.net/projects/nsis/files/NSIS%203/3.13/nsis-3.13-setup.exe/download",
+      "sha256": "db9a1038bbc0e53fef24f423fd609979bd578e942f1be1198db186d1c42652a3",
+      "verification_source": "https://github.com/microsoft/winget-pkgs/blob/master/manifests/n/NSIS/NSIS/3.13/NSIS.NSIS.installer.yaml"
+    },
+    "gradle": {
+      "version": "9.8.2",
+      "url": "https://services.gradle.org/distributions/gradle-9.8.2-bin.zip",
+      "checksum_url": "https://services.gradle.org/distributions/gradle-9.8.2-bin.zip.sha256"
+    },
+    "tailscale": {
+      "version": "1.104.5"
+    },
+    "linux": {
+      "version": "20.04",
+      "image": "ubuntu@sha256:8feb4d8ca5354def3d8fce243717141ce31e2c428701f6682bd2fafe15388214",
+      "architectures": {
+        "x64": {
+          "python": {
+            "url": "https://github.com/astral-sh/python-build-standalone/releases/download/20261026/cpython-3.11.18%2B20261026-x86_64-unknown-linux-gnu-install_only.tar.gz",
+            "sha256": "a87ee63646c8f8438b7af3954b2135ed2af91d033c631f12a8f20af903046d06"
+          },
+          "cloud": {
+            "url": "https://cloud-images.ubuntu.com/focal/20250624/focal-server-cloudimg-amd64.img",
+            "sha256": "18f2977d77dfea1b74aee14533bd21c34f789139e949c57023b7364894b7e5e9"
+          }
+        },
+        "arm64": {
+          "python": {
+            "url": "https://github.com/astral-sh/python-build-standalone/releases/download/20261026/cpython-3.11.18%2B20261026-aarch64-unknown-linux-gnu-install_only.tar.gz",
+            "sha256": "a344c887b04a309f292cac1ef7c7a85e39e11932ec301d635258c569d830861b"
+          },
+          "cloud": {
+            "url": "https://cloud-images.ubuntu.com/focal/20250624/focal-server-cloudimg-arm64.img",
+            "sha256": "d4603cd783e2578f838c63f7c3a8dae6b554bd6358870f2c8eb182aa51ade465"
+          }
+        }
+      }
+    }
+  }
+}

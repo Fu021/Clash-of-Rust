@@ -13,7 +13,6 @@ from build_support import run, sha256
 OPTIONS = ['apt-get', '-o', 'Acquire::http::Timeout=30', '-o',
            'Acquire::https::Timeout=30', '-o', 'Acquire::Retries=2', '-o',
            'Acquire::Languages=none', '-o', 'Dpkg::Use-Pty=0']
-MAX_CACHE_BYTES = 512 * 1024**2
 
 
 def privileged(command, timeout, **kwargs):
@@ -53,18 +52,6 @@ def matches(path, record):
                 and sha256(path) == record['sha256'])
     except OSError:
         return False
-
-
-def trim(directory):
-    size = 0
-    files = [path for path in directory.glob('*.deb')
-             if stat.S_ISREG(path.lstat().st_mode)]
-    for path in sorted(files, key=lambda value: value.stat().st_mtime, reverse=True):
-        length = path.stat().st_size
-        if size + length > MAX_CACHE_BYTES:
-            path.unlink()
-        else:
-            size += length
 
 
 def install(packages, timeout=900, no_recommends=False):
@@ -127,7 +114,6 @@ def install(packages, timeout=900, no_recommends=False):
                     temporary = cache/(name+'.partial')
                     shutil.copyfile(source, temporary)
                     temporary.replace(cache/name)
-            trim(cache)
         except OSError as error:
             print('::warning::APT download cache export unavailable: '
                   + type(error).__name__, flush=True)

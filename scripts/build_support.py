@@ -196,22 +196,40 @@ def download(url, destination, proxy='', digest=None):
     destination = Path(destination)
     destination.parent.mkdir(parents=True, exist_ok=True)
     if digest and destination.is_file() and sha256(destination) == digest:
+        record_download(url, destination, digest)
         return
     partial = destination.with_name(destination.name+'.partial')
     for attempt in range(3):
         try:
-            request = urllib.request.Request(url, headers={'User-Agent': 'Clash-of-Rust-build'})
+            headers = {'User-Agent': 'Clash-of-Rust-build'}
+            if re.fullmatch(r'https://api\.github\.com/repos/[^/]+/[^/]+/releases/assets/\d+', url):
+                headers['Accept'] = 'application/octet-stream'
+                if token := os.environ.get('GH_TOKEN'):
+                    headers['Authorization'] = 'Bearer ' + token
+            request = urllib.request.Request(url, headers=headers)
             with opener(proxy).open(request, timeout=90) as response, partial.open('wb') as stream:
                 shutil.copyfileobj(response, stream, length=1024*1024)
             if digest and sha256(partial) != digest:
                 raise ValueError('SHA256 mismatch: '+destination.name)
             partial.replace(destination)
+            if digest:
+                record_download(url, destination, digest)
             return
         except Exception:
             partial.unlink(missing_ok=True)
             if attempt == 2:
                 raise
             time.sleep(attempt+1)
+
+
+def record_download(url, destination, checksum):
+    if os.environ.get('GITHUB_ACTIONS') != 'true' or not os.environ.get('RUNNER_TEMP'):
+        return
+    directory = Path(os.environ['RUNNER_TEMP']) / 'cor-upstream-downloads'
+    directory.mkdir(parents=True, exist_ok=True)
+    path = str(Path(destination).absolute())
+    write_json(directory / (hashlib.sha256(path.encode()).hexdigest() + '.json'),
+               {'path': path, 'url': url, 'sha256': checksum, 'size': Path(destination).stat().st_size})
 
 
 def download_asset(asset, destination, proxy=''):
@@ -289,14 +307,14 @@ def stage_resources(source, stage, system):
 
 
 def nsis(proxy=''):
-    from build_inputs import component, nsis_release
+    from build_inputs import approved, component
     destination = ROOT/'tools/nsis'
     receipt = destination/'tool.json'
     previous = json.loads(receipt.read_text()) if receipt.is_file() else {}
     compiler = destination/'current/makensis.exe'
     valid = compiler.is_file() and previous.get('compiler_sha256') == sha256(compiler)
     try:
-        selected = component('nsis') or nsis_release()
+        selected = component('nsis') or approved()['upstream']['nsis']
         if valid and previous.get('installer_sha256') == selected['sha256']:
             return compiler
         installer = ROOT/'tools/nsis-installer.exe'

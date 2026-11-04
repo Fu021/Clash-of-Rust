@@ -124,7 +124,7 @@ class BuildTests(unittest.TestCase):
         ])
 
     def test_linux_download_cache_identity_tracks_arch_and_upstream_content(self):
-        value = {'architectures': {
+        value = {'image': 'ubuntu@sha256:' + 'c'*64, 'architectures': {
             arch: {'python': {'sha256': 'a'*64}, 'cloud': {'sha256': 'b'*64}}
             for arch in ('x64', 'arm64')}}
         keys = linux_ci.cache_keys(value, 'x64')
@@ -1125,69 +1125,143 @@ assert.equal(calls.length,2);
                                      'debug/build/tool/build-script-build', 'debug/deps/dep.rlib',
                                      'release/build/tool/build-script-build.exe', 'release/deps/dep.rlib'])
 
-    def test_source_dependency_network_failure_restores_previous_snapshot_but_bad_constraints_fail(self):
+    def test_resolve_uses_repository_dependencies_and_approved_tools_without_updating(self):
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
-            lock = root/'Cargo.lock'; lock.write_bytes(b'cached')
-            for message in ('503 Service Unavailable', '429 Too Many Requests',
-                            'reading https://proxy.example/module: 429 Too Many Requests',
-                            'go: Get "https://proxy.example": dial tcp: lookup proxy.example: no such host',
-                            'dial tcp 192.0.2.1:443: no route to host'):
-                def failure(*args, **kwargs):
-                    lock.write_bytes(b'incomplete replacement')
-                    return subprocess.CompletedProcess(args[0], 1, message)
-                with self.subTest(message=message), patch.object(build_inputs, 'ROOT', root), \
-                     patch.object(build_inputs.subprocess, 'run', side_effect=failure):
-                    warnings = []
-                    build_inputs.refresh_command(['cargo','update'], ('Cargo.lock',), warnings)
-                    self.assertTrue(warnings)
-                    self.assertEqual(lock.read_bytes(), b'cached')
-            with patch.object(build_inputs, 'ROOT', root), patch.object(build_inputs.subprocess, 'run',
-                    return_value=subprocess.CompletedProcess([],1,'failed to select a version: incompatible constraints')):
-                with self.assertRaisesRegex(RuntimeError, 'not a network'):
-                    build_inputs.refresh_command(['cargo','update'], ('Cargo.lock',), [])
-            with patch.object(build_inputs, 'ROOT', root), patch.object(build_inputs.subprocess, 'run',
-                    side_effect=subprocess.TimeoutExpired(['cargo','update'],180)):
-                warnings = []
-                build_inputs.refresh_command(['cargo','update'], ('Cargo.lock',), warnings)
-                self.assertTrue(warnings)
-                self.assertEqual(lock.read_bytes(), b'cached')
+            files = {name: b'approved source' for name in build_inputs.FILES}
+            files['Cargo.lock'] = b'[[package]]\nname="example"\nversion="1.0.0"\n'
+            for name, content in files.items():
+                path = root / name
+                path.parent.mkdir(parents=True, exist_ok=True)
+                path.write_bytes(content)
+            snapshot = root / 'snapshot'
+            snapshot.mkdir()
+            (snapshot / 'inputs.json').write_text('{"upstream":{"gradle":{"version":"99.0.0"}}}')
+            with patch.object(build_inputs, 'ROOT', root), \
+                    patch.object(build_inputs, 'original', side_effect=files.__getitem__), \
+                    patch.object(build_inputs, 'constraints', return_value={}), \
+                    patch.object(build_inputs, 'current_commit', return_value='current'), \
+                    patch.object(build_inputs, 'approved', return_value={'upstream': {'gradle': {'version': '9.8.2'}}}), \
+                    patch.object(build_inputs, 'read_json', side_effect=AssertionError('unexpected network update')), \
+                    patch.object(build_inputs.subprocess, 'run', side_effect=AssertionError('unexpected resolver')), \
+                    patch.object(build_inputs, 'report'):
+                build_inputs.resolve(snapshot)
+                value = json.loads((snapshot / 'inputs.json').read_text())
+                self.assertEqual(value['upstream']['gradle']['version'], '9.8.2')
+                self.assertEqual(value['files'], {name: hashlib.sha256(content).hexdigest() for name, content in files.items()})
+                self.assertTrue(all((root / name).read_bytes() == content for name, content in files.items()))
+                (root / 'Cargo.lock').write_text('unapproved update')
+                with self.assertRaisesRegex(ValueError, 'approved repository'):
+                    build_inputs.resolve(snapshot)
 
-    def test_gradle_refresh_stays_in_the_supported_agp_line(self):
-        versions = [{'version': version, 'downloadUrl': version, 'checksumUrl': version + '.sha256'}
-                    for version in ('8.14.6', '9.5.0', '9.6.0', '9.8.2', '9.9.0-rc-1', '10.0.0')]
-        versions.extend([
-            {'version': '9.9.0', 'broken': True},
-            {'version': '9.10.0', 'snapshot': True},
-        ])
-        with patch.object(build_inputs, 'read_json', return_value=versions):
-            self.assertEqual(build_inputs.gradle_release()['version'], '9.8.2')
-        with patch.object(build_inputs, 'read_json', return_value=versions[:2]):
-            with self.assertRaises(ValueError):
-                build_inputs.gradle_release()
+    def test_packaging_reuses_ci_tool_metadata_without_querying_new_versions(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            directory = Path(temporary)
+            path = directory / 'inputs.json'
+            path.write_text(json.dumps({'commit': 'current', 'upstream': {'nsis': {'sha256': 'a'*64}},
+                                        'warnings': []}))
+            before = path.read_bytes()
+            with patch.object(build_inputs, 'current_commit', return_value='current'), \
+                    patch.object(build_inputs, 'read_json', side_effect=AssertionError('unexpected tool upgrade')), \
+                    patch.object(build_inputs, 'report'):
+                build_inputs.packaging(directory)
+            self.assertEqual(path.read_bytes(), before)
 
-    def test_go_refresh_checks_exact_modules_without_downgrades_and_retains_unreachable_versions(self):
-        modules=[{'Path':'go4.org/netipx','Version':'v0.0.0-20260823151212-3075585bcbeb'},
-                 {'Path':'example.org/Module','Version':'v1.2.0'},
-                 {'Path':'example.org/offline','Version':'v2.0.0'}]
+    def test_go_audit_checks_exact_modules_and_does_not_execute_updates(self):
+        import dependency_audit
+
         queries=[]
-        class Fetch:
-            def open(self,url,**kwargs):
-                queries.append(url)
-                if '/offline/' in url: raise urllib.error.URLError('offline')
-                value='v1.3.0' if '!module' in url else 'v0.0.0-20260112195520-a5071408f32f'
-                return io.BytesIO(json.dumps({'Version':value}).encode())
-        with patch.object(build_inputs.subprocess,'check_output',return_value=json.dumps({'Require':modules})), \
-                patch.object(build_inputs,'opener',return_value=Fetch()),patch.object(build_inputs,'refresh_command') as update:
-            warnings=build_inputs.refresh_go()
-        commands=[call.args[0] for call in update.call_args_list]
-        self.assertTrue(any(command[-1]=='example.org/Module@v1.3.0' for command in commands))
-        self.assertFalse(any('-u' in command or './...' in command for command in commands))
-        self.assertIn('https://proxy.golang.org/go4.org/netipx/@latest',queries)
+        def fetch(url, raw=False):
+            queries.append(url)
+            if '/offline/' in url:
+                raise urllib.error.URLError('offline')
+            if raw:
+                return b'module example.org/Module\n'
+            return {'Version': 'v1.3.0' if '!module' in url else 'v0.0.0-20260112195520-a5071408f32f'}
+        entries = [('go', 'go4.org/netipx', 'v0.0.0-20260823151212-3075585bcbeb', dependency_audit.go_candidate),
+                   ('go', 'example.org/Module', 'v1.2.0', dependency_audit.go_candidate),
+                   ('go', 'example.org/offline', 'v2.0.0', dependency_audit.go_candidate)]
+        with tempfile.TemporaryDirectory() as temporary, \
+                patch.object(dependency_audit, 'inventory', return_value=entries), \
+                patch.object(dependency_audit, 'metadata', side_effect=fetch), \
+                patch.object(build_inputs.subprocess, 'run', side_effect=AssertionError('unexpected update')):
+            dependency_audit.audit(Path(temporary))
+            records = json.loads((Path(temporary) / 'dependency-audit.json').read_text())['results']
+        self.assertEqual([entry['status'] for entry in records], ['current', 'review', 'unavailable'])
+        self.assertIn('https://proxy.golang.org/go4.org/netipx/@latest', queries)
         self.assertFalse(any(url.endswith('/go4.org/@latest') for url in queries))
-        self.assertTrue(any('offline' in warning for warning in warnings))
         self.assertGreater(build_inputs.go_version('v1.0.0'),build_inputs.go_version('v1.0.0-rc.1'))
         self.assertGreater(build_inputs.go_version('v1.0.0-rc.10'),build_inputs.go_version('v1.0.0-rc.2'))
+
+    def test_runtime_snapshot_preserves_internal_links_and_rejects_parent_escapes(self):
+        import runtime_cache
+
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            tool = root / 'tool'
+            tool.mkdir()
+            (tool / 'compiler').write_bytes(b'compiler')
+            try:
+                (tool / 'alias').symlink_to('compiler')
+            except OSError:
+                self.skipTest('Symbolic links are unavailable')
+            cache = root / 'cache'
+            runtime_cache.capture('rust', cache, [tool])
+            tool.rename(root / 'original')
+            runtime_cache.hydrate('rust', cache, [tool])
+            self.assertTrue((tool / 'alias').is_symlink())
+            self.assertEqual((tool / 'alias').read_bytes(), b'compiler')
+            (tool / 'escape').symlink_to('../outside')
+            with self.assertRaisesRegex(ValueError, 'escapes'):
+                runtime_cache.capture('rust', cache, [tool])
+
+    def test_runtime_restore_rejects_an_inner_link_outside_payload_before_publish(self):
+        import runtime_cache
+
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            cache = root / 'cache'
+            cache.mkdir()
+            destination = root / 'tool'
+            archive = cache / '0.tar'
+            with tarfile.open(archive, 'w') as output:
+                link = tarfile.TarInfo('payload/escape')
+                link.type = tarfile.SYMTYPE
+                link.linkname = '../outside'
+                output.addfile(link)
+            (cache / 'manifest.json').write_text(json.dumps({'schema': 1, 'kind': 'rust', 'roots': [
+                {'index': 0, 'root': str(destination), 'size': archive.stat().st_size,
+                 'sha256': build.sha256(archive)}]}))
+            with self.assertRaisesRegex(ValueError, 'escapes'):
+                runtime_cache.hydrate('rust', cache, [destination])
+            self.assertFalse(destination.exists())
+
+    def test_upstream_import_sends_verified_urls_and_logical_destinations_only(self):
+        with tempfile.TemporaryDirectory() as temporary, \
+                patch.dict(os.environ, {'RUNNER_TEMP': temporary, 'GITHUB_ACTIONS': 'true'}):
+            source = Path(temporary) / 'python.tar.gz'
+            source.write_bytes(b'verified upstream')
+            build.record_download('https://github.com/example/tool/releases/download/v1/tool.tar.gz',
+                                  source, build.sha256(source))
+            config = {'kind': 'archives', 'group': 'tools/linux-python-x64', 'key': 'approved',
+                      'server_capabilities': ['upstream-fetch-v1']}
+            sequence = int(os.environ.get('GITHUB_RUN_ID', '0')) * 1000 + min(int(os.environ.get('GITHUB_RUN_ATTEMPT', '0')), 999)
+            reply = io.BytesIO(json.dumps({'schema': 1, 'group': config['group'], 'key': config['key'],
+                                           'sequence': sequence, 'status': 'queued'}).encode())
+            reply.status = 202
+            with patch.object(local_cache, 'response', return_value=nullcontext(reply)) as request, \
+                    patch.object(local_cache, 'cache_report'):
+                self.assertTrue(local_cache.upstream_import(config, [source]))
+            payload = json.loads(request.call_args.kwargs['file'])
+            self.assertEqual(request.call_args.args[1], '/v1/import')
+            self.assertEqual(payload['files'][0]['path'], '0')
+            self.assertEqual(payload['files'][0]['sha256'], build.sha256(source))
+            self.assertNotIn(temporary, json.dumps(payload))
+            self.assertTrue(config['import_queued'])
+            config['server_capabilities'] = []
+            with patch.object(local_cache, 'response') as request:
+                self.assertFalse(local_cache.upstream_import(config, [source]))
+                request.assert_not_called()
 
     def test_release_metadata_network_fallback_respects_explicit_version(self):
         with tempfile.TemporaryDirectory() as temporary:
@@ -1195,6 +1269,7 @@ assert.equal(calls.length,2);
             cached = {'tag_name':'v1.2.3','assets':[]}
             path.write_text(json.dumps({'release':cached}))
             with patch.object(build_inputs, 'component', return_value=None), \
+                 patch.object(build_inputs, 'approved', return_value={'upstream': {}}), \
                  patch.object(build_inputs, 'read_json', side_effect=urllib.error.URLError('network unavailable')):
                 self.assertEqual(build_inputs.resource_release('mihomo', path), cached)
                 with self.assertRaisesRegex(RuntimeError, 'no verified'):
@@ -1207,6 +1282,7 @@ assert.equal(calls.length,2);
                      'archive_sha256':'a'*64,'exe_sha256':'b'*64}
             path.write_text(json.dumps(value))
             with patch.object(build_inputs, 'component', return_value=None), \
+                 patch.object(build_inputs, 'approved', return_value={'upstream': {}}), \
                  patch.object(build_inputs, 'read_json', side_effect=urllib.error.URLError('offline')):
                 release = build_inputs.resource_release('mihomo', path)
                 self.assertEqual(release['tag_name'], 'v1.2.3')
@@ -1251,7 +1327,7 @@ assert.equal(calls.length,2);
             compiler.write_bytes(b'verified compiler')
             (root/'tools/nsis/tool.json').write_text(json.dumps({'compiler_sha256':build.sha256(compiler)}))
             with patch.object(build, 'ROOT', root), patch.object(build_inputs, 'component', return_value=None), \
-                 patch.object(build_inputs, 'nsis_release', side_effect=urllib.error.URLError('unavailable')):
+                 patch.object(build_inputs, 'approved', side_effect=urllib.error.URLError('unavailable')):
                 self.assertEqual(build.nsis(), compiler)
                 compiler.write_bytes(b'corrupt')
                 with self.assertRaises(urllib.error.URLError): build.nsis()
@@ -2410,18 +2486,6 @@ class ReleaseTests(unittest.TestCase):
 
 
 class AptCacheTests(unittest.TestCase):
-    def test_cache_trim_respects_bound_without_discarding_smaller_archives(self):
-        with tempfile.TemporaryDirectory() as temporary:
-            root = Path(temporary)
-            for name, size, timestamp in [('large.deb', 8, 3), ('new.deb', 3, 2),
-                                          ('old.deb', 3, 1)]:
-                path = root/name
-                path.write_bytes(b'x'*size)
-                os.utime(path, (timestamp, timestamp))
-            with patch.object(linux_apt, 'MAX_CACHE_BYTES', 5):
-                linux_apt.trim(root)
-            self.assertEqual([path.name for path in root.iterdir()], ['new.deb'])
-
     def test_records_require_strong_hashes_and_safe_names(self):
         checksum = 'a'*64
         valid = f"'https://example.invalid/pkg.deb' pkg_1_amd64.deb 3 SHA256:{checksum}\n"
