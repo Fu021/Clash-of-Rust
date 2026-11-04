@@ -323,6 +323,8 @@ def rust_keys(source, compiler, environment):
 
 
 def cache_paths(config):
+    if config.get('runtime') == 'java':
+        return [Path(config['paths']).absolute() / 'jdk.tar.gz']
     if config['kind'] == 'rust':
         cargo = Path(os.environ.get('CARGO_HOME', str(Path.home()/'.cargo')))
         return [cargo/'registry/index', cargo/'registry/cache', cargo/'git/db', Path(config['source'])/'target']

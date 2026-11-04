@@ -1280,6 +1280,43 @@ runpy.run_path(str(script), run_name='__main__')
                 runtime_cache.hydrate('rust', cache, [destination])
             self.assertFalse(destination.exists())
 
+    def test_java_cache_restores_the_official_archive_to_a_complete_tool_directory(self):
+        import runtime_cache
+
+        with tempfile.TemporaryDirectory() as temporary:
+            directory = Path(temporary)
+            archive = directory / 'jdk.tar.gz'
+            with tarfile.open(archive, 'w:gz') as output:
+                executable = tarfile.TarInfo('jdk-17/bin/java')
+                executable.size = len(b'approved runtime')
+                executable.mode = 0o755
+                output.addfile(executable, io.BytesIO(b'approved runtime'))
+            destination = directory / 'toolcache/version'
+            record = {'url': 'https://github.com/adoptium/example.tar.gz', 'sha256': build.sha256(archive)}
+            with patch.object(runtime_cache, 'java_archive', return_value=record), \
+                    patch.object(runtime_cache, 'host_arch', return_value='x64'):
+                runtime_cache.hydrate('java', directory, [destination])
+            self.assertEqual((destination / 'x64/bin/java').read_bytes(), b'approved runtime')
+            self.assertTrue((destination / 'x64.complete').is_file())
+            config = {'kind': 'archives', 'runtime': 'java', 'paths': str(directory)}
+            self.assertEqual(local_cache.cache_paths(config), [archive])
+            with patch.object(runtime_cache, 'java_archive', return_value=record), \
+                    patch.object(runtime_cache, 'download') as download:
+                runtime_cache.capture('java', directory, [destination])
+            download.assert_called_once_with(record['url'], archive, digest=record['sha256'])
+
+    def test_java_cache_rejects_invalid_archive_checksums_before_publishing(self):
+        import runtime_cache
+
+        with tempfile.TemporaryDirectory() as temporary:
+            directory = Path(temporary)
+            (directory / 'jdk.tar.gz').write_bytes(b'invalid archive')
+            destination = directory / 'toolcache/version'
+            with patch.object(runtime_cache, 'java_archive', return_value={'sha256': '0' * 64}):
+                with self.assertRaisesRegex(ValueError, 'checksum'):
+                    runtime_cache.hydrate('java', directory, [destination])
+            self.assertFalse(destination.exists())
+
     def test_cache_upload_preserves_early_http_rejections(self):
         config = {'url': 'http://100.64.0.1:9080', 'token': ''}
         for status in (409, 413, 507):

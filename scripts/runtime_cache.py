@@ -8,10 +8,17 @@ import platform
 import tarfile
 import tempfile
 
-from build_inputs import tool_versions
-from build_support import host_arch, host_system, sha256, write_json
+from build_inputs import approved, tool_versions
+from build_support import download, host_arch, host_system, sha256, write_json
 
 KINDS = ('bootstrap', 'rust', 'go', 'java', 'android', 'android-package', 'emulator', 'apt')
+
+
+def java_archive():
+    value = approved()['upstream']['java']
+    if value['version'] != tool_versions()['java']:
+        raise ValueError('Java archive differs from the approved tool version')
+    return value['architectures'][host_system() + '-' + host_arch()]
 
 
 def roots(kind):
@@ -53,6 +60,8 @@ def plan(kind):
         identity['image_version'] = os.environ.get('ImageVersion', '')
     if kind == 'rust':
         identity['target'] = os.environ.get('RUNTIME_RUST_TARGET', '')
+    if kind == 'java':
+        identity['archive'] = java_archive()
     checksum = hashlib.sha256(json.dumps(identity, sort_keys=True).encode()).hexdigest()
     prefix = f'runtime-v1-{kind}-{system}-{arch}-{checksum}-'
     key = prefix + (os.environ['GITHUB_RUN_ID'] + '-' + os.environ.get('GITHUB_RUN_ATTEMPT', '1') if kind == 'apt' else 'approved')
@@ -75,6 +84,11 @@ def plan(kind):
 
 def capture(kind, directory, selected):
     if kind == 'apt':
+        return
+    if kind == 'java':
+        record = java_archive()
+        download(record['url'], directory / 'jdk.tar.gz', digest=record['sha256'])
+        print('Captured approved official Java archive', flush=True)
         return
     directory.mkdir(parents=True, exist_ok=True)
     receipt = directory / 'manifest.json'
@@ -131,6 +145,35 @@ def capture(kind, directory, selected):
 
 
 def hydrate(kind, directory, selected):
+    if kind == 'java':
+        archive = directory / 'jdk.tar.gz'
+        if not archive.is_file():
+            return
+        record = java_archive()
+        if archive.is_symlink() or sha256(archive) != record['sha256']:
+            raise ValueError('Java archive checksum mismatch')
+        root = selected[0] / host_arch()
+        if root.exists() or root.is_symlink():
+            return
+        root.parent.mkdir(parents=True, exist_ok=True)
+        with tempfile.TemporaryDirectory(prefix='.cor-java-', dir=root.parent) as temporary:
+            stage = Path(temporary)
+            with tarfile.open(archive, 'r:*') as stream:
+                members = stream.getmembers()
+                names = {Path(member.name).parts[0] for member in members if Path(member.name).parts}
+                if (len(names) != 1 or len(members) > 500_000
+                        or sum(member.size for member in members) > 3 * 1024**3
+                        or any(Path(member.name).is_absolute() or '..' in Path(member.name).parts
+                               or '\\' in member.name for member in members)):
+                    raise ValueError('Invalid official Java archive layout')
+                stream.extractall(stage, members=members, filter='data')
+            payload = stage / names.pop()
+            if not payload.is_dir() or payload.is_symlink() or not (payload / 'bin/java').is_file():
+                raise ValueError('Java archive lacks its approved runtime')
+            payload.replace(root)
+        (root.parent / (host_arch() + '.complete')).touch()
+        print('Restored approved official Java runtime', flush=True)
+        return
     if kind == 'apt' or not (directory / 'manifest.json').is_file():
         return
     receipt = json.loads((directory / 'manifest.json').read_text())

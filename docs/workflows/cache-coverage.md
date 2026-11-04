@@ -24,7 +24,9 @@
 | 宿主 QEMU、兼容验证、Memory 的 APT 下载 | Linux 打包与 Memory；Linux CI 的补充依赖 | `dependencies/host-apt-linux-<arch>` |
 | guest 的 APT 下载 | Ubuntu 20.04 安装验证 | `dependencies/linux-apt-<arch>` |
 
-`runtime-cache` 只选白名单工具目录，排除 home、密钥、签名材料、SDK 用户目录、AVD、Rustup 配置与凭据。每个目录单独保存为含内部链接的 tar，外层继续使用原有普通归档协议，避免丢失 JDK/NDK/工具链链接。恢复先校验清单与摘要，再用安全过滤器解到暂存目录；链接不得逃出 payload，完成后才发布。已有工具目录交官方 setup action 校验和补齐；快照不能覆盖正在使用的解释器。工具缺失、外部链接或权限问题在日志中记录，不能据此宣称镜像完整。
+`runtime-cache` 只选白名单工具目录，排除 home、密钥、签名材料、SDK 用户目录、AVD、Rustup 配置与凭据。每个目录单独保存为含内部链接的 tar，外层继续使用原有普通归档协议，避免丢失 NDK/工具链链接。恢复先校验清单与摘要，再用安全过滤器解到暂存目录；链接不得逃出 payload，完成后才发布。已有工具目录交官方 setup action 校验和补齐；快照不能覆盖正在使用的解释器。工具缺失、外部链接或权限问题在日志中记录，不能据此宣称镜像完整。
+
+Temurin JDK 单独保存同一已确认版本的官方原始归档及固定 SHA256，避免跟随 runner 预装目录指向系统文件的链接。恢复验证后在工具缓存中暂存解包并发布标准架构目录及完成标记，再由既有 setup-java 校验使用；也可通过下述上游代拉协议补镜像。当前只有实际使用的 Linux x64 JDK 身份，新增宿主须先补对应官方归档。
 
 Python 按各平台上一轮成功 CI 的实际二进制分别固定，不能将 Linux 的安全维护补丁号直接用于 Windows/macOS。版本引导只使用旧 runner Python 可用的标准库；加载 3.11+ 工具后才导入 `tomllib` 执行实际构建逻辑。升级审计同时核对目标 OS/架构的下载清单，避免提出无对应二进制的候选。
 
@@ -42,4 +44,4 @@ Android 打包仅恢复命令行工具、platform-tools 和 build-tools，不传
 
 Android SDK 的包标识和 runner 镜像版本参与身份；包标识内的上游 revision、APT 签名索引及托管 runner 预装内容并非仓库源码锁文件。新增、升级或替换声明的工具/包须用户批准；严格固定这些环境的每一项 revision 需要进一步锁定官方归档或预置镜像，不能把当前结果当作逐字节离线复现。
 
-公开、带固定 SHA256 的原始归档可以使用[服务端代拉协议](cache-server.md#可选的上游代拉下载)。当前先接入 Linux Python 与云镜像；目录快照、构建对象、Gradle 转换结果和已构建 Docker 镜像没有适用的公开 URL，继续从 runner 上传。即使服务端接口就绪，也不能将排队应答当作已经保存并可恢复。
+公开、带固定 SHA256 的原始归档可以使用[服务端代拉协议](cache-server.md#可选的上游代拉下载)。当前先接入 JDK、Linux Python 与云镜像；目录快照、构建对象、Gradle 转换结果和已构建 Docker 镜像没有适用的公开 URL，继续从 runner 上传。即使服务端接口就绪，也不能将排队应答当作已经保存并可恢复。
