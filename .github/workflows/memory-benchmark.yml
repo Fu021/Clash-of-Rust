@@ -44,7 +44,7 @@ jobs:
       PYTHONDONTWRITEBYTECODE: '1'
       COR_USE_BOOTSTRAP_TAILNET: 'true'
     steps:
-      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with:
           fetch-depth: 0
           persist-credentials: false
@@ -66,12 +66,12 @@ jobs:
                   break
           else:
               raise ValueError('Selected branch, tag or commit was not found in this repository')
-      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with:
           ref: ${{ steps.source.outputs.commit }}
           path: source
           persist-credentials: false
-      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1
+      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0
         with:
           python-version: ${{ env.COR_PYTHON }}
       - name: Remember original macOS DNS before cache login
@@ -155,7 +155,7 @@ jobs:
           token: ${{ secrets.LOCAL_CACHE_TOKEN }}
       - name: Restore GitHub benchmark resources
         id: resources
-        uses: actions/cache@caa296126883cff596d87d8935842f9db880ef25
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9
         continue-on-error: true
         timeout-minutes: 5
         with:
@@ -204,7 +204,7 @@ jobs:
           if os.environ['BENCH_ROWS'].strip():
               command += ['--rows', os.environ['BENCH_ROWS']]
           subprocess.run(command, check=True)
-      - uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
         if: always()
         with:
           name: memory-results-${{ github.run_id }}
@@ -224,7 +224,7 @@ jobs:
       group: actions-cache-budget
       cancel-in-progress: false
     steps:
-      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with:
           persist-credentials: false
       - name: Trim obsolete dependencies and enforce 9 GiB cache budget

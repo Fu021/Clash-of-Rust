@@ -20,6 +20,7 @@ if (post) {
     paths: input('paths'), kind: input('kind', 'archives'),
     source: path.resolve(input('source', '.')), save: input('save', 'true') === 'true',
     restore_seconds: Number(input('restore-timeout', '300')),
+    save_seconds: Number(input('save-timeout', '900')),
     github_hit: input('github-hit'),
     github_failed: input('github-failed', 'false') === 'true',
     immutable: input('immutable', 'false') === 'true',
@@ -27,6 +28,9 @@ if (post) {
   };
   if (!Number.isInteger(config.restore_seconds) || config.restore_seconds < 30 || config.restore_seconds > 900) {
     throw new Error('Invalid private cache restore budget');
+  }
+  if (!Number.isInteger(config.save_seconds) || config.save_seconds < 30 || config.save_seconds > 1800) {
+    throw new Error('Invalid private cache save budget');
   }
   fs.writeFileSync(state, JSON.stringify(config), { mode: 0o600 });
   fs.appendFileSync(process.env.GITHUB_STATE, `cache_state=${state}\n`);
@@ -60,7 +64,7 @@ const result = spawnSync('python', [script, post ? 'save' : 'restore', '--state'
   // Python keeps fully verified shards after its soft restore deadline. The
   // watchdog also bounds a blocked extractor; then discard every partial
   // compiler object before allowing normal compilation to continue.
-  stdio: 'inherit', timeout: post ? 5 * 60 * 1000
+  stdio: 'inherit', timeout: post ? config.save_seconds * 1000
     : (JSON.parse(fs.readFileSync(state, 'utf8')).restore_seconds + 90) * 1000,
 });
 if (!post && (result.error || result.status !== 0)) {
@@ -72,7 +76,7 @@ if (!post && (result.error || result.status !== 0)) {
     throw new Error('Cannot safely clean an interrupted private cache restore');
   }
 } else if (post && result.error?.code === 'ETIMEDOUT') {
-  const message = 'Private cache save exceeded 5 minutes; completed shards remain reusable and incomplete uploads are discarded.';
+  const message = `Private cache save exceeded ${config.save_seconds} seconds; completed shards remain reusable and incomplete uploads are discarded.`;
   console.log(`::warning::${message}`);
   if (process.env.GITHUB_STEP_SUMMARY) fs.appendFileSync(process.env.GITHUB_STEP_SUMMARY, `\n${message}\n`);
 } else if (result.status !== 0) {

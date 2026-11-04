@@ -481,6 +481,7 @@ pub async fn run(engine: &mut Engine, profile: &Path) {
                 tokio::time::sleep(Duration::from_millis(100)).await;
             }
             wait_protection_ready(listen_port).await;
+            wait_split_recovery(&new_search, &vpn_queries).await;
             lookup(&format!("reconnected.{tail}"), "100.100.12.34").await;
             lookup(&format!("reconnected.{new_search}"), "100.100.12.34").await;
             lookup_name(&format!("new-short-{suffix}"), "100.100.12.34").await;

@@ -16,8 +16,8 @@
 | Python 与 Tailscale 的安装目录/安装包 | CI、打包、Memory | `tools/runtime-<系统>-<架构>` 的 `bootstrap` key |
 | Rust 工具链与目标标准库 | CI、Memory | 同上，`rust` key 按版本、宿主和交叉目标区分 |
 | Go 工具链、Temurin JDK | CI，Android 打包使用 JDK | 同上，分别为 `go`、`java` key |
-| Android 命令行工具、platform-tools、API 36、build-tools 36、NDK 28.2 | CI、Android 打包 | 同上，`android` key |
-| 模拟器及 API 35 Google APIs x86_64 系统镜像 | CI 与 Android 打包的 x64 | 同上，`emulator` key；AVD 和用户状态不入缓存 |
+| Android 命令行工具 23、platform-tools 37.0.1、API 37.2、build-tools 37、NDK 30 | CI、Android 打包 | 同上，`android` key |
+| 模拟器 37.2.13 及 API 36 Google APIs x86_64 系统镜像 | CI 与 Android 打包的 x64 | 同上，`emulator` key；AVD 和用户状态不入缓存 |
 | NSIS 安装编译器 | Windows 打包 | `tools/nsis` |
 | Ubuntu 20.04 独立 Python、原始云镜像 | Linux CI、打包及旧内核验证 | `tools/linux-python-<arch>`、`tools/linux-cloud-<arch>` |
 | Ubuntu 基础层、构建工具及库组成的已构建镜像 | Linux CI 与打包 | `dependencies/linux-image-<arch>` |
@@ -30,20 +30,20 @@ Temurin JDK 单独保存同一已确认版本的官方原始归档及固定 SHA2
 
 macOS Python 使用官方实际安装的对应次版本 Framework 目录作为白名单根，避免从工具缓存中的别名跨到根目录外；镜像不覆盖运行中的解释器，首次安装和系统 Framework 注册仍由官方 setup-python 负责。
 
-Python 按各平台上一轮成功 CI 的实际二进制分别固定，不能将 Linux 的安全维护补丁号直接用于 Windows/macOS。版本引导只使用旧 runner Python 可用的标准库；加载 3.11+ 工具后才导入 `tomllib` 执行实际构建逻辑。升级审计同时核对目标 OS/架构的下载清单，避免提出无对应二进制的候选。
+Python 3.15.2 已核对各 OS/架构的官方下载清单；固定版本须具有目标平台二进制，不能将仅 Linux 提供的补丁号直接用于 Windows/macOS。版本引导只使用旧 runner Python 可用的标准库；加载已确认解释器后才导入 `tomllib` 执行实际构建逻辑。升级审计检查跨次版本候选，并核对目标 OS/架构的下载清单。
 
-输入任务与 Memory 保持原有 Tailscale `1.94.2`，平台矩阵/打包沿用其已用的 `1.104.5`；目录快照按实际角色选择版本。统一这两个版本也属于工具升级，需先征求用户意见。
+输入任务、Memory、平台矩阵与打包统一使用 Tailscale `1.104.5`；工具快照按实际版本计算身份。
 
 工具快照在 post 阶段先捕获，再保存私网及 GitHub；同一目录未变化时复用已有 tar。容器按固定基础 digest、Python SHA256、Dockerfile、架构和 UID/GID 生成 key，加载时核对归档及镜像 ID；首次构建后导出一次供后续 Linux CI/打包复用。宿主补充 DEB 通过显式挂载进入容器，依然验证当轮签名索引。
 
 服务端提前拒绝上传时，客户端先尝试读取已返回的 HTTP 状态：序号冲突保留较新副本，容量或其他拒绝如实记为未保存；不能把发送中断或绿色 job 当作私网已完整覆盖。连接无法取得应答时保留原网络错误并关闭连接。
 
-Android 打包仅恢复命令行工具、platform-tools 和 build-tools，不传输打包不使用的 NDK/API 36。SDK/NDK 的初始安装和模拟器下载共用 `sdkmanager_install`，只对明确的损坏归档或网络错误最多尝试三次，每次换 SDK 用户缓存；配置、许可和编译错误直接失败。
+Android 打包仅恢复命令行工具、platform-tools 和 build-tools，不传输打包不使用的 NDK/API。版本和系统镜像由工具基线的 `upstream.android` 统一声明并参与快照身份，CI 和打包共用 `prepare_sdk`。SDK/NDK 的初始安装和模拟器下载共用 `sdkmanager_install`，只对明确的损坏归档或网络错误最多尝试三次，每次换 SDK 用户缓存；配置、许可和编译错误直接失败。
 
-输入任务不再运行 Cargo 解析，因而不安装 Rust，也不下载单独的 Cargo registry 快照；实际编译任务仍完整镜像 Rust 下载与对象。此调整只移除重复入口，不删除私网历史类别。首次工具/容器冷缓存会增加捕获与传输成本，耗时收益须按相同环境、冷暖状态及验证范围对照后续运行。
+普通输入任务不运行 Cargo 解析，也不安装 Rust 或下载单独的 Cargo registry 快照；显式依赖刷新运行安装已确认 Rust 后解析更新并导出锁文件。实际编译任务仍完整镜像 Rust 下载与对象。此调整只移除重复入口，不删除私网历史类别。首次工具/容器冷缓存会增加捕获与传输成本，耗时收益须按相同环境、冷暖状态及验证范围对照后续运行。
 
 缓存不能接管 GitHub 托管 runner 镜像、其内置 Node/Git/系统工具，或在 checkout 前由 GitHub 下载的 Actions 运行包。Python/Tailscale 首次启动也必须先具备 runner 可用解释器及登录通道，之后才能镜像；私网不可达时无法用它启动自身。当前方案覆盖可复用的项目工具与下载，不构成完全脱离 GitHub/上游的离线 runner。若要求启动环境也能从私网恢复，需要维护者另行提供预置镜像/自托管 runner 或引导镜像服务，不能靠当前缓存 job 实现。
 
-Android SDK 的包标识和 runner 镜像版本参与身份；包标识内的上游 revision、APT 签名索引及托管 runner 预装内容并非仓库源码锁文件。新增、升级或替换声明的工具/包须用户批准；严格固定这些环境的每一项 revision 需要进一步锁定官方归档或预置镜像，不能把当前结果当作逐字节离线复现。
+Android SDK 的包标识、声明版本和 runner 镜像版本参与身份；包标识内的上游 revision、APT 签名索引及托管 runner 预装内容并非仓库源码锁文件。工具维护遵循[loop 更新约定](../loop-workflow.md#每轮怎么做)；严格固定这些环境的每一项 revision 需要进一步锁定官方归档或预置镜像，不能把当前结果当作逐字节离线复现。
 
 公开、带固定 SHA256 的原始归档可以使用[服务端代拉协议](cache-server.md#可选的上游代拉下载)。当前先接入 JDK、Linux Python 与云镜像；目录快照、构建对象、Gradle 转换结果和已构建 Docker 镜像没有适用的公开 URL，继续从 runner 上传。即使服务端接口就绪，也不能将排队应答当作已经保存并可恢复。

@@ -14,7 +14,7 @@ import urllib.request
 import xml.etree.ElementTree as ET
 
 from build_support import ROOT, opener, write_json
-from build_inputs import approved, go_version
+from build_inputs import android_versions, approved, go_version
 
 
 def metadata(url, raw=False):
@@ -85,15 +85,11 @@ def inventory():
             entries.append(('maven', 'com.android.tools.build:gradle', match[1], maven_candidate))
     for name, version in selected['tools'].items():
         entries.append(('tool', name, version, tool_candidate))
-    for name, version in (('ndk', '28.2.13676358'), ('build-tools', '36.0.0'), ('platforms', '36')):
-        entries.append(('sdk', name, version, android_candidate))
-    for name in ('emulator', 'platform-tools', 'cmdline-tools'):
-        root = Path(os.environ.get('ANDROID_HOME', '/nonexistent')) / name
-        if name == 'cmdline-tools':
-            root /= 'latest'
-        properties = root / 'source.properties'
-        match = re.search(r'(?m)^Pkg.Revision\s*=\s*(\S+)', properties.read_text()) if properties.is_file() else None
-        entries.append(('sdk', name, match[1] if match else 'runner-managed', android_candidate))
+    android = android_versions()
+    for name, key in (('ndk', 'ndk'), ('build-tools', 'build_tools'), ('platforms', 'platform'),
+                      ('emulator', 'emulator'), ('platform-tools', 'platform_tools'),
+                      ('cmdline-tools', 'cmdline_tools')):
+        entries.append(('sdk', name, android[key], android_candidate))
     for name in ('mihomo', 'geo', 'nsis', 'linux'):
         value = selected['upstream'][name]
         current = value.get('published_at') if name == 'geo' else value.get('image', value.get('version', value.get('tag_name')))
@@ -175,11 +171,12 @@ def tool_candidate(name, current):
         system = 'win32' if name.startswith('python_windows') else 'darwin' if name == 'python_macos' else 'linux'
         architectures = {'arm64'} if name.endswith('_arm64') else {'x64'} if system == 'win32' else {'x64', 'arm64'}
         versions = [entry['version'] for entry in metadata(url)
-                    if entry.get('stable') and entry['version'].startswith('.'.join(current.split('.')[:2]) + '.')
+                    if entry.get('stable')
                     and architectures.issubset({item['arch'] for item in entry['files'] if item['platform'] == system})]
         return max(versions, key=lambda version: go_version('v' + version)), '', url
     if name == 'java':
-        url = 'https://api.adoptium.net/v3/assets/latest/17/hotspot?architecture=x64&image_type=jdk&os=linux'
+        release = max(metadata('https://api.adoptium.net/v3/info/available_releases')['available_lts_releases'])
+        url = f'https://api.adoptium.net/v3/assets/latest/{release}/hotspot?architecture=x64&image_type=jdk&os=linux'
         return metadata(url)[0]['version']['semver'], '', url
     if name.startswith('tailscale'):
         url = 'https://pkgs.tailscale.com/stable/?mode=json'

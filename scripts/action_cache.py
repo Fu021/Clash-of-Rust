@@ -484,10 +484,10 @@ def request(config, path, method='GET', file=None, headers=None):
     proxy = urllib.parse.urlsplit(config.get('proxy', ''))
     # Large archives share the small cache host's uplink. Allow temporary
     # backpressure without slowing metadata lookups or upstream version checks.
-    timeout = 120 if urllib.parse.urlsplit(path).path == '/v1/blob' else 30
+    timeout = 600 if urllib.parse.urlsplit(path).path == '/v1/blob' else 30
     remaining = restore_remaining(config)
     if remaining is not None:
-        timeout = min(timeout, remaining, 30)
+        timeout = min(timeout, remaining)
     if proxy.hostname:
         if proxy.scheme != 'http' or proxy.hostname not in ('127.0.0.1', 'localhost') or url.scheme != 'http':
             raise ValueError('Cache proxy must be the local Tailscale userspace proxy')

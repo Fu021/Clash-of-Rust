@@ -2,37 +2,47 @@
   "schema": 1,
   "baseline_ci": 41761794441,
   "actions": {
-    "actions/checkout": "v6",
-    "actions/setup-python": "v6",
-    "actions/setup-go": "v6",
-    "actions/cache": "v5",
-    "actions/upload-artifact": "v6",
+    "actions/checkout": "v7",
+    "actions/setup-python": "v7",
+    "actions/setup-go": "v7",
+    "actions/cache": "v6",
+    "actions/upload-artifact": "v7",
     "actions/download-artifact": "v8",
-    "actions/setup-java": "v5",
+    "actions/setup-java": "v6",
     "dtolnay/rust-toolchain": "stable",
     "Swatinem/rust-cache": "v2",
     "tailscale/github-action": "v4",
-    "gradle/actions": "v5"
+    "gradle/actions": "v6"
   },
   "tools": {
     "rust": "1.99.1",
     "go": "1.27.3",
-    "java": "17.0.21+9",
-    "python": "3.11.18",
-    "python_windows": "3.11.9",
-    "python_macos": "3.11.9",
-    "python_windows_arm64": "3.13.17",
+    "java": "25.0.5+8",
+    "python": "3.15.2",
+    "python_windows": "3.15.2",
+    "python_macos": "3.15.2",
+    "python_windows_arm64": "3.15.2",
     "tailscale": "1.104.5",
-    "tailscale_bootstrap": "1.94.2",
+    "tailscale_bootstrap": "1.104.5",
     "gradle": "9.8.2"
   },
   "upstream": {
+    "android": {
+      "version": "37.2",
+      "platform": "37.2",
+      "build_tools": "37.0.0",
+      "ndk": "30.0.16248370",
+      "cmdline_tools": "23.0",
+      "platform_tools": "37.0.1",
+      "emulator": "37.2.13",
+      "system_image": "system-images;android-36;google_apis;x86_64"
+    },
     "java": {
-      "version": "17.0.21+9",
+      "version": "25.0.5+8",
       "architectures": {
         "linux-x64": {
-          "url": "https://github.com/adoptium/temurin17-binaries/releases/download/jdk-17.0.21%2B9/OpenJDK17U-jdk_x64_linux_hotspot_17.0.21_9.tar.gz",
-          "sha256": "8b9b611d917e3dfd8419d3566b5949226f69b052fed7e109c1368add1dfe8711"
+          "url": "https://github.com/adoptium/temurin25-binaries/releases/download/jdk-25.0.5%2B8/OpenJDK25U-jdk_x64_linux_hotspot_25.0.5_8.tar.gz",
+          "sha256": "68982529869257d0ee6b824ec5aa270ff8b118bb438670da0b97ebdab178d7fb"
         }
       }
     },
@@ -78,8 +88,8 @@
       "architectures": {
         "x64": {
           "python": {
-            "url": "https://github.com/astral-sh/python-build-standalone/releases/download/20261026/cpython-3.11.18%2B20261026-x86_64-unknown-linux-gnu-install_only.tar.gz",
-            "sha256": "a87ee63646c8f8438b7af3954b2135ed2af91d033c631f12a8f20af903046d06"
+            "url": "https://github.com/astral-sh/python-build-standalone/releases/download/20261026/cpython-3.15.2%2B20261026-x86_64-unknown-linux-gnu-install_only.tar.gz",
+            "sha256": "08d4ae9024a7cfbd3b70e559241afa2571cd3208d7bd5f96f88e0080dd4092aa"
           },
           "cloud": {
             "url": "https://cloud-images.ubuntu.com/focal/20250624/focal-server-cloudimg-amd64.img",
@@ -88,8 +98,8 @@
         },
         "arm64": {
           "python": {
-            "url": "https://github.com/astral-sh/python-build-standalone/releases/download/20261026/cpython-3.11.18%2B20261026-aarch64-unknown-linux-gnu-install_only.tar.gz",
-            "sha256": "a344c887b04a309f292cac1ef7c7a85e39e11932ec301d635258c569d830861b"
+            "url": "https://github.com/astral-sh/python-build-standalone/releases/download/20261026/cpython-3.15.2%2B20261026-aarch64-unknown-linux-gnu-install_only.tar.gz",
+            "sha256": "6fc73e8a4c80a65d2a0ed21535c65383f7b9f96bb58a5f40ed035bd7ee318616"
           },
           "cloud": {
             "url": "https://cloud-images.ubuntu.com/focal/20250624/focal-server-cloudimg-arm64.img",

@@ -6,8 +6,12 @@ val selectedAbi = providers.gradleProperty("appAbi").orNull
 
 android {
     namespace = "org.clashofrust.android"
-    compileSdk = 36
-    buildToolsVersion = "36.0.0"
+    compileSdk {
+        version = release(37) {
+            minorApiLevel = 2
+        }
+    }
+    buildToolsVersion = "37.0.0"
     testBuildType = "release"
     defaultConfig {
         applicationId = "org.clashofrust.android"

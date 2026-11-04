@@ -8,7 +8,7 @@ import platform
 import tarfile
 import tempfile
 
-from build_inputs import approved, tool_versions
+from build_inputs import android_versions, approved, tool_versions
 from build_support import download, host_arch, host_system, sha256, write_json
 
 KINDS = ('bootstrap', 'rust', 'go', 'java', 'android', 'android-package', 'emulator', 'apt')
@@ -41,11 +41,14 @@ def roots(kind):
         return [Path(os.environ.get('RUSTUP_HOME', Path.home() / '.rustup')) / 'toolchains' / (versions['rust'] + '-' + triple)]
     if kind in ('android', 'android-package', 'emulator'):
         sdk = Path(os.environ['ANDROID_HOME'])
-        names = ('cmdline-tools', 'platform-tools', 'platforms/android-36', 'build-tools/36.0.0', 'ndk/28.2.13676358')
+        android = android_versions()
+        names = ('cmdline-tools/' + android['cmdline_tools'], 'platform-tools',
+                 'platforms/android-' + android['platform'], 'build-tools/' + android['build_tools'],
+                 'ndk/' + android['ndk'])
         if kind == 'emulator':
-            names = ('emulator', 'system-images/android-35/google_apis/x86_64')
+            names = ('emulator', android['system_image'].replace(';', '/'))
         elif kind == 'android-package':
-            names = ('cmdline-tools', 'platform-tools', 'build-tools/36.0.0')
+            names = ('cmdline-tools/' + android['cmdline_tools'], 'platform-tools', 'build-tools/' + android['build_tools'])
         return [sdk / name for name in names]
     return []
 
@@ -65,6 +68,8 @@ def plan(kind):
         identity['target'] = os.environ.get('RUNTIME_RUST_TARGET', '')
     if kind == 'java':
         identity['archive'] = java_archive()
+    if kind in ('android', 'android-package', 'emulator'):
+        identity['android'] = android_versions()
     checksum = hashlib.sha256(json.dumps(identity, sort_keys=True).encode()).hexdigest()
     prefix = f'runtime-v1-{kind}-{system}-{arch}-{checksum}-'
     key = prefix + (os.environ['GITHUB_RUN_ID'] + '-' + os.environ.get('GITHUB_RUN_ATTEMPT', '1') if kind == 'apt' else 'approved')

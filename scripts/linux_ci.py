@@ -63,11 +63,13 @@ def resolve_inputs(fetch=read_json, read=text):
     cloud = CLOUD_ROOT+max(dates, key=lambda value: tuple(map(int, value.split('.'))))+'/'
     sums = read(cloud+'SHA256SUMS')
     result = {'version': BASELINE, 'image': 'ubuntu@'+digest, 'architectures': {}}
+    from build_inputs import tool_versions
+    python_version = re.escape(tool_versions()['python'])
     for arch, triple, deb in [('x64', 'x86_64', 'amd64'), ('arm64', 'aarch64', 'arm64')]:
-        pattern = rf'cpython-3\.11\.[0-9]+\+[^/]+-{triple}-unknown-linux-gnu-install_only\.tar\.gz'
+        pattern = rf'cpython-{python_version}\+[^/]+-{triple}-unknown-linux-gnu-install_only\.tar\.gz'
         selected = [asset for asset in assets if re.fullmatch(pattern, asset['name'])]
         if len(selected) != 1:
-            raise ValueError('Expected one portable Python 3.11 archive for '+arch)
+            raise ValueError('Expected one approved portable Python archive for '+arch)
         asset = selected[0]
         checksum = (asset.get('digest') or '').removeprefix('sha256:')
         if not re.fullmatch('[0-9a-f]{64}', checksum):

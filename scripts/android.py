@@ -15,6 +15,7 @@ import time
 import zipfile
 
 from build_support import ROOT, mihomo_go_version, package_version, sha256, write_json, write_mihomo_notice
+from build_inputs import android_versions
 
 ANDROID = ROOT / 'apps/android'
 ADB = str(Path(os.environ.get('ANDROID_HOME', '/nonexistent')) / 'platform-tools/adb')
@@ -81,6 +82,31 @@ def sdkmanager_install(command, device_root):
 
 def commit():
     return subprocess.check_output(['git', 'rev-parse', 'HEAD'], cwd=ROOT, text=True).strip()
+
+
+def sdk_tools():
+    return Path(os.environ['ANDROID_HOME']) / 'build-tools' / android_versions()['build_tools']
+
+
+def sdk_manager():
+    return Path(os.environ['ANDROID_HOME']) / 'cmdline-tools' / android_versions()['cmdline_tools'] / 'bin'
+
+
+def prepare_sdk(package_only=False):
+    sdk = Path(os.environ['ANDROID_HOME'])
+    versions = android_versions()
+    device_root = Path(os.environ['RUNNER_TEMP']) / 'cor-sdk-install'
+    manager = sdk_manager() / 'sdkmanager'
+    if not manager.is_file():
+        sdkmanager_install([sdk / 'cmdline-tools/latest/bin/sdkmanager',
+                            'cmdline-tools;' + versions['cmdline_tools']], device_root)
+    packages = ['platform-tools', 'build-tools;' + versions['build_tools']]
+    if not package_only:
+        packages += ['platforms;android-' + versions['platform'], 'ndk;' + versions['ndk']]
+    sdkmanager_install([manager, *packages], device_root)
+    if not package_only:
+        with open(os.environ['GITHUB_ENV'], 'a') as stream:
+            stream.write('ANDROID_NDK_ROOT=' + str(sdk / 'ndk' / versions['ndk']) + '\n')
 
 
 def ensure_binding_tool(name):
@@ -166,7 +192,7 @@ def validate_apk(path, arch):
                         raise ValueError('Native library is not 16 KiB aligned: '+name)
         sizes={'apk_bytes':path.stat().st_size, 'native_compressed_bytes':sum(archive.getinfo(n).compress_size for n in libraries),
                'native_bytes':sum(archive.getinfo(n).file_size for n in libraries)}
-    tool=Path(os.environ['ANDROID_HOME'])/'build-tools/36.0.0/aapt2'
+    tool=sdk_tools()/'aapt2'
     metadata=subprocess.check_output([str(tool),'dump','badging',str(path)],text=True)
     report=ROOT/'target/android-report'/arch
     report.mkdir(parents=True,exist_ok=True)
@@ -217,8 +243,8 @@ def build(arch):
         'CXX_'+target.replace('-', '_'):str(clang)+'++',
         'AR_'+target.replace('-', '_'):str(toolchain/'llvm-ar'),
         'ANDROID_NDK_HOME':str(ndk),
-        'ANDROID_PLATFORM':'android-36',
-        'ANDROID_BUILD_TOOLS_VERSION':'36.0.0',
+        'ANDROID_PLATFORM':'android-'+android_versions()['platform'],
+        'ANDROID_BUILD_TOOLS_VERSION':android_versions()['build_tools'],
         'CXXSTDLIB':'c++_static',
         'RUSTFLAGS':'-C link-arg=-Wl,-z,max-page-size=16384',
     })
@@ -385,13 +411,13 @@ def package(arch, run_id, check_only):
     if not check_only:
         key=os.environ.get('ANDROID_KEYSTORE_PATH')
         if not key: raise RuntimeError('Formal Android APKs require a persistent Android signing key')
-        tool=Path(os.environ['ANDROID_HOME'])/'build-tools/36.0.0'
+        tool=sdk_tools()
         # Instrumentation and its target must carry the same signature.
         for path in (apk,root/'tests/androidTest.apk'):
             run([tool/'apksigner','sign','--ks',key,'--ks-key-alias',os.environ['ANDROID_KEY_ALIAS'],
                  '--ks-pass','env:ANDROID_KEYSTORE_PASSWORD','--key-pass','env:ANDROID_KEY_PASSWORD',path])
     sizes=validate_apk(apk,arch)
-    tool=Path(os.environ['ANDROID_HOME'])/'build-tools/36.0.0'
+    tool=sdk_tools()
     run([tool/'apksigner','verify','--verbose',apk])
     run([tool/'zipalign','-c','-P','16','4',apk])
     digest=sha256(apk)
@@ -418,15 +444,15 @@ def main():
     args=parser.parse_args()
     if args.operation=='emulator':
         sdk=Path(os.environ['ANDROID_HOME'])
-        manager=sdk/'cmdline-tools/latest/bin'
+        manager=sdk_manager()
         device_root=Path(os.environ['RUNNER_TEMP'])/'cor-emulator'
-        sdkmanager_install([manager/'sdkmanager','platform-tools','system-images;android-35;google_apis;x86_64'],
+        sdkmanager_install([manager/'sdkmanager','platform-tools','emulator',android_versions()['system_image']],
                            device_root)
         user_home=device_root/'.android'; avds=user_home/'avd'
         avds.mkdir(parents=True,exist_ok=True)
         env=dict(os.environ,ANDROID_USER_HOME=str(user_home),ANDROID_AVD_HOME=str(avds),ANDROID_SDK_HOME=str(device_root))
         run([manager/'avdmanager','create','avd','--force','--name','cor-ci','--path',avds/'cor-ci.avd',
-             '--device','pixel_6','--package','system-images;android-35;google_apis;x86_64'],input='no\n',text=True,env=env)
+             '--device','pixel_6','--package',android_versions()['system_image']],input='no\n',text=True,env=env)
         report=ROOT/'target/android-report/x64'; report.mkdir(parents=True,exist_ok=True)
         with (report/'emulator.txt').open('w') as log:
             process=subprocess.Popen([sdk/'emulator/emulator','-avd','cor-ci','-no-window','-no-audio','-no-boot-anim','-no-snapshot',

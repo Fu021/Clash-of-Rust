@@ -29,18 +29,20 @@ jobs:
       id-token: write
     outputs:
       go: ${{ steps.go.outputs.go-version }}
+      java: ${{ steps.versions.outputs.java }}
       resources: ${{ steps.resolve.outputs.resources }}
       tailscale: ${{ steps.resolve.outputs.tailscale }}
       gradle: ${{ steps.resolve.outputs.gradle }}
       nsis: ${{ steps.resolve.outputs.nsis }}
     steps:
-      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with:
           ref: ${{ github.event.pull_request.head.sha || github.sha }}
           persist-credentials: false
       - name: Load approved tool versions
+        id: versions
         run: python3 scripts/build_inputs.py versions
-      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1
+      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0
         with:
           python-version: ${{ env.COR_PYTHON }}
       - name: Validate common build and package logic
@@ -78,14 +80,14 @@ jobs:
           kind: go
           url: ${{ steps.tailnet.outcome == 'success' && vars.LOCAL_CACHE_URL || '' }}
           token: ${{ secrets.LOCAL_CACHE_TOKEN }}
-      - uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e
         id: go
         with:
           go-version: ${{ env.COR_GO }}
           cache: false
       - name: Restore GitHub source module downloads
         id: source_go_github
-        uses: actions/cache@caa296126883cff596d87d8935842f9db880ef25
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9
         continue-on-error: true
         timeout-minutes: 5
         with:
@@ -116,7 +118,7 @@ jobs:
           restore-keys: go-
       - name: Restore GitHub dependency snapshot
         id: snapshot_github
-        uses: actions/cache@caa296126883cff596d87d8935842f9db880ef25
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9
         continue-on-error: true
         timeout-minutes: 5
         with:
@@ -143,7 +145,7 @@ jobs:
       - name: Resolve updated source lockfiles
         if: inputs.refresh_dependencies
         run: python3 scripts/build_inputs.py refresh --directory target/dependency-updates
-      - uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
         if: inputs.refresh_dependencies
         with:
           name: dependency-updates
@@ -160,7 +162,7 @@ jobs:
       - name: Prepare shared Android source downloads
         if: ${{ !inputs.refresh_dependencies }}
         run: python3 scripts/build_inputs.py share-go --directory target/shared-go
-      - uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
         if: ${{ !inputs.refresh_dependencies }}
         with:
           name: android-shared-dependencies
@@ -168,7 +170,7 @@ jobs:
           compression-level: 0
           retention-days: 3
           if-no-files-found: error
-      - uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
         if: ${{ !inputs.refresh_dependencies }}
         with:
           name: dependency-snapshot
@@ -199,7 +201,7 @@ jobs:
       ANDROID_CI_TEST: '1'
       GOCACHE: ${{ github.workspace }}/target/go-build
     steps:
-      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with:
           ref: ${{ github.event.pull_request.head.sha || github.sha }}
           persist-credentials: false
@@ -209,7 +211,7 @@ jobs:
         run: |
           import subprocess, sys
           subprocess.run([sys.executable, 'scripts/build_inputs.py', 'versions'], check=True)
-      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1
+      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0
         with:
           python-version: ${{ env.COR_PYTHON }}
       - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333
@@ -297,7 +299,7 @@ jobs:
               output.write('checksum=' + package['checksum'] + '\n')
       - name: Restore GitHub ARMv7 Skia source cache
         if: matrix.arch == 'armv7'
-        uses: actions/cache@caa296126883cff596d87d8935842f9db880ef25
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9
         timeout-minutes: 5
         continue-on-error: true
         id: skia_github
@@ -325,7 +327,7 @@ jobs:
           kind: java
           url: ${{ steps.tailnet.outcome == 'success' && vars.LOCAL_CACHE_URL || '' }}
           token: ${{ secrets.LOCAL_CACHE_TOKEN }}
-      - uses: actions/setup-java@b6effb05e454b25005698d916606bdc6ffcbf961
+      - uses: actions/setup-java@b843ebf9b913146b38da2eaa7aeddf76074ae1ad
         with:
           distribution: temurin
           java-version: ${{ env.COR_JAVA }}
@@ -334,7 +336,7 @@ jobs:
           kind: go
           url: ${{ steps.tailnet.outcome == 'success' && vars.LOCAL_CACHE_URL || '' }}
           token: ${{ secrets.LOCAL_CACHE_TOKEN }}
-      - uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e
         id: go
         with:
           go-version: ${{ needs.inputs.outputs.go }}
@@ -363,7 +365,7 @@ jobs:
           restore-keys: go-
       - name: Restore GitHub Android Go compilation results
         id: go_build_github
-        uses: actions/cache@caa296126883cff596d87d8935842f9db880ef25
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9
         continue-on-error: true
         timeout-minutes: 5
         with:
@@ -384,11 +386,11 @@ jobs:
           restore-keys: go-${{ needs.inputs.outputs.go }}-
       - name: Restore GitHub Gradle dependencies and distribution
         id: gradle_github
-        uses: actions/cache/restore@caa296126883cff596d87d8935842f9db880ef25
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9
         continue-on-error: true
         timeout-minutes: 5
         with:
-          key: gradle-linux-${{ needs.inputs.outputs.gradle }}-java-17-${{ hashFiles('apps/android/**/*.gradle.kts', 'apps/android/gradle.properties') }}
+          key: gradle-linux-${{ needs.inputs.outputs.gradle }}-java-${{ needs.inputs.outputs.java }}-${{ hashFiles('apps/android/**/*.gradle.kts', 'apps/android/gradle.properties') }}
           restore-keys: gradle-linux-
           path: |
             ~/.gradle/caches
@@ -405,13 +407,13 @@ jobs:
           group: dependencies/gradle-linux
           immutable: true
           save: ${{ matrix.arch == 'x64' }}
-          key: gradle-${{ needs.inputs.outputs.gradle }}-java-17-${{ hashFiles('apps/android/**/*.gradle.kts', 'apps/android/gradle.properties') }}
+          key: gradle-${{ needs.inputs.outputs.gradle }}-java-${{ needs.inputs.outputs.java }}-${{ hashFiles('apps/android/**/*.gradle.kts', 'apps/android/gradle.properties') }}
           paths: |
             ~/.gradle/caches
             ~/.gradle/permwrapper/dists
             ~/.gradle/wrapper/dists
           restore-keys: gradle-
-      - uses: gradle/actions/setup-gradle@0723195856401067f7a2779048b490ace7a47d7c
+      - uses: gradle/actions/setup-gradle@8da46b539cd8fe6ab27ca75128919a18d757604c
         with:
           gradle-version: ${{ needs.inputs.outputs.gradle }}
           cache-disabled: true
@@ -449,18 +451,13 @@ jobs:
       - name: Prepare Android toolchain
         shell: python
         run: |
-          import os, pathlib, sys
+          import sys
           sys.path.insert(0, 'scripts')
-          from android import sdkmanager_install
-          sdk=pathlib.Path(os.environ['ANDROID_HOME'])
-          manager=sdk/'cmdline-tools/latest/bin/sdkmanager'
-          sdkmanager_install([str(manager),'platforms;android-36','build-tools;36.0.0','ndk;28.2.13676358'],
-                             pathlib.Path(os.environ['RUNNER_TEMP'])/'cor-sdk-install')
-          with open(os.environ['GITHUB_ENV'],'a') as out:
-              out.write('ANDROID_NDK_ROOT='+str(sdk/'ndk/28.2.13676358')+'\n')
+          from android import prepare_sdk
+          prepare_sdk()
       - name: Restore GitHub Android Geo resources
         id: geo_github
-        uses: actions/cache@caa296126883cff596d87d8935842f9db880ef25
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9
         continue-on-error: true
         timeout-minutes: 5
         with:
@@ -494,7 +491,7 @@ jobs:
         run: python3 scripts/android.py test --arch x64
       - name: Export tested Android compilation
         run: python3 scripts/android.py export --arch ${{ matrix.arch }}
-      - uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
         with:
           name: build-android-${{ matrix.arch }}
           path: |
@@ -503,7 +500,7 @@ jobs:
           compression-level: 0
           if-no-files-found: error
           retention-days: 3
-      - uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
         if: always()
         with:
           name: android-report-${{ matrix.arch }}
@@ -515,11 +512,11 @@ jobs:
           retention-days: 3
       - name: Save shared GitHub Gradle dependencies and distribution
         if: matrix.arch == 'x64' && steps.gradle_github.outputs.cache-hit != 'true'
-        uses: actions/cache/save@caa296126883cff596d87d8935842f9db880ef25
+        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9
         continue-on-error: true
         timeout-minutes: 5
         with:
-          key: gradle-linux-${{ needs.inputs.outputs.gradle }}-java-17-${{ hashFiles('apps/android/**/*.gradle.kts', 'apps/android/gradle.properties') }}
+          key: gradle-linux-${{ needs.inputs.outputs.gradle }}-java-${{ needs.inputs.outputs.java }}-${{ hashFiles('apps/android/**/*.gradle.kts', 'apps/android/gradle.properties') }}
           path: |
             ~/.gradle/caches
             ~/.gradle/permwrapper/dists
@@ -540,31 +537,31 @@ jobs:
             system: windows
             arch: x64
             target: x86_64-pc-windows-msvc
-            python: '3.11'
+            python: '3.15'
           - os: windows-11-arm
             system: windows
             arch: arm64
             target: aarch64-pc-windows-msvc
-            python: '3.13'
+            python: '3.15'
           - os: ubuntu-22.04
             system: linux
             arch: x64
             target: x86_64-unknown-linux-gnu
-            python: '3.11'
+            python: '3.15'
           - os: ubuntu-22.04-arm
             system: linux
             arch: arm64
             target: aarch64-unknown-linux-gnu
-            python: '3.11'
+            python: '3.15'
           - os: macos-15-intel
             system: macos
             arch: x64
-            python: '3.11'
+            python: '3.15'
             target: x86_64-apple-darwin
           - os: macos-latest
             system: macos
             arch: arm64
-            python: '3.11'
+            python: '3.15'
             target: aarch64-apple-darwin
     runs-on: ${{ matrix.os }}
     env:
@@ -575,7 +572,7 @@ jobs:
       run:
         shell: python
     steps:
-      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with:
           # Preserve one immutable source identity for PR builds and packaging.
           ref: ${{ github.event.pull_request.head.sha || github.sha }}
@@ -584,7 +581,7 @@ jobs:
         run: |
           import subprocess, sys
           subprocess.run([sys.executable, 'scripts/build_inputs.py', 'versions'], check=True)
-      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1
+      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0
         with:
           python-version: ${{ runner.os == 'Windows' && runner.arch == 'ARM64' && env.COR_PYTHON_WINDOWS_ARM64 || env.COR_PYTHON }}
           architecture: ${{ matrix.arch }}
@@ -697,7 +694,7 @@ jobs:
       - name: Restore compatible GitHub workspace compilation
         id: rust_fallback
         if: steps.rust_paths.outputs.needed == 'true' && (runner.os == 'macOS' || runner.os == 'Windows')
-        uses: actions/cache/restore@caa296126883cff596d87d8935842f9db880ef25
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9
         continue-on-error: true
         timeout-minutes: 5
         with:
@@ -729,7 +726,7 @@ jobs:
           assert host_arch() == '${{ matrix.arch }}'
           assert 'host: ${{ matrix.target }}' in subprocess.check_output(['rustc', '-vV'], text=True)
       - name: Restore GitHub resource cache
-        uses: actions/cache@caa296126883cff596d87d8935842f9db880ef25
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9
         timeout-minutes: 5
         continue-on-error: true
         id: resource_github
@@ -789,7 +786,7 @@ jobs:
           import subprocess, sys
           subprocess.run([sys.executable, 'scripts/macos_ci.py', 'diagnostics', '--arch', '${{ matrix.arch }}'], check=True)
       - name: Preserve macOS results
-        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
         if: always() && runner.os == 'macOS'
         with:
           name: macos-ci-report-${{ matrix.arch }}
@@ -797,14 +794,14 @@ jobs:
           if-no-files-found: error
           retention-days: 3
       - name: Preserve Windows basic test results
-        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
         if: always() && runner.os == 'Windows'
         with:
           name: windows-ci-report-${{ matrix.arch }}
           path: target/windows-ci-report.json
           if-no-files-found: warn
           retention-days: 3
-      - uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
         with:
           name: build-${{ matrix.system }}-${{ matrix.arch }}
           path: |
@@ -827,7 +824,7 @@ jobs:
       group: actions-cache-budget
       cancel-in-progress: false
     steps:
-      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with:
           ref: ${{ github.event.pull_request.head.sha || github.sha }}
           persist-credentials: false
@@ -836,7 +833,7 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           PYTHONDONTWRITEBYTECODE: '1'
         run: python3 scripts/build_inputs.py audit --directory target/dependency-audit
-      - uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
         with:
           name: dependency-audit
           path: target/dependency-audit
@@ -862,7 +859,7 @@ jobs:
           oauth-client-id: ${{ vars.TS_OAUTH_CLIENT_ID }}
           audience: ${{ vars.TS_AUDIENCE }}
           tags: tag:github-action-cache
-          version: ${{ needs.inputs.outputs.tailscale || '1.94.2' }}
+          version: ${{ needs.inputs.outputs.tailscale || '1.104.5' }}
           retry: '1'
           timeout: 45s
           args: --accept-dns=false
@@ -878,7 +875,7 @@ jobs:
         run: |
           sudo -n tailscale set --accept-routes=false --accept-dns=false
           python3 scripts/action_cache.py inventory
-      - uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
         if: steps.tailnet.outcome == 'success'
         with:
           name: private-cache-inventory

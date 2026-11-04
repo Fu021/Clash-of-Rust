@@ -43,6 +43,10 @@ def tool_versions():
     return selected
 
 
+def android_versions():
+    return approved()['upstream']['android']
+
+
 def versions():
     selected = tool_versions()
     for target in ('GITHUB_ENV', 'GITHUB_OUTPUT'):
@@ -169,7 +173,7 @@ def resolve(directory):
     if output := os.environ.get('GITHUB_OUTPUT'):
         with open(output, 'a') as stream:
             stream.write('resources=' + resource_key(upstream) + '\n')
-            for name, fallback in (('tailscale', '1.94.2'), ('gradle', GRADLE_MIN)):
+            for name, fallback in (('tailscale', '1.104.5'), ('gradle', GRADLE_MIN)):
                 version = upstream.get(name, {}).get('version', fallback)
                 if not re.fullmatch(r'v?[0-9.]+', version):
                     raise ValueError('Invalid resolved tool version')
@@ -182,6 +186,7 @@ def refresh(directory):
         raise ValueError('Dependency refresh requires an explicitly dispatched CI run')
     subprocess.run(['cargo', 'update'], cwd=ROOT, check=True, timeout=600)
     module = ROOT / 'apps/android/core'
+    subprocess.run(['go', 'mod', 'edit', '-go=' + tool_versions()['go']], cwd=module, check=True, timeout=30)
     subprocess.run(['go', 'get', '-u', './...'], cwd=module, check=True, timeout=600)
     subprocess.run(['go', 'mod', 'tidy'], cwd=module, check=True, timeout=300)
     directory.mkdir(parents=True, exist_ok=True)
@@ -211,7 +216,7 @@ def packaging(directory):
     if output := os.environ.get('GITHUB_OUTPUT'):
         with open(output, 'a') as stream:
             stream.write('nsis=' + value['upstream'].get('nsis', {}).get('sha256', 'verified-cache') + '\n')
-            stream.write('tailscale=' + value['upstream'].get('tailscale', {}).get('version', '1.94.2') + '\n')
+            stream.write('tailscale=' + value['upstream'].get('tailscale', {}).get('version', '1.104.5') + '\n')
 
 
 def apply(directory, require_commit=True):

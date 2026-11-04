@@ -704,6 +704,44 @@ assert.equal(calls.length,2);
                 result=subprocess.run([node,'-e',harness,str(script),mode],capture_output=True,text=True)
                 self.assertEqual(result.returncode,0,result.stdout+result.stderr)
 
+    def test_blob_requests_use_remaining_restore_budget_without_short_metadata_limit(self):
+        config = {'url': 'http://100.64.0.1:8080', 'token': 'test', 'restore_deadline': 1000}
+        for path, budget, expected in (('/v1/blob?id=test', 180, 180),
+                                        ('/v1/blob?id=test', 800, 600),
+                                        ('/v1/lookup', 180, 30)):
+            with self.subTest(path=path, budget=budget), \
+                    patch.object(local_cache, 'restore_remaining', return_value=budget), \
+                    patch.object(local_cache.http.client, 'HTTPConnection') as connection:
+                local_cache.request(config, path)
+                self.assertEqual(connection.call_args.kwargs['timeout'], expected)
+
+    def test_cache_action_save_budget_is_validated_and_applied_to_the_watchdog(self):
+        node = shutil.which('node')
+        if not node:
+            self.skipTest('Node is required for the Actions wrapper test')
+        script = build.ROOT / '.github/actions/local-cache/index.cjs'
+        harness = r'''
+const assert=require('node:assert/strict'),vm=require('node:vm'),realfs=require('node:fs');
+const script=process.argv[1],budget=process.argv[2],post=process.argv[3]==='post',calls=[];
+let saved={save:true,save_seconds:Number(budget)};
+const fs={writeFileSync(_path,value){saved=JSON.parse(value)},
+  readFileSync(){return JSON.stringify(saved)},appendFileSync(){},rmSync(){}};
+const context={__dirname:require('node:path').dirname(script),console:{log(){}},
+  process:{env:{RUNNER_TEMP:'/runner/temp',GITHUB_STATE:'state',GITHUB_OUTPUT:'output',
+    'INPUT_SAVE-TIMEOUT':budget,...(post?{STATE_cache_state:'state'}:{})},platform:'linux'},
+  require(name){if(name==='node:fs')return fs;if(name==='node:child_process')
+    return {spawnSync(_command,_args,options){calls.push(options);return {status:0}}};return require(name)}};
+const run=()=>vm.runInNewContext(realfs.readFileSync(script,'utf8'),context,{filename:script});
+if(post){run();assert.equal(calls[0].timeout,Number(budget)*1000)}
+else{assert.throws(run,/Invalid private cache save budget/);assert.equal(calls.length,0)}
+'''
+        for budget, mode in (('900', 'post'), ('1200', 'post'), ('29', 'main'),
+                              ('1801', 'main'), ('invalid', 'main')):
+            with self.subTest(budget=budget, mode=mode):
+                result = subprocess.run([node, '-e', harness, str(script), budget, mode],
+                                        capture_output=True, text=True)
+                self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+
     def test_partial_rust_cache_invalidates_only_native_and_cross_build_script_runs(self):
         with tempfile.TemporaryDirectory() as temporary:
             root=Path(temporary)
@@ -1142,6 +1180,18 @@ assert.equal(calls.length,2);
                 build_inputs.refresh(output)
             self.assertFalse(output.exists())
 
+    def test_dependency_refresh_sets_approved_go_version_before_resolving_modules(self):
+        with tempfile.TemporaryDirectory() as temporary, \
+                patch.dict(os.environ, {'GITHUB_ACTIONS': 'true', 'GITHUB_EVENT_NAME': 'workflow_dispatch'}), \
+                patch.object(build_inputs.subprocess, 'run') as execute, \
+                patch.object(build_inputs, 'constraints', return_value={}), \
+                patch.object(build_inputs, 'current_commit', return_value='current'):
+            build_inputs.refresh(Path(temporary))
+        self.assertEqual([call.args[0] for call in execute.call_args_list], [
+            ['cargo', 'update'], ['go', 'mod', 'edit', '-go=' + build_inputs.tool_versions()['go']],
+            ['go', 'get', '-u', './...'], ['go', 'mod', 'tidy'],
+        ])
+
     def test_resolve_uses_repository_dependencies_and_approved_tools_without_updating(self):
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
@@ -1198,8 +1248,8 @@ runpy.run_path(str(script), run_name='__main__')
     def test_python_baseline_and_audit_are_specific_to_target_platforms(self):
         import dependency_audit
 
-        for system, arch, expected in (('linux', 'arm64', '3.11.18'), ('windows', 'x64', '3.11.9'),
-                                       ('windows', 'arm64', '3.13.17'), ('macos', 'arm64', '3.11.9')):
+        for system, arch, expected in (('linux', 'arm64', '3.15.2'), ('windows', 'x64', '3.15.2'),
+                                       ('windows', 'arm64', '3.15.2'), ('macos', 'arm64', '3.15.2')):
             with self.subTest(system=system, arch=arch), \
                     patch.object(build_inputs, 'host_system', return_value=system), \
                     patch.object(build_inputs, 'host_arch', return_value=arch):
@@ -1208,12 +1258,50 @@ runpy.run_path(str(script), run_name='__main__')
             {'version': '3.11.9', 'stable': True, 'files': [{'platform': 'win32', 'arch': 'x64'}]},
             {'version': '3.11.18', 'stable': True, 'files': [
                 {'platform': 'linux', 'arch': 'x64'}, {'platform': 'linux', 'arch': 'arm64'}]},
+            {'version': '3.15.2', 'stable': True, 'files': [
+                {'platform': 'linux', 'arch': 'x64'}, {'platform': 'linux', 'arch': 'arm64'}]},
         ]
         with patch.object(dependency_audit, 'metadata', return_value=releases):
             self.assertEqual(dependency_audit.tool_candidate('python_windows', '3.11.9')[0], '3.11.9')
-            self.assertEqual(dependency_audit.tool_candidate('python', '3.11.18')[0], '3.11.18')
+            self.assertEqual(dependency_audit.tool_candidate('python', '3.11.18')[0], '3.15.2')
         with patch.dict(os.environ, {'COR_USE_BOOTSTRAP_TAILNET': 'true'}):
             self.assertEqual(build_inputs.tool_versions()['tailscale'], build_inputs.approved()['tools']['tailscale_bootstrap'])
+
+    def test_java_audit_follows_the_latest_supported_lts(self):
+        import dependency_audit
+
+        with patch.object(dependency_audit, 'metadata', side_effect=[
+                {'available_lts_releases': [8, 11, 17, 21, 25]},
+                [{'version': {'semver': '25.0.5+8'}}],
+        ]) as fetch:
+            self.assertEqual(dependency_audit.tool_candidate('java', '17.0.21+9')[0], '25.0.5+8')
+        self.assertIn('/latest/25/', fetch.call_args.args[0])
+
+    def test_android_preparation_uses_the_approved_sdk_and_skips_unused_package_tools(self):
+        versions = build_inputs.android_versions()
+        for package_only in (False, True):
+            with self.subTest(package_only=package_only), tempfile.TemporaryDirectory() as temporary:
+                root = Path(temporary)
+                sdk = root / 'sdk'
+                output = root / 'environment'
+                with patch.dict(os.environ, {'ANDROID_HOME': str(sdk), 'RUNNER_TEMP': str(root),
+                                             'GITHUB_ENV': str(output)}), \
+                        patch.object(android_build, 'sdkmanager_install') as install:
+                    android_build.prepare_sdk(package_only=package_only)
+                commands = [list(map(str, call.args[0])) for call in install.call_args_list]
+                self.assertEqual(commands[0], [str(sdk / 'cmdline-tools/latest/bin/sdkmanager'),
+                                               'cmdline-tools;' + versions['cmdline_tools']])
+                self.assertEqual(commands[1][:3], [
+                    str(sdk / 'cmdline-tools' / versions['cmdline_tools'] / 'bin/sdkmanager'),
+                    'platform-tools', 'build-tools;' + versions['build_tools'],
+                ])
+                if package_only:
+                    self.assertEqual(len(commands[1]), 3)
+                    self.assertFalse(output.exists())
+                else:
+                    self.assertEqual(commands[1][3:], ['platforms;android-' + versions['platform'],
+                                                       'ndk;' + versions['ndk']])
+                    self.assertEqual(output.read_text(), 'ANDROID_NDK_ROOT=' + str(sdk / 'ndk' / versions['ndk']) + '\n')
 
     def test_packaging_reuses_ci_tool_metadata_without_querying_new_versions(self):
         with tempfile.TemporaryDirectory() as temporary:
