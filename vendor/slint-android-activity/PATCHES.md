@@ -40,9 +40,11 @@ https://github.com/androidx/androidx/blob/androidx-main/core/core/src/main/java/
 
 Current Actions evidence and remaining failures are recorded in
 [the IME review](../../docs/agent-failures/android-ime.md).
-The latest lifecycle and request-order changes have local static checks only;
-the production keyboard, layout, Back, rotation and lifecycle regressions still
-require same-commit Actions and device verification.
+The same-commit CI on `3dd1f87` passed the production keyboard, layout, Back,
+rotation and lifecycle regressions on API 31 and 36. The earlier Gboard
+null-pointer crash did not recur, so the native cold-start controls did not run
+and its cause remains unconfirmed. Physical-device and OEM verification remain
+pending; historical multi-version results do not prove all-device compatibility.
 The upstream crate license files remain authoritative.
 
 Remove this override after updating Slint to a release containing equivalent

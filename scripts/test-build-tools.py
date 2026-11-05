@@ -2923,6 +2923,27 @@ class ReleaseTests(unittest.TestCase):
         with self.assertRaises(ValueError):release.verified_run(self.client(jobs=jobs),self.commit,77)
         with self.assertRaises(ValueError):release.verified_run(self.client(main='b'*40),self.commit,77)
 
+    def test_release_allows_skipped_optional_matrix_without_omitting_required_jobs(self):
+        required = [{'name':name,'status':'completed','conclusion':'success'} for name in release.CI_JOBS]
+        optional = {'name':'Android IME API ${{ matrix.api }}','status':'completed','conclusion':'skipped'}
+        changes = {'event':'pull_request','head_branch':'codex/fix-android'}
+        for mode in ({'check_only':True}, {'prerelease':True}):
+            with self.subTest(mode=mode):
+                self.assertEqual(release.verified_run(self.client(changes,jobs=required+[optional]),
+                                                     self.commit,77,**mode)['id'],77)
+                with self.assertRaisesRegex(ValueError,'does not cover'):
+                    release.verified_run(self.client(changes,jobs=required[:-1]+[optional]),
+                                         self.commit,77,**mode)
+                skipped = [dict(job) for job in required]
+                skipped[0]['conclusion'] = 'skipped'
+                with self.assertRaisesRegex(ValueError,'did not pass'):
+                    release.verified_run(self.client(changes,jobs=skipped+[optional]),
+                                         self.commit,77,**mode)
+        for conclusion in ['failure','cancelled','success']:
+            with self.subTest(conclusion=conclusion), self.assertRaises(ValueError):
+                release.verified_run(self.client(jobs=required+[optional|{'conclusion':conclusion}]),
+                                     self.commit,77)
+
     def test_preview_packaging_accepts_current_same_repository_pr_ci_only_in_check_mode(self):
         changes = {'event':'pull_request', 'head_branch':'codex/dev-0.5.2'}
         with self.assertRaises(ValueError):

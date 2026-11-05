@@ -173,7 +173,8 @@ def verified_run(client, commit, run_id=None, check_only=False, prerelease=False
     branch = 'main' if main_ci else run['head_branch']
     require(client('/branches/' + urllib.parse.quote(branch, safe=''))['commit']['sha'] == commit,
             'Source branch has changed; select its current successful CI')
-    jobs = workflow_jobs(client, run, CI_JOBS)
+    jobs = [job for job in workflow_jobs(client, run, CI_JOBS)
+            if job['name'] in CI_JOBS or job['conclusion'] != 'skipped']
     require(len(jobs) == len(CI_JOBS) and {j['name'] for j in jobs} == CI_JOBS,
             'CI does not cover all required desktop platforms and Android ABIs')
     require(all(j['status'] == 'completed' and j['conclusion'] == 'success' for j in jobs), 'A required CI job did not pass')
