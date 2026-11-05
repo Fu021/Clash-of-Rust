@@ -1541,6 +1541,17 @@ runpy.run_path(str(script), run_name='__main__')
                     android_build.pull_ime_report('/sdcard/ime-report',report,required=True)
             self.assertEqual(invoke.call_count,1)
 
+    def test_ime_export_can_require_native_control_state_instead_of_subscription_screenshots(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            report=Path(temporary)
+            def invoke(command, **kwargs):
+                (report/'ime-report/state.json').write_text('{"editor":"android.widget.EditText"}')
+                return subprocess.CompletedProcess(command,0,'1 file pulled','')
+            with patch.object(android_build.subprocess,'run',side_effect=invoke):
+                android_build.pull_ime_report('/sdcard/native-control',report,
+                                              required=True,required_pattern='state.json')
+            self.assertTrue((report/'ime-report/state.json').is_file())
+
     def test_android_ime_crash_report_uses_only_the_current_run_and_selected_input_method(self):
         crash=('E AndroidRuntime: FATAL EXCEPTION: main\n'
                'E AndroidRuntime: Process: com.example.ime, PID: 42\n'
@@ -1588,6 +1599,7 @@ runpy.run_path(str(script), run_name='__main__')
             process.poll.return_value=None
             def start(command, **kwargs):
                 self.assertNotIn('-d',command)
+                self.assertNotIn('-T',command)
                 kwargs['stdout'].write(b'I system: previous log\n')
                 kwargs['stdout'].flush()
                 return process
@@ -1648,6 +1660,52 @@ runpy.run_path(str(script), run_name='__main__')
                     android_build.start_test_log(report,'current-test')
             process.terminate.assert_called_once()
             process.kill.assert_called_once()
+
+    def test_android_log_stream_requires_a_captured_start_marker_before_running_tests(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            report=Path(temporary)
+            process=MagicMock()
+            process.poll.return_value=None
+            with patch.object(android_build.subprocess,'Popen',return_value=process), \
+                    patch.object(android_build.subprocess,'run'), \
+                    patch.object(android_build.time,'monotonic',side_effect=[0,31]):
+                with self.assertRaisesRegex(RuntimeError,'did not capture its marker'):
+                    android_build.start_test_log(report,'current-test')
+            process.terminate.assert_called_once()
+
+    def test_android_native_ime_control_never_resets_a_physical_or_other_api_device(self):
+        for values in (('0','1','31'),('1','0','31'),('1','1','36')):
+            with self.subTest(properties=values), tempfile.TemporaryDirectory() as temporary:
+                with patch.object(android_build.subprocess,'check_output',side_effect=values), \
+                        patch.object(android_build.subprocess,'run') as invoke:
+                    with self.assertRaisesRegex(RuntimeError,'debuggable API 31 emulator'):
+                        android_build.platform_ime_control(Path(temporary),'com.example.ime/.Keyboard')
+                invoke.assert_not_called()
+
+    def test_android_native_ime_controls_preserve_crashes_without_replacing_production_results(self):
+        crash=('E AndroidRuntime: FATAL EXCEPTION: main\n'
+               'E AndroidRuntime: Process: com.example.ime, PID: 42\n'
+               'E AndroidRuntime: java.lang.NullPointerException: native editor\n')
+        with tempfile.TemporaryDirectory() as temporary:
+            report=Path(temporary)
+            def invoke(command, **kwargs):
+                output='Success\n' if command[1:4]==['shell','pm','clear'] else b'evidence'
+                return subprocess.CompletedProcess(command,0,output,'' if isinstance(output,str) else b'')
+            with patch.object(android_build.subprocess,'check_output',side_effect=['1','1','31']), \
+                    patch.object(android_build.subprocess,'run',side_effect=invoke) as execute, \
+                    patch.object(android_build,'start_test_log'), \
+                    patch.object(android_build,'finish_test_log',return_value=(crash,None)), \
+                    patch.object(android_build,'pull_ime_report'), \
+                    patch.object(android_build.time,'monotonic',side_effect=[0,16,0,16]):
+                android_build.platform_ime_control(report,'com.example.ime/.Keyboard')
+            reset_commands=[call.args[0] for call in execute.call_args_list
+                            if call.args[0][1:4]==['shell','pm','clear']]
+            self.assertEqual(reset_commands,[[android_build.ADB,'shell','pm','clear','com.example.ime']]*2)
+            for requests in (1,2):
+                result=json.loads((report/'platform-control'/f'show-{requests}'/'result.json').read_text())
+                self.assertEqual(len(result['crashes']),1)
+                self.assertTrue(result['diagnostic_only'])
+                self.assertFalse(result['replaces_production_result'])
 
     def test_android_preparation_uses_the_approved_sdk_and_skips_unused_package_tools(self):
         versions = build_inputs.android_versions()

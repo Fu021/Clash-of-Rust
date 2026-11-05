@@ -415,7 +415,7 @@ def verify_build(root, arch, expected_commit):
     return manifest
 
 
-def pull_ime_report(remote, report, required=False):
+def pull_ime_report(remote, report, required=False, required_pattern='*.png'):
     destination=report/'ime-report'
     destination.mkdir(exist_ok=True)
     command=[ADB,'pull',remote.rstrip('/')+'/.',str(destination)]
@@ -434,8 +434,9 @@ def pull_ime_report(remote, report, required=False):
                     result=subprocess.run(command,capture_output=True,text=True,timeout=30)
                     output.append(result.stdout+result.stderr)
     (report/'ime-pull.txt').write_text('\n'.join(output))
-    if required and (result.returncode or not any(destination.rglob('*.png'))):
-        raise RuntimeError('IME screenshot export failed; inspect ime-pull.txt')
+    if required and (result.returncode or not any(destination.rglob(required_pattern))):
+        evidence='screenshot' if required_pattern=='*.png' else 'evidence'
+        raise RuntimeError(f'IME {evidence} export failed; inspect ime-pull.txt')
 
 
 def scoped_test_log(log, marker, end_marker=None):
@@ -456,10 +457,11 @@ def scoped_test_log(log, marker, end_marker=None):
 
 def start_test_log(report, marker):
     with (report/'logcat.raw').open('wb') as output, (report/'logcat-stderr.txt').open('wb') as errors:
-        process=subprocess.Popen([ADB,'logcat','-b','main,system,crash','-v','threadtime','-T','1'],
+        process=subprocess.Popen([ADB,'logcat','-b','main,system,crash','-v','threadtime'],
                                  stdout=output,stderr=errors)
     try:
         run([ADB,'shell','log','-t','CorAndroidTest',marker],timeout=15)
+        wait_test_log_marker(process,report,marker)
     except BaseException:
         stop_test_log(process)
         raise
@@ -476,6 +478,25 @@ def stop_test_log(process):
             process.wait(timeout=5)
 
 
+def wait_test_log_marker(process, report, marker):
+    deadline=time.monotonic()+30
+    boundary=marker.encode()
+    pending=b''
+    with (report/'logcat.raw').open('rb') as stream:
+        while True:
+            chunk=stream.read(64*1024)
+            pending+=chunk
+            if boundary in pending:
+                return
+            pending=pending[-len(boundary):]
+            if process.poll() is not None:
+                raise RuntimeError('Android logcat stream exited before its marker')
+            if time.monotonic()>=deadline:
+                raise RuntimeError('Android logcat stream did not capture its marker')
+            if not chunk:
+                time.sleep(0.1)
+
+
 def finish_test_log(process, report, marker):
     error=None
     end_marker=marker+'-end'
@@ -483,22 +504,7 @@ def finish_test_log(process, report, marker):
         if process.poll() is not None:
             raise RuntimeError('Android logcat stream exited before test completion')
         run([ADB,'shell','log','-t','CorAndroidTest',end_marker],timeout=15)
-        deadline=time.monotonic()+30
-        boundary=end_marker.encode()
-        pending=b''
-        with (report/'logcat.raw').open('rb') as stream:
-            while True:
-                chunk=stream.read(64*1024)
-                pending+=chunk
-                if boundary in pending:
-                    break
-                pending=pending[-len(boundary):]
-                if process.poll() is not None:
-                    raise RuntimeError('Android logcat stream exited before its end marker')
-                if time.monotonic()>=deadline:
-                    raise RuntimeError('Android logcat stream did not capture its end marker')
-                if not chunk:
-                    time.sleep(0.1)
+        wait_test_log_marker(process,report,end_marker)
     except Exception as capture_error:
         error=capture_error
     finally:
@@ -530,6 +536,74 @@ def input_method_crashes(log, package):
                         and ('Exception:' in entry or 'Error:' in entry)), 'unknown')
         crashes.append({'process':package,'exception':exception[:500]})
     return crashes
+
+
+def platform_ime_control(report, ime_service):
+    package=ime_service.split('/',1)[0]
+    properties=[subprocess.check_output([ADB,'shell','getprop',name],text=True,timeout=15).strip()
+                for name in ('ro.kernel.qemu','ro.debuggable','ro.build.version.sdk')]
+    if properties!=['1','1','31']:
+        raise RuntimeError('Native IME cold controls require a debuggable API 31 emulator')
+    for requests in (1,2):
+        directory=report/'platform-control'/('show-'+str(requests))
+        directory.mkdir(parents=True,exist_ok=True)
+        package_details=subprocess.run([ADB,'shell','dumpsys','package',package],
+                                       capture_output=True,timeout=15)
+        (directory/'input-method-package.txt').write_bytes(package_details.stdout+package_details.stderr)
+        run([ADB,'shell','am','force-stop','org.clashofrust.android'])
+        run([ADB,'shell','am','force-stop','org.clashofrust.android.test'])
+        cleared=subprocess.run([ADB,'shell','pm','clear',package],capture_output=True,text=True,timeout=30)
+        (directory/'reset.txt').write_text(cleared.stdout+cleared.stderr)
+        if cleared.returncode or cleared.stdout.strip()!='Success':
+            raise RuntimeError('Could not reset emulator input method for native control')
+        run([ADB,'shell','ime','enable',ime_service],timeout=15)
+        run([ADB,'shell','ime','set',ime_service],timeout=15)
+        marker=f'cor-native-ime-{os.getpid()}-{time.time_ns()}'
+        capture=start_test_log(directory,marker)
+        error=None
+        try:
+            run([ADB,'shell','am','start','-W','-n',
+                 'org.clashofrust.android.test/org.clashofrust.android.PlatformImeControlActivity',
+                 '--ei','show_requests',str(requests)],timeout=30)
+            deadline=time.monotonic()+15
+            while time.monotonic()<deadline:
+                time.sleep(0.5)
+                if input_method_crashes(scoped_test_log((directory/'logcat.raw').read_bytes(),marker),package):
+                    time.sleep(1)
+                    break
+                result=subprocess.run([ADB,'shell','dumpsys','input_method'],capture_output=True,text=True,timeout=10)
+                if 'mInputShown=true' in result.stdout:
+                    time.sleep(1)
+                    break
+        except Exception as control_error:
+            error=control_error
+        finally:
+            captured,log_error=finish_test_log(capture,directory,marker)
+            crashes=input_method_crashes(captured,package)
+            result={'schema':1,'editor':'android.widget.EditText',
+                'requested_shows':requests,'cold_input_method_data':True,'crashes':crashes,
+                'log_scoped':log_error is None,'capture_error':type(error or log_error).__name__
+                if error or log_error else None,
+                'complete':False,'diagnostic_only':True,'replaces_production_result':False}
+            write_json(directory/'result.json',result)
+            for name,command in {'input-method':['dumpsys','input_method'],
+                                 'windows':['dumpsys','window','windows']}.items():
+                details=subprocess.run([ADB,'shell',*command],capture_output=True,timeout=15)
+                (directory/(name+'.txt')).write_bytes(details.stdout+details.stderr)
+            screenshot=subprocess.run([ADB,'exec-out','screencap','-p'],capture_output=True,timeout=15)
+            (directory/'screenshot.png').write_bytes(screenshot.stdout)
+            try:
+                pull_ime_report('/sdcard/Android/data/org.clashofrust.android.test/files/platform-ime-control',
+                                directory,required=True,required_pattern='state.json')
+                state=json.loads((directory/'ime-report/state.json').read_text())
+                result['editor_state']=state
+                result['complete']=not result['capture_error'] and state.get('show_requests')==requests \
+                    and screenshot.returncode==0 and screenshot.stdout.startswith(b'\x89PNG\r\n\x1a\n')
+            except Exception as export_error:
+                result['capture_error']=type(export_error).__name__
+            write_json(directory/'result.json',result)
+            print('Native IME control:',requests,'show request(s),',len(crashes),
+                  'input method crash(es); original regression remains failed.',flush=True)
 
 
 def test(arch, apk=None, test_apk=None, ime_only=False, ime_probe=False,
@@ -667,6 +741,11 @@ def test(arch, apk=None, test_apk=None, ime_only=False, ime_probe=False,
         errors=[error for error in (capture_error,log_error) if error is not None]
         if crashes:
             errors.append(RuntimeError(f'Android input method crashed: {ime_package}; inspect input-method-status.json'))
+            if ime_only and not ime_probe and properties.get('ro.build.version.sdk')=='31':
+                try:
+                    platform_ime_control(report,ime_service)
+                except Exception as control_error:
+                    errors.append(RuntimeError('Native IME control capture failed: '+str(control_error)))
         if errors:
             if original:=sys.exception():
                 for error in errors:
