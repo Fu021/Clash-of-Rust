@@ -22,7 +22,7 @@
 - 新字段是否允许旧缓存、旧 manifest 和空/缺失输入；失败时应安全回退，而不是越界。
 - `.github/workflows/*.yml` 中冻结输入、artifact schema、job 名称和脚本参数是否一致。
 - composite action 的步骤字段受独立元数据契约约束，不能直接复制工作流步骤的 `timeout-minutes`；脚本内设置硬超时，调用方保留总预算。缓存允许失败时仍需核对步骤和日志，绿色 job 可能掩盖整个缓存入口加载失败。
-- 离线脚本回归须隔离 `RUNNER_TEMP`、原包配置和 summary，检查真实下载清单没有混入测试 URL 或模拟结果；测试通过不能代替这些副作用检查。
+- 所有离线脚本测试类须隔离 `RUNNER_TEMP`、原包配置及 Actions 的 env/output/state/summary 文件。共享 Go 下载测试也会登记原包，须验证记录只进入测试目录；检查真实下载清单没有混入测试 URL 或模拟结果，测试通过不能代替副作用检查。
 - 引导读取工具版本时不能提前导入 `tomllib` 等待安装解释器才提供的模块；固定 Python 须核对各 OS/架构实际提供的二进制，见[运行依赖缓存](../workflows/cache-coverage.md)，不能直接推广 Linux 的安全维护补丁号。
 - 绿色 CI 仍检查实际日志：Slint `viewport-y/height` 迁移为 `content-y/height`；Android 后端明确传入已选择的 SDK/build-tools，不能自动探测 runner 上的预览版；Gradle 显示完整弃用来源，Java 保留细粒度诊断。NativeActivity 的旧系统回退仅在必需方法上标注兼容，不能全局屏蔽。
 

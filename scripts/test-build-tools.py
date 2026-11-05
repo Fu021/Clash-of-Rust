@@ -416,10 +416,15 @@ Private_Clean: 2 kB
             self.assertEqual(len(memory_benchmark.read_scene(path, seconds=10, role='daemon')), 1)
 
     def setUp(self):
-        # Fixtures must not inherit the workflow's real dependency snapshot.
         directory = tempfile.TemporaryDirectory()
         self.addCleanup(directory.cleanup)
-        override = patch.dict(os.environ, {'BUILD_INPUTS_DIR': directory.name})
+        override = patch.dict(os.environ, {
+            'BUILD_INPUTS_DIR': directory.name,
+            'RUNNER_TEMP': directory.name,
+            'COR_UPSTREAM_CACHE_CONFIG': '',
+            **{name: str(Path(directory.name) / name.lower()) for name in (
+                'GITHUB_ENV', 'GITHUB_OUTPUT', 'GITHUB_STATE', 'GITHUB_STEP_SUMMARY')},
+        })
         override.start()
         self.addCleanup(override.stop)
 
@@ -845,8 +850,18 @@ Private_Clean: 2 kB
             (root/'apps/android/core/go.sum').write_bytes(b'checksums')
             with patch.object(build_inputs,'ROOT',root),patch.object(build_inputs.Path,'home',return_value=home), \
                     patch.object(build_inputs,'current_commit',return_value='a'*40), \
-                    patch.object(android_build,'ensure_binding_tool'),patch.object(build_inputs.subprocess,'run'):
+                    patch.object(android_build,'ensure_binding_tool'),patch.object(build_inputs.subprocess,'run'), \
+                    patch.dict(os.environ, {'GITHUB_ACTIONS': 'true'}):
                 build_inputs.shared_go(out)
+                reports = list(upstream_cache.directory().glob('*.json'))
+                self.assertEqual(len(reports), 1)
+                self.assertTrue(upstream_cache.directory().is_relative_to(
+                    Path(os.environ['BUILD_INPUTS_DIR'])))
+                self.assertEqual(json.loads(reports[0].read_text()), {
+                    'url': 'https://proxy.golang.org/example/@v/v1.0.0.zip',
+                    'size': len(b'verified source zip'),
+                    'sha256': build.sha256(module),
+                })
                 module.unlink()
                 build_inputs.shared_go(out,restore=True)
                 self.assertEqual(module.read_bytes(),b'verified source zip')
@@ -2831,9 +2846,11 @@ class OriginalDownloadTests(unittest.TestCase):
         self.addCleanup(temporary.cleanup)
         environment = patch.dict(os.environ, {
             'GITHUB_ACTIONS': 'true',
+            'BUILD_INPUTS_DIR': temporary.name,
             'RUNNER_TEMP': temporary.name,
             'COR_UPSTREAM_CACHE_CONFIG': '',
-            'GITHUB_STEP_SUMMARY': str(Path(temporary.name) / 'summary.md'),
+            **{name: str(Path(temporary.name) / name.lower()) for name in (
+                'GITHUB_ENV', 'GITHUB_OUTPUT', 'GITHUB_STATE', 'GITHUB_STEP_SUMMARY')},
         })
         environment.start()
         self.addCleanup(environment.stop)
