@@ -1357,6 +1357,9 @@ runpy.run_path(str(script), run_name='__main__')
             self.assertEqual(dependency_audit.android_candidate('system-image', '36-r7')[0], '36-r8')
         with patch.object(dependency_audit, 'metadata', return_value=content.replace(b'channel-1', b'channel-0')):
             self.assertEqual(dependency_audit.android_candidate('system-image', '36-r7')[0], '37-r1')
+        legacy=content.replace(b'android-35',b'android-31')
+        with patch.object(dependency_audit, 'metadata', return_value=legacy):
+            self.assertEqual(dependency_audit.android_candidate('system-image-legacy','31-r14')[0],'31-r99')
 
     def test_emulator_rejects_revisions_that_differ_from_the_cache_identity(self):
         versions = build_inputs.android_versions()
@@ -1375,6 +1378,13 @@ runpy.run_path(str(script), run_name='__main__')
                     with self.assertRaisesRegex(ValueError, 'revision differs'):
                         android_build.verify_emulator_versions(sdk)
                 properties.write_text(original)
+            legacy=sdk/versions['legacy_system_image'].replace(';','/')
+            legacy.mkdir(parents=True)
+            (legacy/'source.properties').write_text('Pkg.Revision = '+versions['legacy_system_image_revision']+'\n')
+            android_build.verify_emulator_versions(sdk,legacy=True)
+            (legacy/'source.properties').write_text('Pkg.Revision = 999\n')
+            with self.assertRaisesRegex(ValueError,'revision differs'):
+                android_build.verify_emulator_versions(sdk,legacy=True)
 
     def test_android_preparation_uses_the_approved_sdk_and_skips_unused_package_tools(self):
         versions = build_inputs.android_versions()

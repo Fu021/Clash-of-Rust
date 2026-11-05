@@ -92,6 +92,8 @@ def inventory():
         entries.append(('sdk', name, android[key], android_candidate))
     image_api = android['system_image'].split(';')[1].removeprefix('android-')
     entries.append(('sdk', 'system-image', image_api + '-r' + android['system_image_revision'], android_candidate))
+    legacy_api = android['legacy_system_image'].split(';')[1].removeprefix('android-')
+    entries.append(('sdk', 'system-image-legacy', legacy_api + '-r' + android['legacy_system_image_revision'], android_candidate))
     for name in ('mihomo', 'geo', 'nsis', 'linux'):
         value = selected['upstream'][name]
         current = value.get('published_at') if name == 'geo' else value.get('image', value.get('version', value.get('tag_name')))
@@ -106,14 +108,15 @@ def android_metadata():
 
 
 def android_candidate(name, current):
-    if name == 'system-image':
-        image = android_versions()['system_image'].split(';')
+    if name in ('system-image', 'system-image-legacy'):
+        image = android_versions()['legacy_system_image' if name == 'system-image-legacy' else 'system_image'].split(';')
         url = 'https://dl.google.com/android/repository/sys-img/' + image[2] + '/sys-img2-3.xml'
         root = ET.fromstring(metadata(url, raw=True))
         candidates = []
         for entry in root.iter('remotePackage'):
             parts = entry.get('path', '').split(';')
             if (len(parts) != 4 or parts[0] != image[0] or parts[2:] != image[2:]
+                    or (name == 'system-image-legacy' and parts[1] != image[1])
                     or not parts[1].removeprefix('android-').isdigit()
                     or entry.find('obsolete') is not None):
                 continue

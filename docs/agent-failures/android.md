@@ -64,6 +64,13 @@
 - 订阅保护校验放在共享会话，在下载、保存或重载前拒绝编辑和更新受保护订阅，同时允许修改其他订阅；界面禁用按钮只提供反馈，不能代替业务校验。
 - 网络开关同步移动协议、宿主投影、持久化与预览；依赖项被规范化关闭后要有重新开启入口。回归覆盖 DNS 覆盖关闭、重开、Fake-IP 手动恢复和重启保留，见[移动会话测试](../../crates/mobile-ffi/src/lib.rs)。
 
+### 输入框有光标但软键盘不显示
+
+- [issue #31](https://github.com/Fu021/Clash-of-Rust/issues/31) 的 Redmi K30 / MIUI 14.0.5 在两种输入法下均出现问题，视频有焦点和选择柄；这不能证明 Android 已建立 `InputConnection` 或键盘已显示。MIUI 版本也不能替代 Android 版本和 API 级别。
+- `v0.6.6` 与当前 [Java helper](../../vendor/slint-android-activity/java/SlintAndroidJavaHelper.java) 字节相同，已包含将动画回调移至输入视图的 OEM 补丁；[上游 #11344](https://github.com/slint-ui/slint/issues/11344) 不能再当作本次缺少的修复。Slint 1.18.1 重复点击已聚焦输入框仍会请求键盘，不能只据视频归因为首次调用过早。
+- 当前 helper 直接 `requestFocus()` 后调用 `showSoftInput()`，未核对返回值或实际 IME 可见性；窗口初始化还会隐藏键盘。请求未被系统接收、OEM 显示异常及随后隐藏均待设备日志区分，不能靠无限重试、强制弹出或模拟器通过认定修复。
+- 复现时采集跨进程 `adb logcat -b main -b system -v threadtime`，点击前后分别保留 `dumpsys input_method`、`dumpsys window windows` 及系统/API 信息；用虚构名称和地址，分享前脱敏。`cor logs` 是内核日志，不能替代系统输入法日志。[定向 CI](../workflows/ci.md#ci)补上 API 36/31 的添加表单、系统键盘可见性、输入连接提交、切换字段与隐藏后重开；运行结果及 MIUI 实机仍待验证。
+
 ### Geo 与安装包下载
 
 - 逐块同步写盘和直接覆盖活动 Geo 文件会让慢网、UI 卡顿与安装中断互相放大；活动文件破损还会影响内核重启。下载应复用[共享缓冲与慢速/断流约束](../../crates/client-core/src/download.rs)，Geo 按整组暂存、校验、事务安装，重载失败恢复旧文件。

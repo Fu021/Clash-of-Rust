@@ -255,6 +255,7 @@ export component MSwitch inherits Rectangle {
 export component MField inherits Rectangle {
     in property <bool> enabled: true;
     in property <bool> secret;
+    out property <bool> has-focus: input.has-focus;
     in-out property <string> text;
     in property <string> placeholder;
     callback edited(string);

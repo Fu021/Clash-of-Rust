@@ -137,7 +137,12 @@ export component MobileProxies inherits PageSurface {
 export component MobileSubscriptions inherits PageSurface {
     MScroll { VerticalLayout { alignment: start; spacing: MobileTypography.gap; padding-bottom: MobileTypography.padding;
         HorizontalLayout { spacing: MobileTypography.small-gap;
-            MButton { text: "+ 添加订阅"; primary: true; enabled: !MobileData.profile-busy; clicked => { MobileView.selected-id = ""; MobileView.profile-name = ""; MobileView.profile-source = ""; MobileView.detail = 3; } }
+            MButton { text: "+ 添加订阅"; primary: true; enabled: !MobileData.profile-busy;
+                property <[length]> target: [self.absolute-position.x, self.absolute-position.y, self.width, self.height];
+                changed target => { MobileView.profile-add-target = self.target; }
+                init => { MobileView.profile-add-target = self.target; }
+                clicked => { MobileView.selected-id = ""; MobileView.profile-name = ""; MobileView.profile-source = ""; MobileView.detail = 3; }
+            }
         }
         for profile in MobileData.profiles: MCard {
             selected: profile.active;

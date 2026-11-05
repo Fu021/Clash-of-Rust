@@ -58,10 +58,22 @@ export component MobileDetails inherits PageSurface {
             }
             if MobileView.detail == 3: MCard {
                 MSmall { text: "订阅名称"; }
-                MField { placeholder: "输入名称"; enabled: !MobileData.profile-busy; text <=> MobileView.profile-name; edited(value) => { MobileView.draft-dirty = true; } }
+                MField { placeholder: "输入名称"; enabled: !MobileData.profile-busy; text <=> MobileView.profile-name;
+                    property <[length]> target: [self.absolute-position.x, self.absolute-position.y, self.width, self.height];
+                    changed target => { MobileView.profile-name-target = self.target; }
+                    changed has-focus => { MobileView.profile-name-focused = self.has-focus; }
+                    init => { MobileView.profile-name-target = self.target; MobileView.profile-name-focused = self.has-focus; }
+                    edited(value) => { MobileView.draft-dirty = true; }
+                }
                 MButton { text: "选择本地文件"; enabled: !MobileData.profile-busy; clicked => { MobileActions.request(MobileIntent.pick-file, "", ""); } }
                 MSmall { text: "订阅地址（本地配置可留空）"; }
-                MField { placeholder: "https://example.com/subscription"; enabled: !MobileData.profile-busy; text <=> MobileView.profile-source; edited(value) => { MobileView.draft-dirty = true; } }
+                MField { placeholder: "https://example.com/subscription"; enabled: !MobileData.profile-busy; text <=> MobileView.profile-source;
+                    property <[length]> target: [self.absolute-position.x, self.absolute-position.y, self.width, self.height];
+                    changed target => { MobileView.profile-source-target = self.target; }
+                    changed has-focus => { MobileView.profile-source-focused = self.has-focus; }
+                    init => { MobileView.profile-source-target = self.target; MobileView.profile-source-focused = self.has-focus; }
+                    edited(value) => { MobileView.draft-dirty = true; }
+                }
                 if MobileData.profile-busy: MSmall { text: "正在保存订阅，请稍候…"; wrap: word-wrap; }
             }
             if MobileView.detail == 16: VerticalLayout { spacing: MobileTypography.gap;

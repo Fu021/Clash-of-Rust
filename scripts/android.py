@@ -118,13 +118,14 @@ def prepare_sdk(package_only=False):
             stream.write('ANDROID_NDK_ROOT=' + str(sdk / 'ndk' / versions['ndk']) + '\n')
 
 
-def verify_emulator_versions(sdk):
+def verify_emulator_versions(sdk, legacy=False):
     versions = android_versions()
+    image_key = 'legacy_system_image' if legacy else 'system_image'
     def revision(value):
         parts = value.split('.')
         return tuple(int(part) for part in parts + ['0'] * (3 - len(parts)))
     for relative, expected in (('emulator', versions['emulator']),
-                               (versions['system_image'].replace(';', '/'), versions['system_image_revision'])):
+                               (versions[image_key].replace(';', '/'), versions[image_key+'_revision'])):
         properties = (sdk / relative / 'source.properties').read_text()
         match = re.search(r'(?m)^\s*Pkg\.Revision\s*=\s*([0-9.]+)\s*$', properties)
         if not match or revision(match[1]) != revision(expected):
@@ -357,7 +358,7 @@ def verify_build(root, arch, expected_commit):
     return manifest
 
 
-def test(arch, apk=None, test_apk=None):
+def test(arch, apk=None, test_apk=None, ime_only=False):
     if arch != 'x64':
         return
     apk = apk or ANDROID/'app/build/outputs/apk/release/app-release.apk'
@@ -384,19 +385,34 @@ def test(arch, apk=None, test_apk=None):
             self.wfile.write(body); self.wfile.flush()
             if self.path=='/hold': time.sleep(15)
         def log_message(self,*args): pass
-    server=http.server.ThreadingHTTPServer(('0.0.0.0',18081),Origin)
-    threading.Thread(target=server.serve_forever,daemon=True).start()
+    server=None
+    if not ime_only:
+        server=http.server.ThreadingHTTPServer(('0.0.0.0',18081),Origin)
+        threading.Thread(target=server.serve_forever,daemon=True).start()
     # Exercise Android's real first-use dialog; pre-granting consent hides
     # ordering bugs between authorization, protection DNS and VPN startup.
-    run([ADB,'shell','appops','set','org.clashofrust.android','ACTIVATE_VPN','default'])
+    if not ime_only:
+        run([ADB,'shell','appops','set','org.clashofrust.android','ACTIVATE_VPN','default'])
     report=ROOT/'target/android-report'/arch
+    if ime_only:
+        api=subprocess.check_output([ADB,'shell','getprop','ro.build.version.sdk'],text=True,timeout=15).strip()
+        if not api.isdigit():
+            raise ValueError('Could not identify the Android IME test API level')
+        report=report/('ime-api-'+api)
     report.mkdir(parents=True,exist_ok=True)
+    properties={}
+    for name in ('ro.build.version.sdk','ro.build.version.release','ro.build.fingerprint',
+                 'ro.product.manufacturer','ro.product.model','ro.product.cpu.abi'):
+        properties[name]=subprocess.check_output([ADB,'shell','getprop',name],text=True,timeout=15).strip()
+    write_json(report/'device.json',properties)
     try:
         outputs=[]
-        for case in ('localProxyAndRealTunCarryTrafficAndDisconnectCleanly',
-                     'quickTileRestoresColdCoreWithoutOpeningTheActivity'):
-            if case.startswith('quickTile'):
-                run([ADB,'shell','am','force-stop','org.clashofrust.android'])
+        cases=('subscriptionFieldsShowImeAcceptTextAndReopenAfterBack',)
+        if not ime_only:
+            cases+=('localProxyAndRealTunCarryTrafficAndDisconnectCleanly',
+                    'quickTileRestoresColdCoreWithoutOpeningTheActivity')
+        for case in cases:
+            run([ADB,'shell','am','force-stop','org.clashofrust.android'])
             result = subprocess.run([ADB,'shell','am','instrument','-w','-e','class',
                 'org.clashofrust.android.ProxyTunTest#'+case,
                 'org.clashofrust.android.test/androidx.test.runner.AndroidJUnitRunner'],
@@ -405,15 +421,20 @@ def test(arch, apk=None, test_apk=None):
             (report/'instrumentation.txt').write_text('\n\n'.join(outputs))
             print(result.stdout,flush=True)
             if result.returncode or 'FAILURES!!!' in result.stdout or 'OK (' not in result.stdout:
-                raise RuntimeError('Android real proxy/TUN integration test failed: '+case)
+                raise RuntimeError('Android integration test failed: '+case)
     finally:
-        server.shutdown(); server.server_close()
+        if server is not None:
+            server.shutdown(); server.server_close()
         log = subprocess.run([ADB,'logcat','-d','-v','threadtime'],capture_output=True,text=True,timeout=30)
         (report/'logcat.txt').write_text(log.stdout)
+        screenshots=subprocess.run([ADB,'pull','/sdcard/Android/data/org.clashofrust.android/files/ime-report',
+                                    str(report/'ime-report')],capture_output=True,text=True,timeout=30)
+        (report/'ime-pull.txt').write_text(screenshots.stdout+screenshots.stderr)
         for name, command in {'connectivity':['dumpsys','connectivity'],
                               'routes':['ip','route','show','table','all'],
                               'vpn':['dumpsys','vpn_management'],
                               'windows':['dumpsys','window','windows'],
+                              'input-method':['dumpsys','input_method'],
                               'activities':['dumpsys','activity','activities'],
                               'power':['dumpsys','power']}.items():
             details=subprocess.run([ADB,'shell',*command],capture_output=True,text=True,timeout=15)
@@ -467,22 +488,33 @@ def main():
     parser.add_argument('--arch',choices=ABIS,required=True)
     parser.add_argument('--run-id',type=int)
     parser.add_argument('--check',action='store_true')
+    parser.add_argument('--legacy',action='store_true',help='Use the approved Android 12 IME regression image')
+    parser.add_argument('--ime-only',action='store_true',help='Run only the subscription input-method regression')
     args=parser.parse_args()
+    if args.legacy and args.operation!='emulator':
+        parser.error('--legacy applies only to emulator preparation')
+    if args.ime_only and args.operation!='test':
+        parser.error('--ime-only applies only to test')
     if args.operation=='emulator':
         sdk=Path(os.environ['ANDROID_HOME'])
         manager=sdk_bin()
         device_root=Path(os.environ['RUNNER_TEMP'])/'cor-emulator'
         versions=android_versions()
+        image_key='legacy_system_image' if args.legacy else 'system_image'
+        image=versions[image_key]
         install_sdk_packages(sdk_install_command(manager, [
             'platform-tools@'+versions['platform_tools'], 'emulator@'+versions['emulator'],
-            versions['system_image']+'@'+versions['system_image_revision']]), device_root)
-        verify_emulator_versions(sdk)
+            image+'@'+versions[image_key+'_revision']]), device_root)
+        verify_emulator_versions(sdk,legacy=args.legacy)
         user_home=device_root/'.android'; avds=user_home/'avd'
         avds.mkdir(parents=True,exist_ok=True)
         env=dict(os.environ,ANDROID_USER_HOME=str(user_home),ANDROID_AVD_HOME=str(avds),ANDROID_SDK_HOME=str(device_root))
         run([manager/'avdmanager','create','avd','--force','--name','cor-ci','--path',avds/'cor-ci.avd',
-             '--device','pixel_6','--package',android_versions()['system_image']],input='no\n',text=True,env=env)
+             '--device','pixel_6','--package',image],input='no\n',text=True,env=env)
         report=ROOT/'target/android-report/x64'; report.mkdir(parents=True,exist_ok=True)
+        if args.legacy:
+            report=report/('ime-api-'+image.split(';')[1].removeprefix('android-'))
+            report.mkdir(parents=True,exist_ok=True)
         cores=min(4,os.cpu_count() or 1)
         print(f'Disposable Android emulator: 4096 MiB RAM, {cores} virtual CPUs',flush=True)
         with (report/'emulator.txt').open('w') as log:
@@ -501,13 +533,16 @@ def main():
         run([ADB,'shell','settings','put','global','private_dns_mode','off'])
         run([ADB,'shell','input','keyevent','KEYCODE_WAKEUP'])
         run([ADB,'shell','wm','dismiss-keyguard'])
+        if args.legacy:
+            run([ADB,'shell','wm','size','1080x2400'])
+            run([ADB,'shell','wm','density','440'])
         # Standard UI-test setup: the launcher's animated input sink can outlive
         # Activity.onResume. Keep system transitions deterministic in CI only.
         for setting in ('window_animation_scale','transition_animation_scale','animator_duration_scale'):
             run([ADB,'shell','settings','put','global',setting,'0'])
     elif args.operation=='build': build(args.arch)
     elif args.operation=='export': export_build(args.arch)
-    elif args.operation=='test': test(args.arch)
+    elif args.operation=='test': test(args.arch,ime_only=args.ime_only)
     else: package(args.arch,args.run_id,args.check)
 
 

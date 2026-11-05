@@ -3051,6 +3051,14 @@ fn apply(ui: &AndroidWindow, p: Projection) {
             "body_size":typography.invoke_font_size(16),
             "width":size.width as f32/scale,"height":size.height as f32/scale,"scale":scale,
             "safe_top":view.get_safe_top(),"safe_bottom":view.get_safe_bottom(),
+            "keyboard_inset":view.get_keyboard_inset(),
+            "profile_add_target":view.get_profile_add_target().iter().collect::<Vec<_>>(),
+            "profile_name_target":view.get_profile_name_target().iter().collect::<Vec<_>>(),
+            "profile_source_target":view.get_profile_source_target().iter().collect::<Vec<_>>(),
+            "profile_name_focused":view.get_profile_name_focused(),
+            "profile_source_focused":view.get_profile_source_focused(),
+            "profile_name_length":view.get_profile_name().chars().count(),
+            "profile_source_length":view.get_profile_source().chars().count(),
             "settings_scroll_y":view.get_settings_scroll_y(),"settings_content_height":view.get_settings_content_height(),
             "settings_viewport_height":view.get_settings_viewport_height()})
         .to_string();

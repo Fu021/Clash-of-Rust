@@ -181,6 +181,133 @@ public class ProxyTunTest {
         });
         return result.get();
     }
+    private static void tapTarget(String name) throws Exception {
+        JSONObject ui=MainActivity.diagnostics();
+        JSONArray bounds=ui.getJSONArray(name);
+        assertEquals("Expected the real Slint control bounds",4,bounds.length());
+        assertTrue("Control has no width",bounds.getDouble(2)>0);
+        assertTrue("Control has no height",bounds.getDouble(3)>0);
+        float scale=(float)ui.getDouble("scale");
+        tap((float)(bounds.getDouble(0)+bounds.getDouble(2)/2)*scale,
+            (float)(bounds.getDouble(1)+bounds.getDouble(3)/2)*scale);
+    }
+    private static android.view.View inputEditor(android.view.View view) {
+        if ("SlintInputView".equals(view.getClass().getSimpleName())) return view;
+        if (view instanceof android.view.ViewGroup) {
+            android.view.ViewGroup group=(android.view.ViewGroup)view;
+            for (int index=0;index<group.getChildCount();index++) {
+                android.view.View found=inputEditor(group.getChildAt(index));
+                if (found!=null) return found;
+            }
+        }
+        return null;
+    }
+    private static boolean imeVisible() {
+        java.util.concurrent.atomic.AtomicBoolean visible=new java.util.concurrent.atomic.AtomicBoolean();
+        MainActivity activity=resumedActivity();
+        if (activity==null) return false;
+        InstrumentationRegistry.getInstrumentation().runOnMainSync(()-> {
+            android.view.View editor=inputEditor(activity.getWindow().getDecorView());
+            if (editor==null || !editor.hasFocus()) return;
+            android.view.WindowInsets insets=editor.getRootWindowInsets();
+            android.view.inputmethod.InputMethodManager manager=activity.getSystemService(
+                android.view.inputmethod.InputMethodManager.class);
+            visible.set(insets!=null && insets.isVisible(android.view.WindowInsets.Type.ime())
+                && insets.getInsets(android.view.WindowInsets.Type.ime()).bottom>0
+                && manager.isActive(editor));
+        });
+        return visible.get();
+    }
+    private static void commitImeText(String text) {
+        MainActivity activity=resumedActivity();
+        assertNotNull("No resumed input Activity",activity);
+        InstrumentationRegistry.getInstrumentation().runOnMainSync(()-> {
+            android.view.View editor=inputEditor(activity.getWindow().getDecorView());
+            assertNotNull("Slint input editor is missing",editor);
+            assertTrue("Slint input editor has no Android focus",editor.hasFocus());
+            assertTrue("Android has not connected the input editor",activity.getSystemService(
+                android.view.inputmethod.InputMethodManager.class).isActive(editor));
+            android.view.inputmethod.InputConnection connection=editor.onCreateInputConnection(
+                new android.view.inputmethod.EditorInfo());
+            assertTrue("Expected the production editable connection",
+                connection instanceof android.view.inputmethod.BaseInputConnection);
+            android.text.Editable editable=((android.view.inputmethod.BaseInputConnection)connection).getEditable();
+            assertNotNull("Input connection has no editable text",editable);
+            connection.beginBatchEdit();
+            try {
+                assertTrue(connection.setSelection(0,editable.length()));
+                assertTrue("Input connection rejected committed text",connection.commitText(text,1));
+            } finally {connection.endBatchEdit();}
+        });
+    }
+    private static void captureIme(String phase) throws Exception {
+        Context context=InstrumentationRegistry.getInstrumentation().getTargetContext();
+        File directory=new File(context.getExternalFilesDir(null),"ime-report");
+        assertTrue(directory.isDirectory() || directory.mkdirs());
+        for (String service:new String[]{"input_method","window windows"}) {
+            String name=service.startsWith("window")?"windows":"input-method";
+            java.nio.file.Files.write(new File(directory,phase+"-"+name+".txt").toPath(),
+                shell("dumpsys "+service).getBytes(StandardCharsets.UTF_8));
+        }
+        android.graphics.Bitmap screenshot=InstrumentationRegistry.getInstrumentation().getUiAutomation().takeScreenshot();
+        assertNotNull("Could not capture the actual keyboard surface",screenshot);
+        try (OutputStream output=new FileOutputStream(new File(directory,phase+".png"))) {
+            assertTrue(screenshot.compress(android.graphics.Bitmap.CompressFormat.PNG,100,output));
+        } finally {screenshot.recycle();}
+        System.out.println("IME "+phase+": "+MainActivity.diagnostics());
+    }
+    @Test public void subscriptionFieldsShowImeAcceptTextAndReopenAfterBack() throws Exception {
+        Context context=InstrumentationRegistry.getInstrumentation().getTargetContext();
+        shell("settings put system font_scale 1.0");
+        context.startActivity(new Intent(context,MainActivity.class).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK));
+        try {
+            await("Input test Activity did not receive focus",()->inStage(androidx.test.runner.lifecycle.Stage.RESUMED,true));
+            waitForAppWindow();
+            await("Input test core did not start",CoreBridge::ready);
+            tab(2,2);
+            await("Add subscription control has no layout",()-> {
+                JSONArray target=MainActivity.diagnostics().optJSONArray("profile_add_target");
+                return target!=null && target.length()==4 && target.optDouble(2)>0 && target.optDouble(3)>0;
+            });
+            tapTarget("profile_add_target");
+            await("Add subscription did not open",()->MainActivity.diagnostics().optInt("detail")==3);
+            captureIme("before-focus");
+            int iteration=0;
+            for (String field:new String[]{"name","source","name"}) {
+                tapTarget("profile_"+field+"_target");
+                await("Subscription "+field+" did not gain Slint focus",()-> {
+                    if (MainActivity.diagnostics().optBoolean("profile_"+field+"_focused")) return true;
+                    tapTarget("profile_"+field+"_target");
+                    SystemClock.sleep(250);
+                    return MainActivity.diagnostics().optBoolean("profile_"+field+"_focused");
+                });
+                await("Focused subscription "+field+" did not show the actual Android IME",ProxyTunTest::imeVisible);
+                await("Slint did not receive the keyboard inset",()->MainActivity.diagnostics().optDouble("keyboard_inset")>0);
+                String text=field.equals("name")?"ImeProbe":"https://example.invalid/ime";
+                commitImeText(text);
+                await("IME text did not reach the subscription "+field,()->MainActivity.diagnostics()
+                    .optInt("profile_"+field+"_length",-1)==text.length());
+                captureIme((iteration++)+"-"+field+"-visible");
+                shell("input keyevent KEYCODE_BACK");
+                await("Android IME did not hide after Back",()->!imeVisible()
+                    && MainActivity.diagnostics().optDouble("keyboard_inset")==0);
+                assertEquals("Back should hide the IME and keep the editor open",3,MainActivity.diagnostics().getInt("detail"));
+            }
+            shell("am start -W -a android.intent.action.MAIN -c android.intent.category.HOME");
+            await("Input test Activity did not enter background",()->inStage(androidx.test.runner.lifecycle.Stage.STOPPED,false));
+            shell("am start -W -n org.clashofrust.android/.MainActivity");
+            await("Input test Activity did not resume",()->inStage(androidx.test.runner.lifecycle.Stage.RESUMED,true));
+            waitForAppWindow();
+            tapTarget("profile_source_target");
+            await("Resumed subscription editor did not show the IME",ProxyTunTest::imeVisible);
+            captureIme("after-resume");
+            captureIme("final");
+        } catch (Exception | AssertionError error) {
+            try {captureIme("failure");}
+            catch (Exception | AssertionError snapshot) {error.addSuppressed(snapshot);}
+            throw error;
+        }
+    }
     private interface Condition { boolean ready() throws Exception; }
     private static boolean vpnActive(ConnectivityManager connectivity) {
         NetworkCapabilities capabilities=connectivity.getNetworkCapabilities(connectivity.getActiveNetwork());

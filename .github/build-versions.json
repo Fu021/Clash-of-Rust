@@ -36,7 +36,9 @@
       "platform_tools": "37.0.1",
       "emulator": "37.2.13",
       "system_image": "system-images;android-36;google_apis;x86_64",
-      "system_image_revision": "7"
+      "system_image_revision": "7",
+      "legacy_system_image": "system-images;android-31;google_apis;x86_64",
+      "legacy_system_image_revision": "14"
     },
     "java": {
       "version": "25.0.5+8",

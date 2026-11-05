@@ -8,6 +8,8 @@
 
 依赖维护可手动运行现有 CI，设置 `refresh_dependencies=true`：只在 Actions 解析 Cargo/Go 更新并导出带来源提交和 SHA256 的 `dependency-updates`，不运行平台矩阵，也不作为打包依据。将已审阅的锁文件提交后，仍须取得新提交的普通 push CI 与不发布打包验证；受限本机不执行依赖下载或构建。
 
+输入法排障可手动设置 `android_ime_only=true`：仅构建 Android x64，在 API 36 和固定 API 31 镜像上验证订阅名称/URL 的焦点、系统 IME 可见性、输入连接提交、Back 隐藏后重开及前后台恢复。保留控件实际坐标、字符数量、窗口/输入法日志和截图，测试只用虚构表单内容；旧系统使用 1080×2400、440 dpi 的通用手机视口。它不包含 MIUI，不能冒充 Redmi K30 实机复现，也不能作为完整 CI 或发布依据；不启动桌面矩阵、缓存审计或打包。两个手动模式分别运行。
+
 Android 在 Gradle setup 后重新激活固定 Python、JDK 和 Go，编译前执行 `build_inputs.py check-tools` 核对实际版本。环境变量里记录的版本或早先 setup 成功不能代替当前 PATH 上的工具检查；版本漂移先失败，不放宽 `go mod tidy -diff` 或自动下载另一套编译器。
 
 共享 Go 下载在矩阵启动前执行 `go mod tidy -diff`，先拒绝未规范化的锁文件，避免三种 Android ABI 完成 Rust 编译后才发现同一问题。
@@ -47,7 +49,7 @@ Python 和原始云镜像使用官方优先、原包私网回退，全部新导�
 - main push、PR 更新触发 CI；过时运行自动取消。本地生成的编译、打包产物和缓存已在 `.gitignore` 中排除，不应提交。
 - 桌面 CI 不生成安装包；桌面后台、界面程序、`cor` 和网络助手一起导出，现有代理/TUN 集成场景同时验证真实控制台命令及后台生命周期。Android CI 生成供安装测试与发布复用的 APK。产物记录提交、版本、架构、Cargo.lock、工具链及逐文件校验值；仅附带发布后复用的 `core_integration` 代理/TUN 测试程序，不上传源码单元测试程序。产物采用 schema 3，只与同一提交的打包流程配套使用。
 
-Android x86_64 使用 API 36 模拟器运行真实代理/TUN 流量测试，验证正式界面的内核状态、默认策略组、订阅导航和设置触摸滚动，以及系统 VPN 授权、DNS、套接字保护、快捷磁贴连接/断开、Activity 重建和路由恢复。取消后到达的普通授权、过期服务启动与排队连接不得重新开启 VPN，连接中必须提供取消入口；ARM64/ARMv7 完成实际编译、Gradle lint 与架构校验，仍需真机验收。Android 测试结果、体积报告和 logcat 保存在 `android-report-{arch}`，固定开发签名与构建说明见 [Android 宿主](../../apps/android/README.md)。
+Android x86_64 使用 API 36 模拟器运行真实代理/TUN 流量测试及上述订阅输入法回归，验证正式界面的内核状态、默认策略组、订阅导航和设置触摸滚动，以及系统 VPN 授权、DNS、套接字保护、快捷磁贴连接/断开、Activity 重建和路由恢复；另在 API 31 串行复验输入法。取消后到达的普通授权、过期服务启动与排队连接不得重新开启 VPN，连接中必须提供取消入口；ARM64/ARMv7 完成实际编译、Gradle lint 与架构校验，仍需真机验收。Android 测试结果、体积报告和 logcat 保存在 `android-report-{arch}`，固定开发签名与构建说明见 [Android 宿主](../../apps/android/README.md)。
 
 macOS 失败日志、系统与网络状态、崩溃报告保存在 `macos-ci-report-{arch}`，Windows 集成检查结果保存在 `windows-ci-report-{arch}`。人工授权窗口、真实重启登录和物理显示器行为仍需人工验收。
 

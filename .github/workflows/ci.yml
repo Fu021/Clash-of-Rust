@@ -9,6 +9,10 @@ on:
         description: Resolve updated Cargo/Go lockfiles for a subsequent reviewed commit
         type: boolean
         default: false
+      android_ime_only:
+        description: Build Android x64 and investigate subscription keyboard on Android 12 and 16
+        type: boolean
+        default: false
 env:
   SEGMENT_DOWNLOAD_TIMEOUT_MINS: '2'
   BUILD_INPUTS_DIR: dependency-snapshot
@@ -143,13 +147,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        include:
-          - arch: arm64
-            target: aarch64-linux-android
-          - arch: armv7
-            target: armv7-linux-androideabi
-          - arch: x64
-            target: x86_64-linux-android
+        include: ${{ fromJSON(inputs.android_ime_only && '[{"arch":"x64","target":"x86_64-linux-android"}]' || '[{"arch":"arm64","target":"aarch64-linux-android"},{"arch":"armv7","target":"armv7-linux-androideabi"},{"arch":"x64","target":"x86_64-linux-android"}]') }}
     env:
       PYTHONDONTWRITEBYTECODE: '1'
       ANDROID_CI_TEST: '1'
@@ -287,13 +285,27 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: python3 scripts/android.py build --arch ${{ matrix.arch }}
       - name: Start Android test device
+        id: android_device
         if: matrix.arch == 'x64'
         run: |
           sudo chmod a+rw /dev/kvm
           python3 scripts/android.py emulator --arch x64
       - name: Verify real Android proxy and TUN traffic
-        if: matrix.arch == 'x64'
+        if: matrix.arch == 'x64' && !inputs.android_ime_only
         run: python3 scripts/android.py test --arch x64
+      - name: Investigate subscription keyboard on Android 16
+        if: matrix.arch == 'x64' && inputs.android_ime_only
+        run: python3 scripts/android.py test --arch x64 --ime-only
+      - name: Verify subscription keyboard on Android 12
+        if: ${{ !cancelled() && matrix.arch == 'x64' && steps.android_device.outcome == 'success' }}
+        shell: python
+        run: |
+          import os, pathlib, subprocess, sys
+          adb = str(pathlib.Path(os.environ['ANDROID_HOME']) / 'platform-tools/adb')
+          subprocess.run([adb, 'emu', 'kill'], check=True, timeout=30)
+          subprocess.run([adb, 'wait-for-disconnect'], check=True, timeout=30)
+          subprocess.run([sys.executable, 'scripts/android.py', 'emulator', '--arch', 'x64', '--legacy'], check=True)
+          subprocess.run([sys.executable, 'scripts/android.py', 'test', '--arch', 'x64', '--ime-only'], check=True)
       - name: Export tested Android compilation
         run: python3 scripts/android.py export --arch ${{ matrix.arch }}
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
@@ -322,7 +334,7 @@ jobs:
         with:
           name: upstream-downloads-${{ github.job }}-${{ strategy.job-index || '0' }}
   check:
-    if: ${{ !inputs.refresh_dependencies }}
+    if: ${{ !inputs.refresh_dependencies && !inputs.android_ime_only }}
     name: ${{ matrix.system }}-${{ matrix.arch }}
     needs: inputs
     timeout-minutes: 90
@@ -571,7 +583,7 @@ jobs:
   cache_budget:
     name: Actions cache budget
     needs: [inputs, android, check]
-    if: ${{ !cancelled() && !inputs.refresh_dependencies }}
+    if: ${{ !cancelled() && !inputs.refresh_dependencies && !inputs.android_ime_only }}
     runs-on: ubuntu-latest
     timeout-minutes: 10
     permissions:
