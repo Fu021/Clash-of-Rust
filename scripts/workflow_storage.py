@@ -59,17 +59,21 @@ def lineage(key):
 def priority(entry):
     key = entry['key']
     if key.startswith('native-release-'):
-        if 'windows' in key and 'arm' in key:
-            return 6
-        if 'macos' in key and ('13' in key or 'intel' in key):
-            return 5
-        if 'windows' in key:
-            return 4
         if 'macos' in key:
-            return 3
+            return 8 if 'macos-13-' in key or 'intel' in key else 9
+        if 'windows' in key and 'arm' in key:
+            return 7
+        if 'windows' in key:
+            return 6
+        if 'linux' in key or 'ubuntu' in key:
+            return 1 if 'arm' in key else 2
         return 1
+    if key.startswith('android-v2-arm64-'):
+        return 5
+    if key.startswith('android-v2-x64-'):
+        return 4
     if key.startswith('android-v2-armv7-'):
-        return 2
+        return 3
     if key.startswith('android-v2-'):
         return 1
     if key.startswith('memory-'):

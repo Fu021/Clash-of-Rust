@@ -3582,6 +3582,30 @@ if(mode==='main'){
         removed = storage.eviction_plan([slow, desktop, linux, memory, tool], 200)
         self.assertEqual({value['id'] for value in removed}, {3, 4, 5})
 
+    def test_rust_cache_budget_preserves_arm_mac_then_measured_platform_order(self):
+        native_prefix = 'native-release-'+'v2-'
+        keys = [
+            native_prefix+'macos-latest',
+            native_prefix+'macos-15-intel',
+            native_prefix+'windows-11-arm',
+            native_prefix+'windows-2025',
+            'android-v2-arm64',
+            'android-v2-x64',
+            'android-v2-armv7',
+            'native-release-ubuntu20-v1-ubuntu-22.04',
+            'native-release-ubuntu20-v1-ubuntu-22.04-arm',
+            'memory-ubuntu22-v2-release',
+        ]
+        entries = [{'id':index,'key':key+'-13131313-11223344','ref':'refs/heads/main',
+                    'size_in_bytes':100,'last_accessed_at':f'{index:02d}','created_at':f'{index:02d}'}
+                   for index,key in enumerate(keys)]
+        for count in range(1,len(entries)+1):
+            with self.subTest(retained=count):
+                removed = storage.eviction_plan(entries,count*100)
+                retained = {entry['id'] for entry in entries}-{entry['id'] for entry in removed}
+                self.assertEqual(retained,set(range(count)))
+        self.assertEqual(storage.priority({'key':native_prefix+'macos-13-check-13131313-11223344'}),8)
+
 
 class AptCacheTests(unittest.TestCase):
     def test_records_require_strong_hashes_and_safe_names(self):
