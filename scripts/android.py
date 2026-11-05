@@ -588,6 +588,7 @@ def test(arch, apk=None, test_apk=None, ime_only=False, ime_probe=False,
                         ('before-focus','0-name-visible','1-source-visible','2-name-visible',
                          '2-name-hidden','3-source-visible','3-source-hidden','4-name-visible',
                          '4-name-hidden','after-resume','landscape-hidden','landscape-name-visible',
+                         'landscape-source-visible',
                          'portrait-hidden','final'))
                 for iteration in range(1,ime_rounds+1):
                     for phase in phases:

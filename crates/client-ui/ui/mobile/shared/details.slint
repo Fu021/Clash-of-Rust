@@ -32,21 +32,9 @@ export component MobileDetails inherits PageSurface {
     if MobileView.detail != 14 && MobileView.detail != 15 && MobileView.detail != 6 && MobileView.detail != 17: VerticalLayout { spacing: MobileTypography.gap;
         details-scroll := MScroll {
             content-key: MobileView.detail + "/" + MobileView.selected-id + "/" + MobileView.category + "/" + MobileView.site-status + "/" + MobileView.log-message;
-            property <length> keyboard: MobileView.keyboard-inset;
             property <[length]> viewport: [self.absolute-position.x, self.absolute-position.y, self.width, self.height];
             changed viewport => { MobileView.profile-editor-viewport = self.viewport; }
             init => { MobileView.profile-editor-viewport = self.viewport; }
-            function reveal-profile-field() {
-                if MobileView.detail == 3 && self.keyboard > 0px {
-                    if MobileView.profile-name-focused {
-                        self.reveal(MobileView.profile-name-target[1], MobileView.profile-name-target[3]);
-                    } else if MobileView.profile-source-focused {
-                        self.reveal(MobileView.profile-source-target[1], MobileView.profile-source-target[3]);
-                    }
-                }
-            }
-            changed height => { self.reveal-profile-field(); }
-            changed keyboard => { self.reveal-profile-field(); }
             VerticalLayout { width: root.width; alignment: start; spacing: MobileTypography.gap; padding-bottom: MobileTypography.padding;
             if MobileView.detail == 5: MCard {
                 for row[i] in MobileData.connection-details: VerticalLayout { spacing: MobileTypography.small-gap;
@@ -89,28 +77,41 @@ export component MobileDetails inherits PageSurface {
                     toggled(value) => { MobileView.rule-enabled = value; MobileView.draft-dirty = true; }
                 }
             }
-            if MobileView.detail == 3: MCard {
+            if MobileView.detail == 3: profile-form := MCard {
+                property <length> keyboard: MobileView.keyboard-inset;
+                property <length> viewport-height: details-scroll.height;
+                property <bool> name-focused: MobileView.profile-name-focused;
+                property <bool> source-focused: MobileView.profile-source-focused;
+                function reveal-profile-field() {
+                    if self.keyboard > 0px {
+                        if self.name-focused {
+                            details-scroll.reveal(name-field.absolute-position.y, name-field.height);
+                        } else if self.source-focused {
+                            details-scroll.reveal(source-field.absolute-position.y, source-field.height);
+                        }
+                    }
+                }
+                changed keyboard => { self.reveal-profile-field(); }
+                changed viewport-height => { self.reveal-profile-field(); }
+                changed name-focused => { self.reveal-profile-field(); }
+                changed source-focused => { self.reveal-profile-field(); }
                 MSmall { text: "订阅名称"; }
-                MField { placeholder: "输入名称"; enabled: !MobileData.profile-busy; text <=> MobileView.profile-name;
+                name-field := MField { placeholder: "输入名称"; enabled: !MobileData.profile-busy; text <=> MobileView.profile-name;
                     property <[length]> target: [self.absolute-position.x, self.absolute-position.y, self.width, self.height];
                     changed target => { MobileView.profile-name-target = self.target; }
                     changed has-focus => {
                         MobileView.profile-name-focused = self.has-focus;
-                        if self.has-focus {
-                            details-scroll.reveal-profile-field();
-                        }
                     }
                     init => { MobileView.profile-name-target = self.target; MobileView.profile-name-focused = self.has-focus; }
                     edited(value) => { MobileView.draft-dirty = true; }
                 }
                 MButton { text: "选择本地文件"; enabled: !MobileData.profile-busy; clicked => { MobileActions.request(MobileIntent.pick-file, "", ""); } }
                 MSmall { text: "订阅地址（本地配置可留空）"; }
-                MField { placeholder: "https://example.com/subscription"; enabled: !MobileData.profile-busy; text <=> MobileView.profile-source;
+                source-field := MField { placeholder: "https://example.com/subscription"; enabled: !MobileData.profile-busy; text <=> MobileView.profile-source;
                     property <[length]> target: [self.absolute-position.x, self.absolute-position.y, self.width, self.height];
                     changed target => { MobileView.profile-source-target = self.target; }
                     changed has-focus => {
                         MobileView.profile-source-focused = self.has-focus;
-                        if self.has-focus { details-scroll.reveal-profile-field(); }
                     }
                     init => { MobileView.profile-source-target = self.target; MobileView.profile-source-focused = self.has-focus; }
                     edited(value) => { MobileView.draft-dirty = true; }

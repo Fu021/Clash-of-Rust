@@ -212,6 +212,31 @@ public class ProxyTunTest {
     private static void tapTarget(String name) throws Exception {
         assertTrue("Android rejected touch input",tryTapTarget(name));
     }
+    private static void tapVisibleProfileField(String field) throws Exception {
+        await("Could not scroll the subscription "+field+" into its viewport",()-> {
+            JSONObject ui=MainActivity.diagnostics();
+            JSONArray target=ui.getJSONArray("profile_"+field+"_target");
+            JSONArray viewport=ui.getJSONArray("profile_editor_viewport");
+            double center=target.getDouble(1)+target.getDouble(3)/2;
+            double top=viewport.getDouble(1), bottom=top+viewport.getDouble(3);
+            if (center>=top+4 && center<=bottom-4) return true;
+            assertTrue("Subscription scroll viewport is too short to swipe",bottom-top>16);
+            float scale=(float)ui.getDouble("scale");
+            float horizontal=(float)(viewport.getDouble(0)+8)*scale;
+            float upper=(float)(top+4)*scale, lower=(float)(bottom-4)*scale;
+            float start=center>bottom?lower:upper, end=center>bottom?upper:lower;
+            long down=SystemClock.uptimeMillis();
+            pointer(MotionEvent.ACTION_DOWN,horizontal,start,down,down);
+            for (int index=1;index<=10;index++) {
+                SystemClock.sleep(20);
+                pointer(MotionEvent.ACTION_MOVE,horizontal,start+(end-start)*index/10,down,SystemClock.uptimeMillis());
+            }
+            pointer(MotionEvent.ACTION_UP,horizontal,end,down,SystemClock.uptimeMillis());
+            SystemClock.sleep(750);
+            return false;
+        });
+        tapTarget("profile_"+field+"_target");
+    }
     private static android.view.View inputEditor(android.view.View view) {
         if ("SlintInputView".equals(view.getClass().getSimpleName())) return view;
         if (view instanceof android.view.ViewGroup) {
@@ -483,15 +508,17 @@ public class ProxyTunTest {
                 });
                 SystemClock.sleep(1500);
                 verifyRestoredImeAndHide("landscape");
-                tapTarget("profile_name_target");
-                await("Landscape subscription name did not gain focus",
-                    ()->MainActivity.diagnostics().optBoolean("profile_name_focused"));
-                await("Landscape editor did not show the IME",ProxyTunTest::imeVisible);
-                await("Landscape Slint editor did not receive the keyboard inset",
-                    ()->MainActivity.diagnostics().optDouble("keyboard_inset")>0);
-                SystemClock.sleep(1500);
-                assertImeLayout("name");
-                captureIme("landscape-name-visible");
+                for (String field:new String[]{"name","source"}) {
+                    tapVisibleProfileField(field);
+                    await("Landscape subscription "+field+" did not gain focus",
+                        ()->MainActivity.diagnostics().optBoolean("profile_"+field+"_focused"));
+                    await("Landscape editor did not show the IME",ProxyTunTest::imeVisible);
+                    await("Landscape Slint editor did not receive the keyboard inset",
+                        ()->MainActivity.diagnostics().optDouble("keyboard_inset")>0);
+                    SystemClock.sleep(1500);
+                    assertImeLayout(field);
+                    captureIme("landscape-"+field+"-visible");
+                }
                 shell("input keyevent KEYCODE_BACK");
                 await("Landscape keyboard inset did not clear",()->!imeVisible()
                     && MainActivity.diagnostics().optDouble("keyboard_inset")==0);
