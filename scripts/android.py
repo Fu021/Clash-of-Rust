@@ -438,14 +438,82 @@ def pull_ime_report(remote, report, required=False):
         raise RuntimeError('IME screenshot export failed; inspect ime-pull.txt')
 
 
-def scoped_test_log(log, marker):
+def scoped_test_log(log, marker, end_marker=None):
     if isinstance(log, bytes):
         log=log.decode('utf-8',errors='replace')
     lines=log.splitlines(keepends=True)
     for index,line in enumerate(lines):
         if marker in line:
-            return ''.join(lines[index+1:])
+            remaining=lines[index+1:]
+            if end_marker is None:
+                return ''.join(remaining)
+            for end_index,entry in enumerate(remaining):
+                if end_marker in entry:
+                    return ''.join(remaining[:end_index])
+            raise RuntimeError('Android test log end marker is missing')
     raise RuntimeError('Android test log start marker is missing')
+
+
+def start_test_log(report, marker):
+    with (report/'logcat.raw').open('wb') as output, (report/'logcat-stderr.txt').open('wb') as errors:
+        process=subprocess.Popen([ADB,'logcat','-b','main,system,crash','-v','threadtime','-T','1'],
+                                 stdout=output,stderr=errors)
+    try:
+        run([ADB,'shell','log','-t','CorAndroidTest',marker],timeout=15)
+    except BaseException:
+        stop_test_log(process)
+        raise
+    return process
+
+
+def stop_test_log(process):
+    if process.poll() is None:
+        process.terminate()
+        try:
+            process.wait(timeout=5)
+        except subprocess.TimeoutExpired:
+            process.kill()
+            process.wait(timeout=5)
+
+
+def finish_test_log(process, report, marker):
+    error=None
+    end_marker=marker+'-end'
+    try:
+        if process.poll() is not None:
+            raise RuntimeError('Android logcat stream exited before test completion')
+        run([ADB,'shell','log','-t','CorAndroidTest',end_marker],timeout=15)
+        deadline=time.monotonic()+30
+        boundary=end_marker.encode()
+        pending=b''
+        with (report/'logcat.raw').open('rb') as stream:
+            while True:
+                chunk=stream.read(64*1024)
+                pending+=chunk
+                if boundary in pending:
+                    break
+                pending=pending[-len(boundary):]
+                if process.poll() is not None:
+                    raise RuntimeError('Android logcat stream exited before its end marker')
+                if time.monotonic()>=deadline:
+                    raise RuntimeError('Android logcat stream did not capture its end marker')
+                if not chunk:
+                    time.sleep(0.1)
+    except Exception as capture_error:
+        error=capture_error
+    finally:
+        try:
+            stop_test_log(process)
+        except Exception as cleanup_error:
+            error=error or cleanup_error
+    raw=(report/'logcat.raw').read_bytes()
+    try:
+        captured_log=scoped_test_log(raw,marker,end_marker)
+    except RuntimeError as scope_error:
+        error=error or scope_error
+        captured_log=raw.decode('utf-8',errors='replace')
+    (report/'logcat.txt').write_text(captured_log)
+    return captured_log,error
 
 
 def input_method_crashes(log, package):
@@ -522,7 +590,7 @@ def test(arch, apk=None, test_apk=None, ime_only=False, ime_probe=False,
     properties['input_method']=ime_service
     write_json(report/'device.json',properties)
     marker=f'cor-android-test-{os.getpid()}-{time.time_ns()}'
-    run([ADB,'shell','log','-t','CorAndroidTest',marker])
+    log_capture=start_test_log(report,marker)
     try:
         outputs=[]
         cases=('subscriptionKeyboardProbeCapturesBothFields' if ime_probe
@@ -562,18 +630,7 @@ def test(arch, apk=None, test_apk=None, ime_only=False, ime_probe=False,
     finally:
         if server is not None:
             server.shutdown(); server.server_close()
-        log = subprocess.run([ADB,'logcat','-d','-v','threadtime'],capture_output=True,timeout=30)
-        (report/'logcat.raw').write_bytes(log.stdout)
-        (report/'logcat-stderr.txt').write_bytes(log.stderr)
-        log_error=None
-        try:
-            if log.returncode:
-                raise RuntimeError('Android logcat capture failed; inspect logcat-stderr.txt')
-            captured_log=scoped_test_log(log.stdout,marker)
-        except RuntimeError as error:
-            log_error=error
-            captured_log=log.stdout.decode('utf-8',errors='replace')
-        (report/'logcat.txt').write_text(captured_log)
+        captured_log,log_error=finish_test_log(log_capture,report,marker)
         crashes=input_method_crashes(captured_log,ime_package) if log_error is None else []
         write_json(report/'input-method-status.json',
                    {'schema':1,'input_method':ime_service,'log_scoped':log_error is None,'crashes':crashes})

@@ -1581,6 +1581,74 @@ runpy.run_path(str(script), run_name='__main__')
         with self.assertRaisesRegex(RuntimeError,'start marker is missing'):
             android_build.scoped_test_log(log,'absent-ime-test')
 
+    def test_android_log_stream_preserves_bytes_and_checks_crashes_between_both_markers(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            report=Path(temporary)
+            process=MagicMock()
+            process.poll.return_value=None
+            def start(command, **kwargs):
+                self.assertNotIn('-d',command)
+                kwargs['stdout'].write(b'I system: previous log\n')
+                kwargs['stdout'].flush()
+                return process
+            def emit(command, **kwargs):
+                marker=command[-1]
+                with (report/'logcat.raw').open('ab') as output:
+                    output.write(f'I CorAndroidTest: {marker}\n'.encode())
+                    if not marker.endswith('-end'):
+                        output.write(b'I system: invalid byte \xc0\n'
+                                     b'E AndroidRuntime: FATAL EXCEPTION: main\n'
+                                     b'E AndroidRuntime: Process: com.example.ime, PID: 42\n'
+                                     b'E AndroidRuntime: java.lang.NullPointerException: keyboard\n')
+                return subprocess.CompletedProcess(command,0)
+            with patch.object(android_build.subprocess,'Popen',side_effect=start), \
+                    patch.object(android_build.subprocess,'run',side_effect=emit):
+                capture=android_build.start_test_log(report,'current-test')
+                captured,error=android_build.finish_test_log(capture,report,'current-test')
+            self.assertIsNone(error)
+            self.assertNotIn('previous log',captured)
+            self.assertNotIn('current-test-end',captured)
+            self.assertIn('\ufffd',captured)
+            self.assertIn(b'\xc0',(report/'logcat.raw').read_bytes())
+            self.assertEqual(len(android_build.input_method_crashes(captured,'com.example.ime')),1)
+            process.terminate.assert_called_once()
+
+    def test_android_log_stream_failure_preserves_raw_evidence_and_requires_complete_scope(self):
+        for ended,timeout in ((True,False),(False,True)):
+            with self.subTest(ended=ended), tempfile.TemporaryDirectory() as temporary:
+                report=Path(temporary)
+                raw=b'I CorAndroidTest: current-test\nI system: partial evidence\n'
+                (report/'logcat.raw').write_bytes(raw)
+                process=MagicMock()
+                process.poll.return_value=1 if ended else None
+                with patch.object(android_build.subprocess,'run'), \
+                        patch.object(android_build.time,'monotonic',side_effect=[0,31]), \
+                        patch.object(android_build.time,'sleep') as pause:
+                    captured,error=android_build.finish_test_log(process,report,'current-test')
+                self.assertIsNotNone(error)
+                self.assertIn('partial evidence',captured)
+                self.assertEqual((report/'logcat.raw').read_bytes(),raw)
+                pause.assert_not_called()
+                if timeout:
+                    process.terminate.assert_called_once()
+                else:
+                    process.terminate.assert_not_called()
+        with self.assertRaisesRegex(RuntimeError,'end marker is missing'):
+            android_build.scoped_test_log(b'I CorAndroidTest: current-test\n','current-test','current-test-end')
+
+    def test_android_log_stream_cleans_up_when_start_marker_cannot_be_written(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            report=Path(temporary)
+            process=MagicMock()
+            process.poll.return_value=None
+            process.wait.side_effect=[subprocess.TimeoutExpired([],5),0]
+            with patch.object(android_build.subprocess,'Popen',return_value=process), \
+                    patch.object(android_build.subprocess,'run',side_effect=subprocess.TimeoutExpired([],15)):
+                with self.assertRaises(subprocess.TimeoutExpired):
+                    android_build.start_test_log(report,'current-test')
+            process.terminate.assert_called_once()
+            process.kill.assert_called_once()
+
     def test_android_preparation_uses_the_approved_sdk_and_skips_unused_package_tools(self):
         versions = build_inputs.android_versions()
         for package_only in (False, True):
