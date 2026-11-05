@@ -3064,6 +3064,7 @@ fn apply(ui: &AndroidWindow, p: Projection) {
             "profile_add_target":view.get_profile_add_target().iter().collect::<Vec<_>>(),
             "profile_name_target":view.get_profile_name_target().iter().collect::<Vec<_>>(),
             "profile_source_target":view.get_profile_source_target().iter().collect::<Vec<_>>(),
+            "profile_editor_viewport":view.get_profile_editor_viewport().iter().collect::<Vec<_>>(),
             "profile_name_focused":view.get_profile_name_focused(),
             "profile_source_focused":view.get_profile_source_focused(),
             "profile_name_length":view.get_profile_name().chars().count(),

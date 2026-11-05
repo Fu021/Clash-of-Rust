@@ -8,7 +8,7 @@
 
 依赖维护可手动运行现有 CI，设置 `refresh_dependencies=true`：只在 Actions 解析 Cargo/Go 更新并导出带来源提交和 SHA256 的 `dependency-updates`，不运行平台矩阵，也不作为打包依据。将已审阅的锁文件提交后，仍须取得新提交的普通 push CI 与不发布打包验证；受限本机不执行依赖下载或构建。
 
-输入法专项设置 `android_ime_only=true`：只构建一次 Android x64 测试 APK，最多三个 runner 并发覆盖 API 26、28、29、30、31、32、33、34、35、36；`android_ime_apis` 默认 `all`，也接受 `30,32,34` 等已批准版本子集。每个系统先三轮正式路径截图，再三轮严格回归；前两轮动画倍率为 1，第三轮为 0，不在测试进程中修改生产回调。字段切换、高度一致、Back、前后台与旋转的断言和验收边界见[输入法专页](../agent-failures/android-ime.md#当前修复与待验收)。
+输入法专项设置 `android_ime_only=true`：只构建一次 Android x64 测试 APK，最多三个 runner 并发覆盖 API 26、28、29、30、31、32、33、34、35、36；`android_ime_apis` 默认 `all`，也接受 `30,32,34` 等已批准版本子集。补测选择尚未通过的版本，已完成的 job 不占 runner，也不因下一轮补测重复全量矩阵；常规 CI 保留 API 36 和 31 的回归。每个系统先三轮正式路径截图，再三轮严格回归；前两轮动画倍率为 1，第三轮为 0，不在测试进程中修改生产回调。字段切换、高度一致、Back、前后台与旋转的断言和验收边界见[输入法专页](../agent-failures/android-ime.md#当前修复与待验收)。
 
 附件 `android-ime-api-{api}` 按 `production` / `regression` 及轮次保留截图、JSON、输入法/窗口 dumpsys 和本次日志；`device.json`、`input-method-status.json` 记录实际输入法及崩溃。缺少必需证据、输入法崩溃或日志边界丢失均失败。截图导出权限不足时，仅在确认是可调试模拟器后尝试 root adbd。截图探测成功不等于键盘绘制成功，须核对截图与严格回归。专项不覆盖 MIUI、API 27 或完整兼容验收，不作为发布依据、不导出发布编译附件、不运行桌面矩阵/缓存审计/打包，与依赖维护模式分别运行；常规 CI 保留严格输入法回归。
 
@@ -53,7 +53,9 @@ Python 和原始云镜像使用官方优先、原包私网回退，全部新导�
 
 Android x86_64 使用 API 36 模拟器运行真实代理/TUN 流量测试及上述订阅输入法回归，验证正式界面的内核状态、默认策略组、订阅导航和设置触摸滚动，以及系统 VPN 授权、DNS、套接字保护、快捷磁贴连接/断开、Activity 重建和路由恢复；另在 API 31 串行复验输入法。取消后到达的普通授权、过期服务启动与排队连接不得重新开启 VPN，连接中必须提供取消入口；ARM64/ARMv7 完成实际编译、Gradle lint 与架构校验，仍需真机验收。Android 测试结果、体积报告和 logcat 保存在 `android-report-{arch}`，固定开发签名与构建说明见 [Android 宿主](../../apps/android/README.md)。
 
-常规测试与输入法专项共用模拟器准备入口，将一次性 AVD 的 userdata 固定为 3072 MiB；启动前要求至少 4 GiB 空闲，并在 `storage.json` 保存分区预算及实测空间。`42026038757` 的 x64 已编译成功，但默认设备要求 12288 MiB、runner 仅剩约 5255 MiB，测试尚未启动。空间不足属于前置失败，不能省略代理/TUN 或输入法断言；本入口不删除编译缓存、SDK 或私网内容。
+常规测试、输入法专项及打包共用模拟器准备入口。当前[模拟器实现](https://android.googlesource.com/platform/external/qemu/+/emu-master-dev/android-qemu2-glue/main.cpp)会将首次启动的 API 24+ userdata 提高到至少 6 GiB，并要求分区大小的 1.2 倍空闲；因此配置显式使用 6144 MiB，再为测试留出 1 GiB，启动前合计要求约 8.2 GiB。此前 3072 MiB / 4 GiB 的预检遗漏了这一最低值，`1139dcc` 的 x64 仍在约 5255 MiB 空闲时被模拟器要求 7372.8 MiB 而拒绝，不能把配置写入或较宽裕 runner 的偶然成功当作修复。
+
+仅在 GitHub 托管 Linux 临时 runner 空间不足时，移除 Android 测试不用的 `/usr/share/dotnet`，再核对实际空间；本地、自托管及其他系统不会执行此操作。`storage.json` 保留预算、处理前后空间和移除的工具路径；仍不足则在改动 AVD 前失败。编译缓存、SDK、仓库内容与私网数据不受该操作影响；空间不足不能省略代理/TUN 或输入法断言。
 
 macOS 失败日志、系统与网络状态、崩溃报告保存在 `macos-ci-report-{arch}`，Windows 集成检查结果保存在 `windows-ci-report-{arch}`。人工授权窗口、真实重启登录和物理显示器行为仍需人工验收。
 

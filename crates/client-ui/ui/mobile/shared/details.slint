@@ -5,8 +5,24 @@ import { MobileData, MobileView, MobileActions, MobileIntent } from "state.slint
 import { MText, MSmall, MHeading, MParagraph, MCard, MButton, MRow, MDivider, MField, MSelect, MTag, MScroll, MCopyButton, MSwitch } from "controls.slint";
 import { MobileFakeIp, MobileRuleActions, MobileSiteResults, MobileDetectionOptions } from "editors.slint";
 
+component MobileEditorActions inherits HorizontalLayout {
+    spacing: MobileTypography.small-gap;
+    MButton { text: "取消"; enabled: !MobileData.profile-busy; clicked => { MobileView.back(); } }
+    MButton { text: MobileView.detail == 2 ? "保存规则" : MobileData.profile-busy ? "正在保存…" : "保存订阅"; primary: true;
+        enabled: !MobileData.working && !MobileData.profile-busy;
+        busy: MobileView.detail == 3 && MobileData.profile-busy;
+        clicked => {
+            if MobileView.detail == 2 {
+                MobileActions.request(MobileIntent.rule-save, MobileView.rule-text-mode ? MobileView.rule-raw : root.rule-line, MobileView.rule-position + "|" + (MobileView.rule-enabled ? "true" : "false"));
+            } else { MobileActions.request(MobileIntent.save-profile, MobileView.profile-name, MobileView.profile-source); }
+        }
+    }
+    in property <string> rule-line;
+}
+
 export component MobileDetails inherits PageSurface {
     motion-revision: MobileView.detail;
+    property <bool> scrolling-editor-actions: root.height < 200px * MobileTypography.density;
     property <bool> supports-no-resolve: MobileView.rule-kind == "GEOIP" || MobileView.rule-kind == "IP-CIDR" || MobileView.rule-kind == "IP-CIDR6" || MobileView.rule-kind == "IP-ASN" || MobileView.rule-kind == "RULE-SET";
     property <string> rule-line: (MobileView.rule-kind == "MATCH" ? "MATCH," + MobileView.rule-policy : MobileView.rule-kind + "," + MobileView.rule-payload + "," + MobileView.rule-policy) + (root.supports-no-resolve && MobileView.rule-no-resolve ? ",no-resolve" : "");
     if MobileView.detail == 14: MobileFakeIp { }
@@ -17,6 +33,9 @@ export component MobileDetails inherits PageSurface {
         details-scroll := MScroll {
             content-key: MobileView.detail + "/" + MobileView.selected-id + "/" + MobileView.category + "/" + MobileView.site-status + "/" + MobileView.log-message;
             property <length> keyboard: MobileView.keyboard-inset;
+            property <[length]> viewport: [self.absolute-position.x, self.absolute-position.y, self.width, self.height];
+            changed viewport => { MobileView.profile-editor-viewport = self.viewport; }
+            init => { MobileView.profile-editor-viewport = self.viewport; }
             function reveal-profile-field() {
                 if MobileView.detail == 3 && self.keyboard > 0px {
                     if MobileView.profile-name-focused {
@@ -124,6 +143,7 @@ export component MobileDetails inherits PageSurface {
                   }
                 }
             }
+            if root.scrolling-editor-actions && (MobileView.detail == 2 || MobileView.detail == 3): MobileEditorActions { rule-line: root.rule-line; }
         } }
         if MobileView.detail == 5 || MobileView.detail == 10: HorizontalLayout { spacing: MobileTypography.small-gap;
             MCopyButton { label: MobileView.detail == 5 ? "复制详情" : "复制全文";
@@ -131,18 +151,7 @@ export component MobileDetails inherits PageSurface {
             }
             MButton { text: "关闭"; clicked => { MobileView.back(); } }
         }
-        if MobileView.detail == 2 || MobileView.detail == 3: HorizontalLayout { spacing: MobileTypography.small-gap;
-            MButton { text: "取消"; enabled: !MobileData.profile-busy; clicked => { MobileView.back(); } }
-            MButton { text: MobileView.detail == 2 ? "保存规则" : MobileData.profile-busy ? "正在保存…" : "保存订阅"; primary: true;
-                enabled: !MobileData.working && !MobileData.profile-busy;
-                busy: MobileView.detail == 3 && MobileData.profile-busy;
-                clicked => {
-                    if MobileView.detail == 2 {
-                        MobileActions.request(MobileIntent.rule-save, MobileView.rule-text-mode ? MobileView.rule-raw : root.rule-line, MobileView.rule-position + "|" + (MobileView.rule-enabled ? "true" : "false"));
-                    } else { MobileActions.request(MobileIntent.save-profile, MobileView.profile-name, MobileView.profile-source); }
-                }
-            }
-        }
+        if !root.scrolling-editor-actions && (MobileView.detail == 2 || MobileView.detail == 3): MobileEditorActions { rule-line: root.rule-line; }
         if MobileView.detail == 16: HorizontalLayout { spacing: MobileTypography.small-gap;
             MButton { text: "返回结果"; clicked => { MobileView.detail = 6; } }
             MButton { text: "重测此项"; primary: true; enabled: !MobileData.detecting;

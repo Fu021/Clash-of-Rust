@@ -270,6 +270,12 @@ public class ProxyTunTest {
         assertEquals("Keyboard height must exclude the bottom safe area exactly once",
             expected,ui.getDouble("keyboard_inset"),2);
         JSONArray target=ui.getJSONArray("profile_"+field+"_target");
+        JSONArray viewport=ui.getJSONArray("profile_editor_viewport");
+        assertEquals("Missing subscription scroll viewport",4,viewport.length());
+        assertTrue("Subscription "+field+" is above the scroll viewport",
+            target.getDouble(1)>=viewport.getDouble(1)-2);
+        assertTrue("Subscription "+field+" is clipped by the scroll viewport",
+            target.getDouble(1)+target.getDouble(3)<=viewport.getDouble(1)+viewport.getDouble(3)+2);
         assertTrue("Subscription "+field+" is covered by the keyboard",
             target.getDouble(1)+target.getDouble(3)<=ui.getDouble("height")-occluded+2);
     }
@@ -387,6 +393,8 @@ public class ProxyTunTest {
     }
     private static void verifyRestoredImeAndHide(String orientation) throws Exception {
         if (imeVisible()) {
+            await("Restored "+orientation+" Slint keyboard inset did not synchronize",
+                ()->MainActivity.diagnostics().optDouble("keyboard_inset")>0);
             JSONObject ui=MainActivity.diagnostics();
             String field=ui.optBoolean("profile_source_focused")?"source":"name";
             assertTrue("Restored keyboard has no focused subscription field",

@@ -161,12 +161,22 @@ def verify_emulator_versions(sdk, legacy=False, api=None):
 
 
 def configure_emulator_storage(avd, report):
-    userdata_mib = 3072
-    required = 4 * 1024**3
+    userdata_mib = 6144
+    required = ((userdata_mib * 12 + 9) // 10 + 1024) * 1024**2
     free = shutil.disk_usage(avd).free
-    write_json(report/'storage.json', {
-        'userdata_mib': userdata_mib, 'required_free_bytes': required, 'free_bytes': free,
-    })
+    storage = {
+        'userdata_mib': userdata_mib, 'required_free_bytes': required,
+        'free_bytes_before': free, 'free_bytes': free, 'removed_host_tools': [],
+    }
+    write_json(report/'storage.json', storage)
+    hosted_linux = (os.environ.get('GITHUB_ACTIONS') == 'true'
+                    and os.environ.get('RUNNER_ENVIRONMENT') == 'github-hosted'
+                    and os.environ.get('RUNNER_OS') == 'Linux')
+    if free < required and hosted_linux:
+        run(['sudo', '-n', 'rm', '-rf', '--', '/usr/share/dotnet'], timeout=120)
+        free = shutil.disk_usage(avd).free
+        storage.update(free_bytes=free, removed_host_tools=['/usr/share/dotnet'])
+        write_json(report/'storage.json', storage)
     if free < required:
         raise RuntimeError(f'Android emulator needs at least {required / 1024**3:.1f} GiB free '
                            f'for its {userdata_mib} MiB userdata partition; '
@@ -429,6 +439,8 @@ def pull_ime_report(remote, report, required=False):
 
 
 def scoped_test_log(log, marker):
+    if isinstance(log, bytes):
+        log=log.decode('utf-8',errors='replace')
     lines=log.splitlines(keepends=True)
     for index,line in enumerate(lines):
         if marker in line:
@@ -550,13 +562,17 @@ def test(arch, apk=None, test_apk=None, ime_only=False, ime_probe=False,
     finally:
         if server is not None:
             server.shutdown(); server.server_close()
-        log = subprocess.run([ADB,'logcat','-d','-v','threadtime'],capture_output=True,text=True,timeout=30)
+        log = subprocess.run([ADB,'logcat','-d','-v','threadtime'],capture_output=True,timeout=30)
+        (report/'logcat.raw').write_bytes(log.stdout)
+        (report/'logcat-stderr.txt').write_bytes(log.stderr)
         log_error=None
         try:
+            if log.returncode:
+                raise RuntimeError('Android logcat capture failed; inspect logcat-stderr.txt')
             captured_log=scoped_test_log(log.stdout,marker)
         except RuntimeError as error:
             log_error=error
-            captured_log=log.stdout
+            captured_log=log.stdout.decode('utf-8',errors='replace')
         (report/'logcat.txt').write_text(captured_log)
         crashes=input_method_crashes(captured_log,ime_package) if log_error is None else []
         write_json(report/'input-method-status.json',
