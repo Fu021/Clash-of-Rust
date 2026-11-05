@@ -385,6 +385,29 @@ def verify_build(root, arch, expected_commit):
     return manifest
 
 
+def pull_ime_report(remote, report, required=False):
+    destination=report/'ime-report'
+    destination.mkdir(exist_ok=True)
+    command=[ADB,'pull',remote.rstrip('/')+'/.',str(destination)]
+    result=subprocess.run(command,capture_output=True,text=True,timeout=30)
+    output=[result.stdout+result.stderr]
+    if result.returncode and required:
+        properties=[subprocess.run([ADB,'shell','getprop',name],capture_output=True,text=True,timeout=15)
+                    for name in ('ro.kernel.qemu','ro.debuggable')]
+        if all(value.returncode==0 and value.stdout.strip()=='1' for value in properties):
+            restart=subprocess.run([ADB,'root'],capture_output=True,text=True,timeout=30)
+            output.append(restart.stdout+restart.stderr)
+            if restart.returncode==0:
+                connected=subprocess.run([ADB,'wait-for-device'],capture_output=True,text=True,timeout=30)
+                output.append(connected.stdout+connected.stderr)
+                if connected.returncode==0:
+                    result=subprocess.run(command,capture_output=True,text=True,timeout=30)
+                    output.append(result.stdout+result.stderr)
+    (report/'ime-pull.txt').write_text('\n'.join(output))
+    if required and (result.returncode or not any(destination.rglob('*.png'))):
+        raise RuntimeError('IME screenshot export failed; inspect ime-pull.txt')
+
+
 def test(arch, apk=None, test_apk=None, ime_only=False, ime_probe=False,
          ime_rounds=1, system_animation=False):
     if not 1 <= ime_rounds <= 3 or ((ime_probe or system_animation or ime_rounds != 1) and not ime_only):
@@ -482,9 +505,19 @@ def test(arch, apk=None, test_apk=None, ime_only=False, ime_probe=False,
         remote_report='/sdcard/Android/data/org.clashofrust.android/files/ime-report'
         if ime_probe:
             remote_report+='/'+('system-animation' if system_animation else 'production')
-        screenshots=subprocess.run([ADB,'pull',remote_report,
-                                    str(report/'ime-report')],capture_output=True,text=True,timeout=30)
-        (report/'ime-pull.txt').write_text(screenshots.stdout+screenshots.stderr)
+        capture_error=None
+        try:
+            pull_ime_report(remote_report,report,required=ime_only)
+            if ime_probe:
+                for iteration in range(1,ime_rounds+1):
+                    for phase in ('before-focus','name-after-tap','name-settled',
+                                  'source-after-tap','source-settled','after-back'):
+                        for suffix in ('.png','-state.json'):
+                            expected=report/'ime-report'/('round-'+str(iteration))/(phase+suffix)
+                            if not expected.is_file():
+                                raise RuntimeError('IME probe evidence is incomplete: '+str(expected.relative_to(report)))
+        except Exception as error:
+            capture_error=error
         for name, command in {'connectivity':['dumpsys','connectivity'],
                               'routes':['ip','route','show','table','all'],
                               'vpn':['dumpsys','vpn_management'],
@@ -494,6 +527,11 @@ def test(arch, apk=None, test_apk=None, ime_only=False, ime_probe=False,
                               'power':['dumpsys','power']}.items():
             details=subprocess.run([ADB,'shell',*command],capture_output=True,text=True,timeout=15)
             (report/(name+'.txt')).write_text(details.stdout+details.stderr)
+        if capture_error is not None:
+            if original:=sys.exception():
+                original.add_note(str(capture_error))
+            else:
+                raise capture_error
     if 'Android startup:' in log.stdout or 'Mobile runtime stopped:' in log.stdout:
         raise RuntimeError('Native Android UI/runtime failed; inspect logcat')
 

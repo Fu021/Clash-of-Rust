@@ -299,7 +299,6 @@ public class ProxyTunTest {
         context.startActivity(new Intent(context,MainActivity.class).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK));
         try {
             await("Keyboard probe Activity did not receive focus",()->inStage(androidx.test.runner.lifecycle.Stage.RESUMED,true));
-            waitForAppWindow();
             await("Keyboard probe core did not start",CoreBridge::ready);
             tab(2,2);
             await("Keyboard probe add control has no layout",()-> {

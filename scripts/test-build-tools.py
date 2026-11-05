@@ -1410,6 +1410,45 @@ runpy.run_path(str(script), run_name='__main__')
         with self.assertRaisesRegex(ValueError,'No approved'):
             android_build.emulator_image(api=27)
 
+    def test_ime_export_retries_permission_failure_only_on_a_debuggable_emulator(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            report=Path(temporary)
+            commands=[]
+            def invoke(command, **kwargs):
+                commands.append(command[1:])
+                if command[1]=='pull':
+                    if commands.count(command[1:])==1:
+                        return subprocess.CompletedProcess(command,1,'','Permission denied')
+                    (report/'ime-report/name.png').write_bytes(b'screenshot')
+                return subprocess.CompletedProcess(command,0,'1\n' if command[1]=='shell' else '','')
+            with patch.object(android_build.subprocess,'run',side_effect=invoke):
+                android_build.pull_ime_report('/sdcard/ime-report',report,required=True)
+            self.assertIn(['root'],commands)
+            self.assertIn(['wait-for-device'],commands)
+            self.assertEqual(sum(command[0]=='pull' for command in commands),2)
+            self.assertEqual(commands[-1][1],'/sdcard/ime-report/.')
+            self.assertIn('Permission denied',(report/'ime-pull.txt').read_text())
+
+    def test_ime_export_does_not_root_a_physical_or_non_debuggable_device(self):
+        for values in (('0','1'),('1','0')):
+            with self.subTest(properties=values), tempfile.TemporaryDirectory() as temporary:
+                report=Path(temporary)
+                responses=[subprocess.CompletedProcess([],1,'','Permission denied'),
+                           *(subprocess.CompletedProcess([],0,value+'\n','') for value in values)]
+                with patch.object(android_build.subprocess,'run',side_effect=responses) as invoke:
+                    with self.assertRaisesRegex(RuntimeError,'screenshot export failed'):
+                        android_build.pull_ime_report('/sdcard/ime-report',report,required=True)
+                self.assertNotIn([android_build.ADB,'root'],[call.args[0] for call in invoke.call_args_list])
+
+    def test_ime_export_rejects_successful_empty_reports(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            report=Path(temporary)
+            with patch.object(android_build.subprocess,'run',
+                              return_value=subprocess.CompletedProcess([],0,'0 files pulled','')) as invoke:
+                with self.assertRaisesRegex(RuntimeError,'screenshot export failed'):
+                    android_build.pull_ime_report('/sdcard/ime-report',report,required=True)
+            self.assertEqual(invoke.call_count,1)
+
     def test_android_preparation_uses_the_approved_sdk_and_skips_unused_package_tools(self):
         versions = build_inputs.android_versions()
         for package_only in (False, True):

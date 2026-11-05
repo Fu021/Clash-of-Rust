@@ -13,6 +13,10 @@ on:
         description: Probe subscription keyboard on ten Android versions with repeated screenshots and animation comparison
         type: boolean
         default: false
+      android_ime_apis:
+        description: Select all approved IME versions or comma-separated API levels to repeat
+        type: string
+        default: all
 env:
   SEGMENT_DOWNLOAD_TIMEOUT_MINS: '2'
   BUILD_INPUTS_DIR: dependency-snapshot
@@ -38,6 +42,7 @@ jobs:
       tailscale: ${{ steps.resolve.outputs.tailscale }}
       gradle: ${{ steps.resolve.outputs.gradle }}
       nsis: ${{ steps.resolve.outputs.nsis }}
+      ime_apis: ${{ steps.ime.outputs.apis }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with:
@@ -46,6 +51,24 @@ jobs:
       - name: Load approved tool versions
         id: versions
         run: python3 scripts/build_inputs.py versions
+      - name: Select approved IME probe versions
+        id: ime
+        if: inputs.android_ime_only
+        env:
+          REQUESTED_IME_APIS: ${{ inputs.android_ime_apis || 'all' }}
+        shell: python
+        run: |
+          import json, os, sys
+          sys.path.insert(0, 'scripts')
+          from android import emulator_image
+          requested = os.environ['REQUESTED_IME_APIS'].strip()
+          selected = [26, 28, 29, 30, 31, 32, 33, 34, 35, 36] if requested == 'all' else [int(value.strip()) for value in requested.split(',')]
+          if not 1 <= len(selected) <= 10 or len(set(selected)) != len(selected):
+              raise ValueError('Select one to ten distinct approved Android API levels')
+          for api in selected:
+              emulator_image(api=api)
+          with open(os.environ['GITHUB_OUTPUT'], 'a') as stream:
+              stream.write('apis=' + json.dumps(selected) + '\n')
       - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0
         with:
           python-version: ${{ env.COR_PYTHON }}
@@ -356,7 +379,7 @@ jobs:
       fail-fast: false
       max-parallel: 3
       matrix:
-        api: [26, 28, 29, 30, 31, 32, 33, 34, 35, 36]
+        api: ${{ fromJSON(needs.inputs.outputs.ime_apis || '[36]') }}
     env:
       PYTHONDONTWRITEBYTECODE: '1'
     steps:
