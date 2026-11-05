@@ -43,17 +43,24 @@ public class ProxyTunTest {
             }
         }
     }
-    private static void pointer(int action,float x,float y,long down,long now) {
+    private static boolean injectPointer(int action,float x,float y,long down,long now) {
         MotionEvent event=MotionEvent.obtain(down,now,action,x,y,0);
         event.setSource(android.view.InputDevice.SOURCE_TOUCHSCREEN);
-        try { assertTrue("Android rejected touch input", InstrumentationRegistry.getInstrumentation().getUiAutomation().injectInputEvent(event,true)); }
+        try { return InstrumentationRegistry.getInstrumentation().getUiAutomation().injectInputEvent(event,true); }
         finally {event.recycle();}
     }
-    private static void tap(float x,float y) {
+    private static void pointer(int action,float x,float y,long down,long now) {
+        assertTrue("Android rejected touch input",injectPointer(action,x,y,down,now));
+    }
+    private static boolean tryTap(float x,float y) {
         long start=SystemClock.uptimeMillis();
-        pointer(MotionEvent.ACTION_DOWN,x,y,start,start);
+        boolean pressed=injectPointer(MotionEvent.ACTION_DOWN,x,y,start,start);
         SystemClock.sleep(50);
-        pointer(MotionEvent.ACTION_UP,x,y,start,SystemClock.uptimeMillis());
+        boolean released=injectPointer(MotionEvent.ACTION_UP,x,y,start,SystemClock.uptimeMillis());
+        return pressed && released;
+    }
+    private static void tap(float x,float y) {
+        assertTrue("Android rejected touch input",tryTap(x,y));
     }
     private static String shell(String command) throws Exception {
         try (InputStream in=new android.os.ParcelFileDescriptor.AutoCloseInputStream(
@@ -160,9 +167,18 @@ public class ProxyTunTest {
     private static void waitForAppWindow() throws Exception {
         android.app.UiAutomation automation=InstrumentationRegistry.getInstrumentation().getUiAutomation();
         automation.waitForIdle(500,10000);
-        await("Clash window is not the active input window",()-> {
-            android.view.accessibility.AccessibilityNodeInfo root=automation.getRootInActiveWindow();
-            return root!=null && "org.clashofrust.android".contentEquals(root.getPackageName());
+        await("Clash window is not visible and focused",()-> {
+            MainActivity activity=resumedActivity();
+            if (activity==null) return false;
+            java.util.concurrent.atomic.AtomicBoolean visible=new java.util.concurrent.atomic.AtomicBoolean();
+            InstrumentationRegistry.getInstrumentation().runOnMainSync(()-> {
+                android.view.View decor=activity.getWindow().getDecorView();
+                visible.set(decor.isAttachedToWindow() && decor.isShown()
+                    && decor.getWidth()>0 && decor.getHeight()>0);
+            });
+            JSONObject ui=MainActivity.diagnostics();
+            return visible.get() && ui.optDouble("scale")>0
+                && ui.optDouble("width")>0 && ui.optDouble("height")>0;
         });
     }
     private static boolean inStage(androidx.test.runner.lifecycle.Stage stage,boolean focused) {
@@ -183,15 +199,18 @@ public class ProxyTunTest {
         });
         return result.get();
     }
-    private static void tapTarget(String name) throws Exception {
+    private static boolean tryTapTarget(String name) throws Exception {
         JSONObject ui=MainActivity.diagnostics();
         JSONArray bounds=ui.getJSONArray(name);
         assertEquals("Expected the real Slint control bounds",4,bounds.length());
         assertTrue("Control has no width",bounds.getDouble(2)>0);
         assertTrue("Control has no height",bounds.getDouble(3)>0);
         float scale=(float)ui.getDouble("scale");
-        tap((float)(bounds.getDouble(0)+bounds.getDouble(2)/2)*scale,
+        return tryTap((float)(bounds.getDouble(0)+bounds.getDouble(2)/2)*scale,
             (float)(bounds.getDouble(1)+bounds.getDouble(3)/2)*scale);
+    }
+    private static void tapTarget(String name) throws Exception {
+        assertTrue("Android rejected touch input",tryTapTarget(name));
     }
     private static android.view.View inputEditor(android.view.View view) {
         if ("SlintInputView".equals(view.getClass().getSimpleName())) return view;
@@ -415,7 +434,12 @@ public class ProxyTunTest {
             shell("am start -W -n org.clashofrust.android/.MainActivity");
             await("Input test Activity did not resume",()->inStage(androidx.test.runner.lifecycle.Stage.RESUMED,true));
             waitForAppWindow();
-            tapTarget("profile_source_target");
+            captureIme("before-resumed-tap");
+            await("Resumed subscription source did not receive touch focus",()-> {
+                if (MainActivity.diagnostics().optBoolean("profile_source_focused")) return true;
+                tryTapTarget("profile_source_target");
+                return MainActivity.diagnostics().optBoolean("profile_source_focused");
+            });
             await("Resumed subscription editor did not show the IME",ProxyTunTest::imeVisible);
             await("Resumed Slint editor did not receive the keyboard inset",
                 ()->MainActivity.diagnostics().optDouble("keyboard_inset")>0);
@@ -434,6 +458,14 @@ public class ProxyTunTest {
                     return ui.optDouble("width")>ui.optDouble("height");
                 });
                 SystemClock.sleep(1500);
+                if (imeVisible()) {
+                    String focused=MainActivity.diagnostics().optBoolean("profile_source_focused")?"source":"name";
+                    assertImeLayout(focused);
+                    captureIme("landscape-restored-visible");
+                    shell("input keyevent KEYCODE_BACK");
+                    await("Restored landscape IME did not hide after Back",()->!imeVisible()
+                        && MainActivity.diagnostics().optDouble("keyboard_inset")==0);
+                }
                 assertEquals("Navigation bars must not become a keyboard inset after rotation",
                     0,MainActivity.diagnostics().getDouble("keyboard_inset"),0);
                 captureIme("landscape-hidden");

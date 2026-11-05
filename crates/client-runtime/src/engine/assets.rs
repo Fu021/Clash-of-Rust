@@ -49,7 +49,11 @@ pub fn discover() -> Result<PathBuf> {
             return Ok(development);
         }
     }
-    bail!("安装资源不完整，请重新安装 Clash of Rust")
+    bail!(
+        "安装资源不完整：程序 {} 未找到资源目录 {}；请从完整安装目录运行，或用 --resources PATH 指定资源目录",
+        exe.display(),
+        sibling.display()
+    )
 }
 
 pub fn core_path(resources: &Path) -> Result<PathBuf> {
@@ -66,7 +70,6 @@ pub fn core_path(resources: &Path) -> Result<PathBuf> {
 }
 
 pub fn seed(resources: &Path, runtime: &Path) -> Result<GeoManifest> {
-    recover(runtime)?;
     core_path(resources)?;
     clash_client_core::geodata::seed(resources, runtime)
 }

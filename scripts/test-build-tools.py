@@ -1361,6 +1361,41 @@ runpy.run_path(str(script), run_name='__main__')
         with patch.object(dependency_audit, 'metadata', return_value=legacy):
             self.assertEqual(dependency_audit.android_candidate('system-image-legacy','31-r14')[0],'31-r99')
 
+    def test_emulator_storage_fits_the_failed_runner_without_changing_other_device_settings(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            avd = root/'device.avd'
+            avd.mkdir()
+            config = avd/'config.ini'
+            config.write_text('hw.device.name=pixel_6\n'
+                              'disk.dataPartition.size=10G\n'
+                              '  disk.dataPartition.size = 12G\n'
+                              'hw.ramSize=4096\n')
+            free = 5255 * 1024**2
+            with patch.object(android_build.shutil, 'disk_usage',
+                              return_value=MagicMock(free=free)):
+                android_build.configure_emulator_storage(avd, root/'report')
+                android_build.configure_emulator_storage(avd, root/'report')
+            self.assertEqual(config.read_text(), 'hw.device.name=pixel_6\nhw.ramSize=4096\n'
+                             'disk.dataPartition.size=3072M\n')
+            report = json.loads((root/'report/storage.json').read_text())
+            self.assertEqual(report['free_bytes'], free)
+            self.assertEqual(report['userdata_mib'], 3072)
+            self.assertLess(report['required_free_bytes'], free)
+
+    def test_emulator_storage_reports_insufficient_space_before_changing_the_device(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            config = root/'config.ini'
+            config.write_text('disk.dataPartition.size=10G\n')
+            with patch.object(android_build.shutil, 'disk_usage',
+                              return_value=MagicMock(free=3 * 1024**3)):
+                with self.assertRaisesRegex(RuntimeError, 'available: 3.00 GiB'):
+                    android_build.configure_emulator_storage(root, root/'report')
+            self.assertEqual(config.read_text(), 'disk.dataPartition.size=10G\n')
+            report = json.loads((root/'report/storage.json').read_text())
+            self.assertEqual(report['free_bytes'], 3 * 1024**3)
+
     def test_emulator_rejects_revisions_that_differ_from_the_cache_identity(self):
         versions = build_inputs.android_versions()
         with tempfile.TemporaryDirectory() as temporary:

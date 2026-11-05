@@ -160,6 +160,26 @@ def verify_emulator_versions(sdk, legacy=False, api=None):
         print('Verified Android runtime:', relative, match[1], flush=True)
 
 
+def configure_emulator_storage(avd, report):
+    userdata_mib = 3072
+    required = 4 * 1024**3
+    free = shutil.disk_usage(avd).free
+    write_json(report/'storage.json', {
+        'userdata_mib': userdata_mib, 'required_free_bytes': required, 'free_bytes': free,
+    })
+    if free < required:
+        raise RuntimeError(f'Android emulator needs at least {required / 1024**3:.1f} GiB free '
+                           f'for its {userdata_mib} MiB userdata partition; '
+                           f'available: {free / 1024**3:.2f} GiB at {avd}')
+    config = avd/'config.ini'
+    lines = [line for line in config.read_text().splitlines()
+             if line.partition('=')[0].strip() != 'disk.dataPartition.size']
+    lines.append(f'disk.dataPartition.size={userdata_mib}M')
+    config.write_text('\n'.join(lines)+'\n')
+    print(f'Disposable Android emulator: {userdata_mib} MiB userdata; '
+          f'{free / 1024**3:.2f} GiB disk free', flush=True)
+
+
 def ensure_binding_tool(name):
     package = 'golang.org/x/mobile/cmd/' + name
     selected = re.search(r'(?m)^(?:require\s+)?\s*golang.org/x/mobile\s+(v\S+)',
@@ -656,6 +676,7 @@ def main():
         if args.legacy or args.api is not None:
             report=report/('ime-api-'+image.split(';')[1].removeprefix('android-'))
             report.mkdir(parents=True,exist_ok=True)
+        configure_emulator_storage(avds/'cor-ci.avd',report)
         cores=min(4,os.cpu_count() or 1)
         print(f'Disposable Android emulator: 4096 MiB RAM, {cores} virtual CPUs',flush=True)
         with (report/'emulator.txt').open('w') as log:
