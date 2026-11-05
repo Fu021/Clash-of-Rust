@@ -204,6 +204,7 @@ public class ProxyTunTest {
         }
         return null;
     }
+    @SuppressWarnings("deprecation")
     private static int imeBottom(android.view.View editor) {
         android.view.WindowInsets insets=editor.getRootWindowInsets();
         if (Build.VERSION.SDK_INT>=30) {

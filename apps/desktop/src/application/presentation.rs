@@ -275,7 +275,7 @@ impl App {
                 let source = $value;
                 let value: &str = source.as_ref();
                 if data.$get().as_str() != value {
-                    data.$put(SharedString::from(value));
+                    data.$put(value.into());
                 }
             }};
         }
