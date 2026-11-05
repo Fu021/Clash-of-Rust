@@ -124,12 +124,15 @@ def verify_emulator_versions(sdk, legacy=False):
     def revision(value):
         parts = value.split('.')
         return tuple(int(part) for part in parts + ['0'] * (3 - len(parts)))
+    source_revision = versions.get(image_key+'_source_revision', versions[image_key+'_revision'])
     for relative, expected in (('emulator', versions['emulator']),
-                               (versions[image_key].replace(';', '/'), versions[image_key+'_revision'])):
+                               (versions[image_key].replace(';', '/'), source_revision)):
         properties = (sdk / relative / 'source.properties').read_text()
         match = re.search(r'(?m)^\s*Pkg\.Revision\s*=\s*([0-9.]+)\s*$', properties)
         if not match or revision(match[1]) != revision(expected):
-            raise ValueError('Android runtime revision differs from the approved version: ' + relative)
+            actual = match[1] if match else 'missing'
+            raise ValueError(f'Android runtime revision differs from the approved version: {relative}: '
+                             f'expected {expected}, got {actual}')
         print('Verified Android runtime:', relative, match[1], flush=True)
 
 

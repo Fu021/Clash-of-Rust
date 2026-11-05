@@ -73,6 +73,8 @@ public class ProxyTunTest {
         await("UI tab did not navigate to "+page,()-> {
             JSONObject ui=MainActivity.diagnostics();
             if (ui.optInt("page",-1)==page) return true;
+            if (ui.optDouble("scale",0)<=0 || ui.optDouble("width",0)<=0
+                    || ui.optDouble("height",0)<=0) return false;
             float scale=(float)ui.getDouble("scale");
             tap((float)ui.getDouble("width")*(index+0.5f)/5*scale,
                 ((float)ui.getDouble("height")-(float)ui.getDouble("safe_bottom")-38)*scale);

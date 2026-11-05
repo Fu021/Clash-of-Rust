@@ -38,7 +38,8 @@
       "system_image": "system-images;android-36;google_apis;x86_64",
       "system_image_revision": "7",
       "legacy_system_image": "system-images;android-31;google_apis;x86_64",
-      "legacy_system_image_revision": "14"
+      "legacy_system_image_revision": "14",
+      "legacy_system_image_source_revision": "12"
     },
     "java": {
       "version": "25.0.5+8",

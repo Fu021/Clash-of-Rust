@@ -1380,11 +1380,14 @@ runpy.run_path(str(script), run_name='__main__')
                 properties.write_text(original)
             legacy=sdk/versions['legacy_system_image'].replace(';','/')
             legacy.mkdir(parents=True)
-            (legacy/'source.properties').write_text('Pkg.Revision = '+versions['legacy_system_image_revision']+'\n')
+            source_revision=versions['legacy_system_image_source_revision']
+            self.assertNotEqual(source_revision,versions['legacy_system_image_revision'])
+            (legacy/'source.properties').write_text('Pkg.Revision = '+source_revision+'\n')
             android_build.verify_emulator_versions(sdk,legacy=True)
-            (legacy/'source.properties').write_text('Pkg.Revision = 999\n')
-            with self.assertRaisesRegex(ValueError,'revision differs'):
-                android_build.verify_emulator_versions(sdk,legacy=True)
+            for invalid in ('999',versions['legacy_system_image_revision']):
+                (legacy/'source.properties').write_text('Pkg.Revision = '+invalid+'\n')
+                with self.assertRaisesRegex(ValueError,'revision differs'):
+                    android_build.verify_emulator_versions(sdk,legacy=True)
 
     def test_android_preparation_uses_the_approved_sdk_and_skips_unused_package_tools(self):
         versions = build_inputs.android_versions()
