@@ -187,7 +187,7 @@ def resolve(directory):
              'rust_packages': [{key: package[key] for key in ('name', 'version', 'source', 'checksum') if key in package}
                                for package in packages],
              'go_modules': go_modules,
-             'policy': 'Repository lockfiles and approved build versions only; upgrades and replacements require user approval.'}
+             'policy': 'Repository lockfiles and approved build versions only; apply the maintainer loop update policy and validate committed changes.'}
     write_json(directory / 'inputs.json', value)
     report(value)
     if output := os.environ.get('GITHUB_OUTPUT'):

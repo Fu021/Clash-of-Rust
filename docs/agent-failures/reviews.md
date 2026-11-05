@@ -4,7 +4,7 @@
 
 | 日期 | 任务 | 结果与主题 | 证据与验证边界 |
 | --- | --- | --- | --- |
-| 2026-11-05 | CLI 网络诊断与持久原包清单 | 补分组帮助、当前用户与主机 TUN 路由提示、无后台诊断和手动网络刷新；Linux 先在宿主准备 Geo，Windows 原包改为目标目录暂存。三条工作流统一接入[持久清单](../workflows/cache-server.md#持久清单补拉)，先交全部批次，再核对分页回执；保留未接收/pending/失败，不自动重置重试，不恢复 agent 通道。 | 基于 `bcdd903` 的修复分支；Python/Node/YAML、Rust 格式和 Slint 静态检查通过，相关回归交同提交 Actions。旧第二轮 CI `41960759305` 的四项失败分别为 Geo 404 后容器无凭据及 Windows 普通用户 ACL；Memory `41960785579` 通过。队列接入、大文件入库、真实恢复及长时间 TUN 症状仍须分别验收；本机未编译或执行测试。 |
+| 2026-11-05 | CLI 网络诊断与持久原包清单 | 补分组帮助、当前用户与主机 TUN 路由提示、无后台诊断和手动网络刷新；三条工作流共用[持久清单](../workflows/cache-server.md#持久清单补拉)。修复宿主 Geo 准备、Windows 原包暂存和测试清单污染；loop 更新兼容 Rust/Go 锁文件、Java action 与 Geo 固定资产，补缓存优先级和命令文档。 | `726f476` 的 CI `41966802804` 11/11、Memory `41966849950` 2/2、不发布打包 `41969428145` 15/15 通过。隔离修复 `a610184` 的 CI `41973243758` 11/11、不发布打包 `41975370454` 15/15 通过，九组包/SHA256/收据核验、37 个 Release/432 附件未变；最终盘点列出本轮 347/347 原包，早期 pending 不冒充 ready。依赖候选由现有 CI `41975601628` 生成并核验摘要，更新后须另验同提交 CI/打包；长时间 TUN 根因、真实私网回退及实机仍未确认，本机仅静态检查。 |
 | 2026-11-04 | 依赖全量更新与构建适配 | 按授权更新依赖、Actions 和工具，保留 macOS tray-icon 兼容约束。适配 sysinfo、工具优先级、Go 锁文件和严格 TLS；分片保存统一预算，提前拒绝覆盖 Windows 中止。Android 改用原生 CLI 和精确 revision，补 Python/JDK 门禁、签名器原生访问授权及模拟器[ANR 资源调整](android.md#6-android-vpndns-与系统-ui-时序)，保留焦点/流量断言。最终审计新增的 gobwas/ws 1.5.0 由 Actions 解析并核对锁文件。 | `42268f7` 的 CI `41816952495` 11/11、Memory `41817148214` 2/2 通过，打包 `41821657923` 的三种 Android 包及 x64 代理/TUN 通过；因追加依赖更新停止旧打包，完整验收交新提交。本机 152 项脚本回归（1 跳过）、11 项产物回归及静态检查通过，未本地编译。私网 1422 key/60 GiB 满额，旧 key 全保留；502/507/断连未解决，仅交用户反馈，不写 README.txt。 |
 | 2026-11-04 | 工作流缓存职责重排 | Rust 对象仅用 GitHub，按慢平台优先保留；停止私网对象、目录快照及构建镜像传输。原包官方优先、私网回退，末尾只交 URL 清单；失败不上传归档，取消不清理缓存。补 GitHub 恢复失败清理与 SVG key，服务端按[可保留白名单](../workflows/cache-retention.md)迁移。 | 本机 160 项脚本回归（1 跳过）、11 项产物回归、actionlint、Node/Python/YAML 与 diff 检查通过；未本地编译，最终提交 CI/不发布打包待执行。原生 setup/SDK/Maven 等未接入原包适配的路径明确列出，不宣称私网全覆盖。服务端异步队列及真实官方失败回退待联合验收。 |
 | 2026-11-04 | macOS 安装后 TUN 重启 | 安装验证发现 Intel 的助手未就绪；静态审查发现探测连接提前关闭会因响应写入失败退出整个助手。隔离单次响应错误，已认证停止仍清理，子进程错误进入既有日志；新增真实 Unix socket 回归，不放宽流量及重启断言。 | `715e02e` 的 CI `41694322211` 11 项及不发布打包 `41697700116` 15 项通过，两种 macOS 架构新增回归及安装后 TUN 重启通过；九组包/18 附件核验、37 个 Release/432 附件未变。本机仅静态检查；旧失败日志不足以认定唯一触发原因，真实设备与人工授权仍待验收。 |
@@ -23,11 +23,8 @@
 | 2026-10-28 | 保护锁定、订阅定时更新与代理组定位 | 保护期间灰置代理模式和整个规则页，保留业务校验与草稿；新增默认 360 分钟的远程[订阅自动更新](../subscriptions.md)，唯一所有者调度、过期丢弃、失败保留、成功才清理旧检测及刷新规则。桌面进入代理页时将实际策略组置顶并展开；[loop](../loop-workflow.md)补双向盘点已有便利交互。 | `efde5bb` 的 [CI 40624892505](https://github.com/Fu021/Clash-of-Rust/actions/runs/40624892505) 11 项通过，修正前轮多余 `mut`；未单独打包，随本轮用户隔离重验。真实下载、长时间定时及设备手势未验收。 |
 | 2026-10-28 | 完整 loop、保护状态与文档清理 | Android 保护错误改归风险，读取停止线程的失败快照；共享控制接口恢复后清除暂时错误；短暂失联不覆盖通知或拦截失败，保留异常记录。按[循环审查](../loop-workflow.md)核对各端、UI 与 cor，拆分长文和精简复盘。 | `9926a2f` 的 [CI][ci-loop] 11 项及[不发布打包][package-loop] 13 项通过，九组包/18 附件核验通过，31 个 Release/324 个附件未变。本机仅静态检查与三种尺寸预览；实机、真实 tailnet 与吞吐未验收。 |
 | 2026-10-27 | fix.6 预发布与 DNS 国家误报 | Google 官方数据修正错误标签；[真实国家差异仍属风险](../claude-protection.md#递归-dns-国家排查)。递归 DNS 与 IP 检测复用国旗，港澳台仅文字。 | `4696c81` 的 [CI 40562836032][ci-fix6] 11 项、[预发布 40567590202][release-fix6] 13 项通过，九组包及九份 SHA256 已独立核对；保留 fix.5，稳定 latest 为 v0.6.4。 |
-| 2026-10-27 | macOS Tailscale DNS 与 CLI 重启 | [动态 DNS 共存](macos-dns.md)保留私有分域、接口与恢复记录；原生随机探针确认接管，延迟重发不外流。[端口复用](macos-lifecycle.md#内核退出后的端口复用)区分监听者与暂未释放。 | `2a3e09b` 的 [CI 40542749551][ci-tailscale] 11 项、[不发布打包 40546066504][package-tailscale] 13 项通过；九组包/18 附件及来源核验通过，Release 未变。真实 tailnet、接口/出口变化未验收。 |
 
 [ci-loop]: https://github.com/Fu021/Clash-of-Rust/actions/runs/40610758771
 [package-loop]: https://github.com/Fu021/Clash-of-Rust/actions/runs/40613948109
 [ci-fix6]: https://github.com/Fu021/Clash-of-Rust/actions/runs/40562836032
 [release-fix6]: https://github.com/Fu021/Clash-of-Rust/actions/runs/40567590202
-[ci-tailscale]: https://github.com/Fu021/Clash-of-Rust/actions/runs/40542749551
-[package-tailscale]: https://github.com/Fu021/Clash-of-Rust/actions/runs/40546066504

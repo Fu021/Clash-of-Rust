@@ -12,7 +12,7 @@
 
 ## Actions 跟进节奏
 
-先确认一次运行编号、来源提交和启动状态，再参考同工作流近期耗时低频查询。近期 [CI 40562836032](https://github.com/Fu021/Clash-of-Rust/actions/runs/40562836032) 用时约 29 分钟，[Publish Release 40567590202](https://github.com/Fu021/Clash-of-Rust/actions/runs/40567590202) 约 12 分钟：CI 建议 10 分钟首查、此后约 5 分钟；打包 7 分钟首查、临近完成每 2～3 分钟。排队和长步骤延长间隔，其他 Actions 同样先参考历史；失败后才读取必要日志，不反复下载整份日志。
+先确认一次运行编号、来源提交和启动状态，再参考同工作流近期耗时低频查询。原包缓存重排与持久清单接入后的 [CI 41966802804](https://github.com/Fu021/Clash-of-Rust/actions/runs/41966802804) 用时 24 分 17 秒、[Memory 41966849950](https://github.com/Fu021/Clash-of-Rust/actions/runs/41966849950) 8 分 46 秒、[Publish Release 41969428145](https://github.com/Fu021/Clash-of-Rust/actions/runs/41969428145) 31 分 50 秒；打包关键路径是 Ubuntu 20.04 ARM64 的 TCG 安装后验证。此前 18 次完整成功 CI 中位数为 24 分 56 秒，单次暖缓存结果不能代表普遍提速。CI 建议 10 分钟首查、此后约 5 分钟；打包 7 分钟首查、临近完成每 2～3 分钟。排队和长步骤延长间隔，其他 Actions 同样先参考历史；失败后才读取必要日志，不反复下载整份日志。
 
 若运行已失败，且 job 注解或日志明确显示长时间未分配到 runner，Agent 自动重试对应失败 job，复用同提交的成功结果并继续低频跟进，无需用户提醒；先等待本轮结束，再用 `gh run rerun <run-id> --job <job-id>`。job ID 取 `gh run view <run-id> --json jobs` 中的 `databaseId`，不要与 run ID 混淆。仍在排队时不取消或重跑；无法确认原因、代码、测试及安装校验失败均先定位，不能当作 runner 故障重试。相同容量故障再次出现时延长等待，持续记录原因；适用于 CI、打包和其他已获授权的 Actions，不增加工作流或访问权限。
 

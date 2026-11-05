@@ -35,7 +35,7 @@ GUI 已运行时，CLI 通过带随机密钥的本机接口操作同一内核。
 
 ## 帮助、脚本与输出
 
-所有命令都支持 `--help`；`cor help profile`、`cor profile help` 和 `cor profile --help` 列出该组命令。帮助与解析、补全来自同一份命令表。
+所有命令都支持 `--help`；`cor help profile`、`cor profile help` 和 `cor profile --help` 列出该组命令，节点组同样可用 `cor node help`。帮助与解析、补全来自同一份命令表。
 
 默认使用中文状态说明和表格；节点列表区分策略组、节点与内置出站，空延迟显示“未测速”，测速失败显示“超时”。速度和流量按 B、KiB、MiB 等单位显示，时间使用运行机器的本地时区。较窄终端会改用分条显示，保留完整名称和 ID；可通过 `COLUMNS` 指定显示宽度。脚本请使用 `--json` / `--jsonl`，字段与原有结构保持一致。
 
