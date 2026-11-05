@@ -98,7 +98,7 @@ def sdk_install_command(directory, packages):
             *(package.replace(';', '/') for package in packages)]
 
 
-def prepare_sdk(package_only=False):
+def prepare_sdk_manager():
     sdk = Path(os.environ['ANDROID_HOME'])
     versions = android_versions()
     device_root = Path(os.environ['RUNNER_TEMP']) / 'cor-sdk-install'
@@ -109,6 +109,14 @@ def prepare_sdk(package_only=False):
         command = sdk_install_command(bootstrap, [package]) if (bootstrap/'android').is_file() else [
             bootstrap/'sdkmanager', package]
         install_sdk_packages(command, device_root)
+    return manager
+
+
+def prepare_sdk(package_only=False):
+    sdk = Path(os.environ['ANDROID_HOME'])
+    versions = android_versions()
+    device_root = Path(os.environ['RUNNER_TEMP']) / 'cor-sdk-install'
+    manager = prepare_sdk_manager()
     packages = ['platform-tools@' + versions['platform_tools'], 'build-tools;' + versions['build_tools']]
     if not package_only:
         packages += ['platforms;android-' + versions['platform'], 'ndk;' + versions['ndk']]
@@ -118,15 +126,31 @@ def prepare_sdk(package_only=False):
             stream.write('ANDROID_NDK_ROOT=' + str(sdk / 'ndk' / versions['ndk']) + '\n')
 
 
-def verify_emulator_versions(sdk, legacy=False):
+def emulator_image(legacy=False, api=None):
     versions = android_versions()
     image_key = 'legacy_system_image' if legacy else 'system_image'
+    if api is not None:
+        if versions['system_image'].split(';')[1] == 'android-'+str(api):
+            image_key = 'system_image'
+        elif versions['legacy_system_image'].split(';')[1] == 'android-'+str(api):
+            image_key = 'legacy_system_image'
+        else:
+            selected = versions['ime_system_images'].get(str(api))
+            if selected is None:
+                raise ValueError('No approved Android IME image for API '+str(api))
+            return 'system-images;android-'+str(api)+';google_apis;x86_64', selected['revision'], selected['source_revision']
+    return (versions[image_key], versions[image_key+'_revision'],
+            versions.get(image_key+'_source_revision', versions[image_key+'_revision']))
+
+
+def verify_emulator_versions(sdk, legacy=False, api=None):
+    versions = android_versions()
+    image, _, source_revision = emulator_image(legacy, api)
     def revision(value):
         parts = value.split('.')
         return tuple(int(part) for part in parts + ['0'] * (3 - len(parts)))
-    source_revision = versions.get(image_key+'_source_revision', versions[image_key+'_revision'])
     for relative, expected in (('emulator', versions['emulator']),
-                               (versions[image_key].replace(';', '/'), source_revision)):
+                               (image.replace(';', '/'), source_revision)):
         properties = (sdk / relative / 'source.properties').read_text()
         match = re.search(r'(?m)^\s*Pkg\.Revision\s*=\s*([0-9.]+)\s*$', properties)
         if not match or revision(match[1]) != revision(expected):
@@ -361,7 +385,10 @@ def verify_build(root, arch, expected_commit):
     return manifest
 
 
-def test(arch, apk=None, test_apk=None, ime_only=False):
+def test(arch, apk=None, test_apk=None, ime_only=False, ime_probe=False,
+         ime_rounds=1, system_animation=False):
+    if not 1 <= ime_rounds <= 3 or ((ime_probe or system_animation or ime_rounds != 1) and not ime_only):
+        raise ValueError('IME probe options require IME-only testing and one to three rounds')
     if arch != 'x64':
         return
     apk = apk or ANDROID/'app/build/outputs/apk/release/app-release.apk'
@@ -402,6 +429,8 @@ def test(arch, apk=None, test_apk=None, ime_only=False):
         if not api.isdigit():
             raise ValueError('Could not identify the Android IME test API level')
         report=report/('ime-api-'+api)
+        if ime_probe:
+            report=report/('system-animation' if system_animation else 'production')
     report.mkdir(parents=True,exist_ok=True)
     properties={}
     for name in ('ro.build.version.sdk','ro.build.version.release','ro.build.fingerprint',
@@ -410,27 +439,50 @@ def test(arch, apk=None, test_apk=None, ime_only=False):
     write_json(report/'device.json',properties)
     try:
         outputs=[]
-        cases=('subscriptionFieldsShowImeAcceptTextAndReopenAfterBack',)
+        cases=('subscriptionKeyboardProbeCapturesBothFields' if ime_probe
+               else 'subscriptionFieldsShowImeAcceptTextAndReopenAfterBack',)
         if not ime_only:
             cases+=('localProxyAndRealTunCarryTrafficAndDisconnectCleanly',
                     'quickTileRestoresColdCoreWithoutOpeningTheActivity')
-        for case in cases:
-            run([ADB,'shell','am','force-stop','org.clashofrust.android'])
-            result = subprocess.run([ADB,'shell','am','instrument','-w','-e','class',
-                'org.clashofrust.android.ProxyTunTest#'+case,
-                'org.clashofrust.android.test/androidx.test.runner.AndroidJUnitRunner'],
-                text=True,capture_output=True,timeout=240)
-            outputs.append(case+'\n'+result.stdout+result.stderr)
-            (report/'instrumentation.txt').write_text('\n\n'.join(outputs))
-            print(result.stdout,flush=True)
-            if result.returncode or 'FAILURES!!!' in result.stdout or 'OK (' not in result.stdout:
-                raise RuntimeError('Android integration test failed: '+case)
+        failures=[]
+        for iteration in range(1,ime_rounds+1):
+            if ime_probe:
+                animation_scale='0' if iteration==3 else '1'
+                for setting in ('window_animation_scale','transition_animation_scale','animator_duration_scale'):
+                    run([ADB,'shell','settings','put','global',setting,animation_scale])
+                print(f'IME probe round {iteration}: system animation scale {animation_scale}',flush=True)
+            for case in cases:
+                run([ADB,'shell','am','force-stop','org.clashofrust.android'])
+                result = subprocess.run([ADB,'shell','am','instrument','-w','-e','class',
+                    'org.clashofrust.android.ProxyTunTest#'+case,
+                    '-e','ime_round',str(iteration),
+                    '-e','ime_probe',str(ime_probe).lower(),
+                    '-e','ime_system_animation',str(system_animation).lower(),
+                    'org.clashofrust.android.test/androidx.test.runner.AndroidJUnitRunner'],
+                    text=True,capture_output=True,timeout=240)
+                outputs.append(f'Round {iteration}: '+case+'\n'+result.stdout+result.stderr)
+                (report/'instrumentation.txt').write_text('\n\n'.join(outputs))
+                print(result.stdout,flush=True)
+                if result.returncode or 'FAILURES!!!' in result.stdout or 'OK (' not in result.stdout:
+                    failures.append(f'{case} round {iteration}')
+        if failures:
+            raise RuntimeError('Android integration test failed: '+', '.join(failures))
+        if ime_probe:
+            message='Visual IME probe captured; instrumentation success does not verify keyboard rendering or Android compatibility.'
+            print(message,flush=True)
+            if summary:=os.environ.get('GITHUB_STEP_SUMMARY'):
+                with open(summary,'a') as stream:
+                    stream.write(f'\nAndroid API {api}, {"system animation" if system_animation else "production"}: '
+                                 f'{ime_rounds} probe rounds. {message}\n')
     finally:
         if server is not None:
             server.shutdown(); server.server_close()
         log = subprocess.run([ADB,'logcat','-d','-v','threadtime'],capture_output=True,text=True,timeout=30)
         (report/'logcat.txt').write_text(log.stdout)
-        screenshots=subprocess.run([ADB,'pull','/sdcard/Android/data/org.clashofrust.android/files/ime-report',
+        remote_report='/sdcard/Android/data/org.clashofrust.android/files/ime-report'
+        if ime_probe:
+            remote_report+='/'+('system-animation' if system_animation else 'production')
+        screenshots=subprocess.run([ADB,'pull',remote_report,
                                     str(report/'ime-report')],capture_output=True,text=True,timeout=30)
         (report/'ime-pull.txt').write_text(screenshots.stdout+screenshots.stderr)
         for name, command in {'connectivity':['dumpsys','connectivity'],
@@ -493,29 +545,31 @@ def main():
     parser.add_argument('--check',action='store_true')
     parser.add_argument('--legacy',action='store_true',help='Use the approved Android 12 IME regression image')
     parser.add_argument('--ime-only',action='store_true',help='Run only the subscription input-method regression')
+    parser.add_argument('--api',type=int,help='Use an approved historical Android IME test image')
     args=parser.parse_args()
     if args.legacy and args.operation!='emulator':
         parser.error('--legacy applies only to emulator preparation')
+    if args.api is not None and (args.operation!='emulator' or args.legacy):
+        parser.error('--api applies only to emulator preparation and cannot be combined with --legacy')
     if args.ime_only and args.operation!='test':
         parser.error('--ime-only applies only to test')
     if args.operation=='emulator':
         sdk=Path(os.environ['ANDROID_HOME'])
-        manager=sdk_bin()
+        manager=prepare_sdk_manager()
         device_root=Path(os.environ['RUNNER_TEMP'])/'cor-emulator'
         versions=android_versions()
-        image_key='legacy_system_image' if args.legacy else 'system_image'
-        image=versions[image_key]
+        image,image_revision,_=emulator_image(args.legacy,args.api)
         install_sdk_packages(sdk_install_command(manager, [
             'platform-tools@'+versions['platform_tools'], 'emulator@'+versions['emulator'],
-            image+'@'+versions[image_key+'_revision']]), device_root)
-        verify_emulator_versions(sdk,legacy=args.legacy)
+            image+'@'+image_revision]), device_root)
+        verify_emulator_versions(sdk,legacy=args.legacy,api=args.api)
         user_home=device_root/'.android'; avds=user_home/'avd'
         avds.mkdir(parents=True,exist_ok=True)
         env=dict(os.environ,ANDROID_USER_HOME=str(user_home),ANDROID_AVD_HOME=str(avds),ANDROID_SDK_HOME=str(device_root))
         run([manager/'avdmanager','create','avd','--force','--name','cor-ci','--path',avds/'cor-ci.avd',
              '--device','pixel_6','--package',image],input='no\n',text=True,env=env)
         report=ROOT/'target/android-report/x64'; report.mkdir(parents=True,exist_ok=True)
-        if args.legacy:
+        if args.legacy or args.api is not None:
             report=report/('ime-api-'+image.split(';')[1].removeprefix('android-'))
             report.mkdir(parents=True,exist_ok=True)
         cores=min(4,os.cpu_count() or 1)
@@ -536,7 +590,7 @@ def main():
         run([ADB,'shell','settings','put','global','private_dns_mode','off'])
         run([ADB,'shell','input','keyevent','KEYCODE_WAKEUP'])
         run([ADB,'shell','wm','dismiss-keyguard'])
-        if args.legacy:
+        if args.legacy or args.api is not None:
             run([ADB,'shell','wm','size','1080x2400'])
             run([ADB,'shell','wm','density','440'])
         # Standard UI-test setup: the launcher's animated input sink can outlive

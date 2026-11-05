@@ -1389,6 +1389,27 @@ runpy.run_path(str(script), run_name='__main__')
                 with self.assertRaisesRegex(ValueError,'revision differs'):
                     android_build.verify_emulator_versions(sdk,legacy=True)
 
+    def test_historical_android_probe_images_keep_archive_and_embedded_identity_separate(self):
+        for api in (26,28,29,30,31,32,33,34,35,36):
+            with self.subTest(api=api), tempfile.TemporaryDirectory() as temporary:
+                sdk=Path(temporary)
+                image,archive_revision,source_revision=android_build.emulator_image(api=api)
+                self.assertEqual(image,f'system-images;android-{api};google_apis;x86_64')
+                self.assertTrue(archive_revision.isdigit())
+                emulator=sdk/'emulator'
+                emulator.mkdir()
+                (emulator/'source.properties').write_text('Pkg.Revision='+build_inputs.android_versions()['emulator']+'\n')
+                installed=sdk/image.replace(';','/')
+                installed.mkdir(parents=True)
+                (installed/'source.properties').write_text('Pkg.Revision='+source_revision+'\n')
+                android_build.verify_emulator_versions(sdk,api=api)
+                if archive_revision!=source_revision:
+                    (installed/'source.properties').write_text('Pkg.Revision='+archive_revision+'\n')
+                    with self.assertRaisesRegex(ValueError,'revision differs'):
+                        android_build.verify_emulator_versions(sdk,api=api)
+        with self.assertRaisesRegex(ValueError,'No approved'):
+            android_build.emulator_image(api=27)
+
     def test_android_preparation_uses_the_approved_sdk_and_skips_unused_package_tools(self):
         versions = build_inputs.android_versions()
         for package_only in (False, True):

@@ -245,6 +245,13 @@ public class ProxyTunTest {
     private static void captureIme(String phase) throws Exception {
         Context context=InstrumentationRegistry.getInstrumentation().getTargetContext();
         File directory=new File(context.getExternalFilesDir(null),"ime-report");
+        if (Boolean.parseBoolean(InstrumentationRegistry.getArguments().getString("ime_probe","false"))) {
+            boolean systemAnimation=Boolean.parseBoolean(InstrumentationRegistry.getArguments()
+                .getString("ime_system_animation","false"));
+            int round=Integer.parseInt(InstrumentationRegistry.getArguments().getString("ime_round","1"));
+            assertTrue(round>=1 && round<=3);
+            directory=new File(directory,(systemAnimation?"system-animation":"production")+"/round-"+round);
+        }
         assertTrue(directory.isDirectory() || directory.mkdirs());
         for (String service:new String[]{"input_method","window windows"}) {
             String name=service.startsWith("window")?"windows":"input-method";
@@ -256,7 +263,88 @@ public class ProxyTunTest {
         try (OutputStream output=new FileOutputStream(new File(directory,phase+".png"))) {
             assertTrue(screenshot.compress(android.graphics.Bitmap.CompressFormat.PNG,100,output));
         } finally {screenshot.recycle();}
-        System.out.println("IME "+phase+": "+MainActivity.diagnostics());
+        JSONObject androidState=new JSONObject();
+        MainActivity activity=resumedActivity();
+        if (activity!=null) InstrumentationRegistry.getInstrumentation().runOnMainSync(()-> {
+            try {
+                android.view.View decor=activity.getWindow().getDecorView();
+                android.view.View editor=inputEditor(decor);
+                android.graphics.Rect visibleFrame=new android.graphics.Rect();
+                decor.getWindowVisibleDisplayFrame(visibleFrame);
+                androidState.put("api",Build.VERSION.SDK_INT)
+                    .put("window_focus",activity.hasWindowFocus())
+                    .put("editor_focus",editor!=null && editor.hasFocus())
+                    .put("editor_active",editor!=null && activity.getSystemService(
+                        android.view.inputmethod.InputMethodManager.class).isActive(editor))
+                    .put("decor_height",decor.getHeight())
+                    .put("visible_frame_bottom",visibleFrame.bottom)
+                    .put("soft_input_mode",activity.getWindow().getAttributes().softInputMode)
+                    .put("animator_duration_scale",android.provider.Settings.Global.getFloat(
+                        activity.getContentResolver(),android.provider.Settings.Global.ANIMATOR_DURATION_SCALE,1));
+                if (Build.VERSION.SDK_INT>=30 && editor!=null && editor.getRootWindowInsets()!=null) {
+                    android.view.WindowInsets insets=editor.getRootWindowInsets();
+                    androidState.put("ime_visible",insets.isVisible(android.view.WindowInsets.Type.ime()))
+                        .put("ime_bottom",insets.getInsets(android.view.WindowInsets.Type.ime()).bottom);
+                }
+            } catch (JSONException error) {throw new IllegalStateException(error);}
+        });
+        JSONObject state=new JSONObject().put("slint",MainActivity.diagnostics()).put("android",androidState);
+        java.nio.file.Files.write(new File(directory,phase+"-state.json").toPath(),
+            state.toString(2).getBytes(StandardCharsets.UTF_8));
+        System.out.println("IME "+phase+": "+state);
+    }
+    @Test public void subscriptionKeyboardProbeCapturesBothFields() throws Exception {
+        Context context=InstrumentationRegistry.getInstrumentation().getTargetContext();
+        shell("settings put system font_scale 1.0");
+        context.startActivity(new Intent(context,MainActivity.class).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK));
+        try {
+            await("Keyboard probe Activity did not receive focus",()->inStage(androidx.test.runner.lifecycle.Stage.RESUMED,true));
+            waitForAppWindow();
+            await("Keyboard probe core did not start",CoreBridge::ready);
+            tab(2,2);
+            await("Keyboard probe add control has no layout",()-> {
+                JSONArray target=MainActivity.diagnostics().optJSONArray("profile_add_target");
+                return target!=null && target.length()==4 && target.optDouble(2)>0 && target.optDouble(3)>0;
+            });
+            tapTarget("profile_add_target");
+            await("Keyboard probe editor did not open",()->MainActivity.diagnostics().optInt("detail")==3);
+            boolean systemAnimation=Boolean.parseBoolean(InstrumentationRegistry.getArguments()
+                .getString("ime_system_animation","false"));
+            if (systemAnimation && Build.VERSION.SDK_INT>=30) {
+                MainActivity activity=resumedActivity();
+                assertNotNull(activity);
+                InstrumentationRegistry.getInstrumentation().runOnMainSync(()-> {
+                    android.view.View editor=inputEditor(activity.getWindow().getDecorView());
+                    assertNotNull(editor);
+                    editor.setWindowInsetsAnimationCallback(null);
+                });
+            }
+            captureIme("before-focus");
+            for (String field:new String[]{"name","source"}) {
+                tapTarget("profile_"+field+"_target");
+                await("Keyboard probe "+field+" did not gain focus",()-> {
+                    if (MainActivity.diagnostics().optBoolean("profile_"+field+"_focused")) return true;
+                    tapTarget("profile_"+field+"_target");
+                    SystemClock.sleep(250);
+                    return MainActivity.diagnostics().optBoolean("profile_"+field+"_focused");
+                });
+                captureIme(field+"-after-tap");
+                SystemClock.sleep(1500);
+                captureIme(field+"-settled");
+            }
+            shell("input keyevent KEYCODE_BACK");
+            SystemClock.sleep(500);
+            captureIme("after-back");
+            if (MainActivity.diagnostics().optInt("detail")==3) {
+                tapTarget("profile_name_target");
+                SystemClock.sleep(1500);
+                captureIme("reopened");
+            }
+            System.out.println("Visual probe only: inspect screenshots; no keyboard-rendering success is asserted.");
+        } catch (Throwable error) {
+            try {captureIme("failure");} catch (Throwable snapshot) {error.addSuppressed(snapshot);}
+            throw error;
+        }
     }
     @Test public void subscriptionFieldsShowImeAcceptTextAndReopenAfterBack() throws Exception {
         Context context=InstrumentationRegistry.getInstrumentation().getTargetContext();

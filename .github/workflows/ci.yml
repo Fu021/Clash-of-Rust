@@ -10,7 +10,7 @@ on:
         type: boolean
         default: false
       android_ime_only:
-        description: Build Android x64 and investigate subscription keyboard on Android 12 and 16
+        description: Probe subscription keyboard on ten Android versions with repeated screenshots and animation comparison
         type: boolean
         default: false
 env:
@@ -284,18 +284,26 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: python3 scripts/android.py build --arch ${{ matrix.arch }}
+      - name: Preserve APKs for the isolated keyboard probe matrix
+        if: inputs.android_ime_only
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
+        with:
+          name: android-ime-apks
+          path: |
+            apps/android/app/build/outputs/apk/release/app-release.apk
+            apps/android/app/build/outputs/apk/androidTest/release/app-release-androidTest.apk
+          compression-level: 0
+          if-no-files-found: error
+          retention-days: 3
       - name: Start Android test device
         id: android_device
-        if: matrix.arch == 'x64'
+        if: matrix.arch == 'x64' && !inputs.android_ime_only
         run: |
           sudo chmod a+rw /dev/kvm
           python3 scripts/android.py emulator --arch x64
       - name: Verify real Android proxy and TUN traffic
         if: matrix.arch == 'x64' && !inputs.android_ime_only
         run: python3 scripts/android.py test --arch x64
-      - name: Investigate subscription keyboard on Android 16
-        if: matrix.arch == 'x64' && inputs.android_ime_only
-        run: python3 scripts/android.py test --arch x64 --ime-only
       - name: Verify subscription keyboard on Android 12
         if: ${{ !cancelled() && matrix.arch == 'x64' && steps.android_device.outcome == 'success' }}
         shell: python
@@ -307,8 +315,10 @@ jobs:
           subprocess.run([sys.executable, 'scripts/android.py', 'emulator', '--arch', 'x64', '--legacy'], check=True)
           subprocess.run([sys.executable, 'scripts/android.py', 'test', '--arch', 'x64', '--ime-only'], check=True)
       - name: Export tested Android compilation
+        if: ${{ !inputs.android_ime_only }}
         run: python3 scripts/android.py export --arch ${{ matrix.arch }}
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
+        if: ${{ !inputs.android_ime_only }}
         with:
           name: build-android-${{ matrix.arch }}
           path: |
@@ -333,6 +343,101 @@ jobs:
         uses: ./.github/actions/upstream-report
         with:
           name: upstream-downloads-${{ github.job }}-${{ strategy.job-index || '0' }}
+  android-ime:
+    if: inputs.android_ime_only
+    name: Android IME API ${{ matrix.api }}
+    needs: [inputs, android]
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    permissions:
+      contents: read
+      id-token: write
+    strategy:
+      fail-fast: false
+      max-parallel: 3
+      matrix:
+        api: [26, 28, 29, 30, 31, 32, 33, 34, 35, 36]
+    env:
+      PYTHONDONTWRITEBYTECODE: '1'
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+      - name: Load approved tool versions
+        run: python3 scripts/build_inputs.py versions
+      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0
+        with:
+          python-version: ${{ env.COR_PYTHON }}
+      - name: Connect for verified emulator downloads
+        id: tailnet
+        if: vars.TS_OAUTH_CLIENT_ID != '' && vars.TS_AUDIENCE != ''
+        uses: tailscale/github-action@064b10558093f38325e838ddea35486bdc6b1d5c
+        timeout-minutes: 3
+        continue-on-error: true
+        with:
+          oauth-client-id: ${{ vars.TS_OAUTH_CLIENT_ID }}
+          audience: ${{ vars.TS_AUDIENCE }}
+          tags: tag:github-action-cache
+          version: ${{ needs.inputs.outputs.tailscale }}
+          use-cache: 'false'
+          retry: '1'
+          timeout: 45s
+          args: --accept-dns=false
+          tailscaled-args: --tun=userspace-networking --outbound-http-proxy-listen=127.0.0.1:19082
+      - name: Keep runner routing unchanged
+        if: steps.tailnet.outcome == 'success'
+        run: sudo -n tailscale set --accept-routes=false --accept-dns=false
+      - uses: ./.github/actions/upstream-cache
+        with:
+          url: ${{ steps.tailnet.outcome == 'success' && vars.LOCAL_CACHE_URL || '' }}
+          token: ${{ secrets.LOCAL_CACHE_TOKEN }}
+      - uses: actions/setup-java@77dd5b2ce225ea11469928ac317850245a74ae78
+        with:
+          distribution: temurin
+          java-version: ${{ needs.inputs.outputs.java }}
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333
+        with:
+          name: android-ime-apks
+          path: dist/android-ime-apks
+      - name: Start the approved Android test image
+        run: |
+          sudo chmod a+rw /dev/kvm
+          python3 scripts/android.py emulator --arch x64 --api ${{ matrix.api }}
+      - name: Capture three production keyboard probe rounds
+        shell: python
+        run: |
+          import pathlib, sys
+          sys.path.insert(0, 'scripts')
+          from android import test
+          root = pathlib.Path('dist/android-ime-apks')
+          test('x64', apk=root/'release/app-release.apk',
+               test_apk=root/'androidTest/release/app-release-androidTest.apk',
+               ime_only=True, ime_probe=True, ime_rounds=3)
+      - name: Compare three rounds without application animation callbacks
+        if: ${{ !cancelled() && matrix.api >= 30 }}
+        shell: python
+        run: |
+          import pathlib, sys
+          sys.path.insert(0, 'scripts')
+          from android import test
+          root = pathlib.Path('dist/android-ime-apks')
+          test('x64', apk=root/'release/app-release.apk',
+               test_apk=root/'androidTest/release/app-release-androidTest.apk',
+               ime_only=True, ime_probe=True, ime_rounds=3, system_animation=True)
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
+        if: always()
+        with:
+          name: android-ime-api-${{ matrix.api }}
+          path: target/android-report
+          if-no-files-found: error
+          retention-days: 3
+      - name: Preserve original download inventory
+        if: ${{ !cancelled() }}
+        continue-on-error: true
+        uses: ./.github/actions/upstream-report
+        with:
+          name: upstream-downloads-${{ github.job }}-${{ strategy.job-index }}
   check:
     if: ${{ !inputs.refresh_dependencies && !inputs.android_ime_only }}
     name: ${{ matrix.system }}-${{ matrix.arch }}

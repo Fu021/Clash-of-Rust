@@ -1,6 +1,14 @@
 # Android 宿主
 
-版本取自根 [Cargo.toml](../../Cargo.toml) workspace，[分支规则](../../docs/development.md#分支版本)统一维护。最低 Android 8.0（API 26），支持 ARM64、ARMv7 和 x86_64；iOS 仅为宿主占位。
+版本取自根 [Cargo.toml](../../Cargo.toml) workspace，[分支规则](../../docs/development.md#分支版本)统一维护。最低安装版本 Android 8.0（API 26），提供 ARM64、ARMv7 和 x86_64 包；iOS 仅为宿主占位。
+
+## 兼容性与验证范围
+
+最低安装版本不代表所有后续系统及厂商 ROM 已完成兼容验收。常规 CI 的完整代理/TUN 场景主要在 API 36 x86_64 模拟器执行；ARM 包完成编译、lint 和架构检查，仍需真机验证。
+
+[issue #31](https://github.com/Fu021/Clash-of-Rust/issues/31) 报告 Redmi K30 / MIUI 14.0.5 的订阅输入框有光标但不显示键盘。专项 `41995793003` 中，API 31 截图也未显示键盘，而 API 36 可见；API 31 的系统输入法状态却报告已显示，不能只凭系统布尔值判断。两者是否同根因尚未确认，API 31 测试关闭了系统动画，仍需对照正常动画。MIUI 版本不能代替 Android API 信息。
+
+后续先用[输入法专项](../../docs/workflows/ci.md#ci)逐版复验键盘、截图和系统接口，再补 Android 8 起的安装、订阅输入/保存、系统 VPN 授权/拒绝、连接/断开、后台恢复及更新安装矩阵；厂商 ROM、ARM 实机、真实网络、休眠与重启单独记录。输入法截图探测成功不能代替完整兼容验收。
 
 ## 结构
 

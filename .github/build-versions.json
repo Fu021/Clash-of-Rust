@@ -39,7 +39,17 @@
       "system_image_revision": "7",
       "legacy_system_image": "system-images;android-31;google_apis;x86_64",
       "legacy_system_image_revision": "14",
-      "legacy_system_image_source_revision": "12"
+      "legacy_system_image_source_revision": "12",
+      "ime_system_images": {
+        "26": {"revision": "16", "source_revision": "16"},
+        "28": {"revision": "11", "source_revision": "11"},
+        "29": {"revision": "13", "source_revision": "13"},
+        "30": {"revision": "16", "source_revision": "16"},
+        "32": {"revision": "8", "source_revision": "4"},
+        "33": {"revision": "17", "source_revision": "17"},
+        "34": {"revision": "14", "source_revision": "14"},
+        "35": {"revision": "9", "source_revision": "9"}
+      }
     },
     "java": {
       "version": "25.0.5+8",

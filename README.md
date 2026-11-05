@@ -3,7 +3,7 @@
 </p>
 <h1 align="center">Clash of Rust</h1>
 
-基于 mihomo 的原生 Rust 代理客户端。支持 **Windows（x64 / ARM64）**、**Debian/Ubuntu（amd64 / ARM64，Ubuntu 仅支持 20.04 及以上）**、**macOS 14 及以上（Intel / Apple Silicon）** 和 **Android 8.0 及以上（ARM64 / ARMv7 / x86_64）**。版本 **0.6.6**，更新内容见 [发布说明](docs/releases/0.6.6.md)。
+基于 mihomo 的原生 Rust 代理客户端。提供 **Windows（x64 / ARM64）**、**Debian/Ubuntu（amd64 / ARM64，Ubuntu 最低 20.04）**、**macOS 14 及以上（Intel / Apple Silicon）** 和 **Android（ARM64 / ARMv7 / x86_64，最低安装版本 8.0）**。Android 各版本和厂商 ROM 的验证范围、已知问题见[兼容性说明](apps/android/README.md#兼容性与验证范围)。版本 **0.6.6**，更新内容见 [发布说明](docs/releases/0.6.6.md)。
 
 ## Features
 
