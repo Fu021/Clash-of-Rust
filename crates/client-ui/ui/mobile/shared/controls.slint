@@ -60,6 +60,15 @@ export component MScroll inherits Flickable {
     property <length> bottom: min(0px, self.height - self.content-height);
     changed content-key => { self.content-y = 0px; }
     changed bottom => { self.content-y = clamp(self.content-y, self.bottom, 0px); }
+    public function reveal(target-y: length, target-height: length) {
+        if root.height > 0px {
+            let visible-height = min(target-height, root.height);
+            let padding = min(8px, max(0px, (root.height - visible-height) / 2));
+            let relative-top = target-y - root.absolute-position.y;
+            let offset = relative-top < padding ? padding - relative-top : min(0px, root.height - padding - relative-top - visible-height);
+            root.content-y = clamp(root.content-y + offset, root.bottom, 0px);
+        }
+    }
     min-width: 0px; min-height: 0px;
     horizontal-stretch: 1; vertical-stretch: 1;
     interactive: true; mouse-drag-pan-enabled: true;

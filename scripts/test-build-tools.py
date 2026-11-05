@@ -1449,6 +1449,30 @@ runpy.run_path(str(script), run_name='__main__')
                     android_build.pull_ime_report('/sdcard/ime-report',report,required=True)
             self.assertEqual(invoke.call_count,1)
 
+    def test_android_ime_crash_report_uses_only_the_current_run_and_selected_input_method(self):
+        crash=('E AndroidRuntime: FATAL EXCEPTION: main\n'
+               'E AndroidRuntime: Process: com.example.ime, PID: 42\n'
+               'E AndroidRuntime: java.lang.NullPointerException: unavailable keyboard\n')
+        log=crash+'I CorAndroidTest: start-current-test\n'+crash
+        current=android_build.scoped_test_log(log,'start-current-test')
+        self.assertEqual(android_build.input_method_crashes(current,'com.example.ime'),
+                         [{'process':'com.example.ime',
+                           'exception':'java.lang.NullPointerException: unavailable keyboard'}])
+        self.assertEqual(android_build.input_method_crashes(current,'org.clashofrust.android'),[])
+        self.assertEqual(android_build.input_method_crashes(
+            android_build.scoped_test_log(crash+'I CorAndroidTest: start-current-test\n','start-current-test'),
+            'com.example.ime'),[])
+        with self.assertRaisesRegex(RuntimeError,'start marker is missing'):
+            android_build.scoped_test_log(log,'unrecorded-marker')
+
+    def test_android_ime_crash_report_ignores_other_packages_and_ordinary_log_errors(self):
+        log=('E AndroidRuntime: FATAL EXCEPTION: main\n'
+             'E AndroidRuntime: Process: com.example.other, PID: 42\n'
+             'E AndroidRuntime: java.lang.IllegalArgumentException: bad input\n'
+             'E AndroidRuntime: Process: com.example.ime.extra, PID: 43\n'
+             'E InputMethodManager: java.lang.NullPointerException: remote connection\n')
+        self.assertEqual(android_build.input_method_crashes(log,'com.example.ime'),[])
+
     def test_android_preparation_uses_the_approved_sdk_and_skips_unused_package_tools(self):
         versions = build_inputs.android_versions()
         for package_only in (False, True):
