@@ -128,7 +128,12 @@ export component AppWindow inherits Window {
                             }
                             Badge { text: UiData.running ? "● 内核运行中" : UiData.ready ? "● 内核未启动" : "● 正在初始化"; tone: UiData.running ? 1 : 4; }
                         }
-                        Caption { text: UiData.profile + (UiData.node != "" ? "  |  " + UiData.node : ""); horizontal-alignment: right; }
+                        HorizontalLayout { alignment: end; spacing: 4px;
+                            Caption { text: UiData.profile; horizontal-alignment: right; }
+                            if UiData.node != "": Caption { text: "|"; }
+                            if UiData.node-flag.width > 0: Image { source: UiData.node-flag; width: 20px; height: 20px; image-fit: contain; }
+                            if UiData.node != "": Caption { text: UiData.node; horizontal-alignment: right; }
+                        }
                     }
                 }
             }

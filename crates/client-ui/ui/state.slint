@@ -28,9 +28,9 @@ export enum Intent {
 export struct Choice { id: string, label: string }
 export struct DetailItem { label: string, value: string }
 export struct FakeIpExclusionItem { domain: string, source: string }
-export struct NodeItem { group: string, name: string, kind: string, delay: string, tone: int, selected: bool, valid: bool }
+export struct NodeItem { group: string, name: string, label: string, flag: image, kind: string, delay: string, tone: int, selected: bool, valid: bool }
 export struct NodePair { left: NodeItem, right: NodeItem }
-export struct GroupItem { id: string, title: string, detail: string, current: string, expanded: bool, testing: bool, page: string, previous: bool, next: bool, nodes: [NodePair] }
+export struct GroupItem { id: string, title: string, detail: string, current: string, current-flag: image, expanded: bool, testing: bool, page: string, previous: bool, next: bool, nodes: [NodePair] }
 export struct ProfileItem { id: string, name: string, source: string, detail: string, active: bool, local: bool }
 export struct ConnectionItem { id: string, host: string, detail: string, rule: string, route: string, up: string, down: string, upload: string, download: string }
 export struct RuleItem { id: string, position: string, kind: string, value: string, policy: string, source: string, selected: bool, enabled: bool, raw: string }
@@ -73,6 +73,7 @@ export global UiData {
     in-out property <bool> exiting;
     in-out property <string> profile;
     in-out property <string> node;
+    in-out property <image> node-flag;
     in-out property <string> notice;
     in-out property <bool> notice-error;
     in-out property <int> notice-revision;

@@ -14,3 +14,7 @@ https://github.com/unicode-org/cldr-json/tree/46.0.0
 `python scripts/prepare-assets.py flags` reproduces these offline assets. Its development-only
 dependency is Pillow. The application never downloads flags or territory names.
 The full upstream licenses are included next to this file and in the installer.
+
+The US, Japan, and Singapore preview SVG wrappers in
+`crates/client-ui/ui/mobile/preview-data/` embed the corresponding original pixels
+from this atlas. They are offline preview fixtures and use the same artwork license.

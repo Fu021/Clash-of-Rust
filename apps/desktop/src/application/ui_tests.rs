@@ -1013,6 +1013,51 @@ fn ip_report_uses_bitmaps_in_summary_rows_and_details() {
 }
 
 #[test]
+fn offline_node_flags_reach_the_renderer_without_changing_node_identities() {
+    ui_testing::initialize(950, 700);
+    let mut app = fixture(Page::Proxies);
+    app.expanded.insert("Proxy".into());
+    let nodes = [
+        ("🇺🇸 美国 01", "美国 01", true),
+        ("日本 01", "日本 01", true),
+        ("🇩🇪 德国 01", "德国 01", true),
+        ("🇭🇰 香港 01", "香港 01", false),
+        ("澳门 01", "澳门 01", false),
+        ("TW-台湾 01", "台湾 01", false),
+        ("DIRECT", "DIRECT", false),
+    ];
+    app.snapshot.proxies = serde_json::from_value(serde_json::json!({"proxies": {
+        "Proxy": {"type":"Selector", "now":nodes[0].0,
+            "all":nodes.iter().map(|(name, _, _)| *name).collect::<Vec<_>>()}
+    }}))
+    .unwrap();
+    let window = AppWindow::new().unwrap();
+    let data = window.global::<UiData>();
+    let mut models = ViewModels::default();
+    models.attach(&data);
+    for (name, label, flagged) in nodes {
+        app.snapshot.active_node = Some(name.into());
+        app.snapshot.proxies.proxies.get_mut("Proxy").unwrap().now = name.into();
+        app.present_slint(&data, &mut models);
+        assert_eq!(data.get_node(), label, "{name}");
+        assert_eq!(data.get_node_flag().size().width > 0, flagged, "{name}");
+        let group = data.get_groups().row_data(0).unwrap();
+        assert_eq!(group.current, label, "{name}");
+        assert_eq!(group.current_flag.size().width > 0, flagged, "{name}");
+        let node = group
+            .nodes
+            .iter()
+            .flat_map(|pair| [pair.left, pair.right])
+            .find(|node| node.name == name)
+            .unwrap();
+        assert_eq!(node.label, label, "{name}");
+        assert_eq!(node.flag.size().width > 0, flagged, "{name}");
+        assert!(node.selected, "{name}");
+        assert_eq!(app.snapshot.active_node.as_deref(), Some(name));
+    }
+}
+
+#[test]
 fn recursive_dns_flags_follow_the_country_without_changing_risk_or_other_signals() {
     use clash_of_rust::claude_check::{Environment, Evidence, Group, Report, Signal};
 
@@ -1025,6 +1070,7 @@ fn recursive_dns_flags_follow_the_country_without_changing_risk_or_other_signals
     for (code, label, flagged) in [
         ("DE", "德国", true),
         ("US", "美国", true),
+        ("JP", "日本", true),
         ("HK", "香港", false),
         ("MO", "澳门", false),
         ("TW", "台湾", false),

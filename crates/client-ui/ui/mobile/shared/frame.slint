@@ -21,7 +21,12 @@ component HeaderStatus inherits VerticalLayout {
             text: MobileData.core-running ? "● 内核运行中" : "○ 内核未运行"; tone: MobileData.core-running ? 1 : 4;
         }
     }
-    if !root.compact: MSmall { text: MobileData.profile + (MobileData.node != "" ? "  |  " + MobileData.node : ""); horizontal-alignment: right; }
+    if !root.compact: HorizontalLayout { alignment: end; spacing: 4px;
+        MSmall { text: MobileData.profile; horizontal-alignment: right; }
+        if MobileData.node != "": MSmall { text: "|"; }
+        if MobileData.node-flag.width > 0: Image { source: MobileData.node-flag; width: 18px; height: 18px; image-fit: contain; }
+        if MobileData.node != "": MSmall { text: MobileData.node; horizontal-alignment: right; }
+    }
 }
 
 export component MobileFrame inherits Rectangle {

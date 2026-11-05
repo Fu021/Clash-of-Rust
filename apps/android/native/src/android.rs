@@ -2749,7 +2749,9 @@ fn apply(ui: &AndroidWindow, p: Projection) {
     data.set_core_running(p.running);
     data.set_vpn_connected(p.vpn);
     data.set_profile(p.profile.into());
-    data.set_node(p.node.into());
+    let (node, node_flag) = core::countries::node_label(&p.node);
+    data.set_node(node.into());
+    data.set_node_flag(flag(node_flag.unwrap_or_default()));
     data.set_connection_count(p.total.to_string().into());
     data.set_upload_total(p.upload.into());
     data.set_download_total(p.download.into());
@@ -2877,21 +2879,28 @@ fn apply(ui: &AndroidWindow, p: Projection) {
                     let group_id = name.clone();
                     let node_items = nodes
                         .into_iter()
-                        .map(|(name, node)| NodeItem {
-                            group: group_id.clone().into(),
-                            selected: name == group.now.as_str(),
-                            name: name.into(),
-                            kind: node.kind.to_string().into(),
-                            delay: proxy_order::delay_label(node.delay).into(),
-                            tone: proxy_order::delay_tone(node.delay),
-                            valid: true,
+                        .map(|(name, node)| {
+                            let (label, code) = core::countries::node_label(&name);
+                            NodeItem {
+                                group: group_id.clone().into(),
+                                selected: name == group.now.as_str(),
+                                label: label.into(),
+                                flag: flag(code.unwrap_or_default()),
+                                name: name.into(),
+                                kind: node.kind.to_string().into(),
+                                delay: proxy_order::delay_label(node.delay).into(),
+                                tone: proxy_order::delay_tone(node.delay),
+                                valid: true,
+                            }
                         })
                         .collect::<Vec<_>>();
+                    let (current, current_flag) = core::countries::node_label(group.now.as_str());
                     GroupItem {
                         id: name.clone().into(),
                         title: name.into(),
                         detail: format!("{} · {count} 个节点", group.kind).into(),
-                        current: group.now.to_string().into(),
+                        current: current.into(),
+                        current_flag: flag(current_flag.unwrap_or_default()),
                         expanded,
                         testing,
                         nodes: stable(
@@ -3072,11 +3081,9 @@ fn flag(country: &str) -> slint::Image {
         serde_json::from_str(include_str!("../../../../resources/flags/codes.json"))
             .expect("flag codes")
     });
-    let text = core::countries::country_text(country);
-    let code = core::countries::country_code(text).unwrap_or(text);
-    if matches!(code, "HK" | "MO" | "TW") {
+    let Some(code) = core::countries::flag_code(country) else {
         return slint::Image::default();
-    }
+    };
     let Some(index) = codes.iter().position(|c| c == code) else {
         return slint::Image::default();
     };

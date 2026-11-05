@@ -109,9 +109,12 @@ impl App {
                     .min(last_page_offset(count));
                 let node = |index: usize| {
                     let name = proxy.all[index].as_str();
+                    let (label, flag) = clash_client_core::countries::node_label(name);
                     NodeItem {
                         group: group.as_str().into(),
                         name: name.into(),
+                        label: label.into(),
+                        flag: flag.unwrap_or_default().into(),
                         valid: true,
                         selected: proxy.now.as_str() == name,
                         kind: self
@@ -134,11 +137,14 @@ impl App {
                     });
                 }
             }
+            let (current, current_flag) =
+                clash_client_core::countries::node_label(proxy.now.as_str());
             rows.push((
                 GroupItem {
                     id: group.as_str().into(),
                     title: group.as_str().into(),
-                    current: proxy.now.as_str().into(),
+                    current: current.into(),
+                    current_flag: current_flag.unwrap_or_default().into(),
                     detail: format!("{} · {} 个节点", proxy.kind, proxy.all.len()).into(),
                     expanded,
                     testing: self.testing_groups.contains(group.as_str()),
@@ -384,11 +390,11 @@ impl App {
                 .find(|profile| self.settings.active_profile.as_deref() == Some(&profile.id))
                 .map_or("未选择订阅", |profile| profile.name.as_str())
         );
-        text!(
-            get_node,
-            set_node,
-            self.snapshot.active_node.as_deref().unwrap_or("")
+        let (node, node_flag) = clash_client_core::countries::node_label(
+            self.snapshot.active_node.as_deref().unwrap_or(""),
         );
+        text!(get_node, set_node, node);
+        text!(get_node_flag, set_node_flag, node_flag.unwrap_or(""));
         set!(
             get_mode,
             set_mode,

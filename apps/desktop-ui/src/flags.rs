@@ -1,5 +1,5 @@
 //! Offline bitmap flags avoid Windows font-dependent regional indicator rendering.
-pub use clash_client_core::countries::{country_code, country_text};
+pub use clash_client_core::countries::{country_code, country_text, flag_code};
 use slint::{Image, SharedPixelBuffer};
 use std::sync::OnceLock;
 use std::{cell::RefCell, collections::VecDeque};
@@ -34,29 +34,10 @@ pub fn release_cache() {
 
 pub fn label(country: &str) -> (&str, Option<Image>) {
     let text = country_text(country);
-    let mut chars = country.chars();
-    let flag = match (chars.next(), chars.next()) {
-        (Some(a), Some(b))
-            if (0x1f1e6..=0x1f1ff).contains(&u32::from(a))
-                && (0x1f1e6..=0x1f1ff).contains(&u32::from(b)) =>
-        {
-            Some(
-                [a, b]
-                    .into_iter()
-                    .filter_map(|ch| char::from_u32(u32::from(ch) - 0x1f1e6 + u32::from(b'A')))
-                    .collect::<String>(),
-            )
-        }
-        _ => None,
-    };
-    let code = flag.or_else(|| country_code(text).map(str::to_owned));
-    let Some(code) = code else {
+    let Some(code) = flag_code(country) else {
         return (text, None);
     };
-    if matches!(code.as_str(), "HK" | "MO" | "TW") {
-        return (text, None);
-    }
-    let handle = codes().iter().position(|item| item == &code).map(|index| {
+    let handle = codes().iter().position(|item| item == code).map(|index| {
         HANDLES.with(|handles| {
             let mut handles = handles.borrow_mut();
             let image = if let Some(position) = handles.iter().position(|(key, _)| *key == index) {
@@ -82,16 +63,41 @@ mod tests {
     #[test]
     fn countries_and_pixels_are_consistent() {
         assert_eq!(PIXELS.len(), codes().len() * BYTES);
+        for code in codes() {
+            assert!(label(code).1.is_some(), "{code}");
+        }
         assert_eq!(country_code("United States"), Some("US"));
         assert_eq!(country_code("No"), None);
         assert_eq!(label("🇺🇸 美国").0, "美国");
         assert!(label("🇺🇸 美国").1.is_some());
-        for country in ["🇩🇪 德国", "德国", "DE", "Germany"] {
+        for country in [
+            "🇩🇪 德国",
+            "德国",
+            "DE",
+            "Germany",
+            "🇺🇸 美国",
+            "美国",
+            "US",
+            "United States",
+            "🇯🇵 日本",
+            "日本",
+            "JP",
+            "Japan",
+        ] {
             assert!(label(country).1.is_some(), "{country}");
         }
         assert!(label("未识别").1.is_none());
-        for country in ["香港", "澳门", "台湾", "🇭🇰 香港", "🇲🇴 澳门", "🇹🇼 台湾"]
-        {
+        for country in [
+            "香港",
+            "澳门",
+            "台湾",
+            "HK",
+            "MO",
+            "TW",
+            "🇭🇰 香港",
+            "🇲🇴 澳门",
+            "🇹🇼 台湾",
+        ] {
             assert!(label(country).1.is_none());
         }
     }
