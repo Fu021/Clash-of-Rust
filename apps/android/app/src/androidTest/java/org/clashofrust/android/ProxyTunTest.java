@@ -385,6 +385,22 @@ public class ProxyTunTest {
             throw error;
         }
     }
+    private static void verifyRestoredImeAndHide(String orientation) throws Exception {
+        if (imeVisible()) {
+            JSONObject ui=MainActivity.diagnostics();
+            String field=ui.optBoolean("profile_source_focused")?"source":"name";
+            assertTrue("Restored keyboard has no focused subscription field",
+                ui.optBoolean("profile_"+field+"_focused"));
+            assertImeLayout(field);
+            captureIme(orientation+"-restored-visible");
+            shell("input keyevent KEYCODE_BACK");
+        }
+        await("Restored "+orientation+" IME did not hide after Back",()->!imeVisible()
+            && MainActivity.diagnostics().optDouble("keyboard_inset")==0);
+        assertEquals("Navigation bars must not become a keyboard inset after rotation",
+            0,MainActivity.diagnostics().getDouble("keyboard_inset"),0);
+        captureIme(orientation+"-hidden");
+    }
     @Test public void subscriptionFieldsShowImeAcceptTextAndReopenAfterBack() throws Exception {
         Context context=InstrumentationRegistry.getInstrumentation().getTargetContext();
         shell("settings put system font_scale 1.0");
@@ -458,17 +474,7 @@ public class ProxyTunTest {
                     return ui.optDouble("width")>ui.optDouble("height");
                 });
                 SystemClock.sleep(1500);
-                if (imeVisible()) {
-                    String focused=MainActivity.diagnostics().optBoolean("profile_source_focused")?"source":"name";
-                    assertImeLayout(focused);
-                    captureIme("landscape-restored-visible");
-                    shell("input keyevent KEYCODE_BACK");
-                    await("Restored landscape IME did not hide after Back",()->!imeVisible()
-                        && MainActivity.diagnostics().optDouble("keyboard_inset")==0);
-                }
-                assertEquals("Navigation bars must not become a keyboard inset after rotation",
-                    0,MainActivity.diagnostics().getDouble("keyboard_inset"),0);
-                captureIme("landscape-hidden");
+                verifyRestoredImeAndHide("landscape");
                 tapTarget("profile_name_target");
                 await("Landscape subscription name did not gain focus",
                     ()->MainActivity.diagnostics().optBoolean("profile_name_focused"));
@@ -494,8 +500,8 @@ public class ProxyTunTest {
                     });
                 } finally {automation.setRotation(android.app.UiAutomation.ROTATION_UNFREEZE);}
             }
-            await("Keyboard inset did not clear after portrait restoration",
-                ()->MainActivity.diagnostics().optDouble("keyboard_inset")==0);
+            SystemClock.sleep(1500);
+            verifyRestoredImeAndHide("portrait");
             captureIme("final");
         } catch (Exception | AssertionError error) {
             try {captureIme("failure");}

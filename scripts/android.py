@@ -571,7 +571,8 @@ def test(arch, apk=None, test_apk=None, ime_only=False, ime_probe=False,
                          'source-settled','after-back') if ime_probe else
                         ('before-focus','0-name-visible','1-source-visible','2-name-visible',
                          '2-name-hidden','3-source-visible','3-source-hidden','4-name-visible',
-                         '4-name-hidden','after-resume','landscape-hidden','landscape-name-visible','final'))
+                         '4-name-hidden','after-resume','landscape-hidden','landscape-name-visible',
+                         'portrait-hidden','final'))
                 for iteration in range(1,ime_rounds+1):
                     for phase in phases:
                         for suffix in ('.png','-state.json','-input-method.txt','-windows.txt'):

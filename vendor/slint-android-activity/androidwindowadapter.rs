@@ -38,6 +38,8 @@ pub struct AndroidWindowAdapter {
     requested_graphics_api: RefCell<Option<i_slint_core::graphics::RequestedGraphicsAPI>>,
     pub(crate) event_queue: EventQueue,
     pub(crate) pending_redraw: Cell<bool>,
+    surface_ready: Cell<bool>,
+    window_focused: Cell<bool>,
     pub(super) java_helper: JavaHelper,
     pub(crate) fullscreen: Cell<bool>,
     /// The offset at which the Slint view is drawn in the native window (account for status bar)
@@ -188,6 +190,8 @@ impl AndroidWindowAdapter {
             requested_graphics_api: RefCell::new(None),
             event_queue: Default::default(),
             pending_redraw: Default::default(),
+            surface_ready: Cell::new(false),
+            window_focused: Cell::new(false),
             java_helper,
             fullscreen: Cell::new(false),
             offset: Default::default(),
@@ -228,7 +232,9 @@ impl AndroidWindowAdapter {
                         self.requested_graphics_api.borrow().clone(),
                         false,
                     )?;
+                    self.surface_ready.set(true);
                     self.resize()?;
+                    self.render_surface()?;
                     self.request_redraw();
 
                     // Fixes a problem for old Android versions: the soft input always prompt out on startup.
@@ -239,6 +245,8 @@ impl AndroidWindowAdapter {
                 }
             }
             PollEvent::Main(MainEvent::TerminateWindow { .. }) => {
+                self.surface_ready.set(false);
+                self.pending_redraw.set(false);
                 // The window, and with it the context that a rendering notifier's resources belong
                 // to, is only valid until this callback returns.
                 self.renderer.suspend()?;
@@ -251,10 +259,17 @@ impl AndroidWindowAdapter {
                 self.do_render()?;
             }
             PollEvent::Main(MainEvent::GainedFocus) => {
+                self.window_focused.set(true);
                 self.window.dispatch_event_with_result(WindowEvent::WindowActiveChanged(true))?;
+                self.request_redraw();
             }
             PollEvent::Main(MainEvent::LostFocus) => {
+                self.window_focused.set(false);
                 self.window.dispatch_event_with_result(WindowEvent::WindowActiveChanged(false))?;
+            }
+            PollEvent::Main(MainEvent::Pause | MainEvent::Stop) => {
+                self.window_focused.set(false);
+                self.pending_redraw.set(false);
             }
             PollEvent::Main(MainEvent::ConfigChanged { .. }) => {
                 let scale_factor =
@@ -519,15 +534,42 @@ impl AndroidWindowAdapter {
         Ok(())
     }
 
+    pub(crate) fn can_render(&self) -> bool {
+        self.surface_ready.get() && self.window_focused.get()
+    }
+
     pub fn do_render(&self) -> Result<(), PlatformError> {
+        if !self.can_render() {
+            return Ok(());
+        }
+        self.render_surface()
+    }
+
+    fn render_surface(&self) -> Result<(), PlatformError> {
         if let Some(win) = self.app.native_window() {
             let o = self.offset.get();
-            let _ = self.renderer.render_transformed_with_post_callback(
+            let result = self.renderer.render_transformed_with_post_callback(
                 0.,
                 (o.x as f32, o.y as f32),
                 PhysicalSize { width: win.width() as _, height: win.height() as _ },
                 None,
-            )?;
+            );
+            match result {
+                Ok(_) => (),
+                Err(error)
+                    if error
+                        .to_string()
+                        .starts_with("Skia OpenGL Renderer: Error swapping buffers: [300d]") =>
+                {
+                    self.surface_ready.set(false);
+                    self.pending_redraw.set(false);
+                    self.renderer.suspend()?;
+                    i_slint_core::debug_log!(
+                        "Android window surface was lost; waiting for InitWindow: {error}"
+                    );
+                }
+                Err(error) => return Err(error),
+            }
         }
         Ok(())
     }

@@ -442,13 +442,11 @@ public class SlintAndroidJavaHelper {
                     return;
                 }
                 mKeyboardShowPending = false;
-                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
-                    if (Build.VERSION.SDK_INT < Build.VERSION_CODES.TIRAMISU) {
-                        imm.isActive();
-                    }
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
                     android.view.WindowInsetsController controller = mInputView.getWindowInsetsController();
                     if (controller != null) {
                         controller.show(WindowInsets.Type.ime());
+                        return;
                     }
                 }
                 imm.showSoftInput(mInputView, InputMethodManager.SHOW_IMPLICIT);
@@ -471,9 +469,11 @@ public class SlintAndroidJavaHelper {
                 mActivity.addContentView(mInputView, params);
                 mInputView.setVisibility(View.VISIBLE);
                 mInputView.getViewTreeObserver().addOnWindowFocusChangeListener(hasFocus -> {
-                    mInputView.removeCallbacks(mApplyKeyboardVisibility);
-                    if (hasFocus && mKeyboardRequested && mKeyboardShowPending) {
-                        mInputView.postOnAnimation(mApplyKeyboardVisibility);
+                    if (mKeyboardRequested) {
+                        mInputView.removeCallbacks(mApplyKeyboardVisibility);
+                        if (hasFocus && mKeyboardShowPending) {
+                            mInputView.postOnAnimation(mApplyKeyboardVisibility);
+                        }
                     }
                 });
                 if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
@@ -603,7 +603,7 @@ public class SlintAndroidJavaHelper {
                 mKeyboardRequested = false;
                 mKeyboardShowPending = false;
                 mInputView.removeCallbacks(mApplyKeyboardVisibility);
-                mInputView.postOnAnimation(mApplyKeyboardVisibility);
+                mInputView.postDelayed(mApplyKeyboardVisibility, 150);
             }
         });
     }

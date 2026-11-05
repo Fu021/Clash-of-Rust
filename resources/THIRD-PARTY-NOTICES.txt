@@ -48,3 +48,4 @@ and corresponding upstream sources are recorded in Cargo.lock.
 The Android backend includes a window lifecycle fix backported from
 https://github.com/slint-ui/slint/commit/611357480eb7a7eb4f1957d912512fadf99a6666.
 Its modified source and original licenses are in vendor/slint-android-activity.
+Local IME and window-transition changes are documented there in PATCHES.md.

@@ -10,15 +10,24 @@ the old Android window is still valid and request a redraw when a new window
 is initialized. Source:
 https://github.com/slint-ui/slint/commit/611357480eb7a7eb4f1957d912512fadf99a6666
 
+Local lifecycle handling draws the first frame on `InitWindow`, then requires
+both an initialized surface and window focus for regular frames and animation
+wakeups. Pause, stop and focus loss prevent drawing to an outgoing surface.
+The pinned Skia swap-buffer error `[300d]` suspends the invalid surface and waits
+for `InitWindow`; unrelated rendering errors still propagate. Foreground input
+and rotation tests must prove recovery, not just that the process survived.
+
 The Java helper also carries local IME compatibility changes:
 
 - Remove the application `WindowInsetsAnimation.Callback`; API 31/32 screenshot
   comparisons found an active input connection and reported IME visibility
   without a rendered keyboard while this callback was installed.
-- Coalesce field-switch show/hide requests on the input view's next frame and
-  wait for window focus before showing. Synchronize the input-method focus on
-  API 30–32 before using `WindowInsetsController`, following AndroidX's
-  `SoftwareKeyboardControllerCompat`; retain the posted `showSoftInput` path.
+- Coalesce show requests on the input view's next frame and wait for window
+  focus before showing. Delay a hide by 150 ms so the next field can cancel it
+  before the input view loses focus or a system hide animation starts.
+  Use posted `showSoftInput` on API 26–32. On API 33+, use
+  `WindowInsetsController` when available and only fall back to `showSoftInput`
+  when it is unavailable; do not request both for a single show operation.
   A pending request can resume when window focus arrives; an already delivered
   request does not reopen a keyboard dismissed with Back on later focus changes.
 - On API 26–29, exclude stable system bars when choosing the keyboard edge.
@@ -29,9 +38,12 @@ The Java helper also carries local IME compatibility changes:
 AndroidX reference:
 https://github.com/androidx/androidx/blob/androidx-main/core/core/src/main/java/androidx/core/view/SoftwareKeyboardControllerCompat.java
 
-These IME changes have local static checks only; the production keyboard,
-layout, Back, rotation and lifecycle regressions still require Actions and
-device verification. The upstream crate license files remain authoritative.
+Current Actions evidence and remaining failures are recorded in
+[the IME review](../../docs/agent-failures/android-ime.md).
+The latest lifecycle and request-order changes have local static checks only;
+the production keyboard, layout, Back, rotation and lifecycle regressions still
+require same-commit Actions and device verification.
+The upstream crate license files remain authoritative.
 
 Remove this override after updating Slint to a release containing equivalent
 window and IME fixes and verifying Activity recreation, VPN continuity and
