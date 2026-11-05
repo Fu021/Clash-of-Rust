@@ -383,13 +383,14 @@ fn diagnose(out: &mut dyn Write, value: &Value) -> Result<()> {
     .into_iter()
     .filter_map(|(key, name)| (environment[key] == true).then_some(name))
     .collect();
+    let configured = configured.join("、");
     field(
         out,
         "终端代理环境变量",
         if configured.is_empty() {
             "未检测到常见代理变量"
         } else {
-            &configured.join("、")
+            &configured
         },
     )?;
     host_routes(out, &value["host_routes"])?;
