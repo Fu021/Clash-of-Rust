@@ -35,7 +35,7 @@ Linux 兼容验证在来源解析后准备环境，仅等待本次运行中对�
 
 Ubuntu 18.04 未纳入此基线或兼容矩阵，不能从 20.04 的验证结果推断其受支持。
 
-Ubuntu 20.04 的镜像、Python 和已验证 DEB 下载缓存见 [CI 缓存边界](ci.md#ubuntu-2004-环境下载缓存)；每轮重建虚拟机磁盘，安装后验证照常执行。
+打包与安装验证所需原包遵循[三条工作流的缓存分工](cache-coverage.md)，不向私网保存安装目录或构建对象。原包准备后尽早交持久清单，所有下载 job（含 Ubuntu latest）在末尾保存清单和分页回执附件；pending 与整批 ready 分别报告。Ubuntu 20.04 的镜像、Python 和已验证 DEB 下载范围见 [CI 缓存边界](ci.md#ubuntu-2004-环境下载缓存)；每轮重建虚拟机磁盘，安装后验证照常执行。
 
 只有最终发布 job 有 `contents: write`。发布工作流向 `scripts/build-installer.py --prebuilt` 传入已验证的 CI 产物；本地打包可传入按上述步骤生成的本地产物。打包器只校验与组装，不隐式调用 Cargo。
 

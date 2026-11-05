@@ -147,6 +147,11 @@ jobs:
           from linux_apt import OPTIONS, privileged, install
           privileged([*OPTIONS, 'update'], 300)
           install(['libglib2.0-dev', 'libfontconfig1-dev', 'libfreetype6-dev', 'libxkbcommon-dev', 'libwayland-dev', 'libx11-dev', 'libx11-xcb-dev', 'libxkbcommon-x11-0', 'libxcursor1', 'libxrandr2', 'libxi6', 'libxinerama1', 'libegl1', 'gsettings-desktop-schemas', 'dbus', 'xvfb', 'xauth', 'xdotool', 'python3-gi'])
+      - name: Enqueue verified original downloads before benchmarking
+        continue-on-error: true
+        uses: ./.github/actions/upstream-report
+        with:
+          checkpoint: 'true'
       - name: Benchmark the selected source
         shell: python
         env:

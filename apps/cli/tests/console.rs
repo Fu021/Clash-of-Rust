@@ -11,6 +11,7 @@ fn help_version_completion_and_usage_do_not_initialize_a_backend() {
     for arguments in [
         vec!["help"],
         vec!["help", "rule", "add"],
+        vec!["node", "help"],
         vec!["--json", "version"],
         vec!["completion", "bash"],
     ] {
@@ -36,4 +37,19 @@ fn help_version_completion_and_usage_do_not_initialize_a_backend() {
         assert_eq!(result.status.code(), Some(2));
         assert!(result.stdout.is_empty());
     }
+}
+
+#[test]
+fn network_only_restart_does_not_spawn_a_missing_backend() {
+    let root = tempfile::tempdir().unwrap();
+    let data = root.path().join("data");
+    let result = cor()
+        .args(["restart", "--network-only", "--yes", "--data-dir"])
+        .arg(&data)
+        .output()
+        .unwrap();
+    assert!(!result.status.success());
+    assert!(String::from_utf8_lossy(&result.stderr).contains("后台未运行"));
+    assert!(!data.join("control.json").exists());
+    assert!(!data.join("daemon.log").exists());
 }

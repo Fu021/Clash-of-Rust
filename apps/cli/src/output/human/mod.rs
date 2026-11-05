@@ -23,6 +23,10 @@ pub(super) fn write(out: &mut dyn Write, args: &Args, value: &Value) -> Result<(
             Ok(())
         }
         "status" => status(out, value),
+        "restart" if args.flag("network-only") => message(
+            out,
+            "已刷新当前内核的出站与 DNS，并关闭旧连接；目标服务是否可用仍需检查",
+        ),
         "start" | "restart" => {
             writeln!(
                 out,
@@ -57,7 +61,11 @@ pub(super) fn write(out: &mut dyn Write, args: &Args, value: &Value) -> Result<(
             Ok(())
         }
         "mode" => field(out, "运行模式", &text(value, "mode")),
-        "proxy" => field(out, "代理方式", &text(value, "proxy")),
+        "diagnose" => diagnose(out, value),
+        "proxy" => {
+            field(out, "当前用户代理方式", &text(value, "proxy"))?;
+            host_routes(out, &value["host_routes"])
+        }
         "profile list" => lists::profiles(out, value),
         "profile add" | "profile import" => field(out, "已添加订阅", &text(value, "imported")),
         "profile use" => field(out, "当前订阅", &text(value, "name")),
@@ -257,7 +265,7 @@ fn status(out: &mut dyn Write, value: &Value) -> Result<()> {
         field(out, "控制方", &text(value, "owner"))?;
     }
     if value["running"] != true {
-        return Ok(());
+        return host_routes(out, &value["host_routes"]);
     }
     for key in [
         "version",
@@ -270,9 +278,122 @@ fn status(out: &mut dyn Write, value: &Value) -> Result<()> {
         "upload_rate",
         "download_rate",
     ] {
-        field(out, label(key), &text(value, key))?;
+        field(
+            out,
+            if key == "proxy" {
+                "当前用户代理方式"
+            } else {
+                label(key)
+            },
+            &text(value, key),
+        )?;
+    }
+    host_routes(out, &value["host_routes"])
+}
+
+fn host_routes(out: &mut dyn Write, value: &Value) -> Result<()> {
+    if value.is_null() {
+        return Ok(());
+    }
+    if value["scope"] != "current_network_namespace" {
+        return field(out, "主机路由", "当前平台暂未确认");
+    }
+    for (family, destination) in [("ipv4", "1.1.1.1"), ("ipv6", "2606:4700:4700::1111")] {
+        let route = &value[family];
+        let description = if route["state"] == "observed" {
+            let interface = text(route, "interface");
+            if route["kind"] == "tun" {
+                format!("TUN/TAP 接口 {interface}；归属未确认")
+            } else {
+                format!("接口 {interface}；其他隧道或策略路由仍需核对")
+            }
+        } else {
+            "未确认".to_owned()
+        };
+        field(
+            out,
+            &format!("{family} 目标 {destination} 的路由"),
+            &description,
+        )?;
+    }
+    for warning in rows(&value["warnings"]) {
+        let description = match warning.as_str() {
+            Some("tun_owner_unconfirmed") => {
+                "检测到 TUN/TAP 路由，但当前用户未启用 TUN；接口归属未确认，可能来自其他用户或程序"
+            }
+            Some("sample_routes_not_tun") => {
+                "当前用户启用 TUN，但已确认的示例目标路由未经过可识别的 TUN/TAP；分流和策略路由可能不同"
+            }
+            _ => continue,
+        };
+        field(out, "路由提示", description)?;
     }
     Ok(())
+}
+
+fn diagnose(out: &mut dyn Write, value: &Value) -> Result<()> {
+    field(out, "DNS 检测域名", &text(value, "dns_host"))?;
+    for (name, key) in [("系统 DNS", "system_dns"), ("当前内核 DNS", "core_dns")] {
+        let result = &value[key];
+        let description = if let Some(answers) = result["Ok"].as_array() {
+            answers
+                .iter()
+                .filter_map(Value::as_str)
+                .map(clean)
+                .collect::<Vec<_>>()
+                .join("、")
+        } else if let Some(error) = result["Err"].as_str() {
+            format!("失败：{}", clean(error))
+        } else {
+            "未检测".to_owned()
+        };
+        field(out, name, &description)?;
+    }
+    for (name, key) in [
+        ("系统路由 HTTP（不使用代理环境变量）", "system_route_http"),
+        ("当前用户本地代理 HTTP", "http"),
+        ("当前用户代理 IPv4 出口", "ipv4"),
+        ("当前用户代理 IPv6 出口", "ipv6"),
+    ] {
+        let probe = &value[key];
+        let description = if let Some(error) = probe["error"].as_str() {
+            format!("失败：{}", clean(error))
+        } else if probe["status"].is_number() {
+            format!(
+                "{} · {} · {}",
+                text(probe, "url"),
+                text(probe, "detail"),
+                text(probe, "millis")
+            )
+        } else {
+            "未检测".to_owned()
+        };
+        field(out, name, &description)?;
+    }
+    if let Some(error) = value["backend_error"].as_str() {
+        field(out, "当前用户后台", &clean(error))?;
+    }
+    let environment = &value["proxy_environment"];
+    let configured: Vec<_> = [
+        ("http", "HTTP_PROXY"),
+        ("https", "HTTPS_PROXY"),
+        ("all", "ALL_PROXY"),
+        ("no_proxy", "NO_PROXY"),
+    ]
+    .into_iter()
+    .filter_map(|(key, name)| (environment[key] == true).then_some(name))
+    .collect();
+    field(
+        out,
+        "终端代理环境变量",
+        if configured.is_empty() {
+            "未检测到常见代理变量"
+        } else {
+            &configured.join("、")
+        },
+    )?;
+    host_routes(out, &value["host_routes"])?;
+    message(out, "DNS 或单个 HTTP 成功不代表其他应用或目标服务可用。")
 }
 
 fn message(out: &mut dyn Write, message: &str) -> Result<()> {

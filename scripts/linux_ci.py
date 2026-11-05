@@ -395,6 +395,9 @@ def main():
             parser.error('vm takes no additional arguments')
         vm_test()
     elif args.operation == 'ci':
+        require_actions()
+        run([sys.executable, ROOT/'scripts/prepare-resources.py',
+             '--system', 'linux', '--arch', host_arch()])
         container(['python3', 'scripts/run-ci.py', '--system', 'linux', '--arch', host_arch()])
     else:
         container(['python3', 'scripts/test-release-package.py', '--system', 'linux',

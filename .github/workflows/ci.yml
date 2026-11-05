@@ -104,6 +104,12 @@ jobs:
       - name: Prepare shared Android source downloads
         if: ${{ !inputs.refresh_dependencies }}
         run: python3 scripts/build_inputs.py share-go --directory target/shared-go
+      - name: Enqueue verified source downloads before matrix builds
+        if: ${{ !inputs.refresh_dependencies }}
+        continue-on-error: true
+        uses: ./.github/actions/upstream-report
+        with:
+          checkpoint: 'true'
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
         if: ${{ !inputs.refresh_dependencies }}
         with:
@@ -504,6 +510,17 @@ jobs:
         uses: ./.github/actions/linux-download-cache
         timeout-minutes: 30
         continue-on-error: true
+      - name: Prepare frozen native resources on the host
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          import subprocess, sys
+          subprocess.run([sys.executable, 'scripts/prepare-resources.py', '--system', '${{ matrix.system }}', '--arch', '${{ matrix.arch }}'], check=True)
+      - name: Enqueue verified original downloads before compilation
+        continue-on-error: true
+        uses: ./.github/actions/upstream-report
+        with:
+          checkpoint: 'true'
       - name: Compile, test and export native binaries
         env:
           GH_TOKEN: ${{ github.token }}

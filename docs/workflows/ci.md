@@ -12,15 +12,15 @@ Android 在 Gradle setup 后重新激活固定 Python、JDK 和 Go，编译前�
 
 共享 Go 下载在矩阵启动前执行 `go mod tidy -diff`，先拒绝未规范化的锁文件，避免三种 Android ABI 完成 Rust 编译后才发现同一问题。
 
-CI 与 Memory 的 Rust 编译缓存仅使用 GitHub，未命中直接编译；Publish Release 复用同提交 CI 附件。原始下载优先官方外网，失败后才取私网，job 末尾只发送已验证的 URL 清单供服务端代拉。私网不再保存编译对象、安装目录、Gradle 转换缓存或已构建容器；当前逐项覆盖及未接入的原生包管理器见[缓存分工](cache-coverage.md)，服务端接口和[可保留白名单](cache-retention.md)独立维护。工作流不删除私网条目。
+CI 与 Memory 的 Rust 编译缓存仅使用 GitHub，未命中直接编译；Publish Release 复用同提交 CI 附件。原始下载优先官方外网，失败后才取私网，准备完成后尽早提交已验证的 URL 清单，末尾追加及查询持久回执。私网不再保存编译对象、安装目录、Gradle 转换缓存或已构建容器；当前逐项覆盖及未接入的原生包管理器见[缓存分工](cache-coverage.md)，服务端接口和[可保留白名单](cache-retention.md)独立维护。工作流不删除私网条目。
 
 每轮 loop 执行只读依赖审计，CI 在最后的缓存 job 中输出 `dependency-audit` 附件及 summary，避免候选查询阻塞平台矩阵启动。报告覆盖 Cargo 锁定包、Go 模块、Android Maven 声明、Actions、已确认工具及 Linux/资源元数据，标出撤回、弃用和上游归档信号；查询失败与未检查项单列。按[loop 更新约定](../loop-workflow.md#每轮怎么做)修改声明、锁文件、工具基线及 Actions SHA 并验证。第三方 Actions 固定官方不可变提交，版本标签保存在工具基线中供审计，不随上游标签移动自动更新。
 
-GitHub 缓存预算为 9 GiB，按[慢平台优先级](cache-coverage.md#编译对象只用-github)保留，取消运行不执行预算清理。macOS/Windows 允许复用 workspace 编译对象；源码逐文件核对内容，相同内容才恢复旧时间戳，变化的 crate 及使用共享输入的构建脚本会失效重编，SVG 也参与源码身份。测试报告和安装包不进入编译缓存。
+GitHub 缓存预算为 9 GiB，按[慢平台优先级](cache-coverage.md#编译对象只用-github)保留，取消运行不执行预算清理。macOS/Windows 先尝试包含源码身份的缓存，未恢复有效对象时再尝试同平台旧 GitHub workspace；精确键未命中不代表冷编译。复用时逐文件核对源码内容，相同内容才恢复旧时间戳，变化的 crate 及使用共享输入的构建脚本会失效重编，SVG 也参与源码身份。测试报告和安装包不进入编译缓存。
 
 Go 审计只查询声明的模块路径，不执行更新。Android 公共任务一次准备已校验的模块下载包和绑定工具，经本轮附件分发给三个 ABI；Go 编译与 Gradle 转换在 runner 完成，不再镜像这些目录。已验证的 Go 原始 ZIP/MOD 单独登记来源，不能用本轮分发的 runner tar 代替原始下载。
 
-私网服务使用独立访问令牌；配置仅写 runner 临时文件，不进入下载清单。各 job 输出原包清单 artifact 和 summary，最终 `private-cache-inventory` 仅盘点，未删除旧缓存不代表新工作流仍在使用它们。
+私网服务使用独立访问令牌；配置仅写 runner 临时文件，不进入下载清单。CI 的输入解析和各平台 job 输出原包清单 artifact 与 summary，其他工作流的报告范围见[清单提交](cache-coverage.md#尽早提交完整清单收尾保留回执)。最终 `private-cache-inventory` 仅盘点，未删除旧缓存不代表新工作流仍在使用它们。
 
 需要服务端配合的事项由用户转达，职责见[缓存服务边界](cache-server.md)。工作流不修改或上传 README.txt，不自动交换 agent 反馈；服务器文档由服务端 agent 维护。
 
@@ -28,7 +28,7 @@ Go 审计只查询声明的模块路径，不执行更新。Android 公共任务
 
 ### Ubuntu 20.04 环境下载缓存
 
-CI 和打包通过 `.github/actions/linux-download-cache` 准备独立 Python 与原始云镜像，冻结上游校验值。容器从固定基础 digest 在 runner 构建，不导出 Docker 镜像缓存；本 job 已构建的镜像可复用。详细类别及边界见[覆盖清单](cache-coverage.md)。
+CI 和打包通过 `.github/actions/linux-download-cache` 准备独立 Python 与原始云镜像，冻结上游校验值。Linux CI 在宿主先准备并校验内核与 Geo 文件，再将工作区挂载给不含私网凭据的构建容器；容器再次核验已有资源。容器从固定基础 digest 在 runner 构建，不导出 Docker 镜像缓存；本 job 已构建的镜像可复用。详细类别及边界见[覆盖清单](cache-coverage.md)。
 
 Python 和原始云镜像使用官方优先、原包私网回退，全部新导入共用 `upstream/files`；旧类别只作为服务端迁移候选。虚拟机下载目录只在本 job 使用，不回传其目录快照。
 

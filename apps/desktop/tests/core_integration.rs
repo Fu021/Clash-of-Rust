@@ -590,7 +590,6 @@ async fn basic_system_proxy_and_tun() {
             .unwrap()
             .unwrap();
     assert!(facade.is_remote() && facade.running());
-    let original_revision = facade.view_revision();
     let cli =
         std::env::var_os("MIHOMO_TEST_CLI").expect("native wrapper must provide the bundled CLI");
     async fn console(
@@ -621,6 +620,20 @@ async fn basic_system_proxy_and_tun() {
     }
     let status = console(&cli, &store, &["status"]).await;
     assert_eq!(status["running"], true);
+    let settings_before_refresh = std::fs::read(store.root.join("settings.json")).unwrap();
+    let config_before_refresh = std::fs::read(store.runtime().join("config.yaml")).unwrap();
+    let refreshed = console(&cli, &store, &["restart", "--network-only"]).await;
+    assert_eq!(refreshed["network_refreshed"], true);
+    assert_eq!(
+        std::fs::read(store.root.join("settings.json")).unwrap(),
+        settings_before_refresh
+    );
+    assert_eq!(
+        std::fs::read(store.runtime().join("config.yaml")).unwrap(),
+        config_before_refresh
+    );
+    assert!(facade.poll(Scope::Home).await.unwrap().running);
+    let original_revision = facade.view_revision();
     console(&cli, &store, &["config", "set", "dark", "true"]).await;
     facade.poll(Scope::Other).await.unwrap();
     assert!(facade.settings.dark);

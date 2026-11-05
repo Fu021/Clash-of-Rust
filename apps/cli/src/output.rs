@@ -214,6 +214,59 @@ mod tests {
     }
 
     #[test]
+    fn status_and_diagnostics_explain_route_scope_without_claiming_ownership() {
+        let routes = json!({
+            "scope":"current_network_namespace",
+            "ipv4":{"state":"observed","interface":"Meta","kind":"tun"},
+            "ipv6":{"state":"unknown"},
+            "warnings":["tun_owner_unconfirmed"]
+        });
+        let status = render(
+            &["status"],
+            json!({"running":false,"owner":null,"host_routes":routes}),
+        );
+        assert!(status.contains("TUN/TAP 接口 Meta"));
+        assert!(status.contains("归属未确认"));
+        assert!(status.contains("可能来自其他用户或程序"));
+        let report = render(
+            &["diagnose"],
+            json!({
+                "dns_host":"example.test",
+                "system_dns":{"Ok":["192.0.2.1"]},
+                "core_dns":null,
+                "system_route_http":{"status":200,"millis":12,"url":"https://example.test","detail":"HTTP 200"},
+                "http":null,
+                "ipv4":null,
+                "ipv6":null,
+                "backend_error":"当前用户后台未运行",
+                "host_routes":{"scope":"unsupported"},
+                "proxy_environment":{"https":true}
+            }),
+        );
+        for expected in [
+            "example.test",
+            "192.0.2.1",
+            "不使用代理环境变量",
+            "HTTP 200",
+            "当前用户后台未运行",
+            "HTTPS_PROXY",
+            "不代表其他应用或目标服务可用",
+        ] {
+            assert!(report.contains(expected), "{report}");
+        }
+    }
+
+    #[test]
+    fn network_only_restart_does_not_claim_the_core_was_restarted() {
+        let text = render(
+            &["restart", "--network-only"],
+            json!({"network_refreshed":true}),
+        );
+        assert!(text.contains("关闭旧连接"));
+        assert!(!text.contains("内核已重启"));
+    }
+
+    #[test]
     fn display_escapes_terminal_controls_and_never_truncates_actionable_ids() {
         let name = "节点\u{1b}[31m\nnode";
         let text = render(

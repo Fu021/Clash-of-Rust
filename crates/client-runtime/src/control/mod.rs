@@ -64,6 +64,7 @@ pub enum Command {
     Start,
     Stop,
     Restart,
+    RecoverNetwork,
     Shutdown,
     Quit,
     Settings {

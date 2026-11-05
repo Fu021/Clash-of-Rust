@@ -22,22 +22,44 @@ pub fn validate_url(input: &str) -> Result<Url> {
 }
 
 pub async fn website(input: String, port: u16, exit_ip: bool) -> Result<ProbeResult> {
+    website_with_route(input, Some(port), exit_ip).await
+}
+
+pub async fn website_system_route(input: String) -> Result<ProbeResult> {
+    website_with_route(input, None, false).await
+}
+
+async fn website_with_route(
+    input: String,
+    port: Option<u16>,
+    exit_ip: bool,
+) -> Result<ProbeResult> {
     let url = validate_url(&input)?;
-    let client = crate::network::client_builder()
-        .no_proxy()
-        .proxy(reqwest::Proxy::all(format!("http://127.0.0.1:{port}"))?)
+    let mut builder = crate::network::client_builder().no_proxy();
+    if let Some(port) = port {
+        builder = builder.proxy(reqwest::Proxy::all(format!("http://127.0.0.1:{port}"))?);
+    }
+    let client = builder
         .connect_timeout(Duration::from_secs(5))
         .timeout(Duration::from_secs(10))
         .redirect(reqwest::redirect::Policy::limited(5))
         .build()?;
     let start = Instant::now();
-    let response = client.get(url).send().await?;
+    let response = client
+        .get(url)
+        .send()
+        .await
+        .map_err(reqwest::Error::without_url)?;
     let millis = start.elapsed().as_millis();
     let status = response.status().as_u16();
     let detail = if exit_ip {
         let mut response = response;
         let mut bytes = Vec::new();
-        while let Some(chunk) = response.chunk().await? {
+        while let Some(chunk) = response
+            .chunk()
+            .await
+            .map_err(reqwest::Error::without_url)?
+        {
             if bytes.len() + chunk.len() > 8192 {
                 bail!("IP 查询响应过大");
             }

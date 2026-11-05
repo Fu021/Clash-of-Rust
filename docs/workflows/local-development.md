@@ -4,9 +4,9 @@
 
 ## 本地打包
 
-桌面打包须在与目标系统、架构一致的机器上进行。除 README 中的原生编译依赖外，还需 Go（版本满足 `apps/android/core/go.mod`，供共享依赖快照脚本使用）；Linux 打包需 `dpkg-dev`，macOS 需系统 `hdiutil`、`codesign`，Windows 的 NSIS 由脚本下载并校验。
+桌面打包须在与目标系统、架构一致的机器上进行。除 README 中的原生编译依赖外，Linux 打包需 `dpkg-dev`，macOS 需系统 `hdiutil`、`codesign`，Windows 的 NSIS 由脚本下载并校验。Android 所需的 Go 和 SDK 另见[Android 构建说明](../../apps/android/README.md#本地构建)。
 
-在仓库根目录执行以下命令。依赖快照脚本会查询兼容更新，可能修改 `Cargo.lock`、Android Go 锁文件及 Gradle 依赖声明，提交前应检查这些差异。
+在仓库根目录执行以下命令。`resolve` 只冻结当前提交的锁文件、Android 声明与已确认工具基线，不查询或应用升级，也不修改源码依赖文件；这些文件须与当前提交一致。依赖升级与工具更新按[依赖维护](../development.md#依赖维护)执行，不能用旧快照覆盖当前声明。
 
 ```sh
 python3 scripts/build_inputs.py resolve

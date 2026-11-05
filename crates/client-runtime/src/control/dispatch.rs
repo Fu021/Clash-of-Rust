@@ -108,6 +108,7 @@ pub(super) async fn execute(
         Command::Start
             | Command::Stop
             | Command::Restart
+            | Command::RecoverNetwork
             | Command::Shutdown
             | Command::Quit
             | Command::Settings { .. }
@@ -147,6 +148,7 @@ pub(super) async fn execute(
             engine.stop().await?;
             start(&mut engine).await?;
         }
+        Command::RecoverNetwork => engine.recover_network().await?,
         Command::Shutdown => {
             engine.stop().await?;
             return Ok(

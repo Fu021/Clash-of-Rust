@@ -47,7 +47,14 @@ pub static COMMANDS: &[Spec] = &[
         0,
         ""
     ),
-    command!("restart", "重启内核并恢复当前代理模式", "restart", 0, 0, ""),
+    command!(
+        "restart",
+        "重启内核；--network-only 仅刷新出站与 DNS 并关闭旧连接",
+        "restart [--network-only] [--yes]",
+        0,
+        0,
+        "network-only"
+    ),
     command!(
         "status",
         "显示内核、订阅、节点、模式及实时流量",
@@ -692,6 +699,18 @@ fn parse_inner(input: impl IntoIterator<Item = String>) -> Result<Args> {
         words.remove(0);
         help = true;
     }
+    if words.last().is_some_and(|word| word == "help") {
+        let prefix = words[..words.len() - 1].join(" ");
+        if !prefix.is_empty()
+            && !COMMANDS.iter().any(|spec| spec.path == prefix)
+            && COMMANDS
+                .iter()
+                .any(|spec| spec.path.starts_with(&(prefix.clone() + " ")))
+        {
+            words.pop();
+            help = true;
+        }
+    }
     if options.contains_key("version") && words.is_empty() {
         words.push("version".into());
     }
@@ -816,6 +835,7 @@ fn option_help(key: &str) -> String {
         "quiet" => "不显示进度提示（-q）",
         "no-color" => "纯文本输出；CLI 默认不使用颜色",
         "no-core" => "仅运行后台，暂不启动内核",
+        "network-only" => "刷新当前内核出站和 DNS，关闭旧连接；不重启内核",
         "watch" | "follow" => "持续输出新采样/日志，Ctrl+C 结束",
         "interval" => "采样秒数，默认 1，最小 0.25",
         "filter" => "按文本筛选",
@@ -914,6 +934,31 @@ mod tests {
         }
         assert!(args(&["help", "does-not-exist"]).is_err());
         assert_eq!(args(&["profile"]).unwrap().path, "profile");
+    }
+    #[test]
+    fn grouped_help_aliases_do_not_consume_a_literal_node_name() {
+        for input in [
+            vec!["node", "help"],
+            vec!["help", "node"],
+            vec!["node", "--help"],
+        ] {
+            let parsed = args(&input).unwrap();
+            assert!(parsed.help);
+            assert_eq!(parsed.path, "node");
+            assert!(help(&parsed.path).contains("node list"));
+        }
+        let parsed = args(&["node", "list", "help"]).unwrap();
+        assert!(!parsed.help);
+        assert_eq!(parsed.positional, ["help"]);
+        assert!(args(&["node", "unknown"]).is_err());
+    }
+    #[test]
+    fn network_refresh_is_an_explicit_restart_option() {
+        let parsed = args(&["restart", "--network-only", "--yes"]).unwrap();
+        assert!(parsed.flag("network-only"));
+        assert!(parsed.flag("yes"));
+        assert!(args(&["start", "--network-only"]).is_err());
+        assert!(help("restart").contains("关闭旧连接"));
     }
     #[test]
     fn cross_user_inventory_cannot_be_confused_with_a_selected_data_directory() {

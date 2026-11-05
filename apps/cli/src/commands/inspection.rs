@@ -335,9 +335,9 @@ async fn diagnose(args: &Args) -> Result<()> {
             json!({"source":"system","answers":clash_client_core::probe::dns(args.positional[0].clone()).await?}),
         );
     }
-    let meta = backend::live(args).await?;
-    let api = Api::new(&meta.settings)?;
     if args.path == "dns" {
+        let meta = backend::live(args).await?;
+        let api = Api::new(&meta.settings)?;
         let domain = &args.positional[0];
         let answers = match api.resolve_domain(domain).await {
             Ok(a) => a,
@@ -351,29 +351,74 @@ async fn diagnose(args: &Args) -> Result<()> {
     let url = args
         .get("url")
         .unwrap_or("https://www.cloudflare.com/cdn-cgi/trace");
-    let (system, core, http, v4, v6) = tokio::join!(
-        clash_client_core::probe::dns(host.into()),
-        api.resolve_domain(host),
-        clash_client_core::probe::website(url.into(), meta.settings.mixed_port, false),
-        clash_client_core::probe::website(
-            "https://api.ipify.org".into(),
-            meta.settings.mixed_port,
-            true
-        ),
-        clash_client_core::probe::website(
-            "https://api6.ipify.org".into(),
-            meta.settings.mixed_port,
-            true
-        )
-    );
     let display = |r: Result<clash_client_core::probe::ProbeResult>| match r {
         Ok(p) => json!({"url":p.url,"status":p.status,"millis":p.millis,"detail":p.detail}),
         Err(e) => json!({"error":format!("{e:#}")}),
     };
+    let backend_probes = async {
+        let remote = backend::connect(args, false)
+            .await?
+            .context("当前用户后台未运行")?;
+        let meta: Meta = remote.request(Command::Meta).await?;
+        ensure!(meta.running, "当前用户内核未运行");
+        let api = Api::new(&meta.settings)?;
+        let (core, http, v4, v6) = tokio::join!(
+            api.resolve_domain(host),
+            clash_client_core::probe::website(url.into(), meta.settings.mixed_port, false),
+            clash_client_core::probe::website(
+                "https://api.ipify.org".into(),
+                meta.settings.mixed_port,
+                true
+            ),
+            clash_client_core::probe::website(
+                "https://api6.ipify.org".into(),
+                meta.settings.mixed_port,
+                true
+            )
+        );
+        Ok::<_, anyhow::Error>(json!({
+            "core_dns":core.map_err(|error|format!("{error:#}")),
+            "http":display(http),
+            "ipv4":display(v4),
+            "ipv6":display(v6)
+        }))
+    };
+    let (system, system_http, backend_result, routes) = tokio::join!(
+        clash_client_core::probe::dns(host.into()),
+        clash_client_core::probe::website_system_route(url.into()),
+        backend_probes,
+        crate::host_network::observe()
+    );
+    let (backend, backend_error) = match backend_result {
+        Ok(value) => (value, None),
+        Err(error) => (json!({}), Some(format!("{error:#}"))),
+    };
     output::emit(
         args,
-        json!({"system_dns":system.map_err(|e|format!("{e:#}")),"core_dns":core.map_err(|e|format!("{e:#}")),"http":display(http),"ipv4":display(v4),"ipv6":display(v6)}),
+        json!({
+            "dns_host":host,
+            "system_dns":system.map_err(|e|format!("{e:#}")),
+            "core_dns":backend["core_dns"],
+            "http":backend["http"],
+            "system_route_http":display(system_http),
+            "host_routes":routes,
+            "proxy_environment":{
+                "http":proxy_environment_set("http_proxy"),
+                "https":proxy_environment_set("https_proxy"),
+                "all":proxy_environment_set("all_proxy"),
+                "no_proxy":proxy_environment_set("no_proxy")
+            },
+            "ipv4":backend["ipv4"],
+            "ipv6":backend["ipv6"],
+            "backend_error":backend_error
+        }),
     )
+}
+
+fn proxy_environment_set(name: &str) -> bool {
+    [name.to_owned(), name.to_ascii_uppercase()]
+        .iter()
+        .any(|key| std::env::var_os(key).is_some_and(|value| !value.is_empty()))
 }
 
 async fn ip(args: &Args) -> Result<()> {

@@ -50,6 +50,22 @@ _release_package_spec.loader.exec_module(release_package)
 
 
 class BuildTests(unittest.TestCase):
+    def test_linux_ci_prepares_resources_on_host_before_entering_container(self):
+        with patch.object(sys, 'argv', ['linux_ci.py', 'ci']), \
+                patch.object(linux_ci, 'require_actions'), \
+                patch.object(linux_ci, 'host_arch', return_value='x64'), \
+                patch.object(linux_ci, 'run') as run, \
+                patch.object(linux_ci, 'container') as container:
+            calls = []
+            run.side_effect = lambda command: calls.append(('host', command))
+            container.side_effect = lambda command: calls.append(('container', command))
+            linux_ci.main()
+        self.assertEqual([call[0] for call in calls], ['host', 'container'])
+        self.assertEqual(calls[0][1][1:], [
+            build.ROOT/'scripts/prepare-resources.py', '--system', 'linux', '--arch', 'x64'])
+        self.assertEqual(calls[1][1], [
+            'python3', 'scripts/run-ci.py', '--system', 'linux', '--arch', 'x64'])
+
     def test_isolated_tls_fixture_passes_strict_certificate_validation(self):
         if os.name != 'posix' or not shutil.which('openssl'):
             self.skipTest('POSIX and OpenSSL are required for the isolated certificate fixture')
@@ -1585,7 +1601,8 @@ runpy.run_path(str(script), run_name='__main__')
                     patch.object(local_cache, 'server_capabilities', return_value=set()), \
                     patch.object(local_cache, 'response') as request:
                 report = upstream_cache.submit(Path(temporary) / 'report.json')
-                self.assertEqual(report['files'][0]['status'], 'not_submitted')
+                self.assertEqual(report['files'][0]['status'], 'queued')
+                self.assertEqual(report['protocol'], 'disabled')
                 request.assert_not_called()
 
     def test_release_metadata_network_fallback_respects_explicit_version(self):
@@ -2809,6 +2826,191 @@ class ReleaseTests(unittest.TestCase):
 
 
 class OriginalDownloadTests(unittest.TestCase):
+    def setUp(self):
+        temporary = tempfile.TemporaryDirectory(prefix='cor-original-download-tests-')
+        self.addCleanup(temporary.cleanup)
+        environment = patch.dict(os.environ, {
+            'GITHUB_ACTIONS': 'true',
+            'RUNNER_TEMP': temporary.name,
+            'COR_UPSTREAM_CACHE_CONFIG': '',
+            'GITHUB_STEP_SUMMARY': str(Path(temporary.name) / 'summary.md'),
+        })
+        environment.start()
+        self.addCleanup(environment.stop)
+
+    def originals(self, count=1):
+        folder = upstream_cache.directory()
+        folder.mkdir(parents=True, exist_ok=True)
+        files = []
+        for index in range(count):
+            checksum = hashlib.sha256(str(index).encode()).hexdigest()
+            item = {'url': f'https://github.com/example/tool/releases/download/v1/file-{index}',
+                    'size': 100 + index, 'sha256': checksum}
+            (folder / (checksum + '.json')).write_text(json.dumps(item))
+            files.append(item)
+        return sorted(files, key=lambda item: item['sha256'])
+
+    def queue_page(self, payload, offset=0, state='queued', complete=False):
+        items = payload['files'][offset:offset + 100]
+        identifier = hashlib.sha256(upstream_cache.encoded(payload)).hexdigest()
+        return {
+            'schema': 1, 'group': upstream_cache.GROUP, 'sequence': payload['sequence'],
+            'manifest_id': identifier, 'status': 'ready' if state == 'ready' else 'pending',
+            'total': len(payload['files']), 'counts': {state: len(payload['files'])},
+            'complete': complete, 'next_offset': offset + len(items) if offset + len(items) < len(payload['files']) else None,
+            'files': [{'key': 'sha256-' + item['sha256'], 'sequence': payload['sequence'],
+                       'job_id': item['sha256'], 'status': state,
+                       'error_code': 'upstream_rejected' if state == 'failed' else None}
+                      for item in items],
+        }
+
+    def queue_submit(self, handler, **kwargs):
+        def reply(config, path, **options):
+            status, value = handler(path, options)
+            response = io.BytesIO(json.dumps(value).encode())
+            response.status = status
+            return nullcontext(response)
+        with patch.object(upstream_cache, 'configuration', return_value={
+                'url': 'http://100.64.0.1:9080', 'token': 'never-publish-this'}), \
+                patch.object(local_cache, 'server_capabilities', return_value={
+                    *upstream_cache.IMPORT_CAPABILITIES, upstream_cache.QUEUE_CAPABILITY}), \
+                patch.object(local_cache, 'response', side_effect=reply):
+            return upstream_cache.submit(Path(os.environ['RUNNER_TEMP']) / 'report.json', **kwargs)
+
+    def test_queue_submits_every_batch_before_polling_and_verifies_all_pages(self):
+        self.originals(1025)
+        requests = []
+        batches = {}
+        def server(path, options):
+            requests.append((path, options))
+            if options:
+                payload = json.loads(options['file'])
+                self.assertFalse(payload['retry_failed'])
+                self.assertLessEqual(len(payload['files']), 1024)
+                self.assertLessEqual(len(options['file']), 1024 * 1024)
+                page = self.queue_page(payload)
+                batches[page['manifest_id']] = payload
+                return 202, page
+            query = urllib.parse.parse_qs(urllib.parse.urlsplit(path).query)
+            self.assertEqual(len(batches), 2)
+            return 200, self.queue_page(batches[query['id'][0]], int(query['offset'][0]), 'ready', True)
+        report = self.queue_submit(server)
+        self.assertEqual([len(item['request']['files']) for item in report['manifests']], [1024, 1])
+        self.assertEqual(len(requests), 14)
+        self.assertTrue(all(item['status'] == 'ready' and item['receipt_verified'] for item in report['manifests']))
+        self.assertTrue(all(item['status'] == 'ready' for item in report['files']))
+        self.assertNotIn('never-publish-this', json.dumps(report))
+        self.assertNotIn(os.environ['RUNNER_TEMP'], json.dumps(report))
+
+    def test_manifest_batches_also_enforce_the_encoded_byte_limit(self):
+        files = self.originals(3)
+        for item in files:
+            item['url'] += 'a' * 400_000
+        batches = list(upstream_cache.manifest_batches(files, 123))
+        self.assertEqual([len(item['files']) for item in batches], [2, 1])
+        self.assertTrue(all(len(upstream_cache.encoded(item)) <= 1024 * 1024 for item in batches))
+
+    def test_lost_post_response_reuses_identical_identity_and_later_checkpoint_does_not_resubmit(self):
+        self.originals(1)
+        bodies = []
+        payload = None
+        def server(path, options):
+            nonlocal payload
+            if options:
+                bodies.append(options['file'])
+                payload = json.loads(options['file'])
+                if len(bodies) == 1:
+                    raise ConnectionResetError('server committed but response was lost')
+                return 202, self.queue_page(payload)
+            return 200, self.queue_page(payload, state='ready')
+        first = self.queue_submit(server, poll_seconds=0)
+        self.assertEqual(bodies[0], bodies[1])
+        self.assertEqual(first['files'][0]['status'], 'pending')
+        final = self.queue_submit(server)
+        self.assertEqual(len(bodies), 2)
+        self.assertEqual(final['files'][0]['status'], 'ready')
+        self.assertEqual(first['manifests'][0]['manifest_id'], final['manifests'][0]['manifest_id'])
+
+    def test_complete_failed_or_superseded_is_never_a_success_or_automatic_retry(self):
+        self.originals()
+        for state in ('queued', 'retry_wait', 'failed', 'superseded'):
+            with self.subTest(state=state):
+                (Path(os.environ['RUNNER_TEMP']) / 'report.json').unlink(missing_ok=True)
+                payload = None
+                def server(path, options):
+                    nonlocal payload
+                    if options:
+                        payload = json.loads(options['file'])
+                        self.assertFalse(payload['retry_failed'])
+                    return 200, self.queue_page(payload, state=state, complete=True)
+                report = self.queue_submit(server)
+                self.assertEqual(report['files'][0]['status'], state if state in ('failed', 'superseded') else 'pending')
+                self.assertNotEqual(report['manifests'][0]['status'], 'ready')
+                if state == 'failed':
+                    self.assertEqual(report['files'][0]['error_code'], 'upstream_rejected')
+
+    def test_rejected_batch_is_preserved_as_not_received_and_later_batches_are_still_submitted(self):
+        self.originals(1025)
+        calls = []
+        def server(path, options):
+            calls.append(options['file'])
+            if len(calls) == 1:
+                return 503, {'error': 'queue_full'}
+            return 202, self.queue_page(json.loads(options['file']))
+        report = self.queue_submit(server, poll_seconds=0)
+        self.assertEqual(len(calls), 2)
+        self.assertEqual(sum(item['status'] == 'not_submitted' for item in report['files']), 1024)
+        self.assertEqual(report['manifests'][0]['error'], 'queue_full')
+        self.assertEqual(report['manifests'][0]['http_status'], 503)
+        self.assertEqual(report['files'][-1]['status'], 'pending')
+
+    def test_wrong_receipt_identity_or_ready_counts_do_not_confirm_acceptance(self):
+        self.originals()
+        for changed in ({'sequence': -1}, {'group': 'rust/linux-x64'},
+                        {'total': 2}, {'status': 'ready'}, {'manifest_id': '../private'}):
+            with self.subTest(changed=changed):
+                (Path(os.environ['RUNNER_TEMP']) / 'report.json').unlink(missing_ok=True)
+                def server(path, options):
+                    return 202, {**self.queue_page(json.loads(options['file'])), **changed}
+                report = self.queue_submit(server, poll_seconds=0)
+                self.assertEqual(report['files'][0]['status'], 'not_submitted')
+                self.assertFalse(report['files'][0]['accepted'])
+
+    def test_wrong_item_or_repeated_page_cannot_mark_the_manifest_verified(self):
+        self.originals(201)
+        for kind in ('item', 'pagination'):
+            with self.subTest(kind=kind):
+                (Path(os.environ['RUNNER_TEMP']) / 'report.json').unlink(missing_ok=True)
+                payload = None
+                def server(path, options):
+                    nonlocal payload
+                    if options:
+                        payload = json.loads(options['file'])
+                        return 202, self.queue_page(payload)
+                    query = urllib.parse.parse_qs(urllib.parse.urlsplit(path).query)
+                    page = self.queue_page(payload, int(query['offset'][0]), 'ready')
+                    if kind == 'item':
+                        page['files'][0]['sequence'] = -1
+                    elif int(query['offset'][0]) == 100:
+                        page['files'] = self.queue_page(payload, 0, 'ready')['files']
+                    return 200, page
+                report = self.queue_submit(server)
+                self.assertFalse(report['manifests'][0]['receipt_verified'])
+                self.assertNotEqual(report['manifests'][0]['status'], 'ready')
+                self.assertTrue(all(item['accepted'] for item in report['files']))
+
+    def test_expired_budget_preserves_the_complete_unsent_manifest(self):
+        self.originals(205)
+        with patch.object(upstream_cache.time, 'monotonic', side_effect=[0, 0, 61, 61, 61]), \
+                patch.object(upstream_cache, 'configuration', return_value={'token': 'test'}), \
+                patch.object(local_cache, 'server_capabilities', return_value={
+                    *upstream_cache.IMPORT_CAPABILITIES, upstream_cache.QUEUE_CAPABILITY}), \
+                patch.object(local_cache, 'response') as request:
+            report = upstream_cache.submit(Path(os.environ['RUNNER_TEMP']) / 'report.json')
+        request.assert_not_called()
+        self.assertEqual(len(report['manifests'][0]['request']['files']), 205)
+        self.assertTrue(all(item['status'] == 'not_submitted' for item in report['files']))
+
     def test_action_configures_without_network_and_bounds_post_submission(self):
         node = shutil.which('node')
         if not node:
@@ -2905,6 +3107,27 @@ if(mode==='main'){
                         self.assertEqual(upstream_cache.restore(
                             'https://github.com/tool/original', target, checksum), expected)
                     self.assertEqual(target.read_bytes(), original.read_bytes() if expected else b'existing good data')
+
+    def test_private_original_is_staged_in_destination_directory(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            original = root / 'source'
+            original.write_bytes(b'verified original')
+            archive = root / 'blob'
+            local_cache.pack([original], archive)
+            metadata = {'id': '1' * 64, 'size': archive.stat().st_size, 'sha256': build.sha256(archive)}
+            reply = io.BytesIO(archive.read_bytes())
+            reply.status = 200
+            target = root / 'target'
+            with patch.object(upstream_cache, 'configuration', return_value={'token': 'test'}), \
+                    patch.object(upstream_cache, 'lookup', return_value=metadata), \
+                    patch.object(local_cache, 'response', return_value=nullcontext(reply)), \
+                    patch.object(tempfile, 'mkstemp', wraps=tempfile.mkstemp) as staged:
+                self.assertTrue(upstream_cache.restore(
+                    'https://github.com/tool/original', target, build.sha256(original)))
+            self.assertEqual(staged.call_args.kwargs['dir'], target.parent)
+            self.assertEqual(target.read_bytes(), original.read_bytes())
+            self.assertEqual(list(root.glob('.target-*.partial')), [])
 
     def test_private_envelope_rejects_directories_links_and_extra_payloads(self):
         with tempfile.TemporaryDirectory() as temporary:

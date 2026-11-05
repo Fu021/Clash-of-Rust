@@ -8,7 +8,7 @@
 | --- | --- | --- |
 | `build_support.py` | 共享模块 | 平台识别、版本、资源、下载、架构和暂存目录等标准库辅助。 |
 | `build_inputs.py` | CLI / 模块 | 冻结并应用同一份 Rust、Go、Android、Linux 基线和资源依赖快照。 |
-| `upstream_cache.py` | CLI / 模块 | 官方原始下载的私网回退、来源清单及 URL-only 代拉提交；不上传 runner 归档。 |
+| `upstream_cache.py` | CLI / 模块 | 官方原始下载的私网回退、持久清单分批提交、分页回执与有界状态查询；不上传 runner 归档。 |
 | `dependency_audit.py` | 模块 | 只读探查升级、撤回和替换信号；由 `build_inputs.py audit` 调用，实际变更遵循维护者的 loop 更新授权并验证。 |
 | `runtime_cache.py` | 历史协议辅助 | 旧工具快照的离线兼容回归；当前工作流不调用。 |
 | `workflow_artifacts.py` | CLI / 模块 | 导出、下载和校验不可变 CI 产物；同运行 Linux 包就绪后启动兼容验证，不重新编译。 |
@@ -39,7 +39,7 @@
 
 ## 仓库内其他脚本
 
-`.github/actions/upstream-cache/index.cjs` 只准备私网配置和有界收尾；`upstream-report` 输出原包清单附件。旧 `local-cache`/`runtime-cache` action 已删除，历史协议辅助不作为服务端部署入口。`resources/claude-check/browser.js` 是检测页面资源，随客户端提供，保留在资源目录。
+`.github/actions/upstream-cache/index.cjs` 只准备私网配置和有界收尾；`upstream-report` 支持早期检查点和末尾清单/回执附件，三条工作流共用持久队列客户端。旧 `local-cache`/`runtime-cache` action 已删除，历史协议辅助不作为服务端部署入口。`resources/claude-check/browser.js` 是检测页面资源，随客户端提供，保留在资源目录。
 
 私网缓存的客户端写入能力和服务端职责见[缓存服务说明](../docs/workflows/cache-server.md)。工作流不修改或上传 `.github/cache-server/README.txt`，不传递 agent 协作请求或读取 agent 反馈；需要服务端配合的事项由用户转达。
 
@@ -62,4 +62,4 @@
 - 共享路径、下载、版本、资源和暂存逻辑优先复用 `build_support.py`；排障逻辑进入现有平台模块或离线测试。
 - 每次最终合并并推送 `main` 前，审查上述脚本及工作流内嵌命令，按职责和调用关系决定合并、删除或保留，并更新相关文档与失败复盘。
 
-2026-10-29 审计：26 个 Python 脚本有工作流、其他脚本、测试或明确用户入口；Linux 旧内核/容器与独立桌面会话分别保留为平台模块。5 个 Rust 构建脚本及 2 个 JavaScript 文件均有明确职责；未发现可安全删除的孤立脚本或重复入口。调用表按后续实际变更维护。
+上表随调用关系维护，不用历史脚本数量判断当前入口是否完整。历史协议辅助须有离线兼容回归的实际调用；恢复生产入口或新增上传方式仍须核对[当前缓存分工](../docs/workflows/cache-coverage.md)。

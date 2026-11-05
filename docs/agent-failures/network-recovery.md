@@ -10,6 +10,14 @@
 - **验证入口：** [路由采样与状态机](../../crates/client-runtime/src/control/network.rs)、[平台读取](../../crates/client-runtime/src/platform/network/mod.rs)、[恢复入口](../../crates/client-runtime/src/engine/recovery.rs)、[控制 API](../../crates/client-core/src/controller/mod.rs)与[真实内核集成](../../apps/desktop/tests/core_integration.rs)。覆盖离线恢复、路由抖动、退避、重启失效及代理/TUN 刷新后的状态和磁盘保留。
 - **证据与边界：** 上游行为核对 [ApplyConfig / updateGeneral](https://github.com/MetaCubeX/mihomo/blob/v1.19.33/hub/executor/executor.go) 与 [ReCreateTun](https://github.com/MetaCubeX/mihomo/blob/v1.19.33/listener/listener.go)。同提交 CI 和安装包结果见[最近复盘](reviews.md)及任务汇报；不能替代 Windows 开机断网后联网、真实 tailnet 与休眠恢复的设备验收。合并及公开发布须有用户授权，最终版本仍需同提交 CI 与安装包验证。
 
+## 长时间运行后的服务不可达
+
+`curl` 对某个网站成功、`nslookup` 返回结果，只能证明对应请求和解析路径当时有响应，不能证明目标应用的 DNS、协议、认证或长期连接正常。目前没有针对该症状的可丢弃环境复现，不能认定唯一原因。
+
+在故障用户和相同网络命名空间中先记录 `cor status`、`cor diagnose --host 故障域名 --url https://故障域名/` 与 `cor logs --level warning`；URL 不携带凭据。分别核对系统路由 HTTP、本地代理 HTTP、系统/内核 DNS、IPv4/IPv6、程序自己的代理环境变量、规则与节点、TLS 或认证返回，以及持续连接是否中途断开。必要时进一步检查 MTU/路径 MTU、IPv6 与 UDP；这些是候选原因，需用目标程序的实际错误和可复现对照验证。日志可能包含域名、IP 或敏感信息，分享前先检查。
+
+路由未变化时现有后台不会仅因服务不可达而自动刷新。确认可能中断当前内核的其他连接后，可运行 `cor restart --network-only`；它使用既有刷新路径而非重启 TUN，不证明故障根因已修复。保留失败前后的诊断和日志，在可丢弃环境分别验证系统路由与本地代理；真实设备、长时间运行和跨用户场景仍需验收。
+
 ## IPv6 节点域名解析
 
 [不发布打包 40883823532](https://github.com/Fu021/Clash-of-Rust/actions/runs/40883823532) 的 Ubuntu 20.04 ARM64 隔离测试在保护 DNS 返回 SERVFAIL 时记录 IPv6 节点 `no ip address`。上游 [mihomo 解析器](https://github.com/MetaCubeX/mihomo/blob/v1.19.33/dns/resolver.go)在 A 查询结束后默认只等待 AAAA 100 毫秒；慢 AAAA 是与日志吻合的可能原因，并非已证明所有现场超时都由此造成。

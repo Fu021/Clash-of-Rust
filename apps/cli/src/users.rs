@@ -180,7 +180,9 @@ mod linux {
         }
         // Never load user YAML in this root process. Only the fixed helper may
         // run elevated; the command and its backend run as the selected account.
-        if matches!(args.path.as_str(), "start" | "restart" | "run") && !args.flag("no-core")
+        if matches!(args.path.as_str(), "start" | "restart" | "run")
+            && !args.flag("no-core")
+            && !args.flag("network-only")
             || (args.path == "proxy" && args.positional.first().is_some_and(|v| v == "tun"))
             || (args.path == "claude protect" && args.positional.first().is_some_and(|v| v == "on"))
         {

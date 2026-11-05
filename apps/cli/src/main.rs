@@ -1,6 +1,7 @@
 mod args;
 mod backend;
 mod commands;
+mod host_network;
 mod output;
 mod service;
 mod users;

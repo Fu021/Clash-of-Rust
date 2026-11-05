@@ -18,10 +18,11 @@
 
 **首先检查**
 
-- `scripts/build_inputs.py`、`scripts/workflow_artifacts.py`、`scripts/cache_shards.py`、`scripts/action_cache.py` 与 `.github/actions/local-cache/` 的接口和清单格式是否同步。
+- `scripts/build_inputs.py`、`scripts/workflow_artifacts.py`、`scripts/upstream_cache.py`、`scripts/action_cache.py` 与 `.github/actions/upstream-cache/`、`upstream-report/` 的接口和清单格式是否同步。旧分片和 runtime 辅助只用于历史协议回归，当前入口见[脚本职责](../../scripts/README.md#职责清单)。
 - 新字段是否允许旧缓存、旧 manifest 和空/缺失输入；失败时应安全回退，而不是越界。
 - `.github/workflows/*.yml` 中冻结输入、artifact schema、job 名称和脚本参数是否一致。
 - composite action 的步骤字段受独立元数据契约约束，不能直接复制工作流步骤的 `timeout-minutes`；脚本内设置硬超时，调用方保留总预算。缓存允许失败时仍需核对步骤和日志，绿色 job 可能掩盖整个缓存入口加载失败。
+- 离线脚本回归须隔离 `RUNNER_TEMP`、原包配置和 summary，检查真实下载清单没有混入测试 URL 或模拟结果；测试通过不能代替这些副作用检查。
 - 引导读取工具版本时不能提前导入 `tomllib` 等待安装解释器才提供的模块；固定 Python 须核对各 OS/架构实际提供的二进制，见[运行依赖缓存](../workflows/cache-coverage.md)，不能直接推广 Linux 的安全维护补丁号。
 - 绿色 CI 仍检查实际日志：Slint `viewport-y/height` 迁移为 `content-y/height`；Android 后端明确传入已选择的 SDK/build-tools，不能自动探测 runner 上的预览版；Gradle 显示完整弃用来源，Java 保留细粒度诊断。NativeActivity 的旧系统回退仅在必需方法上标注兼容，不能全局屏蔽。
 
@@ -50,6 +51,7 @@
 - 缓存是否按源代码、工具链、`Cargo.lock`、Gradle/Go 锁和构建脚本共同失效。
 - 恢复失败后是否丢弃不完整编译对象，同时保留已验证源码快照和测试报告。
 - 远端限流、超时和 DNS 故障是否有有界重试、兼容缓存和正常下载回退。
+- Linux 构建容器不持有私网凭据；需私网回退的 Geo/内核原包先由宿主校验并准备。Windows 恢复文件应在目标目录暂存，避免继承仅管理员可访问的私有临时目录 ACL，再由普通用户真实读取验证。
 
 **防回归**
 
@@ -57,7 +59,8 @@
 - 自动测试必须覆盖“部分恢复仍可正常重编”和“旧格式缓存不污染当前构建”。
 - 可选缓存上传要有硬超时，不能拖垮已经通过的主构建。
 - metadata 与原文件恢复均受剩余总预算约束，原包导入另有有界预算。调整预算后仍须用实际保存、下载和校验记录判断效果，不能把延长超时视为吞吐提升。
-- 工作流不通过 README.txt 或反馈接口交换 agent 消息；需要服务端配合的事项由用户转达。停止自动沟通不能代替历史缺片修复或真实恢复验收；能力声明、metadata 和隔离回归也不能代替实际下载校验。[缓存服务边界](../workflows/cache-server.md)。
+- 持久补拉先保存并提交全部批次，再有界查询分页；断线保持清单及 sequence，不能更换序号或自动 `retry_failed=true`。接收、pending、整批 ready 和实际恢复分开验收，详见[清单协议](../workflows/cache-server.md#持久清单补拉)。
+- 工作流不通过 README.txt 或反馈接口交换 agent 消息；需要服务端配合的事项由用户转达。当前原包仍须实际恢复验收，能力声明、metadata、导入接纳和隔离回归不能代替下载校验。已退役数据是否迁移或回收按[白名单](../workflows/cache-retention.md)处理，不再要求修复工作流不会读取的历史分片；职责见[缓存服务边界](../workflows/cache-server.md)。
 - 旧私网分片不能用“索引最后上传”推断引用安全。当前工作流已停止读取和保存这类数据；GitHub workspace key 仍须覆盖 SVG 等实际编译资源。
 - 当前 Rust 对象只用 GitHub，未命中直接编译；私网只保留[白名单原包](../workflows/cache-retention.md)，官方下载失败才回退。末尾只发送 URL 清单，失败不回传 runner 归档，不按 GitHub 淘汰结果清理私网。原生安装器尚未接入的路径须明确列出，不能宣称全量离线覆盖。
 
@@ -108,4 +111,4 @@ APT 可直接复用下载目录中同大小的 DEB，不能仅凭 GitHub 缓存�
 - `reqwest` 0.13 的 TLS feature、查询参数和证书来源与旧版不同；Android 需继续用共享构建器的内置根证书。JNI 0.22 要迁移 `EnvUnowned`/`Env`、带类型全局引用、线程回调与 JNI 字符串/签名，不能仅改版本号。
 - SHA-2 0.11 的摘要数组不再实现 `LowerHex`，原 `format!("{:x}", digest)` 会令所有平台失败，见 [CI 40107022637](https://github.com/Fu021/Clash-of-Rust/actions/runs/40107022637)。使用[共享十六进制编码](../../crates/client-core/src/storage/hash.rs)，同步 Geo、规则修订、下载校验与特权安装器，保留前导零和已知 SHA256 向量的回归。
 - 目标专用声明和测试也须迁移：`winreg` 0.56 的 `RegValue.bytes` 改为 `Cow<[u8]>`，旧测试夹具的 `Vec` 需显式转换；移动保护校验迁出 Android 后清理残余导入。后续 [CI 40108770502](https://github.com/Fu021/Clash-of-Rust/actions/runs/40108770502) 分别暴露了 Windows 类型错误和 Android 未使用导入，不能只凭共享 crate 编译通过判定升级完成。
-- 替换 YAML 与二进制协议库时保留行为回归；协议编码改变须递增协议号。AGP 与 Gradle 成对升级，并对最低版本、预发布、损坏版本及未来不兼容主版本保留解析边界检查。具体版本及仍受上游约束的链路见[依赖核对表](../dependency-audit.csv)。
+- 替换 YAML 与二进制协议库时保留行为回归；协议编码改变须递增协议号。AGP 与 Gradle 成对升级，并对最低版本、预发布、损坏版本及未来不兼容主版本保留解析边界检查。当前版本来源、审计入口和上游约束见[依赖维护](../development.md#依赖维护)；[旧核对表](../dependency-audit.csv)只保留当时的升级证据。

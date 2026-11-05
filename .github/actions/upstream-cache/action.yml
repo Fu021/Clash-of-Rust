@@ -1,5 +1,5 @@
 name: Original download mirror
-description: Official downloads first, verified private fallback, URL-only imports at job end
+description: Official downloads first, verified private fallback, persistent URL manifest imports
 inputs:
   url:
     description: Private cache service URL after tailnet login

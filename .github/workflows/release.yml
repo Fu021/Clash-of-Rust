@@ -203,6 +203,11 @@ jobs:
         uses: ./.github/actions/linux-download-cache
         timeout-minutes: 30
         continue-on-error: true
+      - name: Enqueue verified original downloads before package tests
+        continue-on-error: true
+        uses: ./.github/actions/upstream-report
+        with:
+          checkpoint: 'true'
       - name: Package and test installed programs
         run: |
           import subprocess, sys
@@ -330,6 +335,12 @@ jobs:
           path: target/linux-report
           if-no-files-found: warn
           retention-days: 3
+      - name: Preserve original download inventory
+        if: ${{ !cancelled() }}
+        continue-on-error: true
+        uses: ./.github/actions/upstream-report
+        with:
+          name: upstream-downloads-${{ github.job }}-${{ strategy.job-index || '0' }}
   ubuntu_20:
     name: Ubuntu 20.04-${{ matrix.arch }} installed GUI and TUN
     needs: resolve
@@ -407,6 +418,11 @@ jobs:
               subprocess.run(['sudo', 'chmod', 'a+rw', '/dev/kvm'], check=True)
           else:
               print('KVM is unavailable; keeping TCG software emulation.')
+      - name: Enqueue verified VM and package originals before waiting
+        continue-on-error: true
+        uses: ./.github/actions/upstream-report
+        with:
+          checkpoint: 'true'
       - name: Wait for the verified Linux package from this run
         env:
           GH_TOKEN: ${{ github.token }}

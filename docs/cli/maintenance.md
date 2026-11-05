@@ -10,7 +10,7 @@
 | `config set KEY VALUE` | 修改单个受支持设置，不覆盖其他并发修改 |
 | `config check` | 校验实际合并配置 |
 | `config effective [-o FILE]` | 查看运行配置；完整内容需 `--show-secrets` |
-| `diagnose [--url URL --host DOMAIN]` | HTTP、IPv4/IPv6 出口、系统与内核 DNS |
+| `diagnose [--url URL --host DOMAIN]` | 系统路由与本地代理 HTTP、IPv4/IPv6 出口及系统/内核 DNS |
 | `dns DOMAIN [--system]` | 默认内核/代理解析，显式 `--system` 使用系统解析 |
 | `ip-check list [--category NAME --filter TEXT]` | 查看内置检测项目与 ID |
 | `ip-check [ID] [--category NAME -o FILE]` | 全部、分类或单项测试；最多同时执行 3 项 |
@@ -29,6 +29,8 @@
 共享运行配置在订阅未指定 `dns.ipv6-timeout` 时，在 A 查询结束后额外等待慢 AAAA 最多 1000 毫秒；显式值不覆盖，原订阅不变。该等待不保证 IPv6 网络或节点可达，排查和验证边界见[IPv6 节点域名解析](../agent-failures/network-recovery.md#ipv6-节点域名解析)。
 
 检测完成的退出码为 0，可用性与风险应读取报告字段，不能只看退出码。检测报告表示真实观察结果；单项检测失败记为 Failed，不将网络失败当作“可用”。浏览器采样需要用户打开本机入口，在没有真实浏览器的 SSH 会话中不会伪造 WebRTC/指纹结果。报告不读取 Claude 账户 Cookie、令牌或登录内容。项目审计使用 CLI 所在的当前工作目录和终端环境，不套用 GUI/后台启动时的环境。
+
+`diagnose` 不会启动后台或恢复 TUN；后台未运行时仍检查系统 DNS、无代理环境变量的系统路由 HTTP，以及 Linux 的示例目标路由。内核运行时再检查其 DNS、本地代理和 IPv4/IPv6 出口。`--host` 和 `--url` 可指定故障服务的域名与 HTTP(S) 地址；返回 401、403 等也只是 HTTP 状态，不表示该服务已可登录或正常使用。报告只列出常见代理环境变量是否存在，不显示其值。两个路径的结果、域名及路由可能不同；故障排查和手动刷新边界见[联网恢复](../agent-failures/network-recovery.md#长时间运行后的服务不可达)。
 
 保护开启会强制 TUN、UDP、加密 DNS 及广泛的 Claude 关联规则，可能影响共享服务；关闭按现有保护恢复机制还原此前配置。操作系统授权仍需用户同意。保护状态持久保存，重启后按原有机制恢复；节点、模式和网络覆盖设置在保护期间保持锁定。
 

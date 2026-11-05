@@ -41,6 +41,6 @@ sudo /opt/clash-of-rust/clash-of-rust --authorize-tun
 cor proxy tun
 ```
 
-也可执行 `sudo cor proxy tun`：root 只预先调用安装目录中的固定 TUN 助手，随后以原用户身份切换代理。sudo 的启动、重启、前台运行也预先准备该助手，避免恢复已保存的 TUN 时在后台索取授权；`run --no-core` 不需要此步骤。助手不接收用户内核路径或 YAML，不以 root 启动普通用户后台。直接 root 自有实例沿用 root 的网络能力。
+也可执行 `sudo cor proxy tun`：root 只预先调用安装目录中的固定 TUN 助手，随后以原用户身份切换代理。sudo 的启动、重启、前台运行也预先准备该助手，避免恢复已保存的 TUN 时在后台索取授权；`run --no-core` 和 `restart --network-only` 不需要此步骤。助手不接收用户内核路径或 YAML，不以 root 启动普通用户后台。直接 root 自有实例沿用 root 的网络能力。
 
 设备与容器仍须提供 `/dev/net/tun` 和相应网络能力。仅使用 root 权限无法绕过宿主限制；系统代理也需要对应用户的桌面会话，服务器优先使用 TUN。

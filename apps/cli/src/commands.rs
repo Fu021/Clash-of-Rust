@@ -27,6 +27,21 @@ pub async fn execute(args: &Args) -> Result<()> {
                 .write_all(crate::args::completion(&args.positional[0])?.as_bytes())?;
             Ok(())
         }
+        "restart" if args.flag("network-only") => {
+            output::confirm(
+                args,
+                "刷新内核出站与 DNS 会关闭当前内核的旧连接，可能中断其他用户和程序；继续？",
+            )
+            .await?;
+            let remote = backend::connect(args, false)
+                .await?
+                .context("当前用户后台未运行；网络刷新不会自动启动内核")?;
+            let _: Value = remote
+                .request(Command::RecoverNetwork)
+                .await
+                .context("网络刷新请求失败；请检查后台状态，旧版后台可能不支持此操作")?;
+            output::emit(args, json!({"network_refreshed":true}))
+        }
         "start" | "restart" => {
             backend::prepare_start(args).await?;
             let command = if args.path == "start" {
@@ -78,6 +93,7 @@ pub async fn execute(args: &Args) -> Result<()> {
                     _ => bail!("代理状态应为 system、tun 或 off"),
                 };
                 if mode == ProxyMode::Tun {
+                    crate::host_network::warn_tun();
                     maintenance::authorize_tun(args).await?;
                 }
                 let _: Value = backend::request(args, Command::Proxy { mode }).await?;
@@ -90,7 +106,12 @@ pub async fn execute(args: &Args) -> Result<()> {
                 },
             )
             .await?;
-            output::emit(args, json!({"proxy":poll.snapshot.proxy_mode()}))
+            let proxy = poll.snapshot.proxy_mode();
+            let routes = crate::host_network::with_proxy_context(
+                crate::host_network::observe().await,
+                poll.snapshot.running.then_some(proxy),
+            );
+            output::emit(args, json!({"proxy":proxy,"host_routes":routes}))
         }
         path if path.starts_with("profile ") => profiles::execute(args).await,
         path if path.starts_with("rule ") => rules::execute(args).await,
@@ -110,8 +131,14 @@ pub async fn execute(args: &Args) -> Result<()> {
 }
 
 async fn status(args: &Args) -> Result<()> {
+    let mut routes = crate::host_network::observe().await;
+    let mut observed_at = std::time::Instant::now();
     loop {
-        let value = if let Some(remote) = backend::connect(args, false).await? {
+        if observed_at.elapsed() >= std::time::Duration::from_secs(5) {
+            routes = crate::host_network::observe().await;
+            observed_at = std::time::Instant::now();
+        }
+        let mut value = if let Some(remote) = backend::connect(args, false).await? {
             let poll: Poll = remote
                 .request(Command::Snapshot {
                     scope: Scope::Home,
@@ -131,6 +158,12 @@ async fn status(args: &Args) -> Result<()> {
         } else {
             json!({"running":false,"owner":null})
         };
+        let proxy = if value["running"] == true {
+            serde_json::from_value(value["proxy"].clone()).ok()
+        } else {
+            None
+        };
+        value["host_routes"] = crate::host_network::with_proxy_context(routes.clone(), proxy);
         output::emit(args, value)?;
         if !args.flag("watch") {
             break;
