@@ -98,7 +98,7 @@ mod tests {
             "🇲🇴 澳门",
             "🇹🇼 台湾",
         ] {
-            assert!(label(country).1.is_none());
+            assert!(label(country).1.is_some(), "{country}");
         }
     }
 

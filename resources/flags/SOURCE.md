@@ -6,7 +6,8 @@ https://github.com/twitter/twemoji/tree/v14.0.2/assets/72x72
 
 The original PNG pixels are decoded to a concatenated RGBA file without changing
 the artwork; only the requested flag is allocated by the GUI. Hong Kong, Macao,
-and Taiwan have no flag in this bundle or in the UI.
+and Taiwan have no separate artwork in this bundle; the UI maps those regions to
+the China flag.
 
 English territory names: Unicode CLDR 46.0.0, Unicode License v3:
 https://github.com/unicode-org/cldr-json/tree/46.0.0
@@ -15,6 +16,6 @@ https://github.com/unicode-org/cldr-json/tree/46.0.0
 dependency is Pillow. The application never downloads flags or territory names.
 The full upstream licenses are included next to this file and in the installer.
 
-The US, Japan, and Singapore preview SVG wrappers in
+The US, Japan, Singapore, and China preview SVG wrappers in
 `crates/client-ui/ui/mobile/preview-data/` embed the corresponding original pixels
 from this atlas. They are offline preview fixtures and use the same artwork license.

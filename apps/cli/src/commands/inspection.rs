@@ -366,12 +366,12 @@ async fn diagnose(args: &Args) -> Result<()> {
             api.resolve_domain(host),
             clash_client_core::probe::website(url.into(), meta.settings.mixed_port, false),
             clash_client_core::probe::website(
-                "https://api.ipify.org".into(),
+                "https://api.ipify.org?format=json".into(),
                 meta.settings.mixed_port,
                 true
             ),
             clash_client_core::probe::website(
-                "https://api6.ipify.org".into(),
+                "https://api6.ipify.org?format=json".into(),
                 meta.settings.mixed_port,
                 true
             )

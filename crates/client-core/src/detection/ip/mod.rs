@@ -167,10 +167,10 @@ pub(crate) fn decorate_country(name: String) -> String {
     else {
         return name;
     };
-    if matches!(code, "HK" | "MO" | "TW") {
+    let Some(mapped_code) = crate::countries::flag_code(code) else {
         return name;
-    }
-    let flag: String = code
+    };
+    let flag: String = mapped_code
         .bytes()
         .filter_map(|letter| char::from_u32(0x1f1e6 + u32::from(letter - b'A')))
         .collect();
@@ -327,8 +327,9 @@ mod tests {
     #[test]
     fn country_only_uses_target_specific_evidence() {
         assert_eq!(decorate_country("美国".into()), "🇺🇸 美国");
-        for name in ["香港", "澳门", "台湾", "未提供"] {
-            assert_eq!(decorate_country(name.into()), name);
+        for name in ["香港", "澳门", "台湾"] {
+            assert_eq!(decorate_country(name.into()), format!("🇨🇳 {name}"));
         }
+        assert_eq!(decorate_country("未提供".into()), "未提供");
     }
 }

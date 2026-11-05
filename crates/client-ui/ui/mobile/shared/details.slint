@@ -14,7 +14,21 @@ export component MobileDetails inherits PageSurface {
     if MobileView.detail == 6: MobileSiteResults { }
     if MobileView.detail == 17: MobileDetectionOptions { }
     if MobileView.detail != 14 && MobileView.detail != 15 && MobileView.detail != 6 && MobileView.detail != 17: VerticalLayout { spacing: MobileTypography.gap;
-        MScroll { content-key: MobileView.detail + "/" + MobileView.selected-id + "/" + MobileView.category + "/" + MobileView.site-status + "/" + MobileView.log-message; VerticalLayout { width: root.width; alignment: start; spacing: MobileTypography.gap; padding-bottom: MobileTypography.padding;
+        details-scroll := MScroll {
+            content-key: MobileView.detail + "/" + MobileView.selected-id + "/" + MobileView.category + "/" + MobileView.site-status + "/" + MobileView.log-message;
+            property <length> keyboard: MobileView.keyboard-inset;
+            function reveal-profile-field() {
+                if MobileView.detail == 3 && self.keyboard > 0px {
+                    if MobileView.profile-name-focused {
+                        self.reveal(MobileView.profile-name-target[1], MobileView.profile-name-target[3]);
+                    } else if MobileView.profile-source-focused {
+                        self.reveal(MobileView.profile-source-target[1], MobileView.profile-source-target[3]);
+                    }
+                }
+            }
+            changed height => { self.reveal-profile-field(); }
+            changed keyboard => { self.reveal-profile-field(); }
+            VerticalLayout { width: root.width; alignment: start; spacing: MobileTypography.gap; padding-bottom: MobileTypography.padding;
             if MobileView.detail == 5: MCard {
                 for row[i] in MobileData.connection-details: VerticalLayout { spacing: MobileTypography.small-gap;
                     MSmall { text: row.label; }
@@ -61,7 +75,12 @@ export component MobileDetails inherits PageSurface {
                 MField { placeholder: "输入名称"; enabled: !MobileData.profile-busy; text <=> MobileView.profile-name;
                     property <[length]> target: [self.absolute-position.x, self.absolute-position.y, self.width, self.height];
                     changed target => { MobileView.profile-name-target = self.target; }
-                    changed has-focus => { MobileView.profile-name-focused = self.has-focus; }
+                    changed has-focus => {
+                        MobileView.profile-name-focused = self.has-focus;
+                        if self.has-focus {
+                            details-scroll.reveal-profile-field();
+                        }
+                    }
                     init => { MobileView.profile-name-target = self.target; MobileView.profile-name-focused = self.has-focus; }
                     edited(value) => { MobileView.draft-dirty = true; }
                 }
@@ -70,7 +89,10 @@ export component MobileDetails inherits PageSurface {
                 MField { placeholder: "https://example.com/subscription"; enabled: !MobileData.profile-busy; text <=> MobileView.profile-source;
                     property <[length]> target: [self.absolute-position.x, self.absolute-position.y, self.width, self.height];
                     changed target => { MobileView.profile-source-target = self.target; }
-                    changed has-focus => { MobileView.profile-source-focused = self.has-focus; }
+                    changed has-focus => {
+                        MobileView.profile-source-focused = self.has-focus;
+                        if self.has-focus { details-scroll.reveal-profile-field(); }
+                    }
                     init => { MobileView.profile-source-target = self.target; MobileView.profile-source-focused = self.has-focus; }
                     edited(value) => { MobileView.draft-dirty = true; }
                 }

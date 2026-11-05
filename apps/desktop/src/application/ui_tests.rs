@@ -1013,6 +1013,38 @@ fn ip_report_uses_bitmaps_in_summary_rows_and_details() {
 }
 
 #[test]
+fn ip_report_uses_the_china_flag_for_hong_kong_macao_and_taiwan() {
+    ui_testing::initialize(950, 700);
+    for (country, expected) in [
+        ("🇭🇰 香港", "香港"),
+        ("🇲🇴 澳门", "澳门"),
+        ("🇹🇼 台湾", "台湾"),
+    ] {
+        let mut app = fixture(Page::Websites);
+        app.site_results.push(Some(Ok(ip_check::CheckResult {
+            state: ip_check::State::Identified,
+            summary: "203.0.113.2".into(),
+            country: country.into(),
+            millis: 4,
+            detail: String::new(),
+        })));
+        let window = AppWindow::new().unwrap();
+        let data = window.global::<UiData>();
+        let mut models = ViewModels::default();
+        models.attach(&data);
+        app.present_slint(&data, &mut models);
+        assert!(data.get_site_exit_flagged(), "{country}");
+        assert_eq!(data.get_site_exit_country(), expected, "{country}");
+        assert_eq!(data.get_site_exit_flag().size().width, 72, "{country}");
+        let _ = app.ui_intent(Intent::SiteDetail, "exit-ip", "");
+        app.present_slint(&data, &mut models);
+        assert!(data.get_modal_flagged(), "{country}");
+        assert_eq!(data.get_modal_country(), expected, "{country}");
+        assert_eq!(data.get_modal_flag().size().width, 72, "{country}");
+    }
+}
+
+#[test]
 fn offline_node_flags_reach_the_renderer_without_changing_node_identities() {
     ui_testing::initialize(950, 700);
     let mut app = fixture(Page::Proxies);
@@ -1021,9 +1053,9 @@ fn offline_node_flags_reach_the_renderer_without_changing_node_identities() {
         ("🇺🇸 美国 01", "美国 01", true),
         ("日本 01", "日本 01", true),
         ("🇩🇪 德国 01", "德国 01", true),
-        ("🇭🇰 香港 01", "香港 01", false),
-        ("澳门 01", "澳门 01", false),
-        ("TW-台湾 01", "台湾 01", false),
+        ("🇭🇰 香港 01", "香港 01", true),
+        ("澳门 01", "澳门 01", true),
+        ("TW-台湾 01", "台湾 01", true),
         ("DIRECT", "DIRECT", false),
     ];
     app.snapshot.proxies = serde_json::from_value(serde_json::json!({"proxies": {
@@ -1071,9 +1103,9 @@ fn recursive_dns_flags_follow_the_country_without_changing_risk_or_other_signals
         ("DE", "德国", true),
         ("US", "美国", true),
         ("JP", "日本", true),
-        ("HK", "香港", false),
-        ("MO", "澳门", false),
-        ("TW", "台湾", false),
+        ("HK", "香港", true),
+        ("MO", "澳门", true),
+        ("TW", "台湾", true),
         ("", "", false),
         ("ZZ", "", false),
     ] {

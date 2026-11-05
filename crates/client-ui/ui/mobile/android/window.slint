@@ -17,6 +17,7 @@ export component AndroidWindow inherits Window {
     property <length> bottom: self.safe-area-insets.bottom;
     property <length> left: self.safe-area-insets.left;
     property <length> right: self.safe-area-insets.right;
+    property <length> keyboard: max(0px, self.virtual-keyboard-size.height - self.safe-area-insets.bottom);
     in-out property <int> current-page <=> MobileView.page;
     in-out property <int> current-detail <=> MobileView.detail;
     in-out property <string> selected-id <=> MobileView.selected-id;
@@ -36,9 +37,11 @@ export component AndroidWindow inherits Window {
     changed bottom => { MobileView.safe-bottom = self.bottom; }
     changed left => { MobileView.safe-left = self.left; }
     changed right => { MobileView.safe-right = self.right; }
+    changed keyboard => { MobileView.keyboard-inset = self.keyboard; }
     init => {
         MobileView.safe-top = self.top; MobileView.safe-bottom = self.bottom;
         MobileView.safe-left = self.left; MobileView.safe-right = self.right;
+        MobileView.keyboard-inset = self.keyboard;
     }
     AndroidSurface { width: parent.width; height: parent.height; }
 }

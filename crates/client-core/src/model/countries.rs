@@ -34,10 +34,14 @@ pub fn country_text(country: &str) -> &str {
 }
 
 pub fn flag_code(country: &str) -> Option<&'static str> {
-    emoji_prefix(country)
+    let code = emoji_prefix(country)
         .map(|(code, _)| code)
-        .or_else(|| country_code(country))
-        .filter(|code| !matches!(*code, "HK" | "MO" | "TW"))
+        .or_else(|| country_code(country))?;
+    Some(if uses_china_flag(code) { "CN" } else { code })
+}
+
+fn uses_china_flag(code: &str) -> bool {
+    matches!(code, "HK" | "MO" | "TW")
 }
 
 fn emoji_prefix(value: &str) -> Option<(&'static str, &str)> {
@@ -110,7 +114,7 @@ pub fn node_label(name: &str) -> (&str, Option<&'static str>) {
         return (name, None);
     };
     let flag = flag_code(code);
-    let label = if remaining.is_empty() && flag.is_none() {
+    let label = if remaining.is_empty() && (flag.is_none() || uses_china_flag(code)) {
         code
     } else {
         remaining
@@ -161,7 +165,7 @@ mod tests {
     }
 
     #[test]
-    fn hong_kong_macao_and_taiwan_remain_text_only() {
+    fn hong_kong_macao_and_taiwan_use_the_china_flag() {
         for (code, emoji, name) in [
             ("HK", "🇭🇰", "香港"),
             ("MO", "🇲🇴", "澳门"),
@@ -169,14 +173,14 @@ mod tests {
         ] {
             assert_eq!(country_code(name), Some(code));
             for country in [code, emoji, name] {
-                assert_eq!(flag_code(country), None, "{country}");
+                assert_eq!(flag_code(country), Some("CN"), "{country}");
             }
             let prefixed = format!("{emoji} {name} 01");
             let label = format!("{name} 01");
-            assert_eq!(node_label(&prefixed), (label.as_str(), None));
-            assert_eq!(node_label(&label), (label.as_str(), None));
-            assert_eq!(node_label(emoji), (code, None));
-            assert_eq!(node_label(code), (code, None));
+            assert_eq!(node_label(&prefixed), (label.as_str(), Some("CN")));
+            assert_eq!(node_label(&label), (label.as_str(), Some("CN")));
+            assert_eq!(node_label(emoji), (code, Some("CN")));
+            assert_eq!(node_label(code), (code, Some("CN")));
         }
     }
 

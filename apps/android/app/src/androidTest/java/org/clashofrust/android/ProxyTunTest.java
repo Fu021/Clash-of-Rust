@@ -204,6 +204,21 @@ public class ProxyTunTest {
         }
         return null;
     }
+    private static int imeBottom(android.view.View editor) {
+        android.view.WindowInsets insets=editor.getRootWindowInsets();
+        if (Build.VERSION.SDK_INT>=30) {
+            return insets!=null && insets.isVisible(android.view.WindowInsets.Type.ime())
+                ? insets.getInsets(android.view.WindowInsets.Type.ime()).bottom : 0;
+        }
+        android.view.View root=editor.getRootView();
+        android.graphics.Rect frame=new android.graphics.Rect();
+        root.getWindowVisibleDisplayFrame(frame);
+        int[] origin=new int[2];
+        root.getLocationOnScreen(origin);
+        int obscured=Math.max(0,origin[1]+root.getHeight()-frame.bottom);
+        int navigation=insets!=null ? insets.getStableInsetBottom() : 0;
+        return obscured>navigation ? obscured : 0;
+    }
     private static boolean imeVisible() {
         java.util.concurrent.atomic.AtomicBoolean visible=new java.util.concurrent.atomic.AtomicBoolean();
         MainActivity activity=resumedActivity();
@@ -211,14 +226,32 @@ public class ProxyTunTest {
         InstrumentationRegistry.getInstrumentation().runOnMainSync(()-> {
             android.view.View editor=inputEditor(activity.getWindow().getDecorView());
             if (editor==null || !editor.hasFocus()) return;
-            android.view.WindowInsets insets=editor.getRootWindowInsets();
             android.view.inputmethod.InputMethodManager manager=activity.getSystemService(
                 android.view.inputmethod.InputMethodManager.class);
-            visible.set(insets!=null && insets.isVisible(android.view.WindowInsets.Type.ime())
-                && insets.getInsets(android.view.WindowInsets.Type.ime()).bottom>0
-                && manager.isActive(editor));
+            if (!manager.isActive(editor)) return;
+            visible.set(imeBottom(editor)>0);
         });
         return visible.get();
+    }
+    private static void assertImeLayout(String field) throws Exception {
+        MainActivity activity=resumedActivity();
+        assertNotNull("No resumed input Activity",activity);
+        java.util.concurrent.atomic.AtomicInteger bottom=new java.util.concurrent.atomic.AtomicInteger();
+        InstrumentationRegistry.getInstrumentation().runOnMainSync(()-> {
+            android.view.View editor=inputEditor(activity.getWindow().getDecorView());
+            assertNotNull("Slint input editor is missing",editor);
+            bottom.set(imeBottom(editor));
+        });
+        assertTrue("Android IME has no occluded area",bottom.get()>0);
+        JSONObject ui=MainActivity.diagnostics();
+        double occluded=bottom.get()/ui.getDouble("scale");
+        double expected=Math.max(0,occluded-ui.getDouble("safe_bottom"));
+        assertTrue("Android IME must extend above the navigation area",expected>0);
+        assertEquals("Keyboard height must exclude the bottom safe area exactly once",
+            expected,ui.getDouble("keyboard_inset"),2);
+        JSONArray target=ui.getJSONArray("profile_"+field+"_target");
+        assertTrue("Subscription "+field+" is covered by the keyboard",
+            target.getDouble(1)+target.getDouble(3)<=ui.getDouble("height")-occluded+2);
     }
     private static void commitImeText(String text) {
         MainActivity activity=resumedActivity();
@@ -245,13 +278,10 @@ public class ProxyTunTest {
     private static void captureIme(String phase) throws Exception {
         Context context=InstrumentationRegistry.getInstrumentation().getTargetContext();
         File directory=new File(context.getExternalFilesDir(null),"ime-report");
-        if (Boolean.parseBoolean(InstrumentationRegistry.getArguments().getString("ime_probe","false"))) {
-            boolean systemAnimation=Boolean.parseBoolean(InstrumentationRegistry.getArguments()
-                .getString("ime_system_animation","false"));
-            int round=Integer.parseInt(InstrumentationRegistry.getArguments().getString("ime_round","1"));
-            assertTrue(round>=1 && round<=3);
-            directory=new File(directory,(systemAnimation?"system-animation":"production")+"/round-"+round);
-        }
+        boolean probe=Boolean.parseBoolean(InstrumentationRegistry.getArguments().getString("ime_probe","false"));
+        int round=Integer.parseInt(InstrumentationRegistry.getArguments().getString("ime_round","1"));
+        assertTrue(round>=1 && round<=3);
+        directory=new File(directory,(probe?"production":"regression")+"/round-"+round);
         assertTrue(directory.isDirectory() || directory.mkdirs());
         for (String service:new String[]{"input_method","window windows"}) {
             String name=service.startsWith("window")?"windows":"input-method";
@@ -276,6 +306,7 @@ public class ProxyTunTest {
                     .put("editor_focus",editor!=null && editor.hasFocus())
                     .put("editor_active",editor!=null && activity.getSystemService(
                         android.view.inputmethod.InputMethodManager.class).isActive(editor))
+                    .put("ime_occlusion_bottom",editor!=null ? imeBottom(editor) : 0)
                     .put("decor_height",decor.getHeight())
                     .put("visible_frame_bottom",visibleFrame.bottom)
                     .put("soft_input_mode",activity.getWindow().getAttributes().softInputMode)
@@ -307,17 +338,6 @@ public class ProxyTunTest {
             });
             tapTarget("profile_add_target");
             await("Keyboard probe editor did not open",()->MainActivity.diagnostics().optInt("detail")==3);
-            boolean systemAnimation=Boolean.parseBoolean(InstrumentationRegistry.getArguments()
-                .getString("ime_system_animation","false"));
-            if (systemAnimation && Build.VERSION.SDK_INT>=30) {
-                MainActivity activity=resumedActivity();
-                assertNotNull(activity);
-                InstrumentationRegistry.getInstrumentation().runOnMainSync(()-> {
-                    android.view.View editor=inputEditor(activity.getWindow().getDecorView());
-                    assertNotNull(editor);
-                    editor.setWindowInsetsAnimationCallback(null);
-                });
-            }
             captureIme("before-focus");
             for (String field:new String[]{"name","source"}) {
                 tapTarget("profile_"+field+"_target");
@@ -362,7 +382,7 @@ public class ProxyTunTest {
             await("Add subscription did not open",()->MainActivity.diagnostics().optInt("detail")==3);
             captureIme("before-focus");
             int iteration=0;
-            for (String field:new String[]{"name","source","name"}) {
+            for (String field:new String[]{"name","source","name","source","name"}) {
                 tapTarget("profile_"+field+"_target");
                 await("Subscription "+field+" did not gain Slint focus",()-> {
                     if (MainActivity.diagnostics().optBoolean("profile_"+field+"_focused")) return true;
@@ -376,11 +396,18 @@ public class ProxyTunTest {
                 commitImeText(text);
                 await("IME text did not reach the subscription "+field,()->MainActivity.diagnostics()
                     .optInt("profile_"+field+"_length",-1)==text.length());
+                SystemClock.sleep(1500);
+                assertTrue("Android IME disappeared after switching to "+field,imeVisible());
+                assertTrue("Slint lost the keyboard inset after switching to "+field,
+                    MainActivity.diagnostics().optDouble("keyboard_inset")>0);
+                assertImeLayout(field);
                 captureIme((iteration++)+"-"+field+"-visible");
+                if (iteration<3) continue;
                 shell("input keyevent KEYCODE_BACK");
                 await("Android IME did not hide after Back",()->!imeVisible()
                     && MainActivity.diagnostics().optDouble("keyboard_inset")==0);
                 assertEquals("Back should hide the IME and keep the editor open",3,MainActivity.diagnostics().getInt("detail"));
+                captureIme((iteration-1)+"-"+field+"-hidden");
             }
             shell("am start -W -a android.intent.action.MAIN -c android.intent.category.HOME");
             await("Input test Activity did not enter background",()->inStage(androidx.test.runner.lifecycle.Stage.STOPPED,false));
@@ -389,7 +416,53 @@ public class ProxyTunTest {
             waitForAppWindow();
             tapTarget("profile_source_target");
             await("Resumed subscription editor did not show the IME",ProxyTunTest::imeVisible);
+            await("Resumed Slint editor did not receive the keyboard inset",
+                ()->MainActivity.diagnostics().optDouble("keyboard_inset")>0);
+            SystemClock.sleep(1500);
+            assertImeLayout("source");
             captureIme("after-resume");
+            shell("input keyevent KEYCODE_BACK");
+            await("Resumed IME did not hide",()->!imeVisible()
+                && MainActivity.diagnostics().optDouble("keyboard_inset")==0);
+            android.app.UiAutomation automation=InstrumentationRegistry.getInstrumentation().getUiAutomation();
+            try {
+                assertTrue("Window manager rejected landscape rotation",
+                    automation.setRotation(android.app.UiAutomation.ROTATION_FREEZE_90));
+                await("Input surface did not enter landscape",()-> {
+                    JSONObject ui=MainActivity.diagnostics();
+                    return ui.optDouble("width")>ui.optDouble("height");
+                });
+                SystemClock.sleep(1500);
+                assertEquals("Navigation bars must not become a keyboard inset after rotation",
+                    0,MainActivity.diagnostics().getDouble("keyboard_inset"),0);
+                captureIme("landscape-hidden");
+                tapTarget("profile_name_target");
+                await("Landscape subscription name did not gain focus",
+                    ()->MainActivity.diagnostics().optBoolean("profile_name_focused"));
+                await("Landscape editor did not show the IME",ProxyTunTest::imeVisible);
+                await("Landscape Slint editor did not receive the keyboard inset",
+                    ()->MainActivity.diagnostics().optDouble("keyboard_inset")>0);
+                SystemClock.sleep(1500);
+                assertImeLayout("name");
+                captureIme("landscape-name-visible");
+                shell("input keyevent KEYCODE_BACK");
+                await("Landscape keyboard inset did not clear",()->!imeVisible()
+                    && MainActivity.diagnostics().optDouble("keyboard_inset")==0);
+            } catch (Exception | AssertionError error) {
+                try {captureIme("landscape-failure");}
+                catch (Exception | AssertionError snapshot) {error.addSuppressed(snapshot);}
+                throw error;
+            } finally {
+                automation.setRotation(android.app.UiAutomation.ROTATION_FREEZE_0);
+                try {
+                    await("Input surface did not return to portrait",()-> {
+                        JSONObject ui=MainActivity.diagnostics();
+                        return ui.optDouble("height")>ui.optDouble("width");
+                    });
+                } finally {automation.setRotation(android.app.UiAutomation.ROTATION_UNFREEZE);}
+            }
+            await("Keyboard inset did not clear after portrait restoration",
+                ()->MainActivity.diagnostics().optDouble("keyboard_inset")==0);
             captureIme("final");
         } catch (Exception | AssertionError error) {
             try {captureIme("failure");}

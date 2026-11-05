@@ -58,4 +58,6 @@ Linux 服务器可直接安装现有 DEB 并在 SSH 中使用 `cor`，无需启�
 
 连接排序：`--sort name|rule|chain|upload|download|upload-rate|download-rate|start|none`，文本默认升序，流量/速度/时间默认降序，`--reverse` 反转。速度由两次真实计数采样计算，首次查询会等待一个采样周期；新建、计数重置或开始时间变化的连接速度显示“尚未采样”（JSON 为 null）。
 
-日志 `--level` 为精确等级筛选：debug/info/warning/error/silent。缓冲区沿用客户端的 500 条上限，不是磁盘历史日志库；长时间未跟随后已淘汰的日志无法补回。`logs --follow` 通过短期租约保持内核日志采集，退出后自动释放。
+日志 `--level` 为精确等级筛选：debug/info/warning/error/silent，不代表该级别及以上。`logs` 默认显示最近 100 条，`logs --limit 500` 和 `logs export -o FILE` 可取得当前缓冲的全部记录；缓冲最多 500 条、单条最多 1000 字符，不是磁盘历史日志库，已淘汰或截断的内容无法补回。`logs --follow` 通过短期租约保持内核日志采集，退出后自动释放；可将 `--jsonl logs --follow --limit 500` 的输出重定向到权限受限的文件，保存后续取得的日志，长时间采集须自行限制时长或文件大小。
+
+通过 `cor start` 启动的 CLI 后台将自身 stderr 写入数据目录中的 `daemon.log`，Linux root 默认路径为 `/root/.local/share/clashofrust/daemon.log`；自定义 XDG、`CLASH_OF_RUST_DATA_DIR` 或 `--data-dir` 时以实际目录为准。该文件不保存完整内核日志，后台创建时超过 2 MiB 的旧文件会被移除，不提供历史轮转归档。`cor run` 前台输出和自行配置的 systemd 日志还取决于启动方式，不应把这些文件当作完整流量历史。
