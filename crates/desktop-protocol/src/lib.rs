@@ -85,7 +85,7 @@ impl<T: Clone> List<T> {
 }
 include!(concat!(env!("OUT_DIR"), "/contract.rs"));
 
-pub const PROTOCOL: u32 = 11;
+pub const PROTOCOL: u32 = 12;
 pub const LIMIT: usize = 8 * 1024 * 1024;
 #[derive(Debug, Clone, Copy, Default, PartialEq, Serialize, Deserialize)]
 pub struct Size {
@@ -269,7 +269,7 @@ mod tests {
             message: "完整日志".into(),
             ..Default::default()
         }]);
-        data.set_site_exit_flag("DE".into());
+        data.set_site_exit_flag("🇩🇪".into());
         data.set_node("🚀 🇯🇵 日本 01".into());
         models.set_groups(vec![(
             GroupItem {
@@ -302,7 +302,7 @@ mod tests {
         assert_eq!(accepted, 8);
         assert_eq!(decoded.edit_name, "未保存订阅");
         assert_eq!(decoded.rule_payload, "google.com");
-        assert_eq!(decoded.site_exit_flag, "DE");
+        assert_eq!(decoded.site_exit_flag, "🇩🇪");
         assert_eq!(decoded.node, "🚀 🇯🇵 日本 01");
         let group = decoded.groups.row_data(0).unwrap();
         assert_eq!(group.current, "🚀 🇯🇵 日本 01");

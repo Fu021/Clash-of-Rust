@@ -36,7 +36,7 @@ export component IpCheckPage inherits PageSurface {
                 if UiData.site-exit-country != "": HorizontalLayout {
                     cross-axis-alignment: center; spacing: Theme.content-gap;
                     Caption { text: "出口地区："; horizontal-stretch: 0; }
-                    if UiData.site-exit-flagged: Image { source: UiData.site-exit-flag; width: 24px; height: 24px; image-fit: contain; }
+                    if UiData.site-exit-flagged: Text { text: UiData.site-exit-flag; width: 24px; height: 24px; font-size: 20px; }
                     Label { text: UiData.site-exit-country; }
                 }
             }
@@ -72,7 +72,7 @@ export component IpCheckPage inherits PageSurface {
                 for result in UiData.site-results: ContentPanel {
                     HorizontalLayout { cross-axis-alignment: center; spacing: Theme.content-gap;
                         VerticalLayout { spacing: 4px; Label { text: result.title; } Caption { text: result.value; color: result.tone == 3 ? Theme.danger : result.tone == 2 ? Theme.warning : result.tone == 1 ? Theme.success : Theme.secondary; } }
-                        if result.flagged: Image { source: result.flag; width: 24px; height: 24px; image-fit: contain; }
+                        if result.flagged: Text { text: result.flag; width: 24px; height: 24px; font-size: 20px; }
                         Caption { text: result.source; horizontal-alignment: right; }
                         ActionButton { text: "详情"; clicked => { UiActions.dispatch(Intent.site-detail, result.id, ""); } }
                         ActionButton { text: "重测"; enabled: UiData.running && !UiData.sites-busy; clicked => { UiActions.dispatch(Intent.site-probe, result.id, ""); } }

@@ -134,7 +134,7 @@ export component MobileDetails inherits PageSurface {
                     HorizontalLayout { spacing: MobileTypography.small-gap; cross-axis-alignment: center;
                         MParagraph { text: result.value; min-width: 0px; horizontal-stretch: result.country == "" ? 1 : 0; }
                         if result.country != "": HorizontalLayout { spacing: 6px; cross-axis-alignment: center; horizontal-stretch: 0;
-                            if result.flagged: Image { source: result.flag; width: 24px; height: 24px; image-fit: contain; }
+                            if result.flagged: Text { text: result.flag; width: 24px; height: 24px; font-size: 20px; }
                             MParagraph { text: result.country; wrap: no-wrap; min-width: self.preferred-width; horizontal-stretch: 0; }
                         }
                         if result.country != "": Rectangle { horizontal-stretch: 1; }

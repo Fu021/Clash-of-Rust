@@ -4,6 +4,7 @@ use anyhow::{Context, Result, bail};
 use serde::{Deserialize, Serialize};
 use std::path::Path;
 
+pub mod host_network;
 pub mod memory;
 pub(crate) mod network;
 pub mod notification;

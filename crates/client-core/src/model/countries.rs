@@ -5,7 +5,7 @@ fn countries() -> &'static BTreeMap<String, String> {
     NAMES.get_or_init(|| {
         serde_json::from_str(include_str!(concat!(
             env!("CARGO_MANIFEST_DIR"),
-            "/../../resources/flags/countries.json"
+            "/../../resources/countries/countries.json"
         )))
         .unwrap()
     })
@@ -36,6 +36,14 @@ pub fn country_text(country: &str) -> &str {
 pub fn flag_code(country: &str) -> Option<&'static str> {
     let code = emoji_code(country).or_else(|| country_code(country))?;
     Some(if uses_china_flag(code) { "CN" } else { code })
+}
+
+pub fn flag_emoji(country: &str) -> Option<String> {
+    flag_code(country).map(|code| {
+        code.bytes()
+            .filter_map(|letter| char::from_u32(0x1f1e6 + u32::from(letter - b'A')))
+            .collect()
+    })
 }
 
 fn uses_china_flag(code: &str) -> bool {
@@ -73,6 +81,31 @@ mod tests {
         assert_eq!(flag_code("🇯🇵"), Some("JP"));
         assert_eq!(flag_code("🇺🇸 德国"), Some("US"));
         assert_eq!(flag_code("未识别"), None);
+        for (country, expected) in [("DE", "🇩🇪"), ("🇺🇸 美国", "🇺🇸"), ("日本", "🇯🇵")]
+        {
+            assert_eq!(flag_emoji(country).as_deref(), Some(expected));
+        }
+        assert_eq!(flag_emoji("未识别"), None);
+    }
+
+    #[test]
+    fn every_country_name_and_code_produce_the_same_flag_text() {
+        for (code, english) in countries() {
+            let flag = flag_emoji(code).unwrap();
+            assert_eq!(flag.chars().count(), 2, "{code}");
+            assert!(
+                flag.chars()
+                    .all(|character| (0x1f1e6..=0x1f1ff).contains(&u32::from(character))),
+                "{code}"
+            );
+            assert_eq!(
+                flag_emoji(english).as_deref(),
+                Some(flag.as_str()),
+                "{code}"
+            );
+        }
+        assert_eq!(country_code("United States"), Some("US"));
+        assert_eq!(country_code("No"), None);
     }
 
     #[test]
@@ -85,6 +118,7 @@ mod tests {
             assert_eq!(country_code(name), Some(code));
             for country in [code, emoji, name] {
                 assert_eq!(flag_code(country), Some("CN"), "{country}");
+                assert_eq!(flag_emoji(country).as_deref(), Some("🇨🇳"), "{country}");
             }
         }
     }

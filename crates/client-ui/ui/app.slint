@@ -141,6 +141,16 @@ export component AppWindow inherits Window {
                 enabled: UiData.modal == 0;
                 clicked => { UiActions.dispatch(Intent.navigate, "8", ""); }
             }
+            if UiData.network-alert != "": ContentPanel {
+                Paragraph { text: UiData.network-alert; color: Theme.warning; }
+                HorizontalLayout { cross-axis-alignment: center; spacing: Theme.content-gap;
+                    Caption { text: "请由网络管理员检查；反馈问题时附上诊断报告。"; }
+                    ActionButton {
+                        text: "复制诊断命令";
+                        clicked => { UiActions.dispatch(Intent.copy, "cor diagnose --output cor-diagnose.json", ""); }
+                    }
+                }
+            }
             if UiData.update-busy || UiData.update-available: ContentPanel {
                 HorizontalLayout { cross-axis-alignment: center; spacing: Theme.content-gap;
                     Label { text: UiData.update-status; wrap: word-wrap; }

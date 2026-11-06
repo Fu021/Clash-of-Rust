@@ -49,7 +49,10 @@ pub(super) fn write(out: &mut dyn Write, args: &Args, value: &Value) -> Result<(
             }
             Ok(())
         }
-        "stop" => message(out, "内核已停止，网络设置已恢复"),
+        "stop" => {
+            message(out, "内核已停止")?;
+            network_notice(out, &value["host_routes"])
+        }
         "version" => {
             writeln!(
                 out,
@@ -63,8 +66,8 @@ pub(super) fn write(out: &mut dyn Write, args: &Args, value: &Value) -> Result<(
         "mode" => field(out, "运行模式", &text(value, "mode")),
         "diagnose" => diagnose(out, value),
         "proxy" => {
-            field(out, "当前用户代理方式", &text(value, "proxy"))?;
-            host_routes(out, &value["host_routes"])
+            field(out, "代理", &text(value, "proxy"))?;
+            network_notice(out, &value["host_routes"])
         }
         "profile list" => lists::profiles(out, value),
         "profile add" | "profile import" => field(out, "已添加订阅", &text(value, "imported")),
@@ -261,140 +264,55 @@ pub(super) fn write(out: &mut dyn Write, args: &Args, value: &Value) -> Result<(
 
 fn status(out: &mut dyn Write, value: &Value) -> Result<()> {
     if let Some(error) = value["backend_error"].as_str() {
-        field(out, "当前用户内核", "状态读取失败")?;
+        field(out, "内核", "状态读取失败")?;
         field(out, "失败原因", &clean(error))?;
     } else {
-        field(out, "内核", &text(value, "running"))?;
-    }
-    if !value["owner"].is_null() {
-        field(out, "控制方", &text(value, "owner"))?;
-    }
-    if value["running"] != true {
-        return host_routes(out, &value["host_routes"]);
-    }
-    for key in [
-        "version",
-        "profile",
-        "node",
-        "mode",
-        "proxy",
-        "protected",
-        "connections",
-        "upload_rate",
-        "download_rate",
-    ] {
-        field(
-            out,
-            if key == "proxy" {
-                "当前用户代理方式"
-            } else {
-                label(key)
-            },
-            &text(value, key),
-        )?;
-    }
-    host_routes(out, &value["host_routes"])
-}
-
-fn host_routes(out: &mut dyn Write, value: &Value) -> Result<()> {
-    if value.is_null() {
-        return Ok(());
-    }
-    if value["scope"] != "current_network_namespace" {
-        return field(
-            out,
-            "路由采样",
-            "此平台或本次采样不可用；不代表 IPv4/IPv6 不可用",
-        );
-    }
-    let mut shown_interfaces = std::collections::BTreeSet::new();
-    for (family, destination) in [("ipv4", "1.1.1.1"), ("ipv6", "2606:4700:4700::1111")] {
-        let route = &value[family];
-        let description = if route["state"] == "observed" {
-            let interface = text(route, "interface");
-            if route["kind"] == "tun" {
-                format!("经过 TUN/TAP 接口 {interface}")
-            } else if route["kind"] == "other" {
-                format!("接口 {interface}；未经过可识别的 TUN/TAP")
-            } else {
-                format!("接口 {interface}；接口类型无法读取")
-            }
-        } else {
-            match route["reason"].as_str() {
-                Some("route_unavailable") => "无可用示例路由；未检测该协议的连通性",
-                Some("ip_command_unavailable") => "未能运行 ip 命令；未检测连通性",
-                Some("route_query_timeout") => "路由查询超时；未检测连通性",
-                _ => "无法取得示例路由；未检测连通性",
-            }
-            .to_owned()
-        };
-        field(
-            out,
-            &format!("{family} 目标 {destination} 的路由"),
-            &description,
-        )?;
-        if route["kind"] == "tun"
-            && let Some(interface) = route["interface"].as_str()
-            && shown_interfaces.insert(interface)
-        {
-            let holders = rows(&value["tun_holders"]["interfaces"][interface]);
-            if holders.is_empty() {
-                field(
-                    out,
-                    "TUN 持有进程",
-                    "无法读取，可能受权限或进程退出影响；请用有权读取该进程的用户采集 cor diagnose --offline --output cor-diagnose.json",
-                )?;
-            } else {
-                for holder in holders {
-                    let relation = if holder["uid"] == value["observer_uid"] {
-                        "当前用户"
-                    } else {
-                        "其他用户"
-                    };
-                    let user = if holder["uid"] == 0 {
-                        "root".to_owned()
-                    } else {
-                        format!("UID {}", text(holder, "uid"))
-                    };
-                    field(
-                        out,
-                        "TUN 持有进程",
-                        &format!(
-                            "{interface} · {user}（{relation}）· PID {} · {}",
-                            text(holder, "pid"),
-                            text(holder, "process")
-                        ),
-                    )?;
-                }
+        let mut state = vec![text(value, "running")];
+        for key in ["owner", "version"] {
+            if !value[key].is_null() {
+                state.push(text(value, key));
             }
         }
+        field(out, "内核", &state.join(" · "))?;
     }
-    if !shown_interfaces.is_empty() {
-        message(
+    if value["running"] != true {
+        return network_notice(out, &value["host_routes"]);
+    }
+    field(
+        out,
+        "代理",
+        &format!("{} · {}模式", text(value, "proxy"), text(value, "mode")),
+    )?;
+    for key in ["profile", "node"] {
+        if !value[key].is_null() {
+            field(out, label(key), &text(value, key))?;
+        }
+    }
+    if !value["protected"].is_null() {
+        field(out, "Claude 保护", &text(value, "protected"))?;
+    }
+    field(
+        out,
+        "流量",
+        &format!(
+            "下载 {} · 上传 {} · {} 个连接",
+            text(value, "download_rate"),
+            text(value, "upload_rate"),
+            text(value, "connections")
+        ),
+    )?;
+    network_notice(out, &value["host_routes"])
+}
+
+fn network_notice(out: &mut dyn Write, value: &Value) -> Result<()> {
+    if let Some(notice) = crate::host_network::notice(value) {
+        writeln!(out)?;
+        field(out, "网络提醒", &clean(&notice))?;
+        return field(
             out,
-            "TUN 持有进程来自当前描述符快照，不代表最初开启者或完整进程清单。",
-        )?;
-    }
-    for warning in rows(&value["warnings"]) {
-        let description = match warning.as_str() {
-            Some("tun_owner_unconfirmed") => {
-                "当前用户后台未启用 TUN，但示例流量已经过 TUN/TAP；关闭当前用户代理不会关闭其他实例的 TUN"
-            }
-            Some("tun_current_proxy_unknown") => {
-                "当前用户后台状态无法读取；已观察到 TUN/TAP 路由，请结合持有进程判断，不能认定当前用户已关闭 TUN"
-            }
-            Some("sample_routes_not_tun") => {
-                "当前用户启用 TUN，但已确认的示例目标路由未经过可识别的 TUN/TAP；分流和策略路由可能不同"
-            }
-            _ => continue,
-        };
-        field(out, "路由提示", description)?;
-    }
-    if value["scope"] == "current_network_namespace" {
-        message(
-            out,
-            "以上仅为两个目标的路由采样，不代表全部流量或实际连通性。",
-        )?;
+            "下一步",
+            "请由网络管理员检查持有进程；反馈问题时运行 cor diagnose --output cor-diagnose.json 并附上报告",
+        );
     }
     Ok(())
 }
@@ -414,7 +332,7 @@ fn diagnose(out: &mut dyn Write, value: &Value) -> Result<()> {
             "后台日志采集",
             &text(&value["local_evidence"]["daemon_log"], "state"),
         )?;
-        host_routes(out, &value["host_routes"])?;
+        network_notice(out, &value["host_routes"])?;
         return message(
             out,
             "仅收集本地现场，未检测网络或连接后台；用 --output cor-diagnose.json 保存完整报告。",
@@ -439,9 +357,9 @@ fn diagnose(out: &mut dyn Write, value: &Value) -> Result<()> {
     }
     for (name, key) in [
         ("系统路由 HTTP（不使用代理环境变量）", "system_route_http"),
-        ("当前用户本地代理 HTTP", "http"),
-        ("当前用户代理 IPv4 出口", "ipv4"),
-        ("当前用户代理 IPv6 出口", "ipv6"),
+        ("本地代理 HTTP", "http"),
+        ("代理 IPv4 出口", "ipv4"),
+        ("代理 IPv6 出口", "ipv6"),
     ] {
         let probe = &value[key];
         let description = if let Some(error) = probe["error"].as_str() {
@@ -459,7 +377,7 @@ fn diagnose(out: &mut dyn Write, value: &Value) -> Result<()> {
         field(out, name, &description)?;
     }
     if let Some(error) = value["backend_error"].as_str() {
-        field(out, "当前用户后台", &clean(error))?;
+        field(out, "后台", &clean(error))?;
     }
     let environment = &value["proxy_environment"];
     let configured: Vec<_> = [
@@ -481,8 +399,11 @@ fn diagnose(out: &mut dyn Write, value: &Value) -> Result<()> {
             &configured
         },
     )?;
-    host_routes(out, &value["host_routes"])?;
-    message(out, "DNS 或单个 HTTP 成功不代表其他应用或目标服务可用。")
+    network_notice(out, &value["host_routes"])?;
+    message(
+        out,
+        "反馈问题：运行 cor diagnose --output cor-diagnose.json，附上报告、出错操作和发生时间。",
+    )
 }
 
 fn message(out: &mut dyn Write, message: &str) -> Result<()> {

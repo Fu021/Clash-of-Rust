@@ -1103,7 +1103,7 @@ fn setting_and_toolbar_intents_preserve_their_values_in_the_command_queue() {
 }
 
 #[test]
-fn ip_report_uses_bitmaps_in_summary_rows_and_details() {
+fn ip_report_uses_emoji_in_summary_rows_and_details() {
     ui_testing::initialize(950, 700);
     let mut app = fixture(Page::Websites);
     app.site_results.push(Some(Ok(ip_check::CheckResult {
@@ -1120,11 +1120,12 @@ fn ip_report_uses_bitmaps_in_summary_rows_and_details() {
     app.present_slint(&data, &mut models);
     assert!(data.get_site_exit_flagged());
     assert_eq!(data.get_site_exit_country(), "德国");
-    assert_eq!(data.get_site_exit_flag().size().width, 72);
+    assert_eq!(data.get_site_exit_flag(), "🇩🇪");
     assert!(!data.get_site_summary().contains('🇩'));
     let _ = app.ui_intent(Intent::SiteDetail, "exit-ip", "");
     app.present_slint(&data, &mut models);
     assert!(data.get_modal_flagged());
+    assert_eq!(data.get_modal_flag(), "🇩🇪");
     assert_eq!(data.get_modal_country(), "德国");
     assert!(!data.get_modal_description().contains('🇩'));
 }
@@ -1152,12 +1153,12 @@ fn ip_report_uses_the_china_flag_for_hong_kong_macao_and_taiwan() {
         app.present_slint(&data, &mut models);
         assert!(data.get_site_exit_flagged(), "{country}");
         assert_eq!(data.get_site_exit_country(), expected, "{country}");
-        assert_eq!(data.get_site_exit_flag().size().width, 72, "{country}");
+        assert_eq!(data.get_site_exit_flag(), "🇨🇳", "{country}");
         let _ = app.ui_intent(Intent::SiteDetail, "exit-ip", "");
         app.present_slint(&data, &mut models);
         assert!(data.get_modal_flagged(), "{country}");
         assert_eq!(data.get_modal_country(), expected, "{country}");
-        assert_eq!(data.get_modal_flag().size().width, 72, "{country}");
+        assert_eq!(data.get_modal_flag(), "🇨🇳", "{country}");
     }
 }
 
@@ -1226,15 +1227,15 @@ fn recursive_dns_flags_follow_the_country_without_changing_risk_or_other_signals
     let data = window.global::<UiData>();
     let mut models = ViewModels::default();
     models.attach(&data);
-    for (code, label, flagged) in [
-        ("DE", "德国", true),
-        ("US", "美国", true),
-        ("JP", "日本", true),
-        ("HK", "香港", true),
-        ("MO", "澳门", true),
-        ("TW", "台湾", true),
-        ("", "", false),
-        ("ZZ", "", false),
+    for (code, label, emoji) in [
+        ("DE", "德国", "🇩🇪"),
+        ("US", "美国", "🇺🇸"),
+        ("JP", "日本", "🇯🇵"),
+        ("HK", "香港", "🇨🇳"),
+        ("MO", "澳门", "🇨🇳"),
+        ("TW", "台湾", "🇨🇳"),
+        ("", "", ""),
+        ("ZZ", "", ""),
     ] {
         let mut report = Report::new(Environment::Core, "fixture");
         let mut dns = Signal::new(
@@ -1265,8 +1266,8 @@ fn recursive_dns_flags_follow_the_country_without_changing_risk_or_other_signals
         let rows = data.get_claude_results();
         let dns = rows.row_data(0).unwrap();
         assert_eq!(dns.country, label, "{code}");
-        assert_eq!(dns.flagged, flagged, "{code}");
-        assert_eq!(dns.flag.size().width > 0, flagged, "{code}");
+        assert_eq!(dns.flagged, !emoji.is_empty(), "{code}");
+        assert_eq!(dns.flag, emoji, "{code}");
         assert_eq!(dns.tone, 3, "{code}");
         assert_eq!(
             dns.value,
@@ -1818,6 +1819,35 @@ fn notification_recovery_waits_for_drafts_and_clears_when_permission_is_granted(
     let _ = app.update(Message::NotificationPermissionDenied);
     assert!(!app.notification_busy);
     assert!(app.confirmation.is_some());
+}
+
+#[test]
+fn external_tun_alert_survives_navigation_and_clears_after_proxy_state_changes() {
+    let mut app = fixture(Page::Home);
+    app.network_watch.proxy(Some(ProxyMode::Off));
+    let revision = app.network_watch.begin().unwrap();
+    let _ = app.update(Message::HostRoutes(
+        revision,
+        serde_json::json!({
+            "scope":"current_network_namespace",
+            "ipv4":{"state":"observed","kind":"tun","interface":"Meta"},
+            "tun_holders":{"interfaces":{"Meta":[{"uid":0,"pid":42}]}}
+        }),
+    ));
+    for page in [Page::Home, Page::Proxies, Page::Settings] {
+        app.page = page;
+        let data = clash_desktop_protocol::UiData::default();
+        let mut models = clash_desktop_protocol::models::ViewModels::default();
+        models.attach(&data);
+        app.present(&data, &mut models);
+        assert!(data.get_network_alert().as_str().contains("root · PID 42"));
+    }
+    app.network_watch.proxy(Some(ProxyMode::Tun));
+    let data = clash_desktop_protocol::UiData::default();
+    let mut models = clash_desktop_protocol::models::ViewModels::default();
+    models.attach(&data);
+    app.present(&data, &mut models);
+    assert!(data.get_network_alert().as_str().is_empty());
 }
 
 #[test]

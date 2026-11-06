@@ -167,13 +167,9 @@ pub(crate) fn decorate_country(name: String) -> String {
     else {
         return name;
     };
-    let Some(mapped_code) = crate::countries::flag_code(code) else {
+    let Some(flag) = crate::countries::flag_emoji(code) else {
         return name;
     };
-    let flag: String = mapped_code
-        .bytes()
-        .filter_map(|letter| char::from_u32(0x1f1e6 + u32::from(letter - b'A')))
-        .collect();
     format!("{flag} {name}")
 }
 

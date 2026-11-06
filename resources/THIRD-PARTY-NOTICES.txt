@@ -38,10 +38,6 @@ jq or OpenSSL runtime is bundled for these checks. Request/parse/cancellation
 code is in crates/client-core/src/detection/regions; Rust crate versions and licenses are in Cargo.lock
 and their corresponding upstream sources.
 
-Offline country flags: Twemoji v14.0.2, Copyright Twitter, Inc and other contributors.
-https://github.com/twitter/twemoji/tree/v14.0.2/assets/72x72
-Artwork licensed under CC-BY-4.0; PNG pixels converted to RGBA without artwork changes.
-The complete license is installed as resources/Twemoji-LICENSE.txt.
 English territory names: Unicode CLDR 46.0.0, Unicode License v3.
 https://github.com/unicode-org/cldr-json/tree/46.0.0
 The complete license is installed as resources/Unicode-LICENSE.txt.

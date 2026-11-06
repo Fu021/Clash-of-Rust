@@ -20,6 +20,7 @@ slint::slint! {
         in property <float> alpha: 1;
         in property <length> clip-width: root.width;
         Rectangle {
+            x: 0px; y: 0px;
             width: root.clip-width;
             height: parent.height;
             clip: true;
@@ -71,8 +72,19 @@ fn offline_emoji_render_in_labels_and_inputs_with_opacity_clipping_and_partial_r
     adapter.set_size(slint::PhysicalSize::new(512, 144));
     window.show().unwrap();
     let mut pixels = vec![Rgb8Pixel::default(); 512 * 144];
-    for sample in ["🇺🇸", "🇯🇵", "🇩🇪", "🚀", "😀", "❤️", "👩🏽‍💻", "🇭🇰"]
-    {
+    for sample in [
+        "🇺🇸",
+        "🇯🇵",
+        "🇩🇪",
+        "🚀",
+        "😀",
+        "❤️",
+        "👩🏽‍💻",
+        "🇨🇳",
+        "🇭🇰",
+        "🇲🇴",
+        "🇹🇼",
+    ] {
         window.set_sample(sample.into());
         render(&adapter, &mut pixels, true);
         assert_eq!(window.get_sample(), sample);
@@ -125,5 +137,11 @@ fn offline_emoji_render_in_labels_and_inputs_with_opacity_clipping_and_partial_r
             .all(|(index, pixel)| { index % 512 < 28 || *pixel == Rgb8Pixel::new(255, 255, 255) })
     );
     assert!(pixels.iter().filter(colored).count() > 20);
+    let mut clipped_reference = vec![Rgb8Pixel::default(); pixels.len()];
+    render(&adapter, &mut clipped_reference, false);
+    assert_eq!(
+        pixels, clipped_reference,
+        "clipping changes must repaint the previous glyph bounds"
+    );
     window.hide().unwrap();
 }

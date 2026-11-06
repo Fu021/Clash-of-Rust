@@ -277,6 +277,11 @@ impl App {
         set!(get_page, set_page, self.page as i32);
         set!(get_ready, set_ready, self.engine.is_some());
         set!(get_running, set_running, self.snapshot.running);
+        text!(
+            get_network_alert,
+            set_network_alert,
+            self.network_watch.notice()
+        );
         self.present_protection(data);
         set!(get_working, set_working, self.working);
         set!(get_geo_updating, set_geo_updating, self.geo_updating);
@@ -815,7 +820,7 @@ impl App {
             clash_of_rust::flags::label(exit.map_or("", |exit| exit.country.as_str()));
         data.set_site_exit_country(country.into());
         data.set_site_exit_flagged(flag.is_some());
-        data.set_site_exit_flag(flag.unwrap_or_default());
+        data.set_site_exit_flag(flag.unwrap_or_default().into());
         let categories: Vec<_> = report
             .categories
             .into_iter()
@@ -873,7 +878,7 @@ impl App {
                         });
                     ReportItem {
                         country: String::new().into(),
-                        flag: flag.clone().unwrap_or_default(),
+                        flag: flag.clone().unwrap_or_default().into(),
                         flagged: flag.is_some(),
                         id: service.id.as_str().into(),
                         title: service.name.as_str().into(),
@@ -1059,7 +1064,7 @@ impl App {
                     ReportItem {
                         country: country.into(),
                         flagged: flag.is_some(),
-                        flag: flag.unwrap_or_default(),
+                        flag: flag.unwrap_or_default().into(),
                         id: "".into(),
                         title: title.into(),
                         value: value.into(),
@@ -1080,7 +1085,7 @@ impl App {
         data.set_modal_copy("".into());
         data.set_modal_country("".into());
         data.set_modal_flagged(false);
-        data.set_modal_flag(String::new());
+        data.set_modal_flag(String::new().into());
         data.set_modal_description("".into());
         data.set_modal_accept("".into());
         data.set_modal_danger(false);
@@ -1212,7 +1217,7 @@ impl App {
                         let (country, flag) = clash_of_rust::flags::label(&result.country);
                         data.set_modal_country(country.into());
                         data.set_modal_flagged(flag.is_some());
-                        data.set_modal_flag(flag.unwrap_or_default());
+                        data.set_modal_flag(flag.unwrap_or_default().into());
                         format!(
                             "{}\n{} ms\n\n{}",
                             result.summary, result.millis, result.detail

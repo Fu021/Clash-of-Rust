@@ -239,7 +239,7 @@ def seed_assets():
                                      'updated':int(time.time()), 'files':records, 'release': release})
     shutil.copy2(ROOT/'LICENSE', target/'LICENSE')
     write_mihomo_notice(target/'THIRD-PARTY-NOTICES.txt', mihomo_go_version(ANDROID/'core/go.mod'))
-    for directory in ('fonts', 'flags', 'ip-check'):
+    for directory in ('fonts', 'countries', 'ip-check'):
         for path in (ROOT/'resources'/directory).iterdir():
             if path.name.startswith(('LICENSE', 'SOURCE')):
                 destination = target/'licenses'/directory/path.name

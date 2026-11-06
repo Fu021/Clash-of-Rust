@@ -55,7 +55,7 @@ export component AppDialog inherits Rectangle {
                         alignment: start; padding-right: Theme.content-gap; spacing: Theme.page-gap;
                         if UiData.modal-country != "": HorizontalLayout {
                             cross-axis-alignment: center; spacing: Theme.content-gap;
-                            if UiData.modal-flagged: Image { source: UiData.modal-flag; width: 24px; height: 24px; image-fit: contain; }
+                            if UiData.modal-flagged: Text { text: UiData.modal-flag; width: 24px; height: 24px; font-size: 20px; }
                             Label { text: UiData.modal-country; }
                         }
                         if (UiData.modal != 0 ? UiData.modal-description : root.last-description) != "": Paragraph { text: UiData.modal != 0 ? UiData.modal-description : root.last-description; }

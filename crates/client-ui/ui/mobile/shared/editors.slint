@@ -117,7 +117,7 @@ export component MobileSiteResults inherits VerticalLayout {
                 }
                 HorizontalLayout { spacing: MobileTypography.small-gap; cross-axis-alignment: center;
                     MHeading { text: result.title; }
-                    if result.flagged: Image { source: result.flag; width: 24px; height: 24px; image-fit: contain; }
+                    if result.flagged: Text { text: result.flag; width: 24px; height: 24px; font-size: 20px; }
                     MTag { text: result.tone == 3 ? "受限" : result.tone == 2 ? "网页可达" : result.tone == 1 ? "确认可用" : "待检测"; tone: result.tone; }
                 }
                 MParagraph { text: result.value; font-size: MobileTypography.font-size(14); }

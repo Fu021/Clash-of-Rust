@@ -68,7 +68,11 @@ pub async fn execute(args: &Args) -> Result<()> {
                         .context("等待后台清理失败")?;
                 }
             }
-            output::emit(args, json!({"running":false}))
+            let routes = crate::host_network::with_proxy_context(
+                crate::host_network::observe().await,
+                Some(ProxyMode::Off),
+            );
+            output::emit(args, json!({"running":false,"host_routes":routes}))
         }
         "status" => status(args).await,
         "mode" => {
@@ -93,7 +97,6 @@ pub async fn execute(args: &Args) -> Result<()> {
                     _ => bail!("代理状态应为 system、tun 或 off"),
                 };
                 if mode == ProxyMode::Tun {
-                    crate::host_network::warn_tun();
                     maintenance::authorize_tun(args).await?;
                 }
                 let _: Value = backend::request(args, Command::Proxy { mode }).await?;

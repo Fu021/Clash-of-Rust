@@ -13,6 +13,7 @@ mod logs;
 #[cfg(target_os = "macos")]
 #[path = "../platform/macos/desktop.rs"]
 mod mac_desktop;
+mod network_watch;
 mod notice;
 mod presentation;
 mod rules;
@@ -243,6 +244,7 @@ enum Message {
     OpenRelease,
     ReleaseOpened(Result<(), String>),
     Tick,
+    HostRoutes(u64, serde_json::Value),
     #[cfg(target_os = "macos")]
     MacTrayPumped(Result<mac_desktop::Events, String>),
     ToggleGroup(String),
@@ -296,6 +298,7 @@ struct App {
     claude: claude_view::State,
     profiles: Vec<Profile>,
     snapshot: Snapshot,
+    network_watch: network_watch::Watch,
     busy: bool,
     working: bool,
     pending_refresh: bool,
@@ -509,6 +512,7 @@ impl App {
             notification_guide_pending: false,
             page: Page::Home,
             snapshot: Snapshot::default(),
+            network_watch: network_watch::Watch::default(),
             busy: false,
             working: false,
             pending_refresh: false,
@@ -684,6 +688,12 @@ impl App {
         ) {
             self.reset_network_results();
         }
+        if matches!(
+            action,
+            Action::Start | Action::ProxyMode(_) | Action::ClaudeProtection(_) | Action::Ipv6(_)
+        ) {
+            self.network_watch.invalidate();
+        }
         self.busy = true;
         self.working = !matches!(action, Action::Refresh);
         if let Action::ClaudeProtection(enabled) = &action {
@@ -736,7 +746,16 @@ impl App {
                 &message,
                 Message::Tick | Message::Window((_, desktop_runtime::window::Event::Opened { .. }))
             );
+        let observe_network = matches!(
+            &message,
+            Message::Tick | Message::Finished(_) | Message::ShowWindow(_)
+        );
         let task = self.update_message(message);
+        let task = if observe_network {
+            Task::batch([task, self.observe_network()])
+        } else {
+            task
+        };
         let task = if prepare_notifications {
             Task::batch([task, self.prepare_notifications()])
         } else {
@@ -1778,6 +1797,9 @@ impl App {
             Message::WindowCreated(_id) => {
                 self.window_opening = false;
             }
+            Message::HostRoutes(revision, routes) => {
+                self.network_watch.finish(revision, routes);
+            }
             Message::Tick => {
                 self.offer_notification_settings();
                 if let Some(startup) = &self.tray_startup {
@@ -1861,6 +1883,15 @@ impl App {
             Message::Finished(reply) => {
                 self.claude.protection_pending = None;
                 let reply = *reply;
+                self.network_watch.proxy(
+                    reply
+                        .snapshot
+                        .as_ref()
+                        .map(Snapshot::proxy_mode)
+                        .or_else(|| {
+                            (!reply.running && reply.notice.is_ok()).then_some(ProxyMode::Off)
+                        }),
+                );
                 let subscription_failure = reply
                     .snapshot
                     .as_ref()

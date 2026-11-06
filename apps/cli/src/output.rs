@@ -225,7 +225,7 @@ mod tests {
     }
 
     #[test]
-    fn status_and_diagnostics_explain_route_scope_without_claiming_ownership() {
+    fn status_reports_external_tun_and_an_action_instead_of_route_sampling_noise() {
         let routes = json!({
             "scope":"current_network_namespace",
             "ipv4":{"state":"observed","interface":"Meta","kind":"tun"},
@@ -236,11 +236,12 @@ mod tests {
             &["status"],
             json!({"running":false,"owner":null,"host_routes":routes}),
         );
-        assert!(status.contains("经过 TUN/TAP 接口 Meta"));
+        assert!(status.contains("外部 TUN"));
+        assert!(status.contains("Meta"));
         assert!(status.contains("无法读取"));
-        assert!(status.contains("关闭当前用户代理不会关闭其他实例"));
-        assert!(status.contains("未检测连通性"));
-        assert!(!status.contains("未确认"));
+        assert!(status.contains("cor diagnose --output cor-diagnose.json"));
+        assert!(!status.contains("ipv6"));
+        assert!(!status.contains("未检测连通性"));
         let report = render(
             &["diagnose"],
             json!({
@@ -263,7 +264,7 @@ mod tests {
             "HTTP 200",
             "当前用户后台未运行",
             "HTTPS_PROXY",
-            "不代表其他应用或目标服务可用",
+            "cor diagnose --output cor-diagnose.json",
         ] {
             assert!(report.contains(expected), "{report}");
         }
@@ -286,13 +287,42 @@ mod tests {
                 }
             }),
         );
-        assert!(
-            status.contains("root（其他用户）· PID 42 · mihomo"),
-            "{status}"
-        );
-        assert!(status.contains("不代表最初开启者"));
-        assert!(status.contains("无可用示例路由"));
+        assert!(status.contains("root · PID 42"), "{status}");
+        assert!(status.contains("持有进程"));
+        assert!(!status.contains("开启者"));
+        assert!(!status.contains("无可用示例路由"));
         assert!(!status.contains("IPv6 不可用"));
+    }
+
+    #[test]
+    fn routine_status_omits_unavailable_samples_and_stop_does_not_claim_global_recovery() {
+        let host_routes = json!({
+            "scope":"current_network_namespace",
+            "ipv4":{"state":"observed","interface":"eth0","kind":"other"},
+            "ipv6":{"state":"unknown","reason":"route_unavailable"},
+            "warnings":[]
+        });
+        for command in ["status", "proxy", "stop"] {
+            let text = render(
+                &[command],
+                json!({"running":false,"proxy":"off","host_routes":host_routes}),
+            );
+            assert!(!text.contains("IPv6"), "{text}");
+            assert!(!text.contains("ipv6"), "{text}");
+            assert!(!text.contains("其他用户"), "{text}");
+            assert!(!text.contains("网络设置已恢复"), "{text}");
+        }
+        let text = render(
+            &["stop"],
+            json!({"host_routes":{
+                "scope":"current_network_namespace",
+                "ipv4":{"state":"observed","interface":"Meta","kind":"tun"},
+                "warnings":["tun_owner_unconfirmed"]
+            }}),
+        );
+        assert!(text.starts_with("内核已停止\n"));
+        assert!(text.contains("外部 TUN"));
+        assert!(text.contains("cor diagnose --output cor-diagnose.json"));
     }
 
     #[test]

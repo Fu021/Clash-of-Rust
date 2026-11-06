@@ -35,7 +35,7 @@ export struct ProfileItem { id: string, name: string, source: string, detail: st
 export struct ConnectionItem { id: string, host: string, detail: string, rule: string, route: string, up: string, down: string, upload: string, download: string }
 export struct RuleItem { id: string, position: string, kind: string, value: string, policy: string, source: string, selected: bool, enabled: bool, raw: string }
 export struct LogItem { time: string, level: string, message: string, tone: int }
-export struct ReportItem { id: string, title: string, value: string, country: string, detail: string, source: string, tone: int, flag: image, flagged: bool }
+export struct ReportItem { id: string, title: string, value: string, country: string, detail: string, source: string, tone: int, flag: string, flagged: bool }
 export struct CategoryItem { id: string, title: string, count: string, detail: string, tone: int }
 
 export struct CategoryPair { left: CategoryItem, right: CategoryItem }
@@ -68,6 +68,7 @@ export global UiData {
     in-out property <string> version;
     in-out property <bool> ready;
     in-out property <bool> running;
+    in-out property <string> network-alert;
     in-out property <bool> working;
     in-out property <bool> geo-updating;
     in-out property <bool> exiting;
@@ -149,7 +150,7 @@ export global UiData {
     in-out property <[string]> site-status-options;
     in-out property <[string]> site-region-options;
     in-out property <string> site-summary;
-    in-out property <image> site-exit-flag;
+    in-out property <string> site-exit-flag;
     in-out property <bool> site-exit-flagged;
     in-out property <string> site-exit-country;
     in-out property <[Choice]> site-counts;
@@ -190,7 +191,7 @@ export global UiData {
     in-out property <int> modal;
     in-out property <string> modal-title;
     in-out property <string> modal-description;
-    in-out property <image> modal-flag;
+    in-out property <string> modal-flag;
     in-out property <bool> modal-flagged;
     in-out property <string> modal-country;
     in-out property <string> modal-error;

@@ -21,5 +21,5 @@ The font is embedded in the application. Segoe UI is loaded from Windows and is 
 Desktop and Android register this embedded font before generic system fallbacks
 through `crates/client-ui/src/fonts.rs`. Android includes that helper directly
 without linking the desktop component tree. Node names remain original text;
-the font does not rewrite names or infer countries. IP and Claude reports
-continue to use the separate offline flag atlas.
+the font does not rewrite names or infer countries. IP and Claude reports also
+render their flag text through this font, without a separate flag atlas.

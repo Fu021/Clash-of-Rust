@@ -2702,7 +2702,11 @@ fn apply(ui: &AndroidWindow, p: Projection) {
     data.set_site_progress(format!("完成 {} / {}", p.progress.0, p.progress.1).into());
     data.set_exit_ip(p.exit.0.into());
     data.set_exit_country(core::countries::country_text(&p.exit.1).into());
-    data.set_exit_flag(flag(&p.exit.1));
+    data.set_exit_flag(
+        core::countries::flag_emoji(&p.exit.1)
+            .unwrap_or_default()
+            .into(),
+    );
     data.set_categories(stable(
         data.get_categories(),
         rows(
@@ -2725,7 +2729,7 @@ fn apply(ui: &AndroidWindow, p: Projection) {
         ),
     ));
     let result = |r: ReportRow| {
-        let flag = flag(&r.country);
+        let flag = core::countries::flag_emoji(&r.country);
         ReportItem {
             id: r.id.into(),
             title: r.title.into(),
@@ -3068,34 +3072,4 @@ fn apply(ui: &AndroidWindow, p: Projection) {
             "settings_viewport_height":view.get_settings_viewport_height()})
         .to_string();
     }
-}
-
-fn flag(country: &str) -> slint::Image {
-    const PIXELS: &[u8] = include_bytes!("../../../../resources/flags/flags.rgba");
-    static CODES: std::sync::OnceLock<Vec<String>> = std::sync::OnceLock::new();
-    let codes = CODES.get_or_init(|| {
-        serde_json::from_str(include_str!("../../../../resources/flags/codes.json"))
-            .expect("flag codes")
-    });
-    let Some(code) = core::countries::flag_code(country) else {
-        return slint::Image::default();
-    };
-    let Some(index) = codes.iter().position(|c| c == code) else {
-        return slint::Image::default();
-    };
-    const BYTES: usize = 72 * 72 * 4;
-    thread_local! { static FLAGS:std::cell::RefCell<std::collections::BTreeMap<usize,slint::Image>>=std::cell::RefCell::default(); }
-    FLAGS.with(|flags| {
-        flags
-            .borrow_mut()
-            .entry(index)
-            .or_insert_with(|| {
-                slint::Image::from_rgba8(slint::SharedPixelBuffer::clone_from_slice(
-                    &PIXELS[index * BYTES..(index + 1) * BYTES],
-                    72,
-                    72,
-                ))
-            })
-            .clone()
-    })
 }

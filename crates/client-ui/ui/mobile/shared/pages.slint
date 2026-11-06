@@ -517,7 +517,7 @@ export component MobileIpCheck inherits PageSurface {
             MSmall { text: "当前出口"; }
             HorizontalLayout { spacing: MobileTypography.small-gap; cross-axis-alignment: center;
                 // Offline bitmap; rendering never depends on an emoji font.
-                Image { source: MobileData.exit-flag; width: 24px; height: 24px; image-fit: contain; }
+                if MobileData.exit-flag != "": Text { text: MobileData.exit-flag; width: 24px; height: 24px; font-size: 20px; }
                 MHeading { text: MobileData.exit-country + " · " + MobileData.exit-ip; }
             }
             MSmall { text: MobileData.site-summary; wrap: word-wrap; }

@@ -147,7 +147,6 @@ pub async fn prepare_start(args: &Args) -> Result<()> {
         && (state.settings.proxy_mode == clash_client_runtime::engine::ProxyMode::Tun
             || state.settings.claude_protection.is_some())
     {
-        crate::host_network::warn_tun();
         authorize_tun(args).await?;
     }
     Ok(())
@@ -198,7 +197,6 @@ pub async fn run(args: &Args) -> Result<()> {
         if state.proxy_mode == clash_client_runtime::engine::ProxyMode::Tun
             || state.claude_protection.is_some()
         {
-            crate::host_network::warn_tun();
             authorize_tun(args).await?;
         }
         let mut owner = engine.lock().await;
