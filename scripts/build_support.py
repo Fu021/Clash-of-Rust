@@ -277,7 +277,7 @@ def copy_static(bundle):
     core = json.loads((resources/'core.json').read_text(encoding='utf-8'))
     write_mihomo_notice(resources/'THIRD-PARTY-NOTICES.txt', core.get('version'))
     shutil.copy2(ROOT/'LICENSE', bundle/'LICENSE')
-    licenses = {'SourceHanSans-LICENSE.txt':'fonts/LICENSE.txt', 'Twemoji-LICENSE.txt':'flags/LICENSE-Twemoji.txt', 'Unicode-LICENSE.txt':'flags/LICENSE-Unicode.txt'}
+    licenses = {'SourceHanSans-LICENSE.txt':'fonts/LICENSE.txt', 'NotoEmoji-LICENSE.txt':'fonts/LICENSE-NotoEmoji.txt', 'Twemoji-LICENSE.txt':'flags/LICENSE-Twemoji.txt', 'Unicode-LICENSE.txt':'flags/LICENSE-Unicode.txt'}
     for name, source in licenses.items():
         shutil.copy2(ROOT/'resources'/source, resources/name)
     ip = resources/'ip-check'

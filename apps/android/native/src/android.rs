@@ -21,6 +21,9 @@ use std::{
 };
 use tokio::sync::mpsc;
 
+#[path = "../../../../crates/client-ui/src/fonts.rs"]
+mod fonts;
+
 slint::include_modules!();
 static EVENTS: Mutex<Option<mpsc::Sender<String>>> = Mutex::new(None);
 static AUTHORIZATION_REQUEST: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
@@ -282,6 +285,7 @@ fn run(app: slint::android::AndroidApp) -> Result<()> {
         .directory(jni_str!("getCacheDir"))?
         .join("updates/update.apk");
     slint::android::init(app)?;
+    fonts::register_emoji()?;
     let window = AndroidWindow::new()?;
     // No engine/Geo/network work precedes the first correctly themed frame.
     let appearance = native.request(json!({"op":"appearance"}))?;
@@ -2749,9 +2753,7 @@ fn apply(ui: &AndroidWindow, p: Projection) {
     data.set_core_running(p.running);
     data.set_vpn_connected(p.vpn);
     data.set_profile(p.profile.into());
-    let (node, node_flag) = core::countries::node_label(&p.node);
-    data.set_node(node.into());
-    data.set_node_flag(flag(node_flag.unwrap_or_default()));
+    data.set_node(p.node.into());
     data.set_connection_count(p.total.to_string().into());
     data.set_upload_total(p.upload.into());
     data.set_download_total(p.download.into());
@@ -2879,28 +2881,21 @@ fn apply(ui: &AndroidWindow, p: Projection) {
                     let group_id = name.clone();
                     let node_items = nodes
                         .into_iter()
-                        .map(|(name, node)| {
-                            let (label, code) = core::countries::node_label(&name);
-                            NodeItem {
-                                group: group_id.clone().into(),
-                                selected: name == group.now.as_str(),
-                                label: label.into(),
-                                flag: flag(code.unwrap_or_default()),
-                                name: name.into(),
-                                kind: node.kind.to_string().into(),
-                                delay: proxy_order::delay_label(node.delay).into(),
-                                tone: proxy_order::delay_tone(node.delay),
-                                valid: true,
-                            }
+                        .map(|(name, node)| NodeItem {
+                            group: group_id.clone().into(),
+                            selected: name == group.now.as_str(),
+                            name: name.into(),
+                            kind: node.kind.to_string().into(),
+                            delay: proxy_order::delay_label(node.delay).into(),
+                            tone: proxy_order::delay_tone(node.delay),
+                            valid: true,
                         })
                         .collect::<Vec<_>>();
-                    let (current, current_flag) = core::countries::node_label(group.now.as_str());
                     GroupItem {
                         id: name.clone().into(),
                         title: name.into(),
                         detail: format!("{} · {count} 个节点", group.kind).into(),
-                        current: current.into(),
-                        current_flag: flag(current_flag.unwrap_or_default()),
+                        current: group.now.as_str().into(),
                         expanded,
                         testing,
                         nodes: stable(

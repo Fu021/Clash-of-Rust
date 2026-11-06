@@ -8,22 +8,22 @@ export component MobileFixture inherits Rectangle {
         MobileData.site-summary = "确认可用 74 · 网页可达 20 · 受限 36";
         MobileData.core-running = true;
         MobileData.dns-override = true; MobileData.fake-ip = true;
-        MobileData.profile = "我的订阅"; MobileData.node = "德国 01 · IPv6"; MobileData.node-flag = @image-url("../preview-data/de.svg");
+        MobileData.profile = "我的订阅"; MobileData.node = "🇩🇪 德国 01 · IPv6";
         MobileData.download-rate = "1.24 MiB/s"; MobileData.upload-rate = "28.6 KiB/s";
         MobileData.connection-count = "24"; MobileData.download-total = "386 MiB"; MobileData.upload-total = "21.7 MiB";
         MobileData.connection-page = "1 / 1 · 24 条";
         MobileData.rule-page = "1 / 1 · 4 条";
         MobileData.groups = [
-            {id: "Proxy", title: "Proxy", detail: "Selector · 6 个节点", current: "德国 01 · IPv6", current-flag: @image-url("../preview-data/de.svg"), expanded: true,
+            {id: "Proxy", title: "Proxy", detail: "Selector · 6 个节点", current: "🇩🇪 德国 01 · IPv6", expanded: true,
                 page: "6 个节点", nodes: [
                     {left: {group: "Proxy", name: "DIRECT", kind: "Direct", delay: "未测速", tone: 4, valid: true},
-                     right: {group: "Proxy", name: "德国 01 · IPv6", label: "德国 01 · IPv6", flag: @image-url("../preview-data/de.svg"), kind: "AnyTLS", delay: "45 ms", tone: 1, valid: true, selected: true}},
-                    {left: {group: "Proxy", name: "新加坡 01", label: "新加坡 01", flag: @image-url("../preview-data/sg.svg"), kind: "Trojan", delay: "376 ms", tone: 2, valid: true},
-                     right: {group: "Proxy", name: "日本 01", label: "日本 01", flag: @image-url("../preview-data/jp.svg"), kind: "Shadowsocks", delay: "64 ms", tone: 1, valid: true}},
-                    {left: {group: "Proxy", name: "美国 01", label: "美国 01", flag: @image-url("../preview-data/us.svg"), kind: "VLESS", delay: "868 ms", tone: 3, valid: true},
-                     right: {group: "Proxy", name: "香港 02", label: "香港 02", flag: @image-url("../preview-data/cn.svg"), kind: "VLESS", delay: "28 ms", tone: 1, valid: true}}
+                     right: {group: "Proxy", name: "🇩🇪 德国 01 · IPv6", kind: "AnyTLS", delay: "45 ms", tone: 1, valid: true, selected: true}},
+                    {left: {group: "Proxy", name: "新加坡 01", kind: "Trojan", delay: "376 ms", tone: 2, valid: true},
+                     right: {group: "Proxy", name: "🚀 🇯🇵 日本 01", kind: "Shadowsocks", delay: "64 ms", tone: 1, valid: true}},
+                    {left: {group: "Proxy", name: "🇺🇸 美国 01 ❤️", kind: "VLESS", delay: "868 ms", tone: 3, valid: true},
+                     right: {group: "Proxy", name: "香港 02", kind: "VLESS", delay: "28 ms", tone: 1, valid: true}}
                 ]},
-            {id: "auto", title: "自动选择", detail: "URLTest · 5 个节点", current: "香港 02", current-flag: @image-url("../preview-data/cn.svg"), expanded: false, nodes: []}
+            {id: "auto", title: "自动选择", detail: "URLTest · 5 个节点", current: "香港 02", expanded: false, nodes: []}
         ];
         MobileData.profiles = [
             {id: "main", name: "我的订阅", source: "https://example.com/subscription", detail: "已用 2.4/100 GiB · 到期 2026-12-31 · 更新 10-15 10:30", active: true},

@@ -154,6 +154,7 @@ pub fn run() -> anyhow::Result<()> {
             "无法初始化桌面图形服务：{error}；纯命令行或 SSH 会话请使用 cor start，不要启动桌面主程序"
         )
     })?;
+    clash_client_ui::fonts::register_emoji()?;
     #[cfg(target_os = "linux")]
     slint::set_xdg_app_id("clash-of-rust")?;
     let (output, events) = mpsc::channel::<UiEvent>();

@@ -222,11 +222,14 @@ export component MRow inherits Rectangle {
     vertical-stretch: 0; min-width: 0px; height: max(48px, 52px * MobileTypography.density, content.preferred-height + MobileTypography.gap);
     content := HorizontalLayout { cross-axis-alignment: center; spacing: 10px;
         VerticalLayout { spacing: 6px;
-            MText { text: root.title; }
+            MText { text: root.title; wrap: word-wrap; }
             if root.subtitle != "": MSmall { text: root.subtitle; wrap: word-wrap; }
         }
         if root.show-swatch: Rectangle { width: 16px; height: 16px; horizontal-stretch: 0; border-radius: 8px; background: root.swatch; }
-        if root.value != "": MSmall { text: root.value; color: root.value-color; horizontal-stretch: 0; }
+        if root.value != "": MSmall {
+            text: root.value; color: root.value-color;
+            max-width: MobileTypography.font-size(14) * 6; horizontal-stretch: 0;
+        }
         if root.arrow && root.expandable: Chevron { expanded: root.expanded; horizontal-stretch: 0; }
         if root.arrow && !root.expandable: Image {
             source: @image-url("../../icons/chevron-right.svg");
@@ -253,7 +256,7 @@ export component MSwitch inherits Rectangle {
     opacity: root.enabled ? 1 : 0.5;
     animate opacity { duration: Motion.control; enabled: Motion.active; }
     content := HorizontalLayout { spacing: MobileTypography.gap; cross-axis-alignment: center;
-        VerticalLayout { spacing: 6px; MText { text: root.title; } if root.subtitle != "": MSmall { text: root.subtitle; wrap: word-wrap; } }
+        VerticalLayout { spacing: 6px; MText { text: root.title; wrap: word-wrap; } if root.subtitle != "": MSmall { text: root.subtitle; wrap: word-wrap; } }
         Rectangle { width: 44px; height: 26px; horizontal-stretch: 0; border-radius: 13px; background: root.checked ? Theme.primary : Theme.muted;
             animate background { duration: Motion.control; enabled: Motion.active; }
             Rectangle { x: root.checked ? 21px : 3px; animate x { duration: Motion.control; easing: ease-out; enabled: Motion.active; } y: 3px; width: 20px; height: 20px; border-radius: 10px; background: #ffffff; }
@@ -265,6 +268,7 @@ export component MField inherits Rectangle {
     in property <bool> enabled: true;
     in property <bool> secret;
     out property <bool> has-focus: input.has-focus;
+    out property <bool> placeholder-visible: input.text == "" && input.preedit-text == "";
     in-out property <string> text;
     in property <string> placeholder;
     callback edited(string);
@@ -279,7 +283,9 @@ export component MField inherits Rectangle {
         selection-background-color: Theme.primary; selection-foreground-color: #ffffff;
         edited => { root.edited(self.text); }
     }
-    if input.text == "": MSmall { x: 12px; width: parent.width - 24px; height: parent.height; text: root.placeholder; }
+    MSmall { x: 12px; width: parent.width - 24px; height: parent.height;
+        text: root.placeholder-visible ? root.placeholder : "";
+    }
 }
 export component MSelect inherits Rectangle {
     in property <bool> enabled: true;

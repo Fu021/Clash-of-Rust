@@ -587,7 +587,7 @@ jobs:
         id: rust_github
         with:
           prefix-key: ${{ runner.os == 'Linux' && 'native-release-ubuntu20-v1-' || 'native-release-v2-' }}${{ matrix.os }}
-          key: ${{ (runner.os == 'macOS' || runner.os == 'Windows') && format('workspace-{0}', hashFiles('apps/**/*.rs', 'apps/**/*.slint', 'apps/**/*.svg', 'crates/**/*.rs', 'crates/**/*.slint', 'crates/**/*.svg', 'resources/**')) || '' }}
+          key: ${{ (runner.os == 'macOS' || runner.os == 'Windows') && format('workspace-{0}', hashFiles('apps/**/*.rs', 'apps/**/*.slint', 'apps/**/*.svg', 'crates/**/*.rs', 'crates/**/*.slint', 'crates/**/*.svg', 'vendor/**/*.rs', 'vendor/**/*.java', 'resources/**')) || '' }}
           cache-on-failure: false
           cache-bin: false
           # Source hashes are checked before restoring workspace mtimes; changed

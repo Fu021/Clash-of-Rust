@@ -19,7 +19,6 @@ component StatusCard inherits MCard {
         if Theme.text-scale <= 1.25: MTag { text: MobileData.vpn-connected ? "已连接" : MobileData.vpn-pending ? "连接中" : "未连接"; tone: MobileData.vpn-connected ? 0 : MobileData.vpn-pending ? 2 : 4; }
     }
     HorizontalLayout { spacing: MobileTypography.small-gap; cross-axis-alignment: center;
-        if MobileData.node-flag.width > 0: Image { source: MobileData.node-flag; width: MobileTypography.font-size(24); height: MobileTypography.font-size(24); horizontal-stretch: 0; image-fit: contain; }
         MText { text: MobileData.node; color: Theme.accent; font-size: MobileTypography.font-size(20); font-weight: 600; }
     }
     MSmall { text: MobileData.profile; }
@@ -86,8 +85,7 @@ component NodeCard inherits MCard {
     interactive: MobileData.core-running && !MobileData.protected && !MobileData.protection-pending;
     clicked => { MobileActions.request(MobileIntent.select-node, root.group, root.item.name); }
     HorizontalLayout { spacing: MobileTypography.small-gap; cross-axis-alignment: center;
-        if root.item.flag.width > 0: Image { source: root.item.flag; width: MobileTypography.font-size(24); height: MobileTypography.font-size(24); horizontal-stretch: 0; image-fit: contain; }
-        MText { text: root.item.label != "" ? root.item.label : (root.item.flag.width > 0 ? "" : root.item.name); wrap: word-wrap; font-weight: 600; color: root.selected ? Theme.accent : Theme.ink; }
+        MText { text: root.item.name; wrap: word-wrap; font-weight: 600; color: root.selected ? Theme.accent : Theme.ink; }
     }
     HorizontalLayout { cross-axis-alignment: center; spacing: MobileTypography.small-gap;
         MSmall { text: root.item.kind + (root.selected ? (MobileData.protected ? " · 已锁定" : " · 使用中") : ""); wrap: word-wrap; }
@@ -102,7 +100,7 @@ component NodeCard inherits MCard {
         }
     }
     if root.detailed: VerticalLayout { spacing: MobileTypography.small-gap;
-        MSmall { text: "完整名称：" + (root.item.label != "" ? root.item.label : root.item.name); wrap: word-wrap; }
+        MSmall { text: "完整名称：" + root.item.name; wrap: word-wrap; }
         MSmall { text: "协议：" + root.item.kind + (root.selected ? (MobileData.protected ? " · 已锁定" : " · 使用中") : ""); wrap: word-wrap; }
     }
 }
@@ -129,7 +127,6 @@ export component MobileProxies inherits PageSurface {
                 MRow { title: group.title; subtitle: group.detail; value: group-card.expanded ? "收起" : "展开"; expandable: true; expanded: group-card.expanded;
                     clicked => { group-card.expanded = !group-card.expanded; }
                 }
-                if root.width > 580px && group.current-flag.width > 0: Image { source: group.current-flag; width: MobileTypography.font-size(20); height: MobileTypography.font-size(20); horizontal-stretch: 0; image-fit: contain; }
                 if root.width > 580px: MTag { text: group.current; width-limit: 180px; }
                 MButton { text: group.testing ? "测速中…" : "组测速"; busy: group.testing; width: max(82px, MobileTypography.font-size(15) * 3 + 16px); horizontal-stretch: 0; enabled: MobileData.core-running && !MobileData.delay-busy && !MobileData.protection-pending;
                     clicked => { MobileActions.request(MobileIntent.group-delay, group.id, ""); }

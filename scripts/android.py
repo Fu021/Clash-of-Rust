@@ -538,6 +538,42 @@ def input_method_crashes(log, package):
     return crashes
 
 
+def prepare_emulator_input_method(report):
+    properties=[subprocess.check_output([ADB,'shell','getprop',name],text=True,timeout=15).strip()
+                for name in ('ro.kernel.qemu','ro.debuggable','ro.build.version.sdk')]
+    if properties[2]!='31':
+        return
+    if properties[:2]!=['1','1']:
+        raise RuntimeError('Input method preparation requires a debuggable API 31 emulator')
+    service=subprocess.check_output(
+        [ADB,'shell','settings','get','secure','default_input_method'],text=True,timeout=15).strip()
+    if not re.fullmatch(r'com\.google\.android\.inputmethod\.latin/[A-Za-z0-9_.$]+',service):
+        return
+    package=service.split('/',1)[0]
+    details=subprocess.run([ADB,'shell','dumpsys','package',package],capture_output=True,timeout=15)
+    (report/'input-method-package-before-setup.txt').write_bytes(details.stdout+details.stderr)
+    if details.returncode:
+        raise RuntimeError('Could not record emulator input method before preparation')
+    record={'schema':1,'input_method':service,'api':31,'disposable_emulator':True,
+            'before_application_tests':True,'complete':False,'commands':[]}
+    try:
+        commands=[['shell','pm','clear',package],['shell','ime','enable',service],['shell','ime','set',service]]
+        for arguments in commands:
+            result=subprocess.run([ADB,*arguments],capture_output=True,text=True,timeout=30)
+            record['commands'].append({'arguments':arguments,'returncode':result.returncode,
+                                       'stdout':result.stdout,'stderr':result.stderr})
+            if result.returncode or (arguments[1:3]==['pm','clear'] and result.stdout.strip()!='Success'):
+                raise RuntimeError('Could not prepare emulator input method before application tests')
+        selected=subprocess.check_output(
+            [ADB,'shell','settings','get','secure','default_input_method'],text=True,timeout=15).strip()
+        if selected!=service:
+            raise RuntimeError('Emulator input method changed during preparation')
+        record['complete']=True
+    finally:
+        write_json(report/'input-method-setup.json',record)
+    print('API 31 emulator input method starts from cold data; application crash checks remain enabled.',flush=True)
+
+
 def platform_ime_control(report, ime_service):
     package=ime_service.split('/',1)[0]
     properties=[subprocess.check_output([ADB,'shell','getprop',name],text=True,timeout=15).strip()
@@ -852,6 +888,7 @@ def main():
         if args.legacy or args.api is not None:
             run([ADB,'shell','wm','size','1080x2400'])
             run([ADB,'shell','wm','density','440'])
+        prepare_emulator_input_method(report)
         # Standard UI-test setup: the launcher's animated input sink can outlive
         # Activity.onResume. Keep system transitions deterministic in CI only.
         for setting in ('window_animation_scale','transition_animation_scale','animator_duration_scale'):

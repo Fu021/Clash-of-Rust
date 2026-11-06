@@ -85,7 +85,7 @@ impl<T: Clone> List<T> {
 }
 include!(concat!(env!("OUT_DIR"), "/contract.rs"));
 
-pub const PROTOCOL: u32 = 10;
+pub const PROTOCOL: u32 = 11;
 pub const LIMIT: usize = 8 * 1024 * 1024;
 #[derive(Debug, Clone, Copy, Default, PartialEq, Serialize, Deserialize)]
 pub struct Size {
@@ -270,20 +270,16 @@ mod tests {
             ..Default::default()
         }]);
         data.set_site_exit_flag("DE".into());
-        data.set_node("日本 01".into());
-        data.set_node_flag("JP".into());
+        data.set_node("🚀 🇯🇵 日本 01".into());
         models.set_groups(vec![(
             GroupItem {
                 id: "Proxy".into(),
-                current: "日本 01".into(),
-                current_flag: "JP".into(),
+                current: "🚀 🇯🇵 日本 01".into(),
                 ..Default::default()
             },
             vec![NodePair {
                 left: NodeItem {
                     name: "🇺🇸 美国 01".into(),
-                    label: "美国 01".into(),
-                    flag: "US".into(),
                     valid: true,
                     ..Default::default()
                 },
@@ -307,13 +303,11 @@ mod tests {
         assert_eq!(decoded.edit_name, "未保存订阅");
         assert_eq!(decoded.rule_payload, "google.com");
         assert_eq!(decoded.site_exit_flag, "DE");
-        assert_eq!(decoded.node_flag, "JP");
+        assert_eq!(decoded.node, "🚀 🇯🇵 日本 01");
         let group = decoded.groups.row_data(0).unwrap();
-        assert_eq!(group.current_flag, "JP");
+        assert_eq!(group.current, "🚀 🇯🇵 日本 01");
         let node = group.nodes.row_data(0).unwrap().left;
         assert_eq!(node.name, "🇺🇸 美国 01");
-        assert_eq!(node.label, "美国 01");
-        assert_eq!(node.flag, "US");
         assert_eq!(decoded.logs.row_data(0).unwrap().message, "完整日志");
         let exclusion = decoded.fake_ip_exclusions.row_data(0).unwrap();
         assert_eq!(exclusion.domain, "localhost");

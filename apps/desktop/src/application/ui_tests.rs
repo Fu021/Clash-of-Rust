@@ -1162,45 +1162,46 @@ fn ip_report_uses_the_china_flag_for_hong_kong_macao_and_taiwan() {
 }
 
 #[test]
-fn offline_node_flags_reach_the_renderer_without_changing_node_identities() {
+fn node_names_reach_all_views_without_rewriting_prefixes_or_emoji() {
     ui_testing::initialize(950, 700);
     let mut app = fixture(Page::Proxies);
     app.expanded.insert("Proxy".into());
     let nodes = [
-        ("🇺🇸 美国 01", "美国 01", true),
-        ("日本 01", "日本 01", true),
-        ("🇩🇪 德国 01", "德国 01", true),
-        ("🇭🇰 香港 01", "香港 01", true),
-        ("澳门 01", "澳门 01", true),
-        ("TW-台湾 01", "台湾 01", true),
-        ("DIRECT", "DIRECT", false),
+        "🇺🇸 美国 01",
+        "日本 01",
+        "🇩🇪 德国 01",
+        "🇭🇰 香港 01",
+        "澳门 01",
+        "TW-台湾 01",
+        "DIRECT",
+        "🚀 🇯🇵 日本 02",
+        "  😀 US-美国 02 ❤️",
+        "👩🏽‍💻 工作线路",
+        "🇽🇽 原始名称",
+        "🇩🇪",
     ];
     app.snapshot.proxies = serde_json::from_value(serde_json::json!({"proxies": {
-        "Proxy": {"type":"Selector", "now":nodes[0].0,
-            "all":nodes.iter().map(|(name, _, _)| *name).collect::<Vec<_>>()}
+        "Proxy": {"type":"Selector", "now":nodes[0], "all":nodes}
     }}))
     .unwrap();
     let window = AppWindow::new().unwrap();
     let data = window.global::<UiData>();
     let mut models = ViewModels::default();
     models.attach(&data);
-    for (name, label, flagged) in nodes {
+    for name in nodes {
         app.snapshot.active_node = Some(name.into());
         app.snapshot.proxies.proxies.get_mut("Proxy").unwrap().now = name.into();
         app.present_slint(&data, &mut models);
-        assert_eq!(data.get_node(), label, "{name}");
-        assert_eq!(data.get_node_flag().size().width > 0, flagged, "{name}");
+        assert_eq!(data.get_node(), name);
         let group = data.get_groups().row_data(0).unwrap();
-        assert_eq!(group.current, label, "{name}");
-        assert_eq!(group.current_flag.size().width > 0, flagged, "{name}");
+        assert_eq!(group.current, name);
         let node = group
             .nodes
             .iter()
             .flat_map(|pair| [pair.left, pair.right])
             .find(|node| node.name == name)
             .unwrap();
-        assert_eq!(node.label, label, "{name}");
-        assert_eq!(node.flag.size().width > 0, flagged, "{name}");
+        assert_eq!(node.name, name);
         assert!(node.selected, "{name}");
         assert_eq!(app.snapshot.active_node.as_deref(), Some(name));
     }

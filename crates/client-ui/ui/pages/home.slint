@@ -36,7 +36,6 @@ export component HomePage inherits PageSurface {
                     Label { text: !UiData.running ? "内核尚未运行" : UiData.proxy-mode == 0 ? "系统代理已连接" : UiData.proxy-mode == 1 ? "TUN 模式已连接" : "代理已关闭"; font-size: 18px * Theme.text-scale; }
                     HorizontalLayout { spacing: 6px; cross-axis-alignment: center;
                         Caption { text: "当前节点 ·"; horizontal-stretch: 0; }
-                        if UiData.node-flag.width > 0: Image { source: UiData.node-flag; width: 20px * Theme.text-scale; height: 20px * Theme.text-scale; horizontal-stretch: 0; image-fit: contain; }
                         Caption { text: UiData.node; }
                     }
                     Paragraph { text: "此处仅显示当前用户状态；其他用户或程序的 TUN 可能影响本机流量。"; color: Theme.secondary; font-size: Theme.detail-size; }

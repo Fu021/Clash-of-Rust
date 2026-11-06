@@ -60,7 +60,7 @@ export component Preview inherits AppWindow {
         UiData.fake-ip-editor = root.preview-fake-ip-editor;
         UiData.version = "0.6.7-fix.2.android-ime-flags";
         UiData.ready = true; UiData.running = true;
-        UiData.profile = "我的订阅"; UiData.node = "德国 01 · IPv6"; UiData.node-flag = @image-url("mobile/preview-data/de.svg");
+        UiData.profile = "我的订阅"; UiData.node = "🇩🇪 德国 01 · IPv6";
         UiData.download-rate = "1.24 MiB/s"; UiData.upload-rate = "28.6 KiB/s";
         UiData.connection-count = "24"; UiData.download-total = "386 MiB"; UiData.upload-total = "21.7 MiB";
         UiData.protection-status = "正在开启保护，切换 TUN、规则与 DNS…";
@@ -75,13 +75,13 @@ export component Preview inherits AppWindow {
             {label: "开始时间", value: "2026-10-16T10:31:20.123+08:00"},
             {label: "连接 ID", value: "9f1a0f02-d63e-4cfe-832e-4ed947af10de"}];
         UiData.page-status = "3 条 · 1–3";
-        UiData.groups = [{id: "Proxy", title: "Proxy", detail: "Selector · 10 个节点", current: "德国 01 · IPv6", current-flag: @image-url("mobile/preview-data/de.svg"), expanded: true, testing: false, page: "10 个节点 · 1–10", previous: false, next: false,
+        UiData.groups = [{id: "Proxy", title: "Proxy", detail: "Selector · 10 个节点", current: "🇩🇪 德国 01 · IPv6", expanded: true, testing: false, page: "10 个节点 · 1–10", previous: false, next: false,
             nodes: [
-                {left: {group: "Proxy", name: "德国 01 · IPv6", label: "德国 01 · IPv6", flag: @image-url("mobile/preview-data/de.svg"), kind: "AnyTLS", delay: "45 ms", tone: 1, selected: true, valid: true}, right: {group: "Proxy", name: "香港 02", label: "香港 02", flag: @image-url("mobile/preview-data/cn.svg"), kind: "VLESS", delay: "28 ms", tone: 1, selected: false, valid: true}},
-                {left: {group: "Proxy", name: "日本 01", label: "日本 01", flag: @image-url("mobile/preview-data/jp.svg"), kind: "Shadowsocks", delay: "64 ms", tone: 1, selected: false, valid: true}, right: {group: "Proxy", name: "新加坡 01", label: "新加坡 01", flag: @image-url("mobile/preview-data/sg.svg"), kind: "Trojan", delay: "376 ms", tone: 2, selected: false, valid: true}},
-                {left: {group: "Proxy", name: "美国 01", label: "美国 01", flag: @image-url("mobile/preview-data/us.svg"), kind: "VLESS", delay: "868 ms", tone: 3, selected: false, valid: true}, right: {group: "Proxy", name: "DIRECT", kind: "Direct", delay: "未测速", tone: 4, selected: false, valid: true}},
-                {left: {group: "Proxy", name: "日本 02 · 备用入口 · 用于确认完整名称不会丢失", label: "日本 02 · 备用入口 · 用于确认完整名称不会丢失", flag: @image-url("mobile/preview-data/jp.svg"), kind: "Trojan", delay: "超时", tone: 3, valid: true}, right: {group: "Proxy", name: "美国 02", label: "美国 02", flag: @image-url("mobile/preview-data/us.svg"), kind: "VLESS", delay: "128 ms", tone: 1, valid: true}},
-                {left: {group: "Proxy", name: "新加坡 02", label: "新加坡 02", flag: @image-url("mobile/preview-data/sg.svg"), kind: "Shadowsocks", delay: "78 ms", tone: 1, valid: true}, right: {group: "Proxy", name: "德国 02", label: "德国 02", flag: @image-url("mobile/preview-data/de.svg"), kind: "VLESS", delay: "176 ms", tone: 2, valid: true}}
+                {left: {group: "Proxy", name: "🇩🇪 德国 01 · IPv6", kind: "AnyTLS", delay: "45 ms", tone: 1, selected: true, valid: true}, right: {group: "Proxy", name: "香港 02", kind: "VLESS", delay: "28 ms", tone: 1, selected: false, valid: true}},
+                {left: {group: "Proxy", name: "🚀 🇯🇵 日本 01", kind: "Shadowsocks", delay: "64 ms", tone: 1, selected: false, valid: true}, right: {group: "Proxy", name: "新加坡 01", kind: "Trojan", delay: "376 ms", tone: 2, selected: false, valid: true}},
+                {left: {group: "Proxy", name: "🇺🇸 美国 01 ❤️", kind: "VLESS", delay: "868 ms", tone: 3, selected: false, valid: true}, right: {group: "Proxy", name: "DIRECT", kind: "Direct", delay: "未测速", tone: 4, selected: false, valid: true}},
+                {left: {group: "Proxy", name: "日本 02 · 备用入口 · 用于确认完整名称不会丢失", kind: "Trojan", delay: "超时", tone: 3, valid: true}, right: {group: "Proxy", name: "US-美国 02", kind: "VLESS", delay: "128 ms", tone: 1, valid: true}},
+                {left: {group: "Proxy", name: "👩🏽‍💻 新加坡 02", kind: "Shadowsocks", delay: "78 ms", tone: 1, valid: true}, right: {group: "Proxy", name: "😀 德国 02", kind: "VLESS", delay: "176 ms", tone: 2, valid: true}}
             ]}];
         UiData.profiles = [
             {id: "main", name: "我的订阅", source: "https://example.com/subscription", detail: "已用 2.4/100 GiB · 到期 2026-12-31 · 更新 10-15 10:30", active: true, local: false},

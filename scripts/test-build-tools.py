@@ -1673,6 +1673,54 @@ runpy.run_path(str(script), run_name='__main__')
                     android_build.start_test_log(report,'current-test')
             process.terminate.assert_called_once()
 
+    def test_android_input_method_preparation_never_mutates_a_physical_or_other_api_device(self):
+        for values in (('0','1','31'),('1','0','31'),('1','1','36')):
+            with self.subTest(properties=values), tempfile.TemporaryDirectory() as temporary:
+                with patch.object(android_build.subprocess,'check_output',side_effect=values), \
+                        patch.object(android_build.subprocess,'run') as invoke:
+                    if values[2]=='31':
+                        with self.assertRaisesRegex(RuntimeError,'debuggable API 31 emulator'):
+                            android_build.prepare_emulator_input_method(Path(temporary))
+                    else:
+                        android_build.prepare_emulator_input_method(Path(temporary))
+                invoke.assert_not_called()
+
+    def test_android_input_method_preparation_keeps_a_different_keyboard_unchanged(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            with patch.object(android_build.subprocess,'check_output',
+                              side_effect=['1','1','31','com.example.ime/.Keyboard']), \
+                    patch.object(android_build.subprocess,'run') as invoke:
+                android_build.prepare_emulator_input_method(Path(temporary))
+            invoke.assert_not_called()
+
+    def test_android_input_method_preparation_preserves_identity_and_rejects_incomplete_setup(self):
+        service='com.google.android.inputmethod.latin/com.android.inputmethod.latin.LatinIME'
+        for reset_ok in (True,False):
+            with self.subTest(reset_ok=reset_ok), tempfile.TemporaryDirectory() as temporary:
+                report=Path(temporary)
+                def invoke(command, **kwargs):
+                    output=(b'approved Gboard version' if command[1:3]==['shell','dumpsys']
+                            else 'Success\n' if reset_ok else 'Failed\n')
+                    return subprocess.CompletedProcess(command,0,output,
+                                                       b'' if isinstance(output,bytes) else '')
+                with patch.object(android_build.subprocess,'check_output',
+                                  side_effect=['1','1','31',service,service]), \
+                        patch.object(android_build.subprocess,'run',side_effect=invoke) as execute:
+                    if reset_ok:
+                        android_build.prepare_emulator_input_method(report)
+                    else:
+                        with self.assertRaisesRegex(RuntimeError,'Could not prepare'):
+                            android_build.prepare_emulator_input_method(report)
+                record=json.loads((report/'input-method-setup.json').read_text())
+                self.assertEqual(record['complete'],reset_ok)
+                self.assertTrue(record['before_application_tests'])
+                self.assertEqual(record['input_method'],service)
+                self.assertEqual((report/'input-method-package-before-setup.txt').read_bytes(),
+                                 b'approved Gboard version')
+                mutations=[call.args[0][1:] for call in execute.call_args_list][1:]
+                self.assertEqual(mutations[0],['shell','pm','clear','com.google.android.inputmethod.latin'])
+                self.assertEqual(len(mutations),3 if reset_ok else 1)
+
     def test_android_native_ime_control_never_resets_a_physical_or_other_api_device(self):
         for values in (('0','1','31'),('1','0','31'),('1','1','36')):
             with self.subTest(properties=values), tempfile.TemporaryDirectory() as temporary:

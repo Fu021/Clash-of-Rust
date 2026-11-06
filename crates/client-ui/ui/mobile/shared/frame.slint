@@ -24,7 +24,6 @@ component HeaderStatus inherits VerticalLayout {
     if !root.compact: HorizontalLayout { alignment: end; spacing: 4px;
         MSmall { text: MobileData.profile; horizontal-alignment: right; }
         if MobileData.node != "": MSmall { text: "|"; }
-        if MobileData.node-flag.width > 0: Image { source: MobileData.node-flag; width: 18px; height: 18px; image-fit: contain; }
         if MobileData.node != "": MSmall { text: MobileData.node; horizontal-alignment: right; }
     }
 }
@@ -51,7 +50,7 @@ export component MobileFrame inherits Rectangle {
     property <length> usable-height: max(0px, root.height - MobileView.safe-top - MobileView.safe-bottom - MobileView.keyboard-inset);
     property <bool> short: root.height - MobileView.safe-top - MobileView.safe-bottom < 480px;
     property <bool> narrow: root.usable-width < 640px && !root.short;
-    property <bool> stacked-header: root.narrow && Theme.text-scale > 1.25;
+    property <bool> stacked-header: root.narrow && (root.usable-width < 360px || Theme.text-scale >= 1.25 || root.has-back);
     property <bool> expanded: root.usable-width >= 1024px && !root.short;
     property <bool> bottom: root.narrow && MobileView.keyboard-inset == 0px;
     property <length> nav-width: root.narrow ? 0px : root.expanded ? root.sidebar-width : 76px;

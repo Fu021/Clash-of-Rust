@@ -10,9 +10,29 @@ use std::{cell::Cell, rc::Rc, time::Duration};
 
 slint::slint! {
     import { ListView, ListHeader, MField, MDragHandle } from "../ui/mobile/shared/controls.slint";
+    import { Field } from "../ui/components/controls.slint";
     import { RuleDragHandle } from "../ui/components/rule-drag.slint";
     import { ListReorderGesture, ListReorderPreview } from "../ui/components/list-reorder.slint";
     import { PageSurface } from "../ui/components/motion.slint";
+
+    export component InputFieldsProbe inherits Window {
+        preferred-width: 320px; preferred-height: 160px;
+        in-out property <string> mobile-text <=> mobile.text;
+        in-out property <string> desktop-text <=> desktop.text;
+        out property <bool> mobile-placeholder: mobile.placeholder-visible;
+        out property <bool> desktop-placeholder: desktop.placeholder-visible;
+        public function focus-field(use-mobile: bool) {
+            if use-mobile { mobile.focus(); } else { desktop.focus(); }
+        }
+        mobile := MField {
+            x: 0px; y: 0px; width: parent.width;
+            placeholder: "Mobile placeholder";
+        }
+        desktop := Field {
+            x: 0px; y: 80px; width: parent.width;
+            placeholder: "Desktop placeholder";
+        }
+    }
 
     export component LockedPageProbe inherits Window {
         preferred-width: 300px; preferred-height: 240px;
@@ -683,4 +703,69 @@ fn mobile_list_stacks_rows_and_keeps_sparse_content_at_the_top() {
     click();
     assert_eq!(locked.get_clicks(), 2);
     locked.hide().unwrap();
+
+    let fields = InputFieldsProbe::new().unwrap();
+    adapter.set_size(slint::PhysicalSize::new(320, 160));
+    fields.show().unwrap();
+    for mobile in [true, false] {
+        fields.invoke_focus_field(mobile);
+        let placeholder = || {
+            if mobile {
+                fields.get_mobile_placeholder()
+            } else {
+                fields.get_desktop_placeholder()
+            }
+        };
+        let text = || {
+            if mobile {
+                fields.get_mobile_text()
+            } else {
+                fields.get_desktop_text()
+            }
+        };
+        let composition = |preedit: &str, committed: &str, commit: bool| {
+            let key_event = i_slint_core::input::KeyEvent {
+                text: committed.into(),
+                ..Default::default()
+            };
+            fields.window().dispatch_event(WindowEvent::internal(
+                i_slint_core::input::InternalKeyEvent {
+                    event_type: if commit {
+                        i_slint_core::input::KeyEventType::CommitComposition
+                    } else {
+                        i_slint_core::input::KeyEventType::UpdateComposition
+                    },
+                    preedit_text: preedit.into(),
+                    key_event,
+                    ..Default::default()
+                },
+            ));
+            frame(&adapter, 320, 160);
+        };
+        assert!(placeholder());
+        composition("pin", "", false);
+        assert_eq!(text(), "");
+        assert!(
+            !placeholder(),
+            "uncommitted IME text must hide the placeholder on both hosts"
+        );
+        composition("", "", false);
+        assert!(placeholder(), "cancelled composition must restore the hint");
+        composition("拼", "", false);
+        assert!(!placeholder());
+        composition("", "拼音 🙂", true);
+        assert_eq!(text(), "拼音 🙂");
+        assert!(!placeholder());
+        if mobile {
+            fields.set_mobile_text("".into());
+        } else {
+            fields.set_desktop_text("".into());
+        }
+        frame(&adapter, 320, 160);
+        assert!(
+            placeholder(),
+            "clearing committed text must restore the hint"
+        );
+    }
+    fields.hide().unwrap();
 }

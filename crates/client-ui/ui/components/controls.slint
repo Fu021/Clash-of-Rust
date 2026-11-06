@@ -253,6 +253,7 @@ export component Field inherits Rectangle {
     in property <bool> enabled: true;
     in property <string> placeholder;
     in-out property <string> text;
+    out property <bool> placeholder-visible: input.text == "" && input.preedit-text == "";
     in property <bool> secret: false;
     in property <string> focus-id;
     in property <int> focus-revision: UiData.focus-revision;
@@ -287,7 +288,7 @@ export component Field inherits Rectangle {
         accepted => { root.accepted(); }
     }
     placeholder-label := Caption {
-        visible: root.text == "";
+        visible: root.placeholder-visible;
         x: 12px;
         width: parent.width - 24px;
         height: parent.height;

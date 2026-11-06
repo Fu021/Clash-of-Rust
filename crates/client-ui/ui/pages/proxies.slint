@@ -15,8 +15,7 @@ component NodeCard inherits ContentPanel {
     border-color: node.selected ? Theme.accent : Theme.line;
     background: node.selected ? Theme.accent-wash : Theme.surface;
     HorizontalLayout { cross-axis-alignment: center; spacing: Theme.content-gap;
-        if root.node.flag.width > 0: Image { source: root.node.flag; width: 24px * Theme.text-scale; height: 24px * Theme.text-scale; horizontal-stretch: 0; image-fit: contain; }
-        Label { text: root.node.label != "" ? root.node.label : (root.node.flag.width > 0 ? "" : root.node.name); color: root.node.selected ? Theme.accent : Theme.ink; }
+        Label { text: root.node.name; color: root.node.selected ? Theme.accent : Theme.ink; }
         Caption { text: root.node.delay; color: root.node.tone == 1 ? Theme.success : root.node.tone == 2 ? Theme.warning : root.node.tone == 3 ? Theme.danger : Theme.muted; horizontal-stretch: 0; }
     }
     HorizontalLayout { cross-axis-alignment: center; spacing: Theme.content-gap;
@@ -26,7 +25,7 @@ component NodeCard inherits ContentPanel {
         ActionButton { text: "测速"; enabled: UiData.running && !UiData.working; clicked => { UiActions.dispatch(Intent.node-delay, root.node.name, ""); } }
     }
     if root.detailed: VerticalLayout { spacing: Theme.content-gap;
-        Caption { text: "完整名称：" + (root.node.label != "" ? root.node.label : root.node.name); wrap: word-wrap; }
+        Caption { text: "完整名称：" + root.node.name; wrap: word-wrap; }
         Caption { text: "协议：" + root.node.kind; wrap: word-wrap; }
     }
 }
@@ -63,7 +62,6 @@ export component ProxiesPage inherits PageSurface {
                         horizontal-stretch: 1; height: max(Theme.control-height, heading.preferred-height);
                         heading := HorizontalLayout { spacing: Theme.content-gap; cross-axis-alignment: center;
                             VerticalLayout { spacing: 4px; Heading { text: group.title; } Caption { text: group.detail; } }
-                            if group.current-flag.width > 0: Image { source: group.current-flag; width: 20px * Theme.text-scale; height: 20px * Theme.text-scale; horizontal-stretch: 0; image-fit: contain; }
                             Badge { text: group.current; width-limit: root.width * 0.28; }
                             Chevron { expanded: group-card.expanded; }
                         }

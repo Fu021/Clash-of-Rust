@@ -131,7 +131,6 @@ export component AppWindow inherits Window {
                         HorizontalLayout { alignment: end; spacing: 4px;
                             Caption { text: UiData.profile; horizontal-alignment: right; }
                             if UiData.node != "": Caption { text: "|"; }
-                            if UiData.node-flag.width > 0: Image { source: UiData.node-flag; width: 20px; height: 20px; image-fit: contain; }
                             if UiData.node != "": Caption { text: UiData.node; horizontal-alignment: right; }
                         }
                     }
