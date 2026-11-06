@@ -724,10 +724,8 @@ fn mobile_list_stacks_rows_and_keeps_sparse_content_at_the_top() {
             }
         };
         let composition = |preedit: &str, committed: &str, commit: bool| {
-            let key_event = i_slint_core::input::KeyEvent {
-                text: committed.into(),
-                ..Default::default()
-            };
+            let mut key_event = i_slint_core::input::KeyEvent::default();
+            key_event.text = committed.into();
             fields.window().dispatch_event(WindowEvent::internal(
                 i_slint_core::input::InternalKeyEvent {
                     event_type: if commit {
