@@ -248,6 +248,17 @@ public class ProxyTunTest {
             SystemClock.sleep(750);
             return false;
         });
+        java.util.concurrent.atomic.AtomicReference<String> previous=new java.util.concurrent.atomic.AtomicReference<>();
+        java.util.concurrent.atomic.AtomicLong stableSince=new java.util.concurrent.atomic.AtomicLong();
+        await("Subscription "+field+" layout did not settle before touch",()-> {
+            JSONObject ui=MainActivity.diagnostics();
+            String geometry=ui.getJSONArray("profile_"+field+"_target").toString()
+                +ui.getJSONArray("profile_editor_viewport").toString()
+                +ui.getDouble("keyboard_inset");
+            long now=SystemClock.uptimeMillis();
+            if (!geometry.equals(previous.getAndSet(geometry))) stableSince.set(now);
+            return now-stableSince.get()>=250;
+        });
         tapTarget("profile_"+field+"_target");
     }
     private static android.view.View inputEditor(android.view.View view) {
@@ -317,7 +328,24 @@ public class ProxyTunTest {
         assertTrue("Subscription "+field+" is covered by the keyboard",
             target.getDouble(1)+target.getDouble(3)<=ui.getDouble("height")-occluded+2);
     }
-    private static void commitImeText(String text) {
+    private static void commitImeText(String field,String text) throws Exception {
+        await("Android input connection did not synchronize the focused "+field,()-> {
+            int expected=MainActivity.diagnostics().getInt("profile_"+field+"_length");
+            java.util.concurrent.atomic.AtomicBoolean synchronizedText=new java.util.concurrent.atomic.AtomicBoolean();
+            MainActivity activity=resumedActivity();
+            if (activity==null) return false;
+            InstrumentationRegistry.getInstrumentation().runOnMainSync(()-> {
+                android.view.View editor=inputEditor(activity.getWindow().getDecorView());
+                if (editor==null || !editor.hasFocus()) return;
+                android.view.inputmethod.InputConnection connection=editor.onCreateInputConnection(
+                    new android.view.inputmethod.EditorInfo());
+                if (!(connection instanceof android.view.inputmethod.BaseInputConnection)) return;
+                android.text.Editable editable=((android.view.inputmethod.BaseInputConnection)connection).getEditable();
+                synchronizedText.set(editable!=null
+                    && Character.codePointCount(editable,0,editable.length())==expected);
+            });
+            return synchronizedText.get();
+        });
         MainActivity activity=resumedActivity();
         assertNotNull("No resumed input Activity",activity);
         InstrumentationRegistry.getInstrumentation().runOnMainSync(()-> {
@@ -334,6 +362,7 @@ public class ProxyTunTest {
             assertNotNull("Input connection has no editable text",editable);
             connection.beginBatchEdit();
             try {
+                assertTrue("Input connection did not finish composition",connection.finishComposingText());
                 assertTrue(connection.setSelection(0,editable.length()));
                 assertTrue("Input connection rejected committed text",connection.commitText(text,1));
             } finally {connection.endBatchEdit();}
@@ -497,19 +526,17 @@ public class ProxyTunTest {
             int iteration=0;
             for (String field:new String[]{"name","source","name","source","name"}) {
                 tapVisibleProfileField(field);
-                await("Subscription "+field+" did not gain Slint focus",()-> {
-                    if (MainActivity.diagnostics().optBoolean("profile_"+field+"_focused")) return true;
-                    tapTarget("profile_"+field+"_target");
-                    SystemClock.sleep(250);
-                    return MainActivity.diagnostics().optBoolean("profile_"+field+"_focused");
-                });
+                await("Subscription "+field+" did not gain Slint focus",
+                    ()->MainActivity.diagnostics().optBoolean("profile_"+field+"_focused"));
                 await("Focused subscription "+field+" did not show the actual Android IME",ProxyTunTest::imeVisible);
                 await("Slint did not receive the keyboard inset",()->MainActivity.diagnostics().optDouble("keyboard_inset")>0);
                 String text=field.equals("name")?"ImeProbe":"https://example.invalid/ime";
-                commitImeText(text);
+                commitImeText(field,text);
                 await("IME text did not reach the subscription "+field,()->MainActivity.diagnostics()
                     .optInt("profile_"+field+"_length",-1)==text.length());
                 SystemClock.sleep(1500);
+                assertEquals("Committed text changed after the input connection settled",
+                    text.length(),MainActivity.diagnostics().getInt("profile_"+field+"_length"));
                 assertTrue("Android IME disappeared after switching to "+field,imeVisible());
                 assertTrue("Slint lost the keyboard inset after switching to "+field,
                     MainActivity.diagnostics().optDouble("keyboard_inset")>0);
