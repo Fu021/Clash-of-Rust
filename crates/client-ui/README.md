@@ -19,7 +19,7 @@
 
 正式应用使用 winit 与软件渲染器。系统代理、TUN、托盘、Dock、更新与文件选择由桌面平台负责；共享业务不依赖 Slint，Android 使用原生宿主，iOS 保留占位。
 
-节点名称在列表、策略组、首页、详情和操作中均保持订阅原文，包括前后空格、国家代码、旗帜及普通 emoji；不删除前缀、不推断地区，也不自动补旗帜。桌面和 Android 使用随包的 [Noto Color Emoji](../../resources/fonts/SOURCE.md#noto-color-emoji) 及共享字体回退注册。桌面保留软件渲染器，局部回移 Slint 已合入的[彩色字形修复](../../vendor/slint-renderer-software/PATCHES.md)，Android 保留现有 Skia 路径。IP 检测与 Claude 保护/检测继续使用离线旗帜图集，港澳台仍映射中国国旗；这套报告映射不参与节点名称显示。
+节点名称、策略组名称和当前策略在列表、首页、详情和操作中均保持订阅原文，包括前后空格、国家代码、旗帜及普通 emoji；不删除前缀、不推断地区，也不自动补旗帜。桌面和 Android 使用随包的 [Noto Color Emoji](../../resources/fonts/SOURCE.md#noto-color-emoji) 及共享字体回退注册。桌面保留软件渲染器，局部回移 Slint 已合入的[彩色字形修复](../../vendor/slint-renderer-software/PATCHES.md)，Android 保留现有 Skia 路径。IP 检测与 Claude 保护/检测继续使用离线旗帜图集，港澳台仍映射中国国旗；这套报告映射不参与节点或策略组名称显示。
 
 输入框在已提交文字和输入法组词文字均为空时才显示占位提示；组词尚未提交时也须隐藏提示，桌面与移动端共用这个条件。移动行标题可换行，右侧值限制宽度，完整内容仍在详情中展示。窄于 360px、字号至少 125% 或显示返回入口的手机页头将状态另起一行，避免页名被运行状态挤压。
 

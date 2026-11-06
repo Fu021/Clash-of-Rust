@@ -1165,7 +1165,8 @@ fn ip_report_uses_the_china_flag_for_hong_kong_macao_and_taiwan() {
 fn node_names_reach_all_views_without_rewriting_prefixes_or_emoji() {
     ui_testing::initialize(950, 700);
     let mut app = fixture(Page::Proxies);
-    app.expanded.insert("Proxy".into());
+    let group_name = "🚀 策略组 ❤️";
+    app.expanded.insert(group_name.into());
     let nodes = [
         "🇺🇸 美国 01",
         "日本 01",
@@ -1181,7 +1182,7 @@ fn node_names_reach_all_views_without_rewriting_prefixes_or_emoji() {
         "🇩🇪",
     ];
     app.snapshot.proxies = serde_json::from_value(serde_json::json!({"proxies": {
-        "Proxy": {"type":"Selector", "now":nodes[0], "all":nodes}
+        "🚀 策略组 ❤️": {"type":"Selector", "now":nodes[0], "all":nodes}
     }}))
     .unwrap();
     let window = AppWindow::new().unwrap();
@@ -1190,10 +1191,17 @@ fn node_names_reach_all_views_without_rewriting_prefixes_or_emoji() {
     models.attach(&data);
     for name in nodes {
         app.snapshot.active_node = Some(name.into());
-        app.snapshot.proxies.proxies.get_mut("Proxy").unwrap().now = name.into();
+        app.snapshot
+            .proxies
+            .proxies
+            .get_mut(group_name)
+            .unwrap()
+            .now = name.into();
         app.present_slint(&data, &mut models);
         assert_eq!(data.get_node(), name);
         let group = data.get_groups().row_data(0).unwrap();
+        assert_eq!(group.id, group_name);
+        assert_eq!(group.title, group_name);
         assert_eq!(group.current, name);
         let node = group
             .nodes
@@ -1201,6 +1209,7 @@ fn node_names_reach_all_views_without_rewriting_prefixes_or_emoji() {
             .flat_map(|pair| [pair.left, pair.right])
             .find(|node| node.name == name)
             .unwrap();
+        assert_eq!(node.group, group_name);
         assert_eq!(node.name, name);
         assert!(node.selected, "{name}");
         assert_eq!(app.snapshot.active_node.as_deref(), Some(name));
