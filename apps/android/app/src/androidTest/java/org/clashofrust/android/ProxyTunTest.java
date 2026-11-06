@@ -201,6 +201,7 @@ public class ProxyTunTest {
     }
     private static boolean tryTapTarget(String name) throws Exception {
         JSONObject ui=MainActivity.diagnostics();
+        assertTrue("Refusing to touch a stale Slint snapshot",ui.optBoolean("live"));
         JSONArray bounds=ui.getJSONArray(name);
         assertEquals("Expected the real Slint control bounds",4,bounds.length());
         assertTrue("Control has no width",bounds.getDouble(2)>0);
@@ -210,6 +211,16 @@ public class ProxyTunTest {
             (float)(bounds.getDouble(1)+bounds.getDouble(3)/2)*scale);
     }
     private static void tapTarget(String name) throws Exception {
+        java.util.concurrent.atomic.AtomicReference<String> previous=new java.util.concurrent.atomic.AtomicReference<>();
+        java.util.concurrent.atomic.AtomicLong stableSince=new java.util.concurrent.atomic.AtomicLong();
+        await("Control "+name+" layout did not settle before touch",()-> {
+            JSONObject ui=MainActivity.diagnostics();
+            if (!ui.optBoolean("live")) return false;
+            String geometry=ui.getJSONArray(name).toString()+ui.getDouble("keyboard_inset");
+            long now=SystemClock.uptimeMillis();
+            if (!geometry.equals(previous.getAndSet(geometry))) stableSince.set(now);
+            return now-stableSince.get()>=250;
+        });
         assertTrue("Android rejected touch input",tryTapTarget(name));
     }
     private static void dismissErrorDialogIfPresent() throws Exception {
@@ -228,6 +239,7 @@ public class ProxyTunTest {
         dismissErrorDialogIfPresent();
         await("Could not scroll the subscription "+field+" into its viewport",()-> {
             JSONObject ui=MainActivity.diagnostics();
+            if (!ui.optBoolean("live")) return false;
             JSONArray target=ui.getJSONArray("profile_"+field+"_target");
             JSONArray viewport=ui.getJSONArray("profile_editor_viewport");
             double center=target.getDouble(1)+target.getDouble(3)/2;
@@ -247,17 +259,6 @@ public class ProxyTunTest {
             pointer(MotionEvent.ACTION_UP,horizontal,end,down,SystemClock.uptimeMillis());
             SystemClock.sleep(750);
             return false;
-        });
-        java.util.concurrent.atomic.AtomicReference<String> previous=new java.util.concurrent.atomic.AtomicReference<>();
-        java.util.concurrent.atomic.AtomicLong stableSince=new java.util.concurrent.atomic.AtomicLong();
-        await("Subscription "+field+" layout did not settle before touch",()-> {
-            JSONObject ui=MainActivity.diagnostics();
-            String geometry=ui.getJSONArray("profile_"+field+"_target").toString()
-                +ui.getJSONArray("profile_editor_viewport").toString()
-                +ui.getDouble("keyboard_inset");
-            long now=SystemClock.uptimeMillis();
-            if (!geometry.equals(previous.getAndSet(geometry))) stableSince.set(now);
-            return now-stableSince.get()>=250;
         });
         tapTarget("profile_"+field+"_target");
     }
@@ -461,6 +462,17 @@ public class ProxyTunTest {
         }
     }
     private static void verifyRestoredImeAndHide(String orientation) throws Exception {
+        java.util.concurrent.atomic.AtomicReference<String> previous=new java.util.concurrent.atomic.AtomicReference<>();
+        java.util.concurrent.atomic.AtomicLong stableSince=new java.util.concurrent.atomic.AtomicLong();
+        await("Restored "+orientation+" keyboard state did not settle",()-> {
+            JSONObject ui=MainActivity.diagnostics();
+            if (!ui.optBoolean("live")) return false;
+            String state=imeVisible()+"/"+ui.getDouble("keyboard_inset")+"/"
+                +ui.getBoolean("profile_name_focused")+"/"+ui.getBoolean("profile_source_focused");
+            long now=SystemClock.uptimeMillis();
+            if (!state.equals(previous.getAndSet(state))) stableSince.set(now);
+            return now-stableSince.get()>=500;
+        });
         if (imeVisible()) {
             await("Restored "+orientation+" Slint keyboard inset did not synchronize",
                 ()->MainActivity.diagnostics().optDouble("keyboard_inset")>0);
@@ -477,6 +489,9 @@ public class ProxyTunTest {
         assertEquals("Navigation bars must not become a keyboard inset after rotation",
             0,MainActivity.diagnostics().getDouble("keyboard_inset"),0);
         captureIme(orientation+"-hidden");
+        assertFalse("The keyboard reopened while capturing "+orientation,imeVisible());
+        assertEquals("Slint keyboard inset changed after hiding "+orientation,
+            0,MainActivity.diagnostics().getDouble("keyboard_inset"),0);
     }
     @Test public void subscriptionFieldsShowImeAcceptTextAndReopenAfterBack() throws Exception {
         Context context=InstrumentationRegistry.getInstrumentation().getTargetContext();

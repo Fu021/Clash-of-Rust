@@ -48,6 +48,7 @@ impl Drop for UiLifetime {
 }
 thread_local! {
     static UI_THREAD_LIFETIME: UiLifetime = const { UiLifetime };
+    static DIAGNOSTIC_WINDOW: std::cell::RefCell<Option<slint::Weak<AndroidWindow>>> = const { std::cell::RefCell::new(None) };
 }
 
 fn await_previous_ui() {
@@ -147,6 +148,23 @@ pub extern "system" fn Java_org_clashofrust_android_MainActivity_nativeDiagnosti
 ) -> jni::sys::jstring {
     unowned_env
         .with_env(|env| {
+            let (sender, receive) = std::sync::mpsc::sync_channel(1);
+            let queued = slint::invoke_from_event_loop(move || {
+                let snapshot = DIAGNOSTIC_WINDOW.with(|window| {
+                    window
+                        .borrow()
+                        .as_ref()
+                        .and_then(slint::Weak::upgrade)
+                        .map(|ui| presentation_snapshot(&ui))
+                });
+                let _ = sender.send(snapshot);
+            })
+            .is_ok();
+            let live = if queued {
+                receive.recv_timeout(Duration::from_secs(1)).ok().flatten()
+            } else {
+                None
+            };
             let (snapshot, generation) = PRESENTATION
                 .lock()
                 .map(|s| {
@@ -156,7 +174,11 @@ pub extern "system" fn Java_org_clashofrust_android_MainActivity_nativeDiagnosti
                     )
                 })
                 .unwrap_or_default();
-            let mut snapshot: Value = serde_json::from_str(&snapshot).unwrap_or_else(|_| json!({}));
+            let fresh = live.is_some();
+            let mut snapshot = live.unwrap_or_else(|| {
+                json!({"cached":serde_json::from_str::<Value>(&snapshot).unwrap_or_else(|_| json!({}))})
+            });
+            snapshot["live"] = json!(fresh);
             snapshot["ui_generation"] = json!(generation);
             if let Ok(first) = FIRST_APPEARANCE.lock()
                 && let Some((dark, accent)) = *first
@@ -291,6 +313,7 @@ fn run(app: slint::android::AndroidApp) -> Result<()> {
     slint::android::init(app)?;
     fonts::register_emoji()?;
     let window = AndroidWindow::new()?;
+    DIAGNOSTIC_WINDOW.with(|current| *current.borrow_mut() = Some(window.as_weak()));
     // No engine/Geo/network work precedes the first correctly themed frame.
     let appearance = native.request(json!({"op":"appearance"}))?;
     let theme = window.global::<Theme>();
@@ -3156,18 +3179,24 @@ fn apply(ui: &AndroidWindow, p: Projection) {
         typography.set_system_fonts(false);
     }
     theme.set_accent_index(accent_index(p.settings.accent_color));
-    let dark = theme.get_dark();
     // Read back the actual Slint globals; diagnostics must reveal stale presentation too.
     if let Ok(mut snapshot) = PRESENTATION.lock() {
-        let view = ui.global::<MobileView>();
-        let scale = ui.window().scale_factor();
-        let size = ui.window().size();
-        *snapshot = json!({"core_running":data.get_core_running(),"vpn":data.get_vpn_connected(),
+        *snapshot = presentation_snapshot(ui).to_string();
+    }
+}
+
+fn presentation_snapshot(ui: &AndroidWindow) -> Value {
+    let data = ui.global::<MobileData>();
+    let view = ui.global::<MobileView>();
+    let theme = ui.global::<Theme>();
+    let scale = ui.window().scale_factor();
+    let size = ui.window().size();
+    json!({"core_running":data.get_core_running(),"vpn":data.get_vpn_connected(),
             "page":ui.get_current_page(),"detail":ui.get_current_detail(),
             "groups":data.get_groups().row_count(),"profiles":data.get_profiles().row_count(),
             "vpn_pending":data.get_vpn_pending(),
-            "logs":data.get_logs().row_count(),"dark":dark,"accent":theme.get_accent_index(),"text_scale":theme.get_text_scale(),
-            "body_size":typography.invoke_font_size(16),
+            "logs":data.get_logs().row_count(),"dark":theme.get_dark(),"accent":theme.get_accent_index(),"text_scale":theme.get_text_scale(),
+            "body_size":ui.global::<MobileTypography>().invoke_font_size(16),
             "width":size.width as f32/scale,"height":size.height as f32/scale,"scale":scale,
             "safe_top":view.get_safe_top(),"safe_bottom":view.get_safe_bottom(),
             "keyboard_inset":view.get_keyboard_inset(),
@@ -3184,6 +3213,4 @@ fn apply(ui: &AndroidWindow, p: Projection) {
             "profile_source_length":view.get_profile_source().chars().count(),
             "settings_scroll_y":view.get_settings_scroll_y(),"settings_content_height":view.get_settings_content_height(),
             "settings_viewport_height":view.get_settings_viewport_height()})
-        .to_string();
-    }
 }
