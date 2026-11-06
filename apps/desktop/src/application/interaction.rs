@@ -191,19 +191,34 @@ impl App {
             Message::TraySpeed(enabled) => self.dispatch(Action::TraySpeed(*enabled)),
             Message::Copy(value) => desktop_runtime::clipboard::write(value.clone()),
             Message::ExportDiagnostics(context) => self.export_diagnostics(context),
+            Message::ReportIssue(context) => self.prepare_diagnostics(context, true),
             Message::DiagnosticsExported(result) => {
                 self.diagnosing = false;
-                if self.notice_visible && self.notice_critical {
-                    let outcome = match result {
-                        Ok(path) => format!("诊断已导出：{path}"),
-                        Err(error) => format!("诊断导出失败：{error}"),
-                    };
-                    self.show_critical(format!("{}\n\n{outcome}", self.notice));
-                    return Some(none());
-                }
                 match result {
-                    Ok(path) => self.show_notice(format!("诊断已导出：{path}"), false),
-                    Err(error) => self.show_notice(format!("诊断导出失败：{error}"), true),
+                    Ok((path, url)) => {
+                        self.show_notice_followup(format!("诊断已导出：{path}"), false);
+                        if let Some(url) = url {
+                            let url = url.clone();
+                            return Some(Task::perform(
+                                async move {
+                                    tokio::task::spawn_blocking(move || platform::open_url(&url))
+                                        .await
+                                        .map_err(|error| error.to_string())?
+                                        .map_err(|error| error.to_string())
+                                },
+                                Message::IssueOpened,
+                            ));
+                        }
+                    }
+                    Err(error) => {
+                        self.show_notice_followup(format!("诊断采集或导出失败：{error}"), true)
+                    }
+                }
+                none()
+            }
+            Message::IssueOpened(result) => {
+                if let Err(error) = result {
+                    self.show_notice_followup(format!("无法打开问题反馈页面：{error}"), true);
                 }
                 none()
             }

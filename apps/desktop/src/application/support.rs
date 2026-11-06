@@ -3,6 +3,10 @@ use serde_json::json;
 
 impl App {
     pub(super) fn export_diagnostics(&mut self, context: &str) -> Task<Message> {
+        self.prepare_diagnostics(context, false)
+    }
+
+    pub(super) fn prepare_diagnostics(&mut self, context: &str, reporting: bool) -> Task<Message> {
         if self.diagnosing {
             return Task::none();
         }
@@ -28,7 +32,7 @@ impl App {
                 } else {
                     None
                 };
-                tokio::task::spawn_blocking(move || -> anyhow::Result<String> {
+                tokio::task::spawn_blocking(move || -> anyhow::Result<(String, Option<String>)> {
                     let root = match &engine {
                         Some(engine) => engine.store.root.clone(),
                         None => Store::default_root()?,
@@ -54,7 +58,9 @@ impl App {
                     ));
                     let bytes = serde_json::to_vec_pretty(&report)?;
                     clash_of_rust::config::atomic_write(&path, &bytes)?;
-                    Ok(path.display().to_string())
+                    let url =
+                        reporting.then(|| clash_client_core::support::issue_draft_url(&report));
+                    Ok((path.display().to_string(), url))
                 })
                 .await
                 .map_err(|error| format!("{error:#}"))?

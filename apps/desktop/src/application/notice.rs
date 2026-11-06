@@ -13,6 +13,18 @@ impl App {
         self.present_notice(text, true, true);
     }
 
+    pub(super) fn show_notice_followup(&mut self, text: String, error: bool) {
+        if self.notice_visible && self.error {
+            self.present_notice(
+                format!("{}\n\n{text}", self.notice),
+                true,
+                self.notice_critical,
+            );
+        } else {
+            self.show_notice(text, error);
+        }
+    }
+
     fn present_notice(&mut self, text: String, error: bool, critical: bool) {
         if error {
             self.issue_events
@@ -21,7 +33,7 @@ impl App {
                 self.issue_events.pop_front();
             }
         }
-        if self.notice_visible && self.notice_critical && !critical {
+        if self.notice_visible && ((self.notice_critical && !critical) || (self.error && !error)) {
             return;
         }
         self.notice = text;
@@ -98,6 +110,11 @@ mod tests {
         assert_eq!(app.issue_events.front().unwrap()["error"], "failure 5");
         app.show_notice("已保存".into(), false);
         assert_eq!(app.issue_events.back().unwrap()["error"], "failure 24");
+        assert_eq!(app.notice, "failure 24");
+        let _ = app.update(Message::NoticeExpired(app.notice_revision));
+        assert!(app.notice_visible);
+        app.dismiss_notice();
+        app.show_notice("已保存".into(), false);
         let _ = app.update(Message::NoticeExpired(app.notice_revision));
         assert!(!app.notice_visible);
     }
@@ -109,12 +126,20 @@ mod tests {
         app.dismiss_notice();
         app.show_notice("Geo 更新失败，旧数据仍可用".into(), true);
         assert!(app.error && !app.notice_critical);
+        app.show_notice_followup("诊断已导出：测试路径".into(), false);
+        assert!(app.notice.starts_with("Geo 更新失败"));
+        assert!(app.notice.contains("诊断已导出"));
+        assert!(app.error && !app.notice_critical);
         app.show_critical("内核无法启动".into());
         app.show_notice("检查更新失败".into(), true);
         app.show_notice("Geo 数据已更新".into(), false);
         assert_eq!(app.notice, "内核无法启动");
         assert!(app.notice_critical && app.error);
         assert_eq!(app.issue_events.back().unwrap()["error"], "检查更新失败");
+        app.show_notice_followup("诊断导出失败：测试磁盘不可写".into(), true);
+        assert!(app.notice.starts_with("内核无法启动"));
+        assert!(app.notice.contains("诊断导出失败"));
+        assert!(app.notice_critical);
         app.dismiss_notice();
         app.show_notice("已保存".into(), false);
         assert!(!app.notice_critical && !app.error);

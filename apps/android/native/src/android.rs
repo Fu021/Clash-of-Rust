@@ -767,7 +767,7 @@ async fn run_loop(
                 } else {
                     state.notice_error = false;
                     state.notice_critical = false;
-                    state.notice_followup = matches!(intent, MobileIntent::ExportDiagnostics | MobileIntent::CopyDiagnostics);
+                    state.notice_followup = matches!(intent, MobileIntent::ExportDiagnostics | MobileIntent::CopyDiagnostics | MobileIntent::ReportIssue);
                     match handle(&mut state, request).await {
                         Ok(()) => {
                             state.completed = Some(intent);
@@ -780,7 +780,7 @@ async fn run_loop(
                                 |MobileIntent::ClaudeProtection) {cancel_delay(&mut state,&mut delay_job);}
                             if !matches!(intent, MobileIntent::Query | MobileIntent::Copy | MobileIntent::ConnectionSort
                                 | MobileIntent::ConnectionDetail | MobileIntent::ConnectionPage | MobileIntent::RulePage
-                                | MobileIntent::LogLevel | MobileIntent::ClearLogs | MobileIntent::ExportLogs | MobileIntent::ExportDiagnostics | MobileIntent::CopyDiagnostics | MobileIntent::RuleTextMode
+                                | MobileIntent::LogLevel | MobileIntent::ClearLogs | MobileIntent::ExportLogs | MobileIntent::ExportDiagnostics | MobileIntent::CopyDiagnostics | MobileIntent::ReportIssue | MobileIntent::RuleTextMode
                                 | MobileIntent::RuleSelect | MobileIntent::RuleEdit | MobileIntent::RuleSave
                                 | MobileIntent::RuleMove | MobileIntent::RuleDelete | MobileIntent::RuleShortcut
                                 | MobileIntent::RuleDiscard | MobileIntent::NodePage | MobileIntent::NodeSort
@@ -1195,9 +1195,17 @@ async fn run_loop(
                 apply(&ui, view);
                 if !notice.is_empty() {
                     let current = ui.global::<MobileView>();
-                    if current.get_notice_modal() && notice_followup {
+                    if !current.get_notice().is_empty()
+                        && current.get_notice_error()
+                        && notice_followup
+                    {
                         ui.invoke_notify(format!("{}\n\n{notice}", current.get_notice()).into());
-                    } else if !current.get_notice_modal() || notice_critical {
+                    } else if notice_critical
+                        || (!current.get_notice_modal()
+                            && (!current.get_notice_error()
+                                || current.get_notice().is_empty()
+                                || notice_error))
+                    {
                         current.set_notice_error(notice_error);
                         current.set_notice_critical(notice_critical);
                         ui.invoke_notify(notice.into());
@@ -1488,16 +1496,16 @@ async fn native_event(state: &mut State, raw: &str) -> Result<()> {
         "vpn" => {
             state.session.vpn = value["value"].as_bool().unwrap_or(false);
         }
-        "error" | "critical" | "notice" | "export-error" | "export-notice" => {
+        "error" | "critical" | "notice" | "export-error" | "export-notice" | "link-error" => {
             state.notice = value["value"].as_str().unwrap_or("").into();
             state.notice_error = matches!(
                 value["event"].as_str(),
-                Some("error" | "critical" | "export-error")
+                Some("error" | "critical" | "export-error" | "link-error")
             );
             state.notice_critical = value["event"] == "critical";
             state.notice_followup = matches!(
                 value["event"].as_str(),
-                Some("export-error" | "export-notice")
+                Some("export-error" | "export-notice" | "link-error")
             );
         }
         "file" => {
@@ -1725,7 +1733,9 @@ async fn handle(state: &mut State, request: Request) -> Result<()> {
                 "content":format!("Android UI: {}\n{}",PRESENTATION.lock().map(|s|s.clone()).unwrap_or_default(),
                     state.logs.iter().map(|(level,line)|format!("[{level}] {line}")).collect::<Vec<_>>().join("\n"))}))?;
         }
-        MobileIntent::ExportDiagnostics | MobileIntent::CopyDiagnostics => {
+        MobileIntent::ExportDiagnostics
+        | MobileIntent::CopyDiagnostics
+        | MobileIntent::ReportIssue => {
             let root = session.store.root.clone();
             let context = json!({
                 "error":a,"events":state.issue_events,"page":state.page,
@@ -1739,17 +1749,23 @@ async fn handle(state: &mut State, request: Request) -> Result<()> {
                 .iter()
                 .map(|(level, line)| format!("[{level}] {line}"))
                 .collect();
-            let content = tokio::task::spawn_blocking(move || {
-                serde_json::to_string_pretty(&core::support::issue_report(&root, context, lines))
+            let report = tokio::task::spawn_blocking(move || {
+                core::support::issue_report(&root, context, lines)
             })
-            .await??;
-            if intent == MobileIntent::CopyDiagnostics {
+            .await?;
+            if intent == MobileIntent::ReportIssue {
+                session.native.request(json!({
+                    "op":"open-url","url":core::support::issue_draft_url(&report)
+                }))?;
+            } else if intent == MobileIntent::CopyDiagnostics {
+                let content = serde_json::to_string_pretty(&report)?;
                 ensure!(content.len() <= 256 * 1024, "诊断报告较大，请使用导出诊断");
                 session
                     .native
                     .request(json!({"op":"copy","text":content}))?;
                 state.notice = "诊断已复制".into();
             } else {
+                let content = serde_json::to_string_pretty(&report)?;
                 session
                     .native
                     .request(json!({"op":"export","name":"cor-diagnose.json","content":content}))?;

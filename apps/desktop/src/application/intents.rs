@@ -57,6 +57,7 @@ impl App {
                         | Intent::CloseDetail
                         | Intent::Copy
                         | Intent::ExportDiagnostics
+                        | Intent::ReportIssue
                 )))
         {
             return Task::none();
@@ -283,6 +284,7 @@ impl App {
             Intent::InstallUpdate => Message::InstallUpdate,
             Intent::CancelUpdate => Message::CancelUpdateDownload,
             Intent::OpenRelease => Message::OpenRelease,
+            Intent::ReportIssue => Message::ReportIssue(a.into()),
             Intent::Copy => Message::Copy(a.into()),
             Intent::Quit => return self.request_exit(),
             Intent::FocusSearch => Message::Key(runtime::keyboard::Event::KeyPressed {

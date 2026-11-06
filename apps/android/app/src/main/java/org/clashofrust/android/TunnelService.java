@@ -187,8 +187,10 @@ public final class TunnelService extends VpnService {
                 // A rejected replacement leaves the old descriptor valid.
                 // Resume its guard and keep the working connection available.
                 connected = true;
+                boolean protectionRestored = true;
                 try { ProtectionRuntime.sync(this); }
                 catch (Exception guard) {
+                    protectionRestored = false;
                     lastError += "; 保护恢复失败：" + guard;
                     android.util.Log.e("ClashOfRust", "Restore protection after rejected VPN replacement", guard);
                 }
@@ -196,7 +198,7 @@ public final class TunnelService extends VpnService {
                     VpnTileService.refresh(this);
                     getSystemService(NotificationManager.class).notify(1, notification("VPN 重建失败，原连接已保留"));
                 } catch (RuntimeException status) { android.util.Log.w("ClashOfRust", "Update preserved VPN status", status); }
-                MainActivity.emit("error", "VPN 重建失败，原连接已保留：" + lastError);
+                MainActivity.emit(protectionRestored ? "error" : "critical", "VPN 重建失败，原连接已保留：" + lastError);
                 return;
             }
             if (previous != null) {

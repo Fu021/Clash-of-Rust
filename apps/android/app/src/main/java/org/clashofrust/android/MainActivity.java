@@ -180,7 +180,10 @@ public final class MainActivity extends NativeActivity {
                     Uri url = Uri.parse(data.getString("url"));
                     if (!"https".equals(url.getScheme()) && !"http".equals(url.getScheme()))
                         throw new IOException("仅支持 HTTP/HTTPS 地址");
-                    runOnUiThread(() -> startActivity(new Intent(Intent.ACTION_VIEW, url)));
+                    runOnUiThread(() -> {
+                        try { startActivity(new Intent(Intent.ACTION_VIEW, url)); }
+                        catch (RuntimeException error) { emit("link-error", "无法打开网页：" + error); }
+                    });
                     break;
                 }
                 default: throw new IOException("未知 Android 操作：" + op);

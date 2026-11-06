@@ -202,6 +202,12 @@ export component MobileFrame inherits Rectangle {
                 enabled: self.active;
                 changed active => { if self.active { self.focus(); } }
                 init => { if self.active { self.focus(); } }
+                key-pressed(event) => {
+                    if event.text == Key.Escape || event.text == Key.Back {
+                        MobileView.notice = ""; return accept;
+                    }
+                    return reject;
+                }
             }
             notice-panel := MNotice {
                 x: MobileView.safe-left + (root.usable-width - self.width) / 2;

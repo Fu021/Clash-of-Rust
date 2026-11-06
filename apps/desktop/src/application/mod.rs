@@ -162,7 +162,9 @@ enum Message {
     ConnectionResolved(u64, Result<String, String>),
     Copy(String),
     ExportDiagnostics(String),
-    DiagnosticsExported(Result<String, String>),
+    ReportIssue(String),
+    DiagnosticsExported(Result<(String, Option<String>), String>),
+    IssueOpened(Result<(), String>),
     EditProfile(String),
     EditName(String),
     EditSource(String),
@@ -806,6 +808,8 @@ impl App {
             | Message::Copy(_)
             | Message::ExportDiagnostics(_)
             | Message::DiagnosticsExported(_)
+            | Message::ReportIssue(_)
+            | Message::IssueOpened(_)
             | Message::EditProfile(_)
             | Message::EditName(_)
             | Message::EditSource(_)

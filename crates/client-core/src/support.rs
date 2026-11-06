@@ -332,6 +332,50 @@ pub fn issue_report(root: &Path, context: Value, lines: Vec<String>) -> Value {
     json!({"schema":1,"command":"diagnose","data":report})
 }
 
+pub fn issue_draft_url(report: &Value) -> String {
+    let data = &report["data"];
+    let context = &data["context"];
+    let original_error = context["error"]
+        .as_str()
+        .unwrap_or("See the exported diagnostic report.");
+    let mut original_error = original_error.to_owned();
+    for (field, replacement) in [
+        ("data_directory", "<data-dir>"),
+        ("executable", "<executable>"),
+    ] {
+        if let Some(path) = data[field].as_str().filter(|path| !path.is_empty()) {
+            original_error = original_error.replace(path, replacement);
+        }
+    }
+    let original_length = original_error.chars().count();
+    let mut error: String = original_error.chars().take(500).collect();
+    loop {
+        let summary = json!({
+            "version":data["version"].as_str().map(|text|text.chars().take(80).collect::<String>()),
+            "os":data["os"].as_str().map(|text|text.chars().take(40).collect::<String>()),
+            "arch":data["arch"].as_str().map(|text|text.chars().take(40).collect::<String>()),
+            "captured_at":data["captured_at"].as_str().map(|text|text.chars().take(80).collect::<String>()),
+            "error":error,
+            "error_truncated":error.chars().count()<original_length,
+            "running":context["running"].as_bool().or(context["core_running"].as_bool()),
+            "context_state":context["state"].as_str().map(|text|text.chars().take(80).collect::<String>()),
+        });
+        let body = format!(
+            "## What happened?\n\n\n## Steps to reproduce\n\n1. \n\n\
+             ## Automatic diagnostic summary\n\n```json\n{summary:#}\n```\n\n\
+             Review this summary before submitting. Attach the full JSON from Export diagnostics \
+             if needed; check it for sensitive data first.\n"
+        );
+        let mut url =
+            reqwest::Url::parse("https://github.com/Fu021/Clash-of-Rust/issues/new").unwrap();
+        url.query_pairs_mut().append_pair("body", &body);
+        if url.as_str().len() <= 6500 || error.is_empty() {
+            return url.to_string();
+        }
+        error.pop();
+    }
+}
+
 fn sanitize_value(value: Value, secrets: &[String]) -> Value {
     match value {
         Value::String(text) => Value::String(sanitize_log(&text, secrets)),
@@ -476,6 +520,44 @@ mod tests {
         );
         assert_eq!(report["data"]["context"]["state"], "withheld");
         assert!(!report.to_string().contains("controller-credential"));
+    }
+
+    #[test]
+    fn issue_drafts_carry_a_redacted_summary_without_uploading_the_full_report() {
+        let temporary = tempfile::tempdir().unwrap();
+        std::fs::write(
+            temporary.path().join("settings.json"),
+            br#"{"secret":"controller-credential"}"#,
+        )
+        .unwrap();
+        let report = issue_report(
+            temporary.path(),
+            json!({"error":format!("connect controller-credential {} https://example.test/sub?token=private",temporary.path().display()),"running":false}),
+            vec!["private full log entry".into()],
+        );
+        let url = reqwest::Url::parse(&issue_draft_url(&report)).unwrap();
+        assert_eq!(url.scheme(), "https");
+        assert_eq!(url.host_str(), Some("github.com"));
+        assert_eq!(url.path(), "/Fu021/Clash-of-Rust/issues/new");
+        let body = url.query_pairs().find(|(key, _)| key == "body").unwrap().1;
+        assert!(body.contains(crate::VERSION));
+        assert!(body.contains("connect"));
+        assert!(!body.contains("controller-credential"));
+        assert!(!body.contains("token=private"));
+        assert!(!body.contains("private full log entry"));
+        assert!(!body.contains(temporary.path().to_string_lossy().as_ref()));
+    }
+
+    #[test]
+    fn issue_drafts_bound_the_encoded_url_and_keep_unicode_valid() {
+        let report = json!({"data":{"version":crate::VERSION,"os":"android","arch":"x86_64",
+            "context":{"error":"网络连接超时😀".repeat(5000)}}});
+        let text = issue_draft_url(&report);
+        assert!(text.len() <= 6500);
+        let url = reqwest::Url::parse(&text).unwrap();
+        let body = url.query_pairs().find(|(key, _)| key == "body").unwrap().1;
+        assert!(!body.contains('\u{fffd}'));
+        assert!(body.contains("网络连接超时"));
     }
 
     #[test]

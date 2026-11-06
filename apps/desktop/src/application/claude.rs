@@ -966,6 +966,7 @@ mod tests {
     #[test]
     fn page_navigation_cancels_sampling_without_clearing_protection() {
         let mut app = app();
+        app.dismiss_notice();
         app.page = Page::Claude;
         let id = uuid::Uuid::new_v4().to_string();
         let saved = Arc::new(check::protection::Protection::new(
@@ -989,8 +990,13 @@ mod tests {
             let _ = app.dispatch(Action::Mode(mode.into()));
             assert!(app.queued_actions.is_empty());
             assert!(app.notice.contains("锁定当前运行模式"));
+            assert!(!app.notice_critical);
             assert_eq!(app.settings.claude_protection.as_ref(), Some(&saved));
         }
+        app.page = Page::Rules;
+        let _ = app.intent(clash_desktop_protocol::Intent::ReportIssue, "测试故障", "");
+        assert!(app.diagnosing);
+        assert_eq!(app.settings.claude_protection.as_ref(), Some(&saved));
     }
     #[test]
     fn measured_challenges_are_other_clues_while_explicit_risks_are_preserved() {

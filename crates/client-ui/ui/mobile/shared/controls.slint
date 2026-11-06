@@ -334,6 +334,7 @@ export component MNotice inherits Rectangle {
     in property <bool> error;
     in property <float> progress;
     in property <length> available-height;
+    property <bool> compact-actions: self.width < 380px || Theme.text-scale > 1.15;
     out property <[length]> close-target: [dismiss.absolute-position.x, dismiss.absolute-position.y, dismiss.width, dismiss.height];
     callback dismissed();
     height: min(content.preferred-height, max(72px, root.available-height));
@@ -346,26 +347,28 @@ export component MNotice inherits Rectangle {
             content-key: root.text; preferred-height: body.preferred-height;
             body := VerticalLayout { alignment: start; spacing: Theme.content-gap;
                 MParagraph { text: root.text; font-size: MobileTypography.font-size(15); color: root.error ? Theme.danger : Theme.secondary; }
-                if root.error && MobileView.notice-modal: HorizontalLayout { spacing: MobileTypography.small-gap;
-                    MButton { modal-control: true; notice-control: true; text: "导出诊断";
-                        clicked => { MobileActions.request(MobileIntent.export-diagnostics, root.text, ""); }
-                    }
-                    MButton { modal-control: true; notice-control: true; text: "复制诊断";
-                        clicked => { MobileActions.request(MobileIntent.copy-diagnostics, root.text, ""); }
-                    }
-                }
-                if root.error && MobileView.notice-modal: MSmall { text: "提交 issue 时附上报告、操作步骤和发生时间；分享前检查敏感信息。"; wrap: word-wrap; }
                 if !root.error: MProgress { height: 2px; value: root.progress; smooth: false; }
             }
         }
-        HorizontalLayout { alignment: root.error && !MobileView.notice-modal ? stretch : end; spacing: MobileTypography.small-gap;
-            if root.error && !MobileView.notice-modal: MButton { modal-control: true; notice-control: true; text: "导出诊断";
+        if root.error && root.compact-actions: HorizontalLayout { spacing: MobileTypography.small-gap;
+            MButton { modal-control: true; notice-control: true; text: "导出诊断";
                 clicked => { MobileActions.request(MobileIntent.export-diagnostics, root.text, ""); }
             }
-            if root.error && !MobileView.notice-modal: MButton { modal-control: true; notice-control: true; text: "复制诊断";
+            MButton { modal-control: true; notice-control: true; text: "复制诊断";
                 clicked => { MobileActions.request(MobileIntent.copy-diagnostics, root.text, ""); }
             }
-            dismiss := MButton { modal-control: true; notice-control: true; text: "关闭"; width: max(68px, MobileTypography.font-size(15) * 2 + 16px); horizontal-stretch: root.error && !MobileView.notice-modal ? 1 : 0;
+        }
+        HorizontalLayout { alignment: root.error ? stretch : end; spacing: MobileTypography.small-gap;
+            if root.error && !root.compact-actions: MButton { modal-control: true; notice-control: true; text: "导出诊断";
+                clicked => { MobileActions.request(MobileIntent.export-diagnostics, root.text, ""); }
+            }
+            if root.error && !root.compact-actions: MButton { modal-control: true; notice-control: true; text: "复制诊断";
+                clicked => { MobileActions.request(MobileIntent.copy-diagnostics, root.text, ""); }
+            }
+            if root.error: MButton { modal-control: true; notice-control: true; text: "新建 Issue";
+                clicked => { MobileActions.request(MobileIntent.report-issue, root.text, ""); }
+            }
+            dismiss := MButton { modal-control: true; notice-control: true; text: "关闭"; min-width: root.error ? 0px : 68px; horizontal-stretch: root.error ? 1 : 0;
                 clicked => { root.dismissed(); }
             }
         }

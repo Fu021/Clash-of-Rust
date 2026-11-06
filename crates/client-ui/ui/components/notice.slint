@@ -1,22 +1,22 @@
 import { Motion, Presence, ProgressTrack } from "motion.slint";
 import { Theme } from "../theme/palette.slint";
 import { UiData, UiActions, Intent } from "../state.slint";
-import { ContentPanel, Paragraph, Caption, Heading, ActionButton } from "controls.slint";
+import { ContentPanel, Paragraph, Heading, ActionButton } from "controls.slint";
 
-export component DiagnosticActions inherits VerticalLayout {
+export component DiagnosticActions inherits HorizontalLayout {
     in property <string> context;
     in property <bool> notice-control;
-    in property <bool> instructions: true;
-    spacing: Theme.content-gap;
-    HorizontalLayout { spacing: Theme.content-gap; alignment: start;
-        ActionButton { modal-control: true; notice-control: root.notice-control; text: UiData.diagnosing ? "正在导出…" : "导出诊断"; enabled: !UiData.diagnosing;
-            clicked => { UiActions.dispatch(Intent.export-diagnostics, root.context, ""); }
-        }
-        ActionButton { modal-control: true; notice-control: root.notice-control; text: "复制诊断命令";
-            clicked => { UiActions.dispatch(Intent.copy, "cor diagnose --output cor-diagnose.json", ""); }
-        }
+    spacing: Theme.content-gap; alignment: start;
+    ActionButton { modal-control: true; notice-control: root.notice-control; text: UiData.diagnosing ? "正在采集…" : "导出诊断"; enabled: !UiData.diagnosing;
+        clicked => { UiActions.dispatch(Intent.export-diagnostics, root.context, ""); }
     }
-    if root.instructions: Caption { text: "提交 issue 时附上报告、操作步骤和发生时间；分享前检查敏感信息。"; wrap: word-wrap; }
+    ActionButton { modal-control: true; notice-control: root.notice-control; text: "复制命令";
+        clicked => { UiActions.dispatch(Intent.copy, "cor diagnose --output cor-diagnose.json", ""); }
+    }
+    ActionButton { modal-control: true; notice-control: root.notice-control; text: "新建 Issue"; enabled: !UiData.diagnosing;
+        clicked => { UiActions.dispatch(Intent.report-issue, root.context, ""); }
+    }
+    @children
 }
 
 export component DesktopNotice inherits Rectangle {
@@ -63,7 +63,7 @@ export component DesktopNotice inherits Rectangle {
                     property <length> bottom: min(0px, self.height - self.content-height);
                     changed context => { self.content-y = 0px; }
                     changed bottom => { self.content-y = clamp(self.content-y, self.bottom, 0px); }
-                    height: min(content.preferred-height, max(80px, root.available-height * (UiData.notice-modal ? 0.8 : 0.4) - (UiData.notice-modal ? 120px : 80px)));
+                    height: min(content.preferred-height, max(48px, root.available-height * (UiData.notice-modal ? 0.8 : 0.4) - (UiData.notice-modal ? 120px : 80px)));
                     horizontal-stretch: 1; vertical-stretch: 0; min-width: 0px;
                     interactive: true; mouse-drag-pan-enabled: true;
                     content-width: self.width; content-height: max(self.height, content.preferred-height);
@@ -71,7 +71,6 @@ export component DesktopNotice inherits Rectangle {
                         width: parent.width; height: self.preferred-height;
                         alignment: start; spacing: Theme.content-gap;
                         Paragraph { text: root.message; color: UiData.notice-error ? Theme.danger : Theme.secondary; }
-                        if UiData.notice-error: DiagnosticActions { context: root.message; notice-control: true; instructions: UiData.notice-modal; }
                         if !UiData.notice-error: ProgressTrack {
                             height: 2px; smooth: false;
                             value: clamp((animation-tick() - root.started) / 8s, 0, 1);
@@ -80,8 +79,11 @@ export component DesktopNotice inherits Rectangle {
                     }
                 }
             }
-            HorizontalLayout { alignment: end; spacing: Theme.content-gap;
+            if UiData.notice-error: DiagnosticActions { context: root.message; notice-control: true;
                 if UiData.notice-modal && UiData.retry-core: ActionButton { modal-control: true; notice-control: true; text: "重启内核"; primary: true; enabled: UiData.notice != "" && !UiData.working; clicked => { UiActions.dispatch(Intent.restart-core, "", ""); } }
+                ActionButton { modal-control: true; notice-control: true; text: "关闭"; enabled: UiData.notice != ""; clicked => { UiActions.dispatch(Intent.dismiss-notice, "", ""); } }
+            }
+            if !UiData.notice-error: HorizontalLayout { alignment: end;
                 ActionButton { modal-control: true; notice-control: true; text: "关闭"; enabled: UiData.notice != ""; clicked => { UiActions.dispatch(Intent.dismiss-notice, "", ""); } }
             }
         }
