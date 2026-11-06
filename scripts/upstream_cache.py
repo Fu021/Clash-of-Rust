@@ -40,6 +40,11 @@ class ImportFailure(RuntimeError):
         self.http_status = http_status
 
 
+class LookupMetadataError(ValueError):
+    def __init__(self, fields):
+        super().__init__('Invalid original download metadata: ' + ', '.join(fields))
+
+
 def valid_source(url, checksum, size=None):
     try:
         parsed = urllib.parse.urlsplit(url)
@@ -89,23 +94,32 @@ def lookup(config, checksum):
         if reply.status != 200:
             raise RuntimeError(f'Upstream lookup HTTP {reply.status}')
         value = json.load(reply)
-    if (not isinstance(value, dict) or value.get('schema') != 1 or value.get('group') != GROUP or value.get('key') != key
-            or not re.fullmatch(r'[0-9a-f]{64}', value.get('id', ''))
-            or not re.fullmatch(r'[0-9a-f]{64}', value.get('sha256', ''))
-            or type(value.get('size')) is not int or not 0 < value['size'] <= 5 * 1024**3):
-        raise ValueError('Invalid original download metadata')
+    if not isinstance(value, dict):
+        raise LookupMetadataError(('object',))
+    checks = {
+        'schema': type(value.get('schema')) is int and value['schema'] == 1,
+        'group': value.get('group') == GROUP,
+        'key': value.get('key') == key,
+        'id': isinstance(value.get('id'), str) and re.fullmatch(r'[0-9a-f]{64}', value['id']) is not None,
+        'sha256': isinstance(value.get('sha256'), str) and re.fullmatch(r'[0-9a-f]{64}', value['sha256']) is not None,
+        'size': type(value.get('size')) is int and 0 < value['size'] <= 5 * 1024**3,
+    }
+    if invalid := [field for field, valid in checks.items() if not valid]:
+        raise LookupMetadataError(invalid)
     return value
 
 
 def restore(url, destination, checksum, deadline=None):
     if not valid_source(url, checksum):
         return False
+    stage = 'configuration'
     try:
         config = configuration()
         if not config:
             return False
         config['restore_deadline'] = min(time.monotonic() + 120, deadline) if deadline else time.monotonic() + 120
         action_cache.restore_remaining(config)
+        stage = 'lookup'
         value = lookup(config, checksum)
         if value is None:
             return False
@@ -114,17 +128,20 @@ def restore(url, destination, checksum, deadline=None):
         with tempfile.TemporaryDirectory(prefix='.cor-upstream-', dir=destination.parent) as temporary:
             archive = Path(temporary) / 'download.tar.gz'
             query = urllib.parse.urlencode({'group': GROUP, 'id': value['id']})
+            stage = 'archive_download'
             with action_cache.response(config, '/v1/blob?' + query) as reply:
                 if reply.status != 200:
                     raise RuntimeError(f'Upstream blob HTTP {reply.status}')
                 with archive.open('wb') as output:
                     action_cache.download_body(config, reply, output, value['size'])
+            stage = 'archive_verify'
             if archive.stat().st_size != value['size'] or sha256(archive) != value['sha256']:
                 raise ValueError('Original download envelope checksum mismatch')
             descriptor, name = tempfile.mkstemp(
                 prefix='.' + destination.name + '-', suffix='.partial', dir=destination.parent)
             staged = Path(name)
             try:
+                stage = 'original_extract'
                 with os.fdopen(descriptor, 'wb') as output, tarfile.open(archive, 'r:gz') as source:
                     entry = source.next()
                     if (entry is None or entry.name != '0' or not entry.isfile()
@@ -134,8 +151,10 @@ def restore(url, destination, checksum, deadline=None):
                         action_cache.download_body(config, incoming, output, entry.size)
                     if source.next() is not None:
                         raise ValueError('Unexpected files in original download')
+                stage = 'original_verify'
                 if sha256(staged) != checksum:
                     raise ValueError('Original download SHA256 mismatch')
+                stage = 'publish'
                 staged.chmod(stat.S_IRUSR | stat.S_IWUSR | stat.S_IRGRP | stat.S_IROTH)
                 staged.replace(destination)
             finally:
@@ -144,7 +163,8 @@ def restore(url, destination, checksum, deadline=None):
         print('Original download: private fallback verified (' + destination.name + ')', flush=True)
         return True
     except ERRORS as error:
-        print('Original download: private fallback unavailable (' + type(error).__name__ + ')', flush=True)
+        detail = str(error) if isinstance(error, LookupMetadataError) else type(error).__name__
+        print(f'Original download: private fallback unavailable ({stage}: {detail})', flush=True)
         return False
 
 

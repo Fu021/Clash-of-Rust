@@ -24,6 +24,14 @@
 
 2026-11-05 的 root / 0.6.6 现场在停止前出现本机 `/configs` 超时，内核仍继续记录部分流量；其中“停止内核前关闭 TUN 失败”的完整错误链对应关闭 TUN 的 `PATCH /configs` 超时，客户端因此未继续结束内核，不能直接断言整个控制器都无响应。23:23（Asia/Shanghai）日志显示一次路由变化触发的刷新完成，随后有停止和启动记录。用户确认最终是成功执行 `cor stop` 后，再手动执行 `cor start` 恢复网络；不能将恢复归因于自动刷新，也不能以日志未记录命令文本推断未执行启动。完整重启后症状消失，仍未区分出站连接、DNS、TUN 路由及配置处理阻塞的原因；匹配规则和建立出站的日志不证明目标 HTTP 请求已成功。
 
+### 阿里云、Tailscale 与 Fake-IP 的共存现场
+
+2026-11-06 的只读检查确认：`systemd-resolved` 的 eth0 使用阿里云 `100.100.2.136/138`，tailscale0 为 MagicDNS 后缀和反向域提供分域解析，Meta 的 `~.` 接收其余域名。按 eth0 查询 GitHub 返回真实公网 IP，默认查询返回 `198.18.0.14`；MagicDNS 正反向查询均成功。阿里云 DNS 的显式路由走 eth0，Tailscale DNS `100.100.100.100` 走 table 52。`~.` 不覆盖更长的分域匹配，见 [systemd-resolved 路由规则](https://www.freedesktop.org/software/systemd/man/latest/systemd-resolved.service.html)。
+
+阿里云 DNS 位于 Tailscale 使用的 `100.64.0.0/10` 范围内，存在入站反欺骗规则的冲突风险；该环境的 `tailscale-allow-alidns.service` 每 5 秒核对 ts-input 链，只让 eth0 上来自两个精确 DNS 地址、源端口 53、ESTABLISHED 的 UDP/TCP 应答返回后续防火墙，不放行整个网段，也不修改 DNS、路由或 TUN。服务已运行，实际防火墙规则与计数仍需 root 核对；参考 [Tailscale 地址冲突](https://tailscale.com/docs/reference/troubleshooting/cgnat-conflicts)与[阿里云内网 DNS](https://www.alibabacloud.com/help/en/dns/what-is-alibaba-cloud-public-dns)。
+
+本次 GitHub HTTPS 失败时，对照网站可达，使用真实 GitHub IP 并保留 SNI 也可达；用户更新订阅后，Git 及 API 均恢复，而默认 Fake-IP 地址未改变。因此不能把 Fake-IP 结果本身、服务处于 active 或订阅更新后的恢复认作唯一根因。仍需失败前后的内核规则、选定出站和 DNS 结果对照。`tailscale-online.target` / wait-online 未启用或未被依赖时不活跃，不等同于 tailscaled 离线。检查未修改任何系统服务、DNS、路由或订阅。
+
 ## IPv6 节点域名解析
 
 [不发布打包 40883823532](https://github.com/Fu021/Clash-of-Rust/actions/runs/40883823532) 的 Ubuntu 20.04 ARM64 隔离测试在保护 DNS 返回 SERVFAIL 时记录 IPv6 节点 `no ip address`。上游 [mihomo 解析器](https://github.com/MetaCubeX/mihomo/blob/v1.19.33/dns/resolver.go)在 A 查询结束后默认只等待 AAAA 100 毫秒；慢 AAAA 是与日志吻合的可能原因，并非已证明所有现场超时都由此造成。

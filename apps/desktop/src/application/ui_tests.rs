@@ -1424,6 +1424,13 @@ fn log_rows_open_full_text_copy_without_opening_and_filter_by_source_level() {
     assert_eq!(app.list_offset, 0);
     assert_eq!(data.get_logs().row_count(), 1);
     assert_eq!(data.get_logs().row_data(0).unwrap().message, long.as_str());
+    events.borrow_mut().clear();
+    let _ = window.window().take_snapshot().unwrap();
+    ui_testing::click(window.window(), 720., 664.);
+    assert_eq!(
+        events.borrow().as_slice(),
+        &[(Intent::ExportDiagnostics, "".into(), "".into())]
+    );
     window.hide().unwrap();
 }
 

@@ -3670,6 +3670,31 @@ if(mode==='main'){
                 with self.assertRaises(ValueError):
                     upstream_cache.lookup({}, 'a' * 64)
 
+    def test_lookup_reports_only_rejected_field_names(self):
+        value = {'schema': True, 'group': 'private-value', 'key': 'wrong-value',
+                 'id': None, 'sha256': ['private-value'], 'size': True}
+        reply = io.BytesIO(json.dumps(value).encode())
+        reply.status = 200
+        with patch.object(local_cache, 'response', return_value=nullcontext(reply)):
+            with self.assertRaises(upstream_cache.LookupMetadataError) as raised:
+                upstream_cache.lookup({}, 'a' * 64)
+        self.assertEqual(str(raised.exception),
+                         'Invalid original download metadata: schema, group, key, id, sha256, size')
+
+    def test_restore_failure_reports_its_stage_without_private_error_contents(self):
+        for error, expected in (
+                (OSError('private-address secret-token'), 'lookup: OSError'),
+                (upstream_cache.LookupMetadataError(('schema',)), 'lookup: Invalid original download metadata: schema')):
+            with self.subTest(error=type(error).__name__), \
+                    patch.object(upstream_cache, 'configuration', return_value={'token': 'test'}), \
+                    patch.object(upstream_cache, 'lookup', side_effect=error), \
+                    patch('sys.stdout', new_callable=io.StringIO) as output:
+                self.assertFalse(upstream_cache.restore(
+                    'https://github.com/tool/original', Path('unused'), 'a' * 64))
+            self.assertIn(expected, output.getvalue())
+            self.assertNotIn('private-address', output.getvalue())
+            self.assertNotIn('secret-token', output.getvalue())
+
     def test_slow_rust_platforms_survive_budget_pressure(self):
         def entry(number, key):
             return {'id': number, 'key': key, 'ref': 'refs/heads/main', 'size_in_bytes': 100,
