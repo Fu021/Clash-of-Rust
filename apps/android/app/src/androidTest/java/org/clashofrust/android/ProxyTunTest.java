@@ -212,7 +212,20 @@ public class ProxyTunTest {
     private static void tapTarget(String name) throws Exception {
         assertTrue("Android rejected touch input",tryTapTarget(name));
     }
+    private static void dismissErrorDialogIfPresent() throws Exception {
+        JSONObject ui=MainActivity.diagnostics();
+        if (!ui.optBoolean("notice_active") || !ui.optBoolean("notice_error")) return;
+        captureIme("background-error");
+        await("The error dialog close button has no layout",()-> {
+            JSONArray target=MainActivity.diagnostics().optJSONArray("notice_close_target");
+            return target!=null && target.length()==4 && target.optDouble(2)>0 && target.optDouble(3)>0;
+        });
+        tapTarget("notice_close_target");
+        await("The background error dialog did not close",
+            ()->!MainActivity.diagnostics().optBoolean("notice_active"));
+    }
     private static void tapVisibleProfileField(String field) throws Exception {
+        dismissErrorDialogIfPresent();
         await("Could not scroll the subscription "+field+" into its viewport",()-> {
             JSONObject ui=MainActivity.diagnostics();
             JSONArray target=ui.getJSONArray("profile_"+field+"_target");
@@ -382,6 +395,7 @@ public class ProxyTunTest {
         try {
             await("Keyboard probe Activity did not receive focus",()->inStage(androidx.test.runner.lifecycle.Stage.RESUMED,true));
             await("Keyboard probe core did not start",CoreBridge::ready);
+            dismissErrorDialogIfPresent();
             tab(2,2);
             await("Keyboard probe add control has no layout",()-> {
                 JSONArray target=MainActivity.diagnostics().optJSONArray("profile_add_target");
@@ -389,6 +403,7 @@ public class ProxyTunTest {
             });
             tapTarget("profile_add_target");
             await("Keyboard probe editor did not open",()->MainActivity.diagnostics().optInt("detail")==3);
+            dismissErrorDialogIfPresent();
             captureIme("before-focus");
             for (String field:new String[]{"name","source"}) {
                 tapTarget("profile_"+field+"_target");
@@ -442,6 +457,7 @@ public class ProxyTunTest {
             await("Input test Activity did not receive focus",()->inStage(androidx.test.runner.lifecycle.Stage.RESUMED,true));
             waitForAppWindow();
             await("Input test core did not start",CoreBridge::ready);
+            dismissErrorDialogIfPresent();
             tab(2,2);
             await("Add subscription control has no layout",()-> {
                 JSONArray target=MainActivity.diagnostics().optJSONArray("profile_add_target");
@@ -449,10 +465,36 @@ public class ProxyTunTest {
             });
             tapTarget("profile_add_target");
             await("Add subscription did not open",()->MainActivity.diagnostics().optInt("detail")==3);
+            dismissErrorDialogIfPresent();
             captureIme("before-focus");
+            int draftNameLength=MainActivity.diagnostics().getInt("profile_name_length");
+            int draftSourceLength=MainActivity.diagnostics().getInt("profile_source_length");
+            MainActivity.emit("error","检查更新失败：测试网络不可用");
+            await("The background error notice did not appear",()-> {
+                JSONObject ui=MainActivity.diagnostics();
+                JSONArray target=ui.optJSONArray("notice_close_target");
+                return ui.optBoolean("notice_active") && ui.optBoolean("notice_error")
+                    && target!=null && target.length()==4 && target.optDouble(2)>0 && target.optDouble(3)>0;
+            });
+            captureIme("notice-before-close");
+            tapTarget("notice_close_target");
+            await("The error notice did not close",()->!MainActivity.diagnostics().optBoolean("notice_active"));
+            assertEquals("Closing the notice must keep the subscription editor open",
+                3,MainActivity.diagnostics().getInt("detail"));
+            assertEquals(draftNameLength,MainActivity.diagnostics().getInt("profile_name_length"));
+            assertEquals(draftSourceLength,MainActivity.diagnostics().getInt("profile_source_length"));
+            MainActivity.emit("error","订阅更新失败：测试网络不可用。\n原订阅和输入内容均已保留。");
+            await("The second error dialog did not appear",()->MainActivity.diagnostics().optBoolean("notice_active"));
+            shell("input keyevent KEYCODE_BACK");
+            await("Android Back did not dismiss the error dialog",
+                ()->!MainActivity.diagnostics().optBoolean("notice_active"));
+            assertEquals("Back must preserve the editor under the error dialog",
+                3,MainActivity.diagnostics().getInt("detail"));
+            assertEquals(draftNameLength,MainActivity.diagnostics().getInt("profile_name_length"));
+            assertEquals(draftSourceLength,MainActivity.diagnostics().getInt("profile_source_length"));
             int iteration=0;
             for (String field:new String[]{"name","source","name","source","name"}) {
-                tapTarget("profile_"+field+"_target");
+                tapVisibleProfileField(field);
                 await("Subscription "+field+" did not gain Slint focus",()-> {
                     if (MainActivity.diagnostics().optBoolean("profile_"+field+"_focused")) return true;
                     tapTarget("profile_"+field+"_target");

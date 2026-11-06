@@ -26,7 +26,8 @@ export component AndroidWindow inherits Window {
     changed current-page => { MobileActions.request(MobileIntent.navigate, "" + root.current-page, ""); }
     callback native-back();
     native-back => {
-        if MobileView.modal { MobileView.detail=MobileView.detail==12 ? MobileView.pending-detail : 0; }
+        if MobileView.notice != "" && MobileView.notice-error { MobileView.notice = ""; }
+        else if MobileView.modal { MobileView.detail=MobileView.detail==12 ? MobileView.pending-detail : 0; }
         else if MobileView.detail>0 {MobileView.back();}
         else if MobileView.page!=0 { MobileView.navigate(0); }
         else { AndroidActions.request(AndroidIntent.background, ""); }

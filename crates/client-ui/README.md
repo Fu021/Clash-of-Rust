@@ -68,7 +68,7 @@ python3 scripts/preview-slint.py --page settings --theme light --output /tmp/cla
 
 `MobileData` 不依赖桌面 `UiData`，只复用不含平台行为的列表行类型；界面请求交由各平台宿主执行，VPN 会话与内核进程状态分别传入。移动端不显示桌面安装器、托盘或窗口尺寸。两端都保留订阅、节点、连接、规则、日志、网络诊断、IP 检测和 A÷检测。
 
-报错通知保留到主动关闭，提供“导出诊断”；桌面同时可复制 `cor diagnose --output cor-diagnose.json`。表单错误、外部 TUN 提醒以及日志页也有诊断入口，正常成功只报告已完成的操作。导出在宿主后台执行，保持原表单草稿；报告范围、脱敏与失败处理以[故障反馈](../../docs/cli/runtime.md#故障反馈与诊断报告)为准。用 `preview-slint.py --notice "订阅更新失败：连接超时" --notice-error` 可预览真实报错组件，不能代替原生保存交互验证。
+报错在屏幕中央弹窗中直接展示详情，保留到主动关闭，提供“导出诊断”；桌面同时可复制 `cor diagnose --output cor-diagnose.json`。桌面与移动端均暂时阻止背景页面及弹窗的操作，页面布局不移动；过长正文可滚动，关闭按钮始终可见，不用“详情”折叠。关闭、Escape 或 Android 返回优先关闭报错，保留原页面与表单草稿；正常成功仍使用轻量提示。表单错误、外部 TUN 提醒以及日志页也有诊断入口。导出在宿主后台执行；报告范围、脱敏与失败处理以[故障反馈](../../docs/cli/runtime.md#故障反馈与诊断报告)为准。用 `preview-slint.py --notice "订阅更新失败：连接超时" --notice-error` 可预览真实报错组件，不能代替原生保存交互验证。
 
 Android 已接入 `apps/android/native`、`apps/android/app` 与 `crates/mobile-ffi`：正式窗口不导入 fixtures，业务操作进入共享会话，VPN、文件与通知进入 Android 宿主，详见 [Android 说明](../../apps/android/README.md)。iOS 保持独立界面原型和宿主占位。两端预览仍使用固定数据，只用于检查外观与导航，不能代替实际设备上的操作验证。
 

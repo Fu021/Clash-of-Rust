@@ -19,7 +19,7 @@ export component NavigationItem inherits Rectangle {
     Image { x: 14px; y: (parent.height - self.height) / 2; width: 18px; height: 18px; source: root.icon; colorize: root.selected ? Theme.accent : Theme.secondary; animate colorize { duration: Motion.control; enabled: Motion.active; } }
     Label { x: 44px; y: 0px; width: parent.width - 48px; height: parent.height; text: root.text; color: root.selected ? Theme.accent : Theme.ink; }
     key-scope := FocusScope {
-        enabled: UiData.modal == 0;
+        enabled: UiData.modal == 0 && !UiData.notice-modal;
         key-pressed(event) => {
             if event.text == " " || event.text == "\n" { root.clicked(); return accept; }
             return reject;

@@ -151,6 +151,8 @@ export global MobileView {
     in-out property <string> dns-host: "github.com";
     in-out property <string> notice;
     in-out property <bool> notice-error;
+    out property <bool> notice-modal: self.notice != "" && self.notice-error;
+    in-out property <[length]> notice-close-target;
     in-out property <int> notice-revision;
     in-out property <float> notice-elapsed;
     in-out property <length> safe-top;

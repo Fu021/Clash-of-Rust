@@ -29,6 +29,7 @@
 
 ## 当前修复与待验收
 
+- 不发布打包 `42225435685` 的 Android x64 首轮输入失败时，后台“检查更新失败”通知遮住订阅名称框。按维护者约定改为屏幕中央的报错弹窗，背景暂不可操作，保留详细正文、诊断入口和固定关闭按钮；关闭后恢复原页面及草稿。输入回归先注入后台错误并采集截图，通过真实触摸关闭报错，确认编辑页仍在，再继续普通字段切换、Back、前后台和旋转。报错存在时不把背景控件当作可直接点击，关闭后仍须通过原有键盘和布局断言；尚待同提交 Actions 验证。
 - [Java helper](../../vendor/slint-android-activity/java/SlintAndroidJavaHelper.java) 移除应用动画回调；显示请求合并至下一帧，隐藏延后 150 毫秒并可被新的显示请求取消，只执行最新状态。`42031422051` 的 API 34 首轮切换字段时，隐藏请求已先发出，约 30 毫秒后才显示，系统随后继续旧的隐藏动画；仅按一帧合并仍不足。取消中间隐藏时也保留输入视图焦点，实际离开编辑器仍有界隐藏；窗口尚无焦点时等待焦点到达，已经发出的显示请求不因窗口再次获得焦点而重放。
 - 每次显示请求只走一套系统接口：API 26–32 在输入视图有焦点后调用 posted `showSoftInput()`；API 33+ 优先 `WindowInsetsController`，控制器不可用时才回退输入法管理器。旧补丁参照 [AndroidX 实现](https://github.com/androidx/androidx/blob/androidx-main/core/core/src/main/java/androidx/core/view/SoftwareKeyboardControllerCompat.java) 同时调用两个入口；`788e8ed` 的 API 31 首轮采集时 Gboard 在 `onStartInputView` 中空指针崩溃，三轮严格回归仍通过，尚不能认定重复请求就是该输入法崩溃的唯一根因。保留输入法崩溃门禁，不通过重启或忽略崩溃冒充成功；未加入持续重试、强制键盘或测试进程专属修复。
 - [Android 窗口](../../crates/client-ui/ui/mobile/android/window.slint) 将系统键盘高度同步给共享布局，扣除已由布局处理的底部安全区，收起恢复为零。旧 API 的可见区域推断先排除稳定系统栏；横屏侧导航栏不能被当作一个占满屏高的键盘。订阅编辑器在键盘或视口变化、焦点切换时滚动显示当前字段，避免小屏或横屏仍被遮挡；普通手动滚动不触发反复拉回。

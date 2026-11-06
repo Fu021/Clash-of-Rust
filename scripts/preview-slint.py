@@ -90,7 +90,8 @@ def mobile_preview(args) -> None:
                       'inset-left': 44 if short and platform == 'ios' else 0,
                       'inset-right': 44 if short and platform == 'ios' else 0,
                       'text-scale': scale, 'preview-connected': connected, 'preview-keyboard': keyboard,
-                      'preview-notice': args.notice, 'preview-notice-error': args.notice_error, 'preview-notice-elapsed': args.notice_elapsed,
+                      'preview-notice': args.notice, 'preview-notice-error': args.notice_error,
+                      'preview-notice-elapsed': args.notice_elapsed,
                       'preview-rules-scroll': args.scroll_y,
                       **protection_fixture(args.protection_state), **extra}
             fixture = fixtures / (name + '.json')
@@ -107,7 +108,8 @@ def mobile_preview(args) -> None:
         for name in names:
             for dark in themes:
                 render(f'{name}-{"dark" if dark else "light"}', pages[name],
-                       args.size or '393x852', list(pages).index(name), dark, detail=args.detail, scale=args.text_scale)
+                       args.size or '393x852', list(pages).index(name), dark, detail=args.detail,
+                       scale=args.text_scale, keyboard=args.keyboard)
         if platform == 'android' and args.dialogs and 'settings' in names:
             for dark in themes:
                 render(f'preview-update-{"dark" if dark else "light"}', '预发布安装确认',
@@ -324,13 +326,14 @@ def main() -> None:
     parser.add_argument("--check", action="store_true", help="only check Slint syntax and bindings")
     parser.add_argument("--pairs", action="store_true", help="also render light/dark pairs suitable for inline sharing")
     parser.add_argument("--full-settings", action="store_true", help="show all settings without scrolling in its page screenshot")
-    parser.add_argument("--notice", default="", help="show a floating notification using the production component")
-    parser.add_argument("--notice-error", action="store_true", help="show the error state and diagnostic export actions")
+    parser.add_argument("--notice", default="", help="show the production floating notice above page content and dialogs")
+    parser.add_argument("--notice-error", action="store_true", help="show a centered error dialog with diagnostic export actions")
     parser.add_argument("--protection-state", choices=["off", "active", "checking", "error"], default="off",
                         help="preview the persistent protection indicator without network effects")
     parser.add_argument("--notice-elapsed", type=float, default=3, help="elapsed notification lifetime in seconds")
     parser.add_argument("--size")
     parser.add_argument("--detail", type=int, default=0, help="preview one mobile detail view without rendering the full matrix")
+    parser.add_argument("--keyboard", type=float, default=0, help="mobile keyboard inset in logical pixels")
     parser.add_argument("--text-scale", type=float, default=1, help="font preview factor, for example 1.3 (native Android uses system SP conversions)")
     parser.add_argument("--scroll-y", type=float, default=0, help="initial rule-page scroll offset for checking content visibility")
     parser.add_argument("--output", type=Path)

@@ -134,7 +134,8 @@ export component MButton inherits Rectangle {
     in property <bool> success;
     out property <length> press-offset: area.pressed && root.interactive ? 1px : 0px;
     animate press-offset { duration: Motion.fast; easing: ease-out; enabled: Motion.active; }
-    property <bool> interactive: root.enabled && !root.busy && (!MobileView.modal || root.modal-control);
+    in property <bool> notice-control;
+    property <bool> interactive: root.enabled && !root.busy && (!MobileView.modal || root.modal-control) && (!MobileView.notice-modal || root.notice-control);
     property <bool> keyboard-focus;
     callback clicked();
     forward-focus: keys;
@@ -278,7 +279,7 @@ export component MField inherits Rectangle {
     border-color: input.has-focus ? Theme.accent : Theme.line;
     animate border-color, background { duration: Motion.fast; enabled: Motion.active; }
     input := TextInput { x: 12px; width: parent.width - 24px; height: parent.height;
-        enabled: root.enabled && !MobileView.modal;
+        enabled: root.enabled && !MobileView.modal && !MobileView.notice-modal;
         text <=> root.text; input-type: root.secret ? InputType.password : InputType.text; font-size: MobileTypography.font-size(16); color: Theme.ink; single-line: true; vertical-alignment: center;
         selection-background-color: Theme.primary; selection-foreground-color: #ffffff;
         edited => { root.edited(self.text); }
@@ -330,28 +331,38 @@ export component MNotice inherits Rectangle {
     in property <string> text;
     in property <bool> error;
     in property <float> progress;
+    in property <length> available-height;
     callback dismissed();
-    height: content.preferred-height;
+    height: min(content.preferred-height, max(72px, root.available-height));
     border-radius: 8px; border-width: 1px; border-color: Theme.line; background: Theme.surface;
     drop-shadow-blur: 16px; drop-shadow-offset-y: 4px; drop-shadow-color: #00000030;
     TouchArea { }
-    content := VerticalLayout { alignment: start; padding: Theme.card-padding; spacing: Theme.content-gap;
-        HorizontalLayout { cross-axis-alignment: center; spacing: Theme.content-gap;
-            MParagraph { text: root.text; font-size: MobileTypography.font-size(15); color: root.error ? Theme.danger : Theme.secondary; }
-            MButton { modal-control: true; text: "关闭"; width: max(68px, MobileTypography.font-size(15) * 2 + 16px); horizontal-stretch: 0;
+    content := VerticalLayout { padding: Theme.card-padding; spacing: Theme.content-gap; alignment: start;
+        if root.error: MHeading { text: "发生错误"; color: Theme.danger; }
+        MScroll {
+            content-key: root.text; preferred-height: body.preferred-height;
+            body := VerticalLayout { alignment: start; spacing: Theme.content-gap;
+                MParagraph { text: root.text; font-size: MobileTypography.font-size(15); color: root.error ? Theme.danger : Theme.secondary; }
+                if root.error: HorizontalLayout { spacing: MobileTypography.small-gap;
+                    MButton { modal-control: true; notice-control: true; text: "导出诊断";
+                        clicked => { MobileActions.request(MobileIntent.export-diagnostics, root.text, ""); }
+                    }
+                    MButton { modal-control: true; notice-control: true; text: "复制诊断";
+                        clicked => { MobileActions.request(MobileIntent.copy-diagnostics, root.text, ""); }
+                    }
+                }
+                if root.error: MSmall { text: "提交 issue 时附上报告、操作步骤和发生时间；分享前检查敏感信息。"; wrap: word-wrap; }
+                if !root.error: MProgress { height: 2px; value: root.progress; smooth: false; }
+            }
+        }
+        HorizontalLayout { alignment: end;
+            MButton { modal-control: true; notice-control: true; text: "关闭"; width: max(68px, MobileTypography.font-size(15) * 2 + 16px); horizontal-stretch: 0;
+                property <[length]> target: [self.absolute-position.x, self.absolute-position.y, self.width, self.height];
+                changed target => { MobileView.notice-close-target = self.target; }
+                init => { MobileView.notice-close-target = self.target; }
                 clicked => { root.dismissed(); }
             }
         }
-        if root.error: HorizontalLayout { spacing: MobileTypography.small-gap;
-            MButton { modal-control: true; text: "导出诊断";
-                clicked => { MobileActions.request(MobileIntent.export-diagnostics, root.text, ""); }
-            }
-            MButton { modal-control: true; text: "复制诊断";
-                clicked => { MobileActions.request(MobileIntent.copy-diagnostics, root.text, ""); }
-            }
-        }
-        if root.error: MSmall { text: "提交 issue 时附上报告、操作步骤和发生时间；分享前检查敏感信息。"; wrap: word-wrap; }
-        if !root.error: MProgress { height: 2px; value: root.progress; smooth: false; }
     }
 }
 export component MNav inherits Rectangle {

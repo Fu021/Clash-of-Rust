@@ -78,6 +78,9 @@ export component MobileFrame inherits Rectangle {
     keys := FocusScope {
         width: parent.width; height: parent.height;
         capture-key-pressed(event) => {
+            if event.text == Key.Escape && MobileView.notice != "" && MobileView.notice-error {
+                MobileView.notice = ""; return accept;
+            }
             if event.text == Key.Escape && MobileView.rule-drag-id != "" {
                 MobileView.rule-drag-id = ""; MobileView.rule-drag-target = ""; return accept;
             }
@@ -187,13 +190,28 @@ export component MobileFrame inherits Rectangle {
         }
         MobileModal { centered: root.centered-modal || root.expanded; }
         // Last sibling: notifications overlay both page content and modal sheets.
-        if notice-presence.mounted: MNotice {
-            x: MobileView.safe-left + (root.usable-width - self.width) / 2;
-            y: MobileView.safe-top + 8px - (1 - notice-presence.progress) * 8px; opacity: notice-presence.progress; width: min(600px, root.usable-width - 24px);
-            text: root.notice-text;
-            error: MobileView.notice-error;
-            progress: clamp((animation-tick() - root.notice-start) / 8s, 0, 1);
-            dismissed => { MobileView.notice = ""; }
+        if notice-presence.mounted: Rectangle {
+            width: root.width; height: root.height - MobileView.keyboard-inset;
+            opacity: notice-presence.progress;
+            background: MobileView.notice-error ? #00000066 : transparent;
+            if MobileView.notice-error: TouchArea { }
+            error-focus := FocusScope {
+                property <bool> active: MobileView.notice != "" && MobileView.notice-error;
+                enabled: self.active;
+                changed active => { if self.active { self.focus(); } }
+                init => { if self.active { self.focus(); } }
+            }
+            MNotice {
+                x: MobileView.safe-left + (root.usable-width - self.width) / 2;
+                y: MobileView.notice-error ? MobileView.safe-top + max(8px, (root.usable-height - self.height) / 2)
+                    : MobileView.safe-top + 8px - (1 - notice-presence.progress) * 8px;
+                width: min(600px, root.usable-width - 24px);
+                text: root.notice-text;
+                error: MobileView.notice-error;
+                available-height: root.usable-height * (MobileView.notice-error ? 0.8 : 0.4);
+                progress: clamp((animation-tick() - root.notice-start) / 8s, 0, 1);
+                dismissed => { MobileView.notice = ""; }
+            }
         }
     }
 }

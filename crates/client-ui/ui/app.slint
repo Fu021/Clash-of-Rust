@@ -47,6 +47,7 @@ export component AppWindow inherits Window {
     changed appearance => { Theme.appearance = root.appearance; }
     changed font-scale => { Theme.text-scale = root.font-scale; }
     property <int> accent: UiData.accent;
+    property <bool> error-active: UiData.notice != "" && UiData.notice-error;
     changed accent => { Theme.accent-index = root.accent; }
     property <[string]> titles: ["首页", "代理", "订阅", "连接", "规则", "日志", "网络诊断", "IP 检测", "A÷检测", "设置"];
     property <[int]> sidebar-pages: [0, 1, 2, 3, 4, 5, 6, 7, 8];
@@ -55,6 +56,12 @@ export component AppWindow inherits Window {
     forward-focus: keys;
     keys := FocusScope {
         width: parent.width; height: parent.height;
+        capture-key-pressed(event) => {
+            if root.error-active && event.text == Key.Escape {
+                UiActions.dispatch(Intent.dismiss-notice, "", ""); return accept;
+            }
+            return reject;
+        }
         key-pressed(event) => {
             if event.text == Key.Escape {
                 UiActions.dispatch(Intent.escape, "", "");
@@ -171,6 +178,8 @@ export component AppWindow inherits Window {
     // Only active/closing overlays mount their content; the page remains live.
     dialog-host := AppDialog { }
     // Last sibling: notices overlay dialogs without changing page geometry.
-    notice-host := DesktopNotice { x: (parent.width - self.width) / 2; width: min(640px, parent.width - 48px); }
+    notice-host := DesktopNotice {
+        width: parent.width; available-height: root.height;
+    }
     }
 }

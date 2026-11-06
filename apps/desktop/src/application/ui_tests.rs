@@ -684,6 +684,32 @@ fn pointer_keyboard_escape_and_modal_input_use_the_production_callbacks() {
         text: Key::Escape.into(),
     });
     assert_eq!(events.borrow().last().unwrap().0, Intent::Escape);
+    data.set_modal(2);
+    data.set_edit_name("Unsaved subscription".into());
+    data.set_edit_source("https://example.invalid/draft".into());
+    data.set_notice("检查更新失败：测试网络不可用".into());
+    data.set_notice_error(true);
+    let _ = window.window().take_snapshot().unwrap();
+    events.borrow_mut().clear();
+    click(65.0, 156.0);
+    assert!(
+        events.borrow().is_empty(),
+        "the centered error must block navigation behind it"
+    );
+    window
+        .window()
+        .dispatch_event(WindowEvent::KeyPressed { text: "x".into() });
+    assert_eq!(data.get_edit_name(), "Unsaved subscription");
+    assert_eq!(data.get_modal(), 2);
+    window.window().dispatch_event(WindowEvent::KeyPressed {
+        text: Key::Escape.into(),
+    });
+    assert_eq!(
+        events.borrow().last().unwrap().0,
+        Intent::DismissNotice,
+        "Escape must dismiss the error before closing the underlying editor"
+    );
+    assert_eq!(data.get_edit_source(), "https://example.invalid/draft");
     window.hide().unwrap();
 }
 

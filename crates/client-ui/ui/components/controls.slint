@@ -154,7 +154,8 @@ export component ActionButton inherits Rectangle {
     in property <bool> success;
     in property <bool> dropdown: false;
     in property <bool> expanded: false;
-    property <bool> interactive: root.enabled && !root.busy && (UiData.modal == 0 || root.modal-control);
+    in property <bool> notice-control;
+    property <bool> interactive: root.enabled && !root.busy && (UiData.modal == 0 || root.modal-control) && (!UiData.notice-modal || root.notice-control);
     // Mouse activation must not leave a focus highlight that resembles selection.
     property <bool> keyboard-focus: false;
     property <bool> pressed: root.interactive && area.pressed;
@@ -277,7 +278,7 @@ export component Field inherits Rectangle {
         width: parent.width - 24px;
         height: self.preferred-height;
         text <=> root.text;
-        enabled: root.enabled && (UiData.modal == 0 || root.modal-control);
+        enabled: root.enabled && (UiData.modal == 0 || root.modal-control) && !UiData.notice-modal;
         single-line: true;
         input-type: root.secret ? InputType.password : InputType.text;
         font-size: Theme.body-size;
@@ -370,14 +371,14 @@ export component Toggle inherits Rectangle {
         background: #ffffff;
     }
     toggle-focus := FocusScope {
-        enabled: root.enabled && (UiData.modal == 0 || root.modal-control);
+        enabled: root.enabled && (UiData.modal == 0 || root.modal-control) && !UiData.notice-modal;
         key-pressed(event) => {
             if event.text == " " || event.text == "\n" { root.toggled(!root.checked); return accept; }
             return reject;
         }
     }
     TouchArea {
-        enabled: root.enabled && (UiData.modal == 0 || root.modal-control);
+        enabled: root.enabled && (UiData.modal == 0 || root.modal-control) && !UiData.notice-modal;
         mouse-cursor: pointer;
         clicked => { toggle-focus.focus(); root.toggled(!root.checked); }
     }
@@ -401,7 +402,7 @@ export component SettingRow inherits Rectangle {
         }
         Toggle {
             modal-control: root.modal-control;
-            enabled: root.enabled && (UiData.modal == 0 || root.modal-control);
+            enabled: root.enabled && (UiData.modal == 0 || root.modal-control) && !UiData.notice-modal;
             checked: root.checked;
             toggled(value) => { root.toggled(value); }
         }
