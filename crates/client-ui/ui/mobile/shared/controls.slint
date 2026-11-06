@@ -328,6 +328,7 @@ export component MProgress inherits ProgressTrack {
 // like the desktop notice. Absolute offsets must not place controls below it.
 export component MNotice inherits Rectangle {
     in property <string> text;
+    in property <bool> error;
     in property <float> progress;
     callback dismissed();
     height: content.preferred-height;
@@ -336,12 +337,21 @@ export component MNotice inherits Rectangle {
     TouchArea { }
     content := VerticalLayout { alignment: start; padding: Theme.card-padding; spacing: Theme.content-gap;
         HorizontalLayout { cross-axis-alignment: center; spacing: Theme.content-gap;
-            MParagraph { text: root.text; font-size: MobileTypography.font-size(15); color: Theme.secondary; }
+            MParagraph { text: root.text; font-size: MobileTypography.font-size(15); color: root.error ? Theme.danger : Theme.secondary; }
             MButton { modal-control: true; text: "关闭"; width: max(68px, MobileTypography.font-size(15) * 2 + 16px); horizontal-stretch: 0;
                 clicked => { root.dismissed(); }
             }
         }
-        MProgress { height: 2px; value: root.progress; smooth: false; }
+        if root.error: HorizontalLayout { spacing: MobileTypography.small-gap;
+            MButton { modal-control: true; text: "导出诊断";
+                clicked => { MobileActions.request(MobileIntent.export-diagnostics, root.text, ""); }
+            }
+            MButton { modal-control: true; text: "复制诊断";
+                clicked => { MobileActions.request(MobileIntent.copy-diagnostics, root.text, ""); }
+            }
+        }
+        if root.error: MSmall { text: "提交 issue 时附上报告、操作步骤和发生时间；分享前检查敏感信息。"; wrap: word-wrap; }
+        if !root.error: MProgress { height: 2px; value: root.progress; smooth: false; }
     }
 }
 export component MNav inherits Rectangle {

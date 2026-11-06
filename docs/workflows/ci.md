@@ -40,7 +40,7 @@ Python 和原始云镜像使用官方优先、原包私网回退，全部新导�
 
 ### 测试覆盖
 
-- 六种桌面平台使用相同的 Release profile 完成整个 workspace 的格式检查、Clippy、编译和源码单元测试，包括共享移动会话；Android 另用三种 ABI 构建实际 Slint/Java/Go 宿主，iOS 不参与构建。
+- 六种桌面平台使用相同的 Release profile 完成格式检查及桌面相关包的 Clippy、编译和源码单元测试；编译与测试明确排除 `clash-mobile-runtime` 和 `clash-android`，共享业务库仍按桌面依赖正常验证。Android 三个 ABI job 自行执行移动会话及请求门禁的宿主单元测试和 Clippy，再编译对应 Android target 的实际 Slint/Java/Go 宿主；宿主测试不等于 ARM 真机验收。iOS 不参与构建。
 - Linux x64/ARM64 在同一轮冻结的 Ubuntu 20.04 镜像中构建；独立 Python 与镜像按上游校验值固定。逐个检查发行 ELF 与集成测试程序的依赖和 `GLIBC` 符号上限 2.31，将镜像、系统依赖及文件摘要写入产物。镜像共享宿主内核，旧内核及完整安装/GUI 验证另见[发布流程](release.md#publish-release)。
 - 单元测试保留配置与规则、网络响应解析、认证信息脱敏、状态恢复、任务取消、列表复用与边界、实际指针交互等验证。`cor` 的命令解析、帮助和无显示环境入口也在源码测试内验证；历史截图和长期忽略的联网/平台手工回归入口已移除。
 - 真实系统集成测试只运行系统代理与 TUN：验证代理设置写入、HTTP 转发、TUN 接管无显式代理的流量、模式恢复及关闭清理。Linux 使用隔离网络命名空间和 GSettings 内存后端；macOS 使用真实 launchd 网络助手；Windows 先注册服务，再以普通用户令牌运行代理/TUN、恢复和服务清理检查。

@@ -34,6 +34,7 @@ mod region_check;
 pub mod rule_manager;
 pub mod runtime;
 pub mod subscription;
+pub mod support;
 pub mod update;
 
 pub const WINDOW_TITLE: &str = "Clash of Rust";

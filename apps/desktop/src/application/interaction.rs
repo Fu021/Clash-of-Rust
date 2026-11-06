@@ -190,6 +190,15 @@ impl App {
             Message::TextScale(scale) => self.dispatch(Action::TextScale(*scale)),
             Message::TraySpeed(enabled) => self.dispatch(Action::TraySpeed(*enabled)),
             Message::Copy(value) => desktop_runtime::clipboard::write(value.clone()),
+            Message::ExportDiagnostics(context) => self.export_diagnostics(context),
+            Message::DiagnosticsExported(result) => {
+                self.diagnosing = false;
+                match result {
+                    Ok(path) => self.show_notice(format!("诊断已导出：{path}"), false),
+                    Err(error) => self.show_notice(format!("诊断导出失败：{error}"), true),
+                }
+                none()
+            }
             Message::LogLevel(level) => {
                 self.log_level = *level;
                 self.list_offset = 0;

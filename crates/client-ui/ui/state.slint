@@ -12,7 +12,7 @@ export enum Intent {
     rule-move-edge, rule-restore, rule-discard, rule-apply, rule-close-editor,
     rule-text-mode, rule-raw, rule-kind, rule-payload, rule-policy, rule-no-resolve,
     rule-enabled, rule-position, rule-save,
-    clear-logs, export-logs, log-level, log-detail, test-url, dns-host, probe, dns,
+    clear-logs, export-logs, export-diagnostics, log-level, log-detail, test-url, dns-host, probe, dns,
     site-all, site-cancel, site-category, site-open-category, site-status, site-region, site-detail,
     site-reset, site-report, site-retest, site-probe,
     claude-start, claude-cancel, claude-close-session, claude-protection, claude-confirm-protection,
@@ -76,6 +76,7 @@ export global UiData {
     in-out property <string> node;
     in-out property <string> notice;
     in-out property <bool> notice-error;
+    in-out property <bool> diagnosing;
     in-out property <int> notice-revision;
     in-out property <float> notice-elapsed;
     in-out property <bool> notification-busy;

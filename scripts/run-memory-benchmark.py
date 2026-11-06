@@ -18,7 +18,7 @@ import time
 import urllib.request
 import uuid
 
-from build_support import ROOT, write_json, core_directory, desktop_directory, package_version
+from build_support import ROOT, write_json, core_directory, desktop_directory, package_version, desktop_cargo_scope
 from memory_desktop import TrayHost, close_window, wait_until
 
 
@@ -479,7 +479,7 @@ def main():
     (output/'gui-fixture.yaml').write_text(fixture(args.workload), encoding='utf-8')
     command = ['cargo', 'build', '--locked', '--bins', '--example', 'memory_benchmark']
     if desktop != source:
-        command.append('--workspace')
+        command.extend(desktop_cargo_scope(source))
     if args.profile == 'release':
         command.append('--release')
     with (output/'build.log').open('x') as log:

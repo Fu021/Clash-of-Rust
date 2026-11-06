@@ -1,5 +1,5 @@
 import { Motion, MotionScope, ProgressTrack } from "components/motion.slint";
-import { DesktopNotice } from "components/notice.slint";
+import { DesktopNotice, DiagnosticActions } from "components/notice.slint";
 import { ScrollView } from "std-widgets.slint";
 import { UiData, UiActions, Intent } from "state.slint";
 import { Theme } from "theme/palette.slint";
@@ -143,13 +143,7 @@ export component AppWindow inherits Window {
             }
             if UiData.network-alert != "": ContentPanel {
                 Paragraph { text: UiData.network-alert; color: Theme.warning; }
-                HorizontalLayout { cross-axis-alignment: center; spacing: Theme.content-gap;
-                    Caption { text: "请由网络管理员检查；反馈问题时附上诊断报告。"; }
-                    ActionButton {
-                        text: "复制诊断命令";
-                        clicked => { UiActions.dispatch(Intent.copy, "cor diagnose --output cor-diagnose.json", ""); }
-                    }
-                }
+                DiagnosticActions { context: UiData.network-alert; }
             }
             if UiData.update-busy || UiData.update-available: ContentPanel {
                 HorizontalLayout { cross-axis-alignment: center; spacing: Theme.content-gap;

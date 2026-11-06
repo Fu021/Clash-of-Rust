@@ -55,6 +55,8 @@ impl App {
                         | Intent::RuleCancelProfile
                         | Intent::CancelConfirm
                         | Intent::CloseDetail
+                        | Intent::Copy
+                        | Intent::ExportDiagnostics
                 )))
         {
             return Task::none();
@@ -178,6 +180,7 @@ impl App {
             Intent::LogDetail => Message::LogDetail(a.into()),
             Intent::ClearLogs => Message::Action(Action::ClearLogs),
             Intent::ExportLogs => Message::Action(Action::ExportLogs),
+            Intent::ExportDiagnostics => Message::ExportDiagnostics(a.into()),
             Intent::TestUrl => Message::TestUrl(a.into()),
             Intent::DnsHost => Message::DnsHost(a.into()),
             Intent::Probe => Message::Probe(boolean(a)),

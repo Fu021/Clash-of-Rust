@@ -7,7 +7,7 @@ export enum MobileIntent {
     import-profile, pick-file, activate-profile, update-profile, save-profile, delete-profile,
     connection-sort, connection-detail, close-connection, close-all, copy,
     rule-select, rule-edit, rule-add, rule-save, rule-move, rule-drop, rule-enable, rule-restore, rule-filter, rule-delete, rule-apply, rule-discard,
-    rule-shortcut, log-level, clear-logs, export-logs, probe, dns,
+    rule-shortcut, log-level, clear-logs, export-logs, export-diagnostics, copy-diagnostics, probe, dns,
     site-start, site-cancel, site-category, site-filter, site-retest, site-probe, site-detail, claude-start, claude-cancel, claude-key, claude-protection, export-report,
     appearance, accent, text-scale, dns-override, ipv6, udp, save-ports, interval, subscription-interval, update-geo, check-update, install-update, cancel-update, open-release, update-prereleases, fake-ip, fake-ip-add, fake-ip-remove, fake-ip-restore-defaults,
 }
@@ -150,6 +150,7 @@ export global MobileView {
     in-out property <string> test-url: "https://www.gstatic.com/generate_204";
     in-out property <string> dns-host: "github.com";
     in-out property <string> notice;
+    in-out property <bool> notice-error;
     in-out property <int> notice-revision;
     in-out property <float> notice-elapsed;
     in-out property <length> safe-top;

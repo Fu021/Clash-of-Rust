@@ -17,6 +17,8 @@
 - `core`：按 CI 依赖快照锁定的 mihomo Go 模块及 gomobile 桥接；使用上游 `cmfa,with_gvisor` 构建标签，路由与应用排除交给 `VpnService`，出站套接字经 `protect` 排除，避免进入自身 TUN。
 - `crates/mobile-ffi`：不依赖 Slint、JNI 或 Android SDK 的共享会话、配置、订阅、规则和控制器操作。原生能力由 `NativeHost` 注入，iOS 可以另接宿主。
 
+移动会话及请求门禁的 Clippy/宿主单元测试由三个 Android ABI job 自行执行，不再由桌面矩阵代跑；之后分别检查、编译实际 Android target。x64 继续运行模拟器集成，ARM64/ARMv7 的宿主测试不代表真机运行通过，见[CI 覆盖](../../docs/workflows/ci.md#测试覆盖)。
+
 ## 当前能力
 
 已接入订阅管理、节点/测速、VPN/应用排除、连接、规则草稿、日志、网络诊断、IP/A÷检测、网络/外观设置及客户端更新。订阅自动更新默认 360 分钟，0 关闭，仅处理远程源且失败保留原状态，见[自动更新](../../docs/subscriptions.md)。字号跟随 Android 系统 SP 换算（含 Android 14 非线性缩放），不用桌面字号；卡片适应内容，保留最小触摸区域。

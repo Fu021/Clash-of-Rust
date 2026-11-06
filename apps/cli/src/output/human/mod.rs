@@ -311,7 +311,7 @@ fn network_notice(out: &mut dyn Write, value: &Value) -> Result<()> {
         return field(
             out,
             "下一步",
-            "请由网络管理员检查持有进程；反馈问题时运行 cor diagnose --output cor-diagnose.json 并附上报告",
+            "导出报告：cor diagnose --output cor-diagnose.json",
         );
     }
     Ok(())
@@ -399,11 +399,7 @@ fn diagnose(out: &mut dyn Write, value: &Value) -> Result<()> {
             &configured
         },
     )?;
-    network_notice(out, &value["host_routes"])?;
-    message(
-        out,
-        "反馈问题：运行 cor diagnose --output cor-diagnose.json，附上报告、出错操作和发生时间。",
-    )
+    network_notice(out, &value["host_routes"])
 }
 
 fn message(out: &mut dyn Write, message: &str) -> Result<()> {

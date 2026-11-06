@@ -9,6 +9,7 @@ export component LogsPage inherits PageSurface {
             Field { placeholder: "搜索日志"; focus-id: "page-search"; text <=> UiData.query; edited(value) => { UiActions.dispatch(Intent.query, value, ""); } }
             Select { width: 132px; horizontal-stretch: 0; options: ["全部等级", "TRACE", "DEBUG", "INFO", "WARN", "ERROR"]; value: UiData.log-level; selected(index, value) => { UiActions.dispatch(Intent.log-level, value, ""); } }
             ActionButton { text: "导出"; enabled: UiData.ready && !UiData.working; clicked => { UiActions.dispatch(Intent.export-logs, "", ""); } }
+            ActionButton { text: "导出诊断"; enabled: !UiData.diagnosing; clicked => { UiActions.dispatch(Intent.export-diagnostics, "", ""); } }
             ActionButton { text: "清空"; enabled: UiData.ready && !UiData.working; clicked => { UiActions.dispatch(Intent.clear-logs, "", ""); } }
         }
         Panel {

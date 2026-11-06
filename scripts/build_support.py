@@ -61,6 +61,20 @@ def package_version(source=None):
     return manifest_version(((Path(source) if source else ROOT)/'Cargo.toml').read_text(encoding='utf-8'))
 
 
+def desktop_cargo_scope(source=ROOT):
+    import tomllib
+
+    source = Path(source)
+    manifest = tomllib.loads((source/'Cargo.toml').read_text(encoding='utf-8'))
+    members = manifest.get('workspace', {}).get('members', [])
+    scope = ['--workspace']
+    for relative in ('crates/mobile-ffi', 'apps/android/native'):
+        if relative in members:
+            package = tomllib.loads((source/relative/'Cargo.toml').read_text(encoding='utf-8'))
+            scope.extend(['--exclude', package['package']['name']])
+    return scope
+
+
 def desktop_directory(source=None):
     source = Path(source) if source else ROOT
     return source/'apps/desktop' if (source/'apps/desktop/Cargo.toml').is_file() else source

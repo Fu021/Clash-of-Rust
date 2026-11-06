@@ -17,6 +17,7 @@ mod network_watch;
 mod notice;
 mod presentation;
 mod rules;
+mod support;
 #[cfg(test)]
 mod ui_testing;
 #[cfg(test)]
@@ -160,6 +161,8 @@ enum Message {
     CloseLogDetail,
     ConnectionResolved(u64, Result<String, String>),
     Copy(String),
+    ExportDiagnostics(String),
+    DiagnosticsExported(Result<String, String>),
     EditProfile(String),
     EditName(String),
     EditSource(String),
@@ -285,6 +288,8 @@ struct App {
     connection_detail: Option<String>,
     log_level: Option<logs::Level>,
     log_detail: Option<String>,
+    diagnosing: bool,
+    issue_events: VecDeque<serde_json::Value>,
     connection_lookup: connection_lookup::Lookup,
     picking_file: bool,
     picking_profile: Option<String>,
@@ -506,6 +511,8 @@ impl App {
             notice_started: error.then(std::time::Instant::now),
             notice_revision: 0,
             notice_timer: None,
+            diagnosing: false,
+            issue_events: VecDeque::new(),
             notification_busy: false,
             notification_checking: false,
             notification_prepared: false,
@@ -795,6 +802,8 @@ impl App {
             | Message::CloseLogDetail
             | Message::CloseConnectionDetail
             | Message::Copy(_)
+            | Message::ExportDiagnostics(_)
+            | Message::DiagnosticsExported(_)
             | Message::EditProfile(_)
             | Message::EditName(_)
             | Message::EditSource(_)
@@ -831,7 +840,7 @@ impl App {
                 self.updates.failure = None;
             }
             Message::NoticeExpired(revision) => {
-                if revision == self.notice_revision {
+                if revision == self.notice_revision && !self.error {
                     self.dismiss_notice();
                 }
             }
@@ -2206,7 +2215,11 @@ impl App {
                     Ok(result) => {
                         format!("{} · {} ms · {}", result.url, result.millis, result.detail)
                     }
-                    Err(error) => format!("测试失败：{error}"),
+                    Err(error) => {
+                        let message = format!("测试失败：{error}");
+                        self.show_notice(message.clone(), true);
+                        message
+                    }
                 };
                 self.add_test(line);
             }
@@ -2223,12 +2236,17 @@ impl App {
             }
             Message::DnsDone(result) => {
                 self.probing = false;
-                self.add_test(match result {
+                let line = match result {
                     Ok(addresses) => {
                         format!("系统 DNS · {} → {}", self.dns_host, addresses.join(", "))
                     }
-                    Err(error) => format!("DNS 查询失败：{error}"),
-                });
+                    Err(error) => {
+                        let message = format!("DNS 查询失败：{error}");
+                        self.show_notice(message.clone(), true);
+                        message
+                    }
+                };
+                self.add_test(line);
             }
             Message::Window((_, desktop_runtime::window::Event::Focused)) => {
                 self.visible = true;

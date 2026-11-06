@@ -90,7 +90,7 @@ def mobile_preview(args) -> None:
                       'inset-left': 44 if short and platform == 'ios' else 0,
                       'inset-right': 44 if short and platform == 'ios' else 0,
                       'text-scale': scale, 'preview-connected': connected, 'preview-keyboard': keyboard,
-                      'preview-notice': args.notice, 'preview-notice-elapsed': args.notice_elapsed,
+                      'preview-notice': args.notice, 'preview-notice-error': args.notice_error, 'preview-notice-elapsed': args.notice_elapsed,
                       'preview-rules-scroll': args.scroll_y,
                       **protection_fixture(args.protection_state), **extra}
             fixture = fixtures / (name + '.json')
@@ -325,6 +325,7 @@ def main() -> None:
     parser.add_argument("--pairs", action="store_true", help="also render light/dark pairs suitable for inline sharing")
     parser.add_argument("--full-settings", action="store_true", help="show all settings without scrolling in its page screenshot")
     parser.add_argument("--notice", default="", help="show a floating notification using the production component")
+    parser.add_argument("--notice-error", action="store_true", help="show the error state and diagnostic export actions")
     parser.add_argument("--protection-state", choices=["off", "active", "checking", "error"], default="off",
                         help="preview the persistent protection indicator without network effects")
     parser.add_argument("--notice-elapsed", type=float, default=3, help="elapsed notification lifetime in seconds")
@@ -392,7 +393,7 @@ def main() -> None:
             fixture.write_text(json.dumps({"preview-page": list(PAGES).index(page), "preview-dark": theme == "dark", "dialog": dialog,
                                            "preview-text-scale": round(args.text_scale * 100),
                                            "preview-rules-scroll": args.scroll_y,
-                                           "preview-notice": args.notice, "preview-notice-elapsed": args.notice_elapsed,
+                                           "preview-notice": args.notice, "preview-notice-error": args.notice_error, "preview-notice-elapsed": args.notice_elapsed,
                                            **protection_fixture(args.protection_state)}))
             image = output / f"{name}-{theme}.png"
             scene_size = f"{width}x{max(height, 1120)}" if args.full_settings and page == "settings" and not dialog else args.size

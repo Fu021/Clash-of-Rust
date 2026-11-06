@@ -1,4 +1,5 @@
 import { Motion, Presence } from "../components/motion.slint";
+import { DiagnosticActions } from "../components/notice.slint";
 import { Theme, AccentPalette } from "../theme/palette.slint";
 import { UiData, UiActions, Intent } from "../state.slint";
 import { PageScroll, Label, Caption, Paragraph, Heading, Panel, ContentPanel, ActionButton, Field, Select, SettingRow, CopyButton, Divider } from "../components/controls.slint";
@@ -153,8 +154,11 @@ export component AppDialog inherits Rectangle {
                                 }
                             }
                         }
-                        if UiData.modal-error != "": Paragraph { text: UiData.modal-error; color: Theme.danger; }
                     }
+                }
+                if UiData.modal-error != "": VerticalLayout { spacing: Theme.content-gap;
+                    Paragraph { text: UiData.modal-error; color: Theme.danger; }
+                    DiagnosticActions { context: UiData.modal-error; }
                 }
                 HorizontalLayout { cross-axis-alignment: center; spacing: Theme.content-gap;
                     if root.kind == 10 || root.kind == 11 || root.kind == 13: CopyButton {

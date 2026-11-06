@@ -704,6 +704,7 @@ dependencies = [
  "futures-util",
  "hmac",
  "hyper-util",
+ "libc",
  "regex",
  "reqwest",
  "roxmltree",

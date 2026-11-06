@@ -72,7 +72,7 @@ export component MobileFrame inherits Rectangle {
     init => { root.notice-start = animation-tick() - MobileView.notice-elapsed * 1s; root.notice-text = MobileView.notice; }
     background: Theme.canvas;
     animate background { duration: Motion.appearance; enabled: Motion.active; }
-    Timer { running: MobileView.notice != ""; interval: 100ms;
+    Timer { running: MobileView.notice != "" && !MobileView.notice-error; interval: 100ms;
         triggered => { if animation-tick() - root.notice-start >= 8s { MobileView.notice = ""; } }
     }
     keys := FocusScope {
@@ -191,6 +191,7 @@ export component MobileFrame inherits Rectangle {
             x: MobileView.safe-left + (root.usable-width - self.width) / 2;
             y: MobileView.safe-top + 8px - (1 - notice-presence.progress) * 8px; opacity: notice-presence.progress; width: min(600px, root.usable-width - 24px);
             text: root.notice-text;
+            error: MobileView.notice-error;
             progress: clamp((animation-tick() - root.notice-start) / 8s, 0, 1);
             dismissed => { MobileView.notice = ""; }
         }

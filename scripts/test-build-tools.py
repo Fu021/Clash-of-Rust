@@ -50,6 +50,58 @@ _release_package_spec.loader.exec_module(release_package)
 
 
 class BuildTests(unittest.TestCase):
+    def test_desktop_scope_uses_the_selected_checkout_members(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            (root/'Cargo.toml').write_text('[workspace]\nmembers=["apps/desktop"]\n')
+            self.assertEqual(build.desktop_cargo_scope(root), ['--workspace'])
+            native = root/'apps/android/native'
+            native.mkdir(parents=True)
+            (native/'Cargo.toml').write_text('[package]\nname="legacy-android-host"\n')
+            (root/'Cargo.toml').write_text('[workspace]\nmembers=["apps/desktop","apps/android/native"]\n')
+            self.assertEqual(build.desktop_cargo_scope(root), ['--workspace', '--exclude', 'legacy-android-host'])
+
+    def test_desktop_pipeline_excludes_mobile_without_dropping_shared_sources(self):
+        specification = importlib.util.spec_from_file_location('native_ci', build.ROOT/'scripts/run-ci.py')
+        native_ci = importlib.util.module_from_spec(specification)
+        specification.loader.exec_module(native_ci)
+        commands = []
+
+        def capture(command, **kwargs):
+            commands.append(command)
+            if command[:2] == ['cargo', 'test']:
+                raise RuntimeError('source checks completed')
+
+        with patch.object(sys, 'argv', ['run-ci.py', '--system', 'linux', '--arch', 'x64']), \
+                patch.object(native_ci, 'host_system', return_value='linux'), \
+                patch.object(native_ci, 'host_arch', return_value='x64'), \
+                patch.object(local_cache, 'workspace_sources'), \
+                patch.object(native_ci, 'run', side_effect=capture), \
+                patch.object(native_ci, 'cargo_messages', return_value=[]), \
+                patch.object(native_ci, 'test_binaries', return_value={}):
+            with self.assertRaisesRegex(RuntimeError, 'source checks completed'):
+                native_ci.main()
+        for command in commands:
+            if command[1] == 'fmt':
+                continue
+            excluded = [command[index + 1] for index, value in enumerate(command) if value == '--exclude']
+            self.assertEqual(set(excluded), {'clash-mobile-runtime', 'clash-android'})
+            self.assertIn('--workspace', command)
+        self.assertEqual([command[1] for command in commands], ['fmt', 'clippy', 'build', 'test'])
+
+    def test_android_build_runs_mobile_unit_tests_before_preparing_target_tools(self):
+        with patch.object(local_cache, 'workspace_sources'), \
+                patch.object(android_build, 'cargo_build') as clippy, \
+                patch.object(android_build, 'run', side_effect=RuntimeError('mobile tests executed')) as tests:
+            with self.assertRaisesRegex(RuntimeError, 'mobile tests executed'):
+                android_build.build('arm64')
+        for command in (clippy.call_args.args[0], tests.call_args.args[0]):
+            packages = [command[index + 1] for index, value in enumerate(command) if value == '-p']
+            self.assertEqual(packages, ['clash-mobile-runtime', 'clash-android'])
+            self.assertNotIn('--workspace', command)
+            self.assertIn('--locked', command)
+        self.assertIn('--lib', tests.call_args.args[0])
+
     def test_linux_ci_prepares_resources_on_host_before_entering_container(self):
         with patch.object(sys, 'argv', ['linux_ci.py', 'ci']), \
                 patch.object(linux_ci, 'require_actions'), \

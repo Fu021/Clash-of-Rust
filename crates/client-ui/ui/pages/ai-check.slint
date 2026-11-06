@@ -1,4 +1,5 @@
 import { PageSurface, ProgressTrack } from "../components/motion.slint";
+import { DiagnosticActions } from "../components/notice.slint";
 import { Theme } from "../theme/palette.slint";
 import { UiData, UiActions, Intent } from "../state.slint";
 import { PageScroll, Label, Caption, Heading, ContentPanel, RowPanel, ActionButton, Toggle, Badge, Paragraph } from "../components/controls.slint";
@@ -45,6 +46,7 @@ export component AiCheckPage inherits PageSurface {
             }
             if UiData.claude-busy: ProgressTrack { value: UiData.claude-progress; track: Theme.subtle-line; fill: Theme.accent; }
             if UiData.claude-status != "": Paragraph { text: UiData.claude-status; font-size: Theme.detail-size; color: UiData.claude-error ? Theme.danger : Theme.secondary; }
+            if UiData.claude-error: DiagnosticActions { context: UiData.claude-status; }
             if UiData.claude-audit != "": Caption { text: UiData.claude-audit; }
             if UiData.claude-guard != "": Caption { text: UiData.claude-guard; }
             if UiData.browser-session: RowPanel {

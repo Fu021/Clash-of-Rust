@@ -2287,6 +2287,19 @@ impl Engine {
             });
         }
     }
+    pub fn log_snapshot(&self) -> Result<Vec<String>> {
+        if let Some(remote) = &self.remote {
+            return remote.call(ControlCommand::Logs { clear: false });
+        }
+        Ok(self
+            .logs
+            .lock()
+            .map_err(|_| anyhow::anyhow!("日志缓冲区不可用"))?
+            .iter()
+            .map(|line| line.to_string())
+            .collect())
+    }
+
     pub fn export_logs(&self) -> Result<PathBuf> {
         if let Some(remote) = &self.remote {
             return remote.call(ControlCommand::ExportLogs);

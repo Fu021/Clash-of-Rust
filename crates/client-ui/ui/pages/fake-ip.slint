@@ -1,4 +1,5 @@
 import { Theme } from "../theme/palette.slint";
+import { DiagnosticActions } from "../components/notice.slint";
 import { UiData, UiActions, Intent } from "../state.slint";
 import { PageScroll, Label, Caption, Heading, ActionButton, Field, ContentPanel } from "../components/controls.slint";
 
@@ -47,6 +48,7 @@ export component FakeIpPage inherits Rectangle {
             Caption { text: "格式：example.com、+.example.com 或 *.example.com；多个用逗号分隔。"; wrap: word-wrap; }
             Caption { text: "DNS 覆盖项删除后可一键还原，保留自定义项；订阅原有过滤规则仍会生效。"; wrap: word-wrap; }
             if UiData.fake-ip-error != "": Caption { text: UiData.fake-ip-error; color: Theme.warning; wrap: word-wrap; }
+            if UiData.fake-ip-error != "": DiagnosticActions { context: UiData.fake-ip-error; }
         }
         PageScroll {
             vertical-stretch: 1;

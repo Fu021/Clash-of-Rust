@@ -2,6 +2,7 @@
 import { AppWindow } from "app.slint";
 import { UiData } from "state.slint";
 import { Motion } from "components/motion.slint";
+import "../../../resources/fonts/NotoColorEmoji-Regular.ttf";
 
 export component Preview inherits AppWindow {
     in-out property <string> preview-network-alert;
@@ -19,6 +20,8 @@ export component Preview inherits AppWindow {
     in-out property <int> preview-text-scale <=> UiData.text-scale;
     in-out property <int> preview-accent <=> UiData.accent;
     in-out property <string> preview-notice <=> UiData.notice;
+    in-out property <bool> preview-notice-error <=> UiData.notice-error;
+    in-out property <string> preview-modal-error <=> UiData.modal-error;
     in-out property <float> preview-notice-elapsed <=> UiData.notice-elapsed;
     in-out property <bool> preview-protection-pending <=> UiData.protection-pending;
     in-out property <bool> preview-protected <=> UiData.protected;

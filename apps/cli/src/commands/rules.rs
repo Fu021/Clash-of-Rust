@@ -22,10 +22,14 @@ pub(super) async fn execute(args: &Args) -> Result<()> {
                 .map(|(i,name)|json!({"name":name,"enabled":draft.enabled[i],"already_in_subscription":doc.included[i],"rule":clash_client_core::config::SUBSCRIPTION_RULES[i]})).collect::<Vec<_>>()));
         }
         let (rows, warnings) = doc.rows(&draft);
+        let has_warnings = !warnings.is_empty();
         for warning in warnings {
             if !args.flag("quiet") {
                 eprintln!("{warning}");
             }
+        }
+        if has_warnings {
+            crate::diagnostics::failure_hint(Some(args));
         }
         let filter = args.get("filter").unwrap_or("").to_lowercase();
         let rows=rows.iter().enumerate().filter(|(_,r)|r.raw.to_lowercase().contains(&filter)||r.id.contains(&filter))

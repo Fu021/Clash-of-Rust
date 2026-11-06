@@ -207,6 +207,8 @@ struct State {
     query: String,
     selected: String,
     notice: String,
+    notice_error: bool,
+    issue_events: VecDeque<Value>,
     copied: (i32, Arc<str>),
     logs: VecDeque<(String, String)>,
     log_level: String,
@@ -449,6 +451,8 @@ async fn run_loop(
         query: String::new(),
         selected: String::new(),
         notice: String::new(),
+        notice_error: false,
+        issue_events: VecDeque::new(),
         copied: Default::default(),
         logs: VecDeque::new(),
         log_level: "全部等级".into(),
@@ -498,6 +502,7 @@ async fn run_loop(
     };
     if let Err(error) = state.session.attach_or_initialize() {
         state.notice = format!("内核启动失败：{error:#}");
+        state.notice_error = true;
         log::error!("{}", state.notice);
         state.logs.push_back(("ERROR".into(), state.notice.clone()));
     }
@@ -629,6 +634,7 @@ async fn run_loop(
                             if let Err(error) = tokio::fs::remove_file(path).await
                                 && error.kind() != std::io::ErrorKind::NotFound {
                                 state.notice = format!("下载已取消，缓存清理失败：{error}");
+                                state.notice_error = true;
                             }
                         }
                     }
@@ -654,16 +660,18 @@ async fn run_loop(
                                 state.update_confirmation = Some(core::update::channel::Consent::new(package.version.clone()));
                             } else {
                                 state.notice = "更新版本已变化，请重新检查更新".into();
+                                state.notice_error = true;
                             }
                         } else if (package.preview && (!state.session.settings.update_prereleases
                             || request.b != "confirmed"
                             || !state.update_confirmation.as_ref().is_some_and(|consent| consent.accepts(&package.version))))
                             || (!package.preview && !request.b.is_empty()) {
                             state.notice = "请先阅读预发布风险提示，并等待 3 秒后确认".into();
+                            state.notice_error = true;
                         } else {
                         state.update_confirmation = None;
                         if state.update_downloaded && state.update_path.is_file() {
-                            if let Err(error)=state.session.native.request(json!({"op":"install-update"})) {state.notice=format!("{error:#}");}
+                            if let Err(error)=state.session.native.request(json!({"op":"install-update"})) {state.notice=format!("{error:#}");state.notice_error=true;}
                         } else {
                             state.update_busy=true;state.update_downloading=true;state.update_status="正在下载更新…".into();state.update_progress=0.0;
                             let path=state.update_path.clone();
@@ -752,6 +760,7 @@ async fn run_loop(
                 } else if intent == MobileIntent::ClaudeStart {
                     start_claude_check(&mut state, &mut claude_job, updates.clone());
                 } else {
+                    state.notice_error = false;
                     match handle(&mut state, request).await {
                         Ok(()) => {
                             state.completed = Some(intent);
@@ -764,7 +773,7 @@ async fn run_loop(
                                 |MobileIntent::ClaudeProtection) {cancel_delay(&mut state,&mut delay_job);}
                             if !matches!(intent, MobileIntent::Query | MobileIntent::Copy | MobileIntent::ConnectionSort
                                 | MobileIntent::ConnectionDetail | MobileIntent::ConnectionPage | MobileIntent::RulePage
-                                | MobileIntent::LogLevel | MobileIntent::ClearLogs | MobileIntent::RuleTextMode
+                                | MobileIntent::LogLevel | MobileIntent::ClearLogs | MobileIntent::ExportLogs | MobileIntent::ExportDiagnostics | MobileIntent::CopyDiagnostics | MobileIntent::RuleTextMode
                                 | MobileIntent::RuleSelect | MobileIntent::RuleEdit | MobileIntent::RuleSave
                                 | MobileIntent::RuleMove | MobileIntent::RuleDelete | MobileIntent::RuleShortcut
                                 | MobileIntent::RuleDiscard | MobileIntent::NodePage | MobileIntent::NodeSort
@@ -776,6 +785,7 @@ async fn run_loop(
                         },
                         Err(error) => {
                             state.notice = format!("{error:#}");
+                            state.notice_error = true;
                             log::error!("{}",state.notice);
                             state.logs.push_back(("ERROR".into(),state.notice.clone()));
                         }
@@ -788,7 +798,7 @@ async fn run_loop(
                     refresh_requested = true;
                     if serde_json::from_str::<Value>(&value).ok().is_some_and(|v|v["event"]=="back") {
                         let weak=weak.clone();slint::invoke_from_event_loop(move||{if let Some(ui)=weak.upgrade(){ui.invoke_native_back();}})?;
-                    } else if let Err(error) = native_event(&mut state,&value).await { state.notice=format!("{error:#}"); }
+                    } else if let Err(error) = native_event(&mut state,&value).await { state.notice=format!("{error:#}");state.notice_error=true; }
                 }
             }
             value = update_rx.recv() => {
@@ -802,6 +812,7 @@ async fn run_loop(
                                 Err(error) => {
                                     if let Err(restore) = rollback_protection(&mut state, &format!("保护验证失败：{error}")) {
                                         state.notice = format!("保护验证失败：{error}；恢复失败：{restore:#}");
+                                        state.notice_error = true;
                                     }
                                 }
                             }
@@ -821,9 +832,10 @@ async fn run_loop(
                             Ok(values)=> {
                                 let failed=values.values().filter(|&&delay|delay==0).count();
                                 state.notice=format!("测速完成 · {} 项，{} 项超时",values.len(),failed);
+                                state.notice_error=failed > 0;
                                 if all {state.node_delays=values;} else {state.node_delays.extend(values);}
                             }
-                            Err(error)=>state.notice=format!("测速失败：{error}"),
+                            Err(error)=>{state.notice=format!("测速失败：{error}");state.notice_error=true;},
                         }
                         immediate=true;refresh_requested=true;
                     }
@@ -852,7 +864,7 @@ async fn run_loop(
                         claude_job = None; state.claude_busy = false; immediate = true;
                         match result {
                             Ok(report) => {state.claude=Some(report); state.claude_status="检测完成 · 浏览器及网络采样已结束".into(); state.notice="检测完成".into();}
-                            Err(error) => {state.claude_status=format!("检测失败：{error}"); state.notice=error;}
+                            Err(error) => {state.claude_status=format!("检测失败：{error}"); state.notice=error;state.notice_error=true;}
                         }
                     }
                     Some(Update::Protection(result)) => {
@@ -873,6 +885,7 @@ async fn run_loop(
                         if let Err(error)=applied
                             && let Err(restore)=rollback_protection(&mut state,&format!("保护开启失败：{error:#}")) {
                             state.notice=format!("保护开启失败：{error:#}；恢复失败：{restore:#}");
+                            state.notice_error=true;
                         }
                         refresh_requested=true;
                     }
@@ -884,7 +897,7 @@ async fn run_loop(
                         state.geo_updating=false;geo_job=None;
                         match result.and_then(|staged|state.session.install_geo(staged.path()).map_err(|e|format!("{e:#}"))) {
                             Ok(manifest)=> {state.geo=manifest.display_status();state.notice="Geo 数据已更新".into();},
-                            Err(error)=>state.notice=format!("Geo 更新失败：{error}"),
+                            Err(error)=>{state.notice=format!("Geo 更新失败：{error}");state.notice_error=true;},
                         }
                     }
                     Some(Update::Subscription(pending, result)) => {
@@ -908,6 +921,7 @@ async fn run_loop(
                                     if pending.is_current(&state.session.settings, &state.session.profiles, &state.session.store).unwrap_or(false)
                                         && let Some(message) = core::subscription::format_notice(&error) {
                                         state.notice = format!("订阅定时更新失败，已保留原配置与运行状态：{message}");
+                                        state.notice_error = true;
                                     }
                                     state.logs.push_back(("WARN".into(), format!("订阅定时下载失败，已保留原配置与运行状态：{error}")));
                                 },
@@ -923,7 +937,7 @@ async fn run_loop(
                                 state.update_downloaded=state.update_downloaded && state.update_package.as_ref().map(|p|&p.version)==package.as_ref().map(|p|&p.version);
                                 state.update_package=package;
                             }
-                            Err(error)=>state.update_status=error,
+                            Err(error)=>{state.update_status=error.clone();state.notice=format!("检查更新失败：{error}");state.notice_error=true;},
                         }
                     }
                     Some(Update::DownloadProgress(generation,value)) if generation == state.update_generation =>{
@@ -939,9 +953,9 @@ async fn run_loop(
                         match result {
                             Ok(())=>{
                                 state.update_downloaded=true;state.update_status="下载完成，请在系统界面确认安装".into();
-                                if let Err(error)=state.session.native.request(json!({"op":"install-update"})) {state.notice=format!("{error:#}");}
+                                if let Err(error)=state.session.native.request(json!({"op":"install-update"})) {state.notice=format!("{error:#}");state.notice_error=true;}
                             }
-                            Err(error)=>state.update_status=error,
+                            Err(error)=>{state.update_status=error.clone();state.notice=format!("更新失败：{error}");state.notice_error=true;},
                         }
                     }
                     _ => {}
@@ -1136,6 +1150,15 @@ async fn run_loop(
         state.rule_form = None;
         state.rule_editor = None;
         let notice = std::mem::take(&mut state.notice);
+        let notice_error = std::mem::take(&mut state.notice_error);
+        if notice_error && !notice.is_empty() {
+            state
+                .issue_events
+                .push_back(core::support::incident(&notice));
+            while state.issue_events.len() > 20 {
+                state.issue_events.pop_front();
+            }
+        }
         let weak = weak.clone();
         let gate = profile_gate.clone();
         slint::invoke_from_event_loop(move || {
@@ -1146,6 +1169,7 @@ async fn run_loop(
                 ui.global::<MobileData>().set_profile_busy(gate.busy());
                 apply(&ui, view);
                 if !notice.is_empty() {
+                    ui.global::<MobileView>().set_notice_error(notice_error);
                     ui.invoke_notify(notice.into());
                 }
             }
@@ -1242,6 +1266,7 @@ fn rollback_protection(state: &mut State, reason: &str) -> Result<()> {
     }
     state.protection_status = reason.to_owned();
     state.notice = reason.to_owned();
+    state.notice_error = true;
     state.logs.push_back(("WARN".into(), reason.to_owned()));
     Ok(())
 }
@@ -1434,6 +1459,7 @@ async fn native_event(state: &mut State, raw: &str) -> Result<()> {
         }
         "error" | "notice" => {
             state.notice = value["value"].as_str().unwrap_or("").into();
+            state.notice_error = value["event"] == "error";
         }
         "file" => {
             let base = value["value"]["name"].as_str().unwrap_or("导入配置");
@@ -1659,6 +1685,36 @@ async fn handle(state: &mut State, request: Request) -> Result<()> {
             session.native.request(json!({"op":"export","name":"clash-of-rust-logs.txt",
                 "content":format!("Android UI: {}\n{}",PRESENTATION.lock().map(|s|s.clone()).unwrap_or_default(),
                     state.logs.iter().map(|(level,line)|format!("[{level}] {line}")).collect::<Vec<_>>().join("\n"))}))?;
+        }
+        MobileIntent::ExportDiagnostics | MobileIntent::CopyDiagnostics => {
+            let root = session.store.root.clone();
+            let context = json!({
+                "error":a,"events":state.issue_events,"page":state.page,
+                "core_running":session.running,"vpn_connected":session.vpn,
+                "site_results":core::support::ip_results(&state.ip_results),"claude_status":state.claude_status,
+                "presentation":PRESENTATION.lock().map(|value|value.clone()).unwrap_or_default(),
+                "platform":session.native.request(json!({"op":"diagnostics"})).map_err(|error|format!("{error:#}")),
+            });
+            let lines = state
+                .logs
+                .iter()
+                .map(|(level, line)| format!("[{level}] {line}"))
+                .collect();
+            let content = tokio::task::spawn_blocking(move || {
+                serde_json::to_string_pretty(&core::support::issue_report(&root, context, lines))
+            })
+            .await??;
+            if intent == MobileIntent::CopyDiagnostics {
+                ensure!(content.len() <= 256 * 1024, "诊断报告较大，请使用导出诊断");
+                session
+                    .native
+                    .request(json!({"op":"copy","text":content}))?;
+                state.notice = "诊断已复制".into();
+            } else {
+                session
+                    .native
+                    .request(json!({"op":"export","name":"cor-diagnose.json","content":content}))?;
+            }
         }
         MobileIntent::RuleEdit => {
             let (rows, _) = session.document().rows(&session.draft);
@@ -2738,8 +2794,8 @@ fn apply(ui: &AndroidWindow, p: Projection) {
             detail: r.detail.into(),
             source: r.source.into(),
             tone: r.tone,
-            flagged: flag.size().width > 0,
-            flag,
+            flagged: flag.is_some(),
+            flag: flag.unwrap_or_default().into(),
         }
     };
     data.set_site_results(stable(

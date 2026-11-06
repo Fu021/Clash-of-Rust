@@ -441,6 +441,7 @@ component LogsToolbar inherits VerticalLayout {
         MButton { text: "导出"; width: max(68px, MobileTypography.font-size(15) * 2 + 16px); horizontal-stretch: 0; clicked => { MobileActions.request(MobileIntent.export-logs, "", ""); } }
         MButton { text: "清空"; width: max(68px, MobileTypography.font-size(15) * 2 + 16px); horizontal-stretch: 0; clicked => { MobileActions.request(MobileIntent.clear-logs, "", ""); } }
     }
+    MButton { text: "导出诊断"; clicked => { MobileActions.request(MobileIntent.export-diagnostics, "", ""); } }
 }
 component LogsRow inherits MCard {
     in property <LogItem> item;

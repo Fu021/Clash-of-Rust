@@ -6,6 +6,13 @@ pub(super) const LIFETIME: Duration = Duration::from_secs(8);
 
 impl App {
     pub(super) fn show_notice(&mut self, text: String, error: bool) {
+        if error {
+            self.issue_events
+                .push_back(clash_client_core::support::incident(&text));
+            while self.issue_events.len() > 20 {
+                self.issue_events.pop_front();
+            }
+        }
         self.notice = text;
         self.error = error;
         self.notice_visible = true;
@@ -20,7 +27,7 @@ impl App {
         if let Some(timer) = self.notice_timer.take() {
             timer.abort();
         }
-        if !self.notice_visible {
+        if !self.notice_visible || self.error {
             return task;
         }
         let revision = self.notice_revision;
@@ -62,5 +69,21 @@ mod tests {
             app.core_failure.is_some(),
             "expiring a notice must not erase the core failure"
         );
+    }
+
+    #[test]
+    fn an_error_remains_actionable_and_its_history_is_bounded() {
+        let mut app = App::initial_state(Err(anyhow::anyhow!("test")), None);
+        for index in 0..25 {
+            app.show_notice(format!("failure {index}"), true);
+        }
+        let _ = app.update(Message::NoticeExpired(app.notice_revision));
+        assert!(app.notice_visible);
+        assert_eq!(app.issue_events.len(), 20);
+        assert_eq!(app.issue_events.front().unwrap()["error"], "failure 5");
+        app.show_notice("已保存".into(), false);
+        assert_eq!(app.issue_events.back().unwrap()["error"], "failure 24");
+        let _ = app.update(Message::NoticeExpired(app.notice_revision));
+        assert!(!app.notice_visible);
     }
 }

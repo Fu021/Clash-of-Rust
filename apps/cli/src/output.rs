@@ -3,6 +3,7 @@ use anyhow::{Result, ensure};
 use serde_json::{Value, json};
 use std::io::{IsTerminal, Write};
 mod human;
+pub(crate) use clash_client_core::support::redact;
 
 pub fn download_progress(progress: &clash_client_core::update::Progress) -> String {
     human::download_progress(progress)
@@ -44,57 +45,6 @@ fn write_output(out: &mut dyn Write, args: &Args, value: &Value) -> Result<()> {
         human::write(out, args, value)?;
     }
     Ok(())
-}
-
-pub(crate) fn sensitive_field(key: &str) -> bool {
-    let normalized = key.to_ascii_lowercase().replace('-', "_");
-    [
-        "password",
-        "secret",
-        "token",
-        "uuid",
-        "private_key",
-        "ip_reputation_key",
-        "authorization",
-        "auth",
-        "psk",
-        "preshared_key",
-        "api_key",
-    ]
-    .iter()
-    .any(|suffix| normalized == *suffix || normalized.ends_with(&format!("_{suffix}")))
-}
-
-pub fn redact(mut value: Value) -> Value {
-    match &mut value {
-        Value::Object(map) => {
-            for (key, field) in map {
-                let normalized = key.to_ascii_lowercase().replace('-', "_");
-                if sensitive_field(key) {
-                    if !field.is_null() {
-                        *field = Value::String("[已隐藏]".into());
-                    }
-                } else if matches!(normalized.as_str(), "source" | "url")
-                    && field
-                        .as_str()
-                        .is_some_and(|s| s.starts_with("http://") || s.starts_with("https://"))
-                {
-                    *field = Value::String(clash_client_runtime::claude_check::system::redact_url(
-                        field.as_str().unwrap(),
-                    ));
-                } else {
-                    *field = redact(std::mem::take(field));
-                }
-            }
-        }
-        Value::Array(items) => {
-            for field in items {
-                *field = redact(std::mem::take(field));
-            }
-        }
-        _ => {}
-    }
-    value
 }
 
 pub async fn confirm(args: &Args, message: &str) -> Result<()> {
@@ -264,7 +214,6 @@ mod tests {
             "HTTP 200",
             "当前用户后台未运行",
             "HTTPS_PROXY",
-            "cor diagnose --output cor-diagnose.json",
         ] {
             assert!(report.contains(expected), "{report}");
         }

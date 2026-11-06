@@ -144,12 +144,22 @@ public final class MainActivity extends NativeActivity {
                     runOnUiThread(() -> {
                         if (exportContent != null) { emit("error", "已有导出操作正在进行"); return; }
                         exportContent = content;
-                        startActivityForResult(new Intent(Intent.ACTION_CREATE_DOCUMENT)
-                            .setType("text/plain").addCategory(Intent.CATEGORY_OPENABLE)
-                            .putExtra(Intent.EXTRA_TITLE, name), SAVE);
+                        try {
+                            startActivityForResult(new Intent(Intent.ACTION_CREATE_DOCUMENT)
+                                .setType(name.endsWith(".json") ? "application/json" : "text/plain").addCategory(Intent.CATEGORY_OPENABLE)
+                                .putExtra(Intent.EXTRA_TITLE, name), SAVE);
+                        } catch (Exception error) {
+                            exportContent = null;
+                            emit("error", "无法打开保存位置：" + error);
+                        }
                     });
                     break;
                 }
+                case "diagnostics": return new JSONObject()
+                    .put("sdk", android.os.Build.VERSION.SDK_INT)
+                    .put("release", android.os.Build.VERSION.RELEASE)
+                    .put("manufacturer", android.os.Build.MANUFACTURER)
+                    .put("model", android.os.Build.MODEL).toString();
                 case "background": runOnUiThread(() -> moveTaskToBack(true)); break;
                 case "vpn-settings": runOnUiThread(() -> startActivity(new Intent(Settings.ACTION_VPN_SETTINGS))); break;
                 case "battery-settings": runOnUiThread(() -> startActivity(new Intent(Settings.ACTION_IGNORE_BATTERY_OPTIMIZATION_SETTINGS))); break;

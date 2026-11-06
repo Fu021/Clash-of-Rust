@@ -5,6 +5,7 @@ import { MobileFixture } from "fixtures.slint";
 import { MSmall } from "controls.slint";
 import { Motion } from "../../components/motion.slint";
 import "../../../../../resources/fonts/SourceHanSansCN-Regular.otf";
+import "../../../../../resources/fonts/NotoColorEmoji-Regular.ttf";
 
 export component MobilePreviewSurface inherits Rectangle {
     in-out property <bool> preview-motion;
@@ -29,6 +30,7 @@ export component MobilePreviewSurface inherits Rectangle {
     in-out property <int> preview-protection-health <=> MobileData.protection-health;
     in-out property <string> preview-protection-message <=> MobileData.protection-message;
     in-out property <string> preview-notice <=> MobileView.notice;
+    in-out property <bool> preview-notice-error <=> MobileView.notice-error;
     in-out property <float> preview-notice-elapsed <=> MobileView.notice-elapsed;
     in-out property <bool> preview-sparse;
     changed preview-sparse => {
