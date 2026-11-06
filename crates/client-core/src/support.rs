@@ -532,7 +532,7 @@ mod tests {
         .unwrap();
         let report = issue_report(
             temporary.path(),
-            json!({"error":format!("connect controller-credential {} https://example.test/sub?token=private",temporary.path().display()),"running":false}),
+            json!({"error":format!("connect controller-credential {}\nhttps://example.test/sub?token=private",temporary.path().display()),"running":false}),
             vec!["private full log entry".into()],
         );
         let url = reqwest::Url::parse(&issue_draft_url(&report)).unwrap();
@@ -542,6 +542,7 @@ mod tests {
         let body = url.query_pairs().find(|(key, _)| key == "body").unwrap().1;
         assert!(body.contains(crate::VERSION));
         assert!(body.contains("connect"));
+        assert!(body.contains("已隐藏含凭据的日志行"));
         assert!(!body.contains("controller-credential"));
         assert!(!body.contains("token=private"));
         assert!(!body.contains("private full log entry"));
