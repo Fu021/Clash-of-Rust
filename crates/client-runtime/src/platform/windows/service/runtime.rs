@@ -68,6 +68,21 @@ pub struct Snapshot {
     token: Handle,
 }
 
+fn host_geo_state(relative: &Path) -> bool {
+    let Some(name) = relative
+        .components()
+        .next()
+        .and_then(|name| name.as_os_str().to_str())
+    else {
+        return false;
+    };
+    let name = name.to_ascii_lowercase();
+    name == "geo-transaction.json"
+        || [".geo-backup-", ".geo-download-", ".geo-recovery-"]
+            .iter()
+            .any(|prefix| name.starts_with(prefix))
+}
+
 fn collect(
     root: &Path,
     relative: &Path,
@@ -81,7 +96,7 @@ fn collect(
         ensure!(*visited <= 4096, "内核运行目录项目过多");
         let entry = entry?;
         let child = relative.join(entry.file_name());
-        if child.starts_with("temp") {
+        if child.starts_with("temp") || host_geo_state(&child) {
             continue;
         }
         let metadata = std::fs::symlink_metadata(entry.path())?;
@@ -202,48 +217,48 @@ pub fn snapshot(pipe: HANDLE, request: &Request) -> Result<Snapshot> {
 
 impl Snapshot {
     pub fn save_cache(&self) -> Result<()> {
-        let mut files = Vec::new();
-        collect(
-            self.directory.path(),
-            Path::new(""),
-            &mut files,
-            &mut 0,
-            &mut 0,
-        )?;
         // Geo/config sources remain owned by the GUI. Mutable provider caches
         // and node selections must survive the transition back to a user core.
-        files.retain(|(path, _, _)| {
-            path.components().count() > 1
-                || !matches!(
-                    path.to_str(),
-                    Some(
-                        "config.yaml"
-                            | "candidate.yaml"
-                            | "GeoIP.dat"
-                            | "GeoSite.dat"
-                            | "Country.mmdb"
-                            | "ASN.mmdb"
-                            | "geodata.json"
-                    )
-                )
-        });
+        let files = cache_files(self.directory.path())?;
         let _impersonation = Impersonation::token(&self.token)?;
-        for (relative, source, size) in files {
-            if relative.starts_with("temp") {
-                continue;
-            }
-            let path = self.original.join(relative);
-            std::fs::create_dir_all(path.parent().context("缓存路径无效")?)?;
-            let mut staged = tempfile::NamedTempFile::new_in(path.parent().unwrap())?;
-            ensure!(
-                std::io::copy(&mut source.take(size + 1), &mut staged)? == size,
-                "缓存数据发生变化"
-            );
-            staged.as_file().sync_all()?;
-            staged.persist(path).map_err(|e| e.error)?;
-        }
-        Ok(())
+        restore_cache(&self.original, files)
     }
+}
+
+fn cache_files(directory: &Path) -> Result<Vec<(PathBuf, File, u64)>> {
+    let mut files = Vec::new();
+    collect(directory, Path::new(""), &mut files, &mut 0, &mut 0)?;
+    files.retain(|(path, _, _)| {
+        path.components().count() > 1
+            || !matches!(
+                path.to_str().map(str::to_ascii_lowercase).as_deref(),
+                Some(
+                    "config.yaml"
+                        | "candidate.yaml"
+                        | "geoip.dat"
+                        | "geosite.dat"
+                        | "country.mmdb"
+                        | "asn.mmdb"
+                        | "geodata.json"
+                )
+            )
+    });
+    Ok(files)
+}
+
+fn restore_cache(original: &Path, files: Vec<(PathBuf, File, u64)>) -> Result<()> {
+    for (relative, source, size) in files {
+        let path = original.join(relative);
+        std::fs::create_dir_all(path.parent().context("缓存路径无效")?)?;
+        let mut staged = tempfile::NamedTempFile::new_in(path.parent().unwrap())?;
+        ensure!(
+            std::io::copy(&mut source.take(size + 1), &mut staged)? == size,
+            "缓存数据发生变化"
+        );
+        staged.as_file().sync_all()?;
+        staged.persist(path).map_err(|e| e.error)?;
+    }
+    Ok(())
 }
 
 pub fn verify_core(root: &Path) -> Result<File> {
@@ -415,5 +430,125 @@ impl Core {
 impl Drop for Core {
     fn drop(&mut self) {
         self.stop();
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn fixture(directory: &Path, relative: &str, contents: &[u8]) {
+        let path = directory.join(relative);
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        std::fs::write(path, contents).unwrap();
+    }
+
+    #[test]
+    fn service_snapshots_skip_geo_transactions_and_staging_before_opening_files() {
+        let temporary = tempfile::tempdir().unwrap();
+        let directory = temporary.path();
+        for relative in [
+            "GEO-TRANSACTION.JSON",
+            ".geo-backup-old/GeoIP.dat",
+            ".geo-backup-old.committed",
+            ".geo-download-old/rejected.exe",
+            ".geo-recovery-old/geo-transaction.json",
+        ] {
+            fixture(directory, relative, b"host-owned");
+        }
+        for relative in [
+            "GeoIP.dat",
+            "cache.db",
+            "providers/subscription.yaml",
+            "providers/.geo-backup-provider/cache.yaml",
+        ] {
+            fixture(directory, relative, b"core-input");
+        }
+        let mut files = Vec::new();
+        collect(directory, Path::new(""), &mut files, &mut 0, &mut 0).unwrap();
+        let names: Vec<_> = files.into_iter().map(|(name, _, _)| name).collect();
+        assert_eq!(names.len(), 4);
+        assert!(names.contains(&PathBuf::from("GeoIP.dat")));
+        assert!(names.contains(&PathBuf::from("providers/subscription.yaml")));
+        assert!(!names.iter().any(|name| host_geo_state(name)));
+        assert!(directory.join(".geo-download-old/rejected.exe").exists());
+    }
+
+    #[test]
+    fn restoring_a_stale_service_snapshot_cannot_resurrect_or_replace_geo_state() {
+        for pending in [false, true] {
+            let temporary = tempfile::tempdir().unwrap();
+            let original = temporary.path().join("user");
+            let snapshot = temporary.path().join("service");
+            for relative in [
+                "config.yaml",
+                "candidate.yaml",
+                "GeoIP.dat",
+                "GeoSite.dat",
+                "Country.mmdb",
+                "ASN.mmdb",
+                "geodata.json",
+            ] {
+                fixture(&original, relative, b"current");
+                fixture(&snapshot, relative, b"stale");
+            }
+            for relative in [
+                "geo-transaction.json",
+                ".geo-backup-old/GeoIP.dat",
+                ".geo-backup-old.committed",
+                ".geo-download-old/GeoSite.dat",
+                ".geo-recovery-old/geo-transaction.json",
+            ] {
+                fixture(&snapshot, relative, b"stale");
+            }
+            fixture(&original, ".geo-backup-current/GeoIP.dat", b"current");
+            if pending {
+                fixture(&original, "geo-transaction.json", b"newer-transaction");
+            }
+            fixture(&snapshot, "cache.db", b"updated-cache");
+            fixture(
+                &snapshot,
+                "providers/subscription.yaml",
+                b"updated-provider",
+            );
+            restore_cache(&original, cache_files(&snapshot).unwrap()).unwrap();
+            for relative in [
+                "config.yaml",
+                "candidate.yaml",
+                "GeoIP.dat",
+                "GeoSite.dat",
+                "Country.mmdb",
+                "ASN.mmdb",
+                "geodata.json",
+                ".geo-backup-current/GeoIP.dat",
+            ] {
+                assert_eq!(std::fs::read(original.join(relative)).unwrap(), b"current");
+            }
+            if pending {
+                assert_eq!(
+                    std::fs::read(original.join("geo-transaction.json")).unwrap(),
+                    b"newer-transaction"
+                );
+            } else {
+                assert!(!original.join("geo-transaction.json").exists());
+            }
+            for relative in [
+                ".geo-backup-old",
+                ".geo-backup-old.committed",
+                ".geo-download-old",
+                ".geo-recovery-old",
+            ] {
+                assert!(!original.join(relative).exists());
+            }
+            assert_eq!(
+                std::fs::read(original.join("cache.db")).unwrap(),
+                b"updated-cache"
+            );
+            assert_eq!(
+                std::fs::read(original.join("providers/subscription.yaml")).unwrap(),
+                b"updated-provider"
+            );
+            assert!(snapshot.join("geo-transaction.json").exists());
+        }
     }
 }

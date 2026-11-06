@@ -260,9 +260,9 @@ fn evidence(root: &Path) -> Value {
             let directory = runtime.join(name);
             if std::fs::symlink_metadata(&directory).is_ok_and(|metadata| metadata.is_dir()) {
                 let mut files = file_inventory(&directory, 32);
+                files["manifest"] = json_record(&directory.join("geodata.json"));
                 if name.starts_with(".geo-recovery-") {
                     files["transaction"] = json_record(&directory.join("geo-transaction.json"));
-                    files["manifest"] = json_record(&directory.join("geodata.json"));
                 }
                 recovery.insert(name.into(), files);
             }
@@ -396,6 +396,12 @@ mod tests {
         .unwrap();
         let journal = br#"{"backup":".geo-backup-absent","files":[]}"#;
         std::fs::write(root.join("runtime/geo-transaction.json"), journal).unwrap();
+        std::fs::create_dir(root.join("runtime/.geo-backup-original")).unwrap();
+        std::fs::write(
+            root.join("runtime/.geo-backup-original/geodata.json"),
+            br#"{"version":"previous","files":[]}"#,
+        )
+        .unwrap();
         std::fs::write(root.join("daemon.log"), "failed: local-controller-credential control-credential\nfetch https://subscription.test/private-path\nfailed https://user:example-password@example.test/get?key=abc\nAuthorization: Bearer other-value\nGeo backup missing\n").unwrap();
         let value = evidence(root);
         let serialized = value.to_string();
@@ -417,6 +423,10 @@ mod tests {
         assert_eq!(
             value["geo_records"]["geo-transaction.json"]["state"],
             "collected"
+        );
+        assert_eq!(
+            value["geo_recovery_files"][".geo-backup-original"]["manifest"]["data"]["version"],
+            "previous"
         );
     }
 
