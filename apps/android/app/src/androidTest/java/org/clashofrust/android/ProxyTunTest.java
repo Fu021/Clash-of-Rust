@@ -555,11 +555,10 @@ public class ProxyTunTest {
             await("Input test Activity did not resume",()->inStage(androidx.test.runner.lifecycle.Stage.RESUMED,true));
             waitForAppWindow();
             captureIme("before-resumed-tap");
-            await("Resumed subscription source did not receive touch focus",()-> {
-                if (MainActivity.diagnostics().optBoolean("profile_source_focused")) return true;
-                tryTapTarget("profile_source_target");
-                return MainActivity.diagnostics().optBoolean("profile_source_focused");
-            });
+            verifyRestoredImeAndHide("foreground");
+            tapVisibleProfileField("source");
+            await("Resumed subscription source did not receive touch focus",
+                ()->MainActivity.diagnostics().optBoolean("profile_source_focused"));
             await("Resumed subscription editor did not show the IME",ProxyTunTest::imeVisible);
             await("Resumed Slint editor did not receive the keyboard inset",
                 ()->MainActivity.diagnostics().optDouble("keyboard_inset")>0);

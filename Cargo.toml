@@ -9,7 +9,7 @@ i-slint-backend-android-activity = { path = "vendor/slint-android-activity" }
 i-slint-renderer-software = { path = "vendor/slint-renderer-software" }
 
 [workspace.package]
-version = "0.6.7-fix.2.android-ime-flags"
+version = "0.6.7-fix.3.diagnostics"
 edition = "2024"
 license = "GPL-3.0-only"
 

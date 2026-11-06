@@ -2051,6 +2051,14 @@ fn failed_subscription_update_keeps_measurements_and_reports_until_a_successful_
     assert_eq!(app.site_results.len(), 1);
     assert!(app.claude.reports[0].is_some());
 
+    let mut background = synchronized_reply(&app);
+    background.notice = Ok("检查完成".into());
+    let _ = app.update(Message::Finished(Box::new(background)));
+    assert!(app.error && app.notice.contains("保留原配置"));
+    assert!(!app.notice_critical && app.snapshot.running);
+    let _ = app.ui_intent(Intent::DismissNotice, "", "");
+    assert!(!app.notice_visible);
+
     let mut success = synchronized_reply(&app);
     success.profile_updated = true;
     success.notice = Ok("订阅已更新".into());
@@ -2112,6 +2120,14 @@ fn geo_download_survives_unrelated_refresh_and_only_success_clears_results() {
     assert!(!app.geo_updating);
     assert_eq!(app.node_delays.get("Test"), Some(&42));
     assert!(app.error && app.notice.contains("下载失败"));
+
+    let mut refresh = synchronized_reply(&app);
+    refresh.notice = Ok("检查完成".into());
+    let _ = app.update(Message::Finished(Box::new(refresh)));
+    assert!(app.error && app.notice.contains("下载失败"));
+    assert!(!app.notice_critical && app.snapshot.running);
+    let _ = app.ui_intent(Intent::DismissNotice, "", "");
+    assert!(!app.notice_visible);
 
     app.geo_updating = true;
     let _ = app.update(Message::GeoFinished(Ok(())));

@@ -1339,6 +1339,93 @@ Private_Clean: 2 kB
                 with self.assertRaisesRegex(ValueError, 'approved repository'):
                     build_inputs.resolve(snapshot)
 
+    def test_geo_snapshot_reuses_verified_bytes_without_network_access(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            payload = b'frozen official database'
+            checksum = hashlib.sha256(payload).hexdigest()
+            upstream = {'geo': {'assets': [
+                {'name': name, 'size': len(payload), 'digest': 'sha256:' + checksum,
+                 'browser_download_url': 'https://github.com/example/geo/' + name}
+                for name in build_inputs.GEO]}}
+            with patch.object(build_inputs, 'download_asset') as download:
+                def save(asset, path):
+                    path.parent.mkdir(parents=True, exist_ok=True)
+                    path.write_bytes(payload)
+                download.side_effect = save
+                resources = build_inputs.freeze_geo(root, upstream)
+            value = {'upstream': upstream, 'resources': resources}
+            with patch.object(build_inputs, 'download_asset', side_effect=AssertionError('unexpected download')):
+                self.assertEqual(set(build_inputs.verify_geo_snapshot(value, root)), set(build_inputs.GEO))
+                damaged = root / 'resources/GeoIP.dat'
+                damaged.write_bytes(b'x' * len(payload))
+                with self.assertRaisesRegex(ValueError, 'checksum or size'):
+                    build_inputs.verify_geo_snapshot(value, root)
+                damaged.unlink()
+                with self.assertRaisesRegex(ValueError, 'checksum or size'):
+                    build_inputs.verify_geo_snapshot(value, root)
+                with self.assertRaisesRegex(ValueError, 'inventory'):
+                    build_inputs.verify_geo_snapshot({**value, 'resources': {}}, root)
+
+    def test_geo_snapshot_rejects_incomplete_assets_and_wrong_download_size(self):
+        payload = b'frozen official database'
+        checksum = hashlib.sha256(payload).hexdigest()
+        assets = [{'name': name, 'size': len(payload), 'digest': 'sha256:' + checksum}
+                  for name in build_inputs.GEO]
+        with self.assertRaisesRegex(ValueError, 'incomplete'):
+            build_inputs.geo_assets({'geo': {'assets': assets[:-1]}})
+        with tempfile.TemporaryDirectory() as temporary, \
+                patch.object(build_inputs, 'download_asset') as download:
+            def save(asset, path):
+                path.parent.mkdir(parents=True, exist_ok=True)
+                path.write_bytes(payload)
+            download.side_effect = save
+            assets[0]['size'] += 1
+            with self.assertRaisesRegex(ValueError, 'checksum or size'):
+                build_inputs.freeze_geo(Path(temporary), {'geo': {'assets': assets}})
+
+    def test_apply_verifies_geo_before_replacing_source_files(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            snapshot = root / 'snapshot'
+            payload = b'verified geo'
+            checksum = hashlib.sha256(payload).hexdigest()
+            upstream = {'geo': {'assets': [
+                {'name': name, 'size': len(payload), 'digest': 'sha256:' + checksum}
+                for name in build_inputs.GEO]}}
+            resources = {}
+            for name in build_inputs.GEO.values():
+                path = snapshot / 'resources' / name
+                path.parent.mkdir(parents=True, exist_ok=True)
+                path.write_bytes(payload)
+                resources['resources/' + name] = checksum
+            sources = {name: b'approved source' for name in build_inputs.FILES}
+            for name, content in sources.items():
+                path = snapshot / name
+                path.parent.mkdir(parents=True, exist_ok=True)
+                path.write_bytes(content)
+                target = root / name
+                target.parent.mkdir(parents=True, exist_ok=True)
+                target.write_bytes(b'unchanged local source')
+            files = {name: hashlib.sha256(content).hexdigest() for name, content in sources.items()}
+            value = {'schema': 1, 'commit': 'current', 'constraints': {}, 'files': files,
+                     'baseline': files, 'upstream': upstream, 'resources': resources}
+            build.write_json(snapshot / 'inputs.json', value)
+            damaged = snapshot / 'resources/GeoIP.dat'
+            damaged.write_bytes(b'x' * len(payload))
+            with patch.object(build_inputs, 'ROOT', root), \
+                    patch.object(build_inputs, 'current_commit', return_value='current'), \
+                    patch.object(build_inputs, 'constraints', return_value={}), \
+                    patch.object(build_inputs, 'original', side_effect=sources.__getitem__):
+                with self.assertRaisesRegex(ValueError, 'checksum or size'):
+                    build_inputs.apply(snapshot)
+                self.assertEqual((root / 'Cargo.lock').read_bytes(), b'unchanged local source')
+                damaged.write_bytes(payload)
+                build_inputs.apply(snapshot)
+                self.assertEqual((root / 'Cargo.lock').read_bytes(), sources['Cargo.lock'])
+                for name in build_inputs.GEO.values():
+                    self.assertEqual((root / 'bundle/resources' / name).read_bytes(), payload)
+
     def test_version_bootstrap_does_not_require_python_311_modules(self):
         with tempfile.TemporaryDirectory() as temporary:
             output = Path(temporary) / 'versions'

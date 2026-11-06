@@ -4,7 +4,7 @@
 
 ## CI
 
-先生成一次 `dependency-snapshot`，只复制仓库的 Rust/Go 锁文件与 Android 声明，结合 `.github/build-versions.json` 中已确认的工具、内核和资源身份；不执行 `cargo update`、`go get` 或 Maven 自动升级，也不应用旧缓存中曾自动解析出的新版源码依赖。所有平台和 Publish Release 复用同一份快照，打包不再刷新安装工具版本。
+先生成一次 `dependency-snapshot`，复制仓库的 Rust/Go 锁文件与 Android 声明，结合 `.github/build-versions.json` 中已确认的工具、内核和资源身份；不执行 `cargo update`、`go get` 或 Maven 自动升级，也不应用旧缓存中曾自动解析出的新版源码依赖。四份 Geo 原包在此时按固定摘要和大小下载、校验并随快照分发，各平台应用快照时再次校验，再准备各自的原生资源。这样不会因平台排队期间上游替换 `latest` 附件或私网临时不可用而重新下载 Geo；快照缺失或损坏仍失败，不改用其他内容。所有平台和 Publish Release 复用同一份快照，打包不再刷新安装工具版本。
 
 依赖维护可手动运行现有 CI，设置 `refresh_dependencies=true`：只在 Actions 解析 Cargo/Go 更新并导出带来源提交和 SHA256 的 `dependency-updates`，不运行平台矩阵，也不作为打包依据。将已审阅的锁文件提交后，仍须取得新提交的普通 push CI 与不发布打包验证；受限本机不执行依赖下载或构建。
 

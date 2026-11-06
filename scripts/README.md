@@ -7,7 +7,7 @@
 | 脚本 | 类型 | 职责 |
 | --- | --- | --- |
 | `build_support.py` | 共享模块 | 平台识别、版本、资源、下载、架构和暂存目录等标准库辅助。 |
-| `build_inputs.py` | CLI / 模块 | 冻结并应用同一份 Rust、Go、Android、Linux 基线和资源依赖快照。 |
+| `build_inputs.py` | CLI / 模块 | 冻结并应用同一份 Rust、Go、Android、Linux 基线和资源依赖快照；统一取得四份 Geo 原包，随快照校验及分发。 |
 | `upstream_cache.py` | CLI / 模块 | 官方原始下载的私网回退、持久清单分批提交、分页回执与有界状态查询；不上传 runner 归档。 |
 | `dependency_audit.py` | 模块 | 只读探查升级、撤回和替换信号；由 `build_inputs.py audit` 调用，实际变更遵循维护者的 loop 更新授权并验证。 |
 | `runtime_cache.py` | 历史协议辅助 | 旧工具快照的离线兼容回归；当前工作流不调用。 |
