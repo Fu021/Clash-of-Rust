@@ -477,14 +477,16 @@ public class ProxyTunTest {
                     && target!=null && target.length()==4 && target.optDouble(2)>0 && target.optDouble(3)>0;
             });
             captureIme("notice-before-close");
+            assertFalse("A recoverable update error must not open a modal",
+                MainActivity.diagnostics().optBoolean("notice_modal"));
             tapTarget("notice_close_target");
             await("The error notice did not close",()->!MainActivity.diagnostics().optBoolean("notice_active"));
             assertEquals("Closing the notice must keep the subscription editor open",
                 3,MainActivity.diagnostics().getInt("detail"));
             assertEquals(draftNameLength,MainActivity.diagnostics().getInt("profile_name_length"));
             assertEquals(draftSourceLength,MainActivity.diagnostics().getInt("profile_source_length"));
-            MainActivity.emit("error","订阅更新失败：测试网络不可用。\n原订阅和输入内容均已保留。");
-            await("The second error dialog did not appear",()->MainActivity.diagnostics().optBoolean("notice_active"));
+            MainActivity.emit("critical","内核启动失败：测试权限不足。\n原订阅和输入内容均已保留。");
+            await("The critical error dialog did not appear",()->MainActivity.diagnostics().optBoolean("notice_modal"));
             shell("input keyevent KEYCODE_BACK");
             await("Android Back did not dismiss the error dialog",
                 ()->!MainActivity.diagnostics().optBoolean("notice_active"));

@@ -355,6 +355,11 @@ impl App {
         set!(get_ports_dirty, set_ports_dirty, self.ports_dirty());
         set!(get_retry_core, set_retry_core, self.ready_to_retry());
         set!(get_notice_error, set_notice_error, self.error);
+        set!(
+            get_notice_critical,
+            set_notice_critical,
+            self.notice_critical
+        );
         set!(get_diagnosing, set_diagnosing, self.diagnosing);
         set!(
             get_notice_revision,

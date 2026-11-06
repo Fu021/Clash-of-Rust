@@ -193,6 +193,14 @@ impl App {
             Message::ExportDiagnostics(context) => self.export_diagnostics(context),
             Message::DiagnosticsExported(result) => {
                 self.diagnosing = false;
+                if self.notice_visible && self.notice_critical {
+                    let outcome = match result {
+                        Ok(path) => format!("诊断已导出：{path}"),
+                        Err(error) => format!("诊断导出失败：{error}"),
+                    };
+                    self.show_critical(format!("{}\n\n{outcome}", self.notice));
+                    return Some(none());
+                }
                 match result {
                     Ok(path) => self.show_notice(format!("诊断已导出：{path}"), false),
                     Err(error) => self.show_notice(format!("诊断导出失败：{error}"), true),

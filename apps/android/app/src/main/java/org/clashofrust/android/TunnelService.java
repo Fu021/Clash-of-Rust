@@ -203,7 +203,7 @@ public final class TunnelService extends VpnService {
                 closeDescriptor(previous);
                 if (descriptor == previous) descriptor = null;
             }
-            MainActivity.emit("error", "VPN 启动失败：" + lastError);
+            MainActivity.emit("critical", "VPN 启动失败：" + lastError);
             disconnect(request);
         }
     }

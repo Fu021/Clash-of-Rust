@@ -23,6 +23,7 @@ export component AndroidWindow inherits Window {
     in-out property <string> selected-id <=> MobileView.selected-id;
     in-out property <string> query <=> MobileView.query;
     in-out property <string> rule-edit-id;
+    out property <[length]> notice-close-target <=> surface.notice-close-target;
     changed current-page => { MobileActions.request(MobileIntent.navigate, "" + root.current-page, ""); }
     callback native-back();
     native-back => {
@@ -44,5 +45,5 @@ export component AndroidWindow inherits Window {
         MobileView.safe-left = self.left; MobileView.safe-right = self.right;
         MobileView.keyboard-inset = self.keyboard;
     }
-    AndroidSurface { width: parent.width; height: parent.height; }
+    surface := AndroidSurface { width: parent.width; height: parent.height; }
 }

@@ -6,6 +6,14 @@ pub(super) const LIFETIME: Duration = Duration::from_secs(8);
 
 impl App {
     pub(super) fn show_notice(&mut self, text: String, error: bool) {
+        self.present_notice(text, error, false);
+    }
+
+    pub(super) fn show_critical(&mut self, text: String) {
+        self.present_notice(text, true, true);
+    }
+
+    fn present_notice(&mut self, text: String, error: bool, critical: bool) {
         if error {
             self.issue_events
                 .push_back(clash_client_core::support::incident(&text));
@@ -13,8 +21,12 @@ impl App {
                 self.issue_events.pop_front();
             }
         }
+        if self.notice_visible && self.notice_critical && !critical {
+            return;
+        }
         self.notice = text;
         self.error = error;
+        self.notice_critical = critical;
         self.notice_visible = true;
         self.notice_started = Some(Instant::now());
         self.notice_revision = self.notice_revision.wrapping_add(1);
@@ -42,6 +54,7 @@ impl App {
 
     pub(super) fn dismiss_notice(&mut self) {
         self.notice_visible = false;
+        self.notice_critical = false;
         self.notice_started = None;
         self.notice_revision = self.notice_revision.wrapping_add(1);
         if let Some(timer) = self.notice_timer.take() {
@@ -57,6 +70,7 @@ mod tests {
     #[test]
     fn a_repeated_notice_restarts_its_lifetime_and_ignores_old_expiry() {
         let mut app = App::initial_state(Err(anyhow::anyhow!("test")), None);
+        app.dismiss_notice();
         app.show_notice("已保存".into(), false);
         let old = app.notice_revision;
         app.show_notice("已保存".into(), false);
@@ -74,6 +88,7 @@ mod tests {
     #[test]
     fn an_error_remains_actionable_and_its_history_is_bounded() {
         let mut app = App::initial_state(Err(anyhow::anyhow!("test")), None);
+        app.dismiss_notice();
         for index in 0..25 {
             app.show_notice(format!("failure {index}"), true);
         }
@@ -85,5 +100,23 @@ mod tests {
         assert_eq!(app.issue_events.back().unwrap()["error"], "failure 24");
         let _ = app.update(Message::NoticeExpired(app.notice_revision));
         assert!(!app.notice_visible);
+    }
+
+    #[test]
+    fn only_critical_errors_block_and_background_results_cannot_replace_them() {
+        let mut app = App::initial_state(Err(anyhow::anyhow!("test")), None);
+        assert!(app.notice_critical && app.error);
+        app.dismiss_notice();
+        app.show_notice("Geo 更新失败，旧数据仍可用".into(), true);
+        assert!(app.error && !app.notice_critical);
+        app.show_critical("内核无法启动".into());
+        app.show_notice("检查更新失败".into(), true);
+        app.show_notice("Geo 数据已更新".into(), false);
+        assert_eq!(app.notice, "内核无法启动");
+        assert!(app.notice_critical && app.error);
+        assert_eq!(app.issue_events.back().unwrap()["error"], "检查更新失败");
+        app.dismiss_notice();
+        app.show_notice("已保存".into(), false);
+        assert!(!app.notice_critical && !app.error);
     }
 }

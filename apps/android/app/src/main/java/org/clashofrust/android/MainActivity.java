@@ -142,7 +142,7 @@ public final class MainActivity extends NativeActivity {
                 case "export": {
                     String name = data.getString("name"), content = data.getString("content");
                     runOnUiThread(() -> {
-                        if (exportContent != null) { emit("error", "已有导出操作正在进行"); return; }
+                        if (exportContent != null) { emit("export-error", "已有导出操作正在进行"); return; }
                         exportContent = content;
                         try {
                             startActivityForResult(new Intent(Intent.ACTION_CREATE_DOCUMENT)
@@ -150,7 +150,7 @@ public final class MainActivity extends NativeActivity {
                                 .putExtra(Intent.EXTRA_TITLE, name), SAVE);
                         } catch (Exception error) {
                             exportContent = null;
-                            emit("error", "无法打开保存位置：" + error);
+                            emit("export-error", "无法打开保存位置：" + error);
                         }
                     });
                     break;
@@ -314,7 +314,7 @@ public final class MainActivity extends NativeActivity {
                         if (out == null) throw new IOException("无法写入所选文件");
                         out.write(content.getBytes(StandardCharsets.UTF_8));
                     }
-                    emit("notice", "文件已导出");
+                    emit("export-notice", "文件已导出");
                 } else {
                     try (InputStream in = getContentResolver().openInputStream(uri)) {
                         if (in == null) throw new IOException("无法读取所选文件");
@@ -334,7 +334,7 @@ public final class MainActivity extends NativeActivity {
                         emit("file", file);
                     }
                 }
-            } catch (Exception error) { emit("error", error.toString()); }
+            } catch (Exception error) { emit(request == SAVE ? "export-error" : "error", error.toString()); }
         });
         worker.shutdown();
     }

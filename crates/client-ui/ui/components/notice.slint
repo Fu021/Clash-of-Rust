@@ -6,6 +6,7 @@ import { ContentPanel, Paragraph, Caption, Heading, ActionButton } from "control
 export component DiagnosticActions inherits VerticalLayout {
     in property <string> context;
     in property <bool> notice-control;
+    in property <bool> instructions: true;
     spacing: Theme.content-gap;
     HorizontalLayout { spacing: Theme.content-gap; alignment: start;
         ActionButton { modal-control: true; notice-control: root.notice-control; text: UiData.diagnosing ? "正在导出…" : "导出诊断"; enabled: !UiData.diagnosing;
@@ -15,7 +16,7 @@ export component DiagnosticActions inherits VerticalLayout {
             clicked => { UiActions.dispatch(Intent.copy, "cor diagnose --output cor-diagnose.json", ""); }
         }
     }
-    Caption { text: "提交 issue 时附上报告、操作步骤和发生时间；分享前检查敏感信息。"; wrap: word-wrap; }
+    if root.instructions: Caption { text: "提交 issue 时附上报告、操作步骤和发生时间；分享前检查敏感信息。"; wrap: word-wrap; }
 }
 
 export component DesktopNotice inherits Rectangle {
@@ -32,12 +33,12 @@ export component DesktopNotice inherits Rectangle {
     height: root.available-height;
     visible: presence.mounted;
     opacity: presence.progress;
-    if UiData.notice-error: Rectangle {
+    if UiData.notice-modal: Rectangle {
         width: parent.width; height: parent.height; background: #00000065;
         TouchArea { }
     }
     error-focus := FocusScope {
-        property <bool> active: UiData.notice != "" && UiData.notice-error;
+        property <bool> active: UiData.notice-modal;
         enabled: self.active;
         changed active => { if self.active { self.focus(); } }
         init => { if self.active { self.focus(); } }
@@ -50,19 +51,19 @@ export component DesktopNotice inherits Rectangle {
     }
     panel := VerticalLayout {
         x: (parent.width - self.width) / 2;
-        y: UiData.notice-error ? max(16px, (parent.height - self.height) / 2) : 16px - (1 - presence.progress) * 8px;
+        y: UiData.notice-modal ? max(16px, (parent.height - self.height) / 2) : 16px - (1 - presence.progress) * 8px;
         width: min(640px, parent.width - 48px); height: self.preferred-height;
         if presence.mounted: ContentPanel {
             drop-shadow-blur: 20px; drop-shadow-offset-y: 4px; drop-shadow-color: #00000030;
             interactive: true;
-            if UiData.notice-error: Heading { text: "发生错误"; color: Theme.danger; }
+            if UiData.notice-modal: Heading { text: "发生错误"; color: Theme.danger; }
             HorizontalLayout { cross-axis-alignment: start; spacing: Theme.content-gap;
                 Flickable {
                     property <string> context: root.message;
                     property <length> bottom: min(0px, self.height - self.content-height);
                     changed context => { self.content-y = 0px; }
                     changed bottom => { self.content-y = clamp(self.content-y, self.bottom, 0px); }
-                    height: min(content.preferred-height, max(48px, root.available-height * 0.8 - 120px));
+                    height: min(content.preferred-height, max(80px, root.available-height * (UiData.notice-modal ? 0.8 : 0.4) - (UiData.notice-modal ? 120px : 80px)));
                     horizontal-stretch: 1; vertical-stretch: 0; min-width: 0px;
                     interactive: true; mouse-drag-pan-enabled: true;
                     content-width: self.width; content-height: max(self.height, content.preferred-height);
@@ -70,7 +71,7 @@ export component DesktopNotice inherits Rectangle {
                         width: parent.width; height: self.preferred-height;
                         alignment: start; spacing: Theme.content-gap;
                         Paragraph { text: root.message; color: UiData.notice-error ? Theme.danger : Theme.secondary; }
-                        if UiData.notice-error: DiagnosticActions { context: root.message; notice-control: true; }
+                        if UiData.notice-error: DiagnosticActions { context: root.message; notice-control: true; instructions: UiData.notice-modal; }
                         if !UiData.notice-error: ProgressTrack {
                             height: 2px; smooth: false;
                             value: clamp((animation-tick() - root.started) / 8s, 0, 1);
@@ -80,7 +81,7 @@ export component DesktopNotice inherits Rectangle {
                 }
             }
             HorizontalLayout { alignment: end; spacing: Theme.content-gap;
-                if UiData.retry-core: ActionButton { modal-control: true; notice-control: true; text: "重启内核"; primary: true; enabled: UiData.notice != "" && !UiData.working; clicked => { UiActions.dispatch(Intent.restart-core, "", ""); } }
+                if UiData.notice-modal && UiData.retry-core: ActionButton { modal-control: true; notice-control: true; text: "重启内核"; primary: true; enabled: UiData.notice != "" && !UiData.working; clicked => { UiActions.dispatch(Intent.restart-core, "", ""); } }
                 ActionButton { modal-control: true; notice-control: true; text: "关闭"; enabled: UiData.notice != ""; clicked => { UiActions.dispatch(Intent.dismiss-notice, "", ""); } }
             }
         }

@@ -208,6 +208,8 @@ struct State {
     selected: String,
     notice: String,
     notice_error: bool,
+    notice_critical: bool,
+    notice_followup: bool,
     issue_events: VecDeque<Value>,
     copied: (i32, Arc<str>),
     logs: VecDeque<(String, String)>,
@@ -452,6 +454,8 @@ async fn run_loop(
         selected: String::new(),
         notice: String::new(),
         notice_error: false,
+        notice_critical: false,
+        notice_followup: false,
         issue_events: VecDeque::new(),
         copied: Default::default(),
         logs: VecDeque::new(),
@@ -503,6 +507,7 @@ async fn run_loop(
     if let Err(error) = state.session.attach_or_initialize() {
         state.notice = format!("内核启动失败：{error:#}");
         state.notice_error = true;
+        state.notice_critical = true;
         log::error!("{}", state.notice);
         state.logs.push_back(("ERROR".into(), state.notice.clone()));
     }
@@ -761,6 +766,8 @@ async fn run_loop(
                     start_claude_check(&mut state, &mut claude_job, updates.clone());
                 } else {
                     state.notice_error = false;
+                    state.notice_critical = false;
+                    state.notice_followup = matches!(intent, MobileIntent::ExportDiagnostics | MobileIntent::CopyDiagnostics);
                     match handle(&mut state, request).await {
                         Ok(()) => {
                             state.completed = Some(intent);
@@ -786,6 +793,7 @@ async fn run_loop(
                         Err(error) => {
                             state.notice = format!("{error:#}");
                             state.notice_error = true;
+                            state.notice_critical = intent == MobileIntent::RestartCore;
                             log::error!("{}",state.notice);
                             state.logs.push_back(("ERROR".into(),state.notice.clone()));
                         }
@@ -796,9 +804,14 @@ async fn run_loop(
                 if let Some(value) = value {
                     immediate = true;
                     refresh_requested = true;
-                    if serde_json::from_str::<Value>(&value).ok().is_some_and(|v|v["event"]=="back") {
+                    let event = serde_json::from_str::<Value>(&value).ok();
+                    if event.as_ref().is_some_and(|event|event["event"]=="back") {
                         let weak=weak.clone();slint::invoke_from_event_loop(move||{if let Some(ui)=weak.upgrade(){ui.invoke_native_back();}})?;
-                    } else if let Err(error) = native_event(&mut state,&value).await { state.notice=format!("{error:#}");state.notice_error=true; }
+                    } else if let Err(error) = native_event(&mut state,&value).await {
+                        state.notice=format!("{error:#}");state.notice_error=true;
+                        state.notice_critical=event.as_ref().is_some_and(|event|
+                            matches!(event["event"].as_str(),Some("vpn-authorized"|"vpn-cancelled")));
+                    }
                 }
             }
             value = update_rx.recv() => {
@@ -813,6 +826,7 @@ async fn run_loop(
                                     if let Err(restore) = rollback_protection(&mut state, &format!("保护验证失败：{error}")) {
                                         state.notice = format!("保护验证失败：{error}；恢复失败：{restore:#}");
                                         state.notice_error = true;
+                                        state.notice_critical = true;
                                     }
                                 }
                             }
@@ -886,6 +900,7 @@ async fn run_loop(
                             && let Err(restore)=rollback_protection(&mut state,&format!("保护开启失败：{error:#}")) {
                             state.notice=format!("保护开启失败：{error:#}；恢复失败：{restore:#}");
                             state.notice_error=true;
+                            state.notice_critical=true;
                         }
                         refresh_requested=true;
                     }
@@ -1003,6 +1018,7 @@ async fn run_loop(
             }
         }
         if refresh_requested {
+            let was_running = state.session.running;
             state.protection_observed = match state.session.observe_native() {
                 Ok(()) => true,
                 Err(error) => {
@@ -1012,6 +1028,11 @@ async fn run_loop(
                     false
                 }
             };
+            if was_running && !state.session.running {
+                state.notice = "内核已意外停止，请导出诊断后重试启动。".into();
+                state.notice_error = true;
+                state.notice_critical = true;
+            }
             match observe_protection(&mut state) {
                 Ok(true) => start_claude_check(&mut state, &mut claude_job, updates.clone()),
                 Ok(false) => {}
@@ -1019,6 +1040,7 @@ async fn run_loop(
                     state.protection_observed = false;
                     state.notice = format!("保护状态异常：{error:#}");
                     state.notice_error = true;
+                    state.notice_critical = true;
                     state.logs.push_back(("ERROR".into(), state.notice.clone()));
                 }
             }
@@ -1152,6 +1174,8 @@ async fn run_loop(
         state.rule_editor = None;
         let notice = std::mem::take(&mut state.notice);
         let notice_error = std::mem::take(&mut state.notice_error);
+        let notice_critical = std::mem::take(&mut state.notice_critical);
+        let notice_followup = std::mem::take(&mut state.notice_followup);
         if notice_error && !notice.is_empty() {
             state
                 .issue_events
@@ -1170,8 +1194,14 @@ async fn run_loop(
                 ui.global::<MobileData>().set_profile_busy(gate.busy());
                 apply(&ui, view);
                 if !notice.is_empty() {
-                    ui.global::<MobileView>().set_notice_error(notice_error);
-                    ui.invoke_notify(notice.into());
+                    let current = ui.global::<MobileView>();
+                    if current.get_notice_modal() && notice_followup {
+                        ui.invoke_notify(format!("{}\n\n{notice}", current.get_notice()).into());
+                    } else if !current.get_notice_modal() || notice_critical {
+                        current.set_notice_error(notice_error);
+                        current.set_notice_critical(notice_critical);
+                        ui.invoke_notify(notice.into());
+                    }
                 }
             }
         })?;
@@ -1458,9 +1488,17 @@ async fn native_event(state: &mut State, raw: &str) -> Result<()> {
         "vpn" => {
             state.session.vpn = value["value"].as_bool().unwrap_or(false);
         }
-        "error" | "notice" => {
+        "error" | "critical" | "notice" | "export-error" | "export-notice" => {
             state.notice = value["value"].as_str().unwrap_or("").into();
-            state.notice_error = value["event"] == "error";
+            state.notice_error = matches!(
+                value["event"].as_str(),
+                Some("error" | "critical" | "export-error")
+            );
+            state.notice_critical = value["event"] == "critical";
+            state.notice_followup = matches!(
+                value["event"].as_str(),
+                Some("export-error" | "export-notice")
+            );
         }
         "file" => {
             let base = value["value"]["name"].as_str().unwrap_or("导入配置");
@@ -3118,7 +3156,8 @@ fn apply(ui: &AndroidWindow, p: Projection) {
             "safe_top":view.get_safe_top(),"safe_bottom":view.get_safe_bottom(),
             "keyboard_inset":view.get_keyboard_inset(),
             "notice_active":!view.get_notice().is_empty(),"notice_error":view.get_notice_error(),
-            "notice_close_target":view.get_notice_close_target().iter().collect::<Vec<_>>(),
+            "notice_modal":view.get_notice_modal(),
+            "notice_close_target":ui.get_notice_close_target().iter().collect::<Vec<_>>(),
             "profile_add_target":view.get_profile_add_target().iter().collect::<Vec<_>>(),
             "profile_name_target":view.get_profile_name_target().iter().collect::<Vec<_>>(),
             "profile_source_target":view.get_profile_source_target().iter().collect::<Vec<_>>(),

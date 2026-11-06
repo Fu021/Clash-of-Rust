@@ -348,6 +348,7 @@ struct App {
     exiting: bool,
     notice: String,
     error: bool,
+    notice_critical: bool,
     core_failure: Option<String>,
     notice_visible: bool,
     notice_started: Option<std::time::Instant>,
@@ -506,6 +507,7 @@ impl App {
             geo_updating: false,
             notice,
             error,
+            notice_critical: core_failure.is_some(),
             core_failure,
             notice_visible: error,
             notice_started: error.then(std::time::Instant::now),
@@ -570,7 +572,7 @@ impl App {
             } else {
                 app.updates.outcome = Some(message);
             }
-            app.error = error;
+            app.error |= error;
         }
         app
     }
@@ -961,7 +963,7 @@ impl App {
                     }
                     Err(error) => {
                         self.core_failure = Some(error.clone());
-                        self.show_notice(error, true);
+                        self.show_critical(error);
                         return self.check_update();
                     }
                 }
@@ -2044,9 +2046,14 @@ impl App {
                     self.claude.status =
                         "内核已停止；已获得的报告保留，网络结果可能已过期。".into();
                 }
+                let core_failed =
+                    !reply.running && (reply.start_requested || self.snapshot.running);
                 if reply.running {
+                    if self.core_failure.is_some() && self.notice_critical {
+                        self.dismiss_notice();
+                    }
                     self.core_failure = None;
-                } else if reply.start_requested || self.snapshot.running {
+                } else if core_failed {
                     self.core_failure = Some(
                         reply
                             .notice
@@ -2145,6 +2152,9 @@ impl App {
                     tray.update(&self.snapshot);
                     tray.speed(&self.snapshot, self.settings.tray_speed);
                 }
+                if core_failed {
+                    self.show_critical(self.core_failure.clone().unwrap_or_default());
+                }
                 match reply.notice {
                     Ok(notice) => {
                         if notice.starts_with("订阅信息已保存") {
@@ -2157,7 +2167,9 @@ impl App {
                         }
                     }
                     Err(error) => {
-                        self.show_notice(error, true);
+                        if !core_failed {
+                            self.show_notice(error, true);
+                        }
                     }
                 }
                 // Start checking after core startup, so its mixed-port proxy is ready.
@@ -2317,7 +2329,7 @@ impl App {
                 Ok(()) => return desktop_runtime::exit(),
                 Err(error) => {
                     self.exiting = false;
-                    self.show_notice(format!("退出失败：{error}"), true);
+                    self.show_critical(format!("退出失败：{error}"));
                     if self.updates.busy() {
                         if let Some(session) = &self.updates.installing {
                             session.cancel();
@@ -2987,6 +2999,7 @@ mod async_state_tests {
     #[test]
     fn settings_errors_preserve_the_original_core_failure() {
         let mut app = app();
+        app.dismiss_notice();
         app.core_failure = Some("内核程序被系统阻止".into());
         let _ = app.update(Message::Finished(Box::new(Reply {
             view_revision: 0,
@@ -3011,6 +3024,7 @@ mod async_state_tests {
         assert_eq!(app.core_failure.as_deref(), Some("内核程序被系统阻止"));
         assert!(app.notice.contains("开机启动"));
         assert!(app.error && app.notice_visible);
+        assert!(!app.notice_critical);
         let _ = app.update(Message::Finished(Box::new(Reply {
             view_revision: 0,
             remote: false,
@@ -3035,6 +3049,7 @@ mod async_state_tests {
             app.core_failure.as_deref(),
             Some("无法启动内核程序：拒绝访问")
         );
+        assert!(app.notice_critical && app.notice_visible);
     }
     #[test]
     fn late_group_result_cannot_remove_new_work_or_restore_old_delays() {

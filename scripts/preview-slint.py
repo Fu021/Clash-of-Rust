@@ -91,6 +91,7 @@ def mobile_preview(args) -> None:
                       'inset-right': 44 if short and platform == 'ios' else 0,
                       'text-scale': scale, 'preview-connected': connected, 'preview-keyboard': keyboard,
                       'preview-notice': args.notice, 'preview-notice-error': args.notice_error,
+                      'preview-notice-critical': args.notice_critical,
                       'preview-notice-elapsed': args.notice_elapsed,
                       'preview-rules-scroll': args.scroll_y,
                       **protection_fixture(args.protection_state), **extra}
@@ -327,7 +328,8 @@ def main() -> None:
     parser.add_argument("--pairs", action="store_true", help="also render light/dark pairs suitable for inline sharing")
     parser.add_argument("--full-settings", action="store_true", help="show all settings without scrolling in its page screenshot")
     parser.add_argument("--notice", default="", help="show the production floating notice above page content and dialogs")
-    parser.add_argument("--notice-error", action="store_true", help="show a centered error dialog with diagnostic export actions")
+    parser.add_argument("--notice-error", action="store_true", help="show a persistent error banner with diagnostic export actions")
+    parser.add_argument("--notice-critical", action="store_true", help="show the error in a centered blocking dialog")
     parser.add_argument("--protection-state", choices=["off", "active", "checking", "error"], default="off",
                         help="preview the persistent protection indicator without network effects")
     parser.add_argument("--notice-elapsed", type=float, default=3, help="elapsed notification lifetime in seconds")
@@ -338,6 +340,8 @@ def main() -> None:
     parser.add_argument("--scroll-y", type=float, default=0, help="initial rule-page scroll offset for checking content visibility")
     parser.add_argument("--output", type=Path)
     args = parser.parse_args()
+    if args.notice_critical:
+        args.notice_error = True
     if not args.viewer:
         parser.error("Install the official prebuilt Slint Viewer in a persistent directory, or pass --viewer PATH.")
     if args.mobile:
@@ -397,6 +401,7 @@ def main() -> None:
                                            "preview-text-scale": round(args.text_scale * 100),
                                            "preview-rules-scroll": args.scroll_y,
                                            "preview-notice": args.notice, "preview-notice-error": args.notice_error, "preview-notice-elapsed": args.notice_elapsed,
+                                           "preview-notice-critical": args.notice_critical,
                                            **protection_fixture(args.protection_state)}))
             image = output / f"{name}-{theme}.png"
             scene_size = f"{width}x{max(height, 1120)}" if args.full_settings and page == "settings" and not dialog else args.size

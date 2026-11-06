@@ -684,18 +684,32 @@ fn pointer_keyboard_escape_and_modal_input_use_the_production_callbacks() {
         text: Key::Escape.into(),
     });
     assert_eq!(events.borrow().last().unwrap().0, Intent::Escape);
-    data.set_modal(2);
-    data.set_edit_name("Unsaved subscription".into());
-    data.set_edit_source("https://example.invalid/draft".into());
+    data.set_modal(0);
     data.set_notice("检查更新失败：测试网络不可用".into());
     data.set_notice_error(true);
+    data.set_notice_critical(false);
     let _ = window.window().take_snapshot().unwrap();
     events.borrow_mut().clear();
     click(65.0, 156.0);
+    assert_eq!(
+        events.borrow().last().unwrap().0,
+        Intent::Navigate,
+        "a recoverable failure must not block navigation"
+    );
+    data.set_notice("内核无法启动：测试权限不足".into());
+    data.set_notice_critical(true);
+    let _ = window.window().take_snapshot().unwrap();
+    events.borrow_mut().clear();
+    click(65.0, 156.0);
+    click(28.0, 36.0);
     assert!(
         events.borrow().is_empty(),
         "the centered error must block navigation behind it"
     );
+    data.set_modal(2);
+    data.set_edit_name("Unsaved subscription".into());
+    data.set_edit_source("https://example.invalid/draft".into());
+    let _ = window.window().take_snapshot().unwrap();
     window
         .window()
         .dispatch_event(WindowEvent::KeyPressed { text: "x".into() });

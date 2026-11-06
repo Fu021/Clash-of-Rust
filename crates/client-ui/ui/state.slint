@@ -76,7 +76,8 @@ export global UiData {
     in-out property <string> node;
     in-out property <string> notice;
     in-out property <bool> notice-error;
-    out property <bool> notice-modal: self.notice != "" && self.notice-error;
+    in-out property <bool> notice-critical;
+    out property <bool> notice-modal: self.notice != "" && self.notice-critical;
     in-out property <bool> diagnosing;
     in-out property <int> notice-revision;
     in-out property <float> notice-elapsed;

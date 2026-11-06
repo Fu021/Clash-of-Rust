@@ -14,7 +14,7 @@ component HeaderStatus inherits VerticalLayout {
         if MobileData.protection-health > 0: ProtectionBadge {
             health: MobileData.protection-health;
             touch-size: 48px;
-            enabled: !MobileView.modal;
+            enabled: !MobileView.modal && !MobileView.notice-modal;
             clicked => { MobileView.navigate(8); }
         }
         MTag {
@@ -29,6 +29,7 @@ component HeaderStatus inherits VerticalLayout {
 }
 
 export component MobileFrame inherits Rectangle {
+    out property <[length]> notice-close-target: notice-panel.close-target;
     MotionScope { }
     notice-presence := Presence { open: MobileView.notice != ""; }
     property <string> notice-source: MobileView.notice;
@@ -78,7 +79,7 @@ export component MobileFrame inherits Rectangle {
     keys := FocusScope {
         width: parent.width; height: parent.height;
         capture-key-pressed(event) => {
-            if event.text == Key.Escape && MobileView.notice != "" && MobileView.notice-error {
+            if (event.text == Key.Escape || event.text == Key.Back) && MobileView.notice != "" && MobileView.notice-error {
                 MobileView.notice = ""; return accept;
             }
             if event.text == Key.Escape && MobileView.rule-drag-id != "" {
@@ -154,7 +155,7 @@ export component MobileFrame inherits Rectangle {
             x: header.x; y: header.y + header.height + 4px; width: header.width;
             height: self.visible ? self.preferred-height : 0px;
             health: MobileData.protection-health; message: MobileData.protection-message;
-            font-size: MobileTypography.font-size(13); enabled: !MobileView.modal;
+            font-size: MobileTypography.font-size(13); enabled: !MobileView.modal && !MobileView.notice-modal;
             clicked => { MobileView.navigate(8); }
         }
         body := Rectangle {
@@ -190,25 +191,26 @@ export component MobileFrame inherits Rectangle {
         }
         MobileModal { centered: root.centered-modal || root.expanded; }
         // Last sibling: notifications overlay both page content and modal sheets.
-        if notice-presence.mounted: Rectangle {
-            width: root.width; height: root.height - MobileView.keyboard-inset;
+        Rectangle {
+            x: 0px; y: 0px; width: root.width; height: root.height - MobileView.keyboard-inset;
+            visible: notice-presence.mounted;
             opacity: notice-presence.progress;
-            background: MobileView.notice-error ? #00000066 : transparent;
-            if MobileView.notice-error: TouchArea { }
+            background: MobileView.notice-modal ? #00000066 : transparent;
+            if MobileView.notice-modal: TouchArea { }
             error-focus := FocusScope {
-                property <bool> active: MobileView.notice != "" && MobileView.notice-error;
+                property <bool> active: MobileView.notice-modal;
                 enabled: self.active;
                 changed active => { if self.active { self.focus(); } }
                 init => { if self.active { self.focus(); } }
             }
-            MNotice {
+            notice-panel := MNotice {
                 x: MobileView.safe-left + (root.usable-width - self.width) / 2;
-                y: MobileView.notice-error ? MobileView.safe-top + max(8px, (root.usable-height - self.height) / 2)
+                y: MobileView.notice-modal ? MobileView.safe-top + max(8px, (root.usable-height - self.height) / 2)
                     : MobileView.safe-top + 8px - (1 - notice-presence.progress) * 8px;
                 width: min(600px, root.usable-width - 24px);
                 text: root.notice-text;
                 error: MobileView.notice-error;
-                available-height: root.usable-height * (MobileView.notice-error ? 0.8 : 0.4);
+                available-height: root.usable-height * (MobileView.notice-modal ? 0.8 : 0.4);
                 progress: clamp((animation-tick() - root.notice-start) / 8s, 0, 1);
                 dismissed => { MobileView.notice = ""; }
             }

@@ -301,7 +301,9 @@ export component Field inherits Rectangle {
 
 export component Select inherits Rectangle {
     in property <bool> enabled: true;
+    property <bool> error-active: UiData.notice-modal;
     changed enabled => { if !root.enabled { popup.close(); } }
+    changed error-active => { if root.error-active { popup.close(); } }
     in property <bool> modal-control: false;
     in property <[string]> options;
     in property <string> value;

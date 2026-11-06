@@ -79,17 +79,17 @@ export component AppWindow inherits Window {
             animate background { duration: Motion.fast; enabled: Motion.active; }
             accessible-role: button;
             accessible-label: "系统通知";
-            accessible-action-default => { if !UiData.notification-busy && UiData.modal == 0 { UiActions.dispatch(Intent.system-notification, "", ""); } }
+            accessible-action-default => { if !UiData.notification-busy && UiData.modal == 0 && !UiData.notice-modal { UiActions.dispatch(Intent.system-notification, "", ""); } }
             Image { x: 8px; y: 8px; width: 24px; height: 24px; source: @image-url("../../../resources/icons/app.png"); }
             FocusScope {
-                enabled: !UiData.notification-busy && UiData.modal == 0;
+                enabled: !UiData.notification-busy && UiData.modal == 0 && !UiData.notice-modal;
                 key-pressed(event) => {
                     if event.text == Key.Return || event.text == " " { UiActions.dispatch(Intent.system-notification, "", ""); return accept; }
                     return reject;
                 }
             }
             icon-area := TouchArea {
-                enabled: !UiData.notification-busy && UiData.modal == 0;
+                enabled: !UiData.notification-busy && UiData.modal == 0 && !UiData.notice-modal;
                 mouse-cursor: pointer;
                 clicked => { UiActions.dispatch(Intent.system-notification, "", ""); }
             }
@@ -130,7 +130,7 @@ export component AppWindow inherits Window {
                             Rectangle { horizontal-stretch: 1; }
                             if UiData.protection-health > 0: ProtectionBadge {
                                 health: UiData.protection-health;
-                                enabled: UiData.modal == 0;
+                                enabled: UiData.modal == 0 && !UiData.notice-modal;
                                 clicked => { UiActions.dispatch(Intent.navigate, "8", ""); }
                             }
                             Badge { text: UiData.running ? "● 内核运行中" : UiData.ready ? "● 内核未启动" : "● 正在初始化"; tone: UiData.running ? 1 : 4; }
@@ -145,7 +145,7 @@ export component AppWindow inherits Window {
             }
             if UiData.protection-health == 3: ProtectionAlert {
                 health: UiData.protection-health; message: UiData.protection-message;
-                enabled: UiData.modal == 0;
+                enabled: UiData.modal == 0 && !UiData.notice-modal;
                 clicked => { UiActions.dispatch(Intent.navigate, "8", ""); }
             }
             if UiData.network-alert != "": ContentPanel {
