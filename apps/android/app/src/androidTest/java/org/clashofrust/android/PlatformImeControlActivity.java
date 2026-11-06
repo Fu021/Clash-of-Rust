@@ -43,7 +43,7 @@ public final class PlatformImeControlActivity extends Activity {
 
     private void show() {
         showRequests++;
-        getSystemService(InputMethodManager.class).showSoftInput(editor,InputMethodManager.SHOW_IMPLICIT);
+        getSystemService(InputMethodManager.class).showSoftInput(editor,0);
         record();
     }
 

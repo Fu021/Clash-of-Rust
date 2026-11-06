@@ -260,7 +260,12 @@ pub(super) fn write(out: &mut dyn Write, args: &Args, value: &Value) -> Result<(
 }
 
 fn status(out: &mut dyn Write, value: &Value) -> Result<()> {
-    field(out, "内核", &text(value, "running"))?;
+    if let Some(error) = value["backend_error"].as_str() {
+        field(out, "当前用户内核", "状态读取失败")?;
+        field(out, "失败原因", &clean(error))?;
+    } else {
+        field(out, "内核", &text(value, "running"))?;
+    }
     if !value["owner"].is_null() {
         field(out, "控制方", &text(value, "owner"))?;
     }
@@ -296,30 +301,87 @@ fn host_routes(out: &mut dyn Write, value: &Value) -> Result<()> {
         return Ok(());
     }
     if value["scope"] != "current_network_namespace" {
-        return field(out, "主机路由", "当前平台暂未确认");
+        return field(
+            out,
+            "路由采样",
+            "此平台或本次采样不可用；不代表 IPv4/IPv6 不可用",
+        );
     }
+    let mut shown_interfaces = std::collections::BTreeSet::new();
     for (family, destination) in [("ipv4", "1.1.1.1"), ("ipv6", "2606:4700:4700::1111")] {
         let route = &value[family];
         let description = if route["state"] == "observed" {
             let interface = text(route, "interface");
             if route["kind"] == "tun" {
-                format!("TUN/TAP 接口 {interface}；归属未确认")
+                format!("经过 TUN/TAP 接口 {interface}")
+            } else if route["kind"] == "other" {
+                format!("接口 {interface}；未经过可识别的 TUN/TAP")
             } else {
-                format!("接口 {interface}；其他隧道或策略路由仍需核对")
+                format!("接口 {interface}；接口类型无法读取")
             }
         } else {
-            "未确认".to_owned()
+            match route["reason"].as_str() {
+                Some("route_unavailable") => "无可用示例路由；未检测该协议的连通性",
+                Some("ip_command_unavailable") => "未能运行 ip 命令；未检测连通性",
+                Some("route_query_timeout") => "路由查询超时；未检测连通性",
+                _ => "无法取得示例路由；未检测连通性",
+            }
+            .to_owned()
         };
         field(
             out,
             &format!("{family} 目标 {destination} 的路由"),
             &description,
         )?;
+        if route["kind"] == "tun"
+            && let Some(interface) = route["interface"].as_str()
+            && shown_interfaces.insert(interface)
+        {
+            let holders = rows(&value["tun_holders"]["interfaces"][interface]);
+            if holders.is_empty() {
+                field(
+                    out,
+                    "TUN 持有进程",
+                    "无法读取，可能受权限或进程退出影响；请用有权读取该进程的用户采集 cor diagnose --offline --output cor-diagnose.json",
+                )?;
+            } else {
+                for holder in holders {
+                    let relation = if holder["uid"] == value["observer_uid"] {
+                        "当前用户"
+                    } else {
+                        "其他用户"
+                    };
+                    let user = if holder["uid"] == 0 {
+                        "root".to_owned()
+                    } else {
+                        format!("UID {}", text(holder, "uid"))
+                    };
+                    field(
+                        out,
+                        "TUN 持有进程",
+                        &format!(
+                            "{interface} · {user}（{relation}）· PID {} · {}",
+                            text(holder, "pid"),
+                            text(holder, "process")
+                        ),
+                    )?;
+                }
+            }
+        }
+    }
+    if !shown_interfaces.is_empty() {
+        message(
+            out,
+            "TUN 持有进程来自当前描述符快照，不代表最初开启者或完整进程清单。",
+        )?;
     }
     for warning in rows(&value["warnings"]) {
         let description = match warning.as_str() {
             Some("tun_owner_unconfirmed") => {
-                "检测到 TUN/TAP 路由，但当前用户未启用 TUN；接口归属未确认，可能来自其他用户或程序"
+                "当前用户后台未启用 TUN，但示例流量已经过 TUN/TAP；关闭当前用户代理不会关闭其他实例的 TUN"
+            }
+            Some("tun_current_proxy_unknown") => {
+                "当前用户后台状态无法读取；已观察到 TUN/TAP 路由，请结合持有进程判断，不能认定当前用户已关闭 TUN"
             }
             Some("sample_routes_not_tun") => {
                 "当前用户启用 TUN，但已确认的示例目标路由未经过可识别的 TUN/TAP；分流和策略路由可能不同"
@@ -328,10 +390,36 @@ fn host_routes(out: &mut dyn Write, value: &Value) -> Result<()> {
         };
         field(out, "路由提示", description)?;
     }
+    if value["scope"] == "current_network_namespace" {
+        message(
+            out,
+            "以上仅为两个目标的路由采样，不代表全部流量或实际连通性。",
+        )?;
+    }
     Ok(())
 }
 
 fn diagnose(out: &mut dyn Write, value: &Value) -> Result<()> {
+    if value["offline"] == true {
+        for (name, key) in [
+            ("客户端版本", "version"),
+            ("采集时间", "captured_at"),
+            ("程序路径", "executable"),
+            ("数据目录", "data_directory"),
+        ] {
+            field(out, name, &text(value, key))?;
+        }
+        field(
+            out,
+            "后台日志采集",
+            &text(&value["local_evidence"]["daemon_log"], "state"),
+        )?;
+        host_routes(out, &value["host_routes"])?;
+        return message(
+            out,
+            "仅收集本地现场，未检测网络或连接后台；用 --output cor-diagnose.json 保存完整报告。",
+        );
+    }
     field(out, "DNS 检测域名", &text(value, "dns_host"))?;
     for (name, key) in [("系统 DNS", "system_dns"), ("当前内核 DNS", "core_dns")] {
         let result = &value[key];

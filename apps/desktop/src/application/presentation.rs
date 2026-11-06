@@ -552,7 +552,13 @@ impl App {
             models.set_groups(Vec::new());
         }
         if self.page == Page::Profiles {
-            let profiles: Vec<_> = self.profiles.iter().collect();
+            let profiles: Vec<_> = self
+                .profiles
+                .iter()
+                .filter(|profile| {
+                    contains_query(&profile.name, &query) || contains_query(&profile.source, &query)
+                })
+                .collect();
             self.pager(data, profiles.len(), PAGE_SIZE);
             reconcile(
                 &models.profiles,

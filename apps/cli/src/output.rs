@@ -21,9 +21,16 @@ pub fn emit(args: &Args, value: Value) -> Result<()> {
         if !args.flag("quiet") {
             eprintln!("已保存：{path}");
         }
+        if crate::diagnostics::has_failure(&value) {
+            crate::diagnostics::failure_hint(Some(args));
+        }
         return Ok(());
     }
-    write_output(&mut std::io::stdout().lock(), args, &value)
+    write_output(&mut std::io::stdout().lock(), args, &value)?;
+    if crate::diagnostics::has_failure(&value) {
+        crate::diagnostics::failure_hint(Some(args));
+    }
+    Ok(())
 }
 
 fn write_output(out: &mut dyn Write, args: &Args, value: &Value) -> Result<()> {
@@ -39,27 +46,31 @@ fn write_output(out: &mut dyn Write, args: &Args, value: &Value) -> Result<()> {
     Ok(())
 }
 
+pub(crate) fn sensitive_field(key: &str) -> bool {
+    let normalized = key.to_ascii_lowercase().replace('-', "_");
+    [
+        "password",
+        "secret",
+        "token",
+        "uuid",
+        "private_key",
+        "ip_reputation_key",
+        "authorization",
+        "auth",
+        "psk",
+        "preshared_key",
+        "api_key",
+    ]
+    .iter()
+    .any(|suffix| normalized == *suffix || normalized.ends_with(&format!("_{suffix}")))
+}
+
 pub fn redact(mut value: Value) -> Value {
     match &mut value {
         Value::Object(map) => {
             for (key, field) in map {
                 let normalized = key.to_ascii_lowercase().replace('-', "_");
-                if [
-                    "password",
-                    "secret",
-                    "token",
-                    "uuid",
-                    "private_key",
-                    "ip_reputation_key",
-                    "authorization",
-                    "auth",
-                    "psk",
-                    "preshared_key",
-                    "api_key",
-                ]
-                .iter()
-                .any(|s| normalized == *s || normalized.ends_with(&format!("_{s}")))
-                {
+                if sensitive_field(key) {
                     if !field.is_null() {
                         *field = Value::String("[已隐藏]".into());
                     }
@@ -225,9 +236,11 @@ mod tests {
             &["status"],
             json!({"running":false,"owner":null,"host_routes":routes}),
         );
-        assert!(status.contains("TUN/TAP 接口 Meta"));
-        assert!(status.contains("归属未确认"));
-        assert!(status.contains("可能来自其他用户或程序"));
+        assert!(status.contains("经过 TUN/TAP 接口 Meta"));
+        assert!(status.contains("无法读取"));
+        assert!(status.contains("关闭当前用户代理不会关闭其他实例"));
+        assert!(status.contains("未检测连通性"));
+        assert!(!status.contains("未确认"));
         let report = render(
             &["diagnose"],
             json!({
@@ -254,6 +267,32 @@ mod tests {
         ] {
             assert!(report.contains(expected), "{report}");
         }
+    }
+
+    #[test]
+    fn status_reports_a_root_tun_holder_without_claiming_who_enabled_it() {
+        let status = render(
+            &["status"],
+            json!({
+                "running":false,
+                "host_routes":{
+                    "scope":"current_network_namespace","observer_uid":1000,
+                    "ipv4":{"state":"observed","interface":"Meta","kind":"tun"},
+                    "ipv6":{"state":"unknown","reason":"route_unavailable"},
+                    "tun_holders":{"state":"partial","interfaces":{
+                        "Meta":[{"uid":0,"pid":42,"process":"mihomo"}]
+                    }},
+                    "warnings":["tun_owner_unconfirmed"]
+                }
+            }),
+        );
+        assert!(
+            status.contains("root（其他用户）· PID 42 · mihomo"),
+            "{status}"
+        );
+        assert!(status.contains("不代表最初开启者"));
+        assert!(status.contains("无可用示例路由"));
+        assert!(!status.contains("IPv6 不可用"));
     }
 
     #[test]

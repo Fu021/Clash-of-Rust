@@ -330,7 +330,7 @@ def main() -> None:
     parser.add_argument("--notice-elapsed", type=float, default=3, help="elapsed notification lifetime in seconds")
     parser.add_argument("--size")
     parser.add_argument("--detail", type=int, default=0, help="preview one mobile detail view without rendering the full matrix")
-    parser.add_argument("--text-scale", type=float, default=1, help="mobile font preview factor (native Android uses system SP conversions)")
+    parser.add_argument("--text-scale", type=float, default=1, help="font preview factor, for example 1.3 (native Android uses system SP conversions)")
     parser.add_argument("--scroll-y", type=float, default=0, help="initial rule-page scroll offset for checking content visibility")
     parser.add_argument("--output", type=Path)
     args = parser.parse_args()
@@ -374,6 +374,7 @@ def main() -> None:
     if args.live:
         fixture = fixtures / "live.json"
         values = {"preview-page": list(PAGES).index(pages[0]), "preview-motion": True,
+                  "preview-text-scale": round(args.text_scale * 100),
                   **protection_fixture(args.protection_state)}
         fixture.write_text(json.dumps({**values, "preview-dark": themes[0] == "dark"}))
         subprocess.run([args.viewer, "--auto-reload", "--load-data", str(fixture), str(entry)],
@@ -389,6 +390,7 @@ def main() -> None:
         for name, label, page, dialog in scenes:
             fixture = fixtures / f"{name}-{theme}.json"
             fixture.write_text(json.dumps({"preview-page": list(PAGES).index(page), "preview-dark": theme == "dark", "dialog": dialog,
+                                           "preview-text-scale": round(args.text_scale * 100),
                                            "preview-rules-scroll": args.scroll_y,
                                            "preview-notice": args.notice, "preview-notice-elapsed": args.notice_elapsed,
                                            **protection_fixture(args.protection_state)}))

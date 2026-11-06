@@ -21,9 +21,12 @@ impl std::fmt::Display for Unavailable {
 impl std::error::Error for Unavailable {}
 
 pub fn store(args: &Args) -> Result<Store> {
+    Store::at(data_root(args)?)
+}
+pub fn data_root(args: &Args) -> Result<PathBuf> {
     match args.get("data-dir") {
-        Some(path) => Store::at(absolute(path)?),
-        None => Store::discover(),
+        Some(path) => absolute(path),
+        None => Store::default_root(),
     }
 }
 pub fn absolute(path: &str) -> Result<PathBuf> {
@@ -46,7 +49,9 @@ pub async fn connect(args: &Args, spawn: bool) -> Result<Option<Remote>> {
         match remote.request::<Meta>(Command::Meta).await {
             Ok(_) => return Ok(Some(remote)),
             Err(error) if store.instance_lock().is_err() => {
-                return Err(error.context(Unavailable("存活的后台暂时不可达，请稍后重试".into())));
+                return Err(
+                    error.context(Unavailable("存活的后台暂时不可达，请先保留排障现场".into()))
+                );
             }
             Err(_) => {}
         }

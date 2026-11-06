@@ -404,16 +404,20 @@ pub struct Store {
 }
 
 impl Store {
+    pub fn default_root() -> Result<PathBuf> {
+        Ok(
+            if let Some(path) = std::env::var_os("CLASH_OF_RUST_DATA_DIR") {
+                PathBuf::from(path)
+            } else {
+                ProjectDirs::from("org", "clash-of-rust", "ClashOfRust")
+                    .context("无法确定应用数据目录")?
+                    .data_local_dir()
+                    .to_owned()
+            },
+        )
+    }
     pub fn discover() -> Result<Self> {
-        let root = if let Some(path) = std::env::var_os("CLASH_OF_RUST_DATA_DIR") {
-            PathBuf::from(path)
-        } else {
-            ProjectDirs::from("org", "clash-of-rust", "ClashOfRust")
-                .context("无法确定应用数据目录")?
-                .data_local_dir()
-                .to_owned()
-        };
-        Self::at(root)
+        Self::at(Self::default_root()?)
     }
     pub fn at(root: PathBuf) -> Result<Self> {
         for name in ["profiles", "runtime"] {

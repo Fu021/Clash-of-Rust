@@ -1,5 +1,8 @@
 use serde_json::{Value, json};
 
+#[cfg(target_os = "linux")]
+mod linux;
+
 pub(crate) fn warn_tun() {
     eprintln!("TUN 可能接管当前网络命名空间中其他用户和程序的流量；实际范围取决于系统路由。");
 }
@@ -59,11 +62,21 @@ pub(crate) async fn observe() -> Value {
     {
         let (ipv4, ipv6) =
             tokio::join!(route("-4", "1.1.1.1"), route("-6", "2606:4700:4700::1111"));
-        json!({
+        let routes = json!({
             "scope":"current_network_namespace",
+            "observer_uid":unsafe { libc::geteuid() },
             "ipv4":ipv4,
             "ipv6":ipv6
-        })
+        });
+        let fallback = routes.clone();
+        tokio::task::spawn_blocking(move || linux::attach_holders(routes))
+            .await
+            .unwrap_or_else(|_| {
+                let mut routes = fallback;
+                routes["tun_holders"] =
+                    json!({"state":"unavailable","reason":"owner_query_failed"});
+                routes
+            })
     }
     #[cfg(not(target_os = "linux"))]
     {
@@ -84,7 +97,9 @@ pub(crate) fn with_proxy_context(
     let other = samples
         .iter()
         .any(|route| route["state"] == "observed" && route["kind"] == "other");
-    let warning = if tun && proxy != Some(ProxyMode::Tun) {
+    let warning = if tun && proxy.is_none() {
+        Some("tun_current_proxy_unknown")
+    } else if tun && proxy != Some(ProxyMode::Tun) {
         Some("tun_owner_unconfirmed")
     } else if !tun && other && proxy == Some(ProxyMode::Tun) {
         Some("sample_routes_not_tun")
@@ -144,7 +159,7 @@ mod context_tests {
         );
         assert_eq!(
             with_proxy_context(routes.clone(), None)["warnings"],
-            json!(["tun_owner_unconfirmed"])
+            json!(["tun_current_proxy_unknown"])
         );
         assert_eq!(
             with_proxy_context(routes, Some(ProxyMode::Tun))["warnings"],

@@ -282,7 +282,7 @@ pub static COMMANDS: &[Spec] = &[
     ),
     command!(
         "logs export",
-        "导出当前完整日志",
+        "导出当前最多 500 条缓冲日志；排障现场用 diagnose --output",
         "logs export --output FILE",
         0,
         0,
@@ -322,11 +322,11 @@ pub static COMMANDS: &[Spec] = &[
     ),
     command!(
         "diagnose",
-        "检查出口、HTTP 与系统/内核 DNS",
-        "diagnose [--url URL] [--host DOMAIN]",
+        "检查网络；--output 保存诊断报告，--offline 仅收集本地现场",
+        "diagnose [--url URL] [--host DOMAIN] [--offline] [--output FILE]",
         0,
         0,
-        "url host"
+        "url host offline output"
     ),
     command!(
         "dns",
@@ -724,6 +724,7 @@ fn parse_inner(input: impl IntoIterator<Item = String>) -> Result<Args> {
     let Some(spec) = selected else {
         let prefix = words.join(" ");
         if prefix.is_empty()
+            || (help && prefix == "all")
             || COMMANDS
                 .iter()
                 .any(|spec| spec.path.starts_with(&(prefix.clone() + " ")))
@@ -771,7 +772,31 @@ fn parse_inner(input: impl IntoIterator<Item = String>) -> Result<Args> {
 
 pub fn help(prefix: &str) -> String {
     let mut out = format!("Clash of Rust CLI {}\n\n", clash_client_core::VERSION);
-    if let Some(spec) = COMMANDS.iter().find(|s| s.path == prefix) {
+    if prefix.is_empty() {
+        out += "用法：cor <命令> [选项]\n\n常用命令：\n";
+        for path in ["start", "stop", "restart", "status", "proxy", "diagnose"] {
+            let spec = COMMANDS.iter().find(|spec| spec.path == path).unwrap();
+            out += &format!("  {:<25} {}\n", spec.path, spec.description);
+        }
+        out += "  profile                   订阅添加、切换与更新；cor profile help\n";
+        out += "  node                      节点选择与测速；cor node help\n";
+        let advanced = COMMANDS
+            .iter()
+            .map(|spec| spec.path.split_whitespace().next().unwrap())
+            .filter(|path| {
+                ![
+                    "start", "stop", "restart", "status", "proxy", "diagnose", "profile", "node",
+                ]
+                .contains(path)
+            })
+            .collect::<BTreeSet<_>>()
+            .into_iter()
+            .collect::<Vec<_>>()
+            .join("、");
+        out += &format!("\n其他功能：{advanced}\n完整命令与通用选项：cor help all\n");
+    } else if prefix == "all" {
+        out += "用法：cor <命令> [选项]\n\n全部命令：\n";
+    } else if let Some(spec) = COMMANDS.iter().find(|s| s.path == prefix) {
         out += &format!("{}\n\n用法：cor {}\n\n", spec.description, spec.usage);
         if !spec.options.is_empty() {
             out += "命令选项：\n";
@@ -787,10 +812,12 @@ pub fn help(prefix: &str) -> String {
             if prefix.is_empty() { "" } else { " " }
         );
     }
-    for spec in COMMANDS
-        .iter()
-        .filter(|s| prefix.is_empty() || s.path.starts_with(&(prefix.to_owned() + " ")))
-    {
+    for spec in COMMANDS.iter().filter(|spec| {
+        prefix == "all"
+            || (!prefix.is_empty()
+                && spec.path.starts_with(&(prefix.to_owned() + " "))
+                && spec.path != "profile import")
+    }) {
         out += &format!("  {:<25} {}\n", spec.path, spec.description);
     }
     let example = match prefix {
@@ -813,7 +840,13 @@ pub fn help(prefix: &str) -> String {
         out += &format!("\n示例：\n  {example}\n");
     }
     out += "\n通用选项：\n";
-    for key in GLOBAL.split_whitespace() {
+    for key in (if prefix.is_empty() {
+        "help version json data-dir user"
+    } else {
+        GLOBAL
+    })
+    .split_whitespace()
+    {
         out += &option_help(key);
     }
     out += "\n详情：cor help <命令>；使用文档：docs/cli.md\n退出码：0 成功，1 操作失败，2 参数错误，3 后台不可达，124 请求超时，130 已取消。\n";
@@ -860,7 +893,7 @@ fn option_help(key: &str) -> String {
         "host" => "诊断域名，默认 github.com",
         "system" => "使用本机系统 DNS，默认使用内核/代理 DNS",
         "category" => "检测分类，例如 AI、全球、日本",
-        "offline" => "仅扫描本机配置，不请求外部检测服务",
+        "offline" => "仅收集本机信息，不请求外部检测服务",
         "open" => "在默认浏览器打开本机采样入口",
         _ => "见当前命令说明",
     };
@@ -880,7 +913,7 @@ pub fn completion(shell: &str) -> Result<String> {
     let words: BTreeSet<_> = COMMANDS
         .iter()
         .flat_map(|s| s.path.split_whitespace())
-        .chain(["help"])
+        .chain(["help", "all"])
         .collect();
     let mut words = words
         .into_iter()
@@ -953,12 +986,35 @@ mod tests {
         assert!(args(&["node", "unknown"]).is_err());
     }
     #[test]
+    fn default_help_is_compact_and_full_help_keeps_compatible_commands() {
+        let compact = help("");
+        assert!(compact.contains("cor help all"));
+        assert!(compact.contains("cor node help"));
+        assert!(!compact.contains("profile import"));
+        let full = args(&["help", "all"]).unwrap();
+        assert!(full.help);
+        for spec in COMMANDS {
+            assert!(help(&full.path).contains(spec.usage.split_whitespace().next().unwrap()));
+            assert!(help(&full.path).contains(spec.path));
+        }
+        assert!(!help("profile").contains("profile import"));
+        assert!(args(&["profile", "import", "example.yaml", "--name", "example"]).is_ok());
+    }
+    #[test]
     fn network_refresh_is_an_explicit_restart_option() {
         let parsed = args(&["restart", "--network-only", "--yes"]).unwrap();
         assert!(parsed.flag("network-only"));
         assert!(parsed.flag("yes"));
         assert!(args(&["start", "--network-only"]).is_err());
         assert!(help("restart").contains("关闭旧连接"));
+    }
+    #[test]
+    fn diagnostics_can_export_local_evidence_without_starting_a_backend() {
+        let parsed = args(&["diagnose", "--offline", "--output", "report.json"]).unwrap();
+        assert!(parsed.flag("offline"));
+        assert_eq!(parsed.get("output"), Some("report.json"));
+        assert!(args(&["status", "--offline"]).is_err());
+        assert!(help("diagnose").contains("--output"));
     }
     #[test]
     fn cross_user_inventory_cannot_be_confused_with_a_selected_data_directory() {

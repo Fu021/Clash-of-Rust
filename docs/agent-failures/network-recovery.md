@@ -14,7 +14,7 @@
 
 `curl` 对某个网站成功、`nslookup` 返回结果，只能证明对应请求和解析路径当时有响应，不能证明目标应用的 DNS、协议、认证或长期连接正常。目前没有针对该症状的可丢弃环境复现，不能认定唯一原因。
 
-在故障用户和相同网络命名空间中先记录 `cor status`、`cor diagnose --host 故障域名 --url https://故障域名/` 与 `cor logs --limit 500`；URL 不携带凭据。分别核对系统路由 HTTP、本地代理 HTTP、系统/内核 DNS、IPv4/IPv6、程序自己的代理环境变量、规则与节点、TLS 或认证返回，以及持续连接是否中途断开。必要时进一步检查 MTU/路径 MTU、IPv6 与 UDP；这些是候选原因，需用目标程序的实际错误和可复现对照验证。日志可能包含域名、IP 或敏感信息，分享前先检查。
+在故障用户和相同网络命名空间中先用 `cor diagnose --offline --output cor-tun-local.json` 保留本地现场，再记录 `cor status`，并执行 `cor diagnose --host 故障域名 --url https://故障域名/ --output cor-tun-network.json`；URL 不携带凭据。沿用原 `--data-dir` 等参数，[报告边界](../cli/runtime.md#故障反馈与诊断报告)不等于完整历史日志。分别核对系统路由 HTTP、本地代理 HTTP、系统/内核 DNS、IPv4/IPv6、程序自己的代理环境变量、规则与节点、TLS 或认证返回，以及持续连接是否中途断开。必要时进一步检查 MTU/路径 MTU、IPv6 与 UDP；这些是候选原因，需用目标程序的实际错误和可复现对照验证。日志可能包含域名、IP 或敏感信息，分享前先检查。
 
 0.6.6 正式版的 `diagnose` 出口查询遗漏 `format=json`，共享探测器却按 JSON 解析，纯文本 IPv4 可触发 `trailing characters`；GUI 已带该参数，不能用 GUI 成功代替 CLI 回归。修复同时对齐请求格式，并在共享层严格接受文本/JSON IP、拒绝非成功 HTTP、错误页及无效地址；该诊断缺陷不证明长期 TUN 故障的根因。有限日志和持久采集边界见[日志说明](../cli/runtime.md#连接与日志)，排查时不要只筛选 warning 而遗漏 error。
 

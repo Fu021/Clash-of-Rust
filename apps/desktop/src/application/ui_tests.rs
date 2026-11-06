@@ -469,6 +469,13 @@ fn clicking_a_node_selects_it_but_its_latency_button_only_tests_it() {
     window.show().unwrap();
     let _ = window.window().take_snapshot().unwrap();
     let click = |x, y| ui_testing::click(window.window(), x, y);
+    click(430.0, 290.0);
+    assert!(
+        events.borrow().is_empty(),
+        "details must not select or test a node"
+    );
+    let _ = window.window().take_snapshot().unwrap();
+    click(430.0, 290.0);
     click(507.0, 298.0);
     assert_eq!(
         events.borrow().as_slice(),
@@ -506,6 +513,116 @@ fn clicking_a_node_selects_it_but_its_latency_button_only_tests_it() {
         "the latency button must consume the click without selecting the node"
     );
     window.hide().unwrap();
+}
+
+#[test]
+fn resizing_a_node_grid_preserves_odd_tail_nodes_and_their_own_actions() {
+    use clash_client_ui::{GroupItem, NodeItem, NodePair};
+    let surface = ui_testing::initialize(1600, 900);
+    let app = fixture(Page::Proxies);
+    let window = AppWindow::new().unwrap();
+    let data = window.global::<UiData>();
+    let mut models = ViewModels::default();
+    models.attach(&data);
+    app.present_slint(&data, &mut models);
+    let nodes: Vec<_> = (0..5)
+        .map(|index| NodeItem {
+            group: "Proxy".into(),
+            name: format!("node-{index}").into(),
+            kind: "VLESS".into(),
+            valid: true,
+            ..Default::default()
+        })
+        .collect();
+    models.set_groups(vec![(
+        GroupItem {
+            id: "Proxy".into(),
+            title: "Proxy".into(),
+            expanded: true,
+            ..Default::default()
+        },
+        nodes
+            .chunks(2)
+            .map(|pair| NodePair {
+                left: pair[0].clone(),
+                right: pair.get(1).cloned().unwrap_or_default(),
+            })
+            .collect(),
+    )]);
+    let events = pointer_events(&window);
+    window.show().unwrap();
+    for (width, height, positions) in [
+        (
+            1600,
+            900,
+            [
+                (250., 252.),
+                (600., 252.),
+                (950., 252.),
+                (1300., 252.),
+                (250., 352.),
+            ],
+        ),
+        (
+            950,
+            700,
+            [
+                (250., 252.),
+                (600., 252.),
+                (250., 352.),
+                (600., 352.),
+                (250., 452.),
+            ],
+        ),
+    ] {
+        surface.set_size(slint::PhysicalSize::new(width, height));
+        let _ = window.window().take_snapshot().unwrap();
+        for (index, (horizontal, vertical)) in positions.into_iter().enumerate() {
+            events.borrow_mut().clear();
+            ui_testing::click(window.window(), horizontal, vertical);
+            assert_eq!(
+                events.borrow().as_slice(),
+                &[(
+                    Intent::SelectNode,
+                    "Proxy".into(),
+                    format!("node-{index}").into()
+                )],
+                "{width}x{height}: each visible card must retain its original node"
+            );
+        }
+    }
+    window.hide().unwrap();
+}
+
+#[test]
+fn subscription_search_filters_names_and_sources_without_replacing_the_model() {
+    ui_testing::initialize(950, 700);
+    let mut app = fixture(Page::Profiles);
+    let mut backup = app.profiles[0].clone();
+    backup.id = "backup".into();
+    backup.name = "备用线路".into();
+    backup.source = "https://backup.example.test/config".into();
+    app.profiles.push(backup);
+    let window = AppWindow::new().unwrap();
+    let data = window.global::<UiData>();
+    let mut models = ViewModels::default();
+    models.attach(&data);
+    app.present_slint(&data, &mut models);
+    let rows = data.get_profiles();
+    assert_eq!(rows.row_count(), 2);
+    for query in ["备用", "BACKUP.EXAMPLE.TEST"] {
+        app.query = query.into();
+        app.present_slint(&data, &mut models);
+        assert_eq!(rows, data.get_profiles());
+        assert_eq!(rows.row_count(), 1);
+        assert_eq!(rows.row_data(0).unwrap().id, "backup");
+    }
+    app.query = "no matching subscription".into();
+    app.present_slint(&data, &mut models);
+    assert_eq!(rows.row_count(), 0);
+    app.query.clear();
+    app.present_slint(&data, &mut models);
+    assert_eq!(rows.row_count(), 2);
 }
 
 #[test]
