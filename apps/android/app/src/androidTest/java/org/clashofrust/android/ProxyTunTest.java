@@ -524,7 +524,10 @@ public class ProxyTunTest {
             assertFalse("A recoverable update error must not open a modal",
                 MainActivity.diagnostics().optBoolean("notice_modal"));
             tapTarget("notice_close_target");
-            await("The error notice did not close",()->!MainActivity.diagnostics().optBoolean("notice_active"));
+            await("The error notice did not close",()-> {
+                JSONObject ui=MainActivity.diagnostics();
+                return ui.optBoolean("live") && !ui.optBoolean("notice_active");
+            });
             assertEquals("Closing the notice must keep the subscription editor open",
                 3,MainActivity.diagnostics().getInt("detail"));
             assertEquals(draftNameLength,MainActivity.diagnostics().getInt("profile_name_length"));
@@ -532,8 +535,11 @@ public class ProxyTunTest {
             MainActivity.emit("critical","内核启动失败：测试权限不足。\n原订阅和输入内容均已保留。");
             await("The critical error dialog did not appear",()->MainActivity.diagnostics().optBoolean("notice_modal"));
             shell("input keyevent KEYCODE_BACK");
-            await("Android Back did not dismiss the error dialog",
-                ()->!MainActivity.diagnostics().optBoolean("notice_active"));
+            await("Android Back did not dismiss the error dialog while keeping the Activity active",()-> {
+                JSONObject ui=MainActivity.diagnostics();
+                return ui.optBoolean("live") && !ui.optBoolean("notice_active")
+                    && inStage(androidx.test.runner.lifecycle.Stage.RESUMED,true);
+            });
             assertEquals("Back must preserve the editor under the error dialog",
                 3,MainActivity.diagnostics().getInt("detail"));
             assertEquals(draftNameLength,MainActivity.diagnostics().getInt("profile_name_length"));

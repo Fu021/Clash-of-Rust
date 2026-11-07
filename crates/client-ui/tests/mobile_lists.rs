@@ -2,7 +2,7 @@
 use slint::{
     ComponentHandle,
     platform::{
-        Platform, PlatformError, WindowAdapter,
+        Platform, PlatformError, WindowAdapter, WindowEventDispatchResult,
         software_renderer::{MinimalSoftwareWindow, RepaintBufferType},
     },
 };
@@ -14,6 +14,24 @@ slint::slint! {
     import { RuleDragHandle } from "../ui/components/rule-drag.slint";
     import { ListReorderGesture, ListReorderPreview } from "../ui/components/list-reorder.slint";
     import { PageSurface } from "../ui/components/motion.slint";
+    import { MobileFrame } from "../ui/mobile/shared/frame.slint";
+    import { MobileView } from "../ui/mobile/shared/state.slint";
+
+    export component MobileNoticeProbe inherits Window {
+        preferred-width: 393px; preferred-height: 852px;
+        forward-focus: surface;
+        in-out property <string> notice <=> MobileView.notice;
+        in-out property <bool> notice-error <=> MobileView.notice-error;
+        in-out property <bool> notice-critical <=> MobileView.notice-critical;
+        in-out property <int> detail <=> MobileView.detail;
+        in-out property <string> draft <=> MobileView.profile-name;
+        surface := MobileFrame {
+            width: parent.width; height: parent.height;
+            primary-pages: [0, 1, 2, 10, 9];
+            sidebar-pages: [0, 1, 2, 3, 4, 5, 6, 7, 8];
+            sidebar-footer-pages: [9];
+        }
+    }
 
     export component InputFieldsProbe inherits Window {
         preferred-width: 320px; preferred-height: 160px;
@@ -766,4 +784,38 @@ fn mobile_list_stacks_rows_and_keeps_sparse_content_at_the_top() {
         );
     }
     fields.hide().unwrap();
+
+    adapter.set_size(slint::PhysicalSize::new(393, 852));
+    let notice = MobileNoticeProbe::new().unwrap();
+    notice.set_detail(3);
+    notice.set_draft("Unchanged subscription draft".into());
+    notice.show().unwrap();
+    for critical in [false, true] {
+        notice.set_notice_error(true);
+        notice.set_notice_critical(critical);
+        notice.set_notice("A recoverable or critical error".into());
+        frame(&adapter, 393, 852);
+        advance(&clock, Duration::from_millis(200));
+        let pressed = notice
+            .window()
+            .dispatch_event_with_result(WindowEvent::KeyPressed {
+                text: slint::platform::Key::Back.into(),
+            })
+            .unwrap();
+        let released = notice
+            .window()
+            .dispatch_event_with_result(WindowEvent::KeyReleased {
+                text: slint::platform::Key::Back.into(),
+            })
+            .unwrap();
+        assert!(
+            matches!(pressed, WindowEventDispatchResult::Accepted)
+                || matches!(released, WindowEventDispatchResult::Accepted),
+            "Android Back must be consumed instead of finishing the Activity"
+        );
+        assert!(notice.get_notice().is_empty());
+        assert_eq!(notice.get_detail(), 3);
+        assert_eq!(notice.get_draft().as_str(), "Unchanged subscription draft");
+    }
+    notice.hide().unwrap();
 }

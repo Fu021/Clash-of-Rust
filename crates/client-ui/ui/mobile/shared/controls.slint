@@ -107,6 +107,7 @@ export component ListView inherits SlintListView {
     min-width: 0px; preferred-width: 0px; horizontal-stretch: 1;
     content-width: self.visible-width;
     horizontal-scrollbar-policy: always-off;
+    vertical-scrollbar-policy: always-off;
     property <length> bottom: min(0px, self.visible-height - self.content-height);
     changed content-key => { self.content-y = 0px; }
     changed bottom => { self.content-y = clamp(self.content-y, self.bottom, 0px); }

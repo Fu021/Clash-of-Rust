@@ -1,13 +1,12 @@
 import { Motion, MotionScope, ProgressTrack } from "components/motion.slint";
 import { DesktopNotice, DiagnosticActions } from "components/notice.slint";
-import { ScrollView } from "std-widgets.slint";
 import { UiData, UiActions, Intent } from "state.slint";
 import { Theme } from "theme/palette.slint";
 export { Theme } from "theme/palette.slint";
 export { Motion } from "components/motion.slint";
 export { UiGeometry } from "components/geometry.slint";
 export { UiData, UiActions, Intent, Choice, DetailItem, FakeIpExclusionItem, NodeItem, NodePair, GroupItem, ProfileItem, ConnectionItem, RuleItem, LogItem, ReportItem, OverviewItem, CategoryItem, CategoryPair } from "state.slint";
-import { Label, Caption, ContentPanel, Panel, ActionButton, Badge, Paragraph } from "components/controls.slint";
+import { PageScroll, Label, Caption, ContentPanel, Panel, ActionButton, Badge, Paragraph } from "components/controls.slint";
 import { NavigationItem } from "components/navigation.slint";
 import { Wordmark, ConnectionPower } from "components/brand.slint";
 import { GeometryTarget } from "components/geometry.slint";
@@ -78,7 +77,6 @@ export component AppWindow inherits Window {
     Rectangle {
         x: 0px; y: 44px; width: root.sidebar-width; height: parent.height - self.y; background: Theme.sidebar;
         animate background { duration: Motion.appearance; enabled: Motion.active; }
-        Rectangle { x: parent.width - 1px; width: 1px; height: parent.height; background: Theme.line; }
         HorizontalLayout {
             x: root.compact-sidebar ? 14px : 16px; y: 8px; width: parent.width - self.x * 2; height: 44px;
             spacing: 10px; cross-axis-alignment: center;
@@ -97,7 +95,7 @@ export component AppWindow inherits Window {
                 font-weight: 500;
             }
         }
-        nav := ScrollView {
+        nav := PageScroll {
             content-y <=> UiData.scroll-navigation;
             x: 0px; y: 62px; width: parent.width; height: max(0px, footer.y - self.y - 12px);
             VerticalLayout { alignment: start; padding-left: 10px; padding-right: 10px; spacing: 2px;
@@ -119,10 +117,9 @@ export component AppWindow inherits Window {
     content-area := Rectangle {
         x: root.sidebar-width; y: 44px; width: parent.width - self.x; height: parent.height - self.y;
         background: Theme.canvas; border-top-left-radius: 14px;
-        border-width: 1px; border-color: Theme.subtle-line;
         VerticalLayout {
             spacing: Theme.page-gap;
-            padding-left: 24px; padding-right: 24px; padding-bottom: 20px;
+            padding-left: 24px; padding-right: 24px; padding-bottom: 8px;
             Rectangle {
                 height: max(52px, header.preferred-height + 12px);
                 Rectangle { y: parent.height - 1px; width: parent.width; height: 1px; background: Theme.subtle-line; }

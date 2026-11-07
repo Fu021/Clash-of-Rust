@@ -25,6 +25,7 @@ component HeaderStatus inherits VerticalLayout {
 }
 
 export component MobileFrame inherits Rectangle {
+    forward-focus: keys;
     out property <[length]> notice-close-target: notice-panel.close-target;
     MotionScope { }
     notice-presence := Presence { open: MobileView.notice != ""; }
@@ -90,9 +91,8 @@ export component MobileFrame inherits Rectangle {
         }
         if root.nav-width > 0px: Rectangle {
             x: MobileView.safe-left + root.nav-width; y: MobileView.safe-top;
-            width: root.usable-width - root.nav-width; height: root.usable-height;
+            width: max(0px, root.width - self.x); height: max(0px, root.height - self.y);
             background: Theme.canvas; border-top-left-radius: 18px;
-            border-width: 1px; border-color: Theme.subtle-line;
         }
         if root.nav-width > 0px: Rectangle {
             // Paint behind the system bars/cutouts; inset interactive content only.
@@ -100,7 +100,6 @@ export component MobileFrame inherits Rectangle {
             height: root.height - MobileView.keyboard-inset;
             background: Theme.sidebar;
             animate background { duration: Motion.appearance; enabled: Motion.active; }
-            Rectangle { x: parent.width - 1px; width: 1px; height: parent.height; background: Theme.line; }
             VerticalLayout { x: MobileView.safe-left; y: MobileView.safe-top;
                 width: root.nav-width; height: root.usable-height;
                 padding: MobileTypography.small-gap; spacing: 10px;

@@ -8,6 +8,8 @@ import { GeometryTarget } from "geometry.slint";
 // (including a shorter detail) so a previous offset cannot hide the new body.
 export component PageScroll inherits ScrollView {
     in property <string> content-key;
+    horizontal-scrollbar-policy: always-off;
+    vertical-scrollbar-policy: always-off;
     property <length> bottom: min(0px, self.visible-height - self.content-height);
     changed content-key => { self.content-y = 0px; }
     changed bottom => { self.content-y = clamp(self.content-y, self.bottom, 0px); }
@@ -346,7 +348,7 @@ export component Select inherits Rectangle {
             border-color: Theme.line;
             border-width: 1px;
             border-radius: 6px;
-            ScrollView {
+            PageScroll {
                 VerticalLayout {
                     alignment: start;
                     padding: 8px;

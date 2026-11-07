@@ -11,6 +11,7 @@ export { GroupItem, NodeItem, NodePair, ProfileItem, ConnectionItem, RuleItem, L
 import "../../../../../resources/fonts/SourceHanSansCN-Regular.otf";
 
 export component AndroidWindow inherits Window {
+    forward-focus: surface;
     default-font-family: "Source Han Sans CN";
     background: Theme.canvas;
     property <length> top: self.safe-area-insets.top;
