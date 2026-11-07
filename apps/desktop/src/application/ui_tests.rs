@@ -1096,9 +1096,20 @@ fn click_target_at(window: &AppWindow, key: &str, horizontal: f32, vertical: f32
     );
 }
 
-fn click_popup_target(_window: &AppWindow, key: &str) {
-    let bounds = target_bounds(key);
-    ui_testing::popup_click(bounds[0] + bounds[2] / 2.0, bounds[1] + bounds[3] / 2.0);
+fn click_popup_target(window: &AppWindow, trigger: &str, key: &str) {
+    let popup = target_bounds(&format!("popup:{trigger}"));
+    let option = target_bounds(key);
+    let scale = window.window().scale_factor();
+    let size = window.window().size();
+    let width = size.width as f32 / scale;
+    let height = size.height as f32 / scale;
+    let popup_x = popup[0].clamp(0.0, (width - popup[2]).max(0.0));
+    let popup_y = popup[1].clamp(0.0, (height - popup[3]).max(0.0));
+    ui_testing::click(
+        window.window(),
+        popup_x + option[0] + option[2] / 2.0,
+        popup_y + option[1] + option[3] / 2.0,
+    );
 }
 
 fn rapid_target(window: &AppWindow, key: &str) {
@@ -1158,7 +1169,7 @@ fn node_sort_popup_dispatches_each_clicked_option_and_reorders_real_models() {
         let _ = window.window().take_snapshot().unwrap();
         click_target(&window, "node-sort");
         let _ = window.window().take_snapshot().unwrap();
-        click_popup_target(&window, &format!("option:node-sort/{index}"));
+        click_popup_target(&window, "node-sort", &format!("option:node-sort/{index}"));
         let events = events.borrow_mut().drain(..).collect::<Vec<_>>();
         assert_eq!(
             events.len(),
@@ -1308,7 +1319,7 @@ fn font_popup_changes_the_saved_request_and_rendered_font_at_fractional_scale() 
     let before = window.global::<Theme>().get_body_size();
     click_target(&window, "text-scale");
     let _ = window.window().take_snapshot().unwrap();
-    click_popup_target(&window, "option:text-scale/4");
+    click_popup_target(&window, "text-scale", "option:text-scale/4");
     assert_eq!(
         events.borrow().as_slice(),
         &[(Intent::TextScale, "125%".into(), "".into())]
@@ -1352,7 +1363,11 @@ fn rule_editor_popups_deliver_type_and_policy_inside_a_modal() {
         .unwrap();
     click_target(&window, "rule-kind");
     let _ = window.window().take_snapshot().unwrap();
-    click_popup_target(&window, &format!("option:rule-kind/{kind_index}"));
+    click_popup_target(
+        &window,
+        "rule-kind",
+        &format!("option:rule-kind/{kind_index}"),
+    );
     assert_eq!(
         events.borrow().as_slice(),
         &[(Intent::RuleKind, "DOMAIN-KEYWORD".into(), "".into())]
@@ -1365,7 +1380,7 @@ fn rule_editor_popups_deliver_type_and_policy_inside_a_modal() {
     let policy = data.get_rule_policies().row_data(1).unwrap();
     click_target(&window, "rule-policy");
     let _ = window.window().take_snapshot().unwrap();
-    click_popup_target(&window, "option:rule-policy/1");
+    click_popup_target(&window, "rule-policy", "option:rule-policy/1");
     assert_eq!(
         events.borrow().as_slice(),
         &[(Intent::RulePolicy, policy.clone(), "".into())]
@@ -1696,7 +1711,7 @@ fn profile_and_rule_source_popups_preserve_ids_and_filters() {
     let _ = window.window().take_snapshot().unwrap();
     click_target(&window, "rule-profile");
     let _ = window.window().take_snapshot().unwrap();
-    click_popup_target(&window, "option:rule-profile/1");
+    click_popup_target(&window, "rule-profile", "option:rule-profile/1");
     assert_eq!(
         events.borrow().as_slice(),
         &[(Intent::RuleProfile, "second".into(), "".into())]
@@ -1706,7 +1721,7 @@ fn profile_and_rule_source_popups_preserve_ids_and_filters() {
     assert!(matches!(app.queued_actions.pop_back(), Some(Action::LoadRules(id)) if id == "second"));
     click_target(&window, "rule-source");
     let _ = window.window().take_snapshot().unwrap();
-    click_popup_target(&window, "option:rule-source/1");
+    click_popup_target(&window, "rule-source", "option:rule-source/1");
     assert_eq!(
         events.borrow().as_slice(),
         &[(Intent::RuleFilter, "1".into(), "".into())]
@@ -1740,7 +1755,7 @@ fn ip_category_status_and_region_popups_drive_report_filters() {
     ] {
         click_target(&window, key);
         let _ = window.window().take_snapshot().unwrap();
-        click_popup_target(&window, &format!("option:{key}/{index}"));
+        click_popup_target(&window, key, &format!("option:{key}/{index}"));
         assert_eq!(
             events.borrow().as_slice(),
             &[(intent, value.clone(), "".into())]
@@ -1801,7 +1816,7 @@ fn log_rows_open_full_text_copy_without_opening_and_filter_by_source_level() {
     let _ = window.window().take_snapshot().unwrap();
     click_target(&window, "log-level");
     let _ = window.window().take_snapshot().unwrap();
-    click_popup_target(&window, "option:log-level/4");
+    click_popup_target(&window, "log-level", "option:log-level/4");
     assert_eq!(
         events.borrow().as_slice(),
         &[(Intent::LogLevel, "WARN".into(), "".into())]

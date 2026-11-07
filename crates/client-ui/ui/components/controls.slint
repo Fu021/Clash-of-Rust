@@ -325,6 +325,10 @@ export component Select inherits Rectangle {
     in property <[string]> options;
     in property <string> value;
     callback selected(int, string);
+    property <length> popup-request-x: 0px;
+    property <length> popup-request-y: root.height + 4px;
+    property <length> popup-request-width: max(root.width, 180px);
+    property <length> popup-request-height: min(320px, root.options.length * (Theme.control-height + 4px) + 12px);
     height: Theme.control-height;
     min-width: 100px;
     ActionButton {
@@ -338,9 +342,10 @@ export component Select inherits Rectangle {
     }
     popup := PopupWindow {
         close-policy: close-on-click-outside;
-        y: root.height + 4px;
-        width: max(root.width, 180px);
-        height: min(320px, root.options.length * (Theme.control-height + 4px) + 12px);
+        x: root.popup-request-x;
+        y: root.popup-request-y;
+        width: root.popup-request-width;
+        height: root.popup-request-height;
         Rectangle {
             entrance := Entrance { }
             opacity: entrance.progress;
@@ -365,6 +370,10 @@ export component Select inherits Rectangle {
                 }
             }
         }
+    }
+    GeometryTarget {
+        key: "popup:" + root.geometry-key;
+        bounds: [root.absolute-position.x + root.popup-request-x, root.absolute-position.y + root.popup-request-y, root.popup-request-width, root.popup-request-height];
     }
 }
 
