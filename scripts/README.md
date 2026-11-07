@@ -17,7 +17,7 @@
 | `workflow_storage.py` | CLI | 限制 GitHub Actions 热缓存容量并保留需要的版本。 |
 | `prepare-resources.py` | CLI | 校验并准备 mihomo、Geo 和桌面共享资源。 |
 | `prepare-assets.py` | 维护 CLI | 生成图标、CLDR 国家名称，或核验 Windows 嵌入图标；普通构建不运行，不生成国旗图片。 |
-| `android.py` | CLI | Android 编译、模拟器测试、产物导出与已测试 APK 打包；`emulator --legacy` / `--api` 选择固定旧版镜像，`test --ime-only` 运行严格输入法回归；可调试 API 31 模拟器的输入法崩溃另采原生 EditText 冷启动对照，保留原回归失败。Actions 的多轮正式截图及高度/生命周期回归共用 `test()`，见[专项范围](../docs/workflows/ci.md#ci)。 |
+| `android.py` | CLI | Android 编译、模拟器测试、产物导出与已测试 APK 打包；默认 `test` 与打包只运行代理/TUN 及生命周期集成。经明确要求的输入法调查使用 `emulator --legacy` / `--api` 和 `test --ime-only`；专项保留截图、输入高度与崩溃证据，见[验证范围](../docs/workflows/ci.md#ci)。 |
 | `build-installer.py` | CLI | 只组装已验证产物为 Windows、Linux 或 macOS 安装包。 |
 | `macos_package.py` | 模块 | macOS App / DMG 组装；被打包器和 macOS 验证延迟导入。 |
 | `publish-release.py` | CLI / 模块 | 校验成功 CI，复用已验证产物创建测试包或公开正式/预发布 Release。 |

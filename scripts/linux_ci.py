@@ -142,6 +142,12 @@ def cache_downloads(vm=False):
         download(records[name], tools_directory()/filename)
 
 
+def guest_python(remote, environment, script, timeout):
+    bootstrap = "import sys; sys.path.insert(0,'scripts'); "
+    remote(environment+'/opt/cor-test-python/bin/python3 -c '+shlex.quote(
+        bootstrap+script), timeout=timeout)
+
+
 def guest_deb_downloads(ssh, remote, environment, staging):
     script = (
         "import json,pathlib,runpy,subprocess; "
@@ -153,8 +159,7 @@ def guest_deb_downloads(ssh, remote, environment, staging):
         "'install','-y','--no-install-recommends',*packages],120,stdout=subprocess.PIPE,text=True); "
         "pathlib.Path('/home/ubuntu/cor-apt-plan.json').write_text(json.dumps(archive_records(result.stdout)))"
     )
-    remote(environment+'/opt/cor-test-python/bin/python3 -c '+shlex.quote(
-        "import sys; sys.path.insert(0,'scripts'); "+script), timeout=180)
+    guest_python(remote, environment, script, timeout=180)
     records = json.loads(subprocess.check_output([*ssh, 'cat ~/cor-apt-plan.json'], timeout=60))
     from linux_apt import matches, source_url
     from upstream_cache import valid_source
@@ -395,10 +400,10 @@ def vm_test(package_run_id=None):
                        + shlex.join([*APT_OPTIONS, 'update']),
                        timeout=360)
                 guest_deb_downloads(ssh, remote, environment, directory/'guest-debs')
-                remote(environment+'/opt/cor-test-python/bin/python3 -c '+shlex.quote(
+                guest_python(remote, environment,
                     "import runpy; "
                     "runpy.run_path('scripts/test-release-package.py')"
-                    "['prepare_compatibility_environment']()"), timeout=2100)
+                    "['prepare_compatibility_environment']()", timeout=2100)
                 guest_receipts(ssh)
                 try:
                     run([sys.executable, ROOT/'scripts/upstream_cache.py', 'submit',

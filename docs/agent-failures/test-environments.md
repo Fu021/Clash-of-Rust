@@ -36,6 +36,7 @@
 - 测试不应读取用户真实订阅、Cookie、密钥或历史数据。
 - TLS 夹具的 CA 与叶证书都提供 SKI/AKI 和明确的关键用途；生成后用 `openssl verify -x509_strict` 校验用途、IP 和 DNS 名称。Python 升级暴露缺少 AKI 时修正证书，不能关闭证书校验或移除严格模式。
 - 记录“测试失败”与“测试前置失败”的区别，不能把后者写成功能回归。
+- SSH 内通过 `python -c` / `runpy.run_path` 加载 `scripts/` 入口时，必须显式加入脚本模块路径；工作目录本身不能代替 `sys.path`。预发布 `42392669361` 的 Ubuntu 20.04 x64 因遗漏该路径报 `ModuleNotFoundError: build_support`，尚未进入应用安装验证。guest 内联 Python 共用启动入口，离线回归以独立、隔离的 Python 进程从 checkout 根目录加载真实发布模块，不用 mock 导入成功。
 - 桌面窗口可能早于后台初始化显示；GUI/CLI 共用后台测试应先等待 GUI 的控制端点就绪，再执行会创建后台的 CLI 操作。
 - [打包 40818293573](https://github.com/Fu021/Clash-of-Rust/actions/runs/40818293573)在 Ubuntu latest 首次检查 Wayland 窗口时发现尺寸不足，但未记录尺寸；[打包 40834032340](https://github.com/Fu021/Clash-of-Rust/actions/runs/40834032340)发现重建窗口可能短暂报告零尺寸。初次启动及托盘重建均等待实际窗口达到最小尺寸，超时保留最后观测值；持续过小仍须失败。
 - 同一轮 20.04 x64 的 root CLI 请求和内核 TUN 日志均成功，但立即检查异步流量统计失败。测试应同时验证系统路由、TUN 双向计数和内核流量统计，在有限时间内等待统计可见；失败保留计数，不以延时或成功的 HTTP 响应代替流量证据。

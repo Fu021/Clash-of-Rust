@@ -695,22 +695,25 @@ def test(arch, apk=None, test_apk=None, ime_only=False, ime_probe=False,
     for name in ('ro.build.version.sdk','ro.build.version.release','ro.build.fingerprint',
                  'ro.product.manufacturer','ro.product.model','ro.product.cpu.abi'):
         properties[name]=subprocess.check_output([ADB,'shell','getprop',name],text=True,timeout=15).strip()
-    ime_service=subprocess.check_output(
-        [ADB,'shell','settings','get','secure','default_input_method'],text=True,timeout=15).strip()
-    ime_package=ime_service.split('/',1)[0]
-    if not re.fullmatch(r'[A-Za-z_][A-Za-z0-9_.]*/[A-Za-z0-9_.$]+',ime_service):
-        raise ValueError('Could not identify the active Android input method')
-    properties['input_method']=ime_service
+    ime_service=''
+    ime_package=''
+    if ime_only:
+        ime_service=subprocess.check_output(
+            [ADB,'shell','settings','get','secure','default_input_method'],text=True,timeout=15).strip()
+        ime_package=ime_service.split('/',1)[0]
+        if not re.fullmatch(r'[A-Za-z_][A-Za-z0-9_.]*/[A-Za-z0-9_.$]+',ime_service):
+            raise ValueError('Could not identify the active Android input method')
+        properties['input_method']=ime_service
     write_json(report/'device.json',properties)
     marker=f'cor-android-test-{os.getpid()}-{time.time_ns()}'
     log_capture=start_test_log(report,marker)
     try:
         outputs=[]
-        cases=('subscriptionKeyboardProbeCapturesBothFields' if ime_probe
-               else 'subscriptionFieldsShowImeAcceptTextAndReopenAfterBack',)
-        if not ime_only:
-            cases+=('localProxyAndRealTunCarryTrafficAndDisconnectCleanly',
-                    'quickTileRestoresColdCoreWithoutOpeningTheActivity')
+        cases=(('subscriptionKeyboardProbeCapturesBothFields' if ime_probe
+                else 'subscriptionFieldsShowImeAcceptTextAndReopenAfterBack',)
+               if ime_only else
+               ('localProxyAndRealTunCarryTrafficAndDisconnectCleanly',
+                'quickTileRestoresColdCoreWithoutOpeningTheActivity'))
         failures=[]
         for iteration in range(1,ime_rounds+1):
             if ime_only:
@@ -744,15 +747,16 @@ def test(arch, apk=None, test_apk=None, ime_only=False, ime_probe=False,
         if server is not None:
             server.shutdown(); server.server_close()
         captured_log,log_error=finish_test_log(log_capture,report,marker)
-        crashes=input_method_crashes(captured_log,ime_package) if log_error is None else []
-        write_json(report/'input-method-status.json',
-                   {'schema':1,'input_method':ime_service,'log_scoped':log_error is None,'crashes':crashes})
+        crashes=input_method_crashes(captured_log,ime_package) if ime_only and log_error is None else []
+        if ime_only:
+            write_json(report/'input-method-status.json',
+                       {'schema':1,'input_method':ime_service,'log_scoped':log_error is None,'crashes':crashes})
         remote_report='/sdcard/Android/data/org.clashofrust.android/files/ime-report'
         remote_report+='/'+('production' if ime_probe else 'regression')
         capture_error=None
         try:
-            pull_ime_report(remote_report,report,required=ime_only)
             if ime_only:
+                pull_ime_report(remote_report,report,required=True)
                 phases=(('before-focus','name-after-tap','name-settled','source-after-tap',
                          'source-settled','after-back') if ime_probe else
                         ('before-focus','0-name-visible','1-source-visible','2-name-visible',
@@ -768,13 +772,15 @@ def test(arch, apk=None, test_apk=None, ime_only=False, ime_probe=False,
                                 raise RuntimeError('IME evidence is incomplete: '+str(expected.relative_to(report)))
         except Exception as error:
             capture_error=error
-        for name, command in {'connectivity':['dumpsys','connectivity'],
-                              'routes':['ip','route','show','table','all'],
-                              'vpn':['dumpsys','vpn_management'],
-                              'windows':['dumpsys','window','windows'],
-                              'input-method':['dumpsys','input_method'],
-                              'activities':['dumpsys','activity','activities'],
-                              'power':['dumpsys','power']}.items():
+        diagnostics={'connectivity':['dumpsys','connectivity'],
+                     'routes':['ip','route','show','table','all'],
+                     'vpn':['dumpsys','vpn_management'],
+                     'windows':['dumpsys','window','windows'],
+                     'activities':['dumpsys','activity','activities'],
+                     'power':['dumpsys','power']}
+        if ime_only:
+            diagnostics['input-method']=['dumpsys','input_method']
+        for name, command in diagnostics.items():
             details=subprocess.run([ADB,'shell',*command],capture_output=True,text=True,timeout=15)
             (report/(name+'.txt')).write_text(details.stdout+details.stderr)
         errors=[error for error in (capture_error,log_error) if error is not None]
@@ -891,7 +897,7 @@ def main():
         if args.legacy or args.api is not None:
             run([ADB,'shell','wm','size','1080x2400'])
             run([ADB,'shell','wm','density','440'])
-        prepare_emulator_input_method(report)
+            prepare_emulator_input_method(report)
         # Standard UI-test setup: the launcher's animated input sink can outlive
         # Activity.onResume. Keep system transitions deterministic in CI only.
         for setting in ('window_animation_scale','transition_animation_scale','animator_duration_scale'):

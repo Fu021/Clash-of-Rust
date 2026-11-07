@@ -5,6 +5,7 @@ import logging
 import re
 from pathlib import Path
 import socket
+import shlex
 import tempfile
 import threading
 import tomllib
@@ -320,6 +321,24 @@ class BuildTests(unittest.TestCase):
                 self.assertEqual(len(receipts), int(valid))
                 if valid:
                     self.assertEqual(json.loads(receipts[0].read_text()), record)
+
+    def test_guest_python_loads_the_real_package_entry_from_the_checkout_root(self):
+        calls = []
+        linux_ci.guest_python(
+            lambda command, **kwargs: calls.append((command, kwargs)), '',
+            "import runpy; "
+            "module=runpy.run_path('scripts/test-release-package.py'); "
+            "assert callable(module['prepare_compatibility_environment']); "
+            "assert 'git' in module['compatibility_dependencies']()",
+            timeout=2100)
+        command, options = calls.pop()
+        self.assertEqual(options, {'timeout': 2100})
+        arguments = shlex.split(command)
+        self.assertEqual(arguments[0], '/opt/cor-test-python/bin/python3')
+        result = subprocess.run(
+            [sys.executable, '-I', *arguments[1:]], cwd=build.ROOT,
+            capture_output=True, text=True, timeout=15)
+        self.assertEqual(result.returncode, 0, result.stderr)
 
     def test_guest_debs_use_host_fallback_and_verify_bytes_before_transferring(self):
         payload = b'verified-signed-deb'
@@ -1793,6 +1812,78 @@ runpy.run_path(str(script), run_name='__main__')
                 android_build.pull_ime_report('/sdcard/native-control',report,
                                               required=True,required_pattern='state.json')
             self.assertTrue((report/'ime-report/state.json').is_file())
+
+    def test_android_network_runs_exclude_keyboard_without_hiding_failures(self):
+        network_cases=('localProxyAndRealTunCarryTrafficAndDisconnectCleanly',
+                       'quickTileRestoresColdCoreWithoutOpeningTheActivity')
+        for failed_case, log_error, captured_log in (
+                (None,None,'network test complete'),
+                (network_cases[0],None,'network test failed'),
+                (network_cases[1],None,'tile test failed'),
+                (None,RuntimeError('Android test log end marker is missing'),'partial log'),
+                (None,None,'Mobile runtime stopped: core failure')):
+            with self.subTest(failed_case=failed_case,log_error=log_error,log=captured_log), \
+                    tempfile.TemporaryDirectory() as temporary:
+                root=Path(temporary)
+                cases=[]
+                def invoke(command, **kwargs):
+                    if 'instrument' in command:
+                        case=command[command.index('class')+1].split('#')[1]
+                        cases.append(case)
+                        output='FAILURES!!!' if case==failed_case else 'OK (1 test)'
+                        return subprocess.CompletedProcess(command,0,output,'')
+                    return subprocess.CompletedProcess(command,0,'','')
+                with patch.object(android_build,'ROOT',root), \
+                        patch.object(android_build,'run'), \
+                        patch.object(android_build.subprocess,'check_output',return_value='36\n') as properties, \
+                        patch.object(android_build.subprocess,'run',side_effect=invoke) as commands, \
+                        patch('http.server.ThreadingHTTPServer') as server, \
+                        patch('threading.Thread'), \
+                        patch.object(android_build,'start_test_log'), \
+                        patch.object(android_build,'finish_test_log',return_value=(captured_log,log_error)), \
+                        patch.object(android_build,'pull_ime_report') as pull, \
+                        patch.object(android_build,'input_method_crashes') as ime_crashes:
+                    if failed_case or log_error or 'Mobile runtime stopped:' in captured_log:
+                        with self.assertRaises(RuntimeError):
+                            android_build.test('x64',root/'app.apk',root/'test.apk')
+                    else:
+                        android_build.test('x64',root/'app.apk',root/'test.apk')
+                    self.assertEqual(cases,list(network_cases))
+                    self.assertTrue(all('getprop' in call.args[0] for call in properties.call_args_list))
+                    self.assertFalse(any('input_method' in call.args[0] for call in commands.call_args_list))
+                    pull.assert_not_called()
+                    ime_crashes.assert_not_called()
+                    server.return_value.shutdown.assert_called_once()
+                    server.return_value.server_close.assert_called_once()
+                report=root/'target/android-report/x64'
+                self.assertFalse((report/'input-method-status.json').exists())
+                self.assertTrue((report/'instrumentation.txt').is_file())
+
+    def test_android_ime_runs_remain_explicit_and_require_screenshot_evidence(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root=Path(temporary)
+            cases=[]
+            def invoke(command, **kwargs):
+                if 'instrument' in command:
+                    cases.append(command[command.index('class')+1].split('#')[1])
+                return subprocess.CompletedProcess(command,0,'OK (1 test)','')
+            def property_value(command, **kwargs):
+                return 'com.example.ime/.Keyboard\n' if 'default_input_method' in command else '36\n'
+            with patch.object(android_build,'ROOT',root), \
+                    patch.object(android_build,'run'), \
+                    patch.object(android_build.subprocess,'check_output',side_effect=property_value), \
+                    patch.object(android_build.subprocess,'run',side_effect=invoke), \
+                    patch('http.server.ThreadingHTTPServer') as server, \
+                    patch.object(android_build,'start_test_log'), \
+                    patch.object(android_build,'finish_test_log',return_value=('',None)), \
+                    patch.object(android_build,'pull_ime_report') as pull:
+                with self.assertRaisesRegex(RuntimeError,'IME evidence is incomplete'):
+                    android_build.test('x64',root/'app.apk',root/'test.apk',ime_only=True)
+                self.assertEqual(cases,['subscriptionFieldsShowImeAcceptTextAndReopenAfterBack'])
+                server.assert_not_called()
+                pull.assert_called_once()
+                self.assertTrue(pull.call_args.kwargs['required'])
+            self.assertTrue((root/'target/android-report/x64/ime-api-36/regression/input-method-status.json').is_file())
 
     def test_android_ime_crash_report_uses_only_the_current_run_and_selected_input_method(self):
         crash=('E AndroidRuntime: FATAL EXCEPTION: main\n'

@@ -89,6 +89,21 @@ public class ProxyTunTest {
             return MainActivity.diagnostics().optInt("page",-1)==page;
         });
     }
+    @Test public void presentationUsesSavedAppearanceAndHandlesNavigation() throws Exception {
+        Context context = InstrumentationRegistry.getInstrumentation().getTargetContext();
+        shell("cmd uimode night no");
+        File settings=new File(context.getFilesDir(),"client/settings.json");
+        settings.getParentFile().mkdirs();
+        JSONObject saved=settings.isFile()?new JSONObject(new String(java.nio.file.Files.readAllBytes(settings.toPath()),StandardCharsets.UTF_8)):new JSONObject();
+        saved.put("theme_mode","dark");
+        saved.put("accent_color","purple");
+        java.nio.file.Files.write(settings.toPath(),saved.toString().getBytes(StandardCharsets.UTF_8));
+        context.startActivity(new Intent(context, MainActivity.class).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK));
+        await("Native UI did not start its core; inspect logcat", CoreBridge::ready);
+        await("Activity did not receive focus",()->inStage(androidx.test.runner.lifecycle.Stage.RESUMED,true));
+        waitForAppWindow();
+        verifyPresentation();
+    }
     private static void verifyPresentation() throws Exception {
         new ProxyTunTest().notificationShowsModeAndNodeWithOptionalSpeeds();
         new ProxyTunTest().heldResponseClassifiesTruncationAsTransportFailure();
@@ -945,20 +960,11 @@ public class ProxyTunTest {
     }
     @Test public void localProxyAndRealTunCarryTrafficAndDisconnectCleanly() throws Exception {
         Context context = InstrumentationRegistry.getInstrumentation().getTargetContext();
-        // A light emulator must still launch an explicitly dark app correctly
-        // on its first frame, before the core/settings worker is ready.
-        shell("cmd uimode night no");
-        File settings=new File(context.getFilesDir(),"client/settings.json");
-        settings.getParentFile().mkdirs();
-        JSONObject saved=settings.isFile()?new JSONObject(new String(java.nio.file.Files.readAllBytes(settings.toPath()),StandardCharsets.UTF_8)):new JSONObject();
-        saved.put("theme_mode","dark");
-        saved.put("accent_color","purple");
-        java.nio.file.Files.write(settings.toPath(),saved.toString().getBytes(StandardCharsets.UTF_8));
         context.startActivity(new Intent(context, MainActivity.class).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK));
         await("Native UI did not start its core; inspect logcat", CoreBridge::ready);
         await("Activity did not receive focus",()->inStage(androidx.test.runner.lifecycle.Stage.RESUMED,true));
         waitForAppWindow();
-        verifyPresentation();
+        heldResponseClassifiesTruncationAsTransportFailure();
         String raw = CoreBridge.config();
         verifyFirstVpnConsent(context,raw);
         String secret = value(raw,"secret");
