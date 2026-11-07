@@ -34,6 +34,8 @@
 
 2026-11-05 的 root / 0.6.6 现场在停止前出现本机 `/configs` 超时，内核仍继续记录部分流量；其中“停止内核前关闭 TUN 失败”的完整错误链对应关闭 TUN 的 `PATCH /configs` 超时，客户端因此未继续结束内核，不能直接断言整个控制器都无响应。23:23（Asia/Shanghai）日志显示一次路由变化触发的刷新完成，随后有停止和启动记录。用户确认最终是成功执行 `cor stop` 后，再手动执行 `cor start` 恢复网络；不能将恢复归因于自动刷新，也不能以日志未记录命令文本推断未执行启动。完整重启后症状消失，仍未区分出站连接、DNS、TUN 路由及配置处理阻塞的原因；匹配规则和建立出站的日志不证明目标 HTTP 请求已成功。
 
+2026-11-07 同一台服务器上的开发分支构建再次出现 GitHub HTTPS/TLS 握手中断。用户现场看到 `cor` 连接数为 0；切换到 `off` 再切回 TUN 后连接数变为 1，网络恢复。该操作只证明重新应用接管能清除当时状态，不能区分是 TUN 路由、出站连接还是 DNS 未建立；本侧沙箱与宿主网络命名空间隔离，无法读取当时的接口、路由和内核日志。后续 CI 推送改用 GitHub Git Data API，避免把本地 TUN 故障误判为远端仓库故障；下次复现须在宿主机保存切换前后的 `cor status`、`cor diagnose`、`ip rule`/`route`、`ss` 和内核日志。
+
 ### 阿里云、Tailscale 与 Fake-IP 的共存现场
 
 2026-11-06 的只读检查确认：`systemd-resolved` 的 eth0 使用阿里云 `100.100.2.136/138`，tailscale0 为 MagicDNS 后缀和反向域提供分域解析，Meta 的 `~.` 接收其余域名。按 eth0 查询 GitHub 返回真实公网 IP，默认查询返回 `198.18.0.14`；MagicDNS 正反向查询均成功。阿里云 DNS 的显式路由走 eth0，Tailscale DNS `100.100.100.100` 走 table 52。`~.` 不覆盖更长的分域匹配，见 [systemd-resolved 路由规则](https://www.freedesktop.org/software/systemd/man/latest/systemd-resolved.service.html)。

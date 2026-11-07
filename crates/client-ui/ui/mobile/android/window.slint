@@ -30,6 +30,10 @@ export component AndroidWindow inherits Window {
     native-back => {
         if MobileView.notice-back-pending > 0 { MobileView.notice-back-pending -= 1; }
         else if MobileView.notice != "" && MobileView.notice-error { MobileView.notice = ""; }
+        else if MobileView.keyboard-inset > 0 || MobileView.profile-name-focused || MobileView.profile-source-focused {
+            // The platform hides the IME on Back; do not also navigate away
+            // from the editor or open its discard-draft dialog.
+        }
         else if MobileView.modal { MobileView.detail=MobileView.detail==12 ? MobileView.pending-detail : 0; }
         else if MobileView.detail>0 {MobileView.back();}
         else if MobileView.page!=0 { MobileView.navigate(0); }
