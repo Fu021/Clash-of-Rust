@@ -1655,14 +1655,16 @@ mod tests {
     #[test]
     fn protection_marks_settings_read_only_and_removes_the_direct_download_listener() {
         use crate::claude_check::protection::{Previous, Protection};
+        let profile_id = uuid::Uuid::new_v4().to_string();
         let mut settings = Settings {
             direct_download_port: 45678,
+            active_profile: Some(profile_id.clone()),
             ..Default::default()
         };
         assert_eq!(settings.download_ports().direct, 45678);
         assert!(settings.require_mutable().is_ok());
         settings.claude_protection = Some(std::sync::Arc::new(Protection::new(
-            "fixture".into(),
+            profile_id,
             "node".into(),
             Previous {
                 mode: "rule".into(),

@@ -423,7 +423,7 @@ mod tests {
         assert_eq!(progress.first().unwrap().received, 0);
         let last = progress.last().unwrap();
         assert_eq!(last.received, package.size);
-        assert_eq!(last.route, "直连");
+        assert_eq!(last.route, "系统网络");
         assert!(last.bytes_per_second > 0);
         server.await.unwrap();
     }

@@ -8,7 +8,7 @@
 
 依赖维护可手动运行现有 CI，设置 `refresh_dependencies=true`：只在 Actions 解析 Cargo/Go 更新并导出带来源提交和 SHA256 的 `dependency-updates`，不运行平台矩阵，也不作为打包依据。将已审阅的锁文件提交后，仍须取得新提交的普通 push CI 与不发布打包验证；受限本机不执行依赖下载或构建。
 
-输入法专项设置 `android_ime_only=true`：只构建一次 Android x64 测试 APK，最多三个 runner 并发覆盖 API 26、28、29、30、31、32、33、34、35、36；`android_ime_apis` 默认 `all`，也接受 `30,32,34` 等已批准版本子集。补测选择尚未通过的版本，已完成的 job 不占 runner，也不因下一轮补测重复全量矩阵；常规 CI 保留 API 36 和 31 的回归。每个系统先三轮正式路径截图，再三轮严格回归；前两轮动画倍率为 1，第三轮为 0，不在测试进程中修改生产回调。字段切换、高度一致、Back、前后台与旋转的断言和验收边界见[输入法专页](../agent-failures/android-ime.md#当前修复与待验收)。
+输入法专项设置 `android_ime_only=true`：只构建一次 Android x64 测试 APK，最多三个 runner 并发覆盖 API 26、28、29、30、31、32、33、34、35、36；Actions job 按具体 Android 版本命名，如 `Android IME Android 8.0 (API 26)`。`android_ime_apis` 默认 `all`，也接受 `30,32,34` 等已批准版本子集。补测选择尚未通过的版本，已完成的 job 不占 runner，也不因下一轮补测重复全量矩阵；常规 CI 保留 API 36 和 31 的回归。每个系统先三轮正式路径截图，再三轮严格回归；前两轮动画倍率为 1，第三轮为 0，不在测试进程中修改生产回调。字段切换、高度一致、Back、前后台与旋转的断言和验收边界见[输入法专页](../agent-failures/android-ime.md#当前修复与待验收)。
 
 附件 `android-ime-api-{api}` 按 `production` / `regression` 及轮次保留截图、JSON、输入法/窗口 dumpsys 和本次日志；`device.json`、`input-method-status.json` 记录实际输入法及崩溃。缺少必需证据、输入法崩溃或日志边界丢失均失败。截图导出权限不足时，仅在确认是可调试模拟器后尝试 root adbd。截图探测成功不等于键盘绘制成功，须核对截图与严格回归。专项不覆盖 MIUI、API 27 或完整兼容验收，不作为发布依据、不导出发布编译附件、不运行桌面矩阵/缓存审计/打包，与依赖维护模式分别运行；常规 CI 保留严格输入法回归。
 
