@@ -603,7 +603,7 @@ body[data-platform=android] .gesture::after{width:108px;height:4px;opacity:.5}
 .m-node{display:flex;align-items:center;gap:8px;margin:0 0 6px;font-family:var(--display);font-size:26px;font-weight:650;letter-spacing:-.025em;line-height:1.2;white-space:nowrap}
 .m-node .badge{font-family:var(--font);letter-spacing:0;height:20px;font-size:12px;font-weight:600}
 .m-power{width:55px;height:55px}
-.m-chin{padding:10px 12px 12px;border-top:1px solid var(--line)}
+.m-chin{padding:10px 12px 12px;border-top:1px solid var(--line);display:flex;flex-direction:column;gap:8px}
 .m-seg{display:flex;width:100%}
 .m-seg button{flex:1;height:36px;font-size:14px}
 .m-body .traffic{margin-top:0;padding:12px 14px 6px}
@@ -661,6 +661,13 @@ body[data-theme=dark] .m-draft{background:var(--raised)}
 .t-head .m-kernel{margin:0}
 .t-body{flex:1;min-height:0;overflow:hidden;padding:22px 26px}
 .t-grid{display:grid;grid-template-columns:1.15fr 1fr;gap:18px;align-items:start}
+.t-home{height:100%;align-items:stretch}
+.t-home>.stack{min-height:0}
+/* 平板首页铺满视口高度：流量图与活跃连接按剩余高度伸展，而不是留白 */
+.t-home .traffic{flex:1;min-height:0;display:flex;flex-direction:column;margin-top:0}
+.t-home svg.traffic-plot{flex:1;min-height:89px;height:0;max-height:none;aspect-ratio:auto}
+.t-home .card.list{flex:1;min-height:0;display:flex;flex-direction:column}
+.t-home .card.list>.m-row{flex:1;min-height:55px}
 .t-conn .m-node{font-size:32px;margin:0 0 8px}
 .t-conn .m-conn-top{padding:24px 22px 22px 24px}
 .t-conn .m-power{width:55px;height:55px}
@@ -1520,7 +1527,7 @@ const connCard = big => `<div class="card m-conn${big ? ' t-conn' : ''}">
     <div class="m-node"><span data-m-node>${flagify('🇩🇪 德国 01')}</span><em class="badge">IPv6</em></div>
     <div class="node-meta"><span class="state"><span class="dot ok"></span><b data-m-state>已连接</b><span class="t" data-m-up>02:14:08</span></span><span>AnyTLS</span><span class="lat g">45 ms</span></div>
   </div><button class="power m-power" title="断开 VPN">${svg('i-power', 'i')}</button></div>
-  <div class="m-chin"><div class="seg m-seg" data-seg><button class="on">规则</button><button>全局</button><button>直连</button></div></div></div>`;
+  <div class="m-chin"><div class="seg m-seg" data-seg><button class="on">规则</button><button>全局</button><button>直连</button></div><div class="seg m-seg" data-seg><button class="on">系统代理</button><button>TUN</button><button>关闭</button></div></div></div>`;
 const connRows = (n, sel = -1) => conns.slice(0, n).map((c, i) => `<div class="m-row${i === sel ? ' sel' : ''}"><span class="tx"><b class="mono">${c[0]}</b><small><span>${c[2]}${c[3] ? ' → ' + c[3] : ''}</span><span>${c[1]}</span></small></span><span class="speed">↓ ${c[4]}</span></div>`).join('');
 const toolRow = (ic, t, d, right = '') => `<div class="m-row"><span class="m-ic">${svg(ic, 'i')}</span><span class="tx"><b>${t}</b><small>${d}</small></span>${right}${svg('i-chev-r', 'i s chev')}</div>`;
 const setRow = (l, r, d = '') => `<div class="m-set"><span class="l">${l}${d ? `<small>${d}</small>` : ''}</span>${r}</div>`;
@@ -1584,8 +1591,8 @@ function tablet(cap, note, active, title, sub, main) {
     <figcaption><b>${cap}</b>${note}</figcaption></figure>`;
 }
 function renderTablets() {
-  const home = `<div class="t-grid"><div class="stack" style="gap:16px">${connCard(true)}${trafficCard()}</div>
-    <div class="stack" style="gap:12px"><div class="m-sec" style="margin-top:2px">活跃连接<a class="link">全部 24 条${svg('i-chev-r', 'i xs')}</a></div><div class="card list">${connRows(7)}</div></div></div>`;
+  const home = `<div class="t-grid t-home"><div class="stack" style="gap:16px">${connCard(true)}${trafficCard()}</div>
+    <div class="stack" style="gap:12px"><div class="m-sec" style="margin-top:2px">活跃连接<a class="link">全部 24 条${svg('i-chev-r', 'i xs')}</a></div><div class="card list">${connRows(8)}</div></div></div>`;
   const c = conns[0];
   const kv = [['域名', 'api.github.com'], ['目标端口', '443'], ['协议', 'tcp'], ['匹配规则', c[1]], ['代理链', 'Proxy → 自动选择 → 德国 01'], ['下载速度', c[4]], ['上传速度', c[5]], ['累计下载', c[6]], ['开始时间', '2026-11-06 10:31:20'], ['连接 ID', '9f1a0f02-d63e-4cfe-832e-4ed947af10de']];
   const connsMain = `<div class="t-split"><div class="stack" style="flex:1;min-width:0;gap:14px">
