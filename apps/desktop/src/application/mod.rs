@@ -645,14 +645,6 @@ impl App {
     }
 
     fn dispatch_scope(&mut self, action: Action, scope: Scope) -> Task<Message> {
-        if (self.settings.claude_protection.is_some() || self.claude.protection_pending.is_some())
-            && !action.allowed_during_protection()
-        {
-            return Task::none();
-        }
-        if matches!(action, Action::ClaudeProtection(true)) {
-            self.updates.pause_for_protection();
-        }
         if matches!(action, Action::Mode(_))
             && (self.settings.claude_protection.is_some()
                 || self.claude.protection_pending.is_some())
@@ -672,6 +664,14 @@ impl App {
                 false,
             );
             return Task::none();
+        }
+        if (self.settings.claude_protection.is_some() || self.claude.protection_pending.is_some())
+            && !action.allowed_during_protection()
+        {
+            return Task::none();
+        }
+        if matches!(action, Action::ClaudeProtection(true)) {
+            self.updates.pause_for_protection();
         }
         if (self.updates.install_pending || self.updates.installing.is_some())
             && !matches!(action, Action::Refresh)
@@ -3268,6 +3268,7 @@ mod async_state_tests {
         assert!(watched.is_aborted());
         let (current, _) = AbortHandle::new_pair();
         app.recovery_aborter = Some(current);
+        app.dismiss_notice();
         app.show_notice("当前操作尚未结束".into(), true);
         let _ = app.update(Message::UnreachableRecovered(
             obsolete,

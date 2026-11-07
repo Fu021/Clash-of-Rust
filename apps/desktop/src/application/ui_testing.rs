@@ -4,20 +4,29 @@ use slint::platform::{
     Platform, PlatformError, WindowAdapter,
     software_renderer::{MinimalSoftwareWindow, RepaintBufferType},
 };
+use std::cell::{Cell, RefCell};
 use std::rc::Rc;
 
 thread_local! {
-    static WINDOW: Rc<MinimalSoftwareWindow> = MinimalSoftwareWindow::new(RepaintBufferType::NewBuffer);
-    static INSTALLED: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
-    static ADVANCE: std::cell::Cell<std::time::Duration> = const { std::cell::Cell::new(std::time::Duration::ZERO) };
+    static PRIMARY: Rc<MinimalSoftwareWindow> = MinimalSoftwareWindow::new(RepaintBufferType::NewBuffer);
+    static WINDOWS: RefCell<Vec<Rc<MinimalSoftwareWindow>>> = const { RefCell::new(Vec::new()) };
+    static PRIMARY_CREATED: Cell<bool> = const { Cell::new(false) };
+    static INSTALLED: Cell<bool> = const { Cell::new(false) };
+    static ADVANCE: Cell<std::time::Duration> = const { Cell::new(std::time::Duration::ZERO) };
 }
 struct Headless;
 impl Platform for Headless {
     fn create_window_adapter(&self) -> Result<Rc<dyn WindowAdapter>, PlatformError> {
-        Ok(WINDOW.with(Clone::clone))
+        let window = if PRIMARY_CREATED.with(|created| created.replace(true)) {
+            MinimalSoftwareWindow::new(RepaintBufferType::NewBuffer)
+        } else {
+            PRIMARY.with(Clone::clone)
+        };
+        WINDOWS.with(|windows| windows.borrow_mut().push(window.clone()));
+        Ok(window)
     }
     fn duration_since_start(&self) -> std::time::Duration {
-        ADVANCE.with(std::cell::Cell::get)
+        ADVANCE.with(Cell::get)
     }
 }
 
@@ -35,7 +44,9 @@ pub fn initialize(width: u32, height: u32) -> Rc<MinimalSoftwareWindow> {
             installed.set(true);
         }
     });
-    let window = WINDOW.with(Clone::clone);
+    WINDOWS.with(|windows| windows.borrow_mut().clear());
+    PRIMARY_CREATED.with(|created| created.set(false));
+    let window = PRIMARY.with(Clone::clone);
     window.set_size(slint::PhysicalSize::new(width, height));
     window
 }
@@ -48,6 +59,22 @@ pub(super) fn click(window: &slint::Window, x: f32, y: f32) {
 #[cfg(test)]
 pub(super) fn rapid_click(window: &slint::Window, x: f32, y: f32) {
     pointer_click(window, x, y, std::time::Duration::ZERO);
+}
+
+#[cfg(test)]
+pub(super) fn popup_click(x: f32, y: f32) {
+    let popup = WINDOWS
+        .with(|windows| {
+            windows
+                .borrow()
+                .iter()
+                .skip(1)
+                .rev()
+                .find(|window| window.window().is_visible())
+                .cloned()
+        })
+        .expect("popup window is not open");
+    pointer_click(popup.window(), x, y, std::time::Duration::from_millis(50));
 }
 
 #[cfg(test)]

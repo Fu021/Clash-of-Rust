@@ -3215,7 +3215,7 @@ class ReleaseTests(unittest.TestCase):
 
     def test_release_allows_skipped_optional_matrix_without_omitting_required_jobs(self):
         required = [{'name':name,'status':'completed','conclusion':'success'} for name in release.CI_JOBS]
-        optional = {'name':'Android IME API ${{ matrix.api }}','status':'completed','conclusion':'skipped'}
+        optional = {'name':'Android 16 IME','status':'completed','conclusion':'skipped'}
         changes = {'event':'pull_request','head_branch':'codex/fix-android'}
         for mode in ({'check_only':True}, {'prerelease':True}):
             with self.subTest(mode=mode):

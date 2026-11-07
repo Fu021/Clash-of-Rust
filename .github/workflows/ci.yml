@@ -74,7 +74,7 @@ jobs:
           with open(os.environ['GITHUB_OUTPUT'], 'a') as stream:
               stream.write('apis=' + json.dumps(selected) + '\n')
               stream.write('labels=' + json.dumps([
-                  {'api': api, 'name': f'{names[api]} (API {api})'} for api in selected
+                  {'api': api, 'name': names[api]} for api in selected
               ]) + '\n')
       - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0
         with:
@@ -375,7 +375,7 @@ jobs:
           name: upstream-downloads-${{ github.job }}-${{ strategy.job-index || '0' }}
   android-ime:
     if: inputs.android_ime_only
-    name: Android IME ${{ matrix.name }}
+    name: ${{ matrix.name }} IME
     needs: [inputs, android]
     runs-on: ubuntu-latest
     timeout-minutes: 25
@@ -386,7 +386,7 @@ jobs:
       fail-fast: false
       max-parallel: 3
       matrix:
-        include: ${{ fromJSON(needs.inputs.outputs.ime_labels || '[{"api":36,"name":"Android 16 (API 36)"}]') }}
+        include: ${{ fromJSON(needs.inputs.outputs.ime_labels || '[{"api":36,"name":"Android 16"}]') }}
     env:
       PYTHONDONTWRITEBYTECODE: '1'
     steps:

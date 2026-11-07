@@ -47,8 +47,11 @@ public final class MainActivity extends NativeActivity {
         catch (RuntimeException error) { android.util.Log.w("ClashOfRust", "Network overview unavailable", error); }
         UpdateInstaller.pruneInstalled(this);
         configureSystemBars(dark);
+        // Slint's Android helper also registers a PRIORITY_DEFAULT back callback.
+        // Stay above that callback but below system overlays so a single app path
+        // owns navigation and dialog dismissal.
         if (Build.VERSION.SDK_INT >= 33) getOnBackInvokedDispatcher().registerOnBackInvokedCallback(
-            android.window.OnBackInvokedDispatcher.PRIORITY_DEFAULT, () -> emit("back",true));
+            android.window.OnBackInvokedDispatcher.PRIORITY_DEFAULT + 1, () -> emit("back",true));
     }
     @Override protected void onNewIntent(Intent intent) {
         super.onNewIntent(intent); setIntent(intent);
@@ -58,12 +61,13 @@ public final class MainActivity extends NativeActivity {
         if (tileConnect && CoreBridge.ready()) { tileConnect=false; prepareVpn(); }
     }
     // NativeActivity cannot use ComponentActivity. API 33+ dispatches through
-    // OnBackInvokedDispatcher above; this entry is solely for API 26–32.
+    // OnBackInvokedDispatcher above; this entry is the legacy path for API 26–32.
+    // Keep forwarding instead of calling super so Android 16 cannot finish the
+    // Activity before Slint dismisses a dialog or navigates back.
     @android.annotation.SuppressLint("GestureBackNavigation")
     @SuppressWarnings("deprecation")
     @Override public void onBackPressed() {
-        if (Build.VERSION.SDK_INT < 33) emit("back",true);
-        else super.onBackPressed();
+        emit("back",true);
     }
     @Override protected void onResume() {
         super.onResume(); emit("visible", true);
