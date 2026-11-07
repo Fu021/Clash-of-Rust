@@ -2,9 +2,10 @@
 //! local proxy, and a timed system DNS lookup. Reachability only means an HTTP
 //! response arrived; it never claims an account or region is unlocked.
 use crate::probe::validate_url;
-use anyhow::{Result, bail};
+use anyhow::{bail, Result};
 use std::time::{Duration, Instant};
 
+#[path = "overview/presentation.rs"]
 mod presentation;
 pub use presentation::{HostInfo, Item, Presentation, Probe, View};
 
