@@ -2207,6 +2207,24 @@ impl Engine {
         if config["tun"]["enable"].as_bool() != Some(enabled) {
             bail!("TUN 状态未生效，请查看内核日志和权限");
         }
+        #[cfg(target_os = "linux")]
+        if enabled {
+            let ipv6_expected = self.settings.ipv6;
+            let mut issue = None;
+            for attempt in 0..6 {
+                let routes = crate::platform::host_network::observe().await;
+                issue = crate::platform::host_network::coverage_issue(&routes, ipv6_expected);
+                if issue.is_none() {
+                    break;
+                }
+                if attempt < 5 {
+                    tokio::time::sleep(Duration::from_millis(250)).await;
+                }
+            }
+            if let Some(issue) = issue {
+                bail!("{issue}");
+            }
+        }
         Ok(())
     }
 

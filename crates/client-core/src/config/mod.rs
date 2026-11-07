@@ -20,6 +20,59 @@ pub const SUBSCRIPTION_RULES: [&str; 5] = [
     "GEOIP,CN,DIRECT,no-resolve",
 ];
 
+/// Settings exposed by `cor config get`, excluding the controller port that
+/// the runtime reserves itself.
+pub const READABLE_SETTINGS: &[&str] = &[
+    "mixed_port",
+    "direct_download_port",
+    "secret",
+    "dark",
+    "theme_mode",
+    "accent_color",
+    "text_scale",
+    "tray_speed",
+    "update_prereleases",
+    "dns_override",
+    "fake_ip",
+    "fake_ip_exclusions",
+    "fake_ip_disabled_defaults",
+    "ipv6",
+    "udp",
+    "claude_protection",
+    "ip_reputation_key",
+    "delay_interval_minutes",
+    "subscription_update_interval_minutes",
+    "active_profile",
+    "run_mode",
+    "proxy_mode",
+    "node_sort",
+    "rule_overrides",
+    "rule_profiles",
+];
+
+/// Settings accepted by `cor config set`; lifecycle settings use dedicated
+/// commands so their validation and rollback cannot be bypassed.
+pub const MUTABLE_SETTINGS: &[&str] = &[
+    "mixed_port",
+    "secret",
+    "dark",
+    "theme_mode",
+    "accent_color",
+    "text_scale",
+    "tray_speed",
+    "update_prereleases",
+    "dns_override",
+    "fake_ip",
+    "fake_ip_exclusions",
+    "fake_ip_disabled_defaults",
+    "ipv6",
+    "udp",
+    "ip_reputation_key",
+    "delay_interval_minutes",
+    "subscription_update_interval_minutes",
+    "node_sort",
+];
+
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct RuleOverrides {
@@ -869,6 +922,29 @@ fn apply_rules(map: &mut Mapping, overrides: &RuleOverrides) -> Result<()> {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn completion_and_mutation_keys_cover_the_settings_schema() {
+        let settings = serde_json::to_value(Settings::default()).unwrap();
+        let actual = settings
+            .as_object()
+            .unwrap()
+            .keys()
+            .map(String::as_str)
+            .collect::<std::collections::BTreeSet<_>>();
+        let readable = READABLE_SETTINGS
+            .iter()
+            .copied()
+            .chain(["controller_port"])
+            .collect::<std::collections::BTreeSet<_>>();
+        assert_eq!(actual, readable);
+        let mutable = MUTABLE_SETTINGS
+            .iter()
+            .copied()
+            .collect::<std::collections::BTreeSet<_>>();
+        assert!(mutable.is_subset(&actual));
+        assert_eq!(mutable.len(), MUTABLE_SETTINGS.len());
+    }
+
     #[test]
     fn existing_settings_keep_stable_updates_and_channel_choice_survives_reload() {
         let settings: Settings = serde_json::from_str("{}").unwrap();

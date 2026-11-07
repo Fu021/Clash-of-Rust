@@ -38,27 +38,7 @@ pub enum RuleChange {
 
 pub(super) fn setting(settings: &Settings, key: &str, value: Value) -> Result<Settings> {
     ensure!(
-        matches!(
-            key,
-            "mixed_port"
-                | "secret"
-                | "dark"
-                | "theme_mode"
-                | "accent_color"
-                | "text_scale"
-                | "tray_speed"
-                | "update_prereleases"
-                | "dns_override"
-                | "fake_ip"
-                | "fake_ip_exclusions"
-                | "fake_ip_disabled_defaults"
-                | "ipv6"
-                | "udp"
-                | "ip_reputation_key"
-                | "delay_interval_minutes"
-                | "subscription_update_interval_minutes"
-                | "node_sort"
-        ),
+        crate::config::MUTABLE_SETTINGS.contains(&key),
         "该设置不能直接修改；订阅、规则、模式和保护请使用对应命令"
     );
     let mut next = serde_json::to_value(settings)?;

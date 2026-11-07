@@ -8,6 +8,17 @@ mod service;
 mod users;
 
 fn main() {
+    let mut completion = std::env::args_os().skip(1);
+    if completion.next().as_deref() == Some(std::ffi::OsStr::new("__complete")) {
+        use std::io::Write;
+        let words = completion
+            .map(|word| word.to_string_lossy().into_owned())
+            .collect::<Vec<_>>();
+        let _ = std::io::stdout()
+            .lock()
+            .write_all(args::complete(&words).as_bytes());
+        return;
+    }
     if clash_client_runtime::update::helper_main() {
         return;
     }

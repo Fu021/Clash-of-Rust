@@ -14,6 +14,7 @@ fn help_version_completion_and_usage_do_not_initialize_a_backend() {
         vec!["node", "help"],
         vec!["--json", "version"],
         vec!["completion", "bash"],
+        vec!["__complete", "config", "set", "theme_mode", ""],
     ] {
         let result = cor()
             .args(arguments)

@@ -12,7 +12,7 @@ use std::{
     time::{Duration, Instant},
 };
 
-#[derive(Serialize, Deserialize)]
+#[derive(Clone, Serialize, Deserialize)]
 struct Plan {
     package: PathBuf,
     executable: PathBuf,
@@ -23,6 +23,8 @@ struct Plan {
     restart: bool,
     #[serde(default)]
     require_commit: bool,
+    #[serde(default)]
+    data_dir: Option<PathBuf>,
 }
 fn default_restart() -> bool {
     true
@@ -59,7 +61,13 @@ impl InstallSession {
 }
 
 fn verify(plan: &Plan, directory: &Path) -> Result<()> {
-    if plan.package.parent() != Some(directory) || !plan.executable.is_absolute() {
+    if plan.package.parent() != Some(directory)
+        || !plan.executable.is_absolute()
+        || plan
+            .data_dir
+            .as_ref()
+            .is_some_and(|data_dir| !data_dir.is_absolute())
+    {
         bail!("更新路径无效");
     }
     let mut file = fs::File::open(&plan.package).context("安装包已被删除或拦截")?;
@@ -101,23 +109,35 @@ fn command(executable: &Path) -> Command {
 }
 
 pub fn handoff(download: Arc<Downloaded>) -> Result<InstallSession> {
-    handoff_owner(download, std::process::id(), true)
+    handoff_at(download, None)
+}
+pub fn handoff_at(download: Arc<Downloaded>, data_dir: Option<PathBuf>) -> Result<InstallSession> {
+    handoff_owner_at(download, std::process::id(), true, data_dir)
 }
 pub fn handoff_owner(
     download: Arc<Downloaded>,
     parent: u32,
     restart: bool,
 ) -> Result<InstallSession> {
-    handoff_with_commit(download, parent, restart, false)
+    handoff_owner_at(download, parent, restart, None)
 }
-
-#[cfg(target_os = "macos")]
-pub(crate) fn handoff_owner_deferred(
+pub fn handoff_owner_at(
     download: Arc<Downloaded>,
     parent: u32,
     restart: bool,
+    data_dir: Option<PathBuf>,
 ) -> Result<InstallSession> {
-    handoff_with_commit(download, parent, restart, true)
+    handoff_with_commit(download, parent, restart, false, data_dir)
+}
+
+#[cfg(target_os = "macos")]
+pub(crate) fn handoff_owner_deferred_at(
+    download: Arc<Downloaded>,
+    parent: u32,
+    restart: bool,
+    data_dir: Option<PathBuf>,
+) -> Result<InstallSession> {
+    handoff_with_commit(download, parent, restart, true, data_dir)
 }
 
 fn handoff_with_commit(
@@ -125,6 +145,7 @@ fn handoff_with_commit(
     parent: u32,
     restart: bool,
     require_commit: bool,
+    data_dir: Option<PathBuf>,
 ) -> Result<InstallSession> {
     let directory = download.directory().to_owned();
     for name in ["ready", "cancel", "commit", "outcome.json", "stage.json"] {
@@ -142,6 +163,7 @@ fn handoff_with_commit(
         parent,
         restart,
         require_commit,
+        data_dir,
     };
     let helper = directory.join(if cfg!(windows) {
         "update-helper.exe"
@@ -250,10 +272,12 @@ pub fn helper_main() -> bool {
             std::thread::sleep(Duration::from_millis(100));
         }
         if !parent_alive(plan.parent) && plan.restart {
-            let _ = command(&plan.executable)
-                .arg("--update-result")
-                .arg(&directory)
-                .spawn();
+            let mut restart = command(&plan.executable);
+            restart.arg("--update-result").arg(&directory);
+            if let Some(data_dir) = &plan.data_dir {
+                restart.env("CLASH_OF_RUST_DATA_DIR", data_dir);
+            }
+            let _ = restart.spawn();
         }
     }
     #[cfg(target_os = "macos")]
@@ -428,13 +452,24 @@ mod tests {
             parent: std::process::id(),
             restart: true,
             require_commit: false,
+            data_dir: Some(std::env::current_dir().unwrap()),
         };
         let mut legacy = serde_json::to_value(&plan).unwrap();
         legacy.as_object_mut().unwrap().remove("restart");
         legacy.as_object_mut().unwrap().remove("require_commit");
+        legacy.as_object_mut().unwrap().remove("data_dir");
         let legacy: Plan = serde_json::from_value(legacy).unwrap();
         assert!(legacy.restart && !legacy.require_commit);
+        assert!(legacy.data_dir.is_none());
+        let encoded = serde_json::to_value(&plan).unwrap();
+        let decoded: Plan = serde_json::from_value(encoded).unwrap();
+        assert_eq!(decoded.data_dir, plan.data_dir);
         verify(&plan, directory.path()).unwrap();
+        let relative = Plan {
+            data_dir: Some(PathBuf::from("relative-data")),
+            ..plan.clone()
+        };
+        assert!(verify(&relative, directory.path()).is_err());
         fs::write(path, b"tampered").unwrap();
         assert!(verify(&plan, directory.path()).is_err());
     }

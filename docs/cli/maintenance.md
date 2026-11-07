@@ -48,7 +48,7 @@
 | `service install --yes` | 为当前用户配置 CLI 后台登录自启 |
 | `service remove --yes` / `service status` | 删除或查询 CLI 后台登录自启 |
 | `notify [MESSAGE]` | 与 Claude 拦截共用系统通知接口，默认“喵!” |
-| `completion bash\|zsh\|fish\|powershell` | 输出 shell 补全脚本 |
+| `completion bash\|zsh\|fish\|powershell` | 输出上下文补全脚本；命令、选项、`config get/set` 键和常见枚举值由本地同步补全，不启动后台 |
 
 Geo 状态区分数据版本、数据准备时间和本机上次成功更新时间；旧版清单没有本机记录时显示“暂无记录”。
 
@@ -62,6 +62,8 @@ CLI 后台使用 Linux systemd user unit、macOS LaunchAgent、Windows 当前用
 
 使用 `cor config set update_prereleases true` 将预发布版纳入检查，默认 `false`。关闭时所有用户都以线上最新正式版为目标，即使本地为 `0.999.0` 等更高版本，也可检查、下载并确认返回正式版；版本相同时不重复提示。开启后才纳入预发布版，且只提供比本地更高的版本。GUI 与 CLI 共用此设置，细则见[更新通道](../workflows/versions.md#版本与更新通道)。
 
+设置保存在当前实例的数据目录 `settings.json`。`--data-dir`、`CLASH_OF_RUST_DATA_DIR`、普通用户默认目录和 root 自有目录是不同实例，不能假设它们共享更新通道或其他设置。桌面自动更新重启时会显式继承原数据目录；若更新后仍看到旧设置，先核对 `cor diagnose --offline --output cor-diagnose.json` 中的 `data_directory`，再比较同一目录的 `settings.json`。
+
 检查更新遇到网络错误或附件暂未完整时，会重新获取发布信息，最多尝试 4 次，总等待不超过约 75 秒；仍缺少当前平台安装包或校验文件时会明确报错。
 
 更新下载显示速度、已下载大小及匹配本次连接的实际节点链，回退直连会明确标注；控制接口无法确认出站时显示未确认，不用首页所选节点代替实际线路。`update download` 的进度写入 stderr，`--quiet` 可关闭。
@@ -72,6 +74,9 @@ cor completion bash > ~/.cor-completion.bash
 
 source ~/.cor-completion.bash
 # 在当前 Bash 终端启用补全；后续可加入 ~/.bashrc。
+
+cor config set theme_mode <Tab>
+# 补全 设置键；选定键后继续补全 system/light/dark 等已知值。
 
 cor --json config get dns_override
 # 以 JSON 读取 DNS 覆盖开关，便于脚本处理。

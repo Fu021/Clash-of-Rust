@@ -826,7 +826,7 @@ def package(arch, run_id, check_only):
     run([tool/'apksigner','-J-enable-native-access=ALL-UNNAMED','verify','--verbose',apk])
     run([tool/'zipalign','-c','-P','16','4',apk])
     digest=sha256(apk)
-    (output/(name+'.sha256')).write_text(digest+'  '+name+'\n')
+    (output/(name+'.sha256')).write_text(digest+'\n')
     # x64 receives the same emulator proxy/TUN test after final signing.
     test(arch,apk,root/'tests/androidTest.apk')
     artifact=json.loads((root/'source-artifact.json').read_text())

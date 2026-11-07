@@ -46,9 +46,9 @@
 
 平台版本字段、正式/预发布选择、Android 安装限制见[版本与更新通道](workflows/versions.md)。
 
-## 手动验收与助手清理
+## 发布后说明与助手清理
 
-首次授权、重启/休眠、升级与 macOS 助手卸载见[手动验收](workflows/release.md#手动验收与助手清理)。
+Actions 已验证范围、硬件专属边界与 macOS 助手卸载见[发布后说明](workflows/release.md#发布后说明与助手清理)。
 
 ## UI 预览与静态资源
 

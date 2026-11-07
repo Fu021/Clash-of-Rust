@@ -603,7 +603,7 @@ mod tests {
                     &job,
                     &Some(disconnected),
                     prereleases,
-                    move |_, _| async move {
+                    move |_, _, _| async move {
                         started.send(()).unwrap();
                         resume.await.unwrap();
                         Ok(())

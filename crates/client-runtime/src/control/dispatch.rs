@@ -16,11 +16,11 @@ pub(crate) async fn prepare_update_handoff<'a, S, F, Fut, C>(
     cancel: C,
 ) -> Result<(tokio::sync::MutexGuard<'a, Engine>, S)>
 where
-    F: FnOnce(u32, bool) -> Fut,
+    F: FnOnce(u32, bool, std::path::PathBuf) -> Fut,
     Fut: std::future::Future<Output = Result<S>>,
     C: FnOnce(&S),
 {
-    let (gui, parent) = {
+    let (gui, parent, data_dir) = {
         let engine = shared.lock().await;
         job.ensure_current(disconnected)?;
         anyhow::ensure!(
@@ -28,9 +28,13 @@ where
             "更新通道已改变，请重新检查更新"
         );
         let gui = super::gui_pid(&engine.store)?;
-        (gui, gui.unwrap_or_else(std::process::id))
+        (
+            gui,
+            gui.unwrap_or_else(std::process::id),
+            engine.store.root.clone(),
+        )
     };
-    let session = prepare(parent, gui.is_some()).await?;
+    let session = prepare(parent, gui.is_some(), data_dir).await?;
     let engine = shared.lock().await;
     if let Err(error) = (|| -> Result<()> {
         job.ensure_current(disconnected)?;
@@ -339,9 +343,14 @@ async fn install_update(
         &job,
         &disconnected,
         prereleases,
-        |parent, gui| async move {
+        |parent, gui, data_dir| async move {
             tokio::task::spawn_blocking(move || {
-                crate::update::handoff_owner_deferred(Arc::new(download), parent, gui)
+                crate::update::handoff_owner_deferred_at(
+                    Arc::new(download),
+                    parent,
+                    gui,
+                    Some(data_dir),
+                )
             })
             .await?
         },
@@ -358,8 +367,14 @@ async fn install_update(
         );
         let gui = super::gui_pid(&engine.store)?;
         let parent = gui.unwrap_or_else(std::process::id);
+        let data_dir = engine.store.root.clone();
         let session = tokio::task::spawn_blocking(move || {
-            crate::update::handoff_owner(Arc::new(download), parent, gui.is_some())
+            crate::update::handoff_owner_at(
+                Arc::new(download),
+                parent,
+                gui.is_some(),
+                Some(data_dir),
+            )
         })
         .await??;
         (engine, session)

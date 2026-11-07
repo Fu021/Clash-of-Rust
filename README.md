@@ -105,7 +105,7 @@ python3 scripts/preview-slint.py --check
 python3 scripts/preview-slint.py --page settings --theme light --output /tmp/clash-slint-preview
 ```
 
-测试、内存基准、发布流程及手动验收说明见 [工作流文档](docs/workflows.md)。
+测试、内存基准与发布流程见 [工作流文档](docs/workflows.md)。
 
 ## 参与贡献
 

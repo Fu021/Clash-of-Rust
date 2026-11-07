@@ -1,6 +1,6 @@
 plugins { id("com.android.application") }
 
-val appVersion = providers.gradleProperty("appVersion").orElse("0.6.7-fix.4.direct-downloads").get()
+val appVersion = providers.gradleProperty("appVersion").orElse("0.6.7-fix.5.cli-tun-coverage").get()
 val appVersionCode = providers.gradleProperty("appVersionCode").orElse("605000").get().toInt()
 val selectedAbi = providers.gradleProperty("appAbi").orNull
 

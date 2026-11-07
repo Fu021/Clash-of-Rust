@@ -467,7 +467,7 @@ pub static COMMANDS: &[Spec] = &[
     ),
     command!(
         "completion",
-        "生成 Bash、Zsh、Fish 或 PowerShell 补全脚本",
+        "生成 Bash、Zsh、Fish 或 PowerShell 上下文补全脚本",
         "completion SHELL",
         1,
         1,
@@ -910,34 +910,188 @@ fn option_help(key: &str) -> String {
 }
 
 pub fn completion(shell: &str) -> Result<String> {
-    let words: BTreeSet<_> = COMMANDS
-        .iter()
-        .flat_map(|s| s.path.split_whitespace())
-        .chain(["help", "all"])
-        .collect();
-    let mut words = words
-        .into_iter()
-        .map(str::to_owned)
-        .collect::<BTreeSet<_>>();
-    words.extend(
-        GLOBAL
-            .split_whitespace()
-            .chain(COMMANDS.iter().flat_map(|s| s.options.split_whitespace()))
-            .map(|s| format!("--{s}")),
-    );
-    let words = words.into_iter().collect::<Vec<_>>().join(" ");
     Ok(match shell {
-        "bash" => format!(
-            "_cor_complete() {{ COMPREPLY=($(compgen -W '{words}' -- \"${{COMP_WORDS[COMP_CWORD]}}\")); }}\ncomplete -F _cor_complete cor\n"
-        ),
-        "zsh" => format!("#compdef cor\ncompctl -k '({words})' cor\n"),
-        "fish" => format!("complete -c cor -f -a '{words}'\n"),
-        "powershell" => format!(
-            "Register-ArgumentCompleter -Native -CommandName cor -ScriptBlock {{ param($wordToComplete) '{}'.Split(' ') | Where-Object {{ $_ -like \"$wordToComplete*\" }} }}\n",
-            words
-        ),
+        "bash" => "_cor_complete() {\n  local IFS=$'\\n'\n  COMPREPLY=( $(cor __complete \"${COMP_WORDS[@]:1}\") )\n}\ncomplete -F _cor_complete cor\n".into(),
+        "zsh" => "#compdef cor\n_cor() {\n  local -a candidates\n  candidates=(\"${(@f)$(cor __complete \"${(@)words[2,-1]}\")}\")\n  compadd -a candidates\n}\ncompdef _cor cor\n".into(),
+        "fish" => "function __cor_complete\n  set -l tokens (commandline -opc)\n  set -e tokens[1]\n  cor __complete $tokens (commandline -ct)\nend\ncomplete -c cor -f -a '(__cor_complete)'\n".into(),
+        "powershell" => "Register-ArgumentCompleter -Native -CommandName cor -ScriptBlock {\n  param($wordToComplete, $commandAst, $cursorPosition)\n  $words = @($commandAst.CommandElements | Select-Object -Skip 1 | ForEach-Object { $_.Extent.Text.Trim('\"').Trim(\"'\") })\n  if ($words.Count -eq 0 -or $words[-1] -ne $wordToComplete) { $words += $wordToComplete }\n  cor __complete @words | ForEach-Object { [System.Management.Automation.CompletionResult]::new($_, $_, 'ParameterValue', $_) }\n}\n".into(),
         _ => bail!("补全支持 bash、zsh、fish、powershell"),
     })
+}
+
+/// Context-sensitive candidates for the hidden shell-completion entry point.
+/// The final item is the incomplete word currently under the cursor.
+pub fn complete(words: &[String]) -> String {
+    let last = words.last().map(String::as_str).unwrap_or("");
+    let completed = words
+        .get(..words.len().saturating_sub(1))
+        .unwrap_or_default();
+    let tokens = completion_tokens(completed);
+    let path = completion_path(&tokens);
+    let path_parts = path.split_whitespace().count();
+    let positional = tokens.get(path_parts..).unwrap_or_default();
+    let spec = COMMANDS.iter().find(|spec| spec.path == path);
+
+    let mut candidates = BTreeSet::new();
+    if let Some((option, prefix)) = attached_option(last) {
+        for value in option_values(&path, option) {
+            candidates.insert(format!("{prefix}{value}"));
+        }
+    } else if let Some(option) = completed
+        .last()
+        .and_then(|value| value.strip_prefix("--"))
+        .filter(|value| VALUES.split_whitespace().any(|name| name == *value))
+    {
+        candidates.extend(
+            option_values(&path, option)
+                .iter()
+                .copied()
+                .map(str::to_owned),
+        );
+    } else if last.starts_with("--") {
+        for option in GLOBAL.split_whitespace().chain(
+            spec.into_iter()
+                .flat_map(|spec| spec.options.split_whitespace()),
+        ) {
+            candidates.insert(format!("--{option}"));
+        }
+    } else if spec.is_none() {
+        candidates.extend(next_commands(&path));
+    } else {
+        candidates.extend(position_candidates(&path, positional));
+    }
+    let mut result = candidates
+        .into_iter()
+        .filter(|candidate| candidate.starts_with(last))
+        .collect::<Vec<_>>()
+        .join("\n");
+    if !result.is_empty() {
+        result.push('\n');
+    }
+    result
+}
+
+fn completion_tokens(words: &[String]) -> Vec<String> {
+    let mut result = Vec::new();
+    let mut index = 0;
+    while index < words.len() {
+        let word = &words[index];
+        if word == "--" {
+            result.extend(words[index + 1..].iter().cloned());
+            break;
+        }
+        if let Some(option) = word.strip_prefix("--") {
+            let (option, attached) = option
+                .split_once('=')
+                .map_or((option, false), |(option, _)| (option, true));
+            index += if !attached && VALUES.split_whitespace().any(|name| name == option) {
+                2
+            } else {
+                1
+            };
+            continue;
+        }
+        result.push(word.clone());
+        index += 1;
+    }
+    result
+}
+
+fn completion_path(words: &[String]) -> String {
+    let mut best = 0;
+    for spec in COMMANDS {
+        let parts = spec.path.split_whitespace().collect::<Vec<_>>();
+        let shared = words
+            .iter()
+            .zip(parts)
+            .take_while(|(word, part)| word == part)
+            .count();
+        best = best.max(shared);
+    }
+    words[..best].join(" ")
+}
+
+fn next_commands(path: &str) -> BTreeSet<String> {
+    let prefix = if path.is_empty() {
+        String::new()
+    } else {
+        format!("{path} ")
+    };
+    let mut candidates = COMMANDS
+        .iter()
+        .filter_map(|spec| {
+            spec.path
+                .strip_prefix(prefix.as_str())?
+                .split_whitespace()
+                .next()
+                .map(str::to_owned)
+        })
+        .collect::<BTreeSet<_>>();
+    if path.is_empty() {
+        candidates.extend(["help".to_owned()]);
+    }
+    candidates
+}
+
+fn position_candidates(path: &str, positional: &[String]) -> Vec<String> {
+    let index = positional.len();
+    let values: &[&str] = match (path, index) {
+        ("mode", 0) => &["rule", "global", "direct"],
+        ("proxy", 0) => &["system", "tun", "off"],
+        ("claude protect" | "autostart", 0) => &["on", "off"],
+        ("rule enable", 1) => &["on", "off"],
+        ("rule shortcut", 0) => &["ads", "private-domain", "private-ip", "cn-domain", "cn-ip"],
+        ("rule shortcut", 1) => &["on", "off"],
+        ("completion", 0) => &["bash", "zsh", "fish", "powershell"],
+        ("config get", 0) => clash_client_core::config::READABLE_SETTINGS,
+        ("config set", 0) => clash_client_core::config::MUTABLE_SETTINGS,
+        ("config set", 1) => {
+            return positional
+                .first()
+                .map_or_else(Vec::new, |key| setting_values(key).to_vec());
+        }
+        _ => &[],
+    };
+    values.iter().map(|value| (*value).to_owned()).collect()
+}
+
+fn setting_values(key: &str) -> &'static [&'static str] {
+    match key {
+        "dark" | "tray_speed" | "update_prereleases" | "dns_override" | "fake_ip" | "ipv6"
+        | "udp" => &["false", "true"],
+        "theme_mode" => &["system", "light", "dark"],
+        "accent_color" => &["teal", "blue", "purple", "rose", "amber", "slate"],
+        "node_sort" => &["latency_ascending", "latency_descending", "name"],
+        _ => &[],
+    }
+}
+
+fn attached_option(word: &str) -> Option<(&str, &str)> {
+    let (option, value) = word.strip_prefix("--")?.split_once('=')?;
+    VALUES
+        .split_whitespace()
+        .any(|name| name == option)
+        .then_some((option, &word[..word.len() - value.len()]))
+}
+
+fn option_values(path: &str, option: &str) -> &'static [&'static str] {
+    match option {
+        "sort" if path == "node list" => &["name", "latency"],
+        "sort" => &[
+            "name",
+            "rule",
+            "chain",
+            "upload",
+            "download",
+            "upload-rate",
+            "download-rate",
+            "start",
+            "none",
+        ],
+        "level" => &["debug", "info", "warning", "error", "silent"],
+        "shell" => &["bash", "zsh", "fish", "powershell", "cmd"],
+        _ => &[],
+    }
 }
 
 #[cfg(test)]
@@ -1026,5 +1180,36 @@ mod tests {
             args(&["--user=alice", "status"]).unwrap().get("user"),
             Some("alice")
         );
+    }
+    #[test]
+    fn contextual_completion_handles_commands_keys_values_and_options() {
+        let complete = |line: &[&str]| {
+            super::complete(
+                &line
+                    .iter()
+                    .map(|value| (*value).to_owned())
+                    .collect::<Vec<_>>(),
+            )
+        };
+        assert!(complete(&["co"]).contains("completion\n"));
+        assert!(complete(&["config", "g"]).contains("get\n"));
+        assert!(complete(&["config", "set", "the"]).contains("theme_mode\n"));
+        assert_eq!(
+            complete(&["config", "set", "theme_mode", ""]),
+            "dark\nlight\nsystem\n"
+        );
+        assert_eq!(complete(&["config", "set", "dns_override", "t"]), "true\n");
+        assert!(complete(&["config", "set", "ipv6", "--"]).contains("--help\n"));
+        assert_eq!(complete(&["node", "list", "--sort", ""]), "latency\nname\n");
+        assert_eq!(complete(&["env", "--shell", "p"]), "powershell\n");
+        assert!(complete(&["config", "get", ""]).contains("update_prereleases\n"));
+        assert!(!complete(&["config", "get", ""]).contains("controller_port\n"));
+        assert!(!complete(&["config", "set", ""]).contains("active_profile\n"));
+    }
+    #[test]
+    fn completion_scripts_delegate_to_the_contextual_entry_point() {
+        for shell in ["bash", "zsh", "fish", "powershell"] {
+            assert!(completion(shell).unwrap().contains("__complete"));
+        }
     }
 }

@@ -399,7 +399,50 @@ fn diagnose(out: &mut dyn Write, value: &Value) -> Result<()> {
             &configured
         },
     )?;
+    if value["tun_configuration"]["state"] == "observed" {
+        field(
+            out,
+            "TUN 配置",
+            &tun_configuration(&value["tun_configuration"]),
+        )?;
+    }
     network_notice(out, &value["host_routes"])
+}
+
+fn tun_configuration(value: &Value) -> String {
+    let mut parts = Vec::new();
+    for (label, key) in [
+        ("自动路由", "auto_route"),
+        ("严格路由", "strict_route"),
+        ("DNS 劫持", "dns_hijack"),
+        ("IPv4 路由段", "inet4_route_address"),
+        ("IPv6 路由段", "inet6_route_address"),
+    ] {
+        let value = &value[key];
+        if value.is_null() {
+            continue;
+        }
+        let text = match value {
+            Value::Array(values) => values
+                .iter()
+                .map(|value| match value {
+                    Value::String(value) => clean(value),
+                    _ => value.to_string(),
+                })
+                .collect::<Vec<_>>()
+                .join("、"),
+            Value::String(value) => clean(value),
+            _ => value.to_string(),
+        };
+        if !text.is_empty() {
+            parts.push(format!("{label}={text}"));
+        }
+    }
+    if parts.is_empty() {
+        "已读取，但未声明覆盖限制".into()
+    } else {
+        parts.join(" · ")
+    }
 }
 
 fn message(out: &mut dyn Write, message: &str) -> Result<()> {

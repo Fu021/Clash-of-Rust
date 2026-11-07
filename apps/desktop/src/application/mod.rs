@@ -2477,9 +2477,12 @@ impl App {
             return Task::none();
         }
         self.updates.prepare_install(downloaded.clone());
+        let data_dir = startup_store().ok().map(|store| store.root);
         Task::perform(
             async move {
-                match tokio::task::spawn_blocking(move || update::handoff(downloaded)).await {
+                match tokio::task::spawn_blocking(move || update::handoff_at(downloaded, data_dir))
+                    .await
+                {
                     Ok(result) => result.map_err(|error| error.to_string()),
                     Err(_) => Err("安装助手无法启动，请重试".into()),
                 }

@@ -90,43 +90,85 @@ pub fn with_proxy_context(mut routes: Value, proxy: Option<crate::engine::ProxyM
     let other = samples
         .iter()
         .any(|route| route["state"] == "observed" && route["kind"] == "other");
-    let warning = if tun && proxy.is_none() {
-        Some("tun_current_proxy_unknown")
+    let mut warnings = Vec::new();
+    if tun && proxy.is_none() {
+        warnings.push("tun_current_proxy_unknown");
     } else if tun && proxy != Some(ProxyMode::Tun) {
-        Some("tun_owner_unconfirmed")
+        warnings.push("tun_owner_unconfirmed");
     } else if !tun && other && proxy == Some(ProxyMode::Tun) {
-        Some("sample_routes_not_tun")
-    } else {
-        None
-    };
-    routes["warnings"] = json!(warning.into_iter().collect::<Vec<_>>());
+        warnings.push("sample_routes_not_tun");
+    }
+    if proxy == Some(ProxyMode::Tun) && tun {
+        if routes["ipv4"]["state"] == "observed" && routes["ipv4"]["kind"] == "other" {
+            warnings.push("tun_ipv4_route_bypass");
+        }
+        if routes["ipv6"]["state"] == "observed" && routes["ipv6"]["kind"] == "other" {
+            warnings.push("tun_ipv6_route_bypass");
+        }
+    }
+    routes["warnings"] = json!(warnings);
     routes
 }
 
+/// A positive sample of a non-TUN route while this process owns TUN means the
+/// host may still send some traffic outside the tunnel. Unknown or unavailable
+/// samples are deliberately not treated as proof either way.
+pub fn coverage_issue(routes: &Value, ipv6_expected: bool) -> Option<String> {
+    if routes["scope"] != "current_network_namespace" {
+        return None;
+    }
+    let mut issues = Vec::new();
+    for (family, label, expected) in [("ipv4", "IPv4", true), ("ipv6", "IPv6", ipv6_expected)] {
+        let route = &routes[family];
+        if !expected || route["state"] != "observed" || route["kind"] != "other" {
+            continue;
+        }
+        let interface = route["interface"].as_str().unwrap_or("物理接口");
+        issues.push(format!("示例 {label} 路由仍经过 {interface}"));
+    }
+    (!issues.is_empty()).then(|| {
+        format!(
+            "TUN 已开启，但{}；部分程序可能绕过 TUN，请导出诊断检查 route-address、strict-route 与 DNS 覆盖",
+            issues.join("，")
+        )
+    })
+}
+
 pub fn notice(routes: &Value) -> Option<String> {
-    if routes["scope"] != "current_network_namespace"
-        || !routes["warnings"].as_array().is_some_and(|warnings| {
-            warnings.iter().any(|warning| {
-                matches!(
-                    warning.as_str(),
-                    Some("tun_owner_unconfirmed" | "tun_current_proxy_unknown")
-                )
-            })
-        })
-    {
+    if routes["scope"] != "current_network_namespace" {
+        return None;
+    }
+    let warnings = routes["warnings"].as_array()?;
+    let external = warnings.iter().any(|warning| {
+        matches!(
+            warning.as_str(),
+            Some("tun_owner_unconfirmed" | "tun_current_proxy_unknown")
+        )
+    });
+    let bypass = warnings.iter().any(|warning| {
+        matches!(
+            warning.as_str(),
+            Some("sample_routes_not_tun" | "tun_ipv4_route_bypass" | "tun_ipv6_route_bypass")
+        )
+    });
+    if !external && !bypass {
         return None;
     }
     let mut interfaces = std::collections::BTreeSet::new();
     let mut evidence = Vec::new();
     for family in ["ipv4", "ipv6"] {
         let route = &routes[family];
-        if route["state"] != "observed" || route["kind"] != "tun" {
+        if route["state"] != "observed" {
             continue;
         }
         let Some(interface) = route["interface"].as_str() else {
             continue;
         };
         if !interfaces.insert(interface) {
+            continue;
+        }
+        if route["kind"] != "tun" {
+            evidence.push(interface.to_owned());
             continue;
         }
         let holders = routes["tun_holders"]["interfaces"][interface]
@@ -152,14 +194,19 @@ pub fn notice(routes: &Value) -> Option<String> {
         });
     }
     if evidence.is_empty() {
-        return None;
+        if !bypass {
+            return None;
+        }
+        evidence.push("未能读取具体接口".into());
     }
-    let uncertain = routes["warnings"].as_array().is_some_and(|warnings| {
-        warnings
-            .iter()
-            .any(|warning| warning == "tun_current_proxy_unknown")
-    });
-    let message = if uncertain {
+    let uncertain = warnings
+        .iter()
+        .any(|warning| warning == "tun_current_proxy_unknown");
+    let message = if bypass && external {
+        "检测到 TUN 路由异常，同时存在外部 TUN 接管"
+    } else if bypass {
+        "TUN 已开启，但示例路由显示仍有流量绕过 TUN"
+    } else if uncertain {
         "检测到流量经过 TUN，本程序代理状态暂时无法读取"
     } else {
         "检测到流量经过外部 TUN，本程序的“关闭代理”无法关闭它"
@@ -254,5 +301,27 @@ mod context_tests {
             with_proxy_context(unknown, Some(ProxyMode::Tun))["warnings"],
             json!([])
         );
+    }
+
+    #[test]
+    fn partial_tun_coverage_is_reported_instead_of_treated_as_healthy() {
+        let routes = json!({
+            "scope":"current_network_namespace",
+            "ipv4":{"state":"observed","kind":"other","interface":"eth0"},
+            "ipv6":{"state":"observed","kind":"tun","interface":"Meta"}
+        });
+        let context = with_proxy_context(routes.clone(), Some(ProxyMode::Tun));
+        assert_eq!(context["warnings"], json!(["tun_ipv4_route_bypass"]));
+        let notice = notice(&context).unwrap();
+        assert!(notice.contains("绕过 TUN"));
+        assert!(notice.contains("eth0"));
+        assert!(coverage_issue(&routes, true).unwrap().contains("IPv4"));
+        let ipv6_only = json!({
+            "scope":"current_network_namespace",
+            "ipv4":{"state":"observed","kind":"tun","interface":"Meta"},
+            "ipv6":{"state":"observed","kind":"other","interface":"eth0"}
+        });
+        assert!(coverage_issue(&ipv6_only, false).is_none());
+        assert!(coverage_issue(&ipv6_only, true).unwrap().contains("IPv6"));
     }
 }
