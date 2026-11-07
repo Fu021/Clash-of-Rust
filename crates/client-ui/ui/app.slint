@@ -189,13 +189,40 @@ export component AppWindow inherits Window {
     }
     Rectangle {
         x: 0px; y: 0px; height: 44px; width: root.width; background: Theme.sidebar;
-        Image { x: 16px; y: 11px; width: 22px; height: 22px; source: @image-url("../../../resources/icons/app.png"); }
-        Wordmark { x: 48px; y: 11px; }
-        ActionButton {
-            x: parent.width - self.width - 16px; y: (44px - self.height) / 2;
-            text: "系统通知"; compact: true; quiet: true; enabled: !UiData.notification-busy;
-            clicked => { UiActions.dispatch(Intent.system-notification, "", ""); }
+        notification-icon := Rectangle {
+            x: 10px; y: 5px; width: 34px; height: 34px; border-radius: 6px;
+            property <bool> interactive: !UiData.notification-busy && UiData.modal == 0 && !UiData.notice-modal;
+            property <bool> keyboard-focus;
+            background: notification-area.pressed ? Theme.accent-wash : notification-area.has-hover ? Theme.inset : transparent;
+            border-width: 1px;
+            border-color: self.interactive && self.keyboard-focus && notification-keys.has-focus ? Theme.accent : transparent;
+            animate background, border-color { duration: Motion.fast; enabled: Motion.active; }
+            accessible-role: button;
+            accessible-label: "测试系统通知";
+            accessible-action-default => { if self.interactive { UiActions.dispatch(Intent.system-notification, "", ""); } }
+            forward-focus: notification-keys;
+            GeometryTarget { key: "notification-icon"; bounds: [notification-icon.absolute-position.x, notification-icon.absolute-position.y, notification-icon.width, notification-icon.height]; }
+            Image { x: 6px; y: 6px; width: 22px; height: 22px; source: @image-url("../../../resources/icons/app.png"); }
+            notification-keys := FocusScope {
+                enabled: notification-icon.interactive;
+                focus-gained(reason) => { notification-icon.keyboard-focus = reason == FocusReason.tab-navigation; }
+                key-pressed(event) => {
+                    if event.text == Key.Return || event.text == " " {
+                        UiActions.dispatch(Intent.system-notification, "", ""); return accept;
+                    }
+                    return reject;
+                }
+            }
+            notification-area := TouchArea {
+                enabled: notification-icon.interactive; mouse-cursor: pointer;
+                clicked => {
+                    notification-icon.keyboard-focus = false;
+                    notification-keys.focus();
+                    UiActions.dispatch(Intent.system-notification, "", "");
+                }
+            }
         }
+        Wordmark { x: 48px; y: 11px; }
     }
     dialog-host := AppDialog { }
     // Last sibling: notices overlay dialogs without changing page geometry.

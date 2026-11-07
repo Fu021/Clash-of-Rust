@@ -912,14 +912,25 @@ fn pointer_keyboard_escape_and_modal_input_use_the_production_callbacks() {
         .on_dispatch(move |intent, a, b| recorded.borrow_mut().push((intent, a, b)));
     window.show().unwrap();
     let _ = window.window().take_snapshot().unwrap();
-    click_target(&window, "button:系统通知");
+    click_target(&window, "notification-icon");
+    assert_eq!(
+        events.borrow().last().unwrap().0,
+        Intent::SystemNotification
+    );
+    events.borrow_mut().clear();
+    window.window().dispatch_event(WindowEvent::KeyPressed {
+        text: Key::Return.into(),
+    });
     assert_eq!(
         events.borrow().last().unwrap().0,
         Intent::SystemNotification
     );
     events.borrow_mut().clear();
     data.set_notification_busy(true);
-    click_target(&window, "button:系统通知");
+    click_target(&window, "notification-icon");
+    window.window().dispatch_event(WindowEvent::KeyPressed {
+        text: Key::Return.into(),
+    });
     assert!(
         events.borrow().is_empty(),
         "only one native notification may be active"
@@ -943,7 +954,7 @@ fn pointer_keyboard_escape_and_modal_input_use_the_production_callbacks() {
     data.set_modal_accept("删除".into());
     data.set_modal_can_accept(true);
     let _ = window.window().take_snapshot().unwrap();
-    click_target(&window, "button:系统通知");
+    click_target(&window, "notification-icon");
     click_target(&window, "nav:代理");
     assert!(
         events.borrow().is_empty(),
@@ -970,7 +981,7 @@ fn pointer_keyboard_escape_and_modal_input_use_the_production_callbacks() {
     let _ = window.window().take_snapshot().unwrap();
     events.borrow_mut().clear();
     click_target(&window, "nav:代理");
-    click_target(&window, "button:系统通知");
+    click_target(&window, "notification-icon");
     assert!(
         events.borrow().is_empty(),
         "the centered error must block navigation behind it"
@@ -2629,7 +2640,7 @@ fn protection_rejects_confirmations_that_would_save_or_delete() {
     app.confirmation = Some(desktop_view::Confirmation {
         title: "删除订阅？".into(),
         description: "该订阅将被删除。".into(),
-        accept: "删除订阅".into(),
+        accept: "删除订阅",
         pending: desktop_view::Pending::Delete("fixture".into()),
         ready_at: None,
     });

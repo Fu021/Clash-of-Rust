@@ -72,6 +72,8 @@ python3 scripts/preview-slint.py --page settings --theme light --output /tmp/cla
 
 ### 通知与故障反馈
 
+桌面点击左上角应用图标发送测试系统通知，也可聚焦图标后按 Enter 或空格；发送期间及模态弹窗内禁用，通知权限和失败反馈沿用宿主处理，不额外占用右上角按钮。
+
 通知由宿主显式分级，不按错误文字推断：
 
 | 等级 | 例子 | 呈现 |
