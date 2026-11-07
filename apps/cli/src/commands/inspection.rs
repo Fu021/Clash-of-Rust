@@ -498,7 +498,7 @@ fn tun_configuration(args: &Args) -> Value {
 }
 
 fn parse_tun_configuration(raw: &str) -> Value {
-    let Ok(config) = yaml_serde::from_str::<Value>(&raw) else {
+    let Ok(config) = yaml_serde::from_str::<Value>(raw) else {
         return json!({"state":"unavailable","reason":"invalid_runtime_config"});
     };
     let tun = &config["tun"];
