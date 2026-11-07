@@ -160,6 +160,10 @@ export global MobileView {
     in-out property <bool> notice-critical;
     in-out property <bool> notice-recover-network;
     out property <bool> notice-modal: self.notice != "" && self.notice-critical;
+    // Set when Slint consumes a Back key that dismissed an error notice. The
+    // native callback may deliver the same Back again; consume that duplicate
+    // instead of navigating the page underneath.
+    in-out property <int> notice-back-pending: 0;
     in-out property <int> notice-revision;
     in-out property <float> notice-elapsed;
     in-out property <length> safe-top;
