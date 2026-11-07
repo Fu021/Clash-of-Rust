@@ -146,7 +146,7 @@ def guest_deb_downloads(ssh, remote, environment, staging):
     script = (
         "import json,pathlib,runpy,subprocess; "
         "from linux_apt import OPTIONS,archive_records,privileged; "
-        "packages=runpy.run_path('scripts/test-release-package.py')['compatibility_dependencies'](); "
+        "packages=runpy.run_path('scripts/test-release-package.py')['compatibility_download_dependencies'](); "
         "pathlib.Path('/home/ubuntu/cor-apt-plan-archives').mkdir(exist_ok=True); "
         "result=privileged([*OPTIONS,'-o','Acquire::ForceHash=SHA256','--print-uris',"
         "'-o','Dir::Cache::archives=/home/ubuntu/cor-apt-plan-archives',"

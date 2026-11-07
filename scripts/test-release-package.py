@@ -152,12 +152,18 @@ def linux_package_tests(package, tun_test, structure=True):
 
 
 def compatibility_dependencies():
+    return ['git', 'dbus-x11', 'iproute2', 'util-linux', 'libcap2-bin',
+            'xvfb', 'xwayland', 'x11-utils', 'xdotool', 'wmctrl', 'openbox',
+            'gnome-shell', 'gnome-shell-extension-appindicator', 'policykit-1-gnome',
+            'libgl1-mesa-dri', 'libegl1']
+
+
+def compatibility_download_dependencies():
     dependencies = runpy.run_path(str(ROOT/'scripts/build-installer.py'))['GUI_DEPENDENCIES']
-    return list(dict.fromkeys(['git', 'dbus-x11', 'iproute2', 'util-linux', 'libcap2-bin',
-         'xvfb', 'xwayland', 'x11-utils', 'xdotool', 'wmctrl', 'openbox',
-         'gnome-shell', 'gnome-shell-extension-appindicator', 'policykit-1-gnome',
-         'libgl1-mesa-dri', 'libegl1',
-         *(dependency.split('|', 1)[0].strip() for dependency in dependencies)]))
+    return list(dict.fromkeys([
+        *compatibility_dependencies(),
+        *(dependency.split('|', 1)[0].strip() for dependency in dependencies),
+    ]))
 
 
 def prepare_compatibility_environment():

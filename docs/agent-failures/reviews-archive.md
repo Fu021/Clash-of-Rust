@@ -13,6 +13,10 @@
 | 2026-10-25 | 订阅删除、Pad 与 fix.3 预发布 | [当前订阅删除与重复提交](ui-and-tests.md#订阅删除与重复提交)按事务处理；手机/Pad 工具导航、规则来源及完整原文同步，拖动按稳定 ID 修改完整草稿。 | [预发布 40283018496][release-fix3] 的 13 项任务、18 附件核验通过；保留 fix.2，未改稳定 latest；物理 Pad 未验收。 |
 | 2026-10-25 | fix.2 预发布 | 按[来源与版本约束](release.md#10-发布产物版本与依赖快照)复用 `9623f45` 的成功 CI，使用 Android 长期发行签名。 | [CI 40176079496][ci-fix2] 与[预发布 40198947679][release-fix2]通过，九组包/18 附件核验通过，原 27 个 Release 未变。 |
 
+[ci-loop]: https://github.com/Fu021/Clash-of-Rust/actions/runs/40610758771
+[package-loop]: https://github.com/Fu021/Clash-of-Rust/actions/runs/40613948109
+[ci-fix6]: https://github.com/Fu021/Clash-of-Rust/actions/runs/40562836032
+[release-fix6]: https://github.com/Fu021/Clash-of-Rust/actions/runs/40567590202
 [ci-toolbars]: https://github.com/Fu021/Clash-of-Rust/actions/runs/40304558635
 [package-toolbars]: https://github.com/Fu021/Clash-of-Rust/actions/runs/40308495398
 [ci-tailscale]: https://github.com/Fu021/Clash-of-Rust/actions/runs/40542749551

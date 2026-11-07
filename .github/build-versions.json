@@ -74,12 +74,12 @@
     },
     "geo": {
       "tag_name": "latest",
-      "published_at": "2026-11-06T02:42:01Z",
+      "published_at": "2026-11-07T02:09:03Z",
       "assets": [
-        {"id": 715651823, "name": "country.mmdb", "size": 7621999, "digest": "sha256:c0c6ea5661a3167abb24bbbaf629605aa3856c425384cbf2897c5a0f41027663", "browser_download_url": "https://api.github.com/repos/MetaCubeX/meta-rules-dat/releases/assets/715651823"},
-        {"id": 715651869, "name": "geoip.dat", "size": 16475153, "digest": "sha256:90b78ab861c1cdc3f871f305f9ceedfb8d6d6329e3a40295e6773e057297384c", "browser_download_url": "https://api.github.com/repos/MetaCubeX/meta-rules-dat/releases/assets/715651869"},
-        {"id": 715651796, "name": "GeoLite2-ASN.mmdb", "size": 9054248, "digest": "sha256:3f729dfdbca46d6bc83fe084e15e335cef702b46f9d9afb8feaede36180959f4", "browser_download_url": "https://api.github.com/repos/MetaCubeX/meta-rules-dat/releases/assets/715651796"},
-        {"id": 715651913, "name": "geosite.dat", "size": 4356594, "digest": "sha256:e4fa530c3f58593e78d20edf6563947a4257d1903e741871cacffc5a8a09d706", "browser_download_url": "https://api.github.com/repos/MetaCubeX/meta-rules-dat/releases/assets/715651913"}
+        {"id": 719297260, "name": "country.mmdb", "size": 7621999, "digest": "sha256:c0c6ea5661a3167abb24bbbaf629605aa3856c425384cbf2897c5a0f41027663", "browser_download_url": "https://api.github.com/repos/MetaCubeX/meta-rules-dat/releases/assets/719297260"},
+        {"id": 719297301, "name": "geoip.dat", "size": 16475153, "digest": "sha256:90b78ab861c1cdc3f871f305f9ceedfb8d6d6329e3a40295e6773e057297384c", "browser_download_url": "https://api.github.com/repos/MetaCubeX/meta-rules-dat/releases/assets/719297301"},
+        {"id": 719297242, "name": "GeoLite2-ASN.mmdb", "size": 9054248, "digest": "sha256:3f729dfdbca46d6bc83fe084e15e335cef702b46f9d9afb8feaede36180959f4", "browser_download_url": "https://api.github.com/repos/MetaCubeX/meta-rules-dat/releases/assets/719297242"},
+        {"id": 719297374, "name": "geosite.dat", "size": 4355007, "digest": "sha256:ab2c9f7217c91632057a8bff7810a6eb02ce05a8be4342cf7319ec1970d29733", "browser_download_url": "https://api.github.com/repos/MetaCubeX/meta-rules-dat/releases/assets/719297374"}
       ]
     },
     "nsis": {

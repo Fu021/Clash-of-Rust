@@ -355,6 +355,11 @@ class BuildTests(unittest.TestCase):
                         linux_ci.guest_deb_downloads(['ssh'], remote, 'environment ', Path(temporary)/'debs')
                     self.assertFalse(received)
 
+    def test_vm_prefetches_package_dependencies_without_preinstalling_them(self):
+        package_font = 'fonts-wqy-microhei'
+        self.assertIn(package_font, release_package.compatibility_download_dependencies())
+        self.assertNotIn(package_font, release_package.compatibility_dependencies())
+
     @unittest.skipUnless(hasattr(socket, 'AF_UNIX'), 'Unix sockets are unavailable')
     def test_linux_gui_finds_only_wayland_sockets(self):
         import linux_gui
