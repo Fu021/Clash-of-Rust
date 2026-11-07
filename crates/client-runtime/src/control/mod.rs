@@ -65,6 +65,7 @@ pub enum Command {
     Stop,
     Restart,
     RecoverNetwork,
+    RecoverUnreachable,
     Shutdown,
     Quit,
     Settings {
@@ -156,6 +157,31 @@ pub enum Command {
     UpdateInstall,
 }
 
+impl Command {
+    pub(crate) fn check_protection(&self, settings: &Settings) -> anyhow::Result<()> {
+        if !matches!(
+            self,
+            Self::Meta
+                | Self::Snapshot { .. }
+                | Self::RuleDocument { .. }
+                | Self::TrayNodes
+                | Self::Delay { .. }
+                | Self::RecoverUnreachable
+                | Self::Logs { clear: false }
+                | Self::ExportLogs
+                | Self::RecordFailure { .. }
+                | Self::CheckConfig
+                | Self::EffectiveConfig
+                | Self::Notify { .. }
+                | Self::Autostart { enabled: None }
+                | Self::Protect { enabled: false }
+        ) {
+            settings.require_mutable()?;
+        }
+        Ok(())
+    }
+}
+
 #[derive(Serialize, Deserialize)]
 struct Request {
     protocol: u32,
@@ -166,4 +192,137 @@ struct Request {
 struct Reply {
     result: Value,
     error: Option<String>,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn protected_settings() -> Settings {
+        use crate::claude_check::protection::{Previous, Protection};
+        Settings {
+            claude_protection: Some(std::sync::Arc::new(Protection::new(
+                "fixture".into(),
+                "node".into(),
+                Previous {
+                    mode: "rule".into(),
+                    proxy_mode: ProxyMode::Off,
+                    selectors: Default::default(),
+                },
+            ))),
+            ..Settings::default()
+        }
+    }
+
+    #[test]
+    fn protection_rejects_mutations_but_keeps_observation_and_disable_available() {
+        let settings = protected_settings();
+        for allowed in [
+            Command::Meta,
+            Command::Snapshot {
+                scope: Scope::Other,
+                header: false,
+            },
+            Command::RuleDocument {
+                id: "fixture".into(),
+            },
+            Command::TrayNodes,
+            Command::Delay {
+                name: None,
+                group: false,
+            },
+            Command::RecoverUnreachable,
+            Command::Logs { clear: false },
+            Command::ExportLogs,
+            Command::RecordFailure {
+                message: "fixture".into(),
+            },
+            Command::CheckConfig,
+            Command::EffectiveConfig,
+            Command::Notify {
+                title: "fixture".into(),
+                message: "fixture".into(),
+            },
+            Command::Autostart { enabled: None },
+            Command::Protect { enabled: false },
+        ] {
+            assert!(allowed.check_protection(&settings).is_ok());
+        }
+        for blocked in [
+            Command::Start,
+            Command::Stop,
+            Command::Restart,
+            Command::RecoverNetwork,
+            Command::Shutdown,
+            Command::Quit,
+            Command::GeoUpdate,
+            Command::GeoInstall {
+                path: "/tmp/geo".into(),
+            },
+            Command::UpdateInstall,
+            Command::RuleOverrides {
+                overrides: crate::config::RuleOverrides::default(),
+            },
+            Command::ConfigSet {
+                key: "ipv6".into(),
+                value: serde_json::json!(true),
+            },
+            Command::RuleChange {
+                id: "fixture".into(),
+                change: RuleChange::Add {
+                    raw: "MATCH,DIRECT".into(),
+                    position: 1,
+                    enabled: true,
+                },
+            },
+            Command::Ports { mixed: 7897 },
+            Command::Import {
+                name: "fixture".into(),
+                source: "https://example.test".into(),
+                id: None,
+                expect_current: false,
+            },
+            Command::EditProfile {
+                id: "fixture".into(),
+                name: "fixture".into(),
+                source: "https://example.test".into(),
+            },
+            Command::Activate {
+                id: "fixture".into(),
+            },
+            Command::DeleteProfile {
+                id: "fixture".into(),
+            },
+            Command::SaveRules {
+                id: "fixture".into(),
+                rules: crate::rule_manager::ProfileRules::default(),
+                expected: None,
+            },
+            Command::Settings {
+                settings: Settings::default(),
+                expected: None,
+            },
+            Command::Select {
+                group: "GLOBAL".into(),
+                node: "DIRECT".into(),
+            },
+            Command::Mode {
+                mode: "rule".into(),
+            },
+            Command::Proxy {
+                mode: ProxyMode::Off,
+            },
+            Command::Protect { enabled: true },
+            Command::Close { id: None },
+            Command::Logs { clear: true },
+            Command::Autostart {
+                enabled: Some(false),
+            },
+        ] {
+            assert!(
+                blocked.check_protection(&settings).is_err(),
+                "{blocked:?} must be rejected during protection"
+            );
+        }
+    }
 }

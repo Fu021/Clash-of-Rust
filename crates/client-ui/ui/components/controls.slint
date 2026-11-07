@@ -2,6 +2,7 @@ import { Motion, Entrance, ProgressTrack, CopyFeedback } from "motion.slint";
 import { Theme } from "../theme/palette.slint";
 import { UiData, UiActions, Intent } from "../state.slint";
 import { ScrollView } from "std-widgets.slint";
+import { GeometryTarget } from "geometry.slint";
 
 // Reset on navigation, not on each model refresh. Clamp after content shrinks
 // (including a shorter detail) so a previous offset cannot hide the new body.
@@ -28,6 +29,7 @@ export component Label {
     in property <TextWrap> wrap: no-wrap;
     out property <FontMetrics> font-metrics: glyphs.font-metrics;
     preferred-width: glyphs.preferred-width;
+    min-width: 0px;
     preferred-height: glyphs.preferred-height;
     min-height: glyphs.preferred-height;
     horizontal-stretch: 1;
@@ -85,6 +87,7 @@ export component Panel inherits Rectangle {
 export component ContentPanel inherits Panel {
     in property <length> gap: Theme.content-gap;
     in property <length> vertical-padding: Theme.card-padding;
+    in property <length> horizontal-padding: Theme.card-padding;
     in property <bool> interactive: false;
     callback clicked();
     vertical-stretch: 0;
@@ -95,7 +98,7 @@ export component ContentPanel inherits Panel {
     }
     content := VerticalLayout {
         alignment: start;
-        padding-left: Theme.card-padding; padding-right: Theme.card-padding;
+        padding-left: root.horizontal-padding; padding-right: root.horizontal-padding;
         padding-top: root.vertical-padding; padding-bottom: root.vertical-padding;
         spacing: root.gap;
         @children
@@ -147,6 +150,8 @@ export component Chevron inherits Path {
 }
 
 export component ActionButton inherits Rectangle {
+    in property <string> geometry-key: "button:" + root.text;
+    GeometryTarget { key: root.geometry-key; bounds: [root.absolute-position.x, root.absolute-position.y, root.width, root.height]; }
     in property <bool> modal-control: false;
     in property <string> text;
     in property <bool> primary: false;
@@ -158,25 +163,29 @@ export component ActionButton inherits Rectangle {
     in property <bool> dropdown: false;
     in property <bool> expanded: false;
     in property <bool> notice-control;
-    property <bool> interactive: root.enabled && !root.busy && (UiData.modal == 0 || root.modal-control) && (!UiData.notice-modal || root.notice-control);
+    in property <bool> quiet;
+    in property <bool> compact;
+    property <bool> interactive: root.enabled && !root.busy && (UiData.modal == 0 || UiData.modal == 10 || root.modal-control) && (!UiData.notice-modal || root.notice-control);
     // Mouse activation must not leave a focus highlight that resembles selection.
     property <bool> keyboard-focus: false;
     property <bool> pressed: root.interactive && area.pressed;
     property <length> press-offset: root.pressed ? 1px : 0px;
     animate press-offset { duration: Motion.fast; easing: ease-out; enabled: Motion.active; }
     callback clicked();
+    accessible-role: button;
+    accessible-label: root.text;
     forward-focus: key-scope;
-    height: Theme.control-height;
-    width: max(68px, button-label.preferred-width + 28px + (root.dropdown ? 20px : 0px));
+    height: root.compact ? max(28px, Theme.detail-size * 1.5 + 8px) : Theme.control-height;
+    width: max(root.compact ? 42px : 68px, button-label.preferred-width + (root.compact ? 16px : 28px) + (root.dropdown ? 20px : 0px));
     vertical-stretch: 0;
     horizontal-stretch: 0;
     border-radius: 8px;
     background: root.primary ? (root.pressed ? Theme.primary.darker(0.15) : Theme.primary)
         : root.success ? Theme.success-wash : root.selected || root.pressed ? Theme.accent-wash
-        : root.interactive && area.has-hover ? Theme.inset : Theme.surface;
+        : root.interactive && area.has-hover ? Theme.inset : root.quiet ? transparent : Theme.surface;
     border-width: 1px;
     border-color: root.interactive && root.keyboard-focus && key-scope.has-focus ? Theme.ink
-        : root.primary ? Theme.primary : root.selected || root.pressed ? Theme.accent : Theme.line;
+        : root.primary ? Theme.primary : root.selected || root.pressed ? Theme.accent : root.quiet ? transparent : Theme.line;
     opacity: root.enabled || root.busy ? 1 : 0.5;
     animate background, border-color, opacity { duration: Motion.fast; enabled: Motion.active; }
     button-label := Label {
@@ -186,7 +195,7 @@ export component ActionButton inherits Rectangle {
         text: root.text;
         horizontal-alignment: center;
         color: root.primary ? #ffffff : root.danger ? Theme.danger : root.success ? Theme.success : root.selected ? Theme.accent : Theme.ink;
-        font-size: Theme.body-size;
+        font-size: root.compact ? Theme.detail-size : Theme.body-size;
     }
     if root.dropdown: Chevron {
         x: parent.width - 24px;
@@ -218,7 +227,7 @@ export component Badge inherits Rectangle {
     // 0 accent, 1 success, 2 warning, 3 danger, 4 neutral.
     in property <int> tone: 0;
     in property <length> width-limit: 320px;
-    height: 28px;
+    height: max(22px, Theme.detail-size * 1.4 + 4px);
     width: min(label.preferred-width + 18px, root.width-limit);
     horizontal-stretch: 0;
     border-radius: 5px;
@@ -234,6 +243,7 @@ export component Badge inherits Rectangle {
 }
 
 export component AccentChoice inherits Rectangle {
+    GeometryTarget { key: "accent-picker"; bounds: [root.absolute-position.x, root.absolute-position.y, root.width, root.height]; }
     in property <bool> modal-control: false;
     in property <bool> enabled: true;
     in property <string> text;
@@ -255,6 +265,7 @@ export component AccentChoice inherits Rectangle {
 export component Field inherits Rectangle {
     in property <bool> modal-control: false;
     in property <bool> enabled: true;
+    in property <bool> borderless;
     in property <string> placeholder;
     in-out property <string> text;
     out property <bool> placeholder-visible: input.text == "" && input.preedit-text == "";
@@ -274,14 +285,14 @@ export component Field inherits Rectangle {
     border-radius: 6px;
     border-color: input.has-focus ? Theme.accent : Theme.line;
     animate border-color, background { duration: Motion.fast; enabled: Motion.active; }
-    border-width: 1px;
+    border-width: root.borderless ? 0px : 1px;
     input := TextInput {
         x: 12px;
         y: (parent.height + placeholder-label.font-metrics.cap-height) / 2 - placeholder-label.font-metrics.ascent;
         width: parent.width - 24px;
         height: self.preferred-height;
         text <=> root.text;
-        enabled: root.enabled && (UiData.modal == 0 || root.modal-control) && !UiData.notice-modal;
+        enabled: root.enabled && (UiData.modal == 0 || UiData.modal == 10 || root.modal-control) && !UiData.notice-modal;
         single-line: true;
         input-type: root.secret ? InputType.password : InputType.text;
         font-size: Theme.body-size;
@@ -303,6 +314,7 @@ export component Field inherits Rectangle {
 }
 
 export component Select inherits Rectangle {
+    in property <string> geometry-key: "select:" + root.value;
     in property <bool> enabled: true;
     property <bool> error-active: UiData.notice-modal;
     changed enabled => { if !root.enabled { popup.close(); } }
@@ -314,6 +326,7 @@ export component Select inherits Rectangle {
     height: Theme.control-height;
     min-width: 100px;
     ActionButton {
+        geometry-key: root.geometry-key;
         width: parent.width;
         text: root.value;
         dropdown: true;
@@ -339,6 +352,7 @@ export component Select inherits Rectangle {
                     padding: 8px;
                     spacing: 4px;
                     for option[i] in root.options: ActionButton {
+                        geometry-key: "option:" + root.geometry-key + "/" + i;
                         enabled: root.enabled;
                         width: popup.width - 16px;
                         modal-control: root.modal-control;
@@ -376,14 +390,14 @@ export component Toggle inherits Rectangle {
         background: #ffffff;
     }
     toggle-focus := FocusScope {
-        enabled: root.enabled && (UiData.modal == 0 || root.modal-control) && !UiData.notice-modal;
+        enabled: root.enabled && (UiData.modal == 0 || UiData.modal == 10 || root.modal-control) && !UiData.notice-modal;
         key-pressed(event) => {
             if event.text == " " || event.text == "\n" { root.toggled(!root.checked); return accept; }
             return reject;
         }
     }
     TouchArea {
-        enabled: root.enabled && (UiData.modal == 0 || root.modal-control) && !UiData.notice-modal;
+        enabled: root.enabled && (UiData.modal == 0 || UiData.modal == 10 || root.modal-control) && !UiData.notice-modal;
         mouse-cursor: pointer;
         clicked => { toggle-focus.focus(); root.toggled(!root.checked); }
     }
@@ -407,11 +421,40 @@ export component SettingRow inherits Rectangle {
         }
         Toggle {
             modal-control: root.modal-control;
-            enabled: root.enabled && (UiData.modal == 0 || root.modal-control) && !UiData.notice-modal;
+            enabled: root.enabled && (UiData.modal == 0 || UiData.modal == 10 || root.modal-control) && !UiData.notice-modal;
             checked: root.checked;
             toggled(value) => { root.toggled(value); }
         }
     }
+}
+
+export component FormRow inherits Rectangle {
+    in property <string> title;
+    in property <string> hint;
+    vertical-stretch: 0;
+    height: max(55px, content.preferred-height);
+    content := HorizontalLayout {
+        padding-left: Theme.card-padding; padding-right: Theme.card-padding;
+        padding-top: 13px; padding-bottom: 13px;
+        cross-axis-alignment: center;
+        spacing: Theme.card-padding;
+        VerticalLayout {
+            horizontal-stretch: 1; spacing: 3px; alignment: center;
+            Label { text: root.title; font-weight: 500; }
+            if root.hint != "": Paragraph { text: root.hint; color: Theme.secondary; font-size: Theme.detail-size; }
+        }
+        HorizontalLayout {
+            spacing: Theme.content-gap; alignment: end;
+            cross-axis-alignment: center; horizontal-stretch: 0;
+            @children
+        }
+    }
+}
+
+export component ListPanel inherits ContentPanel {
+    vertical-padding: 0px;
+    horizontal-padding: 0px;
+    gap: 0px;
 }
 
 export component Divider inherits Rectangle {

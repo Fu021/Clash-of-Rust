@@ -1,79 +1,107 @@
-import { PageSurface } from "../components/motion.slint";
+import { PageSurface, Disclosure } from "../components/motion.slint";
 import { Theme } from "../theme/palette.slint";
-import { UiData, UiActions, Intent } from "../state.slint";
+import { UiData, UiActions, Intent, ProfileItem } from "../state.slint";
+import { PageScroll, Label, Caption, ContentPanel, Panel, ActionButton, Badge, Field, Divider } from "../components/controls.slint";
 import { CardGrid } from "../components/card-grid.slint";
-import { PageScroll, Caption, Heading, ContentPanel, ActionButton, Badge, Field } from "../components/controls.slint";
+
+component ProfileActions inherits HorizontalLayout {
+    in property <ProfileItem> profile;
+    in property <bool> expanded;
+    callback details();
+    spacing: 4px; alignment: start; horizontal-stretch: 0;
+    if !root.profile.active: ActionButton { text: "使用"; compact: true; primary: true; enabled: !UiData.working && !UiData.protected && !UiData.protection-pending; clicked => { UiActions.dispatch(Intent.activate-profile, root.profile.id, ""); } }
+    if !root.profile.local: ActionButton { text: "更新"; compact: true; quiet: true; enabled: !UiData.working && !UiData.protected && !UiData.protection-pending; clicked => { UiActions.dispatch(Intent.update-profile, root.profile.id, ""); } }
+    if !root.profile.local: ActionButton { text: "编辑"; compact: true; quiet: true; enabled: !UiData.working && !UiData.protected && !UiData.protection-pending; clicked => { UiActions.dispatch(Intent.edit-profile, root.profile.id, ""); } }
+    ActionButton { text: root.expanded ? "收起" : "详情"; compact: true; quiet: true; clicked => { root.details(); } }
+}
+
+component ProfileCard inherits ContentPanel {
+    in property <ProfileItem> profile;
+    in property <bool> expanded;
+    callback details();
+    min-width: 0px; preferred-width: 0px; horizontal-stretch: 1;
+    vertical-padding: 14px;
+    border-color: root.profile.active ? Theme.accent : Theme.line;
+    HorizontalLayout {
+        spacing: 10px; cross-axis-alignment: center;
+        Rectangle {
+            width: 30px; height: 30px; border-radius: 8px;
+            background: root.profile.active ? Theme.accent-wash : Theme.inset;
+            Image {
+                x: 7px; y: 7px; width: 16px; height: 16px;
+                source: @image-url("../icons/subscriptions.svg");
+                colorize: root.profile.active ? Theme.accent : Theme.secondary;
+            }
+        }
+        Label { text: root.profile.name; font-weight: 600; preferred-width: 0px; }
+        if root.profile.active: Badge { text: "使用中"; }
+        if root.profile.local: Badge { text: "本地"; tone: 4; }
+    }
+    Caption { text: root.profile.source; font-size: 12px * Theme.text-scale; }
+    Caption { text: root.profile.detail; font-size: 12px * Theme.text-scale; wrap: word-wrap; }
+    ProfileActions {
+        profile: root.profile; expanded: root.expanded;
+        details => { root.details(); }
+    }
+    detail := Disclosure {
+        expanded: root.expanded;
+        if detail.mounted: VerticalLayout {
+            spacing: 8px;
+            Caption { text: "名称：" + root.profile.name; wrap: word-wrap; }
+            Caption { text: "来源：" + root.profile.source; wrap: word-wrap; }
+            if !root.profile.local: ActionButton {
+                text: "删除订阅"; compact: true; quiet: true; danger: true;
+                enabled: !UiData.working && !UiData.protected && !UiData.protection-pending;
+                clicked => { UiActions.dispatch(Intent.delete-profile, root.profile.id, ""); }
+            }
+        }
+    }
+}
+
 export component SubscriptionsPage inherits PageSurface {
     property <string> expanded-id;
     PageScroll {
         content-key: UiData.page-offset + "/" + UiData.query;
         content-y <=> UiData.scroll-profiles;
-        x: 0px; width: parent.width + Theme.content-gap;
         VerticalLayout {
-            alignment: start; padding-right: Theme.content-gap; spacing: Theme.page-gap;
-            HorizontalLayout { cross-axis-alignment: center; spacing: Theme.content-gap;
-                Field { placeholder: "搜索订阅名称或来源"; focus-id: "page-search"; text <=> UiData.query; edited(value) => { UiActions.dispatch(Intent.query, value, ""); } }
-                ActionButton { text: "打开目录"; enabled: UiData.ready; clicked => { UiActions.dispatch(Intent.open-profiles, "", ""); } }
-                ActionButton { text: "+ 添加订阅"; primary: true; enabled: UiData.ready && !UiData.working; clicked => { UiActions.dispatch(Intent.add-profile, "", ""); } }
+            alignment: start; padding-right: 8px; spacing: 16px;
+            Panel {
+                height: importer.preferred-height; border-radius: 16px;
+                importer := HorizontalLayout { padding: 8px; spacing: 8px; cross-axis-alignment: center;
+                    Image { source: @image-url("../icons/subscriptions.svg"); width: 20px; height: 20px; colorize: Theme.muted; }
+                    Field {
+                        placeholder: "粘贴订阅链接"; borderless: true;
+                        text <=> UiData.profile-source; enabled: !UiData.protected && !UiData.protection-pending; edited(value) => { UiActions.dispatch(Intent.profile-source, value, ""); }
+                        accepted => { if UiData.ready && !UiData.working { UiActions.dispatch(Intent.add-profile, "", ""); } }
+                    }
+                    ActionButton { text: "本地文件"; quiet: true; compact: true; enabled: UiData.ready && !UiData.working; clicked => { UiActions.dispatch(Intent.pick-file, "false", ""); } }
+                    ActionButton { text: "导入"; compact: true; primary: true; enabled: UiData.ready && !UiData.working && !UiData.protected && !UiData.protection-pending; clicked => { UiActions.dispatch(Intent.add-profile, "", ""); } }
+                }
             }
-            if UiData.profile-source != "": ContentPanel {
-                Caption { text: "待导入：" + UiData.profile-source; }
-                ActionButton { text: "导入所选配置"; primary: true; enabled: !UiData.working; clicked => { UiActions.dispatch(Intent.add-profile, "", ""); } }
+            HorizontalLayout { spacing: Theme.content-gap; cross-axis-alignment: center;
+                Field { placeholder: "搜索名称或来源"; focus-id: "page-search"; text <=> UiData.query; edited(value) => { UiActions.dispatch(Intent.query, value, ""); } }
             }
             grid := CardGrid {
-                minimum-card-width: 300px;
-                available-width: root.width - Theme.page-gap - Theme.content-gap;
-                for row in floor((UiData.profiles.length + grid.columns - 1) / grid.columns): HorizontalLayout {
+                minimum-card-width: 288px;
+                available-width: root.width - Theme.content-gap;
+                for row in ceil(UiData.profiles.length / grid.columns): HorizontalLayout {
                     spacing: Theme.page-gap; cross-axis-alignment: start;
                     for column in grid.columns: VerticalLayout {
                         min-width: 0px; preferred-width: 0px; horizontal-stretch: 1; alignment: start;
-                        property <int> index: row * grid.columns + column;
-                        if self.index < UiData.profiles.length: card := ContentPanel {
-                            property <int> index: row * grid.columns + column;
-                            property <bool> detailed: root.expanded-id == UiData.profiles[self.index].id;
-                            preferred-width: 0px; min-width: 0px; horizontal-stretch: 1;
-                            vertical-padding: 10px; gap: 6px;
-                            border-color: UiData.profiles[self.index].active ? Theme.accent : Theme.line;
-                            background: UiData.profiles[self.index].active ? Theme.accent-wash : Theme.surface;
-                            HorizontalLayout { cross-axis-alignment: center; spacing: Theme.content-gap;
-                                Heading { text: UiData.profiles[card.index].name; font-size: Theme.body-size + 1px; }
-                                if UiData.profiles[card.index].active: Badge { text: "使用中"; tone: 1; }
-                                if UiData.profiles[card.index].local: Badge { text: "本地"; tone: 4; }
-                            }
-                            Caption { text: UiData.profiles[card.index].detail; }
-                            HorizontalLayout { cross-axis-alignment: center; spacing: Theme.content-gap;
-                                if !UiData.profiles[card.index].active: ActionButton {
-                                    text: "使用"; primary: true; enabled: !UiData.working && !UiData.protected && !UiData.protection-pending;
-                                    clicked => { UiActions.dispatch(Intent.activate-profile, UiData.profiles[card.index].id, ""); }
-                                }
-                                if !UiData.profiles[card.index].local: ActionButton {
-                                    text: "更新"; enabled: !UiData.working && !(UiData.profiles[card.index].active && (UiData.protected || UiData.protection-pending));
-                                    clicked => { UiActions.dispatch(Intent.update-profile, UiData.profiles[card.index].id, ""); }
-                                }
-                                Rectangle { horizontal-stretch: 1; }
-                                ActionButton { text: card.detailed ? "收起" : "详情"; dropdown: true; expanded: card.detailed;
-                                    clicked => { root.expanded-id = card.detailed ? "" : UiData.profiles[card.index].id; }
-                                }
-                            }
-                            if card.detailed: VerticalLayout { spacing: Theme.content-gap;
-                                Caption { text: "完整名称：" + UiData.profiles[card.index].name; wrap: word-wrap; }
-                                Caption { text: UiData.profiles[card.index].detail; wrap: word-wrap; }
-                                Caption { text: "来源：" + UiData.profiles[card.index].source; wrap: word-wrap; }
-                                if !UiData.profiles[card.index].local: HorizontalLayout { spacing: Theme.content-gap;
-                                    ActionButton { text: "编辑"; enabled: !UiData.working && !(UiData.profiles[card.index].active && (UiData.protected || UiData.protection-pending)); clicked => { UiActions.dispatch(Intent.edit-profile, UiData.profiles[card.index].id, ""); } }
-                                    ActionButton { text: "删除"; danger: true; enabled: !UiData.working && !(UiData.profiles[card.index].active && (UiData.protected || UiData.protection-pending)); clicked => { UiActions.dispatch(Intent.delete-profile, UiData.profiles[card.index].id, ""); } }
-                                }
-                            }
+                        if row * grid.columns + column < UiData.profiles.length: ProfileCard {
+                            profile: UiData.profiles[row * grid.columns + column];
+                            expanded: root.expanded-id == self.profile.id;
+                            details => { root.expanded-id = root.expanded-id == self.profile.id ? "" : self.profile.id; }
                         }
                     }
                 }
             }
-            HorizontalLayout { cross-axis-alignment: center; spacing: Theme.content-gap;
+            if UiData.profiles.length == 0: ContentPanel { Caption { text: UiData.query != "" ? "没有匹配的订阅" : "导入订阅链接或本地 YAML 配置开始使用"; wrap: word-wrap; } }
+            HorizontalLayout { spacing: 8px; cross-axis-alignment: center;
                 Caption { text: UiData.page-status; }
-                ActionButton { text: "上一页"; enabled: UiData.previous; clicked => { UiActions.dispatch(Intent.list-page, "" + max(0, UiData.page-offset - 60), ""); } }
-                ActionButton { text: "下一页"; enabled: UiData.next; clicked => { UiActions.dispatch(Intent.list-page, "" + (UiData.page-offset + 60), ""); } }
+                ActionButton { text: "上一页"; quiet: true; compact: true; enabled: UiData.previous; clicked => { UiActions.dispatch(Intent.list-page, "" + max(0, UiData.page-offset - 60), ""); } }
+                ActionButton { text: "下一页"; quiet: true; compact: true; enabled: UiData.next; clicked => { UiActions.dispatch(Intent.list-page, "" + (UiData.page-offset + 60), ""); } }
             }
-            if UiData.profiles.length == 0: ContentPanel { Caption { text: UiData.query != "" ? "没有匹配的订阅；请修改搜索条件。" : "导入订阅链接或本地 YAML 文件后，即可启用配置。"; wrap: word-wrap; } }
         }
     }
 }

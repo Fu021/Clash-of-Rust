@@ -62,7 +62,12 @@ impl Snapshot {
         if scope != Scope::Rules {
             self.rules = Rules::default();
         }
-        if scope != Scope::Connections {
+        if scope == Scope::Home {
+            self.connections
+                .connections
+                .truncate(crate::api::CONNECTION_PREVIEW_LIMIT);
+            self.connections.connections.shrink_to_fit();
+        } else if scope != Scope::Connections {
             self.connections.connections = Vec::new();
             self.connections_sampled_at = None;
         }
@@ -91,6 +96,25 @@ mod tests {
             snapshot.retain_scope(Scope::Other);
             assert_eq!(snapshot.proxy_mode(), expected);
         }
+    }
+
+    #[test]
+    fn home_keeps_a_bounded_sample_and_the_actual_total_then_releases_it_on_exit() {
+        let mut snapshot = Snapshot {
+            connection_count: 100,
+            connections_sampled_at: Some(Instant::now()),
+            ..Default::default()
+        };
+        snapshot.connections.connections = (0..100).map(|_| Default::default()).collect();
+        snapshot.retain_scope(Scope::Home);
+        assert_eq!(snapshot.connection_count, 100);
+        assert_eq!(
+            snapshot.connections.connections.len(),
+            crate::api::CONNECTION_PREVIEW_LIMIT
+        );
+        assert!(snapshot.connections_sampled_at.is_some());
+        snapshot.retain_scope(Scope::Other);
+        assert_eq!(snapshot.connections.connections.capacity(), 0);
     }
 
     #[test]

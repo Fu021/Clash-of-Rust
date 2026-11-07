@@ -190,10 +190,22 @@ impl Default for Settings {
 }
 
 impl Settings {
+    pub fn require_mutable(&self) -> Result<()> {
+        ensure!(
+            self.claude_protection.is_none(),
+            crate::protection::READ_ONLY_NOTICE
+        );
+        Ok(())
+    }
+
     pub fn download_ports(&self) -> crate::network::DownloadPorts {
         crate::network::DownloadPorts {
             mixed: self.mixed_port,
-            direct: self.direct_download_port,
+            direct: if self.claude_protection.is_none() {
+                self.direct_download_port
+            } else {
+                0
+            },
         }
     }
 
@@ -628,7 +640,7 @@ pub fn runtime_config_with_rules(
         Value::from(format!("127.0.0.1:{}", settings.controller_port)),
     );
     map.insert(Value::from("secret"), Value::from(settings.secret.clone()));
-    if settings.direct_download_port != 0 {
+    if settings.direct_download_port != 0 && settings.claude_protection.is_none() {
         if [settings.controller_port, settings.mixed_port].contains(&settings.direct_download_port)
         {
             bail!("直连下载端口不能与控制或代理端口相同");
@@ -1640,6 +1652,31 @@ mod tests {
         );
         assert_eq!(result["secret"].as_str(), Some(settings.secret.as_str()));
     }
+    #[test]
+    fn protection_marks_settings_read_only_and_removes_the_direct_download_listener() {
+        use crate::claude_check::protection::{Previous, Protection};
+        let mut settings = Settings::default();
+        settings.direct_download_port = 45678;
+        assert_eq!(settings.download_ports().direct, 45678);
+        assert!(settings.require_mutable().is_ok());
+        settings.claude_protection = Some(std::sync::Arc::new(Protection::new(
+            "fixture".into(),
+            "node".into(),
+            Previous {
+                mode: "rule".into(),
+                proxy_mode: crate::model::ProxyMode::Off,
+                selectors: Default::default(),
+            },
+        )));
+        assert!(settings.require_mutable().is_err());
+        assert_eq!(settings.download_ports().direct, 0);
+        let runtime: Value = yaml_serde::from_str(
+            &runtime_config("proxies: []\nrules: [MATCH,DIRECT]\n", &settings).unwrap(),
+        )
+        .unwrap();
+        assert!(runtime["listeners"].is_null());
+    }
+
     #[test]
     fn rejects_node_links_and_invalid_ports() {
         assert!(parse_profile("ss://example").is_err());

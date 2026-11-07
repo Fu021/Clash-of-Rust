@@ -31,6 +31,14 @@ pub use crate::proxy::ProxyMode;
 use clash_client_core::runtime::logging::{LOG_FRAME_LIMIT, LogFrames, append, read_core_logs};
 pub use clash_client_core::runtime::logging::{LOG_LIMIT, LogBuffer};
 
+fn protection_pauses_network(settings: &Settings) -> bool {
+    settings.claude_protection.is_some()
+}
+
+fn needs_direct_listener(settings: &Settings) -> bool {
+    !protection_pauses_network(settings)
+}
+
 #[cfg(target_os = "macos")]
 fn mac_port_probe(port: u16) -> std::io::Result<tokio::net::TcpListener> {
     // Match Go's listener behavior. A graceful core shutdown can leave API
@@ -164,6 +172,7 @@ pub struct Engine {
     geo_updates: downloads::UpdateGate,
     app_updates: downloads::UpdateGate,
     subscription_updates: downloads::UpdateGate,
+    unreachable_recovery: downloads::UpdateGate,
     subscription_failure: Option<clash_client_core::subscription::UpdateFailure>,
     subscription_failure_revision: u64,
     resources: PathBuf,
@@ -302,6 +311,7 @@ impl Engine {
             geo_updates: Default::default(),
             app_updates: Default::default(),
             subscription_updates: Default::default(),
+            unreachable_recovery: Default::default(),
             subscription_failure: None,
             subscription_failure_revision: 0,
             child: None,
@@ -506,17 +516,25 @@ impl Engine {
             self.view_revision = self.view_revision.wrapping_add(1);
             append(&self.logs, "[客户端] 已自动分配可用的内核控制端口");
         }
-        let direct = crate::config::reserve_controller(
-            self.settings.direct_download_port,
-            self.settings.mixed_port,
-        )
-        .context("无法分配直连下载端口")?;
-        let direct_port = direct.local_addr()?.port();
-        if direct_port != self.settings.direct_download_port {
-            let mut settings = self.settings.clone();
-            settings.direct_download_port = direct_port;
-            self.store.save_settings(&settings)?;
-            self.settings = settings;
+        let direct = if !needs_direct_listener(&self.settings) {
+            None
+        } else {
+            Some(
+                crate::config::reserve_controller(
+                    self.settings.direct_download_port,
+                    self.settings.mixed_port,
+                )
+                .context("无法分配直连下载端口")?,
+            )
+        };
+        if let Some(direct) = &direct {
+            let direct_port = direct.local_addr()?.port();
+            if direct_port != self.settings.direct_download_port {
+                let mut settings = self.settings.clone();
+                settings.direct_download_port = direct_port;
+                self.store.save_settings(&settings)?;
+                self.settings = settings;
+            }
         }
         {
             let port = self.settings.mixed_port;
@@ -590,9 +608,14 @@ impl Engine {
                 if config["mixed-port"].as_u64() != Some(u64::from(self.settings.mixed_port)) {
                     bail!("内核代理端口仍在初始化");
                 }
-                tokio::net::TcpStream::connect(("127.0.0.1", self.settings.direct_download_port))
+                if needs_direct_listener(&self.settings) {
+                    tokio::net::TcpStream::connect((
+                        "127.0.0.1",
+                        self.settings.direct_download_port,
+                    ))
                     .await
                     .context("内核直连下载端口仍在初始化")?;
+                }
                 Ok::<_, anyhow::Error>(version)
             };
             if let Ok(Ok(version)) = tokio::time::timeout(Duration::from_millis(400), ready).await {
@@ -669,6 +692,7 @@ impl Engine {
         self.geo_updates.cancel();
         self.app_updates.cancel();
         self.subscription_updates.cancel();
+        self.unreachable_recovery.cancel();
         platform::restore(&self.journal()).context("恢复系统代理失败，暂不停止内核以避免断网")?;
         self.stop_process().await
     }
@@ -885,19 +909,11 @@ impl Engine {
             return Ok(());
         }
         settings.validate()?;
-        if self.settings.claude_protection.is_some()
-            && (settings.dns_override != self.settings.dns_override
-                || settings.fake_ip != self.settings.fake_ip
-                || settings.fake_ip_exclusions != self.settings.fake_ip_exclusions
-                || settings.fake_ip_disabled_defaults != self.settings.fake_ip_disabled_defaults
-                || settings.ipv6 != self.settings.ipv6
-                || settings.udp != self.settings.udp
-                || settings.active_profile != self.settings.active_profile
-                || settings.run_mode != self.settings.run_mode
-                || settings.proxy_mode != self.settings.proxy_mode)
-        {
-            bail!("请先关闭 A÷检测中的 Claude 保护，再更改网络设置");
-        }
+        self.settings.require_mutable()?;
+        ensure!(
+            settings.claude_protection == self.settings.claude_protection,
+            "请使用 Claude 保护开关"
+        );
         if settings.controller_port == self.settings.controller_port
             && settings.mixed_port == self.settings.mixed_port
             && settings.secret == self.settings.secret
@@ -999,6 +1015,7 @@ impl Engine {
             })?;
             return Ok(());
         }
+        self.settings.require_mutable()?;
         let name = name.trim();
         let source = source.trim();
         if name.is_empty() || source.is_empty() {
@@ -1091,9 +1108,7 @@ impl Engine {
             .await?;
             return Ok(());
         }
-        if let Some(id) = existing.as_deref() {
-            self.require_unprotected_profile(id)?;
-        }
+        self.settings.require_mutable()?;
         if source.trim().is_empty() {
             bail!("请输入订阅 URL 或本地 YAML 路径");
         }
@@ -1144,9 +1159,7 @@ impl Engine {
         raw: String,
         usage: Option<String>,
     ) -> Result<()> {
-        if let Some(id) = existing.as_deref() {
-            self.require_unprotected_profile(id)?;
-        }
+        self.settings.require_mutable()?;
         let id = existing.unwrap_or_else(|| uuid::Uuid::new_v4().to_string());
         let path = self.store.profile_path(&id)?;
         let payload = self.profile_payload(&raw, &self.settings, &id)?;
@@ -1307,15 +1320,8 @@ impl Engine {
     }
 
     fn require_unprotected_profile(&self, id: &str) -> Result<()> {
-        if self
-            .settings
-            .claude_protection
-            .as_ref()
-            .is_some_and(|p| p.profile_id == id)
-        {
-            bail!("请先关闭 A÷检测中的 Claude 保护，再修改正在使用的订阅与规则");
-        }
-        Ok(())
+        let _ = id;
+        self.settings.require_mutable()
     }
     fn start_protection_guard(&mut self) {
         if let Some(protection) = &self.settings.claude_protection
@@ -1472,6 +1478,9 @@ impl Engine {
         protection: Option<Arc<crate::claude_check::protection::Protection>>,
         recovery: Option<RestartState>,
     ) -> Result<()> {
+        self.geo_updates.cancel();
+        self.app_updates.cancel();
+        self.subscription_updates.cancel();
         let old = self.settings.clone();
         let previous = recovery.or(self.restart_state().await?);
         let candidate = Settings {
@@ -1742,6 +1751,7 @@ impl Engine {
     }
 
     async fn install_geo_staged(&mut self, staged: &std::path::Path) -> Result<()> {
+        self.settings.require_mutable()?;
         let runtime = self.store.runtime();
         assets::verify_geo(staged).context("新下载的 Geo 数据无效")?;
         let geo_settings = Settings {
@@ -2483,7 +2493,11 @@ impl Engine {
             }
         }
         if matches!(scope, Scope::Home | Scope::Connections) || self.settings.tray_speed {
-            if scope != Scope::Connections {
+            if scope == Scope::Home {
+                let preview: crate::api::ConnectionPreview = self.api.get("connections").await?;
+                snapshot.connection_count = preview.count;
+                snapshot.connections = preview.connections;
+            } else if scope != Scope::Connections {
                 let stats: ConnectionStats = self.api.get("connections").await?;
                 snapshot.connection_count = stats.count;
                 snapshot.connections.upload_total = stats.upload_total;
@@ -2493,7 +2507,7 @@ impl Engine {
                 snapshot.connection_count = snapshot.connections.connections.len();
             }
             let now = Instant::now();
-            if scope == Scope::Connections {
+            if matches!(scope, Scope::Home | Scope::Connections) {
                 snapshot.connections_sampled_at = Some(now);
             }
             let up = snapshot.connections.upload_total;
@@ -2594,6 +2608,27 @@ fn validation_error_detail(error: &str) -> &str {
 #[cfg(test)]
 mod memory_tests {
     use super::*;
+
+    #[test]
+    fn protection_disables_the_direct_download_listener() {
+        let mut settings = Settings::default();
+        assert!(needs_direct_listener(&settings));
+        assert!(!protection_pauses_network(&settings));
+        settings.claude_protection =
+            Some(Arc::new(clash_client_core::protection::Protection::new(
+                uuid::Uuid::nil().to_string(),
+                "Node".into(),
+                clash_client_core::protection::Previous {
+                    mode: "rule".into(),
+                    proxy_mode: ProxyMode::Off,
+                    selectors: Vec::new(),
+                },
+            )));
+        assert!(!needs_direct_listener(&settings));
+        assert!(protection_pauses_network(&settings));
+        assert_eq!(settings.download_ports().direct, 0);
+    }
+
     #[cfg(target_os = "macos")]
     #[tokio::test]
     async fn mac_port_probe_reuses_closed_connections_and_rejects_live_listeners() {

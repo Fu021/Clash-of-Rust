@@ -232,7 +232,17 @@ pub async fn run(args: &Args) -> Result<()> {
                     let shared = engine.clone();
                     delay_job = Some(tokio::spawn(async move {
                         match api.delay_all_nodes().await {
-                            Ok(_) => shared.lock().await.invalidate_views(),
+                            Ok(delays) => {
+                                shared.lock().await.invalidate_views();
+                                if !delays.is_empty()
+                                    && delays.values().all(|delay| *delay == 0)
+                                    && let Err(error) = Engine::recover_unreachable_shared(&shared).await
+                                {
+                                    shared.lock().await.record_failure(&format!(
+                                        "节点状态复测未完成，已保留网络设置：{error:#}"
+                                    ));
+                                }
+                            }
                             Err(error) => shared.lock().await.record_failure(&format!("定时测速失败：{error:#}")),
                         }
                     }));

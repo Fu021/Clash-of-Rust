@@ -331,20 +331,32 @@ def root_cli_smoke():
                 'proxies: [{name: Unavailable, type: socks5, server: 203.0.113.10, port: 9}]\n'
                 'rules: ["MATCH,Unavailable"]\n'
                 'dns: {enable: true, enhanced-mode: fake-ip, '
-                'nameserver: ["https://192.0.2.254/dns-query#DIRECT"]}\n'
+                'nameserver: ["https://192.0.2.254/dns-query#DIRECT"], '
+                'direct-nameserver: ["https://1.1.1.1/dns-query#DIRECT"], '
+                'direct-nameserver-follow-policy: false}\n'
                 'tun: {device: CorRootTest, route-address: [203.0.113.0/24], dns-hijack: []}\n')
             invoke('profile', 'import', unavailable, '--name', 'unavailable-nodes')
             invoke('profile', 'use', 'unavailable-nodes')
             previous = invoke('status')
-            connection = HTTPConnection('127.0.0.1', mixed, timeout=15)
-            try:
-                connection.request('GET', 'http://203.0.113.20/subscription.yaml')
-                rejected = connection.getresponse()
-                assert rejected.status != 200, 'The failed-node control unexpectedly succeeded'
-                rejected.read()
-            finally:
-                connection.close()
-            invoke('profile', 'add', 'direct-fallback', 'http://203.0.113.20/subscription.yaml')
+            subscription_url = 'http://updates.fixture.test/subscription.yaml'
+            direct = json.loads((directory/'data/settings.json').read_text())['direct_download_port']
+            assert direct > 0 and direct not in (mixed, controller), 'Managed DIRECT listener is missing'
+
+            def verify_independent_direct():
+                connection = HTTPConnection('127.0.0.1', mixed, timeout=15)
+                try:
+                    connection.request('GET', subscription_url)
+                    rejected = connection.getresponse()
+                    assert rejected.status != 200, 'The failed-node proxy unexpectedly recovered'
+                    rejected.read()
+                finally:
+                    connection.close()
+                assert http('127.0.0.1', direct, subscription_url) == (
+                    b'proxies: []\nrules: ["MATCH,DIRECT"]\n'
+                ), 'Managed DIRECT could not bypass the failed node or resolve the update domain'
+
+            verify_independent_direct()
+            invoke('profile', 'add', 'direct-fallback', subscription_url)
             invoke('profile', 'update', 'direct-fallback')
             after = invoke('status')
             assert (after['profile'] == previous['profile'] and after['mode'] == previous['mode']
@@ -353,6 +365,19 @@ def root_cli_smoke():
                   flush=True)
             invoke('proxy', 'off')
             assert not api('configs')['tun']['enable']
+            for proxy_mode in ('off', 'system'):
+                invoke('proxy', proxy_mode)
+                assert not api('configs')['tun']['enable']
+                before_update = invoke('status')
+                verify_independent_direct()
+                invoke('profile', 'update', 'direct-fallback')
+                after = invoke('status')
+                assert after['profile'] == previous['profile'], 'Update required changing subscriptions'
+                assert after['mode'] == previous['mode'], 'Update changed the rule mode'
+                assert after['proxy'] == before_update['proxy'], 'Update changed proxy ownership or mode'
+                print(f'PASS: {proxy_mode} mode keeps the failed-node profile and network state '
+                      'while subscription updates use independent DIRECT', flush=True)
+            invoke('proxy', 'off')
         except Exception:
             diagnostics = subprocess.run([*command, 'logs', '--limit', '40'], env=env,
                                          capture_output=True, text=True, timeout=45)

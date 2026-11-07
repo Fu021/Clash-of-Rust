@@ -76,6 +76,35 @@ pub(super) async fn execute(
     owner: Owner,
     disconnected: Option<watch::Receiver<bool>>,
 ) -> Result<Value> {
+    operation.check_protection(&shared.lock().await.settings)?;
+    if matches!(&operation, Command::RecoverUnreachable) {
+        return Ok(serde_json::to_value(
+            Engine::recover_unreachable_cancellable(shared, disconnected).await?,
+        )?);
+    }
+    if let Command::Delay { name, group } = &operation {
+        let api = {
+            let mut engine = shared.lock().await;
+            start(&mut engine).await?;
+            engine.api.clone()
+        };
+        let result = match name {
+            Some(name) if *group => api.delay_group(name).await?,
+            Some(name) => api.delay_node(name).await?,
+            None => api.delay_all_nodes().await?,
+        };
+        if (name.is_none() || *group)
+            && !result.is_empty()
+            && result.values().all(|delay| *delay == 0)
+            && let Err(error) = Engine::recover_unreachable_cancellable(shared, disconnected).await
+        {
+            shared
+                .lock()
+                .await
+                .record_failure(&format!("节点状态复测未完成，已保留网络设置：{error:#}"));
+        }
+        return Ok(serde_json::to_value(result)?);
+    }
     if matches!(&operation, Command::GeoUpdate) {
         Engine::update_geo_cancellable(shared, disconnected).await?;
         return Ok(Value::Null);
@@ -127,8 +156,9 @@ pub(super) async fn execute(
             | Command::Delay { .. }
     );
     let mut engine = shared.lock().await;
+    operation.check_protection(&engine.settings)?;
     if changes_view {
-        engine.view_revision = engine.view_revision.wrapping_add(1);
+        engine.invalidate_views();
     }
     match operation {
         Command::Meta => return Ok(serde_json::to_value(meta(&engine, owner)?)?),
@@ -149,6 +179,7 @@ pub(super) async fn execute(
             start(&mut engine).await?;
         }
         Command::RecoverNetwork => engine.recover_network().await?,
+        Command::RecoverUnreachable => unreachable!("handled before locking the owner"),
         Command::Shutdown => {
             engine.stop().await?;
             return Ok(
@@ -245,15 +276,7 @@ pub(super) async fn execute(
             engine.claude_protection(enabled).await?;
         }
         Command::TrayNodes => return Ok(serde_json::to_value(engine.tray_nodes().await?)?),
-        Command::Delay { name, group } => {
-            start(&mut engine).await?;
-            let result = match name {
-                Some(name) if group => engine.api.delay_group(&name).await?,
-                Some(name) => engine.api.delay_node(&name).await?,
-                None => engine.api.delay_all_nodes().await?,
-            };
-            return Ok(serde_json::to_value(result)?);
-        }
+        Command::Delay { .. } => unreachable!("handled before locking the owner"),
         Command::Close { id } => {
             if let Some(id) = id {
                 engine.api.close_connection(&id).await?;

@@ -26,6 +26,7 @@ public final class MainActivity extends NativeActivity {
     private boolean tileConnect;
     boolean waitingForInstallPermission;
     private String exportContent;
+    private volatile NetworkOverview networkOverview;
     private String notificationTitle, notificationMessage;
     private static native void nativeEvent(String value);
     private static native String nativeDiagnostics();
@@ -42,6 +43,8 @@ public final class MainActivity extends NativeActivity {
         setTheme(dark ? R.style.ClientDark : R.style.ClientLight);
         tileConnect=VpnTileService.CONNECT.equals(getIntent().getAction());
         super.onCreate(state);
+        try { networkOverview = new NetworkOverview(this); }
+        catch (RuntimeException error) { android.util.Log.w("ClashOfRust", "Network overview unavailable", error); }
         UpdateInstaller.pruneInstalled(this);
         configureSystemBars(dark);
         if (Build.VERSION.SDK_INT >= 33) getOnBackInvokedDispatcher().registerOnBackInvokedCallback(
@@ -71,6 +74,16 @@ public final class MainActivity extends NativeActivity {
         }
     }
     @Override protected void onPause() { emit("visible", false); super.onPause(); }
+    @Override protected void onDestroy() {
+        NetworkOverview current = networkOverview;
+        networkOverview = null;
+        if (current != null) current.close();
+        super.onDestroy();
+    }
+    private long networkRevision() {
+        NetworkOverview current = networkOverview;
+        return current == null ? 0 : current.revision();
+    }
 
     /** Invoked by the Rust worker, never performs blocking work on the UI thread. */
     public String request(String input) {
@@ -81,10 +94,16 @@ public final class MainActivity extends NativeActivity {
                 case "initialize": CoreBridge.start(this, data.getString("config"), data.getBoolean("ipv6")); runOnUiThread(this::connectFromTile); break;
                 case "reload": CoreBridge.reload(data.getString("config")); CoreBridge.setIpv6(data.getBoolean("ipv6")); break;
                 case "state": return CoreBridge.state()
+                    .put("network_revision",networkRevision())
                     .put("font_sizes",systemFontSizes())
                     .put("dark", Appearance.systemDark(this))
                     .put("notification_speeds",getSharedPreferences("appearance",MODE_PRIVATE).getBoolean("notification-speeds",true))
                     .put("excluded_apps",getSharedPreferences("vpn",MODE_PRIVATE).getStringSet("excluded",Collections.emptySet()).size()).toString();
+                case "network-info": {
+                    NetworkOverview current = networkOverview;
+                    if (current == null) throw new IOException("系统网络信息尚未就绪");
+                    return current.read().toString();
+                }
                 case "connect":
                 case "reconnect": {
                     if (vpnPrompt) break;

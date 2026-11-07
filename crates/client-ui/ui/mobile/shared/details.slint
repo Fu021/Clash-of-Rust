@@ -193,7 +193,8 @@ export component MobileModal inherits Rectangle {
                 height: content.preferred-height;
                 x: (parent.width - self.width) / 2;
                 y: root.centered ? (parent.height - self.height) / 2 : max(MobileView.safe-top, parent.height - self.height - MobileView.safe-bottom - 12px) + (1 - presence.progress) * (root.centered ? 8px : 20px);
-                background: Theme.surface; border-radius: 12px; border-width: 1px; border-color: Theme.line;
+            background: Theme.raised; border-radius: 18px; border-width: 1px; border-color: Theme.line;
+            drop-shadow-blur: 32px; drop-shadow-offset-y: 8px;
                 content := VerticalLayout { alignment: start; spacing: MobileTypography.padding; padding: 24px;
                     MHeading { text: root.kind == 4 ? "删除此订阅？" : root.kind == 8 ? "开启 Claude 保护？" : root.kind == 12 ? "放弃未保存的修改？" : root.kind == 13 ? "安装预发布版 " + MobileData.update-version + "？" : "强调色"; }
                     if root.kind != 11: MParagraph {
@@ -212,13 +213,14 @@ export component MobileModal inherits Rectangle {
                         for row in [0, 1, 2]: HorizontalLayout { spacing: MobileTypography.small-gap;
                             for column in [0, 1]: MButton { modal-control: true; text: AccentPalette.accent-names[row * 2 + column]; selected: Theme.accent-index == row * 2 + column;
                                 show-swatch: true; swatch: Theme.dark ? AccentPalette.dark-colors[row * 2 + column] : AccentPalette.accent-colors[row * 2 + column];
+                                enabled: !MobileData.protected && !MobileData.protection-pending;
                                 clicked => { Theme.accent-index = row * 2 + column; MobileActions.request(MobileIntent.accent, "" + Theme.accent-index, ""); }
                             }
                         }
                     }
                     if root.kind != 11: MButton {
                         modal-control: true; primary: root.kind == 8 || root.kind == 13; danger: root.kind == 4 || root.kind == 12;
-                        enabled: !MobileData.profile-busy && (root.kind != 8 || root.seconds == 0) && (root.kind != 13 || MobileData.update-confirm-wait == 0);
+                        enabled: !MobileData.profile-busy && !MobileData.protected && !MobileData.protection-pending && (root.kind != 8 || root.seconds == 0) && (root.kind != 13 || MobileData.update-confirm-wait == 0);
                         busy: root.kind == 4 && MobileData.profile-busy;
                         text: root.kind == 4 ? (MobileData.profile-busy ? "正在删除…" : "删除订阅") : root.kind == 12 ? "放弃修改"
                             : root.kind == 13 ? (MobileData.update-confirm-wait > 0 ? "继续安装（" + MobileData.update-confirm-wait + " 秒）" : "继续安装")

@@ -287,6 +287,22 @@ pub fn same_shortcut(a: &str, b: &str) -> bool {
         }
     }
 }
+
+pub fn ensure_unique_enabled(rows: &[Row], raw: &str, selected: Option<&str>) -> Result<()> {
+    let shortcut = SUBSCRIPTION_RULES
+        .iter()
+        .find(|shortcut| same_shortcut(raw, shortcut));
+    if rows.iter().any(|row| {
+        row.enabled
+            && Some(row.id.as_str()) != selected
+            && (row.raw.trim() == raw.trim()
+                || shortcut.is_some_and(|shortcut| same_shortcut(&row.raw, shortcut)))
+    }) {
+        bail!("已有相同的启用规则，请修改原规则或调整顺序");
+    }
+    Ok(())
+}
+
 fn compose(original: &[Row], draft: &ProfileRules, builtin: bool) -> (Vec<Row>, Vec<String>) {
     let mut rows: Vec<Row> = Vec::with_capacity(original.len() + draft.custom.len() + 5);
     let mut warnings = Vec::new();
@@ -561,5 +577,15 @@ mod tests {
         assert_eq!(rows.iter().filter(|r| r.enabled).count(), 3);
         assert!(rows[..2].iter().all(|r| r.duplicate));
         assert_eq!(warnings.len(), 1);
+    }
+
+    #[test]
+    fn enabled_rule_validation_matches_existing_and_shortcut_rules() {
+        let doc = document(&["GEOSITE,CN,DIRECT", "DOMAIN,a.test,DIRECT"]);
+        let (rows, _) = doc.rows(&ProfileRules::default());
+        assert!(ensure_unique_enabled(&rows, "GEOSITE, cn ,DIRECT", None).is_err());
+        assert!(ensure_unique_enabled(&rows, " DOMAIN,a.test,DIRECT ", None).is_err());
+        assert!(ensure_unique_enabled(&rows, "DOMAIN,b.test,DIRECT", None).is_ok());
+        assert!(ensure_unique_enabled(&rows, "DOMAIN,a.test,DIRECT", Some(&rows[1].id)).is_ok());
     }
 }

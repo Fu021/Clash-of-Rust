@@ -1,5 +1,5 @@
 use crate::engine::Engine;
-use clash_client_core::subscription::schedule::{PendingUpdate, Schedule};
+use clash_client_core::subscription::schedule::Schedule;
 use std::{
     sync::Weak,
     time::{Duration, SystemTime, UNIX_EPOCH},
@@ -31,33 +31,34 @@ pub(super) fn start(
                     .duration_since(UNIX_EPOCH)
                     .unwrap_or_default()
                     .as_secs();
-                let Some(profile) = schedule.next(&owner.settings, &owner.profiles, now) else {
-                    continue;
-                };
-                match PendingUpdate::capture(profile, &owner.store) {
-                    Ok(pending) => Some((
-                        pending,
-                        owner.running().then_some(owner.settings.download_ports()),
-                    )),
+                match owner.prepare_scheduled_subscription(&mut schedule, now) {
+                    Ok(pending) => pending,
                     Err(_) => {
                         owner.record_failure("订阅定时更新失败，已保留原配置");
                         None
                     }
                 }
             };
-            let Some((pending, port)) = pending else {
+            let Some((mut job, pending, port)) = pending else {
                 continue;
             };
-            // Downloads must not hold the engine lock or block GUI/CLI operations.
-            let result = async {
-                let url = reqwest::Url::parse(&pending.profile.source)?;
-                crate::subscription::download(&url, port).await
-            }
-            .await;
+            let mut disconnected = Some(shutdown.clone());
+            let result = job
+                .download(
+                    async {
+                        let url = reqwest::Url::parse(&pending.profile.source)?;
+                        crate::subscription::download(&url, port).await
+                    },
+                    &mut disconnected,
+                )
+                .await;
             if *shutdown.borrow() {
                 break;
             }
             let mut owner = shared.lock().await;
+            if job.ensure_current(&disconnected).is_err() {
+                continue;
+            }
             match result {
                 Ok((raw, usage)) => {
                     if let Err(error) = owner.update_subscription(&pending, raw, usage).await {

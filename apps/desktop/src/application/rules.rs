@@ -291,6 +291,30 @@ impl State {
             self.move_selected(position);
         }
     }
+    fn toggle_selected(&mut self) -> anyhow::Result<()> {
+        let Some(rule) = self.selected_custom() else {
+            return Ok(());
+        };
+        let id = rule.id.clone();
+        let key = format!("c:{id}");
+        let enabled = !self
+            .rows
+            .iter()
+            .find(|row| row.id == key)
+            .context("规则已变化，请重新选择")?
+            .enabled;
+        if enabled {
+            rule_manager::ensure_unique_enabled(&self.rows, &rule.rule, Some(&key))?;
+        }
+        self.draft
+            .custom
+            .iter_mut()
+            .find(|rule| rule.id == id)
+            .context("规则已变化，请重新选择")?
+            .enabled = enabled;
+        self.rebuild();
+        Ok(())
+    }
     fn save_editor(&mut self) -> anyhow::Result<()> {
         let editor = self.editor.as_ref().context("请先打开规则编辑器")?;
         let raw = if editor.text_mode {
@@ -308,17 +332,9 @@ impl State {
         if position == 0 || position > max.max(1) {
             anyhow::bail!("位置应为 1–{}", max.max(1));
         }
-        if editor.enabled
-            && self.rows.iter().any(|r| {
-                r.enabled
-                    && r.raw.trim() == raw
-                    && editor
-                        .id
-                        .as_ref()
-                        .is_none_or(|id| r.id != format!("c:{id}"))
-            })
-        {
-            anyhow::bail!("已有相同的启用规则，请修改原规则或调整顺序。");
+        if editor.enabled {
+            let selected = editor.id.as_ref().map(|id| format!("c:{id}"));
+            rule_manager::ensure_unique_enabled(&self.rows, &raw, selected.as_deref())?;
         }
         let id = editor
             .id
@@ -415,11 +431,9 @@ impl App {
                 }
             }
             Event::Enable => {
-                if let Some(id) = state.selected_custom().map(|r| r.id.clone())
-                    && let Some(rule) = state.draft.custom.iter_mut().find(|r| r.id == id)
-                {
-                    rule.enabled = !rule.enabled;
-                    state.rebuild();
+                if let Err(error) = state.toggle_selected() {
+                    self.show_notice(error.to_string(), true);
+                    return Task::none();
                 }
             }
             Event::Move(delta) => {
@@ -608,6 +622,19 @@ mod tests {
         state.editor.as_mut().unwrap().payload = "a.test".into();
         assert!(state.save_editor().is_err());
         assert!(!state.dirty());
+    }
+
+    #[test]
+    fn enabling_a_duplicate_rule_keeps_the_desktop_draft_unchanged() {
+        let mut state = state();
+        state.editor = Some(Editor::new(None, 1));
+        let editor = state.editor.as_mut().unwrap();
+        editor.payload = "a.test".into();
+        editor.enabled = false;
+        state.save_editor().unwrap();
+        let before = state.draft.clone();
+        assert!(state.toggle_selected().is_err());
+        assert_eq!(state.draft, before);
     }
     #[test]
     fn unfinished_editor_switches_modes_without_bypassing_save_validation() {

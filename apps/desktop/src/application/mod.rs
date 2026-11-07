@@ -15,6 +15,7 @@ mod logs;
 mod mac_desktop;
 mod network_watch;
 mod notice;
+mod overview;
 mod presentation;
 mod rules;
 mod support;
@@ -182,6 +183,7 @@ enum Message {
     CoreReady(Result<CoreHandle, String>),
     DismissNotice,
     NoticeExpired(u64),
+    UnreachableRecovered(u64, Result<Option<String>, String>),
     SystemNotification,
     NotificationFinished(Result<(), String>),
     NotificationPrepared(Result<platform::notification::Preparation, String>),
@@ -277,6 +279,12 @@ enum Message {
     ProbeDone(Result<probe::ProbeResult, String>),
     Dns,
     DnsDone(Result<Vec<String>, String>),
+    OverviewRefresh,
+    OverviewPrivacy,
+    OverviewHost(u64, Result<platform::HostInfo, String>),
+    OverviewDns(u64, Result<(Vec<String>, u128), String>),
+    OverviewExit(u64, Result<ip_check::CheckResult, String>),
+    OverviewService(u64, usize, Result<clash_of_rust::overview::Status, String>),
     Window((desktop_runtime::window::Id, desktop_runtime::window::Event)),
     ExitWindowState(Option<(desktop_runtime::Size, bool, Option<bool>)>),
     ExitFinished(Result<(), String>),
@@ -325,6 +333,7 @@ struct App {
     delay_generation: u64,
     delay_aborters: BTreeMap<String, AbortHandle>,
     periodic_aborter: Option<AbortHandle>,
+    recovery_aborter: Option<AbortHandle>,
     tray: Option<tray::Guard>,
     tray_startup: Option<tray::Startup>,
     tray_close_requested: Option<desktop_runtime::window::Id>,
@@ -347,6 +356,8 @@ struct App {
     site_generation: u64,
     site_aborters: BTreeMap<String, AbortHandle>,
     site_busy: BTreeSet<String>,
+    overview: overview::Overview,
+    privacy_hidden: bool,
     exiting: bool,
     notice: String,
     error: bool,
@@ -544,6 +555,7 @@ impl App {
             delay_generation: 0,
             delay_aborters: BTreeMap::new(),
             periodic_aborter: None,
+            recovery_aborter: None,
             tray,
             tray_startup,
             tray_close_requested: None,
@@ -560,6 +572,8 @@ impl App {
             site_generation: 0,
             site_aborters: BTreeMap::new(),
             site_busy: BTreeSet::new(),
+            overview: Default::default(),
+            privacy_hidden: false,
             exiting: false,
             query: String::new(),
             list_offset: 0,
@@ -590,7 +604,11 @@ impl App {
     }
 
     fn check_update(&mut self) -> Task<Message> {
-        if self.exiting || !self.updates.begin() {
+        if self.exiting
+            || self.settings.claude_protection.is_some()
+            || self.claude.protection_pending.is_some()
+            || !self.updates.begin()
+        {
             return Task::none();
         }
         let proxy_port = self
@@ -627,6 +645,14 @@ impl App {
     }
 
     fn dispatch_scope(&mut self, action: Action, scope: Scope) -> Task<Message> {
+        if (self.settings.claude_protection.is_some() || self.claude.protection_pending.is_some())
+            && !action.allowed_during_protection()
+        {
+            return Task::none();
+        }
+        if matches!(action, Action::ClaudeProtection(true)) {
+            self.updates.pause_for_protection();
+        }
         if matches!(action, Action::Mode(_))
             && (self.settings.claude_protection.is_some()
                 || self.claude.protection_pending.is_some())
@@ -741,6 +767,7 @@ impl App {
         self.node_delays.clear();
         self.proxy_order.get_mut().clear();
         self.cancel_site_checks();
+        self.overview.invalidate();
         self.site_results.clear();
         self.reset_site_filters();
         self.claude.close();
@@ -849,6 +876,23 @@ impl App {
             Message::DismissNotice => {
                 self.dismiss_notice();
                 self.updates.failure = None;
+            }
+            Message::UnreachableRecovered(generation, result) => {
+                if generation != self.delay_generation || self.recovery_aborter.take().is_none() {
+                    return Task::none();
+                }
+                match result {
+                    Ok(Some(message)) => {
+                        self.show_notice_followup(message, true);
+                        self.notice_network_recovery = true;
+                    }
+                    Ok(None) => {}
+                    Err(error) => self.show_notice_followup(
+                        format!("节点状态复测未完成，已保留网络设置：{error}"),
+                        true,
+                    ),
+                }
+                return self.dispatch(Action::Refresh);
             }
             Message::NoticeExpired(revision) => {
                 if revision == self.notice_revision && !self.error {
@@ -984,7 +1028,12 @@ impl App {
                 }
             }
             Message::InstallUpdate => {
-                if self.exiting || self.updates.busy() || self.updates.checking {
+                if self.exiting
+                    || self.settings.claude_protection.is_some()
+                    || self.claude.protection_pending.is_some()
+                    || self.updates.busy()
+                    || self.updates.checking
+                {
                     return Task::none();
                 }
                 let Some(available) = self.updates.available.clone() else {
@@ -1007,7 +1056,12 @@ impl App {
                 return self.update(Message::InstallUpdateConfirmed(available.version));
             }
             Message::InstallUpdateConfirmed(version) => {
-                if self.exiting || self.updates.busy() || self.updates.checking {
+                if self.exiting
+                    || self.settings.claude_protection.is_some()
+                    || self.claude.protection_pending.is_some()
+                    || self.updates.busy()
+                    || self.updates.checking
+                {
                     return Task::none();
                 }
                 let Some(available) = self.updates.available.clone() else {
@@ -1119,6 +1173,9 @@ impl App {
                 }
             }
             Message::Navigate(page) => {
+                if self.page == Page::Home && page != Page::Home && self.overview.busy() {
+                    self.overview.invalidate();
+                }
                 if self.page == Page::Claude && page != Page::Claude {
                     self.claude.close();
                 }
@@ -1430,6 +1487,11 @@ impl App {
                 }
             },
             Message::UpdateGeo => {
+                if self.settings.claude_protection.is_some()
+                    || self.claude.protection_pending.is_some()
+                {
+                    return Task::none();
+                }
                 if self.geo_updating
                     || self.busy
                     || self.exiting
@@ -1552,6 +1614,12 @@ impl App {
                         }
                         self.node_delays.extend(delays);
                         self.proxy_order.get_mut().clear();
+                        if good == 0
+                            && self.settings.claude_protection.is_none()
+                            && self.settings.proxy_mode != ProxyMode::Off
+                        {
+                            return self.recover_unreachable();
+                        }
                     }
                     Err(error) => {
                         self.show_notice(format!("{group} 测速失败：{error}"), true);
@@ -1682,6 +1750,8 @@ impl App {
                 }
                 self.periodic_testing = false;
                 if let Ok(delays) = result {
+                    let unreachable =
+                        !delays.is_empty() && delays.values().all(|delay| *delay == 0);
                     if !delays.is_empty()
                         && delays.values().all(|delay| *delay == 0)
                         && (self.node_delays.is_empty()
@@ -1691,6 +1761,12 @@ impl App {
                     }
                     self.node_delays = delays;
                     self.proxy_order.get_mut().clear();
+                    if unreachable
+                        && self.settings.claude_protection.is_none()
+                        && self.settings.proxy_mode != ProxyMode::Off
+                    {
+                        return self.recover_unreachable();
+                    }
                 }
                 if self.page == Page::Proxies {
                     return self.dispatch(Action::Refresh);
@@ -1905,14 +1981,16 @@ impl App {
                 }
                 // The console can start a stopped core or change preferences.
                 // A stopped owner returns metadata without querying mihomo.
+                let overview = self.overview_tick();
                 if self.engine.is_some() && !self.busy {
                     let scope = if !self.visible {
                         Scope::Other
                     } else {
                         self.page.scope()
                     };
-                    return self.dispatch_scope(Action::Refresh, scope);
+                    return Task::batch([overview, self.dispatch_scope(Action::Refresh, scope)]);
                 }
+                return overview;
             }
             Message::Finished(reply) => {
                 self.claude.protection_pending = None;
@@ -2186,7 +2264,11 @@ impl App {
                         if let Some(error) = subscription_failure {
                             self.show_notice(error, true);
                         } else if !notice.is_empty() {
-                            self.show_notice(notice, false);
+                            if self.notice_network_recovery {
+                                self.show_notice_followup(notice, false);
+                            } else {
+                                self.show_notice(notice, false);
+                            }
                         }
                     }
                     Err(error) => {
@@ -2283,6 +2365,24 @@ impl App {
                 };
                 self.add_test(line);
             }
+            Message::OverviewRefresh => return self.overview_refresh(),
+            Message::OverviewPrivacy => self.privacy_hidden = !self.privacy_hidden,
+            Message::OverviewHost(generation, result) => {
+                self.overview_done(generation, |o| o.host = Some(result));
+            }
+            Message::OverviewDns(generation, result) => {
+                self.overview_done(generation, |o| o.dns = Some(result));
+            }
+            Message::OverviewExit(generation, result) => {
+                self.overview_done(generation, |o| o.exit = Some(result));
+            }
+            Message::OverviewService(generation, index, result) => {
+                self.overview_done(generation, |o| {
+                    if let Some(slot) = o.services.get_mut(index) {
+                        *slot = Some(result);
+                    }
+                });
+            }
             Message::Window((_, desktop_runtime::window::Event::Focused)) => {
                 self.visible = true;
                 #[cfg(target_os = "macos")]
@@ -2296,6 +2396,9 @@ impl App {
                 let can_reopen = can_reopen || self.mac_reopen_ready;
                 if can_reopen {
                     self.visible = false;
+                    if self.overview.busy() {
+                        self.overview.invalidate();
+                    }
                     self.window_opening = false;
                     self.size_pending = false;
                     self.size_revision = self.size_revision.wrapping_add(1);
@@ -2368,6 +2471,11 @@ impl App {
     }
 
     fn install_download(&mut self, downloaded: Arc<update::Downloaded>) -> Task<Message> {
+        if self.settings.claude_protection.is_some() || self.claude.protection_pending.is_some() {
+            self.updates
+                .fail(clash_client_core::protection::READ_ONLY_NOTICE.into());
+            return Task::none();
+        }
         self.updates.prepare_install(downloaded.clone());
         Task::perform(
             async move {
@@ -2412,12 +2520,39 @@ impl App {
         Task::batch(tasks)
     }
 
+    fn recover_unreachable(&mut self) -> Task<Message> {
+        if self.recovery_aborter.is_some()
+            || self.exiting
+            || self.settings.claude_protection.is_some()
+        {
+            return Task::none();
+        }
+        let Some(engine) = self.engine.clone() else {
+            return Task::none();
+        };
+        let generation = self.delay_generation;
+        let (task, handle) = Task::perform(
+            async move {
+                Engine::recover_unreachable_shared(&engine)
+                    .await
+                    .map_err(|error| format!("{error:#}"))
+            },
+            move |result| Message::UnreachableRecovered(generation, result),
+        )
+        .abortable();
+        self.recovery_aborter = Some(handle);
+        task
+    }
+
     fn cancel_delay_checks(&mut self) {
         self.delay_generation = self.delay_generation.wrapping_add(1);
         for (_, handle) in std::mem::take(&mut self.delay_aborters) {
             handle.abort();
         }
         if let Some(handle) = self.periodic_aborter.take() {
+            handle.abort();
+        }
+        if let Some(handle) = self.recovery_aborter.take() {
             handle.abort();
         }
         self.testing_groups.clear();
@@ -3122,6 +3257,26 @@ mod async_state_tests {
         assert!(!app.periodic_testing);
         assert_eq!(app.node_delays["node"], 42);
     }
+    #[test]
+    fn cancelled_recovery_cannot_clear_a_new_task_or_override_its_notice() {
+        let mut app = app();
+        let obsolete = app.delay_generation;
+        let (old, _) = AbortHandle::new_pair();
+        let watched = old.clone();
+        app.recovery_aborter = Some(old);
+        app.cancel_delay_checks();
+        assert!(watched.is_aborted());
+        let (current, _) = AbortHandle::new_pair();
+        app.recovery_aborter = Some(current);
+        app.show_notice("当前操作尚未结束".into(), true);
+        let _ = app.update(Message::UnreachableRecovered(
+            obsolete,
+            Ok(Some("旧的恢复结果".into())),
+        ));
+        assert!(app.recovery_aborter.is_some());
+        assert_eq!(app.notice, "当前操作尚未结束");
+    }
+
     #[test]
     fn queued_port_save_contains_only_ports() {
         let mut app = app();

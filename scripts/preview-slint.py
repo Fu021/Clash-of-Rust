@@ -116,17 +116,19 @@ def mobile_preview(args) -> None:
             width, height = map(int, size.split('x'))
             short = height < 480
             values = {'preview-page': page, 'preview-dark': dark, 'preview-detail': detail,
+                      'preview-long-names': args.long_names,
                       'inset-top': 0 if short else 24 if width >= 640 else 54 if platform == 'ios' else 28,
                       'inset-bottom': 21 if short else 30 if platform == 'ios' else 24,
                       'inset-left': 44 if short and platform == 'ios' else 0,
                       'inset-right': 44 if short and platform == 'ios' else 0,
-                      'text-scale': scale, 'preview-connected': connected, 'preview-keyboard': keyboard,
+                      'text-scale': scale, 'preview-connected': connected and not args.core_stopped, 'preview-keyboard': keyboard,
                       'preview-core-running': not args.core_stopped,
                       'preview-notice': args.notice, 'preview-notice-error': args.notice_error,
                       'preview-notice-critical': args.notice_critical,
                       'preview-notice-recover-network': args.notice_recover_network,
                       'preview-notice-elapsed': args.notice_elapsed,
                       'preview-rules-scroll': args.scroll_y,
+                      'preview-home-scroll': args.scroll_y,
                       **protection_fixture(args.protection_state), **extra}
             fixture = fixtures / (name + '.json')
             fixture.write_text(json.dumps(values), encoding='utf-8')
@@ -151,7 +153,7 @@ def mobile_preview(args) -> None:
                        **{'preview-update-prereleases': True, 'preview-update-preview': True,
                           'preview-update-version': '0.6.8-dev.1.example', 'preview-update-available': True,
                           'preview-update-status': '发现预发布版 0.6.8-dev.1.example', 'preview-settings-scroll': -1200})
-        if args.page == 'all':
+        if args.page == 'all' and not args.pages_only:
             for name, label, size, page, dark, detail, scale in [
                 ('phone-landscape', '手机横屏 · 首页', '852x393', 0, False, 0, 1),
                 ('landscape-rules', '手机横屏 · 规则', '852x393', 4, False, 0, 1),
@@ -189,6 +191,8 @@ def mobile_preview(args) -> None:
         (output / 'manifest.json').write_text(json.dumps(entries, ensure_ascii=False, indent=2), encoding='utf-8')
         (output / 'preview-viewer.json').write_text(json.dumps(args.rendering, indent=2)+'\n', encoding='utf-8')
         gallery(entries, output)
+        for theme in ('light', 'dark'):
+            overview(args.viewer, entries, theme, output, env)
         if args.pairs:
             pairs(args.viewer, entries, output, env)
         for name, selected in [
@@ -363,6 +367,8 @@ def main() -> None:
     parser.add_argument("--check", action="store_true", help="only check Slint syntax and bindings")
     parser.add_argument("--pairs", action="store_true", help="also render light/dark pairs suitable for inline sharing")
     parser.add_argument("--full-settings", action="store_true", help="show all settings without scrolling in its page screenshot")
+    parser.add_argument("--pages-only", action="store_true", help="render the selected pages without the extra mobile scenario matrix")
+    parser.add_argument("--long-names", action="store_true", help="preview long configuration, group and node names")
     parser.add_argument("--notice", default="", help="show the production floating notice above page content and dialogs")
     parser.add_argument("--notice-error", action="store_true", help="show a persistent error banner with diagnostic export actions")
     parser.add_argument("--notice-critical", action="store_true", help="show the error in a centered blocking dialog")
@@ -375,7 +381,7 @@ def main() -> None:
     parser.add_argument("--detail", type=int, default=0, help="preview one mobile detail view without rendering the full matrix")
     parser.add_argument("--keyboard", type=float, default=0, help="mobile keyboard inset in logical pixels")
     parser.add_argument("--text-scale", type=float, default=1, help="font preview factor, for example 1.3 (native Android uses system SP conversions)")
-    parser.add_argument("--scroll-y", type=float, default=0, help="initial rule-page scroll offset for checking content visibility")
+    parser.add_argument("--scroll-y", type=float, default=0, help="initial home/rule-page scroll offset for checking content visibility")
     parser.add_argument("--output", type=Path)
     args = parser.parse_args()
     if args.notice_critical or args.notice_recover_network:
@@ -431,8 +437,10 @@ def main() -> None:
         for name, label, page, dialog in scenes:
             fixture = fixtures / f"{name}-{theme}.json"
             fixture.write_text(json.dumps({"preview-page": list(PAGES).index(page), "preview-dark": theme == "dark", "dialog": dialog,
+                                           "preview-long-names": args.long_names,
                                            "preview-text-scale": round(args.text_scale * 100),
                                            "preview-rules-scroll": args.scroll_y,
+                                           "preview-home-scroll": args.scroll_y,
                                            "preview-notice": args.notice, "preview-notice-error": args.notice_error, "preview-notice-elapsed": args.notice_elapsed,
                                            "preview-notice-critical": args.notice_critical,
                                            "preview-notice-recover-network": args.notice_recover_network,

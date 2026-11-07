@@ -31,7 +31,7 @@ impl Progress {
                 format!("{} · 直连 ({node})", self.route)
             }
             Some(node) => format!("{} · {node}", self.route),
-            None => format!("{} · 正在确认出站", self.route),
+            None => self.route.to_owned(),
         }
     }
 }

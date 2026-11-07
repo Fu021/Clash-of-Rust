@@ -16,8 +16,10 @@ impl App {
     pub(super) fn show_unreachable_nodes(&mut self, context: &str, count: usize) {
         let detail = if self.settings.claude_protection.is_some() {
             "请在 Claude 保护页检查保护线路。"
+        } else if self.settings.proxy_mode == ProxyMode::Tun {
+            "更新会先尝试代理，失败后尝试独立直连，无需关闭 TUN；其他应用仍可能无法联网。"
         } else {
-            "可更换节点，或关闭代理接管以恢复系统直连。"
+            "更新会先尝试代理，失败后尝试独立直连，无需关闭系统代理；其他应用仍可能无法联网。"
         };
         let revision = self.notice_revision;
         self.show_notice(

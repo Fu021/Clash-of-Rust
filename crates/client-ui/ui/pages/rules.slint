@@ -3,14 +3,18 @@ import { Theme } from "../theme/palette.slint";
 import { UiData, UiActions, Intent, RuleItem } from "../state.slint";
 import { RuleDragHandle } from "../components/rule-drag.slint";
 import { ListReorderGesture, ListReorderPreview } from "../components/list-reorder.slint";
+import { GeometryTarget } from "../components/geometry.slint";
 import { PageScroll, Label, Caption, Heading, ContentPanel, ActionButton, Badge, Field, Toggle, Select, Paragraph, CopyButton } from "../components/controls.slint";
 component RulesRow inherits Rectangle {
+    min-width: 0px; preferred-width: 0px; horizontal-stretch: 1;
     property <bool> protection-locked: UiData.protected || UiData.protection-pending;
     changed protection-locked => { if root.protection-locked { menu.close(); } }
     in property <RuleItem> item;
     in property <string> drag-context;
     in property <bool> highlighted;
     in property <bool> floating;
+    in property <bool> wide;
+    in property <bool> show-source;
     in property <length> available-height;
     in property <length> policy-width-limit;
     callback started();
@@ -35,12 +39,22 @@ component RulesRow inherits Rectangle {
             dropped(delta) => { root.dropped(delta); }
             cancelled => { root.cancelled(); }
         }
-        Caption { text: root.item.position; width: 32px; }
+        Caption { text: root.item.position; width: 24px; horizontal-stretch: 0; }
         VerticalLayout { spacing: 4px; horizontal-stretch: 1;
-            Label { text: root.item.kind + " · " + root.item.value; }
-            Caption { text: root.item.source + (root.item.enabled ? "" : " · 已停用"); }
+            if root.wide: HorizontalLayout { spacing: 8px;
+                Caption { text: root.item.kind; width: 118px; horizontal-stretch: 0; }
+                Label { text: root.item.value; font-size: Theme.detail-size; opacity: root.item.enabled ? 1 : 0.5; }
+            }
+            if !root.wide: Label { text: root.item.value == "" ? root.item.kind : root.item.value; font-size: Theme.detail-size; opacity: root.item.enabled ? 1 : 0.5; }
+            if !root.wide: Caption { text: root.item.kind + " · " + root.item.source; font-size: 12px * Theme.text-scale; }
         }
+        if root.show-source: Caption { text: root.item.source; width: 56px; horizontal-stretch: 0; }
         Badge { text: root.item.policy; width-limit: root.policy-width-limit; }
+        Toggle {
+            checked: root.item.enabled;
+            enabled: root.item.source == "自定义" && !UiData.protected && !UiData.protection-pending && !root.floating && !UiData.working;
+            toggled(value) => { UiActions.dispatch(Intent.rule-select, root.item.id, ""); UiActions.dispatch(Intent.rule-enable, "", ""); }
+        }
         ActionButton {
             text: ""; width: 40px; selected: root.item.selected;
             accessible-role: button; accessible-label: "规则详情与操作"; enabled: !UiData.protected && !UiData.protection-pending && (!root.floating && !UiData.working);
@@ -83,7 +97,7 @@ export component RulesPage inherits PageSurface {
     property <string> drag-id;
     property <string> drag-target;
     property <RuleItem> drag-item;
-    property <length> row-extent: max(60px, Theme.body-size * 3 + 12px) + Theme.content-gap;
+    property <length> row-extent: max(root.width >= 740px ? 44px : 56px, Theme.body-size * 2.5 + 8px) + Theme.content-gap;
     property <string> drag-context: UiData.page-offset + "/" + UiData.query + "/" + UiData.rule-profile + "/" + UiData.rule-source
         + "/" + (root.width / 1px) + "/" + (root.height / 1px) + "/" + Theme.text-scale;
     changed drag-context => { root.drag-id = ""; root.drag-target = ""; }
@@ -98,10 +112,8 @@ export component RulesPage inherits PageSurface {
                 VerticalLayout {
                     alignment: start; padding-right: Theme.content-gap; spacing: Theme.page-gap;
                     HorizontalLayout { cross-axis-alignment: center; spacing: Theme.content-gap;
-                        Select { enabled: !UiData.protected && !UiData.protection-pending; options: UiData.rule-profile-options; value: UiData.rule-profile; selected(index, value) => { UiActions.dispatch(Intent.rule-profile, UiData.rule-profiles[index].id, ""); } }
+                        Select { geometry-key: "rule-profile"; enabled: !UiData.protected && !UiData.protection-pending; options: UiData.rule-profile-options; value: UiData.rule-profile; selected(index, value) => { UiActions.dispatch(Intent.rule-profile, UiData.rule-profiles[index].id, ""); } }
                         Badge { text: UiData.rule-dirty ? "尚未应用" : "已载入"; tone: UiData.rule-dirty ? 2 : 1; }
-                        ActionButton { text: "放弃修改"; enabled: !UiData.protected && !UiData.protection-pending && UiData.rule-dirty && !UiData.working; clicked => { UiActions.dispatch(Intent.rule-discard, "", ""); } }
-                        ActionButton { text: "应用修改"; primary: true; enabled: !UiData.protected && !UiData.protection-pending && UiData.rule-dirty && !UiData.working; clicked => { UiActions.dispatch(Intent.rule-apply, "", ""); } }
                     }
                     ContentPanel {
                         vertical-padding: Theme.content-gap;
@@ -111,21 +123,22 @@ export component RulesPage inherits PageSurface {
                             ActionButton { enabled: !UiData.protected && !UiData.protection-pending; text: UiData.shortcuts-open ? "收起" : "展开"; dropdown: true; expanded: UiData.shortcuts-open; clicked => { UiActions.dispatch(Intent.rule-collapse, "", ""); } }
                         }
                         shortcuts := Disclosure { expanded: UiData.shortcuts-open;
-                            if shortcuts.mounted: VerticalLayout {
+                            if shortcuts.mounted: GridLayout {
                                 spacing: Theme.content-gap;
-                                for title[i] in UiData.shortcuts: Rectangle {
-                                    height: Theme.control-height;
-                                    HorizontalLayout { cross-axis-alignment: center;
-                                        Label { text: title; }
-                                        Toggle { enabled: !UiData.protected && !UiData.protection-pending && UiData.shortcut-available[i] && !UiData.working; checked: UiData.shortcut-values[i]; toggled(value) => { UiActions.dispatch(Intent.rule-toggle, "" + i, value ? "true" : "false"); } }
-                                    }
+                                for title[i] in UiData.shortcuts: ActionButton {
+                                    col: mod(i, root.width > 780px ? 3 : 2); row: floor(i / (root.width > 780px ? 3 : 2));
+                                    width: 0px; horizontal-stretch: 1; compact: true;
+                                    text: (UiData.shortcut-values[i] ? "✓ " : "") + title;
+                                    selected: UiData.shortcut-values[i];
+                                    enabled: !UiData.protected && !UiData.protection-pending && UiData.shortcut-available[i] && !UiData.working;
+                                    clicked => { UiActions.dispatch(Intent.rule-toggle, "" + i, UiData.shortcut-values[i] ? "false" : "true"); }
                                 }
                             }
                         }
                     }
                     HorizontalLayout { cross-axis-alignment: center; spacing: Theme.content-gap;
                         Field { enabled: !UiData.protected && !UiData.protection-pending; placeholder: "搜索规则类型、内容或策略"; focus-id: "page-search"; text <=> UiData.query; edited(value) => { UiActions.dispatch(Intent.query, value, ""); } }
-                        Select { enabled: !UiData.protected && !UiData.protection-pending; width: 120px; horizontal-stretch: 0; options: ["全部来源", "自定义", "快捷规则", "订阅"]; value: UiData.rule-source; selected(index, value) => { UiActions.dispatch(Intent.rule-filter, "" + index, ""); } }
+                        Select { geometry-key: "rule-source"; enabled: !UiData.protected && !UiData.protection-pending; width: 120px; horizontal-stretch: 0; options: ["全部来源", "自定义", "快捷规则", "订阅"]; value: UiData.rule-source; selected(index, value) => { UiActions.dispatch(Intent.rule-filter, "" + index, ""); } }
                         ActionButton { text: "+ 新建规则"; primary: true; enabled: !UiData.protected && !UiData.protection-pending && UiData.rule-types.length > 0 && !UiData.working; clicked => { UiActions.dispatch(Intent.rule-add, "", ""); } }
                     }
                     Caption { text: "拖动手柄排序 · 靠近边缘自动滚动 · Esc 取消 · 右箭头详情"; wrap: word-wrap; }
@@ -133,6 +146,7 @@ export component RulesPage inherits PageSurface {
                         for rule[index] in UiData.rules: RulesRow {
                             height: root.row-extent - Theme.content-gap;
                             item: rule; drag-context: root.drag-context; available-height: root.height;
+                            wide: root.width >= 740px; show-source: root.width >= 900px;
                             policy-width-limit: root.width * 0.2;
                             highlighted: root.drag-target == rule.id;
                             opacity: gesture.reordering && gesture.drag-index == index ? 0.25 : 1;
@@ -160,9 +174,11 @@ export component RulesPage inherits PageSurface {
                 if gesture.reordering: RulesRow {
                     x: 0px; y: 0px; width: parent.width; height: root.row-extent - Theme.content-gap;
                     item: root.drag-item; floating: true; policy-width-limit: root.width * 0.2;
+                    wide: root.width >= 740px; show-source: root.width >= 900px;
                 }
             }
             gesture := ListReorderGesture {
+                GeometryTarget { key: "rule-drag"; bounds: [gesture.absolute-position.x, gesture.absolute-position.y + gesture.header-height + gesture.scroll-y, gesture.width, gesture.row-height]; }
                 x: scroll.x + rules.x + Theme.card-padding + Theme.content-gap; y: scroll.y;
                 width: 24px; height: scroll.visible-height; hold-duration: 0ms;
                 enabled: !UiData.protected && !UiData.protection-pending && !UiData.working && !UiData.exiting && UiData.rule-types.length > 0 && UiData.modal == 0;
@@ -181,10 +197,18 @@ export component RulesPage inherits PageSurface {
                 cancelled => { root.drag-id = ""; root.drag-target = ""; }
             }
         }
+        if UiData.rule-dirty: ContentPanel {
+            vertical-padding: 8px;
+            HorizontalLayout { cross-axis-alignment: center; spacing: Theme.content-gap;
+                Caption { text: "● 修改尚未应用"; color: Theme.warning; }
+                ActionButton { text: "放弃"; compact: true; quiet: true; enabled: !UiData.protected && !UiData.protection-pending && !UiData.working; clicked => { UiActions.dispatch(Intent.rule-discard, "", ""); } }
+                ActionButton { text: "应用修改"; compact: true; primary: true; enabled: !UiData.protected && !UiData.protection-pending && !UiData.working; clicked => { UiActions.dispatch(Intent.rule-apply, "", ""); } }
+            }
+        }
         HorizontalLayout { cross-axis-alignment: center; spacing: Theme.content-gap;
             Caption { text: UiData.page-status; }
-            ActionButton { text: "上一页"; enabled: !UiData.protected && !UiData.protection-pending && UiData.previous; clicked => { UiActions.dispatch(Intent.list-page, "" + max(0, UiData.page-offset - 60), ""); } }
-            ActionButton { text: "下一页"; enabled: !UiData.protected && !UiData.protection-pending && UiData.next; clicked => { UiActions.dispatch(Intent.list-page, "" + (UiData.page-offset + 60), ""); } }
+            ActionButton { text: "上一页"; compact: true; enabled: !UiData.protected && !UiData.protection-pending && UiData.previous; clicked => { UiActions.dispatch(Intent.list-page, "" + max(0, UiData.page-offset - 60), ""); } }
+            ActionButton { text: "下一页"; compact: true; enabled: !UiData.protected && !UiData.protection-pending && UiData.next; clicked => { UiActions.dispatch(Intent.list-page, "" + (UiData.page-offset + 60), ""); } }
         }
     }
 }

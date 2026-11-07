@@ -1,0 +1,19 @@
+import { NetworkInfo, ServiceStatus } from "../../components/overview.slint";
+import { MobileData, MobileView, MobileActions, MobileIntent } from "state.slint";
+import { MobileTypography } from "typography.slint";
+
+export component MobileNetworkInfo inherits NetworkInfo {
+    items: MobileData.overview-network;
+    hidden: MobileData.overview-hidden; busy: MobileData.overview-busy;
+    enabled: !MobileData.working && !MobileView.modal && !MobileView.notice-modal;
+    body-size: MobileTypography.font-size(16); caption-size: MobileTypography.font-size(13);
+    detail-size: MobileTypography.font-size(12); title-size: MobileTypography.font-size(16); control-size: 48px;
+    privacy-requested => { MobileActions.request(MobileIntent.overview-privacy, "", ""); }
+    refresh-requested => { MobileActions.request(MobileIntent.overview-refresh, "", ""); }
+}
+
+export component MobileServices inherits ServiceStatus {
+    items: MobileData.overview-services; status: MobileData.overview-status;
+    body-size: MobileTypography.font-size(13); detail-size: MobileTypography.font-size(12);
+    title-size: MobileTypography.font-size(16); control-size: 48px;
+}

@@ -126,6 +126,17 @@ impl State {
         self.status = "更新通道已更改，请检查更新".into();
     }
 
+    pub fn pause_for_protection(&mut self) {
+        self.cancel_download();
+        self.check_id = self.check_id.wrapping_add(1);
+        self.checking = false;
+        self.available = None;
+        self.cached_download = None;
+        self.failure = None;
+        self.outcome = None;
+        self.status = "Claude 保护期间暂停客户端更新".into();
+    }
+
     pub fn busy(&self) -> bool {
         self.progress.is_some() || self.installing.is_some() || self.install_pending
     }

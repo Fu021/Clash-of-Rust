@@ -20,7 +20,7 @@
 | --- | --- |
 | 找代码、理解模块与数据流 | [开发与验证](development.md)，含目录职责、平台边界、占用锁与验证要求 |
 | 贡献代码或文档 | [贡献者须知](../.github/CONTRIBUTING.md)；agent 另读[开发约束](../AGENTS.md) |
-| 修改桌面或移动界面、预览正式组件 | [Slint 界面说明](../crates/client-ui/README.md)；[预览与本地工具](workflows/local-development.md) |
+| 修改桌面或移动界面、预览正式组件 | [界面设计与审阅](ui-design.md)；[Slint 界面说明](../crates/client-ui/README.md)；[预览与本地工具](workflows/local-development.md) |
 | 修改 Android 宿主、VPN 或输入法 | [Android 开发说明](../apps/android/README.md)；[输入法兼容性复盘](agent-failures/android-ime.md) |
 | 完成功能或修复后的循环审查 | [loop 工作流](loop-workflow.md)；[代表尺寸与 UI 检查](loop-ui.md) |
 | 查构建脚本入口、职责与调用关系 | [脚本维护说明](../scripts/README.md) |

@@ -3,9 +3,10 @@ import { MobileTypography } from "typography.slint";
 // Responsive chrome only. Each platform supplies its own routes and pages.
 import { Theme } from "../../theme/palette.slint";
 import { MobileData, MobileView, MobileActions, MobileIntent } from "state.slint";
-import { MText, MSmall, MHeading, MButton, MBackButton, MTag, MNav, MScroll, MNotice, MAppIcon } from "controls.slint";
+import { MText, MSmall, MHeading, MButton, MBackButton, MTag, MNav, MScroll, MNotice, MAppIcon, MProtectionLock } from "controls.slint";
 import { MobileDetails, MobileModal } from "details.slint";
 import { ProtectionBadge, ProtectionAlert } from "../../components/protection-status.slint";
+import { Wordmark, ConnectionPower } from "../../components/brand.slint";
 
 component HeaderStatus inherits VerticalLayout {
     in property <bool> compact;
@@ -20,11 +21,6 @@ component HeaderStatus inherits VerticalLayout {
         MTag {
             text: MobileData.core-running ? "● 内核运行中" : "○ 内核未运行"; tone: MobileData.core-running ? 1 : 4;
         }
-    }
-    if !root.compact: HorizontalLayout { alignment: end; spacing: 4px;
-        MSmall { text: MobileData.profile; horizontal-alignment: right; }
-        if MobileData.node != "": MSmall { text: "|"; }
-        if MobileData.node != "": MSmall { text: MobileData.node; horizontal-alignment: right; }
     }
 }
 
@@ -51,7 +47,7 @@ export component MobileFrame inherits Rectangle {
     property <length> usable-height: max(0px, root.height - MobileView.safe-top - MobileView.safe-bottom - MobileView.keyboard-inset);
     property <bool> short: root.height - MobileView.safe-top - MobileView.safe-bottom < 480px;
     property <bool> narrow: root.usable-width < 640px && !root.short;
-    property <bool> stacked-header: root.narrow && (root.usable-width < 360px || Theme.text-scale >= 1.25 || root.has-back);
+    property <bool> stacked-header: root.narrow && Theme.text-scale >= 1.25;
     property <bool> expanded: root.usable-width >= 1024px && !root.short;
     property <bool> bottom: root.narrow && MobileView.keyboard-inset == 0px;
     property <length> nav-width: root.narrow ? 0px : root.expanded ? root.sidebar-width : 76px;
@@ -71,7 +67,7 @@ export component MobileFrame inherits Rectangle {
     changed notice-revision => { root.notice-start = animation-tick() - MobileView.notice-elapsed * 1s; }
     changed notice-elapsed => { root.notice-start = animation-tick() - MobileView.notice-elapsed * 1s; }
     init => { root.notice-start = animation-tick() - MobileView.notice-elapsed * 1s; root.notice-text = MobileView.notice; }
-    background: Theme.canvas;
+    background: root.nav-width > 0px ? Theme.sidebar : Theme.canvas;
     animate background { duration: Motion.appearance; enabled: Motion.active; }
     Timer { running: MobileView.notice != "" && !MobileView.notice-error; interval: 100ms;
         triggered => { if animation-tick() - root.notice-start >= 8s { MobileView.notice = ""; } }
@@ -93,6 +89,12 @@ export component MobileFrame inherits Rectangle {
             return reject;
         }
         if root.nav-width > 0px: Rectangle {
+            x: MobileView.safe-left + root.nav-width; y: MobileView.safe-top;
+            width: root.usable-width - root.nav-width; height: root.usable-height;
+            background: Theme.canvas; border-top-left-radius: 18px;
+            border-width: 1px; border-color: Theme.subtle-line;
+        }
+        if root.nav-width > 0px: Rectangle {
             // Paint behind the system bars/cutouts; inset interactive content only.
             x: 0px; y: 0px; width: MobileView.safe-left + root.nav-width;
             height: root.height - MobileView.keyboard-inset;
@@ -102,9 +104,16 @@ export component MobileFrame inherits Rectangle {
             VerticalLayout { x: MobileView.safe-left; y: MobileView.safe-top;
                 width: root.nav-width; height: root.usable-height;
                 padding: MobileTypography.small-gap; spacing: 10px;
-                if !root.short: HorizontalLayout { height: 64px; spacing: 10px; padding-left: root.expanded ? 8px : 14px; cross-axis-alignment: center;
-                    MAppIcon { }
-                    if root.expanded: MText { text: "Clash of Rust"; font-weight: 600; }
+                if !root.short: HorizontalLayout { height: 46px; spacing: 8px; padding-left: root.expanded ? 8px : 6px; cross-axis-alignment: center;
+                    MAppIcon { width: 36px; height: 48px; }
+                    if root.expanded: Wordmark { width: 138px; }
+                }
+                if root.expanded: HorizontalLayout { height: 48px; spacing: 12px; padding-left: 10px; cross-axis-alignment: center;
+                    ConnectionPower { width: 30px; height: 30px; connected: MobileData.vpn-connected; label: MobileData.vpn-connected ? "断开 VPN" : "连接 VPN";
+                        enabled: !MobileData.working && !MobileData.protected && !MobileData.protection-pending && !MobileView.modal && !MobileView.notice-modal;
+                        clicked => { MobileActions.request(MobileData.vpn-connected || MobileData.vpn-pending ? MobileIntent.disconnect : MobileIntent.connect, "", ""); }
+                    }
+                    MText { text: MobileData.vpn-connected ? "已连接" : MobileData.vpn-pending ? "连接中…" : "未连接"; }
                 }
                 MScroll { vertical-stretch: 1; min-height: 0px;
                     if root.expanded: VerticalLayout { alignment: start; spacing: 4px;
@@ -139,12 +148,11 @@ export component MobileFrame inherits Rectangle {
                 if root.has-back: MBackButton {
                     clicked => { if root.detail-page { MobileView.back(); } else { MobileView.navigate(10); } }
                 }
-                if !root.has-back && root.narrow: MAppIcon { }
                 MHeading { text: root.detail-page && !root.pane ? root.detail-title : root.titles[MobileView.page];
                     font-size: root.short ? MobileTypography.font-size(21) : root.usable-width < 360px ? MobileTypography.font-size(20) : MobileTypography.font-size(round(root.title-size / 1px));
                     horizontal-stretch: 0; wrap: word-wrap;
                 }
-                if root.stacked-header: Rectangle { horizontal-stretch: 1; }
+                Rectangle { horizontal-stretch: 1; }
                 if !root.stacked-header: HeaderStatus { compact: root.usable-height < 600px; }
               }
               if root.stacked-header: HeaderStatus { compact: root.usable-height < 600px; }
@@ -158,8 +166,15 @@ export component MobileFrame inherits Rectangle {
             font-size: MobileTypography.font-size(13); enabled: !MobileView.modal && !MobileView.notice-modal;
             clicked => { MobileView.navigate(8); }
         }
+        protection-lock := MProtectionLock {
+            visible: MobileData.protected || MobileData.protection-pending;
+            x: header.x; y: protection-alert.y + protection-alert.height + (protection-alert.visible ? 8px : 0px);
+            width: header.width; height: self.visible ? self.preferred-height : 0px;
+            pending: MobileData.protection-pending;
+            enabled: !MobileData.working && !MobileView.modal && !MobileView.notice-modal;
+        }
         body := Rectangle {
-            x: header.x; y: protection-alert.y + protection-alert.height + (protection-alert.visible ? 8px : 0px); width: header.width;
+            x: header.x; y: protection-lock.y + protection-lock.height + (protection-lock.visible ? 8px : 0px); width: header.width;
             height: max(0px, root.usable-height - (self.y - MobileView.safe-top) - (root.bottom ? root.bottom-height - MobileView.safe-bottom : 0px));
             HorizontalLayout { spacing: MobileTypography.padding;
                 Rectangle {
@@ -216,7 +231,7 @@ export component MobileFrame inherits Rectangle {
                 width: min(600px, root.usable-width - 24px);
                 text: root.notice-text;
                 error: MobileView.notice-error;
-                available-height: root.usable-height * (MobileView.notice-modal ? 0.8 : 0.4);
+                available-height: root.usable-height * (MobileView.notice-modal ? 0.8 : MobileView.notice-error ? 0.65 : 0.4);
                 progress: clamp((animation-tick() - root.notice-start) / 8s, 0, 1);
                 dismissed => { MobileView.notice = ""; }
             }

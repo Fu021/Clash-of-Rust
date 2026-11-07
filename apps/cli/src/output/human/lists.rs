@@ -152,7 +152,12 @@ pub(super) fn delays(out: &mut dyn Write, args: &Args, value: &Value) -> Result<
             && map.values().all(|delay| delay.as_u64() == Some(0))
         {
             writeln!(out, "本次测速全部失败，可更换节点。")?;
-            writeln!(out, "解除本程序的代理接管：cor proxy off")?;
+            writeln!(
+                out,
+                "接管状态保持不变；更新会先尝试代理，失败后尝试独立 DIRECT，无需关闭 TUN 或系统代理。"
+            )?;
+            writeln!(out, "查看当前接管状态：cor status")?;
+            writeln!(out, "可选：停止本程序的网络接管：cor proxy off")?;
             writeln!(out, "导出诊断：cor diagnose --output cor-diagnose.json")?;
         }
     }

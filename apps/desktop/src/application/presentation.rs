@@ -7,7 +7,7 @@ use clash_desktop_protocol::{
     *,
 };
 
-fn model<T: Clone + PartialEq>(old: ModelRc<T>, values: Vec<T>) -> ModelRc<T> {
+pub(super) fn model<T: Clone + PartialEq>(old: ModelRc<T>, values: Vec<T>) -> ModelRc<T> {
     if old.rows() == values {
         old
     } else {
@@ -549,6 +549,7 @@ impl App {
                 .unwrap_or(&self.updates.status)
         );
         data.set_network_results(strings(data.get_network_results(), &self.test_results));
+        self.present_overview(data);
         if !self.visible {
             models.clear();
             return;
@@ -597,9 +598,11 @@ impl App {
         } else {
             reconcile(&models.profiles, Vec::new());
         }
-        if self.page == Page::Connections {
+        if matches!(self.page, Page::Home | Page::Connections) {
             let (total, rows) = self.connection_rows();
-            self.pager(data, total, PAGE_SIZE);
+            if self.page == Page::Connections {
+                self.pager(data, total, PAGE_SIZE);
+            }
             reconcile(&models.connections, rows);
         } else {
             reconcile(&models.connections, Vec::new());
@@ -1094,6 +1097,7 @@ impl App {
             || self.claude.protection_pending.is_some();
         data.set_modal_error("".into());
         data.set_modal_copy("".into());
+        data.set_connection_selected_id("".into());
         data.set_modal_country("".into());
         data.set_modal_flagged(false);
         data.set_modal_flag(String::new().into());
@@ -1191,6 +1195,7 @@ impl App {
             }
         } else if let Some(id) = &self.connection_detail {
             kind = 10;
+            data.set_connection_selected_id(id.as_str().into());
             data.set_modal_title("连接详情".into());
             let connection = self
                 .snapshot

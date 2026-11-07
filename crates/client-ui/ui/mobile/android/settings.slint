@@ -7,45 +7,45 @@ import { AppearanceSettings, NetworkToggles, ScheduleSettings, CurrentVersion, G
 
 component AndroidNetwork inherits VerticalLayout {
     alignment: start; spacing: 10px;
-    MHeading { text: "网络"; }
+    MSmall { text: "网络"; font-weight: 600; }
     MCard {
         HorizontalLayout { spacing: MobileTypography.gap; cross-axis-alignment: center;
             MText { text: "混合端口"; }
-            MField { width: 96px; horizontal-stretch: 0; text <=> MobileData.mixed-port; edited(value) => { AndroidData.ports-dirty = true; } }
+            MField { width: 96px; horizontal-stretch: 0; text <=> MobileData.mixed-port; enabled: !MobileData.protected && !MobileData.protection-pending; edited(value) => { AndroidData.ports-dirty = true; } }
         }
-        if AndroidData.ports-dirty: MButton { text: "保存端口"; primary: true; clicked => { MobileActions.request(MobileIntent.save-ports, MobileData.mixed-port, ""); } }
+        if AndroidData.ports-dirty: MButton { text: "保存端口"; primary: true; enabled: !MobileData.protected && !MobileData.protection-pending; clicked => { MobileActions.request(MobileIntent.save-ports, MobileData.mixed-port, ""); } }
         MDivider { }
         NetworkToggles { show-fake-ip-exclusions: true; }
     }
 }
 component AndroidConnection inherits VerticalLayout {
     alignment: start; spacing: 10px;
-    MHeading { text: "连接与系统"; }
+    MSmall { text: "VPN 与系统"; font-weight: 600; }
     MCard {
-        MRow { title: "VPN 设置"; value: AndroidData.authorization-status; clicked => { AndroidActions.request(AndroidIntent.vpn-settings, ""); } }
+        MRow { title: "VPN 设置"; value: AndroidData.authorization-status; interactive: !MobileData.protected && !MobileData.protection-pending; clicked => { AndroidActions.request(AndroidIntent.vpn-settings, ""); } }
         MDivider { }
-        MRow { title: "应用分流"; value: AndroidData.application-scope; clicked => { AndroidActions.request(AndroidIntent.application-routing, ""); } }
+        MRow { title: "应用分流"; value: AndroidData.application-scope; interactive: !MobileData.protected && !MobileData.protection-pending; clicked => { AndroidActions.request(AndroidIntent.application-routing, ""); } }
         MDivider { }
-        MSwitch { title: "通知显示实时速度"; checked: AndroidData.notification-speeds;
+        MSwitch { title: "通知显示实时速度"; checked: AndroidData.notification-speeds; enabled: !MobileData.protected && !MobileData.protection-pending;
             toggled(value) => { AndroidActions.request(AndroidIntent.notification-speeds, value ? "true" : "false"); }
         }
         MDivider { }
-        MRow { title: "电池与后台运行"; clicked => { AndroidActions.request(AndroidIntent.battery-settings, ""); } }
+        MRow { title: "电池与后台运行"; interactive: !MobileData.protected && !MobileData.protection-pending; clicked => { AndroidActions.request(AndroidIntent.battery-settings, ""); } }
     }
 }
 component AndroidUpdates inherits VerticalLayout {
     alignment: start; spacing: 10px;
-    MHeading { text: "更新"; }
+    MSmall { text: "更新"; font-weight: 600; }
     MCard {
         CurrentVersion { }
-        MSwitch { title: "包含预发布版本"; checked: MobileData.update-prereleases; enabled: !MobileData.working && !AndroidData.update-busy;
+        MSwitch { title: "包含预发布版本"; checked: MobileData.update-prereleases; enabled: !MobileData.working && !AndroidData.update-busy && !MobileData.protected && !MobileData.protection-pending;
             toggled(value) => { MobileActions.request(MobileIntent.update-prereleases, value ? "true" : "false", ""); }
         }
         MSmall { text: AndroidData.update-status; wrap: word-wrap; }
         if AndroidData.update-downloading: MProgress { value: AndroidData.update-progress; indeterminate: AndroidData.update-progress == 0; }
         HorizontalLayout { spacing: MobileTypography.small-gap;
-            MButton { text: "检查更新"; busy: AndroidData.update-busy && !AndroidData.update-downloading; enabled: !AndroidData.update-busy; clicked => { MobileActions.request(MobileIntent.check-update, "", ""); } }
-            if AndroidData.update-available: MButton { text: "安装更新"; primary: true; enabled: !AndroidData.update-busy;
+            MButton { text: "检查更新"; busy: AndroidData.update-busy && !AndroidData.update-downloading; enabled: !AndroidData.update-busy && !MobileData.protected && !MobileData.protection-pending; clicked => { MobileActions.request(MobileIntent.check-update, "", ""); } }
+            if AndroidData.update-available: MButton { text: "安装更新"; primary: true; enabled: !AndroidData.update-busy && !MobileData.protected && !MobileData.protection-pending;
                 clicked => {
                     if MobileData.update-preview {
                         MobileActions.request(MobileIntent.install-update, "", "prepare");
@@ -67,11 +67,11 @@ export component AndroidSettings inherits PageSurface {
         changed height => { MobileView.settings-viewport-height = self.height; }
         init => { MobileView.settings-content-height = self.content-height; MobileView.settings-viewport-height = self.height; }
         if root.width < 760px: VerticalLayout { alignment: start; spacing: 20px; padding-bottom: 20px;
-            AppearanceSettings { custom-font-size: false; } AndroidNetwork { } AndroidConnection { } ScheduleSettings { } AndroidUpdates { }
+            AndroidConnection { } AndroidNetwork { } AppearanceSettings { custom-font-size: false; } AndroidUpdates { } ScheduleSettings { }
         }
         if root.width >= 760px: HorizontalLayout { spacing: 20px; width: root.width;
-            VerticalLayout { alignment: start; spacing: 20px; AppearanceSettings { custom-font-size: false; } AndroidConnection { } ScheduleSettings { } }
-            VerticalLayout { alignment: start; spacing: 20px; AndroidNetwork { } AndroidUpdates { } }
+            VerticalLayout { alignment: start; spacing: 20px; AndroidConnection { } AndroidNetwork { } }
+            VerticalLayout { alignment: start; spacing: 20px; AppearanceSettings { custom-font-size: false; } AndroidUpdates { } ScheduleSettings { } }
         }
     }
 }

@@ -11,6 +11,9 @@ pub struct Schedule {
 
 impl Schedule {
     pub fn next(&mut self, settings: &Settings, profiles: &[Profile], now: u64) -> Option<Profile> {
+        if settings.claude_protection.is_some() {
+            return None;
+        }
         self.attempted
             .retain(|id, _| profiles.iter().any(|profile| profile.id == *id));
         let minutes = settings.subscription_update_interval_minutes;
@@ -20,18 +23,12 @@ impl Schedule {
         let profile = profiles.iter().find(|profile| {
             let remote = reqwest::Url::parse(&profile.source)
                 .is_ok_and(|url| matches!(url.scheme(), "https" | "http"));
-            let protected = settings
-                .claude_protection
-                .as_ref()
-                .is_some_and(|protection| protection.profile_id == profile.id);
             let attempted = self
                 .attempted
                 .get(&profile.id)
                 .filter(|(source, _)| *source == profile.source)
                 .map_or(0, |(_, time)| *time);
-            remote
-                && !protected
-                && now.saturating_sub(profile.updated.max(attempted)) >= u64::from(minutes) * 60
+            remote && now.saturating_sub(profile.updated.max(attempted)) >= u64::from(minutes) * 60
         })?;
         self.attempted
             .insert(profile.id.clone(), (profile.source.clone(), now));
@@ -68,10 +65,7 @@ impl PendingUpdate {
         profiles: &[Profile],
         store: &Store,
     ) -> Result<bool> {
-        if settings
-            .claude_protection
-            .as_ref()
-            .is_some_and(|protection| protection.profile_id == self.profile.id)
+        if settings.claude_protection.is_some()
             || !profiles.iter().any(|profile| profile == &self.profile)
         {
             return Ok(false);
@@ -171,13 +165,13 @@ mod tests {
     }
 
     #[test]
-    fn protected_subscription_is_skipped_while_other_remote_profiles_can_update() {
+    fn protection_pauses_all_subscriptions_without_consuming_a_scheduled_attempt() {
         use crate::protection::{Previous, Protection};
         let profiles = vec![
             profile("https://example.test/locked"),
             profile("https://example.test/other"),
         ];
-        let settings = Settings {
+        let mut settings = Settings {
             subscription_update_interval_minutes: 1,
             claude_protection: Some(std::sync::Arc::new(Protection::new(
                 profiles[0].id.clone(),
@@ -191,10 +185,16 @@ mod tests {
             ..Default::default()
         };
         let mut schedule = Schedule::default();
+        assert!(schedule.next(&settings, &profiles, 160).is_none());
+        assert!(schedule.next(&settings, &profiles, 161).is_none());
+        settings.claude_protection = None;
         assert_eq!(
-            schedule.next(&settings, &profiles, 160),
+            schedule.next(&settings, &profiles, 161),
+            Some(profiles[0].clone())
+        );
+        assert_eq!(
+            schedule.next(&settings, &profiles, 161),
             Some(profiles[1].clone())
         );
-        assert!(schedule.next(&settings, &profiles, 161).is_none());
     }
 }

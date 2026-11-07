@@ -2,18 +2,16 @@ import { Presence } from "motion.slint";
 import { Theme } from "../theme/palette.slint";
 import { UiData, UiActions, Intent } from "../state.slint";
 import { ContentPanel, Paragraph, Heading, ActionButton } from "controls.slint";
+import { GeometryTarget } from "geometry.slint";
 
 export component DiagnosticActions inherits HorizontalLayout {
     in property <string> context;
     in property <bool> notice-control;
-    spacing: Theme.content-gap; alignment: start;
-    ActionButton { modal-control: true; notice-control: root.notice-control; text: UiData.diagnosing ? "正在采集…" : "导出诊断"; enabled: !UiData.diagnosing;
+    spacing: 6px; alignment: start;
+    ActionButton { modal-control: true; notice-control: root.notice-control; compact: true; quiet: true; text: UiData.diagnosing ? "正在采集…" : "导出诊断"; enabled: !UiData.diagnosing;
         clicked => { UiActions.dispatch(Intent.export-diagnostics, root.context, ""); }
     }
-    ActionButton { modal-control: true; notice-control: root.notice-control; text: "复制命令";
-        clicked => { UiActions.dispatch(Intent.copy, "cor diagnose --output cor-diagnose.json", ""); }
-    }
-    ActionButton { modal-control: true; notice-control: root.notice-control; text: "新建 Issue"; enabled: !UiData.diagnosing;
+    ActionButton { modal-control: true; notice-control: root.notice-control; compact: true; quiet: true; text: "新建 Issue"; enabled: !UiData.diagnosing;
         clicked => { UiActions.dispatch(Intent.report-issue, root.context, ""); }
     }
     @children
@@ -23,7 +21,7 @@ export component DesktopNotice inherits Rectangle {
     in property <length> available-height;
     presence := Presence { open: UiData.notice != ""; }
     out property <bool> mounted: presence.mounted;
-    out property <[length]> close-target: [panel.absolute-position.x + Theme.card-padding, panel.absolute-position.y + Theme.card-padding, panel.width - Theme.card-padding * 2, 24px];
+    in-out property <[length]> close-target;
     property <string> message;
     property <string> source: UiData.notice;
     changed source => { if self.source != "" { self.message = self.source; } }
@@ -50,12 +48,21 @@ export component DesktopNotice inherits Rectangle {
     panel := VerticalLayout {
         x: (parent.width - self.width) / 2;
         y: UiData.notice-modal ? max(16px, (parent.height - self.height) / 2) : parent.height - self.height - 24px + (1 - presence.progress) * 8px;
-        width: min(UiData.notice-modal ? 640px : 560px, parent.width - 48px); height: self.preferred-height;
+        width: min(UiData.notice-modal ? 600px : 480px, parent.width - 48px); height: self.preferred-height;
         if presence.mounted: ContentPanel {
+            background: UiData.notice-error ? Theme.surface : Theme.ink;
+            vertical-padding: UiData.notice-modal ? Theme.card-padding : 12px;
+            border-radius: UiData.notice-modal ? 18px : 14px;
+            border-color: Theme.line;
             drop-shadow-blur: 20px; drop-shadow-offset-y: 4px; drop-shadow-color: #00000030;
             interactive: true;
-            clicked => { UiActions.dispatch(Intent.dismiss-notice, "", ""); }
-            if UiData.notice-modal: Heading { text: "发生错误"; color: Theme.danger; }
+            clicked => { if !UiData.notice-error { UiActions.dispatch(Intent.dismiss-notice, "", ""); } }
+            if UiData.notice-error: HorizontalLayout { cross-axis-alignment: center; spacing: 10px;
+                Rectangle { width: 26px; height: 26px; border-radius: 8px; background: Theme.danger-wash;
+                    Heading { text: "!"; color: Theme.danger; width: parent.width; height: parent.height; horizontal-alignment: center; }
+                }
+                Heading { text: UiData.notice-modal ? "需要处理" : "操作未完成"; font-size: UiData.notice-modal ? 18px * Theme.text-scale : Theme.detail-size; }
+            }
             HorizontalLayout { cross-axis-alignment: start; spacing: Theme.content-gap;
                 Flickable {
                     property <string> context: root.message;
@@ -70,22 +77,36 @@ export component DesktopNotice inherits Rectangle {
                         width: parent.width; height: self.preferred-height;
                         alignment: start; spacing: Theme.content-gap;
                         message-area := Rectangle {
+                            GeometryTarget { key: "notice-message"; bounds: message-area.target; }
+                            property <[length]> target: [self.absolute-position.x, self.absolute-position.y, self.width, self.height];
+                            changed target => { if !UiData.notice-error { root.close-target = self.target; } }
+                            init => { if !UiData.notice-error { root.close-target = self.target; } }
                             height: message.preferred-height;
-                            accessible-role: button;
-                            accessible-label: root.message + "，点击关闭";
-                            accessible-action-default => { UiActions.dispatch(Intent.dismiss-notice, "", ""); }
-                            message := Paragraph { width: parent.width; text: root.message; color: UiData.notice-error ? Theme.danger : Theme.ink; }
-                            TouchArea { mouse-cursor: pointer; clicked => { UiActions.dispatch(Intent.dismiss-notice, "", ""); } }
+                            accessible-role: text;
+                            accessible-label: root.message;
+                            message := Paragraph { width: parent.width; text: root.message; color: UiData.notice-error ? Theme.ink : Theme.canvas; font-size: UiData.notice-modal ? Theme.body-size : Theme.detail-size; }
+                            if !UiData.notice-error: TouchArea {
+                                accessible-role: button; accessible-label: "关闭提示";
+                                accessible-action-default => { UiActions.dispatch(Intent.dismiss-notice, "", ""); }
+                                mouse-cursor: pointer; clicked => { UiActions.dispatch(Intent.dismiss-notice, "", ""); }
+                            }
                         }
                     }
                 }
             }
             if UiData.notice-error: DiagnosticActions { context: root.message; notice-control: true;
                 if UiData.notice-recover-network && UiData.proxy-mode != 2 && !UiData.protected && !UiData.protection-pending: ActionButton {
-                    modal-control: true; notice-control: true; text: "恢复系统直连"; enabled: !UiData.working;
+                    modal-control: true; notice-control: true; compact: true; quiet: true; text: "停止接管"; enabled: !UiData.working;
                     clicked => { UiActions.dispatch(Intent.proxy-mode, "2", ""); }
                 }
-                if UiData.notice-modal && UiData.retry-core: ActionButton { modal-control: true; notice-control: true; text: "重启内核"; primary: true; enabled: UiData.notice != "" && !UiData.working; clicked => { UiActions.dispatch(Intent.restart-core, "", ""); } }
+                if UiData.notice-modal && UiData.retry-core: ActionButton { modal-control: true; notice-control: true; compact: true; quiet: true; text: "重启内核"; enabled: UiData.notice != "" && !UiData.working && !UiData.protected && !UiData.protection-pending; clicked => { UiActions.dispatch(Intent.restart-core, "", ""); } }
+                ActionButton {
+                    property <[length]> target: [self.absolute-position.x, self.absolute-position.y, self.width, self.height];
+                    changed target => { root.close-target = self.target; }
+                    init => { root.close-target = self.target; }
+                    modal-control: true; notice-control: true; compact: true; quiet: true; text: "关闭";
+                    clicked => { UiActions.dispatch(Intent.dismiss-notice, "", ""); }
+                }
             }
         }
     }

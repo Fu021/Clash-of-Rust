@@ -5,9 +5,12 @@ import { UiData, UiActions, Intent } from "state.slint";
 import { Theme } from "theme/palette.slint";
 export { Theme } from "theme/palette.slint";
 export { Motion } from "components/motion.slint";
-export { UiData, UiActions, Intent, Choice, DetailItem, FakeIpExclusionItem, NodeItem, NodePair, GroupItem, ProfileItem, ConnectionItem, RuleItem, LogItem, ReportItem, CategoryItem, CategoryPair } from "state.slint";
+export { UiGeometry } from "components/geometry.slint";
+export { UiData, UiActions, Intent, Choice, DetailItem, FakeIpExclusionItem, NodeItem, NodePair, GroupItem, ProfileItem, ConnectionItem, RuleItem, LogItem, ReportItem, OverviewItem, CategoryItem, CategoryPair } from "state.slint";
 import { Label, Caption, ContentPanel, Panel, ActionButton, Badge, Paragraph } from "components/controls.slint";
 import { NavigationItem } from "components/navigation.slint";
+import { Wordmark, ConnectionPower } from "components/brand.slint";
+import { GeometryTarget } from "components/geometry.slint";
 import { ProtectionBadge, ProtectionAlert } from "components/protection-status.slint";
 import { HomePage } from "pages/home.slint";
 import { ProxiesPage } from "pages/proxies.slint";
@@ -31,7 +34,7 @@ export component AppWindow inherits Window {
     title: root.app-title;
     preferred-width: 950px;
     preferred-height: 700px;
-    background: Theme.canvas;
+    background: Theme.sidebar;
     animate background { duration: Motion.appearance; enabled: Motion.active; }
     in-out property <bool> dark <=> UiData.dark;
     in-out property <int> page <=> UiData.page;
@@ -49,7 +52,7 @@ export component AppWindow inherits Window {
     changed font-scale => { Theme.text-scale = root.font-scale; }
     property <int> accent: UiData.accent;
     property <bool> compact-sidebar: self.width < 880px;
-    property <length> sidebar-width: self.compact-sidebar ? 60px : 176px;
+    property <length> sidebar-width: self.compact-sidebar ? 60px : 216px;
     property <bool> error-active: UiData.notice != "" && UiData.notice-error;
     changed accent => { Theme.accent-index = root.accent; }
     property <[string]> titles: ["首页", "代理", "订阅", "连接", "规则", "日志", "网络诊断", "IP 检测", "A÷检测", "设置"];
@@ -73,76 +76,73 @@ export component AppWindow inherits Window {
             return reject;
         }
     Rectangle {
-        x: 0px; y: 0px; width: root.sidebar-width; height: parent.height; background: Theme.sidebar;
+        x: 0px; y: 44px; width: root.sidebar-width; height: parent.height - self.y; background: Theme.sidebar;
         animate background { duration: Motion.appearance; enabled: Motion.active; }
         Rectangle { x: parent.width - 1px; width: 1px; height: parent.height; background: Theme.line; }
-        Rectangle {
-            x: root.compact-sidebar ? 10px : 12px; y: 12px; width: 40px; height: 40px; border-radius: 8px;
-            background: icon-area.pressed ? Theme.accent-wash : icon-area.has-hover ? Theme.inset : transparent;
-            animate background { duration: Motion.fast; enabled: Motion.active; }
-            accessible-role: button;
-            accessible-label: "系统通知";
-            accessible-action-default => { if !UiData.notification-busy && UiData.modal == 0 && !UiData.notice-modal { UiActions.dispatch(Intent.system-notification, "", ""); } }
-            Image { x: 8px; y: 8px; width: 24px; height: 24px; source: @image-url("../../../resources/icons/app.png"); }
-            FocusScope {
-                enabled: !UiData.notification-busy && UiData.modal == 0 && !UiData.notice-modal;
-                key-pressed(event) => {
-                    if event.text == Key.Return || event.text == " " { UiActions.dispatch(Intent.system-notification, "", ""); return accept; }
-                    return reject;
+        HorizontalLayout {
+            x: root.compact-sidebar ? 14px : 16px; y: 8px; width: parent.width - self.x * 2; height: 44px;
+            spacing: 10px; cross-axis-alignment: center;
+            ConnectionPower {
+                width: 30px; height: 30px;
+                connected: UiData.running && UiData.proxy-mode != 2;
+                label: self.connected ? "关闭代理" : UiData.retry-core ? "重启内核" : "连接代理";
+                enabled: (UiData.ready || UiData.retry-core) && !UiData.working && (UiData.retry-core || (!UiData.protected && !UiData.protection-pending)) && UiData.modal == 0 && !UiData.notice-modal;
+                clicked => {
+                    if UiData.retry-core { UiActions.dispatch(Intent.restart-core, "", ""); }
+                    else { UiActions.dispatch(Intent.proxy-mode, UiData.proxy-mode == 2 ? "0" : "2", ""); }
                 }
             }
-            icon-area := TouchArea {
-                enabled: !UiData.notification-busy && UiData.modal == 0 && !UiData.notice-modal;
-                mouse-cursor: pointer;
-                clicked => { UiActions.dispatch(Intent.system-notification, "", ""); }
+            if !root.compact-sidebar: Label {
+                text: !UiData.running ? "内核未启动" : UiData.proxy-mode == 2 ? "代理已关闭" : "已连接";
+                font-weight: 500;
             }
         }
-        if !root.compact-sidebar: Label { x: 56px; y: 16px; height: 32px; width: parent.width - 64px; text: "Clash of Rust"; font-size: 15px * Theme.text-scale; font-weight: 600; }
         nav := ScrollView {
             content-y <=> UiData.scroll-navigation;
-            x: 0px; y: 92px; width: parent.width; height: max(0px, footer.y - self.y - 12px);
-            VerticalLayout { alignment: start; padding-left: 8px; padding-right: 8px; spacing: 4px;
+            x: 0px; y: 62px; width: parent.width; height: max(0px, footer.y - self.y - 12px);
+            VerticalLayout { alignment: start; padding-left: 10px; padding-right: 10px; spacing: 2px;
                 for route-id in root.sidebar-pages: VerticalLayout {
                     spacing: 4px;
                     if route-id == 6 && !root.compact-sidebar: Caption { text: "工具"; height: 24px; font-size: 12px * Theme.text-scale; }
-                    NavigationItem { compact: root.compact-sidebar; text: root.titles[route-id]; icon: root.icons[route-id]; selected: UiData.page == route-id; clicked => { UiActions.dispatch(Intent.navigate, "" + route-id, ""); } }
+                    NavigationItem { compact: root.compact-sidebar; text: root.titles[route-id]; icon: root.icons[route-id]; trailing: route-id == 3 ? UiData.connection-count : ""; selected: UiData.page == route-id; clicked => { UiActions.dispatch(Intent.navigate, "" + route-id, ""); } }
                 }
             }
         }
         footer := VerticalLayout {
             x: 8px; y: parent.height - self.height - 14px; width: parent.width - 16px;
             height: self.preferred-height; spacing: 8px;
+            Rectangle { height: 1px; background: Theme.line; }
             NavigationItem { compact: root.compact-sidebar; text: root.titles[9]; icon: root.icons[9]; selected: UiData.page == 9; clicked => { UiActions.dispatch(Intent.navigate, "9", ""); } }
             if !root.compact-sidebar: Caption { height: 22px; text: UiData.version; font-size: 12px * Theme.text-scale; }
         }
     }
-    Rectangle {
-        x: root.sidebar-width + 24px; y: 20px; width: parent.width - self.x - 24px; height: parent.height - 36px;
+    content-area := Rectangle {
+        x: root.sidebar-width; y: 44px; width: parent.width - self.x; height: parent.height - self.y;
+        background: Theme.canvas; border-top-left-radius: 14px;
+        border-width: 1px; border-color: Theme.subtle-line;
         VerticalLayout {
             spacing: Theme.page-gap;
+            padding-left: 24px; padding-right: 24px; padding-bottom: 20px;
             Rectangle {
-                height: max(72px, header.preferred-height);
+                height: max(52px, header.preferred-height + 12px);
+                Rectangle { y: parent.height - 1px; width: parent.width; height: 1px; background: Theme.subtle-line; }
                 header := HorizontalLayout { cross-axis-alignment: center; spacing: Theme.page-gap;
-                    VerticalLayout { spacing: 4px;
-                        Label { text: root.titles[UiData.page]; font-size: 20px * Theme.text-scale; font-weight: 600; }
-                        if !root.compact-sidebar: Caption { text: root.subtitles[UiData.page]; font-size: Theme.detail-size; }
+                    Label { text: root.titles[UiData.page]; font-size: Theme.body-size; font-weight: 600; horizontal-stretch: 0; }
+                    Rectangle { horizontal-stretch: 1; }
+                    if UiData.page == 2: ActionButton { text: "打开目录"; quiet: true; compact: true; enabled: UiData.ready; clicked => { UiActions.dispatch(Intent.open-profiles, "", ""); } }
+                    if UiData.page == 3: ActionButton { text: "关闭全部"; quiet: true; compact: true; danger: true; enabled: UiData.running && !UiData.working && !UiData.protected && !UiData.protection-pending; clicked => { UiActions.dispatch(Intent.close-all, "", ""); } }
+                    if UiData.page == 4: ActionButton { text: "+ 新建规则"; primary: true; compact: true; enabled: !UiData.protected && !UiData.protection-pending && UiData.rule-types.length > 0 && !UiData.working; clicked => { UiActions.dispatch(Intent.rule-add, "", ""); } }
+                    if UiData.page == 5: ActionButton { text: "导出"; quiet: true; compact: true; enabled: UiData.ready && !UiData.working; clicked => { UiActions.dispatch(Intent.export-logs, "", ""); } }
+                    if UiData.page == 5: ActionButton { text: "清空"; quiet: true; compact: true; enabled: UiData.ready && !UiData.working && !UiData.protected && !UiData.protection-pending; clicked => { UiActions.dispatch(Intent.clear-logs, "", ""); } }
+                    if UiData.page == 7: ActionButton { text: UiData.sites-busy ? "取消" : UiData.sites-started ? "重测" : "一键检测"; compact: true; enabled: UiData.running && !UiData.working; clicked => { UiActions.dispatch(UiData.sites-busy ? Intent.site-cancel : Intent.site-all, "", ""); } }
+                    if UiData.page == 8: ActionButton { text: "导出报告"; quiet: true; compact: true; enabled: UiData.ready; clicked => { UiActions.dispatch(Intent.claude-export, "", ""); } }
+                    if UiData.page == 8: ActionButton { text: "补充采样"; quiet: true; compact: true; clicked => { UiActions.dispatch(Intent.claude-guide, "supplement", ""); } }
+                    if UiData.protection-health > 0: ProtectionBadge {
+                        health: UiData.protection-health;
+                        enabled: UiData.modal == 0 && !UiData.notice-modal;
+                        clicked => { UiActions.dispatch(Intent.navigate, "8", ""); }
                     }
-                    VerticalLayout { width: 250px; spacing: 8px;
-                        HorizontalLayout { cross-axis-alignment: center; spacing: 8px;
-                            Rectangle { horizontal-stretch: 1; }
-                            if UiData.protection-health > 0: ProtectionBadge {
-                                health: UiData.protection-health;
-                                enabled: UiData.modal == 0 && !UiData.notice-modal;
-                                clicked => { UiActions.dispatch(Intent.navigate, "8", ""); }
-                            }
-                            Badge { text: UiData.running ? "● 内核运行中" : UiData.ready ? "● 内核未启动" : "● 正在初始化"; tone: UiData.running ? 1 : 4; }
-                        }
-                        HorizontalLayout { alignment: end; spacing: 4px;
-                            Caption { text: UiData.profile; horizontal-alignment: right; }
-                            if UiData.node != "": Caption { text: "|"; }
-                            if UiData.node != "": Caption { text: UiData.node; horizontal-alignment: right; }
-                        }
-                    }
+                    Badge { text: UiData.running ? "● 内核运行中" : UiData.ready ? "● 内核未启动" : "● 正在初始化"; tone: UiData.running ? 1 : 4; }
                 }
             }
             if UiData.protection-health == 3: ProtectionAlert {
@@ -150,11 +150,23 @@ export component AppWindow inherits Window {
                 enabled: UiData.modal == 0 && !UiData.notice-modal;
                 clicked => { UiActions.dispatch(Intent.navigate, "8", ""); }
             }
+            if UiData.protected || UiData.protection-pending: ContentPanel {
+                horizontal-padding: 12px; vertical-padding: 8px;
+                HorizontalLayout { spacing: 10px; cross-axis-alignment: center;
+                    Rectangle { width: 8px; height: 8px; border-radius: 4px; background: Theme.success; horizontal-stretch: 0; }
+                    Paragraph { text: "Claude 保护期间为只读状态，更新、切换与设置修改已暂停。"; horizontal-stretch: 1; min-width: 0px; }
+                    ActionButton {
+                        text: "关闭保护"; compact: true; quiet: true;
+                        enabled: !UiData.protection-pending && !UiData.working;
+                        clicked => { UiActions.dispatch(Intent.claude-protection, "false", ""); }
+                    }
+                }
+            }
             if UiData.network-alert != "": ContentPanel {
                 Paragraph { text: UiData.network-alert; color: Theme.warning; }
                 DiagnosticActions { context: UiData.network-alert; }
             }
-            if UiData.update-busy || UiData.update-available: ContentPanel {
+            if UiData.update-busy || (UiData.update-available && !UiData.protected && !UiData.protection-pending): ContentPanel {
                 HorizontalLayout { cross-axis-alignment: center; spacing: Theme.content-gap;
                     Label { text: UiData.update-status; wrap: word-wrap; }
                     if UiData.update-downloading: ActionButton { text: "取消"; clicked => { UiActions.dispatch(Intent.cancel-update, "", ""); } }
@@ -162,8 +174,9 @@ export component AppWindow inherits Window {
                 }
                 if UiData.update-downloading: ProgressTrack { value: UiData.update-fraction; track: Theme.subtle-line; fill: Theme.accent; }
             }
-            Rectangle {
+            page-host := Rectangle {
                 vertical-stretch: 1; min-height: 0px; clip: true;
+                GeometryTarget { key: "content"; bounds: [page-host.absolute-position.x, page-host.absolute-position.y, page-host.width, page-host.height]; }
                 if UiData.page == 0: HomePage { }
                 if UiData.page == 1: ProxiesPage { }
                 if UiData.page == 2: SubscriptionsPage { }
@@ -173,11 +186,20 @@ export component AppWindow inherits Window {
                 if UiData.page == 6: NetworkPage { }
                 if UiData.page == 7: IpCheckPage { }
                 if UiData.page == 8: AiCheckPage { }
-                if UiData.page == 9: SettingsPage { }
+                if UiData.page == 9: SettingsPage { wide-navigation: root.width > 880px; }
             }
         }
     }
-    // Only active/closing overlays mount their content; the page remains live.
+    Rectangle {
+        x: 0px; y: 0px; height: 44px; width: root.width; background: Theme.sidebar;
+        Image { x: 16px; y: 11px; width: 22px; height: 22px; source: @image-url("../../../resources/icons/app.png"); }
+        Wordmark { x: 48px; y: 11px; }
+        ActionButton {
+            x: parent.width - self.width - 16px; y: (44px - self.height) / 2;
+            text: "系统通知"; compact: true; quiet: true; enabled: !UiData.notification-busy;
+            clicked => { UiActions.dispatch(Intent.system-notification, "", ""); }
+        }
+    }
     dialog-host := AppDialog { }
     // Last sibling: notices overlay dialogs without changing page geometry.
     notice-host := DesktopNotice {

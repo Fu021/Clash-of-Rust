@@ -1,6 +1,7 @@
 import { Motion, Presence } from "../components/motion.slint";
 import { DiagnosticActions } from "../components/notice.slint";
 import { Theme, AccentPalette } from "../theme/palette.slint";
+import { GeometryTarget } from "../components/geometry.slint";
 import { UiData, UiActions, Intent } from "../state.slint";
 import { PageScroll, Label, Caption, Paragraph, Heading, Panel, ContentPanel, ActionButton, Field, Select, SettingRow, CopyButton, Divider } from "../components/controls.slint";
 export component AppDialog inherits Rectangle {
@@ -34,16 +35,18 @@ export component AppDialog inherits Rectangle {
     if presence.mounted: Rectangle {
         opacity: presence.progress;
         property <bool> opened: UiData.modal != 0;
-        changed opened => { if self.opened { modal-focus.focus(); } }
-        background: #00000065;
-        TouchArea { }
-        init => { modal-focus.focus(); }
-        modal-focus := FocusScope { enabled: UiData.modal != 0; }
+        changed opened => { if self.opened && root.kind != 10 { modal-focus.focus(); } }
+        background: root.kind == 10 ? transparent : #00000065;
+        if root.kind != 10: TouchArea { }
+        init => { if root.kind != 10 { modal-focus.focus(); } }
+        modal-focus := FocusScope { enabled: UiData.modal != 0 && root.kind != 10; }
         dialog := Panel {
-            x: (parent.width - self.width) / 2;
-            y: (parent.height - self.height) / 2 + (1 - presence.progress) * 8px;
-            width: min(parent.width - 48px, root.kind == 10 || root.kind == 11 || root.kind == 13 ? 700px : 600px);
-            height: min(parent.height - 48px, content.preferred-height);
+            border-radius: root.kind == 10 ? 0px : 18px;
+            drop-shadow-blur: 32px; drop-shadow-offset-y: 8px;
+            x: root.kind == 10 ? parent.width - self.width + (1 - presence.progress) * 32px : (parent.width - self.width) / 2;
+            y: root.kind == 10 ? 44px : (parent.height - self.height) / 2 + (1 - presence.progress) * 8px;
+            width: min(parent.width - 48px, root.kind == 10 ? 360px * Theme.text-scale : root.kind == 11 || root.kind == 13 ? 700px : 600px);
+            height: root.kind == 10 ? parent.height - 44px : min(parent.height - 48px, content.preferred-height);
             content := VerticalLayout {
                 padding: Theme.dialog-padding; spacing: Theme.dialog-gap;
                 Heading { text: UiData.modal != 0 ? UiData.modal-title : root.last-title; font-size: 20px * Theme.text-scale; }
@@ -88,7 +91,7 @@ export component AppDialog inherits Rectangle {
                                 spacing: Theme.page-gap;
                                 HorizontalLayout { cross-axis-alignment: center; spacing: Theme.content-gap;
                                     Caption { text: "类型"; width: 80px; }
-                                    Select { modal-control: true; value: UiData.rule-kind; options: UiData.rule-types; selected(index, value) => { UiActions.dispatch(Intent.rule-kind, value, ""); } }
+                                    Select { geometry-key: "rule-kind"; modal-control: true; value: UiData.rule-kind; options: UiData.rule-types; selected(index, value) => { UiActions.dispatch(Intent.rule-kind, value, ""); } }
                                 }
                                 HorizontalLayout { cross-axis-alignment: center; spacing: Theme.content-gap;
                                     Caption { text: "匹配内容"; width: 80px; }
@@ -96,7 +99,7 @@ export component AppDialog inherits Rectangle {
                                 }
                                 HorizontalLayout { cross-axis-alignment: center; spacing: Theme.content-gap;
                                     Caption { text: "策略"; width: 80px; }
-                                    Select { modal-control: true; value: UiData.rule-policy; options: UiData.rule-policies; selected(index, value) => { UiActions.dispatch(Intent.rule-policy, value, ""); } }
+                                    Select { geometry-key: "rule-policy"; modal-control: true; value: UiData.rule-policy; options: UiData.rule-policies; selected(index, value) => { UiActions.dispatch(Intent.rule-policy, value, ""); } }
                                 }
                                 if (UiData.rule-kind == "GEOIP" || UiData.rule-kind == "IP-CIDR" || UiData.rule-kind == "IP-CIDR6" || UiData.rule-kind == "IP-ASN" || UiData.rule-kind == "RULE-SET"): SettingRow { modal-control: true; title: "no-resolve"; checked: UiData.rule-no-resolve; toggled(value) => { UiActions.dispatch(Intent.rule-no-resolve, value ? "true" : "false", ""); } }
                             }
@@ -115,8 +118,8 @@ export component AppDialog inherits Rectangle {
                         }
                         if root.kind == 9: VerticalLayout {
                             spacing: Theme.page-gap;
-                            Field { modal-control: true; accepted => { if UiData.modal-can-accept && !UiData.working && !UiData.exiting { UiActions.dispatch(Intent.confirm, "", ""); } } secret: true; placeholder: "可选：ipapi.is API 密钥"; text <=> UiData.reputation-key; edited(value) => { UiActions.dispatch(Intent.claude-key, value, ""); } }
-                            ActionButton { modal-control: true; text: "保存密钥"; enabled: !UiData.working; clicked => { UiActions.dispatch(Intent.claude-save-key, "", ""); } }
+                            Field { modal-control: true; accepted => { if UiData.modal-can-accept && !UiData.working && !UiData.exiting { UiActions.dispatch(Intent.confirm, "", ""); } } secret: true; placeholder: "可选：ipapi.is API 密钥"; text <=> UiData.reputation-key; enabled: !UiData.protected && !UiData.protection-pending; edited(value) => { UiActions.dispatch(Intent.claude-key, value, ""); } }
+                            ActionButton { modal-control: true; text: "保存密钥"; enabled: !UiData.working && !UiData.protected && !UiData.protection-pending; clicked => { UiActions.dispatch(Intent.claude-save-key, "", ""); } }
                             HorizontalLayout { cross-axis-alignment: center; spacing: Theme.content-gap;
                                 ActionButton { modal-control: true; text: "注册信息"; enabled: UiData.running && !UiData.claude-busy; clicked => { UiActions.dispatch(Intent.claude-additional, "registration", ""); } }
                                 ActionButton { modal-control: true; text: "全球探针"; enabled: UiData.running && !UiData.claude-busy; clicked => { UiActions.dispatch(Intent.claude-additional, "global-ping", ""); } }
@@ -143,7 +146,8 @@ export component AppDialog inherits Rectangle {
                         if root.kind == 12: VerticalLayout {
                             spacing: Theme.page-gap;
                             for row in [0, 1]: HorizontalLayout { cross-axis-alignment: center; spacing: Theme.page-gap;
-                                for column in [0, 1, 2]: Rectangle {
+                                for column in [0, 1, 2]: swatch := Rectangle {
+                                    GeometryTarget { key: "accent:" + (row * 3 + column); bounds: [swatch.absolute-position.x, swatch.absolute-position.y, swatch.width, swatch.height]; }
                                     width: (dialog.width - Theme.dialog-padding * 2 - Theme.content-gap - Theme.page-gap * 2) / 3; height: 76px;
                                     border-radius: 8px; border-width: 1px;
                                     border-color: root.selected-accent == row * 3 + column ? Theme.accent : Theme.line;
@@ -166,6 +170,11 @@ export component AppDialog inherits Rectangle {
                         enabled: root.kind != 10 || UiData.connection-details.length > 0;
                     }
                     Rectangle { horizontal-stretch: 1; }
+                    if root.kind == 10: ActionButton {
+                        modal-control: true; text: "关闭连接"; danger: true; compact: true;
+                        enabled: UiData.connection-selected-id != "" && UiData.connection-details.length > 0 && !UiData.working && !UiData.protected && !UiData.protection-pending;
+                        clicked => { UiActions.dispatch(Intent.close-connection, UiData.connection-selected-id, ""); }
+                    }
                     ActionButton { modal-control: true; text: (UiData.modal != 0 ? UiData.modal-accept : root.last-accept) == "" ? "关闭" : "取消"; clicked => { UiActions.dispatch(Intent.cancel-confirm, "", ""); } }
                     if (UiData.modal != 0 ? UiData.modal-accept : root.last-accept) != "": ActionButton { modal-control: true;
                         text: UiData.modal != 0 ? UiData.modal-accept : root.last-accept; primary: !UiData.modal-danger; danger: UiData.modal-danger;

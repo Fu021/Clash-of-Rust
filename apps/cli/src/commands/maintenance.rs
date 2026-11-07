@@ -71,6 +71,7 @@ pub(super) async fn execute(args: &Args) -> Result<()> {
         }
         path if path.starts_with("service ") => {
             if path != "service status" {
+                backend::store(args)?.load_settings()?.require_mutable()?;
                 output::confirm(
                     args,
                     if path == "service install" {
@@ -167,17 +168,16 @@ async fn update(args: &Args) -> Result<()> {
     let (port, api, include_prereleases) =
         if let Some(remote) = backend::connect(args, false).await? {
             let meta: Meta = remote.request(Command::Meta).await?;
+            meta.settings.require_mutable()?;
             (
                 meta.running.then_some(meta.settings.download_ports()),
                 Some(clash_client_core::api::Api::new(&meta.settings)?),
                 meta.settings.update_prereleases,
             )
         } else {
-            (
-                None,
-                None,
-                backend::store(args)?.load_settings()?.update_prereleases,
-            )
+            let settings = backend::store(args)?.load_settings()?;
+            settings.require_mutable()?;
+            (None, None, settings.update_prereleases)
         };
     if args.path == "update install" {
         let prompt = if include_prereleases {

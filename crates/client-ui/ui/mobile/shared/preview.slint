@@ -8,6 +8,7 @@ import "../../../../../resources/fonts/SourceHanSansCN-Regular.otf";
 import "../../../../../resources/fonts/NotoColorEmoji-Regular.ttf";
 
 export component MobilePreviewSurface inherits Rectangle {
+    in-out property <bool> preview-long-names;
     in-out property <bool> preview-motion;
     changed preview-motion => { Motion.enabled = root.preview-motion; }
     init => { Motion.enabled = root.preview-motion; }
@@ -26,6 +27,7 @@ export component MobilePreviewSurface inherits Rectangle {
     in-out property <bool> preview-selected-rule <=> MobileView.rule-selected;
     in-out property <bool> preview-shortcuts <=> MobileView.shortcuts-open;
     in-out property <length> preview-rules-scroll <=> MobileView.rules-scroll-y;
+    in-out property <length> preview-home-scroll <=> MobileView.home-scroll-y;
     in-out property <bool> preview-protection-pending <=> MobileData.protection-pending;
     in-out property <bool> preview-protected <=> MobileData.protected;
     in-out property <int> preview-protection-health <=> MobileData.protection-health;
@@ -41,7 +43,7 @@ export component MobilePreviewSurface inherits Rectangle {
     }
     changed preview-dark => { Theme.system-dark = root.preview-dark; }
     changed text-scale => { Theme.text-scale = root.text-scale; }
-    MobileFixture { }
+    MobileFixture { long-names: root.preview-long-names; }
     Rectangle { @children }
     if root.preview-keyboard > 0px: Rectangle {
         y: parent.height - root.preview-keyboard; height: root.preview-keyboard; width: parent.width;

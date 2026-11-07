@@ -23,14 +23,15 @@ export component MobileFakeIp inherits VerticalLayout {
         }
     }
     ListView { min-height: 0px; vertical-stretch: 1;
-        for entry in MobileData.fake-ip-exclusions: Rectangle { height: card.height + MobileTypography.small-gap;
+        for entry in MobileData.fake-ip-exclusions: Rectangle { height: card.height + 1px;
             card := MCard { width: parent.width;
+                border-radius: 0px; border-width: 0px; vertical-padding: 6px;
                 HorizontalLayout { spacing: MobileTypography.small-gap; cross-axis-alignment: center;
                     VerticalLayout { spacing: 4px;
                         MText { text: entry.domain; }
                         MSmall { text: "来源：" + entry.source; wrap: word-wrap; }
                     }
-                    MButton { text: "删除"; width: 64px; horizontal-stretch: 0; danger: true; enabled: root.editable;
+                    MButton { text: "删除"; quiet: true; width: 64px; horizontal-stretch: 0; danger: true; enabled: root.editable;
                         clicked => { MobileActions.request(MobileIntent.fake-ip-remove, entry.domain, ""); }
                     }
                 }
@@ -138,8 +139,8 @@ export component MobileDetectionOptions inherits MScroll {
         MCard {
             MHeading { text: "IP 信誉查询"; }
             MSmall { text: MobileData.reputation-key-saved ? "已保存自定义密钥；留空保存可清除。" : "可选填写 ipapi.is 密钥；留空使用公共查询。"; wrap: word-wrap; }
-            MField { secret: true; text <=> MobileView.reputation-key; placeholder: "可选：ipapi.is API 密钥"; }
-            MButton { text: "保存"; enabled: !MobileData.claude-busy && !MobileData.working;
+            MField { secret: true; text <=> MobileView.reputation-key; placeholder: "可选：ipapi.is API 密钥"; enabled: !MobileData.protected && !MobileData.protection-pending; }
+            MButton { text: "保存"; enabled: !MobileData.claude-busy && !MobileData.working && !MobileData.protected && !MobileData.protection-pending;
                 clicked => { MobileActions.request(MobileIntent.claude-key, MobileView.reputation-key, ""); }
             }
         }

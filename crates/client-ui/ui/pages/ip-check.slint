@@ -1,7 +1,7 @@
 import { PageSurface, ProgressTrack } from "../components/motion.slint";
 import { Theme } from "../theme/palette.slint";
 import { UiData, UiActions, Intent, CategoryItem } from "../state.slint";
-import { PageScroll, Label, Caption, Heading, ContentPanel, ActionButton, Field, Select, Badge, Paragraph } from "../components/controls.slint";
+import { PageScroll, Label, Caption, Heading, Panel, ContentPanel, ActionButton, Field, Select, Badge, Paragraph } from "../components/controls.slint";
 
 component CategoryCard inherits ContentPanel {
     in property <CategoryItem> item;
@@ -24,27 +24,27 @@ export component IpCheckPage inherits PageSurface {
         x: 0px; width: parent.width + Theme.content-gap;
         VerticalLayout {
             alignment: start; padding-right: Theme.content-gap; spacing: Theme.page-gap;
-            HorizontalLayout { cross-axis-alignment: center; spacing: Theme.content-gap;
-                Heading { text: UiData.sites-report ? "检测报告" : UiData.site-category; }
-                Caption { text: UiData.site-progress; horizontal-alignment: right; }
-                if UiData.sites-busy: ActionButton { text: "取消"; clicked => { UiActions.dispatch(Intent.site-cancel, "", ""); } }
-                if !UiData.sites-busy: ActionButton { text: UiData.sites-started ? "重新检测" : "一键检测"; primary: true; enabled: UiData.running && !UiData.working; clicked => { UiActions.dispatch(Intent.site-all, "", ""); } }
-            }
-            ProgressTrack { value: UiData.site-fraction; track: Theme.subtle-line; fill: Theme.accent; }
-            if UiData.site-summary != "": ContentPanel {
-                Paragraph { text: UiData.site-summary; }
+            ContentPanel {
+                HorizontalLayout { spacing: 16px; cross-axis-alignment: start;
+                    VerticalLayout { spacing: 8px;
+                        Caption { text: UiData.site-summary == "" ? "检测当前出口与平台可用情况" : UiData.site-summary; wrap: word-wrap; }
+                        Heading { text: UiData.site-counts.length > 0 ? UiData.site-counts[0].label : "等待检测"; font-size: 24px * Theme.text-scale; color: Theme.success; }
+                    }
+                    Caption { text: UiData.site-progress; horizontal-stretch: 0; }
+                }
+                ProgressTrack { value: UiData.site-fraction; track: Theme.subtle-line; fill: Theme.accent; }
                 if UiData.site-exit-country != "": HorizontalLayout {
                     cross-axis-alignment: center; spacing: Theme.content-gap;
-                    Caption { text: "出口地区："; horizontal-stretch: 0; }
                     if UiData.site-exit-flagged: Text { text: UiData.site-exit-flag; width: 24px; height: 24px; font-size: 20px; }
                     Label { text: UiData.site-exit-country; }
                 }
             }
-            if UiData.sites-report: PageScroll {
-                content-y <=> UiData.scroll-site-categories;
-                height: Theme.control-height + Theme.content-gap;
-                HorizontalLayout { alignment: start; spacing: Theme.content-gap;
-                    for count in UiData.site-counts: ActionButton { text: count.label; clicked => { UiActions.dispatch(Intent.site-status, count.id, "all"); } }
+            if UiData.sites-report: GridLayout {
+                spacing: 6px;
+                for count[index] in UiData.site-counts: ActionButton {
+                    col: mod(index, root.width > 900px ? 5 : 3); row: floor(index / (root.width > 900px ? 5 : 3));
+                    text: count.label; compact: true; quiet: true;
+                    clicked => { UiActions.dispatch(Intent.site-status, count.id, "all"); }
                 }
             }
             if UiData.sites-report: VerticalLayout {
@@ -64,9 +64,9 @@ export component IpCheckPage inherits PageSurface {
                     ActionButton { text: "重测分类"; enabled: UiData.running && !UiData.sites-busy; clicked => { UiActions.dispatch(Intent.site-retest, "", ""); } }
                 }
                 HorizontalLayout { cross-axis-alignment: center; spacing: Theme.content-gap;
-                    Select { options: UiData.site-category-options; value: UiData.site-category; selected(index, value) => { UiActions.dispatch(Intent.site-category, value, ""); } }
-                    Select { options: UiData.site-status-options; value: UiData.site-status; selected(index, value) => { UiActions.dispatch(Intent.site-status, value, ""); } }
-                    Select { options: UiData.site-region-options; value: UiData.site-region; selected(index, value) => { UiActions.dispatch(Intent.site-region, value, ""); } }
+                    Select { geometry-key: "site-category"; options: UiData.site-category-options; value: UiData.site-category; selected(index, value) => { UiActions.dispatch(Intent.site-category, value, ""); } }
+                    Select { geometry-key: "site-status"; options: UiData.site-status-options; value: UiData.site-status; selected(index, value) => { UiActions.dispatch(Intent.site-status, value, ""); } }
+                    Select { geometry-key: "site-region"; options: UiData.site-region-options; value: UiData.site-region; selected(index, value) => { UiActions.dispatch(Intent.site-region, value, ""); } }
                     ActionButton { text: "清除筛选"; clicked => { UiActions.dispatch(Intent.site-reset, "", ""); } }
                 }
                 for result in UiData.site-results: ContentPanel {

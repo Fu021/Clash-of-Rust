@@ -2,14 +2,19 @@ import { PageSurface } from "../components/motion.slint";
 import { Theme } from "../theme/palette.slint";
 import { UiData, UiActions, Intent } from "../state.slint";
 import { PageScroll, Label, Caption, Panel, ActionButton, Field, Badge, Select, CopyButton } from "../components/controls.slint";
+import { GeometryTarget } from "../components/geometry.slint";
+import { ChoiceBar } from "../components/sections.slint";
 export component LogsPage inherits PageSurface {
     VerticalLayout {
         spacing: Theme.page-gap;
         HorizontalLayout { cross-axis-alignment: center; spacing: Theme.content-gap;
+            if root.width >= 720px && Theme.text-scale <= 1.1: ChoiceBar {
+                width: 260px; horizontal-stretch: 0; options: ["全部", "信息", "警告", "错误"];
+                selected: UiData.log-level == "INFO" ? 1 : UiData.log-level == "WARN" ? 2 : UiData.log-level == "ERROR" ? 3 : 0;
+                chosen(index) => { UiActions.dispatch(Intent.log-level, ["全部等级", "INFO", "WARN", "ERROR"][index], ""); }
+            }
             Field { placeholder: "搜索日志"; focus-id: "page-search"; text <=> UiData.query; edited(value) => { UiActions.dispatch(Intent.query, value, ""); } }
-            Select { width: 132px; horizontal-stretch: 0; options: ["全部等级", "TRACE", "DEBUG", "INFO", "WARN", "ERROR"]; value: UiData.log-level; selected(index, value) => { UiActions.dispatch(Intent.log-level, value, ""); } }
-            ActionButton { text: "导出"; enabled: UiData.ready && !UiData.working; clicked => { UiActions.dispatch(Intent.export-logs, "", ""); } }
-            ActionButton { text: "清空"; enabled: UiData.ready && !UiData.working; clicked => { UiActions.dispatch(Intent.clear-logs, "", ""); } }
+            Select { geometry-key: "log-level"; width: 112px; horizontal-stretch: 0; options: ["全部等级", "TRACE", "DEBUG", "INFO", "WARN", "ERROR"]; value: UiData.log-level; selected(index, value) => { UiActions.dispatch(Intent.log-level, value, ""); } }
         }
         Panel {
             vertical-stretch: 1;
@@ -17,9 +22,11 @@ export component LogsPage inherits PageSurface {
                 content-key: UiData.page-offset + "/" + UiData.query + "/" + UiData.log-level;
                 content-y <=> UiData.scroll-logs;
                 VerticalLayout {
-                    alignment: start; padding: Theme.card-padding; spacing: Theme.content-gap;
-                    for entry in UiData.logs: Rectangle {
-                        height: max(44px, Theme.control-height + 8px);
+                    alignment: start; padding-top: 6px; padding-bottom: 6px; spacing: 0px;
+                    for entry in UiData.logs: entry-row := Rectangle {
+                        GeometryTarget { key: "log:" + entry.message; bounds: [entry-row.absolute-position.x, entry-row.absolute-position.y, entry-row.width, entry-row.height]; }
+                        height: max(34px, Theme.detail-size * 1.6 + 12px);
+                        background: row-area.has-hover ? Theme.inset : entry.tone == 3 ? Theme.danger-wash : entry.tone == 2 ? Theme.warning-wash : transparent;
                         accessible-role: button;
                         accessible-label: entry.message;
                         accessible-action-default => { if UiData.modal == 0 { UiActions.dispatch(Intent.log-detail, entry.message, ""); } }
@@ -30,12 +37,12 @@ export component LogsPage inherits PageSurface {
                                 return reject;
                             }
                         }
-                        TouchArea { enabled: UiData.modal == 0; mouse-cursor: pointer; clicked => { UiActions.dispatch(Intent.log-detail, entry.message, ""); } }
-                        HorizontalLayout { cross-axis-alignment: center; spacing: Theme.page-gap;
+                        row-area := TouchArea { enabled: UiData.modal == 0; mouse-cursor: pointer; clicked => { UiActions.dispatch(Intent.log-detail, entry.message, ""); } }
+                        HorizontalLayout { cross-axis-alignment: center; spacing: 10px; padding-left: 16px; padding-right: 8px;
                             if entry.time != "": Caption { text: entry.time; width: 66px; horizontal-stretch: 0; }
-                            Badge { text: entry.level; tone: entry.tone; width: 60px * Theme.text-scale; }
-                            Label { text: entry.message; }
-                            CopyButton { value: entry.message; }
+                            Caption { text: entry.level; color: entry.tone == 3 ? Theme.danger : entry.tone == 2 ? Theme.warning : Theme.secondary; width: 52px * Theme.text-scale; horizontal-stretch: 0; }
+                            Label { text: entry.message; font-size: Theme.detail-size; }
+                            CopyButton { geometry-key: "copy-log:" + entry.message; value: entry.message; quiet: true; compact: true; }
                         }
                     }
                 }

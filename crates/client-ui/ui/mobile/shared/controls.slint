@@ -48,9 +48,19 @@ export component MText {
         horizontal-alignment: root.horizontal-alignment; wrap: root.wrap; overflow: elide;
     }
 }
-export component MSmall inherits MText { font-size: MobileTypography.font-size(14); color: Theme.secondary; }
+export component MSmall inherits MText { font-size: MobileTypography.font-size(13); color: Theme.secondary; }
 export component MHeading inherits MText { font-size: MobileTypography.font-size(19); font-weight: 600; }
 export component MParagraph inherits MText { wrap: word-wrap; height: self.preferred-height; }
+export component MToolHeading inherits HorizontalLayout {
+    in property <string> title;
+    in property <image> icon;
+    spacing: 12px; cross-axis-alignment: center;
+    Rectangle { width: 34px; height: 34px; border-radius: 10px; background: Theme.inset;
+        Image { x: 8px; y: 8px; width: 18px; height: 18px; source: root.icon; colorize: Theme.secondary; }
+    }
+    MText { text: root.title; font-weight: 600; }
+    @children
+}
 // A touch viewport with an explicit content extent. Do not inherit a desktop
 // ScrollView whose generated wrapper can constrain conditional layouts to the
 // visible height, leaving Android with no scrollable overflow.
@@ -105,17 +115,18 @@ export component MCard inherits Rectangle {
     in property <bool> selected;
     in property <bool> interactive;
     in property <length> vertical-padding: MobileTypography.padding;
+    in property <length> horizontal-padding: MobileTypography.padding;
     in property <length> gap: MobileTypography.gap;
     callback clicked();
     preferred-width: 0px; min-width: 0px; horizontal-stretch: 1; vertical-stretch: 0;
     height: content.preferred-height;
     background: root.selected ? Theme.accent-wash : Theme.surface;
-    border-width: 1px; border-color: root.selected ? Theme.accent : Theme.line; border-radius: 10px;
+    border-width: 1px; border-color: root.selected ? Theme.accent : Theme.line; border-radius: 18px;
     animate background, border-color { duration: Motion.control; enabled: Motion.active; }
     if root.interactive: TouchArea { enabled: !MobileView.modal && !MobileView.notice-modal; mouse-cursor: pointer; clicked => { root.clicked(); } }
     content := VerticalLayout {
         alignment: start;
-        padding-left: MobileTypography.padding; padding-right: MobileTypography.padding;
+        padding-left: root.horizontal-padding; padding-right: root.horizontal-padding;
         padding-top: root.vertical-padding; padding-bottom: root.vertical-padding;
         spacing: root.gap; @children
     }
@@ -135,6 +146,8 @@ export component MButton inherits Rectangle {
     out property <length> press-offset: area.pressed && root.interactive ? 1px : 0px;
     animate press-offset { duration: Motion.fast; easing: ease-out; enabled: Motion.active; }
     in property <bool> notice-control;
+    in property <bool> quiet;
+    in property <bool> compact;
     property <bool> interactive: root.enabled && !root.busy && (!MobileView.modal || root.modal-control) && (!MobileView.notice-modal || root.notice-control);
     property <bool> keyboard-focus;
     callback clicked();
@@ -143,10 +156,10 @@ export component MButton inherits Rectangle {
     height: max(48px, label.preferred-height + 24px); vertical-stretch: 0;
     background: root.primary ? (area.pressed && root.enabled ? Theme.primary.darker(0.15) : Theme.primary)
         : root.success ? Theme.success-wash : root.selected || (area.pressed && root.enabled) ? Theme.accent-wash
-        : area.has-hover && root.enabled ? Theme.inset : Theme.surface;
-    border-width: 1px; border-radius: 6px;
+        : area.has-hover && root.enabled ? Theme.inset : root.quiet ? transparent : Theme.surface;
+    border-width: 1px; border-radius: 10px;
     border-color: root.enabled && root.keyboard-focus && keys.has-focus ? Theme.ink
-        : root.primary ? Theme.primary : root.selected || (area.pressed && root.enabled) ? Theme.accent : Theme.line;
+        : root.primary ? Theme.primary : root.selected || (area.pressed && root.enabled) ? Theme.accent : root.quiet ? transparent : Theme.line;
     opacity: root.enabled || root.busy ? 1 : 0.5;
     animate background, border-color, opacity { duration: Motion.fast; enabled: Motion.active; }
     if root.busy: ProgressTrack { y: parent.height - 3px; width: parent.width; indeterminate: true; track: transparent; fill: root.primary ? #ffffff : Theme.accent; }
@@ -157,7 +170,7 @@ export component MButton inherits Rectangle {
     label := MText { y: root.press-offset; width: parent.width - 12px - (root.dropdown ? 24px : 0px) - (root.show-swatch ? 26px : 0px); x: root.show-swatch ? 32px : 6px; height: parent.height;
         text: root.text; horizontal-alignment: center;
         color: root.primary ? #ffffff : root.danger ? Theme.danger : root.success ? Theme.success : root.selected ? Theme.accent : Theme.ink;
-        font-size: MobileTypography.font-size(15);
+        font-size: MobileTypography.font-size(root.compact ? 13 : 15);
     }
     if root.dropdown: Image { source: @image-url("../../icons/chevron-down.svg");
         x: parent.width - 28px; y: (parent.height - 18px) / 2 + root.press-offset; width: 18px; height: 18px; colorize: Theme.secondary;
@@ -173,6 +186,33 @@ export component MButton inherits Rectangle {
     }
     area := TouchArea { enabled: root.interactive; mouse-cursor: pointer;
         clicked => { root.keyboard-focus = false; keys.focus(); root.clicked(); }
+    }
+}
+// Permanent while protection is active: the status is readable everywhere,
+// but only disabling protection or diagnostics remain available.
+export component MProtectionLock inherits Rectangle {
+    in property <bool> enabled: true;
+    in property <bool> pending: false;
+    min-height: max(50px, detail.preferred-height + 18px);
+    preferred-height: self.min-height;
+    border-radius: 12px; border-width: 1px;
+    border-color: Theme.success.with-alpha(0.28);
+    background: Theme.success-wash;
+    HorizontalLayout {
+        padding-left: 12px; padding-right: 8px; padding-top: 6px; padding-bottom: 6px;
+        spacing: 8px; cross-axis-alignment: center;
+        Rectangle { width: 8px; height: 8px; border-radius: 4px; background: Theme.success; horizontal-stretch: 0; }
+        detail := MParagraph {
+            text: "Claude 保护只读模式，更新与设置已暂停。";
+            font-size: MobileTypography.font-size(13); color: Theme.ink;
+            horizontal-stretch: 1; min-width: 0px;
+        }
+        MButton {
+            text: "关闭保护"; quiet: true; compact: true;
+            width: max(88px, MobileTypography.font-size(13) * 5.4); horizontal-stretch: 0;
+            enabled: root.enabled && !root.pending;
+            clicked => { MobileActions.request(MobileIntent.claude-protection, "false", ""); }
+        }
     }
 }
 export component MPagination inherits HorizontalLayout {
@@ -222,8 +262,8 @@ export component MRow inherits Rectangle {
     callback clicked();
     vertical-stretch: 0; min-width: 0px; height: max(48px, 52px * MobileTypography.density, content.preferred-height + MobileTypography.gap);
     content := HorizontalLayout { cross-axis-alignment: center; spacing: 10px;
-        VerticalLayout { spacing: 6px;
-            MText { text: root.title; wrap: word-wrap; }
+        VerticalLayout { spacing: 6px; min-width: 0px; preferred-width: 0px; horizontal-stretch: 1;
+            MText { text: root.title; }
             if root.subtitle != "": MSmall { text: root.subtitle; wrap: word-wrap; }
         }
         if root.show-swatch: Rectangle { width: 16px; height: 16px; horizontal-stretch: 0; border-radius: 8px; background: root.swatch; }
@@ -257,7 +297,7 @@ export component MSwitch inherits Rectangle {
     opacity: root.enabled ? 1 : 0.5;
     animate opacity { duration: Motion.control; enabled: Motion.active; }
     content := HorizontalLayout { spacing: MobileTypography.gap; cross-axis-alignment: center;
-        VerticalLayout { spacing: 6px; MText { text: root.title; wrap: word-wrap; } if root.subtitle != "": MSmall { text: root.subtitle; wrap: word-wrap; } }
+        if root.title != "" || root.subtitle != "": VerticalLayout { spacing: 6px; MText { text: root.title; wrap: word-wrap; } if root.subtitle != "": MSmall { text: root.subtitle; wrap: word-wrap; } }
         Rectangle { width: 44px; height: 26px; horizontal-stretch: 0; border-radius: 13px; background: root.checked ? Theme.primary : Theme.muted;
             animate background { duration: Motion.control; enabled: Motion.active; }
             Rectangle { x: root.checked ? 21px : 3px; animate x { duration: Motion.control; easing: ease-out; enabled: Motion.active; } y: 3px; width: 20px; height: 20px; border-radius: 10px; background: #ffffff; }
@@ -334,49 +374,56 @@ export component MNotice inherits Rectangle {
     in property <bool> error;
     in property <float> progress;
     in property <length> available-height;
-    property <bool> compact-actions: self.width < 380px || Theme.text-scale > 1.15;
-    out property <[length]> close-target: [message-area.absolute-position.x, message-area.absolute-position.y, message-area.width, message-area.height];
+    property <bool> can-recover: MobileView.notice-recover-network && MobileData.vpn-connected && !MobileData.protected && !MobileData.protection-pending;
+    property <bool> can-restart: MobileView.notice-modal && !MobileData.core-running && !MobileData.protected && !MobileData.protection-pending;
+    property <bool> has-recovery: root.can-restart || root.can-recover;
+    property <int> action-count: root.has-recovery ? 4 : 3;
+    property <int> action-columns: root.width / Theme.text-scale < 220px ? 1 : root.has-recovery || root.width / Theme.text-scale < 300px ? 2 : 3;
+    in-out property <[length]> close-target;
     callback dismissed();
     height: min(content.preferred-height, max(72px, root.available-height));
-    border-radius: 12px; border-width: 1px; border-color: Theme.line; background: Theme.surface;
+    border-radius: MobileView.notice-modal ? 18px : 14px; border-width: 1px; border-color: Theme.line; background: root.error ? Theme.surface : Theme.ink;
     drop-shadow-blur: 16px; drop-shadow-offset-y: 4px; drop-shadow-color: #00000030;
-    TouchArea { mouse-cursor: pointer; clicked => { root.dismissed(); } }
-    content := VerticalLayout { padding: Theme.card-padding; spacing: Theme.content-gap; alignment: start;
-        if MobileView.notice-modal: MHeading { text: "发生错误"; color: Theme.danger; }
+    TouchArea { mouse-cursor: root.error ? default : pointer; clicked => { if !root.error { root.dismissed(); } } }
+    content := VerticalLayout { padding: MobileView.notice-modal ? Theme.card-padding : 12px; spacing: MobileTypography.small-gap; alignment: start;
+        if root.error: HorizontalLayout { cross-axis-alignment: center; spacing: 10px;
+            Rectangle { width: 28px; height: 28px; border-radius: 8px; background: Theme.danger-wash;
+                MHeading { text: "!"; width: parent.width; height: parent.height; color: Theme.danger; horizontal-alignment: center; }
+            }
+            MHeading { text: MobileView.notice-modal ? "需要处理" : "操作未完成"; font-size: MobileTypography.font-size(MobileView.notice-modal ? 18 : 14); }
+        }
         MScroll {
             content-key: root.text; preferred-height: body.preferred-height;
             body := VerticalLayout { alignment: start; spacing: Theme.content-gap;
                 message-area := Rectangle {
+                    property <[length]> target: [self.absolute-position.x, self.absolute-position.y, self.width, self.height];
+                    changed target => { if !root.error { root.close-target = self.target; } }
+                    init => { if !root.error { root.close-target = self.target; } }
                     height: message.preferred-height;
-                    accessible-role: button; accessible-label: root.text + "，点击关闭";
-                    accessible-action-default => { root.dismissed(); }
-                    message := MParagraph { width: parent.width; text: root.text; font-size: MobileTypography.font-size(15); color: root.error ? Theme.danger : Theme.ink; }
-                    TouchArea { mouse-cursor: pointer; clicked => { root.dismissed(); } }
+                    accessible-role: AccessibleRole.text; accessible-label: root.text;
+                    message := MParagraph { width: parent.width; text: root.text; color: root.error ? Theme.ink : Theme.canvas; font-size: MobileTypography.font-size(14); }
+                    if !root.error: TouchArea {
+                        accessible-role: button; accessible-label: "关闭提示";
+                        accessible-action-default => { root.dismissed(); }
+                        mouse-cursor: pointer; clicked => { root.dismissed(); }
+                    }
                 }
             }
         }
-        if root.error && root.compact-actions: HorizontalLayout { spacing: MobileTypography.small-gap;
-            MButton { modal-control: true; notice-control: true; text: "导出诊断";
-                clicked => { MobileActions.request(MobileIntent.export-diagnostics, root.text, ""); }
+        if root.error: GridLayout { spacing: MobileTypography.small-gap;
+            for index in root.action-count: MButton {
+                property <[length]> target: [self.absolute-position.x, self.absolute-position.y, self.width, self.height];
+                changed target => { if index == root.action-count - 1 { root.close-target = self.target; } }
+                init => { if index == root.action-count - 1 { root.close-target = self.target; } }
+                col: mod(index, root.action-columns); row: floor(index / root.action-columns);
+                modal-control: true; notice-control: true; quiet: true; compact: true;
+                text: index == root.action-count - 1 ? "关闭" : index == 0 ? "导出诊断" : index == 1 ? "新建 Issue" : root.can-restart ? "重启内核" : "停止接管";
+                enabled: index != 2 || !root.has-recovery || !MobileData.working;
+                clicked => {
+                    if index == root.action-count - 1 { root.dismissed(); }
+                    else { MobileActions.request(index == 0 ? MobileIntent.export-diagnostics : index == 1 ? MobileIntent.report-issue : root.can-restart ? MobileIntent.restart-core : MobileIntent.disconnect, index == 2 ? "" : root.text, ""); }
+                }
             }
-            MButton { modal-control: true; notice-control: true; text: "复制诊断";
-                clicked => { MobileActions.request(MobileIntent.copy-diagnostics, root.text, ""); }
-            }
-        }
-        if root.error: HorizontalLayout { spacing: MobileTypography.small-gap;
-            if root.error && !root.compact-actions: MButton { modal-control: true; notice-control: true; text: "导出诊断";
-                clicked => { MobileActions.request(MobileIntent.export-diagnostics, root.text, ""); }
-            }
-            if root.error && !root.compact-actions: MButton { modal-control: true; notice-control: true; text: "复制诊断";
-                clicked => { MobileActions.request(MobileIntent.copy-diagnostics, root.text, ""); }
-            }
-            if root.error: MButton { modal-control: true; notice-control: true; text: "新建 Issue";
-                clicked => { MobileActions.request(MobileIntent.report-issue, root.text, ""); }
-            }
-        }
-        if root.error && MobileView.notice-recover-network && MobileData.vpn-connected && !MobileData.protected && !MobileData.protection-pending: MButton {
-            modal-control: true; notice-control: true; text: "恢复系统直连"; enabled: !MobileData.working;
-            clicked => { MobileActions.request(MobileIntent.disconnect, "", ""); }
         }
     }
 }
@@ -388,18 +435,19 @@ export component MNav inherits Rectangle {
     in property <bool> pill: true;
     callback clicked();
     min-height: 48px; border-radius: root.stacked ? 12px : 6px;
-    background: root.selected && root.pill ? Theme.accent-wash : area.pressed ? Theme.inset : transparent;
+    background: root.selected && !root.stacked ? Theme.inset : area.pressed ? Theme.inset : transparent;
     animate background { duration: Motion.control; enabled: Motion.active; }
-    if !root.stacked: Rectangle { x: 0px; width: 3px; height: root.selected ? 20px : 12px; y: (parent.height - self.height) / 2; background: Theme.accent; border-radius: 2px; opacity: root.selected ? 1 : 0;
-        animate opacity, height { duration: Motion.control; easing: ease-out; enabled: Motion.active; }
-    }
     if root.stacked: VerticalLayout { padding-top: 4px; padding-bottom: 4px; spacing: 4px; alignment: center;
-        Rectangle { height: 22px; Image { x: (parent.width - 22px) / 2; source: root.icon; width: 22px; height: 22px; colorize: root.selected ? Theme.accent : Theme.secondary; } }
+        Rectangle { height: 28px;
+            Rectangle { x: (parent.width - self.width) / 2; width: 58px; height: 28px; border-radius: 14px; background: root.selected && root.pill ? Theme.accent-wash : transparent;
+                Image { x: (parent.width - 22px) / 2; y: 3px; source: root.icon; width: 22px; height: 22px; colorize: root.selected ? Theme.accent : Theme.secondary; }
+            }
+        }
         MSmall { text: root.text; font-size: MobileTypography.font-size(12); horizontal-alignment: center; color: root.selected ? Theme.accent : Theme.secondary; font-weight: root.selected ? 600 : 400; }
     }
     if !root.stacked: HorizontalLayout { padding-left: 14px; padding-right: 12px; spacing: MobileTypography.gap; cross-axis-alignment: center;
-        Image { source: root.icon; width: 20px; height: 20px; colorize: root.selected ? Theme.accent : Theme.secondary; }
-        MText { text: root.text; color: root.selected ? Theme.accent : Theme.secondary; font-weight: root.selected ? 600 : 400; }
+        Image { source: root.icon; width: 20px; height: 20px; colorize: Theme.secondary; }
+        MText { text: root.text; color: root.selected ? Theme.ink : Theme.secondary; font-weight: root.selected ? 600 : 400; }
     }
     area := TouchArea { enabled: !MobileView.modal && !MobileView.notice-modal; mouse-cursor: pointer; clicked => { root.clicked(); } }
 }

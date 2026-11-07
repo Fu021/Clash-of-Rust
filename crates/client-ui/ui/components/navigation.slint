@@ -1,30 +1,43 @@
 import { Motion } from "motion.slint";
 import { Theme } from "../theme/palette.slint";
 import { UiData } from "../state.slint";
-import { Label } from "controls.slint";
+import { Label, Caption } from "controls.slint";
+import { GeometryTarget } from "geometry.slint";
 
 export component NavigationItem inherits Rectangle {
     in property <string> text;
     in property <image> icon;
     in property <bool> selected;
     in property <bool> compact;
+    in property <string> trailing;
     callback clicked();
+    GeometryTarget { key: "nav:" + root.text; bounds: [root.absolute-position.x, root.absolute-position.y, root.width, root.height]; }
     forward-focus: key-scope;
-    height: Theme.control-height;
+    height: max(36px, Theme.body-size * 1.5 + 10px);
     border-radius: 8px;
+    border-width: 1px;
+    border-color: root.keyboard-focus && key-scope.has-focus ? Theme.accent : transparent;
+    property <bool> keyboard-focus;
     background: root.selected ? Theme.inset : area.has-hover ? Theme.surface : transparent;
     accessible-role: button;
     accessible-label: root.text;
-    accessible-action-default => { if UiData.modal == 0 && !UiData.notice-modal { root.clicked(); } }
+    accessible-action-default => { if (UiData.modal == 0 || UiData.modal == 10) && !UiData.notice-modal { root.clicked(); } }
     animate background { duration: Motion.control; enabled: Motion.active; }
-    Image { x: root.compact ? (parent.width - self.width) / 2 : 12px; y: (parent.height - self.height) / 2; width: 18px; height: 18px; source: root.icon; colorize: root.selected ? Theme.accent : Theme.secondary; animate colorize { duration: Motion.control; enabled: Motion.active; } }
-    if !root.compact: Label { x: 40px; y: 0px; width: parent.width - 48px; height: parent.height; text: root.text; color: Theme.ink; font-weight: root.selected ? 600 : 400; }
+    Image { x: root.compact ? (parent.width - self.width) / 2 : 12px; y: (parent.height - self.height) / 2; width: 18px; height: 18px; source: root.icon; colorize: Theme.secondary; animate colorize { duration: Motion.control; enabled: Motion.active; } }
+    if !root.compact: Label { x: 40px; y: 0px; width: parent.width - 48px - (root.trailing == "" ? 0px : trailing.preferred-width + 8px); height: parent.height; text: root.text; color: Theme.ink; font-weight: root.selected ? 600 : 400; }
+    trailing := Caption {
+        visible: !root.compact && root.trailing != "";
+        x: parent.width - self.preferred-width - 8px; width: self.preferred-width; height: parent.height;
+        text: root.trailing;
+    }
     key-scope := FocusScope {
-        enabled: UiData.modal == 0 && !UiData.notice-modal;
+        enabled: (UiData.modal == 0 || UiData.modal == 10) && !UiData.notice-modal;
+        focus-gained(reason) => { root.keyboard-focus = reason == FocusReason.tab-navigation; }
         key-pressed(event) => {
+            root.keyboard-focus = true;
             if event.text == " " || event.text == "\n" { root.clicked(); return accept; }
             return reject;
         }
     }
-    area := TouchArea { mouse-cursor: pointer; clicked => { key-scope.focus(); root.clicked(); } }
+    area := TouchArea { mouse-cursor: pointer; clicked => { root.keyboard-focus = false; key-scope.focus(); root.clicked(); } }
 }

@@ -1,9 +1,9 @@
 // Mobile presentation contract. Native hosts supply data and execute requests.
 // Only domain row types are reused; mobile views never read desktop UiData.
-import { GroupItem, ProfileItem, ConnectionItem, RuleItem, LogItem, CategoryPair, ReportItem, DetailItem, FakeIpExclusionItem } from "../../state.slint";
+import { GroupItem, ProfileItem, ConnectionItem, RuleItem, LogItem, CategoryPair, ReportItem, DetailItem, FakeIpExclusionItem, OverviewItem } from "../../state.slint";
 
 export enum MobileIntent {
-    navigate, connect, disconnect, restart-core, mode, query, node-sort, node-page, connection-page, rule-page, rule-text-mode, select-node, node-delay, group-delay, delay-all, system-notification,
+    navigate, connect, disconnect, restart-core, mode, overview-refresh, overview-privacy, query, node-sort, node-page, connection-page, rule-page, rule-text-mode, select-node, node-delay, group-delay, delay-all, system-notification,
     import-profile, pick-file, activate-profile, update-profile, save-profile, delete-profile,
     connection-sort, connection-detail, close-connection, close-all, copy,
     rule-select, rule-edit, rule-add, rule-save, rule-move, rule-drop, rule-enable, rule-restore, rule-filter, rule-delete, rule-apply, rule-discard,
@@ -30,6 +30,11 @@ export global MobileData {
     in-out property <string> connection-count;
     in-out property <string> download-total;
     in-out property <string> upload-total;
+    in-out property <[OverviewItem]> overview-network;
+    in-out property <[OverviewItem]> overview-services;
+    in-out property <string> overview-status;
+    in-out property <bool> overview-busy;
+    in-out property <bool> overview-hidden;
     in-out property <int> mode;
     in-out property <[GroupItem]> groups;
     in-out property <[ProfileItem]> profiles;
@@ -119,6 +124,7 @@ export global MobileView {
     in-out property <string> rule-drag-id;
     in-out property <string> rule-drag-target;
     in-out property <length> rules-scroll-y;
+    in-out property <length> home-scroll-y;
     in-out property <string> fake-ip-input;
     in-out property <string> reputation-key;
     in-out property <bool> site-filters;

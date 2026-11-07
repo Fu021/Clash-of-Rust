@@ -1,21 +1,240 @@
 //! Exercise production component callbacks, model projection and application state.
 use super::*;
-use clash_client_ui::{AppWindow, Intent, UiActions, UiData, models::ViewModels};
+use clash_client_ui::{AppWindow, Intent, UiActions, UiData, UiGeometry, models::ViewModels};
 use slint::{ComponentHandle, Model};
 
 #[test]
-fn notice_messages_dismiss_once_when_clicked_for_every_severity() {
+fn home_overview_reports_host_exit_dns_and_each_service_without_overclaiming() {
+    use clash_of_rust::overview::{Health, Status, TARGETS};
+    ui_testing::initialize(950, 700);
+    let ip = |text: &str| text.parse::<std::net::IpAddr>().unwrap();
+    let mut app = fixture(Page::Home);
+    app.visible = true;
+    let _ = app.overview_tick();
+    assert!(app.overview.busy());
+    let _ = app.overview_tick();
+    let generation = 1;
+    let _ = app.update(Message::OverviewHost(
+        generation,
+        Ok(platform::HostInfo {
+            addresses: vec![ip("192.168.1.23")],
+            dns: vec![ip("223.5.5.5")],
+        }),
+    ));
+    let _ = app.update(Message::OverviewDns(
+        generation,
+        Ok((vec!["198.18.0.9".into()], 12)),
+    ));
+    let _ = app.update(Message::OverviewExit(
+        generation,
+        Ok(ip_check::CheckResult {
+            state: ip_check::State::Identified,
+            summary: "203.0.113.2".into(),
+            country: "🇩🇪 德国".into(),
+            millis: 188,
+            detail: String::new(),
+        }),
+    ));
+    for (index, (health, status, millis)) in [
+        (Health::Ok, 204, 142),
+        (Health::Reachable, 403, 264),
+        (Health::Error, 502, 50),
+    ]
+    .into_iter()
+    .enumerate()
+    {
+        let _ = app.update(Message::OverviewService(
+            generation,
+            index,
+            Ok(Status {
+                health,
+                status,
+                millis,
+            }),
+        ));
+    }
+    let _ = app.update(Message::OverviewService(
+        generation,
+        3,
+        Err("无法连接".into()),
+    ));
+    let _ = app.update(Message::OverviewService(
+        0,
+        4,
+        Ok(Status {
+            health: Health::Ok,
+            status: 200,
+            millis: 1,
+        }),
+    ));
+    let window = AppWindow::new().unwrap();
+    let data = window.global::<UiData>();
+    let mut models = ViewModels::default();
+    models.attach(&data);
+    app.present_slint(&data, &mut models);
+    let network = data.get_overview_network();
+    let row = |index| network.row_data(index).unwrap();
+    assert_eq!(
+        (row(0).value.as_str(), row(0).detail.as_str()),
+        ("192.168.1.23", "仅 IPv4")
+    );
+    assert_eq!(row(1).value.as_str(), "203.0.113.2");
+    assert!(row(1).flagged);
+    assert_eq!(row(1).flag.as_str(), "🇩🇪");
+    assert_eq!(row(1).detail.as_str(), "德国 · 188 ms");
+    assert_eq!(row(2).value.as_str(), "223.5.5.5");
+    assert!(row(3).detail.contains("Fake-IP"));
+    let services = data.get_overview_services();
+    let item = |index| services.row_data(index).unwrap();
+    assert_eq!((item(0).tone, item(0).value.as_str()), (1, "142 ms"));
+    assert_eq!(
+        (item(1).tone, item(1).detail.as_str()),
+        (2, "HTTP 403 · 可达")
+    );
+    assert_eq!((item(2).tone, item(2).value.as_str()), (3, "服务异常"));
+    assert_eq!((item(3).tone, item(3).value.as_str()), (3, "无法连接"));
+    assert_eq!((item(4).tone, item(4).value.as_str()), (4, "检测中…"));
+    assert!(data.get_overview_busy());
+
+    let _ = app.ui_intent(Intent::OverviewPrivacy, "", "");
+    app.present_slint(&data, &mut models);
+    assert!(data.get_privacy_hidden());
+    let hidden = data.get_overview_network();
+    for (index, real) in [(0, "192.168.1.23"), (1, "203.0.113.2"), (2, "223.5.5.5")] {
+        let row = hidden.row_data(index).unwrap();
+        assert!(row.fogged);
+        assert_ne!(row.value.as_str(), real);
+        assert_eq!(row.value.len(), real.len());
+        assert!(row.value.parse::<std::net::IpAddr>().is_ok());
+    }
+    let first = hidden.row_data(0).unwrap().value;
+    app.present_slint(&data, &mut models);
+    assert_eq!(
+        data.get_overview_network().row_data(0).unwrap().value,
+        first
+    );
+    assert!(hidden.row_data(3).unwrap().fogged);
+    assert!(hidden.row_data(3).unwrap().value.contains("github.com"));
+    assert!(!hidden.row_data(3).unwrap().value.contains("198.18.0.9"));
+    let _ = app.ui_intent(Intent::OverviewPrivacy, "", "");
+    app.present_slint(&data, &mut models);
+    assert!(!data.get_privacy_hidden());
+    assert_eq!(
+        data.get_overview_network()
+            .row_data(0)
+            .unwrap()
+            .value
+            .as_str(),
+        "192.168.1.23"
+    );
+    for index in 4..TARGETS.len() {
+        let _ = app.update(Message::OverviewService(
+            generation,
+            index,
+            Err("超时".into()),
+        ));
+    }
+    assert!(!app.overview.busy());
+    app.present_slint(&data, &mut models);
+    assert_eq!(data.get_overview_status().as_str(), "可访问 2 / 8");
+    let _ = app.overview_tick();
+    assert!(!app.overview.busy());
+    app.snapshot.running = false;
+    app.present_slint(&data, &mut models);
+    assert_eq!(
+        data.get_overview_services()
+            .row_data(0)
+            .unwrap()
+            .value
+            .as_str(),
+        "未检测"
+    );
+    assert_eq!(
+        data.get_overview_network()
+            .row_data(1)
+            .unwrap()
+            .detail
+            .as_str(),
+        "启动内核后检测"
+    );
+}
+
+#[test]
+fn leaving_home_aborts_overview_and_late_results_do_not_repopulate_it() {
+    let mut app = fixture(Page::Home);
+    app.visible = true;
+    let _ = app.overview_tick();
+    assert!(app.overview.busy());
+    let _ = app.update(Message::Navigate(Page::Profiles));
+    assert!(!app.overview.busy());
+    let _ = app.update(Message::OverviewDns(1, Ok((vec!["198.18.0.9".into()], 12))));
+    assert!(app.overview.dns.is_none());
+    let _ = app.update(Message::OverviewRefresh);
+    assert!(!app.overview.busy());
+    app.page = Page::Home;
+    app.visible = false;
+    let _ = app.update(Message::OverviewRefresh);
+    assert!(!app.overview.busy());
+    app.visible = true;
+    app.working = true;
+    let _ = app.update(Message::OverviewRefresh);
+    assert!(!app.overview.busy());
+}
+
+#[test]
+fn home_mode_choices_have_visible_hit_targets_and_dispatch_each_action() {
+    ui_testing::initialize(950, 700);
+    let app = fixture(Page::Home);
+    let window = AppWindow::new().unwrap();
+    let data = window.global::<UiData>();
+    let mut models = ViewModels::default();
+    models.attach(&data);
+    app.present_slint(&data, &mut models);
+    let events = pointer_events(&window);
+    window.show().unwrap();
+    let _ = window.window().take_snapshot().unwrap();
+    for (title, expected, value) in [
+        ("规则", Intent::Mode, "0"),
+        ("全局", Intent::Mode, "1"),
+        ("直连", Intent::Mode, "2"),
+        ("系统代理", Intent::ProxyMode, "0"),
+        ("TUN", Intent::ProxyMode, "1"),
+        ("关闭", Intent::ProxyMode, "2"),
+    ] {
+        let key = format!("button:{title}");
+        let bounds = target_bounds(&key);
+        assert!(
+            bounds[2] >= 40.0 && bounds[3] >= 28.0,
+            "{title}: {bounds:?}"
+        );
+        events.borrow_mut().clear();
+        click_target(&window, &key);
+        let recorded = events.borrow();
+        assert_eq!(recorded.len(), 1, "{title}: {recorded:?}");
+        assert_eq!(recorded[0].0, expected);
+        assert_eq!(recorded[0].1.as_str(), value);
+    }
+    window.hide().unwrap();
+}
+
+#[test]
+fn errors_require_an_explicit_close_and_success_messages_allow_body_clicks() {
     ui_testing::initialize(950, 700);
     let window = AppWindow::new().unwrap();
     let data = window.global::<UiData>();
     let events = pointer_events(&window);
+    track_targets(&window);
     window.show().unwrap();
     for (error, critical) in [(false, false), (true, false), (true, true)] {
-        data.set_notice("测试通知，点击正文关闭".into());
+        data.set_notice("测试通知，错误详情不会因点击正文丢失".into());
         data.set_notice_error(error);
         data.set_notice_critical(critical);
         let _ = window.window().take_snapshot().unwrap();
         events.borrow_mut().clear();
+        if error {
+            click_target(&window, "notice-message");
+            assert!(events.borrow().is_empty());
+        }
         let target = window.get_notice_close_target();
         let coordinates: Vec<f32> = target.iter().collect();
         ui_testing::click(
@@ -25,6 +244,43 @@ fn notice_messages_dismiss_once_when_clicked_for_every_severity() {
         );
         assert_eq!(events.borrow().len(), 1);
         assert_eq!(events.borrow()[0].0, Intent::DismissNotice);
+        data.set_notice("".into());
+    }
+}
+
+#[test]
+fn long_subscription_names_preserve_visible_actions_and_the_full_model() {
+    let name = format!(
+        "🚀 超长订阅配置名称{}",
+        "VeryLongUnbrokenName0123456789".repeat(12)
+    );
+    for (width, height, scale) in [(800, 450, 100), (950, 700, 130)] {
+        ui_testing::initialize(width, height);
+        let mut app = fixture(Page::Profiles);
+        app.profiles[0].name = name.clone();
+        app.profiles[0].source = "https://example.invalid/subscription".into();
+        let window = AppWindow::new().unwrap();
+        let data = window.global::<UiData>();
+        let mut models = ViewModels::default();
+        models.attach(&data);
+        app.present_slint(&data, &mut models);
+        data.set_text_scale(scale);
+        let events = pointer_events(&window);
+        window.show().unwrap();
+        let _ = window.window().take_snapshot().unwrap();
+        let mut previous_right = 0.0;
+        for label in ["更新", "编辑", "详情"] {
+            let bounds = target_bounds(&format!("button:{label}"));
+            assert!(bounds[0] >= previous_right);
+            assert!(bounds[0] + bounds[2] <= width as f32);
+            assert!(bounds[1] >= 0.0 && bounds[1] + bounds[3] <= height as f32);
+            previous_right = bounds[0] + bounds[2];
+        }
+        assert_eq!(models.profiles.row_data(0).unwrap().name.as_str(), name);
+        click_target(&window, "button:更新");
+        assert_eq!(events.borrow()[0].0, Intent::UpdateProfile);
+        assert_eq!(events.borrow()[0].1.as_str(), "fixture");
+        window.hide().unwrap();
     }
 }
 
@@ -139,14 +395,17 @@ fn desktop_rule_handle_edges_lift_the_real_row_and_follow_the_pointer() {
             renderer.set_repaint_buffer_type(RepaintBufferType::ReusedBuffer);
             renderer.render(&mut pixels, 950);
         }));
-        (300..600)
-            .find(|&y| {
-                (350..600).all(|x| pixels[y * 950 + x] == slint::Rgb8Pixel::new(15, 118, 110))
-            })
+        let accent = window.global::<clash_client_ui::Theme>().get_accent();
+        let accent = slint::Rgb8Pixel::new(accent.red(), accent.green(), accent.blue());
+        (0..700)
+            .find(|&y| (350..600).all(|x| pixels[y * 950 + x] == accent))
             .expect("the lifted row must render a full-width accent border")
     };
-    for x in [225., 247.] {
-        let start = slint::LogicalPosition::new(x, 355.);
+    let bounds = target_bounds("rule-drag");
+    let distance = bounds[3].round() as usize;
+    for horizontal in [1.0, bounds[2] - 1.0] {
+        let start =
+            slint::LogicalPosition::new(bounds[0] + horizontal, bounds[1] + bounds[3] / 2.0);
         window
             .window()
             .dispatch_event(WindowEvent::PointerMoved { position: start });
@@ -155,11 +414,15 @@ fn desktop_rule_handle_edges_lift_the_real_row_and_follow_the_pointer() {
             button: PointerEventButton::Left,
         });
         let top = border_y();
-        let end = slint::LogicalPosition::new(x, 435.);
+        let end = slint::LogicalPosition::new(start.x, start.y + distance as f32);
         window
             .window()
             .dispatch_event(WindowEvent::PointerMoved { position: end });
-        assert_eq!(border_y(), top + 80, "the preview must follow the pointer");
+        assert_eq!(
+            border_y(),
+            top + distance,
+            "the preview must follow the pointer"
+        );
         window
             .window()
             .dispatch_event(WindowEvent::PointerReleased {
@@ -265,13 +528,16 @@ fn connection_sort_clicks_redraw_the_header_immediately_and_third_click_restores
             // so the next click really renders incrementally into this buffer.
             renderer.render(&mut pixels, 950);
         }));
+        let bounds = target_bounds("connection-header");
+        let left = bounds[0].round() as usize;
+        let right = (bounds[0] + bounds[2]).round() as usize;
         pixels
             .as_chunks::<950>()
             .0
             .iter()
-            .skip(156)
-            .take(52)
-            .flat_map(|row| row[200..926].iter().copied())
+            .skip(bounds[1].round() as usize)
+            .take(bounds[3].round() as usize)
+            .flat_map(|row| row[left..right].iter().copied())
             .collect::<Vec<_>>()
     };
     let before = header();
@@ -280,19 +546,19 @@ fn connection_sort_clicks_redraw_the_header_immediately_and_third_click_restores
         .iter()
         .map(|row| row.id)
         .collect::<Vec<_>>();
-    for (x, y, field, first_descending) in [
-        (780., 174., "download-rate", true),
-        (780., 197., "download-total", true),
-        (670., 174., "upload-rate", true),
-        (670., 197., "upload-total", true),
-        (480., 174., "rule", false),
-        (480., 197., "chain", false),
-        (260., 174., "name", false),
-        (260., 197., "start", true),
+    for (field, first_descending) in [
+        ("download-rate", true),
+        ("download-total", true),
+        ("upload-rate", true),
+        ("upload-total", true),
+        ("rule", false),
+        ("chain", false),
+        ("name", false),
+        ("start", true),
     ] {
         let mut frames = Vec::new();
         for click in 0..3 {
-            ui_testing::click(window.window(), x, y);
+            click_target(&window, &format!("connection-sort:{field}"));
             let event = events
                 .borrow_mut()
                 .pop()
@@ -345,8 +611,8 @@ fn connection_sort_clicks_redraw_the_header_immediately_and_third_click_restores
     app.present_slint(&data, &mut models);
     assert_eq!(header(), before);
     for _ in 0..4 {
-        for (x, y) in [(670., 174.), (480., 197.), (260., 174.), (780., 174.)] {
-            ui_testing::rapid_click(window.window(), x, y);
+        for field in ["upload-rate", "chain", "name", "download-rate"] {
+            rapid_target(&window, &format!("connection-sort:{field}"));
         }
     }
     let pending = std::mem::take(&mut *events.borrow_mut());
@@ -488,27 +754,28 @@ fn clicking_a_node_selects_it_but_its_latency_button_only_tests_it() {
     )]);
     let events = std::rc::Rc::new(RefCell::new(Vec::new()));
     let recorded = events.clone();
+    track_targets(&window);
     window
         .global::<UiActions>()
         .on_dispatch(move |intent, a, b| recorded.borrow_mut().push((intent, a, b)));
     window.show().unwrap();
     let _ = window.window().take_snapshot().unwrap();
-    let click = |x, y| ui_testing::click(window.window(), x, y);
-    click(430.0, 290.0);
+    click_target(&window, "node-detail:node-a");
     assert!(
         events.borrow().is_empty(),
         "details must not select or test a node"
     );
     let _ = window.window().take_snapshot().unwrap();
-    click(430.0, 290.0);
-    click(507.0, 298.0);
+    click_target(&window, "node-detail:node-a");
+    let _ = window.window().take_snapshot().unwrap();
+    click_target(&window, "node-delay:node-a");
     assert_eq!(
         events.borrow().as_slice(),
         &[(Intent::NodeDelay, "node-a".into(), "".into())],
         "the first button click must run the action, not only focus it"
     );
     events.borrow_mut().clear();
-    click(250.0, 252.0);
+    click_target_at(&window, "node:node-a", 0.15, 0.2);
     assert_eq!(
         events.borrow().as_slice(),
         &[(Intent::SelectNode, "Proxy".into(), "node-a".into())],
@@ -517,7 +784,7 @@ fn clicking_a_node_selects_it_but_its_latency_button_only_tests_it() {
     events.borrow_mut().clear();
     data.set_protected(true);
     let _ = window.window().take_snapshot().unwrap();
-    click(250.0, 252.0);
+    click_target_at(&window, "node:node-a", 0.15, 0.2);
     assert!(
         events.borrow().is_empty(),
         "protected nodes must not dispatch a selection"
@@ -525,13 +792,13 @@ fn clicking_a_node_selects_it_but_its_latency_button_only_tests_it() {
     data.set_protected(false);
     let _ = window.window().take_snapshot().unwrap();
     events.borrow_mut().clear();
-    click(260.0, 205.0);
+    click_target(&window, "group:Proxy");
     assert_eq!(
         events.borrow().as_slice(),
         &[(Intent::ToggleGroup, "Proxy".into(), "".into())]
     );
     events.borrow_mut().clear();
-    click(507.0, 298.0);
+    click_target(&window, "node-delay:node-a");
     assert_eq!(
         events.borrow().as_slice(),
         &[(Intent::NodeDelay, "node-a".into(), "".into())],
@@ -576,35 +843,12 @@ fn resizing_a_node_grid_preserves_odd_tail_nodes_and_their_own_actions() {
     )]);
     let events = pointer_events(&window);
     window.show().unwrap();
-    for (width, height, positions) in [
-        (
-            1600,
-            900,
-            [
-                (250., 252.),
-                (600., 252.),
-                (950., 252.),
-                (1300., 252.),
-                (250., 352.),
-            ],
-        ),
-        (
-            950,
-            700,
-            [
-                (250., 252.),
-                (600., 252.),
-                (250., 352.),
-                (600., 352.),
-                (250., 452.),
-            ],
-        ),
-    ] {
+    for (width, height) in [(1600, 900), (950, 700)] {
         surface.set_size(slint::PhysicalSize::new(width, height));
         let _ = window.window().take_snapshot().unwrap();
-        for (index, (horizontal, vertical)) in positions.into_iter().enumerate() {
+        for index in 0..5 {
             events.borrow_mut().clear();
-            ui_testing::click(window.window(), horizontal, vertical);
+            click_target_at(&window, &format!("node:node-{index}"), 0.15, 0.2);
             assert_eq!(
                 events.borrow().as_slice(),
                 &[(
@@ -662,26 +906,26 @@ fn pointer_keyboard_escape_and_modal_input_use_the_production_callbacks() {
     app.present_slint(&data, &mut models);
     let events = std::rc::Rc::new(RefCell::new(Vec::new()));
     let recorded = events.clone();
+    track_targets(&window);
     window
         .global::<UiActions>()
         .on_dispatch(move |intent, a, b| recorded.borrow_mut().push((intent, a, b)));
     window.show().unwrap();
     let _ = window.window().take_snapshot().unwrap();
-    let click = |x, y| ui_testing::click(window.window(), x, y);
-    click(28.0, 36.0);
+    click_target(&window, "button:系统通知");
     assert_eq!(
         events.borrow().last().unwrap().0,
         Intent::SystemNotification
     );
     events.borrow_mut().clear();
     data.set_notification_busy(true);
-    click(28.0, 36.0);
+    click_target(&window, "button:系统通知");
     assert!(
         events.borrow().is_empty(),
         "only one native notification may be active"
     );
     data.set_notification_busy(false);
-    click(65.0, 156.0);
+    click_target(&window, "nav:代理");
     assert_eq!(events.borrow().last().unwrap().0, Intent::Navigate);
     assert_eq!(events.borrow().last().unwrap().1, "1");
     window.window().dispatch_event(WindowEvent::KeyPressed {
@@ -699,8 +943,8 @@ fn pointer_keyboard_escape_and_modal_input_use_the_production_callbacks() {
     data.set_modal_accept("删除".into());
     data.set_modal_can_accept(true);
     let _ = window.window().take_snapshot().unwrap();
-    click(28.0, 36.0);
-    click(65.0, 156.0);
+    click_target(&window, "button:系统通知");
+    click_target(&window, "nav:代理");
     assert!(
         events.borrow().is_empty(),
         "modal overlay must block background actions"
@@ -715,7 +959,7 @@ fn pointer_keyboard_escape_and_modal_input_use_the_production_callbacks() {
     data.set_notice_critical(false);
     let _ = window.window().take_snapshot().unwrap();
     events.borrow_mut().clear();
-    click(65.0, 156.0);
+    click_target(&window, "nav:代理");
     assert_eq!(
         events.borrow().last().unwrap().0,
         Intent::Navigate,
@@ -725,8 +969,8 @@ fn pointer_keyboard_escape_and_modal_input_use_the_production_callbacks() {
     data.set_notice_critical(true);
     let _ = window.window().take_snapshot().unwrap();
     events.borrow_mut().clear();
-    click(65.0, 156.0);
-    click(28.0, 36.0);
+    click_target(&window, "nav:代理");
+    click_target(&window, "button:系统通知");
     assert!(
         events.borrow().is_empty(),
         "the centered error must block navigation behind it"
@@ -796,7 +1040,60 @@ pub(super) fn fixture(page: Page) -> App {
 }
 
 type UiEventLog = std::rc::Rc<RefCell<Vec<(Intent, slint::SharedString, slint::SharedString)>>>;
+thread_local! {
+    static TARGETS: RefCell<std::collections::HashMap<String, [f32; 4]>> = RefCell::new(std::collections::HashMap::new());
+}
+
+fn track_targets(window: &AppWindow) {
+    TARGETS.with(|targets| targets.borrow_mut().clear());
+    window.global::<UiGeometry>().on_measured(|key, bounds| {
+        let bounds: Vec<f32> = bounds.iter().collect();
+        if let [horizontal, vertical, width, height] = bounds.as_slice()
+            && *width > 0.0
+            && *height > 0.0
+        {
+            TARGETS.with(|targets| {
+                targets
+                    .borrow_mut()
+                    .insert(key.to_string(), [*horizontal, *vertical, *width, *height]);
+            });
+        }
+    });
+}
+
+fn target_bounds(key: &str) -> [f32; 4] {
+    TARGETS.with(|targets| {
+        *targets
+            .borrow()
+            .get(key)
+            .unwrap_or_else(|| panic!("missing rendered target: {key}"))
+    })
+}
+
+fn click_target(window: &AppWindow, key: &str) {
+    click_target_at(window, key, 0.5, 0.5);
+}
+
+fn click_target_at(window: &AppWindow, key: &str, horizontal: f32, vertical: f32) {
+    let bounds = target_bounds(key);
+    ui_testing::click(
+        window.window(),
+        bounds[0] + bounds[2] * horizontal,
+        bounds[1] + bounds[3] * vertical,
+    );
+}
+
+fn rapid_target(window: &AppWindow, key: &str) {
+    let bounds = target_bounds(key);
+    ui_testing::rapid_click(
+        window.window(),
+        bounds[0] + bounds[2] / 2.0,
+        bounds[1] + bounds[3] / 2.0,
+    );
+}
+
 fn pointer_events(window: &AppWindow) -> UiEventLog {
+    track_targets(window);
     // Existing interaction assertions intentionally inspect the settled UI.
     // Dedicated motion tests below enable animations and advance the clock.
     window
@@ -841,9 +1138,9 @@ fn node_sort_popup_dispatches_each_clicked_option_and_reorders_real_models() {
         (2, ["node1", "node2", "node10"]),
     ] {
         let _ = window.window().take_snapshot().unwrap();
-        ui_testing::click(window.window(), 830., 124.);
+        click_target(&window, "node-sort");
         let _ = window.window().take_snapshot().unwrap();
-        ui_testing::click(window.window(), 830., 176. + index as f32 * 44.);
+        click_target(&window, &format!("option:node-sort/{index}"));
         let events = events.borrow_mut().drain(..).collect::<Vec<_>>();
         assert_eq!(
             events.len(),
@@ -920,16 +1217,16 @@ fn appearance_remains_interactive_while_geo_owns_the_engine_and_late_reply_canno
     let events = pointer_events(&window);
     window.show().unwrap();
     let _ = window.window().take_snapshot().unwrap();
-    ui_testing::click(window.window(), 840., 233.);
+    click_target(&window, "accent-picker");
     assert_eq!(events.borrow_mut().pop().unwrap().0, Intent::AccentPicker);
     let _ = app.ui_intent(Intent::AccentPicker, "", "");
     app.present_slint(&data, &mut models);
     assert_eq!(data.get_modal(), 12);
     assert!(data.get_modal_can_accept());
     let _ = window.window().take_snapshot().unwrap();
-    ui_testing::click(window.window(), 475., 314.); // blue swatch
+    click_target(&window, "accent:1");
     let _ = window.window().take_snapshot().unwrap();
-    ui_testing::click(window.window(), 710., 460.); // complete while Geo is still busy
+    click_target(&window, "button:完成");
     let chosen = events
         .borrow_mut()
         .pop()
@@ -987,9 +1284,9 @@ fn font_popup_changes_the_saved_request_and_rendered_font_at_fractional_scale() 
     window.show().unwrap();
     let _ = window.window().take_snapshot().unwrap();
     let before = window.global::<Theme>().get_body_size();
-    ui_testing::click(window.window(), 860., 290.);
+    click_target(&window, "text-scale");
     let _ = window.window().take_snapshot().unwrap();
-    ui_testing::click(window.window(), 860., 518.); // fifth option: 125%
+    click_target(&window, "option:text-scale/4");
     assert_eq!(
         events.borrow().as_slice(),
         &[(Intent::TextScale, "125%".into(), "".into())]
@@ -1026,9 +1323,14 @@ fn rule_editor_popups_deliver_type_and_policy_inside_a_modal() {
     let events = pointer_events(&window);
     window.show().unwrap();
     let _ = window.window().take_snapshot().unwrap();
-    ui_testing::click(window.window(), 500., 266.);
+    let kind_index = data
+        .get_rule_types()
+        .iter()
+        .position(|kind| kind == "DOMAIN-KEYWORD")
+        .unwrap();
+    click_target(&window, "rule-kind");
     let _ = window.window().take_snapshot().unwrap();
-    ui_testing::click(window.window(), 500., 406.); // DOMAIN-KEYWORD, nonzero index
+    click_target(&window, &format!("option:rule-kind/{kind_index}"));
     assert_eq!(
         events.borrow().as_slice(),
         &[(Intent::RuleKind, "DOMAIN-KEYWORD".into(), "".into())]
@@ -1039,9 +1341,9 @@ fn rule_editor_popups_deliver_type_and_policy_inside_a_modal() {
     let _ = window.window().take_snapshot().unwrap();
     assert_eq!(data.get_rule_kind(), "DOMAIN-KEYWORD");
     let policy = data.get_rule_policies().row_data(1).unwrap();
-    ui_testing::click(window.window(), 500., 370.);
+    click_target(&window, "rule-policy");
     let _ = window.window().take_snapshot().unwrap();
-    ui_testing::click(window.window(), 500., 466.);
+    click_target(&window, "option:rule-policy/1");
     assert_eq!(
         events.borrow().as_slice(),
         &[(Intent::RulePolicy, policy.clone(), "".into())]
@@ -1370,9 +1672,9 @@ fn profile_and_rule_source_popups_preserve_ids_and_filters() {
     let events = pointer_events(&window);
     window.show().unwrap();
     let _ = window.window().take_snapshot().unwrap();
-    ui_testing::click(window.window(), 400., 124.);
+    click_target(&window, "rule-profile");
     let _ = window.window().take_snapshot().unwrap();
-    ui_testing::click(window.window(), 400., 220.);
+    click_target(&window, "option:rule-profile/1");
     assert_eq!(
         events.borrow().as_slice(),
         &[(Intent::RuleProfile, "second".into(), "".into())]
@@ -1380,9 +1682,9 @@ fn profile_and_rule_source_popups_preserve_ids_and_filters() {
     let event = events.borrow_mut().pop().unwrap();
     let _ = app.ui_intent(event.0, &event.1, &event.2);
     assert!(matches!(app.queued_actions.pop_back(), Some(Action::LoadRules(id)) if id == "second"));
-    ui_testing::click(window.window(), 750., 260.);
+    click_target(&window, "rule-source");
     let _ = window.window().take_snapshot().unwrap();
-    ui_testing::click(window.window(), 750., 356.);
+    click_target(&window, "option:rule-source/1");
     assert_eq!(
         events.borrow().as_slice(),
         &[(Intent::RuleFilter, "1".into(), "".into())]
@@ -1409,14 +1711,14 @@ fn ip_category_status_and_region_popups_drive_report_filters() {
     let _ = window.window().take_snapshot().unwrap();
     let category = data.get_site_category_options().row_data(1).unwrap();
     let status = data.get_site_status_options().row_data(3).unwrap();
-    for (x, index, intent, value) in [
-        (300., 1, Intent::SiteCategory, category),
-        (510., 3, Intent::SiteStatus, status),
-        (730., 1, Intent::SiteRegion, "未识别地区".into()),
+    for (key, index, intent, value) in [
+        ("site-category", 1, Intent::SiteCategory, category),
+        ("site-status", 3, Intent::SiteStatus, status),
+        ("site-region", 1, Intent::SiteRegion, "未识别地区".into()),
     ] {
-        ui_testing::click(window.window(), x, 305.);
+        click_target(&window, key);
         let _ = window.window().take_snapshot().unwrap();
-        ui_testing::click(window.window(), x, 357. + index as f32 * 44.);
+        click_target(&window, &format!("option:{key}/{index}"));
         assert_eq!(
             events.borrow().as_slice(),
             &[(intent, value.clone(), "".into())]
@@ -1454,13 +1756,13 @@ fn log_rows_open_full_text_copy_without_opening_and_filter_by_source_level() {
     let events = pointer_events(&window);
     window.show().unwrap();
     let _ = window.window().take_snapshot().unwrap();
-    ui_testing::click(window.window(), 876., 196.);
+    click_target(&window, "copy-log:[error] failed");
     assert_eq!(
         events.borrow().as_slice(),
         &[(Intent::Copy, "[error] failed".into(), "".into())]
     );
     events.borrow_mut().clear();
-    ui_testing::click(window.window(), 400., 252.);
+    click_target(&window, &format!("log:{long}"));
     assert_eq!(
         events.borrow().as_slice(),
         &[(Intent::LogDetail, long.clone().into(), "".into())]
@@ -1475,9 +1777,9 @@ fn log_rows_open_full_text_copy_without_opening_and_filter_by_source_level() {
     assert_eq!(data.get_modal(), 0);
     events.borrow_mut().clear();
     let _ = window.window().take_snapshot().unwrap();
-    ui_testing::click(window.window(), 708., 124.);
+    click_target(&window, "log-level");
     let _ = window.window().take_snapshot().unwrap();
-    ui_testing::click(window.window(), 708., 352.);
+    click_target(&window, "option:log-level/4");
     assert_eq!(
         events.borrow().as_slice(),
         &[(Intent::LogLevel, "WARN".into(), "".into())]
@@ -1491,7 +1793,7 @@ fn log_rows_open_full_text_copy_without_opening_and_filter_by_source_level() {
     assert_eq!(data.get_logs().row_data(0).unwrap().message, long.as_str());
     events.borrow_mut().clear();
     let _ = window.window().take_snapshot().unwrap();
-    ui_testing::click(window.window(), 720., 664.);
+    click_target(&window, "button:导出诊断");
     assert_eq!(
         events.borrow().as_slice(),
         &[(Intent::ExportDiagnostics, "".into(), "".into())]
@@ -1533,7 +1835,7 @@ fn a_new_log_detail_resets_the_previous_dialog_scroll_and_shows_what_it_copies()
         reference, reopened,
         "the short log must remain visibly identical to a fresh detail"
     );
-    ui_testing::click(window.window(), 194., 392.);
+    click_target(&window, "button:复制全文");
     assert_eq!(
         events.borrow().last(),
         Some(&(Intent::Copy, short.into(), "".into()))
@@ -1663,7 +1965,11 @@ fn motion_overlays_reverse_on_reopen_release_content_and_leave_no_idle_clock() {
     let initial = motion_frame(&window, 0);
     // Saved dark appearance is already present in the first rendered frame.
     let canvas = (690 * 950 + 940) * 4;
-    assert_eq!(&initial[canvas..canvas + 3], &[0x11, 0x19, 0x23]);
+    let color = window.global::<clash_client_ui::Theme>().get_canvas();
+    assert_eq!(
+        &initial[canvas..canvas + 3],
+        &[color.red(), color.green(), color.blue()]
+    );
     motion_frame(&window, 250);
     assert!(
         motion.get_initialized(),
@@ -1738,20 +2044,23 @@ fn motion_does_not_delay_connection_sort_arrow_or_third_click_reset() {
     motion_frame(&window, 250);
     let before = motion_frame(&window, 0);
     for click in 0..3 {
-        ui_testing::rapid_click(window.window(), 780., 174.);
+        rapid_target(&window, "connection-sort:download-rate");
         let (intent, a, b) = events.borrow_mut().pop().unwrap();
         assert_eq!(intent, Intent::ConnectionSort);
         let _ = app.ui_intent(intent, &a, &b);
         app.present_slint(&data, &mut models);
         let immediately = motion_frame(&window, 0);
         let header = |pixels: &[u8]| {
+            let bounds = target_bounds("connection-sort:download-rate");
+            let left = bounds[0].round() as usize * 4;
+            let right = (bounds[0] + bounds[2]).round() as usize * 4;
             pixels
                 .as_chunks::<{ 950 * 4 }>()
                 .0
                 .iter()
-                .skip(156)
-                .take(52)
-                .flat_map(|row| row[740 * 4..820 * 4].iter().copied())
+                .skip(bounds[1].round() as usize)
+                .take(bounds[3].round() as usize)
+                .flat_map(|row| row[left..right].iter().copied())
                 .collect::<Vec<_>>()
         };
         if click < 2 {
@@ -1785,7 +2094,7 @@ fn copy_feedback_waits_for_matching_native_ack_and_resets_without_resizing() {
     window.global::<clash_client_ui::Motion>().set_enabled(true);
     window.show().unwrap();
     motion_frame(&window, 250);
-    ui_testing::rapid_click(window.window(), 876., 196.);
+    rapid_target(&window, "copy-log:[info] copy fixture");
     let (_, value, _) = events.borrow_mut().pop().unwrap();
     let waiting = motion_frame(&window, 250);
     data.set_copy_value("another request".into());
@@ -1795,7 +2104,7 @@ fn copy_feedback_waits_for_matching_native_ack_and_resets_without_resizing() {
         motion_frame(&window, 250),
         "unrelated or failed writes must not display success"
     );
-    ui_testing::rapid_click(window.window(), 876., 196.);
+    rapid_target(&window, "copy-log:[info] copy fixture");
     data.set_copy_value(value);
     data.set_copy_revision(2);
     motion_frame(&window, 0);
@@ -1831,7 +2140,7 @@ fn motion_group_collapse_is_persisted_before_exit_and_navigation_drops_nodes() {
     window.show().unwrap();
     motion_frame(&window, 250);
     for expanded in [false, true, false] {
-        ui_testing::rapid_click(window.window(), 400., 185.);
+        rapid_target(&window, "group:Proxy");
         let (intent, a, b) = events
             .borrow_mut()
             .pop()
@@ -2249,6 +2558,13 @@ fn protection_locks_rule_controls_and_proxy_mode_without_a_warning_or_draft_chan
     assert!(!app.rule_state.has_editor());
     assert!(!app.notice_visible);
     app.page = Page::Home;
+    let update_check = app.updates.check_id;
+    let _ = app.ui_intent(Intent::CheckUpdate, "", "");
+    let _ = app.ui_intent(Intent::UpdateGeo, "", "");
+    let _ = app.ui_intent(Intent::InstallUpdate, "", "");
+    let _ = app.ui_intent(Intent::UpdatePrereleases, "true", "");
+    assert_eq!(app.updates.check_id, update_check);
+    assert!(!app.updates.checking && !app.geo_updating);
     for mode in ["0", "1", "2"] {
         let _ = app.ui_intent(Intent::ProxyMode, mode, "");
     }
@@ -2265,6 +2581,8 @@ fn protection_locks_rule_controls_and_proxy_mode_without_a_warning_or_draft_chan
         Intent::MixedPort,
         Intent::SavePorts,
         Intent::Mode,
+        Intent::SubscriptionIntervalInput,
+        Intent::SaveSubscriptionInterval,
     ] {
         let _ = app.ui_intent(intent, "false", "blocked.test");
     }
@@ -2293,6 +2611,32 @@ fn a_locked_rules_page_still_accepts_the_global_exit_confirmation() {
     assert!(!app.exiting);
     let _ = app.ui_intent(Intent::Confirm, "", "");
     assert!(app.exiting);
+}
+
+#[test]
+fn protection_rejects_confirmations_that_would_save_or_delete() {
+    let mut app = fixture(Page::Rules);
+    let _ = app.ui_intent(Intent::RuleAdd, "", "");
+    let _ = app.ui_intent(Intent::RulePayload, "unsaved.test", "");
+    app.page = Page::Home;
+    app.claude.protection_pending = Some(true);
+    let draft = app.rule_state.draft.clone();
+    assert!(app.rule_state.has_editor());
+    let _ = app.ui_intent(Intent::Confirm, "", "");
+    assert!(app.rule_state.has_editor());
+    assert_eq!(app.rule_state.draft, draft);
+
+    app.confirmation = Some(desktop_view::Confirmation {
+        title: "删除订阅？".into(),
+        description: "该订阅将被删除。".into(),
+        accept: "删除订阅".into(),
+        pending: desktop_view::Pending::Delete("fixture".into()),
+        ready_at: None,
+    });
+    let profiles = app.profiles.len();
+    let _ = app.ui_intent(Intent::Confirm, "", "");
+    assert!(app.confirmation.is_some());
+    assert_eq!(app.profiles.len(), profiles);
 }
 
 #[test]

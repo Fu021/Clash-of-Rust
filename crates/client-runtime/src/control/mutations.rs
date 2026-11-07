@@ -98,6 +98,9 @@ pub(super) fn rule(
         } => {
             crate::rule_manager::parts(&raw)?;
             ensure!((1..=rows.len() + 1).contains(&position), "规则位置超出范围");
+            if enabled {
+                crate::rule_manager::ensure_unique_enabled(&rows, &raw, None)?;
+            }
             let id = uuid::Uuid::new_v4().to_string();
             draft.custom.push(CustomRule {
                 id: id.clone(),
@@ -139,13 +142,25 @@ pub(super) fn rule(
             match change {
                 RuleChange::Edit { raw, .. } => {
                     crate::rule_manager::parts(&raw)?;
+                    if draft.custom[at].enabled {
+                        crate::rule_manager::ensure_unique_enabled(&rows, &raw, Some(&row.id))?;
+                    }
                     draft.custom[at].rule = raw;
                 }
                 RuleChange::Remove { .. } => {
                     draft.custom.remove(at);
                     draft.order.retain(|id| id != &row.id);
                 }
-                RuleChange::Enable { enabled, .. } => draft.custom[at].enabled = enabled,
+                RuleChange::Enable { enabled, .. } => {
+                    if enabled {
+                        crate::rule_manager::ensure_unique_enabled(
+                            &rows,
+                            &draft.custom[at].rule,
+                            Some(&row.id),
+                        )?;
+                    }
+                    draft.custom[at].enabled = enabled;
+                }
                 _ => unreachable!(),
             }
         }
@@ -275,5 +290,78 @@ mod tests {
         )
         .unwrap();
         assert!(!doc.rows(&draft).0[0].enabled);
+    }
+
+    #[test]
+    fn cli_rejects_duplicate_add_edit_and_enable_without_changing_the_draft() {
+        let doc = Document::from_raw(
+            "test",
+            false,
+            "proxies: []\nrules: [\"DOMAIN,a.test,DIRECT\", \"MATCH,DIRECT\"]",
+        )
+        .unwrap();
+        let mut draft = ProfileRules::default();
+        let initial = draft.clone();
+        assert!(
+            rule(
+                &doc,
+                &mut draft,
+                RuleChange::Add {
+                    raw: "DOMAIN,a.test,DIRECT".into(),
+                    position: 1,
+                    enabled: true,
+                },
+            )
+            .is_err()
+        );
+        assert_eq!(draft, initial);
+        rule(
+            &doc,
+            &mut draft,
+            RuleChange::Add {
+                raw: "DOMAIN,b.test,DIRECT".into(),
+                position: 1,
+                enabled: true,
+            },
+        )
+        .unwrap();
+        let unique = format!("c:{}", draft.custom[0].id);
+        let before = draft.clone();
+        assert!(
+            rule(
+                &doc,
+                &mut draft,
+                RuleChange::Edit {
+                    rule: unique,
+                    raw: "DOMAIN,a.test,DIRECT".into(),
+                },
+            )
+            .is_err()
+        );
+        assert_eq!(draft, before);
+        rule(
+            &doc,
+            &mut draft,
+            RuleChange::Add {
+                raw: "DOMAIN,a.test,DIRECT".into(),
+                position: 1,
+                enabled: false,
+            },
+        )
+        .unwrap();
+        let disabled = format!("c:{}", draft.custom[1].id);
+        let before = draft.clone();
+        assert!(
+            rule(
+                &doc,
+                &mut draft,
+                RuleChange::Enable {
+                    rule: disabled,
+                    enabled: true,
+                },
+            )
+            .is_err()
+        );
+        assert_eq!(draft, before);
     }
 }

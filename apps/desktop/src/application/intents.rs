@@ -1,6 +1,68 @@
 use super::*;
 use clash_desktop_protocol::Intent;
 
+fn allowed_during_protection(intent: Intent, value: &str) -> bool {
+    matches!(
+        intent,
+        Intent::Navigate
+            | Intent::Query
+            | Intent::DismissNotice
+            | Intent::SystemNotification
+            | Intent::ToggleGroup
+            | Intent::GroupDelay
+            | Intent::GroupPage
+            | Intent::NodeDelay
+            | Intent::ListPage
+            | Intent::ConnectionSort
+            | Intent::ConnectionDetail
+            | Intent::OpenProfiles
+            | Intent::CloseProfile
+            | Intent::ExportLogs
+            | Intent::ExportDiagnostics
+            | Intent::ReportIssue
+            | Intent::LogLevel
+            | Intent::LogDetail
+            | Intent::TestUrl
+            | Intent::DnsHost
+            | Intent::Probe
+            | Intent::Dns
+            | Intent::SiteAll
+            | Intent::SiteCancel
+            | Intent::SiteCategory
+            | Intent::SiteOpenCategory
+            | Intent::SiteStatus
+            | Intent::SiteRegion
+            | Intent::SiteDetail
+            | Intent::SiteReset
+            | Intent::SiteReport
+            | Intent::SiteRetest
+            | Intent::SiteProbe
+            | Intent::ClaudeStart
+            | Intent::ClaudeCancel
+            | Intent::ClaudeCloseSession
+            | Intent::ClaudeFilter
+            | Intent::ClaudePage
+            | Intent::ClaudeGuide
+            | Intent::ClaudeBrowser
+            | Intent::ClaudeCopyScript
+            | Intent::ClaudeExport
+            | Intent::ClaudeAdditional
+            | Intent::RuleCloseEditor
+            | Intent::RuleCancelProfile
+            | Intent::Confirm
+            | Intent::CancelConfirm
+            | Intent::CloseDetail
+            | Intent::Copy
+            | Intent::Escape
+            | Intent::FocusSearch
+            | Intent::Quit
+            | Intent::CancelUpdate
+            | Intent::OpenRelease
+            | Intent::OverviewRefresh
+            | Intent::OverviewPrivacy
+    ) || (intent == Intent::ClaudeProtection && value == "false")
+}
+
 impl App {
     fn category(&self, text: &str) -> CategoryFilter {
         ip_report::Report::from_results(&self.site_results)
@@ -24,10 +86,11 @@ impl App {
     pub(super) fn intent(&mut self, intent: Intent, a: &str, b: &str) -> Task<Message> {
         use claude_view::Event as C;
         use rules_view::Event as R;
-        let global_confirmation = intent == Intent::Confirm
-            && self.confirmation.as_ref().is_some_and(|confirmation| {
-                !matches!(&confirmation.pending, desktop_view::Pending::Rules(_))
-            });
+        if (self.settings.claude_protection.is_some() || self.claude.protection_pending.is_some())
+            && !allowed_during_protection(intent, a)
+        {
+            return Task::none();
+        }
         if (self.settings.claude_protection.is_some() || self.claude.protection_pending.is_some())
             && (matches!(
                 intent,
@@ -43,7 +106,6 @@ impl App {
                     | Intent::Ipv6
                     | Intent::Udp
             ) || (self.page == Page::Rules
-                && !global_confirmation
                 && !matches!(
                     intent,
                     Intent::Navigate
@@ -53,7 +115,9 @@ impl App {
                         | Intent::Escape
                         | Intent::RuleCloseEditor
                         | Intent::RuleCancelProfile
+                        | Intent::Confirm
                         | Intent::CancelConfirm
+                        | Intent::ClaudeProtection
                         | Intent::CloseDetail
                         | Intent::Copy
                         | Intent::ExportDiagnostics
@@ -186,6 +250,8 @@ impl App {
             Intent::DnsHost => Message::DnsHost(a.into()),
             Intent::Probe => Message::Probe(boolean(a)),
             Intent::Dns => Message::Dns,
+            Intent::OverviewRefresh => Message::OverviewRefresh,
+            Intent::OverviewPrivacy => Message::OverviewPrivacy,
             Intent::SiteAll => Message::SiteAll,
             Intent::SiteCancel => Message::SiteCancel,
             Intent::SiteCategory => Message::SiteCategory(self.category(a)),
@@ -299,6 +365,23 @@ impl App {
         self.update(message)
     }
     fn accept_dialog(&mut self) -> Task<Message> {
+        if self.settings.claude_protection.is_some() || self.claude.protection_pending.is_some() {
+            let safe_confirmation = self.confirmation.as_ref().is_some_and(|confirmation| {
+                matches!(
+                    &confirmation.pending,
+                    desktop_view::Pending::Exit
+                        | desktop_view::Pending::CloseImport
+                        | desktop_view::Pending::CloseProfile
+                        | desktop_view::Pending::NotificationSettings
+                        | desktop_view::Pending::Rules(_)
+                )
+            });
+            return if safe_confirmation {
+                self.update(Message::Confirm)
+            } else {
+                Task::none()
+            };
+        }
         if self.confirmation.is_some() {
             return self.update(Message::Confirm);
         }
