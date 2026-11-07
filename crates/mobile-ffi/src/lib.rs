@@ -1786,6 +1786,8 @@ mod tests {
 
     #[tokio::test]
     async fn protected_initialize_skips_the_direct_download_listener() {
+        use crate::core::claude_check::protection::{Previous, Protection};
+
         let root = tempfile::tempdir().unwrap();
         let mut session = Session::open(root.path().into(), Arc::new(Fake)).unwrap();
         session
