@@ -214,20 +214,20 @@ pub fn snapshot(pipe: HANDLE, request: &Request) -> Result<Snapshot> {
     // The managed DIRECT download listener is a loopback TCP proxy and must
     // survive into the privileged core. Drop every other listener kind so a
     // supplied configuration cannot create pipes or privileged sockets.
-    if let Some(value) = config.remove(yaml_serde::Value::from("listeners")) {
-        if let Some(items) = value.as_sequence() {
-            let listeners: Vec<_> = items
-                .iter()
-                .filter(|listener| safe_listener(listener))
-                .take(4)
-                .cloned()
-                .collect();
-            if !listeners.is_empty() {
-                config.insert(
-                    yaml_serde::Value::from("listeners"),
-                    yaml_serde::Value::Sequence(listeners),
-                );
-            }
+    if let Some(value) = config.remove(yaml_serde::Value::from("listeners"))
+        && let Some(items) = value.as_sequence()
+    {
+        let listeners: Vec<_> = items
+            .iter()
+            .filter(|listener| safe_listener(listener))
+            .take(4)
+            .cloned()
+            .collect();
+        if !listeners.is_empty() {
+            config.insert(
+                yaml_serde::Value::from("listeners"),
+                yaml_serde::Value::Sequence(listeners),
+            );
         }
     }
     let controller = config
