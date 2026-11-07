@@ -34,7 +34,6 @@ component ProtectionIcon inherits Rectangle {
         LineTo { x: 9; y: 8; }
     }
 }
-
 export component ProtectionBadge inherits Rectangle {
     in property <int> health;
     in property <bool> enabled: true;
@@ -85,7 +84,7 @@ export component ProtectionAlert inherits Rectangle {
     min-height: max(38px, reason.preferred-height + 16px);
     preferred-height: self.min-height;
     vertical-stretch: 0;
-    border-radius: 6px; border-width: 1px; border-color: root.status-color.with-alpha(0.4);
+    border-radius: 10px; border-width: 1px; border-color: root.status-color.with-alpha(0.25);
     background: root.health == 3 ? Theme.danger-wash : Theme.warning-wash;
     accessible-role: button;
     accessible-label: root.message + "，查看保护详情";

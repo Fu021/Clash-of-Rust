@@ -90,6 +90,8 @@ cargo build -p clash-of-rust -p clash-desktop-ui -p clash-cli --bins --locked
 
 ## 开发与发布
 
+按任务查阅[文档导航](docs/README.md)，或从[仓库目录与职责](docs/development.md#目录与职责)定位代码。
+
 共享业务、桌面宿主、独立窗口、CLI 与移动桥接的模块职责和验证要求见 [开发与验证](docs/development.md)；Android 工具链与原生宿主见 [Android 开发说明](apps/android/README.md)，iOS 保留独立界面与宿主占位。
 
 历史提交与 GitHub Actions 常见失败模式按主题整理在 [Agent 失败复盘目录](docs/agent-failures/README.md)。按任务查相关主题，结束时更新[最近复盘](docs/agent-failures/reviews.md)。

@@ -3,5 +3,6 @@
 // integration tests link the normal library and exercise the production models.
 #[cfg(not(test))]
 slint::include_modules!();
+pub mod fonts;
 #[cfg(not(test))]
 pub mod models;

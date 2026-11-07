@@ -1,0 +1,61 @@
+import { Theme } from "../theme/palette.slint";
+import { Motion } from "motion.slint";
+
+export component Wordmark inherits Rectangle {
+    width: 138px; height: 22px;
+    horizontal-stretch: 0;
+    accessible-role: image;
+    accessible-label: "Clash of Rust";
+    Path {
+        width: parent.width; height: parent.height;
+        viewbox-width: 116; viewbox-height: 19;
+        stroke: Theme.ink; stroke-width: 1.8px;
+        commands: "M9.6 8.5A5 5 0 1 0 9.6 15.5 M13.4 2V17 M16.8 12a5 5 0 1 0 10 0a5 5 0 1 0 -10 0 M26.8 7V17 M35.8 8.6C34.8 7.1 29.8 6.7 29.8 9.6C29.8 12.2 36.2 11.5 36.2 14.3C36.2 17.6 30.6 17.5 29.4 15.6 M39.6 2V17 M39.6 12a4 4.6 0 0 1 8 0V17 M80.8 7V17 M80.8 11.8a4.6 4.6 0 0 1 5 -4.5 M89.2 7V12a4 4.6 0 0 0 8 0 M97.2 7V17 M106.2 8.6C105.2 7.1 100.2 6.7 100.2 9.6C100.2 12.2 106.6 11.5 106.6 14.3C106.6 17.6 101 17.5 99.8 15.6 M111 3.4V13.6a3 3 0 0 0 3.9 3 M109 8H114.4";
+    }
+    Path {
+        width: parent.width; height: parent.height;
+        viewbox-width: 116; viewbox-height: 19;
+        stroke: Theme.accent; stroke-width: 1.6px;
+        commands: "M55.2 12a5 5 0 1 0 10 0a5 5 0 1 0 -10 0 M68.8 17V6.2a3.5 3.5 0 0 1 4.4 -3.4 M66.8 8H72";
+    }
+}
+
+export component ConnectionPower inherits Rectangle {
+    in property <bool> connected;
+    in property <bool> enabled: true;
+    in property <string> label;
+    callback clicked();
+    width: 56px; height: 56px;
+    horizontal-stretch: 0; vertical-stretch: 0;
+    border-radius: self.width / 2;
+    background: root.connected ? Theme.primary : Theme.surface;
+    border-width: 1px;
+    border-color: keys.has-focus ? Theme.ink : root.connected ? Theme.primary : Theme.line;
+    opacity: root.enabled ? 1 : 0.45;
+    drop-shadow-blur: root.connected ? 16px : 4px;
+    drop-shadow-offset-y: 3px;
+    drop-shadow-color: root.connected ? Theme.primary.transparentize(0.75) : #00000010;
+    animate background, opacity { duration: Motion.control; enabled: Motion.active; }
+    accessible-role: button;
+    accessible-label: root.label;
+    accessible-action-default => { if root.enabled { root.clicked(); } }
+    forward-focus: keys;
+    Path {
+        width: parent.width * 0.42; height: self.width;
+        x: (parent.width - self.width) / 2; y: (parent.height - self.height) / 2;
+        viewbox-width: 24; viewbox-height: 24;
+        stroke: root.connected ? #ffffff : Theme.secondary; stroke-width: 2px;
+        commands: "M12 3.5V11.5 M6.6 6.8a7.5 7.5 0 1 0 10.8 0";
+    }
+    keys := FocusScope {
+        enabled: root.enabled;
+        key-pressed(event) => {
+            if event.text == Key.Return || event.text == " " { root.clicked(); return accept; }
+            return reject;
+        }
+    }
+    TouchArea {
+        enabled: root.enabled; mouse-cursor: pointer;
+        clicked => { keys.focus(); root.clicked(); }
+    }
+}

@@ -12,7 +12,6 @@ import android.view.MotionEvent;
 import android.view.View;
 import android.view.ViewTreeObserver;
 import android.view.WindowInsets;
-import android.view.WindowInsetsAnimation;
 import android.view.WindowMetrics;
 import android.view.inputmethod.EditorInfo;
 import android.view.inputmethod.InputConnection;
@@ -426,6 +425,38 @@ public class SlintAndroidJavaHelper {
     Activity mActivity;
     SlintInputView mInputView;
     private OnBackInvokedCallback mBackCallback;
+    private boolean mKeyboardRequested;
+    private boolean mKeyboardShowPending;
+    private final Runnable mApplyKeyboardVisibility = new Runnable() {
+        @Override
+        public void run() {
+            if (mActivity.isFinishing() || mActivity.isDestroyed()) {
+                return;
+            }
+            InputMethodManager imm = (InputMethodManager) mActivity.getSystemService(Context.INPUT_METHOD_SERVICE);
+            if (mKeyboardRequested) {
+                if (!mInputView.isShown() || !mInputView.hasWindowFocus()) {
+                    return;
+                }
+                if (!mInputView.hasFocus() && !mInputView.requestFocus()) {
+                    return;
+                }
+                mKeyboardShowPending = false;
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+                    android.view.WindowInsetsController controller = mInputView.getWindowInsetsController();
+                    if (controller != null) {
+                        controller.show(WindowInsets.Type.ime());
+                        return;
+                    }
+                }
+                imm.showSoftInput(mInputView, InputMethodManager.SHOW_IMPLICIT);
+            } else {
+                imm.hideSoftInputFromWindow(mInputView.getWindowToken(), 0);
+                mInputView.clearFocus();
+                mInputView.setCursorPos(0, 0, 0, 0, 0, 0);
+            }
+        }
+    };
 
     public SlintAndroidJavaHelper(Activity activity) {
         this.mActivity = activity;
@@ -437,21 +468,17 @@ public class SlintAndroidJavaHelper {
                         FrameLayout.LayoutParams.MATCH_PARENT);
                 mActivity.addContentView(mInputView, params);
                 mInputView.setVisibility(View.VISIBLE);
+                mInputView.getViewTreeObserver().addOnWindowFocusChangeListener(hasFocus -> {
+                    if (mKeyboardRequested) {
+                        mInputView.removeCallbacks(mApplyKeyboardVisibility);
+                        if (hasFocus && mKeyboardShowPending) {
+                            mInputView.postOnAnimation(mApplyKeyboardVisibility);
+                        }
+                    }
+                });
                 if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
                     mActivity.getWindow().getDecorView().getRootView()
                             .setOnApplyWindowInsetsListener((v, insets) -> dispatchInsets(insets));
-                    // Attach the IME animation callback to the input view rather than the
-                    // decor root: some OEM ROMs fail to render the IME surface when an
-                    // animation callback is installed on the window's root view.
-                    mInputView.setWindowInsetsAnimationCallback(
-                            new WindowInsetsAnimation.Callback(
-                                    WindowInsetsAnimation.Callback.DISPATCH_MODE_CONTINUE_ON_SUBTREE) {
-                                @Override
-                                public WindowInsets onProgress(WindowInsets insets,
-                                        java.util.List<WindowInsetsAnimation> runningAnimations) {
-                                    return dispatchInsets(insets);
-                                }
-                            });
                 }
                 // On API 34+, Back arrives via OnBackInvokedDispatcher; forward
                 // it into Slint's key-event pipeline.
@@ -478,23 +505,32 @@ public class SlintAndroidJavaHelper {
                                     Rect visibleRect = new Rect();
                                     mActivity.getWindow().getDecorView().getRootView()
                                             .getWindowVisibleDisplayFrame(visibleRect);
-                                    int keyboardBottom = windowRect.bottom - visibleRect.bottom;
-                                    int keyboardLeft = windowRect.left - visibleRect.left;
-                                    int keyboardTop = windowRect.top - visibleRect.top;
-                                    int keyboardRight = windowRect.right - visibleRect.right;
-                                    int max = Math.max(keyboardBottom, Math.max(keyboardLeft,
-                                            Math.max(keyboardTop, keyboardRight)));
+                                    int keyboardBottom = Math.max(0, windowRect.bottom - visibleRect.bottom);
+                                    int keyboardLeft = Math.max(0, visibleRect.left - windowRect.left);
+                                    int keyboardTop = Math.max(0, visibleRect.top - windowRect.top);
+                                    int keyboardRight = Math.max(0, windowRect.right - visibleRect.right);
+                                    int bottomOcclusion = Math.max(0, keyboardBottom - safeAreaRect.bottom);
+                                    int leftOcclusion = Math.max(0, keyboardLeft - safeAreaRect.left);
+                                    int topOcclusion = Math.max(0, keyboardTop - safeAreaRect.top);
+                                    int rightOcclusion = Math.max(0, keyboardRight - safeAreaRect.right);
+                                    int max = Math.max(bottomOcclusion, Math.max(leftOcclusion,
+                                            Math.max(topOcclusion, rightOcclusion)));
 
                                     // only take the largest value (it's probably always going to be bottom)
-                                    if (max == keyboardBottom) {
+                                    if (max == 0) {
                                         keyboardTop = 0;
                                         keyboardLeft = 0;
                                         keyboardRight = 0;
-                                    } else if (max == keyboardLeft) {
+                                        keyboardBottom = 0;
+                                    } else if (max == bottomOcclusion) {
+                                        keyboardTop = 0;
+                                        keyboardLeft = 0;
+                                        keyboardRight = 0;
+                                    } else if (max == leftOcclusion) {
                                         keyboardTop = 0;
                                         keyboardRight = 0;
                                         keyboardBottom = 0;
-                                    } else if (max == keyboardTop) {
+                                    } else if (max == topOcclusion) {
                                         keyboardLeft = 0;
                                         keyboardRight = 0;
                                         keyboardBottom = 0;
@@ -552,9 +588,10 @@ public class SlintAndroidJavaHelper {
         mActivity.runOnUiThread(new Runnable() {
             @Override
             public void run() {
-                mInputView.requestFocus();
-                InputMethodManager imm = (InputMethodManager) mActivity.getSystemService(Context.INPUT_METHOD_SERVICE);
-                imm.showSoftInput(mInputView, 0);
+                mKeyboardRequested = true;
+                mKeyboardShowPending = true;
+                mInputView.removeCallbacks(mApplyKeyboardVisibility);
+                mInputView.postOnAnimation(mApplyKeyboardVisibility);
             }
         });
     }
@@ -563,10 +600,10 @@ public class SlintAndroidJavaHelper {
         mActivity.runOnUiThread(new Runnable() {
             @Override
             public void run() {
-                InputMethodManager imm = (InputMethodManager) mActivity.getSystemService(Context.INPUT_METHOD_SERVICE);
-                imm.hideSoftInputFromWindow(mInputView.getWindowToken(), 0);
-                mInputView.clearFocus();
-                mInputView.setCursorPos(0, 0, 0, 0, 0, 0);
+                mKeyboardRequested = false;
+                mKeyboardShowPending = false;
+                mInputView.removeCallbacks(mApplyKeyboardVisibility);
+                mInputView.postDelayed(mApplyKeyboardVisibility, 150);
             }
         });
     }

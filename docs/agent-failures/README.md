@@ -8,6 +8,7 @@
 | Slint 契约、预览、列表与草稿 | [界面与交互](ui-and-tests.md) | 4 |
 | 测试时钟、竞态、fixture 和外部环境 | [测试环境与稳定性](test-environments.md) | 11 |
 | Android 工具链、VPN、DNS、系统 UI | [Android](android.md) | 5、6 |
+| Android 输入法不显示、旧版接口与截图证据 | [输入法兼容性](android-ime.md) | 6 的输入法专题 |
 | macOS Tailscale、系统 DNS、分域与原生就绪 | [macOS DNS 共存](macos-dns.md) | 原 8 的 DNS 主题 |
 | Linux 代理/TUN、Windows 服务/安装器 | [桌面集成](desktop.md) | 7、9 |
 | macOS 身份、助手、端口复用及安装后启动 | [macOS 生命周期](macos-lifecycle.md) | 原 8 的生命周期主题 |

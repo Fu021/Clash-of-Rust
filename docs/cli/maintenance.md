@@ -10,7 +10,7 @@
 | `config set KEY VALUE` | 修改单个受支持设置，不覆盖其他并发修改 |
 | `config check` | 校验实际合并配置 |
 | `config effective [-o FILE]` | 查看运行配置；完整内容需 `--show-secrets` |
-| `diagnose [--url URL --host DOMAIN]` | 系统路由与本地代理 HTTP、IPv4/IPv6 出口及系统/内核 DNS |
+| `diagnose [--url URL --host DOMAIN --offline -o FILE]` | 网络检测或离线现场采集；[报告与日志边界](runtime.md#故障反馈与诊断报告) |
 | `dns DOMAIN [--system]` | 默认内核/代理解析，显式 `--system` 使用系统解析 |
 | `ip-check list [--category NAME --filter TEXT]` | 查看内置检测项目与 ID |
 | `ip-check [ID] [--category NAME -o FILE]` | 全部、分类或单项测试；最多同时执行 3 项 |
@@ -32,6 +32,8 @@
 
 `diagnose` 不会启动后台或恢复 TUN；后台未运行时仍检查系统 DNS、无代理环境变量的系统路由 HTTP，以及 Linux 的示例目标路由。内核运行时再检查其 DNS、本地代理和 IPv4/IPv6 出口。`--host` 和 `--url` 可指定故障服务的域名与 HTTP(S) 地址；返回 401、403 等也只是 HTTP 状态，不表示该服务已可登录或正常使用。报告只列出常见代理环境变量是否存在，不显示其值。两个路径的结果、域名及路由可能不同；故障排查和手动刷新边界见[联网恢复](../agent-failures/network-recovery.md#长时间运行后的服务不可达)。
 
+出口查询请求 JSON 格式，并兼容纯文本 IPv4/IPv6；只有成功 HTTP 状态和有效 IP 才报告出口地址。错误页、缺少或无效 `ip` 字段、超大响应均报告检测失败，不把解析错误当作 IPv4/IPv6 网络不可用的证据。0.6.6 正式版的 CLI 曾请求纯文本接口后按 JSON 解析，可能出现 `trailing characters`；该现象须与真实连接、TLS 或目标服务错误分开排查。
+
 保护开启会强制 TUN、UDP、加密 DNS 及广泛的 Claude 关联规则，可能影响共享服务；关闭按现有保护恢复机制还原此前配置。操作系统授权仍需用户同意。保护状态持久保存，重启后按原有机制恢复；节点、模式和网络覆盖设置在保护期间保持锁定。
 
 ## 维护与后台自启
@@ -49,6 +51,8 @@
 | `completion bash\|zsh\|fish\|powershell` | 输出 shell 补全脚本 |
 
 Geo 状态区分数据版本、数据准备时间和本机上次成功更新时间；旧版清单没有本机记录时显示“暂无记录”。
+
+Geo 更新后后台因备份缺失无法启动时，启动恢复仅保留通过整组校验的当前数据，并保存原事务、清单及残余备份；不把此前更新记为成功。未通过校验时保留现场并报错，详见[Geo 恢复与启动](../agent-failures/downloads.md#geo-恢复与启动)。资源缺失报错会列出实际程序及资源查找目录，可核对完整安装位置或 `--resources PATH`，不要直接删除恢复记录。
 
 后台请求超时或中断会取消尚未提交的订阅、Geo 和客户端更新下载；安装交接一旦开始，系统安装程序可能已经启动。慢网可用 `--timeout N` 延长请求等待，详见[下载任务](../agent-failures/downloads.md)。
 

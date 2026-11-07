@@ -6,10 +6,6 @@ fn mapped_rows(kind: &str) -> String {
     match kind {
         "int" | "bool" | "float" | "length" => "rows.to_vec()".into(),
         "string" => "rows.iter().map(|v|v.as_str().into()).collect::<Vec<_>>()".into(),
-        "image" => {
-            "rows.iter().map(|v|crate::flags::label(v).1.unwrap_or_default()).collect::<Vec<_>>()"
-                .into()
-        }
         kind => format!(
             "rows.iter().map(convert_{}).collect::<Vec<_>>()",
             rust_name(kind)
@@ -19,7 +15,6 @@ fn mapped_rows(kind: &str) -> String {
 fn convert(kind: &str, value: &str) -> String {
     match kind {
         "string" => format!("{value}.as_str().into()"),
-        "image" => format!("crate::flags::label(&{value}).1.unwrap_or_default()"),
         "int" | "bool" | "float" | "length" => value.into(),
         kind if kind.starts_with('[') => {
             let inner = &kind[1..kind.len() - 1];
@@ -92,11 +87,6 @@ fn main() {
         } else if kind == "string" {
             code += &format!(
                 "if data.get_{field}().as_str()!=frame.{field}.as_str(){{data.set_{field}(frame.{field}.as_str().into());}}"
-            );
-        } else if kind == "image" {
-            code += &format!(
-                "data.set_{field}({});",
-                convert(kind, &format!("frame.{field}"))
             );
         } else {
             code += &format!(

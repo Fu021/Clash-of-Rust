@@ -7,7 +7,7 @@
 | 脚本 | 类型 | 职责 |
 | --- | --- | --- |
 | `build_support.py` | 共享模块 | 平台识别、版本、资源、下载、架构和暂存目录等标准库辅助。 |
-| `build_inputs.py` | CLI / 模块 | 冻结并应用同一份 Rust、Go、Android、Linux 基线和资源依赖快照。 |
+| `build_inputs.py` | CLI / 模块 | 冻结并应用同一份 Rust、Go、Android、Linux 基线和资源依赖快照；统一取得四份 Geo 原包，随快照校验及分发。 |
 | `upstream_cache.py` | CLI / 模块 | 官方原始下载的私网回退、持久清单分批提交、分页回执与有界状态查询；不上传 runner 归档。 |
 | `dependency_audit.py` | 模块 | 只读探查升级、撤回和替换信号；由 `build_inputs.py audit` 调用，实际变更遵循维护者的 loop 更新授权并验证。 |
 | `runtime_cache.py` | 历史协议辅助 | 旧工具快照的离线兼容回归；当前工作流不调用。 |
@@ -16,8 +16,8 @@
 | `cache_shards.py` | 历史协议辅助 | 旧 Rust 分片的离线兼容回归；当前工作流不调用。 |
 | `workflow_storage.py` | CLI | 限制 GitHub Actions 热缓存容量并保留需要的版本。 |
 | `prepare-resources.py` | CLI | 校验并准备 mihomo、Geo 和桌面共享资源。 |
-| `prepare-assets.py` | 维护 CLI | 生成图标、国旗，或核验 Windows 嵌入图标；普通构建不运行。 |
-| `android.py` | CLI | Android 编译、模拟器测试、产物导出与已测试 APK 打包；`emulator --legacy` / `--api` 选择固定旧版镜像，`test --ime-only` 运行严格输入法回归；Actions 的多轮截图/动画对照共用 `test()`，见[专项范围](../docs/workflows/ci.md#ci)。 |
+| `prepare-assets.py` | 维护 CLI | 生成图标、CLDR 国家名称，或核验 Windows 嵌入图标；普通构建不运行，不生成国旗图片。 |
+| `android.py` | CLI | Android 编译、模拟器测试、产物导出与已测试 APK 打包；默认 `test` 与打包只运行代理/TUN 及生命周期集成。经明确要求的输入法调查使用 `emulator --legacy` / `--api` 和 `test --ime-only`；专项保留截图、输入高度与崩溃证据，见[验证范围](../docs/workflows/ci.md#ci)。 |
 | `build-installer.py` | CLI | 只组装已验证产物为 Windows、Linux 或 macOS 安装包。 |
 | `macos_package.py` | 模块 | macOS App / DMG 组装；被打包器和 macOS 验证延迟导入。 |
 | `publish-release.py` | CLI / 模块 | 校验成功 CI，复用已验证产物创建测试包或公开正式/预发布 Release。 |
@@ -33,7 +33,7 @@
 | `test-release-package.py` | CLI | 统一调度安装包结构、安装后验证和 Linux 兼容性检查。 |
 | `run-memory-benchmark.py` | CLI | 隔离运行 API、GUI、托盘和 CLI 内存基准。 |
 | `memory_desktop.py` | 模块 / 子进程 | 托盘宿主与窗口夹具；测量进程外运行，不能并入基准入口。 |
-| `preview-slint.py` | CLI | 使用官方 Slint Viewer 检查或渲染正式组件，不调用 Cargo。 |
+| `preview-slint.py` | CLI | 使用依赖版本一致的 Viewer 检查语法，主线 Viewer 配合随包字体渲染正式组件；拒绝旧工具输出缺字截图，不调用 Cargo。 |
 | `test-build-tools.py` | 离线测试 | 构建输入、缓存、打包、Windows/macOS 辅助逻辑的单元测试。 |
 | `test-workflow-artifacts.py` | 离线测试 | 不可变产物、安装包和内存工作流的离线回归测试。 |
 

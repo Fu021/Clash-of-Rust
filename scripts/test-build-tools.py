@@ -5,6 +5,7 @@ import logging
 import re
 from pathlib import Path
 import socket
+import shlex
 import tempfile
 import threading
 import tomllib
@@ -47,9 +48,87 @@ _release_package_spec = importlib.util.spec_from_file_location(
 release_package = importlib.util.module_from_spec(_release_package_spec)
 _release_package_spec.loader.exec_module(release_package)
 
+_preview_spec = importlib.util.spec_from_file_location(
+    'preview_slint', build.ROOT/'scripts/preview-slint.py')
+preview_slint = importlib.util.module_from_spec(_preview_spec)
+_preview_spec.loader.exec_module(preview_slint)
 
 
 class BuildTests(unittest.TestCase):
+    def test_previews_reject_a_viewer_without_color_font_support(self):
+        for version, supported in [('slint-viewer 1.18.1', False),
+                                   ('slint-viewer 1.19.0', True)]:
+            with self.subTest(version=version), patch.object(
+                    preview_slint.subprocess, 'run',
+                    return_value=subprocess.CompletedProcess([], 0, version)):
+                if supported:
+                    self.assertEqual(preview_slint.rendering_viewer('viewer')['version'], version)
+                else:
+                    with self.assertRaisesRegex(RuntimeError, 'Accurate emoji previews'):
+                        preview_slint.rendering_viewer('viewer')
+
+    def test_previews_use_bundled_font_fallback_instead_of_the_hosts_preferences(self):
+        with tempfile.TemporaryDirectory() as temporary, patch.dict(
+                os.environ, {'SLINT_FONT_PATH': '/unrelated/font',
+                             'SLINT_DEFAULT_FONT': '/unrelated/primary'}):
+            environment = preview_slint.preview_environment(Path(temporary))
+            self.assertEqual(environment['SLINT_FONT_PATH'],
+                             str(build.ROOT/'resources/fonts/NotoColorEmoji-Regular.ttf'))
+            self.assertEqual(environment['SLINT_DEFAULT_FONT'],
+                             str(build.ROOT/'resources/fonts/SourceHanSansCN-Regular.otf'))
+
+    def test_desktop_scope_uses_the_selected_checkout_members(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            (root/'Cargo.toml').write_text('[workspace]\nmembers=["apps/desktop"]\n')
+            self.assertEqual(build.desktop_cargo_scope(root), ['--workspace'])
+            native = root/'apps/android/native'
+            native.mkdir(parents=True)
+            (native/'Cargo.toml').write_text('[package]\nname="legacy-android-host"\n')
+            (root/'Cargo.toml').write_text('[workspace]\nmembers=["apps/desktop","apps/android/native"]\n')
+            self.assertEqual(build.desktop_cargo_scope(root), ['--workspace', '--exclude', 'legacy-android-host'])
+
+    def test_desktop_pipeline_excludes_mobile_without_dropping_shared_sources(self):
+        specification = importlib.util.spec_from_file_location('native_ci', build.ROOT/'scripts/run-ci.py')
+        native_ci = importlib.util.module_from_spec(specification)
+        specification.loader.exec_module(native_ci)
+        commands = []
+
+        def capture(command, **kwargs):
+            commands.append(command)
+            if command[:2] == ['cargo', 'test']:
+                raise RuntimeError('source checks completed')
+
+        with patch.object(sys, 'argv', ['run-ci.py', '--system', 'linux', '--arch', 'x64']), \
+                patch.object(native_ci, 'host_system', return_value='linux'), \
+                patch.object(native_ci, 'host_arch', return_value='x64'), \
+                patch.object(local_cache, 'workspace_sources'), \
+                patch.object(native_ci, 'run', side_effect=capture), \
+                patch.object(native_ci, 'cargo_messages', return_value=[]), \
+                patch.object(native_ci, 'test_binaries', return_value={}):
+            with self.assertRaisesRegex(RuntimeError, 'source checks completed'):
+                native_ci.main()
+        for command in commands:
+            if command[1] == 'fmt':
+                continue
+            excluded = [command[index + 1] for index, value in enumerate(command) if value == '--exclude']
+            self.assertEqual(set(excluded), {'clash-mobile-runtime', 'clash-android'})
+            self.assertIn('--workspace', command)
+        self.assertEqual([command[1] for command in commands], ['fmt', 'clippy', 'build', 'test'])
+
+    def test_android_build_runs_mobile_unit_tests_before_preparing_target_tools(self):
+        with patch.object(local_cache, 'workspace_sources'), \
+                patch.object(android_build, 'cargo_build') as clippy, \
+                patch.object(android_build, 'run', side_effect=RuntimeError('mobile tests executed')) as tests:
+            with self.assertRaisesRegex(RuntimeError, 'mobile tests executed'):
+                android_build.build('arm64')
+        for command in (clippy.call_args.args[0], tests.call_args.args[0]):
+            packages = [command[index + 1] for index, value in enumerate(command) if value == '-p']
+            self.assertEqual(packages, ['clash-mobile-runtime', 'clash-android'])
+            self.assertNotIn('--workspace', command)
+            self.assertIn('--locked', command)
+        self.assertIn('--lib', tests.call_args.args[0])
+
     def test_linux_ci_prepares_resources_on_host_before_entering_container(self):
         with patch.object(sys, 'argv', ['linux_ci.py', 'ci']), \
                 patch.object(linux_ci, 'require_actions'), \
@@ -204,6 +283,101 @@ class BuildTests(unittest.TestCase):
         self.assertIn('--wayland-display=cor-wayland', modern)
         self.assertIn('--virtual-monitor=1280x900', modern)
         self.assertIn('--unsafe-mode', modern)
+
+    def test_dbus_probe_errors_remain_in_the_report_and_still_raise(self):
+        import linux_gui
+        failure = subprocess.CalledProcessError(1, ['gdbus'], stderr='service is starting')
+        with tempfile.TemporaryDirectory() as temporary, \
+                patch.dict(os.environ, {'COR_GUI_REPORT': temporary}), \
+                patch.object(linux_gui, 'output', side_effect=failure):
+            with self.assertRaises(subprocess.CalledProcessError):
+                linux_gui.dbus('org.gnome.Shell', '/org/gnome/Shell', 'org.gnome.Shell.Eval', 'true')
+            self.assertIn('service is starting', (Path(temporary)/'dbus-probes.log').read_text())
+
+    def test_only_macos_tailscale_bootstrap_binaries_survive_retirement(self):
+        self.assertFalse(storage.retired('action-setup-tailscale/1.104.5/macOS-amd64'))
+        self.assertFalse(storage.retired('action-setup-tailscale/1.104.5/macOS-arm64'))
+        self.assertTrue(storage.retired('action-setup-tailscale/1.104.5/Linux-amd64'))
+        self.assertTrue(storage.retired('action-setup-tailscale/1.104.5/Windows-arm64'))
+        self.assertEqual(storage.lineage('action-setup-tailscale/1.104.5/macOS-arm64'),
+                         storage.lineage('action-setup-tailscale/1.104.1/macOS-arm64'))
+        native = 'native-release-v2-macos-26-arm64-build-' + 'a'*8 + '-' + 'b'*8
+        bootstrap = 'action-setup-tailscale/' + '1.104.5/' + 'macOS-arm64'
+        self.assertGreater(storage.priority({'key': native}),
+                           storage.priority({'key': bootstrap}))
+
+    def test_guest_original_receipts_replace_slow_archive_exports_and_reject_bad_sources(self):
+        record = {'url': 'https://ports.ubuntu.com/ubuntu-ports/pool/main/a/a.deb',
+                  'sha256': 'a'*64, 'size': 123}
+        for valid in (True, False):
+            value = record if valid else dict(record, url='https://untrusted.invalid/a.deb')
+            with self.subTest(valid=valid), tempfile.TemporaryDirectory() as temporary, \
+                    patch.dict(os.environ, {'RUNNER_TEMP': temporary}), \
+                    patch.object(linux_ci, 'REPORT', Path(temporary)/'report'), \
+                    patch.object(linux_ci.subprocess, 'check_output',
+                                 return_value=json.dumps([value]).encode()):
+                linux_ci.guest_receipts(['ssh', 'isolated-guest'])
+                receipts = list((Path(temporary)/'cor-upstream-downloads').glob('*.json'))
+                self.assertEqual(len(receipts), int(valid))
+                if valid:
+                    self.assertEqual(json.loads(receipts[0].read_text()), record)
+
+    def test_guest_python_loads_the_real_package_entry_from_the_checkout_root(self):
+        calls = []
+        linux_ci.guest_python(
+            lambda command, **kwargs: calls.append((command, kwargs)), '',
+            "import runpy; "
+            "module=runpy.run_path('scripts/test-release-package.py'); "
+            "assert callable(module['prepare_compatibility_environment']); "
+            "assert 'git' in module['compatibility_dependencies']()",
+            timeout=2100)
+        command, options = calls.pop()
+        self.assertEqual(options, {'timeout': 2100})
+        arguments = shlex.split(command)
+        self.assertEqual(arguments[0], '/opt/cor-test-python/bin/python3')
+        result = subprocess.run(
+            [sys.executable, '-I', *arguments[1:]], cwd=build.ROOT,
+            capture_output=True, text=True, timeout=15)
+        self.assertEqual(result.returncode, 0, result.stderr)
+
+    def test_guest_debs_use_host_fallback_and_verify_bytes_before_transferring(self):
+        payload = b'verified-signed-deb'
+        record = {'url': 'http://ports.ubuntu.com/ubuntu-ports/pool/main/a/a.deb',
+                  'sha256': hashlib.sha256(payload).hexdigest(), 'size': len(payload)}
+        for scenario in ('valid', 'changed-bytes', 'bad-source', 'bad-name', 'unavailable'):
+            value = dict(record, url='https://untrusted.invalid/a.deb') if scenario == 'bad-source' else record
+            name = '../a.deb' if scenario == 'bad-name' else 'a.deb'
+            received = []
+
+            def download(url, destination, digest):
+                self.assertTrue(url.startswith('https://ports.ubuntu.com/'))
+                self.assertEqual(digest, record['sha256'])
+                if scenario == 'unavailable':
+                    raise OSError('Both official and private downloads failed')
+                destination.write_bytes(payload if scenario != 'changed-bytes' else b'changed')
+
+            def remote(command, **kwargs):
+                if stream := kwargs.get('stdin'):
+                    with tarfile.open(fileobj=io.BytesIO(stream.read())) as archive:
+                        received.append(archive.extractfile('a.deb').read())
+
+            with self.subTest(scenario=scenario), tempfile.TemporaryDirectory() as temporary, \
+                    patch.object(linux_ci.subprocess, 'check_output',
+                                 return_value=json.dumps({name: value}).encode()), \
+                    patch.object(linux_ci, 'download_original', side_effect=download):
+                if scenario == 'valid':
+                    linux_ci.guest_deb_downloads(['ssh'], remote, 'environment ', Path(temporary)/'debs')
+                    self.assertEqual(received, [payload])
+                else:
+                    expected = OSError if scenario == 'unavailable' else ValueError
+                    with self.assertRaises(expected):
+                        linux_ci.guest_deb_downloads(['ssh'], remote, 'environment ', Path(temporary)/'debs')
+                    self.assertFalse(received)
+
+    def test_vm_prefetches_package_dependencies_without_preinstalling_them(self):
+        package_font = 'fonts-wqy-microhei'
+        self.assertIn(package_font, release_package.compatibility_download_dependencies())
+        self.assertNotIn(package_font, release_package.compatibility_dependencies())
 
     @unittest.skipUnless(hasattr(socket, 'AF_UNIX'), 'Unix sockets are unavailable')
     def test_linux_gui_finds_only_wayland_sockets(self):
@@ -1287,6 +1461,93 @@ Private_Clean: 2 kB
                 with self.assertRaisesRegex(ValueError, 'approved repository'):
                     build_inputs.resolve(snapshot)
 
+    def test_geo_snapshot_reuses_verified_bytes_without_network_access(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            payload = b'frozen official database'
+            checksum = hashlib.sha256(payload).hexdigest()
+            upstream = {'geo': {'assets': [
+                {'name': name, 'size': len(payload), 'digest': 'sha256:' + checksum,
+                 'browser_download_url': 'https://github.com/example/geo/' + name}
+                for name in build_inputs.GEO]}}
+            with patch.object(build_inputs, 'download_asset') as download:
+                def save(asset, path):
+                    path.parent.mkdir(parents=True, exist_ok=True)
+                    path.write_bytes(payload)
+                download.side_effect = save
+                resources = build_inputs.freeze_geo(root, upstream)
+            value = {'upstream': upstream, 'resources': resources}
+            with patch.object(build_inputs, 'download_asset', side_effect=AssertionError('unexpected download')):
+                self.assertEqual(set(build_inputs.verify_geo_snapshot(value, root)), set(build_inputs.GEO))
+                damaged = root / 'resources/GeoIP.dat'
+                damaged.write_bytes(b'x' * len(payload))
+                with self.assertRaisesRegex(ValueError, 'checksum or size'):
+                    build_inputs.verify_geo_snapshot(value, root)
+                damaged.unlink()
+                with self.assertRaisesRegex(ValueError, 'checksum or size'):
+                    build_inputs.verify_geo_snapshot(value, root)
+                with self.assertRaisesRegex(ValueError, 'inventory'):
+                    build_inputs.verify_geo_snapshot({**value, 'resources': {}}, root)
+
+    def test_geo_snapshot_rejects_incomplete_assets_and_wrong_download_size(self):
+        payload = b'frozen official database'
+        checksum = hashlib.sha256(payload).hexdigest()
+        assets = [{'name': name, 'size': len(payload), 'digest': 'sha256:' + checksum}
+                  for name in build_inputs.GEO]
+        with self.assertRaisesRegex(ValueError, 'incomplete'):
+            build_inputs.geo_assets({'geo': {'assets': assets[:-1]}})
+        with tempfile.TemporaryDirectory() as temporary, \
+                patch.object(build_inputs, 'download_asset') as download:
+            def save(asset, path):
+                path.parent.mkdir(parents=True, exist_ok=True)
+                path.write_bytes(payload)
+            download.side_effect = save
+            assets[0]['size'] += 1
+            with self.assertRaisesRegex(ValueError, 'checksum or size'):
+                build_inputs.freeze_geo(Path(temporary), {'geo': {'assets': assets}})
+
+    def test_apply_verifies_geo_before_replacing_source_files(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            snapshot = root / 'snapshot'
+            payload = b'verified geo'
+            checksum = hashlib.sha256(payload).hexdigest()
+            upstream = {'geo': {'assets': [
+                {'name': name, 'size': len(payload), 'digest': 'sha256:' + checksum}
+                for name in build_inputs.GEO]}}
+            resources = {}
+            for name in build_inputs.GEO.values():
+                path = snapshot / 'resources' / name
+                path.parent.mkdir(parents=True, exist_ok=True)
+                path.write_bytes(payload)
+                resources['resources/' + name] = checksum
+            sources = {name: b'approved source' for name in build_inputs.FILES}
+            for name, content in sources.items():
+                path = snapshot / name
+                path.parent.mkdir(parents=True, exist_ok=True)
+                path.write_bytes(content)
+                target = root / name
+                target.parent.mkdir(parents=True, exist_ok=True)
+                target.write_bytes(b'unchanged local source')
+            files = {name: hashlib.sha256(content).hexdigest() for name, content in sources.items()}
+            value = {'schema': 1, 'commit': 'current', 'constraints': {}, 'files': files,
+                     'baseline': files, 'upstream': upstream, 'resources': resources}
+            build.write_json(snapshot / 'inputs.json', value)
+            damaged = snapshot / 'resources/GeoIP.dat'
+            damaged.write_bytes(b'x' * len(payload))
+            with patch.object(build_inputs, 'ROOT', root), \
+                    patch.object(build_inputs, 'current_commit', return_value='current'), \
+                    patch.object(build_inputs, 'constraints', return_value={}), \
+                    patch.object(build_inputs, 'original', side_effect=sources.__getitem__):
+                with self.assertRaisesRegex(ValueError, 'checksum or size'):
+                    build_inputs.apply(snapshot)
+                self.assertEqual((root / 'Cargo.lock').read_bytes(), b'unchanged local source')
+                damaged.write_bytes(payload)
+                build_inputs.apply(snapshot)
+                self.assertEqual((root / 'Cargo.lock').read_bytes(), sources['Cargo.lock'])
+                for name in build_inputs.GEO.values():
+                    self.assertEqual((root / 'bundle/resources' / name).read_bytes(), payload)
+
     def test_version_bootstrap_does_not_require_python_311_modules(self):
         with tempfile.TemporaryDirectory() as temporary:
             output = Path(temporary) / 'versions'
@@ -1360,6 +1621,98 @@ runpy.run_path(str(script), run_name='__main__')
         legacy=content.replace(b'android-35',b'android-31')
         with patch.object(dependency_audit, 'metadata', return_value=legacy):
             self.assertEqual(dependency_audit.android_candidate('system-image-legacy','31-r14')[0],'31-r99')
+
+    def test_emulator_storage_accounts_for_the_effective_userdata_floor(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            avd = root/'device.avd'
+            avd.mkdir()
+            config = avd/'config.ini'
+            config.write_text('hw.device.name=pixel_6\n'
+                              'disk.dataPartition.size=10G\n'
+                              '  disk.dataPartition.size = 12G\n'
+                              'hw.ramSize=4096\n')
+            free = 10 * 1024**3
+            with patch.object(android_build.shutil, 'disk_usage',
+                              return_value=MagicMock(free=free)):
+                android_build.configure_emulator_storage(avd, root/'report')
+                android_build.configure_emulator_storage(avd, root/'report')
+            self.assertEqual(config.read_text(), 'hw.device.name=pixel_6\nhw.ramSize=4096\n'
+                             'disk.dataPartition.size=6144M\n')
+            report = json.loads((root/'report/storage.json').read_text())
+            self.assertEqual(report['free_bytes'], free)
+            self.assertEqual(report['userdata_mib'], 6144)
+            self.assertGreater(report['required_free_bytes'], 7 * 1024**3)
+            self.assertLess(report['required_free_bytes'], free)
+            self.assertEqual(report['removed_host_tools'], [])
+
+    def test_emulator_storage_reports_insufficient_space_before_changing_the_device(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            config = root/'config.ini'
+            config.write_text('disk.dataPartition.size=10G\n')
+            with patch.dict(os.environ, {'GITHUB_ACTIONS': ''}), \
+                 patch.object(android_build, 'run') as invoke, \
+                 patch.object(android_build.shutil, 'disk_usage',
+                              return_value=MagicMock(free=3 * 1024**3)):
+                with self.assertRaisesRegex(RuntimeError, 'available: 3.00 GiB'):
+                    android_build.configure_emulator_storage(root, root/'report')
+            self.assertEqual(config.read_text(), 'disk.dataPartition.size=10G\n')
+            report = json.loads((root/'report/storage.json').read_text())
+            self.assertEqual(report['free_bytes'], 3 * 1024**3)
+            invoke.assert_not_called()
+
+    def test_emulator_storage_reclaims_only_unused_tools_on_hosted_linux(self):
+        for environment, system in (('github-hosted', 'Linux'),
+                                    ('self-hosted', 'Linux'),
+                                    ('github-hosted', 'Windows')):
+            with self.subTest(environment=environment, system=system), \
+                 tempfile.TemporaryDirectory() as temporary:
+                root = Path(temporary)
+                config = root/'config.ini'
+                config.write_text('disk.dataPartition.size=10G\n')
+                free_before = 5255 * 1024**2
+                hosted_linux = environment == 'github-hosted' and system == 'Linux'
+                with patch.dict(os.environ, {'GITHUB_ACTIONS': 'true',
+                                             'RUNNER_ENVIRONMENT': environment,
+                                             'RUNNER_OS': system}), \
+                     patch.object(android_build, 'run') as invoke, \
+                     patch.object(android_build.shutil, 'disk_usage', side_effect=[
+                         MagicMock(free=free_before), MagicMock(free=15 * 1024**3),
+                     ]):
+                    if hosted_linux:
+                        android_build.configure_emulator_storage(root, root/'report')
+                        invoke.assert_called_once_with(
+                            ['sudo', '-n', 'rm', '-rf', '--', '/usr/share/dotnet'], timeout=120)
+                    else:
+                        with self.assertRaisesRegex(RuntimeError, 'available: 5.13 GiB'):
+                            android_build.configure_emulator_storage(root, root/'report')
+                        invoke.assert_not_called()
+                        self.assertEqual(config.read_text(), 'disk.dataPartition.size=10G\n')
+                report = json.loads((root/'report/storage.json').read_text())
+                self.assertEqual(report['free_bytes_before'], free_before)
+                self.assertEqual(report['free_bytes'],
+                                 15 * 1024**3 if hosted_linux else free_before)
+                self.assertEqual(report['removed_host_tools'],
+                                 ['/usr/share/dotnet'] if hosted_linux else [])
+
+    def test_emulator_storage_rechecks_capacity_after_reclaiming_host_tools(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            config = root/'config.ini'
+            config.write_text('disk.dataPartition.size=10G\n')
+            with patch.dict(os.environ, {'GITHUB_ACTIONS': 'true',
+                                         'RUNNER_ENVIRONMENT': 'github-hosted',
+                                         'RUNNER_OS': 'Linux'}), \
+                 patch.object(android_build, 'run'), \
+                 patch.object(android_build.shutil, 'disk_usage', side_effect=[
+                     MagicMock(free=5 * 1024**3), MagicMock(free=6 * 1024**3),
+                 ]):
+                with self.assertRaisesRegex(RuntimeError, 'available: 6.00 GiB'):
+                    android_build.configure_emulator_storage(root, root/'report')
+            self.assertEqual(config.read_text(), 'disk.dataPartition.size=10G\n')
+            report = json.loads((root/'report/storage.json').read_text())
+            self.assertEqual(report['free_bytes'], 6 * 1024**3)
 
     def test_emulator_rejects_revisions_that_differ_from_the_cache_identity(self):
         versions = build_inputs.android_versions()
@@ -1448,6 +1801,292 @@ runpy.run_path(str(script), run_name='__main__')
                 with self.assertRaisesRegex(RuntimeError,'screenshot export failed'):
                     android_build.pull_ime_report('/sdcard/ime-report',report,required=True)
             self.assertEqual(invoke.call_count,1)
+
+    def test_ime_export_can_require_native_control_state_instead_of_subscription_screenshots(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            report=Path(temporary)
+            def invoke(command, **kwargs):
+                (report/'ime-report/state.json').write_text('{"editor":"android.widget.EditText"}')
+                return subprocess.CompletedProcess(command,0,'1 file pulled','')
+            with patch.object(android_build.subprocess,'run',side_effect=invoke):
+                android_build.pull_ime_report('/sdcard/native-control',report,
+                                              required=True,required_pattern='state.json')
+            self.assertTrue((report/'ime-report/state.json').is_file())
+
+    def test_android_network_runs_exclude_keyboard_without_hiding_failures(self):
+        network_cases=('localProxyAndRealTunCarryTrafficAndDisconnectCleanly',
+                       'quickTileRestoresColdCoreWithoutOpeningTheActivity')
+        for failed_case, log_error, captured_log in (
+                (None,None,'network test complete'),
+                (network_cases[0],None,'network test failed'),
+                (network_cases[1],None,'tile test failed'),
+                (None,RuntimeError('Android test log end marker is missing'),'partial log'),
+                (None,None,'Mobile runtime stopped: core failure')):
+            with self.subTest(failed_case=failed_case,log_error=log_error,log=captured_log), \
+                    tempfile.TemporaryDirectory() as temporary:
+                root=Path(temporary)
+                cases=[]
+                def invoke(command, **kwargs):
+                    if 'instrument' in command:
+                        case=command[command.index('class')+1].split('#')[1]
+                        cases.append(case)
+                        output='FAILURES!!!' if case==failed_case else 'OK (1 test)'
+                        return subprocess.CompletedProcess(command,0,output,'')
+                    return subprocess.CompletedProcess(command,0,'','')
+                with patch.object(android_build,'ROOT',root), \
+                        patch.object(android_build,'run'), \
+                        patch.object(android_build.subprocess,'check_output',return_value='36\n') as properties, \
+                        patch.object(android_build.subprocess,'run',side_effect=invoke) as commands, \
+                        patch('http.server.ThreadingHTTPServer') as server, \
+                        patch('threading.Thread'), \
+                        patch.object(android_build,'start_test_log'), \
+                        patch.object(android_build,'finish_test_log',return_value=(captured_log,log_error)), \
+                        patch.object(android_build,'pull_ime_report') as pull, \
+                        patch.object(android_build,'input_method_crashes') as ime_crashes:
+                    if failed_case or log_error or 'Mobile runtime stopped:' in captured_log:
+                        with self.assertRaises(RuntimeError):
+                            android_build.test('x64',root/'app.apk',root/'test.apk')
+                    else:
+                        android_build.test('x64',root/'app.apk',root/'test.apk')
+                    self.assertEqual(cases,list(network_cases))
+                    self.assertTrue(all('getprop' in call.args[0] for call in properties.call_args_list))
+                    self.assertFalse(any('input_method' in call.args[0] for call in commands.call_args_list))
+                    pull.assert_not_called()
+                    ime_crashes.assert_not_called()
+                    server.return_value.shutdown.assert_called_once()
+                    server.return_value.server_close.assert_called_once()
+                report=root/'target/android-report/x64'
+                self.assertFalse((report/'input-method-status.json').exists())
+                self.assertTrue((report/'instrumentation.txt').is_file())
+
+    def test_android_ime_runs_remain_explicit_and_require_screenshot_evidence(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root=Path(temporary)
+            cases=[]
+            def invoke(command, **kwargs):
+                if 'instrument' in command:
+                    cases.append(command[command.index('class')+1].split('#')[1])
+                return subprocess.CompletedProcess(command,0,'OK (1 test)','')
+            def property_value(command, **kwargs):
+                return 'com.example.ime/.Keyboard\n' if 'default_input_method' in command else '36\n'
+            with patch.object(android_build,'ROOT',root), \
+                    patch.object(android_build,'run'), \
+                    patch.object(android_build.subprocess,'check_output',side_effect=property_value), \
+                    patch.object(android_build.subprocess,'run',side_effect=invoke), \
+                    patch('http.server.ThreadingHTTPServer') as server, \
+                    patch.object(android_build,'start_test_log'), \
+                    patch.object(android_build,'finish_test_log',return_value=('',None)), \
+                    patch.object(android_build,'pull_ime_report') as pull:
+                with self.assertRaisesRegex(RuntimeError,'IME evidence is incomplete'):
+                    android_build.test('x64',root/'app.apk',root/'test.apk',ime_only=True)
+                self.assertEqual(cases,['subscriptionFieldsShowImeAcceptTextAndReopenAfterBack'])
+                server.assert_not_called()
+                pull.assert_called_once()
+                self.assertTrue(pull.call_args.kwargs['required'])
+            self.assertTrue((root/'target/android-report/x64/ime-api-36/regression/input-method-status.json').is_file())
+
+    def test_android_ime_crash_report_uses_only_the_current_run_and_selected_input_method(self):
+        crash=('E AndroidRuntime: FATAL EXCEPTION: main\n'
+               'E AndroidRuntime: Process: com.example.ime, PID: 42\n'
+               'E AndroidRuntime: java.lang.NullPointerException: unavailable keyboard\n')
+        log=crash+'I CorAndroidTest: start-current-test\n'+crash
+        current=android_build.scoped_test_log(log,'start-current-test')
+        self.assertEqual(android_build.input_method_crashes(current,'com.example.ime'),
+                         [{'process':'com.example.ime',
+                           'exception':'java.lang.NullPointerException: unavailable keyboard'}])
+        self.assertEqual(android_build.input_method_crashes(current,'org.clashofrust.android'),[])
+        self.assertEqual(android_build.input_method_crashes(
+            android_build.scoped_test_log(crash+'I CorAndroidTest: start-current-test\n','start-current-test'),
+            'com.example.ime'),[])
+        with self.assertRaisesRegex(RuntimeError,'start marker is missing'):
+            android_build.scoped_test_log(log,'unrecorded-marker')
+
+    def test_android_ime_crash_report_ignores_other_packages_and_ordinary_log_errors(self):
+        log=('E AndroidRuntime: FATAL EXCEPTION: main\n'
+             'E AndroidRuntime: Process: com.example.other, PID: 42\n'
+             'E AndroidRuntime: java.lang.IllegalArgumentException: bad input\n'
+             'E AndroidRuntime: Process: com.example.ime.extra, PID: 43\n'
+             'E InputMethodManager: java.lang.NullPointerException: remote connection\n')
+        self.assertEqual(android_build.input_method_crashes(log,'com.example.ime'),[])
+
+    def test_android_ime_log_accepts_invalid_utf8_without_hiding_crashes_or_losing_scope(self):
+        log=(b'I system: old invalid message \xc0\n'
+             b'I CorAndroidTest: current-ime-test\n'
+             b'I system: new invalid message \xc0\n'
+             b'E AndroidRuntime: FATAL EXCEPTION: main\n'
+             b'E AndroidRuntime: Process: com.example.ime, PID: 42\n'
+             b'E AndroidRuntime: java.lang.NullPointerException: bad keyboard \xc0\n')
+        current=android_build.scoped_test_log(log,'current-ime-test')
+        self.assertNotIn('old invalid message',current)
+        self.assertIn('new invalid message \ufffd',current)
+        self.assertEqual(android_build.input_method_crashes(current,'com.example.ime'),
+                         [{'process':'com.example.ime',
+                           'exception':'java.lang.NullPointerException: bad keyboard \ufffd'}])
+        with self.assertRaisesRegex(RuntimeError,'start marker is missing'):
+            android_build.scoped_test_log(log,'absent-ime-test')
+
+    def test_android_log_stream_preserves_bytes_and_checks_crashes_between_both_markers(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            report=Path(temporary)
+            process=MagicMock()
+            process.poll.return_value=None
+            def start(command, **kwargs):
+                self.assertNotIn('-d',command)
+                self.assertNotIn('-T',command)
+                kwargs['stdout'].write(b'I system: previous log\n')
+                kwargs['stdout'].flush()
+                return process
+            def emit(command, **kwargs):
+                marker=command[-1]
+                with (report/'logcat.raw').open('ab') as output:
+                    output.write(f'I CorAndroidTest: {marker}\n'.encode())
+                    if not marker.endswith('-end'):
+                        output.write(b'I system: invalid byte \xc0\n'
+                                     b'E AndroidRuntime: FATAL EXCEPTION: main\n'
+                                     b'E AndroidRuntime: Process: com.example.ime, PID: 42\n'
+                                     b'E AndroidRuntime: java.lang.NullPointerException: keyboard\n')
+                return subprocess.CompletedProcess(command,0)
+            with patch.object(android_build.subprocess,'Popen',side_effect=start), \
+                    patch.object(android_build.subprocess,'run',side_effect=emit):
+                capture=android_build.start_test_log(report,'current-test')
+                captured,error=android_build.finish_test_log(capture,report,'current-test')
+            self.assertIsNone(error)
+            self.assertNotIn('previous log',captured)
+            self.assertNotIn('current-test-end',captured)
+            self.assertIn('\ufffd',captured)
+            self.assertIn(b'\xc0',(report/'logcat.raw').read_bytes())
+            self.assertEqual(len(android_build.input_method_crashes(captured,'com.example.ime')),1)
+            process.terminate.assert_called_once()
+
+    def test_android_log_stream_failure_preserves_raw_evidence_and_requires_complete_scope(self):
+        for ended,timeout in ((True,False),(False,True)):
+            with self.subTest(ended=ended), tempfile.TemporaryDirectory() as temporary:
+                report=Path(temporary)
+                raw=b'I CorAndroidTest: current-test\nI system: partial evidence\n'
+                (report/'logcat.raw').write_bytes(raw)
+                process=MagicMock()
+                process.poll.return_value=1 if ended else None
+                with patch.object(android_build.subprocess,'run'), \
+                        patch.object(android_build.time,'monotonic',side_effect=[0,31]), \
+                        patch.object(android_build.time,'sleep') as pause:
+                    captured,error=android_build.finish_test_log(process,report,'current-test')
+                self.assertIsNotNone(error)
+                self.assertIn('partial evidence',captured)
+                self.assertEqual((report/'logcat.raw').read_bytes(),raw)
+                pause.assert_not_called()
+                if timeout:
+                    process.terminate.assert_called_once()
+                else:
+                    process.terminate.assert_not_called()
+        with self.assertRaisesRegex(RuntimeError,'end marker is missing'):
+            android_build.scoped_test_log(b'I CorAndroidTest: current-test\n','current-test','current-test-end')
+
+    def test_android_log_stream_cleans_up_when_start_marker_cannot_be_written(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            report=Path(temporary)
+            process=MagicMock()
+            process.poll.return_value=None
+            process.wait.side_effect=[subprocess.TimeoutExpired([],5),0]
+            with patch.object(android_build.subprocess,'Popen',return_value=process), \
+                    patch.object(android_build.subprocess,'run',side_effect=subprocess.TimeoutExpired([],15)):
+                with self.assertRaises(subprocess.TimeoutExpired):
+                    android_build.start_test_log(report,'current-test')
+            process.terminate.assert_called_once()
+            process.kill.assert_called_once()
+
+    def test_android_log_stream_requires_a_captured_start_marker_before_running_tests(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            report=Path(temporary)
+            process=MagicMock()
+            process.poll.return_value=None
+            with patch.object(android_build.subprocess,'Popen',return_value=process), \
+                    patch.object(android_build.subprocess,'run'), \
+                    patch.object(android_build.time,'monotonic',side_effect=[0,31]):
+                with self.assertRaisesRegex(RuntimeError,'did not capture its marker'):
+                    android_build.start_test_log(report,'current-test')
+            process.terminate.assert_called_once()
+
+    def test_android_input_method_preparation_never_mutates_a_physical_or_other_api_device(self):
+        for values in (('0','1','31'),('1','0','31'),('1','1','36')):
+            with self.subTest(properties=values), tempfile.TemporaryDirectory() as temporary:
+                with patch.object(android_build.subprocess,'check_output',side_effect=values), \
+                        patch.object(android_build.subprocess,'run') as invoke:
+                    if values[2]=='31':
+                        with self.assertRaisesRegex(RuntimeError,'debuggable API 31 emulator'):
+                            android_build.prepare_emulator_input_method(Path(temporary))
+                    else:
+                        android_build.prepare_emulator_input_method(Path(temporary))
+                invoke.assert_not_called()
+
+    def test_android_input_method_preparation_keeps_a_different_keyboard_unchanged(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            with patch.object(android_build.subprocess,'check_output',
+                              side_effect=['1','1','31','com.example.ime/.Keyboard']), \
+                    patch.object(android_build.subprocess,'run') as invoke:
+                android_build.prepare_emulator_input_method(Path(temporary))
+            invoke.assert_not_called()
+
+    def test_android_input_method_preparation_preserves_identity_and_rejects_incomplete_setup(self):
+        service='com.google.android.inputmethod.latin/com.android.inputmethod.latin.LatinIME'
+        for reset_ok in (True,False):
+            with self.subTest(reset_ok=reset_ok), tempfile.TemporaryDirectory() as temporary:
+                report=Path(temporary)
+                def invoke(command, **kwargs):
+                    output=(b'approved Gboard version' if command[1:3]==['shell','dumpsys']
+                            else 'Success\n' if reset_ok else 'Failed\n')
+                    return subprocess.CompletedProcess(command,0,output,
+                                                       b'' if isinstance(output,bytes) else '')
+                with patch.object(android_build.subprocess,'check_output',
+                                  side_effect=['1','1','31',service,service]), \
+                        patch.object(android_build.subprocess,'run',side_effect=invoke) as execute:
+                    if reset_ok:
+                        android_build.prepare_emulator_input_method(report)
+                    else:
+                        with self.assertRaisesRegex(RuntimeError,'Could not prepare'):
+                            android_build.prepare_emulator_input_method(report)
+                record=json.loads((report/'input-method-setup.json').read_text())
+                self.assertEqual(record['complete'],reset_ok)
+                self.assertTrue(record['before_application_tests'])
+                self.assertEqual(record['input_method'],service)
+                self.assertEqual((report/'input-method-package-before-setup.txt').read_bytes(),
+                                 b'approved Gboard version')
+                mutations=[call.args[0][1:] for call in execute.call_args_list][1:]
+                self.assertEqual(mutations[0],['shell','pm','clear','com.google.android.inputmethod.latin'])
+                self.assertEqual(len(mutations),3 if reset_ok else 1)
+
+    def test_android_native_ime_control_never_resets_a_physical_or_other_api_device(self):
+        for values in (('0','1','31'),('1','0','31'),('1','1','36')):
+            with self.subTest(properties=values), tempfile.TemporaryDirectory() as temporary:
+                with patch.object(android_build.subprocess,'check_output',side_effect=values), \
+                        patch.object(android_build.subprocess,'run') as invoke:
+                    with self.assertRaisesRegex(RuntimeError,'debuggable API 31 emulator'):
+                        android_build.platform_ime_control(Path(temporary),'com.example.ime/.Keyboard')
+                invoke.assert_not_called()
+
+    def test_android_native_ime_controls_preserve_crashes_without_replacing_production_results(self):
+        crash=('E AndroidRuntime: FATAL EXCEPTION: main\n'
+               'E AndroidRuntime: Process: com.example.ime, PID: 42\n'
+               'E AndroidRuntime: java.lang.NullPointerException: native editor\n')
+        with tempfile.TemporaryDirectory() as temporary:
+            report=Path(temporary)
+            def invoke(command, **kwargs):
+                output='Success\n' if command[1:4]==['shell','pm','clear'] else b'evidence'
+                return subprocess.CompletedProcess(command,0,output,'' if isinstance(output,str) else b'')
+            with patch.object(android_build.subprocess,'check_output',side_effect=['1','1','31']), \
+                    patch.object(android_build.subprocess,'run',side_effect=invoke) as execute, \
+                    patch.object(android_build,'start_test_log'), \
+                    patch.object(android_build,'finish_test_log',return_value=(crash,None)), \
+                    patch.object(android_build,'pull_ime_report'), \
+                    patch.object(android_build.time,'monotonic',side_effect=[0,16,0,16]):
+                android_build.platform_ime_control(report,'com.example.ime/.Keyboard')
+            reset_commands=[call.args[0] for call in execute.call_args_list
+                            if call.args[0][1:4]==['shell','pm','clear']]
+            self.assertEqual(reset_commands,[[android_build.ADB,'shell','pm','clear','com.example.ime']]*2)
+            for requests in (1,2):
+                result=json.loads((report/'platform-control'/f'show-{requests}'/'result.json').read_text())
+                self.assertEqual(len(result['crashes']),1)
+                self.assertTrue(result['diagnostic_only'])
+                self.assertFalse(result['replaces_production_result'])
 
     def test_android_preparation_uses_the_approved_sdk_and_skips_unused_package_tools(self):
         versions = build_inputs.android_versions()
@@ -2665,6 +3304,27 @@ class ReleaseTests(unittest.TestCase):
         with self.assertRaises(ValueError):release.verified_run(self.client(jobs=jobs),self.commit,77)
         with self.assertRaises(ValueError):release.verified_run(self.client(main='b'*40),self.commit,77)
 
+    def test_release_allows_skipped_optional_matrix_without_omitting_required_jobs(self):
+        required = [{'name':name,'status':'completed','conclusion':'success'} for name in release.CI_JOBS]
+        optional = {'name':'Android 16 IME','status':'completed','conclusion':'skipped'}
+        changes = {'event':'pull_request','head_branch':'codex/fix-android'}
+        for mode in ({'check_only':True}, {'prerelease':True}):
+            with self.subTest(mode=mode):
+                self.assertEqual(release.verified_run(self.client(changes,jobs=required+[optional]),
+                                                     self.commit,77,**mode)['id'],77)
+                with self.assertRaisesRegex(ValueError,'does not cover'):
+                    release.verified_run(self.client(changes,jobs=required[:-1]+[optional]),
+                                         self.commit,77,**mode)
+                skipped = [dict(job) for job in required]
+                skipped[0]['conclusion'] = 'skipped'
+                with self.assertRaisesRegex(ValueError,'did not pass'):
+                    release.verified_run(self.client(changes,jobs=skipped+[optional]),
+                                         self.commit,77,**mode)
+        for conclusion in ['failure','cancelled','success']:
+            with self.subTest(conclusion=conclusion), self.assertRaises(ValueError):
+                release.verified_run(self.client(jobs=required+[optional|{'conclusion':conclusion}]),
+                                     self.commit,77)
+
     def test_preview_packaging_accepts_current_same_repository_pr_ci_only_in_check_mode(self):
         changes = {'event':'pull_request', 'head_branch':'codex/dev-0.5.2'}
         with self.assertRaises(ValueError):
@@ -3291,6 +3951,31 @@ if(mode==='main'){
                 with self.assertRaises(ValueError):
                     upstream_cache.lookup({}, 'a' * 64)
 
+    def test_lookup_reports_only_rejected_field_names(self):
+        value = {'schema': True, 'group': 'private-value', 'key': 'wrong-value',
+                 'id': None, 'sha256': ['private-value'], 'size': True}
+        reply = io.BytesIO(json.dumps(value).encode())
+        reply.status = 200
+        with patch.object(local_cache, 'response', return_value=nullcontext(reply)):
+            with self.assertRaises(upstream_cache.LookupMetadataError) as raised:
+                upstream_cache.lookup({}, 'a' * 64)
+        self.assertEqual(str(raised.exception),
+                         'Invalid original download metadata: schema, group, key, id, sha256, size')
+
+    def test_restore_failure_reports_its_stage_without_private_error_contents(self):
+        for error, expected in (
+                (OSError('private-address secret-token'), 'lookup: OSError'),
+                (upstream_cache.LookupMetadataError(('schema',)), 'lookup: Invalid original download metadata: schema')):
+            with self.subTest(error=type(error).__name__), \
+                    patch.object(upstream_cache, 'configuration', return_value={'token': 'test'}), \
+                    patch.object(upstream_cache, 'lookup', side_effect=error), \
+                    patch('sys.stdout', new_callable=io.StringIO) as output:
+                self.assertFalse(upstream_cache.restore(
+                    'https://github.com/tool/original', Path('unused'), 'a' * 64))
+            self.assertIn(expected, output.getvalue())
+            self.assertNotIn('private-address', output.getvalue())
+            self.assertNotIn('secret-token', output.getvalue())
+
     def test_slow_rust_platforms_survive_budget_pressure(self):
         def entry(number, key):
             return {'id': number, 'key': key, 'ref': 'refs/heads/main', 'size_in_bytes': 100,
@@ -3302,6 +3987,30 @@ if(mode==='main'){
         tool = entry(5, 'runtime-v1-java-linux-x64')
         removed = storage.eviction_plan([slow, desktop, linux, memory, tool], 200)
         self.assertEqual({value['id'] for value in removed}, {3, 4, 5})
+
+    def test_rust_cache_budget_preserves_arm_mac_then_measured_platform_order(self):
+        native_prefix = 'native-release-'+'v2-'
+        keys = [
+            native_prefix+'macos-latest',
+            native_prefix+'macos-15-intel',
+            native_prefix+'windows-11-arm',
+            native_prefix+'windows-2025',
+            'android-v2-arm64',
+            'android-v2-x64',
+            'android-v2-armv7',
+            'native-release-ubuntu20-v1-ubuntu-22.04',
+            'native-release-ubuntu20-v1-ubuntu-22.04-arm',
+            'memory-ubuntu22-v2-release',
+        ]
+        entries = [{'id':index,'key':key+'-13131313-11223344','ref':'refs/heads/main',
+                    'size_in_bytes':100,'last_accessed_at':f'{index:02d}','created_at':f'{index:02d}'}
+                   for index,key in enumerate(keys)]
+        for count in range(1,len(entries)+1):
+            with self.subTest(retained=count):
+                removed = storage.eviction_plan(entries,count*100)
+                retained = {entry['id'] for entry in entries}-{entry['id'] for entry in removed}
+                self.assertEqual(retained,set(range(count)))
+        self.assertEqual(storage.priority({'key':native_prefix+'macos-13-check-13131313-11223344'}),8)
 
 
 class AptCacheTests(unittest.TestCase):

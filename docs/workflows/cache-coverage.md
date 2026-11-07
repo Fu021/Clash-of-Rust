@@ -6,9 +6,26 @@
 
 CI 与 Memory Benchmark 的 Rust 对象只恢复和保存 GitHub Actions Cache；未命中正常编译，不查询私网 Rust 索引或分片，也不在 job 结束后镜像对象。Publish Release 继续复用同提交成功 CI 的构建附件，不重新编译 Rust。
 
-GitHub 热缓存预算为 9 GiB，主分支保存，其他来源可读取兼容缓存。优先保留 Windows ARM64、macOS Intel、Windows x64、macOS ARM64，其次 Android ARMv7，再到其他 Android/Linux，Memory 最先让出空间。同一逻辑键组/分支只留最近一代；Windows/macOS 不同源码的 workspace 键归入同一平台族，保留最新兼容对象并共享总预算。此顺序为固定策略，不随每轮实测耗时自动调整。容量不足可以淘汰，不向私网复制。`rust-cache` 自带的 Cargo registry/Git 数据与 Rust 对象一起管理，不再另建下载缓存。测试报告和安装包仅使用短期 artifact。
+GitHub 热缓存预算为 9 GiB，主分支保存，其他来源可读取兼容缓存。macOS ARM64 按维护者要求最高优先，减少稀缺 runner 分配后重新编译的损失；缓存不会缩短 runner 排队。其余按最近六次成功完整 CI 的“Rust 缓存恢复＋编译/测试”中位耗时排序：
 
-仓库自行管理的 Go 编译、Gradle 转换、工具安装目录、资源目录和 Docker 构建镜像不再占用 GitHub 缓存。官方 Actions 的引导及托管 runner 镜像不由本仓库接管；Tailscale 自带缓存也显式关闭。预算任务在运行取消时跳过，只操作 GitHub API。
+| 保留优先级 | 平台 | 中位耗时（分钟） |
+| --- | --- | --- |
+| 1 | macOS ARM64 | 9.2 |
+| 2 | macOS Intel | 16.6 |
+| 3 | Windows ARM64 | 12.3 |
+| 4 | Windows x64 | 11.9 |
+| 5 | Android ARM64 | 7.3 |
+| 6 | Android x64 | 7.0 |
+| 7 | Android ARMv7 | 6.7 |
+| 8 | Linux x64 | 5.8 |
+| 9 | Linux ARM64 | 5.3 |
+| 10 | Memory Benchmark | 最先让出空间 |
+
+2026-11-06 核对的来源为 `42063675832`、`42044579484`、`42031368400`、`41979081254`、`41973243758`、`41966802804`。桌面计 Rust 恢复、兼容 workspace 恢复及编译/测试，Android 计 Rust 恢复和应用/内核编译；排除排队、私网接入、模拟器测试与清单收尾。它们并非纯 Rust 编译或冷/热对照，不能当作缓存净节约。策略经审阅后固定，不随每轮数据自动变化。
+
+同一逻辑键组/分支只留最近一代；Windows/macOS 不同源码的 workspace 键归入同一平台族，保留最新兼容对象并共享总预算。容量不足可以淘汰，不向私网复制。`rust-cache` 自带的 Cargo registry/Git 数据与 Rust 对象一起管理，不再另建下载缓存。测试报告和安装包仅使用短期 artifact。
+
+仓库自行管理的 Go 编译、Gradle 转换、工具安装目录、资源目录和 Docker 构建镜像不再占用 GitHub 缓存。官方 Actions 的引导及托管 runner 镜像不由本仓库接管。macOS 的官方 Tailscale Action 会源码编译 CLI/daemon，因此只在 macOS 开启该 Action 自带的 GitHub 二进制缓存，避免每个 CI、打包和内存 job 重编；其他平台保持关闭。此引导缓存按架构/分支保留最近版本，与 Intel Rust 同级、低于 ARM64 Rust，仍计入 9 GiB 总预算，不上传私网。预算任务在运行取消时跳过，只操作 GitHub API。
 
 性能分析须将私网接入与 Rust 恢复分开：[CI 41973243758](https://github.com/Fu021/Clash-of-Rust/actions/runs/41973243758) 的 macOS Intel 分别用时 376 秒接入 Tailscale、74 秒恢复 GitHub 对象、269 秒编译与测试；ARM64 分别为 135、28、172 秒。两种架构均恢复有效 workspace，对 452 个源码/目录时间戳完成核验且没有变化的 crate；官方 action 在 macOS 从源码构建 Tailscale 的行为见[上游问题](https://github.com/tailscale/github-action/issues/287)。这些单次结果不能据总 job 时间认定 Rust 缓存无效，也不能代替冷编译对照。
 

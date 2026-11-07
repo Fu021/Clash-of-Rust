@@ -4,6 +4,7 @@ import "../../../../../resources/fonts/SourceHanSansCN-Regular.otf";
 import { AndroidData } from "state.slint";
 import { MobileData, MobileView } from "../shared/state.slint";
 export component AndroidPreview inherits Window {
+    in-out property <bool> preview-long-names <=> scene.preview-long-names;
     preferred-width: 393px; preferred-height: 852px;
     default-font-family: "Source Han Sans CN";
     in-out property <bool> preview-motion <=> scene.preview-motion;
@@ -11,6 +12,7 @@ export component AndroidPreview inherits Window {
     in-out property <int> preview-detail <=> scene.preview-detail;
     in-out property <bool> preview-dark <=> scene.preview-dark;
     in-out property <bool> preview-connected <=> scene.preview-connected;
+    in-out property <bool> preview-core-running <=> scene.preview-core-running;
     in-out property <length> inset-top <=> scene.inset-top;
     in-out property <length> inset-bottom <=> scene.inset-bottom;
     in-out property <length> inset-left <=> scene.inset-left;
@@ -24,6 +26,9 @@ export component AndroidPreview inherits Window {
     in-out property <int> preview-protection-health <=> scene.preview-protection-health;
     in-out property <string> preview-protection-message <=> scene.preview-protection-message;
     in-out property <string> preview-notice <=> scene.preview-notice;
+    in-out property <bool> preview-notice-error <=> scene.preview-notice-error;
+    in-out property <bool> preview-notice-critical <=> scene.preview-notice-critical;
+    in-out property <bool> preview-notice-recover-network <=> scene.preview-notice-recover-network;
     in-out property <float> preview-notice-elapsed <=> scene.preview-notice-elapsed;
     in-out property <bool> preview-sparse <=> scene.preview-sparse;
     in-out property <bool> preview-profile-busy <=> MobileData.profile-busy;
@@ -34,6 +39,7 @@ export component AndroidPreview inherits Window {
     in-out property <string> preview-update-status <=> AndroidData.update-status;
     in-out property <length> preview-settings-scroll <=> MobileView.settings-scroll-y;
     in-out property <length> preview-rules-scroll <=> MobileView.rules-scroll-y;
+    in-out property <length> preview-home-scroll <=> MobileView.home-scroll-y;
     scene := MobilePreviewSurface {
         inset-top: 28px; inset-bottom: 24px; preview-connected: true;
         AndroidSurface { }

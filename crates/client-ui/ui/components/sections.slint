@@ -1,0 +1,92 @@
+import { Theme, AccentPalette } from "../theme/palette.slint";
+import { Label, Caption, ActionButton } from "controls.slint";
+
+export component ChoiceBar inherits Rectangle {
+    in property <[string]> options;
+    in property <int> selected;
+    in property <string> geometry-prefix;
+    in property <bool> enabled: true;
+    in property <length> available-width: 220px;
+    callback chosen(int);
+    width: root.available-width;
+    height: Theme.control-height;
+    border-radius: 8px;
+    background: Theme.inset;
+    HorizontalLayout {
+        padding: 3px; spacing: 2px;
+        for option[index] in root.options: ActionButton {
+            width: max(0px, (root.available-width - 6px - 2px * max(0, root.options.length - 1)) / max(1, root.options.length));
+            height: parent.height - 6px;
+            text: option; quiet: true; compact: true;
+            selected: root.selected == index; enabled: root.enabled;
+            geometry-key: root.geometry-prefix == "" ? "button:" + option : root.geometry-prefix + ":" + index;
+            clicked => { root.chosen(index); }
+        }
+    }
+}
+
+export component ToolHeading inherits HorizontalLayout {
+    in property <string> title;
+    in property <image> icon;
+    spacing: 12px; cross-axis-alignment: center;
+    Rectangle {
+        width: 34px; height: 34px; border-radius: 10px;
+        background: Theme.inset;
+        Image { x: 8px; y: 8px; width: 18px; height: 18px; source: root.icon; colorize: Theme.secondary; }
+    }
+    Label { text: root.title; font-weight: 600; }
+    @children
+}
+export component AccentSwatches inherits HorizontalLayout {
+    in property <int> selected;
+    in property <bool> enabled: true;
+    callback chosen(int);
+    spacing: 6px; horizontal-stretch: 0;
+    for index in 6: ActionButton {
+        text: ""; width: 28px; horizontal-stretch: 0; compact: true; quiet: true;
+        geometry-key: "accent-inline:" + index; enabled: root.enabled;
+        selected: root.selected == index;
+        accessible-role: button; accessible-label: AccentPalette.accent-names[index];
+        Rectangle {
+            x: (parent.width - 18px) / 2; y: (parent.height - 18px) / 2;
+            width: 18px; height: 18px; border-radius: 9px;
+            background: Theme.dark ? AccentPalette.dark-colors[index] : AccentPalette.accent-colors[index];
+        }
+        clicked => { root.chosen(index); }
+    }
+}
+
+export component InsetResult inherits Rectangle {
+    height: content.preferred-height;
+    background: Theme.inset; border-radius: 8px;
+    content := VerticalLayout {
+        padding: 12px; spacing: 6px;
+        @children
+    }
+}
+
+export component SummaryMetric inherits Rectangle {
+    in property <string> title;
+    in property <string> value;
+    in property <int> tone;
+    in property <bool> selected;
+    callback clicked();
+    min-width: 0px; preferred-width: 0px; horizontal-stretch: 1;
+    height: content.preferred-height;
+    background: root.selected ? Theme.accent-wash : area.has-hover ? Theme.inset : transparent;
+    border-radius: 8px;
+    accessible-role: button; accessible-label: root.title + " " + root.value;
+    accessible-action-default => { root.clicked(); }
+    content := VerticalLayout {
+        padding: 16px; spacing: 6px;
+        Caption { text: root.title; }
+        Label { text: root.value; font-size: 26px * Theme.text-scale; font-weight: 600; color: root.tone == 1 ? Theme.success : root.tone == 3 ? Theme.danger : Theme.warning; }
+    }
+    FocusScope {
+        key-pressed(event) => {
+            if event.text == Key.Return || event.text == " " { root.clicked(); return accept; }
+            return reject;
+        }
+    }
+    area := TouchArea { mouse-cursor: pointer; clicked => { root.clicked(); } }
+}

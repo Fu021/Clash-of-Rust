@@ -12,7 +12,7 @@ export enum Intent {
     rule-move-edge, rule-restore, rule-discard, rule-apply, rule-close-editor,
     rule-text-mode, rule-raw, rule-kind, rule-payload, rule-policy, rule-no-resolve,
     rule-enabled, rule-position, rule-save,
-    clear-logs, export-logs, log-level, log-detail, test-url, dns-host, probe, dns,
+    clear-logs, export-logs, export-diagnostics, report-issue, log-level, log-detail, test-url, dns-host, probe, dns,
     site-all, site-cancel, site-category, site-open-category, site-status, site-region, site-detail,
     site-reset, site-report, site-retest, site-probe,
     claude-start, claude-cancel, claude-close-session, claude-protection, claude-confirm-protection,
@@ -24,6 +24,7 @@ export enum Intent {
     reset-window, interval-input, save-interval, subscription-interval-input, save-subscription-interval, update-geo,
     check-update, install-update, cancel-update, open-release, update-prereleases,
     confirm, cancel-confirm, close-detail, copy, escape, focus-search, quit, rule-drop,
+    overview-refresh, overview-privacy,
 }
 export struct Choice { id: string, label: string }
 export struct DetailItem { label: string, value: string }
@@ -35,7 +36,8 @@ export struct ProfileItem { id: string, name: string, source: string, detail: st
 export struct ConnectionItem { id: string, host: string, detail: string, rule: string, route: string, up: string, down: string, upload: string, download: string }
 export struct RuleItem { id: string, position: string, kind: string, value: string, policy: string, source: string, selected: bool, enabled: bool, raw: string }
 export struct LogItem { time: string, level: string, message: string, tone: int }
-export struct ReportItem { id: string, title: string, value: string, country: string, detail: string, source: string, tone: int, flag: image, flagged: bool }
+export struct ReportItem { id: string, title: string, value: string, country: string, detail: string, source: string, tone: int, flag: string, flagged: bool }
+export struct OverviewItem { id: string, title: string, value: string, detail: string, tone: int, flag: string, flagged: bool, fogged: bool }
 export struct CategoryItem { id: string, title: string, count: string, detail: string, tone: int }
 
 export struct CategoryPair { left: CategoryItem, right: CategoryItem }
@@ -57,6 +59,7 @@ export global UiData {
     in-out property <length> scroll-navigation;
     in-out property <int> accent;
     in-out property <[DetailItem]> connection-details;
+    in-out property <string> connection-selected-id;
     in-out property <string> modal-copy;
     in-out property <int> copy-revision;
     in-out property <string> copy-value;
@@ -68,6 +71,7 @@ export global UiData {
     in-out property <string> version;
     in-out property <bool> ready;
     in-out property <bool> running;
+    in-out property <string> network-alert;
     in-out property <bool> working;
     in-out property <bool> geo-updating;
     in-out property <bool> exiting;
@@ -75,6 +79,10 @@ export global UiData {
     in-out property <string> node;
     in-out property <string> notice;
     in-out property <bool> notice-error;
+    in-out property <bool> notice-critical;
+    in-out property <bool> notice-recover-network;
+    out property <bool> notice-modal: self.notice != "" && self.notice-critical;
+    in-out property <bool> diagnosing;
     in-out property <int> notice-revision;
     in-out property <float> notice-elapsed;
     in-out property <bool> notification-busy;
@@ -137,6 +145,11 @@ export global UiData {
     in-out property <bool> claude-next;
     in-out property <int> claude-result-page;
     in-out property <string> reputation-key;
+    in-out property <[OverviewItem]> overview-network;
+    in-out property <[OverviewItem]> overview-services;
+    in-out property <bool> overview-busy;
+    in-out property <bool> privacy-hidden;
+    in-out property <string> overview-status;
     in-out property <string> site-progress;
     in-out property <float> site-fraction;
     in-out property <bool> sites-busy;
@@ -149,7 +162,7 @@ export global UiData {
     in-out property <[string]> site-status-options;
     in-out property <[string]> site-region-options;
     in-out property <string> site-summary;
-    in-out property <image> site-exit-flag;
+    in-out property <string> site-exit-flag;
     in-out property <bool> site-exit-flagged;
     in-out property <string> site-exit-country;
     in-out property <[Choice]> site-counts;
@@ -190,7 +203,7 @@ export global UiData {
     in-out property <int> modal;
     in-out property <string> modal-title;
     in-out property <string> modal-description;
-    in-out property <image> modal-flag;
+    in-out property <string> modal-flag;
     in-out property <bool> modal-flagged;
     in-out property <string> modal-country;
     in-out property <string> modal-error;

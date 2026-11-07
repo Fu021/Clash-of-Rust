@@ -3,7 +3,6 @@ use clash_client_ui as ui;
 use clash_desktop_protocol as wire;
 use slint::{Model, ModelRc, VecModel};
 mod activation;
-pub mod flags;
 mod process;
 mod repaint;
 mod view_state;

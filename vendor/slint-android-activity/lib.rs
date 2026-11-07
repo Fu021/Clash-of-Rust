@@ -117,7 +117,7 @@ impl i_slint_core::platform::Platform for AndroidPlatform {
             let mut timeout = ctx.duration_until_next_timer_update();
             // While animating, the vsync thread wakes this loop at each display refresh
             // so rendering tracks the refresh rate instead of a fixed poll timeout.
-            let animating = self.window.window.has_active_animations();
+            let animating = self.window.can_render() && self.window.window.has_active_animations();
             vsync.set_animating(animating);
             if animating && !vsync.is_driving() {
                 // The vsync thread is not driving frames (still starting, or unavailable);

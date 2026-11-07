@@ -114,7 +114,17 @@ pub fn atomic_copy(source: &Path, destination: &Path) -> Result<()> {
 }
 
 pub fn seed(resources: &Path, runtime: &Path) -> Result<GeoManifest> {
-    recover(runtime)?;
+    if let Err(error) = recover(runtime) {
+        if error.is::<MissingBackup>() {
+            return retain_verified_runtime(runtime).with_context(|| {
+                format!(
+                    "{error:#}；当前 Geo 数据也未能安全保留。请保留 {} 及 .geo-backup-*，不要直接删除恢复记录",
+                    runtime.join(JOURNAL).display()
+                )
+            });
+        }
+        return Err(error);
+    }
     // Preserve all four user-updated files as a set; only seed missing/invalid sets.
     if let Ok(manifest) = verify_geo(runtime) {
         return Ok(manifest);
@@ -141,8 +151,11 @@ struct ReleaseAsset {
     browser_download_url: String,
 }
 
-pub async fn download_geo(destination: &Path, proxy_port: Option<u16>) -> Result<GeoManifest> {
-    let routes = crate::network::routes(proxy_port, None);
+pub async fn download_geo(
+    destination: &Path,
+    proxy_port: Option<crate::network::DownloadPorts>,
+) -> Result<GeoManifest> {
+    let routes = crate::network::download_routes(proxy_port, None);
     let mut release = None;
     let mut errors = Vec::new();
     for route in &routes {
@@ -309,6 +322,66 @@ struct BackupContents {
     sha256: String,
     size: u64,
 }
+
+#[derive(Debug)]
+struct MissingBackup;
+
+impl std::fmt::Display for MissingBackup {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter.write_str("Geo 更新备份不完整，无法自动恢复")
+    }
+}
+
+impl std::error::Error for MissingBackup {}
+
+fn backup_error(error: anyhow::Error) -> anyhow::Error {
+    if error
+        .downcast_ref::<std::io::Error>()
+        .is_some_and(|cause| cause.kind() == std::io::ErrorKind::NotFound)
+    {
+        error.context(MissingBackup)
+    } else {
+        error.context("Geo 更新备份无法读取，无法自动恢复")
+    }
+}
+
+fn retain_verified_runtime(runtime: &Path) -> Result<GeoManifest> {
+    let mut manifest = verify_geo(runtime).context("当前整组 Geo 数据未通过校验")?;
+    let journal: Transaction = serde_json::from_slice(&std::fs::read(runtime.join(JOURNAL))?)?;
+    let previous_manifest = journal
+        .files
+        .as_ref()
+        .and_then(|files| files.iter().find(|file| file.name == MANIFEST))
+        .and_then(|file| file.contents.as_ref())
+        .is_some_and(|contents| {
+            hash_file(&runtime.join(MANIFEST))
+                .is_ok_and(|(sha256, size)| sha256 == contents.sha256 && size == contents.size)
+        });
+    let archive = tempfile::Builder::new()
+        .prefix(".geo-recovery-")
+        .tempdir_in(runtime)?;
+    atomic_copy(&runtime.join(MANIFEST), &archive.path().join(MANIFEST))?;
+    atomic_copy(&runtime.join(JOURNAL), &archive.path().join(JOURNAL))?;
+    let archive = archive.keep();
+    if manifest.installed_at.is_some() && !previous_manifest {
+        let mut value: serde_json::Value =
+            serde_json::from_slice(&std::fs::read(runtime.join(MANIFEST))?)?;
+        value
+            .as_object_mut()
+            .context("Geo 数据清单格式无效")?
+            .remove("installed_at");
+        atomic_write(&runtime.join(MANIFEST), &serde_json::to_vec_pretty(&value)?)?;
+        manifest.installed_at = None;
+    }
+    crate::config::remove_file(&runtime.join(JOURNAL))
+        .context("已保留中断的 Geo 更新记录，但无法解除原事务")?;
+    eprintln!(
+        "Geo 更新备份缺失；已保留通过完整校验的当前数据，未确认此前更新成功。恢复记录保存于 {}，原备份保持原位",
+        archive.display()
+    );
+    Ok(manifest)
+}
+
 fn backup_path(runtime: &Path, journal: &Transaction) -> Result<PathBuf> {
     if !journal.backup.starts_with(".geo-backup-") || journal.backup.contains(['/', '\\', ':']) {
         bail!("Geo 恢复记录路径无效");
@@ -473,14 +546,27 @@ pub fn recover(runtime: &Path) -> Result<()> {
         {
             bail!("Geo 更新备份记录无效，无法自动恢复");
         }
+        let mut missing = None;
         for file in files {
             if let Some(contents) = &file.contents {
-                let (sha256, size) = hash_file(&backup.join(&file.name))
-                    .context("Geo 更新备份不完整，无法自动恢复")?;
+                let (sha256, size) = match hash_file(&backup.join(&file.name))
+                    .map_err(backup_error)
+                    .with_context(|| format!("Geo 备份文件：{}", backup.join(&file.name).display()))
+                {
+                    Ok(value) => value,
+                    Err(error) if error.is::<MissingBackup>() => {
+                        let _ = missing.get_or_insert(error);
+                        continue;
+                    }
+                    Err(error) => return Err(error),
+                };
                 if sha256 != contents.sha256 || size != contents.size {
                     bail!("Geo 更新备份校验失败，无法自动恢复");
                 }
             }
+        }
+        if let Some(error) = missing {
+            return Err(error);
         }
         for file in files {
             let destination = runtime.join(&file.name);
@@ -494,7 +580,7 @@ pub fn recover(runtime: &Path) -> Result<()> {
         }
     } else {
         // Journals from earlier versions used the original manifest for verification.
-        verify_geo(&backup).context("Geo 更新备份不完整，无法自动恢复")?;
+        verify_geo(&backup).map_err(backup_error)?;
         for name in GEO_FILES.into_iter().chain([MANIFEST]) {
             atomic_copy(&backup.join(name), &runtime.join(name))?;
         }
@@ -792,5 +878,160 @@ mod tests {
         recover(&old).unwrap();
         assert_eq!(std::fs::read(old.join("GeoIP.dat")).unwrap(), b"old-data");
         assert!(verify_geo(&old).is_ok());
+    }
+
+    #[test]
+    fn startup_retains_verified_data_and_evidence_when_backup_is_missing() {
+        for legacy in [false, true] {
+            let tmp = tempfile::tempdir().unwrap();
+            let runtime = tmp.path().join("runtime");
+            let staged = tmp.path().join("new");
+            fixture(&runtime, b"old-data");
+            fixture(&staged, b"new-data");
+            begin_install(&staged, &runtime).unwrap();
+            record_install(&runtime).unwrap();
+            let transaction: Transaction =
+                serde_json::from_slice(&std::fs::read(runtime.join(JOURNAL)).unwrap()).unwrap();
+            if legacy {
+                atomic_write(
+                    &runtime.join(JOURNAL),
+                    &serde_json::to_vec(&serde_json::json!({"backup": &transaction.backup}))
+                        .unwrap(),
+                )
+                .unwrap();
+            }
+            let journal = std::fs::read(runtime.join(JOURNAL)).unwrap();
+            let original_manifest = std::fs::read(runtime.join(MANIFEST)).unwrap();
+            let backup = backup_path(&runtime, &transaction).unwrap();
+            std::fs::remove_file(backup.join("GeoIP.dat")).unwrap();
+
+            assert!(recover(&runtime).unwrap_err().is::<MissingBackup>());
+            assert!(runtime.join(JOURNAL).exists());
+            let kept = seed(&tmp.path().join("absent-resources"), &runtime).unwrap();
+            assert!(kept.installed_at.is_none());
+            for name in GEO_FILES {
+                assert_eq!(std::fs::read(runtime.join(name)).unwrap(), b"new-data");
+            }
+            assert!(!runtime.join(JOURNAL).exists());
+            assert!(backup.join("GeoSite.dat").exists());
+            let archives: Vec<_> = std::fs::read_dir(&runtime)
+                .unwrap()
+                .map(|entry| entry.unwrap().path())
+                .filter(|path| {
+                    path.file_name()
+                        .unwrap()
+                        .to_string_lossy()
+                        .starts_with(".geo-recovery-")
+                })
+                .collect();
+            assert_eq!(archives.len(), 1);
+            assert_eq!(std::fs::read(archives[0].join(JOURNAL)).unwrap(), journal);
+            assert_eq!(
+                std::fs::read(archives[0].join(MANIFEST)).unwrap(),
+                original_manifest
+            );
+            recover(&runtime).unwrap();
+            assert_eq!(verify_geo(&runtime).unwrap().installed_at, None);
+            begin_install(&staged, &runtime).unwrap();
+            commit(&runtime).unwrap();
+            assert!(archives[0].join(JOURNAL).exists());
+            assert!(backup.join("GeoSite.dat").exists());
+        }
+    }
+
+    #[test]
+    fn startup_preserves_the_proven_previous_install_time_when_backup_has_disappeared() {
+        let tmp = tempfile::tempdir().unwrap();
+        let runtime = tmp.path().join("runtime");
+        let staged = tmp.path().join("new");
+        fixture(&runtime, b"old-data");
+        fixture(&staged, b"new-data");
+        let mut manifest = read_manifest(&runtime).unwrap();
+        manifest.installed_at = Some(123);
+        atomic_write(
+            &runtime.join(MANIFEST),
+            &serde_json::to_vec(&manifest).unwrap(),
+        )
+        .unwrap();
+        begin_install(&staged, &runtime).unwrap();
+        let transaction: Transaction =
+            serde_json::from_slice(&std::fs::read(runtime.join(JOURNAL)).unwrap()).unwrap();
+        let backup = backup_path(&runtime, &transaction).unwrap();
+        for name in GEO_FILES.into_iter().chain([MANIFEST]) {
+            atomic_copy(&backup.join(name), &runtime.join(name)).unwrap();
+        }
+        std::fs::remove_dir_all(backup).unwrap();
+
+        let kept = seed(&staged, &runtime).unwrap();
+        assert_eq!(kept.installed_at, Some(123));
+        assert_eq!(
+            std::fs::read(runtime.join("GeoIP.dat")).unwrap(),
+            b"old-data"
+        );
+    }
+
+    #[test]
+    fn startup_does_not_replace_invalid_live_data_when_backup_is_missing() {
+        let tmp = tempfile::tempdir().unwrap();
+        let runtime = tmp.path().join("runtime");
+        let resources = tmp.path().join("resources");
+        fixture(&runtime, b"old-data");
+        fixture(&resources, b"new-data");
+        begin_install(&resources, &runtime).unwrap();
+        let transaction: Transaction =
+            serde_json::from_slice(&std::fs::read(runtime.join(JOURNAL)).unwrap()).unwrap();
+        let backup = backup_path(&runtime, &transaction).unwrap();
+        std::fs::remove_dir_all(&backup).unwrap();
+        std::fs::write(runtime.join("ASN.mmdb"), b"incomplete").unwrap();
+        let journal = std::fs::read(runtime.join(JOURNAL)).unwrap();
+        let manifest = std::fs::read(runtime.join(MANIFEST)).unwrap();
+
+        let error = seed(&resources, &runtime).unwrap_err();
+        assert!(format!("{error:#}").contains("当前整组 Geo 数据未通过校验"));
+        assert_eq!(std::fs::read(runtime.join(JOURNAL)).unwrap(), journal);
+        assert_eq!(std::fs::read(runtime.join(MANIFEST)).unwrap(), manifest);
+        assert_eq!(
+            std::fs::read(runtime.join("ASN.mmdb")).unwrap(),
+            b"incomplete"
+        );
+        assert_eq!(
+            std::fs::read(runtime.join("GeoIP.dat")).unwrap(),
+            b"new-data"
+        );
+    }
+
+    #[test]
+    fn startup_rejects_corrupt_backup_and_invalid_transaction_paths() {
+        for scenario in ["corrupt", "missing-and-corrupt", "invalid-path"] {
+            let tmp = tempfile::tempdir().unwrap();
+            let runtime = tmp.path().join("runtime");
+            let staged = tmp.path().join("new");
+            fixture(&runtime, b"old-data");
+            fixture(&staged, b"new-data");
+            begin_install(&staged, &runtime).unwrap();
+            let mut transaction: Transaction =
+                serde_json::from_slice(&std::fs::read(runtime.join(JOURNAL)).unwrap()).unwrap();
+            if scenario == "invalid-path" {
+                transaction.backup = ".geo-backup-../outside".into();
+                atomic_write(
+                    &runtime.join(JOURNAL),
+                    &serde_json::to_vec(&transaction).unwrap(),
+                )
+                .unwrap();
+            } else {
+                let backup = backup_path(&runtime, &transaction).unwrap();
+                if scenario == "missing-and-corrupt" {
+                    std::fs::remove_file(backup.join("GeoIP.dat")).unwrap();
+                }
+                std::fs::write(backup.join("ASN.mmdb"), b"corrupt").unwrap();
+            }
+            let journal = std::fs::read(runtime.join(JOURNAL)).unwrap();
+            assert!(seed(&staged, &runtime).is_err());
+            assert_eq!(std::fs::read(runtime.join(JOURNAL)).unwrap(), journal);
+            assert_eq!(
+                std::fs::read(runtime.join("GeoIP.dat")).unwrap(),
+                b"new-data"
+            );
+        }
     }
 }

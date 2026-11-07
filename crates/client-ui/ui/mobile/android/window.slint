@@ -7,25 +7,34 @@ export { MobileData, MobileView, MobileActions, MobileIntent } from "../shared/s
 export { AndroidData, AndroidActions, AndroidIntent } from "state.slint";
 export { Theme } from "../../theme/palette.slint";
 export { MobileTypography } from "../shared/typography.slint";
-export { GroupItem, NodeItem, NodePair, ProfileItem, ConnectionItem, RuleItem, LogItem, CategoryItem, CategoryPair, ReportItem, DetailItem, FakeIpExclusionItem } from "../../state.slint";
+export { GroupItem, NodeItem, NodePair, ProfileItem, ConnectionItem, RuleItem, LogItem, CategoryItem, CategoryPair, ReportItem, DetailItem, FakeIpExclusionItem, OverviewItem } from "../../state.slint";
 import "../../../../../resources/fonts/SourceHanSansCN-Regular.otf";
 
 export component AndroidWindow inherits Window {
+    forward-focus: surface;
     default-font-family: "Source Han Sans CN";
     background: Theme.canvas;
     property <length> top: self.safe-area-insets.top;
     property <length> bottom: self.safe-area-insets.bottom;
     property <length> left: self.safe-area-insets.left;
     property <length> right: self.safe-area-insets.right;
+    property <length> keyboard: max(0px, self.virtual-keyboard-size.height - self.safe-area-insets.bottom);
     in-out property <int> current-page <=> MobileView.page;
     in-out property <int> current-detail <=> MobileView.detail;
     in-out property <string> selected-id <=> MobileView.selected-id;
     in-out property <string> query <=> MobileView.query;
     in-out property <string> rule-edit-id;
+    out property <[length]> notice-close-target <=> surface.notice-close-target;
     changed current-page => { MobileActions.request(MobileIntent.navigate, "" + root.current-page, ""); }
     callback native-back();
     native-back => {
-        if MobileView.modal { MobileView.detail=MobileView.detail==12 ? MobileView.pending-detail : 0; }
+        if MobileView.notice-back-pending > 0 { MobileView.notice-back-pending -= 1; }
+        else if MobileView.notice != "" && MobileView.notice-error { MobileView.notice = ""; }
+        else if MobileView.keyboard-inset > 0 || MobileView.profile-name-focused || MobileView.profile-source-focused {
+            // The platform hides the IME on Back; do not also navigate away
+            // from the editor or open its discard-draft dialog.
+        }
+        else if MobileView.modal { MobileView.detail=MobileView.detail==12 ? MobileView.pending-detail : 0; }
         else if MobileView.detail>0 {MobileView.back();}
         else if MobileView.page!=0 { MobileView.navigate(0); }
         else { AndroidActions.request(AndroidIntent.background, ""); }
@@ -36,9 +45,11 @@ export component AndroidWindow inherits Window {
     changed bottom => { MobileView.safe-bottom = self.bottom; }
     changed left => { MobileView.safe-left = self.left; }
     changed right => { MobileView.safe-right = self.right; }
+    changed keyboard => { MobileView.keyboard-inset = self.keyboard; }
     init => {
         MobileView.safe-top = self.top; MobileView.safe-bottom = self.bottom;
         MobileView.safe-left = self.left; MobileView.safe-right = self.right;
+        MobileView.keyboard-inset = self.keyboard;
     }
-    AndroidSurface { width: parent.width; height: parent.height; }
+    surface := AndroidSurface { width: parent.width; height: parent.height; }
 }

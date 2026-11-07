@@ -5,6 +5,7 @@ import os
 from pathlib import Path
 import platform
 import re
+import runpy
 import select
 import shutil
 import signal
@@ -150,6 +151,39 @@ def linux_package_tests(package, tun_test, structure=True):
              '--test-binary', tun_test, '--bundle', '/opt/clash-of-rust'])
 
 
+def compatibility_dependencies():
+    return ['git', 'dbus-x11', 'iproute2', 'util-linux', 'libcap2-bin',
+            'xvfb', 'xwayland', 'x11-utils', 'xdotool', 'wmctrl', 'openbox',
+            'gnome-shell', 'gnome-shell-extension-appindicator', 'policykit-1-gnome',
+            'libgl1-mesa-dri', 'libegl1']
+
+
+def compatibility_download_dependencies():
+    dependencies = runpy.run_path(str(ROOT/'scripts/build-installer.py'))['GUI_DEPENDENCIES']
+    return list(dict.fromkeys([
+        *compatibility_dependencies(),
+        *(dependency.split('|', 1)[0].strip() for dependency in dependencies),
+    ]))
+
+
+def prepare_compatibility_environment():
+    if os.environ.get('GITHUB_ACTIONS') != 'true':
+        raise RuntimeError('Compatibility preparation requires a disposable GitHub Actions runner')
+    # The hosted image's Azure mirror can stall on package indices even after
+    # falling back for InRelease. Use the official HTTPS mirrors consistently.
+    for name, mirror in (('apt-mirrors.txt', 'https://archive.ubuntu.com/ubuntu/'),
+                         ('apt-mirrors-security.txt', 'https://security.ubuntu.com/ubuntu/')):
+        path = Path('/etc/apt')/name
+        if path.is_file():
+            run(['sudo', 'tee', path], input=mirror+'\n', text=True)
+    prepare_guest_package_environment()
+    if not os.environ.get('COR_LINUX_GUEST'):
+        run_privileged_with_timeout(
+            [*APT_OPTIONS, '-o', 'APT::Update::Error-Mode=any', 'update'], 300)
+    package_timeout = 1800 if platform.machine().lower() in ('aarch64', 'arm64') else 900
+    install_packages(compatibility_dependencies(), package_timeout, no_recommends=True)
+
+
 def run_compatibility(expected=None):
     if os.environ.get('GITHUB_ACTIONS') != 'true':
         raise RuntimeError('Compatibility tests require a disposable GitHub Actions runner')
@@ -169,23 +203,7 @@ def run_compatibility(expected=None):
         or receipt['linux_tun_test_sha256'] != sha256(binary)):
         raise ValueError('Compatibility inputs differ from the verified package/test binaries')
     binary.chmod(0o755)
-    # The hosted image's Azure mirror can stall on package indices even after
-    # falling back for InRelease. Use the official HTTPS mirrors consistently.
-    for name, mirror in (('apt-mirrors.txt', 'https://archive.ubuntu.com/ubuntu/'),
-                         ('apt-mirrors-security.txt', 'https://security.ubuntu.com/ubuntu/')):
-        path = Path('/etc/apt')/name
-        if path.is_file():
-            run(['sudo', 'tee', path], input=mirror+'\n', text=True)
-    prepare_guest_package_environment()
-    if not os.environ.get('COR_LINUX_GUEST'):
-        run_privileged_with_timeout(
-            [*APT_OPTIONS, '-o', 'APT::Update::Error-Mode=any', 'update'], 300)
-    package_timeout = 1800 if platform.machine().lower() in ('aarch64', 'arm64') else 900
-    install_packages(
-        ['dbus-x11', 'iproute2', 'util-linux', 'libcap2-bin',
-         'xvfb', 'xwayland', 'x11-utils', 'xdotool', 'wmctrl', 'openbox',
-         'gnome-shell', 'gnome-shell-extension-appindicator', 'policykit-1-gnome',
-         'libgl1-mesa-dri', 'libegl1'], package_timeout, no_recommends=True)
+    prepare_compatibility_environment()
     # Package structure was tested in the native packaging job. This job tests
     # its GUI, proxy and routing against this distribution, without repackaging.
     linux_package_tests(packages[0], binary, structure=False)

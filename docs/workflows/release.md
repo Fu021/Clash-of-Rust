@@ -30,12 +30,12 @@ Linux 兼容验证在来源解析后准备环境，仅等待本次运行中对�
 2. Windows 更新 Defender 检测库，逐个扫描安装包及未压缩的全部 EXE/DLL，再验证安装、服务注册、普通用户代理/TUN、更新安装路径、卸载与用户文件保留；安装后以普通用户启动窗口，检查尺寸、GUI/CLI 共享状态和最小化/恢复。PE 图标在打包阶段核验。扫描版本和逐文件 SHA256 写入 `package-receipt.json`。
 3. Linux 使用 Ubuntu 20.04 构建的同一份 DEB：基线容器先做安装及 X11 窗口快速检查；Ubuntu 22.04 x64/ARM64、最新版 x64 与 Ubuntu 20.04 x64/ARM64 虚拟机分别验证安装后的 X11/Wayland 窗口、托盘、窗口重建、GUI/CLI 共用内核、图形授权取消/接受和代理/TUN。GUI 测试用户使用独立临时目录，仅保留诊断报告；20.04 虚拟机要求 5.4 GA 内核，实际硬件仍需单独验收。结构、代理/TUN 不在同一环境重复运行。disposable guest 只跳过无关文档索引，GUI 依赖与全部功能检查仍执行，见[测试环境复盘](../agent-failures/test-environments.md#11-测试稳定性与外部环境假设)。
 4. macOS 核验 App/DMG 版本、架构、资源及签名，启动安装后的 GUI/内核并验证代理/TUN；界面辅助包使用独立身份与 `LSUIElement`，连续重建界面 5 次，核对应用注册、Dock 最近应用条目及内核 PID。当前使用 ad-hoc 签名，没有 Developer ID 与 Apple 公证。
-5. Android 复用三种 ABI 的已编译 APK，打包 job 显式安装并核对固定 Python/JDK，不要求未使用的 Go；检查签名、架构与 16 KiB 对齐，x86_64 最终包再运行代理/TUN 测试。`check_only` 保留固定开发签名，正式发布要求单独配置长期签名。
+5. Android 复用三种 ABI 的已编译 APK，打包 job 显式安装并核对固定 Python/JDK，不要求未使用的 Go；检查签名、架构与 16 KiB 对齐，x86_64 最终包再运行代理/TUN 及其生命周期测试，不运行键盘或截图专项。`check_only` 保留固定开发签名，正式发布要求单独配置长期签名。
 6. 核对安装包、校验值、成功记录及来源后，正式模式才公开 Release；`check_only` 仅保留 Actions 附件。开发版本标记为 prerelease，不覆盖稳定版 latest。
 
 Ubuntu 18.04 未纳入此基线或兼容矩阵，不能从 20.04 的验证结果推断其受支持。
 
-打包与安装验证所需原包遵循[三条工作流的缓存分工](cache-coverage.md)，不向私网保存安装目录或构建对象。原包准备后尽早交持久清单，所有下载 job（含 Ubuntu latest）在末尾保存清单和分页回执附件；pending 与整批 ready 分别报告。Ubuntu 20.04 的镜像、Python 和已验证 DEB 下载范围见 [CI 缓存边界](ci.md#ubuntu-2004-环境下载缓存)；每轮重建虚拟机磁盘，安装后验证照常执行。
+打包与安装验证所需原包遵循[三条工作流的缓存分工](cache-coverage.md)，不向私网保存安装目录或构建对象。原包准备后尽早交持久清单，所有下载 job（含 Ubuntu latest）在末尾保存清单和分页回执附件；pending 与整批 ready 分别报告。Ubuntu 20.04 的镜像、Python 和已验证 DEB 下载范围见 [CI 缓存边界](ci.md#ubuntu-2004-环境下载缓存)；每轮重建虚拟机磁盘，安装后验证照常执行。虚拟机先启动、解包 Python，再由宿主根据 guest 的签名 APT 索引下载并校验完整 GUI/测试依赖，按官方来源优先、私网回退传入 guest；来源或摘要不匹配时失败。测试环境先安装，应用自身依赖仍由安装包声明和安装，避免掩盖缺失的包依赖。之后才等待本架构 Linux 包，认证不进入 guest；下载核验 artifact 摘要、成员、来源及收据后才传入 guest。guest 只回传经实际字节校验的原包来源记录，不再把全部 DEB 复制回宿主；开始等待前和任务末尾都收集记录，供持久清单补拉。GNOME 启动中短暂的 DBus 探测失败保存在 GUI 报告的 `dbus-probes.log`，就绪超时仍失败并显示最后错误。
 
 只有最终发布 job 有 `contents: write`。发布工作流向 `scripts/build-installer.py --prebuilt` 传入已验证的 CI 产物；本地打包可传入按上述步骤生成的本地产物。打包器只校验与组装，不隐式调用 Cargo。
 

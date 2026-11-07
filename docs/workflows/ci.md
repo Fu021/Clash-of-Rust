@@ -4,13 +4,13 @@
 
 ## CI
 
-先生成一次 `dependency-snapshot`，只复制仓库的 Rust/Go 锁文件与 Android 声明，结合 `.github/build-versions.json` 中已确认的工具、内核和资源身份；不执行 `cargo update`、`go get` 或 Maven 自动升级，也不应用旧缓存中曾自动解析出的新版源码依赖。所有平台和 Publish Release 复用同一份快照，打包不再刷新安装工具版本。
+先生成一次 `dependency-snapshot`，复制仓库的 Rust/Go 锁文件与 Android 声明，结合 `.github/build-versions.json` 中已确认的工具、内核和资源身份；不执行 `cargo update`、`go get` 或 Maven 自动升级，也不应用旧缓存中曾自动解析出的新版源码依赖。四份 Geo 原包在此时按固定摘要和大小下载、校验并随快照分发，各平台应用快照时再次校验，再准备各自的原生资源。这样不会因平台排队期间上游替换 `latest` 附件或私网临时不可用而重新下载 Geo；快照缺失或损坏仍失败，不改用其他内容。所有平台和 Publish Release 复用同一份快照，打包不再刷新安装工具版本。
 
 依赖维护可手动运行现有 CI，设置 `refresh_dependencies=true`：只在 Actions 解析 Cargo/Go 更新并导出带来源提交和 SHA256 的 `dependency-updates`，不运行平台矩阵，也不作为打包依据。将已审阅的锁文件提交后，仍须取得新提交的普通 push CI 与不发布打包验证；受限本机不执行依赖下载或构建。
 
-输入法排障可手动设置 `android_ime_only=true`：只构建一次 Android x64 测试 APK，由至多三个并发 runner 测试 API 26、28、29、30、31、32、33、34、35、36。每个系统采集三轮正式行为；API 30+ 再采集三轮移除应用输入视图动画回调的对照，变更只在 instrumentation 进程内生效，不修改发行代码。每组前两轮系统动画倍率为 1，第三轮为 0，以区分普通配置和 CI 动画设置。保留名称/URL 点击前后、Back 后与重开截图、窗口/输入法日志、焦点和 API 30+ 的 IME 几何；旧系统同时记录可见窗口区域，采用 1080×2400、440 dpi 通用手机视口。
+常规 CI 和打包的运行时集成验证聚焦系统代理/TUN：授权、真实流量、DNS、重载、后台与重建、取消及断开后的路由恢复。键盘输入、键盘高度、Back 编辑行为和多版本截图已另有专项证据，不随 push/PR、loop 或打包自动重跑，也不要求启动第二台 Android 12 模拟器；主题、字号与页面滑动检查同样从 Android 网络集成中分开，保留单独手动测试入口。源码编译、lint 和单元测试照常执行。
 
-附件 `android-ime-api-{api}` 按模式和轮次保留原始截图及 JSON；`android_ime_apis` 默认 `all`，也可用 `30,32,34` 等逗号分隔的已批准版本定向补跑。截图探测先检查 Activity 焦点，再以真实触摸引起的页面变化确认输入就绪，不依赖旧系统可能缺失的无障碍根节点。导出权限失败时，仅在同时确认是可调试模拟器后尝试重启 root adbd；每轮必需截图或状态缺失均失败，保留导出错误和其他诊断，不能以 JUnit 成功掩盖空报告。此探测的 JUnit 成功只证明导航和证据采集完成，键盘是否真正绘制须检查截图；系统 `ime_visible=true` 不能单独作为显示成功。常规 CI 的严格输入法回归仍检查输入连接、实际 IME 状态、布局避让、Back 重开及前后台恢复。专项不包含 MIUI 或 API 27，不冒充 Redmi K30 实机或完整兼容验收，不作为发布依据，不导出带“测试通过”声明的发布编译附件，也不启动桌面矩阵、缓存审计或打包。与依赖维护模式分别运行。
+工作流已移除输入法专项的参数、APK 中转和多版本矩阵。保留 `scripts/android.py test --arch x64 --ime-only` 等手工调查脚本与既有证据，只有维护者明确要求重新调查时才使用，不因版本升级或 loop 自动恢复到 CI；缺图、日志边界丢失和输入法崩溃仍使手工专项失败。历史十版本范围、证据要求及 MIUI/实机边界见[输入法专页](../agent-failures/android-ime.md#当前修复与待验收)。
 
 Android 在 Gradle setup 后重新激活固定 Python、JDK 和 Go，编译前执行 `build_inputs.py check-tools` 核对实际版本。环境变量里记录的版本或早先 setup 成功不能代替当前 PATH 上的工具检查；版本漂移先失败，不放宽 `go mod tidy -diff` 或自动下载另一套编译器。
 
@@ -40,7 +40,7 @@ Python 和原始云镜像使用官方优先、原包私网回退，全部新导�
 
 ### 测试覆盖
 
-- 六种桌面平台使用相同的 Release profile 完成整个 workspace 的格式检查、Clippy、编译和源码单元测试，包括共享移动会话；Android 另用三种 ABI 构建实际 Slint/Java/Go 宿主，iOS 不参与构建。
+- 六种桌面平台使用相同的 Release profile 完成格式检查及桌面相关包的 Clippy、编译和源码单元测试；编译与测试明确排除 `clash-mobile-runtime` 和 `clash-android`，共享业务库仍按桌面依赖正常验证。Android 三个 ABI job 自行执行移动会话及请求门禁的宿主单元测试和 Clippy，再编译对应 Android target 的实际 Slint/Java/Go 宿主；宿主测试不等于 ARM 真机验收。iOS 不参与构建。
 - Linux x64/ARM64 在同一轮冻结的 Ubuntu 20.04 镜像中构建；独立 Python 与镜像按上游校验值固定。逐个检查发行 ELF 与集成测试程序的依赖和 `GLIBC` 符号上限 2.31，将镜像、系统依赖及文件摘要写入产物。镜像共享宿主内核，旧内核及完整安装/GUI 验证另见[发布流程](release.md#publish-release)。
 - 单元测试保留配置与规则、网络响应解析、认证信息脱敏、状态恢复、任务取消、列表复用与边界、实际指针交互等验证。`cor` 的命令解析、帮助和无显示环境入口也在源码测试内验证；历史截图和长期忽略的联网/平台手工回归入口已移除。
 - 真实系统集成测试只运行系统代理与 TUN：验证代理设置写入、HTTP 转发、TUN 接管无显式代理的流量、模式恢复及关闭清理。Linux 使用隔离网络命名空间和 GSettings 内存后端；macOS 使用真实 launchd 网络助手；Windows 先注册服务，再以普通用户令牌运行代理/TUN、恢复和服务清理检查。
@@ -51,7 +51,11 @@ Python 和原始云镜像使用官方优先、原包私网回退，全部新导�
 - main push、PR 更新触发 CI；过时运行自动取消。本地生成的编译、打包产物和缓存已在 `.gitignore` 中排除，不应提交。
 - 桌面 CI 不生成安装包；桌面后台、界面程序、`cor` 和网络助手一起导出，现有代理/TUN 集成场景同时验证真实控制台命令及后台生命周期。Android CI 生成供安装测试与发布复用的 APK。产物记录提交、版本、架构、Cargo.lock、工具链及逐文件校验值；仅附带发布后复用的 `core_integration` 代理/TUN 测试程序，不上传源码单元测试程序。产物采用 schema 3，只与同一提交的打包流程配套使用。
 
-Android x86_64 使用 API 36 模拟器运行真实代理/TUN 流量测试及上述订阅输入法回归，验证正式界面的内核状态、默认策略组、订阅导航和设置触摸滚动，以及系统 VPN 授权、DNS、套接字保护、快捷磁贴连接/断开、Activity 重建和路由恢复；另在 API 31 串行复验输入法。取消后到达的普通授权、过期服务启动与排队连接不得重新开启 VPN，连接中必须提供取消入口；ARM64/ARMv7 完成实际编译、Gradle lint 与架构校验，仍需真机验收。Android 测试结果、体积报告和 logcat 保存在 `android-report-{arch}`，固定开发签名与构建说明见 [Android 宿主](../../apps/android/README.md)。
+Android x86_64 使用 Android 16（API 36）模拟器运行真实代理/TUN 流量测试，验证系统 VPN 授权、DNS、套接字保护、快捷磁贴连接/断开、Activity 重建和路由恢复。取消后到达的普通授权、过期服务启动与排队连接不得重新开启 VPN，连接中必须提供取消入口；ARM64/ARMv7 完成实际编译、Gradle lint 与架构校验，仍需真机验收。Android 测试结果、体积报告和 logcat 保存在 `android-report-{arch}`，固定开发签名与构建说明见 [Android 宿主](../../apps/android/README.md)。
+
+常规测试、输入法专项及打包共用模拟器准备入口。当前[模拟器实现](https://android.googlesource.com/platform/external/qemu/+/emu-master-dev/android-qemu2-glue/main.cpp)会将首次启动的 API 24+ userdata 提高到至少 6 GiB，并要求分区大小的 1.2 倍空闲；因此配置显式使用 6144 MiB，再为测试留出 1 GiB，启动前合计要求约 8.2 GiB。此前 3072 MiB / 4 GiB 的预检遗漏了这一最低值，`1139dcc` 的 x64 仍在约 5255 MiB 空闲时被模拟器要求 7372.8 MiB 而拒绝，不能把配置写入或较宽裕 runner 的偶然成功当作修复。
+
+仅在 GitHub 托管 Linux 临时 runner 空间不足时，移除 Android 测试不用的 `/usr/share/dotnet`，再核对实际空间；本地、自托管及其他系统不会执行此操作。`storage.json` 保留预算、处理前后空间和移除的工具路径；仍不足则在改动 AVD 前失败。编译缓存、SDK、仓库内容与私网数据不受该操作影响；空间不足不能省略本次已选择的代理/TUN 或手动专项断言。
 
 macOS 失败日志、系统与网络状态、崩溃报告保存在 `macos-ci-report-{arch}`，Windows 集成检查结果保存在 `windows-ci-report-{arch}`。人工授权窗口、真实重启登录和物理显示器行为仍需人工验收。
 

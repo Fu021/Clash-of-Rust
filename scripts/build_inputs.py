@@ -13,7 +13,7 @@ import sys
 import urllib.error
 import urllib.parse
 
-from build_support import ROOT, host_arch, host_system, read_json, sha256, write_json
+from build_support import ROOT, download_asset, host_arch, host_system, read_json, sha256, write_json
 
 FILES = ('Cargo.lock', 'apps/android/core/go.mod', 'apps/android/core/go.sum',
          'apps/android/build.gradle.kts', 'apps/android/app/build.gradle.kts')
@@ -111,7 +111,47 @@ def verified_manifest():
         path = ROOT / relative
         if not path.is_file() or sha256(path) != checksum:
             raise ValueError('Build dependencies changed after resolution: ' + relative)
+    verify_geo_snapshot(value, Path(os.environ.get('BUILD_INPUTS_DIR', SNAPSHOT)))
     return value
+
+
+def geo_assets(upstream):
+    release = upstream.get('geo')
+    if release is None:
+        return {}
+    assets = {asset['name']: asset for asset in release['assets'] if asset['name'] in GEO}
+    if set(assets) != set(GEO):
+        raise ValueError('Dependency snapshot Geo resources are incomplete')
+    for asset in assets.values():
+        if (not re.fullmatch(r'sha256:[0-9a-f]{64}', asset.get('digest', ''))
+                or type(asset.get('size')) is not int or asset['size'] <= 0):
+            raise ValueError('Dependency snapshot Geo identity is invalid')
+    return assets
+
+
+def freeze_geo(directory, upstream):
+    files = {}
+    for name, asset in geo_assets(upstream).items():
+        relative = 'resources/' + GEO[name]
+        path = directory / relative
+        download_asset(asset, path)
+        if path.is_symlink() or path.stat().st_size != asset['size'] or sha256(path) != asset['digest'][7:]:
+            raise ValueError('Dependency snapshot Geo checksum or size mismatch: ' + name)
+        files[relative] = asset['digest'][7:]
+    return files
+
+
+def verify_geo_snapshot(value, directory):
+    assets = geo_assets(value.get('upstream', {}))
+    expected = {'resources/' + GEO[name]: asset['digest'][7:] for name, asset in assets.items()}
+    if value.get('resources', {}) != expected:
+        raise ValueError('Dependency snapshot Geo resource inventory mismatch')
+    for name, asset in assets.items():
+        path = directory / 'resources' / GEO[name]
+        if (path.is_symlink() or not path.is_file() or path.stat().st_size != asset['size']
+                or sha256(path) != asset['digest'][7:]):
+            raise ValueError('Dependency snapshot Geo checksum or size mismatch: ' + name)
+    return assets
 
 
 def component(name):
@@ -183,7 +223,7 @@ def resolve(directory):
         (ROOT / 'apps/android/core/go.mod').read_text())]
     value = {'schema': 1, 'commit': current_commit(), 'baseline': baseline, 'constraints': constraints(), 'files': files,
              'resolved_at': datetime.datetime.now(datetime.timezone.utc).isoformat(),
-             'upstream': upstream, 'warnings': [],
+             'upstream': upstream, 'resources': freeze_geo(directory, upstream), 'warnings': [],
              'rust_packages': [{key: package[key] for key in ('name', 'version', 'source', 'checksum') if key in package}
                                for package in packages],
              'go_modules': go_modules,
@@ -253,8 +293,13 @@ def apply(directory, require_commit=True):
         path = directory / relative
         if path.is_symlink() or sha256(path) != checksum:
             raise ValueError('Dependency snapshot checksum mismatch: ' + relative)
+    assets = verify_geo_snapshot(value, directory)
     for relative in FILES:
         shutil.copy2(directory / relative, ROOT / relative)
+    for name in assets:
+        destination = ROOT / 'bundle/resources' / GEO[name]
+        destination.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copy2(directory / 'resources' / GEO[name], destination)
     print('Applied verified dependency snapshot:', value.get('resolved_at', 'unknown'))
 
 

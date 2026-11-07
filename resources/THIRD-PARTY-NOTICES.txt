@@ -15,6 +15,11 @@ Source Han Sans CN Regular (Adobe), embedded Chinese UI font:
 https://github.com/adobe-fonts/source-han-sans
 Distributed under SIL Open Font License 1.1.
 The complete font license is installed as resources/SourceHanSans-LICENSE.txt.
+Noto Color Emoji, embedded offline emoji font:
+https://github.com/googlefonts/noto-emoji/tree/1ffdd21391dd1f25c081fa93a9dea0c7c029442b
+Distributed under SIL Open Font License 1.1.
+The complete font license is installed as resources/NotoEmoji-LICENSE.txt
+or licenses/fonts/LICENSE-NotoEmoji.txt in the Android application.
 Clash of Rust application source and installer scripts use GPL-3.0-only.
 
 RegionRestrictionCheck platform detector (upstream contributors):
@@ -33,10 +38,6 @@ jq or OpenSSL runtime is bundled for these checks. Request/parse/cancellation
 code is in crates/client-core/src/detection/regions; Rust crate versions and licenses are in Cargo.lock
 and their corresponding upstream sources.
 
-Offline country flags: Twemoji v14.0.2, Copyright Twitter, Inc and other contributors.
-https://github.com/twitter/twemoji/tree/v14.0.2/assets/72x72
-Artwork licensed under CC-BY-4.0; PNG pixels converted to RGBA without artwork changes.
-The complete license is installed as resources/Twemoji-LICENSE.txt.
 English territory names: Unicode CLDR 46.0.0, Unicode License v3.
 https://github.com/unicode-org/cldr-json/tree/46.0.0
 The complete license is installed as resources/Unicode-LICENSE.txt.
@@ -45,6 +46,11 @@ Slint 1.18.1 (SixtyFPS GmbH): https://github.com/slint-ui/slint/tree/v1.18.1
 Used under GPL-3.0-only; the GPLv3 license is installed as LICENSE.
 The desktop uses winit and the Slint software renderer. Dependency versions
 and corresponding upstream sources are recorded in Cargo.lock.
+The software renderer includes the color-glyph changes from Slint PR #14567:
+https://github.com/slint-ui/slint/pull/14567
+Its modified 1.18.1 source and original licenses are in vendor/slint-renderer-software.
+The adaptation and its limits are documented there in PATCHES.md.
 The Android backend includes a window lifecycle fix backported from
 https://github.com/slint-ui/slint/commit/611357480eb7a7eb4f1957d912512fadf99a6666.
 Its modified source and original licenses are in vendor/slint-android-activity.
+Local IME and window-transition changes are documented there in PATCHES.md.

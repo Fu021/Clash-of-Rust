@@ -22,7 +22,6 @@ pub fn variant(value: &str) -> String {
 pub fn wire_type(value: &str) -> String {
     match value {
         "string" => "Text".into(),
-        "image" => "String".into(),
         "int" => "i32".into(),
         "bool" => "bool".into(),
         "float" | "length" => "f32".into(),

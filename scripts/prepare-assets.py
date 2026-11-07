@@ -1,11 +1,9 @@
-"""Maintain offline icons/flags and verify Windows embedded icons.
+"""Maintain icons and territory names and verify Windows embedded icons.
 
-Only generation needs Pillow; verification uses the standard library. Normal
-builds consume committed assets and never regenerate artwork or flags.
+Only icon generation needs Pillow; verification uses the standard library. Normal
+builds consume committed assets and never regenerate artwork or country data.
 """
 import argparse
-import concurrent.futures
-import io
 import json
 from pathlib import Path
 import re
@@ -34,10 +32,8 @@ def pack_icons():
                 image.save(output/'app.ico', sizes=[(n, n) for n in (16, 24, 32, 48, 64, 128, 256)])
 
 
-def prepare_flags(proxy):
-    from PIL import Image
-
-    dest = ROOT/'resources/flags'
+def prepare_country_names(proxy):
+    dest = ROOT/'resources/countries'
     dest.mkdir(parents=True, exist_ok=True)
     client = opener(proxy)
 
@@ -45,29 +41,15 @@ def prepare_flags(proxy):
         with client.open(url, timeout=30) as response:
             return response.read()
 
-    twemoji = 'https://raw.githubusercontent.com/twitter/twemoji/v14.0.2/'
     codes = re.search(r'ISO_CODES: &str = "([^"]+)"',
                       (ROOT/'crates/client-core/src/detection/probe.rs').read_text(encoding='utf-8'))[1].split()
-
-    def flag(code):
-        name = '-'.join(f"{0x1f1e6 + ord(ch) - ord('A'):x}" for ch in code)
-        with Image.open(io.BytesIO(fetch(twemoji + f'assets/72x72/{name}.png'))) as image:
-            image = image.convert('RGBA')
-            assert image.size == (72, 72)
-            return code, image.tobytes()
-
-    with concurrent.futures.ThreadPoolExecutor(max_workers=8) as pool:
-        flags = sorted(pool.map(flag, [code for code in codes if code not in ('HK', 'MO', 'TW')]))
-    (dest/'flags.rgba').write_bytes(b''.join(pixels for _, pixels in flags))
-    (dest/'codes.json').write_text(json.dumps([code for code, _ in flags]), encoding='utf-8')
-    (dest/'LICENSE-Twemoji.txt').write_bytes(fetch(twemoji + 'LICENSE-GRAPHICS'))
     cldr = 'https://raw.githubusercontent.com/unicode-org/cldr-json/46.0.0/'
     territories = json.loads(fetch(cldr + 'cldr-json/cldr-localenames-full/main/en/territories.json'))[
         'main']['en']['localeDisplayNames']['territories']
     (dest/'countries.json').write_text(json.dumps(
         {code: territories[code] for code in codes}, ensure_ascii=False, indent=2) + '\n', encoding='utf-8')
     (dest/'LICENSE-Unicode.txt').write_bytes(fetch(cldr + 'LICENSE'))
-    print(f'Prepared {len(flags)} flags; no network access is needed by the application')
+    print(f'Prepared {len(codes)} territory names; no network access is needed by the application')
 
 
 def verify_icons(filenames):
@@ -124,15 +106,15 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     commands = parser.add_subparsers(dest='command', required=True)
     commands.add_parser('icons', help='Encode approved PNG artwork as ICO, PNG and RGBA')
-    flags = commands.add_parser('flags', help='Prepare pinned Twemoji/CLDR offline assets')
-    flags.add_argument('--proxy', default='')
+    countries = commands.add_parser('countries', help='Prepare pinned CLDR territory names')
+    countries.add_argument('--proxy', default='')
     verify = commands.add_parser('verify-icons', help='Check PE icon resources without executing programs')
     verify.add_argument('files', type=Path, nargs='+')
     args = parser.parse_args()
     if args.command == 'icons':
         pack_icons()
-    elif args.command == 'flags':
-        prepare_flags(args.proxy)
+    elif args.command == 'countries':
+        prepare_country_names(args.proxy)
     else:
         verify_icons(args.files)
 

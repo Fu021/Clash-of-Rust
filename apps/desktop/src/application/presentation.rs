@@ -7,7 +7,7 @@ use clash_desktop_protocol::{
     *,
 };
 
-fn model<T: Clone + PartialEq>(old: ModelRc<T>, values: Vec<T>) -> ModelRc<T> {
+pub(super) fn model<T: Clone + PartialEq>(old: ModelRc<T>, values: Vec<T>) -> ModelRc<T> {
     if old.rows() == values {
         old
     } else {
@@ -269,7 +269,7 @@ impl App {
                 let source = $value;
                 let value: &str = source.as_ref();
                 if data.$get().as_str() != value {
-                    data.$put(SharedString::from(value));
+                    data.$put(value.into());
                 }
             }};
         }
@@ -277,6 +277,11 @@ impl App {
         set!(get_page, set_page, self.page as i32);
         set!(get_ready, set_ready, self.engine.is_some());
         set!(get_running, set_running, self.snapshot.running);
+        text!(
+            get_network_alert,
+            set_network_alert,
+            self.network_watch.notice()
+        );
         self.present_protection(data);
         set!(get_working, set_working, self.working);
         set!(get_geo_updating, set_geo_updating, self.geo_updating);
@@ -350,6 +355,17 @@ impl App {
         set!(get_ports_dirty, set_ports_dirty, self.ports_dirty());
         set!(get_retry_core, set_retry_core, self.ready_to_retry());
         set!(get_notice_error, set_notice_error, self.error);
+        set!(
+            get_notice_recover_network,
+            set_notice_recover_network,
+            self.notice_network_recovery
+        );
+        set!(
+            get_notice_critical,
+            set_notice_critical,
+            self.notice_critical
+        );
+        set!(get_diagnosing, set_diagnosing, self.diagnosing);
         set!(
             get_notice_revision,
             set_notice_revision,
@@ -533,6 +549,7 @@ impl App {
                 .unwrap_or(&self.updates.status)
         );
         data.set_network_results(strings(data.get_network_results(), &self.test_results));
+        self.present_overview(data);
         if !self.visible {
             models.clear();
             return;
@@ -546,7 +563,13 @@ impl App {
             models.set_groups(Vec::new());
         }
         if self.page == Page::Profiles {
-            let profiles: Vec<_> = self.profiles.iter().collect();
+            let profiles: Vec<_> = self
+                .profiles
+                .iter()
+                .filter(|profile| {
+                    contains_query(&profile.name, &query) || contains_query(&profile.source, &query)
+                })
+                .collect();
             self.pager(data, profiles.len(), PAGE_SIZE);
             reconcile(
                 &models.profiles,
@@ -575,9 +598,11 @@ impl App {
         } else {
             reconcile(&models.profiles, Vec::new());
         }
-        if self.page == Page::Connections {
+        if matches!(self.page, Page::Home | Page::Connections) {
             let (total, rows) = self.connection_rows();
-            self.pager(data, total, PAGE_SIZE);
+            if self.page == Page::Connections {
+                self.pager(data, total, PAGE_SIZE);
+            }
             reconcile(&models.connections, rows);
         } else {
             reconcile(&models.connections, Vec::new());
@@ -809,7 +834,7 @@ impl App {
             clash_of_rust::flags::label(exit.map_or("", |exit| exit.country.as_str()));
         data.set_site_exit_country(country.into());
         data.set_site_exit_flagged(flag.is_some());
-        data.set_site_exit_flag(flag.unwrap_or_default());
+        data.set_site_exit_flag(flag.unwrap_or_default().into());
         let categories: Vec<_> = report
             .categories
             .into_iter()
@@ -867,7 +892,7 @@ impl App {
                         });
                     ReportItem {
                         country: String::new().into(),
-                        flag: flag.clone().unwrap_or_default(),
+                        flag: flag.clone().unwrap_or_default().into(),
                         flagged: flag.is_some(),
                         id: service.id.as_str().into(),
                         title: service.name.as_str().into(),
@@ -1053,7 +1078,7 @@ impl App {
                     ReportItem {
                         country: country.into(),
                         flagged: flag.is_some(),
-                        flag: flag.unwrap_or_default(),
+                        flag: flag.unwrap_or_default().into(),
                         id: "".into(),
                         title: title.into(),
                         value: value.into(),
@@ -1072,9 +1097,10 @@ impl App {
             || self.claude.protection_pending.is_some();
         data.set_modal_error("".into());
         data.set_modal_copy("".into());
+        data.set_connection_selected_id("".into());
         data.set_modal_country("".into());
         data.set_modal_flagged(false);
-        data.set_modal_flag(String::new());
+        data.set_modal_flag(String::new().into());
         data.set_modal_description("".into());
         data.set_modal_accept("".into());
         data.set_modal_danger(false);
@@ -1169,6 +1195,7 @@ impl App {
             }
         } else if let Some(id) = &self.connection_detail {
             kind = 10;
+            data.set_connection_selected_id(id.as_str().into());
             data.set_modal_title("连接详情".into());
             let connection = self
                 .snapshot
@@ -1206,7 +1233,7 @@ impl App {
                         let (country, flag) = clash_of_rust::flags::label(&result.country);
                         data.set_modal_country(country.into());
                         data.set_modal_flagged(flag.is_some());
-                        data.set_modal_flag(flag.unwrap_or_default());
+                        data.set_modal_flag(flag.unwrap_or_default().into());
                         format!(
                             "{}\n{} ms\n\n{}",
                             result.summary, result.millis, result.detail

@@ -58,18 +58,24 @@ def lineage(key):
 
 def priority(entry):
     key = entry['key']
+    if re.fullmatch(r'action-setup-tailscale/[^/]+/macOS-(?:amd64|arm64)', key):
+        return 8
     if key.startswith('native-release-'):
-        if 'windows' in key and 'arm' in key:
-            return 6
-        if 'macos' in key and ('13' in key or 'intel' in key):
-            return 5
-        if 'windows' in key:
-            return 4
         if 'macos' in key:
-            return 3
+            return 8 if 'macos-13-' in key or 'intel' in key else 9
+        if 'windows' in key and 'arm' in key:
+            return 7
+        if 'windows' in key:
+            return 6
+        if 'linux' in key or 'ubuntu' in key:
+            return 1 if 'arm' in key else 2
         return 1
+    if key.startswith('android-v2-arm64-'):
+        return 5
+    if key.startswith('android-v2-x64-'):
+        return 4
     if key.startswith('android-v2-armv7-'):
-        return 2
+        return 3
     if key.startswith('android-v2-'):
         return 1
     if key.startswith('memory-'):
@@ -78,11 +84,12 @@ def priority(entry):
 
 
 def retired(key):
+    if key.startswith('action-setup-tailscale/'):
+        return re.fullmatch(r'action-setup-tailscale/[^/]+/macOS-(?:amd64|arm64)', key) is None
     return key.startswith((
         'macos-compiler-', 'android-go-', 'runtime-v1-', 'resources-', 'source-',
         'gradle-', 'tools-nsis-', 'skia-source-', 'linux-python-ubuntu20-',
         'linux-cloud-ubuntu20-', 'linux-apt-ubuntu20-', 'linux-image-ubuntu20-',
-        'action-setup-tailscale/',
     ))
 
 

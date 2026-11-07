@@ -44,6 +44,19 @@ pub(super) enum Action {
 }
 
 impl Action {
+    pub(super) fn allowed_during_protection(&self) -> bool {
+        matches!(
+            self,
+            Self::Refresh
+                | Self::LoadRules(_)
+                | Self::RefreshTray
+                | Self::OpenProfiles
+                | Self::Delay(_)
+                | Self::ExportLogs
+                | Self::ClaudeProtection(false)
+        )
+    }
+
     /// Preview only local appearance; persistence still uses the serialized engine queue.
     pub(super) fn preview_appearance(&self, settings: &mut Settings) -> bool {
         match self {
@@ -166,7 +179,31 @@ pub(super) async fn execute(
         _ => None,
     };
     let mut engine = engine.lock().await;
+    if matches!(
+        &action,
+        Action::Start
+            | Action::SavePorts(_)
+            | Action::DnsOverride(_)
+            | Action::FakeIp(_)
+            | Action::FakeIpAdd(_)
+            | Action::FakeIpRemove(_)
+            | Action::FakeIpRestoreDefaults
+            | Action::Ipv6(_)
+            | Action::Udp(_)
+            | Action::ClaudeProtection(_)
+            | Action::SaveRules(..)
+            | Action::Activate(_)
+            | Action::DeleteProfile(_)
+            | Action::Mode(_)
+            | Action::ProxyMode(_)
+            | Action::Select(..)
+    ) {
+        engine.invalidate_views();
+    }
     let result: anyhow::Result<String> = async {
+        if !action.allowed_during_protection() {
+            engine.settings.require_mutable()?;
+        }
         match action {
             Action::Refresh => Ok(String::new()),
             Action::RefreshTray => Ok(String::new()),
@@ -482,6 +519,57 @@ pub(super) async fn execute(
 #[cfg(test)]
 mod synchronization_tests {
     use super::*;
+
+    #[test]
+    fn protection_allows_observation_and_disable_but_rejects_mutations() {
+        for allowed in [
+            Action::Refresh,
+            Action::LoadRules("fixture".into()),
+            Action::OpenProfiles,
+            Action::Delay("node".into()),
+            Action::ExportLogs,
+            Action::ClaudeProtection(false),
+        ] {
+            assert!(allowed.allowed_during_protection());
+        }
+        for blocked in [
+            Action::Start,
+            Action::SavePorts(7897),
+            Action::Appearance(clash_client_core::config::ThemeMode::Dark),
+            Action::Accent(clash_client_core::config::AccentColor::Blue),
+            Action::TextScale(125),
+            Action::TraySpeed(true),
+            Action::UpdatePrereleases(true),
+            Action::DnsOverride(true),
+            Action::FakeIp(true),
+            Action::FakeIpAdd(vec!["example.test".into()]),
+            Action::FakeIpRemove("example.test".into()),
+            Action::FakeIpRestoreDefaults,
+            Action::Ipv6(true),
+            Action::Udp(true),
+            Action::Import("fixture".into(), "https://example.test".into()),
+            Action::EditProfile(
+                "fixture".into(),
+                "fixture".into(),
+                "https://example.test".into(),
+            ),
+            Action::UpdateProfile("fixture".into()),
+            Action::ReputationKey(Some("fixture".into())),
+            Action::Autostart(true),
+            Action::DelayInterval(30),
+            Action::SubscriptionInterval(360),
+            Action::NodeSort(proxy_order::NodeSort::Name),
+            Action::Mode("rule".into()),
+            Action::ProxyMode(ProxyMode::Tun),
+            Action::Select("GLOBAL".into(), "DIRECT".into()),
+            Action::Close("fixture".into()),
+            Action::CloseAll,
+            Action::ClearLogs,
+            Action::ClaudeProtection(true),
+        ] {
+            assert!(!blocked.allowed_during_protection());
+        }
+    }
 
     #[test]
     fn console_profile_changes_follow_the_active_profile_without_discarding_drafts() {

@@ -18,6 +18,7 @@ impl Default for UpdateGate {
     }
 }
 
+#[derive(Debug)]
 pub(crate) struct UpdateJob {
     _permit: OwnedSemaphorePermit,
     cancellation: watch::Receiver<u64>,
@@ -82,20 +83,52 @@ async fn wait_for_disconnect(disconnected: &mut Option<watch::Receiver<bool>>) {
 }
 
 impl Engine {
+    pub(crate) fn prepare_scheduled_subscription(
+        &self,
+        schedule: &mut clash_client_core::subscription::schedule::Schedule,
+        now: u64,
+    ) -> Result<
+        Option<(
+            UpdateJob,
+            clash_client_core::subscription::schedule::PendingUpdate,
+            Option<crate::network::DownloadPorts>,
+        )>,
+    > {
+        if self.settings.claude_protection.is_some() {
+            return Ok(None);
+        }
+        let Ok(job) = self.subscription_updates.begin("订阅正在更新，请稍候") else {
+            return Ok(None);
+        };
+        let Some(profile) = schedule.next(&self.settings, &self.profiles, now) else {
+            return Ok(None);
+        };
+        let pending = clash_client_core::subscription::schedule::PendingUpdate::capture(
+            profile,
+            &self.store,
+        )?;
+        Ok(Some((
+            job,
+            pending,
+            self.running().then_some(self.settings.download_ports()),
+        )))
+    }
+
     pub(crate) async fn download_app_update_with<T, F, Fut>(
         shared: &Arc<tokio::sync::Mutex<Self>>,
         disconnected: &mut Option<watch::Receiver<bool>>,
         download: F,
     ) -> Result<(UpdateJob, T, bool)>
     where
-        F: FnOnce(Option<u16>, bool, Api) -> Fut,
+        F: FnOnce(Option<crate::network::DownloadPorts>, bool, Api) -> Fut,
         Fut: Future<Output = Result<T>>,
     {
         let (mut job, port, prereleases, api) = {
             let engine = shared.lock().await;
+            engine.settings.require_mutable()?;
             (
                 engine.app_updates.begin("客户端更新正在进行，请稍候")?,
-                engine.running().then_some(engine.settings.mixed_port),
+                engine.running().then_some(engine.settings.download_ports()),
                 engine.settings.update_prereleases,
                 engine.api.clone(),
             )
@@ -168,12 +201,13 @@ impl Engine {
         download: F,
     ) -> Result<()>
     where
-        F: FnOnce(reqwest::Url, Option<u16>) -> Fut,
+        F: FnOnce(reqwest::Url, Option<crate::network::DownloadPorts>) -> Fut,
         Fut: Future<Output = Result<(String, Option<String>)>>,
     {
         let url = reqwest::Url::parse(&source).context("订阅 URL 无效")?;
         let (mut job, pending, port) = {
             let engine = shared.lock().await;
+            engine.settings.require_mutable()?;
             let job = engine.subscription_updates.begin("订阅正在更新，请稍候")?;
             let pending = if let Some(id) = &existing {
                 engine.require_unprotected_profile(id)?;
@@ -197,7 +231,7 @@ impl Engine {
             (
                 job,
                 pending,
-                engine.running().then_some(engine.settings.mixed_port),
+                engine.running().then_some(engine.settings.download_ports()),
             )
         };
         let (raw, usage) = job
@@ -261,16 +295,17 @@ impl Engine {
         download: F,
     ) -> Result<()>
     where
-        F: FnOnce(PathBuf, Option<u16>) -> Fut,
+        F: FnOnce(PathBuf, Option<crate::network::DownloadPorts>) -> Fut,
         Fut: Future<Output = Result<()>>,
     {
         let (mut job, staged, port) = {
             let engine = shared.lock().await;
+            engine.settings.require_mutable()?;
             let job = engine.geo_updates.begin("Geo 数据正在更新，请稍候")?;
             let staged = tempfile::Builder::new()
                 .prefix(".geo-download-")
                 .tempdir_in(engine.store.runtime())?;
-            let port = engine.running().then_some(engine.settings.mixed_port);
+            let port = engine.running().then_some(engine.settings.download_ports());
             append(
                 &engine.logs,
                 "[客户端] 开始下载全部 Geo 数据，下载期间继续使用原数据",
@@ -351,6 +386,7 @@ mod tests {
             geo_updates: Default::default(),
             app_updates: Default::default(),
             subscription_updates: Default::default(),
+            unreachable_recovery: Default::default(),
             subscription_failure: None,
             subscription_failure_revision: 0,
             resources: PathBuf::new(),
@@ -378,6 +414,83 @@ mod tests {
             view_revision: 0,
             network_monitor: Default::default(),
         }
+    }
+
+    #[tokio::test]
+    async fn protection_rejects_every_download_before_network_io() {
+        use crate::claude_check::protection::{Previous, Protection};
+        let root = tempfile::tempdir().unwrap();
+        let mut owner = fixture(Store::at(root.path().into()).unwrap());
+        owner.settings.claude_protection = Some(Arc::new(Protection::new(
+            "fixture".into(),
+            "node".into(),
+            Previous {
+                mode: "rule".into(),
+                proxy_mode: ProxyMode::Off,
+                selectors: Default::default(),
+            },
+        )));
+        let shared = Arc::new(tokio::sync::Mutex::new(owner));
+        let subscription = Engine::import_remote_with(
+            &shared,
+            "Fixture".into(),
+            "https://example.test/sub".into(),
+            None,
+            false,
+            None,
+            |_, _| async { anyhow::bail!("protected subscription download reached the network") },
+        )
+        .await
+        .unwrap_err();
+        assert!(subscription.to_string().contains("Claude 保护"));
+        let app =
+            Engine::download_app_update_with::<(), _, _>(&shared, &mut None, |_, _, _| async {
+                anyhow::bail!("protected app update reached the network")
+            })
+            .await
+            .unwrap_err();
+        assert!(app.to_string().contains("Claude 保护"));
+        let geo = Engine::download_geo_with(&shared, None, |_, _| async {
+            anyhow::bail!("protected Geo download reached the network")
+        })
+        .await
+        .unwrap_err();
+        assert!(geo.to_string().contains("Claude 保护"));
+    }
+
+    #[tokio::test]
+    async fn stopped_owner_does_not_probe_or_change_network_settings() {
+        let root = tempfile::tempdir().unwrap();
+        let mut owner = fixture(Store::at(root.path().to_owned()).unwrap());
+        owner.settings.proxy_mode = ProxyMode::Tun;
+        let settings = serde_json::to_value(&owner.settings).unwrap();
+        let shared = Arc::new(tokio::sync::Mutex::new(owner));
+        assert!(
+            Engine::recover_unreachable_shared(&shared)
+                .await
+                .unwrap()
+                .is_none()
+        );
+        let owner = shared.lock().await;
+        assert_eq!(serde_json::to_value(&owner.settings).unwrap(), settings);
+        assert_eq!(owner.view_revision(), 0);
+        assert!(owner.logs.lock().unwrap().is_empty());
+    }
+
+    #[tokio::test]
+    async fn changing_views_cancels_a_pending_unreachable_recovery() {
+        let root = tempfile::tempdir().unwrap();
+        let mut owner = fixture(Store::at(root.path().to_owned()).unwrap());
+        let mut job = owner.unreachable_recovery.begin("busy").unwrap();
+        owner.invalidate_views();
+        assert!(job.ensure_current(&None).is_err());
+        assert!(
+            job.download(std::future::pending::<Result<bool>>(), &mut None)
+                .await
+                .is_err()
+        );
+        drop(job);
+        assert!(owner.unreachable_recovery.begin("busy").is_ok());
     }
 
     #[tokio::test]
@@ -639,5 +752,99 @@ mod tests {
                 .contains("已改变")
         );
         assert_eq!(std::fs::read_to_string(path).unwrap(), original);
+    }
+
+    #[tokio::test]
+    async fn scheduled_and_manual_subscription_updates_share_a_cancellable_gate() {
+        let root = tempfile::tempdir().unwrap();
+        let store = Store::at(root.path().to_owned()).unwrap();
+        let profile = Profile {
+            id: uuid::Uuid::new_v4().to_string(),
+            name: "Fixture".into(),
+            source: "https://example.test/sub".into(),
+            updated: 100,
+            usage: None,
+        };
+        atomic_write(
+            &store.profile_path(&profile.id).unwrap(),
+            b"proxies: []\nrules: ['MATCH,DIRECT']\n",
+        )
+        .unwrap();
+        let mut owner = fixture(store);
+        owner.settings.subscription_update_interval_minutes = 1;
+        owner.profiles.push(profile.clone());
+        let shared = Arc::new(tokio::sync::Mutex::new(owner));
+        let (started, ready) = oneshot::channel();
+        let running = shared.clone();
+        let manual_profile = profile.clone();
+        let manual = tokio::spawn(async move {
+            Engine::import_remote_with(
+                &running,
+                manual_profile.name,
+                manual_profile.source,
+                Some(manual_profile.id),
+                true,
+                None,
+                |_, _| async move {
+                    started.send(()).unwrap();
+                    std::future::pending::<Result<(String, Option<String>)>>().await
+                },
+            )
+            .await
+        });
+        ready.await.unwrap();
+        let mut schedule = clash_client_core::subscription::schedule::Schedule::default();
+        {
+            let owner = shared.lock().await;
+            assert!(
+                owner
+                    .prepare_scheduled_subscription(&mut schedule, 160)
+                    .unwrap()
+                    .is_none()
+            );
+            owner.subscription_updates.cancel();
+        }
+        assert!(manual.await.unwrap().is_err());
+        let (mut job, pending, _) = shared
+            .lock()
+            .await
+            .prepare_scheduled_subscription(&mut schedule, 160)
+            .unwrap()
+            .expect("a busy manual update must not consume the scheduled attempt");
+        assert_eq!(pending.profile.id, profile.id);
+        let (started, ready) = oneshot::channel();
+        let scheduled = tokio::spawn(async move {
+            job.download(
+                async {
+                    started.send(()).unwrap();
+                    std::future::pending::<Result<()>>().await
+                },
+                &mut None,
+            )
+            .await
+        });
+        ready.await.unwrap();
+        let error = Engine::import_remote_with(
+            &shared,
+            profile.name,
+            profile.source,
+            Some(profile.id),
+            true,
+            None,
+            |_, _| async move { bail!("scheduled gate did not stop manual download") },
+        )
+        .await
+        .unwrap_err();
+        assert!(format!("{error:#}").contains("订阅正在更新"));
+        shared.lock().await.subscription_updates.cancel();
+        assert!(scheduled.await.unwrap().is_err());
+        assert!(
+            shared
+                .lock()
+                .await
+                .subscription_updates
+                .begin("busy")
+                .is_ok()
+        );
     }
 }

@@ -2,7 +2,7 @@
 use slint::{
     ComponentHandle,
     platform::{
-        Platform, PlatformError, WindowAdapter,
+        Platform, PlatformError, WindowAdapter, WindowEventDispatchResult,
         software_renderer::{MinimalSoftwareWindow, RepaintBufferType},
     },
 };
@@ -10,9 +10,47 @@ use std::{cell::Cell, rc::Rc, time::Duration};
 
 slint::slint! {
     import { ListView, ListHeader, MField, MDragHandle } from "../ui/mobile/shared/controls.slint";
+    import { Field } from "../ui/components/controls.slint";
     import { RuleDragHandle } from "../ui/components/rule-drag.slint";
     import { ListReorderGesture, ListReorderPreview } from "../ui/components/list-reorder.slint";
     import { PageSurface } from "../ui/components/motion.slint";
+    import { MobileFrame } from "../ui/mobile/shared/frame.slint";
+    import { MobileView } from "../ui/mobile/shared/state.slint";
+
+    export component MobileNoticeProbe inherits Window {
+        preferred-width: 393px; preferred-height: 852px;
+        forward-focus: surface;
+        in-out property <string> notice <=> MobileView.notice;
+        in-out property <bool> notice-error <=> MobileView.notice-error;
+        in-out property <bool> notice-critical <=> MobileView.notice-critical;
+        in-out property <int> detail <=> MobileView.detail;
+        in-out property <string> draft <=> MobileView.profile-name;
+        surface := MobileFrame {
+            width: parent.width; height: parent.height;
+            primary-pages: [0, 1, 2, 10, 9];
+            sidebar-pages: [0, 1, 2, 3, 4, 5, 6, 7, 8];
+            sidebar-footer-pages: [9];
+        }
+    }
+
+    export component InputFieldsProbe inherits Window {
+        preferred-width: 320px; preferred-height: 160px;
+        in-out property <string> mobile-text <=> mobile.text;
+        in-out property <string> desktop-text <=> desktop.text;
+        out property <bool> mobile-placeholder: mobile.placeholder-visible;
+        out property <bool> desktop-placeholder: desktop.placeholder-visible;
+        public function focus-field(use-mobile: bool) {
+            if use-mobile { mobile.focus(); } else { desktop.focus(); }
+        }
+        mobile := MField {
+            x: 0px; y: 0px; width: parent.width;
+            placeholder: "Mobile placeholder";
+        }
+        desktop := Field {
+            x: 0px; y: 80px; width: parent.width;
+            placeholder: "Desktop placeholder";
+        }
+    }
 
     export component LockedPageProbe inherits Window {
         preferred-width: 300px; preferred-height: 240px;
@@ -683,4 +721,101 @@ fn mobile_list_stacks_rows_and_keeps_sparse_content_at_the_top() {
     click();
     assert_eq!(locked.get_clicks(), 2);
     locked.hide().unwrap();
+
+    let fields = InputFieldsProbe::new().unwrap();
+    adapter.set_size(slint::PhysicalSize::new(320, 160));
+    fields.show().unwrap();
+    for mobile in [true, false] {
+        fields.invoke_focus_field(mobile);
+        let placeholder = || {
+            if mobile {
+                fields.get_mobile_placeholder()
+            } else {
+                fields.get_desktop_placeholder()
+            }
+        };
+        let text = || {
+            if mobile {
+                fields.get_mobile_text()
+            } else {
+                fields.get_desktop_text()
+            }
+        };
+        let composition = |preedit: &str, committed: &str, commit: bool| {
+            let mut key_event = i_slint_core::input::KeyEvent::default();
+            key_event.text = committed.into();
+            fields.window().dispatch_event(WindowEvent::internal(
+                i_slint_core::input::InternalKeyEvent {
+                    event_type: if commit {
+                        i_slint_core::input::KeyEventType::CommitComposition
+                    } else {
+                        i_slint_core::input::KeyEventType::UpdateComposition
+                    },
+                    preedit_text: preedit.into(),
+                    key_event,
+                    ..Default::default()
+                },
+            ));
+            frame(&adapter, 320, 160);
+        };
+        assert!(placeholder());
+        composition("pin", "", false);
+        assert_eq!(text(), "");
+        assert!(
+            !placeholder(),
+            "uncommitted IME text must hide the placeholder on both hosts"
+        );
+        composition("", "", false);
+        assert!(placeholder(), "cancelled composition must restore the hint");
+        composition("拼", "", false);
+        assert!(!placeholder());
+        composition("", "拼音 🙂", true);
+        assert_eq!(text(), "拼音 🙂");
+        assert!(!placeholder());
+        if mobile {
+            fields.set_mobile_text("".into());
+        } else {
+            fields.set_desktop_text("".into());
+        }
+        frame(&adapter, 320, 160);
+        assert!(
+            placeholder(),
+            "clearing committed text must restore the hint"
+        );
+    }
+    fields.hide().unwrap();
+
+    adapter.set_size(slint::PhysicalSize::new(393, 852));
+    let notice = MobileNoticeProbe::new().unwrap();
+    notice.set_detail(3);
+    notice.set_draft("Unchanged subscription draft".into());
+    notice.show().unwrap();
+    for critical in [false, true] {
+        notice.set_notice_error(true);
+        notice.set_notice_critical(critical);
+        notice.set_notice("A recoverable or critical error".into());
+        frame(&adapter, 393, 852);
+        advance(&clock, Duration::from_millis(200));
+        let pressed = notice
+            .window()
+            .dispatch_event_with_result(WindowEvent::KeyPressed {
+                text: slint::platform::Key::Back.into(),
+            })
+            .unwrap();
+        let released = notice
+            .window()
+            .dispatch_event_with_result(WindowEvent::KeyReleased {
+                text: slint::platform::Key::Back.into(),
+            })
+            .unwrap();
+        assert!(
+            matches!(pressed, WindowEventDispatchResult::Accepted)
+                || matches!(released, WindowEventDispatchResult::Accepted),
+            "Android Back must be consumed instead of finishing the Activity"
+        );
+        assert!(notice.get_notice().is_empty());
+        assert_eq!(notice.get_detail(), 3);
+        assert_eq!(notice.get_draft().as_str(), "Unchanged subscription draft");
+    }
+    notice.hide().unwrap();
 }

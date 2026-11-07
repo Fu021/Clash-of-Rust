@@ -24,7 +24,7 @@
     "python_windows_arm64": "3.15.2",
     "tailscale": "1.104.5",
     "tailscale_bootstrap": "1.104.5",
-    "gradle": "9.8.2"
+    "gradle": "9.9.0"
   },
   "upstream": {
     "android": {
@@ -74,12 +74,12 @@
     },
     "geo": {
       "tag_name": "latest",
-      "published_at": "2026-11-05T02:40:43Z",
+      "published_at": "2026-11-07T02:09:03Z",
       "assets": [
-        {"id": 711792998, "name": "country.mmdb", "size": 7621999, "digest": "sha256:c0c6ea5661a3167abb24bbbaf629605aa3856c425384cbf2897c5a0f41027663", "browser_download_url": "https://api.github.com/repos/MetaCubeX/meta-rules-dat/releases/assets/711792998"},
-        {"id": 711793081, "name": "geoip.dat", "size": 16475153, "digest": "sha256:90b78ab861c1cdc3f871f305f9ceedfb8d6d6329e3a40295e6773e057297384c", "browser_download_url": "https://api.github.com/repos/MetaCubeX/meta-rules-dat/releases/assets/711793081"},
-        {"id": 711792971, "name": "GeoLite2-ASN.mmdb", "size": 9000080, "digest": "sha256:3169b9ea7dad762f6837b95408dadc1173f47be33be2d83b6c90e67a57a7eb2e", "browser_download_url": "https://api.github.com/repos/MetaCubeX/meta-rules-dat/releases/assets/711792971"},
-        {"id": 711793171, "name": "geosite.dat", "size": 4356581, "digest": "sha256:b17c22dbe38b64631f5820d14c000ec1bb9db7636d0bf6599a166f36980e597d", "browser_download_url": "https://api.github.com/repos/MetaCubeX/meta-rules-dat/releases/assets/711793171"}
+        {"id": 719297260, "name": "country.mmdb", "size": 7621999, "digest": "sha256:c0c6ea5661a3167abb24bbbaf629605aa3856c425384cbf2897c5a0f41027663", "browser_download_url": "https://api.github.com/repos/MetaCubeX/meta-rules-dat/releases/assets/719297260"},
+        {"id": 719297301, "name": "geoip.dat", "size": 16475153, "digest": "sha256:90b78ab861c1cdc3f871f305f9ceedfb8d6d6329e3a40295e6773e057297384c", "browser_download_url": "https://api.github.com/repos/MetaCubeX/meta-rules-dat/releases/assets/719297301"},
+        {"id": 719297242, "name": "GeoLite2-ASN.mmdb", "size": 9054248, "digest": "sha256:3f729dfdbca46d6bc83fe084e15e335cef702b46f9d9afb8feaede36180959f4", "browser_download_url": "https://api.github.com/repos/MetaCubeX/meta-rules-dat/releases/assets/719297242"},
+        {"id": 719297374, "name": "geosite.dat", "size": 4355007, "digest": "sha256:ab2c9f7217c91632057a8bff7810a6eb02ce05a8be4342cf7319ec1970d29733", "browser_download_url": "https://api.github.com/repos/MetaCubeX/meta-rules-dat/releases/assets/719297374"}
       ]
     },
     "nsis": {
@@ -89,9 +89,9 @@
       "verification_source": "https://github.com/microsoft/winget-pkgs/blob/master/manifests/n/NSIS/NSIS/3.13/NSIS.NSIS.installer.yaml"
     },
     "gradle": {
-      "version": "9.8.2",
-      "url": "https://services.gradle.org/distributions/gradle-9.8.2-bin.zip",
-      "checksum_url": "https://services.gradle.org/distributions/gradle-9.8.2-bin.zip.sha256"
+      "version": "9.9.0",
+      "url": "https://services.gradle.org/distributions/gradle-9.9.0-bin.zip",
+      "checksum_url": "https://services.gradle.org/distributions/gradle-9.9.0-bin.zip.sha256"
     },
     "tailscale": {
       "version": "1.104.5"

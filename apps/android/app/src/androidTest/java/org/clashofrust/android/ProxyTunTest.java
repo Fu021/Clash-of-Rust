@@ -43,17 +43,24 @@ public class ProxyTunTest {
             }
         }
     }
-    private static void pointer(int action,float x,float y,long down,long now) {
+    private static boolean injectPointer(int action,float x,float y,long down,long now) {
         MotionEvent event=MotionEvent.obtain(down,now,action,x,y,0);
         event.setSource(android.view.InputDevice.SOURCE_TOUCHSCREEN);
-        try { assertTrue("Android rejected touch input", InstrumentationRegistry.getInstrumentation().getUiAutomation().injectInputEvent(event,true)); }
+        try { return InstrumentationRegistry.getInstrumentation().getUiAutomation().injectInputEvent(event,true); }
         finally {event.recycle();}
     }
-    private static void tap(float x,float y) {
+    private static void pointer(int action,float x,float y,long down,long now) {
+        assertTrue("Android rejected touch input",injectPointer(action,x,y,down,now));
+    }
+    private static boolean tryTap(float x,float y) {
         long start=SystemClock.uptimeMillis();
-        pointer(MotionEvent.ACTION_DOWN,x,y,start,start);
+        boolean pressed=injectPointer(MotionEvent.ACTION_DOWN,x,y,start,start);
         SystemClock.sleep(50);
-        pointer(MotionEvent.ACTION_UP,x,y,start,SystemClock.uptimeMillis());
+        boolean released=injectPointer(MotionEvent.ACTION_UP,x,y,start,SystemClock.uptimeMillis());
+        return pressed && released;
+    }
+    private static void tap(float x,float y) {
+        assertTrue("Android rejected touch input",tryTap(x,y));
     }
     private static String shell(String command) throws Exception {
         try (InputStream in=new android.os.ParcelFileDescriptor.AutoCloseInputStream(
@@ -81,6 +88,21 @@ public class ProxyTunTest {
             SystemClock.sleep(500);
             return MainActivity.diagnostics().optInt("page",-1)==page;
         });
+    }
+    @Test public void presentationUsesSavedAppearanceAndHandlesNavigation() throws Exception {
+        Context context = InstrumentationRegistry.getInstrumentation().getTargetContext();
+        shell("cmd uimode night no");
+        File settings=new File(context.getFilesDir(),"client/settings.json");
+        settings.getParentFile().mkdirs();
+        JSONObject saved=settings.isFile()?new JSONObject(new String(java.nio.file.Files.readAllBytes(settings.toPath()),StandardCharsets.UTF_8)):new JSONObject();
+        saved.put("theme_mode","dark");
+        saved.put("accent_color","purple");
+        java.nio.file.Files.write(settings.toPath(),saved.toString().getBytes(StandardCharsets.UTF_8));
+        context.startActivity(new Intent(context, MainActivity.class).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK));
+        await("Native UI did not start its core; inspect logcat", CoreBridge::ready);
+        await("Activity did not receive focus",()->inStage(androidx.test.runner.lifecycle.Stage.RESUMED,true));
+        waitForAppWindow();
+        verifyPresentation();
     }
     private static void verifyPresentation() throws Exception {
         new ProxyTunTest().notificationShowsModeAndNodeWithOptionalSpeeds();
@@ -160,9 +182,18 @@ public class ProxyTunTest {
     private static void waitForAppWindow() throws Exception {
         android.app.UiAutomation automation=InstrumentationRegistry.getInstrumentation().getUiAutomation();
         automation.waitForIdle(500,10000);
-        await("Clash window is not the active input window",()-> {
-            android.view.accessibility.AccessibilityNodeInfo root=automation.getRootInActiveWindow();
-            return root!=null && "org.clashofrust.android".contentEquals(root.getPackageName());
+        await("Clash window is not visible and focused",()-> {
+            MainActivity activity=resumedActivity();
+            if (activity==null) return false;
+            java.util.concurrent.atomic.AtomicBoolean visible=new java.util.concurrent.atomic.AtomicBoolean();
+            InstrumentationRegistry.getInstrumentation().runOnMainSync(()-> {
+                android.view.View decor=activity.getWindow().getDecorView();
+                visible.set(decor.isAttachedToWindow() && decor.isShown()
+                    && decor.getWidth()>0 && decor.getHeight()>0);
+            });
+            JSONObject ui=MainActivity.diagnostics();
+            return visible.get() && ui.optDouble("scale")>0
+                && ui.optDouble("width")>0 && ui.optDouble("height")>0;
         });
     }
     private static boolean inStage(androidx.test.runner.lifecycle.Stage stage,boolean focused) {
@@ -183,15 +214,68 @@ public class ProxyTunTest {
         });
         return result.get();
     }
-    private static void tapTarget(String name) throws Exception {
+    private static boolean tryTapTarget(String name) throws Exception {
         JSONObject ui=MainActivity.diagnostics();
+        assertTrue("Refusing to touch a stale Slint snapshot",ui.optBoolean("live"));
         JSONArray bounds=ui.getJSONArray(name);
         assertEquals("Expected the real Slint control bounds",4,bounds.length());
         assertTrue("Control has no width",bounds.getDouble(2)>0);
         assertTrue("Control has no height",bounds.getDouble(3)>0);
         float scale=(float)ui.getDouble("scale");
-        tap((float)(bounds.getDouble(0)+bounds.getDouble(2)/2)*scale,
+        return tryTap((float)(bounds.getDouble(0)+bounds.getDouble(2)/2)*scale,
             (float)(bounds.getDouble(1)+bounds.getDouble(3)/2)*scale);
+    }
+    private static void tapTarget(String name) throws Exception {
+        java.util.concurrent.atomic.AtomicReference<String> previous=new java.util.concurrent.atomic.AtomicReference<>();
+        java.util.concurrent.atomic.AtomicLong stableSince=new java.util.concurrent.atomic.AtomicLong();
+        await("Control "+name+" layout did not settle before touch",()-> {
+            JSONObject ui=MainActivity.diagnostics();
+            if (!ui.optBoolean("live")) return false;
+            String geometry=ui.getJSONArray(name).toString()+ui.getDouble("keyboard_inset");
+            long now=SystemClock.uptimeMillis();
+            if (!geometry.equals(previous.getAndSet(geometry))) stableSince.set(now);
+            return now-stableSince.get()>=250;
+        });
+        assertTrue("Android rejected touch input",tryTapTarget(name));
+    }
+    private static void dismissErrorDialogIfPresent() throws Exception {
+        JSONObject ui=MainActivity.diagnostics();
+        if (!ui.optBoolean("notice_active") || !ui.optBoolean("notice_error")) return;
+        captureIme("background-error");
+        await("The error dialog close button has no layout",()-> {
+            JSONArray target=MainActivity.diagnostics().optJSONArray("notice_close_target");
+            return target!=null && target.length()==4 && target.optDouble(2)>0 && target.optDouble(3)>0;
+        });
+        tapTarget("notice_close_target");
+        await("The background error dialog did not close",
+            ()->!MainActivity.diagnostics().optBoolean("notice_active"));
+    }
+    private static void tapVisibleProfileField(String field) throws Exception {
+        dismissErrorDialogIfPresent();
+        await("Could not scroll the subscription "+field+" into its viewport",()-> {
+            JSONObject ui=MainActivity.diagnostics();
+            if (!ui.optBoolean("live")) return false;
+            JSONArray target=ui.getJSONArray("profile_"+field+"_target");
+            JSONArray viewport=ui.getJSONArray("profile_editor_viewport");
+            double center=target.getDouble(1)+target.getDouble(3)/2;
+            double top=viewport.getDouble(1), bottom=top+viewport.getDouble(3);
+            if (center>=top+4 && center<=bottom-4) return true;
+            assertTrue("Subscription scroll viewport is too short to swipe",bottom-top>16);
+            float scale=(float)ui.getDouble("scale");
+            float horizontal=(float)(viewport.getDouble(0)+8)*scale;
+            float upper=(float)(top+4)*scale, lower=(float)(bottom-4)*scale;
+            float start=center>bottom?lower:upper, end=center>bottom?upper:lower;
+            long down=SystemClock.uptimeMillis();
+            pointer(MotionEvent.ACTION_DOWN,horizontal,start,down,down);
+            for (int index=1;index<=10;index++) {
+                SystemClock.sleep(20);
+                pointer(MotionEvent.ACTION_MOVE,horizontal,start+(end-start)*index/10,down,SystemClock.uptimeMillis());
+            }
+            pointer(MotionEvent.ACTION_UP,horizontal,end,down,SystemClock.uptimeMillis());
+            SystemClock.sleep(750);
+            return false;
+        });
+        tapTarget("profile_"+field+"_target");
     }
     private static android.view.View inputEditor(android.view.View view) {
         if ("SlintInputView".equals(view.getClass().getSimpleName())) return view;
@@ -204,6 +288,22 @@ public class ProxyTunTest {
         }
         return null;
     }
+    @SuppressWarnings("deprecation")
+    private static int imeBottom(android.view.View editor) {
+        android.view.WindowInsets insets=editor.getRootWindowInsets();
+        if (Build.VERSION.SDK_INT>=30) {
+            return insets!=null && insets.isVisible(android.view.WindowInsets.Type.ime())
+                ? insets.getInsets(android.view.WindowInsets.Type.ime()).bottom : 0;
+        }
+        android.view.View root=editor.getRootView();
+        android.graphics.Rect frame=new android.graphics.Rect();
+        root.getWindowVisibleDisplayFrame(frame);
+        int[] origin=new int[2];
+        root.getLocationOnScreen(origin);
+        int obscured=Math.max(0,origin[1]+root.getHeight()-frame.bottom);
+        int navigation=insets!=null ? insets.getStableInsetBottom() : 0;
+        return obscured>navigation ? obscured : 0;
+    }
     private static boolean imeVisible() {
         java.util.concurrent.atomic.AtomicBoolean visible=new java.util.concurrent.atomic.AtomicBoolean();
         MainActivity activity=resumedActivity();
@@ -211,16 +311,57 @@ public class ProxyTunTest {
         InstrumentationRegistry.getInstrumentation().runOnMainSync(()-> {
             android.view.View editor=inputEditor(activity.getWindow().getDecorView());
             if (editor==null || !editor.hasFocus()) return;
-            android.view.WindowInsets insets=editor.getRootWindowInsets();
             android.view.inputmethod.InputMethodManager manager=activity.getSystemService(
                 android.view.inputmethod.InputMethodManager.class);
-            visible.set(insets!=null && insets.isVisible(android.view.WindowInsets.Type.ime())
-                && insets.getInsets(android.view.WindowInsets.Type.ime()).bottom>0
-                && manager.isActive(editor));
+            if (!manager.isActive(editor)) return;
+            visible.set(imeBottom(editor)>0);
         });
         return visible.get();
     }
-    private static void commitImeText(String text) {
+    private static void assertImeLayout(String field) throws Exception {
+        MainActivity activity=resumedActivity();
+        assertNotNull("No resumed input Activity",activity);
+        java.util.concurrent.atomic.AtomicInteger bottom=new java.util.concurrent.atomic.AtomicInteger();
+        InstrumentationRegistry.getInstrumentation().runOnMainSync(()-> {
+            android.view.View editor=inputEditor(activity.getWindow().getDecorView());
+            assertNotNull("Slint input editor is missing",editor);
+            bottom.set(imeBottom(editor));
+        });
+        assertTrue("Android IME has no occluded area",bottom.get()>0);
+        JSONObject ui=MainActivity.diagnostics();
+        double occluded=bottom.get()/ui.getDouble("scale");
+        double expected=Math.max(0,occluded-ui.getDouble("safe_bottom"));
+        assertTrue("Android IME must extend above the navigation area",expected>0);
+        assertEquals("Keyboard height must exclude the bottom safe area exactly once",
+            expected,ui.getDouble("keyboard_inset"),2);
+        JSONArray target=ui.getJSONArray("profile_"+field+"_target");
+        JSONArray viewport=ui.getJSONArray("profile_editor_viewport");
+        assertEquals("Missing subscription scroll viewport",4,viewport.length());
+        assertTrue("Subscription "+field+" is above the scroll viewport",
+            target.getDouble(1)>=viewport.getDouble(1)-2);
+        assertTrue("Subscription "+field+" is clipped by the scroll viewport",
+            target.getDouble(1)+target.getDouble(3)<=viewport.getDouble(1)+viewport.getDouble(3)+2);
+        assertTrue("Subscription "+field+" is covered by the keyboard",
+            target.getDouble(1)+target.getDouble(3)<=ui.getDouble("height")-occluded+2);
+    }
+    private static void commitImeText(String field,String text) throws Exception {
+        await("Android input connection did not synchronize the focused "+field,()-> {
+            int expected=MainActivity.diagnostics().getInt("profile_"+field+"_length");
+            java.util.concurrent.atomic.AtomicBoolean synchronizedText=new java.util.concurrent.atomic.AtomicBoolean();
+            MainActivity activity=resumedActivity();
+            if (activity==null) return false;
+            InstrumentationRegistry.getInstrumentation().runOnMainSync(()-> {
+                android.view.View editor=inputEditor(activity.getWindow().getDecorView());
+                if (editor==null || !editor.hasFocus()) return;
+                android.view.inputmethod.InputConnection connection=editor.onCreateInputConnection(
+                    new android.view.inputmethod.EditorInfo());
+                if (!(connection instanceof android.view.inputmethod.BaseInputConnection)) return;
+                android.text.Editable editable=((android.view.inputmethod.BaseInputConnection)connection).getEditable();
+                synchronizedText.set(editable!=null
+                    && Character.codePointCount(editable,0,editable.length())==expected);
+            });
+            return synchronizedText.get();
+        });
         MainActivity activity=resumedActivity();
         assertNotNull("No resumed input Activity",activity);
         InstrumentationRegistry.getInstrumentation().runOnMainSync(()-> {
@@ -237,6 +378,7 @@ public class ProxyTunTest {
             assertNotNull("Input connection has no editable text",editable);
             connection.beginBatchEdit();
             try {
+                assertTrue("Input connection did not finish composition",connection.finishComposingText());
                 assertTrue(connection.setSelection(0,editable.length()));
                 assertTrue("Input connection rejected committed text",connection.commitText(text,1));
             } finally {connection.endBatchEdit();}
@@ -245,13 +387,10 @@ public class ProxyTunTest {
     private static void captureIme(String phase) throws Exception {
         Context context=InstrumentationRegistry.getInstrumentation().getTargetContext();
         File directory=new File(context.getExternalFilesDir(null),"ime-report");
-        if (Boolean.parseBoolean(InstrumentationRegistry.getArguments().getString("ime_probe","false"))) {
-            boolean systemAnimation=Boolean.parseBoolean(InstrumentationRegistry.getArguments()
-                .getString("ime_system_animation","false"));
-            int round=Integer.parseInt(InstrumentationRegistry.getArguments().getString("ime_round","1"));
-            assertTrue(round>=1 && round<=3);
-            directory=new File(directory,(systemAnimation?"system-animation":"production")+"/round-"+round);
-        }
+        boolean probe=Boolean.parseBoolean(InstrumentationRegistry.getArguments().getString("ime_probe","false"));
+        int round=Integer.parseInt(InstrumentationRegistry.getArguments().getString("ime_round","1"));
+        assertTrue(round>=1 && round<=3);
+        directory=new File(directory,(probe?"production":"regression")+"/round-"+round);
         assertTrue(directory.isDirectory() || directory.mkdirs());
         for (String service:new String[]{"input_method","window windows"}) {
             String name=service.startsWith("window")?"windows":"input-method";
@@ -276,6 +415,7 @@ public class ProxyTunTest {
                     .put("editor_focus",editor!=null && editor.hasFocus())
                     .put("editor_active",editor!=null && activity.getSystemService(
                         android.view.inputmethod.InputMethodManager.class).isActive(editor))
+                    .put("ime_occlusion_bottom",editor!=null ? imeBottom(editor) : 0)
                     .put("decor_height",decor.getHeight())
                     .put("visible_frame_bottom",visibleFrame.bottom)
                     .put("soft_input_mode",activity.getWindow().getAttributes().softInputMode)
@@ -300,6 +440,7 @@ public class ProxyTunTest {
         try {
             await("Keyboard probe Activity did not receive focus",()->inStage(androidx.test.runner.lifecycle.Stage.RESUMED,true));
             await("Keyboard probe core did not start",CoreBridge::ready);
+            dismissErrorDialogIfPresent();
             tab(2,2);
             await("Keyboard probe add control has no layout",()-> {
                 JSONArray target=MainActivity.diagnostics().optJSONArray("profile_add_target");
@@ -307,17 +448,7 @@ public class ProxyTunTest {
             });
             tapTarget("profile_add_target");
             await("Keyboard probe editor did not open",()->MainActivity.diagnostics().optInt("detail")==3);
-            boolean systemAnimation=Boolean.parseBoolean(InstrumentationRegistry.getArguments()
-                .getString("ime_system_animation","false"));
-            if (systemAnimation && Build.VERSION.SDK_INT>=30) {
-                MainActivity activity=resumedActivity();
-                assertNotNull(activity);
-                InstrumentationRegistry.getInstrumentation().runOnMainSync(()-> {
-                    android.view.View editor=inputEditor(activity.getWindow().getDecorView());
-                    assertNotNull(editor);
-                    editor.setWindowInsetsAnimationCallback(null);
-                });
-            }
+            dismissErrorDialogIfPresent();
             captureIme("before-focus");
             for (String field:new String[]{"name","source"}) {
                 tapTarget("profile_"+field+"_target");
@@ -345,6 +476,38 @@ public class ProxyTunTest {
             throw error;
         }
     }
+    private static void verifyRestoredImeAndHide(String orientation) throws Exception {
+        java.util.concurrent.atomic.AtomicReference<String> previous=new java.util.concurrent.atomic.AtomicReference<>();
+        java.util.concurrent.atomic.AtomicLong stableSince=new java.util.concurrent.atomic.AtomicLong();
+        await("Restored "+orientation+" keyboard state did not settle",()-> {
+            JSONObject ui=MainActivity.diagnostics();
+            if (!ui.optBoolean("live")) return false;
+            String state=imeVisible()+"/"+ui.getDouble("keyboard_inset")+"/"
+                +ui.getBoolean("profile_name_focused")+"/"+ui.getBoolean("profile_source_focused");
+            long now=SystemClock.uptimeMillis();
+            if (!state.equals(previous.getAndSet(state))) stableSince.set(now);
+            return now-stableSince.get()>=500;
+        });
+        if (imeVisible()) {
+            await("Restored "+orientation+" Slint keyboard inset did not synchronize",
+                ()->MainActivity.diagnostics().optDouble("keyboard_inset")>0);
+            JSONObject ui=MainActivity.diagnostics();
+            String field=ui.optBoolean("profile_source_focused")?"source":"name";
+            assertTrue("Restored keyboard has no focused subscription field",
+                ui.optBoolean("profile_"+field+"_focused"));
+            assertImeLayout(field);
+            captureIme(orientation+"-restored-visible");
+            shell("input keyevent KEYCODE_BACK");
+        }
+        await("Restored "+orientation+" IME did not hide after Back",()->!imeVisible()
+            && MainActivity.diagnostics().optDouble("keyboard_inset")==0);
+        assertEquals("Navigation bars must not become a keyboard inset after rotation",
+            0,MainActivity.diagnostics().getDouble("keyboard_inset"),0);
+        captureIme(orientation+"-hidden");
+        assertFalse("The keyboard reopened while capturing "+orientation,imeVisible());
+        assertEquals("Slint keyboard inset changed after hiding "+orientation,
+            0,MainActivity.diagnostics().getDouble("keyboard_inset"),0);
+    }
     @Test public void subscriptionFieldsShowImeAcceptTextAndReopenAfterBack() throws Exception {
         Context context=InstrumentationRegistry.getInstrumentation().getTargetContext();
         shell("settings put system font_scale 1.0");
@@ -353,6 +516,7 @@ public class ProxyTunTest {
             await("Input test Activity did not receive focus",()->inStage(androidx.test.runner.lifecycle.Stage.RESUMED,true));
             waitForAppWindow();
             await("Input test core did not start",CoreBridge::ready);
+            dismissErrorDialogIfPresent();
             tab(2,2);
             await("Add subscription control has no layout",()-> {
                 JSONArray target=MainActivity.diagnostics().optJSONArray("profile_add_target");
@@ -360,36 +524,125 @@ public class ProxyTunTest {
             });
             tapTarget("profile_add_target");
             await("Add subscription did not open",()->MainActivity.diagnostics().optInt("detail")==3);
+            dismissErrorDialogIfPresent();
             captureIme("before-focus");
+            int draftNameLength=MainActivity.diagnostics().getInt("profile_name_length");
+            int draftSourceLength=MainActivity.diagnostics().getInt("profile_source_length");
+            MainActivity.emit("error","检查更新失败：测试网络不可用");
+            await("The background error notice did not appear",()-> {
+                JSONObject ui=MainActivity.diagnostics();
+                JSONArray target=ui.optJSONArray("notice_close_target");
+                return ui.optBoolean("notice_active") && ui.optBoolean("notice_error")
+                    && target!=null && target.length()==4 && target.optDouble(2)>0 && target.optDouble(3)>0;
+            });
+            captureIme("notice-before-close");
+            assertFalse("A recoverable update error must not open a modal",
+                MainActivity.diagnostics().optBoolean("notice_modal"));
+            tapTarget("notice_close_target");
+            await("The error notice did not close",()-> {
+                JSONObject ui=MainActivity.diagnostics();
+                return ui.optBoolean("live") && !ui.optBoolean("notice_active");
+            });
+            assertEquals("Closing the notice must keep the subscription editor open",
+                3,MainActivity.diagnostics().getInt("detail"));
+            assertEquals(draftNameLength,MainActivity.diagnostics().getInt("profile_name_length"));
+            assertEquals(draftSourceLength,MainActivity.diagnostics().getInt("profile_source_length"));
+            MainActivity.emit("critical","内核启动失败：测试权限不足。\n原订阅和输入内容均已保留。");
+            await("The critical error dialog did not appear",()->MainActivity.diagnostics().optBoolean("notice_modal"));
+            shell("input keyevent KEYCODE_BACK");
+            await("Android Back did not dismiss the error dialog while keeping the Activity active",()-> {
+                JSONObject ui=MainActivity.diagnostics();
+                return ui.optBoolean("live") && !ui.optBoolean("notice_active")
+                    && inStage(androidx.test.runner.lifecycle.Stage.RESUMED,true);
+            });
+            assertEquals("Back must preserve the editor under the error dialog",
+                3,MainActivity.diagnostics().getInt("detail"));
+            assertEquals(draftNameLength,MainActivity.diagnostics().getInt("profile_name_length"));
+            assertEquals(draftSourceLength,MainActivity.diagnostics().getInt("profile_source_length"));
             int iteration=0;
-            for (String field:new String[]{"name","source","name"}) {
-                tapTarget("profile_"+field+"_target");
-                await("Subscription "+field+" did not gain Slint focus",()-> {
-                    if (MainActivity.diagnostics().optBoolean("profile_"+field+"_focused")) return true;
-                    tapTarget("profile_"+field+"_target");
-                    SystemClock.sleep(250);
-                    return MainActivity.diagnostics().optBoolean("profile_"+field+"_focused");
-                });
+            for (String field:new String[]{"name","source","name","source","name"}) {
+                tapVisibleProfileField(field);
+                await("Subscription "+field+" did not gain Slint focus",
+                    ()->MainActivity.diagnostics().optBoolean("profile_"+field+"_focused"));
                 await("Focused subscription "+field+" did not show the actual Android IME",ProxyTunTest::imeVisible);
                 await("Slint did not receive the keyboard inset",()->MainActivity.diagnostics().optDouble("keyboard_inset")>0);
                 String text=field.equals("name")?"ImeProbe":"https://example.invalid/ime";
-                commitImeText(text);
+                commitImeText(field,text);
                 await("IME text did not reach the subscription "+field,()->MainActivity.diagnostics()
                     .optInt("profile_"+field+"_length",-1)==text.length());
+                SystemClock.sleep(1500);
+                assertEquals("Committed text changed after the input connection settled",
+                    text.length(),MainActivity.diagnostics().getInt("profile_"+field+"_length"));
+                assertTrue("Android IME disappeared after switching to "+field,imeVisible());
+                assertTrue("Slint lost the keyboard inset after switching to "+field,
+                    MainActivity.diagnostics().optDouble("keyboard_inset")>0);
+                assertImeLayout(field);
                 captureIme((iteration++)+"-"+field+"-visible");
+                if (iteration<3) continue;
                 shell("input keyevent KEYCODE_BACK");
                 await("Android IME did not hide after Back",()->!imeVisible()
                     && MainActivity.diagnostics().optDouble("keyboard_inset")==0);
                 assertEquals("Back should hide the IME and keep the editor open",3,MainActivity.diagnostics().getInt("detail"));
+                captureIme((iteration-1)+"-"+field+"-hidden");
             }
             shell("am start -W -a android.intent.action.MAIN -c android.intent.category.HOME");
             await("Input test Activity did not enter background",()->inStage(androidx.test.runner.lifecycle.Stage.STOPPED,false));
             shell("am start -W -n org.clashofrust.android/.MainActivity");
             await("Input test Activity did not resume",()->inStage(androidx.test.runner.lifecycle.Stage.RESUMED,true));
             waitForAppWindow();
-            tapTarget("profile_source_target");
+            captureIme("before-resumed-tap");
+            verifyRestoredImeAndHide("foreground");
+            tapVisibleProfileField("source");
+            await("Resumed subscription source did not receive touch focus",
+                ()->MainActivity.diagnostics().optBoolean("profile_source_focused"));
             await("Resumed subscription editor did not show the IME",ProxyTunTest::imeVisible);
+            await("Resumed Slint editor did not receive the keyboard inset",
+                ()->MainActivity.diagnostics().optDouble("keyboard_inset")>0);
+            SystemClock.sleep(1500);
+            assertImeLayout("source");
             captureIme("after-resume");
+            shell("input keyevent KEYCODE_BACK");
+            await("Resumed IME did not hide",()->!imeVisible()
+                && MainActivity.diagnostics().optDouble("keyboard_inset")==0);
+            android.app.UiAutomation automation=InstrumentationRegistry.getInstrumentation().getUiAutomation();
+            try {
+                assertTrue("Window manager rejected landscape rotation",
+                    automation.setRotation(android.app.UiAutomation.ROTATION_FREEZE_90));
+                await("Input surface did not enter landscape",()-> {
+                    JSONObject ui=MainActivity.diagnostics();
+                    return ui.optDouble("width")>ui.optDouble("height");
+                });
+                SystemClock.sleep(1500);
+                verifyRestoredImeAndHide("landscape");
+                for (String field:new String[]{"name","source"}) {
+                    tapVisibleProfileField(field);
+                    await("Landscape subscription "+field+" did not gain focus",
+                        ()->MainActivity.diagnostics().optBoolean("profile_"+field+"_focused"));
+                    await("Landscape editor did not show the IME",ProxyTunTest::imeVisible);
+                    await("Landscape Slint editor did not receive the keyboard inset",
+                        ()->MainActivity.diagnostics().optDouble("keyboard_inset")>0);
+                    SystemClock.sleep(1500);
+                    assertImeLayout(field);
+                    captureIme("landscape-"+field+"-visible");
+                }
+                shell("input keyevent KEYCODE_BACK");
+                await("Landscape keyboard inset did not clear",()->!imeVisible()
+                    && MainActivity.diagnostics().optDouble("keyboard_inset")==0);
+            } catch (Exception | AssertionError error) {
+                try {captureIme("landscape-failure");}
+                catch (Exception | AssertionError snapshot) {error.addSuppressed(snapshot);}
+                throw error;
+            } finally {
+                automation.setRotation(android.app.UiAutomation.ROTATION_FREEZE_0);
+                try {
+                    await("Input surface did not return to portrait",()-> {
+                        JSONObject ui=MainActivity.diagnostics();
+                        return ui.optDouble("height")>ui.optDouble("width");
+                    });
+                } finally {automation.setRotation(android.app.UiAutomation.ROTATION_UNFREEZE);}
+            }
+            SystemClock.sleep(1500);
+            verifyRestoredImeAndHide("portrait");
             captureIme("final");
         } catch (Exception | AssertionError error) {
             try {captureIme("failure");}
@@ -707,20 +960,11 @@ public class ProxyTunTest {
     }
     @Test public void localProxyAndRealTunCarryTrafficAndDisconnectCleanly() throws Exception {
         Context context = InstrumentationRegistry.getInstrumentation().getTargetContext();
-        // A light emulator must still launch an explicitly dark app correctly
-        // on its first frame, before the core/settings worker is ready.
-        shell("cmd uimode night no");
-        File settings=new File(context.getFilesDir(),"client/settings.json");
-        settings.getParentFile().mkdirs();
-        JSONObject saved=settings.isFile()?new JSONObject(new String(java.nio.file.Files.readAllBytes(settings.toPath()),StandardCharsets.UTF_8)):new JSONObject();
-        saved.put("theme_mode","dark");
-        saved.put("accent_color","purple");
-        java.nio.file.Files.write(settings.toPath(),saved.toString().getBytes(StandardCharsets.UTF_8));
         context.startActivity(new Intent(context, MainActivity.class).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK));
         await("Native UI did not start its core; inspect logcat", CoreBridge::ready);
         await("Activity did not receive focus",()->inStage(androidx.test.runner.lifecycle.Stage.RESUMED,true));
         waitForAppWindow();
-        verifyPresentation();
+        heldResponseClassifiesTruncationAsTransportFailure();
         String raw = CoreBridge.config();
         verifyFirstVpnConsent(context,raw);
         String secret = value(raw,"secret");

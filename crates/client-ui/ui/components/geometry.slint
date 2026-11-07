@@ -1,0 +1,14 @@
+export global UiGeometry {
+    in-out property <int> revision: 0;
+    callback measured(string, [length]);
+}
+
+export component GeometryTarget {
+    in property <string> key;
+    in property <[length]> bounds;
+    property <int> revision: UiGeometry.revision;
+    changed revision => { if root.key != "" { UiGeometry.measured(root.key, root.bounds); } }
+    changed bounds => { if root.key != "" { UiGeometry.measured(root.key, root.bounds); } }
+    changed key => { if root.key != "" { UiGeometry.measured(root.key, root.bounds); } }
+    init => { if root.key != "" { UiGeometry.measured(root.key, root.bounds); } }
+}

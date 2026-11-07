@@ -6,8 +6,9 @@ import { IosSettings } from "settings.slint";
 // iOS owns its routes and native settings independently of Android.
 export component IosSurface inherits MobileFrame {
     primary-pages: [0, 1, 2, 10, 9];
-    sidebar-pages: [0, 1, 2, 3, 4, 5, 6, 7, 8, 9];
-    tab-pill: false; title-size: 28px; sidebar-width: 208px; tab-height: 68px;
+    sidebar-pages: [0, 1, 2, 3, 4, 5, 6, 7, 8];
+    sidebar-footer-pages: [9];
+    tab-pill: false; title-size: 31px; sidebar-width: 236px; tab-height: 60px;
     centered-modal: true;
     if MobileView.page == 0: MobileHome { }
     if MobileView.page == 1: MobileProxies { }

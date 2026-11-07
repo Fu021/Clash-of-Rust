@@ -1,6 +1,7 @@
 mod args;
 mod backend;
 mod commands;
+mod diagnostics;
 mod host_network;
 mod output;
 mod service;
@@ -13,6 +14,7 @@ fn main() {
     if let Some(result) = clash_client_runtime::claude_check::system::helper_main() {
         if let Err(error) = result {
             eprintln!("{error:#}");
+            diagnostics::failure_hint(None);
             std::process::exit(1);
         }
         return;
@@ -33,6 +35,7 @@ fn main() {
         #[cfg(windows)]
         if let Err(error) = clash_client_runtime::platform::notification::prepare_process() {
             eprintln!("通知初始化失败：{error:#}");
+            diagnostics::failure_hint(Some(&args));
         }
         anyhow::ensure!(
             !(args.flag("json") && args.flag("jsonl")),
@@ -80,6 +83,9 @@ fn main() {
         };
         if code != 0 {
             eprintln!("cor: {error:#}");
+            if code != 130 {
+                diagnostics::failure_hint(None);
+            }
         }
         std::process::exit(code);
     }

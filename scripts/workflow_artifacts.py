@@ -274,6 +274,47 @@ def wait_package(client, run_id, system, arch, expected_commit, timeout=1200):
         time.sleep(15)
 
 
+def fetch_package_inputs(client, run_id, arch, root, expected_commit, expected_ci_run_id):
+    if type(expected_ci_run_id) is not int or expected_ci_run_id <= 0:
+        raise ValueError('Package inputs require a verified source CI run')
+    wait_package(client, run_id, 'linux', arch, expected_commit)
+    records = client(f'/actions/runs/{run_id}/artifacts?per_page=100')['artifacts']
+    suffix = 'amd64' if arch == 'x64' else 'arm64'
+    package = f'Clash-of-Rust-{package_version()}-linux-{suffix}.deb'
+    for name, folder, expected in [
+            (f'package-linux-{arch}', root/'dist',
+             {package, package+'.sha256', 'package-receipt.json'}),
+            (f'linux-tun-test-{arch}', root/'target', {'linux-tun-test'})]:
+        matches = [record for record in records if record['name'] == name]
+        if len(matches) != 1 or matches[0].get('expired'):
+            raise ValueError('Package artifact duplicated, expired or missing: '+name)
+        artifact = matches[0]
+        data = client(f"/actions/artifacts/{artifact['id']}/zip", raw=True)
+        if artifact.get('digest') != 'sha256:'+hashlib.sha256(data).hexdigest():
+            raise ValueError('Package artifact checksum mismatch: '+name)
+        with zipfile.ZipFile(io.BytesIO(data)) as archive:
+            entries = archive.infolist()
+            if (len(entries) != len(expected) or {entry.filename for entry in entries} != expected
+                    or any(not safe_name(entry.filename) or entry.is_dir()
+                           or (entry.external_attr >> 16) & 0o170000 == 0o120000
+                           or entry.file_size > 512*1024*1024 for entry in entries)):
+                raise ValueError('Unexpected package artifact members: '+name)
+            folder.mkdir(parents=True, exist_ok=True)
+            for entry in entries:
+                with archive.open(entry) as source, (folder/entry.filename).open('wb') as target:
+                    shutil.copyfileobj(source, target)
+    receipt = json.loads((root/'dist/package-receipt.json').read_text())
+    if (receipt.get('schema') != 1 or receipt.get('tests_passed') is not True
+            or receipt.get('system') != 'linux' or receipt.get('arch') != arch
+            or receipt.get('version') != package_version()
+            or receipt.get('ci_run_id') != expected_ci_run_id
+            or receipt.get('commit') != expected_commit or receipt.get('package') != package
+            or receipt.get('sha256') != sha256(root/'dist'/package)
+            or (root/'dist'/(package+'.sha256')).read_text().strip() != receipt.get('sha256')
+            or receipt.get('linux_tun_test_sha256') != sha256(root/'target/linux-tun-test')):
+        raise ValueError('Package receipt differs from the selected source or binaries')
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('operation', choices=('export', 'fetch', 'wait'))

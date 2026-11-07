@@ -85,7 +85,7 @@ impl<T: Clone> List<T> {
 }
 include!(concat!(env!("OUT_DIR"), "/contract.rs"));
 
-pub const PROTOCOL: u32 = 9;
+pub const PROTOCOL: u32 = 14;
 pub const LIMIT: usize = 8 * 1024 * 1024;
 #[derive(Debug, Clone, Copy, Default, PartialEq, Serialize, Deserialize)]
 pub struct Size {
@@ -253,7 +253,7 @@ mod tests {
     #[test]
     fn production_contract_round_trip_carries_lists_flags_and_drafts() {
         let data = UiData::default();
-        let models = models::ViewModels::default();
+        let mut models = models::ViewModels::default();
         models.attach(&data);
         data.set_edit_name("未保存订阅".into());
         data.set_rule_payload("google.com".into());
@@ -269,7 +269,23 @@ mod tests {
             message: "完整日志".into(),
             ..Default::default()
         }]);
-        data.set_site_exit_flag("DE".into());
+        data.set_site_exit_flag("🇩🇪".into());
+        data.set_node("🚀 🇯🇵 日本 01".into());
+        models.set_groups(vec![(
+            GroupItem {
+                id: "Proxy".into(),
+                current: "🚀 🇯🇵 日本 01".into(),
+                ..Default::default()
+            },
+            vec![NodePair {
+                left: NodeItem {
+                    name: "🇺🇸 美国 01".into(),
+                    valid: true,
+                    ..Default::default()
+                },
+                ..Default::default()
+            }],
+        )]);
         let packet = HostPacket::Frame {
             data: data.snapshot(),
             view_ready: true,
@@ -286,7 +302,12 @@ mod tests {
         assert_eq!(accepted, 8);
         assert_eq!(decoded.edit_name, "未保存订阅");
         assert_eq!(decoded.rule_payload, "google.com");
-        assert_eq!(decoded.site_exit_flag, "DE");
+        assert_eq!(decoded.site_exit_flag, "🇩🇪");
+        assert_eq!(decoded.node, "🚀 🇯🇵 日本 01");
+        let group = decoded.groups.row_data(0).unwrap();
+        assert_eq!(group.current, "🚀 🇯🇵 日本 01");
+        let node = group.nodes.row_data(0).unwrap().left;
+        assert_eq!(node.name, "🇺🇸 美国 01");
         assert_eq!(decoded.logs.row_data(0).unwrap().message, "完整日志");
         let exclusion = decoded.fake_ip_exclusions.row_data(0).unwrap();
         assert_eq!(exclusion.domain, "localhost");

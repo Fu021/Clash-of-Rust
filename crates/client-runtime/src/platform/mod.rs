@@ -4,8 +4,10 @@ use anyhow::{Context, Result, bail};
 use serde::{Deserialize, Serialize};
 use std::path::Path;
 
+pub mod host_network;
 pub mod memory;
 pub(crate) mod network;
+pub use network::{HostInfo, host_info};
 pub mod notification;
 mod proxy_state;
 pub use proxy_state::{ProxyState, ProxyValue};

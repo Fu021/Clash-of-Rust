@@ -126,6 +126,17 @@ impl State {
         self.status = "更新通道已更改，请检查更新".into();
     }
 
+    pub fn pause_for_protection(&mut self) {
+        self.cancel_download();
+        self.check_id = self.check_id.wrapping_add(1);
+        self.checking = false;
+        self.available = None;
+        self.cached_download = None;
+        self.failure = None;
+        self.outcome = None;
+        self.status = "Claude 保护期间暂停客户端更新".into();
+    }
+
     pub fn busy(&self) -> bool {
         self.progress.is_some() || self.installing.is_some() || self.install_pending
     }
@@ -390,7 +401,7 @@ fn checksum(bytes: &[u8]) -> Result<String> {
 
 pub async fn download(
     available: Available,
-    proxy_port: Option<u16>,
+    proxy_port: Option<crate::network::DownloadPorts>,
     api: Option<crate::api::Api>,
     report: impl FnMut(Progress),
 ) -> Result<Downloaded> {
@@ -584,11 +595,11 @@ async fn transfer(
     Ok(())
 }
 
-pub async fn check(proxy_port: Option<u16>) -> Result<Option<Available>> {
+pub async fn check(proxy_port: Option<crate::network::DownloadPorts>) -> Result<Option<Available>> {
     check_with_prereleases(proxy_port, false).await
 }
 pub async fn check_with_prereleases(
-    proxy_port: Option<u16>,
+    proxy_port: Option<crate::network::DownloadPorts>,
     include_prereleases: bool,
 ) -> Result<Option<Available>> {
     discovery::check(proxy_port, include_prereleases).await

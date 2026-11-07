@@ -15,6 +15,8 @@
 
 ## 7. Linux 代理、TUN、DNS 与通知
 
+**跨用户 TUN 与 CLI 反馈：** 当前用户的代理开关不能代表整个网络命名空间的路由；无示例 IPv6 路由也不能写成网络不可用。`cor status` / `proxy` 的 Linux 采样通过同一命名空间内的 TUN 描述符核对 PID/UID，进程标识同时核对启动时间，权限或预算不足只报告部分结果。它证明当前可读取的持有方，不证明最初开启者，不会替其他用户关闭 TUN。后台失联仍保留路由输出并返回错误；故障统一提示[导出诊断报告](../cli/runtime.md#故障反馈与诊断报告)，离线采集不走数据初始化或 Geo 恢复入口。回归应覆盖其他用户持有、不同命名空间、奇异进程名、扫描上限、凭据记录损坏、日志链接、缺失目录及导出后现场不变；本次验证见最近复盘。
+
 **用户目录与无显示环境：** `sudo cor` 应在解析用户配置前降权并复用原用户后台；直接 root 保留独立目录。跨用户总览只读索引，不启动后台。polkit 的 SSH/非活动会话仍需 `auth_admin`，只授权固定安装助手；不能让用户 YAML 在 root 后台运行。回归需覆盖两用户同名订阅、环境白名单与管理员凭据隔离、sudo/指定用户操作、stdin/原样参数、文件 UID、后台复用、前台信号及退出恢复，见[用户与授权](../cli/linux-users.md)。Wayland compositor 错误来自桌面入口，服务器使用 `cor`，不通过为 root 配置显示服务器规避。
 
 **安装后 GUI 验证：** `sudo -u` 不创建 logind 登录会话，图形 polkit 代理会因 `No session for pid` 注册失败。测试使用隔离的临时 PAM 登录会话，验证进程归属、真实授权的取消与接受，并隔离用户和 D-Bus 配置；不注入批准规则。模拟环境中代理进程存活不等于已注册，仅对明确的 `No authentication agent found` 有限重试授权请求。GNOME 42 的 `--unsafe-mode` 是隐藏选项，不能仅凭 `--help` 判断；旧版需启用 `development-tools`，窗口结果也只能编码一次。GNOME 3.36 的 `get_pid()` 对 Wayland 不返回客户端 PID，隔离会话只能在恰好一个原生 Wayland 窗口和一个渲染进程时回退匹配，并以窗口稳定序号关闭；新版本仍核对客户端 PID。[打包 40827251291](https://github.com/Fu021/Clash-of-Rust/actions/runs/40827251291) 的 20.04 x64 窗口识别、ARM64 授权代理注册失败；修复后 `9f92c5f` 的[打包 40845419892](https://github.com/Fu021/Clash-of-Rust/actions/runs/40845419892)通过两架构验证。

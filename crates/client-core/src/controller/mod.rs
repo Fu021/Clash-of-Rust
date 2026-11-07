@@ -5,6 +5,9 @@ use serde::{Deserialize, Serialize, de::DeserializeOwned};
 use serde_json::{Value, json};
 use std::{collections::BTreeMap, io::Read, time::Duration};
 
+mod connection_preview;
+pub use connection_preview::{CONNECTION_PREVIEW_LIMIT, ConnectionPreview};
+
 const JSON_LIMIT: usize = 32 * 1024 * 1024;
 
 // Backpressure bounds queued response chunks. Dropping the request closes the
@@ -301,6 +304,26 @@ pub struct Delay {
 fn automatic(proxy: &Proxy) -> bool {
     matches!(proxy.kind.as_str(), "URLTest" | "Fallback") && !proxy.all.is_empty()
 }
+
+fn recovery_targets(proxies: &Proxies) -> std::collections::BTreeSet<Text> {
+    proxies
+        .proxies
+        .iter()
+        .filter(|(_, proxy)| proxy.all.is_empty())
+        .map(|(name, _)| name)
+        .chain(proxies.proxies.values().flat_map(|proxy| proxy.all.iter()))
+        .filter(|name| {
+            proxies.proxies.get(name.as_str()).is_none_or(|proxy| {
+                proxy.all.is_empty()
+                    && !matches!(
+                        proxy.kind.as_str(),
+                        "Direct" | "Reject" | "Compatible" | "Pass"
+                    )
+            })
+        })
+        .cloned()
+        .collect()
+}
 #[derive(Debug, Clone, Default, Serialize)]
 pub struct Proxies {
     pub proxies: BTreeMap<Text, Proxy>,
@@ -460,7 +483,7 @@ impl<'de> Deserialize<'de> for Connections {
     }
 }
 
-/// Home needs counts and traffic totals, without allocating each connection's metadata.
+/// Background indicators need counts and totals without allocating connection metadata.
 #[derive(Debug, Default, Deserialize)]
 pub struct ConnectionStats {
     #[serde(rename = "uploadTotal", default)]
@@ -857,6 +880,44 @@ impl Api {
             .collect();
         self.delay_batch(proxies, names.into_iter().collect(), false)
             .await
+    }
+
+    pub async fn confirm_all_nodes_unreachable(&self) -> Result<bool> {
+        let proxies: Proxies = self.get("proxies").await?;
+        let targets = recovery_targets(&proxies);
+        if targets.is_empty() {
+            return Ok(false);
+        }
+        let missing = targets
+            .iter()
+            .filter(|name| !proxies.proxies.contains_key(name.as_str()))
+            .cloned()
+            .collect();
+        let providers = self.provider_routes(&missing).await?;
+        let measured = self
+            .measure_delays(
+                targets.iter().cloned().collect(),
+                "https://www.gstatic.com/generate_204",
+                "204",
+                &providers,
+            )
+            .await;
+        if measured.values().any(|delay| *delay > 0) {
+            return Ok(false);
+        }
+        let confirmed = self
+            .measure_delays(
+                targets.iter().cloned().collect(),
+                "https://www.cloudflare.com/cdn-cgi/trace",
+                "200",
+                &providers,
+            )
+            .await;
+        let current: Proxies = self.get("proxies").await?;
+        let _: ConfigStatus = self.get("configs").await?;
+        Ok(recovery_targets(&current) == targets
+            && confirmed.len() == targets.len()
+            && confirmed.values().all(|delay| *delay == 0))
     }
 
     pub async fn delay_node(&self, name: &str) -> Result<BTreeMap<String, u32>> {
@@ -1526,6 +1587,91 @@ rules: ['MATCH,group']\n";
         assert_eq!(delays["bad"], 0);
         assert_eq!(delays.values().filter(|v| **v == 42).count(), 8);
         server.await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn recovery_requires_all_nodes_to_fail_on_both_targets_and_a_live_controller() {
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+        for (primary, secondary, controller, empty, changed, expected) in [
+            (42, 0, true, false, false, Some(false)),
+            (0, 42, true, false, false, Some(false)),
+            (0, 0, true, false, false, Some(true)),
+            (0, 0, false, false, false, None),
+            (0, 0, true, true, false, Some(false)),
+            (0, 0, true, false, true, Some(false)),
+        ] {
+            let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+            let port = listener.local_addr().unwrap().port();
+            let server = tokio::spawn(async move {
+                let reads = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
+                loop {
+                    let (mut socket, _) = listener.accept().await.unwrap();
+                    let reads = reads.clone();
+                    tokio::spawn(async move {
+                        let mut request = Vec::new();
+                        while !request.windows(4).any(|bytes| bytes == b"\r\n\r\n") {
+                            let mut buffer = [0; 2048];
+                            let count = socket.read(&mut buffer).await.unwrap();
+                            if count == 0 || request.len() > 8192 {
+                                return;
+                            }
+                            request.extend_from_slice(&buffer[..count]);
+                        }
+                        let request = String::from_utf8(request).unwrap();
+                        let (status, body) = if request.starts_with("GET /proxies HTTP") {
+                            (
+                                "200 OK",
+                                if empty {
+                                    r#"{"proxies":{"DIRECT":{"type":"Direct"}}}"#.into()
+                                } else if changed
+                                    && reads.fetch_add(1, std::sync::atomic::Ordering::Relaxed) > 0
+                                {
+                                    r#"{"proxies":{"replacement":{"type":"Socks5"}}}"#.into()
+                                } else {
+                                    r#"{"proxies":{"Proxy":{"type":"Selector","all":["node","DIRECT"]},"node":{"type":"Socks5"},"DIRECT":{"type":"Direct"}}}"#.into()
+                                },
+                            )
+                        } else if request.starts_with("GET /providers/proxies HTTP") {
+                            ("200 OK", r#"{"providers":{}}"#.into())
+                        } else if request.starts_with("GET /configs HTTP") {
+                            (
+                                if controller {
+                                    "200 OK"
+                                } else {
+                                    "503 Service Unavailable"
+                                },
+                                "{}".into(),
+                            )
+                        } else {
+                            assert!(request.starts_with("GET /proxies/node/delay?"));
+                            let delay = if request.contains("cloudflare.com") {
+                                secondary
+                            } else {
+                                primary
+                            };
+                            ("200 OK", format!(r#"{{"delay":{delay}}}"#))
+                        };
+                        let _ = socket.write_all(format!(
+                            "HTTP/1.1 {status}\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}", body.len()
+                        ).as_bytes()).await;
+                    });
+                }
+            });
+            let api = Api::new(&Settings {
+                controller_port: port,
+                ..Default::default()
+            })
+            .unwrap();
+            let result =
+                tokio::time::timeout(Duration::from_secs(5), api.confirm_all_nodes_unreachable())
+                    .await
+                    .unwrap();
+            match expected {
+                Some(value) => assert_eq!(result.unwrap(), value),
+                None => assert!(result.is_err()),
+            }
+            server.abort();
+        }
     }
     #[test]
     fn accepts_go_nil_slices_in_idle_core() {

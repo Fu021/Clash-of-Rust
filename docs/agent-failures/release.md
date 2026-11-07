@@ -15,7 +15,7 @@
 - Publish Release [39784808500](https://github.com/Fu021/Clash-of-Rust/actions/runs/39784808500)：macOS 获取 artifact 时 DNS 失败。
 - Android 打包 [38989293563](https://github.com/Fu021/Clash-of-Rust/actions/runs/38989293563)：依赖快照与已验证 CI 不一致。
 - Publish Release [40523828709](https://github.com/Fu021/Clash-of-Rust/actions/runs/40523828709)：CI 步骤和产物已结束，但 GitHub 仍返回必需 job 为 `in_progress`，前置校验按预期拒绝；等待 job 状态同步为成功后再启动，不能仅凭产物存在跳过门禁。
-- 不发布打包 [41293222935](https://github.com/Fu021/Clash-of-Rust/actions/runs/41293222935)：普通 `filter=latest` 列表漏掉已成功的缓存预算任务，attempt 专用列表则完整返回 11 项；按 attempt 分页收集，以新尝试覆盖同名旧结果，保留未重跑的成功任务。检查总数、重复项及最新状态，不能拿旧成功遮盖新失败。
+- 不发布打包 [41293222935](https://github.com/Fu021/Clash-of-Rust/actions/runs/41293222935)：普通 `filter=latest` 列表漏掉已成功的缓存预算任务，attempt 专用列表则完整返回 11 项；按 attempt 分页收集，以新尝试覆盖同名旧结果，保留未重跑的成功任务。检查总数、重复项及最新状态，不能拿旧成功遮盖新失败。常规 CI 还可能返回已跳过的可选专项矩阵占位项；仅忽略必需集合之外且结论为 `skipped` 的条目，不能忽略必需平台的缺失、跳过或失败，也不能把实际执行的额外任务静默丢弃。
 - 修复提交 `8b7ff41`、`9d705d5`、`1aaa1da`、`465fec6`。
 
 **首先检查**

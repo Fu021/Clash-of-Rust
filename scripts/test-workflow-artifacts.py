@@ -86,6 +86,61 @@ class ArtifactTests(unittest.TestCase):
             with self.subTest(entries=entries), self.assertRaisesRegex(ValueError, 'duplicated or expired'):
                 artifacts.wait_package(client, 42, 'linux', 'x64', self.commit)
 
+    def test_vm_package_fetch_checks_archives_and_receipts_before_using_them(self):
+        package = f'Clash-of-Rust-{self.version}-linux-amd64.deb'
+        binary = b'isolated-tun-test'
+        payload = b'verified-deb'
+        receipt = {'schema': 1, 'tests_passed': True, 'system': 'linux', 'arch': 'x64',
+                   'version': self.version, 'commit': self.commit, 'ci_run_id': 17, 'package': package,
+                   'sha256': hashlib.sha256(payload).hexdigest(),
+                   'linux_tun_test_sha256': hashlib.sha256(binary).hexdigest()}
+
+        def zipped(entries):
+            stream = io.BytesIO()
+            with zipfile.ZipFile(stream, 'w') as archive:
+                for name, data in entries.items():
+                    archive.writestr(name, data)
+            return stream.getvalue()
+
+        originals = [
+            zipped({package: payload, package+'.sha256': receipt['sha256'],
+                    'package-receipt.json': json.dumps(receipt)}),
+            zipped({'linux-tun-test': binary}),
+        ]
+        for scenario in ('valid', 'archive-changed', 'wrong-receipt', 'wrong-ci', 'unsafe-member'):
+            archives = originals.copy()
+            if scenario in ('wrong-receipt', 'wrong-ci'):
+                changed = dict(receipt, **({'commit': 'b'*40} if scenario == 'wrong-receipt'
+                                          else {'ci_run_id': 18}))
+                archives[0] = zipped({package: payload, package+'.sha256': receipt['sha256'],
+                                      'package-receipt.json': json.dumps(changed)})
+            if scenario == 'unsafe-member':
+                archives[1] = zipped({'../linux-tun-test': binary})
+            records = [{'id': index, 'name': name, 'expired': False,
+                        'digest': 'sha256:'+hashlib.sha256(data).hexdigest()}
+                       for index, (name, data) in enumerate(zip(
+                           ['package-linux-x64', 'linux-tun-test-x64'], archives))]
+            if scenario == 'archive-changed':
+                archives[0] += b'altered'
+
+            def client(path, raw=False):
+                if raw:
+                    return archives[int(path.split('/')[3])]
+                if '/artifacts?' in path:
+                    return {'artifacts': records}
+                return {'head_sha': self.commit, 'status': 'in_progress'}
+
+            with self.subTest(scenario=scenario), tempfile.TemporaryDirectory() as temporary, \
+                    patch.object(artifacts, 'package_version', return_value=self.version):
+                root = Path(temporary)
+                if scenario == 'valid':
+                    artifacts.fetch_package_inputs(client, 42, 'x64', root, self.commit, 17)
+                    self.assertEqual((root/'dist'/package).read_bytes(), payload)
+                    self.assertEqual((root/'target/linux-tun-test').read_bytes(), binary)
+                else:
+                    with self.assertRaises(ValueError):
+                        artifacts.fetch_package_inputs(client, 42, 'x64', root, self.commit, 17)
+
     def test_only_proxy_tun_test_is_exported_after_units_run_in_ci(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)

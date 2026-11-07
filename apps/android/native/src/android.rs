@@ -21,6 +21,9 @@ use std::{
 };
 use tokio::sync::mpsc;
 
+#[path = "../../../../crates/client-ui/src/fonts.rs"]
+mod fonts;
+
 slint::include_modules!();
 static EVENTS: Mutex<Option<mpsc::Sender<String>>> = Mutex::new(None);
 static AUTHORIZATION_REQUEST: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
@@ -45,6 +48,7 @@ impl Drop for UiLifetime {
 }
 thread_local! {
     static UI_THREAD_LIFETIME: UiLifetime = const { UiLifetime };
+    static DIAGNOSTIC_WINDOW: std::cell::RefCell<Option<slint::Weak<AndroidWindow>>> = const { std::cell::RefCell::new(None) };
 }
 
 fn await_previous_ui() {
@@ -144,6 +148,23 @@ pub extern "system" fn Java_org_clashofrust_android_MainActivity_nativeDiagnosti
 ) -> jni::sys::jstring {
     unowned_env
         .with_env(|env| {
+            let (sender, receive) = std::sync::mpsc::sync_channel(1);
+            let queued = slint::invoke_from_event_loop(move || {
+                let snapshot = DIAGNOSTIC_WINDOW.with(|window| {
+                    window
+                        .borrow()
+                        .as_ref()
+                        .and_then(slint::Weak::upgrade)
+                        .map(|ui| presentation_snapshot(&ui))
+                });
+                let _ = sender.send(snapshot);
+            })
+            .is_ok();
+            let live = if queued {
+                receive.recv_timeout(Duration::from_secs(1)).ok().flatten()
+            } else {
+                None
+            };
             let (snapshot, generation) = PRESENTATION
                 .lock()
                 .map(|s| {
@@ -153,7 +174,11 @@ pub extern "system" fn Java_org_clashofrust_android_MainActivity_nativeDiagnosti
                     )
                 })
                 .unwrap_or_default();
-            let mut snapshot: Value = serde_json::from_str(&snapshot).unwrap_or_else(|_| json!({}));
+            let fresh = live.is_some();
+            let mut snapshot = live.unwrap_or_else(|| {
+                json!({"cached":serde_json::from_str::<Value>(&snapshot).unwrap_or_else(|_| json!({}))})
+            });
+            snapshot["live"] = json!(fresh);
             snapshot["ui_generation"] = json!(generation);
             if let Ok(first) = FIRST_APPEARANCE.lock()
                 && let Some((dark, accent)) = *first
@@ -200,10 +225,17 @@ struct ProtectionChange {
 }
 struct State {
     session: Session,
+    overview: clash_mobile_runtime::overview::Monitor,
+    overview_epoch: u64,
     page: i32,
     query: String,
     selected: String,
     notice: String,
+    notice_error: bool,
+    notice_critical: bool,
+    notice_network_recovery: bool,
+    notice_followup: bool,
+    issue_events: VecDeque<Value>,
     copied: (i32, Arc<str>),
     logs: VecDeque<(String, String)>,
     log_level: String,
@@ -282,7 +314,9 @@ fn run(app: slint::android::AndroidApp) -> Result<()> {
         .directory(jni_str!("getCacheDir"))?
         .join("updates/update.apk");
     slint::android::init(app)?;
+    fonts::register_emoji()?;
     let window = AndroidWindow::new()?;
+    DIAGNOSTIC_WINDOW.with(|current| *current.borrow_mut() = Some(window.as_weak()));
     // No engine/Geo/network work precedes the first correctly themed frame.
     let appearance = native.request(json!({"op":"appearance"}))?;
     let theme = window.global::<Theme>();
@@ -410,10 +444,17 @@ enum DelayScope {
 }
 enum Update {
     Subscription(
+        u64,
         core::subscription::schedule::PendingUpdate,
         Result<(String, Option<String>)>,
     ),
     Delays(u64, std::result::Result<BTreeMap<String, u32>, String>),
+    Unreachable(
+        u64,
+        u64,
+        serde_json::Value,
+        std::result::Result<bool, String>,
+    ),
     Snapshot(u64, std::result::Result<Snapshot, String>),
     Ip(u64, usize, core::ip_report::ResultSlot),
     IpDone(u64),
@@ -441,10 +482,17 @@ async fn run_loop(
 ) -> Result<()> {
     let mut state = State {
         session: Session::open(root, native)?,
+        overview: Default::default(),
+        overview_epoch: 0,
         page: 0,
         query: String::new(),
         selected: String::new(),
         notice: String::new(),
+        notice_error: false,
+        notice_critical: false,
+        notice_network_recovery: false,
+        notice_followup: false,
+        issue_events: VecDeque::new(),
         copied: Default::default(),
         logs: VecDeque::new(),
         log_level: "全部等级".into(),
@@ -494,6 +542,8 @@ async fn run_loop(
     };
     if let Err(error) = state.session.attach_or_initialize() {
         state.notice = format!("内核启动失败：{error:#}");
+        state.notice_error = true;
+        state.notice_critical = true;
         log::error!("{}", state.notice);
         state.logs.push_back(("ERROR".into(), state.notice.clone()));
     }
@@ -530,6 +580,7 @@ async fn run_loop(
         }
     }
     let (updates, mut update_rx) = mpsc::channel::<Update>(32);
+    let (overview_send, mut overview_rx) = mpsc::channel(16);
     let mut checks: Option<tokio::task::JoinHandle<()>> = None;
     let mut claude_job: Option<tokio::task::JoinHandle<()>> = None;
     let mut protection_job: Option<tokio::task::JoinHandle<()>> = None;
@@ -542,8 +593,10 @@ async fn run_loop(
     let mut last_delay = std::time::Instant::now();
     let mut subscription_schedule = core::subscription::schedule::Schedule::default();
     let mut subscription_job: Option<tokio::task::JoinHandle<()>> = None;
+    let mut subscription_generation = 0u64;
     let mut last_subscription_check = std::time::Instant::now() - Duration::from_secs(30);
     let mut delay_job: Option<tokio::task::JoinHandle<()>> = None;
+    let mut recovery_job: Option<tokio::task::JoinHandle<()>> = None;
     let mut poll = tokio::time::interval(Duration::from_secs(1));
     poll.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
     let mut refresh_job: Option<tokio::task::JoinHandle<()>> = None;
@@ -556,13 +609,33 @@ async fn run_loop(
         let mut immediate = false;
         let mut refresh_requested = false;
         let mut profile_completed = None;
+        let mut overview_refresh = false;
         tokio::select! {
             value = receive.recv() => {
                 let Some(request) = value else { break; };
                 profile_completed = request.profile_ticket;
+                if profile_completed.is_some() {
+                    subscription_generation = subscription_generation.wrapping_add(1);
+                    if let Some(job) = subscription_job.take() { job.abort(); let _ = job.await; }
+                }
                 state.selected = request.selected.clone();
                 immediate = true;
                 let intent = request.intent;
+                if matches!(intent, MobileIntent::Connect | MobileIntent::Disconnect
+                    | MobileIntent::RestartCore | MobileIntent::Mode | MobileIntent::SelectNode
+                    | MobileIntent::ActivateProfile | MobileIntent::UpdateProfile | MobileIntent::SaveProfile
+                    | MobileIntent::SavePorts | MobileIntent::ClaudeProtection | MobileIntent::DnsOverride
+                    | MobileIntent::FakeIp | MobileIntent::FakeIpAdd | MobileIntent::FakeIpRemove
+                    | MobileIntent::FakeIpRestoreDefaults | MobileIntent::Ipv6 | MobileIntent::Udp
+                    | MobileIntent::RuleApply) {
+                    state.overview_epoch = state.overview_epoch.wrapping_add(1);
+                }
+                if matches!(intent, MobileIntent::Connect | MobileIntent::Disconnect
+                    | MobileIntent::RestartCore | MobileIntent::Mode | MobileIntent::SelectNode
+                    | MobileIntent::ActivateProfile | MobileIntent::ClaudeProtection) {
+                    if let Some(job) = recovery_job.take() { job.abort(); }
+                    cancel_delay(&mut state, &mut delay_job);
+                }
                 let edited_profile = match intent {
                     MobileIntent::UpdateProfile => Some(request.a.as_str()),
                     MobileIntent::SaveProfile => Some(request.selected.as_str()),
@@ -600,7 +673,11 @@ async fn run_loop(
                     | MobileIntent::SaveProfile | MobileIntent::DeleteProfile) {
                     state.rule_rows = None;
                 }
-                if intent == MobileIntent::Navigate {
+                if intent == MobileIntent::OverviewRefresh {
+                    overview_refresh = true;
+                } else if intent == MobileIntent::OverviewPrivacy {
+                    state.overview.toggle_privacy();
+                } else if intent == MobileIntent::Navigate {
                     let page: i32 = request.a.parse()?;
                     if state.page == 8 && page != 8 {
                         if let Some(job) = claude_job.take() { job.abort(); }
@@ -625,6 +702,7 @@ async fn run_loop(
                             if let Err(error) = tokio::fs::remove_file(path).await
                                 && error.kind() != std::io::ErrorKind::NotFound {
                                 state.notice = format!("下载已取消，缓存清理失败：{error}");
+                                state.notice_error = true;
                             }
                         }
                     }
@@ -634,36 +712,39 @@ async fn run_loop(
                     state.claude_busy = false;
                     state.claude_status = "已停止检测，保留上次完成的报告".into();
                 } else if intent==MobileIntent::CheckUpdate {
-                    if !state.update_busy {
+                    if !blocked_during_protection(&mut state) && !state.update_busy {
                         state.update_busy=true;state.update_downloading=false;state.update_status="正在检查更新…".into();state.update_progress=0.0;
                         last_update_check=std::time::Instant::now();
                         state.update_generation = state.update_generation.wrapping_add(1);
                         state.update_confirmation = None;
-                        update_job=Some(start_update_check(state.session.settings.mixed_port,state.session.settings.update_prereleases,state.update_generation,updates.clone()));
+                        update_job=Some(start_update_check(state.session.settings.download_ports(),state.session.settings.update_prereleases,state.update_generation,updates.clone()));
                     }
                 } else if intent==MobileIntent::InstallUpdate {
                     if request.b == "cancel" {
                         state.update_confirmation = None;
+                    } else if blocked_during_protection(&mut state) {
                     } else if !state.update_busy && let Some(package)=state.update_package.clone() {
                         if request.b == "prepare" {
                             if package.preview && state.session.settings.update_prereleases {
                                 state.update_confirmation = Some(core::update::channel::Consent::new(package.version.clone()));
                             } else {
                                 state.notice = "更新版本已变化，请重新检查更新".into();
+                                state.notice_error = true;
                             }
                         } else if (package.preview && (!state.session.settings.update_prereleases
                             || request.b != "confirmed"
                             || !state.update_confirmation.as_ref().is_some_and(|consent| consent.accepts(&package.version))))
                             || (!package.preview && !request.b.is_empty()) {
                             state.notice = "请先阅读预发布风险提示，并等待 3 秒后确认".into();
+                            state.notice_error = true;
                         } else {
                         state.update_confirmation = None;
                         if state.update_downloaded && state.update_path.is_file() {
-                            if let Err(error)=state.session.native.request(json!({"op":"install-update"})) {state.notice=format!("{error:#}");}
+                            if let Err(error)=state.session.native.request(json!({"op":"install-update"})) {state.notice=format!("{error:#}");state.notice_error=true;}
                         } else {
                             state.update_busy=true;state.update_downloading=true;state.update_status="正在下载更新…".into();state.update_progress=0.0;
                             let path=state.update_path.clone();
-                            let port=state.session.settings.mixed_port;let send=updates.clone();
+                            let port=state.session.settings.download_ports();let send=updates.clone();
                             let download_api=state.session.api.clone();
                             state.update_generation = state.update_generation.wrapping_add(1);
                             let generation = state.update_generation;
@@ -676,10 +757,10 @@ async fn run_loop(
                         }
                     }
                 } else if intent == MobileIntent::UpdateGeo {
-                    if !state.geo_updating {
+                    if !blocked_during_protection(&mut state) && !state.geo_updating {
                         state.geo_updating=true;
                         let runtime=state.session.store.runtime();
-                        let port=state.session.running.then_some(state.session.settings.mixed_port);
+                        let port=state.session.running.then_some(state.session.settings.download_ports());
                         let send=updates.clone();
                         geo_job=Some(tokio::spawn(async move {
                             let result=async {
@@ -716,6 +797,7 @@ async fn run_loop(
                     state.generation += 1; state.detecting = false;
                 } else if matches!(intent,MobileIntent::NodeDelay|MobileIntent::GroupDelay|MobileIntent::DelayAll) {
                     if state.delay_scope.is_none() && state.protection_change.is_none() {
+                        if let Some(job) = recovery_job.take() { job.abort(); }
                         last_delay=std::time::Instant::now();
                         let scope=match intent { MobileIntent::GroupDelay=>DelayScope::Group(request.a),
                             MobileIntent::DelayAll=>DelayScope::All,_=>DelayScope::Node(request.a) };
@@ -724,6 +806,15 @@ async fn run_loop(
                 } else if intent == MobileIntent::ClaudeProtection && request.a == "true" {
                     if state.protection_change.is_none() && state.session.settings.claude_protection.is_none() {
                         cancel_delay(&mut state,&mut delay_job);
+                        state.update_generation = state.update_generation.wrapping_add(1);
+                        if let Some(job) = update_job.take() { job.abort(); let _ = job.await; }
+                        state.update_busy = false; state.update_downloading = false;
+                        state.update_downloaded = false; state.update_progress = 0.0;
+                        state.update_status = "Claude 保护期间暂停客户端更新".into();
+                        if let Some(job) = geo_job.take() { job.abort(); let _ = job.await; }
+                        state.geo_updating = false;
+                        subscription_generation = subscription_generation.wrapping_add(1);
+                        if let Some(job) = subscription_job.take() { job.abort(); let _ = job.await; }
                         if let Some(job) = protection_dns_job.take() { job.abort(); }
                         state.protection_change = Some(ProtectionChange {
                             before: state.session.settings.clone(), before_vpn: state.session.vpn, enabled: true,
@@ -748,6 +839,9 @@ async fn run_loop(
                 } else if intent == MobileIntent::ClaudeStart {
                     start_claude_check(&mut state, &mut claude_job, updates.clone());
                 } else {
+                    state.notice_error = false;
+                    state.notice_critical = false;
+                    state.notice_followup = matches!(intent, MobileIntent::ExportDiagnostics | MobileIntent::CopyDiagnostics | MobileIntent::ReportIssue);
                     match handle(&mut state, request).await {
                         Ok(()) => {
                             state.completed = Some(intent);
@@ -760,7 +854,7 @@ async fn run_loop(
                                 |MobileIntent::ClaudeProtection) {cancel_delay(&mut state,&mut delay_job);}
                             if !matches!(intent, MobileIntent::Query | MobileIntent::Copy | MobileIntent::ConnectionSort
                                 | MobileIntent::ConnectionDetail | MobileIntent::ConnectionPage | MobileIntent::RulePage
-                                | MobileIntent::LogLevel | MobileIntent::ClearLogs | MobileIntent::RuleTextMode
+                                | MobileIntent::LogLevel | MobileIntent::ClearLogs | MobileIntent::ExportLogs | MobileIntent::ExportDiagnostics | MobileIntent::CopyDiagnostics | MobileIntent::ReportIssue | MobileIntent::RuleTextMode
                                 | MobileIntent::RuleSelect | MobileIntent::RuleEdit | MobileIntent::RuleSave
                                 | MobileIntent::RuleMove | MobileIntent::RuleDelete | MobileIntent::RuleShortcut
                                 | MobileIntent::RuleDiscard | MobileIntent::NodePage | MobileIntent::NodeSort
@@ -772,6 +866,8 @@ async fn run_loop(
                         },
                         Err(error) => {
                             state.notice = format!("{error:#}");
+                            state.notice_error = true;
+                            state.notice_critical = intent == MobileIntent::RestartCore;
                             log::error!("{}",state.notice);
                             state.logs.push_back(("ERROR".into(),state.notice.clone()));
                         }
@@ -782,10 +878,18 @@ async fn run_loop(
                 if let Some(value) = value {
                     immediate = true;
                     refresh_requested = true;
-                    if serde_json::from_str::<Value>(&value).ok().is_some_and(|v|v["event"]=="back") {
+                    let event = serde_json::from_str::<Value>(&value).ok();
+                    if event.as_ref().is_some_and(|event|event["event"]=="back") {
                         let weak=weak.clone();slint::invoke_from_event_loop(move||{if let Some(ui)=weak.upgrade(){ui.invoke_native_back();}})?;
-                    } else if let Err(error) = native_event(&mut state,&value).await { state.notice=format!("{error:#}"); }
+                    } else if let Err(error) = native_event(&mut state,&value).await {
+                        state.notice=format!("{error:#}");state.notice_error=true;
+                        state.notice_critical=event.as_ref().is_some_and(|event|
+                            matches!(event["event"].as_str(),Some("vpn-authorized"|"vpn-cancelled")));
+                    }
                 }
+            }
+            Some(event) = overview_rx.recv() => {
+                state.overview.apply(event);
             }
             value = update_rx.recv() => {
                 match value {
@@ -798,6 +902,8 @@ async fn run_loop(
                                 Err(error) => {
                                     if let Err(restore) = rollback_protection(&mut state, &format!("保护验证失败：{error}")) {
                                         state.notice = format!("保护验证失败：{error}；恢复失败：{restore:#}");
+                                        state.notice_error = true;
+                                        state.notice_critical = true;
                                     }
                                 }
                             }
@@ -816,12 +922,58 @@ async fn run_loop(
                         match result {
                             Ok(values)=> {
                                 let failed=values.values().filter(|&&delay|delay==0).count();
-                                state.notice=format!("测速完成 · {} 项，{} 项超时",values.len(),failed);
+                                let unavailable = !values.is_empty() && failed == values.len();
+                                state.notice=if unavailable {
+                                    let detail = if state.session.settings.claude_protection.is_some() {
+                                        "请在 Claude 保护页检查保护线路。"
+                                    } else {
+                                        "更新会先尝试代理，失败后尝试独立直连，无需断开 VPN；其他应用仍可能无法联网。"
+                                    };
+                                    format!("本次测速的 {} 个节点均未通过测速。{detail}", values.len())
+                                } else {
+                                    format!("测速完成 · {} 项，{} 项超时",values.len(),failed)
+                                };
+                                state.notice_network_recovery = unavailable;
+                                state.notice_error=failed > 0;
+                                if unavailable && state.session.vpn && recovery_job.is_none()
+                                    && state.protection_change.is_none()
+                                    && state.session.settings.claude_protection.is_none() {
+                                    let api = state.session.api.clone();
+                                    let settings = serde_json::to_value(&state.session.settings)?;
+                                    let vpn_generation = state.session.platform["vpn_generation"].as_u64().unwrap_or(0);
+                                    let sender = updates.clone();
+                                    recovery_job = Some(tokio::spawn(async move {
+                                        let result = tokio::time::timeout(Duration::from_secs(120),
+                                            api.confirm_all_nodes_unreachable()).await
+                                            .context("全部节点复测超时")
+                                            .and_then(|result| result).map_err(|error| format!("{error:#}"));
+                                        let _ = sender.send(Update::Unreachable(generation, vpn_generation, settings, result)).await;
+                                    }));
+                                }
                                 if all {state.node_delays=values;} else {state.node_delays.extend(values);}
                             }
-                            Err(error)=>state.notice=format!("测速失败：{error}"),
+                            Err(error)=>{state.notice=format!("测速失败：{error}");state.notice_error=true;},
                         }
                         immediate=true;refresh_requested=true;
+                    }
+                    Some(Update::Unreachable(generation, vpn_generation, settings, result)) if generation == state.delay_generation => {
+                        recovery_job = None;
+                        if state.session.vpn && state.protection_change.is_none()
+                            && state.session.settings.claude_protection.is_none()
+                            && serde_json::to_value(&state.session.settings)? == settings
+                            && state.session.platform["vpn_generation"].as_u64().unwrap_or(0) == vpn_generation {
+                            match result {
+                                Ok(true) => {
+                                    state.notice = "全部节点经两个目标复测仍不可达。VPN 保持连接；更新会先尝试代理，失败后尝试独立直连。其他应用仍可能无法联网，可更换节点或手动停止接管。".into();
+                                    state.notice_network_recovery = true;
+                                },
+                                Ok(false) => state.notice = "未确认全部节点失联，已保留 VPN；可选择其他节点。".into(),
+                                Err(error) => state.notice = format!("无法确认全部节点状态，已保留 VPN：{error}"),
+                            }
+                            state.notice_error = true;
+                            immediate = true;
+                            refresh_requested = true;
+                        }
                     }
                     Some(Update::Snapshot(generation, result)) if generation == refresh_generation => {
                         refresh_job = None;
@@ -848,7 +1000,7 @@ async fn run_loop(
                         claude_job = None; state.claude_busy = false; immediate = true;
                         match result {
                             Ok(report) => {state.claude=Some(report); state.claude_status="检测完成 · 浏览器及网络采样已结束".into(); state.notice="检测完成".into();}
-                            Err(error) => {state.claude_status=format!("检测失败：{error}"); state.notice=error;}
+                            Err(error) => {state.claude_status=format!("检测失败：{error}"); state.notice=error;state.notice_error=true;}
                         }
                     }
                     Some(Update::Protection(result)) => {
@@ -869,6 +1021,8 @@ async fn run_loop(
                         if let Err(error)=applied
                             && let Err(restore)=rollback_protection(&mut state,&format!("保护开启失败：{error:#}")) {
                             state.notice=format!("保护开启失败：{error:#}；恢复失败：{restore:#}");
+                            state.notice_error=true;
+                            state.notice_critical=true;
                         }
                         refresh_requested=true;
                     }
@@ -880,12 +1034,12 @@ async fn run_loop(
                         state.geo_updating=false;geo_job=None;
                         match result.and_then(|staged|state.session.install_geo(staged.path()).map_err(|e|format!("{e:#}"))) {
                             Ok(manifest)=> {state.geo=manifest.display_status();state.notice="Geo 数据已更新".into();},
-                            Err(error)=>state.notice=format!("Geo 更新失败：{error}"),
+                            Err(error)=>{state.notice=format!("Geo 更新失败：{error}");state.notice_error=true;},
                         }
                     }
-                    Some(Update::Subscription(pending, result)) => {
+                    Some(Update::Subscription(generation, pending, result)) if generation == subscription_generation => {
                         subscription_job = None;
-                        if state.protection_change.is_none() {
+                        if !profile_gate.busy() && state.protection_change.is_none() {
                             match result {
                                 Ok((raw, usage)) => match state.session.update_subscription(&pending, raw, usage) {
                                     Ok(true) => {
@@ -904,6 +1058,7 @@ async fn run_loop(
                                     if pending.is_current(&state.session.settings, &state.session.profiles, &state.session.store).unwrap_or(false)
                                         && let Some(message) = core::subscription::format_notice(&error) {
                                         state.notice = format!("订阅定时更新失败，已保留原配置与运行状态：{message}");
+                                        state.notice_error = true;
                                     }
                                     state.logs.push_back(("WARN".into(), format!("订阅定时下载失败，已保留原配置与运行状态：{error}")));
                                 },
@@ -919,7 +1074,7 @@ async fn run_loop(
                                 state.update_downloaded=state.update_downloaded && state.update_package.as_ref().map(|p|&p.version)==package.as_ref().map(|p|&p.version);
                                 state.update_package=package;
                             }
-                            Err(error)=>state.update_status=error,
+                            Err(error)=>{state.update_status=error.clone();state.notice=format!("检查更新失败：{error}");state.notice_error=true;},
                         }
                     }
                     Some(Update::DownloadProgress(generation,value)) if generation == state.update_generation =>{
@@ -935,9 +1090,9 @@ async fn run_loop(
                         match result {
                             Ok(())=>{
                                 state.update_downloaded=true;state.update_status="下载完成，请在系统界面确认安装".into();
-                                if let Err(error)=state.session.native.request(json!({"op":"install-update"})) {state.notice=format!("{error:#}");}
+                                if let Err(error)=state.session.native.request(json!({"op":"install-update"})) {state.notice=format!("{error:#}");state.notice_error=true;}
                             }
-                            Err(error)=>state.update_status=error,
+                            Err(error)=>{state.update_status=error.clone();state.notice=format!("更新失败：{error}");state.notice_error=true;},
                         }
                     }
                     _ => {}
@@ -946,7 +1101,9 @@ async fn run_loop(
             _ = poll.tick() => {
                 if state.session.settings.subscription_update_interval_minutes == 0
                     && let Some(job) = subscription_job.take() {
+                    subscription_generation = subscription_generation.wrapping_add(1);
                     job.abort();
+                    let _ = job.await;
                 }
                 if subscription_job.is_none() && !profile_gate.busy() && state.protection_change.is_none()
                     && last_subscription_check.elapsed() >= Duration::from_secs(30) {
@@ -955,14 +1112,16 @@ async fn run_loop(
                     if let Some(profile) = subscription_schedule.next(&state.session.settings, &state.session.profiles, now) {
                         match core::subscription::schedule::PendingUpdate::capture(profile, &state.session.store) {
                             Ok(pending) => {
-                                let port = state.session.running.then_some(state.session.settings.mixed_port);
+                                let port = state.session.running.then_some(state.session.settings.download_ports());
                                 let sender = updates.clone();
+                                subscription_generation = subscription_generation.wrapping_add(1);
+                                let generation = subscription_generation;
                                 subscription_job = Some(tokio::spawn(async move {
                                     let result = async {
                                         let url = core::probe::validate_url(&pending.profile.source)?;
-                                        core::subscription::download_routes(&url, &core::network::routes(port, None)).await
+                                        core::subscription::download_routes(&url, &core::network::download_routes(port, None)).await
                                     }.await;
-                                    let _ = sender.send(Update::Subscription(pending, result)).await;
+                                    let _ = sender.send(Update::Subscription(generation, pending, result)).await;
                                 }));
                             }
                             Err(_) => state.logs.push_back(("WARN".into(), "订阅定时更新失败，已保留原配置".into())),
@@ -970,14 +1129,19 @@ async fn run_loop(
                     }
                 }
                 if state.session.running && !state.update_busy && last_update_check.elapsed()>=Duration::from_secs(6*60*60) {
+                    if state.session.settings.claude_protection.is_some() || state.protection_change.is_some() {
+                        last_update_check=std::time::Instant::now();
+                    } else {
                     last_update_check=std::time::Instant::now();state.update_busy=true;state.update_downloading=false;state.update_status="正在检查更新…".into();
                     state.update_generation = state.update_generation.wrapping_add(1);
                     state.update_confirmation = None;
-                    update_job=Some(start_update_check(state.session.settings.mixed_port,state.session.settings.update_prereleases,state.update_generation,updates.clone()));
+                    update_job=Some(start_update_check(state.session.settings.download_ports(),state.session.settings.update_prereleases,state.update_generation,updates.clone()));
+                    }
                 }
                 let minutes=state.session.settings.delay_interval_minutes;
                 if state.session.running && state.protection_change.is_none() && minutes>0
-                    && last_delay.elapsed()>=Duration::from_secs(minutes as u64*60) && state.delay_scope.is_none() {
+                    && last_delay.elapsed()>=Duration::from_secs(minutes as u64*60) && state.delay_scope.is_none()
+                    && recovery_job.is_none() {
                     last_delay=std::time::Instant::now();
                     delay_job=Some(start_delay(&mut state,DelayScope::All,updates.clone()));
                 }
@@ -985,6 +1149,7 @@ async fn run_loop(
             }
         }
         if refresh_requested {
+            let was_running = state.session.running;
             state.protection_observed = match state.session.observe_native() {
                 Ok(()) => true,
                 Err(error) => {
@@ -994,12 +1159,19 @@ async fn run_loop(
                     false
                 }
             };
+            if was_running && !state.session.running {
+                state.notice = "内核已意外停止，请导出诊断后重试启动。".into();
+                state.notice_error = true;
+                state.notice_critical = true;
+            }
             match observe_protection(&mut state) {
                 Ok(true) => start_claude_check(&mut state, &mut claude_job, updates.clone()),
                 Ok(false) => {}
                 Err(error) => {
                     state.protection_observed = false;
                     state.notice = format!("保护状态异常：{error:#}");
+                    state.notice_error = true;
+                    state.notice_critical = true;
                     state.logs.push_back(("ERROR".into(), state.notice.clone()));
                 }
             }
@@ -1058,6 +1230,37 @@ async fn run_loop(
                 }));
             }
         }
+        state.overview.tick(
+            clash_mobile_runtime::overview::Input {
+                context: clash_mobile_runtime::overview::Context {
+                    running: state.session.running,
+                    port: state.session.settings.mixed_port,
+                    route: format!(
+                        "{:?}",
+                        (
+                            &state.session.node,
+                            &state.session.settings.active_profile,
+                            &state.session.settings.run_mode,
+                            state.session.vpn,
+                            &state.session.platform["vpn_generation"],
+                            &state.session.platform["network_revision"],
+                            state.overview_epoch,
+                        )
+                    ),
+                },
+                visible: state.visible && state.page == 0,
+                idle: !profile_gate.busy()
+                    && !state.detecting
+                    && !state.claude_busy
+                    && !state.update_busy
+                    && !state.geo_updating
+                    && state.protection_change.is_none()
+                    && state.delay_scope.is_none(),
+            },
+            state.session.native.clone(),
+            overview_send.clone(),
+            overview_refresh,
+        );
         if log_port != state.session.settings.controller_port {
             if let Some(job) = log_job.take() {
                 job.abort();
@@ -1132,6 +1335,18 @@ async fn run_loop(
         state.rule_form = None;
         state.rule_editor = None;
         let notice = std::mem::take(&mut state.notice);
+        let notice_error = std::mem::take(&mut state.notice_error);
+        let notice_critical = std::mem::take(&mut state.notice_critical);
+        let notice_network_recovery = std::mem::take(&mut state.notice_network_recovery);
+        let notice_followup = std::mem::take(&mut state.notice_followup);
+        if notice_error && !notice.is_empty() {
+            state
+                .issue_events
+                .push_back(core::support::incident(&notice));
+            while state.issue_events.len() > 20 {
+                state.issue_events.pop_front();
+            }
+        }
         let weak = weak.clone();
         let gate = profile_gate.clone();
         slint::invoke_from_event_loop(move || {
@@ -1142,7 +1357,23 @@ async fn run_loop(
                 ui.global::<MobileData>().set_profile_busy(gate.busy());
                 apply(&ui, view);
                 if !notice.is_empty() {
-                    ui.invoke_notify(notice.into());
+                    let current = ui.global::<MobileView>();
+                    if !current.get_notice().is_empty()
+                        && current.get_notice_error()
+                        && notice_followup
+                    {
+                        ui.invoke_notify(format!("{}\n\n{notice}", current.get_notice()).into());
+                    } else if notice_critical
+                        || (!current.get_notice_modal()
+                            && (!current.get_notice_error()
+                                || current.get_notice().is_empty()
+                                || notice_error))
+                    {
+                        current.set_notice_error(notice_error);
+                        current.set_notice_critical(notice_critical);
+                        current.set_notice_recover_network(notice_network_recovery);
+                        ui.invoke_notify(notice.into());
+                    }
                 }
             }
         })?;
@@ -1174,6 +1405,9 @@ async fn run_loop(
     if let Some(job) = delay_job {
         job.abort();
     }
+    if let Some(job) = recovery_job {
+        job.abort();
+    }
     if let Some(job) = update_job {
         job.abort();
     }
@@ -1184,7 +1418,7 @@ async fn run_loop(
 }
 
 fn start_update_check(
-    port: u16,
+    port: core::network::DownloadPorts,
     include_prereleases: bool,
     generation: u64,
     send: mpsc::Sender<Update>,
@@ -1229,7 +1463,9 @@ fn rollback_protection(state: &mut State, reason: &str) -> Result<()> {
                 .session
                 .native
                 .request(json!({"op":"vpn-plan","enabled":change.before_vpn}))?;
-            state.session.commit_settings(previous)?;
+            state
+                .session
+                .commit_protection(previous.claude_protection, previous.run_mode)?;
             state
                 .session
                 .native
@@ -1238,6 +1474,7 @@ fn rollback_protection(state: &mut State, reason: &str) -> Result<()> {
     }
     state.protection_status = reason.to_owned();
     state.notice = reason.to_owned();
+    state.notice_error = true;
     state.logs.push_back(("WARN".into(), reason.to_owned()));
     Ok(())
 }
@@ -1407,7 +1644,9 @@ async fn native_event(state: &mut State, raw: &str) -> Result<()> {
                 change.deadline = std::time::Instant::now() + Duration::from_secs(120);
                 let mut next = before;
                 next.claude_protection = Some(Arc::new(protection));
-                state.session.commit_settings(next)?;
+                state
+                    .session
+                    .commit_protection(next.claude_protection, next.run_mode)?;
                 state
                     .session
                     .native
@@ -1428,8 +1667,17 @@ async fn native_event(state: &mut State, raw: &str) -> Result<()> {
         "vpn" => {
             state.session.vpn = value["value"].as_bool().unwrap_or(false);
         }
-        "error" | "notice" => {
+        "error" | "critical" | "notice" | "export-error" | "export-notice" | "link-error" => {
             state.notice = value["value"].as_str().unwrap_or("").into();
+            state.notice_error = matches!(
+                value["event"].as_str(),
+                Some("error" | "critical" | "export-error" | "link-error")
+            );
+            state.notice_critical = value["event"] == "critical";
+            state.notice_followup = matches!(
+                value["event"].as_str(),
+                Some("export-error" | "export-notice" | "link-error")
+            );
         }
         "file" => {
             let base = value["value"]["name"].as_str().unwrap_or("导入配置");
@@ -1464,6 +1712,12 @@ async fn handle(state: &mut State, request: Request) -> Result<()> {
         selected,
         profile_ticket: _,
     } = request;
+    if state.session.settings.claude_protection.is_some() || state.protection_change.is_some() {
+        ensure!(
+            mobile_allowed_during_protection(intent, &a),
+            core::protection::READ_ONLY_NOTICE
+        );
+    }
     if (state.session.settings.claude_protection.is_some() || state.protection_change.is_some())
         && (matches!(
             intent,
@@ -1655,6 +1909,44 @@ async fn handle(state: &mut State, request: Request) -> Result<()> {
             session.native.request(json!({"op":"export","name":"clash-of-rust-logs.txt",
                 "content":format!("Android UI: {}\n{}",PRESENTATION.lock().map(|s|s.clone()).unwrap_or_default(),
                     state.logs.iter().map(|(level,line)|format!("[{level}] {line}")).collect::<Vec<_>>().join("\n"))}))?;
+        }
+        MobileIntent::ExportDiagnostics
+        | MobileIntent::CopyDiagnostics
+        | MobileIntent::ReportIssue => {
+            let root = session.store.root.clone();
+            let context = json!({
+                "error":a,"events":state.issue_events,"page":state.page,
+                "core_running":session.running,"vpn_connected":session.vpn,
+                "site_results":core::support::ip_results(&state.ip_results),"claude_status":state.claude_status,
+                "presentation":PRESENTATION.lock().map(|value|value.clone()).unwrap_or_default(),
+                "platform":session.native.request(json!({"op":"diagnostics"})).map_err(|error|format!("{error:#}")),
+            });
+            let lines = state
+                .logs
+                .iter()
+                .map(|(level, line)| format!("[{level}] {line}"))
+                .collect();
+            let report = tokio::task::spawn_blocking(move || {
+                core::support::issue_report(&root, context, lines)
+            })
+            .await?;
+            if intent == MobileIntent::ReportIssue {
+                session.native.request(json!({
+                    "op":"open-url","url":core::support::issue_draft_url(&report)
+                }))?;
+            } else if intent == MobileIntent::CopyDiagnostics {
+                let content = serde_json::to_string_pretty(&report)?;
+                ensure!(content.len() <= 256 * 1024, "诊断报告较大，请使用导出诊断");
+                session
+                    .native
+                    .request(json!({"op":"copy","text":content}))?;
+                state.notice = "诊断已复制".into();
+            } else {
+                let content = serde_json::to_string_pretty(&report)?;
+                session
+                    .native
+                    .request(json!({"op":"export","name":"cor-diagnose.json","content":content}))?;
+            }
         }
         MobileIntent::RuleEdit => {
             let (rows, _) = session.document().rows(&session.draft);
@@ -1901,7 +2193,7 @@ async fn handle(state: &mut State, request: Request) -> Result<()> {
                 let mut next = before;
                 next.claude_protection = None;
                 next.run_mode = saved.previous.mode.clone();
-                session.commit_settings(next)?;
+                session.commit_protection(next.claude_protection, next.run_mode)?;
                 session
                     .api
                     .restore_automatic_groups(&saved.locked_groups, &saved.fixed_groups)
@@ -1930,6 +2222,54 @@ async fn handle(state: &mut State, request: Request) -> Result<()> {
         _ => {}
     }
     Ok(())
+}
+
+fn blocked_during_protection(state: &mut State) -> bool {
+    if state.session.settings.claude_protection.is_none() && state.protection_change.is_none() {
+        return false;
+    }
+    state.notice = core::protection::READ_ONLY_NOTICE.into();
+    state.notice_error = true;
+    true
+}
+
+fn mobile_allowed_during_protection(intent: MobileIntent, value: &str) -> bool {
+    matches!(
+        intent,
+        MobileIntent::Navigate
+            | MobileIntent::OverviewRefresh
+            | MobileIntent::OverviewPrivacy
+            | MobileIntent::Query
+            | MobileIntent::NodePage
+            | MobileIntent::ConnectionPage
+            | MobileIntent::RulePage
+            | MobileIntent::ConnectionSort
+            | MobileIntent::ConnectionDetail
+            | MobileIntent::Copy
+            | MobileIntent::LogLevel
+            | MobileIntent::ExportLogs
+            | MobileIntent::ExportDiagnostics
+            | MobileIntent::CopyDiagnostics
+            | MobileIntent::ReportIssue
+            | MobileIntent::Probe
+            | MobileIntent::Dns
+            | MobileIntent::SiteStart
+            | MobileIntent::SiteCancel
+            | MobileIntent::SiteCategory
+            | MobileIntent::SiteFilter
+            | MobileIntent::SiteRetest
+            | MobileIntent::SiteProbe
+            | MobileIntent::SiteDetail
+            | MobileIntent::ClaudeStart
+            | MobileIntent::ClaudeCancel
+            | MobileIntent::ExportReport
+            | MobileIntent::NodeDelay
+            | MobileIntent::GroupDelay
+            | MobileIntent::DelayAll
+            | MobileIntent::SystemNotification
+            | MobileIntent::CancelUpdate
+            | MobileIntent::OpenRelease
+    ) || (intent == MobileIntent::ClaudeProtection && value == "false")
 }
 
 fn rows<T: Clone + 'static>(values: Vec<T>) -> ModelRc<T> {
@@ -2024,6 +2364,7 @@ struct GroupView {
     testing: bool,
 }
 struct Projection {
+    overview: core::overview::Presentation,
     copied: (i32, Arc<str>),
     page: i32,
     settings: config::Settings,
@@ -2172,7 +2513,7 @@ fn project(state: &State) -> Projection {
         .connections
         .connections
         .iter()
-        .filter(|_| state.page == 3)
+        .filter(|_| matches!(state.page, 0 | 3))
         .filter(|c| {
             query.is_empty()
                 || format!(
@@ -2398,6 +2739,7 @@ fn project(state: &State) -> Projection {
         });
     }
     Projection {
+        overview: state.overview.present(s.running),
         copied: state.copied.clone(),
         page: state.page,
         settings: s.settings.clone(),
@@ -2515,6 +2857,27 @@ fn apply(ui: &AndroidWindow, p: Projection) {
     }
     let data = ui.global::<MobileData>();
     let view = ui.global::<MobileView>();
+    let overview_row = |entry: core::overview::Item| OverviewItem {
+        id: entry.id.into(),
+        title: entry.title.into(),
+        value: entry.value.into(),
+        detail: entry.detail.into(),
+        tone: entry.tone,
+        flagged: !entry.flag.is_empty(),
+        flag: entry.flag.into(),
+        fogged: entry.fogged,
+    };
+    data.set_overview_network(stable(
+        data.get_overview_network(),
+        rows(p.overview.network.into_iter().map(overview_row).collect()),
+    ));
+    data.set_overview_services(stable(
+        data.get_overview_services(),
+        rows(p.overview.services.into_iter().map(overview_row).collect()),
+    ));
+    data.set_overview_status(p.overview.status.into());
+    data.set_overview_busy(p.overview.busy);
+    data.set_overview_hidden(p.overview.hidden);
     if view.get_copy_revision() != p.copied.0 {
         view.set_copy_value(p.copied.1.as_ref().into());
         view.set_copy_revision(p.copied.0);
@@ -2698,7 +3061,11 @@ fn apply(ui: &AndroidWindow, p: Projection) {
     data.set_site_progress(format!("完成 {} / {}", p.progress.0, p.progress.1).into());
     data.set_exit_ip(p.exit.0.into());
     data.set_exit_country(core::countries::country_text(&p.exit.1).into());
-    data.set_exit_flag(flag(&p.exit.1));
+    data.set_exit_flag(
+        core::countries::flag_emoji(&p.exit.1)
+            .unwrap_or_default()
+            .into(),
+    );
     data.set_categories(stable(
         data.get_categories(),
         rows(
@@ -2721,7 +3088,7 @@ fn apply(ui: &AndroidWindow, p: Projection) {
         ),
     ));
     let result = |r: ReportRow| {
-        let flag = flag(&r.country);
+        let flag = core::countries::flag_emoji(&r.country);
         ReportItem {
             id: r.id.into(),
             title: r.title.into(),
@@ -2730,8 +3097,8 @@ fn apply(ui: &AndroidWindow, p: Projection) {
             detail: r.detail.into(),
             source: r.source.into(),
             tone: r.tone,
-            flagged: flag.size().width > 0,
-            flag,
+            flagged: flag.is_some(),
+            flag: flag.unwrap_or_default().into(),
         }
     };
     data.set_site_results(stable(
@@ -2747,6 +3114,12 @@ fn apply(ui: &AndroidWindow, p: Projection) {
     data.set_claude_clues(p.claude_counts.2.to_string().into());
 
     data.set_core_running(p.running);
+    if p.completed == Some(MobileIntent::RestartCore) && p.running && view.get_notice_modal() {
+        view.set_notice_error(false);
+        view.set_notice_critical(false);
+        view.set_notice_recover_network(false);
+        ui.invoke_notify("内核已启动".into());
+    }
     data.set_vpn_connected(p.vpn);
     data.set_profile(p.profile.into());
     data.set_node(p.node.into());
@@ -2891,7 +3264,7 @@ fn apply(ui: &AndroidWindow, p: Projection) {
                         id: name.clone().into(),
                         title: name.into(),
                         detail: format!("{} · {count} 个节点", group.kind).into(),
-                        current: group.now.to_string().into(),
+                        current: group.now.as_str().into(),
                         expanded,
                         testing,
                         nodes: stable(
@@ -3037,62 +3410,38 @@ fn apply(ui: &AndroidWindow, p: Projection) {
         typography.set_system_fonts(false);
     }
     theme.set_accent_index(accent_index(p.settings.accent_color));
-    let dark = theme.get_dark();
     // Read back the actual Slint globals; diagnostics must reveal stale presentation too.
     if let Ok(mut snapshot) = PRESENTATION.lock() {
-        let view = ui.global::<MobileView>();
-        let scale = ui.window().scale_factor();
-        let size = ui.window().size();
-        *snapshot = json!({"core_running":data.get_core_running(),"vpn":data.get_vpn_connected(),
+        *snapshot = presentation_snapshot(ui).to_string();
+    }
+}
+
+fn presentation_snapshot(ui: &AndroidWindow) -> Value {
+    let data = ui.global::<MobileData>();
+    let view = ui.global::<MobileView>();
+    let theme = ui.global::<Theme>();
+    let scale = ui.window().scale_factor();
+    let size = ui.window().size();
+    json!({"core_running":data.get_core_running(),"vpn":data.get_vpn_connected(),
             "page":ui.get_current_page(),"detail":ui.get_current_detail(),
             "groups":data.get_groups().row_count(),"profiles":data.get_profiles().row_count(),
             "vpn_pending":data.get_vpn_pending(),
-            "logs":data.get_logs().row_count(),"dark":dark,"accent":theme.get_accent_index(),"text_scale":theme.get_text_scale(),
-            "body_size":typography.invoke_font_size(16),
+            "logs":data.get_logs().row_count(),"dark":theme.get_dark(),"accent":theme.get_accent_index(),"text_scale":theme.get_text_scale(),
+            "body_size":ui.global::<MobileTypography>().invoke_font_size(16),
             "width":size.width as f32/scale,"height":size.height as f32/scale,"scale":scale,
             "safe_top":view.get_safe_top(),"safe_bottom":view.get_safe_bottom(),
             "keyboard_inset":view.get_keyboard_inset(),
+            "notice_active":!view.get_notice().is_empty(),"notice_error":view.get_notice_error(),
+            "notice_modal":view.get_notice_modal(),
+            "notice_close_target":ui.get_notice_close_target().iter().collect::<Vec<_>>(),
             "profile_add_target":view.get_profile_add_target().iter().collect::<Vec<_>>(),
             "profile_name_target":view.get_profile_name_target().iter().collect::<Vec<_>>(),
             "profile_source_target":view.get_profile_source_target().iter().collect::<Vec<_>>(),
+            "profile_editor_viewport":view.get_profile_editor_viewport().iter().collect::<Vec<_>>(),
             "profile_name_focused":view.get_profile_name_focused(),
             "profile_source_focused":view.get_profile_source_focused(),
             "profile_name_length":view.get_profile_name().chars().count(),
             "profile_source_length":view.get_profile_source().chars().count(),
             "settings_scroll_y":view.get_settings_scroll_y(),"settings_content_height":view.get_settings_content_height(),
             "settings_viewport_height":view.get_settings_viewport_height()})
-        .to_string();
-    }
-}
-
-fn flag(country: &str) -> slint::Image {
-    const PIXELS: &[u8] = include_bytes!("../../../../resources/flags/flags.rgba");
-    static CODES: std::sync::OnceLock<Vec<String>> = std::sync::OnceLock::new();
-    let codes = CODES.get_or_init(|| {
-        serde_json::from_str(include_str!("../../../../resources/flags/codes.json"))
-            .expect("flag codes")
-    });
-    let text = core::countries::country_text(country);
-    let code = core::countries::country_code(text).unwrap_or(text);
-    if matches!(code, "HK" | "MO" | "TW") {
-        return slint::Image::default();
-    }
-    let Some(index) = codes.iter().position(|c| c == code) else {
-        return slint::Image::default();
-    };
-    const BYTES: usize = 72 * 72 * 4;
-    thread_local! { static FLAGS:std::cell::RefCell<std::collections::BTreeMap<usize,slint::Image>>=std::cell::RefCell::default(); }
-    FLAGS.with(|flags| {
-        flags
-            .borrow_mut()
-            .entry(index)
-            .or_insert_with(|| {
-                slint::Image::from_rgba8(slint::SharedPixelBuffer::clone_from_slice(
-                    &PIXELS[index * BYTES..(index + 1) * BYTES],
-                    72,
-                    72,
-                ))
-            })
-            .clone()
-    })
 }

@@ -1,38 +1,49 @@
 import { PageSurface } from "../components/motion.slint";
 import { UiData, UiActions, Intent } from "../state.slint";
 import { Theme } from "../theme/palette.slint";
-import { PageScroll, Label, Caption, Heading, ContentPanel, ActionButton, Field, Badge, Paragraph } from "../components/controls.slint";
+import { PageScroll, Label, Caption, Heading, ContentPanel, ActionButton, Field, Badge, Paragraph, Divider } from "../components/controls.slint";
+import { ToolHeading, InsetResult } from "../components/sections.slint";
 
 export component NetworkPage inherits PageSurface {
     PageScroll {
         content-y <=> UiData.scroll-network;
-        x: 0px;
-        width: parent.width + Theme.content-gap;
         VerticalLayout {
-            padding-right: Theme.content-gap;
-            spacing: Theme.page-gap;
+            padding-right: 8px; spacing: 16px; alignment: start;
             ContentPanel {
-                Heading { text: "网站响应"; }
+                ToolHeading { title: "网站响应"; icon: @image-url("../icons/network.svg"); }
                 HorizontalLayout { cross-axis-alignment: center;
                     spacing: Theme.content-gap;
                     Field { text <=> UiData.test-url; edited(value) => { UiActions.dispatch(Intent.test-url, value, ""); } }
-                    ActionButton { text: UiData.probing ? "测试中…" : "开始测试"; primary: true; busy: UiData.probing; enabled: !UiData.probing; clicked => { UiActions.dispatch(Intent.probe, "false", ""); } }
+                    ActionButton { text: UiData.probing ? "测试中…" : "测试"; primary: true; busy: UiData.probing; enabled: !UiData.probing; clicked => { UiActions.dispatch(Intent.probe, "false", ""); } }
                 }
             }
             ContentPanel {
-                HorizontalLayout { cross-axis-alignment: center; Heading { text: "出口信息"; } ActionButton { text: "查询出口"; enabled: !UiData.probing; clicked => { UiActions.dispatch(Intent.probe, "true", ""); } } }
+                ToolHeading {
+                    title: "出口信息"; icon: @image-url("../icons/ip.svg");
+                    ActionButton { text: "查询出口"; compact: true; enabled: !UiData.probing; clicked => { UiActions.dispatch(Intent.probe, "true", ""); } }
+                }
+                Caption { text: "查询当前网络的公网出口与地区"; }
             }
             ContentPanel {
-                Heading { text: "系统 DNS 查询"; }
+                ToolHeading { title: "系统 DNS 查询"; icon: @image-url("../icons/proxies.svg"); }
                 HorizontalLayout { cross-axis-alignment: center;
                     spacing: Theme.content-gap;
                     Field { text <=> UiData.dns-host; edited(value) => { UiActions.dispatch(Intent.dns-host, value, ""); } }
                     ActionButton { text: "解析"; enabled: !UiData.probing; clicked => { UiActions.dispatch(Intent.dns, "", ""); } }
                 }
-                Caption { text: "通过当前系统解析器查询"; }
             }
-            for line in UiData.network-results: ContentPanel { Paragraph { text: line; } }
-            Rectangle { vertical-stretch: 1; }
+            if UiData.network-results.length > 0: ContentPanel {
+                vertical-padding: 0px; gap: 0px;
+                HorizontalLayout { height: 44px; Caption { text: "本次检查记录"; } Badge { text: "" + UiData.network-results.length; tone: 4; } }
+                for line in UiData.network-results: VerticalLayout {
+                    spacing: 0px;
+                    Divider { }
+                    Rectangle {
+                        height: max(44px, result.preferred-height + 20px);
+                        result := Paragraph { y: 10px; width: parent.width; text: line; font-size: Theme.detail-size; }
+                    }
+                }
+            }
         }
     }
 }

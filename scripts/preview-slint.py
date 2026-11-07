@@ -7,6 +7,7 @@ from html import escape
 import json
 import os
 from pathlib import Path
+import re
 import shutil
 import struct
 import subprocess
@@ -53,12 +54,42 @@ def protection_fixture(state: str) -> dict:
     }
 
 
+def preview_environment(output):
+    fixtures = output/'fixtures'
+    fixtures.mkdir(parents=True, exist_ok=True)
+    cache = output/'font-cache'
+    cache.mkdir(exist_ok=True)
+    fontconfig = fixtures/'fonts.conf'
+    fontconfig.write_text(
+        '<?xml version="1.0"?><!DOCTYPE fontconfig SYSTEM "urn:fontconfig:fonts.dtd">'
+        '<fontconfig><include ignore_missing="yes">/etc/fonts/fonts.conf</include>'
+        f'<dir>{escape(str(ROOT/"resources/fonts"))}</dir>'
+        f'<cachedir>{escape(str(cache))}</cachedir></fontconfig>', encoding='utf-8')
+    return {**os.environ, 'FONTCONFIG_FILE': str(fontconfig), 'SLINT_SCALE_FACTOR': '1',
+            'SLINT_DEFAULT_FONT': str(ROOT/'resources/fonts/SourceHanSansCN-Regular.otf'),
+            'SLINT_FONT_PATH': str(ROOT/'resources/fonts/NotoColorEmoji-Regular.ttf')}
+
+
+def rendering_viewer(viewer):
+    result = subprocess.run([viewer, '--version'], check=True, capture_output=True,
+                            text=True, timeout=10)
+    version = result.stdout.strip()
+    match = re.search(r'\b(\d+)\.(\d+)\.(\d+)\b', version)
+    if not match or tuple(map(int, match.groups())) < (1, 19, 0):
+        raise RuntimeError(
+            'Accurate emoji previews require Slint Viewer 1.19 or newer. '
+            'Install the verified official mainline Viewer as slint-viewer-main, '
+            'or pass --viewer PATH. --check can still use the application’s pinned Viewer.')
+    return {'version': version, 'emoji_font': 'resources/fonts/NotoColorEmoji-Regular.ttf',
+            'font_fallback': 'bundled-first', 'mode': 'headless'}
+
+
 def mobile_preview(args) -> None:
     """Preview the independent Android/iOS entries without building a native host."""
     platforms = ['android', 'ios'] if args.platform == 'both' else [args.platform]
     for platform in platforms:
         entry = ROOT / f'crates/client-ui/ui/mobile/{platform}/preview.slint'
-        run_viewer(args.viewer, ['--check', str(entry)], dict(os.environ))
+        run_viewer(args.check_viewer, ['--check', str(entry)], dict(os.environ))
     if args.check:
         print('Android/iOS Slint syntax and bindings: OK')
         return
@@ -77,7 +108,7 @@ def mobile_preview(args) -> None:
         output = base / platform
         fixtures = output / 'fixtures'
         fixtures.mkdir(parents=True, exist_ok=True)
-        env = {**os.environ, 'SLINT_SCALE_FACTOR': '1', 'XDG_CACHE_HOME': str(output / 'cache')}
+        env = {**preview_environment(output), 'XDG_CACHE_HOME': str(output / 'cache')}
         entries = []
 
         def render(name, label, size='393x852', page=0, dark=False, detail=0,
@@ -85,13 +116,19 @@ def mobile_preview(args) -> None:
             width, height = map(int, size.split('x'))
             short = height < 480
             values = {'preview-page': page, 'preview-dark': dark, 'preview-detail': detail,
+                      'preview-long-names': args.long_names,
                       'inset-top': 0 if short else 24 if width >= 640 else 54 if platform == 'ios' else 28,
                       'inset-bottom': 21 if short else 30 if platform == 'ios' else 24,
                       'inset-left': 44 if short and platform == 'ios' else 0,
                       'inset-right': 44 if short and platform == 'ios' else 0,
-                      'text-scale': scale, 'preview-connected': connected, 'preview-keyboard': keyboard,
-                      'preview-notice': args.notice, 'preview-notice-elapsed': args.notice_elapsed,
+                      'text-scale': scale, 'preview-connected': connected and not args.core_stopped, 'preview-keyboard': keyboard,
+                      'preview-core-running': not args.core_stopped,
+                      'preview-notice': args.notice, 'preview-notice-error': args.notice_error,
+                      'preview-notice-critical': args.notice_critical,
+                      'preview-notice-recover-network': args.notice_recover_network,
+                      'preview-notice-elapsed': args.notice_elapsed,
                       'preview-rules-scroll': args.scroll_y,
+                      'preview-home-scroll': args.scroll_y,
                       **protection_fixture(args.protection_state), **extra}
             fixture = fixtures / (name + '.json')
             fixture.write_text(json.dumps(values), encoding='utf-8')
@@ -107,7 +144,8 @@ def mobile_preview(args) -> None:
         for name in names:
             for dark in themes:
                 render(f'{name}-{"dark" if dark else "light"}', pages[name],
-                       args.size or '393x852', list(pages).index(name), dark, detail=args.detail, scale=args.text_scale)
+                       args.size or '393x852', list(pages).index(name), dark, detail=args.detail,
+                       scale=args.text_scale, keyboard=args.keyboard)
         if platform == 'android' and args.dialogs and 'settings' in names:
             for dark in themes:
                 render(f'preview-update-{"dark" if dark else "light"}', '预发布安装确认',
@@ -115,7 +153,7 @@ def mobile_preview(args) -> None:
                        **{'preview-update-prereleases': True, 'preview-update-preview': True,
                           'preview-update-version': '0.6.8-dev.1.example', 'preview-update-available': True,
                           'preview-update-status': '发现预发布版 0.6.8-dev.1.example', 'preview-settings-scroll': -1200})
-        if args.page == 'all':
+        if args.page == 'all' and not args.pages_only:
             for name, label, size, page, dark, detail, scale in [
                 ('phone-landscape', '手机横屏 · 首页', '852x393', 0, False, 0, 1),
                 ('landscape-rules', '手机横屏 · 规则', '852x393', 4, False, 0, 1),
@@ -151,7 +189,10 @@ def mobile_preview(args) -> None:
                    **{'preview-notice': '强调色已保存。', 'preview-notice-elapsed': 3})
             render('sparse-subscriptions', '少量内容置顶', page=2, **{'preview-sparse': True})
         (output / 'manifest.json').write_text(json.dumps(entries, ensure_ascii=False, indent=2), encoding='utf-8')
+        (output / 'preview-viewer.json').write_text(json.dumps(args.rendering, indent=2)+'\n', encoding='utf-8')
         gallery(entries, output)
+        for theme in ('light', 'dark'):
+            overview(args.viewer, entries, theme, output, env)
         if args.pairs:
             pairs(args.viewer, entries, output, env)
         for name, selected in [
@@ -314,7 +355,9 @@ def pairs(viewer: str, entries: list[dict], output: Path, env: dict[str, str]) -
 
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--viewer", default=shutil.which("slint-viewer"))
+    parser.add_argument("--viewer", default=shutil.which("slint-viewer-main") or shutil.which("slint-viewer"))
+    parser.add_argument("--check-viewer", default=shutil.which("slint-viewer"),
+                        help="Viewer matching the application’s pinned Slint version for syntax checks")
     parser.add_argument("--page", choices=["all", *PAGES, "tools"], default="all")
     parser.add_argument("--mobile", action="store_true", help="render the separate adaptive Android/iOS UI study")
     parser.add_argument("--platform", choices=["android", "ios", "both"], default="both", help="mobile platform entry")
@@ -324,18 +367,29 @@ def main() -> None:
     parser.add_argument("--check", action="store_true", help="only check Slint syntax and bindings")
     parser.add_argument("--pairs", action="store_true", help="also render light/dark pairs suitable for inline sharing")
     parser.add_argument("--full-settings", action="store_true", help="show all settings without scrolling in its page screenshot")
-    parser.add_argument("--notice", default="", help="show a floating notification using the production component")
+    parser.add_argument("--pages-only", action="store_true", help="render the selected pages without the extra mobile scenario matrix")
+    parser.add_argument("--long-names", action="store_true", help="preview long configuration, group and node names")
+    parser.add_argument("--notice", default="", help="show the production floating notice above page content and dialogs")
+    parser.add_argument("--notice-error", action="store_true", help="show a persistent error banner with diagnostic export actions")
+    parser.add_argument("--notice-critical", action="store_true", help="show the error in a centered blocking dialog")
+    parser.add_argument("--notice-recover-network", action="store_true", help="offer the failed-node recovery action")
+    parser.add_argument("--core-stopped", action="store_true", help="preview an unavailable core and its recovery actions")
     parser.add_argument("--protection-state", choices=["off", "active", "checking", "error"], default="off",
                         help="preview the persistent protection indicator without network effects")
     parser.add_argument("--notice-elapsed", type=float, default=3, help="elapsed notification lifetime in seconds")
     parser.add_argument("--size")
     parser.add_argument("--detail", type=int, default=0, help="preview one mobile detail view without rendering the full matrix")
-    parser.add_argument("--text-scale", type=float, default=1, help="mobile font preview factor (native Android uses system SP conversions)")
-    parser.add_argument("--scroll-y", type=float, default=0, help="initial rule-page scroll offset for checking content visibility")
+    parser.add_argument("--keyboard", type=float, default=0, help="mobile keyboard inset in logical pixels")
+    parser.add_argument("--text-scale", type=float, default=1, help="font preview factor, for example 1.3 (native Android uses system SP conversions)")
+    parser.add_argument("--scroll-y", type=float, default=0, help="initial home/rule-page scroll offset for checking content visibility")
     parser.add_argument("--output", type=Path)
     args = parser.parse_args()
+    if args.notice_critical or args.notice_recover_network:
+        args.notice_error = True
     if not args.viewer:
         parser.error("Install the official prebuilt Slint Viewer in a persistent directory, or pass --viewer PATH.")
+    args.check_viewer = args.check_viewer or args.viewer
+    args.rendering = None if args.check else rendering_viewer(args.viewer)
     if args.mobile:
         mobile_preview(args)
         return
@@ -351,7 +405,7 @@ def main() -> None:
         parser.error("--size must be WIDTHxHEIGHT, between 800x450 and 4096x4096")
 
     if args.check:
-        run_viewer(args.viewer, ["--check", str(ENTRY)], dict(os.environ))
+        run_viewer(args.check_viewer, ["--check", str(ENTRY)], dict(os.environ))
         print("Slint UI syntax and bindings: OK")
         return
 
@@ -359,21 +413,15 @@ def main() -> None:
     output.mkdir(parents=True, exist_ok=True)
     fixtures = output / "fixtures"
     fixtures.mkdir(exist_ok=True)
-    # Keep fontconfig caches writable without requiring installation as root.
-    cache = output / "font-cache"
-    cache.mkdir(exist_ok=True)
-    fontconfig = fixtures / "fonts.conf"
-    fontconfig.write_text('<?xml version="1.0"?><!DOCTYPE fontconfig SYSTEM "urn:fontconfig:fonts.dtd">'
-                          '<fontconfig><include ignore_missing="yes">/etc/fonts/fonts.conf</include>'
-                          f'<cachedir>{escape(str(cache))}</cachedir></fontconfig>', encoding="utf-8")
-    env = {**os.environ, "FONTCONFIG_FILE": str(fontconfig), "SLINT_SCALE_FACTOR": "1"}
+    env = preview_environment(output)
     entry = ENTRY
-    run_viewer(args.viewer, ["--check", str(entry)], env)
+    run_viewer(args.check_viewer, ["--check", str(entry)], env)
     pages = list(PAGES) if args.page == "all" else [args.page]
     themes = ["light", "dark"] if args.theme == "both" else [args.theme]
     if args.live:
         fixture = fixtures / "live.json"
         values = {"preview-page": list(PAGES).index(pages[0]), "preview-motion": True,
+                  "preview-text-scale": round(args.text_scale * 100),
                   **protection_fixture(args.protection_state)}
         fixture.write_text(json.dumps({**values, "preview-dark": themes[0] == "dark"}))
         subprocess.run([args.viewer, "--auto-reload", "--load-data", str(fixture), str(entry)],
@@ -389,8 +437,14 @@ def main() -> None:
         for name, label, page, dialog in scenes:
             fixture = fixtures / f"{name}-{theme}.json"
             fixture.write_text(json.dumps({"preview-page": list(PAGES).index(page), "preview-dark": theme == "dark", "dialog": dialog,
+                                           "preview-long-names": args.long_names,
+                                           "preview-text-scale": round(args.text_scale * 100),
                                            "preview-rules-scroll": args.scroll_y,
-                                           "preview-notice": args.notice, "preview-notice-elapsed": args.notice_elapsed,
+                                           "preview-home-scroll": args.scroll_y,
+                                           "preview-notice": args.notice, "preview-notice-error": args.notice_error, "preview-notice-elapsed": args.notice_elapsed,
+                                           "preview-notice-critical": args.notice_critical,
+                                           "preview-notice-recover-network": args.notice_recover_network,
+                                           "preview-core-running": not args.core_stopped,
                                            **protection_fixture(args.protection_state)}))
             image = output / f"{name}-{theme}.png"
             scene_size = f"{width}x{max(height, 1120)}" if args.full_settings and page == "settings" and not dialog else args.size
@@ -405,6 +459,7 @@ def main() -> None:
     (output / "manifest.json").write_text(json.dumps({"entry": str(ENTRY.relative_to(ROOT)),
                                                      "screenshots": entries, "overviews": overviews, "pairs": paired},
                                                     ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+    (output / 'preview-viewer.json').write_text(json.dumps(args.rendering, indent=2)+'\n', encoding='utf-8')
     gallery(entries, output)
     print(f"Gallery: {output / 'index.html'}")
 

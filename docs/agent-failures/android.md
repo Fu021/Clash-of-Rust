@@ -61,16 +61,12 @@
 - 测试辅助状态必须有稳定来源，等待状态变化而不是固定 sleep。
 - VPN 授权测试不能把无障碍 `ACTION_CLICK` 返回成功当作对话框已关闭；要等应用窗口实际恢复前台与焦点，再发起下一次授权，避免连续拒绝/允许误点正在退出的旧窗口。证据见 [CI 40161810492](https://github.com/Fu021/Clash-of-Rust/actions/runs/40161810492) 的 Android x64 logcat。
 - 焦点等待失败时同时检查宿主生命周期与模拟器系统窗口。[打包 40524184066](https://github.com/Fu021/Clash-of-Rust/actions/runs/40524184066) 的 Google Messages、[打包 41812352411](https://github.com/Fu021/Clash-of-Rust/actions/runs/41812352411) 的 SystemUI/Google 服务均曾在应用外出现 ANR，挡住已 `RESUMED` 的应用焦点；不能改写应用生命周期或删除焦点断言。后者冷启动时 CPU 压力约 89%、负载约 17.5；可丢弃模拟器改为 4 GiB RAM、至多使用宿主的 4 个 CPU，并保存窗口、Activity、电源诊断；显式传入 `-no-metrics`，避免后续交互式遥测确认。`2ac829d` 的 CI `41823452467` 与不发布打包 `41828458776` 均通过真实代理/TUN 和授权检查；这不能认定旧 ANR 的唯一根因或代替实机验收。
-- 订阅保护校验放在共享会话，在下载、保存或重载前拒绝编辑和更新受保护订阅，同时允许修改其他订阅；界面禁用按钮只提供反馈，不能代替业务校验。
+- 保护只读校验放在共享会话，在下载、保存或重载前拒绝所有订阅编辑、更新和设置修改；界面禁用按钮只提供反馈，不能代替业务校验。
 - 网络开关同步移动协议、宿主投影、持久化与预览；依赖项被规范化关闭后要有重新开启入口。回归覆盖 DNS 覆盖关闭、重开、Fake-IP 手动恢复和重启保留，见[移动会话测试](../../crates/mobile-ffi/src/lib.rs)。
 
 ### 输入框有光标但软键盘不显示
 
-- [issue #31](https://github.com/Fu021/Clash-of-Rust/issues/31) 的 Redmi K30 / MIUI 14.0.5 在两种输入法下均出现问题，视频有焦点和选择柄；这不能证明 Android 已建立 `InputConnection` 或键盘已显示。MIUI 版本也不能替代 Android 版本和 API 级别。
-- `v0.6.6` 与当前 [Java helper](../../vendor/slint-android-activity/java/SlintAndroidJavaHelper.java) 字节相同，已包含将动画回调移至输入视图的 OEM 补丁；[上游 #11344](https://github.com/slint-ui/slint/issues/11344) 不能再当作本次缺少的修复。Slint 1.18.1 重复点击已聚焦输入框仍会请求键盘，不能只据视频归因为首次调用过早。
-- 当前 helper 直接 `requestFocus()` 后调用 `showSoftInput()`，未核对返回值或实际 IME 可见性；窗口初始化还会隐藏键盘。请求未被系统接收、OEM 显示异常及随后隐藏均待设备日志区分，不能靠无限重试、强制弹出或模拟器通过认定修复。
-- 专项 `41995793003` 的 API 31 截图有光标却无键盘，系统同时报告 `mInputShown=true`、有效输入连接和可见 IME；API 36 截图键盘可见，两版的 `MobileView.keyboard-inset` 均为 0。显示、系统状态与界面避让是不同证据，不能将一个断言失败归为同一根因。该轮关闭系统动画，后续用正常/关闭动画、保留/移除应用动画回调的多轮对照；MIUI 实机仍未验证。
-- 复现时采集跨进程 `adb logcat -b main -b system -v threadtime`，点击前后分别保留 `dumpsys input_method`、`dumpsys window windows` 及系统/API 信息；用虚构名称和地址，分享前脱敏。`cor logs` 是内核日志，不能替代系统输入法日志。[定向 CI](../workflows/ci.md#ci)补上 API 36/31 的添加表单、系统键盘可见性、输入连接提交、切换字段与隐藏后重开；首轮 `41993603936` 被首帧诊断尚未就绪及镜像元数据差异阻断，不算键盘复现。API 31 官方 `x86_64-31_r14.zip` 的仓库 revision 为 14，包内 `source.properties` 实为 12，分别固定下载身份与包内版本；不可放宽成任意版本。修正后的模拟器结果及 MIUI 实机仍待验证。
+十版本、51 轮的截图与接口对照及当前修复见[输入法专页](android-ime.md)。API 31/32 已复现系统报告显示却未绘出键盘，移除动画回调明显改善；本地一并修复字段切换时序、跨版本键盘高度同步、旧版系统栏误判及字段滚动避让，仍待新补丁的 Actions 和 MIUI 实机验收。不能把历史模拟器采集成功当作全面兼容或正式修复通过。
 
 ### Geo 与安装包下载
 

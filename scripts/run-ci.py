@@ -4,7 +4,7 @@ import importlib.util
 import shutil
 import sys
 
-from build_support import host_system, ROOT, bundle_directory, host_arch, run, cargo_messages, write_json
+from build_support import host_system, ROOT, bundle_directory, host_arch, run, cargo_messages, write_json, desktop_cargo_scope
 from workflow_artifacts import export_build, test_binaries
 
 
@@ -22,12 +22,13 @@ def main():
     # platform matrix restores any large compiler caches.
     # One profile across Clippy, tests and production builds avoids a second
     # dependency compilation and produces the exact binaries released later.
-    run(['cargo', 'clippy', '--workspace', '--release', '--all-targets', '--locked', '--', '-D', 'warnings'])
-    run(['cargo', 'build', '--workspace', '--release', '--locked', '--bins'])
-    messages = cargo_messages(['cargo', 'test', '--workspace', '--release', '--locked', '--lib', '--bins', '--tests',
+    packages = desktop_cargo_scope(ROOT)
+    run(['cargo', 'clippy', *packages, '--release', '--all-targets', '--locked', '--', '-D', 'warnings'])
+    run(['cargo', 'build', *packages, '--release', '--locked', '--bins'])
+    messages = cargo_messages(['cargo', 'test', *packages, '--release', '--locked', '--lib', '--bins', '--tests',
                               '--no-run', '--message-format=json'])
     tests = test_binaries(messages)
-    run(['cargo', 'test', '--workspace', '--release', '--locked', '--lib', '--bins', '--tests', '--', '--test-threads=1'])
+    run(['cargo', 'test', *packages, '--release', '--locked', '--lib', '--bins', '--tests', '--', '--test-threads=1'])
     spec = importlib.util.spec_from_file_location('prepare', ROOT/'scripts/prepare-resources.py')
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)

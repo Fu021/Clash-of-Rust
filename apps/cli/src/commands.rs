@@ -68,7 +68,11 @@ pub async fn execute(args: &Args) -> Result<()> {
                         .context("等待后台清理失败")?;
                 }
             }
-            output::emit(args, json!({"running":false}))
+            let routes = crate::host_network::with_proxy_context(
+                crate::host_network::observe().await,
+                Some(ProxyMode::Off),
+            );
+            output::emit(args, json!({"running":false,"host_routes":routes}))
         }
         "status" => status(args).await,
         "mode" => {
@@ -93,23 +97,18 @@ pub async fn execute(args: &Args) -> Result<()> {
                     _ => bail!("代理状态应为 system、tun 或 off"),
                 };
                 if mode == ProxyMode::Tun {
-                    crate::host_network::warn_tun();
                     maintenance::authorize_tun(args).await?;
                 }
                 let _: Value = backend::request(args, Command::Proxy { mode }).await?;
             }
-            let poll: Poll = backend::request(
-                args,
-                Command::Snapshot {
-                    scope: Scope::Other,
-                    header: false,
-                },
-            )
-            .await?;
-            let proxy = poll.snapshot.proxy_mode();
+            let poll = current_snapshot(args, Scope::Other, false).await?;
+            let proxy = poll
+                .as_ref()
+                .filter(|poll| poll.snapshot.running)
+                .map_or(ProxyMode::Off, |poll| poll.snapshot.proxy_mode());
             let routes = crate::host_network::with_proxy_context(
                 crate::host_network::observe().await,
-                poll.snapshot.running.then_some(proxy),
+                Some(proxy),
             );
             output::emit(args, json!({"proxy":proxy,"host_routes":routes}))
         }
@@ -130,6 +129,20 @@ pub async fn execute(args: &Args) -> Result<()> {
     }
 }
 
+async fn current_snapshot(args: &Args, scope: Scope, header: bool) -> Result<Option<Poll>> {
+    tokio::time::timeout(std::time::Duration::from_secs(5), async {
+        let Some(remote) = backend::connect(args, false).await? else {
+            return Ok(None);
+        };
+        remote
+            .request(Command::Snapshot { scope, header })
+            .await
+            .map(Some)
+    })
+    .await
+    .context("读取当前用户后台状态超过 5 秒")?
+}
+
 async fn status(args: &Args) -> Result<()> {
     let mut routes = crate::host_network::observe().await;
     let mut observed_at = std::time::Instant::now();
@@ -138,13 +151,14 @@ async fn status(args: &Args) -> Result<()> {
             routes = crate::host_network::observe().await;
             observed_at = std::time::Instant::now();
         }
-        let mut value = if let Some(remote) = backend::connect(args, false).await? {
-            let poll: Poll = remote
-                .request(Command::Snapshot {
-                    scope: Scope::Home,
-                    header: true,
-                })
-                .await?;
+        let mut failure = None;
+        let mut value = if let Some(poll) = match current_snapshot(args, Scope::Home, true).await {
+            Ok(poll) => poll,
+            Err(error) => {
+                failure = Some(error);
+                None
+            }
+        } {
             let profile = poll
                 .meta
                 .profiles
@@ -158,14 +172,21 @@ async fn status(args: &Args) -> Result<()> {
         } else {
             json!({"running":false,"owner":null})
         };
-        let proxy = if value["running"] == true {
+        let proxy = if let Some(error) = &failure {
+            value["running"] = Value::Null;
+            value["backend_error"] = json!(format!("{error:#}"));
+            None
+        } else if value["running"] == true {
             serde_json::from_value(value["proxy"].clone()).ok()
         } else {
-            None
+            Some(ProxyMode::Off)
         };
         value["host_routes"] = crate::host_network::with_proxy_context(routes.clone(), proxy);
         output::emit(args, value)?;
         if !args.flag("watch") {
+            if let Some(error) = failure {
+                return Err(error);
+            }
             break;
         }
         tokio::time::sleep(args.interval()?).await;

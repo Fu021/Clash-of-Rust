@@ -117,6 +117,7 @@ fn validate_fake_ip_exclusion(value: &str) -> Result<()> {
 pub struct Settings {
     pub controller_port: u16,
     pub mixed_port: u16,
+    pub direct_download_port: u16,
     pub secret: String,
     pub dark: bool,
     // None preserves the explicit theme of settings saved by older versions.
@@ -160,6 +161,7 @@ impl Default for Settings {
         Self {
             controller_port: defaults.controller_port,
             mixed_port: defaults.mixed_port,
+            direct_download_port: 0,
             secret: uuid::Uuid::new_v4().to_string(),
             dark: defaults.dark,
             theme_mode: None,
@@ -188,6 +190,25 @@ impl Default for Settings {
 }
 
 impl Settings {
+    pub fn require_mutable(&self) -> Result<()> {
+        ensure!(
+            self.claude_protection.is_none(),
+            crate::protection::READ_ONLY_NOTICE
+        );
+        Ok(())
+    }
+
+    pub fn download_ports(&self) -> crate::network::DownloadPorts {
+        crate::network::DownloadPorts {
+            mixed: self.mixed_port,
+            direct: if self.claude_protection.is_none() {
+                self.direct_download_port
+            } else {
+                0
+            },
+        }
+    }
+
     /// DNS overrides own the Fake-IP switch. Turning the override off also
     /// turns Fake-IP off so a later override cannot silently restore it.
     pub fn fake_ip_enabled(&self) -> bool {
@@ -404,16 +425,20 @@ pub struct Store {
 }
 
 impl Store {
+    pub fn default_root() -> Result<PathBuf> {
+        Ok(
+            if let Some(path) = std::env::var_os("CLASH_OF_RUST_DATA_DIR") {
+                PathBuf::from(path)
+            } else {
+                ProjectDirs::from("org", "clash-of-rust", "ClashOfRust")
+                    .context("无法确定应用数据目录")?
+                    .data_local_dir()
+                    .to_owned()
+            },
+        )
+    }
     pub fn discover() -> Result<Self> {
-        let root = if let Some(path) = std::env::var_os("CLASH_OF_RUST_DATA_DIR") {
-            PathBuf::from(path)
-        } else {
-            ProjectDirs::from("org", "clash-of-rust", "ClashOfRust")
-                .context("无法确定应用数据目录")?
-                .data_local_dir()
-                .to_owned()
-        };
-        Self::at(root)
+        Self::at(Self::default_root()?)
     }
     pub fn at(root: PathBuf) -> Result<Self> {
         for name in ["profiles", "runtime"] {
@@ -615,6 +640,23 @@ pub fn runtime_config_with_rules(
         Value::from(format!("127.0.0.1:{}", settings.controller_port)),
     );
     map.insert(Value::from("secret"), Value::from(settings.secret.clone()));
+    if settings.direct_download_port != 0 && settings.claude_protection.is_none() {
+        if [settings.controller_port, settings.mixed_port].contains(&settings.direct_download_port)
+        {
+            bail!("直连下载端口不能与控制或代理端口相同");
+        }
+        map.insert(
+            Value::from("listeners"),
+            yaml_serde::to_value([serde_json::json!({
+                "name": "cor-download-direct",
+                "type": "mixed",
+                "listen": "127.0.0.1",
+                "port": settings.direct_download_port,
+                "proxy": "DIRECT",
+                "udp": false,
+            })])?,
+        );
+    }
     map.insert(Value::from("allow-lan"), Value::from(false));
     map.insert(Value::from("bind-address"), Value::from("127.0.0.1"));
     map.insert(Value::from("mode"), Value::from(settings.run_mode.clone()));
@@ -1119,6 +1161,12 @@ mod tests {
                         "https://dns.alidns.com/dns-query",
                     ])
                     .unwrap();
+                    expected["direct-nameserver"] = yaml_serde::to_value([
+                        "https://doh.pub/dns-query#DIRECT",
+                        "https://dns.alidns.com/dns-query#DIRECT",
+                    ])
+                    .unwrap();
+                    expected["direct-nameserver-follow-policy"] = Value::from(false);
                     let filters = expected["fake-ip-filter"].as_sequence_mut().unwrap();
                     for domain in DEFAULT_FAKE_IP_EXCLUSIONS {
                         if !filters.contains(&Value::from(*domain)) {
@@ -1605,6 +1653,35 @@ mod tests {
         assert_eq!(result["secret"].as_str(), Some(settings.secret.as_str()));
     }
     #[test]
+    fn protection_marks_settings_read_only_and_removes_the_direct_download_listener() {
+        use crate::claude_check::protection::{Previous, Protection};
+        let profile_id = uuid::Uuid::new_v4().to_string();
+        let mut settings = Settings {
+            direct_download_port: 45678,
+            active_profile: Some(profile_id.clone()),
+            ..Default::default()
+        };
+        assert_eq!(settings.download_ports().direct, 45678);
+        assert!(settings.require_mutable().is_ok());
+        settings.claude_protection = Some(std::sync::Arc::new(Protection::new(
+            profile_id,
+            "node".into(),
+            Previous {
+                mode: "rule".into(),
+                proxy_mode: crate::model::ProxyMode::Off,
+                selectors: Default::default(),
+            },
+        )));
+        assert!(settings.require_mutable().is_err());
+        assert_eq!(settings.download_ports().direct, 0);
+        let runtime: Value = yaml_serde::from_str(
+            &runtime_config("proxies: []\nrules: [MATCH,DIRECT]\n", &settings).unwrap(),
+        )
+        .unwrap();
+        assert!(runtime["listeners"].is_null());
+    }
+
+    #[test]
     fn rejects_node_links_and_invalid_ports() {
         assert!(parse_profile("ss://example").is_err());
         let settings = Settings {
@@ -1612,6 +1689,44 @@ mod tests {
             ..Settings::default()
         };
         assert!(runtime_config("proxies: []", &settings).is_err());
+    }
+
+    #[test]
+    fn download_listener_forces_direct_and_replaces_subscription_listeners() {
+        let mut settings = Settings::default();
+        let listener = reserve_controller(0, settings.mixed_port).unwrap();
+        settings.direct_download_port = listener.local_addr().unwrap().port();
+        let raw = "proxies: []\nlisteners: [{name: untrusted, type: mixed, port: 8888, listen: '0.0.0.0'}]\ndns: {direct-nameserver: ['https://dns.example.test/dns-query#BadNode'], direct-nameserver-follow-policy: true}\n";
+        for mode in ["rule", "global", "direct"] {
+            settings.run_mode = mode.into();
+            let runtime: Value =
+                yaml_serde::from_str(&runtime_config(raw, &settings).unwrap()).unwrap();
+            let listeners = runtime["listeners"].as_sequence().unwrap();
+            assert_eq!(listeners.len(), 1);
+            assert_eq!(listeners[0]["listen"].as_str(), Some("127.0.0.1"));
+            assert_eq!(listeners[0]["proxy"].as_str(), Some("DIRECT"));
+            assert_eq!(
+                listeners[0]["port"].as_u64(),
+                Some(u64::from(settings.direct_download_port))
+            );
+            assert_eq!(
+                runtime["dns"]["direct-nameserver-follow-policy"].as_bool(),
+                Some(false)
+            );
+            assert_eq!(
+                runtime["dns"]["direct-nameserver"][0].as_str(),
+                Some("https://doh.pub/dns-query#DIRECT")
+            );
+        }
+        settings.dns_override = false;
+        let runtime: Value =
+            yaml_serde::from_str(&runtime_config(raw, &settings).unwrap()).unwrap();
+        assert_eq!(
+            runtime["dns"]["direct-nameserver"][0].as_str(),
+            Some("https://dns.example.test/dns-query#BadNode")
+        );
+        settings.direct_download_port = settings.mixed_port;
+        assert!(runtime_config(raw, &settings).is_err());
     }
     #[test]
     fn atomic_storage_and_profile_ids() {

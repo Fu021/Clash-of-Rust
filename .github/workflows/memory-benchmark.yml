@@ -92,7 +92,7 @@ jobs:
           audience: ${{ vars.TS_AUDIENCE }}
           tags: tag:github-action-cache
           version: ${{ env.COR_TAILSCALE }}
-          use-cache: 'false'
+          use-cache: ${{ runner.os == 'macOS' && 'true' || 'false' }}
           retry: '1'
           timeout: 45s
           args: --accept-dns=false
