@@ -78,7 +78,10 @@ export component MobileFrame inherits Rectangle {
     keys := FocusScope {
         width: parent.width; height: parent.height;
         capture-key-pressed(event) => {
-            if (event.text == Key.Escape || event.text == Key.Back) && MobileView.notice != "" && MobileView.notice-error {
+            // Android delivers Back through MainActivity/OnBackInvokedDispatcher.
+            // Handling Key.Back here as well dismisses the notice twice and the
+            // second pass closes the page underneath it.
+            if event.text == Key.Escape && MobileView.notice != "" && MobileView.notice-error {
                 MobileView.notice = ""; return accept;
             }
             if event.text == Key.Escape && MobileView.rule-drag-id != "" {
@@ -219,7 +222,7 @@ export component MobileFrame inherits Rectangle {
                 changed active => { if self.active { self.focus(); } }
                 init => { if self.active { self.focus(); } }
                 key-pressed(event) => {
-                    if event.text == Key.Escape || event.text == Key.Back {
+                    if event.text == Key.Escape {
                         MobileView.notice = ""; return accept;
                     }
                     return reject;

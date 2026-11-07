@@ -83,6 +83,31 @@ fn host_geo_state(relative: &Path) -> bool {
             .any(|prefix| name.starts_with(prefix))
 }
 
+fn safe_listener(value: &yaml_serde::Value) -> bool {
+    let Some(listener) = value.as_mapping() else {
+        return false;
+    };
+    let kind = listener
+        .get(yaml_serde::Value::from("type"))
+        .and_then(yaml_serde::Value::as_str);
+    let listen = listener
+        .get(yaml_serde::Value::from("listen"))
+        .and_then(yaml_serde::Value::as_str);
+    let Some(port) = listener
+        .get(yaml_serde::Value::from("port"))
+        .and_then(yaml_serde::Value::as_u64)
+    else {
+        return false;
+    };
+    matches!(kind, Some("http" | "socks" | "mixed"))
+        && listen == Some("127.0.0.1")
+        && (1024..=65535).contains(&port)
+        && !listener
+            .get(yaml_serde::Value::from("udp"))
+            .and_then(yaml_serde::Value::as_bool)
+            .unwrap_or(false)
+}
+
 fn collect(
     root: &Path,
     relative: &Path,
@@ -183,9 +208,27 @@ pub fn snapshot(pipe: HANDLE, request: &Request) -> Result<Snapshot> {
         "external-controller-unix",
         "external-controller-pipe",
         "external-controller-tls",
-        "listeners",
     ] {
         config.remove(yaml_serde::Value::from(key));
+    }
+    // The managed DIRECT download listener is a loopback TCP proxy and must
+    // survive into the privileged core. Drop every other listener kind so a
+    // supplied configuration cannot create pipes or privileged sockets.
+    if let Some(value) = config.remove(yaml_serde::Value::from("listeners")) {
+        if let Some(items) = value.as_sequence() {
+            let listeners: Vec<_> = items
+                .iter()
+                .filter(|listener| safe_listener(listener))
+                .take(4)
+                .cloned()
+                .collect();
+            if !listeners.is_empty() {
+                config.insert(
+                    yaml_serde::Value::from("listeners"),
+                    yaml_serde::Value::Sequence(listeners),
+                );
+            }
+        }
     }
     let controller = config
         .get(yaml_serde::Value::from("external-controller"))
@@ -472,6 +515,30 @@ mod tests {
         assert!(names.contains(&PathBuf::from("providers/subscription.yaml")));
         assert!(!names.iter().any(|name| host_geo_state(name)));
         assert!(directory.join(".geo-download-old/rejected.exe").exists());
+    }
+
+    #[test]
+    fn only_loopback_tcp_listeners_reach_the_service_core() {
+        let listeners: yaml_serde::Value = yaml_serde::from_str(
+            "- {name: direct, type: mixed, listen: 127.0.0.1, port: 42131, proxy: DIRECT, udp: false}\n\
+             - {name: unix, type: unix, listen: /tmp/core.sock, port: 1}\n\
+             - {name: public, type: mixed, listen: 0.0.0.0, port: 42132}\n\
+             - {name: udp, type: socks, listen: 127.0.0.1, port: 42133, udp: true}\n\
+             - {name: privileged, type: http, listen: 127.0.0.1, port: 80}\n",
+        )
+        .unwrap();
+        let sequence = listeners.as_sequence().unwrap();
+        let safe: Vec<_> = sequence
+            .iter()
+            .filter(|listener| safe_listener(listener))
+            .collect();
+        assert_eq!(safe.len(), 1);
+        assert_eq!(
+            safe[0]
+                .get(yaml_serde::Value::from("name"))
+                .and_then(yaml_serde::Value::as_str),
+            Some("direct")
+        );
     }
 
     #[test]

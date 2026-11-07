@@ -424,9 +424,12 @@ pub async fn run(engine: &mut Engine, profile: &std::path::Path) {
                 "Missing traffic for {key}: {after}"
             );
         }
+        // Root CLI smoke intentionally resolves update domains through a
+        // direct nameserver before this protected window. Count only public
+        // DNS that appears after protection is enabled.
         assert_eq!(
-            after["direct_public_dns"], 0,
-            "Public DNS bypassed the node: {after}"
+            after["direct_public_dns"], before["direct_public_dns"],
+            "Public DNS bypassed the node: before={before}, after={after}"
         );
         assert_eq!(after["plaintext_dns"], 0, "Plaintext DNS leaked: {after}");
         assert_eq!(
