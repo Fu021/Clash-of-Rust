@@ -1655,8 +1655,10 @@ mod tests {
     #[test]
     fn protection_marks_settings_read_only_and_removes_the_direct_download_listener() {
         use crate::claude_check::protection::{Previous, Protection};
-        let mut settings = Settings::default();
-        settings.direct_download_port = 45678;
+        let mut settings = Settings {
+            direct_download_port: 45678,
+            ..Default::default()
+        };
         assert_eq!(settings.download_ports().direct, 45678);
         assert!(settings.require_mutable().is_ok());
         settings.claude_protection = Some(std::sync::Arc::new(Protection::new(

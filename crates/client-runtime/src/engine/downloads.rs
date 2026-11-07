@@ -18,6 +18,7 @@ impl Default for UpdateGate {
     }
 }
 
+#[derive(Debug)]
 pub(crate) struct UpdateJob {
     _permit: OwnedSemaphorePermit,
     cancellation: watch::Receiver<u64>,
@@ -425,7 +426,7 @@ mod tests {
             "node".into(),
             Previous {
                 mode: "rule".into(),
-                proxy_mode: crate::model::ProxyMode::Off,
+                proxy_mode: ProxyMode::Off,
                 selectors: Default::default(),
             },
         )));
@@ -442,13 +443,14 @@ mod tests {
         .await
         .unwrap_err();
         assert!(subscription.to_string().contains("Claude 保护"));
-        let app = Engine::download_app_update_with(&shared, &mut None, |_, _, _| async {
-            anyhow::bail!("protected app update reached the network")
-        })
-        .await
-        .unwrap_err();
+        let app =
+            Engine::download_app_update_with::<(), _, _>(&shared, &mut None, |_, _, _| async {
+                anyhow::bail!("protected app update reached the network")
+            })
+            .await
+            .unwrap_err();
         assert!(app.to_string().contains("Claude 保护"));
-        let geo = Engine::update_geo_with(&shared, None, |_, _| async {
+        let geo = Engine::download_geo_with(&shared, None, |_, _| async {
             anyhow::bail!("protected Geo download reached the network")
         })
         .await
