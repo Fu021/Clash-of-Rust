@@ -1,5 +1,5 @@
 import { Motion, Entrance, ProgressTrack, CopyFeedback } from "motion.slint";
-import { Theme } from "../theme/palette.slint";
+import { Theme, AccentPalette } from "../theme/palette.slint";
 import { UiData, UiActions, Intent } from "../state.slint";
 import { ScrollView } from "std-widgets.slint";
 
@@ -54,7 +54,7 @@ export component Label {
 
 export component Caption inherits Label {
     font-size: Theme.detail-size;
-    color: Theme.secondary;
+    color: Theme.muted;
 }
 
 export component Heading inherits Label {
@@ -73,7 +73,7 @@ export component Panel inherits Rectangle {
     background: Theme.surface;
     border-color: Theme.line;
     border-width: 1px;
-    border-radius: 8px;
+    border-radius: Theme.radius-lg;
     animate background, border-color { duration: Motion.appearance; enabled: Motion.active; }
     @children
 }
@@ -82,6 +82,7 @@ export component Panel inherits Rectangle {
 export component ContentPanel inherits Panel {
     in property <length> gap: Theme.content-gap;
     in property <length> vertical-padding: Theme.card-padding;
+    in property <length> horizontal-padding: Theme.card-padding;
     in property <bool> interactive: false;
     callback clicked();
     vertical-stretch: 0;
@@ -92,7 +93,7 @@ export component ContentPanel inherits Panel {
     }
     content := VerticalLayout {
         alignment: start;
-        padding-left: Theme.card-padding; padding-right: Theme.card-padding;
+        padding-left: root.horizontal-padding; padding-right: root.horizontal-padding;
         padding-top: root.vertical-padding; padding-bottom: root.vertical-padding;
         spacing: root.gap;
         @children
@@ -122,7 +123,7 @@ export component SettingsSection inherits Rectangle {
     height: content.preferred-height;
     content := VerticalLayout {
         alignment: start;
-        spacing: Theme.content-gap;
+        spacing: 10px;
         Heading { text: root.title; height: 28px; }
         @children
     }
@@ -154,6 +155,9 @@ export component ActionButton inherits Rectangle {
     in property <bool> success;
     in property <bool> dropdown: false;
     in property <bool> expanded: false;
+    // Quiet variant: no outline until hovered. Used for secondary actions.
+    in property <bool> ghost: false;
+    in property <bool> compact: false;
     property <bool> interactive: root.enabled && !root.busy && (UiData.modal == 0 || root.modal-control);
     // Mouse activation must not leave a focus highlight that resembles selection.
     property <bool> keyboard-focus: false;
@@ -162,17 +166,18 @@ export component ActionButton inherits Rectangle {
     animate press-offset { duration: Motion.fast; easing: ease-out; enabled: Motion.active; }
     callback clicked();
     forward-focus: key-scope;
-    height: Theme.control-height;
-    width: max(68px, button-label.preferred-width + 28px + (root.dropdown ? 20px : 0px));
+    height: root.compact ? Theme.compact-height : Theme.control-height;
+    width: max(root.compact ? 27px : 55px, button-label.preferred-width + (root.compact ? 20px : 26px) + (root.dropdown ? 20px : 0px));
     vertical-stretch: 0;
     horizontal-stretch: 0;
-    border-radius: 5px;
-    background: root.primary ? (root.pressed ? Theme.primary.darker(0.15) : Theme.primary)
+    border-radius: root.compact ? Theme.radius-sm : Theme.radius;
+    background: root.primary ? (root.pressed ? Theme.primary.darker(0.15) : root.interactive && area.has-hover ? Theme.primary.darker(0.1) : Theme.primary)
         : root.success ? Theme.success-wash : root.selected || root.pressed ? Theme.accent-wash
-        : root.interactive && area.has-hover ? Theme.inset : Theme.surface;
+        : root.interactive && area.has-hover ? (root.ghost ? Theme.hover : Theme.dark ? Theme.raised : Theme.inset)
+        : root.ghost ? transparent : Theme.surface;
     border-width: 1px;
-    border-color: root.interactive && root.keyboard-focus && key-scope.has-focus ? Theme.ink
-        : root.primary ? Theme.primary : root.selected || root.pressed ? Theme.accent : Theme.line;
+    border-color: root.interactive && root.keyboard-focus && key-scope.has-focus ? Theme.accent
+        : root.primary ? Theme.primary : root.selected || root.pressed ? Theme.accent.with-alpha(0.4) : root.ghost ? transparent : Theme.line-strong;
     opacity: root.enabled || root.busy ? 1 : 0.5;
     animate background, border-color, opacity { duration: Motion.fast; enabled: Motion.active; }
     button-label := Label {
@@ -181,7 +186,8 @@ export component ActionButton inherits Rectangle {
         height: parent.height;
         text: root.text;
         horizontal-alignment: center;
-        color: root.primary ? #ffffff : root.danger ? Theme.danger : root.success ? Theme.success : root.selected ? Theme.accent : Theme.ink;
+        font-weight: 500;
+        color: root.primary ? Theme.on-primary : root.danger ? Theme.danger : root.success ? Theme.success : root.selected ? Theme.accent : root.ghost ? Theme.secondary : Theme.ink;
         font-size: Theme.body-size;
     }
     if root.dropdown: Chevron {
@@ -191,7 +197,7 @@ export component ActionButton inherits Rectangle {
     }
     if root.busy: ProgressTrack {
         y: parent.height - 3px; width: parent.width; indeterminate: true; track: transparent;
-        fill: root.primary ? #ffffff : Theme.accent;
+        fill: root.primary ? Theme.on-primary : Theme.accent;
     }
     key-scope := FocusScope {
         enabled: root.interactive;
@@ -209,15 +215,75 @@ export component ActionButton inherits Rectangle {
     }
 }
 
+// One option of a segmented control (design: .seg button). The selected option
+// lifts onto the surface; the track behind the group stays neutral.
+component SegmentOption inherits Rectangle {
+    in property <string> text;
+    in property <bool> selected;
+    in property <bool> enabled: true;
+    callback clicked();
+    forward-focus: key-scope;
+    height: Theme.compact-height;
+    width: option-label.preferred-width + 26px;
+    border-radius: Theme.radius-sm;
+    property <bool> keyboard-focus: false;
+    property <bool> interactive: root.enabled && UiData.modal == 0;
+    background: root.selected ? (Theme.dark ? Theme.raised : Theme.surface) : root.interactive && area.has-hover ? Theme.hover : transparent;
+    border-width: 1px;
+    border-color: root.interactive && root.keyboard-focus && key-scope.has-focus ? Theme.accent : root.selected ? Theme.line-strong : transparent;
+    opacity: root.enabled ? 1 : 0.5;
+    animate background, border-color, opacity { duration: Motion.fast; enabled: Motion.active; }
+    option-label := Label {
+        width: parent.width; height: parent.height; text: root.text; horizontal-alignment: center;
+        font-weight: root.selected ? 600 : 400;
+        color: root.selected ? Theme.ink : Theme.secondary;
+    }
+    key-scope := FocusScope {
+        enabled: root.interactive;
+        focus-gained(reason) => { root.keyboard-focus = reason == FocusReason.tab-navigation; }
+        key-pressed(event) => {
+            root.keyboard-focus = true;
+            if event.text == "\n" || event.text == " " { root.clicked(); return accept; }
+            return reject;
+        }
+    }
+    area := TouchArea {
+        enabled: root.interactive;
+        mouse-cursor: pointer;
+        clicked => { root.keyboard-focus = false; key-scope.focus(); root.clicked(); }
+    }
+}
+
+export component Segmented inherits Rectangle {
+    in property <[string]> options;
+    in property <int> current;
+    in property <bool> enabled: true;
+    callback picked(int);
+    height: Theme.compact-height + 6px;
+    width: row.preferred-width;
+    horizontal-stretch: 0;
+    vertical-stretch: 0;
+    border-radius: Theme.radius;
+    background: Theme.track;
+    animate background { duration: Motion.appearance; enabled: Motion.active; }
+    row := HorizontalLayout {
+        padding: 3px; spacing: 2px;
+        for option[i] in root.options: SegmentOption {
+            text: option; selected: i == root.current; enabled: root.enabled;
+            clicked => { root.picked(i); }
+        }
+    }
+}
+
 export component Badge inherits Rectangle {
     in property <string> text;
     // 0 accent, 1 success, 2 warning, 3 danger, 4 neutral.
     in property <int> tone: 0;
     in property <length> width-limit: 320px;
-    height: 28px;
-    width: min(label.preferred-width + 18px, root.width-limit);
+    height: 22px * Theme.text-scale;
+    width: min(label.preferred-width + 16px, root.width-limit);
     horizontal-stretch: 0;
-    border-radius: 5px;
+    border-radius: self.height / 2;
     background: tone == 1 ? Theme.success-wash : tone == 2 ? Theme.warning-wash : tone == 3 ? Theme.danger-wash : tone == 4 ? Theme.inset : Theme.accent-wash;
     animate background { duration: Motion.control; enabled: Motion.active; }
     label := Caption {
@@ -225,27 +291,43 @@ export component Badge inherits Rectangle {
         height: parent.height;
         text: root.text;
         color: root.tone == 1 ? Theme.success : root.tone == 2 ? Theme.warning : root.tone == 3 ? Theme.danger : root.tone == 4 ? Theme.secondary : Theme.accent;
+        font-weight: 500;
         horizontal-alignment: center;
     }
 }
 
-export component AccentChoice inherits Rectangle {
-    in property <bool> modal-control: false;
+// Six accent swatches in a row. The ring marks the current one; nothing else
+// on the page changes meaning with the accent.
+export component AccentSwatches inherits Rectangle {
     in property <bool> enabled: true;
-    in property <string> text;
-    in property <color> swatch;
-    callback clicked();
-    width: 138px;
-    height: Theme.control-height;
+    in property <int> current;
+    callback picked(int);
+    height: 27px;
+    width: 6 * 22px + 5 * 8px + 8px;
     horizontal-stretch: 0;
-    border-radius: 5px;
-    border-width: 1px;
-    border-color: Theme.line;
-    background: area.has-hover ? Theme.inset : Theme.surface;
-    Rectangle { x: 12px; y: (parent.height - self.height) / 2; width: 18px; height: 18px; border-radius: 9px; background: root.swatch; }
-    Label { x: 40px; y: 0px; width: parent.width - 67px; height: parent.height; text: root.text; }
-    Chevron { x: parent.width - 24px; y: (parent.height - self.height) / 2; }
-    area := TouchArea { enabled: root.enabled; mouse-cursor: pointer; clicked => { root.clicked(); } }
+    HorizontalLayout {
+        alignment: end; spacing: 8px; padding-right: 4px;
+        for swatch[i] in 6: Rectangle {
+            width: 22px; height: 22px;
+            Rectangle {
+                width: 22px; height: 22px; border-radius: 11px;
+                y: (parent.height - self.height) / 2;
+                background: Theme.dark ? AccentPalette.dark-colors[i] : AccentPalette.accent-colors[i];
+                border-width: 1px; border-color: #00000019;
+            }
+            if i == root.current: Rectangle {
+                x: -4px; y: -4px; width: 30px; height: 30px; border-radius: 15px;
+                border-width: 1.5px; border-color: Theme.dark ? AccentPalette.dark-colors[i] : AccentPalette.accent-colors[i];
+            }
+            accessible-role: button;
+            accessible-label: AccentPalette.accent-names[i];
+            TouchArea {
+                enabled: root.enabled && UiData.modal == 0;
+                mouse-cursor: pointer;
+                clicked => { root.picked(i); }
+            }
+        }
+    }
 }
 
 export component Field inherits Rectangle {
@@ -266,8 +348,8 @@ export component Field inherits Rectangle {
     min-width: 100px;
     background: Theme.surface;
     opacity: root.enabled ? 1 : 0.55;
-    border-radius: 6px;
-    border-color: input.has-focus ? Theme.accent : Theme.line;
+    border-radius: Theme.radius;
+    border-color: input.has-focus ? Theme.accent : Theme.line-strong;
     animate border-color, background { duration: Motion.fast; enabled: Motion.active; }
     border-width: 1px;
     input := TextInput {
@@ -282,7 +364,7 @@ export component Field inherits Rectangle {
         font-size: Theme.body-size;
         color: Theme.ink;
         selection-background-color: Theme.primary;
-        selection-foreground-color: #ffffff;
+        selection-foreground-color: Theme.on-primary;
         edited => { root.edited(self.text); }
         accepted => { root.accepted(); }
     }
@@ -323,9 +405,9 @@ export component Select inherits Rectangle {
             entrance := Entrance { }
             opacity: entrance.progress;
             background: Theme.surface;
-            border-color: Theme.line;
+            border-color: Theme.line-strong;
             border-width: 1px;
-            border-radius: 6px;
+            border-radius: Theme.radius;
             ScrollView {
                 VerticalLayout {
                     alignment: start;
@@ -351,21 +433,21 @@ export component Toggle inherits Rectangle {
     in property <bool> checked;
     in property <bool> enabled: true;
     callback toggled(bool);
-    width: 40px;
-    height: 24px;
+    width: 34px;
+    height: 21px;
     horizontal-stretch: 0;
     vertical-stretch: 0;
-    border-radius: 12px;
-    background: root.checked ? Theme.primary : Theme.muted;
+    border-radius: 11px;
+    background: root.checked ? Theme.primary : Theme.line-strong;
     animate background, opacity { duration: Motion.control; enabled: Motion.active; }
     opacity: root.enabled ? 1 : 0.5;
     Rectangle {
-        x: root.checked ? 19px : 3px;
+        x: root.checked ? 16px : 3px;
         animate x { duration: Motion.control; easing: ease-out; enabled: Motion.active; }
         y: 3px;
-        width: 18px;
-        height: 18px;
-        border-radius: 9px;
+        width: 15px;
+        height: 15px;
+        border-radius: 8px;
         background: #ffffff;
     }
     toggle-focus := FocusScope {
@@ -407,9 +489,38 @@ export component SettingRow inherits Rectangle {
     }
 }
 
+// Settings list row (design: .set-row): title and optional hint on the left,
+// the control on the right. Rows sit inside a ListPanel and are separated by Dividers.
+export component FormRow inherits Rectangle {
+    in property <string> title;
+    in property <string> hint;
+    vertical-stretch: 0;
+    height: max(55px, content.preferred-height);
+    content := HorizontalLayout {
+        padding-left: Theme.card-padding; padding-right: Theme.card-padding;
+        padding-top: 13px; padding-bottom: 13px;
+        cross-axis-alignment: center;
+        spacing: Theme.card-padding;
+        VerticalLayout {
+            horizontal-stretch: 1; spacing: 1px; alignment: center;
+            Label { text: root.title; font-weight: 500; }
+            if root.hint != "": Caption { text: root.hint; }
+        }
+        HorizontalLayout { spacing: Theme.content-gap; alignment: end; cross-axis-alignment: center; horizontal-stretch: 0; @children }
+    }
+}
+
+// A card whose rows run edge to edge and are divided by hairlines.
+export component ListPanel inherits ContentPanel {
+    vertical-padding: 0px;
+    horizontal-padding: 0px;
+    gap: 0px;
+    clip: true;
+}
+
 export component Divider inherits Rectangle {
     height: 1px;
-    background: Theme.subtle-line;
+    background: Theme.line;
 }
 
 export component CopyButton inherits ActionButton {

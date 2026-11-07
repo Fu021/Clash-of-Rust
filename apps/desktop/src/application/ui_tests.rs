@@ -120,7 +120,7 @@ fn desktop_rule_handle_edges_lift_the_real_row_and_follow_the_pointer() {
             })
             .expect("the lifted row must render a full-width accent border")
     };
-    for x in [225., 247.] {
+    for x in [227., 249.] {
         let start = slint::LogicalPosition::new(x, 355.);
         window
             .window()
@@ -244,7 +244,7 @@ fn connection_sort_clicks_redraw_the_header_immediately_and_third_click_restores
             .as_chunks::<950>()
             .0
             .iter()
-            .skip(156)
+            .skip(124)
             .take(52)
             .flat_map(|row| row[200..926].iter().copied())
             .collect::<Vec<_>>()
@@ -256,14 +256,14 @@ fn connection_sort_clicks_redraw_the_header_immediately_and_third_click_restores
         .map(|row| row.id)
         .collect::<Vec<_>>();
     for (x, y, field, first_descending) in [
-        (780., 174., "download-rate", true),
-        (780., 197., "download-total", true),
-        (670., 174., "upload-rate", true),
-        (670., 197., "upload-total", true),
-        (480., 174., "rule", false),
-        (480., 197., "chain", false),
-        (260., 174., "name", false),
-        (260., 197., "start", true),
+        (760., 137., "download-rate", true),
+        (760., 159., "download-total", true),
+        (650., 137., "upload-rate", true),
+        (650., 159., "upload-total", true),
+        (450., 137., "rule", false),
+        (450., 159., "chain", false),
+        (237., 137., "name", false),
+        (237., 159., "start", true),
     ] {
         let mut frames = Vec::new();
         for click in 0..3 {
@@ -320,7 +320,7 @@ fn connection_sort_clicks_redraw_the_header_immediately_and_third_click_restores
     app.present_slint(&data, &mut models);
     assert_eq!(header(), before);
     for _ in 0..4 {
-        for (x, y) in [(670., 174.), (480., 197.), (260., 174.), (780., 174.)] {
+        for (x, y) in [(650., 137.), (450., 159.), (237., 137.), (760., 137.)] {
             ui_testing::rapid_click(window.window(), x, y);
         }
     }
@@ -469,14 +469,14 @@ fn clicking_a_node_selects_it_but_its_latency_button_only_tests_it() {
     window.show().unwrap();
     let _ = window.window().take_snapshot().unwrap();
     let click = |x, y| ui_testing::click(window.window(), x, y);
-    click(507.0, 298.0);
+    click(536.0, 229.0);
     assert_eq!(
         events.borrow().as_slice(),
         &[(Intent::NodeDelay, "node-a".into(), "".into())],
         "the first button click must run the action, not only focus it"
     );
     events.borrow_mut().clear();
-    click(250.0, 252.0);
+    click(300.0, 206.0);
     assert_eq!(
         events.borrow().as_slice(),
         &[(Intent::SelectNode, "Proxy".into(), "node-a".into())],
@@ -485,7 +485,7 @@ fn clicking_a_node_selects_it_but_its_latency_button_only_tests_it() {
     events.borrow_mut().clear();
     data.set_protected(true);
     let _ = window.window().take_snapshot().unwrap();
-    click(250.0, 252.0);
+    click(300.0, 206.0);
     assert!(
         events.borrow().is_empty(),
         "protected nodes must not dispatch a selection"
@@ -493,13 +493,13 @@ fn clicking_a_node_selects_it_but_its_latency_button_only_tests_it() {
     data.set_protected(false);
     let _ = window.window().take_snapshot().unwrap();
     events.borrow_mut().clear();
-    click(260.0, 205.0);
+    click(260.0, 152.0);
     assert_eq!(
         events.borrow().as_slice(),
         &[(Intent::ToggleGroup, "Proxy".into(), "".into())]
     );
     events.borrow_mut().clear();
-    click(507.0, 298.0);
+    click(536.0, 229.0);
     assert_eq!(
         events.borrow().as_slice(),
         &[(Intent::NodeDelay, "node-a".into(), "".into())],
@@ -539,7 +539,7 @@ fn pointer_keyboard_escape_and_modal_input_use_the_production_callbacks() {
         "only one native notification may be active"
     );
     data.set_notification_busy(false);
-    click(65.0, 156.0);
+    click(65.0, 102.0);
     assert_eq!(events.borrow().last().unwrap().0, Intent::Navigate);
     assert_eq!(events.borrow().last().unwrap().1, "1");
     window.window().dispatch_event(WindowEvent::KeyPressed {
@@ -558,7 +558,7 @@ fn pointer_keyboard_escape_and_modal_input_use_the_production_callbacks() {
     data.set_modal_can_accept(true);
     let _ = window.window().take_snapshot().unwrap();
     click(28.0, 36.0);
-    click(65.0, 156.0);
+    click(65.0, 102.0);
     assert!(
         events.borrow().is_empty(),
         "modal overlay must block background actions"
@@ -659,9 +659,9 @@ fn node_sort_popup_dispatches_each_clicked_option_and_reorders_real_models() {
         (2, ["node1", "node2", "node10"]),
     ] {
         let _ = window.window().take_snapshot().unwrap();
-        ui_testing::click(window.window(), 830., 124.);
+        ui_testing::click(window.window(), 830., 93.);
         let _ = window.window().take_snapshot().unwrap();
-        ui_testing::click(window.window(), 830., 176. + index as f32 * 44.);
+        ui_testing::click(window.window(), 830., 139. + index as f32 * 38.);
         let events = events.borrow_mut().drain(..).collect::<Vec<_>>();
         assert_eq!(
             events.len(),
@@ -738,16 +738,10 @@ fn appearance_remains_interactive_while_geo_owns_the_engine_and_late_reply_canno
     let events = pointer_events(&window);
     window.show().unwrap();
     let _ = window.window().take_snapshot().unwrap();
-    ui_testing::click(window.window(), 840., 233.);
-    assert_eq!(events.borrow_mut().pop().unwrap().0, Intent::AccentPicker);
-    let _ = app.ui_intent(Intent::AccentPicker, "", "");
-    app.present_slint(&data, &mut models);
-    assert_eq!(data.get_modal(), 12);
-    assert!(data.get_modal_can_accept());
+    data.set_settings_section(2);
+    data.set_settings_jump(1);
     let _ = window.window().take_snapshot().unwrap();
-    ui_testing::click(window.window(), 475., 314.); // blue swatch
-    let _ = window.window().take_snapshot().unwrap();
-    ui_testing::click(window.window(), 710., 460.); // complete while Geo is still busy
+    ui_testing::click(window.window(), 774., 198.); // blue swatch, applied while Geo is still busy
     let chosen = events
         .borrow_mut()
         .pop()
@@ -805,9 +799,12 @@ fn font_popup_changes_the_saved_request_and_rendered_font_at_fractional_scale() 
     window.show().unwrap();
     let _ = window.window().take_snapshot().unwrap();
     let before = window.global::<Theme>().get_body_size();
-    ui_testing::click(window.window(), 860., 290.);
+    data.set_settings_section(2);
+    data.set_settings_jump(1);
     let _ = window.window().take_snapshot().unwrap();
-    ui_testing::click(window.window(), 860., 518.); // fifth option: 125%
+    ui_testing::click(window.window(), 860., 253.);
+    let _ = window.window().take_snapshot().unwrap();
+    ui_testing::click(window.window(), 860., 451.); // fifth option: 125%
     assert_eq!(
         events.borrow().as_slice(),
         &[(Intent::TextScale, "125%".into(), "".into())]
@@ -1099,9 +1096,9 @@ fn profile_and_rule_source_popups_preserve_ids_and_filters() {
     let events = pointer_events(&window);
     window.show().unwrap();
     let _ = window.window().take_snapshot().unwrap();
-    ui_testing::click(window.window(), 400., 124.);
+    ui_testing::click(window.window(), 400., 93.);
     let _ = window.window().take_snapshot().unwrap();
-    ui_testing::click(window.window(), 400., 220.);
+    ui_testing::click(window.window(), 400., 177.);
     assert_eq!(
         events.borrow().as_slice(),
         &[(Intent::RuleProfile, "second".into(), "".into())]
@@ -1109,9 +1106,9 @@ fn profile_and_rule_source_popups_preserve_ids_and_filters() {
     let event = events.borrow_mut().pop().unwrap();
     let _ = app.ui_intent(event.0, &event.1, &event.2);
     assert!(matches!(app.queued_actions.pop_back(), Some(Action::LoadRules(id)) if id == "second"));
-    ui_testing::click(window.window(), 750., 260.);
+    ui_testing::click(window.window(), 768., 203.);
     let _ = window.window().take_snapshot().unwrap();
-    ui_testing::click(window.window(), 750., 356.);
+    ui_testing::click(window.window(), 768., 287.);
     assert_eq!(
         events.borrow().as_slice(),
         &[(Intent::RuleFilter, "1".into(), "".into())]
@@ -1143,9 +1140,9 @@ fn ip_category_status_and_region_popups_drive_report_filters() {
         (510., 3, Intent::SiteStatus, status),
         (730., 1, Intent::SiteRegion, "未识别地区".into()),
     ] {
-        ui_testing::click(window.window(), x, 305.);
+        ui_testing::click(window.window(), x, 269.);
         let _ = window.window().take_snapshot().unwrap();
-        ui_testing::click(window.window(), x, 357. + index as f32 * 44.);
+        ui_testing::click(window.window(), x, 315. + index as f32 * 38.);
         assert_eq!(
             events.borrow().as_slice(),
             &[(intent, value.clone(), "".into())]
@@ -1183,13 +1180,13 @@ fn log_rows_open_full_text_copy_without_opening_and_filter_by_source_level() {
     let events = pointer_events(&window);
     window.show().unwrap();
     let _ = window.window().take_snapshot().unwrap();
-    ui_testing::click(window.window(), 876., 196.);
+    ui_testing::click(window.window(), 869., 161.);
     assert_eq!(
         events.borrow().as_slice(),
         &[(Intent::Copy, "[error] failed".into(), "".into())]
     );
     events.borrow_mut().clear();
-    ui_testing::click(window.window(), 400., 252.);
+    ui_testing::click(window.window(), 400., 213.);
     assert_eq!(
         events.borrow().as_slice(),
         &[(Intent::LogDetail, long.clone().into(), "".into())]
@@ -1204,9 +1201,9 @@ fn log_rows_open_full_text_copy_without_opening_and_filter_by_source_level() {
     assert_eq!(data.get_modal(), 0);
     events.borrow_mut().clear();
     let _ = window.window().take_snapshot().unwrap();
-    ui_testing::click(window.window(), 708., 124.);
+    ui_testing::click(window.window(), 708., 93.);
     let _ = window.window().take_snapshot().unwrap();
-    ui_testing::click(window.window(), 708., 352.);
+    ui_testing::click(window.window(), 708., 291.);
     assert_eq!(
         events.borrow().as_slice(),
         &[(Intent::LogLevel, "WARN".into(), "".into())]
@@ -1385,7 +1382,7 @@ fn motion_overlays_reverse_on_reopen_release_content_and_leave_no_idle_clock() {
     let initial = motion_frame(&window, 0);
     // Saved dark appearance is already present in the first rendered frame.
     let canvas = (690 * 950 + 940) * 4;
-    assert_eq!(&initial[canvas..canvas + 3], &[0x11, 0x19, 0x23]);
+    assert_eq!(&initial[canvas..canvas + 3], &[0x1d, 0x20, 0x22]);
     motion_frame(&window, 250);
     assert!(
         motion.get_initialized(),
@@ -1460,7 +1457,7 @@ fn motion_does_not_delay_connection_sort_arrow_or_third_click_reset() {
     motion_frame(&window, 250);
     let before = motion_frame(&window, 0);
     for click in 0..3 {
-        ui_testing::rapid_click(window.window(), 780., 174.);
+        ui_testing::rapid_click(window.window(), 760., 137.);
         let (intent, a, b) = events.borrow_mut().pop().unwrap();
         assert_eq!(intent, Intent::ConnectionSort);
         let _ = app.ui_intent(intent, &a, &b);
@@ -1471,9 +1468,9 @@ fn motion_does_not_delay_connection_sort_arrow_or_third_click_reset() {
                 .as_chunks::<{ 950 * 4 }>()
                 .0
                 .iter()
-                .skip(156)
+                .skip(124)
                 .take(52)
-                .flat_map(|row| row[740 * 4..820 * 4].iter().copied())
+                .flat_map(|row| row[740 * 4..900 * 4].iter().copied())
                 .collect::<Vec<_>>()
         };
         if click < 2 {
@@ -1507,7 +1504,7 @@ fn copy_feedback_waits_for_matching_native_ack_and_resets_without_resizing() {
     window.global::<clash_client_ui::Motion>().set_enabled(true);
     window.show().unwrap();
     motion_frame(&window, 250);
-    ui_testing::rapid_click(window.window(), 876., 196.);
+    ui_testing::rapid_click(window.window(), 869., 161.);
     let (_, value, _) = events.borrow_mut().pop().unwrap();
     let waiting = motion_frame(&window, 250);
     data.set_copy_value("another request".into());
@@ -1517,7 +1514,7 @@ fn copy_feedback_waits_for_matching_native_ack_and_resets_without_resizing() {
         motion_frame(&window, 250),
         "unrelated or failed writes must not display success"
     );
-    ui_testing::rapid_click(window.window(), 876., 196.);
+    ui_testing::rapid_click(window.window(), 869., 161.);
     data.set_copy_value(value);
     data.set_copy_revision(2);
     motion_frame(&window, 0);
@@ -1553,7 +1550,7 @@ fn motion_group_collapse_is_persisted_before_exit_and_navigation_drops_nodes() {
     window.show().unwrap();
     motion_frame(&window, 250);
     for expanded in [false, true, false] {
-        ui_testing::rapid_click(window.window(), 400., 185.);
+        ui_testing::rapid_click(window.window(), 400., 155.);
         let (intent, a, b) = events
             .borrow_mut()
             .pop()

@@ -3,27 +3,42 @@ import { Theme } from "../theme/palette.slint";
 import { UiData } from "../state.slint";
 import { Label } from "controls.slint";
 
+// Sidebar entry (design: .nav-item). The current page is a neutral pressed
+// background; the accent is reserved for primary actions and selection marks.
 export component NavigationItem inherits Rectangle {
     in property <string> text;
     in property <image> icon;
     in property <bool> selected;
+    // Optional trailing hint, e.g. the connection count or the version.
+    in property <string> trailing;
     callback clicked();
     forward-focus: key-scope;
     height: Theme.control-height;
-    border-radius: 8px;
-    background: root.selected ? Theme.accent-wash : area.has-hover ? Theme.surface : transparent;
+    border-radius: Theme.radius;
+    background: root.selected ? Theme.press : area.has-hover ? Theme.hover : transparent;
+    border-width: 1px;
+    border-color: key-scope.has-focus && root.keyboard-focus ? Theme.accent : transparent;
+    property <bool> keyboard-focus: false;
     animate background { duration: Motion.control; enabled: Motion.active; }
-    Rectangle { x: 0px; y: (parent.height - self.height) / 2; width: 3px; height: root.selected ? 20px : 12px; background: Theme.accent; border-radius: 2px; opacity: root.selected ? 1 : 0;
-        animate opacity, height { duration: Motion.control; easing: ease-out; enabled: Motion.active; }
+    Image { x: 8px; y: (parent.height - self.height) / 2; width: 18px; height: 18px; source: root.icon; colorize: root.selected ? Theme.ink : Theme.secondary; animate colorize { duration: Motion.control; enabled: Motion.active; } }
+    Label {
+        x: 34px; y: 0px; width: parent.width - 34px - (root.trailing != "" ? trailing-label.preferred-width + 16px : 8px); height: parent.height;
+        text: root.text; color: root.selected ? Theme.ink : Theme.secondary;
+        font-weight: root.selected ? 600 : 400;
     }
-    Image { x: 14px; y: (parent.height - self.height) / 2; width: 18px; height: 18px; source: root.icon; colorize: root.selected ? Theme.accent : Theme.secondary; animate colorize { duration: Motion.control; enabled: Motion.active; } }
-    Label { x: 44px; y: 0px; width: parent.width - 48px; height: parent.height; text: root.text; color: root.selected ? Theme.accent : Theme.ink; }
+    trailing-label := Label {
+        visible: root.trailing != "";
+        x: parent.width - self.preferred-width - 8px; y: 0px; width: self.preferred-width; height: parent.height;
+        text: root.trailing; color: Theme.muted; font-size: Theme.detail-size;
+    }
     key-scope := FocusScope {
         enabled: UiData.modal == 0;
+        focus-gained(reason) => { root.keyboard-focus = reason == FocusReason.tab-navigation; }
         key-pressed(event) => {
+            root.keyboard-focus = true;
             if event.text == " " || event.text == "\n" { root.clicked(); return accept; }
             return reject;
         }
     }
-    area := TouchArea { mouse-cursor: pointer; clicked => { key-scope.focus(); root.clicked(); } }
+    area := TouchArea { mouse-cursor: pointer; clicked => { root.keyboard-focus = false; key-scope.focus(); root.clicked(); } }
 }

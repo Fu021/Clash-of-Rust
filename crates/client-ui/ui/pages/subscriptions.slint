@@ -1,7 +1,7 @@
 import { PageSurface } from "../components/motion.slint";
 import { Theme } from "../theme/palette.slint";
 import { UiData, UiActions, Intent } from "../state.slint";
-import { PageScroll, Label, Caption, Heading, ContentPanel, ActionButton, Badge } from "../components/controls.slint";
+import { PageScroll, Label, Caption, ContentPanel, ActionButton, Badge } from "../components/controls.slint";
 export component SubscriptionsPage inherits PageSurface {
     PageScroll {
         content-key: "" + UiData.page-offset;
@@ -11,34 +11,53 @@ export component SubscriptionsPage inherits PageSurface {
             alignment: start; padding-right: Theme.content-gap; spacing: Theme.page-gap;
             HorizontalLayout { cross-axis-alignment: center; spacing: Theme.content-gap;
                 Rectangle { horizontal-stretch: 1; }
-                ActionButton { text: "打开目录"; enabled: UiData.ready; clicked => { UiActions.dispatch(Intent.open-profiles, "", ""); } }
+                ActionButton { text: "打开目录"; ghost: true; enabled: UiData.ready; clicked => { UiActions.dispatch(Intent.open-profiles, "", ""); } }
                 ActionButton { text: "+ 添加订阅"; primary: true; enabled: UiData.ready && !UiData.working; clicked => { UiActions.dispatch(Intent.add-profile, "", ""); } }
             }
             if UiData.profile-source != "": ContentPanel {
                 Caption { text: "待导入：" + UiData.profile-source; }
                 ActionButton { text: "导入所选配置"; primary: true; enabled: !UiData.working; clicked => { UiActions.dispatch(Intent.add-profile, "", ""); } }
             }
-            for profile in UiData.profiles: ContentPanel {
-                border-color: profile.active ? Theme.accent : Theme.line;
-                HorizontalLayout { cross-axis-alignment: center; spacing: Theme.content-gap;
-                    height: Theme.control-height;
-                    Heading { text: profile.name; }
-                    if profile.active: Badge { text: "当前使用中"; tone: 1; }
-                    if !profile.active: ActionButton { text: "使用"; enabled: !UiData.working; clicked => { UiActions.dispatch(Intent.activate-profile, profile.id, ""); } }
-                }
-                Caption { text: profile.detail; wrap: word-wrap; }
-                Caption { text: profile.source; }
-                if !profile.local: HorizontalLayout { cross-axis-alignment: center; spacing: Theme.content-gap;
-                    Rectangle { horizontal-stretch: 1; }
-                    ActionButton { text: "更新"; enabled: !UiData.working; clicked => { UiActions.dispatch(Intent.update-profile, profile.id, ""); } }
-                    ActionButton { text: "编辑"; enabled: !UiData.working; clicked => { UiActions.dispatch(Intent.edit-profile, profile.id, ""); } }
-                    ActionButton { text: "删除"; danger: true; enabled: !UiData.working; clicked => { UiActions.dispatch(Intent.delete-profile, profile.id, ""); } }
+            // Subscription cards flow into as many columns as fit (min 288 wide, 13 apart),
+            // so a 950 window shows two per row instead of one long list (issue #33).
+            grid := Rectangle {
+                vertical-stretch: 0;
+                property <length> gap: 13px;
+                property <length> card-height: max(132px, 132px * Theme.text-scale);
+                property <int> columns: max(1, floor((self.width + self.gap) / (288px + self.gap)));
+                property <length> card-width: (self.width - (self.columns - 1) * self.gap) / self.columns;
+                property <int> rows: ceil(UiData.profiles.length / self.columns);
+                height: self.rows > 0 ? self.rows * self.card-height + (self.rows - 1) * self.gap : 0px;
+                for profile[i] in UiData.profiles: Rectangle {
+                    x: mod(i, grid.columns) * (grid.card-width + grid.gap);
+                    y: floor(i / grid.columns) * (grid.card-height + grid.gap);
+                    width: grid.card-width; height: grid.card-height;
+                    background: Theme.surface;
+                    border-radius: Theme.radius-lg;
+                    border-width: profile.active ? 1.5px : 1px;
+                    border-color: profile.active ? Theme.accent : Theme.line;
+                    VerticalLayout {
+                        padding-left: 16px; padding-right: 13px; padding-top: 13px; padding-bottom: 13px; spacing: 5px;
+                        HorizontalLayout { spacing: Theme.content-gap; cross-axis-alignment: center; height: Theme.compact-height;
+                            Label { text: profile.name; font-size: Theme.title-size; font-weight: 600; }
+                            if profile.active: Badge { text: "使用中"; tone: 1; }
+                            if !profile.active: ActionButton { text: "使用"; compact: true; enabled: !UiData.working; clicked => { UiActions.dispatch(Intent.activate-profile, profile.id, ""); } }
+                        }
+                        Caption { text: profile.source; overflow: elide; }
+                        Caption { text: profile.detail; wrap: word-wrap; overflow: elide; vertical-alignment: top; }
+                        Rectangle { vertical-stretch: 1; }
+                        if !profile.local: HorizontalLayout { spacing: 2px; alignment: end; cross-axis-alignment: center;
+                            ActionButton { text: "更新"; compact: true; ghost: true; enabled: !UiData.working; clicked => { UiActions.dispatch(Intent.update-profile, profile.id, ""); } }
+                            ActionButton { text: "编辑"; compact: true; ghost: true; enabled: !UiData.working; clicked => { UiActions.dispatch(Intent.edit-profile, profile.id, ""); } }
+                            ActionButton { text: "删除"; compact: true; ghost: true; danger: true; enabled: !UiData.working; clicked => { UiActions.dispatch(Intent.delete-profile, profile.id, ""); } }
+                        }
+                    }
                 }
             }
             HorizontalLayout { cross-axis-alignment: center; spacing: Theme.content-gap;
                 Caption { text: UiData.page-status; }
-                ActionButton { text: "上一页"; enabled: UiData.previous; clicked => { UiActions.dispatch(Intent.list-page, "" + max(0, UiData.page-offset - 60), ""); } }
-                ActionButton { text: "下一页"; enabled: UiData.next; clicked => { UiActions.dispatch(Intent.list-page, "" + (UiData.page-offset + 60), ""); } }
+                ActionButton { text: "上一页"; compact: true; enabled: UiData.previous; clicked => { UiActions.dispatch(Intent.list-page, "" + max(0, UiData.page-offset - 60), ""); } }
+                ActionButton { text: "下一页"; compact: true; enabled: UiData.next; clicked => { UiActions.dispatch(Intent.list-page, "" + (UiData.page-offset + 60), ""); } }
             }
             if UiData.profiles.length == 0: ContentPanel { Caption { text: "导入订阅链接或本地 YAML 文件后，即可启用配置。"; } }
         }

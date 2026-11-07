@@ -75,7 +75,7 @@ export component ConnectionsPage inherits PageSurface {
                             VerticalLayout { width: root.rule-column; spacing: 4px; Caption { text: connection.rule; } Caption { text: connection.route; } }
                             VerticalLayout { width: root.speed-column; spacing: 4px; Label { text: connection.up; } Caption { text: connection.upload; } }
                             VerticalLayout { width: root.speed-column; spacing: 4px; Label { text: connection.down; color: Theme.accent; } Caption { text: connection.download; } }
-                            ActionButton { width: 72px; text: "关闭"; danger: true; enabled: !UiData.working; clicked => { UiActions.dispatch(Intent.close-connection, connection.id, ""); } }
+                            ActionButton { width: 72px; text: "关闭"; compact: true; ghost: true; danger: true; enabled: !UiData.working; clicked => { UiActions.dispatch(Intent.close-connection, connection.id, ""); } }
                         }
                     }
                     content-height: UiData.connections.length * root.row-height;
@@ -84,8 +84,8 @@ export component ConnectionsPage inherits PageSurface {
         }
         HorizontalLayout { cross-axis-alignment: center; spacing: Theme.content-gap;
             Caption { text: UiData.page-status; }
-            ActionButton { text: "上一页"; enabled: UiData.previous; clicked => { UiActions.dispatch(Intent.list-page, "" + max(0, UiData.page-offset - 60), ""); } }
-            ActionButton { text: "下一页"; enabled: UiData.next; clicked => { UiActions.dispatch(Intent.list-page, "" + (UiData.page-offset + 60), ""); } }
+            ActionButton { text: "上一页"; compact: true; enabled: UiData.previous; clicked => { UiActions.dispatch(Intent.list-page, "" + max(0, UiData.page-offset - 60), ""); } }
+            ActionButton { text: "下一页"; compact: true; enabled: UiData.next; clicked => { UiActions.dispatch(Intent.list-page, "" + (UiData.page-offset + 60), ""); } }
         }
     }
     property <length> row-height: max(84px, Theme.body-size * 3 + 36px);

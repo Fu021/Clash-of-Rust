@@ -9,7 +9,6 @@ use std::rc::Rc;
 thread_local! {
     static WINDOW: Rc<MinimalSoftwareWindow> = MinimalSoftwareWindow::new(RepaintBufferType::NewBuffer);
     static INSTALLED: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
-    static EPOCH: std::time::Instant = std::time::Instant::now();
     static ADVANCE: std::cell::Cell<std::time::Duration> = const { std::cell::Cell::new(std::time::Duration::ZERO) };
 }
 struct Headless;
@@ -18,7 +17,9 @@ impl Platform for Headless {
         Ok(WINDOW.with(Clone::clone))
     }
     fn duration_since_start(&self) -> std::time::Duration {
-        EPOCH.with(std::time::Instant::elapsed) + ADVANCE.with(std::cell::Cell::get)
+        // A purely virtual clock: slow debug renders must not push an animation
+        // or disposal timer past the instant a test asserts on.
+        ADVANCE.with(std::cell::Cell::get)
     }
 }
 
@@ -62,9 +63,7 @@ fn pointer_click(window: &slint::Window, x: f32, y: f32, delay: std::time::Durat
         position,
         button: PointerEventButton::Left,
     });
-    if !delay.is_zero() {
-        std::thread::sleep(delay);
-    }
+    ADVANCE.with(|clock| clock.set(clock.get() + delay));
     window.dispatch_event(WindowEvent::PointerReleased {
         position,
         button: PointerEventButton::Left,

@@ -55,6 +55,11 @@ export global UiData {
     in-out property <length> scroll-settings;
     in-out property <length> scroll-dialog;
     in-out property <length> scroll-navigation;
+    // Settings tabs live in the page header: the tab asks for a jump (section + revision),
+    // the page reports which section is at the top of its scroll position.
+    in-out property <int> settings-section;
+    in-out property <int> settings-jump;
+    in-out property <int> settings-active;
     in-out property <int> accent;
     in-out property <[DetailItem]> connection-details;
     in-out property <string> modal-copy;

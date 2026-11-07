@@ -1,23 +1,59 @@
-import { PageSurface, Disclosure } from "../components/motion.slint";
+import { PageSurface, Disclosure, Motion } from "../components/motion.slint";
 import { Theme } from "../theme/palette.slint";
 import { UiData, UiActions, Intent, NodeItem, NodePair } from "../state.slint";
-import { PageScroll, Label, Caption, Heading, Chevron, ContentPanel, RowPanel, ActionButton, Badge, Field, Select } from "../components/controls.slint";
+import { PageScroll, Label, Caption, Heading, Chevron, ContentPanel, ActionButton, Badge, Field, Select } from "../components/controls.slint";
 
-component NodeCard inherits ContentPanel {
+// Node tile (design: .node): a flat button inside the group card, not a card in a card.
+// The latency figure is its own small button, so testing never changes the selection.
+component NodeCard inherits Rectangle {
     in property <NodeItem> node;
     preferred-width: 0px; min-width: 0px; horizontal-stretch: 1;
-    interactive: UiData.running && !UiData.working && !UiData.protected && !UiData.protection-pending;
-    clicked => { UiActions.dispatch(Intent.select-node, root.node.group, root.node.name); }
-    border-color: node.selected ? Theme.accent : Theme.line;
-    background: node.selected ? Theme.accent-wash : Theme.surface;
-    HorizontalLayout { cross-axis-alignment: center; spacing: Theme.content-gap;
-        Label { text: root.node.name; color: root.node.selected ? Theme.accent : Theme.ink; }
-        Caption { text: root.node.delay; color: root.node.tone == 1 ? Theme.success : root.node.tone == 2 ? Theme.warning : root.node.tone == 3 ? Theme.danger : Theme.muted; horizontal-stretch: 0; }
+    property <bool> interactive: UiData.running && !UiData.working && !UiData.protected && !UiData.protection-pending;
+    height: max(55px, content.preferred-height);
+    vertical-stretch: 0;
+    border-radius: Theme.radius;
+    background: node.selected ? Theme.accent-wash : area.has-hover && root.interactive ? Theme.press : Theme.track;
+    border-width: node.selected ? 1.5px : 0px;
+    border-color: Theme.accent;
+    animate background { duration: Motion.fast; enabled: Motion.active; }
+    area := TouchArea {
+        enabled: root.interactive;
+        mouse-cursor: pointer;
+        clicked => { UiActions.dispatch(Intent.select-node, root.node.group, root.node.name); }
     }
-    HorizontalLayout { cross-axis-alignment: center; spacing: Theme.content-gap;
-        Caption { text: root.node.kind; }
-        if root.node.selected: Badge { text: UiData.protected ? "已锁定" : "使用中"; tone: 1; }
-        ActionButton { text: "测速"; enabled: UiData.running && !UiData.working; clicked => { UiActions.dispatch(Intent.node-delay, root.node.name, ""); } }
+    content := VerticalLayout {
+        padding-left: 10px; padding-right: 10px; padding-top: 6px; padding-bottom: 6px;
+        HorizontalLayout { spacing: 6px; cross-axis-alignment: center;
+            Label { text: root.node.name; font-weight: 500; }
+            if root.node.selected && UiData.protected: Badge { text: "已锁定"; tone: 1; }
+            if root.node.selected && !UiData.protected: Rectangle {
+                width: 16px; height: 16px; border-radius: 8px; background: Theme.accent; horizontal-stretch: 0;
+                Path {
+                    width: parent.width; height: parent.height; viewbox-width: 16; viewbox-height: 16;
+                    stroke: Theme.on-primary; stroke-width: 1.6px;
+                    MoveTo { x: 4.5; y: 8.3; }
+                    LineTo { x: 7; y: 10.8; }
+                    LineTo { x: 11.5; y: 5.6; }
+                }
+            }
+        }
+        HorizontalLayout { spacing: Theme.content-gap; cross-axis-alignment: center;
+            Caption { text: root.node.kind; }
+            Rectangle {
+                horizontal-stretch: 0; height: 22px; width: max(delay.preferred-width + 12px, 44px); border-radius: 6px;
+                background: delay-area.has-hover && delay-area.enabled ? Theme.hover : transparent;
+                delay := Label {
+                    x: 6px; width: parent.width - 12px; height: parent.height; text: root.node.delay; horizontal-alignment: right;
+                    font-size: Theme.detail-size; font-weight: 500;
+                    color: root.node.tone == 1 ? Theme.success : root.node.tone == 2 ? Theme.warning : root.node.tone == 3 ? Theme.danger : Theme.muted;
+                }
+                delay-area := TouchArea {
+                    enabled: UiData.running && !UiData.working;
+                    mouse-cursor: pointer;
+                    clicked => { UiActions.dispatch(Intent.node-delay, root.node.name, ""); }
+                }
+            }
+        }
     }
 }
 export component ProxiesPage inherits PageSurface {
@@ -50,26 +86,26 @@ export component ProxiesPage inherits PageSurface {
                     header := Rectangle {
                         horizontal-stretch: 1; height: max(Theme.control-height, heading.preferred-height);
                         heading := HorizontalLayout { spacing: Theme.content-gap; cross-axis-alignment: center;
-                            VerticalLayout { spacing: 4px; Heading { text: group.title; } Caption { text: group.detail; } }
+                            VerticalLayout { spacing: 1px; Heading { text: group.title; font-size: Theme.body-size + 2px; } Caption { text: group.detail; } }
                             Badge { text: group.current; width-limit: root.width * 0.28; }
                             Chevron { expanded: group-card.expanded; }
                         }
                         TouchArea { mouse-cursor: pointer; clicked => { group-card.toggle(); } }
                     }
-                    ActionButton { text: group.testing ? "测速中…" : "全部测速"; busy: group.testing; enabled: UiData.running && !UiData.working && !group.testing; clicked => { UiActions.dispatch(Intent.group-delay, group.id, ""); } }
+                    ActionButton { text: group.testing ? "测速中…" : "全部测速"; compact: true; busy: group.testing; enabled: UiData.running && !UiData.working && !group.testing; clicked => { UiActions.dispatch(Intent.group-delay, group.id, ""); } }
                 }
                 group-body := Disclosure { expanded: group-card.expanded;
                     if group-body.mounted: VerticalLayout {
-                        spacing: Theme.page-gap;
-                        for pair in (group.expanded ? group.nodes : group-card.closing-nodes): HorizontalLayout { cross-axis-alignment: center; spacing: Theme.page-gap;
+                        spacing: Theme.content-gap;
+                        for pair in (group.expanded ? group.nodes : group-card.closing-nodes): HorizontalLayout { cross-axis-alignment: center; spacing: Theme.content-gap;
                             NodeCard { node: pair.left; }
                             if pair.right.valid: NodeCard { node: pair.right; }
                             if !pair.right.valid: Rectangle { horizontal-stretch: 1; }
                         }
                         HorizontalLayout { cross-axis-alignment: center; spacing: Theme.content-gap;
                             Caption { text: group.expanded ? group.page : group-card.closing-page; }
-                            ActionButton { text: "上一页"; enabled: group.previous; clicked => { UiActions.dispatch(Intent.group-page, group.id, "false"); } }
-                            ActionButton { text: "下一页"; enabled: group.next; clicked => { UiActions.dispatch(Intent.group-page, group.id, "true"); } }
+                            ActionButton { text: "上一页"; compact: true; enabled: group.previous; clicked => { UiActions.dispatch(Intent.group-page, group.id, "false"); } }
+                            ActionButton { text: "下一页"; compact: true; enabled: group.next; clicked => { UiActions.dispatch(Intent.group-page, group.id, "true"); } }
                         }
                     }
                 }
@@ -77,8 +113,8 @@ export component ProxiesPage inherits PageSurface {
             if UiData.groups.length == 0: ContentPanel { Caption { text: UiData.running ? "当前配置没有匹配的代理组" : "内核启动后显示代理组"; } }
             HorizontalLayout { cross-axis-alignment: center; spacing: Theme.content-gap;
                 Caption { text: UiData.page-status; }
-                ActionButton { text: "上一页"; enabled: UiData.previous; clicked => { UiActions.dispatch(Intent.list-page, "" + max(0, UiData.page-offset - 4), ""); } }
-                ActionButton { text: "下一页"; enabled: UiData.next; clicked => { UiActions.dispatch(Intent.list-page, "" + (UiData.page-offset + 4), ""); } }
+                ActionButton { text: "上一页"; compact: true; enabled: UiData.previous; clicked => { UiActions.dispatch(Intent.list-page, "" + max(0, UiData.page-offset - 4), ""); } }
+                ActionButton { text: "下一页"; compact: true; enabled: UiData.next; clicked => { UiActions.dispatch(Intent.list-page, "" + (UiData.page-offset + 4), ""); } }
             }
         }
     }
