@@ -246,6 +246,7 @@ def root_cli_smoke():
     env = dict(os.environ)
     for key in ('DISPLAY', 'WAYLAND_DISPLAY', 'WAYLAND_SOCKET', 'DBUS_SESSION_BUS_ADDRESS'):
         env.pop(key, None)
+    env['GSETTINGS_BACKEND'] = 'memory'
     with tempfile.TemporaryDirectory(prefix='cor-root-cli-') as temporary:
         directory = Path(temporary)
         command = [cli, '--data-dir', str(directory/'data'), '--json', '--timeout', '30']
