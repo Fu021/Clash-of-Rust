@@ -1,7 +1,7 @@
 import { PageSurface } from "../components/motion.slint";
-import { UiData, UiActions, Intent } from "../state.slint";
+import { UiData, UiActions, Intent, OverviewItem } from "../state.slint";
 import { Theme } from "../theme/palette.slint";
-import { PageScroll, Label, Caption, ActionButton, Segmented, Divider } from "../components/controls.slint";
+import { PageScroll, Label, Caption, Heading, ActionButton, Segmented, Divider } from "../components/controls.slint";
 
 component TrafficMetric inherits Rectangle {
     in property <string> title;
@@ -12,6 +12,80 @@ component TrafficMetric inherits Rectangle {
         spacing: 3px;
         Caption { text: root.title; }
         Label { text: root.value; font-size: 23px * Theme.text-scale; font-weight: 600; }
+    }
+}
+
+global OverviewTone {
+    // 0 plain, 1 reachable, 2 slow or partial, 3 failed, 4 not measured.
+    pure public function color(tone: int) -> brush {
+        return tone == 1 ? Theme.success : tone == 2 ? Theme.warning : tone == 3 ? Theme.danger : tone == 4 ? Theme.muted : Theme.ink;
+    }
+}
+
+// Hidden value, drawn the way magpie does it: a made-up string of the same shape,
+// blurred and dimmed. Slint has no blur filter, so the blur is a soft stack of
+// offset copies. The real value is never part of the view data.
+component Fog inherits Rectangle {
+    in property <string> text;
+    in property <length> font-size;
+    height: size.preferred-height;
+    opacity: 0.6;
+    accessible-role: AccessibleRole.text;
+    accessible-label: "已隐藏";
+    size := Label { text: root.text; font-size: root.font-size; font-weight: 600; color: transparent; }
+    for tap in [
+        {dx: 0px, dy: 0px, alpha: 0.26},
+        {dx: 1.4px, dy: 0px, alpha: 0.09}, {dx: -1.4px, dy: 0px, alpha: 0.09},
+        {dx: 0px, dy: 1.4px, alpha: 0.09}, {dx: 0px, dy: -1.4px, alpha: 0.09},
+        {dx: 1px, dy: 1px, alpha: 0.09}, {dx: -1px, dy: 1px, alpha: 0.09},
+        {dx: 1px, dy: -1px, alpha: 0.09}, {dx: -1px, dy: -1px, alpha: 0.09},
+        {dx: 3px, dy: 0px, alpha: 0.04}, {dx: -3px, dy: 0px, alpha: 0.04},
+        {dx: 0px, dy: 3px, alpha: 0.04}, {dx: 0px, dy: -3px, alpha: 0.04},
+        {dx: 2.1px, dy: 2.1px, alpha: 0.04}, {dx: -2.1px, dy: 2.1px, alpha: 0.04},
+        {dx: 2.1px, dy: -2.1px, alpha: 0.04}, {dx: -2.1px, dy: -2.1px, alpha: 0.04},
+    ]: Label {
+        x: tap.dx; y: tap.dy; width: root.width; height: root.height; opacity: tap.alpha;
+        text: root.text; font-size: root.font-size; font-weight: 600; color: Theme.ink;
+    }
+}
+
+// One host fact: label, value, and a short note (the exit row also carries its flag).
+component InfoCell inherits Rectangle {
+    in property <OverviewItem> item;
+    horizontal-stretch: 1; preferred-width: 0px; min-width: 0px;
+    height: content.preferred-height;
+    content := VerticalLayout {
+        spacing: 3px;
+        Caption { text: root.item.title; }
+        if !root.item.fogged: Label { text: root.item.value; font-size: 16px * Theme.text-scale; font-weight: 600; color: root.item.tone == 3 || root.item.tone == 4 ? OverviewTone.color(root.item.tone) : Theme.ink; }
+        if root.item.fogged: Fog { text: root.item.value; font-size: 16px * Theme.text-scale; }
+        HorizontalLayout {
+            spacing: 6px; alignment: start;
+            if root.item.flagged: Image { source: root.item.flag; width: 18px; height: 18px; image-fit: contain; }
+            Caption { text: root.item.detail; }
+        }
+    }
+}
+
+// One service: state dot, name and response time; the HTTP note sits below.
+component ServiceCell inherits Rectangle {
+    in property <OverviewItem> item;
+    horizontal-stretch: 1; preferred-width: 0px; min-width: 0px;
+    height: content.preferred-height + 16px;
+    border-width: 1px; border-color: Theme.line; border-radius: Theme.radius;
+    content := VerticalLayout {
+        x: 10px; y: 8px; width: parent.width - 20px;
+        spacing: 2px;
+        HorizontalLayout {
+            spacing: 7px;
+            Rectangle {
+                width: 7px;
+                Rectangle { y: (parent.height - self.height) / 2; width: 7px; height: 7px; border-radius: 4px; background: OverviewTone.color(root.item.tone); }
+            }
+            Label { text: root.item.title; font-weight: 600; }
+            Label { text: root.item.value; color: OverviewTone.color(root.item.tone); font-size: Theme.detail-size; horizontal-stretch: 0; width: min(self.preferred-width, parent.width * 0.6); horizontal-alignment: right; }
+        }
+        Caption { text: root.item.detail; x: 14px; }
     }
 }
 
@@ -87,6 +161,56 @@ export component HomePage inherits PageSurface {
                     HorizontalLayout {
                         Caption { text: "本次运行累计"; }
                         Caption { text: "↑ " + UiData.upload-total + "    ↓ " + UiData.download-total; horizontal-alignment: right; }
+                    }
+                }
+            }
+            Rectangle {
+                vertical-stretch: 0;
+                height: network.preferred-height;
+                background: Theme.surface;
+                border-width: 1px; border-color: Theme.line;
+                border-radius: Theme.radius-lg;
+                network := VerticalLayout {
+                    padding: 13px; padding-left: 16px; padding-right: 16px; spacing: 13px;
+                    HorizontalLayout { spacing: Theme.content-gap; cross-axis-alignment: center;
+                        Heading { text: "网络信息"; horizontal-stretch: 1; }
+                        ActionButton {
+                            text: ""; compact: true; ghost: true; width: 32px; selected: UiData.privacy-hidden;
+                            accessible-role: button;
+                            accessible-label: UiData.privacy-hidden ? "显示 IP 地址" : "隐藏 IP 地址";
+                            Image { source: UiData.privacy-hidden ? @image-url("../icons/eye-off.svg") : @image-url("../icons/eye.svg"); colorize: UiData.privacy-hidden ? Theme.accent : Theme.secondary; width: 16px; height: 16px; x: (parent.width - self.width) / 2; y: (parent.height - self.height) / 2; }
+                            clicked => { UiActions.dispatch(Intent.overview-privacy, "", ""); }
+                        }
+                        ActionButton { text: UiData.overview-busy ? "检测中…" : "重新检测"; compact: true; ghost: true; busy: UiData.overview-busy; enabled: !UiData.overview-busy; clicked => { UiActions.dispatch(Intent.overview-refresh, "", ""); } }
+                    }
+                    Divider { }
+                    HorizontalLayout { spacing: 16px;
+                        InfoCell { item: UiData.overview-network[0]; }
+                        Rectangle { width: 1px; background: Theme.line; }
+                        InfoCell { item: UiData.overview-network[1]; }
+                    }
+                    HorizontalLayout { spacing: 16px;
+                        InfoCell { item: UiData.overview-network[2]; }
+                        Rectangle { width: 1px; background: Theme.line; }
+                        InfoCell { item: UiData.overview-network[3]; }
+                    }
+                }
+            }
+            Rectangle {
+                vertical-stretch: 0;
+                height: services.preferred-height;
+                background: Theme.surface;
+                border-width: 1px; border-color: Theme.line;
+                border-radius: Theme.radius-lg;
+                services := VerticalLayout {
+                    padding: 13px; padding-left: 16px; padding-right: 16px; spacing: 13px;
+                    HorizontalLayout { spacing: Theme.content-gap; cross-axis-alignment: center;
+                        Heading { text: "服务状态"; }
+                        Caption { text: UiData.overview-status; horizontal-alignment: right; }
+                    }
+                    Divider { }
+                    for row in 2: HorizontalLayout { spacing: Theme.content-gap;
+                        for column in 4: ServiceCell { item: UiData.overview-services[row * 4 + column]; }
                     }
                 }
             }

@@ -347,6 +347,22 @@ body[data-theme=dark] .power{color:#0d1415} body[data-theme=dark] .power.off{col
 .tr-key small{font-size:12px;color:var(--muted);margin-left:-3px}
 .tr-sum{margin-left:auto;display:flex;gap:16px;font-size:12px;color:var(--muted);white-space:nowrap}
 .tr-sum b{color:var(--ink-2);font-weight:550}
+/* ---------- 网络信息 / 服务状态 ---------- */
+.netcard{margin-top:13px;padding:13px 16px 15px}
+.nc-head{display:flex;align-items:center;gap:6px;margin-bottom:11px}
+.nc-head h3{margin:0 auto 0 0;font-size:14px;font-weight:600}
+.nc-grid{display:grid;grid-template-columns:1fr 1fr;gap:13px 16px;border-top:1px solid var(--line);padding-top:12px}
+.nc-cell{min-width:0;display:flex;flex-direction:column;gap:3px}
+.nc-cell small{font-size:12px;color:var(--muted)}
+.nc-cell b{font-size:16px;font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+/* 与 magpie 一致：把内容换成同形状的假值，再模糊并降低不透明度 */
+.pii{filter:blur(2.2px);opacity:.5;user-select:none}
+.svc-grid{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:8px;border-top:1px solid var(--line);padding-top:12px}
+.svc{min-width:0;padding:8px 10px;border-radius:var(--r);box-shadow:0 0 0 1px var(--line);display:flex;flex-direction:column;gap:2px}
+.svc .r{display:flex;align-items:center;gap:7px;font-size:13px;font-weight:600}
+.svc .r em{margin-left:auto;font-style:normal;font-size:12px;font-weight:500;white-space:nowrap}
+.svc small{padding-left:14px;font-size:12px;color:var(--muted);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.svc.ok em{color:var(--ok)}.svc.warn em{color:var(--warn)}.svc.bad em{color:var(--bad)}
 /* 图高 = 宽 / φ³，限制在 89–144（斐波那契） */
 svg.traffic-plot{display:block;width:100%;height:auto;aspect-ratio:4.236;min-height:89px;max-height:144px;margin-top:8px;overflow:visible}
 .traffic-plot text{font-size:11px;fill:var(--muted)}
@@ -700,6 +716,8 @@ body[data-theme=dark] .m-draft{background:var(--raised)}
   <symbol id="i-power" viewBox="0 0 24 24"><path d="M12 3.5v8"/><path d="M6.6 6.8a7.5 7.5 0 1 0 10.8 0"/></symbol>
   <symbol id="i-refresh" viewBox="0 0 24 24"><path d="M20 11.5A8 8 0 1 0 17.7 17"/><path d="M20 4.5v7h-7"/></symbol>
   <symbol id="i-zap" viewBox="0 0 24 24"><path d="M13 2.5 4.5 13.5H11l-1 8 8.5-11H12z"/></symbol>
+  <symbol id="i-eye" viewBox="0 0 24 24"><path d="M2.5 12S6 5.5 12 5.5 21.5 12 21.5 12 18 18.5 12 18.5 2.5 12 2.5 12Z"/><circle cx="12" cy="12" r="2.8"/></symbol>
+  <symbol id="i-eye-off" viewBox="0 0 24 24"><path d="M9.9 5.7A9.5 9.5 0 0 1 12 5.5c6 0 9.5 6.5 9.5 6.5a16 16 0 0 1-2.6 3.4M6.3 7.3A15.6 15.6 0 0 0 2.5 12S6 18.5 12 18.5a9.4 9.4 0 0 0 4-.9"/><path d="M9.9 9.9a2.8 2.8 0 0 0 4 4"/><path d="m3.5 3.5 17 17"/></symbol>
   <symbol id="i-plus" viewBox="0 0 24 24"><path d="M12 5v14M5 12h14"/></symbol>
   <symbol id="i-x" viewBox="0 0 24 24"><path d="M6 6l12 12M18 6 6 18"/></symbol>
   <symbol id="i-trash" viewBox="0 0 24 24"><path d="M4.5 7h15M9.5 7V4.8c0-.7.6-1.3 1.3-1.3h2.4c.7 0 1.3.6 1.3 1.3V7M6.5 7l.8 12.1c.1.8.7 1.4 1.5 1.4h6.4c.8 0 1.4-.6 1.5-1.4L17.5 7"/></symbol>
@@ -800,6 +818,8 @@ body[data-theme=dark] .m-draft{background:var(--raised)}
           </div>
 
           <div id="homeTraffic"></div>
+          <div id="homeNet"></div>
+          <div id="homeSvc"></div>
           </div><div class="col">
           <div class="sec-title">活跃连接 <a class="link" data-go="conns">全部 24 条<svg class="i xs"><use href="#i-chev-r"/></svg></a></div>
           <div class="card list">
@@ -1346,6 +1366,41 @@ const trafficCard = () => `<div class="card traffic">
   </div>
   <svg class="traffic-plot" role="img" aria-label="最近 60 秒的下载与上传速度"></svg></div>`;
 $('#homeTraffic').outerHTML = trafficCard();
+
+/* ---------- 网络信息与服务状态（首页） ---------- */
+const netInfo = [
+  { key: '内网 IP', val: '192.168.1.23', fake: '47.213.8.90', note: 'IPv4 + IPv6' },
+  { key: '出口 IP', val: '203.0.113.42', fake: '712.41.206.9', note: '德国 · 188 ms' },
+  { key: 'DNS 服务器', val: '223.5.5.5  119.29.29.29', fake: '88.4.130.7  61.91.7.220', note: '物理网卡的系统设置' },
+  { key: 'DNS 解析', val: 'github.com → 198.18.0.12', note: '12 ms · Fake-IP' },
+];
+const services = [
+  ['Google', 142, 'HTTP 204'], ['YouTube', 156, 'HTTP 204'], ['GitHub', 311, 'HTTP 200'], ['ChatGPT', 264, 'HTTP 403 · 可达', 'warn'],
+  ['Claude', 233, 'HTTP 307'], ['Gemini', 1260, 'HTTP 200', 'warn'], ['Telegram', 0, '未获得响应', 'bad'], ['X', 402, 'HTTP 200'],
+];
+const netCard = () => `<div class="card netcard" id="netCard">
+  <div class="nc-head"><h3>网络信息</h3>
+    <button class="btn icon sm ghost" id="piiBtn" aria-pressed="false" title="隐藏 IP 地址" data-tip="隐藏 IP 地址：换成同形状的假值并模糊"><svg class="i s"><use href="#i-eye"/></svg></button>
+    <button class="btn sm ghost" data-toast="已重新检测"><svg class="i s"><use href="#i-refresh"/></svg>重新检测</button></div>
+  <div class="nc-grid">${netInfo.map(c => `<div class="nc-cell"><small>${c.key}</small><b${c.fake ? ` data-real="${c.val}" data-fake="${c.fake}"` : ''}>${c.val}</b><small>${c.note}</small></div>`).join('')}</div></div>`;
+const svcCard = () => {
+  const reach = services.filter(s => s[3] !== 'bad').length;
+  return `<div class="card netcard"><div class="nc-head"><h3>服务状态</h3><span class="cap">可访问 ${reach} / ${services.length}</span></div>
+  <div class="svc-grid">${services.map(([n, ms, note, st]) => `<div class="svc ${st || (ms < 800 ? 'ok' : 'warn')}"><span class="r"><i class="dot ${st === 'bad' ? 'bad' : st === 'warn' || ms >= 800 ? 'warn' : 'ok'}"></i>${n}<em>${st === 'bad' ? '无法连接' : ms + ' ms'}</em></span><small>${note}</small></div>`).join('')}</div></div>`;
+};
+$('#homeNet').outerHTML = netCard();
+$('#homeSvc').outerHTML = svcCard();
+$('#piiBtn').addEventListener('click', () => {
+  const btn = $('#piiBtn'), hide = btn.getAttribute('aria-pressed') !== 'true';
+  btn.setAttribute('aria-pressed', hide);
+  btn.title = hide ? '显示 IP 地址' : '隐藏 IP 地址';
+  btn.querySelector('use').setAttribute('href', hide ? '#i-eye-off' : '#i-eye');
+  document.querySelectorAll('#netCard [data-fake]').forEach(el => {
+    el.textContent = hide ? el.dataset.fake : el.dataset.real;
+    el.classList.toggle('pii', hide);
+    el.setAttribute('aria-label', hide ? '已隐藏' : el.dataset.real);
+  });
+});
 const plotRO = new ResizeObserver(es => es.forEach(e => drawPlot(e.target)));
 function drawPlot(el) {
   const W = el.clientWidth, H = el.clientHeight; if (!W) return;

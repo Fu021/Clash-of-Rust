@@ -1010,6 +1010,168 @@ fn ip_report_uses_bitmaps_in_summary_rows_and_details() {
 }
 
 #[test]
+fn home_overview_reports_host_exit_dns_and_each_service_without_overclaiming() {
+    use clash_of_rust::overview::{Health, Status};
+    ui_testing::initialize(950, 700);
+    let ip = |text: &str| text.parse::<std::net::IpAddr>().unwrap();
+    let mut app = fixture(Page::Home);
+    app.visible = true;
+    app.snapshot.running = true;
+    // A visible home page measures once; a run in flight is not restarted.
+    let _ = app.overview_tick();
+    assert!(app.overview.busy());
+    let _ = app.overview_tick();
+    let generation = 1;
+    let _ = app.update(Message::OverviewHost(
+        generation,
+        Ok(platform::HostInfo {
+            addresses: vec![ip("192.168.1.23")],
+            dns: vec![ip("223.5.5.5")],
+        }),
+    ));
+    let _ = app.update(Message::OverviewDns(
+        generation,
+        Ok((vec!["198.18.0.9".into()], 12)),
+    ));
+    let _ = app.update(Message::OverviewExit(
+        generation,
+        Ok(ip_check::CheckResult {
+            state: ip_check::State::Identified,
+            summary: "203.0.113.2".into(),
+            country: "🇩🇪 德国".into(),
+            millis: 188,
+            detail: String::new(),
+        }),
+    ));
+    for (index, (health, status, millis)) in [
+        (Health::Ok, 204, 142),
+        (Health::Reachable, 403, 264),
+        (Health::Error, 502, 50),
+    ]
+    .into_iter()
+    .enumerate()
+    {
+        let _ = app.update(Message::OverviewService(
+            generation,
+            index,
+            Ok(Status {
+                health,
+                status,
+                millis,
+            }),
+        ));
+    }
+    let _ = app.update(Message::OverviewService(
+        generation,
+        3,
+        Err("无法连接".into()),
+    ));
+    // A result from an invalidated run must not fill a slot of the current one.
+    let _ = app.update(Message::OverviewService(
+        0,
+        4,
+        Ok(Status {
+            health: Health::Ok,
+            status: 200,
+            millis: 1,
+        }),
+    ));
+    let window = AppWindow::new().unwrap();
+    let data = window.global::<UiData>();
+    let mut models = ViewModels::default();
+    models.attach(&data);
+    app.present_slint(&data, &mut models);
+    let network = data.get_overview_network();
+    let row = |index| network.row_data(index).unwrap();
+    assert_eq!(
+        (row(0).value.as_str(), row(0).detail.as_str()),
+        ("192.168.1.23", "仅 IPv4")
+    );
+    assert_eq!(row(1).value.as_str(), "203.0.113.2");
+    assert!(row(1).flagged);
+    assert_eq!(row(1).detail.as_str(), "德国 · 188 ms");
+    assert_eq!(row(2).value.as_str(), "223.5.5.5");
+    assert!(row(3).detail.contains("Fake-IP"));
+    let services = data.get_overview_services();
+    let item = |index| services.row_data(index).unwrap();
+    assert_eq!((item(0).tone, item(0).value.as_str()), (1, "142 ms"));
+    assert_eq!(
+        (item(1).tone, item(1).detail.as_str()),
+        (2, "HTTP 403 · 可达")
+    );
+    assert_eq!((item(2).tone, item(2).value.as_str()), (3, "服务异常"));
+    assert_eq!((item(3).tone, item(3).value.as_str()), (3, "无法连接"));
+    assert_eq!((item(4).tone, item(4).value.as_str()), (4, "检测中…"));
+    assert!(data.get_overview_busy());
+
+    // The privacy button replaces addresses with same-shaped placeholders before they
+    // reach the view; the real digits are not recoverable from what is sent.
+    let _ = app.ui_intent(Intent::OverviewPrivacy, "", "");
+    app.present_slint(&data, &mut models);
+    assert!(data.get_privacy_hidden());
+    let hidden = data.get_overview_network();
+    for (index, real) in [(0, "192.168.1.23"), (1, "203.0.113.2"), (2, "223.5.5.5")] {
+        let row = hidden.row_data(index).unwrap();
+        assert!(row.fogged, "row {index} must be covered");
+        assert_ne!(
+            row.value.as_str(),
+            real,
+            "row {index} shows the real address"
+        );
+        assert_eq!(row.value.len(), real.len(), "row {index} keeps its width");
+        assert!(row.value.parse::<std::net::IpAddr>().is_ok());
+    }
+    let first = hidden.row_data(0).unwrap().value.to_string();
+    app.present_slint(&data, &mut models);
+    assert_eq!(
+        data.get_overview_network()
+            .row_data(0)
+            .unwrap()
+            .value
+            .as_str(),
+        first,
+        "the placeholder must not flicker between redraws"
+    );
+    let lookup = hidden.row_data(3).unwrap();
+    assert!(!lookup.fogged && lookup.value.contains("github.com"));
+    assert_eq!(hidden.row_data(1).unwrap().detail.as_str(), "德国 · 188 ms");
+    let _ = app.ui_intent(Intent::OverviewPrivacy, "", "");
+    app.present_slint(&data, &mut models);
+    assert!(!data.get_privacy_hidden());
+    assert_eq!(
+        data.get_overview_network()
+            .row_data(0)
+            .unwrap()
+            .value
+            .as_str(),
+        "192.168.1.23"
+    );
+
+    // Without the core only local facts are shown; nothing claims a probe ran.
+    app.snapshot.running = false;
+    app.present_slint(&data, &mut models);
+    assert_eq!(
+        data.get_overview_services()
+            .row_data(0)
+            .unwrap()
+            .value
+            .as_str(),
+        "未检测"
+    );
+    assert_eq!(
+        data.get_overview_network()
+            .row_data(1)
+            .unwrap()
+            .detail
+            .as_str(),
+        "启动内核后检测"
+    );
+    // A changed network discards results so the next visit measures again.
+    app.overview.invalidate();
+    assert!(!app.overview.busy());
+}
+
+#[test]
 fn recursive_dns_flags_follow_the_country_without_changing_risk_or_other_signals() {
     use clash_of_rust::claude_check::{Environment, Evidence, Group, Report, Signal};
 
