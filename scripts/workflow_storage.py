@@ -58,6 +58,8 @@ def lineage(key):
 
 def priority(entry):
     key = entry['key']
+    if re.fullmatch(r'action-setup-tailscale/[^/]+/macOS-(?:amd64|arm64)', key):
+        return 8
     if key.startswith('native-release-'):
         if 'macos' in key:
             return 8 if 'macos-13-' in key or 'intel' in key else 9
@@ -82,11 +84,12 @@ def priority(entry):
 
 
 def retired(key):
+    if key.startswith('action-setup-tailscale/'):
+        return re.fullmatch(r'action-setup-tailscale/[^/]+/macOS-(?:amd64|arm64)', key) is None
     return key.startswith((
         'macos-compiler-', 'android-go-', 'runtime-v1-', 'resources-', 'source-',
         'gradle-', 'tools-nsis-', 'skia-source-', 'linux-python-ubuntu20-',
         'linux-cloud-ubuntu20-', 'linux-apt-ubuntu20-', 'linux-image-ubuntu20-',
-        'action-setup-tailscale/',
     ))
 
 

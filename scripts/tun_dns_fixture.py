@@ -73,6 +73,8 @@ async def http(reader, writer):
         elif path.startswith('/delay-node6-aaaa/'):
             DELAY_NODE6_AAAA = path.endswith('/on')
             body, content_type = b'ok', 'text/plain'
+        elif path == '/subscription.yaml':
+            body, content_type = b'proxies: []\nrules: ["MATCH,DIRECT"]\n', 'application/yaml'
         elif path == '/metrics':
             body, content_type = json.dumps(METRICS).encode(), 'application/json'
         elif path.startswith('/dns-query?dns='):

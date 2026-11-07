@@ -73,7 +73,10 @@ export component Panel inherits Rectangle {
     background: Theme.surface;
     border-color: Theme.line;
     border-width: 1px;
-    border-radius: 8px;
+    border-radius: 12px;
+    drop-shadow-blur: 6px;
+    drop-shadow-offset-y: 1px;
+    drop-shadow-color: Theme.dark ? #00000018 : #00000008;
     animate background, border-color { duration: Motion.appearance; enabled: Motion.active; }
     @children
 }
@@ -167,7 +170,7 @@ export component ActionButton inherits Rectangle {
     width: max(68px, button-label.preferred-width + 28px + (root.dropdown ? 20px : 0px));
     vertical-stretch: 0;
     horizontal-stretch: 0;
-    border-radius: 5px;
+    border-radius: 8px;
     background: root.primary ? (root.pressed ? Theme.primary.darker(0.15) : Theme.primary)
         : root.success ? Theme.success-wash : root.selected || root.pressed ? Theme.accent-wash
         : root.interactive && area.has-hover ? Theme.inset : Theme.surface;

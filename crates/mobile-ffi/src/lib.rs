@@ -239,8 +239,23 @@ impl Session {
                 self.settings = settings;
             }
         }
+        let direct = if native_running {
+            None
+        } else {
+            Some(core::config::reserve_controller(
+                self.settings.direct_download_port,
+                self.settings.mixed_port,
+            )?)
+        };
+        if let Some(listener) = &direct {
+            let mut settings = self.settings.clone();
+            settings.direct_download_port = listener.local_addr()?.port();
+            self.store.save_settings(&settings)?;
+            self.settings = settings;
+        }
         let raw = self.runtime(&self.settings)?;
         drop(controller);
+        drop(direct);
         self.native.request(
             json!({"op":"initialize","config":raw,"ipv6":effective_ipv6(&self.settings)}),
         )?;
@@ -294,6 +309,7 @@ impl Session {
     }
     pub fn commit_settings(&mut self, mut settings: Settings) -> Result<()> {
         settings.normalize();
+        settings.direct_download_port = self.settings.direct_download_port;
         if settings.mixed_port == settings.controller_port {
             settings.controller_port = core::config::reserve_controller(0, settings.mixed_port)?
                 .local_addr()?
@@ -507,7 +523,10 @@ impl Session {
             let url = core::probe::validate_url(source)?;
             core::subscription::download_routes(
                 &url,
-                &core::network::routes(self.running.then_some(self.settings.mixed_port), None),
+                &core::network::download_routes(
+                    self.running.then_some(self.settings.download_ports()),
+                    None,
+                ),
             )
             .await
             .context(if id.is_some() {

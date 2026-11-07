@@ -390,7 +390,7 @@ fn checksum(bytes: &[u8]) -> Result<String> {
 
 pub async fn download(
     available: Available,
-    proxy_port: Option<u16>,
+    proxy_port: Option<crate::network::DownloadPorts>,
     api: Option<crate::api::Api>,
     report: impl FnMut(Progress),
 ) -> Result<Downloaded> {
@@ -584,11 +584,11 @@ async fn transfer(
     Ok(())
 }
 
-pub async fn check(proxy_port: Option<u16>) -> Result<Option<Available>> {
+pub async fn check(proxy_port: Option<crate::network::DownloadPorts>) -> Result<Option<Available>> {
     check_with_prereleases(proxy_port, false).await
 }
 pub async fn check_with_prereleases(
-    proxy_port: Option<u16>,
+    proxy_port: Option<crate::network::DownloadPorts>,
     include_prereleases: bool,
 ) -> Result<Option<Available>> {
     discovery::check(proxy_port, include_prereleases).await

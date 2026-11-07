@@ -33,7 +33,7 @@
 | `test-release-package.py` | CLI | 统一调度安装包结构、安装后验证和 Linux 兼容性检查。 |
 | `run-memory-benchmark.py` | CLI | 隔离运行 API、GUI、托盘和 CLI 内存基准。 |
 | `memory_desktop.py` | 模块 / 子进程 | 托盘宿主与窗口夹具；测量进程外运行，不能并入基准入口。 |
-| `preview-slint.py` | CLI | 使用官方 Slint Viewer 检查或渲染正式组件，不调用 Cargo。 |
+| `preview-slint.py` | CLI | 使用依赖版本一致的 Viewer 检查语法，主线 Viewer 配合随包字体渲染正式组件；拒绝旧工具输出缺字截图，不调用 Cargo。 |
 | `test-build-tools.py` | 离线测试 | 构建输入、缓存、打包、Windows/macOS 辅助逻辑的单元测试。 |
 | `test-workflow-artifacts.py` | 离线测试 | 不可变产物、安装包和内存工作流的离线回归测试。 |
 

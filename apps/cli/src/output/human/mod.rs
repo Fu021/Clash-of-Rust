@@ -12,7 +12,7 @@ pub(super) fn write(out: &mut dyn Write, args: &Args, value: &Value) -> Result<(
     let first = args.positional.first().map(String::as_str).unwrap_or("");
     match args.path.as_str() {
         "node list" => lists::nodes(out, args, value),
-        "node test" => lists::delays(out, value),
+        "node test" => lists::delays(out, args, value),
         "node select" => {
             writeln!(
                 out,

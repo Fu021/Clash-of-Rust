@@ -168,7 +168,7 @@ jobs:
           audience: ${{ vars.TS_AUDIENCE }}
           tags: tag:github-action-cache
           version: ${{ needs.resolve.outputs.tailscale }}
-          use-cache: 'false'
+          use-cache: ${{ runner.os == 'macOS' && 'true' || 'false' }}
           retry: '1'
           timeout: 45s
           args: --accept-dns=false
@@ -423,23 +423,12 @@ jobs:
         uses: ./.github/actions/upstream-report
         with:
           checkpoint: 'true'
-      - name: Wait for the verified Linux package from this run
+      - name: Prepare Ubuntu 20.04 before waiting, then verify the same package
         env:
           GH_TOKEN: ${{ github.token }}
+          CI_RUN_ID: ${{ needs.resolve.outputs.ci_run_id }}
           PYTHONDONTWRITEBYTECODE: '1'
-        run: python3 scripts/workflow_artifacts.py wait --system linux --arch '${{ matrix.arch }}' --run-id '${{ github.run_id }}'
-      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333
-        with:
-          name: package-linux-${{ matrix.arch }}
-          path: dist
-      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333
-        with:
-          name: linux-tun-test-${{ matrix.arch }}
-          path: target
-      - name: Verify the same package with the Ubuntu 20.04 GA kernel
-        env:
-          PYTHONDONTWRITEBYTECODE: '1'
-        run: python3 scripts/linux_ci.py vm
+        run: python3 scripts/linux_ci.py vm --package-run-id '${{ github.run_id }}'
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
         if: always()
         with:

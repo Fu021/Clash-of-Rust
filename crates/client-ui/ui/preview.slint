@@ -22,6 +22,7 @@ export component Preview inherits AppWindow {
     in-out property <string> preview-notice <=> UiData.notice;
     in-out property <bool> preview-notice-error <=> UiData.notice-error;
     in-out property <bool> preview-notice-critical <=> UiData.notice-critical;
+    in-out property <bool> preview-notice-recover-network <=> UiData.notice-recover-network;
     in-out property <bool> preview-core-running <=> UiData.running;
     changed preview-core-running => { UiData.retry-core = !root.preview-core-running; }
     in-out property <string> preview-modal-error <=> UiData.modal-error;
@@ -68,7 +69,7 @@ export component Preview inherits AppWindow {
     init => {
         Motion.enabled = root.preview-motion;
         UiData.fake-ip-editor = root.preview-fake-ip-editor;
-        UiData.version = "0.6.7-fix.3.diagnostics";
+        UiData.version = "0.6.7-fix.4.direct-downloads";
         UiData.ready = true; UiData.running = true;
         UiData.profile = "我的订阅"; UiData.node = "🇩🇪 德国 01 · IPv6";
         UiData.download-rate = "1.24 MiB/s"; UiData.upload-rate = "28.6 KiB/s";

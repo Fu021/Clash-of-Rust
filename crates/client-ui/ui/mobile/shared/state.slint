@@ -152,6 +152,7 @@ export global MobileView {
     in-out property <string> notice;
     in-out property <bool> notice-error;
     in-out property <bool> notice-critical;
+    in-out property <bool> notice-recover-network;
     out property <bool> notice-modal: self.notice != "" && self.notice-critical;
     in-out property <int> notice-revision;
     in-out property <float> notice-elapsed;

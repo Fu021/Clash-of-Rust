@@ -25,7 +25,7 @@ GitHub 热缓存预算为 9 GiB，主分支保存，其他来源可读取兼容�
 
 同一逻辑键组/分支只留最近一代；Windows/macOS 不同源码的 workspace 键归入同一平台族，保留最新兼容对象并共享总预算。容量不足可以淘汰，不向私网复制。`rust-cache` 自带的 Cargo registry/Git 数据与 Rust 对象一起管理，不再另建下载缓存。测试报告和安装包仅使用短期 artifact。
 
-仓库自行管理的 Go 编译、Gradle 转换、工具安装目录、资源目录和 Docker 构建镜像不再占用 GitHub 缓存。官方 Actions 的引导及托管 runner 镜像不由本仓库接管；Tailscale 自带缓存也显式关闭。预算任务在运行取消时跳过，只操作 GitHub API。
+仓库自行管理的 Go 编译、Gradle 转换、工具安装目录、资源目录和 Docker 构建镜像不再占用 GitHub 缓存。官方 Actions 的引导及托管 runner 镜像不由本仓库接管。macOS 的官方 Tailscale Action 会源码编译 CLI/daemon，因此只在 macOS 开启该 Action 自带的 GitHub 二进制缓存，避免每个 CI、打包和内存 job 重编；其他平台保持关闭。此引导缓存按架构/分支保留最近版本，与 Intel Rust 同级、低于 ARM64 Rust，仍计入 9 GiB 总预算，不上传私网。预算任务在运行取消时跳过，只操作 GitHub API。
 
 性能分析须将私网接入与 Rust 恢复分开：[CI 41973243758](https://github.com/Fu021/Clash-of-Rust/actions/runs/41973243758) 的 macOS Intel 分别用时 376 秒接入 Tailscale、74 秒恢复 GitHub 对象、269 秒编译与测试；ARM64 分别为 135、28、172 秒。两种架构均恢复有效 workspace，对 452 个源码/目录时间戳完成核验且没有变化的 crate；官方 action 在 macOS 从源码构建 Tailscale 的行为见[上游问题](https://github.com/tailscale/github-action/issues/287)。这些单次结果不能据总 job 时间认定 Rust 缓存无效，也不能代替冷编译对照。
 

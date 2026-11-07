@@ -295,6 +295,36 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn a_failed_node_can_fall_back_to_the_managed_direct_listener() {
+        let (failed_proxy, failed_task) = server(
+            b"HTTP/1.1 502 Bad Gateway\r\nContent-Length: 0\r\nConnection: close\r\n\r\n".to_vec(),
+        )
+        .await;
+        let (direct_proxy, direct_task) = server(response()).await;
+        let mixed = Url::parse(&failed_proxy).unwrap().port().unwrap();
+        let direct = Url::parse(&direct_proxy).unwrap().port().unwrap();
+        let routes = crate::network::download_routes(
+            Some(crate::network::DownloadPorts { mixed, direct }),
+            None,
+        );
+        let url = Url::parse("http://unreachable-origin.invalid/subscription").unwrap();
+        let (raw, _) = download_routes(&url, &routes).await.unwrap();
+        assert_eq!(raw, "proxies: []\n");
+        assert!(
+            failed_task
+                .await
+                .unwrap()
+                .contains("unreachable-origin.invalid")
+        );
+        assert!(
+            direct_task
+                .await
+                .unwrap()
+                .contains("unreachable-origin.invalid")
+        );
+    }
+
+    #[tokio::test]
     async fn incomplete_oversized_and_non_utf8_subscriptions_are_rejected() {
         for (wire, incompatible) in [
             (

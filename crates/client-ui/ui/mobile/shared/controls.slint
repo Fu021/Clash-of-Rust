@@ -335,19 +335,24 @@ export component MNotice inherits Rectangle {
     in property <float> progress;
     in property <length> available-height;
     property <bool> compact-actions: self.width < 380px || Theme.text-scale > 1.15;
-    out property <[length]> close-target: [dismiss.absolute-position.x, dismiss.absolute-position.y, dismiss.width, dismiss.height];
+    out property <[length]> close-target: [message-area.absolute-position.x, message-area.absolute-position.y, message-area.width, message-area.height];
     callback dismissed();
     height: min(content.preferred-height, max(72px, root.available-height));
-    border-radius: 8px; border-width: 1px; border-color: Theme.line; background: Theme.surface;
+    border-radius: 12px; border-width: 1px; border-color: Theme.line; background: Theme.surface;
     drop-shadow-blur: 16px; drop-shadow-offset-y: 4px; drop-shadow-color: #00000030;
-    TouchArea { }
+    TouchArea { mouse-cursor: pointer; clicked => { root.dismissed(); } }
     content := VerticalLayout { padding: Theme.card-padding; spacing: Theme.content-gap; alignment: start;
         if MobileView.notice-modal: MHeading { text: "发生错误"; color: Theme.danger; }
         MScroll {
             content-key: root.text; preferred-height: body.preferred-height;
             body := VerticalLayout { alignment: start; spacing: Theme.content-gap;
-                MParagraph { text: root.text; font-size: MobileTypography.font-size(15); color: root.error ? Theme.danger : Theme.secondary; }
-                if !root.error: MProgress { height: 2px; value: root.progress; smooth: false; }
+                message-area := Rectangle {
+                    height: message.preferred-height;
+                    accessible-role: button; accessible-label: root.text + "，点击关闭";
+                    accessible-action-default => { root.dismissed(); }
+                    message := MParagraph { width: parent.width; text: root.text; font-size: MobileTypography.font-size(15); color: root.error ? Theme.danger : Theme.ink; }
+                    TouchArea { mouse-cursor: pointer; clicked => { root.dismissed(); } }
+                }
             }
         }
         if root.error && root.compact-actions: HorizontalLayout { spacing: MobileTypography.small-gap;
@@ -358,7 +363,7 @@ export component MNotice inherits Rectangle {
                 clicked => { MobileActions.request(MobileIntent.copy-diagnostics, root.text, ""); }
             }
         }
-        HorizontalLayout { alignment: root.error ? stretch : end; spacing: MobileTypography.small-gap;
+        if root.error: HorizontalLayout { spacing: MobileTypography.small-gap;
             if root.error && !root.compact-actions: MButton { modal-control: true; notice-control: true; text: "导出诊断";
                 clicked => { MobileActions.request(MobileIntent.export-diagnostics, root.text, ""); }
             }
@@ -368,9 +373,10 @@ export component MNotice inherits Rectangle {
             if root.error: MButton { modal-control: true; notice-control: true; text: "新建 Issue";
                 clicked => { MobileActions.request(MobileIntent.report-issue, root.text, ""); }
             }
-            dismiss := MButton { modal-control: true; notice-control: true; text: "关闭"; min-width: root.error ? 0px : 68px; horizontal-stretch: root.error ? 1 : 0;
-                clicked => { root.dismissed(); }
-            }
+        }
+        if root.error && MobileView.notice-recover-network && MobileData.vpn-connected && !MobileData.protected && !MobileData.protection-pending: MButton {
+            modal-control: true; notice-control: true; text: "恢复系统直连"; enabled: !MobileData.working;
+            clicked => { MobileActions.request(MobileIntent.disconnect, "", ""); }
         }
     }
 }

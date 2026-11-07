@@ -356,6 +356,11 @@ impl App {
         set!(get_retry_core, set_retry_core, self.ready_to_retry());
         set!(get_notice_error, set_notice_error, self.error);
         set!(
+            get_notice_recover_network,
+            set_notice_recover_network,
+            self.notice_network_recovery
+        );
+        set!(
             get_notice_critical,
             set_notice_critical,
             self.notice_critical

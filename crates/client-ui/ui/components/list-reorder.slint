@@ -1,3 +1,5 @@
+import { Theme } from "../theme/palette.slint";
+
 // Keep the gesture and its preview outside recycled rows.
 export component ListReorderPreview inherits Rectangle {
     in property <bool> active;
@@ -8,6 +10,7 @@ export component ListReorderPreview inherits Rectangle {
     clip: true;
     Rectangle {
         x: 0px; y: root.preview-y; width: parent.width; height: root.row-height;
+        background: Theme.surface; border-radius: 10px;
         drop-shadow-blur: 12px; drop-shadow-offset-y: 3px; drop-shadow-color: #00000030;
         @children
     }

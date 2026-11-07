@@ -212,7 +212,7 @@ export component MobileFrame inherits Rectangle {
             notice-panel := MNotice {
                 x: MobileView.safe-left + (root.usable-width - self.width) / 2;
                 y: MobileView.notice-modal ? MobileView.safe-top + max(8px, (root.usable-height - self.height) / 2)
-                    : MobileView.safe-top + 8px - (1 - notice-presence.progress) * 8px;
+                    : max(MobileView.safe-top + 8px, parent.height - MobileView.safe-bottom - root.nav-content-height - self.height - 24px) + (1 - notice-presence.progress) * 8px;
                 width: min(600px, root.usable-width - 24px);
                 text: root.notice-text;
                 error: MobileView.notice-error;

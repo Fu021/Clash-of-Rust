@@ -151,8 +151,11 @@ struct ReleaseAsset {
     browser_download_url: String,
 }
 
-pub async fn download_geo(destination: &Path, proxy_port: Option<u16>) -> Result<GeoManifest> {
-    let routes = crate::network::routes(proxy_port, None);
+pub async fn download_geo(
+    destination: &Path,
+    proxy_port: Option<crate::network::DownloadPorts>,
+) -> Result<GeoManifest> {
+    let routes = crate::network::download_routes(proxy_port, None);
     let mut release = None;
     let mut errors = Vec::new();
     for route in &routes {

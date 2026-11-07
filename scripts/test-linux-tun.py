@@ -326,6 +326,31 @@ def root_cli_smoke():
             # A fresh root daemon must also restore a persisted TUN mode.
             assert invoke('start')['running'] and api('configs')['tun']['enable']
             verify_tun_http()
+            unavailable = directory/'unavailable.yaml'
+            unavailable.write_text(
+                'proxies: [{name: Unavailable, type: socks5, server: 203.0.113.10, port: 9}]\n'
+                'rules: ["MATCH,Unavailable"]\n'
+                'dns: {enable: true, enhanced-mode: fake-ip, '
+                'nameserver: ["https://192.0.2.254/dns-query#DIRECT"]}\n'
+                'tun: {device: CorRootTest, route-address: [203.0.113.0/24], dns-hijack: []}\n')
+            invoke('profile', 'import', unavailable, '--name', 'unavailable-nodes')
+            invoke('profile', 'use', 'unavailable-nodes')
+            previous = invoke('status')
+            connection = HTTPConnection('127.0.0.1', mixed, timeout=15)
+            try:
+                connection.request('GET', 'http://203.0.113.20/subscription.yaml')
+                rejected = connection.getresponse()
+                assert rejected.status != 200, 'The failed-node control unexpectedly succeeded'
+                rejected.read()
+            finally:
+                connection.close()
+            invoke('profile', 'add', 'direct-fallback', 'http://203.0.113.20/subscription.yaml')
+            invoke('profile', 'update', 'direct-fallback')
+            after = invoke('status')
+            assert (after['profile'] == previous['profile'] and after['mode'] == previous['mode']
+                    and after['proxy'] == previous['proxy']), 'Download fallback changed the active network'
+            print('PASS: subscription import/update bypass a failed rule through managed DIRECT with TUN active',
+                  flush=True)
             invoke('proxy', 'off')
             assert not api('configs')['tun']['enable']
         except Exception:

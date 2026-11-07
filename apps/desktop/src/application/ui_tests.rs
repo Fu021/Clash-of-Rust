@@ -4,6 +4,31 @@ use clash_client_ui::{AppWindow, Intent, UiActions, UiData, models::ViewModels};
 use slint::{ComponentHandle, Model};
 
 #[test]
+fn notice_messages_dismiss_once_when_clicked_for_every_severity() {
+    ui_testing::initialize(950, 700);
+    let window = AppWindow::new().unwrap();
+    let data = window.global::<UiData>();
+    let events = pointer_events(&window);
+    window.show().unwrap();
+    for (error, critical) in [(false, false), (true, false), (true, true)] {
+        data.set_notice("测试通知，点击正文关闭".into());
+        data.set_notice_error(error);
+        data.set_notice_critical(critical);
+        let _ = window.window().take_snapshot().unwrap();
+        events.borrow_mut().clear();
+        let target = window.get_notice_close_target();
+        let coordinates: Vec<f32> = target.iter().collect();
+        ui_testing::click(
+            window.window(),
+            coordinates[0] + coordinates[2] / 2.0,
+            coordinates[1] + coordinates[3] / 2.0,
+        );
+        assert_eq!(events.borrow().len(), 1);
+        assert_eq!(events.borrow()[0].0, Intent::DismissNotice);
+    }
+}
+
+#[test]
 fn closing_a_foreground_window_while_the_tray_starts_waits_before_exiting() {
     let mut app = fixture(Page::Home);
     app.visible = true;

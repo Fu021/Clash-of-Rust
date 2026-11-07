@@ -13,6 +13,22 @@ impl App {
         self.present_notice(text, true, true);
     }
 
+    pub(super) fn show_unreachable_nodes(&mut self, context: &str, count: usize) {
+        let detail = if self.settings.claude_protection.is_some() {
+            "请在 Claude 保护页检查保护线路。"
+        } else {
+            "可更换节点，或关闭代理接管以恢复系统直连。"
+        };
+        let revision = self.notice_revision;
+        self.show_notice(
+            format!("{context}的 {count} 个节点均未通过测速。{detail}"),
+            true,
+        );
+        if self.notice_revision != revision {
+            self.notice_network_recovery = true;
+        }
+    }
+
     pub(super) fn show_notice_followup(&mut self, text: String, error: bool) {
         if self.notice_visible && self.error {
             self.present_notice(
@@ -39,6 +55,7 @@ impl App {
         self.notice = text;
         self.error = error;
         self.notice_critical = critical;
+        self.notice_network_recovery = false;
         self.notice_visible = true;
         self.notice_started = Some(Instant::now());
         self.notice_revision = self.notice_revision.wrapping_add(1);
@@ -67,6 +84,7 @@ impl App {
     pub(super) fn dismiss_notice(&mut self) {
         self.notice_visible = false;
         self.notice_critical = false;
+        self.notice_network_recovery = false;
         self.notice_started = None;
         self.notice_revision = self.notice_revision.wrapping_add(1);
         if let Some(timer) = self.notice_timer.take() {
@@ -117,6 +135,20 @@ mod tests {
         app.show_notice("已保存".into(), false);
         let _ = app.update(Message::NoticeExpired(app.notice_revision));
         assert!(!app.notice_visible);
+    }
+
+    #[test]
+    fn unreachable_nodes_offer_recovery_without_changing_the_network() {
+        let mut app = App::initial_state(Err(anyhow::anyhow!("test")), None);
+        app.dismiss_notice();
+        let previous = app.settings.clone();
+        app.show_unreachable_nodes("本次测速", 3);
+        assert!(app.error && app.notice_network_recovery);
+        assert!(app.notice.contains("3 个节点均未通过测速"));
+        assert_eq!(app.settings.proxy_mode, previous.proxy_mode);
+        assert_eq!(app.settings.run_mode, previous.run_mode);
+        app.dismiss_notice();
+        assert!(!app.notice_network_recovery);
     }
 
     #[test]

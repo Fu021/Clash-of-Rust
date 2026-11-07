@@ -111,6 +111,20 @@ mod tests {
     }
 
     #[test]
+    fn failed_group_tests_offer_network_recovery_without_changing_json() {
+        let all_failed = json!({"节点 A": 0, "节点 B": 0});
+        let human = render(&["node", "test", "--all"], all_failed.clone());
+        assert!(human.contains("cor proxy off"));
+        assert!(human.contains("cor diagnose --output cor-diagnose.json"));
+        assert!(
+            !render(&["node", "test", "--all"], json!({"A": 1, "B": 0})).contains("cor proxy off")
+        );
+        assert!(!render(&["node", "test", "A"], json!({"A": 0})).contains("cor proxy off"));
+        let json = render(&["node", "test", "--all", "--json"], all_failed);
+        assert!(!json.contains("cor proxy off"));
+    }
+
+    #[test]
     fn node_output_explains_groups_unknown_delays_timeouts_and_selection() {
         let value = json!({"offset":0,"total":5,"items":[
             {"name":"Auto","type":"URLTest","now":"德国01","members":2,"latency_ms":null,"selected":true},

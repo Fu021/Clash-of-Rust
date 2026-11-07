@@ -88,14 +88,14 @@ impl Engine {
         download: F,
     ) -> Result<(UpdateJob, T, bool)>
     where
-        F: FnOnce(Option<u16>, bool, Api) -> Fut,
+        F: FnOnce(Option<crate::network::DownloadPorts>, bool, Api) -> Fut,
         Fut: Future<Output = Result<T>>,
     {
         let (mut job, port, prereleases, api) = {
             let engine = shared.lock().await;
             (
                 engine.app_updates.begin("客户端更新正在进行，请稍候")?,
-                engine.running().then_some(engine.settings.mixed_port),
+                engine.running().then_some(engine.settings.download_ports()),
                 engine.settings.update_prereleases,
                 engine.api.clone(),
             )
@@ -168,7 +168,7 @@ impl Engine {
         download: F,
     ) -> Result<()>
     where
-        F: FnOnce(reqwest::Url, Option<u16>) -> Fut,
+        F: FnOnce(reqwest::Url, Option<crate::network::DownloadPorts>) -> Fut,
         Fut: Future<Output = Result<(String, Option<String>)>>,
     {
         let url = reqwest::Url::parse(&source).context("订阅 URL 无效")?;
@@ -197,7 +197,7 @@ impl Engine {
             (
                 job,
                 pending,
-                engine.running().then_some(engine.settings.mixed_port),
+                engine.running().then_some(engine.settings.download_ports()),
             )
         };
         let (raw, usage) = job
@@ -261,7 +261,7 @@ impl Engine {
         download: F,
     ) -> Result<()>
     where
-        F: FnOnce(PathBuf, Option<u16>) -> Fut,
+        F: FnOnce(PathBuf, Option<crate::network::DownloadPorts>) -> Fut,
         Fut: Future<Output = Result<()>>,
     {
         let (mut job, staged, port) = {
@@ -270,7 +270,7 @@ impl Engine {
             let staged = tempfile::Builder::new()
                 .prefix(".geo-download-")
                 .tempdir_in(engine.store.runtime())?;
-            let port = engine.running().then_some(engine.settings.mixed_port);
+            let port = engine.running().then_some(engine.settings.download_ports());
             append(
                 &engine.logs,
                 "[客户端] 开始下载全部 Geo 数据，下载期间继续使用原数据",

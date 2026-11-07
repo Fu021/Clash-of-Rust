@@ -351,6 +351,7 @@ struct App {
     notice: String,
     error: bool,
     notice_critical: bool,
+    notice_network_recovery: bool,
     core_failure: Option<String>,
     notice_visible: bool,
     notice_started: Option<std::time::Instant>,
@@ -510,6 +511,7 @@ impl App {
             notice,
             error,
             notice_critical: core_failure.is_some(),
+            notice_network_recovery: false,
             core_failure,
             notice_visible: error,
             notice_started: error.then(std::time::Instant::now),
@@ -591,7 +593,10 @@ impl App {
         if self.exiting || !self.updates.begin() {
             return Task::none();
         }
-        let proxy_port = self.snapshot.running.then_some(self.settings.mixed_port);
+        let proxy_port = self
+            .snapshot
+            .running
+            .then_some(self.settings.download_ports());
         let include_prereleases = self.settings.update_prereleases;
         let id = self.updates.check_id;
         Task::perform(
@@ -1026,7 +1031,10 @@ impl App {
                         .as_ref()
                         .map_or(1, |package| package.asset.size),
                 );
-                let port = self.snapshot.running.then_some(self.settings.mixed_port);
+                let port = self
+                    .snapshot
+                    .running
+                    .then_some(self.settings.download_ports());
                 let download_api = clash_of_rust::api::Api::new(&self.settings).ok();
                 return Task::run(
                     desktop_runtime::stream::channel(8, async move |output| {
@@ -1531,13 +1539,17 @@ impl App {
                 match result {
                     Ok(delays) => {
                         let good = delays.values().filter(|d| **d > 0).count();
-                        self.show_notice(
-                            format!(
-                                "{group} 测速完成：{good}/{} 个节点可达，其余超时或失败",
-                                delays.len()
-                            ),
-                            false,
-                        );
+                        if good == 0 && !delays.is_empty() {
+                            self.show_unreachable_nodes(&format!("{group} 中"), delays.len());
+                        } else {
+                            self.show_notice(
+                                format!(
+                                    "{group} 测速完成：{good}/{} 个节点可达，其余超时或失败",
+                                    delays.len()
+                                ),
+                                false,
+                            );
+                        }
                         self.node_delays.extend(delays);
                         self.proxy_order.get_mut().clear();
                     }
@@ -1670,6 +1682,13 @@ impl App {
                 }
                 self.periodic_testing = false;
                 if let Ok(delays) = result {
+                    if !delays.is_empty()
+                        && delays.values().all(|delay| *delay == 0)
+                        && (self.node_delays.is_empty()
+                            || self.node_delays.values().any(|delay| *delay > 0))
+                    {
+                        self.show_unreachable_nodes("本次定时测速", delays.len());
+                    }
                     self.node_delays = delays;
                     self.proxy_order.get_mut().clear();
                 }

@@ -37,7 +37,7 @@ pub(super) fn start(
                 match PendingUpdate::capture(profile, &owner.store) {
                     Ok(pending) => Some((
                         pending,
-                        owner.running().then_some(owner.settings.mixed_port),
+                        owner.running().then_some(owner.settings.download_ports()),
                     )),
                     Err(_) => {
                         owner.record_failure("订阅定时更新失败，已保留原配置");

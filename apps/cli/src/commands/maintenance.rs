@@ -168,7 +168,7 @@ async fn update(args: &Args) -> Result<()> {
         if let Some(remote) = backend::connect(args, false).await? {
             let meta: Meta = remote.request(Command::Meta).await?;
             (
-                meta.running.then_some(meta.settings.mixed_port),
+                meta.running.then_some(meta.settings.download_ports()),
                 Some(clash_client_core::api::Api::new(&meta.settings)?),
                 meta.settings.update_prereleases,
             )

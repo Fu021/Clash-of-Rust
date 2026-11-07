@@ -506,6 +506,18 @@ impl Engine {
             self.view_revision = self.view_revision.wrapping_add(1);
             append(&self.logs, "[客户端] 已自动分配可用的内核控制端口");
         }
+        let direct = crate::config::reserve_controller(
+            self.settings.direct_download_port,
+            self.settings.mixed_port,
+        )
+        .context("无法分配直连下载端口")?;
+        let direct_port = direct.local_addr()?.port();
+        if direct_port != self.settings.direct_download_port {
+            let mut settings = self.settings.clone();
+            settings.direct_download_port = direct_port;
+            self.store.save_settings(&settings)?;
+            self.settings = settings;
+        }
         {
             let port = self.settings.mixed_port;
             #[cfg(target_os = "macos")]
@@ -540,6 +552,7 @@ impl Engine {
         self.node_root.lock().expect("header route lock").take();
         drop(payload);
         drop(controller);
+        drop(direct);
         let mut child = self
             .command()?
             .arg("-d")
@@ -577,6 +590,9 @@ impl Engine {
                 if config["mixed-port"].as_u64() != Some(u64::from(self.settings.mixed_port)) {
                     bail!("内核代理端口仍在初始化");
                 }
+                tokio::net::TcpStream::connect(("127.0.0.1", self.settings.direct_download_port))
+                    .await
+                    .context("内核直连下载端口仍在初始化")?;
                 Ok::<_, anyhow::Error>(version)
             };
             if let Ok(Ok(version)) = tokio::time::timeout(Duration::from_millis(400), ready).await {
@@ -859,6 +875,7 @@ impl Engine {
 
     pub async fn save_settings(&mut self, mut settings: Settings) -> Result<()> {
         settings.normalize();
+        settings.direct_download_port = self.settings.direct_download_port;
         if self.remote.is_some() {
             self.remote_mutate(ControlCommand::Settings {
                 settings: settings.clone(),
@@ -1082,13 +1099,16 @@ impl Engine {
         }
         let (raw, usage) = if source.starts_with("https://") || source.starts_with("http://") {
             let url = reqwest::Url::parse(&source).context("订阅 URL 无效")?;
-            crate::subscription::download(&url, self.running().then_some(self.settings.mixed_port))
-                .await
-                .context(if existing.is_some() {
-                    "订阅更新失败，已保留原配置与运行状态"
-                } else {
-                    "订阅下载失败"
-                })?
+            crate::subscription::download(
+                &url,
+                self.running().then_some(self.settings.download_ports()),
+            )
+            .await
+            .context(if existing.is_some() {
+                "订阅更新失败，已保留原配置与运行状态"
+            } else {
+                "订阅下载失败"
+            })?
         } else {
             (read_profile(std::path::Path::new(&source))?, None)
         };

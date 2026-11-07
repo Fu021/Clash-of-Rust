@@ -92,6 +92,14 @@ pub(super) fn apply(map: &mut Mapping, settings: &Settings) -> Result<bool> {
             Value::from("nameserver"),
             yaml_serde::to_value(DEFAULT_DNS_NAMESERVERS)?,
         );
+        dns.insert(
+            Value::from("direct-nameserver"),
+            yaml_serde::to_value(DEFAULT_DNS_NAMESERVERS.map(|server| format!("{server}#DIRECT")))?,
+        );
+        dns.insert(
+            Value::from("direct-nameserver-follow-policy"),
+            Value::from(false),
+        );
     }
     if !fake_ip {
         // DNS override off still preserves subscription nameservers, policies

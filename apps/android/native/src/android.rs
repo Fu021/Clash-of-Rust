@@ -231,6 +231,7 @@ struct State {
     notice: String,
     notice_error: bool,
     notice_critical: bool,
+    notice_network_recovery: bool,
     notice_followup: bool,
     issue_events: VecDeque<Value>,
     copied: (i32, Arc<str>),
@@ -478,6 +479,7 @@ async fn run_loop(
         notice: String::new(),
         notice_error: false,
         notice_critical: false,
+        notice_network_recovery: false,
         notice_followup: false,
         issue_events: VecDeque::new(),
         copied: Default::default(),
@@ -677,7 +679,7 @@ async fn run_loop(
                         last_update_check=std::time::Instant::now();
                         state.update_generation = state.update_generation.wrapping_add(1);
                         state.update_confirmation = None;
-                        update_job=Some(start_update_check(state.session.settings.mixed_port,state.session.settings.update_prereleases,state.update_generation,updates.clone()));
+                        update_job=Some(start_update_check(state.session.settings.download_ports(),state.session.settings.update_prereleases,state.update_generation,updates.clone()));
                     }
                 } else if intent==MobileIntent::InstallUpdate {
                     if request.b == "cancel" {
@@ -703,7 +705,7 @@ async fn run_loop(
                         } else {
                             state.update_busy=true;state.update_downloading=true;state.update_status="正在下载更新…".into();state.update_progress=0.0;
                             let path=state.update_path.clone();
-                            let port=state.session.settings.mixed_port;let send=updates.clone();
+                            let port=state.session.settings.download_ports();let send=updates.clone();
                             let download_api=state.session.api.clone();
                             state.update_generation = state.update_generation.wrapping_add(1);
                             let generation = state.update_generation;
@@ -719,7 +721,7 @@ async fn run_loop(
                     if !state.geo_updating {
                         state.geo_updating=true;
                         let runtime=state.session.store.runtime();
-                        let port=state.session.running.then_some(state.session.settings.mixed_port);
+                        let port=state.session.running.then_some(state.session.settings.download_ports());
                         let send=updates.clone();
                         geo_job=Some(tokio::spawn(async move {
                             let result=async {
@@ -868,7 +870,18 @@ async fn run_loop(
                         match result {
                             Ok(values)=> {
                                 let failed=values.values().filter(|&&delay|delay==0).count();
-                                state.notice=format!("测速完成 · {} 项，{} 项超时",values.len(),failed);
+                                let unavailable = !values.is_empty() && failed == values.len();
+                                state.notice=if unavailable {
+                                    let detail = if state.session.settings.claude_protection.is_some() {
+                                        "请在 Claude 保护页检查保护线路。"
+                                    } else {
+                                        "可更换节点，或断开 VPN 以恢复系统直连。"
+                                    };
+                                    format!("本次测速的 {} 个节点均未通过测速。{detail}", values.len())
+                                } else {
+                                    format!("测速完成 · {} 项，{} 项超时",values.len(),failed)
+                                };
+                                state.notice_network_recovery = unavailable;
                                 state.notice_error=failed > 0;
                                 if all {state.node_delays=values;} else {state.node_delays.extend(values);}
                             }
@@ -1011,12 +1024,12 @@ async fn run_loop(
                     if let Some(profile) = subscription_schedule.next(&state.session.settings, &state.session.profiles, now) {
                         match core::subscription::schedule::PendingUpdate::capture(profile, &state.session.store) {
                             Ok(pending) => {
-                                let port = state.session.running.then_some(state.session.settings.mixed_port);
+                                let port = state.session.running.then_some(state.session.settings.download_ports());
                                 let sender = updates.clone();
                                 subscription_job = Some(tokio::spawn(async move {
                                     let result = async {
                                         let url = core::probe::validate_url(&pending.profile.source)?;
-                                        core::subscription::download_routes(&url, &core::network::routes(port, None)).await
+                                        core::subscription::download_routes(&url, &core::network::download_routes(port, None)).await
                                     }.await;
                                     let _ = sender.send(Update::Subscription(pending, result)).await;
                                 }));
@@ -1029,7 +1042,7 @@ async fn run_loop(
                     last_update_check=std::time::Instant::now();state.update_busy=true;state.update_downloading=false;state.update_status="正在检查更新…".into();
                     state.update_generation = state.update_generation.wrapping_add(1);
                     state.update_confirmation = None;
-                    update_job=Some(start_update_check(state.session.settings.mixed_port,state.session.settings.update_prereleases,state.update_generation,updates.clone()));
+                    update_job=Some(start_update_check(state.session.settings.download_ports(),state.session.settings.update_prereleases,state.update_generation,updates.clone()));
                 }
                 let minutes=state.session.settings.delay_interval_minutes;
                 if state.session.running && state.protection_change.is_none() && minutes>0
@@ -1198,6 +1211,7 @@ async fn run_loop(
         let notice = std::mem::take(&mut state.notice);
         let notice_error = std::mem::take(&mut state.notice_error);
         let notice_critical = std::mem::take(&mut state.notice_critical);
+        let notice_network_recovery = std::mem::take(&mut state.notice_network_recovery);
         let notice_followup = std::mem::take(&mut state.notice_followup);
         if notice_error && !notice.is_empty() {
             state
@@ -1231,6 +1245,7 @@ async fn run_loop(
                     {
                         current.set_notice_error(notice_error);
                         current.set_notice_critical(notice_critical);
+                        current.set_notice_recover_network(notice_network_recovery);
                         ui.invoke_notify(notice.into());
                     }
                 }
@@ -1274,7 +1289,7 @@ async fn run_loop(
 }
 
 fn start_update_check(
-    port: u16,
+    port: core::network::DownloadPorts,
     include_prereleases: bool,
     generation: u64,
     send: mpsc::Sender<Update>,

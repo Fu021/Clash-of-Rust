@@ -26,6 +26,7 @@ export component AppWindow inherits Window {
     out property <bool> modal-mounted: dialog-host.mounted;
     in-out property <int> accent-draft <=> dialog-host.selected-accent;
     out property <bool> notice-mounted: notice-host.mounted;
+    out property <[length]> notice-close-target: notice-host.close-target;
     in-out property <string> app-title: "Clash of Rust";
     title: root.app-title;
     preferred-width: 950px;
@@ -47,6 +48,8 @@ export component AppWindow inherits Window {
     changed appearance => { Theme.appearance = root.appearance; }
     changed font-scale => { Theme.text-scale = root.font-scale; }
     property <int> accent: UiData.accent;
+    property <bool> compact-sidebar: self.width < 880px;
+    property <length> sidebar-width: self.compact-sidebar ? 60px : 176px;
     property <bool> error-active: UiData.notice != "" && UiData.notice-error;
     changed accent => { Theme.accent-index = root.accent; }
     property <[string]> titles: ["首页", "代理", "订阅", "连接", "规则", "日志", "网络诊断", "IP 检测", "A÷检测", "设置"];
@@ -70,11 +73,11 @@ export component AppWindow inherits Window {
             return reject;
         }
     Rectangle {
-        x: 0px; y: 0px; width: 176px; height: parent.height; background: Theme.sidebar;
+        x: 0px; y: 0px; width: root.sidebar-width; height: parent.height; background: Theme.sidebar;
         animate background { duration: Motion.appearance; enabled: Motion.active; }
         Rectangle { x: parent.width - 1px; width: 1px; height: parent.height; background: Theme.line; }
         Rectangle {
-            x: 8px; y: 16px; width: 40px; height: 40px; border-radius: 8px;
+            x: root.compact-sidebar ? 10px : 12px; y: 12px; width: 40px; height: 40px; border-radius: 8px;
             background: icon-area.pressed ? Theme.accent-wash : icon-area.has-hover ? Theme.inset : transparent;
             animate background { duration: Motion.fast; enabled: Motion.active; }
             accessible-role: button;
@@ -94,36 +97,35 @@ export component AppWindow inherits Window {
                 clicked => { UiActions.dispatch(Intent.system-notification, "", ""); }
             }
         }
-        Label { x: 48px; y: 18px; height: 32px; width: 122px; text: "Clash of Rust"; font-size: 16px * Theme.text-scale; }
-        Caption { x: 48px; y: 46px; height: 22px; width: 122px; text: "原生代理客户端"; font-size: 12px * Theme.text-scale; }
+        if !root.compact-sidebar: Label { x: 56px; y: 16px; height: 32px; width: parent.width - 64px; text: "Clash of Rust"; font-size: 15px * Theme.text-scale; font-weight: 600; }
         nav := ScrollView {
             content-y <=> UiData.scroll-navigation;
             x: 0px; y: 92px; width: parent.width; height: max(0px, footer.y - self.y - 12px);
-            VerticalLayout { alignment: start; padding-left: 12px; padding-right: 12px; spacing: 4px;
+            VerticalLayout { alignment: start; padding-left: 8px; padding-right: 8px; spacing: 4px;
                 for route-id in root.sidebar-pages: VerticalLayout {
                     spacing: 4px;
-                    if route-id == 6: Caption { text: "工具"; height: 24px; font-size: 12px * Theme.text-scale; }
-                    NavigationItem { text: root.titles[route-id]; icon: root.icons[route-id]; selected: UiData.page == route-id; clicked => { UiActions.dispatch(Intent.navigate, "" + route-id, ""); } }
+                    if route-id == 6 && !root.compact-sidebar: Caption { text: "工具"; height: 24px; font-size: 12px * Theme.text-scale; }
+                    NavigationItem { compact: root.compact-sidebar; text: root.titles[route-id]; icon: root.icons[route-id]; selected: UiData.page == route-id; clicked => { UiActions.dispatch(Intent.navigate, "" + route-id, ""); } }
                 }
             }
         }
         footer := VerticalLayout {
-            x: 12px; y: parent.height - self.height - 14px; width: parent.width - 24px;
+            x: 8px; y: parent.height - self.height - 14px; width: parent.width - 16px;
             height: self.preferred-height; spacing: 8px;
-            NavigationItem { text: root.titles[9]; icon: root.icons[9]; selected: UiData.page == 9; clicked => { UiActions.dispatch(Intent.navigate, "9", ""); } }
-            Caption { height: 22px; text: UiData.version; font-size: 13px * Theme.text-scale; }
+            NavigationItem { compact: root.compact-sidebar; text: root.titles[9]; icon: root.icons[9]; selected: UiData.page == 9; clicked => { UiActions.dispatch(Intent.navigate, "9", ""); } }
+            if !root.compact-sidebar: Caption { height: 22px; text: UiData.version; font-size: 12px * Theme.text-scale; }
         }
     }
     Rectangle {
-        x: 200px; y: 20px; width: parent.width - 224px; height: parent.height - 36px;
+        x: root.sidebar-width + 24px; y: 20px; width: parent.width - self.x - 24px; height: parent.height - 36px;
         VerticalLayout {
             spacing: Theme.page-gap;
             Rectangle {
                 height: max(72px, header.preferred-height);
                 header := HorizontalLayout { cross-axis-alignment: center; spacing: Theme.page-gap;
                     VerticalLayout { spacing: 4px;
-                        Label { text: root.titles[UiData.page]; font-size: 26px * Theme.text-scale; font-weight: 600; }
-                        Caption { text: root.subtitles[UiData.page]; }
+                        Label { text: root.titles[UiData.page]; font-size: 20px * Theme.text-scale; font-weight: 600; }
+                        if !root.compact-sidebar: Caption { text: root.subtitles[UiData.page]; font-size: Theme.detail-size; }
                     }
                     VerticalLayout { width: 250px; spacing: 8px;
                         HorizontalLayout { cross-axis-alignment: center; spacing: 8px;

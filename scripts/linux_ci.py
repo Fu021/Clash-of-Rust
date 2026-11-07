@@ -5,6 +5,7 @@ explicit build inputs enter the disposable container; guests receive no tokens.
 """
 import argparse
 import contextlib
+from concurrent.futures import ThreadPoolExecutor
 import hashlib
 import json
 import os
@@ -141,26 +142,77 @@ def cache_downloads(vm=False):
         download(records[name], tools_directory()/filename)
 
 
-def guest_cache(scp, remote, restore=False):
-    """Transfer only guest DEBs; fresh signed indexes establish their trust."""
-    configured = os.environ.get('COR_LINUX_APT_CACHE')
-    if not configured:
-        return
-    directory = Path(configured)
+def guest_deb_downloads(ssh, remote, environment, staging):
+    script = (
+        "import json,pathlib,runpy,subprocess; "
+        "from linux_apt import OPTIONS,archive_records,privileged; "
+        "packages=runpy.run_path('scripts/test-release-package.py')['compatibility_dependencies'](); "
+        "pathlib.Path('/home/ubuntu/cor-apt-plan-archives').mkdir(exist_ok=True); "
+        "result=privileged([*OPTIONS,'-o','Acquire::ForceHash=SHA256','--print-uris',"
+        "'-o','Dir::Cache::archives=/home/ubuntu/cor-apt-plan-archives',"
+        "'install','-y','--no-install-recommends',*packages],120,stdout=subprocess.PIPE,text=True); "
+        "pathlib.Path('/home/ubuntu/cor-apt-plan.json').write_text(json.dumps(archive_records(result.stdout)))"
+    )
+    remote(environment+'/opt/cor-test-python/bin/python3 -c '+shlex.quote(
+        "import sys; sys.path.insert(0,'scripts'); "+script), timeout=180)
+    records = json.loads(subprocess.check_output([*ssh, 'cat ~/cor-apt-plan.json'], timeout=60))
+    from linux_apt import matches, source_url
+    from upstream_cache import valid_source
+    if not isinstance(records, dict) or len(records) > 4096:
+        raise ValueError('Guest APT download plan is invalid')
+    for name, record in records.items():
+        if (not isinstance(name, str) or not re.fullmatch(r'[A-Za-z0-9.+_%~:-]+\.deb', name)
+                or not isinstance(record, dict) or set(record) != {'url', 'size', 'sha256'}
+                or not isinstance(record['url'], str)
+                or not valid_source(source_url(record['url']), record['sha256'], record['size'])):
+            raise ValueError('Guest APT download plan has invalid metadata')
+    staging.mkdir(parents=True, exist_ok=True)
+
+    def fetch(entry):
+        name, record = entry
+        destination = staging/name
+        download_original(source_url(record['url']), destination, digest=record['sha256'])
+        if not matches(destination, record):
+            raise ValueError('Guest DEB download differs from signed APT metadata')
+        return destination
+
+    with ThreadPoolExecutor(max_workers=4) as workers:
+        archives = list(workers.map(fetch, records.items()))
+    archive = staging.parent/'guest-debs.tar'
+    with tarfile.open(archive, 'w') as tar:
+        for path in archives:
+            tar.add(path, arcname=path.name, recursive=False)
+    with archive.open('rb') as stream:
+        remote('mkdir -p ~/cor-apt && tar xf - -C ~/cor-apt', stdin=stream, timeout=600)
+    print(f'Guest APT inputs: staged {len(archives)} verified originals through host official/private fallback',
+          flush=True)
+
+
+def guest_receipts(ssh):
+    from upstream_cache import directory, valid_source
+    script = ("import json,pathlib; root=pathlib.Path('/home/ubuntu/cor-runner-temp/cor-upstream-downloads'); "
+              "files=sorted(root.glob('*.json')); "
+              "assert len(files)<=4096; "
+              "print(json.dumps([json.loads(path.read_text()) for path in files]))")
     try:
-        directory.mkdir(parents=True, exist_ok=True)
-        if restore:
-            files = [path for path in directory.glob('*.deb')
-                     if path.is_file() and not path.is_symlink()]
-            if files:
-                run([*scp, *files, remote+':cor-apt/'], timeout=300)
-            print(f'Guest DEB cache: staged {len(files)} untrusted downloads', flush=True)
-        else:
-            run([*scp, remote+':cor-apt/*.deb', directory], timeout=300)
-            print(f'Guest DEB cache: exported {len(list(directory.glob("*.deb")))} downloads',
-                  flush=True)
-    except (OSError, subprocess.SubprocessError) as error:
-        print('::warning::Optional guest DEB cache transfer unavailable: '
+        payload = subprocess.check_output(
+            [*ssh, '/opt/cor-test-python/bin/python3 -c '+shlex.quote(script)], timeout=60)
+        if len(payload) > 1024*1024:
+            raise ValueError('Guest original receipt exceeds 1 MiB')
+        records = json.loads(payload)
+        if not isinstance(records, list) or any(
+                not isinstance(record, dict) or set(record) != {'url', 'size', 'sha256'}
+                or not valid_source(record['url'], record['sha256'], record['size'])
+                for record in records):
+            raise ValueError('Guest original receipt has invalid metadata')
+        write_json(REPORT/'focal-upstream-receipts.json', records)
+        for record in records:
+            identity = hashlib.sha256((record['url']+'\n'+record['sha256']).encode()).hexdigest()
+            write_json(directory()/(identity+'.json'), record)
+        print(f'Guest DEB inventory: imported {len(records)} verified original receipts; no archives copied',
+              flush=True)
+    except (OSError, ValueError, subprocess.SubprocessError) as error:
+        print('::warning::Guest original download receipts unavailable: '
               + type(error).__name__, flush=True)
 
 
@@ -254,7 +306,7 @@ def baseline_report():
             'packages': subprocess.check_output(['dpkg-query', '-W', '-f=${Package}=${Version}\\n'], text=True).splitlines()}
 
 
-def vm_test():
+def vm_test(package_run_id=None):
     require_actions()
     REPORT.mkdir(parents=True, exist_ok=True)
     value = inputs()['architectures'][host_arch()]
@@ -301,7 +353,6 @@ def vm_test():
                       '-o', 'ControlMaster=auto', '-o', 'ControlPersist=60',
                       '-o', 'ControlPath='+str(directory/'ssh-control')]
         ssh = ['ssh', *connection, '-p', str(port), 'ubuntu@127.0.0.1']
-        scp = ['scp', *connection, '-P', str(port)]
         archive = directory/'source.tar.gz'
         tracked = subprocess.check_output(['git', 'ls-files', '-z'], cwd=ROOT).decode().split('\0')
         with tarfile.open(archive, 'w:gz', compresslevel=1) as tar:
@@ -336,17 +387,37 @@ def vm_test():
                 remote('sudo mkdir -p /opt/cor-test-python && sudo tar xzf - -C /opt/cor-test-python --strip-components=1',
                        stdin=python.open('rb'), timeout=120)
                 remote('mkdir -p ~/cor-apt')
-                guest_cache(scp, 'ubuntu@127.0.0.1', restore=True)
                 environment = ('cd ~/cor-source && GITHUB_ACTIONS=true COR_LINUX_GUEST=true '
+                               'RUNNER_TEMP=/home/ubuntu/cor-runner-temp '
+                               'COR_LINUX_APT_CACHE=/home/ubuntu/cor-apt '
                                'PATH=/opt/cor-test-python/bin:$PATH PYTHONDONTWRITEBYTECODE=1 ')
-                if os.environ.get('COR_LINUX_APT_CACHE'):
-                    environment += 'COR_LINUX_APT_CACHE=/home/ubuntu/cor-apt '
                 remote('sudo timeout --signal=TERM --kill-after=30s 300s '
                        + shlex.join([*APT_OPTIONS, 'update']),
                        timeout=360)
+                guest_deb_downloads(ssh, remote, environment, directory/'guest-debs')
                 remote(environment+'/opt/cor-test-python/bin/python3 -c '+shlex.quote(
-                    "import sys; sys.path.insert(0, 'scripts'); "
-                    "from linux_apt import install; install(['git'], 300)"), timeout=600)
+                    "import runpy; "
+                    "runpy.run_path('scripts/test-release-package.py')"
+                    "['prepare_compatibility_environment']()"), timeout=2100)
+                guest_receipts(ssh)
+                try:
+                    run([sys.executable, ROOT/'scripts/upstream_cache.py', 'submit',
+                         '--budget-seconds', '20', '--poll-seconds', '0', '--no-summary'], timeout=30)
+                except (OSError, subprocess.SubprocessError) as error:
+                    print('::warning::Early guest download manifest submission unavailable: '
+                          + type(error).__name__, flush=True)
+                if package_run_id:
+                    from workflow_artifacts import commit, fetch_package_inputs, release_module
+                    module = release_module()
+                    repo = module.repository()
+                    client = module.GitHub(repo, module.credential(repo))
+                    fetch_package_inputs(client, package_run_id, host_arch(), ROOT, commit(),
+                                         int(os.environ['CI_RUN_ID']))
+                    with tarfile.open(directory/'package.tar.gz', 'w:gz', compresslevel=1) as tar:
+                        for relative in ('dist', 'target/linux-tun-test'):
+                            tar.add(ROOT/relative, arcname=relative)
+                    with (directory/'package.tar.gz').open('rb') as stream:
+                        remote('tar xzf - -C ~/cor-source', stdin=stream, timeout=300)
                 remote(environment+'/opt/cor-test-python/bin/python3 scripts/test-release-package.py '
                        '--linux-compat --expect-ubuntu 20.04',
                        timeout=2400 if architecture == 'aarch64' or not kvm else 1200)
@@ -357,7 +428,7 @@ def vm_test():
                 with contextlib.suppress(subprocess.SubprocessError):
                     subprocess.run([*ssh, 'cd ~/cor-source && tar czf - target/linux-report'],
                                    stdout=(REPORT/'focal-guest-report.tar.gz').open('wb'), timeout=60)
-                guest_cache(scp, 'ubuntu@127.0.0.1')
+                guest_receipts(ssh)
                 with contextlib.suppress(OSError, subprocess.SubprocessError):
                     subprocess.run(['ssh', '-O', 'exit', *connection, '-p', str(port),
                                     'ubuntu@127.0.0.1'], timeout=10)
@@ -373,7 +444,10 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('operation', choices=('ci', 'package', 'vm', 'cache-keys', 'cache-downloads', 'cache-image'))
     parser.add_argument('--vm', action='store_true', help='Include cloud image downloads')
+    parser.add_argument('--package-run-id', type=int, help='Prepare the VM before waiting for this run’s Linux package')
     args, extra = parser.parse_known_args()
+    if args.package_run_id is not None and (args.operation != 'vm' or args.package_run_id <= 0):
+        parser.error('--package-run-id requires vm and a positive Actions run id')
     if args.operation in ('cache-keys', 'cache-downloads'):
         if extra or (args.vm and args.operation != 'cache-downloads'):
             parser.error('Unexpected cache arguments')
@@ -393,7 +467,7 @@ def main():
     elif args.operation == 'vm':
         if extra:
             parser.error('vm takes no additional arguments')
-        vm_test()
+        vm_test(args.package_run_id)
     elif args.operation == 'ci':
         require_actions()
         run([sys.executable, ROOT/'scripts/prepare-resources.py',

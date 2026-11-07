@@ -47,9 +47,35 @@ _release_package_spec = importlib.util.spec_from_file_location(
 release_package = importlib.util.module_from_spec(_release_package_spec)
 _release_package_spec.loader.exec_module(release_package)
 
+_preview_spec = importlib.util.spec_from_file_location(
+    'preview_slint', build.ROOT/'scripts/preview-slint.py')
+preview_slint = importlib.util.module_from_spec(_preview_spec)
+_preview_spec.loader.exec_module(preview_slint)
 
 
 class BuildTests(unittest.TestCase):
+    def test_previews_reject_a_viewer_without_color_font_support(self):
+        for version, supported in [('slint-viewer 1.18.1', False),
+                                   ('slint-viewer 1.19.0', True)]:
+            with self.subTest(version=version), patch.object(
+                    preview_slint.subprocess, 'run',
+                    return_value=subprocess.CompletedProcess([], 0, version)):
+                if supported:
+                    self.assertEqual(preview_slint.rendering_viewer('viewer')['version'], version)
+                else:
+                    with self.assertRaisesRegex(RuntimeError, 'Accurate emoji previews'):
+                        preview_slint.rendering_viewer('viewer')
+
+    def test_previews_use_bundled_font_fallback_instead_of_the_hosts_preferences(self):
+        with tempfile.TemporaryDirectory() as temporary, patch.dict(
+                os.environ, {'SLINT_FONT_PATH': '/unrelated/font',
+                             'SLINT_DEFAULT_FONT': '/unrelated/primary'}):
+            environment = preview_slint.preview_environment(Path(temporary))
+            self.assertEqual(environment['SLINT_FONT_PATH'],
+                             str(build.ROOT/'resources/fonts/NotoColorEmoji-Regular.ttf'))
+            self.assertEqual(environment['SLINT_DEFAULT_FONT'],
+                             str(build.ROOT/'resources/fonts/SourceHanSansCN-Regular.otf'))
+
     def test_desktop_scope_uses_the_selected_checkout_members(self):
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
@@ -256,6 +282,78 @@ class BuildTests(unittest.TestCase):
         self.assertIn('--wayland-display=cor-wayland', modern)
         self.assertIn('--virtual-monitor=1280x900', modern)
         self.assertIn('--unsafe-mode', modern)
+
+    def test_dbus_probe_errors_remain_in_the_report_and_still_raise(self):
+        import linux_gui
+        failure = subprocess.CalledProcessError(1, ['gdbus'], stderr='service is starting')
+        with tempfile.TemporaryDirectory() as temporary, \
+                patch.dict(os.environ, {'COR_GUI_REPORT': temporary}), \
+                patch.object(linux_gui, 'output', side_effect=failure):
+            with self.assertRaises(subprocess.CalledProcessError):
+                linux_gui.dbus('org.gnome.Shell', '/org/gnome/Shell', 'org.gnome.Shell.Eval', 'true')
+            self.assertIn('service is starting', (Path(temporary)/'dbus-probes.log').read_text())
+
+    def test_only_macos_tailscale_bootstrap_binaries_survive_retirement(self):
+        self.assertFalse(storage.retired('action-setup-tailscale/1.104.5/macOS-amd64'))
+        self.assertFalse(storage.retired('action-setup-tailscale/1.104.5/macOS-arm64'))
+        self.assertTrue(storage.retired('action-setup-tailscale/1.104.5/Linux-amd64'))
+        self.assertTrue(storage.retired('action-setup-tailscale/1.104.5/Windows-arm64'))
+        self.assertEqual(storage.lineage('action-setup-tailscale/1.104.5/macOS-arm64'),
+                         storage.lineage('action-setup-tailscale/1.104.1/macOS-arm64'))
+        native = 'native-release-v2-macos-26-arm64-build-' + 'a'*8 + '-' + 'b'*8
+        bootstrap = 'action-setup-tailscale/' + '1.104.5/' + 'macOS-arm64'
+        self.assertGreater(storage.priority({'key': native}),
+                           storage.priority({'key': bootstrap}))
+
+    def test_guest_original_receipts_replace_slow_archive_exports_and_reject_bad_sources(self):
+        record = {'url': 'https://ports.ubuntu.com/ubuntu-ports/pool/main/a/a.deb',
+                  'sha256': 'a'*64, 'size': 123}
+        for valid in (True, False):
+            value = record if valid else dict(record, url='https://untrusted.invalid/a.deb')
+            with self.subTest(valid=valid), tempfile.TemporaryDirectory() as temporary, \
+                    patch.dict(os.environ, {'RUNNER_TEMP': temporary}), \
+                    patch.object(linux_ci, 'REPORT', Path(temporary)/'report'), \
+                    patch.object(linux_ci.subprocess, 'check_output',
+                                 return_value=json.dumps([value]).encode()):
+                linux_ci.guest_receipts(['ssh', 'isolated-guest'])
+                receipts = list((Path(temporary)/'cor-upstream-downloads').glob('*.json'))
+                self.assertEqual(len(receipts), int(valid))
+                if valid:
+                    self.assertEqual(json.loads(receipts[0].read_text()), record)
+
+    def test_guest_debs_use_host_fallback_and_verify_bytes_before_transferring(self):
+        payload = b'verified-signed-deb'
+        record = {'url': 'http://ports.ubuntu.com/ubuntu-ports/pool/main/a/a.deb',
+                  'sha256': hashlib.sha256(payload).hexdigest(), 'size': len(payload)}
+        for scenario in ('valid', 'changed-bytes', 'bad-source', 'bad-name', 'unavailable'):
+            value = dict(record, url='https://untrusted.invalid/a.deb') if scenario == 'bad-source' else record
+            name = '../a.deb' if scenario == 'bad-name' else 'a.deb'
+            received = []
+
+            def download(url, destination, digest):
+                self.assertTrue(url.startswith('https://ports.ubuntu.com/'))
+                self.assertEqual(digest, record['sha256'])
+                if scenario == 'unavailable':
+                    raise OSError('Both official and private downloads failed')
+                destination.write_bytes(payload if scenario != 'changed-bytes' else b'changed')
+
+            def remote(command, **kwargs):
+                if stream := kwargs.get('stdin'):
+                    with tarfile.open(fileobj=io.BytesIO(stream.read())) as archive:
+                        received.append(archive.extractfile('a.deb').read())
+
+            with self.subTest(scenario=scenario), tempfile.TemporaryDirectory() as temporary, \
+                    patch.object(linux_ci.subprocess, 'check_output',
+                                 return_value=json.dumps({name: value}).encode()), \
+                    patch.object(linux_ci, 'download_original', side_effect=download):
+                if scenario == 'valid':
+                    linux_ci.guest_deb_downloads(['ssh'], remote, 'environment ', Path(temporary)/'debs')
+                    self.assertEqual(received, [payload])
+                else:
+                    expected = OSError if scenario == 'unavailable' else ValueError
+                    with self.assertRaises(expected):
+                        linux_ci.guest_deb_downloads(['ssh'], remote, 'environment ', Path(temporary)/'debs')
+                    self.assertFalse(received)
 
     @unittest.skipUnless(hasattr(socket, 'AF_UNIX'), 'Unix sockets are unavailable')
     def test_linux_gui_finds_only_wayland_sockets(self):

@@ -4,7 +4,7 @@
 
 桌面 GUI、`cor` 与 Android 共用订阅下载器。请求的 User-Agent 为 `clash.meta mihomo ClashMeta clash-verge ClashVerge ClashMetaForAndroid clash-of-rust`，本客户端标识不携带版本号；同时接受 YAML 响应。标识只参与服务端格式识别，不转换节点协议。
 
-每条可用路线使用同一 User-Agent 请求，单条路线最多等待 30 秒；响应不兼容、HTTP 错误或网络故障可尝试其他可用代理及直连路线，不重复发送相同的客户端标识。仅含复制同一 SS 配置的“不支持本机场协议”提示节点时拒绝更新；提示旁仍有真实节点或非空 provider 时保留配置，避免误拒可用订阅。
+每条可用路线使用同一 User-Agent 请求，单条路线最多等待 30 秒；响应不兼容、HTTP 错误或网络故障可尝试其他可用代理及[内核直连入口](agent-failures/downloads.md#tun-下的更新直连)，不重复发送相同的客户端标识。直连回退不要求切换节点、规则模式或订阅；最后的系统网络仍可能受其他 VPN/TUN 影响。仅含复制同一 SS 配置的“不支持本机场协议”提示节点时拒绝更新；提示旁仍有真实节点或非空 provider 时保留配置，避免误拒可用订阅。
 
 订阅 URL 和显式格式参数保持原样；若链接固定了旧客户端格式，应在机场取得 Mihomo/Clash Meta YAML 链接。最终仍只接受有效的 mihomo YAML，协商全部失败不会覆盖已有订阅或运行状态。
 

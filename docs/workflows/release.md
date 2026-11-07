@@ -35,7 +35,7 @@ Linux 兼容验证在来源解析后准备环境，仅等待本次运行中对�
 
 Ubuntu 18.04 未纳入此基线或兼容矩阵，不能从 20.04 的验证结果推断其受支持。
 
-打包与安装验证所需原包遵循[三条工作流的缓存分工](cache-coverage.md)，不向私网保存安装目录或构建对象。原包准备后尽早交持久清单，所有下载 job（含 Ubuntu latest）在末尾保存清单和分页回执附件；pending 与整批 ready 分别报告。Ubuntu 20.04 的镜像、Python 和已验证 DEB 下载范围见 [CI 缓存边界](ci.md#ubuntu-2004-环境下载缓存)；每轮重建虚拟机磁盘，安装后验证照常执行。
+打包与安装验证所需原包遵循[三条工作流的缓存分工](cache-coverage.md)，不向私网保存安装目录或构建对象。原包准备后尽早交持久清单，所有下载 job（含 Ubuntu latest）在末尾保存清单和分页回执附件；pending 与整批 ready 分别报告。Ubuntu 20.04 的镜像、Python 和已验证 DEB 下载范围见 [CI 缓存边界](ci.md#ubuntu-2004-环境下载缓存)；每轮重建虚拟机磁盘，安装后验证照常执行。虚拟机先启动、解包 Python，再由宿主根据 guest 的签名 APT 索引下载并校验完整 GUI/测试依赖，按官方来源优先、私网回退传入 guest 安装；来源或摘要不匹配时失败。之后才等待本架构 Linux 包，认证不进入 guest；下载核验 artifact 摘要、成员、来源及收据后才传入 guest。guest 只回传经实际字节校验的原包来源记录，不再把全部 DEB 复制回宿主；开始等待前和任务末尾都收集记录，供持久清单补拉。GNOME 启动中短暂的 DBus 探测失败保存在 GUI 报告的 `dbus-probes.log`，就绪超时仍失败并显示最后错误。
 
 只有最终发布 job 有 `contents: write`。发布工作流向 `scripts/build-installer.py --prebuilt` 传入已验证的 CI 产物；本地打包可传入按上述步骤生成的本地产物。打包器只校验与组装，不隐式调用 Cargo。
 
