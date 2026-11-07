@@ -7,6 +7,8 @@ import android.net.Uri;
 import android.net.VpnService;
 import android.os.*;
 import android.provider.Settings;
+import android.view.WindowInsets;
+import android.view.inputmethod.InputMethodManager;
 import java.io.*;
 import java.nio.charset.StandardCharsets;
 import java.util.*;
@@ -51,7 +53,7 @@ public final class MainActivity extends NativeActivity {
         // Stay above that callback but below system overlays so a single app path
         // owns navigation and dialog dismissal.
         if (Build.VERSION.SDK_INT >= 33) getOnBackInvokedDispatcher().registerOnBackInvokedCallback(
-            android.window.OnBackInvokedDispatcher.PRIORITY_DEFAULT + 1, () -> emit("back",true));
+            android.window.OnBackInvokedDispatcher.PRIORITY_DEFAULT + 1, this::handleBack);
     }
     @Override protected void onNewIntent(Intent intent) {
         super.onNewIntent(intent); setIntent(intent);
@@ -67,7 +69,25 @@ public final class MainActivity extends NativeActivity {
     @android.annotation.SuppressLint("GestureBackNavigation")
     @SuppressWarnings("deprecation")
     @Override public void onBackPressed() {
+        handleBack();
+    }
+    private void handleBack() {
+        if (hideImeIfVisible()) return;
         emit("back",true);
+    }
+    private boolean hideImeIfVisible() {
+        InputMethodManager imm=(InputMethodManager)getSystemService(INPUT_METHOD_SERVICE);
+        if (imm==null) return false;
+        boolean visible;
+        if (Build.VERSION.SDK_INT >= 30) {
+            WindowInsets insets=getWindow().getDecorView().getRootWindowInsets();
+            visible=insets!=null && insets.isVisible(WindowInsets.Type.ime());
+        } else {
+            visible=imm.isAcceptingText();
+        }
+        if (!visible) return false;
+        imm.hideSoftInputFromWindow(getWindow().getDecorView().getWindowToken(),0);
+        return true;
     }
     @Override protected void onResume() {
         super.onResume(); emit("visible", true);
