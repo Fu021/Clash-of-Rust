@@ -1046,9 +1046,12 @@ fn position_candidates(path: &str, positional: &[String]) -> Vec<String> {
         ("config get", 0) => clash_client_core::config::READABLE_SETTINGS,
         ("config set", 0) => clash_client_core::config::MUTABLE_SETTINGS,
         ("config set", 1) => {
-            return positional
-                .first()
-                .map_or_else(Vec::new, |key| setting_values(key).to_vec());
+            return positional.first().map_or_else(Vec::new, |key| {
+                setting_values(key)
+                    .iter()
+                    .map(|value| (*value).to_owned())
+                    .collect()
+            });
         }
         _ => &[],
     };
