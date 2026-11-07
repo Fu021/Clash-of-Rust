@@ -14,6 +14,7 @@ mod logs;
 #[path = "../platform/macos/desktop.rs"]
 mod mac_desktop;
 mod notice;
+mod overview;
 mod presentation;
 mod rules;
 #[cfg(test)]
@@ -270,6 +271,12 @@ enum Message {
     ProbeDone(Result<probe::ProbeResult, String>),
     Dns,
     DnsDone(Result<Vec<String>, String>),
+    OverviewRefresh,
+    OverviewPrivacy,
+    OverviewHost(u64, Result<platform::HostInfo, String>),
+    OverviewDns(u64, Result<(Vec<String>, u128), String>),
+    OverviewExit(u64, Result<ip_check::CheckResult, String>),
+    OverviewService(u64, usize, Result<clash_of_rust::overview::Status, String>),
     Window((desktop_runtime::window::Id, desktop_runtime::window::Event)),
     ExitWindowState(Option<(desktop_runtime::Size, bool, Option<bool>)>),
     ExitFinished(Result<(), String>),
@@ -337,6 +344,8 @@ struct App {
     site_generation: u64,
     site_aborters: BTreeMap<String, AbortHandle>,
     site_busy: BTreeSet<String>,
+    overview: overview::Overview,
+    privacy_hidden: bool,
     exiting: bool,
     notice: String,
     error: bool,
@@ -543,6 +552,8 @@ impl App {
             site_generation: 0,
             site_aborters: BTreeMap::new(),
             site_busy: BTreeSet::new(),
+            overview: Default::default(),
+            privacy_hidden: false,
             exiting: false,
             query: String::new(),
             list_offset: 0,
@@ -715,6 +726,7 @@ impl App {
         self.node_delays.clear();
         self.proxy_order.get_mut().clear();
         self.cancel_site_checks();
+        self.overview.invalidate();
         self.site_results.clear();
         self.reset_site_filters();
         self.claude.close();
@@ -1849,14 +1861,16 @@ impl App {
                 }
                 // The console can start a stopped core or change preferences.
                 // A stopped owner returns metadata without querying mihomo.
+                let overview = self.overview_tick();
                 if self.engine.is_some() && !self.busy {
                     let scope = if !self.visible {
                         Scope::Other
                     } else {
                         self.page.scope()
                     };
-                    return self.dispatch_scope(Action::Refresh, scope);
+                    return Task::batch([overview, self.dispatch_scope(Action::Refresh, scope)]);
                 }
+                return overview;
             }
             Message::Finished(reply) => {
                 self.claude.protection_pending = None;
@@ -2197,6 +2211,24 @@ impl App {
                         format!("系统 DNS · {} → {}", self.dns_host, addresses.join(", "))
                     }
                     Err(error) => format!("DNS 查询失败：{error}"),
+                });
+            }
+            Message::OverviewRefresh => return self.overview_refresh(),
+            Message::OverviewPrivacy => self.privacy_hidden = !self.privacy_hidden,
+            Message::OverviewHost(generation, result) => {
+                self.overview_done(generation, |o| o.host = Some(result));
+            }
+            Message::OverviewDns(generation, result) => {
+                self.overview_done(generation, |o| o.dns = Some(result));
+            }
+            Message::OverviewExit(generation, result) => {
+                self.overview_done(generation, |o| o.exit = Some(result));
+            }
+            Message::OverviewService(generation, index, result) => {
+                self.overview_done(generation, |o| {
+                    if let Some(slot) = o.services.get_mut(index) {
+                        *slot = Some(result);
+                    }
                 });
             }
             Message::Window((_, desktop_runtime::window::Event::Focused)) => {

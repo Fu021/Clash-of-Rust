@@ -14,7 +14,7 @@ export enum Intent {
     rule-enabled, rule-position, rule-save,
     clear-logs, export-logs, log-level, log-detail, test-url, dns-host, probe, dns,
     site-all, site-cancel, site-category, site-open-category, site-status, site-region, site-detail,
-    site-reset, site-report, site-retest, site-probe,
+    site-reset, site-report, site-retest, site-probe, overview-refresh, overview-privacy,
     claude-start, claude-cancel, claude-close-session, claude-protection, claude-confirm-protection,
     claude-filter, claude-page, claude-guide, claude-browser, claude-copy-script,
     claude-import, claude-export, claude-key, claude-save-key, claude-additional,
@@ -36,6 +36,7 @@ export struct ConnectionItem { id: string, host: string, detail: string, rule: s
 export struct RuleItem { id: string, position: string, kind: string, value: string, policy: string, source: string, selected: bool, enabled: bool, raw: string }
 export struct LogItem { time: string, level: string, message: string, tone: int }
 export struct ReportItem { id: string, title: string, value: string, country: string, detail: string, source: string, tone: int, flag: image, flagged: bool }
+export struct OverviewItem { id: string, title: string, value: string, detail: string, tone: int, flag: image, flagged: bool, fogged: bool }
 export struct CategoryItem { id: string, title: string, count: string, detail: string, tone: int }
 
 export struct CategoryPair { left: CategoryItem, right: CategoryItem }
@@ -55,6 +56,11 @@ export global UiData {
     in-out property <length> scroll-settings;
     in-out property <length> scroll-dialog;
     in-out property <length> scroll-navigation;
+    // Settings tabs live in the page header: the tab asks for a jump (section + revision),
+    // the page reports which section is at the top of its scroll position.
+    in-out property <int> settings-section;
+    in-out property <int> settings-jump;
+    in-out property <int> settings-active;
     in-out property <int> accent;
     in-out property <[DetailItem]> connection-details;
     in-out property <string> modal-copy;
@@ -137,6 +143,13 @@ export global UiData {
     in-out property <bool> claude-next;
     in-out property <int> claude-result-page;
     in-out property <string> reputation-key;
+    // Home overview: host/exit/DNS rows and common-service reachability (tone 0 plain, 1 ok, 2 warn, 3 fail, 4 idle).
+    in-out property <[OverviewItem]> overview-network;
+    in-out property <[OverviewItem]> overview-services;
+    in-out property <bool> overview-busy;
+    // Hides addresses behind a placeholder; the real values are not sent to the view.
+    in-out property <bool> privacy-hidden;
+    in-out property <string> overview-status;
     in-out property <string> site-progress;
     in-out property <float> site-fraction;
     in-out property <bool> sites-busy;

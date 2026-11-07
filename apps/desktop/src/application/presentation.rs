@@ -7,7 +7,7 @@ use clash_desktop_protocol::{
     *,
 };
 
-fn model<T: Clone + PartialEq>(old: ModelRc<T>, values: Vec<T>) -> ModelRc<T> {
+pub(super) fn model<T: Clone + PartialEq>(old: ModelRc<T>, values: Vec<T>) -> ModelRc<T> {
     if old.rows() == values {
         old
     } else {
@@ -533,6 +533,7 @@ impl App {
                 .unwrap_or(&self.updates.status)
         );
         data.set_network_results(strings(data.get_network_results(), &self.test_results));
+        self.present_overview(data);
         if !self.visible {
             models.clear();
             return;

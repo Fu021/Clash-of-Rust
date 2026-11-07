@@ -30,7 +30,7 @@ export component IpCheckPage inherits PageSurface {
                 if UiData.sites-busy: ActionButton { text: "取消"; clicked => { UiActions.dispatch(Intent.site-cancel, "", ""); } }
                 if !UiData.sites-busy: ActionButton { text: UiData.sites-started ? "重新检测" : "一键检测"; primary: true; enabled: UiData.running && !UiData.working; clicked => { UiActions.dispatch(Intent.site-all, "", ""); } }
             }
-            ProgressTrack { value: UiData.site-fraction; track: Theme.subtle-line; fill: Theme.accent; }
+            ProgressTrack { value: UiData.site-fraction; track: UiData.sites-busy ? Theme.line : transparent; fill: Theme.accent; }
             if UiData.site-summary != "": ContentPanel {
                 Paragraph { text: UiData.site-summary; }
                 if UiData.site-exit-country != "": HorizontalLayout {
@@ -80,8 +80,8 @@ export component IpCheckPage inherits PageSurface {
                 }
                 HorizontalLayout { cross-axis-alignment: center; spacing: Theme.content-gap;
                     Caption { text: UiData.page-status; }
-                    ActionButton { text: "上一页"; enabled: UiData.previous; clicked => { UiActions.dispatch(Intent.list-page, "" + max(0, UiData.page-offset - 60), ""); } }
-                    ActionButton { text: "下一页"; enabled: UiData.next; clicked => { UiActions.dispatch(Intent.list-page, "" + (UiData.page-offset + 60), ""); } }
+                    ActionButton { text: "上一页"; compact: true; enabled: UiData.previous; clicked => { UiActions.dispatch(Intent.list-page, "" + max(0, UiData.page-offset - 60), ""); } }
+                    ActionButton { text: "下一页"; compact: true; enabled: UiData.next; clicked => { UiActions.dispatch(Intent.list-page, "" + (UiData.page-offset + 60), ""); } }
                 }
             }
         }

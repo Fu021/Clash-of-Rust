@@ -182,6 +182,8 @@ impl App {
             Intent::DnsHost => Message::DnsHost(a.into()),
             Intent::Probe => Message::Probe(boolean(a)),
             Intent::Dns => Message::Dns,
+            Intent::OverviewRefresh => Message::OverviewRefresh,
+            Intent::OverviewPrivacy => Message::OverviewPrivacy,
             Intent::SiteAll => Message::SiteAll,
             Intent::SiteCancel => Message::SiteCancel,
             Intent::SiteCategory => Message::SiteCategory(self.category(a)),

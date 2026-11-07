@@ -58,7 +58,7 @@ export component Preview inherits AppWindow {
     init => {
         Motion.enabled = root.preview-motion;
         UiData.fake-ip-editor = root.preview-fake-ip-editor;
-        UiData.version = "0.6.7-fix.1.cli-tun-diagnostics";
+        UiData.version = "0.6.7-dev.1.ui-redesign";
         UiData.ready = true; UiData.running = true;
         UiData.profile = "我的订阅"; UiData.node = "德国 01 · IPv6";
         UiData.download-rate = "1.24 MiB/s"; UiData.upload-rate = "28.6 KiB/s";
@@ -110,6 +110,21 @@ export component Preview inherits AppWindow {
             {time: "", level: "ERROR", message: "connection timeout: api.example.org:443", tone: 3}];
         UiData.test-url = "https://www.gstatic.com/generate_204"; UiData.dns-host = "github.com";
         UiData.network-results = ["网站响应 · HTTP 204 · 42 ms", "出口 IP · 203.0.113.42 · 德国", "系统 DNS · github.com → 140.82.112.4"];
+        UiData.overview-status = "可访问 7 / 8";
+        UiData.overview-network = [
+            {id: "lan", title: "内网 IP", value: "192.168.1.23", detail: "IPv4 + IPv6", tone: 0, flagged: false},
+            {id: "exit", title: "出口 IP", value: "203.0.113.42", detail: "德国 · 188 ms", tone: 1, flag: @image-url("mobile/preview-data/de.svg"), flagged: true},
+            {id: "dns", title: "DNS 服务器", value: "223.5.5.5  119.29.29.29", detail: "物理网卡的系统设置", tone: 0, flagged: false},
+            {id: "lookup", title: "DNS 解析", value: "github.com → 198.18.0.12", detail: "12 ms · Fake-IP", tone: 1, flagged: false}];
+        UiData.overview-services = [
+            {id: "google", title: "Google", value: "142 ms", detail: "HTTP 204", tone: 1, flagged: false},
+            {id: "youtube", title: "YouTube", value: "156 ms", detail: "HTTP 204", tone: 1, flagged: false},
+            {id: "github", title: "GitHub", value: "311 ms", detail: "HTTP 200", tone: 1, flagged: false},
+            {id: "chatgpt", title: "ChatGPT", value: "264 ms", detail: "HTTP 403 · 可达", tone: 2, flagged: false},
+            {id: "claude", title: "Claude", value: "233 ms", detail: "HTTP 307", tone: 1, flagged: false},
+            {id: "gemini", title: "Gemini", value: "1260 ms", detail: "HTTP 200", tone: 2, flagged: false},
+            {id: "telegram", title: "Telegram", value: "无法连接", detail: "未获得响应", tone: 3, flagged: false},
+            {id: "x", title: "X", value: "402 ms", detail: "HTTP 200", tone: 1, flagged: false}];
         UiData.node-sort = 2;
         UiData.sites-started = true; UiData.site-progress = "完成 183 / 183"; UiData.site-fraction = 1;
         UiData.site-counts = [{id: "确认可用", label: "确认可用 74"}, {id: "仅网页可达", label: "仅网页可达 20"}, {id: "信息已识别", label: "信息已识别 5"}, {id: "不可用或受限", label: "不可用或受限 36"}, {id: "结果未确认", label: "结果未确认 48"}];

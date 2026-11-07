@@ -1,81 +1,219 @@
 import { PageSurface } from "../components/motion.slint";
-import { UiData, UiActions, Intent } from "../state.slint";
+import { UiData, UiActions, Intent, OverviewItem } from "../state.slint";
 import { Theme } from "../theme/palette.slint";
-import { PageScroll, Label, Caption, Paragraph, ContentPanel, RowPanel, ActionButton, Divider } from "../components/controls.slint";
+import { PageScroll, Label, Caption, Heading, ActionButton, Segmented, Divider } from "../components/controls.slint";
 
 component TrafficMetric inherits Rectangle {
     in property <string> title;
     in property <string> value;
-    in property <string> detail;
     preferred-width: 0px;
     height: content.preferred-height;
     content := VerticalLayout {
-        spacing: 4px;
+        spacing: 3px;
         Caption { text: root.title; }
-        Label { text: root.value; font-size: 30px * Theme.text-scale; color: Theme.accent; }
-        Caption { text: root.detail; }
+        Label { text: root.value; font-size: 23px * Theme.text-scale; font-weight: 600; }
     }
 }
 
+global OverviewTone {
+    // 0 plain, 1 reachable, 2 slow or partial, 3 failed, 4 not measured.
+    pure public function color(tone: int) -> brush {
+        return tone == 1 ? Theme.success : tone == 2 ? Theme.warning : tone == 3 ? Theme.danger : tone == 4 ? Theme.muted : Theme.ink;
+    }
+}
+
+// Hidden value, drawn the way magpie does it: a made-up string of the same shape,
+// blurred and dimmed. Slint has no blur filter, so the blur is a soft stack of
+// offset copies. The real value is never part of the view data.
+component Fog inherits Rectangle {
+    in property <string> text;
+    in property <length> font-size;
+    height: size.preferred-height;
+    opacity: 0.6;
+    accessible-role: AccessibleRole.text;
+    accessible-label: "已隐藏";
+    size := Label { text: root.text; font-size: root.font-size; font-weight: 600; color: transparent; }
+    for tap in [
+        {dx: 0px, dy: 0px, alpha: 0.26},
+        {dx: 1.4px, dy: 0px, alpha: 0.09}, {dx: -1.4px, dy: 0px, alpha: 0.09},
+        {dx: 0px, dy: 1.4px, alpha: 0.09}, {dx: 0px, dy: -1.4px, alpha: 0.09},
+        {dx: 1px, dy: 1px, alpha: 0.09}, {dx: -1px, dy: 1px, alpha: 0.09},
+        {dx: 1px, dy: -1px, alpha: 0.09}, {dx: -1px, dy: -1px, alpha: 0.09},
+        {dx: 3px, dy: 0px, alpha: 0.04}, {dx: -3px, dy: 0px, alpha: 0.04},
+        {dx: 0px, dy: 3px, alpha: 0.04}, {dx: 0px, dy: -3px, alpha: 0.04},
+        {dx: 2.1px, dy: 2.1px, alpha: 0.04}, {dx: -2.1px, dy: 2.1px, alpha: 0.04},
+        {dx: 2.1px, dy: -2.1px, alpha: 0.04}, {dx: -2.1px, dy: -2.1px, alpha: 0.04},
+    ]: Label {
+        x: tap.dx; y: tap.dy; width: root.width; height: root.height; opacity: tap.alpha;
+        text: root.text; font-size: root.font-size; font-weight: 600; color: Theme.ink;
+    }
+}
+
+// One host fact: label, value, and a short note (the exit row also carries its flag).
+component InfoCell inherits Rectangle {
+    in property <OverviewItem> item;
+    horizontal-stretch: 1; preferred-width: 0px; min-width: 0px;
+    height: content.preferred-height;
+    content := VerticalLayout {
+        spacing: 3px;
+        Caption { text: root.item.title; }
+        if !root.item.fogged: Label { text: root.item.value; font-size: 16px * Theme.text-scale; font-weight: 600; color: root.item.tone == 3 || root.item.tone == 4 ? OverviewTone.color(root.item.tone) : Theme.ink; }
+        if root.item.fogged: Fog { text: root.item.value; font-size: 16px * Theme.text-scale; }
+        HorizontalLayout {
+            spacing: 6px; alignment: start;
+            if root.item.flagged: Image { source: root.item.flag; width: 18px; height: 18px; image-fit: contain; }
+            Caption { text: root.item.detail; }
+        }
+    }
+}
+
+// One service: state dot, name and response time; the HTTP note sits below.
+component ServiceCell inherits Rectangle {
+    in property <OverviewItem> item;
+    horizontal-stretch: 1; preferred-width: 0px; min-width: 0px;
+    height: content.preferred-height + 16px;
+    border-width: 1px; border-color: Theme.line; border-radius: Theme.radius;
+    content := VerticalLayout {
+        x: 10px; y: 8px; width: parent.width - 20px;
+        spacing: 2px;
+        HorizontalLayout {
+            spacing: 7px;
+            Rectangle {
+                width: 7px;
+                Rectangle { y: (parent.height - self.height) / 2; width: 7px; height: 7px; border-radius: 4px; background: OverviewTone.color(root.item.tone); }
+            }
+            Label { text: root.item.title; font-weight: 600; }
+            Label { text: root.item.value; color: OverviewTone.color(root.item.tone); font-size: Theme.detail-size; horizontal-stretch: 0; width: min(self.preferred-width, parent.width * 0.6); horizontal-alignment: right; }
+        }
+        Caption { text: root.item.detail; x: 14px; }
+    }
+}
+
+// Connection card (design: .composer). The node is the one large element; state,
+// mode and subscription entry sit around it.
 export component HomePage inherits PageSurface {
+    property <bool> can-switch: UiData.running && !UiData.working && !UiData.protected && !UiData.protection-pending;
     PageScroll {
         content-y <=> UiData.scroll-home;
         x: 0px;
         width: parent.width + Theme.content-gap;
         VerticalLayout {
+            alignment: start;
             padding-right: Theme.content-gap;
             spacing: Theme.page-gap;
-            RowPanel {
-                Rectangle {
-                    width: 40px; height: 40px; border-radius: 20px; background: Theme.accent-wash;
-                    Label { width: parent.width; height: parent.height; text: "✓"; font-size: 23px * Theme.text-scale; color: Theme.accent; horizontal-alignment: center; }
-                }
-                VerticalLayout {
-                    spacing: 4px;
-                    horizontal-stretch: 1;
-                    Label { text: !UiData.running ? "内核尚未运行" : UiData.proxy-mode == 0 ? "系统代理已连接" : UiData.proxy-mode == 1 ? "TUN 模式已连接" : "代理已关闭"; font-size: 18px * Theme.text-scale; }
-                    Caption { text: "当前节点 · " + UiData.node; }
-                    Paragraph { text: "此处仅显示当前用户状态；其他用户或程序的 TUN 可能影响本机流量。"; color: Theme.secondary; font-size: Theme.detail-size; }
-                }
-                if UiData.retry-core: ActionButton { text: "重启内核"; primary: true; enabled: !UiData.working; clicked => { UiActions.dispatch(Intent.restart-core, "", ""); } }
-                ActionButton { text: "查看代理 →"; clicked => { UiActions.dispatch(Intent.navigate, "1", ""); } }
-            }
-            RowPanel {
-                metric := TrafficMetric { title: "下载速度"; value: UiData.download-rate; detail: "实时流量"; }
-                Rectangle { width: 1px; height: metric.height; background: Theme.subtle-line; }
-                TrafficMetric { title: "上传速度"; value: UiData.upload-rate; detail: "实时流量"; }
-                Rectangle { width: 1px; height: metric.height; background: Theme.subtle-line; }
-                TrafficMetric { title: "活跃连接"; value: UiData.connection-count; detail: "当前连接"; }
-            }
-            ContentPanel {
-                Label { text: "连接设置"; font-size: 16px * Theme.text-scale; height: 28px; }
-                HorizontalLayout { cross-axis-alignment: center;
-                    spacing: Theme.content-gap;
-                    Caption { text: "运行模式"; horizontal-stretch: 1; }
-                    ActionButton { text: "规则"; enabled: UiData.running && !UiData.working && !UiData.protected && !UiData.protection-pending; selected: UiData.mode == 0; clicked => { UiActions.dispatch(Intent.mode, "0", ""); } }
-                    ActionButton { text: "全局"; enabled: UiData.running && !UiData.working && !UiData.protected && !UiData.protection-pending; selected: UiData.mode == 1; clicked => { UiActions.dispatch(Intent.mode, "1", ""); } }
-                    ActionButton { text: "直连"; enabled: UiData.running && !UiData.working && !UiData.protected && !UiData.protection-pending; selected: UiData.mode == 2; clicked => { UiActions.dispatch(Intent.mode, "2", ""); } }
-                }
-                Divider { }
-                HorizontalLayout { cross-axis-alignment: center;
-                    spacing: Theme.content-gap;
-                    Caption { text: "代理模式"; horizontal-stretch: 1; }
-                    ActionButton { text: "系统代理"; enabled: UiData.running && !UiData.working && !UiData.protected && !UiData.protection-pending; selected: UiData.proxy-mode == 0; clicked => { UiActions.dispatch(Intent.proxy-mode, "0", ""); } }
-                    ActionButton { text: "TUN"; enabled: UiData.running && !UiData.working && !UiData.protected && !UiData.protection-pending; selected: UiData.proxy-mode == 1; clicked => { UiActions.dispatch(Intent.proxy-mode, "1", ""); } }
-                    ActionButton { text: "关闭"; enabled: UiData.running && !UiData.working && !UiData.protected && !UiData.protection-pending; selected: UiData.proxy-mode == 2; clicked => { UiActions.dispatch(Intent.proxy-mode, "2", ""); } }
-                }
-            }
-            ContentPanel {
-                HorizontalLayout { cross-axis-alignment: center;
-                    Label { text: "当前订阅"; }
-                    Caption { text: "累计流量 · 本次运行"; horizontal-alignment: right; }
-                }
-                HorizontalLayout { cross-axis-alignment: center;
-                    Label { text: UiData.profile; color: Theme.accent; }
-                    Caption { text: "↑ " + UiData.upload-total + "     ↓ " + UiData.download-total; horizontal-alignment: right; }
+            Rectangle {
+                vertical-stretch: 0;
+                height: card.preferred-height;
+                background: Theme.surface;
+                border-width: 1px; border-color: Theme.line;
+                border-radius: Theme.radius-xl;
+                clip: true;
+                card := VerticalLayout {
+                    VerticalLayout {
+                        padding: 21px; spacing: 8px;
+                        HorizontalLayout { spacing: 21px; cross-axis-alignment: center;
+                            VerticalLayout { horizontal-stretch: 1; spacing: 8px;
+                                Rectangle {
+                                    height: node-name.preferred-height + 8px;
+                                    node-name := Label {
+                                        x: 0px; width: parent.width; height: parent.height;
+                                        text: UiData.node != "" ? UiData.node : "未选择节点";
+                                        font-size: 29px * Theme.text-scale; font-weight: 650;
+                                    }
+                                    TouchArea { mouse-cursor: pointer; clicked => { UiActions.dispatch(Intent.navigate, "1", ""); } }
+                                }
+                                HorizontalLayout { spacing: 7px; alignment: start; cross-axis-alignment: center;
+                                    Rectangle { width: 7px; height: 7px; border-radius: 4px; background: UiData.running ? Theme.success : Theme.muted; }
+                                    Label { text: !UiData.running ? "内核尚未运行" : UiData.proxy-mode == 0 ? "系统代理已连接" : UiData.proxy-mode == 1 ? "TUN 模式已连接" : "代理已关闭"; font-size: Theme.detail-size; font-weight: 600; color: UiData.running ? Theme.success : Theme.secondary; horizontal-stretch: 0; width: self.preferred-width; }
+                                    Caption { text: UiData.profile; overflow: elide; }
+                                }
+                            }
+                            if UiData.retry-core: ActionButton { text: "重启内核"; primary: true; enabled: !UiData.working; clicked => { UiActions.dispatch(Intent.restart-core, "", ""); } }
+                        }
+                    }
+                    Divider { }
+                    HorizontalLayout {
+                        padding: 8px; padding-left: 13px; padding-right: 13px; spacing: Theme.content-gap;
+                        alignment: start;
+                        Segmented { options: ["规则", "全局", "直连"]; current: UiData.mode; enabled: root.can-switch; picked(index) => { UiActions.dispatch(Intent.mode, "" + index, ""); } }
+                        Segmented { options: ["系统代理", "TUN", "关闭"]; current: UiData.proxy-mode; enabled: root.can-switch; picked(index) => { UiActions.dispatch(Intent.proxy-mode, "" + index, ""); } }
+                        Rectangle { horizontal-stretch: 1; }
+                        ActionButton { text: "我的订阅"; compact: true; ghost: true; clicked => { UiActions.dispatch(Intent.navigate, "2", ""); } }
+                    }
                 }
             }
-            Rectangle { vertical-stretch: 1; }
+            Rectangle {
+                vertical-stretch: 0;
+                height: traffic.preferred-height;
+                background: Theme.surface;
+                border-width: 1px; border-color: Theme.line;
+                border-radius: Theme.radius-lg;
+                traffic := VerticalLayout {
+                    padding: 13px; padding-left: 16px; padding-right: 16px; spacing: 13px;
+                    HorizontalLayout { spacing: 16px;
+                        metric := TrafficMetric { title: "下载速度"; value: UiData.download-rate; }
+                        Rectangle { width: 1px; height: metric.height; background: Theme.line; }
+                        TrafficMetric { title: "上传速度"; value: UiData.upload-rate; }
+                        Rectangle { width: 1px; height: metric.height; background: Theme.line; }
+                        TrafficMetric { title: "活跃连接"; value: UiData.connection-count; }
+                    }
+                    Divider { }
+                    HorizontalLayout {
+                        Caption { text: "本次运行累计"; }
+                        Caption { text: "↑ " + UiData.upload-total + "    ↓ " + UiData.download-total; horizontal-alignment: right; }
+                    }
+                }
+            }
+            Rectangle {
+                vertical-stretch: 0;
+                height: network.preferred-height;
+                background: Theme.surface;
+                border-width: 1px; border-color: Theme.line;
+                border-radius: Theme.radius-lg;
+                network := VerticalLayout {
+                    padding: 13px; padding-left: 16px; padding-right: 16px; spacing: 13px;
+                    HorizontalLayout { spacing: Theme.content-gap; cross-axis-alignment: center;
+                        Heading { text: "网络信息"; horizontal-stretch: 1; }
+                        ActionButton {
+                            text: ""; compact: true; ghost: true; width: 32px; selected: UiData.privacy-hidden;
+                            accessible-role: button;
+                            accessible-label: UiData.privacy-hidden ? "显示 IP 地址" : "隐藏 IP 地址";
+                            Image { source: UiData.privacy-hidden ? @image-url("../icons/eye-off.svg") : @image-url("../icons/eye.svg"); colorize: UiData.privacy-hidden ? Theme.accent : Theme.secondary; width: 16px; height: 16px; x: (parent.width - self.width) / 2; y: (parent.height - self.height) / 2; }
+                            clicked => { UiActions.dispatch(Intent.overview-privacy, "", ""); }
+                        }
+                        ActionButton { text: UiData.overview-busy ? "检测中…" : "重新检测"; compact: true; ghost: true; busy: UiData.overview-busy; enabled: !UiData.overview-busy; clicked => { UiActions.dispatch(Intent.overview-refresh, "", ""); } }
+                    }
+                    Divider { }
+                    HorizontalLayout { spacing: 16px;
+                        InfoCell { item: UiData.overview-network[0]; }
+                        Rectangle { width: 1px; background: Theme.line; }
+                        InfoCell { item: UiData.overview-network[1]; }
+                    }
+                    HorizontalLayout { spacing: 16px;
+                        InfoCell { item: UiData.overview-network[2]; }
+                        Rectangle { width: 1px; background: Theme.line; }
+                        InfoCell { item: UiData.overview-network[3]; }
+                    }
+                }
+            }
+            Rectangle {
+                vertical-stretch: 0;
+                height: services.preferred-height;
+                background: Theme.surface;
+                border-width: 1px; border-color: Theme.line;
+                border-radius: Theme.radius-lg;
+                services := VerticalLayout {
+                    padding: 13px; padding-left: 16px; padding-right: 16px; spacing: 13px;
+                    HorizontalLayout { spacing: Theme.content-gap; cross-axis-alignment: center;
+                        Heading { text: "服务状态"; }
+                        Caption { text: UiData.overview-status; horizontal-alignment: right; }
+                    }
+                    Divider { }
+                    for row in 2: HorizontalLayout { spacing: Theme.content-gap;
+                        for column in 4: ServiceCell { item: UiData.overview-services[row * 4 + column]; }
+                    }
+                }
+            }
         }
     }
 }

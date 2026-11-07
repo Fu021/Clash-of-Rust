@@ -1,6 +1,7 @@
 //! Read only the host's default routes, never probe an external service.
 use anyhow::Result;
 
+mod host;
 #[cfg(target_os = "linux")]
 mod linux;
 #[cfg(target_os = "macos")]
@@ -30,6 +31,14 @@ pub(crate) fn snapshot() -> Result<Routes> {
     Ok(routes)
 }
 
+pub use host::HostInfo;
+
+/// Addresses and resolvers of the physical default-route interfaces. Reads
+/// local system state only; nothing is sent to an external service.
+pub fn host_info() -> Result<HostInfo> {
+    host::read(&snapshot()?)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -39,5 +48,13 @@ mod tests {
         let routes = snapshot().expect("native default-route discovery failed");
         assert!(routes.windows(2).all(|pair| pair[0] < pair[1]));
         assert!(routes.iter().all(|route| !route.interface.is_empty()));
+    }
+
+    #[test]
+    fn host_info_reads_local_state_without_contacting_anything() {
+        let info = host_info().expect("native address discovery failed");
+        assert!(info.addresses.iter().all(|ip| !ip.is_loopback()));
+        assert!(info.dns.iter().all(|ip| !ip.is_loopback()));
+        assert!(info.dns.len() <= 4);
     }
 }

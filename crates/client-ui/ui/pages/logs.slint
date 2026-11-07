@@ -43,8 +43,8 @@ export component LogsPage inherits PageSurface {
         }
         HorizontalLayout { cross-axis-alignment: center; spacing: Theme.content-gap;
             Caption { text: UiData.page-status; }
-            ActionButton { text: "上一页"; enabled: UiData.previous; clicked => { UiActions.dispatch(Intent.list-page, "" + max(0, UiData.page-offset - 60), ""); } }
-            ActionButton { text: "下一页"; enabled: UiData.next; clicked => { UiActions.dispatch(Intent.list-page, "" + (UiData.page-offset + 60), ""); } }
+            ActionButton { text: "上一页"; compact: true; enabled: UiData.previous; clicked => { UiActions.dispatch(Intent.list-page, "" + max(0, UiData.page-offset - 60), ""); } }
+            ActionButton { text: "下一页"; compact: true; enabled: UiData.next; clicked => { UiActions.dispatch(Intent.list-page, "" + (UiData.page-offset + 60), ""); } }
         }
     }
 }
