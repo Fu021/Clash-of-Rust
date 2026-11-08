@@ -34,7 +34,7 @@ iOS 当前只有宿主占位与界面原型；预览不代表已有可安装、�
 | 想做什么 | 阅读位置 |
 | --- | --- |
 | 理解 CI 的平台、源码测试和真实网络验证 | [CI](workflows/ci.md) |
-| 不发布打包、核验安装包或公开发布 | [Publish Release](workflows/release.md) |
+| 不发布打包、核验安装包或公开发布 | [Publish Release](workflows/release.md)；[发布文案模板](releases/TEMPLATE.md) |
 | 测量内存和窗口关闭后的资源释放 | [Memory Benchmark](workflows/memory.md) |
 | 在本机编译、打包与预览 | [本地开发](workflows/local-development.md) |
 | 理解版本、更新通道与依赖快照 | [版本和依赖](workflows/versions.md)；[分支版本规则](development.md#分支版本) |
@@ -45,7 +45,7 @@ iOS 当前只有宿主占位与界面原型；预览不代表已有可安装、�
 
 ## 发布历史、复盘与第三方来源
 
-- 发布变化按版本保存在 [`releases/`](releases/)；已发布正式版入口见[项目首页](../README.md)，开发分支说明不等于已发布版本。
+- [`releases/`](releases/)仅保留当前正式版、最近公开预发布、当前开发版本及[文案模板](releases/TEMPLATE.md)；旧版文案查 Git 历史或 GitHub Releases。已发布正式版入口见[项目首页](../README.md)，开发分支说明不等于已发布版本。
 - 排查已知失败模式从[复盘索引](agent-failures/README.md)进入；[最近复盘](agent-failures/reviews.md)记录证据和验证范围，较早记录在[历史复盘](agent-failures/reviews-archive.md)。
 - 软件、字体及数据的许可见[第三方声明](../resources/THIRD-PARTY-NOTICES.txt)；[字体来源](../resources/fonts/SOURCE.md)、[国家和地区数据](../resources/countries/SOURCE.md)、[IP 检测来源](../resources/ip-check/SOURCE.md)分别保留来源与修改说明。
 - Slint 的局部兼容修复见 [Android 后端补丁](../vendor/slint-android-activity/PATCHES.md)和[软件渲染补丁](../vendor/slint-renderer-software/PATCHES.md)。

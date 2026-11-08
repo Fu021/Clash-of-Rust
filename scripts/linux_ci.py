@@ -313,6 +313,24 @@ def baseline_report():
             'packages': subprocess.check_output(['dpkg-query', '-W', '-f=${Package}=${Version}\\n'], text=True).splitlines()}
 
 
+def wait_vm_ssh(process, command, timeout=600):
+    deadline = time.monotonic() + timeout
+    while True:
+        if process.poll() is not None:
+            raise RuntimeError('Ubuntu 20.04 VM exited during boot')
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            raise TimeoutError('Ubuntu 20.04 VM did not become SSH-ready')
+        try:
+            ready = subprocess.run([*command, 'true'], stdout=subprocess.DEVNULL,
+                                   stderr=subprocess.DEVNULL, timeout=min(15, remaining))
+        except subprocess.TimeoutExpired:
+            ready = None
+        if ready is not None and ready.returncode == 0:
+            return
+        time.sleep(min(5, max(0, deadline - time.monotonic())))
+
+
 class VmGuest:
     def __init__(self, base, directory, label):
         self.directory = Path(directory) / label
@@ -369,17 +387,7 @@ class VmGuest:
         try:
             self.console = (REPORT / ('focal-console-' + label + '.log')).open('w')
             self.process = subprocess.Popen(command, stdout=self.console, stderr=subprocess.STDOUT)
-            deadline = time.monotonic() + 600
-            while True:
-                if self.process.poll() is not None:
-                    raise RuntimeError('Ubuntu 20.04 VM exited during boot')
-                ready = subprocess.run([*self.ssh, 'true'], stdout=subprocess.DEVNULL,
-                                       stderr=subprocess.DEVNULL, timeout=15)
-                if ready.returncode == 0:
-                    break
-                if time.monotonic() >= deadline:
-                    raise TimeoutError('Ubuntu 20.04 VM did not become SSH-ready')
-                time.sleep(5)
+            wait_vm_ssh(self.process, self.ssh)
             self.remote('sudo timeout --signal=TERM --kill-after=30s 300s cloud-init status --wait',
                         timeout=360)
             self.kernel = self.output('uname -r').strip()
@@ -484,8 +492,10 @@ def prepare_vm_guest(guest, directory, frozen=None):
         guest_deb_downloads(guest.ssh, guest.remote, guest.environment, directory/'guest-debs',
                             frozen['lock']['downloads'])
         guest.python("from build_inputs import manifest; "
-                     "from prepared_vm_environment import install_frozen; "
-                     "value=manifest(); install_frozen('dependency-snapshot',value['prepared_vm'],"
+                     "from prepared_vm_environment import install_frozen, frozen_environments; "
+                     "from build_support import host_arch; "
+                     "value=manifest(); install_frozen('dependency-snapshot',"
+                     "frozen_environments(value)[host_arch()],"
                      "value['upstream']['linux'])", timeout=2100)
     else:
         guest.remote('sudo timeout --signal=TERM --kill-after=30s 300s '
@@ -542,13 +552,13 @@ def vm_test(package_run_id=None):
     value = linux['architectures'][host_arch()]
     client = protocol.client(REPORT / 'prepared-vm.json')
     snapshot = manifest() or {}
-    frozen = snapshot.get('prepared_vm')
+    frozen = environment.frozen_environments(snapshot).get(host_arch())
     enabled = False
-    if host_arch() == 'arm64' and frozen:
+    if frozen:
         try:
             enabled = environment.verify_frozen(
                 Path(os.environ.get('BUILD_INPUTS_DIR', 'dependency-snapshot')), frozen, linux)
-            enabled = enabled and client.available()
+            enabled = enabled and client.available(host_arch())
         except protocol.ERRORS as error:
             client.event('inputs', 'invalid_frozen_inputs', time.monotonic(),
                          error_code=getattr(error, 'code', type(error).__name__))
@@ -597,7 +607,7 @@ def vm_test(package_run_id=None):
                     phase_started = time.monotonic()
                     prepare_vm_guest(guest, directory, frozen if enabled else None)
                     timings['dependency_preparation'] = round(time.monotonic() - phase_started, 3)
-                    if enabled:
+                    if enabled and client.available(host_arch()):
                         phase_started = time.monotonic()
                         actual = guest.inspect()
                         environment.check_environment(actual, None, frozen['lock'])
@@ -627,7 +637,8 @@ def vm_test(package_run_id=None):
                         client.event('template', 'second_boot_verified', started)
                         cache_path = 'cold_template'
                         timings['template_and_second_boot'] = round(time.monotonic() - phase_started, 3)
-                        upload = workers.submit(client.upload, record, candidate)
+                        if client.available(host_arch()):
+                            upload = workers.submit(client.upload, record, candidate)
                 except protocol.ERRORS as error:
                     if not enabled:
                         raise

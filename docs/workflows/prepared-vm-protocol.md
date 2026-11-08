@@ -2,11 +2,11 @@
 
 [方案与测速](prepared-vm-images.md) · [元数据与共用测试向量](prepared-vm-metadata.md) · [现行原包协议](cache-server.md)
 
-日期：2026-11-08。客户端已在 `scripts/prepared_vm.py` 与 `scripts/prepared_vm_environment.py` 实现。维护者报告服务端已部署独立类型、五个接口及不可变环境键，通过 128 项隔离回归；真实模板的 Actions 上传、下载与启动尚未验收。
+日期：2026-11-08。客户端已在 `scripts/prepared_vm.py` 与 `scripts/prepared_vm_environment.py` 实现。本页已按维护者转交的 `prepared-vm-v1-20261108`、revision `2026-11-08-x64` 对齐；服务端于北京时间 21:10 部署双架构，交接包报告 131 项隔离回归通过，真实模板的 Actions 上传、下载与启动尚未验收。
 
 ## 保存什么
 
-新增类型 `prepared-vm`，逻辑组固定 `vm/prepared`，首版只接 Ubuntu 20.04 ARM64。清理后的预装模板是官方原包保存规则的明确例外，独立存储及登记。只保存正常关机后的独立压缩 qcow2 和结构化清单，不封装第二层 tar/gzip。不接纳运行中快照、测试后的写入层、cor、应用编译产物或用户数据。
+新增类型 `prepared-vm`，逻辑组固定 `vm/prepared`。维护者报告 Ubuntu 20.04 ARM64 和 x64 已部署并在 health 声明；客户端仍须逐次检查声明与限制。清理后的预装模板是官方原包保存规则的明确例外，独立存储及登记。只保存正常关机后的独立压缩 qcow2 和结构化清单，不封装第二层 tar/gzip。不接纳运行中快照、测试后的写入层、cor、应用编译产物或用户数据。
 
 服务端流式收发文件并维护原子映射，不制作或执行模板，不需安装 QEMU。除元数据、长度和 SHA256 外，服务端还做下述 qcow2 头部准入检查；客户端负责完整格式检查、模板清理和实际启动验证。头部合格或认证成功均不证明模板可启动及内容干净。
 
@@ -32,7 +32,7 @@
 
 维护者报告服务端已声明 `prepared-vm-cache-v1`。客户端在实际能力及限制匹配前保持冷路径，不试探上传。
 
-health 和回执的确切字段见[响应封装](prepared-vm-metadata.md#响应封装)，服务端实现须与客户端核对。
+health 和回执的确切字段见[响应封装](prepared-vm-metadata.md#响应封装)。线上同时返回内容相等的 `vm_limits` 和 `prepared_vm`，各含 `range_supported` / `range` 及 `resume_supported` / `resume`；客户端读取 `vm_limits`，拒绝存在的兼容字段冲突。21:12:56 的完整实际响应已纳入离线联调夹具；复用、制作和上传前核对实时能力，真实传输与启动仍须另验收。
 
 | 接口 | 行为 |
 | --- | --- |
@@ -46,7 +46,7 @@ health 和回执的确切字段见[响应封装](prepared-vm-metadata.md#响应�
 
 | 限制 | 首版约定 |
 | --- | --- |
-| 架构 / 单镜像 / 虚拟容量 | ARM64 / 8 GiB / 32 GiB |
+| 架构 / 单镜像 / 虚拟容量 | ARM64、x64 / 8 GiB / 32 GiB |
 | VM 专用额度 / 服务总预算 / 磁盘空闲底线 | 16 GiB / 60 GiB / 15 GiB |
 | 全局活动上传 | 1 个；同环境最多 1 个 |
 | 内容传输 / 上传租约 | 30 分钟 / 预登记后 45 分钟 |
@@ -63,7 +63,7 @@ health 和回执的确切字段见[响应封装](prepared-vm-metadata.md#响应�
 - 内容提交成功：200 / `ready`，必须包含原 env_key、object_id、字节数、SHA256 和最终清单。
 - 失败保留 `failed` 与固定错误码；断连、500、202、文件已收到或上传计数完成都不能当作 ready。
 
-客户端核对完整回执的身份、长度、摘要和环境后才记为 ready；这仍不代替实际下载与启动验收。
+客户端核对完整回执的身份、长度、摘要和完整 environment 后才记为 ready；顶层 size/sha256 与 image 相符，保留 object id、原 producer 及经校验的上传时间。响应时间接受有限的整数或小数 Unix 秒，不能当作请求元数据的严格整数。failed 保留固定错误码，含重启恢复的 `upload_interrupted`；这仍不代替实际下载与启动验收。
 
 ## 原子性、并发与容量
 
@@ -75,13 +75,15 @@ health 和回执的确切字段见[响应封装](prepared-vm-metadata.md#响应�
 6. 租约及失败暂存只由服务端清理，须先确认没有写入者；不扫描其他归档。终态回执到期清理不级联删除镜像、来源或环境映射。
 7. 首版至多两个已提交环境，由服务端管理回收；新版本实际验收前保留有效旧版。16 GiB 已包含上传预留，两张各 8 GiB 的镜像会占满额度，不保证还有第三张的构建空间。额度或环境名额不足便拒绝新上传，由维护者确认验收结果后安排回收，不能静默删除旧内容腾位。工作流不发 DELETE，不另建验收反馈通道。
 
+同时接入 ARM64 和 x64 后，两种架构各占一个环境名额，当前两个名额无法再同时保留它们的上一代。是否调整额度及名额由服务端与维护者确认；客户端仍按拒绝结果冷回退，不主动回收。两种 job 也继续共用一个上传槽，不为 x64 绕过并发限制。
+
 固定错误码包括 `invalid_metadata`、`identity_conflict`、`unsupported_image`、`upload_busy`、`upload_timeout`、`upload_expired`、`size_mismatch`、`checksum_mismatch`、`capacity_unavailable`、`metadata_unavailable`、`stored_object_changed`。大小或摘要错误不能换身份盲重试；查询须检查 JSON，不能只看 HTTP 200。
 
 ready 查询检查文件及身份指纹，变化时不再报告 ready；恢复时重算完整摘要。日志仅记关联号、固定错误码、长度和耗时。
 
 ## qcow2 准入检查
 
-首版模板使用默认 zlib 压缩及独立 qcow2 v2/v3。服务端有界读取头部与扩展，核对 magic、版本、合法头部/簇长度、虚拟容量与声明一致且不超过 32 GiB；要求无 backing 文件、无外部数据文件、无加密、无内部快照。首版拒绝非零不兼容特性位，包括 dirty/corrupt 状态及尚未支持的扩展格式；畸形偏移、截断头部或扩展越界均拒绝。不仅检查文件扩展名或 JSON 的 `format`。
+首版模板使用默认 zlib 压缩及独立 qcow2 v2/v3。服务端有界读取头部与扩展，核对 magic、版本、合法头部/簇长度、虚拟容量与声明一致且不超过 32 GiB，并检查 L1/refcount 表的头部范围及重叠；要求无 backing 文件、无外部数据文件、无加密、无内部快照。拒绝非零不兼容或 autoclear 位，仅接纳 feature-name-table 扩展，拒绝未知/重复扩展、非零额外头部字段及越界。客户端先做同类保守头部筛查，再用 QEMU 完整格式检查；不能仅检查扩展名或 JSON 的 `format`。
 
 这些只是存储准入条件，不是完整的簇表/文件系统校验。客户端仍在离线状态执行格式和逻辑内容检查，确认清理后正常关机，再以新身份独立启动验证。格式依据见 [QEMU qcow2 规范](https://www.qemu.org/docs/master/interop/qcow2.html)，客户端工具边界见 [qemu-img 文档](https://www.qemu.org/docs/master/tools/qemu-img.html)。
 

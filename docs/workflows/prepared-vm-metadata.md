@@ -1,6 +1,6 @@
 # 预装 VM v1：元数据与共用测试向量
 
-[接口、认证与容量](prepared-vm-protocol.md) · [模板及测速](prepared-vm-images.md) · [机器可读向量](fixtures/prepared-vm-v1.json)
+[接口、认证与容量](prepared-vm-protocol.md) · [模板及测速](prepared-vm-images.md) · [双架构向量](fixtures/prepared-vm-v1.json)
 
 本页细化 2026-11-08 对接约定，客户端校验器已在 `scripts/prepared_vm.py` 实现，现有 `test-build-tools.py` 直接消费以下共用向量；维护者报告服务端已部署并完成隔离回归，真实镜像联调仍待验收。双方不能分别改预期以迁就实现，修改契约时同步本页及向量。向量全是假数据，只测试元数据规则，不用于下载、上传或证明真实文件存在。
 
@@ -35,7 +35,7 @@ json.dumps(value, sort_keys=True, separators=(',', ':'), ensure_ascii=True,
 | `kind` | 字符串 `"ubuntu-compat"` |
 | `distribution` | 字符串 `"ubuntu"` |
 | `release` | 字符串 `"20.04"` |
-| `arch` | 首版仅字符串 `"arm64"`；其他架构须后续显式放行 |
+| `arch` | 字符串 `"arm64"` 或 `"x64"`；x64 是本轮新增扩展，须服务端在 health 中显式放行 |
 | `kernel_series` | 字符串 `"5.4"` |
 | `base_sha256` | `sha256`，官方基础镜像原文件 |
 | `python_sha256` | `sha256`，独立 Python 原文件 |
@@ -69,9 +69,9 @@ json.dumps(value, sort_keys=True, separators=(',', ':'), ensure_ascii=True,
 
 | 字段 | 确切类型及规则 |
 | --- | --- |
-| `name` | ASCII 字符串，2～128 字符；匹配 `[a-z0-9][a-z0-9+.-]+`，不带 `:arm64` 后缀 |
+| `name` | ASCII 字符串，2～128 字符；匹配 `[a-z0-9][a-z0-9+.-]+`，不带 `:arm64` 或 `:amd64` 后缀 |
 | `version` | ASCII 字符串，1～256 字符；匹配 `[0-9][A-Za-z0-9.+:~-]*`，保留 epoch 与 revision |
-| `architecture` | 首版仅 `"arm64"` 或 `"all"` |
+| `architecture` | descriptor 为 `arm64` 时仅 `"arm64"` / `"all"`，为 `x64` 时仅 `"amd64"` / `"all"`，禁止混用 |
 
 以上正则均匹配整个字符串，是本协议的接纳范围。包数组按 `(name, architecture)` 的 ASCII 字节升序排列；同一 `(name, architecture)` 即使版本相同也拒绝重复，不按 name 合并或只取最大版本。记录完整已安装包清单，不能只报本轮额外安装项；独立 Python 由对应字段及来源记录，不冒充 dpkg 包。
 
@@ -92,15 +92,35 @@ json.dumps(value, sort_keys=True, separators=(',', ':'), ensure_ascii=True,
 
 ## 响应封装
 
-health 返回 HTTP 200，`capabilities` 数组含已实现能力；`prepared_vm` 对象包含 `architectures: ["arm64"]`、`max_image_bytes`、`max_virtual_bytes` 和 `range: false`。两个容量字段为正严格整数，不超过协议上限；虚拟容量至少覆盖 24 GiB guest。未声明或不匹配时冷回退，不进行上传。
+health 返回 HTTP 200，`capabilities` 数组含已实现能力。已部署版本同时返回内容相等的 `vm_limits` 和 `prepared_vm`；客户端读取 `vm_limits`，兼容对象存在时还须逐值、逐类型一致。核对 `group: "vm/prepared"`、无重复的字符串数组 `architectures`、严格整数容量及数量、上传和租约限时，以及严格布尔值 `range_supported: false` / `resume_supported: false`；兼容字段 `range` / `resume` 存在时也必须为 false。字段缺失、类型不符、别名冲突或限制不匹配时冷回退，不查询或上传镜像。每次重新探测先清空上次限制，不能沿用旧的可用状态。
 
-ready 响应使用 HTTP 200，将原始请求的七个字段置于顶层，额外返回 `status: "ready"` 和 `object_id`，不再嵌套 manifest。不可变复用保留原 producer 和文件身份；实际内核、Python、包清单及来源的摘要/大小必须匹配，相同来源内容的官方 URL 别名可以不同。
+本轮采用维护者转交的 `prepared-vm-v1-20261108` 交接包，revision 为 `2026-11-08-x64`。包内 SHA256 校验通过；[health 联调夹具](fixtures/prepared-vm-health-v1.json)与北京时间 2026-11-08 21:12:56 的实际响应内容一致，由客户端离线回归直接消费。此前字段名差异导致 `unsupported_limits`，本轮不再只用客户端猜测形状测试。以下省略兼容对象及其他限制，仅示意主字段：
 
-201/202 及非 ready 上传查询使用顶层 `schema/group/env_key/upload_id/status`，201 另含 `expires_at`（正整数 Unix 秒）。ID 匹配 `[A-Za-z0-9_-]{1,128}`；GET 查询返回 HTTP 200，ready 时使用完整 ready 形状。错误使用 `error_code`，不依赖自由文本。blob 只返回完整内容，Content-Length 等于 image.size；客户端不跟随重定向。
+```json
+{
+  "capabilities": ["prepared-vm-cache-v1"],
+  "vm_limits": {
+    "group": "vm/prepared",
+    "architectures": ["arm64", "x64"],
+    "max_image_bytes": 8589934592,
+    "max_virtual_bytes": 34359738368,
+    "range_supported": false,
+    "resume_supported": false
+  }
+}
+```
+
+镜像上限不得超过 8 GiB，虚拟容量至少覆盖 24 GiB guest 且不超过 32 GiB；实际请求还须满足服务声明的元数据字节数、包数和来源数。客户端仅启用明确声明的本机架构；只声明 ARM64 时，x64 冷准备。复用、制作及上传前重新核对实时能力。CI 冻结快照的旧 `prepared_vm` 字段属于另一种文档格式。
+
+ready 响应使用 HTTP 200，将原始请求的七个字段置于顶层，另有 `status: "ready"`、`object_id`、`size`、`sha256` 和 `created_at`。顶层长度、摘要须与 image 一致。上传回执还可有 `upload_id`、`terminal_at` 和 `receipt_expires_at`，这些字段经验证后保留到附件。不可变复用保留原 producer 和文件身份；完整 environment 须一致，不能在同键下修改来源 URL。
+
+201/202 及非 ready 上传查询使用顶层 `schema/group/env_key/upload_id/status`，201 另含 `expires_at`。所有响应时间字段为正的有限 Unix 秒，可为整数或小数，不接受字符串、布尔值、NaN 或无穷值；元数据请求中的严格整数规则不变。ID 匹配 `[A-Za-z0-9_-]{1,128}`；GET 查询返回 HTTP 200，ready 时使用完整 ready 形状。failed 保留固定 `error_code`，不输出服务端自由文本。回执 404 后再按精确 env_key 查询，仍须核对完整 ready。blob 只返回完整内容，Content-Length 等于 image.size；客户端不跟随重定向。
 
 ## 共用向量与错误
 
 [prepared-vm-v1.json](fixtures/prepared-vm-v1.json) 含一个 `base_request` 及 `cases`。逐条深拷贝 base，按序执行 `operations`；`path` 是字段名/数组下标组成的数组。`set` 替换已有数组项或设置对象字段，`remove` 删除已有字段或数组项。不修改原 base，不隐含重算任何摘要。
+
+当前采用交接包的完整 46 条向量，revision 为 `2026-11-08-x64`；交接原件 SHA256 为 `169f9ac5a0094055885a154713844eccba43fdfb22551038af24a89c853d659d`。修订明确将原“拒绝 x64”改为拒绝 riscv64，并新增合法 x64、沿用 ARM64 环境键、包架构混用和错误 amd64 descriptor 别名用例。客户端 fixture 保留本仓库排版，JSON 内容及顺序与交接原件一致；不再另行维护一套不同的 x64 扩展向量。
 
 `wire` 只用于解析层边界：`duplicate_top_key` 在 JSON 编码时重复指定顶层字段，不能先解析成字典而丢掉重复；`append` 将给定文本附在完整 JSON 后。其余 case 直接序列化变换后的请求。`expected.valid` 是元数据校验结果；成功须同时比对明确给出的环境键和包清单摘要。`expected.error` 是拒绝时的固定错误码。
 

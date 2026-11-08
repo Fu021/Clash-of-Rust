@@ -57,4 +57,4 @@ GitHub 热缓存预算为 9 GiB，主分支保存，其他来源可读取兼容�
 
 工作流不调用私网 DELETE，不同步 GitHub 淘汰结果，也不修改或上传 README.txt。服务端协作与保留范围见[协议](cache-server.md)和[可保留白名单](cache-retention.md)。
 
-维护者于 2026-11-08 授权以独立 `vm/prepared` 复用 Ubuntu 20.04 ARM64 预装测试环境；镜像只存私网，禁止进入 GitHub Actions Cache、artifact 或 Release。客户端与发布入口已实现，服务端能力未验收时保持冷路径；不复用原包接口，不跳过应用安装及 GUI/代理/TUN 测试。冻结输入、能力门禁、回退和冷/暖测速见[预装镜像方案](prepared-vm-images.md)。
+维护者于 2026-11-08 授权以独立 `vm/prepared` 复用 Ubuntu 20.04 ARM64 及 x64 预装测试环境；镜像只存私网，禁止进入 GitHub Actions Cache、artifact 或 Release。客户端与发布入口按 health 的 `vm_limits` 启用明确声明的架构；维护者报告线上已声明两种架构，实际上传与恢复待验收。未声明、限制不符或恢复失败时冷回退；不复用原包接口，不跳过应用安装及 GUI/代理/TUN 测试。16 GiB 和两个环境名额由两种架构共享。冻结输入、能力门禁、回退和冷/暖测速见[预装镜像方案](prepared-vm-images.md)。

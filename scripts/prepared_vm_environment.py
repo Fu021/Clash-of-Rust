@@ -1,4 +1,4 @@
-"""Freeze a disposable ARM64 guest environment independently of cor builds."""
+"""Freeze disposable Ubuntu guest environments independently of cor builds."""
 import os
 from pathlib import Path, PurePosixPath
 import platform
@@ -18,35 +18,51 @@ TEST_PACKAGES = (
     'gnome-shell', 'gnome-shell-extension-appindicator', 'policykit-1-gnome',
     'libgl1-mesa-dri', 'libegl1',
 )
-SOURCES = ''.join(
-    f'deb [arch=arm64 signed-by=/usr/share/keyrings/ubuntu-archive-keyring.gpg] '
-    f'https://ports.ubuntu.com/ubuntu-ports {suite} main universe restricted multiverse\n'
-    for suite in ('focal', 'focal-updates', 'focal-security'))
+def sources(arch):
+    protocol.require(arch in protocol.ARCHITECTURES, 'unsupported_image')
+    base = ('https://ports.ubuntu.com/ubuntu-ports' if arch == 'arm64'
+            else 'https://archive.ubuntu.com/ubuntu')
+    result = []
+    for suite in ('focal', 'focal-updates', 'focal-security'):
+        origin = 'https://security.ubuntu.com/ubuntu' if arch == 'x64' and suite == 'focal-security' else base
+        result.append(f'deb [arch={protocol.ARCHITECTURES[arch]} '
+                      f'signed-by=/usr/share/keyrings/ubuntu-archive-keyring.gpg] '
+                      f'{origin} {suite} main universe restricted multiverse\n')
+    return ''.join(result)
 
 
-def recipe():
+def recipe(arch='arm64'):
     return protocol.checksum({'schema': 1, 'recipe_sha256': sha256(Path(__file__)),
-                              'test_packages': list(TEST_PACKAGES), 'sources': SOURCES})
+                              'test_packages': list(TEST_PACKAGES), 'sources': sources(arch)})
 
 
-def package_record(filename):
+def package_record(filename, arch='arm64'):
     parts = urllib.parse.unquote(filename.removesuffix('.deb')).split('_')
     protocol.require(len(parts) == 3)
     name, version, architecture = parts
     protocol.text(name, '[a-z0-9][a-z0-9+.-]+', 2, 128)
     protocol.text(version, '[0-9][A-Za-z0-9.+:~-]*', maximum=256)
-    protocol.require(architecture in ('arm64', 'all'))
+    protocol.require(architecture in (protocol.ARCHITECTURES[arch], 'all'))
     return {'name': name, 'version': version, 'architecture': architecture}
 
 
-def packages_from_plan(records):
-    packages = [package_record(name) for name in records]
+def packages_from_plan(records, arch='arm64'):
+    packages = [package_record(name, arch) for name in records]
     result = sorted(packages, key=lambda package: (package['name'], package['architecture']))
     protocol.require(len({(entry['name'], entry['architecture']) for entry in result}) == len(result))
     return result
 
 
-def freeze(directory, linux):
+def frozen_environments(snapshot):
+    if 'prepared_vms' in snapshot:
+        value = snapshot['prepared_vms']
+        protocol.require(type(value) is dict and set(value) == set(protocol.ARCHITECTURES))
+        return value
+    return {'arm64': snapshot['prepared_vm']} if 'prepared_vm' in snapshot else {}
+
+
+def freeze(directory, linux, arch='arm64'):
+    protocol.require(arch in protocol.ARCHITECTURES, 'unsupported_image')
     if os.environ.get('COR_PREPARED_VM_INPUTS') != 'true':
         return {'schema': 1, 'status': 'disabled', 'reason': 'not_requested'}
     if os.environ.get('GITHUB_ACTIONS') != 'true' or sys.platform != 'linux':
@@ -55,19 +71,20 @@ def freeze(directory, linux):
     if not linux:
         return {'schema': 1, 'status': 'disabled', 'reason': 'linux_inputs_unavailable'}
     try:
-        staging = directory / 'vm-environment'
+        staging = directory / 'vm-environment' / arch
         apt = staging / 'apt'
         (apt / 'lists/partial').mkdir(parents=True, exist_ok=True)
         (apt / 'archives/partial').mkdir(parents=True, exist_ok=True)
         (apt / 'status').write_text('')
-        (apt / 'sources.list').write_text(SOURCES)
+        (apt / 'sources.list').write_text(sources(arch))
+        native = protocol.ARCHITECTURES[arch]
         (apt / 'isolated.conf').write_text(
             'Dir::Etc::parts "-";\nDir::Etc::main "-";\n'
-            'APT::Architecture "arm64";\nAPT::Architectures { "arm64"; };\n')
+            f'APT::Architecture "{native}";\nAPT::Architectures {{ "{native}"; }};\n')
         apt_environment = {**os.environ, 'APT_CONFIG': str((apt / 'isolated.conf').resolve()),
                            'LC_ALL': 'C'}
         command = [
-            *OPTIONS, '-o', 'APT::Architecture=arm64', '-o', 'APT::Architectures::=arm64',
+            *OPTIONS, '-o', 'APT::Architecture=' + native, '-o', 'APT::Architectures::=' + native,
             '-o', 'Dir::Etc::sourcelist=' + str((apt / 'sources.list').resolve()),
             '-o', 'Dir::Etc::sourceparts=-', '-o', 'Dir::Etc::preferencesparts=-',
             '-o', 'Dir::Etc::preferences=-',
@@ -95,7 +112,7 @@ def freeze(directory, linux):
             for record in records.values():
                 record['url'] = source_url(record['url'])
                 protocol.require(protocol.valid_source(record['url'], record['sha256'], record['size']))
-            resolved = {entry['name'] for entry in packages_from_plan(records)}
+            resolved = {entry['name'] for entry in packages_from_plan(records, arch)}
             protocol.require(set(packages).issubset(resolved))
             return records
 
@@ -104,14 +121,14 @@ def freeze(directory, linux):
         for name, record in installed.items():
             protocol.require(name not in downloads or downloads[name] == record)
             downloads[name] = record
-        lock = {'schema': 1, 'arch': 'arm64', 'packages': packages_from_plan(installed),
-                'downloads': downloads, 'sources_list': SOURCES}
+        lock = {'schema': 1, 'arch': arch, 'packages': packages_from_plan(installed, arch),
+                'downloads': downloads, 'sources_list': sources(arch)}
         descriptor = {'schema': 1, 'kind': 'ubuntu-compat', 'distribution': 'ubuntu',
-                      'release': '20.04', 'arch': 'arm64', 'kernel_series': '5.4',
-                      'base_sha256': linux['architectures']['arm64']['cloud']['sha256'],
-                      'python_sha256': linux['architectures']['arm64']['python']['sha256'],
+                      'release': '20.04', 'arch': arch, 'kernel_series': '5.4',
+                      'base_sha256': linux['architectures'][arch]['cloud']['sha256'],
+                      'python_sha256': linux['architectures'][arch]['python']['sha256'],
                       'environment_lock_sha256': protocol.checksum(lock),
-                      'prepare_recipe_sha256': recipe()}
+                      'prepare_recipe_sha256': recipe(arch)}
         paths = [apt / 'sources.list', *(apt / 'lists').glob('*')]
         files = {path.relative_to(directory).as_posix(): sha256(path)
                  for path in paths if path.is_file() and path.name != 'lock'}
@@ -119,8 +136,8 @@ def freeze(directory, linux):
                                                for name in files) <= 256 * 1024**2)
         return {'schema': 1, 'status': 'frozen', 'descriptor': descriptor, 'lock': lock, 'files': files}
     except protocol.ERRORS as error:
-        shutil.rmtree(directory / 'vm-environment', ignore_errors=True)
-        print('Prepared VM inputs: cold fallback: ' + type(error).__name__, flush=True)
+        shutil.rmtree(directory / 'vm-environment' / arch, ignore_errors=True)
+        print('Prepared VM inputs: ' + arch + ': cold fallback: ' + type(error).__name__, flush=True)
         return {'schema': 1, 'status': 'disabled', 'reason': 'resolution_failed'}
 
 
@@ -132,9 +149,10 @@ def verify_frozen(directory, frozen, linux):
     protocol.fields(frozen, 'schema status descriptor lock files')
     descriptor, lock = frozen['descriptor'], frozen['lock']
     protocol.validate_descriptor(descriptor)
+    arch = descriptor['arch']
     protocol.fields(lock, 'schema arch packages downloads sources_list')
     protocol.require(type(lock['schema']) is int and lock['schema'] == 1)
-    protocol.validate_packages(lock['packages'])
+    protocol.validate_packages(lock['packages'], arch)
     protocol.require(type(lock['downloads']) is dict and 0 < len(lock['downloads']) <= 4096)
     for name, record in lock['downloads'].items():
         protocol.text(name, r'[A-Za-z0-9.+_%~:-]+\.deb', maximum=512)
@@ -143,37 +161,45 @@ def verify_frozen(directory, frozen, linux):
         protocol.digest(record['sha256'])
         protocol.require(protocol.valid_source(record['url'], record['sha256'], record['size']))
     downloaded = {(entry['name'], entry['version'], entry['architecture'])
-                  for entry in packages_from_plan(lock['downloads'])}
+                  for entry in packages_from_plan(lock['downloads'], arch)}
     protocol.require(all((entry['name'], entry['version'], entry['architecture']) in downloaded
                          for entry in lock['packages']))
     protocol.require(descriptor['environment_lock_sha256'] == protocol.checksum(lock)
-                     and descriptor['prepare_recipe_sha256'] == recipe()
-                     and descriptor['base_sha256'] == linux['architectures']['arm64']['cloud']['sha256']
-                     and descriptor['python_sha256'] == linux['architectures']['arm64']['python']['sha256'])
-    protocol.require(lock['arch'] == 'arm64' and lock['sources_list'] == SOURCES
+                     and descriptor['prepare_recipe_sha256'] == recipe(arch)
+                     and descriptor['base_sha256'] == linux['architectures'][arch]['cloud']['sha256']
+                     and descriptor['python_sha256'] == linux['architectures'][arch]['python']['sha256'])
+    protocol.require(lock['arch'] == arch and lock['sources_list'] == sources(arch)
                      and 0 < len(lock['packages']) <= 4096 and type(frozen['files']) is dict
                      and 4 <= len(frozen['files']) <= 64)
     directory = Path(directory).resolve()
     for name, expected in frozen['files'].items():
         relative = PurePosixPath(name)
         protocol.require(str(relative) == name and not relative.is_absolute()
-                         and '..' not in relative.parts and relative.parts[0] == 'vm-environment')
+                         and '..' not in relative.parts
+                         and relative.parts[:2] == ('vm-environment', arch))
         target = directory / name
         protocol.require(not target.is_symlink() and target.resolve().is_relative_to(directory)
                          and target.is_file() and sha256(target) == expected)
+    source = f'vm-environment/{arch}/apt/sources.list'
+    protocol.require(source in frozen['files']
+                     and (directory / source).read_text() == lock['sources_list'])
     return True
 
 
-def guest_only():
+def guest_only(arch=None):
+    machine = platform.machine().lower()
     if (os.environ.get('GITHUB_ACTIONS') != 'true' or os.environ.get('COR_LINUX_GUEST') != 'true'
-            or platform.machine().lower() not in ('arm64', 'aarch64')):
-        raise RuntimeError('Prepared VM operations require the disposable ARM64 Actions guest')
+            or machine not in ('arm64', 'aarch64', 'x86_64', 'amd64')):
+        raise RuntimeError('Prepared VM operations require the disposable Actions guest')
+    if arch is not None:
+        protocol.require(arch == ('arm64' if machine in ('arm64', 'aarch64') else 'x64'),
+                         'environment_mismatch')
 
 
 def install_frozen(directory, frozen, linux):
-    guest_only()
+    guest_only(frozen['descriptor']['arch'])
     verify_frozen(directory, frozen, linux)
-    apt = Path(directory) / 'vm-environment/apt'
+    apt = Path(directory) / 'vm-environment' / frozen['descriptor']['arch'] / 'apt'
     run(['sudo', 'sh', '-c',
          'for unit in apt-daily.timer apt-daily-upgrade.timer apt-daily.service '
          'apt-daily-upgrade.service unattended-upgrades.service; do '

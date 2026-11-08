@@ -90,6 +90,9 @@ class PreparedVmTests(unittest.TestCase):
     def fixture(self):
         return json.loads((build.ROOT/'docs/workflows/fixtures/prepared-vm-v1.json').read_text())
 
+    def health(self):
+        return json.loads((build.ROOT/'docs/workflows/fixtures/prepared-vm-health-v1.json').read_text())
+
     def manifest(self, payload=b'prepared-system-disk'):
         record = self.fixture()['base_request']
         record['image']['size'] = len(payload)
@@ -97,7 +100,9 @@ class PreparedVmTests(unittest.TestCase):
         return record
 
     def receipt(self, record):
-        return {**copy.deepcopy(record), 'status': 'ready', 'object_id': 'object_one'}
+        return {**copy.deepcopy(record), 'status': 'ready', 'object_id': 'object_one',
+                'size': record['image']['size'], 'sha256': record['image']['sha256'],
+                'created_at': 1794143576.125}
 
     @contextmanager
     def replies(self, responses):
@@ -120,6 +125,8 @@ class PreparedVmTests(unittest.TestCase):
 
     def test_shared_contract_vectors(self):
         fixture = self.fixture()
+        self.assertEqual(fixture['revision'], '2026-11-08-x64')
+        self.assertEqual(len(fixture['cases']), 46)
         for case in fixture['cases']:
             with self.subTest(case=case['id']):
                 record = copy.deepcopy(fixture['base_request'])
@@ -163,17 +170,152 @@ class PreparedVmTests(unittest.TestCase):
             self.assertNotIn('private', (Path(temporary)/'report.json').read_text())
 
     def test_capability_requires_exact_supported_limits(self):
-        limits = {'architectures': ['arm64'], 'max_image_bytes': prepared_vm.MAX_IMAGE,
-                  'max_virtual_bytes': prepared_vm.MAX_VIRTUAL, 'range': False}
+        limits = self.health()['vm_limits']
         with tempfile.TemporaryDirectory() as temporary:
             client = prepared_vm.Client({'url': 'http://127.0.0.1', 'token': 'private'},
                                         Path(temporary)/'report.json')
-            for advertised, expected in ((limits, True), ({**limits, 'max_image_bytes': True}, False),
-                                         ({**limits, 'range': True}, False)):
+            invalid = [{**limits, name: value} for name, value in (
+                ('group', 'upstream/files'), ('architectures', ['arm64', 'arm64']),
+                ('architectures', ['arm64', 1]), ('architectures', 'arm64'),
+                ('max_image_bytes', True), ('max_image_bytes', 0),
+                ('max_image_bytes', prepared_vm.MAX_IMAGE + 1),
+                ('max_virtual_bytes', 24 * 1024**3 - 1),
+                ('max_virtual_bytes', prepared_vm.MAX_VIRTUAL + 1),
+                ('range_supported', True), ('range_supported', 0),
+                ('resume_supported', True), ('resume_supported', 0))]
+            invalid.extend({name: value for name, value in limits.items() if name != missing}
+                           for missing in ('group', 'architectures', 'max_image_bytes',
+                                           'max_virtual_bytes', 'range_supported', 'resume_supported'))
+            for advertised, expected in [(limits, True), *((value, False) for value in invalid)]:
                 with self.subTest(limits=advertised), self.replies([
-                    (200, {'capabilities': [prepared_vm.CAPABILITY], 'prepared_vm': advertised})
+                    (200, {**self.health(), 'vm_limits': advertised, 'prepared_vm': advertised})
                 ]):
                     self.assertEqual(client.available(), expected)
+                    if not expected:
+                        self.assertEqual(client.limits, {})
+
+    def test_legacy_health_names_do_not_enable_vm_uploads(self):
+        health = self.health()
+        limits = health.pop('vm_limits')
+        for advertised in ({**health, 'prepared_vm': limits},
+                           {**health, 'vm_limits': {
+                               name: value for name, value in limits.items() if name != 'range_supported'
+                           } | {'range': False}}):
+            with tempfile.TemporaryDirectory() as temporary:
+                client = prepared_vm.Client({'url': 'http://127.0.0.1', 'token': 'private'},
+                                            Path(temporary)/'report.json')
+                with self.subTest(health=advertised), self.replies([(200, advertised)]) as calls:
+                    self.assertFalse(client.available())
+                self.assertEqual([call[1] for call in calls], ['/health'])
+
+    def test_lost_capability_clears_previous_limits(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            client = prepared_vm.Client({'url': 'http://127.0.0.1', 'token': 'private'},
+                                        Path(temporary)/'report.json')
+            with self.replies([(200, self.health()), (200, {'capabilities': []})]):
+                self.assertTrue(client.available())
+                self.assertFalse(client.available())
+            self.assertEqual(client.limits, {})
+
+    def test_conflicting_health_aliases_never_enable_vm_operations(self):
+        for key, value in (('max_environments', True), ('architectures', ['arm64']),
+                           ('range', True), ('resume', True)):
+            advertised = self.health()
+            advertised['prepared_vm'][key] = value
+            with self.subTest(key=key), tempfile.TemporaryDirectory() as temporary:
+                client = prepared_vm.Client({'url': 'http://127.0.0.1', 'token': 'private'},
+                                            Path(temporary)/'report.json')
+                with self.replies([(200, advertised)]) as calls:
+                    self.assertFalse(client.available())
+                self.assertEqual([call[1] for call in calls], ['/health'])
+                self.assertEqual(client.limits, {})
+
+    def test_ready_receipt_checks_identity_copies_and_fractional_times(self):
+        record = self.manifest()
+        valid = self.receipt(record)
+        valid.update(upload_id='upload_one', terminal_at=1794143576.25,
+                     receipt_expires_at=1794748376.25)
+        self.assertEqual(prepared_vm.receipt(valid, record['descriptor'])['upload_id'], 'upload_one')
+        for name, value in (('size', True), ('size', record['image']['size'] + 1),
+                            ('sha256', 'f' * 64), ('created_at', '1794143576'),
+                            ('terminal_at', True), ('receipt_expires_at', 1)):
+            with self.subTest(name=name), self.assertRaises(prepared_vm.ProtocolError):
+                prepared_vm.receipt({**valid, name: value}, record['descriptor'])
+        for value in (True, None, 0, -1, '123', float('nan'), float('inf')):
+            with self.subTest(timestamp=value), self.assertRaises(prepared_vm.ProtocolError):
+                prepared_vm.timestamp(value)
+
+    def test_capability_selects_only_an_advertised_native_architecture(self):
+        limits = {**self.health()['vm_limits'], 'architectures': ['arm64', 'x64']}
+        with tempfile.TemporaryDirectory() as temporary:
+            client = prepared_vm.Client({}, Path(temporary)/'report.json')
+            client.config = {'url': 'http://127.0.0.1', 'token': 'private'}
+            for arch in prepared_vm.ARCHITECTURES:
+                for advertised, expected in ((limits, True),
+                                             ({**limits, 'architectures': ['arm64']}, arch == 'arm64')):
+                    with self.subTest(arch=arch, limits=advertised), self.replies([
+                        (200, {**self.health(), 'vm_limits': advertised, 'prepared_vm': advertised})
+                    ]) as calls:
+                        self.assertEqual(client.available(arch), expected)
+                    self.assertEqual([call[1] for call in calls], ['/health'])
+
+    def test_apt_sources_use_native_official_suites(self):
+        for arch, native, base in (
+                ('arm64', 'arm64', 'https://ports.ubuntu.com/ubuntu-ports'),
+                ('x64', 'amd64', 'https://archive.ubuntu.com/ubuntu')):
+            with self.subTest(arch=arch):
+                sources = prepared_vm_environment.sources(arch).splitlines()
+                self.assertEqual(len(sources), 3)
+                for source, suite in zip(sources, ('focal', 'focal-updates', 'focal-security')):
+                    origin = 'https://security.ubuntu.com/ubuntu' if arch == 'x64' and suite == 'focal-security' else base
+                    self.assertTrue(source.startswith('deb [arch=' + native + ' signed-by='))
+                    self.assertIn(f'] {origin} {suite} main universe restricted multiverse', source)
+
+    def test_vm_ssh_retries_transient_timeouts_before_the_boot_deadline(self):
+        clock = [0.0]
+        attempts = []
+        process = MagicMock()
+        process.poll.return_value = None
+
+        def execute(command, **kwargs):
+            attempts.append(kwargs['timeout'])
+            clock[0] += 1
+            if len(attempts) == 1:
+                raise subprocess.TimeoutExpired(command, kwargs['timeout'])
+            return subprocess.CompletedProcess(command, 1 if len(attempts) == 2 else 0)
+
+        def sleep(seconds):
+            clock[0] += seconds
+
+        with patch.object(linux_ci.time, 'monotonic', side_effect=lambda: clock[0]), \
+                patch.object(linux_ci.time, 'sleep', side_effect=sleep), \
+                patch.object(linux_ci.subprocess, 'run', side_effect=execute):
+            linux_ci.wait_vm_ssh(process, ['ssh', 'guest'], timeout=30)
+        self.assertEqual(attempts, [15, 15, 15])
+
+    def test_vm_ssh_never_outlives_the_total_deadline_or_a_dead_guest(self):
+        clock = [0.0]
+        process = MagicMock()
+        process.poll.return_value = None
+
+        def execute(command, **kwargs):
+            clock[0] += kwargs['timeout']
+            raise subprocess.TimeoutExpired(command, kwargs['timeout'])
+
+        def sleep(seconds):
+            clock[0] += seconds
+
+        with patch.object(linux_ci.time, 'monotonic', side_effect=lambda: clock[0]), \
+                patch.object(linux_ci.time, 'sleep', side_effect=sleep), \
+                patch.object(linux_ci.subprocess, 'run', side_effect=execute) as commands:
+            with self.assertRaisesRegex(TimeoutError, 'SSH-ready'):
+                linux_ci.wait_vm_ssh(process, ['ssh', 'guest'], timeout=18)
+            self.assertEqual(clock[0], 18)
+            self.assertEqual(commands.call_count, 1)
+            process.poll.return_value = 1
+            with self.assertRaisesRegex(RuntimeError, 'exited during boot'):
+                linux_ci.wait_vm_ssh(process, ['ssh', 'guest'])
+            self.assertEqual(commands.call_count, 1)
 
     def test_private_restore_is_atomic_and_preserves_existing_file_on_bad_bytes(self):
         record = self.manifest()
@@ -211,7 +353,7 @@ class PreparedVmTests(unittest.TestCase):
                 image.write_bytes(b'prepared-system-disk')
                 client = prepared_vm.Client({}, Path(temporary)/'report.json')
                 reservation = {'schema': 1, 'group': prepared_vm.GROUP, 'env_key': record['env_key'],
-                               'status': 'uploading', 'upload_id': 'upload_one', 'expires_at': 4102444800}
+                               'status': 'uploading', 'upload_id': 'upload_one', 'expires_at': 4102444800.125}
                 responses = [(201, reservation),
                              (502, b'private error') if lost else (200, self.receipt(record))]
                 if lost:
@@ -230,7 +372,7 @@ class PreparedVmTests(unittest.TestCase):
         existing = self.receipt(record)
         existing['producer']['run_id'] = 9
         existing['image']['sha256'] = 'f' * 64
-        existing['environment']['sources'][0]['url'] = 'https://cloud-images.ubuntu.com/synthetic-alias.img'
+        existing['sha256'] = 'f' * 64
         with tempfile.TemporaryDirectory() as temporary:
             image = Path(temporary)/'image.qcow2'
             image.write_bytes(b'prepared-system-disk')
@@ -240,6 +382,47 @@ class PreparedVmTests(unittest.TestCase):
             self.assertEqual(result['producer']['run_id'], 9)
             self.assertEqual(result['image']['sha256'], 'f' * 64)
             self.assertEqual(len(calls), 1)
+
+    def test_existing_environment_cannot_change_sources_under_the_same_key(self):
+        record = self.manifest()
+        existing = self.receipt(record)
+        existing['environment']['sources'][0]['url'] = 'https://cloud-images.ubuntu.com/synthetic-alias.img'
+        with tempfile.TemporaryDirectory() as temporary:
+            image = Path(temporary)/'image.qcow2'
+            image.write_bytes(b'prepared-system-disk')
+            client = prepared_vm.Client({}, Path(temporary)/'report.json')
+            with self.replies([(200, existing)]):
+                self.assertIsNone(client.upload(record, image))
+            self.assertEqual(client.events[-1]['result'], 'identity_conflict')
+
+    def test_expired_upload_receipt_recovers_ready_image_by_exact_environment(self):
+        record = self.manifest()
+        with tempfile.TemporaryDirectory() as temporary:
+            image = Path(temporary)/'image.qcow2'
+            image.write_bytes(b'prepared-system-disk')
+            client = prepared_vm.Client({}, Path(temporary)/'report.json')
+            reservation = {'schema': 1, 'group': prepared_vm.GROUP, 'env_key': record['env_key'],
+                           'status': 'uploading', 'upload_id': 'upload_one', 'expires_at': 4102444800.25}
+            with self.replies([(201, reservation), (502, {}), (404, {'error_code': 'upload_not_found'}),
+                               (200, self.receipt(record))]) as calls:
+                saved = client.upload(record, image)
+            self.assertEqual(saved['env_key'], record['env_key'])
+            self.assertEqual(calls[-1][1], '/v1/vm-images?key=' + record['env_key'])
+            self.assertEqual(client.events[-1]['result'], 'ready_after_lookup')
+
+    def test_interrupted_upload_keeps_terminal_error_without_retransmitting(self):
+        record = self.manifest()
+        with tempfile.TemporaryDirectory() as temporary:
+            image = Path(temporary)/'image.qcow2'
+            image.write_bytes(b'prepared-system-disk')
+            client = prepared_vm.Client({}, Path(temporary)/'report.json')
+            reservation = {'schema': 1, 'group': prepared_vm.GROUP, 'env_key': record['env_key'],
+                           'status': 'uploading', 'upload_id': 'upload_one', 'expires_at': 4102444800}
+            failed = {**reservation, 'status': 'failed', 'error_code': 'upload_interrupted'}
+            with self.replies([(201, reservation), (502, {}), (200, failed)]) as calls:
+                self.assertIsNone(client.upload(record, image))
+            self.assertEqual(client.events[-1]['result'], 'upload_interrupted')
+            self.assertEqual(len(calls), 3)
 
     def test_busy_upload_is_pending_and_does_not_send_content(self):
         record = self.manifest()
@@ -266,7 +449,7 @@ class PreparedVmTests(unittest.TestCase):
                 client = prepared_vm.Client({}, Path(temporary)/'report.json')
                 responses = [(status, value)]
                 if status == 201:
-                    responses.append((404, {}))
+                    responses.extend([(404, {}), (404, {})])
                 with self.replies(responses) as calls:
                     self.assertIsNone(client.upload(record, image))
                 self.assertTrue(all(call[2].get('stream') is None for call in calls))
@@ -322,24 +505,34 @@ class PreparedVmTests(unittest.TestCase):
         self.assertNotEqual(prepared_vm.identity(changed), expected)
 
     @contextmanager
-    def vm_context(self, temporary):
+    def vm_context(self, temporary, arch='arm64'):
         record = self.manifest()
+        record['descriptor']['arch'] = arch
+        for package in record['environment']['packages']:
+            if package['architecture'] != 'all':
+                package['architecture'] = prepared_vm.ARCHITECTURES[arch]
+        record['environment']['packages_sha256'] = prepared_vm.checksum(record['environment']['packages'])
+        record['env_key'] = prepared_vm.identity(record['descriptor'])
         frozen = {'descriptor': record['descriptor'],
                   'lock': {'packages': record['environment']['packages'], 'downloads': {}}}
-        linux = {'architectures': {'arm64': {'cloud': {
+        linux = {'architectures': {arch: {'cloud': {
             'url': record['environment']['sources'][0]['url'], 'sha256': 'a' * 64},
             'python': {'url': record['environment']['sources'][1]['url'], 'sha256': 'b' * 64}}}}
         client = MagicMock()
         client.available.return_value = True
         client.restore.return_value = self.receipt(record)
-        guest = MagicMock(kernel='5.4.0-216-generic', architecture='aarch64', kvm=False, boot_seconds=0.1)
+        guest = MagicMock(kernel='5.4.0-216-generic',
+                          architecture='aarch64' if arch == 'arm64' else 'x86_64',
+                          kvm=arch == 'x64', boot_seconds=0.1)
         guest.inspect.return_value = record['environment']
         with patch.dict(os.environ, {'RUNNER_TEMP': temporary}, clear=False), \
                 patch.object(linux_ci, 'require_actions'), \
                 patch.object(linux_ci, 'REPORT', Path(temporary)/'report'), \
                 patch.object(linux_ci, 'inputs', return_value=linux), \
-                patch.object(linux_ci, 'host_arch', return_value='arm64'), \
-                patch.object(build_inputs, 'manifest', return_value={'prepared_vm': frozen}), \
+                patch.object(linux_ci, 'host_arch', return_value=arch), \
+                patch.object(build_inputs, 'manifest', return_value={'prepared_vms': {
+                    name: frozen if name == arch else {'schema': 1, 'status': 'disabled'}
+                    for name in prepared_vm.ARCHITECTURES}}), \
                 patch.object(prepared_vm, 'client', return_value=client), \
                 patch.object(prepared_vm_environment, 'verify_frozen', return_value=True), \
                 patch.object(linux_ci, 'vm_source_archive', return_value=Path(temporary)/'source.tar.gz'), \
@@ -350,16 +543,19 @@ class PreparedVmTests(unittest.TestCase):
             yield client, guest, download, prepare, application
 
     def test_warm_vm_skips_all_cold_downloads_but_runs_application_tests(self):
-        with tempfile.TemporaryDirectory() as temporary, self.vm_context(temporary) as context:
-            client, guest, download, prepare, application = context
-            linux_ci.vm_test(123)
-            download.assert_not_called()
-            prepare.assert_not_called()
-            client.upload.assert_not_called()
-            self.assertEqual(application.call_args.kwargs['prepared'], True)
-            self.assertEqual(application.call_args.args[2], 123)
-            guest.preserve.assert_called_once()
-            guest.close.assert_called_once()
+        for arch in prepared_vm.ARCHITECTURES:
+            with self.subTest(arch=arch), tempfile.TemporaryDirectory() as temporary, \
+                    self.vm_context(temporary, arch) as context:
+                client, guest, download, prepare, application = context
+                linux_ci.vm_test(123)
+                client.available.assert_called_once_with(arch)
+                download.assert_not_called()
+                prepare.assert_not_called()
+                client.upload.assert_not_called()
+                self.assertEqual(application.call_args.kwargs['prepared'], True)
+                self.assertEqual(application.call_args.args[2], 123)
+                guest.preserve.assert_called_once()
+                guest.close.assert_called_once()
 
     def test_missing_service_capability_keeps_frozen_inputs_on_the_cold_path(self):
         with tempfile.TemporaryDirectory() as temporary, self.vm_context(temporary) as context:
@@ -456,10 +652,19 @@ class PreparedVmTests(unittest.TestCase):
             self.assertTrue(application.call_args.kwargs['prepared'])
 
     def test_signed_apt_resolution_freezes_versions_without_touching_host_apt(self):
+        for arch in prepared_vm.ARCHITECTURES:
+            with self.subTest(arch=arch):
+                self.check_signed_apt_resolution(arch)
+
+    def check_signed_apt_resolution(self, arch):
         changes = {'version': '1', 'index': 0}
+        native = prepared_vm.ARCHITECTURES[arch]
+        base = ('https://ports.ubuntu.com/ubuntu-ports' if arch == 'arm64'
+                else 'https://archive.ubuntu.com/ubuntu')
 
         def execute(command, **kwargs):
             apt = Path(kwargs['env']['APT_CONFIG']).parent
+            self.assertIn('APT::Architecture=' + native, command)
             if command[-1] == 'update':
                 changes['index'] += 1
                 for suite in ('focal', 'focal-updates', 'focal-security'):
@@ -471,20 +676,20 @@ class PreparedVmTests(unittest.TestCase):
             packages = command[command.index('--no-install-recommends') + 1:]
             lines = []
             for package in packages:
-                filename = package + '_' + changes['version'] + '_arm64.deb'
+                filename = package + '_' + changes['version'] + '_' + native + '.deb'
                 checksum = hashlib.sha256(filename.encode()).hexdigest()
-                lines.append(f"'https://ports.ubuntu.com/ubuntu-ports/pool/{filename}' {filename} 10 SHA256:{checksum}")
+                lines.append(f"'{base}/pool/{filename}' {filename} 10 SHA256:{checksum}")
             return subprocess.CompletedProcess(command, 0, '\n'.join(lines))
 
-        linux = {'architectures': {'arm64': {'cloud': {'sha256': 'a' * 64},
+        linux = {'architectures': {arch: {'cloud': {'sha256': 'a' * 64},
                                             'python': {'sha256': 'b' * 64}}}}
         with tempfile.TemporaryDirectory() as temporary, patch.dict(os.environ, {
                 'GITHUB_ACTIONS': 'true', 'COR_PREPARED_VM_INPUTS': 'true'}, clear=True), \
                 patch.object(prepared_vm, 'client', side_effect=AssertionError('No private access during freeze')), \
                 patch.object(prepared_vm_environment, 'run', side_effect=execute):
             root = Path(temporary)
-            first = prepared_vm_environment.freeze(root/'first', linux)
-            second = prepared_vm_environment.freeze(root/'second', linux)
+            first = prepared_vm_environment.freeze(root/'first', linux, arch)
+            second = prepared_vm_environment.freeze(root/'second', linux, arch)
             self.assertEqual(first['status'], 'frozen')
             self.assertEqual(first['descriptor'], second['descriptor'])
             self.assertNotEqual(first['files'], second['files'])
@@ -499,7 +704,7 @@ class PreparedVmTests(unittest.TestCase):
                 with self.subTest(change=change), self.assertRaises(prepared_vm.ProtocolError):
                     prepared_vm_environment.verify_frozen(root/'first', malformed, linux)
             changes['version'] = '2'
-            changed = prepared_vm_environment.freeze(root/'third', linux)
+            changed = prepared_vm_environment.freeze(root/'third', linux, arch)
             self.assertNotEqual(first['descriptor']['environment_lock_sha256'],
                                 changed['descriptor']['environment_lock_sha256'])
             damaged = root/'first'/next(iter(first['files']))
@@ -514,6 +719,20 @@ class PreparedVmTests(unittest.TestCase):
         with self.assertRaises(prepared_vm.ProtocolError):
             prepared_vm_environment.packages_from_plan({
                 'example_1_arm64.deb': {}, 'example_2_arm64.deb': {}})
+
+    def test_snapshot_keeps_native_environment_locks_separate(self):
+        environments = {arch: {'schema': 1, 'status': 'disabled'} for arch in prepared_vm.ARCHITECTURES}
+        self.assertEqual(prepared_vm_environment.frozen_environments({'prepared_vms': environments}),
+                         environments)
+        legacy = {'schema': 1, 'status': 'disabled'}
+        self.assertEqual(prepared_vm_environment.frozen_environments({'prepared_vm': legacy}),
+                         {'arm64': legacy})
+        with self.assertRaises(prepared_vm.ProtocolError):
+            prepared_vm_environment.frozen_environments({'prepared_vms': {'arm64': legacy}})
+        with self.assertRaises(prepared_vm.ProtocolError):
+            prepared_vm_environment.packages_from_plan({'example_1_arm64.deb': {}}, 'x64')
+        result = prepared_vm_environment.packages_from_plan({'example_1_amd64.deb': {}}, 'x64')
+        self.assertEqual(result[0]['architecture'], 'amd64')
 
     def test_warm_guest_must_match_full_package_manifest_and_frozen_versions(self):
         actual = self.manifest()['environment']
@@ -3896,6 +4115,23 @@ class ReleaseTests(unittest.TestCase):
             with tempfile.TemporaryDirectory() as folder:
                 path=Path(folder)/'notes.md';path.write_text('Uncommitted notes')
                 with self.assertRaises(ValueError):release.release_metadata(self.commit,notes_path=path)
+
+    def test_download_badges_target_each_asset_for_stable_and_prerelease(self):
+        for version, endpoint in [('0.6.6', 'downloads'), ('0.6.7-fix.1.example', 'downloads-pre')]:
+            with self.subTest(version=version):
+                tag = 'v' + version
+                notes = release.release_notes_with_downloads(self.notes, 'example/project', version, tag)
+                self.assertTrue(notes.startswith(self.notes.rstrip()))
+                self.assertEqual(notes.count('https://img.shields.io/badge/'), len(release.PACKAGES))
+                self.assertEqual(notes.count('https://img.shields.io/github/' + endpoint + '/'), len(release.PACKAGES))
+                self.assertEqual(notes.count('displayAssetName=false'), len(release.PACKAGES))
+                for suffix in release.PACKAGES.values():
+                    filename = 'Clash-of-Rust-' + version + '-' + suffix
+                    self.assertIn('/releases/download/' + tag + '/' + filename, notes)
+                    self.assertIn('/github/' + endpoint + '/example/project/' + tag + '/' + filename, notes)
+                self.assertNotIn('/latest/', notes)
+        with self.assertRaises(ValueError):
+            release.release_notes_with_downloads(self.notes, 'example/project', '0.6.6', 'v0.6.5')
 
     def test_prerelease_requires_explicit_current_same_repository_ci(self):
         changes = {'event':'pull_request', 'head_branch':'codex/fix-android'}

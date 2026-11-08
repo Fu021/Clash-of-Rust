@@ -20,7 +20,7 @@
 | `android.py` | CLI | Android 编译、模拟器测试、产物导出与已测试 APK 打包；默认 `test` 与打包只运行代理/TUN 及生命周期集成。经明确要求的输入法调查使用 `emulator --legacy` / `--api` 和 `test --ime-only`；专项保留截图、输入高度与崩溃证据，见[验证范围](../docs/workflows/ci.md#ci)。 |
 | `build-installer.py` | CLI | 只组装已验证产物为 Windows、Linux 或 macOS 安装包。 |
 | `macos_package.py` | 模块 | macOS App / DMG 组装；被打包器和 macOS 验证延迟导入。 |
-| `publish-release.py` | CLI / 模块 | 校验成功 CI，复用已验证产物创建测试包或公开正式/预发布 Release。 |
+| `publish-release.py` | CLI / 模块 | 校验成功 CI，复用已验证产物创建测试包或公开正式/预发布 Release；按版本自动生成安装包与下载量徽章。 |
 | `run-ci.py` | CLI | 单个原生平台的编译、Clippy、源码测试与代理/TUN 集成入口。 |
 | `linux_ci.py` | CLI / 模块 | Linux 基线容器、ELF 审计和旧内核虚拟机；容器及 VM 必须运行在可丢弃 Actions 环境。 |
 | `prepared_vm.py` | 共享模块 | 私网专用 VM 协议、严格元数据、能力门禁、有界完整下载及流式上传；不写 GitHub 缓存、不发 DELETE。 |

@@ -36,6 +36,17 @@ PACKAGES = {
     'package-android-armv7': 'android-armv7.apk',
     'package-android-x64': 'android-x64.apk',
 }
+DOWNLOAD_BUTTONS = (
+    ('Android', 'package-android-arm64', 'APK', 'ARM64', '3DDC84', 'android'),
+    ('Android', 'package-android-armv7', 'APK', 'ARMv7', '3DDC84', 'android'),
+    ('Android', 'package-android-x64', 'APK', 'x64', '3DDC84', 'android'),
+    ('Windows', 'package-windows-x64', 'Setup', 'x64', '0078D4', ''),
+    ('Windows', 'package-windows-arm64', 'Setup', 'ARM64', '0078D4', ''),
+    ('macOS', 'package-macos-arm64', 'DMG', 'Apple_Silicon', '555555', 'apple'),
+    ('macOS', 'package-macos-x64', 'DMG', 'Intel_x64', '555555', 'apple'),
+    ('Linux', 'package-linux-x64', 'DEB', 'x64', 'E95420', 'linux'),
+    ('Linux', 'package-linux-arm64', 'DEB', 'ARM64', 'E95420', 'linux'),
+)
 PACKAGE_JOBS = set(PACKAGES) | {'Ubuntu latest-x64 proxy and TUN',
                                'Ubuntu 20.04-x64 installed GUI and TUN',
                                'Ubuntu 20.04-arm64 installed GUI and TUN'}
@@ -196,6 +207,33 @@ def release_metadata(commit, tag=None, notes_path=None, check_only=False, prerel
     if notes_path:
         require(notes_path.read_text(encoding='utf-8') == notes, 'Release notes differ from the tested commit')
     return version, expected_tag, notes
+
+
+def release_notes_with_downloads(notes, repo, version, tag):
+    require(bool(re.fullmatch(r'[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+', repo)), 'Invalid repository path')
+    require(validate_version(version) == version and tag == 'v' + version, 'Invalid release identity')
+    require({item[1] for item in DOWNLOAD_BUTTONS} == set(PACKAGES)
+            and len(DOWNLOAD_BUTTONS) == len(PACKAGES), 'Download buttons do not match packages')
+    rows = {}
+    release_tag = urllib.parse.quote(tag, safe='')
+    for system, key, kind, architecture, color, logo in DOWNLOAD_BUTTONS:
+        name = 'Clash-of-Rust-' + version + '-' + PACKAGES[key]
+        asset = urllib.parse.quote(name, safe='')
+        download = f'https://github.com/{repo}/releases/download/{release_tag}/{asset}'
+        query = urllib.parse.urlencode({'logo': logo, 'logoColor': 'white'}) if logo else ''
+        badge = f'https://img.shields.io/badge/{kind}-{architecture}-{color}'
+        if query:
+            badge += '?' + query
+        counter = 'downloads-pre' if '-' in version.split('+', 1)[0] else 'downloads'
+        count = (f'https://img.shields.io/github/{counter}/{repo}/{release_tag}/{asset}'
+                 '?label=downloads&displayAssetName=false')
+        text = f'[![{system} {kind} {architecture}]({badge})]({download})'
+        text += f' [![{system} {architecture} downloads]({count})]({download})'
+        rows.setdefault(system, []).append(text)
+    table = ['## 下载', '', '| 平台 | 安装包与下载次数 |', '| --- | --- |']
+    table.extend(f"| {system} | {'<br>'.join(buttons)} |" for system, buttons in rows.items())
+    table.extend(['', 'SHA256 校验文件位于下方 Assets 中。'])
+    return notes.rstrip() + '\n\n' + '\n'.join(table) + '\n'
 
 
 def filenames(version):
@@ -405,6 +443,7 @@ def main():
     if args.check:
         print('Check complete; no release changes made')
         return
+    notes = release_notes_with_downloads(notes, repo, version, tag)
     url = publish(client, commit, tag, notes, files, source_branch=run['head_branch'], prerelease=args.prerelease)
     if os.environ.get('GITHUB_STEP_SUMMARY'):
         with Path(os.environ['GITHUB_STEP_SUMMARY']).open('a', encoding='utf-8') as summary:

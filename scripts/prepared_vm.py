@@ -2,6 +2,7 @@
 import hashlib
 import http.client
 import json
+import math
 import os
 from pathlib import Path
 import re
@@ -22,9 +23,16 @@ MAX_JSON = 1024 * 1024
 MAX_IMAGE = 8 * 1024**3
 MAX_VIRTUAL = 32 * 1024**3
 MAX_INTEGER = 9007199254740991
+ARCHITECTURES = {'arm64': 'arm64', 'x64': 'amd64'}
 FIELDS = 'schema group env_key descriptor image environment producer'.split()
 ERRORS = (OSError, ValueError, RuntimeError, KeyError, TypeError,
           http.client.HTTPException, subprocess.SubprocessError)
+SERVER_ERRORS = {
+    'invalid_metadata', 'identity_conflict', 'unsupported_image', 'upload_busy',
+    'upload_timeout', 'upload_expired', 'upload_interrupted', 'size_mismatch',
+    'checksum_mismatch', 'capacity_unavailable', 'metadata_unavailable',
+    'stored_object_changed', 'image_not_found', 'upload_not_found', 'endpoint_not_found',
+}
 
 
 class ProtocolError(ValueError):
@@ -90,20 +98,21 @@ def validate_descriptor(descriptor):
                         'release': '20.04', 'kernel_series': '5.4'}.items():
         require(descriptor[name] == value)
     require(type(descriptor['arch']) is str)
-    require(descriptor['arch'] == 'arm64', 'unsupported_image')
+    require(descriptor['arch'] in ARCHITECTURES, 'unsupported_image')
     for name in ('base_sha256', 'python_sha256', 'environment_lock_sha256', 'prepare_recipe_sha256'):
         digest(descriptor[name])
     require(descriptor['base_sha256'] != descriptor['python_sha256'])
 
 
-def validate_packages(packages):
+def validate_packages(packages, arch='arm64'):
+    require(arch in ARCHITECTURES, 'unsupported_image')
     require(type(packages) is list and 1 <= len(packages) <= 4096)
     identities = []
     for package in packages:
         fields(package, 'name version architecture')
         text(package['name'], '[a-z0-9][a-z0-9+.-]+', 2, 128)
         text(package['version'], '[0-9][A-Za-z0-9.+:~-]*', maximum=256)
-        require(package['architecture'] in ('arm64', 'all'))
+        require(package['architecture'] in (ARCHITECTURES[arch], 'all'))
         identities.append((package['name'], package['architecture']))
     require(identities == sorted(set(identities)))
 
@@ -129,7 +138,7 @@ def validate(record):
     text(environment['kernel_release'], r'5\.4\.[0-9][A-Za-z0-9.+_~-]*', maximum=128)
     text(environment['python_version'], r'[0-9]+\.[0-9]+\.[0-9]+', maximum=32)
     packages = environment['packages']
-    validate_packages(packages)
+    validate_packages(packages, descriptor['arch'])
     digest(environment['packages_sha256'])
     require(environment['packages_sha256'] == checksum(packages))
     sources = environment['sources']
@@ -172,6 +181,11 @@ def object_id(value):
     return value
 
 
+def timestamp(value):
+    require(type(value) in (int, float) and math.isfinite(value)
+            and 0 < value <= MAX_INTEGER, 'invalid_receipt')
+
+
 def qcow2_header(path, virtual_size):
     with Path(path).open('rb') as stream:
         header = stream.read(104)
@@ -199,16 +213,18 @@ def qcow2_header(path, virtual_size):
         cluster = stream.read(2**cluster_bits)
         require(len(cluster) >= length, 'unsupported_image')
         if length > 104:
-            require(cluster[104] == 0, 'unsupported_image')
+            require(not any(cluster[104:length]), 'unsupported_image')
         offset = length
+        extensions = set()
         while offset + 8 <= len(cluster):
             kind, size = struct.unpack_from('>II', cluster, offset)
             offset += 8
             if kind == 0:
                 require(size == 0, 'unsupported_image')
                 return
-            require(kind not in (0x44415441, 0x0537BE77) and size <= len(cluster) - offset,
+            require(kind == 0x6803f857 and kind not in extensions and size <= len(cluster) - offset,
                     'unsupported_image')
+            extensions.add(kind)
             offset += (size + 7) // 8 * 8
         raise ProtocolError('unsupported_image')
 
@@ -218,14 +234,24 @@ def receipt(value, descriptor):
     require(all(name in value for name in FIELDS), 'invalid_receipt')
     manifest = validate({name: value[name] for name in FIELDS})
     require(manifest['descriptor'] == descriptor, 'identity_conflict')
-    return {**manifest, 'status': 'ready', 'object_id': object_id(value.get('object_id'))}
+    require(type(value.get('size')) is int and value['size'] == manifest['image']['size']
+            and value.get('sha256') == manifest['image']['sha256'], 'invalid_receipt')
+    timestamp(value.get('created_at'))
+    result = {**manifest, 'status': 'ready', 'object_id': object_id(value.get('object_id')),
+              'size': value['size'], 'sha256': value['sha256'], 'created_at': value['created_at']}
+    if 'upload_id' in value:
+        result['upload_id'] = object_id(value['upload_id'])
+    for name in ('terminal_at', 'receipt_expires_at'):
+        if name in value:
+            timestamp(value[name])
+            result[name] = value[name]
+    if 'terminal_at' in result and 'receipt_expires_at' in result:
+        require(result['receipt_expires_at'] > result['terminal_at'], 'invalid_receipt')
+    return result
 
 
 def same_environment(left, right):
-    names = ('kernel_release', 'python_version', 'packages', 'packages_sha256')
-    return (all(left[name] == right[name] for name in names)
-            and {entry['sha256']: entry['size'] for entry in left['sources']}
-            == {entry['sha256']: entry['size'] for entry in right['sources']})
+    return left == right
 
 
 class DeadlineReader:
@@ -279,21 +305,18 @@ class Client:
                 payload.extend(block)
             require(len(payload) <= MAX_JSON)
             if response.status not in (200, 201, 202):
-                allowed = {'invalid_metadata', 'identity_conflict', 'unsupported_image',
-                           'upload_busy', 'upload_timeout', 'upload_expired', 'size_mismatch',
-                           'checksum_mismatch', 'capacity_unavailable', 'metadata_unavailable',
-                           'stored_object_changed'}
                 try:
                     value = decode(payload)
                     code = value.get('error_code') if type(value) is dict else None
                 except ValueError:
                     code = None
-                raise ProtocolError(code if code in allowed else 'http_failure', response.status)
+                raise ProtocolError(code if code in SERVER_ERRORS else 'http_failure', response.status)
             value = decode(payload)
             return response.status, value
 
-    def available(self):
+    def available(self, arch='arm64'):
         started = time.monotonic()
+        self.limits = {}
         try:
             if not self.config:
                 self.event('capability', 'not_configured', started)
@@ -303,13 +326,30 @@ class Client:
             enabled = (type(health) is dict and type(health.get('capabilities')) is list
                        and CAPABILITY in health['capabilities'])
             if enabled:
-                limits = health.get('prepared_vm', {})
-                require(type(limits) is dict and limits.get('architectures') == ['arm64']
+                limits = health.get('vm_limits')
+                require('prepared_vm' not in health
+                        or canonical(health['prepared_vm']) == canonical(limits), 'unsupported_limits')
+                require(type(limits) is dict and limits.get('group') == GROUP
+                        and type(limits.get('architectures')) is list
+                        and all(type(value) is str for value in limits['architectures'])
+                        and len(limits['architectures']) == len(set(limits['architectures']))
+                        and arch in ARCHITECTURES
+                        and arch in limits['architectures']
                         and type(limits.get('max_image_bytes')) is int
                         and 0 < limits['max_image_bytes'] <= MAX_IMAGE
                         and type(limits.get('max_virtual_bytes')) is int
                         and 24 * 1024**3 <= limits['max_virtual_bytes'] <= MAX_VIRTUAL
-                        and limits.get('range') is False, 'unsupported_limits')
+                        and limits.get('range_supported') is False
+                        and limits.get('resume_supported') is False, 'unsupported_limits')
+                require(all(name not in limits or limits[name] is False
+                            for name in ('range', 'resume')), 'unsupported_limits')
+                for name, maximum in (
+                        ('max_metadata_bytes', MAX_JSON), ('max_packages', 4096), ('max_sources', 4096),
+                        ('budget_bytes', MAX_INTEGER), ('max_environments', MAX_INTEGER),
+                        ('upload_concurrency', 1), ('upload_timeout_seconds', 1800),
+                        ('upload_lease_seconds', 2700), ('terminal_receipt_seconds', 604800)):
+                    require(type(limits.get(name)) is int and 0 < limits[name] <= maximum,
+                            'unsupported_limits')
                 self.limits = limits
             self.event('capability', 'supported' if enabled else 'unavailable', started)
             return enabled
@@ -378,6 +418,12 @@ class Client:
         upload_id = None
         try:
             validate(manifest)
+            limits = getattr(self, 'limits', {})
+            require(manifest['descriptor']['arch'] in limits.get('architectures', ARCHITECTURES)
+                    and len(canonical(manifest)) <= limits.get('max_metadata_bytes', MAX_JSON)
+                    and len(manifest['environment']['packages']) <= limits.get('max_packages', 4096)
+                    and len(manifest['environment']['sources']) <= limits.get('max_sources', 4096),
+                    'unsupported_limits')
             require(manifest['image']['size'] <= getattr(self, 'limits', {}).get('max_image_bytes', MAX_IMAGE),
                     'unsupported_image')
             require(manifest['image']['virtual_size']
@@ -399,12 +445,13 @@ class Client:
                                env_key=manifest['env_key'])
                     return None
                 require(value.get('status') == 'uploading', 'invalid_receipt')
-                integer(value.get('expires_at'))
+                timestamp(value.get('expires_at'))
                 require(value['expires_at'] > time.time(), 'upload_expired')
                 with Path(image).open('rb') as stream:
                     status, value = self.request('/v1/vm-images/uploads/' + upload_id + '/content', 'POST',
                                                 stream=stream, size=manifest['image']['size'],
-                                                deadline=min(time.monotonic() + 600,
+                                                deadline=min(time.monotonic() + limits.get(
+                                                                 'upload_timeout_seconds', 1800),
                                                              time.monotonic() + value['expires_at'] - time.time()))
                 require(status == 200, 'invalid_receipt')
                 saved = receipt(value, manifest['descriptor'])
@@ -417,6 +464,13 @@ class Client:
                 try:
                     status, value = self.request('/v1/vm-images/uploads/' + upload_id)
                     require(status == 200, 'invalid_receipt')
+                    if type(value) is dict and value.get('status') == 'failed':
+                        require(value.get('group') == GROUP
+                                and value.get('env_key') == manifest['env_key']
+                                and value.get('upload_id') == upload_id, 'invalid_receipt')
+                        code = value.get('error_code')
+                        error = ProtocolError(code if code in SERVER_ERRORS else 'invalid_receipt')
+                        raise error
                     if (type(value) is dict and value.get('status') in ('uploading', 'busy')
                             and value.get('group') == GROUP
                             and value.get('env_key') == manifest['env_key']
@@ -425,12 +479,23 @@ class Client:
                                    env_key=manifest['env_key'])
                         return None
                     saved = receipt(value, manifest['descriptor'])
+                    require(saved.get('upload_id', upload_id) == upload_id, 'invalid_receipt')
                     require(same_environment(saved['environment'], manifest['environment']), 'identity_conflict')
                     write_json(self.report.with_name('prepared-vm-receipt.json'), saved)
                     self.event('upload', 'ready_after_query', started, env_key=saved['env_key'])
                     return saved
-                except ERRORS:
-                    pass
+                except ERRORS as recovery_error:
+                    if isinstance(recovery_error, ProtocolError) and recovery_error.status == 404:
+                        try:
+                            saved = self.lookup(manifest['descriptor'])
+                            if saved is not None:
+                                require(same_environment(saved['environment'], manifest['environment']),
+                                        'identity_conflict')
+                                write_json(self.report.with_name('prepared-vm-receipt.json'), saved)
+                                self.event('upload', 'ready_after_lookup', started, env_key=saved['env_key'])
+                                return saved
+                        except ERRORS:
+                            pass
             details = {'upload_id': upload_id} if upload_id else {}
             if isinstance(error, ProtocolError) and error.status is not None:
                 details['http_status'] = error.status

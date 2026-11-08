@@ -113,10 +113,10 @@ def verified_manifest():
         if not path.is_file() or sha256(path) != checksum:
             raise ValueError('Build dependencies changed after resolution: ' + relative)
     verify_geo_snapshot(value, Path(os.environ.get('BUILD_INPUTS_DIR', SNAPSHOT)))
-    if value.get('prepared_vm', {}).get('status') == 'frozen':
-        from prepared_vm_environment import verify_frozen
+    from prepared_vm_environment import frozen_environments, verify_frozen
+    for frozen in frozen_environments(value).values():
         verify_frozen(Path(os.environ.get('BUILD_INPUTS_DIR', SNAPSHOT)),
-                      value['prepared_vm'], value['upstream']['linux'])
+                      frozen, value['upstream']['linux'])
     return value
 
 
@@ -235,7 +235,9 @@ def resolve(directory):
              'policy': 'Repository lockfiles and approved build versions only; apply the maintainer loop update policy and validate committed changes.'}
     if 'linux' in upstream:
         from prepared_vm_environment import freeze
-        value['prepared_vm'] = freeze(directory, upstream['linux'])
+        from prepared_vm import ARCHITECTURES
+        value['prepared_vms'] = {arch: freeze(directory, upstream['linux'], arch)
+                                for arch in ARCHITECTURES}
     write_json(directory / 'inputs.json', value)
     report(value)
     if output := os.environ.get('GITHUB_OUTPUT'):
@@ -302,9 +304,9 @@ def apply(directory, require_commit=True):
         if path.is_symlink() or sha256(path) != checksum:
             raise ValueError('Dependency snapshot checksum mismatch: ' + relative)
     assets = verify_geo_snapshot(value, directory)
-    if value.get('prepared_vm', {}).get('status') == 'frozen':
-        from prepared_vm_environment import verify_frozen
-        verify_frozen(directory, value['prepared_vm'], value['upstream']['linux'])
+    from prepared_vm_environment import frozen_environments, verify_frozen
+    for frozen in frozen_environments(value).values():
+        verify_frozen(directory, frozen, value['upstream']['linux'])
     for relative in FILES:
         shutil.copy2(directory / relative, ROOT / relative)
     for name in assets:

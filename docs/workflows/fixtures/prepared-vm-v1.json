@@ -1,6 +1,7 @@
 {
   "schema": 1,
   "contract": "prepared-vm-v1",
+  "revision": "2026-11-08-x64",
   "scope": "Synthetic offline metadata only; never download or upload these examples.",
   "base_request": {
     "schema": 1,
@@ -137,7 +138,41 @@
     },
     {
       "id": "reject-unsupported-architecture",
+      "operations": [{"op": "set", "path": ["descriptor", "arch"], "value": "riscv64"}],
+      "expected": {"valid": false, "error": "unsupported_image"}
+    },
+    {
+      "id": "valid-x64",
+      "operations": [
+        {"op": "set", "path": ["descriptor", "arch"], "value": "x64"},
+        {"op": "set", "path": ["env_key"], "value": "env1-5b8acbb7a6315fd6ebcf8eb28327f1dd66357eb1a2dbcf3b0db7a5c70955ecaf"},
+        {"op": "set", "path": ["environment", "packages", 0, "architecture"], "value": "amd64"},
+        {"op": "set", "path": ["environment", "packages", 2, "architecture"], "value": "amd64"},
+        {"op": "set", "path": ["environment", "packages_sha256"], "value": "ae121cf69b0ad506911bec374c912bcf6dd859f3a2cb868c1d13078a95e1ccb2"},
+        {"op": "set", "path": ["environment", "sources", 0, "url"], "value": "https://cloud-images.ubuntu.com/releases/focal/release/ubuntu-20.04-server-cloudimg-amd64.img"}
+      ],
+      "expected": {
+        "valid": true,
+        "env_key": "env1-5b8acbb7a6315fd6ebcf8eb28327f1dd66357eb1a2dbcf3b0db7a5c70955ecaf",
+        "packages_sha256": "ae121cf69b0ad506911bec374c912bcf6dd859f3a2cb868c1d13078a95e1ccb2"
+      }
+    },
+    {
+      "id": "reject-x64-with-arm64-key",
       "operations": [{"op": "set", "path": ["descriptor", "arch"], "value": "x64"}],
+      "expected": {"valid": false, "error": "identity_conflict"}
+    },
+    {
+      "id": "reject-x64-with-arm64-package",
+      "operations": [
+        {"op": "set", "path": ["descriptor", "arch"], "value": "x64"},
+        {"op": "set", "path": ["env_key"], "value": "env1-5b8acbb7a6315fd6ebcf8eb28327f1dd66357eb1a2dbcf3b0db7a5c70955ecaf"}
+      ],
+      "expected": {"valid": false, "error": "invalid_metadata"}
+    },
+    {
+      "id": "reject-amd64-descriptor-alias",
+      "operations": [{"op": "set", "path": ["descriptor", "arch"], "value": "amd64"}],
       "expected": {"valid": false, "error": "unsupported_image"}
     },
     {
