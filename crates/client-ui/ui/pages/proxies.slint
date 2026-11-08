@@ -1,4 +1,4 @@
-import { PageSurface, Disclosure } from "../components/motion.slint";
+import { Motion, PageSurface, Disclosure, Entrance } from "../components/motion.slint";
 import { Theme } from "../theme/palette.slint";
 import { UiData, UiActions, Intent, NodeItem, NodePair } from "../state.slint";
 import { CardGrid } from "../components/card-grid.slint";
@@ -79,7 +79,12 @@ export component ProxiesPage inherits PageSurface {
                 group-body := Disclosure { expanded: group-card.expanded;
                     if group-body.mounted: VerticalLayout {
                         spacing: Theme.page-gap;
+                        Rectangle {
+                            height: grid.preferred-height; vertical-stretch: 0;
+                            opacity: reflow.progress;
+                            reflow := Entrance { revision: grid.columns; enabled: Motion.layout-active; }
                         grid := CardGrid {
+                            y: (1 - reflow.progress) * 4px;
                             minimum-card-width: 196px;
                             available-width: root.width - 2 * Theme.card-padding - Theme.page-gap - Theme.content-gap;
                             property <[NodePair]> pairs: group.expanded ? group.nodes : group-card.closing-nodes;
@@ -100,6 +105,7 @@ export component ProxiesPage inherits PageSurface {
                                     }
                                 }
                             }
+                        }
                         }
                         HorizontalLayout { cross-axis-alignment: center; spacing: Theme.content-gap;
                             Caption { text: group.expanded ? group.page : group-card.closing-page; }

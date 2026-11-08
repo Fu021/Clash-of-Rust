@@ -94,8 +94,10 @@ async fn observe_scope(holder_scope: HolderScope) -> Value {
             .await
             .unwrap_or_else(|_| {
                 let mut routes = fallback;
-                routes["tun_holders"] =
-                    json!({"state":"unavailable","reason":"owner_query_failed"});
+                routes["tun_holders"] = json!({
+                    "state":"unavailable","reason":"owner_query_failed",
+                    "scope":holder_scope.label()
+                });
                 routes
             })
     }

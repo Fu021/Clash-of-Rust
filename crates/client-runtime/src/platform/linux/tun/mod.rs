@@ -74,13 +74,16 @@ pub fn check_tun_environment() -> Result<()> {
         .write(true)
         .open("/dev/net/tun")
         .context("无法访问 /dev/net/tun，请检查设备访问权限")?;
-    let status = std::fs::read_to_string("/proc/self/status")?;
+    check_tun_privileges(&std::fs::read_to_string("/proc/self/status")?)
+}
+
+fn check_tun_privileges(status: &str) -> Result<()> {
     ensure!(
-        status_number(&status, "NoNewPrivs:", 10)? == 0,
+        status_number(status, "NoNewPrivs:", 10)? == 0 || root_has_tun_permissions(status)?,
         "启动环境禁止获取网络权限，请从系统应用菜单启动客户端"
     );
     ensure!(
-        status_number(&status, "CapBnd:", 16)? & NETWORK_CAPABILITIES == NETWORK_CAPABILITIES,
+        status_number(status, "CapBnd:", 16)? & NETWORK_CAPABILITIES == NETWORK_CAPABILITIES,
         "启动环境限制了 TUN 网络权限，请检查容器或沙箱设置"
     );
     Ok(())
@@ -351,6 +354,22 @@ mod tests {
         }
         assert!(root_has_tun_permissions("Uid: 0\nCapEff: 3000\n").is_err());
         assert!(root_has_tun_permissions("CapEff: 3000\n").is_err());
+    }
+
+    #[test]
+    fn no_new_privileges_allows_existing_root_capabilities_but_never_grants_them() {
+        for (uid, effective, bounding, no_new_privs, allowed) in [
+            (0, 0x3000, 0x3000, 1, true),
+            (0, 0x1000, 0x3000, 1, false),
+            (0, 0x3000, 0x1000, 1, false),
+            (1000, 0x3000, 0x3000, 1, false),
+            (1000, 0, 0x3000, 0, true),
+        ] {
+            let status = format!(
+                "Uid:\t{uid} {uid} {uid} {uid}\nCapEff:\t{effective:x}\nCapBnd:\t{bounding:x}\nNoNewPrivs:\t{no_new_privs}\n"
+            );
+            assert_eq!(check_tun_privileges(&status).is_ok(), allowed);
+        }
     }
 
     #[test]

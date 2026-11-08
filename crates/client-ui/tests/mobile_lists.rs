@@ -10,12 +10,30 @@ use std::{cell::Cell, rc::Rc, time::Duration};
 
 slint::slint! {
     import { ListView, ListHeader, MField, MDragHandle } from "../ui/mobile/shared/controls.slint";
-    import { Field } from "../ui/components/controls.slint";
+    import { Field, PageScroll } from "../ui/components/controls.slint";
     import { RuleDragHandle } from "../ui/components/rule-drag.slint";
     import { ListReorderGesture, ListReorderPreview } from "../ui/components/list-reorder.slint";
     import { PageSurface } from "../ui/components/motion.slint";
     import { MobileFrame } from "../ui/mobile/shared/frame.slint";
     import { MobileView } from "../ui/mobile/shared/state.slint";
+
+    export component DesktopScrollProbe inherits Window {
+        preferred-width: 500px; preferred-height: 240px;
+        in property <int> rows: 20;
+        out property <length> offset <=> list.content-y;
+        out property <length> extent: list.content-height;
+        list := PageScroll {
+            width: parent.width; height: parent.height;
+            VerticalLayout {
+                alignment: start; spacing: 0px;
+                if root.rows > 0: VerticalLayout {
+                    spacing: 0px;
+                    for index in root.rows: Rectangle { height: 48px; }
+                }
+                Rectangle { height: 40px; }
+            }
+        }
+    }
 
     export component MobileNoticeProbe inherits Window {
         preferred-width: 393px; preferred-height: 852px;
@@ -818,4 +836,40 @@ fn mobile_list_stacks_rows_and_keeps_sparse_content_at_the_top() {
         assert_eq!(notice.get_draft().as_str(), "Unchanged subscription draft");
     }
     notice.hide().unwrap();
+    drop(notice);
+    adapter.set_size(slint::PhysicalSize::new(500, 240));
+    let desktop = DesktopScrollProbe::new().unwrap();
+    desktop.show().unwrap();
+    frame(&adapter, 500, 240);
+    assert!(desktop.get_extent() >= 1000.);
+    let wheel = |delta_y| {
+        desktop
+            .window()
+            .dispatch_event(WindowEvent::PointerScrolled {
+                position: LogicalPosition::new(100., 100.),
+                delta_x: 0.,
+                delta_y,
+            });
+    };
+    wheel(-10000.);
+    frame(&adapter, 500, 240);
+    assert_eq!(desktop.get_offset(), 240. - desktop.get_extent());
+    wheel(10000.);
+    frame(&adapter, 500, 240);
+    assert_eq!(desktop.get_offset(), 0.);
+    wheel(-200.);
+    frame(&adapter, 500, 240);
+    desktop.set_rows(0);
+    frame(&adapter, 500, 240);
+    assert_eq!(desktop.get_extent(), 240.);
+    assert_eq!(desktop.get_offset(), 0.);
+    desktop.set_rows(20);
+    frame(&adapter, 500, 240);
+    wheel(-200.);
+    frame(&adapter, 500, 240);
+    assert!(desktop.get_offset() < 0.);
+    adapter.set_size(slint::PhysicalSize::new(500, 1400));
+    frame(&adapter, 500, 1400);
+    assert_eq!(desktop.get_offset(), 0.);
+    desktop.hide().unwrap();
 }

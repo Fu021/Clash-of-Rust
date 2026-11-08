@@ -173,6 +173,7 @@ pub fn run() -> anyhow::Result<()> {
         }
     });
     let window = AppWindow::new()?;
+    crate::motion::refresh(&window);
     window.set_app_title(clash_client_core::WINDOW_TITLE.into());
     let mut models = ViewModels::default();
     models.attach(&window.global::<UiData>());
@@ -271,6 +272,7 @@ pub fn run() -> anyhow::Result<()> {
                     send(&native, UiEvent::Rescaled);
                 }
                 WindowEvent::Focused(true) => {
+                    crate::motion::refresh(&window);
                     repaint::invalidate(native_window);
                     send(&native, UiEvent::Focused);
                 }

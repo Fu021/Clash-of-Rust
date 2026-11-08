@@ -1,7 +1,12 @@
 <p align="center">
   <img src="resources/icons/app.png" width="112" height="112" alt="Clash of Rust 图标">
 </p>
-<h1 align="center">Clash of Rust</h1>
+<h1 align="center">
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="resources/icons/wordmark-dark.svg">
+    <img src="resources/icons/wordmark-light.svg" width="348" alt="Clash of Rust">
+  </picture>
+</h1>
 
 基于 mihomo 的原生 Rust 代理客户端。提供 **Windows（x64 / ARM64）**、**Debian/Ubuntu（amd64 / ARM64，Ubuntu 最低 20.04）**、**macOS 14 及以上（Intel / Apple Silicon）** 和 **Android（ARM64 / ARMv7 / x86_64，最低安装版本 8.0）**。Android 各版本和厂商 ROM 的验证范围、已知问题见[兼容性说明](apps/android/README.md#兼容性与验证范围)。版本 **0.6.6**，更新内容见 [发布说明](docs/releases/0.6.6.md)。
 

@@ -864,6 +864,53 @@ fn resizing_a_node_grid_preserves_odd_tail_nodes_and_their_own_actions() {
 }
 
 #[test]
+fn sidebar_toggle_keeps_manual_choice_across_breakpoints_and_respects_reduced_motion() {
+    let surface = ui_testing::initialize(950, 700);
+    let app = fixture(Page::Home);
+    let window = AppWindow::new().unwrap();
+    let data = window.global::<UiData>();
+    let mut models = ViewModels::default();
+    models.attach(&data);
+    app.present_slint(&data, &mut models);
+    let _events = pointer_events(&window);
+    window.show().unwrap();
+    motion_frame(&window, 0);
+    let expanded = target_bounds("content");
+    click_target(&window, "sidebar-toggle");
+    motion_frame(&window, 0);
+    assert!(window.get_sidebar_collapsed());
+    assert!(window.get_compact_sidebar());
+    let collapsed = target_bounds("content");
+    assert!((expanded[0] - collapsed[0] - 156.).abs() < 1.);
+    surface.set_size(slint::PhysicalSize::new(800, 450));
+    motion_frame(&window, 0);
+    assert!(window.get_compact_sidebar());
+    assert!(window.get_sidebar_collapsed());
+    surface.set_size(slint::PhysicalSize::new(950, 700));
+    motion_frame(&window, 0);
+    assert!(window.get_sidebar_collapsed());
+    click_target(&window, "sidebar-toggle");
+    motion_frame(&window, 0);
+    assert!(!window.get_compact_sidebar());
+    let motion = window.global::<clash_client_ui::Motion>();
+    motion.set_enabled(true);
+    motion_frame(&window, 250);
+    click_target(&window, "sidebar-toggle");
+    motion_frame(&window, 60);
+    let moving = target_bounds("content")[0];
+    assert!(moving > collapsed[0] && moving < expanded[0]);
+    motion_frame(&window, 250);
+    assert!(!window.window().has_active_animations());
+    motion.set_reduced_motion(true);
+    click_target(&window, "sidebar-toggle");
+    motion_frame(&window, 0);
+    assert!(!window.get_sidebar_collapsed());
+    assert!((target_bounds("content")[0] - expanded[0]).abs() < 1.);
+    assert_eq!(data.get_page(), Page::Home.index());
+    window.hide().unwrap();
+}
+
+#[test]
 fn subscription_search_filters_names_and_sources_without_replacing_the_model() {
     ui_testing::initialize(950, 700);
     let mut app = fixture(Page::Profiles);

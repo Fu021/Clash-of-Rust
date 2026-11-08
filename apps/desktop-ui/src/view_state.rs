@@ -8,13 +8,14 @@ macro_rules! view_state {
     ($(($get:ident,$set:ident)),+ $(,)?) => {
         pub fn capture(window:&AppWindow)->ViewState{
             let data=window.global::<UiData>();let position=native_position(window);let(maximized,fullscreen)=native_state(window);
-            ViewState{page:data.get_page(),scroll:[$(data.$get()),+],accent:(data.get_modal()==12).then(||window.get_accent_draft()),position,maximized,fullscreen}
+            ViewState{page:data.get_page(),scroll:[$(data.$get()),+],accent:(data.get_modal()==12).then(||window.get_accent_draft()),position,maximized,fullscreen,sidebar_collapsed:window.get_sidebar_collapsed()}
         }
         pub fn prepare(state:&ViewState,window:&AppWindow)->bool{
             if let Some((x,y))=state.position{window.window().set_position(fit_window_position(window,slint::PhysicalPosition::new(x,y)));}
             window.window().set_maximized(state.maximized);window.window().set_fullscreen(state.fullscreen);state.maximized||state.fullscreen
         }
         pub fn restore(state:&ViewState,window:&AppWindow){
+            window.set_sidebar_collapsed(state.sidebar_collapsed);
             let weak=window.as_weak();let state=state.clone();
             Timer::single_shot(Duration::from_millis(16),move||{
                 let Some(window)=weak.upgrade()else{return;};let data=window.global::<UiData>();if data.get_page()!=state.page{return;}

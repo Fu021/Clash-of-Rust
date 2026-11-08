@@ -57,10 +57,10 @@ fn holders(
     let mut skipped_other_users = 0_u64;
     let namespace = std::fs::read_link(proc_root.join("self/ns/net")).ok();
     let Some(namespace) = namespace else {
-        return json!({"state":"unavailable","reason":"network_namespace_unavailable","interfaces":result});
+        return json!({"state":"unavailable","reason":"network_namespace_unavailable","scope":scope.label(),"interfaces":result});
     };
     let Ok(processes) = std::fs::read_dir(proc_root) else {
-        return json!({"state":"unavailable","reason":"processes_unavailable","interfaces":result});
+        return json!({"state":"unavailable","reason":"processes_unavailable","scope":scope.label(),"interfaces":result});
     };
     let mut process_count = 0;
     let mut descriptor_count = 0;
@@ -243,7 +243,7 @@ mod tests {
         );
         assert_eq!(value["state"], "complete");
         assert_eq!(value["scope"], "current_user");
-        assert_eq!(value["skipped_other_users"], 2);
+        assert_eq!(value["skipped_other_users"], 3);
         let owners = value["interfaces"]["Meta"].as_array().unwrap();
         assert_eq!(owners.len(), 1);
         assert_eq!(owners[0]["pid"], 11);
@@ -257,20 +257,30 @@ mod tests {
             0,
             HolderScope::AllUsers,
         );
+        assert_eq!(all_users["state"], "complete");
+        assert_eq!(all_users["scope"], "all_users");
+        assert_eq!(all_users["skipped_other_users"], 0);
         let owners = all_users["interfaces"]["Meta"].as_array().unwrap();
         assert_eq!(owners.len(), 2);
         assert_eq!(owners[0]["pid"], 11);
         assert_eq!(owners[1]["pid"], 14);
+        assert_eq!(owners[1]["uid"], 1000);
     }
 
     #[test]
     fn missing_permissions_and_exhausted_budget_never_claim_no_owner() {
         let temporary = tempfile::tempdir().unwrap();
         let root = temporary.path();
+        let interfaces = ["Meta".into()];
+        for scope in [HolderScope::CurrentUser, HolderScope::AllUsers] {
+            let value = holders(root, &interfaces, Duration::from_secs(2), 0, scope);
+            assert_eq!(value["state"], "unavailable");
+            assert_eq!(value["scope"], scope.label());
+            assert_eq!(value["interfaces"]["Meta"], json!([]));
+        }
         std::fs::create_dir_all(root.join("self/ns")).unwrap();
         symlink("net:[1]", root.join("self/ns/net")).unwrap();
         std::fs::create_dir(root.join("22")).unwrap();
-        let interfaces = ["Meta".into()];
         let value = holders(
             root,
             &interfaces,

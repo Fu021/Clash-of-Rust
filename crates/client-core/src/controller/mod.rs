@@ -558,6 +558,7 @@ impl Api {
         Ok(Self {
             client: crate::network::client_builder()
                 .no_proxy()
+                .pool_max_idle_per_host(0)
                 .connect_timeout(Duration::from_secs(2))
                 .timeout(Duration::from_secs(8))
                 .build()?,
@@ -576,6 +577,26 @@ impl Api {
     pub fn request(&self, method: Method, url: Url) -> reqwest::RequestBuilder {
         self.client.request(method, url).bearer_auth(&self.secret)
     }
+    async fn read_response(&self, url: Url) -> Result<reqwest::Response> {
+        self.read_request(self.request(Method::GET, url)).await
+    }
+    async fn read_request(&self, request: reqwest::RequestBuilder) -> Result<reqwest::Response> {
+        let retry = request.try_clone().context("无法重建控制查询")?;
+        let first = match tokio::time::timeout(Duration::from_secs(8), request.send()).await {
+            Ok(Ok(response)) => return Ok(response),
+            Ok(Err(error)) if !error.is_timeout() && !error.is_connect() && !error.is_request() => {
+                return Err(error.into());
+            }
+            Ok(Err(error)) => anyhow::Error::from(error),
+            Err(error) => anyhow::Error::from(error),
+        };
+        tokio::time::timeout(Duration::from_secs(2), retry.send())
+            .await
+            .context("控制查询重试超时")
+            .and_then(|result| result.map_err(anyhow::Error::from))
+            .context(first)
+            .context("mihomo 控制查询失败，已用新连接重试一次")
+    }
     async fn checked(response: reqwest::Response) -> Result<reqwest::Response> {
         let status = response.status();
         if !status.is_success() {
@@ -586,8 +607,7 @@ impl Api {
     }
     pub async fn get<T: DeserializeOwned + Send + 'static>(&self, path: &str) -> Result<T> {
         let response = self
-            .request(Method::GET, self.url(&[path])?)
-            .send()
+            .read_response(self.url(&[path])?)
             .await
             .context("无法连接 mihomo 控制接口")?;
         decode_json(Self::checked(response).await?).await
@@ -598,27 +618,21 @@ impl Api {
         path: &str,
         decode: impl FnOnce(&mut dyn Read) -> serde_json::Result<T> + Send + 'static,
     ) -> Result<T> {
-        let response = self.request(Method::GET, self.url(&[path])?).send().await?;
+        let response = self.read_response(self.url(&[path])?).await?;
         decode_json_with(Self::checked(response).await?, move |mut reader| {
             decode(&mut reader)
         })
         .await
     }
     pub async fn proxy_selection(&self, name: &str) -> Result<Option<ProxySelection>> {
-        let response = self
-            .request(Method::GET, self.url(&["proxies", name])?)
-            .send()
-            .await?;
+        let response = self.read_response(self.url(&["proxies", name])?).await?;
         if response.status() == reqwest::StatusCode::NOT_FOUND {
             return Ok(None); // Provider members do not have a /proxies/{name} entry.
         }
         decode_json(Self::checked(response).await?).await.map(Some)
     }
     pub async fn proxy_nodes(&self, name: &str) -> Result<Proxy> {
-        let response = self
-            .request(Method::GET, self.url(&["proxies", name])?)
-            .send()
-            .await?;
+        let response = self.read_response(self.url(&["proxies", name])?).await?;
         decode_json(Self::checked(response).await?).await
     }
     pub async fn patch(&self, body: Value) -> Result<()> {
@@ -710,7 +724,7 @@ impl Api {
             url.query_pairs_mut()
                 .append_pair("name", host)
                 .append_pair("type", kind);
-            let response = Self::checked(self.request(Method::GET, url).send().await?).await?;
+            let response = Self::checked(self.read_response(url).await?).await?;
             let answer: crate::dns::Answer = decode_json(response).await?;
             answer.addresses()
         };
@@ -821,8 +835,7 @@ impl Api {
             providers: BTreeMap<Text, Source>,
         }
         let response = self
-            .request(Method::GET, self.url(&["providers", "proxies"])?)
-            .send()
+            .read_response(self.url(&["providers", "proxies"])?)
             .await?;
         let sources: Sources = decode_json(Self::checked(response).await?).await?;
         let mut routes = BTreeMap::new();
@@ -1115,15 +1128,90 @@ impl Api {
         url.query_pairs_mut().append_pair("level", "info");
         let client = crate::network::client_builder()
             .no_proxy()
+            .pool_max_idle_per_host(0)
             .connect_timeout(Duration::from_secs(2))
             .build()?;
-        Self::checked(client.get(url).bearer_auth(&self.secret).send().await?).await
+        Self::checked(
+            self.read_request(client.get(url).bearer_auth(&self.secret))
+                .await?,
+        )
+        .await
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[tokio::test]
+    async fn controller_reads_retry_a_closed_connection_without_replaying_writes() {
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let api = Api::new(&Settings {
+            controller_port: listener.local_addr().unwrap().port(),
+            secret: "fresh-control-test".into(),
+            ..Default::default()
+        })
+        .unwrap();
+        let server = tokio::spawn(async move {
+            let mut methods = Vec::new();
+            for attempt in 0..3 {
+                let (mut socket, _) = listener.accept().await.unwrap();
+                let mut request = Vec::new();
+                while !request.windows(4).any(|bytes| bytes == b"\r\n\r\n") {
+                    let mut buffer = [0; 4096];
+                    let count = socket.read(&mut buffer).await.unwrap();
+                    assert_ne!(count, 0);
+                    request.extend_from_slice(&buffer[..count]);
+                }
+                methods.push(
+                    String::from_utf8_lossy(&request)
+                        .split_whitespace()
+                        .next()
+                        .unwrap()
+                        .to_owned(),
+                );
+                if attempt == 1 {
+                    let body = r#"{"version":"test"}"#;
+                    socket.write_all(format!(
+                        "HTTP/1.1 200 OK\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}", body.len()
+                    ).as_bytes()).await.unwrap();
+                }
+            }
+            assert!(
+                tokio::time::timeout(Duration::from_millis(150), listener.accept())
+                    .await
+                    .is_err()
+            );
+            methods
+        });
+        let version: Value = tokio::time::timeout(Duration::from_secs(5), api.get("version"))
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(version["version"], "test");
+        assert!(api.patch(json!({"tun":{"enable":false}})).await.is_err());
+        assert_eq!(
+            tokio::time::timeout(Duration::from_secs(5), server)
+                .await
+                .unwrap()
+                .unwrap(),
+            ["GET", "GET", "PATCH"]
+        );
+    }
+
+    #[tokio::test]
+    async fn controller_http_rejections_are_not_transport_retried() {
+        let (api, server) = recovery_controller(vec![("401 Unauthorized", "{}")]).await;
+        assert!(
+            api.get::<Value>("configs")
+                .await
+                .unwrap_err()
+                .to_string()
+                .contains("401")
+        );
+        assert_eq!(server.await.unwrap().len(), 1);
+    }
+
     async fn recovery_controller(
         responses: Vec<(&'static str, &'static str)>,
     ) -> (Api, tokio::task::JoinHandle<Vec<String>>) {

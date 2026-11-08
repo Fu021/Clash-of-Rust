@@ -66,8 +66,7 @@ export component ConnectionsPage inherits PageSurface {
                 PageScroll {
                     content-key: UiData.page-offset + "/" + UiData.query + "/" + UiData.connection-sort + "/" + (UiData.descending ? "desc" : "asc");
                     content-y <=> UiData.scroll-connections;
-                    for connection[i] in UiData.connections: Rectangle {
-                        y: i * root.row-height;
+                    for connection in UiData.connections: Rectangle {
                         height: root.row-height;
                         background: UiData.connection-selected-id == connection.id ? Theme.accent-wash : row-area.has-hover ? Theme.inset : Theme.surface;
                         Rectangle { y: parent.height - 1px; height: 1px; width: parent.width; background: Theme.subtle-line; }
@@ -80,7 +79,6 @@ export component ConnectionsPage inherits PageSurface {
                             ActionButton { width: 72px; text: "关闭"; compact: true; quiet: true; danger: true; enabled: !UiData.working && !UiData.protected && !UiData.protection-pending; clicked => { UiActions.dispatch(Intent.close-connection, connection.id, ""); } }
                         }
                     }
-                    content-height: UiData.connections.length * root.row-height;
                 }
             }
         }

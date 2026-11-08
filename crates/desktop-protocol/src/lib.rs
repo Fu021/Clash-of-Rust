@@ -100,6 +100,8 @@ pub struct ViewState {
     pub position: Option<(i32, i32)>,
     pub maximized: bool,
     pub fullscreen: bool,
+    #[serde(default)]
+    pub sidebar_collapsed: bool,
 }
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct Metrics {

@@ -369,6 +369,7 @@ def main() -> None:
     parser.add_argument("--full-settings", action="store_true", help="show all settings without scrolling in its page screenshot")
     parser.add_argument("--pages-only", action="store_true", help="render the selected pages without the extra mobile scenario matrix")
     parser.add_argument("--long-names", action="store_true", help="preview long configuration, group and node names")
+    parser.add_argument("--sidebar-collapsed", action="store_true", help="preview the desktop's manually collapsed sidebar")
     parser.add_argument("--notice", default="", help="show the production floating notice above page content and dialogs")
     parser.add_argument("--notice-error", action="store_true", help="show a persistent error banner with diagnostic export actions")
     parser.add_argument("--notice-critical", action="store_true", help="show the error in a centered blocking dialog")
@@ -381,7 +382,7 @@ def main() -> None:
     parser.add_argument("--detail", type=int, default=0, help="preview one mobile detail view without rendering the full matrix")
     parser.add_argument("--keyboard", type=float, default=0, help="mobile keyboard inset in logical pixels")
     parser.add_argument("--text-scale", type=float, default=1, help="font preview factor, for example 1.3 (native Android uses system SP conversions)")
-    parser.add_argument("--scroll-y", type=float, default=0, help="initial home/rule-page scroll offset for checking content visibility")
+    parser.add_argument("--scroll-y", type=float, default=0, help="initial page scroll offset for checking content visibility")
     parser.add_argument("--output", type=Path)
     args = parser.parse_args()
     if args.notice_critical or args.notice_recover_network:
@@ -421,6 +422,7 @@ def main() -> None:
     if args.live:
         fixture = fixtures / "live.json"
         values = {"preview-page": list(PAGES).index(pages[0]), "preview-motion": True,
+                  "preview-sidebar-collapsed": args.sidebar_collapsed,
                   "preview-text-scale": round(args.text_scale * 100),
                   **protection_fixture(args.protection_state)}
         fixture.write_text(json.dumps({**values, "preview-dark": themes[0] == "dark"}))
@@ -441,6 +443,9 @@ def main() -> None:
                                            "preview-text-scale": round(args.text_scale * 100),
                                            "preview-rules-scroll": args.scroll_y,
                                            "preview-home-scroll": args.scroll_y,
+                                           "preview-sidebar-collapsed": args.sidebar_collapsed,
+                                           **{f"preview-{name}-scroll": args.scroll_y for name in (
+                                               "proxies", "profiles", "connections", "logs", "network", "sites", "claude", "settings")},
                                            "preview-notice": args.notice, "preview-notice-error": args.notice_error, "preview-notice-elapsed": args.notice_elapsed,
                                            "preview-notice-critical": args.notice_critical,
                                            "preview-notice-recover-network": args.notice_recover_network,

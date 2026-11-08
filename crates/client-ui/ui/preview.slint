@@ -21,6 +21,7 @@ export component Preview inherits AppWindow {
     changed preview-network-alert => { UiData.network-alert = root.preview-network-alert; }
     in-out property <bool> preview-motion;
     changed preview-motion => { Motion.enabled = root.preview-motion; }
+    in-out property <bool> preview-sidebar-collapsed <=> root.sidebar-collapsed;
     in-out property <int> preview-page <=> UiData.page;
     changed preview-page => {
         let count = root.preview-page == 2 ? UiData.profiles.length : root.preview-page == 4 ? UiData.rules.length : UiData.connections.length;
@@ -51,6 +52,14 @@ export component Preview inherits AppWindow {
     in-out property <bool> shortcuts-open <=> UiData.shortcuts-open;
     in-out property <length> preview-rules-scroll <=> UiData.scroll-rules;
     in-out property <length> preview-home-scroll <=> UiData.scroll-home;
+    in-out property <length> preview-proxies-scroll <=> UiData.scroll-proxies;
+    in-out property <length> preview-profiles-scroll <=> UiData.scroll-profiles;
+    in-out property <length> preview-connections-scroll <=> UiData.scroll-connections;
+    in-out property <length> preview-logs-scroll <=> UiData.scroll-logs;
+    in-out property <length> preview-network-scroll <=> UiData.scroll-network;
+    in-out property <length> preview-sites-scroll <=> UiData.scroll-sites;
+    in-out property <length> preview-claude-scroll <=> UiData.scroll-claude;
+    in-out property <length> preview-settings-scroll <=> UiData.scroll-settings;
     in-out property <bool> raw-rule <=> UiData.rule-text-mode;
     changed dialog => {
         UiData.modal = root.dialog == 1 || root.dialog == 2 ? 1 : root.dialog == 3 ? 7 : root.dialog == 5 ? 2 : root.dialog == 6 ? 11 : root.dialog == 10 ? 12 : root.dialog == 11 ? 10 : root.dialog;

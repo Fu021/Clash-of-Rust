@@ -1,15 +1,19 @@
 import { Motion, Entrance, ProgressTrack, CopyFeedback } from "motion.slint";
 import { Theme } from "../theme/palette.slint";
 import { UiData, UiActions, Intent } from "../state.slint";
-import { ScrollView } from "std-widgets.slint";
 import { GeometryTarget } from "geometry.slint";
 
 // Reset on navigation, not on each model refresh. Clamp after content shrinks
 // (including a shorter detail) so a previous offset cannot hide the new body.
-export component PageScroll inherits ScrollView {
+export component PageScroll inherits Flickable {
     in property <string> content-key;
-    horizontal-scrollbar-policy: always-off;
-    vertical-scrollbar-policy: always-off;
+    out property <length> visible-height: self.height;
+    out property <length> visible-width: self.width;
+    min-width: 0px; min-height: 0px;
+    horizontal-stretch: 1; vertical-stretch: 1;
+    content-width: self.width;
+    content-height: max(self.height, content.preferred-height);
+    interactive: true;
     property <length> bottom: min(0px, self.visible-height - self.content-height);
     changed content-key => { self.content-y = 0px; }
     changed bottom => { self.content-y = clamp(self.content-y, self.bottom, 0px); }
@@ -17,6 +21,11 @@ export component PageScroll inherits ScrollView {
         if self.content-y < self.bottom || self.content-y > 0px {
             self.content-y = clamp(self.content-y, self.bottom, 0px);
         }
+    }
+    content := VerticalLayout {
+        x: 0px; y: 0px; width: root.width; height: self.preferred-height;
+        vertical-stretch: 0; alignment: start; spacing: 0px;
+        @children
     }
 }
 

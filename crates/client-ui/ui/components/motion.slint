@@ -2,7 +2,9 @@
 export global Motion {
     in-out property <bool> initialized;
     in-out property <bool> enabled: true;
+    in-out property <bool> reduced-motion;
     out property <bool> active: initialized && enabled;
+    out property <bool> layout-active: active && !reduced-motion;
     out property <duration> fast: 100ms;
     out property <duration> control: 160ms;
     out property <duration> reveal: 200ms;
@@ -20,14 +22,15 @@ export component MotionScope {
 
 export component Entrance {
     in property <int> revision;
+    in property <bool> enabled: Motion.active;
     property <bool> revealed;
     out property <float> progress: self.revealed ? 1 : 0;
-    animate progress { duration: Motion.reveal; easing: ease-out; enabled: Motion.active && self.revealed; }
+    animate progress { duration: Motion.reveal; easing: ease-out; enabled: root.enabled && self.revealed; }
     init => {
-        if Motion.active { reveal.restart(); } else { self.revealed = true; }
+        if root.enabled { reveal.restart(); } else { self.revealed = true; }
     }
     changed revision => {
-        if Motion.active { self.revealed = false; reveal.restart(); }
+        if root.enabled { self.revealed = false; reveal.restart(); }
         else { self.revealed = true; }
     }
     reveal := Timer { interval: 1ms; triggered => { self.stop(); root.revealed = true; } }

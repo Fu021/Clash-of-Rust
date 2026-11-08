@@ -50,8 +50,10 @@ export component AppWindow inherits Window {
     changed appearance => { Theme.appearance = root.appearance; }
     changed font-scale => { Theme.text-scale = root.font-scale; }
     property <int> accent: UiData.accent;
-    property <bool> compact-sidebar: self.width < 880px;
+    in-out property <bool> sidebar-collapsed;
+    out property <bool> compact-sidebar: self.width < 880px || self.sidebar-collapsed;
     property <length> sidebar-width: self.compact-sidebar ? 60px : 216px;
+    animate sidebar-width { duration: Motion.control; easing: ease-out; enabled: Motion.layout-active; }
     property <bool> error-active: UiData.notice != "" && UiData.notice-error;
     changed accent => { Theme.accent-index = root.accent; }
     property <[string]> titles: ["首页", "代理", "订阅", "连接", "规则", "日志", "网络诊断", "IP 检测", "A÷检测", "设置"];
@@ -75,7 +77,7 @@ export component AppWindow inherits Window {
             return reject;
         }
     Rectangle {
-        x: 0px; y: 44px; width: root.sidebar-width; height: parent.height - self.y; background: Theme.sidebar;
+        x: 0px; y: 44px; width: root.sidebar-width; height: parent.height - self.y; background: Theme.sidebar; clip: true;
         animate background { duration: Motion.appearance; enabled: Motion.active; }
         HorizontalLayout {
             x: root.compact-sidebar ? 14px : 16px; y: 8px; width: parent.width - self.x * 2; height: 44px;
@@ -222,7 +224,26 @@ export component AppWindow inherits Window {
                 }
             }
         }
-        Wordmark { x: 48px; y: 11px; }
+        Wordmark { x: 48px; y: 12px; width: 124px; height: 20px; }
+        ActionButton {
+            geometry-key: "sidebar-toggle";
+            x: 180px; y: 6px; width: 32px; height: 32px;
+            text: ""; compact: true;
+            visible: root.width >= 880px;
+            enabled: root.width >= 880px;
+            accessible-label: root.sidebar-collapsed ? "展开侧栏" : "收起侧栏";
+            clicked => { root.sidebar-collapsed = !root.sidebar-collapsed; }
+            Image {
+                x: 7px; y: 7px; width: 18px; height: 18px;
+                source: @image-url("icons/sidebar.svg"); colorize: Theme.secondary;
+            }
+            Path {
+                x: 7px; y: 7px; width: 18px; height: 18px;
+                viewbox-width: 24; viewbox-height: 24;
+                stroke: Theme.secondary; stroke-width: 1.6px;
+                commands: root.sidebar-collapsed ? "M13 8L17 12L13 16" : "M17 8L13 12L17 16";
+            }
+        }
     }
     dialog-host := AppDialog { }
     // Last sibling: notices overlay dialogs without changing page geometry.

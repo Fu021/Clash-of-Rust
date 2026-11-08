@@ -43,7 +43,7 @@ python3 scripts/preview-slint.py --mobile --platform android --page rules --them
 
 截图工具拒绝使用缺少彩色字形支持的旧 Viewer。仅导入字体仍可能让系统回退先选中不支持组合 emoji 的字体；脚本通过 `SLINT_DEFAULT_FONT` 与 `SLINT_FONT_PATH` 明确设置随包正文和 emoji 回退，保持节点及策略组原文。每份截图目录的 `preview-viewer.json` 记录工具版本与字体身份。预览使用主线 Viewer 的无窗口渲染，应用仍使用已提交依赖及软件渲染器回移；二者并非同一构建。正式软件渲染的颜色、输入框、透明度、裁切和重绘由 `tests/emoji.rs` 在 Actions 验证，预览不替代设备验收。
 
-资源受限（例如 1 核 CPU、约 1 GiB 内存）时优先运行 `--check`，或按[多尺寸检查](../../docs/loop-workflow.md#多尺寸-ui-检查)串行预览必要页面；维护者明确要求全量浅深主题时也须串行。`--pages-only` 可跳过额外移动情境矩阵，`--scroll-y` 检查移动首页与规则页滚动后的内容。使用 `--output /tmp/...` 等工作区外目录保存审阅产物，按维护者要求保留或清理，不在仓库留下 `dist/`、缓存或截图：
+资源受限（例如 1 核 CPU、约 1 GiB 内存）时优先运行 `--check`，或按[多尺寸检查](../../docs/loop-workflow.md#多尺寸-ui-检查)串行预览必要页面；维护者明确要求全量浅深主题时也须串行。`--pages-only` 可跳过额外移动情境矩阵，`--scroll-y` 检查桌面各页和移动首页、规则页滚动后的内容；`--sidebar-collapsed` 检查桌面手动收起的侧栏。侧栏、减少动态效果及滚动边界见[界面设计](../../docs/ui-design.md#滚动侧栏与布局过渡)。使用 `--output /tmp/...` 等工作区外目录保存审阅产物，按维护者要求保留或清理，不在仓库留下 `dist/`、缓存或截图：
 
 ```sh
 python3 scripts/preview-slint.py --check
