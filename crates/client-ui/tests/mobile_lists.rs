@@ -852,12 +852,15 @@ fn mobile_list_stacks_rows_and_keeps_sparse_content_at_the_top() {
             });
     };
     wheel(-10000.);
+    advance(&clock, Duration::from_secs(1));
     frame(&adapter, 500, 240);
     assert_eq!(desktop.get_offset(), 240. - desktop.get_extent());
     wheel(10000.);
+    advance(&clock, Duration::from_secs(1));
     frame(&adapter, 500, 240);
     assert_eq!(desktop.get_offset(), 0.);
     wheel(-200.);
+    advance(&clock, Duration::from_secs(1));
     frame(&adapter, 500, 240);
     desktop.set_rows(0);
     frame(&adapter, 500, 240);
@@ -866,6 +869,7 @@ fn mobile_list_stacks_rows_and_keeps_sparse_content_at_the_top() {
     desktop.set_rows(20);
     frame(&adapter, 500, 240);
     wheel(-200.);
+    advance(&clock, Duration::from_secs(1));
     frame(&adapter, 500, 240);
     assert!(desktop.get_offset() < 0.);
     adapter.set_size(slint::PhysicalSize::new(500, 1400));

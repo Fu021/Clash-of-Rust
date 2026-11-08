@@ -906,7 +906,7 @@ fn sidebar_toggle_keeps_manual_choice_across_breakpoints_and_respects_reduced_mo
     motion_frame(&window, 0);
     assert!(!window.get_sidebar_collapsed());
     assert!((target_bounds("content")[0] - expanded[0]).abs() < 1.);
-    assert_eq!(data.get_page(), Page::Home.index());
+    assert_eq!(data.get_page(), Page::Home as i32);
     window.hide().unwrap();
 }
 
