@@ -503,12 +503,19 @@ impl Store {
     }
     pub fn load_settings(&self) -> Result<Settings> {
         let path = self.root.join("settings.json");
-        if !path.exists() {
-            let settings = Settings::default();
-            self.save_settings(&settings)?;
-            return Ok(settings);
-        }
-        let mut settings: Settings = serde_json::from_slice(&std::fs::read(path)?)?;
+        let bytes = match std::fs::read(&path) {
+            Ok(bytes) => bytes,
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+                let settings = Settings::default();
+                self.save_settings(&settings)?;
+                return Ok(settings);
+            }
+            Err(error) => {
+                return Err(error).with_context(|| format!("无法读取设置文件：{}", path.display()));
+            }
+        };
+        let mut settings: Settings = serde_json::from_slice(&bytes)
+            .with_context(|| format!("设置文件格式错误：{}", path.display()))?;
         settings.normalize();
         settings.validate()?;
         Ok(settings)
@@ -535,10 +542,15 @@ impl Store {
     }
     pub fn profiles(&self) -> Result<Vec<Profile>> {
         let path = self.root.join("profiles.json");
-        if !path.exists() {
-            return Ok(vec![]);
-        }
-        Ok(serde_json::from_slice(&std::fs::read(path)?)?)
+        let bytes = match std::fs::read(&path) {
+            Ok(bytes) => bytes,
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(vec![]),
+            Err(error) => {
+                return Err(error).with_context(|| format!("无法读取订阅索引：{}", path.display()));
+            }
+        };
+        serde_json::from_slice(&bytes)
+            .with_context(|| format!("订阅索引格式错误：{}", path.display()))
     }
     pub fn save_profiles(&self, profiles: &[Profile]) -> Result<()> {
         atomic_write(
@@ -960,6 +972,75 @@ mod tests {
         store.save_settings(&selected).unwrap();
         assert!(store.load_settings().unwrap().update_prereleases);
     }
+
+    #[test]
+    fn missing_storage_initializes_settings_without_creating_a_profile_index() {
+        let directory = tempfile::tempdir().unwrap();
+        let store = Store::at(directory.path().to_owned()).unwrap();
+        let settings = store.load_settings().unwrap();
+        assert!(!settings.update_prereleases);
+        assert!(directory.path().join("settings.json").is_file());
+        assert!(store.profiles().unwrap().is_empty());
+        assert!(!directory.path().join("profiles.json").exists());
+    }
+
+    #[test]
+    fn storage_read_errors_include_the_path_and_preserve_existing_entries() {
+        let directory = tempfile::tempdir().unwrap();
+        let store = Store::at(directory.path().to_owned()).unwrap();
+        let settings = directory.path().join("settings.json");
+        let profiles = directory.path().join("profiles.json");
+        for path in [&settings, &profiles] {
+            std::fs::create_dir(path).unwrap();
+            std::fs::write(path.join("preserve"), b"original").unwrap();
+        }
+        assert!(
+            store
+                .load_settings()
+                .unwrap_err()
+                .to_string()
+                .contains(&settings.display().to_string())
+        );
+        assert!(
+            store
+                .profiles()
+                .unwrap_err()
+                .to_string()
+                .contains(&profiles.display().to_string())
+        );
+        for path in [&settings, &profiles] {
+            assert_eq!(std::fs::read(path.join("preserve")).unwrap(), b"original");
+        }
+    }
+
+    #[test]
+    fn invalid_storage_is_not_replaced_with_defaults() {
+        let directory = tempfile::tempdir().unwrap();
+        let store = Store::at(directory.path().to_owned()).unwrap();
+        let settings = directory.path().join("settings.json");
+        let profiles = directory.path().join("profiles.json");
+        for path in [&settings, &profiles] {
+            std::fs::write(path, b"invalid json").unwrap();
+        }
+        assert!(
+            store
+                .load_settings()
+                .unwrap_err()
+                .to_string()
+                .contains(&settings.display().to_string())
+        );
+        assert!(
+            store
+                .profiles()
+                .unwrap_err()
+                .to_string()
+                .contains(&profiles.display().to_string())
+        );
+        for path in [&settings, &profiles] {
+            assert_eq!(std::fs::read(path).unwrap(), b"invalid json");
+        }
+    }
+
     #[test]
     fn data_directory_is_exclusive() {
         let tmp = tempfile::tempdir().unwrap();

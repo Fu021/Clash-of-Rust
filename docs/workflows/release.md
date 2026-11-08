@@ -11,7 +11,7 @@
 在 Actions 中选择 **Publish Release → Run workflow**：
 
 - `ci_run_id`：成功的当前提交 CI 编号；留空选择当前提交的 main CI。开发分支测试包必须填写当前分支、当前提交成功的 PR CI 编号。
-- `check_only`：勾选后完成打包与安装后验证，不创建或修改 Release；默认验收使用此模式。安装包在本次运行的 `package-{system}-{arch}` 附件中，无需下载到本地。
+- `check_only`：默认勾选，核验同提交 CI 已完成安装验证的九组候选包、SHA256 和收据，不重新打包、不创建或修改 Release。安装包保存在所选 CI 的 `package-{system}-{arch}` 附件中，无需下载到本地。
 - `prerelease`：经维护者确认后显式发布预发布版，须关闭 `check_only`。可在开发/修复分支上运行，必须指定同仓库、同分支头成功的 PR CI，源码使用合法预发布版本，并提交 `docs/releases/<完整版本>.md`。不能用此开关发布无后缀的正式版本；两种模式同时勾选会在前置校验失败。
 
 正式版和预发布版的文字按[发布文案模板](../releases/TEMPLATE.md)准备并随源码提交。发布程序校验该提交的文案后，自动附上九种安装包的徽章下载入口和各附件下载次数；链接固定到本次版本和具体文件，预发布不指向稳定版 `latest`。下载量由 Shields.io 读取 GitHub 附件计数，可能因缓存延迟更新；SHA256 文件仍在 Release 附件中。
@@ -22,28 +22,30 @@
 
 复盘和其他文档随功能改动纳入最终提交，再启动验证；完成后的运行编号、来源提交和附件结果写入最终汇报，不为补写成功记录再次推送。后续纯文档补充按[收尾规则](../../AGENTS.md#actions提交与发布)保留本地；确需修复代码时，以新提交重新完成 CI 与不发布打包。
 
-流程固定到所选 CI 的提交与依赖快照，核对六种桌面平台及三种 Android ABI 的成功记录和产物身份，不重新编译，也不重新下载应用资源。过期或旧格式产物需要重新运行当前代码的 CI。
-
-Linux 兼容验证在来源解析后准备环境，仅等待本次运行中对应架构的 Linux 安装包及 TUN 程序，无需等待其他平台打包。等待核对完整提交、重复/过期附件和生产任务失败，默认最多 20 分钟；最终发布仍要求全部平台及兼容验证成功。
+流程固定到所选 CI 的提交与依赖快照，核对六种桌面平台、三种 Android ABI 和三个 Ubuntu 兼容 job 的成功记录与产物身份，不重新编译或下载应用资源。候选包、源码产物及收据保留 3 天；过期或旧格式产物需要重新运行当前代码的 CI。完整测试职责见[安装验收](install-validation.md)。
 
 Ubuntu 20.04 ARM64 和 x64 的客户端接入[私网预装环境镜像](prepared-vm-images.md)的能力门禁与冷回退；按线上 `vm_limits` 中明确声明的架构启用，维护者报告服务端已声明两种架构。真实镜像上传、恢复和冷/暖测速需联调后另验收；SSH 启动探测的短时超时在总预算内重试，不由缓存命中替代就绪检查。预装镜像、基础盘及测试写入层均不进入 GitHub Cache、artifact 或 Release。
 
 从启动到最终核验完成，来源分支必须仍指向该 CI 的提交；`publish-release.py` 在前置解析和最终核验时都会检查分支头。即使只是文档改动，也应等本轮打包结束后再推送，避免 `Source branch has changed`。测试包以本次工作流固定的提交为准，后续提交需另做验证。
 
-1. 六个平台获取并校验已有程序，再生成 Windows EXE、Linux DEB、macOS DMG。
-2. Windows 更新 Defender 检测库，逐个扫描安装包及未压缩的全部 EXE/DLL，再验证安装、服务注册、普通用户代理/TUN、更新安装路径、卸载与用户文件保留；安装后以普通用户启动窗口，检查尺寸、GUI/CLI 共享状态和最小化/恢复。PE 图标在打包阶段核验。扫描版本和逐文件 SHA256 写入 `package-receipt.json`。
-3. Linux 使用 Ubuntu 20.04 构建的同一份 DEB：基线容器先做安装及 X11 窗口快速检查；Ubuntu 22.04 x64/ARM64、最新版 x64 与 Ubuntu 20.04 x64/ARM64 虚拟机分别验证安装后的 X11/Wayland 窗口、托盘、窗口重建、GUI/CLI 共用内核、图形授权取消/接受和代理/TUN。GUI 测试用户使用独立临时目录，仅保留诊断报告；20.04 虚拟机要求 5.4 GA 内核，实际硬件仍需单独验收。结构、代理/TUN 不在同一环境重复运行。disposable guest 只跳过无关文档索引，GUI 依赖与全部功能检查仍执行，见[测试环境复盘](../agent-failures/test-environments.md#11-测试稳定性与外部环境假设)。
-4. macOS 核验 App/DMG 版本、架构、资源及签名，启动安装后的 GUI/内核并验证代理/TUN；界面辅助包使用独立身份与 `LSUIElement`，连续重建界面 5 次，核对应用注册、Dock 最近应用条目及内核 PID。当前使用 ad-hoc 签名，没有 Developer ID 与 Apple 公证。
-5. Android 复用三种 ABI 的已编译 APK，打包 job 显式安装并核对固定 Python/JDK，不要求未使用的 Go；检查签名、架构与 16 KiB 对齐，x86_64 最终包再运行代理/TUN 及其生命周期测试，不运行键盘或截图专项。`check_only` 保留固定开发签名，正式发布要求单独配置长期签名。
-6. 核对安装包、校验值、成功记录及来源后，正式模式才公开 Release；`check_only` 仅保留 Actions 附件。开发版本标记为 prerelease，不覆盖稳定版 latest。
+1. 前置解析要求同提交 CI 的全部必需 job 成功，九组候选包和九组构建附件唯一、未过期，冻结来源与依赖快照。
+2. 不发布模式直接校验 CI 内已通过安装测试的九组候选包，不申请平台或虚拟机 runner。
+3. 公开模式复用六组桌面候选包；三个 Android job 取得独立发行签名凭据，重新签名 CI 的实际 APK 与 instrumentation，核对签名、架构、16 KiB 对齐，并在 x64 最终签名包执行代理/TUN 及生命周期验证。开发签名候选包不能作为发行签名证据；不运行键盘或截图专项。
+4. 最终 job 核对九组包、外层 artifact digest、安装收据、来源构建身份及包摘要，输出九份安装包和对应 SHA256。公开模式才创建 Release；开发版本标记为 prerelease，不覆盖稳定版 latest。
 
 Ubuntu 18.04 未纳入此基线或兼容矩阵，不能从 20.04 的验证结果推断其受支持。
 
-打包与安装验证所需原包遵循[三条工作流的缓存分工](cache-coverage.md)，不向私网保存安装目录或构建对象。原包准备后尽早交持久清单，所有下载 job（含 Ubuntu latest）在末尾保存清单和分页回执附件；pending 与整批 ready 分别报告。Ubuntu 20.04 的镜像、Python 和已验证 DEB 下载范围见 [CI 缓存边界](ci.md#ubuntu-2004-环境下载缓存)；每轮重建虚拟机磁盘，安装后验证照常执行。虚拟机先启动、解包 Python，再由宿主根据 guest 的签名 APT 索引下载并校验完整 GUI/测试依赖，按官方来源优先、私网回退传入 guest；来源或摘要不匹配时失败。测试环境先安装，应用自身依赖仍由安装包声明和安装，避免掩盖缺失的包依赖。之后才等待本架构 Linux 包，认证不进入 guest；下载核验 artifact 摘要、成员、来源及收据后才传入 guest。guest 只回传经实际字节校验的原包来源记录，不再把全部 DEB 复制回宿主；开始等待前和任务末尾都收集记录，供持久清单补拉。GNOME 启动中短暂的 DBus 探测失败保存在 GUI 报告的 `dbus-probes.log`，就绪超时仍失败并显示最后错误。
+打包与安装验证所需原包遵循[三条工作流的缓存分工](cache-coverage.md)，不向私网保存安装目录或构建对象。原包准备后尽早交持久清单，下载 job 在末尾保存清单和分页回执附件；pending 与整批 ready 分别报告。Ubuntu 环境准备与安装矩阵已归 CI，具体范围见[CI 缓存边界](ci.md#ubuntu-2004-环境下载缓存)与[安装验收](install-validation.md)。
 
-只有最终发布 job 有 `contents: write`。发布工作流向 `scripts/build-installer.py --prebuilt` 传入已验证的 CI 产物；本地打包可传入按上述步骤生成的本地产物。打包器只校验与组装，不隐式调用 Cargo。
+只有最终发布 job 有 `contents: write`。桌面 CI 向 `scripts/build-installer.py --prebuilt` 传入已验证的本地构建产物；本地打包沿用相同入口。打包器只校验与组装，不隐式调用 Cargo。
 
 平台检查集中在 `scripts/windows_ci.py`、`scripts/macos_ci.py`、`scripts/linux_gui.py` 和 Linux 隔离网络夹具中；`scripts/test-release-package.py` 统一调度，`scripts/linux_ci.py` 负责基线容器和虚拟机。各 GUI 结果与失败日志保存在对应 `*-package-report-*` 附件中。
+
+### 候选包验收前移
+
+安装包生成、安装后检查和 Linux 兼容矩阵在 CI 内执行，CI 成功同时要求候选包验收成功。平台范围、环境隔离、权限和收据约定统一见[安装验收](install-validation.md)；新接线尚未取得同提交 Actions 结果时，不能写成平台验收已经通过。未来桌面引入发行签名时，也须按实际字节重新验证，不沿用签名前收据。
+
+此调整会增加 CI 时长和候选包存储，目标是更早发现安装问题并减少 CI→发布失败→修改→再 CI 的重复，不承诺单次 CI 更快。发布阶段的网络或 runner 故障且没有代码改动时，可以复用同提交成功 CI，仅重试失败发布 job；实际代码或构建输入变化仍需新提交验证。
 
 ### Windows Defender 告警
 

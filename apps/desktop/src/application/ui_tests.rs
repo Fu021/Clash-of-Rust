@@ -1184,6 +1184,52 @@ fn pointer_events(window: &AppWindow) -> UiEventLog {
 }
 
 #[test]
+fn custom_window_controls_remain_available_during_errors_and_preserve_close_policy() {
+    ui_testing::initialize(950, 700);
+    let window = AppWindow::new().unwrap();
+    let data = window.global::<UiData>();
+    let events = pointer_events(&window);
+    let closed = std::rc::Rc::new(std::cell::Cell::new(0));
+    let requests = closed.clone();
+    window.window().on_close_requested(move || {
+        requests.set(requests.get() + 1);
+        slint::CloseRequestResponse::KeepWindowShown
+    });
+    window.window().set_maximized(false);
+    window.window().set_minimized(false);
+    window.show().unwrap();
+    let _ = window.window().take_snapshot().unwrap();
+    click_target(&window, "window-maximize");
+    assert!(window.window().is_maximized());
+    click_target(&window, "window-maximize");
+    assert!(!window.window().is_maximized());
+    ui_testing::advance(1000);
+    click_target(&window, "window-drag");
+    click_target(&window, "window-drag");
+    assert!(window.window().is_maximized());
+    window.window().set_maximized(false);
+    data.set_modal(1);
+    data.set_edit_name("unfinished subscription".into());
+    data.set_notice("内核启动失败".into());
+    data.set_notice_error(true);
+    data.set_notice_critical(true);
+    let _ = window.window().take_snapshot().unwrap();
+    click_target(&window, "window-minimize");
+    assert!(window.window().is_minimized());
+    window.window().set_minimized(false);
+    click_target(&window, "window-maximize");
+    assert!(window.window().is_maximized());
+    click_target(&window, "window-close");
+    assert_eq!(closed.get(), 1);
+    assert!(window.window().is_visible());
+    assert_eq!(data.get_edit_name(), "unfinished subscription");
+    assert_eq!(data.get_notice(), "内核启动失败");
+    assert!(events.borrow().is_empty());
+    window.window().set_maximized(false);
+    window.hide().unwrap();
+}
+
+#[test]
 fn node_sort_popup_dispatches_each_clicked_option_and_reorders_real_models() {
     ui_testing::initialize(950, 700);
     let mut app = fixture(Page::Proxies);
@@ -1293,7 +1339,7 @@ fn appearance_remains_interactive_while_geo_owns_the_engine_and_late_reply_canno
     let events = pointer_events(&window);
     window.show().unwrap();
     let _ = window.window().take_snapshot().unwrap();
-    click_target(&window, "button:外观");
+    click_target(&window, "settings-section:2");
     let _ = window.window().take_snapshot().unwrap();
     click_target(&window, "accent-picker");
     assert_eq!(events.borrow_mut().pop().unwrap().0, Intent::AccentPicker);
@@ -1361,7 +1407,7 @@ fn font_popup_changes_the_saved_request_and_rendered_font_at_fractional_scale() 
     let events = pointer_events(&window);
     window.show().unwrap();
     let _ = window.window().take_snapshot().unwrap();
-    click_target(&window, "button:外观");
+    click_target(&window, "settings-section:2");
     let _ = window.window().take_snapshot().unwrap();
     let before = window.global::<Theme>().get_body_size();
     click_target(&window, "text-scale");

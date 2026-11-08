@@ -34,6 +34,7 @@ iOS 当前只有宿主占位与界面原型；预览不代表已有可安装、�
 | 想做什么 | 阅读位置 |
 | --- | --- |
 | 理解 CI 的平台、源码测试和真实网络验证 | [CI](workflows/ci.md) |
+| 核对候选安装包、平台安装检查与成功收据 | [CI 候选包与安装验收](workflows/install-validation.md) |
 | 不发布打包、核验安装包或公开发布 | [Publish Release](workflows/release.md)；[发布文案模板](releases/TEMPLATE.md) |
 | 测量内存和窗口关闭后的资源释放 | [Memory Benchmark](workflows/memory.md) |
 | 在本机编译、打包与预览 | [本地开发](workflows/local-development.md) |

@@ -1,4 +1,4 @@
-"""Publish packages tested by the manual release workflow using verified CI binaries.
+"""Publish CI-verified candidate packages, with distribution-signed Android inputs.
 
 The workflow and local CLI share the same CI, checksum and release checks.
 Credentials stay in memory; Python 3.11+ and the standard library only.
@@ -25,6 +25,9 @@ CI_JOBS = {
     'windows-x64', 'windows-arm64', 'linux-x64', 'linux-arm64', 'macos-x64', 'macos-arm64',
 }
 CI_JOBS |= {'android-arm64', 'android-armv7', 'android-x64', 'Actions cache budget', 'Resolve build inputs'}
+CI_JOBS |= {'Ubuntu latest-x64 proxy and TUN',
+            'Ubuntu 20.04-x64 installed GUI and TUN',
+            'Ubuntu 20.04-arm64 installed GUI and TUN'}
 PACKAGES = {
     'package-windows-x64': 'windows-x64-setup.exe',
     'package-windows-arm64': 'windows-arm64-setup.exe',
@@ -47,9 +50,7 @@ DOWNLOAD_BUTTONS = (
     ('Linux', 'package-linux-x64', 'DEB', 'x64', 'E95420', 'linux'),
     ('Linux', 'package-linux-arm64', 'DEB', 'ARM64', 'E95420', 'linux'),
 )
-PACKAGE_JOBS = set(PACKAGES) | {'Ubuntu latest-x64 proxy and TUN',
-                               'Ubuntu 20.04-x64 installed GUI and TUN',
-                               'Ubuntu 20.04-arm64 installed GUI and TUN'}
+PACKAGE_JOBS = {name for name in PACKAGES if name.startswith('package-android-')}
 
 
 def git(*args):
@@ -274,10 +275,11 @@ def verified_package_run(client, run_id, commit, check_only=False, prerelease=Fa
             'Package workflow branch differs from the selected CI')
     require(run['head_sha'] == commit and run['head_repository']['full_name'].lower() == client.repo.lower(),
             'Package workflow source differs from the selected CI')
-    jobs = workflow_jobs(client, run, PACKAGE_JOBS)
-    required = [job for job in jobs if job['name'] in PACKAGE_JOBS]
-    require(len(required) == len(PACKAGE_JOBS) and {j['name'] for j in required} == PACKAGE_JOBS,
-            'Release workflow does not cover every package and Ubuntu compatibility test')
+    expected = {'Resolve verified CI'} if check_only else PACKAGE_JOBS | {'Resolve verified CI'}
+    jobs = workflow_jobs(client, run, expected)
+    required = [job for job in jobs if job['name'] in expected]
+    require(len(required) == len(expected) and {j['name'] for j in required} == expected,
+            'Release workflow does not cover CI resolution and required signed Android tests')
     require(all(j['status'] == 'completed' and j['conclusion'] == 'success' for j in required),
             'A package or installed-program test did not pass')
     # When called by the final job this workflow is still in progress. Outside
@@ -288,12 +290,27 @@ def verified_package_run(client, run_id, commit, check_only=False, prerelease=Fa
     return run
 
 
-def download_package_files(client, run_id, ci_run_id, commit, version, directory):
-    builds = build_artifacts(client, ci_run_id)
+def candidate_artifacts(client, run_id):
     artifacts = client(f'/actions/runs/{run_id}/artifacts?per_page=100')['artifacts']
-    packages = [a for a in artifacts if a['name'].startswith('package-')]
-    require(len(packages) == len(PACKAGES) and {a['name'] for a in packages} == set(PACKAGES),
-            'Release package artifacts are incomplete or duplicated')
+    packages = [artifact for artifact in artifacts if artifact['name'].startswith('package-')]
+    require(len(packages) == len(PACKAGES) and {artifact['name'] for artifact in packages} == set(PACKAGES),
+            'CI candidate packages are incomplete or duplicated')
+    require(all(not artifact['expired'] for artifact in packages), 'CI candidate package expired')
+    return packages
+
+
+def download_package_files(client, run_id, ci_run_id, commit, version, directory, check_only=False):
+    builds = build_artifacts(client, ci_run_id)
+    candidates = candidate_artifacts(client, ci_run_id)
+    if check_only:
+        packages = candidates
+    else:
+        require(run_id != ci_run_id, 'Distribution signatures require a separate release run')
+        artifacts = client(f'/actions/runs/{run_id}/artifacts?per_page=100')['artifacts']
+        signed = [artifact for artifact in artifacts if artifact['name'].startswith('package-')]
+        require(len(signed) == len(PACKAGE_JOBS) and {artifact['name'] for artifact in signed} == PACKAGE_JOBS,
+                'Distribution-signed Android packages are incomplete or duplicated')
+        packages = [artifact for artifact in candidates if artifact['name'] not in PACKAGE_JOBS] + signed
     directory.mkdir(parents=True, exist_ok=True)
     require({p.name for p in directory.iterdir()} <= filenames(version), 'Output directory contains unexpected files')
     for artifact in packages:
@@ -313,6 +330,9 @@ def download_package_files(client, run_id, ci_run_id, commit, version, directory
                     (1, commit, version, ci_run_id, system, arch, name, True), 'Package receipt mismatch')
             require(receipt.get('build_artifact') == builds[f'build-{system}-{arch}'],
                     'Package was not produced from the selected CI build artifact')
+            if system == 'android':
+                require(receipt.get('distribution_signed') is (not check_only),
+                        'Android signing evidence differs from the selected publishing mode')
             require(receipt.get('sha256') == hashlib.sha256(zipped.read(name)).hexdigest(),
                     'Package differs from the tested package receipt')
             for filename in (name, name + '.sha256'):
@@ -424,6 +444,7 @@ def main():
     version, tag, notes = release_metadata(commit, args.tag, args.notes, check_only=args.check, prerelease=args.prerelease)
     if args.resolve:
         build_artifacts(client, run['id'])
+        candidate_artifacts(client, run['id'])
         if os.environ.get('GITHUB_OUTPUT'):
             with Path(os.environ['GITHUB_OUTPUT']).open('a', encoding='utf-8') as output:
                 output.write(f"commit={commit}\nci_run_id={run['id']}\nversion={version}\n")
@@ -434,7 +455,8 @@ def main():
     verified_package_run(client, package_run_id, commit, check_only=args.check,
                          prerelease=args.prerelease, source_branch=run['head_branch'])
     directory = args.output_dir or ROOT / f"dist/release-{version}-run-{package_run_id}"
-    files = download_package_files(client, package_run_id, run['id'], commit, version, directory)
+    files = download_package_files(client, package_run_id, run['id'], commit, version, directory,
+                                   check_only=args.check)
     if args.asset:
         local = validate_files(args.asset, version)
         require(all(sha256(local[name]) == sha256(path) for name, path in files.items()), 'Local assets differ from selected CI')

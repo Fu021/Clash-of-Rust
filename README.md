@@ -91,7 +91,7 @@ cargo build -p clash-of-rust -p clash-desktop-ui -p clash-cli --bins --locked
 
 [CI](https://github.com/Fu021/Clash-of-Rust/actions/workflows/ci.yml) 在提交 PR 或推送 main 后，完成六种桌面平台及三种 Android ABI 的编译、检查、单元测试与代理/TUN 测试。
 
-测试安装包：等待对应提交的 CI 成功，手动运行 **Publish Release**，填写 `ci_run_id` 并勾选 `check_only`；安装包保存在 Actions 附件中。打包复用 CI 产物，不再编译；正式发布流程见 [工作流说明](docs/workflows.md)。
+测试安装包：对应提交的 CI 会生成并验收九组 `package-*` 安装包及 SHA256，保存在 CI 的 Actions 附件中。手动运行 **Publish Release** 并勾选 `check_only` 可再次核对候选包与安装收据，不重新编译或重复安装矩阵；公开发布复用桌面候选包，并对 Android 重新签名和验证。流程见[工作流说明](docs/workflows.md)。
 
 ## 开发与发布
 

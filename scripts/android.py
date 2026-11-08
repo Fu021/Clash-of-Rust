@@ -801,14 +801,20 @@ def test(arch, apk=None, test_apk=None, ime_only=False, ime_probe=False,
         raise RuntimeError('Native Android UI/runtime failed; inspect logcat')
 
 
-def package(arch, run_id, check_only):
+def package(arch, run_id, check_only, build=None):
     from workflow_artifacts import fetch_build
     from importlib.util import spec_from_file_location, module_from_spec
     spec=spec_from_file_location('publish_release',ROOT/'scripts/publish-release.py')
     module=module_from_spec(spec); spec.loader.exec_module(module)
-    repo=module.repository(); client=module.GitHub(repo,module.credential(repo))
-    root=ROOT/'ci-build'
-    fetch_build(client, run_id, 'android', arch, root, commit())
+    if build is None:
+        repo=module.repository(); client=module.GitHub(repo,module.credential(repo))
+        root=ROOT/'ci-build'
+        fetch_build(client, run_id, 'android', arch, root, commit())
+    else:
+        if not check_only:
+            raise ValueError('Local Android candidate input requires check mode')
+        root=build
+        verify_build(root,arch,commit())
     output=ROOT/'dist'; output.mkdir(exist_ok=True)
     name=f'Clash-of-Rust-{package_version()}-android-{arch}.apk'
     apk=output/name
@@ -833,6 +839,7 @@ def package(arch, run_id, check_only):
     from build_inputs import package_contents
     write_json(output/'package-receipt.json',{'schema':1,'commit':commit(),'version':package_version(),
         'ci_run_id':run_id,'system':'android','arch':arch,'package':name,'tests_passed':True,
+        'distribution_signed':not check_only,
         'build_artifact':artifact,'sha256':digest,'contents':package_contents(root)})
     summary=os.environ.get('GITHUB_STEP_SUMMARY')
     if summary:
@@ -846,10 +853,13 @@ def main():
     parser.add_argument('--arch',choices=ABIS,required=True)
     parser.add_argument('--run-id',type=int)
     parser.add_argument('--check',action='store_true')
+    parser.add_argument('--build',type=Path,help='Verified local CI candidate input; package --check only')
     parser.add_argument('--legacy',action='store_true',help='Use the approved Android 12 IME regression image')
     parser.add_argument('--ime-only',action='store_true',help='Run only the subscription input-method regression')
     parser.add_argument('--api',type=int,help='Use an approved historical Android IME test image')
     args=parser.parse_args()
+    if args.build is not None and (args.operation!='package' or not args.check):
+        parser.error('--build requires package --check')
     if args.legacy and args.operation!='emulator':
         parser.error('--legacy applies only to emulator preparation')
     if args.api is not None and (args.operation!='emulator' or args.legacy):
@@ -905,7 +915,7 @@ def main():
     elif args.operation=='build': build(args.arch)
     elif args.operation=='export': export_build(args.arch)
     elif args.operation=='test': test(args.arch,ime_only=args.ime_only)
-    else: package(args.arch,args.run_id,args.check)
+    else: package(args.arch,args.run_id,args.check,args.build)
 
 
 if __name__=='__main__':

@@ -9,6 +9,7 @@ export { UiData, UiActions, Intent, Choice, DetailItem, FakeIpExclusionItem, Nod
 import { PageScroll, Label, Caption, ContentPanel, Panel, ActionButton, Badge, Paragraph } from "components/controls.slint";
 import { NavigationItem } from "components/navigation.slint";
 import { Wordmark, ConnectionPower } from "components/brand.slint";
+import { WindowControl } from "components/window-control.slint";
 import { GeometryTarget } from "components/geometry.slint";
 import { ProtectionBadge, ProtectionAlert } from "components/protection-status.slint";
 import { HomePage } from "pages/home.slint";
@@ -31,6 +32,8 @@ export component AppWindow inherits Window {
     out property <[length]> notice-close-target: notice-host.close-target;
     in-out property <string> app-title: "Clash of Rust";
     title: root.app-title;
+    no-frame: true;
+    resize-border-width: root.maximized || root.full-screen ? 0px : 5px;
     preferred-width: 950px;
     preferred-height: 700px;
     background: Theme.sidebar;
@@ -58,6 +61,10 @@ export component AppWindow inherits Window {
     property <bool> settings-header-navigation: content-area.width - 48px >= (600px + (UiData.protection-health > 0 ? 160px : 0px)) * Theme.text-scale;
     property <int> settings-active-section;
     property <int> settings-navigation-request: -1;
+    function toggle-window-maximized() {
+        if root.full-screen { root.full-screen = false; }
+        else { root.maximized = !root.maximized; }
+    }
     changed accent => { Theme.accent-index = root.accent; }
     property <[string]> titles: ["首页", "代理", "订阅", "连接", "规则", "日志", "网络诊断", "IP 检测", "A÷检测", "设置"];
     property <[int]> sidebar-pages: [0, 1, 2, 3, 4, 5, 6, 7, 8];
@@ -200,8 +207,20 @@ export component AppWindow inherits Window {
             }
         }
     }
+    dialog-host := AppDialog { }
+    notice-host := DesktopNotice {
+        width: parent.width; available-height: root.height;
+    }
+    }
     Rectangle {
         x: 0px; y: 0px; height: 44px; width: root.width; background: Theme.sidebar;
+        WindowMoveArea {
+            x: 216px; y: 5px; width: max(0px, parent.width - 352px); height: 34px;
+            GeometryTarget { key: "window-drag"; bounds: [parent.absolute-position.x, parent.absolute-position.y, parent.width, parent.height]; }
+            TouchArea {
+                double-clicked => { root.toggle-window-maximized(); }
+            }
+        }
         notification-icon := Rectangle {
             x: 10px; y: 5px; width: 34px; height: 34px; border-radius: 6px;
             property <bool> interactive: !UiData.notification-busy && UiData.modal == 0 && !UiData.notice-modal;
@@ -215,7 +234,11 @@ export component AppWindow inherits Window {
             accessible-action-default => { if self.interactive { UiActions.dispatch(Intent.system-notification, "", ""); } }
             forward-focus: notification-keys;
             GeometryTarget { key: "notification-icon"; bounds: [notification-icon.absolute-position.x, notification-icon.absolute-position.y, notification-icon.width, notification-icon.height]; }
-            Image { x: 6px; y: 6px; width: 22px; height: 22px; source: @image-url("../../../resources/icons/app.png"); }
+            Image {
+                x: 6px; y: 6px; width: 22px; height: 22px;
+                source: @image-url("../../../resources/icons/app.png"); colorize: Theme.accent;
+                animate colorize { duration: Motion.appearance; enabled: Motion.active; }
+            }
             notification-keys := FocusScope {
                 enabled: notification-icon.interactive;
                 focus-gained(reason) => { notification-icon.keyboard-focus = reason == FocusReason.tab-navigation; }
@@ -255,11 +278,14 @@ export component AppWindow inherits Window {
                 commands: root.sidebar-collapsed ? "M13 8L17 12L13 16" : "M17 8L13 12L17 16";
             }
         }
-    }
-    dialog-host := AppDialog { }
-    // Last sibling: notices overlay dialogs without changing page geometry.
-    notice-host := DesktopNotice {
-        width: parent.width; available-height: root.height;
-    }
+        HorizontalLayout {
+            x: parent.width - 132px; y: 6px; width: 124px; height: 32px; spacing: 2px;
+            WindowControl { action: 0; clicked => { root.minimized = true; } }
+            WindowControl {
+                action: 1; restored: root.maximized || root.full-screen;
+                clicked => { root.toggle-window-maximized(); }
+            }
+            WindowControl { action: 2; clicked => { root.close(); } }
+        }
     }
 }

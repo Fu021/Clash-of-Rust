@@ -15,6 +15,8 @@ export component MAppIcon inherits Rectangle {
     accessible-action-default => { if !MobileView.modal && !MobileView.notice-modal { MobileActions.request(MobileIntent.system-notification, "", ""); } }
     Image { width: 28px; height: 28px; x: (parent.width - self.width) / 2; y: (parent.height - self.height) / 2;
         source: @image-url("../../../../../resources/icons/app.png");
+        colorize: Theme.accent;
+        animate colorize { duration: Motion.appearance; enabled: Motion.active; }
     }
     FocusScope {
         width: parent.width; height: parent.height;

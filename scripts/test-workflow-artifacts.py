@@ -57,6 +57,20 @@ class ArtifactTests(unittest.TestCase):
             artifacts.wait_package(lambda path: {'head_sha': 'b'*40},
                                    42, 'linux', 'x64', self.commit)
 
+    def test_package_wait_stops_when_the_native_ci_producer_failed(self):
+        def client(path):
+            if '/artifacts?' in path:
+                return {'artifacts': []}
+            if '/jobs?' in path:
+                return {'jobs': [{'name': 'linux-arm64', 'status': 'completed',
+                                  'conclusion': 'failure'}]}
+            return {'path': '.github/workflows/ci.yml', 'head_sha': self.commit,
+                    'status': 'in_progress'}
+
+        with patch.object(artifacts.time, 'sleep') as pause, self.assertRaisesRegex(RuntimeError, 'did not produce'):
+            artifacts.wait_package(client, 42, 'linux', 'arm64', self.commit)
+        pause.assert_not_called()
+
     def test_package_wait_stops_after_producer_failure_or_timeout(self):
         for failed in (False, True):
             def client(path):
@@ -225,6 +239,36 @@ class ArtifactTests(unittest.TestCase):
                 build.write_json(root/'input/manifest.json', original)
                 (root/'input/payload/clash-of-rust').write_bytes(b'corrupt executable')
                 with self.assertRaises(ValueError):artifacts.verify_build(root/'input', 'linux', 'x64', self.commit)
+
+    def test_local_staging_preserves_uploaded_identity_and_checks_payload_and_archive(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            self.fixture(root)
+            archive = root/artifacts.ARCHIVE_NAME
+            with tarfile.open(archive, 'w:gz') as stream:
+                for path in sorted((root/'input').rglob('*')):
+                    if path.is_file():
+                        stream.add(path, arcname=path.relative_to(root/'input'))
+            archive.with_name(archive.name+'.sha256').write_text(build.sha256(archive)+'\n')
+            with patch.object(artifacts, 'ROOT', root), \
+                 patch.object(artifacts, 'package_version', return_value=self.version), \
+                 patch.object(artifacts, 'release_module') as network:
+                artifacts.stage_local_build(archive, root/'staged', 'linux', 'x64',
+                                            self.commit, 123, 'a'*64)
+                self.assertEqual(json.loads((root/'staged/source-artifact.json').read_text()),
+                                 {'id': 123, 'name': 'build-linux-x64', 'digest': 'sha256:'+'a'*64})
+                network.assert_not_called()
+                with self.assertRaises(ValueError):
+                    artifacts.stage_local_build(archive, root/'wrong-source', 'linux', 'x64',
+                                                'b'*40, 123, 'a'*64)
+                for identity, digest in ((0, 'a'*64), (True, 'a'*64), (123, 'invalid')):
+                    with self.subTest(identity=identity, digest=digest), self.assertRaises(ValueError):
+                        artifacts.stage_local_build(archive, root/'invalid', 'linux', 'x64',
+                                                    self.commit, identity, digest)
+                archive.write_bytes(b'corrupt archive')
+                with self.assertRaisesRegex(ValueError, 'checksum'):
+                    artifacts.stage_local_build(archive, root/'corrupt', 'linux', 'x64',
+                                                self.commit, 123, 'a'*64)
 
     def test_linux_artifact_requires_the_frozen_baseline_and_complete_elf_audit(self):
         import build_inputs

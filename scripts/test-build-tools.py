@@ -3455,14 +3455,19 @@ runpy.run_path(str(script), run_name='__main__')
             self.assertEqual(build.core_directory(root), root/'crates/client-core')
 
     def test_release_job_protocol_matches_workflow_display_names(self):
-        workflow = (build.ROOT/'.github/workflows/release.yml').read_text()
-        for name in release.PACKAGE_JOBS - set(release.PACKAGES):
+        workflow = (build.ROOT/'.github/workflows/ci.yml').read_text()
+        for name in release.CI_JOBS:
             if name.startswith('Ubuntu 20.04-'):
                 self.assertIn('    name: Ubuntu 20.04-${{ matrix.arch }} installed GUI and TUN\n', workflow)
                 arch = name.removeprefix('Ubuntu 20.04-').split(' ', 1)[0]
                 self.assertIn('            arch: '+arch+'\n', workflow)
-            else:
+            elif name.startswith('Ubuntu latest-'):
                 self.assertIn('    name: '+name+'\n', workflow)
+        publishing = (build.ROOT/'.github/workflows/release.yml').read_text()
+        self.assertIn('    name: package-android-${{ matrix.arch }}\n', publishing)
+        self.assertNotIn('  ubuntu_20:', publishing)
+        self.assertNotIn('  ubuntu_latest:', publishing)
+        self.assertNotIn('scripts/test-release-package.py', publishing)
 
     def test_failed_cargo_json_preserves_human_diagnostics(self):
         message = json.dumps({'reason': 'compiler-message', 'message': {'rendered': 'error[E0308]: expected borrowed window'}})+'\n'
@@ -4208,8 +4213,9 @@ class ReleaseTests(unittest.TestCase):
             checksum.write_text('0'*64+'\n')
             with self.assertRaises(ValueError):release.validate_files(list(files.values()),self.version)
 
-    def artifact_client(self, bad_name=False, expired=False, bad_digest=False, duplicate=False, bad_receipt=False, bad_build=False):
-        artifacts=[];archives={};builds=[]
+    def artifact_client(self, bad_name=False, expired=False, bad_digest=False, duplicate=False, bad_receipt=False, bad_build=False,
+                        bad_signing=False, missing_candidate=False):
+        artifacts=[];candidates=[];archives={};builds=[]
         for number,(package,suffix) in enumerate(release.PACKAGES.items()):
             name=f'Clash-of-Rust-{self.version}-{suffix}'
             data=('installer '+suffix).encode();stream=io.BytesIO()
@@ -4220,6 +4226,8 @@ class ReleaseTests(unittest.TestCase):
                      'system':system,'arch':arch,'package':name,'tests_passed':True,
                      'sha256':hashlib.sha256(data).hexdigest(),
                      'build_artifact':{key:source[key] for key in ('id','name','digest')}}
+            if system == 'android':
+                receipt['distribution_signed'] = not bad_signing
             if bad_receipt:receipt['commit']='b'*40
             if bad_build:receipt['build_artifact']['id']=999
             with zipfile.ZipFile(stream,'w') as zipped:
@@ -4229,9 +4237,23 @@ class ReleaseTests(unittest.TestCase):
             blob=stream.getvalue();archives[number]=blob
             artifacts.append({'id':number,'name':package,'expired':expired,
                               'digest':'sha256:'+('0'*64 if bad_digest else hashlib.sha256(blob).hexdigest())})
+            candidate = copy.deepcopy(receipt)
+            if system == 'android':
+                candidate['distribution_signed'] = False
+            candidate_stream = io.BytesIO()
+            with zipfile.ZipFile(candidate_stream, 'w') as zipped:
+                zipped.writestr('../outside' if bad_name and number==0 else name, data)
+                zipped.writestr(name+'.sha256', hashlib.sha256(data).hexdigest()+'\n')
+                zipped.writestr('package-receipt.json', json.dumps(candidate))
+            candidate_blob = candidate_stream.getvalue()
+            archives[1000+number] = candidate_blob
+            candidates.append({'id': 1000+number, 'name': package, 'expired': expired,
+                               'digest': 'sha256:'+hashlib.sha256(candidate_blob).hexdigest()})
+        artifacts = [artifact for artifact in artifacts if artifact['name'] in release.PACKAGE_JOBS]
         if duplicate:artifacts.append(artifacts[0])
+        if missing_candidate:candidates.pop()
         def request(path, raw=False):
-            if path.startswith('/actions/runs/77/artifacts?'):return {'artifacts':builds}
+            if path.startswith('/actions/runs/77/artifacts?'):return {'artifacts':builds+candidates}
             if path.startswith('/actions/runs/88/artifacts?'):return {'artifacts':artifacts}
             return archives[int(path.split('/')[3])]
         return request
@@ -4240,10 +4262,28 @@ class ReleaseTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as folder:
             directory=Path(folder)
             self.assertEqual(len(release.download_package_files(self.artifact_client(),88,77,self.commit,self.version,directory/'good')),len(release.PACKAGES)*2)
-            for key in ('bad_name','expired','bad_digest','duplicate','bad_receipt','bad_build'):
+            for key in ('bad_name','expired','bad_digest','duplicate','bad_receipt','bad_build','bad_signing','missing_candidate'):
                 with self.subTest(key=key), self.assertRaises(ValueError):
                     release.download_package_files(self.artifact_client(**{key:True}),88,77,self.commit,self.version,directory/key)
             self.assertFalse((directory/'outside').exists())
+
+    def test_check_mode_reads_only_ci_candidates_and_rejects_them_for_distribution(self):
+        selected = self.artifact_client()
+        queries = []
+
+        def client(path, raw=False):
+            queries.append(path)
+            self.assertNotIn('/actions/runs/88/', path)
+            return selected(path, raw=raw)
+
+        with tempfile.TemporaryDirectory() as directory:
+            files = release.download_package_files(client, 88, 77, self.commit, self.version,
+                                                    Path(directory)/'check', check_only=True)
+            self.assertEqual(len(files), 18)
+            self.assertTrue(queries)
+            with self.assertRaisesRegex(ValueError, 'separate release'):
+                release.download_package_files(client, 77, 77, self.commit, self.version,
+                                               Path(directory)/'signed')
 
     def test_release_requires_every_package_and_compatibility_job(self):
         def client(changes=None,jobs=None):
@@ -4251,7 +4291,8 @@ class ReleaseTests(unittest.TestCase):
                  'head_branch':'main','head_sha':self.commit,'head_repository':{'full_name':'example/project'},
                  'status':'completed','conclusion':'success'}
             run.update(changes or {})
-            records=jobs if jobs is not None else [{'name':name,'status':'completed','conclusion':'success'} for name in release.PACKAGE_JOBS]
+            records=jobs if jobs is not None else [{'name':name,'status':'completed','conclusion':'success'}
+                for name in release.PACKAGE_JOBS | {'Resolve verified CI'}]
             def request(path):
                 return {'jobs':records,'total_count':len(records)} if '/jobs?' in path else run
             request.repo='example/project'
@@ -4262,7 +4303,8 @@ class ReleaseTests(unittest.TestCase):
                            {'status':'in_progress'},{'conclusion':'failure'},{'head_branch':'codex/dev-0.5.2'}):
                 with self.subTest(change=change),self.assertRaises(ValueError):
                     release.verified_package_run(client(change),88,self.commit)
-            jobs=[{'name':name,'status':'completed','conclusion':'success'} for name in release.PACKAGE_JOBS]
+            jobs=[{'name':name,'status':'completed','conclusion':'success'}
+                  for name in sorted(release.PACKAGE_JOBS | {'Resolve verified CI'})]
             with self.assertRaises(ValueError):release.verified_package_run(client(jobs=jobs[:-1]),88,self.commit)
             jobs[0]['conclusion']='skipped'
             with self.assertRaises(ValueError):release.verified_package_run(client(jobs=jobs),88,self.commit)
@@ -4288,7 +4330,8 @@ class ReleaseTests(unittest.TestCase):
                  patch.object(release,'GitHub'),patch.object(release,'git',return_value=self.commit), \
                  patch.object(release,'verified_run',return_value={'id':77}), \
                  patch.object(release,'release_metadata',return_value=(self.version,self.tag,self.notes)), \
-                 patch.object(release,'build_artifacts'),patch.object(release,'download_package_files') as download, \
+                 patch.object(release,'build_artifacts'),patch.object(release,'candidate_artifacts'), \
+                 patch.object(release,'download_package_files') as download, \
                  patch.object(release,'publish') as publishing,patch.dict(build.os.environ,{'GITHUB_OUTPUT':str(output)}):
                 release.main()
                 download.assert_not_called();publishing.assert_not_called()

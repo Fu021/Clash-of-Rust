@@ -292,18 +292,39 @@ jobs:
         run: |
           sudo chmod a+rw /dev/kvm
           python3 scripts/android.py emulator --arch x64
-      - name: Verify real Android proxy and TUN traffic
-        if: matrix.arch == 'x64'
-        run: python3 scripts/android.py test --arch x64
-      - name: Export tested Android compilation
+      - name: Export Android compilation for candidate validation
         run: python3 scripts/android.py export --arch ${{ matrix.arch }}
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
+        id: android_build
         with:
           name: build-android-${{ matrix.arch }}
           path: |
             dist/android-build/build.tar.gz
             dist/android-build/build.tar.gz.sha256
           compression-level: 0
+          if-no-files-found: error
+          retention-days: 3
+      - name: Package and validate the Android candidate
+        shell: python
+        env:
+          BUILD_ARTIFACT_ID: ${{ steps.android_build.outputs.artifact-id }}
+          BUILD_ARTIFACT_DIGEST: ${{ steps.android_build.outputs.artifact-digest }}
+        run: |
+          import os, pathlib, subprocess, sys
+          sys.path.insert(0, 'scripts')
+          from workflow_artifacts import stage_local_build, commit
+          stage_local_build(pathlib.Path('dist/android-build/build.tar.gz'), pathlib.Path('ci-build'),
+              'android', '${{ matrix.arch }}', commit(),
+              int(os.environ['BUILD_ARTIFACT_ID']), os.environ['BUILD_ARTIFACT_DIGEST'])
+          subprocess.run([sys.executable, 'scripts/android.py', 'package', '--arch', '${{ matrix.arch }}',
+              '--run-id', '${{ github.run_id }}', '--check', '--build', 'ci-build'], check=True)
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
+        with:
+          name: package-android-${{ matrix.arch }}
+          path: |
+            dist/*.apk
+            dist/*.sha256
+            dist/package-receipt.json
           if-no-files-found: error
           retention-days: 3
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
@@ -533,6 +554,59 @@ jobs:
           elif '${{ matrix.system }}' == 'linux':
               command = [sys.executable, 'scripts/linux_ci.py', 'ci']
           subprocess.run(command, check=True)
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
+        id: native_build
+        with:
+          name: build-${{ matrix.system }}-${{ matrix.arch }}
+          path: |
+            dist/build/build.tar.gz
+            dist/build/build.tar.gz.sha256
+          if-no-files-found: error
+          compression-level: 0
+          retention-days: 3
+      - name: Stage the uploaded native build without downloading it again
+        env:
+          BUILD_ARTIFACT_ID: ${{ steps.native_build.outputs.artifact-id }}
+          BUILD_ARTIFACT_DIGEST: ${{ steps.native_build.outputs.artifact-digest }}
+        run: |
+          import os, pathlib, sys
+          sys.path.insert(0, 'scripts')
+          from workflow_artifacts import stage_local_build, commit
+          stage_local_build(pathlib.Path('dist/build/build.tar.gz'), pathlib.Path('ci-build'),
+              '${{ matrix.system }}', '${{ matrix.arch }}', commit(),
+              int(os.environ['BUILD_ARTIFACT_ID']), os.environ['BUILD_ARTIFACT_DIGEST'])
+      - name: Package and test installed native programs
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          import subprocess, sys
+          if '${{ matrix.system }}' == 'linux':
+              subprocess.run([sys.executable, 'scripts/linux_ci.py', 'package',
+                  '--build', 'ci-build', '--ci-run-id', '${{ github.run_id }}'], check=True)
+              subprocess.run([sys.executable, 'scripts/test-release-package.py',
+                  '--linux-compat', '--expect-ubuntu', '22.04'], check=True)
+          else:
+              subprocess.run([sys.executable, 'scripts/test-release-package.py',
+                  '--system', '${{ matrix.system }}', '--arch', '${{ matrix.arch }}',
+                  '--build', 'ci-build', '--ci-run-id', '${{ github.run_id }}'], check=True)
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
+        if: runner.os == 'Linux'
+        with:
+          name: linux-tun-test-${{ matrix.arch }}
+          path: dist/linux-tun-test
+          if-no-files-found: error
+          retention-days: 3
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
+        with:
+          name: package-${{ matrix.system }}-${{ matrix.arch }}
+          path: |
+            dist/*-setup.exe
+            dist/*.deb
+            dist/*.dmg
+            dist/*.sha256
+            dist/package-receipt.json
+          if-no-files-found: error
+          retention-days: 3
       - name: Collect macOS failure diagnostics
         if: failure() && runner.os == 'macOS'
         run: |
@@ -546,22 +620,197 @@ jobs:
           path: target/macos-report
           if-no-files-found: error
           retention-days: 3
-      - name: Preserve Windows basic test results
+      - name: Preserve Windows test results
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
         if: always() && runner.os == 'Windows'
         with:
           name: windows-ci-report-${{ matrix.arch }}
-          path: target/windows-ci-report.json
+          path: |
+            target/windows-ci-report.json
+            target/windows-gui-report.json
           if-no-files-found: warn
           retention-days: 3
-      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
+      - name: Preserve Linux package diagnostics
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
+        if: always() && runner.os == 'Linux'
         with:
-          name: build-${{ matrix.system }}-${{ matrix.arch }}
-          path: |
-            dist/build/build.tar.gz
-            dist/build/build.tar.gz.sha256
-          if-no-files-found: error
-          compression-level: 0
+          name: linux-package-report-${{ matrix.arch }}
+          path: target/linux-report
+          if-no-files-found: warn
+          retention-days: 3
+      - name: Preserve original download inventory
+        if: ${{ !cancelled() }}
+        continue-on-error: true
+        uses: ./.github/actions/upstream-report
+        with:
+          name: upstream-downloads-${{ github.job }}-${{ strategy.job-index || '0' }}
+  ubuntu_latest:
+    name: Ubuntu latest-x64 proxy and TUN
+    if: ${{ !inputs.refresh_dependencies }}
+    needs: inputs
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    permissions:
+      actions: read
+      contents: read
+      id-token: write
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          persist-credentials: false
+      - name: Load approved tool versions
+        run: python3 scripts/build_inputs.py versions
+      - name: Connect to private system package cache
+        id: tailnet
+        if: vars.TS_OAUTH_CLIENT_ID != '' && vars.TS_AUDIENCE != '' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository)
+        uses: tailscale/github-action@064b10558093f38325e838ddea35486bdc6b1d5c
+        continue-on-error: true
+        timeout-minutes: 3
+        with:
+          oauth-client-id: ${{ vars.TS_OAUTH_CLIENT_ID }}
+          audience: ${{ vars.TS_AUDIENCE }}
+          tags: tag:github-action-cache
+          version: ${{ needs.inputs.outputs.tailscale }}
+          use-cache: 'false'
+          retry: '1'
+          timeout: 45s
+          args: --accept-dns=false
+          tailscaled-args: --tun=userspace-networking --outbound-http-proxy-listen=127.0.0.1:19082
+      - name: Preserve host routing
+        if: steps.tailnet.outcome == 'success'
+        run: sudo -n tailscale set --accept-routes=false --accept-dns=false
+      - uses: ./.github/actions/upstream-cache
+        with:
+          url: ${{ steps.tailnet.outcome == 'success' && vars.LOCAL_CACHE_URL || '' }}
+          token: ${{ secrets.LOCAL_CACHE_TOKEN }}
+      - name: Wait for this CI run's verified Linux package
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PYTHONDONTWRITEBYTECODE: '1'
+        run: python3 scripts/workflow_artifacts.py wait --system linux --arch x64 --run-id '${{ github.run_id }}' --timeout 3600
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333
+        with:
+          name: package-linux-x64
+          path: dist
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333
+        with:
+          name: linux-tun-test-x64
+          path: target
+      - name: Verify the candidate on Ubuntu latest
+        env:
+          PYTHONDONTWRITEBYTECODE: '1'
+        run: python3 scripts/test-release-package.py --linux-compat
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
+        if: always()
+        with:
+          name: linux-package-report-latest
+          path: target/linux-report
+          if-no-files-found: warn
+          retention-days: 3
+      - name: Preserve original download inventory
+        if: ${{ !cancelled() }}
+        continue-on-error: true
+        uses: ./.github/actions/upstream-report
+        with:
+          name: upstream-downloads-${{ github.job }}-${{ strategy.job-index || '0' }}
+  ubuntu_20:
+    name: Ubuntu 20.04-${{ matrix.arch }} installed GUI and TUN
+    if: ${{ !inputs.refresh_dependencies }}
+    needs: inputs
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 120
+    permissions:
+      actions: read
+      contents: read
+      id-token: write
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-latest
+            arch: x64
+            qemu: qemu-system-x86
+          - os: ubuntu-22.04-arm
+            arch: arm64
+            qemu: qemu-system-arm qemu-efi-aarch64
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          persist-credentials: false
+      - name: Load approved tool versions
+        run: python3 scripts/build_inputs.py versions
+      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0
+        with:
+          python-version: ${{ env.COR_PYTHON }}
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333
+        with:
+          name: dependency-snapshot
+          path: ${{ env.BUILD_INPUTS_DIR }}
+      - name: Connect to private Linux download cache
+        id: tailnet
+        if: vars.TS_OAUTH_CLIENT_ID != '' && vars.TS_AUDIENCE != '' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository)
+        uses: tailscale/github-action@064b10558093f38325e838ddea35486bdc6b1d5c
+        timeout-minutes: 3
+        continue-on-error: true
+        with:
+          oauth-client-id: ${{ vars.TS_OAUTH_CLIENT_ID }}
+          audience: ${{ vars.TS_AUDIENCE }}
+          tags: tag:github-action-cache
+          version: ${{ needs.inputs.outputs.tailscale }}
+          use-cache: 'false'
+          retry: '1'
+          timeout: 45s
+          args: --accept-dns=false
+          tailscaled-args: --tun=userspace-networking --outbound-http-proxy-listen=127.0.0.1:19082
+      - name: Preserve host routing after private cache login
+        if: steps.tailnet.outcome == 'success'
+        run: sudo -n tailscale set --accept-routes=false --accept-dns=false
+      - uses: ./.github/actions/upstream-cache
+        with:
+          url: ${{ steps.tailnet.outcome == 'success' && vars.LOCAL_CACHE_URL || '' }}
+          token: ${{ secrets.LOCAL_CACHE_TOKEN }}
+      - name: Configure VM originals before prepared-image lookup
+        uses: ./.github/actions/linux-download-cache
+        timeout-minutes: 15
+        continue-on-error: true
+        with:
+          vm: 'true'
+          download-originals: 'false'
+      - name: Install virtual machine tools
+        shell: python
+        env:
+          QEMU_PACKAGES: ${{ matrix.qemu }}
+        run: |
+          import os, pathlib, subprocess
+          import sys
+          sys.path.insert(0, 'scripts')
+          from linux_apt import OPTIONS, privileged, install
+          os.environ['COR_LINUX_APT_CACHE'] = os.environ['COR_HOST_APT_CACHE']
+          privileged([*OPTIONS, 'update'], 300)
+          install([*os.environ['QEMU_PACKAGES'].split(), 'qemu-utils', 'cloud-image-utils'])
+          if pathlib.Path('/dev/kvm').exists():
+              subprocess.run(['sudo', 'chmod', 'a+rw', '/dev/kvm'], check=True)
+          else:
+              print('KVM is unavailable; keeping TCG software emulation.')
+      - name: Enqueue verified VM originals before waiting
+        continue-on-error: true
+        uses: ./.github/actions/upstream-report
+        with:
+          checkpoint: 'true'
+      - name: Prepare Ubuntu 20.04 while the native candidate builds, then test it
+        env:
+          GH_TOKEN: ${{ github.token }}
+          CI_RUN_ID: ${{ github.run_id }}
+          PYTHONDONTWRITEBYTECODE: '1'
+        run: python3 scripts/linux_ci.py vm --package-run-id '${{ github.run_id }}'
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
+        if: always()
+        with:
+          name: linux-package-report-ubuntu20-${{ matrix.arch }}
+          path: target/linux-report
+          if-no-files-found: warn
           retention-days: 3
       - name: Preserve original download inventory
         if: ${{ !cancelled() }}
@@ -571,7 +820,7 @@ jobs:
           name: upstream-downloads-${{ github.job }}-${{ strategy.job-index || '0' }}
   cache_budget:
     name: Actions cache budget
-    needs: [inputs, android, check]
+    needs: [inputs, android, check, ubuntu_latest, ubuntu_20]
     if: ${{ !cancelled() && !inputs.refresh_dependencies }}
     runs-on: ubuntu-latest
     timeout-minutes: 10
