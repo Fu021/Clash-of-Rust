@@ -301,16 +301,16 @@ class PreparedVmTests(unittest.TestCase):
                 self.assertIsNone(client.upload(record, image))
             self.assertEqual(calls, [])
 
-    def test_environment_resolution_is_opt_in_and_capability_gated(self):
+    def test_environment_resolution_is_opt_in_and_requires_linux_inputs(self):
         with tempfile.TemporaryDirectory() as temporary, patch.dict(os.environ, {}, clear=True), \
                 patch.object(prepared_vm_environment, 'run') as execute:
             self.assertEqual(prepared_vm_environment.freeze(Path(temporary), {})['status'], 'disabled')
             execute.assert_not_called()
         with tempfile.TemporaryDirectory() as temporary, patch.dict(os.environ, {
                 'GITHUB_ACTIONS': 'true', 'COR_PREPARED_VM_INPUTS': 'true'}, clear=True), \
-                patch.object(prepared_vm.Client, 'available', return_value=False), \
+                patch.object(prepared_vm, 'client', side_effect=AssertionError('No private access during freeze')), \
                 patch.object(prepared_vm_environment, 'run') as execute:
-            self.assertEqual(prepared_vm_environment.freeze(Path(temporary), {'test': True})['status'], 'disabled')
+            self.assertEqual(prepared_vm_environment.freeze(Path(temporary), {})['status'], 'disabled')
             execute.assert_not_called()
 
     def test_environment_key_ignores_application_and_run_identity(self):
@@ -360,6 +360,18 @@ class PreparedVmTests(unittest.TestCase):
             self.assertEqual(application.call_args.args[2], 123)
             guest.preserve.assert_called_once()
             guest.close.assert_called_once()
+
+    def test_missing_service_capability_keeps_frozen_inputs_on_the_cold_path(self):
+        with tempfile.TemporaryDirectory() as temporary, self.vm_context(temporary) as context:
+            client, guest, download, prepare, application = context
+            client.available.return_value = False
+            linux_ci.vm_test(123)
+            client.restore.assert_not_called()
+            client.upload.assert_not_called()
+            self.assertEqual(download.call_count, 2)
+            prepare.assert_called_once()
+            self.assertIsNone(prepare.call_args.args[2])
+            self.assertFalse(application.call_args.kwargs['prepared'])
 
     def test_application_failure_on_warm_vm_is_not_hidden_by_cold_retry(self):
         with tempfile.TemporaryDirectory() as temporary, self.vm_context(temporary) as context:
@@ -468,7 +480,7 @@ class PreparedVmTests(unittest.TestCase):
                                             'python': {'sha256': 'b' * 64}}}}
         with tempfile.TemporaryDirectory() as temporary, patch.dict(os.environ, {
                 'GITHUB_ACTIONS': 'true', 'COR_PREPARED_VM_INPUTS': 'true'}, clear=True), \
-                patch.object(prepared_vm.Client, 'available', return_value=True), \
+                patch.object(prepared_vm, 'client', side_effect=AssertionError('No private access during freeze')), \
                 patch.object(prepared_vm_environment, 'run', side_effect=execute):
             root = Path(temporary)
             first = prepared_vm_environment.freeze(root/'first', linux)
@@ -521,6 +533,28 @@ class PreparedVmTests(unittest.TestCase):
                 with self.assertRaises(RuntimeError):
                     function()
             execute.assert_not_called()
+
+    def test_template_cleanup_finishes_before_its_working_directory_disappears(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            source = Path(temporary) / 'cor-source'
+            source.mkdir()
+            original_exists = Path.exists
+
+            def exists(path):
+                return path != Path('/opt/clash-of-rust') and original_exists(path)
+
+            def execute(command, **kwargs):
+                if not source.exists():
+                    raise FileNotFoundError('The source working directory has been deleted')
+                if '/home/ubuntu/cor-source' in command[-1]:
+                    source.rmdir()
+
+            with patch.object(prepared_vm_environment, 'guest_only'), \
+                    patch.object(Path, 'exists', exists), \
+                    patch.object(prepared_vm_environment, 'run', side_effect=execute) as commands:
+                prepared_vm_environment.clean_template()
+            self.assertFalse(source.exists())
+            self.assertIn('fstrim /', commands.call_args.args[0][-1])
 
     def test_image_checks_reject_external_dependencies_dirty_images_and_leaks(self):
         information = {'format': 'qcow2', 'virtual-size': 24 * 1024**3}

@@ -52,9 +52,8 @@ def freeze(directory, linux):
     if os.environ.get('GITHUB_ACTIONS') != 'true' or sys.platform != 'linux':
         raise RuntimeError('VM environment resolution requires a disposable Actions Linux runner')
     directory = Path(directory)
-    client = protocol.client(directory / 'prepared-vm-capability.json')
-    if not linux or not client.available():
-        return {'schema': 1, 'status': 'disabled', 'reason': 'capability_unavailable'}
+    if not linux:
+        return {'schema': 1, 'status': 'disabled', 'reason': 'linux_inputs_unavailable'}
     try:
         staging = directory / 'vm-environment'
         apt = staging / 'apt'
@@ -252,12 +251,11 @@ def clean_template():
     run(['sudo', 'cloud-init', 'clean', '--logs'], timeout=60)
     run(['sudo', 'passwd', '-l', 'ubuntu'], timeout=30)
     run(['sudo', 'sh', '-c',
-         'set -eu; rm -rf /home/ubuntu/cor-source /home/ubuntu/cor-runner-temp '
+         'set -eu; cd /; rm -rf /home/ubuntu/cor-source /home/ubuntu/cor-runner-temp '
          '/home/ubuntu/.ssh /home/ubuntu/.cache /home/ubuntu/.bash_history '
          '/home/ubuntu/cor-apt-plan* /root/.ssh /root/.bash_history '
          '/var/lib/cloud/seed /tmp/* /var/tmp/*; '
          'rm -f /etc/ssh/ssh_host_* /var/lib/systemd/random-seed; '
          'rm -f /var/lib/dbus/machine-id; ln -s /etc/machine-id /var/lib/dbus/machine-id; '
          'truncate -s 0 /etc/machine-id; '
-         'find /var/log -type f -exec truncate -s 0 {} +'], timeout=90)
-    run(['sudo', 'fstrim', '/'], timeout=180)
+         'find /var/log -type f -exec truncate -s 0 {} +; fstrim /'], timeout=270)
