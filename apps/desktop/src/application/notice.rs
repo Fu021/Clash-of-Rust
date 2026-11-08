@@ -2,7 +2,7 @@
 use super::*;
 use std::time::Instant;
 
-pub(super) const LIFETIME: Duration = Duration::from_secs(8);
+pub(super) const LIFETIME: Duration = Duration::from_secs(5);
 
 impl App {
     pub(super) fn show_notice(&mut self, text: String, error: bool) {
@@ -15,18 +15,20 @@ impl App {
 
     pub(super) fn show_unreachable_nodes(&mut self, context: &str, count: usize) {
         let detail = if self.settings.claude_protection.is_some() {
-            "请在 Claude 保护页检查保护线路。"
-        } else if self.settings.proxy_mode == ProxyMode::Tun {
-            "更新会先尝试代理，失败后尝试独立直连，无需关闭 TUN；其他应用仍可能无法联网。"
+            "请检查 Claude 保护线路。"
         } else {
-            "更新会先尝试代理，失败后尝试独立直连，无需关闭系统代理；其他应用仍可能无法联网。"
+            "请更换节点；更新失败后会自动尝试直连。"
         };
         let revision = self.notice_revision;
-        self.show_notice(
-            format!("{context}的 {count} 个节点均未通过测速。{detail}"),
-            true,
-        );
+        self.show_notice(format!("{context}：{count} 个节点不可达。{detail}"), true);
         if self.notice_revision != revision {
+            self.notice_network_recovery = true;
+        }
+    }
+
+    pub(super) fn update_unreachable_notice(&mut self, text: String) {
+        if self.notice_visible && self.notice_network_recovery {
+            self.show_notice(text, true);
             self.notice_network_recovery = true;
         }
     }
@@ -146,11 +148,31 @@ mod tests {
         let previous = app.settings.clone();
         app.show_unreachable_nodes("本次测速", 3);
         assert!(app.error && app.notice_network_recovery);
-        assert!(app.notice.contains("3 个节点均未通过测速"));
+        assert!(app.notice.contains("3 个节点不可达"));
         assert_eq!(app.settings.proxy_mode, previous.proxy_mode);
         assert_eq!(app.settings.run_mode, previous.run_mode);
         app.dismiss_notice();
         assert!(!app.notice_network_recovery);
+    }
+
+    #[test]
+    fn node_confirmation_replaces_its_warning_without_reopening_or_overwriting_other_errors() {
+        let mut app = App::initial_state(Err(anyhow::anyhow!("test")), None);
+        app.dismiss_notice();
+        app.show_unreachable_nodes("本次测速", 3);
+        app.update_unreachable_notice("全部节点不可达，TUN 仍开启。".into());
+        assert_eq!(app.notice, "全部节点不可达，TUN 仍开启。");
+        assert!(app.error && app.notice_network_recovery);
+        app.show_notice_followup("诊断已导出：测试路径".into(), false);
+        let diagnostic = app.notice.clone();
+        app.update_unreachable_notice("迟到的节点复测结果".into());
+        assert_eq!(app.notice, diagnostic);
+        app.dismiss_notice();
+        app.update_unreachable_notice("关闭后的节点复测结果".into());
+        assert!(!app.notice_visible);
+        app.show_critical("内核无法启动".into());
+        app.update_unreachable_notice("迟到的节点复测失败".into());
+        assert_eq!(app.notice, "内核无法启动");
     }
 
     #[test]

@@ -249,7 +249,8 @@ def root_cli_smoke():
     env['GSETTINGS_BACKEND'] = 'memory'
     with tempfile.TemporaryDirectory(prefix='cor-root-cli-') as temporary:
         directory = Path(temporary)
-        command = [cli, '--data-dir', str(directory/'data'), '--json', '--timeout', '30']
+        env['CLASH_OF_RUST_DATA_DIR'] = str(directory/'data')
+        command = [cli, '--json', '--timeout', '30']
 
         def invoke(*arguments, success=True):
             output = subprocess.run([*command, *map(str, arguments)], env=env,

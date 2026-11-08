@@ -151,13 +151,11 @@ pub(super) fn delays(out: &mut dyn Write, args: &Args, value: &Value) -> Result<
             && !map.is_empty()
             && map.values().all(|delay| delay.as_u64() == Some(0))
         {
-            writeln!(out, "本次测速全部失败，可更换节点。")?;
             writeln!(
                 out,
-                "接管状态保持不变；更新会先尝试代理，失败后尝试独立 DIRECT，无需关闭 TUN 或系统代理。"
+                "全部节点不可达。请更换节点；更新失败后会自动尝试直连。"
             )?;
-            writeln!(out, "查看当前接管状态：cor status")?;
-            writeln!(out, "可选：停止本程序的网络接管：cor proxy off")?;
+            writeln!(out, "接管状态：cor status · 停止接管：cor proxy off")?;
             writeln!(out, "导出诊断：cor diagnose --output cor-diagnose.json")?;
         }
     }

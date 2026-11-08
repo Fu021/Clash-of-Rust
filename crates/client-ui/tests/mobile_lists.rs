@@ -1,12 +1,16 @@
 //! Exercise production virtual lists and rule gestures with a software window.
 use slint::{
-    ComponentHandle,
+    ComponentHandle, Model,
     platform::{
         Platform, PlatformError, WindowAdapter, WindowEventDispatchResult,
         software_renderer::{MinimalSoftwareWindow, RepaintBufferType},
     },
 };
-use std::{cell::Cell, rc::Rc, time::Duration};
+use std::{
+    cell::{Cell, RefCell},
+    rc::Rc,
+    time::Duration,
+};
 
 slint::slint! {
     import { ListView, ListHeader, MField, MDragHandle } from "../ui/mobile/shared/controls.slint";
@@ -16,6 +20,21 @@ slint::slint! {
     import { PageSurface } from "../ui/components/motion.slint";
     import { MobileFrame } from "../ui/mobile/shared/frame.slint";
     import { MobileView } from "../ui/mobile/shared/state.slint";
+    import { SettingsPage } from "../ui/pages/settings.slint";
+    import { UiData } from "../ui/state.slint";
+    import { Theme } from "../ui/theme/palette.slint";
+    export { UiGeometry } from "../ui/components/geometry.slint";
+
+    export component SettingsScrollProbe inherits Window {
+        title: "SettingsScrollProbe";
+        preferred-width: 740px; preferred-height: 360px;
+        in-out property <length> offset <=> UiData.scroll-settings;
+        in-out property <string> draft <=> UiData.mixed-port;
+        out property <color> selected-color: Theme.accent-wash;
+        settings := SettingsPage {
+            x: 0px; y: 0px; width: parent.width; height: parent.height;
+        }
+    }
 
     export component DesktopScrollProbe inherits Window {
         preferred-width: 500px; preferred-height: 240px;
@@ -43,6 +62,7 @@ slint::slint! {
         in-out property <bool> notice-critical <=> MobileView.notice-critical;
         in-out property <int> detail <=> MobileView.detail;
         in-out property <string> draft <=> MobileView.profile-name;
+        public function notify(message: string) { MobileView.notify(message); }
         surface := MobileFrame {
             width: parent.width; height: parent.height;
             primary-pages: [0, 1, 2, 10, 9];
@@ -808,12 +828,24 @@ fn mobile_list_stacks_rows_and_keeps_sparse_content_at_the_top() {
     notice.set_detail(3);
     notice.set_draft("Unchanged subscription draft".into());
     notice.show().unwrap();
+    notice.set_notice_error(false);
+    notice.set_notice_critical(false);
+    notice.invoke_notify("已保存".into());
+    frame(&adapter, 393, 852);
+    advance(&clock, Duration::from_secs(4));
+    assert_eq!(notice.get_notice(), "已保存");
+    notice.invoke_notify("已保存".into());
+    advance(&clock, Duration::from_secs(4));
+    assert_eq!(notice.get_notice(), "已保存");
+    advance(&clock, Duration::from_millis(1100));
+    assert!(notice.get_notice().is_empty());
     for critical in [false, true] {
         notice.set_notice_error(true);
         notice.set_notice_critical(critical);
         notice.set_notice("A recoverable or critical error".into());
         frame(&adapter, 393, 852);
-        advance(&clock, Duration::from_millis(200));
+        advance(&clock, Duration::from_secs(6));
+        assert!(!notice.get_notice().is_empty());
         let pressed = notice
             .window()
             .dispatch_event_with_result(WindowEvent::KeyPressed {
@@ -876,4 +908,89 @@ fn mobile_list_stacks_rows_and_keeps_sparse_content_at_the_top() {
     frame(&adapter, 500, 1400);
     assert_eq!(desktop.get_offset(), 0.);
     desktop.hide().unwrap();
+    drop(desktop);
+
+    adapter.set_size(slint::PhysicalSize::new(740, 360));
+    let settings = SettingsScrollProbe::new().unwrap();
+    settings.set_draft("7897".into());
+    let targets = Rc::new(RefCell::new(std::collections::BTreeMap::new()));
+    let measured_targets = targets.clone();
+    settings
+        .global::<UiGeometry>()
+        .on_measured(move |key, bounds| {
+            measured_targets
+                .borrow_mut()
+                .insert(key.to_string(), bounds.iter().collect::<Vec<f32>>());
+        });
+    let geometry = settings.global::<UiGeometry>();
+    geometry.set_revision(geometry.get_revision().wrapping_add(1));
+    settings.show().unwrap();
+    frame(&adapter, 740, 360);
+    advance(&clock, Duration::from_secs(1));
+    let active_section = |pixels: &[slint::Rgb8Pixel]| {
+        let selected = settings.get_selected_color();
+        let selected = slint::Rgb8Pixel::new(selected.red(), selected.green(), selected.blue());
+        let bounds = targets.borrow();
+        let highlighted: Vec<_> = ["常规", "网络", "外观", "更新", "计划任务"]
+            .iter()
+            .enumerate()
+            .filter_map(|(index, title)| {
+                let target = &bounds[&format!("button:{title}")];
+                let horizontal = (target[0] + 5.) as usize;
+                let vertical = (target[1] + target[3] / 2.) as usize;
+                (pixels[vertical * 740 + horizontal] == selected).then_some(index)
+            })
+            .collect();
+        assert_eq!(highlighted.len(), 1);
+        highlighted[0]
+    };
+    assert_eq!(active_section(&frame(&adapter, 740, 360)), 0);
+    for (delta_y, expected) in [(-48., vec![0, 1, 2, 3, 4]), (48., vec![4, 3, 2, 1, 0])] {
+        let mut visited = vec![active_section(&frame(&adapter, 740, 360))];
+        for _ in 0..80 {
+            let previous = settings.get_offset();
+            settings
+                .window()
+                .dispatch_event(WindowEvent::PointerScrolled {
+                    position: LogicalPosition::new(600., 180.),
+                    delta_x: 0.,
+                    delta_y,
+                });
+            advance(&clock, Duration::from_secs(1));
+            let active = active_section(&frame(&adapter, 740, 360));
+            if active != *visited.last().unwrap() {
+                visited.push(active);
+            }
+            if settings.get_offset() == previous {
+                break;
+            }
+        }
+        assert_eq!(visited, expected);
+    }
+    for (title, expected) in [("常规", 0), ("网络", 1), ("外观", 2)] {
+        let bounds = targets.borrow()[&format!("button:{title}")].clone();
+        let position = LogicalPosition::new(bounds[0] + bounds[2] / 2., bounds[1] + bounds[3] / 2.);
+        for event in [
+            WindowEvent::PointerPressed {
+                position,
+                button: PointerEventButton::Left,
+            },
+            WindowEvent::PointerReleased {
+                position,
+                button: PointerEventButton::Left,
+            },
+        ] {
+            settings.window().dispatch_event(event);
+        }
+        advance(&clock, Duration::from_secs(1));
+        assert_eq!(active_section(&frame(&adapter, 740, 360)), expected);
+    }
+    adapter.set_size(slint::PhysicalSize::new(740, 2400));
+    frame(&adapter, 740, 2400);
+    advance(&clock, Duration::from_secs(1));
+    let pixels = frame(&adapter, 740, 2400);
+    assert_eq!(settings.get_offset(), 0.);
+    assert_eq!(active_section(&pixels), 0);
+    assert_eq!(settings.get_draft(), "7897");
+    settings.hide().unwrap();
 }

@@ -28,7 +28,6 @@ Clash-of-Rust/
 ├── resources/                     图标、字体、默认配置、检测数据与第三方声明
 ├── scripts/                       构建、验证、打包、缓存和 UI 预览入口
 ├── docs/                          使用、开发、工作流、发布说明与失败复盘
-├── design/                        交互 HTML 等界面设计参考，不作为运行时页面
 ├── vendor/                        带来源、许可证及移除条件的 Slint 局部修复
 ├── .github/
 │   ├── workflows/                 CI、Publish Release、Memory Benchmark

@@ -883,14 +883,10 @@ impl App {
                 }
                 match result {
                     Ok(Some(message)) => {
-                        self.show_notice_followup(message, true);
-                        self.notice_network_recovery = true;
+                        self.update_unreachable_notice(message);
                     }
                     Ok(None) => {}
-                    Err(error) => self.show_notice_followup(
-                        format!("节点状态复测未完成，已保留网络设置：{error}"),
-                        true,
-                    ),
+                    Err(error) => self.update_unreachable_notice(format!("节点复测失败：{error}")),
                 }
                 return self.dispatch(Action::Refresh);
             }
@@ -1602,13 +1598,10 @@ impl App {
                     Ok(delays) => {
                         let good = delays.values().filter(|d| **d > 0).count();
                         if good == 0 && !delays.is_empty() {
-                            self.show_unreachable_nodes(&format!("{group} 中"), delays.len());
+                            self.show_unreachable_nodes(&group, delays.len());
                         } else {
                             self.show_notice(
-                                format!(
-                                    "{group} 测速完成：{good}/{} 个节点可达，其余超时或失败",
-                                    delays.len()
-                                ),
+                                format!("{group}：{good}/{} 个节点可达", delays.len()),
                                 false,
                             );
                         }

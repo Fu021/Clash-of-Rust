@@ -925,11 +925,11 @@ async fn run_loop(
                                 let unavailable = !values.is_empty() && failed == values.len();
                                 state.notice=if unavailable {
                                     let detail = if state.session.settings.claude_protection.is_some() {
-                                        "请在 Claude 保护页检查保护线路。"
+                                        "请检查 Claude 保护线路。"
                                     } else {
-                                        "更新会先尝试代理，失败后尝试独立直连，无需断开 VPN；其他应用仍可能无法联网。"
+                                        "请更换节点；更新失败后会自动尝试直连。"
                                     };
-                                    format!("本次测速的 {} 个节点均未通过测速。{detail}", values.len())
+                                    format!("本次测速：{} 个节点不可达。{detail}", values.len())
                                 } else {
                                     format!("测速完成 · {} 项，{} 项超时",values.len(),failed)
                                 };
@@ -964,11 +964,12 @@ async fn run_loop(
                             && state.session.platform["vpn_generation"].as_u64().unwrap_or(0) == vpn_generation {
                             match result {
                                 Ok(true) => {
-                                    state.notice = "全部节点经两个目标复测仍不可达。VPN 保持连接；更新会先尝试代理，失败后尝试独立直连。其他应用仍可能无法联网，可更换节点或手动停止接管。".into();
+                                    state.logs.push_back(("WARN".into(), "全部节点经两个独立目标复测仍不可达，VPN 保持连接".into()));
+                                    state.notice = "全部节点不可达，VPN 仍连接。请更换节点；更新失败后会自动尝试直连。".into();
                                     state.notice_network_recovery = true;
                                 },
-                                Ok(false) => state.notice = "未确认全部节点失联，已保留 VPN；可选择其他节点。".into(),
-                                Err(error) => state.notice = format!("无法确认全部节点状态，已保留 VPN：{error}"),
+                                Ok(false) => state.notice = "未确认全部节点失联，可重试或更换节点。".into(),
+                                Err(error) => state.notice = format!("节点复测失败：{error}"),
                             }
                             state.notice_error = true;
                             immediate = true;

@@ -61,7 +61,10 @@ impl Engine {
             return Ok(None);
         }
         let message = unreachable_notice(engine.settings.proxy_mode);
-        append(&engine.logs, format!("[客户端] {message}"));
+        append(
+            &engine.logs,
+            format!("[客户端] 全部节点经两个独立目标复测仍不可达；{message}"),
+        );
         Ok(Some(message.into()))
     }
 
@@ -131,8 +134,8 @@ impl Engine {
 
 pub(crate) fn unreachable_notice(mode: ProxyMode) -> &'static str {
     if mode == ProxyMode::Tun {
-        "全部节点经两个目标复测仍不可达。TUN 保持开启；更新会先尝试代理，失败后尝试独立直连。其他应用仍可能无法联网，可更换节点或手动停止接管。"
+        "全部节点不可达，TUN 仍开启。请更换节点；更新失败后会自动尝试直连。"
     } else {
-        "全部节点经两个目标复测仍不可达。更新会先尝试代理，失败后尝试独立直连，无需关闭系统代理。其他应用仍可能无法联网，可更换节点或手动停止接管。"
+        "全部节点不可达，系统代理仍开启。请更换节点；更新失败后会自动尝试直连。"
     }
 }

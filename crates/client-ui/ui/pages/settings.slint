@@ -7,22 +7,30 @@ import { FakeIpPage } from "fake-ip.slint";
 
 export component SettingsPage inherits PageSurface {
     in property <bool> wide-navigation: true;
-    property <int> section;
+    property <length> section-offset: max(0px, -UiData.scroll-settings) + 1px;
     property <bool> dns-locked: !UiData.working && !UiData.update-busy && !UiData.protected && !UiData.protection-pending;
     if UiData.fake-ip-editor: FakeIpPage { }
-    if !UiData.fake-ip-editor: HorizontalLayout {
+    if !UiData.fake-ip-editor: sections := HorizontalLayout {
+        property <int> active-section: UiData.scroll-settings < 0px
+            && settings-scroll.content-height > settings-scroll.visible-height
+            && root.section-offset >= settings-scroll.content-height - settings-scroll.visible-height ? 4
+            : root.section-offset >= schedule-section.y ? 4
+            : root.section-offset >= update-section.y ? 3
+            : root.section-offset >= appearance-section.y ? 2
+            : root.section-offset >= network-section.y ? 1 : 0;
         spacing: 16px;
         if root.wide-navigation && Theme.text-scale <= 1.25: VerticalLayout {
             width: 112px; horizontal-stretch: 0; spacing: 4px; alignment: start;
             for title[index] in ["常规", "网络", "外观", "更新", "计划任务"]: ActionButton {
-                text: title; quiet: true; compact: true; selected: root.section == index;
+                text: title; quiet: true; compact: true; selected: sections.active-section == index;
                 clicked => {
-                    root.section = index;
-                    UiData.scroll-settings = -(index == 0 ? general-section.y : index == 1 ? network-section.y : index == 2 ? appearance-section.y : index == 3 ? update-section.y : schedule-section.y);
+                    UiData.scroll-settings = -clamp(
+                        index == 0 ? general-section.y : index == 1 ? network-section.y : index == 2 ? appearance-section.y : index == 3 ? update-section.y : schedule-section.y,
+                        0px, max(0px, settings-scroll.content-height - settings-scroll.visible-height));
                 }
             }
         }
-        PageScroll {
+        settings-scroll := PageScroll {
             horizontal-stretch: 1;
             content-y <=> UiData.scroll-settings;
             VerticalLayout {
