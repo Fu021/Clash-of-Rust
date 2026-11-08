@@ -1225,6 +1225,12 @@ fn custom_window_controls_remain_available_during_errors_and_preserve_close_poli
     assert_eq!(data.get_edit_name(), "unfinished subscription");
     assert_eq!(data.get_notice(), "内核启动失败");
     assert!(events.borrow().is_empty());
+    window
+        .window()
+        .dispatch_event(slint::platform::WindowEvent::KeyPressed {
+            text: slint::platform::Key::Escape.into(),
+        });
+    assert_eq!(events.borrow().last().unwrap().0, Intent::DismissNotice);
     window.window().set_maximized(false);
     window.hide().unwrap();
 }

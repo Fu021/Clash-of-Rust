@@ -222,7 +222,7 @@ jobs:
           cache-on-failure: false
           cache-bin: false
           cache-workspace-crates: false
-          save-if: ${{ github.ref == 'refs/heads/main' }}
+          save-if: ${{ github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository }}
       - name: Discard interrupted GitHub compiler restore
         if: steps.rust_github.outcome == 'failure'
         shell: python
@@ -434,7 +434,7 @@ jobs:
           audience: ${{ vars.TS_AUDIENCE }}
           tags: tag:github-action-cache
           version: ${{ needs.inputs.outputs.tailscale }}
-          use-cache: 'false'
+          use-cache: ${{ runner.os == 'macOS' && 'true' || 'false' }}
           retry: '1'
           timeout: 45s
           args: --accept-dns=false
@@ -476,7 +476,7 @@ jobs:
           # crates are invalidated explicitly, even for an older source branch.
           cache-workspace-crates: ${{ runner.os == 'macOS' || runner.os == 'Windows' }}
           cache-directories: ${{ runner.temp }}/workspace-sources
-          save-if: ${{ github.ref == 'refs/heads/main' }}
+          save-if: ${{ github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository }}
       - name: Discard interrupted GitHub compiler restore
         if: steps.rust_github.outcome == 'failure'
         run: |

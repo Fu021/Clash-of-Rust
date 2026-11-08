@@ -89,6 +89,61 @@ def mounted(package):
         finally: disk_image(['detach', mount], timeout=60)
 
 
+def wait_for_window(inspect, process, label, timeout=30):
+    deadline = time.monotonic()+timeout
+    observations = []
+    while True:
+        if process.poll() is not None:
+            raise RuntimeError(f'GUI exited while waiting for {label} window: {process.returncode}')
+        result, owned = inspect(label)
+        observations.append(result)
+        write_json(REPORT/(label+'-window-observations.json'), observations)
+        if result['windows']:
+            return result, owned
+        if time.monotonic() >= deadline:
+            raise RuntimeError(
+                f'Core is healthy but macOS reports no usable {label} window within {timeout} seconds; '
+                f"candidates: {json.dumps(result.get('candidates', []), sort_keys=True)}")
+        time.sleep(.5)
+
+
+def descendants(process):
+    parents, commands = {}, {}
+    for row in subprocess.check_output(['/bin/ps','-axww','-o','pid=,ppid=,comm='],text=True).splitlines():
+        parts = row.split(None, 2)
+        if len(parts) == 3:
+            pid, parent = map(int,parts[:2])
+            parents[pid], commands[pid] = parent, parts[2]
+    owned = {process.pid}
+    while extra := {pid for pid,parent in parents.items() if parent in owned} - owned:
+        owned |= extra
+    return {pid:commands.get(pid,'') for pid in owned}
+
+
+def cleanup_gui(process, controller_port, label, primary_error=None):
+    try:
+        process.terminate()
+        try: process.wait(timeout=10)
+        except subprocess.TimeoutExpired: process.kill(); process.wait()
+        if controller_port is not None:
+            import socket
+            deadline = time.monotonic()+5
+            while time.monotonic() < deadline:
+                try:
+                    with socket.create_connection(('127.0.0.1', controller_port), timeout=.2): pass
+                except OSError: break
+                time.sleep(.1)
+            else:
+                try: os.killpg(process.pid, signal.SIGTERM)
+                except ProcessLookupError: pass
+                raise RuntimeError('GUI termination left its core listening')
+    except Exception as error:
+        write_json(REPORT/(label+'-cleanup-error.json'), {
+            'error': str(error), 'primary_error': str(primary_error) if primary_error else None})
+        if primary_error is None:
+            raise
+
+
 def gui_smoke(app, label):
     # Private data directory avoids existing profiles and proxy journals.
     with tempfile.TemporaryDirectory(prefix='clash-gui-') as temporary:
@@ -97,6 +152,7 @@ def gui_smoke(app, label):
         with (REPORT/(label+'-gui.log')).open('w') as log:
             process = subprocess.Popen([binary], env=env, stdout=log, stderr=subprocess.STDOUT, start_new_session=True)
             version = None
+            primary_error = None
             try:
                 deadline = time.monotonic()+45
                 proxy = urllib.request.build_opener(urllib.request.ProxyHandler({}))
@@ -118,14 +174,26 @@ import CoreGraphics
 import AppKit
 let pids = Set(CommandLine.arguments.dropFirst().compactMap(Int.init))
 let windows = CGWindowListCopyWindowInfo(.optionAll, kCGNullWindowID) as? [[String: Any]] ?? []
-let matching = windows.filter {
-    guard let pid = $0[kCGWindowOwnerPID as String] as? Int, pids.contains(pid),
-          ($0[kCGWindowLayer as String] as? Int) == 0,
-          ($0[kCGWindowIsOnscreen as String] as? Bool) == true,
-          let bounds = $0[kCGWindowBounds as String] as? [String: Any],
-          let width = bounds["Width"] as? NSNumber,
-          let height = bounds["Height"] as? NSNumber else { return false }
-    return width.doubleValue >= 800 && height.doubleValue >= 450
+let candidates = windows.filter {
+    guard let pid = $0[kCGWindowOwnerPID as String] as? Int else { return false }
+    return pids.contains(pid)
+}.map { window -> [String: Any] in
+    let bounds = window[kCGWindowBounds as String] as? [String: Any] ?? [:]
+    let checks = [
+        "normal_layer": (window[kCGWindowLayer as String] as? Int) == 0,
+        "onscreen": (window[kCGWindowIsOnscreen as String] as? Bool) == true,
+        "minimum_width": ((bounds["Width"] as? NSNumber)?.doubleValue ?? 0) >= 800,
+        "minimum_height": ((bounds["Height"] as? NSNumber)?.doubleValue ?? 0) >= 450
+    ]
+    return ["window": window, "checks": checks, "accepted": checks.values.allSatisfy { $0 }]
+}
+let matching = candidates.filter { $0["accepted"] as? Bool == true }.compactMap {
+    $0["window"] as? [String: Any]
+}
+let screens = NSScreen.screens.map {
+    ["x": $0.frame.origin.x, "y": $0.frame.origin.y,
+     "width": $0.frame.width, "height": $0.frame.height,
+     "scale": $0.backingScaleFactor]
 }
 let policies = Dictionary(uniqueKeysWithValues: pids.compactMap { pid -> (String, Int)? in
     guard let app = NSRunningApplication(processIdentifier: pid_t(pid)) else { return nil }
@@ -142,31 +210,20 @@ let helperTiles = tiles.filter {
     let path = (file["_CFURLString"] as? String ?? "").removingPercentEncoding ?? ""
     return tile["bundle-identifier"] as? String == "org.clashofrust.desktop.renderer" || path.contains("Clash of Rust UI.app")
 }.count
-let result: [String: Any] = ["windows": matching, "activation": policies, "applications": apps, "helper_dock_entries": helperTiles]
+let result: [String: Any] = ["windows": matching, "candidates": candidates, "screens": screens,
+    "activation": policies, "applications": apps, "helper_dock_entries": helperTiles]
 let data = try JSONSerialization.data(withJSONObject: result, options: [.prettyPrinted, .sortedKeys])
 FileHandle.standardOutput.write(data)
 ''')
                 query = REPORT/'inspect-windows'
                 subprocess.run(['/usr/bin/swiftc',swift,'-o',query],check=True,timeout=120)
-                def descendants():
-                    parents, commands = {}, {}
-                    for row in subprocess.check_output(['/bin/ps','-axww','-o','pid=,ppid=,comm='],text=True).splitlines():
-                        parts = row.split(None, 2)
-                        if len(parts) == 3:
-                            pid, parent = map(int,parts[:2])
-                            parents[pid], commands[pid] = parent, parts[2]
-                    owned = {process.pid}
-                    while extra := {pid for pid,parent in parents.items() if parent in owned} - owned:
-                        owned |= extra
-                    return {pid:commands.get(pid,'') for pid in owned}
                 def inspect_window(label):
-                    owned = descendants()
+                    owned = descendants(process)
                     output = subprocess.check_output([query, *map(str,sorted(owned))], timeout=15)
                     result = json.loads(output)
                     write_json(REPORT/(label+'-windows.json'), result)
                     return result, owned
-                result, owned = inspect_window(label)
-                if not result['windows']: raise RuntimeError('Core is healthy but macOS reports no application window')
+                result, owned = wait_for_window(inspect_window, process, label)
                 renderers = {pid for pid,command in owned.items() if Path(command).name == 'clash-desktop-ui'}
                 cores = {pid for pid,command in owned.items() if Path(command).name == 'mihomo'}
                 if len(renderers) != 1: raise RuntimeError('Installed GUI must have exactly one renderer process')
@@ -190,25 +247,23 @@ FileHandle.standardOutput.write(data)
                     previous = renderers
                     for pid in previous: os.kill(pid, signal.SIGTERM)
                     deadline = time.monotonic()+10
-                    while previous & descendants().keys() and time.monotonic() < deadline:
+                    while previous & descendants(process).keys() and time.monotonic() < deadline:
                         time.sleep(.1)
-                    if previous & descendants().keys(): raise RuntimeError('Renderer did not exit')
+                    if previous & descendants(process).keys(): raise RuntimeError('Renderer did not exit')
                     time.sleep(1.2)  # Let the owner's reaper acknowledge EOF.
                     if process.poll() is not None: raise RuntimeError('Renderer exit also terminated the resident owner')
                     subprocess.run(['/usr/bin/open','-a',str(app)],check=True,timeout=15)
                     deadline = time.monotonic()+30
                     while time.monotonic() < deadline:
-                        current = descendants()
+                        current = descendants(process)
                         renderers = {pid for pid,command in current.items() if Path(command).name == 'clash-desktop-ui'}
                         if renderers: break
                         if process.poll() is not None: raise RuntimeError('Owner exited while reopening GUI')
                         time.sleep(.2)
                     else: raise RuntimeError('LaunchServices did not restore the renderer')
-                    restored, current = inspect_window(f'{label}-reopened-{cycle}')
-                    while not restored['windows'] and time.monotonic() < deadline:
-                        time.sleep(.2)
-                        restored, current = inspect_window(f'{label}-reopened-{cycle}')
-                    if not restored['windows']: raise RuntimeError('Restored renderer has no visible application window')
+                    restored, current = wait_for_window(
+                        inspect_window, process, f'{label}-reopened-{cycle}')
+                    renderers = {pid for pid,command in current.items() if Path(command).name == 'clash-desktop-ui'}
                     verify_identity(restored,renderers)
                     if cores != {pid for pid,command in current.items() if Path(command).name == 'mihomo'}:
                         raise RuntimeError('Core restarted after the renderer exited')
@@ -218,7 +273,16 @@ FileHandle.standardOutput.write(data)
                 return {'core': version, 'window_count': len(result['windows']),
                         'renderer_accessory': True, 'renderer_agent_bundle': True, 'reopen_cycles': 5,
                         'helper_dock_entries': 0, 'reopened_after_renderer_exit': True, 'core_pid_preserved': True}
-            except BaseException:
+            except BaseException as error:
+                primary_error = error
+                try: owned = descendants(process)
+                except Exception: owned = {}
+                for pid, command in owned.items():
+                    if Path(command).name not in ('clash-of-rust', 'clash-desktop-ui'):
+                        continue
+                    try: logged(f'{label}-thread-sample-{pid}', ['/usr/bin/sample', str(pid), '2'], timeout=10)
+                    except Exception as sample_error:
+                        (REPORT/(f'{label}-sample-{pid}-error.txt')).write_text(str(sample_error))
                 # A native crash can precede the core readiness response. Reap
                 # this isolated launch before collecting a fresh debugger trace.
                 try: os.killpg(process.pid, signal.SIGTERM)
@@ -230,23 +294,7 @@ FileHandle.standardOutput.write(data)
             finally:
                 # GUI shutdown by SIGTERM is also a useful abnormal-exit check:
                 # its ordinary core must not remain listening afterwards.
-                process.terminate()
-                try: process.wait(timeout=10)
-                except subprocess.TimeoutExpired: process.kill(); process.wait()
-                # macOS user processes do not get Linux parent-death signals.
-                # Reap only this isolated GUI's child core, identified by parent.
-                if version:
-                    import socket
-                    deadline = time.monotonic()+5
-                    while time.monotonic() < deadline:
-                        try:
-                            with socket.create_connection(('127.0.0.1', value['controller_port']), timeout=.2): pass
-                        except OSError: break
-                        time.sleep(.1)
-                    else:
-                        try: os.killpg(process.pid, signal.SIGTERM)
-                        except ProcessLookupError: pass
-                        raise RuntimeError('GUI termination left its core listening')
+                cleanup_gui(process, value['controller_port'] if version else None, label, primary_error)
 
 
 def startup_backtrace(binary, label):
@@ -315,7 +363,7 @@ def diagnostics(arch):
                 'interfaces': ['/sbin/ifconfig'],
                 'session': ['/bin/launchctl', 'print', f'gui/{os.getuid()}'],
                 'processes': ['/bin/ps', '-axo', 'pid,ppid,uid,stat,comm'],
-                'unified-log': ['/usr/bin/log', 'show', '--last', '15m', '--style', 'compact', '--predicate', 'process == "clash-of-rust" OR process == "clash-tun-launcher" OR process == "mihomo"']}
+                'unified-log': ['/usr/bin/log', 'show', '--last', '15m', '--style', 'compact', '--predicate', 'process == "clash-of-rust" OR process == "clash-desktop-ui" OR process == "clash-tun-launcher" OR process == "mihomo"']}
     for name, command in commands.items():
         try: logged('diagnostic-'+name, command, timeout=30)
         except Exception as error: (REPORT/(name+'-collection-error.txt')).write_text(str(error))

@@ -211,7 +211,6 @@ export component AppWindow inherits Window {
     notice-host := DesktopNotice {
         width: parent.width; available-height: root.height;
     }
-    }
     Rectangle {
         x: 0px; y: 0px; height: 44px; width: root.width; background: Theme.sidebar;
         WindowMoveArea {
@@ -287,5 +286,6 @@ export component AppWindow inherits Window {
             }
             WindowControl { action: 2; clicked => { root.close(); } }
         }
+    }
     }
 }

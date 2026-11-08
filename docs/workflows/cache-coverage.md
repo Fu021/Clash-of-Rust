@@ -6,7 +6,7 @@
 
 CI 与 Memory Benchmark 的 Rust 对象只恢复和保存 GitHub Actions Cache；未命中正常编译，不查询私网 Rust 索引或分片，也不在 job 结束后镜像对象。Publish Release 继续复用同提交成功 CI 的构建附件，不重新编译 Rust。
 
-GitHub 热缓存预算为 9 GiB，主分支保存，其他来源可读取兼容缓存。macOS ARM64 按维护者要求最高优先，减少稀缺 runner 分配后重新编译的损失；缓存不会缩短 runner 排队。其余按最近六次成功完整 CI 的“Rust 缓存恢复＋编译/测试”中位耗时排序：
+GitHub 热缓存预算为 9 GiB。CI 的主分支、开发分支及同仓库 PR 成功后均尝试保存各平台的新编译缓存；Memory Benchmark 不再限定主分支保存。精确键已存在时由不可变缓存规则复用，未命中正常编译；fork PR 仍只读，不增加缓存保存或私网权限。Publish Release 复用 CI 候选包，不重新编译或另建 Rust 缓存。macOS ARM64 按维护者要求最高优先，减少稀缺 runner 分配后重新编译的损失；缓存不会缩短 runner 排队。其余按最近六次成功完整 CI 的“Rust 缓存恢复＋编译/测试”中位耗时排序：
 
 | 保留优先级 | 平台 | 中位耗时（分钟） |
 | --- | --- | --- |
@@ -57,4 +57,4 @@ GitHub 热缓存预算为 9 GiB，主分支保存，其他来源可读取兼容�
 
 工作流不调用私网 DELETE，不同步 GitHub 淘汰结果，也不修改或上传 README.txt。服务端协作与保留范围见[协议](cache-server.md)和[可保留白名单](cache-retention.md)。
 
-维护者于 2026-11-08 授权以独立 `vm/prepared` 复用 Ubuntu 20.04 ARM64 及 x64 预装测试环境；镜像只存私网，禁止进入 GitHub Actions Cache、artifact 或 Release。客户端与发布入口按 health 的 `vm_limits` 启用明确声明的架构；维护者报告线上已声明两种架构，实际上传与恢复待验收。未声明、限制不符或恢复失败时冷回退；不复用原包接口，不跳过应用安装及 GUI/代理/TUN 测试。16 GiB 和两个环境名额由两种架构共享。冻结输入、能力门禁、回退和冷/暖测速见[预装镜像方案](prepared-vm-images.md)。
+维护者于 2026-11-08 授权以独立 `vm/prepared` 复用 Ubuntu 20.04 ARM64 及 x64 预装测试环境；镜像只存私网，禁止进入 GitHub Actions Cache、artifact 或 Release。客户端与发布入口按 health 的 `vm_limits` 启用明确声明的架构；双架构真实模板上传、暖恢复及安装后 GUI/代理/TUN 已由 Actions 验证，证据和单次测速边界见[预装镜像方案](prepared-vm-images.md#首次双架构暖恢复证据)。未声明、限制不符或恢复失败时冷回退；不复用原包接口，不跳过应用测试。16 GiB 和两个环境名额由两种架构共享。

@@ -130,7 +130,7 @@ jobs:
           cache-on-failure: false
           cache-bin: false
           cache-workspace-crates: false
-          save-if: ${{ github.ref == 'refs/heads/main' }}
+          save-if: true
       - name: Discard interrupted GitHub compiler restore
         if: steps.rust_github.outcome == 'failure'
         shell: python

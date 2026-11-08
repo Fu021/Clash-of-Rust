@@ -17,6 +17,7 @@ from unittest.mock import MagicMock, patch
 import build_support as build
 import android as android_build
 import windows_ci as windows
+import macos_ci as macos
 import workflow_storage as storage
 import action_cache as local_cache
 import upstream_cache
@@ -1006,6 +1007,58 @@ class BuildTests(unittest.TestCase):
             with self.assertRaisesRegex(TimeoutError, 'did not become ready'):
                 windows.wait_unelevated_ready(kernel, 12, ready)
             pause.assert_not_called()
+
+    def test_macos_window_waits_for_native_mapping_and_records_rejected_candidates(self):
+        pending = {'windows': [], 'candidates': [{'checks': {'onscreen': False}}]}
+        mapped = {'windows': [{'kCGWindowOwnerPID': 42}], 'candidates': []}
+        process = MagicMock()
+        process.poll.return_value = None
+        inspect = MagicMock(side_effect=[(pending, {42: 'clash-desktop-ui'}),
+                                         (mapped, {42: 'clash-desktop-ui'})])
+        with tempfile.TemporaryDirectory() as temporary, \
+             patch.object(macos, 'REPORT', Path(temporary)), \
+             patch.object(macos.time, 'sleep') as pause:
+            result = macos.wait_for_window(inspect, process, 'installed')
+            self.assertEqual(result, (mapped, {42: 'clash-desktop-ui'}))
+            self.assertEqual(json.loads((Path(temporary)/'installed-window-observations.json').read_text()),
+                             [pending, mapped])
+        pause.assert_called_once_with(.5)
+
+    def test_macos_window_wait_reports_candidates_at_bounded_deadline(self):
+        pending = {'windows': [], 'candidates': [{'checks': {'minimum_width': False}}]}
+        process = MagicMock()
+        process.poll.return_value = None
+        with tempfile.TemporaryDirectory() as temporary, \
+             patch.object(macos, 'REPORT', Path(temporary)), \
+             patch.object(macos.time, 'monotonic', side_effect=[0, 30]), \
+             patch.object(macos.time, 'sleep') as pause:
+            with self.assertRaisesRegex(RuntimeError, r'30 seconds.*minimum_width'):
+                macos.wait_for_window(lambda label: (pending, {}), process, 'installed')
+        pause.assert_not_called()
+
+    def test_macos_window_wait_rejects_an_exited_owner(self):
+        process = MagicMock()
+        process.poll.return_value = -11
+        process.returncode = -11
+        inspect = MagicMock()
+        with self.assertRaisesRegex(RuntimeError, r'GUI exited.*-11'):
+            macos.wait_for_window(inspect, process, 'installed')
+        inspect.assert_not_called()
+
+    def test_macos_cleanup_keeps_primary_failure_and_still_rejects_cleanup_only_failure(self):
+        for primary in (RuntimeError('window missing'), None):
+            process = MagicMock()
+            process.terminate.side_effect = RuntimeError('cleanup failed')
+            with self.subTest(primary=primary), tempfile.TemporaryDirectory() as temporary, \
+                 patch.object(macos, 'REPORT', Path(temporary)):
+                if primary is None:
+                    with self.assertRaisesRegex(RuntimeError, 'cleanup failed'):
+                        macos.cleanup_gui(process, None, 'installed')
+                else:
+                    macos.cleanup_gui(process, None, 'installed', primary)
+                report = json.loads((Path(temporary)/'installed-cleanup-error.json').read_text())
+                self.assertEqual(report, {'error': 'cleanup failed',
+                                         'primary_error': str(primary) if primary else None})
 
     def test_linux_guest_package_preparation_skips_documentation_indexes(self):
         with patch.dict(os.environ, {'COR_LINUX_GUEST': 'true'}), \

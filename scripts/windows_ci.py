@@ -333,6 +333,9 @@ def installed_gui_smoke(installed, root):
     profile = root/'gui-profile'
     profile.mkdir()
     allow_ordinary_user_directory(profile)
+    exports = root/'gui-exports'
+    exports.mkdir()
+    allow_ordinary_user_directory(exports)
     env = dict(os.environ, CLASH_OF_RUST_DATA_DIR=str(profile), PYTHONUTF8='1')
     command = [installed/'cor.exe', '--data-dir', profile, '--json']
 
@@ -393,8 +396,8 @@ def installed_gui_smoke(installed, root):
             assert any(item['name'] == 'Ordinary user'
                        for item in json.loads((profile/'profiles.json').read_text()))
             for arguments, path in (
-                (['logs', 'export'], profile/'exported.log'),
-                (['diagnose', '--offline'], profile/'diagnostics.json'),
+                (['logs', 'export'], exports/'exported.log'),
+                (['diagnose', '--offline'], exports/'diagnostics.json'),
             ):
                 run_unelevated([*command, *arguments, '--output', path], env)
                 assert path.is_file() and path.stat().st_size > 0
