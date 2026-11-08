@@ -7,6 +7,30 @@ use winreg::{
 
 const KEY: &str = "Software\\Microsoft\\Windows\\CurrentVersion\\Internet Settings";
 
+pub fn launch_after_install() -> Result<()> {
+    let executable = std::env::current_exe()?;
+    anyhow::ensure!(installed_executable(&executable)?, "请从已安装的客户端启动");
+    super::windows_process::spawn_desktop(&executable, &[], None)?;
+    Ok(())
+}
+
+pub fn restart_after_update(
+    executable: &Path,
+    directory: &Path,
+    data_dir: Option<&Path>,
+) -> Result<()> {
+    anyhow::ensure!(
+        installed_executable(executable)?,
+        "更新后客户端路径与安装记录不一致"
+    );
+    super::windows_process::spawn_desktop(
+        executable,
+        &["--update-result".into(), directory.as_os_str().to_owned()],
+        data_dir,
+    )?;
+    Ok(())
+}
+
 pub fn installed_executable(executable: &Path) -> Result<bool> {
     use winreg::enums::{HKEY_LOCAL_MACHINE, KEY_WOW64_64KEY};
     let key = match RegKey::predef(HKEY_LOCAL_MACHINE).open_subkey_with_flags(

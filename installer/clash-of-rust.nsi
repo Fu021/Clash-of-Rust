@@ -50,7 +50,8 @@ VIAddVersionKey /LANG=2052 "LegalCopyright" "Clash of Rust contributors · GPL-3
 !insertmacro MUI_PAGE_LICENSE "${PAYLOAD}\LICENSE"
 !insertmacro MUI_PAGE_DIRECTORY
 !insertmacro MUI_PAGE_INSTFILES
-  !define MUI_FINISHPAGE_RUN "$INSTDIR\clash-of-rust.exe"
+  !define MUI_FINISHPAGE_RUN
+  !define MUI_FINISHPAGE_RUN_FUNCTION LaunchClient
   !define MUI_FINISHPAGE_RUN_TEXT "立即启动 Clash of Rust"
   !define MUI_FINISHPAGE_SHOWREADME ""
   !define MUI_FINISHPAGE_SHOWREADME_TEXT "添加快捷方式"
@@ -73,6 +74,17 @@ Var DeleteUserData
 Var UserDataDir
 Var DataOptionsDialog
 Var DeleteDataCheckbox
+
+Function LaunchClient
+  ClearErrors
+  ExecWait '"$INSTDIR\clash-of-rust.exe" --launch-after-install' $ResultCode
+  ${If} ${Errors}
+    StrCpy $ResultCode 1
+  ${EndIf}
+  ${If} $ResultCode != 0
+    MessageBox MB_OK|MB_ICONINFORMATION "安装已完成，请从开始菜单启动 Clash of Rust。"
+  ${EndIf}
+FunctionEnd
 
 !macro CheckRunning PREFIX
   System::Call 'kernel32::OpenMutexW(i 0x100000, i 0, w "${APP_MUTEX}") p.r0'
@@ -254,7 +266,7 @@ Section "Clash of Rust" MainSection
     ClearErrors
     Rename "$INSTDIR\clash-of-rust.exe" "$INSTDIR\clash-of-rust.update-backup.exe"
     ${If} ${Errors}
-      SetErrorLevel 6
+      SetErrorLevel 61
       Abort
     ${EndIf}
     StrCpy $UpdateBackup 1
@@ -267,7 +279,7 @@ Section "Clash of Rust" MainSection
       ${If} ${Errors}
         StrCpy $UpdateUiBackup 0
         Call RestoreUpdate
-        SetErrorLevel 6
+        SetErrorLevel 62
         Abort
       ${EndIf}
       StrCpy $UpdateUiBackup 1
@@ -303,18 +315,26 @@ Section "Clash of Rust" MainSection
   File "${PAYLOAD}\resources\ip-check\LICENSE"
   File "${PAYLOAD}\resources\ip-check\SOURCE.md"
   SetOutPath "$INSTDIR"
-  WriteUninstaller "$INSTDIR\uninstall.exe"
   ${If} ${Errors}
     Call RestoreUpdate
     SetErrorLevel 6
     Abort
   ${EndIf}
+  WriteUninstaller "$INSTDIR\uninstall.exe"
+  ${If} ${Errors}
+    Call RestoreUpdate
+    SetErrorLevel 64
+    Abort
+  ${EndIf}
   ; The installer's existing administrator grant registers the demand-start
   ; service once. Ordinary GUI launches and TUN switches never elevate it.
+  ClearErrors
+  StrCpy $0 1
   ExecWait '"$INSTDIR\clash-tun-launcher.exe" --windows-service-install' $0
-  ${If} $0 != 0
+  ${If} ${Errors}
+  ${OrIf} $0 != 0
     Call RestoreUpdate
-    SetErrorLevel 6
+    SetErrorLevel 65
     Abort
   ${EndIf}
     ${If} $KeepAutostart == 1
@@ -333,7 +353,7 @@ Section "Clash of Rust" MainSection
   WriteRegDWORD ${PRODUCT_HIVE} "${PRODUCT_KEY}" "NoRepair" 1
   ${If} ${Errors}
     Call RestoreUpdate
-    SetErrorLevel 6
+    SetErrorLevel 66
     Abort
   ${EndIf}
     ${If} $UpdateMode == 1

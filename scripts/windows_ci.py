@@ -307,7 +307,7 @@ def _verify_failed_update(package, installed):
         try:
             # Read sharing permits verification, but denies WriteUninstaller.
             # Extraction has already replaced both executables at this point.
-            _installer_exit(package,['/S','/UPDATE',f'/D={installed}'],6)
+            _installer_exit(package,['/S','/UPDATE',f'/D={installed}'],64)
             assert sha256(installed/'clash-of-rust.exe') == owner_hash
             if legacy: assert not renderer.exists()
             else: assert sha256(renderer) == expected
@@ -385,6 +385,19 @@ def installed_gui_smoke(installed, root):
                 if time.monotonic() >= deadline:
                     raise TimeoutError('Windows GUI did not start its shared core')
                 time.sleep(.5)
+            run_unelevated([*command, 'config', 'set', 'update_prereleases', 'true'], env)
+            assert json.loads((profile/'settings.json').read_text())['update_prereleases'] is True
+            source = profile/'ordinary-subscription.yaml'
+            source.write_text('proxies: []\nrules: ["MATCH,DIRECT"]\n', encoding='utf-8')
+            run_unelevated([*command, 'profile', 'import', source, '--name', 'Ordinary user'], env)
+            assert any(item['name'] == 'Ordinary user'
+                       for item in json.loads((profile/'profiles.json').read_text()))
+            for arguments, path in (
+                (['logs', 'export'], profile/'exported.log'),
+                (['diagnose', '--offline'], profile/'diagnostics.json'),
+            ):
+                run_unelevated([*command, *arguments, '--output', path], env)
+                assert path.is_file() and path.stat().st_size > 0
             cli('mode', 'global')
             user32.ShowWindow(hwnd, 6)  # Minimize, then restore the real window.
             user32.ShowWindow(hwnd, 9)
@@ -399,7 +412,8 @@ def installed_gui_smoke(installed, root):
                 time.sleep(.25)
             write_json(ROOT/'target/windows-gui-report.json',
                        {'status': 'passed', 'ordinary_user': True, 'visible_window': True,
-                        'window_restore': True, 'shared_cli_mode': True})
+                        'window_restore': True, 'shared_cli_mode': True,
+                        'user_storage': ['settings', 'subscription', 'log_export', 'diagnostics']})
         finally:
             try:
                 cli('stop')

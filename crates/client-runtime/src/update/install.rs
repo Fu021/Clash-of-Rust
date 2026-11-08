@@ -108,6 +108,23 @@ fn command(executable: &Path) -> Command {
     command
 }
 
+fn restart_client(plan: &Plan, directory: &Path) -> Result<()> {
+    #[cfg(windows)]
+    {
+        crate::platform::restart_after_update(&plan.executable, directory, plan.data_dir.as_deref())
+    }
+    #[cfg(not(windows))]
+    {
+        let mut restart = command(&plan.executable);
+        restart.arg("--update-result").arg(directory);
+        if let Some(data_dir) = &plan.data_dir {
+            restart.env("CLASH_OF_RUST_DATA_DIR", data_dir);
+        }
+        restart.spawn().context("无法重新打开客户端")?;
+        Ok(())
+    }
+}
+
 pub fn handoff(download: Arc<Downloaded>) -> Result<InstallSession> {
     handoff_at(download, None)
 }
@@ -271,13 +288,18 @@ pub fn helper_main() -> bool {
         while parent_alive(plan.parent) && Instant::now() < deadline {
             std::thread::sleep(Duration::from_millis(100));
         }
-        if !parent_alive(plan.parent) && plan.restart {
-            let mut restart = command(&plan.executable);
-            restart.arg("--update-result").arg(&directory);
-            if let Some(data_dir) = &plan.data_dir {
-                restart.env("CLASH_OF_RUST_DATA_DIR", data_dir);
-            }
-            let _ = restart.spawn();
+        if !parent_alive(plan.parent)
+            && plan.restart
+            && let Err(error) = restart_client(&plan, &directory)
+        {
+            let _ = crate::config::atomic_write(
+                &directory.join("outcome.json"),
+                &serde_json::to_vec(&Outcome {
+                    message: format!("更新安装已结束，重新打开客户端失败：{error:#}"),
+                    error: true,
+                })
+                .unwrap_or_default(),
+            );
         }
     }
     #[cfg(target_os = "macos")]
@@ -354,6 +376,11 @@ fn install(plan: &Plan, directory: &Path) -> Result<()> {
         2 => bail!("安装已取消"),
         3 | 5 => bail!("客户端未能正常退出或文件被占用，请退出后重试"),
         6 => bail!("安装文件写入失败，请检查磁盘空间与权限"),
+        61 => bail!("无法替换主程序：文件被占用或安装目录不可写，已保留旧版本"),
+        62 => bail!("无法替换界面程序：文件被占用或安装目录不可写，已恢复旧版本"),
+        64 => bail!("无法写入卸载程序：文件被占用或安装目录不可写，已恢复旧版本"),
+        65 => bail!("Windows 网络助手安装失败，已恢复旧版主程序与界面"),
+        66 => bail!("无法写入安装登记信息，已恢复旧版主程序与界面"),
         code => bail!("安装程序失败（代码 {code}），请重试"),
     }
 }

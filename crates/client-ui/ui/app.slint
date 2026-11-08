@@ -20,7 +20,7 @@ import { LogsPage } from "pages/logs.slint";
 import { NetworkPage } from "pages/network.slint";
 import { IpCheckPage } from "pages/ip-check.slint";
 import { AiCheckPage } from "pages/ai-check.slint";
-import { SettingsPage } from "pages/settings.slint";
+import { SettingsPage, SettingsNavigation } from "pages/settings.slint";
 import { AppDialog } from "dialogs/app-dialog.slint";
 import "../../../resources/fonts/SourceHanSansCN-Regular.otf";
 export component AppWindow inherits Window {
@@ -55,6 +55,9 @@ export component AppWindow inherits Window {
     property <length> sidebar-width: self.compact-sidebar ? 60px : 216px;
     animate sidebar-width { duration: Motion.control; easing: ease-out; enabled: Motion.layout-active; }
     property <bool> error-active: UiData.notice != "" && UiData.notice-error;
+    property <bool> settings-header-navigation: content-area.width - 48px >= (600px + (UiData.protection-health > 0 ? 160px : 0px)) * Theme.text-scale;
+    property <int> settings-active-section;
+    property <int> settings-navigation-request: -1;
     changed accent => { Theme.accent-index = root.accent; }
     property <[string]> titles: ["首页", "代理", "订阅", "连接", "规则", "日志", "网络诊断", "IP 检测", "A÷检测", "设置"];
     property <[int]> sidebar-pages: [0, 1, 2, 3, 4, 5, 6, 7, 8];
@@ -127,6 +130,10 @@ export component AppWindow inherits Window {
                 Rectangle { y: parent.height - 1px; width: parent.width; height: 1px; background: Theme.subtle-line; }
                 header := HorizontalLayout { cross-axis-alignment: center; spacing: Theme.page-gap;
                     Label { text: root.titles[UiData.page]; font-size: Theme.body-size; font-weight: 600; horizontal-stretch: 0; }
+                    if UiData.page == 9 && !UiData.fake-ip-editor && root.settings-header-navigation: SettingsNavigation {
+                        active-section: root.settings-active-section;
+                        chosen(index) => { root.settings-navigation-request = index; }
+                    }
                     Rectangle { horizontal-stretch: 1; }
                     if UiData.page == 2: ActionButton { text: "打开目录"; quiet: true; compact: true; enabled: UiData.ready; clicked => { UiActions.dispatch(Intent.open-profiles, "", ""); } }
                     if UiData.page == 3: ActionButton { text: "关闭全部"; quiet: true; compact: true; danger: true; enabled: UiData.running && !UiData.working && !UiData.protected && !UiData.protection-pending; clicked => { UiActions.dispatch(Intent.close-all, "", ""); } }
@@ -185,7 +192,11 @@ export component AppWindow inherits Window {
                 if UiData.page == 6: NetworkPage { }
                 if UiData.page == 7: IpCheckPage { }
                 if UiData.page == 8: AiCheckPage { }
-                if UiData.page == 9: SettingsPage { wide-navigation: root.width > 880px; }
+                if UiData.page == 9: SettingsPage {
+                    navigation-request <=> root.settings-navigation-request;
+                    changed active-section => { root.settings-active-section = self.active-section; }
+                    init => { root.settings-active-section = self.active-section; }
+                }
             }
         }
     }

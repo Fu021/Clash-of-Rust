@@ -734,6 +734,38 @@ class PreparedVmTests(unittest.TestCase):
         result = prepared_vm_environment.packages_from_plan({'example_1_amd64.deb': {}}, 'x64')
         self.assertEqual(result[0]['architecture'], 'amd64')
 
+    def test_verified_guest_checks_its_native_frozen_environment(self):
+        environments = {
+            arch: {'status': 'frozen', 'lock': {'arch': arch}}
+            for arch in prepared_vm.ARCHITECTURES
+        }
+        linux = {'architectures': {}}
+        snapshot = {'prepared_vms': environments, 'upstream': {'linux': linux}}
+        actual = {'packages': []}
+        for arch in prepared_vm.ARCHITECTURES:
+            with self.subTest(arch=arch), patch.dict(os.environ, {
+                    'GITHUB_ACTIONS': 'true', 'COR_PREPARED_VM_VERIFIED': 'true',
+                    'BUILD_INPUTS_DIR': 'dependency-snapshot'}), \
+                    patch.object(build_inputs, 'manifest', return_value=snapshot), \
+                    patch.object(release_package, 'host_arch', return_value=arch), \
+                    patch.object(prepared_vm_environment, 'verify_frozen') as verify, \
+                    patch.object(prepared_vm_environment, 'inspect_environment', return_value=actual), \
+                    patch.object(prepared_vm_environment, 'check_environment') as check, \
+                    patch.object(release_package, 'install_packages') as install:
+                release_package.prepare_compatibility_environment()
+                verify.assert_called_once_with(Path('dependency-snapshot'), environments[arch], linux)
+                check.assert_called_once_with(actual, None, environments[arch]['lock'])
+                install.assert_not_called()
+                verify.side_effect = prepared_vm.ProtocolError('environment_mismatch')
+                with self.assertRaises(prepared_vm.ProtocolError):
+                    release_package.prepare_compatibility_environment()
+                self.assertEqual(check.call_count, 1)
+                verify.side_effect = None
+                environments[arch]['status'] = 'disabled'
+                with self.assertRaisesRegex(ValueError, 'frozen CI environment'):
+                    release_package.prepare_compatibility_environment()
+                environments[arch]['status'] = 'frozen'
+
     def test_warm_guest_must_match_full_package_manifest_and_frozen_versions(self):
         actual = self.manifest()['environment']
         lock = {'packages': actual['packages']}

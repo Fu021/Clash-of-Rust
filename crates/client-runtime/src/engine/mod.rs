@@ -39,6 +39,13 @@ fn needs_direct_listener(settings: &Settings) -> bool {
     !protection_pauses_network(settings)
 }
 
+fn startup_config_ready(config: &Value, mixed_port: u16) -> bool {
+    config["mixed-port"].as_u64() == Some(u64::from(mixed_port))
+        && config["tun"]["enable"].as_bool() == Some(false)
+        && config["tun"]["auto-route"].as_bool() == Some(true)
+        && config["tun"]["auto-detect-interface"].as_bool() == Some(true)
+}
+
 #[cfg(target_os = "macos")]
 fn mac_port_probe(port: u16) -> std::io::Result<tokio::net::TcpListener> {
     // Match Go's listener behavior. A graceful core shutdown can leave API
@@ -605,8 +612,8 @@ impl Engine {
             let ready = async {
                 let version = self.healthy().await?;
                 let config: Value = self.api.get("configs").await?;
-                if config["mixed-port"].as_u64() != Some(u64::from(self.settings.mixed_port)) {
-                    bail!("内核代理端口仍在初始化");
+                if !startup_config_ready(&config, self.settings.mixed_port) {
+                    bail!("内核代理端口或 TUN 配置仍在初始化");
                 }
                 if needs_direct_listener(&self.settings) {
                     tokio::net::TcpStream::connect((
@@ -2626,6 +2633,23 @@ fn validation_error_detail(error: &str) -> &str {
 #[cfg(test)]
 mod memory_tests {
     use super::*;
+
+    #[test]
+    fn startup_waits_for_the_disabled_tun_configuration_after_listeners_bind() {
+        let mut config = json!({"mixed-port": 7897});
+        assert!(!startup_config_ready(&config, 7897));
+        config["tun"] = json!({
+            "enable": false, "auto-route": false, "auto-detect-interface": false
+        });
+        assert!(!startup_config_ready(&config, 7897));
+        config["tun"]["auto-route"] = true.into();
+        assert!(!startup_config_ready(&config, 7897));
+        config["tun"]["auto-detect-interface"] = true.into();
+        assert!(startup_config_ready(&config, 7897));
+        assert!(!startup_config_ready(&config, 7898));
+        config["tun"]["enable"] = true.into();
+        assert!(!startup_config_ready(&config, 7897));
+    }
 
     #[test]
     fn protection_disables_the_direct_download_listener() {

@@ -169,12 +169,15 @@ def prepare_compatibility_environment():
         raise RuntimeError('Compatibility preparation requires a disposable GitHub Actions runner')
     if os.environ.get('COR_PREPARED_VM_VERIFIED') == 'true':
         from build_inputs import manifest
-        from prepared_vm_environment import check_environment, inspect_environment, verify_frozen
+        from prepared_vm_environment import (
+            check_environment, frozen_environments, inspect_environment, verify_frozen,
+        )
         value = manifest()
-        if not value or value.get('prepared_vm', {}).get('status') != 'frozen':
+        frozen = frozen_environments(value or {}).get(host_arch())
+        if not frozen or frozen.get('status') != 'frozen':
             raise ValueError('Prepared VM lacks the frozen CI environment')
-        verify_frozen(Path(os.environ['BUILD_INPUTS_DIR']), value['prepared_vm'], value['upstream']['linux'])
-        check_environment(inspect_environment(), None, value['prepared_vm']['lock'])
+        verify_frozen(Path(os.environ['BUILD_INPUTS_DIR']), frozen, value['upstream']['linux'])
+        check_environment(inspect_environment(), None, frozen['lock'])
         return
     # The hosted image's Azure mirror can stall on package indices even after
     # falling back for InRelease. Use the official HTTPS mirrors consistently.

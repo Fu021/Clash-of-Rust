@@ -5,31 +5,53 @@ import { PageScroll, Caption, SettingsSection, ListPanel, FormRow, ActionButton,
 import { AccentSwatches, ChoiceBar } from "../components/sections.slint";
 import { FakeIpPage } from "fake-ip.slint";
 
+export component SettingsNavigation inherits Flickable {
+    in property <int> active-section;
+    callback chosen(int);
+    height: navigation.preferred-height;
+    min-width: 0px;
+    preferred-width: navigation.preferred-width;
+    horizontal-stretch: 0;
+    vertical-stretch: 0;
+    content-width: max(self.width, navigation.preferred-width);
+    content-height: self.height;
+    navigation := HorizontalLayout {
+        x: 0px; y: 0px; width: self.preferred-width; height: parent.height;
+        spacing: 4px; alignment: start;
+        for title[index] in ["常规", "网络", "外观", "更新", "计划任务"]: ActionButton {
+            geometry-key: "settings-section:" + index;
+            text: title; quiet: true; compact: true;
+            selected: root.active-section == index;
+            clicked => { root.chosen(index); }
+        }
+    }
+}
+
 export component SettingsPage inherits PageSurface {
-    in property <bool> wide-navigation: true;
+    in-out property <int> navigation-request: -1;
+    out property <int> active-section: UiData.scroll-settings < 0px
+        && settings-scroll.content-height > settings-scroll.visible-height
+        && root.section-offset >= settings-scroll.content-height - settings-scroll.visible-height ? 4
+        : root.section-offset >= schedule-section.y ? 4
+        : root.section-offset >= update-section.y ? 3
+        : root.section-offset >= appearance-section.y ? 2
+        : root.section-offset >= network-section.y ? 1 : 0;
+    public function go-to-section(index: int) {
+        UiData.scroll-settings = -clamp(
+            index == 0 ? general-section.y : index == 1 ? network-section.y : index == 2 ? appearance-section.y : index == 3 ? update-section.y : schedule-section.y,
+            0px, max(0px, settings-scroll.content-height - settings-scroll.visible-height));
+    }
+    changed navigation-request => {
+        if self.navigation-request >= 0 {
+            self.go-to-section(self.navigation-request);
+            self.navigation-request = -1;
+        }
+    }
     property <length> section-offset: max(0px, -UiData.scroll-settings) + 1px;
     property <bool> dns-locked: !UiData.working && !UiData.update-busy && !UiData.protected && !UiData.protection-pending;
     if UiData.fake-ip-editor: FakeIpPage { }
-    if !UiData.fake-ip-editor: sections := HorizontalLayout {
-        property <int> active-section: UiData.scroll-settings < 0px
-            && settings-scroll.content-height > settings-scroll.visible-height
-            && root.section-offset >= settings-scroll.content-height - settings-scroll.visible-height ? 4
-            : root.section-offset >= schedule-section.y ? 4
-            : root.section-offset >= update-section.y ? 3
-            : root.section-offset >= appearance-section.y ? 2
-            : root.section-offset >= network-section.y ? 1 : 0;
-        spacing: 16px;
-        if root.wide-navigation && Theme.text-scale <= 1.25: VerticalLayout {
-            width: 112px; horizontal-stretch: 0; spacing: 4px; alignment: start;
-            for title[index] in ["常规", "网络", "外观", "更新", "计划任务"]: ActionButton {
-                text: title; quiet: true; compact: true; selected: sections.active-section == index;
-                clicked => {
-                    UiData.scroll-settings = -clamp(
-                        index == 0 ? general-section.y : index == 1 ? network-section.y : index == 2 ? appearance-section.y : index == 3 ? update-section.y : schedule-section.y,
-                        0px, max(0px, settings-scroll.content-height - settings-scroll.visible-height));
-                }
-            }
-        }
+    VerticalLayout {
+        visible: !UiData.fake-ip-editor;
         settings-scroll := PageScroll {
             horizontal-stretch: 1;
             content-y <=> UiData.scroll-settings;

@@ -9,6 +9,7 @@
 - **状态边界：** 重载当前运行 YAML，使用实际模式与 TUN 开关，保留手动节点选择；不重新绑定入口、不改系统代理或保护 DNS、不清 Fake-IP 映射。相同 TUN 配置由内核复用现有监听器并执行 `OnReload`，不重新申请授权。成功后清 DNS 缓存和旧连接，订阅、设置、运行文件和恢复记录不变；恢复不依赖 GUI 窗口。
 - **验证入口：** [路由采样与状态机](../../crates/client-runtime/src/control/network.rs)、[平台读取](../../crates/client-runtime/src/platform/network/mod.rs)、[恢复入口](../../crates/client-runtime/src/engine/recovery.rs)、[控制 API](../../crates/client-core/src/controller/mod.rs)与[真实内核集成](../../apps/desktop/tests/core_integration.rs)。覆盖离线恢复、路由抖动、退避、重启失效及代理/TUN 刷新后的状态和磁盘保留。
 - **证据与边界：** 上游行为核对 [ApplyConfig / updateGeneral](https://github.com/MetaCubeX/mihomo/blob/v1.19.33/hub/executor/executor.go) 与 [ReCreateTun](https://github.com/MetaCubeX/mihomo/blob/v1.19.33/listener/listener.go)。同提交 CI 和安装包结果见[最近复盘](reviews.md)及任务汇报；不能替代 Windows 开机断网后联网、真实 tailnet 与休眠恢复的设备验收。合并及公开发布须有用户授权，最终版本仍需同提交 CI 与安装包验证。
+- **启动门禁：** 上游先创建 mixed 监听器，之后才应用初始 TUN 配置。只核对 `/version`、mixed 端口或独立 DIRECT 监听器可能在此期间过早宣布就绪；随后 PATCH 启用 TUN 可能被初始禁用配置覆盖。启动须同时确认受管的 `tun.enable=false`、`auto-route=true` 和 `auto-detect-interface=true` 已返回，才允许恢复已保存的代理模式。该时序修复不能代替 Windows 驱动错误或长期 TLS 故障的实际诊断；安装后重启失败时保留内核日志，不放宽 TUN 状态与流量断言。
 
 ## 全部节点不可达时的更新与警告
 

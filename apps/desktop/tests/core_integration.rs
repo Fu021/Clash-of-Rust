@@ -792,7 +792,12 @@ async fn basic_system_proxy_and_tun() {
             facade.stop().await.unwrap();
             assert!(!facade.running());
             assert_eq!(facade.settings.proxy_mode, ProxyMode::Tun);
-            facade.start_with_proxy_mode().await.unwrap();
+            if let Err(error) = facade.start_with_proxy_mode().await {
+                for line in engine.lock().await.poll(Scope::Logs).await.unwrap().logs {
+                    eprintln!("{line}");
+                }
+                panic!("attached GUI could not restore saved TUN: {error:#}");
+            }
             assert!(facade.is_remote() && facade.running());
             let state = facade.poll(Scope::Home).await.unwrap();
             assert!(state.running && state.tun);

@@ -20,7 +20,7 @@ slint::slint! {
     import { PageSurface } from "../ui/components/motion.slint";
     import { MobileFrame } from "../ui/mobile/shared/frame.slint";
     import { MobileView } from "../ui/mobile/shared/state.slint";
-    import { SettingsPage } from "../ui/pages/settings.slint";
+    import { SettingsPage, SettingsNavigation } from "../ui/pages/settings.slint";
     import { UiData } from "../ui/state.slint";
     import { Theme } from "../ui/theme/palette.slint";
     export { UiGeometry } from "../ui/components/geometry.slint";
@@ -31,8 +31,15 @@ slint::slint! {
         in-out property <length> offset <=> UiData.scroll-settings;
         in-out property <string> draft <=> UiData.mixed-port;
         out property <color> selected-color: Theme.accent-wash;
-        settings := SettingsPage {
-            x: 0px; y: 0px; width: parent.width; height: parent.height;
+        property <int> navigation-request: -1;
+        VerticalLayout {
+            SettingsNavigation {
+                active-section: settings.active-section;
+                chosen(index) => { root.navigation-request = index; }
+            }
+            settings := SettingsPage {
+                navigation-request <=> root.navigation-request;
+            }
         }
     }
 
@@ -934,8 +941,8 @@ fn mobile_list_stacks_rows_and_keeps_sparse_content_at_the_top() {
         let highlighted: Vec<_> = ["常规", "网络", "外观", "更新", "计划任务"]
             .iter()
             .enumerate()
-            .filter_map(|(index, title)| {
-                let target = &bounds[&format!("button:{title}")];
+            .filter_map(|(index, _)| {
+                let target = &bounds[&format!("settings-section:{index}")];
                 let horizontal = (target[0] + 5.) as usize;
                 let vertical = (target[1] + target[3] / 2.) as usize;
                 (pixels[vertical * 740 + horizontal] == selected).then_some(index)
@@ -967,8 +974,8 @@ fn mobile_list_stacks_rows_and_keeps_sparse_content_at_the_top() {
         }
         assert_eq!(visited, expected);
     }
-    for (title, expected) in [("常规", 0), ("网络", 1), ("外观", 2)] {
-        let bounds = targets.borrow()[&format!("button:{title}")].clone();
+    for expected in [0, 1, 2] {
+        let bounds = targets.borrow()[&format!("settings-section:{expected}")].clone();
         let position = LogicalPosition::new(bounds[0] + bounds[2] / 2., bounds[1] + bounds[3] / 2.);
         for event in [
             WindowEvent::PointerPressed {

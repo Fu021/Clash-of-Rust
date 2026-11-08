@@ -14,7 +14,7 @@
 
 CI 的共享输入阶段显式开启 `COR_PREPARED_VM_INPUTS=true`，分别在临时 APT 状态目录解析 ARM64 和 x64 依赖，使用官方签名索引、空安装状态和独立配置，不改宿主 APT，也不依赖私网在线或已声明镜像能力。冻结测试工具的完整解析闭包、版本、全部待下载原包及 APT 索引；索引文件随现有依赖附件传递并复核摘要，锁本身不含 InRelease 的刷新时间。仅索引刷新而所选原包未变时可以复用同键。发布 VM job 再检查能力，未就绪时沿用冷路径；服务端之后上线能力可以复用同一 CI 快照，不为能力变更重新冻结输入。
 
-`scripts/prepared_vm_environment.py` 负责独立准备配方；环境键包含该文件内容与工具清单，不哈希 `linux_ci.py` 的应用测试逻辑。CI 的 `prepared_vms` 按 `arm64`、`x64` 保存独立清单，APT 索引放在 `vm-environment/<架构>/apt`，不能交叉复用。ARM64 使用 Ubuntu ports；x64 的基础及 updates 使用 Ubuntu archive，security 使用 Ubuntu security，分别锁定 `arm64` / `amd64` 与 `all` 包。冷路径按冻结版本安装，暖路径比较完整实际包清单和冻结的必需版本；基础盘已有包由官方基础镜像摘要固定。仅下载、不预装应用专有依赖，继续验证安装包声明。
+`scripts/prepared_vm_environment.py` 负责独立准备配方；环境键包含该文件内容与工具清单，不哈希 `linux_ci.py` 的应用测试逻辑。CI 的 `prepared_vms` 按 `arm64`、`x64` 保存独立清单，APT 索引放在 `vm-environment/<架构>/apt`，不能交叉复用。宿主应用快照、guest 冻结安装和安装前环境复核共用 `frozen_environments()`，再以 guest 本机架构选择；只含旧 `prepared_vm` 的快照仅兼容 ARM64，不能用作 x64 环境。ARM64 使用 Ubuntu ports；x64 的基础及 updates 使用 Ubuntu archive，security 使用 Ubuntu security，分别锁定 `arm64` / `amd64` 与 `all` 包。冷路径按冻结版本安装，暖路径比较完整实际包清单和冻结的必需版本；基础盘已有包由官方基础镜像摘要固定。仅下载、不预装应用专有依赖，继续验证安装包声明。
 
 镜像必须正常关机后封装，成为无外部 backing file 的独立系统盘；不保存内存或运行态快照。恢复后重新注入本轮 SSH 授权和实例身份，以只读基础盘加一次性 qcow2 写入层运行；不把测试后的磁盘覆盖回基础镜像。
 
