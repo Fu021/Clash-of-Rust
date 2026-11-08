@@ -192,8 +192,13 @@ mod tests {
     fn status_reports_external_tun_and_an_action_instead_of_route_sampling_noise() {
         let routes = json!({
             "scope":"current_network_namespace",
+            "holder_scope":"current_user",
             "ipv4":{"state":"observed","interface":"Meta","kind":"tun"},
             "ipv6":{"state":"unknown"},
+            "tun_holders":{
+                "state":"complete","scope":"current_user",
+                "interfaces":{"Meta":[]},"skipped_other_users":1
+            },
             "warnings":["tun_owner_unconfirmed"]
         });
         let status = render(
@@ -202,7 +207,9 @@ mod tests {
         );
         assert!(status.contains("外部 TUN"));
         assert!(status.contains("Meta"));
-        assert!(status.contains("无法读取"));
+        assert!(status.contains("当前用户范围未发现持有进程"), "{status}");
+        assert!(status.contains("sudo cor status --all-users"), "{status}");
+        assert!(!status.contains("无法读取"), "{status}");
         assert!(status.contains("cor diagnose --output cor-diagnose.json"));
         assert!(!status.contains("ipv6"));
         assert!(!status.contains("未检测连通性"));
