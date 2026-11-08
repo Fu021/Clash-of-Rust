@@ -152,10 +152,8 @@ def linux_package_tests(package, tun_test, structure=True):
 
 
 def compatibility_dependencies():
-    return ['git', 'dbus-x11', 'iproute2', 'util-linux', 'libcap2-bin',
-            'xvfb', 'xwayland', 'x11-utils', 'xdotool', 'wmctrl', 'openbox',
-            'gnome-shell', 'gnome-shell-extension-appindicator', 'policykit-1-gnome',
-            'libgl1-mesa-dri', 'libegl1']
+    from prepared_vm_environment import TEST_PACKAGES
+    return list(TEST_PACKAGES)
 
 
 def compatibility_download_dependencies():
@@ -169,6 +167,15 @@ def compatibility_download_dependencies():
 def prepare_compatibility_environment():
     if os.environ.get('GITHUB_ACTIONS') != 'true':
         raise RuntimeError('Compatibility preparation requires a disposable GitHub Actions runner')
+    if os.environ.get('COR_PREPARED_VM_VERIFIED') == 'true':
+        from build_inputs import manifest
+        from prepared_vm_environment import check_environment, inspect_environment, verify_frozen
+        value = manifest()
+        if not value or value.get('prepared_vm', {}).get('status') != 'frozen':
+            raise ValueError('Prepared VM lacks the frozen CI environment')
+        verify_frozen(Path(os.environ['BUILD_INPUTS_DIR']), value['prepared_vm'], value['upstream']['linux'])
+        check_environment(inspect_environment(), None, value['prepared_vm']['lock'])
+        return
     # The hosted image's Azure mirror can stall on package indices even after
     # falling back for InRelease. Use the official HTTPS mirrors consistently.
     for name, mirror in (('apt-mirrors.txt', 'https://archive.ubuntu.com/ubuntu/'),

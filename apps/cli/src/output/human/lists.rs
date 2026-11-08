@@ -155,7 +155,7 @@ pub(super) fn delays(out: &mut dyn Write, args: &Args, value: &Value) -> Result<
                 out,
                 "全部节点不可达。请更换节点；更新失败后会自动尝试直连。"
             )?;
-            writeln!(out, "接管状态：cor status · 停止接管：cor proxy off")?;
+            writeln!(out, "接管状态：cor status · 关闭代理：cor proxy off")?;
             writeln!(out, "导出诊断：cor diagnose --output cor-diagnose.json")?;
         }
     }

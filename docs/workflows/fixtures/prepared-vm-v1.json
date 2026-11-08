@@ -1,0 +1,306 @@
+{
+  "schema": 1,
+  "contract": "prepared-vm-v1",
+  "scope": "Synthetic offline metadata only; never download or upload these examples.",
+  "base_request": {
+    "schema": 1,
+    "group": "vm/prepared",
+    "env_key": "env1-bd65672ebdcf862c10e3415b7e5237c1b7b4a4af85087b9eb83639f47af3fd22",
+    "descriptor": {
+      "schema": 1,
+      "kind": "ubuntu-compat",
+      "distribution": "ubuntu",
+      "release": "20.04",
+      "arch": "arm64",
+      "kernel_series": "5.4",
+      "base_sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "python_sha256": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+      "environment_lock_sha256": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+      "prepare_recipe_sha256": "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd"
+    },
+    "image": {
+      "format": "qcow2",
+      "size": 1048576,
+      "virtual_size": 25769803776,
+      "sha256": "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee"
+    },
+    "environment": {
+      "kernel_release": "5.4.0-216-generic",
+      "python_version": "3.12.0",
+      "packages": [
+        {"name": "base-files", "version": "11ubuntu5.8", "architecture": "arm64"},
+        {"name": "ca-certificates", "version": "20230311ubuntu0.20.04.1", "architecture": "all"},
+        {"name": "linux-image-5.4.0-216-generic", "version": "5.4.0-216.236", "architecture": "arm64"}
+      ],
+      "packages_sha256": "cd014afc9f3a7c281ee422972aa6d63dc5702ab31c9a1350f4fb34879bfb79bd",
+      "sources": [
+        {
+          "url": "https://cloud-images.ubuntu.com/releases/focal/release/ubuntu-20.04-server-cloudimg-arm64.img",
+          "size": 536870912,
+          "sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+        },
+        {
+          "url": "https://github.com/astral-sh/python-build-standalone/releases/download/20990101/synthetic-python.tar.gz",
+          "size": 33554432,
+          "sha256": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+        }
+      ]
+    },
+    "producer": {
+      "repository": "example/project",
+      "commit": "1111111111111111111111111111111111111111",
+      "run_id": 1,
+      "run_attempt": 1
+    }
+  },
+  "cases": [
+    {
+      "id": "valid-base",
+      "operations": [],
+      "expected": {
+        "valid": true,
+        "env_key": "env1-bd65672ebdcf862c10e3415b7e5237c1b7b4a4af85087b9eb83639f47af3fd22",
+        "packages_sha256": "cd014afc9f3a7c281ee422972aa6d63dc5702ab31c9a1350f4fb34879bfb79bd"
+      }
+    },
+    {
+      "id": "valid-new-producer-same-environment",
+      "operations": [
+        {"op": "set", "path": ["producer", "repository"], "value": "example/another-project"},
+        {"op": "set", "path": ["producer", "commit"], "value": "2222222222222222222222222222222222222222"},
+        {"op": "set", "path": ["producer", "run_id"], "value": 2},
+        {"op": "set", "path": ["producer", "run_attempt"], "value": 3}
+      ],
+      "expected": {
+        "valid": true,
+        "env_key": "env1-bd65672ebdcf862c10e3415b7e5237c1b7b4a4af85087b9eb83639f47af3fd22",
+        "packages_sha256": "cd014afc9f3a7c281ee422972aa6d63dc5702ab31c9a1350f4fb34879bfb79bd"
+      }
+    },
+    {
+      "id": "valid-new-recipe-new-environment",
+      "operations": [
+        {"op": "set", "path": ["descriptor", "prepare_recipe_sha256"], "value": "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff"},
+        {"op": "set", "path": ["env_key"], "value": "env1-3f723af9bb3d9a9618edc074453c1653c2518420bb909ed468893284611d6516"}
+      ],
+      "expected": {
+        "valid": true,
+        "env_key": "env1-3f723af9bb3d9a9618edc074453c1653c2518420bb909ed468893284611d6516",
+        "packages_sha256": "cd014afc9f3a7c281ee422972aa6d63dc5702ab31c9a1350f4fb34879bfb79bd"
+      }
+    },
+    {
+      "id": "valid-largest-run-id",
+      "operations": [
+        {"op": "set", "path": ["producer", "run_id"], "value": 9007199254740991}
+      ],
+      "expected": {
+        "valid": true,
+        "env_key": "env1-bd65672ebdcf862c10e3415b7e5237c1b7b4a4af85087b9eb83639f47af3fd22",
+        "packages_sha256": "cd014afc9f3a7c281ee422972aa6d63dc5702ab31c9a1350f4fb34879bfb79bd"
+      }
+    },
+    {
+      "id": "reject-extra-top-field",
+      "operations": [{"op": "set", "path": ["command"], "value": "synthetic"}],
+      "expected": {"valid": false, "error": "invalid_metadata"}
+    },
+    {
+      "id": "reject-boolean-schema",
+      "operations": [{"op": "set", "path": ["schema"], "value": true}],
+      "expected": {"valid": false, "error": "invalid_metadata"}
+    },
+    {
+      "id": "reject-floating-schema",
+      "operations": [{"op": "set", "path": ["schema"], "value": 1.0}],
+      "expected": {"valid": false, "error": "invalid_metadata"}
+    },
+    {
+      "id": "reject-missing-producer",
+      "operations": [{"op": "remove", "path": ["producer"]}],
+      "expected": {"valid": false, "error": "invalid_metadata"}
+    },
+    {
+      "id": "reject-extra-descriptor-field",
+      "operations": [{"op": "set", "path": ["descriptor", "application_version"], "value": "1.0.0"}],
+      "expected": {"valid": false, "error": "invalid_metadata"}
+    },
+    {
+      "id": "reject-uppercase-digest",
+      "operations": [{"op": "set", "path": ["descriptor", "base_sha256"], "value": "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"}],
+      "expected": {"valid": false, "error": "invalid_metadata"}
+    },
+    {
+      "id": "reject-wrong-environment-key",
+      "operations": [{"op": "set", "path": ["env_key"], "value": "env1-0000000000000000000000000000000000000000000000000000000000000000"}],
+      "expected": {"valid": false, "error": "identity_conflict"}
+    },
+    {
+      "id": "reject-unsupported-architecture",
+      "operations": [{"op": "set", "path": ["descriptor", "arch"], "value": "x64"}],
+      "expected": {"valid": false, "error": "unsupported_image"}
+    },
+    {
+      "id": "reject-extra-environment-field",
+      "operations": [{"op": "set", "path": ["environment", "path"], "value": "/synthetic"}],
+      "expected": {"valid": false, "error": "invalid_metadata"}
+    },
+    {
+      "id": "reject-empty-packages",
+      "operations": [{"op": "set", "path": ["environment", "packages"], "value": []}],
+      "expected": {"valid": false, "error": "invalid_metadata"}
+    },
+    {
+      "id": "reject-extra-package-field",
+      "operations": [{"op": "set", "path": ["environment", "packages", 0, "installed"], "value": true}],
+      "expected": {"valid": false, "error": "invalid_metadata"}
+    },
+    {
+      "id": "reject-duplicate-package-identity",
+      "operations": [
+        {"op": "set", "path": ["environment", "packages", 1], "value": {"name": "base-files", "version": "11ubuntu5.8", "architecture": "arm64"}}
+      ],
+      "expected": {"valid": false, "error": "invalid_metadata"}
+    },
+    {
+      "id": "reject-unsorted-packages",
+      "operations": [
+        {"op": "set", "path": ["environment", "packages", 0], "value": {"name": "ca-certificates", "version": "20230311ubuntu0.20.04.1", "architecture": "all"}},
+        {"op": "set", "path": ["environment", "packages", 1], "value": {"name": "base-files", "version": "11ubuntu5.8", "architecture": "arm64"}}
+      ],
+      "expected": {"valid": false, "error": "invalid_metadata"}
+    },
+    {
+      "id": "reject-package-architecture",
+      "operations": [{"op": "set", "path": ["environment", "packages", 0, "architecture"], "value": "amd64"}],
+      "expected": {"valid": false, "error": "invalid_metadata"}
+    },
+    {
+      "id": "reject-qualified-package-name",
+      "operations": [{"op": "set", "path": ["environment", "packages", 0, "name"], "value": "base-files:arm64"}],
+      "expected": {"valid": false, "error": "invalid_metadata"}
+    },
+    {
+      "id": "reject-package-control-character",
+      "operations": [{"op": "set", "path": ["environment", "packages", 0, "version"], "value": "11ubuntu5.8\n"}],
+      "expected": {"valid": false, "error": "invalid_metadata"}
+    },
+    {
+      "id": "reject-wrong-package-digest",
+      "operations": [{"op": "set", "path": ["environment", "packages_sha256"], "value": "0000000000000000000000000000000000000000000000000000000000000000"}],
+      "expected": {"valid": false, "error": "invalid_metadata"}
+    },
+    {
+      "id": "reject-wrong-kernel-series",
+      "operations": [{"op": "set", "path": ["environment", "kernel_release"], "value": "6.8.0-1-generic"}],
+      "expected": {"valid": false, "error": "invalid_metadata"}
+    },
+    {
+      "id": "reject-invalid-python-version",
+      "operations": [{"op": "set", "path": ["environment", "python_version"], "value": "3.12"}],
+      "expected": {"valid": false, "error": "invalid_metadata"}
+    },
+    {
+      "id": "reject-duplicate-source-digest",
+      "operations": [{"op": "set", "path": ["environment", "sources", 1, "sha256"], "value": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"}],
+      "expected": {"valid": false, "error": "invalid_metadata"}
+    },
+    {
+      "id": "reject-unsorted-sources",
+      "operations": [
+        {"op": "set", "path": ["environment", "sources", 0, "sha256"], "value": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"},
+        {"op": "set", "path": ["environment", "sources", 1, "sha256"], "value": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"}
+      ],
+      "expected": {"valid": false, "error": "invalid_metadata"}
+    },
+    {
+      "id": "reject-missing-base-source",
+      "operations": [
+        {"op": "set", "path": ["environment", "sources", 0, "sha256"], "value": "0000000000000000000000000000000000000000000000000000000000000000"}
+      ],
+      "expected": {"valid": false, "error": "invalid_metadata"}
+    },
+    {
+      "id": "reject-source-credentials",
+      "operations": [{"op": "set", "path": ["environment", "sources", 0, "url"], "value": "https://example:synthetic@cloud-images.ubuntu.com/example.img"}],
+      "expected": {"valid": false, "error": "invalid_metadata"}
+    },
+    {
+      "id": "reject-source-query",
+      "operations": [{"op": "set", "path": ["environment", "sources", 0, "url"], "value": "https://cloud-images.ubuntu.com/example.img?synthetic=1"}],
+      "expected": {"valid": false, "error": "invalid_metadata"}
+    },
+    {
+      "id": "reject-boolean-source-size",
+      "operations": [{"op": "set", "path": ["environment", "sources", 0, "size"], "value": true}],
+      "expected": {"valid": false, "error": "invalid_metadata"}
+    },
+    {
+      "id": "reject-repository-url",
+      "operations": [{"op": "set", "path": ["producer", "repository"], "value": "https://github.com/example/project"}],
+      "expected": {"valid": false, "error": "invalid_metadata"}
+    },
+    {
+      "id": "reject-boolean-run-id",
+      "operations": [{"op": "set", "path": ["producer", "run_id"], "value": true}],
+      "expected": {"valid": false, "error": "invalid_metadata"}
+    },
+    {
+      "id": "reject-too-large-run-id",
+      "operations": [{"op": "set", "path": ["producer", "run_id"], "value": 9007199254740992}],
+      "expected": {"valid": false, "error": "invalid_metadata"}
+    },
+    {
+      "id": "reject-zero-attempt",
+      "operations": [{"op": "set", "path": ["producer", "run_attempt"], "value": 0}],
+      "expected": {"valid": false, "error": "invalid_metadata"}
+    },
+    {
+      "id": "reject-uppercase-commit",
+      "operations": [{"op": "set", "path": ["producer", "commit"], "value": "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"}],
+      "expected": {"valid": false, "error": "invalid_metadata"}
+    },
+    {
+      "id": "reject-null-producer",
+      "operations": [{"op": "set", "path": ["producer"], "value": null}],
+      "expected": {"valid": false, "error": "invalid_metadata"}
+    },
+    {
+      "id": "reject-zero-image-size",
+      "operations": [{"op": "set", "path": ["image", "size"], "value": 0}],
+      "expected": {"valid": false, "error": "invalid_metadata"}
+    },
+    {
+      "id": "reject-boolean-virtual-size",
+      "operations": [{"op": "set", "path": ["image", "virtual_size"], "value": true}],
+      "expected": {"valid": false, "error": "invalid_metadata"}
+    },
+    {
+      "id": "reject-too-large-image",
+      "operations": [{"op": "set", "path": ["image", "size"], "value": 8589934593}],
+      "expected": {"valid": false, "error": "unsupported_image"}
+    },
+    {
+      "id": "reject-too-large-virtual-size",
+      "operations": [{"op": "set", "path": ["image", "virtual_size"], "value": 34359738880}],
+      "expected": {"valid": false, "error": "unsupported_image"}
+    },
+    {
+      "id": "reject-unaligned-virtual-size",
+      "operations": [{"op": "set", "path": ["image", "virtual_size"], "value": 25769803777}],
+      "expected": {"valid": false, "error": "invalid_metadata"}
+    },
+    {
+      "id": "reject-duplicate-json-schema",
+      "operations": [],
+      "wire": {"duplicate_top_key": "schema"},
+      "expected": {"valid": false, "error": "invalid_metadata"}
+    },
+    {
+      "id": "reject-trailing-json-value",
+      "operations": [],
+      "wire": {"append": " null"},
+      "expected": {"valid": false, "error": "invalid_metadata"}
+    }
+  ]
+}

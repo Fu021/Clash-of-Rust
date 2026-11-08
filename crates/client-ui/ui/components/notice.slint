@@ -96,7 +96,7 @@ export component DesktopNotice inherits Rectangle {
             }
             if UiData.notice-error: DiagnosticActions { context: root.message; notice-control: true;
                 if UiData.notice-recover-network && UiData.proxy-mode != 2 && !UiData.protected && !UiData.protection-pending: ActionButton {
-                    modal-control: true; notice-control: true; compact: true; quiet: true; text: "停止接管"; enabled: !UiData.working;
+                    modal-control: true; notice-control: true; compact: true; quiet: true; text: "关闭代理"; enabled: !UiData.working;
                     clicked => { UiActions.dispatch(Intent.proxy-mode, "2", ""); }
                 }
                 if UiData.notice-modal && UiData.retry-core: ActionButton { modal-control: true; notice-control: true; compact: true; quiet: true; text: "重启内核"; enabled: UiData.notice != "" && !UiData.working && !UiData.protected && !UiData.protection-pending; clicked => { UiActions.dispatch(Intent.restart-core, "", ""); } }

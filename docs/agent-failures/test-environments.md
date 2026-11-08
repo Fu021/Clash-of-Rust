@@ -41,6 +41,7 @@
 - 桌面窗口可能早于后台初始化显示；GUI/CLI 共用后台测试应先等待 GUI 的控制端点就绪，再执行会创建后台的 CLI 操作。
 - [打包 40818293573](https://github.com/Fu021/Clash-of-Rust/actions/runs/40818293573)在 Ubuntu latest 首次检查 Wayland 窗口时发现尺寸不足，但未记录尺寸；[打包 40834032340](https://github.com/Fu021/Clash-of-Rust/actions/runs/40834032340)发现重建窗口可能短暂报告零尺寸。初次启动及托盘重建均等待实际窗口达到最小尺寸，超时保留最后观测值；持续过小仍须失败。
 - 同一轮 20.04 x64 的 root CLI 请求和内核 TUN 日志均成功，但立即检查异步流量统计失败。测试应同时验证系统路由、TUN 双向计数和内核流量统计，在有限时间内等待统计可见；失败保留计数，不以延时或成功的 HTTP 响应代替流量证据。
+- 预发布 `42465627320` 的 20.04 ARM64 在坏节点下更新订阅时收到 DIRECT 502，同提交 x64 通过。原夹具把更新域名的 IPv4 也指向 TUN 捕获网段，双栈选择及重载时序尚无完整证据；更新目标现独立映射到双栈物理 peer，并明确断言其路由。普通站点仍在 TUN 网段，保留真实流量、失败代理、独立 DIRECT、配置不变和关闭 TUN 后更新的验证；不能据此宣称真实用户的长期断网根因已定位。
 - 同一轮 Ubuntu 20.04 虚拟机的 GNOME 3.36 不接受较新的 `--wayland-display` 参数；安装测试按实际支持的选项启动，并识别新建的 Wayland socket，不省略旧版 Wayland 验证。
 - [不发布打包 40973627120](https://github.com/Fu021/Clash-of-Rust/actions/runs/40973627120) 的 Ubuntu 20.04 ARM64 软件模拟虚拟机在 GUI 依赖安装阶段达到 15 分钟：`man-db` 全量索引约耗时 6 分 34 秒，测试尚未进入应用检查。disposable guest 安装 GUI 依赖前应排除文档与 man 页面并关闭 `man-db` 自动索引；ARM64 给安装步骤更长上限，但仍须实际执行 GUI、代理与 TUN 检查。
 - 非 root runner 不能可靠终止已切换为 root 的 `sudo` 子进程；Python 超时清理会以 `PermissionError` 覆盖真实超时。交给 sudo 的限时操作应由 root 所有的 `timeout` 控制并保留退出码，外层宿主超时只作为最后防线。

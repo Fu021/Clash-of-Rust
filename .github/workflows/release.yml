@@ -397,12 +397,13 @@ jobs:
         with:
           url: ${{ steps.tailnet.outcome == 'success' && vars.LOCAL_CACHE_URL || '' }}
           token: ${{ secrets.LOCAL_CACHE_TOKEN }}
-      - name: Prepare Ubuntu VM original downloads
+      - name: Configure VM originals without downloading before prepared-image lookup
         uses: ./.github/actions/linux-download-cache
         timeout-minutes: 15
         continue-on-error: true
         with:
           vm: 'true'
+          download-originals: 'false'
       - name: Install virtual machine tools
         shell: python
         env:

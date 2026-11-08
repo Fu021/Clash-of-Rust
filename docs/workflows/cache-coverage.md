@@ -56,3 +56,5 @@ GitHub 热缓存预算为 9 GiB，主分支保存，其他来源可读取兼容�
 各下载 job（含发布 Ubuntu latest）均保存 `upstream-downloads-<job>-<index>` artifact，内含完整清单、批次请求、manifest id、已核验分页、固定错误码。summary 区分未接收、pending、ready 和失败；只有清单 ready、ready=total 且所有分页身份和单项状态核对完成才算整批入库。附件只是证据，服务端不会扫描附件。job 结束仍 pending 的任务由服务端继续处理，之后验收须重新查在线状态，不能将旧附件或中间 inventory 缺项当最终结论。
 
 工作流不调用私网 DELETE，不同步 GitHub 淘汰结果，也不修改或上传 README.txt。服务端协作与保留范围见[协议](cache-server.md)和[可保留白名单](cache-retention.md)。
+
+维护者于 2026-11-08 授权以独立 `vm/prepared` 复用 Ubuntu 20.04 ARM64 预装测试环境；镜像只存私网，禁止进入 GitHub Actions Cache、artifact 或 Release。客户端与发布入口已实现，服务端能力未验收时保持冷路径；不复用原包接口，不跳过应用安装及 GUI/代理/TUN 测试。冻结输入、能力门禁、回退和冷/暖测速见[预装镜像方案](prepared-vm-images.md)。

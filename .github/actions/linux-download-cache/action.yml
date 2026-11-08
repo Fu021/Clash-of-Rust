@@ -4,6 +4,9 @@ inputs:
   vm:
     description: Also download the original cloud image
     default: 'false'
+  download-originals:
+    description: Defer originals when the VM may restore a prepared private image
+    default: 'true'
 runs:
   using: composite
   steps:
@@ -18,6 +21,7 @@ runs:
           echo "COR_LINUX_APT_CACHE=$COR_LINUX_TOOLS_DIR/apt" >> "$GITHUB_ENV"
         fi
     - name: Verify or download frozen original archives
+      if: inputs.download-originals == 'true'
       shell: bash
       env:
         CACHE_VM: ${{ inputs.vm }}

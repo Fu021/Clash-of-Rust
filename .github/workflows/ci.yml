@@ -100,6 +100,7 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
           PYTHONDONTWRITEBYTECODE: '1'
+          COR_PREPARED_VM_INPUTS: 'true'
         run: python3 scripts/build_inputs.py resolve
       - name: Prepare shared Android source downloads
         if: ${{ !inputs.refresh_dependencies }}

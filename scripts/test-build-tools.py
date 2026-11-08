@@ -23,6 +23,9 @@ import upstream_cache
 import cache_shards
 import linux_apt
 import linux_ci
+import prepared_vm
+import prepared_vm_environment
+import tun_dns_fixture
 import build_inputs
 import os
 import copy
@@ -33,7 +36,7 @@ import urllib.error
 import urllib.parse
 import zipfile
 import tarfile
-from contextlib import nullcontext
+from contextlib import contextmanager, nullcontext
 
 _spec = importlib.util.spec_from_file_location('publish_release', build.ROOT/'scripts/publish-release.py')
 release = importlib.util.module_from_spec(_spec)
@@ -52,6 +55,519 @@ _preview_spec = importlib.util.spec_from_file_location(
     'preview_slint', build.ROOT/'scripts/preview-slint.py')
 preview_slint = importlib.util.module_from_spec(_preview_spec)
 _preview_spec.loader.exec_module(preview_slint)
+
+
+class TunDnsFixtureTests(unittest.TestCase):
+    def query(self, name, kind):
+        labels = b''.join(bytes([len(label)]) + label.encode('ascii') for label in name.split('.'))
+        return struct.pack('!HHHHHH', 1, 0x0100, 1, 0, 0, 0) + labels + b'\0' + struct.pack('!HH', kind, 1)
+
+    def test_update_addresses_stay_outside_tun_traffic_targets(self):
+        import ipaddress
+        for kind, offset in ((1, 0), (28, 1)):
+            with self.subTest(kind=kind):
+                query = self.query('updates.fixture.test', kind)
+                answer = tun_dns_fixture.dns_response(query, False)
+                length = 16 if kind == 28 else 4
+                self.assertEqual(str(ipaddress.ip_address(answer[-length:])),
+                                 tun_dns_fixture.UPDATES[offset])
+                query = self.query('web.fixture.test', kind)
+                answer = tun_dns_fixture.dns_response(query, False)
+                self.assertEqual(str(ipaddress.ip_address(answer[-length:])),
+                                 tun_dns_fixture.WEBSITE[offset])
+                if kind == 1:
+                    self.assertNotIn(ipaddress.ip_address(tun_dns_fixture.UPDATES[offset]),
+                                     ipaddress.ip_network('203.0.113.0/24'))
+
+    def test_update_lookup_is_not_allowed_through_private_bootstrap(self):
+        with patch.dict(tun_dns_fixture.METRICS, tun_dns_fixture.METRICS.copy()):
+            for kind in (1, 28):
+                answer = tun_dns_fixture.dns_response(self.query('updates.fixture.test', kind), True)
+                self.assertEqual(struct.unpack_from('!H', answer, 6)[0], 0)
+
+
+class PreparedVmTests(unittest.TestCase):
+    def fixture(self):
+        return json.loads((build.ROOT/'docs/workflows/fixtures/prepared-vm-v1.json').read_text())
+
+    def manifest(self, payload=b'prepared-system-disk'):
+        record = self.fixture()['base_request']
+        record['image']['size'] = len(payload)
+        record['image']['sha256'] = hashlib.sha256(payload).hexdigest()
+        return record
+
+    def receipt(self, record):
+        return {**copy.deepcopy(record), 'status': 'ready', 'object_id': 'object_one'}
+
+    @contextmanager
+    def replies(self, responses):
+        calls = []
+
+        @contextmanager
+        def response(config, path, **kwargs):
+            calls.append((config, path, kwargs))
+            status, body = responses.pop(0)
+            payload = body if isinstance(body, bytes) else json.dumps(body).encode()
+            stream = io.BytesIO(payload)
+            reply = MagicMock(status=status)
+            reply.read = stream.read
+            reply.read1 = stream.read1
+            reply.getheader.side_effect = lambda name: str(len(payload)) if name == 'Content-Length' else None
+            yield reply
+
+        with patch.object(local_cache, 'response', side_effect=response):
+            yield calls
+
+    def test_shared_contract_vectors(self):
+        fixture = self.fixture()
+        for case in fixture['cases']:
+            with self.subTest(case=case['id']):
+                record = copy.deepcopy(fixture['base_request'])
+                for operation in case['operations']:
+                    container = record
+                    for component in operation['path'][:-1]:
+                        container = container[component]
+                    name = operation['path'][-1]
+                    if operation['op'] == 'set':
+                        container[name] = copy.deepcopy(operation['value'])
+                    else:
+                        del container[name]
+                payload = json.dumps(record)
+                wire = case.get('wire', {})
+                if name := wire.get('duplicate_top_key'):
+                    payload = '{' + json.dumps(name) + ':' + json.dumps(record[name]) + ',' + payload[1:]
+                payload += wire.get('append', '')
+                if case['expected']['valid']:
+                    value = prepared_vm.validate(prepared_vm.decode(payload.encode()))
+                    self.assertEqual(value['env_key'], case['expected']['env_key'])
+                    self.assertEqual(value['environment']['packages_sha256'],
+                                     case['expected']['packages_sha256'])
+                else:
+                    with self.assertRaises(prepared_vm.ProtocolError) as failure:
+                        prepared_vm.validate(prepared_vm.decode(payload.encode()))
+                    self.assertEqual(failure.exception.code, case['expected']['error'])
+
+    def test_parser_rejects_nested_duplicates_nonfinite_invalid_utf8_and_oversize(self):
+        for payload in (b'{"nested":{"key":1,"key":2}}', b'{"key":NaN}', b'{"key":Infinity}',
+                        b'\xff', b' ' * (prepared_vm.MAX_JSON + 1)):
+            with self.subTest(payload=payload[:30]), self.assertRaises(prepared_vm.ProtocolError):
+                prepared_vm.decode(payload)
+
+    def test_disabled_capability_never_probes_a_vm_endpoint(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            client = prepared_vm.Client({'url': 'http://127.0.0.1', 'token': 'private'},
+                                        Path(temporary)/'report.json')
+            with self.replies([(200, {'capabilities': []})]) as calls:
+                self.assertFalse(client.available())
+            self.assertEqual([call[1] for call in calls], ['/health'])
+            self.assertNotIn('private', (Path(temporary)/'report.json').read_text())
+
+    def test_capability_requires_exact_supported_limits(self):
+        limits = {'architectures': ['arm64'], 'max_image_bytes': prepared_vm.MAX_IMAGE,
+                  'max_virtual_bytes': prepared_vm.MAX_VIRTUAL, 'range': False}
+        with tempfile.TemporaryDirectory() as temporary:
+            client = prepared_vm.Client({'url': 'http://127.0.0.1', 'token': 'private'},
+                                        Path(temporary)/'report.json')
+            for advertised, expected in ((limits, True), ({**limits, 'max_image_bytes': True}, False),
+                                         ({**limits, 'range': True}, False)):
+                with self.subTest(limits=advertised), self.replies([
+                    (200, {'capabilities': [prepared_vm.CAPABILITY], 'prepared_vm': advertised})
+                ]):
+                    self.assertEqual(client.available(), expected)
+
+    def test_private_restore_is_atomic_and_preserves_existing_file_on_bad_bytes(self):
+        record = self.manifest()
+        for body, result in ((b'prepared-system-disk', True), (b'damaged-system-disk!', False)):
+            with self.subTest(result=result), tempfile.TemporaryDirectory() as temporary:
+                target = Path(temporary)/'image.qcow2'
+                target.write_bytes(b'existing')
+                client = prepared_vm.Client({}, Path(temporary)/'report.json')
+                replies = [(200, self.receipt(record)), (200, body)]
+                if not result:
+                    replies.append((200, body))
+                with self.replies(replies) as calls:
+                    restored = client.restore(record['descriptor'], target, lambda path, size: None)
+                self.assertEqual(restored is not None, result)
+                self.assertEqual(target.read_bytes(), body if result else b'existing')
+                self.assertTrue(all('Range' not in call[2].get('headers', {}) for call in calls))
+                self.assertFalse(list(Path(temporary).glob('vm-download-*')))
+
+    def test_http_failure_bodies_are_not_exported_and_404_is_a_miss(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            client = prepared_vm.Client({}, Path(temporary)/'report.json')
+            with self.replies([(404, b'not-json private-service-address')]):
+                self.assertIsNone(client.lookup(self.manifest()['descriptor']))
+            with self.replies([(507, {'error_code': 'capacity_unavailable', 'detail': 'private'})]):
+                with self.assertRaises(prepared_vm.ProtocolError) as failure:
+                    client.request('/v1/vm-images/uploads', 'POST', self.manifest())
+            self.assertEqual(failure.exception.status, 507)
+            self.assertEqual(str(failure.exception), 'capacity_unavailable')
+
+    def test_upload_streams_a_file_and_recovers_a_lost_content_response(self):
+        record = self.manifest()
+        for lost in (False, True):
+            with self.subTest(lost=lost), tempfile.TemporaryDirectory() as temporary:
+                image = Path(temporary)/'image.qcow2'
+                image.write_bytes(b'prepared-system-disk')
+                client = prepared_vm.Client({}, Path(temporary)/'report.json')
+                reservation = {'schema': 1, 'group': prepared_vm.GROUP, 'env_key': record['env_key'],
+                               'status': 'uploading', 'upload_id': 'upload_one', 'expires_at': 4102444800}
+                responses = [(201, reservation),
+                             (502, b'private error') if lost else (200, self.receipt(record))]
+                if lost:
+                    responses.append((200, self.receipt(record)))
+                with self.replies(responses) as calls:
+                    self.assertIsNotNone(client.upload(record, image))
+                self.assertEqual(calls[1][2]['headers']['Content-Length'], str(image.stat().st_size))
+                self.assertIsInstance(calls[1][2]['file'], prepared_vm.DeadlineReader)
+                self.assertEqual(calls[1][1], '/v1/vm-images/uploads/upload_one/content')
+                if lost:
+                    self.assertEqual(calls[2][1], '/v1/vm-images/uploads/upload_one')
+                self.assertNotIn('private', (Path(temporary)/'report.json').read_text())
+
+    def test_existing_immutable_image_keeps_original_producer_and_different_file_identity(self):
+        record = self.manifest()
+        existing = self.receipt(record)
+        existing['producer']['run_id'] = 9
+        existing['image']['sha256'] = 'f' * 64
+        existing['environment']['sources'][0]['url'] = 'https://cloud-images.ubuntu.com/synthetic-alias.img'
+        with tempfile.TemporaryDirectory() as temporary:
+            image = Path(temporary)/'image.qcow2'
+            image.write_bytes(b'prepared-system-disk')
+            client = prepared_vm.Client({}, Path(temporary)/'report.json')
+            with self.replies([(200, existing)]) as calls:
+                result = client.upload(record, image)
+            self.assertEqual(result['producer']['run_id'], 9)
+            self.assertEqual(result['image']['sha256'], 'f' * 64)
+            self.assertEqual(len(calls), 1)
+
+    def test_busy_upload_is_pending_and_does_not_send_content(self):
+        record = self.manifest()
+        busy = {'schema': 1, 'group': prepared_vm.GROUP, 'env_key': record['env_key'],
+                'status': 'busy', 'upload_id': 'upload_one'}
+        with tempfile.TemporaryDirectory() as temporary:
+            image = Path(temporary)/'image.qcow2'
+            image.write_bytes(b'prepared-system-disk')
+            client = prepared_vm.Client({}, Path(temporary)/'report.json')
+            with self.replies([(202, busy)]) as calls:
+                self.assertIsNone(client.upload(record, image))
+            self.assertEqual(len(calls), 1)
+            self.assertEqual(client.events[-1]['result'], 'pending')
+
+    def test_expired_upload_and_capacity_failure_never_send_file_or_delete(self):
+        record = self.manifest()
+        for status, value in ((507, {'error_code': 'capacity_unavailable'}),
+                              (201, {'schema': 1, 'group': prepared_vm.GROUP,
+                                     'env_key': record['env_key'], 'status': 'uploading',
+                                     'upload_id': 'upload_one', 'expires_at': 1})):
+            with self.subTest(status=status), tempfile.TemporaryDirectory() as temporary:
+                image = Path(temporary)/'image.qcow2'
+                image.write_bytes(b'prepared-system-disk')
+                client = prepared_vm.Client({}, Path(temporary)/'report.json')
+                responses = [(status, value)]
+                if status == 201:
+                    responses.append((404, {}))
+                with self.replies(responses) as calls:
+                    self.assertIsNone(client.upload(record, image))
+                self.assertTrue(all(call[2].get('stream') is None for call in calls))
+                self.assertTrue(all(call[2].get('method', 'GET') != 'DELETE' for call in calls))
+
+    def test_stream_reader_enforces_wall_clock(self):
+        with self.assertRaises(local_cache.RestoreBudgetExceeded):
+            prepared_vm.DeadlineReader(io.BytesIO(b'file'), {'restore_deadline': 0}).read(4)
+
+    def test_metadata_reader_rechecks_wall_clock_between_chunks(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            client = prepared_vm.Client({}, Path(temporary)/'report.json')
+            with self.replies([(200, {'status': 'ready'})]), \
+                    patch.object(local_cache, 'restore_remaining',
+                                 side_effect=[1, local_cache.RestoreBudgetExceeded()]):
+                with self.assertRaises(local_cache.RestoreBudgetExceeded):
+                    client.request('/health')
+
+    def test_limits_reject_oversize_virtual_disk_before_transfer(self):
+        record = self.manifest()
+        record['image']['virtual_size'] = 32 * 1024**3
+        with tempfile.TemporaryDirectory() as temporary:
+            image = Path(temporary)/'image.qcow2'
+            image.write_bytes(b'prepared-system-disk')
+            client = prepared_vm.Client({}, Path(temporary)/'report.json')
+            client.limits = {'max_image_bytes': prepared_vm.MAX_IMAGE,
+                             'max_virtual_bytes': 24 * 1024**3}
+            with self.replies([(200, self.receipt(record))]) as calls:
+                self.assertIsNone(client.restore(record['descriptor'], image, MagicMock()))
+            self.assertEqual(len(calls), 1)
+            with self.replies([]) as calls:
+                self.assertIsNone(client.upload(record, image))
+            self.assertEqual(calls, [])
+
+    def test_environment_resolution_is_opt_in_and_capability_gated(self):
+        with tempfile.TemporaryDirectory() as temporary, patch.dict(os.environ, {}, clear=True), \
+                patch.object(prepared_vm_environment, 'run') as execute:
+            self.assertEqual(prepared_vm_environment.freeze(Path(temporary), {})['status'], 'disabled')
+            execute.assert_not_called()
+        with tempfile.TemporaryDirectory() as temporary, patch.dict(os.environ, {
+                'GITHUB_ACTIONS': 'true', 'COR_PREPARED_VM_INPUTS': 'true'}, clear=True), \
+                patch.object(prepared_vm.Client, 'available', return_value=False), \
+                patch.object(prepared_vm_environment, 'run') as execute:
+            self.assertEqual(prepared_vm_environment.freeze(Path(temporary), {'test': True})['status'], 'disabled')
+            execute.assert_not_called()
+
+    def test_environment_key_ignores_application_and_run_identity(self):
+        descriptor = self.manifest()['descriptor']
+        expected = prepared_vm.identity(descriptor)
+        with patch.dict(os.environ, {'GITHUB_RUN_ID': '999', 'GITHUB_SHA': 'f' * 40}):
+            self.assertEqual(prepared_vm.identity(descriptor), expected)
+        changed = {**descriptor, 'environment_lock_sha256': 'f' * 64}
+        self.assertNotEqual(prepared_vm.identity(changed), expected)
+
+    @contextmanager
+    def vm_context(self, temporary):
+        record = self.manifest()
+        frozen = {'descriptor': record['descriptor'],
+                  'lock': {'packages': record['environment']['packages'], 'downloads': {}}}
+        linux = {'architectures': {'arm64': {'cloud': {
+            'url': record['environment']['sources'][0]['url'], 'sha256': 'a' * 64},
+            'python': {'url': record['environment']['sources'][1]['url'], 'sha256': 'b' * 64}}}}
+        client = MagicMock()
+        client.available.return_value = True
+        client.restore.return_value = self.receipt(record)
+        guest = MagicMock(kernel='5.4.0-216-generic', architecture='aarch64', kvm=False, boot_seconds=0.1)
+        guest.inspect.return_value = record['environment']
+        with patch.dict(os.environ, {'RUNNER_TEMP': temporary}, clear=False), \
+                patch.object(linux_ci, 'require_actions'), \
+                patch.object(linux_ci, 'REPORT', Path(temporary)/'report'), \
+                patch.object(linux_ci, 'inputs', return_value=linux), \
+                patch.object(linux_ci, 'host_arch', return_value='arm64'), \
+                patch.object(build_inputs, 'manifest', return_value={'prepared_vm': frozen}), \
+                patch.object(prepared_vm, 'client', return_value=client), \
+                patch.object(prepared_vm_environment, 'verify_frozen', return_value=True), \
+                patch.object(linux_ci, 'vm_source_archive', return_value=Path(temporary)/'source.tar.gz'), \
+                patch.object(linux_ci, 'VmGuest', return_value=guest), \
+                patch.object(linux_ci, 'download') as download, \
+                patch.object(linux_ci, 'prepare_vm_guest') as prepare, \
+                patch.object(linux_ci, 'verify_vm_package') as application:
+            yield client, guest, download, prepare, application
+
+    def test_warm_vm_skips_all_cold_downloads_but_runs_application_tests(self):
+        with tempfile.TemporaryDirectory() as temporary, self.vm_context(temporary) as context:
+            client, guest, download, prepare, application = context
+            linux_ci.vm_test(123)
+            download.assert_not_called()
+            prepare.assert_not_called()
+            client.upload.assert_not_called()
+            self.assertEqual(application.call_args.kwargs['prepared'], True)
+            self.assertEqual(application.call_args.args[2], 123)
+            guest.preserve.assert_called_once()
+            guest.close.assert_called_once()
+
+    def test_application_failure_on_warm_vm_is_not_hidden_by_cold_retry(self):
+        with tempfile.TemporaryDirectory() as temporary, self.vm_context(temporary) as context:
+            client, guest, download, prepare, application = context
+            application.side_effect = subprocess.CalledProcessError(1, ['application-test'])
+            with self.assertRaises(subprocess.CalledProcessError):
+                linux_ci.vm_test(123)
+            download.assert_not_called()
+            prepare.assert_not_called()
+            guest.close.assert_called_once()
+            report = json.loads((Path(temporary)/'report/focal-vm.json').read_text())
+            self.assertFalse(report['success'])
+            self.assertEqual(report['cache_path'], 'warm')
+
+    def test_invalid_warm_environment_falls_back_without_republishing_same_identity(self):
+        with tempfile.TemporaryDirectory() as temporary, self.vm_context(temporary) as context:
+            client, guest, download, prepare, application = context
+            guest.inspect.side_effect = prepared_vm.ProtocolError('environment_mismatch')
+            source = Path(temporary)/'original'
+            source.write_bytes(b'original')
+            download.return_value = source
+            linux_ci.vm_test(123)
+            self.assertEqual(download.call_count, 2)
+            self.assertEqual(prepare.call_count, 1)
+            self.assertIsNone(prepare.call_args.args[2])
+            self.assertFalse(application.call_args.kwargs['prepared'])
+            events = [call.args[1] for call in client.event.call_args_list]
+            self.assertIn('cold_fallback', events)
+            client.upload.assert_not_called()
+
+    def test_cold_preparation_failure_keeps_failure_report(self):
+        with tempfile.TemporaryDirectory() as temporary, self.vm_context(temporary) as context:
+            client, guest, download, prepare, application = context
+            client.restore.return_value = None
+            client.available.return_value = False
+            prepare.side_effect = RuntimeError('isolated preparation failure')
+            with self.assertRaises(RuntimeError):
+                linux_ci.vm_test(123)
+            application.assert_not_called()
+            client.upload.assert_not_called()
+            report = json.loads((Path(temporary)/'report/focal-vm.json').read_text())
+            self.assertFalse(report['success'])
+            self.assertIn('upload_tail_wait', report['timings_seconds'])
+
+    def test_restored_sources_must_cover_the_exact_frozen_downloads(self):
+        record = self.manifest()
+        download = {'url': 'https://ports.ubuntu.com/ubuntu-ports/pool/test.deb',
+                    'size': 100, 'sha256': 'c' * 64}
+        frozen = {'descriptor': record['descriptor'], 'lock': {'downloads': {'test.deb': download}}}
+        with self.assertRaises(prepared_vm.ProtocolError):
+            prepared_vm_environment.check_sources(record['environment'], frozen)
+        record['environment']['sources'].append(download)
+        prepared_vm_environment.check_sources(record['environment'], frozen)
+        record['environment']['sources'][-1] = {**download, 'size': 101}
+        with self.assertRaises(prepared_vm.ProtocolError):
+            prepared_vm_environment.check_sources(record['environment'], frozen)
+
+    def test_new_template_is_shut_down_and_second_boot_checked_before_upload(self):
+        with tempfile.TemporaryDirectory() as temporary, self.vm_context(temporary) as context:
+            client, guest, download, prepare, application = context
+            client.restore.return_value = None
+            source = Path(temporary)/'original'
+            source.write_bytes(b'original')
+            download.return_value = source
+            guest.disk = source
+
+            def qemu(command, **kwargs):
+                if command[:2] == ['qemu-img', 'convert']:
+                    self.assertTrue(guest.shutdown.called)
+                    Path(command[-1]).write_bytes(b'prepared-system-disk')
+
+            with patch.object(linux_ci, 'run', side_effect=qemu), \
+                    patch.object(linux_ci, 'verify_vm_image'), \
+                    patch.object(prepared_vm, 'producer', return_value=self.manifest()['producer']):
+                linux_ci.vm_test(123)
+            guest.shutdown.assert_called_once()
+            self.assertEqual(guest.inspect.call_count, 2)
+            client.upload.assert_called_once()
+            uploaded = client.upload.call_args.args[0]
+            self.assertEqual(uploaded['image']['sha256'], hashlib.sha256(b'prepared-system-disk').hexdigest())
+            prepared_vm.validate(uploaded)
+            self.assertTrue(application.call_args.kwargs['prepared'])
+
+    def test_signed_apt_resolution_freezes_versions_without_touching_host_apt(self):
+        changes = {'version': '1', 'index': 0}
+
+        def execute(command, **kwargs):
+            apt = Path(kwargs['env']['APT_CONFIG']).parent
+            if command[-1] == 'update':
+                changes['index'] += 1
+                for suite in ('focal', 'focal-updates', 'focal-security'):
+                    (apt/'lists'/('ports.ubuntu.com_' + suite + '_InRelease')).write_text(
+                        'isolated signed-index stand-in ' + str(changes['index']))
+                self.assertNotIn('/etc/apt/sources.list', command)
+                self.assertTrue((apt/'isolated.conf').read_text().startswith('Dir::Etc::parts "-"'))
+                return subprocess.CompletedProcess(command, 0)
+            packages = command[command.index('--no-install-recommends') + 1:]
+            lines = []
+            for package in packages:
+                filename = package + '_' + changes['version'] + '_arm64.deb'
+                checksum = hashlib.sha256(filename.encode()).hexdigest()
+                lines.append(f"'https://ports.ubuntu.com/ubuntu-ports/pool/{filename}' {filename} 10 SHA256:{checksum}")
+            return subprocess.CompletedProcess(command, 0, '\n'.join(lines))
+
+        linux = {'architectures': {'arm64': {'cloud': {'sha256': 'a' * 64},
+                                            'python': {'sha256': 'b' * 64}}}}
+        with tempfile.TemporaryDirectory() as temporary, patch.dict(os.environ, {
+                'GITHUB_ACTIONS': 'true', 'COR_PREPARED_VM_INPUTS': 'true'}, clear=True), \
+                patch.object(prepared_vm.Client, 'available', return_value=True), \
+                patch.object(prepared_vm_environment, 'run', side_effect=execute):
+            root = Path(temporary)
+            first = prepared_vm_environment.freeze(root/'first', linux)
+            second = prepared_vm_environment.freeze(root/'second', linux)
+            self.assertEqual(first['status'], 'frozen')
+            self.assertEqual(first['descriptor'], second['descriptor'])
+            self.assertNotEqual(first['files'], second['files'])
+            self.assertTrue(prepared_vm_environment.verify_frozen(root/'first', first, linux))
+            for change in ('invalid_name', 'missing_download'):
+                malformed = copy.deepcopy(first)
+                if change == 'invalid_name':
+                    malformed['lock']['packages'][0]['name'] = '--option'
+                else:
+                    malformed['lock']['downloads'].clear()
+                malformed['descriptor']['environment_lock_sha256'] = prepared_vm.checksum(malformed['lock'])
+                with self.subTest(change=change), self.assertRaises(prepared_vm.ProtocolError):
+                    prepared_vm_environment.verify_frozen(root/'first', malformed, linux)
+            changes['version'] = '2'
+            changed = prepared_vm_environment.freeze(root/'third', linux)
+            self.assertNotEqual(first['descriptor']['environment_lock_sha256'],
+                                changed['descriptor']['environment_lock_sha256'])
+            damaged = root/'first'/next(iter(first['files']))
+            damaged.write_text('tampered')
+            with self.assertRaises(prepared_vm.ProtocolError):
+                prepared_vm_environment.verify_frozen(root/'first', first, linux)
+
+    def test_package_plan_decodes_epochs_and_rejects_duplicate_architecture(self):
+        result = prepared_vm_environment.packages_from_plan({
+            'example_1%3a2.0-1_arm64.deb': {}, 'second_3_all.deb': {}})
+        self.assertEqual(result[0]['version'], '1:2.0-1')
+        with self.assertRaises(prepared_vm.ProtocolError):
+            prepared_vm_environment.packages_from_plan({
+                'example_1_arm64.deb': {}, 'example_2_arm64.deb': {}})
+
+    def test_warm_guest_must_match_full_package_manifest_and_frozen_versions(self):
+        actual = self.manifest()['environment']
+        lock = {'packages': actual['packages']}
+        prepared_vm_environment.check_environment(actual, actual, lock)
+        changed = copy.deepcopy(actual)
+        changed['packages'][0]['version'] = '999'
+        changed['packages_sha256'] = prepared_vm.checksum(changed['packages'])
+        with self.assertRaises(prepared_vm.ProtocolError):
+            prepared_vm_environment.check_environment(changed, actual, lock)
+        with self.assertRaises(prepared_vm.ProtocolError):
+            prepared_vm_environment.check_environment(changed, None, lock)
+
+    def test_guest_template_operations_cannot_run_on_the_host(self):
+        with patch.dict(os.environ, {}, clear=True), patch.object(prepared_vm_environment, 'run') as execute:
+            for function in (prepared_vm_environment.clean_template, prepared_vm_environment.inspect_environment):
+                with self.assertRaises(RuntimeError):
+                    function()
+            execute.assert_not_called()
+
+    def test_image_checks_reject_external_dependencies_dirty_images_and_leaks(self):
+        information = {'format': 'qcow2', 'virtual-size': 24 * 1024**3}
+        invalid = [
+            {**information, 'backing-filename': 'external'},
+            {**information, 'snapshots': [{'id': 'snapshot'}]},
+            {**information, 'encrypted': True},
+            {**information, 'dirty-flag': True},
+            {**information, 'format-specific': {'data': {'data-file': 'external'}}},
+            {**information, 'format-specific': {'data': {'dirty-flag': True}}},
+        ]
+        for value in invalid:
+            with self.subTest(value=value), patch.object(prepared_vm, 'qcow2_header'), \
+                    patch.object(linux_ci.subprocess, 'check_output', return_value=json.dumps(value)):
+                with self.assertRaises(prepared_vm.ProtocolError):
+                    linux_ci.verify_vm_image(Path('/synthetic/image.qcow2'), 24 * 1024**3)
+        for checked in ({}, {'format': 'qcow2', 'check-errors': 0, 'leaks': 1},
+                        {'format': 'qcow2', 'check-errors': 1}):
+            with self.subTest(checked=checked), patch.object(prepared_vm, 'qcow2_header'), \
+                    patch.object(linux_ci.subprocess, 'check_output', side_effect=[
+                        json.dumps(information), json.dumps(checked)]):
+                with self.assertRaises(prepared_vm.ProtocolError):
+                    linux_ci.verify_vm_image(Path('/fake/image.qcow2'), 24 * 1024**3)
+        with patch.object(prepared_vm, 'qcow2_header'), patch.object(linux_ci.subprocess, 'check_output', side_effect=[
+                json.dumps(information), json.dumps({'format': 'qcow2', 'check-errors': 0})]):
+            linux_ci.verify_vm_image(Path('/fake/image.qcow2'), 24 * 1024**3)
+
+    def test_qcow_header_rejects_external_storage_before_invoking_qemu(self):
+        header = bytearray(512)
+        struct.pack_into('>4sI', header, 0, b'QFI\xfb', 3)
+        struct.pack_into('>I', header, 20, 9)
+        struct.pack_into('>Q', header, 24, 24 * 1024**3)
+        struct.pack_into('>I', header, 100, 104)
+        with tempfile.TemporaryDirectory() as temporary:
+            path = Path(temporary)/'image.qcow2'
+            path.write_bytes(header)
+            prepared_vm.qcow2_header(path, 24 * 1024**3)
+            for offset, value, format in ((8, 512, '>Q'), (32, 1, '>I'), (60, 1, '>I'),
+                                           (72, 4, '>Q'), (88, 1, '>Q'),
+                                           (104, 0x44415441, '>I')):
+                changed = bytearray(header)
+                struct.pack_into(format, changed, offset, value)
+                path.write_bytes(changed)
+                with self.subTest(offset=offset), patch.object(linux_ci.subprocess, 'check_output') as execute:
+                    with self.assertRaises(prepared_vm.ProtocolError):
+                        linux_ci.verify_vm_image(path, 24 * 1024**3)
+                    execute.assert_not_called()
 
 
 class BuildTests(unittest.TestCase):

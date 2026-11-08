@@ -15,6 +15,7 @@ BOOTSTRAP = ('223.5.5.5', '223.6.6.6', '1.0.0.1')
 PUBLIC = ('1.1.1.1', '8.8.8.8', '2606:4700:4700::1111', '2001:4860:4860::8888')
 NODE = ('203.0.113.10', '2001:db8:2::10')
 WEBSITE = ('203.0.113.20', '2001:db8:2::20')
+UPDATES = ('192.0.2.254', '2001:db8:1::fe')
 METRICS = {'bootstrap': 0, 'proxied_dns': 0, 'direct_public_dns': 0,
            'node_connections': 0, 'web': 0, 'plaintext_dns': 0,
            'bootstrap_public_lookup': 0, 'resolver_bootstrap': 0,
@@ -38,8 +39,8 @@ def dns_question(query):
 
 def dns_response(query, bootstrap):
     name, kind, end = dns_question(query)
-    if name == 'resolver.fixture.test':
-        address = ('192.0.2.254', '2001:db8:1::fe')
+    if name in ('resolver.fixture.test', 'updates.fixture.test'):
+        address = UPDATES
     else:
         address = NODE if name.startswith(('node.', 'node6.')) else WEBSITE
     # Bootstrap may resolve only node names. A public lookup sent here would
@@ -142,7 +143,7 @@ async def socks(reader, writer):
             host = (await reader.readexactly((await reader.readexactly(1))[0])).decode('ascii')
         port = struct.unpack('!H', await reader.readexactly(2))[0]
         # Only the fixtures are reachable. Domain requests have no OS lookup.
-        if host not in (*BOOTSTRAP, *PUBLIC, *WEBSITE, '192.0.2.254'):
+        if host not in (*BOOTSTRAP, *PUBLIC, *WEBSITE, *UPDATES):
             host = WEBSITE[0]
         incoming, remote = await asyncio.open_connection(host, port)
         METRICS['node_connections'] += 1

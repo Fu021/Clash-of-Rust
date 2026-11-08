@@ -91,6 +91,7 @@ def constraints():
     paths = subprocess.check_output(['git', 'ls-files', 'Cargo.toml', 'apps/**/Cargo.toml',
                                      'crates/**/Cargo.toml', 'vendor/**/Cargo.toml', '.cargo/*', 'apps/android/gradle.properties',
                                      'resources/linux/ubuntu20.Dockerfile', 'scripts/linux_ci.py',
+                                     'scripts/prepared_vm.py', 'scripts/prepared_vm_environment.py',
                                      '.github/build-versions.json'],
                                     cwd=ROOT, text=True).splitlines()
     return {path: hashlib.sha256(original(path)).hexdigest() for path in paths}
@@ -112,6 +113,10 @@ def verified_manifest():
         if not path.is_file() or sha256(path) != checksum:
             raise ValueError('Build dependencies changed after resolution: ' + relative)
     verify_geo_snapshot(value, Path(os.environ.get('BUILD_INPUTS_DIR', SNAPSHOT)))
+    if value.get('prepared_vm', {}).get('status') == 'frozen':
+        from prepared_vm_environment import verify_frozen
+        verify_frozen(Path(os.environ.get('BUILD_INPUTS_DIR', SNAPSHOT)),
+                      value['prepared_vm'], value['upstream']['linux'])
     return value
 
 
@@ -228,6 +233,9 @@ def resolve(directory):
                                for package in packages],
              'go_modules': go_modules,
              'policy': 'Repository lockfiles and approved build versions only; apply the maintainer loop update policy and validate committed changes.'}
+    if 'linux' in upstream:
+        from prepared_vm_environment import freeze
+        value['prepared_vm'] = freeze(directory, upstream['linux'])
     write_json(directory / 'inputs.json', value)
     report(value)
     if output := os.environ.get('GITHUB_OUTPUT'):
@@ -294,6 +302,9 @@ def apply(directory, require_commit=True):
         if path.is_symlink() or sha256(path) != checksum:
             raise ValueError('Dependency snapshot checksum mismatch: ' + relative)
     assets = verify_geo_snapshot(value, directory)
+    if value.get('prepared_vm', {}).get('status') == 'frozen':
+        from prepared_vm_environment import verify_frozen
+        verify_frozen(directory, value['prepared_vm'], value['upstream']['linux'])
     for relative in FILES:
         shutil.copy2(directory / relative, ROOT / relative)
     for name in assets:

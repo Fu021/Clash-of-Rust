@@ -347,6 +347,12 @@ def root_cli_smoke():
             assert direct > 0 and direct not in (mixed, controller), 'Managed DIRECT listener is missing'
 
             def verify_independent_direct():
+                from tun_dns_fixture import UPDATES
+                for family, address in zip(('-4', '-6'), UPDATES):
+                    routes = json.loads(subprocess.check_output(
+                        ['ip', family, '-j', 'route', 'get', address], text=True))
+                    assert len(routes) == 1 and routes[0].get('dev') == 'uplink', (
+                        f'Update fixture must remain on the physical peer: {routes}')
                 connection = HTTPConnection('127.0.0.1', mixed, timeout=15)
                 try:
                     connection.request('GET', subscription_url)
@@ -383,7 +389,7 @@ def root_cli_smoke():
                       'while subscription updates use independent DIRECT', flush=True)
             invoke('proxy', 'off')
         except Exception:
-            diagnostics = subprocess.run([*command, 'logs', '--limit', '40'], env=env,
+            diagnostics = subprocess.run([*command, 'logs', '--limit', '150'], env=env,
                                          capture_output=True, text=True, timeout=45)
             print(diagnostics.stdout+diagnostics.stderr, flush=True)
             raise

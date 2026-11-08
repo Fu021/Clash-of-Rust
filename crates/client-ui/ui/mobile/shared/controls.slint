@@ -418,7 +418,7 @@ export component MNotice inherits Rectangle {
                 init => { if index == root.action-count - 1 { root.close-target = self.target; } }
                 col: mod(index, root.action-columns); row: floor(index / root.action-columns);
                 modal-control: true; notice-control: true; quiet: true; compact: true;
-                text: index == root.action-count - 1 ? "关闭" : index == 0 ? "导出诊断" : index == 1 ? "新建 Issue" : root.can-restart ? "重启内核" : "停止接管";
+                text: index == root.action-count - 1 ? "关闭" : index == 0 ? "导出诊断" : index == 1 ? "新建 Issue" : root.can-restart ? "重启内核" : "关闭代理";
                 enabled: index != 2 || !root.has-recovery || !MobileData.working;
                 clicked => {
                     if index == root.action-count - 1 { root.dismissed(); }
