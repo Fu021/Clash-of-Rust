@@ -846,6 +846,19 @@ public class ProxyTunTest {
         } while (SystemClock.elapsedRealtime()<deadline);
         throw new IOException("VPN data path did not become ready; before="+before+"; "+networkState(),last);
     }
+    private static void tunResolvesAndCarriesHttp() throws Exception {
+        long deadline=SystemClock.elapsedRealtime()+15000;
+        IOException last=null;
+        do {
+            try {
+                assertEquals("cor-android-network-ok",read(
+                    URI.create("http://android-tun.test:18081/probe").toURL(),java.net.Proxy.NO_PROXY,null));
+                return;
+            } catch (IOException transition) {last=transition;}
+            SystemClock.sleep(100);
+        } while (SystemClock.elapsedRealtime()<deadline);
+        throw new IOException("VPN hostname traffic did not become ready; "+networkState(),last);
+    }
     private static String interfaceCounters(ConnectivityManager manager) {
         LinkProperties properties=manager.getLinkProperties(manager.getActiveNetwork());
         String device=properties==null ? null : properties.getInterfaceName();
@@ -982,6 +995,8 @@ public class ProxyTunTest {
             +"hosts:\n  android-tun.test: 10.0.2.2\n"
             +"proxies:\n  - {name: CI-TUN-origin, type: http, server: 10.0.2.2, port: 18081}\n"
             +"rules:\n  - IP-CIDR,198.51.100.1/32,CI-TUN-origin,no-resolve\n  - MATCH,DIRECT\n");
+        java.nio.file.Files.write(new File(context.getFilesDir(),"client/runtime/config.yaml").toPath(),
+            CoreBridge.config().getBytes(StandardCharsets.UTF_8));
         shell("cmd statusbar add-tile org.clashofrust.android/.VpnTileService");
         for (int cycle=0; cycle<2; cycle++) {
             if (cycle==0) TunnelService.start(context,false);
@@ -995,13 +1010,14 @@ public class ProxyTunTest {
             tunCarriesSocket(controller,secret);
             // A settings reload must preserve the independently owned Android TUN.
             CoreBridge.reload(CoreBridge.config());
+            tunCarriesSocket(controller,secret);
             if (cycle == 0) {
                 shell("am start -W -a android.intent.action.MAIN -c android.intent.category.HOME");
                 await("VPN Activity did not enter background",()->inStage(androidx.test.runner.lifecycle.Stage.STOPPED,false));
                 assertTrue("Closing the UI disconnected the foreground VPN", TunnelService.connected());
                 assertTrue("Explicit disconnect must be remembered for sticky recovery",
                     context.getSharedPreferences("vpn",Context.MODE_PRIVATE).getBoolean("desired",false));
-                assertEquals("cor-android-network-ok", read(URI.create("http://android-tun.test:18081/probe").toURL(),java.net.Proxy.NO_PROXY,null));
+                tunResolvesAndCarriesHttp();
                 shell("am start -W -n org.clashofrust.android/.MainActivity");
                 await("VPN Activity did not resume",()->inStage(androidx.test.runner.lifecycle.Stage.RESUMED,true));
                 java.util.concurrent.atomic.AtomicBoolean monitoring=new java.util.concurrent.atomic.AtomicBoolean(true);
