@@ -258,6 +258,29 @@ mod tests {
     }
 
     #[test]
+    fn explicit_all_user_scan_shows_holders_even_when_this_instance_owns_tun() {
+        let status = render(
+            &["status", "--all-users"],
+            json!({
+                "running":true,"owner":"daemon","version":"0.6.7","proxy":"tun","mode":"rule",
+                "profile":"sub","node":"Node","protected":false,"connections":1,
+                "upload_rate":1,"download_rate":2,
+                "host_routes":{
+                    "scope":"current_network_namespace","holder_scope":"all_users",
+                    "ipv4":{"state":"observed","interface":"Meta","kind":"tun"},
+                    "ipv6":{"state":"unknown"},
+                    "tun_holders":{"state":"complete","scope":"all_users","interfaces":{
+                        "Meta":[{"uid":1000,"pid":42,"process":"mihomo"}]
+                    }},
+                    "warnings":[]
+                }
+            }),
+        );
+        assert!(status.contains("TUN 持有进程"), "{status}");
+        assert!(status.contains("UID 1000 · PID 42"), "{status}");
+    }
+
+    #[test]
     fn routine_status_omits_unavailable_samples_and_stop_does_not_claim_global_recovery() {
         let host_routes = json!({
             "scope":"current_network_namespace",

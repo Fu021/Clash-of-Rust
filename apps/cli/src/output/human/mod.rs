@@ -314,6 +314,9 @@ fn network_notice(out: &mut dyn Write, value: &Value) -> Result<()> {
             "导出报告：cor diagnose --output cor-diagnose.json",
         );
     }
+    if let Some(summary) = crate::host_network::holder_summary(value) {
+        field(out, "TUN 持有进程", &clean(&summary))?;
+    }
     Ok(())
 }
 

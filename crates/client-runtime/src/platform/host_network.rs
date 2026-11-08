@@ -160,6 +160,63 @@ pub fn coverage_issue(routes: &Value, ipv6_expected: bool) -> Option<String> {
     })
 }
 
+fn holder_labels(holders: &[Value]) -> Vec<String> {
+    holders
+        .iter()
+        .take(3)
+        .filter_map(|holder| {
+            let uid = holder["uid"].as_u64()?;
+            let pid = holder["pid"].as_u64()?;
+            let user = if uid == 0 {
+                "root".to_owned()
+            } else {
+                format!("UID {uid}")
+            };
+            Some(format!("{user} · PID {pid}"))
+        })
+        .collect()
+}
+
+pub fn holder_summary(routes: &Value) -> Option<String> {
+    if routes["scope"] != "current_network_namespace" || routes["holder_scope"] != "all_users" {
+        return None;
+    }
+    let mut interfaces = std::collections::BTreeSet::new();
+    let mut evidence = Vec::new();
+    for family in ["ipv4", "ipv6"] {
+        let route = &routes[family];
+        if route["state"] != "observed" || route["kind"] != "tun" {
+            continue;
+        }
+        let Some(interface) = route["interface"].as_str() else {
+            continue;
+        };
+        if !interfaces.insert(interface) {
+            continue;
+        }
+        let holders = routes["tun_holders"]["interfaces"][interface]
+            .as_array()
+            .map(Vec::as_slice)
+            .unwrap_or_default();
+        let owners = holder_labels(holders);
+        evidence.push(if owners.is_empty() {
+            format!("{interface}：未找到持有进程")
+        } else {
+            format!("{interface}：{}", owners.join("、"))
+        });
+    }
+    if evidence.is_empty() {
+        return None;
+    }
+    let state = match routes["tun_holders"]["state"].as_str() {
+        Some("complete") => "",
+        Some("partial") => "；扫描不完整",
+        Some("unavailable") => "；扫描不可用",
+        _ => "",
+    };
+    Some(format!("{}{state}", evidence.join("；")))
+}
+
 pub fn notice(routes: &Value) -> Option<String> {
     if routes["scope"] != "current_network_namespace" {
         return None;
@@ -201,18 +258,7 @@ pub fn notice(routes: &Value) -> Option<String> {
             .as_array()
             .map(Vec::as_slice)
             .unwrap_or_default();
-        let mut owners = Vec::new();
-        for holder in holders.iter().take(3) {
-            let (Some(uid), Some(pid)) = (holder["uid"].as_u64(), holder["pid"].as_u64()) else {
-                continue;
-            };
-            let user = if uid == 0 {
-                "root".to_owned()
-            } else {
-                format!("UID {uid}")
-            };
-            owners.push(format!("{user} · PID {pid}"));
-        }
+        let owners = holder_labels(holders);
         evidence.push(if !owners.is_empty() {
             format!("{interface}；持有进程 {}", owners.join("、"))
         } else if routes["holder_scope"] == "all_users" {
@@ -376,6 +422,11 @@ mod context_tests {
         let mut all_users = routes;
         all_users["holder_scope"] = json!("all_users");
         all_users["tun_holders"]["scope"] = json!("all_users");
+        assert!(
+            holder_summary(&all_users)
+                .unwrap()
+                .contains("未找到持有进程")
+        );
         let all_users = notice(&with_proxy_context(all_users, Some(ProxyMode::Off))).unwrap();
         assert!(
             all_users.contains("跨用户扫描未找到持有进程"),
