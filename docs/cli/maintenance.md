@@ -10,7 +10,7 @@
 | `config set KEY VALUE` | 修改单个受支持设置，不覆盖其他并发修改 |
 | `config check` | 校验实际合并配置 |
 | `config effective [-o FILE]` | 查看运行配置；完整内容需 `--show-secrets` |
-| `diagnose [--url URL --host DOMAIN --offline -o FILE]` | 网络检测或离线现场采集；[报告与日志边界](runtime.md#故障反馈与诊断报告) |
+| `diagnose [--url URL --host DOMAIN --offline -o FILE] [--all-users]` | 网络检测或离线现场采集；Linux root 用 `--all-users` 只读核对跨用户 TUN 持有进程；[报告与日志边界](runtime.md#故障反馈与诊断报告) |
 | `dns DOMAIN [--system]` | 默认内核/代理解析，显式 `--system` 使用系统解析 |
 | `ip-check list [--category NAME --filter TEXT]` | 查看内置检测项目与 ID |
 | `ip-check [ID] [--category NAME -o FILE]` | 全部、分类或单项测试；最多同时执行 3 项 |

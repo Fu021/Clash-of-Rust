@@ -322,6 +322,8 @@ def root_cli_smoke():
             invoke('profile', 'use', 'root-network')
             invoke('proxy', 'tun')
             assert api('configs')['tun']['enable']
+            assert invoke('status')['host_routes']['holder_scope'] == 'current_user'
+            assert invoke('status', '--all-users')['host_routes']['holder_scope'] == 'all_users'
             verify_tun_http()
             invoke('stop')
             # A fresh root daemon must also restore a persisted TUN mode.
@@ -507,6 +509,7 @@ def account_cli_matrix():
                         assert '用法：cor ' in output.stdout
                 assert not data(user).exists()
                 invoke(user, 'user', 'profile', 'list', '--all-users', success=False)
+                invoke(user, 'user', 'status', '--all-users', success=False)
                 invoke(user, 'user', '--user', users[1]['name'], 'status', success=False)
                 raw = ('proxies: []\nproxy-groups: [{name: Route, type: select, proxies: [DIRECT, REJECT]}]\n'
                        'rules: ["MATCH,Route"]\n'

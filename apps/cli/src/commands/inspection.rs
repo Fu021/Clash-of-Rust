@@ -340,7 +340,7 @@ async fn diagnose(args: &Args) -> Result<()> {
         if args.flag("offline") {
             let (report, routes) = tokio::join!(
                 crate::diagnostics::collect(args),
-                crate::host_network::observe()
+                crate::host_network::observe(args)
             );
             let mut report = report?;
             report["offline"] = json!(true);
@@ -441,7 +441,7 @@ async fn diagnose(args: &Args) -> Result<()> {
         bounded_probe(clash_client_core::probe::dns(host.into())),
         bounded_probe(clash_client_core::probe::website_system_route(url.into())),
         backend_probes,
-        crate::host_network::observe(),
+        crate::host_network::observe(args),
         local
     );
     let (backend, backend_error) = match backend_result {

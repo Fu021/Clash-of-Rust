@@ -11,7 +11,7 @@ use clash_client_runtime::{
 use serde_json::{Value, json};
 
 pub async fn execute(args: &Args) -> Result<()> {
-    if args.flag("all-users") {
+    if args.flag("all-users") && args.path == "profile list" {
         return output::emit(args, crate::users::profiles(args)?);
     }
     match args.path.as_str() {
@@ -69,7 +69,7 @@ pub async fn execute(args: &Args) -> Result<()> {
                 }
             }
             let routes = crate::host_network::with_proxy_context(
-                crate::host_network::observe().await,
+                crate::host_network::observe(args).await,
                 Some(ProxyMode::Off),
             );
             output::emit(args, json!({"running":false,"host_routes":routes}))
@@ -107,7 +107,7 @@ pub async fn execute(args: &Args) -> Result<()> {
                 .filter(|poll| poll.snapshot.running)
                 .map_or(ProxyMode::Off, |poll| poll.snapshot.proxy_mode());
             let routes = crate::host_network::with_proxy_context(
-                crate::host_network::observe().await,
+                crate::host_network::observe(args).await,
                 Some(proxy),
             );
             output::emit(args, json!({"proxy":proxy,"host_routes":routes}))
@@ -144,11 +144,11 @@ async fn current_snapshot(args: &Args, scope: Scope, header: bool) -> Result<Opt
 }
 
 async fn status(args: &Args) -> Result<()> {
-    let mut routes = crate::host_network::observe().await;
+    let mut routes = crate::host_network::observe(args).await;
     let mut observed_at = std::time::Instant::now();
     loop {
         if observed_at.elapsed() >= std::time::Duration::from_secs(5) {
-            routes = crate::host_network::observe().await;
+            routes = crate::host_network::observe(args).await;
             observed_at = std::time::Instant::now();
         }
         let mut failure = None;

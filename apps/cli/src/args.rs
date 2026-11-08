@@ -42,10 +42,10 @@ pub static COMMANDS: &[Spec] = &[
     command!(
         "stop",
         "停止内核并恢复网络；独立后台同时退出",
-        "stop",
+        "stop [--all-users]",
         0,
         0,
-        ""
+        "all-users"
     ),
     command!(
         "restart",
@@ -58,10 +58,10 @@ pub static COMMANDS: &[Spec] = &[
     command!(
         "status",
         "显示内核、订阅、节点、模式及实时流量",
-        "status [--watch]",
+        "status [--watch] [--all-users]",
         0,
         0,
-        "watch interval"
+        "watch interval all-users"
     ),
     command!("version", "显示客户端版本与本机架构", "version", 0, 0, ""),
     command!(
@@ -171,10 +171,10 @@ pub static COMMANDS: &[Spec] = &[
     command!(
         "proxy",
         "读取或切换系统代理、TUN、关闭状态",
-        "proxy [system|tun|off]",
+        "proxy [system|tun|off] [--all-users]",
         0,
         1,
-        ""
+        "all-users"
     ),
     command!(
         "env",
@@ -323,10 +323,10 @@ pub static COMMANDS: &[Spec] = &[
     command!(
         "diagnose",
         "检查网络；--output 保存诊断报告，--offline 仅收集本地现场",
-        "diagnose [--url URL] [--host DOMAIN] [--offline] [--output FILE]",
+        "diagnose [--url URL] [--host DOMAIN] [--offline] [--output FILE] [--all-users]",
         0,
         0,
-        "url host offline output"
+        "url host offline output all-users"
     ),
     command!(
         "dns",
@@ -574,6 +574,10 @@ fn validate(args: &Args) -> Result<()> {
             if let Some(value) = args.positional.first() {
                 enum_value(value, &["system", "tun", "off"])?;
             }
+            ensure!(
+                !args.flag("all-users") || args.positional.is_empty(),
+                "--all-users 仅用于跨用户观察，不能同时切换代理"
+            );
         }
         "claude protect" | "autostart" => {
             if let Some(value) = args.positional.first() {
@@ -862,7 +866,7 @@ fn option_help(key: &str) -> String {
         "data-dir" => "指定独立数据目录",
         "resources" => "指定内核与 Geo 资源目录",
         "user" => "Linux 管理员以指定用户身份操作其配置与后台",
-        "all-users" => "Linux 管理员只读列出各本机用户默认目录中的订阅",
+        "all-users" => "Linux root 跨用户只读观察；订阅列表或 TUN 持有进程",
         "yes" => "明确确认删除、保护或安装等操作（-y）",
         "show-secrets" => "显式允许输出订阅/配置中的完整凭据",
         "quiet" => "不显示进度提示（-q）",
@@ -1183,6 +1187,18 @@ mod tests {
             args(&["--user=alice", "status"]).unwrap().get("user"),
             Some("alice")
         );
+    }
+    #[test]
+    fn cross_user_tun_observation_is_explicit_and_limited_to_network_commands() {
+        for command in ["status", "proxy", "stop", "diagnose"] {
+            assert!(args(&[command, "--all-users"]).is_ok(), "{command}");
+        }
+        assert!(args(&["--all-users", "status"]).is_ok());
+        assert!(args(&["status", "--watch", "--all-users"]).is_ok());
+        assert!(args(&["proxy", "--all-users"]).is_ok());
+        assert!(args(&["proxy", "off", "--all-users"]).is_err());
+        assert!(args(&["node", "list", "--all-users"]).is_err());
+        assert!(args(&["status", "--all-users", "--user", "alice"]).is_err());
     }
     #[test]
     fn contextual_completion_handles_commands_keys_values_and_options() {

@@ -7,6 +7,8 @@ use std::{
     time::{Duration, Instant},
 };
 
+use super::HolderScope;
+
 fn read_small(path: &Path) -> Option<String> {
     let mut contents = String::new();
     File::open(path)
@@ -39,13 +41,20 @@ fn held_interface(info: &str) -> Option<&str> {
         .filter(|name| !name.is_empty())
 }
 
-fn holders(proc_root: &Path, interfaces: &[String], budget: Duration) -> Value {
+fn holders(
+    proc_root: &Path,
+    interfaces: &[String],
+    budget: Duration,
+    observer_uid: u32,
+    scope: HolderScope,
+) -> Value {
     let started = Instant::now();
     let mut result: BTreeMap<String, Vec<Value>> = interfaces
         .iter()
         .map(|name| (name.clone(), Vec::new()))
         .collect();
     let mut complete = true;
+    let mut skipped_other_users = 0_u64;
     let namespace = std::fs::read_link(proc_root.join("self/ns/net")).ok();
     let Some(namespace) = namespace else {
         return json!({"state":"unavailable","reason":"network_namespace_unavailable","interfaces":result});
@@ -77,6 +86,17 @@ fn holders(proc_root: &Path, interfaces: &[String], budget: Duration) -> Value {
             break;
         }
         let process = entry.path();
+        let Some(uid) = read_small(&process.join("status"))
+            .as_deref()
+            .and_then(effective_uid)
+        else {
+            complete = false;
+            continue;
+        };
+        if scope == HolderScope::CurrentUser && uid != observer_uid {
+            skipped_other_users += 1;
+            continue;
+        }
         match std::fs::read_link(process.join("ns/net")) {
             Ok(value) if value == namespace => {}
             Ok(_) => continue,
@@ -86,13 +106,6 @@ fn holders(proc_root: &Path, interfaces: &[String], budget: Duration) -> Value {
             }
         }
         let Some(before) = start_time(&process) else {
-            complete = false;
-            continue;
-        };
-        let Some(uid) = read_small(&process.join("status"))
-            .as_deref()
-            .and_then(effective_uid)
-        else {
             complete = false;
             continue;
         };
@@ -159,20 +172,27 @@ fn holders(proc_root: &Path, interfaces: &[String], budget: Duration) -> Value {
     }
     json!({
         "state":if complete {"complete"} else {"partial"},
+        "scope":scope.label(),
+        "skipped_other_users":skipped_other_users,
         "namespace":namespace.to_string_lossy(),
         "interfaces":result
     })
 }
 
-pub(super) fn attach_holders(mut routes: Value) -> Value {
+pub(super) fn attach_holders(mut routes: Value, scope: HolderScope) -> Value {
     let interfaces: Vec<_> = ["ipv4", "ipv6"]
         .into_iter()
         .filter(|family| routes[*family]["kind"] == "tun")
         .filter_map(|family| routes[family]["interface"].as_str().map(str::to_owned))
         .collect();
     if !interfaces.is_empty() {
-        routes["tun_holders"] =
-            holders(Path::new("/proc"), &interfaces, Duration::from_millis(250));
+        routes["tun_holders"] = holders(
+            Path::new("/proc"),
+            &interfaces,
+            Duration::from_millis(250),
+            unsafe { libc::geteuid() },
+            scope,
+        );
     }
     routes
 }
@@ -213,14 +233,34 @@ mod tests {
         process(root, 11, 0, "net:[1]", "Meta");
         process(root, 12, 1000, "net:[2]", "Meta");
         process(root, 13, 1000, "net:[1]", "unrelated");
-        let value = holders(root, &["Meta".into()], Duration::from_secs(2));
+        process(root, 14, 1000, "net:[1]", "Meta");
+        let value = holders(
+            root,
+            &["Meta".into()],
+            Duration::from_secs(2),
+            0,
+            HolderScope::CurrentUser,
+        );
         assert_eq!(value["state"], "complete");
+        assert_eq!(value["scope"], "current_user");
+        assert_eq!(value["skipped_other_users"], 2);
         let owners = value["interfaces"]["Meta"].as_array().unwrap();
         assert_eq!(owners.len(), 1);
         assert_eq!(owners[0]["pid"], 11);
         assert_eq!(owners[0]["uid"], 0);
         assert_eq!(owners[0]["start_ticks"], "123");
         assert_eq!(owners[0]["evidence"], "tun_fdinfo");
+        let all_users = holders(
+            root,
+            &["Meta".into()],
+            Duration::from_secs(2),
+            0,
+            HolderScope::AllUsers,
+        );
+        let owners = all_users["interfaces"]["Meta"].as_array().unwrap();
+        assert_eq!(owners.len(), 2);
+        assert_eq!(owners[0]["pid"], 11);
+        assert_eq!(owners[1]["pid"], 14);
     }
 
     #[test]
@@ -231,11 +271,23 @@ mod tests {
         symlink("net:[1]", root.join("self/ns/net")).unwrap();
         std::fs::create_dir(root.join("22")).unwrap();
         let interfaces = ["Meta".into()];
-        let value = holders(root, &interfaces, Duration::from_secs(2));
+        let value = holders(
+            root,
+            &interfaces,
+            Duration::from_secs(2),
+            0,
+            HolderScope::CurrentUser,
+        );
         assert_eq!(value["state"], "partial");
         assert_eq!(value["interfaces"]["Meta"], json!([]));
         assert_eq!(
-            holders(root, &interfaces, Duration::ZERO)["state"],
+            holders(
+                root,
+                &interfaces,
+                Duration::ZERO,
+                0,
+                HolderScope::CurrentUser,
+            )["state"],
             "partial"
         );
         assert_eq!(held_interface("flags:\t1\n"), None);

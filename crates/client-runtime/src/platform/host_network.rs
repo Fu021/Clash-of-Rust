@@ -3,6 +3,22 @@ use serde_json::{Value, json};
 #[cfg(target_os = "linux")]
 mod linux;
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum HolderScope {
+    CurrentUser,
+    AllUsers,
+}
+
+impl HolderScope {
+    #[cfg(target_os = "linux")]
+    fn label(self) -> &'static str {
+        match self {
+            Self::CurrentUser => "current_user",
+            Self::AllUsers => "all_users",
+        }
+    }
+}
+
 #[cfg(target_os = "linux")]
 fn parse_route(output: &[u8], sysfs: &std::path::Path) -> Value {
     let parsed: Value = match serde_json::from_slice(output) {
@@ -54,6 +70,14 @@ async fn route(family: &str, destination: &str) -> Value {
 }
 
 pub async fn observe() -> Value {
+    observe_scope(HolderScope::CurrentUser).await
+}
+
+pub async fn observe_all_users() -> Value {
+    observe_scope(HolderScope::AllUsers).await
+}
+
+async fn observe_scope(holder_scope: HolderScope) -> Value {
     #[cfg(target_os = "linux")]
     {
         let (ipv4, ipv6) =
@@ -61,11 +85,12 @@ pub async fn observe() -> Value {
         let routes = json!({
             "scope":"current_network_namespace",
             "observer_uid":unsafe { libc::geteuid() },
+            "holder_scope":holder_scope.label(),
             "ipv4":ipv4,
             "ipv6":ipv6
         });
         let fallback = routes.clone();
-        tokio::task::spawn_blocking(move || linux::attach_holders(routes))
+        tokio::task::spawn_blocking(move || linux::attach_holders(routes, holder_scope))
             .await
             .unwrap_or_else(|_| {
                 let mut routes = fallback;
@@ -76,6 +101,7 @@ pub async fn observe() -> Value {
     }
     #[cfg(not(target_os = "linux"))]
     {
+        let _ = holder_scope;
         json!({"scope":"unsupported"})
     }
 }
@@ -187,10 +213,21 @@ pub fn notice(routes: &Value) -> Option<String> {
             };
             owners.push(format!("{user} · PID {pid}"));
         }
-        evidence.push(if owners.is_empty() {
-            format!("{interface}；持有进程无法读取")
-        } else {
+        evidence.push(if !owners.is_empty() {
             format!("{interface}；持有进程 {}", owners.join("、"))
+        } else if routes["holder_scope"] == "all_users" {
+            match routes["tun_holders"]["state"].as_str() {
+                Some("complete") => format!("{interface}；跨用户扫描未找到持有进程"),
+                _ => format!("{interface}；跨用户持有进程读取不完整"),
+            }
+        } else if routes["tun_holders"]["state"] == "complete" {
+            format!(
+                "{interface}；当前用户范围未发现持有进程，跨用户检查请运行 sudo cor status --all-users"
+            )
+        } else {
+            format!(
+                "{interface}；当前用户持有进程读取不完整，跨用户检查请运行 sudo cor status --all-users"
+            )
         });
     }
     if evidence.is_empty() {
@@ -323,5 +360,27 @@ mod context_tests {
         });
         assert!(coverage_issue(&ipv6_only, false).is_none());
         assert!(coverage_issue(&ipv6_only, true).unwrap().contains("IPv6"));
+    }
+
+    #[test]
+    fn cross_user_tun_requires_an_explicit_privileged_scan() {
+        let routes = json!({
+            "scope":"current_network_namespace",
+            "holder_scope":"current_user",
+            "ipv4":{"state":"observed","kind":"tun","interface":"Meta"},
+            "ipv6":{"state":"unknown"},
+            "tun_holders":{"state":"complete","interfaces":{"Meta":[]}}
+        });
+        let current = notice(&with_proxy_context(routes.clone(), Some(ProxyMode::Off))).unwrap();
+        assert!(current.contains("sudo cor status --all-users"), "{current}");
+        let mut all_users = routes;
+        all_users["holder_scope"] = json!("all_users");
+        all_users["tun_holders"]["scope"] = json!("all_users");
+        let all_users = notice(&with_proxy_context(all_users, Some(ProxyMode::Off))).unwrap();
+        assert!(
+            all_users.contains("跨用户扫描未找到持有进程"),
+            "{all_users}"
+        );
+        assert!(!all_users.contains("sudo cor status"), "{all_users}");
     }
 }
