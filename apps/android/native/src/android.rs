@@ -3506,7 +3506,7 @@ fn presentation_snapshot(ui: &AndroidWindow) -> Value {
     let theme = ui.global::<Theme>();
     let scale = ui.window().scale_factor();
     let size = ui.window().size();
-    json!({"core_running":data.get_core_running(),"vpn":data.get_vpn_connected(),
+    let mut snapshot = json!({"core_running":data.get_core_running(),"vpn":data.get_vpn_connected(),
             "page":ui.get_current_page(),"detail":ui.get_current_detail(),
             "groups":data.get_groups().row_count(),"profiles":data.get_profiles().row_count(),
             "vpn_pending":data.get_vpn_pending(),
@@ -3516,7 +3516,8 @@ fn presentation_snapshot(ui: &AndroidWindow) -> Value {
             "safe_top":view.get_safe_top(),"safe_bottom":view.get_safe_bottom(),
             "keyboard_inset":view.get_keyboard_inset(),
             "notice_active":!view.get_notice().is_empty(),"notice_error":view.get_notice_error(),
-            "notice_modal":view.get_notice_modal(),
+            "notice_modal":view.get_notice_modal()});
+    let targets = json!({
             "notice_close_target":ui.get_notice_close_target().iter().collect::<Vec<_>>(),
             "profile_add_target":view.get_profile_add_target().iter().collect::<Vec<_>>(),
             "profile_name_target":view.get_profile_name_target().iter().collect::<Vec<_>>(),
@@ -3527,7 +3528,8 @@ fn presentation_snapshot(ui: &AndroidWindow) -> Value {
             "profile_name_length":view.get_profile_name().chars().count(),
             "profile_source_length":view.get_profile_source().chars().count(),
             "settings_scroll_y":view.get_settings_scroll_y(),"settings_content_height":view.get_settings_content_height(),
-            "settings_viewport_height":view.get_settings_viewport_height(),
+            "settings_viewport_height":view.get_settings_viewport_height()});
+    let applications = json!({
             "targets": DIAGNOSTIC_GEOMETRY.with(|geometry| geometry.borrow().clone()),
             "shortcuts_open":view.get_shortcuts_open(),
             "nodes_list":ui.global::<PageViews>().get_nodes_list(),
@@ -3539,5 +3541,11 @@ fn presentation_snapshot(ui: &AndroidWindow) -> Value {
             "applications_loaded":android.get_applications_loaded(),
             "applications_total":android.get_applications_total(),
             "applications_visible":android.get_applications().row_count(),
-            "applications_error":android.get_applications_error().as_str()})
+            "applications_error":android.get_applications_error().as_str()});
+    for section in [targets, applications] {
+        if let Value::Object(fields) = section {
+            snapshot.as_object_mut().unwrap().extend(fields);
+        }
+    }
+    snapshot
 }

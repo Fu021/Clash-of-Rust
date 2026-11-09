@@ -7,6 +7,7 @@
 | 脚本 | 类型 | 职责 |
 | --- | --- | --- |
 | `build_support.py` | 共享模块 | 平台识别、版本、资源、下载、架构和暂存目录等标准库辅助。 |
+| `proxy_benchmark.py` | 测试夹具模块 | 为桌面代理集成测试提供本机 HTTP/可信 TLS 数据源和延迟端点，保存吞吐与合成节点测速报告；由代理/TUN 包装器按 CI 选取启动，不修改用户网络。 |
 | `build_inputs.py` | CLI / 模块 | 冻结并应用同一份 Rust、Go、Android、Linux 基线和资源依赖快照；统一取得四份 Geo 原包，随快照校验及分发；按冻结身份下载、校验和安装 Gradle，支持原包私网回退及实际 PATH 版本检查。 |
 | `upstream_cache.py` | CLI / 模块 | 官方原始下载的私网回退、持久清单分批提交、分页回执与有界状态查询；不上传 runner 归档。 |
 | `dependency_audit.py` | 模块 | 只读探查升级、撤回和替换信号；由 `build_inputs.py audit` 调用，实际变更遵循维护者的 loop 更新授权并验证。 |

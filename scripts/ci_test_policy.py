@@ -37,6 +37,10 @@ def desktop_ui_tests():
     return extended_tests() or enabled('COR_CI_DESKTOP_UI_TESTS')
 
 
+def proxy_benchmark():
+    return enabled('COR_CI_PROXY_BENCHMARK')
+
+
 def select(paths, extended=False):
     android = any(
         path.startswith(('apps/android/app/src/main/java/org/clashofrust/android/ApplicationRouting',
@@ -60,8 +64,21 @@ def select(paths, extended=False):
                          'apps/desktop/src/application/'))
         for path in paths
     )
+    benchmark = any(
+        path.startswith(('apps/desktop/tests/support/proxy_benchmark.rs',
+                         'crates/client-core/src/controller/',
+                         'crates/client-runtime/src/platform/windows/mod.rs',
+                         'crates/client-runtime/src/platform/macos/proxy_preferences.rs',
+                         'crates/client-runtime/src/platform/macos/mod.rs',
+                         'crates/client-runtime/src/platform/linux/mod.rs'))
+        or path in ('scripts/proxy_benchmark.py', 'apps/desktop/tests/core_integration.rs',
+                    'crates/client-core/src/download.rs',
+                    'crates/client-core/src/subscription/routes.rs')
+        for path in paths
+    )
     return {'extended_tests': extended, 'android_routing_tests': extended or android,
-            'linux_user_tests': extended or linux, 'desktop_ui_tests': extended or desktop_ui}
+            'linux_user_tests': extended or linux, 'desktop_ui_tests': extended or desktop_ui,
+            'proxy_benchmark': benchmark}
 
 
 def changed_paths():
@@ -81,10 +98,12 @@ def main():
     except (OSError, ValueError, subprocess.CalledProcessError):
         plan = select([], True)
         plan['selection_fallback'] = 'changed_source_unavailable'
+    plan['proxy_benchmark'] |= proxy_benchmark()
     print(json.dumps(plan))
     if output := os.environ.get('GITHUB_OUTPUT'):
         with open(output, 'a') as stream:
-            for key in ('extended_tests', 'android_routing_tests', 'linux_user_tests', 'desktop_ui_tests'):
+            for key in ('extended_tests', 'android_routing_tests', 'linux_user_tests',
+                        'desktop_ui_tests', 'proxy_benchmark'):
                 stream.write(f'{key}={str(plan[key]).lower()}\n')
     if summary := os.environ.get('GITHUB_STEP_SUMMARY'):
         with open(summary, 'a') as stream:

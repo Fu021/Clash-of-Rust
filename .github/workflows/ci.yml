@@ -13,6 +13,10 @@ on:
         description: Run optional source, UI and platform regression suites
         type: boolean
         default: false
+      proxy_benchmark:
+        description: Compare desktop loopback proxy throughput and local node latency
+        type: boolean
+        default: false
 env:
   SEGMENT_DOWNLOAD_TIMEOUT_MINS: '2'
   BUILD_INPUTS_DIR: dependency-snapshot
@@ -42,6 +46,7 @@ jobs:
       android_routing_tests: ${{ steps.test_policy.outputs.android_routing_tests }}
       linux_user_tests: ${{ steps.test_policy.outputs.linux_user_tests }}
       desktop_ui_tests: ${{ steps.test_policy.outputs.desktop_ui_tests }}
+      proxy_benchmark: ${{ steps.test_policy.outputs.proxy_benchmark }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with:
@@ -52,6 +57,7 @@ jobs:
         id: test_policy
         env:
           COR_CI_EXTENDED_TESTS: ${{ inputs.extended_tests && 'true' || 'false' }}
+          COR_CI_PROXY_BENCHMARK: ${{ inputs.proxy_benchmark && 'true' || 'false' }}
         run: python3 scripts/ci_test_policy.py
       - name: Load approved tool versions
         id: versions
@@ -408,6 +414,7 @@ jobs:
       COR_CI_EXTENDED_TESTS: ${{ needs.inputs.outputs.extended_tests }}
       COR_CI_LINUX_USER_TESTS: ${{ needs.inputs.outputs.linux_user_tests }}
       COR_CI_DESKTOP_UI_TESTS: ${{ needs.inputs.outputs.desktop_ui_tests }}
+      COR_CI_PROXY_BENCHMARK: ${{ needs.inputs.outputs.proxy_benchmark }}
     defaults:
       run:
         shell: python
@@ -646,6 +653,14 @@ jobs:
           path: |
             target/windows-ci-report.json
             target/windows-gui-report.json
+          if-no-files-found: warn
+          retention-days: 3
+      - name: Preserve local proxy throughput measurements
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
+        if: always() && needs.inputs.outputs.proxy_benchmark == 'true'
+        with:
+          name: proxy-benchmark-${{ matrix.system }}-${{ matrix.arch }}
+          path: target/proxy-benchmark-report
           if-no-files-found: warn
           retention-days: 3
       - name: Preserve Linux package diagnostics

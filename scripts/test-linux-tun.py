@@ -726,6 +726,7 @@ def main():
     parser.add_argument('--uid', type=int, required=True)
     parser.add_argument('--inside-namespace', action='store_true')
     parser.add_argument('--with-user-tests', action='store_true')
+    parser.add_argument('--proxy-benchmark', action='store_true')
     parser.add_argument('--test-case', default='basic_system_proxy_and_tun', choices=('basic_system_proxy_and_tun',))
     args = parser.parse_args()
     assert os.geteuid() == 0 and args.uid != 0
@@ -743,13 +744,18 @@ def main():
                 root_cli_smoke()
                 account_cli_matrix()
             run(['/opt/clash-of-rust/clash-of-rust', '--authorize-tun'])
-            run([binary, args.test_case, '--exact',
-                 '--ignored', '--test-threads=1', '--nocapture'],
-                env=dict(os.environ, CLASH_TUN_TEST_NAMESPACE='1', CLASH_PROXY_SMOKE='1',
-                         MIHOMO_TEST_RESOURCES='/opt/clash-of-rust/resources', MIHOMO_TEST_CLI='/opt/clash-of-rust/cor',
-                         GSETTINGS_BACKEND='memory', SSL_CERT_FILE='/etc/ssl/certs/ca-certificates.crt',
-                         SSL_CERT_DIR='/etc/ssl/certs'),
-                preexec_fn=ordinary_user, timeout=240)
+            benchmark = contextlib.nullcontext({})
+            if args.proxy_benchmark:
+                from proxy_benchmark import fixture
+                benchmark = fixture(uid=user.pw_uid, gid=user.pw_gid)
+            with benchmark as benchmark_environment:
+                run([binary, args.test_case, '--exact',
+                     '--ignored', '--test-threads=1', '--nocapture'],
+                    env=dict(os.environ, CLASH_TUN_TEST_NAMESPACE='1', CLASH_PROXY_SMOKE='1',
+                             MIHOMO_TEST_RESOURCES='/opt/clash-of-rust/resources', MIHOMO_TEST_CLI='/opt/clash-of-rust/cor',
+                             GSETTINGS_BACKEND='memory', SSL_CERT_FILE='/etc/ssl/certs/ca-certificates.crt',
+                             SSL_CERT_DIR='/etc/ssl/certs', **benchmark_environment),
+                    preexec_fn=ordinary_user, timeout=360 if args.proxy_benchmark else 240)
         return
 
     core = '/opt/clash-of-rust/resources/mihomo'
@@ -766,9 +772,12 @@ def main():
     original_dns_mode = os.stat(dns_helper).st_mode & 0o7777
     try:
         user_tests = ['--with-user-tests'] if args.with_user_tests else []
+        if args.proxy_benchmark:
+            user_tests += ['--proxy-benchmark']
         run(['unshare', '--net', '--mount', sys.executable, Path(__file__).resolve(),
              '--inside-namespace', '--test-binary', binary, '--uid', args.uid,
-             '--test-case', args.test_case, *user_tests], timeout=520)
+             '--test-case', args.test_case, *user_tests],
+            timeout=640 if args.proxy_benchmark else 520)
         print(json.dumps({'basic': True, 'native_authorization': True, 'root_cli': args.with_user_tests, 'ordinary_user': args.uid,
                           'tun_traffic_cleanup': True, 'network_namespace': True,
                           'resolved_without_polkit': True}))

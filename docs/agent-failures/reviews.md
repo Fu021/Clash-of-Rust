@@ -1,6 +1,6 @@
 # 最近复盘
 
-当前待验收增量（`0.6.7-fix.8.rules-shortcuts`）：应用分流改用 [Slint 页面](../android-application-routing.md)，修正预装应用过滤，并按维护者授权拆出[多版本应用列表截图](../workflows/android-previews.md)，覆盖 Android 8.0／8.1 至 16，复用成功 CI 输入，不执行 VPN/流量测试。补齐 [CLI 安装结果](../cli/maintenance.md)、Pad 等宽设置列、强调色按钮重叠及双向视图切换过渡。[快捷规则](../../crates/client-ui/README.md)桌面／Pad 紧邻内核状态左侧，手机隐藏状态时靠右，打开选择窗口；缺少文档时清空旧状态并保留禁用项。计划任务补现有更新检查周期，普通通知倒计时改为连续线性动画。首轮 CI `42617201673` 已结束：11 项成功、三个 Android 因未使用导入和 `SharedString` 未转文本即序列化而失败，两处已本地修正，待集中推送。本轮 277 项脚本回归（1 跳过）、14 项产物回归、桌面及 Android/iOS Slint 检查、Rust 格式与 actionlint 通过；桌面 875／885px 断点、手机 393×852、Pad 1024×768 设置／分流及小屏 320×568／125% 字号弹窗预览已核对。Linux x64 增加缩放、快捷规则草稿及通知倒计时定向回归。本机未编译；实际应用枚举、交互、真实拖窗和安装后结果仍待验收，下表历史结果不代表本增量已通过。
+当前待验收增量（`0.6.7-fix.8.rules-shortcuts`）：[应用分流](../android-application-routing.md)使用 Slint，修正预装应用过滤；[多版本截图](../workflows/android-previews.md)扩展至主要页面、手机横竖屏、Pad 和分流各状态，复用成功 CI，不执行 VPN/流量测试。[快捷规则](../../crates/client-ui/README.md)移至页头弹窗；补齐 [CLI 安装结果](../cli/maintenance.md)、Pad 设置列、更新检查周期、连续通知倒计时及双向视图过渡。修复桌面收据误探测 Gradle；`13db28b` 的 CI `42639211820` 三个 Android 因截图状态对象触发 JSON 宏递归上限失败，现拆分后合并，保留原字段。按维护者要求追加[桌面回环吞吐和合成节点延迟](../workflows/ci.md#桌面代理回环测速)，覆盖 Linux、Windows、macOS 双架构，结果尚未生成；用户公网慢速和间歇超时原因未定位。延迟夹具增补前本地 284 项脚本回归（1 跳过）、14 项产物回归通过，本次改动仅做静态检查，未编译。既有代表尺寸预览不代替实际应用枚举、跨平台速度及快速拖窗验收；下表历史结果不代表本增量已通过。
 
 [主题索引](README.md)保存稳定经验；本页只记近期结论和验证范围，最多 20 条，不复制排障过程。较早任务见[历史复盘](reviews-archive.md)。新增时先合并同类任务和过时待办；运行记录不代表当前提交已通过。历史缓存和 agent 反馈记录仅说明当时行为，当前规则见[缓存分工](../workflows/cache-coverage.md)与[服务边界](../workflows/cache-server.md)。
 

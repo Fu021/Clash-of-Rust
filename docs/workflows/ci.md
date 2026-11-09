@@ -32,6 +32,16 @@ macOS x64 上一轮构建全部测试程序耗时 20 分 32 秒，本轮只准�
 
 维护者授权的独立 [Android UI Previews](android-previews.md) 复用成功 CI 的 x64 APK，按安卓版本采集主要页面、分流列表及手机、平板尺寸截图。它不自动随常规 CI 启动，不保存分流、不申请 VPN、不验证流量或键盘；常规 Android job 的基础代理/TUN 范围保持独立。版本范围、触发方法、来源门禁与附件见该专页。
 
+### 桌面代理回环测速
+
+手动 CI 的 `proxy_benchmark=true`，或下载传输、平台系统代理和测速夹具相关改动，会在六种桌面 runner 的安装后代理检查中追加测速；普通 UI 改动不会单独启用。复用同一个真实 mihomo 进程和已经启用的系统代理，依次比较直接回环、从系统设置读回的 HTTP 代理、mixed 入口的 SOCKS5。代理地址显式传给共享客户端路线，避免系统对 localhost 的绕过规则把代理样本变成直连，并校验实际连接的端口。
+
+每条路线分别访问本机 HTTP 和 HTTPS；HTTPS 经过 HTTP 代理时建立 CONNECT 隧道，TLS 只信任本次临时生成的测试证书，校验未关闭。每个样本 16 MiB，三轮轮换路线顺序；分别只接收并计算 SHA256，以及使用与安装包相同的 256 KiB 缓冲写临时文件并 flush/sync。校验完整字节数和摘要，记录首字节、总耗时及吞吐中位数，附原始样本。单轮预算 90 秒，速度不设跨平台硬阈值，连接失败、缺报告及数据不完整仍失败。
+
+另用固定延迟 25 ms 的本机 HEAD 端点比较五轮：直接请求、系统 HTTP 代理、SOCKS、mihomo 控制接口的 DIRECT，以及通过本机 mixed 入口转发的合成 SOCKS 节点。控制接口分别记录请求总耗时和内核返回的测速值；默认 `unified-delay` 在第二次请求成功时采用复用连接的耗时，而其他路线记录新建连接后的响应耗时，两者不能直接等同。这些测量与用户订阅节点的延迟是不同的测试。
+
+结果在 job summary 和 `proxy-benchmark-{system}-{arch}` 附件中，含 JSON 和 Markdown；失败时保留已经完成的样本。Linux 夹具在现有隔离网络命名空间内启动，不向 VM 兼容 job 重复追加。这些样本限于 IPv4、HTTP/1.1，不经过公网 DNS、远端节点或 GitHub CDN，也不覆盖 HTTP/2、QUIC 和 IPv6，不能证明相同订阅节点在用户 Windows/macOS 上的公网表现；先看各 runner 内的代理/直接回环比值，再结合故障设备的出站链和同目标下载对照。runner CPU、虚拟化、磁盘及安全软件差异不能只用绝对 MiB/s 归因于操作系统。
+
 ### Android 工具与原包
 
 Android 使用固定 Python、JDK 和 Go；`build_inputs.py prepare-gradle` 按冻结快照中的版本及已提交的官方 SHA256 准备 Gradle ZIP，官方下载失败后回退私网原包，校验并解压后加入 PATH。编译前执行 `build_inputs.py check-tools --tools go java gradle` 核对实际版本。环境变量里记录的版本或早先 setup 成功不能代替当前 PATH 上的工具检查；版本漂移先失败，不放宽 `go mod tidy -diff` 或自动下载另一套编译器。Gradle 不再由独立 setup action 另行下载，SDK 准备结束后提交原包清单检查点。

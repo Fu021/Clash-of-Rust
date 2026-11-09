@@ -29,6 +29,7 @@ import prepared_vm_environment
 import tun_dns_fixture
 import build_inputs
 import ci_test_policy
+import proxy_benchmark
 import android_previews
 import os
 import copy
@@ -917,7 +918,7 @@ class BuildTests(unittest.TestCase):
             self.assertFalse(ci_test_policy.desktop_ui_tests())
             self.assertEqual(ci_test_policy.select([]), {
                 'extended_tests': False, 'android_routing_tests': False, 'linux_user_tests': False,
-                'desktop_ui_tests': False})
+                'desktop_ui_tests': False, 'proxy_benchmark': False})
             self.assertTrue(ci_test_policy.select([
                 'apps/android/app/src/main/java/org/clashofrust/android/ApplicationRouting.java'
             ])['android_routing_tests'])
@@ -952,6 +953,102 @@ class BuildTests(unittest.TestCase):
                 proxy_modes.check(Path('/test/core_integration'), Path('/opt/clash-of-rust'))
             command = invoke.call_args.args[0]
             self.assertEqual('--with-user-tests' in command, selected)
+
+    def test_proxy_benchmark_is_selected_for_transport_changes_and_survives_sudo(self):
+        self.assertTrue(ci_test_policy.select([
+            'apps/desktop/tests/support/proxy_benchmark.rs'])['proxy_benchmark'])
+        self.assertTrue(ci_test_policy.select([
+            'crates/client-core/src/subscription/routes.rs'])['proxy_benchmark'])
+        self.assertTrue(ci_test_policy.select([
+            'crates/client-core/src/controller/mod.rs'])['proxy_benchmark'])
+        self.assertFalse(ci_test_policy.select(['README.md'])['proxy_benchmark'])
+        specification = importlib.util.spec_from_file_location(
+            'proxy_modes_benchmark', build.ROOT/'scripts/test-proxy-modes.py')
+        module = importlib.util.module_from_spec(specification)
+        specification.loader.exec_module(module)
+        with patch.dict(os.environ, {'GITHUB_ACTIONS': 'true',
+                                    'COR_CI_PROXY_BENCHMARK': 'true',
+                                    'COR_CI_LINUX_USER_TESTS': 'false',
+                                    'COR_CI_EXTENDED_TESTS': 'false'}), \
+                patch.object(module, 'host_system', return_value='linux'), \
+                patch.object(module.Path, 'resolve', autospec=True,
+                             side_effect=lambda path, **kwargs: path), \
+                patch.object(module, 'run') as invoke:
+            module.check(Path('/test/core_integration'), Path('/opt/clash-of-rust'))
+        self.assertIn('--proxy-benchmark', invoke.call_args.args[0])
+
+    def test_proxy_benchmark_fixture_serves_identical_verified_http_and_https_payloads(self):
+        import ssl
+        import urllib.request
+        with patch.object(proxy_benchmark, 'BODY_SIZE', len(proxy_benchmark.BLOCK)), \
+                patch.object(proxy_benchmark, 'save_report') as save:
+            with proxy_benchmark.fixture() as environment:
+                manifest = json.loads(Path(environment['CLASH_PROXY_BENCHMARK_FIXTURE']).read_text())
+                context = ssl.create_default_context(cafile=manifest['certificate'])
+                context.verify_flags |= ssl.VERIFY_X509_STRICT
+                opener = urllib.request.build_opener(
+                    urllib.request.ProxyHandler({}), urllib.request.HTTPSHandler(context=context))
+                for url in manifest['urls']:
+                    with opener.open(url, timeout=5) as response:
+                        body = response.read()
+                        self.assertEqual(len(body), manifest['size'])
+                        self.assertEqual(hashlib.sha256(body).hexdigest(), manifest['sha256'])
+                        self.assertEqual(response.headers['Content-Length'], str(len(body)))
+                request = urllib.request.Request(manifest['latency_url'], method='HEAD')
+                with opener.open(request, timeout=5) as response:
+                    self.assertEqual(response.status, 204)
+                    self.assertEqual(response.read(), b'')
+                Path(manifest['report']).write_text('{"complete": true}')
+            save.assert_called_once()
+            self.assertFalse(Path(manifest['certificate']).exists())
+
+    def test_proxy_benchmark_rejects_missing_or_partial_reports_without_masking_test_failure(self):
+        for report in (None, {'complete': False}):
+            with self.subTest(report=report), \
+                    patch.object(proxy_benchmark, 'save_report') as save:
+                with self.assertRaisesRegex(RuntimeError, 'did not'):
+                    with proxy_benchmark.fixture() as environment:
+                        manifest = json.loads(Path(environment['CLASH_PROXY_BENCHMARK_FIXTURE']).read_text())
+                        if report is not None:
+                            Path(manifest['report']).write_text(json.dumps(report))
+                self.assertEqual(save.call_count, int(report is not None))
+        with patch.object(proxy_benchmark, 'save_report'):
+            with self.assertRaisesRegex(ValueError, 'original failure'):
+                with proxy_benchmark.fixture():
+                    raise ValueError('original failure')
+
+    def test_proxy_benchmark_preserves_partial_measurements_and_labels_their_scope(self):
+        report = {
+            'system': 'windows', 'arch': 'x64', 'host': {'logical_cpus': 4},
+            'complete': False, 'error': 'TLS handshake timed out',
+            'samples': [], 'summaries': [{
+                'protocol': 'https', 'route': 'native-http', 'sink': 'memory',
+                'median_mib_per_second': 12.5, 'median_first_byte_ms': 4.25,
+            }],
+            'latency_summaries': [{
+                'route': 'controller-loopback-socks', 'median_elapsed_ms': 51.5,
+                'median_reported_delay_ms': 25,
+            }, {
+                'route': 'direct', 'median_elapsed_ms': 25.5,
+                'median_reported_delay_ms': None,
+            }],
+        }
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            source = root/'report.json'
+            source.write_text(json.dumps(report))
+            with patch.object(proxy_benchmark, 'ROOT', root), \
+                    patch.dict(os.environ, {'GITHUB_STEP_SUMMARY': str(root/'summary.md')}), \
+                    patch('builtins.print'):
+                proxy_benchmark.save_report(source)
+            preserved = json.loads((root/'target/proxy-benchmark-report/loopback.json').read_text())
+            self.assertFalse(preserved['complete'])
+            self.assertEqual(preserved['error'], report['error'])
+            text = (root/'summary.md').read_text()
+            self.assertIn('| https | native-http | memory | 12.50 | 4.25 |', text)
+            self.assertIn('| controller-loopback-socks | 51.50 | 25.00 |', text)
+            self.assertIn('| direct | 25.50 | — |', text)
+            self.assertIn('no public DNS, remote node or GitHub CDN', text)
 
     def test_previews_reject_a_viewer_without_color_font_support(self):
         for version, supported in [('slint-viewer 1.18.1', False),

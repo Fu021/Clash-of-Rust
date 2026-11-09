@@ -12,6 +12,17 @@ from build_support import ROOT, run, host_system
 
 
 @contextlib.contextmanager
+def optional_proxy_benchmark():
+    from ci_test_policy import proxy_benchmark
+    if proxy_benchmark():
+        from proxy_benchmark import fixture
+        with fixture() as environment:
+            yield environment
+    else:
+        yield {}
+
+
+@contextlib.contextmanager
 def macos_network_service(report):
     label = f'org.clashofrust.network.{os.getuid()}'
     directory = Path('/Library/PrivilegedHelperTools')/label
@@ -47,9 +58,11 @@ def check(binary, bundle, test_case='basic_system_proxy_and_tun'):
     env['MIHOMO_TEST_CLI'] = str(cli.resolve(strict=True))
     command = [binary, test_case, '--exact', '--ignored', '--nocapture']
     if system == 'linux':
-        from ci_test_policy import linux_user_tests
+        from ci_test_policy import linux_user_tests, proxy_benchmark
         sudo = ['sudo']
         user_tests = ['--with-user-tests'] if linux_user_tests() else []
+        if proxy_benchmark():
+            user_tests += ['--proxy-benchmark']
         installed = Path('/opt/clash-of-rust')
         if bundle.resolve() != installed:
             # Install only the raw tested binaries/resources, never package in CI.
@@ -94,7 +107,9 @@ def check(binary, bundle, test_case='basic_system_proxy_and_tun'):
             # Production helper and launchd service, ordinary-user client. Only
             # initial administrative installation is performed by runner sudo.
             run(['/usr/bin/sudo', '-n', stage/'clash-tun-launcher', '--macos-install-service', os.getuid()])
-            run(command, env=env, timeout=240)
+            with optional_proxy_benchmark() as benchmark_environment:
+                run(command, env=dict(env, **benchmark_environment),
+                    timeout=360 if benchmark_environment else 240)
     elif system == 'windows':
         from ci_test_policy import extended_tests
         from windows_ci import allow_ordinary_user_directory, run_unelevated, wait_unelevated_ready
@@ -108,7 +123,9 @@ def check(binary, bundle, test_case='basic_system_proxy_and_tun'):
             run([helper, '--windows-service-install'])
         try:
             env['CLASH_EXPECT_UNELEVATED'] = '1'
-            run_unelevated(command, env)
+            with optional_proxy_benchmark() as benchmark_environment:
+                run_unelevated(command, dict(env, **benchmark_environment),
+                               timeout=360 if benchmark_environment else 240)
             if extended_tests():
                 run([helper, '--windows-service-stop'])
                 run_unelevated(command, env)

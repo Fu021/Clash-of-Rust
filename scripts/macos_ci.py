@@ -322,7 +322,7 @@ def package_tests(package, manifest, build):
 
 
 def installed_package_tests(package, manifest, build):
-    from ci_test_policy import extended_tests
+    from ci_test_policy import extended_tests, proxy_benchmark
     from macos_package import APP_NAME, BUNDLE_ID, UI_APP, UI_BUNDLE_ID
     with mounted(package) as volume:
         app = volume/APP_NAME
@@ -346,7 +346,7 @@ def installed_package_tests(package, manifest, build):
             suite('Installed system proxy and TUN', lambda: logged('installed-proxy-modes',
                 [sys.executable, ROOT/'scripts/test-proxy-modes.py',
                  '--test-binary', build/manifest['tests']['core_integration'],
-                 '--bundle', installed]))
+                 '--bundle', installed], timeout=450 if proxy_benchmark() else 300))
 
 
 def diagnostics(arch):
