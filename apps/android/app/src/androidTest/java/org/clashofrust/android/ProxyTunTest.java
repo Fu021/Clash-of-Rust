@@ -1096,6 +1096,50 @@ public class ProxyTunTest {
         }
         fail("Tool is outside the screenshot viewport: " + page);
     }
+    private static android.graphics.Bitmap previewWindowBitmap() throws Exception {
+        MainActivity activity = resumedActivity();
+        assertNotNull("Screenshot activity is not focused", activity);
+        java.util.concurrent.atomic.AtomicReference<android.graphics.Bitmap> bitmap =
+            new java.util.concurrent.atomic.AtomicReference<>();
+        java.util.concurrent.atomic.AtomicReference<RuntimeException> failure =
+            new java.util.concurrent.atomic.AtomicReference<>();
+        java.util.concurrent.atomic.AtomicInteger result = new java.util.concurrent.atomic.AtomicInteger(-1);
+        java.util.concurrent.CountDownLatch completed = new java.util.concurrent.CountDownLatch(1);
+        InstrumentationRegistry.getInstrumentation().runOnMainSync(() -> {
+            try {
+                android.view.View decor = activity.getWindow().getDecorView();
+                android.graphics.Bitmap target = android.graphics.Bitmap.createBitmap(
+                    decor.getWidth(), decor.getHeight(), android.graphics.Bitmap.Config.ARGB_8888);
+                bitmap.set(target);
+                android.view.PixelCopy.request(activity.getWindow(), target, status -> {
+                    result.set(status);
+                    completed.countDown();
+                }, new android.os.Handler(android.os.Looper.getMainLooper()));
+            } catch (RuntimeException error) {
+                failure.set(error);
+                completed.countDown();
+            }
+        });
+        assertTrue("Window screenshot timed out", completed.await(10, java.util.concurrent.TimeUnit.SECONDS));
+        if (failure.get() != null) throw failure.get();
+        assertEquals("Could not copy the Slint window surface", android.view.PixelCopy.SUCCESS, result.get());
+        return bitmap.get();
+    }
+    private static double previewBlackRatio(android.graphics.Bitmap bitmap) {
+        int black = 0, sampled = 0;
+        int stepX = Math.max(1, bitmap.getWidth() / 64);
+        int stepY = Math.max(1, bitmap.getHeight() / 64);
+        for (int row = stepY / 2; row < bitmap.getHeight(); row += stepY) {
+            for (int column = stepX / 2; column < bitmap.getWidth(); column += stepX) {
+                int color = bitmap.getPixel(column, row);
+                if (android.graphics.Color.alpha(color) < 128
+                        || (android.graphics.Color.red(color) < 8 && android.graphics.Color.green(color) < 8
+                            && android.graphics.Color.blue(color) < 8)) black++;
+                sampled++;
+            }
+        }
+        return (double)black / sampled;
+    }
     private static void capturePreview(File directory, JSONArray cases, String name) throws Exception {
         SystemClock.sleep(400);
         JSONObject ui = MainActivity.diagnostics();
@@ -1105,13 +1149,26 @@ public class ProxyTunTest {
         ui.put("window_origin_px", new JSONArray().put(origin[0]).put(origin[1]));
         android.graphics.Bitmap screenshot = InstrumentationRegistry.getInstrumentation().getUiAutomation().takeScreenshot();
         assertNotNull("Could not capture " + name, screenshot);
-        int width = screenshot.getWidth(), height = screenshot.getHeight();
-        try (OutputStream output = new FileOutputStream(new File(directory, name + ".png"))) {
+        String screenImage = name + "-screen.png";
+        try (OutputStream output = new FileOutputStream(new File(directory, screenImage))) {
             assertTrue("Could not encode " + name, screenshot.compress(android.graphics.Bitmap.CompressFormat.PNG, 100, output));
         } finally { screenshot.recycle(); }
+        android.graphics.Bitmap window = previewWindowBitmap();
+        int width = window.getWidth(), height = window.getHeight();
+        double blackRatio = previewBlackRatio(window);
+        try (OutputStream output = new FileOutputStream(new File(directory, name + ".png"))) {
+            assertTrue("Could not encode the window " + name,
+                window.compress(android.graphics.Bitmap.CompressFormat.PNG, 100, output));
+        } finally { window.recycle(); }
+        double scale = ui.getDouble("scale");
+        assertEquals("Screenshot window width differs from Slint", Math.round(ui.getDouble("width") * scale), width, 2);
+        assertEquals("Screenshot window height differs from Slint", Math.round(ui.getDouble("height") * scale), height, 2);
+        assertTrue("Screenshot window contains excessive black or transparent pixels: " + blackRatio, blackRatio <= 0.2);
         cases.put(new JSONObject().put("name", name).put("image", name + ".png")
+            .put("screen_image", screenImage).put("capture_method", "pixelcopy-window")
+            .put("black_sample_ratio", blackRatio)
             .put("pixel_width", width).put("pixel_height", height).put("state", ui));
-        JSONObject manifest = new JSONObject().put("schema", 2).put("scope", "android-ui-preview")
+        JSONObject manifest = new JSONObject().put("schema", 3).put("scope", "android-ui-preview")
             .put("android_api", Build.VERSION.SDK_INT).put("android_release", Build.VERSION.RELEASE)
             .put("cases", cases);
         java.nio.file.Files.write(new File(directory, "manifest.json").toPath(),

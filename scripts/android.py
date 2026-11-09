@@ -839,7 +839,7 @@ def test(arch, apk=None, test_apk=None, ime_only=False, ime_probe=False,
 def validate_application_preview(directory, api):
     manifest = json.loads((directory / 'manifest.json').read_text())
     if (manifest.get('schema'), manifest.get('scope'), manifest.get('android_api')) != (
-            2, 'android-ui-preview', api) or not manifest.get('android_release'):
+            3, 'android-ui-preview', api) or not manifest.get('android_release'):
         raise ValueError('Android preview identity differs from the selected Android version')
     primary = ('home', 'proxies-grid', 'proxies-list', 'subscriptions-grid', 'subscriptions-list',
                'settings-top', 'settings-middle', 'settings-bottom', 'applications-default',
@@ -881,8 +881,18 @@ def validate_application_preview(directory, api):
         if (type(scale) not in (int, float) or not math.isfinite(scale) or scale <= 0
                 or (name.startswith('tablet-') and abs(scale - 1.0) >= .001)):
             raise ValueError('Android preview did not use the intended display scale: ' + name)
-        if type(width) not in (int, float) or type(height) not in (int, float) or width <= 0 or height <= 0:
+        if (type(width) not in (int, float) or type(height) not in (int, float)
+                or not math.isfinite(width) or not math.isfinite(height) or width <= 0 or height <= 0):
             raise ValueError('Android preview has invalid logical dimensions: ' + name)
+        black_ratio = case.get('black_sample_ratio')
+        if (case.get('capture_method') != 'pixelcopy-window' or type(black_ratio) not in (int, float)
+                or not math.isfinite(black_ratio) or not 0 <= black_ratio <= .2
+                or not math.isfinite(width * scale) or not math.isfinite(height * scale)
+                or abs(size[0] - round(width * scale)) > 2 or abs(size[1] - round(height * scale)) > 2):
+            raise ValueError('Android preview window capture is invalid or obscured: ' + name)
+        if case.get('screen_image') != name + '-screen.png' \
+                or not (directory / case['screen_image']).is_file():
+            raise ValueError('Android preview is missing the original display capture: ' + name)
         if ((name.startswith(('phone-', 'tablet-portrait-')) and width >= height)
                 or (name.startswith(('landscape-', 'tablet-landscape-')) and width <= height)
                 or (name.startswith('tablet-portrait-') and width < 760)

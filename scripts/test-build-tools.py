@@ -3210,7 +3210,10 @@ runpy.run_path(str(script), run_name='__main__')
                 case_name = layout + '-' + name
                 image = b'\x89PNG\r\n\x1a\n' + struct.pack('>I', 13) + b'IHDR' + struct.pack('>II', width, height)
                 (directory / (case_name + '.png')).write_bytes(image)
+                (directory / (case_name + '-screen.png')).write_bytes(image)
                 cases.append({'name': case_name, 'image': case_name + '.png',
+                              'screen_image': case_name + '-screen.png',
+                              'capture_method': 'pixelcopy-window', 'black_sample_ratio': 0,
                               'pixel_width': width, 'pixel_height': height,
                               'state': base | {'width': width, 'height': height, 'page': page} | state})
             for layout in ('phone', 'landscape', 'tablet-portrait', 'tablet-landscape'):
@@ -3231,12 +3234,17 @@ runpy.run_path(str(script), run_name='__main__')
                     ('applications-exclude', 9, {'detail': 18, 'applications_mode': 2}),
                     ('applications-unsaved', 9, {'detail': 12})):
                 add('phone', name, page, **state)
-            manifest = {'schema': 2, 'scope': 'android-ui-preview', 'android_api': 31,
+            manifest = {'schema': 3, 'scope': 'android-ui-preview', 'android_api': 31,
                         'android_release': '12', 'cases': cases}
             def write():
                 (directory / 'manifest.json').write_text(json.dumps(manifest))
             write()
             android_build.validate_application_preview(directory, 31)
+            manifest['schema'] = 2
+            write()
+            with self.assertRaisesRegex(ValueError, 'identity'):
+                android_build.validate_application_preview(directory, 31)
+            manifest['schema'] = 3
             tablet = next(case for case in cases if case['name'] == 'tablet-portrait-home')
             for scale in (None, 0, -1, 2.75, True, float('nan'), float('inf')):
                 with self.subTest(scale=scale):
@@ -3246,6 +3254,20 @@ runpy.run_path(str(script), run_name='__main__')
                     with self.assertRaisesRegex(ValueError, 'display scale'):
                         android_build.validate_application_preview(directory, 31)
                     tablet['state'] = original
+            write()
+            for change in ({'capture_method': None}, {'capture_method': 'uiautomation'},
+                           {'state': tablet['state'] | {'width': 1000}},
+                           {'black_sample_ratio': None}, {'black_sample_ratio': -1},
+                           {'black_sample_ratio': .21}, {'black_sample_ratio': True},
+                           {'black_sample_ratio': float('nan')}, {'black_sample_ratio': float('inf')}):
+                with self.subTest(change=change):
+                    original = dict(tablet)
+                    tablet.update(change)
+                    write()
+                    with self.assertRaisesRegex(ValueError, 'window capture'):
+                        android_build.validate_application_preview(directory, 31)
+                    tablet.clear()
+                    tablet.update(original)
             write()
             application = next(case for case in cases if case['name'] == 'phone-applications-default')
             for changes in ({'detail': 9}, {'live': False}, {'applications_loading': True},
