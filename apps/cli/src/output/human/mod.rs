@@ -232,8 +232,24 @@ pub(super) fn write(out: &mut dyn Write, args: &Args, value: &Value) -> Result<(
         }
         "update install" => message(
             out,
-            "已交给系统安装，请完成系统授权；安装完成后可用 cor start 启动后台",
+            "安装包已校验，安装助手已启动，尚未确认安装完成。\n查看结果：cor update status（沿用原账户和 --data-dir 参数）\n安装成功后可用 cor start 启动后台。",
         ),
+        "update status" => {
+            if value["state"] == "none" {
+                message(out, "没有安装记录；旧版本开始的安装可能没有记录")
+            } else {
+                field(out, "目标版本", &text(value, "version"))?;
+                field(out, "安装结果", &text(value, "message"))?;
+                if matches!(value["state"].as_str(), Some("preparing" | "installing")) {
+                    message(
+                        out,
+                        "稍后运行 cor update status 查看结果；若安装已退出，请导出诊断",
+                    )
+                } else {
+                    Ok(())
+                }
+            }
+        }
         "ip-check list" => table::records(
             out,
             rows(value),

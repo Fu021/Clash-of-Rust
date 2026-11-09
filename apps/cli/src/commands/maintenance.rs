@@ -165,6 +165,19 @@ pub(super) async fn authorize_tun(args: &Args) -> Result<()> {
 }
 
 async fn update(args: &Args) -> Result<()> {
+    if args.path == "update status" {
+        let status = clash_client_runtime::update::installation_status(&backend::data_root(args)?)?;
+        return output::emit(
+            args,
+            match status {
+                Some(status) => json!({
+                    "state":status.state, "version":status.version,
+                    "message":status.message, "error":status.error, "updated_at":status.updated_at,
+                }),
+                None => json!({"state":"none","message":"没有安装记录"}),
+            },
+        );
+    }
     let (port, api, include_prereleases) =
         if let Some(remote) = backend::connect(args, false).await? {
             let meta: Meta = remote.request(Command::Meta).await?;
@@ -189,6 +202,9 @@ async fn update(args: &Args) -> Result<()> {
             "下载并安装最新正式版（预发布版可返回正式版），停止当前内核和后台？".into()
         };
         output::confirm(args, &prompt).await?;
+        if !args.flag("quiet") && !args.flag("json") && !args.flag("jsonl") {
+            eprintln!("正在检查更新、下载安装包并校验 SHA256…");
+        }
         return output::emit(args, backend::request(args, Command::UpdateInstall).await?);
     }
     let available =

@@ -19,9 +19,13 @@ export component AppearanceSettings inherits VerticalLayout {
         }
         MDivider { }
         MRow { title: "强调色"; value: AccentPalette.accent-names[Theme.accent-index]; show-swatch: true; swatch: Theme.accent; clicked => { MobileView.detail = 11; } }
-        HorizontalLayout { spacing: 0px;
+        swatches := GridLayout {
+            property <int> columns: self.width >= 308px ? 6 : 3;
+            spacing: 4px;
             for index in 6: MButton {
-                text: ""; quiet: true; selected: Theme.accent-index == index; width: 0px; horizontal-stretch: 1;
+                col: mod(index, swatches.columns); row: floor(index / swatches.columns);
+                min-width: 48px;
+                text: ""; quiet: true; selected: Theme.accent-index == index;
                 enabled: !MobileData.protected && !MobileData.protection-pending;
                 accessible-role: button; accessible-label: AccentPalette.accent-names[index];
                 Rectangle { x: (parent.width - 20px) / 2; y: (parent.height - 20px) / 2; width: 20px; height: 20px; border-radius: 10px;

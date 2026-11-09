@@ -5,6 +5,7 @@
 | [CI](workflows/ci.md) | main push、PR；源码检查、编译、九组候选包、安装及 Ubuntu 兼容验证，真实集成聚焦代理/TUN | 九组 `build-*`、九组 `package-*`、SHA256 和收据，保留 3 天 |
 | [Publish Release](workflows/release.md) | 手动；核验同提交成功 CI 候选包；公开模式另验 Android 发行签名并发布 | 桌面复用 CI 附件；公开模式追加三组发行签名 APK，保留 3 天 |
 | [Memory Benchmark](workflows/memory.md) | 手动；指定提交的轻负载或压力内存采样 | 原始数据、报告和日志，保留 3 天 |
+| [Android Application Previews](workflows/android-previews.md) | 手动；复用成功 CI 的 x64 APK，打开多 Android 版本应用分流页，只枚举和截图 | 各版本 PNG、状态和日志，保留 7 天 |
 
 普通 CI 共 14 个必需 job：共享输入 1、桌面 6、Android 3、Ubuntu 兼容 3、缓存预算 1。Publish Release 的 `check_only` 仅执行来源解析与最终核验两个 job，三个 Android 签名 job 跳过；公开发布则执行五个 job。Memory Benchmark 执行采样与缓存预算两个 job，不生成安装包。依赖维护模式不执行完整 CI 矩阵，不能作为发布来源。
 
@@ -14,7 +15,7 @@
 
 ## Actions 跟进节奏
 
-先确认一次运行编号、来源提交和启动状态，再参考同工作流近期耗时低频查询。迁移前的 [CI 41966802804](https://github.com/Fu021/Clash-of-Rust/actions/runs/41966802804) 用时 24 分 17 秒、[Memory 41966849950](https://github.com/Fu021/Clash-of-Rust/actions/runs/41966849950) 8 分 46 秒、[Publish Release 41969428145](https://github.com/Fu021/Clash-of-Rust/actions/runs/41969428145) 31 分 50 秒；此前 18 次完整成功 CI 中位数为 24 分 56 秒。这些范围不含已前移的候选包/安装矩阵，不能直接比较新 CI；Ubuntu 20.04 ARM64 的 TCG 检查现在计入 CI，首次迁移尚待实际测速，单次暖缓存结果也不能代表普遍提速。CI 建议 10 分钟首查、此后约 5 分钟；发布 7 分钟首查、临近完成每 2～3 分钟，纯 `check_only` 可在已启动且完成后立即核对。排队和长步骤延长间隔；失败后才读取必要日志，不反复下载整份日志。
+先确认一次运行编号、来源提交和启动状态，再参考同工作流近期耗时低频查询。候选包和安装验证前移、常规测试精简后的实测见[CI 耗时记录](workflows/ci.md#测试精简后的耗时)。迁移前的 CI `41966802804` 用时 24 分 17 秒、Memory `41966849950` 用时 8 分 46 秒、Publish Release `41969428145` 用时 31 分 50 秒；范围不同，不能直接与现在的工作流比较。CI 建议 10 分钟首查、此后约 5 分钟；发布 7 分钟首查、临近完成每 2～3 分钟，纯 `check_only` 可在已启动且完成后立即核对。排队和长步骤延长间隔；失败后才读取必要日志，不反复下载整份日志。
 
 若运行已失败，且 job 注解或日志明确显示长时间未分配到 runner，Agent 自动重试对应失败 job，复用同提交的成功结果并继续低频跟进，无需用户提醒；先等待本轮结束，再用 `gh run rerun <run-id> --job <job-id>`。job ID 取 `gh run view <run-id> --json jobs` 中的 `databaseId`，不要与 run ID 混淆。仍在排队时不取消或重跑；无法确认原因、代码、测试及安装校验失败均先定位，不能当作 runner 故障重试。相同容量故障再次出现时延长等待，持续记录原因；适用于 CI、打包和其他已获授权的 Actions，不增加工作流或访问权限。
 

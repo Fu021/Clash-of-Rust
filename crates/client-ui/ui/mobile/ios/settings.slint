@@ -39,8 +39,12 @@ export component IosSettings inherits PageSurface {
             IosConnection { } IosNetwork { } AppearanceSettings { } IosUpdates { } ScheduleSettings { }
         }
         if root.width >= 760px: HorizontalLayout { spacing: 20px; width: root.width;
-            VerticalLayout { alignment: start; spacing: 20px; IosConnection { } IosNetwork { } }
-            VerticalLayout { alignment: start; spacing: 20px; AppearanceSettings { } IosUpdates { } ScheduleSettings { } }
+            VerticalLayout { width: (root.width - 20px) / 2; horizontal-stretch: 0; alignment: start; spacing: 20px;
+                IosConnection { } IosNetwork { }
+            }
+            VerticalLayout { width: (root.width - 20px) / 2; horizontal-stretch: 0; alignment: start; spacing: 20px;
+                AppearanceSettings { } IosUpdates { } ScheduleSettings { }
+            }
         }
     }
 }

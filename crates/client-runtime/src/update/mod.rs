@@ -8,8 +8,8 @@ use futures_util::future::{AbortHandle, AbortRegistration};
 #[cfg(target_os = "macos")]
 pub(crate) use install::handoff_owner_deferred_at;
 pub use install::{
-    InstallSession, cleanup, ensure_installable, handoff, handoff_at, handoff_owner,
-    handoff_owner_at, helper_main, startup_outcome,
+    InstallSession, InstallationStatus, cleanup, ensure_installable, handoff, handoff_at,
+    handoff_owner, handoff_owner_at, helper_main, installation_status, startup_outcome,
 };
 use reqwest::{Client, StatusCode, Url};
 use semver::Version;

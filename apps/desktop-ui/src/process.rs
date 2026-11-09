@@ -223,6 +223,8 @@ pub fn run() -> anyhow::Result<()> {
     let native_revision = revision.clone();
     let mut modifiers = winit::keyboard::ModifiersState::empty();
     let mut first_draw = true;
+    let geometry_timer = Timer::default();
+    let mut repaint_state = repaint::RepaintState::default();
     window
         .window()
         .on_winit_window_event(move |native_window, event| {
@@ -260,12 +262,22 @@ pub fn run() -> anyhow::Result<()> {
                             clash_desktop_shell::platform::memory::release_unused_heap();
                         });
                     }
-                    repaint::before_draw(native_window);
+                    repaint_state.before_draw(native_window);
                 }
                 WindowEvent::Resized(size) => {
                     let s = size.to_logical::<f32>(f64::from(native_window.scale_factor()));
                     repaint::invalidate_size(native_window, s.width, s.height);
-                    geometry(&native, &window);
+                    let weak = window.as_weak();
+                    let output = native.clone();
+                    geometry_timer.start(
+                        slint::TimerMode::SingleShot,
+                        Duration::from_millis(80),
+                        move || {
+                            if let Some(window) = weak.upgrade() {
+                                geometry(&output, &window);
+                            }
+                        },
+                    );
                 }
                 WindowEvent::Moved(_) | WindowEvent::ThemeChanged(_) => geometry(&native, &window),
                 WindowEvent::ScaleFactorChanged { .. } => {

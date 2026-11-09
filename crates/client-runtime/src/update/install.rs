@@ -12,6 +12,92 @@ use std::{
     time::{Duration, Instant},
 };
 
+#[derive(Debug, Serialize, Deserialize)]
+pub struct InstallationStatus {
+    pub version: String,
+    pub state: String,
+    pub message: String,
+    pub error: bool,
+    pub updated_at: u64,
+    directory: PathBuf,
+}
+
+fn load_installation_status(data_dir: &Path) -> Result<Option<InstallationStatus>> {
+    let path = data_dir.join("update-install.json");
+    let file = match fs::File::open(path) {
+        Ok(file) => file,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+        Err(error) => return Err(error).context("无法读取安装记录"),
+    };
+    let mut bytes = Vec::new();
+    file.take(16 * 1024 + 1).read_to_end(&mut bytes)?;
+    anyhow::ensure!(bytes.len() <= 16 * 1024, "安装记录过大");
+    Ok(Some(
+        serde_json::from_slice(&bytes).context("安装记录损坏")?,
+    ))
+}
+
+pub fn installation_status(data_dir: &Path) -> Result<Option<InstallationStatus>> {
+    let Some(mut status) = load_installation_status(data_dir)? else {
+        return Ok(None);
+    };
+    if matches!(status.state.as_str(), "preparing" | "installing")
+        && let Some((message, error)) = read_outcome(&status.directory)
+    {
+        status.state = if error { "failed" } else { "succeeded" }.into();
+        status.message = message;
+        status.error = error;
+    }
+    Ok(Some(status))
+}
+
+fn record_installation(
+    plan: &Plan,
+    directory: &Path,
+    state: &str,
+    message: &str,
+    error: bool,
+) -> Result<()> {
+    let Some(data_dir) = &plan.data_dir else {
+        return Ok(());
+    };
+    let mut options = fs::OpenOptions::new();
+    options.read(true).write(true).create(true).truncate(false);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+        options.mode(0o600);
+    }
+    let lock = options.open(data_dir.join("update-install.lock"))?;
+    lock.lock().context("无法锁定安装记录")?;
+    if let Some(previous) = load_installation_status(data_dir)? {
+        if state != "preparing" && previous.directory != directory {
+            return Ok(());
+        }
+        if previous.directory == directory
+            && matches!(previous.state.as_str(), "succeeded" | "failed")
+            && matches!(state, "preparing" | "installing")
+        {
+            return Ok(());
+        }
+    }
+    let status = InstallationStatus {
+        version: plan.version.clone(),
+        state: state.into(),
+        message: message.into(),
+        error,
+        updated_at: std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)?
+            .as_secs(),
+        directory: directory.into(),
+    };
+    crate::config::atomic_write(
+        &data_dir.join("update-install.json"),
+        &serde_json::to_vec(&status)?,
+    )
+    .context("无法保存安装记录")
+}
+
 #[derive(Clone, Serialize, Deserialize)]
 struct Plan {
     package: PathBuf,
@@ -190,17 +276,32 @@ fn handoff_with_commit(
     fs::copy(&plan.executable, &helper).context("无法准备安装助手，请检查磁盘空间或安全软件")?;
     fs::write(directory.join("plan.json"), serde_json::to_vec(&plan)?)
         .context("无法保存更新信息")?;
-    let mut child = command(&helper)
+    record_installation(
+        &plan,
+        &directory,
+        "preparing",
+        "安装包已校验，正在准备安装",
+        false,
+    )?;
+    let started = command(&helper)
         .arg("--install-update")
         .arg(&directory)
         .spawn()
-        .context("无法启动安装助手，请检查安全软件或权限")?;
+        .context("无法启动安装助手，请检查安全软件或权限");
+    let mut child = match started {
+        Ok(child) => child,
+        Err(error) => {
+            let _ = record_installation(&plan, &directory, "failed", &format!("{error:#}"), true);
+            return Err(error);
+        }
+    };
     let deadline = Instant::now() + Duration::from_secs(240);
     loop {
         if let Some((reason, true)) = read_outcome(&directory) {
             let _ = fs::write(directory.join("cancel"), b"");
             let _ = child.kill();
             let _ = child.wait();
+            let _ = record_installation(&plan, &directory, "failed", &reason, true);
             bail!("{}", reason.strip_prefix("更新失败：").unwrap_or(&reason));
         }
         if directory.join("ready").exists() {
@@ -211,12 +312,14 @@ fn handoff_with_commit(
             });
         }
         if child.try_wait()?.is_some() {
+            let _ = record_installation(&plan, &directory, "failed", "安装助手意外退出", true);
             bail!("安装助手意外退出，请检查安全软件");
         }
         if Instant::now() >= deadline {
             let _ = fs::write(directory.join("cancel"), b"");
             let _ = child.kill();
             let _ = child.wait();
+            let _ = record_installation(&plan, &directory, "failed", "安装准备或授权超时", true);
             bail!("安装准备或授权超时，客户端仍在运行，请重试或手动安装");
         }
         std::thread::sleep(Duration::from_millis(100));
@@ -263,6 +366,13 @@ pub fn helper_main() -> bool {
         }
         let plan: Plan = serde_json::from_slice(&data)?;
         verify(&plan, &directory)?;
+        record_installation(
+            &plan,
+            &directory,
+            "installing",
+            "安装助手正在处理，尚未确认完成",
+            false,
+        )?;
         install(&plan, &directory)?;
         Ok(plan)
     })();
@@ -275,6 +385,18 @@ pub fn helper_main() -> bool {
         &directory.join("outcome.json"),
         &serde_json::to_vec(&Outcome { message, error }).unwrap_or_default(),
     );
+    if let Ok(data) = fs::read(directory.join("plan.json"))
+        && let Ok(plan) = serde_json::from_slice::<Plan>(&data)
+        && let Some((message, error)) = read_outcome(&directory)
+    {
+        let _ = record_installation(
+            &plan,
+            &directory,
+            if error { "failed" } else { "succeeded" },
+            &message,
+            error,
+        );
+    }
     // Before readiness the original GUI is still open and handles the error.
     if !cancelled
         && directory.join("ready").exists()
@@ -292,14 +414,16 @@ pub fn helper_main() -> bool {
             && plan.restart
             && let Err(error) = restart_client(&plan, &directory)
         {
+            let message = format!("更新安装已结束，重新打开客户端失败：{error:#}");
             let _ = crate::config::atomic_write(
                 &directory.join("outcome.json"),
                 &serde_json::to_vec(&Outcome {
-                    message: format!("更新安装已结束，重新打开客户端失败：{error:#}"),
+                    message: message.clone(),
                     error: true,
                 })
                 .unwrap_or_default(),
             );
+            let _ = record_installation(&plan, &directory, "failed", &message, true);
         }
     }
     #[cfg(target_os = "macos")]
@@ -453,6 +577,71 @@ fn parent_alive(pid: u32) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+    fn status_plan(data_dir: &Path, directory: &Path) -> Plan {
+        Plan {
+            package: directory.join("package"),
+            executable: std::env::current_exe().unwrap(),
+            sha256: "0".repeat(64),
+            version: "0.6.7-fix.8.example".into(),
+            parent: std::process::id(),
+            restart: false,
+            require_commit: false,
+            data_dir: Some(data_dir.into()),
+        }
+    }
+
+    #[test]
+    fn installation_result_survives_temporary_directory_cleanup_and_does_not_regress() {
+        let data = tempfile::tempdir().unwrap();
+        let download = tempfile::tempdir().unwrap();
+        let plan = status_plan(data.path(), download.path());
+        assert!(installation_status(data.path()).unwrap().is_none());
+        record_installation(&plan, download.path(), "preparing", "准备安装", false).unwrap();
+        record_installation(&plan, download.path(), "succeeded", "安装成功", false).unwrap();
+        record_installation(&plan, download.path(), "installing", "正在安装", false).unwrap();
+        download.close().unwrap();
+        let status = installation_status(data.path()).unwrap().unwrap();
+        assert_eq!(status.state, "succeeded");
+        assert_eq!(status.message, "安装成功");
+        assert!(!status.error);
+        let next = tempfile::tempdir().unwrap();
+        record_installation(&plan, next.path(), "preparing", "下一次安装", false).unwrap();
+        record_installation(&plan, &status.directory, "failed", "上次安装迟到", true).unwrap();
+        assert_eq!(
+            installation_status(data.path()).unwrap().unwrap().message,
+            "下一次安装"
+        );
+    }
+
+    #[test]
+    fn installation_status_uses_outcome_without_claiming_handoff_is_success() {
+        let data = tempfile::tempdir().unwrap();
+        let download = tempfile::tempdir().unwrap();
+        let plan = status_plan(data.path(), download.path());
+        record_installation(&plan, download.path(), "installing", "尚未完成", false).unwrap();
+        let pending = installation_status(data.path()).unwrap().unwrap();
+        assert_eq!(pending.state, "installing");
+        fs::write(
+            download.path().join("outcome.json"),
+            serde_json::to_vec(&Outcome {
+                message: "安装授权取消".into(),
+                error: true,
+            })
+            .unwrap(),
+        )
+        .unwrap();
+        let failed = installation_status(data.path()).unwrap().unwrap();
+        assert_eq!(failed.state, "failed");
+        assert_eq!(failed.message, "安装授权取消");
+        assert!(failed.error);
+        fs::write(
+            data.path().join("update-install.json"),
+            vec![b' '; 16 * 1024 + 1],
+        )
+        .unwrap();
+        assert!(installation_status(data.path()).is_err());
+    }
+
     #[cfg(target_os = "macos")]
     #[test]
     fn update_processes_are_isolated_from_the_gui_process_group() {

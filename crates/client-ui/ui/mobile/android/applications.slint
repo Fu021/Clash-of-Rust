@@ -1,0 +1,78 @@
+import { PageSurface } from "../../components/motion.slint";
+import { Theme } from "../../theme/palette.slint";
+import { MobileTypography } from "../shared/typography.slint";
+import { MobileData, MobileActions, MobileIntent } from "../shared/state.slint";
+import { AndroidData, AndroidActions, AndroidIntent } from "state.slint";
+import { MText, MSmall, MParagraph, MButton, MField, MSelect, MSwitch, ListHeader, ListView } from "../shared/controls.slint";
+
+export component AndroidApplications inherits PageSurface {
+    property <bool> editable: AndroidData.applications-loaded && !AndroidData.applications-loading && !AndroidData.applications-saving && !MobileData.protected && !MobileData.protection-pending;
+    VerticalLayout { spacing: 8px;
+        header := ListHeader {
+            list-height: root.height;
+            list-content-height: apps.content-height + self.header-height;
+            VerticalLayout { alignment: start; spacing: 8px;
+                HorizontalLayout { spacing: 8px;
+                    MSelect {
+                        options: ["全部应用", "仅代理选中应用", "排除选中应用"];
+                        value: self.options[AndroidData.applications-mode]; enabled: root.editable;
+                        selected(index, value) => { AndroidActions.request(AndroidIntent.application-mode, "" + index); }
+                    }
+                    MButton { text: "保存"; primary: true; compact: true; width: 64px; horizontal-stretch: 0;
+                        busy: AndroidData.applications-saving; enabled: root.editable;
+                        clicked => { AndroidActions.request(AndroidIntent.application-save, ""); }
+                    }
+                }
+                MSmall { text: "保存后重新连接 VPN 生效"; wrap: word-wrap; }
+                MField { placeholder: "搜索名称或包名"; text <=> AndroidData.applications-query; enabled: root.editable;
+                    edited(value) => { AndroidActions.request(AndroidIntent.application-query, value); }
+                }
+                MSwitch { title: "显示系统组件"; checked: AndroidData.applications-system; enabled: root.editable;
+                    toggled(value) => { AndroidActions.request(AndroidIntent.application-system, value ? "true" : "false"); }
+                }
+                HorizontalLayout { spacing: 4px;
+                    MButton { text: "全选结果"; quiet: true; compact: true; enabled: root.editable; clicked => { AndroidActions.request(AndroidIntent.application-select, "all"); } }
+                    MButton { text: "反选结果"; quiet: true; compact: true; enabled: root.editable; clicked => { AndroidActions.request(AndroidIntent.application-select, "invert"); } }
+                    MButton { text: "清空"; quiet: true; compact: true; enabled: root.editable; clicked => { AndroidActions.request(AndroidIntent.application-select, "clear"); } }
+                }
+                HorizontalLayout { cross-axis-alignment: center; spacing: 8px;
+                    MSmall { text: AndroidData.applications-loading ? "正在读取应用…" : "显示 " + AndroidData.applications.length + " / " + AndroidData.applications-total + " · 已选 " + AndroidData.applications-selected; }
+                    MButton { text: "刷新"; quiet: true; compact: true; width: 60px; horizontal-stretch: 0;
+                        enabled: !AndroidData.applications-loading && !AndroidData.applications-saving && !MobileData.protected && !MobileData.protection-pending;
+                        clicked => { AndroidActions.request(AndroidIntent.application-refresh, ""); }
+                    }
+                }
+                if AndroidData.applications-error != "": MParagraph { text: AndroidData.applications-error; color: Theme.danger; }
+                if AndroidData.applications-error != "": MButton { text: "导出诊断"; compact: true;
+                    clicked => { MobileActions.request(MobileIntent.export-diagnostics, AndroidData.applications-error, ""); }
+                }
+                if !AndroidData.applications-loading && AndroidData.applications-loaded && AndroidData.applications.length == 0: MParagraph {
+                    text: AndroidData.applications-total == 0 ? "未读取到应用，请刷新重试" : "没有匹配的应用，可调整搜索或显示系统组件";
+                    color: Theme.secondary;
+                }
+            }
+        }
+        apps := ListView {
+            content-key: AndroidData.applications-query + (AndroidData.applications-system ? "/system" : "/apps");
+            for item in AndroidData.applications: Rectangle {
+                height: max(64px, row.preferred-height + 16px);
+                background: item.selected ? Theme.accent-wash : Theme.surface;
+                border-radius: 8px;
+                row := HorizontalLayout { x: 12px; y: 8px; width: parent.width - 24px; height: self.preferred-height;
+                    spacing: 12px; cross-axis-alignment: center;
+                    Rectangle { width: 36px; height: 36px; border-radius: 10px; background: Theme.inset; horizontal-stretch: 0;
+                        Image { width: 20px; height: 20px; x: 8px; y: 8px; source: @image-url("../../icons/proxies.svg"); colorize: item.selected ? Theme.accent : Theme.secondary; }
+                    }
+                    VerticalLayout { spacing: 4px; min-width: 0px;
+                        MText { text: item.name; font-size: MobileTypography.font-size(14); }
+                        MSmall { text: item.package; font-size: MobileTypography.font-size(11); }
+                    }
+                    MText { text: item.selected ? "✓" : "○"; color: item.selected ? Theme.accent : Theme.secondary;
+                        width: 24px; horizontal-stretch: 0; horizontal-alignment: center;
+                    }
+                }
+                TouchArea { enabled: root.editable; clicked => { AndroidActions.request(AndroidIntent.application-toggle, item.package); } }
+            }
+        }
+    }
+}

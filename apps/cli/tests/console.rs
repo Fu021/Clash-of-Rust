@@ -41,6 +41,42 @@ fn help_version_completion_and_usage_do_not_initialize_a_backend() {
 }
 
 #[test]
+fn update_status_reads_the_result_without_spawning_a_backend() {
+    let root = tempfile::tempdir().unwrap();
+    for recorded in [false, true] {
+        if recorded {
+            std::fs::write(
+                root.path().join("update-install.json"),
+                serde_json::to_vec(&serde_json::json!({
+                    "version":"0.6.7", "state":"succeeded", "message":"已更新至 0.6.7",
+                    "error":false, "updated_at":123, "directory":root.path().join("expired"),
+                }))
+                .unwrap(),
+            )
+            .unwrap();
+        }
+        let output = cor()
+            .args(["--json", "--data-dir"])
+            .arg(root.path())
+            .args(["update", "status"])
+            .output()
+            .unwrap();
+        assert!(
+            output.status.success(),
+            "{}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        let value: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+        assert_eq!(
+            value["data"]["state"],
+            if recorded { "succeeded" } else { "none" }
+        );
+        assert!(!root.path().join("control.json").exists());
+        assert!(!root.path().join("daemon.log").exists());
+    }
+}
+
+#[test]
 fn network_only_restart_does_not_spawn_a_missing_backend() {
     let root = tempfile::tempdir().unwrap();
     let data = root.path().join("data");

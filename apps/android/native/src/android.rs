@@ -21,6 +21,8 @@ use std::{
 };
 use tokio::sync::mpsc;
 
+#[path = "application_routing.rs"]
+mod application_routing;
 #[path = "../../../../crates/client-ui/src/fonts.rs"]
 mod fonts;
 
@@ -388,17 +390,33 @@ fn run(app: slint::android::AndroidApp) -> Result<()> {
             }
         });
     let host = native.clone();
+    let routing_window = window.as_weak();
+    let application_editor = Arc::new(Mutex::new(application_routing::Editor::default()));
     window
         .global::<AndroidActions>()
         .on_request(move |intent, value| {
+            if application_routing::handles(intent) {
+                if let Some(ui) = routing_window.upgrade()
+                    && let Err(error) = application_routing::request(
+                        &application_editor,
+                        host.clone(),
+                        &ui,
+                        intent,
+                        value.as_str(),
+                    )
+                {
+                    ui.global::<AndroidData>()
+                        .set_applications_error(format!("{error:#}").into());
+                }
+                return;
+            }
             let op = match intent {
                 AndroidIntent::VpnSettings => "vpn-settings",
-                AndroidIntent::ApplicationRouting => "application-routing",
                 AndroidIntent::NotificationSpeeds => "notification-speeds",
                 AndroidIntent::BatterySettings => "battery-settings",
                 AndroidIntent::CheckUpdate => "open-url",
                 AndroidIntent::Background => "background",
-                AndroidIntent::SavePorts => return, // Routed through MobileActions below.
+                _ => return,
             };
             let request = if op == "open-url" {
                 json!({"op":op,"url":"https://github.com/Fu021/Clash-of-Rust/releases"})
@@ -3437,6 +3455,7 @@ fn apply(ui: &AndroidWindow, p: Projection) {
 
 fn presentation_snapshot(ui: &AndroidWindow) -> Value {
     let data = ui.global::<MobileData>();
+    let android = ui.global::<AndroidData>();
     let view = ui.global::<MobileView>();
     let theme = ui.global::<Theme>();
     let scale = ui.window().scale_factor();
@@ -3462,5 +3481,11 @@ fn presentation_snapshot(ui: &AndroidWindow) -> Value {
             "profile_name_length":view.get_profile_name().chars().count(),
             "profile_source_length":view.get_profile_source().chars().count(),
             "settings_scroll_y":view.get_settings_scroll_y(),"settings_content_height":view.get_settings_content_height(),
-            "settings_viewport_height":view.get_settings_viewport_height()})
+            "settings_viewport_height":view.get_settings_viewport_height(),
+            "applications_target":android.get_applications_target().iter().collect::<Vec<_>>(),
+            "applications_loading":android.get_applications_loading(),
+            "applications_loaded":android.get_applications_loaded(),
+            "applications_total":android.get_applications_total(),
+            "applications_visible":android.get_applications().row_count(),
+            "applications_error":android.get_applications_error()})
 }

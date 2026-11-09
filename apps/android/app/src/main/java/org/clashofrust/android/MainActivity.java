@@ -206,7 +206,8 @@ public final class MainActivity extends NativeActivity {
                 case "background": runOnUiThread(() -> moveTaskToBack(true)); break;
                 case "vpn-settings": runOnUiThread(() -> startActivity(new Intent(Settings.ACTION_VPN_SETTINGS))); break;
                 case "battery-settings": runOnUiThread(() -> startActivity(new Intent(Settings.ACTION_IGNORE_BATTERY_OPTIMIZATION_SETTINGS))); break;
-                case "application-routing": runOnUiThread(this::applicationRouting); break;
+                case "applications-list": return ApplicationCatalog.read(this).toString();
+                case "applications-save": return ApplicationCatalog.save(this, data).toString();
                 case "notification-speeds":
                     getSharedPreferences("appearance", MODE_PRIVATE).edit().putBoolean("notification-speeds", data.getBoolean("value")).apply(); break;
                 case "notify": {
@@ -383,14 +384,6 @@ public final class MainActivity extends NativeActivity {
             } catch (Exception error) { emit(request == SAVE ? "export-error" : "error", error.toString()); }
         });
         worker.shutdown();
-    }
-    private void applicationRouting() {
-        try {
-            if (CoreBridge.protectedMode(this)) {
-                emit("notice", "请先关闭 Claude 保护，再修改应用分流"); return;
-            }
-        } catch (Exception error) { emit("error", error.toString()); return; }
-        startActivity(new Intent(this, ApplicationRoutingActivity.class));
     }
     @Override public void onRequestPermissionsResult(int request, String[] permissions, int[] results) {
         super.onRequestPermissionsResult(request, permissions, results);

@@ -277,6 +277,7 @@ fn evidence(root: &Path) -> Value {
     json!({
         "credential_files":credential_files,
         "daemon_log":daemon_log(root, &secrets, redaction_ready),
+        "update_installation":json_record(&root.join("update-install.json")),
         "runtime_files":inventory,"geo_records":geo,"geo_recovery_files":recovery,
         "limits":{"daemon_log_bytes":LOG_LIMIT,"json_file_bytes":JSON_LIMIT,"runtime_entries":128,"recovery_entries":32},
         "note":"只读快照，采集中状态可能变化；日志已尽力脱敏，分享前仍须检查域名、IP、路径和第三方返回内容。未读取订阅正文或输出设置/控制凭据。"

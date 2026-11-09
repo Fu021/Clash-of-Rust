@@ -1013,8 +1013,70 @@ public class ProxyTunTest {
         assertNotNull("An HTTP error must fail without a readiness retry",rejected);
         assertHeldResponse(new BufferedReader(new StringReader("HTTP/1.1 200 OK\r\nX-Test: 1\r\n\r\nx")));
     }
+    @Test public void applicationListPreviewCapturesInstalledApps() throws Exception {
+        Context context = InstrumentationRegistry.getInstrumentation().getTargetContext();
+        String before = ApplicationRouting.load(context).summary();
+        context.startActivity(new Intent(context, MainActivity.class).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK));
+        File directory = new File(context.getExternalFilesDir(null), "application-preview");
+        assertTrue(directory.isDirectory() || directory.mkdirs());
+        try {
+            await("Slint did not start for the application list preview",
+                () -> MainActivity.diagnostics().optBoolean("live"));
+            tab(4, 9);
+            if (MainActivity.diagnostics().optBoolean("notice_error")) tapTarget("notice_close_target");
+            tapTarget("applications_target");
+            await("Application enumeration did not finish", () -> {
+                JSONObject ui = MainActivity.diagnostics();
+                return ui.optInt("detail") == 18 && !ui.optBoolean("applications_loading")
+                    && (ui.optBoolean("applications_loaded") || !ui.optString("applications_error").isEmpty());
+            });
+            JSONObject catalog = ApplicationCatalog.read(context);
+            JSONArray entries = catalog.getJSONArray("applications");
+            java.util.Set<String> selected = ApplicationRouting.load(context).packages;
+            int expected = 0, other = 0;
+            for (int index = 0; index < entries.length(); index++) {
+                JSONObject item = entries.getJSONObject(index);
+                boolean visible = item.getBoolean("launchable") || !item.getBoolean("system")
+                    || selected.contains(item.getString("package"));
+                if (visible) {
+                    expected++;
+                    if (!context.getPackageName().equals(item.getString("package"))) other++;
+                }
+            }
+            JSONObject ui = MainActivity.diagnostics();
+            assertEquals("Application enumeration failed: " + ui, "", ui.getString("applications_error"));
+            assertEquals(entries.length(), ui.getInt("applications_total"));
+            assertEquals(expected, ui.getInt("applications_visible"));
+            assertTrue("The emulator has no other visible applications", other > 0);
+            assertEquals("Preview must not save application routing", before, ApplicationRouting.load(context).summary());
+            assertFalse("Preview must not start VPN", TunnelService.connected() || TunnelService.pending());
+            SystemClock.sleep(500);
+        } finally {
+            JSONObject ui = MainActivity.diagnostics();
+            ui.put("android_release", Build.VERSION.RELEASE).put("android_api", Build.VERSION.SDK_INT)
+                .put("schema", 1).put("scope", "application-list-preview-only");
+            java.nio.file.Files.write(new File(directory, "state.json").toPath(),
+                ui.toString(2).getBytes(StandardCharsets.UTF_8));
+            android.graphics.Bitmap screenshot = InstrumentationRegistry.getInstrumentation().getUiAutomation().takeScreenshot();
+            assertNotNull("Could not capture the application list", screenshot);
+            try (OutputStream output = new FileOutputStream(new File(directory, "applications.png"))) {
+                assertTrue(screenshot.compress(android.graphics.Bitmap.CompressFormat.PNG, 100, output));
+            } finally { screenshot.recycle(); }
+        }
+    }
     @Test public void applicationRoutingPersistsAndKeepsOtherAppsOnline() throws Exception {
         Context context = InstrumentationRegistry.getInstrumentation().getTargetContext();
+        android.content.pm.ApplicationInfo bundled = new android.content.pm.ApplicationInfo();
+        bundled.flags = android.content.pm.ApplicationInfo.FLAG_SYSTEM;
+        assertTrue("Preinstalled launchable apps must remain selectable",
+            ApplicationCatalog.visibleWithoutComponents(bundled, true, false));
+        assertFalse("Non-launchable system components are hidden by default",
+            ApplicationCatalog.visibleWithoutComponents(bundled, false, false));
+        assertTrue("Filtering must not hide selected system components",
+            ApplicationCatalog.visibleWithoutComponents(bundled, false, true));
+        bundled.flags = 0;
+        assertTrue("Background user applications must remain selectable",
+            ApplicationCatalog.visibleWithoutComponents(bundled, false, false));
         context.startActivity(new Intent(context, MainActivity.class).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK));
         await("Native core did not restore for application routing", CoreBridge::ready);
         assertNull("Application routing requires the consent granted by the preceding VPN test", VpnService.prepare(context));

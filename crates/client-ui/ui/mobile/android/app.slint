@@ -2,6 +2,7 @@ import { MobileView } from "../shared/state.slint";
 import { MobileFrame } from "../shared/frame.slint";
 import { MobileHome, MobileProxies, MobileSubscriptions, MobileConnections, MobileRules, MobileLogs, MobileNetwork, MobileIpCheck, MobileAiCheck, MobileTools } from "../shared/pages.slint";
 import { AndroidSettings } from "settings.slint";
+import { AndroidApplications } from "applications.slint";
 
 // Android owns this composition and may replace/add pages without iOS changes.
 export component AndroidSurface inherits MobileFrame {
@@ -11,6 +12,8 @@ export component AndroidSurface inherits MobileFrame {
     grouped-tools: false;
     tab-pill: true; title-size: 26px; sidebar-width: 236px; tab-height: 56px;
     compact-system-insets: true;
+    standalone-detail: MobileView.detail == 18 || (MobileView.detail == 12 && MobileView.pending-detail == 18);
+    standalone-title: "应用分流";
     centered-modal: false;
     if MobileView.page == 0: MobileHome { }
     if MobileView.page == 1: MobileProxies { }
@@ -21,6 +24,7 @@ export component AndroidSurface inherits MobileFrame {
     if MobileView.page == 6: MobileNetwork { }
     if MobileView.page == 7: MobileIpCheck { }
     if MobileView.page == 8: MobileAiCheck { }
-    if MobileView.page == 9: AndroidSettings { }
+    if MobileView.page == 9 && !root.standalone-detail: AndroidSettings { }
+    if root.standalone-detail: AndroidApplications { }
     if MobileView.page == 10: MobileTools { }
 }

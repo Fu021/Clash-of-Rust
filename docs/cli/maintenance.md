@@ -44,6 +44,7 @@
 | `update check` | 按已保存的更新通道检查；默认仅正式版 |
 | `update download -o FILE` | 下载并校验当前平台安装包，不安装 |
 | `update install --yes` | 由运行层下载、校验并交给系统安装，成功交接后退出所有者；有窗口时关闭并在安装后重新打开窗口，无窗口时安装后用 `cor start` 恢复后台 |
+| `update status` | 不启动后台，读取本账户和数据目录中的最近安装结果；区分准备、安装中、成功与失败 |
 | `autostart [on\|off]` | 普通桌面程序登录自启 |
 | `service install --yes` | 为当前用户配置 CLI 后台登录自启 |
 | `service remove --yes` / `service status` | 删除或查询 CLI 后台登录自启 |
@@ -59,6 +60,8 @@ Geo 更新后后台因备份缺失无法启动时，启动恢复仅保留通过�
 CLI 后台使用 Linux systemd user unit、macOS LaunchAgent、Windows 当前用户登录任务（无窗口入口启动 `cor`，系统受限时沿用原有注册表回退）。`service install` 配置下次登录启动，当前会话用 `cor start`；`service remove` 只取消自启，停止当前后台用 `cor stop`。不是 Linux 系统级 root 服务，也不自动启用 linger。配置时记录可执行文件和数据目录，移动程序后应重新安装服务。建议桌面自启与 CLI 自启选择一种。卸载或更换安装目录前，对自定义 `--data-dir` 先执行 `cor stop` 和 `cor service remove --yes`；Windows 安装包也会清理默认目录的后台与当前安装的 CLI 自启项。
 
 完整安装更新需要正式安装目录：Linux DEB、Windows 安装程序或 macOS `.app`。便携目录可下载后手动安装。更新前退出其他长时间运行的 CLI 查询进程，避免 Windows 可执行文件被占用。首次系统授权仍可能需要图形会话；无人值守环境可使用 `update download`。
+
+`update install` 返回“安装助手已启动”只说明已交接，不等于安装完成。使用同一账户及原有 `--data-dir` 参数执行 `cor update status` 查看结果；状态保存在数据目录 `update-install.json`，临时安装目录清理后仍可查询。安装失败会给出原因，准备或安装中不冒充成功。诊断报告的 `update_installation` 同步保留该结果。
 
 使用 `cor config set update_prereleases true` 将预发布版纳入检查，默认 `false`。关闭时所有用户都以线上最新正式版为目标，即使本地为 `0.999.0` 等更高版本，也可检查、下载并确认返回正式版；版本相同时不重复提示。开启后才纳入预发布版，且只提供比本地更高的版本。GUI 与 CLI 共用此设置，细则见[更新通道](../workflows/versions.md#版本与更新通道)。
 

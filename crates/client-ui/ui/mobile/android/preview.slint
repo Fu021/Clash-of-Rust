@@ -48,5 +48,17 @@ export component AndroidPreview inherits Window {
     init => {
         AndroidData.authorization-status = "已允许";
         MobileData.protection-supported = true;
+        AndroidData.applications-loaded = true;
+        AndroidData.applications-total = 6;
+        AndroidData.applications-selected = 2;
+        AndroidData.applications-mode = 1;
+        AndroidData.applications = [
+            {name: "浏览器", package: "org.example.browser", selected: true},
+            {name: "地图", package: "org.example.maps", selected: false},
+            {name: "邮件", package: "org.example.mail", selected: true},
+            {name: "音乐", package: "org.example.music", selected: false},
+            {name: "很长的应用名称用于检查操作控件是否始终可见", package: "org.example.long.application.name", selected: false},
+            {name: "Clash of Rust", package: "org.clashofrust.android", selected: false},
+        ];
     }
 }

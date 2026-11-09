@@ -1,4 +1,4 @@
-import { PageSurface, Disclosure } from "../components/motion.slint";
+import { PageSurface, Disclosure, Motion } from "../components/motion.slint";
 import { Theme } from "../theme/palette.slint";
 import { UiData, UiActions, Intent, ProfileItem } from "../state.slint";
 import { PageScroll, Label, Caption, ContentPanel, Panel, ActionButton, Badge, Field, Divider } from "../components/controls.slint";
@@ -85,6 +85,8 @@ component ProfileCard inherits ContentPanel {
 }
 
 export component SubscriptionsPage inherits PageSurface {
+    motion-revision: PageViews.profiles-list ? 1 : 0;
+    motion-enabled: Motion.layout-active;
     property <string> expanded-id;
     PageScroll {
         content-key: UiData.page-offset + "/" + UiData.query;

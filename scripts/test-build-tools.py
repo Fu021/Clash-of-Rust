@@ -29,6 +29,7 @@ import prepared_vm_environment
 import tun_dns_fixture
 import build_inputs
 import ci_test_policy
+import android_previews
 import os
 import copy
 import importlib.util
@@ -2927,6 +2928,108 @@ runpy.run_path(str(script), run_name='__main__')
                 self.assertTrue(pull.call_args.kwargs['required'])
             self.assertTrue((root/'target/android-report/x64/ime-api-36/regression/input-method-status.json').is_file())
 
+    def test_application_preview_matrix_uses_every_approved_image_and_readable_names(self):
+        from build_inputs import android_versions
+        versions = android_versions()
+        apis = set(map(int, versions['ime_system_images']))
+        apis.update(int(versions[name].split(';')[1].removeprefix('android-'))
+                    for name in ('system_image', 'legacy_system_image'))
+        matrix = android_previews.matrix()['include']
+        self.assertEqual([item['api'] for item in matrix], sorted(apis))
+        self.assertEqual(next(item['android'] for item in matrix if item['api'] == 31), '12')
+        self.assertEqual(next(item['android'] for item in matrix if item['api'] == 32), '12L')
+
+    def test_preview_source_rejects_failed_foreign_or_different_commit_ci(self):
+        source = {'id': 123, 'path': '.github/workflows/ci.yml', 'head_sha': 'a' * 40,
+                  'repository': {'full_name': 'example/project'},
+                  'head_repository': {'full_name': 'example/project'},
+                  'status': 'completed', 'conclusion': 'success', 'event': 'pull_request'}
+        self.assertEqual(android_previews.validate_run(source, 'example/project', 'a' * 40), 123)
+        for changes in ({'status': 'in_progress'}, {'conclusion': 'failure'}, {'head_sha': 'b' * 40},
+                        {'path': '.github/workflows/android-previews.yml'}, {'event': 'workflow_run'},
+                        {'head_repository': {'full_name': 'external/fork'}},
+                        {'repository': {'full_name': 'other/project'}}, {'id': True}):
+            with self.subTest(changes=changes), self.assertRaises(ValueError):
+                android_previews.validate_run(source | changes, 'example/project', 'a' * 40)
+
+    def test_preview_source_requires_unique_live_same_run_inputs(self):
+        source = {'id': 123, 'path': '.github/workflows/ci.yml', 'head_sha': 'a' * 40,
+                  'repository': {'full_name': 'example/project'},
+                  'head_repository': {'full_name': 'example/project'},
+                  'status': 'completed', 'conclusion': 'success', 'event': 'pull_request'}
+        artifacts = [{'name': name, 'expired': False,
+                      'workflow_run': {'id': 123, 'head_sha': 'a' * 40}}
+                     for name in ('build-android-x64', 'dependency-snapshot')]
+        def client(items):
+            return lambda path: {'artifacts': items} if '/artifacts?' in path else source
+        self.assertEqual(android_previews.resolve(client(artifacts), 'example/project', 'a' * 40, 123)
+                         ['ci_run_id'], 123)
+        for items in (artifacts[:1], artifacts + [artifacts[0]],
+                      [artifacts[0] | {'expired': True}, artifacts[1]],
+                      [artifacts[0] | {'workflow_run': {'id': 124, 'head_sha': 'a' * 40}}, artifacts[1]],
+                      [artifacts[0] | {'workflow_run': {'id': 123, 'head_sha': 'b' * 40}}, artifacts[1]]):
+            with self.subTest(items=items), self.assertRaises(ValueError):
+                android_previews.resolve(client(items), 'example/project', 'a' * 40, 123)
+
+    def test_application_preview_requires_real_completed_list_screenshot_and_matching_version(self):
+        good = {'schema': 1, 'scope': 'application-list-preview-only', 'android_api': 31,
+                'detail': 18, 'live': True, 'applications_loaded': True, 'applications_loading': False,
+                'applications_error': '', 'applications_total': 15, 'applications_visible': 7,
+                'vpn': False, 'vpn_pending': False}
+        with tempfile.TemporaryDirectory() as temporary:
+            directory = Path(temporary)
+            image = b'\x89PNG\r\n\x1a\n' + struct.pack('>I', 13) + b'IHDR' + struct.pack('>II', 1080, 2400)
+            (directory/'applications.png').write_bytes(image)
+            (directory/'state.json').write_text(json.dumps(good))
+            android_build.validate_application_preview(directory, 31)
+            for changes in ({'android_api': 30}, {'detail': 9}, {'live': False},
+                            {'applications_loading': True}, {'applications_loaded': False},
+                            {'applications_error': 'access denied'}, {'applications_total': 0},
+                            {'applications_visible': 1}, {'applications_visible': 16},
+                            {'applications_visible': True}, {'vpn': True}, {'vpn_pending': True}):
+                with self.subTest(changes=changes):
+                    (directory/'state.json').write_text(json.dumps(good | changes))
+                    with self.assertRaises(ValueError):
+                        android_build.validate_application_preview(directory, 31)
+            (directory/'state.json').write_text(json.dumps(good))
+            (directory/'applications.png').write_bytes(b'not an image')
+            with self.assertRaisesRegex(ValueError, 'screenshot'):
+                android_build.validate_application_preview(directory, 31)
+
+    def test_application_preview_rejects_the_wrong_device_before_installing_apks(self):
+        with patch.object(android_build.subprocess, 'check_output', return_value='36\n'), \
+                patch.object(android_build, 'test') as run_test:
+            with self.assertRaisesRegex(ValueError, 'selected Android version'):
+                android_build.application_preview(Path('/missing-build'), 31)
+            run_test.assert_not_called()
+
+    def test_application_preview_never_starts_network_tests_and_requires_exported_evidence(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            commands = []
+            def execute(command, **kwargs):
+                commands.append(list(map(str, command)))
+                return subprocess.CompletedProcess(command, 0, 'OK (1 test)', '')
+            with patch.object(android_build, 'ROOT', root), \
+                    patch.object(android_build, 'run', side_effect=execute), \
+                    patch.object(android_build.subprocess, 'run', side_effect=execute), \
+                    patch.object(android_build.subprocess, 'check_output', return_value='31\n'), \
+                    patch('http.server.ThreadingHTTPServer') as origin, \
+                    patch.object(android_build, 'start_test_log'), \
+                    patch.object(android_build, 'finish_test_log', return_value=('', None)), \
+                    patch.object(android_build, 'validate_application_preview',
+                                 side_effect=ValueError('missing screenshot')) as verify:
+                with self.assertRaisesRegex(RuntimeError, 'missing screenshot'):
+                    android_build.test('x64', root/'app.apk', root/'test.apk', applications_only=True)
+                origin.assert_not_called()
+                self.assertFalse(any('ACTIVATE_VPN' in command for command in commands))
+                instruments = [command for command in commands if 'instrument' in command]
+                self.assertEqual(len(instruments), 1)
+                self.assertIn('org.clashofrust.android.ProxyTunTest#applicationListPreviewCapturesInstalledApps',
+                              instruments[0])
+                verify.assert_called_once_with(
+                    root/'target/android-report/x64/applications-api-31/application-preview', 31)
+
     def test_android_ime_crash_report_uses_only_the_current_run_and_selected_input_method(self):
         crash=('E AndroidRuntime: FATAL EXCEPTION: main\n'
                'E AndroidRuntime: Process: com.example.ime, PID: 42\n'
@@ -4395,21 +4498,53 @@ class ReleaseTests(unittest.TestCase):
                 with self.assertRaises(ValueError):release.release_metadata(self.commit,notes_path=path)
 
     def test_download_badges_target_each_asset_for_stable_and_prerelease(self):
-        for version, endpoint in [('0.6.6', 'downloads'), ('0.6.7-fix.1.example', 'downloads-pre')]:
+        for version in ['0.6.6', '0.6.7-fix.1.example']:
             with self.subTest(version=version):
                 tag = 'v' + version
                 notes = release.release_notes_with_downloads(self.notes, 'example/project', version, tag)
                 self.assertTrue(notes.startswith(self.notes.rstrip()))
                 self.assertEqual(notes.count('https://img.shields.io/badge/'), len(release.PACKAGES))
-                self.assertEqual(notes.count('https://img.shields.io/github/' + endpoint + '/'), len(release.PACKAGES))
+                self.assertEqual(notes.count('https://img.shields.io/github/downloads/'), len(release.PACKAGES))
                 self.assertEqual(notes.count('displayAssetName=false'), len(release.PACKAGES))
+                buttons = re.findall(r'\[!\[([^]]+)\]\(([^)]+)\)\]\(([^)]+)\)', notes)
+                self.assertEqual(len(buttons), 2 * len(release.PACKAGES))
+                downloads = []
+                for label, image_url, download_url in buttons:
+                    image = urllib.parse.urlparse(image_url)
+                    download = urllib.parse.urlparse(download_url)
+                    self.assertEqual(image.netloc, 'img.shields.io')
+                    self.assertEqual(download.netloc, 'github.com')
+                    self.assertEqual(urllib.parse.unquote(download.path).split('/')[-2], tag)
+                    if label.endswith(' downloads'):
+                        self.assertEqual(urllib.parse.parse_qs(image.query),
+                                         {'label': ['downloads'], 'displayAssetName': ['false']})
+                        self.assertEqual(urllib.parse.unquote(image.path).split('/')[-2], tag)
+                        self.assertEqual(image.path.split('/')[-1], download.path.split('/')[-1])
+                    downloads.append(urllib.parse.unquote(download.path).split('/')[-1])
+                self.assertEqual(set(downloads),
+                                 {'Clash-of-Rust-' + version + '-' + suffix for suffix in release.PACKAGES.values()})
                 for suffix in release.PACKAGES.values():
                     filename = 'Clash-of-Rust-' + version + '-' + suffix
-                    self.assertIn('/releases/download/' + tag + '/' + filename, notes)
-                    self.assertIn('/github/' + endpoint + '/example/project/' + tag + '/' + filename, notes)
+                    self.assertEqual(downloads.count(filename), 2)
+                self.assertNotIn('/downloads-pre/', notes)
                 self.assertNotIn('/latest/', notes)
+                self.assertNotIn('下载次数包含重复下载', notes)
+                self.assertNotIn('SHA256 校验文件位于下方 Assets', notes)
         with self.assertRaises(ValueError):
             release.release_notes_with_downloads(self.notes, 'example/project', '0.6.6', 'v0.6.5')
+
+    def test_download_table_precedes_long_release_details(self):
+        version = '0.6.7-fix.7.settings-storage'
+        details = '## 更新\n\n' + '完整保留更新说明。\n' * 2000
+        notes = '# ' + version + '\n\n' + details
+        result = release.release_notes_with_downloads(notes, 'example/project', version, 'v' + version)
+        self.assertTrue(result.startswith('# ' + version + '\n\n## 下载\n'))
+        self.assertTrue(result.endswith(details.rstrip() + '\n'))
+        downloads = result.split('## 更新', 1)[0]
+        self.assertEqual(downloads.count(' downloads]('), len(release.PACKAGES))
+        buttons = re.findall(r'\[!\[[^]]+\]\([^)]+\)\]\([^)]+\)', downloads)
+        self.assertEqual(len(buttons), 2 * len(release.PACKAGES))
+        self.assertLess(len(downloads), 9000)
 
     def test_prerelease_requires_explicit_current_same_repository_ci(self):
         changes = {'event':'pull_request', 'head_branch':'codex/fix-android'}

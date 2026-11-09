@@ -111,6 +111,24 @@ mod tests {
     }
 
     #[test]
+    fn update_handoff_and_result_have_distinct_output() {
+        let handed_off = render(&["update", "install"], json!({"shutdown":true}));
+        assert!(handed_off.contains("尚未确认安装完成"));
+        assert!(handed_off.contains("cor update status"));
+        let finished = render(
+            &["update", "status"],
+            json!({"state":"succeeded","version":"0.6.7","message":"已更新至 0.6.7","error":false}),
+        );
+        assert!(finished.contains("已更新至 0.6.7"));
+        assert!(!finished.contains("尚未确认"));
+        let failed = render(
+            &["update", "status"],
+            json!({"state":"failed","version":"0.6.7","message":"安装授权已取消","error":true}),
+        );
+        assert!(failed.contains("安装授权已取消"));
+    }
+
+    #[test]
     fn failed_group_tests_offer_network_recovery_without_changing_json() {
         let all_failed = json!({"节点 A": 0, "节点 B": 0});
         let human = render(&["node", "test", "--all"], all_failed.clone());

@@ -12,7 +12,27 @@
 
 需要完整源码、窗口、应用分流、多用户及其他既有回归时，可手动运行 CI 并设置 `extended_tests=true`；各专项测试入口保留，不删除断言。常规 CI 不覆盖完整 UI、存储、单元测试或全部生命周期，绿色结果不能当作这些专项也已通过。键盘、键盘高度、Back 编辑和多版本截图继续使用单独手动入口，不随常规 CI、loop 或打包自动重跑。
 
+### 测试精简后的耗时
+
+2026-11-09，提交 `35d2d7e` 的 CI `42596299301` 共 14 项全部通过，总耗时 22 分 17 秒；未启用完整扩展回归，Android 分流和 Linux 多用户专项因本分支包含相关变更而执行。下面对比上一轮 `42587460890` 的 job 实际执行时间，不含等待分配 runner：
+
+| Job | 上一轮 | 本轮 |
+| --- | --- | --- |
+| macOS x64 | 41.0 分钟 | 13.2 分钟 |
+| macOS ARM64 | 15.7 分钟 | 12.2 分钟 |
+| Windows x64 | 36.6 分钟 | 9.9 分钟 |
+| Windows ARM64 | 37.6 分钟 | 13.2 分钟 |
+| Ubuntu 20.04 ARM64 | 31.2 分钟 | 19.9 分钟 |
+
+macOS x64 上一轮构建全部测试程序耗时 20 分 32 秒，本轮只准备网络集成测试程序耗时约 16 秒；两轮范围和缓存状态均有变化，这不是同覆盖范围的性能基准。ARM64 预装 VM 恢复校验通过后仍使用 TCG，当前是关键路径。完整单元、GUI、更新回滚及其他生命周期未在本轮运行。
+
 工作流已移除输入法专项的参数、APK 中转和多版本矩阵。保留 `scripts/android.py test --arch x64 --ime-only` 等手工调查脚本与既有证据，只有维护者明确要求重新调查时才使用，不因版本升级或 loop 自动恢复到 CI；缺图、日志边界丢失和输入法崩溃仍使手工专项失败。历史十版本范围、证据要求及 MIUI/实机边界见[输入法专页](../agent-failures/android-ime.md#当前修复与待验收)。
+
+### Android 应用列表预览
+
+维护者授权的独立 [Android Application Previews](android-previews.md) 复用成功 CI 的 x64 APK，只打开分流页、枚举并截图。它不自动随常规 CI 启动，不编辑分流、不申请 VPN、不验证流量或键盘；常规 Android job 的基础代理/TUN 范围保持独立。版本范围、触发方法、来源门禁与附件见该专页。
+
+### Android 工具与原包
 
 Android 使用固定 Python、JDK 和 Go；`build_inputs.py prepare-gradle` 按冻结快照中的版本及已提交的官方 SHA256 准备 Gradle ZIP，官方下载失败后回退私网原包，校验并解压后加入 PATH。编译前执行 `build_inputs.py check-tools --tools go java gradle` 核对实际版本。环境变量里记录的版本或早先 setup 成功不能代替当前 PATH 上的工具检查；版本漂移先失败，不放宽 `go mod tidy -diff` 或自动下载另一套编译器。Gradle 不再由独立 setup action 另行下载，SDK 准备结束后提交原包清单检查点。
 

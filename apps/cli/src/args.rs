@@ -418,6 +418,14 @@ pub static COMMANDS: &[Spec] = &[
         "output"
     ),
     command!(
+        "update status",
+        "查看本账户最近一次更新安装的结果，不启动后台",
+        "update status",
+        0,
+        0,
+        ""
+    ),
+    command!(
         "update install",
         "下载并交给系统安装更新，完成后退出后台",
         "update install [--yes]",

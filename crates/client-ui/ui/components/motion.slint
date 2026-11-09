@@ -49,8 +49,9 @@ export component Presence {
 // Pages remain conditional: only the newly selected page enters, no page cache.
 export component PageSurface inherits Rectangle {
     in property <int> motion-revision;
+    in property <bool> motion-enabled: Motion.active;
     in property <bool> locked;
-    entrance := Entrance { revision: root.motion-revision; }
+    entrance := Entrance { revision: root.motion-revision; enabled: root.motion-enabled; }
     opacity: entrance.progress * (root.locked ? 0.5 : 1);
     clip: true;
     Rectangle {

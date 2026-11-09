@@ -24,7 +24,12 @@ component AndroidConnection inherits VerticalLayout {
     MCard {
         MRow { title: "VPN 设置"; value: AndroidData.authorization-status; interactive: !MobileData.protected && !MobileData.protection-pending; clicked => { AndroidActions.request(AndroidIntent.vpn-settings, ""); } }
         MDivider { }
-        MRow { title: "应用分流"; value: AndroidData.application-scope; interactive: !MobileData.protected && !MobileData.protection-pending; clicked => { AndroidActions.request(AndroidIntent.application-routing, ""); } }
+        MRow { title: "应用分流"; value: AndroidData.application-scope; interactive: !MobileData.protected && !MobileData.protection-pending;
+            property <[length]> target: [self.absolute-position.x, self.absolute-position.y, self.width, self.height];
+            changed target => { AndroidData.applications-target = self.target; }
+            init => { AndroidData.applications-target = self.target; }
+            clicked => { AndroidActions.request(AndroidIntent.application-routing, ""); }
+        }
         MDivider { }
         MSwitch { title: "通知显示实时速度"; checked: AndroidData.notification-speeds; enabled: !MobileData.protected && !MobileData.protection-pending;
             toggled(value) => { AndroidActions.request(AndroidIntent.notification-speeds, value ? "true" : "false"); }
@@ -70,8 +75,12 @@ export component AndroidSettings inherits PageSurface {
             AndroidConnection { } AndroidNetwork { } AppearanceSettings { custom-font-size: false; } AndroidUpdates { } ScheduleSettings { }
         }
         if root.width >= 760px: HorizontalLayout { spacing: 20px; width: root.width;
-            VerticalLayout { alignment: start; spacing: 20px; AndroidConnection { } AndroidNetwork { } }
-            VerticalLayout { alignment: start; spacing: 20px; AppearanceSettings { custom-font-size: false; } AndroidUpdates { } ScheduleSettings { } }
+            VerticalLayout { width: (root.width - 20px) / 2; horizontal-stretch: 0; alignment: start; spacing: 20px;
+                AndroidConnection { } AndroidNetwork { }
+            }
+            VerticalLayout { width: (root.width - 20px) / 2; horizontal-stretch: 0; alignment: start; spacing: 20px;
+                AppearanceSettings { custom-font-size: false; } AndroidUpdates { } ScheduleSettings { }
+            }
         }
     }
 }

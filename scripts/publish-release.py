@@ -225,16 +225,19 @@ def release_notes_with_downloads(notes, repo, version, tag):
         badge = f'https://img.shields.io/badge/{kind}-{architecture}-{color}'
         if query:
             badge += '?' + query
-        counter = 'downloads-pre' if '-' in version.split('+', 1)[0] else 'downloads'
-        count = (f'https://img.shields.io/github/{counter}/{repo}/{release_tag}/{asset}'
+        count = (f'https://img.shields.io/github/downloads/{repo}/{release_tag}/{asset}'
                  '?label=downloads&displayAssetName=false')
-        text = f'[![{system} {kind} {architecture}]({badge})]({download})'
-        text += f' [![{system} {architecture} downloads]({count})]({download})'
+        label = architecture.replace('_', ' ')
+        text = f'[![{system} {kind} {label}]({badge})]({download})'
+        text += f' [![{system} {label} downloads]({count})]({download})'
         rows.setdefault(system, []).append(text)
     table = ['## 下载', '', '| 平台 | 安装包与下载次数 |', '| --- | --- |']
     table.extend(f"| {system} | {'<br>'.join(buttons)} |" for system, buttons in rows.items())
-    table.extend(['', 'SHA256 校验文件位于下方 Assets 中。'])
-    return notes.rstrip() + '\n\n' + '\n'.join(table) + '\n'
+    heading, separator, details = notes.rstrip().partition('\n\n')
+    result = heading + '\n\n' + '\n'.join(table)
+    if separator:
+        result += '\n\n' + details
+    return result + '\n'
 
 
 def filenames(version):

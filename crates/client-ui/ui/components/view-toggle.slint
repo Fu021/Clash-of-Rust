@@ -1,15 +1,28 @@
 import { ActionButton } from "controls.slint";
 import { Theme } from "../theme/palette.slint";
+import { Motion } from "motion.slint";
 
 export global PageViews {
     in-out property <bool> nodes-list;
     in-out property <bool> profiles-list;
 }
 
-export component ViewModeIcon inherits Image {
+export component ViewModeIcon inherits Rectangle {
     in property <bool> list-view;
-    source: root.list-view ? @image-url("../icons/layout-grid.svg") : @image-url("../icons/list.svg");
-    colorize: Theme.dark ? #f0efec : #181817;
+    property <float> progress: root.list-view ? 1 : 0;
+    animate progress { duration: Motion.control; easing: ease-out; enabled: Motion.layout-active; }
+    Image {
+        width: parent.width; height: parent.height;
+        source: @image-url("../icons/layout-grid.svg");
+        colorize: Theme.dark ? #f0efec : #181817;
+        opacity: root.progress;
+    }
+    Image {
+        width: parent.width; height: parent.height;
+        source: @image-url("../icons/list.svg");
+        colorize: Theme.dark ? #f0efec : #181817;
+        opacity: 1 - root.progress;
+    }
 }
 
 export component ViewToggle inherits ActionButton {

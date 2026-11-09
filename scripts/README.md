@@ -17,12 +17,13 @@
 | `workflow_storage.py` | CLI | 限制 GitHub Actions 热缓存容量并保留需要的版本。 |
 | `prepare-resources.py` | CLI | 校验并准备 mihomo、Geo 和桌面共享资源。 |
 | `prepare-assets.py` | 维护 CLI | 生成图标、CLDR 国家名称，或核验 Windows 嵌入图标；普通构建不运行，不生成国旗图片。 |
-| `android.py` | CLI | Android 编译、模拟器测试、产物导出与已测试 APK 打包；默认只运行基础代理/TUN，分流和生命周期由 CI 策略按需选择。经明确要求的输入法调查使用 `emulator --legacy` / `--api` 和 `test --ime-only`，见[验证范围](../docs/workflows/ci.md#ci)。 |
+| `android.py` | CLI | Android 编译、模拟器测试、产物导出与已测试 APK 打包；默认只运行基础代理/TUN，分流和生命周期由 CI 策略按需选择。`application-preview --arch x64 --api LEVEL --build DIRECTORY` 校验设备版本及本轮归档，再采集实际应用列表截图，不启动 VPN；版本范围与入口见[应用列表预览](../docs/workflows/ci.md#android-应用列表预览)。输入法调查仍需明确要求，使用 `emulator --legacy` / `--api` 和 `test --ime-only`。 |
 | `build-installer.py` | CLI | 只组装已验证产物为 Windows、Linux 或 macOS 安装包。 |
 | `macos_package.py` | 模块 | macOS App / DMG 组装；被打包器和 macOS 验证延迟导入。 |
 | `publish-release.py` | CLI / 模块 | 核验成功 CI 候选包及安装收据，公开模式改取发行签名 Android 包；不重新打包桌面，按版本生成下载与下载量徽章。 |
 | `run-ci.py` | CLI | 单个原生平台的编译、Clippy 和代理/TUN 集成程序导出；完整源码测试按 CI 策略选择。 |
 | `ci_test_policy.py` | CLI / 模块 | 选择基础网络、相关变更专项和手动扩展回归，并向 CI 各平台传递选择结果。 |
+| `android_previews.py` | CLI / 模块 | 为独立应用列表截图工作流核验成功 CI、同提交附件并生成已固定镜像的 Android 版本矩阵；不构建或运行网络测试。 |
 | `linux_ci.py` | CLI / 模块 | Linux 基线容器、ELF 审计和旧内核虚拟机；容器及 VM 必须运行在可丢弃 Actions 环境。 |
 | `prepared_vm.py` | 共享模块 | 私网专用 VM 协议、严格元数据、能力门禁、有界完整下载及流式上传；不写 GitHub 缓存、不发 DELETE。 |
 | `prepared_vm_environment.py` | 共享模块 | 冻结隔离 APT 环境、独立配方、guest 包清单和模板清理；由输入解析和 Linux VM 入口调用，不在开发服务器准备环境。 |
@@ -42,7 +43,7 @@
 
 ## 仓库内其他脚本
 
-`.github/actions/upstream-cache/index.cjs` 只准备私网配置和有界收尾；`upstream-report` 支持早期检查点和末尾清单/回执附件，三条工作流共用持久队列客户端。旧 `local-cache`/`runtime-cache` action 已删除，历史协议辅助不作为服务端部署入口。`resources/claude-check/browser.js` 是检测页面资源，随客户端提供，保留在资源目录。
+`.github/actions/upstream-cache/index.cjs` 只准备私网配置和有界收尾；`upstream-report` 支持早期检查点和末尾清单/回执附件，工作流共用持久队列客户端。旧 `local-cache`/`runtime-cache` action 已删除，历史协议辅助不作为服务端部署入口。`resources/claude-check/browser.js` 是检测页面资源，随客户端提供，保留在资源目录。
 
 私网缓存的客户端写入能力和服务端职责见[缓存服务说明](../docs/workflows/cache-server.md)。工作流不修改或上传 `.github/cache-server/README.txt`，不传递 agent 协作请求或读取 agent 反馈；需要服务端配合的事项由用户转达。
 

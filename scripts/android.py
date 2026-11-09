@@ -137,7 +137,7 @@ def emulator_image(legacy=False, api=None):
         else:
             selected = versions['ime_system_images'].get(str(api))
             if selected is None:
-                raise ValueError('No approved Android IME image for API '+str(api))
+                raise ValueError('No approved Android test image for API '+str(api))
             return 'system-images;android-'+str(api)+';google_apis;x86_64', selected['revision'], selected['source_revision']
     return (versions[image_key], versions[image_key+'_revision'],
             versions.get(image_key+'_source_revision', versions[image_key+'_revision']))
@@ -650,9 +650,12 @@ def platform_ime_control(report, ime_service):
 
 
 def test(arch, apk=None, test_apk=None, ime_only=False, ime_probe=False,
-         ime_rounds=1):
+         ime_rounds=1, applications_only=False):
     if not 1 <= ime_rounds <= 3 or ((ime_probe or ime_rounds != 1) and not ime_only):
         raise ValueError('IME probe options require IME-only testing and one to three rounds')
+    if applications_only and ime_only:
+        raise ValueError('Application screenshots and input-method tests are separate')
+    network_tests = not (ime_only or applications_only)
     if arch != 'x64':
         return
     apk = apk or ANDROID/'app/build/outputs/apk/release/app-release.apk'
@@ -680,12 +683,12 @@ def test(arch, apk=None, test_apk=None, ime_only=False, ime_probe=False,
             if self.path=='/hold': time.sleep(15)
         def log_message(self,*args): pass
     server=None
-    if not ime_only:
+    if network_tests:
         server=http.server.ThreadingHTTPServer(('0.0.0.0',18081),Origin)
         threading.Thread(target=server.serve_forever,daemon=True).start()
     # Exercise Android's real first-use dialog; pre-granting consent hides
     # ordering bugs between authorization, protection DNS and VPN startup.
-    if not ime_only:
+    if network_tests:
         run([ADB,'shell','appops','set','org.clashofrust.android','ACTIVATE_VPN','default'])
     report=ROOT/'target/android-report'/arch
     if ime_only:
@@ -694,6 +697,12 @@ def test(arch, apk=None, test_apk=None, ime_only=False, ime_probe=False,
             raise ValueError('Could not identify the Android IME test API level')
         report=report/('ime-api-'+api)
         report=report/('production' if ime_probe else 'regression')
+    if applications_only:
+        api = subprocess.check_output([ADB, 'shell', 'getprop', 'ro.build.version.sdk'],
+                                      text=True, timeout=15).strip()
+        if not api.isdigit():
+            raise ValueError('Could not identify the Android application preview version')
+        report = report / ('applications-api-' + api)
     report.mkdir(parents=True,exist_ok=True)
     properties={}
     for name in ('ro.build.version.sdk','ro.build.version.release','ro.build.fingerprint',
@@ -714,7 +723,8 @@ def test(arch, apk=None, test_apk=None, ime_only=False, ime_probe=False,
     try:
         outputs=[]
         from ci_test_policy import android_cases
-        cases=(('subscriptionKeyboardProbeCapturesBothFields' if ime_probe
+        cases=(('applicationListPreviewCapturesInstalledApps',) if applications_only else
+               ('subscriptionKeyboardProbeCapturesBothFields' if ime_probe
                 else 'subscriptionFieldsShowImeAcceptTextAndReopenAfterBack',)
                if ime_only else android_cases())
         failures=[]
@@ -758,6 +768,18 @@ def test(arch, apk=None, test_apk=None, ime_only=False, ime_probe=False,
         remote_report+='/'+('production' if ime_probe else 'regression')
         capture_error=None
         try:
+            if applications_only:
+                destination = report / 'application-preview'
+                run([ADB, 'pull', '/sdcard/Android/data/org.clashofrust.android/files/application-preview',
+                     report], timeout=30)
+                validate_application_preview(destination, int(api))
+                if summary := os.environ.get('GITHUB_STEP_SUMMARY'):
+                    state = json.loads((destination / 'state.json').read_text())
+                    with open(summary, 'a') as stream:
+                        stream.write(f'\nAndroid {properties["ro.build.version.release"]}: '
+                                     f'application list {state["applications_visible"]} / '
+                                     f'{state["applications_total"]}; screenshot captured. '
+                                     'No VPN or traffic-routing test was run by this preview.\n')
             if ime_only:
                 pull_ime_report(remote_report,report,required=True)
                 phases=(('before-focus','name-after-tap','name-settled','source-after-tap',
@@ -783,6 +805,8 @@ def test(arch, apk=None, test_apk=None, ime_only=False, ime_probe=False,
                      'power':['dumpsys','power']}
         if ime_only:
             diagnostics['input-method']=['dumpsys','input_method']
+        if applications_only:
+            diagnostics = {key: diagnostics[key] for key in ('windows', 'activities')}
         for name, command in diagnostics.items():
             details=subprocess.run([ADB,'shell',*command],capture_output=True,text=True,timeout=15)
             (report/(name+'.txt')).write_text(details.stdout+details.stderr)
@@ -802,6 +826,42 @@ def test(arch, apk=None, test_apk=None, ime_only=False, ime_probe=False,
                 raise RuntimeError('; '.join(map(str,errors)))
     if 'Android startup:' in captured_log or 'Mobile runtime stopped:' in captured_log:
         raise RuntimeError('Native Android UI/runtime failed; inspect logcat')
+
+
+def validate_application_preview(directory, api):
+    image = (directory / 'applications.png').read_bytes()
+    state = json.loads((directory / 'state.json').read_text())
+    if len(image) < 24 or not image.startswith(b'\x89PNG\r\n\x1a\n') \
+            or image[12:16] != b'IHDR' or min(struct.unpack('>II', image[16:24])) < 320:
+        raise ValueError('Application preview screenshot is missing or invalid')
+    if (state.get('schema'), state.get('scope'), state.get('android_api'), state.get('detail')) != (
+            1, 'application-list-preview-only', api, 18):
+        raise ValueError('Application preview identity differs from the selected Android version')
+    total, visible = state.get('applications_total'), state.get('applications_visible')
+    if (state.get('live') is not True or state.get('applications_loaded') is not True
+            or state.get('applications_loading') is not False or state.get('applications_error') != ''
+            or type(total) is not int or type(visible) is not int or not 1 < visible <= total
+            or state.get('vpn') is not False or state.get('vpn_pending') is not False):
+        raise ValueError('Application preview did not show a complete installed-app list without VPN')
+
+
+def application_preview(build, api):
+    from workflow_artifacts import extract_build
+    actual_api = subprocess.check_output([ADB, 'shell', 'getprop', 'ro.build.version.sdk'],
+                                         text=True, timeout=15).strip()
+    if actual_api != str(api):
+        raise ValueError('Application preview device differs from the selected Android version')
+    archive = build / 'build.tar.gz'
+    expected = (build / 'build.tar.gz.sha256').read_text().strip()
+    if not re.fullmatch('[a-f0-9]{64}', expected) or sha256(archive) != expected:
+        raise ValueError('Application preview CI archive checksum mismatch')
+    root = ROOT / 'target/android-application-preview-build'
+    root.mkdir(parents=True, exist_ok=False)
+    extract_build(archive, root)
+    prepare_sdk(package_only=True)
+    verify_build(root, 'x64', commit())
+    test('x64', apk=root / 'payload/app.apk', test_apk=root / 'tests/androidTest.apk',
+         applications_only=True)
 
 
 def package(arch, run_id, check_only, build=None):
@@ -852,21 +912,23 @@ def package(arch, run_id, check_only, build=None):
 
 def main():
     parser=argparse.ArgumentParser(description=__doc__)
-    parser.add_argument('operation',choices=('build','export','test','package','emulator'))
+    parser.add_argument('operation',choices=('build','export','test','package','emulator','application-preview'))
     parser.add_argument('--arch',choices=ABIS,required=True)
     parser.add_argument('--run-id',type=int)
     parser.add_argument('--check',action='store_true')
-    parser.add_argument('--build',type=Path,help='Verified local CI candidate input; package --check only')
+    parser.add_argument('--build',type=Path,help='CI candidate input for package --check or application-preview')
     parser.add_argument('--legacy',action='store_true',help='Use the approved Android 12 IME regression image')
     parser.add_argument('--ime-only',action='store_true',help='Run only the subscription input-method regression')
-    parser.add_argument('--api',type=int,help='Use an approved historical Android IME test image')
+    parser.add_argument('--api',type=int,help='Use an approved Android test image')
     args=parser.parse_args()
-    if args.build is not None and (args.operation!='package' or not args.check):
-        parser.error('--build requires package --check')
+    if args.build is not None and args.operation != 'application-preview' and (args.operation!='package' or not args.check):
+        parser.error('--build requires package --check or application-preview')
+    if args.operation == 'application-preview' and (args.arch != 'x64' or args.build is None or args.api is None):
+        parser.error('application-preview requires --arch x64, --api and --build DIRECTORY')
     if args.legacy and args.operation!='emulator':
         parser.error('--legacy applies only to emulator preparation')
-    if args.api is not None and (args.operation!='emulator' or args.legacy):
-        parser.error('--api applies only to emulator preparation and cannot be combined with --legacy')
+    if args.api is not None and (args.operation not in ('emulator', 'application-preview') or args.legacy):
+        parser.error('--api applies only to emulator preparation or application-preview and cannot be combined with --legacy')
     if args.ime_only and args.operation!='test':
         parser.error('--ime-only applies only to test')
     if args.operation=='emulator':
@@ -886,7 +948,7 @@ def main():
              '--device','pixel_6','--package',image],input='no\n',text=True,env=env)
         report=ROOT/'target/android-report/x64'; report.mkdir(parents=True,exist_ok=True)
         if args.legacy or args.api is not None:
-            report=report/('ime-api-'+image.split(';')[1].removeprefix('android-'))
+            report=report/(('ime-api-' if args.legacy else 'api-')+image.split(';')[1].removeprefix('android-'))
             report.mkdir(parents=True,exist_ok=True)
         configure_emulator_storage(avds/'cor-ci.avd',report)
         cores=min(4,os.cpu_count() or 1)
@@ -907,10 +969,11 @@ def main():
         run([ADB,'shell','settings','put','global','private_dns_mode','off'])
         run([ADB,'shell','input','keyevent','KEYCODE_WAKEUP'])
         run([ADB,'shell','wm','dismiss-keyguard'])
+        if args.legacy:
+            prepare_emulator_input_method(report)
         if args.legacy or args.api is not None:
             run([ADB,'shell','wm','size','1080x2400'])
             run([ADB,'shell','wm','density','440'])
-            prepare_emulator_input_method(report)
         # Standard UI-test setup: the launcher's animated input sink can outlive
         # Activity.onResume. Keep system transitions deterministic in CI only.
         for setting in ('window_animation_scale','transition_animation_scale','animator_duration_scale'):
@@ -918,6 +981,7 @@ def main():
     elif args.operation=='build': build(args.arch)
     elif args.operation=='export': export_build(args.arch)
     elif args.operation=='test': test(args.arch,ime_only=args.ime_only)
+    elif args.operation=='application-preview': application_preview(args.build, args.api)
     else: package(args.arch,args.run_id,args.check,args.build)
 
 

@@ -8,12 +8,12 @@
 
 [issue #31](https://github.com/Fu021/Clash-of-Rust/issues/31) 报告 Redmi K30 / MIUI 14.0.5 的订阅输入框有光标但不显示键盘。十个系统版本的 51 轮[输入法对照](../../docs/agent-failures/android-ime.md)已在 API 31/32 复现键盘绘制异常，并发现跨版本键盘高度同步问题。显示时序、系统栏去重及字段滚动避让修复已进入 Actions；后续专项另发现 API 28 恢复前台时的渲染表面失效及 API 31 输入法进程崩溃，当前验证状态统一见该专题。MIUI 是否同根因仍未确认，不能以部分系统通过代替完整兼容验收。
 
-常规 CI 与打包只自动运行代理/TUN 相关集成验证，不重复已完成的键盘与多版本截图专项；再次调查须维护者明确要求。Android 8 起完整兼容性、厂商 ROM、ARM 实机、真实网络、休眠与重启仍需单独验收，已有输入法截图不能替代这些边界，见[验证范围](../../docs/workflows/ci.md#ci)。
+常规 CI 与打包只自动运行代理/TUN 相关集成验证，不重复已完成的键盘与多版本截图专项；再次调查须维护者明确要求。当前只验证已固定身份并有 x64 镜像的 Android 版本：8.0、9～16 及 12L；8.1 等缺镜像版本不能宣称覆盖。厂商 ROM、ARM 实机、真实网络、休眠与重启仍需单独验收，已有输入法截图不能替代这些边界，见[验证范围](../../docs/workflows/ci.md#ci)。
 
 ## 结构
 
 - `native`：Slint NativeActivity 入口、JNI、异步任务和界面模型；正式入口为 `crates/client-ui/ui/mobile/android/window.slint`。
-- `app`：Android 生命周期、文件选择、通知、应用分流及前台 `VpnService`。关闭界面不等于断开 VPN。
+- `app`：Android 生命周期、权限、文件选择、通知、应用枚举与分流持久化及前台 `VpnService`。应用内业务页面统一使用 Slint，不新增 Java 自绘页面；Java 保留系统能力桥接。关闭界面不等于断开 VPN。
 - `core`：按 CI 依赖快照锁定的 mihomo Go 模块及 gomobile 桥接；使用上游 `cmfa,with_gvisor` 构建标签，路由与应用分流交给 `VpnService`，出站套接字经 `protect` 排除，避免进入自身 TUN。
 - `crates/mobile-ffi`：不依赖 Slint、JNI 或 Android SDK 的共享会话、配置、订阅、规则和控制器操作。原生能力由 `NativeHost` 注入，iOS 可以另接宿主。
 
@@ -25,7 +25,7 @@
 
 已接入订阅管理、节点/测速、VPN/应用分流、连接、规则草稿、日志、网络诊断、IP/A÷检测、网络/外观设置及客户端更新。订阅自动更新默认 360 分钟，0 关闭，仅处理远程源且失败保留原状态，见[自动更新](../../docs/subscriptions.md)。字号跟随 Android 系统 SP 换算（含 Android 14 非线性缩放），不用桌面字号；卡片适应内容，保留最小触摸区域。
 
-应用分流支持全部应用、仅代理选中应用与排除选中应用，独立选择页提供搜索、系统应用、图标和批量选择。保存后重连生效，旧排除列表自动迁移；保护覆盖、空允许列表及实际出站边界见[Android 应用分流](../../docs/android-application-routing.md)。
+应用分流支持全部应用、仅代理选中应用与排除选中应用，Slint 选择页提供搜索、系统组件开关、通用离线图标和批量选择，默认保留可启动的预装应用。保存后重连生效，旧排除列表自动迁移；保护覆盖、空允许列表、版本截图及实际出站边界见[Android 应用分流](../../docs/android-application-routing.md)。
 
 删除正在使用的订阅时，确认后自动切换到默认直连，再删除订阅及其规则；内核重载或文件提交失败会恢复原状态。默认直连配置不能编辑或删除，旧版内置配置会保留原 ID 并补齐标识；缺少内置配置时只补建，不覆盖已有订阅。添加和编辑订阅提交后立即显示保存状态，暂时锁定表单并阻止重复提交；失败保留输入供重试，成功返回列表。Claude 保护开启时，仍需先关闭保护才能删除当前订阅。
 
@@ -73,7 +73,7 @@ CI 在三个 ABI 编译、执行 Gradle lint，生成候选 APK、SHA256 及安�
 
 开发 CI 使用固定签名：`ANDROID_DEV_KEYSTORE`（base64 PKCS12）与 `ANDROID_DEV_KEYSTORE_PASSWORD`，别名 `cor-android-dev`。这些值只存 Actions Secrets；私钥不进入仓库或附件。无密钥的外部 PR 使用临时测试签名。正式发布另需 `ANDROID_KEYSTORE`、`ANDROID_KEYSTORE_PASSWORD`、`ANDROID_KEY_ALIAS` 与 `ANDROID_KEY_PASSWORD`，签名不同时不能直接覆盖已有 APK。
 
-Slint 界面可用 `python3 scripts/preview-slint.py --mobile --platform android --check` 静态检查；预览固定数据不代替真实 VPN 测试。
+Slint 界面可用 `python3 scripts/preview-slint.py --mobile --platform android --check` 静态检查；预览固定数据不代替真实 VPN 测试。多版本真实应用列表使用按需 [Android Application Previews](../../docs/workflows/android-previews.md)，复用成功 CI 的 APK，只枚举和截图。
 
 ## 连接超时排查
 
