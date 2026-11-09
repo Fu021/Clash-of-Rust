@@ -2265,6 +2265,101 @@ Private_Clean: 2 kB
                 execute.assert_called_once()
                 self.assertEqual(execute.call_args.args[0][0], 'java')
 
+    def test_gradle_tool_check_rejects_another_version_on_path(self):
+        selected = build_inputs.tool_versions()
+        for version, accepted in ((selected['gradle'], True), ('9.6.0', False)):
+            with self.subTest(version=version), \
+                    patch.object(build_inputs.sys, 'version', selected['python']), \
+                    patch.object(build_inputs.subprocess, 'run', return_value=subprocess.CompletedProcess(
+                        [], 0, '\nGradle ' + version + '\n', '')):
+                if accepted:
+                    build_inputs.check_tools(('gradle',))
+                else:
+                    with self.assertRaisesRegex(ValueError, 'Active Gradle'):
+                        build_inputs.check_tools(('gradle',))
+
+    def test_gradle_official_failure_restores_the_verified_private_original(self):
+        version = build_inputs.tool_versions()['gradle']
+        prefix = 'gradle-' + version
+        content = io.BytesIO()
+        with zipfile.ZipFile(content, 'w') as archive:
+            for name in ('bin/gradle', 'bin/gradle.bat', f'lib/gradle-launcher-{version}.jar'):
+                archive.writestr(prefix + '/' + name, 'fixture ' + name)
+        payload = content.getvalue()
+        selected = {'version': version,
+                    'url': f'https://services.gradle.org/distributions/gradle-{version}-bin.zip',
+                    'sha256': hashlib.sha256(payload).hexdigest()}
+
+        def restore(url, target, checksum):
+            target.write_bytes(payload)
+            return True
+
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            path_output = root / 'path'
+            with patch.object(build_inputs, 'component', return_value=selected), \
+                    patch.dict(os.environ, {'GITHUB_PATH': str(path_output)}), \
+                    patch.object(build, 'opener') as http, \
+                    patch.object(build.time, 'sleep'), \
+                    patch.object(upstream_cache, 'restore', side_effect=restore) as mirror:
+                http.return_value.open.side_effect = OSError('HTTP 504')
+                result = build_inputs.prepare_gradle(root / 'tools')
+            self.assertEqual(http.return_value.open.call_count, 3)
+            mirror.assert_called_once_with(selected['url'], root / 'tools' / (prefix + '-bin.zip'),
+                                           selected['sha256'])
+            self.assertEqual(path_output.read_text().splitlines(), [str(result / 'bin')])
+            self.assertTrue(os.access(result / 'bin/gradle', os.X_OK))
+            self.assertEqual((result / 'bin/gradle.bat').read_text(), 'fixture bin/gradle.bat')
+            self.assertFalse(any((root / 'tools').glob('.gradle-*')))
+
+    def test_gradle_rejects_unapproved_identity_before_downloading(self):
+        selected = build_inputs.approved()['upstream']['gradle']
+        for changed in ({'version': '9.6.0'}, {'sha256': ''},
+                        {'url': 'https://example.com/gradle.zip'}):
+            with self.subTest(changed=changed), \
+                    patch.object(build_inputs, 'component', return_value={**selected, **changed}), \
+                    patch.object(build_inputs, 'download') as download:
+                with self.assertRaisesRegex(ValueError, 'approved identity'):
+                    build_inputs.prepare_gradle(Path('/unused'))
+                download.assert_not_called()
+
+    def test_gradle_rejects_corrupt_or_unsafe_archives_without_exposing_tools(self):
+        version = build_inputs.tool_versions()['gradle']
+        prefix = 'gradle-' + version
+        for scenario in ('checksum', 'parent', 'absolute', 'symlink', 'missing-launcher'):
+            content = io.BytesIO()
+            with zipfile.ZipFile(content, 'w') as archive:
+                archive.writestr(prefix + '/bin/gradle', 'fixture launcher')
+                if scenario == 'parent':
+                    archive.writestr(prefix + '/../outside', 'invalid')
+                elif scenario == 'absolute':
+                    archive.writestr('/' + prefix + '/outside', 'invalid')
+                elif scenario == 'symlink':
+                    member = zipfile.ZipInfo(prefix + '/link')
+                    member.create_system = 3
+                    member.external_attr = 0o120777 << 16
+                    archive.writestr(member, '../../outside')
+            payload = content.getvalue()
+            selected = {'version': version,
+                        'url': f'https://services.gradle.org/distributions/gradle-{version}-bin.zip',
+                        'sha256': '0' * 64 if scenario == 'checksum' else hashlib.sha256(payload).hexdigest()}
+
+            def save(url, target, **kwargs):
+                target.parent.mkdir(parents=True, exist_ok=True)
+                target.write_bytes(payload)
+
+            with self.subTest(scenario=scenario), tempfile.TemporaryDirectory() as temporary:
+                root = Path(temporary)
+                with patch.object(build_inputs, 'component', return_value=selected), \
+                        patch.object(build_inputs, 'download', side_effect=save), \
+                        patch.dict(os.environ, {'GITHUB_PATH': str(root / 'path')}):
+                    with self.assertRaises(ValueError):
+                        build_inputs.prepare_gradle(root / 'tools')
+                self.assertFalse((root / 'path').exists())
+                self.assertFalse((root / 'outside').exists())
+                self.assertFalse((root / 'tools' / prefix).exists())
+                self.assertFalse(any((root / 'tools').glob('.gradle-*')))
+
     def test_dependency_refresh_does_not_export_partial_lockfiles_after_resolution_failure(self):
         with tempfile.TemporaryDirectory() as temporary, \
                 patch.dict(os.environ, {'GITHUB_ACTIONS': 'true', 'GITHUB_EVENT_NAME': 'workflow_dispatch'}), \

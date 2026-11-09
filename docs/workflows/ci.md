@@ -12,7 +12,7 @@
 
 工作流已移除输入法专项的参数、APK 中转和多版本矩阵。保留 `scripts/android.py test --arch x64 --ime-only` 等手工调查脚本与既有证据，只有维护者明确要求重新调查时才使用，不因版本升级或 loop 自动恢复到 CI；缺图、日志边界丢失和输入法崩溃仍使手工专项失败。历史十版本范围、证据要求及 MIUI/实机边界见[输入法专页](../agent-failures/android-ime.md#当前修复与待验收)。
 
-Android 在 Gradle setup 后重新激活固定 Python、JDK 和 Go，编译前执行 `build_inputs.py check-tools` 核对实际版本。环境变量里记录的版本或早先 setup 成功不能代替当前 PATH 上的工具检查；版本漂移先失败，不放宽 `go mod tidy -diff` 或自动下载另一套编译器。
+Android 使用固定 Python、JDK 和 Go；`build_inputs.py prepare-gradle` 按冻结快照中的版本及已提交的官方 SHA256 准备 Gradle ZIP，官方下载失败后回退私网原包，校验并解压后加入 PATH。编译前执行 `build_inputs.py check-tools --tools go java gradle` 核对实际版本。环境变量里记录的版本或早先 setup 成功不能代替当前 PATH 上的工具检查；版本漂移先失败，不放宽 `go mod tidy -diff` 或自动下载另一套编译器。Gradle 不再由独立 setup action 另行下载，SDK 准备结束后提交原包清单检查点。
 
 共享 Go 下载在矩阵启动前执行 `go mod tidy -diff`，先拒绝未规范化的锁文件，避免三种 Android ABI 完成 Rust 编译后才发现同一问题。
 
@@ -32,7 +32,7 @@ Go 审计只查询声明的模块路径，不执行更新。Android 公共任务
 
 ### Ubuntu 20.04 环境下载缓存
 
-CI 和打包通过 `.github/actions/linux-download-cache` 准备独立 Python 与原始云镜像，冻结上游校验值。Linux CI 在宿主先准备并校验内核与 Geo 文件，再将工作区挂载给不含私网凭据的构建容器；容器再次核验已有资源。容器从固定基础 digest 在 runner 构建，不导出 Docker 镜像缓存；本 job 已构建的镜像可复用。详细类别及边界见[覆盖清单](cache-coverage.md)。
+CI 的 Linux 编译和 Ubuntu 兼容 job 通过 `.github/actions/linux-download-cache` 准备独立 Python 与原始云镜像，冻结上游校验值；Publish Release 不再重复准备这些环境。Linux CI 在宿主先准备并校验内核与 Geo 文件，再将工作区挂载给不含私网凭据的构建容器；容器再次核验已有资源。容器从固定基础 digest 在 runner 构建，不导出 Docker 镜像缓存；本 job 已构建的镜像可复用。详细类别及边界见[覆盖清单](cache-coverage.md)。
 
 共享输入阶段还会分别冻结 [Ubuntu 20.04 ARM64 和 x64 预装镜像环境](prepared-vm-images.md)的包版本、原包和签名索引，供同提交安装验证复用。此阶段只解析官方环境，不依赖私网能力，不启动 VM 或制作镜像；CI 的 VM job 再按 health 的 `vm_limits` 检查本机架构，未就绪时冷准备。镜像始终只存私网，不计入 GitHub 编译缓存；历史模板就绪不能替代本提交的恢复和安装验证。
 

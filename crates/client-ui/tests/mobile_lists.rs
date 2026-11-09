@@ -872,8 +872,12 @@ fn mobile_list_stacks_rows_and_keeps_sparse_content_at_the_top() {
     advance(&clock, Duration::from_millis(2500));
     assert!((countdown.get_remaining() - 0.5).abs() < 0.03);
     countdown.set_revision(1);
+    advance(&clock, Duration::ZERO);
+    frame(&adapter, 300, 80);
     assert_eq!(countdown.get_remaining(), 1.);
     countdown.set_elapsed(4.);
+    advance(&clock, Duration::ZERO);
+    frame(&adapter, 300, 80);
     assert!((countdown.get_remaining() - 0.2).abs() < 0.001);
     advance(&clock, Duration::from_millis(1100));
     assert_eq!(countdown.get_remaining(), 0.);

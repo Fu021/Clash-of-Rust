@@ -39,11 +39,12 @@ GitHub 热缓存预算为 9 GiB。CI 的主分支、开发分支及同仓库 PR 
 | Linux 构建容器内的 mihomo/Geo | 先在宿主用同一冻结快照下载及校验，必要时私网回退，再挂载已准备资源；容器不接收私网凭据。容器后续仍复核资源身份 |
 | Android Geo 原始文件 | 同一共享下载器；不镜像 `offline-assets` 目录 |
 | NSIS 原始安装程序 | 同一共享下载器；不镜像安装后的 NSIS 目录 |
+| Gradle 分发 ZIP | CI 三个 Android ABI job 使用 `build_inputs.py prepare-gradle`，按快照版本和已提交官方 SHA256 走共享下载及私网回退；解压到 runner 临时目录，不保存安装目录或转换缓存。发布只重签 APK，内存基准不使用 Gradle |
 | Ubuntu 20.04 独立 Python 与原始云镜像 | `linux_ci.download` 共用上述下载器；不保存构建容器、VM 系统盘或运行状态 |
 | Go 模块原始 ZIP/MOD | `go mod verify` 后登记公开 Go proxy URL；仍由原生 Go 工具下载、校验并在本轮 artifact 内分发 |
 | 宿主 APT 原始 DEB | 当轮签名索引确认 URL、大小及 SHA256；APT 先正常下载，失败后整批最多用 120 秒尝试私网，再交 APT 复核 |
 | 容器和 guest 的 APT | 沿用签名索引校验；不向其传入私网凭据，不能据此声称已接入私网恢复 |
-| Python/Tailscale 引导、Rust/Go/JDK、Gradle、Android SDK/NDK/模拟器、Maven | 保留官方 setup/包管理器安装；停止目录快照。未通过共享下载器或已验证原包登记的路径不计入私网覆盖 |
+| Python/Tailscale 引导、Rust/Go/JDK、Android SDK/NDK/模拟器、Maven | 保留官方 setup/包管理器安装；停止目录快照。未通过共享下载器或已验证原包登记的路径不计入私网覆盖 |
 
 最后一行是当前实现边界，不能用“工具有官方下载链接”推断客户端已能从私网安装。需要新增原包适配时，先补明确来源、强校验、安装器入口及失败回退回归；不恢复目录快照或 runner 归档上传。Python/Tailscale 在私网登录前的引导还依赖 GitHub/runner，现有方案不是离线 runner。
 
@@ -53,7 +54,7 @@ GitHub 热缓存预算为 9 GiB。CI 的主分支、开发分支及同仓库 PR 
 
 检查点预算 20 秒、不轮询；末尾总预算 60 秒，其中最多 15 秒用于一次分页查询，各元数据请求最多 8 秒，外层子进程分别限 30/90 秒。先保存全部批次，再提交全部批次，最后查询；不会等待单 worker 下载完全部原包。持续轮询不重置失败任务，断线重发固定请求与序号。预算不足、拒绝或能力缺失保留未提交项，绝不改为 `PUT` 归档。只有旧能力时明确使用兼容单项导入，不宣称已使用持久队列。
 
-各下载 job（含发布 Ubuntu latest）均保存 `upstream-downloads-<job>-<index>` artifact，内含完整清单、批次请求、manifest id、已核验分页、固定错误码。summary 区分未接收、pending、ready 和失败；只有清单 ready、ready=total 且所有分页身份和单项状态核对完成才算整批入库。附件只是证据，服务端不会扫描附件。job 结束仍 pending 的任务由服务端继续处理，之后验收须重新查在线状态，不能将旧附件或中间 inventory 缺项当最终结论。
+各下载 job（CI 的输入、Android、桌面及 Ubuntu 兼容任务，公开发布的 Android 签名任务，以及内存基准任务）均保存 `upstream-downloads-<job>-<index>` artifact，内含完整清单、批次请求、manifest id、已核验分页、固定错误码。summary 区分未接收、pending、ready 和失败；只有清单 ready、ready=total 且所有分页身份和单项状态核对完成才算整批入库。附件只是证据，服务端不会扫描附件。job 结束仍 pending 的任务由服务端继续处理，之后验收须重新查在线状态，不能将旧附件或中间 inventory 缺项当最终结论。
 
 工作流不调用私网 DELETE，不同步 GitHub 淘汰结果，也不修改或上传 README.txt。服务端协作与保留范围见[协议](cache-server.md)和[可保留白名单](cache-retention.md)。
 

@@ -28,6 +28,7 @@ public final class ApplicationRoutingActivity extends Activity {
     private EditText search;
     private CheckBox systemApps;
     private TextView status;
+    private Button saveButton;
     private boolean loaded;
 
     private static final class Entry {
@@ -62,10 +63,12 @@ public final class ApplicationRoutingActivity extends Activity {
         title.setText("应用分流");
         title.setTextSize(20);
         heading.addView(title, new LinearLayout.LayoutParams(0, -2, 1));
-        heading.addView(button("保存", this::save));
+        saveButton = button("保存", this::save);
+        saveButton.setEnabled(false);
+        heading.addView(saveButton);
         layout.addView(heading);
         TextView explanation = new TextView(this);
-        explanation.setText("先选择哪些应用进入 VPN；具体出站仍遵循当前模式和配置。修改后重新连接 VPN 生效。");
+        explanation.setText(R.string.application_routing_explanation);
         layout.addView(explanation);
         modes = new Spinner(this);
         ArrayAdapter<String> choices = new ArrayAdapter<>(this, android.R.layout.simple_spinner_item,
@@ -127,6 +130,7 @@ public final class ApplicationRoutingActivity extends Activity {
                     for (Entry entry : entries) available.add(entry.application.packageName);
                     selected.retainAll(available);
                     loaded = true;
+                    saveButton.setEnabled(true);
                     filter();
                 });
             } catch (Exception error) { runOnUiThread(() -> { if (!isDestroyed()) failed(error); }); }
@@ -186,7 +190,7 @@ public final class ApplicationRoutingActivity extends Activity {
 
     private void refresh() {
         if (!loaded) return;
-        status.setText("已选 " + selected.size() + " 个 · 当前显示 " + visible.size() + " 个");
+        status.setText(getString(R.string.application_routing_selection_count, selected.size(), visible.size()));
         adapter.notifyDataSetChanged();
     }
 

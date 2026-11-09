@@ -4,6 +4,8 @@
 
 CI 负责源码与候选安装包的验收，Publish Release 复用已通过的桌面包，只在公开模式重新签名和验证 Android。迁移不缩减原有安装、GUI 或代理/TUN 断言；尚未取得新提交 Actions 结果时，不能把接线完成写成验收通过。
 
+候选打包器及其工具随 CI 平台 job 准备：Windows 准备 NSIS，Linux 准备 DEB 工具，macOS 复用本机 DMG 工具，Android 准备 Gradle、JDK 与 SDK。发布的不发布模式只需要核验工具；公开模式的 Android job 只准备 JDK、签名/对齐工具和 x64 模拟器，不安装 Gradle 或重新构建 Rust/Go。Memory Benchmark 只编译所选桌面源码并采样，不生成候选安装包。各原包的实际私网覆盖以[下载路径表](cache-coverage.md#原始下载官方优先私网回退)为准，不能把 setup 成功视为私网可恢复。
+
 ## 平台范围
 
 | 平台 | 同轮 CI 内执行的检查 |

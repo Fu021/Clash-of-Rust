@@ -1,8 +1,8 @@
-# 预装 VM 镜像：v1 对接约定（待联调）
+# 预装 VM 镜像：v1 对接约定
 
 [方案与测速](prepared-vm-images.md) · [元数据与共用测试向量](prepared-vm-metadata.md) · [现行原包协议](cache-server.md)
 
-日期：2026-11-08。客户端已在 `scripts/prepared_vm.py` 与 `scripts/prepared_vm_environment.py` 实现。本页已按维护者转交的 `prepared-vm-v1-20261108`、revision `2026-11-08-x64` 对齐；服务端于北京时间 21:10 部署双架构，交接包报告 131 项隔离回归通过，真实模板的 Actions 上传、下载与启动尚未验收。
+协议日期：2026-11-08，验收状态更新：2026-11-09。客户端已在 `scripts/prepared_vm.py` 与 `scripts/prepared_vm_environment.py` 实现。本页已按维护者转交的 `prepared-vm-v1-20261108`、revision `2026-11-08-x64` 对齐；服务端于北京时间 21:10 部署双架构，交接包报告 131 项隔离回归通过。真实模板的双架构 Actions 上传、暖恢复与安装后验证已有[首轮证据](prepared-vm-images.md#首次双架构暖恢复证据)，不代表全部故障路径已在线验收。
 
 ## 保存什么
 

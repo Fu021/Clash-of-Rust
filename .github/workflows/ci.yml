@@ -32,7 +32,6 @@ jobs:
       java: ${{ steps.versions.outputs.java }}
       resources: ${{ steps.resolve.outputs.resources }}
       tailscale: ${{ steps.resolve.outputs.tailscale }}
-      gradle: ${{ steps.resolve.outputs.gradle }}
       nsis: ${{ steps.resolve.outputs.nsis }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
@@ -237,14 +236,8 @@ jobs:
           path: target/shared-go
       - name: Restore verified shared source downloads
         run: python3 scripts/build_inputs.py restore-go --directory target/shared-go
-      - uses: gradle/actions/setup-gradle@8da46b539cd8fe6ab27ca75128919a18d757604c
-        with:
-          gradle-version: ${{ needs.inputs.outputs.gradle }}
-          cache-disabled: true
-      - name: Activate approved Python after Gradle setup
-        uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0
-        with:
-          python-version: ${{ env.COR_PYTHON }}
+      - name: Prepare verified Gradle with private original fallback
+        run: python3 scripts/build_inputs.py prepare-gradle --directory '${{ runner.temp }}/cor-gradle'
       - uses: actions/setup-java@77dd5b2ce225ea11469928ac317850245a74ae78
         with:
           distribution: temurin
@@ -255,7 +248,7 @@ jobs:
           go-version: ${{ needs.inputs.outputs.go }}
           cache: false
       - name: Verify approved Android build tools before compiling
-        run: python3 scripts/build_inputs.py check-tools
+        run: python3 scripts/build_inputs.py check-tools --tools go java gradle
       - name: Load stable development signature when configured
         shell: python
         env:
@@ -283,6 +276,11 @@ jobs:
           sys.path.insert(0, 'scripts')
           from android import prepare_sdk
           prepare_sdk()
+      - name: Enqueue verified Android tools before compilation
+        continue-on-error: true
+        uses: ./.github/actions/upstream-report
+        with:
+          checkpoint: 'true'
       - name: Compile Android application and embedded core
         env:
           GH_TOKEN: ${{ github.token }}

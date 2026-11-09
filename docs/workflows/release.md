@@ -24,7 +24,7 @@
 
 流程固定到所选 CI 的提交与依赖快照，核对六种桌面平台、三种 Android ABI 和三个 Ubuntu 兼容 job 的成功记录与产物身份，不重新编译或下载应用资源。候选包、源码产物及收据保留 3 天；过期或旧格式产物需要重新运行当前代码的 CI。完整测试职责见[安装验收](install-validation.md)。
 
-Ubuntu 20.04 ARM64 和 x64 的客户端接入[私网预装环境镜像](prepared-vm-images.md)的能力门禁与冷回退；按线上 `vm_limits` 中明确声明的架构启用，维护者报告服务端已声明两种架构。真实镜像上传、恢复和冷/暖测速需联调后另验收；SSH 启动探测的短时超时在总预算内重试，不由缓存命中替代就绪检查。预装镜像、基础盘及测试写入层均不进入 GitHub Cache、artifact 或 Release。
+Ubuntu 20.04 ARM64 和 x64 的模板准备、恢复及安装验证均归 CI，按线上 `vm_limits` 明确声明的架构启用[私网预装环境镜像](prepared-vm-images.md)，不满足条件时冷回退。双架构真实上传、暖恢复及安装后验证已有[首轮证据](prepared-vm-images.md#首次双架构暖恢复证据)，不能替代新提交的应用验证或代表所有故障路径通过。SSH 短时超时在总预算内重试，不由缓存命中代替就绪检查。Publish Release 读取这些 CI 结果，不再启动 VM；预装镜像、基础盘及测试写入层均不进入 GitHub Cache、artifact 或 Release。
 
 从启动到最终核验完成，来源分支必须仍指向该 CI 的提交；`publish-release.py` 在前置解析和最终核验时都会检查分支头。即使只是文档改动，也应等本轮打包结束后再推送，避免 `Source branch has changed`。测试包以本次工作流固定的提交为准，后续提交需另做验证。
 

@@ -1,0 +1,5 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="application_routing_explanation">先选择哪些应用进入 VPN；具体出站仍遵循当前模式和配置。修改后重新连接 VPN 生效。</string>
+    <string name="application_routing_selection_count">已选 %1$d 个 · 当前显示 %2$d 个</string>
+</resources>

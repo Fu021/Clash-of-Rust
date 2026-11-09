@@ -21,7 +21,7 @@
 
 ## 当前能力
 
-首页网络信息与服务状态沿用[跨端概览约定](../../docs/ui-design.md#pr-36-的融合与兼容)，共享结果分类与隐私处理；原生地址/DNS 通过已连接的非 VPN 网络回调读取，Activity 销毁时注销。概览不启动 VPN，不修改路由，隐藏或离开首页即取消网络探测。此接入目前只有静态与预览验证，尚未编译或完成设备验收。
+首页网络信息与服务状态沿用[跨端概览约定](../../docs/ui-design.md#pr-36-的融合与兼容)，共享结果分类与隐私处理；原生地址/DNS 通过已连接的非 VPN 网络回调读取，Activity 销毁时注销。概览不启动 VPN，不修改路由，隐藏或离开首页即取消网络探测。自动化验证范围见[CI 说明](../../docs/workflows/ci.md)，真实设备与厂商 ROM 的网络信息仍需对应现场验收。
 
 已接入订阅管理、节点/测速、VPN/应用分流、连接、规则草稿、日志、网络诊断、IP/A÷检测、网络/外观设置及客户端更新。订阅自动更新默认 360 分钟，0 关闭，仅处理远程源且失败保留原状态，见[自动更新](../../docs/subscriptions.md)。字号跟随 Android 系统 SP 换算（含 Android 14 非线性缩放），不用桌面字号；卡片适应内容，保留最小触摸区域。
 
@@ -68,8 +68,8 @@ APK 输出到 `apps/android/app/build/outputs/apk/release/`；其他架构使用
 
 使用 CI / Publish Release 时无需在本地安装 Android 工具链。
 
-CI 在三个 ABI 编译、执行 Gradle lint 并校验 APK 架构与 64 位 ELF 的 16 KiB 对齐；x86_64 模拟器还验证正式界面、字号、横竖屏、授权/取消、后台、磁贴及真实代理/TUN。工具链、依赖快照、完整测试范围和 `android-report-*` 日志见[CI 说明](../../docs/workflows/ci.md)。ARM 架构仍需真机验收。
-成功 CI 上传 `build-android-{arm64,armv7,x64}`。Publish Release 必须复用对应提交的产物，`check_only` 生成测试 APK 与 SHA256，不合并、不发布；x86_64 包在最终签名后再次运行代理/TUN 测试。APK 按架构提供，现代手机和平板通常选择 ARM64。
+CI 在三个 ABI 编译、执行 Gradle lint，生成候选 APK、SHA256 及安装收据，校验签名、架构与 64 位 ELF 的 16 KiB 对齐；x86_64 模拟器验证授权/取消、后台、磁贴、应用分流及真实代理/TUN。字号、横竖屏与输入法截图保留手动专项，不随普通 CI 重复运行。工具链、依赖快照、完整测试范围和 `android-report-*` 日志见[CI 说明](../../docs/workflows/ci.md)。Gradle 原包使用固定官方摘要、官方下载和私网回退，不再依赖 setup action 的独立下载路径。ARM 架构仍需真机验收。
+成功 CI 上传 `build-android-{arm64,armv7,x64}` 与 `package-android-{arm64,armv7,x64}`。Publish Release 的 `check_only` 仅核验九组 CI 候选包、SHA256 及收据，不重新生成 APK、不申请模拟器、不发布；公开模式才取得发行签名并重签对应提交的实际 APK，x86_64 最终签名包再次运行代理/TUN 测试。APK 按架构提供，现代手机和平板通常选择 ARM64。
 
 开发 CI 使用固定签名：`ANDROID_DEV_KEYSTORE`（base64 PKCS12）与 `ANDROID_DEV_KEYSTORE_PASSWORD`，别名 `cor-android-dev`。这些值只存 Actions Secrets；私钥不进入仓库或附件。无密钥的外部 PR 使用临时测试签名。正式发布另需 `ANDROID_KEYSTORE`、`ANDROID_KEYSTORE_PASSWORD`、`ANDROID_KEY_ALIAS` 与 `ANDROID_KEY_PASSWORD`，签名不同时不能直接覆盖已有 APK。
 
