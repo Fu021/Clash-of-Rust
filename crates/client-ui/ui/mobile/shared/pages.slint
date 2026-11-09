@@ -7,7 +7,7 @@ import { Theme } from "../../theme/palette.slint";
 import { ConnectionPower } from "../../components/brand.slint";
 import { MobileNetworkInfo, MobileServices } from "overview.slint";
 import { HomeConnections } from "../../components/home-section.slint";
-import { NodeItem, CategoryItem, ConnectionItem, RuleItem, LogItem, ReportItem } from "../../state.slint";
+import { NodeItem, ProfileItem, CategoryItem, ConnectionItem, RuleItem, LogItem, ReportItem } from "../../state.slint";
 import { MobileData, MobileView, MobileActions, MobileIntent } from "state.slint";
 import { MText, MSmall, MHeading, MParagraph, MCard, MButton, MPagination, MRow, MDivider, MSwitch, MField, MSelect, MTag, MNav, MScroll, ListView, ListHeader, MProgress, MCopyButton, MDragHandle, MToolHeading } from "controls.slint";
 
@@ -141,18 +141,20 @@ export component MobileProxies inherits PageSurface {
         self.detail-group = group;
     }
     MScroll { content-key: MobileView.query + "/" + MobileView.node-sort; VerticalLayout { alignment: start; spacing: MobileTypography.gap; padding-bottom: MobileTypography.padding;
-        MField { placeholder: "搜索节点或策略组"; text <=> MobileView.query; edited(value) => { MobileActions.request(MobileIntent.query, "proxies", value); } }
+        HorizontalLayout { spacing: MobileTypography.small-gap; cross-axis-alignment: center;
+            MButton { geometry-key: "nodes-view"; width: 48px; height: 48px; horizontal-stretch: 0; quiet: true;
+                accessible-label: PageViews.nodes-list ? "切换到宫格视图" : "切换到列表视图";
+                ViewModeIcon { list-view: PageViews.nodes-list; x: 14px; y: 14px + parent.press-offset; width: 20px; height: 20px; }
+                clicked => { PageViews.nodes-list = !PageViews.nodes-list; }
+            }
+            MField { placeholder: "搜索节点或策略组"; text <=> MobileView.query; edited(value) => { MobileActions.request(MobileIntent.query, "proxies", value); } }
+        }
         HorizontalLayout { spacing: MobileTypography.small-gap;
             MSelect { options: ["延迟从低到高", "延迟从高到低", "名称排序"]; value: self.options[MobileView.node-sort];
                 selected(index, value) => { MobileView.node-sort = index; MobileActions.request(MobileIntent.node-sort, "" + index, ""); }
             }
             MButton { text: MobileData.delay-busy ? "测速中…" : "全部测速"; compact: true; busy: MobileData.delay-busy; width: max(84px, MobileTypography.font-size(13) * 4 + 16px); horizontal-stretch: 0; enabled: MobileData.core-running && !MobileData.delay-busy && !MobileData.protection-pending;
                 clicked => { MobileActions.request(MobileIntent.delay-all, "", ""); }
-            }
-            MButton { geometry-key: "nodes-view"; width: 48px; height: 48px; horizontal-stretch: 0; quiet: true;
-                accessible-label: PageViews.nodes-list ? "切换到宫格视图" : "切换到列表视图";
-                ViewModeIcon { list-view: PageViews.nodes-list; x: 14px; y: 14px + parent.press-offset; width: 20px; height: 20px; }
-                clicked => { PageViews.nodes-list = !PageViews.nodes-list; }
             }
         }
         for group in MobileData.groups: group-card := MCard {
@@ -206,6 +208,11 @@ export component MobileSubscriptions inherits PageSurface {
     MScroll { VerticalLayout { alignment: start; spacing: MobileTypography.gap; padding-bottom: MobileTypography.padding;
         MCard { vertical-padding: 6px; horizontal-padding: 8px;
           HorizontalLayout { spacing: 6px; cross-axis-alignment: center;
+            MButton { geometry-key: "profiles-view"; width: 48px; height: 48px; horizontal-stretch: 0; quiet: true;
+                accessible-label: PageViews.profiles-list ? "切换到宫格视图" : "切换到列表视图";
+                ViewModeIcon { list-view: PageViews.profiles-list; x: 14px; y: 14px + parent.press-offset; width: 20px; height: 20px; }
+                clicked => { PageViews.profiles-list = !PageViews.profiles-list; }
+            }
             MField { placeholder: "粘贴订阅链接"; text <=> MobileView.profile-source; enabled: !MobileData.protected && !MobileData.protection-pending; }
             MButton { text: "导入"; compact: true; primary: true; enabled: !MobileData.profile-busy && !MobileData.protected && !MobileData.protection-pending; width: 56px; horizontal-stretch: 0;
                 property <[length]> target: [self.absolute-position.x, self.absolute-position.y, self.width, self.height];
@@ -215,19 +222,17 @@ export component MobileSubscriptions inherits PageSurface {
             }
           }
         }
-        HorizontalLayout { alignment: end;
-            MButton { geometry-key: "profiles-view"; width: 48px; height: 48px; horizontal-stretch: 0; quiet: true;
-                accessible-label: PageViews.profiles-list ? "切换到宫格视图" : "切换到列表视图";
-                ViewModeIcon { list-view: PageViews.profiles-list; x: 14px; y: 14px + parent.press-offset; width: 20px; height: 20px; }
-                clicked => { PageViews.profiles-list = !PageViews.profiles-list; }
-            }
-        }
-        profile-grid := GridLayout {
+        profile-grid := VerticalLayout {
         property <int> columns: PageViews.profiles-list ? 1 : max(1, floor(root.width / (288px * Theme.text-scale)));
-        spacing: MobileTypography.gap;
-        for profile[index] in MobileData.profiles: card := MCard {
+        spacing: MobileTypography.gap; alignment: start;
+        for row in ceil(MobileData.profiles.length / profile-grid.columns): HorizontalLayout {
+          spacing: MobileTypography.gap; cross-axis-alignment: start;
+          for column in profile-grid.columns: slot := VerticalLayout {
+            min-width: 0px; preferred-width: 0px; horizontal-stretch: 1; alignment: start;
+            property <int> profile-index: row * profile-grid.columns + column;
+            if slot.profile-index < MobileData.profiles.length: card := MCard {
+            property <ProfileItem> profile: MobileData.profiles[slot.profile-index];
             GeometryTarget { key: "profile:" + profile.id; bounds: [card.absolute-position.x, card.absolute-position.y, card.width, card.height]; }
-            col: mod(index, profile-grid.columns); row: floor(index / profile-grid.columns);
             min-width: 0px; preferred-width: 0px; horizontal-stretch: 1;
             property <bool> detailed: root.expanded-id == profile.id;
             property <bool> mutable: !MobileData.profile-busy && !MobileData.protected && !MobileData.protection-pending;
@@ -267,6 +272,8 @@ export component MobileSubscriptions inherits PageSurface {
                         clicked => { MobileView.selected-id = profile.id; MobileView.profile-name = profile.name; MobileView.profile-active = profile.active; MobileView.detail = 4; } }
                 }
             }
+        }
+        }
         }
         }
     } }

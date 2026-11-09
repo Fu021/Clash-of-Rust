@@ -1,8 +1,9 @@
 //! Exercise production virtual lists and rule gestures with a software window.
 use slint::{
-    ComponentHandle, Model,
+    ComponentHandle, LogicalPosition, Model,
     platform::{
-        Platform, PlatformError, WindowAdapter, WindowEventDispatchResult,
+        Platform, PlatformError, PointerEventButton, WindowAdapter, WindowEvent,
+        WindowEventDispatchResult,
         software_renderer::{MinimalSoftwareWindow, RepaintBufferType},
     },
 };
@@ -296,12 +297,17 @@ fn advance(clock: &Cell<Duration>, duration: Duration) {
     }
 }
 
-#[test]
-fn mobile_list_stacks_rows_and_keeps_sparse_content_at_the_top() {
+fn headless(width: u32, height: u32) -> (Rc<MinimalSoftwareWindow>, Rc<Cell<Duration>>) {
     let adapter = MinimalSoftwareWindow::new(RepaintBufferType::NewBuffer);
     let clock = Rc::new(Cell::new(Duration::ZERO));
     slint::platform::set_platform(Box::new(Headless(adapter.clone(), clock.clone()))).unwrap();
-    adapter.set_size(slint::PhysicalSize::new(300, 240));
+    adapter.set_size(slint::PhysicalSize::new(width, height));
+    (adapter, clock)
+}
+
+#[test]
+fn mobile_list_stacks_rows_and_keeps_sparse_content_at_the_top() {
+    let (adapter, _clock) = headless(300, 240);
     let probe = MobileListProbe::new().unwrap();
     let rows = Rc::new(slint::VecModel::from(vec![48.; 20]));
     probe.set_rows(rows.clone().into());
@@ -335,14 +341,11 @@ fn mobile_list_stacks_rows_and_keeps_sparse_content_at_the_top() {
     assert_eq!(pixels[110 * 900 + 700], slint::Rgb8Pixel::new(0, 0, 255));
     probe.hide().unwrap();
     drop(probe);
+}
 
-    // Slint installs one platform per test process, so exercise the drag probe
-    // after releasing the first window instead of installing a second platform.
-    use slint::{
-        LogicalPosition,
-        platform::{PointerEventButton, WindowEvent},
-    };
-    adapter.set_size(slint::PhysicalSize::new(300, 240));
+#[test]
+fn mobile_drag_waits_for_long_press_and_cancels_a_short_tap() {
+    let (adapter, clock) = headless(300, 240);
     let drag_probe = MobileDragProbe::new().unwrap();
     drag_probe.show().unwrap();
     frame(&adapter, 300, 240);
@@ -393,7 +396,11 @@ fn mobile_list_stacks_rows_and_keeps_sparse_content_at_the_top() {
     assert_eq!(drag_probe.get_delta(), 2);
     drag_probe.hide().unwrap();
     drop(drag_probe);
+}
 
+#[test]
+fn desktop_drag_starts_immediately_and_respects_busy_state() {
+    let (adapter, _clock) = headless(300, 240);
     let desktop = DesktopDragProbe::new().unwrap();
     desktop.show().unwrap();
     frame(&adapter, 300, 240);
@@ -450,7 +457,11 @@ fn mobile_list_stacks_rows_and_keeps_sparse_content_at_the_top() {
     assert_eq!(desktop.get_delta(), 99, "a busy handle must not reorder");
     desktop.hide().unwrap();
     drop(desktop);
+}
 
+#[test]
+fn reorder_scroll_preserves_the_lifted_row_and_cancels_stale_content() {
+    let (adapter, clock) = headless(300, 240);
     for hold_millis in [550, 0] {
         let scrolling = ReorderScrollProbe::new().unwrap();
         scrolling.set_hold_duration(hold_millis);
@@ -640,7 +651,11 @@ fn mobile_list_stacks_rows_and_keeps_sparse_content_at_the_top() {
         scrolling.hide().unwrap();
         drop(scrolling);
     }
+}
 
+#[test]
+fn reorder_header_is_excluded_from_drag_targets() {
+    let (adapter, clock) = headless(300, 240);
     let header = ReorderScrollProbe::new().unwrap();
     header.set_header_height(120.);
     header.show().unwrap();
@@ -680,8 +695,11 @@ fn mobile_list_stacks_rows_and_keeps_sparse_content_at_the_top() {
         });
     assert_eq!(header.get_drop_count(), 1);
     header.hide().unwrap();
+}
 
-    adapter.set_size(slint::PhysicalSize::new(300, 600));
+#[test]
+fn search_header_retains_focus_during_keyboard_and_model_changes() {
+    let (adapter, clock) = headless(300, 600);
     let search = HeaderSearchProbe::new().unwrap();
     let search_rows = Rc::new(slint::VecModel::from(vec![80.; 8]));
     search.set_rows(search_rows.clone().into());
@@ -764,8 +782,12 @@ fn mobile_list_stacks_rows_and_keeps_sparse_content_at_the_top() {
     frame(&adapter, 300, 600);
     assert!(search.get_header_visible_height() >= 48.);
     search.hide().unwrap();
+}
+
+#[test]
+fn locked_pages_block_clicks_and_scrolling() {
+    let (adapter, _clock) = headless(300, 240);
     let locked = LockedPageProbe::new().unwrap();
-    adapter.set_size(slint::PhysicalSize::new(300, 240));
     locked.show().unwrap();
     frame(&adapter, 300, 240);
     let click = || {
@@ -806,9 +828,12 @@ fn mobile_list_stacks_rows_and_keeps_sparse_content_at_the_top() {
     click();
     assert_eq!(locked.get_clicks(), 2);
     locked.hide().unwrap();
+}
 
+#[test]
+fn input_composition_hides_placeholders_on_mobile_and_desktop() {
+    let (adapter, _clock) = headless(320, 160);
     let fields = InputFieldsProbe::new().unwrap();
-    adapter.set_size(slint::PhysicalSize::new(320, 160));
     fields.show().unwrap();
     for mobile in [true, false] {
         fields.invoke_focus_field(mobile);
@@ -869,8 +894,11 @@ fn mobile_list_stacks_rows_and_keeps_sparse_content_at_the_top() {
         );
     }
     fields.hide().unwrap();
+}
 
-    adapter.set_size(slint::PhysicalSize::new(300, 80));
+#[test]
+fn notice_countdown_restarts_and_expires_after_five_seconds() {
+    let (adapter, clock) = headless(300, 80);
     let countdown = CountdownProbe::new().unwrap();
     countdown.show().unwrap();
     advance(&clock, Duration::from_millis(2500));
@@ -887,8 +915,11 @@ fn mobile_list_stacks_rows_and_keeps_sparse_content_at_the_top() {
     assert_eq!(countdown.get_remaining(), 0.);
     countdown.hide().unwrap();
     drop(countdown);
+}
 
-    adapter.set_size(slint::PhysicalSize::new(393, 852));
+#[test]
+fn mobile_notices_reflow_and_preserve_the_underlying_draft() {
+    let (adapter, clock) = headless(393, 852);
     let notice = MobileNoticeProbe::new().unwrap();
     notice.set_detail(3);
     notice.set_draft("Unchanged subscription draft".into());
@@ -951,7 +982,11 @@ fn mobile_list_stacks_rows_and_keeps_sparse_content_at_the_top() {
     }
     notice.hide().unwrap();
     drop(notice);
-    adapter.set_size(slint::PhysicalSize::new(500, 240));
+}
+
+#[test]
+fn desktop_scroll_clamps_after_content_and_viewport_changes() {
+    let (adapter, clock) = headless(500, 240);
     let desktop = DesktopScrollProbe::new().unwrap();
     desktop.show().unwrap();
     frame(&adapter, 500, 240);
@@ -991,8 +1026,11 @@ fn mobile_list_stacks_rows_and_keeps_sparse_content_at_the_top() {
     assert_eq!(desktop.get_offset(), 0.);
     desktop.hide().unwrap();
     drop(desktop);
+}
 
-    adapter.set_size(slint::PhysicalSize::new(740, 360));
+#[test]
+fn settings_navigation_tracks_scroll_and_preserves_drafts() {
+    let (adapter, clock) = headless(740, 360);
     let settings = SettingsScrollProbe::new().unwrap();
     settings.set_draft("7897".into());
     let targets = Rc::new(RefCell::new(std::collections::BTreeMap::new()));
@@ -1076,8 +1114,11 @@ fn mobile_list_stacks_rows_and_keeps_sparse_content_at_the_top() {
     assert_eq!(settings.get_draft(), "7897");
     settings.hide().unwrap();
     drop(settings);
+}
 
-    adapter.set_size(slint::PhysicalSize::new(200, 100));
+#[test]
+fn compact_mobile_buttons_keep_their_touch_targets() {
+    let (adapter, _clock) = headless(200, 100);
     let compact = CompactButtonProbe::new().unwrap();
     compact.show().unwrap();
     let pixels = frame(&adapter, 200, 100);
@@ -1102,29 +1143,30 @@ fn mobile_list_stacks_rows_and_keeps_sparse_content_at_the_top() {
     }
     compact.hide().unwrap();
     drop(compact);
+}
 
-    adapter.set_size(slint::PhysicalSize::new(740, 1100));
+#[test]
+fn mobile_subscriptions_reflow_and_keep_local_profile_actions() {
+    let (adapter, clock) = headless(740, 1100);
     let profiles = MobileProfilesProbe::new().unwrap();
-    profiles.set_profiles(
-        Rc::new(slint::VecModel::from(vec![
-            ProfileItem {
-                id: "imported".into(),
-                name: "Imported file".into(),
-                local: true,
-                active: true,
-                ..Default::default()
-            },
-            ProfileItem {
-                id: "builtin".into(),
-                name: "默认直连".into(),
-                source: "default.yaml".into(),
-                local: true,
-                builtin: true,
-                ..Default::default()
-            },
-        ]))
-        .into(),
-    );
+    let profile_items = Rc::new(slint::VecModel::from(vec![
+        ProfileItem {
+            id: "imported".into(),
+            name: "Imported file".into(),
+            local: true,
+            active: true,
+            ..Default::default()
+        },
+        ProfileItem {
+            id: "builtin".into(),
+            name: "默认直连".into(),
+            source: "default.yaml".into(),
+            local: true,
+            builtin: true,
+            ..Default::default()
+        },
+    ]));
+    profiles.set_profiles(profile_items.clone().into());
     let targets = Rc::new(RefCell::new(std::collections::BTreeMap::new()));
     let measured_targets = targets.clone();
     profiles
@@ -1144,7 +1186,46 @@ fn mobile_list_stacks_rows_and_keeps_sparse_content_at_the_top() {
     profiles.show().unwrap();
     advance(&clock, Duration::from_secs(1));
     frame(&adapter, 740, 1100);
+    let mut renamed = profile_items.row_data(0).unwrap();
+    renamed.name = "Renamed imported file".into();
+    profile_items.set_row_data(0, renamed);
+    profile_items.push(ProfileItem {
+        id: "temporary".into(),
+        name: "Temporary remote subscription".into(),
+        ..Default::default()
+    });
+    advance(&clock, Duration::from_secs(1));
+    frame(&adapter, 740, 1100);
+    {
+        let targets = targets.borrow();
+        let first = &targets["profile:imported"];
+        let third = &targets["profile:temporary"];
+        assert!(third[1] >= first[1] + first[3]);
+        assert!((third[0] - first[0]).abs() < 1.);
+    }
+    profile_items.remove(2);
+    let restored = profile_items.iter().collect::<Vec<_>>();
+    profile_items.set_vec(Vec::new());
+    advance(&clock, Duration::from_secs(1));
+    frame(&adapter, 740, 1100);
+    profile_items.set_vec(restored);
+    advance(&clock, Duration::from_secs(1));
+    frame(&adapter, 740, 1100);
     let bounds = |key: &str| targets.borrow()[key].clone();
+    for width in [320, 740] {
+        adapter.set_size(slint::PhysicalSize::new(width, 1100));
+        advance(&clock, Duration::from_secs(1));
+        frame(&adapter, width as usize, 1100);
+        let first = bounds("profile:imported");
+        let second = bounds("profile:builtin");
+        assert!(first[0] >= 0. && first[0] + first[2] <= width as f32 + 1.);
+        assert!(second[0] >= 0. && second[0] + second[2] <= width as f32 + 1.);
+        if width == 320 {
+            assert!(second[1] >= first[1] + first[3]);
+        } else {
+            assert!((first[1] - second[1]).abs() < 1.);
+        }
+    }
     let click = |key: &str| {
         let bounds = bounds(key);
         let position = LogicalPosition::new(bounds[0] + bounds[2] / 2., bounds[1] + bounds[3] / 2.);
@@ -1182,6 +1263,16 @@ fn mobile_list_stacks_rows_and_keeps_sparse_content_at_the_top() {
     profiles.set_selected_id("".into());
     click("profiles-view");
     assert!(profiles.get_list_view());
+    for width in [320, 740] {
+        adapter.set_size(slint::PhysicalSize::new(width, 1100));
+        advance(&clock, Duration::from_secs(1));
+        frame(&adapter, width as usize, 1100);
+        let first = bounds("profile:imported");
+        let second = bounds("profile:builtin");
+        assert!(first[0] >= 0. && first[0] + first[2] <= width as f32 + 1.);
+        assert!((first[0] - second[0]).abs() < 1.);
+        assert!(second[1] >= first[1] + first[3]);
+    }
     let imported = bounds("profile:imported");
     let builtin = bounds("profile:builtin");
     assert!(

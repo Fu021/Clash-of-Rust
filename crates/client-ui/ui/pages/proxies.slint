@@ -55,9 +55,9 @@ export component ProxiesPage inherits PageSurface {
             alignment: start;
             padding-right: Theme.content-gap; spacing: Theme.page-gap;
             HorizontalLayout { cross-axis-alignment: center; spacing: Theme.content-gap;
+                ViewToggle { geometry-key: "nodes-view"; list-view <=> PageViews.nodes-list; }
                 Field { placeholder: "搜索节点或代理组"; focus-id: "page-search"; text <=> UiData.query; edited(value) => { UiActions.dispatch(Intent.query, value, ""); } }
                 Select { geometry-key: "node-sort"; width: 172px; horizontal-stretch: 0; options: ["延迟从低到高", "延迟从高到低", "名称排序"]; value: self.options[UiData.node-sort]; selected(index, value) => { UiActions.dispatch(Intent.node-sort, "" + index, ""); } }
-                ViewToggle { geometry-key: "nodes-view"; list-view <=> PageViews.nodes-list; }
             }
             for group in UiData.groups: group-card := ContentPanel {
                 property <[NodePair]> closing-nodes;

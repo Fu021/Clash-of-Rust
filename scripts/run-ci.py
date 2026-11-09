@@ -28,7 +28,8 @@ def main():
     messages = cargo_messages(['cargo', 'test', *packages, '--release', '--locked', '--lib', '--bins', '--tests',
                               '--no-run', '--message-format=json'])
     tests = test_binaries(messages)
-    run(['cargo', 'test', *packages, '--release', '--locked', '--lib', '--bins', '--tests', '--', '--test-threads=1'])
+    run(['cargo', 'test', *packages, '--release', '--locked', '--lib', '--bins', '--tests',
+         '--no-fail-fast', '--', '--test-threads=1'])
     spec = importlib.util.spec_from_file_location('prepare', ROOT/'scripts/prepare-resources.py')
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)

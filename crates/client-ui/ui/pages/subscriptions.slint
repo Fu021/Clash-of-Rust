@@ -94,7 +94,7 @@ export component SubscriptionsPage inherits PageSurface {
             Panel {
                 height: importer.preferred-height; border-radius: 16px;
                 importer := HorizontalLayout { padding: 8px; spacing: 8px; cross-axis-alignment: center;
-                    Image { source: @image-url("../icons/subscriptions.svg"); width: 20px; height: 20px; colorize: Theme.muted; }
+                    ViewToggle { geometry-key: "profiles-view"; list-view <=> PageViews.profiles-list; }
                     Field {
                         placeholder: "粘贴订阅链接"; borderless: true;
                         text <=> UiData.profile-source; enabled: !UiData.protected && !UiData.protection-pending; edited(value) => { UiActions.dispatch(Intent.profile-source, value, ""); }
@@ -106,7 +106,6 @@ export component SubscriptionsPage inherits PageSurface {
             }
             HorizontalLayout { spacing: Theme.content-gap; cross-axis-alignment: center;
                 Field { placeholder: "搜索名称或来源"; focus-id: "page-search"; text <=> UiData.query; edited(value) => { UiActions.dispatch(Intent.query, value, ""); } }
-                ViewToggle { geometry-key: "profiles-view"; list-view <=> PageViews.profiles-list; }
             }
             grid := CardGrid {
                 list-view: PageViews.profiles-list;

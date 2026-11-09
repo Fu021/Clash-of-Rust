@@ -299,7 +299,8 @@ def build(arch):
     workspace_sources(ROOT)
     packages = ['-p', 'clash-mobile-runtime', '-p', 'clash-android']
     cargo_build(['cargo', 'clippy', *packages, '--release', '--all-targets', '--locked', '--', '-D', 'warnings'], cwd=ROOT)
-    run(['cargo', 'test', *packages, '--release', '--locked', '--lib', '--', '--test-threads=1'], cwd=ROOT)
+    run(['cargo', 'test', *packages, '--release', '--locked', '--lib',
+         '--no-fail-fast', '--', '--test-threads=1'], cwd=ROOT)
     abi, target, clang_target, go_arch = ABIS[arch]
     ndk = Path(os.environ['ANDROID_NDK_ROOT'])
     toolchain = ndk/'toolchains/llvm/prebuilt/linux-x86_64/bin'
