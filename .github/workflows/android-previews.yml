@@ -1,4 +1,4 @@
-name: Android Application Previews
+name: Android UI Previews
 on:
   workflow_dispatch:
     inputs:
@@ -44,11 +44,11 @@ jobs:
           args=()
           if [[ -n "$SOURCE_RUN" ]]; then args+=(--run-id "$SOURCE_RUN"); fi
           python3 scripts/android_previews.py "${args[@]}"
-  applications:
-    name: Android ${{ matrix.android }} application list
+  screenshots:
+    name: Android ${{ matrix.android }} UI screenshots
     needs: resolve
     runs-on: ubuntu-latest
-    timeout-minutes: 35
+    timeout-minutes: 45
     permissions:
       actions: read
       contents: read
@@ -117,12 +117,12 @@ jobs:
         uses: ./.github/actions/upstream-report
         with:
           checkpoint: 'true'
-      - name: Capture the real Slint application list
+      - name: Capture Slint pages and the installed application list
         run: python3 scripts/android.py application-preview --arch x64 --api ${{ matrix.api }} --build android-preview-input
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
         if: always()
         with:
-          name: android-${{ matrix.android }}-application-list
+          name: android-${{ matrix.android }}-ui-screenshots
           path: target/android-report
           if-no-files-found: error
           retention-days: 7

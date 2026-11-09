@@ -100,7 +100,7 @@ def export_build(system, arch, tests, output, binaries=None):
                     'tests': paths, 'files': records}
         from build_inputs import verified_manifest, toolchain_report
         manifest['build_inputs'] = verified_manifest()
-        manifest['toolchain'] = toolchain_report()
+        manifest['toolchain'] = toolchain_report(system)
         if system == 'linux' and (os.environ.get('GITHUB_ACTIONS') == 'true'
                                   or os.environ.get('COR_LINUX_BASELINE')):
             from linux_ci import audit_elf, baseline_report

@@ -8,6 +8,7 @@ import { MobileDetails, MobileModal } from "details.slint";
 import { ProtectionBadge, ProtectionAlert } from "../../components/protection-status.slint";
 import { Wordmark, ConnectionPower } from "../../components/brand.slint";
 import { RuleShortcutsDialog } from "../../components/rule-shortcuts.slint";
+import { GeometryTarget } from "../../components/geometry.slint";
 
 component RulesShortcutButton inherits MButton {
     geometry-key: "rule-shortcuts-open";
@@ -152,20 +153,20 @@ export component MobileFrame inherits Rectangle {
                     if root.expanded: VerticalLayout { alignment: start; spacing: 4px;
                         for route-id in root.sidebar-pages: VerticalLayout { alignment: start; spacing: 4px;
                             if route-id == 6: MSmall { text: "工具"; height: max(28px, MobileTypography.font-size(12) + 12px); font-size: MobileTypography.font-size(12); }
-                            MNav { height: 48px; text: root.titles[route-id]; icon: root.icons[route-id]; selected: MobileView.page == route-id || (route-id == 10 && MobileView.page >= 3 && MobileView.page <= 8);
+                            MNav { geometry-key: "preview-nav:" + route-id; height: 48px; text: root.titles[route-id]; icon: root.icons[route-id]; selected: MobileView.page == route-id || (route-id == 10 && MobileView.page >= 3 && MobileView.page <= 8);
                                 clicked => { MobileView.navigate(route-id); }
                             }
                         }
                     }
                     if !root.expanded: VerticalLayout { alignment: start; spacing: root.short ? 0px : 8px;
-                        for route-id in root.primary-pages: MNav { height: root.short ? 56px : 68px; stacked: true; pill: root.tab-pill;
+                        for route-id in root.primary-pages: MNav { geometry-key: "preview-nav:" + route-id; height: root.short ? 56px : 68px; stacked: true; pill: root.tab-pill;
                             text: root.titles[route-id]; icon: root.icons[route-id]; selected: MobileView.page == route-id || (route-id == 10 && MobileView.page >= 3 && MobileView.page <= 8);
                             clicked => { MobileView.navigate(route-id); }
                         }
                     }
                 }
                 if root.expanded: VerticalLayout { vertical-stretch: 0; spacing: 10px;
-                    for route-id in root.sidebar-footer-pages: MNav { height: 48px; text: root.titles[route-id]; icon: root.icons[route-id]; selected: MobileView.page == route-id;
+                    for route-id in root.sidebar-footer-pages: MNav { geometry-key: "preview-nav:" + route-id; height: 48px; text: root.titles[route-id]; icon: root.icons[route-id]; selected: MobileView.page == route-id;
                         clicked => { MobileView.navigate(route-id); }
                     }
                     MSmall { height: 28px; text: MobileData.version; }
@@ -215,7 +216,10 @@ export component MobileFrame inherits Rectangle {
             height: max(0px, root.usable-height - (self.y - MobileView.safe-top) - (root.bottom ? root.bottom-height - MobileView.safe-bottom : 0px));
             HorizontalLayout { spacing: MobileTypography.padding;
                 Rectangle {
-                    page-host := Rectangle { x: 0px; y: 0px; width: parent.width; height: parent.height; visible: !root.detail-page || root.pane; @children }
+                    page-host := Rectangle { x: 0px; y: 0px; width: parent.width; height: parent.height; visible: !root.detail-page || root.pane;
+                        GeometryTarget { key: "preview-content"; bounds: [page-host.absolute-position.x, page-host.absolute-position.y, page-host.width, page-host.height]; }
+                        @children
+                    }
                     if root.detail-page && !root.pane: MobileDetails { width: parent.width; height: parent.height; }
                 }
                 if root.pane: Rectangle { width: 344px;
@@ -235,7 +239,7 @@ export component MobileFrame inherits Rectangle {
             animate background { duration: Motion.appearance; enabled: Motion.active; }
             Rectangle { x: 0px; y: 0px; height: 1px; width: parent.width; background: Theme.line; }
             HorizontalLayout { x: MobileView.safe-left + 8px; y: 4px; width: root.usable-width - 16px; height: root.nav-content-height; spacing: 4px;
-                for route-id in root.primary-pages: MNav { stacked: true; pill: root.tab-pill;
+                for route-id in root.primary-pages: MNav { geometry-key: "preview-nav:" + route-id; stacked: true; pill: root.tab-pill;
                     text: root.titles[route-id]; icon: root.icons[route-id]; selected: MobileView.page == route-id || (route-id == 10 && MobileView.page >= 3 && MobileView.page <= 8);
                     clicked => { MobileView.navigate(route-id); }
                 }

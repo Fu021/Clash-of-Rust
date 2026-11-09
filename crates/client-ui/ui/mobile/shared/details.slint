@@ -220,6 +220,7 @@ export component MobileModal inherits Rectangle {
                         }
                     }
                     if root.kind != 11: MButton {
+                        geometry-key: root.kind == 12 ? "preview-discard" : "";
                         modal-control: true; primary: root.kind == 8 || root.kind == 13; danger: root.kind == 4 || root.kind == 12;
                         enabled: !MobileData.profile-busy && !MobileData.protected && !MobileData.protection-pending && (root.kind != 8 || root.seconds == 0) && (root.kind != 13 || MobileData.update-confirm-wait == 0);
                         busy: root.kind == 4 && MobileData.profile-busy;

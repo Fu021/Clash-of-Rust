@@ -17,7 +17,7 @@
 | `workflow_storage.py` | CLI | 限制 GitHub Actions 热缓存容量并保留需要的版本。 |
 | `prepare-resources.py` | CLI | 校验并准备 mihomo、Geo 和桌面共享资源。 |
 | `prepare-assets.py` | 维护 CLI | 生成图标、CLDR 国家名称，或核验 Windows 嵌入图标；普通构建不运行，不生成国旗图片。 |
-| `android.py` | CLI | Android 编译、模拟器测试、产物导出与已测试 APK 打包；默认只运行基础代理/TUN，分流和生命周期由 CI 策略按需选择。`application-preview --arch x64 --api LEVEL --build DIRECTORY` 校验设备版本及本轮归档，再采集实际应用列表截图，不启动 VPN；版本范围与入口见[应用列表预览](../docs/workflows/ci.md#android-应用列表预览)。输入法调查仍需明确要求，使用 `emulator --legacy` / `--api` 和 `test --ime-only`。 |
+| `android.py` | CLI | Android 编译、模拟器测试、产物导出与已测试 APK 打包；默认只运行基础代理/TUN，分流和生命周期由 CI 策略按需选择。`application-preview --arch x64 --api LEVEL --build DIRECTORY` 校验设备版本及本轮归档，再采集主要页面和实际应用列表截图，不启动 VPN；版本范围与入口见[Android 界面预览](../docs/workflows/ci.md#android-界面预览)。输入法调查仍需明确要求，使用 `emulator --legacy` / `--api` 和 `test --ime-only`。 |
 | `build-installer.py` | CLI | 只组装已验证产物为 Windows、Linux 或 macOS 安装包。 |
 | `macos_package.py` | 模块 | macOS App / DMG 组装；被打包器和 macOS 验证延迟导入。 |
 | `publish-release.py` | CLI / 模块 | 核验成功 CI 候选包及安装收据，公开模式改取发行签名 Android 包；不重新打包桌面，按版本生成下载与下载量徽章。 |

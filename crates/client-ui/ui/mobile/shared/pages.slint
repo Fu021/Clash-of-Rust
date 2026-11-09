@@ -367,7 +367,7 @@ component RulesToolbar inherits VerticalLayout {
             selected(index, value) => { MobileView.rule-source = value; MobileActions.request(MobileIntent.rule-filter, value, ""); }
         }
         MButton { enabled: !MobileData.protected && !MobileData.protection-pending; col: parent.narrow ? 1 : 2; row: parent.narrow ? 1 : 0;
-            text: "+ 新建"; primary: true; width: parent.narrow ? max(88px, (parent.width - MobileTypography.small-gap) / 2) : 88px; horizontal-stretch: 0;
+            geometry-key: "preview-rule-add"; text: "+ 新建"; primary: true; width: parent.narrow ? max(88px, (parent.width - MobileTypography.small-gap) / 2) : 88px; horizontal-stretch: 0;
             clicked => { MobileView.selected-id = ""; MobileView.rule-kind = "DOMAIN-SUFFIX"; MobileView.rule-policy = "DIRECT"; MobileView.rule-position = "1";
                 MobileView.rule-payload = ""; MobileView.rule-raw = ""; MobileView.rule-text-mode = false; MobileView.rule-no-resolve = false; MobileView.rule-enabled = true; MobileView.draft-dirty = false; MobileView.detail = 2; }
         }
@@ -700,7 +700,7 @@ export component MobileTools inherits PageSurface {
                     Rectangle { width: 34px; height: 34px; border-radius: 10px; background: Theme.inset;
                         Image { x: 8px; y: 8px; width: 18px; height: 18px; colorize: Theme.secondary; source: [@image-url("../../icons/connections.svg"), @image-url("../../icons/rules.svg"), @image-url("../../icons/logs.svg")][index]; }
                     }
-                    MRow { title: ["连接", "规则", "日志"][index]; subtitle: index == 0 ? MobileData.connection-count + " 条活跃连接" : index == 1 ? "快捷规则与匹配顺序" : "查看与导出运行记录";
+                    MRow { geometry-key: "preview-tool:" + route; title: ["连接", "规则", "日志"][index]; subtitle: index == 0 ? MobileData.connection-count + " 条活跃连接" : index == 1 ? "快捷规则与匹配顺序" : "查看与导出运行记录";
                         value: index == 1 && MobileData.rule-dirty ? "尚未应用" : ""; value-color: Theme.warning;
                         clicked => { MobileView.navigate(route); }
                     }
@@ -715,7 +715,7 @@ export component MobileTools inherits PageSurface {
                     Rectangle { width: 34px; height: 34px; border-radius: 10px; background: Theme.inset;
                         Image { x: 8px; y: 8px; width: 18px; height: 18px; colorize: Theme.secondary; source: [@image-url("../../icons/network.svg"), @image-url("../../icons/ip.svg"), @image-url("../../icons/ai.svg")][index]; }
                     }
-                    MRow { title: ["网络诊断", "IP 检测", "A÷检测"][index]; subtitle: index == 0 ? "网站响应、DNS 与出口" : index == 1 ? "平台可用情况与地区报告" : "地区线索与配置";
+                    MRow { geometry-key: "preview-tool:" + route; title: ["网络诊断", "IP 检测", "A÷检测"][index]; subtitle: index == 0 ? "网站响应、DNS 与出口" : index == 1 ? "平台可用情况与地区报告" : "地区线索与配置";
                         value: index == 2 && MobileData.claude-risk != "0" ? MobileData.claude-risk + " 风险" : ""; value-color: Theme.danger;
                         clicked => { MobileView.navigate(route); }
                     }

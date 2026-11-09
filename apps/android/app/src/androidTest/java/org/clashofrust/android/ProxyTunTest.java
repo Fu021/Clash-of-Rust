@@ -1013,55 +1013,275 @@ public class ProxyTunTest {
         assertNotNull("An HTTP error must fail without a readiness retry",rejected);
         assertHeldResponse(new BufferedReader(new StringReader("HTTP/1.1 200 OK\r\nX-Test: 1\r\n\r\nx")));
     }
-    @Test public void applicationListPreviewCapturesInstalledApps() throws Exception {
+    private static JSONArray previewBounds(JSONObject ui, String name) {
+        JSONObject targets = ui.optJSONObject("targets");
+        return targets == null ? null : targets.optJSONArray(name);
+    }
+    private static boolean tryPreviewTarget(String name) throws Exception {
+        JSONObject ui = MainActivity.diagnostics();
+        JSONArray bounds = previewBounds(ui, name);
+        if (!ui.optBoolean("live") || bounds == null || bounds.length() != 4
+                || bounds.optDouble(2) <= 0 || bounds.optDouble(3) <= 0) return false;
+        double x = bounds.getDouble(0) + bounds.getDouble(2) / 2;
+        double y = bounds.getDouble(1) + bounds.getDouble(3) / 2;
+        if (x < 0 || y < 0 || x >= ui.getDouble("width") || y >= ui.getDouble("height")) return false;
+        float scale = (float)ui.getDouble("scale");
+        return tryTap((float)x * scale, (float)y * scale);
+    }
+    private static void previewTarget(String name) throws Exception {
+        await("Screenshot control was unavailable: " + name, () -> tryPreviewTarget(name));
+    }
+    private static void previewSwipe(boolean forward) throws Exception {
+        JSONObject ui = MainActivity.diagnostics();
+        JSONArray bounds = previewBounds(ui, "preview-content");
+        assertNotNull("Screenshot content has no measured bounds", bounds);
+        float scale = (float)ui.getDouble("scale");
+        float x = (float)(bounds.getDouble(0) + bounds.getDouble(2) * 0.55) * scale;
+        float top = (float)(bounds.getDouble(1) + bounds.getDouble(3) * 0.22) * scale;
+        float bottom = (float)(bounds.getDouble(1) + bounds.getDouble(3) * 0.78) * scale;
+        float start = forward ? bottom : top, end = forward ? top : bottom;
+        long down = SystemClock.uptimeMillis();
+        pointer(MotionEvent.ACTION_DOWN, x, start, down, down);
+        for (int index = 1; index <= 12; index++) {
+            SystemClock.sleep(20);
+            pointer(MotionEvent.ACTION_MOVE, x, start + (end - start) * index / 12, down, SystemClock.uptimeMillis());
+        }
+        pointer(MotionEvent.ACTION_UP, x, end, down, SystemClock.uptimeMillis());
+        SystemClock.sleep(500);
+    }
+    private static void previewNavigate(int page) throws Exception {
+        await("Could not navigate to screenshot page " + page, () -> {
+            JSONObject ui = MainActivity.diagnostics();
+            if (ui.optInt("page", -1) == page && ui.optInt("detail", -1) == 0) return true;
+            tryPreviewTarget("preview-nav:" + page);
+            SystemClock.sleep(350);
+            return false;
+        });
+    }
+    private static void previewTool(int page) throws Exception {
+        previewNavigate(10);
+        for (int attempt = 0; attempt < 5; attempt++) {
+            JSONObject ui = MainActivity.diagnostics();
+            JSONArray bounds = previewBounds(ui, "preview-tool:" + page);
+            JSONArray content = previewBounds(ui, "preview-content");
+            if (bounds != null && content != null && bounds.length() == 4 && content.length() == 4) {
+                double center = bounds.getDouble(1) + bounds.getDouble(3) / 2;
+                if (center >= content.getDouble(1) && center < content.getDouble(1) + content.getDouble(3)) {
+                    previewTarget("preview-tool:" + page);
+                    await("Tool page did not open: " + page,
+                        () -> MainActivity.diagnostics().optInt("page", -1) == page);
+                    return;
+                }
+                previewSwipe(center > content.getDouble(1));
+            } else {
+                SystemClock.sleep(350);
+            }
+        }
+        fail("Tool is outside the screenshot viewport: " + page);
+    }
+    private static void capturePreview(File directory, JSONArray cases, String name) throws Exception {
+        SystemClock.sleep(400);
+        JSONObject ui = MainActivity.diagnostics();
+        assertTrue("Screenshot is not from the live Slint window: " + name, ui.optBoolean("live"));
+        assertFalse("Screenshot preview must not start VPN", TunnelService.connected() || TunnelService.pending());
+        android.graphics.Bitmap screenshot = InstrumentationRegistry.getInstrumentation().getUiAutomation().takeScreenshot();
+        assertNotNull("Could not capture " + name, screenshot);
+        int width = screenshot.getWidth(), height = screenshot.getHeight();
+        try (OutputStream output = new FileOutputStream(new File(directory, name + ".png"))) {
+            assertTrue("Could not encode " + name, screenshot.compress(android.graphics.Bitmap.CompressFormat.PNG, 100, output));
+        } finally { screenshot.recycle(); }
+        cases.put(new JSONObject().put("name", name).put("image", name + ".png")
+            .put("pixel_width", width).put("pixel_height", height).put("state", ui));
+        JSONObject manifest = new JSONObject().put("schema", 2).put("scope", "android-ui-preview")
+            .put("android_api", Build.VERSION.SDK_INT).put("android_release", Build.VERSION.RELEASE)
+            .put("cases", cases);
+        java.nio.file.Files.write(new File(directory, "manifest.json").toPath(),
+            manifest.toString(2).getBytes(StandardCharsets.UTF_8));
+    }
+    private static void previewSettingsTop() throws Exception {
+        for (int attempt = 0; attempt < 6 && MainActivity.diagnostics().optDouble("settings_scroll_y") < -2; attempt++)
+            previewSwipe(false);
+        assertTrue("Settings did not return to its top",
+            MainActivity.diagnostics().optDouble("settings_scroll_y") >= -2);
+    }
+    private static void previewSettings(File directory, JSONArray cases, String prefix) throws Exception {
+        previewNavigate(9);
+        previewSettingsTop();
+        capturePreview(directory, cases, prefix + "-settings-top");
+        previewSwipe(true);
+        capturePreview(directory, cases, prefix + "-settings-middle");
+        previewSwipe(true);
+        capturePreview(directory, cases, prefix + "-settings-bottom");
+        previewSettingsTop();
+    }
+    private static void previewApplicationCatalog(Context context) throws Exception {
+        JSONObject catalog = ApplicationCatalog.read(context);
+        JSONArray entries = catalog.getJSONArray("applications");
+        java.util.Set<String> selected = ApplicationRouting.load(context).packages;
+        int expected = 0, other = 0;
+        for (int index = 0; index < entries.length(); index++) {
+            JSONObject item = entries.getJSONObject(index);
+            boolean visible = item.getBoolean("launchable") || !item.getBoolean("system")
+                || selected.contains(item.getString("package"));
+            if (visible) {
+                expected++;
+                if (!context.getPackageName().equals(item.getString("package"))) other++;
+            }
+        }
+        JSONObject ui = MainActivity.diagnostics();
+        assertEquals("Application enumeration failed: " + ui, "", ui.getString("applications_error"));
+        assertEquals(entries.length(), ui.getInt("applications_total"));
+        assertEquals(expected, ui.getInt("applications_visible"));
+        assertTrue("The emulator has no other visible applications", other > 0);
+    }
+    private static void previewApplications(Context context, File directory, JSONArray cases,
+            String prefix, boolean modes) throws Exception {
+        previewNavigate(9);
+        previewSettingsTop();
+        await("Application routing entry was not laid out", () -> {
+            JSONArray target = MainActivity.diagnostics().optJSONArray("applications_target");
+            return target != null && target.length() == 4 && target.optDouble(2) > 0 && target.optDouble(3) > 0;
+        });
+        tapTarget("applications_target");
+        await("Application enumeration did not finish", () -> {
+            JSONObject ui = MainActivity.diagnostics();
+            return ui.optInt("detail") == 18 && !ui.optBoolean("applications_loading")
+                && (ui.optBoolean("applications_loaded") || !ui.optString("applications_error").isEmpty());
+        });
+        previewApplicationCatalog(context);
+        capturePreview(directory, cases, prefix + "-applications-default");
+        if (modes) {
+            previewTarget("preview-applications-system");
+            await("System components did not become visible",
+                () -> MainActivity.diagnostics().optBoolean("applications_system"));
+            capturePreview(directory, cases, prefix + "-applications-system");
+            previewTarget("preview-applications-system");
+            await("System component filter did not return",
+                () -> !MainActivity.diagnostics().optBoolean("applications_system"));
+            for (int mode = 1; mode <= 2; mode++) {
+                previewTarget("preview-applications-mode");
+                if (mode == 1) capturePreview(directory, cases, prefix + "-applications-menu");
+                else SystemClock.sleep(400);
+                JSONObject ui = MainActivity.diagnostics();
+                JSONArray bounds = previewBounds(ui, "preview-applications-mode");
+                assertNotNull("Application mode control is missing", bounds);
+                float scale = (float)ui.getDouble("scale");
+                float x = (float)(bounds.getDouble(0) + bounds.getDouble(2) / 2) * scale;
+                float y = (float)(bounds.getDouble(1) + bounds.getDouble(3) + 4 + 8 + 24 + mode * 52) * scale;
+                tap(x, y);
+                final int expected = mode;
+                await("Application routing mode did not change to " + mode,
+                    () -> MainActivity.diagnostics().optInt("applications_mode", -1) == expected);
+                capturePreview(directory, cases, prefix + (mode == 1 ? "-applications-only" : "-applications-exclude"));
+            }
+        }
+        previewSwipe(true);
+        capturePreview(directory, cases, prefix + "-applications-scrolled");
+        shell("input keyevent KEYCODE_BACK");
+        if (modes) {
+            await("Unsaved application changes did not request confirmation",
+                () -> MainActivity.diagnostics().optInt("detail") == 12);
+            capturePreview(directory, cases, prefix + "-applications-unsaved");
+            previewTarget("preview-discard");
+        }
+        await("Application routing did not return to settings",
+            () -> MainActivity.diagnostics().optInt("detail", -1) == 0);
+    }
+    private static void previewPrimaryPages(File directory, JSONArray cases, String prefix) throws Exception {
+        previewNavigate(0);
+        capturePreview(directory, cases, prefix + "-home");
+        previewNavigate(1);
+        await("Proxy groups were not loaded", () -> MainActivity.diagnostics().optInt("groups") > 0);
+        capturePreview(directory, cases, prefix + "-proxies-grid");
+        previewTarget("nodes-view");
+        await("Proxy list view did not open", () -> MainActivity.diagnostics().optBoolean("nodes_list"));
+        capturePreview(directory, cases, prefix + "-proxies-list");
+        previewTarget("nodes-view");
+        await("Proxy grid view did not return", () -> !MainActivity.diagnostics().optBoolean("nodes_list"));
+        previewNavigate(2);
+        await("Subscriptions were not loaded", () -> MainActivity.diagnostics().optInt("profiles") > 0);
+        capturePreview(directory, cases, prefix + "-subscriptions-grid");
+        previewTarget("profiles-view");
+        await("Subscription list view did not open", () -> MainActivity.diagnostics().optBoolean("profiles_list"));
+        capturePreview(directory, cases, prefix + "-subscriptions-list");
+        previewTarget("profiles-view");
+        await("Subscription grid view did not return", () -> !MainActivity.diagnostics().optBoolean("profiles_list"));
+    }
+    @Test public void androidUiPreviewCapturesPagesAndApplications() throws Exception {
         Context context = InstrumentationRegistry.getInstrumentation().getTargetContext();
         String before = ApplicationRouting.load(context).summary();
-        context.startActivity(new Intent(context, MainActivity.class).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK));
         File directory = new File(context.getExternalFilesDir(null), "application-preview");
         assertTrue(directory.isDirectory() || directory.mkdirs());
+        JSONArray cases = new JSONArray();
+        android.app.UiAutomation automation = InstrumentationRegistry.getInstrumentation().getUiAutomation();
+        context.startActivity(new Intent(context, MainActivity.class).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK));
         try {
-            await("Slint did not start for the application list preview",
-                () -> MainActivity.diagnostics().optBoolean("live"));
-            tab(4, 9);
-            if (MainActivity.diagnostics().optBoolean("notice_error")) tapTarget("notice_close_target");
-            tapTarget("applications_target");
-            await("Application enumeration did not finish", () -> {
-                JSONObject ui = MainActivity.diagnostics();
-                return ui.optInt("detail") == 18 && !ui.optBoolean("applications_loading")
-                    && (ui.optBoolean("applications_loaded") || !ui.optString("applications_error").isEmpty());
-            });
-            JSONObject catalog = ApplicationCatalog.read(context);
-            JSONArray entries = catalog.getJSONArray("applications");
-            java.util.Set<String> selected = ApplicationRouting.load(context).packages;
-            int expected = 0, other = 0;
-            for (int index = 0; index < entries.length(); index++) {
-                JSONObject item = entries.getJSONObject(index);
-                boolean visible = item.getBoolean("launchable") || !item.getBoolean("system")
-                    || selected.contains(item.getString("package"));
-                if (visible) {
-                    expected++;
-                    if (!context.getPackageName().equals(item.getString("package"))) other++;
+            await("Slint did not start for Android screenshots", () -> MainActivity.diagnostics().optBoolean("live"));
+            await("Android screenshot activity did not receive focus", () -> inStage(androidx.test.runner.lifecycle.Stage.RESUMED, true));
+            waitForAppWindow();
+            if (MainActivity.diagnostics().optBoolean("notice_error")) {
+                capturePreview(directory, cases, "startup-error");
+                tapTarget("notice_close_target");
+                await("Startup error did not close", () -> !MainActivity.diagnostics().optBoolean("notice_active"));
+            }
+            previewApplications(context, directory, cases, "phone", true);
+            previewPrimaryPages(directory, cases, "phone");
+            tapTarget("profile_add_target");
+            await("Subscription editor did not open", () -> MainActivity.diagnostics().optInt("detail") == 3);
+            capturePreview(directory, cases, "phone-subscription-editor");
+            shell("input keyevent KEYCODE_BACK");
+            await("Subscription editor did not close", () -> MainActivity.diagnostics().optInt("detail") == 0);
+            previewNavigate(10);
+            capturePreview(directory, cases, "phone-tools");
+            for (int page = 3; page <= 8; page++) {
+                previewTool(page);
+                String[] names = {"connections", "rules", "logs", "network", "ip", "ai"};
+                capturePreview(directory, cases, "phone-" + names[page - 3]);
+                if (page == 4) {
+                    previewTarget("rule-shortcuts-open");
+                    await("Rule shortcuts did not open", () -> MainActivity.diagnostics().optBoolean("shortcuts_open"));
+                    capturePreview(directory, cases, "phone-rule-shortcuts");
+                    shell("input keyevent KEYCODE_BACK");
+                    await("Rule shortcuts did not close", () -> !MainActivity.diagnostics().optBoolean("shortcuts_open"));
                 }
             }
-            JSONObject ui = MainActivity.diagnostics();
-            assertEquals("Application enumeration failed: " + ui, "", ui.getString("applications_error"));
-            assertEquals(entries.length(), ui.getInt("applications_total"));
-            assertEquals(expected, ui.getInt("applications_visible"));
-            assertTrue("The emulator has no other visible applications", other > 0);
+            previewSettings(directory, cases, "phone");
+            assertTrue("Window manager rejected landscape rotation", automation.setRotation(android.app.UiAutomation.ROTATION_FREEZE_90));
+            await("Phone did not enter landscape", () -> {
+                JSONObject ui = MainActivity.diagnostics();
+                return ui.optDouble("width") > ui.optDouble("height");
+            });
+            previewPrimaryPages(directory, cases, "landscape");
+            previewSettings(directory, cases, "landscape");
+            previewApplications(context, directory, cases, "landscape", false);
+            assertTrue("Window manager rejected portrait rotation", automation.setRotation(android.app.UiAutomation.ROTATION_FREEZE_0));
+            shell("wm size 800x1280");
+            shell("wm density 160");
+            await("Tablet portrait viewport was not applied", () -> {
+                JSONObject ui = MainActivity.diagnostics();
+                return ui.optDouble("width") >= 760 && ui.optDouble("height") > ui.optDouble("width");
+            });
+            previewPrimaryPages(directory, cases, "tablet-portrait");
+            previewSettings(directory, cases, "tablet-portrait");
+            previewApplications(context, directory, cases, "tablet-portrait", false);
+            assertTrue("Window manager rejected tablet rotation", automation.setRotation(android.app.UiAutomation.ROTATION_FREEZE_90));
+            await("Tablet landscape viewport was not applied", () -> {
+                JSONObject ui = MainActivity.diagnostics();
+                return ui.optDouble("width") >= 1024 && ui.optDouble("width") > ui.optDouble("height");
+            });
+            previewPrimaryPages(directory, cases, "tablet-landscape");
+            previewSettings(directory, cases, "tablet-landscape");
+            previewApplications(context, directory, cases, "tablet-landscape", false);
             assertEquals("Preview must not save application routing", before, ApplicationRouting.load(context).summary());
             assertFalse("Preview must not start VPN", TunnelService.connected() || TunnelService.pending());
-            SystemClock.sleep(500);
+        } catch (Exception | AssertionError error) {
+            try { capturePreview(directory, cases, "failure"); }
+            catch (Exception | AssertionError snapshot) { error.addSuppressed(snapshot); }
+            throw error;
         } finally {
-            JSONObject ui = MainActivity.diagnostics();
-            ui.put("android_release", Build.VERSION.RELEASE).put("android_api", Build.VERSION.SDK_INT)
-                .put("schema", 1).put("scope", "application-list-preview-only");
-            java.nio.file.Files.write(new File(directory, "state.json").toPath(),
-                ui.toString(2).getBytes(StandardCharsets.UTF_8));
-            android.graphics.Bitmap screenshot = InstrumentationRegistry.getInstrumentation().getUiAutomation().takeScreenshot();
-            assertNotNull("Could not capture the application list", screenshot);
-            try (OutputStream output = new FileOutputStream(new File(directory, "applications.png"))) {
-                assertTrue(screenshot.compress(android.graphics.Bitmap.CompressFormat.PNG, 100, output));
-            } finally { screenshot.recycle(); }
+            shell("wm size reset");
+            shell("wm density reset");
+            automation.setRotation(android.app.UiAutomation.ROTATION_UNFREEZE);
         }
     }
     @Test public void applicationRoutingPersistsAndKeepsOtherAppsOnline() throws Exception {

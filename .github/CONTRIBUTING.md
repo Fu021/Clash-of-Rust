@@ -28,7 +28,7 @@
 
 ## 工作流、测试与发布
 
-- 常驻工作流为 **CI、Publish Release、Memory Benchmark**；另经维护者授权保留按需 [Android Application Previews](../docs/workflows/android-previews.md)。未经维护者事先同意，不要新增或复制其他工作流，包括临时测试工作流；确需新增时，先说明用途、触发条件、权限、资源消耗和清理方式。
+- 常驻工作流为 **CI、Publish Release、Memory Benchmark**；另经维护者授权保留按需 [Android UI Previews](../docs/workflows/android-previews.md)。未经维护者事先同意，不要新增或复制其他工作流，包括临时测试工作流；确需新增时，先说明用途、触发条件、权限、资源消耗和清理方式。
 - 新增测试优先接入现有流程。CI 验证源码、候选安装包及安装后行为，真实系统集成聚焦系统代理与 TUN；Publish Release 复用这些结果，保留发行签名后的必要验证与公开发布。避免堆积一次性排障脚本、重复包装脚本和无价值测试。
 - 本地 UI 截图使用 `scripts/preview-slint.py` 预览正式 Slint 组件；Android 应用列表的真实多版本截图使用上述按需工作流，不重复编译或执行代理/TUN。涉及外观时关注深浅色、系统字号、窗口尺寸，以及手机横竖屏和平板布局。
 - `.github/` 中的工作流、复合操作和审核配置由 **@Fu021** 审核；追加可审阅提交会撤销旧的 PR 批准，需要重新审核。弃用工作流应删除文件，并由维护者在 GitHub 上禁用。

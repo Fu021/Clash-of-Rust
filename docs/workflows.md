@@ -5,7 +5,7 @@
 | [CI](workflows/ci.md) | main push、PR；源码检查、编译、九组候选包、安装及 Ubuntu 兼容验证，真实集成聚焦代理/TUN | 九组 `build-*`、九组 `package-*`、SHA256 和收据，保留 3 天 |
 | [Publish Release](workflows/release.md) | 手动；核验同提交成功 CI 候选包；公开模式另验 Android 发行签名并发布 | 桌面复用 CI 附件；公开模式追加三组发行签名 APK，保留 3 天 |
 | [Memory Benchmark](workflows/memory.md) | 手动；指定提交的轻负载或压力内存采样 | 原始数据、报告和日志，保留 3 天 |
-| [Android Application Previews](workflows/android-previews.md) | 手动；复用成功 CI 的 x64 APK，打开多 Android 版本应用分流页，只枚举和截图 | 各版本 PNG、状态和日志，保留 7 天 |
+| [Android UI Previews](workflows/android-previews.md) | 手动；复用成功 CI 的 x64 APK，采集多 Android 版本页面和应用分流截图 | 各版本 PNG、状态和日志，保留 7 天 |
 
 普通 CI 共 14 个必需 job：共享输入 1、桌面 6、Android 3、Ubuntu 兼容 3、缓存预算 1。Publish Release 的 `check_only` 仅执行来源解析与最终核验两个 job，三个 Android 签名 job 跳过；公开发布则执行五个 job。Memory Benchmark 执行采样与缓存预算两个 job，不生成安装包。依赖维护模式不执行完整 CI 矩阵，不能作为发布来源。
 

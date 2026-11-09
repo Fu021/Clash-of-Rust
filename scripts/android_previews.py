@@ -1,4 +1,4 @@
-"""Resolve an existing successful CI for installed-application screenshots only."""
+"""Resolve an existing successful CI for Android UI screenshots."""
 import argparse
 import json
 import os
@@ -85,7 +85,7 @@ def main():
                 stream.write(name + '=' + (json.dumps(value) if isinstance(value, dict) else str(value)) + '\n')
     if summary := os.environ.get('GITHUB_STEP_SUMMARY'):
         with Path(summary).open('a') as stream:
-            stream.write(f'\nApplication-list screenshots only. Source CI: {plan["ci_run_id"]}; '
+            stream.write(f'\nAndroid UI screenshots. Source CI: {plan["ci_run_id"]}; '
                          f'commit: `{plan["commit"]}`. No VPN or traffic-routing checks.\n')
 
 

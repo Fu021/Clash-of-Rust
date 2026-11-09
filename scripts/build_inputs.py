@@ -383,17 +383,21 @@ def package_contents(build):
             'installer_compiler': json.loads(tool.read_text()) if tool.is_file() else None}
 
 
-def toolchain_report():
+def toolchain_report(system):
     """Record the actual runner tools, in addition to resolved dependency versions."""
+    if system not in ('android', 'linux', 'windows', 'macos'):
+        raise ValueError('Unknown build system for toolchain report: ' + system)
     tools = {'python': sys.version.split()[0]}
-    for name, args in {'rustc': ['-vV'], 'cargo': ['--version'], 'go': ['version'],
-                       'java': ['-version'], 'gradle': ['--version']}.items():
+    commands = {'rustc': ['-vV'], 'cargo': ['--version']}
+    if system == 'android':
+        commands.update({'go': ['version'], 'java': ['-version'], 'gradle': ['--version']})
+    for name, args in commands.items():
         if executable := shutil.which(name):
             result = subprocess.run([executable, *args], capture_output=True, text=True, timeout=60)
             tools[name] = (result.stdout + result.stderr).strip()[:8192]
             if result.returncode:
                 tools[name] = 'version query failed: ' + str(result.returncode)
-    ndk = os.environ.get('ANDROID_NDK_ROOT')
+    ndk = os.environ.get('ANDROID_NDK_ROOT') if system == 'android' else None
     if ndk and (path := Path(ndk)/'source.properties').is_file():
         tools['android_ndk'] = path.read_text().strip()
     return tools

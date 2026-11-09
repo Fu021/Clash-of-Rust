@@ -73,7 +73,7 @@ CI 在三个 ABI 编译、执行 Gradle lint，生成候选 APK、SHA256 及安�
 
 开发 CI 使用固定签名：`ANDROID_DEV_KEYSTORE`（base64 PKCS12）与 `ANDROID_DEV_KEYSTORE_PASSWORD`，别名 `cor-android-dev`。这些值只存 Actions Secrets；私钥不进入仓库或附件。无密钥的外部 PR 使用临时测试签名。正式发布另需 `ANDROID_KEYSTORE`、`ANDROID_KEYSTORE_PASSWORD`、`ANDROID_KEY_ALIAS` 与 `ANDROID_KEY_PASSWORD`，签名不同时不能直接覆盖已有 APK。
 
-Slint 界面可用 `python3 scripts/preview-slint.py --mobile --platform android --check` 静态检查；预览固定数据不代替真实 VPN 测试。多版本真实应用列表使用按需 [Android Application Previews](../../docs/workflows/android-previews.md)，复用成功 CI 的 APK，只枚举和截图。
+Slint 界面可用 `python3 scripts/preview-slint.py --mobile --platform android --check` 静态检查；预览固定数据不代替真实 VPN 测试。多版本页面与真实应用列表使用按需 [Android UI Previews](../../docs/workflows/android-previews.md)，复用成功 CI 的 APK，仅采集界面截图。
 
 ## 连接超时排查
 

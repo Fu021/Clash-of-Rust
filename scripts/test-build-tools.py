@@ -2397,6 +2397,40 @@ Private_Clean: 2 kB
                 execute.assert_called_once()
                 self.assertEqual(execute.call_args.args[0][0], 'java')
 
+    def test_desktop_toolchain_report_never_invokes_ambient_android_tools(self):
+        for system in ('windows', 'macos', 'linux'):
+            def execute(command, **kwargs):
+                self.assertIn(command[0], ('rustc', 'cargo'))
+                return subprocess.CompletedProcess(command, 0, command[0] + ' version', '')
+
+            with self.subTest(system=system), \
+                    patch.object(build_inputs.shutil, 'which', side_effect=lambda name: name) as locate, \
+                    patch.object(build_inputs.subprocess, 'run', side_effect=execute) as run_tool, \
+                    patch.dict(os.environ, {'ANDROID_NDK_ROOT': '/unused-android-toolchain'}):
+                report = build_inputs.toolchain_report(system)
+            self.assertEqual([call.args[0] for call in locate.call_args_list], ['rustc', 'cargo'])
+            self.assertEqual(run_tool.call_count, 2)
+            self.assertEqual(set(report), {'python', 'rustc', 'cargo'})
+
+    def test_android_toolchain_report_records_required_tools_and_ndk(self):
+        with tempfile.TemporaryDirectory() as directory:
+            (Path(directory) / 'source.properties').write_text('Pkg.Revision = fixture')
+            with patch.object(build_inputs.shutil, 'which', side_effect=lambda name: name), \
+                    patch.object(build_inputs.subprocess, 'run', side_effect=lambda command, **kwargs:
+                                 subprocess.CompletedProcess(command, 0, command[0] + ' version', '')) as execute, \
+                    patch.dict(os.environ, {'ANDROID_NDK_ROOT': directory}):
+                report = build_inputs.toolchain_report('android')
+            self.assertEqual([call.args[0][0] for call in execute.call_args_list],
+                             ['rustc', 'cargo', 'go', 'java', 'gradle'])
+            self.assertEqual(set(report), {'python', 'rustc', 'cargo', 'go', 'java', 'gradle', 'android_ndk'})
+            self.assertEqual(report['android_ndk'], 'Pkg.Revision = fixture')
+
+    def test_toolchain_report_rejects_an_unknown_system_before_running_tools(self):
+        with patch.object(build_inputs.subprocess, 'run') as execute, \
+                self.assertRaisesRegex(ValueError, 'Unknown build system'):
+            build_inputs.toolchain_report('unknown')
+        execute.assert_not_called()
+
     def test_gradle_tool_check_rejects_another_version_on_path(self):
         selected = build_inputs.tool_versions()
         for version, accepted in ((selected['gradle'], True), ('9.6.0', False)):
@@ -3014,28 +3048,72 @@ runpy.run_path(str(script), run_name='__main__')
             with self.subTest(items=items), self.assertRaises(ValueError):
                 android_previews.resolve(client(items), 'example/project', 'a' * 40, 123)
 
-    def test_application_preview_requires_real_completed_list_screenshot_and_matching_version(self):
-        good = {'schema': 1, 'scope': 'application-list-preview-only', 'android_api': 31,
-                'detail': 18, 'live': True, 'applications_loaded': True, 'applications_loading': False,
+    def test_android_preview_requires_all_pages_real_applications_and_matching_version(self):
+        base = {'live': True, 'vpn': False, 'vpn_pending': False, 'detail': 0,
+                'applications_loaded': True, 'applications_loading': False,
                 'applications_error': '', 'applications_total': 15, 'applications_visible': 7,
-                'vpn': False, 'vpn_pending': False}
+                'applications_system': False, 'applications_mode': 0,
+                'nodes_list': False, 'profiles_list': False}
         with tempfile.TemporaryDirectory() as temporary:
             directory = Path(temporary)
-            image = b'\x89PNG\r\n\x1a\n' + struct.pack('>I', 13) + b'IHDR' + struct.pack('>II', 1080, 2400)
-            (directory/'applications.png').write_bytes(image)
-            (directory/'state.json').write_text(json.dumps(good))
+            cases = []
+            def add(layout, name, page, **state):
+                width, height = ((800, 1280) if layout == 'tablet-portrait' else
+                                 (1280, 800) if layout == 'tablet-landscape' else
+                                 (852, 393) if layout == 'landscape' else (393, 852))
+                case_name = layout + '-' + name
+                image = b'\x89PNG\r\n\x1a\n' + struct.pack('>I', 13) + b'IHDR' + struct.pack('>II', width, height)
+                (directory / (case_name + '.png')).write_bytes(image)
+                cases.append({'name': case_name, 'image': case_name + '.png',
+                              'pixel_width': width, 'pixel_height': height,
+                              'state': base | {'width': width, 'height': height, 'page': page} | state})
+            for layout in ('phone', 'landscape', 'tablet-portrait', 'tablet-landscape'):
+                for name, page, state in (
+                        ('home', 0, {}), ('proxies-grid', 1, {}), ('proxies-list', 1, {'nodes_list': True}),
+                        ('subscriptions-grid', 2, {}), ('subscriptions-list', 2, {'profiles_list': True}),
+                        ('settings-top', 9, {}), ('settings-middle', 9, {}), ('settings-bottom', 9, {}),
+                        ('applications-default', 9, {'detail': 18}),
+                        ('applications-scrolled', 9, {'detail': 18})):
+                    add(layout, name, page, **state)
+            for name, page, state in (
+                    ('subscription-editor', 2, {'detail': 3}), ('tools', 10, {}),
+                    ('connections', 3, {}), ('rules', 4, {}), ('rule-shortcuts', 4, {'shortcuts_open': True}),
+                    ('logs', 5, {}), ('network', 6, {}), ('ip', 7, {}), ('ai', 8, {}),
+                    ('applications-system', 9, {'detail': 18, 'applications_system': True}),
+                    ('applications-menu', 9, {'detail': 18}),
+                    ('applications-only', 9, {'detail': 18, 'applications_mode': 1}),
+                    ('applications-exclude', 9, {'detail': 18, 'applications_mode': 2}),
+                    ('applications-unsaved', 9, {'detail': 12})):
+                add('phone', name, page, **state)
+            manifest = {'schema': 2, 'scope': 'android-ui-preview', 'android_api': 31,
+                        'android_release': '12', 'cases': cases}
+            def write():
+                (directory / 'manifest.json').write_text(json.dumps(manifest))
+            write()
             android_build.validate_application_preview(directory, 31)
-            for changes in ({'android_api': 30}, {'detail': 9}, {'live': False},
-                            {'applications_loading': True}, {'applications_loaded': False},
-                            {'applications_error': 'access denied'}, {'applications_total': 0},
-                            {'applications_visible': 1}, {'applications_visible': 16},
-                            {'applications_visible': True}, {'vpn': True}, {'vpn_pending': True}):
+            application = next(case for case in cases if case['name'] == 'phone-applications-default')
+            for changes in ({'detail': 9}, {'live': False}, {'applications_loading': True},
+                            {'applications_loaded': False}, {'applications_error': 'access denied'},
+                            {'applications_total': 0}, {'applications_visible': 1},
+                            {'applications_visible': 16}, {'applications_visible': True},
+                            {'vpn': True}, {'vpn_pending': True}):
                 with self.subTest(changes=changes):
-                    (directory/'state.json').write_text(json.dumps(good | changes))
+                    original = application['state']
+                    application['state'] = original | changes
+                    write()
                     with self.assertRaises(ValueError):
                         android_build.validate_application_preview(directory, 31)
-            (directory/'state.json').write_text(json.dumps(good))
-            (directory/'applications.png').write_bytes(b'not an image')
+                    application['state'] = original
+            write()
+            with self.assertRaisesRegex(ValueError, 'version'):
+                android_build.validate_application_preview(directory, 30)
+            missing = cases.pop()
+            write()
+            with self.assertRaisesRegex(ValueError, 'incomplete'):
+                android_build.validate_application_preview(directory, 31)
+            cases.append(missing)
+            write()
+            (directory / 'phone-applications-default.png').write_bytes(b'not an image')
             with self.assertRaisesRegex(ValueError, 'screenshot'):
                 android_build.validate_application_preview(directory, 31)
 
@@ -3068,7 +3146,7 @@ runpy.run_path(str(script), run_name='__main__')
                 self.assertFalse(any('ACTIVATE_VPN' in command for command in commands))
                 instruments = [command for command in commands if 'instrument' in command]
                 self.assertEqual(len(instruments), 1)
-                self.assertIn('org.clashofrust.android.ProxyTunTest#applicationListPreviewCapturesInstalledApps',
+                self.assertIn('org.clashofrust.android.ProxyTunTest#androidUiPreviewCapturesPagesAndApplications',
                               instruments[0])
                 verify.assert_called_once_with(
                     root/'target/android-report/x64/applications-api-31/application-preview', 31)

@@ -28,9 +28,9 @@ macOS x64 上一轮构建全部测试程序耗时 20 分 32 秒，本轮只准�
 
 工作流已移除输入法专项的参数、APK 中转和多版本矩阵。保留 `scripts/android.py test --arch x64 --ime-only` 等手工调查脚本与既有证据，只有维护者明确要求重新调查时才使用，不因版本升级或 loop 自动恢复到 CI；缺图、日志边界丢失和输入法崩溃仍使手工专项失败。历史十版本范围、证据要求及 MIUI/实机边界见[输入法专页](../agent-failures/android-ime.md#当前修复与待验收)。
 
-### Android 应用列表预览
+### Android 界面预览
 
-维护者授权的独立 [Android Application Previews](android-previews.md) 复用成功 CI 的 x64 APK，只打开分流页、枚举并截图。它不自动随常规 CI 启动，不编辑分流、不申请 VPN、不验证流量或键盘；常规 Android job 的基础代理/TUN 范围保持独立。版本范围、触发方法、来源门禁与附件见该专页。
+维护者授权的独立 [Android UI Previews](android-previews.md) 复用成功 CI 的 x64 APK，按安卓版本采集主要页面、分流列表及手机、平板尺寸截图。它不自动随常规 CI 启动，不保存分流、不申请 VPN、不验证流量或键盘；常规 Android job 的基础代理/TUN 范围保持独立。版本范围、触发方法、来源门禁与附件见该专页。
 
 ### Android 工具与原包
 

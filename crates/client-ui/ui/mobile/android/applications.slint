@@ -14,6 +14,7 @@ export component AndroidApplications inherits PageSurface {
             VerticalLayout { alignment: start; spacing: 8px;
                 HorizontalLayout { spacing: 8px;
                     MSelect {
+                        geometry-key: "preview-applications-mode";
                         options: ["全部应用", "仅代理选中应用", "排除选中应用"];
                         value: self.options[AndroidData.applications-mode]; enabled: root.editable;
                         selected(index, value) => { AndroidActions.request(AndroidIntent.application-mode, "" + index); }
@@ -27,7 +28,7 @@ export component AndroidApplications inherits PageSurface {
                 MField { placeholder: "搜索名称或包名"; text <=> AndroidData.applications-query; enabled: root.editable;
                     edited(value) => { AndroidActions.request(AndroidIntent.application-query, value); }
                 }
-                MSwitch { title: "显示系统组件"; checked: AndroidData.applications-system; enabled: root.editable;
+                MSwitch { geometry-key: "preview-applications-system"; title: "显示系统组件"; checked: AndroidData.applications-system; enabled: root.editable;
                     toggled(value) => { AndroidActions.request(AndroidIntent.application-system, value ? "true" : "false"); }
                 }
                 HorizontalLayout { spacing: 4px;

@@ -48,6 +48,8 @@ GitHub 热缓存预算为 9 GiB。CI 的主分支、开发分支及同仓库 PR 
 
 最后一行是当前实现边界，不能用“工具有官方下载链接”推断客户端已能从私网安装。需要新增原包适配时，先补明确来源、强校验、安装器入口及失败回退回归；不恢复目录快照或 runner 归档上传。Python/Tailscale 在私网登录前的引导还依赖 GitHub/runner，现有方案不是离线 runner。
 
+构建收据按任务记录实际使用的工具：桌面只查询 Python、Rust 与 Cargo；Android 另查询 Go、Java、Gradle 与 NDK。桌面不调用 runner 预装的 Chocolatey Gradle 或其他移动工具；Gradle 私网回退只解决原包下载，不解决无关工具启动或版本探测超时。
+
 ## 尽早提交完整清单，收尾保留回执
 
 `upstream-cache` 在 runner 临时目录保存认证配置；三条工作流的 `upstream-report` 均使用[持久清单协议](cache-server.md#持久清单补拉)。共享 Go、原生资源、Linux 原包、VM 和内存基准宿主依赖准备完成后设置检查点，尽早提交当前全部已校验文件；收尾追加后续下载并查询已接收清单。只交官方 URL、大小、SHA256 和运行序号，没有文件内容、runner 绝对路径或凭据。记录不依赖临时原包继续存在，相同内容按 SHA256 合并。

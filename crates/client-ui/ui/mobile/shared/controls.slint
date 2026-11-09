@@ -264,6 +264,8 @@ export component MDragHandle inherits RuleDragHandle {
     hit-width: 48px;
 }
 export component MRow inherits Rectangle {
+    in property <string> geometry-key;
+    GeometryTarget { key: root.geometry-key; bounds: [root.absolute-position.x, root.absolute-position.y, root.width, root.height]; }
     in property <string> title;
     in property <string> subtitle;
     in property <string> value;
@@ -303,6 +305,8 @@ export component MBackButton inherits MButton {
 }
 export component MDivider inherits Rectangle { height: 1px; vertical-stretch: 0; background: Theme.subtle-line; }
 export component MSwitch inherits Rectangle {
+    in property <string> geometry-key;
+    GeometryTarget { key: root.geometry-key; bounds: [root.absolute-position.x, root.absolute-position.y, root.width, root.height]; }
     in property <string> title;
     in property <string> subtitle;
     in property <bool> checked;
@@ -344,6 +348,8 @@ export component MField inherits Rectangle {
     }
 }
 export component MSelect inherits Rectangle {
+    in property <string> geometry-key;
+    GeometryTarget { key: root.geometry-key; bounds: [root.absolute-position.x, root.absolute-position.y, root.width, root.height]; }
     in property <bool> enabled: true;
     property <bool> error-active: MobileView.notice-modal;
     changed enabled => { if !root.enabled { popup.close(); } }
@@ -453,6 +459,8 @@ export component MNotice inherits Rectangle {
     }
 }
 export component MNav inherits Rectangle {
+    in property <string> geometry-key;
+    GeometryTarget { key: root.geometry-key; bounds: [root.absolute-position.x, root.absolute-position.y, root.width, root.height]; }
     in property <string> text;
     in property <image> icon;
     in property <bool> selected;

@@ -51,6 +51,7 @@ impl Drop for UiLifetime {
 thread_local! {
     static UI_THREAD_LIFETIME: UiLifetime = const { UiLifetime };
     static DIAGNOSTIC_WINDOW: std::cell::RefCell<Option<slint::Weak<AndroidWindow>>> = const { std::cell::RefCell::new(None) };
+    static DIAGNOSTIC_GEOMETRY: std::cell::RefCell<BTreeMap<String, Vec<f32>>> = const { std::cell::RefCell::new(BTreeMap::new()) };
 }
 
 fn await_previous_ui() {
@@ -157,7 +158,13 @@ pub extern "system" fn Java_org_clashofrust_android_MainActivity_nativeDiagnosti
                         .borrow()
                         .as_ref()
                         .and_then(slint::Weak::upgrade)
-                        .map(|ui| presentation_snapshot(&ui))
+                        .map(|ui| {
+                            let geometry = ui.global::<UiGeometry>();
+                            geometry.set_enabled(true);
+                            geometry.set_revision(geometry.get_revision().wrapping_add(1));
+                            ui.window().request_redraw();
+                            presentation_snapshot(&ui)
+                        })
                 });
                 let _ = sender.send(snapshot);
             })
@@ -318,6 +325,26 @@ fn run(app: slint::android::AndroidApp) -> Result<()> {
     slint::android::init(app)?;
     fonts::register_emoji()?;
     let window = AndroidWindow::new()?;
+    DIAGNOSTIC_GEOMETRY.with(|geometry| geometry.borrow_mut().clear());
+    window.global::<UiGeometry>().on_measured(|key, bounds| {
+        if !(key.starts_with("preview-")
+            || matches!(
+                key.as_str(),
+                "nodes-view" | "profiles-view" | "rule-shortcuts-open"
+            ))
+        {
+            return;
+        }
+        let bounds: Vec<f32> = bounds.iter().collect();
+        if bounds.len() == 4 && bounds.iter().all(|value| value.is_finite()) {
+            DIAGNOSTIC_GEOMETRY.with(|geometry| {
+                let mut geometry = geometry.borrow_mut();
+                if geometry.len() < 64 || geometry.contains_key(key.as_str()) {
+                    geometry.insert(key.to_string(), bounds);
+                }
+            });
+        }
+    });
     DIAGNOSTIC_WINDOW.with(|current| *current.borrow_mut() = Some(window.as_weak()));
     // No engine/Geo/network work precedes the first correctly themed frame.
     let appearance = native.request(json!({"op":"appearance"}))?;
@@ -3501,6 +3528,12 @@ fn presentation_snapshot(ui: &AndroidWindow) -> Value {
             "profile_source_length":view.get_profile_source().chars().count(),
             "settings_scroll_y":view.get_settings_scroll_y(),"settings_content_height":view.get_settings_content_height(),
             "settings_viewport_height":view.get_settings_viewport_height(),
+            "targets": DIAGNOSTIC_GEOMETRY.with(|geometry| geometry.borrow().clone()),
+            "shortcuts_open":view.get_shortcuts_open(),
+            "nodes_list":ui.global::<PageViews>().get_nodes_list(),
+            "profiles_list":ui.global::<PageViews>().get_profiles_list(),
+            "applications_system":android.get_applications_system(),
+            "applications_mode":android.get_applications_mode(),
             "applications_target":android.get_applications_target().iter().collect::<Vec<_>>(),
             "applications_loading":android.get_applications_loading(),
             "applications_loaded":android.get_applications_loaded(),

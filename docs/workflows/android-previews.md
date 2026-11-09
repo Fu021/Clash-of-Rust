@@ -1,8 +1,8 @@
-# Android 应用列表预览
+# Android 界面预览
 
 [工作流索引](../workflows.md) · [应用分流](../android-application-routing.md) · [CI](ci.md)
 
-`Android Application Previews` 经维护者授权独立运行，只在可丢弃模拟器中打开生产 Slint 应用分流页、读取已安装应用并截图。复用成功 CI 的 `build-android-x64` 和 `dependency-snapshot`，不重新编译，不编辑或保存分流，不申请 VPN，不执行代理、流量、分流或输入法功能测试。
+`Android UI Previews` 经维护者授权独立运行，在可丢弃模拟器中打开生产 Slint 界面，重点检查应用分流页和实际已安装应用。复用成功 CI 的 `build-android-x64` 和 `dependency-snapshot`，不重新编译，不保存分流，不申请 VPN，不执行代理、流量、分流或输入法功能测试。
 
 ## 启动与来源
 
@@ -33,12 +33,12 @@
 | 15 | 35 |
 | 16 | 36 |
 
-Android 8.1 使用 Google 官方 AOSP `default/x86_64` 第 1 版镜像，其余版本使用 Google APIs x64 镜像；不额外编译 x86 APK。每项最长 35 分钟，最多三个模拟器 job 并行，失败不取消其他版本。仅准备 Python、Java、SDK 和模拟器，不初始化 Cargo、Go 或 Gradle。原包官方优先、私网回退，按现有持久清单提交来源；不保存安装目录或 AVD 快照，不删除私网内容。8.1 的实际启动和截图仍须本轮 Actions 验证。
+Android 8.1 使用 Google 官方 AOSP `default/x86_64` 第 1 版镜像，其余版本使用 Google APIs x64 镜像；不额外编译 x86 APK。每项最长 45 分钟，最多三个模拟器 job 并行，失败不取消其他版本。仅准备 Python、Java、SDK 和模拟器，不初始化 Cargo、Go 或 Gradle。原包官方优先、私网回退，按现有持久清单提交来源；不保存安装目录或 AVD 快照，不删除私网内容。
 
 ## 截图与边界
 
-`applicationListPreviewCapturesInstalledApps` 是 instrumentation 的截图入口，仅通过真实触摸导航、等待应用枚举、核对可见条数并采集证据。加载失败、只剩本应用、版本不一致、缺少有效 PNG 或意外启动 VPN 均明确报错，不能把空白截图当成完成。
+`androidUiPreviewCapturesPagesAndApplications` 使用真实触摸导航，采集首页、代理与订阅的宫格和列表、订阅编辑、工具页及其各页面、快捷规则、设置滚动位置和应用分流。分流包括已安装应用、系统组件、模式菜单、两种可选模式与放弃修改提示；不保存编辑。另以手机横屏和平板竖横屏检查主要页面与分流，记录每张图实际逻辑尺寸。平板由模拟器调整尺寸和密度，结束后恢复；它不能替代平板真机。
 
-每个 `android-<版本>-application-list` 附件保留七天，包含 `applications.png`、`state.json`、设备版本、instrumentation 输出和 logcat。状态记录实际枚举总数、可见数和加载状态；清单仅来自 CI 模拟器，不采集用户设备数据。
+加载失败、只剩本应用、截图缺失、页面状态或布局尺寸不符、意外启动 VPN 均明确报错，不能把空白截图当成完成。每个 `android-<版本>-ui-screenshots` 附件保留七天，包含各页面 PNG、`manifest.json`、设备版本、instrumentation 输出和 logcat。清单记录每张截图的页面、视图模式、逻辑及物理尺寸与应用枚举状态；信息仅来自 CI 模拟器。
 
 这些结果用于检查页面和应用枚举，不证明实际分流、VPN、厂商 ROM 或真机可用。本地 Slint 固定数据预览也不能替代本流程的真实枚举结果。代理/TUN 验证仍由普通 CI 执行，iOS 仍为 UI 原型。

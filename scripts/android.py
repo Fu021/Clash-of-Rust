@@ -390,7 +390,7 @@ def export_build(arch):
                 'tests':{'android-proxy-tun':'tests/androidTest.apk'}}
     from build_inputs import verified_manifest, toolchain_report
     manifest['build_inputs'] = verified_manifest()
-    manifest['toolchain'] = toolchain_report()
+    manifest['toolchain'] = toolchain_report('android')
     with tarfile.open(output/ARCHIVE_NAME, 'w:gz', compresslevel=1) as tar:
         for name,path in records.items():
             tar.add(path, arcname=name)
@@ -726,7 +726,7 @@ def test(arch, apk=None, test_apk=None, ime_only=False, ime_probe=False,
     try:
         outputs=[]
         from ci_test_policy import android_cases
-        cases=(('applicationListPreviewCapturesInstalledApps',) if applications_only else
+        cases=(('androidUiPreviewCapturesPagesAndApplications',) if applications_only else
                ('subscriptionKeyboardProbeCapturesBothFields' if ime_probe
                 else 'subscriptionFieldsShowImeAcceptTextAndReopenAfterBack',)
                if ime_only else android_cases())
@@ -744,7 +744,7 @@ def test(arch, apk=None, test_apk=None, ime_only=False, ime_probe=False,
                     '-e','ime_round',str(iteration),
                     '-e','ime_probe',str(ime_probe).lower(),
                     'org.clashofrust.android.test/androidx.test.runner.AndroidJUnitRunner'],
-                    text=True,capture_output=True,timeout=240)
+                    text=True,capture_output=True,timeout=600 if applications_only else 240)
                 outputs.append(f'Round {iteration}: '+case+'\n'+result.stdout+result.stderr)
                 (report/'instrumentation.txt').write_text('\n\n'.join(outputs))
                 print(result.stdout,flush=True)
@@ -774,14 +774,17 @@ def test(arch, apk=None, test_apk=None, ime_only=False, ime_probe=False,
             if applications_only:
                 destination = report / 'application-preview'
                 run([ADB, 'pull', '/sdcard/Android/data/org.clashofrust.android/files/application-preview',
-                     report], timeout=30)
+                     report], timeout=120)
                 validate_application_preview(destination, int(api))
                 if summary := os.environ.get('GITHUB_STEP_SUMMARY'):
-                    state = json.loads((destination / 'state.json').read_text())
+                    manifest = json.loads((destination / 'manifest.json').read_text())
+                    state = next(case['state'] for case in manifest['cases']
+                                 if case['name'] == 'phone-applications-default')
                     with open(summary, 'a') as stream:
                         stream.write(f'\nAndroid {properties["ro.build.version.release"]}: '
                                      f'application list {state["applications_visible"]} / '
-                                     f'{state["applications_total"]}; screenshot captured. '
+                                     f'{state["applications_total"]}; '
+                                     f'{len(manifest["cases"])} page screenshots captured. '
                                      'No VPN or traffic-routing test was run by this preview.\n')
             if ime_only:
                 pull_ime_report(remote_report,report,required=True)
@@ -832,20 +835,82 @@ def test(arch, apk=None, test_apk=None, ime_only=False, ime_probe=False,
 
 
 def validate_application_preview(directory, api):
-    image = (directory / 'applications.png').read_bytes()
-    state = json.loads((directory / 'state.json').read_text())
-    if len(image) < 24 or not image.startswith(b'\x89PNG\r\n\x1a\n') \
-            or image[12:16] != b'IHDR' or min(struct.unpack('>II', image[16:24])) < 320:
-        raise ValueError('Application preview screenshot is missing or invalid')
-    if (state.get('schema'), state.get('scope'), state.get('android_api'), state.get('detail')) != (
-            1, 'application-list-preview-only', api, 18):
-        raise ValueError('Application preview identity differs from the selected Android version')
-    total, visible = state.get('applications_total'), state.get('applications_visible')
-    if (state.get('live') is not True or state.get('applications_loaded') is not True
-            or state.get('applications_loading') is not False or state.get('applications_error') != ''
-            or type(total) is not int or type(visible) is not int or not 1 < visible <= total
-            or state.get('vpn') is not False or state.get('vpn_pending') is not False):
-        raise ValueError('Application preview did not show a complete installed-app list without VPN')
+    manifest = json.loads((directory / 'manifest.json').read_text())
+    if (manifest.get('schema'), manifest.get('scope'), manifest.get('android_api')) != (
+            2, 'android-ui-preview', api) or not manifest.get('android_release'):
+        raise ValueError('Android preview identity differs from the selected Android version')
+    primary = ('home', 'proxies-grid', 'proxies-list', 'subscriptions-grid', 'subscriptions-list',
+               'settings-top', 'settings-middle', 'settings-bottom', 'applications-default',
+               'applications-scrolled')
+    expected = {f'{layout}-{case}' for layout in ('phone', 'landscape', 'tablet-portrait', 'tablet-landscape')
+                for case in primary}
+    expected.update('phone-' + case for case in (
+        'subscription-editor', 'tools', 'connections', 'rules', 'rule-shortcuts', 'logs', 'network', 'ip', 'ai',
+        'applications-system', 'applications-menu', 'applications-only', 'applications-exclude',
+        'applications-unsaved'))
+    cases = manifest.get('cases')
+    if not isinstance(cases, list):
+        raise ValueError('Android preview screenshot manifest is invalid')
+    indexed = {}
+    for case in cases:
+        if not isinstance(case, dict) or not isinstance(case.get('name'), str):
+            raise ValueError('Android preview screenshot entry is invalid')
+        name = case['name']
+        if name in indexed or not re.fullmatch('[a-z0-9-]+', name) or case.get('image') != name + '.png':
+            raise ValueError('Android preview screenshot name is invalid or duplicated')
+        indexed[name] = case
+    if not expected.issubset(indexed):
+        raise ValueError('Android preview screenshots are incomplete: ' + ', '.join(sorted(expected - indexed.keys())))
+    for name in sorted(expected):
+        case = indexed[name]
+        image = (directory / case['image']).read_bytes()
+        if len(image) < 24 or not image.startswith(b'\x89PNG\r\n\x1a\n') \
+                or image[12:16] != b'IHDR':
+            raise ValueError('Android preview screenshot is missing or invalid: ' + name)
+        size = struct.unpack('>II', image[16:24])
+        if min(size) < 320 or size != (case.get('pixel_width'), case.get('pixel_height')):
+            raise ValueError('Android preview screenshot dimensions are invalid: ' + name)
+        state = case.get('state')
+        if not isinstance(state, dict) or state.get('live') is not True \
+                or state.get('vpn') is not False or state.get('vpn_pending') is not False:
+            raise ValueError('Android preview did not capture the live UI without VPN: ' + name)
+        width, height = state.get('width'), state.get('height')
+        if type(width) not in (int, float) or type(height) not in (int, float) or width <= 0 or height <= 0:
+            raise ValueError('Android preview has invalid logical dimensions: ' + name)
+        if ((name.startswith(('phone-', 'tablet-portrait-')) and width >= height)
+                or (name.startswith(('landscape-', 'tablet-landscape-')) and width <= height)
+                or (name.startswith('tablet-portrait-') and width < 760)
+                or (name.startswith('tablet-landscape-') and width < 1024)):
+            raise ValueError('Android preview did not use the intended layout: ' + name)
+        suffix = name.removeprefix('tablet-landscape-').removeprefix('tablet-portrait-') \
+            .removeprefix('landscape-').removeprefix('phone-')
+        pages = {'home': 0, 'proxies': 1, 'subscriptions': 2, 'subscription-editor': 2,
+                 'connections': 3, 'rules': 4, 'rule-shortcuts': 4, 'logs': 5, 'network': 6,
+                 'ip': 7, 'ai': 8, 'settings': 9, 'applications': 9, 'tools': 10}
+        page = next((value for prefix, value in pages.items()
+                     if suffix == prefix or suffix.startswith(prefix + '-')), None)
+        if page is None or state.get('page') != page:
+            raise ValueError('Android preview captured the wrong page: ' + name)
+        detail = 3 if suffix == 'subscription-editor' else 12 if suffix == 'applications-unsaved' \
+            else 18 if suffix.startswith('applications-') else 0
+        if state.get('detail') != detail:
+            raise ValueError('Android preview captured the wrong detail: ' + name)
+        if suffix == 'rule-shortcuts' and state.get('shortcuts_open') is not True:
+            raise ValueError('Android preview did not open rule shortcuts')
+        for prefix, key in (('proxies-', 'nodes_list'), ('subscriptions-', 'profiles_list')):
+            if suffix.startswith(prefix) and state.get(key) is not (suffix.endswith('-list')):
+                raise ValueError('Android preview captured the wrong list mode: ' + name)
+        if suffix.startswith('applications-') and suffix != 'applications-unsaved':
+            total, visible = state.get('applications_total'), state.get('applications_visible')
+            if (state.get('applications_loaded') is not True or state.get('applications_loading') is not False
+                    or state.get('applications_error') != '' or type(total) is not int or type(visible) is not int
+                    or not 1 < visible <= total):
+                raise ValueError('Android preview did not show a completed application list: ' + name)
+            if suffix == 'applications-system' and state.get('applications_system') is not True:
+                raise ValueError('Android preview did not show system applications')
+            if suffix in ('applications-only', 'applications-exclude') and state.get('applications_mode') != (
+                    1 if suffix == 'applications-only' else 2):
+                raise ValueError('Android preview captured the wrong application routing mode')
 
 
 def application_preview(build, api):
