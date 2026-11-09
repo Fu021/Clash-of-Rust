@@ -18,6 +18,48 @@ import static org.junit.Assert.*;
 /** Uses the packaged Slint Activity, embedded core and the real Android VPN. */
 @RunWith(AndroidJUnit4.class)
 public class ProxyTunTest {
+    private static void persistNetworkProfile(Context context) throws Exception {
+        assertFalse("Prepare the network profile before starting the core", CoreBridge.ready());
+        File directory = new File(context.getFilesDir(), "client");
+        File profiles = new File(directory, "profiles");
+        assertTrue(profiles.isDirectory() || profiles.mkdirs());
+        String profileId = "b4f7a20e-402d-4739-90dd-4b517591e653";
+        File settingsFile = new File(directory, "settings.json");
+        JSONObject settings = settingsFile.isFile()
+            ? new JSONObject(new String(java.nio.file.Files.readAllBytes(settingsFile.toPath()), StandardCharsets.UTF_8))
+            : new JSONObject();
+        File indexFile = new File(directory, "profiles.json");
+        JSONArray index = indexFile.isFile()
+            ? new JSONArray(new String(java.nio.file.Files.readAllBytes(indexFile.toPath()), StandardCharsets.UTF_8))
+            : new JSONArray();
+        JSONArray updated = new JSONArray();
+        for (int position = 0; position < index.length(); position++) {
+            JSONObject profile = index.getJSONObject(position);
+            if (!profileId.equals(profile.getString("id"))) updated.put(profile);
+        }
+        updated.put(new JSONObject().put("id", profileId).put("name", "CI TUN route")
+            .put("source", "ci-tun.yaml").put("updated", 0).put("usage", JSONObject.NULL));
+        String raw = "dns:\n  enable: true\n  enhanced-mode: fake-ip\n"
+            + "  nameserver: [https://1.1.1.1/dns-query]\n"
+            + "hosts:\n  android-tun.test: 10.0.2.2\n"
+            + "proxies:\n  - {name: CI-TUN-origin, type: http, server: 10.0.2.2, port: 18081}\n"
+            + "rules:\n  - IP-CIDR,198.51.100.1/32,CI-TUN-origin,no-resolve\n  - MATCH,DIRECT\n";
+        settings.put("active_profile", profileId).put("run_mode", "rule").put("ipv6", true);
+        java.nio.file.Files.write(new File(profiles, profileId + ".yaml").toPath(), raw.getBytes(StandardCharsets.UTF_8));
+        java.nio.file.Files.write(indexFile.toPath(), updated.toString().getBytes(StandardCharsets.UTF_8));
+        java.nio.file.Files.write(settingsFile.toPath(), settings.toString().getBytes(StandardCharsets.UTF_8));
+    }
+
+    private static void assertNetworkProfile(String raw) throws Exception {
+        assertTrue("The active profile lost its TUN route", raw.contains("198.51.100.1/32"));
+        assertTrue("The active profile lost its DNS host", raw.contains("android-tun.test"));
+        JSONObject proxies = new JSONObject(read(
+            new URL("http://" + value(raw, "external-controller") + "/proxies"),
+            java.net.Proxy.NO_PROXY, value(raw, "secret")));
+        assertTrue("The running core did not load the persisted test outbound",
+            proxies.getJSONObject("proxies").has("CI-TUN-origin"));
+    }
+
     @Test public void notificationShowsModeAndNodeWithOptionalSpeeds() {
         String text = TunnelService.statusText("1 MiB/s", "2 KiB/s", "Current node", "global", true, "");
         assertTrue(text.contains("全局 · Current node"));
@@ -1003,6 +1045,7 @@ public class ProxyTunTest {
                 assertEquals("请至少选择一个应用", expected.getMessage());
             }
             String raw = CoreBridge.config();
+            assertNetworkProfile(raw);
             String controller = value(raw, "external-controller");
             String secret = value(raw, "secret");
             ConnectivityManager connectivity = context.getSystemService(ConnectivityManager.class);
@@ -1056,12 +1099,14 @@ public class ProxyTunTest {
 
     @Test public void localProxyAndRealTunCarryTrafficAndDisconnectCleanly() throws Exception {
         Context context = InstrumentationRegistry.getInstrumentation().getTargetContext();
+        persistNetworkProfile(context);
         context.startActivity(new Intent(context, MainActivity.class).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK));
         await("Native UI did not start its core; inspect logcat", CoreBridge::ready);
         await("Activity did not receive focus",()->inStage(androidx.test.runner.lifecycle.Stage.RESUMED,true));
         waitForAppWindow();
         heldResponseClassifiesTruncationAsTransportFailure();
         String raw = CoreBridge.config();
+        assertNetworkProfile(raw);
         verifyFirstVpnConsent(context,raw);
         String secret = value(raw,"secret");
         int mixed = Integer.parseInt(value(raw,"mixed-port"));
@@ -1072,14 +1117,6 @@ public class ProxyTunTest {
         assertNotNull(new JSONObject(read(new URL("http://"+controller+"/version"),java.net.Proxy.NO_PROXY,secret)).getString("version"));
         assertNull("The real consent dialog must grant VPN permission", VpnService.prepare(context));
         noTunRoute();
-        CoreBridge.reload("mixed-port: "+mixed+"\nexternal-controller: "+controller+"\nsecret: "+JSONObject.quote(secret)
-            +"\nmode: rule\nipv6: true\nfind-process-mode: off\n"
-            +"dns:\n  enable: true\n  enhanced-mode: fake-ip\n  nameserver: [https://1.1.1.1/dns-query]\n"
-            +"hosts:\n  android-tun.test: 10.0.2.2\n"
-            +"proxies:\n  - {name: CI-TUN-origin, type: http, server: 10.0.2.2, port: 18081}\n"
-            +"rules:\n  - IP-CIDR,198.51.100.1/32,CI-TUN-origin,no-resolve\n  - MATCH,DIRECT\n");
-        java.nio.file.Files.write(new File(context.getFilesDir(),"client/runtime/config.yaml").toPath(),
-            CoreBridge.config().getBytes(StandardCharsets.UTF_8));
         shell("cmd statusbar add-tile org.clashofrust.android/.VpnTileService");
         for (int cycle=0; cycle<2; cycle++) {
             if (cycle==0) TunnelService.start(context,false);
@@ -1163,10 +1200,10 @@ public class ProxyTunTest {
             assertFalse("Explicit disconnect must not restart on sticky recovery",
                 context.getSharedPreferences("vpn",Context.MODE_PRIVATE).getBoolean("desired",true));
         }
-        // The next instrumentation starts in a fresh process and must restore
-        // this known test route without opening the Activity.
-        java.nio.file.Files.write(new File(context.getFilesDir(),"client/runtime/config.yaml").toPath(),
-            CoreBridge.config().getBytes(StandardCharsets.UTF_8));
+        assertNetworkProfile(CoreBridge.config());
+        assertTrue("The generated runtime must survive a cold process",
+            CoreBridge.config().equals(new String(java.nio.file.Files.readAllBytes(
+                new File(context.getFilesDir(), "client/runtime/config.yaml").toPath()), StandardCharsets.UTF_8)));
     }
     @Test public void quickTileRestoresColdCoreWithoutOpeningTheActivity() throws Exception {
         Context context=InstrumentationRegistry.getInstrumentation().getTargetContext();
@@ -1211,6 +1248,7 @@ public class ProxyTunTest {
             assertFalse(inStage(androidx.test.runner.lifecycle.Stage.STARTED,false));
             assertFalse(inStage(androidx.test.runner.lifecycle.Stage.CREATED,false));
             String raw=CoreBridge.config();
+            assertNetworkProfile(raw);
             tunCarriesSocket(value(raw,"external-controller"),value(raw,"secret"));
             shell("cmd statusbar click-tile org.clashofrust.android/.VpnTileService");
             await("Cold tile did not disconnect",()->!TunnelService.connected());

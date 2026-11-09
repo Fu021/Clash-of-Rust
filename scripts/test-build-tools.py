@@ -57,6 +57,11 @@ _preview_spec = importlib.util.spec_from_file_location(
 preview_slint = importlib.util.module_from_spec(_preview_spec)
 _preview_spec.loader.exec_module(preview_slint)
 
+_linux_tun_spec = importlib.util.spec_from_file_location(
+    'linux_tun_test', build.ROOT/'scripts/test-linux-tun.py')
+linux_tun_test = importlib.util.module_from_spec(_linux_tun_spec)
+_linux_tun_spec.loader.exec_module(linux_tun_test)
+
 
 class TunDnsFixtureTests(unittest.TestCase):
     def query(self, name, kind):
@@ -85,6 +90,42 @@ class TunDnsFixtureTests(unittest.TestCase):
             for kind in (1, 28):
                 answer = tun_dns_fixture.dns_response(self.query('updates.fixture.test', kind), True)
                 self.assertEqual(struct.unpack_from('!H', answer, 6)[0], 0)
+
+    def test_managed_direct_probe_delegates_dns_and_preserves_http_target(self):
+        for bound_type, bound in ((1, b'\x7f\x00\x00\x01'),
+                                  (4, b'\0'*16),
+                                  (3, b'\x09localhost')):
+            with self.subTest(bound_type=bound_type):
+                connection = MagicMock()
+                connection.recv.side_effect = [
+                    b'\x05', b'\x00', bytes([5, 0, 0, bound_type]),
+                    *([bound[:1], bound[1:]+b'\0\0'] if bound_type == 3 else [bound+b'\0\0']),
+                ]
+                connection.makefile.return_value = io.BytesIO(
+                    b'HTTP/1.1 200 OK\r\nContent-Length: 2\r\nConnection: close\r\n\r\nok')
+                with patch.object(linux_tun_test.socket, 'create_connection') as connect:
+                    connect.return_value.__enter__.return_value = connection
+                    self.assertEqual(linux_tun_test.socks_http(
+                        '127.0.0.1', 7898, 'http://updates.fixture.test:8080/subscription.yaml?test=1'), b'ok')
+                self.assertEqual(connection.sendall.call_args_list[0].args[0], b'\x05\x01\x00')
+                self.assertEqual(connection.sendall.call_args_list[1].args[0],
+                                 b'\x05\x01\x00\x03\x14updates.fixture.test\x1f\x90')
+                self.assertEqual(connection.sendall.call_args_list[2].args[0],
+                                 b'GET /subscription.yaml?test=1 HTTP/1.1\r\n'
+                                 b'Host: updates.fixture.test:8080\r\nConnection: close\r\n\r\n')
+
+    def test_managed_direct_probe_rejects_refused_and_truncated_tunnels(self):
+        for fragments, expected in (([b'\x05\xff'], RuntimeError),
+                                    ([b'\x05\x00', b'\x05\x05\x00\x01'], RuntimeError),
+                                    ([b'\x05\x00', b''], EOFError)):
+            with self.subTest(fragments=fragments):
+                connection = MagicMock()
+                connection.recv.side_effect = fragments
+                with patch.object(linux_tun_test.socket, 'create_connection') as connect:
+                    connect.return_value.__enter__.return_value = connection
+                    with self.assertRaises(expected):
+                        linux_tun_test.socks_http('127.0.0.1', 7898, 'http://updates.fixture.test/')
+                connection.makefile.assert_not_called()
 
 
 class PreparedVmTests(unittest.TestCase):

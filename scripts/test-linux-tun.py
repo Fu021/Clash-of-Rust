@@ -8,20 +8,21 @@ import argparse
 import base64
 import contextlib
 import errno
-from http.client import HTTPConnection
+from http.client import HTTPConnection, HTTPResponse
 import json
 import os
 from pathlib import Path
-import pwd
 import re
 import shutil
 import signal
+import socket
 import ssl
 import subprocess
 import sys
 import tempfile
 import time
 import urllib.error
+import urllib.parse
 import urllib.request
 
 
@@ -237,6 +238,47 @@ def tun_device_counters(device):
     return int(stats['rx']['bytes']), int(stats['tx']['bytes'])
 
 
+def socks_http(host, port, url):
+    target = urllib.parse.urlsplit(url)
+    if target.scheme != 'http' or not target.hostname or target.username or target.password:
+        raise ValueError('The isolated SOCKS probe requires a public HTTP URL without credentials')
+    hostname = target.hostname.encode('idna')
+    if len(hostname) > 255:
+        raise ValueError('SOCKS destination name is too long')
+    with socket.create_connection((host, port), timeout=10) as connection:
+        def receive(size):
+            data = bytearray()
+            while len(data) < size:
+                chunk = connection.recv(size-len(data))
+                if not chunk:
+                    raise EOFError('Truncated SOCKS response')
+                data.extend(chunk)
+            return bytes(data)
+
+        connection.sendall(b'\x05\x01\x00')
+        if receive(2) != b'\x05\x00':
+            raise RuntimeError('The managed DIRECT listener rejected SOCKS authentication')
+        connection.sendall(b'\x05\x01\x00\x03'+bytes([len(hostname)])+hostname
+                           +(target.port or 80).to_bytes(2, 'big'))
+        reply = receive(4)
+        if reply[:3] != b'\x05\x00\x00':
+            raise RuntimeError(f'The managed DIRECT listener rejected the target: {reply!r}')
+        address_size = {1: 4, 4: 16}.get(reply[3])
+        if reply[3] == 3:
+            address_size = receive(1)[0]
+        if address_size is None:
+            raise RuntimeError('The managed DIRECT listener returned an invalid address type')
+        receive(address_size+2)
+        path = urllib.parse.urlunsplit(('', '', target.path or '/', target.query, ''))
+        connection.sendall(
+            f'GET {path} HTTP/1.1\r\nHost: {target.netloc}\r\nConnection: close\r\n\r\n'.encode('ascii'))
+        response = HTTPResponse(connection)
+        response.begin()
+        body = response.read()
+        assert response.status == 200, f'Managed DIRECT HTTP {response.status}; response={body[:256]!r}'
+        return body
+
+
 def root_cli_smoke():
     """Exercise the installed headless root path before granting user TUN access."""
     cli = '/opt/clash-of-rust/cor'
@@ -261,14 +303,18 @@ def root_cli_smoke():
             assert output.returncode != 0, f'Invalid configuration was accepted: {arguments}'
             return output.stderr
 
-        def http(host, port, path, secret=None):
+        def http(host, port, path, secret=None, headers=None):
             connection = HTTPConnection(host, port, timeout=10)
             try:
-                headers = {'Authorization': 'Bearer '+secret} if secret else {}
-                connection.request('GET', path, headers=headers)
+                request_headers = dict(headers or {})
+                if secret:
+                    request_headers['Authorization'] = 'Bearer '+secret
+                connection.request('GET', path, headers=request_headers)
                 response = connection.getresponse()
-                assert response.status == 200, f'HTTP {host}:{port}: {response.status}'
-                return response.read()
+                body = response.read()
+                assert response.status == 200, (
+                    f'HTTP {host}:{port}: {response.status}; response={body[:256]!r}')
+                return body
             finally:
                 connection.close()
 
@@ -348,6 +394,7 @@ def root_cli_smoke():
 
             def verify_independent_direct():
                 from tun_dns_fixture import UPDATES
+                headers = {'Host': urllib.parse.urlsplit(subscription_url).netloc}
                 for family, address in zip(('-4', '-6'), UPDATES):
                     routes = json.loads(subprocess.check_output(
                         ['ip', family, '-j', 'route', 'get', address], text=True))
@@ -355,13 +402,13 @@ def root_cli_smoke():
                         f'Update fixture must remain on the physical peer: {routes}')
                 connection = HTTPConnection('127.0.0.1', mixed, timeout=15)
                 try:
-                    connection.request('GET', subscription_url)
+                    connection.request('GET', subscription_url, headers=headers)
                     rejected = connection.getresponse()
                     assert rejected.status != 200, 'The failed-node proxy unexpectedly recovered'
                     rejected.read()
                 finally:
                     connection.close()
-                assert http('127.0.0.1', direct, subscription_url) == (
+                assert socks_http('127.0.0.1', direct, subscription_url) == (
                     b'proxies: []\nrules: ["MATCH,DIRECT"]\n'
                 ), 'Managed DIRECT could not bypass the failed node or resolve the update domain'
 
@@ -389,9 +436,13 @@ def root_cli_smoke():
                       'while subscription updates use independent DIRECT', flush=True)
             invoke('proxy', 'off')
         except Exception:
-            diagnostics = subprocess.run([*command, 'logs', '--limit', '150'], env=env,
+            diagnostics = subprocess.run([*command, 'logs', '--limit', '500'], env=env,
                                          capture_output=True, text=True, timeout=45)
             print(diagnostics.stdout+diagnostics.stderr, flush=True)
+            try:
+                print('Isolated upstream metrics:', http('192.0.2.254', 80, '/metrics').decode(), flush=True)
+            except Exception as error:
+                print('Isolated upstream metrics unavailable:', error, flush=True)
             raise
         finally:
             invoke('stop')
@@ -404,6 +455,8 @@ def root_cli_smoke():
 @contextlib.contextmanager
 def isolated_accounts():
     """Account/sudo policy changes exist only in this private mount namespace."""
+    import pwd
+
     with tempfile.TemporaryDirectory(prefix='cor-account-matrix-') as temporary:
         root = Path(temporary)
         root.chmod(0o755)
@@ -666,6 +719,8 @@ def account_cli_matrix():
 
 
 def main():
+    import pwd
+
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--test-binary', type=Path, required=True)
     parser.add_argument('--uid', type=int, required=True)

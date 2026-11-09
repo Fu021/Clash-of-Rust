@@ -30,7 +30,7 @@ pub fn download_routes(ports: Option<DownloadPorts>, system: Option<String>) -> 
             selected.len() - 1,
             Route {
                 label: "内核直连",
-                proxy: Some(format!("http://127.0.0.1:{}", ports.direct)),
+                proxy: Some(format!("socks5h://127.0.0.1:{}", ports.direct)),
             },
         );
     }
@@ -122,7 +122,10 @@ mod tests {
         assert_eq!(selected.len(), 3);
         assert_eq!(selected[0].label, "内核代理");
         assert_eq!(selected[1].label, "内核直连");
-        assert_eq!(selected[1].proxy.as_deref(), Some("http://127.0.0.1:7898"));
+        assert_eq!(
+            selected[1].proxy.as_deref(),
+            Some("socks5h://127.0.0.1:7898")
+        );
         assert_eq!(selected[2].label, "系统网络");
         assert!(selected[2].proxy.is_none());
     }
