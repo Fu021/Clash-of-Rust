@@ -534,13 +534,17 @@ def finish_test_log(process, report, marker):
     return captured_log,error
 
 
-def input_method_crashes(log, package):
+def process_crashes(log, package):
     crashes=[]
     lines=log.splitlines()
     for index,line in enumerate(lines):
         if 'FATAL EXCEPTION:' not in line:
             continue
-        context=lines[index+1:index+8]
+        context=[]
+        for entry in lines[index+1:index+8]:
+            if 'FATAL EXCEPTION:' in entry:
+                break
+            context.append(entry)
         if not any(f'Process: {package},' in entry for entry in context):
             continue
         exception=next((entry.split('AndroidRuntime:',1)[-1].strip()
@@ -548,6 +552,16 @@ def input_method_crashes(log, package):
                         and ('Exception:' in entry or 'Error:' in entry)), 'unknown')
         crashes.append({'process':package,'exception':exception[:500]})
     return crashes
+
+
+def input_method_crashes(log, package):
+    return process_crashes(log, package)
+
+
+def runtime_crash_status(log, scoped=True):
+    return {'schema': 1, 'log_scoped': scoped,
+            'application_crashes': process_crashes(log, 'org.clashofrust.android'),
+            'system_ui_crashes': process_crashes(log, 'com.android.systemui')}
 
 
 def prepare_emulator_input_method(report):
@@ -765,6 +779,11 @@ def test(arch, apk=None, test_apk=None, ime_only=False, ime_probe=False,
         if server is not None:
             server.shutdown(); server.server_close()
         captured_log,log_error=finish_test_log(log_capture,report,marker)
+        runtime_status=runtime_crash_status(captured_log,log_error is None)
+        write_json(report/'runtime-status.json',runtime_status)
+        if runtime_status['system_ui_crashes']:
+            print('::warning::Android emulator SystemUI crashed; inspect runtime-status.json and original logcat. '
+                  'Application crashes and window readiness are checked separately.',flush=True)
         crashes=input_method_crashes(captured_log,ime_package) if ime_only and log_error is None else []
         if ime_only:
             write_json(report/'input-method-status.json',
@@ -819,6 +838,8 @@ def test(arch, apk=None, test_apk=None, ime_only=False, ime_probe=False,
             details=subprocess.run([ADB,'shell',*command],capture_output=True,text=True,timeout=15)
             (report/(name+'.txt')).write_text(details.stdout+details.stderr)
         errors=[error for error in (capture_error,log_error) if error is not None]
+        if runtime_status['application_crashes']:
+            errors.append(RuntimeError('Android application crashed; inspect runtime-status.json and logcat'))
         if crashes:
             errors.append(RuntimeError(f'Android input method crashed: {ime_package}; inspect input-method-status.json'))
             if ime_only and not ime_probe and properties.get('ro.build.version.sdk')=='31':
@@ -832,7 +853,8 @@ def test(arch, apk=None, test_apk=None, ime_only=False, ime_probe=False,
                     original.add_note(str(error))
             else:
                 raise RuntimeError('; '.join(map(str,errors)))
-    if 'Android startup:' in captured_log or 'Mobile runtime stopped:' in captured_log:
+    if any(marker in captured_log for marker in
+           ('Android startup:', 'Mobile runtime stopped:', 'Recursion detected', 'E RustPanic')):
         raise RuntimeError('Native Android UI/runtime failed; inspect logcat')
 
 

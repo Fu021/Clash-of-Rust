@@ -3343,6 +3343,24 @@ runpy.run_path(str(script), run_name='__main__')
                     root/'target/android-report/x64/applications-api-31',
                     required=True, name='application-preview')
 
+    def test_android_runtime_report_separates_adjacent_app_and_system_ui_crashes(self):
+        log=('E AndroidRuntime: FATAL EXCEPTION: main\n'
+             'E AndroidRuntime: Process: com.android.systemui, PID: 42\n'
+             'E AndroidRuntime: java.lang.NullPointerException: navigation bar\n'
+             'E AndroidRuntime: FATAL EXCEPTION: main\n'
+             'E AndroidRuntime: Process: org.clashofrust.android, PID: 43\n'
+             'E AndroidRuntime: java.lang.IllegalStateException: application\n')
+        report=android_build.runtime_crash_status(log)
+        self.assertTrue(report['log_scoped'])
+        self.assertEqual(report['application_crashes'],
+                         [{'process':'org.clashofrust.android',
+                           'exception':'java.lang.IllegalStateException: application'}])
+        self.assertEqual(report['system_ui_crashes'],
+                         [{'process':'com.android.systemui',
+                           'exception':'java.lang.NullPointerException: navigation bar'}])
+        self.assertFalse(android_build.runtime_crash_status(log,False)['log_scoped'])
+        self.assertEqual(android_build.runtime_crash_status('ordinary log')['application_crashes'],[])
+
     def test_android_ime_crash_report_uses_only_the_current_run_and_selected_input_method(self):
         crash=('E AndroidRuntime: FATAL EXCEPTION: main\n'
                'E AndroidRuntime: Process: com.example.ime, PID: 42\n'

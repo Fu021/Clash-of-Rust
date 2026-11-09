@@ -228,14 +228,21 @@ public class ProxyTunTest {
             MainActivity activity=resumedActivity();
             if (activity==null) return false;
             java.util.concurrent.atomic.AtomicBoolean visible=new java.util.concurrent.atomic.AtomicBoolean();
+            java.util.concurrent.atomic.AtomicInteger width=new java.util.concurrent.atomic.AtomicInteger();
+            java.util.concurrent.atomic.AtomicInteger height=new java.util.concurrent.atomic.AtomicInteger();
             InstrumentationRegistry.getInstrumentation().runOnMainSync(()-> {
                 android.view.View decor=activity.getWindow().getDecorView();
                 visible.set(decor.isAttachedToWindow() && decor.isShown()
-                    && decor.getWidth()>0 && decor.getHeight()>0);
+                    && decor.hasWindowFocus() && decor.isLaidOut() && !decor.isLayoutRequested());
+                width.set(decor.getWidth());
+                height.set(decor.getHeight());
             });
             JSONObject ui=MainActivity.diagnostics();
-            return visible.get() && ui.optDouble("scale")>0
-                && ui.optDouble("width")>0 && ui.optDouble("height")>0;
+            double scale=ui.optDouble("scale");
+            return visible.get() && ui.optBoolean("live") && scale>0
+                && ui.optDouble("width")>0 && ui.optDouble("height")>0
+                && Math.abs(width.get()-ui.optDouble("width")*scale)<=2
+                && Math.abs(height.get()-ui.optDouble("height")*scale)<=2;
         });
     }
     private static boolean inStage(androidx.test.runner.lifecycle.Stage stage,boolean focused) {
@@ -1031,6 +1038,7 @@ public class ProxyTunTest {
         return targets == null ? null : targets.optJSONArray(name);
     }
     private static boolean tryPreviewTarget(String name) throws Exception {
+        if (!inStage(androidx.test.runner.lifecycle.Stage.RESUMED, true)) return false;
         dismissErrorDialogIfPresent(false);
         JSONObject ui = MainActivity.diagnostics();
         JSONArray bounds = previewBounds(ui, name);
@@ -1040,8 +1048,20 @@ public class ProxyTunTest {
         double y = bounds.getDouble(1) + bounds.getDouble(3) / 2;
         if (x < 0 || y < 0 || x >= ui.getDouble("width") || y >= ui.getDouble("height")) return false;
         float scale = (float)ui.getDouble("scale");
-        int[] origin = windowOrigin();
-        return tryTap(origin[0] + (float)x * scale, origin[1] + (float)y * scale);
+        MainActivity activity = resumedActivity();
+        if (activity == null) return false;
+        int[] origin = new int[2];
+        java.util.concurrent.atomic.AtomicBoolean ready = new java.util.concurrent.atomic.AtomicBoolean();
+        InstrumentationRegistry.getInstrumentation().runOnMainSync(() -> {
+            android.view.View decor = activity.getWindow().getDecorView();
+            if (activity.hasWindowFocus() && decor.isAttachedToWindow() && decor.isShown()
+                    && Math.abs(decor.getWidth() - ui.optDouble("width") * scale) <= 2
+                    && Math.abs(decor.getHeight() - ui.optDouble("height") * scale) <= 2) {
+                decor.getLocationOnScreen(origin);
+                ready.set(true);
+            }
+        });
+        return ready.get() && tryTap(origin[0] + (float)x * scale, origin[1] + (float)y * scale);
     }
     private static void previewTarget(String name) throws Exception {
         await("Screenshot control was unavailable: " + name, () -> tryPreviewTarget(name));
@@ -1141,6 +1161,7 @@ public class ProxyTunTest {
         return (double)black / sampled;
     }
     private static void capturePreview(File directory, JSONArray cases, String name) throws Exception {
+        waitForAppWindow();
         SystemClock.sleep(400);
         JSONObject ui = MainActivity.diagnostics();
         assertTrue("Screenshot is not from the live Slint window: " + name, ui.optBoolean("live"));
@@ -1268,6 +1289,7 @@ public class ProxyTunTest {
             () -> MainActivity.diagnostics().optInt("detail", -1) == 0);
     }
     private static void previewPrimaryPages(File directory, JSONArray cases, String prefix) throws Exception {
+        waitForAppWindow();
         previewNavigate(0);
         capturePreview(directory, cases, prefix + "-home");
         previewNavigate(1);
