@@ -12,6 +12,12 @@
 
 实现参考 Clash Verge Rev 的[默认 UA 与自定义入口](https://github.com/clash-verge-rev/clash-verge-rev/blob/4337bd85758d54d7b9044b2da3c9ac1176eae1f3/src-tauri/src/utils/network.rs#L244)，问题来源见 [Issue #30](https://github.com/Fu021/Clash-of-Rust/issues/30)。服务端实际匹配规则及用户订阅仍需现场验证，不能仅凭截图认定故意封禁。
 
+## 订阅操作
+
+桌面和移动端的宫格、列表均保留“使用／使用中”“更新”“编辑”和“详情”入口，详情内保留“删除”。远程来源统一标为“订阅”，文件路径或空来源标为“本地”，不按来源是否为空区分。本地导入的订阅可以编辑、删除，“更新”置灰；改名读取已保存的 YAML，不要求原始导入文件仍存在。内置默认直连的“更新”“编辑”“删除”均置灰，后端仍拒绝编辑和删除默认直连。不可用操作不隐藏，避免不同类型订阅的按钮位置跳动。
+
+当前订阅用强调色显示“使用中”，不能重复点击；其他不可用按钮置灰。Claude 保护及切换期间继续禁止修改，详情仍可查看。本地导入配置改名保留已有 YAML；编辑来源不等于已经成功更新配置，仍按各端既有校验和保存流程处理。
+
 ## 自动更新
 
 桌面 GUI、`cor` 后台与 Android 共用 `subscription_update_interval_minutes`，默认 360 分钟，范围 0–10080；0 关闭。桌面和 Android 设置页可修改，CLI 使用 `cor config set subscription_update_interval_minutes 360`。该间隔与节点定时测速独立。

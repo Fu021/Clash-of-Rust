@@ -20,10 +20,33 @@ slint::slint! {
     import { PageSurface } from "../ui/components/motion.slint";
     import { MobileFrame } from "../ui/mobile/shared/frame.slint";
     import { MobileView } from "../ui/mobile/shared/state.slint";
+    import { MobileData } from "../ui/mobile/shared/state.slint";
+    import { MobileSubscriptions } from "../ui/mobile/shared/pages.slint";
+    import { PageViews } from "../ui/components/view-toggle.slint";
+    import { NoticeCountdown } from "../ui/components/motion.slint";
+    export { ProfileItem } from "../ui/state.slint";
+    export { MobileActions, MobileIntent } from "../ui/mobile/shared/state.slint";
     import { SettingsPage, SettingsNavigation } from "../ui/pages/settings.slint";
-    import { UiData } from "../ui/state.slint";
+    import { UiData, ProfileItem } from "../ui/state.slint";
     import { Theme } from "../ui/theme/palette.slint";
     export { UiGeometry } from "../ui/components/geometry.slint";
+
+    export component CountdownProbe inherits Window {
+        preferred-width: 300px; preferred-height: 80px;
+        in-out property <float> elapsed <=> countdown.elapsed;
+        in-out property <int> revision <=> countdown.revision;
+        out property <float> remaining <=> countdown.value;
+        countdown := NoticeCountdown { width: parent.width; track: #333; fill: #abc; }
+    }
+
+    export component MobileProfilesProbe inherits Window {
+        preferred-width: 740px; preferred-height: 1100px;
+        in-out property <[ProfileItem]> profiles <=> MobileData.profiles;
+        in-out property <bool> list-view <=> PageViews.profiles-list;
+        in-out property <string> selected-id <=> MobileView.selected-id;
+        in-out property <int> detail <=> MobileView.detail;
+        MobileSubscriptions { width: parent.width; height: parent.height; }
+    }
 
     export component SettingsScrollProbe inherits Window {
         title: "SettingsScrollProbe";
@@ -830,6 +853,20 @@ fn mobile_list_stacks_rows_and_keeps_sparse_content_at_the_top() {
     }
     fields.hide().unwrap();
 
+    adapter.set_size(slint::PhysicalSize::new(300, 80));
+    let countdown = CountdownProbe::new().unwrap();
+    countdown.show().unwrap();
+    advance(&clock, Duration::from_millis(2500));
+    assert!((countdown.get_remaining() - 0.5).abs() < 0.03);
+    countdown.set_revision(1);
+    assert_eq!(countdown.get_remaining(), 1.);
+    countdown.set_elapsed(4.);
+    assert!((countdown.get_remaining() - 0.2).abs() < 0.001);
+    advance(&clock, Duration::from_millis(1100));
+    assert_eq!(countdown.get_remaining(), 0.);
+    countdown.hide().unwrap();
+    drop(countdown);
+
     adapter.set_size(slint::PhysicalSize::new(393, 852));
     let notice = MobileNoticeProbe::new().unwrap();
     notice.set_detail(3);
@@ -1000,4 +1037,106 @@ fn mobile_list_stacks_rows_and_keeps_sparse_content_at_the_top() {
     assert_eq!(active_section(&pixels), 0);
     assert_eq!(settings.get_draft(), "7897");
     settings.hide().unwrap();
+    drop(settings);
+
+    adapter.set_size(slint::PhysicalSize::new(740, 1100));
+    let profiles = MobileProfilesProbe::new().unwrap();
+    profiles.set_profiles(
+        Rc::new(slint::VecModel::from(vec![
+            ProfileItem {
+                id: "imported".into(),
+                name: "Imported file".into(),
+                local: true,
+                active: true,
+                ..Default::default()
+            },
+            ProfileItem {
+                id: "builtin".into(),
+                name: "默认直连".into(),
+                source: "default.yaml".into(),
+                local: true,
+                builtin: true,
+                ..Default::default()
+            },
+        ]))
+        .into(),
+    );
+    let targets = Rc::new(RefCell::new(std::collections::BTreeMap::new()));
+    let measured_targets = targets.clone();
+    profiles
+        .global::<UiGeometry>()
+        .on_measured(move |key, bounds| {
+            measured_targets
+                .borrow_mut()
+                .insert(key.to_string(), bounds.iter().collect::<Vec<f32>>());
+        });
+    let events = Rc::new(RefCell::new(Vec::new()));
+    let recorded = events.clone();
+    profiles
+        .global::<MobileActions>()
+        .on_request(move |intent, first, second| {
+            recorded.borrow_mut().push((intent, first, second))
+        });
+    profiles.show().unwrap();
+    advance(&clock, Duration::from_secs(1));
+    frame(&adapter, 740, 1100);
+    let bounds = |key: &str| targets.borrow()[key].clone();
+    let click = |key: &str| {
+        let bounds = bounds(key);
+        let position = LogicalPosition::new(bounds[0] + bounds[2] / 2., bounds[1] + bounds[3] / 2.);
+        profiles
+            .window()
+            .dispatch_event(WindowEvent::PointerPressed {
+                position,
+                button: PointerEventButton::Left,
+            });
+        advance(&clock, Duration::from_millis(50));
+        profiles
+            .window()
+            .dispatch_event(WindowEvent::PointerReleased {
+                position,
+                button: PointerEventButton::Left,
+            });
+        advance(&clock, Duration::from_secs(1));
+        frame(&adapter, 740, 1100);
+    };
+    assert!((bounds("profile:imported")[1] - bounds("profile:builtin")[1]).abs() < 1.);
+    for key in [
+        "profile-use:imported",
+        "profile-update:imported",
+        "profile-update:builtin",
+        "profile-edit:builtin",
+    ] {
+        click(key);
+    }
+    assert!(events.borrow().is_empty());
+    assert_eq!(profiles.get_detail(), 0);
+    click("profile-edit:imported");
+    assert_eq!(profiles.get_detail(), 3);
+    assert_eq!(profiles.get_selected_id(), "imported");
+    profiles.set_detail(0);
+    profiles.set_selected_id("".into());
+    click("profiles-view");
+    assert!(profiles.get_list_view());
+    let imported = bounds("profile:imported");
+    let builtin = bounds("profile:builtin");
+    assert!(
+        imported[3] < 130.,
+        "mobile list rows must stay compact: {imported:?}"
+    );
+    assert!((imported[0] - builtin[0]).abs() < 1.);
+    assert!(builtin[1] >= imported[1] + imported[3]);
+    click("profile-detail:imported");
+    assert!(targets.borrow().contains_key("profile-delete:imported"));
+    click("profile-detail:builtin");
+    assert!(targets.borrow().contains_key("profile-delete:builtin"));
+    click("profile-delete:builtin");
+    assert_eq!(profiles.get_detail(), 0);
+    assert!(profiles.get_selected_id().is_empty());
+    assert!(events.borrow().is_empty());
+    click("profile-detail:imported");
+    click("profile-delete:imported");
+    assert_eq!(profiles.get_detail(), 4);
+    assert_eq!(profiles.get_selected_id(), "imported");
+    profiles.hide().unwrap();
 }

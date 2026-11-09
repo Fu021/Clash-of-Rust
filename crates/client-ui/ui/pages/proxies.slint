@@ -1,7 +1,8 @@
-import { Motion, PageSurface, Disclosure, Entrance } from "../components/motion.slint";
+import { PageSurface, Disclosure } from "../components/motion.slint";
 import { Theme } from "../theme/palette.slint";
 import { UiData, UiActions, Intent, NodeItem, NodePair } from "../state.slint";
 import { CardGrid } from "../components/card-grid.slint";
+import { PageViews, ViewToggle } from "../components/view-toggle.slint";
 import { GeometryTarget } from "../components/geometry.slint";
 import { PageScroll, Label, Caption, Heading, Chevron, ContentPanel, RowPanel, ActionButton, Badge, Field, Select } from "../components/controls.slint";
 
@@ -9,21 +10,31 @@ component NodeCard inherits ContentPanel {
     in property <NodeItem> node;
     GeometryTarget { key: "node:" + root.node.name; bounds: [root.absolute-position.x, root.absolute-position.y, root.width, root.height]; }
     in property <bool> detailed;
+    in property <bool> list-view;
     callback detail-requested();
     preferred-width: 0px; min-width: 0px; horizontal-stretch: 1;
-    vertical-padding: 10px; gap: 4px;
+    vertical-padding: root.list-view ? 4px : 10px;
+    horizontal-padding: root.list-view ? 10px : 16px;
+    gap: root.list-view ? 2px : 4px;
     interactive: UiData.running && !UiData.working && !UiData.protected && !UiData.protection-pending;
     clicked => { UiActions.dispatch(Intent.select-node, root.node.group, root.node.name); }
     border-color: node.selected ? Theme.accent : Theme.line;
     background: node.selected ? Theme.accent-wash : Theme.canvas;
-    HorizontalLayout { cross-axis-alignment: center; spacing: Theme.content-gap;
+    if root.list-view: HorizontalLayout { spacing: Theme.content-gap; cross-axis-alignment: center;
         Label { text: root.node.name; preferred-width: 0px; font-size: 14px * Theme.text-scale; font-weight: root.node.selected ? 600 : 500; }
-        if root.node.selected: Caption { text: "✓"; color: Theme.accent; horizontal-stretch: 0; }
+        ActionButton { geometry-key: "node-delay:" + root.node.name; text: root.node.delay; width: 78px; compact: true; quiet: true; text-color: Theme.tone-color(root.node.tone); enabled: UiData.running && !UiData.working;
+            accessible-label: "测速 " + root.node.name + "，" + root.node.delay;
+            clicked => { UiActions.dispatch(Intent.node-delay, root.node.name, ""); }
+        }
+        ActionButton { geometry-key: "node-detail:" + root.node.name; text: root.detailed ? "收起" : "详情"; width: 44px; compact: true; quiet: true; clicked => { root.detail-requested(); } }
     }
-    HorizontalLayout { cross-axis-alignment: center; spacing: Theme.content-gap;
-        Caption { text: root.node.kind; }
-        ActionButton { geometry-key: "node-detail:" + root.node.name; text: root.detailed ? "收起" : "详情"; compact: true; quiet: true; clicked => { root.detail-requested(); } }
-        ActionButton { geometry-key: "node-delay:" + root.node.name; text: root.node.delay; compact: true; quiet: true; danger: root.node.tone == 3; enabled: UiData.running && !UiData.working;
+    if !root.list-view: GridLayout { spacing: Theme.content-gap;
+        HorizontalLayout { col: 0; row: 0; colspan: 3; cross-axis-alignment: center; spacing: Theme.content-gap;
+            Label { text: root.node.name; preferred-width: 0px; font-size: 14px * Theme.text-scale; font-weight: root.node.selected ? 600 : 500; }
+        }
+        Caption { col: 0; row: 1; text: root.node.kind; horizontal-stretch: 1; }
+        ActionButton { col: 1; row: 1; geometry-key: "node-detail:" + root.node.name; text: root.detailed ? "收起" : "详情"; compact: true; quiet: true; clicked => { root.detail-requested(); } }
+        ActionButton { col: 2; row: 1; geometry-key: "node-delay:" + root.node.name; text: root.node.delay; compact: true; quiet: true; text-color: Theme.tone-color(root.node.tone); enabled: UiData.running && !UiData.working;
             accessible-label: "测速 " + root.node.name + "，" + root.node.delay;
             clicked => { UiActions.dispatch(Intent.node-delay, root.node.name, ""); }
         }
@@ -46,6 +57,7 @@ export component ProxiesPage inherits PageSurface {
             HorizontalLayout { cross-axis-alignment: center; spacing: Theme.content-gap;
                 Field { placeholder: "搜索节点或代理组"; focus-id: "page-search"; text <=> UiData.query; edited(value) => { UiActions.dispatch(Intent.query, value, ""); } }
                 Select { geometry-key: "node-sort"; width: 172px; horizontal-stretch: 0; options: ["延迟从低到高", "延迟从高到低", "名称排序"]; value: self.options[UiData.node-sort]; selected(index, value) => { UiActions.dispatch(Intent.node-sort, "" + index, ""); } }
+                ViewToggle { geometry-key: "nodes-view"; list-view <=> PageViews.nodes-list; }
             }
             for group in UiData.groups: group-card := ContentPanel {
                 property <[NodePair]> closing-nodes;
@@ -79,12 +91,8 @@ export component ProxiesPage inherits PageSurface {
                 group-body := Disclosure { expanded: group-card.expanded;
                     if group-body.mounted: VerticalLayout {
                         spacing: Theme.page-gap;
-                        Rectangle {
-                            height: grid.preferred-height; vertical-stretch: 0;
-                            opacity: reflow.progress;
-                            reflow := Entrance { revision: grid.columns; enabled: Motion.layout-active; }
                         grid := CardGrid {
-                            y: (1 - reflow.progress) * 4px;
+                            list-view: PageViews.nodes-list;
                             minimum-card-width: 196px;
                             available-width: root.width - 2 * Theme.card-padding - Theme.page-gap - Theme.content-gap;
                             property <[NodePair]> pairs: group.expanded ? group.nodes : group-card.closing-nodes;
@@ -96,6 +104,7 @@ export component ProxiesPage inherits PageSurface {
                                 for column in grid.columns: VerticalLayout {
                                     min-width: 0px; preferred-width: 0px; horizontal-stretch: 1; alignment: start;
                                     if row * grid.columns + column < grid.count: NodeCard {
+                                        list-view: PageViews.nodes-list;
                                         node: grid.node(row * grid.columns + column);
                                         detailed: root.detail-group == self.node.group && root.detail-node == self.node.name;
                                         detail-requested => {
@@ -105,7 +114,6 @@ export component ProxiesPage inherits PageSurface {
                                     }
                                 }
                             }
-                        }
                         }
                         HorizontalLayout { cross-axis-alignment: center; spacing: Theme.content-gap;
                             Caption { text: group.expanded ? group.page : group-card.closing-page; }

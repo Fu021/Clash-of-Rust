@@ -3,26 +3,51 @@ import { Theme } from "../theme/palette.slint";
 import { UiData, UiActions, Intent, ProfileItem } from "../state.slint";
 import { PageScroll, Label, Caption, ContentPanel, Panel, ActionButton, Badge, Field, Divider } from "../components/controls.slint";
 import { CardGrid } from "../components/card-grid.slint";
+import { GeometryTarget } from "../components/geometry.slint";
+import { PageViews, ViewToggle } from "../components/view-toggle.slint";
 
 component ProfileActions inherits HorizontalLayout {
     in property <ProfileItem> profile;
     in property <bool> expanded;
     callback details();
+    property <bool> mutable: !UiData.working && !UiData.protected && !UiData.protection-pending;
     spacing: 4px; alignment: start; horizontal-stretch: 0;
-    if !root.profile.active: ActionButton { text: "使用"; compact: true; primary: true; enabled: !UiData.working && !UiData.protected && !UiData.protection-pending; clicked => { UiActions.dispatch(Intent.activate-profile, root.profile.id, ""); } }
-    if !root.profile.local: ActionButton { text: "更新"; compact: true; quiet: true; enabled: !UiData.working && !UiData.protected && !UiData.protection-pending; clicked => { UiActions.dispatch(Intent.update-profile, root.profile.id, ""); } }
-    if !root.profile.local: ActionButton { text: "编辑"; compact: true; quiet: true; enabled: !UiData.working && !UiData.protected && !UiData.protection-pending; clicked => { UiActions.dispatch(Intent.edit-profile, root.profile.id, ""); } }
-    ActionButton { text: root.expanded ? "收起" : "详情"; compact: true; quiet: true; clicked => { root.details(); } }
+    ActionButton { text: root.profile.active ? "使用中" : "使用"; geometry-key: "profile-use:" + root.profile.id; width: max(58px, Theme.detail-size * 3 + 16px); compact: true; primary: !root.profile.active; selected: root.profile.active; opacity: root.profile.active || self.enabled ? 1 : 0.5; enabled: !root.profile.active && root.mutable; clicked => { UiActions.dispatch(Intent.activate-profile, root.profile.id, ""); } }
+    ActionButton { text: "更新"; geometry-key: "profile-update:" + root.profile.id; compact: true; quiet: true; enabled: !root.profile.local && !root.profile.builtin && root.mutable; clicked => { UiActions.dispatch(Intent.update-profile, root.profile.id, ""); } }
+    ActionButton { text: "编辑"; geometry-key: "profile-edit:" + root.profile.id; compact: true; quiet: true; enabled: !root.profile.builtin && root.mutable; clicked => { UiActions.dispatch(Intent.edit-profile, root.profile.id, ""); } }
+    ActionButton { text: root.expanded ? "收起" : "详情"; geometry-key: "profile-detail:" + root.profile.id; compact: true; quiet: true; clicked => { root.details(); } }
 }
 
 component ProfileCard inherits ContentPanel {
+    GeometryTarget { key: "profile:" + root.profile.id; bounds: [root.absolute-position.x, root.absolute-position.y, root.width, root.height]; }
     in property <ProfileItem> profile;
     in property <bool> expanded;
+    in property <bool> list-view;
     callback details();
     min-width: 0px; preferred-width: 0px; horizontal-stretch: 1;
-    vertical-padding: 14px;
+    vertical-padding: root.list-view ? 6px : 14px;
+    horizontal-padding: root.list-view ? 10px : 16px;
     border-color: root.profile.active ? Theme.accent : Theme.line;
-    HorizontalLayout {
+    if root.list-view: HorizontalLayout {
+        spacing: 8px; cross-axis-alignment: center;
+        Rectangle {
+            width: 24px; height: 24px; border-radius: 6px; horizontal-stretch: 0;
+            background: root.profile.active ? Theme.accent-wash : Theme.inset;
+            Image {
+                x: 5px; y: 5px; width: 14px; height: 14px;
+                source: @image-url("../icons/subscriptions.svg");
+                colorize: root.profile.active ? Theme.accent : Theme.secondary;
+            }
+        }
+        Label { text: root.profile.name; font-weight: 600; preferred-width: 0px; horizontal-stretch: 2; }
+        Badge { text: root.profile.local ? "本地" : "订阅"; tone: 4; }
+        ProfileActions {
+            profile: root.profile; expanded: root.expanded;
+            details => { root.details(); }
+        }
+    }
+    if !root.list-view: GridLayout { spacing: 6px;
+    HorizontalLayout { col: 0; row: 0;
         spacing: 10px; cross-axis-alignment: center;
         Rectangle {
             width: 30px; height: 30px; border-radius: 8px;
@@ -34,14 +59,14 @@ component ProfileCard inherits ContentPanel {
             }
         }
         Label { text: root.profile.name; font-weight: 600; preferred-width: 0px; }
-        if root.profile.active: Badge { text: "使用中"; }
-        if root.profile.local: Badge { text: "本地"; tone: 4; }
+        Badge { text: root.profile.local ? "本地" : "订阅"; tone: 4; }
     }
-    Caption { text: root.profile.source; font-size: 12px * Theme.text-scale; }
-    Caption { text: root.profile.detail; font-size: 12px * Theme.text-scale; wrap: word-wrap; }
-    ProfileActions {
+    if root.profile.source != "": Caption { col: 0; row: 1; text: root.profile.source; font-size: 12px * Theme.text-scale; }
+    Caption { col: 0; row: 2; text: root.profile.detail; font-size: 12px * Theme.text-scale; wrap: word-wrap; }
+    ProfileActions { col: 0; row: 3;
         profile: root.profile; expanded: root.expanded;
         details => { root.details(); }
+    }
     }
     detail := Disclosure {
         expanded: root.expanded;
@@ -49,9 +74,10 @@ component ProfileCard inherits ContentPanel {
             spacing: 8px;
             Caption { text: "名称：" + root.profile.name; wrap: word-wrap; }
             Caption { text: "来源：" + root.profile.source; wrap: word-wrap; }
-            if !root.profile.local: ActionButton {
-                text: "删除订阅"; compact: true; quiet: true; danger: true;
-                enabled: !UiData.working && !UiData.protected && !UiData.protection-pending;
+            ActionButton {
+                text: "删除订阅"; compact: true; quiet: true; danger: !root.profile.builtin;
+                geometry-key: "profile-delete:" + root.profile.id;
+                enabled: !root.profile.builtin && !UiData.working && !UiData.protected && !UiData.protection-pending;
                 clicked => { UiActions.dispatch(Intent.delete-profile, root.profile.id, ""); }
             }
         }
@@ -80,8 +106,10 @@ export component SubscriptionsPage inherits PageSurface {
             }
             HorizontalLayout { spacing: Theme.content-gap; cross-axis-alignment: center;
                 Field { placeholder: "搜索名称或来源"; focus-id: "page-search"; text <=> UiData.query; edited(value) => { UiActions.dispatch(Intent.query, value, ""); } }
+                ViewToggle { geometry-key: "profiles-view"; list-view <=> PageViews.profiles-list; }
             }
             grid := CardGrid {
+                list-view: PageViews.profiles-list;
                 minimum-card-width: 288px;
                 available-width: root.width - Theme.content-gap;
                 for row in ceil(UiData.profiles.length / grid.columns): HorizontalLayout {
@@ -89,6 +117,7 @@ export component SubscriptionsPage inherits PageSurface {
                     for column in grid.columns: VerticalLayout {
                         min-width: 0px; preferred-width: 0px; horizontal-stretch: 1; alignment: start;
                         if row * grid.columns + column < UiData.profiles.length: ProfileCard {
+                            list-view: PageViews.profiles-list;
                             profile: UiData.profiles[row * grid.columns + column];
                             expanded: root.expanded-id == self.profile.id;
                             details => { root.expanded-id = root.expanded-id == self.profile.id ? "" : self.profile.id; }

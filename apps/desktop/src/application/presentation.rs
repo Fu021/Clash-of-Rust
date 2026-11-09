@@ -582,8 +582,9 @@ impl App {
                         name: profile.name.as_str().into(),
                         source: profile.source.as_str().into(),
                         active: self.settings.active_profile.as_deref() == Some(&profile.id),
-                        local: profile.is_default(),
-                        detail: if profile.is_default() {
+                        local: profile.is_local(),
+                        builtin: profile.is_default(),
+                        detail: if profile.is_local() {
                             "本地配置".into()
                         } else {
                             clash_client_core::subscription::summary(
@@ -908,11 +909,16 @@ impl App {
                             .into(),
                         source: result
                             .and_then(|result| result.as_ref().ok())
-                            .map_or("".into(), |result| {
-                                format!("{} · {} ms", country, result.millis)
-                            })
+                            .map_or("", |_| country)
                             .into(),
                         tone: tone(status),
+                        delay: result
+                            .and_then(|result| result.as_ref().ok())
+                            .map_or(String::new(), |result| format!("{} ms", result.millis))
+                            .into(),
+                        delay_tone: result
+                            .and_then(|result| result.as_ref().ok())
+                            .map_or(4, |result| proxy_order::response_tone(result.millis)),
                     }
                 })
                 .collect(),
@@ -1085,6 +1091,8 @@ impl App {
                         detail: detail.into(),
                         source: source.into(),
                         tone,
+                        delay: "".into(),
+                        delay_tone: 4,
                     }
                 })
                 .collect(),

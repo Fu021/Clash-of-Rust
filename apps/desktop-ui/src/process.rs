@@ -27,6 +27,7 @@ fn send(output: &mpsc::Sender<UiEvent>, event: UiEvent) {
 fn metrics(window: &AppWindow) -> wire::Metrics {
     // Event filters run before Slint updates its cached geometry. Read the
     // native state to avoid echoing a stale size/DPI/minimized state to the host.
+    let (maximized, fullscreen) = view_state::native_state(window);
     if let Some(metrics) = window.window().with_winit_window(|native| {
         let size = native.inner_size().to_logical::<f32>(native.scale_factor());
         wire::Metrics {
@@ -35,7 +36,7 @@ fn metrics(window: &AppWindow) -> wire::Metrics {
                 height: size.height,
             },
             available: available(window),
-            maximized: native.is_maximized() || native.fullscreen().is_some(),
+            maximized: maximized || fullscreen,
             minimized: native.is_minimized().unwrap_or(false),
             system_dark: native
                 .theme()

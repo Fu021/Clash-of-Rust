@@ -26,19 +26,19 @@ export component MobileFixture inherits Rectangle {
         MobileData.overview-status = "可访问 7 / 8";
         MobileData.overview-network = [
             {id: "lan", title: "内网 IP", value: "192.168.1.23", detail: "仅 IPv4"},
-            {id: "exit", title: "出口 IP", value: "203.0.113.42", detail: "德国 · 188 ms", tone: 1, flag: "🇩🇪", flagged: true},
+            {id: "exit", title: "出口 IP", value: "203.0.113.42", detail: "德国", delay: "188 ms", delay-tone: 1, tone: 1, flag: "🇩🇪", flagged: true},
             {id: "dns", title: "DNS 服务器", value: "223.5.5.5", detail: "系统解析器配置"},
-            {id: "lookup", title: "DNS 解析", value: "github.com → 198.18.0.12", detail: "12 ms · Fake-IP", tone: 1}
+            {id: "lookup", title: "DNS 解析", value: "github.com → 198.18.0.12", detail: "Fake-IP", delay: "12 ms", delay-tone: 1, tone: 1}
         ];
         MobileData.overview-services = [
-            {id: "google", title: "Google", value: "142 ms", detail: "HTTP 204", tone: 1},
-            {id: "youtube", title: "YouTube", value: "156 ms", detail: "HTTP 204", tone: 1},
-            {id: "github", title: "GitHub", value: "311 ms", detail: "HTTP 200", tone: 1},
-            {id: "chatgpt", title: "ChatGPT", value: "264 ms", detail: "HTTP 403 · 可达", tone: 2},
-            {id: "claude", title: "Claude", value: "233 ms", detail: "HTTP 307", tone: 1},
-            {id: "gemini", title: "Gemini", value: "1260 ms", detail: "HTTP 200", tone: 2},
+            {id: "google", title: "Google", value: "142 ms", delay: "142 ms", delay-tone: 1, detail: "HTTP 204", tone: 1},
+            {id: "youtube", title: "YouTube", value: "156 ms", delay: "156 ms", delay-tone: 1, detail: "HTTP 204", tone: 1},
+            {id: "github", title: "GitHub", value: "311 ms", delay: "311 ms", delay-tone: 2, detail: "HTTP 200", tone: 1},
+            {id: "chatgpt", title: "ChatGPT", value: "264 ms", delay: "264 ms", delay-tone: 1, detail: "HTTP 403 · 可达", tone: 2},
+            {id: "claude", title: "Claude", value: "233 ms", delay: "233 ms", delay-tone: 1, detail: "HTTP 307", tone: 1},
+            {id: "gemini", title: "Gemini", value: "1260 ms", delay: "1260 ms", delay-tone: 3, detail: "HTTP 200", tone: 1},
             {id: "telegram", title: "Telegram", value: "无法连接", detail: "未获得响应", tone: 3},
-            {id: "x", title: "X", value: "402 ms", detail: "HTTP 200", tone: 1}
+            {id: "x", title: "X", value: "402 ms", delay: "402 ms", delay-tone: 2, detail: "HTTP 200", tone: 1}
         ];
         MobileData.connection-page = "1 / 1 · 24 条";
         MobileData.rule-page = "1 / 1 · 4 条";
@@ -57,7 +57,8 @@ export component MobileFixture inherits Rectangle {
         MobileData.profiles = [
             {id: "main", name: root.long-names ? root.long-name : "我的订阅", source: "https://example.com/subscription", detail: "已用 2.4/100 GiB · 到期 2026-12-31 · 更新 10-15 10:30", active: true},
             {id: "backup", name: "备用订阅", source: "https://example.org/sub", detail: "已用 1/50 GiB · 不限期 · 更新 10-14 18:20"},
-            {id: "local", name: "默认直连", source: "default.yaml", detail: "本地配置", local: true}
+            {id: "local", name: "默认直连", source: "default.yaml", detail: "本地配置", local: true, builtin: true},
+            {id: "imported", name: "本地导入的配置", source: "", detail: "本地配置", local: true}
         ];
         MobileData.connections = [
             {id: "1", host: "api.github.com:443", detail: "tcp · 10:31:20", rule: "DOMAIN-SUFFIX github.com", route: "Proxy → 德国 01 · IPv6", up: "2.4 KiB/s", down: "128 KiB/s", upload: "24 KiB", download: "1.8 MiB"},
@@ -127,11 +128,11 @@ export component MobileFixture inherits Rectangle {
              right: {id: "台湾", title: "台湾", count: "8 / 13", detail: "确认可用 8 · 网页可达 0 · 受限 5", tone: 2}}
         ];
         MobileData.site-results = [
-            {id: "netflix", title: "Netflix", value: "可用 · 识别地区：香港 · 128 ms", country: "香港", flag: "🇨🇳", flagged: true, source: "服务响应", tone: 1},
-            {id: "chatgpt", title: "ChatGPT", value: "可用 · 识别地区：台湾 · 246 ms", country: "台湾", flag: "🇨🇳", flagged: true, source: "服务响应", tone: 1},
-            {id: "claude", title: "Claude", value: "可用 · 识别地区：德国 · 312 ms", country: "德国", flag: "🇩🇪", flagged: true, source: "服务响应", tone: 1},
+            {id: "netflix", title: "Netflix", value: "可用 · 识别地区：香港", country: "香港", flag: "🇨🇳", flagged: true, source: "服务响应", tone: 1, delay: "128 ms", delay-tone: 1},
+            {id: "chatgpt", title: "ChatGPT", value: "可用 · 识别地区：台湾", country: "台湾", flag: "🇨🇳", flagged: true, source: "服务响应", tone: 1, delay: "420 ms", delay-tone: 2},
+            {id: "claude", title: "Claude", value: "可用 · 识别地区：德国", country: "德国", flag: "🇩🇪", flagged: true, source: "服务响应", tone: 1, delay: "925 ms", delay-tone: 3},
             {id: "gemini", title: "Gemini", value: "网页可达，登录后可用情况待确认", source: "网页响应", tone: 2},
-            {id: "copilot", title: "Copilot", value: "可用 · 识别地区：德国 · 218 ms", country: "德国", flag: "🇩🇪", flagged: true, source: "服务响应", tone: 1},
+            {id: "copilot", title: "Copilot", value: "可用 · 识别地区：德国", country: "德国", flag: "🇩🇪", flagged: true, source: "服务响应", delay: "218 ms", delay-tone: 1, tone: 1},
             {id: "other", title: "其他 AI 服务", value: "当前地区不可用", source: "服务响应", tone: 3}
         ];
         MobileData.claude-normal = "19"; MobileData.claude-risk = "2"; MobileData.claude-clues = "5";

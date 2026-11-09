@@ -71,9 +71,16 @@ fn special(name: &str) -> u8 {
 pub fn delay_tone(delay: Option<u32>) -> i32 {
     match delay {
         None => 4,
-        Some(0 | 800..) => 3,
-        Some(1..300) => 1,
-        Some(_) => 2,
+        Some(0) => 3,
+        Some(millis) => response_tone(u128::from(millis)),
+    }
+}
+
+pub fn response_tone(millis: u128) -> i32 {
+    match millis {
+        0..300 => 1,
+        300..800 => 2,
+        _ => 3,
     }
 }
 
@@ -146,6 +153,16 @@ mod tests {
         assert_eq!(delay_label(None), "未测速");
         assert_eq!(delay_label(Some(0)), "超时");
         assert_eq!(delay_label(Some(42)), "42 ms");
+        for (millis, tone) in [
+            (0, 1),
+            (299, 1),
+            (300, 2),
+            (799, 2),
+            (800, 3),
+            (u128::MAX, 3),
+        ] {
+            assert_eq!(response_tone(millis), tone);
+        }
     }
 
     #[test]

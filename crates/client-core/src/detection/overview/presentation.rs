@@ -17,6 +17,8 @@ pub struct Item {
     pub value: String,
     pub detail: String,
     pub tone: i32,
+    pub delay: String,
+    pub delay_tone: i32,
     pub flag: String,
     pub fogged: bool,
 }
@@ -49,6 +51,14 @@ fn item(id: &str, title: &str, value: &str, detail: &str, tone: i32) -> Item {
         detail: detail.into(),
         tone,
         ..Default::default()
+    }
+}
+
+impl Item {
+    fn with_delay(mut self, millis: u128) -> Self {
+        self.delay = format!("{millis} ms");
+        self.delay_tone = crate::proxy_order::response_tone(millis);
+        self
     }
 }
 
@@ -151,13 +161,8 @@ impl View<'_> {
                 Ok(address) => {
                     let country = crate::countries::country_text(&result.country);
                     let flag = crate::countries::flag_emoji(&result.country);
-                    let mut entry = item(
-                        "exit",
-                        "出口 IP",
-                        &self.address(address),
-                        &format!("{country} · {} ms", result.millis),
-                        1,
-                    );
+                    let mut entry = item("exit", "出口 IP", &self.address(address), &country, 1)
+                        .with_delay(result.millis);
                     entry.flag = flag.unwrap_or_default();
                     entry.fogged = self.hidden;
                     entry
@@ -177,9 +182,10 @@ impl View<'_> {
                     "lookup",
                     "DNS 解析",
                     &format!("github.com → {address}"),
-                    &format!("{millis} ms{}", if fake { " · Fake-IP" } else { "" }),
-                    if *millis < 500 { 1 } else { 2 },
-                );
+                    if fake { "Fake-IP" } else { "" },
+                    1,
+                )
+                .with_delay(*millis);
                 entry.fogged = self.hidden && parsed.is_some();
                 entry
             }
@@ -208,12 +214,9 @@ impl View<'_> {
                                     } else {
                                         detail
                                     },
-                                    if status.health == Health::Ok && status.millis < 800 {
-                                        1
-                                    } else {
-                                        2
-                                    },
+                                    if status.health == Health::Ok { 1 } else { 2 },
                                 )
+                                .with_delay(status.millis)
                             }
                             Health::Error => item(target.id, target.name, "服务异常", &detail, 3),
                         }
@@ -245,6 +248,50 @@ impl View<'_> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn response_time_color_does_not_override_service_health() {
+        let services = [
+            Some(Ok(Status {
+                health: Health::Ok,
+                status: 200,
+                millis: 925,
+            })),
+            Some(Ok(Status {
+                health: Health::Reachable,
+                status: 403,
+                millis: 128,
+            })),
+            Some(Ok(Status {
+                health: Health::Error,
+                status: 502,
+                millis: 30,
+            })),
+        ];
+        let report = View {
+            running: true,
+            busy: false,
+            dirty: false,
+            measured: true,
+            hidden: false,
+            host: &None,
+            dns: &None,
+            exit: &None,
+            services: &services,
+        }
+        .present();
+        assert_eq!(
+            (report.services[0].tone, report.services[0].delay_tone),
+            (1, 3)
+        );
+        assert_eq!(
+            (report.services[1].tone, report.services[1].delay_tone),
+            (2, 1)
+        );
+        assert!(report.services[1].detail.contains("可达"));
+        assert_eq!(report.services[2].tone, 3);
+        assert!(report.services[2].delay.is_empty());
+    }
 
     #[test]
     fn privacy_changes_the_address_before_either_host_receives_the_display_model() {

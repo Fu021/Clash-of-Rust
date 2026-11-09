@@ -37,6 +37,9 @@ export global Theme {
     out property <color> warning-wash: dark ? #3b3428 : #fff7e5;
     out property <color> danger: dark ? #ef8b7f : #b4372b;
     out property <color> danger-wash: dark ? #402c39 : #fef2f2;
+    pure public function tone-color(tone: int) -> color {
+        return tone == 1 ? Theme.success : tone == 2 ? Theme.warning : tone == 3 ? Theme.danger : Theme.muted;
+    }
 }
 
 // Shared swatches; the saved selection belongs to the application settings.

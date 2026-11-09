@@ -470,6 +470,10 @@ impl Profile {
                 .file_name()
                 .is_some_and(|name| name == "default.yaml")
     }
+
+    pub fn is_local(&self) -> bool {
+        !reqwest::Url::parse(&self.source).is_ok_and(|url| matches!(url.scheme(), "http" | "https"))
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -1085,6 +1089,28 @@ mod tests {
         }
     }
     use super::*;
+    #[test]
+    fn profile_origin_distinguishes_imported_files_from_remote_subscriptions() {
+        for (source, local) in [
+            ("", true),
+            ("/home/example/subscription.yaml", true),
+            (r"C:\Users\Example\subscription.yaml", true),
+            ("default.yaml", true),
+            ("https://example.test/subscription", false),
+            ("http://example.test/config.yaml?token=example", false),
+            ("HTTPS://example.test/subscription", false),
+        ] {
+            let profile = Profile {
+                id: "fixture".into(),
+                name: "Imported".into(),
+                source: source.into(),
+                updated: 0,
+                usage: None,
+            };
+            assert_eq!(profile.is_local(), local, "{source}");
+        }
+    }
+
     #[test]
     fn yaml_runtime_preserves_aliases_tags_and_quoted_scalars() {
         let raw = "proxies: []\nx-base: &base {server: example.test, port: '443'}\nx-copy: *base\nx-merged: {<<: *base, enabled: true}\nx-tagged: !custom 'on'\nx-text: ['yes', '001', 'null']\n";

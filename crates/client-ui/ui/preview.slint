@@ -2,6 +2,7 @@
 import { AppWindow } from "app.slint";
 import { UiData } from "state.slint";
 import { Motion } from "components/motion.slint";
+import { PageViews } from "components/view-toggle.slint";
 import "../../../resources/fonts/NotoColorEmoji-Regular.ttf";
 
 export component Preview inherits AppWindow {
@@ -22,6 +23,8 @@ export component Preview inherits AppWindow {
     in-out property <bool> preview-motion;
     changed preview-motion => { Motion.enabled = root.preview-motion; }
     in-out property <bool> preview-sidebar-collapsed <=> root.sidebar-collapsed;
+    in-out property <bool> preview-list-view;
+    changed preview-list-view => { PageViews.nodes-list = root.preview-list-view; PageViews.profiles-list = root.preview-list-view; }
     in-out property <int> preview-page <=> UiData.page;
     changed preview-page => {
         let count = root.preview-page == 2 ? UiData.profiles.length : root.preview-page == 4 ? UiData.rules.length : UiData.connections.length;
@@ -99,18 +102,18 @@ export component Preview inherits AppWindow {
         UiData.overview-status = "可访问 7 / 8";
         UiData.overview-network = [
             {id: "lan", title: "内网 IP", value: "192.168.1.23", detail: "仅 IPv4", tone: 0},
-            {id: "exit", title: "出口 IP", value: "203.0.113.42", detail: "德国 · 188 ms", tone: 1, flag: "🇩🇪", flagged: true},
+            {id: "exit", title: "出口 IP", value: "203.0.113.42", detail: "德国", delay: "188 ms", delay-tone: 1, tone: 1, flag: "🇩🇪", flagged: true},
             {id: "dns", title: "DNS 服务器", value: "223.5.5.5  119.29.29.29", detail: "系统解析器配置", tone: 0},
-            {id: "lookup", title: "DNS 解析", value: "github.com → 198.18.0.12", detail: "12 ms · Fake-IP", tone: 1}];
+            {id: "lookup", title: "DNS 解析", value: "github.com → 198.18.0.12", detail: "Fake-IP", delay: "12 ms", delay-tone: 1, tone: 1}];
         UiData.overview-services = [
-            {id: "google", title: "Google", value: "142 ms", detail: "HTTP 204", tone: 1},
-            {id: "youtube", title: "YouTube", value: "156 ms", detail: "HTTP 204", tone: 1},
-            {id: "github", title: "GitHub", value: "311 ms", detail: "HTTP 200", tone: 1},
-            {id: "chatgpt", title: "ChatGPT", value: "264 ms", detail: "HTTP 403 · 可达", tone: 2},
-            {id: "claude", title: "Claude", value: "233 ms", detail: "HTTP 307", tone: 1},
-            {id: "gemini", title: "Gemini", value: "1260 ms", detail: "HTTP 200", tone: 2},
+            {id: "google", title: "Google", value: "142 ms", delay: "142 ms", delay-tone: 1, detail: "HTTP 204", tone: 1},
+            {id: "youtube", title: "YouTube", value: "156 ms", delay: "156 ms", delay-tone: 1, detail: "HTTP 204", tone: 1},
+            {id: "github", title: "GitHub", value: "311 ms", delay: "311 ms", delay-tone: 2, detail: "HTTP 200", tone: 1},
+            {id: "chatgpt", title: "ChatGPT", value: "264 ms", delay: "264 ms", delay-tone: 1, detail: "HTTP 403 · 可达", tone: 2},
+            {id: "claude", title: "Claude", value: "233 ms", delay: "233 ms", delay-tone: 1, detail: "HTTP 307", tone: 1},
+            {id: "gemini", title: "Gemini", value: "1260 ms", delay: "1260 ms", delay-tone: 3, detail: "HTTP 200", tone: 1},
             {id: "telegram", title: "Telegram", value: "无法连接", detail: "未获得响应", tone: 3},
-            {id: "x", title: "X", value: "402 ms", detail: "HTTP 200", tone: 1}];
+            {id: "x", title: "X", value: "402 ms", delay: "402 ms", delay-tone: 2, detail: "HTTP 200", tone: 1}];
         UiData.protection-status = "正在开启保护，切换 TUN、规则与 DNS…";
         UiData.connection-details = [
             {label: "连接名称", value: "api.github.com"}, {label: "域名", value: "api.github.com"},
@@ -135,11 +138,11 @@ export component Preview inherits AppWindow {
         UiData.profiles = [
             {id: "main", name: root.preview-long-names ? root.long-name : "我的订阅", source: "https://example.com/subscription", detail: "已用 2.4/100 GiB · 到期 2026-12-31 · 更新 10-15 10:30", active: true, local: false},
             {id: "backup", name: "备用订阅", source: "https://example.org/sub", detail: "已用 1/50 GiB · 不限期 · 更新 10-14 18:20", active: false, local: false},
-            {id: "default", name: "默认直连", source: "default.yaml", detail: "本地配置", active: false, local: true},
+            {id: "default", name: "默认直连", source: "default.yaml", detail: "本地配置", active: false, local: true, builtin: true},
             {id: "daily", name: "日常备用", source: "https://example.net/daily", detail: "已用 12/80 GiB · 到期 2026-12-01 · 更新 11-05 11:00", active: false, local: false},
             {id: "testing", name: "测试线路 · 用于检查长订阅名称与来源详情", source: "https://example.com/testing/long-source-path", detail: "已用 8/60 GiB · 不限期 · 更新 11-05 10:30", active: false, local: false},
             {id: "overseas", name: "海外线路", source: "https://example.org/overseas", detail: "流量信息未提供 · 更新 11-04 15:20", active: false, local: false},
-            {id: "backup-c", name: "备用订阅 C", source: "https://example.net/backup", detail: "已用 32/100 GiB · 到期 2027-01-01 · 更新 11-04 09:00", active: false, local: false}];
+            {id: "backup-c", name: "本地导入的配置", source: "", detail: "本地配置", active: false, local: true}];
         UiData.connections = [
             {id: "1", host: "api.github.com:443", detail: "tcp · 10:31:20", rule: "DOMAIN-SUFFIX github.com", route: "Proxy → 德国 01", up: "2.4 KiB/s", down: "128 KiB/s", upload: "24 KiB", download: "1.8 MiB"},
             {id: "2", host: "www.google.com:443", detail: "tcp · 10:31:24", rule: "MATCH", route: "Proxy → 德国 01", up: "1.8 KiB/s", down: "86 KiB/s", upload: "18 KiB", download: "980 KiB"},
@@ -171,8 +174,9 @@ export component Preview inherits AppWindow {
         UiData.site-summary = "出口 IP：203.0.113.42 · 各平台识别到 6 个地区";
         UiData.site-exit-country = "香港"; UiData.site-exit-flagged = true; UiData.site-exit-flag = "🇨🇳";
         UiData.site-results = [
-            {id: "netflix", title: "Netflix", value: "确认可用 · 香港 · 128 ms", country: "香港", flag: "🇨🇳", flagged: true, source: "固定演示结果", tone: 1},
-            {id: "chatgpt", title: "ChatGPT", value: "确认可用 · 台湾 · 246 ms", country: "台湾", flag: "🇨🇳", flagged: true, source: "固定演示结果", tone: 1}
+            {id: "netflix", title: "Netflix", value: "确认可用 · 香港", country: "香港", flag: "🇨🇳", flagged: true, source: "固定演示结果", tone: 1, delay: "128 ms", delay-tone: 1},
+            {id: "chatgpt", title: "ChatGPT", value: "确认可用 · 台湾", country: "台湾", flag: "🇨🇳", flagged: true, source: "固定演示结果", tone: 1, delay: "420 ms", delay-tone: 2},
+            {id: "claude", title: "Claude", value: "确认可用 · 德国", country: "德国", flag: "🇩🇪", flagged: true, source: "固定演示结果", tone: 1, delay: "925 ms", delay-tone: 3}
         ];
         UiData.categories = [
             {left: {id: "AI", title: "AI", count: "4 / 5", detail: "确认可用 3 · 网页可达 1 · 受限 1", tone: 2}, right: {id: "全球", title: "全球", count: "16 / 19", detail: "确认可用 14 · 网页可达 2 · 受限 3", tone: 2}},

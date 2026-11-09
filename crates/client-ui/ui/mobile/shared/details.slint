@@ -141,6 +141,7 @@ export component MobileDetails inherits PageSurface {
                     }
                     MSmall { text: result.detail; wrap: word-wrap; }
                     MSmall { text: result.source; wrap: word-wrap; }
+                    if result.delay != "": MSmall { text: result.delay; color: Theme.tone-color(result.delay-tone); }
                   }
                 }
             }

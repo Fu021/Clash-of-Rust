@@ -546,7 +546,13 @@ impl Session {
         );
         let (raw, usage) = if let Some(raw) = content {
             (raw.to_owned(), None)
-        } else if source.is_empty() {
+        } else if source.is_empty()
+            || id.is_some_and(|id| {
+                self.profiles.iter().any(|profile| {
+                    profile.id == id && profile.is_local() && profile.source == source
+                })
+            })
+        {
             let id = id.context("本地配置需要导入文件")?;
             (
                 core::config::read_profile(&self.store.profile_path(id)?)?,
@@ -693,7 +699,7 @@ impl Session {
             .find(|p| p.id == id)
             .context("订阅不存在")?
             .clone();
-        ensure!(!profile.source.is_empty(), "本地配置没有更新地址");
+        ensure!(!profile.is_local(), "本地配置没有更新地址");
         self.save_profile(Some(id), &profile.name, &profile.source, None)
             .await
     }
@@ -1388,6 +1394,45 @@ mod tests {
                 .count(),
             1
         );
+    }
+
+    #[tokio::test]
+    async fn renaming_an_imported_profile_preserves_its_content_after_reopen() {
+        for source in ["", "/no-longer-present/imported.yaml"] {
+            let root = tempfile::tempdir().unwrap();
+            let mut session = Session::open(root.path().into(), Arc::new(Fake)).unwrap();
+            let raw = "proxies: []\nrules: ['MATCH,DIRECT']\n";
+            session
+                .save_profile(None, "Imported", source, Some(raw))
+                .await
+                .unwrap();
+            let id = session.profiles.last().unwrap().id.clone();
+            assert!(
+                session
+                    .update_profile(&id)
+                    .await
+                    .unwrap_err()
+                    .to_string()
+                    .contains("本地配置没有更新地址")
+            );
+            session
+                .save_profile(Some(&id), "Renamed", source, None)
+                .await
+                .unwrap();
+            let reopened = Session::open(root.path().into(), Arc::new(Fake)).unwrap();
+            let profile = reopened
+                .profiles
+                .iter()
+                .find(|profile| profile.id == id)
+                .unwrap();
+            assert_eq!(profile.name, "Renamed");
+            assert_eq!(profile.source, source);
+            assert!(profile.is_local());
+            assert_eq!(
+                core::config::read_profile(&reopened.store.profile_path(&id).unwrap()).unwrap(),
+                raw
+            );
+        }
     }
 
     #[tokio::test]

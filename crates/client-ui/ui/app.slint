@@ -4,6 +4,7 @@ import { UiData, UiActions, Intent } from "state.slint";
 import { Theme } from "theme/palette.slint";
 export { Theme } from "theme/palette.slint";
 export { Motion } from "components/motion.slint";
+export { PageViews } from "components/view-toggle.slint";
 export { UiGeometry } from "components/geometry.slint";
 export { UiData, UiActions, Intent, Choice, DetailItem, FakeIpExclusionItem, NodeItem, NodePair, GroupItem, ProfileItem, ConnectionItem, RuleItem, LogItem, ReportItem, OverviewItem, CategoryItem, CategoryPair } from "state.slint";
 import { PageScroll, Label, Caption, ContentPanel, Panel, ActionButton, Badge, Paragraph } from "components/controls.slint";
@@ -55,8 +56,9 @@ export component AppWindow inherits Window {
     property <int> accent: UiData.accent;
     in-out property <bool> sidebar-collapsed;
     out property <bool> compact-sidebar: self.width < 880px || self.sidebar-collapsed;
+    property <length> sidebar-action-width: -1px;
     property <length> sidebar-width: self.compact-sidebar ? 60px : 216px;
-    animate sidebar-width { duration: Motion.control; easing: ease-out; enabled: Motion.layout-active; }
+    animate sidebar-width { duration: Motion.control; easing: ease-out; enabled: Motion.layout-active && root.width == root.sidebar-action-width; }
     property <bool> error-active: UiData.notice != "" && UiData.notice-error;
     property <bool> settings-header-navigation: content-area.width - 48px >= (600px + (UiData.protection-health > 0 ? 160px : 0px)) * Theme.text-scale;
     property <int> settings-active-section;
@@ -265,7 +267,7 @@ export component AppWindow inherits Window {
             visible: root.width >= 880px;
             enabled: root.width >= 880px;
             accessible-label: root.sidebar-collapsed ? "展开侧栏" : "收起侧栏";
-            clicked => { root.sidebar-collapsed = !root.sidebar-collapsed; }
+            clicked => { root.sidebar-action-width = root.width; root.sidebar-collapsed = !root.sidebar-collapsed; }
             Image {
                 x: 7px; y: 7px; width: 18px; height: 18px;
                 source: @image-url("icons/sidebar.svg"); colorize: Theme.secondary;

@@ -85,7 +85,7 @@ impl<T: Clone> List<T> {
 }
 include!(concat!(env!("OUT_DIR"), "/contract.rs"));
 
-pub const PROTOCOL: u32 = 14;
+pub const PROTOCOL: u32 = 15;
 pub const LIMIT: usize = 8 * 1024 * 1024;
 #[derive(Debug, Clone, Copy, Default, PartialEq, Serialize, Deserialize)]
 pub struct Size {
@@ -102,6 +102,10 @@ pub struct ViewState {
     pub fullscreen: bool,
     #[serde(default)]
     pub sidebar_collapsed: bool,
+    #[serde(default)]
+    pub nodes_list: bool,
+    #[serde(default)]
+    pub profiles_list: bool,
 }
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct Metrics {
@@ -219,6 +223,23 @@ pub fn read_frame(reader: &mut impl Read) -> io::Result<Option<Vec<u8>>> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn view_state_round_trip_preserves_page_view_choices() {
+        let state = ViewState {
+            nodes_list: true,
+            profiles_list: true,
+            sidebar_collapsed: true,
+            ..Default::default()
+        };
+        let HostPacket::Close(decoded) =
+            decode(&encode(&HostPacket::Close(state)).unwrap()).unwrap()
+        else {
+            panic!("wrong packet")
+        };
+        assert!(decoded.nodes_list);
+        assert!(decoded.profiles_list);
+        assert!(decoded.sidebar_collapsed);
+    }
     #[test]
     fn framed_pipe_preserves_unicode_and_message_boundaries_and_detects_truncation() {
         let event = UiEvent::Intent {

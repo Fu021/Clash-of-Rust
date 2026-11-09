@@ -242,7 +242,6 @@ export component MobileFrame inherits Rectangle {
                 text: root.notice-text;
                 error: MobileView.notice-error;
                 available-height: root.usable-height * (MobileView.notice-modal ? 0.8 : MobileView.notice-error ? 0.65 : 0.4);
-                progress: clamp((animation-tick() - root.notice-start) / 5s, 0, 1);
                 dismissed => { MobileView.notice = ""; }
             }
         }

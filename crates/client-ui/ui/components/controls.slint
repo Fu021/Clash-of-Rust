@@ -176,11 +176,12 @@ export component ActionButton inherits Rectangle {
     in property <bool> notice-control;
     in property <bool> quiet;
     in property <bool> compact;
+    in property <color> text-color: root.primary ? #ffffff : root.danger ? Theme.danger : root.success ? Theme.success : root.selected ? Theme.accent : Theme.ink;
     property <bool> interactive: root.enabled && !root.busy && (UiData.modal == 0 || UiData.modal == 10 || root.modal-control) && (!UiData.notice-modal || root.notice-control);
     // Mouse activation must not leave a focus highlight that resembles selection.
     property <bool> keyboard-focus: false;
     property <bool> pressed: root.interactive && area.pressed;
-    property <length> press-offset: root.pressed ? 1px : 0px;
+    out property <length> press-offset: root.pressed ? 1px : 0px;
     animate press-offset { duration: Motion.fast; easing: ease-out; enabled: Motion.active; }
     callback clicked();
     accessible-role: button;
@@ -205,7 +206,7 @@ export component ActionButton inherits Rectangle {
         height: parent.height;
         text: root.text;
         horizontal-alignment: center;
-        color: root.primary ? #ffffff : root.danger ? Theme.danger : root.success ? Theme.success : root.selected ? Theme.accent : Theme.ink;
+        color: root.text-color;
         font-size: root.compact ? Theme.detail-size : Theme.body-size;
     }
     if root.dropdown: Chevron {
@@ -282,6 +283,7 @@ export component Field inherits Rectangle {
     out property <bool> placeholder-visible: input.text == "" && input.preedit-text == "";
     in property <bool> secret: false;
     in property <string> focus-id;
+    GeometryTarget { key: root.focus-id == "" ? "" : "field:" + root.focus-id; bounds: [root.absolute-position.x, root.absolute-position.y, root.width, root.height]; }
     in property <int> focus-revision: UiData.focus-revision;
     callback edited(string);
     callback accepted();
@@ -291,6 +293,8 @@ export component Field inherits Rectangle {
     }
     height: Theme.control-height;
     min-width: 100px;
+    preferred-width: 0px;
+    horizontal-stretch: 1;
     background: Theme.surface;
     opacity: root.enabled ? 1 : 0.55;
     border-radius: 6px;
@@ -298,6 +302,7 @@ export component Field inherits Rectangle {
     animate border-color, background { duration: Motion.fast; enabled: Motion.active; }
     border-width: root.borderless ? 0px : 1px;
     input := TextInput {
+        accessible-label: root.placeholder;
         x: 12px;
         y: (parent.height + placeholder-label.font-metrics.cap-height) / 2 - placeholder-label.font-metrics.ascent;
         width: parent.width - 24px;

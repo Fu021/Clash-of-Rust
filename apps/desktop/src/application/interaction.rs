@@ -343,7 +343,9 @@ impl App {
                     return Some(none());
                 }
                 if let Some(p) = &mut self.profile_editor {
-                    if p.name.trim().is_empty() || p.source.trim().is_empty() {
+                    if p.name.trim().is_empty()
+                        || (p.source.trim().is_empty() && !p.original.1.is_empty())
+                    {
                         p.error = "配置名称与来源不能为空。".into();
                         return Some(none());
                     }

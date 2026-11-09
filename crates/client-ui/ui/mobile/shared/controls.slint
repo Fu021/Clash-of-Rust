@@ -1,5 +1,6 @@
-import { Motion, Entrance, ProgressTrack, CopyFeedback } from "../../components/motion.slint";
+import { Motion, Entrance, ProgressTrack, CopyFeedback, NoticeCountdown } from "../../components/motion.slint";
 import { Chevron } from "../../components/controls.slint";
+import { GeometryTarget } from "../../components/geometry.slint";
 import { RuleDragHandle } from "../../components/rule-drag.slint";
 import { MobileTypography } from "typography.slint";
 import { Theme } from "../../theme/palette.slint";
@@ -135,6 +136,8 @@ export component MCard inherits Rectangle {
     }
 }
 export component MButton inherits Rectangle {
+    in property <string> geometry-key;
+    GeometryTarget { key: root.geometry-key; bounds: [root.absolute-position.x, root.absolute-position.y, root.width, root.height]; }
     in property <bool> modal-control;
     in property <string> text;
     in property <bool> primary;
@@ -151,9 +154,13 @@ export component MButton inherits Rectangle {
     in property <bool> notice-control;
     in property <bool> quiet;
     in property <bool> compact;
+    in property <color> text-color: root.primary ? #ffffff : root.danger ? Theme.danger : root.success ? Theme.success : root.selected ? Theme.accent : Theme.ink;
     property <bool> interactive: root.enabled && !root.busy && (!MobileView.modal || root.modal-control) && (!MobileView.notice-modal || root.notice-control);
     property <bool> keyboard-focus;
     callback clicked();
+    accessible-role: button;
+    accessible-label: root.text;
+    accessible-action-default => { if root.interactive { root.clicked(); } }
     forward-focus: keys;
     min-width: 0px; preferred-width: 0px; horizontal-stretch: 1;
     height: max(48px, label.preferred-height + 24px); vertical-stretch: 0;
@@ -172,7 +179,7 @@ export component MButton inherits Rectangle {
     }
     label := MText { y: root.press-offset; width: parent.width - 12px - (root.dropdown ? 24px : 0px) - (root.show-swatch ? 26px : 0px); x: root.show-swatch ? 32px : 6px; height: parent.height;
         text: root.text; horizontal-alignment: center;
-        color: root.primary ? #ffffff : root.danger ? Theme.danger : root.success ? Theme.success : root.selected ? Theme.accent : Theme.ink;
+        color: root.text-color;
         font-size: MobileTypography.font-size(root.compact ? 13 : 15);
     }
     if root.dropdown: Image { source: @image-url("../../icons/chevron-down.svg");
@@ -375,7 +382,6 @@ export component MProgress inherits ProgressTrack {
 export component MNotice inherits Rectangle {
     in property <string> text;
     in property <bool> error;
-    in property <float> progress;
     in property <length> available-height;
     property <bool> can-recover: MobileView.notice-recover-network && MobileData.vpn-connected && !MobileData.protected && !MobileData.protection-pending;
     property <bool> can-restart: MobileView.notice-modal && !MobileData.core-running && !MobileData.protected && !MobileData.protection-pending;
@@ -427,6 +433,10 @@ export component MNotice inherits Rectangle {
                     else { MobileActions.request(index == 0 ? MobileIntent.export-diagnostics : index == 1 ? MobileIntent.report-issue : root.can-restart ? MobileIntent.restart-core : MobileIntent.disconnect, index == 2 ? "" : root.text, ""); }
                 }
             }
+        }
+        if !root.error: NoticeCountdown {
+            revision: MobileView.notice-revision; elapsed: MobileView.notice-elapsed;
+            track: Theme.canvas.with-alpha(0.15); fill: Theme.accent;
         }
     }
 }

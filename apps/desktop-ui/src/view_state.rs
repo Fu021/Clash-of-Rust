@@ -1,5 +1,5 @@
 //! Only small, view-local values survive the window. Business drafts live in App.
-use clash_client_ui::{AppWindow, UiData};
+use clash_client_ui::{AppWindow, PageViews, UiData};
 use slint::{ComponentHandle, Timer, winit_030::WinitWindowAccessor};
 use std::time::Duration;
 
@@ -8,14 +8,19 @@ macro_rules! view_state {
     ($(($get:ident,$set:ident)),+ $(,)?) => {
         pub fn capture(window:&AppWindow)->ViewState{
             let data=window.global::<UiData>();let position=native_position(window);let(maximized,fullscreen)=native_state(window);
-            ViewState{page:data.get_page(),scroll:[$(data.$get()),+],accent:(data.get_modal()==12).then(||window.get_accent_draft()),position,maximized,fullscreen,sidebar_collapsed:window.get_sidebar_collapsed()}
+            let views=window.global::<PageViews>();
+            ViewState{page:data.get_page(),scroll:[$(data.$get()),+],accent:(data.get_modal()==12).then(||window.get_accent_draft()),position,maximized,fullscreen,sidebar_collapsed:window.get_sidebar_collapsed(),nodes_list:views.get_nodes_list(),profiles_list:views.get_profiles_list()}
         }
         pub fn prepare(state:&ViewState,window:&AppWindow)->bool{
             if let Some((x,y))=state.position{window.window().set_position(fit_window_position(window,slint::PhysicalPosition::new(x,y)));}
-            window.window().set_maximized(state.maximized);window.window().set_fullscreen(state.fullscreen);state.maximized||state.fullscreen
+            if window.window().is_maximized()!=state.maximized{window.window().set_maximized(state.maximized);}
+            if window.window().is_fullscreen()!=state.fullscreen{window.window().set_fullscreen(state.fullscreen);}
+            state.maximized||state.fullscreen
         }
         pub fn restore(state:&ViewState,window:&AppWindow){
             window.set_sidebar_collapsed(state.sidebar_collapsed);
+            window.global::<PageViews>().set_nodes_list(state.nodes_list);
+            window.global::<PageViews>().set_profiles_list(state.profiles_list);
             let weak=window.as_weak();let state=state.clone();
             Timer::single_shot(Duration::from_millis(16),move||{
                 let Some(window)=weak.upgrade()else{return;};let data=window.global::<UiData>();if data.get_page()!=state.page{return;}
@@ -26,12 +31,16 @@ macro_rules! view_state {
     };
 }
 
-fn native_state(window: &AppWindow) -> (bool, bool) {
+pub(super) fn native_state(window: &AppWindow) -> (bool, bool) {
     window
         .window()
         .with_winit_window(|native| {
+            #[cfg(target_os = "macos")]
+            let maximized = window.window().is_maximized();
+            #[cfg(not(target_os = "macos"))]
+            let maximized = native.is_maximized();
             (
-                native.is_maximized()
+                maximized
                     || (native.is_minimized().unwrap_or(false) && window.window().is_maximized()),
                 native.fullscreen().is_some(),
             )

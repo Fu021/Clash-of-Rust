@@ -117,6 +117,7 @@ def mobile_preview(args) -> None:
             short = height < 480
             values = {'preview-page': page, 'preview-dark': dark, 'preview-detail': detail,
                       'preview-long-names': args.long_names,
+                      'preview-list-view': args.list_view,
                       'inset-top': 0 if short else 24 if width >= 640 else 54 if platform == 'ios' else 28,
                       'inset-bottom': 21 if short else 30 if platform == 'ios' else 24,
                       'inset-left': 44 if short and platform == 'ios' else 0,
@@ -370,6 +371,7 @@ def main() -> None:
     parser.add_argument("--pages-only", action="store_true", help="render the selected pages without the extra mobile scenario matrix")
     parser.add_argument("--long-names", action="store_true", help="preview long configuration, group and node names")
     parser.add_argument("--sidebar-collapsed", action="store_true", help="preview the desktop's manually collapsed sidebar")
+    parser.add_argument("--list-view", action="store_true", help="preview proxies and subscriptions as lists")
     parser.add_argument("--notice", default="", help="show the production floating notice above page content and dialogs")
     parser.add_argument("--notice-error", action="store_true", help="show a persistent error banner with diagnostic export actions")
     parser.add_argument("--notice-critical", action="store_true", help="show the error in a centered blocking dialog")
@@ -423,6 +425,7 @@ def main() -> None:
         fixture = fixtures / "live.json"
         values = {"preview-page": list(PAGES).index(pages[0]), "preview-motion": True,
                   "preview-sidebar-collapsed": args.sidebar_collapsed,
+                  "preview-list-view": args.list_view,
                   "preview-text-scale": round(args.text_scale * 100),
                   **protection_fixture(args.protection_state)}
         fixture.write_text(json.dumps({**values, "preview-dark": themes[0] == "dark"}))
@@ -444,6 +447,7 @@ def main() -> None:
                                            "preview-rules-scroll": args.scroll_y,
                                            "preview-home-scroll": args.scroll_y,
                                            "preview-sidebar-collapsed": args.sidebar_collapsed,
+                                           "preview-list-view": args.list_view,
                                            **{f"preview-{name}-scroll": args.scroll_y for name in (
                                                "proxies", "profiles", "connections", "logs", "network", "sites", "claude", "settings")},
                                            "preview-notice": args.notice, "preview-notice-error": args.notice_error, "preview-notice-elapsed": args.notice_elapsed,

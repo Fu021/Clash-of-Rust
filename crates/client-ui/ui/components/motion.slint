@@ -89,10 +89,29 @@ export component ProgressTrack inherits Rectangle {
     animate displayed { duration: Motion.control; easing: ease-out; enabled: Motion.active && root.smooth && root.value > 0; }
     height: 3px; vertical-stretch: 0; clip: true; background: root.track;
     animate background { duration: Motion.appearance; enabled: Motion.active; }
-    if !root.indeterminate: Rectangle { width: parent.width * root.displayed; height: parent.height; background: root.fill; }
+    if !root.indeterminate: Rectangle { x: 0px; y: 0px; width: parent.width * root.displayed; height: parent.height; background: root.fill; }
     if root.indeterminate: Rectangle {
         width: parent.width * 0.25; height: parent.height; background: root.fill;
         x: Motion.active ? (parent.width + self.width) * mod(animation-tick(), 1400ms) / 1400ms - self.width : parent.width * 0.375;
+    }
+}
+
+export component NoticeCountdown inherits ProgressTrack {
+    in property <int> revision;
+    in property <float> elapsed;
+    property <duration> started;
+    smooth: false;
+    function reset() {
+        self.started = animation-tick() - root.elapsed * 1s;
+        self.value = clamp(1 - root.elapsed / 5, 0, 1);
+    }
+    init => { self.reset(); }
+    changed revision => { self.reset(); }
+    changed elapsed => { self.reset(); }
+    Timer {
+        interval: 100ms;
+        running: root.visible && root.value > 0;
+        triggered => { root.value = clamp(1 - (animation-tick() - root.started) / 5s, 0, 1); }
     }
 }
 

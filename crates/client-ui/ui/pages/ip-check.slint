@@ -74,6 +74,7 @@ export component IpCheckPage inherits PageSurface {
                         VerticalLayout { spacing: 4px; Label { text: result.title; } Caption { text: result.value; color: result.tone == 3 ? Theme.danger : result.tone == 2 ? Theme.warning : result.tone == 1 ? Theme.success : Theme.secondary; } }
                         if result.flagged: Text { text: result.flag; width: 24px; height: 24px; font-size: 20px; }
                         Caption { text: result.source; horizontal-alignment: right; }
+                        if result.delay != "": Caption { text: result.delay; color: Theme.tone-color(result.delay-tone); horizontal-stretch: 0; }
                         ActionButton { text: "详情"; clicked => { UiActions.dispatch(Intent.site-detail, result.id, ""); } }
                         ActionButton { text: "重测"; enabled: UiData.running && !UiData.sites-busy; clicked => { UiActions.dispatch(Intent.site-probe, result.id, ""); } }
                     }

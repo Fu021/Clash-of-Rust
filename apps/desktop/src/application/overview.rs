@@ -175,6 +175,8 @@ impl App {
             value: entry.value.into(),
             detail: entry.detail.into(),
             tone: entry.tone,
+            delay: entry.delay.into(),
+            delay_tone: entry.delay_tone,
             flagged: !entry.flag.is_empty(),
             flag: entry.flag.into(),
             fogged: entry.fogged,

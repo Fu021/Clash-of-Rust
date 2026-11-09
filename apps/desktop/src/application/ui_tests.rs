@@ -81,7 +81,8 @@ fn home_overview_reports_host_exit_dns_and_each_service_without_overclaiming() {
     assert_eq!(row(1).value.as_str(), "203.0.113.2");
     assert!(row(1).flagged);
     assert_eq!(row(1).flag.as_str(), "🇩🇪");
-    assert_eq!(row(1).detail.as_str(), "德国 · 188 ms");
+    assert_eq!(row(1).detail.as_str(), "德国");
+    assert_eq!((row(1).delay.as_str(), row(1).delay_tone), ("188 ms", 1));
     assert_eq!(row(2).value.as_str(), "223.5.5.5");
     assert!(row(3).detail.contains("Fake-IP"));
     let services = data.get_overview_services();
@@ -91,6 +92,7 @@ fn home_overview_reports_host_exit_dns_and_each_service_without_overclaiming() {
         (item(1).tone, item(1).detail.as_str()),
         (2, "HTTP 403 · 可达")
     );
+    assert_eq!(item(1).delay_tone, 1);
     assert_eq!((item(2).tone, item(2).value.as_str()), (3, "服务异常"));
     assert_eq!((item(3).tone, item(3).value.as_str()), (3, "无法连接"));
     assert_eq!((item(4).tone, item(4).value.as_str()), (4, "检测中…"));
@@ -667,6 +669,15 @@ fn connection_detail_exposes_all_fields_and_copies_the_same_values() {
     models.attach(&data);
     let _ = app.ui_intent(Intent::ConnectionDetail, "1", "");
     app.present_slint(&data, &mut models);
+    let _events = pointer_events(&window);
+    window.show().unwrap();
+    motion_frame(&window, 0);
+    let close = target_bounds("dialog-dismiss");
+    for key in ["dialog-copy", "dialog-close-connection"] {
+        let bounds = target_bounds(key);
+        assert_eq!(bounds[2], close[2], "{key} must use the same button width");
+        assert_eq!(bounds[3], close[3], "{key} must use the same button height");
+    }
     let details = data.get_connection_details();
     assert_eq!(details.row_count(), 14);
     for row in details.iter() {
@@ -706,6 +717,38 @@ fn connection_detail_exposes_all_fields_and_copies_the_same_values() {
     assert_eq!(data.get_connection_details().row_count(), 0);
     assert!(data.get_modal_copy().is_empty());
     assert!(data.get_modal_description().contains("已结束"));
+    window.hide().unwrap();
+}
+
+#[test]
+fn ip_response_times_preserve_availability_and_use_independent_latency_tones() {
+    ui_testing::initialize(950, 700);
+    let mut app = fixture(Page::Websites);
+    app.site_show_results = true;
+    for millis in [128, 420, 925] {
+        app.site_results.push(Some(Ok(ip_check::CheckResult {
+            state: ip_check::State::Confirmed,
+            summary: "Confirmed service".into(),
+            country: String::new(),
+            detail: String::new(),
+            millis,
+        })));
+    }
+    let window = AppWindow::new().unwrap();
+    let data = window.global::<UiData>();
+    let mut models = ViewModels::default();
+    models.attach(&data);
+    app.present_slint(&data, &mut models);
+    for (index, (delay, tone)) in [("128 ms", 1), ("420 ms", 2), ("925 ms", 3)]
+        .into_iter()
+        .enumerate()
+    {
+        let row = data.get_site_results().row_data(index).unwrap();
+        assert_eq!(row.delay, delay);
+        assert_eq!(row.delay_tone, tone);
+        assert_eq!(row.tone, 1);
+        assert!(!row.source.contains("ms"));
+    }
 }
 
 #[test]
@@ -843,10 +886,35 @@ fn resizing_a_node_grid_preserves_odd_tail_nodes_and_their_own_actions() {
     )]);
     let events = pointer_events(&window);
     window.show().unwrap();
-    for (width, height) in [(1600, 900), (950, 700)] {
+    window.global::<clash_client_ui::Motion>().set_enabled(true);
+    motion_frame(&window, 250);
+    for (width, height) in [
+        (1600, 900),
+        (950, 700),
+        (875, 700),
+        (865, 700),
+        (885, 700),
+        (940, 700),
+        (1200, 700),
+    ] {
         surface.set_size(slint::PhysicalSize::new(width, height));
-        let _ = window.window().take_snapshot().unwrap();
-        for index in 0..5 {
+        motion_frame(&window, 0);
+        let expected_sidebar = if width < 880 { 60. } else { 216. };
+        assert!((target_bounds("content")[0] - expected_sidebar).abs() < 1.);
+        let initial_bounds: Vec<_> = (0..5)
+            .map(|index| target_bounds(&format!("node:node-{index}")))
+            .collect();
+        motion_frame(&window, 250);
+        assert!(
+            !window.window().has_active_animations(),
+            "{width}x{height}: resizing must not leave an animation running"
+        );
+        for (index, bounds) in initial_bounds.iter().enumerate() {
+            assert_eq!(
+                target_bounds(&format!("node:node-{index}")),
+                *bounds,
+                "{width}x{height}: node geometry must follow the resize without a delayed transition"
+            );
             events.borrow_mut().clear();
             click_target_at(&window, &format!("node:node-{index}"), 0.15, 0.2);
             assert_eq!(
@@ -860,6 +928,40 @@ fn resizing_a_node_grid_preserves_odd_tail_nodes_and_their_own_actions() {
             );
         }
     }
+    click_target(&window, "nodes-view");
+    motion_frame(&window, 250);
+    assert!(
+        window
+            .global::<clash_client_ui::PageViews>()
+            .get_nodes_list()
+    );
+    let first = target_bounds("node:node-0");
+    let second = target_bounds("node:node-1");
+    assert!(
+        first[3] < 52.,
+        "node list rows must stay compact: {first:?}"
+    );
+    let delay = target_bounds("node-delay:node-0");
+    let detail = target_bounds("node-detail:node-0");
+    assert!(
+        delay[0] < detail[0],
+        "latency must precede the detail action"
+    );
+    assert!((first[0] - second[0]).abs() < 1.);
+    assert!(second[1] >= first[1] + first[3]);
+    events.borrow_mut().clear();
+    click_target(&window, "node-delay:node-1");
+    assert_eq!(
+        events.borrow().as_slice(),
+        &[(Intent::NodeDelay, "node-1".into(), "".into())]
+    );
+    click_target(&window, "nodes-view");
+    motion_frame(&window, 250);
+    assert!(
+        !window
+            .global::<clash_client_ui::PageViews>()
+            .get_nodes_list()
+    );
     window.hide().unwrap();
 }
 
@@ -939,6 +1041,156 @@ fn subscription_search_filters_names_and_sources_without_replacing_the_model() {
     app.query.clear();
     app.present_slint(&data, &mut models);
     assert_eq!(rows.row_count(), 2);
+}
+
+#[test]
+fn subscription_forms_use_the_available_width_without_truncating_stored_input() {
+    let surface = ui_testing::initialize(950, 700);
+    let window = AppWindow::new().unwrap();
+    let data = window.global::<UiData>();
+    let _events = pointer_events(&window);
+    let name = "A long subscription name with emoji 🚀 and multiple words";
+    let source = "https://example.test/subscription/config.yaml?client=desktop&format=mihomo";
+    data.set_profile_name(name.into());
+    data.set_profile_source(source.into());
+    data.set_edit_name(name.into());
+    data.set_edit_source(source.into());
+    data.set_modal_title("订阅".into());
+    data.set_modal_accept("保存".into());
+    window.show().unwrap();
+    for width in [800, 950, 1600] {
+        surface.set_size(slint::PhysicalSize::new(width, 700));
+        for kind in [2, 3] {
+            data.set_modal(kind);
+            motion_frame(&window, 0);
+            let name_bounds = target_bounds("field:profile-edit-name");
+            let source_bounds = target_bounds("field:profile-edit-source");
+            assert!(
+                name_bounds[2] >= 500.,
+                "{width}px, modal {kind}: {name_bounds:?}"
+            );
+            assert_eq!(name_bounds[0], source_bounds[0]);
+            assert_eq!(name_bounds[2], source_bounds[2]);
+            assert!(name_bounds[0] >= 0.);
+            assert!(name_bounds[0] + name_bounds[2] <= width as f32);
+            assert!(source_bounds[1] >= name_bounds[1] + name_bounds[3]);
+        }
+    }
+    assert_eq!(data.get_profile_name(), name);
+    assert_eq!(data.get_profile_source(), source);
+    assert_eq!(data.get_edit_name(), name);
+    assert_eq!(data.get_edit_source(), source);
+    window.hide().unwrap();
+}
+
+#[test]
+fn profile_views_keep_local_actions_available_and_builtin_actions_disabled() {
+    ui_testing::initialize(1600, 1000);
+    let mut app = fixture(Page::Profiles);
+    app.profiles[0].source = "/fixture/imported.yaml".into();
+    let mut remote = app.profiles[0].clone();
+    remote.id = "remote".into();
+    remote.name = "Remote subscription".into();
+    remote.source = "https://example.test/subscription".into();
+    let mut builtin = app.profiles[0].clone();
+    builtin.id = "builtin".into();
+    builtin.name = "默认直连".into();
+    builtin.source = "/fixture/default.yaml".into();
+    app.profiles.extend([remote, builtin]);
+    let window = AppWindow::new().unwrap();
+    let data = window.global::<UiData>();
+    let mut models = ViewModels::default();
+    models.attach(&data);
+    app.present_slint(&data, &mut models);
+    let imported = data
+        .get_profiles()
+        .iter()
+        .find(|profile| profile.id == "fixture")
+        .unwrap();
+    assert!(imported.local);
+    assert!(!imported.builtin);
+    let events = pointer_events(&window);
+    window.show().unwrap();
+    motion_frame(&window, 0);
+    let first = target_bounds("profile:fixture");
+    let second = target_bounds("profile:remote");
+    assert!((first[1] - second[1]).abs() < 1.);
+    assert!(second[0] >= first[0] + first[2]);
+    for suffix in ["use", "update", "edit", "detail"] {
+        for id in ["fixture", "remote", "builtin"] {
+            let _ = target_bounds(&format!("profile-{suffix}:{id}"));
+        }
+    }
+    for key in [
+        "profile-use:fixture",
+        "profile-update:fixture",
+        "profile-update:builtin",
+        "profile-edit:builtin",
+    ] {
+        click_target(&window, key);
+    }
+    assert!(events.borrow().is_empty());
+    click_target(&window, "profile-edit:fixture");
+    assert_eq!(
+        events.borrow().as_slice(),
+        &[(Intent::EditProfile, "fixture".into(), "".into())]
+    );
+    events.borrow_mut().clear();
+    click_target(&window, "profiles-view");
+    motion_frame(&window, 0);
+    assert!(
+        window
+            .global::<clash_client_ui::PageViews>()
+            .get_profiles_list()
+    );
+    let first = target_bounds("profile:fixture");
+    let second = target_bounds("profile:remote");
+    assert!(
+        first[3] < 60.,
+        "profile list rows must stay compact: {first:?}"
+    );
+    assert!((first[0] - second[0]).abs() < 1.);
+    assert!(second[1] >= first[1] + first[3]);
+    click_target(&window, "profile-edit:fixture");
+    assert_eq!(
+        events.borrow().as_slice(),
+        &[(Intent::EditProfile, "fixture".into(), "".into())]
+    );
+    let _ = app.ui_intent(Intent::EditProfile, "fixture", "");
+    assert_eq!(app.profile_editor.as_ref().unwrap().id, "fixture");
+    assert_eq!(
+        app.profile_editor.as_ref().unwrap().source,
+        "/fixture/imported.yaml"
+    );
+    let _ = app.ui_intent(Intent::EditProfile, "builtin", "");
+    assert_eq!(app.profile_editor.as_ref().unwrap().id, "fixture");
+    let _ = app.ui_intent(Intent::EditName, "Renamed local file", "");
+    app.busy = true;
+    let _ = app.ui_intent(Intent::SaveProfile, "", "");
+    assert!(app.profile_editor.as_ref().unwrap().error.is_empty());
+    assert!(app.queued_actions.iter().any(|action| matches!(
+        action,
+        Action::EditProfile(id, name, source)
+            if id == "fixture" && name == "Renamed local file" && source == "/fixture/imported.yaml"
+    )));
+    events.borrow_mut().clear();
+    click_target(&window, "profile-detail:fixture");
+    motion_frame(&window, 0);
+    click_target(&window, "profile-delete:fixture");
+    assert_eq!(
+        events.borrow().as_slice(),
+        &[(Intent::DeleteProfile, "fixture".into(), "".into())]
+    );
+    events.borrow_mut().clear();
+    track_targets(&window);
+    motion_frame(&window, 0);
+    click_target(&window, "profile-detail:builtin");
+    motion_frame(&window, 0);
+    let _ = target_bounds("profile-delete:builtin");
+    click_target(&window, "profile-delete:builtin");
+    click_target(&window, "profile-edit:builtin");
+    assert!(events.borrow().is_empty());
+    window.hide().unwrap();
 }
 
 #[test]

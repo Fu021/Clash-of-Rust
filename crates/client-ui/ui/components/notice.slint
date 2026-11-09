@@ -1,4 +1,4 @@
-import { Presence } from "motion.slint";
+import { Presence, NoticeCountdown } from "motion.slint";
 import { Theme } from "../theme/palette.slint";
 import { UiData, UiActions, Intent } from "../state.slint";
 import { ContentPanel, Paragraph, Heading, ActionButton } from "controls.slint";
@@ -107,6 +107,10 @@ export component DesktopNotice inherits Rectangle {
                     modal-control: true; notice-control: true; compact: true; quiet: true; text: "关闭";
                     clicked => { UiActions.dispatch(Intent.dismiss-notice, "", ""); }
                 }
+            }
+            if !UiData.notice-error: NoticeCountdown {
+                revision: UiData.notice-revision; elapsed: UiData.notice-elapsed;
+                track: Theme.canvas.with-alpha(0.15); fill: Theme.accent;
             }
         }
     }

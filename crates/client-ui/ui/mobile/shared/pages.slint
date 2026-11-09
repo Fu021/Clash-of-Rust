@@ -1,5 +1,7 @@
 import { PageSurface, Disclosure, Entrance } from "../../components/motion.slint";
 import { ListReorderGesture, ListReorderPreview } from "../../components/list-reorder.slint";
+import { PageViews, ViewModeIcon } from "../../components/view-toggle.slint";
+import { GeometryTarget } from "../../components/geometry.slint";
 import { MobileTypography } from "typography.slint";
 import { Theme } from "../../theme/palette.slint";
 import { ConnectionPower } from "../../components/brand.slint";
@@ -94,24 +96,36 @@ component NodeCard inherits MCard {
     in property <NodeItem> item;
     in property <string> group;
     in property <bool> detailed;
+    in property <bool> list-view;
     callback detail-requested();
-    vertical-padding: 8px * MobileTypography.density;
+    vertical-padding: (root.list-view ? 4px : 8px) * MobileTypography.density;
     horizontal-padding: 10px;
-    gap: 4px * MobileTypography.density;
+    gap: (root.list-view ? 2px : 4px) * MobileTypography.density;
     border-radius: 10px;
     selected: root.item.selected;
     interactive: MobileData.core-running && !MobileData.protected && !MobileData.protection-pending;
     clicked => { MobileActions.request(MobileIntent.select-node, root.group, root.item.name); }
-    HorizontalLayout { spacing: MobileTypography.small-gap; cross-axis-alignment: center;
+    if root.list-view: HorizontalLayout { spacing: MobileTypography.small-gap; cross-axis-alignment: center;
         MText { text: root.item.name; font-size: MobileTypography.font-size(14); font-weight: 500; }
-        MButton { text: root.selected ? "✓ ⋯" : "⋯"; quiet: true; width: 48px; horizontal-stretch: 0;
+        MButton { text: root.item.delay; quiet: true; text-color: Theme.tone-color(root.item.tone); width: 66px; horizontal-stretch: 0; enabled: !MobileData.delay-busy && !MobileData.protection-pending;
+            clicked => { MobileActions.request(MobileIntent.node-delay, root.item.name, ""); }
+        }
+        MButton { text: "⋯"; quiet: true; width: 44px; horizontal-stretch: 0;
             accessible-role: button; accessible-label: "节点详情"; clicked => { root.detail-requested(); }
         }
     }
-    HorizontalLayout { cross-axis-alignment: center; spacing: MobileTypography.small-gap;
-        MSmall { text: root.item.kind; font-size: MobileTypography.font-size(12); }
-        MButton { text: root.item.delay; quiet: true; danger: root.item.tone == 3; width: 62px; horizontal-stretch: 0; enabled: !MobileData.delay-busy && !MobileData.protection-pending;
-            clicked => { MobileActions.request(MobileIntent.node-delay, root.item.name, ""); }
+    if !root.list-view: VerticalLayout { spacing: 4px * MobileTypography.density;
+        HorizontalLayout { spacing: MobileTypography.small-gap; cross-axis-alignment: center;
+            MText { text: root.item.name; font-size: MobileTypography.font-size(14); font-weight: 500; }
+            MButton { text: "⋯"; quiet: true; width: 48px; horizontal-stretch: 0;
+                accessible-role: button; accessible-label: "节点详情"; clicked => { root.detail-requested(); }
+            }
+        }
+        HorizontalLayout { cross-axis-alignment: center; spacing: MobileTypography.small-gap;
+            MSmall { text: root.item.kind; font-size: MobileTypography.font-size(12); }
+            MButton { text: root.item.delay; quiet: true; text-color: Theme.tone-color(root.item.tone); width: 62px; horizontal-stretch: 0; enabled: !MobileData.delay-busy && !MobileData.protection-pending;
+                clicked => { MobileActions.request(MobileIntent.node-delay, root.item.name, ""); }
+            }
         }
     }
     if root.detailed: VerticalLayout { spacing: MobileTypography.small-gap;
@@ -135,6 +149,11 @@ export component MobileProxies inherits PageSurface {
             MButton { text: MobileData.delay-busy ? "测速中…" : "全部测速"; busy: MobileData.delay-busy; width: max(100px, MobileTypography.font-size(15) * 4 + 16px); horizontal-stretch: 0; enabled: MobileData.core-running && !MobileData.delay-busy && !MobileData.protection-pending;
                 clicked => { MobileActions.request(MobileIntent.delay-all, "", ""); }
             }
+            MButton { geometry-key: "nodes-view"; width: 48px; height: 48px; horizontal-stretch: 0; quiet: true;
+                accessible-label: PageViews.nodes-list ? "切换到宫格视图" : "切换到列表视图";
+                ViewModeIcon { list-view: PageViews.nodes-list; x: 14px; y: 14px + parent.press-offset; width: 20px; height: 20px; }
+                clicked => { PageViews.nodes-list = !PageViews.nodes-list; }
+            }
         }
         for group in MobileData.groups: group-card := MCard {
             property <bool> expanded: group.expanded;
@@ -150,20 +169,20 @@ export component MobileProxies inherits PageSurface {
             group-body := Disclosure { expanded: group-card.expanded;
                 if group-body.mounted: VerticalLayout { spacing: 10px;
                     for pair in group.nodes: VerticalLayout { spacing: 10px;
-                        if root.width < 340px || Theme.text-scale > 1.25: NodeCard { item: pair.left; group: group.id;
+                        if PageViews.nodes-list || root.width < 340px || Theme.text-scale > 1.25: NodeCard { item: pair.left; group: group.id; list-view: PageViews.nodes-list;
                             detailed: root.detail-group == group.id && root.detail-node == pair.left.name;
                             detail-requested => { root.show-detail(group.id, pair.left.name); }
                         }
-                        if (root.width < 340px || Theme.text-scale > 1.25) && pair.right.valid: NodeCard { item: pair.right; group: group.id;
+                        if (PageViews.nodes-list || root.width < 340px || Theme.text-scale > 1.25) && pair.right.valid: NodeCard { item: pair.right; group: group.id; list-view: PageViews.nodes-list;
                             detailed: root.detail-group == group.id && root.detail-node == pair.right.name;
                             detail-requested => { root.show-detail(group.id, pair.right.name); }
                         }
-                        if root.width >= 340px && Theme.text-scale <= 1.25: HorizontalLayout { spacing: 8px;
-                            NodeCard { item: pair.left; group: group.id;
+                        if !PageViews.nodes-list && root.width >= 340px && Theme.text-scale <= 1.25: HorizontalLayout { spacing: 8px;
+                            NodeCard { item: pair.left; group: group.id; list-view: false;
                                 detailed: root.detail-group == group.id && root.detail-node == pair.left.name;
                                 detail-requested => { root.show-detail(group.id, pair.left.name); }
                             }
-                            if pair.right.valid: NodeCard { item: pair.right; group: group.id;
+                            if pair.right.valid: NodeCard { item: pair.right; group: group.id; list-view: false;
                                 detailed: root.detail-group == group.id && root.detail-node == pair.right.name;
                                 detail-requested => { root.show-detail(group.id, pair.right.name); }
                             }
@@ -196,40 +215,59 @@ export component MobileSubscriptions inherits PageSurface {
             }
           }
         }
-        for profile in MobileData.profiles: card := MCard {
+        HorizontalLayout { alignment: end;
+            MButton { geometry-key: "profiles-view"; width: 48px; height: 48px; horizontal-stretch: 0; quiet: true;
+                accessible-label: PageViews.profiles-list ? "切换到宫格视图" : "切换到列表视图";
+                ViewModeIcon { list-view: PageViews.profiles-list; x: 14px; y: 14px + parent.press-offset; width: 20px; height: 20px; }
+                clicked => { PageViews.profiles-list = !PageViews.profiles-list; }
+            }
+        }
+        profile-grid := GridLayout {
+        property <int> columns: PageViews.profiles-list ? 1 : max(1, floor(root.width / (288px * Theme.text-scale)));
+        spacing: MobileTypography.gap;
+        for profile[index] in MobileData.profiles: card := MCard {
+            GeometryTarget { key: "profile:" + profile.id; bounds: [card.absolute-position.x, card.absolute-position.y, card.width, card.height]; }
+            col: mod(index, profile-grid.columns); row: floor(index / profile-grid.columns);
+            min-width: 0px; preferred-width: 0px; horizontal-stretch: 1;
             property <bool> detailed: root.expanded-id == profile.id;
-            vertical-padding: 10px * MobileTypography.density;
-            gap: 4px * MobileTypography.density;
+            property <bool> mutable: !MobileData.profile-busy && !MobileData.protected && !MobileData.protection-pending;
+            vertical-padding: (PageViews.profiles-list ? 4px : 10px) * MobileTypography.density;
+            gap: (PageViews.profiles-list ? 2px : 4px) * MobileTypography.density;
             HorizontalLayout { cross-axis-alignment: center; spacing: MobileTypography.small-gap;
                 Rectangle { width: 32px; height: 32px; border-radius: 9px; background: profile.active ? Theme.accent-wash : Theme.inset;
                     Image { source: @image-url("../../icons/subscriptions.svg"); colorize: profile.active ? Theme.accent : Theme.secondary; x: 7px; y: 7px; width: 18px; height: 18px; }
                 }
                 MHeading { text: profile.name; preferred-width: 0px; font-size: MobileTypography.font-size(15); }
-                MTag { text: profile.active ? "使用中" : profile.local ? "本地" : "订阅"; tone: profile.active ? 0 : 4; }
+                MTag { text: profile.local ? "本地" : "订阅"; tone: 4; }
             }
-            MSmall { text: profile.source; font-size: MobileTypography.font-size(12); }
-            MSmall { text: profile.detail; wrap: word-wrap; font-size: MobileTypography.font-size(12); }
-            HorizontalLayout { spacing: MobileTypography.small-gap;
-                MButton { text: profile.active ? (profile.local ? "使用中" : "更新") : "使用"; selected: profile.active; primary: !profile.active; enabled: !MobileData.profile-busy && !MobileData.protected && !MobileData.protection-pending && (!profile.active || !profile.local);
-                    clicked => { MobileActions.request(profile.active ? MobileIntent.update-profile : MobileIntent.activate-profile, profile.id, ""); }
+            if !PageViews.profiles-list: VerticalLayout { spacing: 4px * MobileTypography.density;
+                MSmall { text: profile.source; font-size: MobileTypography.font-size(12); }
+                MSmall { text: profile.detail; wrap: word-wrap; font-size: MobileTypography.font-size(12); }
+            }
+            actions := GridLayout {
+                property <int> columns: (root.width - MobileTypography.gap * (profile-grid.columns - 1)) / profile-grid.columns - 32px < 272px * Theme.text-scale ? 2 : 4;
+                spacing: MobileTypography.small-gap;
+                MButton { col: 0; row: 0; geometry-key: "profile-use:" + profile.id; text: profile.active ? "使用中" : "使用"; compact: true; primary: !profile.active; selected: profile.active; opacity: profile.active || self.enabled ? 1 : 0.5; enabled: !profile.active && card.mutable;
+                    clicked => { MobileActions.request(MobileIntent.activate-profile, profile.id, ""); }
                 }
-                if !profile.local: MButton { text: "编辑"; quiet: true; enabled: !MobileData.profile-busy && !MobileData.protected && !MobileData.protection-pending; clicked => { MobileView.selected-id = profile.id; MobileView.profile-name = profile.name; MobileView.profile-source = profile.source; MobileView.detail = 3; } }
-                MButton { text: card.detailed ? "收起" : "更多"; quiet: true; dropdown: true; width: 72px; horizontal-stretch: 0;
+                MButton { col: 1; row: 0; geometry-key: "profile-update:" + profile.id; text: "更新"; compact: true; quiet: true; enabled: !profile.local && !profile.builtin && card.mutable;
+                    clicked => { MobileActions.request(MobileIntent.update-profile, profile.id, ""); }
+                }
+                MButton { col: mod(2, actions.columns); row: floor(2 / actions.columns); geometry-key: "profile-edit:" + profile.id; text: "编辑"; compact: true; quiet: true; enabled: !profile.builtin && card.mutable; clicked => { MobileView.selected-id = profile.id; MobileView.profile-name = profile.name; MobileView.profile-source = profile.source; MobileView.detail = 3; } }
+                MButton { col: mod(3, actions.columns); row: floor(3 / actions.columns); geometry-key: "profile-detail:" + profile.id; text: card.detailed ? "收起" : "详情"; compact: true; quiet: true;
                     clicked => { root.expanded-id = card.detailed ? "" : profile.id; }
                 }
             }
             if card.detailed: VerticalLayout { spacing: MobileTypography.small-gap;
-                if !profile.active && !profile.local: MButton { text: "更新订阅"; enabled: !MobileData.profile-busy && !MobileData.protected && !MobileData.protection-pending;
-                    clicked => { MobileActions.request(MobileIntent.update-profile, profile.id, ""); }
-                }
                 MSmall { text: "完整名称：" + profile.name; wrap: word-wrap; }
                 MSmall { text: profile.detail; wrap: word-wrap; }
                 MSmall { text: "来源：" + profile.source; wrap: word-wrap; }
                 HorizontalLayout { spacing: MobileTypography.small-gap;
-                    if !profile.local: MButton { text: "删除"; danger: true; enabled: !MobileData.profile-busy && !MobileData.protected && !MobileData.protection-pending;
+                    MButton { geometry-key: "profile-delete:" + profile.id; text: "删除"; danger: !profile.builtin; enabled: !profile.builtin && card.mutable;
                         clicked => { MobileView.selected-id = profile.id; MobileView.profile-name = profile.name; MobileView.profile-active = profile.active; MobileView.detail = 4; } }
                 }
             }
+        }
         }
     } }
 }

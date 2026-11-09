@@ -28,6 +28,9 @@ component InfoCell inherits Rectangle {
             text: (root.item.flagged ? root.item.flag + " " : "") + root.item.detail;
             color: Theme.secondary; font-size: root.detail-size;
         }
+        if root.item.delay != "": Caption {
+            text: root.item.delay; color: Theme.tone-color(root.item.delay-tone); font-size: root.detail-size;
+        }
     }
 }
 
@@ -42,11 +45,11 @@ component ServiceCell inherits HomeSection {
         Rectangle { width: 7px; height: 7px; border-radius: 4px; background: OverviewTone.color(root.item.tone); }
         Label { text: root.item.title; font-size: root.body-size; font-weight: 600; }
         if Theme.text-scale <= 1.25: Label {
-            text: root.item.value; color: OverviewTone.color(root.item.tone);
+            text: root.item.value; color: root.item.delay != "" ? Theme.tone-color(root.item.delay-tone) : OverviewTone.color(root.item.tone);
             font-size: root.body-size; horizontal-stretch: 0; width: self.preferred-width;
         }
     }
-    if Theme.text-scale > 1.25: Paragraph { text: root.item.value; color: OverviewTone.color(root.item.tone); font-size: root.body-size; }
+    if Theme.text-scale > 1.25: Paragraph { text: root.item.value; color: root.item.delay != "" ? Theme.tone-color(root.item.delay-tone) : OverviewTone.color(root.item.tone); font-size: root.body-size; }
     Paragraph { text: root.item.detail; color: Theme.secondary; font-size: root.detail-size; }
 }
 

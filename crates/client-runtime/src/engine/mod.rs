@@ -1025,14 +1025,6 @@ impl Engine {
         self.settings.require_mutable()?;
         let name = name.trim();
         let source = source.trim();
-        if name.is_empty() || source.is_empty() {
-            bail!("配置名称与来源不能为空");
-        }
-        if source.starts_with("http://") || source.starts_with("https://") {
-            reqwest::Url::parse(source).context("订阅 URL 无效")?;
-        } else if source.contains("://") {
-            bail!("订阅链接仅支持 HTTP 或 HTTPS");
-        }
         let mut profiles = self.profiles.clone();
         let profile = profiles
             .iter_mut()
@@ -1040,6 +1032,14 @@ impl Engine {
             .context("订阅已不存在")?;
         if profile.is_default() {
             bail!("默认直连配置不能编辑");
+        }
+        if name.is_empty() || (source.is_empty() && !profile.source.is_empty()) {
+            bail!("配置名称与来源不能为空");
+        }
+        if source.starts_with("http://") || source.starts_with("https://") {
+            reqwest::Url::parse(source).context("订阅 URL 无效")?;
+        } else if source.contains("://") {
+            bail!("订阅链接仅支持 HTTP 或 HTTPS");
         }
         profile.name = name.to_owned();
         profile.source = source.to_owned();

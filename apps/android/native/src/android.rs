@@ -2431,6 +2431,7 @@ struct ReportRow {
     tone: i32,
     country: String,
     country_label: String,
+    millis: Option<u128>,
 }
 fn project(state: &State) -> Projection {
     let s = &state.session;
@@ -2672,6 +2673,9 @@ fn project(state: &State) -> Projection {
             tone,
             country,
             country_label: String::new(),
+            millis: slot
+                .and_then(|result| result.as_ref().ok())
+                .map(|result| result.millis),
         });
     }
     let mut claude = vec![];
@@ -2707,6 +2711,7 @@ fn project(state: &State) -> Projection {
                 tone,
                 country: signal.country.clone(),
                 country_label,
+                millis: None,
             });
         }
     }
@@ -2724,6 +2729,7 @@ fn project(state: &State) -> Projection {
             tone: 3,
             country: String::new(),
             country_label: String::new(),
+            millis: None,
         });
     }
     if !state.guard_snapshot.error.is_empty() {
@@ -2737,6 +2743,7 @@ fn project(state: &State) -> Projection {
             tone: 3,
             country: String::new(),
             country_label: String::new(),
+            millis: None,
         });
     }
     Projection {
@@ -2864,6 +2871,8 @@ fn apply(ui: &AndroidWindow, p: Projection) {
         value: entry.value.into(),
         detail: entry.detail.into(),
         tone: entry.tone,
+        delay: entry.delay.into(),
+        delay_tone: entry.delay_tone,
         flagged: !entry.flag.is_empty(),
         flag: entry.flag.into(),
         fogged: entry.fogged,
@@ -3100,6 +3109,11 @@ fn apply(ui: &AndroidWindow, p: Projection) {
             tone: r.tone,
             flagged: flag.is_some(),
             flag: flag.unwrap_or_default().into(),
+            delay: r
+                .millis
+                .map_or(String::new(), |millis| format!("{millis} ms"))
+                .into(),
+            delay_tone: r.millis.map_or(4, proxy_order::response_tone),
         }
     };
     data.set_site_results(stable(
@@ -3215,18 +3229,20 @@ fn apply(ui: &AndroidWindow, p: Projection) {
                 .into_iter()
                 .map(|profile| {
                     let builtin = profile.is_default();
+                    let local = profile.is_local();
                     ProfileItem {
                         id: profile.id.clone().into(),
                         name: profile.name.into(),
                         source: profile.source.clone().into(),
-                        detail: if builtin || profile.source.is_empty() {
+                        detail: if local {
                             "本地配置".into()
                         } else {
                             core::subscription::summary(profile.usage.as_deref(), profile.updated)
                                 .into()
                         },
                         active: p.settings.active_profile.as_deref() == Some(&profile.id),
-                        local: builtin || profile.source.is_empty(),
+                        local,
+                        builtin,
                     }
                 })
                 .collect(),
