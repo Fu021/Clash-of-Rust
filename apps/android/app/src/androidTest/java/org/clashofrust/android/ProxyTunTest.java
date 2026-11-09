@@ -1334,8 +1334,14 @@ public class ProxyTunTest {
             previewSettings(directory, cases, "landscape");
             previewApplications(context, directory, cases, "landscape", false);
             assertTrue("Window manager rejected portrait rotation", automation.setRotation(android.app.UiAutomation.ROTATION_FREEZE_0));
+            await("Phone did not return to portrait before tablet resize", () -> {
+                JSONObject ui = MainActivity.diagnostics();
+                return ui.optDouble("width") < ui.optDouble("height");
+            });
             shell("wm size 800x1280");
             shell("wm density 160");
+            assertTrue("Window manager rejected tablet portrait rotation",
+                automation.setRotation(android.app.UiAutomation.ROTATION_FREEZE_0));
             await("Tablet portrait viewport was not applied", () -> {
                 JSONObject ui = MainActivity.diagnostics();
                 return Math.abs(ui.optDouble("scale") - 1.0) < 0.001
