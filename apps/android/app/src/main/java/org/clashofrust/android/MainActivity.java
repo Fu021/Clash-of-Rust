@@ -75,15 +75,23 @@ public final class MainActivity extends NativeActivity {
         if (hideImeIfVisible()) return;
         emit("back",true);
     }
+    @SuppressWarnings("deprecation")
     private boolean hideImeIfVisible() {
         InputMethodManager imm=(InputMethodManager)getSystemService(INPUT_METHOD_SERVICE);
         if (imm==null) return false;
+        android.view.View root=getWindow().getDecorView().getRootView();
+        WindowInsets insets=root.getRootWindowInsets();
         boolean visible;
         if (Build.VERSION.SDK_INT >= 30) {
-            WindowInsets insets=getWindow().getDecorView().getRootWindowInsets();
             visible=insets!=null && insets.isVisible(WindowInsets.Type.ime());
         } else {
-            visible=imm.isAcceptingText();
+            android.graphics.Rect frame=new android.graphics.Rect();
+            root.getWindowVisibleDisplayFrame(frame);
+            int[] origin=new int[2];
+            root.getLocationOnScreen(origin);
+            int obscured=Math.max(0,origin[1]+root.getHeight()-frame.bottom);
+            int navigation=insets!=null ? insets.getStableInsetBottom() : 0;
+            visible=obscured>navigation;
         }
         if (!visible) return false;
         imm.hideSoftInputFromWindow(getWindow().getDecorView().getWindowToken(),0);

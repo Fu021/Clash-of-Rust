@@ -69,6 +69,8 @@
 
 十版本、51 轮的截图与接口对照及当前修复见[输入法专页](android-ime.md)。API 31/32 已复现系统报告显示却未绘出键盘，移除动画回调明显改善；本地一并修复字段切换时序、跨版本键盘高度同步、旧版系统栏误判及字段滚动避让，仍待新补丁的 Actions 和 MIUI 实机验收。不能把历史模拟器采集成功当作全面兼容或正式修复通过。
 
+Android 8.0/8.1 的[应用分流截图](https://github.com/Fu021/Clash-of-Rust/actions/runs/42651167579)曾在 `keyboard_inset=0` 时吞掉返回键，未出现放弃修改提示。`InputMethodManager.isAcceptingText()` 只说明输入连接接受文本，不能判定键盘是否可见；Android 10 及以下按窗口可见区域扣除稳定导航栏判断，Android 11 起读取 IME insets，只有确认可见才消费返回键。
+
 ### Geo 与安装包下载
 
 - 逐块同步写盘和直接覆盖活动 Geo 文件会让慢网、UI 卡顿与安装中断互相放大；活动文件破损还会影响内核重启。下载应复用[共享缓冲与慢速/断流约束](../../crates/client-core/src/download.rs)，Geo 按整组暂存、校验、事务安装，重载失败恢复旧文件。

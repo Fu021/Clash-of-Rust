@@ -24,6 +24,9 @@ slint::slint! {
     import { MobileData } from "../ui/mobile/shared/state.slint";
     import { MobileSubscriptions } from "../ui/mobile/shared/pages.slint";
     import { AndroidSurface } from "../ui/mobile/android/app.slint";
+    import { AndroidApplications } from "../ui/mobile/android/applications.slint";
+    import { AndroidData, ApplicationItem } from "../ui/mobile/android/state.slint";
+    export { ApplicationItem } from "../ui/mobile/android/state.slint";
     import { IosSurface } from "../ui/mobile/ios/app.slint";
     import { PageViews } from "../ui/components/view-toggle.slint";
     import { NoticeCountdown } from "../ui/components/motion.slint";
@@ -64,6 +67,15 @@ slint::slint! {
         in-out property <bool> protected <=> MobileData.protected;
         in-out property <bool> busy <=> MobileData.profile-busy;
         MobileSubscriptions { width: parent.width; height: parent.height; }
+    }
+
+    export component ApplicationsProbe inherits Window {
+        preferred-width: 393px; preferred-height: 852px;
+        in-out property <[ApplicationItem]> applications <=> AndroidData.applications;
+        in-out property <length> offset <=> AndroidData.applications-scroll-y;
+        in-out property <string> query <=> AndroidData.applications-query;
+        AndroidApplications { width: parent.width; height: parent.height; }
+        init => { AndroidData.applications-loaded = true; }
     }
 
     export component MobileStartupProbe inherits Window {
@@ -355,6 +367,57 @@ fn mobile_list_stacks_rows_and_keeps_sparse_content_at_the_top() {
     assert_eq!(pixels[110 * 900 + 700], slint::Rgb8Pixel::new(0, 0, 255));
     probe.hide().unwrap();
     drop(probe);
+}
+
+#[test]
+fn applications_scroll_across_phone_and_tablet_viewports() {
+    let (adapter, clock) = headless(393, 852);
+    let probe = ApplicationsProbe::new().unwrap();
+    let applications = Rc::new(slint::VecModel::from(
+        (0..50)
+            .map(|index| ApplicationItem {
+                name: format!("Application {index}").into(),
+                package: format!("org.example.application{index}").into(),
+                selected: false,
+            })
+            .collect::<Vec<_>>(),
+    ));
+    probe.set_applications(applications.clone().into());
+    probe.show().unwrap();
+    let scroll = |delta_y| {
+        probe.window().dispatch_event(WindowEvent::PointerScrolled {
+            position: LogicalPosition::new(24., 24.),
+            delta_x: 0.,
+            delta_y,
+        });
+    };
+    for (width, height) in [(393, 852), (852, 240), (800, 1100), (1280, 650)] {
+        adapter.set_size(slint::PhysicalSize::new(width, height));
+        probe.set_offset(0.);
+        frame(&adapter, width as usize, height as usize);
+        scroll(-160.);
+        advance(&clock, Duration::from_secs(1));
+        frame(&adapter, width as usize, height as usize);
+        assert!(
+            probe.get_offset() < 0.,
+            "application header and rows must share scrolling at {width}x{height}"
+        );
+        scroll(-10000.);
+        advance(&clock, Duration::from_secs(1));
+        frame(&adapter, width as usize, height as usize);
+        scroll(10000.);
+        advance(&clock, Duration::from_secs(1));
+        frame(&adapter, width as usize, height as usize);
+        assert_eq!(probe.get_offset(), 0.);
+    }
+    scroll(-160.);
+    advance(&clock, Duration::from_secs(1));
+    frame(&adapter, 1280, 650);
+    applications.set_vec(vec![]);
+    probe.set_query("no results".into());
+    frame(&adapter, 1280, 650);
+    assert_eq!(probe.get_offset(), 0.);
+    probe.hide().unwrap();
 }
 
 #[test]

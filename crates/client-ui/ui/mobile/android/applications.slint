@@ -2,15 +2,51 @@ import { PageSurface } from "../../components/motion.slint";
 import { Theme } from "../../theme/palette.slint";
 import { MobileTypography } from "../shared/typography.slint";
 import { MobileData, MobileActions, MobileIntent } from "../shared/state.slint";
-import { AndroidData, AndroidActions, AndroidIntent } from "state.slint";
+import { AndroidData, AndroidActions, AndroidIntent, ApplicationItem } from "state.slint";
 import { MText, MSmall, MParagraph, MButton, MField, MSelect, MSwitch, ListHeader, ListView } from "../shared/controls.slint";
+
+component ApplicationRow inherits Rectangle {
+    in property <ApplicationItem> item;
+    in property <bool> editable;
+    height: max(64px, row.preferred-height + 16px);
+    background: root.item.selected ? Theme.accent-wash : Theme.surface;
+    border-radius: 8px;
+    row := HorizontalLayout { x: 12px; y: 8px; width: parent.width - 24px; height: self.preferred-height;
+        spacing: 12px; cross-axis-alignment: center;
+        Rectangle { width: 36px; height: 36px; border-radius: 10px; background: Theme.inset; horizontal-stretch: 0;
+            Image { width: 20px; height: 20px; x: 8px; y: 8px; source: @image-url("../../icons/proxies.svg"); colorize: root.item.selected ? Theme.accent : Theme.secondary; }
+        }
+        VerticalLayout { spacing: 4px; min-width: 0px;
+            MText { text: root.item.name; font-size: MobileTypography.font-size(14); }
+            MSmall { text: root.item.package; font-size: MobileTypography.font-size(11); }
+        }
+        MText { text: root.item.selected ? "✓" : "○"; color: root.item.selected ? Theme.accent : Theme.secondary;
+            width: 24px; horizontal-stretch: 0; horizontal-alignment: center;
+        }
+    }
+    TouchArea { enabled: root.editable; clicked => { AndroidActions.request(AndroidIntent.application-toggle, root.item.package); } }
+}
 
 export component AndroidApplications inherits PageSurface {
     property <bool> editable: AndroidData.applications-loaded && !AndroidData.applications-loading && !AndroidData.applications-saving && !MobileData.protected && !MobileData.protection-pending;
-    VerticalLayout { spacing: 8px;
+    init => { AndroidData.applications-scroll-y = 0px; }
+    Rectangle {
+        clip: true;
+        apps := ListView {
+            width: parent.width; height: parent.height;
+            content-key: AndroidData.applications-query + (AndroidData.applications-system ? "/system" : "/apps");
+            content-y <=> AndroidData.applications-scroll-y;
+            for index in AndroidData.applications.length + 1: Rectangle {
+                height: index == 0 ? header.header-height : content.preferred-height + 8px;
+                content := VerticalLayout {
+                    x: 0px; y: 0px; width: parent.width; height: self.preferred-height; alignment: start; spacing: 0px;
+                    if index > 0: ApplicationRow { item: AndroidData.applications[index - 1]; editable: root.editable; }
+                }
+            }
+        }
         header := ListHeader {
-            list-height: root.height;
-            list-content-height: apps.content-height + self.header-height;
+            x: 0px; y: 0px; width: apps.visible-width;
+            list-height: apps.visible-height; list-content-height: apps.content-height; content-y <=> apps.content-y;
             VerticalLayout { alignment: start; spacing: 8px;
                 HorizontalLayout { spacing: 8px;
                     MSelect {
@@ -51,28 +87,6 @@ export component AndroidApplications inherits PageSurface {
                     text: AndroidData.applications-total == 0 ? "未读取到应用，请刷新重试" : "没有匹配的应用，可调整搜索或显示系统组件";
                     color: Theme.secondary;
                 }
-            }
-        }
-        apps := ListView {
-            content-key: AndroidData.applications-query + (AndroidData.applications-system ? "/system" : "/apps");
-            for item in AndroidData.applications: Rectangle {
-                height: max(64px, row.preferred-height + 16px);
-                background: item.selected ? Theme.accent-wash : Theme.surface;
-                border-radius: 8px;
-                row := HorizontalLayout { x: 12px; y: 8px; width: parent.width - 24px; height: self.preferred-height;
-                    spacing: 12px; cross-axis-alignment: center;
-                    Rectangle { width: 36px; height: 36px; border-radius: 10px; background: Theme.inset; horizontal-stretch: 0;
-                        Image { width: 20px; height: 20px; x: 8px; y: 8px; source: @image-url("../../icons/proxies.svg"); colorize: item.selected ? Theme.accent : Theme.secondary; }
-                    }
-                    VerticalLayout { spacing: 4px; min-width: 0px;
-                        MText { text: item.name; font-size: MobileTypography.font-size(14); }
-                        MSmall { text: item.package; font-size: MobileTypography.font-size(11); }
-                    }
-                    MText { text: item.selected ? "✓" : "○"; color: item.selected ? Theme.accent : Theme.secondary;
-                        width: 24px; horizontal-stretch: 0; horizontal-alignment: center;
-                    }
-                }
-                TouchArea { enabled: root.editable; clicked => { AndroidActions.request(AndroidIntent.application-toggle, item.package); } }
             }
         }
     }

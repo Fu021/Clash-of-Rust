@@ -425,8 +425,8 @@ def verify_build(root, arch, expected_commit):
     return manifest
 
 
-def pull_ime_report(remote, report, required=False, required_pattern='*.png'):
-    destination=report/'ime-report'
+def pull_device_report(remote, report, required=False, required_pattern='*.png', name='ime-report'):
+    destination=report/name
     destination.mkdir(exist_ok=True)
     command=[ADB,'pull',remote.rstrip('/')+'/.',str(destination)]
     result=subprocess.run(command,capture_output=True,text=True,timeout=30)
@@ -443,10 +443,11 @@ def pull_ime_report(remote, report, required=False, required_pattern='*.png'):
                 if connected.returncode==0:
                     result=subprocess.run(command,capture_output=True,text=True,timeout=30)
                     output.append(result.stdout+result.stderr)
-    (report/'ime-pull.txt').write_text('\n'.join(output))
+    pull_log = name.removesuffix('-report') + '-pull.txt'
+    (report/pull_log).write_text('\n'.join(output))
     if required and (result.returncode or not any(destination.rglob(required_pattern))):
         evidence='screenshot' if required_pattern=='*.png' else 'evidence'
-        raise RuntimeError(f'IME {evidence} export failed; inspect ime-pull.txt')
+        raise RuntimeError(f'{name} {evidence} export failed; inspect {pull_log}')
 
 
 def scoped_test_log(log, marker, end_marker=None):
@@ -639,7 +640,7 @@ def platform_ime_control(report, ime_service):
             screenshot=subprocess.run([ADB,'exec-out','screencap','-p'],capture_output=True,timeout=15)
             (directory/'screenshot.png').write_bytes(screenshot.stdout)
             try:
-                pull_ime_report('/sdcard/Android/data/org.clashofrust.android.test/files/platform-ime-control',
+                pull_device_report('/sdcard/Android/data/org.clashofrust.android.test/files/platform-ime-control',
                                 directory,required=True,required_pattern='state.json')
                 state=json.loads((directory/'ime-report/state.json').read_text())
                 result['editor_state']=state
@@ -773,8 +774,8 @@ def test(arch, apk=None, test_apk=None, ime_only=False, ime_probe=False,
         try:
             if applications_only:
                 destination = report / 'application-preview'
-                run([ADB, 'pull', '/sdcard/Android/data/org.clashofrust.android/files/application-preview',
-                     report], timeout=120)
+                pull_device_report('/sdcard/Android/data/org.clashofrust.android/files/application-preview',
+                                   report, required=True, name='application-preview')
                 validate_application_preview(destination, int(api))
                 if summary := os.environ.get('GITHUB_STEP_SUMMARY'):
                     manifest = json.loads((destination / 'manifest.json').read_text())
@@ -787,7 +788,7 @@ def test(arch, apk=None, test_apk=None, ime_only=False, ime_probe=False,
                                      f'{len(manifest["cases"])} page screenshots captured. '
                                      'No VPN or traffic-routing test was run by this preview.\n')
             if ime_only:
-                pull_ime_report(remote_report,report,required=True)
+                pull_device_report(remote_report,report,required=True)
                 phases=(('before-focus','name-after-tap','name-settled','source-after-tap',
                          'source-settled','after-back') if ime_probe else
                         ('before-focus','0-name-visible','1-source-visible','2-name-visible',
@@ -911,6 +912,10 @@ def validate_application_preview(directory, api):
             if suffix in ('applications-only', 'applications-exclude') and state.get('applications_mode') != (
                     1 if suffix == 'applications-only' else 2):
                 raise ValueError('Android preview captured the wrong application routing mode')
+            if suffix == 'applications-scrolled':
+                offset = state.get('applications_scroll_y')
+                if type(offset) not in (int, float) or not offset < -1:
+                    raise ValueError('Android preview application list did not scroll: ' + name)
 
 
 def application_preview(build, api):

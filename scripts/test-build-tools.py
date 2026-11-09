@@ -1128,7 +1128,7 @@ class BuildTests(unittest.TestCase):
             with self.assertRaisesRegex(RuntimeError, 'source checks completed'):
                 native_ci.main()
         ui_checks = [command for command in commands if len(command) > 1 and command[1] == 'test']
-        self.assertEqual(len(ui_checks), 4)
+        self.assertEqual(len(ui_checks), 5)
         self.assertTrue(any('application::ui_tests::resizing_a_node_grid_preserves_odd_tail_nodes_and_their_own_actions'
                             in command for command in ui_checks))
         self.assertTrue(any('application::ui_tests::shortcut_dialog_edits_the_draft_and_keeps_disabled_choices_after_document_release'
@@ -1136,6 +1136,8 @@ class BuildTests(unittest.TestCase):
         self.assertTrue(any('application::ui_tests::appearance_remains_interactive_while_geo_owns_the_engine_and_late_reply_cannot_undo_it'
                             in command for command in ui_checks))
         self.assertTrue(any('notice_countdown_restarts_and_expires_after_five_seconds'
+                            in command for command in ui_checks))
+        self.assertTrue(any('applications_scroll_across_phone_and_tablet_viewports'
                             in command for command in ui_checks))
         self.assertTrue(all('--exact' in command for command in ui_checks))
         with patch.dict(os.environ, {'COR_CI_DESKTOP_UI_TESTS': 'true'}), \
@@ -2977,23 +2979,27 @@ runpy.run_path(str(script), run_name='__main__')
             android_build.emulator_image(api=25)
 
     def test_ime_export_retries_permission_failure_only_on_a_debuggable_emulator(self):
-        with tempfile.TemporaryDirectory() as temporary:
-            report=Path(temporary)
-            commands=[]
-            def invoke(command, **kwargs):
-                commands.append(command[1:])
-                if command[1]=='pull':
-                    if commands.count(command[1:])==1:
-                        return subprocess.CompletedProcess(command,1,'','Permission denied')
-                    (report/'ime-report/name.png').write_bytes(b'screenshot')
-                return subprocess.CompletedProcess(command,0,'1\n' if command[1]=='shell' else '','')
-            with patch.object(android_build.subprocess,'run',side_effect=invoke):
-                android_build.pull_ime_report('/sdcard/ime-report',report,required=True)
-            self.assertIn(['root'],commands)
-            self.assertIn(['wait-for-device'],commands)
-            self.assertEqual(sum(command[0]=='pull' for command in commands),2)
-            self.assertEqual(commands[-1][1],'/sdcard/ime-report/.')
-            self.assertIn('Permission denied',(report/'ime-pull.txt').read_text())
+        for name in ('ime-report', 'application-preview'):
+            with self.subTest(name=name), tempfile.TemporaryDirectory() as temporary:
+                self.verify_device_report_export(Path(temporary), name)
+
+    def verify_device_report_export(self, report, name):
+        commands=[]
+        def invoke(command, **kwargs):
+            commands.append(command[1:])
+            if command[1]=='pull':
+                if commands.count(command[1:])==1:
+                    return subprocess.CompletedProcess(command,1,'','Permission denied')
+                (report/name/'name.png').write_bytes(b'screenshot')
+            return subprocess.CompletedProcess(command,0,'1\n' if command[1]=='shell' else '','')
+        with patch.object(android_build.subprocess,'run',side_effect=invoke):
+            android_build.pull_device_report('/sdcard/'+name,report,required=True,name=name)
+        self.assertIn(['root'],commands)
+        self.assertIn(['wait-for-device'],commands)
+        self.assertEqual(sum(command[0]=='pull' for command in commands),2)
+        self.assertEqual(commands[-1][1],'/sdcard/'+name+'/.')
+        pull_log = name.removesuffix('-report') + '-pull.txt'
+        self.assertIn('Permission denied',(report/pull_log).read_text())
 
     def test_ime_export_does_not_root_a_physical_or_non_debuggable_device(self):
         for values in (('0','1'),('1','0')):
@@ -3003,7 +3009,7 @@ runpy.run_path(str(script), run_name='__main__')
                            *(subprocess.CompletedProcess([],0,value+'\n','') for value in values)]
                 with patch.object(android_build.subprocess,'run',side_effect=responses) as invoke:
                     with self.assertRaisesRegex(RuntimeError,'screenshot export failed'):
-                        android_build.pull_ime_report('/sdcard/ime-report',report,required=True)
+                        android_build.pull_device_report('/sdcard/ime-report',report,required=True)
                 self.assertNotIn([android_build.ADB,'root'],[call.args[0] for call in invoke.call_args_list])
 
     def test_ime_export_rejects_successful_empty_reports(self):
@@ -3012,7 +3018,7 @@ runpy.run_path(str(script), run_name='__main__')
             with patch.object(android_build.subprocess,'run',
                               return_value=subprocess.CompletedProcess([],0,'0 files pulled','')) as invoke:
                 with self.assertRaisesRegex(RuntimeError,'screenshot export failed'):
-                    android_build.pull_ime_report('/sdcard/ime-report',report,required=True)
+                    android_build.pull_device_report('/sdcard/ime-report',report,required=True)
             self.assertEqual(invoke.call_count,1)
 
     def test_ime_export_can_require_native_control_state_instead_of_subscription_screenshots(self):
@@ -3022,7 +3028,7 @@ runpy.run_path(str(script), run_name='__main__')
                 (report/'ime-report/state.json').write_text('{"editor":"android.widget.EditText"}')
                 return subprocess.CompletedProcess(command,0,'1 file pulled','')
             with patch.object(android_build.subprocess,'run',side_effect=invoke):
-                android_build.pull_ime_report('/sdcard/native-control',report,
+                android_build.pull_device_report('/sdcard/native-control',report,
                                               required=True,required_pattern='state.json')
             self.assertTrue((report/'ime-report/state.json').is_file())
 
@@ -3057,7 +3063,7 @@ runpy.run_path(str(script), run_name='__main__')
                         patch('threading.Thread'), \
                         patch.object(android_build,'start_test_log'), \
                         patch.object(android_build,'finish_test_log',return_value=(captured_log,log_error)), \
-                        patch.object(android_build,'pull_ime_report') as pull, \
+                        patch.object(android_build,'pull_device_report') as pull, \
                         patch.object(android_build,'input_method_crashes') as ime_crashes:
                     if failed_case or log_error or 'Mobile runtime stopped:' in captured_log:
                         with self.assertRaises(RuntimeError):
@@ -3092,7 +3098,7 @@ runpy.run_path(str(script), run_name='__main__')
                     patch('http.server.ThreadingHTTPServer') as server, \
                     patch.object(android_build,'start_test_log'), \
                     patch.object(android_build,'finish_test_log',return_value=('',None)), \
-                    patch.object(android_build,'pull_ime_report') as pull:
+                    patch.object(android_build,'pull_device_report') as pull:
                 with self.assertRaisesRegex(RuntimeError,'IME evidence is incomplete'):
                     android_build.test('x64',root/'app.apk',root/'test.apk',ime_only=True)
                 self.assertEqual(cases,['subscriptionFieldsShowImeAcceptTextAndReopenAfterBack'])
@@ -3170,7 +3176,7 @@ runpy.run_path(str(script), run_name='__main__')
                         ('subscriptions-grid', 2, {}), ('subscriptions-list', 2, {'profiles_list': True}),
                         ('settings-top', 9, {}), ('settings-middle', 9, {}), ('settings-bottom', 9, {}),
                         ('applications-default', 9, {'detail': 18}),
-                        ('applications-scrolled', 9, {'detail': 18})):
+                        ('applications-scrolled', 9, {'detail': 18, 'applications_scroll_y': -120})):
                     add(layout, name, page, **state)
             for name, page, state in (
                     ('subscription-editor', 2, {'detail': 3}), ('tools', 10, {}),
@@ -3201,6 +3207,15 @@ runpy.run_path(str(script), run_name='__main__')
                     with self.assertRaises(ValueError):
                         android_build.validate_application_preview(directory, 31)
                     application['state'] = original
+            scrolled = next(case for case in cases if case['name'] == 'phone-applications-scrolled')
+            for offset in (None, 0, 1, True, float('nan')):
+                with self.subTest(offset=offset):
+                    original = scrolled['state']
+                    scrolled['state'] = original | {'applications_scroll_y': offset}
+                    write()
+                    with self.assertRaisesRegex(ValueError, 'did not scroll'):
+                        android_build.validate_application_preview(directory, 31)
+                    scrolled['state'] = original
             write()
             with self.assertRaisesRegex(ValueError, 'version'):
                 android_build.validate_application_preview(directory, 30)
@@ -3235,6 +3250,7 @@ runpy.run_path(str(script), run_name='__main__')
                     patch('http.server.ThreadingHTTPServer') as origin, \
                     patch.object(android_build, 'start_test_log'), \
                     patch.object(android_build, 'finish_test_log', return_value=('', None)), \
+                    patch.object(android_build, 'pull_device_report') as pull, \
                     patch.object(android_build, 'validate_application_preview',
                                  side_effect=ValueError('missing screenshot')) as verify:
                 with self.assertRaisesRegex(RuntimeError, 'missing screenshot'):
@@ -3247,6 +3263,10 @@ runpy.run_path(str(script), run_name='__main__')
                               instruments[0])
                 verify.assert_called_once_with(
                     root/'target/android-report/x64/applications-api-31/application-preview', 31)
+                pull.assert_called_once_with(
+                    '/sdcard/Android/data/org.clashofrust.android/files/application-preview',
+                    root/'target/android-report/x64/applications-api-31',
+                    required=True, name='application-preview')
 
     def test_android_ime_crash_report_uses_only_the_current_run_and_selected_input_method(self):
         crash=('E AndroidRuntime: FATAL EXCEPTION: main\n'
@@ -3439,7 +3459,7 @@ runpy.run_path(str(script), run_name='__main__')
                     patch.object(android_build.subprocess,'run',side_effect=invoke) as execute, \
                     patch.object(android_build,'start_test_log'), \
                     patch.object(android_build,'finish_test_log',return_value=(crash,None)), \
-                    patch.object(android_build,'pull_ime_report'), \
+                    patch.object(android_build,'pull_device_report'), \
                     patch.object(android_build.time,'monotonic',side_effect=[0,16,0,16]):
                 android_build.platform_ime_control(report,'com.example.ime/.Keyboard')
             reset_commands=[call.args[0] for call in execute.call_args_list

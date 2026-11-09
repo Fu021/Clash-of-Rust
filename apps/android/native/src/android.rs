@@ -3541,6 +3541,7 @@ fn presentation_snapshot(ui: &AndroidWindow) -> Value {
             "applications_loaded":android.get_applications_loaded(),
             "applications_total":android.get_applications_total(),
             "applications_visible":android.get_applications().row_count(),
+            "applications_scroll_y":android.get_applications_scroll_y(),
             "applications_error":android.get_applications_error().as_str()});
     for section in [targets, applications] {
         if let Value::Object(fields) = section {

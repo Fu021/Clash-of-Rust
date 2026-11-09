@@ -256,6 +256,14 @@ public class ProxyTunTest {
         });
         return result.get();
     }
+    private static int[] windowOrigin() {
+        MainActivity activity=resumedActivity();
+        assertNotNull("Slint activity is not focused",activity);
+        int[] origin=new int[2];
+        InstrumentationRegistry.getInstrumentation().runOnMainSync(
+            () -> activity.getWindow().getDecorView().getLocationOnScreen(origin));
+        return origin;
+    }
     private static boolean tryTapTarget(String name) throws Exception {
         JSONObject ui=MainActivity.diagnostics();
         assertTrue("Refusing to touch a stale Slint snapshot",ui.optBoolean("live"));
@@ -264,8 +272,9 @@ public class ProxyTunTest {
         assertTrue("Control has no width",bounds.getDouble(2)>0);
         assertTrue("Control has no height",bounds.getDouble(3)>0);
         float scale=(float)ui.getDouble("scale");
-        return tryTap((float)(bounds.getDouble(0)+bounds.getDouble(2)/2)*scale,
-            (float)(bounds.getDouble(1)+bounds.getDouble(3)/2)*scale);
+        int[] origin=windowOrigin();
+        return tryTap(origin[0]+(float)(bounds.getDouble(0)+bounds.getDouble(2)/2)*scale,
+            origin[1]+(float)(bounds.getDouble(1)+bounds.getDouble(3)/2)*scale);
     }
     private static void tapTarget(String name) throws Exception {
         java.util.concurrent.atomic.AtomicReference<String> previous=new java.util.concurrent.atomic.AtomicReference<>();
@@ -1026,7 +1035,8 @@ public class ProxyTunTest {
         double y = bounds.getDouble(1) + bounds.getDouble(3) / 2;
         if (x < 0 || y < 0 || x >= ui.getDouble("width") || y >= ui.getDouble("height")) return false;
         float scale = (float)ui.getDouble("scale");
-        return tryTap((float)x * scale, (float)y * scale);
+        int[] origin = windowOrigin();
+        return tryTap(origin[0] + (float)x * scale, origin[1] + (float)y * scale);
     }
     private static void previewTarget(String name) throws Exception {
         await("Screenshot control was unavailable: " + name, () -> tryPreviewTarget(name));
@@ -1036,9 +1046,10 @@ public class ProxyTunTest {
         JSONArray bounds = previewBounds(ui, "preview-content");
         assertNotNull("Screenshot content has no measured bounds", bounds);
         float scale = (float)ui.getDouble("scale");
-        float x = (float)(bounds.getDouble(0) + bounds.getDouble(2) * 0.55) * scale;
-        float top = (float)(bounds.getDouble(1) + bounds.getDouble(3) * 0.22) * scale;
-        float bottom = (float)(bounds.getDouble(1) + bounds.getDouble(3) * 0.78) * scale;
+        int[] origin = windowOrigin();
+        float x = origin[0] + (float)(bounds.getDouble(0) + bounds.getDouble(2) * 0.55) * scale;
+        float top = origin[1] + (float)(bounds.getDouble(1) + bounds.getDouble(3) * 0.22) * scale;
+        float bottom = origin[1] + (float)(bounds.getDouble(1) + bounds.getDouble(3) * 0.78) * scale;
         float start = forward ? bottom : top, end = forward ? top : bottom;
         long down = SystemClock.uptimeMillis();
         pointer(MotionEvent.ACTION_DOWN, x, start, down, down);
@@ -1084,6 +1095,8 @@ public class ProxyTunTest {
         JSONObject ui = MainActivity.diagnostics();
         assertTrue("Screenshot is not from the live Slint window: " + name, ui.optBoolean("live"));
         assertFalse("Screenshot preview must not start VPN", TunnelService.connected() || TunnelService.pending());
+        int[] origin = windowOrigin();
+        ui.put("window_origin_px", new JSONArray().put(origin[0]).put(origin[1]));
         android.graphics.Bitmap screenshot = InstrumentationRegistry.getInstrumentation().getUiAutomation().takeScreenshot();
         assertNotNull("Could not capture " + name, screenshot);
         int width = screenshot.getWidth(), height = screenshot.getHeight();
@@ -1166,8 +1179,9 @@ public class ProxyTunTest {
                 JSONArray bounds = previewBounds(ui, "preview-applications-mode");
                 assertNotNull("Application mode control is missing", bounds);
                 float scale = (float)ui.getDouble("scale");
-                float x = (float)(bounds.getDouble(0) + bounds.getDouble(2) / 2) * scale;
-                float y = (float)(bounds.getDouble(1) + bounds.getDouble(3) + 4 + 8 + 24 + mode * 52) * scale;
+                int[] origin = windowOrigin();
+                float x = origin[0] + (float)(bounds.getDouble(0) + bounds.getDouble(2) / 2) * scale;
+                float y = origin[1] + (float)(bounds.getDouble(1) + bounds.getDouble(3) + 4 + 8 + 24 + mode * 52) * scale;
                 tap(x, y);
                 final int expected = mode;
                 await("Application routing mode did not change to " + mode,
@@ -1175,7 +1189,10 @@ public class ProxyTunTest {
                 capturePreview(directory, cases, prefix + (mode == 1 ? "-applications-only" : "-applications-exclude"));
             }
         }
+        double beforeScroll = MainActivity.diagnostics().getDouble("applications_scroll_y");
         previewSwipe(true);
+        await("Application list did not scroll",
+            () -> MainActivity.diagnostics().getDouble("applications_scroll_y") < beforeScroll - 1);
         capturePreview(directory, cases, prefix + "-applications-scrolled");
         shell("input keyevent KEYCODE_BACK");
         if (modes) {
